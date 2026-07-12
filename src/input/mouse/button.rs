@@ -27,10 +27,7 @@ use orzma_tty_engine::{
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use std::time::Duration;
 
-pub(in crate::input::mouse) mod tmux;
-
-/// Registers the mouse-button dispatcher and its gesture resource, plus the
-/// tmux left-button gesture pipeline (`tmux::MouseButtonTmuxPlugin`). Runs in
+/// Registers the mouse-button dispatcher and its gesture resource. Runs in
 /// `InputPhase::Dispatch`, gated to frames carrying any mouse message — the
 /// focus/empty-candidate guard must still run on wheel-only frames to drain
 /// readers and reset the gesture.
@@ -38,14 +35,12 @@ pub(super) struct MouseButtonInputPlugin;
 
 impl Plugin for MouseButtonInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<OrzmaMouseGesture>()
-            .add_systems(
-                Update,
-                dispatch_mouse_buttons
-                    .in_set(InputPhase::Dispatch)
-                    .run_if(on_any_mouse_message()),
-            )
-            .add_plugins(tmux::MouseButtonTmuxPlugin);
+        app.init_resource::<OrzmaMouseGesture>().add_systems(
+            Update,
+            dispatch_mouse_buttons
+                .in_set(InputPhase::Dispatch)
+                .run_if(on_any_mouse_message()),
+        );
     }
 }
 

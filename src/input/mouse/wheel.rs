@@ -20,25 +20,21 @@ use bevy::window::PrimaryWindow;
 use orzma_tty_engine::{CellCoord, TermMode, TerminalModifiers, WheelAction, WheelModifiers};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 
-pub(in crate::input::mouse) mod tmux;
-
-/// Registers the mouse-wheel dispatcher and its accumulator resource, plus the
-/// tmux wheel-forwarding pipeline (`tmux::MouseWheelTmuxPlugin`). Runs in
+/// Registers the mouse-wheel dispatcher and its accumulator resource. Runs in
 /// `InputPhase::Dispatch`, gated to frames carrying any mouse message — a
-/// cursor-only frame must still run `WheelAccumulator::retarget` so a pane's
-/// sub-notch residual is cleared when the cursor moves to another terminal.
+/// cursor-only frame must still run `WheelAccumulator::retarget` so a
+/// terminal's sub-notch residual is cleared when the cursor moves to another
+/// terminal.
 pub(super) struct MouseWheelInputPlugin;
 
 impl Plugin for MouseWheelInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WheelAccumulator>()
-            .add_systems(
-                Update,
-                dispatch_mouse_wheel
-                    .in_set(InputPhase::Dispatch)
-                    .run_if(on_any_mouse_message()),
-            )
-            .add_plugins(tmux::MouseWheelTmuxPlugin);
+        app.init_resource::<WheelAccumulator>().add_systems(
+            Update,
+            dispatch_mouse_wheel
+                .in_set(InputPhase::Dispatch)
+                .run_if(on_any_mouse_message()),
+        );
     }
 }
 

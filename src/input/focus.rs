@@ -10,8 +10,8 @@ use bevy_cef::prelude::{FocusedWebview, WebviewSource};
 use orzma_webview::{NonInteractive, Webview};
 
 /// When present on an `OrzmaTerminal` entity, the crate's default keyboard
-/// dispatcher skips it entirely — the host routes keyboard input elsewhere
-/// (tmux, a focused webview, an open picker, IME composition).
+/// dispatcher skips it entirely — the host withholds keyboard input for it
+/// (vi mode, a focused webview, IME composition, or an unfocused window).
 #[derive(Component)]
 pub(crate) struct KeyboardDisabled;
 
@@ -160,7 +160,7 @@ mod tests {
     }
 
     #[test]
-    fn tmux_pane_inline_focus_is_preserved() {
+    fn terminal_inline_focus_is_preserved() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn tmux_pane_inline_focus_is_gc_on_despawn() {
+    fn terminal_inline_focus_is_gc_on_despawn() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();

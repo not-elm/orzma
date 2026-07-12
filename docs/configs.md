@@ -124,10 +124,9 @@ paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<
 copy                  = "Cmd+C"        # Copy the focused terminal's selection to the system clipboard.
 release-webview-focus = "<Leader>u"
 quit                  = "Cmd+Q"
-enter-vi-mode         = "<Leader>s"    # Both modes: Alacritty vi mode in Default, tmux copy-mode under tmux.
-detach-session        = "<Leader>x"    # tmux mode only.
+enter-vi-mode         = "<Leader>s"    # Enters Alacritty vi mode.
 
-# --- pane actions (tmux mode only) ---
+# --- pane actions (no effect until the built-in multiplexer lands) ---
 select-left-pane      = "<Leader>h"    # select-pane -L
 select-down-pane      = "<Leader>j"    # select-pane -D
 select-up-pane        = "<Leader>k"    # select-pane -U
@@ -141,13 +140,11 @@ resize-down-pane      = "<Leader:r>Shift+J"  # resize-pane -D 5 (repeatable)
 resize-up-pane        = "<Leader:r>Shift+K"  # resize-pane -U 5 (repeatable)
 resize-right-pane     = "<Leader:r>Shift+L"  # resize-pane -R 5 (repeatable)
 
-# --- window actions (tmux mode only) ---
+# --- window actions (no effect until the built-in multiplexer lands) ---
 new-window            = "<Leader>c"        # new-window
 kill-window           = "<Leader>Shift+X"  # kill-window, after a confirm prompt
 next-window           = "<Leader>]"        # next-window
 previous-window       = "<Leader>["        # previous-window
-next-session          = "<Leader>Shift+]"  # switch-client -n (next session)
-previous-session      = "<Leader>Shift+["  # switch-client -p (previous session)
 select-window-0       = "<Leader>0"        # select-window -t @<id at tmux index 0>
 select-window-1       = "<Leader>1"
 select-window-2       = "<Leader>2"
@@ -159,16 +156,14 @@ select-window-7       = "<Leader>7"
 select-window-8       = "<Leader>8"
 select-window-9       = "<Leader>9"
 
-# --- rename actions (tmux mode only) ---
+# --- rename action (no effect until the built-in multiplexer lands) ---
 rename-window         = "<Leader>r"        # opens the rename prompt for the active window
-rename-session        = "<Leader>Shift+R"  # opens the rename prompt for the session
 
 [vi-mode]
-# Shared vi-mode key bindings, used in BOTH modes: Default mode's Alacritty
-# vi mode and tmux mode's copy-mode. See "Vi-mode keys" below for the key
-# syntax, duplicate-key rule, and mode-coverage caveats.
+# Vi-mode key bindings for Alacritty vi mode. See "Vi-mode keys" below for
+# the key syntax and duplicate-key rule.
 
-# --- cursor motion (Default: ViMotion / tmux: send-keys -X) ---
+# --- cursor motion (trailing comment: ViMotion variant / tmux copy-mode -X command, for reference) ---
 cursor-left        = ["h", "ArrowLeft"]     # Left            / cursor-left
 cursor-down        = ["j", "ArrowDown"]     # Down            / cursor-down
 cursor-up          = ["k", "ArrowUp"]       # Up              / cursor-up
@@ -202,13 +197,13 @@ scroll-down        = ["Ctrl+E"]             # LineDown / scroll-down
 # --- selection ---
 toggle-selection      = ["v", "Space"]      # Simple / begin-selection
 toggle-line-selection = ["V"]               # Lines  / select-line
-toggle-rect-selection = ["Ctrl+V"]          # Block  / rectangle-toggle (works in both modes)
+toggle-rect-selection = ["Ctrl+V"]          # Block  / rectangle-toggle
 
 # --- copy / exit ---
 yank = ["y", "Enter"]                       # copy the selection, then leave vi mode
 exit = ["q", "Escape", "Ctrl+C"]            # leave vi mode
 
-# --- search / jump (tmux mode only — see "Mode coverage" below) ---
+# --- search / jump (currently has no effect — see "Mode coverage" below) ---
 search-forward     = ["/"]                  # opens a prompt -> -X search-forward
 search-backward    = ["?"]                  # opens a prompt -> -X search-backward
 search-next        = ["n"]                  # repeats the last search -> -X search-again
@@ -261,59 +256,44 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `release-webview-focus` | `<Leader>u` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit orzma. |
 | `enter-vi-mode` | `<Leader>s` | Enter vi mode. |
-| `detach-session` | `<Leader>x` | Detach the current tmux session (tmux mode only). |
-| `select-left-pane` | `<Leader>h` | Focus the pane to the left (tmux mode only). |
-| `select-down-pane` | `<Leader>j` | Focus the pane below (tmux mode only). |
-| `select-up-pane` | `<Leader>k` | Focus the pane above (tmux mode only). |
-| `select-right-pane` | `<Leader>l` | Focus the pane to the right (tmux mode only). |
-| `resize-left-pane` | `<Leader:r>Shift+H` | Resize the active pane's border left by 5 cells, repeatable (tmux mode only). |
-| `resize-down-pane` | `<Leader:r>Shift+J` | Resize the active pane's border down by 5 cells, repeatable (tmux mode only). |
-| `resize-up-pane` | `<Leader:r>Shift+K` | Resize the active pane's border up by 5 cells, repeatable (tmux mode only). |
-| `resize-right-pane` | `<Leader:r>Shift+L` | Resize the active pane's border right by 5 cells, repeatable (tmux mode only). |
-| `split-vertical-pane` | `<Leader>i` | Split the active pane side-by-side (tmux `split-window -h`) (tmux mode only). |
-| `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (tmux `split-window -v`) (tmux mode only). |
-| `kill-pane` | `<Leader>p` | Kill the active pane, after a confirm prompt (tmux mode only). |
-| `zoom-pane` | `<Leader>z` | Toggle zoom on the active pane (tmux mode only). |
-| `new-window` | `<Leader>c` | Open a new window (tmux mode only). |
-| `kill-window` | `<Leader>Shift+X` | Kill the active window, after a confirm prompt (tmux mode only). |
-| `next-window` | `<Leader>]` | Switch to the next window (tmux mode only). |
-| `previous-window` | `<Leader>[` | Switch to the previous window (tmux mode only). |
-| `next-session` | `<Leader>Shift+]` | Switch to the next session (tmux mode only). |
-| `previous-session` | `<Leader>Shift+[` | Switch to the previous session (tmux mode only). |
-| `select-window-0` | `<Leader>0` | Switch to the window at tmux index 0 (tmux mode only). |
-| `select-window-1` | `<Leader>1` | Switch to the window at tmux index 1 (tmux mode only). |
-| `select-window-2` | `<Leader>2` | Switch to the window at tmux index 2 (tmux mode only). |
-| `select-window-3` | `<Leader>3` | Switch to the window at tmux index 3 (tmux mode only). |
-| `select-window-4` | `<Leader>4` | Switch to the window at tmux index 4 (tmux mode only). |
-| `select-window-5` | `<Leader>5` | Switch to the window at tmux index 5 (tmux mode only). |
-| `select-window-6` | `<Leader>6` | Switch to the window at tmux index 6 (tmux mode only). |
-| `select-window-7` | `<Leader>7` | Switch to the window at tmux index 7 (tmux mode only). |
-| `select-window-8` | `<Leader>8` | Switch to the window at tmux index 8 (tmux mode only). |
-| `select-window-9` | `<Leader>9` | Switch to the window at tmux index 9 (tmux mode only). |
-| `rename-window` | `<Leader>r` | Open the rename prompt for the active window (tmux mode only). |
-| `rename-session` | `<Leader>Shift+R` | Open the rename prompt for the session (tmux mode only). |
+| `select-left-pane` | `<Leader>h` | Focus the pane to the left (no effect until the built-in multiplexer lands). |
+| `select-down-pane` | `<Leader>j` | Focus the pane below (no effect until the built-in multiplexer lands). |
+| `select-up-pane` | `<Leader>k` | Focus the pane above (no effect until the built-in multiplexer lands). |
+| `select-right-pane` | `<Leader>l` | Focus the pane to the right (no effect until the built-in multiplexer lands). |
+| `resize-left-pane` | `<Leader:r>Shift+H` | Resize the active pane's border left by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
+| `resize-down-pane` | `<Leader:r>Shift+J` | Resize the active pane's border down by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
+| `resize-up-pane` | `<Leader:r>Shift+K` | Resize the active pane's border up by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
+| `resize-right-pane` | `<Leader:r>Shift+L` | Resize the active pane's border right by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
+| `split-vertical-pane` | `<Leader>i` | Split the active pane side-by-side (tmux `split-window -h`) (no effect until the built-in multiplexer lands). |
+| `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (tmux `split-window -v`) (no effect until the built-in multiplexer lands). |
+| `kill-pane` | `<Leader>p` | Kill the active pane, after a confirm prompt (no effect until the built-in multiplexer lands). |
+| `zoom-pane` | `<Leader>z` | Toggle zoom on the active pane (no effect until the built-in multiplexer lands). |
+| `new-window` | `<Leader>c` | Open a new window (no effect until the built-in multiplexer lands). |
+| `kill-window` | `<Leader>Shift+X` | Kill the active window, after a confirm prompt (no effect until the built-in multiplexer lands). |
+| `next-window` | `<Leader>]` | Switch to the next window (no effect until the built-in multiplexer lands). |
+| `previous-window` | `<Leader>[` | Switch to the previous window (no effect until the built-in multiplexer lands). |
+| `select-window-0` | `<Leader>0` | Switch to the window at tmux index 0 (no effect until the built-in multiplexer lands). |
+| `select-window-1` | `<Leader>1` | Switch to the window at tmux index 1 (no effect until the built-in multiplexer lands). |
+| `select-window-2` | `<Leader>2` | Switch to the window at tmux index 2 (no effect until the built-in multiplexer lands). |
+| `select-window-3` | `<Leader>3` | Switch to the window at tmux index 3 (no effect until the built-in multiplexer lands). |
+| `select-window-4` | `<Leader>4` | Switch to the window at tmux index 4 (no effect until the built-in multiplexer lands). |
+| `select-window-5` | `<Leader>5` | Switch to the window at tmux index 5 (no effect until the built-in multiplexer lands). |
+| `select-window-6` | `<Leader>6` | Switch to the window at tmux index 6 (no effect until the built-in multiplexer lands). |
+| `select-window-7` | `<Leader>7` | Switch to the window at tmux index 7 (no effect until the built-in multiplexer lands). |
+| `select-window-8` | `<Leader>8` | Switch to the window at tmux index 8 (no effect until the built-in multiplexer lands). |
+| `select-window-9` | `<Leader>9` | Switch to the window at tmux index 9 (no effect until the built-in multiplexer lands). |
+| `rename-window` | `<Leader>r` | Open the rename prompt for the active window (no effect until the built-in multiplexer lands). |
 
-Note: some actions only take effect in one mode. `enter-vi-mode` now works in
-**both** modes: Alacritty vi mode in Default (single-terminal) mode, tmux
-copy-mode under tmux. `detach-session` and all 30 pane/window/session/rename actions
-above (`select-*-pane`, `split-*-pane`, `kill-pane`, `zoom-pane`,
-`resize-*-pane`, `new-window`, `kill-window`, `next-window`, `previous-window`,
-`next-session`, `previous-session`, `select-window-0`…`9`, `rename-window`, `rename-session`) are active under tmux
-mode only — they are
-inert in Default mode. `paste`, `copy`, `quit`, and `release-webview-focus` work in
-both modes. This applies whether an action is bound directly or as a
+Note: some actions have no effect yet. `enter-vi-mode` works today (Alacritty
+vi mode). All 27 pane/window/rename actions above (`select-*-pane`,
+`split-*-pane`, `kill-pane`, `zoom-pane`, `resize-*-pane`, `new-window`,
+`kill-window`, `next-window`, `previous-window`, `select-window-0`…`9`,
+`rename-window`) are no-ops until the built-in multiplexer lands — the
+bindings are accepted and validated at startup, but pressing them does
+nothing. `paste`, `copy`, `quit`, `release-webview-focus`, and `enter-vi-mode`
+work today. This applies whether an action is bound directly or as a
 leader-scoped key (e.g. `<Leader>s`), and regardless of whether the leader is
 a chord or a modifier tap.
-
-Note on tmux.conf bindings: with the tmux prefix key no longer intercepted by
-orzma, root-table and prefix-table bindings from your `tmux.conf` do not fire
-inside orzma — the tmux prefix key passes straight through to the pane like
-any other keystroke. Use the `[shortcuts]` actions above instead. Keys pressed
-**inside vi mode** (Default mode's Alacritty vi mode and tmux mode's
-copy-mode alike) no longer follow tmux's own copy-mode key tables at all:
-orzma resolves every vi-mode key itself from the `[vi-mode]` table, so
-your `tmux.conf` copy-mode / copy-mode-vi customizations and the tmux
-`mode-keys` option have no effect inside orzma. See "Vi-mode keys" below.
 
 Note on the leader: because the stock defaults above bind more than two dozen
 actions to `<Leader>...`, the `Cmd` tap leader is armed by default — tapping and
@@ -331,18 +311,17 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
   actions. Unbind the stock default explicitly (`new-window = ""`) or pick a
   free chord.
 - **`leader = ""` disables every `<Leader>`-bound action at once** — with the
-  stock defaults that includes all 28 tmux actions, silently
+  stock defaults that includes all 29 leader-bound actions above, silently
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g. `next-window = "Cmd+]"`.
 
 ## Vi-mode keys
 
-`enter-vi-mode` (see the table above) drops the active pane into vi mode:
-Alacritty vi mode in Default (single-terminal) mode, tmux copy-mode under
-tmux. What each keystroke does **once inside vi mode** is a separate key
-grammar from `[shortcuts]`, driven entirely by the `[vi-mode]` table shown
-in the example config above — a flat table of 40 vi-mode actions, each bound to
-zero or more keys.
+`enter-vi-mode` (see the table above) drops the active pane into Alacritty vi
+mode on the focused terminal. What each keystroke does **once inside vi
+mode** is a separate key grammar from `[shortcuts]`, driven entirely by the
+`[vi-mode]` table shown in the example config above — a flat table of 40
+vi-mode actions, each bound to zero or more keys.
 
 ### Key grammar
 
@@ -381,59 +360,58 @@ validate across the two tables; check your own bindings for overlap.
 
 ### Vi-mode actions
 
-| Action | Default | Mode | What it does |
-| --- | --- | --- | --- |
-| `cursor-left` | `h`, `ArrowLeft` | both | Move the cursor one cell left. |
-| `cursor-down` | `j`, `ArrowDown` | both | Move the cursor one cell down. |
-| `cursor-up` | `k`, `ArrowUp` | both | Move the cursor one cell up. |
-| `cursor-right` | `l`, `ArrowRight` | both | Move the cursor one cell right. |
-| `line-start` | `0` | both | Jump to column 0. |
-| `line-end` | `$` | both | Jump to the last column. |
-| `line-first-char` | `^` | both | Jump to the first non-blank column. |
-| `next-word` | `w` | both | Jump to the next (semantic) word start. |
-| `previous-word` | `b` | both | Jump to the previous (semantic) word start. |
-| `next-word-end` | `e` | both | Jump to the next (semantic) word end. |
-| `next-space` | `W` | both | Jump to the next space-delimited word start. |
-| `previous-space` | `B` | both | Jump to the previous space-delimited word start. |
-| `next-space-end` | `E` | both | Jump to the next space-delimited word end. |
-| `screen-top` | `H` | both | Jump to the top visible line. |
-| `screen-middle` | `M` | both | Jump to the middle visible line. |
-| `screen-bottom` | `L` | both | Jump to the bottom visible line. |
-| `previous-paragraph` | `{` | both | Jump to the previous paragraph boundary. |
-| `next-paragraph` | `}` | both | Jump to the next paragraph boundary. |
-| `matching-bracket` | `%` | both | Jump to the matching bracket. |
-| `history-top` | `g` | both | Scroll to the oldest history line. |
-| `history-bottom` | `G` | both | Scroll to the live tail. |
-| `page-up` | `Ctrl+B` | both | Scroll one page up. |
-| `page-down` | `Ctrl+F` | both | Scroll one page down. |
-| `half-page-up` | `Ctrl+U` | both | Scroll half a page up. |
-| `half-page-down` | `Ctrl+D` | both | Scroll half a page down. |
-| `scroll-up` | `Ctrl+Y` | both | Scroll one line up. |
-| `scroll-down` | `Ctrl+E` | both | Scroll one line down. |
-| `toggle-selection` | `v`, `Space` | both | Toggle a character-wise selection. |
-| `toggle-line-selection` | `V` | both | Toggle a line-wise selection. |
-| `toggle-rect-selection` | `Ctrl+V` | both | Toggle a rectangular (block) selection. |
-| `yank` | `y`, `Enter` | both | Copy the selection to the clipboard and leave vi mode. |
-| `exit` | `q`, `Escape`, `Ctrl+C` | both | Leave vi mode. |
-| `search-forward` | `/` | tmux only | Open the search-down prompt. |
-| `search-backward` | `?` | tmux only | Open the search-up prompt. |
-| `search-next` | `n` | tmux only | Repeat the previous search. |
-| `search-previous` | `N` | tmux only | Repeat the previous search, reversed. |
-| `jump-forward` | `f` | tmux only | Open the jump-to-char-forward prompt. |
-| `jump-backward` | `F` | tmux only | Open the jump-to-char-backward prompt. |
-| `jump-to-forward` | `t` | tmux only | Open the jump-till-char-forward prompt. |
-| `jump-to-backward` | `T` | tmux only | Open the jump-till-char-backward prompt. |
+| Action | Default | What it does |
+| --- | --- | --- |
+| `cursor-left` | `h`, `ArrowLeft` | Move the cursor one cell left. |
+| `cursor-down` | `j`, `ArrowDown` | Move the cursor one cell down. |
+| `cursor-up` | `k`, `ArrowUp` | Move the cursor one cell up. |
+| `cursor-right` | `l`, `ArrowRight` | Move the cursor one cell right. |
+| `line-start` | `0` | Jump to column 0. |
+| `line-end` | `$` | Jump to the last column. |
+| `line-first-char` | `^` | Jump to the first non-blank column. |
+| `next-word` | `w` | Jump to the next (semantic) word start. |
+| `previous-word` | `b` | Jump to the previous (semantic) word start. |
+| `next-word-end` | `e` | Jump to the next (semantic) word end. |
+| `next-space` | `W` | Jump to the next space-delimited word start. |
+| `previous-space` | `B` | Jump to the previous space-delimited word start. |
+| `next-space-end` | `E` | Jump to the next space-delimited word end. |
+| `screen-top` | `H` | Jump to the top visible line. |
+| `screen-middle` | `M` | Jump to the middle visible line. |
+| `screen-bottom` | `L` | Jump to the bottom visible line. |
+| `previous-paragraph` | `{` | Jump to the previous paragraph boundary. |
+| `next-paragraph` | `}` | Jump to the next paragraph boundary. |
+| `matching-bracket` | `%` | Jump to the matching bracket. |
+| `history-top` | `g` | Scroll to the oldest history line. |
+| `history-bottom` | `G` | Scroll to the live tail. |
+| `page-up` | `Ctrl+B` | Scroll one page up. |
+| `page-down` | `Ctrl+F` | Scroll one page down. |
+| `half-page-up` | `Ctrl+U` | Scroll half a page up. |
+| `half-page-down` | `Ctrl+D` | Scroll half a page down. |
+| `scroll-up` | `Ctrl+Y` | Scroll one line up. |
+| `scroll-down` | `Ctrl+E` | Scroll one line down. |
+| `toggle-selection` | `v`, `Space` | Toggle a character-wise selection. |
+| `toggle-line-selection` | `V` | Toggle a line-wise selection. |
+| `toggle-rect-selection` | `Ctrl+V` | Toggle a rectangular (block) selection. |
+| `yank` | `y`, `Enter` | Copy the selection to the clipboard and leave vi mode. |
+| `exit` | `q`, `Escape`, `Ctrl+C` | Leave vi mode. |
+| `search-forward` | `/` | Open the search-down prompt (currently has no effect). |
+| `search-backward` | `?` | Open the search-up prompt (currently has no effect). |
+| `search-next` | `n` | Repeat the previous search (currently has no effect). |
+| `search-previous` | `N` | Repeat the previous search, reversed (currently has no effect). |
+| `jump-forward` | `f` | Open the jump-to-char-forward prompt (currently has no effect). |
+| `jump-backward` | `F` | Open the jump-to-char-backward prompt (currently has no effect). |
+| `jump-to-forward` | `t` | Open the jump-till-char-forward prompt (currently has no effect). |
+| `jump-to-backward` | `T` | Open the jump-till-char-backward prompt (currently has no effect). |
 
 ### Mode coverage
 
 The 8 prompt/search actions (`search-forward`, `search-backward`,
 `search-next`, `search-previous`, `jump-forward`, `jump-backward`,
 `jump-to-forward`, `jump-to-backward` — i.e. the stock `/ ? n N f F t T`
-keys) only take effect in **tmux mode**; in Default mode the corresponding
-key press is swallowed (no prompt opens, nothing is sent to the pane). Every
-other action works in **both** modes, including `toggle-rect-selection`
-(`Ctrl+V`), which now toggles a real rectangular selection in both Default
-and tmux copy-mode.
+keys) currently have no effect: the key press is swallowed (no prompt opens,
+nothing happens) while vi mode is active. Local vi-mode search is a future
+feature. Every other action works today, including `toggle-rect-selection`
+(`Ctrl+V`), which toggles a real rectangular selection.
 
 ### Escape semantics
 

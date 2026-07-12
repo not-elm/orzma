@@ -6,7 +6,7 @@ pub enum OrzmaSystems {
     /// Per-frame input handling — keyboard and mouse. Members run in
     /// `crate::input::InputPhase` order: `Hover` → `Dispatch` →
     /// `FocusedKey`. The chain ensures click-to-focus (Dispatch)
-    /// retargets the tmux active pane before the keyboard chord
+    /// retargets the focused surface before the keyboard chord
     /// dispatcher (FocusedKey) reads it in the same frame.
     Input,
 }

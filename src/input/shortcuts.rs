@@ -3,12 +3,10 @@
 //! The translation lives here (not in `orzma_configs`) so the config crate
 //! stays free of any `bevy` dependency.
 
-use crate::app_mode::AppMode;
 use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
 use crate::input::shortcuts::default_mode::ShortcutsDefaultModePlugin;
-use crate::input::shortcuts::tmux::ShortcutsTmuxModePlugin;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -26,13 +24,12 @@ use orzma_tty_engine::{ButtonConfig, WheelConfig};
 use std::time::Duration;
 
 pub(in crate::input) mod default_mode;
-pub(in crate::input) mod tmux;
 
 pub(super) struct ShortcutsPlugin;
 
 impl Plugin for ShortcutsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((ShortcutsDefaultModePlugin, ShortcutsTmuxModePlugin))
+        app.add_plugins(ShortcutsDefaultModePlugin)
             .configure_sets(
                 Update,
                 (ShortcutSet::Resolve, ShortcutSet::Apply)
@@ -42,7 +39,6 @@ impl Plugin for ShortcutsPlugin {
             .add_message::<ShortcutMessage>()
             .add_message::<ViModeMessage>()
             .add_message::<TypeMessage>()
-            .add_message::<WebviewForwardMessage>()
             .init_resource::<Shortcuts>()
             .init_resource::<LeaderPhase>()
             .init_resource::<HeldRepeatKey>()
@@ -66,14 +62,13 @@ impl Plugin for ShortcutsPlugin {
                         .run_if(resource_exists_and_changed::<FocusedWebview>)
                         .before(LeaderGate::Detect),
                 ),
-            )
-            .add_systems(OnExit(AppMode::Tmux), reset_leader_phase)
-            .add_systems(OnExit(AppMode::Default), reset_leader_phase);
+            );
     }
 }
 
 /// One resolved keyboard shortcut action, fanned out from `resolve_key_effects`
-/// to the per-mode appliers. Excludes `Quit` / `ReleaseWebviewFocus` (handled
+/// to the default-mode appliers (`crate::input::shortcuts::default_mode`).
+/// Excludes `Quit` / `ReleaseWebviewFocus` (handled
 /// inline in `resolve_key_effects`). `focused` is the `KeyboardFocused` surface;
 /// `in_vi_mode` gates the vi-mode re-entry and paste-suppression rules.
 #[derive(Message)]
@@ -88,7 +83,8 @@ pub(in crate::input) struct ShortcutMessage {
     pub in_vi_mode: bool,
 }
 
-/// One matched `[vi-mode]` key, fanned out to the per-mode appliers.
+/// One matched `[vi-mode]` key, fanned out to the default-mode appliers
+/// (`crate::input::shortcuts::default_mode`).
 #[derive(Message)]
 pub(in crate::input) struct ViModeMessage {
     /// The vi-mode action to run.
@@ -102,46 +98,32 @@ pub(in crate::input) struct ViModeMessage {
 pub(in crate::input) struct TypeMessage {
     /// The logical key, for text/printable-key mapping.
     pub logical: Key,
-    /// The physical key, for named-key mapping.
-    pub key_code: KeyCode,
     /// The `KeyboardFocused` surface, or `None` when none is focused.
     pub focused: Option<Entity>,
     /// The frame's modifier snapshot.
     pub mods: Modifiers,
 }
 
-/// One key to forward to the focused webview's declared forward-key chord.
-#[derive(Message)]
-pub(in crate::input) struct WebviewForwardMessage {
-    /// The logical key, for text/printable-key mapping.
-    pub logical: Key,
-    /// The physical key, for named-key mapping.
-    pub key_code: KeyCode,
-    /// The `KeyboardFocused` surface, or `None` when none is focused.
-    pub focused: Option<Entity>,
-    /// The frame's modifier snapshot.
-    pub mods: Modifiers,
-}
-
-/// The four shortcut-effect message writers `resolve_key_effects` fans out to,
+/// The three shortcut-effect message writers `resolve_key_effects` fans out to,
 /// bundled to stay within Bevy's system-parameter limit.
 #[derive(SystemParam)]
 pub(in crate::input) struct ShortcutMessages<'w> {
     pub shortcut: MessageWriter<'w, ShortcutMessage>,
     pub vi_mode: MessageWriter<'w, ViModeMessage>,
     pub type_keys: MessageWriter<'w, TypeMessage>,
-    pub webview_forward: MessageWriter<'w, WebviewForwardMessage>,
 }
 
 /// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
 /// `resolve_key_effects` (`Resolve`) fans out the per-responsibility messages
-/// before the per-mode appliers (`Apply`) read them, so every message is
-/// consumed the same frame it is written.
+/// before the default-mode appliers (`crate::input::shortcuts::default_mode`,
+/// `Apply`) read them, so every message is consumed the same frame it is
+/// written.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::input) enum ShortcutSet {
     /// `resolve_key_effects`: classifies keys and fans out the typed messages.
     Resolve,
-    /// The per-mode appliers: read the typed messages and apply their effects.
+    /// The default-mode appliers (`crate::input::shortcuts::default_mode`):
+    /// read the typed messages and apply their effects.
     Apply,
 }
 
@@ -210,8 +192,7 @@ struct OrzmaShortcut {
 }
 
 /// The startup-resolved orzma shortcut tables. Built once from
-/// `OrzmaConfigsResource`; consumed by the tmux and Default keyboard
-/// dispatchers.
+/// `OrzmaConfigsResource`; consumed by the keyboard dispatcher.
 #[derive(Resource, Default, Debug, Clone)]
 pub(crate) struct Shortcuts {
     direct: Vec<OrzmaShortcut>,
@@ -419,9 +400,8 @@ pub(crate) fn test_shortcuts_with_direct_chord(
 }
 
 /// Clears the leader phase (pending or repeat window), any armed hold-to-repeat,
-/// and any in-progress modifier tap on an `AppMode` transition or a webview
-/// focus change, so a leader engaged/armed in one context never fires in
-/// another.
+/// and any in-progress modifier tap on a webview focus change, so a leader
+/// engaged/armed before the focus change never fires after it.
 fn reset_leader_phase(
     mut leader_phase: ResMut<LeaderPhase>,
     mut held_repeat: ResMut<HeldRepeatKey>,
@@ -786,7 +766,7 @@ mod tests {
                 OrzmaShortcut {
                     keycode: KeyCode::KeyD,
                     modifiers: mods(false, false, false, false),
-                    action: Shortcut::DetachSession,
+                    action: Shortcut::KillPane,
                     repeat: true,
                 },
                 OrzmaShortcut {
@@ -835,7 +815,7 @@ mod tests {
         let mut phase = LeaderPhase::Repeat { deadline: ms(500) };
         assert!(matches!(
             step_leader(&mut phase, &sc, KeyCode::KeyD, no_mods(), ms(100)),
-            LeaderStep::RunAction(Shortcut::DetachSession)
+            LeaderStep::RunAction(Shortcut::KillPane)
         ));
         assert_eq!(phase, LeaderPhase::Repeat { deadline: ms(600) });
     }
@@ -1092,13 +1072,13 @@ mod tests {
     fn step_leader_ignores_bare_modifier_and_survives_to_second_chord() {
         // Reproduces [0]: the second chord's Ctrl modifier emits its own Pressed
         // event before KeyD; it must not consume the pending phase. Leader
-        // Ctrl+B, prefix detach-session = Ctrl+D.
+        // Ctrl+B, prefix kill-pane = Ctrl+D.
         let sc = Shortcuts {
             direct: Vec::new(),
             prefix: vec![OrzmaShortcut {
                 keycode: KeyCode::KeyD,
                 modifiers: mods(true, false, false, false),
-                action: Shortcut::DetachSession,
+                action: Shortcut::KillPane,
                 repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
@@ -1162,7 +1142,7 @@ mod tests {
                 mods(true, false, false, false),
                 ms(0)
             ),
-            LeaderStep::RunAction(Shortcut::DetachSession)
+            LeaderStep::RunAction(Shortcut::KillPane)
         ));
         assert_eq!(phase, LeaderPhase::Idle);
     }
@@ -1204,20 +1184,20 @@ mod tests {
     #[test]
     fn resolve_from_chords_accepts_leader_chords() {
         let config = ConfigShortcuts {
-            detach_session: Some(Binding::Leader {
+            kill_pane: Some(Binding::Leader {
                 chord: orzma_configs::shortcuts::parse_key_chord("d").unwrap(),
                 repeat: true,
             }),
             ..Default::default()
         };
         let resolved = resolve_from_chords(config.leader_chords());
-        let detach = resolved
+        let kill_pane = resolved
             .iter()
-            .find(|s| s.action == Shortcut::DetachSession)
-            .expect("detach-session must resolve as a leader chord");
-        assert_eq!(detach.keycode, KeyCode::KeyD);
+            .find(|s| s.action == Shortcut::KillPane)
+            .expect("kill-pane must resolve as a leader chord");
+        assert_eq!(kill_pane.keycode, KeyCode::KeyD);
         assert!(
-            detach.repeat,
+            kill_pane.repeat,
             "the <Leader:r> flag must reach the resolved table"
         );
     }
@@ -1564,7 +1544,7 @@ mod tests {
 
     #[test]
     fn build_shortcuts_leaves_default_cmd_leader_inert_without_leader_bindings() {
-        // NOTE: `ConfigShortcuts::default()` ships 33 leader-scoped actions
+        // NOTE: `ConfigShortcuts::default()` ships 29 leader-scoped actions
         // (plus the direct `paste`/`quit` chords), so `OrzmaConfigs::default()`
         // alone no longer exercises the inert-leader path; every leader binding
         // is explicitly unbound here to reproduce a config with no leader
@@ -1574,7 +1554,6 @@ mod tests {
                 paste: None,
                 release_webview_focus: None,
                 enter_vi_mode: None,
-                detach_session: None,
                 select_left_pane: None,
                 select_down_pane: None,
                 select_up_pane: None,
@@ -1591,8 +1570,6 @@ mod tests {
                 kill_window: None,
                 next_window: None,
                 previous_window: None,
-                next_session: None,
-                previous_session: None,
                 select_window_0: None,
                 select_window_1: None,
                 select_window_2: None,
@@ -1604,7 +1581,6 @@ mod tests {
                 select_window_8: None,
                 select_window_9: None,
                 rename_window: None,
-                rename_session: None,
                 ..Default::default()
             },
             ..Default::default()
@@ -1618,7 +1594,7 @@ mod tests {
     fn build_shortcuts_activates_default_cmd_leader_with_a_leader_binding() {
         let config = OrzmaConfigs {
             shortcuts: ConfigShortcuts {
-                detach_session: Some(Binding::Leader {
+                kill_pane: Some(Binding::Leader {
                     chord: orzma_configs::shortcuts::parse_key_chord("d").unwrap(),
                     repeat: false,
                 }),

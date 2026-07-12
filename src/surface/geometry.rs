@@ -1,7 +1,7 @@
 //! Shared terminal-surface geometry: cursor physical-pixel → pane-local px →
-//! cell (column/row/side). Mode-agnostic — used by the pointer router
-//! (`crate::input::mouse::webview`), both mode pipelines, and hyperlink hover.
-//! The `TmuxPane`-specific hit-test lives in `crate::input::tmux::pane_hit`.
+//! cell (column/row/side). Used by the pointer router
+//! (`crate::input::mouse::webview`), the Default-mode input pipeline, and
+//! hyperlink hover.
 
 use bevy::ecs::entity::Entity;
 use bevy::math::Vec2;
@@ -61,28 +61,6 @@ pub(crate) fn cell_at_local(
     (col, row, side_of(frac_x))
 }
 
-/// Maps a window cursor position (physical px) to the active `TmuxPane`'s
-/// visible `(col, row, side)`, clamped to `[0, cols) × [0, rows)`. Returns
-/// `None` when the projection is degenerate (zero-area node). The point is
-/// clamped (not rejected) when it falls outside the pane so a drag that leaves
-/// the pane edge still extends the selection to the nearest cell.
-pub(crate) fn cell_at_pane(
-    node: &ComputedNode,
-    transform: &UiGlobalTransform,
-    cursor_phys: Vec2,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    cols: u16,
-    rows: u16,
-) -> Option<(u16, u16, Side)> {
-    let local = phys_to_pane_local(node, transform, cursor_phys)?;
-    let (col_floor, frac_x) = floor_frac(local.x, cell_w_phys);
-    let (row_floor, _) = floor_frac(local.y, cell_h_phys);
-    let col = col_floor.min(cols.saturating_sub(1) as u32);
-    let row = row_floor.min(rows.saturating_sub(1) as u32);
-    Some((col as u16, row as u16, side_of(frac_x)))
-}
-
 /// Computes terminal dimensions in cells from physical pixel size.
 ///
 /// Returns `(cols, rows)`, each clamped to a minimum of 1.
@@ -96,8 +74,7 @@ pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16,
 /// or `None` when the cursor is over none. "Topmost" is the highest
 /// `ComputedStackIndex` (Bevy's resolved front-to-back UI order); ties
 /// break by `Entity` for determinism. The Default-mode pointer/gate path uses
-/// this to pick the single shell (or the frontmost surface) under the cursor;
-/// tmux keeps its own multi-pane `tmux_pane_at_phys` resolution.
+/// this to pick the single shell (or the frontmost surface) under the cursor.
 pub(crate) fn topmost_surface_at<'a>(
     cursor_phys: Vec2,
     candidates: impl Iterator<
@@ -153,59 +130,6 @@ mod tests {
         assert_eq!(cells_for(1, 1, 8.0, 16.0), (1, 1));
         assert_eq!(cells_for(0, 0, 8.0, 16.0), (1, 1));
         assert_eq!(cells_for(807, 607, 8.0, 16.0), (100, 37));
-    }
-
-    #[test]
-    fn cell_at_pane_maps_and_clamps() {
-        // A point at local (40, 48) with 8x16 px cells maps to col 5, row 3
-        // (floor(40/8)=5, floor(48/16)=3); cols/rows bound the clamp, not the node.
-        let node = ComputedNode {
-            size: Vec2::new(640.0, 384.0),
-            ..ComputedNode::DEFAULT
-        };
-        let transform = UiGlobalTransform::from_xy(320.0, 192.0);
-        let cell = cell_at_pane(&node, &transform, Vec2::new(40.0, 48.0), 8.0, 16.0, 80, 24);
-        assert_eq!(cell, Some((5, 3, Side::Left)));
-    }
-
-    #[test]
-    fn cell_at_pane_clamps_past_the_far_edge() {
-        let node = ComputedNode {
-            size: Vec2::new(640.0, 384.0),
-            ..ComputedNode::DEFAULT
-        };
-        let transform = UiGlobalTransform::from_xy(320.0, 192.0);
-        // A point well past the bottom-right clamps to (cols-1, rows-1).
-        let cell = cell_at_pane(
-            &node,
-            &transform,
-            Vec2::new(9999.0, 9999.0),
-            8.0,
-            16.0,
-            80,
-            24,
-        );
-        assert_eq!(cell, Some((79, 23, Side::Right)));
-    }
-
-    #[test]
-    fn cell_at_pane_clamps_negative_to_origin() {
-        let node = ComputedNode {
-            size: Vec2::new(640.0, 384.0),
-            ..ComputedNode::DEFAULT
-        };
-        let transform = UiGlobalTransform::from_xy(320.0, 192.0);
-        // A point above-left of the node clamps to (0, 0).
-        let cell = cell_at_pane(
-            &node,
-            &transform,
-            Vec2::new(-50.0, -50.0),
-            8.0,
-            16.0,
-            80,
-            24,
-        );
-        assert_eq!(cell, Some((0, 0, Side::Left)));
     }
 
     #[test]

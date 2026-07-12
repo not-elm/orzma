@@ -16,7 +16,8 @@ pub struct OrzmaUiRootPlugin;
 
 impl Plugin for OrzmaUiRootPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (spawn_camera, spawn_root_ui));
+        app.insert_resource(ClearColor(Color::BLACK))
+            .add_systems(Startup, (spawn_camera, spawn_root_ui));
     }
 }
 

@@ -28,9 +28,8 @@ use orzma_webview::{Webview, focused_webview_of};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
 ///
-/// Per-backend observers apply it: the tmux observer in `src/input/tmux/forward.rs`
-/// sends it over the control socket (targeting tmux panes); the Default observer
-/// in `src/input/default_mode.rs` writes the local PTY via `TerminalKeyInput`.
+/// The observer in `src/input/default_mode.rs` applies it, writing the local
+/// PTY via `TerminalKeyInput`.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ImeCommit {
     #[event_target]
@@ -41,8 +40,8 @@ pub(crate) struct ImeCommit {
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before `read_ime_events`
 /// (chained); both run in `InputPhase::Dispatch`, ahead of
-/// `InputPhase::FocusedKey` where `apply_tmux_shortcuts` forwards keys to the
-/// active pane (and gates on `ImeState`, so IME must apply first).
+/// `InputPhase::FocusedKey`, whose dispatcher gates on `ImeState`, so IME
+/// must apply first.
 pub struct ImePlugin;
 
 impl Plugin for ImePlugin {
@@ -152,10 +151,10 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
     }
 }
 
-/// Resolves the single keyboard-focused terminal surface — the active tmux pane
-/// or the Default `OrzmaTerminal`, both of which carry `KeyboardFocused`. Returns
-/// `None` when zero or more than one entity is focused; both degrade to "no
-/// surface". The host maintains the "exactly one focused" invariant.
+/// Resolves the single keyboard-focused terminal surface — the `KeyboardFocused`
+/// `OrzmaTerminal` surface. Returns `None` when zero or more than one entity is
+/// focused; both degrade to "no surface". The host maintains the "exactly one
+/// focused" invariant.
 pub(crate) fn resolve_focused_surface(
     focused: &Query<Entity, With<KeyboardFocused>>,
 ) -> Option<Entity> {
@@ -167,8 +166,8 @@ pub(crate) fn resolve_focused_surface(
 ///
 /// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
 /// IME through bevy_cef's `Ime` → CEF bridge), OR a surface exists that does
-/// NOT have `ViModeState`. The surface is the active tmux pane or the
-/// Default `OrzmaTerminal`, both resolved uniformly via `KeyboardFocused`.
+/// NOT have `ViModeState`. The surface is the `KeyboardFocused` `OrzmaTerminal`
+/// surface.
 ///
 /// `ime_position` is the logical-pixel anchor for the OS candidate
 /// window — computed from the surface's `UiGlobalTransform`
@@ -298,8 +297,7 @@ fn ime_policy_system(
 /// `ImeCommit` to the keyboard-focused surface. The commit is suppressed (the
 /// state machine still runs, so `ImeState` stays consistent) when EITHER any
 /// webview owns keyboard focus OR the focused surface is in vi mode. The
-/// commit transport is applied by per-backend observers
-/// (`src/input/tmux/forward.rs`, `src/input/default_mode.rs`).
+/// commit transport is applied by the observer in `src/input/default_mode.rs`.
 fn read_ime_events(
     mut commands: Commands,
     mut events: MessageReader<Ime>,
@@ -374,18 +372,15 @@ fn webview_ime_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_mode::AppMode;
     use crate::surface::OrzmaTerminal;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
     use bevy::ecs::system::RunSystemOnce;
-    use bevy::prelude::{AppExtStates, MinimalPlugins, default};
+    use bevy::prelude::{MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
-    use orzma_tmux::{ActivePane, PaneId, TmuxPane};
     use orzma_tty_renderer::CellMetrics;
     use orzma_tty_renderer::prelude::{Cursor, TerminalGrid};
-    use tmux_control_parser::CellDims;
 
     #[test]
     fn try_new_returns_none_for_empty_text() {
@@ -564,7 +559,7 @@ mod tests {
         assert_eq!(c.caret(), None);
     }
 
-    fn build_app_with_active_pane() -> (App, Entity) {
+    fn build_app_with_focused_terminal() -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
             .add_systems(Update, read_ime_events);
@@ -572,22 +567,7 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.add_message::<Ime>();
 
-        let pane_entity = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: CellDims {
-                        width: 0,
-                        height: 0,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                },
-                ActivePane,
-                KeyboardFocused,
-            ))
-            .id();
+        let terminal_entity = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
 
         app.world_mut().spawn(Window {
             focused: true,
@@ -595,7 +575,7 @@ mod tests {
             ..default()
         });
 
-        (app, pane_entity)
+        (app, terminal_entity)
     }
 
     #[test]
@@ -603,7 +583,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,
@@ -645,75 +624,11 @@ mod tests {
     }
 
     #[test]
-    fn ime_enabled_for_active_tmux_pane() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.init_resource::<ImeState>();
-        app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
-        app.insert_resource(TerminalCellMetricsResource {
-            metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 12.0,
-                descent_phys: 4.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
-            },
-            phys_font_size: 12,
-        });
-
-        app.world_mut().spawn((
-            TmuxPane {
-                id: PaneId(1),
-                dims: CellDims {
-                    width: 0,
-                    height: 0,
-                    xoff: 0,
-                    yoff: 0,
-                },
-            },
-            ActivePane,
-            KeyboardFocused,
-            ComputedNode::default(),
-            UiGlobalTransform::default(),
-            TerminalGrid {
-                cursor: Some(Cursor::default()),
-                ..default()
-            },
-        ));
-
-        // Window starts with IME OFF — the policy must turn it ON for the
-        // active tmux pane.
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                resolution: WindowResolution::new(800, 600),
-                ime_enabled: false,
-                ..default()
-            },
-            PrimaryWindow,
-        ));
-
-        app.world_mut().run_system_once(ime_policy_system).unwrap();
-
-        let mut q = app
-            .world_mut()
-            .query_filtered::<&Window, With<PrimaryWindow>>();
-        let enabled = q.single(app.world()).expect("primary window").ime_enabled;
-        assert!(
-            enabled,
-            "IME must be enabled while a tmux pane is active and not in vi mode"
-        );
-    }
-
-    #[test]
-    fn commit_consumes_state_with_active_pane() {
-        // The unit-test harness has no live tmux client, so the byte send is a
-        // no-op; this asserts the state-machine side effects (commit clears the
-        // composition) and that the active-pane commit path runs without panic.
-        let (mut app, _pane_entity) = build_app_with_active_pane();
+    fn commit_consumes_state_with_focused_terminal() {
+        // This asserts the state-machine side effects (commit clears the
+        // composition) and that the focused-terminal commit path runs without
+        // panic.
+        let (mut app, _terminal_entity) = build_app_with_focused_terminal();
 
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<Ime>>()
@@ -749,7 +664,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,
@@ -768,19 +682,10 @@ mod tests {
         // 8x16 px.
         let mut overlays = TerminalOverlays::default();
         overlays.rects[0] = bevy::math::IVec4::new(2, 3, 10, 40);
-        let pane = app
+        let terminal = app
             .world_mut()
             .spawn((
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: CellDims {
-                        width: 0,
-                        height: 0,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                },
-                ActivePane,
+                OrzmaTerminal,
                 KeyboardFocused,
                 ComputedNode {
                     size: Vec2::new(800.0, 600.0),
@@ -794,7 +699,7 @@ mod tests {
         let child = app
             .world_mut()
             .spawn((
-                ChildOf(pane),
+                ChildOf(terminal),
                 Webview {
                     view_id: "webview".into(),
                     instance_id: None,
@@ -832,14 +737,14 @@ mod tests {
     }
 
     #[test]
-    fn commit_suppressed_to_pane_while_inline_focused() {
-        let (mut app, pane_entity) = build_app_with_active_pane();
+    fn commit_suppressed_to_terminal_while_inline_focused() {
+        let (mut app, terminal_entity) = build_app_with_focused_terminal();
 
-        // Focus an inline child of the active pane.
+        // Focus an inline child of the focused terminal.
         let child = app
             .world_mut()
             .spawn((
-                ChildOf(pane_entity),
+                ChildOf(terminal_entity),
                 Webview {
                     view_id: "webview".into(),
                     instance_id: None,
@@ -859,7 +764,7 @@ mod tests {
         app.update();
 
         // The composition state machine still ran: ImeState cleared on commit,
-        // even though the inline-focus arm suppresses the pane write.
+        // even though the inline-focus arm suppresses the terminal write.
         assert!(
             !app.world().resource::<ImeState>().is_composing(),
             "the state machine must still consume the commit, leaving ImeState non-composing",
@@ -867,10 +772,10 @@ mod tests {
     }
 
     #[test]
-    fn commit_dropped_when_no_active_pane() {
-        let (mut app, pane_entity) = build_app_with_active_pane();
-        // Remove the only active pane: the commit must be dropped (no target).
-        app.world_mut().despawn(pane_entity);
+    fn commit_dropped_when_no_focused_terminal() {
+        let (mut app, terminal_entity) = build_app_with_focused_terminal();
+        // Remove the only focused terminal: the commit must be dropped (no target).
+        app.world_mut().despawn(terminal_entity);
 
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<Ime>>()
@@ -881,7 +786,7 @@ mod tests {
 
         app.update();
 
-        // The state machine still consumed the commit despite having no pane.
+        // The state machine still consumed the commit despite having no terminal.
         assert!(
             !app.world().resource::<ImeState>().is_composing(),
             "commit should clear the composition even when dropped",
@@ -930,7 +835,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,
@@ -983,11 +887,10 @@ mod tests {
     }
 
     #[test]
-    fn ime_enabled_for_keyboard_focused_terminal_without_tmux() {
+    fn ime_enabled_for_keyboard_focused_terminal() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,
@@ -1027,7 +930,7 @@ mod tests {
             .query_filtered::<&Window, With<PrimaryWindow>>();
         assert!(
             q.single(app.world()).expect("primary window").ime_enabled,
-            "IME must enable for a KeyboardFocused terminal with no tmux state",
+            "IME must enable for a KeyboardFocused terminal",
         );
     }
 }

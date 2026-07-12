@@ -1,7 +1,6 @@
 //! Shared terminal-surface identity: the `OrzmaTerminal` marker and the
-//! render-bundle injection observer, which fire for every surface — tmux
-//! panes and the Default-mode shell alike. Surface geometry helpers live in
-//! `geometry`.
+//! render-bundle injection observer, which fire for every surface. Surface
+//! geometry helpers live in `geometry`.
 
 pub(crate) mod geometry;
 

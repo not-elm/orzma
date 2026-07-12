@@ -1,19 +1,17 @@
-//! Default-mode (`AppMode::Default`) webview pointer routing: forwards left
-//! press/release and pointer motion to the inline CEF child under the cursor on
-//! the single Default shell surface, via the mode-agnostic core in
-//! `crate::input::mouse::webview`. The tmux equivalent is `crate::input::mouse::button::tmux`;
-//! this is the single-surface analogue (no pane arbitration / gesture hand-off).
+//! Webview pointer routing for the shell surface: forwards left press/release
+//! and pointer motion to the inline CEF child under the cursor on the single
+//! Default shell surface, via the mode-agnostic core in
+//! `crate::input::mouse::webview`.
 //!
-//! The pointer system runs EVERY frame in `AppMode::Default` (not message-gated)
-//! so an in-flight press is released when input is suppressed (window unfocused /
-//! modal), never leaving CEF logically pressed. Double-handling with the
+//! The pointer system runs EVERY frame (not message-gated) so an in-flight
+//! press is released when input is suppressed (window unfocused), never
+//! leaving CEF logically pressed. Double-handling with the
 //! terminal's `dispatch_mouse_buttons` is avoided by the `MouseDisabled`
 //! rect-claim gate in `crate::input::default_mode::maintain_input_gates`: over an
 //! interactive rect the shell is `MouseDisabled` (dispatch yields, the webview
 //! gets the click); off-rect the press clears webview focus here and falls
 //! through to the terminal.
 
-use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::input::mouse::cell_dims;
 use crate::input::mouse::webview::{
@@ -24,7 +22,6 @@ use crate::input::mouse::webview::{
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::surface::geometry::topmost_surface_at;
-use crate::ui::vi_search::ViModePrompt;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
@@ -41,31 +38,26 @@ pub(super) struct MouseWebviewDefaultModePlugin;
 
 impl Plugin for MouseWebviewDefaultModePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            default_webview_pointer
-                .in_set(InputPhase::Dispatch)
-                .run_if(in_state(AppMode::Default)),
-        )
-        .add_systems(
-            Update,
-            forward_default_webview_mouse_moves
-                .in_set(InputPhase::Hover)
-                .run_if(in_state(AppMode::Default).and_then(on_message::<CursorMoved>)),
-        )
-        .add_systems(
-            Update,
-            forward_default_webview_wheel
-                .in_set(InputPhase::Dispatch)
-                .run_if(in_state(AppMode::Default).and_then(on_message::<MouseWheel>)),
-        );
+        app.add_systems(Update, default_webview_pointer.in_set(InputPhase::Dispatch))
+            .add_systems(
+                Update,
+                forward_default_webview_mouse_moves
+                    .in_set(InputPhase::Hover)
+                    .run_if(on_message::<CursorMoved>),
+            )
+            .add_systems(
+                Update,
+                forward_default_webview_wheel
+                    .in_set(InputPhase::Dispatch)
+                    .run_if(on_message::<MouseWheel>),
+            );
     }
 }
 
 /// Forwards left press/release to the inline CEF child under the cursor on the
-/// Default shell. Runs every frame in `AppMode::Default`: a suppressed frame
-/// (window unfocused / vi-search prompt) drains the reader and releases an
-/// in-flight press so the focused page is not left logically pressed.
+/// Default shell. Runs EVERY frame: a suppressed frame (window unfocused)
+/// drains the reader and releases an in-flight press so the focused page is
+/// not left logically pressed.
 fn default_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
@@ -80,7 +72,6 @@ fn default_webview_pointer(
         With<OrzmaTerminal>,
     >,
     metrics: Res<TerminalCellMetricsResource>,
-    vi_mode_prompt: Res<ViModePrompt>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let Ok(window) = windows.single() else {
@@ -89,7 +80,7 @@ fn default_webview_pointer(
         return;
     };
     let frame = webview_pointer_frame(window, &metrics);
-    if !window.focused || vi_mode_prompt.open.is_some() {
+    if !window.focused {
         buttons.clear();
         release_webview_press(
             &mut webview_press,
@@ -132,8 +123,7 @@ fn default_webview_pointer(
 }
 
 /// Forwards pointer motion over an interactive inline rect of the Default shell
-/// to the child's CEF browser via the shared `forward_webview_move_at`. Skipped
-/// while a vi-search prompt owns input.
+/// to the child's CEF browser via the shared `forward_webview_move_at`.
 fn forward_default_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     surfaces: Query<
@@ -151,15 +141,11 @@ fn forward_default_webview_mouse_moves(
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    vi_mode_prompt: Res<ViModePrompt>,
     browsers: Option<NonSend<Browsers>>,
 ) {
     let Some(moved) = cursor_msg.read().last() else {
         return;
     };
-    if vi_mode_prompt.open.is_some() {
-        return;
-    }
     let Ok(window) = windows.single() else {
         return;
     };
@@ -208,14 +194,13 @@ fn forward_default_webview_wheel(
     overlay_rects: Query<&TerminalOverlays>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
-    vi_mode_prompt: Res<ViModePrompt>,
     browsers: Option<NonSend<Browsers>>,
 ) {
     let Ok(window) = windows.single() else {
         wheel.clear();
         return;
     };
-    if !window.focused || vi_mode_prompt.open.is_some() {
+    if !window.focused {
         wheel.clear();
         return;
     }
@@ -284,7 +269,6 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseButtonInput>();
         app.init_resource::<WebviewPress>();
-        app.init_resource::<ViModePrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
         app.add_systems(Update, default_webview_pointer);

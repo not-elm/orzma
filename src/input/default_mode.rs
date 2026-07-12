@@ -1,15 +1,14 @@
-//! Host-side input for `AppMode::Default`: maintains the crate's
-//! `KeyboardDisabled` / `MouseDisabled` markers from the coarse guards (IME,
-//! focus, webview). The frame's shortcut messages (resolved by
+//! Host-side input: maintains the crate's `KeyboardDisabled` / `MouseDisabled`
+//! markers from the coarse guards (IME, focus, webview). The frame's shortcut
+//! messages (resolved by
 //! `crate::input::keyboard::key_effect::classify_key_batch`) are applied by
 //! `crate::input::shortcuts::default_mode`'s per-message systems — vi-mode
 //! entry, the shared `[vi-mode]` key table (while vi mode is active),
 //! direct-chord and leader paste, and raw-key typing
 //! (`crate::action::clipboard::PasteAction`, `TerminalKeyInput`). Quit and
 //! release-webview-focus are handled upstream; the pane/window actions are
-//! no-ops in Default mode.
+//! no-ops.
 
-use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::input::focus::{KeyboardDisabled, MouseDisabled};
 use crate::input::ime::{ImeCommit, ImeState};
@@ -22,24 +21,18 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use orzma_tmux::TmuxPane;
 use orzma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::TerminalOverlays;
 use orzma_webview::{NonInteractive, Webview, webview_hit_at};
 
-/// Registers the host-side input systems for `AppMode::Default`.
+/// Registers the host-side input systems.
 pub(super) struct DefaultHostInputPlugin;
 
 impl Plugin for DefaultHostInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            maintain_input_gates
-                .before(InputPhase::Hover)
-                .run_if(in_state(AppMode::Default)),
-        )
-        .add_observer(apply_ime_commit_to_terminal);
+        app.add_systems(Update, maintain_input_gates.before(InputPhase::Hover))
+            .add_observer(apply_ime_commit_to_terminal);
     }
 }
 
@@ -119,9 +112,8 @@ fn maintain_input_gates(
 }
 
 /// The Default shell whose INTERACTIVE inline webview rect is under the cursor,
-/// or `None`. Mirrors `crate::input::tmux::gate::claimed_webview_pane` for the single
-/// Default surface: resolve the topmost `OrzmaTerminal` under the cursor, then
-/// hit-test its active overlay rects (`webview_hit_at` skips `NonInteractive`
+/// or `None`. Resolves the topmost `OrzmaTerminal` under the cursor, then
+/// hit-tests its active overlay rects (`webview_hit_at` skips `NonInteractive`
 /// children). A claimed surface is marked `MouseDisabled` so
 /// `dispatch_mouse_buttons` yields the click to the webview router.
 fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<Entity> {
@@ -150,12 +142,8 @@ fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<
 fn apply_ime_commit_to_terminal(
     ev: On<ImeCommit>,
     mut commands: Commands,
-    terminals: Query<(), (With<OrzmaTerminal>, Without<TmuxPane>)>,
+    terminals: Query<(), With<OrzmaTerminal>>,
 ) {
-    // NOTE: discriminate on TmuxPane absence — tmux panes are also OrzmaTerminal
-    // entities (src/render/tmux.rs), and their commits go out via the tmux
-    // observer in src/input/tmux/forward.rs. Without this filter the commit would be
-    // double-delivered.
     if terminals.get(ev.entity).is_err() {
         return;
     }
@@ -183,9 +171,7 @@ mod tests {
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
     use bevy::window::PrimaryWindow;
     use orzma_configs::shortcuts::{Modifiers, Shortcut};
-    use orzma_tmux::{PaneId, TmuxPane};
     use orzma_tty_engine::TerminalKey;
-    use tmux_control_parser::CellDims;
 
     #[test]
     fn ime_commit_fires_terminal_key_input_for_plain_terminal() {
@@ -218,44 +204,6 @@ mod tests {
     }
 
     #[test]
-    fn ime_commit_is_noop_for_tmux_pane_target() {
-        use crate::input::ime::ImeCommit;
-        use crate::surface::OrzmaTerminal;
-
-        #[derive(Resource, Default)]
-        struct Hits(u32);
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<Hits>()
-            .add_observer(apply_ime_commit_to_terminal)
-            .add_observer(|_ev: On<TerminalKeyInput>, mut h: ResMut<Hits>| h.0 += 1);
-
-        let pane = app
-            .world_mut()
-            .spawn((
-                OrzmaTerminal,
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: CellDims {
-                        width: 0,
-                        height: 0,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                },
-            ))
-            .id();
-        app.world_mut().trigger(ImeCommit {
-            entity: pane,
-            text: "x".into(),
-        });
-        app.update();
-
-        assert_eq!(app.world().resource::<Hits>().0, 0);
-    }
-
-    #[test]
     fn disables_input_on_any_guard() {
         assert!(!should_disable_input(false, true, false));
         assert!(should_disable_input(true, true, false));
@@ -263,7 +211,7 @@ mod tests {
         assert!(should_disable_input(false, true, true));
     }
 
-    /// Default shell (`OrzmaTerminal`, no `TmuxPane`) at window center (400,300),
+    /// Default shell (`OrzmaTerminal`) at window center (400,300),
     /// size 800x600, with one interactive inline rect rows 2..12, cols 3..43
     /// (phys y 32..192, x 24..344 at the 8x16 px cell pitch). Runs
     /// `maintain_input_gates`. Returns `(app, shell)`.
@@ -445,10 +393,9 @@ mod tests {
                     app.world_mut()
                         .write_message(ViModeMessage { action, focused });
                 }
-                KeyEffect::Type { logical, key_code } => {
+                KeyEffect::Type { logical, .. } => {
                     app.world_mut().write_message(TypeMessage {
                         logical,
-                        key_code,
                         focused,
                         mods,
                     });

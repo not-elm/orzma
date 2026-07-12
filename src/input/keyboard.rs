@@ -1,8 +1,8 @@
 //! Host keyboard input primitives: registers the `KeyboardInput` message stream
 //! and provides the key/modifier mapping helpers used elsewhere in the input
-//! pipeline — `bevy_key_to_terminal_key` (the `AppMode::Default` applier's
-//! raw-key forwarding) and `current_terminal_modifiers` (the Default applier
-//! plus the mouse dispatch).
+//! pipeline — `bevy_key_to_terminal_key` (the Default applier's raw-key
+//! forwarding) and `current_terminal_modifiers` (the Default applier plus the
+//! mouse dispatch).
 
 use crate::input::current_modifiers;
 use crate::input::keyboard::handler::KeyboardHandlerPlugin;

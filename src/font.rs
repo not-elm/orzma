@@ -97,13 +97,6 @@ impl TerminalUiFont {
     }
 }
 
-/// Strong handle to the bundled Nerd Font, used only for the window-bar
-/// powerline separator glyphs (U+E0B0 / U+E0B2). Independent of
-/// `TerminalUiFont` so a user font override (which may lack those glyphs)
-/// cannot turn the separators into tofu.
-#[derive(Resource, Clone)]
-pub struct PowerlineFont(pub Handle<Font>);
-
 /// Bevy plugin that wires `bridge_font_config` into Startup.
 pub struct FontBridgePlugin;
 
@@ -162,9 +155,6 @@ fn bridge_font_config(
 ) {
     font_size.0 = configs.font.size;
     let font = &configs.font;
-
-    let powerline = fonts_assets.add(Font::from_bytes(bundled::REGULAR.to_vec()));
-    commands.insert_resource(PowerlineFont(powerline));
 
     // NOTE: materialize &mut FontContext once, before the terminal-family
     // branch, so both the terminal-face resolution and the UI family probe
@@ -493,26 +483,6 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&tmp);
-    }
-
-    #[test]
-    fn powerline_font_resource_is_inserted_and_resolves() {
-        let (mut app, _guard, _env) = make_test_app(None);
-        app.update();
-
-        let handle = app
-            .world()
-            .get_resource::<PowerlineFont>()
-            .expect("PowerlineFont must be inserted at Startup")
-            .0
-            .clone();
-        assert!(
-            app.world()
-                .resource::<Assets<Font>>()
-                .get(&handle)
-                .is_some(),
-            "PowerlineFont handle must resolve to a Font asset"
-        );
     }
 
     #[test]

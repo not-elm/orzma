@@ -1,15 +1,14 @@
-//! `AppMode`s, resolves the frame's pressed keys through the pure
+//! Resolves the frame's pressed keys through the pure
 //! `crate::input::resolve::classify_key_batch` decider, handles the two
 //! mode-independent effects inline (Quit → `AppExit`, release-webview-focus →
-//! clear `FocusedWebview`), and fans out the remaining effects as the four
+//! clear `FocusedWebview`), and fans out the remaining effects as the three
 //! per-responsibility shortcut messages (`ShortcutMessage`, `ViModeMessage`,
-//! `TypeMessage`, `WebviewForwardMessage`). The per-mode appliers
-//! (`crate::input::shortcuts::default_mode`, `crate::input::shortcuts::tmux`)
-//! consume those messages and apply the mode-specific events. This is the
-//! sole system that steps `LeaderPhase`.
+//! `TypeMessage`). The default-mode appliers
+//! (`crate::input::shortcuts::default_mode`) consume those messages and apply
+//! the mode-specific events. This is the sole system that steps
+//! `LeaderPhase`.
 
 use crate::action::vi::ResolvedViModeKeys;
-use crate::app_mode::AppMode;
 use crate::input::current_modifiers;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::{ImeState, resolve_focused_surface};
@@ -18,12 +17,9 @@ use crate::input::keyboard::key_effect::{
 };
 use crate::input::shortcuts::{
     HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
-    Shortcuts, TypeMessage, ViModeMessage, WebviewForwardMessage, clear_leader_phase,
+    Shortcuts, TypeMessage, ViModeMessage, clear_leader_phase,
 };
-use crate::ui::tmux::confirm_prompt::ConfirmState;
-use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::ui::vi_mode::ViModeState;
-use crate::ui::vi_search::ViModePrompt;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
@@ -49,18 +45,6 @@ impl Plugin for KeyboardHandlerPlugin {
     }
 }
 
-/// The modal-guard and mode inputs `resolve_key_effects` reads: the tmux modal
-/// prompts, IME state, and the active `AppMode` that gates the tmux-only prompt
-/// guards.
-#[derive(SystemParam)]
-struct ModalGuards<'w> {
-    vi_mode_prompt: Res<'w, ViModePrompt>,
-    confirm_state: Option<Res<'w, ConfirmState>>,
-    rename_prompt: Option<Res<'w, RenamePrompt>>,
-    ime: Res<'w, ImeState>,
-    app_mode: Res<'w, State<AppMode>>,
-}
-
 /// The classifier inputs `resolve_key_effects` feeds to `classify_key_batch`: the
 /// shortcut table, resolved vi-mode keys, held modifier keys, and the
 /// real-time clock the leader timeout is measured against.
@@ -73,15 +57,15 @@ struct ClassifyInputs<'w> {
 }
 
 /// Resolves the frame's pressed keys and fans out the per-responsibility
-/// shortcut messages. Runs in both `AppMode`s (gated only on
+/// shortcut messages. Runs unconditionally (gated only on
 /// `on_message::<KeyboardInput>`), in `InputPhase::FocusedKey` /
 /// `ShortcutSet::Resolve` / `LeaderGate::Advance`. The sole `LeaderPhase`-stepping
-/// system: on a coarse guard (a tmux modal prompt, IME composition, or an
-/// unfocused window) it clears the leader, drains the frame's keys, and writes no
-/// messages; otherwise it classifies the keys, applies `Quit` (`AppExit`) and
+/// system: on a coarse guard (IME composition or an unfocused window) it
+/// clears the leader, drains the frame's keys, and writes no messages;
+/// otherwise it classifies the keys, applies `Quit` (`AppExit`) and
 /// `ReleaseWebviewFocus` (clear `FocusedWebview`) inline, and writes every other
 /// effect to its typed message (`ShortcutMessage`, `ViModeMessage`,
-/// `TypeMessage`, `WebviewForwardMessage`).
+/// `TypeMessage`).
 fn resolve_key_effects(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
@@ -90,28 +74,15 @@ fn resolve_key_effects(
     mut leader_phase: ResMut<LeaderPhase>,
     mut held_repeat: ResMut<HeldRepeatKey>,
     mut messages: ShortcutMessages,
-    guards: ModalGuards,
+    ime: Res<ImeState>,
     inputs: ClassifyInputs,
     windows: Query<&Window, With<PrimaryWindow>>,
     focused_surface: Query<Entity, With<KeyboardFocused>>,
     vi_modes: Query<(), With<ViModeState>>,
     forward_keys: Query<&ForwardKeys>,
 ) {
-    let mode = guards.app_mode.get().clone();
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
-    // NOTE: the prompt guards (vi-mode prompt, confirm-before, rename) are
-    // tmux-only by design. Those resources are set by tmux actions and cleared
-    // only by their own handlers — never on a mode transition — so a prompt left
-    // open when the tmux connection drops (falling back to Default) would
-    // otherwise drain EVERY key and freeze Default keyboard input. IME + window
-    // focus guard both modes. When a guard fires, drain (don't replay) the
-    // frame's keys and write no messages, so no key leaks to the terminal,
-    // tmux, or the prefix state machine (and no preedit key is double-sent).
-    let prompt_open = mode == AppMode::Tmux
-        && (guards.vi_mode_prompt.open.is_some()
-            || guards.confirm_state.is_some()
-            || guards.rename_prompt.is_some());
-    if prompt_open || guards.ime.is_composing() || !focused_window {
+    if ime.is_composing() || !focused_window {
         clear_leader_phase(&mut leader_phase);
         if held_repeat.0.is_some() {
             held_repeat.0 = None;
@@ -181,22 +152,17 @@ fn resolve_key_effects(
             KeyEffect::ViMode(action) => {
                 messages.vi_mode.write(ViModeMessage { action, focused });
             }
-            KeyEffect::Type { logical, key_code } => {
+            KeyEffect::Type { logical, .. } => {
                 messages.type_keys.write(TypeMessage {
                     logical,
-                    key_code,
                     focused,
                     mods,
                 });
             }
-            KeyEffect::WebviewForward { logical, key_code } => {
-                messages.webview_forward.write(WebviewForwardMessage {
-                    logical,
-                    key_code,
-                    focused,
-                    mods,
-                });
-            }
+            // NOTE: WebviewForward is classified (not suppressed, not typed) so
+            // the chord reaches the focused webview through CEF's native
+            // keyboard path; there is no message to deliver host-side.
+            KeyEffect::WebviewForward { .. } => {}
         }
     }
     let ms = ModifiersState {
@@ -231,11 +197,8 @@ mod tests {
     use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
-    use bevy::state::app::StatesPlugin;
     use orzma_configs::shortcuts::Modifiers;
-    use orzma_tmux::{PaneId, TmuxPane};
     use std::time::Duration;
-    use tmux_control_parser::CellDims;
 
     #[derive(Resource, Default)]
     struct Captured {
@@ -243,16 +206,15 @@ mod tests {
         shortcuts: Vec<(Shortcut, bool)>,
         vi_mode: usize,
         typed: usize,
-        webview_forward: usize,
         focused: Option<Entity>,
         in_vi_mode: Option<bool>,
         mods: Option<Modifiers>,
-        last_typed: Option<(Key, KeyCode)>,
+        last_typed: Option<Key>,
     }
 
     impl Captured {
         fn message_count(&self) -> usize {
-            self.shortcuts.len() + self.vi_mode + self.typed + self.webview_forward
+            self.shortcuts.len() + self.vi_mode + self.typed
         }
     }
 
@@ -261,7 +223,6 @@ mod tests {
         mut shortcuts: MessageReader<ShortcutMessage>,
         mut vi_mode: MessageReader<ViModeMessage>,
         mut typed: MessageReader<TypeMessage>,
-        mut webview_forward: MessageReader<WebviewForwardMessage>,
     ) {
         for m in shortcuts.read() {
             cap.shortcuts.push((m.action, m.via_leader));
@@ -276,12 +237,7 @@ mod tests {
             cap.typed += 1;
             cap.focused = m.focused;
             cap.mods = Some(m.mods);
-            cap.last_typed = Some((m.logical.clone(), m.key_code));
-        }
-        for m in webview_forward.read() {
-            cap.webview_forward += 1;
-            cap.focused = m.focused;
-            cap.mods = Some(m.mods);
+            cap.last_typed = Some(m.logical.clone());
         }
     }
 
@@ -292,13 +248,11 @@ mod tests {
     fn resolve_app(shortcuts: Shortcuts) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins(StatesPlugin)
             .add_plugins(KeyboardHandlerPlugin)
             .add_message::<KeyboardInput>()
             .add_message::<ShortcutMessage>()
             .add_message::<ViModeMessage>()
             .add_message::<TypeMessage>()
-            .add_message::<WebviewForwardMessage>()
             .add_message::<AppExit>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ImeState>()
@@ -307,10 +261,8 @@ mod tests {
             .init_resource::<LeaderPhase>()
             .init_resource::<HeldRepeatKey>()
             .init_resource::<ResolvedViModeKeys>()
-            .init_resource::<ViModePrompt>()
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
-            .insert_state(AppMode::Default)
             .configure_sets(Update, (ShortcutSet::Resolve, ShortcutSet::Apply).chain())
             .add_systems(
                 Update,
@@ -326,18 +278,6 @@ mod tests {
             PrimaryWindow,
         ));
         app
-    }
-
-    fn tmux_pane(id: u32) -> TmuxPane {
-        TmuxPane {
-            id: PaneId(id),
-            dims: CellDims {
-                width: 80,
-                height: 24,
-                xoff: 0,
-                yoff: 0,
-            },
-        }
     }
 
     fn press_key(app: &mut App, key_code: KeyCode, logical: Key) {
@@ -365,7 +305,7 @@ mod tests {
         );
         assert_eq!(
             cap.last_typed,
-            Some((Key::Character("a".into()), KeyCode::KeyA)),
+            Some(Key::Character("a".into())),
             "a plain key resolves to one TypeMessage"
         );
         assert_eq!(cap.focused, Some(term));
@@ -471,22 +411,6 @@ mod tests {
             cap.message_count(),
             0,
             "ReleaseWebviewFocus is handled inline and never reaches a ShortcutMessage"
-        );
-    }
-
-    #[test]
-    fn focused_resolves_for_tmux_pane() {
-        let mut app = resolve_app(Shortcuts::default());
-        let pane = app
-            .world_mut()
-            .spawn((OrzmaTerminal, tmux_pane(1), KeyboardFocused))
-            .id();
-        press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
-        app.update();
-        assert_eq!(
-            app.world().resource::<Captured>().focused,
-            Some(pane),
-            "a KeyboardFocused tmux pane resolves as the message's focused field"
         );
     }
 

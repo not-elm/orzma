@@ -9,7 +9,6 @@ use crate::inactive_pane::InactivePaneConfig;
 use crate::keyboard::KeyboardConfig;
 use crate::mouse::MouseConfig;
 use crate::orzma::OrzmaConfig;
-use crate::scrollback::ScrollbackConfig;
 use crate::shortcuts::Shortcuts;
 use crate::{font::FontConfig, vi_mode::ViModeConfig};
 pub use error::{OrzmaConfigsError, OrzmaConfigsResult};
@@ -23,7 +22,6 @@ pub mod keyboard;
 pub mod mouse;
 pub mod orzma;
 pub mod path;
-pub mod scrollback;
 pub mod shortcuts;
 pub mod vi_mode;
 
@@ -46,9 +44,6 @@ pub struct OrzmaConfigs {
     pub inactive_pane: InactivePaneConfig,
     /// Orzma single-terminal mode configuration.
     pub orzma: OrzmaConfig,
-    /// Scrollback configuration.
-    #[serde(default)]
-    pub scrollback: ScrollbackConfig,
 }
 
 impl OrzmaConfigs {
@@ -262,7 +257,7 @@ mod validate_tests {
 
     #[test]
     fn validate_rejects_leader_shadowing_direct_binding() {
-        let toml_str = "[shortcuts]\nleader = \"Cmd+Q\"\ndetach-session = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Cmd+Q\"\nrename-window = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         match err {
             OrzmaConfigsError::LeaderShadowsDirectBinding { action, .. } => {
@@ -274,14 +269,14 @@ mod validate_tests {
 
     #[test]
     fn validate_rejects_leader_table_internal_dupe() {
-        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\ndetach-session = \"<Leader>d\"\nenter-vi-mode = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nrename-window = \"<Leader>d\"\nenter-vi-mode = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         assert!(matches!(err, OrzmaConfigsError::DuplicatePrefixChords(_)));
     }
 
     #[test]
     fn validate_allows_cross_keyspace_same_key() {
-        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-vi-mode = \"s\"\ndetach-session = \"<Leader>s\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-vi-mode = \"s\"\nrename-window = \"<Leader>s\"\n";
         assert!(
             parse_validated(toml_str).is_ok(),
             "direct `s` and leader-scoped `s` occupy different key-spaces"
@@ -290,13 +285,13 @@ mod validate_tests {
 
     #[test]
     fn validate_allows_leader_with_bindings() {
-        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\ndetach-session = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nrename-window = \"<Leader>d\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 
     #[test]
     fn validate_rejects_unmappable_leader() {
-        let toml_str = "[shortcuts]\nleader = \"Cmd+Plus\"\ndetach-session = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Cmd+Plus\"\nrename-window = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         assert!(matches!(err, OrzmaConfigsError::UnmappableLeader { .. }));
     }
@@ -309,7 +304,7 @@ mod validate_tests {
 
     #[test]
     fn validate_accepts_bare_modifier_tap_leader() {
-        let toml_str = "[shortcuts]\nleader = \"Cmd\"\ndetach-session = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Cmd\"\nrename-window = \"<Leader>d\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 

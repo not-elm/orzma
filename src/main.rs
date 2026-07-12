@@ -1,14 +1,11 @@
 //! orzma Bevy GUI entry point.
 
 mod action;
-mod app_mode;
 mod bootstrap;
 mod cef_profile;
 mod configs;
-mod error;
 mod font;
 mod input;
-mod render;
 mod session;
 mod surface;
 mod system_set;
@@ -17,7 +14,6 @@ mod ui;
 mod window_title;
 
 use crate::action::ActionPlugin;
-use crate::app_mode::AppModePlugin;
 use crate::cef_profile::CefProfileDir;
 use crate::input::focus::FocusSyncPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
@@ -33,14 +29,9 @@ use orzma_tty_engine::TerminalHandlePlugin;
 use orzma_tty_renderer::TerminalRendererPlugin;
 use orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use orzma_webview_host::WebviewAssetRegistry;
-use render::tmux::RenderPlugin;
 use session::default::DefaultSessionPlugin;
-use session::tmux::TmuxLifecyclePlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
-use ui::{
-    OrzmaUiPlugin, vi_mode::ViModePlugin, vi_mode_indicator::ViModeIndicatorPlugin,
-    vi_search::ViModePromptPlugin,
-};
+use ui::{OrzmaUiPlugin, vi_mode::ViModePlugin, vi_mode_indicator::ViModeIndicatorPlugin};
 
 fn main() {
     // NOTE: must run before App::new() spawns any thread — they write process
@@ -60,15 +51,12 @@ fn main() {
             cef_plugin(orzma_registry.clone(), cef_profile.path()),
         ))
         .add_plugins((
-            AppModePlugin,
             SurfacePlugin,
             DefaultSessionPlugin {
                 shell: pre_configs.orzma.shell.clone(),
             },
             TerminalHandlePlugin,
             TerminalRendererPlugin,
-            RenderPlugin,
-            TmuxLifecyclePlugin,
             ActionPlugin,
             OrzmaConfigsPlugin,
             FontBridgePlugin,
@@ -82,7 +70,6 @@ fn main() {
             },
             ViModePlugin,
             ViModeIndicatorPlugin,
-            ViModePromptPlugin,
             WindowTitlePlugin,
             FocusSyncPlugin,
             HyperlinkInputPlugin,
@@ -110,7 +97,7 @@ fn primary_window() -> Window {
 /// Fills `TERM`/`COLORTERM` with a portable default when the inherited `TERM`
 /// is unset or empty, mirroring `alacritty_terminal::tty::setup_env`.
 ///
-/// A child shell (a tmux pane or the native orzma PTY) whose `TERM` is empty
+/// A child shell (the native orzma PTY) whose `TERM` is empty
 /// cannot load terminfo, so zsh's line editor (ZLE) — Backspace included —
 /// silently breaks; a bundled `.app` launched from Finder inherits launchd's
 /// empty `TERM`. `xterm-256color` is exactly Alacritty's fallback when the
@@ -148,21 +135,16 @@ fn term_fallback(current: Option<&str>) -> Option<&'static str> {
 
 /// The UTF-8 `LC_CTYPE` orzma installs when the inherited locale is not UTF-8.
 /// Guaranteed present on macOS, the only platform [`ensure_utf8_locale_env`]
-/// writes it on. Also the fallback advertised to tmux panes
-/// (`crate::session::tmux::locale`).
-pub(crate) const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
+/// writes it on.
+const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
 
 /// Ensures `LC_CTYPE` advertises a UTF-8 locale when the inherited environment
-/// selects none, so tmux treats orzma's control client as UTF-8 capable.
+/// selects none, so PTY children see a sane character type.
 ///
-/// tmux replaces every TAB (and other non-printable byte) in `display-message`
-/// / `list-windows` format output with `_` when its effective `LC_CTYPE` is not
-/// UTF-8 (the C/POSIX locale). orzma's tab-separated `LIST_WINDOWS_FORMAT`
-/// query then collapses into a single unsplittable field, breaking window
-/// enumeration. A bundled `.app` launched from Finder inherits launchd's
-/// environment with no `LANG`/`LC_*`, so it falls into the C locale; this
-/// restores a UTF-8 `LC_CTYPE`. A usable inherited UTF-8 locale is left
-/// untouched.
+/// A bundled `.app` launched from Finder inherits launchd's environment with
+/// no `LANG`/`LC_*`, so it falls into the C locale and spawned shells
+/// misclassify multibyte input; this restores a UTF-8 `LC_CTYPE`. A usable
+/// inherited UTF-8 locale is left untouched.
 ///
 /// # Invariants
 ///
@@ -202,7 +184,7 @@ fn set_utf8_ctype_fallback() {}
 /// The UTF-8 `LC_CTYPE` orzma substitutes when the effective locale is not
 /// UTF-8, or `None` to keep the inherited locale.
 ///
-/// Mirrors tmux's own `LC_ALL` > `LC_CTYPE` > `LANG` resolution: the first
+/// Follows the POSIX `LC_ALL` > `LC_CTYPE` > `LANG` resolution: the first
 /// non-empty of the three decides the character type. Returns the fallback when
 /// that value is absent or not UTF-8; otherwise `None`.
 fn utf8_locale_fallback(
@@ -222,7 +204,7 @@ fn utf8_locale_fallback(
 
 /// Returns whether a locale string selects the UTF-8 codeset (`…UTF-8`,
 /// `…UTF8`, or the bare macOS `UTF-8`), case-insensitively.
-pub(crate) fn is_utf8_locale(value: &str) -> bool {
+fn is_utf8_locale(value: &str) -> bool {
     let upper = value.to_ascii_uppercase();
     upper.contains("UTF-8") || upper.contains("UTF8")
 }

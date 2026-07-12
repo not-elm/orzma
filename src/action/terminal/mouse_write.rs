@@ -1,11 +1,10 @@
-//! Mouse-report write action: delivers mouse-protocol bytes to a terminal's
-//! backend (PTY when attached, `TerminalForwardInput` when detached).
+//! Mouse-report write action: delivers mouse-protocol bytes to a terminal's PTY.
 
-use crate::action::terminal::{TerminalBackendQuery, TerminalForwardInput, apply_to_terminal};
+use crate::action::terminal::{TerminalBackendQuery, apply_to_terminal};
 use bevy::prelude::*;
 
 /// Writes mouse-protocol report bytes to `entity`'s backend (PTY when
-/// attached, `TerminalForwardInput` when detached).
+/// attached; dropped when detached).
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct TerminalMouseWrite {
     /// The terminal entity whose backend receives `bytes`.
@@ -24,8 +23,8 @@ impl Plugin for MouseWritePlugin {
     }
 }
 
-/// Applies a `TerminalMouseWrite`: PTY write when attached, otherwise a
-/// `TerminalForwardInput` to the host-owned backend router.
+/// Applies a `TerminalMouseWrite`: PTY write when attached;
+/// a detached (PTY-less) terminal drops the bytes.
 fn on_terminal_mouse_write(
     ev: On<TerminalMouseWrite>,
     mut commands: Commands,
@@ -45,49 +44,6 @@ fn on_terminal_mouse_write(
                 tracing::warn!(?e, "orzma mouse pty write failed");
             }
         },
-        |commands, _handle, entity| {
-            commands.trigger(TerminalForwardInput {
-                entity,
-                bytes: ev.bytes.clone(),
-            });
-            false
-        },
+        |_commands, _handle, _entity| false,
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::surface::OrzmaTerminal;
-    use orzma_tty_engine::TerminalHandle;
-
-    #[test]
-    fn detached_write_event_forwards_bytes() {
-        #[derive(Resource, Default)]
-        struct CapturedForward(Vec<Vec<u8>>);
-
-        let mut app = App::new();
-        app.init_resource::<CapturedForward>()
-            .add_observer(on_terminal_mouse_write)
-            .add_observer(
-                |ev: On<TerminalForwardInput>, mut cap: ResMut<CapturedForward>| {
-                    cap.0.push(ev.bytes.clone());
-                },
-            );
-
-        let handle = TerminalHandle::detached(10, 5);
-        let entity = app.world_mut().spawn((OrzmaTerminal, handle)).id();
-
-        app.world_mut().trigger(TerminalMouseWrite {
-            entity,
-            bytes: b"\x1b[<0;1;1M".to_vec(),
-        });
-        app.world_mut().flush();
-
-        assert_eq!(
-            app.world().resource::<CapturedForward>().0,
-            vec![b"\x1b[<0;1;1M".to_vec()],
-            "TerminalMouseWrite on a PTY-less OrzmaTerminal must emit TerminalForwardInput"
-        );
-    }
 }

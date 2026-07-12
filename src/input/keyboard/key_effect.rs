@@ -1,6 +1,6 @@
 //! Pure decision layer for keyboard-shortcut dispatch: the `KeyEffect`
 //! intermediate representation plus the single decider `classify_key_batch`
-//! that the Default and tmux keyboard dispatchers wire into. No ECS handles —
+//! that the Default-mode keyboard dispatcher wires into. No ECS handles —
 //! fully unit-testable without a Bevy `App`.
 
 use crate::action::vi::ResolvedViModeKeys;
@@ -15,8 +15,8 @@ use orzma_webview::NormalizedChord;
 use std::time::Duration;
 
 /// One decided effect of a single pressed key, produced by `classify_key_batch`.
-/// Mode-specific appliers (the Default and tmux dispatchers) interpret each
-/// variant; this type carries no ECS handles so the decider stays pure.
+/// The Default-mode appliers interpret each variant; this type carries no ECS
+/// handles so the decider stays pure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KeyEffect {
     /// Run a bound `Shortcut`. `via_leader` distinguishes a leader-scoped
@@ -32,8 +32,7 @@ pub(crate) enum KeyEffect {
     },
     /// Run a matched `[vi-mode]` key.
     ViMode(ViModeAction),
-    /// Type the key into the focused terminal (Default: the PTY directly;
-    /// tmux: forwarded as a `send-keys`).
+    /// Type the key into the focused terminal's PTY directly.
     Type {
         /// The logical key, for text/printable-key mapping.
         logical: Key,
@@ -93,7 +92,7 @@ pub(crate) fn classify_key_batch<'a>(
     // repeat-marked key doubling as a vi-mode key would re-fire its bound
     // action into the hidden live terminal instead of being resolved as a
     // vi-mode key below. Close the window (and disarm hold-to-repeat) before
-    // the batch is processed (tmux/Default parity).
+    // the batch is processed.
     if ctx.in_vi_mode {
         *held_repeat = None;
         if matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
@@ -157,8 +156,7 @@ pub(crate) fn classify_key_batch<'a>(
         }
         // NOTE: vi-mode keys resolve only after leader and GUI-shortcut
         // dispatch declined the key, and a vi-mode key never falls through
-        // to Type — an unmatched key in vi mode is swallowed, not typed
-        // (tmux/Default parity).
+        // to Type — an unmatched key in vi mode is swallowed, not typed.
         if ctx.in_vi_mode {
             if let Some(vi_action) =
                 resolved_vi_mode.resolve(&ev.logical_key, ev.key_code, ctx.mods)
@@ -592,11 +590,8 @@ mod tests {
 
     #[test]
     fn pending_skips_bare_modifier_then_second_key() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyD,
-            Shortcut::DetachSession,
-            Duration::ZERO,
-        );
+        let sc =
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyD, Shortcut::KillPane, Duration::ZERO);
         let resolved_vi_mode = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [
@@ -613,7 +608,7 @@ mod tests {
         assert_eq!(
             effects,
             vec![KeyEffect::Shortcut {
-                action: Shortcut::DetachSession,
+                action: Shortcut::KillPane,
                 via_leader: true,
             }],
             "the leading bare modifier must not consume the pending slot; the real \
@@ -624,7 +619,7 @@ mod tests {
 
     #[test]
     fn pending_suppresses_type_for_second_key() {
-        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::DetachSession, ms(500));
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::KillPane, ms(500));
         let resolved_vi_mode = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [press(KeyCode::KeyA, Key::Character("a".into()))];
@@ -645,7 +640,7 @@ mod tests {
 
     #[test]
     fn pending_types_trailing_same_frame_key() {
-        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::DetachSession, ms(500));
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::KillPane, ms(500));
         let resolved_vi_mode = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [

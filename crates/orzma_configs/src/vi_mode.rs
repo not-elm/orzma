@@ -1,7 +1,7 @@
-//! `[vi-mode]` table: shared vi-mode key bindings for both Default and
-//! tmux modes. Keys are LOGICAL (case-sensitive characters, symbols allowed)
-//! with an optional `Ctrl+` prefix — a different grammar from `[shortcuts]`
-//! chords, matching how vi-mode keys are actually decided at runtime.
+//! `[vi-mode]` table: shared vi-mode key bindings. Keys are LOGICAL
+//! (case-sensitive characters, symbols allowed) with an optional `Ctrl+`
+//! prefix — a different grammar from `[shortcuts]` chords, matching how
+//! vi-mode keys are actually decided at runtime.
 
 use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
@@ -185,8 +185,8 @@ pub fn parse_vi_mode_key(s: &str) -> Result<ViModeKey, ViModeKeyParseError> {
     })
 }
 
-/// A cursor motion, in mode-neutral vocabulary. The binary maps this to the
-/// engine's `ViMotion` (Default mode) or a tmux `-X` command (tmux mode).
+/// A cursor motion, in engine-neutral vocabulary. The binary maps this to
+/// the terminal engine's `ViMotion`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViModeMotion {
     /// One cell left.
@@ -300,9 +300,11 @@ pub enum ViModeAction {
     Yank,
     /// Leave vi mode.
     Exit,
-    /// Open a search / jump prompt (tmux mode only for now).
+    /// Open a search / jump prompt (currently has no effect — local vi-mode
+    /// search is a future feature).
     Prompt(ViModePromptDir),
-    /// Repeat the previous search (tmux mode only for now).
+    /// Repeat the previous search (currently has no effect — local vi-mode
+    /// search is a future feature).
     SearchStep(ViModeSearchStep),
 }
 
@@ -422,21 +424,29 @@ vi_mode_fields! {
     yank => "yank", ViModeAction::Yank, ["y", "Enter"];
     /// Leave vi mode.
     exit => "exit", ViModeAction::Exit, ["q", "Escape", "Ctrl+C"];
-    /// Open the search-down prompt (tmux mode only for now).
+    /// Open the search-down prompt (currently has no effect — local vi-mode
+    /// search is a future feature).
     search_forward => "search-forward", ViModeAction::Prompt(ViModePromptDir::SearchForward), ["/"];
-    /// Open the search-up prompt (tmux mode only for now).
+    /// Open the search-up prompt (currently has no effect — local vi-mode
+    /// search is a future feature).
     search_backward => "search-backward", ViModeAction::Prompt(ViModePromptDir::SearchBackward), ["?"];
-    /// Repeat the previous search (tmux mode only for now).
+    /// Repeat the previous search (currently has no effect — local vi-mode
+    /// search is a future feature).
     search_next => "search-next", ViModeAction::SearchStep(ViModeSearchStep::Next), ["n"];
-    /// Repeat the previous search, reversed (tmux mode only for now).
+    /// Repeat the previous search, reversed (currently has no effect — local
+    /// vi-mode search is a future feature).
     search_previous => "search-previous", ViModeAction::SearchStep(ViModeSearchStep::Previous), ["N"];
-    /// Open the jump-to-char-forward prompt (tmux mode only for now).
+    /// Open the jump-to-char-forward prompt (currently has no effect — local
+    /// vi-mode search is a future feature).
     jump_forward => "jump-forward", ViModeAction::Prompt(ViModePromptDir::JumpForward), ["f"];
-    /// Open the jump-to-char-backward prompt (tmux mode only for now).
+    /// Open the jump-to-char-backward prompt (currently has no effect —
+    /// local vi-mode search is a future feature).
     jump_backward => "jump-backward", ViModeAction::Prompt(ViModePromptDir::JumpBackward), ["F"];
-    /// Open the jump-till-char-forward prompt (tmux mode only for now).
+    /// Open the jump-till-char-forward prompt (currently has no effect —
+    /// local vi-mode search is a future feature).
     jump_to_forward => "jump-to-forward", ViModeAction::Prompt(ViModePromptDir::JumpToForward), ["t"];
-    /// Open the jump-till-char-backward prompt (tmux mode only for now).
+    /// Open the jump-till-char-backward prompt (currently has no effect —
+    /// local vi-mode search is a future feature).
     jump_to_backward => "jump-to-backward", ViModeAction::Prompt(ViModePromptDir::JumpToBackward), ["T"];
 }
 

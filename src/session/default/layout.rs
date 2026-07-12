@@ -38,11 +38,6 @@ fn reset_last_size(_trigger: On<Add, OrzmaTerminal>, mut last_size: ResMut<Orzma
     last_size.0 = None;
 }
 
-// NOTE: not Default-only despite the module path — the query needs
-// &mut PtyHandle + &mut Coalescer, so detached tmux panes never match, but the
-// adopted tmux gateway (OrzmaTerminal + real PtyHandle) is then the single
-// match: this system keeps resizing the hidden gateway PTY during tmux mode.
-// Do not gate it on AppMode::Default without re-examining gateway behavior.
 fn resize_to_window(
     mut commands: Commands,
     mut last_size: ResMut<OrzmaLastSize>,

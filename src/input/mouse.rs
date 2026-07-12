@@ -4,7 +4,7 @@
 //! the per-path dispatchers in `button` and `wheel`, and the `MouseEffect` IR +
 //! `trigger_mouse_effects` used by the `button` path only (the `wheel` path
 //! triggers its `EntityEvent`s directly). Gated per entity by `MouseDisabled`,
-//! so dispatch runs in both `AppMode`s for surfaces that still own the mouse.
+//! so dispatch runs for every surface that still owns the mouse.
 
 use crate::action::terminal::{
     TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy,
@@ -19,7 +19,6 @@ use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::CursorMoved;
-pub(crate) use button::tmux::divider_at;
 use orzma_tty_engine::{CellCoord, Point, SelectionType, Side, TermMode, TerminalHandle};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::schema::TerminalGrid;
