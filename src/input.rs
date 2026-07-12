@@ -1,8 +1,7 @@
-//! Root of the host input pipeline: keyboard, mouse, focus, gesture and binding primitives, IME, hyperlink-hover, shortcuts, option-as-alt, and the
-//! `default_mode` dispatchers.
+//! Root of the host input pipeline: keyboard, mouse, focus, gesture and
+//! binding primitives, IME, hyperlink-hover, shortcuts, and option-as-alt.
 
 mod bindings;
-pub(crate) mod default_mode;
 pub(crate) mod focus;
 pub(crate) mod hyperlink;
 pub(crate) mod ime;
@@ -13,8 +12,8 @@ pub(crate) mod shortcuts;
 
 use crate::{
     input::{
-        default_mode::DefaultHostInputPlugin, keyboard::KeyboardInputPlugin,
-        mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin, shortcuts::ShortcutsPlugin,
+        keyboard::KeyboardInputPlugin, mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin,
+        shortcuts::ShortcutsPlugin,
     },
     system_set::OrzmaSystems,
 };
@@ -44,7 +43,6 @@ impl Plugin for OrzmaInputPlugin {
             OptionAsAltPlugin,
             KeyboardInputPlugin,
             MouseInputPlugin,
-            DefaultHostInputPlugin,
         ))
         .configure_sets(
             Update,

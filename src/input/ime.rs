@@ -9,11 +9,13 @@
 use crate::action::vi::mode::ViModeState;
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
+use crate::surface::OrzmaTerminal;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
+use bevy::ecs::observer::On;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
@@ -22,14 +24,15 @@ use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
+use orzma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use orzma_webview::{Webview, focused_webview_of};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
 ///
-/// The observer in `src/input/default_mode.rs` applies it, writing the local
-/// PTY via `TerminalKeyInput`.
+/// The `apply_ime_commit_to_terminal` observer below applies it, writing the
+/// local PTY via `TerminalKeyInput`.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ImeCommit {
     #[event_target]
@@ -46,12 +49,14 @@ pub struct ImePlugin;
 
 impl Plugin for ImePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ImeState>().add_systems(
-            Update,
-            (ime_policy_system, read_ime_events)
-                .chain()
-                .in_set(InputPhase::Dispatch),
-        );
+        app.init_resource::<ImeState>()
+            .add_systems(
+                Update,
+                (ime_policy_system, read_ime_events)
+                    .chain()
+                    .in_set(InputPhase::Dispatch),
+            )
+            .add_observer(apply_ime_commit_to_terminal);
     }
 }
 
@@ -367,6 +372,21 @@ fn webview_ime_position(
     let host_origin_phys = ui_xform.translation - 0.5 * node.size();
     let rect_origin_phys = Vec2::new(rect.y as f32 * cell_w_phys, rect.x as f32 * cell_h_phys);
     Some((host_origin_phys + rect_origin_phys) / scale_factor.max(f32::EPSILON))
+}
+
+fn apply_ime_commit_to_terminal(
+    ev: On<ImeCommit>,
+    mut commands: Commands,
+    terminals: Query<(), With<OrzmaTerminal>>,
+) {
+    if terminals.get(ev.entity).is_err() {
+        return;
+    }
+    commands.trigger(TerminalKeyInput {
+        entity: ev.entity,
+        key: TerminalKey::Text(ev.text.clone()),
+        modifiers: TerminalModifiers::default(),
+    });
 }
 
 #[cfg(test)]
@@ -931,6 +951,36 @@ mod tests {
         assert!(
             q.single(app.world()).expect("primary window").ime_enabled,
             "IME must enable for a KeyboardFocused terminal",
+        );
+    }
+
+    #[test]
+    fn ime_commit_fires_terminal_key_input_for_plain_terminal() {
+        use crate::input::ime::ImeCommit;
+        use crate::surface::OrzmaTerminal;
+        use orzma_tty_engine::TerminalKey;
+
+        #[derive(Resource, Default)]
+        struct Hits(Vec<(Entity, TerminalKey)>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Hits>()
+            .add_observer(apply_ime_commit_to_terminal)
+            .add_observer(|ev: On<TerminalKeyInput>, mut h: ResMut<Hits>| {
+                h.0.push((ev.entity, ev.key.clone()));
+            });
+
+        let term = app.world_mut().spawn(OrzmaTerminal).id();
+        app.world_mut().trigger(ImeCommit {
+            entity: term,
+            text: "あ".into(),
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Hits>().0,
+            vec![(term, TerminalKey::Text("あ".into()))]
         );
     }
 }
