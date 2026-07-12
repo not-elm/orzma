@@ -21,7 +21,7 @@ pub(super) struct ClipboardPasteActionPlugin;
 impl Plugin for ClipboardPasteActionPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_paste)
-            .add_observer(on_paste_default_mode);
+            .add_observer(on_paste_to_terminal);
     }
 }
 
@@ -164,7 +164,7 @@ fn on_paste(
 /// Applies `PasteToTerminal` to a PTY-attached terminal: snaps a scrolled-back
 /// viewport to the bottom, then writes the (optionally bracketed) paste
 /// bytes. The query filters select only PTY-attached terminals.
-fn on_paste_default_mode(
+fn on_paste_to_terminal(
     ev: On<PasteToTerminal>,
     mut terminals: Query<
         (&mut TerminalHandle, &mut PtyHandle, &mut Coalescer),
@@ -319,7 +319,7 @@ mod tests {
     fn paste_applier_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_observer(on_paste_default_mode);
+        app.add_observer(on_paste_to_terminal);
         app
     }
 

@@ -6,7 +6,7 @@
 use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
-use crate::input::shortcuts::apply::ShortcutsDefaultModePlugin;
+use crate::input::shortcuts::apply::ShortcutsApplyPlugin;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -29,7 +29,7 @@ pub(super) struct ShortcutsPlugin;
 
 impl Plugin for ShortcutsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ShortcutsDefaultModePlugin)
+        app.add_plugins(ShortcutsApplyPlugin)
             .configure_sets(
                 Update,
                 (ShortcutSet::Resolve, ShortcutSet::Apply)

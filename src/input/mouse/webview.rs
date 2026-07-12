@@ -33,7 +33,7 @@ pub(super) struct MouseWebviewPlugin;
 impl Plugin for MouseWebviewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WebviewPress>()
-            .add_plugins(router::MouseWebviewDefaultModePlugin);
+            .add_plugins(router::MouseWebviewRouterPlugin);
     }
 }
 

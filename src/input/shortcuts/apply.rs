@@ -17,25 +17,25 @@ use bevy::prelude::*;
 use orzma_configs::shortcuts::Shortcut;
 use orzma_tty_engine::{TerminalKeyInput, TerminalModifiers};
 
-pub(super) struct ShortcutsDefaultModePlugin;
+pub(super) struct ShortcutsApplyPlugin;
 
-impl Plugin for ShortcutsDefaultModePlugin {
+impl Plugin for ShortcutsApplyPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
             (
-                apply_default_shortcuts
+                apply_shortcuts
                     .in_set(ShortcutSet::Apply)
                     .run_if(on_message::<ShortcutMessage>),
-                apply_default_vi_mode
+                apply_vi_mode
                     .in_set(ShortcutSet::Apply)
                     .run_if(on_message::<ViModeMessage>)
-                    .after(apply_default_shortcuts),
-                apply_default_type
+                    .after(apply_shortcuts),
+                apply_type
                     .in_set(ShortcutSet::Apply)
                     .run_if(on_message::<TypeMessage>)
-                    .after(apply_default_shortcuts)
-                    .after(apply_default_vi_mode),
+                    .after(apply_shortcuts)
+                    .after(apply_vi_mode),
             ),
         );
     }
@@ -48,7 +48,7 @@ impl Plugin for ShortcutsDefaultModePlugin {
 /// `resolve_key_effects`; pane/window actions are no-ops until the built-in
 /// multiplexer lands.
 /// Registered in `ShortcutSet::Apply`, gated on `on_message::<ShortcutMessage>`.
-pub(in crate::input) fn apply_default_shortcuts(
+pub(in crate::input) fn apply_shortcuts(
     mut commands: Commands,
     mut shortcuts: MessageReader<ShortcutMessage>,
 ) {
@@ -87,7 +87,7 @@ pub(in crate::input) fn apply_default_shortcuts(
 /// Applies matched `[vi-mode]` keys from `ViModeMessage` on the focused
 /// terminal. Registered in `ShortcutSet::Apply`, gated on
 /// `on_message::<ViModeMessage>`.
-pub(in crate::input) fn apply_default_vi_mode(
+pub(in crate::input) fn apply_vi_mode(
     mut commands: Commands,
     mut vi_mode: MessageReader<ViModeMessage>,
 ) {
@@ -101,7 +101,7 @@ pub(in crate::input) fn apply_default_vi_mode(
 /// Types raw keys from `TypeMessage` into the focused terminal as
 /// `TerminalKeyInput`. Runs after the shortcut/copy appliers. Registered in
 /// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>`.
-pub(in crate::input) fn apply_default_type(
+pub(in crate::input) fn apply_type(
     mut commands: Commands,
     mut type_keys: MessageReader<TypeMessage>,
 ) {
@@ -158,11 +158,9 @@ mod tests {
             .add_systems(
                 Update,
                 (
-                    apply_default_shortcuts,
-                    apply_default_vi_mode.after(apply_default_shortcuts),
-                    apply_default_type
-                        .after(apply_default_shortcuts)
-                        .after(apply_default_vi_mode),
+                    apply_shortcuts,
+                    apply_vi_mode.after(apply_shortcuts),
+                    apply_type.after(apply_shortcuts).after(apply_vi_mode),
                 ),
             )
             .add_observer(|_ev: On<EnterViModeActionEvent>, mut c: ResMut<Captured>| {

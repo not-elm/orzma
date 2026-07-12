@@ -1,5 +1,6 @@
-//! Default-mode UI subtree: lazily (re)spawns the single `OrzmaTerminal` shell
-//! under `UiRoot`.
+//! Shell-surface subtree: lazily (re)spawns the single `OrzmaTerminal` shell
+//! under `UiRoot`. Owns the surface entity's UI-side lifecycle;
+//! `crate::session` owns the PTY-side policy (spawn config, layout, exit).
 
 use crate::input::focus::KeyboardFocused;
 use crate::session::spawn::{OrzmaSpawnOptions, OrzmaTerminalBundle, OrzmaTerminalConfig};
@@ -7,24 +8,24 @@ use crate::ui::UiRoot;
 use bevy::prelude::*;
 use orzma_webview::ControlPlaneHandle;
 
-/// Root of the Default-mode UI subtree, mounted under `UiRoot`.
+/// Root of the shell-surface subtree, mounted under `UiRoot`.
 #[derive(Component)]
-pub(crate) struct DefaultModeUi;
+pub(crate) struct ShellSurfaceUi;
 
-/// Bevy plugin that ensures the Default-mode UI subtree exists. Gated by the
-/// absence of `DefaultModeUi`.
-pub(super) struct DefaultModeUiPlugin;
+/// Bevy plugin that ensures the shell-surface subtree exists. Gated by the
+/// absence of `ShellSurfaceUi`.
+pub(super) struct ShellSurfacePlugin;
 
-impl Plugin for DefaultModeUiPlugin {
+impl Plugin for ShellSurfacePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            ensure_default_mode_ui.run_if(not(any_with_component::<DefaultModeUi>)),
+            ensure_shell_surface_ui.run_if(not(any_with_component::<ShellSurfaceUi>)),
         );
     }
 }
 
-fn ensure_default_mode_ui(
+fn ensure_shell_surface_ui(
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
     ui_root: Query<Entity, With<UiRoot>>,
@@ -34,12 +35,12 @@ fn ensure_default_mode_ui(
     let Ok(ui_root) = ui_root.single() else {
         return;
     };
-    // NOTE: spawn the DefaultModeUi container before attempting the PTY spawn.
-    // The run condition gates on `DefaultModeUi` being absent; if the PTY spawn
+    // NOTE: spawn the ShellSurfaceUi container before attempting the PTY spawn.
+    // The run condition gates on `ShellSurfaceUi` being absent; if the PTY spawn
     // failed and we returned without the container, this Update system would
     // re-fire every frame — re-attempting the PTY and re-writing AppExit.
     // Spawning the container first makes a failure a single attempt.
-    let mode_ui = spawn_default_mode_container(&mut commands, ui_root);
+    let mode_ui = spawn_shell_surface_container(&mut commands, ui_root);
     let shell = commands.spawn_empty().id();
     let env = control
         .as_deref()
@@ -54,7 +55,7 @@ fn ensure_default_mode_ui(
             commands.entity(shell).insert((
                 bundle,
                 KeyboardFocused,
-                DefaultShell,
+                ShellTerminal,
                 ChildOf(mode_ui),
             ));
             // NOTE: bind the token only after a successful spawn. gc keys on
@@ -72,21 +73,21 @@ fn ensure_default_mode_ui(
     }
 }
 
-/// Marker for the single Default-mode shell terminal entity.
+/// Marker for the single shell terminal entity.
 #[derive(Component)]
-struct DefaultShell;
+struct ShellTerminal;
 
-/// Spawns the `DefaultModeUi` container node under `ui_root` and returns it.
-fn spawn_default_mode_container(commands: &mut Commands, ui_root: Entity) -> Entity {
+/// Spawns the `ShellSurfaceUi` container node under `ui_root` and returns it.
+fn spawn_shell_surface_container(commands: &mut Commands, ui_root: Entity) -> Entity {
     commands
         .spawn((
-            Name::new("Default Mode UI"),
+            Name::new("Shell Surface UI"),
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
                 ..default()
             },
-            DefaultModeUi,
+            ShellSurfaceUi,
             ChildOf(ui_root),
         ))
         .id()
@@ -104,30 +105,30 @@ mod tests {
         app.world_mut().spawn((Node::default(), UiRoot));
         app.add_plugins((
             crate::session::SessionPlugin { shell: None },
-            DefaultModeUiPlugin,
+            ShellSurfacePlugin,
         ));
         app
     }
 
     #[test]
-    fn spawns_default_mode_ui_once() {
+    fn spawns_shell_surface_ui_once() {
         let mut app = build_app();
         app.update();
         let world = app.world_mut();
-        let mut q = world.query_filtered::<(), With<DefaultModeUi>>();
-        assert_eq!(q.iter(world).count(), 1, "exactly one DefaultModeUi");
+        let mut q = world.query_filtered::<(), With<ShellSurfaceUi>>();
+        assert_eq!(q.iter(world).count(), 1, "exactly one ShellSurfaceUi");
         app.update();
         let world = app.world_mut();
-        let mut q = world.query_filtered::<(), With<DefaultModeUi>>();
+        let mut q = world.query_filtered::<(), With<ShellSurfaceUi>>();
         assert_eq!(
             q.iter(world).count(),
             1,
-            "still exactly one DefaultModeUi after second update"
+            "still exactly one ShellSurfaceUi after second update"
         );
     }
 
     #[test]
-    fn default_shell_registers_a_resolvable_webview_token() {
+    fn shell_terminal_registers_a_resolvable_webview_token() {
         let mut app = build_app();
         let tokens = TokenRegistry::default();
         app.world_mut().insert_resource(ControlPlaneHandle {
@@ -139,15 +140,15 @@ mod tests {
         let shell = {
             let world = app.world_mut();
             world
-                .query_filtered::<Entity, With<DefaultShell>>()
+                .query_filtered::<Entity, With<ShellTerminal>>()
                 .single(world)
-                .expect("DefaultShell spawned")
+                .expect("ShellTerminal spawned")
         };
         let token = format!("orzma:{}", shell.to_bits());
         assert_eq!(
             tokens.resolve(&token),
             Some(shell),
-            "the default shell's $ORZMA_TOKEN must resolve to its own surface entity"
+            "the shell terminal's $ORZMA_TOKEN must resolve to its own surface entity"
         );
     }
 }

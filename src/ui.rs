@@ -10,7 +10,7 @@ pub(crate) mod shell_surface;
 pub mod vi_mode_indicator;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup, never
-/// despawned. Hosts the `DefaultModeUi` subtree as a child.
+/// despawned. Hosts the `ShellSurfaceUi` subtree as a child.
 #[derive(Component)]
 pub struct UiRoot;
 
@@ -21,7 +21,7 @@ impl Plugin for OrzmaUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             OrzmaUiRootPlugin,
-            shell_surface::DefaultModeUiPlugin,
+            shell_surface::ShellSurfacePlugin,
             ime_overlay::ImeOverlayPlugin,
             vi_mode_indicator::ViModeIndicatorPlugin,
         ));

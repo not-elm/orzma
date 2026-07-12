@@ -73,7 +73,7 @@ fn full_size_node() -> Node {
     }
 }
 
-/// Inserts the shell-override config resource read by `ensure_default_mode_ui`.
+/// Inserts the shell-override config resource read by `ensure_shell_surface_ui`.
 pub(super) struct SpawnPlugin {
     /// Shell override from the loaded configs; `None` defers to `$SHELL`.
     pub shell: Option<String>,

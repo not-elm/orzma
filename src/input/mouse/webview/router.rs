@@ -34,20 +34,20 @@ use orzma_webview::{NonInteractive, Webview};
 
 /// Registers the Default-mode webview pointer systems. The shared
 /// `WebviewPress` resource is owned by the parent `MouseWebviewPlugin`.
-pub(super) struct MouseWebviewDefaultModePlugin;
+pub(super) struct MouseWebviewRouterPlugin;
 
-impl Plugin for MouseWebviewDefaultModePlugin {
+impl Plugin for MouseWebviewRouterPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, default_webview_pointer.in_set(InputPhase::Dispatch))
+        app.add_systems(Update, route_webview_pointer.in_set(InputPhase::Dispatch))
             .add_systems(
                 Update,
-                forward_default_webview_mouse_moves
+                forward_webview_mouse_moves
                     .in_set(InputPhase::Hover)
                     .run_if(on_message::<CursorMoved>),
             )
             .add_systems(
                 Update,
-                forward_default_webview_wheel
+                forward_webview_wheel
                     .in_set(InputPhase::Dispatch)
                     .run_if(on_message::<MouseWheel>),
             );
@@ -58,7 +58,7 @@ impl Plugin for MouseWebviewDefaultModePlugin {
 /// Default shell. Runs EVERY frame: a suppressed frame (window unfocused)
 /// drains the reader and releases an in-flight press so the focused page is
 /// not left logically pressed.
-fn default_webview_pointer(
+fn route_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
     mut buttons: MessageReader<MouseButtonInput>,
@@ -124,7 +124,7 @@ fn default_webview_pointer(
 
 /// Forwards pointer motion over an interactive inline rect of the Default shell
 /// to the child's CEF browser via the shared `forward_webview_move_at`.
-fn forward_default_webview_mouse_moves(
+fn forward_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     surfaces: Query<
         (
@@ -176,7 +176,7 @@ fn forward_default_webview_mouse_moves(
 /// `crate::input::mouse::wheel::dispatch_mouse_wheel` (terminal scrollback) through its own
 /// reader; over the rect the shell is `MouseDisabled` (rect-claim gate), so that
 /// dispatcher yields and only the page scrolls. Gated to wheel frames.
-fn forward_default_webview_wheel(
+fn forward_webview_wheel(
     mut wheel: MessageReader<MouseWheel>,
     focused_webview: Res<FocusedWebview>,
     webview_parents: Query<&ChildOf, With<Webview>>,
@@ -271,7 +271,7 @@ mod tests {
         app.init_resource::<WebviewPress>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
-        app.add_systems(Update, default_webview_pointer);
+        app.add_systems(Update, route_webview_pointer);
 
         let mut overlays = TerminalOverlays::default();
         overlays.rects[0] = IVec4::new(2, 3, 10, 40);
