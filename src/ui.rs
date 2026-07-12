@@ -6,7 +6,7 @@ use bevy::prelude::*;
 
 mod ime_overlay;
 pub mod root;
-pub(crate) mod shell_surface;
+mod shell_surface;
 mod vi_mode_indicator;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup, never

@@ -264,7 +264,7 @@ mod tests {
     /// The shell surface at window center (400,300), size 800x600 → top-left (0,0),
     /// with one interactive inline rect rows 2..12, cols 3..43 (phys y 32..192,
     /// x 24..344 at the 8x16 px cell pitch). Returns `(app, shell, child)`.
-    fn make_default_webview_app() -> (App, Entity, Entity) {
+    fn make_webview_app() -> (App, Entity, Entity) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseButtonInput>();
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn default_press_over_inline_rect_focuses_child() {
-        let (mut app, _shell, child) = make_default_webview_app();
+        let (mut app, _shell, child) = make_webview_app();
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_left(&mut app, ButtonState::Pressed);
         app.update();
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn default_off_rect_press_clears_focus_and_records_no_press() {
-        let (mut app, _shell, child) = make_default_webview_app();
+        let (mut app, _shell, child) = make_webview_app();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
         set_cursor(&mut app, Vec2::new(400.0, 400.0));
         write_left(&mut app, ButtonState::Pressed);
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn default_suppressed_frame_releases_in_flight_press() {
-        let (mut app, _shell, child) = make_default_webview_app();
+        let (mut app, _shell, child) = make_webview_app();
         app.world_mut().resource_mut::<WebviewPress>().0 = Some(child);
         let win = app
             .world_mut()

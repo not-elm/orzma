@@ -1,6 +1,6 @@
 //! The action layer: per-command `EntityEvent`s and their apply observers,
-//! grouped by domain (vi mode — state, keymap, and ops —, PTY-level terminal
-//! ops, clipboard).
+//! grouped by domain (vi mode: state, keymap, and ops; PTY-level terminal
+//! ops; clipboard).
 
 pub(crate) mod clipboard;
 pub(crate) mod terminal;

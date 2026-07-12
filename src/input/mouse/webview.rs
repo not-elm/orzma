@@ -27,7 +27,7 @@ use orzma_webview::{
 
 mod router;
 
-/// Registers the shared webview pointer resource and the per-mode webview routers.
+/// Registers the shared webview pointer resource and the webview router.
 pub(super) struct MouseWebviewPlugin;
 
 impl Plugin for MouseWebviewPlugin {
@@ -39,8 +39,8 @@ impl Plugin for MouseWebviewPlugin {
 
 /// Tracks the CEF child currently pressed (a left press inside an interactive
 /// inline rect was forwarded to it) so the matching release routes to the same
-/// child even if the pointer drifted off-rect. Shared by both mode pipelines —
-/// only one mode is active at a time, so a single in-flight press suffices.
+/// child even if the pointer drifted off-rect. One router owns the pointer
+/// pipeline, so a single in-flight press suffices.
 #[derive(Resource, Default)]
 pub(in crate::input::mouse) struct WebviewPress(pub Option<Entity>);
 

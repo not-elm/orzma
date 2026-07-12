@@ -42,7 +42,7 @@ pub(crate) struct KeyboardFocused;
 pub(crate) struct MouseDisabled;
 
 /// Registers `maintain_input_gates` and the webview focus-sync system.
-pub(crate) struct FocusSyncPlugin;
+pub(super) struct FocusSyncPlugin;
 
 impl Plugin for FocusSyncPlugin {
     fn build(&self, app: &mut App) {
@@ -174,7 +174,7 @@ fn maintain_input_gates(
     }
 }
 
-/// The Default shell whose INTERACTIVE inline webview rect is under the cursor,
+/// The shell surface whose INTERACTIVE inline webview rect is under the cursor,
 /// or `None`. Resolves the topmost `OrzmaTerminal` under the cursor, then
 /// hit-tests its active overlay rects (`webview_hit_at` skips `NonInteractive`
 /// children). A claimed surface is marked `MouseDisabled` so
@@ -387,7 +387,7 @@ mod tests {
         assert!(should_disable_input(false, true, true));
     }
 
-    /// Default shell (`OrzmaTerminal`) at window center (400,300),
+    /// Shell terminal (`OrzmaTerminal`) at window center (400,300),
     /// size 800x600, with one interactive inline rect rows 2..12, cols 3..43
     /// (phys y 32..192, x 24..344 at the 8x16 px cell pitch). Runs
     /// `maintain_input_gates`. Returns `(app, shell)`.

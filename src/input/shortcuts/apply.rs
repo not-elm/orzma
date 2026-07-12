@@ -136,9 +136,9 @@ mod tests {
         keys: Vec<TerminalKey>,
     }
 
-    /// Builds an app running the three Default appliers as bare
+    /// Builds an app running the three appliers as bare
     /// per-message consumers, capturing the events they trigger.
-    fn build_default_dispatch_app(shortcuts: Shortcuts) -> App {
+    fn build_dispatch_app(shortcuts: Shortcuts) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<ShortcutMessage>()
@@ -169,8 +169,8 @@ mod tests {
         app
     }
 
-    fn default_dispatch_app(shortcuts: Shortcuts) -> (App, Entity) {
-        let mut app = build_default_dispatch_app(shortcuts);
+    fn dispatch_app(shortcuts: Shortcuts) -> (App, Entity) {
+        let mut app = build_dispatch_app(shortcuts);
         let term = app.world_mut().spawn(OrzmaTerminal).id();
         (app, term)
     }
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn plain_key_triggers_terminal_key_input() {
-        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        let (mut app, term) = dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
             vec![type_effect(Key::Character("a".into()), KeyCode::KeyA)],
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn pane_action_is_noop() {
-        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        let (mut app, term) = dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
             vec![action_effect(Shortcut::ZoomPane, true)],
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn direct_paste_outside_vi_mode_pastes() {
-        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        let (mut app, term) = dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
             vec![action_effect(Shortcut::Paste, false)],
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn direct_copy_outside_vi_mode_fires_selection_copy() {
-        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        let (mut app, term) = dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
             vec![action_effect(Shortcut::Copy, false)],
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn direct_copy_in_vi_mode_also_fires_selection_copy() {
-        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        let (mut app, term) = dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
             vec![action_effect(Shortcut::Copy, false)],
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn direct_paste_in_vi_mode_suppressed() {
-        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        let (mut app, term) = dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
             vec![action_effect(Shortcut::Paste, false)],
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn leader_paste_in_vi_mode_pastes() {
-        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        let (mut app, term) = dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
             vec![action_effect(Shortcut::Paste, true)],
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn enter_vi_mode_fires_even_when_already_in_vi_mode() {
-        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        let (mut app, term) = dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
             vec![action_effect(Shortcut::EnterViMode, false)],

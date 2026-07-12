@@ -31,7 +31,7 @@ use orzma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 
 /// Plugin: registers `insert_initial_cursor_icon` at `Startup` and
 /// `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
-pub(crate) struct HyperlinkInputPlugin;
+pub(super) struct HyperlinkInputPlugin;
 
 impl Plugin for HyperlinkInputPlugin {
     fn build(&self, app: &mut App) {

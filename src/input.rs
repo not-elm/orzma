@@ -34,7 +34,8 @@ pub(crate) enum InputPhase {
     FocusedKey,
 }
 
-/// Bevy Plugin that registers the keyboard shortcut handling pipeline.
+/// Bevy Plugin that registers the host input pipeline (keyboard, mouse, IME,
+/// focus gates, hyperlink hover, shortcuts).
 pub struct OrzmaInputPlugin;
 
 impl Plugin for OrzmaInputPlugin {

@@ -854,8 +854,8 @@ mod tests {
                 action: Shortcut::Paste,
                 via_leader: false,
             }],
-            "the decider still emits the direct paste action; the Default \
-             applier is what suppresses it in vi mode (via `via_leader || \
+            "the decider still emits the direct paste action; apply_shortcuts \
+             is what suppresses it in vi mode (via `via_leader || \
              !in_vi_mode`), so a direct paste never fires while vi mode is \
              active"
         );
