@@ -326,11 +326,7 @@ fn resize_in(
         return None;
     }
     let toward_second = matches!(dir, PaneDirection::Right | PaneDirection::Down);
-    let signed = if in_first == toward_second {
-        delta
-    } else {
-        -delta
-    };
+    let signed = if toward_second { delta } else { -delta };
     *ratio = (*ratio + signed).clamp(min, 1.0 - min);
     Some(())
 }
@@ -527,6 +523,40 @@ mod tests {
         let rs = l.rects(area, 1.0);
         let left = rs.iter().find(|(x, _)| *x == e(1)).unwrap().1;
         assert_eq!(left.w, 10.0);
+    }
+
+    #[test]
+    fn resize_left_grows_right_pane() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        assert!(l.resize(e(2), PaneDirection::Left, 0.1, 0.1));
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let rs = l.rects(area, 1.0);
+        let right = rs.iter().find(|(x, _)| *x == e(2)).unwrap().1;
+        assert_eq!(right.w, 60.0);
+    }
+
+    #[test]
+    fn resize_second_child_clamps_at_min() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        assert!(l.resize(e(2), PaneDirection::Left, 0.9, 0.1));
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let rs = l.rects(area, 1.0);
+        let left = rs.iter().find(|(x, _)| *x == e(1)).unwrap().1;
+        let right = rs.iter().find(|(x, _)| *x == e(2)).unwrap().1;
+        assert_eq!(left.w, 10.0);
+        assert_eq!(right.w, 90.0);
     }
 
     #[test]
