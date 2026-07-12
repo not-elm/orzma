@@ -9,6 +9,7 @@ use bevy::prelude::*;
 // `confirm_prompt::ConfirmState` to keep an answering y/n out of the PTY.
 pub(crate) mod confirm_prompt;
 mod divider_handle;
+mod pane_focus;
 
 /// Root of the multiplexer UI subtree, mounted once under `UiRoot`.
 #[derive(Component)]
@@ -34,6 +35,7 @@ impl Plugin for MultiplexerUiPlugin {
         .add_plugins((
             confirm_prompt::ConfirmPromptPlugin,
             divider_handle::DividerHandlePlugin,
+            pane_focus::PaneFocusPlugin,
         ));
     }
 }
