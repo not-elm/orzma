@@ -59,7 +59,7 @@ impl MultiplexerLayout {
     /// Returns every pane leaf in left-to-right / top-to-bottom order.
     pub(crate) fn leaves(&self) -> Vec<Entity> {
         let mut out = Vec::new();
-        collect_leaves(&self.root, &mut out);
+        collect_leaves(&mut out, &self.root);
         out
     }
 
@@ -84,7 +84,7 @@ impl MultiplexerLayout {
             return vec![(z, area)];
         }
         let mut out = Vec::new();
-        layout_rects(&self.root, area, gap, &mut out);
+        layout_rects(&mut out, &self.root, area, gap);
         out
     }
 
@@ -112,14 +112,50 @@ impl MultiplexerLayout {
             _ => remove_in(&mut self.root, pane),
         }
     }
+
+    /// The adjacent pane in `dir` from `from`, by edge adjacency with
+    /// perpendicular-span overlap. Returns the first overlapping neighbor on
+    /// that side, or `None` at the window edge.
+    pub(crate) fn neighbor(
+        &self,
+        from: Entity,
+        dir: PaneDirection,
+        area: PaneRect,
+        gap: f32,
+    ) -> Option<Entity> {
+        let rects = self.rects(area, gap);
+        let src = rects.iter().find(|(e, _)| *e == from)?.1;
+        rects
+            .iter()
+            .filter(|(e, _)| *e != from)
+            .filter(|(_, r)| adjacent(src, *r, dir) && perp_overlap(src, *r, dir))
+            .map(|(e, _)| *e)
+            .next()
+    }
+
+    /// Grows or shrinks `focused`'s pane along `dir` by `delta_frac`, moving
+    /// the ratio of the nearest ancestor split whose axis matches `dir`
+    /// (skipping ancestors on the other axis), clamping each side to
+    /// `min_frac`. Returns false (no change) when `focused` has no ancestor
+    /// split along that axis (e.g. a lone pane).
+    pub(crate) fn resize(
+        &mut self,
+        focused: Entity,
+        dir: PaneDirection,
+        delta_frac: f32,
+        min_frac: f32,
+    ) -> bool {
+        let want = axis_of(dir);
+        resize_in(&mut self.root, focused, dir, want, delta_frac, min_frac).is_some()
+    }
 }
 
-fn collect_leaves(node: &LayoutNode, out: &mut Vec<Entity>) {
+fn collect_leaves(out: &mut Vec<Entity>, node: &LayoutNode) {
     match node {
         LayoutNode::Leaf(e) => out.push(*e),
         LayoutNode::Split { first, second, .. } => {
-            collect_leaves(first, out);
-            collect_leaves(second, out);
+            collect_leaves(out, first);
+            collect_leaves(out, second);
         }
     }
 }
@@ -142,7 +178,7 @@ fn split_at(node: &mut LayoutNode, target: Entity, new_pane: Entity, axis: Split
     }
 }
 
-fn layout_rects(node: &LayoutNode, area: PaneRect, gap: f32, out: &mut Vec<(Entity, PaneRect)>) {
+fn layout_rects(out: &mut Vec<(Entity, PaneRect)>, node: &LayoutNode, area: PaneRect, gap: f32) {
     match node {
         LayoutNode::Leaf(e) => out.push((*e, area)),
         LayoutNode::Split {
@@ -152,8 +188,8 @@ fn layout_rects(node: &LayoutNode, area: PaneRect, gap: f32, out: &mut Vec<(Enti
             second,
         } => {
             let (a, b) = split_rect(area, *axis, *ratio, gap);
-            layout_rects(first, a, gap, out);
-            layout_rects(second, b, gap, out);
+            layout_rects(out, first, a, gap);
+            layout_rects(out, second, b, gap);
         }
     }
 }
@@ -224,6 +260,87 @@ fn first_leaf(node: &LayoutNode) -> Entity {
     match node {
         LayoutNode::Leaf(e) => *e,
         LayoutNode::Split { first, .. } => first_leaf(first),
+    }
+}
+
+fn axis_of(dir: PaneDirection) -> SplitAxis {
+    match dir {
+        PaneDirection::Left | PaneDirection::Right => SplitAxis::Vertical,
+        PaneDirection::Up | PaneDirection::Down => SplitAxis::Horizontal,
+    }
+}
+
+fn adjacent(src: PaneRect, other: PaneRect, dir: PaneDirection) -> bool {
+    let eps = 2.0;
+    match dir {
+        PaneDirection::Right => {
+            (other.x - (src.x + src.w)).abs() <= src.w + other.w && other.x >= src.x + src.w - eps
+        }
+        PaneDirection::Left => other.x + other.w <= src.x + eps,
+        PaneDirection::Down => other.y >= src.y + src.h - eps,
+        PaneDirection::Up => other.y + other.h <= src.y + eps,
+    }
+}
+
+fn perp_overlap(src: PaneRect, other: PaneRect, dir: PaneDirection) -> bool {
+    match dir {
+        PaneDirection::Left | PaneDirection::Right => {
+            src.y < other.y + other.h && other.y < src.y + src.h
+        }
+        PaneDirection::Up | PaneDirection::Down => {
+            src.x < other.x + other.w && other.x < src.x + src.w
+        }
+    }
+}
+
+fn resize_in(
+    node: &mut LayoutNode,
+    focused: Entity,
+    dir: PaneDirection,
+    want: SplitAxis,
+    delta: f32,
+    min: f32,
+) -> Option<()> {
+    let LayoutNode::Split {
+        axis,
+        ratio,
+        first,
+        second,
+    } = node
+    else {
+        return None;
+    };
+    let in_first = subtree_contains(first, focused);
+    let in_second = subtree_contains(second, focused);
+    let deeper = if in_first {
+        resize_in(first, focused, dir, want, delta, min)
+    } else if in_second {
+        resize_in(second, focused, dir, want, delta, min)
+    } else {
+        None
+    };
+    if deeper.is_some() {
+        return deeper;
+    }
+    if *axis != want || (!in_first && !in_second) {
+        return None;
+    }
+    let toward_second = matches!(dir, PaneDirection::Right | PaneDirection::Down);
+    let signed = if in_first == toward_second {
+        delta
+    } else {
+        -delta
+    };
+    *ratio = (*ratio + signed).clamp(min, 1.0 - min);
+    Some(())
+}
+
+fn subtree_contains(node: &LayoutNode, pane: Entity) -> bool {
+    match node {
+        LayoutNode::Leaf(e) => *e == pane,
+        LayoutNode::Split { first, second, .. } => {
+            subtree_contains(first, pane) || subtree_contains(second, pane)
+        }
     }
 }
 
@@ -309,6 +426,30 @@ mod tests {
         assert!(covers(&rs, area));
     }
 
+    #[test]
+    fn zoom_shows_only_zoomed_pane_at_full_area() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        l.set_zoom(Some(e(2)));
+        assert_eq!(l.zoomed(), Some(e(2)));
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        assert_eq!(l.rects(area, 1.0), vec![(e(2), area)]);
+    }
+
+    #[test]
+    fn remove_clears_zoom_of_removed_pane() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        l.set_zoom(Some(e(1)));
+        l.remove(e(1));
+        assert_eq!(l.zoomed(), None);
+    }
+
     fn overlap(a: PaneRect, b: PaneRect) -> bool {
         a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
     }
@@ -336,5 +477,62 @@ mod tests {
         let n = l.remove(e(2));
         assert_eq!(n, Some(e(3)));
         assert_eq!(l.leaves(), vec![e(1), e(3)]);
+    }
+
+    #[test]
+    fn neighbor_right_of_left_pane() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 50.0,
+        };
+        assert_eq!(
+            l.neighbor(e(1), PaneDirection::Right, area, 1.0),
+            Some(e(2))
+        );
+        assert_eq!(l.neighbor(e(2), PaneDirection::Left, area, 1.0), Some(e(1)));
+        assert_eq!(l.neighbor(e(1), PaneDirection::Up, area, 1.0), None);
+    }
+
+    #[test]
+    fn resize_right_grows_left_pane() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        assert!(l.resize(e(1), PaneDirection::Right, 0.1, 0.1));
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let rs = l.rects(area, 1.0);
+        let left = rs.iter().find(|(x, _)| *x == e(1)).unwrap().1;
+        assert_eq!(left.w, 60.0);
+    }
+
+    #[test]
+    fn resize_clamps_at_min() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        assert!(l.resize(e(1), PaneDirection::Left, 0.9, 0.1));
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let rs = l.rects(area, 1.0);
+        let left = rs.iter().find(|(x, _)| *x == e(1)).unwrap().1;
+        assert_eq!(left.w, 10.0);
+    }
+
+    #[test]
+    fn resize_edge_pane_is_noop() {
+        let l0 = MultiplexerLayout::new(e(1));
+        let mut l = l0.clone();
+        assert!(!l.resize(e(1), PaneDirection::Right, 0.1, 0.1));
     }
 }
