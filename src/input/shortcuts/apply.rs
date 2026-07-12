@@ -35,7 +35,6 @@ impl Plugin for ShortcutsApplyPlugin {
                 apply_type
                     .in_set(ShortcutSet::Apply)
                     .run_if(on_message::<TypeMessage>)
-                    .run_if(not(resource_exists::<ConfirmState>))
                     .after(apply_shortcuts)
                     .after(apply_vi_mode),
             ),
@@ -96,10 +95,24 @@ fn apply_vi_mode(mut commands: Commands, mut vi_mode: MessageReader<ViModeMessag
 
 /// Types raw keys from `TypeMessage` into the focused terminal as
 /// `TerminalKeyInput`. Runs after the shortcut/copy appliers. Registered in
-/// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>` and suppressed
-/// while a `ConfirmState` prompt is open, so the y/n answering a kill-pane /
-/// kill-window confirm never leaks into the terminal's PTY.
-fn apply_type(mut commands: Commands, mut type_keys: MessageReader<TypeMessage>) {
+/// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>`. While a
+/// `ConfirmState` prompt is open, this DRAINS `TypeMessage`s instead of
+/// typing them, so the y/n answering a kill-pane / kill-window confirm never
+/// leaks into the terminal's PTY.
+fn apply_type(
+    mut commands: Commands,
+    mut type_keys: MessageReader<TypeMessage>,
+    confirm: Option<Res<ConfirmState>>,
+) {
+    // NOTE: while a confirm prompt owns the keyboard, DRAIN (clear) TypeMessages
+    // rather than gating this system off with run_if — a run_if would leave the
+    // confirming key buffered on apply_type's reader cursor and inject it into the
+    // PTY on the next ungated frame (the reader cursor only advances when the body
+    // runs).
+    if confirm.is_some() {
+        type_keys.clear();
+        return;
+    }
     for msg in type_keys.read() {
         if let Some(entity) = msg.focused
             && let Some(key) = bevy_key_to_terminal_key(&msg.logical)
@@ -367,19 +380,17 @@ mod tests {
         );
     }
 
-    /// Builds an app running only `apply_type`, gated exactly as
-    /// `ShortcutsApplyPlugin` registers it (`.run_if(not(resource_exists::<ConfirmState>))`),
-    /// to prove the modality gate suppresses typing while a kill-pane /
-    /// kill-window confirm prompt is open.
+    /// Builds an app running only `apply_type`, registered exactly as
+    /// `ShortcutsApplyPlugin` registers it (gated on `on_message::<TypeMessage>`
+    /// only — the confirm-prompt suppression is the in-body drain), to prove
+    /// typing is suppressed while a kill-pane / kill-window confirm prompt is
+    /// open, and that a confirming key never leaks into a later frame.
     fn build_confirm_gated_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<TypeMessage>()
             .init_resource::<Captured>()
-            .add_systems(
-                Update,
-                apply_type.run_if(not(resource_exists::<ConfirmState>)),
-            )
+            .add_systems(Update, apply_type.run_if(on_message::<TypeMessage>))
             .add_observer(|ev: On<TerminalKeyInput>, mut c: ResMut<Captured>| {
                 c.keys.push(ev.key.clone());
             });
@@ -419,6 +430,43 @@ mod tests {
             app.world().resource::<Captured>().keys,
             vec![TerminalKey::Text("y".into())],
             "apply_type must run normally when no ConfirmState is present"
+        );
+    }
+
+    /// Reproduces the cross-frame key-leak race: a confirming key typed while
+    /// `ConfirmState` is present must be drained on its own frame, not merely
+    /// suppressed, so it cannot resurface once `ConfirmState` is removed and a
+    /// later key is typed. A `run_if`-only gate fails this test because the
+    /// suppressed frame never advances `apply_type`'s `MessageReader` cursor,
+    /// leaving the confirming key buffered for the next ungated frame.
+    #[test]
+    fn confirm_key_does_not_leak_into_pty_on_next_frame() {
+        let mut app = build_confirm_gated_app();
+        let term = app.world_mut().spawn(OrzmaTerminal).id();
+        app.world_mut()
+            .insert_resource(ConfirmState::kill_pane(term));
+        app.world_mut().write_message(TypeMessage {
+            logical: Key::Character("y".into()),
+            focused: Some(term),
+            mods: Modifiers::default(),
+        });
+        app.update();
+        assert!(
+            app.world().resource::<Captured>().keys.is_empty(),
+            "the confirming key must be drained on the confirming frame, not deferred"
+        );
+
+        app.world_mut().remove_resource::<ConfirmState>();
+        app.world_mut().write_message(TypeMessage {
+            logical: Key::Character("x".into()),
+            focused: Some(term),
+            mods: Modifiers::default(),
+        });
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().keys,
+            vec![TerminalKey::Text("x".into())],
+            "only the new key must reach the PTY; the drained confirming y must not leak in"
         );
     }
 }
