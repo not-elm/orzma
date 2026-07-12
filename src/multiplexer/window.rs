@@ -57,6 +57,36 @@ impl Plugin for WindowPlugin {
     }
 }
 
+/// Moves `KeyboardFocused` onto the active window's `active_pane`: removes it
+/// from whatever pane currently holds it, then inserts it on the new target.
+/// Gated by `active_pane_changed` so it only writes on a real change; ordered
+/// `.before(InputPhase::FocusedKey)` so the resolved key effects' `focused`
+/// reflects the active pane the same frame it changes.
+///
+/// `pub(crate)` (not private): `crate::input::mouse::button::multiplexer`'s
+/// `focus_pane_on_click` names this function in a `.before(...)` ordering
+/// constraint, so its own `active_pane` write lands before this sync runs —
+/// otherwise the two systems' conflicting `MultiplexerWindow` access would be
+/// ordered arbitrarily and focus could lag a frame behind a click.
+pub(crate) fn sync_keyboard_focus_to_active_pane(
+    mut commands: Commands,
+    active_windows: Query<&MultiplexerWindow, With<ActiveMultiplexerWindow>>,
+    focused: Query<Entity, With<KeyboardFocused>>,
+) {
+    let Ok(window) = active_windows.single() else {
+        return;
+    };
+    let target = window.active_pane;
+    for current in focused.iter() {
+        if current != target {
+            commands.entity(current).remove::<KeyboardFocused>();
+        }
+    }
+    if !focused.contains(target) {
+        commands.entity(target).insert(KeyboardFocused);
+    }
+}
+
 /// Moves the active window's `active_pane` to its neighbor in a
 /// `SelectPaneRequest`'s direction. Un-zooms the window first so the
 /// neighbor lookup runs against the full split layout rather than the
@@ -108,30 +138,6 @@ fn active_pane_changed(
     windows: Query<(), (With<ActiveMultiplexerWindow>, Changed<MultiplexerWindow>)>,
 ) -> bool {
     !windows.is_empty()
-}
-
-/// Moves `KeyboardFocused` onto the active window's `active_pane`: removes it
-/// from whatever pane currently holds it, then inserts it on the new target.
-/// Gated by `active_pane_changed` so it only writes on a real change; ordered
-/// `.before(InputPhase::FocusedKey)` so the resolved key effects' `focused`
-/// reflects the active pane the same frame it changes.
-fn sync_keyboard_focus_to_active_pane(
-    mut commands: Commands,
-    active_windows: Query<&MultiplexerWindow, With<ActiveMultiplexerWindow>>,
-    focused: Query<Entity, With<KeyboardFocused>>,
-) {
-    let Ok(window) = active_windows.single() else {
-        return;
-    };
-    let target = window.active_pane;
-    for current in focused.iter() {
-        if current != target {
-            commands.entity(current).remove::<KeyboardFocused>();
-        }
-    }
-    if !focused.contains(target) {
-        commands.entity(target).insert(KeyboardFocused);
-    }
 }
 
 #[cfg(test)]
