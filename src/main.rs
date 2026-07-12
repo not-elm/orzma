@@ -6,7 +6,6 @@ mod configs;
 mod font;
 mod input;
 mod multiplexer;
-mod session;
 mod surface;
 mod system_set;
 mod ui;
@@ -20,11 +19,11 @@ use bevy::prelude::*;
 use configs::OrzmaConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
+use multiplexer::MultiplexerPlugin;
 use orzma_tty_engine::TerminalHandlePlugin;
 use orzma_tty_renderer::TerminalRendererPlugin;
 use orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use orzma_webview_host::WebviewAssetRegistry;
-use session::SessionPlugin;
 use ui::OrzmaUiPlugin;
 
 fn main() {
@@ -46,7 +45,7 @@ fn main() {
         ))
         .add_plugins((
             SurfacePlugin,
-            SessionPlugin {
+            MultiplexerPlugin {
                 shell: pre_configs.orzma.shell.clone(),
             },
             TerminalHandlePlugin,
