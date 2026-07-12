@@ -1,13 +1,13 @@
 //! Webview pointer routing for the shell surface: forwards left press/release
 //! and pointer motion to the inline CEF child under the cursor on the single
-//! Default shell surface, via the mode-agnostic core in
+//! shell surface, via the core in
 //! `crate::input::mouse::webview`.
 //!
 //! The pointer system runs EVERY frame (not message-gated) so an in-flight
 //! press is released when input is suppressed (window unfocused), never
 //! leaving CEF logically pressed. Double-handling with the
 //! terminal's `dispatch_mouse_buttons` is avoided by the `MouseDisabled`
-//! rect-claim gate in `crate::input::default_mode::maintain_input_gates`: over an
+//! rect-claim gate in `crate::input::focus::maintain_input_gates`: over an
 //! interactive rect the shell is `MouseDisabled` (dispatch yields, the webview
 //! gets the click); off-rect the press clears webview focus here and falls
 //! through to the terminal.
@@ -32,7 +32,7 @@ use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::TerminalOverlays;
 use orzma_webview::{NonInteractive, Webview};
 
-/// Registers the Default-mode webview pointer systems. The shared
+/// Registers the webview pointer systems. The shared
 /// `WebviewPress` resource is owned by the parent `MouseWebviewPlugin`.
 pub(super) struct MouseWebviewRouterPlugin;
 
@@ -55,7 +55,7 @@ impl Plugin for MouseWebviewRouterPlugin {
 }
 
 /// Forwards left press/release to the inline CEF child under the cursor on the
-/// Default shell. Runs EVERY frame: a suppressed frame (window unfocused)
+/// shell surface. Runs EVERY frame: a suppressed frame (window unfocused)
 /// drains the reader and releases an in-flight press so the focused page is
 /// not left logically pressed.
 fn route_webview_pointer(
@@ -122,7 +122,7 @@ fn route_webview_pointer(
     }
 }
 
-/// Forwards pointer motion over an interactive inline rect of the Default shell
+/// Forwards pointer motion over an interactive inline rect of the shell surface
 /// to the child's CEF browser via the shared `forward_webview_move_at`.
 fn forward_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
@@ -171,7 +171,7 @@ fn forward_webview_mouse_moves(
 }
 
 /// Forwards the mouse wheel to the FOCUSED inline webview under the cursor on the
-/// Default shell (raw CEF wheel, focus-gated). When no focused webview is under
+/// shell surface (raw CEF wheel, focus-gated). When no focused webview is under
 /// the pointer the reader is drained and the wheel cedes to
 /// `crate::input::mouse::wheel::dispatch_mouse_wheel` (terminal scrollback) through its own
 /// reader; over the rect the shell is `MouseDisabled` (rect-claim gate), so that
@@ -261,7 +261,7 @@ mod tests {
         }
     }
 
-    /// Default shell at window center (400,300), size 800x600 → top-left (0,0),
+    /// The shell surface at window center (400,300), size 800x600 → top-left (0,0),
     /// with one interactive inline rect rows 2..12, cols 3..43 (phys y 32..192,
     /// x 24..344 at the 8x16 px cell pitch). Returns `(app, shell, child)`.
     fn make_default_webview_app() -> (App, Entity, Entity) {

@@ -1,8 +1,8 @@
-//! Shared CEF pointer routing helpers for the default-mode router: forwards left
+//! Shared CEF pointer routing helpers for the router: forwards left
 //! press/release and pointer motion to the inline CEF child under the cursor, on
-//! ANY `OrzmaTerminal` surface. The mode-specific system
-//! (`crate::input::mouse::webview::default_mode`) resolves which surface is
-//! under the cursor — the single shell for Default — and then delegates the
+//! ANY `OrzmaTerminal` surface. The router system
+//! (`crate::input::mouse::webview::router`) resolves which surface is
+//! under the cursor — the single shell surface — and then delegates the
 //! CEF forwarding + focus to the helpers here. Inline webviews are Node/Mesh-free
 //! `ChildOf` children (`orzma_webview`), so `bevy_cef`'s native picking cannot
 //! reach them; this manual forwarding is the only path that delivers clicks to
@@ -204,8 +204,8 @@ pub(in crate::input::mouse) struct WebviewMoveDeps<'a> {
     pub pressed_buttons: &'a ButtonInput<MouseButton>,
 }
 
-/// Resolves the surface under `cursor_phys` via `resolve` (the Default-mode
-/// single-shell hit-test) and forwards pointer motion to the inline CEF child
+/// Resolves the surface under `cursor_phys` via `resolve` (the single-shell
+/// hit-test) and forwards pointer motion to the inline CEF child
 /// there through `forward_webview_move`. A `None` resolution forwards nothing.
 pub(in crate::input::mouse) fn forward_webview_move_at(
     deps: &WebviewMoveDeps,

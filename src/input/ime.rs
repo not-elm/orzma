@@ -302,7 +302,8 @@ fn ime_policy_system(
 /// `ImeCommit` to the keyboard-focused surface. The commit is suppressed (the
 /// state machine still runs, so `ImeState` stays consistent) when EITHER any
 /// webview owns keyboard focus OR the focused surface is in vi mode. The
-/// commit transport is applied by the observer in `src/input/default_mode.rs`.
+/// commit transport is applied by the `apply_ime_commit_to_terminal` observer
+/// in this module.
 fn read_ime_events(
     mut commands: Commands,
     mut events: MessageReader<Ime>,

@@ -257,7 +257,7 @@ mod tests {
         assert_eq!(
             (c.vi_mode, c.paste, c.keys.len()),
             (0, 0, 0),
-            "a Default-mode pane action resolves to a no-op: no event, no typing"
+            "a pane action resolves to a no-op: no event, no typing"
         );
     }
 
@@ -359,8 +359,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().vi_mode,
             1,
-            "EnterViMode must fire unconditionally in Default mode, even when vi mode is \
-             already active"
+            "EnterViMode must fire unconditionally, even when vi mode is already active"
         );
     }
 }

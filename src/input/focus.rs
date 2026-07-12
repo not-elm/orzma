@@ -41,7 +41,7 @@ pub(crate) struct KeyboardFocused;
 #[derive(Component)]
 pub(crate) struct MouseDisabled;
 
-/// Registers the webview focus-sync system.
+/// Registers `maintain_input_gates` and the webview focus-sync system.
 pub(crate) struct FocusSyncPlugin;
 
 impl Plugin for FocusSyncPlugin {

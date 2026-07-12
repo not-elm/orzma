@@ -1,6 +1,6 @@
 //! OSC 8 hyperlink hover detection and cursor-icon control — the single
 //! authority for `HyperlinkHoverState` (the renderer underline) and the window
-//! `CursorIcon` over every terminal surface: the Default-mode shell and
+//! `CursorIcon` over every terminal surface: the shell terminal and
 //! webview hosts (all are `OrzmaTerminal` entities). Over a linked cell the
 //! cursor becomes a pointer while the platform activation modifier
 //! (`link_modifier_held`) is held, and text otherwise; over a webview host the
@@ -29,7 +29,8 @@ use orzma_configs::shortcuts::Modifiers;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 
-/// Plugin: registers `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
+/// Plugin: registers `insert_initial_cursor_icon` at `Startup` and
+/// `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
 pub(crate) struct HyperlinkInputPlugin;
 
 impl Plugin for HyperlinkInputPlugin {
@@ -352,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_over_default_mode_terminal_link_sets_state_and_pointer() {
+    fn hover_over_terminal_link_sets_state_and_pointer() {
         use orzma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
 
         let mut app = App::new();
@@ -416,7 +417,7 @@ mod tests {
         assert_eq!(
             hover.entity,
             Some(term),
-            "hover must resolve to the Default-mode OrzmaTerminal under the cursor"
+            "hover must resolve to the OrzmaTerminal under the cursor"
         );
         assert_eq!(
             hover.hyperlink_id,

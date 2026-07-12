@@ -11,9 +11,8 @@ orzma is a terminal that runs as a single native GUI application; a built-in mul
 The workspace root package is the one and only binary; library crates live under `crates/`. Edition 2024, toolchain pinned to `1.95` (`rust-toolchain.toml`).
 
 - `orzma` (workspace root, `src/main.rs`) — the single binary: a Bevy 0.19 app. `main()` builds one `App` and adds `DefaultPlugins` (configured with a `WindowPlugin` titled "orzma") plus `cef_plugin(orzma_registry.clone(), cef_profile.path())` (from `bevy_cef`), then the orzma plugins:
-  - `SurfacePlugin`, `DefaultSessionPlugin`, `TerminalHandlePlugin` (from `orzma_tty_engine`), `TerminalRendererPlugin` (from `orzma_tty_renderer`), `ActionPlugin`, `OrzmaConfigsPlugin`, `FontBridgePlugin`, `OrzmaBootstrapPlugin`, `OrzmaInputPlugin` (`input`'s root plugin, aggregating `ShortcutsPlugin`, `OptionAsAltPlugin`, `KeyboardInputPlugin`, `MouseInputPlugin`, and the default-mode input dispatcher), `OrzmaUiPlugin` (`ui`'s root plugin, aggregating the UI root plus the default-mode UI subtree);
-  - `OrzmaWebviewPlugin` (from `orzma_webview`), `ViModePlugin`, `ViModeIndicatorPlugin`, `WindowTitlePlugin`;
-  - the input plugins `FocusSyncPlugin`, `HyperlinkInputPlugin`, `ImePlugin`, and `ImeOverlayPlugin`.
+  - `SurfacePlugin`, `SessionPlugin`, `TerminalHandlePlugin` (from `orzma_tty_engine`), `TerminalRendererPlugin` (from `orzma_tty_renderer`), `ActionPlugin`, `OrzmaConfigsPlugin`, `FontBridgePlugin`, `OrzmaInputPlugin` (`input`'s root plugin, aggregating `ShortcutsPlugin`, `OptionAsAltPlugin`, `KeyboardInputPlugin`, `MouseInputPlugin`, `FocusSyncPlugin`, `ImePlugin`, and `HyperlinkInputPlugin`), `OrzmaUiPlugin` (`ui`'s root plugin, aggregating the UI root, the shell-surface subtree, the IME overlay, and the vi-mode indicator);
+  - `OrzmaWebviewPlugin` (from `orzma_webview`), `WindowTitlePlugin`.
   - The in-process webview feature — CEF render wiring, the control-socket listener, the `window.orzma` back-channel, OSC 5379 `mount` / `unmount`, and webviews — is aggregated under `OrzmaWebviewPlugin` (from `crates/orzma_webview`).
 
   The root `Cargo.toml` depends on `orzma_webview` (path dep) and on `bevy_cef` (crates.io, `0.12`). A root `[features] debug` flag (forwarded through `orzma_webview/debug` to `bevy_cef/debug`) enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded webview; it is off by default (`cargo run --features debug`).
@@ -40,7 +39,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (crate
 
 ### `src/` module map
 
-`src/main.rs` plus: `action`, `bootstrap`, `cef_profile`, `configs`, `font`, `input`, `session`, `surface`, `system_set`, `theme`, `ui`, `window_title`.
+`src/main.rs` plus: `action`, `cef_profile`, `configs`, `font`, `input`, `session`, `surface`, `system_set`, `ui`, `window_title`.
 
 ## Commands
 

@@ -1,6 +1,5 @@
 //! Spawns the singleton UiRoot Node and a 2D Camera under PrimaryWindow.
-//! Runs after bootstrap. Each mode's UI subtree attaches under `UiRoot` while
-//! that mode is active.
+//! The shell-surface subtree attaches under `UiRoot`.
 
 use crate::ui::UiRoot;
 use bevy::camera::RenderTarget;
