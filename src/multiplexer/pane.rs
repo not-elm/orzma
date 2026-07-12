@@ -1,5 +1,5 @@
-//! Multiplexer pane domain: the pane component, its cwd cache, and the
-//! split-pane request observer.
+//! Multiplexer pane domain: the pane component, its cwd cache, the
+//! split-pane request observer, and the resize-pane request reader.
 
 pub(crate) mod exit;
 pub(crate) mod layout;
@@ -10,8 +10,10 @@ use crate::multiplexer::bootstrap::{OrzmaTerminalConfig, WindowContainer};
 use crate::multiplexer::layout::{PaneRect, SplitAxis};
 use crate::multiplexer::pane::layout::PANE_GAP_PX;
 use crate::multiplexer::pane::spawn::{MultiplexerPaneBundle, MultiplexerPaneSpawnOptions};
-use crate::multiplexer::request::SplitPaneRequest;
-use crate::multiplexer::window::{MultiplexerLayoutComp, MultiplexerWindow};
+use crate::multiplexer::request::{ResizePaneRequest, SplitPaneRequest};
+use crate::multiplexer::window::{
+    ActiveMultiplexerWindow, MultiplexerLayoutComp, MultiplexerWindow,
+};
 use bevy::prelude::*;
 use bevy::ui::ComputedNode;
 use orzma_tty_renderer::TerminalCellMetricsResource;
@@ -35,6 +37,23 @@ pub(in crate::multiplexer) struct SplitPanePlugin;
 impl Plugin for SplitPanePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_split_pane);
+    }
+}
+
+/// Registers the `ResizePaneRequest` message and `resize_pane`.
+///
+/// Registers `ResizePaneRequest` here (not only in the shortcut-applier
+/// plugin that writes it) so `resize_pane`'s `on_message::<ResizePaneRequest>`
+/// run condition has a `Messages<ResizePaneRequest>` resource to read even
+/// when `MultiplexerPlugin` is exercised without the input plugins (as
+/// bootstrap tests do); `add_message` is idempotent, so this is a no-op when
+/// the shortcut-applier plugin already registered it.
+pub(in crate::multiplexer) struct ResizePanePlugin;
+
+impl Plugin for ResizePanePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<ResizePaneRequest>()
+            .add_systems(Update, resize_pane.run_if(on_message::<ResizePaneRequest>));
     }
 }
 
@@ -179,10 +198,54 @@ fn split_would_underflow(extent_px: f32, cell_px: f32, gap_px: f32) -> bool {
     extent_px < 2.0 * MIN_PANE_CELLS * cell_px + gap_px
 }
 
+/// Fixed per-request resize step, as a fraction of the split axis extent.
+/// MVP: a constant step rather than acceleration or pixel-based dragging.
+const RESIZE_STEP_FRAC: f32 = 0.05;
+
+/// Minimum split ratio either side of a resize is clamped to, so a repeated
+/// resize toward one edge shrinks a pane down to a sliver but never past it.
+const MIN_PANE_FRAC: f32 = 0.05;
+
+/// `MessageReader<ResizePaneRequest>` consumer: grows or shrinks the active
+/// window's focused pane along the request's direction by a fixed
+/// `RESIZE_STEP_FRAC` step, via `MultiplexerLayout::resize` (already
+/// unit-tested at the layout level — this system only wires the message to
+/// the active window's focused pane).
+///
+/// Conditional mutation (rust.md change-detection rule): clones the layout,
+/// resizes the clone, and writes it back through `DerefMut` only when
+/// `resize` reports a real change, so a request whose direction has no
+/// matching-axis ancestor split (e.g. `Up`/`Down` on a vertical-only split)
+/// never spuriously trips `Changed<MultiplexerLayoutComp>`.
+///
+/// Gated `.run_if(on_message::<ResizePaneRequest>)`. Unlike `select_pane`,
+/// this never moves `active_pane`, so it needs no ordering relative to
+/// `sync_keyboard_focus_to_active_pane`; `apply_layout` (`PostUpdate`) picks
+/// up the ratio change on its own.
+fn resize_pane(
+    mut requests: MessageReader<ResizePaneRequest>,
+    mut windows: Query<
+        (&MultiplexerWindow, &mut MultiplexerLayoutComp),
+        With<ActiveMultiplexerWindow>,
+    >,
+) {
+    let Ok((window_state, mut layout)) = windows.single_mut() else {
+        return;
+    };
+    let focused = window_state.active_pane;
+    for msg in requests.read() {
+        let mut next = layout.0.clone();
+        if next.resize(focused, msg.dir, RESIZE_STEP_FRAC, MIN_PANE_FRAC) {
+            layout.0 = next;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::multiplexer::layout::MultiplexerLayout;
+    use orzma_configs::shortcuts::PaneDirection;
 
     #[test]
     fn pane_component_roundtrips() {
@@ -401,6 +464,119 @@ mod tests {
             world.get::<MultiplexerWindow>(window).unwrap().active_pane,
             target,
             "active_pane must be unchanged when the spawn fails"
+        );
+    }
+
+    /// Spawns an active window with a 2-leaf vertical split (`pane_a` left,
+    /// `pane_b` right, `active_pane` starting on `pane_a`). Mirrors
+    /// `window::tests::spawn_two_pane_vertical_window`, minus the
+    /// `WindowContainer`/`ComputedNode` area wiring `resize_pane` doesn't
+    /// need. Returns `(window, pane_a, pane_b)`.
+    fn spawn_two_pane_active_window(app: &mut App) -> (Entity, Entity, Entity) {
+        let world = app.world_mut();
+        let pane_a = world.spawn_empty().id();
+        let pane_b = world.spawn_empty().id();
+        let mut layout = MultiplexerLayout::new(pane_a);
+        layout.split(pane_a, pane_b, SplitAxis::Vertical);
+        let window = world
+            .spawn((
+                MultiplexerWindow {
+                    index: 0,
+                    name: None,
+                    active_pane: pane_a,
+                },
+                ActiveMultiplexerWindow,
+                MultiplexerLayoutComp(layout),
+            ))
+            .id();
+        (window, pane_a, pane_b)
+    }
+
+    #[test]
+    fn resize_right_grows_focused_left_pane() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ResizePaneRequest>()
+            .add_systems(Update, resize_pane);
+        let (window, pane_a, pane_b) = spawn_two_pane_active_window(&mut app);
+
+        app.world_mut().write_message(ResizePaneRequest {
+            dir: PaneDirection::Right,
+        });
+        app.update();
+
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let rects = app
+            .world()
+            .get::<MultiplexerLayoutComp>(window)
+            .unwrap()
+            .0
+            .rects(area, PANE_GAP_PX);
+        let left = rects.iter().find(|(e, _)| *e == pane_a).unwrap().1;
+        let right = rects.iter().find(|(e, _)| *e == pane_b).unwrap().1;
+        assert_eq!(
+            left.w, 55.0,
+            "ResizePaneRequest {{ Right }} must grow the focused left pane by RESIZE_STEP_FRAC"
+        );
+        assert_eq!(right.w, 45.0);
+    }
+
+    #[test]
+    fn resize_edge_request_does_not_trigger_change_detection() {
+        #[derive(Resource, Default)]
+        struct RunCount(u32);
+
+        fn probe(mut count: ResMut<RunCount>) {
+            count.0 += 1;
+        }
+
+        fn layout_changed(
+            windows: Query<
+                (),
+                (
+                    With<ActiveMultiplexerWindow>,
+                    Changed<MultiplexerLayoutComp>,
+                ),
+            >,
+        ) -> bool {
+            !windows.is_empty()
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ResizePaneRequest>()
+            .init_resource::<RunCount>()
+            .add_systems(Update, (resize_pane, probe.run_if(layout_changed)).chain());
+        let (window, pane_a, _pane_b) = spawn_two_pane_active_window(&mut app);
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            1,
+            "a freshly-inserted MultiplexerLayoutComp counts as changed"
+        );
+
+        app.world_mut().write_message(ResizePaneRequest {
+            dir: PaneDirection::Up,
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            1,
+            "a ResizePaneRequest with no matching-axis ancestor split must not spuriously trip Changed<MultiplexerLayoutComp>"
+        );
+        assert_eq!(
+            app.world()
+                .get::<MultiplexerWindow>(window)
+                .unwrap()
+                .active_pane,
+            pane_a
         );
     }
 }

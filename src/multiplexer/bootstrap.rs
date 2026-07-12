@@ -4,13 +4,12 @@
 
 use crate::input::focus::KeyboardFocused;
 use crate::multiplexer::layout::MultiplexerLayout;
-use crate::multiplexer::pane::MultiplexerPane;
-use crate::multiplexer::pane::SplitPanePlugin;
 use crate::multiplexer::pane::exit::ExitPlugin;
 use crate::multiplexer::pane::layout::LayoutPlugin;
 use crate::multiplexer::pane::spawn::{
     MultiplexerPaneBundle, MultiplexerPaneSpawnOptions, PaneCwdPlugin,
 };
+use crate::multiplexer::pane::{MultiplexerPane, ResizePanePlugin, SplitPanePlugin};
 use crate::multiplexer::window::{
     ActiveMultiplexerWindow, MultiplexerLayoutComp, MultiplexerWindow, WindowPlugin,
 };
@@ -55,6 +54,7 @@ impl Plugin for MultiplexerPlugin {
             ExitPlugin,
             WindowPlugin,
             SplitPanePlugin,
+            ResizePanePlugin,
         ))
         .add_systems(
             Update,
