@@ -4,6 +4,11 @@
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 
+// NOTE: `confirm_prompt` must be `pub(crate)`, not the repo's default private
+// submodule, because `apply_type` (`src/input/shortcuts/apply.rs`) gates on
+// `confirm_prompt::ConfirmState` to keep an answering y/n out of the PTY.
+pub(crate) mod confirm_prompt;
+
 /// Root of the multiplexer UI subtree, mounted once under `UiRoot`.
 #[derive(Component)]
 struct MultiplexerUiRoot;
@@ -24,7 +29,8 @@ impl Plugin for MultiplexerUiPlugin {
         app.add_systems(
             Update,
             ensure_ui_root.run_if(not(any_with_component::<MultiplexerUiRoot>)),
-        );
+        )
+        .add_plugins(confirm_prompt::ConfirmPromptPlugin);
     }
 }
 

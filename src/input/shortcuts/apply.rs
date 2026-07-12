@@ -12,6 +12,7 @@ use crate::{
         keyboard::bevy_key_to_terminal_key,
         shortcuts::{ShortcutMessage, ShortcutSet, TypeMessage, ViModeMessage},
     },
+    ui::multiplexer::confirm_prompt::ConfirmState,
 };
 use bevy::prelude::*;
 use orzma_configs::shortcuts::Shortcut;
@@ -34,6 +35,7 @@ impl Plugin for ShortcutsApplyPlugin {
                 apply_type
                     .in_set(ShortcutSet::Apply)
                     .run_if(on_message::<TypeMessage>)
+                    .run_if(not(resource_exists::<ConfirmState>))
                     .after(apply_shortcuts)
                     .after(apply_vi_mode),
             ),
@@ -94,7 +96,9 @@ fn apply_vi_mode(mut commands: Commands, mut vi_mode: MessageReader<ViModeMessag
 
 /// Types raw keys from `TypeMessage` into the focused terminal as
 /// `TerminalKeyInput`. Runs after the shortcut/copy appliers. Registered in
-/// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>`.
+/// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>` and suppressed
+/// while a `ConfirmState` prompt is open, so the y/n answering a kill-pane /
+/// kill-window confirm never leaks into the terminal's PTY.
 fn apply_type(mut commands: Commands, mut type_keys: MessageReader<TypeMessage>) {
     for msg in type_keys.read() {
         if let Some(entity) = msg.focused
@@ -360,6 +364,61 @@ mod tests {
             app.world().resource::<Captured>().vi_mode,
             1,
             "EnterViMode must fire unconditionally, even when vi mode is already active"
+        );
+    }
+
+    /// Builds an app running only `apply_type`, gated exactly as
+    /// `ShortcutsApplyPlugin` registers it (`.run_if(not(resource_exists::<ConfirmState>))`),
+    /// to prove the modality gate suppresses typing while a kill-pane /
+    /// kill-window confirm prompt is open.
+    fn build_confirm_gated_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<TypeMessage>()
+            .init_resource::<Captured>()
+            .add_systems(
+                Update,
+                apply_type.run_if(not(resource_exists::<ConfirmState>)),
+            )
+            .add_observer(|ev: On<TerminalKeyInput>, mut c: ResMut<Captured>| {
+                c.keys.push(ev.key.clone());
+            });
+        app
+    }
+
+    #[test]
+    fn apply_type_suppressed_while_confirm_state_present() {
+        let mut app = build_confirm_gated_app();
+        let term = app.world_mut().spawn(OrzmaTerminal).id();
+        app.world_mut()
+            .insert_resource(ConfirmState::kill_pane(term));
+        app.world_mut().write_message(TypeMessage {
+            logical: Key::Character("y".into()),
+            focused: Some(term),
+            mods: Modifiers::default(),
+        });
+        app.update();
+        assert!(
+            app.world().resource::<Captured>().keys.is_empty(),
+            "apply_type must be suppressed while a ConfirmState prompt is open, so an \
+             answering y/n never reaches the terminal's PTY"
+        );
+    }
+
+    #[test]
+    fn apply_type_runs_normally_without_confirm_state() {
+        let mut app = build_confirm_gated_app();
+        let term = app.world_mut().spawn(OrzmaTerminal).id();
+        app.world_mut().write_message(TypeMessage {
+            logical: Key::Character("y".into()),
+            focused: Some(term),
+            mods: Modifiers::default(),
+        });
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().keys,
+            vec![TerminalKey::Text("y".into())],
+            "apply_type must run normally when no ConfirmState is present"
         );
     }
 }
