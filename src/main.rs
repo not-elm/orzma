@@ -5,6 +5,7 @@ mod cef_profile;
 mod configs;
 mod font;
 mod input;
+mod multiplexer;
 mod session;
 mod surface;
 mod system_set;
