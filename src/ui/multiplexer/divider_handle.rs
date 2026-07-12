@@ -52,17 +52,18 @@ const MIN_PANE_FRAC: f32 = 0.05;
 
 /// Registers the divider-handle visuals, the resize hover cursor, and
 /// mouse-drag pane resize.
+///
+/// `MouseButtonInput` / `CursorMoved` are normally registered by bevy's
+/// `InputPlugin` / `WindowPlugin`; they are re-registered here (idempotent
+/// `add_message`) so `divider_drag`'s `MessageReader`s and its `on_message`
+/// run condition have a `Messages<T>` resource to read even when this plugin
+/// is exercised without those plugins, mirroring `ResizePanePlugin` /
+/// `ZoomPanePlugin`.
 pub(super) struct DividerHandlePlugin;
 
 impl Plugin for DividerHandlePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DividerDrag>()
-            // `MouseButtonInput` / `CursorMoved` are normally registered by
-            // bevy's `InputPlugin` / `WindowPlugin`; `add_message` here too
-            // (idempotent) so `divider_drag`'s `MessageReader`s and its
-            // `on_message` run condition have a `Messages<T>` resource to
-            // read even when this plugin is exercised without those plugins,
-            // mirroring `ResizePanePlugin` / `ZoomPanePlugin`.
             .add_message::<MouseButtonInput>()
             .add_message::<CursorMoved>()
             .add_systems(
