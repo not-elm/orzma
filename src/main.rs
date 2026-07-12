@@ -1,7 +1,6 @@
 //! orzma Bevy GUI entry point.
 
 mod action;
-mod bootstrap;
 mod cef_profile;
 mod configs;
 mod font;
@@ -19,7 +18,6 @@ use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::surface::SurfacePlugin;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
-use bootstrap::OrzmaBootstrapPlugin;
 use configs::OrzmaConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
@@ -59,7 +57,6 @@ fn main() {
             ActionPlugin,
             OrzmaConfigsPlugin,
             FontBridgePlugin,
-            OrzmaBootstrapPlugin,
             OrzmaInputPlugin,
             OrzmaUiPlugin,
         ))

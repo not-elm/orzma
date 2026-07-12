@@ -34,16 +34,17 @@ pub(crate) struct HyperlinkInputPlugin;
 
 impl Plugin for HyperlinkInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            hyperlink_hover_and_cursor
-                .run_if(
-                    on_message::<MouseMotion>
-                        .or_else(on_message::<CursorMoved>)
-                        .or_else(on_message::<KeyboardInput>),
-                )
-                .in_set(InputPhase::Hover),
-        );
+        app.add_systems(Startup, insert_initial_cursor_icon)
+            .add_systems(
+                Update,
+                hyperlink_hover_and_cursor
+                    .run_if(
+                        on_message::<MouseMotion>
+                            .or_else(on_message::<CursorMoved>)
+                            .or_else(on_message::<KeyboardInput>),
+                    )
+                    .in_set(InputPhase::Hover),
+            );
     }
 }
 
@@ -552,5 +553,21 @@ mod tests {
             Some(&CursorIcon::System(SystemCursorIcon::Pointer)),
             "over a webview host the cursor is left untouched for bevy_cef to own"
         );
+    }
+}
+
+/// Inserts an initial `CursorIcon::System(SystemCursorIcon::Default)`
+/// (the arrow) on the primary window so the hover system in this module
+/// can mutate the component without first having to insert it. The arrow
+/// is the default for non-terminal regions; the hover system narrows it to
+/// the I-beam over terminal text.
+fn insert_initial_cursor_icon(
+    mut commands: Commands,
+    windows: Query<Entity, (With<PrimaryWindow>, Without<CursorIcon>)>,
+) {
+    for window in windows.iter() {
+        commands
+            .entity(window)
+            .insert(CursorIcon::System(SystemCursorIcon::Default));
     }
 }
