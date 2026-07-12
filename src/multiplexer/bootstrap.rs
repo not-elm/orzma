@@ -5,6 +5,7 @@
 use crate::input::focus::KeyboardFocused;
 use crate::multiplexer::layout::MultiplexerLayout;
 use crate::multiplexer::pane::MultiplexerPane;
+use crate::multiplexer::pane::SplitPanePlugin;
 use crate::multiplexer::pane::exit::ExitPlugin;
 use crate::multiplexer::pane::layout::LayoutPlugin;
 use crate::multiplexer::pane::spawn::{
@@ -47,7 +48,13 @@ impl Plugin for MultiplexerPlugin {
         app.insert_resource(OrzmaTerminalConfig {
             shell: self.shell.clone(),
         })
-        .add_plugins((PaneCwdPlugin, LayoutPlugin, ExitPlugin, WindowPlugin))
+        .add_plugins((
+            PaneCwdPlugin,
+            LayoutPlugin,
+            ExitPlugin,
+            WindowPlugin,
+            SplitPanePlugin,
+        ))
         .add_systems(
             Update,
             ensure_bootstrap.run_if(
