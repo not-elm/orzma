@@ -4,10 +4,10 @@
 //! host carries `ViModeState` and shows `[offset/total]` over the
 //! pane's top-right corner.
 
+use crate::action::vi::mode::ViModeState;
 use crate::font::TerminalUiFont;
 use crate::theme;
 use crate::ui::palette;
-use crate::action::vi::mode::ViModeState;
 use bevy::app::{App, Plugin};
 use bevy::ecs::component::Component;
 use bevy::ecs::lifecycle::Remove;

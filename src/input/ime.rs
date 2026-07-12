@@ -6,9 +6,9 @@
 //! keyboard-focused surface), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
+use crate::action::vi::mode::ViModeState;
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
-use crate::action::vi::mode::ViModeState;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;

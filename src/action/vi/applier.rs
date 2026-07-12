@@ -3,10 +3,10 @@
 //! terminal entity.
 
 use crate::action::clipboard::CopyAction;
+use crate::action::vi::mode::ExitViMode;
 use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
-use crate::action::vi::mode::ExitViMode;
 use bevy::prelude::*;
 use orzma_configs::vi_mode::ViModeScroll;
 use orzma_tty_engine::{Coalescer, SelectionType, TerminalHandle};

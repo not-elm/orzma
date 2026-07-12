@@ -9,6 +9,7 @@
 //! `LeaderPhase`.
 
 use crate::action::vi::ResolvedViModeKeys;
+use crate::action::vi::mode::ViModeState;
 use crate::input::current_modifiers;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::{ImeState, resolve_focused_surface};
@@ -19,7 +20,6 @@ use crate::input::shortcuts::{
     HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
     Shortcuts, TypeMessage, ViModeMessage, clear_leader_phase,
 };
-use crate::action::vi::mode::ViModeState;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;

@@ -9,13 +9,13 @@
 //! release-webview-focus are handled upstream; the pane/window actions are
 //! no-ops.
 
+use crate::action::vi::mode::ViModeState;
 use crate::input::InputPhase;
 use crate::input::focus::{KeyboardDisabled, MouseDisabled};
 use crate::input::ime::{ImeCommit, ImeState};
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::surface::geometry::topmost_surface_at;
-use crate::action::vi::mode::ViModeState;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
@@ -159,12 +159,12 @@ mod tests {
     use super::*;
     use crate::action::clipboard::PasteAction;
     use crate::action::terminal::TerminalSelectionCopy;
+    use crate::action::vi::mode::EnterViModeActionEvent;
     use crate::input::keyboard::key_effect::KeyEffect;
     use crate::input::shortcuts::default_mode::{
         apply_default_shortcuts, apply_default_type, apply_default_vi_mode,
     };
     use crate::input::shortcuts::{ShortcutMessage, Shortcuts, TypeMessage, ViModeMessage};
-    use crate::action::vi::mode::EnterViModeActionEvent;
     use bevy::app::App;
     use bevy::ecs::resource::Resource;
     use bevy::input::keyboard::{Key, KeyCode};

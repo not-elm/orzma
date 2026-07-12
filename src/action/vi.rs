@@ -2,9 +2,10 @@
 //! fired by the vi-mode key gather and applied by `vi/applier.rs`'s
 //! local terminal-engine observers, for every terminal surface.
 
+pub(crate) mod mode;
+
 mod applier;
 mod keymap;
-pub(crate) mod mode;
 
 use bevy::prelude::*;
 pub(crate) use keymap::{ResolvedViModeKeys, trigger_vi_mode_action};
