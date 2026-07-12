@@ -101,12 +101,26 @@ fn apply_layout(
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
 
-    for (pane, rect) in layout.0.rects(area, PANE_GAP_PX) {
+    for (pane, display) in layout.0.display_rects(area, PANE_GAP_PX) {
         let Ok((entity, mut node, mut handle, mut pty, mut coalescer, mut last_cells)) =
             panes.get_mut(pane)
         else {
             continue;
         };
+        let Some(rect) = display else {
+            if node.display != Display::None {
+                node.display = Display::None;
+            }
+            continue;
+        };
+        // NOTE: this Display::Flex restore must run BEFORE the last_cells
+        // early-continue below. On un-zoom a pane's rect is unchanged (only
+        // the zoom flag cleared), so cols/rows still match last_cells and the
+        // loop continues right after — if the restore were placed after that
+        // guard, an un-zoomed pane would stay Display::None forever.
+        if node.display != Display::Flex {
+            node.display = Display::Flex;
+        }
         apply_rect(&mut node, rect, computed.inverse_scale_factor);
         let (cols, rows) = pane_cells(rect, cell_w, cell_h);
         if last_cells.0 == Some((cols, rows)) {

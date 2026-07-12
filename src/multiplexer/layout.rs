@@ -88,6 +88,25 @@ impl MultiplexerLayout {
         out
     }
 
+    /// Every leaf's display state: `Some(rect)` where the pane is visible,
+    /// `None` where it is hidden (a non-zoomed pane while another pane is
+    /// zoomed).
+    pub(crate) fn display_rects(
+        &self,
+        area: PaneRect,
+        gap: f32,
+    ) -> Vec<(Entity, Option<PaneRect>)> {
+        let visible = self.rects(area, gap);
+        let mut out: Vec<(Entity, Option<PaneRect>)> =
+            visible.into_iter().map(|(e, r)| (e, Some(r))).collect();
+        for leaf in self.leaves() {
+            if !out.iter().any(|(e, _)| *e == leaf) {
+                out.push((leaf, None));
+            }
+        }
+        out
+    }
+
     /// Sets or clears the zoomed pane.
     pub(crate) fn set_zoom(&mut self, pane: Option<Entity>) {
         self.zoomed = pane;
@@ -435,6 +454,47 @@ mod tests {
             h: 50.0,
         };
         assert_eq!(l.rects(area, 1.0), vec![(e(2), area)]);
+    }
+
+    #[test]
+    fn display_rects_zoom_hides_siblings() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        l.set_zoom(Some(e(2)));
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let display = l.display_rects(area, 1.0);
+        assert_eq!(display.len(), 2, "every leaf must have a display entry");
+        let zoomed = display.iter().find(|(pane, _)| *pane == e(2)).unwrap().1;
+        assert_eq!(
+            zoomed,
+            Some(area),
+            "the zoomed pane must be visible at full area"
+        );
+        let hidden = display.iter().find(|(pane, _)| *pane == e(1)).unwrap().1;
+        assert_eq!(hidden, None, "the non-zoomed sibling must be hidden");
+    }
+
+    #[test]
+    fn display_rects_no_zoom_shows_every_leaf() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let display = l.display_rects(area, 1.0);
+        assert_eq!(display.len(), 2);
+        assert!(
+            display.iter().all(|(_, r)| r.is_some()),
+            "with no zoom, every leaf must be visible"
+        );
     }
 
     #[test]

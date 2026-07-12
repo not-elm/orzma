@@ -9,7 +9,9 @@ use crate::multiplexer::pane::layout::LayoutPlugin;
 use crate::multiplexer::pane::spawn::{
     MultiplexerPaneBundle, MultiplexerPaneSpawnOptions, PaneCwdPlugin,
 };
-use crate::multiplexer::pane::{MultiplexerPane, ResizePanePlugin, SplitPanePlugin};
+use crate::multiplexer::pane::{
+    MultiplexerPane, ResizePanePlugin, SplitPanePlugin, ZoomPanePlugin,
+};
 use crate::multiplexer::window::{
     ActiveMultiplexerWindow, MultiplexerLayoutComp, MultiplexerWindow, WindowPlugin,
 };
@@ -55,6 +57,7 @@ impl Plugin for MultiplexerPlugin {
             WindowPlugin,
             SplitPanePlugin,
             ResizePanePlugin,
+            ZoomPanePlugin,
         ))
         .add_systems(
             Update,

@@ -10,7 +10,7 @@ use crate::multiplexer::bootstrap::{OrzmaTerminalConfig, WindowContainer};
 use crate::multiplexer::layout::{PaneRect, SplitAxis};
 use crate::multiplexer::pane::layout::PANE_GAP_PX;
 use crate::multiplexer::pane::spawn::{MultiplexerPaneBundle, MultiplexerPaneSpawnOptions};
-use crate::multiplexer::request::{ResizePaneRequest, SplitPaneRequest};
+use crate::multiplexer::request::{ResizePaneRequest, SplitPaneRequest, ZoomPaneRequest};
 use crate::multiplexer::window::{
     ActiveMultiplexerWindow, MultiplexerLayoutComp, MultiplexerWindow,
 };
@@ -54,6 +54,21 @@ impl Plugin for ResizePanePlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<ResizePaneRequest>()
             .add_systems(Update, resize_pane.run_if(on_message::<ResizePaneRequest>));
+    }
+}
+
+/// Registers the `ZoomPaneRequest` message and `zoom_pane`.
+///
+/// Same rationale as `ResizePanePlugin`: registers `ZoomPaneRequest` here so
+/// `zoom_pane`'s `on_message::<ZoomPaneRequest>` run condition has a
+/// `Messages<ZoomPaneRequest>` resource to read even when `MultiplexerPlugin`
+/// is exercised without the input plugins; `add_message` is idempotent.
+pub(in crate::multiplexer) struct ZoomPanePlugin;
+
+impl Plugin for ZoomPanePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<ZoomPaneRequest>()
+            .add_systems(Update, zoom_pane.run_if(on_message::<ZoomPaneRequest>));
     }
 }
 
@@ -237,6 +252,43 @@ fn resize_pane(
         let mut next = layout.0.clone();
         if next.resize(focused, msg.dir, RESIZE_STEP_FRAC, MIN_PANE_FRAC) {
             layout.0 = next;
+        }
+    }
+}
+
+/// `MessageReader<ZoomPaneRequest>` consumer: toggles zoom on the active
+/// window's focused pane via `MultiplexerLayout::set_zoom`/`zoomed` (already
+/// unit-tested at the layout level — this system only wires the message to
+/// the active window's focused pane).
+///
+/// Conditional mutation (rust.md change-detection rule): only calls
+/// `set_zoom` when the next zoom state actually differs from the current
+/// one, so a request never spuriously trips `Changed<MultiplexerLayoutComp>`
+/// beyond the one real toggle it causes.
+///
+/// Gated `.run_if(on_message::<ZoomPaneRequest>)`. Like `resize_pane`, this
+/// never moves `active_pane`, so it needs no ordering relative to
+/// `sync_keyboard_focus_to_active_pane`; `apply_layout` (`PostUpdate`) picks
+/// up the zoom change on its own.
+fn zoom_pane(
+    mut requests: MessageReader<ZoomPaneRequest>,
+    mut windows: Query<
+        (&MultiplexerWindow, &mut MultiplexerLayoutComp),
+        With<ActiveMultiplexerWindow>,
+    >,
+) {
+    let Ok((window_state, mut layout)) = windows.single_mut() else {
+        return;
+    };
+    let focused = window_state.active_pane;
+    for _ in requests.read() {
+        let next = if layout.0.zoomed() == Some(focused) {
+            None
+        } else {
+            Some(focused)
+        };
+        if layout.0.zoomed() != next {
+            layout.0.set_zoom(next);
         }
     }
 }
@@ -577,6 +629,98 @@ mod tests {
                 .unwrap()
                 .active_pane,
             pane_a
+        );
+    }
+
+    #[test]
+    fn zoom_pane_toggles_focused_pane() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ZoomPaneRequest>()
+            .add_systems(Update, zoom_pane);
+        let (window, pane_a, _pane_b) = spawn_two_pane_active_window(&mut app);
+
+        app.world_mut().write_message(ZoomPaneRequest);
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<MultiplexerLayoutComp>(window)
+                .unwrap()
+                .0
+                .zoomed(),
+            Some(pane_a),
+            "a ZoomPaneRequest must zoom the active window's focused pane"
+        );
+
+        app.world_mut().write_message(ZoomPaneRequest);
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<MultiplexerLayoutComp>(window)
+                .unwrap()
+                .0
+                .zoomed(),
+            None,
+            "a second ZoomPaneRequest must un-zoom the pane"
+        );
+    }
+
+    #[test]
+    fn zoom_pane_change_detection_fires_only_on_real_toggle() {
+        #[derive(Resource, Default)]
+        struct RunCount(u32);
+
+        fn probe(mut count: ResMut<RunCount>) {
+            count.0 += 1;
+        }
+
+        fn layout_changed(
+            windows: Query<
+                (),
+                (
+                    With<ActiveMultiplexerWindow>,
+                    Changed<MultiplexerLayoutComp>,
+                ),
+            >,
+        ) -> bool {
+            !windows.is_empty()
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ZoomPaneRequest>()
+            .init_resource::<RunCount>()
+            .add_systems(Update, (zoom_pane, probe.run_if(layout_changed)).chain());
+        let (window, pane_a, _pane_b) = spawn_two_pane_active_window(&mut app);
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            1,
+            "a freshly-inserted MultiplexerLayoutComp counts as changed"
+        );
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            1,
+            "no ZoomPaneRequest must not spuriously trip Changed<MultiplexerLayoutComp>"
+        );
+
+        app.world_mut().write_message(ZoomPaneRequest);
+        app.update();
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            2,
+            "a ZoomPaneRequest must toggle zoom and trip Changed<MultiplexerLayoutComp>"
+        );
+        assert_eq!(
+            app.world()
+                .get::<MultiplexerLayoutComp>(window)
+                .unwrap()
+                .0
+                .zoomed(),
+            Some(pane_a)
         );
     }
 }
