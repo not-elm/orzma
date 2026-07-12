@@ -9,7 +9,6 @@ mod input;
 mod session;
 mod surface;
 mod system_set;
-mod theme;
 mod ui;
 mod window_title;
 

@@ -6,7 +6,6 @@ use bevy::prelude::*;
 
 pub(crate) mod default_mode;
 pub(crate) mod ime_overlay;
-pub mod palette;
 pub mod root;
 pub mod vi_mode_indicator;
 
