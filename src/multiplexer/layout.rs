@@ -72,6 +72,30 @@ impl MultiplexerLayout {
     pub(crate) fn split(&mut self, target: Entity, new_pane: Entity, axis: SplitAxis) -> bool {
         split_at(&mut self.root, target, new_pane, axis)
     }
+
+    /// Computes each pane's pixel rect within `area`, leaving `gap` px between
+    /// siblings. When a pane is zoomed it is the only rect returned, filling
+    /// `area`.
+    pub(crate) fn rects(&self, area: PaneRect, gap: f32) -> Vec<(Entity, PaneRect)> {
+        if let Some(z) = self.zoomed
+            && self.contains(z)
+        {
+            return vec![(z, area)];
+        }
+        let mut out = Vec::new();
+        layout_rects(&self.root, area, gap, &mut out);
+        out
+    }
+
+    /// Sets or clears the zoomed pane.
+    pub(crate) fn set_zoom(&mut self, pane: Option<Entity>) {
+        self.zoomed = pane;
+    }
+
+    /// The currently zoomed pane, if any.
+    pub(crate) fn zoomed(&self) -> Option<Entity> {
+        self.zoomed
+    }
 }
 
 fn collect_leaves(node: &LayoutNode, out: &mut Vec<Entity>) {
@@ -98,6 +122,65 @@ fn split_at(node: &mut LayoutNode, target: Entity, new_pane: Entity, axis: Split
         LayoutNode::Leaf(_) => false,
         LayoutNode::Split { first, second, .. } => {
             split_at(first, target, new_pane, axis) || split_at(second, target, new_pane, axis)
+        }
+    }
+}
+
+fn layout_rects(node: &LayoutNode, area: PaneRect, gap: f32, out: &mut Vec<(Entity, PaneRect)>) {
+    match node {
+        LayoutNode::Leaf(e) => out.push((*e, area)),
+        LayoutNode::Split {
+            axis,
+            ratio,
+            first,
+            second,
+        } => {
+            let (a, b) = split_rect(area, *axis, *ratio, gap);
+            layout_rects(first, a, gap, out);
+            layout_rects(second, b, gap, out);
+        }
+    }
+}
+
+fn split_rect(area: PaneRect, axis: SplitAxis, ratio: f32, gap: f32) -> (PaneRect, PaneRect) {
+    match axis {
+        SplitAxis::Vertical => {
+            let usable = (area.w - gap).max(0.0);
+            let fw = (usable * ratio).round();
+            let sw = usable - fw;
+            (
+                PaneRect {
+                    x: area.x,
+                    y: area.y,
+                    w: fw,
+                    h: area.h,
+                },
+                PaneRect {
+                    x: area.x + fw + gap,
+                    y: area.y,
+                    w: sw,
+                    h: area.h,
+                },
+            )
+        }
+        SplitAxis::Horizontal => {
+            let usable = (area.h - gap).max(0.0);
+            let fh = (usable * ratio).round();
+            let sh = usable - fh;
+            (
+                PaneRect {
+                    x: area.x,
+                    y: area.y,
+                    w: area.w,
+                    h: fh,
+                },
+                PaneRect {
+                    x: area.x,
+                    y: area.y + fh + gap,
+                    w: area.w,
+                    h: sh,
+                },
+            )
         }
     }
 }
@@ -130,5 +213,61 @@ mod tests {
         let mut l = MultiplexerLayout::new(e(1));
         assert!(!l.split(e(9), e(2), SplitAxis::Vertical));
         assert_eq!(l.leaves(), vec![e(1)]);
+    }
+
+    fn covers(rects: &[(Entity, PaneRect)], area: PaneRect) -> bool {
+        let sum: f32 = rects.iter().map(|(_, r)| r.w * r.h).sum();
+        sum <= area.w * area.h + 1.0
+    }
+
+    #[test]
+    fn single_pane_fills_area() {
+        let l = MultiplexerLayout::new(e(1));
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        let rs = l.rects(area, 1.0);
+        assert_eq!(rs, vec![(e(1), area)]);
+    }
+
+    #[test]
+    fn vertical_split_side_by_side_with_gap() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let rs = l.rects(area, 1.0);
+        let left = rs.iter().find(|(x, _)| *x == e(1)).unwrap().1;
+        let right = rs.iter().find(|(x, _)| *x == e(2)).unwrap().1;
+        assert_eq!(left.x, 0.0);
+        assert_eq!(left.w, 50.0);
+        assert_eq!(right.x, 51.0);
+        assert_eq!(right.w, 50.0);
+        assert!(!overlap(left, right));
+    }
+
+    #[test]
+    fn vertical_split_with_gap_covers_full_area() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let rs = l.rects(area, 1.0);
+        assert!(covers(&rs, area));
+    }
+
+    fn overlap(a: PaneRect, b: PaneRect) -> bool {
+        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
     }
 }
