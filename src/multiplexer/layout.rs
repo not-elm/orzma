@@ -6,6 +6,7 @@
 
 use bevy::ecs::entity::Entity;
 use orzma_configs::shortcuts::PaneDirection;
+use std::mem::replace;
 
 /// The axis a split divides along, named after the divider the user sees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +97,21 @@ impl MultiplexerLayout {
     pub(crate) fn zoomed(&self) -> Option<Entity> {
         self.zoomed
     }
+
+    /// Removes `pane`'s leaf, collapsing its parent split into the surviving
+    /// sibling. Returns a leaf of that sibling to focus next, or `None` if
+    /// `pane` was the last leaf (caller closes the window). Clears zoom if the
+    /// zoomed pane was removed.
+    pub(crate) fn remove(&mut self, pane: Entity) -> Option<Entity> {
+        if self.zoomed == Some(pane) {
+            self.zoomed = None;
+        }
+        match &self.root {
+            LayoutNode::Leaf(e) if *e == pane => None,
+            LayoutNode::Leaf(_) => None,
+            _ => remove_in(&mut self.root, pane),
+        }
+    }
 }
 
 fn collect_leaves(node: &LayoutNode, out: &mut Vec<Entity>) {
@@ -185,6 +201,32 @@ fn split_rect(area: PaneRect, axis: SplitAxis, ratio: f32, gap: f32) -> (PaneRec
     }
 }
 
+fn remove_in(node: &mut LayoutNode, pane: Entity) -> Option<Entity> {
+    let LayoutNode::Split { first, second, .. } = node else {
+        return None;
+    };
+    if matches!(first.as_ref(), LayoutNode::Leaf(e) if *e == pane) {
+        let sib = replace(second.as_mut(), LayoutNode::Leaf(pane));
+        let focus = first_leaf(&sib);
+        *node = sib;
+        return Some(focus);
+    }
+    if matches!(second.as_ref(), LayoutNode::Leaf(e) if *e == pane) {
+        let sib = replace(first.as_mut(), LayoutNode::Leaf(pane));
+        let focus = first_leaf(&sib);
+        *node = sib;
+        return Some(focus);
+    }
+    remove_in(first, pane).or_else(|| remove_in(second, pane))
+}
+
+fn first_leaf(node: &LayoutNode) -> Entity {
+    match node {
+        LayoutNode::Leaf(e) => *e,
+        LayoutNode::Split { first, .. } => first_leaf(first),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +311,30 @@ mod tests {
 
     fn overlap(a: PaneRect, b: PaneRect) -> bool {
         a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    }
+
+    #[test]
+    fn remove_collapses_parent_and_returns_neighbor() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        let neighbor = l.remove(e(1));
+        assert_eq!(neighbor, Some(e(2)));
+        assert_eq!(l.leaves(), vec![e(2)]);
+    }
+
+    #[test]
+    fn remove_last_leaf_returns_none() {
+        let mut l = MultiplexerLayout::new(e(1));
+        assert_eq!(l.remove(e(1)), None);
+    }
+
+    #[test]
+    fn remove_nested_keeps_other_subtree() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        l.split(e(2), e(3), SplitAxis::Horizontal);
+        let n = l.remove(e(2));
+        assert_eq!(n, Some(e(3)));
+        assert_eq!(l.leaves(), vec![e(1), e(3)]);
     }
 }
