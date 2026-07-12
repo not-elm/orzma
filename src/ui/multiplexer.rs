@@ -10,6 +10,10 @@ use bevy::prelude::*;
 pub(crate) mod confirm_prompt;
 mod divider_handle;
 mod pane_focus;
+// NOTE: `rename_prompt` must be `pub(crate)`, not the repo's default private
+// submodule, because `apply_type` (`src/input/shortcuts/apply.rs`) gates on
+// `rename_prompt::RenameState` to keep typed rename characters out of the PTY.
+pub(crate) mod rename_prompt;
 mod window_bar;
 
 /// Root of the multiplexer UI subtree, mounted once under `UiRoot`.
@@ -37,6 +41,7 @@ impl Plugin for MultiplexerUiPlugin {
             confirm_prompt::ConfirmPromptPlugin,
             divider_handle::DividerHandlePlugin,
             pane_focus::PaneFocusPlugin,
+            rename_prompt::RenamePromptPlugin,
             window_bar::WindowBarPlugin,
         ));
     }

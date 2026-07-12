@@ -12,7 +12,7 @@ use crate::{
         keyboard::bevy_key_to_terminal_key,
         shortcuts::{ShortcutMessage, ShortcutSet, TypeMessage, ViModeMessage},
     },
-    ui::multiplexer::confirm_prompt::ConfirmState,
+    ui::multiplexer::{confirm_prompt::ConfirmState, rename_prompt::RenameState},
 };
 use bevy::prelude::*;
 use orzma_configs::shortcuts::Shortcut;
@@ -96,20 +96,22 @@ fn apply_vi_mode(mut commands: Commands, mut vi_mode: MessageReader<ViModeMessag
 /// Types raw keys from `TypeMessage` into the focused terminal as
 /// `TerminalKeyInput`. Runs after the shortcut/copy appliers. Registered in
 /// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>`. While a
-/// `ConfirmState` prompt is open, this DRAINS `TypeMessage`s instead of
-/// typing them, so the y/n answering a kill-pane / kill-window confirm never
-/// leaks into the terminal's PTY.
+/// `ConfirmState` or `RenameState` prompt is open, this DRAINS `TypeMessage`s
+/// instead of typing them, so the y/n answering a kill-pane / kill-window
+/// confirm, or a character typed into the rename prompt, never leaks into
+/// the terminal's PTY.
 fn apply_type(
     mut commands: Commands,
     mut type_keys: MessageReader<TypeMessage>,
     confirm: Option<Res<ConfirmState>>,
+    rename: Option<Res<RenameState>>,
 ) {
-    // NOTE: while a confirm prompt owns the keyboard, DRAIN (clear) TypeMessages
-    // rather than gating this system off with run_if — a run_if would leave the
-    // confirming key buffered on apply_type's reader cursor and inject it into the
-    // PTY on the next ungated frame (the reader cursor only advances when the body
-    // runs).
-    if confirm.is_some() {
+    // NOTE: while a confirm or rename prompt owns the keyboard, DRAIN (clear)
+    // TypeMessages rather than gating this system off with run_if — a run_if
+    // would leave the confirming/typed key buffered on apply_type's reader
+    // cursor and inject it into the PTY on the next ungated frame (the reader
+    // cursor only advances when the body runs).
+    if confirm.is_some() || rename.is_some() {
         type_keys.clear();
         return;
     }
@@ -382,9 +384,10 @@ mod tests {
 
     /// Builds an app running only `apply_type`, registered exactly as
     /// `ShortcutsApplyPlugin` registers it (gated on `on_message::<TypeMessage>`
-    /// only — the confirm-prompt suppression is the in-body drain), to prove
-    /// typing is suppressed while a kill-pane / kill-window confirm prompt is
-    /// open, and that a confirming key never leaks into a later frame.
+    /// only — the confirm/rename-prompt suppression is the in-body drain), to
+    /// prove typing is suppressed while a kill-pane / kill-window confirm
+    /// prompt or the rename prompt is open, and that a confirming/typed key
+    /// never leaks into a later frame.
     fn build_confirm_gated_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -413,6 +416,25 @@ mod tests {
             app.world().resource::<Captured>().keys.is_empty(),
             "apply_type must be suppressed while a ConfirmState prompt is open, so an \
              answering y/n never reaches the terminal's PTY"
+        );
+    }
+
+    #[test]
+    fn apply_type_suppressed_while_rename_state_present() {
+        let mut app = build_confirm_gated_app();
+        let term = app.world_mut().spawn(OrzmaTerminal).id();
+        app.world_mut()
+            .insert_resource(RenameState::new("build".to_string()));
+        app.world_mut().write_message(TypeMessage {
+            logical: Key::Character("x".into()),
+            focused: Some(term),
+            mods: Modifiers::default(),
+        });
+        app.update();
+        assert!(
+            app.world().resource::<Captured>().keys.is_empty(),
+            "apply_type must be suppressed while a RenameState prompt is open, so a \
+             character typed into the rename prompt never reaches the terminal's PTY"
         );
     }
 
