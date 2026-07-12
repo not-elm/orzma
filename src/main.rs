@@ -23,7 +23,7 @@ use orzma_tty_engine::TerminalHandlePlugin;
 use orzma_tty_renderer::TerminalRendererPlugin;
 use orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use orzma_webview_host::WebviewAssetRegistry;
-use session::DefaultSessionPlugin;
+use session::SessionPlugin;
 use ui::OrzmaUiPlugin;
 
 fn main() {
@@ -45,7 +45,7 @@ fn main() {
         ))
         .add_plugins((
             SurfacePlugin,
-            DefaultSessionPlugin {
+            SessionPlugin {
                 shell: pre_configs.orzma.shell.clone(),
             },
             TerminalHandlePlugin,

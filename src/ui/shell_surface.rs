@@ -103,7 +103,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.world_mut().spawn((Node::default(), UiRoot));
         app.add_plugins((
-            crate::session::DefaultSessionPlugin { shell: None },
+            crate::session::SessionPlugin { shell: None },
             DefaultModeUiPlugin,
         ));
         app

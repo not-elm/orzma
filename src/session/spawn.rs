@@ -1,4 +1,4 @@
-//! Default-mode standalone terminal spawn: the PTY bundle, spawn options, and
+//! Standalone terminal spawn: the PTY bundle, spawn options, and
 //! the shell-override config resource.
 
 use crate::surface::OrzmaTerminal;
@@ -61,7 +61,7 @@ impl OrzmaTerminalBundle {
     }
 }
 
-/// Full-window absolute layout for the standalone Default-mode terminal.
+/// Full-window absolute layout for the standalone terminal.
 fn full_size_node() -> Node {
     Node {
         position_type: PositionType::Absolute,
@@ -74,12 +74,12 @@ fn full_size_node() -> Node {
 }
 
 /// Inserts the shell-override config resource read by `ensure_default_mode_ui`.
-pub(super) struct DefaultSpawnPlugin {
+pub(super) struct SpawnPlugin {
     /// Shell override from the loaded configs; `None` defers to `$SHELL`.
     pub shell: Option<String>,
 }
 
-impl Plugin for DefaultSpawnPlugin {
+impl Plugin for SpawnPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(OrzmaTerminalConfig {
             shell: self.shell.clone(),

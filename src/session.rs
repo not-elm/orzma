@@ -10,19 +10,19 @@ mod layout;
 use bevy::prelude::*;
 
 /// Bevy plugin for the shell session lifecycle (spawn / layout / exit).
-pub(crate) struct DefaultSessionPlugin {
-    /// Shell override forwarded to `spawn::DefaultSpawnPlugin`.
+pub(crate) struct SessionPlugin {
+    /// Shell override forwarded to `spawn::SpawnPlugin`.
     pub shell: Option<String>,
 }
 
-impl Plugin for DefaultSessionPlugin {
+impl Plugin for SessionPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            spawn::DefaultSpawnPlugin {
+            spawn::SpawnPlugin {
                 shell: self.shell.clone(),
             },
-            exit::DefaultExitPlugin,
-            layout::DefaultLayoutPlugin,
+            exit::ExitPlugin,
+            layout::LayoutPlugin,
         ));
     }
 }
@@ -36,7 +36,7 @@ mod tests {
     fn config_shell_forwards_to_orzma_terminal_config() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(DefaultSessionPlugin {
+        app.add_plugins(SessionPlugin {
             shell: Some("/bin/fish".into()),
         });
         assert_eq!(
@@ -45,7 +45,7 @@ mod tests {
                 .shell
                 .as_deref(),
             Some("/bin/fish"),
-            "DefaultSessionPlugin must forward shell through DefaultSpawnPlugin into OrzmaTerminalConfig",
+            "SessionPlugin must forward shell through SpawnPlugin into OrzmaTerminalConfig",
         );
     }
 }
