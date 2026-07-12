@@ -8,6 +8,7 @@ use bevy::prelude::*;
 // submodule, because `apply_type` (`src/input/shortcuts/apply.rs`) gates on
 // `confirm_prompt::ConfirmState` to keep an answering y/n out of the PTY.
 pub(crate) mod confirm_prompt;
+mod divider_handle;
 
 /// Root of the multiplexer UI subtree, mounted once under `UiRoot`.
 #[derive(Component)]
@@ -30,7 +31,10 @@ impl Plugin for MultiplexerUiPlugin {
             Update,
             ensure_ui_root.run_if(not(any_with_component::<MultiplexerUiRoot>)),
         )
-        .add_plugins(confirm_prompt::ConfirmPromptPlugin);
+        .add_plugins((
+            confirm_prompt::ConfirmPromptPlugin,
+            divider_handle::DividerHandlePlugin,
+        ));
     }
 }
 

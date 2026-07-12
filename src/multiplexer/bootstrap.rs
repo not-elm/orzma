@@ -32,9 +32,13 @@ pub(in crate::multiplexer) struct OrzmaTerminalConfig {
 /// window, and — for window 0 — the bootstrap gate marker (spawned before the
 /// PTY, never despawned on error). `window` links the container back to its
 /// window entity for the window-switch/layout systems in later PR-1 tasks.
+///
+/// `pub(crate)` (not `pub(super)`): `crate::ui::multiplexer::divider_handle`
+/// reads it to find the active window's container the same way
+/// `crate::multiplexer::pane::layout::apply_layout` does.
 #[derive(Component)]
-pub(super) struct WindowContainer {
-    pub(super) window: Entity,
+pub(crate) struct WindowContainer {
+    pub(crate) window: Entity,
 }
 
 /// Aggregates the multiplexer's PTY-side lifecycle: the cwd cache, the shell
