@@ -10,6 +10,7 @@ use bevy::prelude::*;
 pub(crate) mod confirm_prompt;
 mod divider_handle;
 mod pane_focus;
+mod window_bar;
 
 /// Root of the multiplexer UI subtree, mounted once under `UiRoot`.
 #[derive(Component)]
@@ -36,6 +37,7 @@ impl Plugin for MultiplexerUiPlugin {
             confirm_prompt::ConfirmPromptPlugin,
             divider_handle::DividerHandlePlugin,
             pane_focus::PaneFocusPlugin,
+            window_bar::WindowBarPlugin,
         ));
     }
 }
