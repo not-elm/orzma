@@ -1,5 +1,6 @@
 //! Multiplexer pane domain: the pane component and its cwd cache.
 
+pub(crate) mod exit;
 pub(crate) mod layout;
 pub(crate) mod spawn;
 
