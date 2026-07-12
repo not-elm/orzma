@@ -2,7 +2,7 @@
 //! under `UiRoot`.
 
 use crate::input::focus::KeyboardFocused;
-use crate::session::default::spawn::{OrzmaSpawnOptions, OrzmaTerminalBundle, OrzmaTerminalConfig};
+use crate::session::spawn::{OrzmaSpawnOptions, OrzmaTerminalBundle, OrzmaTerminalConfig};
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 use orzma_webview::ControlPlaneHandle;
@@ -103,7 +103,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.world_mut().spawn((Node::default(), UiRoot));
         app.add_plugins((
-            crate::session::default::DefaultSessionPlugin { shell: None },
+            crate::session::DefaultSessionPlugin { shell: None },
             DefaultModeUiPlugin,
         ));
         app

@@ -26,7 +26,7 @@ use orzma_tty_engine::TerminalHandlePlugin;
 use orzma_tty_renderer::TerminalRendererPlugin;
 use orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use orzma_webview_host::WebviewAssetRegistry;
-use session::default::DefaultSessionPlugin;
+use session::DefaultSessionPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{OrzmaUiPlugin, vi_mode_indicator::ViModeIndicatorPlugin};
 
