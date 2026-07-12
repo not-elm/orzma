@@ -8,7 +8,9 @@ use crate::multiplexer::layout::{MultiplexerLayout, PaneRect};
 use crate::multiplexer::pane::layout::PANE_GAP_PX;
 use crate::multiplexer::pane::spawn::{MultiplexerPaneBundle, MultiplexerPaneSpawnOptions};
 use crate::multiplexer::pane::{MultiplexerPane, PaneCwd};
-use crate::multiplexer::request::{KillWindowRequest, NewWindowRequest, SelectPaneRequest};
+use crate::multiplexer::request::{
+    KillWindowRequest, NewWindowRequest, SelectPaneRequest, SelectWindowRequest, WindowSelect,
+};
 use crate::ui::multiplexer::WorkspaceContainer;
 use bevy::prelude::*;
 use bevy::ui::ComputedNode;
@@ -35,14 +37,17 @@ pub(crate) struct ActiveMultiplexerWindow;
 #[derive(Component)]
 pub(crate) struct MultiplexerLayoutComp(pub MultiplexerLayout);
 
-/// Registers the `SelectPaneRequest`/`NewWindowRequest` messages, the
-/// `KillWindowRequest` observer, `select_pane`, `on_new_window`,
-/// `on_kill_window`, and `sync_keyboard_focus_to_active_pane`.
+/// Registers the `SelectPaneRequest`/`NewWindowRequest`/`SelectWindowRequest`
+/// messages, the `KillWindowRequest` observer, the
+/// `On<Add, ActiveMultiplexerWindow>` visibility observer, `select_pane`,
+/// `select_window`, `on_new_window`, `on_kill_window`, and
+/// `sync_keyboard_focus_to_active_pane`.
 ///
-/// Registers `SelectPaneRequest`/`NewWindowRequest` here (not only in the
-/// shortcut-applier plugin that writes them) so `select_pane`'s
-/// `on_message::<SelectPaneRequest>` and `on_new_window`'s
-/// `on_message::<NewWindowRequest>` run conditions have a `Messages<T>`
+/// Registers `SelectPaneRequest`/`NewWindowRequest`/`SelectWindowRequest`
+/// here (not only in the shortcut-applier plugin that writes them) so
+/// `select_pane`'s `on_message::<SelectPaneRequest>`, `on_new_window`'s
+/// `on_message::<NewWindowRequest>`, and `select_window`'s
+/// `on_message::<SelectWindowRequest>` run conditions have a `Messages<T>`
 /// resource to read even when `WindowPlugin` is exercised without the input
 /// plugins (as bootstrap tests do); `add_message` is idempotent, so this is
 /// a no-op when the shortcut-applier plugin already registered them.
@@ -52,6 +57,7 @@ impl Plugin for WindowPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<SelectPaneRequest>()
             .add_message::<NewWindowRequest>()
+            .add_message::<SelectWindowRequest>()
             .add_systems(
                 Update,
                 (
@@ -62,9 +68,11 @@ impl Plugin for WindowPlugin {
                         .before(InputPhase::FocusedKey)
                         .run_if(active_pane_changed),
                     on_new_window.run_if(on_message::<NewWindowRequest>),
+                    select_window.run_if(on_message::<SelectWindowRequest>),
                 ),
             )
-            .add_observer(on_kill_window);
+            .add_observer(on_kill_window)
+            .add_observer(on_active_window_added);
     }
 }
 
@@ -140,6 +148,90 @@ fn select_pane(
         {
             window_state.active_pane = next;
         }
+    }
+}
+
+/// `MessageReader<SelectWindowRequest>` consumer: resolves the target window
+/// via the pure `select_target` from the current active window's index, then
+/// — only if the target exists and differs from the current active window —
+/// moves `ActiveMultiplexerWindow` and `KeyboardFocused` onto it. A request
+/// that resolves to `None` or to the already-active window is a no-op: the
+/// marker and focus components are left untouched, so `On<Add,
+/// ActiveMultiplexerWindow>` (`on_active_window_added`) never re-fires
+/// spuriously.
+///
+/// Multiple requests in the same frame chain against an in-loop `active`/
+/// `active_index` pair rather than re-reading the queries, mirroring
+/// `on_new_window`: the `Commands` this system queues have not applied yet,
+/// so the queries would otherwise still see the pre-switch state.
+///
+/// Gated `.run_if(on_message::<SelectWindowRequest>)`.
+fn select_window(
+    mut commands: Commands,
+    mut requests: MessageReader<SelectWindowRequest>,
+    active_windows: Query<(Entity, &MultiplexerWindow), With<ActiveMultiplexerWindow>>,
+    all_windows: Query<(Entity, &MultiplexerWindow)>,
+) {
+    let Ok((mut active, active_state)) = active_windows.single() else {
+        return;
+    };
+    let mut active_index = active_state.index;
+    let windows: Vec<(Entity, u32)> = all_windows.iter().map(|(e, w)| (e, w.index)).collect();
+
+    for msg in requests.read() {
+        let Some(target) = select_target(&windows, active_index, msg.0) else {
+            continue;
+        };
+        if target == active {
+            continue;
+        }
+        let Ok((_, old_state)) = all_windows.get(active) else {
+            continue;
+        };
+        let Ok((_, target_state)) = all_windows.get(target) else {
+            continue;
+        };
+        commands.entity(active).remove::<ActiveMultiplexerWindow>();
+        commands
+            .entity(old_state.active_pane)
+            .remove::<KeyboardFocused>();
+        commands.entity(target).insert(ActiveMultiplexerWindow);
+        commands
+            .entity(target_state.active_pane)
+            .insert(KeyboardFocused);
+        active_index = target_state.index;
+        active = target;
+    }
+}
+
+/// Pure resolution of a `WindowSelect` against the current windows and the
+/// active window's index: `Next`/`Previous` step to the neighboring index,
+/// WRAPPING to the opposite end when there is no neighbor in that direction;
+/// `Index(n)` resolves to the window whose index is exactly `n`, or `None` if
+/// no window has it. With a single window, `Next`/`Previous` both resolve
+/// back to that same window (the caller's no-op check then skips the move).
+fn select_target(
+    windows: &[(Entity, u32)],
+    active_index: u32,
+    sel: WindowSelect,
+) -> Option<Entity> {
+    match sel {
+        WindowSelect::Next => windows
+            .iter()
+            .filter(|(_, index)| *index > active_index)
+            .min_by_key(|(_, index)| *index)
+            .or_else(|| windows.iter().min_by_key(|(_, index)| *index))
+            .map(|(entity, _)| *entity),
+        WindowSelect::Previous => windows
+            .iter()
+            .filter(|(_, index)| *index < active_index)
+            .max_by_key(|(_, index)| *index)
+            .or_else(|| windows.iter().max_by_key(|(_, index)| *index))
+            .map(|(entity, _)| *entity),
+        WindowSelect::Index(n) => windows
+            .iter()
+            .find(|(_, index)| *index == n as u32)
+            .map(|(entity, _)| *entity),
     }
 }
 
@@ -403,6 +495,35 @@ fn on_kill_window(
         commands.entity(neighbor).insert(ActiveMultiplexerWindow);
         if let Ok((_, window)) = windows.get(neighbor) {
             commands.entity(window.active_pane).insert(KeyboardFocused);
+        }
+    }
+}
+
+/// `On<Add, ActiveMultiplexerWindow>` observer: the ONLY place that writes a
+/// `WindowContainer`'s `Node.display`. Fires whenever `ActiveMultiplexerWindow`
+/// is added to a window — by `select_window` above, `on_new_window`, and
+/// bootstrap alike — so this one hook keeps every container's visibility in
+/// sync with whichever window just became active: `Display::Flex` for the
+/// container whose `window` is the entity the marker was added to,
+/// `Display::None` for every other container. Written only when the value
+/// differs, so this never spuriously trips the `Changed<ComputedNode>` gate
+/// that `apply_layout` (`pane/layout.rs`) and `reconcile_divider_handles`
+/// (`ui/multiplexer/divider_handle.rs`) key off of — the layout reflow those
+/// two systems drive is itself triggered by the `Display` flip changing
+/// `ComputedNode.size` the next frame, so no manual recompute is needed here.
+fn on_active_window_added(
+    ev: On<Add, ActiveMultiplexerWindow>,
+    mut containers: Query<(&WindowContainer, &mut Node)>,
+) {
+    let active = ev.event_target();
+    for (container, mut node) in containers.iter_mut() {
+        let want = if container.window == active {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != want {
+            node.display = want;
         }
     }
 }
@@ -911,6 +1032,177 @@ mod tests {
         assert!(
             app.world().get_entity(window).is_err(),
             "the killed window must not survive"
+        );
+    }
+
+    #[test]
+    fn select_target_next_previous_wrap() {
+        let mut world = World::new();
+        let a = world.spawn_empty().id();
+        let b = world.spawn_empty().id();
+        let c = world.spawn_empty().id();
+        let windows = [(a, 0), (b, 1), (c, 2)];
+
+        assert_eq!(
+            select_target(&windows, 2, WindowSelect::Next),
+            Some(a),
+            "Next from the highest index wraps to the smallest index"
+        );
+        assert_eq!(
+            select_target(&windows, 0, WindowSelect::Previous),
+            Some(c),
+            "Previous from the smallest index wraps to the largest index"
+        );
+        assert_eq!(
+            select_target(&windows, 0, WindowSelect::Next),
+            Some(b),
+            "Next steps to the next-higher index"
+        );
+        assert_eq!(
+            select_target(&windows, 0, WindowSelect::Index(1)),
+            Some(b),
+            "Index resolves to the window with that exact index"
+        );
+        assert_eq!(
+            select_target(&windows, 0, WindowSelect::Index(9)),
+            None,
+            "Index with no matching window resolves to None"
+        );
+    }
+
+    #[test]
+    fn select_window_moves_active_and_focus() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<SelectWindowRequest>()
+            .add_systems(Update, select_window);
+
+        let (window_a, pane_a) = spawn_bare_window(&mut app, 0, true);
+        let (window_b, pane_b) = spawn_bare_window(&mut app, 1, false);
+        app.world_mut().entity_mut(pane_a).insert(KeyboardFocused);
+
+        app.world_mut()
+            .write_message(SelectWindowRequest(WindowSelect::Next));
+        app.update();
+
+        assert!(
+            app.world()
+                .entity(window_b)
+                .contains::<ActiveMultiplexerWindow>(),
+            "Next from window 0 of two windows must activate window 1"
+        );
+        assert!(
+            !app.world()
+                .entity(window_a)
+                .contains::<ActiveMultiplexerWindow>(),
+            "the previously active window loses the marker"
+        );
+        assert!(
+            app.world().entity(pane_b).contains::<KeyboardFocused>(),
+            "keyboard focus follows to the new active window's active_pane"
+        );
+        assert!(
+            !app.world().entity(pane_a).contains::<KeyboardFocused>(),
+            "the old active pane loses KeyboardFocused"
+        );
+    }
+
+    #[test]
+    fn select_window_nonexistent_index_is_noop() {
+        #[derive(Resource, Default)]
+        struct AddCount(u32);
+        fn count_added(_ev: On<Add, ActiveMultiplexerWindow>, mut count: ResMut<AddCount>) {
+            count.0 += 1;
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<SelectWindowRequest>()
+            .init_resource::<AddCount>()
+            .add_systems(Update, select_window)
+            .add_observer(count_added);
+
+        let (window_a, pane_a) = spawn_bare_window(&mut app, 0, true);
+        let (_window_b, _pane_b) = spawn_bare_window(&mut app, 1, false);
+        app.world_mut().entity_mut(pane_a).insert(KeyboardFocused);
+        app.update();
+        let baseline = app.world().resource::<AddCount>().0;
+
+        app.world_mut()
+            .write_message(SelectWindowRequest(WindowSelect::Index(9)));
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<AddCount>().0,
+            baseline,
+            "an Index request with no matching window must not re-add ActiveMultiplexerWindow"
+        );
+        assert!(
+            app.world()
+                .entity(window_a)
+                .contains::<ActiveMultiplexerWindow>(),
+            "the active window stays active on a no-op index"
+        );
+        assert!(
+            app.world().entity(pane_a).contains::<KeyboardFocused>(),
+            "keyboard focus is untouched on a no-op"
+        );
+    }
+
+    /// Spawns a bare window (as `spawn_bare_window`) with an accompanying
+    /// `WindowContainer` + `Node`, the minimal shape
+    /// `on_active_window_added` reads. Returns `(window, container)`.
+    fn spawn_window_with_container(app: &mut App, index: u32, active: bool) -> (Entity, Entity) {
+        let (window, _pane) = spawn_bare_window(app, index, active);
+        let container = app
+            .world_mut()
+            .spawn((WindowContainer { window }, Node::default()))
+            .id();
+        (window, container)
+    }
+
+    #[test]
+    fn on_active_window_added_sets_display() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_observer(on_active_window_added);
+
+        let (window_a, container_a) = spawn_window_with_container(&mut app, 0, false);
+        let (window_b, container_b) = spawn_window_with_container(&mut app, 1, false);
+
+        app.world_mut()
+            .entity_mut(window_b)
+            .insert(ActiveMultiplexerWindow);
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Node>(container_b).unwrap().display,
+            Display::Flex,
+            "the active window's container is Flex"
+        );
+        assert_eq!(
+            app.world().get::<Node>(container_a).unwrap().display,
+            Display::None,
+            "the inactive window's container is None"
+        );
+
+        app.world_mut()
+            .entity_mut(window_b)
+            .remove::<ActiveMultiplexerWindow>();
+        app.world_mut()
+            .entity_mut(window_a)
+            .insert(ActiveMultiplexerWindow);
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Node>(container_a).unwrap().display,
+            Display::Flex,
+            "after switching, the newly active window's container becomes Flex"
+        );
+        assert_eq!(
+            app.world().get::<Node>(container_b).unwrap().display,
+            Display::None,
+            "after switching, the previously active window's container becomes None"
         );
     }
 
