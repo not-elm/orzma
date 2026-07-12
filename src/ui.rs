@@ -4,9 +4,9 @@
 use crate::ui::root::OrzmaUiRootPlugin;
 use bevy::prelude::*;
 
-pub(crate) mod default_mode;
 pub(crate) mod ime_overlay;
 pub mod root;
+pub(crate) mod shell_surface;
 pub mod vi_mode_indicator;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup, never
@@ -19,6 +19,6 @@ pub struct OrzmaUiPlugin;
 
 impl Plugin for OrzmaUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((OrzmaUiRootPlugin, default_mode::DefaultModeUiPlugin));
+        app.add_plugins((OrzmaUiRootPlugin, shell_surface::DefaultModeUiPlugin));
     }
 }

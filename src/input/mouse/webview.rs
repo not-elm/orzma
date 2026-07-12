@@ -25,7 +25,7 @@ use orzma_webview::{
     NonInteractive, Webview, focused_webview_of, webview_hit_at, webview_local_dip,
 };
 
-mod default_mode;
+mod router;
 
 /// Registers the shared webview pointer resource and the per-mode webview routers.
 pub(super) struct MouseWebviewPlugin;
@@ -33,7 +33,7 @@ pub(super) struct MouseWebviewPlugin;
 impl Plugin for MouseWebviewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WebviewPress>()
-            .add_plugins(default_mode::MouseWebviewDefaultModePlugin);
+            .add_plugins(router::MouseWebviewDefaultModePlugin);
     }
 }
 

@@ -3,12 +3,9 @@
 //! `PasteToTerminal`; also hosts `build_paste_bytes`, the shared paste-byte
 //! construction.
 
-use crate::{
-    action::clipboard::paste::default_mode::PasteDefaultModePlugin, surface::OrzmaTerminal,
-};
+use crate::surface::OrzmaTerminal;
 use bevy::{clipboard::ClipboardError, prelude::*};
-
-mod default_mode;
+use orzma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
 /// Pastes the system clipboard into the target terminal entity.
 #[derive(EntityEvent, Debug, Clone)]
@@ -24,7 +21,7 @@ pub(super) struct ClipboardPasteActionPlugin;
 impl Plugin for ClipboardPasteActionPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_paste)
-            .add_plugins(PasteDefaultModePlugin);
+            .add_observer(on_paste_default_mode);
     }
 }
 
@@ -164,6 +161,29 @@ fn on_paste(
     }
 }
 
+/// Applies `PasteToTerminal` to a PTY-attached terminal: snaps a scrolled-back
+/// viewport to the bottom, then writes the (optionally bracketed) paste
+/// bytes. The query filters select only PTY-attached terminals.
+fn on_paste_default_mode(
+    ev: On<PasteToTerminal>,
+    mut terminals: Query<
+        (&mut TerminalHandle, &mut PtyHandle, &mut Coalescer),
+        With<OrzmaTerminal>,
+    >,
+) {
+    let Ok((mut handle, mut pty, mut coalescer)) = terminals.get_mut(ev.terminal) else {
+        return;
+    };
+    if !handle.is_at_bottom() {
+        handle.scroll_to_bottom(&mut coalescer);
+    }
+    let bracketed = handle.bracketed_paste_enabled();
+    let bytes = build_paste_bytes(&ev.text, bracketed);
+    if let Err(e) = handle.write(&mut pty, &bytes) {
+        tracing::warn!(?e, entity = ?ev.terminal, "orzma paste write failed");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,5 +314,25 @@ mod tests {
             }))),
             PasteRead::Failed(_)
         ));
+    }
+
+    fn paste_applier_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_observer(on_paste_default_mode);
+        app
+    }
+
+    #[test]
+    fn on_paste_without_terminal_does_not_panic() {
+        let mut app = paste_applier_app();
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut().trigger(PasteToTerminal {
+            terminal: entity,
+            text: "hello".to_string(),
+        });
+        app.update();
+        // Reaching here proves the missing-terminal path did not panic. Byte
+        // correctness is covered by the `build_paste_bytes_*` tests.
     }
 }
