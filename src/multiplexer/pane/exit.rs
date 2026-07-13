@@ -1,11 +1,13 @@
 //! Shell-exit cascade: when a pane's shell process exits, closes that pane —
 //! collapsing its window's layout tree onto a neighbor, or, when it was the
-//! last pane, closing the whole window and, if that was the last window,
-//! exiting the app.
+//! last pane, handing the whole window off to the `KillWindowRequest`
+//! teardown (`crate::multiplexer::window::on_kill_window`), which reactivates
+//! a neighbor window and, if that was the last window, exits the app.
 
+#[cfg(test)]
 use crate::multiplexer::bootstrap::WindowContainer;
 use crate::multiplexer::pane::MultiplexerPane;
-use crate::multiplexer::request::KillPaneRequest;
+use crate::multiplexer::request::{KillPaneRequest, KillWindowRequest};
 use crate::multiplexer::window::{MultiplexerLayoutComp, MultiplexerWindow};
 use bevy::prelude::*;
 use orzma_tty_engine::TerminalChildExit;
@@ -22,24 +24,24 @@ impl Plugin for ExitPlugin {
 }
 
 /// Closes `pane`: removes its leaf from its window's layout tree. If a
-/// sibling survives, that window's `active_pane` moves to it and the pane's
-/// container (its `ChildOf` parent) despawns recursively, taking the pane
-/// with it — falling back to despawning `pane` directly when it has no
-/// `ChildOf` parent (a PTY-less unit test). If `pane` was the window's last
-/// leaf, the whole window (its `WindowContainer` subtree plus the window
-/// entity itself) despawns instead, and — when it was also the last window —
-/// `AppExit` is written.
+/// sibling survives, the pane's container (its `ChildOf` parent) despawns
+/// recursively, taking the pane with it — falling back to despawning `pane`
+/// directly when it has no `ChildOf` parent (a PTY-less unit test) — and the
+/// window's `active_pane` moves to the surviving neighbor ONLY when `pane`
+/// was the active one, so closing a background pane never steals focus. If
+/// `pane` was the window's last leaf, the whole window's teardown is handed
+/// off to a `KillWindowRequest` (`crate::multiplexer::window::on_kill_window`)
+/// rather than duplicated here, so both close paths reactivate a neighbor
+/// window, renumber, and — when it was the last window — exit the app
+/// identically.
 ///
 /// A no-op when `pane` does not carry `MultiplexerPane` (already closed, or
 /// not a multiplexer pane at all). Reused by `on_kill_pane` below.
 pub(in crate::multiplexer) fn close_pane(
     commands: &mut Commands,
-    exit: &mut MessageWriter<AppExit>,
     windows: &mut Query<&mut MultiplexerWindow>,
     layouts: &mut Query<&mut MultiplexerLayoutComp>,
     panes: &Query<&MultiplexerPane>,
-    all_windows: &Query<Entity, With<MultiplexerWindow>>,
-    containers: &Query<(Entity, &WindowContainer)>,
     child_ofs: &Query<&ChildOf>,
     pane: Entity,
 ) {
@@ -51,7 +53,9 @@ pub(in crate::multiplexer) fn close_pane(
     };
     match layout.0.remove(pane) {
         Some(neighbor) => {
-            if let Ok(mut w) = windows.get_mut(window) {
+            if let Ok(mut w) = windows.get_mut(window)
+                && w.active_pane == pane
+            {
                 w.active_pane = neighbor;
             }
             if let Ok(child_of) = child_ofs.get(pane) {
@@ -61,19 +65,7 @@ pub(in crate::multiplexer) fn close_pane(
             }
         }
         None => {
-            let last_window = all_windows.iter().count() <= 1;
-            // NOTE: despawn the pane directly instead of relying solely on
-            // the WindowContainer cascade below — a world with no UI
-            // hierarchy under the container (e.g. a PTY-less unit test) has
-            // no container to cascade through, and the pane would leak.
-            commands.entity(pane).despawn();
-            if let Some((container, _)) = containers.iter().find(|(_, c)| c.window == window) {
-                commands.entity(container).despawn();
-            }
-            commands.entity(window).despawn();
-            if last_window {
-                exit.write(AppExit::Success);
-            }
+            commands.trigger(KillWindowRequest { window });
         }
     }
 }
@@ -83,22 +75,16 @@ pub(in crate::multiplexer) fn close_pane(
 fn on_pane_shell_exit(
     ev: On<TerminalChildExit>,
     mut commands: Commands,
-    mut exit: MessageWriter<AppExit>,
     mut windows: Query<&mut MultiplexerWindow>,
     mut layouts: Query<&mut MultiplexerLayoutComp>,
     panes: Query<&MultiplexerPane>,
-    all_windows: Query<Entity, With<MultiplexerWindow>>,
-    containers: Query<(Entity, &WindowContainer)>,
     child_ofs: Query<&ChildOf>,
 ) {
     close_pane(
         &mut commands,
-        &mut exit,
         &mut windows,
         &mut layouts,
         &panes,
-        &all_windows,
-        &containers,
         &child_ofs,
         ev.event_target(),
     );
@@ -112,22 +98,16 @@ fn on_pane_shell_exit(
 fn on_kill_pane(
     ev: On<KillPaneRequest>,
     mut commands: Commands,
-    mut exit: MessageWriter<AppExit>,
     mut windows: Query<&mut MultiplexerWindow>,
     mut layouts: Query<&mut MultiplexerLayoutComp>,
     panes: Query<&MultiplexerPane>,
-    all_windows: Query<Entity, With<MultiplexerWindow>>,
-    containers: Query<(Entity, &WindowContainer)>,
     child_ofs: Query<&ChildOf>,
 ) {
     close_pane(
         &mut commands,
-        &mut exit,
         &mut windows,
         &mut layouts,
         &panes,
-        &all_windows,
-        &containers,
         &child_ofs,
         ev.event_target(),
     );
@@ -137,7 +117,7 @@ fn on_kill_pane(
 mod tests {
     use super::*;
     use crate::multiplexer::layout::{MultiplexerLayout, SplitAxis};
-    use crate::multiplexer::window::ActiveMultiplexerWindow;
+    use crate::multiplexer::window::{ActiveMultiplexerWindow, WindowPlugin};
     use bevy::ecs::message::MessageReader;
 
     #[test]
@@ -155,6 +135,7 @@ mod tests {
         app.init_resource::<Got>();
         app.add_systems(Update, capture);
         app.add_observer(on_pane_shell_exit);
+        app.add_plugins(WindowPlugin);
 
         let pane = app.world_mut().spawn_empty().id();
         let window = app
@@ -169,9 +150,15 @@ mod tests {
                 MultiplexerLayoutComp(MultiplexerLayout::new(pane)),
             ))
             .id();
+        // A WindowContainer wired as the pane's ChildOf ancestor mirrors the
+        // real spawn shape (`bootstrap.rs`, `window.rs::spawn_window`) closely
+        // enough for on_kill_window's container-despawn cascade to reach the
+        // pane, since close_pane's last-leaf branch no longer despawns the
+        // pane itself.
+        let window_container = app.world_mut().spawn(WindowContainer { window }).id();
         app.world_mut()
             .entity_mut(pane)
-            .insert(MultiplexerPane { window });
+            .insert((MultiplexerPane { window }, ChildOf(window_container)));
 
         app.world_mut().trigger(TerminalChildExit {
             entity: pane,
@@ -188,6 +175,82 @@ mod tests {
         assert!(
             app.world().get_entity(window).is_err(),
             "the closed window must not survive the same frame"
+        );
+    }
+
+    #[test]
+    fn close_active_window_last_pane_reactivates_neighbor() {
+        #[derive(Resource, Default)]
+        struct Got(bool);
+        fn capture(mut reader: MessageReader<AppExit>, mut got: ResMut<Got>) {
+            if reader.read().next().is_some() {
+                got.0 = true;
+            }
+        }
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<AppExit>();
+        app.init_resource::<Got>();
+        app.add_systems(Update, capture);
+        app.add_observer(on_pane_shell_exit);
+        app.add_plugins(WindowPlugin);
+
+        // Window 0: bootstrap-style, inactive, single pane.
+        let pane0 = app.world_mut().spawn_empty().id();
+        let window0 = app
+            .world_mut()
+            .spawn((
+                MultiplexerWindow {
+                    index: 0,
+                    name: None,
+                    active_pane: pane0,
+                },
+                MultiplexerLayoutComp(MultiplexerLayout::new(pane0)),
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(pane0)
+            .insert(MultiplexerPane { window: window0 });
+
+        // Window 1: active, single pane -- the one whose last pane is about
+        // to close, reproducing the soft-lock: with no unify-via-KillWindowRequest
+        // fix, this leaves zero ActiveMultiplexerWindow entities.
+        let pane1 = app.world_mut().spawn_empty().id();
+        let window1 = app
+            .world_mut()
+            .spawn((
+                MultiplexerWindow {
+                    index: 1,
+                    name: None,
+                    active_pane: pane1,
+                },
+                ActiveMultiplexerWindow,
+                MultiplexerLayoutComp(MultiplexerLayout::new(pane1)),
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(pane1)
+            .insert(MultiplexerPane { window: window1 });
+
+        app.world_mut().trigger(TerminalChildExit {
+            entity: pane1,
+            code: Some(0),
+        });
+        app.world_mut().flush();
+        app.update();
+
+        let world = app.world_mut();
+        let mut actives = world.query_filtered::<Entity, With<ActiveMultiplexerWindow>>();
+        let active_windows: Vec<Entity> = actives.iter(world).collect();
+        assert_eq!(
+            active_windows,
+            vec![window0],
+            "exactly one active window must remain, and it must be the surviving window"
+        );
+        assert!(
+            !app.world().resource::<Got>().0,
+            "closing the active window's last pane while another window exists must not exit \
+             the app"
         );
     }
 
@@ -265,6 +328,40 @@ mod tests {
         assert!(
             !app.world().resource::<Got>().0,
             "closing a pane with a surviving neighbor must not exit the app"
+        );
+    }
+
+    #[test]
+    fn close_background_pane_keeps_active_pane() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<AppExit>();
+        app.add_observer(on_pane_shell_exit);
+
+        let (window, pane_a, pane_b) = spawn_two_pane_window(&mut app);
+        app.world_mut()
+            .get_mut::<MultiplexerWindow>(window)
+            .unwrap()
+            .active_pane = pane_b;
+
+        app.world_mut().trigger(TerminalChildExit {
+            entity: pane_a,
+            code: Some(0),
+        });
+        app.world_mut().flush();
+        app.update();
+
+        assert!(
+            app.world().get_entity(pane_a).is_err(),
+            "the closed background pane must not survive the same frame"
+        );
+        assert_eq!(
+            app.world()
+                .get::<MultiplexerWindow>(window)
+                .unwrap()
+                .active_pane,
+            pane_b,
+            "closing a background (non-active) pane must not move active_pane"
         );
     }
 

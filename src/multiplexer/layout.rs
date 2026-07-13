@@ -369,8 +369,8 @@ fn collect_divider_rects(
     };
     let (first_area, gap_rect, second_area) = split_regions(area, *axis, *ratio, gap);
     let axis_extent = match axis {
-        SplitAxis::Vertical => area.w,
-        SplitAxis::Horizontal => area.h,
+        SplitAxis::Vertical => area.w - gap,
+        SplitAxis::Horizontal => area.h - gap,
     };
     out.push(DividerRect {
         axis: *axis,
@@ -476,7 +476,11 @@ fn resize_in(
     }
     let toward_second = matches!(dir, PaneDirection::Right | PaneDirection::Down);
     let signed = if toward_second { delta } else { -delta };
-    *ratio = (*ratio + signed).clamp(min, 1.0 - min);
+    let next = (*ratio + signed).clamp(min, 1.0 - min);
+    if next == *ratio {
+        return None;
+    }
+    *ratio = next;
     Some(())
 }
 
@@ -649,6 +653,38 @@ mod tests {
     }
 
     #[test]
+    fn display_rects_nested_three_leaf_zoom_hides_other_two() {
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        l.split(e(2), e(3), SplitAxis::Horizontal);
+        l.set_zoom(Some(e(3)));
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 101.0,
+        };
+        let display = l.display_rects(area, 1.0);
+        assert_eq!(display.len(), 3, "every leaf must have a display entry");
+        let zoomed = display.iter().find(|(pane, _)| *pane == e(3)).unwrap().1;
+        assert_eq!(
+            zoomed,
+            Some(area),
+            "the zoomed pane must be visible at full area"
+        );
+        let hidden_1 = display.iter().find(|(pane, _)| *pane == e(1)).unwrap().1;
+        let hidden_2 = display.iter().find(|(pane, _)| *pane == e(2)).unwrap().1;
+        assert_eq!(
+            hidden_1, None,
+            "a non-zoomed leaf in a nested split must be hidden"
+        );
+        assert_eq!(
+            hidden_2, None,
+            "a non-zoomed leaf in a nested split must be hidden"
+        );
+    }
+
+    #[test]
     fn remove_clears_zoom_of_removed_pane() {
         let mut l = MultiplexerLayout::new(e(1));
         l.split(e(1), e(2), SplitAxis::Vertical);
@@ -801,7 +837,7 @@ mod tests {
                 h: 50.0
             }
         );
-        assert_eq!(d.axis_extent, 101.0);
+        assert_eq!(d.axis_extent, 100.0);
     }
 
     #[test]
@@ -828,7 +864,7 @@ mod tests {
                 h: 101.0
             }
         );
-        assert_eq!(root.axis_extent, 101.0);
+        assert_eq!(root.axis_extent, 100.0);
         let nested = ds.iter().find(|d| !d.path.is_empty()).unwrap();
         assert_eq!(nested.path, vec![ChildSide::Second]);
         assert_eq!(nested.axis, SplitAxis::Horizontal);
@@ -841,7 +877,7 @@ mod tests {
                 h: 1.0
             }
         );
-        assert_eq!(nested.axis_extent, 101.0);
+        assert_eq!(nested.axis_extent, 100.0);
         assert_ne!(
             root.path, nested.path,
             "each split must key a distinct divider"

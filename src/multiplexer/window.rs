@@ -119,13 +119,13 @@ pub(crate) fn sync_keyboard_focus_to_active_pane(
 /// `.run_if(on_message::<SelectPaneRequest>)`.
 fn select_pane(
     mut requests: MessageReader<SelectPaneRequest>,
-    mut windows: Query<
+    mut window: Query<
         (Entity, &mut MultiplexerWindow, &mut MultiplexerLayoutComp),
         With<ActiveMultiplexerWindow>,
     >,
     containers: Query<(&WindowContainer, &ComputedNode)>,
 ) {
-    let Ok((window, mut window_state, mut layout)) = windows.single_mut() else {
+    let Ok((window, mut window_state, mut layout)) = window.single_mut() else {
         return;
     };
     let Some((_, computed)) = containers.iter().find(|(c, _)| c.window == window) else {
@@ -331,7 +331,6 @@ fn spawn_window(
         }
         Err(e) => {
             commands.entity(pane).despawn();
-            commands.entity(pane_container).despawn();
             commands.entity(window_container).despawn();
             commands.entity(window).despawn();
             tracing::error!(?e, "failed to spawn new multiplexer window");
@@ -441,9 +440,11 @@ fn renumber_windows(
 
 /// `On<KillWindowRequest>` observer: despawns the targeted window's subtree
 /// — its `WindowContainer` (recursively taking its pane containers and
-/// panes) plus the window entity itself — mirroring `close_pane`'s
-/// last-leaf branch (`crate::multiplexer::pane::exit`) at window
-/// granularity.
+/// panes) plus the window entity itself. This is the single window-teardown
+/// path: `close_pane`'s last-leaf branch (`crate::multiplexer::pane::exit`)
+/// triggers this same request rather than duplicating the cascade, so a
+/// window closing via its last pane exiting and a window closing via an
+/// explicit kill-window shortcut always reactivate a neighbor the same way.
 ///
 /// If the killed window was the only `MultiplexerWindow`, writes
 /// `AppExit::Success` and returns. Otherwise reassigns the remaining
@@ -901,6 +902,11 @@ mod tests {
             pick_neighbor(&remaining, 0),
             Some(e2),
             "falls back to the smallest remaining index above when none is below"
+        );
+        assert_eq!(
+            pick_neighbor(&remaining, 10),
+            Some(e5),
+            "when killed_index is above every remaining index, only the previous-window path applies"
         );
         assert_eq!(
             pick_neighbor(&[], 3),

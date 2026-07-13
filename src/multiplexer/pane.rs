@@ -239,12 +239,12 @@ const MIN_PANE_FRAC: f32 = 0.05;
 /// up the ratio change on its own.
 fn resize_pane(
     mut requests: MessageReader<ResizePaneRequest>,
-    mut windows: Query<
+    mut window: Query<
         (&MultiplexerWindow, &mut MultiplexerLayoutComp),
         With<ActiveMultiplexerWindow>,
     >,
 ) {
-    let Ok((window_state, mut layout)) = windows.single_mut() else {
+    let Ok((window_state, mut layout)) = window.single_mut() else {
         return;
     };
     let focused = window_state.active_pane;
@@ -272,12 +272,12 @@ fn resize_pane(
 /// up the zoom change on its own.
 fn zoom_pane(
     mut requests: MessageReader<ZoomPaneRequest>,
-    mut windows: Query<
+    mut window: Query<
         (&MultiplexerWindow, &mut MultiplexerLayoutComp),
         With<ActiveMultiplexerWindow>,
     >,
 ) {
-    let Ok((window_state, mut layout)) = windows.single_mut() else {
+    let Ok((window_state, mut layout)) = window.single_mut() else {
         return;
     };
     let focused = window_state.active_pane;
@@ -630,6 +630,78 @@ mod tests {
                 .active_pane,
             pane_a
         );
+    }
+
+    #[test]
+    fn resize_at_clamp_does_not_trigger_change_detection() {
+        #[derive(Resource, Default)]
+        struct RunCount(u32);
+
+        fn probe(mut count: ResMut<RunCount>) {
+            count.0 += 1;
+        }
+
+        fn layout_changed(
+            windows: Query<
+                (),
+                (
+                    With<ActiveMultiplexerWindow>,
+                    Changed<MultiplexerLayoutComp>,
+                ),
+            >,
+        ) -> bool {
+            !windows.is_empty()
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ResizePaneRequest>()
+            .init_resource::<RunCount>()
+            .add_systems(Update, (resize_pane, probe.run_if(layout_changed)).chain());
+        let (window, pane_a, _pane_b) = spawn_two_pane_active_window(&mut app);
+        // Drive the split ratio all the way to MIN_PANE_FRAC in a single
+        // frame: a generous batch of Left requests, all processed by the
+        // same resize_pane call, so the clamped ratio this test then
+        // re-exercises below is reached through the exact arithmetic path
+        // resize_pane itself uses (a manually pre-set ratio would land on a
+        // different, merely numerically-close f32 bit pattern and make the
+        // no-op check below flaky).
+        for _ in 0..20 {
+            app.world_mut().write_message(ResizePaneRequest {
+                dir: PaneDirection::Left,
+            });
+        }
+        app.update();
+        let after_clamp = app.world().resource::<RunCount>().0;
+        assert_eq!(
+            after_clamp, 1,
+            "the first frame (fresh component plus the clamp-driving resizes) counts as changed"
+        );
+
+        app.world_mut().write_message(ResizePaneRequest {
+            dir: PaneDirection::Left,
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            after_clamp,
+            "a ResizePaneRequest that clamps to the already-current ratio must not spuriously trip Changed<MultiplexerLayoutComp>"
+        );
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let rects = app
+            .world()
+            .get::<MultiplexerLayoutComp>(window)
+            .unwrap()
+            .0
+            .rects(area, PANE_GAP_PX);
+        let left = rects.iter().find(|(e, _)| *e == pane_a).unwrap().1;
+        assert_eq!(left.w, 5.0, "the ratio stays clamped at MIN_PANE_FRAC");
     }
 
     #[test]
