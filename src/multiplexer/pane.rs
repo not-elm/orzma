@@ -219,7 +219,8 @@ const RESIZE_STEP_FRAC: f32 = 0.05;
 
 /// Minimum split ratio either side of a resize is clamped to, so a repeated
 /// resize toward one edge shrinks a pane down to a sliver but never past it.
-const MIN_PANE_FRAC: f32 = 0.05;
+/// Shared with the mouse-drag resize in `crate::ui::multiplexer::divider_handle`.
+pub(crate) const MIN_PANE_FRAC: f32 = 0.05;
 
 /// `MessageReader<ResizePaneRequest>` consumer: grows or shrinks the active
 /// window's focused pane along the request's direction by a fixed

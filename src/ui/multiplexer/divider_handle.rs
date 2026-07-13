@@ -18,7 +18,10 @@
 use crate::input::InputPhase;
 use crate::multiplexer::bootstrap::WindowContainer;
 use crate::multiplexer::layout::{ChildSide, PaneRect, SplitAxis, divider_at};
-use crate::multiplexer::pane::layout::PANE_GAP_PX;
+use crate::multiplexer::pane::MIN_PANE_FRAC;
+use crate::multiplexer::pane::layout::{
+    PANE_GAP_PX, active_layout_tree_changed, window_container_computed_changed,
+};
 use crate::multiplexer::window::{ActiveMultiplexerWindow, MultiplexerLayoutComp};
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
@@ -45,12 +48,6 @@ const DIVIDER_GRAB_TOL_PX: f32 = 4.0;
 /// overlay's 200, the confirm prompt's 330 — see `ui/ime_overlay.rs` /
 /// `ui/multiplexer/confirm_prompt.rs`).
 const DIVIDER_HANDLE_Z: i32 = 50;
-
-/// Minimum split ratio either side of a drag is clamped to. Mirrors
-/// `crate::multiplexer::pane`'s `MIN_PANE_FRAC` convention (that constant is
-/// private to its module, so this is a local re-declaration of the same 0.05
-/// value, not an import).
-const MIN_PANE_FRAC: f32 = 0.05;
 
 /// Registers the divider-handle visuals, the resize hover cursor, and
 /// mouse-drag pane resize.
@@ -110,29 +107,6 @@ struct ActiveDrag {
 /// press-drag-release cycle.
 #[derive(Resource, Default)]
 struct DividerDrag(Option<ActiveDrag>);
-
-/// Whether the active window's `WindowContainer` was resized this frame.
-/// Mirrors `crate::multiplexer::pane::layout`'s run condition of the same
-/// name (private to that module, so re-declared here).
-fn window_container_computed_changed(
-    containers: Query<(), (With<WindowContainer>, Changed<ComputedNode>)>,
-) -> bool {
-    !containers.is_empty()
-}
-
-/// Whether the active window's layout tree changed this frame. Mirrors
-/// `crate::multiplexer::pane::layout`'s run condition of the same name.
-fn active_layout_tree_changed(
-    windows: Query<
-        (),
-        (
-            With<ActiveMultiplexerWindow>,
-            Changed<MultiplexerLayoutComp>,
-        ),
-    >,
-) -> bool {
-    !windows.is_empty()
-}
 
 /// Despawns and respawns the active window's handle bars from its current
 /// `divider_rects`, gated to frames where the active layout tree or the

@@ -46,7 +46,7 @@ impl Plugin for LayoutPlugin {
 pub(super) struct PaneLastCells(Option<(u16, u16)>);
 
 /// Whether the active window's `WindowContainer` was resized this frame.
-fn window_container_computed_changed(
+pub(crate) fn window_container_computed_changed(
     containers: Query<(), (With<WindowContainer>, Changed<ComputedNode>)>,
 ) -> bool {
     !containers.is_empty()
@@ -54,7 +54,7 @@ fn window_container_computed_changed(
 
 /// Whether the active window's layout tree changed this frame — a split,
 /// removal, resize, zoom, or the tree's first insertion at bootstrap.
-fn active_layout_tree_changed(
+pub(crate) fn active_layout_tree_changed(
     windows: Query<
         (),
         (
