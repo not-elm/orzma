@@ -7,7 +7,9 @@
 //! read mouse messages): `reconcile_divider_handles` spawns/despawns one
 //! handle bar per divider of the active window, parented to its
 //! `WindowContainer` and positioned from the same physical-px geometry
-//! `crate::multiplexer::pane::layout::apply_layout` uses for panes;
+//! `crate::multiplexer::pane::layout::apply_layout` uses for panes — like
+//! that system, it runs in `PostUpdate.after(UiSystems::Layout)` so it reads
+//! the same-frame `ComputedNode`, not a frame-stale one;
 //! `divider_hover_feedback` brightens the hovered handle and sets a
 //! `ColResize` / `RowResize` cursor, running after `InputPhase::Hover` so it
 //! overrides the hyperlink baseline cursor; `divider_drag` turns a Left
@@ -21,7 +23,7 @@ use crate::multiplexer::window::{ActiveMultiplexerWindow, MultiplexerLayoutComp}
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
-use bevy::ui::ComputedNode;
+use bevy::ui::{ComputedNode, UiSystems};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 
 /// Subtle grey background for an un-hovered divider handle. The theme module
@@ -67,11 +69,14 @@ impl Plugin for DividerHandlePlugin {
             .add_message::<MouseButtonInput>()
             .add_message::<CursorMoved>()
             .add_systems(
+                PostUpdate,
+                reconcile_divider_handles
+                    .after(UiSystems::Layout)
+                    .run_if(window_container_computed_changed.or_else(active_layout_tree_changed)),
+            )
+            .add_systems(
                 Update,
                 (
-                    reconcile_divider_handles.run_if(
-                        window_container_computed_changed.or_else(active_layout_tree_changed),
-                    ),
                     divider_hover_feedback.after(InputPhase::Hover),
                     divider_drag
                         .run_if(on_message::<MouseButtonInput>.or_else(on_message::<CursorMoved>)),
@@ -131,10 +136,13 @@ fn active_layout_tree_changed(
 
 /// Despawns and respawns the active window's handle bars from its current
 /// `divider_rects`, gated to frames where the active layout tree or the
-/// container's computed size changed (the two run conditions above). Each
-/// handle is positioned with the same physical-px-times-`inverse_scale_factor`
-/// conversion `apply_layout` uses for pane rects, and carries a `GlobalZIndex`
-/// so hover-brighten renders over pane content.
+/// container's computed size changed (the two run conditions above). Runs in
+/// `PostUpdate.after(UiSystems::Layout)`, matching `apply_layout`'s
+/// scheduling — reading `ComputedNode` from `Update` would be one frame stale
+/// during a live resize. Each handle is positioned with the same
+/// physical-px-times-`inverse_scale_factor` conversion `apply_layout` uses
+/// for pane rects, and carries a `GlobalZIndex` so hover-brighten renders
+/// over pane content.
 fn reconcile_divider_handles(
     mut commands: Commands,
     active_windows: Query<(Entity, &MultiplexerLayoutComp), With<ActiveMultiplexerWindow>>,
@@ -411,8 +419,9 @@ mod tests {
     fn reconcile_spawns_one_handle_per_divider() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).add_systems(
-            Update,
+            PostUpdate,
             reconcile_divider_handles
+                .after(UiSystems::Layout)
                 .run_if(window_container_computed_changed.or_else(active_layout_tree_changed)),
         );
         let (window, container, _pane_a, pane_b) =

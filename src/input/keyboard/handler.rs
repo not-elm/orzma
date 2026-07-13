@@ -19,6 +19,9 @@ use crate::input::shortcuts::{
     HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
     Shortcuts, TypeMessage, ViModeMessage, clear_leader_phase,
 };
+use crate::ui::multiplexer::confirm_prompt::ConfirmState;
+use crate::ui::multiplexer::modal::any_modal_open;
+use crate::ui::multiplexer::rename_prompt::RenameState;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
@@ -59,12 +62,12 @@ struct ClassifyInputs<'w> {
 /// shortcut messages. Runs unconditionally (gated only on
 /// `on_message::<KeyboardInput>`), in `InputPhase::FocusedKey` /
 /// `ShortcutSet::Resolve` / `LeaderGate::Advance`. The sole `LeaderPhase`-stepping
-/// system: on a coarse guard (IME composition or an unfocused window) it
-/// clears the leader, drains the frame's keys, and writes no messages;
-/// otherwise it classifies the keys, applies `Quit` (`AppExit`) and
-/// `ReleaseWebviewFocus` (clear `FocusedWebview`) inline, and writes every other
-/// effect to its typed message (`ShortcutMessage`, `ViModeMessage`,
-/// `TypeMessage`).
+/// system: on a coarse guard (IME composition, an unfocused window, or a
+/// confirm/rename prompt owning the keyboard) it clears the leader, drains the
+/// frame's keys, and writes no messages; otherwise it classifies the keys,
+/// applies `Quit` (`AppExit`) and `ReleaseWebviewFocus` (clear
+/// `FocusedWebview`) inline, and writes every other effect to its typed
+/// message (`ShortcutMessage`, `ViModeMessage`, `TypeMessage`).
 fn resolve_key_effects(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
@@ -79,9 +82,16 @@ fn resolve_key_effects(
     focused_surface: Query<Entity, With<KeyboardFocused>>,
     vi_modes: Query<(), With<ViModeState>>,
     forward_keys: Query<&ForwardKeys>,
+    confirm: Option<Res<ConfirmState>>,
+    rename: Option<Res<RenameState>>,
 ) {
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
-    if ime.is_composing() || !focused_window {
+    // NOTE: DRAIN (clear) the frame's keys on this guard rather than gating
+    // the whole system off with run_if — a run_if would leave the frame's
+    // keys buffered on this reader's cursor and re-inject them (e.g. a
+    // Cmd+V paste, or a split/zoom chord) into resolution on the next
+    // ungated frame (the reader cursor only advances when the body runs).
+    if ime.is_composing() || !focused_window || any_modal_open(confirm, rename) {
         clear_leader_phase(&mut leader_phase);
         if held_repeat.0.is_some() {
             held_repeat.0 = None;
@@ -348,6 +358,55 @@ mod tests {
             alt: false,
             meta: true,
         }
+    }
+
+    /// Reproduces the modality leak this change fixes: with a `ConfirmState`
+    /// prompt open, a chord bound to a pane action (split/zoom/etc.) must not
+    /// resolve to a `ShortcutMessage` — the prompt owns the keyboard, so the
+    /// focused pane must see no effect at all.
+    #[test]
+    fn shortcut_suppressed_while_modal_open() {
+        let mut app = resolve_app(test_shortcuts_with_direct_chord(
+            KeyCode::KeyW,
+            Modifiers::default(),
+            Shortcut::ZoomPane,
+        ));
+        let term = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
+        app.world_mut()
+            .insert_resource(ConfirmState::kill_pane(term));
+        press_key(&mut app, KeyCode::KeyW, Key::Character("w".into()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().message_count(),
+            0,
+            "no ShortcutMessage resolves while a confirm modal is open"
+        );
+    }
+
+    /// Reproduces the paste leak: a Cmd+V-equivalent chord bound to `Paste`
+    /// must not resolve to a `ShortcutMessage` while a `ConfirmState` prompt
+    /// is open, so a paste never reaches the focused pane's PTY behind the
+    /// prompt.
+    #[test]
+    fn paste_suppressed_while_modal_open() {
+        let mut app = resolve_app(test_shortcuts_with_direct_chord(
+            KeyCode::KeyV,
+            meta_mods(),
+            Shortcut::Paste,
+        ));
+        let term = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
+        app.world_mut()
+            .insert_resource(ConfirmState::kill_pane(term));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::SuperLeft);
+        press_key(&mut app, KeyCode::KeyV, Key::Character("v".into()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().message_count(),
+            0,
+            "no ShortcutMessage (including Paste) resolves while a confirm modal is open"
+        );
     }
 
     fn quit_test_app(spawn_focused: bool) -> App {

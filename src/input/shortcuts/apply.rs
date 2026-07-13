@@ -12,7 +12,9 @@ use crate::{
         keyboard::bevy_key_to_terminal_key,
         shortcuts::{ShortcutMessage, ShortcutSet, TypeMessage, ViModeMessage},
     },
-    ui::multiplexer::{confirm_prompt::ConfirmState, rename_prompt::RenameState},
+    ui::multiplexer::{
+        confirm_prompt::ConfirmState, modal::any_modal_open, rename_prompt::RenameState,
+    },
 };
 use bevy::prelude::*;
 use orzma_configs::shortcuts::Shortcut;
@@ -111,7 +113,7 @@ fn apply_type(
     // would leave the confirming/typed key buffered on apply_type's reader
     // cursor and inject it into the PTY on the next ungated frame (the reader
     // cursor only advances when the body runs).
-    if confirm.is_some() || rename.is_some() {
+    if any_modal_open(confirm, rename) {
         type_keys.clear();
         return;
     }
@@ -382,18 +384,20 @@ mod tests {
         );
     }
 
-    /// Builds an app running only `apply_type`, registered exactly as
-    /// `ShortcutsApplyPlugin` registers it (gated on `on_message::<TypeMessage>`
-    /// only — the confirm/rename-prompt suppression is the in-body drain), to
-    /// prove typing is suppressed while a kill-pane / kill-window confirm
-    /// prompt or the rename prompt is open, and that a confirming/typed key
-    /// never leaks into a later frame.
+    /// Builds an app running the real `ShortcutsApplyPlugin` registration (not
+    /// a hand-rolled re-registration of `apply_type`), so a future change to
+    /// how the plugin gates `apply_type` is caught by these tests too. Proves
+    /// typing is suppressed while a kill-pane / kill-window confirm prompt or
+    /// the rename prompt is open, and that a confirming/typed key never leaks
+    /// into a later frame.
     fn build_confirm_gated_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .add_message::<ShortcutMessage>()
+            .add_message::<ViModeMessage>()
             .add_message::<TypeMessage>()
             .init_resource::<Captured>()
-            .add_systems(Update, apply_type.run_if(on_message::<TypeMessage>))
+            .add_plugins(ShortcutsApplyPlugin)
             .add_observer(|ev: On<TerminalKeyInput>, mut c: ResMut<Captured>| {
                 c.keys.push(ev.key.clone());
             });

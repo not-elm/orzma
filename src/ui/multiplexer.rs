@@ -9,6 +9,13 @@ use bevy::prelude::*;
 // `confirm_prompt::ConfirmState` to keep an answering y/n out of the PTY.
 pub(crate) mod confirm_prompt;
 mod divider_handle;
+// NOTE: `modal` must be `pub(crate)`, not the repo's default private
+// submodule, because `resolve_key_effects` (`src/input/keyboard/handler.rs`),
+// `read_ime_events` (`src/input/ime.rs`), and `apply_type`
+// (`src/input/shortcuts/apply.rs`) all call `modal::any_modal_open` to keep
+// typing, shortcuts, paste, and IME commits out of the focused pane while a
+// prompt owns the keyboard.
+pub(crate) mod modal;
 mod pane_focus;
 // NOTE: `rename_prompt` must be `pub(crate)`, not the repo's default private
 // submodule, because `apply_type` (`src/input/shortcuts/apply.rs`) gates on

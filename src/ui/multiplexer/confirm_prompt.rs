@@ -8,6 +8,8 @@ use crate::input::InputPhase;
 use crate::multiplexer::request::{
     KillPaneRequest, KillWindowRequest, OpenKillPaneConfirm, OpenKillWindowConfirm,
 };
+use crate::ui::multiplexer::modal::any_modal_open;
+use crate::ui::multiplexer::rename_prompt::RenameState;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -100,18 +102,20 @@ enum ConfirmStep {
     Cancel,
 }
 
-/// Maps one key to a confirm/cancel decision: `y`/`Y`/Enter confirm, `n`/`N`/
-/// Escape cancel; any other key is ignored (returns `None`).
-fn confirm_step(key: &Key) -> Option<ConfirmStep> {
-    match key {
-        Key::Enter => Some(ConfirmStep::Confirm),
-        Key::Escape => Some(ConfirmStep::Cancel),
-        Key::Character(s) => match s.as_str() {
-            "y" | "Y" => Some(ConfirmStep::Confirm),
-            "n" | "N" => Some(ConfirmStep::Cancel),
+impl ConfirmStep {
+    /// Maps one key to a confirm/cancel decision: `y`/`Y`/Enter confirm,
+    /// `n`/`N`/Escape cancel; any other key is ignored (returns `None`).
+    fn classify(key: &Key) -> Option<Self> {
+        match key {
+            Key::Enter => Some(Self::Confirm),
+            Key::Escape => Some(Self::Cancel),
+            Key::Character(s) => match s.as_str() {
+                "y" | "Y" => Some(Self::Confirm),
+                "n" | "N" => Some(Self::Cancel),
+                _ => None,
+            },
             _ => None,
-        },
-        _ => None,
+        }
     }
 }
 
@@ -174,16 +178,19 @@ fn show_confirm_ui(
 /// `ConfirmState` for the requested target. Both readers are always drained
 /// (so a stale Open* message from this frame never resurfaces later); a
 /// prompt already open is left untouched — an in-flight confirm is never
-/// silently redirected to a different kill target.
+/// silently redirected to a different kill target. Also refuses to open when
+/// a `RenameState` prompt is already up, so a kill-confirm chord pressed
+/// while renaming is a no-op rather than opening a second modal.
 fn open_confirm_prompt(
     mut commands: Commands,
     mut kill_pane: MessageReader<OpenKillPaneConfirm>,
     mut kill_window: MessageReader<OpenKillWindowConfirm>,
     state: Option<Res<ConfirmState>>,
+    rename: Option<Res<RenameState>>,
 ) {
     let pane_target = kill_pane.read().next().map(|msg| msg.pane);
     let window_target = kill_window.read().next().map(|msg| msg.window);
-    if state.is_some() {
+    if any_modal_open(state, rename) {
         return;
     }
     if let Some(pane) = pane_target {
@@ -213,7 +220,7 @@ fn handle_confirm_input(
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        match confirm_step(&ev.logical_key) {
+        match ConfirmStep::classify(&ev.logical_key) {
             None => {}
             Some(ConfirmStep::Confirm) => {
                 match state.action {
@@ -243,21 +250,27 @@ mod tests {
 
     #[test]
     fn confirm_step_maps_keys() {
-        assert_eq!(confirm_step(&Key::Enter), Some(ConfirmStep::Confirm));
         assert_eq!(
-            confirm_step(&Key::Character("y".into())),
+            ConfirmStep::classify(&Key::Enter),
             Some(ConfirmStep::Confirm)
         );
         assert_eq!(
-            confirm_step(&Key::Character("Y".into())),
+            ConfirmStep::classify(&Key::Character("y".into())),
             Some(ConfirmStep::Confirm)
         );
-        assert_eq!(confirm_step(&Key::Escape), Some(ConfirmStep::Cancel));
         assert_eq!(
-            confirm_step(&Key::Character("n".into())),
+            ConfirmStep::classify(&Key::Character("Y".into())),
+            Some(ConfirmStep::Confirm)
+        );
+        assert_eq!(
+            ConfirmStep::classify(&Key::Escape),
             Some(ConfirmStep::Cancel)
         );
-        assert_eq!(confirm_step(&Key::Character("x".into())), None);
+        assert_eq!(
+            ConfirmStep::classify(&Key::Character("n".into())),
+            Some(ConfirmStep::Cancel)
+        );
+        assert_eq!(ConfirmStep::classify(&Key::Character("x".into())), None);
     }
 
     #[derive(Resource, Default)]
@@ -328,6 +341,21 @@ mod tests {
         assert!(
             matches!(state.action, ConfirmAction::KillPane(p) if p == first),
             "a prompt already open must not be redirected to a later Open* message"
+        );
+    }
+
+    #[test]
+    fn second_modal_refused() {
+        let mut app = test_app();
+        app.world_mut()
+            .insert_resource(RenameState::new("build".to_string()));
+        let pane = app.world_mut().spawn_empty().id();
+        app.world_mut().write_message(OpenKillPaneConfirm { pane });
+        app.update();
+
+        assert!(
+            app.world().get_resource::<ConfirmState>().is_none(),
+            "a kill-confirm request must be refused while a RenameState prompt is open"
         );
     }
 

@@ -7,6 +7,8 @@ use crate::font::TerminalUiFont;
 use crate::input::InputPhase;
 use crate::multiplexer::request::RenameWindowRequest;
 use crate::multiplexer::window::{ActiveMultiplexerWindow, MultiplexerWindow};
+use crate::ui::multiplexer::confirm_prompt::ConfirmState;
+use crate::ui::multiplexer::modal::any_modal_open;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -150,15 +152,18 @@ fn show_rename_ui(
 /// Consumes `RenameWindowRequest`, inserting `RenameState` pre-filled from
 /// the active window's current name. A prompt already open is left
 /// untouched — an in-flight rename is never silently reset by a later
-/// request.
+/// request. Also refuses to open when a `ConfirmState` prompt is already up,
+/// so a rename chord pressed while a kill-confirm is open is a no-op rather
+/// than opening a second modal.
 fn open_rename_prompt(
     mut commands: Commands,
     mut requests: MessageReader<RenameWindowRequest>,
     state: Option<Res<RenameState>>,
+    confirm: Option<Res<ConfirmState>>,
     active_windows: Query<&MultiplexerWindow, With<ActiveMultiplexerWindow>>,
 ) {
     let requested = requests.read().next().is_some();
-    if !requested || state.is_some() {
+    if !requested || any_modal_open(confirm, state) {
         return;
     }
     let Ok(window) = active_windows.single() else {
@@ -417,6 +422,25 @@ mod tests {
             app.world().resource::<RenameState>().text,
             "edited",
             "a prompt already open must not be reset by a later RenameWindowRequest"
+        );
+    }
+
+    #[test]
+    fn second_modal_refused() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<RenameWindowRequest>()
+            .add_systems(Update, open_rename_prompt);
+        let window = spawn_active_window(&mut app, Some("nvim"));
+        app.world_mut()
+            .insert_resource(ConfirmState::kill_pane(window));
+
+        app.world_mut().write_message(RenameWindowRequest);
+        app.update();
+
+        assert!(
+            app.world().get_resource::<RenameState>().is_none(),
+            "a rename request must be refused while a ConfirmState prompt is open"
         );
     }
 }
