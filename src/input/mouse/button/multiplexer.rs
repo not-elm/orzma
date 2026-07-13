@@ -12,6 +12,7 @@ use crate::multiplexer::window::{
     ActiveMultiplexerWindow, MultiplexerWindow, sync_keyboard_focus_to_active_pane,
 };
 use crate::surface::geometry::topmost_surface_at;
+use crate::ui::multiplexer::divider_handle::DividerDrag;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
@@ -55,6 +56,7 @@ fn focus_pane_on_click(
     terminals: TerminalSurfaces,
     panes: Query<(), With<MultiplexerPane>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    divider_drag: Option<Res<DividerDrag>>,
 ) {
     let Ok(mut active_window) = active_windows.single_mut() else {
         buttons.clear();
@@ -71,6 +73,9 @@ fn focus_pane_on_click(
     };
     for ev in buttons.read() {
         if ev.button != MouseButton::Left || ev.state != ButtonState::Pressed {
+            continue;
+        }
+        if divider_drag.as_deref().is_some_and(|drag| drag.claims(ev)) {
             continue;
         }
         let Some(hit) = topmost_surface_at(cursor_phys, hit_candidates(&terminals)) else {
@@ -198,6 +203,29 @@ mod tests {
                 .active_pane,
             pane_a,
             "a Left press over pane A must move active_pane back to A"
+        );
+    }
+
+    #[test]
+    fn click_is_ignored_while_a_divider_drag_is_active() {
+        use crate::ui::multiplexer::divider_handle::DividerDrag;
+
+        let mut app = make_focus_app();
+        let (window, pane_a, _pane_b) = spawn_active_window_with_two_panes(&mut app);
+        app.world_mut()
+            .insert_resource(DividerDrag::dragging_for_test(window));
+
+        set_phys_cursor(&mut app, Vec2::new(600.0, 300.0));
+        write_left_press(&mut app);
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<MultiplexerWindow>(window)
+                .unwrap()
+                .active_pane,
+            pane_a,
+            "a press that started a divider drag must not also move pane focus"
         );
     }
 

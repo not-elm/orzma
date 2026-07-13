@@ -13,15 +13,14 @@
 //! through to the terminal.
 
 use crate::input::InputPhase;
-use crate::input::mouse::cell_dims;
 use crate::input::mouse::webview::{
     WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
     release_webview_press, route_webview_left_click, webview_pointer_frame, webview_wheel_delta,
     webview_wheel_target,
 };
 use crate::surface::OrzmaTerminal;
-use crate::surface::geometry::phys_to_pane_local;
-use crate::surface::geometry::topmost_surface_at;
+use crate::surface::geometry::{cell_dims, phys_to_pane_local, topmost_surface_at};
+use crate::ui::multiplexer::divider_handle::DividerDrag;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
@@ -73,6 +72,7 @@ fn route_webview_pointer(
     >,
     metrics: Res<TerminalCellMetricsResource>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    divider_drag: Option<Res<DividerDrag>>,
 ) {
     let Ok(window) = windows.single() else {
         buttons.clear();
@@ -94,6 +94,9 @@ fn route_webview_pointer(
     }
     for ev in buttons.read() {
         if ev.button != MouseButton::Left {
+            continue;
+        }
+        if divider_drag.as_deref().is_some_and(|drag| drag.claims(ev)) {
             continue;
         }
         let Some(cursor_phys) = frame.cursor_phys else {

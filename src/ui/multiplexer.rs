@@ -8,7 +8,13 @@ use bevy::prelude::*;
 // submodule, because `apply_type` (`src/input/shortcuts/apply.rs`) gates on
 // `confirm_prompt::ConfirmState` to keep an answering y/n out of the PTY.
 pub(crate) mod confirm_prompt;
-mod divider_handle;
+// NOTE: `divider_handle` must be `pub(crate)`, not the repo's default private
+// submodule, because the Dispatch-phase mouse consumers
+// (`dispatch_mouse_buttons`, `focus_pane_on_click`, `route_webview_pointer`
+// under `src/input/mouse`) gate on `divider_handle::DividerDrag::claims` so a
+// press in a divider's ±grab-zone never double-dispatches into the pane (or
+// its webview) under the cursor.
+pub(crate) mod divider_handle;
 // NOTE: `modal` must be `pub(crate)`, not the repo's default private
 // submodule, because `resolve_key_effects` (`src/input/keyboard/handler.rs`),
 // `read_ime_events` (`src/input/ime.rs`), and `apply_type`

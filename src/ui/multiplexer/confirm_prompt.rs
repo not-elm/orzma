@@ -8,9 +8,10 @@ use crate::input::InputPhase;
 use crate::multiplexer::request::{
     KillPaneRequest, KillWindowRequest, OpenKillPaneConfirm, OpenKillWindowConfirm,
 };
-use crate::ui::multiplexer::modal::any_modal_open;
+use crate::ui::multiplexer::modal::{
+    ModalKeys, any_modal_open, hide_bar, show_bar_with_text, spawn_bottom_bar,
+};
 use crate::ui::multiplexer::rename_prompt::RenameState;
-use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 
@@ -19,10 +20,6 @@ const CONFIRM_Z: i32 = 330;
 /// destructive kill-pane/kill-window prompt reads as distinct from ordinary
 /// terminal output.
 const CONFIRM_BAR_BG: Color = Color::srgb(0.16, 0.35, 0.60);
-/// Foreground (text) color of the confirm bar, contrasting `CONFIRM_BAR_BG`.
-const CONFIRM_BAR_FG: Color = Color::srgb(0.95, 0.95, 0.95);
-/// Font size of the confirm bar's prompt text.
-const CONFIRM_BAR_FONT_SIZE_PX: f32 = 12.0;
 
 /// Registers the kill-pane / kill-window confirm prompt: the Open* message
 /// intake, the y/n input handler, and the show/hide render systems.
@@ -32,6 +29,8 @@ impl Plugin for ConfirmPromptPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<OpenKillPaneConfirm>()
             .add_message::<OpenKillWindowConfirm>()
+            .add_message::<KeyboardInput>()
+            .init_resource::<ButtonInput<KeyCode>>()
             .add_systems(Startup, spawn_confirm_ui)
             .add_systems(
                 Update,
@@ -48,7 +47,7 @@ impl Plugin for ConfirmPromptPlugin {
             .add_systems(
                 PostUpdate,
                 (
-                    hide_confirm_ui.run_if(resource_removed::<ConfirmState>),
+                    hide_bar::<ConfirmBar>.run_if(resource_removed::<ConfirmState>),
                     show_confirm_ui.run_if(resource_exists_and_changed::<ConfirmState>),
                 ),
             );
@@ -66,22 +65,26 @@ pub(crate) struct ConfirmState {
     message: String,
     /// The kill request fired on confirm.
     action: ConfirmAction,
+    /// Keys pressed since the prompt opened (see [`ModalKeys`]).
+    keys: ModalKeys,
 }
 
 impl ConfirmState {
     /// Builds the prompt state for a pending `KillPaneRequest`.
-    pub(crate) fn kill_pane(pane: Entity) -> Self {
+    pub(crate) fn kill_pane(pane: Entity, keys: ModalKeys) -> Self {
         Self {
             message: "kill pane? [y/N]".to_string(),
             action: ConfirmAction::KillPane(pane),
+            keys,
         }
     }
 
     /// Builds the prompt state for a pending `KillWindowRequest`.
-    fn kill_window(window: Entity) -> Self {
+    fn kill_window(window: Entity, keys: ModalKeys) -> Self {
         Self {
             message: "kill window? [y/N]".to_string(),
             action: ConfirmAction::KillWindow(window),
+            keys,
         }
     }
 }
@@ -103,11 +106,13 @@ enum ConfirmStep {
 }
 
 impl ConfirmStep {
-    /// Maps one key to a confirm/cancel decision: `y`/`Y`/Enter confirm,
-    /// `n`/`N`/Escape cancel; any other key is ignored (returns `None`).
+    /// Maps one key to a confirm/cancel decision: `y`/`Y` confirm;
+    /// `n`/`N`/Enter/Escape cancel — Enter takes the advertised `[y/N]`
+    /// default (No), matching tmux's `confirm-before`; any other key is
+    /// ignored (returns `None`).
     fn classify(key: &Key) -> Option<Self> {
         match key {
-            Key::Enter => Some(Self::Confirm),
+            Key::Enter => Some(Self::Cancel),
             Key::Escape => Some(Self::Cancel),
             Key::Character(s) => match s.as_str() {
                 "y" | "Y" => Some(Self::Confirm),
@@ -123,55 +128,21 @@ impl ConfirmStep {
 struct ConfirmBar;
 
 fn spawn_confirm_ui(mut commands: Commands, ui_font: Option<Res<TerminalUiFont>>) {
-    let ui = ui_font.as_deref().cloned().unwrap_or_default();
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                width: Val::Percent(100.0),
-                height: Val::Auto,
-                display: Display::None,
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
-                ..default()
-            },
-            BackgroundColor(CONFIRM_BAR_BG),
-            GlobalZIndex(CONFIRM_Z),
-            ConfirmBar,
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Text::new(""),
-                ui.text_font(FontSize::Px(CONFIRM_BAR_FONT_SIZE_PX)),
-                TextColor(CONFIRM_BAR_FG),
-            ));
-        });
-}
-
-fn hide_confirm_ui(mut bar: Query<&mut Node, With<ConfirmBar>>) {
-    if let Ok(mut node) = bar.single_mut() {
-        node.display = Display::None;
-    }
+    spawn_bottom_bar(
+        &mut commands,
+        ui_font,
+        ConfirmBar,
+        CONFIRM_BAR_BG,
+        CONFIRM_Z,
+    );
 }
 
 fn show_confirm_ui(
-    mut bar: Query<&mut Node, With<ConfirmBar>>,
+    mut bar: Query<(&mut Node, &Children), With<ConfirmBar>>,
     mut texts: Query<&mut Text>,
     state: Res<ConfirmState>,
-    bar_children: Query<&Children, With<ConfirmBar>>,
 ) {
-    let Ok(mut node) = bar.single_mut() else {
-        return;
-    };
-    node.display = Display::Flex;
-    if let Ok(children) = bar_children.single() {
-        for child in children.iter() {
-            if let Ok(mut text) = texts.get_mut(child) {
-                text.0 = state.message.clone();
-            }
-        }
-    }
+    show_bar_with_text(&mut bar, &mut texts, state.message.clone());
 }
 
 /// Consumes `OpenKillPaneConfirm` / `OpenKillWindowConfirm`, inserting
@@ -187,72 +158,69 @@ fn open_confirm_prompt(
     mut kill_window: MessageReader<OpenKillWindowConfirm>,
     state: Option<Res<ConfirmState>>,
     rename: Option<Res<RenameState>>,
+    messages: Res<Messages<KeyboardInput>>,
 ) {
-    let pane_target = kill_pane.read().next().map(|msg| msg.pane);
-    let window_target = kill_window.read().next().map(|msg| msg.window);
+    let pane_target = kill_pane.read().last().map(|msg| msg.pane);
+    let window_target = kill_window.read().last().map(|msg| msg.window);
     if any_modal_open(state, rename) {
         return;
     }
     if let Some(pane) = pane_target {
-        commands.insert_resource(ConfirmState::kill_pane(pane));
+        commands.insert_resource(ConfirmState::kill_pane(
+            pane,
+            ModalKeys::at_current(&messages),
+        ));
     } else if let Some(window) = window_target {
-        commands.insert_resource(ConfirmState::kill_window(window));
+        commands.insert_resource(ConfirmState::kill_window(
+            window,
+            ModalKeys::at_current(&messages),
+        ));
     }
 }
 
+/// Applies the first `y`/`n`/Enter/Escape decision among the keys pressed
+/// since the prompt opened (see [`ModalKeys`] for the intake semantics).
 fn handle_confirm_input(
     mut commands: Commands,
-    mut events: MessageReader<KeyboardInput>,
-    mut armed: Local<bool>,
-    state: Res<ConfirmState>,
+    mut state: ResMut<ConfirmState>,
+    messages: Res<Messages<KeyboardInput>>,
+    keys: Res<ButtonInput<KeyCode>>,
 ) {
-    // NOTE: the bound key that opened the prompt (e.g. the KillPane shortcut)
-    // is still in the shared KeyboardInput buffer; this reader has its own
-    // cursor, so skip the open frame — drain past the opening key — or it
-    // could be read as the y/n answer (a shortcut bound to `y`/`n` would
-    // self-answer instantly).
-    if !*armed {
-        events.clear();
-        *armed = true;
+    if state.keys.is_empty(&messages) {
         return;
     }
-    for ev in events.read() {
-        if ev.state != ButtonState::Pressed {
-            continue;
-        }
-        match ConfirmStep::classify(&ev.logical_key) {
-            None => {}
-            Some(ConfirmStep::Confirm) => {
-                match state.action {
-                    ConfirmAction::KillPane(pane) => {
-                        commands.trigger(KillPaneRequest { pane });
-                    }
-                    ConfirmAction::KillWindow(window) => {
-                        commands.trigger(KillWindowRequest { window });
-                    }
-                }
-                commands.remove_resource::<ConfirmState>();
-                *armed = false;
-                break;
+    let action = state.action;
+    let Some(step) = state
+        .keys
+        .pressed(&messages, &keys)
+        .find_map(ConfirmStep::classify)
+    else {
+        return;
+    };
+    if step == ConfirmStep::Confirm {
+        match action {
+            ConfirmAction::KillPane(pane) => {
+                commands.trigger(KillPaneRequest { pane });
             }
-            Some(ConfirmStep::Cancel) => {
-                commands.remove_resource::<ConfirmState>();
-                *armed = false;
-                break;
+            ConfirmAction::KillWindow(window) => {
+                commands.trigger(KillWindowRequest { window });
             }
         }
     }
+    commands.remove_resource::<ConfirmState>();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::input::ButtonState;
 
     #[test]
     fn confirm_step_maps_keys() {
         assert_eq!(
             ConfirmStep::classify(&Key::Enter),
-            Some(ConfirmStep::Confirm)
+            Some(ConfirmStep::Cancel),
+            "Enter takes the advertised [y/N] default: No"
         );
         assert_eq!(
             ConfirmStep::classify(&Key::Character("y".into())),
@@ -347,9 +315,12 @@ mod tests {
     #[test]
     fn second_modal_refused() {
         let mut app = test_app();
-        app.world_mut()
-            .insert_resource(RenameState::new("build".to_string()));
         let pane = app.world_mut().spawn_empty().id();
+        app.world_mut().insert_resource(RenameState::new(
+            pane,
+            "build".to_string(),
+            ModalKeys::default(),
+        ));
         app.world_mut().write_message(OpenKillPaneConfirm { pane });
         app.update();
 
@@ -364,9 +335,7 @@ mod tests {
         let mut app = test_app();
         let pane = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(pane));
-        // First update: handle_confirm_input arms and drains the open frame.
-        app.update();
+            .insert_resource(ConfirmState::kill_pane(pane, ModalKeys::default()));
 
         app.world_mut()
             .write_message(press(Key::Character("y".into())));
@@ -388,10 +357,11 @@ mod tests {
         let mut app = test_app();
         let window = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .insert_resource(ConfirmState::kill_window(window));
+            .insert_resource(ConfirmState::kill_window(window, ModalKeys::default()));
         app.update();
 
-        app.world_mut().write_message(press(Key::Enter));
+        app.world_mut()
+            .write_message(press(Key::Character("y".into())));
         app.update();
 
         assert_eq!(
@@ -406,11 +376,80 @@ mod tests {
     }
 
     #[test]
+    fn enter_answers_no_per_the_advertised_default() {
+        let mut app = test_app();
+        let pane = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .insert_resource(ConfirmState::kill_pane(pane, ModalKeys::default()));
+        app.update();
+
+        app.world_mut().write_message(press(Key::Enter));
+        app.update();
+
+        assert!(
+            app.world().resource::<Captured>().killed_panes.is_empty(),
+            "Enter must take the advertised [y/N] default — No — and never kill"
+        );
+        assert!(
+            app.world().get_resource::<ConfirmState>().is_none(),
+            "Enter (default No) must dismiss the prompt"
+        );
+    }
+
+    #[test]
+    fn modifier_chord_y_does_not_answer() {
+        let mut app = test_app();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        let pane = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .insert_resource(ConfirmState::kill_pane(pane, ModalKeys::default()));
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::SuperLeft);
+        app.world_mut()
+            .write_message(press(Key::Character("y".into())));
+        app.update();
+
+        assert!(
+            app.world().resource::<Captured>().killed_panes.is_empty(),
+            "Cmd+Y is a chord, not an answer — it must not confirm the kill"
+        );
+        assert!(
+            app.world().get_resource::<ConfirmState>().is_some(),
+            "the prompt must stay open after an ignored chord"
+        );
+    }
+
+    #[test]
+    fn fast_answer_after_open_is_not_swallowed() {
+        let mut app = test_app();
+        let pane = app.world_mut().spawn_empty().id();
+        // The opening chord key is already in the shared buffer at open time.
+        app.world_mut()
+            .write_message(press(Key::Character("x".into())));
+        let keys = ModalKeys::at_current(app.world().resource::<Messages<KeyboardInput>>());
+        app.world_mut()
+            .insert_resource(ConfirmState::kill_pane(pane, keys));
+        // A fast 'y' lands before the handler's first run.
+        app.world_mut()
+            .write_message(press(Key::Character("y".into())));
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Captured>().killed_panes,
+            vec![pane],
+            "an answer pressed in the prompt's first frame must not be swallowed"
+        );
+    }
+
+    #[test]
     fn cancel_dismisses_without_kill() {
         let mut app = test_app();
         let pane = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(pane));
+            .insert_resource(ConfirmState::kill_pane(pane, ModalKeys::default()));
         app.update();
 
         app.world_mut().write_message(press(Key::Escape));

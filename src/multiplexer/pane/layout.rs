@@ -6,7 +6,7 @@ use crate::multiplexer::bootstrap::WindowContainer;
 use crate::multiplexer::layout::PaneRect;
 use crate::multiplexer::pane::MultiplexerPane;
 use crate::multiplexer::window::{ActiveMultiplexerWindow, MultiplexerLayoutComp};
-use crate::surface::geometry::cells_for;
+use crate::surface::geometry::{cell_dims, cells_for};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiSystems};
 use orzma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
@@ -92,14 +92,8 @@ fn apply_layout(
     let Some((_, computed)) = containers.iter().find(|(c, _)| c.window == window) else {
         return;
     };
-    let area = PaneRect {
-        x: 0.0,
-        y: 0.0,
-        w: computed.size.x,
-        h: computed.size.y,
-    };
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let area = PaneRect::from_size(computed.size);
+    let (cell_w, cell_h) = cell_dims(&metrics);
 
     for (pane, display) in layout.0.display_rects(area, PANE_GAP_PX) {
         let Ok((entity, mut node, mut handle, mut pty, mut coalescer, mut last_cells)) =
@@ -138,15 +132,10 @@ fn apply_layout(
     }
 }
 
-/// Writes `rect` (physical px) into `node`'s absolute-position fields as
-/// `Val::Px` (a logical-px unit — the layout system multiplies it back by the
-/// node's scale factor), one field at a time, only where the value actually
-/// differs.
+/// Writes `rect` (physical px) into `node`'s absolute-position fields, one
+/// field at a time, only where the value actually differs.
 fn apply_rect(node: &mut Node, rect: PaneRect, inverse_scale_factor: f32) {
-    let left = Val::Px(rect.x * inverse_scale_factor);
-    let top = Val::Px(rect.y * inverse_scale_factor);
-    let width = Val::Px(rect.w * inverse_scale_factor);
-    let height = Val::Px(rect.h * inverse_scale_factor);
+    let (left, top, width, height) = rect_logical_vals(rect, inverse_scale_factor);
     if node.left != left {
         node.left = left;
     }
@@ -161,14 +150,23 @@ fn apply_rect(node: &mut Node, rect: PaneRect, inverse_scale_factor: f32) {
     }
 }
 
-/// Converts a pane's pixel rect into terminal cell dimensions.
-fn pane_cells(r: PaneRect, cell_w: f32, cell_h: f32) -> (u16, u16) {
-    cells_for(
-        r.w.floor() as u32,
-        r.h.floor() as u32,
-        cell_w.floor().max(1.0),
-        cell_h.floor().max(1.0),
+/// Converts a PHYSICAL-px rect into the LOGICAL-px `Val::Px` fields of an
+/// absolute-position `Node` (the layout system multiplies logical px back by
+/// the node's scale factor). Shared by pane placement (`apply_rect`) and the
+/// divider handle bars.
+pub(crate) fn rect_logical_vals(rect: PaneRect, inverse_scale_factor: f32) -> (Val, Val, Val, Val) {
+    (
+        Val::Px(rect.x * inverse_scale_factor),
+        Val::Px(rect.y * inverse_scale_factor),
+        Val::Px(rect.w * inverse_scale_factor),
+        Val::Px(rect.h * inverse_scale_factor),
     )
+}
+
+/// Converts a pane's pixel rect into terminal cell dimensions. `cell_w` /
+/// `cell_h` are the already-floored pitch from `cell_dims`.
+fn pane_cells(r: PaneRect, cell_w: f32, cell_h: f32) -> (u16, u16) {
+    cells_for(r.w.floor() as u32, r.h.floor() as u32, cell_w, cell_h)
 }
 
 #[cfg(test)]

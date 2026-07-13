@@ -119,7 +119,7 @@ fn apply_multiplexer_shortcuts(
             Shortcut::SelectWindow(index) => {
                 requests
                     .select_window
-                    .write(SelectWindowRequest(WindowSelect::Index(index)));
+                    .write(SelectWindowRequest(WindowSelect::Index(u32::from(index))));
             }
             Shortcut::RenameWindow => {
                 requests.rename_window.write(RenameWindowRequest);

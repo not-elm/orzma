@@ -9,7 +9,7 @@
 
 use crate::configs::OrzmaConfigsResource;
 use crate::multiplexer::pane::MultiplexerPane;
-use crate::multiplexer::window::{ActiveMultiplexerWindow, MultiplexerWindow};
+use crate::multiplexer::window::{ActiveMultiplexerWindow, MultiplexerWindow, active_marker_moved};
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use orzma_tty_engine::TerminalHandle;
@@ -50,13 +50,17 @@ fn augment_multiplexer_pane(
 }
 
 /// True when a pane's inactive style may need re-syncing this frame: a new
-/// pane appeared (needs its initial style), or the active window's
-/// `active_pane` changed.
+/// pane appeared (needs its initial style), the active window's
+/// `active_pane` changed, or the `ActiveMultiplexerWindow` marker moved (a
+/// window switch — see `active_marker_moved`).
 fn pane_style_needs_sync(
+    mut removed_active: RemovedComponents<ActiveMultiplexerWindow>,
     added_panes: Query<(), Added<MultiplexerPane>>,
     changed_active: Query<(), (With<ActiveMultiplexerWindow>, Changed<MultiplexerWindow>)>,
+    added_active: Query<(), Added<ActiveMultiplexerWindow>>,
 ) -> bool {
-    !added_panes.is_empty() || !changed_active.is_empty()
+    let marker_moved = active_marker_moved(&mut removed_active, &added_active);
+    !added_panes.is_empty() || !changed_active.is_empty() || marker_moved
 }
 
 /// Sets each pane's [`PaneInactiveStyle`] from the active window's
@@ -221,6 +225,56 @@ mod tests {
             style(&app, p1),
             Some(inactive),
             "the former active pane gains the configured style"
+        );
+    }
+
+    #[test]
+    fn window_switch_resyncs_pane_styles() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, PaneFocusPlugin));
+        app.insert_resource(OrzmaConfigsResource::default());
+        let (window_a, pane_a, _pane_a2) = spawn_active_window_with_two_panes(&mut app);
+        let window_b = app.world_mut().spawn_empty().id();
+        let pane_b = app
+            .world_mut()
+            .spawn((
+                MultiplexerPane { window: window_b },
+                TerminalHandle::detached(10, 5),
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(window_b)
+            .insert(MultiplexerWindow {
+                index: 1,
+                name: None,
+                active_pane: pane_b,
+            });
+        app.update();
+
+        let style = |app: &App, e| app.world().get::<PaneInactiveStyle>(e).copied();
+        assert!(
+            style(&app, pane_b).is_some(),
+            "window B's pane is styled inactive while window A is active"
+        );
+
+        // Switch windows the way select_window does: pure marker moves, no
+        // MultiplexerWindow mutation.
+        app.world_mut()
+            .entity_mut(window_a)
+            .remove::<ActiveMultiplexerWindow>();
+        app.world_mut()
+            .entity_mut(window_b)
+            .insert(ActiveMultiplexerWindow);
+        app.update();
+
+        assert_eq!(
+            style(&app, pane_b),
+            None,
+            "the switched-to window's focused pane must shed its inactive style"
+        );
+        assert!(
+            style(&app, pane_a).is_some(),
+            "the backgrounded window's former active pane must gain the inactive style"
         );
     }
 

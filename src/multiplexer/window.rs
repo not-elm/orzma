@@ -5,9 +5,11 @@ use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
 use crate::multiplexer::bootstrap::{OrzmaTerminalConfig, WindowContainer};
 use crate::multiplexer::layout::{MultiplexerLayout, PaneRect};
+use crate::multiplexer::pane::PaneCwd;
 use crate::multiplexer::pane::layout::PANE_GAP_PX;
-use crate::multiplexer::pane::spawn::{MultiplexerPaneBundle, MultiplexerPaneSpawnOptions};
-use crate::multiplexer::pane::{MultiplexerPane, PaneCwd};
+use crate::multiplexer::pane::spawn::{
+    MultiplexerPaneBundle, MultiplexerPaneSpawnOptions, insert_spawned_pane, spawn_pane_container,
+};
 use crate::multiplexer::request::{
     KillWindowRequest, NewWindowRequest, SelectPaneRequest, SelectWindowRequest, WindowSelect,
 };
@@ -31,6 +33,26 @@ pub(crate) struct MultiplexerWindow {
 /// Marks the single active window whose `active_pane` drives keyboard focus.
 #[derive(Component)]
 pub(crate) struct ActiveMultiplexerWindow;
+
+/// Whether the [`ActiveMultiplexerWindow`] marker moved this frame — added to
+/// or removed from any window. A window switch moves the marker without
+/// mutating any `MultiplexerWindow`, so dirty gates reacting to the active
+/// window (`window_bar_dirty`, `pane_style_needs_sync`) call this instead of
+/// hand-rolling the marker terms.
+///
+/// # Invariants
+///
+/// Call this BEFORE short-circuiting on any other dirty term: it drains the
+/// `RemovedComponents` reader unconditionally — a caller that skips the call
+/// on an early-true term would leave the one-frame removal events unread, so
+/// they would re-fire (a stale, spurious dirty) on the next frame.
+pub(crate) fn active_marker_moved(
+    removed: &mut RemovedComponents<ActiveMultiplexerWindow>,
+    added: &Query<(), Added<ActiveMultiplexerWindow>>,
+) -> bool {
+    let removed_any = removed.read().next().is_some();
+    !added.is_empty() || removed_any
+}
 
 /// ECS wrapper around the Bevy-free layout tree, kept a newtype so
 /// `layout.rs` has no Bevy dependency beyond the `Entity` id.
@@ -131,12 +153,7 @@ fn select_pane(
     let Some((_, computed)) = containers.iter().find(|(c, _)| c.window == window) else {
         return;
     };
-    let area = PaneRect {
-        x: 0.0,
-        y: 0.0,
-        w: computed.size.x,
-        h: computed.size.y,
-    };
+    let area = PaneRect::from_size(computed.size);
     for msg in requests.read() {
         if layout.0.zoomed().is_some() {
             layout.0.set_zoom(None);
@@ -230,7 +247,7 @@ fn select_target(
             .map(|(entity, _)| *entity),
         WindowSelect::Index(n) => windows
             .iter()
-            .find(|(_, index)| *index == n as u32)
+            .find(|(_, index)| *index == n)
             .map(|(entity, _)| *entity),
     }
 }
@@ -285,17 +302,7 @@ fn spawn_window(
             ChildOf(workspace),
         ))
         .id();
-    let pane_container = commands
-        .spawn((
-            Name::new("Pane Container"),
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                ..default()
-            },
-            ChildOf(window_container),
-        ))
-        .id();
+    let pane_container = spawn_pane_container(commands, window_container);
     let pane = commands.spawn_empty().id();
     let env = control
         .map(|c| c.surface_env(pane).to_vec())
@@ -306,12 +313,7 @@ fn spawn_window(
         env,
     }) {
         Ok(bundle) => {
-            commands.entity(pane).insert((
-                bundle,
-                KeyboardFocused,
-                MultiplexerPane { window },
-                ChildOf(pane_container),
-            ));
+            insert_spawned_pane(commands, pane, window, pane_container, bundle, control);
             commands.entity(window).insert((
                 MultiplexerWindow {
                     index,
@@ -321,12 +323,6 @@ fn spawn_window(
                 ActiveMultiplexerWindow,
                 MultiplexerLayoutComp(MultiplexerLayout::new(pane)),
             ));
-            // NOTE: bind the token only after a successful spawn, mirroring
-            // ensure_bootstrap — a pre-spawn bind would leak the token if the
-            // PTY spawn had failed instead.
-            if let Some(c) = control {
-                c.bind_surface(pane);
-            }
             Some((window, pane))
         }
         Err(e) => {
@@ -470,7 +466,6 @@ fn on_kill_window(
         return;
     };
     let was_active = active.get(killed).is_ok();
-    let last_window = windows.iter().count() <= 1;
     let remaining: Vec<(Entity, u32)> = windows
         .iter()
         .filter(|(entity, _)| *entity != killed)
@@ -482,7 +477,7 @@ fn on_kill_window(
     }
     commands.entity(killed).despawn();
 
-    if last_window {
+    if remaining.is_empty() {
         exit.write(AppExit::Success);
         return;
     }
@@ -533,6 +528,7 @@ fn on_active_window_added(
 mod tests {
     use super::*;
     use crate::multiplexer::layout::SplitAxis;
+    use crate::multiplexer::pane::MultiplexerPane;
     use orzma_configs::shortcuts::PaneDirection;
 
     /// Spawns an active window with a 2-leaf vertical split (`pane_a` left,
@@ -1297,6 +1293,39 @@ mod tests {
             containers.iter(world).count(),
             1,
             "the new window gets its own WindowContainer"
+        );
+    }
+
+    #[test]
+    fn new_window_pane_container_is_absolutely_positioned_at_origin() {
+        let mut app = build_new_window_app();
+        let (_, old_pane) = spawn_active_window_with_cwd(&mut app, None);
+
+        app.world_mut().write_message(NewWindowRequest);
+        app.update();
+
+        let world = app.world_mut();
+        let mut panes = world.query_filtered::<Entity, With<MultiplexerPane>>();
+        let new_pane = panes.iter(world).find(|p| *p != old_pane).unwrap();
+        let container = world.entity(new_pane).get::<ChildOf>().unwrap().parent();
+        let node = world.entity(container).get::<Node>().unwrap();
+        assert_eq!(
+            node.position_type,
+            PositionType::Absolute,
+            "a pane container must be absolutely positioned: as a Relative flex \
+             child, sibling containers flex-share the window container's area, \
+             displacing the pane rects (window-container coordinates) resolved \
+             against them"
+        );
+        assert_eq!(
+            node.left,
+            Val::Px(0.0),
+            "a pane container must pin to the window container's origin"
+        );
+        assert_eq!(
+            node.top,
+            Val::Px(0.0),
+            "a pane container must pin to the window container's origin"
         );
     }
 

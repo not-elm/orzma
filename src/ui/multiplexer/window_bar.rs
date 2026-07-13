@@ -7,7 +7,7 @@
 
 use crate::font::TerminalUiFont;
 use crate::multiplexer::request::{SelectWindowRequest, WindowSelect};
-use crate::multiplexer::window::{ActiveMultiplexerWindow, MultiplexerWindow};
+use crate::multiplexer::window::{ActiveMultiplexerWindow, MultiplexerWindow, active_marker_moved};
 use crate::ui::multiplexer::WindowBarContainer;
 use bevy::prelude::*;
 use orzma_tty_engine::TerminalTitle;
@@ -64,38 +64,62 @@ fn window_bar_dirty(
     added_active: Query<(), Added<ActiveMultiplexerWindow>>,
     changed_titles: Query<(), Changed<TerminalTitle>>,
 ) -> bool {
-    // NOTE: drain both RemovedComponents readers up front, not inside the `||`
-    // chain — a short-circuit on an earlier `Changed`/`Added` term would leave
-    // the one-frame removal events unread, so they would re-fire (a stale,
-    // spurious rebuild) on the next frame.
+    // NOTE: drain the RemovedComponents readers up front (active_marker_moved
+    // drains its own), not inside the `||` chain — a short-circuit on an
+    // earlier `Changed`/`Added` term would leave the one-frame removal events
+    // unread, so they would re-fire (a stale, spurious rebuild) next frame.
+    let marker_moved = active_marker_moved(&mut removed_active, &added_active);
     let window_removed = removed_windows.read().next().is_some();
-    let active_removed = removed_active.read().next().is_some();
-    !changed_windows.is_empty()
-        || !added_active.is_empty()
-        || !changed_titles.is_empty()
-        || window_removed
-        || active_removed
+    !changed_windows.is_empty() || !changed_titles.is_empty() || window_removed || marker_moved
 }
 
 /// Despawns the bar's current entries and respawns one per `MultiplexerWindow`
 /// (ascending `index`), each a `Button` carrying `WindowEntry`. Gated by
-/// `window_bar_dirty`.
+/// `window_bar_dirty`, and a no-op when the rendered rows would be identical
+/// to the existing ones — the dirty gate over-approximates (e.g. any pane's
+/// title change fires it, but only unnamed windows' ACTIVE panes render), so
+/// a busy shell churning its OSC title must not despawn/respawn the bar.
 fn rebuild_window_bar(
     mut commands: Commands,
     bar: Query<Entity, With<WindowBarContainer>>,
     windows: Query<(&MultiplexerWindow, Has<ActiveMultiplexerWindow>)>,
     titles: Query<&TerminalTitle>,
+    existing: Query<(&WindowEntry, &BackgroundColor, &Children)>,
+    texts: Query<&Text>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     let Ok(bar) = bar.single() else {
         return;
     };
+
+    let mut entries: Vec<(&MultiplexerWindow, bool)> = windows.iter().collect();
+    entries.sort_by_key(|(window, _)| window.index);
+    let desired: Vec<(u32, String, Color)> = entries
+        .iter()
+        .map(|(window, active)| {
+            let label = window_label(window.index, &display_name(window, &titles));
+            (window.index, label, entry_colors(*active).1)
+        })
+        .collect();
+    let mut current: Vec<(u32, String, Color)> = existing
+        .iter()
+        .map(|(entry, bg, children)| {
+            let label = children
+                .iter()
+                .find_map(|child| texts.get(child).ok())
+                .map(|text| text.0.clone())
+                .unwrap_or_default();
+            (entry.index, label, bg.0)
+        })
+        .collect();
+    current.sort_by_key(|(index, _, _)| *index);
+    if desired == current {
+        return;
+    }
+
     commands.entity(bar).despawn_related::<Children>();
 
     let ui = ui_font.as_deref().cloned().unwrap_or_default();
-    let mut entries: Vec<(&MultiplexerWindow, bool)> = windows.iter().collect();
-    entries.sort_by_key(|(window, _)| window.index);
-
     for (window, active) in entries {
         let label = window_label(window.index, &display_name(window, &titles));
         let (fg, bg) = entry_colors(active);
@@ -135,7 +159,7 @@ fn select_window_on_click(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        requests.write(SelectWindowRequest(WindowSelect::Index(entry.index as u8)));
+        requests.write(SelectWindowRequest(WindowSelect::Index(entry.index)));
     }
 }
 
@@ -321,6 +345,38 @@ mod tests {
         assert!(
             matches!(captured[0], WindowSelect::Index(2)),
             "the request targets the pressed entry's index"
+        );
+    }
+
+    #[test]
+    fn click_entry_with_index_beyond_u8_is_not_truncated() {
+        #[derive(Resource, Default)]
+        struct Captured(Vec<WindowSelect>);
+
+        fn capture(mut reader: MessageReader<SelectWindowRequest>, mut c: ResMut<Captured>) {
+            for m in reader.read() {
+                c.0.push(m.0);
+            }
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<SelectWindowRequest>()
+            .init_resource::<Captured>()
+            .add_systems(Update, (select_window_on_click, capture).chain());
+        let entry = app
+            .world_mut()
+            .spawn((WindowEntry { index: 300 }, Interaction::None))
+            .id();
+
+        app.update();
+        *app.world_mut().get_mut::<Interaction>(entry).unwrap() = Interaction::Pressed;
+        app.update();
+
+        let captured = &app.world().resource::<Captured>().0;
+        assert!(
+            matches!(captured[0], WindowSelect::Index(300)),
+            "a window index above 255 must reach the request unwrapped"
         );
     }
 }

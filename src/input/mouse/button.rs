@@ -5,7 +5,7 @@
 //! `MouseButtonInputPlugin`; skips `MouseDisabled` surfaces.
 
 use super::{
-    CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_dims, hit_candidates,
+    CellContext, MouseEffect, TerminalSurfaces, cell_context_for, hit_candidates,
     on_any_mouse_message, trigger_mouse_effects,
 };
 use crate::input::InputPhase;
@@ -14,7 +14,8 @@ use crate::input::current_modifiers;
 use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
 use crate::input::mouse::gesture::{DragGesture, DragPhase, HeldPointer, OrzmaMouseGesture};
-use crate::surface::geometry::topmost_surface_at;
+use crate::surface::geometry::{cell_dims, topmost_surface_at};
+use crate::ui::multiplexer::divider_handle::DividerDrag;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
@@ -77,6 +78,7 @@ fn dispatch_mouse_buttons(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    divider_drag: Option<Res<DividerDrag>>,
 ) {
     let Some(frame) = resolve_frame(
         &mut gesture,
@@ -94,6 +96,9 @@ fn dispatch_mouse_buttons(
 
     let now = time.elapsed();
     for ev in buttons.read() {
+        if divider_drag.as_deref().is_some_and(|drag| drag.claims(ev)) {
+            continue;
+        }
         process_button_event(
             &mut commands,
             &mut gesture,

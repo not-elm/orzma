@@ -8,8 +8,9 @@ use crate::input::InputPhase;
 use crate::multiplexer::request::RenameWindowRequest;
 use crate::multiplexer::window::{ActiveMultiplexerWindow, MultiplexerWindow};
 use crate::ui::multiplexer::confirm_prompt::ConfirmState;
-use crate::ui::multiplexer::modal::any_modal_open;
-use bevy::input::ButtonState;
+use crate::ui::multiplexer::modal::{
+    ModalKeys, any_modal_open, hide_bar, show_bar_with_text, spawn_bottom_bar,
+};
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 
@@ -18,10 +19,6 @@ const RENAME_Z: i32 = 340;
 /// kill-window confirm bar's destructive blue, so an in-progress edit reads
 /// as a different kind of modal.
 const RENAME_BAR_BG: Color = Color::srgb(0.30, 0.24, 0.55);
-/// Foreground (text) color of the rename bar, contrasting `RENAME_BAR_BG`.
-const RENAME_BAR_FG: Color = Color::srgb(0.95, 0.95, 0.95);
-/// Font size of the rename bar's edit text.
-const RENAME_BAR_FONT_SIZE_PX: f32 = 12.0;
 
 /// Registers the rename-prompt message intake, the input handler, and the
 /// show/hide render systems.
@@ -30,6 +27,8 @@ pub(super) struct RenamePromptPlugin;
 impl Plugin for RenamePromptPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<RenameWindowRequest>()
+            .add_message::<KeyboardInput>()
+            .init_resource::<ButtonInput<KeyCode>>()
             .add_systems(Startup, spawn_rename_ui)
             .add_systems(
                 Update,
@@ -43,7 +42,7 @@ impl Plugin for RenamePromptPlugin {
             .add_systems(
                 PostUpdate,
                 (
-                    hide_rename_ui.run_if(resource_removed::<RenameState>),
+                    hide_bar::<RenameBar>.run_if(resource_removed::<RenameState>),
                     show_rename_ui.run_if(resource_exists_and_changed::<RenameState>),
                 ),
             );
@@ -56,19 +55,43 @@ impl Plugin for RenamePromptPlugin {
 /// character never leaks into the focused terminal's PTY.
 #[derive(Resource)]
 pub(crate) struct RenameState {
-    /// The edit buffer, pre-filled with the active window's current name.
+    /// The edit buffer, pre-filled with the target window's current name.
     text: String,
+    /// The window this prompt renames — captured at open time so a window
+    /// switch (window-bar click, select-window chord, or auto-activation
+    /// after a window closes) mid-edit cannot redirect the submit to a
+    /// different window.
+    target: Entity,
+    /// Keys pressed since the prompt opened (see [`ModalKeys`]).
+    keys: ModalKeys,
 }
 
 impl RenameState {
-    /// Opens a prompt pre-filled with `current_name` (the active window's
-    /// current name, or empty if unset).
-    pub(crate) fn new(current_name: String) -> Self {
-        Self { text: current_name }
+    /// Opens a prompt renaming `target`, pre-filled with `current_name` (the
+    /// window's current name, or empty if unset).
+    pub(crate) fn new(target: Entity, current_name: String, keys: ModalKeys) -> Self {
+        Self {
+            text: current_name,
+            target,
+            keys,
+        }
+    }
+
+    /// Appends committed IME text to the edit buffer (`read_ime_events`
+    /// routes commits here while this prompt owns the keyboard).
+    pub(crate) fn append(&mut self, s: &str) {
+        self.text.push_str(s);
+    }
+
+    /// The current edit buffer (test-only observation point for the IME
+    /// commit-routing test in `src/input/ime.rs`).
+    #[cfg(test)]
+    pub(crate) fn text(&self) -> &str {
+        &self.text
     }
 
     /// Applies one key: Enter submits, Escape cancels, Backspace deletes the
-    /// last char, a character is appended. Other keys are ignored.
+    /// last char, a character or Space is appended. Other keys are ignored.
     fn apply_key(&mut self, key: &Key) -> RenameStep {
         match key {
             Key::Escape => RenameStep::Cancel,
@@ -79,6 +102,10 @@ impl RenameState {
             }
             Key::Character(s) => {
                 self.text.push_str(s);
+                RenameStep::Continue
+            }
+            Key::Space => {
+                self.text.push(' ');
                 RenameStep::Continue
             }
             _ => RenameStep::Continue,
@@ -98,55 +125,19 @@ enum RenameStep {
 struct RenameBar;
 
 fn spawn_rename_ui(mut commands: Commands, ui_font: Option<Res<TerminalUiFont>>) {
-    let ui = ui_font.as_deref().cloned().unwrap_or_default();
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                width: Val::Percent(100.0),
-                height: Val::Auto,
-                display: Display::None,
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
-                ..default()
-            },
-            BackgroundColor(RENAME_BAR_BG),
-            GlobalZIndex(RENAME_Z),
-            RenameBar,
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Text::new(""),
-                ui.text_font(FontSize::Px(RENAME_BAR_FONT_SIZE_PX)),
-                TextColor(RENAME_BAR_FG),
-            ));
-        });
-}
-
-fn hide_rename_ui(mut bar: Query<&mut Node, With<RenameBar>>) {
-    if let Ok(mut node) = bar.single_mut() {
-        node.display = Display::None;
-    }
+    spawn_bottom_bar(&mut commands, ui_font, RenameBar, RENAME_BAR_BG, RENAME_Z);
 }
 
 fn show_rename_ui(
-    mut bar: Query<&mut Node, With<RenameBar>>,
+    mut bar: Query<(&mut Node, &Children), With<RenameBar>>,
     mut texts: Query<&mut Text>,
     state: Res<RenameState>,
-    bar_children: Query<&Children, With<RenameBar>>,
 ) {
-    let Ok(mut node) = bar.single_mut() else {
-        return;
-    };
-    node.display = Display::Flex;
-    if let Ok(children) = bar_children.single() {
-        for child in children.iter() {
-            if let Ok(mut text) = texts.get_mut(child) {
-                text.0 = format!("Rename window: {}\u{258f}", state.text);
-            }
-        }
-    }
+    show_bar_with_text(
+        &mut bar,
+        &mut texts,
+        format!("Rename window: {}\u{258f}", state.text),
+    );
 }
 
 /// Consumes `RenameWindowRequest`, inserting `RenameState` pre-filled from
@@ -160,42 +151,43 @@ fn open_rename_prompt(
     mut requests: MessageReader<RenameWindowRequest>,
     state: Option<Res<RenameState>>,
     confirm: Option<Res<ConfirmState>>,
-    active_windows: Query<&MultiplexerWindow, With<ActiveMultiplexerWindow>>,
+    active_windows: Query<(Entity, &MultiplexerWindow), With<ActiveMultiplexerWindow>>,
+    messages: Res<Messages<KeyboardInput>>,
 ) {
-    let requested = requests.read().next().is_some();
+    let requested = requests.read().last().is_some();
     if !requested || any_modal_open(confirm, state) {
         return;
     }
-    let Ok(window) = active_windows.single() else {
+    let Ok((target, window)) = active_windows.single() else {
         return;
     };
-    commands.insert_resource(RenameState::new(window.name.clone().unwrap_or_default()));
+    commands.insert_resource(RenameState::new(
+        target,
+        window.name.clone().unwrap_or_default(),
+        ModalKeys::at_current(&messages),
+    ));
 }
 
+/// Edits the buffer with the keys pressed since the prompt opened (see
+/// [`ModalKeys`] for the intake semantics), and on Enter commits the name to
+/// the window captured at open time — never to whatever window happens to be
+/// active at submit time.
 fn handle_rename_input(
     mut commands: Commands,
     mut state: ResMut<RenameState>,
-    mut events: MessageReader<KeyboardInput>,
-    mut armed: Local<bool>,
-    mut active_windows: Query<&mut MultiplexerWindow, With<ActiveMultiplexerWindow>>,
+    mut windows: Query<&mut MultiplexerWindow>,
+    messages: Res<Messages<KeyboardInput>>,
+    keys: Res<ButtonInput<KeyCode>>,
 ) {
-    // NOTE: the bound key that opened the prompt (the RenameWindow shortcut)
-    // is still in the shared KeyboardInput buffer; this reader has its own
-    // cursor, so skip the open frame — drain past the opening key — or it is
-    // appended to the pre-filled name.
-    if !*armed {
-        events.clear();
-        *armed = true;
+    if state.keys.is_empty(&messages) {
         return;
     }
-    for ev in events.read() {
-        if ev.state != ButtonState::Pressed {
-            continue;
-        }
-        match state.apply_key(&ev.logical_key) {
+    let pressed: Vec<Key> = state.keys.pressed(&messages, &keys).cloned().collect();
+    for key in &pressed {
+        match state.apply_key(key) {
             RenameStep::Continue => {}
             RenameStep::Submit => {
-                if let Ok(mut window) = active_windows.single_mut() {
+                if let Ok(mut window) = windows.get_mut(state.target) {
                     let trimmed = state.text.trim();
                     let next_name = if trimmed.is_empty() {
                         None
@@ -207,12 +199,10 @@ fn handle_rename_input(
                     }
                 }
                 commands.remove_resource::<RenameState>();
-                *armed = false;
                 break;
             }
             RenameStep::Cancel => {
                 commands.remove_resource::<RenameState>();
-                *armed = false;
                 break;
             }
         }
@@ -231,25 +221,37 @@ mod tests {
 
     #[test]
     fn new_prefills_text_from_current_name() {
-        let state = RenameState::new("nvim".to_string());
+        let state = RenameState::new(
+            Entity::PLACEHOLDER,
+            "nvim".to_string(),
+            ModalKeys::default(),
+        );
         assert_eq!(state.text, "nvim");
     }
 
     #[test]
     fn apply_key_escape_cancels() {
-        let mut state = RenameState::new("nvim".to_string());
+        let mut state = RenameState::new(
+            Entity::PLACEHOLDER,
+            "nvim".to_string(),
+            ModalKeys::default(),
+        );
         assert_eq!(state.apply_key(&Key::Escape), RenameStep::Cancel);
     }
 
     #[test]
     fn apply_key_enter_submits() {
-        let mut state = RenameState::new("nvim".to_string());
+        let mut state = RenameState::new(
+            Entity::PLACEHOLDER,
+            "nvim".to_string(),
+            ModalKeys::default(),
+        );
         assert_eq!(state.apply_key(&Key::Enter), RenameStep::Submit);
     }
 
     #[test]
     fn apply_key_char_appends_and_continues() {
-        let mut state = RenameState::new(String::new());
+        let mut state = RenameState::new(Entity::PLACEHOLDER, String::new(), ModalKeys::default());
         assert_eq!(state.apply_key(&char_key("a")), RenameStep::Continue);
         assert_eq!(state.apply_key(&char_key("b")), RenameStep::Continue);
         assert_eq!(state.text, "ab");
@@ -257,7 +259,11 @@ mod tests {
 
     #[test]
     fn apply_key_backspace_pops_last_char() {
-        let mut state = RenameState::new("nvim".to_string());
+        let mut state = RenameState::new(
+            Entity::PLACEHOLDER,
+            "nvim".to_string(),
+            ModalKeys::default(),
+        );
         assert_eq!(state.apply_key(&Key::Backspace), RenameStep::Continue);
         assert_eq!(state.text, "nvi");
     }
@@ -293,6 +299,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<KeyboardInput>()
+            .init_resource::<ButtonInput<KeyCode>>()
             .add_systems(
                 Update,
                 handle_rename_input.run_if(resource_exists::<RenameState>),
@@ -303,14 +310,15 @@ mod tests {
     #[test]
     fn open_frame_skips_the_opening_key() {
         let mut app = input_app();
-        spawn_active_window(&mut app, None);
-        app.world_mut()
-            .insert_resource(RenameState::new("nvim".to_string()));
+        let window = spawn_active_window(&mut app, None);
         // The opening rename-window shortcut key is still in the shared
-        // buffer when the prompt opens.
+        // buffer when the prompt opens; the open-time cursor skips it.
         app.world_mut()
             .resource_mut::<Messages<KeyboardInput>>()
             .write(key_event(char_key(","), KeyCode::Comma));
+        let keys = ModalKeys::at_current(app.world().resource::<Messages<KeyboardInput>>());
+        app.world_mut()
+            .insert_resource(RenameState::new(window, "nvim".to_string(), keys));
         app.update();
 
         let state = app.world().resource::<RenameState>();
@@ -321,12 +329,128 @@ mod tests {
     }
 
     #[test]
-    fn submit_sets_window_name() {
+    fn fast_first_char_after_open_is_not_swallowed() {
         let mut app = input_app();
         let window = spawn_active_window(&mut app, None);
         app.world_mut()
-            .insert_resource(RenameState::new("build".to_string()));
-        app.update(); // arms: drains the open frame
+            .resource_mut::<Messages<KeyboardInput>>()
+            .write(key_event(char_key(","), KeyCode::Comma));
+        let keys = ModalKeys::at_current(app.world().resource::<Messages<KeyboardInput>>());
+        app.world_mut()
+            .insert_resource(RenameState::new(window, "nvim".to_string(), keys));
+        // A fast first character lands before the handler's first run.
+        app.world_mut()
+            .write_message(key_event(char_key("a"), KeyCode::KeyA));
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<RenameState>().text,
+            "nvima",
+            "a character typed in the prompt's first frame must not be swallowed"
+        );
+    }
+
+    #[test]
+    fn modifier_chord_char_is_not_appended() {
+        let mut app = input_app();
+        let window = spawn_active_window(&mut app, None);
+        app.world_mut().insert_resource(RenameState::new(
+            window,
+            "nvim".to_string(),
+            ModalKeys::default(),
+        ));
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::SuperLeft);
+        app.world_mut()
+            .write_message(key_event(char_key("v"), KeyCode::KeyV));
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<RenameState>().text,
+            "nvim",
+            "a character riding a held Cmd chord is a command, not typed text"
+        );
+    }
+
+    #[test]
+    fn submit_renames_the_window_the_prompt_opened_for() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<KeyboardInput>()
+            .add_message::<RenameWindowRequest>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(
+                Update,
+                (
+                    open_rename_prompt,
+                    handle_rename_input.run_if(resource_exists::<RenameState>),
+                )
+                    .chain(),
+            );
+        let window_a = spawn_active_window(&mut app, Some("old-a"));
+        let pane_b = app.world_mut().spawn_empty().id();
+        let window_b = app
+            .world_mut()
+            .spawn(MultiplexerWindow {
+                index: 1,
+                name: Some("old-b".into()),
+                active_pane: pane_b,
+            })
+            .id();
+
+        app.world_mut().write_message(RenameWindowRequest);
+        app.update();
+        app.update();
+
+        // The user switches windows mid-edit: the marker moves to window B.
+        app.world_mut()
+            .entity_mut(window_a)
+            .remove::<ActiveMultiplexerWindow>();
+        app.world_mut()
+            .entity_mut(window_b)
+            .insert(ActiveMultiplexerWindow);
+
+        app.world_mut().resource_mut::<RenameState>().text = "renamed".to_string();
+        app.world_mut()
+            .write_message(key_event(Key::Enter, KeyCode::Enter));
+        app.update();
+
+        assert_eq!(
+            app.world().get::<MultiplexerWindow>(window_a).unwrap().name,
+            Some("renamed".to_string()),
+            "the submit must land on the window the prompt opened for"
+        );
+        assert_eq!(
+            app.world().get::<MultiplexerWindow>(window_b).unwrap().name,
+            Some("old-b".to_string()),
+            "the window that became active mid-edit must be untouched"
+        );
+    }
+
+    #[test]
+    fn apply_key_space_appends_space() {
+        let mut state =
+            RenameState::new(Entity::PLACEHOLDER, "a".to_string(), ModalKeys::default());
+        assert_eq!(state.apply_key(&Key::Space), RenameStep::Continue);
+        assert_eq!(
+            state.text, "a ",
+            "the spacebar arrives as Key::Space and must append a space"
+        );
+    }
+
+    #[test]
+    fn submit_sets_window_name() {
+        let mut app = input_app();
+        let window = spawn_active_window(&mut app, None);
+        app.world_mut().insert_resource(RenameState::new(
+            window,
+            "build".to_string(),
+            ModalKeys::default(),
+        ));
+        app.update();
 
         app.world_mut()
             .write_message(key_event(Key::Enter, KeyCode::Enter));
@@ -347,8 +471,11 @@ mod tests {
     fn submit_empty_clears_name_to_none() {
         let mut app = input_app();
         let window = spawn_active_window(&mut app, Some("old"));
-        app.world_mut()
-            .insert_resource(RenameState::new("   ".to_string()));
+        app.world_mut().insert_resource(RenameState::new(
+            window,
+            "   ".to_string(),
+            ModalKeys::default(),
+        ));
         app.update();
 
         app.world_mut()
@@ -366,8 +493,11 @@ mod tests {
     fn cancel_leaves_name_unchanged() {
         let mut app = input_app();
         let window = spawn_active_window(&mut app, Some("old"));
-        app.world_mut()
-            .insert_resource(RenameState::new("something-else".to_string()));
+        app.world_mut().insert_resource(RenameState::new(
+            window,
+            "something-else".to_string(),
+            ModalKeys::default(),
+        ));
         app.update();
 
         app.world_mut()
@@ -390,6 +520,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<RenameWindowRequest>()
+            .add_message::<KeyboardInput>()
             .add_systems(Update, open_rename_prompt);
         spawn_active_window(&mut app, Some("nvim"));
 
@@ -408,6 +539,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<RenameWindowRequest>()
+            .add_message::<KeyboardInput>()
             .add_systems(Update, open_rename_prompt);
         spawn_active_window(&mut app, Some("nvim"));
 
@@ -430,10 +562,11 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<RenameWindowRequest>()
+            .add_message::<KeyboardInput>()
             .add_systems(Update, open_rename_prompt);
         let window = spawn_active_window(&mut app, Some("nvim"));
         app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(window));
+            .insert_resource(ConfirmState::kill_pane(window, ModalKeys::default()));
 
         app.world_mut().write_message(RenameWindowRequest);
         app.update();

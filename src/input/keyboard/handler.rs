@@ -203,6 +203,7 @@ mod tests {
         test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
     };
     use crate::surface::OrzmaTerminal;
+    use crate::ui::multiplexer::modal::ModalKeys;
     use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
@@ -373,7 +374,7 @@ mod tests {
         ));
         let term = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
         app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(term));
+            .insert_resource(ConfirmState::kill_pane(term, ModalKeys::default()));
         press_key(&mut app, KeyCode::KeyW, Key::Character("w".into()));
         app.update();
         assert_eq!(
@@ -396,7 +397,7 @@ mod tests {
         ));
         let term = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
         app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(term));
+            .insert_resource(ConfirmState::kill_pane(term, ModalKeys::default()));
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::SuperLeft);

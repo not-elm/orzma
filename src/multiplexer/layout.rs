@@ -27,6 +27,20 @@ pub(crate) struct PaneRect {
     pub h: f32,
 }
 
+impl PaneRect {
+    /// Builds the origin-anchored window area from a container's computed
+    /// size — the shape every layout/divider consumer feeds `rects` /
+    /// `divider_rects`.
+    pub(crate) fn from_size(size: Vec2) -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            w: size.x,
+            h: size.y,
+        }
+    }
+}
+
 /// One step in a root-to-`Split` path: which child a divider's descent
 /// takes at that `Split` node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,7 +101,7 @@ impl MultiplexerLayout {
 
     /// Whether `pane` is a leaf in this layout.
     pub(crate) fn contains(&self, pane: Entity) -> bool {
-        self.leaves().contains(&pane)
+        subtree_contains(&self.root, pane)
     }
 
     /// Splits `target`'s leaf: `target` becomes `first`, `new_pane` `second`,
@@ -148,7 +162,6 @@ impl MultiplexerLayout {
             self.zoomed = None;
         }
         match &self.root {
-            LayoutNode::Leaf(e) if *e == pane => None,
             LayoutNode::Leaf(_) => None,
             _ => remove_in(&mut self.root, pane),
         }
@@ -169,7 +182,7 @@ impl MultiplexerLayout {
         rects
             .iter()
             .filter(|(e, _)| *e != from)
-            .filter(|(_, r)| adjacent(src, *r, dir) && perp_overlap(src, *r, dir))
+            .filter(|(_, r)| adjacent(src, *r, dir, gap) && perp_overlap(src, *r, dir))
             .map(|(e, _)| *e)
             .next()
     }
@@ -178,7 +191,9 @@ impl MultiplexerLayout {
     /// the ratio of the nearest ancestor split whose axis matches `dir`
     /// (skipping ancestors on the other axis), clamping each side to
     /// `min_frac`. Returns false (no change) when `focused` has no ancestor
-    /// split along that axis (e.g. a lone pane).
+    /// split along that axis (e.g. a lone pane), or when the nearest matching
+    /// split is already at its clamp — the request dies there rather than
+    /// falling through to a farther ancestor split.
     pub(crate) fn resize(
         &mut self,
         focused: Entity,
@@ -187,7 +202,7 @@ impl MultiplexerLayout {
         min_frac: f32,
     ) -> bool {
         let want = axis_of(dir);
-        resize_in(&mut self.root, focused, dir, want, delta_frac, min_frac).is_some()
+        resize_in(&mut self.root, focused, dir, want, delta_frac, min_frac) == Some(true)
     }
 
     /// Every divider's geometry: the 1px gap rect between a split's two
@@ -209,14 +224,19 @@ impl MultiplexerLayout {
     /// clamped to `[min_frac, 1.0 - min_frac]`. Positive `delta_frac` grows
     /// the FIRST child (moves the divider toward `second`); negative grows
     /// the second. Returns false (no panic, no change) when `path` does not
-    /// resolve to a `Split` node, or the clamped ratio is unchanged.
+    /// resolve to a `Split` node of the given `axis` — the tree may have
+    /// changed since the caller captured the path (e.g. a pane closed
+    /// mid-drag), and applying the delta to whatever split now occupies the
+    /// path would resize an unrelated divider — or when the clamped ratio is
+    /// unchanged.
     pub(crate) fn resize_split_at(
         &mut self,
         path: &[ChildSide],
+        axis: SplitAxis,
         delta_frac: f32,
         min_frac: f32,
     ) -> bool {
-        resize_split_in(&mut self.root, path, delta_frac, min_frac)
+        resize_split_in(&mut self.root, path, axis, delta_frac, min_frac)
     }
 }
 
@@ -419,15 +439,18 @@ fn axis_of(dir: PaneDirection) -> SplitAxis {
     }
 }
 
-fn adjacent(src: PaneRect, other: PaneRect, dir: PaneDirection) -> bool {
-    let eps = 2.0;
+/// Whether `other`'s near edge touches `src`'s far edge on the `dir` side,
+/// within the layout `gap` plus rounding slack. Panes farther away on that
+/// side (with another pane between) do not qualify — without the edge-touch
+/// bound, a directional select would land on the first tree-order pane on
+/// that side, which can be the farthest one.
+fn adjacent(src: PaneRect, other: PaneRect, dir: PaneDirection, gap: f32) -> bool {
+    let eps = gap + 1.0;
     match dir {
-        PaneDirection::Right => {
-            (other.x - (src.x + src.w)).abs() <= src.w + other.w && other.x >= src.x + src.w - eps
-        }
-        PaneDirection::Left => other.x + other.w <= src.x + eps,
-        PaneDirection::Down => other.y >= src.y + src.h - eps,
-        PaneDirection::Up => other.y + other.h <= src.y + eps,
+        PaneDirection::Right => (other.x - (src.x + src.w)).abs() <= eps,
+        PaneDirection::Left => (src.x - (other.x + other.w)).abs() <= eps,
+        PaneDirection::Down => (other.y - (src.y + src.h)).abs() <= eps,
+        PaneDirection::Up => (src.y - (other.y + other.h)).abs() <= eps,
     }
 }
 
@@ -442,6 +465,11 @@ fn perp_overlap(src: PaneRect, other: PaneRect, dir: PaneDirection) -> bool {
     }
 }
 
+/// Returns `Some(changed)` once the nearest matching-axis ancestor split of
+/// `focused` has been found and handled — `Some(false)` when its ratio was
+/// already at the clamp, so the caller must NOT retry a farther ancestor —
+/// and `None` when this subtree has no matching-axis split containing
+/// `focused`.
 fn resize_in(
     node: &mut LayoutNode,
     focused: Entity,
@@ -449,7 +477,7 @@ fn resize_in(
     want: SplitAxis,
     delta: f32,
     min: f32,
-) -> Option<()> {
+) -> Option<bool> {
     let LayoutNode::Split {
         axis,
         ratio,
@@ -478,17 +506,26 @@ fn resize_in(
     let signed = if toward_second { delta } else { -delta };
     let next = (*ratio + signed).clamp(min, 1.0 - min);
     if next == *ratio {
-        return None;
+        return Some(false);
     }
     *ratio = next;
-    Some(())
+    Some(true)
 }
 
-fn resize_split_in(node: &mut LayoutNode, path: &[ChildSide], delta: f32, min: f32) -> bool {
+fn resize_split_in(
+    node: &mut LayoutNode,
+    path: &[ChildSide],
+    want_axis: SplitAxis,
+    delta: f32,
+    min: f32,
+) -> bool {
     let Some((side, rest)) = path.split_first() else {
-        let LayoutNode::Split { ratio, .. } = node else {
+        let LayoutNode::Split { axis, ratio, .. } = node else {
             return false;
         };
+        if *axis != want_axis {
+            return false;
+        }
         let next = (*ratio + delta).clamp(min, 1.0 - min);
         if next == *ratio {
             return false;
@@ -500,8 +537,8 @@ fn resize_split_in(node: &mut LayoutNode, path: &[ChildSide], delta: f32, min: f
         return false;
     };
     match side {
-        ChildSide::First => resize_split_in(first, rest, delta, min),
-        ChildSide::Second => resize_split_in(second, rest, delta, min),
+        ChildSide::First => resize_split_in(first, rest, want_axis, delta, min),
+        ChildSide::Second => resize_split_in(second, rest, want_axis, delta, min),
     }
 }
 
@@ -741,6 +778,55 @@ mod tests {
     }
 
     #[test]
+    fn neighbor_left_picks_adjacent_middle_column_not_farthest() {
+        // Three columns 1 | 2 | 3.
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        l.split(e(2), e(3), SplitAxis::Vertical);
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        assert_eq!(
+            l.neighbor(e(3), PaneDirection::Left, area, 1.0),
+            Some(e(2)),
+            "Left from the right column lands on the adjacent middle column, not the far-left one"
+        );
+        assert_eq!(l.neighbor(e(2), PaneDirection::Left, area, 1.0), Some(e(1)));
+        assert_eq!(
+            l.neighbor(e(1), PaneDirection::Right, area, 1.0),
+            Some(e(2)),
+            "Right from the left column lands on the adjacent middle column"
+        );
+    }
+
+    #[test]
+    fn neighbor_up_picks_adjacent_middle_row_not_farthest() {
+        // Three rows stacked 1 / 2 / 3.
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(2), SplitAxis::Horizontal);
+        l.split(e(2), e(3), SplitAxis::Horizontal);
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        assert_eq!(
+            l.neighbor(e(3), PaneDirection::Up, area, 1.0),
+            Some(e(2)),
+            "Up from the bottom row lands on the adjacent middle row, not the top one"
+        );
+        assert_eq!(
+            l.neighbor(e(1), PaneDirection::Down, area, 1.0),
+            Some(e(2)),
+            "Down from the top row lands on the adjacent middle row"
+        );
+    }
+
+    #[test]
     fn resize_right_grows_left_pane() {
         let mut l = MultiplexerLayout::new(e(1));
         l.split(e(1), e(2), SplitAxis::Vertical);
@@ -804,6 +890,43 @@ mod tests {
         let right = rs.iter().find(|(x, _)| *x == e(2)).unwrap().1;
         assert_eq!(left.w, 10.0);
         assert_eq!(right.w, 90.0);
+    }
+
+    #[test]
+    fn resize_clamped_at_nearest_split_does_not_move_farther_ancestor() {
+        // V( V(1,2), 3 ): from pane 2, Left resizes target the inner split;
+        // once it clamps at min the request must die there, not move the
+        // root split against pane 3.
+        let mut l = MultiplexerLayout::new(e(1));
+        l.split(e(1), e(3), SplitAxis::Vertical);
+        l.split(e(1), e(2), SplitAxis::Vertical);
+        for _ in 0..6 {
+            l.resize(e(2), PaneDirection::Left, 0.1, 0.1);
+        }
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        let outer_width = |l: &MultiplexerLayout| {
+            l.rects(area, 1.0)
+                .iter()
+                .find(|(p, _)| *p == e(3))
+                .unwrap()
+                .1
+                .w
+        };
+        let before = outer_width(&l);
+        assert!(
+            !l.resize(e(2), PaneDirection::Left, 0.1, 0.1),
+            "a resize clamped at the nearest matching split must report no change"
+        );
+        assert_eq!(
+            outer_width(&l),
+            before,
+            "the farther ancestor split must not absorb the clamped resize"
+        );
     }
 
     #[test]
@@ -902,7 +1025,7 @@ mod tests {
     fn resize_split_at_positive_delta_grows_first_child() {
         let mut l = MultiplexerLayout::new(e(1));
         l.split(e(1), e(2), SplitAxis::Vertical);
-        assert!(l.resize_split_at(&[], 0.1, 0.1));
+        assert!(l.resize_split_at(&[], SplitAxis::Vertical, 0.1, 0.1));
         let area = PaneRect {
             x: 0.0,
             y: 0.0,
@@ -918,7 +1041,7 @@ mod tests {
     fn resize_split_at_negative_delta_grows_second_child() {
         let mut l = MultiplexerLayout::new(e(1));
         l.split(e(1), e(2), SplitAxis::Vertical);
-        assert!(l.resize_split_at(&[], -0.1, 0.1));
+        assert!(l.resize_split_at(&[], SplitAxis::Vertical, -0.1, 0.1));
         let area = PaneRect {
             x: 0.0,
             y: 0.0,
@@ -934,7 +1057,7 @@ mod tests {
     fn resize_split_at_clamps_at_max_then_is_noop() {
         let mut l = MultiplexerLayout::new(e(1));
         l.split(e(1), e(2), SplitAxis::Vertical);
-        assert!(l.resize_split_at(&[], 0.9, 0.1));
+        assert!(l.resize_split_at(&[], SplitAxis::Vertical, 0.9, 0.1));
         let area = PaneRect {
             x: 0.0,
             y: 0.0,
@@ -944,14 +1067,14 @@ mod tests {
         let rs = l.rects(area, 1.0);
         let left = rs.iter().find(|(x, _)| *x == e(1)).unwrap().1;
         assert_eq!(left.w, 90.0);
-        assert!(!l.resize_split_at(&[], 0.9, 0.1));
+        assert!(!l.resize_split_at(&[], SplitAxis::Vertical, 0.9, 0.1));
     }
 
     #[test]
     fn resize_split_at_clamps_at_min_then_is_noop() {
         let mut l = MultiplexerLayout::new(e(1));
         l.split(e(1), e(2), SplitAxis::Vertical);
-        assert!(l.resize_split_at(&[], -0.9, 0.1));
+        assert!(l.resize_split_at(&[], SplitAxis::Vertical, -0.9, 0.1));
         let area = PaneRect {
             x: 0.0,
             y: 0.0,
@@ -961,15 +1084,20 @@ mod tests {
         let rs = l.rects(area, 1.0);
         let left = rs.iter().find(|(x, _)| *x == e(1)).unwrap().1;
         assert_eq!(left.w, 10.0);
-        assert!(!l.resize_split_at(&[], -0.9, 0.1));
+        assert!(!l.resize_split_at(&[], SplitAxis::Vertical, -0.9, 0.1));
     }
 
     #[test]
     fn resize_split_at_bad_path_is_noop() {
         let mut l = MultiplexerLayout::new(e(1));
         l.split(e(1), e(2), SplitAxis::Vertical);
-        assert!(!l.resize_split_at(&[ChildSide::First], 0.1, 0.1));
-        assert!(!l.resize_split_at(&[ChildSide::First, ChildSide::Second], 0.1, 0.1));
+        assert!(!l.resize_split_at(&[ChildSide::First], SplitAxis::Vertical, 0.1, 0.1));
+        assert!(!l.resize_split_at(
+            &[ChildSide::First, ChildSide::Second],
+            SplitAxis::Vertical,
+            0.1,
+            0.1
+        ));
     }
 
     fn div(axis: SplitAxis, rect: PaneRect) -> DividerRect {

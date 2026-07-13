@@ -143,6 +143,7 @@ mod tests {
     use crate::input::keyboard::key_effect::KeyEffect;
     use crate::input::shortcuts::Shortcuts;
     use crate::surface::OrzmaTerminal;
+    use crate::ui::multiplexer::modal::ModalKeys;
     use bevy::ecs::resource::Resource;
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
@@ -409,7 +410,7 @@ mod tests {
         let mut app = build_confirm_gated_app();
         let term = app.world_mut().spawn(OrzmaTerminal).id();
         app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(term));
+            .insert_resource(ConfirmState::kill_pane(term, ModalKeys::default()));
         app.world_mut().write_message(TypeMessage {
             logical: Key::Character("y".into()),
             focused: Some(term),
@@ -427,8 +428,11 @@ mod tests {
     fn apply_type_suppressed_while_rename_state_present() {
         let mut app = build_confirm_gated_app();
         let term = app.world_mut().spawn(OrzmaTerminal).id();
-        app.world_mut()
-            .insert_resource(RenameState::new("build".to_string()));
+        app.world_mut().insert_resource(RenameState::new(
+            term,
+            "build".to_string(),
+            ModalKeys::default(),
+        ));
         app.world_mut().write_message(TypeMessage {
             logical: Key::Character("x".into()),
             focused: Some(term),
@@ -470,7 +474,7 @@ mod tests {
         let mut app = build_confirm_gated_app();
         let term = app.world_mut().spawn(OrzmaTerminal).id();
         app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(term));
+            .insert_resource(ConfirmState::kill_pane(term, ModalKeys::default()));
         app.world_mut().write_message(TypeMessage {
             logical: Key::Character("y".into()),
             focused: Some(term),

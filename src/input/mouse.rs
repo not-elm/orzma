@@ -20,7 +20,6 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::CursorMoved;
 use orzma_tty_engine::{CellCoord, Point, SelectionType, Side, TermMode, TerminalHandle};
-use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::schema::TerminalGrid;
 
 mod button;
@@ -173,16 +172,6 @@ fn hit_candidates<'a>(
     terminals
         .iter()
         .map(|(e, _, node, stack, transform, _)| (e, node, stack, transform))
-}
-
-/// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to `>= 1` so
-/// a degenerate metric cannot divide by zero. Shared by the mouse dispatchers
-/// and webview pointer routing's cursor → cell projection.
-fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
-    (
-        metrics.metrics.advance_phys.floor().max(1.0),
-        metrics.metrics.line_height_phys.floor().max(1.0),
-    )
 }
 
 /// Read-only hit-test context for one gather run: the terminal node geometry,

@@ -60,8 +60,10 @@ pub(crate) enum WindowSelect {
     Next,
     /// The previous window in index order.
     Previous,
-    /// The window at this tmux display index.
-    Index(u8),
+    /// The window at this display index. `u32`, matching
+    /// `MultiplexerWindow.index` — window-bar clicks target any index, not
+    /// just the shortcut-reachable 0–9.
+    Index(u32),
 }
 
 /// Requests opening a new window in the current session.

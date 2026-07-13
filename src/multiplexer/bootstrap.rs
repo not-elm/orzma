@@ -2,15 +2,13 @@
 //! single pane under the workspace container, and holds the shell-override config
 //! resource the pane PTY spawn reads.
 
-use crate::input::focus::KeyboardFocused;
 use crate::multiplexer::layout::MultiplexerLayout;
+use crate::multiplexer::pane::PanePlugin;
 use crate::multiplexer::pane::exit::ExitPlugin;
 use crate::multiplexer::pane::layout::LayoutPlugin;
 use crate::multiplexer::pane::spawn::{
-    MultiplexerPaneBundle, MultiplexerPaneSpawnOptions, PaneCwdPlugin,
-};
-use crate::multiplexer::pane::{
-    MultiplexerPane, ResizePanePlugin, SplitPanePlugin, ZoomPanePlugin,
+    MultiplexerPaneBundle, MultiplexerPaneSpawnOptions, PaneCwdPlugin, insert_spawned_pane,
+    spawn_pane_container,
 };
 use crate::multiplexer::window::{
     ActiveMultiplexerWindow, MultiplexerLayoutComp, MultiplexerWindow, WindowPlugin,
@@ -59,9 +57,7 @@ impl Plugin for MultiplexerPlugin {
             LayoutPlugin,
             ExitPlugin,
             WindowPlugin,
-            SplitPanePlugin,
-            ResizePanePlugin,
-            ZoomPanePlugin,
+            PanePlugin,
         ))
         .add_systems(
             Update,
@@ -101,17 +97,7 @@ fn ensure_bootstrap(
             ChildOf(workspace),
         ))
         .id();
-    let pane_container = commands
-        .spawn((
-            Name::new("Pane Container"),
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                ..default()
-            },
-            ChildOf(window_container),
-        ))
-        .id();
+    let pane_container = spawn_pane_container(&mut commands, window_container);
     let pane = commands.spawn_empty().id();
     let env = control
         .as_deref()
@@ -123,12 +109,14 @@ fn ensure_bootstrap(
         ..default()
     }) {
         Ok(bundle) => {
-            commands.entity(pane).insert((
+            insert_spawned_pane(
+                &mut commands,
+                pane,
+                window,
+                pane_container,
                 bundle,
-                KeyboardFocused,
-                MultiplexerPane { window },
-                ChildOf(pane_container),
-            ));
+                control.as_deref(),
+            );
             commands.entity(window).insert((
                 MultiplexerWindow {
                     index: 0,
@@ -138,17 +126,11 @@ fn ensure_bootstrap(
                 ActiveMultiplexerWindow,
                 MultiplexerLayoutComp(MultiplexerLayout::new(pane)),
             ));
-            // NOTE: bind the token only after a successful spawn. gc keys on
-            // RemovedComponents<TerminalHandle> (never added on the error path),
-            // so a pre-spawn bind would leak the token if the spawn failed.
-            if let Some(c) = control.as_deref() {
-                c.bind_surface(pane);
-            }
         }
         Err(e) => {
-            // Keep window_container / pane_container so the WindowContainer gate
-            // stays satisfied (single attempt). Despawn only the un-filled id
-            // placeholders.
+            // NOTE: keep window_container / pane_container so the
+            // WindowContainer gate stays satisfied (single attempt). Despawn
+            // only the un-filled id placeholders.
             commands.entity(pane).despawn();
             commands.entity(window).despawn();
             tracing::error!(?e, "failed to spawn multiplexer bootstrap pane");
@@ -160,6 +142,7 @@ fn ensure_bootstrap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::multiplexer::pane::MultiplexerPane;
     use crate::ui::UiRoot;
     use crate::ui::multiplexer::MultiplexerUiPlugin;
     use orzma_webview::TokenRegistry;
@@ -188,6 +171,37 @@ mod tests {
         let world = app.world_mut();
         let mut panes = world.query_filtered::<(), With<MultiplexerPane>>();
         assert_eq!(panes.iter(world).count(), 1, "exactly one pane");
+    }
+
+    #[test]
+    fn bootstrap_pane_container_is_absolutely_positioned_at_origin() {
+        let mut app = build_app();
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        let mut panes = world.query_filtered::<Entity, With<MultiplexerPane>>();
+        let pane = panes.single(world).expect("bootstrap pane spawned");
+        let container = world.entity(pane).get::<ChildOf>().unwrap().parent();
+        let node = world.entity(container).get::<Node>().unwrap();
+        assert_eq!(
+            node.position_type,
+            PositionType::Absolute,
+            "a pane container must be absolutely positioned: as a Relative flex \
+             child, sibling containers flex-share the window container's area, \
+             displacing the pane rects (window-container coordinates) resolved \
+             against them"
+        );
+        assert_eq!(
+            node.left,
+            Val::Px(0.0),
+            "a pane container must pin to the window container's origin"
+        );
+        assert_eq!(
+            node.top,
+            Val::Px(0.0),
+            "a pane container must pin to the window container's origin"
+        );
     }
 
     #[test]

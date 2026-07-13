@@ -1,12 +1,16 @@
-//! Multiplexer pane spawn: the PTY spawn bundle plus the OSC-7 cwd-cache
-//! observer that keeps a pane's `PaneCwd` in sync so a split can seed its
-//! sibling's working directory.
+//! Multiplexer pane spawn: the PTY spawn bundle, the shared pane-container /
+//! pane-insert helpers every spawn site (`ensure_bootstrap`, `on_split_pane`,
+//! `spawn_window`) goes through, and the OSC-7 cwd-cache observer that keeps
+//! a pane's `PaneCwd` in sync so a split can seed its sibling's working
+//! directory.
 
-use crate::multiplexer::pane::PaneCwd;
+use crate::input::focus::KeyboardFocused;
 use crate::multiplexer::pane::layout::PaneLastCells;
+use crate::multiplexer::pane::{MultiplexerPane, PaneCwd};
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use orzma_tty_engine::{SpawnOptions, TerminalBundle, TerminalCurrentDir};
+use orzma_webview::ControlPlaneHandle;
 use std::path::PathBuf;
 
 /// Options for spawning a multiplexer pane's PTY.
@@ -61,7 +65,7 @@ impl MultiplexerPaneBundle {
 }
 
 /// Registers the cwd cache observer.
-pub(crate) struct PaneCwdPlugin;
+pub(in crate::multiplexer) struct PaneCwdPlugin;
 
 impl Plugin for PaneCwdPlugin {
     fn build(&self, app: &mut App) {
@@ -69,18 +73,58 @@ impl Plugin for PaneCwdPlugin {
     }
 }
 
-/// Observer: caches a pane's OSC-7 cwd so a split can seed its sibling.
-pub(crate) fn cache_pane_cwd(ev: On<TerminalCurrentDir>, mut panes: Query<&mut PaneCwd>) {
-    if let Ok(mut cwd) = panes.get_mut(ev.event_target()) {
-        let next = Some(ev.path.clone());
-        if cwd.0 != next {
-            cwd.0 = next;
-        }
+/// Spawns a pane's dedicated container under `parent` and returns it. Each
+/// pane gets its OWN container so the exit cascade's per-pane
+/// `ChildOf`-despawn (`pane/exit.rs`) never takes a surviving sibling down
+/// with it.
+pub(in crate::multiplexer) fn spawn_pane_container(
+    commands: &mut Commands,
+    parent: Entity,
+) -> Entity {
+    commands
+        .spawn((
+            Name::new("Pane Container"),
+            full_size_node(),
+            ChildOf(parent),
+        ))
+        .id()
+}
+
+/// Inserts a successfully spawned pane bundle under its container, gives it
+/// keyboard focus, and binds it on the control plane.
+///
+/// # Invariants
+///
+/// Call only with a successfully spawned `bundle`: the control-plane gc keys
+/// on `RemovedComponents<TerminalHandle>` (never added on the error path),
+/// so binding before — or despite — a failed PTY spawn would leak the token.
+pub(in crate::multiplexer) fn insert_spawned_pane(
+    commands: &mut Commands,
+    pane: Entity,
+    window: Entity,
+    pane_container: Entity,
+    bundle: MultiplexerPaneBundle,
+    control: Option<&ControlPlaneHandle>,
+) {
+    commands.entity(pane).insert((
+        bundle,
+        KeyboardFocused,
+        MultiplexerPane { window },
+        ChildOf(pane_container),
+    ));
+    if let Some(c) = control {
+        c.bind_surface(pane);
     }
 }
 
-/// Full-window absolute layout for a pane's terminal surface.
-fn full_size_node() -> Node {
+/// Absolute full-area `Node` pinned to the parent's origin.
+///
+/// Used for a pane's terminal surface AND for every pane container
+/// (`ensure_bootstrap`, `on_split_pane`, `spawn_window`). Containers must be
+/// `PositionType::Absolute`: as Relative flex children, sibling containers
+/// would flex-share the window container's area, displacing the pane rects
+/// (window-container coordinates) `apply_layout` resolves against them.
+pub(in crate::multiplexer) fn full_size_node() -> Node {
     Node {
         position_type: PositionType::Absolute,
         left: Val::Px(0.0),
@@ -88,6 +132,16 @@ fn full_size_node() -> Node {
         width: Val::Percent(100.0),
         height: Val::Percent(100.0),
         ..default()
+    }
+}
+
+/// Observer: caches a pane's OSC-7 cwd so a split can seed its sibling.
+fn cache_pane_cwd(ev: On<TerminalCurrentDir>, mut panes: Query<&mut PaneCwd>) {
+    if let Ok(mut cwd) = panes.get_mut(ev.event_target()) {
+        let next = Some(ev.path.clone());
+        if cwd.0 != next {
+            cwd.0 = next;
+        }
     }
 }
 
