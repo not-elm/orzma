@@ -285,9 +285,10 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `rename-window` | `<Leader>r` | Open the rename prompt for the active window (no effect until the built-in multiplexer lands). |
 
 Note: some actions have no effect yet. `enter-vi-mode` works today (Alacritty
-vi mode). All 27 pane/window/rename actions above (`select-*-pane`,
-`split-*-pane`, `kill-pane`, `zoom-pane`, `resize-*-pane`, `new-window`,
-`kill-window`, `next-window`, `previous-window`, `select-window-0`…`9`,
+vi mode), and so do `kill-pane` and `kill-window` (they close the pane/window
+immediately, no confirmation). The remaining 25 pane/window/rename actions
+above (`select-*-pane`, `split-*-pane`, `zoom-pane`, `resize-*-pane`,
+`new-window`, `next-window`, `previous-window`, `select-window-0`…`9`,
 `rename-window`) are no-ops until the built-in multiplexer lands — the
 bindings are accepted and validated at startup, but pressing them does
 nothing. `paste`, `copy`, `quit`, `release-webview-focus`, and `enter-vi-mode`
