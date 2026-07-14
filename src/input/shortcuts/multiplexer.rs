@@ -6,7 +6,7 @@
 use crate::input::shortcuts::{ShortcutMessage, ShortcutSet};
 use crate::multiplexer::layout::SplitAxis;
 use crate::multiplexer::request::{
-    NewWindowRequest, OpenKillPaneConfirm, OpenKillWindowConfirm, RenameWindowRequest,
+    KillPaneRequest, KillWindowRequest, NewWindowRequest, RenameWindowRequest,
     ResizePaneRequest, SelectPaneRequest, SelectWindowRequest, SplitPaneRequest, WindowSelect,
     ZoomPaneRequest,
 };
@@ -27,8 +27,6 @@ impl Plugin for MultiplexerShortcutPlugin {
             .add_message::<NewWindowRequest>()
             .add_message::<SelectWindowRequest>()
             .add_message::<RenameWindowRequest>()
-            .add_message::<OpenKillPaneConfirm>()
-            .add_message::<OpenKillWindowConfirm>()
             .add_systems(
                 Update,
                 apply_multiplexer_shortcuts
@@ -38,26 +36,26 @@ impl Plugin for MultiplexerShortcutPlugin {
     }
 }
 
-/// The multiplexer request-event writers `apply_multiplexer_shortcuts` fans
-/// out to, bundled to stay within Bevy's system-parameter limit.
+/// The multiplexer request-message writers `apply_multiplexer_shortcuts` fans
+/// out to, bundled for signature tidiness (six writers plus `Commands`, a
+/// reader, and a query — no longer near Bevy's system-parameter limit, but
+/// the bundle keeps the applier's signature readable).
 #[derive(SystemParam)]
 struct MultiplexerRequests<'w> {
     select_pane: MessageWriter<'w, SelectPaneRequest>,
     resize_pane: MessageWriter<'w, ResizePaneRequest>,
     zoom_pane: MessageWriter<'w, ZoomPaneRequest>,
-    confirm_kill_pane: MessageWriter<'w, OpenKillPaneConfirm>,
     new_window: MessageWriter<'w, NewWindowRequest>,
-    confirm_kill_window: MessageWriter<'w, OpenKillWindowConfirm>,
     select_window: MessageWriter<'w, SelectWindowRequest>,
     rename_window: MessageWriter<'w, RenameWindowRequest>,
 }
 
 /// Applies multiplexer-scoped keyboard shortcuts from `ShortcutMessage`:
 /// `SplitPane` triggers `SplitPaneRequest` on the focused pane; `KillPane`
-/// and `KillWindow` open their confirm prompts (`OpenKillPaneConfirm` /
-/// `OpenKillWindowConfirm`, consumed by the Task 13 prompt) rather than
-/// closing directly; the remaining pane/window arms write their `Message`
-/// requests. The five non-multiplexer arms (`Paste`/`Copy`/`EnterViMode`/
+/// and `KillWindow` trigger `KillPaneRequest` / `KillWindowRequest`
+/// immediately (no confirm prompt — kills execute like a shell `exit`
+/// would); the remaining pane/window arms write their `Message` requests.
+/// The five non-multiplexer arms (`Paste`/`Copy`/`EnterViMode`/
 /// `Quit`/`ReleaseWebviewFocus`) are handled by
 /// `crate::input::shortcuts::apply`.
 /// Registered in `ShortcutSet::Apply`, gated on `on_message::<ShortcutMessage>`.
@@ -91,9 +89,7 @@ fn apply_multiplexer_shortcuts(
             }
             Shortcut::KillPane => {
                 if let Some(pane) = msg.focused {
-                    requests
-                        .confirm_kill_pane
-                        .write(OpenKillPaneConfirm { pane });
+                    commands.trigger(KillPaneRequest { pane });
                 }
             }
             Shortcut::NewWindow => {
@@ -101,9 +97,7 @@ fn apply_multiplexer_shortcuts(
             }
             Shortcut::KillWindow => {
                 if let Ok(window) = active_window.single() {
-                    requests
-                        .confirm_kill_window
-                        .write(OpenKillWindowConfirm { window });
+                    commands.trigger(KillWindowRequest { window });
                 }
             }
             Shortcut::NextWindow => {
@@ -136,6 +130,7 @@ fn apply_multiplexer_shortcuts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::multiplexer::request::{KillPaneRequest, KillWindowRequest};
     use orzma_configs::shortcuts::PaneDirection;
 
     #[derive(Resource, Default)]
@@ -144,9 +139,9 @@ mod tests {
         select_pane: Vec<PaneDirection>,
         resize_pane: Vec<PaneDirection>,
         zoom_pane: u32,
-        confirm_kill_pane: Vec<Entity>,
+        killed_panes: Vec<Entity>,
         new_window: u32,
-        confirm_kill_window: Vec<Entity>,
+        killed_windows: Vec<Entity>,
         select_window: Vec<WindowSelect>,
         rename_window: u32,
     }
@@ -167,26 +162,8 @@ mod tests {
         c.zoom_pane += reader.read().count() as u32;
     }
 
-    fn capture_confirm_kill_pane(
-        mut reader: MessageReader<OpenKillPaneConfirm>,
-        mut c: ResMut<Captured>,
-    ) {
-        for m in reader.read() {
-            c.confirm_kill_pane.push(m.pane);
-        }
-    }
-
     fn capture_new_window(mut reader: MessageReader<NewWindowRequest>, mut c: ResMut<Captured>) {
         c.new_window += reader.read().count() as u32;
-    }
-
-    fn capture_confirm_kill_window(
-        mut reader: MessageReader<OpenKillWindowConfirm>,
-        mut c: ResMut<Captured>,
-    ) {
-        for m in reader.read() {
-            c.confirm_kill_window.push(m.window);
-        }
     }
 
     fn capture_select_window(
@@ -215,8 +192,6 @@ mod tests {
             .add_message::<NewWindowRequest>()
             .add_message::<SelectWindowRequest>()
             .add_message::<RenameWindowRequest>()
-            .add_message::<OpenKillPaneConfirm>()
-            .add_message::<OpenKillWindowConfirm>()
             .init_resource::<Captured>()
             .add_systems(Update, apply_multiplexer_shortcuts)
             .add_systems(
@@ -225,9 +200,7 @@ mod tests {
                     capture_select_pane,
                     capture_resize_pane,
                     capture_zoom_pane,
-                    capture_confirm_kill_pane,
                     capture_new_window,
-                    capture_confirm_kill_window,
                     capture_select_window,
                     capture_rename_window,
                 )
@@ -235,6 +208,12 @@ mod tests {
             )
             .add_observer(|ev: On<SplitPaneRequest>, mut captured: ResMut<Captured>| {
                 captured.split_targets.push((ev.pane, ev.axis));
+            })
+            .add_observer(|ev: On<KillPaneRequest>, mut captured: ResMut<Captured>| {
+                captured.killed_panes.push(ev.pane);
+            })
+            .add_observer(|ev: On<KillWindowRequest>, mut captured: ResMut<Captured>| {
+                captured.killed_windows.push(ev.window);
             });
         app
     }
@@ -323,14 +302,14 @@ mod tests {
     }
 
     #[test]
-    fn kill_pane_shortcut_opens_confirm_for_focused_pane() {
+    fn kill_pane_shortcut_triggers_kill_pane_request_for_focused_pane() {
         let mut app = test_app();
         let pane = app.world_mut().spawn_empty().id();
         write_shortcut(&mut app, Shortcut::KillPane, Some(pane));
         assert_eq!(
-            app.world().resource::<Captured>().confirm_kill_pane,
+            app.world().resource::<Captured>().killed_panes,
             vec![pane],
-            "KillPane must open the confirm prompt for the focused pane, not close it directly"
+            "KillPane must trigger KillPaneRequest for the focused pane immediately — no confirm prompt"
         );
     }
 
@@ -338,12 +317,7 @@ mod tests {
     fn kill_pane_shortcut_with_no_focus_is_noop() {
         let mut app = test_app();
         write_shortcut(&mut app, Shortcut::KillPane, None);
-        assert!(
-            app.world()
-                .resource::<Captured>()
-                .confirm_kill_pane
-                .is_empty()
-        );
+        assert!(app.world().resource::<Captured>().killed_panes.is_empty());
     }
 
     #[test]
@@ -354,14 +328,14 @@ mod tests {
     }
 
     #[test]
-    fn kill_window_shortcut_opens_confirm_for_active_window() {
+    fn kill_window_shortcut_triggers_kill_window_request_for_active_window() {
         let mut app = test_app();
         let window = app.world_mut().spawn(ActiveMultiplexerWindow).id();
         write_shortcut(&mut app, Shortcut::KillWindow, None);
         assert_eq!(
-            app.world().resource::<Captured>().confirm_kill_window,
+            app.world().resource::<Captured>().killed_windows,
             vec![window],
-            "KillWindow must open the confirm prompt for the active window"
+            "KillWindow must trigger KillWindowRequest for the active window immediately — no confirm prompt"
         );
     }
 
@@ -369,12 +343,7 @@ mod tests {
     fn kill_window_shortcut_with_no_active_window_is_noop() {
         let mut app = test_app();
         write_shortcut(&mut app, Shortcut::KillWindow, None);
-        assert!(
-            app.world()
-                .resource::<Captured>()
-                .confirm_kill_window
-                .is_empty()
-        );
+        assert!(app.world().resource::<Captured>().killed_windows.is_empty());
     }
 
     #[test]
@@ -415,9 +384,9 @@ mod tests {
         assert!(c.select_pane.is_empty());
         assert!(c.resize_pane.is_empty());
         assert_eq!(c.zoom_pane, 0);
-        assert!(c.confirm_kill_pane.is_empty());
+        assert!(c.killed_panes.is_empty());
         assert_eq!(c.new_window, 0);
-        assert!(c.confirm_kill_window.is_empty());
+        assert!(c.killed_windows.is_empty());
         assert!(c.select_window.is_empty());
         assert_eq!(c.rename_window, 0);
     }
