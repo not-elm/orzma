@@ -73,6 +73,15 @@ impl RenameState {
         }
     }
 
+    /// Builds a prompt renaming `target` with a placeholder name and a fresh
+    /// `ModalKeys` — a fixture for tests that only need `RenameState` to be
+    /// present (e.g. other input gates' "a modal is open" tests), not its
+    /// exact text or keyboard cursor.
+    #[cfg(test)]
+    pub(crate) fn renaming(target: Entity) -> Self {
+        Self::new(target, "build".to_string(), ModalKeys::default())
+    }
+
     /// Appends committed IME text to the edit buffer (`read_ime_events`
     /// routes commits here while this prompt owns the keyboard).
     pub(crate) fn append(&mut self, s: &str) {

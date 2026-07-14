@@ -200,7 +200,6 @@ mod tests {
         test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
     };
     use crate::surface::OrzmaTerminal;
-    use crate::ui::multiplexer::modal::ModalKeys;
     use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
@@ -370,11 +369,7 @@ mod tests {
             Shortcut::ZoomPane,
         ));
         let term = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
-        app.world_mut().insert_resource(RenameState::new(
-            term,
-            "build".to_string(),
-            ModalKeys::default(),
-        ));
+        app.world_mut().insert_resource(RenameState::renaming(term));
         press_key(&mut app, KeyCode::KeyW, Key::Character("w".into()));
         app.update();
         assert_eq!(
@@ -396,11 +391,7 @@ mod tests {
             Shortcut::Paste,
         ));
         let term = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
-        app.world_mut().insert_resource(RenameState::new(
-            term,
-            "build".to_string(),
-            ModalKeys::default(),
-        ));
+        app.world_mut().insert_resource(RenameState::renaming(term));
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::SuperLeft);

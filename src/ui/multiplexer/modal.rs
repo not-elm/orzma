@@ -1,6 +1,9 @@
 //! Shared modal-prompt building blocks for the rename prompt: the
-//! chord-modifier filter, the keys-since-open intake (`ModalKeys`), and the
-//! bottom-bar UI helpers. Kept generic so a future modal can reuse them.
+//! keys-since-open intake (`ModalKeys`, which filters held chord modifiers)
+//! and the bottom-bar UI helpers. `ModalKeys` and the bar helpers are kept
+//! generic so a future modal can reuse them; the keyboard-ownership check
+//! itself lives inline at each gate site (`rename.is_some()`) now that only
+//! one modal exists.
 
 use crate::font::TerminalUiFont;
 use bevy::ecs::message::MessageCursor;
@@ -12,21 +15,6 @@ use bevy::prelude::*;
 const MODAL_BAR_FG: Color = Color::srgb(0.95, 0.95, 0.95);
 /// Font size of every modal bottom bar's text.
 const MODAL_BAR_FONT_SIZE_PX: f32 = 12.0;
-
-/// Whether a non-Shift chord modifier (Cmd / Ctrl / Alt) is held. A chord
-/// like Cmd+Y is a command, not an answer or a typed character, so an open
-/// prompt must ignore the key press it rides on. Shift is deliberately
-/// excluded — `Y` and capitalized window names are legitimate prompt input.
-fn chord_modifier_held(keys: &ButtonInput<KeyCode>) -> bool {
-    keys.any_pressed([
-        KeyCode::SuperLeft,
-        KeyCode::SuperRight,
-        KeyCode::ControlLeft,
-        KeyCode::ControlRight,
-        KeyCode::AltLeft,
-        KeyCode::AltRight,
-    ])
-}
 
 /// A modal prompt's keyboard intake: a cursor into the shared
 /// `Messages<KeyboardInput>` buffer, positioned at open time past everything
@@ -128,4 +116,19 @@ pub(super) fn show_bar_with_text<M: Component>(
             text.0 = content.clone();
         }
     }
+}
+
+/// Whether a non-Shift chord modifier (Cmd / Ctrl / Alt) is held. A chord
+/// like Cmd+Y is a command, not an answer or a typed character, so an open
+/// prompt must ignore the key press it rides on. Shift is deliberately
+/// excluded — `Y` and capitalized window names are legitimate prompt input.
+fn chord_modifier_held(keys: &ButtonInput<KeyCode>) -> bool {
+    keys.any_pressed([
+        KeyCode::SuperLeft,
+        KeyCode::SuperRight,
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+        KeyCode::AltLeft,
+        KeyCode::AltRight,
+    ])
 }

@@ -6,9 +6,8 @@
 use crate::input::shortcuts::{ShortcutMessage, ShortcutSet};
 use crate::multiplexer::layout::SplitAxis;
 use crate::multiplexer::request::{
-    KillPaneRequest, KillWindowRequest, NewWindowRequest, RenameWindowRequest,
-    ResizePaneRequest, SelectPaneRequest, SelectWindowRequest, SplitPaneRequest, WindowSelect,
-    ZoomPaneRequest,
+    KillPaneRequest, KillWindowRequest, NewWindowRequest, RenameWindowRequest, ResizePaneRequest,
+    SelectPaneRequest, SelectWindowRequest, SplitPaneRequest, WindowSelect, ZoomPaneRequest,
 };
 use crate::multiplexer::window::ActiveMultiplexerWindow;
 use bevy::ecs::system::SystemParam;
@@ -37,9 +36,7 @@ impl Plugin for MultiplexerShortcutPlugin {
 }
 
 /// The multiplexer request-message writers `apply_multiplexer_shortcuts` fans
-/// out to, bundled for signature tidiness (six writers plus `Commands`, a
-/// reader, and a query — no longer near Bevy's system-parameter limit, but
-/// the bundle keeps the applier's signature readable).
+/// out to, bundled to keep its signature short.
 #[derive(SystemParam)]
 struct MultiplexerRequests<'w> {
     select_pane: MessageWriter<'w, SelectPaneRequest>,
@@ -130,7 +127,6 @@ fn apply_multiplexer_shortcuts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::multiplexer::request::{KillPaneRequest, KillWindowRequest};
     use orzma_configs::shortcuts::PaneDirection;
 
     #[derive(Resource, Default)]
@@ -212,9 +208,11 @@ mod tests {
             .add_observer(|ev: On<KillPaneRequest>, mut captured: ResMut<Captured>| {
                 captured.killed_panes.push(ev.pane);
             })
-            .add_observer(|ev: On<KillWindowRequest>, mut captured: ResMut<Captured>| {
-                captured.killed_windows.push(ev.window);
-            });
+            .add_observer(
+                |ev: On<KillWindowRequest>, mut captured: ResMut<Captured>| {
+                    captured.killed_windows.push(ev.window);
+                },
+            );
         app
     }
 
