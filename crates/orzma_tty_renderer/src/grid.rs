@@ -18,6 +18,12 @@ impl Plugin for TerminalGridPlugin {
 
 fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGrid>) {
     let Ok(mut grid) = terminals.get_mut(snap.entity) else {
+        debug!(
+            entity = ?snap.entity,
+            cols = snap.cols,
+            rows = snap.rows,
+            "FrameSnapshot dropped: entity has no TerminalGrid (render bundle not yet injected)"
+        );
         return;
     };
     grid.cols = snap.cols;
@@ -43,6 +49,10 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
 
 fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
     let Ok(mut grid) = terminals.get_mut(delta.entity) else {
+        debug!(
+            entity = ?delta.entity,
+            "FrameDelta dropped: entity has no TerminalGrid (render bundle not yet injected)"
+        );
         return;
     };
     grid.cursor = Some(delta.cursor.clone());

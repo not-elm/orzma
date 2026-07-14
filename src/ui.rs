@@ -5,12 +5,13 @@ use crate::ui::root::OrzmaUiRootPlugin;
 use bevy::prelude::*;
 
 mod ime_overlay;
+pub(crate) mod multiplexer;
 pub mod root;
-mod shell_surface;
 mod vi_mode_indicator;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup, never
-/// despawned. Hosts the `ShellSurfaceUi` subtree as a child.
+/// despawned. Hosts the multiplexer UI subtree (window bar + workspace) as a
+/// child.
 #[derive(Component)]
 pub struct UiRoot;
 
@@ -21,7 +22,7 @@ impl Plugin for OrzmaUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             OrzmaUiRootPlugin,
-            shell_surface::ShellSurfacePlugin,
+            multiplexer::MultiplexerUiPlugin,
             ime_overlay::ImeOverlayPlugin,
             vi_mode_indicator::ViModeIndicatorPlugin,
         ));

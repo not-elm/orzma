@@ -12,6 +12,7 @@ use crate::{
         keyboard::bevy_key_to_terminal_key,
         shortcuts::{ShortcutMessage, ShortcutSet, TypeMessage, ViModeMessage},
     },
+    ui::multiplexer::rename_prompt::RenameState,
 };
 use bevy::prelude::*;
 use orzma_configs::shortcuts::Shortcut;
@@ -45,8 +46,8 @@ impl Plugin for ShortcutsApplyPlugin {
 /// (direct paste fires outside vi mode; a leader paste fires unconditionally),
 /// and copy (fires unconditionally — vi mode included; no-selection is a
 /// no-op downstream). `Quit` / `ReleaseWebviewFocus` are handled upstream in
-/// `resolve_key_effects`; pane/window actions are no-ops until the built-in
-/// multiplexer lands.
+/// `resolve_key_effects`; pane/window actions are handled by the multiplexer
+/// applier (`input/shortcuts/multiplexer.rs`).
 /// Registered in `ShortcutSet::Apply`, gated on `on_message::<ShortcutMessage>`.
 fn apply_shortcuts(mut commands: Commands, mut shortcuts: MessageReader<ShortcutMessage>) {
     for msg in shortcuts.read() {
@@ -94,8 +95,24 @@ fn apply_vi_mode(mut commands: Commands, mut vi_mode: MessageReader<ViModeMessag
 
 /// Types raw keys from `TypeMessage` into the focused terminal as
 /// `TerminalKeyInput`. Runs after the shortcut/copy appliers. Registered in
-/// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>`.
-fn apply_type(mut commands: Commands, mut type_keys: MessageReader<TypeMessage>) {
+/// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>`. While the
+/// rename prompt is open, this DRAINS `TypeMessage`s instead of typing them,
+/// so a character typed into the rename prompt never leaks into
+/// the terminal's PTY.
+fn apply_type(
+    mut commands: Commands,
+    mut type_keys: MessageReader<TypeMessage>,
+    rename: Option<Res<RenameState>>,
+) {
+    // NOTE: while the rename prompt owns the keyboard, DRAIN (clear)
+    // TypeMessages rather than gating this system off with run_if — a run_if
+    // would leave the typed key buffered on apply_type's reader cursor and
+    // inject it into the PTY on the next ungated frame (the reader cursor
+    // only advances when the body runs).
+    if rename.is_some() {
+        type_keys.clear();
+        return;
+    }
     for msg in type_keys.read() {
         if let Some(entity) = msg.focused
             && let Some(key) = bevy_key_to_terminal_key(&msg.logical)
@@ -360,6 +377,96 @@ mod tests {
             app.world().resource::<Captured>().vi_mode,
             1,
             "EnterViMode must fire unconditionally, even when vi mode is already active"
+        );
+    }
+
+    /// Builds an app running the real `ShortcutsApplyPlugin` registration (not
+    /// a hand-rolled re-registration of `apply_type`), so a future change to
+    /// how the plugin gates `apply_type` is caught by these tests too. Proves
+    /// typing is suppressed while the rename prompt is open, and that a typed
+    /// key never leaks into a later frame.
+    fn build_modal_gated_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ShortcutMessage>()
+            .add_message::<ViModeMessage>()
+            .add_message::<TypeMessage>()
+            .init_resource::<Captured>()
+            .add_plugins(ShortcutsApplyPlugin)
+            .add_observer(|ev: On<TerminalKeyInput>, mut c: ResMut<Captured>| {
+                c.keys.push(ev.key.clone());
+            });
+        app
+    }
+
+    #[test]
+    fn apply_type_suppressed_while_rename_state_present() {
+        let mut app = build_modal_gated_app();
+        let term = app.world_mut().spawn(OrzmaTerminal).id();
+        app.world_mut().insert_resource(RenameState::renaming(term));
+        app.world_mut().write_message(TypeMessage {
+            logical: Key::Character("x".into()),
+            focused: Some(term),
+            mods: Modifiers::default(),
+        });
+        app.update();
+        assert!(
+            app.world().resource::<Captured>().keys.is_empty(),
+            "apply_type must be suppressed while a RenameState prompt is open, so a \
+             character typed into the rename prompt never reaches the terminal's PTY"
+        );
+    }
+
+    #[test]
+    fn apply_type_runs_normally_without_modal() {
+        let mut app = build_modal_gated_app();
+        let term = app.world_mut().spawn(OrzmaTerminal).id();
+        app.world_mut().write_message(TypeMessage {
+            logical: Key::Character("y".into()),
+            focused: Some(term),
+            mods: Modifiers::default(),
+        });
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().keys,
+            vec![TerminalKey::Text("y".into())],
+            "apply_type must run normally when no modal prompt is open"
+        );
+    }
+
+    /// Reproduces the cross-frame key-leak race: a key typed while
+    /// `RenameState` is present must be drained on its own frame, not merely
+    /// suppressed, so it cannot resurface once `RenameState` is removed and a
+    /// later key is typed. A `run_if`-only gate fails this test because the
+    /// suppressed frame never advances `apply_type`'s `MessageReader` cursor,
+    /// leaving the typed key buffered for the next ungated frame.
+    #[test]
+    fn modal_key_does_not_leak_into_pty_on_next_frame() {
+        let mut app = build_modal_gated_app();
+        let term = app.world_mut().spawn(OrzmaTerminal).id();
+        app.world_mut().insert_resource(RenameState::renaming(term));
+        app.world_mut().write_message(TypeMessage {
+            logical: Key::Character("y".into()),
+            focused: Some(term),
+            mods: Modifiers::default(),
+        });
+        app.update();
+        assert!(
+            app.world().resource::<Captured>().keys.is_empty(),
+            "the typed key must be drained on the modal frame, not deferred"
+        );
+
+        app.world_mut().remove_resource::<RenameState>();
+        app.world_mut().write_message(TypeMessage {
+            logical: Key::Character("x".into()),
+            focused: Some(term),
+            mods: Modifiers::default(),
+        });
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().keys,
+            vec![TerminalKey::Text("x".into())],
+            "only the new key must reach the PTY; the drained modal y must not leak in"
         );
     }
 }

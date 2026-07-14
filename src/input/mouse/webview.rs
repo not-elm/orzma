@@ -8,8 +8,8 @@
 //! reach them; this manual forwarding is the only path that delivers clicks to
 //! them.
 
-use crate::input::mouse::cell_dims;
 use crate::surface::OrzmaTerminal;
+use crate::surface::geometry::cell_dims;
 use crate::surface::geometry::phys_to_pane_local;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;

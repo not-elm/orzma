@@ -5,7 +5,7 @@
 //! `apply_wheel_action`. Registered by `MouseWheelInputPlugin`; skips
 //! `MouseDisabled` surfaces.
 
-use super::{TerminalSurfaces, cell_context_for, cell_dims, hit_candidates, on_any_mouse_message};
+use super::{TerminalSurfaces, cell_context_for, hit_candidates, on_any_mouse_message};
 use crate::action::terminal::{TerminalMouseWrite, TerminalViewportScroll};
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
@@ -13,6 +13,7 @@ use crate::input::keyboard::current_terminal_modifiers;
 use crate::input::mouse::gesture::{
     WheelAccumulator, accumulate_notches, lock_dominant_axis, wheel_delta_cells,
 };
+use crate::surface::geometry::cell_dims;
 use crate::surface::geometry::topmost_surface_at;
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;

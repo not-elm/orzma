@@ -361,163 +361,163 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub enter_vi_mode: Option<Binding>,
-    /// Focus the pane to the left (no effect until the built-in multiplexer lands).
+    /// Focus the pane to the left.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_left_pane: Option<Binding>,
-    /// Focus the pane below (no effect until the built-in multiplexer lands).
+    /// Focus the pane below.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_down_pane: Option<Binding>,
-    /// Focus the pane above (no effect until the built-in multiplexer lands).
+    /// Focus the pane above.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_up_pane: Option<Binding>,
-    /// Focus the pane to the right (no effect until the built-in multiplexer lands).
+    /// Focus the pane to the right.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_right_pane: Option<Binding>,
-    /// Split the active pane side-by-side — vertical divider, tmux `-h` (no effect until the built-in multiplexer lands).
+    /// Split the active pane side-by-side — vertical divider, tmux `-h`.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub split_vertical_pane: Option<Binding>,
-    /// Split the active pane stacked — horizontal divider, tmux `-v` (no effect until the built-in multiplexer lands).
+    /// Split the active pane stacked — horizontal divider, tmux `-v`.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub split_horizontal_pane: Option<Binding>,
-    /// Kill the active pane, after a confirm prompt (no effect until the built-in multiplexer lands).
+    /// Kill the active pane immediately.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub kill_pane: Option<Binding>,
-    /// Toggle zoom on the active pane (no effect until the built-in multiplexer lands).
+    /// Toggle zoom on the active pane.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub zoom_pane: Option<Binding>,
-    /// Resize the active pane's border left by 5 cells, repeatable (no effect until the built-in multiplexer lands).
+    /// Resize the active pane's border left by 5 cells, repeatable.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_left_pane: Option<Binding>,
-    /// Resize the active pane's border down by 5 cells, repeatable (no effect until the built-in multiplexer lands).
+    /// Resize the active pane's border down by 5 cells, repeatable.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_down_pane: Option<Binding>,
-    /// Resize the active pane's border up by 5 cells, repeatable (no effect until the built-in multiplexer lands).
+    /// Resize the active pane's border up by 5 cells, repeatable.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_up_pane: Option<Binding>,
-    /// Resize the active pane's border right by 5 cells, repeatable (no effect until the built-in multiplexer lands).
+    /// Resize the active pane's border right by 5 cells, repeatable.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_right_pane: Option<Binding>,
-    /// Open a new window (no effect until the built-in multiplexer lands).
+    /// Open a new window.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub new_window: Option<Binding>,
-    /// Kill the active window, after a confirm prompt (no effect until the built-in multiplexer lands).
+    /// Kill the active window immediately.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub kill_window: Option<Binding>,
-    /// Switch to the next window (no effect until the built-in multiplexer lands).
+    /// Switch to the next window.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub next_window: Option<Binding>,
-    /// Switch to the previous window (no effect until the built-in multiplexer lands).
+    /// Switch to the previous window.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub previous_window: Option<Binding>,
-    /// Switch to the window at tmux index 0 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at tmux index 0.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_0: Option<Binding>,
-    /// Switch to the window at tmux index 1 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at tmux index 1.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_1: Option<Binding>,
-    /// Switch to the window at tmux index 2 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at tmux index 2.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_2: Option<Binding>,
-    /// Switch to the window at tmux index 3 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at tmux index 3.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_3: Option<Binding>,
-    /// Switch to the window at tmux index 4 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at tmux index 4.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_4: Option<Binding>,
-    /// Switch to the window at tmux index 5 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at tmux index 5.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_5: Option<Binding>,
-    /// Switch to the window at tmux index 6 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at tmux index 6.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_6: Option<Binding>,
-    /// Switch to the window at tmux index 7 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at tmux index 7.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_7: Option<Binding>,
-    /// Switch to the window at tmux index 8 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at tmux index 8.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_8: Option<Binding>,
-    /// Switch to the window at tmux index 9 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at tmux index 9.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_9: Option<Binding>,
-    /// Open the rename prompt for the active window (no effect until the built-in multiplexer lands).
+    /// Open the rename prompt for the active window.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
@@ -773,8 +773,7 @@ pub enum SplitOrientation {
     Horizontal,
 }
 
-/// Shortcut actions. GUI-local actions plus the pane/window operations
-/// (the latter have no effect until the built-in multiplexer lands).
+/// Shortcut actions. GUI-local actions plus the pane/window operations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shortcut {
     /// Paste the system clipboard into the active terminal.
@@ -787,27 +786,27 @@ pub enum Shortcut {
     Quit,
     /// Enters vi mode: Alacritty vi mode on the focused terminal.
     EnterViMode,
-    /// Focuses the neighbor pane in the given direction (no effect until the built-in multiplexer lands).
+    /// Focuses the neighbor pane in the given direction.
     SelectPane(PaneDirection),
-    /// Splits the active pane (no effect until the built-in multiplexer lands).
+    /// Splits the active pane.
     SplitPane(SplitOrientation),
-    /// Kills the active pane after a confirm prompt (no effect until the built-in multiplexer lands).
+    /// Kills the active pane immediately.
     KillPane,
-    /// Toggles zoom on the active pane (no effect until the built-in multiplexer lands).
+    /// Toggles zoom on the active pane.
     ZoomPane,
-    /// Resizes the active pane's border in the given direction (no effect until the built-in multiplexer lands).
+    /// Resizes the active pane's border in the given direction.
     ResizePane(PaneDirection),
-    /// Opens a new window in the current session (no effect until the built-in multiplexer lands).
+    /// Opens a new window in the current session.
     NewWindow,
-    /// Kills the active window after a confirm prompt (no effect until the built-in multiplexer lands).
+    /// Kills the active window immediately.
     KillWindow,
-    /// Switches to the next window (no effect until the built-in multiplexer lands).
+    /// Switches to the next window.
     NextWindow,
-    /// Switches to the previous window (no effect until the built-in multiplexer lands).
+    /// Switches to the previous window.
     PreviousWindow,
-    /// Switches to the window with this tmux display index (no effect until the built-in multiplexer lands).
+    /// Switches to the window with this tmux display index.
     SelectWindow(u8),
-    /// Opens the rename prompt for the active window (no effect until the built-in multiplexer lands).
+    /// Opens the rename prompt for the active window.
     RenameWindow,
 }
 

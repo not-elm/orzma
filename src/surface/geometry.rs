@@ -6,6 +6,7 @@
 use bevy::ecs::entity::Entity;
 use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
+use orzma_tty_renderer::TerminalCellMetricsResource;
 
 /// Which half of a cell the pointer fell in (left vs. right of the midline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +60,16 @@ pub(crate) fn cell_at_local(
     let col = (col_floor + 1).min(cols as u32).max(1);
     let row = (row_floor + 1).min(rows as u32).max(1);
     (col, row, side_of(frac_x))
+}
+
+/// The physical-pixel cell pitch `(cell_w, cell_h)` from the shared metrics,
+/// floored and clamped to at least 1px — the one canonical form every
+/// cursor→cell and rect→cells conversion divides by.
+pub(crate) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
+    (
+        metrics.metrics.advance_phys.floor().max(1.0),
+        metrics.metrics.line_height_phys.floor().max(1.0),
+    )
 }
 
 /// Computes terminal dimensions in cells from physical pixel size.

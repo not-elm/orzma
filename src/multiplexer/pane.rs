@@ -1,0 +1,861 @@
+//! Multiplexer pane domain: the pane component, its cwd cache, the
+//! split-pane request observer, and the resize-pane request reader.
+
+pub(crate) mod exit;
+pub(crate) mod layout;
+pub(crate) mod spawn;
+
+use crate::input::focus::KeyboardFocused;
+use crate::multiplexer::bootstrap::{OrzmaTerminalConfig, WindowContainer};
+use crate::multiplexer::layout::{PaneRect, SplitAxis};
+use crate::multiplexer::pane::layout::PANE_GAP_PX;
+use crate::multiplexer::pane::spawn::{
+    MultiplexerPaneBundle, MultiplexerPaneSpawnOptions, insert_spawned_pane, spawn_pane_container,
+};
+use crate::multiplexer::request::{ResizePaneRequest, SplitPaneRequest, ZoomPaneRequest};
+use crate::multiplexer::window::{
+    ActiveMultiplexerWindow, MultiplexerLayoutComp, MultiplexerWindow,
+};
+use crate::surface::geometry::cell_dims;
+use bevy::prelude::*;
+use bevy::ui::ComputedNode;
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_webview::ControlPlaneHandle;
+use std::path::PathBuf;
+
+/// A multiplexer pane: a terminal surface owned by a window.
+#[derive(Component)]
+pub(crate) struct MultiplexerPane {
+    /// The window this pane belongs to.
+    pub window: Entity,
+}
+
+/// The pane's last OSC-7 reported cwd, used to seed a sibling's cwd on split.
+#[derive(Component, Default)]
+pub(crate) struct PaneCwd(pub Option<PathBuf>);
+
+/// Registers the split-pane observer and the resize/zoom request consumers.
+///
+/// Registers `ResizePaneRequest` / `ZoomPaneRequest` here (not only in the
+/// shortcut-applier plugin that writes them) so the `on_message` run
+/// conditions have a `Messages<T>` resource to read even when
+/// `MultiplexerPlugin` is exercised without the input plugins (as bootstrap
+/// tests do); `add_message` is idempotent, so this is a no-op when the
+/// shortcut-applier plugin already registered them.
+pub(in crate::multiplexer) struct PanePlugin;
+
+impl Plugin for PanePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<ResizePaneRequest>()
+            .add_message::<ZoomPaneRequest>()
+            .add_observer(on_split_pane)
+            .add_systems(
+                Update,
+                (
+                    resize_pane.run_if(on_message::<ResizePaneRequest>),
+                    zoom_pane.run_if(on_message::<ZoomPaneRequest>),
+                ),
+            );
+    }
+}
+
+/// Minimum pane extent, in cells, along a split's axis. Below this a
+/// resulting child pane would be illegibly small.
+const MIN_PANE_CELLS: f32 = 2.0;
+
+/// Observer: consumes `SplitPaneRequest`, splitting the target pane's leaf
+/// into two siblings along `axis` (spec §Data flow Split).
+///
+/// Rejects (a true no-op + warn: no PTY spawned, zoom untouched) a split
+/// whose UN-ZOOMED geometry would shrink either resulting child below
+/// `MIN_PANE_CELLS` cells. Otherwise spawns the new pane's PTY — shell from
+/// `OrzmaTerminalConfig` (the same override `ensure_bootstrap` honors), cwd
+/// seeded from the target's cached `PaneCwd`, env from `ControlPlaneHandle`
+/// — BEFORE mutating the tree, so a failed spawn leaves the layout
+/// untouched. On success, un-zooms the window, inserts the new leaf, moves
+/// the window's `active_pane` and `KeyboardFocused` (removing the marker
+/// from its previous holder in the same flush, mirroring `select_window`, so
+/// exactly one surface is ever focused), and parents the new pane
+/// under its OWN fresh pane container (never the target's), so the exit
+/// cascade's per-pane `ChildOf`-despawn (`pane/exit.rs`) never takes a
+/// surviving sibling down with it.
+fn on_split_pane(
+    ev: On<SplitPaneRequest>,
+    mut commands: Commands,
+    mut windows: Query<&mut MultiplexerWindow>,
+    mut layouts: Query<&mut MultiplexerLayoutComp>,
+    config: Res<OrzmaTerminalConfig>,
+    panes: Query<(&MultiplexerPane, &PaneCwd)>,
+    containers: Query<(Entity, &WindowContainer, &ComputedNode)>,
+    focused: Query<Entity, With<KeyboardFocused>>,
+    metrics: Option<Res<TerminalCellMetricsResource>>,
+    control: Option<Res<ControlPlaneHandle>>,
+) {
+    let target = ev.event_target();
+    let axis = ev.axis;
+    let Ok((pane, cwd)) = panes.get(target) else {
+        return;
+    };
+    let window = pane.window;
+    let Ok(mut layout) = layouts.get_mut(window) else {
+        return;
+    };
+    let Some((container, _, computed)) = containers.iter().find(|(_, c, _)| c.window == window)
+    else {
+        return;
+    };
+    let Some(metrics) = metrics else {
+        tracing::warn!("split requested before terminal cell metrics are available; ignoring");
+        return;
+    };
+
+    let mut unzoomed = layout.0.clone();
+    unzoomed.set_zoom(None);
+
+    let area = PaneRect::from_size(computed.size);
+    let (cell_w, cell_h) = cell_dims(&metrics);
+    let Some((_, rect)) = unzoomed
+        .rects(area, PANE_GAP_PX)
+        .into_iter()
+        .find(|(e, _)| *e == target)
+    else {
+        tracing::warn!(?target, "split target is not a leaf of its window's layout");
+        return;
+    };
+    let (extent, cell_px) = match axis {
+        SplitAxis::Vertical => (rect.w, cell_w),
+        SplitAxis::Horizontal => (rect.h, cell_h),
+    };
+    if split_would_underflow(extent, cell_px, PANE_GAP_PX) {
+        tracing::warn!(
+            ?target,
+            ?axis,
+            "split would shrink a pane below the minimum size; ignoring"
+        );
+        return;
+    }
+
+    let new_pane = commands.spawn_empty().id();
+    let env = control
+        .as_deref()
+        .map(|c| c.surface_env(new_pane).to_vec())
+        .unwrap_or_default();
+    match MultiplexerPaneBundle::spawn(MultiplexerPaneSpawnOptions {
+        shell: config.shell.clone(),
+        cwd: cwd.0.clone(),
+        env,
+    }) {
+        Ok(bundle) => {
+            unzoomed.split(target, new_pane, axis);
+            layout.0 = unzoomed;
+            if let Ok(mut w) = windows.get_mut(window) {
+                w.active_pane = new_pane;
+            }
+            for holder in focused.iter() {
+                commands.entity(holder).remove::<KeyboardFocused>();
+            }
+            let pane_container = spawn_pane_container(&mut commands, container);
+            insert_spawned_pane(
+                &mut commands,
+                new_pane,
+                window,
+                pane_container,
+                bundle,
+                control.as_deref(),
+            );
+        }
+        Err(e) => {
+            commands.entity(new_pane).despawn();
+            tracing::warn!(?e, ?target, ?axis, "failed to spawn split pane");
+        }
+    }
+}
+
+/// Whether splitting a pane whose extent (px) along the split axis is
+/// `extent_px` would shrink either resulting child below `MIN_PANE_CELLS`
+/// cells.
+///
+/// `MultiplexerLayout::split` always starts a new split at ratio 0.5, and
+/// `split_rect` subtracts one `gap_px` gutter before dividing the remainder
+/// evenly between the two children, so each child gets roughly
+/// `(extent_px - gap_px) / 2`. Requiring that to be at least
+/// `MIN_PANE_CELLS * cell_px` per child is equivalent to requiring
+/// `extent_px >= 2.0 * MIN_PANE_CELLS * cell_px + gap_px`.
+fn split_would_underflow(extent_px: f32, cell_px: f32, gap_px: f32) -> bool {
+    extent_px < 2.0 * MIN_PANE_CELLS * cell_px + gap_px
+}
+
+/// Fixed per-request resize step, as a fraction of the split axis extent.
+/// MVP: a constant step rather than acceleration or pixel-based dragging.
+const RESIZE_STEP_FRAC: f32 = 0.05;
+
+/// Minimum split ratio either side of a resize is clamped to, so a repeated
+/// resize toward one edge shrinks a pane down to a sliver but never past it.
+/// Shared with the mouse-drag resize in `crate::ui::multiplexer::divider_handle`.
+pub(crate) const MIN_PANE_FRAC: f32 = 0.05;
+
+/// `MessageReader<ResizePaneRequest>` consumer: grows or shrinks the active
+/// window's focused pane along the request's direction by a fixed
+/// `RESIZE_STEP_FRAC` step, via `MultiplexerLayout::resize` (already
+/// unit-tested at the layout level — this system only wires the message to
+/// the active window's focused pane).
+///
+/// Conditional mutation (rust.md change-detection rule): clones the layout
+/// once, applies every queued request to the clone, and writes it back
+/// through `DerefMut` only when any `resize` reported a real change, so a
+/// request whose direction has no matching-axis ancestor split (e.g.
+/// `Up`/`Down` on a vertical-only split) never spuriously trips
+/// `Changed<MultiplexerLayoutComp>`.
+///
+/// Gated `.run_if(on_message::<ResizePaneRequest>)`. Unlike `select_pane`,
+/// this never moves `active_pane`, so it needs no ordering relative to
+/// `sync_keyboard_focus_to_active_pane`; `apply_layout` (`PostUpdate`) picks
+/// up the ratio change on its own.
+fn resize_pane(
+    mut requests: MessageReader<ResizePaneRequest>,
+    mut window: Query<
+        (&MultiplexerWindow, &mut MultiplexerLayoutComp),
+        With<ActiveMultiplexerWindow>,
+    >,
+) {
+    let Ok((window_state, mut layout)) = window.single_mut() else {
+        return;
+    };
+    let focused = window_state.active_pane;
+    let mut next = layout.0.clone();
+    let mut changed = false;
+    for msg in requests.read() {
+        changed |= next.resize(focused, msg.dir, RESIZE_STEP_FRAC, MIN_PANE_FRAC);
+    }
+    if changed {
+        layout.0 = next;
+    }
+}
+
+/// `MessageReader<ZoomPaneRequest>` consumer: toggles zoom on the active
+/// window's focused pane via `MultiplexerLayout::set_zoom`/`zoomed` (already
+/// unit-tested at the layout level — this system only wires the message to
+/// the active window's focused pane).
+///
+/// Each request writes the toggled state unconditionally — a toggle differs
+/// from the current state by construction, so every write is a real change
+/// and `Changed<MultiplexerLayoutComp>` stays honest without a guard.
+///
+/// Gated `.run_if(on_message::<ZoomPaneRequest>)`. Like `resize_pane`, this
+/// never moves `active_pane`, so it needs no ordering relative to
+/// `sync_keyboard_focus_to_active_pane`; `apply_layout` (`PostUpdate`) picks
+/// up the zoom change on its own.
+fn zoom_pane(
+    mut requests: MessageReader<ZoomPaneRequest>,
+    mut window: Query<
+        (&MultiplexerWindow, &mut MultiplexerLayoutComp),
+        With<ActiveMultiplexerWindow>,
+    >,
+) {
+    let Ok((window_state, mut layout)) = window.single_mut() else {
+        return;
+    };
+    let focused = window_state.active_pane;
+    for _ in requests.read() {
+        let next = if layout.0.zoomed() == Some(focused) {
+            None
+        } else {
+            Some(focused)
+        };
+        layout.0.set_zoom(next);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::multiplexer::layout::MultiplexerLayout;
+    use crate::multiplexer::pane::layout::active_layout_tree_changed;
+    use orzma_configs::shortcuts::PaneDirection;
+
+    #[test]
+    fn pane_component_roundtrips() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let window = app.world_mut().spawn_empty().id();
+        let pane = app
+            .world_mut()
+            .spawn((MultiplexerPane { window }, PaneCwd::default()))
+            .id();
+        let p = app.world().entity(pane).get::<MultiplexerPane>().unwrap();
+        assert_eq!(p.window, window);
+        let cwd = app.world().entity(pane).get::<PaneCwd>().unwrap();
+        assert_eq!(cwd.0, None);
+    }
+
+    #[test]
+    fn split_would_underflow_below_two_cells() {
+        // cell_px = 8.0, gap_px = 1.0 -> threshold = 2.0 * 2.0 * 8.0 + 1.0 = 33.0
+        assert!(split_would_underflow(32.0, 8.0, 1.0));
+    }
+
+    #[test]
+    fn split_would_underflow_at_or_above_threshold_is_false() {
+        assert!(!split_would_underflow(33.0, 8.0, 1.0));
+        assert!(!split_would_underflow(64.0, 8.0, 1.0));
+    }
+
+    fn cell_metrics() -> TerminalCellMetricsResource {
+        use orzma_tty_renderer::CellMetrics;
+        TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 16,
+        }
+    }
+
+    /// Spawns a one-pane window: a window entity, its `WindowContainer` (with
+    /// a `ComputedNode` of `area_size`), a dedicated pane container, and the
+    /// pane itself (with `PaneCwd::default()`), wired exactly like
+    /// `ensure_bootstrap` and `on_split_pane` wire a real pane. Returns
+    /// `(window, window_container, pane)`.
+    fn spawn_one_pane_window(app: &mut App, area_size: Vec2) -> (Entity, Entity, Entity) {
+        let world = app.world_mut();
+        let window = world.spawn_empty().id();
+        let window_container = world
+            .spawn((
+                WindowContainer { window },
+                ComputedNode {
+                    size: area_size,
+                    ..ComputedNode::DEFAULT
+                },
+            ))
+            .id();
+        let pane_container = world.spawn(ChildOf(window_container)).id();
+        let pane = world
+            .spawn((
+                MultiplexerPane { window },
+                PaneCwd::default(),
+                ChildOf(pane_container),
+            ))
+            .id();
+        world.entity_mut(window).insert((
+            MultiplexerWindow {
+                index: 0,
+                name: None,
+                active_pane: pane,
+            },
+            MultiplexerLayoutComp(MultiplexerLayout::new(pane)),
+        ));
+        (window, window_container, pane)
+    }
+
+    fn build_app(metrics: TerminalCellMetricsResource, shell: Option<String>) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(metrics);
+        app.insert_resource(OrzmaTerminalConfig { shell });
+        app.add_observer(on_split_pane);
+        app
+    }
+
+    #[test]
+    fn split_below_minimum_size_is_a_noop_and_spawns_no_pane() {
+        let mut app = build_app(cell_metrics(), None);
+        // area.w = 20.0 is below the vertical-split threshold of 33.0 for
+        // this cell/gap combination, so the split must be rejected.
+        let (window, _, pane) = spawn_one_pane_window(&mut app, Vec2::new(20.0, 600.0));
+
+        app.world_mut().trigger(SplitPaneRequest {
+            pane,
+            axis: SplitAxis::Vertical,
+        });
+        app.world_mut().flush();
+        app.update();
+
+        let world = app.world_mut();
+        let mut panes = world.query_filtered::<(), With<MultiplexerPane>>();
+        assert_eq!(
+            panes.iter(world).count(),
+            1,
+            "a too-small split must not spawn a new pane"
+        );
+        assert_eq!(
+            world
+                .get::<MultiplexerLayoutComp>(window)
+                .unwrap()
+                .0
+                .leaves()
+                .len(),
+            1,
+            "the layout tree must be unchanged"
+        );
+    }
+
+    #[test]
+    fn split_success_spawns_sibling_and_moves_active_pane() {
+        let mut app = build_app(cell_metrics(), None);
+        let (window, window_container, target) =
+            spawn_one_pane_window(&mut app, Vec2::new(800.0, 600.0));
+        let target_parent = app
+            .world()
+            .entity(target)
+            .get::<ChildOf>()
+            .unwrap()
+            .parent();
+
+        app.world_mut().trigger(SplitPaneRequest {
+            pane: target,
+            axis: SplitAxis::Vertical,
+        });
+        app.world_mut().flush();
+        app.update();
+
+        let world = app.world_mut();
+        let mut panes = world.query_filtered::<Entity, With<MultiplexerPane>>();
+        let all_panes: Vec<Entity> = panes.iter(world).collect();
+        assert_eq!(all_panes.len(), 2, "split must spawn exactly one sibling");
+        let new_pane = *all_panes.iter().find(|p| **p != target).unwrap();
+
+        let layout = &world.get::<MultiplexerLayoutComp>(window).unwrap().0;
+        assert_eq!(layout.leaves().len(), 2, "the tree must gain a leaf");
+        assert!(layout.contains(target));
+        assert!(layout.contains(new_pane));
+
+        assert_eq!(
+            world.get::<MultiplexerWindow>(window).unwrap().active_pane,
+            new_pane,
+            "active_pane must move to the new sibling"
+        );
+        assert!(
+            world.entity(new_pane).contains::<KeyboardFocused>(),
+            "the new pane must be inserted with KeyboardFocused"
+        );
+
+        let new_parent = world.entity(new_pane).get::<ChildOf>().unwrap().parent();
+        assert_ne!(
+            new_parent, target_parent,
+            "the new pane must get its own pane container, not share the target's"
+        );
+        let new_parents_parent = world.entity(new_parent).get::<ChildOf>().unwrap().parent();
+        assert_eq!(
+            new_parents_parent, window_container,
+            "the new pane container must be parented under the window's WindowContainer"
+        );
+    }
+
+    #[test]
+    fn rejected_split_keeps_zoom() {
+        let mut app = build_app(cell_metrics(), None);
+        // area.w = 20.0 is below the vertical-split threshold of 33.0, so the
+        // split must be rejected — and the rejection must be a true no-op,
+        // leaving the zoom state untouched.
+        let (window, _, pane) = spawn_one_pane_window(&mut app, Vec2::new(20.0, 600.0));
+        app.world_mut()
+            .get_mut::<MultiplexerLayoutComp>(window)
+            .unwrap()
+            .0
+            .set_zoom(Some(pane));
+
+        app.world_mut().trigger(SplitPaneRequest {
+            pane,
+            axis: SplitAxis::Vertical,
+        });
+        app.world_mut().flush();
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<MultiplexerLayoutComp>(window)
+                .unwrap()
+                .0
+                .zoomed(),
+            Some(pane),
+            "a rejected split must not clear the zoom state"
+        );
+    }
+
+    #[test]
+    fn successful_split_unzooms_the_window() {
+        let mut app = build_app(cell_metrics(), None);
+        let (window, _, pane) = spawn_one_pane_window(&mut app, Vec2::new(800.0, 600.0));
+        app.world_mut()
+            .get_mut::<MultiplexerLayoutComp>(window)
+            .unwrap()
+            .0
+            .set_zoom(Some(pane));
+
+        app.world_mut().trigger(SplitPaneRequest {
+            pane,
+            axis: SplitAxis::Vertical,
+        });
+        app.world_mut().flush();
+        app.update();
+
+        let layout = &app.world().get::<MultiplexerLayoutComp>(window).unwrap().0;
+        assert_eq!(layout.zoomed(), None, "a successful split un-zooms");
+        assert_eq!(layout.leaves().len(), 2);
+    }
+
+    #[test]
+    fn split_moves_keyboard_focus_from_target_to_new_pane() {
+        let mut app = build_app(cell_metrics(), None);
+        let (_, _, target) = spawn_one_pane_window(&mut app, Vec2::new(800.0, 600.0));
+        app.world_mut().entity_mut(target).insert(KeyboardFocused);
+
+        app.world_mut().trigger(SplitPaneRequest {
+            pane: target,
+            axis: SplitAxis::Vertical,
+        });
+        app.world_mut().flush();
+        app.update();
+
+        assert!(
+            !app.world().entity(target).contains::<KeyboardFocused>(),
+            "the split target must lose KeyboardFocused in the same flush the new pane gains it"
+        );
+        let world = app.world_mut();
+        let mut focused = world.query_filtered::<Entity, With<KeyboardFocused>>();
+        assert_eq!(
+            focused.iter(world).count(),
+            1,
+            "exactly one KeyboardFocused surface after a split"
+        );
+    }
+
+    #[test]
+    fn split_with_unspawnable_shell_leaves_tree_unchanged() {
+        // NOTE: on macOS, `spawn_login_shell` wraps the shell in `/usr/bin/login`
+        // (an executable that exists), so a merely-nonexistent path fails only
+        // inside the grandchild `zsh -fc "exec ..."`, not synchronously — a plain
+        // bad path here would make this test flake between "spawned" and "not
+        // spawned" depending on platform. A NUL byte breaks the `CString`
+        // conversion `std::process::Command::spawn` performs on every arg
+        // (including the embedded exec string) before it forks, so the PTY spawn
+        // fails synchronously and portably.
+        let mut app = build_app(
+            cell_metrics(),
+            Some("/nonexistent/shell\0-does-not-exist".into()),
+        );
+        let (window, _, target) = spawn_one_pane_window(&mut app, Vec2::new(800.0, 600.0));
+
+        app.world_mut().trigger(SplitPaneRequest {
+            pane: target,
+            axis: SplitAxis::Vertical,
+        });
+        app.world_mut().flush();
+        app.update();
+
+        let world = app.world_mut();
+        let mut panes = world.query_filtered::<(), With<MultiplexerPane>>();
+        assert_eq!(
+            panes.iter(world).count(),
+            1,
+            "a failed PTY spawn must not leave a new pane behind"
+        );
+        assert_eq!(
+            world
+                .get::<MultiplexerLayoutComp>(window)
+                .unwrap()
+                .0
+                .leaves()
+                .len(),
+            1,
+            "the layout tree must be unchanged when the spawn fails"
+        );
+        assert_eq!(
+            world.get::<MultiplexerWindow>(window).unwrap().active_pane,
+            target,
+            "active_pane must be unchanged when the spawn fails"
+        );
+    }
+
+    #[test]
+    fn split_pane_container_is_absolutely_positioned_at_origin() {
+        let mut app = build_app(cell_metrics(), None);
+        let (_, _, target) = spawn_one_pane_window(&mut app, Vec2::new(800.0, 600.0));
+
+        app.world_mut().trigger(SplitPaneRequest {
+            pane: target,
+            axis: SplitAxis::Vertical,
+        });
+        app.world_mut().flush();
+        app.update();
+
+        let world = app.world_mut();
+        let mut panes = world.query_filtered::<Entity, With<MultiplexerPane>>();
+        let new_pane = panes.iter(world).find(|p| *p != target).unwrap();
+        let container = world.entity(new_pane).get::<ChildOf>().unwrap().parent();
+        let node = world.entity(container).get::<Node>().unwrap();
+        assert_eq!(
+            node.position_type,
+            PositionType::Absolute,
+            "a pane container must be absolutely positioned: as a Relative flex \
+             child, sibling containers flex-share the window container's area, \
+             displacing the pane rects (window-container coordinates) resolved \
+             against them — the split pane renders off-screen"
+        );
+        assert_eq!(
+            node.left,
+            Val::Px(0.0),
+            "a pane container must pin to the window container's origin"
+        );
+        assert_eq!(
+            node.top,
+            Val::Px(0.0),
+            "a pane container must pin to the window container's origin"
+        );
+    }
+
+    /// Spawns an active window with a 2-leaf vertical split (`pane_a` left,
+    /// `pane_b` right, `active_pane` starting on `pane_a`). Mirrors
+    /// `window::tests::spawn_two_pane_vertical_window`, minus the
+    /// `WindowContainer`/`ComputedNode` area wiring `resize_pane` doesn't
+    /// need. Returns `(window, pane_a, pane_b)`.
+    fn spawn_two_pane_active_window(app: &mut App) -> (Entity, Entity, Entity) {
+        let world = app.world_mut();
+        let pane_a = world.spawn_empty().id();
+        let pane_b = world.spawn_empty().id();
+        let mut layout = MultiplexerLayout::new(pane_a);
+        layout.split(pane_a, pane_b, SplitAxis::Vertical);
+        let window = world
+            .spawn((
+                MultiplexerWindow {
+                    index: 0,
+                    name: None,
+                    active_pane: pane_a,
+                },
+                ActiveMultiplexerWindow,
+                MultiplexerLayoutComp(layout),
+            ))
+            .id();
+        (window, pane_a, pane_b)
+    }
+
+    #[test]
+    fn resize_right_grows_focused_left_pane() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ResizePaneRequest>()
+            .add_systems(Update, resize_pane);
+        let (window, pane_a, pane_b) = spawn_two_pane_active_window(&mut app);
+
+        app.world_mut().write_message(ResizePaneRequest {
+            dir: PaneDirection::Right,
+        });
+        app.update();
+
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let rects = app
+            .world()
+            .get::<MultiplexerLayoutComp>(window)
+            .unwrap()
+            .0
+            .rects(area, PANE_GAP_PX);
+        let left = rects.iter().find(|(e, _)| *e == pane_a).unwrap().1;
+        let right = rects.iter().find(|(e, _)| *e == pane_b).unwrap().1;
+        assert_eq!(
+            left.w, 55.0,
+            "ResizePaneRequest {{ Right }} must grow the focused left pane by RESIZE_STEP_FRAC"
+        );
+        assert_eq!(right.w, 45.0);
+    }
+
+    #[test]
+    fn resize_edge_request_does_not_trigger_change_detection() {
+        #[derive(Resource, Default)]
+        struct RunCount(u32);
+
+        fn probe(mut count: ResMut<RunCount>) {
+            count.0 += 1;
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ResizePaneRequest>()
+            .init_resource::<RunCount>()
+            .add_systems(
+                Update,
+                (resize_pane, probe.run_if(active_layout_tree_changed)).chain(),
+            );
+        let (window, pane_a, _pane_b) = spawn_two_pane_active_window(&mut app);
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            1,
+            "a freshly-inserted MultiplexerLayoutComp counts as changed"
+        );
+
+        app.world_mut().write_message(ResizePaneRequest {
+            dir: PaneDirection::Up,
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            1,
+            "a ResizePaneRequest with no matching-axis ancestor split must not spuriously trip Changed<MultiplexerLayoutComp>"
+        );
+        assert_eq!(
+            app.world()
+                .get::<MultiplexerWindow>(window)
+                .unwrap()
+                .active_pane,
+            pane_a
+        );
+    }
+
+    #[test]
+    fn resize_at_clamp_does_not_trigger_change_detection() {
+        #[derive(Resource, Default)]
+        struct RunCount(u32);
+
+        fn probe(mut count: ResMut<RunCount>) {
+            count.0 += 1;
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ResizePaneRequest>()
+            .init_resource::<RunCount>()
+            .add_systems(
+                Update,
+                (resize_pane, probe.run_if(active_layout_tree_changed)).chain(),
+            );
+        let (window, pane_a, _pane_b) = spawn_two_pane_active_window(&mut app);
+        // Drive the split ratio all the way to MIN_PANE_FRAC in a single
+        // frame: a generous batch of Left requests, all processed by the
+        // same resize_pane call, so the clamped ratio this test then
+        // re-exercises below is reached through the exact arithmetic path
+        // resize_pane itself uses (a manually pre-set ratio would land on a
+        // different, merely numerically-close f32 bit pattern and make the
+        // no-op check below flaky).
+        for _ in 0..20 {
+            app.world_mut().write_message(ResizePaneRequest {
+                dir: PaneDirection::Left,
+            });
+        }
+        app.update();
+        let after_clamp = app.world().resource::<RunCount>().0;
+        assert_eq!(
+            after_clamp, 1,
+            "the first frame (fresh component plus the clamp-driving resizes) counts as changed"
+        );
+
+        app.world_mut().write_message(ResizePaneRequest {
+            dir: PaneDirection::Left,
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            after_clamp,
+            "a ResizePaneRequest that clamps to the already-current ratio must not spuriously trip Changed<MultiplexerLayoutComp>"
+        );
+        let area = PaneRect {
+            x: 0.0,
+            y: 0.0,
+            w: 101.0,
+            h: 50.0,
+        };
+        let rects = app
+            .world()
+            .get::<MultiplexerLayoutComp>(window)
+            .unwrap()
+            .0
+            .rects(area, PANE_GAP_PX);
+        let left = rects.iter().find(|(e, _)| *e == pane_a).unwrap().1;
+        assert_eq!(left.w, 5.0, "the ratio stays clamped at MIN_PANE_FRAC");
+    }
+
+    #[test]
+    fn zoom_pane_toggles_focused_pane() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ZoomPaneRequest>()
+            .add_systems(Update, zoom_pane);
+        let (window, pane_a, _pane_b) = spawn_two_pane_active_window(&mut app);
+
+        app.world_mut().write_message(ZoomPaneRequest);
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<MultiplexerLayoutComp>(window)
+                .unwrap()
+                .0
+                .zoomed(),
+            Some(pane_a),
+            "a ZoomPaneRequest must zoom the active window's focused pane"
+        );
+
+        app.world_mut().write_message(ZoomPaneRequest);
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<MultiplexerLayoutComp>(window)
+                .unwrap()
+                .0
+                .zoomed(),
+            None,
+            "a second ZoomPaneRequest must un-zoom the pane"
+        );
+    }
+
+    #[test]
+    fn zoom_pane_change_detection_fires_only_on_real_toggle() {
+        #[derive(Resource, Default)]
+        struct RunCount(u32);
+
+        fn probe(mut count: ResMut<RunCount>) {
+            count.0 += 1;
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ZoomPaneRequest>()
+            .init_resource::<RunCount>()
+            .add_systems(
+                Update,
+                (zoom_pane, probe.run_if(active_layout_tree_changed)).chain(),
+            );
+        let (window, pane_a, _pane_b) = spawn_two_pane_active_window(&mut app);
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            1,
+            "a freshly-inserted MultiplexerLayoutComp counts as changed"
+        );
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            1,
+            "no ZoomPaneRequest must not spuriously trip Changed<MultiplexerLayoutComp>"
+        );
+
+        app.world_mut().write_message(ZoomPaneRequest);
+        app.update();
+        assert_eq!(
+            app.world().resource::<RunCount>().0,
+            2,
+            "a ZoomPaneRequest must toggle zoom and trip Changed<MultiplexerLayoutComp>"
+        );
+        assert_eq!(
+            app.world()
+                .get::<MultiplexerLayoutComp>(window)
+                .unwrap()
+                .0
+                .zoomed(),
+            Some(pane_a)
+        );
+    }
+}

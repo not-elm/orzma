@@ -5,7 +5,7 @@
 //! `MouseButtonInputPlugin`; skips `MouseDisabled` surfaces.
 
 use super::{
-    CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_dims, hit_candidates,
+    CellContext, MouseEffect, TerminalSurfaces, cell_context_for, hit_candidates,
     on_any_mouse_message, trigger_mouse_effects,
 };
 use crate::input::InputPhase;
@@ -14,7 +14,8 @@ use crate::input::current_modifiers;
 use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
 use crate::input::mouse::gesture::{DragGesture, DragPhase, HeldPointer, OrzmaMouseGesture};
-use crate::surface::geometry::topmost_surface_at;
+use crate::surface::geometry::{cell_dims, topmost_surface_at};
+use crate::ui::multiplexer::divider_handle::DividerDrag;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
@@ -27,7 +28,10 @@ use orzma_tty_engine::{
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use std::time::Duration;
 
-/// Registers the mouse-button dispatcher and its gesture resource. Runs in
+mod multiplexer;
+
+/// Registers the mouse-button dispatcher and its gesture resource, plus
+/// `multiplexer::FocusPaneOnClickPlugin` (click-to-focus-pane). Runs in
 /// `InputPhase::Dispatch`, gated to frames carrying any mouse message — the
 /// focus/empty-candidate guard must still run on wheel-only frames to drain
 /// readers and reset the gesture.
@@ -35,12 +39,14 @@ pub(super) struct MouseButtonInputPlugin;
 
 impl Plugin for MouseButtonInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<OrzmaMouseGesture>().add_systems(
-            Update,
-            dispatch_mouse_buttons
-                .in_set(InputPhase::Dispatch)
-                .run_if(on_any_mouse_message()),
-        );
+        app.init_resource::<OrzmaMouseGesture>()
+            .add_systems(
+                Update,
+                dispatch_mouse_buttons
+                    .in_set(InputPhase::Dispatch)
+                    .run_if(on_any_mouse_message()),
+            )
+            .add_plugins(multiplexer::FocusPaneOnClickPlugin);
     }
 }
 
@@ -72,6 +78,7 @@ fn dispatch_mouse_buttons(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    divider_drag: Option<Res<DividerDrag>>,
 ) {
     let Some(frame) = resolve_frame(
         &mut gesture,
@@ -89,6 +96,9 @@ fn dispatch_mouse_buttons(
 
     let now = time.elapsed();
     for ev in buttons.read() {
+        if divider_drag.as_deref().is_some_and(|drag| drag.claims(ev)) {
+            continue;
+        }
         process_button_event(
             &mut commands,
             &mut gesture,

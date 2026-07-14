@@ -133,7 +133,7 @@ select-up-pane        = "<Leader>k"    # select-pane -U
 select-right-pane     = "<Leader>l"    # select-pane -R
 split-vertical-pane   = "<Leader>i"    # split-window -h (side-by-side)
 split-horizontal-pane = "<Leader>o"    # split-window -v (stacked)
-kill-pane             = "<Leader>p"    # kill-pane, after a confirm prompt
+kill-pane             = "<Leader>p"    # kill-pane
 zoom-pane             = "<Leader>z"    # resize-pane -Z
 resize-left-pane      = "<Leader:r>Shift+H"  # resize-pane -L 5 (repeatable)
 resize-down-pane      = "<Leader:r>Shift+J"  # resize-pane -D 5 (repeatable)
@@ -142,7 +142,7 @@ resize-right-pane     = "<Leader:r>Shift+L"  # resize-pane -R 5 (repeatable)
 
 # --- window actions (no effect until the built-in multiplexer lands) ---
 new-window            = "<Leader>c"        # new-window
-kill-window           = "<Leader>Shift+X"  # kill-window, after a confirm prompt
+kill-window           = "<Leader>Shift+X"  # kill-window
 next-window           = "<Leader>]"        # next-window
 previous-window       = "<Leader>["        # previous-window
 select-window-0       = "<Leader>0"        # select-window -t @<id at tmux index 0>
@@ -266,10 +266,10 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `resize-right-pane` | `<Leader:r>Shift+L` | Resize the active pane's border right by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
 | `split-vertical-pane` | `<Leader>i` | Split the active pane side-by-side (tmux `split-window -h`) (no effect until the built-in multiplexer lands). |
 | `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (tmux `split-window -v`) (no effect until the built-in multiplexer lands). |
-| `kill-pane` | `<Leader>p` | Kill the active pane, after a confirm prompt (no effect until the built-in multiplexer lands). |
+| `kill-pane` | `<Leader>p` | Kill the active pane immediately. |
 | `zoom-pane` | `<Leader>z` | Toggle zoom on the active pane (no effect until the built-in multiplexer lands). |
 | `new-window` | `<Leader>c` | Open a new window (no effect until the built-in multiplexer lands). |
-| `kill-window` | `<Leader>Shift+X` | Kill the active window, after a confirm prompt (no effect until the built-in multiplexer lands). |
+| `kill-window` | `<Leader>Shift+X` | Kill the active window immediately. |
 | `next-window` | `<Leader>]` | Switch to the next window (no effect until the built-in multiplexer lands). |
 | `previous-window` | `<Leader>[` | Switch to the previous window (no effect until the built-in multiplexer lands). |
 | `select-window-0` | `<Leader>0` | Switch to the window at tmux index 0 (no effect until the built-in multiplexer lands). |
@@ -285,9 +285,10 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `rename-window` | `<Leader>r` | Open the rename prompt for the active window (no effect until the built-in multiplexer lands). |
 
 Note: some actions have no effect yet. `enter-vi-mode` works today (Alacritty
-vi mode). All 27 pane/window/rename actions above (`select-*-pane`,
-`split-*-pane`, `kill-pane`, `zoom-pane`, `resize-*-pane`, `new-window`,
-`kill-window`, `next-window`, `previous-window`, `select-window-0`…`9`,
+vi mode), and so do `kill-pane` and `kill-window` (they close the pane/window
+immediately, no confirmation). The remaining 25 pane/window/rename actions
+above (`select-*-pane`, `split-*-pane`, `zoom-pane`, `resize-*-pane`,
+`new-window`, `next-window`, `previous-window`, `select-window-0`…`9`,
 `rename-window`) are no-ops until the built-in multiplexer lands — the
 bindings are accepted and validated at startup, but pressing them does
 nothing. `paste`, `copy`, `quit`, `release-webview-focus`, and `enter-vi-mode`

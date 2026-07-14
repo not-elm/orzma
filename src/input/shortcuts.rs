@@ -7,6 +7,7 @@ use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
 use crate::input::shortcuts::apply::ShortcutsApplyPlugin;
+use crate::input::shortcuts::multiplexer::MultiplexerShortcutPlugin;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -24,12 +25,13 @@ use orzma_tty_engine::{ButtonConfig, WheelConfig};
 use std::time::Duration;
 
 mod apply;
+mod multiplexer;
 
 pub(super) struct ShortcutsPlugin;
 
 impl Plugin for ShortcutsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ShortcutsApplyPlugin)
+        app.add_plugins((ShortcutsApplyPlugin, MultiplexerShortcutPlugin))
             .configure_sets(
                 Update,
                 (ShortcutSet::Resolve, ShortcutSet::Apply)
