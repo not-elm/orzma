@@ -1,6 +1,6 @@
 //! Centralized multiplexer request events: the shapes every PR-2/PR-3
-//! shortcut-applier and confirm-prompt handler consumes. Defined once here so
-//! downstream observer/handler tasks only add handlers and never
+//! shortcut-applier consumes. Defined once here so downstream
+//! observer/handler tasks only add handlers and never
 //! forward-reference a type.
 //!
 //! Each request is either an `EntityEvent` (consumed by an `On<E>` observer)
@@ -90,21 +90,3 @@ pub(crate) struct SelectWindowRequest(pub WindowSelect);
 /// Consumed by a `MessageReader<RenameWindowRequest>` system.
 #[derive(Message)]
 pub(crate) struct RenameWindowRequest;
-
-/// Requests opening the kill-pane confirm prompt for `pane`. On confirm, the
-/// prompt fires `KillPaneRequest`.
-/// Consumed by a `MessageReader<OpenKillPaneConfirm>` system.
-#[derive(Message)]
-pub(crate) struct OpenKillPaneConfirm {
-    /// The pane the confirm prompt targets.
-    pub pane: Entity,
-}
-
-/// Requests opening the kill-window confirm prompt for `window`. On confirm,
-/// the prompt fires `KillWindowRequest`.
-/// Consumed by a `MessageReader<OpenKillWindowConfirm>` system.
-#[derive(Message)]
-pub(crate) struct OpenKillWindowConfirm {
-    /// The window the confirm prompt targets.
-    pub window: Entity,
-}

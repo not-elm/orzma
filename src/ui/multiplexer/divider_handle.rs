@@ -31,7 +31,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform, UiSystems};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 
 /// Subtle grey background for an un-hovered divider handle. The theme module
-/// is gone (see `ui/multiplexer/confirm_prompt.rs`); this file declares its
+/// is gone (see `ui/multiplexer/rename_prompt.rs`); this file declares its
 /// own colors the same way.
 const DIVIDER_COLOR: Color = Color::srgb(0.35, 0.35, 0.35);
 
@@ -46,8 +46,8 @@ const DIVIDER_GRAB_TOL_PX: f32 = 4.0;
 
 /// Stacking order for divider handles: above ordinary pane content (which has
 /// no explicit `GlobalZIndex`, i.e. 0) but below transient overlays (the IME
-/// overlay's 200, the confirm prompt's 330 — see `ui/ime_overlay.rs` /
-/// `ui/multiplexer/confirm_prompt.rs`).
+/// overlay's 200, the rename bar's 340 — see `ui/ime_overlay.rs` /
+/// `ui/multiplexer/rename_prompt.rs`).
 const DIVIDER_HANDLE_Z: i32 = 50;
 
 /// Registers the divider-handle visuals, the resize hover cursor, and

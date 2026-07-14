@@ -7,17 +7,13 @@ use crate::font::TerminalUiFont;
 use crate::input::InputPhase;
 use crate::multiplexer::request::RenameWindowRequest;
 use crate::multiplexer::window::{ActiveMultiplexerWindow, MultiplexerWindow};
-use crate::ui::multiplexer::confirm_prompt::ConfirmState;
-use crate::ui::multiplexer::modal::{
-    ModalKeys, any_modal_open, hide_bar, show_bar_with_text, spawn_bottom_bar,
-};
+use crate::ui::multiplexer::modal::{ModalKeys, hide_bar, show_bar_with_text, spawn_bottom_bar};
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 
 const RENAME_Z: i32 = 340;
-/// Background color of the rename bar: distinct from the kill-pane /
-/// kill-window confirm bar's destructive blue, so an in-progress edit reads
-/// as a different kind of modal.
+/// Background color of the rename bar: a distinct accent so the modal edit
+/// bar reads apart from ordinary terminal output.
 const RENAME_BAR_BG: Color = Color::srgb(0.30, 0.24, 0.55);
 
 /// Registers the rename-prompt message intake, the input handler, and the
@@ -50,9 +46,9 @@ impl Plugin for RenamePromptPlugin {
 }
 
 /// The active window-rename edit buffer. Present as a resource only while
-/// editing; its existence owns the keyboard like the confirm prompt —
-/// `apply_type` (`src/input/shortcuts/apply.rs`) gates on it so a typed
-/// character never leaks into the focused terminal's PTY.
+/// editing; its existence owns the keyboard — `apply_type`
+/// (`src/input/shortcuts/apply.rs`) gates on it so a typed character never
+/// leaks into the focused terminal's PTY.
 #[derive(Resource)]
 pub(crate) struct RenameState {
     /// The edit buffer, pre-filled with the target window's current name.
@@ -143,19 +139,16 @@ fn show_rename_ui(
 /// Consumes `RenameWindowRequest`, inserting `RenameState` pre-filled from
 /// the active window's current name. A prompt already open is left
 /// untouched — an in-flight rename is never silently reset by a later
-/// request. Also refuses to open when a `ConfirmState` prompt is already up,
-/// so a rename chord pressed while a kill-confirm is open is a no-op rather
-/// than opening a second modal.
+/// request.
 fn open_rename_prompt(
     mut commands: Commands,
     mut requests: MessageReader<RenameWindowRequest>,
     state: Option<Res<RenameState>>,
-    confirm: Option<Res<ConfirmState>>,
     active_windows: Query<(Entity, &MultiplexerWindow), With<ActiveMultiplexerWindow>>,
     messages: Res<Messages<KeyboardInput>>,
 ) {
     let requested = requests.read().last().is_some();
-    if !requested || any_modal_open(confirm, state) {
+    if !requested || state.is_some() {
         return;
     }
     let Ok((target, window)) = active_windows.single() else {
@@ -554,26 +547,6 @@ mod tests {
             app.world().resource::<RenameState>().text,
             "edited",
             "a prompt already open must not be reset by a later RenameWindowRequest"
-        );
-    }
-
-    #[test]
-    fn second_modal_refused() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_message::<RenameWindowRequest>()
-            .add_message::<KeyboardInput>()
-            .add_systems(Update, open_rename_prompt);
-        let window = spawn_active_window(&mut app, Some("nvim"));
-        app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(window, ModalKeys::default()));
-
-        app.world_mut().write_message(RenameWindowRequest);
-        app.update();
-
-        assert!(
-            app.world().get_resource::<RenameState>().is_none(),
-            "a rename request must be refused while a ConfirmState prompt is open"
         );
     }
 }

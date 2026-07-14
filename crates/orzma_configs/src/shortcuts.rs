@@ -397,7 +397,7 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub split_horizontal_pane: Option<Binding>,
-    /// Kill the active pane, after a confirm prompt.
+    /// Kill the active pane immediately.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
@@ -439,7 +439,7 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub new_window: Option<Binding>,
-    /// Kill the active window, after a confirm prompt.
+    /// Kill the active window immediately.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
@@ -790,7 +790,7 @@ pub enum Shortcut {
     SelectPane(PaneDirection),
     /// Splits the active pane.
     SplitPane(SplitOrientation),
-    /// Kills the active pane after a confirm prompt.
+    /// Kills the active pane immediately.
     KillPane,
     /// Toggles zoom on the active pane.
     ZoomPane,
@@ -798,7 +798,7 @@ pub enum Shortcut {
     ResizePane(PaneDirection),
     /// Opens a new window in the current session.
     NewWindow,
-    /// Kills the active window after a confirm prompt.
+    /// Kills the active window immediately.
     KillWindow,
     /// Switches to the next window.
     NextWindow,

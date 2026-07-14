@@ -4,10 +4,6 @@
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 
-// NOTE: `confirm_prompt` must be `pub(crate)`, not the repo's default private
-// submodule, because `apply_type` (`src/input/shortcuts/apply.rs`) gates on
-// `confirm_prompt::ConfirmState` to keep an answering y/n out of the PTY.
-pub(crate) mod confirm_prompt;
 // NOTE: `divider_handle` must be `pub(crate)`, not the repo's default private
 // submodule, because the Dispatch-phase mouse consumers
 // (`dispatch_mouse_buttons`, `focus_pane_on_click`, `route_webview_pointer`
@@ -16,11 +12,10 @@ pub(crate) mod confirm_prompt;
 // its webview) under the cursor.
 pub(crate) mod divider_handle;
 // NOTE: `modal` must be `pub(crate)`, not the repo's default private
-// submodule, because `resolve_key_effects` (`src/input/keyboard/handler.rs`),
-// `read_ime_events` (`src/input/ime.rs`), and `apply_type`
-// (`src/input/shortcuts/apply.rs`) all call `modal::any_modal_open` to keep
-// typing, shortcuts, paste, and IME commits out of the focused pane while a
-// prompt owns the keyboard.
+// submodule, because the input pipeline constructs `modal::ModalKeys` for
+// `RenameState` (`resolve_key_effects` / `apply_type` / `read_ime_events`
+// tests in `src/input/`), and `RenameState` itself is gated on from those
+// same files.
 pub(crate) mod modal;
 mod pane_focus;
 // NOTE: `rename_prompt` must be `pub(crate)`, not the repo's default private
@@ -51,7 +46,6 @@ impl Plugin for MultiplexerUiPlugin {
             ensure_ui_root.run_if(not(any_with_component::<MultiplexerUiRoot>)),
         )
         .add_plugins((
-            confirm_prompt::ConfirmPromptPlugin,
             divider_handle::DividerHandlePlugin,
             pane_focus::PaneFocusPlugin,
             rename_prompt::RenamePromptPlugin,

@@ -1,17 +1,8 @@
-//! Shared modal-prompt building blocks for the confirm and rename prompts:
-//! the "does a prompt own the keyboard" predicate, the chord-modifier
-//! filter, the keys-since-open intake (`ModalKeys`), and the bottom-bar UI
-//! helpers.
-//!
-//! The predicate is used two ways: by `confirm_prompt` / `rename_prompt`
-//! themselves, to refuse opening a second modal while one is already up; and
-//! by the input pipeline (`apply_type`, `resolve_key_effects`,
-//! `read_ime_events`) to withhold typing, shortcuts, paste, and IME commits
-//! from the focused pane while a prompt is open.
+//! Shared modal-prompt building blocks for the rename prompt: the
+//! chord-modifier filter, the keys-since-open intake (`ModalKeys`), and the
+//! bottom-bar UI helpers. Kept generic so a future modal can reuse them.
 
 use crate::font::TerminalUiFont;
-use crate::ui::multiplexer::confirm_prompt::ConfirmState;
-use crate::ui::multiplexer::rename_prompt::RenameState;
 use bevy::ecs::message::MessageCursor;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -22,19 +13,11 @@ const MODAL_BAR_FG: Color = Color::srgb(0.95, 0.95, 0.95);
 /// Font size of every modal bottom bar's text.
 const MODAL_BAR_FONT_SIZE_PX: f32 = 12.0;
 
-/// Whether a confirm or rename prompt currently owns the keyboard.
-pub(crate) fn any_modal_open(
-    confirm: Option<Res<ConfirmState>>,
-    rename: Option<Res<RenameState>>,
-) -> bool {
-    confirm.is_some() || rename.is_some()
-}
-
 /// Whether a non-Shift chord modifier (Cmd / Ctrl / Alt) is held. A chord
 /// like Cmd+Y is a command, not an answer or a typed character, so an open
 /// prompt must ignore the key press it rides on. Shift is deliberately
 /// excluded — `Y` and capitalized window names are legitimate prompt input.
-pub(crate) fn chord_modifier_held(keys: &ButtonInput<KeyCode>) -> bool {
+fn chord_modifier_held(keys: &ButtonInput<KeyCode>) -> bool {
     keys.any_pressed([
         KeyCode::SuperLeft,
         KeyCode::SuperRight,

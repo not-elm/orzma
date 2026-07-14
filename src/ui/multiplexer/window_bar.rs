@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use orzma_tty_engine::TerminalTitle;
 
 /// Text color of the active window entry, read against `ACTIVE_BG`. The
-/// theme module is gone (see `ui/multiplexer/confirm_prompt.rs` /
+/// theme module is gone (see `ui/multiplexer/rename_prompt.rs` /
 /// `divider_handle.rs`); this file declares its own colors the same way.
 const ACTIVE_FG: Color = Color::srgb(0.05, 0.06, 0.08);
 /// Background fill of the active window entry: an accent tone distinguishing
