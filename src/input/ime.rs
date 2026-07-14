@@ -10,7 +10,6 @@ use crate::action::vi::mode::ViModeState;
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
 use crate::surface::OrzmaTerminal;
-use crate::ui::multiplexer::confirm_prompt::ConfirmState;
 use crate::ui::multiplexer::rename_prompt::RenameState;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::entity::Entity;
@@ -303,12 +302,11 @@ fn ime_policy_system(
 /// Drains `Ime` events, updates `ImeState`, and on `Ime::Commit` triggers
 /// `ImeCommit` to the keyboard-focused surface. While the rename prompt owns
 /// the keyboard, commits are routed into its edit buffer instead (composed
-/// CJK text must reach the window name, not vanish); while a confirm prompt
-/// is open they are suppressed outright. The commit is also suppressed (the
-/// state machine still runs, so `ImeState` stays consistent) when any
-/// webview owns keyboard focus, or the focused surface is in vi mode. The
-/// commit transport is applied by the `apply_ime_commit_to_terminal`
-/// observer in this module.
+/// CJK text must reach the window name, not vanish). The commit is also
+/// suppressed (the state machine still runs, so `ImeState` stays consistent)
+/// when any webview owns keyboard focus, or the focused surface is in vi
+/// mode. The commit transport is applied by the
+/// `apply_ime_commit_to_terminal` observer in this module.
 fn read_ime_events(
     mut commands: Commands,
     mut events: MessageReader<Ime>,
@@ -317,27 +315,22 @@ fn read_ime_events(
     focused: Query<Entity, With<KeyboardFocused>>,
     focused_webview: Res<FocusedWebview>,
     vi_modes: Query<(), With<ViModeState>>,
-    confirm: Option<Res<ConfirmState>>,
 ) {
     let surface = resolve_focused_surface(&focused);
-    let confirm_open = confirm.is_some();
     for event in events.read() {
         let Some(commit_text) = apply_event(&mut state, event) else {
             continue;
         };
-        // NOTE: while a modal is open, consume the commit here (route or
-        // drop) rather than gating this whole system off with run_if — a
-        // run_if would leave the commit unread on this reader's cursor (the
-        // reader only advances via `events.read()` above, which already ran)
-        // and re-inject it as a real `ImeCommit` trigger on the next ungated
-        // frame.
+        // NOTE: while the rename prompt is open, consume the commit here
+        // (route it into the edit buffer) rather than gating this whole
+        // system off with run_if — a run_if would leave the commit unread on
+        // this reader's cursor (the reader only advances via `events.read()`
+        // above, which already ran) and re-inject it as a real `ImeCommit`
+        // trigger on the next ungated frame.
         if let Some(rename) = rename.as_mut() {
             if !commit_text.is_empty() {
                 rename.append(&commit_text);
             }
-            continue;
-        }
-        if confirm_open {
             continue;
         }
         // NOTE: gate on `FocusedWebview` itself, NOT on "is the focused webview a
@@ -873,50 +866,6 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].0, focused);
         assert_eq!(hits[0].1, "あ");
-    }
-
-    /// Reproduces the IME leak this change fixes: with a `ConfirmState`
-    /// prompt open, a committed composition must not trigger `ImeCommit` (and
-    /// so never reaches `TerminalKeyInput` / the PTY) even though the state
-    /// machine still consumes the commit.
-    #[test]
-    fn ime_commit_suppressed_while_modal_open() {
-        use bevy::prelude::On;
-
-        #[derive(Resource, Default)]
-        struct Hits(Vec<(Entity, String)>);
-
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin))
-            .add_systems(Update, read_ime_events);
-        app.init_resource::<ImeState>();
-        app.init_resource::<FocusedWebview>();
-        app.init_resource::<Hits>();
-        app.add_message::<Ime>();
-        app.add_observer(|ev: On<ImeCommit>, mut hits: ResMut<Hits>| {
-            hits.0.push((ev.entity, ev.text.clone()));
-        });
-
-        let focused = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
-        app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(focused, ModalKeys::default()));
-
-        app.world_mut()
-            .resource_mut::<bevy::ecs::message::Messages<Ime>>()
-            .write(Ime::Commit {
-                window: Entity::PLACEHOLDER,
-                value: "あ".into(),
-            });
-        app.update();
-
-        assert!(
-            app.world().resource::<Hits>().0.is_empty(),
-            "an IME commit must not trigger ImeCommit while a ConfirmState modal is open"
-        );
-        assert!(
-            !app.world().resource::<ImeState>().is_composing(),
-            "the state machine must still consume the commit even while suppressed"
-        );
     }
 
     /// With the rename prompt open, a committed composition must land in the

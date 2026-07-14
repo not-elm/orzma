@@ -12,9 +12,7 @@ use crate::{
         keyboard::bevy_key_to_terminal_key,
         shortcuts::{ShortcutMessage, ShortcutSet, TypeMessage, ViModeMessage},
     },
-    ui::multiplexer::{
-        confirm_prompt::ConfirmState, modal::any_modal_open, rename_prompt::RenameState,
-    },
+    ui::multiplexer::rename_prompt::RenameState,
 };
 use bevy::prelude::*;
 use orzma_configs::shortcuts::Shortcut;
@@ -97,23 +95,21 @@ fn apply_vi_mode(mut commands: Commands, mut vi_mode: MessageReader<ViModeMessag
 
 /// Types raw keys from `TypeMessage` into the focused terminal as
 /// `TerminalKeyInput`. Runs after the shortcut/copy appliers. Registered in
-/// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>`. While a
-/// `ConfirmState` or `RenameState` prompt is open, this DRAINS `TypeMessage`s
-/// instead of typing them, so the y/n answering a kill-pane / kill-window
-/// confirm, or a character typed into the rename prompt, never leaks into
+/// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>`. While the
+/// rename prompt is open, this DRAINS `TypeMessage`s instead of typing them,
+/// so a character typed into the rename prompt never leaks into
 /// the terminal's PTY.
 fn apply_type(
     mut commands: Commands,
     mut type_keys: MessageReader<TypeMessage>,
-    confirm: Option<Res<ConfirmState>>,
     rename: Option<Res<RenameState>>,
 ) {
-    // NOTE: while a confirm or rename prompt owns the keyboard, DRAIN (clear)
+    // NOTE: while the rename prompt owns the keyboard, DRAIN (clear)
     // TypeMessages rather than gating this system off with run_if — a run_if
-    // would leave the confirming/typed key buffered on apply_type's reader
-    // cursor and inject it into the PTY on the next ungated frame (the reader
-    // cursor only advances when the body runs).
-    if any_modal_open(confirm, rename) {
+    // would leave the typed key buffered on apply_type's reader cursor and
+    // inject it into the PTY on the next ungated frame (the reader cursor
+    // only advances when the body runs).
+    if rename.is_some() {
         type_keys.clear();
         return;
     }
@@ -388,10 +384,9 @@ mod tests {
     /// Builds an app running the real `ShortcutsApplyPlugin` registration (not
     /// a hand-rolled re-registration of `apply_type`), so a future change to
     /// how the plugin gates `apply_type` is caught by these tests too. Proves
-    /// typing is suppressed while a kill-pane / kill-window confirm prompt or
-    /// the rename prompt is open, and that a confirming/typed key never leaks
-    /// into a later frame.
-    fn build_confirm_gated_app() -> App {
+    /// typing is suppressed while the rename prompt is open, and that a typed
+    /// key never leaks into a later frame.
+    fn build_modal_gated_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<ShortcutMessage>()
@@ -406,27 +401,8 @@ mod tests {
     }
 
     #[test]
-    fn apply_type_suppressed_while_confirm_state_present() {
-        let mut app = build_confirm_gated_app();
-        let term = app.world_mut().spawn(OrzmaTerminal).id();
-        app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(term, ModalKeys::default()));
-        app.world_mut().write_message(TypeMessage {
-            logical: Key::Character("y".into()),
-            focused: Some(term),
-            mods: Modifiers::default(),
-        });
-        app.update();
-        assert!(
-            app.world().resource::<Captured>().keys.is_empty(),
-            "apply_type must be suppressed while a ConfirmState prompt is open, so an \
-             answering y/n never reaches the terminal's PTY"
-        );
-    }
-
-    #[test]
     fn apply_type_suppressed_while_rename_state_present() {
-        let mut app = build_confirm_gated_app();
+        let mut app = build_modal_gated_app();
         let term = app.world_mut().spawn(OrzmaTerminal).id();
         app.world_mut().insert_resource(RenameState::new(
             term,
@@ -447,8 +423,8 @@ mod tests {
     }
 
     #[test]
-    fn apply_type_runs_normally_without_confirm_state() {
-        let mut app = build_confirm_gated_app();
+    fn apply_type_runs_normally_without_modal() {
+        let mut app = build_modal_gated_app();
         let term = app.world_mut().spawn(OrzmaTerminal).id();
         app.world_mut().write_message(TypeMessage {
             logical: Key::Character("y".into()),
@@ -459,22 +435,25 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().keys,
             vec![TerminalKey::Text("y".into())],
-            "apply_type must run normally when no ConfirmState is present"
+            "apply_type must run normally when no modal prompt is open"
         );
     }
 
-    /// Reproduces the cross-frame key-leak race: a confirming key typed while
-    /// `ConfirmState` is present must be drained on its own frame, not merely
-    /// suppressed, so it cannot resurface once `ConfirmState` is removed and a
+    /// Reproduces the cross-frame key-leak race: a key typed while
+    /// `RenameState` is present must be drained on its own frame, not merely
+    /// suppressed, so it cannot resurface once `RenameState` is removed and a
     /// later key is typed. A `run_if`-only gate fails this test because the
     /// suppressed frame never advances `apply_type`'s `MessageReader` cursor,
-    /// leaving the confirming key buffered for the next ungated frame.
+    /// leaving the typed key buffered for the next ungated frame.
     #[test]
-    fn confirm_key_does_not_leak_into_pty_on_next_frame() {
-        let mut app = build_confirm_gated_app();
+    fn modal_key_does_not_leak_into_pty_on_next_frame() {
+        let mut app = build_modal_gated_app();
         let term = app.world_mut().spawn(OrzmaTerminal).id();
-        app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(term, ModalKeys::default()));
+        app.world_mut().insert_resource(RenameState::new(
+            term,
+            "build".to_string(),
+            ModalKeys::default(),
+        ));
         app.world_mut().write_message(TypeMessage {
             logical: Key::Character("y".into()),
             focused: Some(term),
@@ -483,10 +462,10 @@ mod tests {
         app.update();
         assert!(
             app.world().resource::<Captured>().keys.is_empty(),
-            "the confirming key must be drained on the confirming frame, not deferred"
+            "the typed key must be drained on the modal frame, not deferred"
         );
 
-        app.world_mut().remove_resource::<ConfirmState>();
+        app.world_mut().remove_resource::<RenameState>();
         app.world_mut().write_message(TypeMessage {
             logical: Key::Character("x".into()),
             focused: Some(term),
@@ -496,7 +475,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().keys,
             vec![TerminalKey::Text("x".into())],
-            "only the new key must reach the PTY; the drained confirming y must not leak in"
+            "only the new key must reach the PTY; the drained modal y must not leak in"
         );
     }
 }

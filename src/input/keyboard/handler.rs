@@ -19,8 +19,6 @@ use crate::input::shortcuts::{
     HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
     Shortcuts, TypeMessage, ViModeMessage, clear_leader_phase,
 };
-use crate::ui::multiplexer::confirm_prompt::ConfirmState;
-use crate::ui::multiplexer::modal::any_modal_open;
 use crate::ui::multiplexer::rename_prompt::RenameState;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -62,8 +60,8 @@ struct ClassifyInputs<'w> {
 /// shortcut messages. Runs unconditionally (gated only on
 /// `on_message::<KeyboardInput>`), in `InputPhase::FocusedKey` /
 /// `ShortcutSet::Resolve` / `LeaderGate::Advance`. The sole `LeaderPhase`-stepping
-/// system: on a coarse guard (IME composition, an unfocused window, or a
-/// confirm/rename prompt owning the keyboard) it clears the leader, drains the
+/// system: on a coarse guard (IME composition, an unfocused window, or
+/// the rename prompt owning the keyboard) it clears the leader, drains the
 /// frame's keys, and writes no messages; otherwise it classifies the keys,
 /// applies `Quit` (`AppExit`) and `ReleaseWebviewFocus` (clear
 /// `FocusedWebview`) inline, and writes every other effect to its typed
@@ -82,7 +80,6 @@ fn resolve_key_effects(
     focused_surface: Query<Entity, With<KeyboardFocused>>,
     vi_modes: Query<(), With<ViModeState>>,
     forward_keys: Query<&ForwardKeys>,
-    confirm: Option<Res<ConfirmState>>,
     rename: Option<Res<RenameState>>,
 ) {
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
@@ -91,7 +88,7 @@ fn resolve_key_effects(
     // keys buffered on this reader's cursor and re-inject them (e.g. a
     // Cmd+V paste, or a split/zoom chord) into resolution on the next
     // ungated frame (the reader cursor only advances when the body runs).
-    if ime.is_composing() || !focused_window || any_modal_open(confirm, rename) {
+    if ime.is_composing() || !focused_window || rename.is_some() {
         clear_leader_phase(&mut leader_phase);
         if held_repeat.0.is_some() {
             held_repeat.0 = None;
@@ -361,7 +358,7 @@ mod tests {
         }
     }
 
-    /// Reproduces the modality leak this change fixes: with a `ConfirmState`
+    /// Reproduces the modality leak this change fixes: with a `RenameState`
     /// prompt open, a chord bound to a pane action (split/zoom/etc.) must not
     /// resolve to a `ShortcutMessage` — the prompt owns the keyboard, so the
     /// focused pane must see no effect at all.
@@ -373,19 +370,22 @@ mod tests {
             Shortcut::ZoomPane,
         ));
         let term = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
-        app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(term, ModalKeys::default()));
+        app.world_mut().insert_resource(RenameState::new(
+            term,
+            "build".to_string(),
+            ModalKeys::default(),
+        ));
         press_key(&mut app, KeyCode::KeyW, Key::Character("w".into()));
         app.update();
         assert_eq!(
             app.world().resource::<Captured>().message_count(),
             0,
-            "no ShortcutMessage resolves while a confirm modal is open"
+            "no ShortcutMessage resolves while the rename modal is open"
         );
     }
 
     /// Reproduces the paste leak: a Cmd+V-equivalent chord bound to `Paste`
-    /// must not resolve to a `ShortcutMessage` while a `ConfirmState` prompt
+    /// must not resolve to a `ShortcutMessage` while a `RenameState` prompt
     /// is open, so a paste never reaches the focused pane's PTY behind the
     /// prompt.
     #[test]
@@ -396,8 +396,11 @@ mod tests {
             Shortcut::Paste,
         ));
         let term = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
-        app.world_mut()
-            .insert_resource(ConfirmState::kill_pane(term, ModalKeys::default()));
+        app.world_mut().insert_resource(RenameState::new(
+            term,
+            "build".to_string(),
+            ModalKeys::default(),
+        ));
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::SuperLeft);
@@ -406,7 +409,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().message_count(),
             0,
-            "no ShortcutMessage (including Paste) resolves while a confirm modal is open"
+            "no ShortcutMessage (including Paste) resolves while the rename modal is open"
         );
     }
 
