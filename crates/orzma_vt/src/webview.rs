@@ -1,10 +1,11 @@
 //! Webview APC capture: feeds `apc_dispatch` payloads through
 //! [`ApcWebviewVerb::parse`] and holds the parsed verb.
 
-use crate::webview::verb::ApcWebviewVerb;
 use vtparse::{self, VTActor};
 
 mod verb;
+
+pub use verb::ApcWebviewVerb;
 
 pub struct WebviewApcState {
     verb: Option<ApcWebviewVerb>,
@@ -56,6 +57,8 @@ impl VTActor for WebviewApcState {
     }
 
     fn apc_dispatch(&mut self, data: Vec<u8>) {
-        todo!()
+        if let Some(verb) = ApcWebviewVerb::parse(&data) {
+            self.verb.replace(verb);
+        }
     }
 }
