@@ -1,13 +1,15 @@
 use vtparse::{VTActor, VTParser};
 
-use crate::{parser::Parser, vt_state::VTState};
+use alacritty_terminal::{
+    Grid, Term,
+    vte::ansi::{Handler, Processor},
+};
 
-mod grid;
-mod parser;
-mod vt_state;
+mod webview;
 
 pub struct Vt {
-    state: VTState,
+    processor: Processor,
+    parser: VTParser,
 }
 
 impl Vt {
