@@ -1,17 +1,4 @@
-//! `EntityEvent` types for terminal entities — both outbound events
-//! triggered by this crate (`TerminalBell`, `TerminalTitleChanged`,
-//! `TerminalModeChanged`, `TerminalClipboardStore`, `TerminalChildExit`,
-//! `TerminalCurrentDir`) and inbound commands triggered by the host UI
-//! and observed by `TerminalHandlePlugin` (`TerminalKeyInput`).
-//!
-//! Frame events (`FrameSnapshot`, `FrameDelta`) come from
-//! `orzma_tty_renderer::schema` and are emitted via
-//! `commands.trigger(FrameSnapshot { entity, .. })` — the
-//! `#[event_target] entity` field routes the trigger to the
-//! correct observer.
-
-use crate::vt::listener::{InlineAnchor, OscWebviewVerb};
-use bevy::ecs::entity::Entity;
+//! `EntityEvent` types for terminal entities — both outbound events triggered by this crate (`TerminalBell`, `TerminalTitleChanged`, `TerminalModeChanged`, `TerminalClipboardStore`, `TerminalChildExit`, `TerminalCurrentDir`) and inbound commands triggered by the host UI and observed by `TerminalHandlePlugin` (`TerminalKeyInput`). Frame events (`FrameSnapshot`, `FrameDelta`) come from `orzma_tty_renderer::schema` and are emitted via `commands.trigger(FrameSnapshot { entity, .. })` — the `#[event_target] entity` field routes the trigger to the correct observer. use crate::vt::listener::{InlineAnchor, OscWebviewVerb}; use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use std::path::PathBuf;
 

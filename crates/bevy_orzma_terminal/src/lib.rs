@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use orzma_vt::prelude::AlacrittyVt;
 
 mod events;
 
@@ -7,12 +8,12 @@ pub mod prelude {
 }
 
 #[derive(Component, Deref, DerefMut)]
-pub struct OrzmaTermHandle(orzma_terminal::OrzmaTerm<orzma_vt::Vt>);
+pub struct OrzmaTermHandle(orzma_terminal::OrzmaTerm<AlacrittyVt>);
 
 pub struct OrzmaTerminalPlugin;
 
 impl Plugin for OrzmaTerminalPlugin {
     fn build(app: &mut App) {
-        app.add_systems
+        todo!("Implement OrzmaTerminalPlugin::build")
     }
 }
