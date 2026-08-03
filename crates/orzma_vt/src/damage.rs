@@ -1,4 +1,7 @@
-use alacritty_terminal::{Term, term::TermDamage};
+use alacritty_terminal::{
+    Term,
+    term::{TermDamage, cell::Cell},
+};
 
 /// Classification of accumulated damage that drives the immediate-flush decision.
 /// The bridge constructs this once per pre-emit decision (via `Term::damage()`)
@@ -21,18 +24,23 @@ impl DamageVerdict {
     /// Classifies the bridge's accumulated damage for the Coalescer's
     /// immediate-flush decision. The cursor delta is folded in so that
     /// cursor-only motion (no dirty rows) counts as `AtMostOneRow`.
-    pub fn classify(dirty: &TermDamage, cursor_changed: bool) -> Self {
-        match dirty {
+    pub fn classify(term: &mut Term<Cell>, cursor_changed: bool) -> Self {
+        match term.damage() {
             TermDamage::Full => DamageVerdict::Full,
-            TermDamage::Partial(rows) if rows. => {
-                if cursor_changed {
-                    DamageVerdict::AtMostOneRow
-                } else {
-                    DamageVerdict::Idle
+            TermDamage::Partial(rows) => {
+                let rows = rows.collect::<Vec<_>>();
+                match rows {
+                    _ if rows.is_empty() => {
+                        if cursor_changed {
+                            DamageVerdict::AtMostOneRow
+                        } else {
+                            DamageVerdict::Idle
+                        }
+                    }
+                    _ if rows.len() <= 1 => DamageVerdict::AtMostOneRow,
+                    _ => DamageVerdict::ManyRows { rows: rows.len() },
                 }
             }
-            TermDamage::Partial(rows) if rows.len() <= 1 => DamageVerdict::AtMostOneRow,
-            TermDamage::Partial(rows) => DamageVerdict::ManyRows { rows: rows.len() },
         }
     }
 }
