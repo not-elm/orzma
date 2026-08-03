@@ -9,6 +9,8 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+orzma_vt = { path = "../orzma_vt" }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

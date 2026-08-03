@@ -16,7 +16,7 @@ mod frame;
 mod webview;
 
 pub mod prelude {
-    pub use crate::{control_frame::*, damage::DamageVerdict};
+    pub use crate::{OrzmaVt, control_frame::*, damage::DamageVerdict};
 }
 
 pub trait OrzmaVt {
