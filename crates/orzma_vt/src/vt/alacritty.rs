@@ -5,7 +5,7 @@ use alacritty_terminal::{
 };
 use vtparse::{VTActor, VTParser};
 
-use crate::apc::ApcState;
+use crate::extension::ApcState;
 
 pub struct AlacrittyVt {
     processor: Processor,

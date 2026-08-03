@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::apc::ApcWebviewVerb;
+use crate::extension::ApcWebviewVerb;
 
 /// Best-effort control frames forwarded from `TermListener`.
 #[derive(Debug, Clone, PartialEq, Eq)]
