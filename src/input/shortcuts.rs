@@ -292,7 +292,7 @@ pub(crate) fn step_leader(
         }
         // NOTE: an expired window or a non-repeat key must close the window and
         // fall through to normal evaluation below — swallowing the key here
-        // would eat ordinary typing (tmux re-dispatches the same way).
+        // would eat ordinary typing.
         *phase = LeaderPhase::Idle;
     }
     if *phase == LeaderPhase::Pending {
@@ -831,7 +831,7 @@ mod tests {
         assert_eq!(
             phase,
             LeaderPhase::Idle,
-            "a non-repeat key closes the window and re-dispatches normally (tmux parity)"
+            "a non-repeat key closes the window and re-dispatches normally"
         );
     }
 

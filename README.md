@@ -4,7 +4,7 @@
 > This app is still in early development and may introduce breaking changes.
 
 orzma is a terminal emulator that can render webviews directly inside the
-terminal, with built-in tmux integration.
+terminal.
 
 ![thumbnail](./docs/thumbnail.png)
 
@@ -16,8 +16,8 @@ macOS (Apple Silicon) via Homebrew Cask:
 brew install --cask not-elm/orzma/orzma
 ```
 
-This taps `not-elm/homebrew-orzma`, installs `orzma.app` into `/Applications`,
-and pulls in `tmux` as a dependency. Upgrade later with:
+This taps `not-elm/homebrew-orzma` and installs `orzma.app` into
+`/Applications`. Upgrade later with:
 
 ```bash
 brew upgrade --cask orzma
@@ -37,15 +37,6 @@ possibilities for TUI applications. For example:
 - render rich graphics such as charts
 - embed games built with WebAssembly
 - host a local frontend (e.g. a dev server on localhost)
-
-### Tmux Integration
-
-orzma supports tmux through its control mode (`tmux -CC`). orzma starts as a
-plain single-pane terminal; running `tmux -CC` inside it switches to
-integration mode, where tmux windows and panes are rendered natively. Window
-and pane management is driven by orzma's own configurable keybindings — defined
-under `[shortcuts]` with a leader kept distinct from your tmux prefix — rather
-than your `tmux.conf` bindings. See [Configuration](#configuration).
 
 ## CLI Tools
 

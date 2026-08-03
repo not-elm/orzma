@@ -101,7 +101,6 @@ webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = f
 # is active only when at least one action is bound to "<Leader>..." — the stock
 # defaults below already bind more than two dozen actions to "<Leader>...", so the Cmd tap
 # is armed out of the box. Set "" to disable it. "Shift" is not allowed as a tap.
-# Choose a leader distinct from your tmux prefix.
 leader = "Cmd"
 # Modifier-tap window (ms): a press+release within this time, with no intervening
 # key or mouse press, counts as a tap. Default 300; 0 reverts to 300.
@@ -120,7 +119,7 @@ repeat-time-ms = 500
 # never collide.
 
 # --- existing actions ---
-paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>p" for the tmux-style leader binding.
+paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>p" for a leader binding.
 copy                  = "Cmd+C"        # Copy the focused terminal's selection to the system clipboard.
 release-webview-focus = "<Leader>u"
 quit                  = "Cmd+Q"
@@ -145,7 +144,7 @@ new-window            = "<Leader>c"        # new-window
 kill-window           = "<Leader>Shift+X"  # kill-window, after a confirm prompt
 next-window           = "<Leader>]"        # next-window
 previous-window       = "<Leader>["        # previous-window
-select-window-0       = "<Leader>0"        # select-window -t @<id at tmux index 0>
+select-window-0       = "<Leader>0"        # select-window at display index 0
 select-window-1       = "<Leader>1"
 select-window-2       = "<Leader>2"
 select-window-3       = "<Leader>3"
@@ -163,7 +162,7 @@ rename-window         = "<Leader>r"        # opens the rename prompt for the act
 # Vi-mode key bindings for Alacritty vi mode. See "Vi-mode keys" below for
 # the key syntax and duplicate-key rule.
 
-# --- cursor motion (trailing comment: ViMotion variant / tmux copy-mode -X command, for reference) ---
+# --- cursor motion (trailing comment: ViMotion variant / copy-mode command, for reference) ---
 cursor-left        = ["h", "ArrowLeft"]     # Left            / cursor-left
 cursor-down        = ["j", "ArrowDown"]     # Down            / cursor-down
 cursor-up          = ["k", "ArrowUp"]       # Up              / cursor-up
@@ -234,7 +233,7 @@ startup.
 ## Repeatable bindings (`<Leader:r>`)
 
 Binding an action with `<Leader:r>` instead of `<Leader>` makes it repeatable,
-like tmux's `bind -r`: after the binding fires, pressing any repeat-marked key
+repeatable: after the binding fires, pressing any repeat-marked key
 again within `repeat-time-ms` (default 500) re-fires its action without
 re-pressing the leader, and each fire re-arms the window. Holding the key down
 keeps firing (OS key auto-repeat participates). Any other key — including keys
@@ -264,24 +263,24 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `resize-down-pane` | `<Leader:r>Shift+J` | Resize the active pane's border down by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
 | `resize-up-pane` | `<Leader:r>Shift+K` | Resize the active pane's border up by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
 | `resize-right-pane` | `<Leader:r>Shift+L` | Resize the active pane's border right by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
-| `split-vertical-pane` | `<Leader>i` | Split the active pane side-by-side (tmux `split-window -h`) (no effect until the built-in multiplexer lands). |
-| `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (tmux `split-window -v`) (no effect until the built-in multiplexer lands). |
+| `split-vertical-pane` | `<Leader>i` | Split the active pane side-by-side (no effect until the built-in multiplexer lands). |
+| `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (no effect until the built-in multiplexer lands). |
 | `kill-pane` | `<Leader>p` | Kill the active pane, after a confirm prompt (no effect until the built-in multiplexer lands). |
 | `zoom-pane` | `<Leader>z` | Toggle zoom on the active pane (no effect until the built-in multiplexer lands). |
 | `new-window` | `<Leader>c` | Open a new window (no effect until the built-in multiplexer lands). |
 | `kill-window` | `<Leader>Shift+X` | Kill the active window, after a confirm prompt (no effect until the built-in multiplexer lands). |
 | `next-window` | `<Leader>]` | Switch to the next window (no effect until the built-in multiplexer lands). |
 | `previous-window` | `<Leader>[` | Switch to the previous window (no effect until the built-in multiplexer lands). |
-| `select-window-0` | `<Leader>0` | Switch to the window at tmux index 0 (no effect until the built-in multiplexer lands). |
-| `select-window-1` | `<Leader>1` | Switch to the window at tmux index 1 (no effect until the built-in multiplexer lands). |
-| `select-window-2` | `<Leader>2` | Switch to the window at tmux index 2 (no effect until the built-in multiplexer lands). |
-| `select-window-3` | `<Leader>3` | Switch to the window at tmux index 3 (no effect until the built-in multiplexer lands). |
-| `select-window-4` | `<Leader>4` | Switch to the window at tmux index 4 (no effect until the built-in multiplexer lands). |
-| `select-window-5` | `<Leader>5` | Switch to the window at tmux index 5 (no effect until the built-in multiplexer lands). |
-| `select-window-6` | `<Leader>6` | Switch to the window at tmux index 6 (no effect until the built-in multiplexer lands). |
-| `select-window-7` | `<Leader>7` | Switch to the window at tmux index 7 (no effect until the built-in multiplexer lands). |
-| `select-window-8` | `<Leader>8` | Switch to the window at tmux index 8 (no effect until the built-in multiplexer lands). |
-| `select-window-9` | `<Leader>9` | Switch to the window at tmux index 9 (no effect until the built-in multiplexer lands). |
+| `select-window-0` | `<Leader>0` | Switch to the window at index 0 (no effect until the built-in multiplexer lands). |
+| `select-window-1` | `<Leader>1` | Switch to the window at index 1 (no effect until the built-in multiplexer lands). |
+| `select-window-2` | `<Leader>2` | Switch to the window at index 2 (no effect until the built-in multiplexer lands). |
+| `select-window-3` | `<Leader>3` | Switch to the window at index 3 (no effect until the built-in multiplexer lands). |
+| `select-window-4` | `<Leader>4` | Switch to the window at index 4 (no effect until the built-in multiplexer lands). |
+| `select-window-5` | `<Leader>5` | Switch to the window at index 5 (no effect until the built-in multiplexer lands). |
+| `select-window-6` | `<Leader>6` | Switch to the window at index 6 (no effect until the built-in multiplexer lands). |
+| `select-window-7` | `<Leader>7` | Switch to the window at index 7 (no effect until the built-in multiplexer lands). |
+| `select-window-8` | `<Leader>8` | Switch to the window at index 8 (no effect until the built-in multiplexer lands). |
+| `select-window-9` | `<Leader>9` | Switch to the window at index 9 (no effect until the built-in multiplexer lands). |
 | `rename-window` | `<Leader>r` | Open the rename prompt for the active window (no effect until the built-in multiplexer lands). |
 
 Note: some actions have no effect yet. `enter-vi-mode` works today (Alacritty
@@ -416,10 +415,8 @@ feature. Every other action works today, including `toggle-rect-selection`
 ### Escape semantics
 
 By default, `Escape` is bound to the `exit` action, which leaves vi mode
-entirely. Note that stock tmux binds `Escape` to clear-selection only
-(deselecting the current selection without exiting copy mode). To deselect a
-selection in orzma without leaving vi mode, press `v` (toggle-selection is a
-toggle: with a selection active, it clears it).
+entirely. To deselect a selection in orzma without leaving vi mode, press `v`
+(toggle-selection is a toggle: with a selection active, it clears it).
 
 Keys not bound to any `[vi-mode]` action are swallowed while vi mode is
 active (they never reach the pane) — this includes stock `copy-mode-vi` keys

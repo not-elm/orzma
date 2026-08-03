@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn valid_term_is_preserved() {
-        assert_eq!(term_fallback(Some("tmux-256color")), None);
+        assert_eq!(term_fallback(Some("screen-256color")), None);
         assert_eq!(term_fallback(Some("xterm-256color")), None);
         assert_eq!(term_fallback(Some("screen")), None);
     }

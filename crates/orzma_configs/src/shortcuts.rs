@@ -385,13 +385,13 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_right_pane: Option<Binding>,
-    /// Split the active pane side-by-side — vertical divider, tmux `-h` (no effect until the built-in multiplexer lands).
+    /// Split the active pane side-by-side — vertical divider (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub split_vertical_pane: Option<Binding>,
-    /// Split the active pane stacked — horizontal divider, tmux `-v` (no effect until the built-in multiplexer lands).
+    /// Split the active pane stacked — horizontal divider (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
@@ -457,61 +457,61 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub previous_window: Option<Binding>,
-    /// Switch to the window at tmux index 0 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index0 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_0: Option<Binding>,
-    /// Switch to the window at tmux index 1 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index1 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_1: Option<Binding>,
-    /// Switch to the window at tmux index 2 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index2 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_2: Option<Binding>,
-    /// Switch to the window at tmux index 3 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index3 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_3: Option<Binding>,
-    /// Switch to the window at tmux index 4 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index4 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_4: Option<Binding>,
-    /// Switch to the window at tmux index 5 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index5 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_5: Option<Binding>,
-    /// Switch to the window at tmux index 6 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index6 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_6: Option<Binding>,
-    /// Switch to the window at tmux index 7 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index7 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_7: Option<Binding>,
-    /// Switch to the window at tmux index 8 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index8 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_8: Option<Binding>,
-    /// Switch to the window at tmux index 9 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index9 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
@@ -531,8 +531,8 @@ pub struct Shortcuts {
     /// fires, pressing a repeat-marked key again within this window re-fires
     /// it without the leader; each fire re-arms the window. Default 500.
     ///
-    /// 0 disables repeat entirely (tmux `repeat-time 0` parity) and is NOT
-    /// normalized away, unlike `leader_tap_timeout_ms`.
+    /// 0 disables repeat entirely and is NOT normalized away, unlike
+    /// `leader_tap_timeout_ms`.
     pub repeat_time_ms: u64,
 }
 
@@ -767,9 +767,9 @@ pub enum PaneDirection {
 /// Which way a split divides the pane, named after the DIVIDER the user sees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitOrientation {
-    /// A vertical divider: panes end up side by side (tmux `split-window -h`).
+    /// A vertical divider: panes end up side by side.
     Vertical,
-    /// A horizontal divider: panes end up stacked (tmux `split-window -v`).
+    /// A horizontal divider: panes end up stacked.
     Horizontal,
 }
 
@@ -805,7 +805,7 @@ pub enum Shortcut {
     NextWindow,
     /// Switches to the previous window (no effect until the built-in multiplexer lands).
     PreviousWindow,
-    /// Switches to the window with this tmux display index (no effect until the built-in multiplexer lands).
+    /// Switches to the window with this display index (no effect until the built-in multiplexer lands).
     SelectWindow(u8),
     /// Opens the rename prompt for the active window (no effect until the built-in multiplexer lands).
     RenameWindow,
@@ -1348,7 +1348,7 @@ mod tests {
     }
 
     #[test]
-    fn default_tmux_actions_are_leader_bound() {
+    fn default_multiplexer_actions_are_leader_bound() {
         let s = Shortcuts::default();
         assert_eq!(
             s.select_left_pane,
@@ -1385,7 +1385,7 @@ mod tests {
     }
 
     #[test]
-    fn tmux_actions_parse_from_flat_toml() {
+    fn multiplexer_actions_parse_from_flat_toml() {
         let toml = r#"
 split-vertical-pane = "<Leader>g"
 select-window-3 = ""

@@ -74,8 +74,8 @@ impl Dimensions for LocalDim {
 pub struct ViIndicatorSnapshot {
     /// 0-based scroll offset from the live tail (0 = bottom).
     pub scroll_offset: usize,
-    /// Scrollback history length, matching tmux's `[offset/total]`
-    /// denominator. Sourced from `Term::history_size()`.
+    /// Scrollback history length — the `[offset/total]` denominator.
+    /// Sourced from `Term::history_size()`.
     pub history_size: usize,
 }
 
@@ -164,7 +164,7 @@ impl TerminalHandle {
     ///
     /// Same VT bridge as `TerminalBundle::spawn` minus the PTY, child
     /// process, and reader thread. Used for terminals whose bytes arrive from
-    /// an external source (e.g. tmux `%output`).
+    /// an external source rather than a PTY read.
     pub fn detached(cols: u16, rows: u16) -> Self {
         let (reply_tx, reply_rx) = unbounded::<Vec<u8>>();
         let (control_tx, control_rx) = unbounded::<ControlFrame>();
@@ -175,30 +175,12 @@ impl TerminalHandle {
         Self::new(cols, rows, listener, reply_rx, control_rx, control_tx)
     }
 
-    /// Returns the scrollback capacity a default-configured handle is built
-    /// with, so callers sizing external history fetches (e.g. tmux
-    /// `capture-pane -S`) stay in sync with the mirror's real cap.
-    pub fn default_scroll_cap() -> usize {
-        Config::default().scrolling_history
-    }
-
-    /// Drains and returns any pending alacritty `PtyWrite` reply bytes
-    /// (DSR / DA answers). A detached handle has no PTY to write them to;
-    /// the caller forwards them to the external program (tmux input) or
-    /// discards them.
-    pub fn take_replies(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        self.drain_replies_into(&mut buf);
-        buf
-    }
-
     /// Stages damage from the current `Term` state and emits a frame
     /// immediately, with no coalescer.
     ///
-    /// The PTY path coalesces via `Coalescer`; tmux panes (whose `%output`
-    /// tmux has already batched) call this once per pane per frame after
-    /// `advance`. Handles the first-emit bootstrap (a blank Initial snapshot
-    /// on a fresh pane).
+    /// The PTY path coalesces via `Coalescer`; callers that already batch their
+    /// own output call this once per frame after `advance`. Handles the
+    /// first-emit bootstrap (a blank Initial snapshot on a fresh terminal).
     pub fn flush_emit(&mut self, commands: &mut Commands, entity: Entity) {
         let mut scratch = std::mem::take(&mut self.scratch_dirty);
         self.pending_damage = Some(DirtyRows::collect(&mut self.term, &mut scratch));
@@ -283,43 +265,14 @@ impl TerminalHandle {
         Ok(())
     }
 
-    /// Resizes the alacritty grid only — no PTY, no echo to any backend.
+    /// Emits the currently-staged `pending_damage` without re-reading
+    /// `Term::damage()`.
     ///
-    /// For tmux panes, tmux owns the pane size; this applies the size tmux
-    /// reported (`%layout-change`) to the local grid. Stages full damage so the
-    /// reflowed grid reaches the renderer even when no output is pending. Unlike
-    /// [`TerminalHandle::resize`], it must NOT touch a PTY or echo the size
-    /// anywhere (echoing back to tmux would loop).
-    pub fn resize_grid_only(&mut self, cols: u16, rows: u16) {
-        self.resize_grid(cols, rows);
-        let mut scratch = std::mem::take(&mut self.scratch_dirty);
-        self.pending_damage = Some(DirtyRows::collect(&mut self.term, &mut scratch));
-        self.scratch_dirty = scratch;
-    }
-
-    /// Emits the currently-staged `pending_damage` (e.g. from `resize_grid_only`)
-    /// without re-reading `Term::damage()`.
-    ///
-    /// Pairs with `resize_grid_only` to repaint a reflow immediately while
-    /// respecting the "one `Term::damage()` per `reset_damage()`" contract
+    /// Pairs with [`TerminalHandle::resize`] to repaint a reflow immediately
+    /// while respecting the "one `Term::damage()` per `reset_damage()`" contract
     /// (`flush_emit` would call `Term::damage()` a second time). No-op if nothing
     /// is staged.
     pub fn emit_pending(&mut self, commands: &mut Commands, entity: Entity) {
-        self.emit(commands, entity);
-    }
-
-    /// Forces a FULL repaint of the current `Term` state, emitting a snapshot
-    /// (never a delta).
-    ///
-    /// Stages `DirtyRows::Full` directly rather than reading `Term::damage()`,
-    /// so `decide_frame_kind` selects `Snapshot` and the renderer replaces the
-    /// whole grid. Used when the rendered grid holds foreign content the next
-    /// delta would paint over — e.g. switching a tmux pane back from the
-    /// capture-fed vi-mode view to its live handle on vi-mode exit: the live
-    /// `Term` is current (it was `advance`d throughout), but the grid still shows
-    /// the captured scrolled view, so a partial delta would garble it.
-    pub fn repaint_full(&mut self, commands: &mut Commands, entity: Entity) {
-        self.pending_damage = Some(DirtyRows::Full);
         self.emit(commands, entity);
     }
 
@@ -403,16 +356,6 @@ impl TerminalHandle {
     /// alt-screen arrow translation, and host scrollback.
     pub fn current_modes(&self) -> TermMode {
         *self.term.mode()
-    }
-
-    /// Returns `true` when the terminal is in alternate screen mode.
-    ///
-    /// Full-screen TUI apps (vim, htop, fzf, less) activate the alternate
-    /// screen via `\x1b[?1049h`; while they are active `TermMode::ALT_SCREEN`
-    /// is set and mouse-wheel events must be forwarded to tmux instead of
-    /// scrolling the local VT scrollback.
-    pub fn is_in_alt_screen(&self) -> bool {
-        self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
     /// Returns `true` when the visible viewport holds any non-whitespace glyph.
@@ -627,9 +570,9 @@ impl TerminalHandle {
 
     /// Starts a selection at `viewport_point` without requiring a `Coalescer`.
     ///
-    /// Mirrors `selection_start_at` but skips the coalescer arm. Used by tmux
-    /// pane drag handling, where no `Coalescer` component is present. The caller
-    /// must call `flush_emit` after this to push the selection to the renderer.
+    /// Mirrors `selection_start_at` but skips the coalescer arm. Used by drag
+    /// handling on handles with no `Coalescer` component. The caller must call
+    /// `flush_emit` after this to push the selection to the renderer.
     ///
     /// Calls `update(anchor, opposite_side)` immediately after
     /// `Selection::new` so `selection_to_string()` does not return `None`
@@ -694,7 +637,7 @@ impl TerminalHandle {
     /// Switches the active selection's type while preserving the
     /// original anchor (captured at `selection_start`). The new
     /// selection spans from the stored anchor to the current vi
-    /// cursor, mirroring tmux's behaviour when the user switches
+    /// cursor, matching copy-mode behaviour when the user switches
     /// between `v` (Char) and `V` (Line) without exiting vi mode.
     ///
     /// Returns `false` when no selection anchor is stored (i.e. no
@@ -1355,47 +1298,6 @@ fn hash_cursor_shape(s: CursorShape, h: &mut DefaultHasher) {
 mod tests {
     use super::*;
 
-    fn scrollback_test_handle(cols: u16, rows: u16) -> TerminalHandle {
-        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
-        let (ctrl_tx, ctrl_rx) =
-            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
-        let listener = crate::vt::listener::TermListener {
-            reply_tx,
-            control_tx: ctrl_tx.clone(),
-        };
-        TerminalHandle::new(cols, rows, listener, reply_rx, ctrl_rx, ctrl_tx)
-    }
-
-    fn cursor_row(h: &TerminalHandle) -> i32 {
-        h.term.grid().cursor.point.line.0
-    }
-
-    #[test]
-    fn capture_seed_restores_prompt_to_top_after_grow_with_scrollback() {
-        // A tmux pane grid that overflowed into scrollback and is then grown
-        // (e.g. the control client pins a larger size after a born-small layout)
-        // pulls scrollback onto the screen and pushes the prompt to mid-screen —
-        // the issue #193 fixed via birth-at-size. The recapture seed (cursor
-        // home + clear + tmux's authoritative rows + real cursor) MUST restore
-        // the prompt to the top; this is why a post-grow re-seed is required.
-        let mut h = scrollback_test_handle(20, 5);
-        let mut parser = alacritty_terminal::vte::ansi::Processor::<
-            alacritty_terminal::vte::ansi::StdSyncHandler,
-        >::new();
-        parser.advance(&mut h.term, b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\n$ ");
-        h.resize_grid_only(20, 15);
-        assert!(
-            cursor_row(&h) > 0,
-            "grow with scrollback pulls history onto the screen, pushing the prompt (cursor) down"
-        );
-        parser.advance(&mut h.term, b"\x1b[H\x1b[2J$ \x1b[1;3H");
-        assert_eq!(
-            cursor_row(&h),
-            0,
-            "the capture seed must restore the prompt (cursor) to the top row"
-        );
-    }
-
     #[test]
     fn is_noop_emit_returns_false_when_only_selection_changed() {
         use alacritty_terminal::index::Side;
@@ -1426,14 +1328,6 @@ mod tests {
         assert!(
             !h.is_noop_emit(&dirty, &curr_cursor, mode, mode, curr_vi, curr_sel),
             "selection appeared on prev_selection==None → must NOT be a no-op"
-        );
-    }
-
-    #[test]
-    fn default_scroll_cap_matches_config_default() {
-        assert_eq!(
-            TerminalHandle::default_scroll_cap(),
-            Config::default().scrolling_history
         );
     }
 
@@ -2926,22 +2820,24 @@ mod tests {
         h.advance(b"hi");
         let (cols, rows, _cursor) = h.read_geometry();
         assert_eq!((cols, rows), (20, 5));
-        assert!(h.take_replies().is_empty());
+        let mut replies = Vec::new();
+        h.drain_replies_into(&mut replies);
+        assert!(replies.is_empty());
     }
 
     #[test]
-    fn take_replies_returns_alacritty_reply_bytes() {
+    fn drain_replies_into_returns_alacritty_reply_bytes() {
         let mut h = TerminalHandle::detached(20, 5);
         h.advance(b"\x1b[5n");
-        let replies = h.take_replies();
+        let mut replies = Vec::new();
+        h.drain_replies_into(&mut replies);
         assert!(
             !replies.is_empty(),
             "DSR query should elicit a device-status reply"
         );
-        assert!(
-            h.take_replies().is_empty(),
-            "replies are drained, not re-read"
-        );
+        let mut again = Vec::new();
+        h.drain_replies_into(&mut again);
+        assert!(again.is_empty(), "replies are drained, not re-read");
     }
 
     #[test]
@@ -2983,14 +2879,6 @@ mod tests {
     }
 
     #[test]
-    fn resize_grid_only_changes_geometry_without_pty() {
-        let mut h = TerminalHandle::detached(20, 5);
-        h.resize_grid_only(40, 10);
-        let (cols, rows, _) = h.read_geometry();
-        assert_eq!((cols, rows), (40, 10));
-    }
-
-    #[test]
     fn has_visible_content_distinguishes_blank_from_painted() {
         let blank = TerminalHandle::detached(20, 5);
         assert!(
@@ -3003,65 +2891,6 @@ mod tests {
             painted.has_visible_content(),
             "a handle with advanced text reports visible content"
         );
-    }
-
-    #[test]
-    fn repaint_full_emits_snapshot_when_idle() {
-        use bevy::ecs::system::RunSystemOnce;
-        use bevy::prelude::*;
-        use orzma_tty_renderer::schema::{FrameDelta, FrameSnapshot};
-
-        #[derive(Resource, Default)]
-        struct Hits {
-            snapshots: u32,
-            deltas: u32,
-        }
-
-        let mut app = App::new();
-        app.init_resource::<Hits>();
-        app.add_observer(|_snap: On<FrameSnapshot>, mut hits: ResMut<Hits>| {
-            hits.snapshots += 1;
-        });
-        app.add_observer(|_delta: On<FrameDelta>, mut hits: ResMut<Hits>| {
-            hits.deltas += 1;
-        });
-        app.world_mut().spawn(TerminalHandle::detached(20, 5));
-        // First emit (bootstrap snapshot), then drain damage so the handle is
-        // idle: a plain flush_emit now would be a no-op.
-        app.world_mut()
-            .run_system_once(
-                |mut commands: Commands, mut q: Query<(Entity, &mut TerminalHandle)>| {
-                    for (entity, mut handle) in &mut q {
-                        handle.advance(b"hello");
-                        handle.flush_emit(&mut commands, entity);
-                        handle.flush_emit(&mut commands, entity);
-                    }
-                },
-            )
-            .unwrap();
-        app.update();
-        let baseline = app.world().resource::<Hits>().snapshots;
-
-        // repaint_full must fire a fresh snapshot (not a delta) even with no new
-        // Term damage staged.
-        app.world_mut()
-            .run_system_once(
-                |mut commands: Commands, mut q: Query<(Entity, &mut TerminalHandle)>| {
-                    for (entity, mut handle) in &mut q {
-                        handle.repaint_full(&mut commands, entity);
-                    }
-                },
-            )
-            .unwrap();
-        app.update();
-
-        let hits = app.world().resource::<Hits>();
-        assert_eq!(
-            hits.snapshots,
-            baseline + 1,
-            "repaint_full fires exactly one fresh snapshot when idle",
-        );
-        assert_eq!(hits.deltas, 0, "repaint_full never emits a delta");
     }
 }
 

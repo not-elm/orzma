@@ -9,7 +9,7 @@ pub const CURSOR_VISIBLE_BIT: u32 = 1;
 
 /// Vi-mode cursor position in viewport coordinates.
 ///
-/// When the user is in alacritty vi mode (= tmux copy mode), the server
+/// When the user is in alacritty vi mode, the server
 /// always tries to keep the cursor inside the visible viewport via
 /// `Term::scroll_display`. `in_scrollback` is the safety valve: when
 /// `true`, the cursor sits above the viewport, the client should skip

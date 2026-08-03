@@ -3,12 +3,6 @@
 //! A detached `TerminalHandle` that receives raw DECSET bytes
 //! (`\x1b[?1000h` / `\x1b[?1006h`) via `advance()` must reflect
 //! `MOUSE_REPORT_CLICK` and `SGR_MOUSE` in `current_modes()`.
-//!
-//! This closes the `[unverified]` premise in the arbiter design doc:
-//! the handle side works independently of tmux, so the only remaining
-//! question is whether tmux forwards these bytes through `%output`
-//! (verified by `real_tmux_mouse::decset_bytes_reach_pane_output` in
-//! `crates/tmux_session/tests/`).
 
 use orzma_tty_engine::{TermMode, TerminalHandle};
 

@@ -89,9 +89,9 @@ fn unknown_action_surfaces_parse_toml() {
 }
 
 #[test]
-fn tmux_action_rebind_and_unbind() {
+fn multiplexer_action_rebind_and_unbind() {
     let configs =
-        load_with_overrides(Some(fixture("tmux_action_binding.toml")), None, None).unwrap();
+        load_with_overrides(Some(fixture("multiplexer_action_binding.toml")), None, None).unwrap();
     assert_eq!(
         configs.shortcuts.split_vertical_pane,
         Some(Binding::Leader {

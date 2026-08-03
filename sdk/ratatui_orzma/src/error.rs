@@ -8,8 +8,8 @@ pub type OrzmaResult<T> = Result<T, OrzmaError>;
 /// An error from the ratatui_orzma SDK.
 #[derive(Debug, thiserror::Error)]
 pub enum OrzmaError {
-    /// `$ORZMA_SOCK`, or both `$ORZMA_TOKEN` and `$TMUX_PANE`, were unset — not
-    /// running inside an orzma pane.
+    /// `$ORZMA_SOCK` or `$ORZMA_TOKEN` was unset — not running inside an orzma
+    /// surface.
     #[error("not inside an orzma pane: {0} is unset")]
     NotInPane(&'static str),
 
@@ -23,7 +23,7 @@ pub enum OrzmaError {
     /// exited. Distinct from [`OrzmaError::Io`] so the caller can tell the user to
     /// re-attach orzma rather than print the misleading "not in a pane" hint.
     #[error(
-        "control socket {path} is unavailable ({cause}); no orzma is attached to this tmux session — attach orzma and retry"
+        "control socket {path} is unavailable ({cause}); the orzma that owned it has exited — restart orzma and retry"
     )]
     SocketUnavailable {
         /// The resolved socket path that could not be reached.
