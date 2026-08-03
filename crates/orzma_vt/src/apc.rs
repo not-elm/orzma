@@ -3,15 +3,15 @@
 
 use vtparse::{self, VTActor};
 
-mod verb;
+mod webview;
 
-pub use verb::ApcWebviewVerb;
+pub use webview::ApcWebviewVerb;
 
-pub struct WebviewApcState {
-    verb: Option<ApcWebviewVerb>,
+pub struct ApcState {
+    webview: Option<ApcWebviewVerb>,
 }
 
-impl VTActor for WebviewApcState {
+impl VTActor for ApcState {
     fn print(&mut self, b: char) {
         // ignore
     }
@@ -58,7 +58,7 @@ impl VTActor for WebviewApcState {
 
     fn apc_dispatch(&mut self, data: Vec<u8>) {
         if let Some(verb) = ApcWebviewVerb::parse(&data) {
-            self.verb.replace(verb);
+            self.webview.replace(verb);
         }
     }
 }

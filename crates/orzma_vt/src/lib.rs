@@ -6,14 +6,12 @@ use alacritty_terminal::{
     vte::ansi::{Handler, Processor},
 };
 
-use crate::{
-    control_frame::ControlFrame, damage::DamageVerdict, frame::Frame, webview::WebviewApcState,
-};
+use crate::{apc::ApcState, control_frame::ControlFrame, damage::DamageVerdict, frame::Frame};
 
+mod apc;
 mod control_frame;
 mod damage;
 mod frame;
-mod webview;
 
 pub mod prelude {
     pub use crate::{OrzmaVt, control_frame::*, damage::DamageVerdict};
@@ -38,14 +36,13 @@ pub trait OrzmaVt {
 pub struct Vt {
     processor: Processor,
     term: Term<OrzmaTermEventHandler>,
-    webview_apc_state: WebviewApcState,
-    webview_apc_parser: VTParser,
+    apc_state: ApcState,
+    apc_parser: VTParser,
 }
 
 impl Vt {
     pub fn advance(&mut self, bytes: &[u8]) {
-        self.webview_apc_parser
-            .parse(bytes, &mut self.webview_apc_state);
+        self.apc_parser.parse(bytes, &mut self.apc_state);
         self.processor.advance(&mut self.term, bytes);
     }
 }
