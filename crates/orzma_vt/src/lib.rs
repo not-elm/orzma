@@ -14,7 +14,7 @@ mod damage;
 mod frame;
 
 pub mod prelude {
-    pub use crate::{OrzmaVt, control_frame::*, damage::DamageVerdict};
+    pub use crate::{OrzmaVt, Vt, apc::*, control_frame::*, damage::DamageVerdict};
 }
 
 pub trait OrzmaVt {
@@ -48,5 +48,4 @@ impl Vt {
 }
 
 struct OrzmaTermEventHandler {}
-
 impl EventListener for OrzmaTermEventHandler {}

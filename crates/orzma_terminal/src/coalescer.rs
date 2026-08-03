@@ -96,9 +96,6 @@ impl Coalescer {
         }
         match verdict {
             DamageVerdict::AtMostOneRow => true,
-            // NOTE: the `armed_at.is_none()` guard protects post-Full coalescing —
-            // if a prior Full chunk is already debouncing, its window must run to
-            // completion rather than be cut short by a follow-up ManyRows chunk.
             DamageVerdict::ManyRows { rows } if *rows <= Self::MANY_ROWS_INSTANT_CAP => {
                 self.armed_at.is_none()
             }

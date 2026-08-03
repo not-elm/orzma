@@ -1,14 +1,18 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use bevy::prelude::*;
+
+mod events;
+
+pub mod prelude {
+    pub use crate::OrzmaTerminalPlugin;
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Component, Deref, DerefMut)]
+pub struct OrzmaTermHandle(orzma_terminal::OrzmaTerm<orzma_vt::Vt>);
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+pub struct OrzmaTerminalPlugin;
+
+impl Plugin for OrzmaTerminalPlugin {
+    fn build(app: &mut App) {
+        app.add_systems
     }
 }

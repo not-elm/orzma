@@ -1310,6 +1310,11 @@ checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 [[package]]
 name = "bevy_orzma_terminal"
 version = "0.2.0-dev"
+dependencies = [
+ "bevy",
+ "orzma_terminal",
+ "orzma_vt",
+]
 
 [[package]]
 name = "bevy_pbr"

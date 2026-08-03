@@ -9,6 +9,9 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+bevy = { workspace = true }
+orzma_vt = { path = "../orzma_vt" }
+orzma_terminal = { path = "../orzma_terminal" }
 
 [lints]
 workspace = true
