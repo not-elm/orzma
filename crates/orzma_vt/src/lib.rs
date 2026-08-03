@@ -8,6 +8,7 @@ use alacritty_terminal::{
 
 use crate::webview::WebviewApcState;
 
+mod damage;
 mod webview;
 
 pub struct Vt {
