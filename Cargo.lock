@@ -5039,6 +5039,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "orzma_terminal"
+version = "0.2.0-dev"
+
+[[package]]
 name = "orzma_tty_engine"
 version = "0.2.0-dev"
 dependencies = [

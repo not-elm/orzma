@@ -22,7 +22,9 @@ anyhow = { workspace = true }
 # It exists only so Cargo feature-unification keeps arboard's `wayland-data-control`
 # (wl-clipboard-rs) enabled on the single arboard build that `bevy_clipboard` pulls in.
 # Pin to match Bevy's arboard pin; if a future Bevy bump changes it, update this in lockstep.
-arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
+arboard = { version = "3.6.1", default-features = false, features = [
+  "wayland-data-control",
+] }
 bevy = { workspace = true }
 bevy_cef = { workspace = true }
 bevy_cef_core = { workspace = true }
@@ -55,9 +57,7 @@ workspace = true
 
 [workspace]
 resolver = "2"
-members = [
-  "crates/*", "sdk/ratatui_orzma", "apps/orzmd", "apps/orzbrowser",
-]
+members = ["crates/*", "sdk/ratatui_orzma", "apps/orzmd", "apps/orzbrowser"]
 
 [workspace.package]
 version = "0.2.0-dev"
@@ -69,7 +69,11 @@ repository = "https://github.com/not-elm/orzma"
 publish = false
 
 [workspace.dependencies]
-bevy = { version = "0.19", features = ["default_font", "system_clipboard", "system_font_discovery"] }
+bevy = { version = "0.19", features = [
+  "default_font",
+  "system_clipboard",
+  "system_font_discovery",
+] }
 anyhow = { version = "1" }
 thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }
