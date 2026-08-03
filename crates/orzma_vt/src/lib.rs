@@ -18,7 +18,7 @@ pub mod prelude {
 }
 
 pub trait OrzmaVt {
-    fn ingest(&mut self, chunk: &[u8]) -> DamageVerdict;
+    fn advance(&mut self, chunk: &[u8]) -> DamageVerdict;
 
     /// Builds the frame for the staged damage.
     fn frames(&mut self) -> Vec<Frame>;

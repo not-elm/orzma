@@ -1308,6 +1308,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 
 [[package]]
+name = "bevy_orzma_terminal"
+version = "0.2.0-dev"
+
+[[package]]
 name = "bevy_pbr"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
