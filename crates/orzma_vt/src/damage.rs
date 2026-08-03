@@ -21,47 +21,18 @@ impl DamageVerdict {
     /// Classifies the bridge's accumulated damage for the Coalescer's
     /// immediate-flush decision. The cursor delta is folded in so that
     /// cursor-only motion (no dirty rows) counts as `AtMostOneRow`.
-    pub fn classify(dirty: &DirtyRows, cursor_changed: bool) -> Self {
+    pub fn classify(dirty: &TermDamage, cursor_changed: bool) -> Self {
         match dirty {
-            DirtyRows::Full => DamageVerdict::Full,
-            DirtyRows::Rows(rows) if rows.is_empty() => {
+            TermDamage::Full => DamageVerdict::Full,
+            TermDamage::Partial(rows) if rows. => {
                 if cursor_changed {
                     DamageVerdict::AtMostOneRow
                 } else {
                     DamageVerdict::Idle
                 }
             }
-            DirtyRows::Rows(rows) if rows.len() <= 1 => DamageVerdict::AtMostOneRow,
-            DirtyRows::Rows(rows) => DamageVerdict::ManyRows { rows: rows.len() },
-        }
-    }
-}
-
-/// Outcome of damage inspection.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DirtyRows {
-    /// Entire screen is dirty (resize / alt-screen swap / clear / reset).
-    Full,
-    /// Specific row indices are dirty.
-    Rows(Vec<u16>),
-}
-
-impl DirtyRows {
-    /// Reads the damage tracker and returns row indices that changed.
-    ///
-    /// `&mut Term` is required because `Term::damage()` takes `&mut self`.
-    /// `scratch_dirty` is cleared, filled with the dirty row indices, then
-    /// moved into the returned `DirtyRows::Rows` variant via `mem::take`.
-    /// The caller should reclaim the consumed `Vec` back into the scratch field
-    /// after the emit completes so capacity persists across calls.
-    pub fn collect<T>(term: &mut Term<T>, scratch_dirty: &mut Vec<u16>) -> DirtyRows {
-        match term.damage() {
-            TermDamage::Full => DirtyRows::Full,
-            TermDamage::Partial(iter) => {
-                scratch_dirty.clear();
-                scratch_dirty.extend(iter.map(|d| d.line as u16));
-                DirtyRows::Rows(std::mem::take(scratch_dirty))
-            }
+            TermDamage::Partial(rows) if rows.len() <= 1 => DamageVerdict::AtMostOneRow,
+            TermDamage::Partial(rows) => DamageVerdict::ManyRows { rows: rows.len() },
         }
     }
 }

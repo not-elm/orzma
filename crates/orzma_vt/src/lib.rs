@@ -6,10 +6,14 @@ use alacritty_terminal::{
     vte::ansi::{Handler, Processor},
 };
 
-use crate::webview::WebviewApcState;
+use crate::{damage::DamageVerdict, webview::WebviewApcState};
 
 mod damage;
 mod webview;
+
+pub trait OrzmaVt {
+    fn ingest(&mut self, chunk: &[u8]) -> DamageVerdict;
+}
 
 pub struct Vt {
     processor: Processor,
