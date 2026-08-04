@@ -1,11 +1,10 @@
+use crate::extension::ApcState;
 use alacritty_terminal::{
     Grid, Term,
     event::EventListener,
     vte::ansi::{Handler, Processor},
 };
 use vtparse::{VTActor, VTParser};
-
-use crate::extension::ApcState;
 
 pub struct AlacrittyVt {
     processor: Processor,
