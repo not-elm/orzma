@@ -149,24 +149,15 @@ impl Orzma {
     /// Connects to the orzma control socket, performs the `hello` handshake, and
     /// spawns the background reader thread.
     ///
-    /// The socket path is resolved from an ordered candidate list (see
-    /// `resolve_orzma_sock_candidates`): the tmux session environment first — orzma
-    /// rewrites it on every attach, so it names the currently-attached orzma — then
-    /// the inherited `$ORZMA_SOCK`, which can be a stale snapshot from an orzma that
-    /// has since exited (the pane forked while that value was live). `connect()`
-    /// tries each in order via `connect_first_reachable` and uses the first that is
-    /// actually reachable, so a stale candidate cannot shadow the live one.
+    /// The socket path comes from the inherited `$ORZMA_SOCK`, and the identity
+    /// sent in the handshake from `$ORZMA_TOKEN`; orzma injects both into every
+    /// surface it spawns. An inherited `$ORZMA_SOCK` can be a stale snapshot from
+    /// an orzma that has since exited, so an unreachable socket surfaces as
+    /// [`OrzmaError::SocketUnavailable`] rather than a bare IO error.
     pub fn connect() -> OrzmaResult<Self> {
-        let candidates = resolve_orzma_sock_candidates();
-        if candidates.is_empty() {
-            return Err(OrzmaError::NotInPane("ORZMA_SOCK"));
-        }
-        let token = pane_identity(
-            std::env::var("ORZMA_TOKEN").ok(),
-            std::env::var("TMUX_PANE").ok(),
-        )
-        .ok_or(OrzmaError::NotInPane("ORZMA_TOKEN or TMUX_PANE"))?;
-        let stream = connect_first_reachable(&candidates)?;
+        let sock = resolve_orzma_sock().ok_or(OrzmaError::NotInPane("ORZMA_SOCK"))?;
+        let token = resolve_orzma_token().ok_or(OrzmaError::NotInPane("ORZMA_TOKEN"))?;
+        let stream = connect_sock(&sock)?;
         let writer: SharedWriter = Arc::new(Mutex::new(stream.try_clone()?));
         let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
         let pending: PendingRegisters = Arc::new(Mutex::new(VecDeque::new()));
@@ -323,101 +314,40 @@ impl Orzma {
     }
 }
 
-/// Resolves the identity sent in the `hello` handshake: the legacy per-surface
-/// `$ORZMA_TOKEN` (direct-PTY backend) when set, else the tmux pane id
-/// `$TMUX_PANE`. tmux injects `$TMUX_PANE` into every pane it spawns, so the
-/// fallback covers the tmux backend where `$ORZMA_TOKEN` is never set. `None`
-/// when neither is present — the process is not inside an orzma pane.
-fn pane_identity(orzma_token: Option<String>, tmux_pane: Option<String>) -> Option<String> {
-    orzma_token.filter(|t| !t.is_empty()).or(tmux_pane)
+/// The control-socket path inherited from the surface's environment. `None` when
+/// `$ORZMA_SOCK` is unset or empty — the process is not inside an orzma surface.
+fn resolve_orzma_sock() -> Option<String> {
+    std::env::var("ORZMA_SOCK").ok().filter(|s| !s.is_empty())
 }
 
-/// Extracts the tmux server socket path from a `$TMUX` value
-/// (`<socket-path>,<server-pid>,<session-id>`): everything up to the first
-/// comma. `None` for an empty value or one starting with a comma, mirroring
-/// tmux's own `$TMUX` validity guard so a malformed value cannot resolve to an
-/// empty socket path.
-fn socket_from_tmux(tmux: &str) -> Option<&str> {
-    tmux.split(',').next().filter(|first| !first.is_empty())
+/// The identity sent in the `hello` handshake, read from the per-surface
+/// `$ORZMA_TOKEN`. `None` when it is unset or empty.
+fn resolve_orzma_token() -> Option<String> {
+    std::env::var("ORZMA_TOKEN").ok().filter(|t| !t.is_empty())
 }
 
-/// Reads the value of `key` from `tmux show-environment` output. tmux prints one
-/// `KEY=value` line per variable and `-KEY` for an unset one; returns the value
-/// when a `KEY=` line is present, else `None`.
-fn parse_show_environment<'a>(output: &'a str, key: &str) -> Option<&'a str> {
-    let prefix = format!("{key}=");
-    output.lines().find_map(|line| line.strip_prefix(&prefix))
-}
-
-/// The control-socket candidates to try, most-authoritative first.
-///
-/// The tmux session value (see [`resolve_from_tmux`]) comes first: orzma rewrites
-/// it on every attach via `set-environment`, so it names the currently-attached
-/// orzma. The inherited `$ORZMA_SOCK` process env is second — it is the only source
-/// under the direct-PTY backend (no `$TMUX`), but in a tmux pane it can be a STALE
-/// snapshot from an orzma that has since exited (the pane forked while that value
-/// was live), so it must not shadow the fresh tmux value. Deduped to avoid a
-/// redundant connect when the pane forked during the current orzma (both equal).
-fn resolve_orzma_sock_candidates() -> Vec<String> {
-    let mut candidates = Vec::new();
-    if let Some(sock) = resolve_from_tmux() {
-        candidates.push(sock);
-    }
-    if let Some(sock) = std::env::var("ORZMA_SOCK").ok().filter(|s| !s.is_empty())
-        && !candidates.contains(&sock)
-    {
-        candidates.push(sock);
-    }
-    candidates
-}
-
-/// Recovers `$ORZMA_SOCK` from the tmux session environment via
-/// `tmux -S <socket> show-environment ORZMA_SOCK`.
-///
-/// A pane that forked before orzma ran `set-environment` never inherited
-/// `$ORZMA_SOCK`, and a running process's environment cannot be changed from
-/// outside; tmux injects `$TMUX` into every pane, so reading the value back
-/// recovers it without a shell-rc hook. `None` outside tmux, when tmux is
-/// unavailable, or when the variable is unset on the session.
-fn resolve_from_tmux() -> Option<String> {
-    let tmux = std::env::var("TMUX").ok()?;
-    let socket = socket_from_tmux(&tmux)?;
-    let output = std::process::Command::new("tmux")
-        .args(["-S", socket, "show-environment", "ORZMA_SOCK"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_show_environment(&stdout, "ORZMA_SOCK")
-        .filter(|sock| !sock.is_empty())
-        .map(str::to_owned)
-}
-
-/// Connects to the first reachable candidate, treating an unreachable one as a
-/// stale `$ORZMA_SOCK` and moving on.
+/// Connects to `sock`, distinguishing a stale socket from a genuine IO failure.
 ///
 /// `NotFound` (the socket file is gone) and `ConnectionRefused` (the file exists
-/// but its orzma has exited) mean a stale candidate — skip it. Any other IO error
-/// is surfaced as [`OrzmaError::Io`]. When every candidate is stale, returns
-/// [`OrzmaError::SocketUnavailable`] for the first (most-authoritative) one so the
-/// message points at the socket the caller most expected to reach.
-fn connect_first_reachable(candidates: &[String]) -> OrzmaResult<UnixStream> {
-    let mut stale: Option<(String, std::io::Error)> = None;
-    for sock in candidates {
-        match UnixStream::connect(sock) {
-            Ok(stream) => return Ok(stream),
-            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused) => {
-                if stale.is_none() {
-                    stale = Some((sock.clone(), e));
-                }
-            }
-            Err(e) => return Err(OrzmaError::Io(e)),
+/// but its orzma has exited) mean the inherited `$ORZMA_SOCK` is stale, and are
+/// reported as [`OrzmaError::SocketUnavailable`]. Any other IO error is surfaced
+/// as [`OrzmaError::Io`].
+fn connect_sock(sock: &str) -> OrzmaResult<UnixStream> {
+    match UnixStream::connect(sock) {
+        Ok(stream) => Ok(stream),
+        Err(cause)
+            if matches!(
+                cause.kind(),
+                ErrorKind::NotFound | ErrorKind::ConnectionRefused
+            ) =>
+        {
+            Err(OrzmaError::SocketUnavailable {
+                path: sock.to_owned(),
+                cause,
+            })
         }
+        Err(e) => Err(OrzmaError::Io(e)),
     }
-    let (path, cause) = stale.expect("candidates is non-empty and every entry was stale");
-    Err(OrzmaError::SocketUnavailable { path, cause })
 }
 
 /// Emits CUP + mount for new/changed placements and unmount for vanished
@@ -622,12 +552,11 @@ fn attempt_reconnect(
     events: &EventRegistry,
     token: &str,
 ) {
-    let candidates = resolve_orzma_sock_candidates();
-    if candidates.is_empty() {
-        tracing::debug!("reconnect: no ORZMA_SOCK candidates, will retry on next signal");
+    let Some(sock) = resolve_orzma_sock() else {
+        tracing::debug!("reconnect: ORZMA_SOCK is unset, will retry on next signal");
         return;
-    }
-    let new_stream = match connect_first_reachable(&candidates) {
+    };
+    let new_stream = match connect_sock(&sock) {
         Ok(s) => s,
         Err(e) => {
             tracing::debug!("reconnect: socket unavailable: {e}");
@@ -750,93 +679,6 @@ mod tests {
             width: w,
             height: h,
         }
-    }
-
-    #[test]
-    fn pane_identity_prefers_orzma_token() {
-        assert_eq!(
-            pane_identity(Some("tok".into()), Some("%3".into())),
-            Some("tok".into())
-        );
-    }
-
-    #[test]
-    fn pane_identity_falls_back_to_tmux_pane() {
-        assert_eq!(pane_identity(None, Some("%3".into())), Some("%3".into()));
-    }
-
-    #[test]
-    fn pane_identity_treats_empty_token_as_absent() {
-        assert_eq!(
-            pane_identity(Some(String::new()), Some("%3".into())),
-            Some("%3".into())
-        );
-    }
-
-    #[test]
-    fn pane_identity_none_when_neither_set() {
-        assert_eq!(pane_identity(None, None), None);
-    }
-
-    #[test]
-    fn socket_from_tmux_takes_first_comma_field() {
-        assert_eq!(
-            socket_from_tmux("/tmp/tmux-501/default,12345,0"),
-            Some("/tmp/tmux-501/default")
-        );
-    }
-
-    #[test]
-    fn socket_from_tmux_handles_path_without_commas() {
-        assert_eq!(
-            socket_from_tmux("/tmp/only-socket"),
-            Some("/tmp/only-socket")
-        );
-    }
-
-    #[test]
-    fn socket_from_tmux_none_for_empty() {
-        assert_eq!(socket_from_tmux(""), None);
-    }
-
-    #[test]
-    fn socket_from_tmux_none_for_leading_comma() {
-        assert_eq!(socket_from_tmux(",12345,0"), None);
-    }
-
-    #[test]
-    fn parse_show_environment_reads_value() {
-        assert_eq!(
-            parse_show_environment("ORZMA_SOCK=/tmp/ctl.sock\n", "ORZMA_SOCK"),
-            Some("/tmp/ctl.sock")
-        );
-    }
-
-    #[test]
-    fn parse_show_environment_none_for_unset_marker() {
-        assert_eq!(parse_show_environment("-ORZMA_SOCK\n", "ORZMA_SOCK"), None);
-    }
-
-    #[test]
-    fn parse_show_environment_finds_key_among_many_lines() {
-        let output = "FOO=bar\nORZMA_SOCK=/run/orzma/x.sock\nBAZ=qux\n";
-        assert_eq!(
-            parse_show_environment(output, "ORZMA_SOCK"),
-            Some("/run/orzma/x.sock")
-        );
-    }
-
-    #[test]
-    fn parse_show_environment_keeps_equals_in_value() {
-        assert_eq!(
-            parse_show_environment("ORZMA_SOCK=/a=b/ctl.sock\n", "ORZMA_SOCK"),
-            Some("/a=b/ctl.sock")
-        );
-    }
-
-    #[test]
-    fn parse_show_environment_none_when_key_absent() {
-        assert_eq!(parse_show_environment("OTHER=/x\n", "ORZMA_SOCK"), None);
     }
 
     #[test]

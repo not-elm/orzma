@@ -260,8 +260,8 @@ impl TokenRegistry {
         self.0.write().unwrap().insert(token.into(), surface);
     }
 
-    /// Drops every binding that resolves to `surface`. Called when a tmux pane
-    /// despawns so a recycled `Entity` id cannot resolve a stale pane key.
+    /// Drops every binding that resolves to `surface`. Called when a surface
+    /// despawns so a recycled `Entity` id cannot resolve a stale key.
     pub fn remove_entity(&self, surface: Entity) {
         self.0.write().unwrap().retain(|_, bound| *bound != surface);
     }
@@ -400,7 +400,7 @@ impl Plugin for ControlPlanePlugin {
 
 /// Purges a despawned surface's dynamic registrations + assets. Keyed on
 /// `RemovedComponents<TerminalHandle>` so it fires for every terminal surface
-/// (tmux pane or standalone), with no multiplexer dependency.
+/// with no multiplexer dependency.
 ///
 /// # Invariants
 /// Must stay ungated and run every frame: `RemovedComponents` buffers clear at

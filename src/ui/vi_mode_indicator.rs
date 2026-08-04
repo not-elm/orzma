@@ -1,4 +1,4 @@
-//! tmux-style vi-mode indicator chip. A `Display::None` chip Node is
+//! Vi-mode indicator chip. A `Display::None` chip Node is
 //! attached as a child of each Surface host the first frame
 //! `TerminalHandle` is observed there; it becomes visible while the
 //! host carries `ViModeState` and shows `[offset/total]` over the
@@ -13,7 +13,7 @@ use bevy::ecs::observer::On;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 
-/// Background color of the vi-mode indicator chip. tmux-style bright
+/// Background color of the vi-mode indicator chip. Bright
 /// yellow so the chip reads as a deliberate HUD element on top of the
 /// terminal grid.
 const VI_MODE_INDICATOR_BG: Color = Color::srgb(0.95, 0.85, 0.20);
@@ -61,7 +61,7 @@ pub struct IndicatorCache {
     pub total: u32,
 }
 
-/// Formats the chip body as `[offset/total]` — tmux compatible.
+/// Formats the chip body as `[offset/total]`.
 pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
     format!("[{offset}/{total}]")
 }
@@ -163,7 +163,7 @@ mod tests {
     use orzma_tty_engine::{SpawnOptions, TerminalBundle};
 
     #[test]
-    fn format_indicator_matches_tmux_default() {
+    fn format_indicator_renders_offset_over_total() {
         assert_eq!(format_indicator(0, 429), "[0/429]");
         assert_eq!(format_indicator(3, 429), "[3/429]");
         assert_eq!(format_indicator(0, 0), "[0/0]");

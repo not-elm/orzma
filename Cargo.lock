@@ -5039,18 +5039,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "orzma_tmux"
-version = "0.2.0-dev"
-dependencies = [
- "bevy",
- "bitflags 2.13.0",
- "orzma_tty_engine",
- "tmux_control",
- "tmux_control_parser",
- "tracing",
-]
-
-[[package]]
 name = "orzma_tty_engine"
 version = "0.2.0-dev"
 dependencies = [
@@ -6193,9 +6181,9 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
+checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
 dependencies = [
  "portable-atomic",
 ]
@@ -6506,22 +6494,6 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
-
-[[package]]
-name = "tmux_control"
-version = "0.2.0-dev"
-dependencies = [
- "thiserror 2.0.18",
- "tmux_control_parser",
- "tracing",
-]
-
-[[package]]
-name = "tmux_control_parser"
-version = "0.2.0-dev"
-dependencies = [
- "thiserror 2.0.18",
-]
 
 [[package]]
 name = "tokio"

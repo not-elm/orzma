@@ -6287,7 +6287,7 @@ THE SOFTWARE.
 ### MIT License — `MIT`
 
 Used by:
-- spin 0.10.0
+- spin 0.10.1
 
 ~~~text
 The MIT License (MIT)
