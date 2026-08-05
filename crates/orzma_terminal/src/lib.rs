@@ -1,9 +1,11 @@
 use crate::{coalescer::Coalescer, error::OrzmaTermResult, event::TermEvent};
 use orzma_vt::prelude::*;
+use std::path::PathBuf;
 
 mod coalescer;
 mod error;
 mod event;
+mod input;
 
 pub mod prelude {
     pub use crate::{OrzmaTerm, error::*};
@@ -49,4 +51,6 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTermResult {
         todo!("OrzmaTerm::resize")
     }
+
+    pub fn write_mouse_input(&mut self) {}
 }
