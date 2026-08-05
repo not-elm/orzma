@@ -18,7 +18,6 @@ impl AlacrittyVt {
     pub fn advance(&mut self, bytes: &[u8]) {
         self.apc_parser.parse(bytes, &mut self.apc_state);
         self.processor.advance(&mut self.term, bytes);
-        TermMode::all()
     }
 }
 
