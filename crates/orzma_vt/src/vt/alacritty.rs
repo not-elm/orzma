@@ -2,6 +2,7 @@ use crate::extension::ApcState;
 use alacritty_terminal::{
     Grid, Term,
     event::EventListener,
+    term::TermMode,
     vte::ansi::{Handler, Processor},
 };
 use vtparse::{VTActor, VTParser};
@@ -17,6 +18,7 @@ impl AlacrittyVt {
     pub fn advance(&mut self, bytes: &[u8]) {
         self.apc_parser.parse(bytes, &mut self.apc_state);
         self.processor.advance(&mut self.term, bytes);
+        TermMode::all()
     }
 }
 

@@ -46,7 +46,7 @@ pub struct TerminalModifiers {
 ///
 /// Returns `None` if the key/modifier combination produces no PTY output
 /// (e.g. empty `Text`, unmapped combination).
-pub(crate) fn encode_key(
+pub(super) fn encode_key(
     key: &TerminalKey,
     mods: &TerminalModifiers,
     app_cursor_keys: bool,

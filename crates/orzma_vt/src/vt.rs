@@ -1,6 +1,4 @@
 use crate::{damage::DamageVerdict, extension::ApcState, prelude::ControlFrame};
-use alacritty_terminal::{Term, event::EventListener, vte::ansi::Processor};
-use vtparse::VTParser;
 
 mod alacritty;
 
