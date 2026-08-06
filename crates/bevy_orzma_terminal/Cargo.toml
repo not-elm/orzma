@@ -11,7 +11,7 @@ publish.workspace = true
 [dependencies]
 bevy = { workspace = true }
 orzma_vt = { path = "../orzma_vt" }
-orzma_terminal = { path = "../orzma_terminal" }
+orzma_term = { path = "../orzma_term" }
 
 [lints]
 workspace = true

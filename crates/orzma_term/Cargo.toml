@@ -1,5 +1,5 @@
 [package]
-name = "orzma_terminal"
+name = "orzma_term"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

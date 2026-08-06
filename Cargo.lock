@@ -1312,7 +1312,7 @@ name = "bevy_orzma_terminal"
 version = "0.2.0-dev"
 dependencies = [
  "bevy",
- "orzma_terminal",
+ "orzma_term",
  "orzma_vt",
 ]
 
@@ -5048,7 +5048,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "orzma_terminal"
+name = "orzma_term"
 version = "0.2.0-dev"
 dependencies = [
  "orzma_vt",
