@@ -1,3 +1,7 @@
+//! Pure VT-encoder for mouse-protocol reports. Translates a logical
+//! mouse report into the byte sequence the PTY expects. No I/O, no
+//! Bevy types — kept pure so unit tests can cover every branch.
+
 /// 1-indexed cell coordinate suitable for SGR / X10 mouse reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CellCoord {
@@ -5,13 +9,11 @@ pub struct CellCoord {
     pub row: u32,
 }
 
-/// Shared mouse-protocol modifier set. `WheelModifiers` builds one of
-/// these at the encoder call boundary; `ButtonAction::route` already
-/// uses this type natively.
+/// Mouse-protocol modifier set, mapped onto the report's `cb` bits
+/// (shift=4, alt/meta=8, ctrl=16).
 ///
-/// `WheelModifiers::fine` is NOT part of the protocol — it is router
-/// policy that decides line counts — so it stays in `WheelModifiers`
-/// and does not appear here.
+/// OS-level Alt (Option on macOS) is xterm's "meta" bit: `alt` and
+/// `meta` merge into the single +8 bit and never double-count.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProtocolModifiers {
     pub shift: bool,
@@ -20,78 +22,222 @@ pub struct ProtocolModifiers {
     pub meta: bool,
 }
 
-/// Encodes one mouse-protocol report.
+/// Button identity carried by a mouse report.
 ///
-/// `cb_base` is the raw button code: 0/1/2 = L/M/R press, 64/65 = wheel
-/// up/down. Caller is responsible for setting `motion = true` for drag
-/// and for wheel reports (xterm treats wheel as a motion-bit press).
-pub(super) fn encode_protocol_event(
-    modes: TermMode,
-    cb_base: u8,
-    cell: CellCoord,
-    mods: ProtocolModifiers,
-    motion: bool,
-    release: bool,
-) -> Vec<u8> {
-    if modes.contains(TermMode::SGR_MOUSE) {
-        encode_sgr(cb_base, cell, mods, motion, release)
-    } else {
-        encode_x10(cb_base, cell, mods, motion, release)
+/// Wheel variants are press-shaped: xterm reports them with button
+/// codes 64..=67 and never emits a release or sets the motion bit
+/// for them, so wheel reports use [`MouseReportKind::Press`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+    WheelUp,
+    WheelDown,
+    WheelLeft,
+    WheelRight,
+}
+
+impl MouseButton {
+    fn cb_base(self) -> u32 {
+        match self {
+            Self::Left => 0,
+            Self::Middle => 1,
+            Self::Right => 2,
+            Self::WheelUp => 64,
+            Self::WheelDown => 65,
+            Self::WheelLeft => 66,
+            Self::WheelRight => 67,
+        }
     }
 }
 
-fn encode_sgr(
-    cb_base: u8,
-    cell: CellCoord,
-    mods: ProtocolModifiers,
-    motion: bool,
-    release: bool,
-) -> Vec<u8> {
-    let mut cb: u32 = cb_base as u32;
-    if motion {
-        cb += 32;
-    }
-    if mods.shift {
-        cb += 4;
-    }
-    if mods.alt || mods.meta {
-        cb += 8;
-    }
-    if mods.ctrl {
-        cb += 16;
-    }
-    let final_byte = if release { 'm' } else { 'M' };
-    format!(
-        "\x1b[<{};{};{}{}",
-        cb,
-        cell.col.max(1),
-        cell.row.max(1),
-        final_byte
-    )
-    .into_bytes()
+/// What produced the report. `Drag` is "motion while the button is
+/// held" and is the only kind that sets the +32 motion bit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseReportKind {
+    Press,
+    Drag,
+    Release,
 }
 
-fn encode_x10(
-    cb_base: u8,
-    cell: CellCoord,
-    mods: ProtocolModifiers,
-    motion: bool,
-    release: bool,
-) -> Vec<u8> {
-    let mut cb: u32 = if release { 3 } else { cb_base as u32 };
-    if motion {
-        cb += 32;
+/// One mouse-protocol report bound for the PTY.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MouseReport {
+    pub button: MouseButton,
+    pub kind: MouseReportKind,
+    pub cell: CellCoord,
+    pub mods: ProtocolModifiers,
+}
+
+impl MouseReport {
+    /// Encodes this report as SGR (1006) when `sgr_mouse` is set, X10
+    /// otherwise. Callers derive `sgr_mouse` from the pane's mode bits;
+    /// legacy UTF-8 mouse (1005) intentionally falls into the X10 branch.
+    pub fn encode(&self, sgr_mouse: bool) -> Vec<u8> {
+        if sgr_mouse {
+            self.encode_sgr()
+        } else {
+            self.encode_x10()
+        }
     }
-    if mods.shift {
-        cb += 4;
+
+    /// `ESC [ < cb ; col ; row {M|m}` — release keeps the button code
+    /// and switches the final byte to lowercase `m`.
+    fn encode_sgr(&self) -> Vec<u8> {
+        let cb = self.cb_bits(self.button.cb_base());
+        let final_byte = if matches!(self.kind, MouseReportKind::Release) {
+            'm'
+        } else {
+            'M'
+        };
+        format!(
+            "\x1b[<{};{};{}{}",
+            cb,
+            self.cell.col.max(1),
+            self.cell.row.max(1),
+            final_byte
+        )
+        .into_bytes()
     }
-    if mods.alt || mods.meta {
-        cb += 8;
+
+    /// `ESC [ M <cb+32> <col+32> <row+32>` with coords clamped to
+    /// `1..=223`. Release replaces the button base with the all-released
+    /// sentinel 3; modifier and motion bits still apply on top, so e.g.
+    /// Shift-release keeps its Shift bit.
+    fn encode_x10(&self) -> Vec<u8> {
+        let base = if matches!(self.kind, MouseReportKind::Release) {
+            3
+        } else {
+            self.button.cb_base()
+        };
+        let cb = self.cb_bits(base);
+        let col = self.cell.col.clamp(1, 223) as u8;
+        let row = self.cell.row.clamp(1, 223) as u8;
+        vec![0x1b, b'[', b'M', (cb + 32) as u8, col + 32, row + 32]
     }
-    if mods.ctrl {
-        cb += 16;
+
+    fn cb_bits(&self, base: u32) -> u32 {
+        let mut cb = base;
+        if matches!(self.kind, MouseReportKind::Drag) {
+            cb += 32;
+        }
+        if self.mods.shift {
+            cb += 4;
+        }
+        if self.mods.alt || self.mods.meta {
+            cb += 8;
+        }
+        if self.mods.ctrl {
+            cb += 16;
+        }
+        cb
     }
-    let col = cell.col.clamp(1, 223) as u8;
-    let row = cell.row.clamp(1, 223) as u8;
-    vec![0x1b, b'[', b'M', (cb + 32) as u8, col + 32, row + 32]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(button: MouseButton, kind: MouseReportKind, col: u32, row: u32) -> MouseReport {
+        MouseReport {
+            button,
+            kind,
+            cell: CellCoord { col, row },
+            mods: ProtocolModifiers::default(),
+        }
+    }
+
+    #[test]
+    fn sgr_left_press_no_mods() {
+        let r = report(MouseButton::Left, MouseReportKind::Press, 5, 7);
+        assert_eq!(r.encode(true), b"\x1b[<0;5;7M");
+    }
+
+    #[test]
+    fn sgr_left_drag_sets_motion_bit() {
+        let r = report(MouseButton::Left, MouseReportKind::Drag, 1, 1);
+        assert_eq!(r.encode(true), b"\x1b[<32;1;1M");
+    }
+
+    #[test]
+    fn sgr_release_uses_lowercase_m() {
+        let r = report(MouseButton::Left, MouseReportKind::Release, 2, 3);
+        assert_eq!(r.encode(true), b"\x1b[<0;2;3m");
+    }
+
+    #[test]
+    fn sgr_middle_and_right_button_codes() {
+        let middle = report(MouseButton::Middle, MouseReportKind::Press, 1, 1);
+        let right = report(MouseButton::Right, MouseReportKind::Press, 1, 1);
+        assert_eq!(middle.encode(true), b"\x1b[<1;1;1M");
+        assert_eq!(right.encode(true), b"\x1b[<2;1;1M");
+    }
+
+    #[test]
+    fn sgr_wheel_up_with_shift_and_ctrl() {
+        let mut r = report(MouseButton::WheelUp, MouseReportKind::Press, 10, 20);
+        r.mods.shift = true;
+        r.mods.ctrl = true;
+        // 64 + 4 (shift) + 16 (ctrl) = 84 — wheel does NOT add the motion bit.
+        assert_eq!(r.encode(true), b"\x1b[<84;10;20M");
+    }
+
+    #[test]
+    fn sgr_wheel_direction_codes() {
+        let down = report(MouseButton::WheelDown, MouseReportKind::Press, 1, 1);
+        let left = report(MouseButton::WheelLeft, MouseReportKind::Press, 1, 1);
+        let right = report(MouseButton::WheelRight, MouseReportKind::Press, 1, 1);
+        assert_eq!(down.encode(true), b"\x1b[<65;1;1M");
+        assert_eq!(left.encode(true), b"\x1b[<66;1;1M");
+        assert_eq!(right.encode(true), b"\x1b[<67;1;1M");
+    }
+
+    #[test]
+    fn sgr_coords_floor_at_1() {
+        let r = report(MouseButton::Left, MouseReportKind::Press, 0, 0);
+        assert_eq!(r.encode(true), b"\x1b[<0;1;1M");
+    }
+
+    #[test]
+    fn alt_modifier_sets_meta_bit_in_sgr() {
+        let mut r = report(MouseButton::Left, MouseReportKind::Press, 5, 5);
+        r.mods.alt = true;
+        assert_eq!(r.encode(true), b"\x1b[<8;5;5M");
+    }
+
+    #[test]
+    fn alt_and_meta_dont_double_count() {
+        let mut r = report(MouseButton::Left, MouseReportKind::Press, 5, 5);
+        r.mods.alt = true;
+        r.mods.meta = true;
+        assert_eq!(r.encode(true), b"\x1b[<8;5;5M");
+    }
+
+    #[test]
+    fn x10_left_press_offset_32() {
+        let r = report(MouseButton::Left, MouseReportKind::Press, 1, 1);
+        assert_eq!(r.encode(false), vec![0x1b, b'[', b'M', 32, 33, 33]);
+    }
+
+    #[test]
+    fn x10_release_uses_cb_base_3() {
+        let r = report(MouseButton::Left, MouseReportKind::Release, 1, 1);
+        // cb_base = 3 (release sentinel) + 32 = 35
+        assert_eq!(r.encode(false), vec![0x1b, b'[', b'M', 35, 33, 33]);
+    }
+
+    #[test]
+    fn x10_release_keeps_modifier_bits() {
+        let mut r = report(MouseButton::Left, MouseReportKind::Release, 1, 1);
+        r.mods.shift = true;
+        // 3 (release sentinel) + 4 (shift) + 32 = 39
+        assert_eq!(r.encode(false), vec![0x1b, b'[', b'M', 39, 33, 33]);
+    }
+
+    #[test]
+    fn x10_coords_clamp_at_223() {
+        let r = report(MouseButton::Left, MouseReportKind::Press, 500, 9999);
+        assert_eq!(r.encode(false), vec![0x1b, b'[', b'M', 32, 255, 255]);
+    }
 }

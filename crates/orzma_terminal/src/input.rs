@@ -2,6 +2,7 @@
 //! the PTY.
 
 use crate::input::keyboard::{TerminalKey, TerminalModifiers};
+use crate::input::mouse::MouseReport;
 
 mod keyboard;
 mod mouse;
@@ -32,8 +33,42 @@ impl PtyInput {
         Self(keyboard::encode_key(key, mods, app_cursor_keys))
     }
 
+    /// Encodes one mouse report. `sgr_mouse` selects SGR (1006) framing;
+    /// legacy X10 framing is used otherwise, so callers deriving the flag
+    /// from mode bits get 1005 (UTF-8 mouse) routed to X10 as intended.
+    ///
+    /// # References
+    ///
+    /// - [Mouse Tracking] — button/modifier/motion `cb` packing and the
+    ///   X10 vs SGR report framing.
+    ///
+    /// [Mouse Tracking]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking
+    pub fn encode_mouse(report: &MouseReport, sgr_mouse: bool) -> Self {
+        Self(report.encode(sgr_mouse))
+    }
+
     /// Returns the encoded bytes, ready to write to the PTY.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::mouse::{
+        CellCoord, MouseButton, MouseReport, MouseReportKind, ProtocolModifiers,
+    };
+
+    #[test]
+    fn encode_mouse_wraps_report_bytes() {
+        let report = MouseReport {
+            button: MouseButton::Left,
+            kind: MouseReportKind::Press,
+            cell: CellCoord { col: 5, row: 7 },
+            mods: ProtocolModifiers::default(),
+        };
+        let input = PtyInput::encode_mouse(&report, true);
+        assert_eq!(input.as_bytes(), b"\x1b[<0;5;7M");
     }
 }
