@@ -1,4 +1,7 @@
-use crate::{coalescer::Coalescer, error::OrzmaTermResult, event::TermEvent};
+//! PTY-backed terminal core: spawns the login shell under a PTY and
+//! drives an [`OrzmaVt`] behind a frame coalescer.
+
+use crate::{coalescer::Coalescer, error::OrzmaTermResult, event::TermEvent, pty::Pty};
 use orzma_vt::prelude::*;
 use std::path::PathBuf;
 
@@ -6,12 +9,13 @@ mod coalescer;
 mod error;
 mod event;
 mod input;
+mod pty;
 
 pub mod prelude {
     pub use crate::{OrzmaTerm, error::*, input::*};
 }
 
-/// Spawn parameters consumed exactly once by `TerminalBundle::spawn`.
+/// Spawn parameters consumed exactly once by `OrzmaTerm::spawn`.
 pub struct SpawnOptions {
     /// Terminal column count.
     pub cols: u16,
@@ -31,14 +35,24 @@ pub struct EnvKey(pub String);
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct EnvValue(pub String);
 
+/// A live terminal: the VT emulation plus the PTY it is wired to.
 pub struct OrzmaTerm<V: OrzmaVt> {
     vt: V,
     coalescer: Coalescer,
+    pty: Pty,
 }
 
 impl<V: OrzmaVt> OrzmaTerm<V> {
+    /// Spawns the login shell under a new PTY and builds the VT at the
+    /// same grid size.
     pub fn spawn(options: SpawnOptions) -> OrzmaTermResult<Self> {
-        todo!("OrzmaTerm::spawn")
+        let vt = V::new(options.cols, options.rows);
+        let pty = Pty::spawn(&options)?;
+        Ok(Self {
+            vt,
+            coalescer: Coalescer::default(),
+            pty,
+        })
     }
 
     /// HACK:

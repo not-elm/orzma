@@ -5051,7 +5051,10 @@ dependencies = [
 name = "orzma_term"
 version = "0.2.0-dev"
 dependencies = [
+ "anyhow",
+ "crossbeam-channel",
  "orzma_vt",
+ "portable-pty",
  "thiserror 2.0.18",
 ]
 

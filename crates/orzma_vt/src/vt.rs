@@ -4,7 +4,9 @@ mod alacritty;
 
 pub use alacritty::AlacrittyVt;
 
-pub trait OrzmaVt {
+pub trait OrzmaVt: Sized {
+    fn new(cols: u16, rows: u16) -> Self;
+
     fn advance(&mut self, chunk: &[u8]) -> DamageVerdict;
 
     /// Builds the frame for the staged damage.

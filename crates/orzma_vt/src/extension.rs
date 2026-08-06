@@ -7,6 +7,7 @@ mod webview;
 
 pub use webview::ApcWebviewVerb;
 
+#[derive(Default)]
 pub struct ApcState {
     webview: Option<ApcWebviewVerb>,
 }

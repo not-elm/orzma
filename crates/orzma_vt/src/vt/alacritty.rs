@@ -19,8 +19,15 @@ pub struct AlacrittyVt {
 }
 
 impl AlacrittyVt {
+    pub fn advance(&mut self, bytes: &[u8]) {
+        self.apc_parser.parse(bytes, &mut self.apc_state);
+        self.processor.advance(&mut self.term, bytes);
+    }
+}
+
+impl OrzmaVt for AlacrittyVt {
     /// Builds a VT backed by an alacritty `Term` at the given grid size.
-    pub fn new(cols: u16, rows: u16) -> Self {
+    fn new(cols: u16, rows: u16) -> Self {
         Self {
             processor: Processor::new(),
             term: Term::new(
@@ -33,13 +40,6 @@ impl AlacrittyVt {
         }
     }
 
-    pub fn advance(&mut self, bytes: &[u8]) {
-        self.apc_parser.parse(bytes, &mut self.apc_state);
-        self.processor.advance(&mut self.term, bytes);
-    }
-}
-
-impl OrzmaVt for AlacrittyVt {
     fn advance(&mut self, chunk: &[u8]) -> crate::prelude::DamageVerdict {
         todo!()
     }

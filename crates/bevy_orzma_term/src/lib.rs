@@ -1,15 +1,21 @@
 use bevy::prelude::*;
-use orzma_term::OrzmaTerm;
+use orzma_term::{OrzmaTerm, SpawnOptions};
 use orzma_vt::prelude::AlacrittyVt;
 
 mod events;
 
 pub mod prelude {
-    pub use crate::OrzmaTerminalPlugin;
+    pub use crate::{OrzmaTermHandle, OrzmaTerminalPlugin};
 }
 
 #[derive(Component, Deref, DerefMut)]
 pub struct OrzmaTermHandle(OrzmaTerm<AlacrittyVt>);
+
+impl OrzmaTermHandle {
+    pub fn new(options: SpawnOptions) -> Self {
+        Self(OrzmaTerm::spawn(options))
+    }
+}
 
 pub struct OrzmaTerminalPlugin;
 
