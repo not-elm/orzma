@@ -8,7 +8,7 @@ mod event;
 mod input;
 
 pub mod prelude {
-    pub use crate::{OrzmaTerm, error::*};
+    pub use crate::{OrzmaTerm, error::*, input::*};
 }
 
 /// Spawn parameters consumed exactly once by `TerminalBundle::spawn`.

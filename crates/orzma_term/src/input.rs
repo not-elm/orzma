@@ -7,6 +7,9 @@ use crate::input::mouse::MouseReport;
 mod keyboard;
 mod mouse;
 
+pub use keyboard::*;
+pub use mouse::*;
+
 /// VT-encoded bytes bound for the PTY, produced by a user input event.
 ///
 /// Covers escape sequences, C0 control bytes, and plain UTF-8 alike —

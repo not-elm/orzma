@@ -12,7 +12,8 @@
 
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
-use orzma_vt::prelude::{ApcWebviewVerb, InlineAnchor};
+use orzma_term::prelude::*;
+use orzma_vt::prelude::*;
 use std::path::PathBuf;
 
 /// Fired when alacritty raises `Event::Bell`.
@@ -80,44 +81,12 @@ pub struct RequestApcWebview {
     pub anchor: Option<InlineAnchor>,
 }
 
-/// Subset of keys the terminal input codec understands.
-/// Keeps the public surface stable and tells callers exactly which keys are wired.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TerminalKey {
-    /// UTF-8 text (single char or multi-codepoint dead-key composition).
-    Text(String),
-    Enter,
-    Backspace,
-    Tab,
-    Escape,
-    Delete,
-    ArrowUp,
-    ArrowDown,
-    ArrowLeft,
-    ArrowRight,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-}
-
-/// Modifier flags carried alongside `TerminalKey`. MVP only reads `ctrl`;
-/// `shift` / `alt` / `meta` are reserved for future CSI u / modifyOtherKeys
-/// support.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TerminalModifiers {
-    pub ctrl: bool,
-    pub shift: bool,
-    pub alt: bool,
-    pub meta: bool,
-}
-
 /// Fired by the host UI to forward a key press to a specific Terminal
 /// Surface entity. The observer registered by `TerminalHandlePlugin`
 /// encodes the key using the entity's `Term::mode()` and writes the
 /// resulting VT bytes to the PTY.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TerminalKeyInput {
+pub struct RequestTerminalKeyInput {
     #[event_target]
     pub entity: Entity,
     pub key: TerminalKey,

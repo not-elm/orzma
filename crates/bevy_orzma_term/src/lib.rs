@@ -14,7 +14,7 @@ pub struct OrzmaTermHandle(OrzmaTerm<AlacrittyVt>);
 pub struct OrzmaTerminalPlugin;
 
 impl Plugin for OrzmaTerminalPlugin {
-    fn build(app: &mut App) {
-        todo!("Implement OrzmaTerminalPlugin::build")
+    fn build(&self, app: &mut App) {
+        todo!()
     }
 }
