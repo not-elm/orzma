@@ -4,6 +4,7 @@
 use crate::input::keyboard::{TerminalKey, TerminalModifiers};
 
 mod keyboard;
+mod mouse;
 
 /// VT-encoded bytes bound for the PTY, produced by a user input event.
 ///
