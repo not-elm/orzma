@@ -51,6 +51,4 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTermResult {
         todo!("OrzmaTerm::resize")
     }
-
-    pub fn write_mouse_input(&mut self) {}
 }

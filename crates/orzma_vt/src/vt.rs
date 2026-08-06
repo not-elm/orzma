@@ -1,4 +1,4 @@
-use crate::{damage::DamageVerdict, extension::ApcState, prelude::ControlFrame};
+use crate::{damage::DamageVerdict, extension::ApcState, frame::Frame, prelude::ControlFrame};
 
 mod alacritty;
 
@@ -6,7 +6,10 @@ pub use alacritty::AlacrittyVt;
 
 pub trait OrzmaVt {
     fn advance(&mut self, chunk: &[u8]) -> DamageVerdict;
-    /// Builds the frame for the staged damage. fn frames(&mut self) -> Vec<Frame>; /// Bell / Title / ResetTitle / Clipboard / CurrentDir / Webview.
+
+    /// Builds the frame for the staged damage.
+    fn frames(&mut self) -> Vec<Frame>;
+
     fn drain_control(&mut self) -> impl Iterator<Item = ControlFrame> + '_;
 
     /// DSR/DA reply bytes the owner must write back to the PTY.
