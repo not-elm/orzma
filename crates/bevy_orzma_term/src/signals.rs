@@ -96,33 +96,39 @@ fn signal_terminal_events(
     mut terms: Query<(Entity, &mut OrzmaTermHandle)>,
 ) {
     for (terminal, mut term) in terms.iter_mut() {
-        for e in term.vt_mut().drain_signals() {
-            match e {
-                VtSignal::Bell => commands.trigger(TermBellSignal { terminal }),
-                VtSignal::Title(title) => {
-                    commands.trigger(TermTitleChangedSignal { terminal, title })
-                }
-                VtSignal::ResetTitle => commands.trigger(TermTitleResetSignal { terminal }),
-                VtSignal::Clipboard { content } => {
-                    commands.trigger(TermClipboardStoreSignal { terminal, content })
-                }
-                VtSignal::CurrentDir(path_buf) => commands.trigger(TermCwdChangedSignal {
-                    terminal,
-                    path: path_buf,
+        for signal in term.pump() {
+            match signal {
+                TermSignal::ChildExit { code } => commands.trigger(TermChildExitSignal {
+                    entity: terminal,
+                    code,
                 }),
-                VtSignal::ApcWebview { verb, anchor } => commands.trigger(TermApcWebviewSignal {
-                    terminal,
-                    verb,
-                    anchor,
-                }),
-                VtSignal::ModeChange { added, removed } => {
-                    commands.trigger(TermModeChangedSignal {
-                        entity: terminal,
-                        added: added.into_iter().map(String::from).collect(),
-                        removed: removed.into_iter().map(String::from).collect(),
-                    })
-                }
+                TermSignal::Vt(signal) => trigger_vt_signal(&mut commands, terminal, signal),
             }
         }
+    }
+}
+
+fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signal: VtSignal) {
+    match signal {
+        VtSignal::Bell => commands.trigger(TermBellSignal { terminal }),
+        VtSignal::Title(title) => commands.trigger(TermTitleChangedSignal { terminal, title }),
+        VtSignal::ResetTitle => commands.trigger(TermTitleResetSignal { terminal }),
+        VtSignal::Clipboard { content } => {
+            commands.trigger(TermClipboardStoreSignal { terminal, content })
+        }
+        VtSignal::CurrentDir(path_buf) => commands.trigger(TermCwdChangedSignal {
+            terminal,
+            path: path_buf,
+        }),
+        VtSignal::ApcWebview { verb, anchor } => commands.trigger(TermApcWebviewSignal {
+            terminal,
+            verb,
+            anchor,
+        }),
+        VtSignal::ModeChange { added, removed } => commands.trigger(TermModeChangedSignal {
+            entity: terminal,
+            added: added.into_iter().map(String::from).collect(),
+            removed: removed.into_iter().map(String::from).collect(),
+        }),
     }
 }
