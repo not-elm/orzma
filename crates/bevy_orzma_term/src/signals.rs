@@ -127,6 +127,13 @@ fn signal_terminal_events(
                     verb,
                     anchor,
                 }),
+                TermSignal::ModeChange { added, removed } => {
+                    commands.trigger(TermModeChangedSignal {
+                        entity: terminal,
+                        added: added.into_iter().map(String::from).collect(),
+                        removed: removed.into_iter().map(String::from).collect(),
+                    })
+                }
             }
         }
     }

@@ -19,6 +19,12 @@ pub enum TermSignal {
         verb: ApcWebviewVerb,
         anchor: Option<InlineAnchor>,
     },
+    /// Tracked `TermMode` flags that transitioned since the previous
+    /// signal drain, as wire mode names (e.g. "alt-screen").
+    ModeChange {
+        added: Vec<&'static str>,
+        removed: Vec<&'static str>,
+    },
 }
 
 /// Anchor stamped by the VT thread at the exact byte position of a
