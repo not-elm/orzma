@@ -10,7 +10,6 @@ pub struct CellCoord {
     pub col: u32,
     pub row: u32,
 }
-
 /// Wheel direction (vertical and horizontal).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WheelDir {
@@ -47,6 +46,7 @@ pub enum MouseButton {
     WheelDown,
     WheelLeft,
     WheelRight,
+    //TODO: [Mouse Button 8-11](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Other-buttons)までの対応をする必要があれば対応。
 }
 
 impl MouseButton {
