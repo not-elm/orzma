@@ -2,6 +2,8 @@
 //! mouse report into the byte sequence the PTY expects. No I/O, no
 //! Bevy types — kept pure so unit tests can cover every branch.
 
+use orzma_vt::prelude::MouseEncoding;
+
 /// 1-indexed cell coordinate suitable for SGR / X10 mouse reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CellCoord {
@@ -71,14 +73,14 @@ pub struct MouseReport {
 }
 
 impl MouseReport {
-    /// Encodes this report as SGR (1006) when `sgr_mouse` is set, X10
-    /// otherwise. Callers derive `sgr_mouse` from the pane's mode bits;
-    /// legacy UTF-8 mouse (1005) intentionally falls into the X10 branch.
-    pub fn encode(&self, sgr_mouse: bool) -> Vec<u8> {
-        if sgr_mouse {
-            self.encode_sgr()
-        } else {
-            self.encode_x10()
+    /// Encodes this report in the given mouse encoding. UTF-8 (1005)
+    /// is not implemented and intentionally falls back to X10 framing
+    /// (byte-identical for coordinates <= 95).
+    pub fn encode(&self, encoding: MouseEncoding) -> Vec<u8> {
+        match encoding {
+            MouseEncoding::Sgr => self.encode_sgr(),
+            // TODO: real 1005 support (UTF-8-encode cb/col/row above 95, cap 2015).
+            MouseEncoding::Utf8 | MouseEncoding::X10 => self.encode_x10(),
         }
     }
 
@@ -151,27 +153,27 @@ mod tests {
     #[test]
     fn sgr_left_press_no_mods() {
         let r = report(MouseButton::Left, MouseReportKind::Press, 5, 7);
-        assert_eq!(r.encode(true), b"\x1b[<0;5;7M");
+        assert_eq!(r.encode(MouseEncoding::Sgr), b"\x1b[<0;5;7M");
     }
 
     #[test]
     fn sgr_left_drag_sets_motion_bit() {
         let r = report(MouseButton::Left, MouseReportKind::Drag, 1, 1);
-        assert_eq!(r.encode(true), b"\x1b[<32;1;1M");
+        assert_eq!(r.encode(MouseEncoding::Sgr), b"\x1b[<32;1;1M");
     }
 
     #[test]
     fn sgr_release_uses_lowercase_m() {
         let r = report(MouseButton::Left, MouseReportKind::Release, 2, 3);
-        assert_eq!(r.encode(true), b"\x1b[<0;2;3m");
+        assert_eq!(r.encode(MouseEncoding::Sgr), b"\x1b[<0;2;3m");
     }
 
     #[test]
     fn sgr_middle_and_right_button_codes() {
         let middle = report(MouseButton::Middle, MouseReportKind::Press, 1, 1);
         let right = report(MouseButton::Right, MouseReportKind::Press, 1, 1);
-        assert_eq!(middle.encode(true), b"\x1b[<1;1;1M");
-        assert_eq!(right.encode(true), b"\x1b[<2;1;1M");
+        assert_eq!(middle.encode(MouseEncoding::Sgr), b"\x1b[<1;1;1M");
+        assert_eq!(right.encode(MouseEncoding::Sgr), b"\x1b[<2;1;1M");
     }
 
     #[test]
@@ -180,7 +182,7 @@ mod tests {
         r.mods.shift = true;
         r.mods.ctrl = true;
         // 64 + 4 (shift) + 16 (ctrl) = 84 — wheel does NOT add the motion bit.
-        assert_eq!(r.encode(true), b"\x1b[<84;10;20M");
+        assert_eq!(r.encode(MouseEncoding::Sgr), b"\x1b[<84;10;20M");
     }
 
     #[test]
@@ -188,22 +190,22 @@ mod tests {
         let down = report(MouseButton::WheelDown, MouseReportKind::Press, 1, 1);
         let left = report(MouseButton::WheelLeft, MouseReportKind::Press, 1, 1);
         let right = report(MouseButton::WheelRight, MouseReportKind::Press, 1, 1);
-        assert_eq!(down.encode(true), b"\x1b[<65;1;1M");
-        assert_eq!(left.encode(true), b"\x1b[<66;1;1M");
-        assert_eq!(right.encode(true), b"\x1b[<67;1;1M");
+        assert_eq!(down.encode(MouseEncoding::Sgr), b"\x1b[<65;1;1M");
+        assert_eq!(left.encode(MouseEncoding::Sgr), b"\x1b[<66;1;1M");
+        assert_eq!(right.encode(MouseEncoding::Sgr), b"\x1b[<67;1;1M");
     }
 
     #[test]
     fn sgr_coords_floor_at_1() {
         let r = report(MouseButton::Left, MouseReportKind::Press, 0, 0);
-        assert_eq!(r.encode(true), b"\x1b[<0;1;1M");
+        assert_eq!(r.encode(MouseEncoding::Sgr), b"\x1b[<0;1;1M");
     }
 
     #[test]
     fn alt_modifier_sets_meta_bit_in_sgr() {
         let mut r = report(MouseButton::Left, MouseReportKind::Press, 5, 5);
         r.mods.alt = true;
-        assert_eq!(r.encode(true), b"\x1b[<8;5;5M");
+        assert_eq!(r.encode(MouseEncoding::Sgr), b"\x1b[<8;5;5M");
     }
 
     #[test]
@@ -211,20 +213,26 @@ mod tests {
         let mut r = report(MouseButton::Left, MouseReportKind::Press, 5, 5);
         r.mods.alt = true;
         r.mods.meta = true;
-        assert_eq!(r.encode(true), b"\x1b[<8;5;5M");
+        assert_eq!(r.encode(MouseEncoding::Sgr), b"\x1b[<8;5;5M");
     }
 
     #[test]
     fn x10_left_press_offset_32() {
         let r = report(MouseButton::Left, MouseReportKind::Press, 1, 1);
-        assert_eq!(r.encode(false), vec![0x1b, b'[', b'M', 32, 33, 33]);
+        assert_eq!(
+            r.encode(MouseEncoding::X10),
+            vec![0x1b, b'[', b'M', 32, 33, 33]
+        );
     }
 
     #[test]
     fn x10_release_uses_cb_base_3() {
         let r = report(MouseButton::Left, MouseReportKind::Release, 1, 1);
         // cb_base = 3 (release sentinel) + 32 = 35
-        assert_eq!(r.encode(false), vec![0x1b, b'[', b'M', 35, 33, 33]);
+        assert_eq!(
+            r.encode(MouseEncoding::X10),
+            vec![0x1b, b'[', b'M', 35, 33, 33]
+        );
     }
 
     #[test]
@@ -232,12 +240,26 @@ mod tests {
         let mut r = report(MouseButton::Left, MouseReportKind::Release, 1, 1);
         r.mods.shift = true;
         // 3 (release sentinel) + 4 (shift) + 32 = 39
-        assert_eq!(r.encode(false), vec![0x1b, b'[', b'M', 39, 33, 33]);
+        assert_eq!(
+            r.encode(MouseEncoding::X10),
+            vec![0x1b, b'[', b'M', 39, 33, 33]
+        );
     }
 
     #[test]
     fn x10_coords_clamp_at_223() {
         let r = report(MouseButton::Left, MouseReportKind::Press, 500, 9999);
-        assert_eq!(r.encode(false), vec![0x1b, b'[', b'M', 32, 255, 255]);
+        assert_eq!(
+            r.encode(MouseEncoding::X10),
+            vec![0x1b, b'[', b'M', 32, 255, 255]
+        );
+    }
+
+    // Documents the current policy: 1005 is unimplemented and encodes
+    // exactly like X10.
+    #[test]
+    fn utf8_currently_falls_back_to_x10() {
+        let r = report(MouseButton::Left, MouseReportKind::Press, 150, 42);
+        assert_eq!(r.encode(MouseEncoding::Utf8), r.encode(MouseEncoding::X10));
     }
 }
