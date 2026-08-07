@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use orzma_term::{OrzmaTerm, SpawnOptions};
+use orzma_term::{OrzmaTerm, SpawnOptions, prelude::OrzmaTermResult};
 use orzma_vt::prelude::AlacrittyVt;
 
 mod events;
@@ -12,8 +12,8 @@ pub mod prelude {
 pub struct OrzmaTermHandle(OrzmaTerm<AlacrittyVt>);
 
 impl OrzmaTermHandle {
-    pub fn new(options: SpawnOptions) -> Self {
-        Self(OrzmaTerm::spawn(options))
+    pub fn new(options: SpawnOptions) -> OrzmaTermResult<Self> {
+        Ok(Self(OrzmaTerm::spawn(options)?))
     }
 }
 

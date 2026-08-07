@@ -1,5 +1,4 @@
 //! `Pty` — owns the PTY master, writer, child killer, and the
-//! channels fed by the blocking-read OS thread for one spawned shell.
 
 use crate::{
     SpawnOptions,
@@ -53,15 +52,11 @@ impl Pty {
             .spawn_command(cmd)
             .map_err(OrzmaTermError::SpawnShell)?;
         let mut child_killer = child.clone_killer();
-        // NOTE: the slave must be dropped here so the reader sees EOF
-        // when the child exits.
         drop(pty_pair.slave);
 
         let (reader, writer) = match master_pipes(pty_pair.master.as_ref()) {
             Ok(pipes) => pipes,
             Err(e) => {
-                // NOTE: the child is already running at this point; kill
-                // it or it leaks past the failed spawn.
                 let _ = child_killer.kill();
                 return Err(OrzmaTermError::PtyPipe(e));
             }
@@ -83,10 +78,6 @@ impl Pty {
 
 impl Drop for Pty {
     fn drop(&mut self) {
-        // NOTE: SIGHUP the child so the blocking reader thread's read()
-        // returns EOF and exits cleanly. portable-pty's ChildKiller
-        // makes this idempotent — kill() on an already-exited child is
-        // a no-op.
         let _ = self.child_killer.kill();
     }
 }
@@ -157,10 +148,6 @@ fn spawn_reader_thread(
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    // NOTE: a send failure means the receiver — and thus
-                    // the whole `Pty`, whose `Drop` already killed the
-                    // child — is gone. `break` (not `return`) so the
-                    // `child.wait()` below still reaps the child.
                     if chunk_tx.send(buf[..n].to_vec()).is_err() {
                         break;
                     }
