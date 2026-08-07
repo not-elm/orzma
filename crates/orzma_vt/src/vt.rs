@@ -1,4 +1,4 @@
-use crate::{damage::DamageVerdict, extension::ApcState, frame::Frame, prelude::ControlFrame};
+use crate::{damage::DamageVerdict, extension::ApcState, frame::Frame, prelude::TermSignal};
 
 mod alacritty;
 
@@ -12,7 +12,7 @@ pub trait OrzmaVt: Sized {
     /// Builds the frame for the staged damage.
     fn frames(&mut self) -> Vec<Frame>;
 
-    fn drain_control(&mut self) -> impl Iterator<Item = ControlFrame> + '_;
+    fn drain_signals(&mut self) -> impl Iterator<Item = TermSignal> + '_;
 
     /// DSR/DA reply bytes the owner must write back to the PTY.
     fn drain_replies_into(&self, buf: &mut Vec<u8>);

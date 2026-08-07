@@ -10,8 +10,10 @@
 //! `#[event_target] entity` field routes the trigger to the
 //! correct observer.
 
+use crate::OrzmaTermHandle;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
+use bevy::prelude::*;
 use orzma_term::prelude::*;
 use orzma_vt::prelude::*;
 use std::path::PathBuf;
@@ -21,16 +23,22 @@ use std::path::PathBuf;
 #[derive(EntityEvent, Debug, Clone)]
 pub struct NotifyTermBell {
     #[event_target]
-    pub entity: Entity,
+    pub terminal: Entity,
 }
 
-/// Fired when the OSC terminal title changes. `title = None` after
-/// `Event::ResetTitle`; `Some(s)` carries the sanitized string.
+/// Fired when the OSC terminal title changes.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct NotifyTermTitleChanged {
     #[event_target]
-    pub entity: Entity,
-    pub title: Option<String>,
+    pub terminal: Entity,
+    pub title: String,
+}
+
+/// Fired when the OSC terminal title resets.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct TermTitleResetSignal {
+    #[event_target]
+    pub terminal: Entity,
 }
 
 /// Fired when tracked `TermMode` flags transition between coalescer
@@ -47,7 +55,7 @@ pub struct NotifyTermModeChanged {
 #[derive(EntityEvent, Debug, Clone)]
 pub struct NotifyTermClipboardStore {
     #[event_target]
-    pub entity: Entity,
+    pub terminal: Entity,
     pub content: String,
 }
 
@@ -65,7 +73,7 @@ pub struct NotifyTermChildExit {
 #[derive(EntityEvent, Debug, Clone)]
 pub struct NotifyTermCwdChanged {
     #[event_target]
-    pub entity: Entity,
+    pub terminal: Entity,
     pub path: PathBuf,
 }
 
@@ -73,7 +81,7 @@ pub struct NotifyTermCwdChanged {
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestApcWebview {
     #[event_target]
-    pub entity: Entity,
+    pub terminal: Entity,
     /// The inline mount/unmount verb parsed from the OSC 5379 payload.
     pub verb: ApcWebviewVerb,
     /// Anchor metadata for `Mount` (absolute line + column + frame seq);
@@ -91,4 +99,41 @@ pub struct RequestTerminalKeyInput {
     pub entity: Entity,
     pub key: TerminalKey,
     pub modifiers: TerminalModifiers,
+}
+
+pub(crate) struct OrzmaTermSignalPlugin;
+
+impl Plugin for OrzmaTermSignalPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, signal_terminal_events);
+    }
+}
+
+fn signal_terminal_events(
+    mut commands: Commands,
+    mut terms: Query<(Entity, &mut OrzmaTermHandle)>,
+) {
+    for (terminal, mut term) in terms.iter_mut() {
+        for e in term.vt_mut().drain_signals() {
+            match e {
+                TermSignal::Bell => commands.trigger(NotifyTermBell { terminal }),
+                TermSignal::Title(title) => {
+                    commands.trigger(NotifyTermTitleChanged { terminal, title })
+                }
+                TermSignal::ResetTitle => commands.trigger(TermTitleResetSignal { terminal }),
+                TermSignal::Clipboard { content } => {
+                    commands.trigger(NotifyTermClipboardStore { terminal, content })
+                }
+                TermSignal::CurrentDir(path_buf) => commands.trigger(NotifyTermCwdChanged {
+                    terminal,
+                    path: path_buf,
+                }),
+                TermSignal::ApcWebview { verb, anchor } => commands.trigger(RequestApcWebview {
+                    terminal,
+                    verb,
+                    anchor,
+                }),
+            }
+        }
+    }
 }

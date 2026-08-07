@@ -65,4 +65,9 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTermResult {
         todo!("OrzmaTerm::resize")
     }
+
+    #[inline]
+    pub const fn vt_mut(&mut self) -> &mut V {
+        &mut self.vt
+    }
 }

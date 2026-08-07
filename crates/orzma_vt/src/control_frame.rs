@@ -4,7 +4,7 @@ use crate::extension::ApcWebviewVerb;
 
 /// Best-effort control frames forwarded from `TermListener`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ControlFrame {
+pub enum TermSignal {
     Bell,
     Title(String),
     ResetTitle,
@@ -15,7 +15,7 @@ pub enum ControlFrame {
     CurrentDir(PathBuf),
     /// An OSC-driven webview mount/unmount request from the PTY.
     /// `anchor` is `Some` only for `Mount` (stamped in `handle.rs`).
-    OscWebview {
+    ApcWebview {
         verb: ApcWebviewVerb,
         anchor: Option<InlineAnchor>,
     },
