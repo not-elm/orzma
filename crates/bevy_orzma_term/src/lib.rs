@@ -4,10 +4,11 @@ use orzma_vt::prelude::AlacrittyVt;
 
 use crate::signals::OrzmaTermSignalPlugin;
 
+mod requests;
 mod signals;
 
 pub mod prelude {
-    pub use crate::{OrzmaTermHandle, OrzmaTerminalPlugin};
+    pub use crate::{OrzmaTermHandle, OrzmaTerminalPlugin, requests::*, signals::*};
 }
 
 #[derive(Component, Deref, DerefMut)]

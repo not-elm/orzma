@@ -1,8 +1,8 @@
-//! `Term*Signal` `EntityEvent` types for terminal entities — outbound
-//! signals drained from the VT (`TermBellSignal`, `TermTitleChangedSignal`,
+//! Outbound `Term*Signal` `EntityEvent` types for terminal entities,
+//! drained from the VT (`TermBellSignal`, `TermTitleChangedSignal`,
 //! `TermTitleResetSignal`, `TermClipboardStoreSignal`, `TermCwdChangedSignal`,
-//! `TermApcWebviewSignal`, `TermModeChangedSignal`, `TermChildExitSignal`)
-//! and inbound signals triggered by the host UI (`TermKeyInputSignal`).
+//! `TermApcWebviewSignal`, `TermModeChangedSignal`, `TermChildExitSignal`).
+//! Inbound requests fired by the host UI live in `requests.rs`.
 
 use crate::OrzmaTermHandle;
 use bevy::ecs::entity::Entity;
@@ -81,18 +81,6 @@ pub struct TermApcWebviewSignal {
     /// Anchor metadata for `Mount` (absolute line + column + frame seq);
     /// `None` for every other verb.
     pub anchor: Option<InlineAnchor>,
-}
-
-/// Fired by the host UI to forward a key press to a specific Terminal
-/// Surface entity. The observer registered by `TerminalHandlePlugin`
-/// encodes the key using the entity's `Term::mode()` and writes the
-/// resulting VT bytes to the PTY.
-#[derive(EntityEvent, Debug, Clone)]
-pub struct TermKeyInputSignal {
-    #[event_target]
-    pub entity: Entity,
-    pub key: TerminalKey,
-    pub modifiers: TerminalModifiers,
 }
 
 pub(crate) struct OrzmaTermSignalPlugin;
