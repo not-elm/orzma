@@ -1,18 +1,18 @@
 //! PTY-backed terminal core: spawns the login shell under a PTY and
 //! drives an [`OrzmaVt`] behind a frame coalescer.
 
-use crate::{coalescer::Coalescer, error::OrzmaTermResult, event::TermEvent, pty::Pty};
+use crate::{coalescer::Coalescer, error::OrzmaTermResult, pty::Pty, signal::TermSignal};
 use orzma_vt::prelude::*;
 use std::path::PathBuf;
 
 mod coalescer;
 mod error;
-mod event;
 mod input;
 mod pty;
+mod signal;
 
 pub mod prelude {
-    pub use crate::{OrzmaTerm, error::*, input::*};
+    pub use crate::{OrzmaTerm, error::*, input::*, signal::*};
 }
 
 /// Spawn parameters consumed exactly once by `OrzmaTerm::spawn`.
@@ -58,7 +58,7 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     /// HACK:
     /// VecでTermEventを収集しているが、この関数はほぼ米フレームで呼ばれることが予想されるため、
     /// コールバック形式などにしたほうがいい？
-    pub fn pump(&mut self) -> Vec<TermEvent> {
+    pub fn pump(&mut self) -> Vec<TermSignal> {
         todo!("OrzmaTerm::pump")
     }
 

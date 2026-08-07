@@ -2,9 +2,10 @@ use std::path::PathBuf;
 
 use crate::extension::ApcWebviewVerb;
 
-/// Best-effort control frames forwarded from `TermListener`.
+/// Out-of-band signal parsed from the VT byte stream, drained by the
+/// owner via `OrzmaVt::drain_signals`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TermSignal {
+pub enum VtSignal {
     Bell,
     Title(String),
     ResetTitle,

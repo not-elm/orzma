@@ -98,24 +98,24 @@ fn signal_terminal_events(
     for (terminal, mut term) in terms.iter_mut() {
         for e in term.vt_mut().drain_signals() {
             match e {
-                TermSignal::Bell => commands.trigger(TermBellSignal { terminal }),
-                TermSignal::Title(title) => {
+                VtSignal::Bell => commands.trigger(TermBellSignal { terminal }),
+                VtSignal::Title(title) => {
                     commands.trigger(TermTitleChangedSignal { terminal, title })
                 }
-                TermSignal::ResetTitle => commands.trigger(TermTitleResetSignal { terminal }),
-                TermSignal::Clipboard { content } => {
+                VtSignal::ResetTitle => commands.trigger(TermTitleResetSignal { terminal }),
+                VtSignal::Clipboard { content } => {
                     commands.trigger(TermClipboardStoreSignal { terminal, content })
                 }
-                TermSignal::CurrentDir(path_buf) => commands.trigger(TermCwdChangedSignal {
+                VtSignal::CurrentDir(path_buf) => commands.trigger(TermCwdChangedSignal {
                     terminal,
                     path: path_buf,
                 }),
-                TermSignal::ApcWebview { verb, anchor } => commands.trigger(TermApcWebviewSignal {
+                VtSignal::ApcWebview { verb, anchor } => commands.trigger(TermApcWebviewSignal {
                     terminal,
                     verb,
                     anchor,
                 }),
-                TermSignal::ModeChange { added, removed } => {
+                VtSignal::ModeChange { added, removed } => {
                     commands.trigger(TermModeChangedSignal {
                         entity: terminal,
                         added: added.into_iter().map(String::from).collect(),

@@ -1,6 +1,6 @@
 //! Alacritty-backed [`OrzmaVt`] implementation.
 
-use crate::{control_frame::TermSignal, extension::ApcState, vt::OrzmaVt};
+use crate::{control_frame::VtSignal, extension::ApcState, vt::OrzmaVt};
 use alacritty_terminal::{
     Grid, Term,
     event::EventListener,
@@ -48,7 +48,7 @@ impl OrzmaVt for AlacrittyVt {
         todo!()
     }
 
-    fn drain_signals(&mut self) -> impl Iterator<Item = TermSignal> + '_ {
+    fn drain_signals(&mut self) -> impl Iterator<Item = VtSignal> + '_ {
         // TODO: drain control frames captured from the APC stream.
         iter::empty()
     }
