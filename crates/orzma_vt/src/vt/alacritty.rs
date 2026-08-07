@@ -1,6 +1,11 @@
 //! Alacritty-backed [`OrzmaVt`] implementation.
 
-use crate::{control_frame::VtSignal, extension::ApcState, vt::OrzmaVt};
+use crate::{
+    control_frame::VtSignal,
+    extension::ApcState,
+    modes::{MouseEncoding, MouseTracking, VtModes},
+    vt::OrzmaVt,
+};
 use alacritty_terminal::{
     Grid, Term,
     event::EventListener,
@@ -60,6 +65,45 @@ impl OrzmaVt for AlacrittyVt {
     fn scroll(&mut self, delta: i32) {
         todo!()
     }
+
+    fn modes(&self) -> VtModes {
+        let mode = self.term.mode();
+        VtModes {
+            app_cursor: mode.contains(TermMode::APP_CURSOR),
+            bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
+            alt_screen: mode.contains(TermMode::ALT_SCREEN),
+            alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
+            focus_in_out: mode.contains(TermMode::FOCUS_IN_OUT),
+            mouse_encoding: MouseEncoding::from_term_mode(mode),
+            mouse_tracking: MouseTracking::from_term_mode(mode),
+        }
+    }
+}
+
+impl MouseEncoding {
+    fn from_term_mode(mode: &TermMode) -> Self {
+        if mode.contains(TermMode::SGR_MOUSE) {
+            Self::Sgr
+        } else if mode.contains(TermMode::UTF8_MOUSE) {
+            Self::Utf8
+        } else {
+            Self::X10
+        }
+    }
+}
+
+impl MouseTracking {
+    fn from_term_mode(mode: &TermMode) -> Self {
+        if mode.contains(TermMode::MOUSE_MOTION) {
+            Self::Motion
+        } else if mode.contains(TermMode::MOUSE_DRAG) {
+            Self::Drag
+        } else if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
+            Self::Clicks
+        } else {
+            Self::Off
+        }
+    }
 }
 
 struct OrzmaTermEventHandler {}
@@ -97,5 +141,73 @@ impl Dimensions for LocalDim {
 
     fn total_lines(&self) -> usize {
         self.rows
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vt_after(bytes: &[u8]) -> AlacrittyVt {
+        let mut vt = AlacrittyVt::new(80, 24);
+        vt.advance(bytes);
+        vt
+    }
+
+    // NOTE: alacritty's `TermMode::default()` enables ALTERNATE_SCROLL,
+    // so a fresh terminal is NOT `VtModes::default()`.
+    fn baseline() -> VtModes {
+        VtModes {
+            alternate_scroll: true,
+            ..VtModes::default()
+        }
+    }
+
+    #[test]
+    fn fresh_terminal_reports_alacritty_baseline() {
+        let vt = AlacrittyVt::new(80, 24);
+        assert_eq!(vt.modes(), baseline());
+    }
+
+    #[test]
+    fn decset_sets_flags_and_enums() {
+        let vt = vt_after(b"\x1b[?1h\x1b[?2004h\x1b[?1004h\x1b[?1000h\x1b[?1006h");
+        assert_eq!(
+            vt.modes(),
+            VtModes {
+                app_cursor: true,
+                bracketed_paste: true,
+                focus_in_out: true,
+                mouse_tracking: MouseTracking::Clicks,
+                mouse_encoding: MouseEncoding::Sgr,
+                ..baseline()
+            }
+        );
+    }
+
+    #[test]
+    fn mouse_encodings_are_exclusive() {
+        let vt = vt_after(b"\x1b[?1005h\x1b[?1006h");
+        assert_eq!(vt.modes().mouse_encoding, MouseEncoding::Sgr);
+        let vt = vt_after(b"\x1b[?1006h\x1b[?1005h");
+        assert_eq!(vt.modes().mouse_encoding, MouseEncoding::Utf8);
+    }
+
+    #[test]
+    fn mouse_tracking_levels_replace_each_other() {
+        let vt = vt_after(b"\x1b[?1000h\x1b[?1003h");
+        assert_eq!(vt.modes().mouse_tracking, MouseTracking::Motion);
+        let vt = vt_after(b"\x1b[?1002h");
+        assert_eq!(vt.modes().mouse_tracking, MouseTracking::Drag);
+    }
+
+    #[test]
+    fn alt_screen_and_decrst_roundtrip() {
+        let vt = vt_after(b"\x1b[?1049h");
+        assert!(vt.modes().alt_screen);
+        let vt = vt_after(b"\x1b[?1006h\x1b[?1006l");
+        assert_eq!(vt.modes().mouse_encoding, MouseEncoding::X10);
+        let vt = vt_after(b"\x1b[?1007l");
+        assert!(!vt.modes().alternate_scroll);
     }
 }

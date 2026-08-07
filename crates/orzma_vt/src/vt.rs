@@ -1,4 +1,6 @@
-use crate::{damage::DamageVerdict, extension::ApcState, frame::Frame, prelude::VtSignal};
+use crate::{
+    damage::DamageVerdict, extension::ApcState, frame::Frame, modes::VtModes, prelude::VtSignal,
+};
 
 mod alacritty;
 
@@ -19,4 +21,7 @@ pub trait OrzmaVt: Sized {
 
     /// Interactive ops stay synchronous and return whether an emit is due.
     fn scroll(&mut self, delta: i32);
+
+    /// Snapshot of the input-relevant terminal modes.
+    fn modes(&self) -> VtModes;
 }
