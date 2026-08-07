@@ -15,3 +15,11 @@ pub struct RequestTermKeyInput {
     /// Modifier state at press time; feeds the encoder, not a raw HID state.
     pub modifiers: TerminalModifiers,
 }
+
+pub(crate) struct OrzmaEventRequestPlugin;
+
+impl Plugin for OrzmaEventRequestPlugin {
+    fn build(&self, app: &mut App) {
+        todo!()
+    }
+}

@@ -87,14 +87,11 @@ pub(crate) struct OrzmaTermSignalPlugin;
 
 impl Plugin for OrzmaTermSignalPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, signal_terminal_events);
+        app.add_systems(Update, pump_terminals);
     }
 }
 
-fn signal_terminal_events(
-    mut commands: Commands,
-    mut terms: Query<(Entity, &mut OrzmaTermHandle)>,
-) {
+fn pump_terminals(mut commands: Commands, mut terms: Query<(Entity, &mut OrzmaTermHandle)>) {
     for (terminal, mut term) in terms.iter_mut() {
         for signal in term.pump() {
             match signal {

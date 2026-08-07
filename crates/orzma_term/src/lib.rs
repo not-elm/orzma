@@ -55,7 +55,7 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         })
     }
 
-    /// HACK:
+    ///HACK:
     /// VecでTermEventを収集しているが、この関数はほぼ米フレームで呼ばれることが予想されるため、
     /// コールバック形式などにしたほうがいい？
     pub fn pump(&mut self) -> Vec<TermSignal> {
