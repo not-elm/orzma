@@ -1,10 +1,10 @@
-mod control_frame;
 mod damage;
 mod extension;
 mod frame;
 mod modes;
+mod signal;
 mod vt;
 
 pub mod prelude {
-    pub use crate::{control_frame::*, damage::DamageVerdict, extension::*, modes::*, vt::*};
+    pub use crate::{damage::DamageVerdict, extension::*, modes::*, signal::*, vt::*};
 }
