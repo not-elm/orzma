@@ -45,7 +45,7 @@ impl OrzmaVt for AlacrittyVt {
         }
     }
 
-    fn advance(&mut self, chunk: &[u8]) -> crate::prelude::DamageVerdict {
+    fn interpret(&mut self, chunk: &[u8]) -> crate::prelude::DamageVerdict {
         todo!()
     }
 

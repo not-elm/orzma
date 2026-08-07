@@ -9,7 +9,11 @@ pub use alacritty::AlacrittyVt;
 pub trait OrzmaVt: Sized {
     fn new(cols: u16, rows: u16) -> Self;
 
-    fn advance(&mut self, chunk: &[u8]) -> DamageVerdict;
+    /// Interprets a chunk of the PTY byte stream, mutating the terminal
+    /// state, and classifies the resulting damage. ("Interpret" per
+    /// ECMA-48 § 2.3.3: a receiving device interprets the coded
+    /// representations of control functions.)
+    fn interpret(&mut self, chunk: &[u8]) -> DamageVerdict;
 
     /// Builds the frame for the staged damage.
     fn frames(&mut self) -> Vec<Frame>;
