@@ -11,6 +11,15 @@ pub struct CellCoord {
     pub row: u32,
 }
 
+/// Wheel direction (vertical and horizontal).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WheelDir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
 /// Mouse-protocol modifier set, mapped onto the report's `cb` bits
 /// (shift=4, alt/meta=8, ctrl=16).
 ///
