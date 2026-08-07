@@ -13,7 +13,7 @@ const MAX_COLS: u16 = 400;
 const MAX_APC_LEN: usize = 1024;
 const ORZMA_APC_PREFIX: &[u8; 1] = b"O";
 
-/// Verb carried by `ControlFrame::OscWebview`: inline mount/unmount of a registered view.
+/// Verb carried by `TermSignal::ApcWebview`: inline mount/unmount of a registered view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApcWebviewVerb {
     /// Mount a registered webview INLINE at the cursor anchor, sized in cells.

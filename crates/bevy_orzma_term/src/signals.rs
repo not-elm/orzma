@@ -1,14 +1,8 @@
-//! `EntityEvent` types for terminal entities — both outbound events
-//! triggered by this crate (`TerminalBell`, `TerminalTitleChanged`,
-//! `TerminalModeChanged`, `TerminalClipboardStore`, `TerminalChildExit`,
-//! `TerminalCurrentDir`) and inbound commands triggered by the host UI
-//! and observed by `TerminalHandlePlugin` (`TerminalKeyInput`).
-//!
-//! Frame events (`FrameSnapshot`, `FrameDelta`) come from
-//! `orzma_tty_renderer::schema` and are emitted via
-//! `commands.trigger(FrameSnapshot { entity, .. })` — the
-//! `#[event_target] entity` field routes the trigger to the
-//! correct observer.
+//! `Term*Signal` `EntityEvent` types for terminal entities — outbound
+//! signals drained from the VT (`TermBellSignal`, `TermTitleChangedSignal`,
+//! `TermTitleResetSignal`, `TermClipboardStoreSignal`, `TermCwdChangedSignal`,
+//! `TermApcWebviewSignal`, `TermModeChangedSignal`, `TermChildExitSignal`)
+//! and inbound signals triggered by the host UI (`TermKeyInputSignal`).
 
 use crate::OrzmaTermHandle;
 use bevy::ecs::entity::Entity;
@@ -21,14 +15,14 @@ use std::path::PathBuf;
 /// Fired when alacritty raises `Event::Bell`.
 /// Best-effort — no back-pressure observability (control channel is unbounded).
 #[derive(EntityEvent, Debug, Clone)]
-pub struct NotifyTermBell {
+pub struct TermBellSignal {
     #[event_target]
     pub terminal: Entity,
 }
 
 /// Fired when the OSC terminal title changes.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct NotifyTermTitleChanged {
+pub struct TermTitleChangedSignal {
     #[event_target]
     pub terminal: Entity,
     pub title: String,
@@ -44,7 +38,7 @@ pub struct TermTitleResetSignal {
 /// Fired when tracked `TermMode` flags transition between coalescer
 /// emit cycles.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct NotifyTermModeChanged {
+pub struct TermModeChangedSignal {
     #[event_target]
     pub entity: Entity,
     pub added: Vec<String>,
@@ -53,7 +47,7 @@ pub struct NotifyTermModeChanged {
 
 /// Fired when alacritty raises `Event::ClipboardStore`.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct NotifyTermClipboardStore {
+pub struct TermClipboardStoreSignal {
     #[event_target]
     pub terminal: Entity,
     pub content: String,
@@ -62,7 +56,7 @@ pub struct NotifyTermClipboardStore {
 /// Fired exactly once when the child shell process exits.
 /// `code` is `None` if the `wait` itself failed.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct NotifyTermChildExit {
+pub struct TermChildExitSignal {
     #[event_target]
     pub entity: Entity,
     pub code: Option<i32>,
@@ -71,7 +65,7 @@ pub struct NotifyTermChildExit {
 /// Fired when a terminal reports a new current working directory via OSC 7.
 /// Targets the terminal host entity; carries the validated absolute path.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct NotifyTermCwdChanged {
+pub struct TermCwdChangedSignal {
     #[event_target]
     pub terminal: Entity,
     pub path: PathBuf,
@@ -79,7 +73,7 @@ pub struct NotifyTermCwdChanged {
 
 /// An OSC-driven webview mount/unmount request from a terminal surface's PTY.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct RequestApcWebview {
+pub struct TermApcWebviewSignal {
     #[event_target]
     pub terminal: Entity,
     /// The inline mount/unmount verb parsed from the OSC 5379 payload.
@@ -94,7 +88,7 @@ pub struct RequestApcWebview {
 /// encodes the key using the entity's `Term::mode()` and writes the
 /// resulting VT bytes to the PTY.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct RequestTerminalKeyInput {
+pub struct TermKeyInputSignal {
     #[event_target]
     pub entity: Entity,
     pub key: TerminalKey,
@@ -116,19 +110,19 @@ fn signal_terminal_events(
     for (terminal, mut term) in terms.iter_mut() {
         for e in term.vt_mut().drain_signals() {
             match e {
-                TermSignal::Bell => commands.trigger(NotifyTermBell { terminal }),
+                TermSignal::Bell => commands.trigger(TermBellSignal { terminal }),
                 TermSignal::Title(title) => {
-                    commands.trigger(NotifyTermTitleChanged { terminal, title })
+                    commands.trigger(TermTitleChangedSignal { terminal, title })
                 }
                 TermSignal::ResetTitle => commands.trigger(TermTitleResetSignal { terminal }),
                 TermSignal::Clipboard { content } => {
-                    commands.trigger(NotifyTermClipboardStore { terminal, content })
+                    commands.trigger(TermClipboardStoreSignal { terminal, content })
                 }
-                TermSignal::CurrentDir(path_buf) => commands.trigger(NotifyTermCwdChanged {
+                TermSignal::CurrentDir(path_buf) => commands.trigger(TermCwdChangedSignal {
                     terminal,
                     path: path_buf,
                 }),
-                TermSignal::ApcWebview { verb, anchor } => commands.trigger(RequestApcWebview {
+                TermSignal::ApcWebview { verb, anchor } => commands.trigger(TermApcWebviewSignal {
                     terminal,
                     verb,
                     anchor,
