@@ -11,7 +11,11 @@ publish.workspace = true
 [dependencies]
 vtparse = { version = "0.7.0" }
 unicode-width = { version = "0.2" }
-alacritty_terminal = { version = "0.26" }
+alacritty_terminal = { version = "0.26", optional = true }
 
 [lints]
 workspace = true
+
+[features]
+default = ["alacritty"]
+alacritty = ["dep:alacritty_terminal"]

@@ -2,8 +2,10 @@ use crate::{
     damage::DamageVerdict, extension::ApcState, frame::Frame, modes::VtModes, prelude::VtSignal,
 };
 
+#[cfg(feature = "alacritty")]
 mod alacritty;
 
+#[cfg(feature = "alacritty")]
 pub use alacritty::AlacrittyVt;
 
 pub trait OrzmaVt: Sized {
@@ -13,7 +15,7 @@ pub trait OrzmaVt: Sized {
     /// state, and classifies the resulting damage. ("Interpret" per
     /// ECMA-48 § 2.3.3: a receiving device interprets the coded
     /// representations of control functions.)
-    fn interpret(&mut self, chunk: &[u8]) -> DamageVerdict;
+    fn interpret(&mut self, chunk: &[u8]) -> Option<DamageVerdict>;
 
     /// Builds the frame for the staged damage.
     fn frames(&mut self) -> Vec<Frame>;

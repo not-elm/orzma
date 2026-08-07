@@ -1,9 +1,10 @@
 //! Alacritty-backed [`OrzmaVt`] implementation.
 
 use crate::{
-    control_frame::VtSignal,
+    damage::DamageVerdict,
     extension::ApcState,
     modes::{MouseEncoding, MouseTracking, VtModes},
+    signal::VtSignal,
     vt::OrzmaVt,
 };
 use alacritty_terminal::{
@@ -24,10 +25,7 @@ pub struct AlacrittyVt {
 }
 
 impl AlacrittyVt {
-    pub fn advance(&mut self, bytes: &[u8]) {
-        self.apc_parser.parse(bytes, &mut self.apc_state);
-        self.processor.advance(&mut self.term, bytes);
-    }
+    pub fn advance(&mut self, bytes: &[u8]) {}
 }
 
 impl OrzmaVt for AlacrittyVt {
@@ -45,8 +43,15 @@ impl OrzmaVt for AlacrittyVt {
         }
     }
 
-    fn interpret(&mut self, chunk: &[u8]) -> crate::prelude::DamageVerdict {
-        todo!()
+    fn interpret(&mut self, chunk: &[u8]) -> Option<DamageVerdict> {
+        if chunk.is_empty() {
+            return None;
+        }
+        self.apc_parser.parse(chunk, &mut self.apc_state);
+        self.processor.advance(&mut self.term, chunk);
+        self.term.damage();
+        DamageVerdict::classify(&mut self.term);
+        Some()
     }
 
     fn frames(&mut self) -> Vec<crate::frame::Frame> {
