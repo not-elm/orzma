@@ -1,6 +1,9 @@
 //! Terminal-mode snapshot the VT exposes for input encoding and
 //! paste/scroll policy.
 
+#[cfg(feature = "alacritty")]
+use alacritty_terminal::term::TermMode;
+
 /// Snapshot of the input-relevant terminal modes.
 ///
 /// # References
@@ -54,6 +57,19 @@ pub enum MouseEncoding {
     Sgr,
 }
 
+impl MouseEncoding {
+    #[cfg(feature = "alacritty")]
+    pub fn from_alacritty_term_mode(mode: &TermMode) -> Self {
+        if mode.contains(TermMode::SGR_MOUSE) {
+            Self::Sgr
+        } else if mode.contains(TermMode::UTF8_MOUSE) {
+            Self::Utf8
+        } else {
+            Self::X10
+        }
+    }
+}
+
 /// Mouse-tracking level.
 ///
 /// The levels are mutually exclusive: each DECSET below replaces the
@@ -82,4 +98,19 @@ pub enum MouseTracking {
     Drag,
     /// DECSET 1003: all motion.
     Motion,
+}
+
+impl MouseTracking {
+    #[cfg(feature = "alacritty")]
+    pub fn from_alacritty_term_mode(mode: &TermMode) -> Self {
+        if mode.contains(TermMode::MOUSE_MOTION) {
+            Self::Motion
+        } else if mode.contains(TermMode::MOUSE_DRAG) {
+            Self::Drag
+        } else if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
+            Self::Clicks
+        } else {
+            Self::Off
+        }
+    }
 }

@@ -3,8 +3,8 @@
 
 use crate::{
     coalescer::Coalescer,
-    error::OrzmaTermResult,
-    input::{PtyInput, TerminalKey, TerminalModifiers},
+    error::{OrzmaTermError, OrzmaTermResult},
+    input::{MouseButton, MouseReport, PtyInput, TerminalKey, TerminalModifiers},
     pty::Pty,
     signal::TermSignal,
 };
@@ -89,5 +89,10 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         //TODO: スクロール処理をいれるかどうか確定する
         self.pty
             .write_all(PtyInput::encode_key(key, mods, modes.app_cursor).as_bytes())
+    }
+
+    pub fn write_mouse_input(&mut self, report: MouseReport) -> OrzmaTermResult {
+        let sequence = report.encode(self.vt.modes().mouse_encoding);
+        self.pty.write_all(&sequence)
     }
 }

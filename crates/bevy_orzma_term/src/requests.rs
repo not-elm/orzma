@@ -3,7 +3,7 @@
 //! `signals.rs` that are drained FROM the VT.
 
 use bevy::prelude::*;
-use orzma_term::prelude::{TerminalKey, TerminalModifiers};
+use orzma_term::prelude::{MouseReport, TerminalKey, TerminalModifiers};
 
 use crate::OrzmaTermHandle;
 
@@ -16,6 +16,13 @@ pub struct RequestTermKeyInput {
     pub key: TerminalKey,
     /// Modifier state at press time; feeds the encoder, not a raw HID state.
     pub modifiers: TerminalModifiers,
+}
+
+#[derive(EntityEvent, Debug, Clone)]
+pub struct RequestTermMouseInput {
+    #[event_target]
+    pub terminal: Entity,
+    pub mouse: MouseReport,
 }
 
 pub(crate) struct OrzmaEventRequestPlugin;

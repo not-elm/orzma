@@ -45,7 +45,7 @@ impl OrzmaVt for AlacrittyVt {
         }
         self.apc_parser.parse(chunk, &mut self.apc_state);
         self.processor.advance(&mut self.term, chunk);
-        let dirty = DirtyRows::from_term(&mut self.term);
+        let dirty = DirtyRows::from_alacritty_term(&mut self.term);
         Some(DamageVerdict::classify(&dirty))
     }
 
@@ -74,51 +74,8 @@ impl OrzmaVt for AlacrittyVt {
             alt_screen: mode.contains(TermMode::ALT_SCREEN),
             alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
             focus_in_out: mode.contains(TermMode::FOCUS_IN_OUT),
-            mouse_encoding: MouseEncoding::from_term_mode(mode),
-            mouse_tracking: MouseTracking::from_term_mode(mode),
-        }
-    }
-}
-
-impl DirtyRows {
-    /// Reads alacritty's accumulated damage for one cycle.
-    ///
-    /// # Invariants
-    ///
-    /// `Term::damage()` consumes its own `last_cursor` bookkeeping, so it must
-    /// be called exactly once per cycle. The owner must call
-    /// `Term::reset_damage()` after the matching emit — without it
-    /// `damage.full` latches and every later cycle reports `Full`.
-    fn from_term<T>(term: &mut Term<T>) -> Self {
-        match term.damage() {
-            TermDamage::Full => Self::Full,
-            TermDamage::Partial(iter) => Self::Rows(iter.map(|d| d.line as u16).collect()),
-        }
-    }
-}
-
-impl MouseEncoding {
-    fn from_term_mode(mode: &TermMode) -> Self {
-        if mode.contains(TermMode::SGR_MOUSE) {
-            Self::Sgr
-        } else if mode.contains(TermMode::UTF8_MOUSE) {
-            Self::Utf8
-        } else {
-            Self::X10
-        }
-    }
-}
-
-impl MouseTracking {
-    fn from_term_mode(mode: &TermMode) -> Self {
-        if mode.contains(TermMode::MOUSE_MOTION) {
-            Self::Motion
-        } else if mode.contains(TermMode::MOUSE_DRAG) {
-            Self::Drag
-        } else if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
-            Self::Clicks
-        } else {
-            Self::Off
+            mouse_encoding: MouseEncoding::from_alacritty_term_mode(mode),
+            mouse_tracking: MouseTracking::from_alacritty_term_mode(mode),
         }
     }
 }
@@ -128,7 +85,6 @@ struct OrzmaTermEventHandler {}
 impl EventListener for OrzmaTermEventHandler {}
 
 /// Grid size handed to `Term::new` / `Term::resize`.
-///
 /// Alacritty's own `TermSize` is `pub(crate)`, so a minimal local
 /// equivalent lives here. `total_lines == screen_lines` on purpose:
 /// scrollback capacity comes from `Config::scrolling_history`, not
@@ -192,20 +148,26 @@ mod tests {
 
     #[test]
     fn a_fresh_terminal_reports_full_damage() {
-        assert_eq!(DirtyRows::from_term(&mut fresh_term()), DirtyRows::Full);
+        assert_eq!(
+            DirtyRows::from_alacritty_term(&mut fresh_term()),
+            DirtyRows::Full
+        );
     }
 
     #[test]
     fn printing_text_damages_the_cursor_row() {
         let mut term = term_after(b"hi");
-        assert_eq!(DirtyRows::from_term(&mut term), DirtyRows::Rows(vec![0]));
+        assert_eq!(
+            DirtyRows::from_alacritty_term(&mut term),
+            DirtyRows::Rows(vec![0])
+        );
     }
 
     #[test]
     fn each_written_line_is_reported_dirty() {
         let mut term = term_after(b"one\r\ntwo\r\nthree");
         assert_eq!(
-            DirtyRows::from_term(&mut term),
+            DirtyRows::from_alacritty_term(&mut term),
             DirtyRows::Rows(vec![0, 1, 2])
         );
     }
@@ -213,18 +175,21 @@ mod tests {
     #[test]
     fn insert_mode_reports_full_damage() {
         let mut term = term_after(b"\x1b[4h");
-        assert_eq!(DirtyRows::from_term(&mut term), DirtyRows::Full);
+        assert_eq!(DirtyRows::from_alacritty_term(&mut term), DirtyRows::Full);
     }
 
     #[test]
     fn reset_damage_clears_the_accumulator() {
         let mut term = term_after(b"one\r\ntwo\r\nthree");
         assert_eq!(
-            DirtyRows::from_term(&mut term),
+            DirtyRows::from_alacritty_term(&mut term),
             DirtyRows::Rows(vec![0, 1, 2])
         );
         term.reset_damage();
-        assert_eq!(DirtyRows::from_term(&mut term), DirtyRows::Rows(vec![2]));
+        assert_eq!(
+            DirtyRows::from_alacritty_term(&mut term),
+            DirtyRows::Rows(vec![2])
+        );
     }
 
     // NOTE: alacritty's `TermMode::default()` enables ALTERNATE_SCROLL,

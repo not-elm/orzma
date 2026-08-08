@@ -13,6 +13,25 @@ pub enum DirtyRows {
     Rows(Vec<u16>),
 }
 
+impl DirtyRows {
+    /// Reads alacritty's accumulated damage for one cycle.
+    ///
+    /// # Invariants
+    ///
+    /// `Term::damage()` consumes its own `last_cursor` bookkeeping, so it must
+    /// be called exactly once per cycle. The owner must call
+    /// `Term::reset_damage()` after the matching emit — without it
+    /// `damage.full` latches and every later cycle reports `Full`.
+    #[cfg(feature = "alacritty")]
+    pub fn from_alacritty_term<T>(term: &mut alacritty_terminal::Term<T>) -> Self {
+        use alacritty_terminal::term::TermDamage;
+        match term.damage() {
+            TermDamage::Full => Self::Full,
+            TermDamage::Partial(iter) => Self::Rows(iter.map(|d| d.line as u16).collect()),
+        }
+    }
+}
+
 /// Classification of collected damage that drives the immediate-flush decision.
 ///
 /// The owner classifies once per interpreted chunk and keeps the matching
