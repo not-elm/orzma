@@ -259,4 +259,106 @@ mod tests {
         let vt = vt_after(b"\x1b[?1007l");
         assert!(!vt.modes().alternate_scroll);
     }
+
+    const VIEWPORT_FILL_ROWS: usize = 23;
+    const SEEDED_HISTORY_ROWS: usize = 10;
+
+    // NOTE: alacritty pushes a row into history only once the cursor already
+    // sits on the last screen line, so the first `VIEWPORT_FILL_ROWS` newlines
+    // of a 24-row grid fill the viewport without growing `history_size`. The
+    // precondition assert keeps a change in that accounting from silently
+    // collapsing every `display_offset` expectation below to zero.
+    fn vt_with_history(history_rows: usize) -> AlacrittyVt {
+        let bytes: Vec<u8> = (0..history_rows + VIEWPORT_FILL_ROWS)
+            .flat_map(|i| format!("l{i}\r\n").into_bytes())
+            .collect();
+        let vt = vt_after(&bytes);
+        assert_eq!(vt.term.grid().history_size(), history_rows);
+        vt
+    }
+
+    #[test]
+    fn positive_delta_scrolls_into_history() {
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        assert_eq!(vt.display_offset(), 0);
+        vt.scroll(3);
+        assert_eq!(vt.display_offset(), 3);
+        vt.scroll(4);
+        assert_eq!(vt.display_offset(), 7);
+    }
+
+    #[test]
+    fn negative_delta_scrolls_toward_the_live_tail() {
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        vt.scroll(7);
+        vt.scroll(-4);
+        assert_eq!(vt.display_offset(), 3);
+        vt.scroll(-3);
+        assert_eq!(vt.display_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_by_zero_leaves_the_viewport_untouched() {
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        vt.scroll(0);
+        assert_eq!(vt.display_offset(), 0);
+        vt.scroll(4);
+        vt.scroll(0);
+        assert_eq!(vt.display_offset(), 4);
+    }
+
+    // NOTE: the clamp bound must stay finite. `Grid::scroll_display` adds
+    // `delta` to `display_offset` with a plain `i32` add, so `i32::MAX` here
+    // would overflow and panic under the overflow checks enabled in dev/test.
+    #[test]
+    fn scroll_clamps_at_the_top_of_history() {
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        vt.scroll(SEEDED_HISTORY_ROWS as i32 + 100);
+        assert_eq!(vt.display_offset(), SEEDED_HISTORY_ROWS as u32);
+        vt.scroll(1);
+        assert_eq!(vt.display_offset(), SEEDED_HISTORY_ROWS as u32);
+    }
+
+    #[test]
+    fn scroll_clamps_at_the_live_tail() {
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        vt.scroll(5);
+        vt.scroll(-1000);
+        assert_eq!(vt.display_offset(), 0);
+        vt.scroll(-1000);
+        assert_eq!(vt.display_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_without_scrollback_is_a_noop() {
+        let mut vt = vt_after(b"one\r\ntwo\r\nthree");
+        vt.scroll(5);
+        assert_eq!(vt.display_offset(), 0);
+        let mut vt = vt_with_history(0);
+        vt.scroll(5);
+        assert_eq!(vt.display_offset(), 0);
+    }
+
+    // NOTE: the history must be seeded on the primary screen before switching,
+    // otherwise this passes for the trivial reason that nothing was scrollable
+    // in the first place. The alternate grid is built with zero scrollback
+    // capacity, so it has nowhere to scroll to.
+    #[test]
+    fn scroll_on_the_alternate_screen_is_a_noop() {
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        vt.interpret(b"\x1b[?1049h");
+        assert!(vt.modes().alt_screen);
+        vt.scroll(5);
+        assert_eq!(vt.display_offset(), 0);
+    }
+
+    #[test]
+    fn at_scroll_bottom_tracks_the_viewport() {
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        assert!(vt.at_scroll_bottom());
+        vt.scroll(3);
+        assert!(!vt.at_scroll_bottom());
+        vt.scroll(-3);
+        assert!(vt.at_scroll_bottom());
+    }
 }
