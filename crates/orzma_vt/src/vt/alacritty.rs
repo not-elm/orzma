@@ -1,7 +1,7 @@
 //! Alacritty-backed [`OrzmaVt`] implementation.
 
 use crate::{
-    damage::DamageVerdict,
+    damage::{DamageVerdict, DirtyRows},
     extension::ApcState,
     modes::{MouseEncoding, MouseTracking, VtModes},
     signal::VtSignal,
@@ -11,7 +11,7 @@ use alacritty_terminal::{
     Grid, Term,
     event::EventListener,
     grid::Dimensions,
-    term::{Config, TermMode},
+    term::{Config, TermDamage, TermMode},
     vte::ansi::{Handler, Processor},
 };
 use std::iter;
@@ -49,9 +49,8 @@ impl OrzmaVt for AlacrittyVt {
         }
         self.apc_parser.parse(chunk, &mut self.apc_state);
         self.processor.advance(&mut self.term, chunk);
-        self.term.damage();
-        DamageVerdict::classify(&mut self.term);
-        Some()
+        let dirty = DirtyRows::from_term(&mut self.term);
+        Some(DamageVerdict::classify(&dirty))
     }
 
     fn frames(&mut self) -> Vec<crate::frame::Frame> {
@@ -81,6 +80,23 @@ impl OrzmaVt for AlacrittyVt {
             focus_in_out: mode.contains(TermMode::FOCUS_IN_OUT),
             mouse_encoding: MouseEncoding::from_term_mode(mode),
             mouse_tracking: MouseTracking::from_term_mode(mode),
+        }
+    }
+}
+
+impl DirtyRows {
+    /// Reads alacritty's accumulated damage for one cycle.
+    ///
+    /// # Invariants
+    ///
+    /// `Term::damage()` consumes its own `last_cursor` bookkeeping, so it must
+    /// be called exactly once per cycle. The owner must call
+    /// `Term::reset_damage()` after the matching emit — without it
+    /// `damage.full` latches and every later cycle reports `Full`.
+    fn from_term<T>(term: &mut Term<T>) -> Self {
+        match term.damage() {
+            TermDamage::Full => Self::Full,
+            TermDamage::Partial(iter) => Self::Rows(iter.map(|d| d.line as u16).collect()),
         }
     }
 }
@@ -155,8 +171,64 @@ mod tests {
 
     fn vt_after(bytes: &[u8]) -> AlacrittyVt {
         let mut vt = AlacrittyVt::new(80, 24);
-        vt.advance(bytes);
+        vt.interpret(bytes);
         vt
+    }
+
+    fn fresh_term() -> Term<OrzmaTermEventHandler> {
+        Term::new(
+            Config::default(),
+            &LocalDim::new(80, 24),
+            OrzmaTermEventHandler {},
+        )
+    }
+
+    // NOTE: a fresh `Term` starts fully damaged (`TermDamageState::new` sets
+    // `full: true` for the bootstrap paint). The reset clears it so each test
+    // observes only the damage its own bytes produced.
+    fn term_after(bytes: &[u8]) -> Term<OrzmaTermEventHandler> {
+        let mut term = fresh_term();
+        term.reset_damage();
+        let mut processor: Processor = Processor::new();
+        processor.advance(&mut term, bytes);
+        term
+    }
+
+    #[test]
+    fn a_fresh_terminal_reports_full_damage() {
+        assert_eq!(DirtyRows::from_term(&mut fresh_term()), DirtyRows::Full);
+    }
+
+    #[test]
+    fn printing_text_damages_the_cursor_row() {
+        let mut term = term_after(b"hi");
+        assert_eq!(DirtyRows::from_term(&mut term), DirtyRows::Rows(vec![0]));
+    }
+
+    #[test]
+    fn each_written_line_is_reported_dirty() {
+        let mut term = term_after(b"one\r\ntwo\r\nthree");
+        assert_eq!(
+            DirtyRows::from_term(&mut term),
+            DirtyRows::Rows(vec![0, 1, 2])
+        );
+    }
+
+    #[test]
+    fn insert_mode_reports_full_damage() {
+        let mut term = term_after(b"\x1b[4h");
+        assert_eq!(DirtyRows::from_term(&mut term), DirtyRows::Full);
+    }
+
+    #[test]
+    fn reset_damage_clears_the_accumulator() {
+        let mut term = term_after(b"one\r\ntwo\r\nthree");
+        assert_eq!(
+            DirtyRows::from_term(&mut term),
+            DirtyRows::Rows(vec![0, 1, 2])
+        );
+        term.reset_damage();
+        assert_eq!(DirtyRows::from_term(&mut term), DirtyRows::Rows(vec![2]));
     }
 
     // NOTE: alacritty's `TermMode::default()` enables ALTERNATE_SCROLL,
