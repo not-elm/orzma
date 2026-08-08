@@ -1,3 +1,4 @@
+mod cursor;
 mod damage;
 mod extension;
 mod frame;
@@ -6,5 +7,5 @@ mod signal;
 mod vt;
 
 pub mod prelude {
-    pub use crate::{damage::DamageVerdict, extension::*, modes::*, signal::*, vt::*};
+    pub use crate::{cursor::*, damage::DamageVerdict, extension::*, modes::*, signal::*, vt::*};
 }

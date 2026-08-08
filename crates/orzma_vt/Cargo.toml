@@ -12,6 +12,7 @@ publish.workspace = true
 vtparse = { version = "0.7.0" }
 unicode-width = { version = "0.2" }
 alacritty_terminal = { version = "0.26", optional = true }
+serde = { workspace = true }
 
 [lints]
 workspace = true
