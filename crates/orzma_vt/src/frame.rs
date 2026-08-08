@@ -6,8 +6,8 @@ use crate::{
 };
 
 pub enum Frame {
-    Snapshot(),
-    Delta(),
+    Snapshot(FrameSnapshot),
+    Delta(FrameDelta),
 }
 
 #[derive(Debug)]
@@ -30,12 +30,7 @@ pub struct FrameDelta {
     pub hyperlinks: Vec<Hyperlink>,
     /// Lines scrolled back from the live tail. `0` = at live tail.
     pub display_offset: u32,
-    /// Total scrollback history line count (upper bound for display_offset).
-    pub history_size: u32,
-    /// Cumulative lines trimmed from the top of scrollback (monotonic;
-    /// advances only on history-destroying folds — spec §3).
-    pub history_base: u64,
-    /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
+    /// Total scrollback history line countuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.
     pub selection: Option<SelectionRange>,

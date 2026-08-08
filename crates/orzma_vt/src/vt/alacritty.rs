@@ -12,7 +12,7 @@ use alacritty_terminal::{
     event::EventListener,
     grid::{Dimensions, Scroll},
     term::{Config, TermDamage, TermMode},
-    vte::ansi::Processor,
+    vte::ansi::{Color, Processor},
 };
 use std::iter;
 use vtparse::VTParser;
