@@ -10,6 +10,7 @@ pub struct CellCoord {
     pub col: u32,
     pub row: u32,
 }
+
 /// Wheel direction (vertical and horizontal).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WheelDir {
