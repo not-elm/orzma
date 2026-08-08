@@ -22,15 +22,17 @@ pub(crate) struct OrzmaEventRequestPlugin;
 
 impl Plugin for OrzmaEventRequestPlugin {
     fn build(&self, app: &mut App) {
-        todo!()
+        app.add_observer(apply_request_term_key_input);
     }
 }
 
 fn apply_request_term_key_input(
     e: On<RequestTermKeyInput>,
-    mut terms: Query<&mut OrzmaTermHandle>
-){
-    if let Ok(mut tty) = terms.get_mut(e.terminal){
-tty.
+    mut terms: Query<&mut OrzmaTermHandle>,
+) {
+    if let Ok(mut tty) = terms.get_mut(e.terminal) {
+        if let Err(e) = tty.write_key_input(&e.key, &e.modifiers) {
+            error!(%e);
+        }
     }
 }

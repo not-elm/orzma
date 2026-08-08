@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use orzma_term::{OrzmaTerm, SpawnOptions, prelude::OrzmaTermResult};
 use orzma_vt::prelude::AlacrittyVt;
 
-use crate::signals::OrzmaTermSignalPlugin;
+use crate::{requests::OrzmaEventRequestPlugin, signals::OrzmaTermSignalPlugin};
 
 mod requests;
 mod signals;
@@ -24,6 +24,6 @@ pub struct OrzmaTerminalPlugin;
 
 impl Plugin for OrzmaTerminalPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((OrzmaTermSignalPlugin,));
+        app.add_plugins((OrzmaTermSignalPlugin, OrzmaEventRequestPlugin));
     }
 }
