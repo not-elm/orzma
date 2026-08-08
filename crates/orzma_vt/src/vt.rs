@@ -1,5 +1,5 @@
 use crate::{
-    damage::DamageVerdict, extension::ApcState, frame::Frame, modes::VtModes, prelude::VtSignal,
+    damage::DamageVerdict, frame::Frame, modes::VtModes, prelude::VtSignal,
 };
 
 #[cfg(feature = "alacritty")]

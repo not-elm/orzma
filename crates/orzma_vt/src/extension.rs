@@ -13,25 +13,25 @@ pub struct ApcState {
 }
 
 impl VTActor for ApcState {
-    fn print(&mut self, b: char) {
+    fn print(&mut self, _b: char) {
         // ignore
     }
 
-    fn execute_c0_or_c1(&mut self, control: u8) {
+    fn execute_c0_or_c1(&mut self, _control: u8) {
         // ignore
     }
 
     fn dcs_hook(
         &mut self,
-        mode: u8,
-        params: &[i64],
-        intermediates: &[u8],
-        ignored_excess_intermediates: bool,
+        _mode: u8,
+        _params: &[i64],
+        _intermediates: &[u8],
+        _ignored_excess_intermediates: bool,
     ) {
         // ignore
     }
 
-    fn dcs_put(&mut self, byte: u8) {
+    fn dcs_put(&mut self, _byte: u8) {
         // ignore
     }
 
@@ -41,19 +41,19 @@ impl VTActor for ApcState {
 
     fn esc_dispatch(
         &mut self,
-        params: &[i64],
-        intermediates: &[u8],
-        ignored_excess_intermediates: bool,
-        byte: u8,
+        _params: &[i64],
+        _intermediates: &[u8],
+        _ignored_excess_intermediates: bool,
+        _byte: u8,
     ) {
         // ignore
     }
 
-    fn csi_dispatch(&mut self, params: &[vtparse::CsiParam], parameters_truncated: bool, byte: u8) {
+    fn csi_dispatch(&mut self, _params: &[vtparse::CsiParam], _parameters_truncated: bool, _byte: u8) {
         // ignore
     }
 
-    fn osc_dispatch(&mut self, params: &[&[u8]]) {
+    fn osc_dispatch(&mut self, _params: &[&[u8]]) {
         // ignore
     }
 

@@ -8,24 +8,20 @@ use crate::{
     vt::OrzmaVt,
 };
 use alacritty_terminal::{
-    Grid, Term,
+    Term,
     event::EventListener,
     grid::Dimensions,
     term::{Config, TermDamage, TermMode},
-    vte::ansi::{Handler, Processor},
+    vte::ansi::Processor,
 };
 use std::iter;
-use vtparse::{VTActor, VTParser};
+use vtparse::VTParser;
 
 pub struct AlacrittyVt {
     processor: Processor,
     term: Term<OrzmaTermEventHandler>,
     apc_state: ApcState,
     apc_parser: VTParser,
-}
-
-impl AlacrittyVt {
-    pub fn advance(&mut self, bytes: &[u8]) {}
 }
 
 impl OrzmaVt for AlacrittyVt {
@@ -62,11 +58,11 @@ impl OrzmaVt for AlacrittyVt {
         iter::empty()
     }
 
-    fn drain_replies_into(&self, buf: &mut Vec<u8>) {
+    fn drain_replies_into(&self, _buf: &mut Vec<u8>) {
         todo!()
     }
 
-    fn scroll(&mut self, delta: i32) {
+    fn scroll(&mut self, _delta: i32) {
         todo!()
     }
 
