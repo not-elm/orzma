@@ -105,7 +105,9 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     ) -> OrzmaTermResult {
         let modes = self.vt.modes();
         self.unflushed_user_input = true;
-        //TODO: スクロール処理をいれるかどうか確定する
+        if self.vt.at_scroll_bottom() {
+            self.vt.scroll_to_bottom();
+        }
         self.pty
             .write_all(PtyInput::encode_key(key, mods, modes.app_cursor).as_bytes())
     }
