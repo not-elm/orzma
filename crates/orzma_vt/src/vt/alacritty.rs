@@ -42,7 +42,7 @@ impl OrzmaVt for AlacrittyVt {
             ),
             apc_state: ApcState::default(),
             apc_parser: VTParser::new(),
-            pending_damage: None,
+            pending_damage: Some(DirtyRows::Full),
         }
     }
 
