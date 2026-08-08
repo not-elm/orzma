@@ -45,7 +45,26 @@ pub struct EnvValue(pub String);
 pub struct OrzmaTerm<V: OrzmaVt> {
     vt: V,
     coalescer: Coalescer,
-    pending_user_input: bool,
+    /// One-shot latch: set immediately before any user-originated PTY
+    /// write, cleared when the coalescer consumes it.
+    ///
+    /// While set it *unlocks* — but does not by itself trigger — the
+    /// immediate-flush path. [`Coalescer::should_flush_immediately`]
+    /// returns `false` outright while this is `false`; only
+    /// `AtMostOneRow`, or `ManyRows` under the row cap with the window
+    /// closed, actually bypasses the IDLE / MAX_CAP deadlines. `Full`
+    /// damage always goes through the window.
+    ///
+    /// # Invariants
+    ///
+    /// - Set BEFORE the PTY write, so an emit cycle racing the write
+    ///   cannot miss it.
+    /// - Machine-originated writes (VT replies such as DSR / DA / CPR)
+    ///   must NOT set this: the flag encodes a write's provenance.
+    /// - Cleared only on an `AtMostOneRow` immediate flush; the
+    ///   `ManyRows` path leaves it set, so it can stay latched across
+    ///   several chunks.
+    unflushed_user_input: bool,
     pty: Pty,
 }
 
@@ -58,7 +77,7 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         Ok(Self {
             vt,
             coalescer: Coalescer::default(),
-            pending_user_input: false,
+            unflushed_user_input: false,
             pty,
         })
     }
@@ -85,7 +104,7 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         mods: &TerminalModifiers,
     ) -> OrzmaTermResult {
         let modes = self.vt.modes();
-        self.pending_user_input = true;
+        self.unflushed_user_input = true;
         //TODO: スクロール処理をいれるかどうか確定する
         self.pty
             .write_all(PtyInput::encode_key(key, mods, modes.app_cursor).as_bytes())
