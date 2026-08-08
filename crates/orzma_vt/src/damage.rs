@@ -101,3 +101,94 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "alacritty"))]
+mod alacritty_tests {
+    use super::*;
+    use alacritty_terminal::Term;
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::term::Config;
+    use alacritty_terminal::vte::ansi::Processor;
+
+    /// Grid size for the fixtures below.
+    ///
+    /// `total_lines == screen_lines` on purpose: scrollback capacity comes
+    /// from `Config::scrolling_history`, not from the size type.
+    struct TestDim;
+
+    impl Dimensions for TestDim {
+        fn columns(&self) -> usize {
+            80
+        }
+
+        fn screen_lines(&self) -> usize {
+            24
+        }
+
+        fn total_lines(&self) -> usize {
+            24
+        }
+    }
+
+    fn fresh_term() -> Term<VoidListener> {
+        Term::new(Config::default(), &TestDim, VoidListener)
+    }
+
+    // NOTE: a fresh `Term` starts fully damaged (`TermDamageState::new` sets
+    // `full: true` for the bootstrap paint). The reset clears it so each test
+    // observes only the damage its own bytes produced.
+    fn term_after(bytes: &[u8]) -> Term<VoidListener> {
+        let mut term = fresh_term();
+        term.reset_damage();
+        let mut processor: Processor = Processor::new();
+        processor.advance(&mut term, bytes);
+        term
+    }
+
+    #[test]
+    fn a_fresh_terminal_reports_full_damage() {
+        assert_eq!(
+            DirtyRows::from_alacritty_term(&mut fresh_term()),
+            DirtyRows::Full
+        );
+    }
+
+    #[test]
+    fn printing_text_damages_the_cursor_row() {
+        let mut term = term_after(b"hi");
+        assert_eq!(
+            DirtyRows::from_alacritty_term(&mut term),
+            DirtyRows::Rows(vec![0])
+        );
+    }
+
+    #[test]
+    fn each_written_line_is_reported_dirty() {
+        let mut term = term_after(b"one\r\ntwo\r\nthree");
+        assert_eq!(
+            DirtyRows::from_alacritty_term(&mut term),
+            DirtyRows::Rows(vec![0, 1, 2])
+        );
+    }
+
+    #[test]
+    fn insert_mode_reports_full_damage() {
+        let mut term = term_after(b"\x1b[4h");
+        assert_eq!(DirtyRows::from_alacritty_term(&mut term), DirtyRows::Full);
+    }
+
+    #[test]
+    fn reset_damage_clears_the_accumulator() {
+        let mut term = term_after(b"one\r\ntwo\r\nthree");
+        assert_eq!(
+            DirtyRows::from_alacritty_term(&mut term),
+            DirtyRows::Rows(vec![0, 1, 2])
+        );
+        term.reset_damage();
+        assert_eq!(
+            DirtyRows::from_alacritty_term(&mut term),
+            DirtyRows::Rows(vec![2])
+        );
+    }
+}

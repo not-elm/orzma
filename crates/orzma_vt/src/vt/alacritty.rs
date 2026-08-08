@@ -22,6 +22,12 @@ pub struct AlacrittyVt {
     term: Term<OrzmaTermEventHandler>,
     apc_state: ApcState,
     apc_parser: VTParser,
+    /// Damage staged for the next [`OrzmaVt::frames`] call.
+    ///
+    /// Replaced rather than unioned on each stage: alacritty accumulates
+    /// line damage internally until `Term::reset_damage`, so the newest
+    /// read already covers every chunk since the last emit.
+    pending_damage: Option<DirtyRows>,
 }
 
 impl OrzmaVt for AlacrittyVt {
@@ -36,6 +42,7 @@ impl OrzmaVt for AlacrittyVt {
             ),
             apc_state: ApcState::default(),
             apc_parser: VTParser::new(),
+            pending_damage: None,
         }
     }
 
@@ -136,71 +143,6 @@ mod tests {
         let mut vt = AlacrittyVt::new(80, 24);
         vt.interpret(bytes);
         vt
-    }
-
-    fn fresh_term() -> Term<OrzmaTermEventHandler> {
-        Term::new(
-            Config::default(),
-            &LocalDim::new(80, 24),
-            OrzmaTermEventHandler {},
-        )
-    }
-
-    // NOTE: a fresh `Term` starts fully damaged (`TermDamageState::new` sets
-    // `full: true` for the bootstrap paint). The reset clears it so each test
-    // observes only the damage its own bytes produced.
-    fn term_after(bytes: &[u8]) -> Term<OrzmaTermEventHandler> {
-        let mut term = fresh_term();
-        term.reset_damage();
-        let mut processor: Processor = Processor::new();
-        processor.advance(&mut term, bytes);
-        term
-    }
-
-    #[test]
-    fn a_fresh_terminal_reports_full_damage() {
-        assert_eq!(
-            DirtyRows::from_alacritty_term(&mut fresh_term()),
-            DirtyRows::Full
-        );
-    }
-
-    #[test]
-    fn printing_text_damages_the_cursor_row() {
-        let mut term = term_after(b"hi");
-        assert_eq!(
-            DirtyRows::from_alacritty_term(&mut term),
-            DirtyRows::Rows(vec![0])
-        );
-    }
-
-    #[test]
-    fn each_written_line_is_reported_dirty() {
-        let mut term = term_after(b"one\r\ntwo\r\nthree");
-        assert_eq!(
-            DirtyRows::from_alacritty_term(&mut term),
-            DirtyRows::Rows(vec![0, 1, 2])
-        );
-    }
-
-    #[test]
-    fn insert_mode_reports_full_damage() {
-        let mut term = term_after(b"\x1b[4h");
-        assert_eq!(DirtyRows::from_alacritty_term(&mut term), DirtyRows::Full);
-    }
-
-    #[test]
-    fn reset_damage_clears_the_accumulator() {
-        let mut term = term_after(b"one\r\ntwo\r\nthree");
-        assert_eq!(
-            DirtyRows::from_alacritty_term(&mut term),
-            DirtyRows::Rows(vec![0, 1, 2])
-        );
-        term.reset_damage();
-        assert_eq!(
-            DirtyRows::from_alacritty_term(&mut term),
-            DirtyRows::Rows(vec![2])
-        );
     }
 
     // NOTE: alacritty's `TermMode::default()` enables ALTERNATE_SCROLL,
@@ -360,5 +302,143 @@ mod tests {
         assert!(!vt.at_scroll_bottom());
         vt.scroll(-3);
         assert!(vt.at_scroll_bottom());
+    }
+
+    /// Row count of the grid every fixture in this module builds.
+    const GRID_ROWS: u16 = 24;
+
+    // NOTE: a fresh `Term` starts fully damaged for the bootstrap paint, so a
+    // test that wants to observe only what its own bytes staged must clear
+    // both halves — the staged value AND alacritty's accumulator. Stands in
+    // for `frames()`, which is still `todo!()`.
+    fn drain_staged(vt: &mut AlacrittyVt) {
+        vt.pending_damage = None;
+        vt.term.reset_damage();
+    }
+
+    #[test]
+    fn empty_chunk_is_not_a_cycle() {
+        let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+        assert_eq!(vt.interpret(b""), None);
+    }
+
+    #[test]
+    fn empty_chunk_leaves_staged_damage_untouched() {
+        let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+        drain_staged(&mut vt);
+        vt.interpret(b"hi");
+        let staged = vt.pending_damage.clone();
+        assert!(
+            staged.is_some(),
+            "precondition: interpreting a non-empty chunk must stage damage"
+        );
+        assert_eq!(vt.interpret(b""), None);
+        assert_eq!(
+            vt.pending_damage, staged,
+            "an empty chunk must neither re-read the damage tracker nor clear the staged value"
+        );
+    }
+
+    #[test]
+    fn the_first_interpret_on_a_fresh_vt_reports_full() {
+        // Whatever the chunk contains: the bootstrap `Full` outranks it.
+        let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+        assert_eq!(vt.interpret(b"x"), Some(DamageVerdict::Full));
+    }
+
+    #[test]
+    fn a_single_row_write_classifies_as_at_most_one_row() {
+        let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+        drain_staged(&mut vt);
+        assert_eq!(vt.interpret(b"hi"), Some(DamageVerdict::AtMostOneRow));
+    }
+
+    #[test]
+    fn a_multi_row_write_classifies_as_many_rows() {
+        let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+        drain_staged(&mut vt);
+        assert_eq!(
+            vt.interpret(b"one\r\ntwo\r\nthree"),
+            Some(DamageVerdict::ManyRows { rows: 3 })
+        );
+    }
+
+    #[test]
+    fn insert_mode_classifies_as_full() {
+        let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+        drain_staged(&mut vt);
+        assert_eq!(vt.interpret(b"\x1b[4h"), Some(DamageVerdict::Full));
+    }
+
+    #[test]
+    fn interpret_stages_the_damage_it_classified() {
+        let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+        drain_staged(&mut vt);
+        assert_eq!(
+            vt.interpret(b"one\r\ntwo\r\nthree"),
+            Some(DamageVerdict::ManyRows { rows: 3 })
+        );
+        assert_eq!(
+            vt.pending_damage,
+            Some(DirtyRows::Rows(vec![0, 1, 2])),
+            "the staged rows must be the ones the verdict was computed from"
+        );
+    }
+
+    #[test]
+    fn staged_damage_accumulates_across_chunks() {
+        // The reason staging is a plain replacement and not a union:
+        // alacritty keeps expanding `damage.lines` until `reset_damage`, so
+        // the newest read already covers every chunk since the last emit.
+        let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+        drain_staged(&mut vt);
+        vt.interpret(b"a");
+        vt.interpret(b"\r\n\r\nb");
+        let Some(DirtyRows::Rows(rows)) = &vt.pending_damage else {
+            panic!(
+                "expected staged partial damage, got {:?}",
+                vt.pending_damage
+            );
+        };
+        assert!(
+            rows.contains(&0),
+            "the row written by the first chunk must survive into the second cycle, got {rows:?}"
+        );
+        assert!(
+            rows.contains(&2),
+            "the row written by the second chunk must be staged, got {rows:?}"
+        );
+    }
+
+    #[test]
+    fn a_fresh_vt_stages_bootstrap_full_damage() {
+        // Without this, a `frames()` call that precedes the first `interpret`
+        // finds nothing staged and the bootstrap paint never reaches the
+        // renderer.
+        assert_eq!(
+            AlacrittyVt::new(80, GRID_ROWS).pending_damage,
+            Some(DirtyRows::Full)
+        );
+    }
+
+    // NOTE: `TermDamageIterator::new` truncates the trailing `display_offset`
+    //       entries BEFORE filtering (alacritty `term/mod.rs:194-198`). Once
+    //       `display_offset >= screen_lines` the whole slice is gone, so the
+    //       iterator yields nothing even though `Term::damage` always damages
+    //       the cursor — which is what makes `DamageVerdict::Idle` reachable.
+    //       alacritty's own `damage_public_usage` (`term/mod.rs:3025-3036`)
+    //       asserts the same empty `Partial`.
+    #[test]
+    fn a_viewport_fully_in_scrollback_stages_empty_damage() {
+        let mut vt = vt_with_history(usize::from(GRID_ROWS) + SEEDED_HISTORY_ROWS);
+        vt.scroll(i32::from(GRID_ROWS));
+        assert_eq!(
+            vt.display_offset(),
+            u32::from(GRID_ROWS),
+            "precondition: the viewport must sit entirely in scrollback"
+        );
+        drain_staged(&mut vt);
+        assert_eq!(vt.interpret(b"\x1b[H"), Some(DamageVerdict::Idle));
+        assert_eq!(vt.pending_damage, Some(DirtyRows::Rows(Vec::new())));
     }
 }
