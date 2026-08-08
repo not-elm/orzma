@@ -74,6 +74,16 @@ impl Pty {
             child_killer,
         })
     }
+
+    #[inline]
+    pub fn write_all(&mut self, buf: &[u8]) -> OrzmaTermResult {
+        self.writer
+            .lock()
+            .unwrap()
+            .write_all(buf)
+            .map_err(|e| OrzmaTermError::PtyWrite(e))?;
+        Ok(())
+    }
 }
 
 impl Drop for Pty {

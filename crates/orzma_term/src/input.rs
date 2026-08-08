@@ -1,8 +1,6 @@
 //! Encoders that turn user input events into the byte sequences written to
 //! the PTY.
 
-use crate::input::keyboard::{TerminalKey, TerminalModifiers};
-use crate::input::mouse::MouseReport;
 use orzma_vt::prelude::MouseEncoding;
 
 mod keyboard;

@@ -5,6 +5,8 @@
 use bevy::prelude::*;
 use orzma_term::prelude::{TerminalKey, TerminalModifiers};
 
+use crate::OrzmaTermHandle;
+
 /// Fired by the host UI to forward a key press to a specific terminal entity.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTermKeyInput {
@@ -21,5 +23,14 @@ pub(crate) struct OrzmaEventRequestPlugin;
 impl Plugin for OrzmaEventRequestPlugin {
     fn build(&self, app: &mut App) {
         todo!()
+    }
+}
+
+fn apply_request_term_key_input(
+    e: On<RequestTermKeyInput>,
+    mut terms: Query<&mut OrzmaTermHandle>
+){
+    if let Ok(mut tty) = terms.get_mut(e.terminal){
+tty.
     }
 }
