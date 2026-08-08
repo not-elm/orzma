@@ -1,6 +1,4 @@
-use crate::{
-    damage::DamageVerdict, frame::Frame, modes::VtModes, prelude::VtSignal,
-};
+use crate::{damage::DamageVerdict, frame::Frame, modes::VtModes, prelude::VtSignal};
 
 #[cfg(feature = "alacritty")]
 mod alacritty;
@@ -10,6 +8,25 @@ pub use alacritty::AlacrittyVt;
 
 pub trait OrzmaVt: Sized {
     fn new(cols: u16, rows: u16) -> Self;
+
+    /// Number of rows the viewport sits above the live tail.
+    ///
+    /// `0` means the viewport is pinned to the live tail; a positive
+    /// value counts the scrollback rows showing above it. The unit is
+    /// grid rows, and the value never exceeds the backend's scrollback
+    /// capacity.
+    ///
+    /// # Invariants
+    ///
+    /// The alternate screen carries no scrollback, so this stays `0`
+    /// for as long as it is active.
+    fn display_offset(&self) -> u32;
+
+    /// Returns `true` when the viewport is pinned to the live tail.
+    #[inline]
+    fn at_scroll_bottom(&self) -> bool {
+        self.display_offset() == 0
+    }
 
     /// Interprets a chunk of the PTY byte stream, mutating the terminal
     /// state, and classifies the resulting damage. ("Interpret" per
@@ -27,6 +44,30 @@ pub trait OrzmaVt: Sized {
 
     /// Interactive ops stay synchronous and return whether an emit is due.
     fn scroll(&mut self, delta: i32);
+
+    /// Snaps the viewport back to the live tail.
+    ///
+    /// Idempotent — a call made while already at the tail leaves the
+    /// viewport untouched. This is the mechanism behind the
+    /// scroll-on-keystroke policy applied before user input reaches the
+    /// PTY.
+    ///
+    /// # Invariants
+    ///
+    /// A no-op call stages no damage, so a caller that needs the
+    /// renderer to observe the new viewport must gate on
+    /// [`Self::at_scroll_bottom`] rather than calling this
+    /// unconditionally.
+    ///
+    /// # References
+    ///
+    /// - [XTerm Control Sequences] — DECSET 1011 (`scrollKey`): scroll
+    ///   to bottom on key press. The inverse policy, DECSET 1010
+    ///   (`scrollTtyOutput`), is not implemented by this trait: the
+    ///   viewport holds its position while the PTY emits output.
+    ///
+    /// [XTerm Control Sequences]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html
+    fn scroll_to_bottom(&mut self);
 
     /// Snapshot of the input-relevant terminal modes.
     fn modes(&self) -> VtModes;

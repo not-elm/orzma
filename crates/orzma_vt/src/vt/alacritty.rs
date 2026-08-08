@@ -10,7 +10,7 @@ use crate::{
 use alacritty_terminal::{
     Term,
     event::EventListener,
-    grid::Dimensions,
+    grid::{Dimensions, Scroll},
     term::{Config, TermDamage, TermMode},
     vte::ansi::Processor,
 };
@@ -62,10 +62,6 @@ impl OrzmaVt for AlacrittyVt {
         todo!()
     }
 
-    fn scroll(&mut self, _delta: i32) {
-        todo!()
-    }
-
     fn modes(&self) -> VtModes {
         let mode = self.term.mode();
         VtModes {
@@ -77,6 +73,21 @@ impl OrzmaVt for AlacrittyVt {
             mouse_encoding: MouseEncoding::from_alacritty_term_mode(mode),
             mouse_tracking: MouseTracking::from_alacritty_term_mode(mode),
         }
+    }
+
+    #[inline]
+    fn display_offset(&self) -> u32 {
+        self.term.grid().display_offset() as u32
+    }
+
+    #[inline]
+    fn scroll(&mut self, delta: i32) {
+        self.term.scroll_display(Scroll::Delta(delta));
+    }
+
+    #[inline]
+    fn scroll_to_bottom(&mut self) {
+        self.scroll(i32::MIN);
     }
 }
 
