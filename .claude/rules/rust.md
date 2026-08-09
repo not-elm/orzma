@@ -62,7 +62,9 @@ Not required (but recommended):
 
 - `pub(crate)` / `pub(super)` / `pub(in path)` items
 - Inline modules (`mod inner { ... }` inside another file)
-- `#[cfg(test)] mod tests { ... }` blocks and their contents
+- `#[cfg(test)] mod tests { ... }` blocks and their contents — EXCEPT
+  `#[test]` functions themselves, which are covered by "Test doc
+  comments" below
 
 Style guide:
 
@@ -76,6 +78,42 @@ Forbidden:
 | ------------------------------------------- | ----------------------------------------- |
 | Externally `pub` item with no doc           | Public API owes the reader an explanation |
 | Placeholder doc like `/// TODO: write this` | Don't ship empty docs                     |
+
+## Test doc comments
+
+Every `#[test]` function carries a `///` doc comment that states the
+asserted contract AND the concrete case the test envisions:
+
+| Place                   | Style                                                                                                     |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- |
+| Every `#[test]` function | `///` — first line: what the test asserts; blank line; a `Case:` paragraph naming the envisioned scenario |
+
+- The `Case:` paragraph describes the real-world situation the test
+  pins — the user action, the terminal/app state it happens in, and the
+  failure a regression would cause. It is NOT a restatement of the
+  assertions; a reader should learn why the contract matters, not what
+  the `assert_eq!` lines already say.
+- When a test pins a decided policy (e.g. "a zero-axis resize is
+  ignored"), the `Case:` paragraph names the policy and the alternative
+  it rejects, so a later reader does not "fix" the test toward the
+  rejected behavior.
+
+```rust
+/// Asserts that a request with a zero axis leaves the PTY size untouched.
+///
+/// Case: a minimized window (or a frame before cell metrics load) makes
+/// the host compute 0 columns or rows. Applying it would tear down the
+/// grid for a transient state, so the agreed policy is to ignore the
+/// request outright rather than clamp it.
+#[test]
+fn a_degenerate_resize_is_ignored() { ... }
+```
+
+Not required:
+
+- Test helpers, fixtures, and mocks inside `#[cfg(test)]` — keep their
+  names descriptive instead (a doc comment is still welcome when the
+  helper hides a non-obvious recipe, e.g. scrollback seeding math).
 
 ## Imports
 
@@ -595,6 +633,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - `mod.rs` ban
 - Comment taxonomy — only `// TODO:` / `// NOTE:` / `// SAFETY:`
 - File-level module `//!` requirement
+- Test doc comments — every `#[test]` fn documents its asserted contract plus a `Case:` paragraph naming the envisioned scenario (see "Test doc comments")
 - "No blank lines between import groups"
 - `#[expect]` preference over `#[allow]`
 - Visibility minimization (MANDATORY axis) — any item (any current visibility) with no callers outside its defining module MUST be private. Manual grep-based check; the `unreachable_pub` lint does NOT catch this.

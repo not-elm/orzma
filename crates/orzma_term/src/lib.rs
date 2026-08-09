@@ -208,6 +208,14 @@ mod tests {
         (term, sink)
     }
 
+    /// Asserts that a detached terminal's PTY writes land on the
+    /// injected sink, byte-identical.
+    ///
+    /// Case: the test-support seam itself — every downstream test that
+    /// asserts "these bytes reached the PTY" (e.g. `bevy_orzma_term`'s
+    /// request-observer tests) trusts `detached` to route the write
+    /// seam into the sink. A regression here silently turns all of
+    /// those assertions into checks against an unrelated buffer.
     #[test]
     fn detached_routes_writes_to_the_injected_sink() {
         let (mut term, sink) = detached_term();
@@ -215,6 +223,12 @@ mod tests {
         assert_eq!(sink.contents(), b"hi");
     }
 
+    /// Asserts that `write_paste("")` writes nothing at all.
+    ///
+    /// Case: an empty clipboard paste. The no-op contract lives here in
+    /// `write_paste` (documented early return): nothing may reach the
+    /// PTY — in bracketed-paste mode even an empty frame would wake the
+    /// receiving app — and the user-input latch stays untouched.
     #[test]
     fn empty_paste_writes_nothing_to_the_pty() {
         let (mut term, sink) = detached_term();
