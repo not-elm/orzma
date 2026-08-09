@@ -5,6 +5,7 @@ use orzma_vt::prelude::MouseEncoding;
 
 mod keyboard;
 mod mouse;
+mod paste;
 mod wheel;
 
 pub use keyboard::*;
@@ -48,6 +49,33 @@ impl PtyInput {
     /// [Mouse Tracking]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking
     pub fn encode_mouse(report: &MouseReport, encoding: MouseEncoding) -> Self {
         Self(report.encode(encoding))
+    }
+
+    /// Encodes a paste of clipboard text, honouring bracketed-paste mode
+    /// (DECSET 2004).
+    ///
+    /// - `bracketed = true`: strips every embedded occurrence of the four
+    ///   bracketed-paste marker forms (7-bit `ESC [ 200~` / `ESC [ 201~` and
+    ///   C1 `U+009B 200~` / `U+009B 201~`) in a fixed-point loop, then wraps
+    ///   the sanitized body in `ESC [ 200 ~` ... `ESC [ 201 ~`; the body is
+    ///   otherwise passed through byte-for-byte. Closes the paste-injection
+    ///   class documented in kitty commit 668f6fa and Alacritty issue #800.
+    /// - `bracketed = false`: normalizes line endings (`\r\n` and lone `\n`
+    ///   become `\r`) and filters nothing else — an unbracketed paste has
+    ///   the same authority as typed input.
+    ///
+    /// The input domain is UTF-8 `&str`: the C1 markers match the codepoint
+    /// `U+009B` (UTF-8 `C2 9B`); a raw `9B` byte is not representable and
+    /// out of scope.
+    ///
+    /// # References
+    ///
+    /// - [Bracketed Paste Mode] — DECSET 2004 and the `ESC [ 200 ~` /
+    ///   `ESC [ 201 ~` framing.
+    ///
+    /// [Bracketed Paste Mode]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Bracketed-Paste-Mode
+    pub fn encode_paste(text: &str, bracketed: bool) -> Self {
+        Self(paste::encode_paste(text, bracketed))
     }
 
     /// Returns the encoded bytes, ready to write to the PTY.

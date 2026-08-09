@@ -57,59 +57,27 @@ mod tests {
         (app, terminal)
     }
 
-    /// Asserts that a triggered `RequestTermPaste` reaches an observer with
-    /// its target and text intact.
+    /// Asserts that the event delivers the clipboard text byte-identical —
+    /// normal text, embedded paste markers, CR/LF, and empty alike.
     ///
-    /// Case: the ordinary Cmd/Ctrl-V path — the host has resolved the
-    /// clipboard read and hands the resulting string to the focused terminal.
+    /// Case: the layer boundary. Bracketed-paste framing, marker stripping,
+    /// and newline normalization are all decided by the terminal-mode-aware
+    /// encoder below this event (`PtyInput::encode_paste`), because only that
+    /// layer sees whether DECSET 2004 is active. A host or event layer that
+    /// "helpfully" pre-sanitized would desync from the encoder's fixed-point
+    /// stripping — so the contract this table pins is that raw text reaches
+    /// the observer for mode-aware encoding, whatever it contains. It does
+    /// NOT mean the markers are safe to forward as-is: stripping is the
+    /// encoder's obligation, exercised by `orzma_term`'s paste tests.
     #[test]
-    fn trigger_delivers_the_clipboard_text() {
-        let (app, terminal) = paste("hello");
-        assert_eq!(
-            app.world().resource::<Seen>().0,
-            vec![(terminal, "hello".to_owned())]
-        );
-    }
-
-    /// Asserts that embedded bracketed-paste markers reach the observer
-    /// unstripped.
-    ///
-    /// Case: the kitty/Alacritty paste-injection class (kitty commit 668f6fa,
-    /// Alacritty issue #800) — hostile clipboard content carrying `ESC[201~`
-    /// tries to close the paste bracket early and have the rest run as typed
-    /// input. Stripping is the apply observer's job because only it knows
-    /// whether bracketed paste is even active; this test pins that the event
-    /// does not half-sanitize on the way and leave the observer believing the
-    /// text is already safe.
-    #[test]
-    fn embedded_paste_markers_are_not_stripped_in_transit() {
-        let hostile = "foo\x1b[201~rm -rf /\x1b[200~bar";
-        let (app, terminal) = paste(hostile);
-        assert_eq!(
-            app.world().resource::<Seen>().0,
-            vec![(terminal, hostile.to_owned())],
-            "sanitization belongs to the apply observer, not to the event"
-        );
-    }
-
-    /// Asserts that line endings and empty text pass through untouched.
-    ///
-    /// Case: a multi-line paste from an editor arrives as `\r\n`, while shells
-    /// expect one `\r` per line — a conversion the apply observer performs.
-    /// Empty text is included because the host can legitimately fire on an
-    /// empty clipboard, and dropping it here would hide that from the observer.
-    #[test]
-    fn line_endings_and_empty_text_pass_through() {
-        let (app, terminal) = paste("a\r\nb\nc");
-        assert_eq!(
-            app.world().resource::<Seen>().0,
-            vec![(terminal, "a\r\nb\nc".to_owned())]
-        );
-
-        let (app, terminal) = paste("");
-        assert_eq!(
-            app.world().resource::<Seen>().0,
-            vec![(terminal, String::new())]
-        );
+    fn request_paste_preserves_raw_text_for_mode_aware_encoding() {
+        for text in ["hello", "foo\x1b[201~rm -rf /\x1b[200~bar", "a\r\nb\nc", ""] {
+            let (app, terminal) = paste(text);
+            assert_eq!(
+                app.world().resource::<Seen>().0,
+                vec![(terminal, text.to_owned())],
+                "text {text:?} must reach the observer byte-identical"
+            );
+        }
     }
 }
