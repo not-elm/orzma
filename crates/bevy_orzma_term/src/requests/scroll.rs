@@ -53,87 +53,97 @@ fn apply_scroll(e: On<RequestTermScroll>) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OrzmaTermHandle;
+    use orzma_vt::prelude::OrzmaVt;
 
-    /// Every `(target, kind)` an observer saw, in fire order.
-    #[derive(Resource, Default)]
-    struct Seen(Vec<(Entity, ScrollKind)>);
-
-    /// Observer that appends what it received to [`Seen`].
-    fn record(ev: On<RequestTermScroll>, mut seen: ResMut<Seen>) {
-        seen.0.push((ev.event_target(), ev.kind));
-    }
-
-    /// Asserts that a triggered `RequestTermScroll` reaches an observer with
-    /// its target and movement intact.
-    ///
-    /// Case: the wheel path — a notch resolves to a line count and fires one
-    /// request at the hovered terminal.
-    #[test]
-    fn trigger_delivers_the_requested_movement() {
+    // NOTE: on the 24-row grid the first 23 newlines only fill the
+    // viewport (alacritty pushes a row into history once the cursor
+    // already sits on the last screen line), so `history_rows + 23`
+    // lines seed exactly `history_rows` — getting this wrong shifts
+    // every `display_offset` expectation below.
+    fn app_with_terminal(history_rows: usize) -> (App, Entity) {
         let mut app = App::new();
-        app.init_resource::<Seen>().add_observer(record);
-        let terminal = app.world_mut().spawn_empty().id();
-
-        app.world_mut().trigger(RequestTermScroll {
-            terminal,
-            kind: ScrollKind::Up(3),
-        });
-
-        assert_eq!(
-            app.world().resource::<Seen>().0,
-            vec![(terminal, ScrollKind::Up(3))]
-        );
-    }
-
-    /// Asserts that every `ScrollKind` variant survives the trigger unchanged.
-    ///
-    /// Case: the vi keymap emits the whole vocabulary (`ViModeScroll` maps onto
-    /// all eight variants). A variant that normalizes on the way — say a future
-    /// `Up(0)` folded into `Bottom`, or `PageUp` rewritten as `Up(rows)` — would
-    /// silently change what the apply observer receives, and the row count it
-    /// would need for that rewrite is not available at trigger time anyway.
-    #[test]
-    fn every_variant_round_trips() {
-        let mut app = App::new();
-        app.init_resource::<Seen>().add_observer(record);
-        let terminal = app.world_mut().spawn_empty().id();
-        let all = [
-            ScrollKind::Up(1),
-            ScrollKind::Down(1),
-            ScrollKind::Up(0),
-            ScrollKind::PageUp,
-            ScrollKind::PageDown,
-            ScrollKind::HalfPageUp,
-            ScrollKind::HalfPageDown,
-            ScrollKind::Top,
-            ScrollKind::Bottom,
-        ];
-
-        for kind in all {
-            app.world_mut()
-                .trigger(RequestTermScroll { terminal, kind });
-        }
-
-        let seen: Vec<ScrollKind> = app
-            .world()
-            .resource::<Seen>()
-            .0
-            .iter()
-            .map(|(_, kind)| *kind)
+        app.add_plugins(ScrollPlugin);
+        let (mut handle, _) = OrzmaTermHandle::detached(80, 24);
+        let seed: Vec<u8> = (0..history_rows + 23)
+            .flat_map(|i| format!("l{i}\r\n").into_bytes())
             .collect();
-        assert_eq!(seen, all);
+        handle.vt_mut().interpret(&seed);
+        let terminal = app.world_mut().spawn(handle).id();
+        (app, terminal)
     }
 
-    /// Asserts that opposite directions stay distinguishable.
+    fn trigger_scroll(app: &mut App, terminal: Entity, kind: ScrollKind) {
+        app.world_mut()
+            .trigger(RequestTermScroll { terminal, kind });
+    }
+
+    fn display_offset(app: &mut App, terminal: Entity) -> u32 {
+        app.world_mut()
+            .get_mut::<OrzmaTermHandle>(terminal)
+            .expect("terminal entity must keep its handle")
+            .vt_mut()
+            .display_offset()
+    }
+
+    /// Asserts that `Up`/`Down` move the viewport by the requested line
+    /// count in opposite directions, cumulatively.
     ///
-    /// Case: the guard against collapsing `Up`/`Down` back into one signed
-    /// field. `Up(3)` and `Down(3)` are the same magnitude, so an accidental
-    /// `unsigned_abs`-style normalization in a later refactor would make the
-    /// viewport scroll the wrong way with no compile error.
+    /// Case: the wheel path — each notch resolves to a line count and
+    /// fires one request, and bursts of notches must accumulate. The
+    /// apply observer is the single place that converts the named
+    /// direction into the VT's signed delta (the reason `ScrollKind`
+    /// has no signed field), so a sign slip there scrolls the viewport
+    /// the wrong way with no compile error; the `Up`-then-`Down`
+    /// sequence pins both mappings against each other.
     #[test]
-    fn up_and_down_of_equal_magnitude_are_not_equal() {
-        assert_ne!(ScrollKind::Up(3), ScrollKind::Down(3));
-        assert_ne!(ScrollKind::PageUp, ScrollKind::PageDown);
-        assert_ne!(ScrollKind::Top, ScrollKind::Bottom);
+    fn scroll_up_and_down_move_the_viewport_relatively() {
+        let (mut app, terminal) = app_with_terminal(10);
+        trigger_scroll(&mut app, terminal, ScrollKind::Up(3));
+        assert_eq!(display_offset(&mut app, terminal), 3);
+        trigger_scroll(&mut app, terminal, ScrollKind::Down(2));
+        assert_eq!(display_offset(&mut app, terminal), 1);
+    }
+
+    /// Asserts that `Top` lands on the oldest retained line and
+    /// `Bottom` returns to the live tail, regardless of the current
+    /// offset.
+    ///
+    /// Case: the vi-mode `gg` / `G` jumps — absolute motions, unlike
+    /// the wheel's relative ones. `Top` must clamp to the real history
+    /// depth via a finite delta (a naive `scroll(i32::MAX)` overflows
+    /// alacritty's offset arithmetic and panics under debug overflow
+    /// checks), and `Bottom` is the escape hatch every scroll-back
+    /// session ends with.
+    #[test]
+    fn scroll_top_and_bottom_jump_to_the_extremes() {
+        let (mut app, terminal) = app_with_terminal(10);
+        trigger_scroll(&mut app, terminal, ScrollKind::Top);
+        assert_eq!(display_offset(&mut app, terminal), 10);
+        trigger_scroll(&mut app, terminal, ScrollKind::Bottom);
+        assert_eq!(display_offset(&mut app, terminal), 0);
+    }
+
+    /// Asserts the agreed page semantics: one page is the full grid
+    /// height (24 rows here) and half a page is half that.
+    ///
+    /// Case: the vi-mode `Ctrl-B`/`Ctrl-F`/`Ctrl-U`/`Ctrl-D` and
+    /// `Shift+PageUp`/`PageDown` paths. The decided policy matches
+    /// xterm / alacritty `Scroll::PageUp` (full screen, no overlap
+    /// line) — do not "fix" this test toward `rows - 1`. The page size
+    /// must come from the live grid height, which only the apply layer
+    /// can see; clamping at the ends of history is the VT's job and is
+    /// pinned by `orzma_vt`'s tests, so it is not re-asserted here.
+    #[test]
+    fn paged_scrolls_move_by_screenfuls() {
+        let (mut app, terminal) = app_with_terminal(40);
+        trigger_scroll(&mut app, terminal, ScrollKind::PageUp);
+        assert_eq!(display_offset(&mut app, terminal), 24);
+        trigger_scroll(&mut app, terminal, ScrollKind::HalfPageUp);
+        assert_eq!(display_offset(&mut app, terminal), 36);
+        trigger_scroll(&mut app, terminal, ScrollKind::HalfPageDown);
+        assert_eq!(display_offset(&mut app, terminal), 24);
+        trigger_scroll(&mut app, terminal, ScrollKind::PageDown);
+        assert_eq!(display_offset(&mut app, terminal), 0);
     }
 }
