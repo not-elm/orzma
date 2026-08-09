@@ -98,22 +98,68 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         &mut self.vt
     }
 
+    /// Encodes a key press and writes it to the PTY.
+    ///
+    /// Snaps a scrolled-back viewport to the live tail first
+    /// (scroll-on-input policy) so the echo is visible, and sets the
+    /// user-input latch before the write.
     pub fn write_key_input(
         &mut self,
         key: &TerminalKey,
         mods: &TerminalModifiers,
     ) -> OrzmaTermResult {
         let modes = self.vt.modes();
-        self.unflushed_user_input = true;
-        if self.vt.at_scroll_bottom() {
-            self.vt.scroll_to_bottom();
-        }
-        self.pty
-            .write_all(PtyInput::encode_key(key, mods, modes.app_cursor).as_bytes())
+        self.snap_to_live_tail();
+        self.write_to_pty(PtyInput::encode_key(key, mods, modes.app_cursor).as_bytes())
     }
 
+    /// Encodes one mouse report in the terminal's active mouse encoding
+    /// and writes it to the PTY.
+    ///
+    /// Sets the user-input latch, but deliberately does NOT snap a
+    /// scrolled-back viewport: the report's cell coordinates were
+    /// computed by the host against the viewport the user is looking
+    /// at, so yanking the view to the live tail on every report would
+    /// make the screen jump under the pointer.
     pub fn write_mouse_input(&mut self, report: MouseReport) -> OrzmaTermResult {
         let sequence = report.encode(self.vt.modes().mouse_encoding);
-        self.pty.write_all(&sequence)
+        self.write_to_pty(&sequence)
+    }
+
+    /// Writes a paste of clipboard text to the PTY, honouring
+    /// bracketed-paste mode (DECSET 2004) via [`PtyInput::encode_paste`].
+    ///
+    /// Empty text is a no-op: nothing reaches the PTY and the
+    /// user-input latch stays untouched. Otherwise a scrolled-back
+    /// viewport snaps to the live tail first (scroll-on-input policy),
+    /// the latch is set before the write, and the whole frame goes out
+    /// in a single write — a partially-written frame would leave the
+    /// receiving app inside an unterminated paste.
+    pub fn write_paste(&mut self, text: &str) -> OrzmaTermResult {
+        if text.is_empty() {
+            return Ok(());
+        }
+        let bracketed = self.vt.modes().bracketed_paste;
+        self.snap_to_live_tail();
+        self.write_to_pty(PtyInput::encode_paste(text, bracketed).as_bytes())
+    }
+
+    /// Sets the user-input latch and writes `buf` to the PTY.
+    ///
+    /// The latch is set before the write per the invariant on
+    /// [`Self::unflushed_user_input`], and stays set when the write
+    /// fails.
+    fn write_to_pty(&mut self, buf: &[u8]) -> OrzmaTermResult {
+        self.unflushed_user_input = true;
+        self.pty.write_all(buf)
+    }
+
+    /// Snaps a scrolled-back viewport to the live tail (scroll-on-input
+    /// policy), gated on [`OrzmaVt::at_scroll_bottom`] so a no-op call
+    /// stages no damage.
+    fn snap_to_live_tail(&mut self) {
+        if !self.vt.at_scroll_bottom() {
+            self.vt.scroll_to_bottom();
+        }
     }
 }

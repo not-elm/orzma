@@ -28,8 +28,10 @@ impl Plugin for PastePlugin {
 }
 
 fn apply_paste(e: On<RequestTermPaste>, mut terms: Query<&mut OrzmaTermHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal) {
-        // tty.paste(e.text);
+    if let Ok(mut tty) = terms.get_mut(e.terminal)
+        && let Err(err) = tty.write_paste(&e.text)
+    {
+        error!(%err);
     }
 }
 
