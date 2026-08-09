@@ -3,18 +3,34 @@
 
 use bevy::prelude::*;
 
+use crate::OrzmaTermHandle;
+
 /// Fired by the host UI to paste text into a specific terminal entity.
 ///
-/// Carries the clipboard text verbatim. Bracketed-paste framing, marker
-/// stripping, and line-ending normalization all depend on terminal modes the
-/// host cannot see, so they belong to the apply observer — the host reads the
-/// clipboard and nothing more.
+/// Carries the clipboard text verbatim.
+/// Bracketed-paste framing, marker stripping, and line-ending normalization all depend on terminal modes the
+/// host cannot see, so they belong to the apply observer — the host reads the clipboard and nothing more.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTermPaste {
     #[event_target]
     pub terminal: Entity,
     /// The text to paste, exactly as read from the clipboard.
     pub text: String,
+}
+
+/// Registers the [`RequestTermPaste`] apply observer.
+pub(super) struct PastePlugin;
+
+impl Plugin for PastePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(apply_paste);
+    }
+}
+
+fn apply_paste(e: On<RequestTermPaste>, mut terms: Query<&mut OrzmaTermHandle>) {
+    if let Ok(mut tty) = terms.get_mut(e.terminal) {
+        // tty.paste(e.text);
+    }
 }
 
 #[cfg(test)]

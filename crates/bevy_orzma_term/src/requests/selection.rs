@@ -79,6 +79,16 @@ pub enum CellSide {
     Right,
 }
 
+pub(super) struct SelectionPlugin;
+
+impl Plugin for SelectionPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(apply_selection);
+    }
+}
+
+fn apply_selection(e: On<RequestTermSelection>) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,6 +17,16 @@ pub struct RequestTermResize {
     pub rows: u16,
 }
 
+pub(super) struct ResizePlugin;
+
+impl Plugin for ResizePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(apply_resize);
+    }
+}
+
+fn apply_resize(e: On<RequestTermResize>) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

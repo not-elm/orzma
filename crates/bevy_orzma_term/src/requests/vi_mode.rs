@@ -26,6 +26,16 @@ pub enum ViModeSwitch {
     Exit,
 }
 
+pub(super) struct ViModePlugin;
+
+impl Plugin for ViModePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(apply_vi_mode);
+    }
+}
+
+fn apply_vi_mode(e: On<RequestTermViMode>) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

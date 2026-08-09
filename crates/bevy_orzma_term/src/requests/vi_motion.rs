@@ -66,6 +66,16 @@ pub enum ViMotion {
     ParagraphDown,
 }
 
+pub(super) struct ViMotionPlugin;
+
+impl Plugin for ViMotionPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(apply_vi_motion);
+    }
+}
+
+fn apply_vi_motion(e: On<RequestTermViMotion>) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

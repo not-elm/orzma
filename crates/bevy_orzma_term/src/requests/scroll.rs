@@ -40,6 +40,16 @@ pub enum ScrollKind {
     Bottom,
 }
 
+pub(super) struct ScrollPlugin;
+
+impl Plugin for ScrollPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(apply_scroll);
+    }
+}
+
+fn apply_scroll(e: On<RequestTermScroll>) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
