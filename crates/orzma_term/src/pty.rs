@@ -6,6 +6,8 @@ use crate::{
 };
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+#[cfg(feature = "test-support")]
+use std::io::Result as IoResult;
 use std::io::{Read, Write};
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
@@ -83,6 +85,34 @@ impl Pty {
             .write_all(buf)
             .map_err(|e| OrzmaTermError::PtyWrite(e))?;
         Ok(())
+    }
+
+    /// Opens a PTY at the given grid size but routes writes to `writer`
+    /// instead of the master, spawning no child process and no reader
+    /// thread — the injectable seam behind `OrzmaTerm::detached`.
+    #[cfg(feature = "test-support")]
+    pub(super) fn detached(
+        cols: u16,
+        rows: u16,
+        writer: Box<dyn Write + Send>,
+    ) -> OrzmaTermResult<Self> {
+        let pty_pair = native_pty_system()
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(OrzmaTermError::PtyOpen)?;
+        let (_, chunk_rx) = unbounded::<Vec<u8>>();
+        let (_, exit_rx) = unbounded::<Option<i32>>();
+        Ok(Self {
+            master: Mutex::new(pty_pair.master),
+            writer: Mutex::new(writer),
+            chunk_rx,
+            exit_rx,
+            child_killer: Box::new(DetachedKiller),
+        })
     }
 }
 
@@ -168,6 +198,23 @@ fn spawn_reader_thread(
         let code = child.wait().ok().map(|s| s.exit_code() as i32);
         let _ = exit_tx.send(code);
     });
+}
+
+/// Stand-in child killer for [`Pty::detached`], which has no child
+/// process to kill.
+#[cfg(feature = "test-support")]
+#[derive(Debug)]
+struct DetachedKiller;
+
+#[cfg(feature = "test-support")]
+impl ChildKiller for DetachedKiller {
+    fn kill(&mut self) -> IoResult<()> {
+        Ok(())
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        Box::new(DetachedKiller)
+    }
 }
 
 #[cfg(test)]

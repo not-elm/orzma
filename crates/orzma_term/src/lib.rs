@@ -9,6 +9,8 @@ use crate::{
     signal::TermSignal,
 };
 use orzma_vt::prelude::*;
+#[cfg(feature = "test-support")]
+use std::io::Write;
 use std::path::PathBuf;
 
 mod coalescer;
@@ -16,6 +18,8 @@ mod error;
 mod input;
 mod pty;
 mod signal;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 pub mod prelude {
     pub use crate::{OrzmaTerm, error::*, input::*, signal::*};
@@ -79,6 +83,23 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
             coalescer: Coalescer::default(),
             unflushed_user_input: false,
             pty,
+        })
+    }
+
+    /// Builds a terminal whose PTY writes land on `writer` instead of a
+    /// spawned shell.
+    ///
+    /// Test-support seam: a PTY is still opened at the grid size, but no
+    /// child process or reader thread is started, so everything the
+    /// input methods emit can be observed on `writer` — typically a
+    /// [`test_support::CaptureSink`].
+    #[cfg(feature = "test-support")]
+    pub fn detached(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> OrzmaTermResult<Self> {
+        Ok(Self {
+            vt: V::new(cols, rows),
+            coalescer: Coalescer::default(),
+            unflushed_user_input: false,
+            pty: Pty::detached(cols, rows, writer)?,
         })
     }
 
@@ -161,5 +182,32 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         if !self.vt.at_scroll_bottom() {
             self.vt.scroll_to_bottom();
         }
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod tests {
+    use super::*;
+    use crate::test_support::CaptureSink;
+
+    fn detached_term() -> (OrzmaTerm<AlacrittyVt>, CaptureSink) {
+        let sink = CaptureSink::default();
+        let term =
+            OrzmaTerm::detached(80, 24, Box::new(sink.clone())).expect("OrzmaTerm::detached");
+        (term, sink)
+    }
+
+    #[test]
+    fn detached_routes_writes_to_the_injected_sink() {
+        let (mut term, sink) = detached_term();
+        term.write_paste("hi").expect("write_paste");
+        assert_eq!(sink.contents(), b"hi");
+    }
+
+    #[test]
+    fn empty_paste_writes_nothing_to_the_pty() {
+        let (mut term, sink) = detached_term();
+        term.write_paste("").expect("write_paste");
+        assert_eq!(sink.contents(), b"");
     }
 }

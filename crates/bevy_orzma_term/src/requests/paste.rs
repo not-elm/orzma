@@ -38,48 +38,88 @@ fn apply_paste(e: On<RequestTermPaste>, mut terms: Query<&mut OrzmaTermHandle>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orzma_term::test_support::CaptureSink;
+    use orzma_vt::prelude::OrzmaVt;
 
-    /// Every `(target, text)` an observer saw, in fire order.
-    #[derive(Resource, Default)]
-    struct Seen(Vec<(Entity, String)>);
-
-    /// Observer that appends what it received to [`Seen`].
-    fn record(ev: On<RequestTermPaste>, mut seen: ResMut<Seen>) {
-        seen.0.push((ev.event_target(), ev.text.clone()));
+    fn app_with_terminal() -> (App, Entity, CaptureSink) {
+        let mut app = App::new();
+        app.add_plugins(PastePlugin);
+        let (handle, sink) = OrzmaTermHandle::detached(80, 24);
+        let terminal = app.world_mut().spawn(handle).id();
+        (app, terminal, sink)
     }
 
-    fn paste(text: &str) -> (App, Entity) {
-        let mut app = App::new();
-        app.init_resource::<Seen>().add_observer(record);
-        let terminal = app.world_mut().spawn_empty().id();
+    fn trigger_paste(app: &mut App, terminal: Entity, text: &str) {
         app.world_mut().trigger(RequestTermPaste {
             terminal,
             text: text.to_owned(),
         });
-        (app, terminal)
     }
 
-    /// Asserts that the event delivers the clipboard text byte-identical —
-    /// normal text, embedded paste markers, CR/LF, and empty alike.
-    ///
-    /// Case: the layer boundary. Bracketed-paste framing, marker stripping,
-    /// and newline normalization are all decided by the terminal-mode-aware
-    /// encoder below this event (`PtyInput::encode_paste`), because only that
-    /// layer sees whether DECSET 2004 is active. A host or event layer that
-    /// "helpfully" pre-sanitized would desync from the encoder's fixed-point
-    /// stripping — so the contract this table pins is that raw text reaches
-    /// the observer for mode-aware encoding, whatever it contains. It does
-    /// NOT mean the markers are safe to forward as-is: stripping is the
-    /// encoder's obligation, exercised by `orzma_term`'s paste tests.
     #[test]
-    fn request_paste_preserves_raw_text_for_mode_aware_encoding() {
-        for text in ["hello", "foo\x1b[201~rm -rf /\x1b[200~bar", "a\r\nb\nc", ""] {
-            let (app, terminal) = paste(text);
+    fn paste_writes_normalized_text_to_the_pty() {
+        for (text, expected) in [("hello", b"hello".as_slice()), ("a\r\nb\nc", b"a\rb\rc")] {
+            let (mut app, terminal, sink) = app_with_terminal();
+            trigger_paste(&mut app, terminal, text);
             assert_eq!(
-                app.world().resource::<Seen>().0,
-                vec![(terminal, text.to_owned())],
-                "text {text:?} must reach the observer byte-identical"
+                sink.contents(),
+                expected,
+                "paste {text:?} must reach the PTY newline-normalized"
             );
         }
+    }
+
+    /// Asserts the observer consults the live VT for DECSET 2004 rather
+    /// than encoding blind: the raw clipboard text must reach the
+    /// mode-aware encoder unsanitized, and what lands on the PTY is the
+    /// framed (and, for embedded markers, stripped) frame. Encoding
+    /// branch coverage itself lives with `PtyInput::encode_paste`'s
+    /// tests in `orzma_term`.
+    #[test]
+    fn paste_honours_live_bracketed_paste_mode() {
+        for (text, expected) in [
+            ("hi", b"\x1b[200~hi\x1b[201~".as_slice()),
+            (
+                "foo\x1b[201~rm -rf /\x1b[200~bar",
+                b"\x1b[200~foorm -rf /bar\x1b[201~",
+            ),
+        ] {
+            let mut app = App::new();
+            app.add_plugins(PastePlugin);
+            let (mut handle, sink) = OrzmaTermHandle::detached(80, 24);
+            handle.vt_mut().interpret(b"\x1b[?2004h");
+            let terminal = app.world_mut().spawn(handle).id();
+            trigger_paste(&mut app, terminal, text);
+            assert_eq!(
+                sink.contents(),
+                expected,
+                "paste {text:?} must reach the PTY bracketed-framed"
+            );
+        }
+    }
+
+    #[test]
+    fn paste_targets_only_the_addressed_terminal() {
+        let (mut app, target, target_sink) = app_with_terminal();
+        let (other_handle, other_sink) = OrzmaTermHandle::detached(80, 24);
+        app.world_mut().spawn(other_handle);
+        trigger_paste(&mut app, target, "hello");
+        assert_eq!(target_sink.contents(), b"hello");
+        assert_eq!(other_sink.contents(), b"");
+    }
+
+    #[test]
+    fn paste_to_an_entity_without_a_handle_writes_nothing() {
+        let (mut app, _terminal, sink) = app_with_terminal();
+        let bare = app.world_mut().spawn_empty().id();
+        trigger_paste(&mut app, bare, "hello");
+        assert_eq!(sink.contents(), b"");
+    }
+
+    #[test]
+    fn empty_paste_writes_nothing() {
+        let (mut app, terminal, sink) = app_with_terminal();
+        trigger_paste(&mut app, terminal, "");
+        assert_eq!(sink.contents(), b"");
     }
 }
