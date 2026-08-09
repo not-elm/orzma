@@ -88,11 +88,10 @@ impl Pty {
     }
 
     /// Reads the master's current size back from the kernel
-    /// (`TIOCGWINSZ`), so tests can observe an applied resize.
+    /// (`TIOCGWINSZ`).
     ///
-    /// Panics on ioctl failure — acceptable for the test-support seam
-    /// this exists for.
-    #[cfg(feature = "test-support")]
+    /// Panics on ioctl failure — the master fd is no longer valid at
+    /// that point (see `OrzmaTerm::pty_size`).
     pub(super) fn size(&self) -> PtySize {
         self.master
             .lock()

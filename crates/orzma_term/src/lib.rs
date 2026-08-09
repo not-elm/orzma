@@ -9,7 +9,6 @@ use crate::{
     signal::TermSignal,
 };
 use orzma_vt::prelude::*;
-#[cfg(feature = "test-support")]
 use portable_pty::PtySize;
 #[cfg(feature = "test-support")]
 use std::io::Write;
@@ -88,11 +87,13 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         })
     }
 
-    /// Reads the PTY master's current grid size back from the kernel.
+    /// Reads the PTY master's current grid size back from the kernel
+    /// (`TIOCGWINSZ`).
     ///
-    /// Test-support seam for asserting an applied resize; panics on
-    /// ioctl failure.
-    #[cfg(feature = "test-support")]
+    /// # Panics
+    ///
+    /// Panics when the ioctl fails, which means the master fd is no
+    /// longer valid and the terminal is unusable anyway.
     pub fn pty_size(&self) -> PtySize {
         self.pty.size()
     }
