@@ -88,6 +88,11 @@ impl OrzmaVt for AlacrittyVt {
     }
 
     #[inline]
+    fn grid_size(&self) -> (u16, u16) {
+        (self.term.columns() as u16, self.term.screen_lines() as u16)
+    }
+
+    #[inline]
     fn scroll(&mut self, delta: i32) {
         self.term.scroll_display(Scroll::Delta(delta));
     }
@@ -158,6 +163,18 @@ mod tests {
     fn fresh_terminal_reports_alacritty_baseline() {
         let vt = AlacrittyVt::new(80, 24);
         assert_eq!(vt.modes(), baseline());
+    }
+
+    /// Asserts `grid_size` returns `(cols, rows)` in constructor-argument
+    /// order.
+    ///
+    /// Case: every consumer converts this pair into paging deltas and
+    /// resize verification. Both axes are `u16`, so a swapped tuple
+    /// compiles cleanly and mis-sizes every page scroll on a non-square
+    /// grid; the 80x24 fixture makes the order unambiguous.
+    #[test]
+    fn grid_size_returns_cols_then_rows() {
+        assert_eq!(AlacrittyVt::new(80, 24).grid_size(), (80, 24));
     }
 
     #[test]

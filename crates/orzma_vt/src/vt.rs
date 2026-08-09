@@ -71,4 +71,10 @@ pub trait OrzmaVt: Sized {
 
     /// Snapshot of the input-relevant terminal modes.
     fn modes(&self) -> VtModes;
+
+    /// Grid dimensions as `(cols, rows)`.
+    ///
+    /// The row count is the source of truth for "one screenful"
+    /// (scroll paging) and for verifying an applied resize.
+    fn grid_size(&self) -> (u16, u16);
 }

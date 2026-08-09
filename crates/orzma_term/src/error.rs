@@ -18,4 +18,7 @@ pub enum OrzmaTermError {
     /// Write a pty input buffer to the PTY master failed.
     #[error("PTY write failed")]
     PtyWrite(#[source] std::io::Error),
+    /// Resizing the PTY master (`TIOCSWINSZ`) failed.
+    #[error("PTY resize failed")]
+    PtyResize(#[source] anyhow::Error),
 }

@@ -118,15 +118,26 @@ impl Pty {
                 pixel_height: 0,
             })
             .map_err(OrzmaTermError::PtyOpen)?;
+        Ok(Self::with_master(pty_pair.master, writer))
+    }
+
+    /// Builds a `Pty` around an arbitrary master and writer, with no
+    /// child process and no reader thread — lets tests inject a fake
+    /// master (e.g. one whose `resize` fails).
+    #[cfg(feature = "test-support")]
+    pub(super) fn with_master(
+        master: Box<dyn MasterPty + Send>,
+        writer: Box<dyn Write + Send>,
+    ) -> Self {
         let (_, chunk_rx) = unbounded::<Vec<u8>>();
         let (_, exit_rx) = unbounded::<Option<i32>>();
-        Ok(Self {
-            master: Mutex::new(pty_pair.master),
+        Self {
+            master: Mutex::new(master),
             writer: Mutex::new(writer),
             chunk_rx,
             exit_rx,
             child_killer: Box::new(DetachedKiller),
-        })
+        }
     }
 }
 

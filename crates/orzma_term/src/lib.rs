@@ -200,12 +200,243 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
 mod tests {
     use super::*;
     use crate::test_support::CaptureSink;
+    use portable_pty::MasterPty;
 
     fn detached_term() -> (OrzmaTerm<AlacrittyVt>, CaptureSink) {
         let sink = CaptureSink::default();
         let term =
             OrzmaTerm::detached(80, 24, Box::new(sink.clone())).expect("OrzmaTerm::detached");
         (term, sink)
+    }
+
+    /// `MasterPty` whose `resize` always fails, for pinning the
+    /// PTY-first / VT-untouched-on-failure contract.
+    #[derive(Debug)]
+    struct FailingMaster;
+
+    impl MasterPty for FailingMaster {
+        fn resize(&self, _size: PtySize) -> anyhow::Result<()> {
+            Err(anyhow::anyhow!("injected resize failure"))
+        }
+
+        fn get_size(&self) -> anyhow::Result<PtySize> {
+            Err(anyhow::anyhow!("not implemented for FailingMaster"))
+        }
+
+        fn try_clone_reader(&self) -> anyhow::Result<Box<dyn std::io::Read + Send>> {
+            Err(anyhow::anyhow!("not implemented for FailingMaster"))
+        }
+
+        fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
+            Err(anyhow::anyhow!("not implemented for FailingMaster"))
+        }
+
+        #[cfg(unix)]
+        fn process_group_leader(&self) -> Option<i32> {
+            None
+        }
+
+        #[cfg(unix)]
+        fn as_raw_fd(&self) -> Option<std::os::unix::io::RawFd> {
+            None
+        }
+
+        #[cfg(unix)]
+        fn tty_name(&self) -> Option<PathBuf> {
+            None
+        }
+    }
+
+    fn failing_term() -> OrzmaTerm<AlacrittyVt> {
+        OrzmaTerm {
+            vt: AlacrittyVt::new(80, 24),
+            coalescer: Coalescer::default(),
+            unflushed_user_input: false,
+            pty: Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default())),
+        }
+    }
+
+    fn sizes(term: &OrzmaTerm<AlacrittyVt>) -> ((u16, u16), (u16, u16)) {
+        let pty = term.pty_size();
+        ((pty.cols, pty.rows), term.vt.grid_size())
+    }
+
+    /// Asserts that a resize lands on the PTY: the size read back from
+    /// the kernel (`TIOCGWINSZ`) is the requested one.
+    ///
+    /// Case: the ordinary window-resize path. The kernel's winsize is
+    /// the only channel through which a child process learns its grid
+    /// (via the SIGWINCH the ioctl raises on a live PTY), so a resize
+    /// that stops short of the kernel leaves every TUI app drawing at
+    /// the stale size.
+    #[test]
+    fn resize_applies_the_size_to_the_pty() {
+        let (mut term, _sink) = detached_term();
+        term.resize(120, 40).expect("resize");
+        let size = term.pty_size();
+        assert_eq!((size.cols, size.rows), (120, 40));
+    }
+
+    /// Asserts that a resize reaches the VT grid, not only the PTY.
+    ///
+    /// Case: the renderer draws whatever the VT reports. An
+    /// implementation that only performs the ioctl leaves the emulation
+    /// (and therefore the rendered grid) at the stale size while the
+    /// child already reflows to the new one — a desync the PTY-side
+    /// test cannot see, which is why the two seams are pinned
+    /// separately.
+    #[test]
+    fn resize_applies_the_size_to_the_vt_grid() {
+        let (mut term, _sink) = detached_term();
+        term.resize(120, 40).expect("resize");
+        assert_eq!(term.vt.grid_size(), (120, 40));
+    }
+
+    /// Asserts that a resize never writes through the PTY writer.
+    ///
+    /// Case: resize is an ioctl on the master, not stream traffic. An
+    /// implementation that "resizes" by writing escape sequences (e.g.
+    /// XTWINOPS) through the writer would inject bytes into the child's
+    /// stdin. The assertion covers the injected writer seam — the same
+    /// path every `write_*` method uses.
+    #[test]
+    fn resize_does_not_write_through_the_pty_writer() {
+        let (mut term, sink) = detached_term();
+        term.resize(120, 40).expect("resize");
+        assert_eq!(sink.contents(), b"");
+    }
+
+    /// Asserts that a successful resize arms the coalescer.
+    ///
+    /// Case: a resize reflows the whole grid, but no PTY output need
+    /// arrive afterwards — an idle shell prompt stays idle. Unless the
+    /// resize itself opens an emit window, the repaint waits for the
+    /// next unrelated chunk and the user stares at a stale grid (the
+    /// predecessor documented exactly this trap and armed on resize).
+    #[test]
+    fn resize_arms_the_coalescer() {
+        let (mut term, _sink) = detached_term();
+        term.resize(120, 40).expect("resize");
+        assert!(term.coalescer.is_armed());
+    }
+
+    /// Asserts that a zero-axis request leaves an already-resized
+    /// terminal at its current size on both seams.
+    ///
+    /// Case: a minimized window or a pre-metrics frame computes 0 for
+    /// an axis; the decided policy is ignore, not clamp. The fixture is
+    /// first resized away from the constructor default so that "stays
+    /// unchanged" is distinguishable from "was reset to the initial
+    /// size".
+    #[test]
+    fn a_zero_axis_resize_is_ignored() {
+        let (mut term, _sink) = detached_term();
+        term.resize(120, 40).expect("resize");
+        for (cols, rows) in [(0, 40), (120, 0), (0, 0)] {
+            term.resize(cols, rows).expect("ignored resize must be Ok");
+            assert_eq!(
+                sizes(&term),
+                ((120, 40), (120, 40)),
+                "resize {cols}x{rows} must be ignored"
+            );
+        }
+    }
+
+    /// Asserts the 4096-per-axis cap: oversized requests are ignored,
+    /// the boundary value is applied.
+    ///
+    /// Case: the zero guard alone accepts 65535x65535 — a
+    /// multi-billion-cell VT allocation issued after the PTY was
+    /// already resized, i.e. an OOM/hang with the two sides desynced.
+    /// 4096 columns is beyond any real display (8K at a tiny font is
+    /// ~2000), so the cap costs nothing; it is pinned at the boundary
+    /// without actually allocating a huge grid.
+    #[test]
+    fn an_oversized_axis_resize_is_ignored() {
+        let (mut term, _sink) = detached_term();
+        for (cols, rows) in [(4097, 24), (80, 4097)] {
+            term.resize(cols, rows).expect("ignored resize must be Ok");
+            assert_eq!(
+                sizes(&term),
+                ((80, 24), (80, 24)),
+                "resize {cols}x{rows} must be ignored"
+            );
+        }
+        term.resize(4096, 24).expect("resize");
+        assert_eq!(sizes(&term), ((4096, 24), (4096, 24)));
+    }
+
+    /// Asserts that an ignored request does not arm the coalescer.
+    ///
+    /// Case: ignored means fully ignored — arming without staging any
+    /// damage would schedule an emit deadline for a repaint that never
+    /// comes, waking the emit path for nothing on every minimized-
+    /// window frame.
+    #[test]
+    fn an_ignored_resize_does_not_arm_the_coalescer() {
+        let (mut term, _sink) = detached_term();
+        term.resize(0, 40).expect("ignored resize must be Ok");
+        term.resize(4097, 24).expect("ignored resize must be Ok");
+        assert!(!term.coalescer.is_armed());
+    }
+
+    /// Asserts that a resize leaves an already-set user-input latch
+    /// set.
+    ///
+    /// Case: the latch encodes "a user write is unflushed" and is
+    /// cleared only when the coalescer consumes it. A window resize can
+    /// land between a keystroke and its echo; a resize that cleared (or
+    /// set) the latch would corrupt that provenance — checking only the
+    /// fresh `false` state would miss the clearing bug entirely.
+    #[test]
+    fn resize_preserves_the_user_input_latch() {
+        let (mut term, _sink) = detached_term();
+        term.write_paste("x").expect("write_paste");
+        assert!(
+            term.unflushed_user_input,
+            "precondition: paste sets the latch"
+        );
+        term.resize(120, 40).expect("resize");
+        assert!(term.unflushed_user_input);
+    }
+
+    /// Asserts that back-to-back resizes settle on the last requested
+    /// size on both seams.
+    ///
+    /// Case: a live window drag fires a burst of requests. Any
+    /// caching or short-circuit mistake that latches onto an earlier
+    /// size leaves the terminal permanently mis-sized relative to the
+    /// final window geometry.
+    #[test]
+    fn sequential_resizes_settle_on_the_last_size() {
+        let (mut term, _sink) = detached_term();
+        term.resize(120, 40).expect("resize");
+        term.resize(90, 30).expect("resize");
+        assert_eq!(sizes(&term), ((90, 30), (90, 30)));
+    }
+
+    /// Asserts PTY-first ordering via failure atomicity: when the PTY
+    /// ioctl fails, the call returns `PtyResize` and the VT grid,
+    /// coalescer, and latch are all untouched.
+    ///
+    /// Case: the ordering contract is deliberately the reverse of the
+    /// predecessor (which resized the VT before the PTY): on ioctl
+    /// failure the renderer must keep drawing the size the child still
+    /// has, never a size the kernel refused. Success-path tests cannot
+    /// distinguish the two orderings — only injected failure can, so
+    /// this test is the sole guard against a silent VT-first
+    /// regression.
+    #[test]
+    fn a_failing_pty_resize_leaves_the_vt_untouched() {
+        let mut term = failing_term();
+        let result = term.resize(120, 40);
+        assert!(
+            matches!(result, Err(OrzmaTermError::PtyResize(_))),
+            "expected PtyResize, got {result:?}"
+        );
+        assert_eq!(term.vt.grid_size(), (80, 24));
+        assert!(!term.coalescer.is_armed());
+        assert!(!term.unflushed_user_input);
     }
 
     /// Asserts that a detached terminal's PTY writes land on the
