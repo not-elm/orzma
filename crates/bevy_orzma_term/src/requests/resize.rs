@@ -30,90 +30,56 @@ fn apply_resize(e: On<RequestTermResize>) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OrzmaTermHandle;
 
-    /// Every `(target, cols, rows)` an observer saw, in fire order.
-    #[derive(Resource, Default)]
-    struct Seen(Vec<(Entity, u16, u16)>);
-
-    /// Observer that appends what it received to [`Seen`].
-    fn record(ev: On<RequestTermResize>, mut seen: ResMut<Seen>) {
-        seen.0.push((ev.event_target(), ev.cols, ev.rows));
+    fn app_with_terminal() -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins(ResizePlugin);
+        let (handle, _) = OrzmaTermHandle::detached(80, 24);
+        let terminal = app.world_mut().spawn(handle).id();
+        (app, terminal)
     }
 
-    /// Asserts that a triggered `RequestTermResize` reaches an observer with
-    /// its target and both dimensions intact.
-    ///
-    /// Case: the ordinary window-resize path — the host has already resolved
-    /// pixels to cells and fires one request at the terminal it owns. The
-    /// apply observer has no other source for the new size, so anything the
-    /// event drops or reorders here is lost outright.
-    #[test]
-    fn trigger_delivers_the_requested_size() {
-        let mut app = App::new();
-        app.init_resource::<Seen>().add_observer(record);
-        let terminal = app.world_mut().spawn_empty().id();
+    /// Reads the terminal's PTY grid size back from the kernel.
+    fn pty_size(app: &App, terminal: Entity) -> (u16, u16) {
+        let handle = app
+            .world()
+            .entity(terminal)
+            .get::<OrzmaTermHandle>()
+            .expect("terminal entity must keep its handle");
+        let size = handle.pty_size();
+        (size.cols, size.rows)
+    }
 
+    #[test]
+    fn resize_applies_the_requested_size_to_the_pty() {
+        let (mut app, terminal) = app_with_terminal();
         app.world_mut().trigger(RequestTermResize {
             terminal,
             cols: 120,
             rows: 40,
         });
-
-        assert_eq!(app.world().resource::<Seen>().0, vec![(terminal, 120, 40)]);
+        assert_eq!(pty_size(&app, terminal), (120, 40));
     }
 
-    /// Asserts that `#[event_target]` routes the event by the `terminal`
-    /// field and by nothing else.
-    ///
-    /// Case: several terminal entities coexist (planned split panes) and each
-    /// carries its own entity-scoped observer. Only the entity named by
-    /// `terminal` may fire. Moving the attribute to another field, or adding
-    /// a second `Entity` field ahead of it, would silently resize a different
-    /// terminal — a mix-up the type checker cannot catch, since every
-    /// candidate field has the same `Entity` type.
+    /// Asserts the agreed degenerate-size policy: a request with a zero
+    /// axis is ignored outright — a minimized window's transient `0x0`
+    /// must not tear down the grid. The guard belongs to
+    /// `OrzmaTerm::resize`, mirroring `write_paste`'s empty-text no-op.
     #[test]
-    fn only_the_terminal_field_receives_the_event() {
-        let mut app = App::new();
-        app.init_resource::<Seen>();
-        let other = app.world_mut().spawn_empty().id();
-        let terminal = app.world_mut().spawn_empty().id();
-        for entity in [other, terminal] {
-            app.world_mut().entity_mut(entity).observe(record);
+    fn a_degenerate_resize_is_ignored() {
+        let (mut app, terminal) = app_with_terminal();
+        for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
+            app.world_mut().trigger(RequestTermResize {
+                terminal,
+                cols,
+                rows,
+            });
+            assert_eq!(
+                pty_size(&app, terminal),
+                (80, 24),
+                "resize {cols}x{rows} must be ignored"
+            );
         }
-        app.world_mut().flush();
-
-        app.world_mut().trigger(RequestTermResize {
-            terminal,
-            cols: 100,
-            rows: 30,
-        });
-
-        assert_eq!(
-            app.world().resource::<Seen>().0,
-            vec![(terminal, 100, 30)],
-            "the observer attached to `other` must not see a resize aimed at `terminal`"
-        );
-    }
-
-    /// Asserts that a zero-sized request is delivered rather than filtered.
-    ///
-    /// Case: a degenerate window size — a minimized window, or a frame before
-    /// the cell metrics have loaded — makes the host compute `0x0`. The event
-    /// is a plain request carrier, so validation and clamping belong to the
-    /// apply observer; this pins that boundary so a later edit cannot quietly
-    /// move the policy into the event type, where no consumer would see it.
-    #[test]
-    fn a_degenerate_size_is_delivered_unchanged() {
-        let mut app = App::new();
-        app.init_resource::<Seen>().add_observer(record);
-        let terminal = app.world_mut().spawn_empty().id();
-
-        app.world_mut().trigger(RequestTermResize {
-            terminal,
-            cols: 0,
-            rows: 0,
-        });
-
-        assert_eq!(app.world().resource::<Seen>().0, vec![(terminal, 0, 0)]);
     }
 }

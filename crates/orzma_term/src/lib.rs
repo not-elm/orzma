@@ -10,6 +10,8 @@ use crate::{
 };
 use orzma_vt::prelude::*;
 #[cfg(feature = "test-support")]
+use portable_pty::PtySize;
+#[cfg(feature = "test-support")]
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -84,6 +86,15 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
             unflushed_user_input: false,
             pty,
         })
+    }
+
+    /// Reads the PTY master's current grid size back from the kernel.
+    ///
+    /// Test-support seam for asserting an applied resize; panics on
+    /// ioctl failure.
+    #[cfg(feature = "test-support")]
+    pub fn pty_size(&self) -> PtySize {
+        self.pty.size()
     }
 
     /// Builds a terminal whose PTY writes land on `writer` instead of a

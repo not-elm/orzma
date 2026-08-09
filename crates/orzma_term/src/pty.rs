@@ -87,6 +87,20 @@ impl Pty {
         Ok(())
     }
 
+    /// Reads the master's current size back from the kernel
+    /// (`TIOCGWINSZ`), so tests can observe an applied resize.
+    ///
+    /// Panics on ioctl failure — acceptable for the test-support seam
+    /// this exists for.
+    #[cfg(feature = "test-support")]
+    pub(super) fn size(&self) -> PtySize {
+        self.master
+            .lock()
+            .unwrap()
+            .get_size()
+            .expect("MasterPty::get_size")
+    }
+
     /// Opens a PTY at the given grid size but routes writes to `writer`
     /// instead of the master, spawning no child process and no reader
     /// thread — the injectable seam behind `OrzmaTerm::detached`.
