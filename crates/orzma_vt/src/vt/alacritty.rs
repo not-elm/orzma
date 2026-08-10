@@ -104,7 +104,7 @@ impl OrzmaVt for AlacrittyVt {
 
     #[inline]
     fn scroll_to_bottom(&mut self) {
-        self.scroll(i32::MIN);
+        self.term.scroll_display(Scroll::Bottom);
     }
 }
 
