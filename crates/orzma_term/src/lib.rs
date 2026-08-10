@@ -108,6 +108,15 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         todo!("OrzmaTerm::pump")
     }
 
+    /// Resizes both the PTY (kernel winsize) and the VT grid, then arms
+    /// the coalescer so the reflow repaints at the next deadline even
+    /// on an otherwise idle terminal.
+    ///
+    /// A request with a zero axis, or one exceeding [`Self::MAX_COLS`] /
+    /// [`Self::MAX_ROWS`], is ignored with `Ok` — neither clamped nor
+    /// an error. When the PTY resize fails the call returns
+    /// [`OrzmaTermError::PtyResize`] and leaves the VT grid and
+    /// coalescer untouched (PTY first; nothing changes on failure).
     pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTermResult {
         if cols == 0 || rows == 0 || Self::MAX_COLS < cols || Self::MAX_ROWS < rows {
             return Ok(());
