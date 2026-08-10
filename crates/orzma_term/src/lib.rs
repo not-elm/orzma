@@ -108,6 +108,11 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         todo!("OrzmaTerm::pump")
     }
 
+    pub fn scroll(&mut self, scroll: Scroll) {
+        self.vt.scroll(scroll);
+        todo!()
+    }
+
     /// Resizes both the PTY (kernel winsize) and the VT grid, then arms
     /// the coalescer so the reflow repaints at the next deadline even
     /// on an otherwise idle terminal.
@@ -183,7 +188,7 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     /// stages no damage.
     fn snap_to_live_tail(&mut self) {
         if !self.vt.at_scroll_bottom() {
-            self.vt.scroll_to_bottom();
+            self.vt.scroll(Scroll::Bottom);
         }
     }
 }
@@ -354,6 +359,133 @@ mod tests {
         );
         assert_eq!(term.vt.grid_size(), (80, 24));
         assert!(!term.coalescer.is_armed());
+    }
+
+    // NOTE: on the 24-row grid the first 23 newlines only fill the
+    // viewport (alacritty pushes a row into history once the cursor
+    // already sits on the last screen line), so `history_rows + 23`
+    // lines seed exactly `history_rows`.
+    fn term_with_history(history_rows: usize) -> (OrzmaTerm<AlacrittyVt>, CaptureSink) {
+        let (mut term, sink) = detached_term();
+        let seed: Vec<u8> = (0..history_rows + 23)
+            .flat_map(|i| format!("l{i}\r\n").into_bytes())
+            .collect();
+        term.vt_mut().interpret(&seed);
+        (term, sink)
+    }
+
+    /// Asserts that `scroll` moves the viewport through the VT,
+    /// cumulatively and in the requested direction.
+    ///
+    /// Case: the wheel/vi path once `apply_scroll` wires up — the
+    /// motion arithmetic is pinned at the VT layer, so this pins only
+    /// that `OrzmaTerm::scroll` actually delegates. A method that
+    /// swallowed the motion (or inverted it) would leave every consumer
+    /// scrolling nothing.
+    #[test]
+    fn scroll_moves_the_viewport() {
+        let (mut term, _sink) = term_with_history(10);
+        term.scroll(Scroll::Delta(3));
+        assert_eq!(term.vt.display_offset(), 3);
+        term.scroll(Scroll::Delta(-2));
+        assert_eq!(term.vt.display_offset(), 1);
+    }
+
+    /// Asserts that a scroll which moved the viewport arms the
+    /// coalescer.
+    ///
+    /// Case: a scroll changes what is visible but produces no PTY
+    /// output, so nothing else opens an emit window — without arming,
+    /// the view stays stale until the next unrelated chunk (the same
+    /// trap as resize; the predecessor armed on every scroll op).
+    #[test]
+    fn scroll_arms_the_coalescer_when_the_viewport_moves() {
+        let (mut term, _sink) = term_with_history(10);
+        term.scroll(Scroll::Delta(3));
+        assert!(term.coalescer.is_armed());
+    }
+
+    /// Asserts that a scroll which did not move the viewport arms
+    /// nothing.
+    ///
+    /// Case: no visual change means no repaint to schedule — arming
+    /// anyway would open an emit window for a repaint that never
+    /// comes on every wheel notch at the clamp (mirrors
+    /// `an_ignored_resize_does_not_arm_the_coalescer`).
+    #[test]
+    fn a_no_op_scroll_does_not_arm_the_coalescer() {
+        let (mut term, _sink) = detached_term();
+        term.scroll(Scroll::Delta(5));
+        assert!(!term.coalescer.is_armed(), "no scrollback to move into");
+        let (mut term, _sink) = term_with_history(10);
+        term.scroll(Scroll::Bottom);
+        assert!(!term.coalescer.is_armed(), "already at the live tail");
+        term.scroll(Scroll::Delta(0));
+        assert!(!term.coalescer.is_armed(), "zero delta");
+    }
+
+    /// Asserts that a no-op scroll leaves an already-open emit window's
+    /// deadline untouched.
+    ///
+    /// Case: the blind spot of `is_armed` — routing a no-op through
+    /// `arm_or_extend` keeps `is_armed()` true but bumps
+    /// `last_chunk_at`, sliding the IDLE deadline and delaying the
+    /// flush of whatever is already pending. Comparing
+    /// `next_deadline()` before and after catches that.
+    #[test]
+    fn a_no_op_scroll_does_not_extend_the_deadline() {
+        let (mut term, _sink) = term_with_history(10);
+        term.scroll(Scroll::Delta(3));
+        let deadline = term.coalescer.next_deadline();
+        assert!(deadline.is_some(), "precondition: a real scroll arms");
+        term.scroll(Scroll::Delta(0));
+        assert_eq!(term.coalescer.next_deadline(), deadline);
+    }
+
+    /// Asserts that scrolling writes nothing through the PTY writer.
+    ///
+    /// Case: viewport motion is host-side state; an implementation that
+    /// "scrolls" by writing CSI S/T or arrow-key sequences would inject
+    /// bytes into the child's stdin. (The alternate-scroll wheel→arrow
+    /// conversion is the input layer's job, not this method's.)
+    #[test]
+    fn scroll_writes_nothing_through_the_pty_writer() {
+        let (mut term, sink) = term_with_history(10);
+        term.scroll(Scroll::Delta(3));
+        term.scroll(Scroll::Bottom);
+        assert_eq!(sink.contents(), b"");
+    }
+
+    /// Asserts the scroll-on-input integration: user input while
+    /// scrolled back snaps the viewport to the live tail AND schedules
+    /// the repaint of that snap.
+    ///
+    /// Case: the user scrolls into history, then types or pastes. The
+    /// echo will arrive as PTY output, but the snap itself is a
+    /// host-side viewport change — if `snap_to_live_tail` bypasses the
+    /// arming path, the view teleports without a scheduled emit and the
+    /// screen shows stale history until the echo happens to arrive
+    /// (the predecessor routed key input through its arming scroll
+    /// path). The scroll-back is seeded through `vt_mut()` so the
+    /// paste is the only arm candidate.
+    #[test]
+    fn paste_while_scrolled_back_snaps_and_arms() {
+        let (mut term, _sink) = term_with_history(10);
+        term.vt_mut().scroll(Scroll::Delta(3));
+        assert!(
+            !term.coalescer.is_armed(),
+            "precondition: nothing armed yet"
+        );
+        term.write_paste("x").expect("write_paste");
+        assert_eq!(
+            term.vt.display_offset(),
+            0,
+            "input must snap to the live tail"
+        );
+        assert!(
+            term.coalescer.is_armed(),
+            "the snap must schedule a repaint"
+        );
     }
 
     /// Asserts that a detached terminal's PTY writes land on the

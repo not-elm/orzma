@@ -375,6 +375,64 @@ mod tests {
         assert_eq!(vt.display_offset(), 0);
     }
 
+    /// Asserts that a scroll which moved the viewport stages full
+    /// damage.
+    ///
+    /// Case: the trait doc's repaint contract. A scroll changes every
+    /// visible row but produces no PTY output; without staged `Full`
+    /// damage the next `frames()` call finds nothing to emit, and an
+    /// armed coalescer fires an emit for a repaint that never comes.
+    #[test]
+    fn scroll_stages_full_damage_when_the_viewport_moves() {
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        drain_staged(&mut vt);
+        vt.scroll(Scroll::Delta(3));
+        assert_eq!(vt.pending_damage, Some(DirtyRows::Full));
+    }
+
+    /// Asserts that a scroll which did not move the viewport leaves the
+    /// staged damage exactly as it was.
+    ///
+    /// Case: the trait doc's "a no-op call stages no damage" invariant,
+    /// pinned against the destructive failure mode — an implementation
+    /// ending in `else { pending_damage = None }` passes a clean-state
+    /// check while silently discarding earlier un-emitted output (same
+    /// shape as `empty_chunk_leaves_staged_damage_untouched`).
+    #[test]
+    fn a_no_op_scroll_preserves_staged_damage() {
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        drain_staged(&mut vt);
+        // NOTE: seeded directly rather than via `interpret` — chunk
+        // damage staging is itself still unimplemented (the four
+        // pre-existing damage-test failures), and this test must not
+        // depend on that gap.
+        vt.pending_damage = Some(DirtyRows::Rows(vec![0]));
+        let staged = vt.pending_damage.clone();
+        vt.scroll(Scroll::Delta(0));
+        vt.scroll(Scroll::Bottom);
+        assert_eq!(vt.pending_damage, staged);
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        drain_staged(&mut vt);
+        vt.scroll(Scroll::Delta(0));
+        assert_eq!(vt.pending_damage, None, "clean state stays clean");
+    }
+
+    /// Asserts that scrolling on the alternate screen stages no damage.
+    ///
+    /// Case: the alternate grid has no scrollback, so every scroll
+    /// there is a no-op — but entering the alternate screen stages its
+    /// own damage, which must be drained first or it masks a violation
+    /// of the no-op invariant on this backend.
+    #[test]
+    fn scrolling_the_alternate_screen_stages_no_damage() {
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        vt.interpret(b"\x1b[?1049h");
+        assert!(vt.modes().alt_screen, "precondition: alt screen entered");
+        drain_staged(&mut vt);
+        vt.scroll(Scroll::Delta(5));
+        assert_eq!(vt.pending_damage, None);
+    }
+
     /// Row count of the grid every fixture in this module builds.
     const GRID_ROWS: u16 = 24;
 
