@@ -10,8 +10,8 @@ use crate::{
 };
 use orzma_vt::prelude::*;
 use portable_pty::PtySize;
-use std::io::Write;
 use std::path::PathBuf;
+use std::{io::Write, time::Instant};
 
 mod coalescer;
 mod error;
@@ -114,6 +114,7 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         }
         self.pty.resize(cols, rows)?;
         self.vt.resize(cols, rows);
+        self.coalescer.arm_or_extend(Instant::now());
         Ok(())
     }
 
