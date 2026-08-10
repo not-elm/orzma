@@ -46,18 +46,6 @@ pub trait OrzmaVt: Sized {
 
     /// Applies the given viewport motion.
     ///
-    /// Every motion clamps to the scrollback bounds, so a call that
-    /// lands where the viewport already is leaves it untouched
-    /// (idempotent at the boundary — [`Scroll::Bottom`] at the live
-    /// tail is a no-op).
-    ///
-    /// # Invariants
-    ///
-    /// A no-op call stages no damage, so a caller that needs the
-    /// renderer to observe the new viewport must gate on
-    /// [`Self::at_scroll_bottom`] rather than scrolling
-    /// unconditionally.
-    ///
     /// # References
     ///
     /// - [XTerm Control Sequences] — DECSET 1011 (`scrollKey`): scroll

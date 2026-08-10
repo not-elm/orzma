@@ -108,6 +108,7 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         todo!("OrzmaTerm::pump")
     }
 
+    /// Scrolls the grid.
     pub fn scroll(&mut self, scroll: Scroll) {
         let prev_offset = self.vt.display_offset();
         self.vt.scroll(scroll);
