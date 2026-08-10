@@ -3,6 +3,8 @@
 
 use bevy::prelude::*;
 
+use crate::OrzmaTermHandle;
+
 /// Fired by the host UI to resize a specific terminal entity's grid.
 ///
 /// Carries the target size in cells, not pixels — the host owns the
@@ -25,7 +27,13 @@ impl Plugin for ResizePlugin {
     }
 }
 
-fn apply_resize(e: On<RequestTermResize>) {}
+fn apply_resize(e: On<RequestTermResize>, mut terms: Query<&mut OrzmaTermHandle>) {
+    if let Ok(mut tty) = terms.get_mut(e.terminal) {
+        if let Err(e) = tty.resize(e.cols, e.rows) {
+            error!(%e);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
