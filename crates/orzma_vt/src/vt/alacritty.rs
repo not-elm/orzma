@@ -100,7 +100,9 @@ impl OrzmaVt for AlacrittyVt {
 
     #[inline]
     fn scroll(&mut self, scroll: Scroll) {
-        self.term.scroll_display(scroll.to_alacritty_scroll());
+        let screen_lines = self.term.screen_lines() as u16;
+        self.term
+            .scroll_display(scroll.to_alacritty_scroll(screen_lines));
     }
 }
 
@@ -353,14 +355,17 @@ mod tests {
     }
 
     /// Asserts that every absolute and paged `Scroll` variant moves the
-    /// viewport in its own direction and magnitude.
+    /// viewport in its own direction and magnitude, with a half page
+    /// being `screen_lines / 2` rows.
     ///
-    /// Case: `Scroll::to_alacritty_scroll` is a five-arm match between
-    /// two identically-shaped enums — a transposed arm
-    /// (PageUp↔PageDown, Top↔Bottom) compiles cleanly and inverts the
-    /// motion, and the `Delta` tests above cannot see it. The history
-    /// is deeper than one screen so `PageUp` lands on the page size,
-    /// not the clamp.
+    /// Case: `Scroll::to_alacritty_scroll` is a seven-arm match onto a
+    /// smaller enum — a transposed arm (PageUp↔PageDown, Top↔Bottom,
+    /// HalfPageUp↔HalfPageDown) compiles cleanly and inverts the
+    /// motion, and the `Delta` tests above cannot see it. The half-page
+    /// arms also carry the only grid-height arithmetic in the mapping,
+    /// so a wrong or unnegated delta shows up only here. The history is
+    /// deeper than one screen so `PageUp` lands on the page size, not
+    /// the clamp.
     #[test]
     fn absolute_and_paged_scrolls_map_to_their_directions() {
         let history = usize::from(GRID_ROWS) + SEEDED_HISTORY_ROWS;
@@ -368,6 +373,10 @@ mod tests {
         vt.scroll(Scroll::PageUp);
         assert_eq!(vt.display_offset(), u32::from(GRID_ROWS));
         vt.scroll(Scroll::PageDown);
+        assert_eq!(vt.display_offset(), 0);
+        vt.scroll(Scroll::HalfPageUp);
+        assert_eq!(vt.display_offset(), u32::from(GRID_ROWS / 2));
+        vt.scroll(Scroll::HalfPageDown);
         assert_eq!(vt.display_offset(), 0);
         vt.scroll(Scroll::Top);
         assert_eq!(vt.display_offset(), history as u32);

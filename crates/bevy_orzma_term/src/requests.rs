@@ -22,7 +22,7 @@ pub use key_input::RequestTermKeyInput;
 pub use mouse_input::RequestTermMouseInput;
 pub use paste::RequestTermPaste;
 pub use resize::RequestTermResize;
-pub use scroll::{RequestTermScroll, ScrollKind};
+pub use scroll::RequestTermScroll;
 pub use selection::{CellSide, RequestTermSelection, SelectionKind, SelectionOp};
 pub use vi_mode::{RequestTermViMode, ViModeSwitch};
 pub use vi_motion::{RequestTermViMotion, ViMotion};

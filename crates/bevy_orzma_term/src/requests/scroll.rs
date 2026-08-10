@@ -2,42 +2,21 @@
 //! entity to perform.
 
 use bevy::prelude::*;
+use orzma_vt::prelude::Scroll;
 
 /// Fired by the host UI to move a specific terminal entity's viewport.
+///
+/// The motion vocabulary is [`Scroll`] itself — the request carries
+/// exactly what the VT applies, and the observer's only job is routing
+/// it to the targeted entity's handle. Clamping at both ends of history
+/// and page-size resolution live in `orzma_vt` and are pinned by its
+/// tests, not re-asserted here.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTermScroll {
     #[event_target]
     pub terminal: Entity,
     /// The movement to perform.
-    pub kind: ScrollKind,
-}
-
-/// A viewport movement, named by direction rather than by a signed delta.
-///
-/// Scrollback grows upward from the live tail, so a signed line count has two
-/// equally plausible readings ("positive is toward history" vs. "positive is
-/// toward the tail") and callers on the wheel path and the vi path disagree
-/// about which. Naming the direction removes the ambiguity from the request
-/// itself: the apply observer is the single place that converts to whatever
-/// sign the VT expects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScrollKind {
-    /// Move `lines` toward older output (deeper into scrollback).
-    Up(u32),
-    /// Move `lines` toward the live tail.
-    Down(u32),
-    /// One screenful toward older output.
-    PageUp,
-    /// One screenful toward the live tail.
-    PageDown,
-    /// Half a screenful toward older output.
-    HalfPageUp,
-    /// Half a screenful toward the live tail.
-    HalfPageDown,
-    /// The oldest line still in scrollback.
-    Top,
-    /// The live tail.
-    Bottom,
+    pub scroll: Scroll,
 }
 
 pub(super) struct ScrollPlugin;
@@ -73,9 +52,9 @@ mod tests {
         (app, terminal)
     }
 
-    fn trigger_scroll(app: &mut App, terminal: Entity, kind: ScrollKind) {
+    fn trigger_scroll(app: &mut App, terminal: Entity, scroll: Scroll) {
         app.world_mut()
-            .trigger(RequestTermScroll { terminal, kind });
+            .trigger(RequestTermScroll { terminal, scroll });
     }
 
     fn display_offset(app: &mut App, terminal: Entity) -> u32 {
@@ -86,22 +65,22 @@ mod tests {
             .display_offset()
     }
 
-    /// Asserts that `Up`/`Down` move the viewport by the requested line
-    /// count in opposite directions, cumulatively.
+    /// Asserts that positive and negative `Delta` requests move the
+    /// viewport in opposite directions, cumulatively.
     ///
-    /// Case: the wheel path — each notch resolves to a line count and
-    /// fires one request, and bursts of notches must accumulate. The
-    /// apply observer is the single place that converts the named
-    /// direction into the VT's signed delta (the reason `ScrollKind`
-    /// has no signed field), so a sign slip there scrolls the viewport
-    /// the wrong way with no compile error; the `Up`-then-`Down`
-    /// sequence pins both mappings against each other.
+    /// Case: the wheel path — each notch resolves to a signed line
+    /// count and fires one request, and bursts of notches must
+    /// accumulate. The sign convention (positive toward history) is
+    /// pinned in `orzma_vt`; what this test pins is the observer
+    /// actually forwarding each request to the targeted entity's
+    /// handle, where a dropped or misrouted request leaves the
+    /// viewport parked with no compile error.
     #[test]
     fn scroll_up_and_down_move_the_viewport_relatively() {
         let (mut app, terminal) = app_with_terminal(10);
-        trigger_scroll(&mut app, terminal, ScrollKind::Up(3));
+        trigger_scroll(&mut app, terminal, Scroll::Delta(3));
         assert_eq!(display_offset(&mut app, terminal), 3);
-        trigger_scroll(&mut app, terminal, ScrollKind::Down(2));
+        trigger_scroll(&mut app, terminal, Scroll::Delta(-2));
         assert_eq!(display_offset(&mut app, terminal), 1);
     }
 
@@ -110,17 +89,16 @@ mod tests {
     /// offset.
     ///
     /// Case: the vi-mode `gg` / `G` jumps — absolute motions, unlike
-    /// the wheel's relative ones. `Top` must clamp to the real history
-    /// depth via a finite delta (a naive `scroll(i32::MAX)` overflows
-    /// alacritty's offset arithmetic and panics under debug overflow
-    /// checks), and `Bottom` is the escape hatch every scroll-back
-    /// session ends with.
+    /// the wheel's relative ones. The observer must forward the
+    /// absolute variants unchanged (clamping to the real history depth
+    /// is the VT's job, pinned by `orzma_vt`'s tests), and `Bottom` is
+    /// the escape hatch every scroll-back session ends with.
     #[test]
     fn scroll_top_and_bottom_jump_to_the_extremes() {
         let (mut app, terminal) = app_with_terminal(10);
-        trigger_scroll(&mut app, terminal, ScrollKind::Top);
+        trigger_scroll(&mut app, terminal, Scroll::Top);
         assert_eq!(display_offset(&mut app, terminal), 10);
-        trigger_scroll(&mut app, terminal, ScrollKind::Bottom);
+        trigger_scroll(&mut app, terminal, Scroll::Bottom);
         assert_eq!(display_offset(&mut app, terminal), 0);
     }
 
@@ -131,19 +109,19 @@ mod tests {
     /// `Shift+PageUp`/`PageDown` paths. The decided policy matches
     /// xterm / alacritty `Scroll::PageUp` (full screen, no overlap
     /// line) — do not "fix" this test toward `rows - 1`. The page size
-    /// must come from the live grid height, which only the apply layer
-    /// can see; clamping at the ends of history is the VT's job and is
-    /// pinned by `orzma_vt`'s tests, so it is not re-asserted here.
+    /// comes from the live grid height, which the VT resolves
+    /// internally — the reason these requests stay symbolic instead of
+    /// being pre-baked into a `Delta` by the caller.
     #[test]
     fn paged_scrolls_move_by_screenfuls() {
         let (mut app, terminal) = app_with_terminal(40);
-        trigger_scroll(&mut app, terminal, ScrollKind::PageUp);
+        trigger_scroll(&mut app, terminal, Scroll::PageUp);
         assert_eq!(display_offset(&mut app, terminal), 24);
-        trigger_scroll(&mut app, terminal, ScrollKind::HalfPageUp);
+        trigger_scroll(&mut app, terminal, Scroll::HalfPageUp);
         assert_eq!(display_offset(&mut app, terminal), 36);
-        trigger_scroll(&mut app, terminal, ScrollKind::HalfPageDown);
+        trigger_scroll(&mut app, terminal, Scroll::HalfPageDown);
         assert_eq!(display_offset(&mut app, terminal), 24);
-        trigger_scroll(&mut app, terminal, ScrollKind::PageDown);
+        trigger_scroll(&mut app, terminal, Scroll::PageDown);
         assert_eq!(display_offset(&mut app, terminal), 0);
     }
 }
