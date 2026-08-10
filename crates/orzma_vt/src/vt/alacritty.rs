@@ -361,11 +361,9 @@ mod tests {
     /// Case: `Scroll::to_alacritty_scroll` is a seven-arm match onto a
     /// smaller enum — a transposed arm (PageUp↔PageDown, Top↔Bottom,
     /// HalfPageUp↔HalfPageDown) compiles cleanly and inverts the
-    /// motion, and the `Delta` tests above cannot see it. The half-page
-    /// arms also carry the only grid-height arithmetic in the mapping,
-    /// so a wrong or unnegated delta shows up only here. The history is
-    /// deeper than one screen so `PageUp` lands on the page size, not
-    /// the clamp.
+    /// motion, and the `Delta` tests above cannot see it. The history
+    /// is deeper than one screen so `PageUp` lands on the page size,
+    /// not the clamp.
     #[test]
     fn absolute_and_paged_scrolls_map_to_their_directions() {
         let history = usize::from(GRID_ROWS) + SEEDED_HISTORY_ROWS;

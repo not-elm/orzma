@@ -4,6 +4,8 @@
 use bevy::prelude::*;
 use orzma_vt::prelude::Scroll;
 
+use crate::OrzmaTermHandle;
+
 /// Fired by the host UI to move a specific terminal entity's viewport.
 ///
 /// The motion vocabulary is [`Scroll`] itself — the request carries
@@ -27,7 +29,11 @@ impl Plugin for ScrollPlugin {
     }
 }
 
-fn apply_scroll(e: On<RequestTermScroll>) {}
+fn apply_scroll(e: On<RequestTermScroll>, mut terms: Query<&mut OrzmaTermHandle>) {
+    if let Ok(mut tty) = terms.get_mut(e.terminal) {
+        tty.scroll(e.scroll);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -68,13 +74,8 @@ mod tests {
     /// Asserts that positive and negative `Delta` requests move the
     /// viewport in opposite directions, cumulatively.
     ///
-    /// Case: the wheel path — each notch resolves to a signed line
-    /// count and fires one request, and bursts of notches must
-    /// accumulate. The sign convention (positive toward history) is
-    /// pinned in `orzma_vt`; what this test pins is the observer
-    /// actually forwarding each request to the targeted entity's
-    /// handle, where a dropped or misrouted request leaves the
-    /// viewport parked with no compile error.
+    /// Case: the wheel path — each notch fires one request, and a
+    /// burst of notches must accumulate.
     #[test]
     fn scroll_up_and_down_move_the_viewport_relatively() {
         let (mut app, terminal) = app_with_terminal(10);
@@ -88,11 +89,8 @@ mod tests {
     /// `Bottom` returns to the live tail, regardless of the current
     /// offset.
     ///
-    /// Case: the vi-mode `gg` / `G` jumps — absolute motions, unlike
-    /// the wheel's relative ones. The observer must forward the
-    /// absolute variants unchanged (clamping to the real history depth
-    /// is the VT's job, pinned by `orzma_vt`'s tests), and `Bottom` is
-    /// the escape hatch every scroll-back session ends with.
+    /// Case: the vi-mode `gg` / `G` jumps.
+    /// Clamping is the VT's job, already pinned in `orzma_vt`.
     #[test]
     fn scroll_top_and_bottom_jump_to_the_extremes() {
         let (mut app, terminal) = app_with_terminal(10);
@@ -106,12 +104,9 @@ mod tests {
     /// height (24 rows here) and half a page is half that.
     ///
     /// Case: the vi-mode `Ctrl-B`/`Ctrl-F`/`Ctrl-U`/`Ctrl-D` and
-    /// `Shift+PageUp`/`PageDown` paths. The decided policy matches
-    /// xterm / alacritty `Scroll::PageUp` (full screen, no overlap
-    /// line) — do not "fix" this test toward `rows - 1`. The page size
-    /// comes from the live grid height, which the VT resolves
-    /// internally — the reason these requests stay symbolic instead of
-    /// being pre-baked into a `Delta` by the caller.
+    /// `Shift+PageUp`/`PageDown` paths. Decided policy: a page is the
+    /// full screen (xterm-style, no overlap line) — do not "fix" this
+    /// toward `rows - 1`.
     #[test]
     fn paged_scrolls_move_by_screenfuls() {
         let (mut app, terminal) = app_with_terminal(40);

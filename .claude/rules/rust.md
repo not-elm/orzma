@@ -97,6 +97,12 @@ asserted contract AND the concrete case the test envisions:
   ignored"), the `Case:` paragraph names the policy and the alternative
   it rejects, so a later reader does not "fix" the test toward the
   rejected behavior.
+- Keep the `Case:` paragraph concise — 2–3 sentences. Name the
+  scenario (and the pinned policy when there is one) and stop. Do not
+  restate what the test itself pins — the first line already says it —
+  and do not re-explain contracts pinned by another layer's tests
+  (sign conventions, clamping, etc.); a single clause pointing there
+  ("clamping is the VT's job, pinned in `orzma_vt`") is enough.
 
 ```rust
 /// Asserts that a request with a zero axis leaves the PTY size untouched.
