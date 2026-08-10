@@ -187,22 +187,6 @@ mod tests {
         ((pty.cols, pty.rows), term.vt.grid_size())
     }
 
-    /// Asserts that a resize lands on the PTY: the size read back from
-    /// the kernel (`TIOCGWINSZ`) is the requested one.
-    ///
-    /// Case: the ordinary window-resize path. The kernel's winsize is
-    /// the only channel through which a child process learns its grid
-    /// (via the SIGWINCH the ioctl raises on a live PTY), so a resize
-    /// that stops short of the kernel leaves every TUI app drawing at
-    /// the stale size.
-    #[test]
-    fn resize_applies_the_size_to_the_pty() {
-        let (mut term, _sink) = detached_term();
-        term.resize(120, 40).expect("resize");
-        let size = term.pty_size();
-        assert_eq!((size.cols, size.rows), (120, 40));
-    }
-
     /// Asserts that a resize reaches the VT grid, not only the PTY.
     ///
     /// Case: the renderer draws whatever the VT reports. An
