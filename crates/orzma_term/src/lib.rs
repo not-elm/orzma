@@ -48,26 +48,6 @@ pub struct EnvValue(pub String);
 pub struct OrzmaTerm<V: OrzmaVt> {
     vt: V,
     coalescer: Coalescer,
-    /// One-shot latch: set immediately before any user-originated PTY
-    /// write, cleared when the coalescer consumes it.
-    ///
-    /// While set it *unlocks* — but does not by itself trigger — the
-    /// immediate-flush path. [`Coalescer::should_flush_immediately`]
-    /// returns `false` outright while this is `false`; only
-    /// `AtMostOneRow`, or `ManyRows` under the row cap with the window
-    /// closed, actually bypasses the IDLE / MAX_CAP deadlines. `Full`
-    /// damage always goes through the window.
-    ///
-    /// # Invariants
-    ///
-    /// - Set BEFORE the PTY write, so an emit cycle racing the write
-    ///   cannot miss it.
-    /// - Machine-originated writes (VT replies such as DSR / DA / CPR)
-    ///   must NOT set this: the flag encodes a write's provenance.
-    /// - Cleared only on an `AtMostOneRow` immediate flush; the
-    ///   `ManyRows` path leaves it set, so it can stay latched across
-    ///   several chunks.
-    unflushed_user_input: bool,
     pty: Pty,
 }
 
@@ -80,7 +60,6 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         Ok(Self {
             vt,
             coalescer: Coalescer::default(),
-            unflushed_user_input: false,
             pty,
         })
     }
@@ -107,7 +86,6 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         Ok(Self {
             vt: V::new(cols, rows),
             coalescer: Coalescer::default(),
-            unflushed_user_input: false,
             pty: Pty::detached(cols, rows, writer)?,
         })
     }
@@ -131,8 +109,7 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     /// Encodes a key press and writes it to the PTY.
     ///
     /// Snaps a scrolled-back viewport to the live tail first
-    /// (scroll-on-input policy) so the echo is visible, and sets the
-    /// user-input latch before the write.
+    /// (scroll-on-input policy) so the echo is visible.
     pub fn write_key_input(
         &mut self,
         key: &TerminalKey,
@@ -140,30 +117,30 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     ) -> OrzmaTermResult {
         let modes = self.vt.modes();
         self.snap_to_live_tail();
-        self.write_to_pty(PtyInput::encode_key(key, mods, modes.app_cursor).as_bytes())
+        self.pty
+            .write_all(PtyInput::encode_key(key, mods, modes.app_cursor).as_bytes())
     }
 
     /// Encodes one mouse report in the terminal's active mouse encoding
     /// and writes it to the PTY.
     ///
-    /// Sets the user-input latch, but deliberately does NOT snap a
-    /// scrolled-back viewport: the report's cell coordinates were
-    /// computed by the host against the viewport the user is looking
-    /// at, so yanking the view to the live tail on every report would
-    /// make the screen jump under the pointer.
+    /// Deliberately does NOT snap a scrolled-back viewport: the
+    /// report's cell coordinates were computed by the host against the
+    /// viewport the user is looking at, so yanking the view to the live
+    /// tail on every report would make the screen jump under the
+    /// pointer.
     pub fn write_mouse_input(&mut self, report: MouseReport) -> OrzmaTermResult {
         let sequence = report.encode(self.vt.modes().mouse_encoding);
-        self.write_to_pty(&sequence)
+        self.pty.write_all(&sequence)
     }
 
     /// Writes a paste of clipboard text to the PTY, honouring
     /// bracketed-paste mode (DECSET 2004) via [`PtyInput::encode_paste`].
     ///
-    /// Empty text is a no-op: nothing reaches the PTY and the
-    /// user-input latch stays untouched. Otherwise a scrolled-back
-    /// viewport snaps to the live tail first (scroll-on-input policy),
-    /// the latch is set before the write, and the whole frame goes out
-    /// in a single write — a partially-written frame would leave the
+    /// Empty text is a no-op: nothing reaches the PTY. Otherwise a
+    /// scrolled-back viewport snaps to the live tail first
+    /// (scroll-on-input policy), and the whole frame goes out in a
+    /// single write — a partially-written frame would leave the
     /// receiving app inside an unterminated paste.
     pub fn write_paste(&mut self, text: &str) -> OrzmaTermResult {
         if text.is_empty() {
@@ -171,17 +148,8 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
         }
         let bracketed = self.vt.modes().bracketed_paste;
         self.snap_to_live_tail();
-        self.write_to_pty(PtyInput::encode_paste(text, bracketed).as_bytes())
-    }
-
-    /// Sets the user-input latch and writes `buf` to the PTY.
-    ///
-    /// The latch is set before the write per the invariant on
-    /// [`Self::unflushed_user_input`], and stays set when the write
-    /// fails.
-    fn write_to_pty(&mut self, buf: &[u8]) -> OrzmaTermResult {
-        self.unflushed_user_input = true;
-        self.pty.write_all(buf)
+        self.pty
+            .write_all(PtyInput::encode_paste(text, bracketed).as_bytes())
     }
 
     /// Snaps a scrolled-back viewport to the live tail (scroll-on-input
@@ -210,7 +178,6 @@ mod tests {
         OrzmaTerm {
             vt: AlacrittyVt::new(80, 24),
             coalescer: Coalescer::default(),
-            unflushed_user_input: false,
             pty: Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default())),
         }
     }
@@ -339,26 +306,6 @@ mod tests {
         assert!(!term.coalescer.is_armed());
     }
 
-    /// Asserts that a resize leaves an already-set user-input latch
-    /// set.
-    ///
-    /// Case: the latch encodes "a user write is unflushed" and is
-    /// cleared only when the coalescer consumes it. A window resize can
-    /// land between a keystroke and its echo; a resize that cleared (or
-    /// set) the latch would corrupt that provenance — checking only the
-    /// fresh `false` state would miss the clearing bug entirely.
-    #[test]
-    fn resize_preserves_the_user_input_latch() {
-        let (mut term, _sink) = detached_term();
-        term.write_paste("x").expect("write_paste");
-        assert!(
-            term.unflushed_user_input,
-            "precondition: paste sets the latch"
-        );
-        term.resize(120, 40).expect("resize");
-        assert!(term.unflushed_user_input);
-    }
-
     /// Asserts that back-to-back resizes settle on the last requested
     /// size on both seams.
     ///
@@ -375,8 +322,8 @@ mod tests {
     }
 
     /// Asserts PTY-first ordering via failure atomicity: when the PTY
-    /// ioctl fails, the call returns `PtyResize` and the VT grid,
-    /// coalescer, and latch are all untouched.
+    /// ioctl fails, the call returns `PtyResize` and the VT grid and
+    /// coalescer are untouched.
     ///
     /// Case: the ordering contract is deliberately the reverse of the
     /// predecessor (which resized the VT before the PTY): on ioctl
@@ -395,7 +342,6 @@ mod tests {
         );
         assert_eq!(term.vt.grid_size(), (80, 24));
         assert!(!term.coalescer.is_armed());
-        assert!(!term.unflushed_user_input);
     }
 
     /// Asserts that a detached terminal's PTY writes land on the
@@ -418,7 +364,7 @@ mod tests {
     /// Case: an empty clipboard paste. The no-op contract lives here in
     /// `write_paste` (documented early return): nothing may reach the
     /// PTY — in bracketed-paste mode even an empty frame would wake the
-    /// receiving app — and the user-input latch stays untouched.
+    /// receiving app.
     #[test]
     fn empty_paste_writes_nothing_to_the_pty() {
         let (mut term, sink) = detached_term();
