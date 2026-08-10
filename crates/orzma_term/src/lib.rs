@@ -52,6 +52,17 @@ pub struct OrzmaTerm<V: OrzmaVt> {
 }
 
 impl<V: OrzmaVt> OrzmaTerm<V> {
+    /// Upper bound for a resize's column count; requests beyond it are
+    /// ignored by [`Self::resize`].
+    ///
+    /// 4096 columns is beyond any real display (8K at a tiny font is
+    /// ~2000), while capping the VT grid allocation a degenerate or
+    /// hostile request could otherwise trigger.
+    const MAX_COLS: u16 = 4096;
+    /// Upper bound for a resize's row count; requests beyond it are
+    /// ignored by [`Self::resize`]. Same rationale as [`Self::MAX_COLS`].
+    const MAX_ROWS: u16 = 4096;
+
     /// Spawns the login shell under a new PTY and builds the VT at the
     /// same grid size.
     pub fn spawn(options: SpawnOptions) -> OrzmaTermResult<Self> {
@@ -98,7 +109,12 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTermResult {
-        todo!("OrzmaTerm::resize")
+        if cols == 0 || rows == 0 || Self::MAX_COLS < cols || Self::MAX_ROWS < rows {
+            return Ok(());
+        }
+        self.pty.resize(cols, rows)?;
+        self.vt.resize(cols, rows);
+        Ok(())
     }
 
     #[inline]
@@ -252,19 +268,20 @@ mod tests {
         }
     }
 
-    /// Asserts the 4096-per-axis cap: oversized requests are ignored,
-    /// the boundary value is applied.
+    /// Asserts the per-axis cap: requests beyond `MAX_COLS` /
+    /// `MAX_ROWS` are ignored, the boundary value is applied.
     ///
     /// Case: the zero guard alone accepts 65535x65535 — a
     /// multi-billion-cell VT allocation issued after the PTY was
-    /// already resized, i.e. an OOM/hang with the two sides desynced.
-    /// 4096 columns is beyond any real display (8K at a tiny font is
-    /// ~2000), so the cap costs nothing; it is pinned at the boundary
-    /// without actually allocating a huge grid.
+    /// already resized, i.e. an OOM/hang with the two sides desynced
+    /// (the cap rationale lives on the constants). Pinned at the
+    /// boundary without actually allocating a huge grid.
     #[test]
     fn an_oversized_axis_resize_is_ignored() {
+        const MAX_COLS: u16 = OrzmaTerm::<AlacrittyVt>::MAX_COLS;
+        const MAX_ROWS: u16 = OrzmaTerm::<AlacrittyVt>::MAX_ROWS;
         let (mut term, _sink) = detached_term();
-        for (cols, rows) in [(4097, 24), (80, 4097)] {
+        for (cols, rows) in [(MAX_COLS + 1, 24), (80, MAX_ROWS + 1)] {
             term.resize(cols, rows).expect("ignored resize must be Ok");
             assert_eq!(
                 sizes(&term),
@@ -272,8 +289,8 @@ mod tests {
                 "resize {cols}x{rows} must be ignored"
             );
         }
-        term.resize(4096, 24).expect("resize");
-        assert_eq!(sizes(&term), ((4096, 24), (4096, 24)));
+        term.resize(MAX_COLS, 24).expect("resize");
+        assert_eq!(sizes(&term), ((MAX_COLS, 24), (MAX_COLS, 24)));
     }
 
     /// Asserts that an ignored request does not arm the coalescer.
@@ -286,7 +303,8 @@ mod tests {
     fn an_ignored_resize_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
         term.resize(0, 40).expect("ignored resize must be Ok");
-        term.resize(4097, 24).expect("ignored resize must be Ok");
+        term.resize(OrzmaTerm::<AlacrittyVt>::MAX_COLS + 1, 24)
+            .expect("ignored resize must be Ok");
         assert!(!term.coalescer.is_armed());
     }
 
