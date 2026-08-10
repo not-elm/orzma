@@ -4,13 +4,14 @@ use crate::{
     damage::{DamageVerdict, DirtyRows},
     extension::ApcState,
     modes::{MouseEncoding, MouseTracking, VtModes},
+    scroll::Scroll,
     signal::VtSignal,
     vt::OrzmaVt,
 };
 use alacritty_terminal::{
     Term,
     event::EventListener,
-    grid::{Dimensions, Scroll},
+    grid::Dimensions,
     term::{Config, TermDamage, TermMode},
     vte::ansi::{Color, Processor},
 };
@@ -98,13 +99,8 @@ impl OrzmaVt for AlacrittyVt {
     }
 
     #[inline]
-    fn scroll(&mut self, delta: i32) {
-        self.term.scroll_display(Scroll::Delta(delta));
-    }
-
-    #[inline]
-    fn scroll_to_bottom(&mut self) {
-        self.term.scroll_display(Scroll::Bottom);
+    fn scroll(&mut self, scroll: Scroll) {
+        self.term.scroll_display(scroll.to_alacritty_scroll());
     }
 }
 
@@ -275,29 +271,29 @@ mod tests {
     fn positive_delta_scrolls_into_history() {
         let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
         assert_eq!(vt.display_offset(), 0);
-        vt.scroll(3);
+        vt.scroll(Scroll::Delta(3));
         assert_eq!(vt.display_offset(), 3);
-        vt.scroll(4);
+        vt.scroll(Scroll::Delta(4));
         assert_eq!(vt.display_offset(), 7);
     }
 
     #[test]
     fn negative_delta_scrolls_toward_the_live_tail() {
         let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
-        vt.scroll(7);
-        vt.scroll(-4);
+        vt.scroll(Scroll::Delta(7));
+        vt.scroll(Scroll::Delta(-4));
         assert_eq!(vt.display_offset(), 3);
-        vt.scroll(-3);
+        vt.scroll(Scroll::Delta(-3));
         assert_eq!(vt.display_offset(), 0);
     }
 
     #[test]
     fn scroll_by_zero_leaves_the_viewport_untouched() {
         let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
-        vt.scroll(0);
+        vt.scroll(Scroll::Delta(0));
         assert_eq!(vt.display_offset(), 0);
-        vt.scroll(4);
-        vt.scroll(0);
+        vt.scroll(Scroll::Delta(4));
+        vt.scroll(Scroll::Delta(0));
         assert_eq!(vt.display_offset(), 4);
     }
 
@@ -307,29 +303,29 @@ mod tests {
     #[test]
     fn scroll_clamps_at_the_top_of_history() {
         let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
-        vt.scroll(SEEDED_HISTORY_ROWS as i32 + 100);
+        vt.scroll(Scroll::Delta(SEEDED_HISTORY_ROWS as i32 + 100));
         assert_eq!(vt.display_offset(), SEEDED_HISTORY_ROWS as u32);
-        vt.scroll(1);
+        vt.scroll(Scroll::Delta(1));
         assert_eq!(vt.display_offset(), SEEDED_HISTORY_ROWS as u32);
     }
 
     #[test]
     fn scroll_clamps_at_the_live_tail() {
         let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
-        vt.scroll(5);
-        vt.scroll(-1000);
+        vt.scroll(Scroll::Delta(5));
+        vt.scroll(Scroll::Delta(-1000));
         assert_eq!(vt.display_offset(), 0);
-        vt.scroll(-1000);
+        vt.scroll(Scroll::Delta(-1000));
         assert_eq!(vt.display_offset(), 0);
     }
 
     #[test]
     fn scroll_without_scrollback_is_a_noop() {
         let mut vt = vt_after(b"one\r\ntwo\r\nthree");
-        vt.scroll(5);
+        vt.scroll(Scroll::Delta(5));
         assert_eq!(vt.display_offset(), 0);
         let mut vt = vt_with_history(0);
-        vt.scroll(5);
+        vt.scroll(Scroll::Delta(5));
         assert_eq!(vt.display_offset(), 0);
     }
 
@@ -342,7 +338,7 @@ mod tests {
         let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
         vt.interpret(b"\x1b[?1049h");
         assert!(vt.modes().alt_screen);
-        vt.scroll(5);
+        vt.scroll(Scroll::Delta(5));
         assert_eq!(vt.display_offset(), 0);
     }
 
@@ -350,10 +346,33 @@ mod tests {
     fn at_scroll_bottom_tracks_the_viewport() {
         let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
         assert!(vt.at_scroll_bottom());
-        vt.scroll(3);
+        vt.scroll(Scroll::Delta(3));
         assert!(!vt.at_scroll_bottom());
-        vt.scroll(-3);
+        vt.scroll(Scroll::Delta(-3));
         assert!(vt.at_scroll_bottom());
+    }
+
+    /// Asserts that every absolute and paged `Scroll` variant moves the
+    /// viewport in its own direction and magnitude.
+    ///
+    /// Case: `Scroll::to_alacritty_scroll` is a five-arm match between
+    /// two identically-shaped enums — a transposed arm
+    /// (PageUp↔PageDown, Top↔Bottom) compiles cleanly and inverts the
+    /// motion, and the `Delta` tests above cannot see it. The history
+    /// is deeper than one screen so `PageUp` lands on the page size,
+    /// not the clamp.
+    #[test]
+    fn absolute_and_paged_scrolls_map_to_their_directions() {
+        let history = usize::from(GRID_ROWS) + SEEDED_HISTORY_ROWS;
+        let mut vt = vt_with_history(history);
+        vt.scroll(Scroll::PageUp);
+        assert_eq!(vt.display_offset(), u32::from(GRID_ROWS));
+        vt.scroll(Scroll::PageDown);
+        assert_eq!(vt.display_offset(), 0);
+        vt.scroll(Scroll::Top);
+        assert_eq!(vt.display_offset(), history as u32);
+        vt.scroll(Scroll::Bottom);
+        assert_eq!(vt.display_offset(), 0);
     }
 
     /// Row count of the grid every fixture in this module builds.
@@ -483,7 +502,7 @@ mod tests {
     #[test]
     fn a_viewport_fully_in_scrollback_stages_empty_damage() {
         let mut vt = vt_with_history(usize::from(GRID_ROWS) + SEEDED_HISTORY_ROWS);
-        vt.scroll(i32::from(GRID_ROWS));
+        vt.scroll(Scroll::Delta(i32::from(GRID_ROWS)));
         assert_eq!(
             vt.display_offset(),
             u32::from(GRID_ROWS),

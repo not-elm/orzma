@@ -6,6 +6,7 @@ mod frame;
 mod hyperlink;
 mod modes;
 mod run;
+mod scroll;
 mod selection;
 mod signal;
 mod vt;
@@ -13,6 +14,6 @@ mod vt;
 pub mod prelude {
     pub use crate::{
         color::*, cursor::*, damage::DamageVerdict, extension::*, hyperlink::*, modes::*, run::*,
-        selection::*, signal::*, vt::*,
+        scroll::*, selection::*, signal::*, vt::*,
     };
 }

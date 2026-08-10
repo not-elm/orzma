@@ -1,4 +1,6 @@
-use crate::{damage::DamageVerdict, frame::Frame, modes::VtModes, prelude::VtSignal};
+use crate::{
+    damage::DamageVerdict, frame::Frame, modes::VtModes, prelude::VtSignal, scroll::Scroll,
+};
 
 #[cfg(feature = "alacritty")]
 mod alacritty;
@@ -42,32 +44,30 @@ pub trait OrzmaVt: Sized {
     /// DSR/DA reply bytes the owner must write back to the PTY.
     fn drain_replies_into(&self, buf: &mut Vec<u8>);
 
-    /// Interactive ops stay synchronous and return whether an emit is due.
-    fn scroll(&mut self, delta: i32);
-
-    /// Snaps the viewport back to the live tail.
+    /// Applies the given viewport motion.
     ///
-    /// Idempotent — a call made while already at the tail leaves the
-    /// viewport untouched. This is the mechanism behind the
-    /// scroll-on-keystroke policy applied before user input reaches the
-    /// PTY.
+    /// Every motion clamps to the scrollback bounds, so a call that
+    /// lands where the viewport already is leaves it untouched
+    /// (idempotent at the boundary — [`Scroll::Bottom`] at the live
+    /// tail is a no-op).
     ///
     /// # Invariants
     ///
     /// A no-op call stages no damage, so a caller that needs the
     /// renderer to observe the new viewport must gate on
-    /// [`Self::at_scroll_bottom`] rather than calling this
+    /// [`Self::at_scroll_bottom`] rather than scrolling
     /// unconditionally.
     ///
     /// # References
     ///
     /// - [XTerm Control Sequences] — DECSET 1011 (`scrollKey`): scroll
-    ///   to bottom on key press. The inverse policy, DECSET 1010
-    ///   (`scrollTtyOutput`), is not implemented by this trait: the
-    ///   viewport holds its position while the PTY emits output.
+    ///   to bottom on key press; [`Scroll::Bottom`] is the mechanism
+    ///   behind that scroll-on-input policy. The inverse policy, DECSET
+    ///   1010 (`scrollTtyOutput`), is not implemented by this trait:
+    ///   the viewport holds its position while the PTY emits output.
     ///
     /// [XTerm Control Sequences]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html
-    fn scroll_to_bottom(&mut self);
+    fn scroll(&mut self, scroll: Scroll);
 
     /// Snapshot of the input-relevant terminal modes.
     fn modes(&self) -> VtModes;
