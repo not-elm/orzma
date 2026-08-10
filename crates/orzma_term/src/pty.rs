@@ -6,7 +6,6 @@ use crate::{
 };
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
-#[cfg(feature = "test-support")]
 use std::io::Result as IoResult;
 use std::io::{Read, Write};
 #[cfg(target_os = "macos")]
@@ -92,7 +91,7 @@ impl Pty {
     ///
     /// Panics on ioctl failure — the master fd is no longer valid at
     /// that point (see `OrzmaTerm::pty_size`).
-    pub(super) fn size(&self) -> PtySize {
+    pub fn size(&self) -> PtySize {
         self.master
             .lock()
             .unwrap()
@@ -103,12 +102,7 @@ impl Pty {
     /// Opens a PTY at the given grid size but routes writes to `writer`
     /// instead of the master, spawning no child process and no reader
     /// thread — the injectable seam behind `OrzmaTerm::detached`.
-    #[cfg(feature = "test-support")]
-    pub(super) fn detached(
-        cols: u16,
-        rows: u16,
-        writer: Box<dyn Write + Send>,
-    ) -> OrzmaTermResult<Self> {
+    pub fn detached(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> OrzmaTermResult<Self> {
         let pty_pair = native_pty_system()
             .openpty(PtySize {
                 rows,
@@ -123,7 +117,6 @@ impl Pty {
     /// Builds a `Pty` around an arbitrary master and writer, with no
     /// child process and no reader thread — lets tests inject a fake
     /// master (e.g. one whose `resize` fails).
-    #[cfg(feature = "test-support")]
     pub(super) fn with_master(
         master: Box<dyn MasterPty + Send>,
         writer: Box<dyn Write + Send>,
@@ -226,11 +219,9 @@ fn spawn_reader_thread(
 
 /// Stand-in child killer for [`Pty::detached`], which has no child
 /// process to kill.
-#[cfg(feature = "test-support")]
 #[derive(Debug)]
 struct DetachedKiller;
 
-#[cfg(feature = "test-support")]
 impl ChildKiller for DetachedKiller {
     fn kill(&mut self) -> IoResult<()> {
         Ok(())

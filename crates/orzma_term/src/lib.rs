@@ -10,7 +10,6 @@ use crate::{
 };
 use orzma_vt::prelude::*;
 use portable_pty::PtySize;
-#[cfg(feature = "test-support")]
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -19,7 +18,6 @@ mod error;
 mod input;
 mod pty;
 mod signal;
-#[cfg(feature = "test-support")]
 pub mod test_support;
 
 pub mod prelude {
@@ -101,11 +99,10 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     /// Builds a terminal whose PTY writes land on `writer` instead of a
     /// spawned shell.
     ///
-    /// Test-support seam: a PTY is still opened at the grid size, but no
-    /// child process or reader thread is started, so everything the
-    /// input methods emit can be observed on `writer` — typically a
+    /// A PTY is still opened at the grid size, but no child process or
+    /// reader thread is started, so everything the input methods emit
+    /// can be observed on `writer` — typically a
     /// [`test_support::CaptureSink`].
-    #[cfg(feature = "test-support")]
     pub fn detached(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> OrzmaTermResult<Self> {
         Ok(Self {
             vt: V::new(cols, rows),
@@ -197,7 +194,7 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     }
 }
 
-#[cfg(all(test, feature = "test-support"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::CaptureSink;
