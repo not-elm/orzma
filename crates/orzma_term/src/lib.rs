@@ -197,52 +197,13 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::CaptureSink;
-    use portable_pty::MasterPty;
+    use crate::test_support::{CaptureSink, FailingMaster};
 
     fn detached_term() -> (OrzmaTerm<AlacrittyVt>, CaptureSink) {
         let sink = CaptureSink::default();
         let term =
             OrzmaTerm::detached(80, 24, Box::new(sink.clone())).expect("OrzmaTerm::detached");
         (term, sink)
-    }
-
-    /// `MasterPty` whose `resize` always fails, for pinning the
-    /// PTY-first / VT-untouched-on-failure contract.
-    #[derive(Debug)]
-    struct FailingMaster;
-
-    impl MasterPty for FailingMaster {
-        fn resize(&self, _size: PtySize) -> anyhow::Result<()> {
-            Err(anyhow::anyhow!("injected resize failure"))
-        }
-
-        fn get_size(&self) -> anyhow::Result<PtySize> {
-            Err(anyhow::anyhow!("not implemented for FailingMaster"))
-        }
-
-        fn try_clone_reader(&self) -> anyhow::Result<Box<dyn std::io::Read + Send>> {
-            Err(anyhow::anyhow!("not implemented for FailingMaster"))
-        }
-
-        fn take_writer(&self) -> anyhow::Result<Box<dyn Write + Send>> {
-            Err(anyhow::anyhow!("not implemented for FailingMaster"))
-        }
-
-        #[cfg(unix)]
-        fn process_group_leader(&self) -> Option<i32> {
-            None
-        }
-
-        #[cfg(unix)]
-        fn as_raw_fd(&self) -> Option<std::os::unix::io::RawFd> {
-            None
-        }
-
-        #[cfg(unix)]
-        fn tty_name(&self) -> Option<PathBuf> {
-            None
-        }
     }
 
     fn failing_term() -> OrzmaTerm<AlacrittyVt> {

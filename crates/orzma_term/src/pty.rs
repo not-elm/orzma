@@ -86,6 +86,16 @@ impl Pty {
         Ok(())
     }
 
+    /// Applies the given grid size to the PTY master (`TIOCSWINSZ`).
+    ///
+    /// A no-policy wrapper: forwards the values verbatim (validation is
+    /// `OrzmaTerm::resize`'s job) with the pixel fields explicitly
+    /// zeroed, and maps the master's error to
+    /// [`OrzmaTermError::PtyResize`].
+    pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTermResult {
+        todo!("Pty::resize")
+    }
+
     /// Reads the master's current size back from the kernel
     /// (`TIOCGWINSZ`).
     ///
@@ -117,10 +127,7 @@ impl Pty {
     /// Builds a `Pty` around an arbitrary master and writer, with no
     /// child process and no reader thread — lets tests inject a fake
     /// master (e.g. one whose `resize` fails).
-    pub(super) fn with_master(
-        master: Box<dyn MasterPty + Send>,
-        writer: Box<dyn Write + Send>,
-    ) -> Self {
+    pub fn with_master(master: Box<dyn MasterPty + Send>, writer: Box<dyn Write + Send>) -> Self {
         let (_, chunk_rx) = unbounded::<Vec<u8>>();
         let (_, exit_rx) = unbounded::<Option<i32>>();
         Self {
@@ -235,7 +242,89 @@ impl ChildKiller for DetachedKiller {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{FailingMaster, RecordingMaster};
+    use std::io::sink;
     use std::time::Duration;
+
+    /// Asserts that a resize round-trips through the kernel: the size
+    /// read back via `TIOCGWINSZ` is the size just applied.
+    ///
+    /// Case: the wrapper's one real side effect. The non-square 120x40
+    /// pins the argument-to-field mapping — the method takes
+    /// `(cols, rows)` while `PtySize` declares `rows` first, so a
+    /// transposition compiles silently and swaps every grid dimension.
+    #[test]
+    fn resize_applies_the_size_to_the_kernel() {
+        let mut pty = Pty::detached(80, 24, Box::new(sink())).expect("Pty::detached");
+        pty.resize(120, 40).expect("resize");
+        let size = pty.size();
+        assert_eq!((size.cols, size.rows), (120, 40));
+    }
+
+    /// Asserts the exact `PtySize` handed to the master: the requested
+    /// cols/rows in the right fields and both pixel fields zero.
+    ///
+    /// Case: the kernel-readback test cannot see this — a detached
+    /// master already starts at pixel 0, so "explicitly wrote 0" and
+    /// "preserved the old value" are indistinguishable there. Recording
+    /// the forwarded struct pins the decided pixel policy (explicitly
+    /// zeroed, consistent with `spawn` / `detached`).
+    #[test]
+    fn resize_forwards_the_exact_pty_size_to_the_master() {
+        let (master, calls) = RecordingMaster::new();
+        let mut pty = Pty::with_master(Box::new(master), Box::new(sink()));
+        pty.resize(120, 40).expect("resize");
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![PtySize {
+                rows: 40,
+                cols: 120,
+                pixel_width: 0,
+                pixel_height: 0
+            }]
+        );
+    }
+
+    /// Asserts that degenerate sizes are forwarded verbatim, one master
+    /// call per request.
+    ///
+    /// Case: the layering pin. The zero-axis / oversize policy lives
+    /// only in `OrzmaTerm::resize`; this wrapper must not validate. A
+    /// guard sneaking in here would duplicate the policy and let the
+    /// two layers drift (one clamping while the other ignores) without
+    /// any layered test noticing.
+    #[test]
+    fn resize_forwards_degenerate_sizes_verbatim() {
+        let (master, calls) = RecordingMaster::new();
+        let mut pty = Pty::with_master(Box::new(master), Box::new(sink()));
+        for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
+            pty.resize(cols, rows).expect("resize");
+        }
+        let recorded: Vec<(u16, u16)> = calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|s| (s.cols, s.rows))
+            .collect();
+        assert_eq!(recorded, vec![(0, 0), (0, 40), (120, 0)]);
+    }
+
+    /// Asserts that a master resize failure surfaces as
+    /// `OrzmaTermError::PtyResize`.
+    ///
+    /// Case: the error-taxonomy pin, mirroring `write_all` →
+    /// `PtyWrite`. `OrzmaTerm::resize`'s failure-atomicity branch and
+    /// the bevy layer's `error!` log both identify the failing
+    /// subsystem by this variant.
+    #[test]
+    fn a_failing_master_maps_to_pty_resize_error() {
+        let mut pty = Pty::with_master(Box::new(FailingMaster), Box::new(sink()));
+        let result = pty.resize(120, 40);
+        assert!(
+            matches!(result, Err(OrzmaTermError::PtyResize(_))),
+            "expected PtyResize, got {result:?}"
+        );
+    }
 
     #[test]
     fn spawn_emits_chunk_and_exit_zero() {
