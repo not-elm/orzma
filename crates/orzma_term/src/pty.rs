@@ -93,7 +93,16 @@ impl Pty {
     /// zeroed, and maps the master's error to
     /// [`OrzmaTermError::PtyResize`].
     pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTermResult {
-        todo!("Pty::resize")
+        self.master
+            .lock()
+            .unwrap()
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| OrzmaTermError::PtyResize(e))
     }
 
     /// Reads the master's current size back from the kernel
