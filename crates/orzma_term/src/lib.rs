@@ -109,8 +109,11 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     }
 
     pub fn scroll(&mut self, scroll: Scroll) {
+        let prev_offset = self.vt.display_offset();
         self.vt.scroll(scroll);
-        todo!()
+        if prev_offset != self.vt.display_offset() {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
     }
 
     /// Resizes both the PTY (kernel winsize) and the VT grid, then arms
@@ -188,7 +191,7 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     /// stages no damage.
     fn snap_to_live_tail(&mut self) {
         if !self.vt.at_scroll_bottom() {
-            self.vt.scroll(Scroll::Bottom);
+            self.scroll(Scroll::Bottom);
         }
     }
 }
