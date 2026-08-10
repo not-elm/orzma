@@ -87,6 +87,11 @@ impl OrzmaVt for AlacrittyVt {
         self.term.grid().display_offset() as u32
     }
 
+    fn resize(&mut self, cols: u16, rows: u16) {
+        self.term.resize(LocalDim::new(cols, rows));
+        self.pending_damage = Some(DirtyRows::Full);
+    }
+
     #[inline]
     fn grid_size(&self) -> (u16, u16) {
         (self.term.columns() as u16, self.term.screen_lines() as u16)
@@ -163,6 +168,36 @@ mod tests {
     fn fresh_terminal_reports_alacritty_baseline() {
         let vt = AlacrittyVt::new(80, 24);
         assert_eq!(vt.modes(), baseline());
+    }
+
+    /// Asserts that `resize` reshapes the emulated grid to the
+    /// requested dimensions.
+    ///
+    /// Case: the window-resize path — `OrzmaTerm::resize` delegates
+    /// here after the PTY ioctl. The non-square target catches a
+    /// cols/rows transposition into `LocalDim`, which would reflow
+    /// every line at the wrong width while the child renders at the
+    /// correct one.
+    #[test]
+    fn resize_updates_the_grid_size() {
+        let mut vt = AlacrittyVt::new(80, 24);
+        vt.resize(120, 40);
+        assert_eq!(vt.grid_size(), (120, 40));
+    }
+
+    /// Asserts that `resize` stages full damage.
+    ///
+    /// Case: a resize reflows the whole grid, but no PTY output need
+    /// follow — an idle shell prompt stays idle. Without staged `Full`
+    /// damage the next `frames()` call finds nothing to emit and the
+    /// renderer keeps drawing the old grid until unrelated output
+    /// arrives (the trait doc pins this repaint contract).
+    #[test]
+    fn resize_stages_full_damage() {
+        let mut vt = AlacrittyVt::new(80, 24);
+        drain_staged(&mut vt);
+        vt.resize(120, 40);
+        assert_eq!(vt.pending_damage, Some(DirtyRows::Full));
     }
 
     /// Asserts `grid_size` returns `(cols, rows)` in constructor-argument

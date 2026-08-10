@@ -72,6 +72,18 @@ pub trait OrzmaVt: Sized {
     /// Snapshot of the input-relevant terminal modes.
     fn modes(&self) -> VtModes;
 
+    /// Resizes the emulated grid to `cols` x `rows` cells.
+    ///
+    /// Stages full damage so the next [`Self::frames`] call repaints
+    /// the reflowed grid.
+    ///
+    /// # Invariants
+    ///
+    /// Both dimensions must be nonzero: degenerate-size validation is
+    /// the caller's job (`OrzmaTerm::resize` ignores zero-axis and
+    /// oversized requests before this method is reached).
+    fn resize(&mut self, cols: u16, rows: u16);
+
     /// Grid dimensions as `(cols, rows)`.
     ///
     /// The row count is the source of truth for "one screenful"
