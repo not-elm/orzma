@@ -130,14 +130,17 @@ impl OrzmaVt for AlacrittyVt {
             SelectionOp::UpdateTo { cell, side } => {
                 let point = self.grid_point(cell);
                 if let Some(selection) = self.term.selection.as_mut() {
-                    *selection = Selection::new(selection.ty, point, side.into());
                     let s: alacritty_terminal::index::Side = side.into();
-                    selection.update(point, s.opposite());
+                    selection.update(point, s);
                 }
             }
             SelectionOp::ChangeKind(selection_kind) => {
+                let vi_point = self.term.vi_mode_cursor.point;
                 if let Some(selection) = self.term.selection.as_mut() {
                     selection.ty = selection_kind.into();
+                    selection.update(vi_point, Side::Left);
+                    selection.include_all();
+                    self.pending_damage = Some(DirtyRows::Full);
                 }
             }
             SelectionOp::Clear => {
@@ -824,14 +827,10 @@ mod tests {
         vt.term.vi_mode_cursor.point = AlacPoint::new(Line(1), Column(7));
         vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
             .unwrap();
-        let text = vt.selected_text().expect("Lines selection still active");
-        assert!(
-            text.starts_with("abc"),
-            "anchor row 0 must be preserved, got {text:?}"
-        );
-        assert!(
-            text.contains("klmno"),
-            "the vi-cursor row 1 must be reached, got {text:?}"
+        assert_eq!(
+            vt.selected_text().as_deref(),
+            Some("abcdefghij\nklmnopqrst\n"),
+            "Lines spanning the preserved row-0 anchor through the vi cursor on row 1"
         );
     }
 
