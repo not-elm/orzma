@@ -65,7 +65,9 @@ impl OrzmaVt for AlacrittyVt {
         self.apc_parser.parse(chunk, &mut self.apc_state);
         self.processor.advance(&mut self.term, chunk);
         let dirty = DirtyRows::from_alacritty_term(&mut self.term);
-        Some(DamageVerdict::classify(&dirty))
+        let verdict = DamageVerdict::classify(&dirty);
+        self.pending_damage.replace(dirty);
+        Some(verdict)
     }
 
     fn frames(&mut self) -> Vec<Frame> {
