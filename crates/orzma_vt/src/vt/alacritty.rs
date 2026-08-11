@@ -7,7 +7,7 @@ use crate::{
     frame::Frame,
     modes::{MouseEncoding, MouseTracking, VtModes},
     scroll::Scroll,
-    selection::{SelectionKind, SelectionOp, SelectionRange},
+    selection::{SelectionKind, SelectionOp, SelectionRange, ViewportPoint},
     signal::VtSignal,
     vi::ViModeSwitch,
     vt::OrzmaVt,
@@ -16,8 +16,10 @@ use alacritty_terminal::{
     Term,
     event::EventListener,
     grid::Dimensions,
+    index::{Column, Line, Point, Side},
+    selection::Selection,
     term::{Config, TermMode},
-    vte::ansi::Processor,
+    vte::ansi::{Handler, Processor},
 };
 use std::iter;
 use vtparse::VTParser;
@@ -109,24 +111,89 @@ impl OrzmaVt for AlacrittyVt {
         (self.term.columns() as u16, self.term.screen_lines() as u16)
     }
 
-    fn apply_selection(&mut self, _op: SelectionOp) -> VtResult {
-        todo!()
+    fn apply_selection(&mut self, op: SelectionOp) -> VtResult {
+        match op {
+            SelectionOp::StartAt { cell, side, kind } => {
+                let point = self.grid_point(cell);
+                let side = Side::from(side);
+                let mut selection = Selection::new(kind.into(), point, side);
+                selection.update(point, side.opposite());
+                self.term.selection = Some(selection);
+                self.pending_damage = Some(DirtyRows::Full);
+            }
+            SelectionOp::StartAtViCursor { kind } => {
+                let cursor_point = self.term.vi_mode_cursor.point;
+                let selection = Selection::new(kind.into(), cursor_point, Side::Left);
+                self.term.selection.replace(selection);
+                self.pending_damage.replace(DirtyRows::Full);
+            }
+            SelectionOp::UpdateTo { cell, side } => {
+                let point = self.grid_point(cell);
+                if let Some(selection) = self.term.selection.as_mut() {
+                    *selection = Selection::new(selection.ty, point, side.into());
+                    let s: alacritty_terminal::index::Side = side.into();
+                    selection.update(point, s.opposite());
+                }
+            }
+            SelectionOp::ChangeKind(selection_kind) => {
+                if let Some(selection) = self.term.selection.as_mut() {
+                    selection.ty = selection_kind.into();
+                }
+            }
+            SelectionOp::Clear => {
+                self.term.selection.take();
+            }
+        }
+        Ok(())
     }
 
     fn selection_range(&self) -> Option<SelectionRange> {
-        todo!()
+        let selection = self.term.selection.as_ref()?;
+        let selection_kind: SelectionKind = selection.ty.into();
+        let range = selection.to_range(&self.term)?;
+        Some(SelectionRange {
+            start: range.start.into(),
+            end: range.end.into(),
+            geometry: selection_kind.into(),
+        })
     }
 
     fn selection_kind(&self) -> Option<SelectionKind> {
-        todo!()
+        let s = self.term.selection.as_ref()?.ty;
+        Some(s.into())
     }
 
+    #[inline]
     fn selected_text(&self) -> Option<String> {
-        todo!()
+        self.term.selection_to_string()
     }
 
-    fn switch_vi_mode(&mut self, _vi_mode: ViModeSwitch) -> VtResult {
-        todo!()
+    fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult {
+        let prev = *self.term.mode();
+        if prev.contains(TermMode::VI) && vi_mode == ViModeSwitch::Enter
+            || !prev.contains(TermMode::VI) && vi_mode == ViModeSwitch::Exit
+        {
+            self.term.toggle_vi_mode();
+        }
+        Ok(())
+    }
+}
+
+impl AlacrittyVt {
+    /// Resolves a viewport cell onto the grid row it currently sits on.
+    ///
+    /// alacritty's `Line` counts from the top of the active screen area
+    /// and goes negative into scrollback, so the display offset has to
+    /// come off the viewport row. Rows outside the viewport are kept as
+    /// they arrive rather than clamped: a drag that leaves the viewport
+    /// names a real scrollback row, and `Selection::to_range` clamps to
+    /// the grid on its own.
+    fn grid_point(&self, cell: ViewportPoint) -> Point {
+        let display_offset = self.term.grid().display_offset() as i32;
+        Point::new(
+            Line(i32::from(cell.row) - display_offset),
+            Column(usize::from(cell.column)),
+        )
     }
 }
 
@@ -600,5 +667,412 @@ mod tests {
         drain_staged(&mut vt);
         assert_eq!(vt.interpret(b"\x1b[H"), Some(DamageVerdict::Idle));
         assert_eq!(vt.pending_damage, Some(DirtyRows::Rows(Vec::new())));
+    }
+
+    use crate::selection::{CellSide, SelectionGeometry};
+    use alacritty_terminal::index::Point as AlacPoint;
+
+    fn cell(x: u16, y: i16) -> ViewportPoint {
+        ViewportPoint { row: y, column: x }
+    }
+
+    fn start_simple(vt: &mut AlacrittyVt, x: u16, y: i16) {
+        vt.apply_selection(SelectionOp::StartAt {
+            cell: cell(x, y),
+            side: CellSide::Left,
+            kind: SelectionKind::Simple,
+        })
+        .unwrap();
+    }
+
+    fn update_to(vt: &mut AlacrittyVt, x: u16, y: i16, side: CellSide) {
+        vt.apply_selection(SelectionOp::UpdateTo {
+            cell: cell(x, y),
+            side,
+        })
+        .unwrap();
+    }
+
+    fn enter_vi_at(vt: &mut AlacrittyVt, x: usize, y: i32) {
+        vt.term.toggle_vi_mode();
+        vt.term.vi_mode_cursor.point = AlacPoint::new(Line(y), Column(x));
+    }
+
+    /// Asserts that a one-cell `StartAt` yields a renderable, non-empty
+    /// selection with `Linear` geometry.
+    ///
+    /// Case: a mouse press followed by copy. A bare `Selection::new` is
+    /// empty when both ends coincide, so the implementation must apply
+    /// the opposite-side update recipe or a click-then-copy yields
+    /// nothing. Also pins the Simple → Linear geometry arm.
+    #[test]
+    fn start_at_anchors_a_non_empty_selection() {
+        let mut vt = vt_after(b"hi");
+        start_simple(&mut vt, 0, 0);
+        let range = vt.selection_range().expect("one-cell start must render");
+        assert_eq!(range.start, ViewportPoint { row: 0, column: 0 });
+        assert_eq!(range.end, ViewportPoint { row: 0, column: 0 });
+        assert_eq!(range.geometry, SelectionGeometry::Linear);
+        assert_eq!(vt.selected_text().as_deref(), Some("h"));
+    }
+
+    /// Asserts that `UpdateTo` moves only the moving end; the anchor
+    /// stays where `StartAt` put it.
+    ///
+    /// Case: the basic drag — press on the first cell, drag right across
+    /// four more. The extracted text must cover the whole span.
+    #[test]
+    fn update_to_extends_the_moving_end() {
+        let mut vt = vt_after(b"abcdefghij");
+        start_simple(&mut vt, 0, 0);
+        update_to(&mut vt, 4, 0, CellSide::Right);
+        assert_eq!(vt.selected_text().as_deref(), Some("abcde"));
+    }
+
+    /// Asserts that `UpdateTo` with no active selection changes nothing.
+    ///
+    /// Case: alacritty wipes the selection on an alt-screen swap while
+    /// the input glue may still deliver one more drag event; the stray
+    /// update must neither panic nor conjure a selection.
+    #[test]
+    fn update_to_without_a_selection_is_a_no_op() {
+        let mut vt = vt_after(b"abc");
+        update_to(&mut vt, 2, 0, CellSide::Right);
+        assert_eq!(vt.selection_range(), None);
+    }
+
+    /// Asserts that `StartAt` resolves viewport rows through the display
+    /// offset onto the scrollback rows the user actually sees.
+    ///
+    /// Case: selecting while scrolled back. The `y - display_offset`
+    /// translation is this crate's code; getting it wrong selects a live
+    /// row hidden below the viewport instead of the visible history row.
+    #[test]
+    fn start_at_translates_viewport_rows_through_display_offset() {
+        let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
+        vt.scroll(Scroll::Delta(3));
+        start_simple(&mut vt, 0, 0);
+        update_to(&mut vt, 1, 0, CellSide::Right);
+        assert_eq!(vt.selected_text().as_deref(), Some("l7"));
+    }
+
+    /// Asserts that the end-cell side decides whether the cell under the
+    /// pointer is included.
+    ///
+    /// Case: the CellSide → alacritty `Side` mapping is a two-arm match;
+    /// a transposition compiles cleanly and off-by-ones every selection
+    /// the user ever drags.
+    #[test]
+    fn cell_side_decides_inclusion_of_the_boundary_cells() {
+        let mut vt = vt_after(b"abcdef");
+        start_simple(&mut vt, 0, 0);
+        update_to(&mut vt, 3, 0, CellSide::Right);
+        assert_eq!(vt.selected_text().as_deref(), Some("abcd"));
+        vt.apply_selection(SelectionOp::Clear).unwrap();
+        start_simple(&mut vt, 0, 0);
+        update_to(&mut vt, 3, 0, CellSide::Left);
+        assert_eq!(vt.selected_text().as_deref(), Some("abc"));
+    }
+
+    /// Asserts that a drag toward the top-left reports a normalized
+    /// range with `start` at the top.
+    ///
+    /// Case: an upward drag. `SelectionRange`'s doc pins start as the
+    /// top-left of the selected cells; a renderer given anchor-order
+    /// endpoints would rasterize a negative-height span.
+    #[test]
+    fn a_backward_drag_normalizes_start_before_end() {
+        let mut vt = vt_after(b"one\r\ntwo\r\nthree");
+        start_simple(&mut vt, 5, 2);
+        update_to(&mut vt, 1, 0, CellSide::Left);
+        let range = vt.selection_range().expect("backward drag must render");
+        assert_eq!(range.start.row, 0);
+        assert_eq!(range.end.row, 2);
+    }
+
+    /// Asserts that `StartAtViCursor` anchors at the vi cursor the VT
+    /// tracks internally.
+    ///
+    /// Case: the vi-mode `v` press. The host deliberately sends no cell
+    /// because it does not track the vi cursor; the VT must resolve the
+    /// anchor itself.
+    #[test]
+    fn start_at_vi_cursor_anchors_at_the_vi_cursor() {
+        let mut vt = vt_after(b"hello");
+        enter_vi_at(&mut vt, 2, 0);
+        vt.apply_selection(SelectionOp::StartAtViCursor {
+            kind: SelectionKind::Simple,
+        })
+        .unwrap();
+        assert_eq!(vt.selected_text().as_deref(), Some("l"));
+    }
+
+    /// Asserts that `ChangeKind` switches granularity while preserving
+    /// the original anchor, spanning to the current vi cursor.
+    ///
+    /// Case: copy-mode `v` then `V` without leaving vi mode (the old
+    /// handle.rs anchor-preservation contract). Re-anchoring at the vi
+    /// cursor instead would collapse the selection the user built up.
+    #[test]
+    fn change_kind_switches_granularity_and_keeps_the_anchor() {
+        let mut vt = vt_after(b"abcdefghij\r\nklmnopqrst");
+        enter_vi_at(&mut vt, 2, 0);
+        vt.apply_selection(SelectionOp::StartAtViCursor {
+            kind: SelectionKind::Simple,
+        })
+        .unwrap();
+        vt.term.vi_mode_cursor.point = AlacPoint::new(Line(1), Column(7));
+        vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
+            .unwrap();
+        let text = vt.selected_text().expect("Lines selection still active");
+        assert!(
+            text.starts_with("abc"),
+            "anchor row 0 must be preserved, got {text:?}"
+        );
+        assert!(
+            text.contains("klmno"),
+            "the vi-cursor row 1 must be reached, got {text:?}"
+        );
+    }
+
+    /// Asserts that `ChangeKind` with no active selection changes
+    /// nothing.
+    ///
+    /// Case: the host resolves the v/V toggle by reading the current
+    /// kind, but the selection can vanish between that read and the
+    /// apply; `ChangeKind` must not conjure a selection from nothing.
+    #[test]
+    fn change_kind_without_a_selection_is_a_no_op() {
+        let mut vt = vt_after(b"abc");
+        vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
+            .unwrap();
+        assert_eq!(vt.selection_range(), None);
+    }
+
+    /// Asserts that `Clear` drops the selection AND the stored anchor a
+    /// later `ChangeKind` would rebuild from.
+    ///
+    /// Case: clear, then press `V`. An implementation keeping the saved
+    /// anchor would resurrect a zombie selection from pre-clear state
+    /// instead of treating the change as a no-op.
+    #[test]
+    fn clear_discards_the_selection_and_the_stored_anchor() {
+        let mut vt = vt_after(b"abcdef");
+        start_simple(&mut vt, 0, 0);
+        vt.apply_selection(SelectionOp::Clear).unwrap();
+        assert_eq!(vt.selection_range(), None);
+        vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
+            .unwrap();
+        assert_eq!(vt.selection_range(), None, "no zombie from a stale anchor");
+    }
+
+    /// Asserts that an alt-screen swap invalidates the selection, its
+    /// reported kind, and the stored anchor.
+    ///
+    /// Case: opening vim mid-selection. alacritty clears only its own
+    /// `Term::selection`; the backend's separately stored anchor must
+    /// not let `ChangeKind` rebuild from stale primary-screen state, and
+    /// the getters must not serve cached values.
+    #[test]
+    fn an_alt_screen_swap_invalidates_selection_and_anchor() {
+        let mut vt = vt_after(b"abcdef");
+        start_simple(&mut vt, 0, 0);
+        vt.interpret(b"\x1b[?1049h");
+        assert!(vt.modes().alt_screen, "precondition: alt screen entered");
+        assert_eq!(vt.selection_range(), None);
+        assert_eq!(vt.selection_kind(), None);
+        vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
+            .unwrap();
+        assert_eq!(vt.selection_range(), None, "no rebuild from a stale anchor");
+    }
+
+    /// Asserts that a `Lines` start selects the logical row: full-width
+    /// range, `Lines` geometry, and content-plus-newline text.
+    ///
+    /// Case: vi `V` (or a triple click). The text is the populated row
+    /// plus a trailing `\n` — not an 80-column space-padded row — per
+    /// the logical-line extraction the old renderer relied on. Also pins
+    /// the Lines → Lines geometry arm.
+    #[test]
+    fn lines_kind_selects_the_logical_row_with_trailing_newline() {
+        let mut vt = vt_after(b"hello world");
+        vt.apply_selection(SelectionOp::StartAt {
+            cell: cell(3, 0),
+            side: CellSide::Left,
+            kind: SelectionKind::Lines,
+        })
+        .unwrap();
+        let range = vt.selection_range().expect("Lines start must render");
+        assert_eq!(range.start, ViewportPoint { row: 0, column: 0 });
+        assert_eq!(range.end, ViewportPoint { row: 0, column: 79 });
+        assert_eq!(range.geometry, SelectionGeometry::Lines);
+        assert_eq!(vt.selected_text().as_deref(), Some("hello world\n"));
+    }
+
+    /// Asserts that dragging back onto the anchor cell/side makes the
+    /// selection empty for `selection_range` and `selected_text` while
+    /// `selection_kind` still reports the live selection object.
+    ///
+    /// Case: a drag that returns to its starting point. The trait doc
+    /// says range/text are `None` for an empty selection but kind is
+    /// `None` only when NO selection exists — this pins the three
+    /// getters to one consistent notion of "empty".
+    #[test]
+    fn an_update_back_onto_the_anchor_empties_the_selection() {
+        let mut vt = vt_after(b"abc");
+        start_simple(&mut vt, 1, 0);
+        update_to(&mut vt, 1, 0, CellSide::Left);
+        assert_eq!(vt.selection_range(), None);
+        assert_eq!(vt.selected_text(), None);
+        assert_eq!(vt.selection_kind(), Some(SelectionKind::Simple));
+    }
+
+    /// Asserts that every operation which changes the visible selection
+    /// stages full damage: StartAt, a moving UpdateTo, ChangeKind, and
+    /// Clear.
+    ///
+    /// Case: the trait's repaint contract. alacritty excludes Selection
+    /// from `Term::damage()`, so an implementation staging damage only
+    /// for StartAt/Clear would leave drags and v/V switches visually
+    /// stale while passing every state test.
+    #[test]
+    fn every_visible_selection_change_stages_full_damage() {
+        let mut vt = vt_after(b"abcdefghij");
+        drain_staged(&mut vt);
+        start_simple(&mut vt, 0, 0);
+        assert_eq!(vt.pending_damage, Some(DirtyRows::Full), "StartAt");
+        drain_staged(&mut vt);
+        update_to(&mut vt, 4, 0, CellSide::Right);
+        assert_eq!(vt.pending_damage, Some(DirtyRows::Full), "UpdateTo");
+        drain_staged(&mut vt);
+        vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
+            .unwrap();
+        assert_eq!(vt.pending_damage, Some(DirtyRows::Full), "ChangeKind");
+        drain_staged(&mut vt);
+        vt.apply_selection(SelectionOp::Clear).unwrap();
+        assert_eq!(vt.pending_damage, Some(DirtyRows::Full), "Clear");
+    }
+
+    /// Asserts that no-op selection operations leave the staged damage
+    /// exactly as it was.
+    ///
+    /// Case: the "a no-op stages no damage" invariant, pinned against
+    /// the destructive failure mode — an implementation ending in
+    /// `else { pending_damage = None }` passes a clean-state check while
+    /// silently discarding earlier un-emitted output (same shape as the
+    /// scroll no-op test).
+    #[test]
+    fn no_op_selection_ops_preserve_staged_damage() {
+        let mut vt = vt_after(b"abc");
+        drain_staged(&mut vt);
+        vt.pending_damage = Some(DirtyRows::Rows(vec![0]));
+        let staged = vt.pending_damage.clone();
+        update_to(&mut vt, 2, 0, CellSide::Right);
+        vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
+            .unwrap();
+        vt.apply_selection(SelectionOp::Clear).unwrap();
+        assert_eq!(vt.pending_damage, staged);
+        let mut vt = vt_after(b"abc");
+        drain_staged(&mut vt);
+        update_to(&mut vt, 2, 0, CellSide::Right);
+        assert_eq!(vt.pending_damage, None, "clean state stays clean");
+    }
+
+    /// Asserts that a fresh VT reports no selection range.
+    ///
+    /// Case: the renderer treats `None` as "no overlay"; a non-`None`
+    /// default would paint a phantom selection on boot.
+    #[test]
+    fn selection_range_is_none_on_a_fresh_vt() {
+        assert_eq!(AlacrittyVt::new(80, GRID_ROWS).selection_range(), None);
+    }
+
+    /// Asserts that display scrolling shifts the projected viewport rows
+    /// and clamps off-viewport endpoints to the -1 / row-count
+    /// sentinels.
+    ///
+    /// Case: select, then scroll. The selection is pinned to grid
+    /// content, so its viewport projection moves opposite the scroll and
+    /// partially visible selections need the sentinel rows for the
+    /// renderer to draw the on-screen part.
+    #[test]
+    fn display_scroll_shifts_and_clamps_the_projected_range() {
+        let mut vt = vt_with_history(usize::from(GRID_ROWS) + SEEDED_HISTORY_ROWS);
+        start_simple(&mut vt, 0, 0);
+        update_to(&mut vt, 5, 15, CellSide::Right);
+        vt.scroll(Scroll::Delta(3));
+        let range = vt.selection_range().expect("selection survives scroll");
+        assert_eq!((range.start.row, range.end.row), (3, 18), "pure shift");
+        vt.scroll(Scroll::Delta(7));
+        let range = vt.selection_range().expect("still partially visible");
+        assert_eq!(range.start.row, 10);
+        assert_eq!(range.end.row, GRID_ROWS as i16, "below-viewport sentinel");
+        vt.apply_selection(SelectionOp::Clear).unwrap();
+        start_simple(&mut vt, 0, 5);
+        update_to(&mut vt, 5, 20, CellSide::Right);
+        vt.scroll(Scroll::Bottom);
+        let range = vt.selection_range().expect("still partially visible");
+        assert_eq!(range.start.row, -1, "above-viewport sentinel");
+        assert_eq!(range.end.row, 10);
+    }
+
+    /// Asserts that `selection_kind` tracks the active granularity and
+    /// resets on `Clear`.
+    ///
+    /// Case: the vi v/V toggle predicate reads this to choose between
+    /// clearing (same kind), switching (different kind), and starting
+    /// (none); a stale kind flips that decision.
+    #[test]
+    fn selection_kind_reports_the_active_granularity_and_resets() {
+        let mut vt = vt_after(b"abcdef");
+        assert_eq!(vt.selection_kind(), None);
+        start_simple(&mut vt, 0, 0);
+        assert_eq!(vt.selection_kind(), Some(SelectionKind::Simple));
+        vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
+            .unwrap();
+        assert_eq!(vt.selection_kind(), Some(SelectionKind::Lines));
+        vt.apply_selection(SelectionOp::Clear).unwrap();
+        assert_eq!(vt.selection_kind(), None);
+    }
+
+    /// Asserts that `selected_text` is `None` on a fresh VT and after a
+    /// `Clear`.
+    ///
+    /// Case: the copy path treats `None` as "nothing to copy". A cached
+    /// or `Some("")` result would overwrite the user's clipboard with an
+    /// empty string.
+    #[test]
+    fn selected_text_is_none_without_a_selection() {
+        let mut vt = vt_after(b"abc");
+        assert_eq!(vt.selected_text(), None);
+        start_simple(&mut vt, 0, 0);
+        vt.apply_selection(SelectionOp::Clear).unwrap();
+        assert_eq!(vt.selected_text(), None);
+    }
+
+    /// Asserts that `selected_text` extracts wide characters exactly
+    /// once, joins soft-wrapped rows without a newline, and keeps hard
+    /// line breaks.
+    ///
+    /// Case: copying CJK output and long wrapped lines. Wide-char spacer
+    /// cells are the classic double-or-drop bug, and a soft wrap that
+    /// leaks a `\n` corrupts every pasted long command line.
+    #[test]
+    fn selected_text_handles_wide_and_wrapped_content() {
+        let mut vt = vt_after("あ".as_bytes());
+        start_simple(&mut vt, 0, 0);
+        update_to(&mut vt, 1, 0, CellSide::Right);
+        assert_eq!(vt.selected_text().as_deref(), Some("あ"));
+
+        let long = "x".repeat(85);
+        let mut vt = vt_after(long.as_bytes());
+        start_simple(&mut vt, 0, 0);
+        update_to(&mut vt, 4, 1, CellSide::Right);
+        assert_eq!(vt.selected_text().as_deref(), Some(long.as_str()));
+
+        let mut vt = vt_after(b"ab\r\ncd");
+        start_simple(&mut vt, 0, 0);
+        update_to(&mut vt, 1, 1, CellSide::Right);
+        assert_eq!(vt.selected_text().as_deref(), Some("ab\ncd"));
     }
 }

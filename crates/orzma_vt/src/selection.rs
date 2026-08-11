@@ -2,33 +2,40 @@
 //! selection ([`SelectionOp`]) and the renderable range the VT reports
 //! back ([`SelectionRange`]).
 
-/// A viewport cell named by an input operation, `x` = column and
-/// `y` = row, both 0-based.
-///
-/// Input-side coordinate: a pointer always sits inside the viewport, so
-/// both axes are unsigned. The output-side counterpart is
-/// [`ViewportPoint`], whose row is signed because a selection endpoint
-/// can scroll out of the viewport.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Position {
-    /// 0-based viewport column.
-    pub x: usize,
-    /// 0-based viewport row.
-    pub y: usize,
-}
+#[cfg(feature = "alacritty")]
+use alacritty_terminal::{
+    index::{Point, Side},
+    selection::SelectionType,
+};
 
-/// A selection endpoint projected into viewport coordinates.
+/// A cell in viewport coordinates: `row` counted from the top of the
+/// visible area, `column` from its left edge.
 ///
-/// Endpoints can lie outside the viewport once the user scrolls: the row
-/// is clamped to `-1` when the endpoint sits above the first visible row
-/// and to the viewport row count when it sits below the last one.
+/// Carries selection endpoints in both directions. The row is signed
+/// because an endpoint — or the moving end of a drag — can leave the
+/// viewport: negative rows sit above the first visible row, rows at or
+/// past the viewport row count sit below the last one. The two
+/// directions treat those out-of-range rows differently: on output the
+/// VT clamps them to `-1` / the row count so the renderer only has to
+/// handle two sentinels, while on input the value is taken literally,
+/// so `-1` means exactly one row above the viewport.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct ViewportPoint {
-    /// Viewport row; `-1` = above the viewport, the viewport row count =
-    /// below it.
+    /// Viewport row. Negative = above the viewport, at or past the
+    /// viewport row count = below it.
     pub row: i16,
     /// 0-based viewport column.
     pub column: u16,
+}
+
+#[cfg(feature = "alacritty")]
+impl From<Point> for ViewportPoint {
+    fn from(value: Point) -> Self {
+        Self {
+            row: value.line.0 as i16,
+            column: value.column.0 as u16,
+        }
+    }
 }
 
 /// A renderable selection: normalized viewport endpoints plus the shape
@@ -63,6 +70,15 @@ pub enum SelectionGeometry {
     Lines,
 }
 
+impl From<SelectionKind> for SelectionGeometry {
+    fn from(value: SelectionKind) -> Self {
+        match value {
+            SelectionKind::Lines => Self::Lines,
+            _ => Self::Linear,
+        }
+    }
+}
+
 /// One selection operation.
 ///
 /// The two `Start` variants differ in where the anchor comes from: a mouse
@@ -72,8 +88,8 @@ pub enum SelectionGeometry {
 pub enum SelectionOp {
     /// Anchor a new selection at an explicit viewport cell (mouse press).
     StartAt {
-        /// Viewport cell, `x` = column and `y` = row, both 0-based.
-        cell: Position,
+        /// Viewport cell the press landed on.
+        cell: ViewportPoint,
         /// Which half of the cell the anchor sits in.
         side: CellSide,
         /// Granularity of the new selection.
@@ -87,8 +103,9 @@ pub enum SelectionOp {
     /// Move the moving end of the active selection to a viewport cell
     /// (mouse drag). No-op when nothing is selected.
     UpdateTo {
-        /// Viewport cell, `x` = column and `y` = row, both 0-based.
-        cell: Position,
+        /// Viewport cell the moving end is dragged to. May sit outside
+        /// the viewport when the drag leaves it.
+        cell: ViewportPoint,
         /// Which half of the cell the moving end sits in.
         side: CellSide,
     },
@@ -104,12 +121,33 @@ pub enum SelectionOp {
 pub enum SelectionKind {
     /// Cell-by-cell, wrapping at the end of each line.
     Simple,
-    /// A rectangular column block.
-    Block,
+    // /// A rectangular column block.
+    // Block,
     /// Snapped outward to word boundaries.
-    Semantic,
+    // Semantic,
     /// Whole lines.
     Lines,
+}
+
+#[cfg(feature = "alacritty")]
+impl From<SelectionType> for SelectionKind {
+    fn from(value: SelectionType) -> Self {
+        match value {
+            SelectionType::Simple => SelectionKind::Simple,
+            SelectionType::Lines => SelectionKind::Lines,
+            _ => todo!("Not supported yet"),
+        }
+    }
+}
+
+#[cfg(feature = "alacritty")]
+impl From<SelectionKind> for SelectionType {
+    fn from(value: SelectionKind) -> Self {
+        match value {
+            SelectionKind::Simple => Self::Simple,
+            SelectionKind::Lines => Self::Lines,
+        }
+    }
 }
 
 /// Which half of a cell a selection endpoint sits in.
@@ -123,4 +161,14 @@ pub enum CellSide {
     Left,
     /// Right half.
     Right,
+}
+
+#[cfg(feature = "alacritty")]
+impl From<CellSide> for Side {
+    fn from(value: CellSide) -> Self {
+        match value {
+            CellSide::Left => Self::Left,
+            CellSide::Right => Self::Right,
+        }
+    }
 }

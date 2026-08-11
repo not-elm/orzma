@@ -31,7 +31,7 @@ fn apply_selection(e: On<RequestTermSelection>) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orzma_vt::prelude::Position;
+    use orzma_vt::prelude::ViewportPoint;
 
     /// Every `(target, op)` an observer saw, in fire order.
     #[derive(Resource, Default)]
@@ -42,8 +42,8 @@ mod tests {
         seen.0.push((ev.event_target(), ev.op));
     }
 
-    fn cell(x: usize, y: usize) -> Position {
-        Position { x, y }
+    fn cell(x: u16, y: i16) -> ViewportPoint {
+        ViewportPoint { row: y, column: x }
     }
 
     /// Asserts that a triggered `RequestTermSelection` reaches an observer
@@ -60,7 +60,7 @@ mod tests {
         let op = SelectionOp::StartAt {
             cell: cell(12, 3),
             side: CellSide::Right,
-            kind: SelectionKind::Semantic,
+            kind: SelectionKind::Lines,
         };
 
         app.world_mut()
@@ -158,7 +158,7 @@ mod tests {
             SelectionOp::StartAt {
                 cell: cell(4, 4),
                 side: CellSide::Left,
-                kind: SelectionKind::Block,
+                kind: SelectionKind::Lines,
             }
         );
         assert_ne!(
