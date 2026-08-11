@@ -29,11 +29,11 @@ pub struct ViewportPoint {
 }
 
 #[cfg(feature = "alacritty")]
-impl From<Point> for ViewportPoint {
-    fn from(value: Point) -> Self {
+impl ViewportPoint {
+    pub fn from_alacritty_point(p: Point, display_offset: u32) -> Self {
         Self {
-            row: value.line.0 as i16,
-            column: value.column.0 as u16,
+            row: (p.line.0 as i64 + display_offset as i64) as i16,
+            column: p.column.0 as u16,
         }
     }
 }

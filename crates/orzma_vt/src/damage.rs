@@ -1,6 +1,8 @@
 //! Damage collection and classification driving the coalescer's
 //! immediate-flush decision.
 
+use std::ops::BitOrAssign;
+
 /// Rows the VT reported dirty in a single damage cycle.
 ///
 /// Backend-agnostic: the alacritty-specific reader lives with the
@@ -9,7 +11,8 @@
 pub enum DirtyRows {
     /// Entire viewport is dirty (resize, clear, alt-screen swap, reset).
     Full,
-    /// Viewport row indices that changed, ascending.
+    /// Viewport row indices that changed, ascending and without
+    /// duplicates.
     Rows(Vec<u16>),
 }
 
@@ -28,6 +31,25 @@ impl DirtyRows {
         match term.damage() {
             TermDamage::Full => Self::Full,
             TermDamage::Partial(iter) => Self::Rows(iter.map(|d| d.line as u16).collect()),
+        }
+    }
+}
+
+/// Merges damage, keeping whichever repaint is the larger of the two.
+///
+/// [`DirtyRows::Full`] absorbs anything and an empty
+/// [`DirtyRows::Rows`] is the identity, so a staged value can start
+/// from an empty set and fold every later reading in.
+impl BitOrAssign for DirtyRows {
+    fn bitor_assign(&mut self, rhs: Self) {
+        match (self, rhs) {
+            (Self::Full, _) => {}
+            (staged, Self::Full) => *staged = Self::Full,
+            (Self::Rows(staged), Self::Rows(incoming)) => {
+                staged.extend(incoming);
+                staged.sort_unstable();
+                staged.dedup();
+            }
         }
     }
 }
@@ -99,6 +121,76 @@ mod tests {
             DamageVerdict::classify(&DirtyRows::Rows(vec![0, 3, 9])),
             DamageVerdict::ManyRows { rows: 3 }
         );
+    }
+
+    /// Asserts that merging partial damage yields the ascending,
+    /// duplicate-free union.
+    ///
+    /// Case: damage from an interpreted chunk and from a selection
+    /// change meets in the staged value before one emit. A single
+    /// backend read is already normalized, so this exists only for that
+    /// cross-read merge; keeping append order would leave a duplicate
+    /// that `classify` reports as `ManyRows` instead of `AtMostOneRow`.
+    #[test]
+    fn merging_partial_damage_unions_sorts_and_dedups_the_rows() {
+        let mut interleaved = DirtyRows::Rows(vec![1, 3, 5]);
+        interleaved |= DirtyRows::Rows(vec![2, 3, 5]);
+        assert_eq!(interleaved, DirtyRows::Rows(vec![1, 2, 3, 5]));
+
+        let mut descending = DirtyRows::Rows(vec![5]);
+        descending |= DirtyRows::Rows(vec![3]);
+        assert_eq!(descending, DirtyRows::Rows(vec![3, 5]));
+
+        let mut repeated = DirtyRows::Rows(vec![0, 1]);
+        repeated |= DirtyRows::Rows(vec![0, 1]);
+        assert_eq!(repeated, DirtyRows::Rows(vec![0, 1]));
+    }
+
+    /// Asserts that `Full` absorbs partial damage from either side.
+    ///
+    /// Case: a selection change demands a whole repaint, then a one-row
+    /// echo arrives before the emit. Both orders are pinned because the
+    /// two arms are asymmetric; letting the newest damage win would
+    /// leave the screen stale.
+    #[test]
+    fn full_damage_absorbs_partial_damage_from_either_side() {
+        let mut staged_full = DirtyRows::Full;
+        staged_full |= DirtyRows::Rows(vec![0]);
+        assert_eq!(staged_full, DirtyRows::Full);
+
+        let mut incoming_full = DirtyRows::Rows(vec![0, 1]);
+        incoming_full |= DirtyRows::Full;
+        assert_eq!(incoming_full, DirtyRows::Full);
+
+        let mut both_full = DirtyRows::Full;
+        both_full |= DirtyRows::Full;
+        assert_eq!(both_full, DirtyRows::Full);
+
+        let mut full_then_empty = DirtyRows::Full;
+        full_then_empty |= DirtyRows::Rows(Vec::new());
+        assert_eq!(full_then_empty, DirtyRows::Full);
+    }
+
+    /// Asserts that an empty row set is the merge identity on both
+    /// sides.
+    ///
+    /// Case: the staging site folds an absent staged value in by merging
+    /// onto an empty `Rows`, so the identity is load-bearing. An empty
+    /// operand is a real reading — a viewport scrolled fully into
+    /// history — not a sentinel to discard the other side for.
+    #[test]
+    fn an_empty_row_set_is_the_merge_identity() {
+        let mut empty_incoming = DirtyRows::Rows(vec![0, 2]);
+        empty_incoming |= DirtyRows::Rows(Vec::new());
+        assert_eq!(empty_incoming, DirtyRows::Rows(vec![0, 2]));
+
+        let mut empty_staged = DirtyRows::Rows(Vec::new());
+        empty_staged |= DirtyRows::Rows(vec![0, 2]);
+        assert_eq!(empty_staged, DirtyRows::Rows(vec![0, 2]));
+
+        let mut both_empty = DirtyRows::Rows(Vec::new());
+        both_empty |= DirtyRows::Rows(Vec::new());
+        assert_eq!(both_empty, DirtyRows::Rows(Vec::new()));
     }
 }
 

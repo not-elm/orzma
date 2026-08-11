@@ -44,6 +44,13 @@ pub trait OrzmaVt: Sized {
     fn interpret(&mut self, chunk: &[u8]) -> Option<DamageVerdict>;
 
     /// Builds the frame for the staged damage.
+    ///
+    /// # Invariants
+    ///
+    /// Implementations must clear the staged damage once it has been
+    /// emitted. Staging merges rather than replaces, so a skipped
+    /// clear is not self-healing: a full repaint latches and every
+    /// later frame stays a whole-grid snapshot.
     fn frames(&mut self) -> Vec<Frame>;
 
     fn drain_signals(&mut self) -> impl Iterator<Item = VtSignal> + '_;

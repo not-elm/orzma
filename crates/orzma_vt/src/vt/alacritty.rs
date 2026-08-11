@@ -31,9 +31,11 @@ pub struct AlacrittyVt {
     apc_parser: VTParser,
     /// Damage staged for the next [`OrzmaVt::frames`] call.
     ///
-    /// Replaced rather than unioned on each stage: alacritty accumulates
-    /// line damage internally until `Term::reset_damage`, so the newest
-    /// read already covers every chunk since the last emit.
+    /// Merged rather than replaced on each stage. Alacritty accumulates
+    /// line damage internally until `Term::reset_damage`, so replacing
+    /// would be safe for the damage it tracks — but it excludes
+    /// selection state, so a repaint staged by a selection change is
+    /// only ever held here and would be lost to the next chunk.
     pending_damage: Option<DirtyRows>,
 }
 
@@ -66,7 +68,7 @@ impl OrzmaVt for AlacrittyVt {
         self.processor.advance(&mut self.term, chunk);
         let dirty = DirtyRows::from_alacritty_term(&mut self.term);
         let verdict = DamageVerdict::classify(&dirty);
-        self.pending_damage.replace(dirty);
+        self.stage_damage(dirty);
         Some(verdict)
     }
 
@@ -105,7 +107,7 @@ impl OrzmaVt for AlacrittyVt {
 
     fn resize(&mut self, cols: u16, rows: u16) {
         self.term.resize(LocalDim::new(cols, rows));
-        self.pending_damage = Some(DirtyRows::Full);
+        self.stage_damage(DirtyRows::Full);
     }
 
     #[inline]
@@ -121,13 +123,13 @@ impl OrzmaVt for AlacrittyVt {
                 let mut selection = Selection::new(kind.into(), point, side);
                 selection.update(point, side.opposite());
                 self.term.selection = Some(selection);
-                self.pending_damage = Some(DirtyRows::Full);
+                self.stage_damage(DirtyRows::Full);
             }
             SelectionOp::StartAtViCursor { kind } => {
                 let cursor_point = self.term.vi_mode_cursor.point;
                 let selection = Selection::new(kind.into(), cursor_point, Side::Left);
                 self.term.selection.replace(selection);
-                self.pending_damage.replace(DirtyRows::Full);
+                self.stage_damage(DirtyRows::Full);
             }
             SelectionOp::UpdateTo { cell, side } => {
                 let point = self.grid_point(cell);
@@ -138,12 +140,13 @@ impl OrzmaVt for AlacrittyVt {
             }
             SelectionOp::ChangeKind(selection_kind) => {
                 let vi_point = self.term.vi_mode_cursor.point;
-                if let Some(selection) = self.term.selection.as_mut() {
-                    selection.ty = selection_kind.into();
-                    selection.update(vi_point, Side::Left);
-                    selection.include_all();
-                    self.pending_damage = Some(DirtyRows::Full);
-                }
+                let Some(selection) = self.term.selection.as_mut() else {
+                    return Ok(());
+                };
+                selection.ty = selection_kind.into();
+                selection.update(vi_point, Side::Left);
+                selection.include_all();
+                self.stage_damage(DirtyRows::Full);
             }
             SelectionOp::Clear => {
                 self.term.selection.take();
@@ -153,12 +156,13 @@ impl OrzmaVt for AlacrittyVt {
     }
 
     fn selection_range(&self) -> Option<SelectionRange> {
+        let display_offset = self.display_offset();
         let selection = self.term.selection.as_ref()?;
         let selection_kind: SelectionKind = selection.ty.into();
         let range = selection.to_range(&self.term)?;
         Some(SelectionRange {
-            start: range.start.into(),
-            end: range.end.into(),
+            start: ViewportPoint::from_alacritty_point(range.start, display_offset),
+            end: ViewportPoint::from_alacritty_point(range.end, display_offset),
             geometry: selection_kind.into(),
         })
     }
@@ -199,6 +203,17 @@ impl AlacrittyVt {
             Line(i32::from(cell.row) - display_offset),
             Column(usize::from(cell.column)),
         )
+    }
+
+    /// Merges `dirty` into the damage staged for the next
+    /// [`OrzmaVt::frames`] call.
+    ///
+    /// Seeding an absent staged value with an empty row set is safe
+    /// because that set is the merge identity.
+    fn stage_damage(&mut self, dirty: DirtyRows) {
+        *self
+            .pending_damage
+            .get_or_insert(DirtyRows::Rows(Vec::new())) |= dirty;
     }
 }
 
@@ -617,11 +632,15 @@ mod tests {
         );
     }
 
+    /// Asserts that a row damaged by an earlier chunk survives into the
+    /// staged value of a later one.
+    ///
+    /// Case: two PTY chunks arrive between emits. This holds for two
+    /// independent reasons — alacritty keeps expanding `damage.lines`
+    /// until `reset_damage`, and staging merges — so it passes either
+    /// way and does not guard the merge on its own.
     #[test]
     fn staged_damage_accumulates_across_chunks() {
-        // The reason staging is a plain replacement and not a union:
-        // alacritty keeps expanding `damage.lines` until `reset_damage`, so
-        // the newest read already covers every chunk since the last emit.
         let mut vt = AlacrittyVt::new(80, GRID_ROWS);
         drain_staged(&mut vt);
         vt.interpret(b"a");
