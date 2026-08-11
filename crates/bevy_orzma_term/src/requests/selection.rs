@@ -1,12 +1,13 @@
 //! `RequestTermSelection`: the selection operation the host UI asks a
 //! terminal entity to perform.
 //!
-//! [`SelectionKind`] and [`CellSide`] mirror the VT's selection vocabulary.
-//! Their final home is the VT layer; they are defined here until that crate
-//! owns them, at which point these become re-exports.
+//! The selection vocabulary ([`SelectionOp`], [`SelectionKind`],
+//! [`CellSide`]) is owned by the VT layer; this module re-exports it so
+//! the request and its payload types travel together — the request
+//! carries exactly what the VT applies.
 
 use bevy::prelude::*;
-use orzma_vt::prelude::Position;
+pub use orzma_vt::prelude::{CellSide, SelectionKind, SelectionOp};
 
 /// Fired by the host UI to change a specific terminal entity's selection.
 #[derive(EntityEvent, Debug, Clone)]
@@ -15,68 +16,6 @@ pub struct RequestTermSelection {
     pub terminal: Entity,
     /// The operation to perform.
     pub op: SelectionOp,
-}
-
-/// One selection operation.
-///
-/// The two `Start` variants differ in where the anchor comes from: a mouse
-/// drag names an explicit cell, while vi mode anchors at the vi cursor, whose
-/// position only the VT knows.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SelectionOp {
-    /// Anchor a new selection at an explicit viewport cell (mouse press).
-    StartAt {
-        /// Viewport cell, `x` = column and `y` = row, both 0-based.
-        cell: Position,
-        /// Which half of the cell the anchor sits in.
-        side: CellSide,
-        /// Granularity of the new selection.
-        kind: SelectionKind,
-    },
-    /// Anchor a new selection at the vi cursor (vi-mode `v` / `V`).
-    StartAtViCursor {
-        /// Granularity of the new selection.
-        kind: SelectionKind,
-    },
-    /// Move the moving end of the active selection to a viewport cell
-    /// (mouse drag). No-op when nothing is selected.
-    UpdateTo {
-        /// Viewport cell, `x` = column and `y` = row, both 0-based.
-        cell: Position,
-        /// Which half of the cell the moving end sits in.
-        side: CellSide,
-    },
-    /// Switch granularity while keeping the anchor (vi-mode `v` while `V` is
-    /// active, and the reverse).
-    ChangeKind(SelectionKind),
-    /// Drop any active selection.
-    Clear,
-}
-
-/// Selection granularity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectionKind {
-    /// Cell-by-cell, wrapping at the end of each line.
-    Simple,
-    /// A rectangular column block.
-    Block,
-    /// Snapped outward to word boundaries.
-    Semantic,
-    /// Whole lines.
-    Lines,
-}
-
-/// Which half of a cell a selection endpoint sits in.
-///
-/// Decides whether the cell under the cursor is included: an endpoint on the
-/// far side of a cell takes that cell, an endpoint on the near side stops
-/// before it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CellSide {
-    /// Left half.
-    Left,
-    /// Right half.
-    Right,
 }
 
 pub(super) struct SelectionPlugin;
@@ -92,6 +31,7 @@ fn apply_selection(e: On<RequestTermSelection>) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orzma_vt::prelude::Position;
 
     /// Every `(target, op)` an observer saw, in fire order.
     #[derive(Resource, Default)]

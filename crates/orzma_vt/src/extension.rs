@@ -49,7 +49,12 @@ impl VTActor for ApcState {
         // ignore
     }
 
-    fn csi_dispatch(&mut self, _params: &[vtparse::CsiParam], _parameters_truncated: bool, _byte: u8) {
+    fn csi_dispatch(
+        &mut self,
+        _params: &[vtparse::CsiParam],
+        _parameters_truncated: bool,
+        _byte: u8,
+    ) {
         // ignore
     }
 

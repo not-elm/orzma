@@ -30,7 +30,7 @@ pub struct FrameDelta {
     pub hyperlinks: Vec<Hyperlink>,
     /// Lines scrolled back from the live tail. `0` = at live tail.
     pub display_offset: u32,
-    /// Total scrollback history line countuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
+    /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.
     pub selection: Option<SelectionRange>,

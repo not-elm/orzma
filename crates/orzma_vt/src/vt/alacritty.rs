@@ -2,18 +2,22 @@
 
 use crate::{
     damage::{DamageVerdict, DirtyRows},
+    error::VtResult,
     extension::ApcState,
+    frame::Frame,
     modes::{MouseEncoding, MouseTracking, VtModes},
     scroll::Scroll,
+    selection::{SelectionKind, SelectionOp, SelectionRange},
     signal::VtSignal,
+    vi::ViModeSwitch,
     vt::OrzmaVt,
 };
 use alacritty_terminal::{
     Term,
     event::EventListener,
     grid::Dimensions,
-    term::{Config, TermDamage, TermMode},
-    vte::ansi::{Color, Processor},
+    term::{Config, TermMode},
+    vte::ansi::Processor,
 };
 use std::iter;
 use vtparse::VTParser;
@@ -47,6 +51,11 @@ impl OrzmaVt for AlacrittyVt {
         }
     }
 
+    #[inline]
+    fn display_offset(&self) -> u32 {
+        self.term.grid().display_offset() as u32
+    }
+
     fn interpret(&mut self, chunk: &[u8]) -> Option<DamageVerdict> {
         if chunk.is_empty() {
             return None;
@@ -57,7 +66,7 @@ impl OrzmaVt for AlacrittyVt {
         Some(DamageVerdict::classify(&dirty))
     }
 
-    fn frames(&mut self) -> Vec<crate::frame::Frame> {
+    fn frames(&mut self) -> Vec<Frame> {
         todo!()
     }
 
@@ -68,6 +77,13 @@ impl OrzmaVt for AlacrittyVt {
 
     fn drain_replies_into(&self, _buf: &mut Vec<u8>) {
         todo!()
+    }
+
+    #[inline]
+    fn scroll(&mut self, scroll: Scroll) {
+        let screen_lines = self.term.screen_lines() as u16;
+        self.term
+            .scroll_display(scroll.to_alacritty_scroll(screen_lines));
     }
 
     fn modes(&self) -> VtModes {
@@ -83,11 +99,6 @@ impl OrzmaVt for AlacrittyVt {
         }
     }
 
-    #[inline]
-    fn display_offset(&self) -> u32 {
-        self.term.grid().display_offset() as u32
-    }
-
     fn resize(&mut self, cols: u16, rows: u16) {
         self.term.resize(LocalDim::new(cols, rows));
         self.pending_damage = Some(DirtyRows::Full);
@@ -98,11 +109,24 @@ impl OrzmaVt for AlacrittyVt {
         (self.term.columns() as u16, self.term.screen_lines() as u16)
     }
 
-    #[inline]
-    fn scroll(&mut self, scroll: Scroll) {
-        let screen_lines = self.term.screen_lines() as u16;
-        self.term
-            .scroll_display(scroll.to_alacritty_scroll(screen_lines));
+    fn apply_selection(&mut self, _op: SelectionOp) -> VtResult {
+        todo!()
+    }
+
+    fn selection_range(&self) -> Option<SelectionRange> {
+        todo!()
+    }
+
+    fn selection_kind(&self) -> Option<SelectionKind> {
+        todo!()
+    }
+
+    fn selected_text(&self) -> Option<String> {
+        todo!()
+    }
+
+    fn switch_vi_mode(&mut self, _vi_mode: ViModeSwitch) -> VtResult {
+        todo!()
     }
 }
 

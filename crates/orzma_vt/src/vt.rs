@@ -1,5 +1,12 @@
 use crate::{
-    damage::DamageVerdict, frame::Frame, modes::VtModes, prelude::VtSignal, scroll::Scroll,
+    damage::DamageVerdict,
+    error::VtResult,
+    frame::Frame,
+    modes::VtModes,
+    prelude::VtSignal,
+    scroll::Scroll,
+    selection::{SelectionKind, SelectionOp, SelectionRange},
+    vi::ViModeSwitch,
 };
 
 #[cfg(feature = "alacritty")]
@@ -77,4 +84,38 @@ pub trait OrzmaVt: Sized {
     /// The row count is the source of truth for "one screenful"
     /// (scroll paging) and for verifying an applied resize.
     fn grid_size(&self) -> (u16, u16);
+
+    /// Applies one selection operation.
+    ///
+    /// An operation that changes the visible selection stages full
+    /// damage so the next [`Self::frames`] call repaints — the backing
+    /// emulator's damage tracking does not cover selection state, so
+    /// implementations must stage it themselves. An operation that
+    /// changes nothing (an `UpdateTo` with no active selection, a
+    /// redundant `Clear`) stages no damage.
+    fn apply_selection(&mut self, op: SelectionOp) -> VtResult;
+
+    /// The active selection as normalized viewport coordinates.
+    ///
+    /// `None` when no selection exists or the active one is empty.
+    /// Callers compare this before and after [`Self::apply_selection`]
+    /// to detect a real change — the same role [`Self::display_offset`]
+    /// plays for [`Self::scroll`].
+    fn selection_range(&self) -> Option<SelectionRange>;
+
+    /// The active selection's granularity.
+    ///
+    /// `None` when no selection exists. The vi `v` / `V` handling reads
+    /// this to decide between clearing (same kind), switching kind, and
+    /// starting a new selection.
+    fn selection_kind(&self) -> Option<SelectionKind>;
+
+    /// The selected text, honoring wrapped lines, wide characters, and
+    /// the Block / Lines shapes.
+    ///
+    /// `None` when no selection exists or the active one is empty.
+    fn selected_text(&self) -> Option<String>;
+
+    /// Switches the vi-mode of the terminal to [`ViModeSwitch`].
+    fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult;
 }
