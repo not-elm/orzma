@@ -112,7 +112,7 @@ impl Coalescer {
 
     /// Returns the next deadline as `min(last_chunk + IDLE, armed + MAX_CAP)`.
     /// Returns `None` when the Coalescer is disarmed.
-    fn next_deadline(&self) -> Option<Instant> {
+    pub(crate) fn next_deadline(&self) -> Option<Instant> {
         let armed = self.armed_at?;
         let last = self.last_chunk_at.unwrap_or(armed);
         Some(min(last + Self::IDLE, armed + Self::MAX_CAP))
