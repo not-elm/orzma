@@ -2,7 +2,7 @@
 
 use crate::{
     schema::{
-        DamageVerdict, DirtyRows, Frame, MouseEncoding, MouseTracking, Scroll, SelectionKind,
+        Damage, DamageVerdict, Frame, MouseEncoding, MouseTracking, Scroll, SelectionKind,
         SelectionOp, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
     },
     vt::{VtBackend, apc::ApcState},
@@ -31,7 +31,7 @@ pub struct AlacrittyVt {
     /// would be safe for the damage it tracks — but it excludes
     /// selection state, so a repaint staged by a selection change is
     /// only ever held here and would be lost to the next chunk.
-    pending_damage: Option<DirtyRows>,
+    pending_damage: Option<Damage>,
 }
 
 impl VtBackend for AlacrittyVt {
@@ -46,7 +46,7 @@ impl VtBackend for AlacrittyVt {
             ),
             apc_state: ApcState::default(),
             apc_parser: VTParser::new(),
-            pending_damage: Some(DirtyRows::Full),
+            pending_damage: Some(Damage::Full),
         }
     }
 
@@ -61,9 +61,9 @@ impl VtBackend for AlacrittyVt {
         }
         self.apc_parser.parse(chunk, &mut self.apc_state);
         self.processor.advance(&mut self.term, chunk);
-        let dirty = DirtyRows::from_alacritty_term(&mut self.term);
-        let verdict = DamageVerdict::classify(&dirty);
-        self.stage_damage(dirty);
+        let damage = Damage::from_alacritty_term(&mut self.term);
+        let verdict = DamageVerdict::classify(&damage);
+        self.stage_damage(damage);
         Some(verdict)
     }
 
@@ -102,7 +102,7 @@ impl VtBackend for AlacrittyVt {
 
     fn resize(&mut self, cols: u16, rows: u16) {
         self.term.resize(LocalDim::new(cols, rows));
-        self.stage_damage(DirtyRows::Full);
+        self.stage_damage(Damage::Full);
     }
 
     #[inline]
@@ -118,13 +118,13 @@ impl VtBackend for AlacrittyVt {
                 let mut selection = Selection::new(kind.into(), point, side);
                 selection.update(point, side.opposite());
                 self.term.selection = Some(selection);
-                self.stage_damage(DirtyRows::Full);
+                self.stage_damage(Damage::Full);
             }
             SelectionOp::StartAtViCursor { kind } => {
                 let cursor_point = self.term.vi_mode_cursor.point;
                 let selection = Selection::new(kind.into(), cursor_point, Side::Left);
                 self.term.selection.replace(selection);
-                self.stage_damage(DirtyRows::Full);
+                self.stage_damage(Damage::Full);
             }
             SelectionOp::UpdateTo { cell, side } => {
                 let point = self.grid_point(cell);
@@ -141,7 +141,7 @@ impl VtBackend for AlacrittyVt {
                 selection.ty = selection_kind.into();
                 selection.update(vi_point, Side::Left);
                 selection.include_all();
-                self.stage_damage(DirtyRows::Full);
+                self.stage_damage(Damage::Full);
             }
             SelectionOp::Clear => {
                 self.term.selection.take();
@@ -200,15 +200,13 @@ impl AlacrittyVt {
         )
     }
 
-    /// Merges `dirty` into the damage staged for the next
+    /// Merges `damage` into the value staged for the next
     /// [`OrzmaVt::frames`] call.
     ///
     /// Seeding an absent staged value with an empty row set is safe
     /// because that set is the merge identity.
-    fn stage_damage(&mut self, dirty: DirtyRows) {
-        *self
-            .pending_damage
-            .get_or_insert(DirtyRows::Rows(Vec::new())) |= dirty;
+    fn stage_damage(&mut self, damage: Damage) {
+        *self.pending_damage.get_or_insert(Damage::Rows(Vec::new())) |= damage;
     }
 }
 

@@ -1,6 +1,6 @@
 //! Frame vocabulary: what one emit hands to the renderer.
 
-use crate::schema::{Cursor, DirtyRows, Hyperlink, SelectionRange, ViCursor};
+use crate::schema::{Cursor, Damage, Hyperlink, SelectionRange, ViCursor};
 
 pub enum Frame {
     Snapshot(FrameSnapshot),
@@ -19,12 +19,12 @@ pub struct FrameDelta {
     /// (arrow keys, character input that doesn't change cell content) is
     /// faithfully tracked without waiting for the next snapshot.
     pub cursor: Cursor,
-    /// Entire rows that changed.
-    pub dirty_rows: DirtyRows,
-    /// Hyperlinks referenced by this delta's dirty rows. The consumer merges
-    /// these cumulatively into its own hyperlink map — this field itself is
-    /// NOT cumulative; only the ids referenced by this delta's dirty rows
-    /// are included.
+    /// Damage this delta repaints.
+    pub damage: Damage,
+    /// Hyperlinks referenced by this delta's damaged rows. The consumer
+    /// merges these cumulatively into its own hyperlink map — this field
+    /// itself is NOT cumulative; only the ids referenced by this delta's
+    /// damaged rows are included.
     pub hyperlinks: Vec<Hyperlink>,
     /// Lines scrolled back from the live tail. `0` = at live tail.
     pub display_offset: u32,
