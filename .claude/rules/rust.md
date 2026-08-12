@@ -122,21 +122,26 @@ asserted contract AND the concrete case the test envisions:
 | ----------------------- | --------------------------------------------------------------------------------------------------------- |
 | Every `#[test]` function | `///` — first line: what the test asserts; blank line; a `Case:` paragraph naming the envisioned scenario |
 
-- The `Case:` paragraph describes the real-world situation the test
-  pins — the user action, the terminal/app state it happens in, and the
-  failure a regression would cause. It is NOT a restatement of the
-  assertions; a reader should learn why the contract matters, not what
-  the `assert_eq!` lines already say.
+- The `Case:` paragraph describes the real-world scenario the test
+  envisions — the user action and the terminal/app state it happens in.
+  It is NOT a restatement of the assertions; a reader should learn
+  which situation the contract serves, not what the `assert_eq!` lines
+  already say.
 - When a test pins a decided policy (e.g. "a zero-axis resize is
   ignored"), the `Case:` paragraph names the policy and the alternative
   it rejects, so a later reader does not "fix" the test toward the
   rejected behavior.
-- Keep the `Case:` paragraph concise — 2–3 sentences. Name the
-  scenario (and the pinned policy when there is one) and stop. Do not
-  restate what the test itself pins — the first line already says it —
-  and do not re-explain contracts pinned by another layer's tests
-  (sign conventions, clamping, etc.); a single clause pointing there
-  ("clamping is the VT's job, pinned in `orzma_vt`") is enough.
+- Keep the `Case:` paragraph to the scenario (plus the pinned policy
+  when there is one) and stop — 1–3 sentences. The scenario is the
+  paragraph's ONLY content; in particular:
+  - Do not restate what the test itself pins — the first line already
+    says it.
+  - Do not speculate about how a hypothetical broken implementation
+    would misbehave ("a forward that drops the operation would paint no
+    highlight") — that is the test's justification, not the case.
+  - Do not add layering footnotes about contracts pinned by another
+    layer's tests (sign conventions, clamping, etc.) — leave them out
+    entirely rather than pointing at them.
 
 ```rust
 /// Asserts that a request with a zero axis leaves the PTY size untouched.
