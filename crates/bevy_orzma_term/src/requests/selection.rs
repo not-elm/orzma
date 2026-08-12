@@ -112,9 +112,7 @@ mod tests {
     /// Asserts that a `Clear` request drops the active selection.
     ///
     /// Case: the user clicks elsewhere to dismiss an existing
-    /// selection. A forward that covers only the start and update
-    /// operations leaves a stale highlight that the renderer keeps
-    /// painting after the user has cleared it.
+    /// selection.
     #[test]
     fn clear_drops_the_active_selection() {
         let (mut app, terminal) = app_with_terminal(b"abcdefghij");
