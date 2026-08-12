@@ -79,6 +79,40 @@ Forbidden:
 | Externally `pub` item with no doc           | Public API owes the reader an explanation |
 | Placeholder doc like `/// TODO: write this` | Don't ship empty docs                     |
 
+## Comment prose — write complete English sentences
+
+English prose in comment and doc bodies — doc-comment paragraphs
+(including `Case:` paragraphs) and the text of `// TODO:` / `// NOTE:` /
+`// SAFETY:` comments — is written as grammatically complete, natural
+sentences. Telegraphic fragments that drop subjects, verbs, or articles
+read as shorthand notes, not documentation, and force the reader to
+reconstruct the elided grammar.
+
+Required:
+
+| Instead of (fragment)                                                       | Use (complete sentence)                                                                                          |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `Case: the mouse path — press anchors, drag extends, copy reads the span.` | `Case: the mouse path, where a press anchors the selection, a drag extends it, and a copy reads back the span.` |
+| `Case: the click-elsewhere teardown.`                                       | `Case: the user clicks elsewhere to dismiss an existing selection.`                                              |
+
+Forbidden:
+
+| Pattern                                                    | Example                       | Why                                          |
+| ---------------------------------------------------------- | ----------------------------- | -------------------------------------------- |
+| Noun-phrase-only sentence in a body paragraph              | `Case: the wheel path.`       | A sentence needs a verb; say what happens    |
+| Clause chains with dropped subjects, objects, or articles | `press anchors, drag extends` | Shorthand the reader must mentally re-expand |
+
+Not fragments for this rule (still fine):
+
+- The **first line** of a doc comment — the style guide above
+  deliberately makes it a noun phrase or third-person singular verb
+  phrase (`/// Returns the active pane.`).
+- Standard parallel ellipsis sharing an auxiliary or subject
+  (`are pinned by its tests, not re-asserted here`).
+- Em-dashes, semicolons, and colons joining clauses that are each
+  complete on their own.
+- Table cells, section headings, and list labels inside doc bodies.
+
 ## Test doc comments
 
 Every `#[test]` function carries a `///` doc comment that states the
@@ -638,6 +672,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 
 - `mod.rs` ban
 - Comment taxonomy — only `// TODO:` / `// NOTE:` / `// SAFETY:`
+- Comment prose — English prose in comment/doc bodies is written as complete, natural sentences, not telegraphic fragments (see "Comment prose — write complete English sentences")
 - File-level module `//!` requirement
 - Test doc comments — every `#[test]` fn documents its asserted contract plus a `Case:` paragraph naming the envisioned scenario (see "Test doc comments")
 - "No blank lines between import groups"
