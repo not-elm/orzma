@@ -2,9 +2,9 @@
 
 use crate::{
     schema::{
-        Damage, DamageVerdict, DisplayOffset, Frame, MouseEncoding, MouseTracking, Scroll,
-        SelectionKind, SelectionOp, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult,
-        VtSignal,
+        Damage, DamageVerdict, DisplayOffset, Frame, GridSize, MouseEncoding, MouseTracking,
+        Scroll, SelectionKind, SelectionOp, SelectionRange, ViModeSwitch, ViewportPoint, VtModes,
+        VtResult, VtSignal,
     },
     vt::{VtBackend, apc::ApcState},
 };
@@ -79,7 +79,7 @@ impl VtBackend for AlacrittyVt {
 
     #[inline]
     fn scroll(&mut self, scroll: Scroll) {
-        let screen_lines = self.term.screen_lines() as u16;
+        let screen_lines = self.grid_size().rows;
         self.term
             .scroll_display(scroll.to_alacritty_scroll(screen_lines));
     }
@@ -103,8 +103,11 @@ impl VtBackend for AlacrittyVt {
     }
 
     #[inline]
-    fn grid_size(&self) -> (u16, u16) {
-        (self.term.columns() as u16, self.term.screen_lines() as u16)
+    fn grid_size(&self) -> GridSize {
+        GridSize {
+            cols: self.term.columns() as u16,
+            rows: self.term.screen_lines() as u16,
+        }
     }
 
     fn apply_selection(&mut self, op: SelectionOp) -> VtResult {

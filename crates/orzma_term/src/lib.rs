@@ -245,7 +245,8 @@ mod tests {
 
     fn sizes(term: &OrzmaTerm<AlacrittyVt>) -> ((u16, u16), (u16, u16)) {
         let pty = term.pty_size();
-        ((pty.cols, pty.rows), term.vt.grid_size())
+        let grid = term.vt.grid_size();
+        ((pty.cols, pty.rows), (grid.cols, grid.rows))
     }
 
     /// Asserts that a resize reaches the VT grid, not only the PTY.
@@ -260,7 +261,13 @@ mod tests {
     fn resize_applies_the_size_to_the_vt_grid() {
         let (mut term, _sink) = detached_term();
         term.resize(120, 40).expect("resize");
-        assert_eq!(term.vt.grid_size(), (120, 40));
+        assert_eq!(
+            term.vt.grid_size(),
+            GridSize {
+                cols: 120,
+                rows: 40
+            }
+        );
     }
 
     /// Asserts that a resize never writes through the PTY writer.
@@ -387,7 +394,7 @@ mod tests {
             matches!(result, Err(OrzmaTermError::PtyResize(_))),
             "expected PtyResize, got {result:?}"
         );
-        assert_eq!(term.vt.grid_size(), (80, 24));
+        assert_eq!(term.vt.grid_size(), GridSize { cols: 80, rows: 24 });
         assert!(!term.coalescer.is_armed());
     }
 

@@ -1,7 +1,7 @@
 //! Engine layer: the [`OrzmaVt`] contract and its backends.
 
 use crate::schema::{
-    Damage, DamageVerdict, DisplayOffset, Frame, Scroll, SelectionKind, SelectionOp,
+    Damage, DamageVerdict, DisplayOffset, Frame, GridSize, Scroll, SelectionKind, SelectionOp,
     SelectionRange, ViModeSwitch, VtModes, VtResult, VtSignal,
 };
 
@@ -83,11 +83,8 @@ pub trait VtBackend: Sized {
     /// oversized requests before this method is reached).
     fn resize(&mut self, cols: u16, rows: u16);
 
-    /// Grid dimensions as `(cols, rows)`.
-    ///
-    /// The row count is the source of truth for "one screenful"
-    /// (scroll paging) and for verifying an applied resize.
-    fn grid_size(&self) -> (u16, u16);
+    /// Grid dimensions in cells.
+    fn grid_size(&self) -> GridSize;
 
     /// Applies one selection operation.
     ///

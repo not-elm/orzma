@@ -1,4 +1,4 @@
-//! Grid viewport vocabulary: [`DisplayOffset`].
+//! Grid viewport vocabulary: [`DisplayOffset`] and [`GridSize`].
 
 /// Number of scrollback rows the viewport sits above the live tail.
 ///
@@ -12,3 +12,15 @@
 /// does not enforce either bound itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DisplayOffset(pub u32);
+
+/// Grid dimensions in cells.
+///
+/// The row count is the source of truth for "one screenful" (scroll
+/// paging) and for verifying an applied resize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GridSize {
+    /// Visible column count.
+    pub cols: u16,
+    /// Visible row count.
+    pub rows: u16,
+}
