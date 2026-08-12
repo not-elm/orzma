@@ -4,8 +4,8 @@
 //! colors, cursors, selections, damage, signals. [`vt`] holds the
 //! [`vt::OrzmaVt`] contract and its backends.
 
-mod schema;
-mod vt;
+pub mod schema;
+pub mod vt;
 
 pub mod prelude {
     pub use crate::{schema::*, vt::*};

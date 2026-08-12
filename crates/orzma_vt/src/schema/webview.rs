@@ -25,7 +25,7 @@ pub enum ApcWebviewVerb {
         /// implicit default instance. `(view_id, instance_id)` is the address.
         instance_id: Option<String>,
     },
-    /// Unmount webview(s):mount_out_of_range_dims_rejected a specific `(view_id, instance_id)`, all
+    /// Unmount webview(s): a specific `(view_id, instance_id)`, all
     /// instances of a `view_id`, or all for this terminal.
     ///
     /// # Invariants

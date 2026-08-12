@@ -129,7 +129,7 @@ impl OrzmaVt for AlacrittyVt {
             SelectionOp::UpdateTo { cell, side } => {
                 let point = self.grid_point(cell);
                 if let Some(selection) = self.term.selection.as_mut() {
-                    let s: alacritty_terminal::index::Side = side.into();
+                    let s: Side = side.into();
                     selection.update(point, s);
                 }
             }

@@ -11,8 +11,8 @@ pub struct Row {
 
 /// A run of cells sharing identical fg/bg/style attributes.
 ///
-/// Wide-char spacers (alacritty internal) are absorbed server-side and do
-/// not appear in `text`.
+/// Wide-char spacers (alacritty internal) are absorbed by this crate and
+/// do not appear in `text`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Run {
     /// Total column span (sum of grapheme cluster widths in `text`).
@@ -24,8 +24,8 @@ pub struct Run {
     /// Style bitmask (see the `style` module). Widened from u8 to u16 so
     /// HIDDEN (bit 6) and future underline variants fit.
     pub style: u16,
-    /// UTF-8 text; the client uses Unicode East Asian Width to position each
-    /// grapheme cluster within the run.
+    /// UTF-8 text; the consumer uses Unicode East Asian Width to position
+    /// each grapheme cluster within the run.
     pub text: String,
     /// Hyperlink id (OSC 8); always `None` until Phase 3.
     pub hyperlink_id: Option<HyperlinkId>,

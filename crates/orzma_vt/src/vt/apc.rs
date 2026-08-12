@@ -5,7 +5,7 @@ use crate::schema::ApcWebviewVerb;
 use vtparse::{self, VTActor};
 
 #[derive(Default)]
-pub(crate) struct ApcState {
+pub(super) struct ApcState {
     webview: Option<ApcWebviewVerb>,
 }
 

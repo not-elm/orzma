@@ -195,7 +195,6 @@ mod tests {
 #[cfg(all(test, feature = "alacritty"))]
 mod alacritty_tests {
     use super::*;
-    use alacritty_terminal::Term;
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::term::Config;

@@ -26,6 +26,11 @@ pub struct ViewportPoint {
 
 #[cfg(feature = "alacritty")]
 impl ViewportPoint {
+    /// Converts an alacritty grid `Point` into viewport coordinates.
+    ///
+    /// `p.line` counts from the top of the active area and goes negative
+    /// into scrollback; `display_offset` shifts that back into a row
+    /// relative to the top of the currently visible viewport.
     pub fn from_alacritty_point(p: Point, display_offset: u32) -> Self {
         Self {
             row: (p.line.0 as i64 + display_offset as i64) as i16,

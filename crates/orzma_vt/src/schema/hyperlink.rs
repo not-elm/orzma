@@ -10,6 +10,7 @@ pub struct Hyperlink {
     /// The hyperlink target URI.
     pub uri: HyperlinkUri,
 }
+
 /// Monotonic hyperlink id.
 ///
 /// # Invariants
