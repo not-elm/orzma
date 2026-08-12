@@ -10,6 +10,10 @@ use bevy::prelude::*;
 pub use orzma_vt::prelude::{CellSide, SelectionKind, SelectionOp};
 
 /// Fired by the host UI to change a specific terminal entity's selection.
+///
+/// The observer's only job is routing the operation to the targeted
+/// entity's handle. Anchor resolution, cell-side inclusion, and geometry
+/// live in `orzma_vt` and are pinned by its tests, not re-asserted here.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTermSelection {
     #[event_target]
@@ -31,143 +35,98 @@ fn apply_selection(e: On<RequestTermSelection>) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orzma_vt::prelude::ViewportPoint;
+    use crate::OrzmaTermHandle;
+    use orzma_vt::prelude::{SelectionRange, ViewportPoint, VtBackend};
 
-    /// Every `(target, op)` an observer saw, in fire order.
-    #[derive(Resource, Default)]
-    struct Seen(Vec<(Entity, SelectionOp)>);
-
-    /// Observer that appends what it received to [`Seen`].
-    fn record(ev: On<RequestTermSelection>, mut seen: ResMut<Seen>) {
-        seen.0.push((ev.event_target(), ev.op));
+    fn app_with_terminal(seed: &[u8]) -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins(SelectionPlugin);
+        let (mut handle, _) = OrzmaTermHandle::detached(80, 24);
+        handle.vt_mut().interpret(seed);
+        let terminal = app.world_mut().spawn(handle).id();
+        (app, terminal)
     }
 
     fn cell(x: u16, y: i16) -> ViewportPoint {
         ViewportPoint { row: y, column: x }
     }
 
-    /// Asserts that a triggered `RequestTermSelection` reaches an observer
-    /// with its target and full payload intact.
-    ///
-    /// Case: a mouse press that anchors a new selection. The cell, the side,
-    /// and the granularity all have to survive together — the apply observer
-    /// cannot reconstruct any of them from the others.
-    #[test]
-    fn trigger_delivers_the_requested_operation() {
-        let mut app = App::new();
-        app.init_resource::<Seen>().add_observer(record);
-        let terminal = app.world_mut().spawn_empty().id();
-        let op = SelectionOp::StartAt {
-            cell: cell(12, 3),
-            side: CellSide::Right,
-            kind: SelectionKind::Lines,
-        };
-
+    fn trigger_op(app: &mut App, terminal: Entity, op: SelectionOp) {
         app.world_mut()
             .trigger(RequestTermSelection { terminal, op });
-
-        assert_eq!(app.world().resource::<Seen>().0, vec![(terminal, op)]);
     }
 
-    /// Asserts that a full drag sequence arrives in order and unmerged.
-    ///
-    /// Case: press, drag across several cells, release. Each `UpdateTo` moves
-    /// only the moving end, so the sequence is order-dependent; coalescing the
-    /// intermediate updates — tempting, since only the last one decides the
-    /// final range — would break a future consumer that reads them for
-    /// autoscroll or hover feedback.
-    #[test]
-    fn a_drag_sequence_is_delivered_in_order() {
-        let mut app = App::new();
-        app.init_resource::<Seen>().add_observer(record);
-        let terminal = app.world_mut().spawn_empty().id();
-        let ops = [
+    fn start_simple(app: &mut App, terminal: Entity, x: u16, y: i16) {
+        trigger_op(
+            app,
+            terminal,
             SelectionOp::StartAt {
-                cell: cell(0, 0),
+                cell: cell(x, y),
                 side: CellSide::Left,
                 kind: SelectionKind::Simple,
             },
+        );
+    }
+
+    fn update_to(app: &mut App, terminal: Entity, x: u16, y: i16, side: CellSide) {
+        trigger_op(
+            app,
+            terminal,
             SelectionOp::UpdateTo {
-                cell: cell(5, 0),
-                side: CellSide::Right,
+                cell: cell(x, y),
+                side,
             },
-            SelectionOp::UpdateTo {
-                cell: cell(9, 2),
-                side: CellSide::Left,
-            },
-        ];
-
-        for op in ops {
-            app.world_mut()
-                .trigger(RequestTermSelection { terminal, op });
-        }
-
-        let seen: Vec<SelectionOp> = app
-            .world()
-            .resource::<Seen>()
-            .0
-            .iter()
-            .map(|(_, op)| *op)
-            .collect();
-        assert_eq!(seen, ops);
+        );
     }
 
-    /// Asserts that the two anchor sources stay distinct.
-    ///
-    /// Case: the vi-mode `v` press. `StartAtViCursor` deliberately carries no
-    /// cell, because the vi cursor's position lives in the VT and the host
-    /// does not track it. Folding it into `StartAt` with a placeholder cell
-    /// would anchor every vi selection at that placeholder.
-    #[test]
-    fn vi_cursor_anchor_is_not_an_explicit_cell_anchor() {
-        let from_vi = SelectionOp::StartAtViCursor {
-            kind: SelectionKind::Lines,
-        };
-        let from_mouse = SelectionOp::StartAt {
-            cell: cell(0, 0),
-            side: CellSide::Left,
-            kind: SelectionKind::Lines,
-        };
-        assert_ne!(from_vi, from_mouse);
+    fn selection_range(app: &mut App, terminal: Entity) -> Option<SelectionRange> {
+        app.world_mut()
+            .get_mut::<OrzmaTermHandle>(terminal)
+            .expect("terminal entity must keep its handle")
+            .vt_mut()
+            .selection_range()
     }
 
-    /// Asserts that the payload fields are compared, not just the variant.
+    fn selected_text(app: &mut App, terminal: Entity) -> Option<String> {
+        app.world_mut()
+            .get_mut::<OrzmaTermHandle>(terminal)
+            .expect("terminal entity must keep its handle")
+            .vt_mut()
+            .selected_text()
+    }
+
+    /// Asserts that press and drag requests select the dragged span in
+    /// the targeted entity's VT.
     ///
-    /// Case: the guard for every `assert_eq!` above. A hand-written or derived
-    /// `PartialEq` that ignored a field would let those tests pass while the
-    /// side, the granularity, or the row silently changed in transit — and
-    /// `side` in particular flips whether the cell under the cursor is part of
-    /// the selection.
+    /// Case: the mouse path, where a press anchors the selection, a
+    /// drag extends it, and a copy reads back the span. An observer
+    /// that drops or mangles the forwarded operation paints either no
+    /// highlight or the wrong one. Cell-side inclusion, granularity,
+    /// and geometry are the VT's job and are pinned in `orzma_vt`.
     #[test]
-    fn operations_differing_only_in_payload_are_not_equal() {
-        let base = SelectionOp::StartAt {
-            cell: cell(4, 4),
-            side: CellSide::Left,
-            kind: SelectionKind::Simple,
-        };
-        assert_ne!(
-            base,
-            SelectionOp::StartAt {
-                cell: cell(4, 4),
-                side: CellSide::Right,
-                kind: SelectionKind::Simple,
-            }
+    fn a_press_and_drag_select_the_dragged_span() {
+        let (mut app, terminal) = app_with_terminal(b"abcdefghij");
+        start_simple(&mut app, terminal, 0, 0);
+        update_to(&mut app, terminal, 4, 0, CellSide::Right);
+        assert_eq!(selected_text(&mut app, terminal).as_deref(), Some("abcde"));
+    }
+
+    /// Asserts that a `Clear` request drops the active selection.
+    ///
+    /// Case: the user clicks elsewhere to dismiss an existing
+    /// selection. A forward that covers only the start and update
+    /// operations leaves a stale highlight that the renderer keeps
+    /// painting after the user has cleared it.
+    #[test]
+    fn clear_drops_the_active_selection() {
+        let (mut app, terminal) = app_with_terminal(b"abcdefghij");
+        start_simple(&mut app, terminal, 0, 0);
+        update_to(&mut app, terminal, 4, 0, CellSide::Right);
+        assert!(
+            selection_range(&mut app, terminal).is_some(),
+            "precondition: the drag must have selected something"
         );
-        assert_ne!(
-            base,
-            SelectionOp::StartAt {
-                cell: cell(4, 4),
-                side: CellSide::Left,
-                kind: SelectionKind::Lines,
-            }
-        );
-        assert_ne!(
-            base,
-            SelectionOp::StartAt {
-                cell: cell(4, 5),
-                side: CellSide::Left,
-                kind: SelectionKind::Simple,
-            }
-        );
+        trigger_op(&mut app, terminal, SelectionOp::Clear);
+        assert_eq!(selection_range(&mut app, terminal), None);
     }
 }
