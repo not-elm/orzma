@@ -39,7 +39,7 @@ fn apply_paste(e: On<RequestTermPaste>, mut terms: Query<&mut OrzmaTermHandle>) 
 mod tests {
     use super::*;
     use orzma_term::test_support::CaptureSink;
-    use orzma_vt::prelude::OrzmaVt;
+    use orzma_vt::prelude::VtBackend;
 
     fn app_with_terminal() -> (App, Entity, CaptureSink) {
         let mut app = App::new();

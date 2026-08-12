@@ -45,13 +45,13 @@ pub struct EnvKey(pub String);
 pub struct EnvValue(pub String);
 
 /// A live terminal: the VT emulation plus the PTY it is wired to.
-pub struct OrzmaTerm<V: OrzmaVt> {
+pub struct OrzmaTerm<V: VtBackend> {
     vt: V,
     coalescer: Coalescer,
     pty: Pty,
 }
 
-impl<V: OrzmaVt> OrzmaTerm<V> {
+impl<V: VtBackend> OrzmaTerm<V> {
     /// Upper bound for a resize's column count; requests beyond it are
     /// ignored by [`Self::resize`].
     ///

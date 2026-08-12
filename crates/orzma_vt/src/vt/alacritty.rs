@@ -5,7 +5,7 @@ use crate::{
         DamageVerdict, DirtyRows, Frame, MouseEncoding, MouseTracking, Scroll, SelectionKind,
         SelectionOp, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
     },
-    vt::{OrzmaVt, apc::ApcState},
+    vt::{VtBackend, apc::ApcState},
 };
 use alacritty_terminal::{
     Term,
@@ -34,7 +34,7 @@ pub struct AlacrittyVt {
     pending_damage: Option<DirtyRows>,
 }
 
-impl OrzmaVt for AlacrittyVt {
+impl VtBackend for AlacrittyVt {
     /// Builds a VT backed by an alacritty `Term` at the given grid size.
     fn new(cols: u16, rows: u16) -> Self {
         Self {

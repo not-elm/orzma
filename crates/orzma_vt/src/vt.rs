@@ -13,7 +13,7 @@ mod alacritty;
 #[cfg(feature = "alacritty")]
 pub use alacritty::AlacrittyVt;
 
-pub trait OrzmaVt: Sized {
+pub trait VtBackend: Sized {
     fn new(cols: u16, rows: u16) -> Self;
 
     /// Number of rows the viewport sits above the live tail.
