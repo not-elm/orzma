@@ -105,7 +105,18 @@ impl<V: VtBackend> OrzmaTerm<V> {
     /// VecでTermEventを収集しているが、この関数はほぼ米フレームで呼ばれることが予想されるため、
     /// コールバック形式などにしたほうがいい？
     pub fn pump(&mut self) -> Vec<TermSignal> {
-        todo!("OrzmaTerm::pump")
+        while let Some(chunk) = self.pty.try_read_chunk() {
+            self.vt.interpret(&chunk);
+        }
+        let mut signals = vec![];
+        if self.coalescer.is_due(Instant::now()) {
+            //TODO: VTからフレームを取得, あればemit
+            // if let Some(f) = self.vt.frame(){
+            // signals.push(TermSignal::FrameChanged(f));
+            // }
+        }
+        signals.extend(self.vt.drain_signals().map(|s| TermSignal::Vt(s)));
+        signals
     }
 
     /// Scrolls the grid.

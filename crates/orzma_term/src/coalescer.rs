@@ -103,9 +103,16 @@ impl Coalescer {
         }
     }
 
+    /// Returns true while the armed window's deadline has elapsed at
+    /// `now`; false when disarmed (no deadline is due).
+    #[inline]
+    pub fn is_due(&self, now: Instant) -> bool {
+        self.next_deadline().is_some_and(|d| d <= now)
+    }
+
     /// Returns the next deadline as `min(last_chunk + IDLE, armed + MAX_CAP)`.
     /// Returns `None` when the Coalescer is disarmed.
-    pub fn next_deadline(&self) -> Option<Instant> {
+    fn next_deadline(&self) -> Option<Instant> {
         let armed = self.armed_at?;
         let last = self.last_chunk_at.unwrap_or(armed);
         Some(min(last + Self::IDLE, armed + Self::MAX_CAP))

@@ -67,10 +67,6 @@ impl VtBackend for AlacrittyVt {
         Some(verdict)
     }
 
-    fn frames(&mut self) -> Vec<Frame> {
-        todo!()
-    }
-
     fn drain_signals(&mut self) -> impl Iterator<Item = VtSignal> + '_ {
         // TODO: drain control frames captured from the APC stream.
         iter::empty()

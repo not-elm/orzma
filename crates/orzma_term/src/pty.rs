@@ -77,6 +77,11 @@ impl Pty {
     }
 
     #[inline]
+    pub fn try_read_chunk(&mut self) -> Option<Vec<u8>> {
+        self.chunk_rx.try_recv().ok()
+    }
+
+    #[inline]
     pub fn write_all(&mut self, buf: &[u8]) -> OrzmaTermResult {
         self.writer
             .lock()

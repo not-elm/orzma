@@ -1,7 +1,7 @@
 //! Engine layer: the [`OrzmaVt`] contract and its backends.
 
 use crate::schema::{
-    DamageVerdict, Frame, Scroll, SelectionKind, SelectionOp, SelectionRange, ViModeSwitch,
+    Damage, DamageVerdict, Frame, Scroll, SelectionKind, SelectionOp, SelectionRange, ViModeSwitch,
     VtModes, VtResult, VtSignal,
 };
 
@@ -12,6 +12,23 @@ mod alacritty;
 
 #[cfg(feature = "alacritty")]
 pub use alacritty::AlacrittyVt;
+
+pub struct OrzmaVt<B: VtBackend> {
+    backend: B,
+    pending_damage: Option<Damage>,
+}
+
+impl<B: VtBackend> OrzmaVt<B> {
+    /// Constructs the new orzma vt.
+    pub fn new(cols: u16, rows: u16) -> Self {
+        Self {
+            backend: B::new(cols, rows),
+            pending_damage: None,
+        }
+    }
+
+    pub fn interpret(&mut self, chunk: &[u8]) {}
+}
 
 pub trait VtBackend: Sized {
     fn new(cols: u16, rows: u16) -> Self;
@@ -40,16 +57,6 @@ pub trait VtBackend: Sized {
     /// ECMA-48 § 2.3.3: a receiving device interprets the coded
     /// representations of control functions.)
     fn interpret(&mut self, chunk: &[u8]) -> Option<DamageVerdict>;
-
-    /// Builds the frame for the staged damage.
-    ///
-    /// # Invariants
-    ///
-    /// Implementations must clear the staged damage once it has been
-    /// emitted. Staging merges rather than replaces, so a skipped
-    /// clear is not self-healing: a full repaint latches and every
-    /// later frame stays a whole-grid snapshot.
-    fn frames(&mut self) -> Vec<Frame>;
 
     fn drain_signals(&mut self) -> impl Iterator<Item = VtSignal> + '_;
 
