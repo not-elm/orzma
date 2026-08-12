@@ -1,16 +1,11 @@
 //! Alacritty-backed [`OrzmaVt`] implementation.
 
 use crate::{
-    damage::{DamageVerdict, DirtyRows},
-    error::VtResult,
-    extension::ApcState,
-    frame::Frame,
-    modes::{MouseEncoding, MouseTracking, VtModes},
-    scroll::Scroll,
-    selection::{SelectionKind, SelectionOp, SelectionRange, ViewportPoint},
-    signal::VtSignal,
-    vi::ViModeSwitch,
-    vt::OrzmaVt,
+    schema::{
+        DamageVerdict, DirtyRows, Frame, MouseEncoding, MouseTracking, Scroll, SelectionKind,
+        SelectionOp, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
+    },
+    vt::{OrzmaVt, apc::ApcState},
 };
 use alacritty_terminal::{
     Term,
@@ -700,7 +695,7 @@ mod tests {
         assert_eq!(vt.pending_damage, Some(DirtyRows::Rows(Vec::new())));
     }
 
-    use crate::selection::{CellSide, SelectionGeometry};
+    use crate::schema::{CellSide, SelectionGeometry};
     use alacritty_terminal::index::Point as AlacPoint;
 
     fn cell(x: u16, y: i16) -> ViewportPoint {

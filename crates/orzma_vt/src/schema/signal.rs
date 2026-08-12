@@ -1,6 +1,5 @@
+use crate::schema::ApcWebviewVerb;
 use std::path::PathBuf;
-
-use crate::extension::ApcWebviewVerb;
 
 /// Out-of-band signal parsed from the VT byte stream, drained by the
 /// owner via `OrzmaVt::drain_signals`.

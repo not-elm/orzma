@@ -1,16 +1,16 @@
-use crate::{
-    damage::DamageVerdict,
-    error::VtResult,
-    frame::Frame,
-    modes::VtModes,
-    prelude::VtSignal,
-    scroll::Scroll,
-    selection::{SelectionKind, SelectionOp, SelectionRange},
-    vi::ViModeSwitch,
+//! Engine layer: the [`OrzmaVt`] contract and its backends.
+
+use crate::schema::{
+    DamageVerdict, Frame, Scroll, SelectionKind, SelectionOp, SelectionRange, ViModeSwitch,
+    VtModes, VtResult, VtSignal,
 };
+
+mod apc;
 
 #[cfg(feature = "alacritty")]
 mod alacritty;
+
+pub use apc::ApcState;
 
 #[cfg(feature = "alacritty")]
 pub use alacritty::AlacrittyVt;

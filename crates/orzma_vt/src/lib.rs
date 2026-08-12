@@ -1,21 +1,12 @@
-mod color;
-mod cursor;
-mod damage;
-mod error;
-mod extension;
-mod frame;
-mod hyperlink;
-mod modes;
-mod run;
-mod scroll;
-mod selection;
-mod signal;
-mod vi;
+//! Backend-agnostic terminal emulation for orzma.
+//!
+//! [`schema`] declares the vocabulary the crate speaks — grid cells,
+//! colors, cursors, selections, damage, signals. [`vt`] holds the
+//! [`vt::OrzmaVt`] contract and its backends.
+
+mod schema;
 mod vt;
 
 pub mod prelude {
-    pub use crate::{
-        color::*, cursor::*, damage::DamageVerdict, error::*, extension::*, hyperlink::*, modes::*,
-        run::*, scroll::*, selection::*, signal::*, vi::*, vt::*,
-    };
+    pub use crate::{schema::*, vt::*};
 }

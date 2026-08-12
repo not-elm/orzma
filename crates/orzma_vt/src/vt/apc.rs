@@ -1,11 +1,8 @@
 //! Webview APC capture: feeds `apc_dispatch` payloads through
 //! [`ApcWebviewVerb::parse`] and holds the parsed verb.
 
+use crate::schema::ApcWebviewVerb;
 use vtparse::{self, VTActor};
-
-mod webview;
-
-pub use webview::ApcWebviewVerb;
 
 #[derive(Default)]
 pub struct ApcState {

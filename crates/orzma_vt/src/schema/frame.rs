@@ -1,9 +1,4 @@
-use crate::{
-    cursor::{Cursor, ViCursor},
-    damage::DirtyRows,
-    hyperlink::Hyperlink,
-    selection::SelectionRange,
-};
+use crate::schema::{Cursor, DirtyRows, Hyperlink, SelectionRange, ViCursor};
 
 pub enum Frame {
     Snapshot(FrameSnapshot),

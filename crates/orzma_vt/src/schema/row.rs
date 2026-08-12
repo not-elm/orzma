@@ -1,7 +1,6 @@
 //! Wire types for a row of attribute runs.
 
-use crate::color::Color;
-use crate::hyperlink::HyperlinkId;
+use crate::schema::{Color, HyperlinkId};
 use serde::{Deserialize, Serialize};
 
 /// A row of runs ordered left-to-right.
