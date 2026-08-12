@@ -188,10 +188,10 @@ impl<V: OrzmaVt> OrzmaTerm<V> {
     }
 
     /// Snaps a scrolled-back viewport to the live tail (scroll-on-input
-    /// policy), gated on [`OrzmaVt::at_scroll_bottom`] so a no-op call
+    /// policy), gated on [`OrzmaVt::is_at_live_tail`] so a no-op call
     /// stages no damage.
     fn snap_to_live_tail(&mut self) {
-        if !self.vt.at_scroll_bottom() {
+        if !self.vt.is_at_live_tail() {
             self.scroll(Scroll::Bottom);
         }
     }

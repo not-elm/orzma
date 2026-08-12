@@ -455,14 +455,21 @@ mod tests {
         assert_eq!(vt.display_offset(), 0);
     }
 
+    /// Asserts that the live-tail predicate follows the viewport in both
+    /// directions, not just away from the tail.
+    ///
+    /// Case: the scroll-on-input policy gates on this predicate, so a
+    /// value that latches `false` after a scroll back down would make
+    /// every later keystroke re-snap a viewport that never moved, and
+    /// stage damage for a repaint nothing asked for.
     #[test]
-    fn at_scroll_bottom_tracks_the_viewport() {
+    fn is_at_live_tail_tracks_the_viewport() {
         let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
-        assert!(vt.at_scroll_bottom());
+        assert!(vt.is_at_live_tail());
         vt.scroll(Scroll::Delta(3));
-        assert!(!vt.at_scroll_bottom());
+        assert!(!vt.is_at_live_tail());
         vt.scroll(Scroll::Delta(-3));
-        assert!(vt.at_scroll_bottom());
+        assert!(vt.is_at_live_tail());
     }
 
     /// Asserts that every absolute and paged `Scroll` variant moves the
