@@ -78,14 +78,14 @@ fn parse_mount_action(payload: &str) -> Option<ApcWebviewVerb> {
         match k {
             "c" if cols.is_none() => {
                 let c = v.parse::<u16>().ok()?;
-                if c <= 0 || MAX_COLS < c {
+                if c == 0 || MAX_COLS < c {
                     return None;
                 }
                 cols.replace(c);
             }
             "r" if rows.is_none() => {
                 let r = v.parse().ok()?;
-                if r <= 0 || MAX_ROWS < r {
+                if r == 0 || MAX_ROWS < r {
                     return None;
                 }
                 rows.replace(r);

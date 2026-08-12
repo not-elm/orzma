@@ -14,7 +14,7 @@ use alacritty_terminal::{
     index::{Column, Line, Point, Side},
     selection::Selection,
     term::{Config, TermMode},
-    vte::ansi::{Handler, Processor},
+    vte::ansi::Processor,
 };
 use std::iter;
 use vtparse::VTParser;
