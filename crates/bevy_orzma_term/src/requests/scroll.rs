@@ -74,8 +74,8 @@ mod tests {
     /// Asserts that positive and negative `Delta` requests move the
     /// viewport in opposite directions, cumulatively.
     ///
-    /// Case: the wheel path — each notch fires one request, and a
-    /// burst of notches must accumulate.
+    /// Case: the user scrolls with the mouse wheel, where each notch
+    /// fires one request and a fast spin delivers a burst of them.
     #[test]
     fn scroll_up_and_down_move_the_viewport_relatively() {
         let (mut app, terminal) = app_with_terminal(10);
@@ -89,8 +89,8 @@ mod tests {
     /// `Bottom` returns to the live tail, regardless of the current
     /// offset.
     ///
-    /// Case: the vi-mode `gg` / `G` jumps.
-    /// Clamping is the VT's job, already pinned in `orzma_vt`.
+    /// Case: the user jumps to the oldest history and back to the
+    /// live tail with the vi-mode `gg` and `G` motions.
     #[test]
     fn scroll_top_and_bottom_jump_to_the_extremes() {
         let (mut app, terminal) = app_with_terminal(10);
@@ -103,10 +103,11 @@ mod tests {
     /// Asserts the agreed page semantics: one page is the full grid
     /// height (24 rows here) and half a page is half that.
     ///
-    /// Case: the vi-mode `Ctrl-B`/`Ctrl-F`/`Ctrl-U`/`Ctrl-D` and
-    /// `Shift+PageUp`/`PageDown` paths. Decided policy: a page is the
-    /// full screen (xterm-style, no overlap line) — do not "fix" this
-    /// toward `rows - 1`.
+    /// Case: the user pages through history with the vi-mode
+    /// `Ctrl-B`/`Ctrl-F`/`Ctrl-U`/`Ctrl-D` motions or
+    /// `Shift+PageUp`/`PageDown`. The decided policy is that one page
+    /// is the full screen height (xterm-style, with no overlap line)
+    /// rather than `rows - 1`.
     #[test]
     fn paged_scrolls_move_by_screenfuls() {
         let (mut app, terminal) = app_with_terminal(40);

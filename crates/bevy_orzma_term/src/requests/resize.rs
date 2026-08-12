@@ -62,12 +62,8 @@ mod tests {
     /// Asserts that a resize request lands on the PTY: the size read
     /// back from the kernel (`TIOCGWINSZ`) is the requested one.
     ///
-    /// Case: the ordinary window-resize path — the host has resolved
-    /// pixels to cells and fires one request at the terminal it owns.
-    /// The child process only learns its new size through the ioctl on
-    /// the master (and the SIGWINCH it raises), so a resize that stops
-    /// short of the PTY leaves every TUI app drawing at the stale size
-    /// while the renderer shows a larger grid.
+    /// Case: the user resizes the window; the host resolves pixels to
+    /// cells and fires one request at the terminal it owns.
     #[test]
     fn resize_applies_the_requested_size_to_the_pty() {
         let (mut app, terminal) = app_with_terminal();
@@ -86,9 +82,7 @@ mod tests {
     /// have loaded, makes the host compute 0 columns or rows. The
     /// agreed policy is to ignore the request outright — clamping to
     /// 1x1 was rejected because shrinking the grid for a transient
-    /// state risks reflow/scrollback loss on the way back. The guard
-    /// belongs to `OrzmaTerm::resize`, mirroring `write_paste`'s
-    /// empty-text no-op; do not "fix" this test toward clamping.
+    /// state risks reflow/scrollback loss on the way back.
     #[test]
     fn a_degenerate_resize_is_ignored() {
         let (mut app, terminal) = app_with_terminal();
