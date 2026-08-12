@@ -10,8 +10,6 @@ mod apc;
 #[cfg(feature = "alacritty")]
 mod alacritty;
 
-pub use apc::ApcState;
-
 #[cfg(feature = "alacritty")]
 pub use alacritty::AlacrittyVt;
 
