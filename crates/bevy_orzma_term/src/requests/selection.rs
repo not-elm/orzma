@@ -98,11 +98,9 @@ mod tests {
     /// Asserts that press and drag requests select the dragged span in
     /// the targeted entity's VT.
     ///
-    /// Case: the mouse path, where a press anchors the selection, a
-    /// drag extends it, and a copy reads back the span. An observer
-    /// that drops or mangles the forwarded operation paints either no
-    /// highlight or the wrong one. Cell-side inclusion, granularity,
-    /// and geometry are the VT's job and are pinned in `orzma_vt`.
+    /// Case: the user presses the mouse on a cell to anchor a
+    /// selection, drags across the neighboring cells to extend it, and
+    /// copies the highlighted span.
     #[test]
     fn a_press_and_drag_select_the_dragged_span() {
         let (mut app, terminal) = app_with_terminal(b"abcdefghij");
