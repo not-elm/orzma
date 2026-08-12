@@ -117,6 +117,21 @@ impl<V: VtBackend> OrzmaTerm<V> {
         }
     }
 
+    /// Applies one selection operation.
+    ///
+    /// Arms the coalescer only when the visible selection actually
+    /// changed, detected by comparing [`VtBackend::selection_range`]
+    /// before and after — the same gate [`Self::scroll`] applies via
+    /// `display_offset`.
+    pub fn apply_selection(&mut self, op: SelectionOp) -> VtResult {
+        let prev_range = self.vt.selection_range();
+        self.vt.apply_selection(op)?;
+        if prev_range != self.vt.selection_range() {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
+        Ok(())
+    }
+
     /// Resizes both the PTY (kernel winsize) and the VT grid, then arms
     /// the coalescer so the reflow repaints at the next deadline even
     /// on an otherwise idle terminal.

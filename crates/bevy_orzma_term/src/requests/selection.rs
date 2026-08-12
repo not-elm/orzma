@@ -9,6 +9,8 @@
 use bevy::prelude::*;
 pub use orzma_vt::prelude::{CellSide, SelectionKind, SelectionOp};
 
+use crate::OrzmaTermHandle;
+
 /// Fired by the host UI to change a specific terminal entity's selection.
 ///
 /// The observer's only job is routing the operation to the targeted
@@ -30,7 +32,13 @@ impl Plugin for SelectionPlugin {
     }
 }
 
-fn apply_selection(e: On<RequestTermSelection>) {}
+fn apply_selection(e: On<RequestTermSelection>, mut terms: Query<&mut OrzmaTermHandle>) {
+    if let Ok(mut tty) = terms.get_mut(e.terminal) {
+        if let Err(err) = tty.apply_selection(e.op) {
+            error!(%err);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
