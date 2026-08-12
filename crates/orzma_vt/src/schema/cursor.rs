@@ -1,3 +1,6 @@
+//! Cursor vocabulary: the live cursor and the vi-mode cursor.
+
+use crate::schema::ViewportPoint;
 use serde::{Deserialize, Serialize};
 
 /// Bit 0 of the packed `cursor_style` u32 — set when the cursor
@@ -9,17 +12,15 @@ pub const CURSOR_VISIBLE_BIT: u32 = 1;
 
 /// Vi-mode cursor position in viewport coordinates.
 ///
-/// When the user is in alacritty vi mode, the server
-/// always tries to keep the cursor inside the visible viewport via
+/// The VT keeps the vi cursor inside the visible viewport via
 /// `Term::scroll_display`. `in_scrollback` is the safety valve: when
-/// `true`, the cursor sits above the viewport, the client should skip
-/// rendering, and `row` is clamped to `-1`.
+/// `true`, the cursor sits above the viewport, the renderer skips it,
+/// and `point.row` is clamped to `-1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViCursor {
-    /// Viewport row; `-1` when `in_scrollback` is true.
-    pub row: i16,
-    /// Viewport column (0-based).
-    pub column: u16,
+    /// Viewport cell the vi cursor sits on. `row` is `-1` when
+    /// `in_scrollback` is true.
+    pub point: ViewportPoint,
     /// True when the vi cursor is above the viewport (in scrollback).
     pub in_scrollback: bool,
 }
@@ -27,10 +28,10 @@ pub struct ViCursor {
 /// Cursor state at snapshot time.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cursor {
-    /// Column position (0-based).
-    pub x: u16,
     /// Row position (0-based).
-    pub y: u16,
+    pub row: u16,
+    /// Column position (0-based).
+    pub column: u16,
     /// Visual shape selected by DECSCUSR.
     pub shape: CursorShape,
     /// True when DECSCUSR selects a blinking variant. Steady variants
