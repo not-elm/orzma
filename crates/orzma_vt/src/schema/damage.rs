@@ -1,12 +1,11 @@
 //! Damage collection and classification driving the coalescer's
 //! immediate-flush decision.
 
+#[cfg(feature = "alacritty")]
+use alacritty_terminal::{Term, term::TermDamage};
 use std::ops::BitOrAssign;
 
 /// Rows the VT reported dirty in a single damage cycle.
-///
-/// Backend-agnostic: the alacritty-specific reader lives with the
-/// backend as `DirtyRows::from_term`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DirtyRows {
     /// Entire viewport is dirty (resize, clear, alt-screen swap, reset).
@@ -26,8 +25,7 @@ impl DirtyRows {
     /// `Term::reset_damage()` after the matching emit — without it
     /// `damage.full` latches and every later cycle reports `Full`.
     #[cfg(feature = "alacritty")]
-    pub fn from_alacritty_term<T>(term: &mut alacritty_terminal::Term<T>) -> Self {
-        use alacritty_terminal::term::TermDamage;
+    pub fn from_alacritty_term<T>(term: &mut Term<T>) -> Self {
         match term.damage() {
             TermDamage::Full => Self::Full,
             TermDamage::Partial(iter) => Self::Rows(iter.map(|d| d.line as u16).collect()),

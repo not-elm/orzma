@@ -1,4 +1,4 @@
-//! Wire types for cell colors.
+//! Vocabulary for cell colors.
 //!
 //! Colors travel symbolically: [`Color::Indexed`] keeps its palette slot
 //! instead of a resolved triple. That is what lets an OSC 4 / OSC 104
@@ -37,7 +37,7 @@ pub enum Color {
 }
 
 impl Color {
-    /// Translates an alacritty cell color into its wire form.
+    /// Translates an alacritty cell color into this crate's form.
     ///
     /// `NamedColor` addresses alacritty's full 0..=268 color table, so the
     /// entries beyond the xterm-256 range have no [`Color::Indexed`]
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn default_background_stays_distinct_from_an_equal_explicit_rgb() {
         // Distinguishes "transparent, let the webview through" from "a TUI
-        // painted this exact color", which an RGB-resolved wire cannot.
+        // painted this exact color", which a resolved RGB value cannot.
         assert_ne!(
             Color::DefaultBackground,
             Color::Rgb(Rgb { r: 0, g: 0, b: 0 })

@@ -1,4 +1,4 @@
-//! Wire types for a row of attribute runs.
+//! Vocabulary for a row of attribute runs.
 
 use crate::schema::{Color, HyperlinkId};
 
@@ -22,9 +22,7 @@ pub struct Run {
     /// Background color.
     pub bg: Color,
     /// Style bitmask (see the `style` module). Widened from u8 to u16 so
-    /// HIDDEN (bit 6) and future underline variants fit. Wire-compatible:
-    /// rmp-serde picks the smallest msgpack int form per value, so masks
-    /// ≤ 127 still serialize to one byte.
+    /// HIDDEN (bit 6) and future underline variants fit.
     pub style: u16,
     /// UTF-8 text; the client uses Unicode East Asian Width to position each
     /// grapheme cluster within the run.

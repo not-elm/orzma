@@ -1,3 +1,5 @@
+//! Frame vocabulary: what one emit hands to the renderer.
+
 use crate::schema::{Cursor, DirtyRows, Hyperlink, SelectionRange, ViCursor};
 
 pub enum Frame {

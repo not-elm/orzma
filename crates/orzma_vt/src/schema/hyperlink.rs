@@ -1,28 +1,26 @@
-//! Wire types for OSC 8 hyperlinks.
+//! Vocabulary for OSC 8 hyperlinks.
 
-/// OSC 8 hyperlink: server-assigned wire id → URI mapping.
+/// OSC 8 hyperlink: an interned id → URI mapping.
 ///
-/// Wire id is a monotonic u32 assigned by `crate::vt::hyperlink::HyperlinkInterner`
-/// keyed by `(alacritty_id, uri)`. Cells reference these via `Run::hyperlink_id`.
+/// Cells reference these via `Run::hyperlink_id`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hyperlink {
-    /// Monotonic u32 wire id assigned server-side.
+    /// This hyperlink's id.
     pub id: HyperlinkId,
     /// The hyperlink target URI.
     pub uri: HyperlinkUri,
 }
-/// Wire-level monotonic hyperlink id.
+/// Monotonic hyperlink id.
 ///
 /// # Invariants
 ///
-/// Callers outside `HyperlinkInterner` MUST NOT construct `HyperlinkId(0)`;
-/// it is the universal "no hyperlink" sentinel used by `GpuCell.hyperlink_id`
-/// and the shader's `hyperlink_id != 0u` branch. The interner reserves it
-/// (see `crate::vt::hyperlink::HyperlinkInterner::new`).
+/// Callers outside the interner MUST NOT construct `HyperlinkId(0)`;
+/// it is the universal "no hyperlink" sentinel the renderer's
+/// `hyperlink_id != 0u` branch depends on.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct HyperlinkId(pub u32);
 
-/// OSC 8 hyperlink target URI.  
+/// OSC 8 hyperlink target URI.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct HyperlinkUri(String);
 

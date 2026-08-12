@@ -22,7 +22,7 @@ pub enum VtSignal {
         anchor: Option<InlineAnchor>,
     },
     /// Tracked `TermMode` flags that transitioned since the previous
-    /// signal drain, as wire mode names (e.g. "alt-screen").
+    /// signal drain, as mode names (e.g. "alt-screen").
     ModeChange {
         added: Vec<&'static str>,
         removed: Vec<&'static str>,

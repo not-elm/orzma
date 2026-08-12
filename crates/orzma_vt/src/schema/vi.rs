@@ -1,3 +1,5 @@
+//! Vi-mode vocabulary.
+
 /// The direction of a vi-mode switch.
 ///
 /// Named variants rather than a `bool` so the intent is readable at the
