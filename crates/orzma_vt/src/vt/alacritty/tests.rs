@@ -129,11 +129,11 @@ fn vt_with_history(history_rows: usize) -> AlacrittyVt {
 #[test]
 fn positive_delta_scrolls_into_history() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
-    assert_eq!(vt.display_offset(), 0);
+    assert_eq!(vt.display_offset(), DisplayOffset(0));
     vt.scroll(Scroll::Delta(3));
-    assert_eq!(vt.display_offset(), 3);
+    assert_eq!(vt.display_offset(), DisplayOffset(3));
     vt.scroll(Scroll::Delta(4));
-    assert_eq!(vt.display_offset(), 7);
+    assert_eq!(vt.display_offset(), DisplayOffset(7));
 }
 
 #[test]
@@ -141,19 +141,19 @@ fn negative_delta_scrolls_toward_the_live_tail() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
     vt.scroll(Scroll::Delta(7));
     vt.scroll(Scroll::Delta(-4));
-    assert_eq!(vt.display_offset(), 3);
+    assert_eq!(vt.display_offset(), DisplayOffset(3));
     vt.scroll(Scroll::Delta(-3));
-    assert_eq!(vt.display_offset(), 0);
+    assert_eq!(vt.display_offset(), DisplayOffset(0));
 }
 
 #[test]
 fn scroll_by_zero_leaves_the_viewport_untouched() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
     vt.scroll(Scroll::Delta(0));
-    assert_eq!(vt.display_offset(), 0);
+    assert_eq!(vt.display_offset(), DisplayOffset(0));
     vt.scroll(Scroll::Delta(4));
     vt.scroll(Scroll::Delta(0));
-    assert_eq!(vt.display_offset(), 4);
+    assert_eq!(vt.display_offset(), DisplayOffset(4));
 }
 
 // NOTE: the clamp bound must stay finite. `Grid::scroll_display` adds
@@ -163,9 +163,15 @@ fn scroll_by_zero_leaves_the_viewport_untouched() {
 fn scroll_clamps_at_the_top_of_history() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
     vt.scroll(Scroll::Delta(SEEDED_HISTORY_ROWS as i32 + 100));
-    assert_eq!(vt.display_offset(), SEEDED_HISTORY_ROWS as u32);
+    assert_eq!(
+        vt.display_offset(),
+        DisplayOffset(SEEDED_HISTORY_ROWS as u32)
+    );
     vt.scroll(Scroll::Delta(1));
-    assert_eq!(vt.display_offset(), SEEDED_HISTORY_ROWS as u32);
+    assert_eq!(
+        vt.display_offset(),
+        DisplayOffset(SEEDED_HISTORY_ROWS as u32)
+    );
 }
 
 #[test]
@@ -173,19 +179,19 @@ fn scroll_clamps_at_the_live_tail() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
     vt.scroll(Scroll::Delta(5));
     vt.scroll(Scroll::Delta(-1000));
-    assert_eq!(vt.display_offset(), 0);
+    assert_eq!(vt.display_offset(), DisplayOffset(0));
     vt.scroll(Scroll::Delta(-1000));
-    assert_eq!(vt.display_offset(), 0);
+    assert_eq!(vt.display_offset(), DisplayOffset(0));
 }
 
 #[test]
 fn scroll_without_scrollback_is_a_noop() {
     let mut vt = vt_after(b"one\r\ntwo\r\nthree");
     vt.scroll(Scroll::Delta(5));
-    assert_eq!(vt.display_offset(), 0);
+    assert_eq!(vt.display_offset(), DisplayOffset(0));
     let mut vt = vt_with_history(0);
     vt.scroll(Scroll::Delta(5));
-    assert_eq!(vt.display_offset(), 0);
+    assert_eq!(vt.display_offset(), DisplayOffset(0));
 }
 
 // NOTE: the history must be seeded on the primary screen before switching,
@@ -198,7 +204,7 @@ fn scroll_on_the_alternate_screen_is_a_noop() {
     vt.interpret(b"\x1b[?1049h");
     assert!(vt.modes().alt_screen);
     vt.scroll(Scroll::Delta(5));
-    assert_eq!(vt.display_offset(), 0);
+    assert_eq!(vt.display_offset(), DisplayOffset(0));
 }
 
 /// Asserts that the live-tail predicate follows the viewport in both
@@ -233,17 +239,17 @@ fn absolute_and_paged_scrolls_map_to_their_directions() {
     let history = usize::from(GRID_ROWS) + SEEDED_HISTORY_ROWS;
     let mut vt = vt_with_history(history);
     vt.scroll(Scroll::PageUp);
-    assert_eq!(vt.display_offset(), u32::from(GRID_ROWS));
+    assert_eq!(vt.display_offset(), DisplayOffset(u32::from(GRID_ROWS)));
     vt.scroll(Scroll::PageDown);
-    assert_eq!(vt.display_offset(), 0);
+    assert_eq!(vt.display_offset(), DisplayOffset(0));
     vt.scroll(Scroll::HalfPageUp);
-    assert_eq!(vt.display_offset(), u32::from(GRID_ROWS / 2));
+    assert_eq!(vt.display_offset(), DisplayOffset(u32::from(GRID_ROWS / 2)));
     vt.scroll(Scroll::HalfPageDown);
-    assert_eq!(vt.display_offset(), 0);
+    assert_eq!(vt.display_offset(), DisplayOffset(0));
     vt.scroll(Scroll::Top);
-    assert_eq!(vt.display_offset(), history as u32);
+    assert_eq!(vt.display_offset(), DisplayOffset(history as u32));
     vt.scroll(Scroll::Bottom);
-    assert_eq!(vt.display_offset(), 0);
+    assert_eq!(vt.display_offset(), DisplayOffset(0));
 }
 
 /// Asserts that a scroll which moved the viewport stages full
@@ -438,7 +444,7 @@ fn a_viewport_fully_in_scrollback_stages_empty_damage() {
     vt.scroll(Scroll::Delta(i32::from(GRID_ROWS)));
     assert_eq!(
         vt.display_offset(),
-        u32::from(GRID_ROWS),
+        DisplayOffset(u32::from(GRID_ROWS)),
         "precondition: the viewport must sit entirely in scrollback"
     );
     drain_staged(&mut vt);

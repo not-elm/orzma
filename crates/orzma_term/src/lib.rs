@@ -416,9 +416,9 @@ mod tests {
     fn scroll_moves_the_viewport() {
         let (mut term, _sink) = term_with_history(10);
         term.scroll(Scroll::Delta(3));
-        assert_eq!(term.vt.display_offset(), 3);
+        assert_eq!(term.vt.display_offset(), DisplayOffset(3));
         term.scroll(Scroll::Delta(-2));
-        assert_eq!(term.vt.display_offset(), 1);
+        assert_eq!(term.vt.display_offset(), DisplayOffset(1));
     }
 
     /// Asserts that a scroll which moved the viewport arms the
@@ -509,7 +509,7 @@ mod tests {
         term.write_paste("x").expect("write_paste");
         assert_eq!(
             term.vt.display_offset(),
-            0,
+            DisplayOffset(0),
             "input must snap to the live tail"
         );
         assert!(

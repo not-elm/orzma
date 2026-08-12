@@ -2,6 +2,8 @@
 //! cursor, and backend grid translation.
 
 #[cfg(feature = "alacritty")]
+use crate::schema::DisplayOffset;
+#[cfg(feature = "alacritty")]
 use alacritty_terminal::index::Point;
 
 /// A cell in viewport coordinates: `row` counted from the top of the
@@ -31,9 +33,9 @@ impl ViewportPoint {
     /// `p.line` counts from the top of the active area and goes negative
     /// into scrollback; `display_offset` shifts that back into a row
     /// relative to the top of the currently visible viewport.
-    pub fn from_alacritty_point(p: Point, display_offset: u32) -> Self {
+    pub fn from_alacritty_point(p: Point, display_offset: DisplayOffset) -> Self {
         Self {
-            row: (p.line.0 as i64 + display_offset as i64) as i16,
+            row: (p.line.0 as i64 + i64::from(display_offset.0)) as i16,
             column: p.column.0 as u16,
         }
     }

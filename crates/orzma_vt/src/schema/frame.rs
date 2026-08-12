@@ -1,6 +1,6 @@
 //! Frame vocabulary: what one emit hands to the renderer.
 
-use crate::schema::{Cursor, Damage, Hyperlink, SelectionRange, ViCursor};
+use crate::schema::{Cursor, Damage, DisplayOffset, Hyperlink, SelectionRange, ViCursor};
 
 pub enum Frame {
     Snapshot(FrameSnapshot),
@@ -26,8 +26,8 @@ pub struct FrameDelta {
     /// itself is NOT cumulative; only the ids referenced by this delta's
     /// damaged rows are included.
     pub hyperlinks: Vec<Hyperlink>,
-    /// Lines scrolled back from the live tail. `0` = at live tail.
-    pub display_offset: u32,
+    /// Lines scrolled back from the live tail.
+    pub display_offset: DisplayOffset,
     /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.

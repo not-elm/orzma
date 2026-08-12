@@ -1,8 +1,8 @@
 //! Engine layer: the [`OrzmaVt`] contract and its backends.
 
 use crate::schema::{
-    Damage, DamageVerdict, Frame, Scroll, SelectionKind, SelectionOp, SelectionRange, ViModeSwitch,
-    VtModes, VtResult, VtSignal,
+    Damage, DamageVerdict, DisplayOffset, Frame, Scroll, SelectionKind, SelectionOp,
+    SelectionRange, ViModeSwitch, VtModes, VtResult, VtSignal,
 };
 
 mod apc;
@@ -33,23 +33,15 @@ impl<B: VtBackend> OrzmaVt<B> {
 pub trait VtBackend: Sized {
     fn new(cols: u16, rows: u16) -> Self;
 
-    /// Number of rows the viewport sits above the live tail.
+    /// Number of scrollback rows the viewport sits above the live tail.
     ///
-    /// `0` means the viewport is pinned to the live tail; a positive
-    /// value counts the scrollback rows showing above it. The unit is
-    /// grid rows, and the value never exceeds the backend's scrollback
-    /// capacity.
-    ///
-    /// # Invariants
-    ///
-    /// The alternate screen carries no scrollback, so this stays `0`
-    /// for as long as it is active.
-    fn display_offset(&self) -> u32;
+    /// [`DisplayOffset`] carries the value's unit and invariants.
+    fn display_offset(&self) -> DisplayOffset;
 
     /// Returns `true` when the viewport is pinned to the live tail.
     #[inline]
     fn is_at_live_tail(&self) -> bool {
-        self.display_offset() == 0
+        self.display_offset() == DisplayOffset(0)
     }
 
     /// Interprets a chunk of the PTY byte stream, mutating the terminal

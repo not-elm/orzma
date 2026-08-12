@@ -39,7 +39,7 @@ fn apply_scroll(e: On<RequestTermScroll>, mut terms: Query<&mut OrzmaTermHandle>
 mod tests {
     use super::*;
     use crate::OrzmaTermHandle;
-    use orzma_vt::prelude::VtBackend;
+    use orzma_vt::prelude::{DisplayOffset, VtBackend};
 
     // NOTE: on the 24-row grid the first 23 newlines only fill the
     // viewport (alacritty pushes a row into history once the cursor
@@ -63,7 +63,7 @@ mod tests {
             .trigger(RequestTermScroll { terminal, scroll });
     }
 
-    fn display_offset(app: &mut App, terminal: Entity) -> u32 {
+    fn display_offset(app: &mut App, terminal: Entity) -> DisplayOffset {
         app.world_mut()
             .get_mut::<OrzmaTermHandle>(terminal)
             .expect("terminal entity must keep its handle")
@@ -80,9 +80,9 @@ mod tests {
     fn scroll_up_and_down_move_the_viewport_relatively() {
         let (mut app, terminal) = app_with_terminal(10);
         trigger_scroll(&mut app, terminal, Scroll::Delta(3));
-        assert_eq!(display_offset(&mut app, terminal), 3);
+        assert_eq!(display_offset(&mut app, terminal), DisplayOffset(3));
         trigger_scroll(&mut app, terminal, Scroll::Delta(-2));
-        assert_eq!(display_offset(&mut app, terminal), 1);
+        assert_eq!(display_offset(&mut app, terminal), DisplayOffset(1));
     }
 
     /// Asserts that `Top` lands on the oldest retained line and
@@ -95,9 +95,9 @@ mod tests {
     fn scroll_top_and_bottom_jump_to_the_extremes() {
         let (mut app, terminal) = app_with_terminal(10);
         trigger_scroll(&mut app, terminal, Scroll::Top);
-        assert_eq!(display_offset(&mut app, terminal), 10);
+        assert_eq!(display_offset(&mut app, terminal), DisplayOffset(10));
         trigger_scroll(&mut app, terminal, Scroll::Bottom);
-        assert_eq!(display_offset(&mut app, terminal), 0);
+        assert_eq!(display_offset(&mut app, terminal), DisplayOffset(0));
     }
 
     /// Asserts the agreed page semantics: one page is the full grid
@@ -112,12 +112,12 @@ mod tests {
     fn paged_scrolls_move_by_screenfuls() {
         let (mut app, terminal) = app_with_terminal(40);
         trigger_scroll(&mut app, terminal, Scroll::PageUp);
-        assert_eq!(display_offset(&mut app, terminal), 24);
+        assert_eq!(display_offset(&mut app, terminal), DisplayOffset(24));
         trigger_scroll(&mut app, terminal, Scroll::HalfPageUp);
-        assert_eq!(display_offset(&mut app, terminal), 36);
+        assert_eq!(display_offset(&mut app, terminal), DisplayOffset(36));
         trigger_scroll(&mut app, terminal, Scroll::HalfPageDown);
-        assert_eq!(display_offset(&mut app, terminal), 24);
+        assert_eq!(display_offset(&mut app, terminal), DisplayOffset(24));
         trigger_scroll(&mut app, terminal, Scroll::PageDown);
-        assert_eq!(display_offset(&mut app, terminal), 0);
+        assert_eq!(display_offset(&mut app, terminal), DisplayOffset(0));
     }
 }

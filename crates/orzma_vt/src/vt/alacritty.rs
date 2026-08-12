@@ -2,8 +2,9 @@
 
 use crate::{
     schema::{
-        Damage, DamageVerdict, Frame, MouseEncoding, MouseTracking, Scroll, SelectionKind,
-        SelectionOp, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
+        Damage, DamageVerdict, DisplayOffset, Frame, MouseEncoding, MouseTracking, Scroll,
+        SelectionKind, SelectionOp, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult,
+        VtSignal,
     },
     vt::{VtBackend, apc::ApcState},
 };
@@ -51,8 +52,8 @@ impl VtBackend for AlacrittyVt {
     }
 
     #[inline]
-    fn display_offset(&self) -> u32 {
-        self.term.grid().display_offset() as u32
+    fn display_offset(&self) -> DisplayOffset {
+        DisplayOffset(self.term.grid().display_offset() as u32)
     }
 
     fn interpret(&mut self, chunk: &[u8]) -> Option<DamageVerdict> {
@@ -189,7 +190,7 @@ impl AlacrittyVt {
     /// names a real scrollback row, and `Selection::to_range` clamps to
     /// the grid on its own.
     fn grid_point(&self, cell: ViewportPoint) -> Point {
-        let display_offset = self.term.grid().display_offset() as i32;
+        let display_offset = self.display_offset().0 as i32;
         Point::new(
             Line(i32::from(cell.row) - display_offset),
             Column(usize::from(cell.column)),
