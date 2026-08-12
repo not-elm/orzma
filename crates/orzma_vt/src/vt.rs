@@ -33,7 +33,7 @@ pub trait OrzmaVt: Sized {
 
     /// Returns `true` when the viewport is pinned to the live tail.
     #[inline]
-    fn at_scroll_bottom(&self) -> bool {
+    fn is_at_live_tail(&self) -> bool {
         self.display_offset() == 0
     }
 
