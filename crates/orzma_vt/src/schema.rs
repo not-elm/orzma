@@ -21,6 +21,7 @@ mod scroll;
 mod selection;
 mod signal;
 mod vi;
+mod viewport;
 mod webview;
 
 pub use color::*;
@@ -35,4 +36,5 @@ pub use scroll::*;
 pub use selection::*;
 pub use signal::*;
 pub use vi::*;
+pub use viewport::*;
 pub use webview::*;
