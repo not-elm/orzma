@@ -1,7 +1,6 @@
 //! Cursor vocabulary: the live cursor and the vi-mode cursor.
 
 use crate::schema::ViewportPoint;
-use serde::{Deserialize, Serialize};
 
 /// Bit 0 of the packed `cursor_style` u32 — set when the cursor
 /// should be drawn. The WGSL shader short-circuits when this bit is
@@ -16,7 +15,7 @@ pub const CURSOR_VISIBLE_BIT: u32 = 1;
 /// `Term::scroll_display`. `in_scrollback` is the safety valve: when
 /// `true`, the cursor sits above the viewport, the renderer skips it,
 /// and `point.row` is clamped to `-1`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViCursor {
     /// Viewport cell the vi cursor sits on. `row` is `-1` when
     /// `in_scrollback` is true.
@@ -26,7 +25,7 @@ pub struct ViCursor {
 }
 
 /// Cursor state at snapshot time.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Cursor {
     /// Row position (0-based).
     pub row: u16,
@@ -56,8 +55,7 @@ impl Cursor {
 }
 
 /// Terminal cursor shape.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CursorShape {
     /// Block cursor.
     #[default]

@@ -1,10 +1,9 @@
 //! Wire types for a row of attribute runs.
 
 use crate::schema::{Color, HyperlinkId};
-use serde::{Deserialize, Serialize};
 
 /// A row of runs ordered left-to-right.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Row {
     /// Runs in left-to-right column order.
     pub runs: Vec<Run>,
@@ -14,7 +13,7 @@ pub struct Row {
 ///
 /// Wide-char spacers (alacritty internal) are absorbed server-side and do
 /// not appear in `text`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Run {
     /// Total column span (sum of grapheme cluster widths in `text`).
     pub cols: u16,

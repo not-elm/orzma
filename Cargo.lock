@@ -5096,7 +5096,6 @@ name = "orzma_vt"
 version = "0.2.0-dev"
 dependencies = [
  "alacritty_terminal",
- "serde",
  "thiserror 2.0.18",
  "unicode-width 0.2.0",
  "vtparse",

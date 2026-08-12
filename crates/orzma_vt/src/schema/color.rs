@@ -9,7 +9,6 @@
 
 #[cfg(feature = "alacritty")]
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor, Rgb as ARgb};
-use serde::{Deserialize, Serialize};
 
 /// A cell color, carrying its source rather than a resolved value.
 ///
@@ -24,8 +23,7 @@ use serde::{Deserialize, Serialize};
 /// an equal [`Color::Rgb`]: the default background renders transparent so
 /// webview overlays composite through it, while an explicitly-set
 /// background occludes them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Color {
     /// The terminal default foreground (`SGR 39`, recolored by OSC 10).
     DefaultForeground,
@@ -95,7 +93,7 @@ impl Color {
 }
 
 /// A 24-bit sRGB color.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb {
     /// Red channel.
     pub r: u8,
