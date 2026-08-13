@@ -239,13 +239,15 @@ mod tests {
     }
 
     /// Asserts that a kind-change request switches the active
-    /// selection's granularity in the targeted entity's VT.
+    /// selection's granularity while routing through `change_selection_kind`
+    /// rather than re-anchoring at the vi cursor.
     ///
-    /// Case: the user presses `V` while a `v` selection is active.
+    /// Case: the user presses `V` while a character-wise selection
+    /// anchored on a lower row is active.
     #[test]
     fn a_kind_change_request_switches_the_granularity() {
-        let (mut app, terminal) = app_with_terminal(b"abcdefghij");
-        start_simple(&mut app, terminal, 0, 0);
+        let (mut app, terminal) = app_with_terminal(b"abcdefghij\r\nklmnopqrst");
+        start_simple(&mut app, terminal, 0, 1);
         app.world_mut().trigger(RequestTermSelectionKindChange {
             terminal,
             kind: SelectionKind::Lines,
@@ -253,6 +255,10 @@ mod tests {
         assert_eq!(
             selection_kind(&mut app, terminal),
             Some(SelectionKind::Lines)
+        );
+        assert_eq!(
+            selected_text(&mut app, terminal).as_deref(),
+            Some("abcdefghij\nklmnopqrst\n")
         );
     }
 }
