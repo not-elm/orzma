@@ -83,10 +83,10 @@ impl Plugin for SelectionPlugin {
 }
 
 fn start_selection(e: On<RequestTermSelectionStart>, mut terms: Query<&mut OrzmaTermHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal) {
-        if let Err(err) = tty.start_selection(e.cell, e.side, e.kind) {
-            error!(%err);
-        }
+    if let Ok(mut tty) = terms.get_mut(e.terminal)
+        && let Err(err) = tty.start_selection(e.cell, e.side, e.kind)
+    {
+        error!(%err);
     }
 }
 
@@ -94,18 +94,18 @@ fn start_selection_at_vi_cursor(
     e: On<RequestTermSelectionStartAtViCursor>,
     mut terms: Query<&mut OrzmaTermHandle>,
 ) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal) {
-        if let Err(err) = tty.start_selection_at_vi_cursor(e.kind) {
-            error!(%err);
-        }
+    if let Ok(mut tty) = terms.get_mut(e.terminal)
+        && let Err(err) = tty.start_selection_at_vi_cursor(e.kind)
+    {
+        error!(%err);
     }
 }
 
 fn update_selection(e: On<RequestTermSelectionUpdate>, mut terms: Query<&mut OrzmaTermHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal) {
-        if let Err(err) = tty.update_selection(e.cell, e.side) {
-            error!(%err);
-        }
+    if let Ok(mut tty) = terms.get_mut(e.terminal)
+        && let Err(err) = tty.update_selection(e.cell, e.side)
+    {
+        error!(%err);
     }
 }
 
@@ -113,18 +113,18 @@ fn change_selection_kind(
     e: On<RequestTermSelectionKindChange>,
     mut terms: Query<&mut OrzmaTermHandle>,
 ) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal) {
-        if let Err(err) = tty.change_selection_kind(e.kind) {
-            error!(%err);
-        }
+    if let Ok(mut tty) = terms.get_mut(e.terminal)
+        && let Err(err) = tty.change_selection_kind(e.kind)
+    {
+        error!(%err);
     }
 }
 
 fn clear_selection(e: On<RequestTermSelectionClear>, mut terms: Query<&mut OrzmaTermHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal) {
-        if let Err(err) = tty.clear_selection() {
-            error!(%err);
-        }
+    if let Ok(mut tty) = terms.get_mut(e.terminal)
+        && let Err(err) = tty.clear_selection()
+    {
+        error!(%err);
     }
 }
 

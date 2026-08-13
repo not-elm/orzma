@@ -155,29 +155,21 @@ impl VtSelection for AlacrittyVtBackend {
         side: CellSide,
     ) -> VtResult<Option<Damage>> {
         let point = self.grid_point(cell);
-        let damage = match self.term.selection.as_mut() {
-            Some(selection) => {
-                let s: Side = side.into();
-                selection.update(point, s);
-                Some(Damage::Full)
-            }
-            None => None,
-        };
-        Ok(damage)
+        let side = Side::from(side);
+        Ok(self.term.selection.as_mut().map(|selection| {
+            selection.update(point, side);
+            Damage::Full
+        }))
     }
 
     fn change_selection_kind(&mut self, kind: SelectionKind) -> VtResult<Option<Damage>> {
         let vi_point = self.term.vi_mode_cursor.point;
-        let damage = match self.term.selection.as_mut() {
-            Some(selection) => {
-                selection.ty = kind.into();
-                selection.update(vi_point, Side::Left);
-                selection.include_all();
-                Some(Damage::Full)
-            }
-            None => None,
-        };
-        Ok(damage)
+        Ok(self.term.selection.as_mut().map(|selection| {
+            selection.ty = kind.into();
+            selection.update(vi_point, Side::Left);
+            selection.include_all();
+            Damage::Full
+        }))
     }
 
     fn clear_selection(&mut self) -> VtResult<Option<Damage>> {
