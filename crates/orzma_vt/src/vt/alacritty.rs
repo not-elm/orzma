@@ -20,7 +20,7 @@ use alacritty_terminal::{
 use std::iter;
 use vtparse::VTParser;
 
-pub struct AlacrittyVt {
+pub struct AlacrittyVtBackend {
     processor: Processor,
     term: Term<OrzmaTermEventHandler>,
     apc_state: ApcState,
@@ -35,7 +35,7 @@ pub struct AlacrittyVt {
     pending_damage: Option<Damage>,
 }
 
-impl VtBackend for AlacrittyVt {
+impl VtBackend for AlacrittyVtBackend {
     /// Builds a VT backed by an alacritty `Term` at the given grid size.
     fn new(cols: u16, rows: u16) -> Self {
         Self {
@@ -183,7 +183,7 @@ impl VtBackend for AlacrittyVt {
     }
 }
 
-impl AlacrittyVt {
+impl AlacrittyVtBackend {
     /// Resolves a viewport cell onto the grid row it currently sits on.
     ///
     /// alacritty's `Line` counts from the top of the active screen area

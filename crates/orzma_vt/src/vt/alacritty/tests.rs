@@ -1,11 +1,11 @@
-//! Tests for [`AlacrittyVt`].
+//! Tests for [`AlacrittyVtBackend`].
 
 use super::*;
 use crate::schema::{CellSide, SelectionGeometry};
 use alacritty_terminal::index::Point as AlacPoint;
 
-fn vt_after(bytes: &[u8]) -> AlacrittyVt {
-    let mut vt = AlacrittyVt::new(80, 24);
+fn vt_after(bytes: &[u8]) -> AlacrittyVtBackend {
+    let mut vt = AlacrittyVtBackend::new(80, 24);
     vt.interpret(bytes);
     vt
 }
@@ -21,7 +21,7 @@ fn baseline() -> VtModes {
 
 #[test]
 fn fresh_terminal_reports_alacritty_baseline() {
-    let vt = AlacrittyVt::new(80, 24);
+    let vt = AlacrittyVtBackend::new(80, 24);
     assert_eq!(vt.modes(), baseline());
 }
 
@@ -35,7 +35,7 @@ fn fresh_terminal_reports_alacritty_baseline() {
 /// correct one.
 #[test]
 fn resize_updates_the_grid_size() {
-    let mut vt = AlacrittyVt::new(80, 24);
+    let mut vt = AlacrittyVtBackend::new(80, 24);
     vt.resize(120, 40);
     assert_eq!(
         vt.grid_size(),
@@ -55,7 +55,7 @@ fn resize_updates_the_grid_size() {
 /// arrives (the trait doc pins this repaint contract).
 #[test]
 fn resize_stages_full_damage() {
-    let mut vt = AlacrittyVt::new(80, 24);
+    let mut vt = AlacrittyVtBackend::new(80, 24);
     drain_staged(&mut vt);
     vt.resize(120, 40);
     assert_eq!(vt.pending_damage, Some(Damage::Full));
@@ -69,7 +69,7 @@ fn resize_stages_full_damage() {
 #[test]
 fn grid_size_maps_cols_and_rows_from_the_term() {
     assert_eq!(
-        AlacrittyVt::new(80, 24).grid_size(),
+        AlacrittyVtBackend::new(80, 24).grid_size(),
         GridSize { cols: 80, rows: 24 }
     );
 }
@@ -124,7 +124,7 @@ const SEEDED_HISTORY_ROWS: usize = 10;
 // of a 24-row grid fill the viewport without growing `history_size`. The
 // precondition assert keeps a change in that accounting from silently
 // collapsing every `display_offset` expectation below to zero.
-fn vt_with_history(history_rows: usize) -> AlacrittyVt {
+fn vt_with_history(history_rows: usize) -> AlacrittyVtBackend {
     let bytes: Vec<u8> = (0..history_rows + VIEWPORT_FILL_ROWS)
         .flat_map(|i| format!("l{i}\r\n").into_bytes())
         .collect();
@@ -324,20 +324,20 @@ const GRID_ROWS: u16 = 24;
 // test that wants to observe only what its own bytes staged must clear
 // both halves — the staged value AND alacritty's accumulator. Stands in
 // for `frames()`, which is still `todo!()`.
-fn drain_staged(vt: &mut AlacrittyVt) {
+fn drain_staged(vt: &mut AlacrittyVtBackend) {
     vt.pending_damage = None;
     vt.term.reset_damage();
 }
 
 #[test]
 fn empty_chunk_is_not_a_cycle() {
-    let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+    let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     assert_eq!(vt.interpret(b""), None);
 }
 
 #[test]
 fn empty_chunk_leaves_staged_damage_untouched() {
-    let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+    let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     drain_staged(&mut vt);
     vt.interpret(b"hi");
     let staged = vt.pending_damage.clone();
@@ -355,20 +355,20 @@ fn empty_chunk_leaves_staged_damage_untouched() {
 #[test]
 fn the_first_interpret_on_a_fresh_vt_reports_full() {
     // Whatever the chunk contains: the bootstrap `Full` outranks it.
-    let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+    let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     assert_eq!(vt.interpret(b"x"), Some(DamageVerdict::Full));
 }
 
 #[test]
 fn a_single_row_write_classifies_as_at_most_one_row() {
-    let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+    let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     drain_staged(&mut vt);
     assert_eq!(vt.interpret(b"hi"), Some(DamageVerdict::AtMostOneRow));
 }
 
 #[test]
 fn a_multi_row_write_classifies_as_many_rows() {
-    let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+    let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     drain_staged(&mut vt);
     assert_eq!(
         vt.interpret(b"one\r\ntwo\r\nthree"),
@@ -378,14 +378,14 @@ fn a_multi_row_write_classifies_as_many_rows() {
 
 #[test]
 fn insert_mode_classifies_as_full() {
-    let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+    let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     drain_staged(&mut vt);
     assert_eq!(vt.interpret(b"\x1b[4h"), Some(DamageVerdict::Full));
 }
 
 #[test]
 fn interpret_stages_the_damage_it_classified() {
-    let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+    let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     drain_staged(&mut vt);
     assert_eq!(
         vt.interpret(b"one\r\ntwo\r\nthree"),
@@ -407,7 +407,7 @@ fn interpret_stages_the_damage_it_classified() {
 /// way and does not guard the merge on its own.
 #[test]
 fn staged_damage_accumulates_across_chunks() {
-    let mut vt = AlacrittyVt::new(80, GRID_ROWS);
+    let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     drain_staged(&mut vt);
     vt.interpret(b"a");
     vt.interpret(b"\r\n\r\nb");
@@ -433,7 +433,7 @@ fn a_fresh_vt_stages_bootstrap_full_damage() {
     // finds nothing staged and the bootstrap paint never reaches the
     // renderer.
     assert_eq!(
-        AlacrittyVt::new(80, GRID_ROWS).pending_damage,
+        AlacrittyVtBackend::new(80, GRID_ROWS).pending_damage,
         Some(Damage::Full)
     );
 }
@@ -466,7 +466,7 @@ fn cell(x: u16, y: i16) -> ViewportPoint {
     ViewportPoint { row: y, column: x }
 }
 
-fn start_simple(vt: &mut AlacrittyVt, x: u16, y: i16) {
+fn start_simple(vt: &mut AlacrittyVtBackend, x: u16, y: i16) {
     vt.apply_selection(SelectionOp::StartAt {
         cell: cell(x, y),
         side: CellSide::Left,
@@ -475,7 +475,7 @@ fn start_simple(vt: &mut AlacrittyVt, x: u16, y: i16) {
     .unwrap();
 }
 
-fn update_to(vt: &mut AlacrittyVt, x: u16, y: i16, side: CellSide) {
+fn update_to(vt: &mut AlacrittyVtBackend, x: u16, y: i16, side: CellSide) {
     vt.apply_selection(SelectionOp::UpdateTo {
         cell: cell(x, y),
         side,
@@ -483,7 +483,7 @@ fn update_to(vt: &mut AlacrittyVt, x: u16, y: i16, side: CellSide) {
     .unwrap();
 }
 
-fn enter_vi_at(vt: &mut AlacrittyVt, x: usize, y: i32) {
+fn enter_vi_at(vt: &mut AlacrittyVtBackend, x: usize, y: i32) {
     vt.term.toggle_vi_mode();
     vt.term.vi_mode_cursor.point = AlacPoint::new(Line(y), Column(x));
 }
@@ -770,7 +770,10 @@ fn no_op_selection_ops_preserve_staged_damage() {
 /// default would paint a phantom selection on boot.
 #[test]
 fn selection_range_is_none_on_a_fresh_vt() {
-    assert_eq!(AlacrittyVt::new(80, GRID_ROWS).selection_range(), None);
+    assert_eq!(
+        AlacrittyVtBackend::new(80, GRID_ROWS).selection_range(),
+        None
+    );
 }
 
 /// Asserts that display scrolling shifts the projected viewport rows

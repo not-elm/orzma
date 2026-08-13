@@ -11,7 +11,7 @@ mod apc;
 mod alacritty;
 
 #[cfg(feature = "alacritty")]
-pub use alacritty::AlacrittyVt;
+pub use alacritty::AlacrittyVtBackend;
 
 pub struct OrzmaVt<B: VtBackend> {
     backend: B,

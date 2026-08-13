@@ -228,22 +228,22 @@ mod tests {
     use super::*;
     use crate::test_support::{CaptureSink, FailingMaster};
 
-    fn detached_term() -> (OrzmaTerm<AlacrittyVt>, CaptureSink) {
+    fn detached_term() -> (OrzmaTerm<AlacrittyVtBackend>, CaptureSink) {
         let sink = CaptureSink::default();
         let term =
             OrzmaTerm::detached(80, 24, Box::new(sink.clone())).expect("OrzmaTerm::detached");
         (term, sink)
     }
 
-    fn failing_term() -> OrzmaTerm<AlacrittyVt> {
+    fn failing_term() -> OrzmaTerm<AlacrittyVtBackend> {
         OrzmaTerm {
-            vt: AlacrittyVt::new(80, 24),
+            vt: AlacrittyVtBackend::new(80, 24),
             coalescer: Coalescer::default(),
             pty: Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default())),
         }
     }
 
-    fn sizes(term: &OrzmaTerm<AlacrittyVt>) -> ((u16, u16), (u16, u16)) {
+    fn sizes(term: &OrzmaTerm<AlacrittyVtBackend>) -> ((u16, u16), (u16, u16)) {
         let pty = term.pty_size();
         let grid = term.vt.grid_size();
         ((pty.cols, pty.rows), (grid.cols, grid.rows))
@@ -330,8 +330,8 @@ mod tests {
     /// boundary without actually allocating a huge grid.
     #[test]
     fn an_oversized_axis_resize_is_ignored() {
-        const MAX_COLS: u16 = OrzmaTerm::<AlacrittyVt>::MAX_COLS;
-        const MAX_ROWS: u16 = OrzmaTerm::<AlacrittyVt>::MAX_ROWS;
+        const MAX_COLS: u16 = OrzmaTerm::<AlacrittyVtBackend>::MAX_COLS;
+        const MAX_ROWS: u16 = OrzmaTerm::<AlacrittyVtBackend>::MAX_ROWS;
         let (mut term, _sink) = detached_term();
         for (cols, rows) in [(MAX_COLS + 1, 24), (80, MAX_ROWS + 1)] {
             term.resize(cols, rows).expect("ignored resize must be Ok");
@@ -355,7 +355,7 @@ mod tests {
     fn an_ignored_resize_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
         term.resize(0, 40).expect("ignored resize must be Ok");
-        term.resize(OrzmaTerm::<AlacrittyVt>::MAX_COLS + 1, 24)
+        term.resize(OrzmaTerm::<AlacrittyVtBackend>::MAX_COLS + 1, 24)
             .expect("ignored resize must be Ok");
         assert!(!term.coalescer.is_armed());
     }
@@ -402,7 +402,7 @@ mod tests {
     // viewport (alacritty pushes a row into history once the cursor
     // already sits on the last screen line), so `history_rows + 23`
     // lines seed exactly `history_rows`.
-    fn term_with_history(history_rows: usize) -> (OrzmaTerm<AlacrittyVt>, CaptureSink) {
+    fn term_with_history(history_rows: usize) -> (OrzmaTerm<AlacrittyVtBackend>, CaptureSink) {
         let (mut term, sink) = detached_term();
         let seed: Vec<u8> = (0..history_rows + 23)
             .flat_map(|i| format!("l{i}\r\n").into_bytes())

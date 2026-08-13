@@ -2,7 +2,7 @@ use bevy::prelude::*;
 #[cfg(test)]
 use orzma_term::test_support::CaptureSink;
 use orzma_term::{OrzmaTerm, SpawnOptions, prelude::OrzmaTermResult};
-use orzma_vt::prelude::AlacrittyVt;
+use orzma_vt::prelude::AlacrittyVtBackend;
 
 use crate::{requests::OrzmaEventRequestPlugin, signals::OrzmaTermSignalPlugin};
 
@@ -14,7 +14,7 @@ pub mod prelude {
 }
 
 #[derive(Component, Deref, DerefMut)]
-pub struct OrzmaTermHandle(OrzmaTerm<AlacrittyVt>);
+pub struct OrzmaTermHandle(OrzmaTerm<AlacrittyVtBackend>);
 
 impl OrzmaTermHandle {
     pub fn new(options: SpawnOptions) -> OrzmaTermResult<Self> {
