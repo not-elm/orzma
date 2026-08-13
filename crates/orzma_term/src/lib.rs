@@ -128,21 +128,6 @@ impl<V: VtBackend> OrzmaTerm<V> {
         }
     }
 
-    /// Applies one selection operation.
-    ///
-    /// Arms the coalescer only when the visible selection actually
-    /// changed, detected by comparing [`VtBackend::selection_range`]
-    /// before and after — the same gate [`Self::scroll`] applies via
-    /// `display_offset`.
-    pub fn apply_selection(&mut self, op: SelectionOp) -> VtResult {
-        let prev_range = self.vt.selection_range();
-        self.vt.apply_selection(op)?;
-        if prev_range != self.vt.selection_range() {
-            self.coalescer.arm_or_extend(Instant::now());
-        }
-        Ok(())
-    }
-
     /// Resizes both the PTY (kernel winsize) and the VT grid, then arms
     /// the coalescer so the reflow repaints at the next deadline even
     /// on an otherwise idle terminal.
@@ -220,6 +205,55 @@ impl<V: VtBackend> OrzmaTerm<V> {
         if !self.vt.is_at_live_tail() {
             self.scroll(Scroll::Bottom);
         }
+    }
+}
+
+impl<V: VtBackend + VtSelection> OrzmaTerm<V> {
+    /// Anchors a new selection at an explicit viewport cell (mouse
+    /// press).
+    pub fn start_selection(
+        &mut self,
+        cell: ViewportPoint,
+        side: CellSide,
+        kind: SelectionKind,
+    ) -> VtResult {
+        self.arm_on_selection_change(|vt| vt.start_selection(cell, side, kind))
+    }
+
+    /// Anchors a new selection at the vi cursor (vi-mode `v` / `V`).
+    pub fn start_selection_at_vi_cursor(&mut self, kind: SelectionKind) -> VtResult {
+        self.arm_on_selection_change(|vt| vt.start_selection_at_vi_cursor(kind))
+    }
+
+    /// Moves the moving end of the active selection (mouse drag).
+    pub fn update_selection(&mut self, cell: ViewportPoint, side: CellSide) -> VtResult {
+        self.arm_on_selection_change(|vt| vt.update_selection(cell, side))
+    }
+
+    /// Switches selection granularity while keeping the anchor.
+    pub fn change_selection_kind(&mut self, kind: SelectionKind) -> VtResult {
+        self.arm_on_selection_change(|vt| vt.change_selection_kind(kind))
+    }
+
+    /// Drops any active selection.
+    pub fn clear_selection(&mut self) -> VtResult {
+        self.arm_on_selection_change(|vt| vt.clear_selection())
+    }
+
+    /// Applies one selection operation and arms the coalescer only
+    /// when the visible selection actually changed, detected by
+    /// comparing [`VtSelection::selection_range`] before and after —
+    /// the same gate [`Self::scroll`] applies via `display_offset`.
+    fn arm_on_selection_change(
+        &mut self,
+        op: impl FnOnce(&mut V) -> VtResult<Option<Damage>>,
+    ) -> VtResult {
+        let prev_range = self.vt.selection_range();
+        op(&mut self.vt)?;
+        if prev_range != self.vt.selection_range() {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
+        Ok(())
     }
 }
 
