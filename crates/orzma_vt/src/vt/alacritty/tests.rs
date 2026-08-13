@@ -43,18 +43,10 @@ fn cell(x: u16, y: i16) -> ViewportPoint {
 }
 
 fn start_simple(vt: &mut AlacrittyVtBackend, x: u16, y: i16) {
-    vt.apply_selection(SelectionOp::StartAt {
-        cell: cell(x, y),
-        side: CellSide::Left,
-        kind: SelectionKind::Simple,
-    })
-    .unwrap();
+    vt.start_selection(cell(x, y), CellSide::Left, SelectionKind::Simple)
+        .unwrap();
 }
 
 fn update_to(vt: &mut AlacrittyVtBackend, x: u16, y: i16, side: CellSide) {
-    vt.apply_selection(SelectionOp::UpdateTo {
-        cell: cell(x, y),
-        side,
-    })
-    .unwrap();
+    vt.update_selection(cell(x, y), side).unwrap();
 }

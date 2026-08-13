@@ -1,8 +1,8 @@
 //! Engine layer: the [`OrzmaVt`] contract and its backends.
 
 use crate::schema::{
-    Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridSize, Scroll, SelectionKind,
-    SelectionOp, SelectionRange, ViModeSwitch, VtModes, VtResult, VtSignal,
+    CellSide, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridSize, Scroll,
+    SelectionKind, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
 };
 
 #[cfg(feature = "alacritty")]
@@ -61,13 +61,6 @@ impl<B: VtBackend> OrzmaVt<B> {
         self.stage_if_changed(damage)
     }
 
-    /// Applies one selection operation; returns whether the visible
-    /// selection changed.
-    pub fn apply_selection(&mut self, op: SelectionOp) -> VtResult<bool> {
-        let damage = self.backend.apply_selection(op)?;
-        Ok(self.stage_if_changed(damage))
-    }
-
     /// Switches vi mode; returns whether the mode actually flipped.
     pub fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<bool> {
         let damage = self.backend.switch_vi_mode(vi_mode)?;
@@ -96,24 +89,6 @@ impl<B: VtBackend> OrzmaVt<B> {
     #[inline]
     pub fn modes(&self) -> VtModes {
         self.backend.modes()
-    }
-
-    /// The active selection as normalized viewport coordinates.
-    #[inline]
-    pub fn selection_range(&self) -> Option<SelectionRange> {
-        self.backend.selection_range()
-    }
-
-    /// The active selection's granularity.
-    #[inline]
-    pub fn selection_kind(&self) -> Option<SelectionKind> {
-        self.backend.selection_kind()
-    }
-
-    /// The selected text.
-    #[inline]
-    pub fn selected_text(&self) -> Option<String> {
-        self.backend.selected_text()
     }
 
     /// Out-of-band signals drained from the backend.
@@ -148,6 +123,65 @@ impl<B: VtBackend> OrzmaVt<B> {
             }
             None => false,
         }
+    }
+}
+
+impl<B: VtBackend + VtSelection> OrzmaVt<B> {
+    /// Anchors a new selection at an explicit viewport cell; returns
+    /// whether the visible selection changed.
+    pub fn start_selection(
+        &mut self,
+        cell: ViewportPoint,
+        side: CellSide,
+        kind: SelectionKind,
+    ) -> VtResult<bool> {
+        let damage = self.backend.start_selection(cell, side, kind)?;
+        Ok(self.stage_if_changed(damage))
+    }
+
+    /// Anchors a new selection at the vi cursor; returns whether the
+    /// visible selection changed.
+    pub fn start_selection_at_vi_cursor(&mut self, kind: SelectionKind) -> VtResult<bool> {
+        let damage = self.backend.start_selection_at_vi_cursor(kind)?;
+        Ok(self.stage_if_changed(damage))
+    }
+
+    /// Moves the moving end of the active selection; returns whether
+    /// the visible selection changed.
+    pub fn update_selection(&mut self, cell: ViewportPoint, side: CellSide) -> VtResult<bool> {
+        let damage = self.backend.update_selection(cell, side)?;
+        Ok(self.stage_if_changed(damage))
+    }
+
+    /// Switches selection granularity while keeping the anchor;
+    /// returns whether the visible selection changed.
+    pub fn change_selection_kind(&mut self, kind: SelectionKind) -> VtResult<bool> {
+        let damage = self.backend.change_selection_kind(kind)?;
+        Ok(self.stage_if_changed(damage))
+    }
+
+    /// Drops any active selection; returns whether one was dropped.
+    pub fn clear_selection(&mut self) -> VtResult<bool> {
+        let damage = self.backend.clear_selection()?;
+        Ok(self.stage_if_changed(damage))
+    }
+
+    /// The active selection as normalized viewport coordinates.
+    #[inline]
+    pub fn selection_range(&self) -> Option<SelectionRange> {
+        self.backend.selection_range()
+    }
+
+    /// The active selection's granularity.
+    #[inline]
+    pub fn selection_kind(&self) -> Option<SelectionKind> {
+        self.backend.selection_kind()
+    }
+
+    /// The selected text.
+    #[inline]
+    pub fn selected_text(&self) -> Option<String> {
+        self.backend.selected_text()
     }
 }
 
@@ -213,15 +247,53 @@ pub trait VtBackend: Sized {
     /// Grid dimensions in cells.
     fn grid_size(&self) -> GridSize;
 
-    /// Applies one selection operation.
+    /// Switches the vi-mode of the terminal to [`ViModeSwitch`].
     ///
-    /// `Ok(Some(_))` reports the repaint for a visible selection change
-    /// — the backing emulator's damage tracking does not cover
-    /// selection state, so the caller can learn of it only here.
-    /// Conservative over-reporting is allowed. `Ok(None)` = a genuine
-    /// no-op (an `UpdateTo`, `ChangeKind`, or `Clear` with no active
-    /// selection).
-    fn apply_selection(&mut self, op: SelectionOp) -> VtResult<Option<Damage>>;
+    /// `Ok(Some(Damage::Full))` on a real transition — the vi cursor
+    /// overlay appears or disappears outside the backing emulator's
+    /// damage tracking. `Ok(None)` on an idempotent request.
+    fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<Option<Damage>>;
+}
+
+/// Selection capability of a VT backend.
+///
+/// Split from [`VtBackend`] so a backend without selection support
+/// carries no selection API, and so [`OrzmaVt`] exposes its selection
+/// surface only for backends that implement this trait.
+///
+/// Every mutator returns the repaint it produced: the backing
+/// emulator's damage tracking does not cover selection state, so the
+/// caller can learn of a visible selection change only here.
+/// Conservative over-reporting is allowed; `Ok(None)` is a genuine
+/// no-op.
+pub trait VtSelection {
+    /// Anchors a new selection at an explicit viewport cell (mouse
+    /// press).
+    fn start_selection(
+        &mut self,
+        cell: ViewportPoint,
+        side: CellSide,
+        kind: SelectionKind,
+    ) -> VtResult<Option<Damage>>;
+
+    /// Anchors a new selection at the vi cursor (vi-mode `v` / `V`),
+    /// whose position only the VT knows.
+    fn start_selection_at_vi_cursor(&mut self, kind: SelectionKind) -> VtResult<Option<Damage>>;
+
+    /// Moves the moving end of the active selection to a viewport cell
+    /// (mouse drag). The cell may sit outside the viewport when the
+    /// drag leaves it. `Ok(None)` when nothing is selected.
+    fn update_selection(&mut self, cell: ViewportPoint, side: CellSide)
+    -> VtResult<Option<Damage>>;
+
+    /// Switches granularity while keeping the anchor (vi-mode `v`
+    /// while `V` is active, and the reverse). `Ok(None)` when nothing
+    /// is selected.
+    fn change_selection_kind(&mut self, kind: SelectionKind) -> VtResult<Option<Damage>>;
+
+    /// Drops any active selection. `Ok(None)` when nothing was
+    /// selected.
+    fn clear_selection(&mut self) -> VtResult<Option<Damage>>;
 
     /// The active selection as normalized viewport coordinates.
     ///
@@ -240,19 +312,11 @@ pub trait VtBackend: Sized {
     ///
     /// `None` when no selection exists or the active one is empty.
     fn selected_text(&self) -> Option<String>;
-
-    /// Switches the vi-mode of the terminal to [`ViModeSwitch`].
-    ///
-    /// `Ok(Some(Damage::Full))` on a real transition — the vi cursor
-    /// overlay appears or disappears outside the backing emulator's
-    /// damage tracking. `Ok(None)` on an idempotent request.
-    fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<Option<Damage>>;
 }
 
 #[cfg(all(test, feature = "alacritty"))]
 mod tests {
     use super::*;
-    use crate::schema::{CellSide, ViewportPoint};
 
     /// Builds a wrapper whose bootstrap damage and backend accumulator are
     /// both consumed, so a test observes only what its own calls stage.
@@ -274,11 +338,11 @@ mod tests {
     }
 
     fn start_simple(vt: &mut OrzmaVt<AlacrittyVtBackend>, x: u16, y: i16) -> bool {
-        vt.apply_selection(SelectionOp::StartAt {
-            cell: ViewportPoint { row: y, column: x },
-            side: CellSide::Left,
-            kind: SelectionKind::Simple,
-        })
+        vt.start_selection(
+            ViewportPoint { row: y, column: x },
+            CellSide::Left,
+            SelectionKind::Simple,
+        )
         .unwrap()
     }
 
@@ -377,13 +441,10 @@ mod tests {
         let staged = vt.pending_damage.clone();
         assert!(!vt.scroll(Scroll::Delta(0)));
         assert!(
-            !vt.apply_selection(SelectionOp::UpdateTo {
-                cell: ViewportPoint { row: 0, column: 2 },
-                side: CellSide::Right,
-            })
-            .unwrap()
+            !vt.update_selection(ViewportPoint { row: 0, column: 2 }, CellSide::Right)
+                .unwrap()
         );
-        assert!(!vt.apply_selection(SelectionOp::Clear).unwrap());
+        assert!(!vt.clear_selection().unwrap());
         assert!(!vt.switch_vi_mode(ViModeSwitch::Exit).unwrap());
         assert!(!vt.resize(80, 24));
         assert_eq!(vt.pending_damage, staged);

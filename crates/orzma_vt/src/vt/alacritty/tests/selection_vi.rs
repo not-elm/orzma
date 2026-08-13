@@ -7,23 +7,21 @@ fn enter_vi_at(vt: &mut AlacrittyVtBackend, x: usize, y: i32) {
     vt.term.vi_mode_cursor.point = AlacPoint::new(Line(y), Column(x));
 }
 
-/// Asserts that `StartAtViCursor` anchors at the vi cursor the VT
-/// tracks internally.
+/// Asserts that `start_selection_at_vi_cursor` anchors at the vi
+/// cursor the VT tracks internally.
 ///
 /// Case: the user presses `v` in vi mode.
 #[test]
 fn start_at_vi_cursor_anchors_at_the_vi_cursor() {
     let mut vt = vt_after(b"hello");
     enter_vi_at(&mut vt, 2, 0);
-    vt.apply_selection(SelectionOp::StartAtViCursor {
-        kind: SelectionKind::Simple,
-    })
-    .unwrap();
+    vt.start_selection_at_vi_cursor(SelectionKind::Simple)
+        .unwrap();
     assert_eq!(vt.selected_text().as_deref(), Some("l"));
 }
 
-/// Asserts that `ChangeKind` switches granularity while preserving
-/// the original anchor, spanning to the current vi cursor.
+/// Asserts that `change_selection_kind` switches granularity while
+/// preserving the original anchor, spanning to the current vi cursor.
 ///
 /// Case: the user presses `v`, moves the vi cursor, then presses `V`
 /// without leaving vi mode. The decided policy preserves the original
@@ -32,13 +30,10 @@ fn start_at_vi_cursor_anchors_at_the_vi_cursor() {
 fn change_kind_switches_granularity_and_keeps_the_anchor() {
     let mut vt = vt_after(b"abcdefghij\r\nklmnopqrst");
     enter_vi_at(&mut vt, 2, 0);
-    vt.apply_selection(SelectionOp::StartAtViCursor {
-        kind: SelectionKind::Simple,
-    })
-    .unwrap();
-    vt.term.vi_mode_cursor.point = AlacPoint::new(Line(1), Column(7));
-    vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
+    vt.start_selection_at_vi_cursor(SelectionKind::Simple)
         .unwrap();
+    vt.term.vi_mode_cursor.point = AlacPoint::new(Line(1), Column(7));
+    vt.change_selection_kind(SelectionKind::Lines).unwrap();
     assert_eq!(
         vt.selected_text().as_deref(),
         Some("abcdefghij\nklmnopqrst\n"),
@@ -46,16 +41,15 @@ fn change_kind_switches_granularity_and_keeps_the_anchor() {
     );
 }
 
-/// Asserts that `ChangeKind` with no active selection changes
-/// nothing.
+/// Asserts that `change_selection_kind` with no active selection
+/// changes nothing.
 ///
 /// Case: the selection vanishes between the host's kind read and the
 /// applied toggle.
 #[test]
 fn change_kind_without_a_selection_is_a_no_op() {
     let mut vt = vt_after(b"abc");
-    vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
-        .unwrap();
+    vt.change_selection_kind(SelectionKind::Lines).unwrap();
     assert_eq!(vt.selection_range(), None);
 }
 
@@ -68,12 +62,8 @@ fn change_kind_without_a_selection_is_a_no_op() {
 #[test]
 fn lines_kind_selects_the_logical_row_with_trailing_newline() {
     let mut vt = vt_after(b"hello world");
-    vt.apply_selection(SelectionOp::StartAt {
-        cell: cell(3, 0),
-        side: CellSide::Left,
-        kind: SelectionKind::Lines,
-    })
-    .unwrap();
+    vt.start_selection(cell(3, 0), CellSide::Left, SelectionKind::Lines)
+        .unwrap();
     let range = vt.selection_range().expect("Lines start must render");
     assert_eq!(range.start, ViewportPoint { row: 0, column: 0 });
     assert_eq!(range.end, ViewportPoint { row: 0, column: 79 });
@@ -116,7 +106,7 @@ fn an_idempotent_vi_mode_request_reports_no_damage() {
 }
 
 /// Asserts that `selection_kind` tracks the active granularity and
-/// resets on `Clear`.
+/// resets on `clear_selection`.
 ///
 /// Case: the user toggles selection granularity with `v` and `V` in
 /// vi mode.
@@ -126,9 +116,8 @@ fn selection_kind_reports_the_active_granularity_and_resets() {
     assert_eq!(vt.selection_kind(), None);
     start_simple(&mut vt, 0, 0);
     assert_eq!(vt.selection_kind(), Some(SelectionKind::Simple));
-    vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
-        .unwrap();
+    vt.change_selection_kind(SelectionKind::Lines).unwrap();
     assert_eq!(vt.selection_kind(), Some(SelectionKind::Lines));
-    vt.apply_selection(SelectionOp::Clear).unwrap();
+    vt.clear_selection().unwrap();
     assert_eq!(vt.selection_kind(), None);
 }

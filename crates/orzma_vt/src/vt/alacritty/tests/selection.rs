@@ -3,8 +3,8 @@
 
 use super::*;
 
-/// Asserts that a one-cell `StartAt` yields a renderable, non-empty
-/// selection with `Linear` geometry.
+/// Asserts that a one-cell `start_selection` yields a renderable,
+/// non-empty selection with `Linear` geometry.
 ///
 /// Case: the user clicks a single cell and copies it.
 #[test]
@@ -18,8 +18,8 @@ fn start_at_anchors_a_non_empty_selection() {
     assert_eq!(vt.selected_text().as_deref(), Some("h"));
 }
 
-/// Asserts that `UpdateTo` moves only the moving end; the anchor
-/// stays where `StartAt` put it.
+/// Asserts that `update_selection` moves only the moving end; the
+/// anchor stays where `start_selection` put it.
 ///
 /// Case: the basic drag — the user presses on the first cell and
 /// drags right across four more.
@@ -31,7 +31,8 @@ fn update_to_extends_the_moving_end() {
     assert_eq!(vt.selected_text().as_deref(), Some("abcde"));
 }
 
-/// Asserts that `UpdateTo` with no active selection changes nothing.
+/// Asserts that `update_selection` with no active selection changes
+/// nothing.
 ///
 /// Case: an alt-screen swap wipes the selection while the input glue
 /// still delivers one more drag event.
@@ -53,7 +54,7 @@ fn cell_side_decides_inclusion_of_the_boundary_cells() {
     start_simple(&mut vt, 0, 0);
     update_to(&mut vt, 3, 0, CellSide::Right);
     assert_eq!(vt.selected_text().as_deref(), Some("abcd"));
-    vt.apply_selection(SelectionOp::Clear).unwrap();
+    vt.clear_selection().unwrap();
     start_simple(&mut vt, 0, 0);
     update_to(&mut vt, 3, 0, CellSide::Left);
     assert_eq!(vt.selected_text().as_deref(), Some("abc"));
@@ -73,18 +74,17 @@ fn a_backward_drag_normalizes_start_before_end() {
     assert_eq!(range.end.row, 2);
 }
 
-/// Asserts that `Clear` drops the selection AND the stored anchor a
-/// later `ChangeKind` would rebuild from.
+/// Asserts that `clear_selection` drops the selection AND the stored
+/// anchor a later `change_selection_kind` would rebuild from.
 ///
 /// Case: the user clears a selection and then presses `V`.
 #[test]
 fn clear_discards_the_selection_and_the_stored_anchor() {
     let mut vt = vt_after(b"abcdef");
     start_simple(&mut vt, 0, 0);
-    vt.apply_selection(SelectionOp::Clear).unwrap();
+    vt.clear_selection().unwrap();
     assert_eq!(vt.selection_range(), None);
-    vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
-        .unwrap();
+    vt.change_selection_kind(SelectionKind::Lines).unwrap();
     assert_eq!(vt.selection_range(), None, "no zombie from a stale anchor");
 }
 

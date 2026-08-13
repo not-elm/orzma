@@ -3,8 +3,8 @@
 
 use super::*;
 
-/// Asserts that `StartAt` resolves viewport rows through the display
-/// offset onto the scrollback rows the user actually sees.
+/// Asserts that `start_selection` resolves viewport rows through the
+/// display offset onto the scrollback rows the user actually sees.
 ///
 /// Case: the user selects text while scrolled back into history.
 #[test]
@@ -28,14 +28,13 @@ fn an_alt_screen_swap_invalidates_selection_and_anchor() {
     assert!(vt.modes().alt_screen, "precondition: alt screen entered");
     assert_eq!(vt.selection_range(), None);
     assert_eq!(vt.selection_kind(), None);
-    vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
-        .unwrap();
+    vt.change_selection_kind(SelectionKind::Lines).unwrap();
     assert_eq!(vt.selection_range(), None, "no rebuild from a stale anchor");
 }
 
 /// Asserts that every operation which changes the visible selection
-/// reports full damage: StartAt, a moving UpdateTo, ChangeKind, and
-/// Clear.
+/// reports full damage: start_selection, a moving update_selection,
+/// change_selection_kind, and clear_selection.
 ///
 /// Case: the user presses, drags, switches granularity with v/V, and
 /// clears, all on an otherwise idle terminal.
@@ -43,34 +42,25 @@ fn an_alt_screen_swap_invalidates_selection_and_anchor() {
 fn every_visible_selection_change_reports_full_damage() {
     let mut vt = vt_after(b"abcdefghij");
     assert_eq!(
-        vt.apply_selection(SelectionOp::StartAt {
-            cell: cell(0, 0),
-            side: CellSide::Left,
-            kind: SelectionKind::Simple,
-        })
-        .unwrap(),
-        Some(Damage::Full),
-        "StartAt"
-    );
-    assert_eq!(
-        vt.apply_selection(SelectionOp::UpdateTo {
-            cell: cell(4, 0),
-            side: CellSide::Right,
-        })
-        .unwrap(),
-        Some(Damage::Full),
-        "UpdateTo"
-    );
-    assert_eq!(
-        vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Simple)
             .unwrap(),
         Some(Damage::Full),
-        "ChangeKind"
+        "start_selection"
     );
     assert_eq!(
-        vt.apply_selection(SelectionOp::Clear).unwrap(),
+        vt.update_selection(cell(4, 0), CellSide::Right).unwrap(),
         Some(Damage::Full),
-        "Clear"
+        "update_selection"
+    );
+    assert_eq!(
+        vt.change_selection_kind(SelectionKind::Lines).unwrap(),
+        Some(Damage::Full),
+        "change_selection_kind"
+    );
+    assert_eq!(
+        vt.clear_selection().unwrap(),
+        Some(Damage::Full),
+        "clear_selection"
     );
 }
 
@@ -83,19 +73,14 @@ fn every_visible_selection_change_reports_full_damage() {
 fn no_op_selection_ops_report_no_damage() {
     let mut vt = vt_after(b"abc");
     assert_eq!(
-        vt.apply_selection(SelectionOp::UpdateTo {
-            cell: cell(2, 0),
-            side: CellSide::Right,
-        })
-        .unwrap(),
+        vt.update_selection(cell(2, 0), CellSide::Right).unwrap(),
         None
     );
     assert_eq!(
-        vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
-            .unwrap(),
+        vt.change_selection_kind(SelectionKind::Lines).unwrap(),
         None
     );
-    assert_eq!(vt.apply_selection(SelectionOp::Clear).unwrap(), None);
+    assert_eq!(vt.clear_selection().unwrap(), None);
 }
 
 /// Asserts that a fresh VT reports no selection range.
@@ -128,7 +113,7 @@ fn display_scroll_shifts_and_clamps_the_projected_range() {
     let range = vt.selection_range().expect("still partially visible");
     assert_eq!(range.start.row, 10);
     assert_eq!(range.end.row, GRID_ROWS as i16, "below-viewport sentinel");
-    vt.apply_selection(SelectionOp::Clear).unwrap();
+    vt.clear_selection().unwrap();
     start_simple(&mut vt, 0, 5);
     update_to(&mut vt, 5, 20, CellSide::Right);
     vt.scroll(Scroll::Bottom);
@@ -138,7 +123,7 @@ fn display_scroll_shifts_and_clamps_the_projected_range() {
 }
 
 /// Asserts that `selected_text` is `None` on a fresh VT and after a
-/// `Clear`.
+/// `clear_selection`.
 ///
 /// Case: the user copies with nothing selected, and again right
 /// after clearing a selection.
@@ -147,7 +132,7 @@ fn selected_text_is_none_without_a_selection() {
     let mut vt = vt_after(b"abc");
     assert_eq!(vt.selected_text(), None);
     start_simple(&mut vt, 0, 0);
-    vt.apply_selection(SelectionOp::Clear).unwrap();
+    vt.clear_selection().unwrap();
     assert_eq!(vt.selected_text(), None);
 }
 

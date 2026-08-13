@@ -1,6 +1,6 @@
-//! Selection vocabulary: the operations a host applies to the VT's
-//! selection ([`SelectionOp`]) and the renderable range the VT reports
-//! back ([`SelectionRange`]).
+//! Selection vocabulary: the parameter types of the VT's selection
+//! operations ([`SelectionKind`], [`CellSide`]) and the renderable
+//! range the VT reports back ([`SelectionRange`]).
 
 use crate::schema::ViewportPoint;
 #[cfg(feature = "alacritty")]
@@ -45,43 +45,6 @@ impl From<SelectionKind> for SelectionGeometry {
             _ => Self::Linear,
         }
     }
-}
-
-/// One selection operation.
-///
-/// The two `Start` variants differ in where the anchor comes from: a mouse
-/// drag names an explicit cell, while vi mode anchors at the vi cursor, whose
-/// position only the VT knows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectionOp {
-    /// Anchor a new selection at an explicit viewport cell (mouse press).
-    StartAt {
-        /// Viewport cell the press landed on.
-        cell: ViewportPoint,
-        /// Which half of the cell the anchor sits in.
-        side: CellSide,
-        /// Granularity of the new selection.
-        kind: SelectionKind,
-    },
-    /// Anchor a new selection at the vi cursor (vi-mode `v` / `V`).
-    StartAtViCursor {
-        /// Granularity of the new selection.
-        kind: SelectionKind,
-    },
-    /// Move the moving end of the active selection to a viewport cell
-    /// (mouse drag). No-op when nothing is selected.
-    UpdateTo {
-        /// Viewport cell the moving end is dragged to. May sit outside
-        /// the viewport when the drag leaves it.
-        cell: ViewportPoint,
-        /// Which half of the cell the moving end sits in.
-        side: CellSide,
-    },
-    /// Switch granularity while keeping the anchor (vi-mode `v` while `V` is
-    /// active, and the reverse).
-    ChangeKind(SelectionKind),
-    /// Drop any active selection.
-    Clear,
 }
 
 /// Selection granularity.

@@ -2,11 +2,10 @@
 
 use crate::{
     schema::{
-        Damage, DisplayOffset, Frame, GridSize, MouseEncoding, MouseTracking, Scroll,
-        SelectionKind, SelectionOp, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult,
-        VtSignal,
+        CellSide, Damage, DisplayOffset, Frame, GridSize, MouseEncoding, MouseTracking, Scroll,
+        SelectionKind, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
     },
-    vt::{VtBackend, apc::ApcState},
+    vt::{VtBackend, VtSelection, apc::ApcState},
 };
 use alacritty_terminal::{
     Term,
@@ -115,49 +114,74 @@ impl VtBackend for AlacrittyVtBackend {
         }
     }
 
-    fn apply_selection(&mut self, op: SelectionOp) -> VtResult<Option<Damage>> {
-        let damage = match op {
-            SelectionOp::StartAt { cell, side, kind } => {
-                let point = self.grid_point(cell);
-                let side = Side::from(side);
-                let mut selection = Selection::new(kind.into(), point, side);
-                selection.update(point, side.opposite());
-                self.term.selection = Some(selection);
+    fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<Option<Damage>> {
+        let in_vi_mode = self.term.mode().contains(TermMode::VI);
+        let transitions = !in_vi_mode && vi_mode == ViModeSwitch::Enter
+            || in_vi_mode && vi_mode == ViModeSwitch::Exit;
+        if !transitions {
+            return Ok(None);
+        }
+        self.term.toggle_vi_mode();
+        Ok(Some(Damage::Full))
+    }
+}
+
+impl VtSelection for AlacrittyVtBackend {
+    fn start_selection(
+        &mut self,
+        cell: ViewportPoint,
+        side: CellSide,
+        kind: SelectionKind,
+    ) -> VtResult<Option<Damage>> {
+        let point = self.grid_point(cell);
+        let side = Side::from(side);
+        let mut selection = Selection::new(kind.into(), point, side);
+        selection.update(point, side.opposite());
+        self.term.selection = Some(selection);
+        Ok(Some(Damage::Full))
+    }
+
+    fn start_selection_at_vi_cursor(&mut self, kind: SelectionKind) -> VtResult<Option<Damage>> {
+        let cursor_point = self.term.vi_mode_cursor.point;
+        let mut selection = Selection::new(kind.into(), cursor_point, Side::Left);
+        selection.update(cursor_point, Side::Left.opposite());
+        self.term.selection = Some(selection);
+        Ok(Some(Damage::Full))
+    }
+
+    fn update_selection(
+        &mut self,
+        cell: ViewportPoint,
+        side: CellSide,
+    ) -> VtResult<Option<Damage>> {
+        let point = self.grid_point(cell);
+        let damage = match self.term.selection.as_mut() {
+            Some(selection) => {
+                let s: Side = side.into();
+                selection.update(point, s);
                 Some(Damage::Full)
             }
-            SelectionOp::StartAtViCursor { kind } => {
-                let cursor_point = self.term.vi_mode_cursor.point;
-                let mut selection = Selection::new(kind.into(), cursor_point, Side::Left);
-                selection.update(cursor_point, Side::Left.opposite());
-                self.term.selection = Some(selection);
-                Some(Damage::Full)
-            }
-            SelectionOp::UpdateTo { cell, side } => {
-                let point = self.grid_point(cell);
-                match self.term.selection.as_mut() {
-                    Some(selection) => {
-                        let s: Side = side.into();
-                        selection.update(point, s);
-                        Some(Damage::Full)
-                    }
-                    None => None,
-                }
-            }
-            SelectionOp::ChangeKind(selection_kind) => {
-                let vi_point = self.term.vi_mode_cursor.point;
-                match self.term.selection.as_mut() {
-                    Some(selection) => {
-                        selection.ty = selection_kind.into();
-                        selection.update(vi_point, Side::Left);
-                        selection.include_all();
-                        Some(Damage::Full)
-                    }
-                    None => None,
-                }
-            }
-            SelectionOp::Clear => self.term.selection.take().map(|_| Damage::Full),
+            None => None,
         };
         Ok(damage)
+    }
+
+    fn change_selection_kind(&mut self, kind: SelectionKind) -> VtResult<Option<Damage>> {
+        let vi_point = self.term.vi_mode_cursor.point;
+        let damage = match self.term.selection.as_mut() {
+            Some(selection) => {
+                selection.ty = kind.into();
+                selection.update(vi_point, Side::Left);
+                selection.include_all();
+                Some(Damage::Full)
+            }
+            None => None,
+        };
+        Ok(damage)
+    }
+
+    fn clear_selection(&mut self) -> VtResult<Option<Damage>> {
+        Ok(self.term.selection.take().map(|_| Damage::Full))
     }
 
     fn selection_range(&self) -> Option<SelectionRange> {
@@ -181,17 +205,6 @@ impl VtBackend for AlacrittyVtBackend {
     #[inline]
     fn selected_text(&self) -> Option<String> {
         self.term.selection_to_string()
-    }
-
-    fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<Option<Damage>> {
-        let in_vi_mode = self.term.mode().contains(TermMode::VI);
-        let transitions = !in_vi_mode && vi_mode == ViModeSwitch::Enter
-            || in_vi_mode && vi_mode == ViModeSwitch::Exit;
-        if !transitions {
-            return Ok(None);
-        }
-        self.term.toggle_vi_mode();
-        Ok(Some(Damage::Full))
     }
 }
 
