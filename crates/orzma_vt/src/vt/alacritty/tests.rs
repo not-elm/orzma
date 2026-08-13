@@ -356,45 +356,45 @@ fn empty_chunk_leaves_staged_damage_untouched() {
 fn the_first_interpret_on_a_fresh_vt_reports_full() {
     // Whatever the chunk contains: the bootstrap `Full` outranks it.
     let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
-    assert_eq!(vt.interpret(b"x"), Some(DamageVerdict::Full));
+    assert_eq!(vt.interpret(b"x"), Some(Damage::Full));
 }
 
 #[test]
-fn a_single_row_write_classifies_as_at_most_one_row() {
+fn a_single_row_write_reports_one_dirty_row() {
     let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     drain_staged(&mut vt);
-    assert_eq!(vt.interpret(b"hi"), Some(DamageVerdict::AtMostOneRow));
+    assert_eq!(vt.interpret(b"hi"), Some(Damage::Delta(vec![0].into())));
 }
 
 #[test]
-fn a_multi_row_write_classifies_as_many_rows() {
+fn a_multi_row_write_reports_each_dirty_row() {
     let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     drain_staged(&mut vt);
     assert_eq!(
         vt.interpret(b"one\r\ntwo\r\nthree"),
-        Some(DamageVerdict::ManyRows { rows: 3 })
+        Some(Damage::Delta(vec![0, 1, 2].into()))
     );
 }
 
 #[test]
-fn insert_mode_classifies_as_full() {
+fn insert_mode_reports_full_damage() {
     let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     drain_staged(&mut vt);
-    assert_eq!(vt.interpret(b"\x1b[4h"), Some(DamageVerdict::Full));
+    assert_eq!(vt.interpret(b"\x1b[4h"), Some(Damage::Full));
 }
 
 #[test]
-fn interpret_stages_the_damage_it_classified() {
+fn interpret_stages_the_damage_it_returns() {
     let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     drain_staged(&mut vt);
     assert_eq!(
         vt.interpret(b"one\r\ntwo\r\nthree"),
-        Some(DamageVerdict::ManyRows { rows: 3 })
+        Some(Damage::Delta(vec![0, 1, 2].into()))
     );
     assert_eq!(
         vt.pending_damage,
         Some(Damage::Delta(vec![0, 1, 2].into())),
-        "the staged rows must be the ones the verdict was computed from"
+        "the staged rows must be the ones the call returned"
     );
 }
 
@@ -442,7 +442,7 @@ fn a_fresh_vt_stages_bootstrap_full_damage() {
 //       entries BEFORE filtering (alacritty `term/mod.rs:194-198`). Once
 //       `display_offset >= screen_lines` the whole slice is gone, so the
 //       iterator yields nothing even though `Term::damage` always damages
-//       the cursor — which is what makes `DamageVerdict::Idle` reachable.
+//       the cursor — which is what makes an empty `Delta` reachable.
 //       alacritty's own `damage_public_usage` (`term/mod.rs:3025-3036`)
 //       asserts the same empty `Partial`.
 #[test]
@@ -455,7 +455,10 @@ fn a_viewport_fully_in_scrollback_stages_empty_damage() {
         "precondition: the viewport must sit entirely in scrollback"
     );
     drain_staged(&mut vt);
-    assert_eq!(vt.interpret(b"\x1b[H"), Some(DamageVerdict::Idle));
+    assert_eq!(
+        vt.interpret(b"\x1b[H"),
+        Some(Damage::Delta(DamageRows::default()))
+    );
     assert_eq!(
         vt.pending_damage,
         Some(Damage::Delta(DamageRows::default()))

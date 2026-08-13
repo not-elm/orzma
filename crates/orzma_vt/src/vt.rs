@@ -1,8 +1,8 @@
 //! Engine layer: the [`OrzmaVt`] contract and its backends.
 
 use crate::schema::{
-    Damage, DamageVerdict, DisplayOffset, Frame, GridSize, Scroll, SelectionKind, SelectionOp,
-    SelectionRange, ViModeSwitch, VtModes, VtResult, VtSignal,
+    Damage, DisplayOffset, Frame, GridSize, Scroll, SelectionKind, SelectionOp, SelectionRange,
+    ViModeSwitch, VtModes, VtResult, VtSignal,
 };
 
 mod apc;
@@ -43,10 +43,13 @@ pub trait VtBackend: Sized {
     }
 
     /// Interprets a chunk of the PTY byte stream, mutating the terminal
-    /// state, and classifies the resulting damage. ("Interpret" per
+    /// state, and returns the collected damage. ("Interpret" per
     /// ECMA-48 § 2.3.3: a receiving device interprets the coded
     /// representations of control functions.)
-    fn interpret(&mut self, chunk: &[u8]) -> Option<DamageVerdict>;
+    ///
+    /// `None` for an empty chunk — not a damage cycle. Classifying the
+    /// damage is the caller's job.
+    fn interpret(&mut self, chunk: &[u8]) -> Option<Damage>;
 
     fn drain_signals(&mut self) -> impl Iterator<Item = VtSignal> + '_;
 

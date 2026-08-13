@@ -2,9 +2,9 @@
 
 use crate::{
     schema::{
-        Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridSize, MouseEncoding,
-        MouseTracking, Scroll, SelectionKind, SelectionOp, SelectionRange, ViModeSwitch,
-        ViewportPoint, VtModes, VtResult, VtSignal,
+        Damage, DamageRows, DisplayOffset, Frame, GridSize, MouseEncoding, MouseTracking, Scroll,
+        SelectionKind, SelectionOp, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult,
+        VtSignal,
     },
     vt::{VtBackend, apc::ApcState},
 };
@@ -56,16 +56,15 @@ impl VtBackend for AlacrittyVtBackend {
         DisplayOffset(self.term.grid().display_offset() as u32)
     }
 
-    fn interpret(&mut self, chunk: &[u8]) -> Option<DamageVerdict> {
+    fn interpret(&mut self, chunk: &[u8]) -> Option<Damage> {
         if chunk.is_empty() {
             return None;
         }
         self.apc_parser.parse(chunk, &mut self.apc_state);
         self.processor.advance(&mut self.term, chunk);
         let damage = Damage::from_alacritty_term(&mut self.term);
-        let verdict = DamageVerdict::classify(&damage);
-        self.stage_damage(damage);
-        Some(verdict)
+        self.stage_damage(damage.clone());
+        Some(damage)
     }
 
     fn drain_signals(&mut self) -> impl Iterator<Item = VtSignal> + '_ {
