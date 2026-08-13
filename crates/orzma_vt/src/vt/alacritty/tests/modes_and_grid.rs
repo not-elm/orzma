@@ -38,19 +38,24 @@ fn resize_updates_the_grid_size() {
     );
 }
 
-/// Asserts that `resize` stages full damage.
+/// Asserts that `resize` reports full damage.
 ///
 /// Case: a resize reflows the whole grid, but no PTY output need
-/// follow — an idle shell prompt stays idle. Without staged `Full`
-/// damage the next `frames()` call finds nothing to emit and the
-/// renderer keeps drawing the old grid until unrelated output
-/// arrives (the trait doc pins this repaint contract).
+/// follow — an idle shell prompt stays idle.
 #[test]
-fn resize_stages_full_damage() {
+fn resize_reports_full_damage() {
     let mut vt = AlacrittyVtBackend::new(80, 24);
-    drain_staged(&mut vt);
-    vt.resize(120, 40);
-    assert_eq!(vt.pending_damage, Some(Damage::Full));
+    assert_eq!(vt.resize(120, 40), Some(Damage::Full));
+}
+
+/// Asserts that a resize to the current dimensions reports no damage.
+///
+/// Case: the host recomputes cells after a pixel-only window change
+/// and re-applies the grid size the terminal already has.
+#[test]
+fn a_same_size_resize_reports_no_damage() {
+    let mut vt = AlacrittyVtBackend::new(80, 24);
+    assert_eq!(vt.resize(80, 24), None);
 }
 
 /// Asserts that `grid_size` maps the term's columns to `cols` and its

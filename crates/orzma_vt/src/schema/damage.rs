@@ -20,9 +20,10 @@ impl Damage {
     /// # Invariants
     ///
     /// `Term::damage()` consumes its own `last_cursor` bookkeeping, so it must
-    /// be called exactly once per cycle. The owner must call
-    /// `Term::reset_damage()` after the matching emit — without it
-    /// `damage.full` latches and every later cycle reports `Full`.
+    /// be called exactly once per cycle, and the caller must
+    /// `Term::reset_damage()` immediately after the read so the next cycle
+    /// reports only its own damage — a skipped reset latches `damage.full`
+    /// and every later cycle reports `Full`.
     #[cfg(feature = "alacritty")]
     pub fn from_alacritty_term<T>(term: &mut Term<T>) -> Self {
         match term.damage() {

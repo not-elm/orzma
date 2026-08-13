@@ -39,54 +39,69 @@ fn an_alt_screen_swap_invalidates_selection_and_anchor() {
 }
 
 /// Asserts that every operation which changes the visible selection
-/// stages full damage: StartAt, a moving UpdateTo, ChangeKind, and
+/// reports full damage: StartAt, a moving UpdateTo, ChangeKind, and
 /// Clear.
 ///
-/// Case: the trait's repaint contract. alacritty excludes Selection
-/// from `Term::damage()`, so an implementation staging damage only
-/// for StartAt/Clear would leave drags and v/V switches visually
-/// stale while passing every state test.
+/// Case: alacritty excludes Selection from `Term::damage()`, so the
+/// repaint for a press, drag, v/V switch, or clear reaches the
+/// renderer only through these return values.
 #[test]
-fn every_visible_selection_change_stages_full_damage() {
+fn every_visible_selection_change_reports_full_damage() {
     let mut vt = vt_after(b"abcdefghij");
-    drain_staged(&mut vt);
-    start_simple(&mut vt, 0, 0);
-    assert_eq!(vt.pending_damage, Some(Damage::Full), "StartAt");
-    drain_staged(&mut vt);
-    update_to(&mut vt, 4, 0, CellSide::Right);
-    assert_eq!(vt.pending_damage, Some(Damage::Full), "UpdateTo");
-    drain_staged(&mut vt);
-    vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
-        .unwrap();
-    assert_eq!(vt.pending_damage, Some(Damage::Full), "ChangeKind");
-    drain_staged(&mut vt);
-    vt.apply_selection(SelectionOp::Clear).unwrap();
-    assert_eq!(vt.pending_damage, Some(Damage::Full), "Clear");
+    assert_eq!(
+        vt.apply_selection(SelectionOp::StartAt {
+            cell: cell(0, 0),
+            side: CellSide::Left,
+            kind: SelectionKind::Simple,
+        })
+        .unwrap(),
+        Some(Damage::Full),
+        "StartAt"
+    );
+    assert_eq!(
+        vt.apply_selection(SelectionOp::UpdateTo {
+            cell: cell(4, 0),
+            side: CellSide::Right,
+        })
+        .unwrap(),
+        Some(Damage::Full),
+        "UpdateTo"
+    );
+    assert_eq!(
+        vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
+            .unwrap(),
+        Some(Damage::Full),
+        "ChangeKind"
+    );
+    assert_eq!(
+        vt.apply_selection(SelectionOp::Clear).unwrap(),
+        Some(Damage::Full),
+        "Clear"
+    );
 }
 
-/// Asserts that no-op selection operations leave the staged damage
-/// exactly as it was.
+/// Asserts that selection operations with no active selection report
+/// no damage.
 ///
-/// Case: the "a no-op stages no damage" invariant, pinned against
-/// the destructive failure mode — an implementation ending in
-/// `else { pending_damage = None }` passes a clean-state check while
-/// silently discarding earlier un-emitted output (same shape as the
-/// scroll no-op test).
+/// Case: an alt-screen swap wipes the selection while the input glue
+/// still delivers one more drag, kind switch, or clear.
 #[test]
-fn no_op_selection_ops_preserve_staged_damage() {
+fn no_op_selection_ops_report_no_damage() {
     let mut vt = vt_after(b"abc");
-    drain_staged(&mut vt);
-    vt.pending_damage = Some(Damage::Delta(vec![0].into()));
-    let staged = vt.pending_damage.clone();
-    update_to(&mut vt, 2, 0, CellSide::Right);
-    vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
-        .unwrap();
-    vt.apply_selection(SelectionOp::Clear).unwrap();
-    assert_eq!(vt.pending_damage, staged);
-    let mut vt = vt_after(b"abc");
-    drain_staged(&mut vt);
-    update_to(&mut vt, 2, 0, CellSide::Right);
-    assert_eq!(vt.pending_damage, None, "clean state stays clean");
+    assert_eq!(
+        vt.apply_selection(SelectionOp::UpdateTo {
+            cell: cell(2, 0),
+            side: CellSide::Right,
+        })
+        .unwrap(),
+        None
+    );
+    assert_eq!(
+        vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
+            .unwrap(),
+        None
+    );
+    assert_eq!(vt.apply_selection(SelectionOp::Clear).unwrap(), None);
 }
 
 /// Asserts that a fresh VT reports no selection range.

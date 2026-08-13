@@ -2,7 +2,7 @@
 
 use crate::{
     schema::{
-        Damage, DamageRows, DisplayOffset, Frame, GridSize, MouseEncoding, MouseTracking, Scroll,
+        Damage, DisplayOffset, Frame, GridSize, MouseEncoding, MouseTracking, Scroll,
         SelectionKind, SelectionOp, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult,
         VtSignal,
     },
@@ -25,14 +25,6 @@ pub struct AlacrittyVtBackend {
     term: Term<OrzmaTermEventHandler>,
     apc_state: ApcState,
     apc_parser: VTParser,
-    /// Damage staged for the next [`OrzmaVt::frames`] call.
-    ///
-    /// Merged rather than replaced on each stage. Alacritty accumulates
-    /// line damage internally until `Term::reset_damage`, so replacing
-    /// would be safe for the damage it tracks — but it excludes
-    /// selection state, so a repaint staged by a selection change is
-    /// only ever held here and would be lost to the next chunk.
-    pending_damage: Option<Damage>,
 }
 
 impl VtBackend for AlacrittyVtBackend {
@@ -47,7 +39,6 @@ impl VtBackend for AlacrittyVtBackend {
             ),
             apc_state: ApcState::default(),
             apc_parser: VTParser::new(),
-            pending_damage: Some(Damage::Full),
         }
     }
 
@@ -63,7 +54,7 @@ impl VtBackend for AlacrittyVtBackend {
         self.apc_parser.parse(chunk, &mut self.apc_state);
         self.processor.advance(&mut self.term, chunk);
         let damage = Damage::from_alacritty_term(&mut self.term);
-        self.stage_damage(damage.clone());
+        self.term.reset_damage();
         Some(damage)
     }
 
@@ -76,11 +67,20 @@ impl VtBackend for AlacrittyVtBackend {
         todo!()
     }
 
-    #[inline]
-    fn scroll(&mut self, scroll: Scroll) {
+    fn scroll(&mut self, scroll: Scroll) -> Option<Damage> {
+        let prev_offset = self.display_offset();
         let screen_lines = self.grid_size().rows;
         self.term
             .scroll_display(scroll.to_alacritty_scroll(screen_lines));
+        if self.display_offset() == prev_offset {
+            return None;
+        }
+        // NOTE: `scroll_display` just latched full damage in alacritty's
+        // accumulator. Resetting converts that mark into this return
+        // value; the accumulator holds nothing else because `interpret`
+        // resets after every read.
+        self.term.reset_damage();
+        Some(Damage::Full)
     }
 
     fn modes(&self) -> VtModes {
@@ -96,9 +96,15 @@ impl VtBackend for AlacrittyVtBackend {
         }
     }
 
-    fn resize(&mut self, cols: u16, rows: u16) {
+    fn resize(&mut self, cols: u16, rows: u16) -> Option<Damage> {
+        if self.grid_size() == (GridSize { cols, rows }) {
+            return None;
+        }
         self.term.resize(LocalDim::new(cols, rows));
-        self.stage_damage(Damage::Full);
+        // NOTE: same recipe as `scroll` — `Term::resize` latched full
+        // damage; the reset converts it into this return value.
+        self.term.reset_damage();
+        Some(Damage::Full)
     }
 
     #[inline]
@@ -109,44 +115,48 @@ impl VtBackend for AlacrittyVtBackend {
         }
     }
 
-    fn apply_selection(&mut self, op: SelectionOp) -> VtResult {
-        match op {
+    fn apply_selection(&mut self, op: SelectionOp) -> VtResult<Option<Damage>> {
+        let damage = match op {
             SelectionOp::StartAt { cell, side, kind } => {
                 let point = self.grid_point(cell);
                 let side = Side::from(side);
                 let mut selection = Selection::new(kind.into(), point, side);
                 selection.update(point, side.opposite());
                 self.term.selection = Some(selection);
-                self.stage_damage(Damage::Full);
+                Some(Damage::Full)
             }
             SelectionOp::StartAtViCursor { kind } => {
                 let cursor_point = self.term.vi_mode_cursor.point;
                 let selection = Selection::new(kind.into(), cursor_point, Side::Left);
                 self.term.selection.replace(selection);
-                self.stage_damage(Damage::Full);
+                Some(Damage::Full)
             }
             SelectionOp::UpdateTo { cell, side } => {
                 let point = self.grid_point(cell);
-                if let Some(selection) = self.term.selection.as_mut() {
-                    let s: Side = side.into();
-                    selection.update(point, s);
+                match self.term.selection.as_mut() {
+                    Some(selection) => {
+                        let s: Side = side.into();
+                        selection.update(point, s);
+                        Some(Damage::Full)
+                    }
+                    None => None,
                 }
             }
             SelectionOp::ChangeKind(selection_kind) => {
                 let vi_point = self.term.vi_mode_cursor.point;
-                let Some(selection) = self.term.selection.as_mut() else {
-                    return Ok(());
-                };
-                selection.ty = selection_kind.into();
-                selection.update(vi_point, Side::Left);
-                selection.include_all();
-                self.stage_damage(Damage::Full);
+                match self.term.selection.as_mut() {
+                    Some(selection) => {
+                        selection.ty = selection_kind.into();
+                        selection.update(vi_point, Side::Left);
+                        selection.include_all();
+                        Some(Damage::Full)
+                    }
+                    None => None,
+                }
             }
-            SelectionOp::Clear => {
-                self.term.selection.take();
-            }
-        }
-        Ok(())
+            SelectionOp::Clear => self.term.selection.take().map(|_| Damage::Full),
+        };
+        Ok(damage)
     }
 
     fn selection_range(&self) -> Option<SelectionRange> {
@@ -171,14 +181,15 @@ impl VtBackend for AlacrittyVtBackend {
         self.term.selection_to_string()
     }
 
-    fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult {
-        let prev = *self.term.mode();
-        if prev.contains(TermMode::VI) && vi_mode == ViModeSwitch::Enter
-            || !prev.contains(TermMode::VI) && vi_mode == ViModeSwitch::Exit
-        {
-            self.term.toggle_vi_mode();
+    fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<Option<Damage>> {
+        let in_vi_mode = self.term.mode().contains(TermMode::VI);
+        let transitions = !in_vi_mode && vi_mode == ViModeSwitch::Enter
+            || in_vi_mode && vi_mode == ViModeSwitch::Exit;
+        if !transitions {
+            return Ok(None);
         }
-        Ok(())
+        self.term.toggle_vi_mode();
+        Ok(Some(Damage::Full))
     }
 }
 
@@ -197,17 +208,6 @@ impl AlacrittyVtBackend {
             Line(i32::from(cell.row) - display_offset),
             Column(usize::from(cell.column)),
         )
-    }
-
-    /// Merges `damage` into the value staged for the next
-    /// [`OrzmaVt::frames`] call.
-    ///
-    /// Seeding an absent staged value with an empty row set is safe
-    /// because that set is the merge identity.
-    fn stage_damage(&mut self, damage: Damage) {
-        *self
-            .pending_damage
-            .get_or_insert(Damage::Delta(DamageRows::default())) |= damage;
     }
 }
 

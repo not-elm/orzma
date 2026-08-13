@@ -2,7 +2,7 @@
 //! module per exercised concern.
 
 use super::*;
-use crate::schema::{CellSide, SelectionGeometry};
+use crate::schema::{CellSide, DamageRows, SelectionGeometry};
 use alacritty_terminal::index::Point as AlacPoint;
 
 mod damage;
@@ -36,15 +36,6 @@ fn vt_with_history(history_rows: usize) -> AlacrittyVtBackend {
     let vt = vt_after(&bytes);
     assert_eq!(vt.term.grid().history_size(), history_rows);
     vt
-}
-
-// NOTE: a fresh `Term` starts fully damaged for the bootstrap paint, so a
-// test that wants to observe only what its own bytes staged must clear
-// both halves — the staged value AND alacritty's accumulator. Stands in
-// for `frames()`, which is still `todo!()`.
-fn drain_staged(vt: &mut AlacrittyVtBackend) {
-    vt.pending_damage = None;
-    vt.term.reset_damage();
 }
 
 fn cell(x: u16, y: i16) -> ViewportPoint {

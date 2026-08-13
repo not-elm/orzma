@@ -85,6 +85,39 @@ fn lines_kind_selects_the_logical_row_with_trailing_newline() {
     assert_eq!(vt.selected_text().as_deref(), Some("hello world\n"));
 }
 
+/// Asserts that `switch_vi_mode` toggles the mode on a real
+/// transition and reports full damage.
+///
+/// Case: the user enters and leaves vi mode; the vi cursor overlay
+/// appears and disappears without any PTY output.
+#[test]
+fn switch_vi_mode_transitions_and_reports_full_damage() {
+    let mut vt = vt_after(b"hello");
+    assert_eq!(
+        vt.switch_vi_mode(ViModeSwitch::Enter).unwrap(),
+        Some(Damage::Full)
+    );
+    assert!(vt.term.mode().contains(TermMode::VI));
+    assert_eq!(
+        vt.switch_vi_mode(ViModeSwitch::Exit).unwrap(),
+        Some(Damage::Full)
+    );
+    assert!(!vt.term.mode().contains(TermMode::VI));
+}
+
+/// Asserts that an idempotent vi-mode request changes nothing and
+/// reports no damage.
+///
+/// Case: a repeated Enter, or an Exit while already in normal mode.
+#[test]
+fn an_idempotent_vi_mode_request_reports_no_damage() {
+    let mut vt = vt_after(b"hello");
+    assert_eq!(vt.switch_vi_mode(ViModeSwitch::Exit).unwrap(), None);
+    vt.switch_vi_mode(ViModeSwitch::Enter).unwrap();
+    assert_eq!(vt.switch_vi_mode(ViModeSwitch::Enter).unwrap(), None);
+    assert!(vt.term.mode().contains(TermMode::VI));
+}
+
 /// Asserts that `selection_kind` tracks the active granularity and
 /// resets on `Clear`.
 ///

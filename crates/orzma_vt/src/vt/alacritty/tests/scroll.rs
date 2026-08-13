@@ -128,60 +128,39 @@ fn absolute_and_paged_scrolls_map_to_their_directions() {
     assert_eq!(vt.display_offset(), DisplayOffset(0));
 }
 
-/// Asserts that a scroll which moved the viewport stages full
+/// Asserts that a scroll which moved the viewport reports full
 /// damage.
 ///
-/// Case: the trait doc's repaint contract. A scroll changes every
-/// visible row but produces no PTY output; without staged `Full`
-/// damage the next `frames()` call finds nothing to emit, and an
-/// armed coalescer fires an emit for a repaint that never comes.
+/// Case: a scroll changes every visible row but produces no PTY
+/// output, so its repaint reaches the renderer only through this
+/// return value.
 #[test]
-fn scroll_stages_full_damage_when_the_viewport_moves() {
+fn scroll_reports_full_damage_when_the_viewport_moves() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
-    drain_staged(&mut vt);
-    vt.scroll(Scroll::Delta(3));
-    assert_eq!(vt.pending_damage, Some(Damage::Full));
+    assert_eq!(vt.scroll(Scroll::Delta(3)), Some(Damage::Full));
 }
 
-/// Asserts that a scroll which did not move the viewport leaves the
-/// staged damage exactly as it was.
+/// Asserts that a scroll which did not move the viewport reports no
+/// damage.
 ///
-/// Case: the trait doc's "a no-op call stages no damage" invariant,
-/// pinned against the destructive failure mode — an implementation
-/// ending in `else { pending_damage = None }` passes a clean-state
-/// check while silently discarding earlier un-emitted output (same
-/// shape as `empty_chunk_leaves_staged_damage_untouched`).
+/// Case: a zero delta, and wheel notches at the live tail that clamp
+/// in place.
 #[test]
-fn a_no_op_scroll_preserves_staged_damage() {
+fn a_no_op_scroll_reports_no_damage() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
-    drain_staged(&mut vt);
-    // NOTE: seeded directly rather than via `interpret` — chunk
-    // damage staging is itself still unimplemented (the four
-    // pre-existing damage-test failures), and this test must not
-    // depend on that gap.
-    vt.pending_damage = Some(Damage::Delta(vec![0].into()));
-    let staged = vt.pending_damage.clone();
-    vt.scroll(Scroll::Delta(0));
-    vt.scroll(Scroll::Bottom);
-    assert_eq!(vt.pending_damage, staged);
-    let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
-    drain_staged(&mut vt);
-    vt.scroll(Scroll::Delta(0));
-    assert_eq!(vt.pending_damage, None, "clean state stays clean");
+    assert_eq!(vt.scroll(Scroll::Delta(0)), None);
+    assert_eq!(vt.scroll(Scroll::Bottom), None);
+    assert_eq!(vt.scroll(Scroll::Delta(-5)), None);
 }
 
-/// Asserts that scrolling on the alternate screen stages no damage.
+/// Asserts that scrolling on the alternate screen reports no damage.
 ///
-/// Case: the alternate grid has no scrollback, so every scroll
-/// there is a no-op — but entering the alternate screen stages its
-/// own damage, which must be drained first or it masks a violation
-/// of the no-op invariant on this backend.
+/// Case: the alternate grid has no scrollback, so every scroll there
+/// is a no-op.
 #[test]
-fn scrolling_the_alternate_screen_stages_no_damage() {
+fn scrolling_the_alternate_screen_reports_no_damage() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
     vt.interpret(b"\x1b[?1049h");
     assert!(vt.modes().alt_screen, "precondition: alt screen entered");
-    drain_staged(&mut vt);
-    vt.scroll(Scroll::Delta(5));
-    assert_eq!(vt.pending_damage, None);
+    assert_eq!(vt.scroll(Scroll::Delta(5)), None);
 }
