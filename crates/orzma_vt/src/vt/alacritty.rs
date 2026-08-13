@@ -2,9 +2,9 @@
 
 use crate::{
     schema::{
-        Damage, DamageVerdict, DisplayOffset, Frame, GridSize, MouseEncoding, MouseTracking,
-        Scroll, SelectionKind, SelectionOp, SelectionRange, ViModeSwitch, ViewportPoint, VtModes,
-        VtResult, VtSignal,
+        Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridSize, MouseEncoding,
+        MouseTracking, Scroll, SelectionKind, SelectionOp, SelectionRange, ViModeSwitch,
+        ViewportPoint, VtModes, VtResult, VtSignal,
     },
     vt::{VtBackend, apc::ApcState},
 };
@@ -206,7 +206,9 @@ impl AlacrittyVt {
     /// Seeding an absent staged value with an empty row set is safe
     /// because that set is the merge identity.
     fn stage_damage(&mut self, damage: Damage) {
-        *self.pending_damage.get_or_insert(Damage::Rows(Vec::new())) |= damage;
+        *self
+            .pending_damage
+            .get_or_insert(Damage::Delta(DamageRows::default())) |= damage;
     }
 }
 

@@ -3,16 +3,15 @@
 
 #[cfg(feature = "alacritty")]
 use alacritty_terminal::{Term, term::TermDamage};
-use std::ops::BitOrAssign;
+use std::ops::{BitOrAssign, Deref};
 
 /// Viewport damage the VT reported in a single damage cycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Damage {
     /// Entire viewport is dirty (resize, clear, alt-screen swap, reset).
     Full,
-    /// Viewport row indices that changed, ascending and without
-    /// duplicates.
-    Rows(Vec<u16>),
+    /// Only the carried rows are dirty.
+    Delta(DamageRows),
 }
 
 impl Damage {
@@ -28,7 +27,7 @@ impl Damage {
     pub fn from_alacritty_term<T>(term: &mut Term<T>) -> Self {
         match term.damage() {
             TermDamage::Full => Self::Full,
-            TermDamage::Partial(iter) => Self::Rows(iter.map(|d| d.line as u16).collect()),
+            TermDamage::Partial(iter) => Self::Delta(iter.map(|d| d.line as u16).collect()),
         }
     }
 }
@@ -36,19 +35,45 @@ impl Damage {
 /// Merges damage, keeping whichever repaint is the larger of the two.
 ///
 /// [`Damage::Full`] absorbs anything and an empty
-/// [`Damage::Rows`] is the identity, so a staged value can start
+/// [`Damage::Delta`] is the identity, so a staged value can start
 /// from an empty set and fold every later reading in.
 impl BitOrAssign for Damage {
     fn bitor_assign(&mut self, rhs: Self) {
         match (self, rhs) {
             (Self::Full, _) => {}
             (staged, Self::Full) => *staged = Self::Full,
-            (Self::Rows(staged), Self::Rows(incoming)) => {
-                staged.extend(incoming);
-                staged.sort_unstable();
-                staged.dedup();
+            (Self::Delta(staged), Self::Delta(incoming)) => {
+                staged.0.extend(incoming.0);
+                staged.0.sort_unstable();
+                staged.0.dedup();
             }
         }
+    }
+}
+
+/// Dirty viewport row indices, ascending and without duplicates.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DamageRows(Vec<u16>);
+
+impl Deref for DamageRows {
+    type Target = Vec<u16>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<Vec<u16>> for DamageRows {
+    fn from(mut rows: Vec<u16>) -> Self {
+        rows.sort_unstable();
+        rows.dedup();
+        Self(rows)
+    }
+}
+
+impl FromIterator<u16> for DamageRows {
+    fn from_iter<I: IntoIterator<Item = u16>>(iter: I) -> Self {
+        Self::from(iter.into_iter().collect::<Vec<u16>>())
     }
 }
 
@@ -76,7 +101,7 @@ impl DamageVerdict {
     pub fn classify(damage: &Damage) -> Self {
         match damage {
             Damage::Full => Self::Full,
-            Damage::Rows(rows) => match rows.len() {
+            Damage::Delta(rows) => match rows.len() {
                 0 => Self::Idle,
                 1 => Self::AtMostOneRow,
                 n => Self::ManyRows { rows: n },
@@ -97,7 +122,7 @@ mod tests {
     #[test]
     fn no_dirty_rows_classifies_as_idle() {
         assert_eq!(
-            DamageVerdict::classify(&Damage::Rows(Vec::new())),
+            DamageVerdict::classify(&Damage::Delta(DamageRows::default())),
             DamageVerdict::Idle
         );
     }
@@ -105,7 +130,7 @@ mod tests {
     #[test]
     fn one_dirty_row_classifies_as_at_most_one_row() {
         assert_eq!(
-            DamageVerdict::classify(&Damage::Rows(vec![7])),
+            DamageVerdict::classify(&Damage::Delta(vec![7].into())),
             DamageVerdict::AtMostOneRow
         );
     }
@@ -113,7 +138,7 @@ mod tests {
     #[test]
     fn many_dirty_rows_carry_the_row_count() {
         assert_eq!(
-            DamageVerdict::classify(&Damage::Rows(vec![0, 3, 9])),
+            DamageVerdict::classify(&Damage::Delta(vec![0, 3, 9].into())),
             DamageVerdict::ManyRows { rows: 3 }
         );
     }
@@ -128,17 +153,17 @@ mod tests {
     /// that `classify` reports as `ManyRows` instead of `AtMostOneRow`.
     #[test]
     fn merging_partial_damage_unions_sorts_and_dedups_the_rows() {
-        let mut interleaved = Damage::Rows(vec![1, 3, 5]);
-        interleaved |= Damage::Rows(vec![2, 3, 5]);
-        assert_eq!(interleaved, Damage::Rows(vec![1, 2, 3, 5]));
+        let mut interleaved = Damage::Delta(vec![1, 3, 5].into());
+        interleaved |= Damage::Delta(vec![2, 3, 5].into());
+        assert_eq!(interleaved, Damage::Delta(vec![1, 2, 3, 5].into()));
 
-        let mut descending = Damage::Rows(vec![5]);
-        descending |= Damage::Rows(vec![3]);
-        assert_eq!(descending, Damage::Rows(vec![3, 5]));
+        let mut descending = Damage::Delta(vec![5].into());
+        descending |= Damage::Delta(vec![3].into());
+        assert_eq!(descending, Damage::Delta(vec![3, 5].into()));
 
-        let mut repeated = Damage::Rows(vec![0, 1]);
-        repeated |= Damage::Rows(vec![0, 1]);
-        assert_eq!(repeated, Damage::Rows(vec![0, 1]));
+        let mut repeated = Damage::Delta(vec![0, 1].into());
+        repeated |= Damage::Delta(vec![0, 1].into());
+        assert_eq!(repeated, Damage::Delta(vec![0, 1].into()));
     }
 
     /// Asserts that `Full` absorbs partial damage from either side.
@@ -150,10 +175,10 @@ mod tests {
     #[test]
     fn full_damage_absorbs_partial_damage_from_either_side() {
         let mut staged_full = Damage::Full;
-        staged_full |= Damage::Rows(vec![0]);
+        staged_full |= Damage::Delta(vec![0].into());
         assert_eq!(staged_full, Damage::Full);
 
-        let mut incoming_full = Damage::Rows(vec![0, 1]);
+        let mut incoming_full = Damage::Delta(vec![0, 1].into());
         incoming_full |= Damage::Full;
         assert_eq!(incoming_full, Damage::Full);
 
@@ -162,7 +187,7 @@ mod tests {
         assert_eq!(both_full, Damage::Full);
 
         let mut full_then_empty = Damage::Full;
-        full_then_empty |= Damage::Rows(Vec::new());
+        full_then_empty |= Damage::Delta(DamageRows::default());
         assert_eq!(full_then_empty, Damage::Full);
     }
 
@@ -170,22 +195,22 @@ mod tests {
     /// sides.
     ///
     /// Case: the staging site folds an absent staged value in by merging
-    /// onto an empty `Rows`, so the identity is load-bearing. An empty
+    /// onto an empty `Delta`, so the identity is load-bearing. An empty
     /// operand is a real reading — a viewport scrolled fully into
     /// history — not a sentinel to discard the other side for.
     #[test]
     fn an_empty_row_set_is_the_merge_identity() {
-        let mut empty_incoming = Damage::Rows(vec![0, 2]);
-        empty_incoming |= Damage::Rows(Vec::new());
-        assert_eq!(empty_incoming, Damage::Rows(vec![0, 2]));
+        let mut empty_incoming = Damage::Delta(vec![0, 2].into());
+        empty_incoming |= Damage::Delta(DamageRows::default());
+        assert_eq!(empty_incoming, Damage::Delta(vec![0, 2].into()));
 
-        let mut empty_staged = Damage::Rows(Vec::new());
-        empty_staged |= Damage::Rows(vec![0, 2]);
-        assert_eq!(empty_staged, Damage::Rows(vec![0, 2]));
+        let mut empty_staged = Damage::Delta(DamageRows::default());
+        empty_staged |= Damage::Delta(vec![0, 2].into());
+        assert_eq!(empty_staged, Damage::Delta(vec![0, 2].into()));
 
-        let mut both_empty = Damage::Rows(Vec::new());
-        both_empty |= Damage::Rows(Vec::new());
-        assert_eq!(both_empty, Damage::Rows(Vec::new()));
+        let mut both_empty = Damage::Delta(DamageRows::default());
+        both_empty |= Damage::Delta(DamageRows::default());
+        assert_eq!(both_empty, Damage::Delta(DamageRows::default()));
     }
 }
 
@@ -242,7 +267,7 @@ mod alacritty_tests {
         let mut term = term_after(b"hi");
         assert_eq!(
             Damage::from_alacritty_term(&mut term),
-            Damage::Rows(vec![0])
+            Damage::Delta(vec![0].into())
         );
     }
 
@@ -251,7 +276,7 @@ mod alacritty_tests {
         let mut term = term_after(b"one\r\ntwo\r\nthree");
         assert_eq!(
             Damage::from_alacritty_term(&mut term),
-            Damage::Rows(vec![0, 1, 2])
+            Damage::Delta(vec![0, 1, 2].into())
         );
     }
 
@@ -266,12 +291,12 @@ mod alacritty_tests {
         let mut term = term_after(b"one\r\ntwo\r\nthree");
         assert_eq!(
             Damage::from_alacritty_term(&mut term),
-            Damage::Rows(vec![0, 1, 2])
+            Damage::Delta(vec![0, 1, 2].into())
         );
         term.reset_damage();
         assert_eq!(
             Damage::from_alacritty_term(&mut term),
-            Damage::Rows(vec![2])
+            Damage::Delta(vec![2].into())
         );
     }
 }

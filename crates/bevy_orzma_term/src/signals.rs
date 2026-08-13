@@ -1,7 +1,8 @@
 //! Outbound `Term*Signal` `EntityEvent` types for terminal entities,
 //! drained from the VT (`TermBellSignal`, `TermTitleChangedSignal`,
 //! `TermTitleResetSignal`, `TermClipboardStoreSignal`, `TermCwdChangedSignal`,
-//! `TermApcWebviewSignal`, `TermModeChangedSignal`, `TermChildExitSignal`).
+//! `TermApcWebviewSignal`, `TermModeChangedSignal`, `TermChildExitSignal`,
+//! `TermFrameSnapshotSignal`, `TermFrameDeltaSignal`).
 //! Inbound requests fired by the host UI live in `requests.rs`.
 
 use crate::OrzmaTermHandle;
@@ -81,6 +82,24 @@ pub struct TermApcWebviewSignal {
     /// Anchor metadata for `Mount` (absolute line + column + frame seq);
     /// `None` for every other verb.
     pub anchor: Option<InlineAnchor>,
+}
+
+/// Fired when the terminal emits a full-repaint snapshot frame.
+#[derive(EntityEvent, Debug)]
+pub struct TermFrameSnapshotSignal {
+    #[event_target]
+    pub terminal: Entity,
+    /// The emitted snapshot.
+    pub frame: FrameSnapshot,
+}
+
+/// Fired when the terminal emits a differential frame.
+#[derive(EntityEvent, Debug)]
+pub struct TermFrameDeltaSignal {
+    #[event_target]
+    pub terminal: Entity,
+    /// The emitted delta.
+    pub delta: FrameDelta,
 }
 
 pub(crate) struct OrzmaTermSignalPlugin;

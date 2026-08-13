@@ -1,6 +1,6 @@
 //! Frame vocabulary: what one emit hands to the renderer.
 
-use crate::schema::{Cursor, Damage, DisplayOffset, Hyperlink, SelectionRange, ViCursor};
+use crate::schema::{Cursor, DamageRows, DisplayOffset, Hyperlink, SelectionRange, ViCursor};
 
 pub enum Frame {
     Snapshot(FrameSnapshot),
@@ -19,8 +19,8 @@ pub struct FrameDelta {
     /// (arrow keys, character input that doesn't change cell content) is
     /// faithfully tracked without waiting for the next snapshot.
     pub cursor: Cursor,
-    /// Damage this delta repaints.
-    pub damage: Damage,
+    /// Dirty rows this delta repaints.
+    pub damage: DamageRows,
     /// Hyperlinks referenced by this delta's damaged rows. The consumer
     /// merges these cumulatively into its own hyperlink map — this field
     /// itself is NOT cumulative; only the ids referenced by this delta's

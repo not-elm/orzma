@@ -290,7 +290,7 @@ fn a_no_op_scroll_preserves_staged_damage() {
     // damage staging is itself still unimplemented (the four
     // pre-existing damage-test failures), and this test must not
     // depend on that gap.
-    vt.pending_damage = Some(Damage::Rows(vec![0]));
+    vt.pending_damage = Some(Damage::Delta(vec![0].into()));
     let staged = vt.pending_damage.clone();
     vt.scroll(Scroll::Delta(0));
     vt.scroll(Scroll::Bottom);
@@ -393,7 +393,7 @@ fn interpret_stages_the_damage_it_classified() {
     );
     assert_eq!(
         vt.pending_damage,
-        Some(Damage::Rows(vec![0, 1, 2])),
+        Some(Damage::Delta(vec![0, 1, 2].into())),
         "the staged rows must be the ones the verdict was computed from"
     );
 }
@@ -411,7 +411,7 @@ fn staged_damage_accumulates_across_chunks() {
     drain_staged(&mut vt);
     vt.interpret(b"a");
     vt.interpret(b"\r\n\r\nb");
-    let Some(Damage::Rows(rows)) = &vt.pending_damage else {
+    let Some(Damage::Delta(rows)) = &vt.pending_damage else {
         panic!(
             "expected staged partial damage, got {:?}",
             vt.pending_damage
@@ -456,7 +456,10 @@ fn a_viewport_fully_in_scrollback_stages_empty_damage() {
     );
     drain_staged(&mut vt);
     assert_eq!(vt.interpret(b"\x1b[H"), Some(DamageVerdict::Idle));
-    assert_eq!(vt.pending_damage, Some(Damage::Rows(Vec::new())));
+    assert_eq!(
+        vt.pending_damage,
+        Some(Damage::Delta(DamageRows::default()))
+    );
 }
 
 fn cell(x: u16, y: i16) -> ViewportPoint {
@@ -748,7 +751,7 @@ fn every_visible_selection_change_stages_full_damage() {
 fn no_op_selection_ops_preserve_staged_damage() {
     let mut vt = vt_after(b"abc");
     drain_staged(&mut vt);
-    vt.pending_damage = Some(Damage::Rows(vec![0]));
+    vt.pending_damage = Some(Damage::Delta(vec![0].into()));
     let staged = vt.pending_damage.clone();
     update_to(&mut vt, 2, 0, CellSide::Right);
     vt.apply_selection(SelectionOp::ChangeKind(SelectionKind::Lines))
