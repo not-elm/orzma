@@ -127,8 +127,9 @@ impl VtBackend for AlacrittyVtBackend {
             }
             SelectionOp::StartAtViCursor { kind } => {
                 let cursor_point = self.term.vi_mode_cursor.point;
-                let selection = Selection::new(kind.into(), cursor_point, Side::Left);
-                self.term.selection.replace(selection);
+                let mut selection = Selection::new(kind.into(), cursor_point, Side::Left);
+                selection.update(cursor_point, Side::Left.opposite());
+                self.term.selection = Some(selection);
                 Some(Damage::Full)
             }
             SelectionOp::UpdateTo { cell, side } => {
