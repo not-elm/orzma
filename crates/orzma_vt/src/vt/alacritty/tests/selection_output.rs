@@ -6,9 +6,7 @@ use super::*;
 /// Asserts that `StartAt` resolves viewport rows through the display
 /// offset onto the scrollback rows the user actually sees.
 ///
-/// Case: selecting while scrolled back. The `y - display_offset`
-/// translation is this crate's code; getting it wrong selects a live
-/// row hidden below the viewport instead of the visible history row.
+/// Case: the user selects text while scrolled back into history.
 #[test]
 fn start_at_translates_viewport_rows_through_display_offset() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
