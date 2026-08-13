@@ -34,8 +34,6 @@ pub trait VtBackend: Sized {
     fn new(cols: u16, rows: u16) -> Self;
 
     /// Number of scrollback rows the viewport sits above the live tail.
-    ///
-    /// [`DisplayOffset`] carries the value's unit and invariants.
     fn display_offset(&self) -> DisplayOffset;
 
     /// Returns `true` when the viewport is pinned to the live tail.

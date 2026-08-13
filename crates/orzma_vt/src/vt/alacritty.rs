@@ -214,7 +214,9 @@ impl AlacrittyVt {
 
 struct OrzmaTermEventHandler {}
 
-impl EventListener for OrzmaTermEventHandler {}
+impl EventListener for OrzmaTermEventHandler {
+    fn send_event(&self, _event: alacritty_terminal::event::Event) {}
+}
 
 /// Grid size handed to `Term::new` / `Term::resize`.
 /// Alacritty's own `TermSize` is `pub(crate)`, so a minimal local
