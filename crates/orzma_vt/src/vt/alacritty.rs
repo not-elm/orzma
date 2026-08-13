@@ -161,12 +161,13 @@ impl VtBackend for AlacrittyVtBackend {
 
     fn selection_range(&self) -> Option<SelectionRange> {
         let display_offset = self.display_offset();
+        let rows = self.grid_size().rows;
         let selection = self.term.selection.as_ref()?;
         let selection_kind: SelectionKind = selection.ty.into();
         let range = selection.to_range(&self.term)?;
         Some(SelectionRange {
-            start: ViewportPoint::from_alacritty_point(range.start, display_offset),
-            end: ViewportPoint::from_alacritty_point(range.end, display_offset),
+            start: ViewportPoint::from_alacritty_point(range.start, display_offset, rows),
+            end: ViewportPoint::from_alacritty_point(range.end, display_offset, rows),
             geometry: selection_kind.into(),
         })
     }
