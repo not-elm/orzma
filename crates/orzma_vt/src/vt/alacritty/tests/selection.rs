@@ -6,10 +6,7 @@ use super::*;
 /// Asserts that a one-cell `StartAt` yields a renderable, non-empty
 /// selection with `Linear` geometry.
 ///
-/// Case: a mouse press followed by copy. A bare `Selection::new` is
-/// empty when both ends coincide, so the implementation must apply
-/// the opposite-side update recipe or a click-then-copy yields
-/// nothing. Also pins the Simple → Linear geometry arm.
+/// Case: the user clicks a single cell and copies it.
 #[test]
 fn start_at_anchors_a_non_empty_selection() {
     let mut vt = vt_after(b"hi");
@@ -24,8 +21,8 @@ fn start_at_anchors_a_non_empty_selection() {
 /// Asserts that `UpdateTo` moves only the moving end; the anchor
 /// stays where `StartAt` put it.
 ///
-/// Case: the basic drag — press on the first cell, drag right across
-/// four more. The extracted text must cover the whole span.
+/// Case: the basic drag — the user presses on the first cell and
+/// drags right across four more.
 #[test]
 fn update_to_extends_the_moving_end() {
     let mut vt = vt_after(b"abcdefghij");
@@ -36,9 +33,8 @@ fn update_to_extends_the_moving_end() {
 
 /// Asserts that `UpdateTo` with no active selection changes nothing.
 ///
-/// Case: alacritty wipes the selection on an alt-screen swap while
-/// the input glue may still deliver one more drag event; the stray
-/// update must neither panic nor conjure a selection.
+/// Case: an alt-screen swap wipes the selection while the input glue
+/// still delivers one more drag event.
 #[test]
 fn update_to_without_a_selection_is_a_no_op() {
     let mut vt = vt_after(b"abc");
@@ -49,9 +45,8 @@ fn update_to_without_a_selection_is_a_no_op() {
 /// Asserts that the end-cell side decides whether the cell under the
 /// pointer is included.
 ///
-/// Case: the CellSide → alacritty `Side` mapping is a two-arm match;
-/// a transposition compiles cleanly and off-by-ones every selection
-/// the user ever drags.
+/// Case: the user drags to a boundary cell, and which half of it the
+/// pointer sits in decides whether that cell is highlighted.
 #[test]
 fn cell_side_decides_inclusion_of_the_boundary_cells() {
     let mut vt = vt_after(b"abcdef");
@@ -67,9 +62,7 @@ fn cell_side_decides_inclusion_of_the_boundary_cells() {
 /// Asserts that a drag toward the top-left reports a normalized
 /// range with `start` at the top.
 ///
-/// Case: an upward drag. `SelectionRange`'s doc pins start as the
-/// top-left of the selected cells; a renderer given anchor-order
-/// endpoints would rasterize a negative-height span.
+/// Case: the user drags upward, toward the top-left.
 #[test]
 fn a_backward_drag_normalizes_start_before_end() {
     let mut vt = vt_after(b"one\r\ntwo\r\nthree");
@@ -83,9 +76,7 @@ fn a_backward_drag_normalizes_start_before_end() {
 /// Asserts that `Clear` drops the selection AND the stored anchor a
 /// later `ChangeKind` would rebuild from.
 ///
-/// Case: clear, then press `V`. An implementation keeping the saved
-/// anchor would resurrect a zombie selection from pre-clear state
-/// instead of treating the change as a no-op.
+/// Case: the user clears a selection and then presses `V`.
 #[test]
 fn clear_discards_the_selection_and_the_stored_anchor() {
     let mut vt = vt_after(b"abcdef");
@@ -101,10 +92,7 @@ fn clear_discards_the_selection_and_the_stored_anchor() {
 /// selection empty for `selection_range` and `selected_text` while
 /// `selection_kind` still reports the live selection object.
 ///
-/// Case: a drag that returns to its starting point. The trait doc
-/// says range/text are `None` for an empty selection but kind is
-/// `None` only when NO selection exists — this pins the three
-/// getters to one consistent notion of "empty".
+/// Case: the user's drag returns to its starting point.
 #[test]
 fn an_update_back_onto_the_anchor_empties_the_selection() {
     let mut vt = vt_after(b"abc");

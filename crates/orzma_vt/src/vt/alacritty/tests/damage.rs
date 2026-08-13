@@ -42,8 +42,7 @@ fn insert_mode_reports_full_damage() {
 /// Asserts that each `interpret` reports only the damage its own
 /// chunk produced: the tracker is reset after every read.
 ///
-/// Case: two PTY chunks arrive between emits; the wrapper accumulates
-/// the per-chunk deltas into one staged repaint.
+/// Case: two PTY chunks arrive between one emit and the next.
 #[test]
 fn a_second_interpret_reports_only_new_damage() {
     let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);

@@ -86,10 +86,8 @@ fn scroll_on_the_alternate_screen_is_a_noop() {
 /// Asserts that the live-tail predicate follows the viewport in both
 /// directions, not just away from the tail.
 ///
-/// Case: the scroll-on-input policy gates on this predicate, so a
-/// value that latches `false` after a scroll back down would make
-/// every later keystroke re-snap a viewport that never moved, and
-/// stage damage for a repaint nothing asked for.
+/// Case: the user scrolls into history and back down to the tail
+/// before typing again.
 #[test]
 fn is_at_live_tail_tracks_the_viewport() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
@@ -104,12 +102,8 @@ fn is_at_live_tail_tracks_the_viewport() {
 /// viewport in its own direction and magnitude, with a half page
 /// being `screen_lines / 2` rows.
 ///
-/// Case: `Scroll::to_alacritty_scroll` is a seven-arm match onto a
-/// smaller enum — a transposed arm (PageUp↔PageDown, Top↔Bottom,
-/// HalfPageUp↔HalfPageDown) compiles cleanly and inverts the
-/// motion, and the `Delta` tests above cannot see it. The history
-/// is deeper than one screen so `PageUp` lands on the page size,
-/// not the clamp.
+/// Case: the user pages up and down and jumps to both ends of a
+/// history deeper than one screen.
 #[test]
 fn absolute_and_paged_scrolls_map_to_their_directions() {
     let history = usize::from(GRID_ROWS) + SEEDED_HISTORY_ROWS;
@@ -131,9 +125,8 @@ fn absolute_and_paged_scrolls_map_to_their_directions() {
 /// Asserts that a scroll which moved the viewport reports full
 /// damage.
 ///
-/// Case: a scroll changes every visible row but produces no PTY
-/// output, so its repaint reaches the renderer only through this
-/// return value.
+/// Case: a scroll changes every visible row while the PTY stays
+/// silent.
 #[test]
 fn scroll_reports_full_damage_when_the_viewport_moves() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
@@ -143,8 +136,8 @@ fn scroll_reports_full_damage_when_the_viewport_moves() {
 /// Asserts that a scroll which did not move the viewport reports no
 /// damage.
 ///
-/// Case: a zero delta, and wheel notches at the live tail that clamp
-/// in place.
+/// Case: a zero delta arrives, and wheel notches at the live tail
+/// clamp in place.
 #[test]
 fn a_no_op_scroll_reports_no_damage() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
@@ -155,8 +148,8 @@ fn a_no_op_scroll_reports_no_damage() {
 
 /// Asserts that scrolling on the alternate screen reports no damage.
 ///
-/// Case: the alternate grid has no scrollback, so every scroll there
-/// is a no-op.
+/// Case: the user wheels over a full-screen TUI on the alternate
+/// screen, which has no scrollback.
 #[test]
 fn scrolling_the_alternate_screen_reports_no_damage() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);

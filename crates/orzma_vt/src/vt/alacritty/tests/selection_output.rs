@@ -19,10 +19,7 @@ fn start_at_translates_viewport_rows_through_display_offset() {
 /// Asserts that an alt-screen swap invalidates the selection, its
 /// reported kind, and the stored anchor.
 ///
-/// Case: opening vim mid-selection. alacritty clears only its own
-/// `Term::selection`; the backend's separately stored anchor must
-/// not let `ChangeKind` rebuild from stale primary-screen state, and
-/// the getters must not serve cached values.
+/// Case: the user opens vim mid-selection.
 #[test]
 fn an_alt_screen_swap_invalidates_selection_and_anchor() {
     let mut vt = vt_after(b"abcdef");
@@ -40,9 +37,8 @@ fn an_alt_screen_swap_invalidates_selection_and_anchor() {
 /// reports full damage: StartAt, a moving UpdateTo, ChangeKind, and
 /// Clear.
 ///
-/// Case: alacritty excludes Selection from `Term::damage()`, so the
-/// repaint for a press, drag, v/V switch, or clear reaches the
-/// renderer only through these return values.
+/// Case: the user presses, drags, switches granularity with v/V, and
+/// clears, all on an otherwise idle terminal.
 #[test]
 fn every_visible_selection_change_reports_full_damage() {
     let mut vt = vt_after(b"abcdefghij");
@@ -104,8 +100,8 @@ fn no_op_selection_ops_report_no_damage() {
 
 /// Asserts that a fresh VT reports no selection range.
 ///
-/// Case: the renderer treats `None` as "no overlay"; a non-`None`
-/// default would paint a phantom selection on boot.
+/// Case: the renderer reads the selection overlay on a freshly
+/// spawned terminal.
 #[test]
 fn selection_range_is_none_on_a_fresh_vt() {
     assert_eq!(
@@ -118,10 +114,8 @@ fn selection_range_is_none_on_a_fresh_vt() {
 /// and clamps off-viewport endpoints to the -1 / row-count
 /// sentinels.
 ///
-/// Case: select, then scroll. The selection is pinned to grid
-/// content, so its viewport projection moves opposite the scroll and
-/// partially visible selections need the sentinel rows for the
-/// renderer to draw the on-screen part.
+/// Case: the user selects a span and then scrolls it partly out of
+/// the viewport.
 #[test]
 fn display_scroll_shifts_and_clamps_the_projected_range() {
     let mut vt = vt_with_history(usize::from(GRID_ROWS) + SEEDED_HISTORY_ROWS);
@@ -146,9 +140,8 @@ fn display_scroll_shifts_and_clamps_the_projected_range() {
 /// Asserts that `selected_text` is `None` on a fresh VT and after a
 /// `Clear`.
 ///
-/// Case: the copy path treats `None` as "nothing to copy". A cached
-/// or `Some("")` result would overwrite the user's clipboard with an
-/// empty string.
+/// Case: the user copies with nothing selected, and again right
+/// after clearing a selection.
 #[test]
 fn selected_text_is_none_without_a_selection() {
     let mut vt = vt_after(b"abc");
@@ -162,9 +155,8 @@ fn selected_text_is_none_without_a_selection() {
 /// once, joins soft-wrapped rows without a newline, and keeps hard
 /// line breaks.
 ///
-/// Case: copying CJK output and long wrapped lines. Wide-char spacer
-/// cells are the classic double-or-drop bug, and a soft wrap that
-/// leaks a `\n` corrupts every pasted long command line.
+/// Case: the user copies CJK output and long soft-wrapped command
+/// lines.
 #[test]
 fn selected_text_handles_wide_and_wrapped_content() {
     let mut vt = vt_after("あ".as_bytes());

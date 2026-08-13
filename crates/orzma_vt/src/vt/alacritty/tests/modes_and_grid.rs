@@ -20,11 +20,7 @@ fn fresh_terminal_reports_alacritty_baseline() {
 /// Asserts that `resize` reshapes the emulated grid to the
 /// requested dimensions.
 ///
-/// Case: the window-resize path — `OrzmaTerm::resize` delegates
-/// here after the PTY ioctl. The non-square target catches a
-/// cols/rows transposition into `LocalDim`, which would reflow
-/// every line at the wrong width while the child renders at the
-/// correct one.
+/// Case: the user resizes the window to a non-square grid.
 #[test]
 fn resize_updates_the_grid_size() {
     let mut vt = AlacrittyVtBackend::new(80, 24);

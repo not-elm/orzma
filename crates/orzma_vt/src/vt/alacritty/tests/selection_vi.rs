@@ -10,9 +10,7 @@ fn enter_vi_at(vt: &mut AlacrittyVtBackend, x: usize, y: i32) {
 /// Asserts that `StartAtViCursor` anchors at the vi cursor the VT
 /// tracks internally.
 ///
-/// Case: the vi-mode `v` press. The host deliberately sends no cell
-/// because it does not track the vi cursor; the VT must resolve the
-/// anchor itself.
+/// Case: the user presses `v` in vi mode.
 #[test]
 fn start_at_vi_cursor_anchors_at_the_vi_cursor() {
     let mut vt = vt_after(b"hello");
@@ -27,9 +25,9 @@ fn start_at_vi_cursor_anchors_at_the_vi_cursor() {
 /// Asserts that `ChangeKind` switches granularity while preserving
 /// the original anchor, spanning to the current vi cursor.
 ///
-/// Case: copy-mode `v` then `V` without leaving vi mode (the old
-/// handle.rs anchor-preservation contract). Re-anchoring at the vi
-/// cursor instead would collapse the selection the user built up.
+/// Case: the user presses `v`, moves the vi cursor, then presses `V`
+/// without leaving vi mode. The decided policy preserves the original
+/// anchor rather than re-anchoring at the vi cursor.
 #[test]
 fn change_kind_switches_granularity_and_keeps_the_anchor() {
     let mut vt = vt_after(b"abcdefghij\r\nklmnopqrst");
@@ -51,9 +49,8 @@ fn change_kind_switches_granularity_and_keeps_the_anchor() {
 /// Asserts that `ChangeKind` with no active selection changes
 /// nothing.
 ///
-/// Case: the host resolves the v/V toggle by reading the current
-/// kind, but the selection can vanish between that read and the
-/// apply; `ChangeKind` must not conjure a selection from nothing.
+/// Case: the selection vanishes between the host's kind read and the
+/// applied toggle.
 #[test]
 fn change_kind_without_a_selection_is_a_no_op() {
     let mut vt = vt_after(b"abc");
@@ -65,10 +62,9 @@ fn change_kind_without_a_selection_is_a_no_op() {
 /// Asserts that a `Lines` start selects the logical row: full-width
 /// range, `Lines` geometry, and content-plus-newline text.
 ///
-/// Case: vi `V` (or a triple click). The text is the populated row
-/// plus a trailing `\n` — not an 80-column space-padded row — per
-/// the logical-line extraction the old renderer relied on. Also pins
-/// the Lines → Lines geometry arm.
+/// Case: the user presses vi `V` (or triple-clicks) on a line. The
+/// decided policy extracts the populated row plus a trailing `\n`,
+/// not an 80-column space-padded row.
 #[test]
 fn lines_kind_selects_the_logical_row_with_trailing_newline() {
     let mut vt = vt_after(b"hello world");
@@ -108,7 +104,8 @@ fn switch_vi_mode_transitions_and_reports_full_damage() {
 /// Asserts that an idempotent vi-mode request changes nothing and
 /// reports no damage.
 ///
-/// Case: a repeated Enter, or an Exit while already in normal mode.
+/// Case: a repeated Enter arrives, or an Exit while the terminal is
+/// already in normal mode.
 #[test]
 fn an_idempotent_vi_mode_request_reports_no_damage() {
     let mut vt = vt_after(b"hello");
@@ -121,9 +118,8 @@ fn an_idempotent_vi_mode_request_reports_no_damage() {
 /// Asserts that `selection_kind` tracks the active granularity and
 /// resets on `Clear`.
 ///
-/// Case: the vi v/V toggle predicate reads this to choose between
-/// clearing (same kind), switching (different kind), and starting
-/// (none); a stale kind flips that decision.
+/// Case: the user toggles selection granularity with `v` and `V` in
+/// vi mode.
 #[test]
 fn selection_kind_reports_the_active_granularity_and_resets() {
     let mut vt = vt_after(b"abcdef");
