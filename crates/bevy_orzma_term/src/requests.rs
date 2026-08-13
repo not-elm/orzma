@@ -23,7 +23,10 @@ pub use mouse_input::RequestTermMouseInput;
 pub use paste::RequestTermPaste;
 pub use resize::RequestTermResize;
 pub use scroll::RequestTermScroll;
-pub use selection::{CellSide, RequestTermSelection, SelectionKind, SelectionOp};
+pub use selection::{
+    CellSide, RequestTermSelectionClear, RequestTermSelectionKindChange, RequestTermSelectionStart,
+    RequestTermSelectionStartAtViCursor, RequestTermSelectionUpdate, SelectionKind, ViewportPoint,
+};
 pub use vi_mode::{RequestTermViMode, ViModeSwitch};
 pub use vi_motion::{RequestTermViMotion, ViMotion};
 
