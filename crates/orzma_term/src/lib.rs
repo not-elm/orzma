@@ -119,11 +119,12 @@ impl<V: VtBackend> OrzmaTerm<V> {
         signals
     }
 
-    /// Scrolls the grid.
+    /// Scrolls the grid, arming the coalescer only when the viewport
+    /// actually moved — a clamped or zero motion reports no damage, and
+    /// arming for it would open an emit window for a repaint that never
+    /// comes.
     pub fn scroll(&mut self, scroll: Scroll) {
-        let prev_offset = self.vt.display_offset();
-        self.vt.scroll(scroll);
-        if prev_offset != self.vt.display_offset() {
+        if self.vt.scroll(scroll).is_some() {
             self.coalescer.arm_or_extend(Instant::now());
         }
     }
@@ -137,13 +138,18 @@ impl<V: VtBackend> OrzmaTerm<V> {
     /// an error. When the PTY resize fails the call returns
     /// [`OrzmaTermError::PtyResize`] and leaves the VT grid and
     /// coalescer untouched (PTY first; nothing changes on failure).
+    ///
+    /// A request for the grid size the VT already has reflows nothing
+    /// and reports no damage, so it arms nothing either — the same gate
+    /// [`Self::scroll`] applies to a clamped motion.
     pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTermResult {
         if cols == 0 || rows == 0 || Self::MAX_COLS < cols || Self::MAX_ROWS < rows {
             return Ok(());
         }
         self.pty.resize(cols, rows)?;
-        self.vt.resize(cols, rows);
-        self.coalescer.arm_or_extend(Instant::now());
+        if self.vt.resize(cols, rows).is_some() {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
         Ok(())
     }
 
@@ -392,6 +398,39 @@ mod tests {
         term.resize(OrzmaTerm::<AlacrittyVtBackend>::MAX_COLS + 1, 24)
             .expect("ignored resize must be Ok");
         assert!(!term.coalescer.is_armed());
+    }
+
+    /// Asserts that a resize to the size the terminal already has arms
+    /// nothing.
+    ///
+    /// Case: the host recomputes cells after a pixel-only window change
+    /// (a DPI event, a drag that does not cross a cell boundary) and
+    /// re-applies the grid size the VT already holds. The decided policy
+    /// is the same one a clamped scroll follows: nothing reflows, so
+    /// nothing is scheduled, rather than opening an emit window on every
+    /// such frame.
+    #[test]
+    fn a_same_size_resize_does_not_arm_the_coalescer() {
+        let (mut term, _sink) = detached_term();
+        term.resize(80, 24).expect("same-size resize must be Ok");
+        assert!(!term.coalescer.is_armed());
+    }
+
+    /// Asserts that a same-size resize leaves an already-open emit
+    /// window's deadline untouched.
+    ///
+    /// Case: a burst of window events re-applies the current grid size
+    /// while an earlier repaint is still pending. Routing the no-op
+    /// through `arm_or_extend` would keep `is_armed()` true but slide
+    /// the idle deadline, delaying the pending flush on every event.
+    #[test]
+    fn a_same_size_resize_does_not_extend_the_deadline() {
+        let (mut term, _sink) = detached_term();
+        term.resize(120, 40).expect("resize");
+        let deadline = term.coalescer.next_deadline();
+        assert!(deadline.is_some(), "precondition: a real resize arms");
+        term.resize(120, 40).expect("same-size resize must be Ok");
+        assert_eq!(term.coalescer.next_deadline(), deadline);
     }
 
     /// Asserts that back-to-back resizes settle on the last requested

@@ -2,7 +2,7 @@
 
 use crate::{
     schema::{
-        CellSide, Damage, DisplayOffset, Frame, GridSize, MouseEncoding, MouseTracking, Scroll,
+        CellSide, Damage, DisplayOffset, GridSize, MouseEncoding, MouseTracking, Scroll,
         SelectionKind, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
     },
     vt::{VtBackend, VtSelection, apc::ApcState},
@@ -220,9 +220,7 @@ impl AlacrittyVtBackend {
 
 struct OrzmaTermEventHandler {}
 
-impl EventListener for OrzmaTermEventHandler {
-    fn send_event(&self, _event: alacritty_terminal::event::Event) {}
-}
+impl EventListener for OrzmaTermEventHandler {}
 
 /// Grid size handed to `Term::new` / `Term::resize`.
 /// Alacritty's own `TermSize` is `pub(crate)`, so a minimal local

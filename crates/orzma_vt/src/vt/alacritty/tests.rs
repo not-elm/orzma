@@ -12,14 +12,16 @@ mod selection;
 mod selection_output;
 mod selection_vi;
 
-const VIEWPORT_FILL_ROWS: usize = 23;
-const SEEDED_HISTORY_ROWS: usize = 10;
-
 /// Row count of the grid every fixture in this module builds.
 const GRID_ROWS: u16 = 24;
+/// Column count of the grid every fixture in this module builds.
+const GRID_COLS: u16 = 80;
+/// Newlines a fresh grid absorbs before history starts growing.
+const VIEWPORT_FILL_ROWS: usize = GRID_ROWS as usize - 1;
+const SEEDED_HISTORY_ROWS: usize = 10;
 
 fn vt_after(bytes: &[u8]) -> AlacrittyVtBackend {
-    let mut vt = AlacrittyVtBackend::new(80, 24);
+    let mut vt = AlacrittyVtBackend::new(GRID_COLS, GRID_ROWS);
     vt.interpret(bytes);
     vt
 }

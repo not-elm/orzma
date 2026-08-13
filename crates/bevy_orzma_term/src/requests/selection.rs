@@ -5,6 +5,10 @@
 //! [`ViewportPoint`]) is owned by the VT layer; this module re-exports
 //! it so the requests and their payload types travel together — each
 //! request carries exactly what the VT applies.
+//!
+//! The observers below only route operations to the targeted entity's
+//! handle. Anchor resolution, cell-side inclusion, and geometry live in
+//! `orzma_vt` and are pinned by its tests, not re-asserted here.
 
 use bevy::prelude::*;
 pub use orzma_vt::prelude::{CellSide, SelectionKind, ViewportPoint};
@@ -13,11 +17,6 @@ use crate::OrzmaTermHandle;
 
 /// Fired by the host UI to anchor a new selection at an explicit
 /// viewport cell (mouse press).
-///
-/// The observers in this module only route operations to the targeted
-/// entity's handle. Anchor resolution, cell-side inclusion, and
-/// geometry live in `orzma_vt` and are pinned by its tests, not
-/// re-asserted here.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTermSelectionStart {
     #[event_target]

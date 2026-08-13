@@ -36,8 +36,14 @@ impl ViewportPoint {
     /// relative to the top of the currently visible viewport. The clamp
     /// implements the output half of the type's contract and keeps the
     /// `i16` cast lossless for arbitrarily deep scrollback.
+    ///
+    /// The below-viewport sentinel is itself capped at [`i16::MAX`]: a
+    /// grid taller than that cannot be addressed by an `i16` row, and
+    /// letting the cast wrap would report a below-viewport endpoint as
+    /// an above-viewport one.
     pub fn from_alacritty_point(p: Point, display_offset: DisplayOffset, rows: u16) -> Self {
-        let row = (p.line.0 as i64 + i64::from(display_offset.0)).clamp(-1, i64::from(rows));
+        let below_viewport = i64::from(rows).min(i64::from(i16::MAX));
+        let row = (p.line.0 as i64 + i64::from(display_offset.0)).clamp(-1, below_viewport);
         Self {
             row: row as i16,
             column: p.column.0 as u16,

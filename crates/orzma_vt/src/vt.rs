@@ -1,8 +1,8 @@
 //! Engine layer: the [`OrzmaVt`] contract and its backends.
 
 use crate::schema::{
-    CellSide, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridSize, Scroll,
-    SelectionKind, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
+    CellSide, Damage, DamageRows, DamageVerdict, DisplayOffset, GridSize, Scroll, SelectionKind,
+    SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
 };
 
 #[cfg(feature = "alacritty")]
@@ -128,7 +128,13 @@ impl<B: VtBackend> OrzmaVt<B> {
 
 impl<B: VtBackend + VtSelection> OrzmaVt<B> {
     /// Anchors a new selection at an explicit viewport cell; returns
-    /// whether the visible selection changed.
+    /// whether the backend reported a repaint to stage.
+    ///
+    /// [`VtSelection`] allows conservative over-reporting, so this is
+    /// not a "the visible selection changed" signal: re-anchoring onto
+    /// the already-selected cell still reports a repaint. A caller that
+    /// needs the precise gate compares
+    /// [`Self::selection_range`] before and after instead.
     pub fn start_selection(
         &mut self,
         cell: ViewportPoint,
@@ -140,21 +146,22 @@ impl<B: VtBackend + VtSelection> OrzmaVt<B> {
     }
 
     /// Anchors a new selection at the vi cursor; returns whether the
-    /// visible selection changed.
+    /// backend reported a repaint to stage.
     pub fn start_selection_at_vi_cursor(&mut self, kind: SelectionKind) -> VtResult<bool> {
         let damage = self.backend.start_selection_at_vi_cursor(kind)?;
         Ok(self.stage_if_changed(damage))
     }
 
     /// Moves the moving end of the active selection; returns whether
-    /// the visible selection changed.
+    /// the backend reported a repaint to stage. A drag sample that
+    /// lands back on the cell and side it came from still reports one.
     pub fn update_selection(&mut self, cell: ViewportPoint, side: CellSide) -> VtResult<bool> {
         let damage = self.backend.update_selection(cell, side)?;
         Ok(self.stage_if_changed(damage))
     }
 
     /// Switches selection granularity while keeping the anchor;
-    /// returns whether the visible selection changed.
+    /// returns whether the backend reported a repaint to stage.
     pub fn change_selection_kind(&mut self, kind: SelectionKind) -> VtResult<bool> {
         let damage = self.backend.change_selection_kind(kind)?;
         Ok(self.stage_if_changed(damage))

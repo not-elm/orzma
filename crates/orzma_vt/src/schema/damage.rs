@@ -44,6 +44,13 @@ impl BitOrAssign for Damage {
             (Self::Full, _) => {}
             (staged, Self::Full) => *staged = Self::Full,
             (Self::Delta(staged), Self::Delta(incoming)) => {
+                if incoming.0.is_empty() {
+                    return;
+                }
+                if staged.0.is_empty() {
+                    *staged = incoming;
+                    return;
+                }
                 staged.0.extend(incoming.0);
                 staged.0.sort_unstable();
                 staged.0.dedup();
@@ -57,7 +64,7 @@ impl BitOrAssign for Damage {
 pub struct DamageRows(Vec<u16>);
 
 impl Deref for DamageRows {
-    type Target = Vec<u16>;
+    type Target = [u16];
 
     fn deref(&self) -> &Self::Target {
         &self.0
