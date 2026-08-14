@@ -118,6 +118,14 @@ impl VtBackend for AlacrittyVtBackend {
         self.term.toggle_vi_mode();
         Ok(Some(Damage::Full))
     }
+
+    fn cursor(&self) -> crate::prelude::Cursor {
+        todo!()
+    }
+
+    fn vi_cursor(&self) -> Option<crate::prelude::ViCursor> {
+        todo!()
+    }
 }
 
 impl VtSelection for AlacrittyVtBackend {

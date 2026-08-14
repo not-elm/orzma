@@ -1,8 +1,9 @@
 //! Engine layer: the [`OrzmaVt`] contract and its backends.
 
 use crate::schema::{
-    CellSide, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridSize, Scroll,
-    SelectionKind, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
+    CellSide, Cursor, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridSize, Scroll,
+    SelectionKind, SelectionRange, ViCursor, ViModeSwitch, ViewportPoint, VtModes, VtResult,
+    VtSignal,
 };
 
 #[cfg(feature = "alacritty")]
@@ -198,6 +199,12 @@ pub trait VtBackend: Sized {
     fn is_at_live_tail(&self) -> bool {
         self.display_offset() == DisplayOffset(0)
     }
+
+    /// Returns the cursor info.
+    fn cursor(&self) -> Cursor;
+
+    /// Returns the cursor info.([`None`] if not in vi-mode)
+    fn vi_cursor(&self) -> Option<ViCursor>;
 
     /// Interprets a chunk of the PTY byte stream, mutating the terminal
     /// state, and returns the damage THIS chunk produced — the backend
