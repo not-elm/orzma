@@ -36,14 +36,14 @@ pub struct GridSize {
 /// It does move when content scrolls: a row pushed into history shifts every line of existing
 /// text by `-1`. It is therefore a frame-local coordinate, not an
 /// identifier that stays stable across scrollback eviction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GridLine(pub i32);
 
 impl GridLine {
     #[inline]
     pub fn to_viewport(&self, offset: DisplayOffset, rows: u16) -> Option<ViewportLine> {
         let vl = self.0 + offset.0 as i32;
-        if vl < 0 || (rows as i32) < vl {
+        if !(0..(rows as i32)).contains(&vl) {
             return None;
         }
         Some(ViewportLine(u16::try_from(vl).ok()?))
@@ -58,14 +58,14 @@ impl GridLine {
 /// below it. Clamping off-viewport values to the `-1` / row-count
 /// sentinels is the responsibility of the conversion that produces
 /// the value, not of this type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ViewportLine(pub u16);
 
 /// A 0-based grid column.
 ///
 /// Columns are shared between the grid and viewport spaces: with no
 /// horizontal scrolling, only the line axis differs between the two.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GridColumn(pub u16);
 
 /// A cell in active-grid coordinates.
@@ -73,7 +73,7 @@ pub struct GridColumn(pub u16);
 /// Pairs a [`GridLine`] with a [`GridColumn`]. Unlike
 /// [`crate::schema::ViewportPoint`], the position does not depend on
 /// where the user has scrolled the viewport.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GridPoint {
     /// Line in active-grid coordinates.
     pub line: GridLine,
@@ -142,6 +142,7 @@ mod tests {
     fn a_line_below_the_viewport_projects_to_none() {
         let offset = DisplayOffset(5);
         assert_eq!(GridLine(23).to_viewport(offset, ROWS), None);
+        assert_eq!(GridLine(19).to_viewport(offset, ROWS), None);
         assert_eq!(
             GridLine(18).to_viewport(offset, ROWS),
             Some(ViewportLine(23))
