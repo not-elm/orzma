@@ -125,6 +125,7 @@ impl<B: VtBackend> OrzmaTerm<B> {
             if let Some(f) = self.vt.frame() {
                 frame.replace(f);
             }
+            self.coalescer.disarm();
         }
         InterpretOutput { frame, signals }
     }
@@ -161,16 +162,6 @@ impl<B: VtBackend> OrzmaTerm<B> {
             self.coalescer.arm_or_extend(Instant::now());
         }
         Ok(())
-    }
-
-    /// Mutable access to the VT, bypassing the coalescer.
-    ///
-    /// A mutation applied through this handle stages its damage like
-    /// any other, but arms nothing — the caller owns deciding whether
-    /// the change deserves an emit.
-    #[inline]
-    pub const fn vt_mut(&mut self) -> &mut OrzmaVt<B> {
-        &mut self.vt
     }
 
     /// Encodes a key press and writes it to the PTY.
