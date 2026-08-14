@@ -95,31 +95,23 @@ fn selection_range_is_none_on_a_fresh_vt() {
     );
 }
 
-/// Asserts that display scrolling shifts the projected viewport rows
-/// and clamps off-viewport endpoints to the -1 / row-count
-/// sentinels.
+/// Asserts that the reported selection range is invariant under
+/// display scrolling.
 ///
-/// Case: the user selects a span and then scrolls it partly out of
-/// the viewport.
+/// Case: the user selects a span and then scrolls back and forth
+/// through history; the selection stays on the text it covered, so
+/// the reported grid range never moves.
 #[test]
-fn display_scroll_shifts_and_clamps_the_projected_range() {
+fn the_selection_range_is_invariant_under_display_scroll() {
     let mut vt = vt_with_history(usize::from(GRID_ROWS) + SEEDED_HISTORY_ROWS);
     start_simple(&mut vt, 0, 0);
     update_to(&mut vt, 5, 15, CellSide::Right);
-    vt.scroll(Scroll::Delta(3));
-    let range = vt.selection_range().expect("selection survives scroll");
-    assert_eq!((range.start.row, range.end.row), (3, 18), "pure shift");
-    vt.scroll(Scroll::Delta(7));
-    let range = vt.selection_range().expect("still partially visible");
-    assert_eq!(range.start.row, 10);
-    assert_eq!(range.end.row, GRID_ROWS as i16, "below-viewport sentinel");
-    vt.clear_selection().unwrap();
-    start_simple(&mut vt, 0, 5);
-    update_to(&mut vt, 5, 20, CellSide::Right);
+    let before = vt.selection_range().expect("selection renders");
+    assert_eq!((before.start, before.end), (point(0, 0), point(15, 5)));
+    vt.scroll(Scroll::Delta(10));
+    assert_eq!(vt.selection_range(), Some(before));
     vt.scroll(Scroll::Bottom);
-    let range = vt.selection_range().expect("still partially visible");
-    assert_eq!(range.start.row, -1, "above-viewport sentinel");
-    assert_eq!(range.end.row, 10);
+    assert_eq!(vt.selection_range(), Some(before));
 }
 
 /// Asserts that `selected_text` is `None` on a fresh VT and after a

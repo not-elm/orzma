@@ -2,22 +2,25 @@
 //! operations ([`SelectionKind`], [`CellSide`]) and the renderable
 //! range the VT reports back ([`SelectionRange`]).
 
-use crate::schema::ViewportPoint;
+use crate::schema::GridPoint;
 #[cfg(feature = "alacritty")]
 use alacritty_terminal::{index::Side, selection::SelectionType};
 
-/// A renderable selection: normalized viewport endpoints plus the shape
-/// they span.
+/// A renderable selection: normalized active-grid endpoints plus the
+/// shape they span.
 ///
 /// `start` is the top-left and `end` the bottom-right of the selected
 /// cells, both inclusive — anchor/moving-end order is already resolved
-/// and cell-side trimming applied by the VT.
+/// and cell-side trimming applied by the VT. The endpoints are raw
+/// grid positions and do not move when the user scrolls; project them
+/// with [`crate::schema::GridLine::to_viewport`] to place the
+/// highlight on screen.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct SelectionRange {
     /// Top-left selected cell (inclusive).
-    pub start: ViewportPoint,
+    pub start: GridPoint,
     /// Bottom-right selected cell (inclusive).
-    pub end: ViewportPoint,
+    pub end: GridPoint,
     /// The shape spanned between the endpoints.
     pub geometry: SelectionGeometry,
 }

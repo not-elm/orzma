@@ -12,8 +12,8 @@ fn start_at_anchors_a_non_empty_selection() {
     let mut vt = vt_after(b"hi");
     start_simple(&mut vt, 0, 0);
     let range = vt.selection_range().expect("one-cell start must render");
-    assert_eq!(range.start, ViewportPoint { row: 0, column: 0 });
-    assert_eq!(range.end, ViewportPoint { row: 0, column: 0 });
+    assert_eq!(range.start, point(0, 0));
+    assert_eq!(range.end, point(0, 0));
     assert_eq!(range.geometry, SelectionGeometry::Linear);
     assert_eq!(vt.selected_text().as_deref(), Some("h"));
 }
@@ -70,8 +70,8 @@ fn a_backward_drag_normalizes_start_before_end() {
     start_simple(&mut vt, 5, 2);
     update_to(&mut vt, 1, 0, CellSide::Left);
     let range = vt.selection_range().expect("backward drag must render");
-    assert_eq!(range.start.row, 0);
-    assert_eq!(range.end.row, 2);
+    assert_eq!(range.start.line, GridLine(0));
+    assert_eq!(range.end.line, GridLine(2));
 }
 
 /// Asserts that `clear_selection` drops the selection AND the stored

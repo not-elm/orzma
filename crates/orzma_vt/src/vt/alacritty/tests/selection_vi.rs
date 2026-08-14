@@ -65,8 +65,8 @@ fn lines_kind_selects_the_logical_row_with_trailing_newline() {
     vt.start_selection(cell(3, 0), CellSide::Left, SelectionKind::Lines)
         .unwrap();
     let range = vt.selection_range().expect("Lines start must render");
-    assert_eq!(range.start, ViewportPoint { row: 0, column: 0 });
-    assert_eq!(range.end, ViewportPoint { row: 0, column: 79 });
+    assert_eq!(range.start, point(0, 0));
+    assert_eq!(range.end, point(0, 79));
     assert_eq!(range.geometry, SelectionGeometry::Lines);
     assert_eq!(vt.selected_text().as_deref(), Some("hello world\n"));
 }
