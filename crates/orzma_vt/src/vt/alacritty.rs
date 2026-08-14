@@ -2,10 +2,11 @@
 
 use crate::{
     schema::{
-        CellSide, Cursor, Damage, DisplayOffset, GridPoint, GridSize, MouseEncoding, MouseTracking,
-        Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
+        CellSide, Cursor, Damage, DamageRows, DisplayOffset, GridPoint, GridSize, MouseEncoding,
+        MouseTracking, Palette, Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch,
+        VtModes, VtResult, VtSignal,
     },
-    vt::{VtBackend, VtSelection, apc::ApcState},
+    vt::{ExtractedRows, VtBackend, VtSelection, apc::ApcState},
 };
 use alacritty_terminal::{
     Term,
@@ -117,6 +118,18 @@ impl VtBackend for AlacrittyVtBackend {
         }
         self.term.toggle_vi_mode();
         Ok(Some(Damage::Full))
+    }
+
+    fn extract_rows(&mut self, _lines: Option<&DamageRows>) -> ExtractedRows {
+        todo!()
+    }
+
+    fn history_size(&self) -> u32 {
+        todo!()
+    }
+
+    fn palette(&self) -> Palette {
+        todo!()
     }
 
     fn cursor(&self) -> Cursor {

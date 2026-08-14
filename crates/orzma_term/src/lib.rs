@@ -106,30 +106,6 @@ impl<B: VtBackend> OrzmaTerm<B> {
         })
     }
 
-    ///HACK:
-    /// VecでTermEventを収集しているが、この関数はほぼ米フレームで呼ばれることが予想されるため、
-    /// コールバック形式などにしたほうがいい？
-    pub fn pump(&mut self) -> InterpretOutput {
-        while let Some(chunk) = self.pty.try_read_chunk() {
-            //TODO: DamageVerdictを使い、colalescerのdeadlineを調整する。
-            self.vt.interpret(&chunk);
-        }
-        let signals = self
-            .vt
-            .drain_signals()
-            .map(|s| TermSignal::Vt(s))
-            .collect::<Vec<_>>();
-        //TODO: ChildExitの判定を行い、必要であればsignalsに追加する。
-        let mut frame: Option<Frame> = None;
-        if self.coalescer.is_due(Instant::now()) {
-            if let Some(f) = self.vt.frame() {
-                frame.replace(f);
-            }
-            self.coalescer.disarm();
-        }
-        InterpretOutput { frame, signals }
-    }
-
     /// Scrolls the grid, arming the coalescer only when the viewport
     /// actually moved — a clamped or zero motion reports no damage, and
     /// arming for it would open an emit window for a repaint that never
@@ -221,6 +197,30 @@ impl<B: VtBackend> OrzmaTerm<B> {
 }
 
 impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
+    ///HACK:
+    /// VecでTermEventを収集しているが、この関数はほぼ米フレームで呼ばれるため、
+    /// コールバック形式などにしたほうがいい？
+    pub fn pump(&mut self) -> InterpretOutput {
+        while let Some(chunk) = self.pty.try_read_chunk() {
+            //TODO: DamageVerdictを使い、colalescerのdeadlineを調整する。
+            self.vt.interpret(&chunk);
+        }
+        let signals = self
+            .vt
+            .drain_signals()
+            .map(|s| TermSignal::Vt(s))
+            .collect::<Vec<_>>();
+        //TODO: ChildExitの判定を行い、必要であればsignalsに追加する。
+        let mut frame: Option<Frame> = None;
+        if self.coalescer.is_due(Instant::now()) {
+            if let Some(f) = self.vt.frame() {
+                frame.replace(f);
+            }
+            self.coalescer.disarm();
+        }
+        InterpretOutput { frame, signals }
+    }
+
     /// Anchors a new selection at an explicit grid cell (mouse
     /// press).
     pub fn start_selection(

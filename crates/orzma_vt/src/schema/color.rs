@@ -103,6 +103,24 @@ pub struct Rgb {
     pub b: u8,
 }
 
+/// The live color table symbolic [`Color`]s resolve against.
+///
+/// Each slot is pre-resolved: the backend folds OSC 4 / OSC 104
+/// overrides over its built-in xterm table before publishing, so a
+/// consumer indexes this table directly instead of layering override
+/// lookups over a fallback of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Palette {
+    /// The 256 xterm palette slots [`Color::Indexed`] addresses.
+    pub indexed: Box<[Rgb; 256]>,
+    /// The default foreground [`Color::DefaultForeground`] resolves
+    /// to (recolored by OSC 10).
+    pub foreground: Rgb,
+    /// The default background [`Color::DefaultBackground`] resolves
+    /// to (recolored by OSC 11).
+    pub background: Rgb,
+}
+
 #[cfg(feature = "alacritty")]
 impl From<ARgb> for Rgb {
     fn from(rgb: ARgb) -> Self {
