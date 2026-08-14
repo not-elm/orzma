@@ -312,12 +312,8 @@ mod tests {
 
     /// Asserts that a resize reaches the VT grid, not only the PTY.
     ///
-    /// Case: the renderer draws whatever the VT reports. An
-    /// implementation that only performs the ioctl leaves the emulation
-    /// (and therefore the rendered grid) at the stale size while the
-    /// child already reflows to the new one — a desync the PTY-side
-    /// test cannot see, which is why the two seams are pinned
-    /// separately.
+    /// Case: the user drags the window to a new size, and the renderer
+    /// redraws from the grid the VT reports.
     #[test]
     fn resize_applies_the_size_to_the_vt_grid() {
         let (mut term, _sink) = detached_term();
@@ -333,11 +329,10 @@ mod tests {
 
     /// Asserts that a resize never writes through the PTY writer.
     ///
-    /// Case: resize is an ioctl on the master, not stream traffic. An
-    /// implementation that "resizes" by writing escape sequences (e.g.
-    /// XTWINOPS) through the writer would inject bytes into the child's
-    /// stdin. The assertion covers the injected writer seam — the same
-    /// path every `write_*` method uses.
+    /// Case: the user resizes the window while a program is reading
+    /// stdin. The size change reaches the child as a kernel ioctl, so
+    /// the decided policy is that nothing at all enters the byte
+    /// stream — not even an XTWINOPS report.
     #[test]
     fn resize_does_not_write_through_the_pty_writer() {
         let (mut term, sink) = detached_term();
@@ -347,11 +342,9 @@ mod tests {
 
     /// Asserts that a successful resize arms the coalescer.
     ///
-    /// Case: a resize reflows the whole grid, but no PTY output need
-    /// arrive afterwards — an idle shell prompt stays idle. Unless the
-    /// resize itself opens an emit window, the repaint waits for the
-    /// next unrelated chunk and the user stares at a stale grid (the
-    /// predecessor documented exactly this trap and armed on resize).
+    /// Case: the user resizes the window at an idle shell prompt,
+    /// where the reflow is the only thing that changes and no PTY
+    /// output follows it.
     #[test]
     fn resize_arms_the_coalescer() {
         let (mut term, _sink) = detached_term();
@@ -362,11 +355,9 @@ mod tests {
     /// Asserts that a zero-axis request leaves an already-resized
     /// terminal at its current size on both seams.
     ///
-    /// Case: a minimized window or a pre-metrics frame computes 0 for
-    /// an axis; the decided policy is ignore, not clamp. The fixture is
-    /// first resized away from the constructor default so that "stays
-    /// unchanged" is distinguishable from "was reset to the initial
-    /// size".
+    /// Case: a minimized window, or a frame before cell metrics load,
+    /// computes 0 for an axis. The decided policy is to ignore the
+    /// request outright rather than clamp it to a usable size.
     #[test]
     fn a_zero_axis_resize_is_ignored() {
         let (mut term, _sink) = detached_term();
@@ -384,11 +375,10 @@ mod tests {
     /// Asserts the per-axis cap: requests beyond `MAX_COLS` /
     /// `MAX_ROWS` are ignored, the boundary value is applied.
     ///
-    /// Case: the zero guard alone accepts 65535x65535 — a
-    /// multi-billion-cell VT allocation issued after the PTY was
-    /// already resized, i.e. an OOM/hang with the two sides desynced
-    /// (the cap rationale lives on the constants). Pinned at the
-    /// boundary without actually allocating a huge grid.
+    /// Case: a degenerate or hostile window geometry asks for a grid
+    /// far larger than any real display. The decided policy is to
+    /// ignore such a request rather than clamp it, while the cap value
+    /// itself stays a legal size.
     #[test]
     fn an_oversized_axis_resize_is_ignored() {
         const MAX_COLS: u16 = OrzmaTerm::<AlacrittyVtBackend>::MAX_COLS;
@@ -408,10 +398,9 @@ mod tests {
 
     /// Asserts that an ignored request does not arm the coalescer.
     ///
-    /// Case: ignored means fully ignored — arming without staging any
-    /// damage would schedule an emit deadline for a repaint that never
-    /// comes, waking the emit path for nothing on every minimized-
-    /// window frame.
+    /// Case: a minimized window emits a stream of zero-axis requests.
+    /// The decided policy is that an ignored request is ignored on
+    /// every seam, arming included.
     #[test]
     fn an_ignored_resize_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
@@ -424,12 +413,11 @@ mod tests {
     /// Asserts that a resize to the size the terminal already has arms
     /// nothing.
     ///
-    /// Case: the host recomputes cells after a pixel-only window change
-    /// (a DPI event, a drag that does not cross a cell boundary) and
-    /// re-applies the grid size the VT already holds. The decided policy
-    /// is the same one a clamped scroll follows: nothing reflows, so
-    /// nothing is scheduled, rather than opening an emit window on every
-    /// such frame.
+    /// Case: the host recomputes cells after a pixel-only window
+    /// change — a DPI event, or a drag that does not cross a cell
+    /// boundary — and re-applies the grid size the VT already holds.
+    /// The decided policy is to schedule nothing rather than open an
+    /// emit window for a reflow that did not happen.
     #[test]
     fn a_same_size_resize_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
@@ -441,9 +429,7 @@ mod tests {
     /// window's deadline untouched.
     ///
     /// Case: a burst of window events re-applies the current grid size
-    /// while an earlier repaint is still pending. Routing the no-op
-    /// through `arm_or_extend` would keep `is_armed()` true but slide
-    /// the idle deadline, delaying the pending flush on every event.
+    /// while an earlier repaint is still pending.
     #[test]
     fn a_same_size_resize_does_not_extend_the_deadline() {
         let (mut term, _sink) = detached_term();
@@ -457,10 +443,8 @@ mod tests {
     /// Asserts that back-to-back resizes settle on the last requested
     /// size on both seams.
     ///
-    /// Case: a live window drag fires a burst of requests. Any
-    /// caching or short-circuit mistake that latches onto an earlier
-    /// size leaves the terminal permanently mis-sized relative to the
-    /// final window geometry.
+    /// Case: a live window drag fires a burst of requests, and the
+    /// terminal must end up at the geometry the drag settled on.
     #[test]
     fn sequential_resizes_settle_on_the_last_size() {
         let (mut term, _sink) = detached_term();
@@ -473,13 +457,10 @@ mod tests {
     /// ioctl fails, the call returns `PtyResize` and the VT grid and
     /// coalescer are untouched.
     ///
-    /// Case: the ordering contract is deliberately the reverse of the
-    /// predecessor (which resized the VT before the PTY): on ioctl
-    /// failure the renderer must keep drawing the size the child still
-    /// has, never a size the kernel refused. Success-path tests cannot
-    /// distinguish the two orderings — only injected failure can, so
-    /// this test is the sole guard against a silent VT-first
-    /// regression.
+    /// Case: the kernel refuses the winsize ioctl. The decided
+    /// ordering is PTY first, so the renderer keeps drawing the size
+    /// the child still has rather than a size the kernel never
+    /// accepted.
     #[test]
     fn a_failing_pty_resize_leaves_the_vt_untouched() {
         let mut term = failing_term();
@@ -508,11 +489,8 @@ mod tests {
     /// Asserts that `scroll` moves the viewport through the VT,
     /// cumulatively and in the requested direction.
     ///
-    /// Case: the wheel/vi path once `apply_scroll` wires up — the
-    /// motion arithmetic is pinned at the VT layer, so this pins only
-    /// that `OrzmaTerm::scroll` actually delegates. A method that
-    /// swallowed the motion (or inverted it) would leave every consumer
-    /// scrolling nothing.
+    /// Case: the user turns the wheel back into scrollback, then
+    /// forward again, and the viewport tracks each notch.
     #[test]
     fn scroll_moves_the_viewport() {
         let (mut term, _sink) = term_with_history(10);
@@ -525,10 +503,9 @@ mod tests {
     /// Asserts that a scroll which moved the viewport arms the
     /// coalescer.
     ///
-    /// Case: a scroll changes what is visible but produces no PTY
-    /// output, so nothing else opens an emit window — without arming,
-    /// the view stays stale until the next unrelated chunk (the same
-    /// trap as resize; the predecessor armed on every scroll op).
+    /// Case: the user scrolls into history on an idle terminal, where
+    /// the viewport change is the only thing that happens and no PTY
+    /// output follows it.
     #[test]
     fn scroll_arms_the_coalescer_when_the_viewport_moves() {
         let (mut term, _sink) = term_with_history(10);
@@ -539,10 +516,10 @@ mod tests {
     /// Asserts that a scroll which did not move the viewport arms
     /// nothing.
     ///
-    /// Case: no visual change means no repaint to schedule — arming
-    /// anyway would open an emit window for a repaint that never
-    /// comes on every wheel notch at the clamp (mirrors
-    /// `an_ignored_resize_does_not_arm_the_coalescer`).
+    /// Case: the user keeps turning the wheel after the viewport has
+    /// reached the end of the scrollback, or is already pinned to the
+    /// live tail. The decided policy is to schedule nothing for a
+    /// motion that moved nothing.
     #[test]
     fn a_no_op_scroll_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
@@ -558,11 +535,8 @@ mod tests {
     /// Asserts that a no-op scroll leaves an already-open emit window's
     /// deadline untouched.
     ///
-    /// Case: the blind spot of `is_armed` — routing a no-op through
-    /// `arm_or_extend` keeps `is_armed()` true but bumps
-    /// `last_chunk_at`, sliding the IDLE deadline and delaying the
-    /// flush of whatever is already pending. Comparing
-    /// `next_deadline()` before and after catches that.
+    /// Case: the user keeps spinning the wheel at the clamp while an
+    /// earlier repaint is still pending.
     #[test]
     fn a_no_op_scroll_does_not_extend_the_deadline() {
         let (mut term, _sink) = term_with_history(10);
@@ -575,10 +549,10 @@ mod tests {
 
     /// Asserts that scrolling writes nothing through the PTY writer.
     ///
-    /// Case: viewport motion is host-side state; an implementation that
-    /// "scrolls" by writing CSI S/T or arrow-key sequences would inject
-    /// bytes into the child's stdin. (The alternate-scroll wheel→arrow
-    /// conversion is the input layer's job, not this method's.)
+    /// Case: the user scrolls through history while a program is
+    /// reading stdin. Viewport motion is host-side state, so the
+    /// decided policy is that no bytes reach the child — neither a
+    /// CSI S/T pair nor arrow keys.
     #[test]
     fn scroll_writes_nothing_through_the_pty_writer() {
         let (mut term, sink) = term_with_history(10);
@@ -591,14 +565,8 @@ mod tests {
     /// scrolled back snaps the viewport to the live tail AND schedules
     /// the repaint of that snap.
     ///
-    /// Case: the user scrolls into history, then types or pastes. The
-    /// echo will arrive as PTY output, but the snap itself is a
-    /// host-side viewport change — if `snap_to_live_tail` bypasses the
-    /// arming path, the view teleports without a scheduled emit and the
-    /// screen shows stale history until the echo happens to arrive
-    /// (the predecessor routed key input through its arming scroll
-    /// path). The scroll-back is seeded through `vt_mut()` so the
-    /// paste is the only arm candidate.
+    /// Case: the user scrolls into history and then pastes, expecting
+    /// the view to jump back to the prompt where the echo lands.
     #[test]
     fn paste_while_scrolled_back_snaps_and_arms() {
         let (mut term, _sink) = term_with_history(10);
@@ -622,11 +590,9 @@ mod tests {
     /// Asserts that a detached terminal's PTY writes land on the
     /// injected sink, byte-identical.
     ///
-    /// Case: the test-support seam itself — every downstream test that
-    /// asserts "these bytes reached the PTY" (e.g. `bevy_orzma_term`'s
-    /// request-observer tests) trusts `detached` to route the write
-    /// seam into the sink. A regression here silently turns all of
-    /// those assertions into checks against an unrelated buffer.
+    /// Case: a caller builds a terminal with an injected writer
+    /// instead of a spawned shell, then reads back the bytes the
+    /// terminal produced.
     #[test]
     fn detached_routes_writes_to_the_injected_sink() {
         let (mut term, sink) = detached_term();
@@ -636,10 +602,10 @@ mod tests {
 
     /// Asserts that `write_paste("")` writes nothing at all.
     ///
-    /// Case: an empty clipboard paste. The no-op contract lives here in
-    /// `write_paste` (documented early return): nothing may reach the
-    /// PTY — in bracketed-paste mode even an empty frame would wake the
-    /// receiving app.
+    /// Case: the user pastes with an empty clipboard. The decided
+    /// policy is to write nothing at all rather than an empty
+    /// bracketed-paste frame, which would still wake the receiving
+    /// program.
     #[test]
     fn empty_paste_writes_nothing_to_the_pty() {
         let (mut term, sink) = detached_term();
