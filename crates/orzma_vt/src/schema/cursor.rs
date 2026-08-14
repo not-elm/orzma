@@ -1,6 +1,6 @@
 //! Cursor vocabulary: the live cursor and the vi-mode cursor.
 
-use crate::schema::{GridPoint, ViewportPoint};
+use crate::schema::GridPoint;
 
 /// Bit 0 of the packed `cursor_style` u32 — set when the cursor
 /// should be drawn. The WGSL shader short-circuits when this bit is
@@ -9,19 +9,18 @@ use crate::schema::{GridPoint, ViewportPoint};
 /// without re-deriving the literal `1`.
 pub const CURSOR_VISIBLE_BIT: u32 = 1;
 
-/// Vi-mode cursor position in viewport coordinates.
+/// Vi-mode cursor position in active-grid coordinates.
 ///
-/// The VT keeps the vi cursor inside the visible viewport via
-/// `Term::scroll_display`. `in_scrollback` is the safety valve: when
-/// `true`, the cursor sits above the viewport, the renderer skips it,
-/// and `point.row` is clamped to `-1`.
+/// The line goes negative while the vi cursor sits in scrollback
+/// history. The sign is not a visibility signal — scrolling clamps
+/// the vi cursor into the viewport, so a negative line can still be
+/// visible; project `point` with
+/// [`crate::schema::GridLine::to_viewport`] to decide whether there
+/// is a cell to paint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViCursor {
-    /// Viewport cell the vi cursor sits on. `row` is `-1` when
-    /// `in_scrollback` is true.
-    pub point: ViewportPoint,
-    /// True when the vi cursor is above the viewport (in scrollback).
-    pub in_scrollback: bool,
+    /// Grid cell the vi cursor sits on.
+    pub point: GridPoint,
 }
 
 /// Cursor state at snapshot time.

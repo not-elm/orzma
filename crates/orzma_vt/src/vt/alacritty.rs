@@ -132,7 +132,12 @@ impl VtBackend for AlacrittyVtBackend {
     }
 
     fn vi_cursor(&self) -> Option<ViCursor> {
-        todo!()
+        if !self.term.mode().contains(TermMode::VI) {
+            return None;
+        }
+        Some(ViCursor {
+            point: self.term.vi_mode_cursor.point.into(),
+        })
     }
 }
 

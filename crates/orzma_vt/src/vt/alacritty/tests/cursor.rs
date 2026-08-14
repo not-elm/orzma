@@ -2,14 +2,7 @@
 //! semantics, DECSCUSR shape and blink, DECTCEM intent, and vi mode.
 
 use super::*;
-use crate::schema::{Cursor, CursorShape, GridColumn, GridLine, GridPoint};
-
-fn point(line: i32, column: u16) -> GridPoint {
-    GridPoint {
-        line: GridLine(line),
-        column: GridColumn(column),
-    }
-}
+use crate::schema::{Cursor, CursorShape};
 
 /// Asserts that a fresh grid reports the origin with the default
 /// style and the cursor shown.

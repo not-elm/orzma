@@ -2,10 +2,11 @@
 //! module per exercised concern.
 
 use super::*;
-use crate::schema::{CellSide, DamageRows, SelectionGeometry};
+use crate::schema::{CellSide, DamageRows, GridColumn, GridLine, GridPoint, SelectionGeometry};
 use alacritty_terminal::index::Point as AlacPoint;
 
 mod cursor;
+mod cursor_vi;
 mod damage;
 mod modes_and_grid;
 mod scroll;
@@ -43,6 +44,13 @@ fn vt_with_history(history_rows: usize) -> AlacrittyVtBackend {
 
 fn cell(x: u16, y: i16) -> ViewportPoint {
     ViewportPoint { row: y, column: x }
+}
+
+fn point(line: i32, column: u16) -> GridPoint {
+    GridPoint {
+        line: GridLine(line),
+        column: GridColumn(column),
+    }
 }
 
 fn start_simple(vt: &mut AlacrittyVtBackend, x: u16, y: i16) {
