@@ -2,7 +2,7 @@
 //! terminal entity.
 //!
 //! The payload vocabulary ([`SelectionKind`], [`CellSide`],
-//! [`ViewportPoint`]) is owned by the VT layer; this module re-exports
+//! [`GridPoint`]) is owned by the VT layer; this module re-exports
 //! it so the requests and their payload types travel together — each
 //! request carries exactly what the VT applies.
 //!
@@ -11,18 +11,20 @@
 //! `orzma_vt` and are pinned by its tests, not re-asserted here.
 
 use bevy::prelude::*;
-pub use orzma_vt::prelude::{CellSide, SelectionKind, ViewportPoint};
+pub use orzma_vt::prelude::{CellSide, GridPoint, SelectionKind};
 
 use crate::OrzmaTermHandle;
 
 /// Fired by the host UI to anchor a new selection at an explicit
-/// viewport cell (mouse press).
+/// grid cell (mouse press).
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTermSelectionStart {
     #[event_target]
     pub terminal: Entity,
-    /// Viewport cell the press landed on.
-    pub cell: ViewportPoint,
+    /// Grid cell the press landed on; the host UI resolves the
+    /// clicked viewport cell against the displayed frame's display
+    /// offset before firing.
+    pub cell: GridPoint,
     /// Which half of the cell the anchor sits in.
     pub side: CellSide,
     /// Granularity of the new selection.
@@ -45,9 +47,10 @@ pub struct RequestTermSelectionStartAtViCursor {
 pub struct RequestTermSelectionUpdate {
     #[event_target]
     pub terminal: Entity,
-    /// Viewport cell the moving end is dragged to. May sit outside the
-    /// viewport when the drag leaves it.
-    pub cell: ViewportPoint,
+    /// Grid cell the moving end is dragged to. May reach into
+    /// scrollback history (a negative line) when the drag leaves the
+    /// viewport.
+    pub cell: GridPoint,
     /// Which half of the cell the moving end sits in.
     pub side: CellSide,
 }
@@ -131,7 +134,7 @@ fn clear_selection(e: On<RequestTermSelectionClear>, mut terms: Query<&mut Orzma
 mod tests {
     use super::*;
     use crate::OrzmaTermHandle;
-    use orzma_vt::prelude::SelectionRange;
+    use orzma_vt::prelude::{GridColumn, GridLine, SelectionRange};
 
     fn app_with_terminal(seed: &[u8]) -> (App, Entity) {
         let mut app = App::new();
@@ -142,11 +145,14 @@ mod tests {
         (app, terminal)
     }
 
-    fn cell(x: u16, y: i16) -> ViewportPoint {
-        ViewportPoint { row: y, column: x }
+    fn cell(x: u16, y: i32) -> GridPoint {
+        GridPoint {
+            line: GridLine(y),
+            column: GridColumn(x),
+        }
     }
 
-    fn start_simple(app: &mut App, terminal: Entity, x: u16, y: i16) {
+    fn start_simple(app: &mut App, terminal: Entity, x: u16, y: i32) {
         app.world_mut().trigger(RequestTermSelectionStart {
             terminal,
             cell: cell(x, y),
@@ -155,7 +161,7 @@ mod tests {
         });
     }
 
-    fn update_to(app: &mut App, terminal: Entity, x: u16, y: i16, side: CellSide) {
+    fn update_to(app: &mut App, terminal: Entity, x: u16, y: i32, side: CellSide) {
         app.world_mut().trigger(RequestTermSelectionUpdate {
             terminal,
             cell: cell(x, y),

@@ -1,9 +1,8 @@
 //! Engine layer: the [`OrzmaVt`] contract and its backends.
 
 use crate::schema::{
-    CellSide, Cursor, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridSize, Scroll,
-    SelectionKind, SelectionRange, ViCursor, ViModeSwitch, ViewportPoint, VtModes, VtResult,
-    VtSignal,
+    CellSide, Cursor, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridPoint, GridSize,
+    Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
 };
 
 #[cfg(feature = "alacritty")]
@@ -123,7 +122,7 @@ impl<B: VtBackend> OrzmaVt<B> {
 }
 
 impl<B: VtBackend + VtSelection> OrzmaVt<B> {
-    /// Anchors a new selection at an explicit viewport cell; returns
+    /// Anchors a new selection at an explicit grid cell; returns
     /// whether the backend reported a repaint to stage.
     ///
     /// [`VtSelection`] allows conservative over-reporting, so this is
@@ -133,7 +132,7 @@ impl<B: VtBackend + VtSelection> OrzmaVt<B> {
     /// [`Self::selection_range`] before and after instead.
     pub fn start_selection(
         &mut self,
-        cell: ViewportPoint,
+        cell: GridPoint,
         side: CellSide,
         kind: SelectionKind,
     ) -> VtResult<bool> {
@@ -151,7 +150,7 @@ impl<B: VtBackend + VtSelection> OrzmaVt<B> {
     /// Moves the moving end of the active selection; returns whether
     /// the backend reported a repaint to stage. A drag sample that
     /// lands back on the cell and side it came from still reports one.
-    pub fn update_selection(&mut self, cell: ViewportPoint, side: CellSide) -> VtResult<bool> {
+    pub fn update_selection(&mut self, cell: GridPoint, side: CellSide) -> VtResult<bool> {
         let damage = self.backend.update_selection(cell, side)?;
         Ok(self.stage_if_changed(damage))
     }
@@ -276,11 +275,11 @@ pub trait VtBackend: Sized {
 /// Conservative over-reporting is allowed; `Ok(None)` is a genuine
 /// no-op.
 pub trait VtSelection {
-    /// Anchors a new selection at an explicit viewport cell (mouse
+    /// Anchors a new selection at an explicit grid cell (mouse
     /// press).
     fn start_selection(
         &mut self,
-        cell: ViewportPoint,
+        cell: GridPoint,
         side: CellSide,
         kind: SelectionKind,
     ) -> VtResult<Option<Damage>>;
@@ -289,11 +288,11 @@ pub trait VtSelection {
     /// whose position only the VT knows.
     fn start_selection_at_vi_cursor(&mut self, kind: SelectionKind) -> VtResult<Option<Damage>>;
 
-    /// Moves the moving end of the active selection to a viewport cell
-    /// (mouse drag). The cell may sit outside the viewport when the
-    /// drag leaves it. `Ok(None)` when nothing is selected.
-    fn update_selection(&mut self, cell: ViewportPoint, side: CellSide)
-    -> VtResult<Option<Damage>>;
+    /// Moves the moving end of the active selection to a grid cell
+    /// (mouse drag). The cell may reach into scrollback history
+    /// (a negative line) when the drag leaves the viewport. `Ok(None)`
+    /// when nothing is selected.
+    fn update_selection(&mut self, cell: GridPoint, side: CellSide) -> VtResult<Option<Damage>>;
 
     /// Switches granularity while keeping the anchor (vi-mode `v`
     /// while `V` is active, and the reverse). `Ok(None)` when nothing
@@ -326,6 +325,7 @@ pub trait VtSelection {
 #[cfg(all(test, feature = "alacritty"))]
 mod tests {
     use super::*;
+    use crate::schema::{GridColumn, GridLine};
 
     /// Builds a wrapper whose bootstrap damage and backend accumulator are
     /// both consumed, so a test observes only what its own calls stage.
@@ -346,9 +346,12 @@ mod tests {
         vt
     }
 
-    fn start_simple(vt: &mut OrzmaVt<AlacrittyVtBackend>, x: u16, y: i16) -> bool {
+    fn start_simple(vt: &mut OrzmaVt<AlacrittyVtBackend>, x: u16, line: i32) -> bool {
         vt.start_selection(
-            ViewportPoint { row: y, column: x },
+            GridPoint {
+                line: GridLine(line),
+                column: GridColumn(x),
+            },
             CellSide::Left,
             SelectionKind::Simple,
         )
@@ -450,8 +453,14 @@ mod tests {
         let staged = vt.pending_damage.clone();
         assert!(!vt.scroll(Scroll::Delta(0)));
         assert!(
-            !vt.update_selection(ViewportPoint { row: 0, column: 2 }, CellSide::Right)
-                .unwrap()
+            !vt.update_selection(
+                GridPoint {
+                    line: GridLine(0),
+                    column: GridColumn(2),
+                },
+                CellSide::Right
+            )
+            .unwrap()
         );
         assert!(!vt.clear_selection().unwrap());
         assert!(!vt.switch_vi_mode(ViModeSwitch::Exit).unwrap());

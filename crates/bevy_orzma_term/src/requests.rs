@@ -24,8 +24,9 @@ pub use paste::RequestTermPaste;
 pub use resize::RequestTermResize;
 pub use scroll::RequestTermScroll;
 pub use selection::{
-    CellSide, RequestTermSelectionClear, RequestTermSelectionKindChange, RequestTermSelectionStart,
-    RequestTermSelectionStartAtViCursor, RequestTermSelectionUpdate, SelectionKind, ViewportPoint,
+    CellSide, GridPoint, RequestTermSelectionClear, RequestTermSelectionKindChange,
+    RequestTermSelectionStart, RequestTermSelectionStartAtViCursor, RequestTermSelectionUpdate,
+    SelectionKind,
 };
 pub use vi_mode::{RequestTermViMode, ViModeSwitch};
 pub use vi_motion::{RequestTermViMotion, ViMotion};

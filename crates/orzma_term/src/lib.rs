@@ -221,11 +221,11 @@ impl<B: VtBackend> OrzmaTerm<B> {
 }
 
 impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
-    /// Anchors a new selection at an explicit viewport cell (mouse
+    /// Anchors a new selection at an explicit grid cell (mouse
     /// press).
     pub fn start_selection(
         &mut self,
-        cell: ViewportPoint,
+        cell: GridPoint,
         side: CellSide,
         kind: SelectionKind,
     ) -> VtResult {
@@ -238,7 +238,7 @@ impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
     }
 
     /// Moves the moving end of the active selection (mouse drag).
-    pub fn update_selection(&mut self, cell: ViewportPoint, side: CellSide) -> VtResult {
+    pub fn update_selection(&mut self, cell: GridPoint, side: CellSide) -> VtResult {
         self.arm_on_selection_change(|vt| vt.update_selection(cell, side))
     }
 

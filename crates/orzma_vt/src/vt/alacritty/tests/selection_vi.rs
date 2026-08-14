@@ -1,6 +1,7 @@
 //! Vi-cursor anchoring and selection-granularity tests.
 
 use super::*;
+use alacritty_terminal::index::{Column, Line};
 
 fn enter_vi_at(vt: &mut AlacrittyVtBackend, x: usize, y: i32) {
     vt.term.toggle_vi_mode();
@@ -62,7 +63,7 @@ fn change_kind_without_a_selection_is_a_no_op() {
 #[test]
 fn lines_kind_selects_the_logical_row_with_trailing_newline() {
     let mut vt = vt_after(b"hello world");
-    vt.start_selection(cell(3, 0), CellSide::Left, SelectionKind::Lines)
+    vt.start_selection(point(0, 3), CellSide::Left, SelectionKind::Lines)
         .unwrap();
     let range = vt.selection_range().expect("Lines start must render");
     assert_eq!(range.start, point(0, 0));

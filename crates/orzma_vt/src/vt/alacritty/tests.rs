@@ -42,10 +42,6 @@ fn vt_with_history(history_rows: usize) -> AlacrittyVtBackend {
     vt
 }
 
-fn cell(x: u16, y: i16) -> ViewportPoint {
-    ViewportPoint { row: y, column: x }
-}
-
 fn point(line: i32, column: u16) -> GridPoint {
     GridPoint {
         line: GridLine(line),
@@ -53,11 +49,11 @@ fn point(line: i32, column: u16) -> GridPoint {
     }
 }
 
-fn start_simple(vt: &mut AlacrittyVtBackend, x: u16, y: i16) {
-    vt.start_selection(cell(x, y), CellSide::Left, SelectionKind::Simple)
+fn start_simple(vt: &mut AlacrittyVtBackend, x: u16, line: i32) {
+    vt.start_selection(point(line, x), CellSide::Left, SelectionKind::Simple)
         .unwrap();
 }
 
-fn update_to(vt: &mut AlacrittyVtBackend, x: u16, y: i16, side: CellSide) {
-    vt.update_selection(cell(x, y), side).unwrap();
+fn update_to(vt: &mut AlacrittyVtBackend, x: u16, line: i32, side: CellSide) {
+    vt.update_selection(point(line, x), side).unwrap();
 }

@@ -70,9 +70,8 @@ pub struct GridColumn(pub u16);
 
 /// A cell in active-grid coordinates.
 ///
-/// Pairs a [`GridLine`] with a [`GridColumn`]. Unlike
-/// [`crate::schema::ViewportPoint`], the position does not depend on
-/// where the user has scrolled the viewport.
+/// Pairs a [`GridLine`] with a [`GridColumn`]. The position does not
+/// depend on where the user has scrolled the viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GridPoint {
     /// Line in active-grid coordinates.
@@ -87,6 +86,19 @@ impl From<alacritty_terminal::index::Point> for GridPoint {
         Self {
             line: GridLine(value.line.0),
             column: GridColumn(value.column.0 as u16),
+        }
+    }
+}
+
+#[cfg(feature = "alacritty")]
+impl From<GridPoint> for alacritty_terminal::index::Point {
+    /// Converts literally, without clamping: a selection drag that
+    /// left the viewport names a real scrollback line, and
+    /// `Selection::to_range` clamps to the grid on its own.
+    fn from(value: GridPoint) -> Self {
+        Self {
+            line: alacritty_terminal::index::Line(value.line.0),
+            column: alacritty_terminal::index::Column(usize::from(value.column.0)),
         }
     }
 }

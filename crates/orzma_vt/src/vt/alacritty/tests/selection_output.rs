@@ -3,16 +3,17 @@
 
 use super::*;
 
-/// Asserts that `start_selection` resolves viewport rows through the
-/// display offset onto the scrollback rows the user actually sees.
+/// Asserts that a negative grid line addresses a scrollback row
+/// without any display-offset dependency.
 ///
-/// Case: the user selects text while scrolled back into history.
+/// Case: the host UI has already resolved a click made while scrolled
+/// back into the grid cell it names, and the VT applies that cell the
+/// same way regardless of where the viewport sits.
 #[test]
-fn start_at_translates_viewport_rows_through_display_offset() {
+fn a_negative_line_addresses_a_history_row() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
-    vt.scroll(Scroll::Delta(3));
-    start_simple(&mut vt, 0, 0);
-    update_to(&mut vt, 1, 0, CellSide::Right);
+    start_simple(&mut vt, 0, -3);
+    update_to(&mut vt, 1, -3, CellSide::Right);
     assert_eq!(vt.selected_text().as_deref(), Some("l7"));
 }
 
@@ -42,13 +43,13 @@ fn an_alt_screen_swap_invalidates_selection_and_anchor() {
 fn every_visible_selection_change_reports_full_damage() {
     let mut vt = vt_after(b"abcdefghij");
     assert_eq!(
-        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Simple)
+        vt.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple)
             .unwrap(),
         Some(Damage::Full),
         "start_selection"
     );
     assert_eq!(
-        vt.update_selection(cell(4, 0), CellSide::Right).unwrap(),
+        vt.update_selection(point(0, 4), CellSide::Right).unwrap(),
         Some(Damage::Full),
         "update_selection"
     );
@@ -73,7 +74,7 @@ fn every_visible_selection_change_reports_full_damage() {
 fn no_op_selection_ops_report_no_damage() {
     let mut vt = vt_after(b"abc");
     assert_eq!(
-        vt.update_selection(cell(2, 0), CellSide::Right).unwrap(),
+        vt.update_selection(point(0, 2), CellSide::Right).unwrap(),
         None
     );
     assert_eq!(

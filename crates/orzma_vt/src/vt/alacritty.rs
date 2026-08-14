@@ -2,9 +2,8 @@
 
 use crate::{
     schema::{
-        CellSide, Cursor, Damage, DisplayOffset, GridSize, MouseEncoding, MouseTracking, Scroll,
-        SelectionKind, SelectionRange, ViCursor, ViModeSwitch, ViewportPoint, VtModes, VtResult,
-        VtSignal,
+        CellSide, Cursor, Damage, DisplayOffset, GridPoint, GridSize, MouseEncoding, MouseTracking,
+        Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
     },
     vt::{VtBackend, VtSelection, apc::ApcState},
 };
@@ -12,7 +11,7 @@ use alacritty_terminal::{
     Term,
     event::EventListener,
     grid::Dimensions,
-    index::{Column, Line, Point, Side},
+    index::{Point, Side},
     selection::Selection,
     term::{Config, TermMode},
     vte::ansi::Processor,
@@ -144,11 +143,11 @@ impl VtBackend for AlacrittyVtBackend {
 impl VtSelection for AlacrittyVtBackend {
     fn start_selection(
         &mut self,
-        cell: ViewportPoint,
+        cell: GridPoint,
         side: CellSide,
         kind: SelectionKind,
     ) -> VtResult<Option<Damage>> {
-        let point = self.grid_point(cell);
+        let point = Point::from(cell);
         let side = Side::from(side);
         let mut selection = Selection::new(kind.into(), point, side);
         selection.update(point, side.opposite());
@@ -164,12 +163,8 @@ impl VtSelection for AlacrittyVtBackend {
         Ok(Some(Damage::Full))
     }
 
-    fn update_selection(
-        &mut self,
-        cell: ViewportPoint,
-        side: CellSide,
-    ) -> VtResult<Option<Damage>> {
-        let point = self.grid_point(cell);
+    fn update_selection(&mut self, cell: GridPoint, side: CellSide) -> VtResult<Option<Damage>> {
+        let point = Point::from(cell);
         let side = Side::from(side);
         Ok(self.term.selection.as_mut().map(|selection| {
             selection.update(point, side);
@@ -210,24 +205,6 @@ impl VtSelection for AlacrittyVtBackend {
     #[inline]
     fn selected_text(&self) -> Option<String> {
         self.term.selection_to_string()
-    }
-}
-
-impl AlacrittyVtBackend {
-    /// Resolves a viewport cell onto the grid row it currently sits on.
-    ///
-    /// alacritty's `Line` counts from the top of the active screen area
-    /// and goes negative into scrollback, so the display offset has to
-    /// come off the viewport row. Rows outside the viewport are kept as
-    /// they arrive rather than clamped: a drag that leaves the viewport
-    /// names a real scrollback row, and `Selection::to_range` clamps to
-    /// the grid on its own.
-    fn grid_point(&self, cell: ViewportPoint) -> Point {
-        let display_offset = self.display_offset().0 as i32;
-        Point::new(
-            Line(i32::from(cell.row) - display_offset),
-            Column(usize::from(cell.column)),
-        )
     }
 }
 
