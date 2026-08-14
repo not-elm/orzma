@@ -1,8 +1,8 @@
 //! Engine layer: the [`OrzmaVt`] contract and its backends.
 
 use crate::schema::{
-    CellSide, Damage, DamageRows, DamageVerdict, DisplayOffset, GridSize, Scroll, SelectionKind,
-    SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
+    CellSide, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridSize, Scroll,
+    SelectionKind, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
 };
 
 #[cfg(feature = "alacritty")]
@@ -12,10 +12,6 @@ mod apc;
 #[cfg(feature = "alacritty")]
 pub use alacritty::AlacrittyVtBackend;
 
-/// A [`VtBackend`] plus the damage staged for the next frame emit.
-///
-/// The backend reports the damage each mutation produced; this wrapper
-/// owns accumulating it across calls until an emit consumes it.
 pub struct OrzmaVt<B: VtBackend> {
     backend: B,
     /// Damage staged for the next frame emit.
@@ -27,10 +23,7 @@ pub struct OrzmaVt<B: VtBackend> {
 }
 
 impl<B: VtBackend> OrzmaVt<B> {
-    /// Builds the backend and stages the bootstrap repaint.
-    ///
-    /// The staged `Full` guarantees the first emit paints the whole
-    /// grid even when the shell never writes a byte.
+    /// Constructs the new vt.
     pub fn new(cols: u16, rows: u16) -> Self {
         Self {
             backend: B::new(cols, rows),
@@ -38,15 +31,17 @@ impl<B: VtBackend> OrzmaVt<B> {
         }
     }
 
-    /// Interprets a PTY chunk, stages the damage it produced, and
-    /// classifies that damage for the caller's flush decision.
-    ///
-    /// `None` for an empty chunk — not a damage cycle.
+    /// Interprets a PTY chunk
     pub fn interpret(&mut self, chunk: &[u8]) -> Option<DamageVerdict> {
         let damage = self.backend.interpret(chunk)?;
         let verdict = DamageVerdict::classify(&damage);
         self.stage(damage);
         Some(verdict)
+    }
+
+    pub fn frame(&mut self) -> Option<Frame> {
+        let damage = self.pending_damage.take()?;
+        todo!()
     }
 
     /// Applies the viewport motion; returns whether the viewport moved.

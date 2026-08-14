@@ -74,10 +74,6 @@ impl VtBackend for AlacrittyVtBackend {
         if self.display_offset() == prev_offset {
             return None;
         }
-        // NOTE: `scroll_display` just latched full damage in alacritty's
-        // accumulator. Resetting converts that mark into this return
-        // value; the accumulator holds nothing else because `interpret`
-        // resets after every read.
         self.term.reset_damage();
         Some(Damage::Full)
     }
@@ -100,8 +96,6 @@ impl VtBackend for AlacrittyVtBackend {
             return None;
         }
         self.term.resize(LocalDim::new(cols, rows));
-        // NOTE: same recipe as `scroll` — `Term::resize` latched full
-        // damage; the reset converts it into this return value.
         self.term.reset_damage();
         Some(Damage::Full)
     }

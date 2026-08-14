@@ -44,14 +44,19 @@ pub struct EnvKey(pub String);
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct EnvValue(pub String);
 
+pub struct InterpretOutput {
+    pub frame: Option<Frame>,
+    pub signals: Vec<TermSignal>,
+}
+
 /// A live terminal: the VT emulation plus the PTY it is wired to.
-pub struct OrzmaTerm<V: VtBackend> {
-    vt: V,
+pub struct OrzmaTerm<B: VtBackend> {
+    vt: OrzmaVt<B>,
     coalescer: Coalescer,
     pty: Pty,
 }
 
-impl<V: VtBackend> OrzmaTerm<V> {
+impl<B: VtBackend> OrzmaTerm<B> {
     /// Upper bound for a resize's column count; requests beyond it are
     /// ignored by [`Self::resize`].
     ///
@@ -66,10 +71,9 @@ impl<V: VtBackend> OrzmaTerm<V> {
     /// Spawns the login shell under a new PTY and builds the VT at the
     /// same grid size.
     pub fn spawn(options: SpawnOptions) -> OrzmaTermResult<Self> {
-        let vt = V::new(options.cols, options.rows);
         let pty = Pty::spawn(&options)?;
         Ok(Self {
-            vt,
+            vt: OrzmaVt::new(options.cols, options.rows),
             coalescer: Coalescer::default(),
             pty,
         })
@@ -82,6 +86,7 @@ impl<V: VtBackend> OrzmaTerm<V> {
     ///
     /// Panics when the ioctl fails, which means the master fd is no
     /// longer valid and the terminal is unusable anyway.
+    #[inline]
     pub fn pty_size(&self) -> PtySize {
         self.pty.size()
     }
@@ -95,7 +100,7 @@ impl<V: VtBackend> OrzmaTerm<V> {
     /// [`test_support::CaptureSink`].
     pub fn detached(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> OrzmaTermResult<Self> {
         Ok(Self {
-            vt: V::new(cols, rows),
+            vt: OrzmaVt::new(cols, rows),
             coalescer: Coalescer::default(),
             pty: Pty::detached(cols, rows, writer)?,
         })
@@ -104,19 +109,24 @@ impl<V: VtBackend> OrzmaTerm<V> {
     ///HACK:
     /// VecでTermEventを収集しているが、この関数はほぼ米フレームで呼ばれることが予想されるため、
     /// コールバック形式などにしたほうがいい？
-    pub fn pump(&mut self) -> Vec<TermSignal> {
+    pub fn pump(&mut self) -> InterpretOutput {
         while let Some(chunk) = self.pty.try_read_chunk() {
+            //TODO: DamageVerdictを使い、colalescerのdeadlineを調整する。
             self.vt.interpret(&chunk);
         }
-        let mut signals = vec![];
+        let signals = self
+            .vt
+            .drain_signals()
+            .map(|s| TermSignal::Vt(s))
+            .collect::<Vec<_>>();
+        //TODO: ChildExitの判定を行い、必要であればsignalsに追加する。
+        let mut frame: Option<Frame> = None;
         if self.coalescer.is_due(Instant::now()) {
-            //TODO: VTからフレームを取得, あればemit
-            // if let Some(f) = self.vt.frame(){
-            // signals.push(TermSignal::FrameChanged(f));
-            // }
+            if let Some(f) = self.vt.frame() {
+                frame.replace(f);
+            }
         }
-        signals.extend(self.vt.drain_signals().map(|s| TermSignal::Vt(s)));
-        signals
+        InterpretOutput { frame, signals }
     }
 
     /// Scrolls the grid, arming the coalescer only when the viewport
@@ -124,7 +134,7 @@ impl<V: VtBackend> OrzmaTerm<V> {
     /// arming for it would open an emit window for a repaint that never
     /// comes.
     pub fn scroll(&mut self, scroll: Scroll) {
-        if self.vt.scroll(scroll).is_some() {
+        if self.vt.scroll(scroll) {
             self.coalescer.arm_or_extend(Instant::now());
         }
     }
@@ -147,14 +157,19 @@ impl<V: VtBackend> OrzmaTerm<V> {
             return Ok(());
         }
         self.pty.resize(cols, rows)?;
-        if self.vt.resize(cols, rows).is_some() {
+        if self.vt.resize(cols, rows) {
             self.coalescer.arm_or_extend(Instant::now());
         }
         Ok(())
     }
 
+    /// Mutable access to the VT, bypassing the coalescer.
+    ///
+    /// A mutation applied through this handle stages its damage like
+    /// any other, but arms nothing — the caller owns deciding whether
+    /// the change deserves an emit.
     #[inline]
-    pub const fn vt_mut(&mut self) -> &mut V {
+    pub const fn vt_mut(&mut self) -> &mut OrzmaVt<B> {
         &mut self.vt
     }
 
@@ -214,7 +229,7 @@ impl<V: VtBackend> OrzmaTerm<V> {
     }
 }
 
-impl<V: VtBackend + VtSelection> OrzmaTerm<V> {
+impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
     /// Anchors a new selection at an explicit viewport cell (mouse
     /// press).
     pub fn start_selection(
@@ -248,11 +263,17 @@ impl<V: VtBackend + VtSelection> OrzmaTerm<V> {
 
     /// Applies one selection operation and arms the coalescer only
     /// when the visible selection actually changed, detected by
-    /// comparing [`VtSelection::selection_range`] before and after —
-    /// the same gate [`Self::scroll`] applies via `display_offset`.
+    /// comparing [`VtSelection::selection_range`] before and after.
+    ///
+    /// [`Self::scroll`] and [`Self::resize`] gate on the staged-damage
+    /// `bool` the VT returns; selection cannot. The backend reports a
+    /// conservative repaint for every operation that touches a live
+    /// selection, so a drag sample that stays inside the cell it
+    /// already covers — or a re-anchor onto the anchored cell — would
+    /// arm an emit for a frame that renders identically.
     fn arm_on_selection_change(
         &mut self,
-        op: impl FnOnce(&mut V) -> VtResult<Option<Damage>>,
+        op: impl FnOnce(&mut OrzmaVt<B>) -> VtResult<bool>,
     ) -> VtResult {
         let prev_range = self.vt.selection_range();
         op(&mut self.vt)?;
@@ -277,7 +298,7 @@ mod tests {
 
     fn failing_term() -> OrzmaTerm<AlacrittyVtBackend> {
         OrzmaTerm {
-            vt: AlacrittyVtBackend::new(80, 24),
+            vt: OrzmaVt::new(80, 24),
             coalescer: Coalescer::default(),
             pty: Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default())),
         }

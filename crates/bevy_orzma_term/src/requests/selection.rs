@@ -131,7 +131,7 @@ fn clear_selection(e: On<RequestTermSelectionClear>, mut terms: Query<&mut Orzma
 mod tests {
     use super::*;
     use crate::OrzmaTermHandle;
-    use orzma_vt::prelude::{SelectionRange, VtBackend, VtSelection};
+    use orzma_vt::prelude::SelectionRange;
 
     fn app_with_terminal(seed: &[u8]) -> (App, Entity) {
         let mut app = App::new();

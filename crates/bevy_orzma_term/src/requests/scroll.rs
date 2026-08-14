@@ -39,7 +39,7 @@ fn apply_scroll(e: On<RequestTermScroll>, mut terms: Query<&mut OrzmaTermHandle>
 mod tests {
     use super::*;
     use crate::OrzmaTermHandle;
-    use orzma_vt::prelude::{DisplayOffset, VtBackend};
+    use orzma_vt::prelude::DisplayOffset;
 
     // NOTE: on the 24-row grid the first 23 newlines only fill the
     // viewport (alacritty pushes a row into history once the cursor
