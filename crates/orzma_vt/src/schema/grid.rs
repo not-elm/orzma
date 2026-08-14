@@ -81,6 +81,16 @@ pub struct GridPoint {
     pub column: GridColumn,
 }
 
+#[cfg(feature = "alacritty")]
+impl From<alacritty_terminal::index::Point> for GridPoint {
+    fn from(value: alacritty_terminal::index::Point) -> Self {
+        Self {
+            line: GridLine(value.line.0),
+            column: GridColumn(value.column.0 as u16),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

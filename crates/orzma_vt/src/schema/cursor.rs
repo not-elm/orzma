@@ -71,6 +71,18 @@ pub enum CursorShape {
     Bar,
 }
 
+#[cfg(feature = "alacritty")]
+impl From<alacritty_terminal::vte::ansi::CursorShape> for CursorShape {
+    fn from(value: alacritty_terminal::vte::ansi::CursorShape) -> Self {
+        use alacritty_terminal::vte::ansi::CursorShape as C;
+        match value {
+            C::Underline => CursorShape::Underline,
+            C::Beam => CursorShape::Bar,
+            _ => CursorShape::Block,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

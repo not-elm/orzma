@@ -5,6 +5,7 @@ use super::*;
 use crate::schema::{CellSide, DamageRows, SelectionGeometry};
 use alacritty_terminal::index::Point as AlacPoint;
 
+mod cursor;
 mod damage;
 mod modes_and_grid;
 mod scroll;

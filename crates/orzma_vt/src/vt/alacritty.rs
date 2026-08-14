@@ -2,8 +2,9 @@
 
 use crate::{
     schema::{
-        CellSide, Damage, DisplayOffset, GridSize, MouseEncoding, MouseTracking, Scroll,
-        SelectionKind, SelectionRange, ViModeSwitch, ViewportPoint, VtModes, VtResult, VtSignal,
+        CellSide, Cursor, Damage, DisplayOffset, GridSize, MouseEncoding, MouseTracking, Scroll,
+        SelectionKind, SelectionRange, ViCursor, ViModeSwitch, ViewportPoint, VtModes, VtResult,
+        VtSignal,
     },
     vt::{VtBackend, VtSelection, apc::ApcState},
 };
@@ -119,11 +120,18 @@ impl VtBackend for AlacrittyVtBackend {
         Ok(Some(Damage::Full))
     }
 
-    fn cursor(&self) -> crate::prelude::Cursor {
-        todo!()
+    fn cursor(&self) -> Cursor {
+        let style = self.term.cursor_style();
+        Cursor {
+            point: self.term.grid().cursor.point.into(),
+            shape: style.shape.into(),
+            blinking: style.blinking,
+            visible: self.term.mode().contains(TermMode::SHOW_CURSOR)
+                && style.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden,
+        }
     }
 
-    fn vi_cursor(&self) -> Option<crate::prelude::ViCursor> {
+    fn vi_cursor(&self) -> Option<ViCursor> {
         todo!()
     }
 }
