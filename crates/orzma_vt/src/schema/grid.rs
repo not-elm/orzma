@@ -2,6 +2,10 @@
 //! coordinate types [`GridLine`], [`GridColumn`], and [`GridPoint`],
 //! and their viewport projection [`ViewportLine`].
 
+use crate::schema::{Color, Hyperlink};
+
+pub mod cell;
+
 /// Number of scrollback rows the viewport sits above the live tail.
 ///
 /// `0` means the viewport is pinned to the live tail; a positive value
@@ -47,6 +51,14 @@ impl GridLine {
             return None;
         }
         Some(ViewportLine(u16::try_from(vl).ok()?))
+    }
+}
+
+#[cfg(feature = "alacritty")]
+impl From<alacritty_terminal::index::Line> for GridLine {
+    #[inline]
+    fn from(value: alacritty_terminal::index::Line) -> Self {
+        GridLine(value.to_be())
     }
 }
 
@@ -101,6 +113,14 @@ impl From<GridPoint> for alacritty_terminal::index::Point {
             column: alacritty_terminal::index::Column(usize::from(value.column.0)),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridCell {
+    pub point: GridPoint,
+    pub fg: Color,
+    pub bg: Color,
+    pub hyperlink: Option<Hyperlink>,
 }
 
 #[cfg(test)]

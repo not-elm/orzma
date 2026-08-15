@@ -2,19 +2,20 @@
 
 use crate::{
     schema::{
-        CellSide, Cursor, Damage, DamageRows, DisplayOffset, GridPoint, GridSize, MouseEncoding,
-        MouseTracking, Palette, Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch,
-        VtModes, VtResult, VtSignal,
+        CellSide, Cursor, Damage, DamageRows, DisplayOffset, GridCell, GridPoint, GridSize,
+        MouseEncoding, MouseTracking, Palette, Scroll, SelectionKind, SelectionRange, ViCursor,
+        ViModeSwitch, VtModes, VtResult, VtSignal,
+        cell::{SourceCell, SourceHyperlink},
     },
     vt::{ExtractedRows, VtBackend, VtSelection, apc::ApcState},
 };
 use alacritty_terminal::{
     Term,
     event::EventListener,
-    grid::Dimensions,
-    index::{Point, Side},
+    grid::{Dimensions, Row},
+    index::{Column, Line, Point, Side},
     selection::Selection,
-    term::{Config, TermMode},
+    term::{Config, TermMode, cell::Cell},
     vte::ansi::Processor,
 };
 use std::iter;
@@ -120,8 +121,18 @@ impl VtBackend for AlacrittyVtBackend {
         Ok(Some(Damage::Full))
     }
 
-    fn extract_rows(&mut self, _lines: Option<&DamageRows>) -> ExtractedRows {
-        todo!()
+    fn cell_at(&self, point: GridPoint) -> Option<SourceCell> {
+        let line = &self.term.grid()[Line(point.line.0)];
+        let cell = &line[Column(point.column.0 as usize)];
+        Some(SourceCell {
+            point,
+            fg: cell.fg.into(),
+            bg: cell.bg.into(),
+            hyperlink: cell
+                .hyperlink()
+                .as_ref()
+                .map(|c| SourceHyperlink::from_alacritty_hyperlink(c)),
+        })
     }
 
     fn history_size(&self) -> u32 {

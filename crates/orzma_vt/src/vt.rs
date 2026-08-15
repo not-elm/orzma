@@ -2,8 +2,8 @@
 
 use crate::schema::{
     CellSide, Cursor, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, FrameSnapshot,
-    GridPoint, GridSize, Hyperlink, Palette, Row, Scroll, SelectionKind, SelectionRange, ViCursor,
-    ViModeSwitch, ViewportLine, VtModes, VtResult, VtSignal,
+    GridCell, GridPoint, GridSize, Hyperlink, Palette, Row, Scroll, SelectionKind, SelectionRange,
+    ViCursor, ViModeSwitch, ViewportLine, VtModes, VtResult, VtSignal, cell::SourceCell,
 };
 
 #[cfg(feature = "alacritty")]
@@ -129,7 +129,6 @@ impl<B: VtBackend + VtSelection> OrzmaVt<B> {
     /// damage yields a [`Frame::Delta`] — including an empty one,
     /// whose metadata is still current.
     pub fn frame(&mut self) -> Option<Frame> {
-        let damage = self.pending_damage.take()?;
         Some(Frame::Snapshot(FrameSnapshot {
             seq: 0,
             size: self.grid_size(),
@@ -285,14 +284,8 @@ pub trait VtBackend: Sized {
     /// damage tracking. `Ok(None)` on an idempotent request.
     fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<Option<Damage>>;
 
-    /// Extracts the contents of the given viewport rows — or of the
-    /// whole visible viewport when `lines` is `None` — together with
-    /// the hyperlinks those rows reference.
-    ///
-    /// One combined pass because hyperlink-id assignment is stateful:
-    /// the backend owns the interner, and only the extraction knows
-    /// which links the produced runs actually reference.
-    fn extract_rows(&mut self, lines: Option<&DamageRows>) -> ExtractedRows;
+    /// Extract the cell at the target point.
+    fn cell_at(&self, point: GridPoint) -> Option<SourceCell<'_>>;
 
     /// Total scrollback history line count.
     fn history_size(&self) -> u32;

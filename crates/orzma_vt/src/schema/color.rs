@@ -92,6 +92,13 @@ impl Color {
     }
 }
 
+#[cfg(feature = "alacritty")]
+impl From<alacritty_terminal::vte::ansi::Color> for Color {
+    fn from(value: alacritty_terminal::vte::ansi::Color) -> Self {
+        Self::from_alacritty(value)
+    }
+}
+
 /// A 24-bit sRGB color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb {
