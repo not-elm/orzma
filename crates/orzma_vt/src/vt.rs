@@ -285,24 +285,13 @@ pub trait VtBackend: Sized {
     fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<Option<Damage>>;
 
     /// Extract the cell at the target point.
-    fn cell_at(&self, point: GridPoint) -> Option<SourceCell<'_>>;
+    fn cell_at(&self, point: GridPoint) -> Option<SourceCell>;
 
     /// Total scrollback history line count.
     fn history_size(&self) -> u32;
 
     /// The live palette symbolic colors resolve against.
     fn palette(&self) -> Palette;
-}
-
-/// Rows extracted from the backend in one pass, together with the
-/// hyperlinks those rows reference.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExtractedRows {
-    /// The extracted rows, ascending by viewport line.
-    pub rows: Vec<(ViewportLine, Row)>,
-    /// Hyperlinks referenced by `rows`. Reserved: empty until the
-    /// hyperlink interner is ported.
-    pub hyperlinks: Vec<Hyperlink>,
 }
 
 /// Selection capability of a VT backend.
