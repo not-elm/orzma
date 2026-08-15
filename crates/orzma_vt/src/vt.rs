@@ -140,7 +140,7 @@ impl<B: VtBackend + VtSelection> OrzmaVt<B> {
             history_base: todo!(),
             selection: self.backend.selection_range(),
             hyperlinks: todo!(),
-            palette: todo!(),
+            palette: self.backend.palette(),
         }))
     }
 
