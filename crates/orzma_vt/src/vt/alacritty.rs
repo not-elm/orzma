@@ -7,7 +7,7 @@ use crate::{
         ViModeSwitch, VtModes, VtResult, VtSignal,
         cell::{SourceCell, SourceHyperlink},
     },
-    vt::{ExtractedRows, VtBackend, VtSelection, apc::ApcState},
+    vt::{VtBackend, VtSelection, apc::ApcState},
 };
 use alacritty_terminal::{
     Term,

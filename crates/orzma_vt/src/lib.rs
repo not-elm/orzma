@@ -4,6 +4,7 @@
 //! colors, cursors, selections, damage, signals. [`vt`] holds the
 //! [`vt::OrzmaVt`] contract and its backends.
 
+pub mod hyperlink;
 pub mod schema;
 pub mod vt;
 
