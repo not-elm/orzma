@@ -1,9 +1,9 @@
 //! Engine layer: the [`OrzmaVt`] contract and its backends.
 
 use crate::schema::{
-    CellSide, Cursor, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridPoint, GridSize,
-    Hyperlink, Palette, Row, Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch,
-    ViewportLine, VtModes, VtResult, VtSignal,
+    CellSide, Cursor, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, FrameSnapshot,
+    GridPoint, GridSize, Hyperlink, Palette, Row, Scroll, SelectionKind, SelectionRange, ViCursor,
+    ViModeSwitch, ViewportLine, VtModes, VtResult, VtSignal,
 };
 
 #[cfg(feature = "alacritty")]
@@ -130,7 +130,19 @@ impl<B: VtBackend + VtSelection> OrzmaVt<B> {
     /// whose metadata is still current.
     pub fn frame(&mut self) -> Option<Frame> {
         let damage = self.pending_damage.take()?;
-        todo!()
+        Some(Frame::Snapshot(FrameSnapshot {
+            seq: 0,
+            size: self.grid_size(),
+            rows: todo!(),
+            cursor: self.backend.cursor(),
+            vi_cursor: self.backend.vi_cursor(),
+            display_offset: self.backend.display_offset(),
+            history_size: todo!(),
+            history_base: todo!(),
+            selection: self.backend.selection_range(),
+            hyperlinks: todo!(),
+            palette: todo!(),
+        }))
     }
 
     /// Anchors a new selection at an explicit grid cell; returns
