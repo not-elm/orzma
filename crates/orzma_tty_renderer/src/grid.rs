@@ -34,7 +34,7 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
     grid.vi_cursor = snap.vi_cursor;
     grid.selection = snap.selection;
     grid.palette = snap.palette.clone();
-    grid.placements = snap.placements.clone();
+    grid.placements.clone_from(&snap.placements);
     grid.cells = snap
         .rows_data
         .iter()
@@ -58,7 +58,7 @@ fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
     grid.last_seq = delta.seq;
     grid.vi_cursor = delta.vi_cursor;
     grid.selection = delta.selection;
-    grid.placements = delta.placements.clone();
+    grid.placements.clone_from(&delta.placements);
     for h in &delta.hyperlinks {
         if !grid.hyperlinks.iter().any(|(id, _)| *id == h.id) {
             grid.hyperlinks.push((h.id, h.uri.clone()));

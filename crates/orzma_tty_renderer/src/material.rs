@@ -652,6 +652,11 @@ impl PackedPalette {
 
     /// Packs a cell foreground, resolving symbolic colors to their
     /// palette slot.
+    //
+    // NOTE: The variant-to-slot mapping mirrors `Palette::resolve` in
+    //       `orzma_vt`, pre-packed here for the per-cell hot path; a
+    //       change to either mapping must be applied to both, or
+    //       symbolic colors silently diverge between producers.
     fn cell_fg(&self, color: CellColor) -> u32 {
         match color {
             CellColor::DefaultForeground => self.foreground,
