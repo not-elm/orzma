@@ -140,7 +140,7 @@ impl VtBackend for AlacrittyVtBackend {
     }
 
     fn palette(&self) -> Palette {
-        todo!()
+        Palette::from_alacritty_colors(self.term.colors())
     }
 
     fn cursor(&self) -> Cursor {

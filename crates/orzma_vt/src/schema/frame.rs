@@ -31,11 +31,13 @@ pub struct FrameSnapshot {
     pub cursor: Cursor,
     /// Lines scrolled back from the live tail.
     pub display_offset: DisplayOffset,
-    /// Total scrollback history line count.
-    pub history_size: u32,
-    /// History lines already evicted from scrollback; anchors an
-    /// absolute line as `history_base + history_size + grid_row`.
-    pub history_base: u64,
+    ///TODO:
+    ///下記２つのフィールドはWebviewのアンカー情報を追跡するために使用されているが、別のアプローチを考えたいためいったんコメントアウトする。
+    // /// Total scrollback history line count.
+    // pub history_size: u32,
+    // /// History lines already evicted from scrollback; anchors an
+    // /// absolute line as `history_base + history_size + grid_row`.
+    // pub history_base: u64,
     /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.

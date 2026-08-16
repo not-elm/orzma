@@ -9,6 +9,7 @@ mod cursor;
 mod cursor_vi;
 mod damage;
 mod modes_and_grid;
+mod palette;
 mod scroll;
 mod selection;
 mod selection_output;

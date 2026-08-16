@@ -8,6 +8,8 @@
 //! explicitly-set background that happens to carry the same RGB.
 
 #[cfg(feature = "alacritty")]
+use alacritty_terminal::term::color::Colors;
+#[cfg(feature = "alacritty")]
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor, Rgb as ARgb};
 
 /// A cell color, carrying its source rather than a resolved value.
@@ -128,6 +130,41 @@ pub struct Palette {
     pub background: Rgb,
 }
 
+impl Default for Palette {
+    fn default() -> Self {
+        Self {
+            indexed: Box::new(XTERM_INDEXED),
+            foreground: DEFAULT_FOREGROUND,
+            background: DEFAULT_BACKGROUND,
+        }
+    }
+}
+
+#[cfg(feature = "alacritty")]
+impl Palette {
+    /// Folds the terminal's live OSC overrides over the xterm defaults.
+    ///
+    /// A `Some` slot in `colors` is an active OSC 4 / 10 / 11 override
+    /// and wins; a `None` slot resolves to the built-in xterm value,
+    /// which is also how an OSC 104 reset takes effect — alacritty
+    /// clears the slot back to `None`.
+    pub fn from_alacritty_colors(colors: &Colors) -> Self {
+        let mut palette = Self::default();
+        for (index, slot) in palette.indexed.iter_mut().enumerate() {
+            if let Some(rgb) = colors[index] {
+                *slot = rgb.into();
+            }
+        }
+        if let Some(foreground) = colors[NamedColor::Foreground] {
+            palette.foreground = foreground.into();
+        }
+        if let Some(background) = colors[NamedColor::Background] {
+            palette.background = background.into();
+        }
+        palette
+    }
+}
+
 #[cfg(feature = "alacritty")]
 impl From<ARgb> for Rgb {
     fn from(rgb: ARgb) -> Self {
@@ -137,6 +174,115 @@ impl From<ARgb> for Rgb {
             b: rgb.b,
         }
     }
+}
+
+/// The default foreground [`Palette`] carries before any OSC 10
+/// override.
+const DEFAULT_FOREGROUND: Rgb = Rgb {
+    r: 255,
+    g: 255,
+    b: 255,
+};
+
+/// The default background [`Palette`] carries before any OSC 11
+/// override.
+const DEFAULT_BACKGROUND: Rgb = Rgb { r: 0, g: 0, b: 0 };
+
+/// Channel ramp for the 6x6x6 cube portion of the xterm table.
+const CUBE_RAMP: [u8; 6] = [0, 95, 135, 175, 215, 255];
+
+/// The 16 ANSI base slots as xterm defaults, black through bright
+/// white.
+const ANSI_16: [Rgb; 16] = [
+    Rgb { r: 0, g: 0, b: 0 },
+    Rgb { r: 205, g: 0, b: 0 },
+    Rgb { r: 0, g: 205, b: 0 },
+    Rgb {
+        r: 205,
+        g: 205,
+        b: 0,
+    },
+    Rgb { r: 0, g: 0, b: 238 },
+    Rgb {
+        r: 205,
+        g: 0,
+        b: 205,
+    },
+    Rgb {
+        r: 0,
+        g: 205,
+        b: 205,
+    },
+    Rgb {
+        r: 229,
+        g: 229,
+        b: 229,
+    },
+    Rgb {
+        r: 127,
+        g: 127,
+        b: 127,
+    },
+    Rgb { r: 255, g: 0, b: 0 },
+    Rgb { r: 0, g: 255, b: 0 },
+    Rgb {
+        r: 255,
+        g: 255,
+        b: 0,
+    },
+    Rgb {
+        r: 92,
+        g: 92,
+        b: 255,
+    },
+    Rgb {
+        r: 255,
+        g: 0,
+        b: 255,
+    },
+    Rgb {
+        r: 0,
+        g: 255,
+        b: 255,
+    },
+    Rgb {
+        r: 255,
+        g: 255,
+        b: 255,
+    },
+];
+
+/// The full 256-slot xterm table [`Color::Indexed`] resolves to before
+/// any OSC 4 override: [`ANSI_16`], the 6x6x6 cube on [`CUBE_RAMP`],
+/// and the grayscale ramp from 8 to 238 in steps of 10.
+const XTERM_INDEXED: [Rgb; 256] = build_xterm_indexed();
+
+const fn build_xterm_indexed() -> [Rgb; 256] {
+    let mut table = [Rgb { r: 0, g: 0, b: 0 }; 256];
+    let mut i = 0;
+    while i < 16 {
+        table[i] = ANSI_16[i];
+        i += 1;
+    }
+    while i < 232 {
+        let cube = i - 16;
+        table[i] = Rgb {
+            r: CUBE_RAMP[cube / 36],
+            g: CUBE_RAMP[(cube / 6) % 6],
+            b: CUBE_RAMP[cube % 6],
+        };
+        i += 1;
+    }
+    while i < 256 {
+        let gray = 8 + (i as u8 - 232) * 10;
+        table[i] = Rgb {
+            r: gray,
+            g: gray,
+            b: gray,
+        };
+        i += 1;
+    }
+    table
 }
 
 #[cfg(all(test, feature = "alacritty"))]
@@ -337,6 +483,131 @@ mod tests {
             Color::Rgb(Rgb { r: 0, g: 0, b: 0 })
         );
         assert_ne!(Color::DefaultBackground, Color::DefaultForeground);
+    }
+
+    /// Asserts that the default palette seeds the 16 ANSI base slots
+    /// with the xterm defaults.
+    ///
+    /// Case: a fresh terminal renders `ls --color` output before any
+    /// OSC 4 override arrives, so indexed cells must resolve against
+    /// the stock xterm colors.
+    #[test]
+    fn the_default_palette_seeds_the_ansi_base_slots() {
+        let palette = Palette::default();
+        assert_eq!(palette.indexed[0], Rgb { r: 0, g: 0, b: 0 });
+        assert_eq!(palette.indexed[1], Rgb { r: 205, g: 0, b: 0 });
+        assert_eq!(
+            palette.indexed[15],
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 255
+            }
+        );
+    }
+
+    /// Asserts that the default palette builds slots 16..=231 from the
+    /// 6x6x6 cube with the xterm channel ramp.
+    ///
+    /// Case: a TUI picks `SGR 38;5;196` for an error marker and the
+    /// renderer must show the canonical cube red, not an interpolated
+    /// approximation.
+    #[test]
+    fn the_default_palette_builds_the_color_cube_from_the_channel_ramp() {
+        let palette = Palette::default();
+        assert_eq!(palette.indexed[16], Rgb { r: 0, g: 0, b: 0 });
+        assert_eq!(palette.indexed[196], Rgb { r: 255, g: 0, b: 0 });
+        assert_eq!(
+            palette.indexed[231],
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 255
+            }
+        );
+    }
+
+    /// Asserts that the default palette fills slots 232..=255 with the
+    /// grayscale ramp from 8 to 238.
+    ///
+    /// Case: a diff pager shades context lines with high grayscale
+    /// slots, which must land on the xterm gray steps.
+    #[test]
+    fn the_default_palette_ends_with_the_grayscale_ramp() {
+        let palette = Palette::default();
+        assert_eq!(palette.indexed[232], Rgb { r: 8, g: 8, b: 8 });
+        assert_eq!(
+            palette.indexed[255],
+            Rgb {
+                r: 238,
+                g: 238,
+                b: 238
+            }
+        );
+    }
+
+    /// Asserts that an overridden slot wins over the xterm default
+    /// while untouched slots keep theirs.
+    ///
+    /// Case: a theming tool recolors slot 1 with OSC 4; every other
+    /// slot must keep resolving to the stock table.
+    #[test]
+    fn an_overridden_slot_wins_over_the_xterm_default() {
+        let mut colors = Colors::default();
+        colors[1] = Some(ARgb { r: 255, g: 0, b: 0 });
+        let palette = Palette::from_alacritty_colors(&colors);
+        assert_eq!(palette.indexed[1], Rgb { r: 255, g: 0, b: 0 });
+        assert_eq!(palette.indexed[2], Rgb { r: 0, g: 205, b: 0 });
+    }
+
+    /// Asserts that a fully unset color table folds to the default
+    /// palette.
+    ///
+    /// Case: OSC 104 resets a themed slot by clearing it to `None`, so
+    /// an all-`None` table must be indistinguishable from a fresh
+    /// terminal's palette.
+    #[test]
+    fn an_unset_table_folds_to_the_default_palette() {
+        let palette = Palette::from_alacritty_colors(&Colors::default());
+        assert_eq!(palette, Palette::default());
+    }
+
+    /// Asserts that OSC 10 / OSC 11 overrides reach the palette's
+    /// default foreground and background.
+    ///
+    /// Case: a theme switcher recolors the terminal defaults, and
+    /// cells painted with `SGR 39` / `SGR 49` must resolve to the new
+    /// values.
+    #[test]
+    fn foreground_and_background_overrides_reach_the_palette() {
+        let mut colors = Colors::default();
+        colors[NamedColor::Foreground] = Some(ARgb {
+            r: 170,
+            g: 187,
+            b: 204,
+        });
+        colors[NamedColor::Background] = Some(ARgb {
+            r: 17,
+            g: 34,
+            b: 51,
+        });
+        let palette = Palette::from_alacritty_colors(&colors);
+        assert_eq!(
+            palette.foreground,
+            Rgb {
+                r: 170,
+                g: 187,
+                b: 204
+            }
+        );
+        assert_eq!(
+            palette.background,
+            Rgb {
+                r: 17,
+                g: 34,
+                b: 51
+            }
+        );
     }
 
     #[test]

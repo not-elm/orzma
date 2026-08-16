@@ -43,8 +43,6 @@ fn a_fresh_vt_emits_a_bootstrap_snapshot_of_the_full_viewport() {
         );
     }
     assert_eq!(snap.display_offset, DisplayOffset(0));
-    assert_eq!(snap.history_size, 0);
-    assert_eq!(snap.history_base, 0);
     assert_eq!(snap.vi_cursor, None);
     assert_eq!(snap.selection, None);
     assert!(snap.hyperlinks.is_empty());
@@ -177,7 +175,6 @@ fn a_scrolled_snapshot_renders_the_scrolled_viewport() {
     vt.scroll(Scroll::Delta(3));
     let snap = snapshot(&mut vt);
     assert_eq!(snap.display_offset, DisplayOffset(3));
-    assert_eq!(snap.history_size, 17);
     assert!(
         row_text(&snap.rows[0]).starts_with("l14"),
         "got {:?}",

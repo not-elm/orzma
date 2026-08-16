@@ -136,8 +136,6 @@ impl<B: VtBackend + VtSelection> OrzmaVt<B> {
             cursor: self.backend.cursor(),
             vi_cursor: self.backend.vi_cursor(),
             display_offset: self.backend.display_offset(),
-            history_size: todo!(),
-            history_base: todo!(),
             selection: self.backend.selection_range(),
             hyperlinks: todo!(),
             palette: self.backend.palette(),
