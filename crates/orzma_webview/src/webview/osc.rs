@@ -1,35 +1,35 @@
-//! Observes `OscWebviewRequest` and mounts/unmounts an inline dynamic webview
-//! at the requesting terminal's cursor (the `Mount` / `Unmount`
-//! verbs).
+//! Observes `TermApcWebviewSignal` and mounts/unmounts an inline dynamic
+//! webview on the requesting terminal (the `Mount` / `Unmount` verbs).
 
 use super::mount::{WebviewMountContext, WebviewParams, mount, unmount};
 use crate::control_plane::OrzmaRegistry;
 use bevy::prelude::*;
-use orzma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
+use bevy_orzma_term::prelude::TermApcWebviewSignal;
+use orzma_vt::prelude::ApcWebviewVerb;
 
 /// Marks a webview as render-only (no pointer or keyboard input
 /// forwarded to the embedded page).
 #[derive(Component, Debug, Default)]
 pub struct NonInteractive;
 
-/// Wires the OSC-webview mount/unmount observer.
+/// Wires the APC-webview mount/unmount observer.
 pub(crate) struct OscPlugin;
 
 impl Plugin for OscPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_osc_webview_request);
+        app.add_observer(on_apc_webview_signal);
     }
 }
 
-pub(crate) fn on_osc_webview_request(
-    ev: On<OscWebviewRequest>,
+pub(crate) fn on_apc_webview_signal(
+    ev: On<TermApcWebviewSignal>,
     mut webview: WebviewParams,
     dynamic: Res<OrzmaRegistry>,
 ) {
     let req = ev.event();
-    let terminal_surface = req.entity;
+    let terminal_surface = req.terminal;
     match &req.verb {
-        OscWebviewVerb::Mount {
+        ApcWebviewVerb::Mount {
             view_id,
             rows,
             cols,
@@ -44,11 +44,11 @@ pub(crate) fn on_osc_webview_request(
                     instance_id: instance_id.as_deref(),
                     rows: *rows,
                     cols: *cols,
-                    anchor: req.anchor,
+                    placement: req.placement,
                 },
             );
         }
-        OscWebviewVerb::Unmount {
+        ApcWebviewVerb::Unmount {
             view_id,
             instance_id,
         } => {

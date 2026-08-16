@@ -1,7 +1,7 @@
 //! Webview mount module: `ChildOf` children of a terminal surface that render a
 //! registered view into the terminal's text flow. This module owns the
 //! components, the mount/unmount policy executed by the `Mount` /
-//! `Unmount` arms of `osc::on_osc_webview_request`, and the
+//! `Unmount` arms of `osc::on_apc_webview_signal`, and the
 //! `WebviewPlugin` runtime systems that keep `WebviewSize` in
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
@@ -19,11 +19,11 @@ use bevy_cef::prelude::{
     FocusedWebview, PreloadScripts, WebviewGpuImageInjectSet, WebviewSize, WebviewSource,
     WebviewTextureTarget,
 };
-use orzma_tty_engine::{AnchorMode, InlineAnchor, TerminalModeChanged};
+use bevy_orzma_term::prelude::TermWebviewEvictedSignal;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use orzma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
-use orzma_tty_renderer::schema::TerminalGrid;
+use orzma_tty_renderer::schema::{PlacementId, TerminalGrid};
 
 /// The normalized forward-key chords for a mounted webview, copied from
 /// its registration. Read by the focused-key filter-fill and PTY-forward
@@ -48,21 +48,22 @@ pub struct Webview {
     pub slot: u8,
 }
 
-/// Where a webview sits: its anchor mode (scrollback line vs fixed
-/// viewport cell), the rect extent in cells, and the VT `frame_seq` the next
-/// grid emit carries (`project_webview_overlays` defers first projection until
-/// the grid catches up).
+/// Where a webview sits: the VT-minted placement id the frame-carried
+/// list addresses, plus the rect extent in cells reserved at mount.
+///
+/// # Invariants
+///
+/// `ProjectedPlacement.rows` / `cols` for this id always equal `rows` /
+/// `cols` here — the VT treats a size change as a remount, so a drift
+/// between the CEF surface size and the painted rect cannot arise.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WebviewPlacement {
-    /// Where the rect is anchored.
-    pub(crate) anchor: AnchorMode,
+    /// The VT-minted id; frames address this placement by it.
+    pub(crate) placement: PlacementId,
     /// Rect height in terminal cells.
     pub(crate) rows: u16,
     /// Rect width in terminal cells.
     pub(crate) cols: u16,
-    /// The VT frame seq stamped at mount; grid frames at or after this seq
-    /// (wrap-aware compare) may project the placement.
-    pub(crate) frame_seq: u32,
 }
 
 /// Marks a bridged webview entity after it has produced its first
@@ -106,13 +107,13 @@ impl Plugin for WebviewPlugin {
                     .before(prepare_assets::<PreparedUiMaterial<TerminalUiMaterial>>),
             );
         }
-        app.add_observer(despawn_fixed_screen_on_alt_exit);
+        app.add_observer(on_webview_evicted);
         app.add_observer(on_placement_removed);
     }
 }
 
 /// Everything the `Mount` verb carries into `mount`: the target
-/// terminal surface and the parsed verb + anchor payload.
+/// terminal surface and the parsed verb + placement payload.
 pub(crate) struct WebviewMountContext<'a> {
     /// The requesting terminal surface — the `ChildOf` parent of the mount.
     pub(crate) terminal_surface: Entity,
@@ -120,16 +121,16 @@ pub(crate) struct WebviewMountContext<'a> {
     pub(crate) view_id: &'a str,
     /// The client-assigned instance id (`None` = implicit default instance).
     pub(crate) instance_id: Option<&'a str>,
-    /// Rect height in terminal cells (validated 1..=200 by `orzma_tty_engine`).
+    /// Rect height in terminal cells (validated 1..=200 by `orzma_vt`).
     pub(crate) rows: u16,
-    /// Rect width in terminal cells (validated 1..=400 by `orzma_tty_engine`).
+    /// Rect width in terminal cells (validated 1..=400 by `orzma_vt`).
     pub(crate) cols: u16,
-    /// The VT-stamped anchor; `None` is a policy rejection (gate 1).
-    pub(crate) anchor: Option<InlineAnchor>,
+    /// The VT-minted placement id; `None` is a policy rejection (gate 1).
+    pub(crate) placement: Option<PlacementId>,
 }
 
 /// The system params `mount` / `unmount` need, bundled so the
-/// `on_osc_webview_request` observer gains a single extra parameter.
+/// `on_apc_webview_signal` observer gains a single extra parameter.
 #[derive(SystemParam)]
 pub(crate) struct WebviewParams<'w, 's> {
     commands: Commands<'w, 's>,
@@ -200,14 +201,14 @@ pub(crate) fn resolve_mount(
 
 /// Mounts a registered view as a webview child of the requesting
 /// terminal surface, applying the policy gates in order (each rejection is a
-/// `tracing::debug!` + return): missing anchor, unregistered view, duplicate
+/// `tracing::debug!` + return): missing placement, unregistered view, duplicate
 /// `view_id` on this terminal, overlay-slot exhaustion.
 ///
-/// The parent (`ctx.terminal_surface`, the `OscWebviewRequest` target) is the
-/// owning `OrzmaTerminal` surface entity: both the `TerminalHandle` (which emits
-/// the OSC request) and the `TerminalRenderBundle` (`TerminalGrid`) live on
-/// that one entity, so the `ChildOf` parent is also the entity
-/// `project_webview_overlays` reads grid state from.
+/// The parent (`ctx.terminal_surface`, the `TermApcWebviewSignal` target) is
+/// the owning `OrzmaTerminal` surface entity: both the `OrzmaTermHandle`
+/// (which emits the APC signal) and the `TerminalRenderBundle`
+/// (`TerminalGrid`) live on that one entity, so the `ChildOf` parent is also
+/// the entity `project_webview_overlays` reads grid state from.
 ///
 /// `WebviewSize` is seeded here because `bevy_cef` builds the CEF browser
 /// from it at creation. The seed is `(cols × cell_w, rows × cell_h) /
@@ -220,8 +221,8 @@ pub(crate) fn mount(
     dynamic: &OrzmaRegistry,
     ctx: WebviewMountContext<'_>,
 ) {
-    let Some(anchor) = ctx.anchor else {
-        tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount without anchor, dropping");
+    let Some(placement) = ctx.placement else {
+        tracing::debug!(view_id = %ctx.view_id, "apc-webview: mount rejected by the VT, dropping");
         return;
     };
     let live = live_webview_children(&params.children, &params.views, ctx.terminal_surface);
@@ -230,10 +231,9 @@ pub(crate) fn mount(
         .find(|(_, v)| v.view_id == ctx.view_id && v.instance_id.as_deref() == ctx.instance_id)
     {
         let next = WebviewPlacement {
-            anchor: anchor.mode,
+            placement,
             rows: ctx.rows,
             cols: ctx.cols,
-            frame_seq: anchor.frame_seq,
         };
         if let Ok(mut placement) = params.placements.get_mut(*existing) {
             // NOTE: set_if_neq elides a no-op re-emit so an unchanged frame
@@ -243,11 +243,11 @@ pub(crate) fn mount(
         return;
     }
     let Some(resolved) = resolve_mount(ctx.view_id, ctx.terminal_surface, dynamic) else {
-        tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount for unregistered or unowned id, dropping");
+        tracing::debug!(view_id = %ctx.view_id, "apc-webview: mount for unregistered or unowned id, dropping");
         return;
     };
     let Some(slot) = smallest_free_slot(&live) else {
-        tracing::debug!(view_id = %ctx.view_id, "osc-webview: all inline overlay slots occupied, dropping");
+        tracing::debug!(view_id = %ctx.view_id, "apc-webview: all inline overlay slots occupied, dropping");
         return;
     };
     let scale_factor = params
@@ -260,7 +260,7 @@ pub(crate) fn mount(
     let size = seed_logical_size(ctx.rows, ctx.cols, cell_w_phys, cell_h_phys, scale_factor);
     let texture = WebviewTextureTarget(params.images.add(Image::default()));
     let Some(url) = resolved.url.as_deref() else {
-        tracing::debug!(view_id = %ctx.view_id, "osc-webview: resolved mount had no url, dropping");
+        tracing::debug!(view_id = %ctx.view_id, "apc-webview: resolved mount had no url, dropping");
         return;
     };
     let source = WebviewSource::new(url);
@@ -282,10 +282,9 @@ pub(crate) fn mount(
             slot,
         },
         WebviewPlacement {
-            anchor: anchor.mode,
+            placement,
             rows: ctx.rows,
             cols: ctx.cols,
-            frame_seq: anchor.frame_seq,
         },
     ));
     if !resolved.interactive {
@@ -320,8 +319,8 @@ pub(crate) fn mount(
         slot,
         rows = ctx.rows,
         cols = ctx.cols,
-        anchor = ?anchor.mode,
-        "osc-webview: webview mounted"
+        placement = ?placement,
+        "apc-webview: webview mounted"
     );
 }
 
@@ -457,26 +456,21 @@ pub fn webview_local_dip(
 const FALLBACK_CELL_W_PHYS: f32 = 8.0;
 const FALLBACK_CELL_H_PHYS: f32 = 16.0;
 
-/// Despawns the `FixedScreen` inline children of a terminal when it leaves the
-/// alternate screen. The teardown lands before the next `PostUpdate`
-/// projection (the engine triggers `TerminalModeChanged` before the frame
-/// trigger, and despawn commands flush at the `Update`->`PostUpdate` boundary),
-/// so no stale rectangle is painted (spec section 4.6, Kitty issue #2901).
-fn despawn_fixed_screen_on_alt_exit(
-    event: On<TerminalModeChanged>,
+/// Despawns the placements named by a `TermWebviewEvictedSignal` on the
+/// signalling terminal. Unknown ids are ignored, so a re-delivered or
+/// stale eviction is a no-op.
+fn on_webview_evicted(
+    event: On<TermWebviewEvictedSignal>,
     mut commands: Commands,
     children: Query<&Children>,
     placements: Query<&WebviewPlacement>,
 ) {
-    if !event.removed.iter().any(|m| m == ALT_SCREEN_MODE) {
-        return;
-    }
-    let Ok(kids) = children.get(event.entity) else {
+    let Ok(kids) = children.get(event.terminal) else {
         return;
     };
     for child in kids.iter() {
-        if let Ok(placement) = placements.get(child)
-            && matches!(placement.anchor, AnchorMode::FixedScreen { .. })
+        if let Ok(p) = placements.get(child)
+            && event.placements.contains(&p.placement)
         {
             commands.entity(child).despawn();
         }
@@ -559,10 +553,6 @@ fn sync_webview_size(
         size.set_if_neq(WebviewSize(next));
     }
 }
-
-/// The wire mode string `orzma_tty_engine`'s `mode_diff` emits for
-/// `TermMode::ALT_SCREEN`.
-const ALT_SCREEN_MODE: &str = "alt-screen";
 
 /// Derives each terminal's `TerminalOverlays` from its live webview
 /// children, every frame, starting from the all-sentinel default (spec §5).
