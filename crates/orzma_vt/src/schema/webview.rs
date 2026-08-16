@@ -152,9 +152,14 @@ fn valid_view_id(view_id: &str) -> bool {
     if view_id.is_empty() || MAX_VIEW_ID < view_id.len() {
         return false;
     }
-    !view_id
+    // NOTE: The accepted set must stay the documented view-id charset
+    // `[A-Za-z0-9._-]` (docs/orzma_webview_protocol.md): the control
+    // plane's mint_id() guarantees its base32 handles (`a-z2-7`) are
+    // valid view ids, so narrowing this — e.g. to alphabetic only —
+    // rejects nearly every minted handle.
+    view_id
         .chars()
-        .any(|c| c.is_whitespace() || c == '/' || !c.is_ascii_alphabetic())
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// VT-assigned identity of one mounted webview placement.
@@ -234,6 +239,31 @@ mod tests {
         });
         for payload in ["Omount;c=20,r=3,v=memo", "Omount;r=3,v=memo,c=20"] {
             assert_eq!(parse(payload), expected, "payload={payload}");
+        }
+    }
+
+    /// Asserts that every character class of the documented view-id
+    /// charset `[A-Za-z0-9._-]` is accepted.
+    ///
+    /// The control plane mints lowercase base32 handles from `a-z2-7`
+    /// and guarantees they are valid view ids, so the parser must not
+    /// be stricter than the documented charset.
+    ///
+    /// Case: a program mounts the handle the control socket handed it,
+    /// digits and all.
+    #[test]
+    fn view_id_accepts_the_documented_charset() {
+        for id in ["mfrgg2lt2y", "DYN1", "my-view", "a.b_c"] {
+            assert_eq!(
+                parse(&format!("Omount;v={id},r=3,c=20")),
+                Some(ApcWebviewVerb::Mount {
+                    view_id: id.into(),
+                    rows: 3,
+                    cols: 20,
+                    instance_id: None,
+                }),
+                "id={id}"
+            );
         }
     }
 

@@ -5,6 +5,7 @@ use super::*;
 use crate::schema::{GridColumn, GridLine};
 
 mod frame;
+mod interpret;
 
 /// Builds a wrapper whose bootstrap damage and backend accumulator are
 /// both consumed, so a test observes only what its own calls stage.

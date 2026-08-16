@@ -354,8 +354,9 @@ impl Default for TerminalOverlays {
 ///   `cursor_style` (and leaving `cursor_pos` at any value). The shader
 ///   short-circuits on `cursor_visible == 0u`, so we deliberately keep
 ///   `cursor_pos` as `UVec2` rather than introducing a signed sentinel —
-///   the existing visibility bit already does that job. The vi cursor in
-///   scrollback uses the same path: `cursor_visible = 0`.
+///   the existing visibility bit already does that job. A cursor (vi or
+///   live) whose grid line projects outside the viewport takes the same
+///   path: `cursor_visible = 0`.
 ///
 /// # Layout (std140, encase derive)
 ///
@@ -485,10 +486,11 @@ impl TerminalParams {
     ///
     /// # Invariants
     ///
-    /// - When `grid.vi_cursor` is present and inside the viewport, it
-    ///   overrides `grid.cursor` and the resulting `cursor_visible` bit is
-    ///   forced to `1`. When the vi cursor is in scrollback, `cursor_visible`
-    ///   is cleared so the shader skips cursor rendering entirely.
+    /// - When `grid.vi_cursor` is present and its grid point projects into
+    ///   the viewport, it overrides `grid.cursor` and the resulting
+    ///   `cursor_visible` bit is forced to `1`. When the projection falls
+    ///   outside the viewport, `cursor_visible` is cleared so the shader
+    ///   skips cursor rendering entirely.
     /// - When `grid.selection` is `None`, `sel_kind == 0` and the shader's
     ///   `is_in_selection_uniform` short-circuits to `false`.
     fn new(
@@ -615,34 +617,71 @@ impl GpuGlyph {
     }
 }
 
-fn padding_color(default_bg: [u8; 3], fallback: [u8; 3]) -> Vec4 {
-    let [r, g, b] = if default_bg == [0, 0, 0] {
+fn padding_color(default_bg: Rgb, fallback: [u8; 3]) -> Vec4 {
+    let [r, g, b] = if default_bg == (Rgb { r: 0, g: 0, b: 0 }) {
         fallback
     } else {
-        default_bg
+        [default_bg.r, default_bg.g, default_bg.b]
     };
     let c = Color::srgb_u8(r, g, b).to_linear();
     Vec4::new(c.red, c.green, c.blue, 1.0)
 }
 
-/// Packs a resolved foreground color for the GPU cell buffer.
-fn pack_cell_fg(palette: &Palette, color: CellColor) -> u32 {
-    pack_linear(palette.resolve(color))
+/// The transparent cell-background packing (`alpha == 0`) the shader
+/// treats as "terminal default background".
+const TRANSPARENT_BG: u32 = 0;
+
+/// The grid palette pre-packed to the shader's linear `u32` encoding,
+/// built once per cell rebuild so symbolic colors resolve by table
+/// lookup instead of a per-cell sRGB-to-linear conversion.
+struct PackedPalette {
+    indexed: [u32; 256],
+    foreground: u32,
+    background: u32,
 }
 
-/// Packs a resolved background color for the GPU cell buffer.
-fn pack_cell_bg(palette: &Palette, color: CellColor) -> u32 {
-    // NOTE: DefaultBackground must stay distinguishable from an equal
-    // explicit Rgb (the schema/color.rs invariant): this branch is
-    // where a future webview-transparency flag attaches. Today both
-    // arms pack the same numeric background.
-    match color {
-        CellColor::DefaultBackground => pack_linear(palette.background),
-        other => pack_linear(palette.resolve(other)),
+impl PackedPalette {
+    /// Packs every slot of `palette` once.
+    fn build(palette: &Palette) -> Self {
+        Self {
+            indexed: palette.indexed.map(pack_linear),
+            foreground: pack_linear(palette.foreground),
+            background: pack_linear(palette.background),
+        }
+    }
+
+    /// Packs a cell foreground, resolving symbolic colors to their
+    /// palette slot.
+    fn cell_fg(&self, color: CellColor) -> u32 {
+        match color {
+            CellColor::DefaultForeground => self.foreground,
+            CellColor::DefaultBackground => self.background,
+            CellColor::Indexed(index) => self.indexed[usize::from(index)],
+            CellColor::Rgb(rgb) => pack_linear(rgb),
+        }
+    }
+
+    /// Packs a cell background.
+    ///
+    /// # Invariants
+    ///
+    /// `DefaultBackground` packs [`TRANSPARENT_BG`], never the opaque
+    /// palette background: the shader keys on `bg.a == 0` to composite
+    /// webview overlays and the padding base through the cell and to
+    /// resolve reverse video (`resolve_cell_colors` / `tint_bg` in
+    /// `terminal_ui_material.wgsl`), and the sentinel is what keeps an
+    /// equal explicit RGB background distinguishable per the
+    /// `schema::Color` invariant. An opaque pack here occludes every
+    /// webview rect.
+    fn cell_bg(&self, color: CellColor) -> u32 {
+        match color {
+            CellColor::DefaultBackground => TRANSPARENT_BG,
+            other => self.cell_fg(other),
+        }
     }
 }
 
-/// sRGB byte triple → the linear u32 packing the shader decodes.
+/// sRGB byte triple → the opaque linear u32 packing the shader decodes.
 fn pack_linear(rgb: Rgb) -> u32 {
     Color::srgb_u8(rgb.r, rgb.g, rgb.b).to_linear().as_u32()
 }
@@ -785,8 +824,7 @@ fn update_terminal_material(
             state.initialized = true;
         }
 
-        let bg = grid.palette.background;
-        let bg_padding_color = padding_color([bg.r, bg.g, bg.b], fallback.0);
+        let bg_padding_color = padding_color(grid.palette.background, fallback.0);
 
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
             (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),
@@ -843,6 +881,7 @@ fn rebuild_cells(
     phys_font_size: u16,
     cols: u32,
 ) {
+    let packed_palette = PackedPalette::build(&grid.palette);
     for (row_idx, row) in grid.cells.iter().enumerate() {
         let mut col: u32 = 0;
         for cell in row {
@@ -859,8 +898,8 @@ fn rebuild_cells(
             }
             let cell_width = u32::from(cell.width);
             let glyph_index = resolve_glyph_index(cell, state, fonts, atlas, phys_font_size);
-            let fg = pack_cell_fg(&grid.palette, cell.fg);
-            let bg = pack_cell_bg(&grid.palette, cell.bg);
+            let fg = packed_palette.cell_fg(cell.fg);
+            let bg = packed_palette.cell_bg(cell.bg);
             let style_flags = u32::from(cell.style) | style_bits_from_combining_marks(&cell.text);
 
             let target = (row_idx as u32 * cols + col) as usize;
@@ -1157,14 +1196,21 @@ mod tests {
 
     #[test]
     fn padding_color_falls_back_when_default_bg_is_black() {
-        let got = padding_color([0, 0, 0], [30, 32, 40]);
+        let got = padding_color(Rgb { r: 0, g: 0, b: 0 }, [30, 32, 40]);
         let c = Color::srgb_u8(30, 32, 40).to_linear();
         assert_eq!(got, Vec4::new(c.red, c.green, c.blue, 1.0));
     }
 
     #[test]
     fn padding_color_uses_default_bg_when_set() {
-        let got = padding_color([10, 20, 30], [99, 99, 99]);
+        let got = padding_color(
+            Rgb {
+                r: 10,
+                g: 20,
+                b: 30,
+            },
+            [99, 99, 99],
+        );
         let c = Color::srgb_u8(10, 20, 30).to_linear();
         assert_eq!(got, Vec4::new(c.red, c.green, c.blue, 1.0));
     }
@@ -1266,11 +1312,19 @@ mod tests {
     }
 
     /// Asserts that fg and bg packing resolve symbolic colors through
-    /// the live palette.
+    /// the live palette, and that the default background packs the
+    /// transparent sentinel instead of the palette value.
+    ///
+    /// The sentinel policy rejects packing the opaque palette
+    /// background for `DefaultBackground`: the shader keys on
+    /// `bg.a == 0` to composite webview overlays and the padding base
+    /// through default-background cells, so an opaque pack would
+    /// occlude both and erase the explicit-vs-default distinction the
+    /// `schema::Color` invariant requires.
     ///
     /// Case: OSC 4 recolors an indexed slot and OSC 10 the default
-    /// foreground, and newly painted cells must pick up the overridden
-    /// values rather than the built-in xterm table.
+    /// foreground while a webview overlay is mounted behind
+    /// default-background cells.
     #[test]
     fn cell_packing_resolves_through_the_live_palette() {
         use crate::schema::{Color as CellColor, Palette, Rgb};
@@ -1287,8 +1341,9 @@ mod tests {
             g: 50,
             b: 60,
         };
+        let packed = PackedPalette::build(&palette);
         assert_eq!(
-            pack_cell_fg(&palette, CellColor::DefaultForeground),
+            packed.cell_fg(CellColor::DefaultForeground),
             pack_linear(Rgb {
                 r: 10,
                 g: 20,
@@ -1296,16 +1351,18 @@ mod tests {
             })
         );
         assert_eq!(
-            pack_cell_fg(&palette, CellColor::Indexed(1)),
+            packed.cell_fg(CellColor::Indexed(1)),
             pack_linear(Rgb {
                 r: 40,
                 g: 50,
                 b: 60,
             })
         );
-        assert_eq!(
-            pack_cell_bg(&palette, CellColor::DefaultBackground),
-            pack_linear(palette.background)
+        assert_eq!(packed.cell_bg(CellColor::DefaultBackground), TRANSPARENT_BG);
+        assert_ne!(
+            packed.cell_bg(CellColor::Rgb(palette.background)),
+            TRANSPARENT_BG,
+            "an explicit RGB equal to the palette background must stay opaque"
         );
     }
 }

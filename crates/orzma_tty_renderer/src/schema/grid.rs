@@ -20,8 +20,6 @@ pub struct TerminalGrid {
     pub display_offset: u32,
     /// Monotonic sequence number of the last applied frame.
     pub last_seq: u32,
-    /// Active terminal modes from the last snapshot (e.g. "mouse-sgr-1006").
-    pub modes: Vec<String>,
     /// Vi-mode cursor when the server is in vi mode; `None` otherwise.
     /// `ViModePlugin` reads this every frame to drive `ViModeState::active`.
     pub vi_cursor: Option<ViCursor>,

@@ -28,7 +28,6 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
     grid.cursor = Some(snap.cursor.clone());
     grid.display_offset = snap.display_offset;
     grid.last_seq = snap.seq;
-    grid.modes = snap.modes.clone();
     grid.hyperlinks.clear();
     grid.hyperlinks
         .extend(snap.hyperlinks.iter().map(|h| (h.id, h.uri.clone())));
@@ -281,9 +280,8 @@ mod tests {
 
     /// Asserts that a snapshot replaces the grid's palette mirror.
     ///
-    /// Case: OSC 4 recolors a palette slot, which repaints fully, and
-    /// the renderer must resolve subsequent cells against the new
-    /// table.
+    /// Case: OSC 4 recolors a palette slot, and the repaint that
+    /// follows arrives as a full snapshot.
     #[test]
     fn apply_snapshot_replaces_the_palette() {
         let mut app = App::new();

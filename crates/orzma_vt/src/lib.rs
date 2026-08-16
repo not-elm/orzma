@@ -51,6 +51,15 @@ pub trait Vt {
     /// (history trim, alternate-screen teardown) surface as
     /// [`VtSignal::WebviewEvicted`]. Ids are never reused within a
     /// session.
+    ///
+    /// A placement projects only while the screen it was mounted on is
+    /// active: while the alternate screen is shown, primary-screen
+    /// placements are omitted from the emitted lists (hidden, not
+    /// evicted), and the reverse on returning to the primary screen. A
+    /// re-issued `mount` for a live `(view_id, instance)` registers a
+    /// successor under a fresh id; the superseded id simply stops
+    /// being listed and is never named by
+    /// [`VtSignal::WebviewEvicted`].
     fn interpret(&mut self, chunk: &[u8]) -> VtUpdate;
 
     /// Builds the frame for the staged damage, consuming it; `None`
@@ -118,10 +127,16 @@ pub struct VtUpdate {
     pub replies: Vec<u8>,
 }
 
+/// The forthcoming self-contained implementation of [`Vt`], replacing
+/// the [`vt::OldOrzmaVt`] + [`vt::VtBackend`] pair.
+///
+/// Every method is still a stub; the grid, damage tracking, and frame
+/// builder land with the migration tracked in
+/// `docs/orzma_tty_engine_replacement_gaps.md`.
 pub struct OrzmaVt {}
 
 impl Vt for OrzmaVt {
-    fn interpret(&mut self, chunk: &[u8]) -> VtUpdate {
+    fn interpret(&mut self, _chunk: &[u8]) -> VtUpdate {
         todo!()
     }
 
@@ -129,11 +144,11 @@ impl Vt for OrzmaVt {
         todo!()
     }
 
-    fn resize(&mut self, size: GridSize) -> bool {
+    fn resize(&mut self, _size: GridSize) -> bool {
         todo!()
     }
 
-    fn scroll(&mut self, scroll: Scroll) -> bool {
+    fn scroll(&mut self, _scroll: Scroll) -> bool {
         todo!()
     }
 
@@ -149,7 +164,7 @@ impl Vt for OrzmaVt {
         todo!()
     }
 
-    fn cell_at(&self, point: GridPoint) -> Option<GridCell> {
+    fn cell_at(&self, _point: GridPoint) -> Option<GridCell> {
         todo!()
     }
 }

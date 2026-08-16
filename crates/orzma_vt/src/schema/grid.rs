@@ -96,7 +96,7 @@ pub struct GridPoint {
 impl From<alacritty_terminal::index::Point> for GridPoint {
     fn from(value: alacritty_terminal::index::Point) -> Self {
         Self {
-            line: GridLine(value.line.0),
+            line: value.line.into(),
             column: GridColumn(value.column.0 as u16),
         }
     }

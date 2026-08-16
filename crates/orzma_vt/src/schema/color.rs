@@ -648,8 +648,7 @@ mod tests {
     /// palette slot.
     ///
     /// Case: a renderer packs cell colors for the GPU while OSC 4 / 10
-    /// / 11 overrides are active, so symbolic colors must follow the
-    /// live table rather than a built-in default.
+    /// / 11 overrides are active.
     #[test]
     fn resolve_follows_the_live_table() {
         let mut palette = Palette {

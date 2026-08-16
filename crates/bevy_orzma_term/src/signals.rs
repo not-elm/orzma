@@ -77,6 +77,7 @@ pub struct TermCwdChangedSignal {
 pub struct TermApcWebviewSignal {
     #[event_target]
     pub terminal: Entity,
+    /// The mount/unmount verb parsed from the APC payload.
     pub verb: ApcWebviewVerb,
     /// The VT-minted placement id; `Some` only for an accepted `Mount`.
     pub placement: Option<PlacementId>,

@@ -109,11 +109,11 @@
 - スクロールバック飽和(cap 10,000 行)時の primary-screen mount 拒否(alt-screen は免除)
 - alt-screen では `FixedScreen`、primary では `Scrollback` アンカー
 
-新スタックでは `TermApcWebviewSignal.anchor` のフィールドはあるが生成側が存在しない。さらに `FrameSnapshot` の `history_size` / `history_base` は「別のアプローチを考えたい」として[コメントアウト中](../crates/orzma_vt/src/schema/frame.rs)であり、`orzma_webview` のオーバーレイ投影(`viewport_row = line - (history_base + history_size - display_offset)`)と seq の回り込み比較(serial-number arithmetic)はこの契約に直接依存する。**「別アプローチ」の設計が決まるまで webview 統合は成立しない。**
+新スタックは本節の「別アプローチ」を placement 契約として確定した: VT が `PlacementId` を採番して placement テーブルを所有し、受理は `TermApcWebviewSignal.placement`(旧 `anchor` フィールドの後継)で通知、毎 emit の `FrameSnapshot::placements` / `FrameDelta::placements` に viewport 射影済みの `ProjectedPlacement` 一覧を載せ、履歴トリム等の VT 都合の破棄は `VtSignal::WebviewEvicted` で通知する(契約本文は `crates/orzma_vt/src/lib.rs` の「Webview placements」節)。GUI 側(`orzma_webview`)は一覧駆動の投影へ移行済みで、`history_base` / `history_size` と seq 回り込み比較への依存は解消された。**残件は VT 側の実装(採番・テーブル・射影・eviction)であり、それが載るまで webview 統合は動作しない。**
 
 ### 4.2 スナップショットに `modes` がない
 
-旧ワイヤは `modes: Vec<String>`(追跡 8 フラグ: `alt-screen`, `bracketed-paste`, `app-cursor-keys`, `focus-events`, `mouse-vt200`, `mouse-btn-event`, `mouse-any-event`, `mouse-sgr-1006`)をスナップショットで運び、`orzma_webview` は `TerminalGrid.modes` と `TerminalModeChanged.removed` の両方で `"alt-screen"` を照合している。
+旧ワイヤは `modes: Vec<String>`(追跡 8 フラグ: `alt-screen`, `bracketed-paste`, `app-cursor-keys`, `focus-events`, `mouse-vt200`, `mouse-btn-event`, `mouse-any-event`, `mouse-sgr-1006`)をスナップショットで運び、旧 `orzma_webview` は `TerminalGrid.modes` と `TerminalModeChanged.removed` の両方で `"alt-screen"` を照合していた(placement 契約への移行でこの照合は撤去済み。alt-screen 中の webview 表示可否は VT が一覧から外すことで表現し、`TerminalGrid.modes` ミラー自体も読み手が消えたため削除した)。
 
 新 `FrameSnapshot` に modes はなく、`ModeChange` シグナル(差分)だけでは絶対状態の再同期ができない。「alt-screen 遷移は必ず Snapshot で届く(delta には載らない)」という旧不変条件の置き場所も未定。
 
@@ -170,6 +170,7 @@
 - [x] `Pty` に exit 読み取り口を追加し、`pump` が `TermSignal::ChildExit` を一度だけ emit するようにする(§3.2)
 - [x] DSR/DA 応答バイトを `pump` が 1 回の `write_all` で PTY へ書き戻す(§3.3。`Vt::interpret` の `VtUpdate::replies` 経由で配管済み。応答の生成自体は新 VT 実装側)
 - [x] `OrzmaTerm` を新 `Vt` プロトコルへ切り替える(`OrzmaTerm<V: Vt>` + VT 注入、signals/replies のバッファ化、`FakeVt` によるテスト移行。selection 面は capability トレイト設計まで一時削除、`bevy_orzma_term` は具象 VT が載るまでコンパイル不能を許容)
+- [ ] `bevy_orzma_term` の `TermFrameSnapshotSignal` / `TermFrameDeltaSignal` を `orzma_tty_renderer` の `FrameSnapshot` / `FrameDelta` EntityEvent へ変換して trigger するブリッジを実装する(§3.1 の残件。現状このシグナルの購読者はワークスペースにゼロで、フレーム生成が実装されても `TerminalGrid` は更新されない)
 
 ### Phase 2 — アクセサとテスト復旧(§3.7、§7)
 
@@ -197,9 +198,9 @@
 
 ### Phase 5 — webview 契約(§4.1、§4.2)
 
-- [ ] `history_base` / `history_size` の「別アプローチ」設計を確定し、`FrameSnapshot` のコメントアウトを解消する(§4.1)
-- [ ] OSC 5379 アンカー機構を移植する: OSC バイト位置での刻印 + `frame_seq` 同時刻印、`?2026` フラッシュ後サンプリング、`history_base` 単調追跡とフォールド時の合成 unmount-all、飽和時の primary mount 拒否、alt-screen の `FixedScreen` アンカー(§4.1)
-- [ ] スナップショットでの絶対 mode 状態の再同期手段(旧 `modes: Vec<String>` 相当)と「alt-screen 遷移は必ず Snapshot で届く」不変条件の置き場所を決める(§4.2)
+- [x] `history_base` / `history_size` の「別アプローチ」を placement 契約(`PlacementId` 採番 + フレーム搭載の `ProjectedPlacement` 一覧 + `WebviewEvicted`)として確定し、フレームから履歴カウンタを撤去する(§4.1)
+- [ ] placement 契約を VT 側に実装する: APC バイト位置での受理判定と `PlacementId` 採番、placement テーブル、`?2026` フラッシュ後サンプリング、毎 emit の viewport 射影(alt-screen 中は primary 由来の placement を一覧から外す)、履歴トリム・alt-screen 終了・飽和時の `WebviewEvicted` 通知、placement 変化時のダメージステージ(§4.1。契約本文は `crates/orzma_vt/src/lib.rs`)
+- [ ] スナップショットでの絶対 mode 状態の再同期手段(旧 `modes: Vec<String>` 相当)と「alt-screen 遷移は必ず Snapshot で届く」不変条件の置き場所を決める(§4.2。alt-screen 中の webview 表示可否は placement 一覧側で解決済み)
 
 ### orzma_vt 側の実装時に併せて運ぶ仕様(§5)
 

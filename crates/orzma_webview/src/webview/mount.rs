@@ -590,16 +590,14 @@ fn project_webview_overlays(
         let mut overlays = TerminalOverlays::default();
         let mut has_webview_child = false;
         if let Some(kids) = children {
-            has_webview_child = kids.iter().any(|child| webviews.get(child).is_ok());
-            for projected in &grid.placements {
-                let matched = kids.iter().find_map(|child| {
-                    webviews
-                        .get(child)
-                        .ok()
-                        .filter(|(_, p, ..)| p.placement == projected.id)
-                        .map(|found| (child, found))
-                });
-                let Some((child, (view, _, texture, already_notified, owner))) = matched else {
+            for child in kids.iter() {
+                let Ok((view, placement, texture, already_notified, owner)) = webviews.get(child)
+                else {
+                    continue;
+                };
+                has_webview_child = true;
+                let Some(projected) = grid.placements.iter().find(|p| p.id == placement.placement)
+                else {
                     continue;
                 };
                 let row = i64::from(projected.viewport_row);
@@ -771,6 +769,27 @@ mod tests {
             .run_system_once(project_webview_overlays)
             .expect("project_webview_overlays runs");
         app.world_mut().flush();
+    }
+
+    /// The canonical 10x40 frame-carried rect at viewport row 2,
+    /// column 3 the projection tests share.
+    fn placed(id: PlacementId) -> ProjectedPlacement {
+        ProjectedPlacement {
+            id,
+            viewport_row: 2,
+            col: 3,
+            rows: 10,
+            cols: 40,
+        }
+    }
+
+    /// The `WebviewPlacement` carrying `placed`'s 10x40 reservation.
+    fn placement_10x40(id: PlacementId) -> WebviewPlacement {
+        WebviewPlacement {
+            placement: id,
+            rows: 10,
+            cols: 40,
+        }
     }
 
     fn webview_children_of(app: &App, terminal: Entity) -> Vec<Entity> {
@@ -1048,6 +1067,15 @@ mod tests {
         );
     }
 
+    /// Asserts that a mount whose placement id is `None` spawns no
+    /// child.
+    ///
+    /// `None` is the VT's policy rejection, so the decided behavior is
+    /// to drop the mount outright rather than spawn a child no frame
+    /// list will ever address.
+    ///
+    /// Case: the VT rejects a program's mount by policy and the signal
+    /// reaches the GUI with `placement: None`.
     #[test]
     fn mount_without_placement_is_dropped() {
         let mut app = make_test_app();
@@ -1254,33 +1282,19 @@ mod tests {
         );
     }
 
+    /// Asserts that a projected child's texture handle lands in its
+    /// own overlay slot while every other slot stays sentinel.
+    ///
+    /// Case: a single webview occupying slot 2 projects from the
+    /// frame-carried list while the remaining slots are unoccupied.
     #[test]
     fn texture_handle_lands_in_the_childs_slot() {
         let mut app = make_test_app();
         let terminal = app
             .world_mut()
-            .spawn(grid_with_placements(
-                24,
-                80,
-                vec![ProjectedPlacement {
-                    id: PlacementId(1),
-                    viewport_row: 2,
-                    col: 3,
-                    rows: 10,
-                    cols: 40,
-                }],
-            ))
+            .spawn(grid_with_placements(24, 80, vec![placed(PlacementId(1))]))
             .id();
-        let handle = spawn_projection_child(
-            &mut app,
-            terminal,
-            2,
-            WebviewPlacement {
-                placement: PlacementId(1),
-                rows: 10,
-                cols: 40,
-            },
-        );
+        let handle = spawn_projection_child(&mut app, terminal, 2, placement_10x40(PlacementId(1)));
 
         run_projection(&mut app);
         let overlays = overlays_of(&app, terminal);
@@ -1296,6 +1310,11 @@ mod tests {
         }
     }
 
+    /// Asserts that two children with distinct placement ids each
+    /// project into their own slot with their own texture handle.
+    ///
+    /// Case: two webview instances are mounted side by side and the
+    /// same frame lists both rects.
     #[test]
     fn projection_draws_two_instances_in_their_own_slots() {
         let mut app = make_test_app();
@@ -1304,44 +1323,11 @@ mod tests {
             .spawn(grid_with_placements(
                 24,
                 80,
-                vec![
-                    ProjectedPlacement {
-                        id: PlacementId(1),
-                        viewport_row: 2,
-                        col: 3,
-                        rows: 10,
-                        cols: 40,
-                    },
-                    ProjectedPlacement {
-                        id: PlacementId(2),
-                        viewport_row: 2,
-                        col: 3,
-                        rows: 10,
-                        cols: 40,
-                    },
-                ],
+                vec![placed(PlacementId(1)), placed(PlacementId(2))],
             ))
             .id();
-        let h0 = spawn_projection_child(
-            &mut app,
-            terminal,
-            0,
-            WebviewPlacement {
-                placement: PlacementId(1),
-                rows: 10,
-                cols: 40,
-            },
-        );
-        let h1 = spawn_projection_child(
-            &mut app,
-            terminal,
-            1,
-            WebviewPlacement {
-                placement: PlacementId(2),
-                rows: 10,
-                cols: 40,
-            },
-        );
+        let h0 = spawn_projection_child(&mut app, terminal, 0, placement_10x40(PlacementId(1)));
+        let h1 = spawn_projection_child(&mut app, terminal, 1, placement_10x40(PlacementId(2)));
 
         run_projection(&mut app);
         let overlays = overlays_of(&app, terminal);
@@ -1359,6 +1345,11 @@ mod tests {
         assert_ne!(overlays.rects[1], IVec4::ZERO);
     }
 
+    /// Asserts that after an unmount-all the next projection converges
+    /// the overlays back to the all-sentinel state.
+    ///
+    /// Case: a program tears down every inline webview while the
+    /// previous frame's overlay rects are still applied.
     #[test]
     fn stale_overlays_clear_after_unmount_all() {
         let mut app = make_test_app();
@@ -1368,17 +1359,7 @@ mod tests {
         mount(&mut app, terminal, "dash", Some(PlacementId(1)));
         app.world_mut()
             .entity_mut(terminal)
-            .insert(grid_with_placements(
-                24,
-                80,
-                vec![ProjectedPlacement {
-                    id: PlacementId(1),
-                    viewport_row: 2,
-                    col: 3,
-                    rows: 10,
-                    cols: 40,
-                }],
-            ));
+            .insert(grid_with_placements(24, 80, vec![placed(PlacementId(1))]));
         run_projection(&mut app);
         let overlays = overlays_of(&app, terminal);
         assert_ne!(overlays.rects[0], IVec4::ZERO);
@@ -2044,6 +2025,13 @@ mod tests {
             .id()
     }
 
+    /// Asserts that a child's first successful projection stamps
+    /// `CompositeNotified` and sends exactly one
+    /// `Compositing { active: true }` push to its owning connection.
+    ///
+    /// Case: a bridged webview paints for the first time after its
+    /// mount while the registering program listens for compositing
+    /// pushes.
     #[test]
     fn first_projection_sends_compositing_start() {
         let mut app = make_test_app();
@@ -2051,27 +2039,13 @@ mod tests {
         app.insert_resource(writers);
         let terminal = app
             .world_mut()
-            .spawn(grid_with_placements(
-                24,
-                80,
-                vec![ProjectedPlacement {
-                    id: PlacementId(1),
-                    viewport_row: 2,
-                    col: 3,
-                    rows: 10,
-                    cols: 40,
-                }],
-            ))
+            .spawn(grid_with_placements(24, 80, vec![placed(PlacementId(1))]))
             .id();
         let entity = spawn_owned_projection_child(
             &mut app,
             terminal,
             0,
-            WebviewPlacement {
-                placement: PlacementId(1),
-                rows: 10,
-                cols: 40,
-            },
+            placement_10x40(PlacementId(1)),
             1,
             "myhandle",
         );
@@ -2091,6 +2065,11 @@ mod tests {
         );
     }
 
+    /// Asserts that projecting an already-notified child sends no
+    /// duplicate compositing push.
+    ///
+    /// Case: the same webview keeps projecting frame after frame while
+    /// its owner stays connected.
     #[test]
     fn second_projection_does_not_resend() {
         let mut app = make_test_app();
@@ -2098,27 +2077,13 @@ mod tests {
         app.insert_resource(writers);
         let terminal = app
             .world_mut()
-            .spawn(grid_with_placements(
-                24,
-                80,
-                vec![ProjectedPlacement {
-                    id: PlacementId(1),
-                    viewport_row: 2,
-                    col: 3,
-                    rows: 10,
-                    cols: 40,
-                }],
-            ))
+            .spawn(grid_with_placements(24, 80, vec![placed(PlacementId(1))]))
             .id();
         spawn_owned_projection_child(
             &mut app,
             terminal,
             0,
-            WebviewPlacement {
-                placement: PlacementId(1),
-                rows: 10,
-                cols: 40,
-            },
+            placement_10x40(PlacementId(1)),
             1,
             "myhandle",
         );
@@ -2133,6 +2098,11 @@ mod tests {
         );
     }
 
+    /// Asserts that despawning a child that was notified at least once
+    /// sends `Compositing { active: false }` to its owner.
+    ///
+    /// Case: a webview that has been painting is unmounted, and the
+    /// registering program must learn that compositing ended.
     #[test]
     fn stop_observer_sends_compositing_stop_when_notified() {
         let mut app = make_test_app();
@@ -2140,27 +2110,13 @@ mod tests {
         app.insert_resource(writers);
         let terminal = app
             .world_mut()
-            .spawn(grid_with_placements(
-                24,
-                80,
-                vec![ProjectedPlacement {
-                    id: PlacementId(1),
-                    viewport_row: 2,
-                    col: 3,
-                    rows: 10,
-                    cols: 40,
-                }],
-            ))
+            .spawn(grid_with_placements(24, 80, vec![placed(PlacementId(1))]))
             .id();
         let child = spawn_owned_projection_child(
             &mut app,
             terminal,
             0,
-            WebviewPlacement {
-                placement: PlacementId(1),
-                rows: 10,
-                cols: 40,
-            },
+            placement_10x40(PlacementId(1)),
             1,
             "myhandle",
         );
@@ -2180,6 +2136,11 @@ mod tests {
         );
     }
 
+    /// Asserts that despawning a child that never projected sends no
+    /// stop push.
+    ///
+    /// Case: a webview is mounted and torn down again before any frame
+    /// lists its placement, so compositing never started.
     #[test]
     fn stop_observer_does_not_send_when_not_notified() {
         let mut app = make_test_app();
@@ -2193,11 +2154,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            WebviewPlacement {
-                placement: PlacementId(1),
-                rows: 10,
-                cols: 40,
-            },
+            placement_10x40(PlacementId(1)),
             1,
             "myhandle",
         );

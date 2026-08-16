@@ -190,7 +190,8 @@ impl<B: VtBackend + VtSelection> OldOrzmaVt<B> {
         Ok(self.stage_if_changed(damage))
     }
 
-    /// The active selection as normalized viewport coordinates.
+    /// The active selection in grid coordinates, normalized to
+    /// `start <= end`.
     #[inline]
     pub fn selection_range(&self) -> Option<SelectionRange> {
         self.backend.selection_range()
@@ -211,6 +212,12 @@ impl<B: VtBackend + VtSelection> OldOrzmaVt<B> {
 
 impl<B: VtBackend + VtSelection> Vt for OldOrzmaVt<B> {
     fn interpret(&mut self, chunk: &[u8]) -> VtUpdate {
+        // NOTE: The Vt contract pins "an empty chunk returns
+        // VtUpdate::default()"; draining here anyway would let items a
+        // previous chunk buffered leak into an empty-chunk update.
+        if chunk.is_empty() {
+            return VtUpdate::default();
+        }
         let verdict = OldOrzmaVt::interpret(self, chunk);
         let signals = OldOrzmaVt::drain_signals(self).collect();
         let mut replies = Vec::new();
@@ -240,6 +247,14 @@ impl<B: VtBackend + VtSelection> Vt for OldOrzmaVt<B> {
 
     fn display_offset(&self) -> DisplayOffset {
         self.backend.display_offset()
+    }
+
+    // NOTE: Forwarded rather than left to the trait default so the
+    // trait path and the inherent path stay one predicate; the default
+    // recomputes `display_offset() == 0` and would silently ignore a
+    // backend's `is_at_live_tail` override.
+    fn is_at_live_tail(&self) -> bool {
+        OldOrzmaVt::is_at_live_tail(self)
     }
 
     fn modes(&self) -> VtModes {
@@ -373,7 +388,8 @@ pub trait VtSelection {
     /// selected.
     fn clear_selection(&mut self) -> VtResult<Option<Damage>>;
 
-    /// The active selection as normalized viewport coordinates.
+    /// The active selection in grid coordinates, normalized to
+    /// `start <= end`.
     ///
     /// `None` when no selection exists or the active one is empty.
     fn selection_range(&self) -> Option<SelectionRange>;

@@ -25,7 +25,9 @@ pub enum VtSignal {
     },
     /// Placements the VT evicted on its own authority (history trim,
     /// alternate-screen teardown). Consumers despawn them by id;
-    /// unknown ids are ignored.
+    /// unknown ids are ignored. A remount's superseded id is never
+    /// named here — supersession shows only as the id vanishing from
+    /// the frame-carried placement lists.
     WebviewEvicted {
         placements: Vec<PlacementId>,
     },
