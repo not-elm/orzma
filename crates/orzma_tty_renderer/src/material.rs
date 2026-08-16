@@ -4,7 +4,9 @@ use crate::{
         font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFontSize, TerminalFonts},
     },
     material::state::TerminalMaterialState,
-    schema::{GridCell, HyperlinkHoverState, SelectionKind, TerminalGrid},
+    schema::{
+        GridCell, GridLine, HyperlinkHoverState, SelectionGeometry, SelectionRange, TerminalGrid,
+    },
 };
 use bevy::{
     asset::{load_internal_asset, uuid_handle},
@@ -511,19 +513,7 @@ impl TerminalParams {
 
         let (cursor_pos, cursor_style) = grid.current_cursor_pos_and_style();
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
-            match grid.selection {
-                Some(sel) => (
-                    i32::from(sel.start.row),
-                    u32::from(sel.start.column),
-                    i32::from(sel.end.row),
-                    u32::from(sel.end.column),
-                    match sel.kind {
-                        SelectionKind::Char => 1u32,
-                        SelectionKind::Line => 2,
-                    },
-                ),
-                None => (0, 0, 0, 0, 0),
-            };
+            selection_uniforms(grid.selection.as_ref(), grid.display_offset, grid.rows);
 
         Self {
             grid_size: UVec2::new(cols.max(1), rows.max(1)),
@@ -955,6 +945,38 @@ fn resolve_glyph_index(
     idx
 }
 
+/// Projects a grid-space selection into the clamped viewport-space
+/// uniform tuple the shader consumes. Rows widen to i64 before adding
+/// the display offset (a signed line plus an unsigned offset must not
+/// wrap) and clamp to the -1 (above) / `rows` (below) sentinels so a
+/// partially visible selection still paints its on-screen span.
+fn selection_uniforms(
+    selection: Option<&SelectionRange>,
+    display_offset: u32,
+    rows: u16,
+) -> (i32, u32, i32, u32, u32) {
+    let Some(sel) = selection else {
+        return (0, 0, 0, 0, 0);
+    };
+    let clamp_row = |line: GridLine| -> i32 {
+        (i64::from(line.0) + i64::from(display_offset)).clamp(-1, i64::from(rows)) as i32
+    };
+    let kind = match sel.geometry {
+        // NOTE: Block degrades to the char encoding until the shader
+        // grows a rectangular mode; SelectionKind cannot currently
+        // produce Block, so no user-visible selection takes this arm.
+        SelectionGeometry::Linear | SelectionGeometry::Block => 1u32,
+        SelectionGeometry::Lines => 2,
+    };
+    (
+        clamp_row(sel.start.line),
+        u32::from(sel.start.column.0),
+        clamp_row(sel.end.line),
+        u32::from(sel.end.column.0),
+        kind,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1171,5 +1193,51 @@ mod tests {
                 "slot {i} call must pair overlay_rects[{i}] with overlay{i}_tex"
             );
         }
+    }
+
+    /// Asserts that in-viewport selection endpoints map to their
+    /// viewport rows and the geometry maps to the shader encoding.
+    ///
+    /// Case: the user drags a linear selection across two visible rows
+    /// at the live tail.
+    #[test]
+    fn selection_uniforms_projects_in_viewport_endpoints() {
+        use crate::schema::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
+        let sel = SelectionRange {
+            start: GridPoint {
+                line: GridLine(1),
+                column: GridColumn(2),
+            },
+            end: GridPoint {
+                line: GridLine(3),
+                column: GridColumn(4),
+            },
+            geometry: SelectionGeometry::Lines,
+        };
+        assert_eq!(selection_uniforms(Some(&sel), 0, 24), (1, 2, 3, 4, 2));
+        assert_eq!(selection_uniforms(None, 0, 24), (0, 0, 0, 0, 0));
+    }
+
+    /// Asserts that endpoints outside the viewport clamp to the -1 /
+    /// `rows` sentinels instead of disappearing.
+    ///
+    /// Case: the user scrolls partway back through a selection that
+    /// spans from scrollback history down past the visible window, so
+    /// only the middle of it is on screen.
+    #[test]
+    fn selection_uniforms_clamps_off_viewport_endpoints() {
+        use crate::schema::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
+        let sel = SelectionRange {
+            start: GridPoint {
+                line: GridLine(-40),
+                column: GridColumn(0),
+            },
+            end: GridPoint {
+                line: GridLine(30),
+                column: GridColumn(5),
+            },
+            geometry: SelectionGeometry::Linear,
+        };
+        assert_eq!(selection_uniforms(Some(&sel), 10, 24), (-1, 0, 24, 5, 1));
     }
 }
