@@ -1388,6 +1388,121 @@ mod tests {
         assert_all_sentinel(overlays_of(&app, terminal));
     }
 
+    /// Asserts that a placement rect fully above, fully below, or
+    /// anchored at or past the right edge of the viewport is culled to
+    /// the sentinel.
+    ///
+    /// Case: a webview's frame-carried rect scrolls entirely off the top
+    /// or bottom of the viewport, or its anchored column lands at or
+    /// past the terminal's last column.
+    #[test]
+    fn projection_culls_fully_outside_rects() {
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        register_orzma(&mut app, "memo", terminal, true);
+        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(1),
+                    viewport_row: -20,
+                    col: 0,
+                    rows: 6,
+                    cols: 10,
+                }],
+            ));
+        run_projection(&mut app);
+        let overlays = overlays_of(&app, terminal);
+        assert_eq!(
+            overlays.rects[0],
+            IVec4::ZERO,
+            "a rect fully above the viewport must be culled"
+        );
+        assert!(overlays.textures[0].is_none());
+
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(1),
+                    viewport_row: 30,
+                    col: 0,
+                    rows: 6,
+                    cols: 10,
+                }],
+            ));
+        run_projection(&mut app);
+        let overlays = overlays_of(&app, terminal);
+        assert_eq!(
+            overlays.rects[0],
+            IVec4::ZERO,
+            "a rect fully below the viewport must be culled"
+        );
+        assert!(overlays.textures[0].is_none());
+
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(1),
+                    viewport_row: 2,
+                    col: 80,
+                    rows: 6,
+                    cols: 10,
+                }],
+            ));
+        run_projection(&mut app);
+        let overlays = overlays_of(&app, terminal);
+        assert_eq!(
+            overlays.rects[0],
+            IVec4::ZERO,
+            "a rect anchored at or past the right edge must be culled"
+        );
+        assert!(overlays.textures[0].is_none());
+    }
+
+    /// Asserts that a placement anchored at the last valid column (`cols
+    /// - 1`) still projects instead of being culled.
+    ///
+    /// Case: a webview's anchored column sits in the terminal's
+    /// rightmost cell when the frame is captured.
+    #[test]
+    fn projection_keeps_rect_anchored_at_last_valid_column() {
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        register_orzma(&mut app, "memo", terminal, true);
+        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(1),
+                    viewport_row: 2,
+                    col: 79,
+                    rows: 10,
+                    cols: 10,
+                }],
+            ));
+
+        run_projection(&mut app);
+        let overlays = overlays_of(&app, terminal);
+        assert_eq!(
+            overlays.rects[0],
+            IVec4::new(2, 79, 10, 10),
+            "a rect anchored at the last valid column (cols - 1) must project, not cull"
+        );
+    }
+
     #[test]
     fn size_sync_updates_webview_size_when_metrics_change() {
         let mut app = make_test_app();
