@@ -67,7 +67,9 @@ impl VtBackend for AlacrittyVtBackend {
     }
 
     fn drain_replies_into(&self, _buf: &mut Vec<u8>) {
-        todo!()
+        // TODO: Buffer DSR/DA replies from the interpreter and drain
+        // them here; the backend produces none yet, so there is
+        // nothing to copy.
     }
 
     fn scroll(&mut self, scroll: Scroll) -> Option<Damage> {

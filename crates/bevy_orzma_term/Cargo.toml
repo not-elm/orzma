@@ -13,6 +13,9 @@ bevy = { workspace = true }
 orzma_vt = { path = "../orzma_vt" }
 orzma_term = { path = "../orzma_term" }
 
+[features]
+test-support = ["orzma_term/test-support"]
+
 [lints]
 workspace = true
 

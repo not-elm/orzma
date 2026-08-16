@@ -5,6 +5,7 @@ use crate::schema::{
     GridCell, GridPoint, GridSize, Hyperlink, Palette, Row, Scroll, SelectionKind, SelectionRange,
     ViCursor, ViModeSwitch, ViewportLine, VtModes, VtResult, VtSignal,
 };
+use crate::{Vt, VtUpdate};
 
 #[cfg(feature = "alacritty")]
 mod alacritty;
@@ -205,6 +206,48 @@ impl<B: VtBackend + VtSelection> OldOrzmaVt<B> {
     #[inline]
     pub fn selected_text(&self) -> Option<String> {
         self.backend.selected_text()
+    }
+}
+
+impl<B: VtBackend + VtSelection> Vt for OldOrzmaVt<B> {
+    fn interpret(&mut self, chunk: &[u8]) -> VtUpdate {
+        let verdict = OldOrzmaVt::interpret(self, chunk);
+        let signals = OldOrzmaVt::drain_signals(self).collect();
+        let mut replies = Vec::new();
+        OldOrzmaVt::drain_replies_into(self, &mut replies);
+        VtUpdate {
+            verdict,
+            signals,
+            replies,
+        }
+    }
+
+    fn frame(&mut self) -> Option<Frame> {
+        OldOrzmaVt::frame(self)
+    }
+
+    fn resize(&mut self, size: GridSize) -> bool {
+        OldOrzmaVt::resize(self, size.cols, size.rows)
+    }
+
+    fn scroll(&mut self, scroll: Scroll) -> bool {
+        OldOrzmaVt::scroll(self, scroll)
+    }
+
+    fn grid_size(&self) -> GridSize {
+        self.backend.grid_size()
+    }
+
+    fn display_offset(&self) -> DisplayOffset {
+        self.backend.display_offset()
+    }
+
+    fn modes(&self) -> VtModes {
+        self.backend.modes()
+    }
+
+    fn cell_at(&self, point: GridPoint) -> Option<GridCell> {
+        self.backend.cell_at(point)
     }
 }
 
