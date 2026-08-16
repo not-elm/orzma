@@ -27,8 +27,6 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
     grid.rows = snap.rows;
     grid.cursor = Some(snap.cursor.clone());
     grid.display_offset = snap.display_offset;
-    grid.history_size = snap.history_size;
-    grid.history_base = snap.history_base;
     grid.last_seq = snap.seq;
     grid.modes = snap.modes.clone();
     grid.hyperlinks.clear();
@@ -36,7 +34,8 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
         .extend(snap.hyperlinks.iter().map(|h| (h.id, h.uri.clone())));
     grid.vi_cursor = snap.vi_cursor;
     grid.selection = snap.selection;
-    grid.default_bg = snap.default_bg;
+    grid.palette = snap.palette.clone();
+    grid.placements = snap.placements.clone();
     grid.cells = snap
         .rows_data
         .iter()
@@ -57,11 +56,10 @@ fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
     };
     grid.cursor = Some(delta.cursor.clone());
     grid.display_offset = delta.display_offset;
-    grid.history_size = delta.history_size;
-    grid.history_base = delta.history_base;
     grid.last_seq = delta.seq;
     grid.vi_cursor = delta.vi_cursor;
     grid.selection = delta.selection;
+    grid.placements = delta.placements.clone();
     for h in &delta.hyperlinks {
         if !grid.hyperlinks.iter().any(|(id, _)| *id == h.id) {
             grid.hyperlinks.push((h.id, h.uri.clone()));
@@ -117,7 +115,10 @@ fn runs_to_cells(runs: &[Run], line: GridLine, hyperlinks: &[Hyperlink]) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{Color, Hyperlink, HyperlinkId, HyperlinkUri, Row};
+    use crate::schema::{
+        Color, Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId, ProjectedPlacement, Rgb,
+        Row,
+    };
 
     fn run_with_link(text: &str, hyperlink_id: Option<HyperlinkId>) -> Run {
         Run {
@@ -216,11 +217,10 @@ mod tests {
                 uri: HyperlinkUri::new("https://new"),
             }],
             display_offset: 0,
-            history_size: 0,
-            history_base: 0,
             vi_cursor: None,
             selection: None,
-            default_bg: [0, 0, 0],
+            placements: vec![],
+            palette: Palette::default(),
         });
         app.update();
         let grid = app.world().get::<TerminalGrid>(entity).unwrap();
@@ -229,11 +229,70 @@ mod tests {
         assert_eq!(grid.hyperlinks[0].1.as_str(), "https://new");
     }
 
+    /// Asserts that a delta's placements list replaces the mirror
+    /// wholesale, including down to empty.
+    ///
+    /// The list is declarative — absence means "not visible this
+    /// frame" — so a merge would keep stale rectangles alive.
+    ///
+    /// Case: a webview scrolls out of the viewport, so the next delta
+    /// carries an empty placements list while the rect stays mounted.
     #[test]
-    fn apply_delta_mirrors_history_fields() {
+    fn apply_delta_replaces_placements_wholesale() {
         let mut app = App::new();
-        app.add_observer(apply_snapshot).add_observer(apply_delta);
+        app.add_observer(apply_delta);
         let entity = app.world_mut().spawn(grid_with(vec![])).id();
+        let placed = ProjectedPlacement {
+            id: PlacementId(1),
+            viewport_row: 2,
+            col: 3,
+            rows: 4,
+            cols: 5,
+        };
+        app.world_mut().trigger(FrameDelta {
+            entity,
+            seq: 2,
+            cursor: Default::default(),
+            dirty_rows: vec![],
+            hyperlinks: vec![],
+            display_offset: 0,
+            vi_cursor: None,
+            selection: None,
+            placements: vec![placed],
+        });
+        app.update();
+        let grid = app.world().get::<TerminalGrid>(entity).unwrap();
+        assert_eq!(grid.placements, vec![placed]);
+        app.world_mut().trigger(FrameDelta {
+            entity,
+            seq: 3,
+            cursor: Default::default(),
+            dirty_rows: vec![],
+            hyperlinks: vec![],
+            display_offset: 0,
+            vi_cursor: None,
+            selection: None,
+            placements: vec![],
+        });
+        app.update();
+        let grid = app.world().get::<TerminalGrid>(entity).unwrap();
+        assert_eq!(grid.placements, vec![]);
+    }
+
+    /// Asserts that a snapshot replaces the grid's palette mirror.
+    ///
+    /// Case: OSC 4 recolors a palette slot, which repaints fully, and
+    /// the renderer must resolve subsequent cells against the new
+    /// table.
+    #[test]
+    fn apply_snapshot_replaces_the_palette() {
+        let mut app = App::new();
+        app.add_observer(apply_snapshot);
+        let entity = app.world_mut().spawn(grid_with(vec![])).id();
+        let palette = Palette {
+            background: Rgb { r: 9, g: 8, b: 7 },
+            ..Palette::default()
+        };
         app.world_mut().trigger(FrameSnapshot {
             entity,
             seq: 1,
@@ -245,32 +304,14 @@ mod tests {
             modes: vec![],
             hyperlinks: vec![],
             display_offset: 0,
-            history_size: 7,
-            history_base: 3,
             vi_cursor: None,
             selection: None,
-            default_bg: [0, 0, 0],
+            placements: vec![],
+            palette,
         });
         app.update();
         let grid = app.world().get::<TerminalGrid>(entity).unwrap();
-        assert_eq!(grid.history_size, 7);
-        assert_eq!(grid.history_base, 3);
-        app.world_mut().trigger(FrameDelta {
-            entity,
-            seq: 2,
-            cursor: Default::default(),
-            dirty_rows: vec![],
-            hyperlinks: vec![],
-            display_offset: 0,
-            history_size: 9,
-            history_base: 5,
-            vi_cursor: None,
-            selection: None,
-        });
-        app.update();
-        let grid = app.world().get::<TerminalGrid>(entity).unwrap();
-        assert_eq!(grid.history_size, 9);
-        assert_eq!(grid.history_base, 5);
+        assert_eq!(grid.palette.background, Rgb { r: 9, g: 8, b: 7 });
     }
 
     #[test]
@@ -300,10 +341,9 @@ mod tests {
                 },
             ],
             display_offset: 0,
-            history_size: 0,
-            history_base: 0,
             vi_cursor: None,
             selection: None,
+            placements: vec![],
         });
         app.update();
         let grid = app.world().get::<TerminalGrid>(entity).unwrap();

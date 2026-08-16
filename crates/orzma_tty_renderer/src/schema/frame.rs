@@ -1,4 +1,6 @@
-use crate::schema::{Cursor, Hyperlink, Row, Run, SelectionRange, ViCursor};
+use crate::schema::{
+    Cursor, Hyperlink, Palette, ProjectedPlacement, Row, Run, SelectionRange, ViCursor,
+};
 use bevy::ecs::{entity::Entity, event::EntityEvent};
 
 /// Full snapshot of the visible viewport at a given seq.
@@ -26,18 +28,17 @@ pub struct FrameSnapshot {
     pub hyperlinks: Vec<Hyperlink>,
     /// Lines scrolled back from the live tail. `0` = at live tail.
     pub display_offset: u32,
-    /// Total scrollback history line count (upper bound for display_offset).
-    pub history_size: u32,
-    /// Cumulative lines trimmed from the top of scrollback (monotonic;
-    /// advances only on history-destroying folds — spec §3).
-    pub history_base: u64,
     /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.
     pub selection: Option<SelectionRange>,
-    /// Terminal default background color from `term.colors()[NamedColor::Background]`
-    /// (OSC 11). `[0, 0, 0]` when no override is present.
-    pub default_bg: [u8; 3],
+    /// Viewport-projected webview placements — the complete list for
+    /// this frame. Absence means "not visible", not "unmounted".
+    pub placements: Vec<ProjectedPlacement>,
+    /// The live palette symbolic colors resolve against. Snapshot-only:
+    /// a palette override repaints fully, so no delta outlives the
+    /// table it was rendered with.
+    pub palette: Palette,
 }
 
 /// Differential update relative to the prior frame.
@@ -58,15 +59,13 @@ pub struct FrameDelta {
     pub hyperlinks: Vec<Hyperlink>,
     /// Lines scrolled back from the live tail. `0` = at live tail.
     pub display_offset: u32,
-    /// Total scrollback history line count (upper bound for display_offset).
-    pub history_size: u32,
-    /// Cumulative lines trimmed from the top of scrollback (monotonic;
-    /// advances only on history-destroying folds — spec §3).
-    pub history_base: u64,
     /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.
     pub selection: Option<SelectionRange>,
+    /// Viewport-projected webview placements — the complete list for
+    /// this frame. Absence means "not visible", not "unmounted".
+    pub placements: Vec<ProjectedPlacement>,
 }
 
 /// A dirty row entry inside a `FrameDelta`.

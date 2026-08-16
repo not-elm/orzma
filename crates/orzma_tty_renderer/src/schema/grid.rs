@@ -1,6 +1,6 @@
 use crate::schema::{
-    CURSOR_VISIBLE_BIT, Cursor, CursorShape, GridCell, HyperlinkId, HyperlinkUri, SelectionRange,
-    ViCursor,
+    CURSOR_VISIBLE_BIT, Cursor, CursorShape, GridCell, HyperlinkId, HyperlinkUri, Palette,
+    ProjectedPlacement, SelectionRange, ViCursor,
 };
 use bevy::prelude::*;
 
@@ -18,10 +18,6 @@ pub struct TerminalGrid {
     pub cursor: Option<Cursor>,
     /// Lines scrolled back from the live tail; 0 = at live tail.
     pub display_offset: u32,
-    /// Total scrollback history line count.
-    pub history_size: u32,
-    /// Cumulative trimmed-lines counter mirrored from the latest frame.
-    pub history_base: u64,
     /// Monotonic sequence number of the last applied frame.
     pub last_seq: u32,
     /// Active terminal modes from the last snapshot (e.g. "mouse-sgr-1006").
@@ -45,12 +41,13 @@ pub struct TerminalGrid {
     /// carry ≤100 distinct hyperlinks (mirroring the server-side
     /// interner rationale).
     pub hyperlinks: Vec<(HyperlinkId, HyperlinkUri)>,
-    /// Terminal default background color from `FrameSnapshot.default_bg`
-    /// (sourced from OSC 11). Raw `[r, g, b]` bytes; black when not set. The
-    /// material uses it as the base background for default-bg cells and the
-    /// padding outside the grid; an unset `[0,0,0]` is mapped to
-    /// `TerminalPaddingFallback` (the theme background) by the material system.
-    pub default_bg: [u8; 3],
+    /// The live palette from the last applied snapshot; symbolic cell
+    /// colors resolve against it. Replaced on snapshot only.
+    pub palette: Palette,
+    /// Viewport-projected webview placements mirrored from the last
+    /// applied frame. Replaced wholesale on snapshot AND delta —
+    /// absence from the list means "not visible this frame".
+    pub placements: Vec<ProjectedPlacement>,
 }
 
 impl TerminalGrid {
