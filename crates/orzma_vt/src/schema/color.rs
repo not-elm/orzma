@@ -140,6 +140,24 @@ impl Default for Palette {
     }
 }
 
+impl Palette {
+    /// Resolves a symbolic cell color against this table.
+    ///
+    /// [`Color::DefaultBackground`] resolves to [`Palette::background`]
+    /// like any other slot. A consumer that must keep the transparent
+    /// default background distinguishable from an equal explicit RGB
+    /// (see the invariant on [`Color`]) branches on the variant before
+    /// calling this.
+    pub fn resolve(&self, color: Color) -> Rgb {
+        match color {
+            Color::DefaultForeground => self.foreground,
+            Color::DefaultBackground => self.background,
+            Color::Indexed(index) => self.indexed[usize::from(index)],
+            Color::Rgb(rgb) => rgb,
+        }
+    }
+}
+
 #[cfg(feature = "alacritty")]
 impl Palette {
     /// Folds the terminal's live OSC overrides over the xterm defaults.
@@ -623,6 +641,46 @@ mod tests {
         assert_ne!(
             digest(Color::DefaultForeground),
             digest(Color::DefaultBackground)
+        );
+    }
+
+    /// Asserts that each color variant resolves against its designated
+    /// palette slot.
+    ///
+    /// Case: a renderer packs cell colors for the GPU while OSC 4 / 10
+    /// / 11 overrides are active, so symbolic colors must follow the
+    /// live table rather than a built-in default.
+    #[test]
+    fn resolve_follows_the_live_table() {
+        let mut palette = Palette {
+            foreground: Rgb { r: 1, g: 2, b: 3 },
+            background: Rgb { r: 4, g: 5, b: 6 },
+            ..Palette::default()
+        };
+        palette.indexed[42] = Rgb { r: 7, g: 8, b: 9 };
+        assert_eq!(
+            palette.resolve(Color::DefaultForeground),
+            Rgb { r: 1, g: 2, b: 3 }
+        );
+        assert_eq!(
+            palette.resolve(Color::DefaultBackground),
+            Rgb { r: 4, g: 5, b: 6 }
+        );
+        assert_eq!(
+            palette.resolve(Color::Indexed(42)),
+            Rgb { r: 7, g: 8, b: 9 }
+        );
+        assert_eq!(
+            palette.resolve(Color::Rgb(Rgb {
+                r: 10,
+                g: 11,
+                b: 12
+            })),
+            Rgb {
+                r: 10,
+                g: 11,
+                b: 12
+            }
         );
     }
 }
