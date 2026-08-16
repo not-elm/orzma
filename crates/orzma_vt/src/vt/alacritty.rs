@@ -135,10 +135,6 @@ impl VtBackend for AlacrittyVtBackend {
         })
     }
 
-    fn history_size(&self) -> u32 {
-        todo!()
-    }
-
     fn palette(&self) -> Palette {
         Palette::from_alacritty_colors(self.term.colors())
     }

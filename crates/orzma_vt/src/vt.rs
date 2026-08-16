@@ -129,17 +129,18 @@ impl<B: VtBackend + VtSelection> OrzmaVt<B> {
     /// damage yields a [`Frame::Delta`] — including an empty one,
     /// whose metadata is still current.
     pub fn frame(&mut self) -> Option<Frame> {
-        Some(Frame::Snapshot(FrameSnapshot {
-            seq: 0,
-            size: self.grid_size(),
-            rows: todo!(),
-            cursor: self.backend.cursor(),
-            vi_cursor: self.backend.vi_cursor(),
-            display_offset: self.backend.display_offset(),
-            selection: self.backend.selection_range(),
-            hyperlinks: todo!(),
-            palette: self.backend.palette(),
-        }))
+        return None;
+        // Some(Frame::Snapshot(FrameSnapshot {
+        //     seq: 0,
+        //     size: self.grid_size(),
+        //     rows: todo!(),
+        //     cursor: self.backend.cursor(),
+        //     vi_cursor: self.backend.vi_cursor(),
+        //     display_offset: self.backend.display_offset(),
+        //     selection: self.backend.selection_range(),
+        //     hyperlinks: todo!(),
+        //     palette: self.backend.palette(),
+        // }))
     }
 
     /// Anchors a new selection at an explicit grid cell; returns
@@ -284,9 +285,6 @@ pub trait VtBackend: Sized {
 
     /// Extract the cell at the target point.
     fn cell_at(&self, point: GridPoint) -> Option<SourceCell>;
-
-    /// Total scrollback history line count.
-    fn history_size(&self) -> u32;
 
     /// The live palette symbolic colors resolve against.
     fn palette(&self) -> Palette;

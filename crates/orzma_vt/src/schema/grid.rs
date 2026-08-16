@@ -117,10 +117,26 @@ impl From<GridPoint> for alacritty_terminal::index::Point {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridCell {
+    /// The grapheme cluster text for this cell.
+    pub text: String,
+    /// Display width: 2 for wide CJK, 0 for combining marks, 1 otherwise.
+    pub width: u8,
     pub point: GridPoint,
     pub fg: Color,
     pub bg: Color,
     pub hyperlink: Option<Hyperlink>,
+}
+
+impl GridCell {
+    /// Whether this cell paints no glyph: a zero-width cell (combining mark /
+    /// wide-char spacer) or one whose text is empty or all whitespace.
+    ///
+    /// Shared by the renderer's glyph resolution and the host paint-rescue's
+    /// blank-grid test so the two notions of "renders nothing" cannot drift.
+    #[inline]
+    pub fn is_blank(&self) -> bool {
+        self.width == 0 || self.text.trim().is_empty()
+    }
 }
 
 #[cfg(test)]
