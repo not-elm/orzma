@@ -83,6 +83,11 @@ JSDoc summary stays a noun phrase or third-person verb phrase per the
 style guide above, and standard parallel ellipsis or complete clauses
 joined by em-dashes, semicolons, or colons are fine.
 
+Conciseness likewise mirrors `rust.md`: complete does not mean long.
+Keep comment and JSDoc bodies to the fewest short sentences that carry
+the point, and when trimming, drop whole sentences rather than
+degrading the survivors into fragments.
+
 ## Visibility — minimize export surface
 
 TypeScript has no `pub(crate)` equivalent. The analog is `export` (visible to other modules) vs unexported (file-local). Reach for unexported by default.
@@ -155,7 +160,7 @@ be detected by biome and must be checked manually during code review (and
 by Claude when proposing changes):
 
 - Comment taxonomy — only `// TODO:` / `// NOTE:` / `// biome-ignore` / `// @ts-expect-error` (each with a reason)
-- Comment prose — English prose in comment/JSDoc bodies is complete, natural sentences, not telegraphic fragments (see "Comment prose — write complete English sentences")
+- Comment prose — English prose in comment/JSDoc bodies is complete, natural sentences, not telegraphic fragments, and kept concise (see "Comment prose — write complete English sentences")
 - JSDoc requirement on `export`s with non-obvious meaning
 - `export` visibility minimization
 - Justification quality on `biome-ignore` and `@ts-expect-error`

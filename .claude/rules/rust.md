@@ -113,14 +113,25 @@ Not fragments for this rule (still fine):
   complete on their own.
 - Table cells, section headings, and list labels inside doc bodies.
 
+Complete does not mean long — keep comments concise:
+
+- Say it once: one to three short sentences per paragraph; a doc body
+  that can be one sentence stays one sentence.
+- Cut filler and repetition: do not restate the first line in the
+  body, and do not add background the reader does not need in order
+  to use the item.
+- When trimming, drop whole sentences rather than degrading the
+  survivors into fragments — the complete-sentences rule above still
+  applies to what remains.
+
 ## Test doc comments
 
 Every `#[test]` function carries a `///` doc comment that states the
 asserted contract AND the concrete case the test envisions:
 
-| Place                   | Style                                                                                                     |
-| ----------------------- | --------------------------------------------------------------------------------------------------------- |
-| Every `#[test]` function | `///` — first line: what the test asserts; blank line; a `Case:` paragraph naming the envisioned scenario |
+| Place                   | Style                                                                                                                                                          |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every `#[test]` function | `///` — first line: what the test asserts; blank line; an optional policy paragraph; a `Case:` paragraph naming the envisioned scenario, and nothing else in it |
 
 - The `Case:` paragraph describes the real-world scenario the test
   envisions — the user action and the terminal/app state it happens in.
@@ -128,14 +139,17 @@ asserted contract AND the concrete case the test envisions:
   which situation the contract serves, not what the `assert_eq!` lines
   already say.
 - When a test pins a decided policy (e.g. "a zero-axis resize is
-  ignored"), the `Case:` paragraph names the policy and the alternative
-  it rejects, so a later reader does not "fix" the test toward the
-  rejected behavior.
-- Keep the `Case:` paragraph to the scenario (plus the pinned policy
-  when there is one) and stop — 1–3 sentences. The scenario is the
-  paragraph's ONLY content; in particular:
+  ignored"), state the policy and the alternative it rejects in a
+  separate body paragraph between the first line and the `Case:`
+  paragraph, so a later reader does not "fix" the test toward the
+  rejected behavior. The policy never goes inside the `Case:`
+  paragraph.
+- Keep the `Case:` paragraph to the scenario and stop — 1–3 sentences.
+  The scenario is the paragraph's ONLY content; in particular:
   - Do not restate what the test itself pins — the first line already
     says it.
+  - Do not state policies, design decisions, or their rationale in the
+    `Case:` paragraph — they live in the policy paragraph above it.
   - Do not speculate about how a hypothetical broken implementation
     would misbehave ("a forward that drops the operation would paint no
     highlight") — that is the test's justification, not the case.
@@ -146,10 +160,12 @@ asserted contract AND the concrete case the test envisions:
 ```rust
 /// Asserts that a request with a zero axis leaves the PTY size untouched.
 ///
+/// The agreed policy is to ignore such a request outright rather than
+/// clamp it: applying it would tear down the grid for a transient
+/// state.
+///
 /// Case: a minimized window (or a frame before cell metrics load) makes
-/// the host compute 0 columns or rows. Applying it would tear down the
-/// grid for a transient state, so the agreed policy is to ignore the
-/// request outright rather than clamp it.
+/// the host compute 0 columns or rows.
 #[test]
 fn a_degenerate_resize_is_ignored() { ... }
 ```
@@ -677,9 +693,9 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 
 - `mod.rs` ban
 - Comment taxonomy — only `// TODO:` / `// NOTE:` / `// SAFETY:`
-- Comment prose — English prose in comment/doc bodies is written as complete, natural sentences, not telegraphic fragments (see "Comment prose — write complete English sentences")
+- Comment prose — English prose in comment/doc bodies is written as complete, natural sentences, not telegraphic fragments, and kept concise (see "Comment prose — write complete English sentences")
 - File-level module `//!` requirement
-- Test doc comments — every `#[test]` fn documents its asserted contract plus a `Case:` paragraph naming the envisioned scenario (see "Test doc comments")
+- Test doc comments — every `#[test]` fn documents its asserted contract plus a scenario-only `Case:` paragraph; pinned policies go in a separate paragraph before the `Case:` (see "Test doc comments")
 - "No blank lines between import groups"
 - `#[expect]` preference over `#[allow]`
 - Visibility minimization (MANDATORY axis) — any item (any current visibility) with no callers outside its defining module MUST be private. Manual grep-based check; the `unreachable_pub` lint does NOT catch this.
