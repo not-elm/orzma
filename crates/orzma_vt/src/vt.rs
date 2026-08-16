@@ -3,7 +3,7 @@
 use crate::schema::{
     CellSide, Cursor, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, FrameSnapshot,
     GridCell, GridPoint, GridSize, Hyperlink, Palette, Row, Scroll, SelectionKind, SelectionRange,
-    ViCursor, ViModeSwitch, ViewportLine, VtModes, VtResult, VtSignal, cell::SourceCell,
+    ViCursor, ViModeSwitch, ViewportLine, VtModes, VtResult, VtSignal,
 };
 
 #[cfg(feature = "alacritty")]
@@ -284,7 +284,7 @@ pub trait VtBackend: Sized {
     fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<Option<Damage>>;
 
     /// Extract the cell at the target point.
-    fn cell_at(&self, point: GridPoint) -> Option<SourceCell>;
+    fn cell_at(&self, point: GridPoint) -> Option<GridCell>;
 
     /// The live palette symbolic colors resolve against.
     fn palette(&self) -> Palette;

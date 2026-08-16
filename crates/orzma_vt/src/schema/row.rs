@@ -2,6 +2,28 @@
 
 use crate::schema::{Color, HyperlinkId};
 
+/// Style bitmask bits shared by [`Run::style`] and
+/// [`crate::schema::GridCell::style`].
+///
+/// The values are pinned by the renderer's shader constants; bits 7-15
+/// are reserved.
+pub mod style {
+    /// Bold weight.
+    pub const BOLD: u16 = 1;
+    /// Italic slant.
+    pub const ITALIC: u16 = 2;
+    /// Underline.
+    pub const UNDERLINE: u16 = 4;
+    /// Strikethrough.
+    pub const STRIKE: u16 = 8;
+    /// Reverse video (fg/bg swapped).
+    pub const REVERSE: u16 = 16;
+    /// Faint intensity.
+    pub const DIM: u16 = 32;
+    /// Hidden (concealed) text.
+    pub const HIDDEN: u16 = 64;
+}
+
 /// A row of runs ordered left-to-right.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {

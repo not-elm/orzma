@@ -168,7 +168,8 @@
 - [ ] `pump` の emit ゲートを `needs_bootstrap() || is_due(now)` にして初回スナップショットを保証し、emit 成立時は `disarm` でなく `settle_emit` を呼ぶ(§3.1。同上。既存 pump テストのフィクスチャに bootstrap の settle が必要)
 - [ ] ChildExit を返す `pump` は deadline を待たず staged frame を強制 emit する(§3.2 派生。ホストが ChildExit で即 teardown しても最終出力が描画されるように)
 - [x] `Pty` に exit 読み取り口を追加し、`pump` が `TermSignal::ChildExit` を一度だけ emit するようにする(§3.2)
-- [ ] `pump` で `OrzmaVt::drain_replies_into` を呼び、DSR/DA 応答バイトを 1 回の `write_all` で PTY へ書き戻す(§3.3)
+- [x] DSR/DA 応答バイトを `pump` が 1 回の `write_all` で PTY へ書き戻す(§3.3。`Vt::interpret` の `VtUpdate::replies` 経由で配管済み。応答の生成自体は新 VT 実装側)
+- [x] `OrzmaTerm` を新 `Vt` プロトコルへ切り替える(`OrzmaTerm<V: Vt>` + VT 注入、signals/replies のバッファ化、`FakeVt` によるテスト移行。selection 面は capability トレイト設計まで一時削除、`bevy_orzma_term` は具象 VT が載るまでコンパイル不能を許容)
 
 ### Phase 2 — アクセサとテスト復旧(§3.7、§7)
 

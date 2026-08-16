@@ -31,14 +31,6 @@ impl<'a> SourceHyperlink {
     }
 }
 
-#[derive(Debug, PartialEq)]
-pub struct SourceCell {
-    pub point: GridPoint,
-    pub fg: Color,
-    pub bg: Color,
-    pub hyperlink: Option<SourceHyperlink>,
-}
-
 #[cfg(all(test, feature = "alacritty"))]
 mod tests {
     use super::*;

@@ -1,8 +1,14 @@
 //! Test-support seam: an in-memory sink observing the PTY write path,
-//! plus crate-internal `MasterPty` fakes for the resize seam.
+//! a scriptable [`Vt`] fake, plus crate-internal `MasterPty` fakes for
+//! the resize seam.
 
+use orzma_vt::prelude::{
+    DamageVerdict, DisplayOffset, Frame, GridCell, GridPoint, GridSize, Scroll, Vt, VtModes,
+    VtUpdate,
+};
 #[cfg(test)]
 use portable_pty::{MasterPty, PtySize};
+use std::collections::VecDeque;
 #[cfg(test)]
 use std::io::Read;
 use std::io::{Result as IoResult, Write};
@@ -32,6 +38,107 @@ impl Write for CaptureSink {
 
     fn flush(&mut self) -> IoResult<()> {
         Ok(())
+    }
+}
+
+/// Scriptable [`Vt`] fake for exercising `OrzmaTerm` without a real
+/// emulator.
+///
+/// `interpret` records each chunk and pops the next scripted update; an
+/// empty script yields a [`DamageVerdict::Idle`] update, matching a
+/// real chunk with no visible change. `resize` applies honestly
+/// (returns whether the size changed). `scroll` records the motion:
+/// `Scroll::Bottom` snaps `display_offset` to zero, every other motion
+/// returns the scripted `scroll_moves`.
+pub struct FakeVt {
+    /// Grid size reported and updated by `resize`.
+    pub grid_size: GridSize,
+    /// Offset reported by `display_offset`; `Scroll::Bottom` zeroes it.
+    pub display_offset: DisplayOffset,
+    /// Modes reported to the input encoders.
+    pub modes: VtModes,
+    /// Scripted return for non-`Bottom` scrolls.
+    pub scroll_moves: bool,
+    /// Every chunk `interpret` received, in order.
+    pub interpreted: Vec<Vec<u8>>,
+    /// Every motion `scroll` received, in order.
+    pub scrolls: Vec<Scroll>,
+    /// Every size `resize` received, in order.
+    pub resizes: Vec<GridSize>,
+    /// Updates popped by `interpret`.
+    pub updates: VecDeque<VtUpdate>,
+    /// Frames popped by `frame`.
+    pub frames: VecDeque<Frame>,
+    /// Cells served by `cell_at`.
+    pub cells: Vec<GridCell>,
+}
+
+impl FakeVt {
+    /// Builds a fake at the given grid size, at the live tail, with
+    /// default modes and an empty script.
+    pub fn new(cols: u16, rows: u16) -> Self {
+        Self {
+            grid_size: GridSize { cols, rows },
+            display_offset: DisplayOffset(0),
+            modes: VtModes::default(),
+            scroll_moves: false,
+            interpreted: Vec::new(),
+            scrolls: Vec::new(),
+            resizes: Vec::new(),
+            updates: VecDeque::new(),
+            frames: VecDeque::new(),
+            cells: Vec::new(),
+        }
+    }
+}
+
+impl Vt for FakeVt {
+    fn interpret(&mut self, chunk: &[u8]) -> VtUpdate {
+        self.interpreted.push(chunk.to_vec());
+        self.updates.pop_front().unwrap_or(VtUpdate {
+            verdict: Some(DamageVerdict::Idle),
+            signals: Vec::new(),
+            replies: Vec::new(),
+        })
+    }
+
+    fn frame(&mut self) -> Option<Frame> {
+        self.frames.pop_front()
+    }
+
+    fn resize(&mut self, size: GridSize) -> bool {
+        self.resizes.push(size);
+        let changed = self.grid_size != size;
+        self.grid_size = size;
+        changed
+    }
+
+    fn scroll(&mut self, scroll: Scroll) -> bool {
+        let snaps_to_bottom = matches!(scroll, Scroll::Bottom);
+        self.scrolls.push(scroll);
+        if snaps_to_bottom {
+            let moved = self.display_offset != DisplayOffset(0);
+            self.display_offset = DisplayOffset(0);
+            moved
+        } else {
+            self.scroll_moves
+        }
+    }
+
+    fn grid_size(&self) -> GridSize {
+        self.grid_size
+    }
+
+    fn display_offset(&self) -> DisplayOffset {
+        self.display_offset
+    }
+
+    fn modes(&self) -> VtModes {
+        self.modes
+    }
+
+    fn cell_at(&self, point: GridPoint) -> Option<GridCell> {
+        self.cells.iter().find(|cell| cell.point == point).cloned()
     }
 }
 

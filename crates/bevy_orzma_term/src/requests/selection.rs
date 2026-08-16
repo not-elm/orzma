@@ -6,14 +6,11 @@
 //! it so the requests and their payload types travel together — each
 //! request carries exactly what the VT applies.
 //!
-//! The observers below only route operations to the targeted entity's
-//! handle. Anchor resolution, cell-side inclusion, and geometry live in
-//! `orzma_vt` and are pinned by its tests, not re-asserted here.
+//! The apply observers are stubs until a selection capability trait
+//! lands on the new `Vt` protocol.
 
 use bevy::prelude::*;
 pub use orzma_vt::prelude::{CellSide, GridPoint, SelectionKind};
-
-use crate::OrzmaTermHandle;
 
 /// Fired by the host UI to anchor a new selection at an explicit
 /// grid cell (mouse press).
@@ -84,180 +81,12 @@ impl Plugin for SelectionPlugin {
     }
 }
 
-fn start_selection(e: On<RequestTermSelectionStart>, mut terms: Query<&mut OrzmaTermHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal)
-        && let Err(err) = tty.start_selection(e.cell, e.side, e.kind)
-    {
-        error!(%err);
-    }
-}
+fn start_selection(_e: On<RequestTermSelectionStart>) {}
 
-fn start_selection_at_vi_cursor(
-    e: On<RequestTermSelectionStartAtViCursor>,
-    mut terms: Query<&mut OrzmaTermHandle>,
-) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal)
-        && let Err(err) = tty.start_selection_at_vi_cursor(e.kind)
-    {
-        error!(%err);
-    }
-}
+fn start_selection_at_vi_cursor(_e: On<RequestTermSelectionStartAtViCursor>) {}
 
-fn update_selection(e: On<RequestTermSelectionUpdate>, mut terms: Query<&mut OrzmaTermHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal)
-        && let Err(err) = tty.update_selection(e.cell, e.side)
-    {
-        error!(%err);
-    }
-}
+fn update_selection(_e: On<RequestTermSelectionUpdate>) {}
 
-fn change_selection_kind(
-    e: On<RequestTermSelectionKindChange>,
-    mut terms: Query<&mut OrzmaTermHandle>,
-) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal)
-        && let Err(err) = tty.change_selection_kind(e.kind)
-    {
-        error!(%err);
-    }
-}
+fn change_selection_kind(_e: On<RequestTermSelectionKindChange>) {}
 
-fn clear_selection(e: On<RequestTermSelectionClear>, mut terms: Query<&mut OrzmaTermHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal)
-        && let Err(err) = tty.clear_selection()
-    {
-        error!(%err);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::OrzmaTermHandle;
-    use orzma_vt::prelude::{GridColumn, GridLine, SelectionRange};
-
-    fn app_with_terminal(seed: &[u8]) -> (App, Entity) {
-        let mut app = App::new();
-        app.add_plugins(SelectionPlugin);
-        let (mut handle, _) = OrzmaTermHandle::detached(80, 24);
-        handle.feed_bytes(seed);
-        let terminal = app.world_mut().spawn(handle).id();
-        (app, terminal)
-    }
-
-    fn cell(x: u16, y: i32) -> GridPoint {
-        GridPoint {
-            line: GridLine(y),
-            column: GridColumn(x),
-        }
-    }
-
-    fn start_simple(app: &mut App, terminal: Entity, x: u16, y: i32) {
-        app.world_mut().trigger(RequestTermSelectionStart {
-            terminal,
-            cell: cell(x, y),
-            side: CellSide::Left,
-            kind: SelectionKind::Simple,
-        });
-    }
-
-    fn update_to(app: &mut App, terminal: Entity, x: u16, y: i32, side: CellSide) {
-        app.world_mut().trigger(RequestTermSelectionUpdate {
-            terminal,
-            cell: cell(x, y),
-            side,
-        });
-    }
-
-    fn selection_range(app: &App, terminal: Entity) -> Option<SelectionRange> {
-        app.world()
-            .get::<OrzmaTermHandle>(terminal)
-            .expect("terminal entity must keep its handle")
-            .vt()
-            .selection_range()
-    }
-
-    fn selection_kind(app: &App, terminal: Entity) -> Option<SelectionKind> {
-        app.world()
-            .get::<OrzmaTermHandle>(terminal)
-            .expect("terminal entity must keep its handle")
-            .vt()
-            .selection_kind()
-    }
-
-    fn selected_text(app: &App, terminal: Entity) -> Option<String> {
-        app.world()
-            .get::<OrzmaTermHandle>(terminal)
-            .expect("terminal entity must keep its handle")
-            .vt()
-            .selected_text()
-    }
-
-    /// Asserts that press and drag requests select the dragged span in
-    /// the targeted entity's VT.
-    ///
-    /// Case: the user presses the mouse on a cell to anchor a
-    /// selection, drags across the neighboring cells to extend it, and
-    /// copies the highlighted span.
-    #[test]
-    fn a_press_and_drag_select_the_dragged_span() {
-        let (mut app, terminal) = app_with_terminal(b"abcdefghij");
-        start_simple(&mut app, terminal, 0, 0);
-        update_to(&mut app, terminal, 4, 0, CellSide::Right);
-        assert_eq!(selected_text(&app, terminal).as_deref(), Some("abcde"));
-    }
-
-    /// Asserts that a clear request drops the active selection.
-    ///
-    /// Case: the user clicks elsewhere to dismiss an existing
-    /// selection.
-    #[test]
-    fn clear_drops_the_active_selection() {
-        let (mut app, terminal) = app_with_terminal(b"abcdefghij");
-        start_simple(&mut app, terminal, 0, 0);
-        update_to(&mut app, terminal, 4, 0, CellSide::Right);
-        assert!(
-            selection_range(&app, terminal).is_some(),
-            "precondition: the drag must have selected something"
-        );
-        app.world_mut()
-            .trigger(RequestTermSelectionClear { terminal });
-        assert_eq!(selection_range(&app, terminal), None);
-    }
-
-    /// Asserts that a vi-cursor start request starts a selection in
-    /// the targeted entity's VT.
-    ///
-    /// Case: the user presses `v` in vi mode.
-    #[test]
-    fn a_vi_cursor_start_request_starts_a_selection() {
-        let (mut app, terminal) = app_with_terminal(b"abcdefghij");
-        app.world_mut()
-            .trigger(RequestTermSelectionStartAtViCursor {
-                terminal,
-                kind: SelectionKind::Simple,
-            });
-        assert_eq!(selection_kind(&app, terminal), Some(SelectionKind::Simple));
-    }
-
-    /// Asserts that a kind-change request switches the active
-    /// selection's granularity while routing through `change_selection_kind`
-    /// rather than re-anchoring at the vi cursor.
-    ///
-    /// Case: the user presses `V` while a character-wise selection
-    /// anchored on a lower row is active.
-    #[test]
-    fn a_kind_change_request_switches_the_granularity() {
-        let (mut app, terminal) = app_with_terminal(b"abcdefghij\r\nklmnopqrst");
-        start_simple(&mut app, terminal, 0, 1);
-        app.world_mut().trigger(RequestTermSelectionKindChange {
-            terminal,
-            kind: SelectionKind::Lines,
-        });
-        assert_eq!(selection_kind(&app, terminal), Some(SelectionKind::Lines));
-        assert_eq!(
-            selected_text(&app, terminal).as_deref(),
-            Some("abcdefghij\nklmnopqrst\n")
-        );
-    }
-}
+fn clear_selection(_e: On<RequestTermSelectionClear>) {}

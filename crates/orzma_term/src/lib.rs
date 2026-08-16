@@ -1,5 +1,5 @@
 //! PTY-backed terminal core: spawns the login shell under a PTY and
-//! drives an [`OldOrzmaVt`] behind a frame coalescer.
+//! drives an injected [`Vt`] implementor behind a frame coalescer.
 
 use crate::{
     coalescer::Coalescer,
@@ -11,7 +11,7 @@ use crate::{
 use orzma_vt::prelude::*;
 use portable_pty::PtySize;
 use std::path::PathBuf;
-use std::{io::Write, time::Instant};
+use std::{io::Write, mem, time::Instant};
 
 mod coalescer;
 mod error;
@@ -50,13 +50,18 @@ pub struct InterpretOutput {
 }
 
 /// A live terminal: the VT emulation plus the PTY it is wired to.
-pub struct OrzmaTerm<B: VtBackend> {
-    vt: OldOrzmaVt<B>,
+pub struct OrzmaTerm<V: Vt> {
+    vt: V,
     coalescer: Coalescer,
     pty: Pty,
+    /// Signals produced by interpreted chunks, awaiting the next pump.
+    pending_signals: Vec<TermSignal>,
+    /// Reply bytes produced by interpreted chunks, awaiting one PTY
+    /// write in the next pump.
+    pending_replies: Vec<u8>,
 }
 
-impl<B: VtBackend> OrzmaTerm<B> {
+impl<V: Vt> OrzmaTerm<V> {
     /// Upper bound for a resize's column count; requests beyond it are
     /// ignored by [`Self::resize`].
     ///
@@ -68,14 +73,20 @@ impl<B: VtBackend> OrzmaTerm<B> {
     /// ignored by [`Self::resize`]. Same rationale as [`Self::MAX_COLS`].
     const MAX_ROWS: u16 = 4096;
 
-    /// Spawns the login shell under a new PTY and builds the VT at the
-    /// same grid size.
-    pub fn spawn(options: SpawnOptions) -> OrzmaTermResult<Self> {
+    /// Spawns the login shell under a new PTY and sizes the injected VT
+    /// to the spawn geometry.
+    pub fn spawn(mut vt: V, options: SpawnOptions) -> OrzmaTermResult<Self> {
         let pty = Pty::spawn(&options)?;
+        vt.resize(GridSize {
+            cols: options.cols,
+            rows: options.rows,
+        });
         Ok(Self {
-            vt: OldOrzmaVt::new(options.cols, options.rows),
+            vt,
             coalescer: Coalescer::default(),
             pty,
+            pending_signals: Vec::new(),
+            pending_replies: Vec::new(),
         })
     }
 
@@ -92,9 +103,9 @@ impl<B: VtBackend> OrzmaTerm<B> {
     }
 
     /// Read-only access to the VT, for host-side observation such as
-    /// the display offset, modes, or the selected text.
+    /// the display offset, modes, or cell contents.
     #[inline]
-    pub fn vt(&self) -> &OldOrzmaVt<B> {
+    pub fn vt(&self) -> &V {
         &self.vt
     }
 
@@ -105,11 +116,20 @@ impl<B: VtBackend> OrzmaTerm<B> {
     /// reader thread is started, so everything the input methods emit
     /// can be observed on `writer` — typically a
     /// [`test_support::CaptureSink`].
-    pub fn detached(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> OrzmaTermResult<Self> {
+    pub fn detached(
+        mut vt: V,
+        cols: u16,
+        rows: u16,
+        writer: Box<dyn Write + Send>,
+    ) -> OrzmaTermResult<Self> {
+        let pty = Pty::detached(cols, rows, writer)?;
+        vt.resize(GridSize { cols, rows });
         Ok(Self {
-            vt: OldOrzmaVt::new(cols, rows),
+            vt,
             coalescer: Coalescer::default(),
-            pty: Pty::detached(cols, rows, writer)?,
+            pty,
+            pending_signals: Vec::new(),
+            pending_replies: Vec::new(),
         })
     }
 
@@ -151,7 +171,7 @@ impl<B: VtBackend> OrzmaTerm<B> {
             return Ok(());
         }
         self.pty.resize(cols, rows)?;
-        if self.vt.resize(cols, rows) {
+        if self.vt.resize(GridSize { cols, rows }) {
             self.coalescer.arm_or_extend(Instant::now());
         }
         Ok(())
@@ -199,37 +219,10 @@ impl<B: VtBackend> OrzmaTerm<B> {
             .write_all(PtyInput::encode_paste(text, bracketed).as_bytes())
     }
 
-    /// Snaps a scrolled-back viewport to the live tail (scroll-on-input
-    /// policy), gated on [`OldOrzmaVt::is_at_live_tail`] so a no-op call
-    /// stages no damage.
-    fn snap_to_live_tail(&mut self) {
-        if !self.vt.is_at_live_tail() {
-            self.scroll(Scroll::Bottom);
-        }
-    }
-
-    /// Drains every queued PTY chunk into the VT.
-    fn drain_chunks(&mut self) {
-        while let Some(chunk) = self.pty.try_read_chunk() {
-            self.feed_chunk(&chunk);
-        }
-    }
-
-    /// Interprets one PTY chunk and arms the coalescer when it staged
-    /// damage.
-    fn feed_chunk(&mut self, chunk: &[u8]) {
-        // TODO: Use the returned DamageVerdict to drive
-        // Coalescer::should_flush_immediately.
-        if self.vt.interpret(chunk).is_some() {
-            self.coalescer.arm_or_extend(Instant::now());
-        }
-    }
-}
-
-impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
-    ///HACK:
-    /// VecでTermEventを収集しているが、この関数はほぼ米フレームで呼ばれるため、
-    /// コールバック形式などにしたほうがいい？
+    /// Drains the PTY and the VT into one output batch: interprets
+    /// queued chunks, writes pending replies back to the PTY, surfaces
+    /// buffered signals (with `ChildExit` last), and emits a frame when
+    /// the coalesce window is due.
     pub fn pump(&mut self) -> InterpretOutput {
         self.drain_chunks();
         let exit = self.pty.try_recv_exit();
@@ -242,11 +235,15 @@ impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
             self.drain_chunks();
         }
 
-        let mut signals = self
-            .vt
-            .drain_signals()
-            .map(TermSignal::Vt)
-            .collect::<Vec<_>>();
+        if !self.pending_replies.is_empty() {
+            let replies = mem::take(&mut self.pending_replies);
+            // NOTE: a failed reply write is dropped deliberately — a PTY
+            // that rejects writes is tearing down and surfaces as
+            // ChildExit; there is no receiver left to answer.
+            let _ = self.pty.write_all(&replies);
+        }
+
+        let mut signals = mem::take(&mut self.pending_signals);
         if let Some(code) = exit {
             signals.push(TermSignal::ChildExit { code });
         }
@@ -261,57 +258,35 @@ impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
         InterpretOutput { frame, signals }
     }
 
-    /// Anchors a new selection at an explicit grid cell (mouse
-    /// press).
-    pub fn start_selection(
-        &mut self,
-        cell: GridPoint,
-        side: CellSide,
-        kind: SelectionKind,
-    ) -> VtResult {
-        self.arm_on_selection_change(|vt| vt.start_selection(cell, side, kind))
+    /// Snaps a scrolled-back viewport to the live tail (scroll-on-input
+    /// policy), gated on [`Vt::is_at_live_tail`] so a no-op call stages
+    /// no damage.
+    fn snap_to_live_tail(&mut self) {
+        if !self.vt.is_at_live_tail() {
+            self.scroll(Scroll::Bottom);
+        }
     }
 
-    /// Anchors a new selection at the vi cursor (vi-mode `v` / `V`).
-    pub fn start_selection_at_vi_cursor(&mut self, kind: SelectionKind) -> VtResult {
-        self.arm_on_selection_change(|vt| vt.start_selection_at_vi_cursor(kind))
+    /// Drains every queued PTY chunk into the VT.
+    fn drain_chunks(&mut self) {
+        while let Some(chunk) = self.pty.try_read_chunk() {
+            self.feed_chunk(&chunk);
+        }
     }
 
-    /// Moves the moving end of the active selection (mouse drag).
-    pub fn update_selection(&mut self, cell: GridPoint, side: CellSide) -> VtResult {
-        self.arm_on_selection_change(|vt| vt.update_selection(cell, side))
-    }
-
-    /// Switches selection granularity while keeping the anchor.
-    pub fn change_selection_kind(&mut self, kind: SelectionKind) -> VtResult {
-        self.arm_on_selection_change(|vt| vt.change_selection_kind(kind))
-    }
-
-    /// Drops any active selection.
-    pub fn clear_selection(&mut self) -> VtResult {
-        self.arm_on_selection_change(|vt| vt.clear_selection())
-    }
-
-    /// Applies one selection operation and arms the coalescer only
-    /// when the visible selection actually changed, detected by
-    /// comparing [`VtSelection::selection_range`] before and after.
-    ///
-    /// [`Self::scroll`] and [`Self::resize`] gate on the staged-damage
-    /// `bool` the VT returns; selection cannot. The backend reports a
-    /// conservative repaint for every operation that touches a live
-    /// selection, so a drag sample that stays inside the cell it
-    /// already covers — or a re-anchor onto the anchored cell — would
-    /// arm an emit for a frame that renders identically.
-    fn arm_on_selection_change(
-        &mut self,
-        op: impl FnOnce(&mut OldOrzmaVt<B>) -> VtResult<bool>,
-    ) -> VtResult {
-        let prev_range = self.vt.selection_range();
-        op(&mut self.vt)?;
-        if prev_range != self.vt.selection_range() {
+    /// Interprets one PTY chunk, arms the coalescer when it staged
+    /// damage, and buffers the update's signals and replies for the
+    /// next pump.
+    fn feed_chunk(&mut self, chunk: &[u8]) {
+        // TODO: Route the verdict through Coalescer::observe_chunk once
+        // the immediate-flush path is wired.
+        let update = self.vt.interpret(chunk);
+        if update.verdict.is_some() {
             self.coalescer.arm_or_extend(Instant::now());
         }
-        Ok(())
+        self.pending_signals
+            .extend(update.signals.into_iter().map(TermSignal::Vt));
+        self.pending_replies.extend(update.replies);
     }
 }
 
@@ -319,53 +294,90 @@ impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
 mod tests {
     use super::*;
     use crate::error::OrzmaTermError;
-    use crate::test_support::{CaptureSink, FailingMaster};
+    use crate::test_support::{CaptureSink, FailingMaster, FakeVt};
     use crossbeam_channel::{Sender, unbounded};
 
-    fn detached_term() -> (OrzmaTerm<AlacrittyVtBackend>, CaptureSink) {
+    fn detached_term() -> (OrzmaTerm<FakeVt>, CaptureSink) {
         let sink = CaptureSink::default();
-        let term =
-            OrzmaTerm::detached(80, 24, Box::new(sink.clone())).expect("OrzmaTerm::detached");
+        let term = OrzmaTerm::detached(FakeVt::new(80, 24), 80, 24, Box::new(sink.clone()))
+            .expect("OrzmaTerm::detached");
         (term, sink)
     }
 
-    fn failing_term() -> OrzmaTerm<AlacrittyVtBackend> {
+    fn failing_term() -> OrzmaTerm<FakeVt> {
         OrzmaTerm {
-            vt: OldOrzmaVt::new(80, 24),
+            vt: FakeVt::new(80, 24),
             coalescer: Coalescer::default(),
             pty: Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default())),
+            pending_signals: Vec::new(),
+            pending_replies: Vec::new(),
         }
     }
 
-    fn sizes(term: &OrzmaTerm<AlacrittyVtBackend>) -> ((u16, u16), (u16, u16)) {
+    /// A terminal whose PTY chunk and exit streams are fed by the
+    /// returned senders, so tests can inject output and child-exit
+    /// reports.
+    fn channelled_term() -> (OrzmaTerm<FakeVt>, Sender<Vec<u8>>, Sender<Option<i32>>) {
+        let (chunk_tx, chunk_rx) = unbounded();
+        let (exit_tx, exit_rx) = unbounded();
+        let term = OrzmaTerm {
+            vt: FakeVt::new(80, 24),
+            coalescer: Coalescer::default(),
+            pty: Pty::with_master_and_channels(
+                Box::new(FailingMaster),
+                Box::new(CaptureSink::default()),
+                chunk_rx,
+                exit_rx,
+            ),
+            pending_signals: Vec::new(),
+            pending_replies: Vec::new(),
+        };
+        (term, chunk_tx, exit_tx)
+    }
+
+    /// Collects the `ChildExit` codes out of a pumped signal batch.
+    fn child_exits(signals: &[TermSignal]) -> Vec<Option<i32>> {
+        signals
+            .iter()
+            .filter_map(|signal| match signal {
+                TermSignal::ChildExit { code } => Some(*code),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn sizes(term: &OrzmaTerm<FakeVt>) -> ((u16, u16), (u16, u16)) {
         let pty = term.pty_size();
         let grid = term.vt.grid_size();
         ((pty.cols, pty.rows), (grid.cols, grid.rows))
     }
 
-    /// Asserts that a resize reaches the VT grid, not only the PTY.
+    /// Asserts that a resize reaches both seams: the PTY size read back
+    /// from the kernel and the `GridSize` handed to the VT.
     ///
-    /// Case: the user drags the window to a new size, and the renderer
-    /// redraws from the grid the VT reports.
+    /// Case: the user drags the window to a new size.
     #[test]
-    fn resize_applies_the_size_to_the_vt_grid() {
+    fn resize_applies_the_size_to_both_seams() {
         let (mut term, _sink) = detached_term();
         term.resize(120, 40).expect("resize");
+        assert_eq!(sizes(&term), ((120, 40), (120, 40)));
         assert_eq!(
-            term.vt.grid_size(),
-            GridSize {
+            term.vt.resizes.last(),
+            Some(&GridSize {
                 cols: 120,
                 rows: 40
-            }
+            })
         );
     }
 
     /// Asserts that a resize never writes through the PTY writer.
     ///
+    /// The size change reaches the child as a kernel ioctl, so the
+    /// decided policy is that nothing at all enters the byte stream —
+    /// not even an XTWINOPS report.
+    ///
     /// Case: the user resizes the window while a program is reading
-    /// stdin. The size change reaches the child as a kernel ioctl, so
-    /// the decided policy is that nothing at all enters the byte
-    /// stream — not even an XTWINOPS report.
+    /// stdin.
     #[test]
     fn resize_does_not_write_through_the_pty_writer() {
         let (mut term, sink) = detached_term();
@@ -375,9 +387,8 @@ mod tests {
 
     /// Asserts that a successful resize arms the coalescer.
     ///
-    /// Case: the user resizes the window at an idle shell prompt,
-    /// where the reflow is the only thing that changes and no PTY
-    /// output follows it.
+    /// Case: the user resizes the window at an idle shell prompt, where
+    /// the reflow is the only thing that changes.
     #[test]
     fn resize_arms_the_coalescer() {
         let (mut term, _sink) = detached_term();
@@ -385,17 +396,20 @@ mod tests {
         assert!(term.coalescer.is_armed());
     }
 
-    /// Asserts that a zero-axis request leaves an already-resized
-    /// terminal at its current size on both seams.
+    /// Asserts that a zero-axis request touches neither the PTY size
+    /// nor the VT.
+    ///
+    /// The agreed policy is to ignore such a request outright rather
+    /// than clamp it.
     ///
     /// Case: a minimized window, or a frame before cell metrics load,
-    /// computes 0 for an axis. The decided policy is to ignore the
-    /// request outright rather than clamp it to a usable size.
+    /// computes 0 for an axis.
     #[test]
     fn a_zero_axis_resize_is_ignored() {
         let (mut term, _sink) = detached_term();
         term.resize(120, 40).expect("resize");
-        for (cols, rows) in [(0, 40), (120, 0), (0, 0)] {
+        let baseline = term.vt.resizes.len();
+        for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
             term.resize(cols, rows).expect("ignored resize must be Ok");
             assert_eq!(
                 sizes(&term),
@@ -403,19 +417,18 @@ mod tests {
                 "resize {cols}x{rows} must be ignored"
             );
         }
+        assert_eq!(term.vt.resizes.len(), baseline);
     }
 
     /// Asserts the per-axis cap: requests beyond `MAX_COLS` /
     /// `MAX_ROWS` are ignored, the boundary value is applied.
     ///
     /// Case: a degenerate or hostile window geometry asks for a grid
-    /// far larger than any real display. The decided policy is to
-    /// ignore such a request rather than clamp it, while the cap value
-    /// itself stays a legal size.
+    /// far larger than any real display.
     #[test]
     fn an_oversized_axis_resize_is_ignored() {
-        const MAX_COLS: u16 = OrzmaTerm::<AlacrittyVtBackend>::MAX_COLS;
-        const MAX_ROWS: u16 = OrzmaTerm::<AlacrittyVtBackend>::MAX_ROWS;
+        const MAX_COLS: u16 = OrzmaTerm::<FakeVt>::MAX_COLS;
+        const MAX_ROWS: u16 = OrzmaTerm::<FakeVt>::MAX_ROWS;
         let (mut term, _sink) = detached_term();
         for (cols, rows) in [(MAX_COLS + 1, 24), (80, MAX_ROWS + 1)] {
             term.resize(cols, rows).expect("ignored resize must be Ok");
@@ -432,13 +445,11 @@ mod tests {
     /// Asserts that an ignored request does not arm the coalescer.
     ///
     /// Case: a minimized window emits a stream of zero-axis requests.
-    /// The decided policy is that an ignored request is ignored on
-    /// every seam, arming included.
     #[test]
     fn an_ignored_resize_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
         term.resize(0, 40).expect("ignored resize must be Ok");
-        term.resize(OrzmaTerm::<AlacrittyVtBackend>::MAX_COLS + 1, 24)
+        term.resize(OrzmaTerm::<FakeVt>::MAX_COLS + 1, 24)
             .expect("ignored resize must be Ok");
         assert!(!term.coalescer.is_armed());
     }
@@ -446,11 +457,8 @@ mod tests {
     /// Asserts that a resize to the size the terminal already has arms
     /// nothing.
     ///
-    /// Case: the host recomputes cells after a pixel-only window
-    /// change — a DPI event, or a drag that does not cross a cell
-    /// boundary — and re-applies the grid size the VT already holds.
-    /// The decided policy is to schedule nothing rather than open an
-    /// emit window for a reflow that did not happen.
+    /// Case: the host recomputes cells after a pixel-only window change
+    /// and re-applies the grid size the VT already holds.
     #[test]
     fn a_same_size_resize_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
@@ -476,8 +484,7 @@ mod tests {
     /// Asserts that back-to-back resizes settle on the last requested
     /// size on both seams.
     ///
-    /// Case: a live window drag fires a burst of requests, and the
-    /// terminal must end up at the geometry the drag settled on.
+    /// Case: a live window drag fires a burst of requests.
     #[test]
     fn sequential_resizes_settle_on_the_last_size() {
         let (mut term, _sink) = detached_term();
@@ -487,13 +494,11 @@ mod tests {
     }
 
     /// Asserts PTY-first ordering via failure atomicity: when the PTY
-    /// ioctl fails, the call returns `PtyResize` and the VT grid and
+    /// ioctl fails, the call returns `PtyResize` and the VT and
     /// coalescer are untouched.
     ///
-    /// Case: the kernel refuses the winsize ioctl. The decided
-    /// ordering is PTY first, so the renderer keeps drawing the size
-    /// the child still has rather than a size the kernel never
-    /// accepted.
+    /// Case: the kernel refuses the winsize ioctl, and the renderer
+    /// must keep drawing the size the child still has.
     #[test]
     fn a_failing_pty_resize_leaves_the_vt_untouched() {
         let mut term = failing_term();
@@ -502,68 +507,32 @@ mod tests {
             matches!(result, Err(OrzmaTermError::PtyResize(_))),
             "expected PtyResize, got {result:?}"
         );
-        assert_eq!(term.vt.grid_size(), GridSize { cols: 80, rows: 24 });
+        assert!(term.vt.resizes.is_empty());
         assert!(!term.coalescer.is_armed());
     }
 
-    // NOTE: on the 24-row grid the first 23 newlines only fill the
-    // viewport (alacritty pushes a row into history once the cursor
-    // already sits on the last screen line), so `history_rows + 23`
-    // lines seed exactly `history_rows`.
-    fn term_with_history(history_rows: usize) -> (OrzmaTerm<AlacrittyVtBackend>, CaptureSink) {
-        let (mut term, sink) = detached_term();
-        let seed: Vec<u8> = (0..history_rows + 23)
-            .flat_map(|i| format!("l{i}\r\n").into_bytes())
-            .collect();
-        term.feed_bytes(&seed);
-        term.coalescer.disarm();
-        (term, sink)
-    }
-
-    /// Asserts that `scroll` moves the viewport through the VT,
-    /// cumulatively and in the requested direction.
-    ///
-    /// Case: the user turns the wheel back into scrollback, then
-    /// forward again, and the viewport tracks each notch.
-    #[test]
-    fn scroll_moves_the_viewport() {
-        let (mut term, _sink) = term_with_history(10);
-        term.scroll(Scroll::Delta(3));
-        assert_eq!(term.vt.display_offset(), DisplayOffset(3));
-        term.scroll(Scroll::Delta(-2));
-        assert_eq!(term.vt.display_offset(), DisplayOffset(1));
-    }
-
-    /// Asserts that a scroll which moved the viewport arms the
+    /// Asserts that a scroll the VT reports as a real move arms the
     /// coalescer.
     ///
     /// Case: the user scrolls into history on an idle terminal, where
-    /// the viewport change is the only thing that happens and no PTY
-    /// output follows it.
+    /// the viewport change is the only thing that happens.
     #[test]
     fn scroll_arms_the_coalescer_when_the_viewport_moves() {
-        let (mut term, _sink) = term_with_history(10);
+        let (mut term, _sink) = detached_term();
+        term.vt.scroll_moves = true;
         term.scroll(Scroll::Delta(3));
         assert!(term.coalescer.is_armed());
     }
 
-    /// Asserts that a scroll which did not move the viewport arms
-    /// nothing.
+    /// Asserts that a scroll the VT reports as a no-op arms nothing.
     ///
-    /// Case: the user keeps turning the wheel after the viewport has
-    /// reached the end of the scrollback, or is already pinned to the
-    /// live tail. The decided policy is to schedule nothing for a
-    /// motion that moved nothing.
+    /// Case: the user keeps turning the wheel after the viewport
+    /// reached the end of the scrollback.
     #[test]
     fn a_no_op_scroll_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
         term.scroll(Scroll::Delta(5));
-        assert!(!term.coalescer.is_armed(), "no scrollback to move into");
-        let (mut term, _sink) = term_with_history(10);
-        term.scroll(Scroll::Bottom);
-        assert!(!term.coalescer.is_armed(), "already at the live tail");
-        term.scroll(Scroll::Delta(0));
-        assert!(!term.coalescer.is_armed(), "zero delta");
+        assert!(!term.coalescer.is_armed());
     }
 
     /// Asserts that a no-op scroll leaves an already-open emit window's
@@ -573,23 +542,28 @@ mod tests {
     /// earlier repaint is still pending.
     #[test]
     fn a_no_op_scroll_does_not_extend_the_deadline() {
-        let (mut term, _sink) = term_with_history(10);
+        let (mut term, _sink) = detached_term();
+        term.vt.scroll_moves = true;
         term.scroll(Scroll::Delta(3));
         let deadline = term.coalescer.next_deadline();
         assert!(deadline.is_some(), "precondition: a real scroll arms");
+        term.vt.scroll_moves = false;
         term.scroll(Scroll::Delta(0));
         assert_eq!(term.coalescer.next_deadline(), deadline);
     }
 
     /// Asserts that scrolling writes nothing through the PTY writer.
     ///
+    /// Viewport motion is host-side state, so the decided policy is
+    /// that no bytes reach the child — neither a CSI S/T pair nor
+    /// arrow keys.
+    ///
     /// Case: the user scrolls through history while a program is
-    /// reading stdin. Viewport motion is host-side state, so the
-    /// decided policy is that no bytes reach the child — neither a
-    /// CSI S/T pair nor arrow keys.
+    /// reading stdin.
     #[test]
     fn scroll_writes_nothing_through_the_pty_writer() {
-        let (mut term, sink) = term_with_history(10);
+        let (mut term, sink) = detached_term();
+        term.vt.scroll_moves = true;
         term.scroll(Scroll::Delta(3));
         term.scroll(Scroll::Bottom);
         assert_eq!(sink.contents(), b"");
@@ -603,31 +577,57 @@ mod tests {
     /// the view to jump back to the prompt where the echo lands.
     #[test]
     fn paste_while_scrolled_back_snaps_and_arms() {
-        let (mut term, _sink) = term_with_history(10);
-        term.scroll(Scroll::Delta(3));
-        term.coalescer.disarm();
-        assert!(
-            !term.coalescer.is_armed(),
-            "precondition: nothing armed yet"
-        );
+        let (mut term, _sink) = detached_term();
+        term.vt.display_offset = DisplayOffset(3);
         term.send_paste("x").expect("send_paste");
-        assert_eq!(
-            term.vt.display_offset(),
-            DisplayOffset(0),
+        assert!(
+            term.vt.scrolls.iter().any(|s| matches!(s, Scroll::Bottom)),
             "input must snap to the live tail"
         );
+        assert_eq!(term.vt.display_offset, DisplayOffset(0));
         assert!(
             term.coalescer.is_armed(),
             "the snap must schedule a repaint"
         );
     }
 
+    /// Asserts that key encoding consults the VT-reported DECCKM state.
+    ///
+    /// Case: an arrow key pressed in a full-screen app that enabled
+    /// application cursor keys, then again at a plain prompt.
+    #[test]
+    fn send_key_honours_the_vt_reported_cursor_mode() {
+        let (mut term, sink) = detached_term();
+        term.vt.modes.app_cursor = true;
+        term.send_key(&TerminalKey::ArrowUp, &TerminalModifiers::default())
+            .expect("send_key");
+        assert_eq!(sink.contents(), b"\x1bOA");
+
+        let (mut term, sink) = detached_term();
+        term.send_key(&TerminalKey::ArrowUp, &TerminalModifiers::default())
+            .expect("send_key");
+        assert_eq!(sink.contents(), b"\x1b[A");
+    }
+
+    /// Asserts that paste encoding consults the VT-reported bracketed
+    /// paste mode.
+    ///
+    /// Case: pasting into an app that enabled DECSET 2004 (vim, fzf,
+    /// modern shells).
+    #[test]
+    fn send_paste_honours_the_vt_reported_bracketed_mode() {
+        let (mut term, sink) = detached_term();
+        term.vt.modes.bracketed_paste = true;
+        term.send_paste("hi").expect("send_paste");
+        assert_eq!(sink.contents(), b"\x1b[200~hi\x1b[201~");
+    }
+
     /// Asserts that a detached terminal's PTY writes land on the
     /// injected sink, byte-identical.
     ///
-    /// Case: a caller builds a terminal with an injected writer
-    /// instead of a spawned shell, then reads back the bytes the
-    /// terminal produced.
+    /// Case: a caller builds a terminal with an injected writer instead
+    /// of a spawned shell, then reads back the bytes the terminal
+    /// produced.
     #[test]
     fn detached_routes_writes_to_the_injected_sink() {
         let (mut term, sink) = detached_term();
@@ -637,67 +637,16 @@ mod tests {
 
     /// Asserts that `send_paste("")` writes nothing at all.
     ///
-    /// Case: the user pastes with an empty clipboard. The decided
-    /// policy is to write nothing at all rather than an empty
+    /// The decided policy is to write nothing rather than an empty
     /// bracketed-paste frame, which would still wake the receiving
     /// program.
+    ///
+    /// Case: the user pastes with an empty clipboard.
     #[test]
     fn empty_paste_writes_nothing_to_the_pty() {
         let (mut term, sink) = detached_term();
         term.send_paste("").expect("send_paste");
         assert_eq!(sink.contents(), b"");
-    }
-
-    /// A terminal whose PTY chunk and exit streams are fed by the
-    /// returned senders, so tests can inject output and child-exit
-    /// reports.
-    fn channelled_term() -> (
-        OrzmaTerm<AlacrittyVtBackend>,
-        Sender<Vec<u8>>,
-        Sender<Option<i32>>,
-    ) {
-        let (chunk_tx, chunk_rx) = unbounded();
-        let (exit_tx, exit_rx) = unbounded();
-        let term = OrzmaTerm {
-            vt: OldOrzmaVt::new(80, 24),
-            coalescer: Coalescer::default(),
-            pty: Pty::with_master_and_channels(
-                Box::new(FailingMaster),
-                Box::new(CaptureSink::default()),
-                chunk_rx,
-                exit_rx,
-            ),
-        };
-        (term, chunk_tx, exit_tx)
-    }
-
-    /// Collects the `ChildExit` codes out of a pumped signal batch.
-    fn child_exits(signals: &[TermSignal]) -> Vec<Option<i32>> {
-        signals
-            .iter()
-            .filter_map(|signal| match signal {
-                TermSignal::ChildExit { code } => Some(*code),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Reads the first `len` cells of the top viewport row back through
-    /// the selection API — the only text readout the VT exposes.
-    fn top_row_text(term: &mut OrzmaTerm<AlacrittyVtBackend>, len: u16) -> Option<String> {
-        let cell = |col| GridPoint {
-            line: GridLine(0),
-            column: GridColumn(col),
-        };
-        term.vt
-            .start_selection(cell(0), CellSide::Left, SelectionKind::Simple)
-            .expect("start_selection");
-        term.vt
-            .update_selection(cell(len - 1), CellSide::Right)
-            .expect("update_selection");
-        let text = term.vt.selected_text();
-        term.vt.clear_selection().expect("clear_selection");
-        text
     }
 
     /// Asserts that a pending child-exit report surfaces in `pump`'s
@@ -767,6 +716,63 @@ mod tests {
         chunk_tx.send(b"bye".to_vec()).expect("send chunk");
         exit_tx.send(Some(0)).expect("send exit");
         assert_eq!(child_exits(&term.pump().signals), vec![Some(0)]);
-        assert_eq!(top_row_text(&mut term, 3).as_deref(), Some("bye"));
+        assert!(term.vt.interpreted.contains(&b"bye".to_vec()));
+    }
+
+    /// Asserts that VT signals from interpreted chunks surface as
+    /// `TermSignal::Vt`, ahead of a `ChildExit` in the same batch.
+    ///
+    /// Case: the shell rings the bell in its final output and exits;
+    /// the host must observe the bell before acting on the exit.
+    #[test]
+    fn vt_signals_are_forwarded_before_child_exit() {
+        let (mut term, chunk_tx, exit_tx) = channelled_term();
+        term.vt.updates.push_back(VtUpdate {
+            verdict: Some(DamageVerdict::Idle),
+            signals: vec![VtSignal::Bell],
+            replies: Vec::new(),
+        });
+        chunk_tx.send(b"\x07".to_vec()).expect("send chunk");
+        exit_tx.send(Some(0)).expect("send exit");
+        let signals = term.pump().signals;
+        assert_eq!(
+            signals,
+            vec![
+                TermSignal::Vt(VtSignal::Bell),
+                TermSignal::ChildExit { code: Some(0) }
+            ]
+        );
+    }
+
+    /// Asserts that reply bytes from interpreted chunks are written
+    /// back to the PTY by the next pump.
+    ///
+    /// Case: an application sends a DSR cursor-position query and
+    /// blocks until the report arrives.
+    #[test]
+    fn replies_are_written_back_to_the_pty() {
+        let (chunk_tx, chunk_rx) = unbounded();
+        let (_exit_tx, exit_rx) = unbounded();
+        let sink = CaptureSink::default();
+        let mut term = OrzmaTerm {
+            vt: FakeVt::new(80, 24),
+            coalescer: Coalescer::default(),
+            pty: Pty::with_master_and_channels(
+                Box::new(FailingMaster),
+                Box::new(sink.clone()),
+                chunk_rx,
+                exit_rx,
+            ),
+            pending_signals: Vec::new(),
+            pending_replies: Vec::new(),
+        };
+        term.vt.updates.push_back(VtUpdate {
+            verdict: Some(DamageVerdict::Idle),
+            signals: Vec::new(),
+            replies: b"\x1b[1;1R".to_vec(),
+        });
+        chunk_tx.send(b"\x1b[6n".to_vec()).expect("send chunk");
+        term.pump();
+        assert_eq!(sink.contents(), b"\x1b[1;1R");
     }
 }
