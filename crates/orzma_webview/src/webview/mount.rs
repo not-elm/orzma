@@ -75,9 +75,9 @@ pub(crate) struct CompositeNotified;
 
 /// Registers the webview runtime systems: the `WebviewSize` size sync
 /// (`Update`), the per-frame projection that derives `TerminalOverlays` from
-/// webview children (spec §5), and the render-world ordering edge that
-/// keeps webview GPU texture injection ahead of the terminal material's
-/// bind-group rebuild.
+/// the frame-carried placement list (spec §5), and the render-world ordering
+/// edge that keeps webview GPU texture injection ahead of the terminal
+/// material's bind-group rebuild.
 ///
 /// The projection is scheduled in `PostUpdate` before
 /// `TerminalMaterialSystems::UpdateMaterial`: grid state settles during
@@ -554,25 +554,20 @@ fn sync_webview_size(
     }
 }
 
-/// Derives each terminal's `TerminalOverlays` from its live webview
-/// children, every frame, starting from the all-sentinel default (spec §5).
+/// Derives each terminal's `TerminalOverlays` from the frame-carried
+/// placement list, every frame, starting from the all-sentinel default.
 ///
-/// Per-child projection rules, in order:
-/// 1. Seq-hold: a placement is skipped until the grid's `last_seq` reaches the
-///    mount-stamped `frame_seq` (wrap-aware compare).
-/// 2. Screen-mode gating: a `Scrollback` placement projects only on the primary
-///    screen (hidden while on the alternate screen); a `FixedScreen` placement
-///    projects only on the alternate screen.
-/// 3. `Scrollback`: `viewport_row = line - (history_base + history_size -
-///    display_offset)`. `FixedScreen`: `viewport_row = row` (already
-///    viewport-relative). Rects fully above/below the viewport or anchored at
-///    or past the right edge are culled; a partially-above rect keeps its
-///    negative row (the shader clips).
+/// The list is authoritative and declarative: an id with no matching
+/// child is ignored (its mount signal has not landed yet), a mounted
+/// child whose id is absent paints nothing (hidden, not unmounted),
+/// and a negative `viewport_row` passes through for the shader to
+/// clip. Rects fully outside the viewport and columns at or past the
+/// right edge are culled defensively, mirroring the old projection.
 ///
-/// The component is (re)inserted for every terminal that has inline children
-/// OR already carries `TerminalOverlays`, so a terminal whose last inline
-/// child despawned converges to all-sentinel / all-`None` instead of keeping
-/// stale texture handles alive.
+/// The component is (re)inserted for every terminal that has inline
+/// children OR already carries `TerminalOverlays`, so a terminal whose
+/// last inline child despawned converges to all-sentinel / all-`None`
+/// instead of keeping stale texture handles alive.
 fn project_webview_overlays(
     mut commands: Commands,
     terminals: Query<(
@@ -591,45 +586,25 @@ fn project_webview_overlays(
     writers: Res<ConnectionWriters>,
 ) {
     for (terminal, grid, children, has_overlays) in &terminals {
-        // NOTE: `grid.modes` refreshes only on snapshots (FrameDelta carries
-        // no modes), which suffices here: alt-screen entry/exit always
-        // arrives as a snapshot — alacritty's `Term::swap_alt` calls
-        // `mark_fully_damaged()`, full damage collects as `DirtyRows::Full`,
-        // and `decide_frame_kind` maps that to `FrameKind::Snapshot`. A
-        // delta can therefore never carry an alt-screen flip past this check.
-        let on_alt_screen = grid.modes.iter().any(|m| m == ALT_SCREEN_MODE);
         let mut overlays = TerminalOverlays::default();
         let mut has_webview_child = false;
         if let Some(kids) = children {
-            for child in kids.iter() {
-                let Ok((view, placement, texture, already_notified, owner)) = webviews.get(child)
-                else {
+            has_webview_child = kids.iter().any(|child| webviews.get(child).is_ok());
+            for projected in &grid.placements {
+                let matched = kids.iter().find_map(|child| {
+                    webviews
+                        .get(child)
+                        .ok()
+                        .filter(|(_, p, ..)| p.placement == projected.id)
+                        .map(|found| (child, found))
+                });
+                let Some((child, (view, _, texture, already_notified, owner))) = matched else {
                     continue;
                 };
-                has_webview_child = true;
-                if (grid.last_seq.wrapping_sub(placement.frame_seq) as i32) < 0 {
-                    continue;
-                }
-                let (viewport_row, anchor_col) = match placement.anchor {
-                    AnchorMode::Scrollback { line, col } => {
-                        if on_alt_screen {
-                            continue;
-                        }
-                        let row = line as i64
-                            - (grid.history_base as i64 + i64::from(grid.history_size)
-                                - i64::from(grid.display_offset));
-                        (row, col)
-                    }
-                    AnchorMode::FixedScreen { row, col } => {
-                        if !on_alt_screen {
-                            continue;
-                        }
-                        (i64::from(row), col)
-                    }
-                };
-                if viewport_row + i64::from(placement.rows) <= 0
-                    || viewport_row >= i64::from(grid.rows)
-                    || u32::from(anchor_col) >= u32::from(grid.cols)
+                let row = i64::from(projected.viewport_row);
+                if row + i64::from(projected.rows) <= 0
+                    || row >= i64::from(grid.rows)
+                    || u32::from(projected.col) >= u32::from(grid.cols)
                 {
                     continue;
                 }
@@ -638,10 +613,10 @@ fn project_webview_overlays(
                     continue;
                 }
                 overlays.rects[slot] = IVec4::new(
-                    viewport_row as i32,
-                    i32::from(anchor_col),
-                    i32::from(placement.rows),
-                    i32::from(placement.cols),
+                    projected.viewport_row,
+                    i32::from(projected.col),
+                    i32::from(projected.rows),
+                    i32::from(projected.cols),
                 );
                 overlays.textures[slot] = Some(texture.0.clone());
                 if !already_notified {
@@ -689,11 +664,12 @@ fn on_placement_removed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webview::osc::on_osc_webview_request;
+    use crate::webview::osc::on_apc_webview_signal;
     use bevy::ecs::system::RunSystemOnce;
     use bevy_cef::prelude::PreloadScripts;
-    use orzma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
+    use bevy_orzma_term::prelude::{TermApcWebviewSignal, TermWebviewEvictedSignal};
     use orzma_tty_renderer::CellMetrics;
+    use orzma_vt::prelude::{ApcWebviewVerb, PlacementId, ProjectedPlacement};
 
     fn make_test_app() -> App {
         let mut app = App::new();
@@ -701,8 +677,9 @@ mod tests {
             .init_resource::<OrzmaRegistry>()
             .init_resource::<Assets<Image>>()
             .init_resource::<ConnectionWriters>()
-            .add_observer(on_osc_webview_request)
-            .add_observer(on_placement_removed);
+            .add_observer(on_apc_webview_signal)
+            .add_observer(on_placement_removed)
+            .add_observer(on_webview_evicted);
         app
     }
 
@@ -747,39 +724,52 @@ mod tests {
         surface
     }
 
-    fn test_anchor() -> InlineAnchor {
-        InlineAnchor {
-            mode: AnchorMode::Scrollback { line: 42, col: 3 },
-            frame_seq: 7,
-        }
-    }
-
-    fn mount(app: &mut App, terminal: Entity, view_id: &str, anchor: Option<InlineAnchor>) {
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal,
-            verb: OscWebviewVerb::Mount {
+    fn mount(app: &mut App, terminal: Entity, view_id: &str, placement: Option<PlacementId>) {
+        app.world_mut().trigger(TermApcWebviewSignal {
+            terminal,
+            verb: ApcWebviewVerb::Mount {
                 view_id: view_id.into(),
                 rows: 10,
                 cols: 40,
                 instance_id: None,
             },
-            anchor,
+            placement,
         });
         app.world_mut().flush();
     }
 
     fn unmount(app: &mut App, terminal: Entity, view_id: Option<&str>) {
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal,
-            verb: OscWebviewVerb::Unmount {
+        app.world_mut().trigger(TermApcWebviewSignal {
+            terminal,
+            verb: ApcWebviewVerb::Unmount {
                 view_id: view_id.map(str::to_string),
                 instance_id: None,
             },
-            anchor: None,
+            placement: None,
         });
         app.world_mut().flush();
         // NOTE: despawn is deferred; a flush + update applies it.
         app.update();
+    }
+
+    fn grid_with_placements(
+        rows: u16,
+        cols: u16,
+        placements: Vec<ProjectedPlacement>,
+    ) -> TerminalGrid {
+        TerminalGrid {
+            rows,
+            cols,
+            placements,
+            ..Default::default()
+        }
+    }
+
+    fn run_projection(app: &mut App) {
+        app.world_mut()
+            .run_system_once(project_webview_overlays)
+            .expect("project_webview_overlays runs");
+        app.world_mut().flush();
     }
 
     fn webview_children_of(app: &App, terminal: Entity) -> Vec<Entity> {
@@ -811,29 +801,29 @@ mod tests {
         terminal: Entity,
         view_id: &str,
         instance_id: &str,
-        anchor: Option<InlineAnchor>,
+        placement: Option<PlacementId>,
     ) {
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal,
-            verb: OscWebviewVerb::Mount {
+        app.world_mut().trigger(TermApcWebviewSignal {
+            terminal,
+            verb: ApcWebviewVerb::Mount {
                 view_id: view_id.into(),
                 rows: 10,
                 cols: 40,
                 instance_id: Some(instance_id.into()),
             },
-            anchor,
+            placement,
         });
         app.world_mut().flush();
     }
 
     fn unmount_instance(app: &mut App, terminal: Entity, view_id: &str, instance_id: &str) {
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal,
-            verb: OscWebviewVerb::Unmount {
+        app.world_mut().trigger(TermApcWebviewSignal {
+            terminal,
+            verb: ApcWebviewVerb::Unmount {
                 view_id: Some(view_id.into()),
                 instance_id: Some(instance_id.into()),
             },
-            anchor: None,
+            placement: None,
         });
         app.world_mut().flush();
         app.update();
@@ -861,7 +851,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
 
-        mount(&mut app, terminal, "dash", Some(test_anchor()));
+        mount(&mut app, terminal, "dash", Some(PlacementId(1)));
 
         let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 1, "mount must spawn one inline child");
@@ -883,10 +873,9 @@ mod tests {
         assert_eq!(
             app.world().get::<WebviewPlacement>(child),
             Some(&WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
+                placement: PlacementId(1),
                 rows: 10,
                 cols: 40,
-                frame_seq: 7
             }),
         );
         match app
@@ -926,25 +915,21 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
 
-        mount(&mut app, terminal, "dash", Some(test_anchor()));
+        mount(&mut app, terminal, "dash", Some(PlacementId(1)));
         let before = webview_children_of(&app, terminal);
         assert_eq!(before.len(), 1, "first mount spawns one child");
         let entity = before[0];
         let slot_before = app.world().get::<Webview>(entity).unwrap().slot;
 
-        // Re-mount the same handle with a different anchor.
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal,
-            verb: OscWebviewVerb::Mount {
+        app.world_mut().trigger(TermApcWebviewSignal {
+            terminal,
+            verb: ApcWebviewVerb::Mount {
                 view_id: "dash".into(),
                 rows: 12,
                 cols: 50,
                 instance_id: None,
             },
-            anchor: Some(InlineAnchor {
-                mode: AnchorMode::Scrollback { line: 99, col: 7 },
-                frame_seq: 9,
-            }),
+            placement: Some(PlacementId(2)),
         });
         app.world_mut().flush();
 
@@ -957,10 +942,9 @@ mod tests {
         assert_eq!(
             app.world().get::<WebviewPlacement>(entity),
             Some(&WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 99, col: 7 },
+                placement: PlacementId(2),
                 rows: 12,
                 cols: 50,
-                frame_seq: 9,
             }),
             "re-mount updates the placement in place"
         );
@@ -981,12 +965,12 @@ mod tests {
         }
 
         for (i, id) in ids.iter().take(OVERLAY_SLOTS).enumerate() {
-            mount(&mut app, terminal, id, Some(test_anchor()));
+            mount(&mut app, terminal, id, Some(PlacementId(1)));
             assert_eq!(slot_of(&app, terminal, id), Some(i as u8));
         }
 
         let overflow = &ids[OVERLAY_SLOTS];
-        mount(&mut app, terminal, overflow, Some(test_anchor()));
+        mount(&mut app, terminal, overflow, Some(PlacementId(1)));
         assert_eq!(
             webview_children_of(&app, terminal).len(),
             OVERLAY_SLOTS,
@@ -1003,8 +987,8 @@ mod tests {
             register_orzma(&mut app, id, terminal, true);
         }
 
-        mount(&mut app, terminal, "a", Some(test_anchor()));
-        mount(&mut app, terminal, "b", Some(test_anchor()));
+        mount(&mut app, terminal, "a", Some(PlacementId(1)));
+        mount(&mut app, terminal, "b", Some(PlacementId(1)));
         unmount(&mut app, terminal, Some("a"));
         assert_eq!(
             webview_children_of(&app, terminal).len(),
@@ -1012,7 +996,7 @@ mod tests {
             "unmounting one view must despawn exactly its child"
         );
 
-        mount(&mut app, terminal, "c", Some(test_anchor()));
+        mount(&mut app, terminal, "c", Some(PlacementId(1)));
         assert_eq!(
             slot_of(&app, terminal, "c"),
             Some(0),
@@ -1028,8 +1012,8 @@ mod tests {
         for id in ["a", "b"] {
             register_orzma(&mut app, id, terminal, true);
         }
-        mount(&mut app, terminal, "a", Some(test_anchor()));
-        mount(&mut app, terminal, "b", Some(test_anchor()));
+        mount(&mut app, terminal, "a", Some(PlacementId(1)));
+        mount(&mut app, terminal, "b", Some(PlacementId(1)));
         let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 2);
 
@@ -1053,7 +1037,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "hud", terminal, false);
 
-        mount(&mut app, terminal, "hud", Some(test_anchor()));
+        mount(&mut app, terminal, "hud", Some(PlacementId(1)));
 
         let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 1);
@@ -1064,7 +1048,7 @@ mod tests {
     }
 
     #[test]
-    fn mount_without_anchor_is_dropped() {
+    fn mount_without_placement_is_dropped() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
@@ -1073,7 +1057,7 @@ mod tests {
 
         assert!(
             webview_children_of(&app, terminal).is_empty(),
-            "a mount without an anchor must be dropped"
+            "a mount without a placement must be dropped"
         );
     }
 
@@ -1082,7 +1066,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
 
-        mount(&mut app, terminal, "ghost", Some(test_anchor()));
+        mount(&mut app, terminal, "ghost", Some(PlacementId(1)));
 
         assert!(
             webview_children_of(&app, terminal).is_empty(),
@@ -1096,8 +1080,8 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
 
-        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
-        mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
+        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
+        mount_instance(&mut app, terminal, "memo", "b", Some(PlacementId(1)));
 
         assert_eq!(
             webview_children_of(&app, terminal).len(),
@@ -1114,8 +1098,8 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
 
-        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
-        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
+        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
+        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
 
         assert_eq!(
             webview_children_of(&app, terminal).len(),
@@ -1130,8 +1114,8 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
 
-        mount(&mut app, terminal, "memo", Some(test_anchor()));
-        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
+        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
 
         assert_eq!(
             webview_children_of(&app, terminal).len(),
@@ -1148,8 +1132,8 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
 
-        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
-        mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
+        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
+        mount_instance(&mut app, terminal, "memo", "b", Some(PlacementId(1)));
 
         unmount_instance(&mut app, terminal, "memo", "a");
 
@@ -1169,9 +1153,9 @@ mod tests {
         register_orzma(&mut app, "memo", terminal, true);
         register_orzma(&mut app, "other", terminal, true);
 
-        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
-        mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
-        mount(&mut app, terminal, "other", Some(test_anchor()));
+        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
+        mount_instance(&mut app, terminal, "memo", "b", Some(PlacementId(1)));
+        mount(&mut app, terminal, "other", Some(PlacementId(1)));
 
         unmount(&mut app, terminal, Some("memo"));
 
@@ -1191,12 +1175,12 @@ mod tests {
 
         let insts: Vec<String> = (0..=OVERLAY_SLOTS).map(|i| format!("i{i}")).collect();
         for inst in insts.iter().take(OVERLAY_SLOTS) {
-            mount_instance(&mut app, terminal, "memo", inst, Some(test_anchor()));
+            mount_instance(&mut app, terminal, "memo", inst, Some(PlacementId(1)));
         }
         assert_eq!(webview_children_of(&app, terminal).len(), OVERLAY_SLOTS);
 
         let overflow = &insts[OVERLAY_SLOTS];
-        mount_instance(&mut app, terminal, "memo", overflow, Some(test_anchor()));
+        mount_instance(&mut app, terminal, "memo", overflow, Some(PlacementId(1)));
         assert_eq!(
             webview_children_of(&app, terminal).len(),
             OVERLAY_SLOTS,
@@ -1228,18 +1212,6 @@ mod tests {
         );
     }
 
-    fn projection_grid(last_seq: u32) -> TerminalGrid {
-        TerminalGrid {
-            cols: 80,
-            rows: 24,
-            last_seq,
-            history_base: 0,
-            history_size: 40,
-            display_offset: 0,
-            ..Default::default()
-        }
-    }
-
     fn spawn_projection_child(
         app: &mut App,
         terminal: Entity,
@@ -1263,12 +1235,6 @@ mod tests {
         handle
     }
 
-    fn project(app: &mut App) {
-        app.world_mut()
-            .run_system_once(project_webview_overlays)
-            .unwrap();
-    }
-
     fn overlays_of(app: &App, terminal: Entity) -> &TerminalOverlays {
         app.world()
             .get::<TerminalOverlays>(terminal)
@@ -1288,267 +1254,34 @@ mod tests {
     }
 
     #[test]
-    fn projection_holds_until_grid_seq_reaches_anchor_seq() {
-        let mut app = make_test_app();
-        let terminal = app.world_mut().spawn(projection_grid(6)).id();
-        spawn_projection_child(
-            &mut app,
-            terminal,
-            0,
-            WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
-                rows: 10,
-                cols: 40,
-                frame_seq: 7,
-            },
-        );
-
-        project(&mut app);
-        assert_all_sentinel(overlays_of(&app, terminal));
-
-        app.world_mut()
-            .get_mut::<TerminalGrid>(terminal)
-            .unwrap()
-            .last_seq = 7;
-        project(&mut app);
-        let overlays = overlays_of(&app, terminal);
-        assert_eq!(
-            overlays.rects[0],
-            IVec4::new(2, 3, 10, 40),
-            "once last_seq reaches frame_seq the rect must project (42 - 40 = row 2)"
-        );
-        assert!(overlays.textures[0].is_some());
-    }
-
-    fn formula_grid(history_size: u32, display_offset: u32) -> TerminalGrid {
-        TerminalGrid {
-            cols: 80,
-            rows: 5,
-            last_seq: 1,
-            history_base: 0,
-            history_size,
-            display_offset,
-            ..Default::default()
-        }
-    }
-
-    fn formula_placement() -> WebviewPlacement {
-        WebviewPlacement {
-            anchor: AnchorMode::Scrollback { line: 30, col: 2 },
-            rows: 4,
-            cols: 10,
-            frame_seq: 0,
-        }
-    }
-
-    #[test]
-    fn projection_formula_maps_absolute_line_to_viewport_row() {
-        let mut app = make_test_app();
-        let terminal = app.world_mut().spawn(formula_grid(26, 0)).id();
-        spawn_projection_child(&mut app, terminal, 0, formula_placement());
-
-        project(&mut app);
-        assert_eq!(
-            overlays_of(&app, terminal).rects[0],
-            IVec4::new(4, 2, 4, 10),
-            "30 - (0 + 26 - 0) must land on viewport row 4"
-        );
-    }
-
-    #[test]
-    fn projection_formula_culls_rect_pushed_below_viewport_by_scrollback() {
-        let mut app = make_test_app();
-        let terminal = app.world_mut().spawn(formula_grid(26, 3)).id();
-        spawn_projection_child(&mut app, terminal, 0, formula_placement());
-
-        project(&mut app);
-        assert_all_sentinel(overlays_of(&app, terminal));
-    }
-
-    #[test]
-    fn projection_formula_keeps_negative_row_for_partially_above_rect() {
-        let mut app = make_test_app();
-        let terminal = app.world_mut().spawn(formula_grid(32, 0)).id();
-        spawn_projection_child(&mut app, terminal, 0, formula_placement());
-
-        project(&mut app);
-        assert_eq!(
-            overlays_of(&app, terminal).rects[0],
-            IVec4::new(-2, 2, 4, 10),
-            "a partially-above rect must pass its negative row through as i32"
-        );
-    }
-
-    #[test]
-    fn projection_culls_fully_outside_rects() {
-        let mut app = make_test_app();
-        let terminal = app
-            .world_mut()
-            .spawn(TerminalGrid {
-                cols: 80,
-                rows: 24,
-                last_seq: 1,
-                history_base: 0,
-                history_size: 30,
-                display_offset: 0,
-                ..Default::default()
-            })
-            .id();
-        let above = WebviewPlacement {
-            anchor: AnchorMode::Scrollback { line: 10, col: 0 },
-            rows: 10,
-            cols: 10,
-            frame_seq: 0,
-        };
-        let below = WebviewPlacement {
-            anchor: AnchorMode::Scrollback { line: 100, col: 0 },
-            rows: 10,
-            cols: 10,
-            frame_seq: 0,
-        };
-        let col_out = WebviewPlacement {
-            anchor: AnchorMode::Scrollback { line: 35, col: 80 },
-            rows: 10,
-            cols: 10,
-            frame_seq: 0,
-        };
-        spawn_projection_child(&mut app, terminal, 0, above);
-        spawn_projection_child(&mut app, terminal, 1, below);
-        spawn_projection_child(&mut app, terminal, 2, col_out);
-
-        project(&mut app);
-        assert_all_sentinel(overlays_of(&app, terminal));
-    }
-
-    #[test]
-    fn projection_keeps_rect_anchored_at_last_valid_column() {
-        let mut app = make_test_app();
-        let terminal = app.world_mut().spawn(projection_grid(7)).id();
-        spawn_projection_child(
-            &mut app,
-            terminal,
-            0,
-            WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 42, col: 79 },
-                rows: 10,
-                cols: 10,
-                frame_seq: 7,
-            },
-        );
-
-        project(&mut app);
-        assert_eq!(
-            overlays_of(&app, terminal).rects[0],
-            IVec4::new(2, 79, 10, 10),
-            "a rect anchored at the last valid column (cols - 1) must project, not cull"
-        );
-    }
-
-    #[test]
-    fn alt_screen_blanks_all_slots() {
-        let mut app = make_test_app();
-        let terminal = app
-            .world_mut()
-            .spawn(TerminalGrid {
-                modes: vec![ALT_SCREEN_MODE.to_string()],
-                ..projection_grid(7)
-            })
-            .id();
-        spawn_projection_child(
-            &mut app,
-            terminal,
-            0,
-            WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
-                rows: 10,
-                cols: 40,
-                frame_seq: 7,
-            },
-        );
-
-        project(&mut app);
-        assert_all_sentinel(overlays_of(&app, terminal));
-
-        app.world_mut()
-            .get_mut::<TerminalGrid>(terminal)
-            .unwrap()
-            .modes
-            .clear();
-        project(&mut app);
-        assert_eq!(
-            overlays_of(&app, terminal).rects[0],
-            IVec4::new(2, 3, 10, 40),
-            "returning to the primary screen must re-project the placement"
-        );
-    }
-
-    #[test]
-    fn fixed_screen_projects_to_its_row_on_alt_screen() {
-        let mut app = make_test_app();
-        let terminal = app
-            .world_mut()
-            .spawn(TerminalGrid {
-                modes: vec![ALT_SCREEN_MODE.to_string()],
-                ..projection_grid(7)
-            })
-            .id();
-        spawn_projection_child(
-            &mut app,
-            terminal,
-            0,
-            WebviewPlacement {
-                anchor: AnchorMode::FixedScreen { row: 5, col: 2 },
-                rows: 4,
-                cols: 10,
-                frame_seq: 7,
-            },
-        );
-
-        project(&mut app);
-        assert_eq!(
-            overlays_of(&app, terminal).rects[0],
-            IVec4::new(5, 2, 4, 10),
-            "a FixedScreen placement projects to its own viewport row on the alt screen"
-        );
-    }
-
-    #[test]
-    fn fixed_screen_is_hidden_on_primary_screen() {
-        let mut app = make_test_app();
-        let terminal = app.world_mut().spawn(projection_grid(7)).id();
-        spawn_projection_child(
-            &mut app,
-            terminal,
-            0,
-            WebviewPlacement {
-                anchor: AnchorMode::FixedScreen { row: 5, col: 2 },
-                rows: 4,
-                cols: 10,
-                frame_seq: 7,
-            },
-        );
-
-        project(&mut app);
-        assert_all_sentinel(overlays_of(&app, terminal));
-    }
-
-    #[test]
     fn texture_handle_lands_in_the_childs_slot() {
         let mut app = make_test_app();
-        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        let terminal = app
+            .world_mut()
+            .spawn(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(1),
+                    viewport_row: 2,
+                    col: 3,
+                    rows: 10,
+                    cols: 40,
+                }],
+            ))
+            .id();
         let handle = spawn_projection_child(
             &mut app,
             terminal,
             2,
             WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
+                placement: PlacementId(1),
                 rows: 10,
                 cols: 40,
-                frame_seq: 7,
             },
         );
 
-        project(&mut app);
+        run_projection(&mut app);
         let overlays = overlays_of(&app, terminal);
         assert_eq!(
             overlays.textures[2].as_ref().map(Handle::id),
@@ -1565,17 +1298,51 @@ mod tests {
     #[test]
     fn projection_draws_two_instances_in_their_own_slots() {
         let mut app = make_test_app();
-        let terminal = app.world_mut().spawn(projection_grid(7)).id();
-        let placement = WebviewPlacement {
-            anchor: AnchorMode::Scrollback { line: 42, col: 3 },
-            rows: 10,
-            cols: 40,
-            frame_seq: 7,
-        };
-        let h0 = spawn_projection_child(&mut app, terminal, 0, placement);
-        let h1 = spawn_projection_child(&mut app, terminal, 1, placement);
+        let terminal = app
+            .world_mut()
+            .spawn(grid_with_placements(
+                24,
+                80,
+                vec![
+                    ProjectedPlacement {
+                        id: PlacementId(1),
+                        viewport_row: 2,
+                        col: 3,
+                        rows: 10,
+                        cols: 40,
+                    },
+                    ProjectedPlacement {
+                        id: PlacementId(2),
+                        viewport_row: 2,
+                        col: 3,
+                        rows: 10,
+                        cols: 40,
+                    },
+                ],
+            ))
+            .id();
+        let h0 = spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            WebviewPlacement {
+                placement: PlacementId(1),
+                rows: 10,
+                cols: 40,
+            },
+        );
+        let h1 = spawn_projection_child(
+            &mut app,
+            terminal,
+            1,
+            WebviewPlacement {
+                placement: PlacementId(2),
+                rows: 10,
+                cols: 40,
+            },
+        );
 
-        project(&mut app);
+        run_projection(&mut app);
         let overlays = overlays_of(&app, terminal);
         assert_eq!(
             overlays.textures[0].as_ref().map(Handle::id),
@@ -1596,50 +1363,29 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
+
+        mount(&mut app, terminal, "dash", Some(PlacementId(1)));
         app.world_mut()
             .entity_mut(terminal)
-            .insert(projection_grid(7));
-
-        mount(&mut app, terminal, "dash", Some(test_anchor()));
-        project(&mut app);
+            .insert(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(1),
+                    viewport_row: 2,
+                    col: 3,
+                    rows: 10,
+                    cols: 40,
+                }],
+            ));
+        run_projection(&mut app);
         let overlays = overlays_of(&app, terminal);
         assert_ne!(overlays.rects[0], IVec4::ZERO);
         assert!(overlays.textures[0].is_some());
 
         unmount(&mut app, terminal, None);
-        project(&mut app);
+        run_projection(&mut app);
         assert_all_sentinel(overlays_of(&app, terminal));
-    }
-
-    #[test]
-    fn seq_hold_is_wrap_aware_near_u32_max() {
-        let mut app = make_test_app();
-        let terminal = app.world_mut().spawn(projection_grid(u32::MAX - 3)).id();
-        spawn_projection_child(
-            &mut app,
-            terminal,
-            0,
-            WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
-                rows: 10,
-                cols: 40,
-                frame_seq: u32::MAX - 1,
-            },
-        );
-
-        project(&mut app);
-        assert_all_sentinel(overlays_of(&app, terminal));
-
-        app.world_mut()
-            .get_mut::<TerminalGrid>(terminal)
-            .unwrap()
-            .last_seq = 2;
-        project(&mut app);
-        assert_eq!(
-            overlays_of(&app, terminal).rects[0],
-            IVec4::new(2, 3, 10, 40),
-            "a last_seq that wrapped past 0 must release the hold"
-        );
     }
 
     #[test]
@@ -1647,7 +1393,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
-        mount(&mut app, terminal, "dash", Some(test_anchor()));
+        mount(&mut app, terminal, "dash", Some(PlacementId(1)));
         let child = webview_children_of(&app, terminal)[0];
         assert_eq!(
             app.world().get::<WebviewSize>(child),
@@ -1696,7 +1442,7 @@ mod tests {
         );
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
-        mount(&mut app, terminal, "dash", Some(test_anchor()));
+        mount(&mut app, terminal, "dash", Some(PlacementId(1)));
 
         app.update();
         assert!(
@@ -1927,7 +1673,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma_dir(&mut app, "DYN1", terminal);
 
-        mount(&mut app, terminal, "DYN1", Some(test_anchor()));
+        mount(&mut app, terminal, "DYN1", Some(PlacementId(1)));
 
         let children = webview_children_of(&app, terminal);
         assert_eq!(
@@ -2016,7 +1762,7 @@ mod tests {
             },
         );
 
-        mount(&mut app, terminal, "HANDLE", Some(test_anchor()));
+        mount(&mut app, terminal, "HANDLE", Some(PlacementId(1)));
 
         let children = webview_children_of(&app, terminal);
         assert_eq!(
@@ -2031,72 +1777,6 @@ mod tests {
             .expect("dynamic mount must stamp WebviewOwner");
         assert_eq!(owner.connection_id, 42);
         assert_eq!(owner.handle, "HANDLE");
-    }
-
-    #[test]
-    fn alt_screen_exit_despawns_only_fixed_screen_children() {
-        use orzma_tty_engine::TerminalModeChanged;
-
-        let mut app = make_test_app();
-        app.add_observer(despawn_fixed_screen_on_alt_exit);
-        let terminal = app.world_mut().spawn(projection_grid(7)).id();
-        spawn_projection_child(
-            &mut app,
-            terminal,
-            0,
-            WebviewPlacement {
-                anchor: AnchorMode::FixedScreen { row: 1, col: 0 },
-                rows: 4,
-                cols: 10,
-                frame_seq: 7,
-            },
-        );
-        spawn_projection_child(
-            &mut app,
-            terminal,
-            1,
-            WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 42, col: 0 },
-                rows: 4,
-                cols: 10,
-                frame_seq: 7,
-            },
-        );
-        let fixed_entity = webview_children_of(&app, terminal)
-            .into_iter()
-            .find(|e| {
-                matches!(
-                    app.world().get::<WebviewPlacement>(*e).unwrap().anchor,
-                    AnchorMode::FixedScreen { .. }
-                )
-            })
-            .unwrap();
-
-        app.world_mut().trigger(TerminalModeChanged {
-            entity: terminal,
-            added: vec![],
-            removed: vec![ALT_SCREEN_MODE.to_string()],
-        });
-        app.world_mut().flush();
-        app.update();
-
-        let remaining = webview_children_of(&app, terminal);
-        assert_eq!(
-            remaining.len(),
-            1,
-            "the FixedScreen child must be despawned"
-        );
-        assert!(
-            !remaining.contains(&fixed_entity),
-            "the despawned child must be the FixedScreen one"
-        );
-        assert!(matches!(
-            app.world()
-                .get::<WebviewPlacement>(remaining[0])
-                .unwrap()
-                .anchor,
-            AnchorMode::Scrollback { .. }
-        ));
     }
 
     #[test]
@@ -2150,7 +1830,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_url(&mut app, "disp", terminal, "https://example.com", false);
 
-        mount(&mut app, terminal, "disp", Some(test_anchor()));
+        mount(&mut app, terminal, "disp", Some(PlacementId(1)));
 
         let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 1);
@@ -2188,7 +1868,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_url(&mut app, "appv", terminal, "https://app.example.com", true);
 
-        mount(&mut app, terminal, "appv", Some(test_anchor()));
+        mount(&mut app, terminal, "appv", Some(PlacementId(1)));
 
         let child = webview_children_of(&app, terminal)[0];
         let preload = app
@@ -2253,22 +1933,34 @@ mod tests {
         let mut app = make_test_app();
         let (writers, rx) = compositing_writers(1);
         app.insert_resource(writers);
-        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        let terminal = app
+            .world_mut()
+            .spawn(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(1),
+                    viewport_row: 2,
+                    col: 3,
+                    rows: 10,
+                    cols: 40,
+                }],
+            ))
+            .id();
         let entity = spawn_owned_projection_child(
             &mut app,
             terminal,
             0,
             WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
+                placement: PlacementId(1),
                 rows: 10,
                 cols: 40,
-                frame_seq: 7,
             },
             1,
             "myhandle",
         );
 
-        project(&mut app);
+        run_projection(&mut app);
 
         assert!(
             app.world().get::<CompositeNotified>(entity).is_some(),
@@ -2288,25 +1980,37 @@ mod tests {
         let mut app = make_test_app();
         let (writers, rx) = compositing_writers(1);
         app.insert_resource(writers);
-        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        let terminal = app
+            .world_mut()
+            .spawn(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(1),
+                    viewport_row: 2,
+                    col: 3,
+                    rows: 10,
+                    cols: 40,
+                }],
+            ))
+            .id();
         spawn_owned_projection_child(
             &mut app,
             terminal,
             0,
             WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
+                placement: PlacementId(1),
                 rows: 10,
                 cols: 40,
-                frame_seq: 7,
             },
             1,
             "myhandle",
         );
 
-        project(&mut app);
+        run_projection(&mut app);
         let _ = rx.try_recv().expect("first projection must send start");
 
-        project(&mut app);
+        run_projection(&mut app);
         assert!(
             rx.try_recv().is_err(),
             "second projection must NOT send a duplicate start"
@@ -2318,22 +2022,34 @@ mod tests {
         let mut app = make_test_app();
         let (writers, rx) = compositing_writers(1);
         app.insert_resource(writers);
-        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        let terminal = app
+            .world_mut()
+            .spawn(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(1),
+                    viewport_row: 2,
+                    col: 3,
+                    rows: 10,
+                    cols: 40,
+                }],
+            ))
+            .id();
         let child = spawn_owned_projection_child(
             &mut app,
             terminal,
             0,
             WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
+                placement: PlacementId(1),
                 rows: 10,
                 cols: 40,
-                frame_seq: 7,
             },
             1,
             "myhandle",
         );
 
-        project(&mut app);
+        run_projection(&mut app);
         let _ = rx.try_recv().expect("start notification must arrive");
 
         app.world_mut().entity_mut(child).despawn();
@@ -2353,16 +2069,18 @@ mod tests {
         let mut app = make_test_app();
         let (writers, rx) = compositing_writers(1);
         app.insert_resource(writers);
-        let terminal = app.world_mut().spawn(projection_grid(6)).id();
+        let terminal = app
+            .world_mut()
+            .spawn(grid_with_placements(24, 80, vec![]))
+            .id();
         let child = spawn_owned_projection_child(
             &mut app,
             terminal,
             0,
             WebviewPlacement {
-                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
+                placement: PlacementId(1),
                 rows: 10,
                 cols: 40,
-                frame_seq: 7,
             },
             1,
             "myhandle",
@@ -2395,7 +2113,7 @@ mod tests {
             },
         );
 
-        mount(&mut app, terminal, "h", Some(test_anchor()));
+        mount(&mut app, terminal, "h", Some(PlacementId(1)));
 
         let child = webview_children_of(&app, terminal)[0];
         let preload = app
@@ -2431,7 +2149,7 @@ mod tests {
             },
         );
 
-        mount(&mut app, terminal, "u", Some(test_anchor()));
+        mount(&mut app, terminal, "u", Some(PlacementId(1)));
 
         let child = webview_children_of(&app, terminal)[0];
         let preload = app
@@ -2466,7 +2184,7 @@ mod tests {
             },
         );
 
-        mount(&mut app, terminal, "disp", Some(test_anchor()));
+        mount(&mut app, terminal, "disp", Some(PlacementId(1)));
 
         let child = webview_children_of(&app, terminal)[0];
         let preload = app
@@ -2482,5 +2200,196 @@ mod tests {
             app.world().get::<WebviewOwner>(child).is_none(),
             "a display-only url must carry no WebviewOwner even with preload"
         );
+    }
+
+    /// Asserts that a frame-carried placement is written through to the
+    /// overlay slot verbatim, including a negative row.
+    ///
+    /// Case: a mounted webview's rect sticks partway above the viewport
+    /// after the user scrolls, and the shader clips the negative rows.
+    #[test]
+    fn projection_passes_the_placement_rect_through() {
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        register_orzma(&mut app, "memo", terminal, true);
+        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(1),
+                    viewport_row: -2,
+                    col: 4,
+                    rows: 6,
+                    cols: 20,
+                }],
+            ));
+        run_projection(&mut app);
+        let overlays = app
+            .world()
+            .get::<TerminalOverlays>(terminal)
+            .expect("overlays inserted");
+        assert_eq!(overlays.rects[0], IVec4::new(-2, 4, 6, 20));
+        assert!(overlays.textures[0].is_some());
+    }
+
+    /// Asserts that a mounted webview whose id is absent from the list
+    /// paints nothing while its entity survives.
+    ///
+    /// Case: the webview scrolls fully out of the viewport; the VT
+    /// omits it from the frame list without unmounting it.
+    #[test]
+    fn projection_hides_a_placement_absent_from_the_list() {
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        register_orzma(&mut app, "memo", terminal, true);
+        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(grid_with_placements(24, 80, vec![]));
+        run_projection(&mut app);
+        let overlays = app
+            .world()
+            .get::<TerminalOverlays>(terminal)
+            .expect("overlays converge to sentinel");
+        assert_eq!(overlays.rects[0], IVec4::ZERO);
+        assert_eq!(webview_children_of(&app, terminal).len(), 1);
+    }
+
+    /// Asserts that a listed id with no matching child is ignored.
+    ///
+    /// Case: the frame carrying a fresh mount's placement is applied a
+    /// Bevy tick before the mount signal's observer runs.
+    #[test]
+    fn projection_ignores_an_unknown_placement_id() {
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(9),
+                    viewport_row: 1,
+                    col: 1,
+                    rows: 2,
+                    cols: 2,
+                }],
+            ));
+        run_projection(&mut app);
+        assert!(app.world().get::<TerminalOverlays>(terminal).is_none());
+    }
+
+    /// Asserts that mount-then-frame and frame-then-mount converge to
+    /// the same painted overlay.
+    ///
+    /// Case: signal and frame arrival interleave differently across
+    /// coalescer windows for the same mount.
+    #[test]
+    fn mount_and_frame_order_converge() {
+        let placed = ProjectedPlacement {
+            id: PlacementId(1),
+            viewport_row: 3,
+            col: 2,
+            rows: 10,
+            cols: 40,
+        };
+        let mut first = make_test_app();
+        let mounted_first = spawn_terminal(&mut first);
+        register_orzma(&mut first, "memo", mounted_first, true);
+        mount(&mut first, mounted_first, "memo", Some(PlacementId(1)));
+        first
+            .world_mut()
+            .entity_mut(mounted_first)
+            .insert(grid_with_placements(24, 80, vec![placed]));
+        run_projection(&mut first);
+        let rect_a = first
+            .world()
+            .get::<TerminalOverlays>(mounted_first)
+            .expect("overlays")
+            .rects[0];
+        let mut second = make_test_app();
+        let framed_first = spawn_terminal(&mut second);
+        register_orzma(&mut second, "memo", framed_first, true);
+        second
+            .world_mut()
+            .entity_mut(framed_first)
+            .insert(grid_with_placements(24, 80, vec![placed]));
+        run_projection(&mut second);
+        assert!(
+            second
+                .world()
+                .get::<TerminalOverlays>(framed_first)
+                .is_none()
+        );
+        mount(&mut second, framed_first, "memo", Some(PlacementId(1)));
+        run_projection(&mut second);
+        let rect_b = second
+            .world()
+            .get::<TerminalOverlays>(framed_first)
+            .expect("overlays")
+            .rects[0];
+        assert_eq!(rect_a, IVec4::new(3, 2, 10, 40));
+        assert_eq!(rect_a, rect_b);
+    }
+
+    /// Asserts that a remount under a fresh id keeps rendering once the
+    /// frame list switches to the new id.
+    ///
+    /// Case: a program re-issues `mount` for the same `(view_id,
+    /// instance)` and the VT mints a successor id.
+    #[test]
+    fn remount_hands_the_slot_to_the_new_id() {
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        register_orzma(&mut app, "memo", terminal, true);
+        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+        mount(&mut app, terminal, "memo", Some(PlacementId(2)));
+        assert_eq!(webview_children_of(&app, terminal).len(), 1);
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(grid_with_placements(
+                24,
+                80,
+                vec![ProjectedPlacement {
+                    id: PlacementId(2),
+                    viewport_row: 5,
+                    col: 0,
+                    rows: 10,
+                    cols: 40,
+                }],
+            ));
+        run_projection(&mut app);
+        let overlays = app
+            .world()
+            .get::<TerminalOverlays>(terminal)
+            .expect("overlays inserted");
+        assert_eq!(overlays.rects[0], IVec4::new(5, 0, 10, 40));
+    }
+
+    /// Asserts that an eviction signal despawns exactly the named
+    /// placements and ignores unknown ids.
+    ///
+    /// Case: the scrollback trims past a webview's row while another
+    /// webview further down stays alive.
+    #[test]
+    fn eviction_despawns_by_id_and_ignores_unknowns() {
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        register_orzma(&mut app, "memo", terminal, true);
+        register_orzma(&mut app, "clock", terminal, true);
+        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+        mount(&mut app, terminal, "clock", Some(PlacementId(2)));
+        assert_eq!(webview_children_of(&app, terminal).len(), 2);
+        app.world_mut().trigger(TermWebviewEvictedSignal {
+            terminal,
+            placements: vec![PlacementId(1), PlacementId(99)],
+        });
+        app.world_mut().flush();
+        app.update();
+        assert_eq!(webview_children_of(&app, terminal).len(), 1);
     }
 }
