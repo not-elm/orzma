@@ -1,4 +1,4 @@
-//! Tests for [`OrzmaVt`]: shared fixtures, the damage-staging tests,
+//! Tests for [`OldOrzmaVt`]: shared fixtures, the damage-staging tests,
 //! plus one child module per exercised concern.
 
 use super::*;
@@ -8,8 +8,8 @@ mod frame;
 
 /// Builds a wrapper whose bootstrap damage and backend accumulator are
 /// both consumed, so a test observes only what its own calls stage.
-fn clean_vt() -> OrzmaVt<AlacrittyVtBackend> {
-    let mut vt = OrzmaVt::new(80, 24);
+fn clean_vt() -> OldOrzmaVt<AlacrittyVtBackend> {
+    let mut vt = OldOrzmaVt::new(80, 24);
     vt.interpret(b"\x1b[H");
     vt.pending_damage = None;
     vt
@@ -18,8 +18,8 @@ fn clean_vt() -> OrzmaVt<AlacrittyVtBackend> {
 /// Builds a wrapper with `history_rows` scrollback lines and its
 /// bootstrap damage consumed; the 24-row viewport absorbs the first 23
 /// newlines before history starts growing.
-fn vt_with_history(history_rows: usize) -> OrzmaVt<AlacrittyVtBackend> {
-    let mut vt = OrzmaVt::new(80, 24);
+fn vt_with_history(history_rows: usize) -> OldOrzmaVt<AlacrittyVtBackend> {
+    let mut vt = OldOrzmaVt::new(80, 24);
     let seed: Vec<u8> = (0..history_rows + 23)
         .flat_map(|i| format!("l{i}\r\n").into_bytes())
         .collect();
@@ -28,7 +28,7 @@ fn vt_with_history(history_rows: usize) -> OrzmaVt<AlacrittyVtBackend> {
     vt
 }
 
-fn start_simple(vt: &mut OrzmaVt<AlacrittyVtBackend>, x: u16, line: i32) -> bool {
+fn start_simple(vt: &mut OldOrzmaVt<AlacrittyVtBackend>, x: u16, line: i32) -> bool {
     vt.start_selection(
         GridPoint {
             line: GridLine(line),
@@ -50,7 +50,7 @@ fn row_text(row: &Row) -> String {
 /// stays silent.
 #[test]
 fn a_fresh_vt_stages_bootstrap_full_damage() {
-    let vt = OrzmaVt::<AlacrittyVtBackend>::new(80, 24);
+    let vt = OldOrzmaVt::<AlacrittyVtBackend>::new(80, 24);
     assert_eq!(vt.pending_damage, Some(Damage::Full));
 }
 

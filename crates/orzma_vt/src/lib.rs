@@ -2,7 +2,7 @@
 //!
 //! [`schema`] declares the vocabulary; the crate root defines [`Vt`],
 //! the protocol between a self-contained terminal emulator and its
-//! owner. [`vt`] holds the superseded [`vt::OrzmaVt`] +
+//! owner. [`vt`] holds the superseded [`vt::OldOrzmaVt`] +
 //! [`vt::VtBackend`] pair until the migration to [`Vt`] completes.
 
 use crate::schema::{

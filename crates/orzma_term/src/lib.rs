@@ -1,5 +1,5 @@
 //! PTY-backed terminal core: spawns the login shell under a PTY and
-//! drives an [`OrzmaVt`] behind a frame coalescer.
+//! drives an [`OldOrzmaVt`] behind a frame coalescer.
 
 use crate::{
     coalescer::Coalescer,
@@ -51,7 +51,7 @@ pub struct InterpretOutput {
 
 /// A live terminal: the VT emulation plus the PTY it is wired to.
 pub struct OrzmaTerm<B: VtBackend> {
-    vt: OrzmaVt<B>,
+    vt: OldOrzmaVt<B>,
     coalescer: Coalescer,
     pty: Pty,
 }
@@ -73,7 +73,7 @@ impl<B: VtBackend> OrzmaTerm<B> {
     pub fn spawn(options: SpawnOptions) -> OrzmaTermResult<Self> {
         let pty = Pty::spawn(&options)?;
         Ok(Self {
-            vt: OrzmaVt::new(options.cols, options.rows),
+            vt: OldOrzmaVt::new(options.cols, options.rows),
             coalescer: Coalescer::default(),
             pty,
         })
@@ -94,7 +94,7 @@ impl<B: VtBackend> OrzmaTerm<B> {
     /// Read-only access to the VT, for host-side observation such as
     /// the display offset, modes, or the selected text.
     #[inline]
-    pub fn vt(&self) -> &OrzmaVt<B> {
+    pub fn vt(&self) -> &OldOrzmaVt<B> {
         &self.vt
     }
 
@@ -107,7 +107,7 @@ impl<B: VtBackend> OrzmaTerm<B> {
     /// [`test_support::CaptureSink`].
     pub fn detached(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> OrzmaTermResult<Self> {
         Ok(Self {
-            vt: OrzmaVt::new(cols, rows),
+            vt: OldOrzmaVt::new(cols, rows),
             coalescer: Coalescer::default(),
             pty: Pty::detached(cols, rows, writer)?,
         })
@@ -161,11 +161,7 @@ impl<B: VtBackend> OrzmaTerm<B> {
     ///
     /// Snaps a scrolled-back viewport to the live tail first
     /// (scroll-on-input policy) so the echo is visible.
-    pub fn send_key(
-        &mut self,
-        key: &TerminalKey,
-        mods: &TerminalModifiers,
-    ) -> OrzmaTermResult {
+    pub fn send_key(&mut self, key: &TerminalKey, mods: &TerminalModifiers) -> OrzmaTermResult {
         let modes = self.vt.modes();
         self.snap_to_live_tail();
         self.pty
@@ -204,7 +200,7 @@ impl<B: VtBackend> OrzmaTerm<B> {
     }
 
     /// Snaps a scrolled-back viewport to the live tail (scroll-on-input
-    /// policy), gated on [`OrzmaVt::is_at_live_tail`] so a no-op call
+    /// policy), gated on [`OldOrzmaVt::is_at_live_tail`] so a no-op call
     /// stages no damage.
     fn snap_to_live_tail(&mut self) {
         if !self.vt.is_at_live_tail() {
@@ -308,7 +304,7 @@ impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
     /// arm an emit for a frame that renders identically.
     fn arm_on_selection_change(
         &mut self,
-        op: impl FnOnce(&mut OrzmaVt<B>) -> VtResult<bool>,
+        op: impl FnOnce(&mut OldOrzmaVt<B>) -> VtResult<bool>,
     ) -> VtResult {
         let prev_range = self.vt.selection_range();
         op(&mut self.vt)?;
@@ -335,7 +331,7 @@ mod tests {
 
     fn failing_term() -> OrzmaTerm<AlacrittyVtBackend> {
         OrzmaTerm {
-            vt: OrzmaVt::new(80, 24),
+            vt: OldOrzmaVt::new(80, 24),
             coalescer: Coalescer::default(),
             pty: Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default())),
         }
@@ -663,7 +659,7 @@ mod tests {
         let (chunk_tx, chunk_rx) = unbounded();
         let (exit_tx, exit_rx) = unbounded();
         let term = OrzmaTerm {
-            vt: OrzmaVt::new(80, 24),
+            vt: OldOrzmaVt::new(80, 24),
             coalescer: Coalescer::default(),
             pty: Pty::with_master_and_channels(
                 Box::new(FailingMaster),

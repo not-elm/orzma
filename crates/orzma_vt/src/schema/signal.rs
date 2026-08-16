@@ -4,7 +4,7 @@ use crate::schema::{ApcWebviewVerb, InlineAnchor};
 use std::path::PathBuf;
 
 /// Out-of-band signal parsed from the VT byte stream, drained by the
-/// owner via `OrzmaVt::drain_signals`.
+/// owner via `OldOrzmaVt::drain_signals`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VtSignal {
     Bell,

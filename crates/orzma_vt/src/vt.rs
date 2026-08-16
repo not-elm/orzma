@@ -1,4 +1,4 @@
-//! Engine layer: the [`OrzmaVt`] contract and its backends.
+//! Engine layer: the [`OldOrzmaVt`] contract and its backends.
 
 use crate::schema::{
     CellSide, Cursor, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, FrameSnapshot,
@@ -13,7 +13,7 @@ mod apc;
 #[cfg(feature = "alacritty")]
 pub use alacritty::AlacrittyVtBackend;
 
-pub struct OrzmaVt<B: VtBackend> {
+pub struct OldOrzmaVt<B: VtBackend> {
     backend: B,
     /// Damage staged for the next frame emit.
     ///
@@ -26,7 +26,7 @@ pub struct OrzmaVt<B: VtBackend> {
     next_frame_seq: u32,
 }
 
-impl<B: VtBackend> OrzmaVt<B> {
+impl<B: VtBackend> OldOrzmaVt<B> {
     /// Constructs the new vt.
     pub fn new(cols: u16, rows: u16) -> Self {
         Self {
@@ -121,7 +121,7 @@ impl<B: VtBackend> OrzmaVt<B> {
     }
 }
 
-impl<B: VtBackend + VtSelection> OrzmaVt<B> {
+impl<B: VtBackend + VtSelection> OldOrzmaVt<B> {
     /// Builds the frame for the staged damage, consuming it.
     ///
     /// Returns `None` when nothing is staged. Staged
@@ -293,7 +293,7 @@ pub trait VtBackend: Sized {
 /// Selection capability of a VT backend.
 ///
 /// Split from [`VtBackend`] so a backend without selection support
-/// carries no selection API, and so [`OrzmaVt`] exposes its selection
+/// carries no selection API, and so [`OldOrzmaVt`] exposes its selection
 /// surface only for backends that implement this trait.
 ///
 /// Every mutator returns the repaint it produced: the backing

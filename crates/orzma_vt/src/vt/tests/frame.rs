@@ -4,14 +4,14 @@
 use super::*;
 use crate::schema::{FrameDelta, FrameSnapshot, Rgb, ViewportLine};
 
-fn snapshot(vt: &mut OrzmaVt<AlacrittyVtBackend>) -> FrameSnapshot {
+fn snapshot(vt: &mut OldOrzmaVt<AlacrittyVtBackend>) -> FrameSnapshot {
     match vt.frame() {
         Some(Frame::Snapshot(snapshot)) => snapshot,
         other => panic!("expected a snapshot, got {other:?}"),
     }
 }
 
-fn delta(vt: &mut OrzmaVt<AlacrittyVtBackend>) -> FrameDelta {
+fn delta(vt: &mut OldOrzmaVt<AlacrittyVtBackend>) -> FrameDelta {
     match vt.frame() {
         Some(Frame::Delta(delta)) => delta,
         other => panic!("expected a delta, got {other:?}"),
@@ -29,7 +29,7 @@ fn dirty_lines(delta: &FrameDelta) -> Vec<ViewportLine> {
 /// shell has just printed its prompt.
 #[test]
 fn a_fresh_vt_emits_a_bootstrap_snapshot_of_the_full_viewport() {
-    let mut vt = OrzmaVt::<AlacrittyVtBackend>::new(80, 24);
+    let mut vt = OldOrzmaVt::<AlacrittyVtBackend>::new(80, 24);
     vt.interpret(b"abc");
     let snap = snapshot(&mut vt);
     assert_eq!(snap.seq, 0);
@@ -54,7 +54,7 @@ fn a_fresh_vt_emits_a_bootstrap_snapshot_of_the_full_viewport() {
 /// between; the second pass has nothing to hand the renderer.
 #[test]
 fn frame_consumes_the_staged_damage() {
-    let mut vt = OrzmaVt::<AlacrittyVtBackend>::new(80, 24);
+    let mut vt = OldOrzmaVt::<AlacrittyVtBackend>::new(80, 24);
     assert!(vt.frame().is_some());
     assert!(vt.frame().is_none());
 }
@@ -140,7 +140,7 @@ fn a_delta_reports_the_current_overlay_state() {
 /// not open gaps in the sequence the renderer tracks.
 #[test]
 fn seq_advances_only_when_a_frame_is_emitted() {
-    let mut vt = OrzmaVt::<AlacrittyVtBackend>::new(80, 24);
+    let mut vt = OldOrzmaVt::<AlacrittyVtBackend>::new(80, 24);
     assert_eq!(snapshot(&mut vt).seq, 0);
     assert!(vt.frame().is_none());
     vt.interpret(b"a");

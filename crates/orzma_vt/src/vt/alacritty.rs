@@ -1,4 +1,4 @@
-//! Alacritty-backed [`OrzmaVt`] implementation.
+//! Alacritty-backed [`OldOrzmaVt`] implementation.
 
 use crate::{
     schema::{
