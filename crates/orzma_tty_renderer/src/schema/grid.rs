@@ -1,6 +1,6 @@
 use crate::schema::{
-    CURSOR_VISIBLE_BIT, Cursor, CursorShape, GridCell, HyperlinkId, HyperlinkUri, Palette,
-    ProjectedPlacement, SelectionRange, ViCursor,
+    CURSOR_VISIBLE_BIT, Cursor, CursorShape, DisplayOffset, GridCell, HyperlinkId, HyperlinkUri,
+    Palette, ProjectedPlacement, SelectionRange, ViCursor,
 };
 use bevy::prelude::*;
 
@@ -81,15 +81,21 @@ impl TerminalGrid {
         None
     }
 
+    /// Returns the viewport cursor cell and the packed style the
+    /// shader decodes, preferring the vi cursor over the live cursor.
+    ///
+    /// A cursor whose grid point projects outside the viewport (the
+    /// user has scrolled it away) paints nothing: both the position
+    /// and the packed style stay zero.
     pub fn current_cursor_pos_and_style(&self) -> (UVec2, u32) {
+        let offset = DisplayOffset(self.display_offset);
         let mut cursor_pos = UVec2::ZERO;
         let mut cursor_style = 0;
         if let Some(vc) = self.vi_cursor {
-            if !vc.in_scrollback && vc.row >= 0 {
-                cursor_pos = UVec2::new(u32::from(vc.column), vc.row as u32);
+            if let Some(line) = vc.point.line.to_viewport(offset, self.rows) {
+                cursor_pos = UVec2::new(u32::from(vc.point.column.0), u32::from(line.0));
                 cursor_style = Cursor {
-                    x: vc.column,
-                    y: vc.row.max(0) as u16,
+                    point: vc.point,
                     shape: CursorShape::Block,
                     blinking: false,
                     visible: true,
@@ -97,8 +103,10 @@ impl TerminalGrid {
                 .pack_cursor_style();
             }
         } else if let Some(c) = self.cursor.as_ref() {
-            cursor_pos = UVec2::new(u32::from(c.x), u32::from(c.y));
-            cursor_style = c.pack_cursor_style();
+            if let Some(line) = c.point.line.to_viewport(offset, self.rows) {
+                cursor_pos = UVec2::new(u32::from(c.point.column.0), u32::from(line.0));
+                cursor_style = c.pack_cursor_style();
+            }
         }
         if self.suppress_cursor {
             cursor_style &= !CURSOR_VISIBLE_BIT;
@@ -110,7 +118,7 @@ impl TerminalGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{Color, Cursor, CursorShape, GridPoint, Hyperlink};
+    use crate::schema::{Color, Cursor, CursorShape, GridColumn, GridLine, GridPoint, Hyperlink};
 
     fn cell_with_link(text: &str, width: u8, link: Option<(u32, &str)>) -> GridCell {
         GridCell {
@@ -129,17 +137,25 @@ mod tests {
 
     fn visible_block_cursor() -> Cursor {
         Cursor {
-            x: 3,
-            y: 5,
+            point: GridPoint {
+                line: GridLine(5),
+                column: GridColumn(3),
+            },
             shape: CursorShape::Block,
             blinking: false,
             visible: true,
         }
     }
 
+    /// Asserts that a visible cursor reports its viewport cell and a
+    /// packed style with the visible bit set.
+    ///
+    /// Case: the shell sits at an ordinary prompt with the caret
+    /// shown.
     #[test]
     fn current_cursor_pos_and_style_returns_packed_style_when_not_suppressed() {
         let grid = TerminalGrid {
+            rows: 24,
             cursor: Some(visible_block_cursor()),
             suppress_cursor: false,
             ..Default::default()
@@ -149,9 +165,15 @@ mod tests {
         assert_eq!(style & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
     }
 
+    /// Asserts that suppression clears the visible bit of the packed
+    /// style.
+    ///
+    /// Case: IME composition temporarily hides the caret without
+    /// touching terminal-controlled cursor state.
     #[test]
     fn current_cursor_pos_and_style_clears_visible_bit_when_suppressed() {
         let grid = TerminalGrid {
+            rows: 24,
             cursor: Some(visible_block_cursor()),
             suppress_cursor: true,
             ..Default::default()
@@ -160,13 +182,20 @@ mod tests {
         assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
     }
 
+    /// Asserts that suppression clears only the visible bit while the
+    /// vi cursor's projected position is still reported.
+    ///
+    /// Case: the user composes IME text while vi mode is active, so the
+    /// app hides the caret without discarding where it sits.
     #[test]
     fn suppress_cursor_does_not_affect_vi_cursor_position() {
         let grid = TerminalGrid {
+            rows: 24,
             vi_cursor: Some(ViCursor {
-                row: 2,
-                column: 7,
-                in_scrollback: false,
+                point: GridPoint {
+                    line: GridLine(2),
+                    column: GridColumn(7),
+                },
             }),
             suppress_cursor: true,
             ..Default::default()
@@ -174,6 +203,27 @@ mod tests {
         let (pos, style) = grid.current_cursor_pos_and_style();
         assert_eq!(pos, UVec2::new(7, 2));
         assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
+    }
+
+    /// Asserts that a cursor whose line projects outside the viewport
+    /// paints nothing.
+    ///
+    /// The decided policy is to omit the caret rather than clamp it to
+    /// an edge cell it does not occupy.
+    ///
+    /// Case: the user scrolls back through history while the shell
+    /// keeps its caret on the live prompt line below the viewport.
+    #[test]
+    fn a_scrolled_away_cursor_paints_nothing() {
+        let grid = TerminalGrid {
+            rows: 24,
+            display_offset: 30,
+            cursor: Some(visible_block_cursor()),
+            ..Default::default()
+        };
+        let (pos, style) = grid.current_cursor_pos_and_style();
+        assert_eq!(pos, UVec2::ZERO);
+        assert_eq!(style, 0);
     }
 
     /// Asserts that a lookup outside the populated grid returns `None`.
