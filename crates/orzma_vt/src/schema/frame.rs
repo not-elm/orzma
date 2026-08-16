@@ -1,8 +1,8 @@
 //! Frame vocabulary: what one emit hands to the renderer.
 
 use crate::schema::{
-    Cursor, DisplayOffset, GridSize, Hyperlink, Palette, Row, SelectionRange, ViCursor,
-    ViewportLine, VtModes,
+    Cursor, DisplayOffset, GridSize, Hyperlink, Palette, ProjectedPlacement, Row, SelectionRange,
+    ViCursor, ViewportLine, VtModes,
 };
 
 /// One emitted frame: a full repaint or a differential update.
@@ -31,11 +31,13 @@ pub struct FrameSnapshot {
     pub cursor: Cursor,
     /// Lines scrolled back from the live tail.
     pub display_offset: DisplayOffset,
-    /// Total scrollback history line count at emit time.
-    pub history_size: u32,
-    /// History lines already evicted from scrollback; a webview anchor
-    /// names an absolute line as `history_base + history_size + grid_row`.
-    pub history_base: u64,
+    /// Viewport-projected webview placements at emit time — the
+    /// complete list, not a diff. A placement present here is drawn at
+    /// its position; one absent is not visible this frame, which is
+    /// not an unmount. Every placement-state change stages an
+    /// emission, so an otherwise-empty delta still carries the moved
+    /// list.
+    pub placements: Vec<ProjectedPlacement>,
     /// Absolute terminal-mode state at emit time. Snapshot-only: a
     /// mode flip consumers gate on stages full damage, so no delta
     /// outlives its mode set.
@@ -68,11 +70,13 @@ pub struct FrameDelta {
     pub cursor: Cursor,
     /// Lines scrolled back from the live tail.
     pub display_offset: DisplayOffset,
-    /// Total scrollback history line count.
-    pub history_size: u32,
-    /// History lines already evicted from scrollback; anchors an
-    /// absolute line as `history_base + history_size + grid_row`.
-    pub history_base: u64,
+    /// Viewport-projected webview placements at emit time — the
+    /// complete list, not a diff. A placement present here is drawn at
+    /// its position; one absent is not visible this frame, which is
+    /// not an unmount. Every placement-state change stages an
+    /// emission, so an otherwise-empty delta still carries the moved
+    /// list.
+    pub placements: Vec<ProjectedPlacement>,
     /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.

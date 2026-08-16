@@ -58,7 +58,7 @@ impl GridLine {
 impl From<alacritty_terminal::index::Line> for GridLine {
     #[inline]
     fn from(value: alacritty_terminal::index::Line) -> Self {
-        GridLine(value.to_be())
+        GridLine(value.0)
     }
 }
 

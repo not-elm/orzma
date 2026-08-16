@@ -37,26 +37,20 @@ pub trait Vt {
     /// - [`VtUpdate::signals`] preserves byte-stream order.
     /// - [`VtUpdate::replies`] must be written back to the PTY.
     ///
-    /// # Webview anchors
+    /// # Webview placements
     ///
     /// An APC webview `mount` becomes a [`VtSignal::ApcWebview`] whose
-    /// anchor the VT stamps itself:
-    ///
-    /// - The cursor is sampled at the APC's byte position, including
-    ///   bytes buffered by `CSI ?2026`.
-    /// - Primary screen: [`crate::schema::AnchorMode::Scrollback`] with
-    ///   `line = history_base + history_size + cursor_row`; alternate
-    ///   screen: [`crate::schema::AnchorMode::FixedScreen`].
-    /// - `frame_seq` is the next emitted seq, and a mount always stages
-    ///   damage, so that frame is guaranteed to follow.
-    /// - Only `Mount` carries `anchor: Some(..)`.
-    /// - `history_base` grows monotonically: a scrollback clear folds
-    ///   the shrink into it and synthesizes an unmount-all BEFORE
-    ///   same-chunk anchors; a resize reflow re-baselines without
-    ///   folding.
-    /// - At the scrollback cap the VT synthesizes one unmount-all and
-    ///   swallows primary-screen mounts; alternate-screen mounts are
-    ///   exempt.
+    /// [`crate::schema::PlacementId`] the VT mints itself; `placement:
+    /// None` is a policy rejection. The VT owns the placement table
+    /// and projects every placement into
+    /// [`crate::schema::FrameSnapshot::placements`] /
+    /// [`crate::schema::FrameDelta::placements`] on each emit; a
+    /// mount, unmount, eviction, or projected-geometry change always
+    /// stages damage, so the frame carrying the new list is guaranteed
+    /// to follow. Evictions the VT performs on its own authority
+    /// (history trim, alternate-screen teardown) surface as
+    /// [`VtSignal::WebviewEvicted`]. Ids are never reused within a
+    /// session.
     fn interpret(&mut self, chunk: &[u8]) -> VtUpdate;
 
     /// Builds the frame for the staged damage, consuming it; `None`
@@ -71,7 +65,7 @@ pub trait Vt {
     ///   `None`; consumers compare it wrap-aware (distance < `2^31`).
     /// - The first emitted frame, and every alternate-screen flip, is a
     ///   [`Frame::Snapshot`].
-    /// - A frame's history counters and display offset describe the
+    /// - A frame's placements and display offset describe the
     ///   same instant as its rows.
     fn frame(&mut self) -> Option<Frame>;
 
@@ -122,4 +116,40 @@ pub struct VtUpdate {
     pub signals: Vec<VtSignal>,
     /// Reply bytes (DSR, DA, …) the owner must write back to the PTY.
     pub replies: Vec<u8>,
+}
+
+pub struct OrzmaVt {}
+
+impl Vt for OrzmaVt {
+    fn interpret(&mut self, chunk: &[u8]) -> VtUpdate {
+        todo!()
+    }
+
+    fn frame(&mut self) -> Option<Frame> {
+        todo!()
+    }
+
+    fn resize(&mut self, size: GridSize) -> bool {
+        todo!()
+    }
+
+    fn scroll(&mut self, scroll: Scroll) -> bool {
+        todo!()
+    }
+
+    fn grid_size(&self) -> GridSize {
+        todo!()
+    }
+
+    fn display_offset(&self) -> DisplayOffset {
+        todo!()
+    }
+
+    fn modes(&self) -> VtModes {
+        todo!()
+    }
+
+    fn cell_at(&self, point: GridPoint) -> Option<GridCell> {
+        todo!()
+    }
 }

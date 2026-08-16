@@ -1,7 +1,7 @@
 //! Outbound `Term*Signal` `EntityEvent` types for terminal entities,
 //! drained from the VT (`TermBellSignal`, `TermTitleChangedSignal`,
 //! `TermTitleResetSignal`, `TermClipboardStoreSignal`, `TermCwdChangedSignal`,
-//! `TermApcWebviewSignal`, `TermModeChangedSignal`, `TermChildExitSignal`,
+//! `TermApcWebviewSignal`, `TermWebviewEvictedSignal`, `TermModeChangedSignal`, `TermChildExitSignal`,
 //! `TermFrameSnapshotSignal`, `TermFrameDeltaSignal`).
 //! Inbound requests fired by the host UI live in `requests.rs`.
 
@@ -72,16 +72,24 @@ pub struct TermCwdChangedSignal {
     pub path: PathBuf,
 }
 
-/// An OSC-driven webview mount/unmount request from a terminal surface's PTY.
+/// Fired for an APC webview mount/unmount request from the PTY.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct TermApcWebviewSignal {
     #[event_target]
     pub terminal: Entity,
-    /// The inline mount/unmount verb parsed from the OSC 5379 payload.
     pub verb: ApcWebviewVerb,
-    /// Anchor metadata for `Mount` (absolute line + column + frame seq);
-    /// `None` for every other verb.
-    pub anchor: Option<InlineAnchor>,
+    /// The VT-minted placement id; `Some` only for an accepted `Mount`.
+    pub placement: Option<PlacementId>,
+}
+
+/// Fired when the VT evicts placements on its own authority (history
+/// trim, alternate-screen teardown); consumers despawn the matching
+/// webviews by id and ignore unknown ids.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct TermWebviewEvictedSignal {
+    #[event_target]
+    pub terminal: Entity,
+    pub placements: Vec<PlacementId>,
 }
 
 /// Fired when the terminal emits a full-repaint snapshot frame.
@@ -144,10 +152,14 @@ fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signal: VtSignal
             terminal,
             path: path_buf,
         }),
-        VtSignal::ApcWebview { verb, anchor } => commands.trigger(TermApcWebviewSignal {
+        VtSignal::ApcWebview { verb, placement } => commands.trigger(TermApcWebviewSignal {
             terminal,
             verb,
-            anchor,
+            placement,
+        }),
+        VtSignal::WebviewEvicted { placements } => commands.trigger(TermWebviewEvictedSignal {
+            terminal,
+            placements,
         }),
         VtSignal::ModeChange { added, removed } => commands.trigger(TermModeChangedSignal {
             entity: terminal,

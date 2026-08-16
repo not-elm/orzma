@@ -1,6 +1,6 @@
 //! Out-of-band signals the VT surfaces from the byte stream.
 
-use crate::schema::{ApcWebviewVerb, InlineAnchor};
+use crate::schema::{ApcWebviewVerb, PlacementId};
 use std::path::PathBuf;
 
 /// Out-of-band signal parsed from the VT byte stream, drained by the
@@ -16,11 +16,18 @@ pub enum VtSignal {
     /// A new current working directory reported via OSC 7.
     CurrentDir(PathBuf),
     /// An APC-driven webview mount/unmount request from the PTY.
-    /// `anchor` is `Some` only for `Mount`, stamped by the `Vt`
-    /// implementor.
+    /// `placement` is the VT-minted id, `Some` only for a `Mount` the
+    /// VT accepted and registered; `None` is a policy rejection the
+    /// consumer drops.
     ApcWebview {
         verb: ApcWebviewVerb,
-        anchor: Option<InlineAnchor>,
+        placement: Option<PlacementId>,
+    },
+    /// Placements the VT evicted on its own authority (history trim,
+    /// alternate-screen teardown). Consumers despawn them by id;
+    /// unknown ids are ignored.
+    WebviewEvicted {
+        placements: Vec<PlacementId>,
     },
     /// Tracked `TermMode` flags that transitioned since the previous
     /// signal drain, as mode names (e.g. "alt-screen").
