@@ -112,9 +112,8 @@ impl Plugin for OrzmaTermSignalPlugin {
 
 fn pump_terminals(mut commands: Commands, mut terms: Query<(Entity, &mut OrzmaTermHandle)>) {
     for (terminal, mut term) in terms.iter_mut() {
-        let pumped = term.pump();
-        // TODO: emit `pumped.frame` as a snapshot / delta signal.
-        for signal in pumped.signals {
+        let o = term.pump();
+        for signal in o.signals {
             match signal {
                 TermSignal::ChildExit { code } => commands.trigger(TermChildExitSignal {
                     entity: terminal,
@@ -122,6 +121,13 @@ fn pump_terminals(mut commands: Commands, mut terms: Query<(Entity, &mut OrzmaTe
                 }),
                 TermSignal::Vt(signal) => trigger_vt_signal(&mut commands, terminal, signal),
             }
+        }
+        match o.frame {
+            Some(Frame::Snapshot(frame)) => {
+                commands.trigger(TermFrameSnapshotSignal { terminal, frame })
+            }
+            Some(Frame::Delta(delta)) => commands.trigger(TermFrameDeltaSignal { terminal, delta }),
+            None => {}
         }
     }
 }
