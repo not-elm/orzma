@@ -30,7 +30,7 @@ fn apply_request_term_key_input(
     mut terms: Query<&mut OrzmaTermHandle>,
 ) {
     if let Ok(mut tty) = terms.get_mut(e.terminal)
-        && let Err(err) = tty.write_key_input(&e.key, &e.modifiers)
+        && let Err(err) = tty.send_key(&e.key, &e.modifiers)
     {
         error!(%err);
     }

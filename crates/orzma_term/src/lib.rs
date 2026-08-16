@@ -161,7 +161,7 @@ impl<B: VtBackend> OrzmaTerm<B> {
     ///
     /// Snaps a scrolled-back viewport to the live tail first
     /// (scroll-on-input policy) so the echo is visible.
-    pub fn write_key_input(
+    pub fn send_key(
         &mut self,
         key: &TerminalKey,
         mods: &TerminalModifiers,
@@ -180,7 +180,7 @@ impl<B: VtBackend> OrzmaTerm<B> {
     /// viewport the user is looking at, so yanking the view to the live
     /// tail on every report would make the screen jump under the
     /// pointer.
-    pub fn write_mouse_input(&mut self, report: MouseReport) -> OrzmaTermResult {
+    pub fn send_mouse(&mut self, report: MouseReport) -> OrzmaTermResult {
         let sequence = report.encode(self.vt.modes().mouse_encoding);
         self.pty.write_all(&sequence)
     }
@@ -193,7 +193,7 @@ impl<B: VtBackend> OrzmaTerm<B> {
     /// (scroll-on-input policy), and the whole frame goes out in a
     /// single write — a partially-written frame would leave the
     /// receiving app inside an unterminated paste.
-    pub fn write_paste(&mut self, text: &str) -> OrzmaTermResult {
+    pub fn send_paste(&mut self, text: &str) -> OrzmaTermResult {
         if text.is_empty() {
             return Ok(());
         }
@@ -614,7 +614,7 @@ mod tests {
             !term.coalescer.is_armed(),
             "precondition: nothing armed yet"
         );
-        term.write_paste("x").expect("write_paste");
+        term.send_paste("x").expect("send_paste");
         assert_eq!(
             term.vt.display_offset(),
             DisplayOffset(0),
@@ -635,11 +635,11 @@ mod tests {
     #[test]
     fn detached_routes_writes_to_the_injected_sink() {
         let (mut term, sink) = detached_term();
-        term.write_paste("hi").expect("write_paste");
+        term.send_paste("hi").expect("send_paste");
         assert_eq!(sink.contents(), b"hi");
     }
 
-    /// Asserts that `write_paste("")` writes nothing at all.
+    /// Asserts that `send_paste("")` writes nothing at all.
     ///
     /// Case: the user pastes with an empty clipboard. The decided
     /// policy is to write nothing at all rather than an empty
@@ -648,7 +648,7 @@ mod tests {
     #[test]
     fn empty_paste_writes_nothing_to_the_pty() {
         let (mut term, sink) = detached_term();
-        term.write_paste("").expect("write_paste");
+        term.send_paste("").expect("send_paste");
         assert_eq!(sink.contents(), b"");
     }
 

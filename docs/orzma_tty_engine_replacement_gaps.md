@@ -135,7 +135,7 @@
 
 - **シグナル語彙は旧イベントと 1:1** — Bell / Title / ResetTitle / Clipboard / Cwd / ApcWebview / ModeChange / ChildExit。旧エンジンで上層未購読だった Bell / CurrentDir / ClipboardStore は元々ホスト側機能が未実装であり、差し替え障害ではない。
 - **キーエンコード** — 同じ 14 キー語彙、Ctrl 文字 → C0、meta-sends-escape、DECCKM。新実装は Home/End にも DECCKM を適用(旧は固定 `CSI H/F`)する xterm 準拠方向の改善。F1-F12 / Insert / CSI-u / modifyOtherKeys 非対応は旧と同等。
-- **ペーストは新スタックが上位互換** — 旧エンジンにはペースト API がなくホストが括っていたが、新 `write_paste` は括弧付け + 埋め込みマーカー除去(ペーストインジェクション対策)+ 改行正規化 + scroll-on-input を内蔵し、テストで固定済み。
+- **ペーストは新スタックが上位互換** — 旧エンジンにはペースト API がなくホストが括っていたが、新 `send_paste` は括弧付け + 埋め込みマーカー除去(ペーストインジェクション対策)+ 改行正規化 + scroll-on-input を内蔵し、テストで固定済み。
 - **マウスプロトコルエンコーダ** — SGR / X10、release センチネル、223 クランプ、alt/meta の単一 meta ビット合流、ホイールボタン 64..=67。UTF-8(1005)を X10 へフォールバックする決定も一致。
 - **Coalescer** — IDLE 3ms / MAX_CAP 12ms / MANY_ROWS_INSTANT_CAP 4、`Full` を即時フラッシュ対象から除外する不変条件まで忠実移植(未結線は §3.1)。
 - **リサイズ** — ゼロ軸 / 上限(4096)ガードと PTY-first の失敗原子性は新規追加の改善。
@@ -163,7 +163,7 @@
 
 - [x] `OrzmaTerm::pump` で `interpret` の `DamageVerdict` を受けて `Coalescer::arm_or_extend` を呼び、PTY 出力からフレームが emit されるようにする(§3.1)
 - [x] エコー即時化と bootstrap の状態を `Coalescer` に内包する(`last_input_at` タイムスタンプ + 150ms 期限、`bootstrap` フラグ、`observe_chunk` / `note_user_input` / `needs_bootstrap` / `settle_emit`)(§3.1。Codex レビュー反映済み: 判定は arm 前の状態で行い、消費は emit 成立時のみ)
-- [ ] `write_key_input` / `write_mouse_input` / `write_paste` の PTY 書き込み**成功後**に `Coalescer::note_user_input` を呼ぶ(§3.1。orzma_vt `frame()` 完成後の結線 PR で)
+- [ ] `send_key` / `send_mouse` / `send_paste` の PTY 書き込み**成功後**に `Coalescer::note_user_input` を呼ぶ(§3.1。orzma_vt `frame()` 完成後の結線 PR で)
 - [ ] `feed_chunk` の `arm_or_extend` 直呼びを `observe_chunk` に置き換え、`FlushDecision::Now` で pump が同一呼び出し内に emit するようにする(§3.1。同上)
 - [ ] `pump` の emit ゲートを `needs_bootstrap() || is_due(now)` にして初回スナップショットを保証し、emit 成立時は `disarm` でなく `settle_emit` を呼ぶ(§3.1。同上。既存 pump テストのフィクスチャに bootstrap の settle が必要)
 - [ ] ChildExit を返す `pump` は deadline を待たず staged frame を強制 emit する(§3.2 派生。ホストが ChildExit で即 teardown しても最終出力が描画されるように)

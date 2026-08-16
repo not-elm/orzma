@@ -229,7 +229,7 @@ mod tests {
     ///
     /// Case: the API's totality. The host layer never fires an empty
     /// paste (its clipboard read filters empty text) and
-    /// `OrzmaTerm::write_paste` early-returns on it, so this input is
+    /// `OrzmaTerm::send_paste` early-returns on it, so this input is
     /// reachable only by calling the encoder directly — but a caller
     /// that does must still get a frame, not a bare marker fragment.
     #[test]

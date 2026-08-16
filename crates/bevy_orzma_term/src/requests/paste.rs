@@ -29,7 +29,7 @@ impl Plugin for PastePlugin {
 
 fn apply_paste(e: On<RequestTermPaste>, mut terms: Query<&mut OrzmaTermHandle>) {
     if let Ok(mut tty) = terms.get_mut(e.terminal)
-        && let Err(err) = tty.write_paste(&e.text)
+        && let Err(err) = tty.send_paste(&e.text)
     {
         error!(%err);
     }
@@ -155,7 +155,7 @@ mod tests {
     /// Case: ⌘V with nothing (or an empty string) on the clipboard. In
     /// bracketed-paste mode a naive encode would still emit the
     /// `ESC[200~ESC[201~` frame and wake the receiving app for a
-    /// zero-byte paste, so `write_paste` short-circuits before the
+    /// zero-byte paste, so `send_paste` short-circuits before the
     /// encoder; this pins that no-op as observed through the observer.
     #[test]
     fn empty_paste_writes_nothing() {

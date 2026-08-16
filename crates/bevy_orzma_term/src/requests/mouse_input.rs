@@ -30,7 +30,7 @@ fn apply_request_term_mouse_input(
     mut terms: Query<&mut OrzmaTermHandle>,
 ) {
     if let Ok(mut tty) = terms.get_mut(e.terminal)
-        && let Err(err) = tty.write_mouse_input(e.mouse)
+        && let Err(err) = tty.send_mouse(e.mouse)
     {
         error!(%err);
     }
