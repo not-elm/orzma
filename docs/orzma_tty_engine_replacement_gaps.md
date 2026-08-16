@@ -161,16 +161,18 @@
 
 ### Phase 1 — pump の駆動系(§3.1〜3.3)
 
-- [ ] `OrzmaTerm::pump` で `interpret` の `DamageVerdict` を受けて `Coalescer::arm_or_extend` を呼び、PTY 出力からフレームが emit されるようにする(§3.1)
-- [ ] `write_key_input` / `write_mouse_input` / `write_paste` で `pending_user_input` を書き込み**前**に立てる仕組みを追加する(§3.1)
-- [ ] `pump` から `Coalescer::should_flush_immediately` を呼び、bootstrap 即時 emit と入力エコーの低遅延パスを結線する(§3.1)
-- [ ] 初回スナップショット保証(旧 `needs_bootstrap_emit` → `force_bootstrap_damage` 相当)を用意する(§3.1)
+- [x] `OrzmaTerm::pump` で `interpret` の `DamageVerdict` を受けて `Coalescer::arm_or_extend` を呼び、PTY 出力からフレームが emit されるようにする(§3.1)
+- [x] エコー即時化と bootstrap の状態を `Coalescer` に内包する(`last_input_at` タイムスタンプ + 150ms 期限、`bootstrap` フラグ、`observe_chunk` / `note_user_input` / `needs_bootstrap` / `settle_emit`)(§3.1。Codex レビュー反映済み: 判定は arm 前の状態で行い、消費は emit 成立時のみ)
+- [ ] `write_key_input` / `write_mouse_input` / `write_paste` の PTY 書き込み**成功後**に `Coalescer::note_user_input` を呼ぶ(§3.1。orzma_vt `frame()` 完成後の結線 PR で)
+- [ ] `feed_chunk` の `arm_or_extend` 直呼びを `observe_chunk` に置き換え、`FlushDecision::Now` で pump が同一呼び出し内に emit するようにする(§3.1。同上)
+- [ ] `pump` の emit ゲートを `needs_bootstrap() || is_due(now)` にして初回スナップショットを保証し、emit 成立時は `disarm` でなく `settle_emit` を呼ぶ(§3.1。同上。既存 pump テストのフィクスチャに bootstrap の settle が必要)
+- [ ] ChildExit を返す `pump` は deadline を待たず staged frame を強制 emit する(§3.2 派生。ホストが ChildExit で即 teardown しても最終出力が描画されるように)
 - [x] `Pty` に exit 読み取り口を追加し、`pump` が `TermSignal::ChildExit` を一度だけ emit するようにする(§3.2)
 - [ ] `pump` で `OrzmaVt::drain_replies_into` を呼び、DSR/DA 応答バイトを 1 回の `write_all` で PTY へ書き戻す(§3.3)
 
 ### Phase 2 — アクセサとテスト復旧(§3.7、§7)
 
-- [ ] `OrzmaTerm` に `pub fn vt_mut(&mut self) -> &mut OrzmaVt<B>` を追加し、`--tests` のコンパイル(E0599 ×9)を直す(§7)
+- [x] `OrzmaTerm` に `pub fn vt_mut(&mut self) -> &mut OrzmaVt<B>` を追加し、`--tests` のコンパイル(E0599 ×9)を直す(§7)
 - [ ] `OrzmaTerm` に `modes()` を再公開する(マウスルーティング・focus 報告ゲート用)(§3.7)
 - [ ] `OrzmaTerm` に `selected_text()` を再公開する(コピー操作用)(§3.7)
 - [ ] `OrzmaTerm` に `selection_kind()` を再公開する(vi の v/V トグル判定用)(§3.7)

@@ -212,6 +212,13 @@ impl<B: VtBackend> OrzmaTerm<B> {
         }
     }
 
+    /// Drains every queued PTY chunk into the VT.
+    fn drain_chunks(&mut self) {
+        while let Some(chunk) = self.pty.try_read_chunk() {
+            self.feed_chunk(&chunk);
+        }
+    }
+
     /// Interprets one PTY chunk and arms the coalescer when it staged
     /// damage.
     fn feed_chunk(&mut self, chunk: &[u8]) {
@@ -219,13 +226,6 @@ impl<B: VtBackend> OrzmaTerm<B> {
         // Coalescer::should_flush_immediately.
         if self.vt.interpret(chunk).is_some() {
             self.coalescer.arm_or_extend(Instant::now());
-        }
-    }
-
-    /// Drains every queued PTY chunk into the VT.
-    fn drain_chunks(&mut self) {
-        while let Some(chunk) = self.pty.try_read_chunk() {
-            self.feed_chunk(&chunk);
         }
     }
 }
