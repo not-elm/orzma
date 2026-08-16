@@ -2,7 +2,7 @@
 
 use crate::schema::{
     Cursor, DisplayOffset, GridSize, Hyperlink, Palette, Row, SelectionRange, ViCursor,
-    ViewportLine,
+    ViewportLine, VtModes,
 };
 
 /// One emitted frame: a full repaint or a differential update.
@@ -31,13 +31,15 @@ pub struct FrameSnapshot {
     pub cursor: Cursor,
     /// Lines scrolled back from the live tail.
     pub display_offset: DisplayOffset,
-    ///TODO:
-    ///下記２つのフィールドはWebviewのアンカー情報を追跡するために使用されているが、別のアプローチを考えたいためいったんコメントアウトする。
-    // /// Total scrollback history line count.
-    // pub history_size: u32,
-    // /// History lines already evicted from scrollback; anchors an
-    // /// absolute line as `history_base + history_size + grid_row`.
-    // pub history_base: u64,
+    /// Total scrollback history line count at emit time.
+    pub history_size: u32,
+    /// History lines already evicted from scrollback; a webview anchor
+    /// names an absolute line as `history_base + history_size + grid_row`.
+    pub history_base: u64,
+    /// Absolute terminal-mode state at emit time. Snapshot-only: a
+    /// mode flip consumers gate on stages full damage, so no delta
+    /// outlives its mode set.
+    pub modes: VtModes,
     /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.

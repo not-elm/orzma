@@ -4,7 +4,8 @@
 //! Every module here holds declarations plus their own inherent /
 //! trait / `From` impls and associated-function constructors. Nothing
 //! here carries state across calls, owns I/O, or mediates several
-//! vocabulary types at once — that belongs to [`crate::vt`].
+//! vocabulary types at once — that belongs to implementors of
+//! [`crate::Vt`] (and the superseded [`crate::vt`] layer).
 //!
 //! Submodules are private and re-exported flat, so callers inside the
 //! crate write `crate::schema::Color`, never `crate::schema::color::Color`.

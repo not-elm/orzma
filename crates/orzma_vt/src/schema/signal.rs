@@ -15,8 +15,9 @@ pub enum VtSignal {
     },
     /// A new current working directory reported via OSC 7.
     CurrentDir(PathBuf),
-    /// An OSC-driven webview mount/unmount request from the PTY.
-    /// `anchor` is `Some` only for `Mount` (stamped in `handle.rs`).
+    /// An APC-driven webview mount/unmount request from the PTY.
+    /// `anchor` is `Some` only for `Mount`, stamped by the `Vt`
+    /// implementor.
     ApcWebview {
         verb: ApcWebviewVerb,
         anchor: Option<InlineAnchor>,
