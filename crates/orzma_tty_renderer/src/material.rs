@@ -5,7 +5,8 @@ use crate::{
     },
     material::state::TerminalMaterialState,
     schema::{
-        GridCell, GridLine, HyperlinkHoverState, SelectionGeometry, SelectionRange, TerminalGrid,
+        Color as CellColor, GridCell, GridLine, HyperlinkHoverState, Palette, Rgb,
+        SelectionGeometry, SelectionRange, TerminalGrid,
     },
 };
 use bevy::{
@@ -624,6 +625,28 @@ fn padding_color(default_bg: [u8; 3], fallback: [u8; 3]) -> Vec4 {
     Vec4::new(c.red, c.green, c.blue, 1.0)
 }
 
+/// Packs a resolved foreground color for the GPU cell buffer.
+fn pack_cell_fg(palette: &Palette, color: CellColor) -> u32 {
+    pack_linear(palette.resolve(color))
+}
+
+/// Packs a resolved background color for the GPU cell buffer.
+fn pack_cell_bg(palette: &Palette, color: CellColor) -> u32 {
+    // NOTE: DefaultBackground must stay distinguishable from an equal
+    // explicit Rgb (the schema/color.rs invariant): this branch is
+    // where a future webview-transparency flag attaches. Today both
+    // arms pack the same numeric background.
+    match color {
+        CellColor::DefaultBackground => pack_linear(palette.background),
+        other => pack_linear(palette.resolve(other)),
+    }
+}
+
+/// sRGB byte triple → the linear u32 packing the shader decodes.
+fn pack_linear(rgb: Rgb) -> u32 {
+    Color::srgb_u8(rgb.r, rgb.g, rgb.b).to_linear().as_u32()
+}
+
 fn update_terminal_material(
     mut atlas: ResMut<GlyphAtlas>,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
@@ -762,7 +785,8 @@ fn update_terminal_material(
             state.initialized = true;
         }
 
-        let bg_padding_color = padding_color(grid.default_bg, fallback.0);
+        let bg = grid.palette.background;
+        let bg_padding_color = padding_color([bg.r, bg.g, bg.b], fallback.0);
 
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
             (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),
@@ -835,8 +859,8 @@ fn rebuild_cells(
             }
             let cell_width = u32::from(cell.width);
             let glyph_index = resolve_glyph_index(cell, state, fonts, atlas, phys_font_size);
-            let fg = cell.fg.to_linear().as_u32();
-            let bg = cell.bg.to_linear().as_u32();
+            let fg = pack_cell_fg(&grid.palette, cell.fg);
+            let bg = pack_cell_bg(&grid.palette, cell.bg);
             let style_flags = u32::from(cell.style) | style_bits_from_combining_marks(&cell.text);
 
             let target = (row_idx as u32 * cols + col) as usize;
@@ -1239,5 +1263,49 @@ mod tests {
             geometry: SelectionGeometry::Linear,
         };
         assert_eq!(selection_uniforms(Some(&sel), 10, 24), (-1, 0, 24, 5, 1));
+    }
+
+    /// Asserts that fg and bg packing resolve symbolic colors through
+    /// the live palette.
+    ///
+    /// Case: OSC 4 recolors an indexed slot and OSC 10 the default
+    /// foreground, and newly painted cells must pick up the overridden
+    /// values rather than the built-in xterm table.
+    #[test]
+    fn cell_packing_resolves_through_the_live_palette() {
+        use crate::schema::{Color as CellColor, Palette, Rgb};
+        let mut palette = Palette {
+            foreground: Rgb {
+                r: 10,
+                g: 20,
+                b: 30,
+            },
+            ..Palette::default()
+        };
+        palette.indexed[1] = Rgb {
+            r: 40,
+            g: 50,
+            b: 60,
+        };
+        assert_eq!(
+            pack_cell_fg(&palette, CellColor::DefaultForeground),
+            pack_linear(Rgb {
+                r: 10,
+                g: 20,
+                b: 30,
+            })
+        );
+        assert_eq!(
+            pack_cell_fg(&palette, CellColor::Indexed(1)),
+            pack_linear(Rgb {
+                r: 40,
+                g: 50,
+                b: 60,
+            })
+        );
+        assert_eq!(
+            pack_cell_bg(&palette, CellColor::DefaultBackground),
+            pack_linear(palette.background)
+        );
     }
 }
