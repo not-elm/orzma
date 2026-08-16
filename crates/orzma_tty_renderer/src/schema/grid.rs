@@ -102,11 +102,11 @@ impl TerminalGrid {
                 }
                 .pack_cursor_style();
             }
-        } else if let Some(c) = self.cursor.as_ref() {
-            if let Some(line) = c.point.line.to_viewport(offset, self.rows) {
-                cursor_pos = UVec2::new(u32::from(c.point.column.0), u32::from(line.0));
-                cursor_style = c.pack_cursor_style();
-            }
+        } else if let Some(c) = self.cursor.as_ref()
+            && let Some(line) = c.point.line.to_viewport(offset, self.rows)
+        {
+            cursor_pos = UVec2::new(u32::from(c.point.column.0), u32::from(line.0));
+            cursor_style = c.pack_cursor_style();
         }
         if self.suppress_cursor {
             cursor_style &= !CURSOR_VISIBLE_BIT;
