@@ -410,7 +410,7 @@ struct TerminalParams {
     sel_start_col: u32,
     sel_end_row: i32,
     sel_end_col: u32,
-    /// 0 = none, 1 = char, 2 = line. See `SelectionKind` in the wire protocol.
+    /// 0 = none, 1 = char, 2 = line. See `SelectionGeometry`.
     sel_kind: u32,
     underline_position_phys: f32,
     underline_thickness_phys: f32,
@@ -1222,7 +1222,7 @@ mod tests {
     /// Asserts that in-viewport selection endpoints map to their
     /// viewport rows and the geometry maps to the shader encoding.
     ///
-    /// Case: the user drags a linear selection across two visible rows
+    /// Case: the user drags a whole-line selection across two visible rows
     /// at the live tail.
     #[test]
     fn selection_uniforms_projects_in_viewport_endpoints() {

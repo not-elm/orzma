@@ -327,8 +327,9 @@ pub(crate) fn mount(
 /// Despawns the inline child(ren) of `terminal_surface` matching the scope:
 /// `(Some(vid), Some(inst))` removes that one instance; `(Some(vid), None)`
 /// removes every instance of `vid`; `(None, _)` removes all inline children
-/// (the VT-synthesized fold/saturation `Unmount { view_id: None }`
-/// frames take this path).
+/// for a client-issued unmount-all. VT-side evictions (history trim,
+/// alternate-screen teardown) arrive separately as `TermWebviewEvictedSignal`
+/// handled by `on_webview_evicted`.
 pub(crate) fn unmount(
     params: &mut WebviewParams,
     terminal_surface: Entity,
