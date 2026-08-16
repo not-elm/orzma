@@ -22,7 +22,7 @@ impl Plugin for ViModePlugin {
     }
 }
 
-fn apply_vi_mode(e: On<RequestTermViMode>) {}
+fn apply_vi_mode(_e: On<RequestTermViMode>) {}
 
 #[cfg(test)]
 mod tests {

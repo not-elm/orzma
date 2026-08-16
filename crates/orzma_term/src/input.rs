@@ -10,7 +10,6 @@ mod wheel;
 
 pub use keyboard::*;
 pub use mouse::*;
-pub use wheel::*;
 
 /// VT-encoded bytes bound for the PTY, produced by a user input event.
 ///

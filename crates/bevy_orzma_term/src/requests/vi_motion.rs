@@ -74,7 +74,7 @@ impl Plugin for ViMotionPlugin {
     }
 }
 
-fn apply_vi_motion(e: On<RequestTermViMotion>) {}
+fn apply_vi_motion(_e: On<RequestTermViMotion>) {}
 
 #[cfg(test)]
 mod tests {

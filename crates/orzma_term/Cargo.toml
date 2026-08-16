@@ -17,3 +17,6 @@ crossbeam-channel = "0.5"
 
 [lints]
 workspace = true
+
+[features]
+test-support = []

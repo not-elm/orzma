@@ -104,7 +104,7 @@ mod tests {
             let mut app = App::new();
             app.add_plugins(PastePlugin);
             let (mut handle, sink) = OrzmaTermHandle::detached(80, 24);
-            handle.vt_mut().interpret(b"\x1b[?2004h");
+            handle.feed_bytes(b"\x1b[?2004h");
             let terminal = app.world_mut().spawn(handle).id();
             trigger_paste(&mut app, terminal, text);
             assert_eq!(

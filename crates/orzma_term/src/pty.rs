@@ -77,6 +77,11 @@ impl Pty {
     }
 
     #[inline]
+    pub fn try_recv_exit(&mut self) -> Option<Option<i32>> {
+        self.exit_rx.try_recv().ok()
+    }
+
+    #[inline]
     pub fn try_read_chunk(&mut self) -> Option<Vec<u8>> {
         self.chunk_rx.try_recv().ok()
     }
@@ -87,7 +92,7 @@ impl Pty {
             .lock()
             .unwrap()
             .write_all(buf)
-            .map_err(|e| OrzmaTermError::PtyWrite(e))?;
+            .map_err(OrzmaTermError::PtyWrite)?;
         Ok(())
     }
 
@@ -107,7 +112,7 @@ impl Pty {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| OrzmaTermError::PtyResize(e))
+            .map_err(OrzmaTermError::PtyResize)
     }
 
     /// Reads the master's current size back from the kernel
@@ -144,6 +149,18 @@ impl Pty {
     pub fn with_master(master: Box<dyn MasterPty + Send>, writer: Box<dyn Write + Send>) -> Self {
         let (_, chunk_rx) = unbounded::<Vec<u8>>();
         let (_, exit_rx) = unbounded::<Option<i32>>();
+        Self::with_master_and_channels(master, writer, chunk_rx, exit_rx)
+    }
+
+    /// Builds a `Pty` like [`Self::with_master`], but with the chunk
+    /// and exit streams fed by the given receivers — lets tests inject
+    /// PTY output and child-exit reports.
+    pub fn with_master_and_channels(
+        master: Box<dyn MasterPty + Send>,
+        writer: Box<dyn Write + Send>,
+        chunk_rx: Receiver<Vec<u8>>,
+        exit_rx: Receiver<Option<i32>>,
+    ) -> Self {
         Self {
             master: Mutex::new(master),
             writer: Mutex::new(writer),
@@ -258,7 +275,8 @@ mod tests {
     use super::*;
     use crate::test_support::{FailingMaster, RecordingMaster};
     use std::io::sink;
-    use std::time::Duration;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     /// Asserts that a resize round-trips through the kernel: the size
     /// read back via `TIOCGWINSZ` is the size just applied.
@@ -338,6 +356,55 @@ mod tests {
             matches!(result, Err(OrzmaTermError::PtyResize(_))),
             "expected PtyResize, got {result:?}"
         );
+    }
+
+    /// Asserts that the child's exit is reported exactly once: the
+    /// first successful read yields the exit code and every later call
+    /// yields `None`.
+    ///
+    /// Case: the shell process exits while the host keeps polling every
+    /// frame for output and exit state.
+    #[test]
+    fn exit_is_reported_once_after_the_child_terminates() {
+        let mut pty = Pty::spawn(&SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: "/bin/echo".into(),
+            cwd: None,
+            env: Vec::new(),
+        })
+        .expect("Pty::spawn failed");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let code = loop {
+            if let Some(code) = pty.try_recv_exit() {
+                break code;
+            }
+            assert!(Instant::now() < deadline, "no exit report arrived");
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(code, Some(0));
+        for _ in 0..3 {
+            assert_eq!(
+                pty.try_recv_exit(),
+                None,
+                "the exit must not be re-reported"
+            );
+        }
+    }
+
+    /// Asserts that a PTY without a child process never reports an
+    /// exit.
+    ///
+    /// Case: a detached test terminal (or one built around an injected
+    /// master) is polled for an exit the same way a live terminal is.
+    #[test]
+    fn a_detached_pty_never_reports_an_exit() {
+        let mut detached = Pty::detached(80, 24, Box::new(sink())).expect("Pty::detached");
+        let mut injected = Pty::with_master(Box::new(FailingMaster), Box::new(sink()));
+        for _ in 0..3 {
+            assert_eq!(detached.try_recv_exit(), None);
+            assert_eq!(injected.try_recv_exit(), None);
+        }
     }
 
     #[test]

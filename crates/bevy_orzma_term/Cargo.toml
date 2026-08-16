@@ -15,3 +15,6 @@ orzma_term = { path = "../orzma_term" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+orzma_term = { path = "../orzma_term", features = ["test-support"] }

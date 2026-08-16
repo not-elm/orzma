@@ -140,7 +140,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(SelectionPlugin);
         let (mut handle, _) = OrzmaTermHandle::detached(80, 24);
-        handle.vt_mut().interpret(seed);
+        handle.feed_bytes(seed);
         let terminal = app.world_mut().spawn(handle).id();
         (app, terminal)
     }
@@ -169,27 +169,27 @@ mod tests {
         });
     }
 
-    fn selection_range(app: &mut App, terminal: Entity) -> Option<SelectionRange> {
-        app.world_mut()
-            .get_mut::<OrzmaTermHandle>(terminal)
+    fn selection_range(app: &App, terminal: Entity) -> Option<SelectionRange> {
+        app.world()
+            .get::<OrzmaTermHandle>(terminal)
             .expect("terminal entity must keep its handle")
-            .vt_mut()
+            .vt()
             .selection_range()
     }
 
-    fn selection_kind(app: &mut App, terminal: Entity) -> Option<SelectionKind> {
-        app.world_mut()
-            .get_mut::<OrzmaTermHandle>(terminal)
+    fn selection_kind(app: &App, terminal: Entity) -> Option<SelectionKind> {
+        app.world()
+            .get::<OrzmaTermHandle>(terminal)
             .expect("terminal entity must keep its handle")
-            .vt_mut()
+            .vt()
             .selection_kind()
     }
 
-    fn selected_text(app: &mut App, terminal: Entity) -> Option<String> {
-        app.world_mut()
-            .get_mut::<OrzmaTermHandle>(terminal)
+    fn selected_text(app: &App, terminal: Entity) -> Option<String> {
+        app.world()
+            .get::<OrzmaTermHandle>(terminal)
             .expect("terminal entity must keep its handle")
-            .vt_mut()
+            .vt()
             .selected_text()
     }
 
@@ -204,7 +204,7 @@ mod tests {
         let (mut app, terminal) = app_with_terminal(b"abcdefghij");
         start_simple(&mut app, terminal, 0, 0);
         update_to(&mut app, terminal, 4, 0, CellSide::Right);
-        assert_eq!(selected_text(&mut app, terminal).as_deref(), Some("abcde"));
+        assert_eq!(selected_text(&app, terminal).as_deref(), Some("abcde"));
     }
 
     /// Asserts that a clear request drops the active selection.
@@ -217,12 +217,12 @@ mod tests {
         start_simple(&mut app, terminal, 0, 0);
         update_to(&mut app, terminal, 4, 0, CellSide::Right);
         assert!(
-            selection_range(&mut app, terminal).is_some(),
+            selection_range(&app, terminal).is_some(),
             "precondition: the drag must have selected something"
         );
         app.world_mut()
             .trigger(RequestTermSelectionClear { terminal });
-        assert_eq!(selection_range(&mut app, terminal), None);
+        assert_eq!(selection_range(&app, terminal), None);
     }
 
     /// Asserts that a vi-cursor start request starts a selection in
@@ -237,10 +237,7 @@ mod tests {
                 terminal,
                 kind: SelectionKind::Simple,
             });
-        assert_eq!(
-            selection_kind(&mut app, terminal),
-            Some(SelectionKind::Simple)
-        );
+        assert_eq!(selection_kind(&app, terminal), Some(SelectionKind::Simple));
     }
 
     /// Asserts that a kind-change request switches the active
@@ -257,12 +254,9 @@ mod tests {
             terminal,
             kind: SelectionKind::Lines,
         });
+        assert_eq!(selection_kind(&app, terminal), Some(SelectionKind::Lines));
         assert_eq!(
-            selection_kind(&mut app, terminal),
-            Some(SelectionKind::Lines)
-        );
-        assert_eq!(
-            selected_text(&mut app, terminal).as_deref(),
+            selected_text(&app, terminal).as_deref(),
             Some("abcdefghij\nklmnopqrst\n")
         );
     }

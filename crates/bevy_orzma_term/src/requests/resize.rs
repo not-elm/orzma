@@ -28,10 +28,10 @@ impl Plugin for ResizePlugin {
 }
 
 fn apply_resize(e: On<RequestTermResize>, mut terms: Query<&mut OrzmaTermHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal) {
-        if let Err(e) = tty.resize(e.cols, e.rows) {
-            error!(%e);
-        }
+    if let Ok(mut tty) = terms.get_mut(e.terminal)
+        && let Err(e) = tty.resize(e.cols, e.rows)
+    {
+        error!(%e);
     }
 }
 

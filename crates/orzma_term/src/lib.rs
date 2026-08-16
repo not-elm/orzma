@@ -3,8 +3,8 @@
 
 use crate::{
     coalescer::Coalescer,
-    error::{OrzmaTermError, OrzmaTermResult},
-    input::{MouseButton, MouseReport, PtyInput, TerminalKey, TerminalModifiers},
+    error::OrzmaTermResult,
+    input::{MouseReport, PtyInput, TerminalKey, TerminalModifiers},
     pty::Pty,
     signal::TermSignal,
 };
@@ -91,6 +91,13 @@ impl<B: VtBackend> OrzmaTerm<B> {
         self.pty.size()
     }
 
+    /// Read-only access to the VT, for host-side observation such as
+    /// the display offset, modes, or the selected text.
+    #[inline]
+    pub fn vt(&self) -> &OrzmaVt<B> {
+        &self.vt
+    }
+
     /// Builds a terminal whose PTY writes land on `writer` instead of a
     /// spawned shell.
     ///
@@ -104,6 +111,16 @@ impl<B: VtBackend> OrzmaTerm<B> {
             coalescer: Coalescer::default(),
             pty: Pty::detached(cols, rows, writer)?,
         })
+    }
+
+    /// Feeds bytes through the same seam [`Self::pump`] runs PTY chunks
+    /// through, arming the coalescer exactly as live output would.
+    ///
+    /// Available to tests only: in-crate under `cfg(test)`, downstream
+    /// via the `test-support` feature.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn feed_bytes(&mut self, bytes: &[u8]) {
+        self.feed_chunk(bytes);
     }
 
     /// Scrolls the grid, arming the coalescer only when the viewport
@@ -194,6 +211,23 @@ impl<B: VtBackend> OrzmaTerm<B> {
             self.scroll(Scroll::Bottom);
         }
     }
+
+    /// Interprets one PTY chunk and arms the coalescer when it staged
+    /// damage.
+    fn feed_chunk(&mut self, chunk: &[u8]) {
+        // TODO: Use the returned DamageVerdict to drive
+        // Coalescer::should_flush_immediately.
+        if self.vt.interpret(chunk).is_some() {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
+    }
+
+    /// Drains every queued PTY chunk into the VT.
+    fn drain_chunks(&mut self) {
+        while let Some(chunk) = self.pty.try_read_chunk() {
+            self.feed_chunk(&chunk);
+        }
+    }
 }
 
 impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
@@ -201,16 +235,26 @@ impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
     /// VecでTermEventを収集しているが、この関数はほぼ米フレームで呼ばれるため、
     /// コールバック形式などにしたほうがいい？
     pub fn pump(&mut self) -> InterpretOutput {
-        while let Some(chunk) = self.pty.try_read_chunk() {
-            //TODO: DamageVerdictを使い、colalescerのdeadlineを調整する。
-            self.vt.interpret(&chunk);
+        self.drain_chunks();
+        let exit = self.pty.try_recv_exit();
+        if exit.is_some() {
+            // NOTE: the reader thread sends every chunk before the exit
+            // report, so one more drain here closes the race where the
+            // final output lands between the drain above and the poll —
+            // without it, a host that tears down on ChildExit loses the
+            // child's last output.
+            self.drain_chunks();
         }
-        let signals = self
+
+        let mut signals = self
             .vt
             .drain_signals()
-            .map(|s| TermSignal::Vt(s))
+            .map(TermSignal::Vt)
             .collect::<Vec<_>>();
-        //TODO: ChildExitの判定を行い、必要であればsignalsに追加する。
+        if let Some(code) = exit {
+            signals.push(TermSignal::ChildExit { code });
+        }
+
         let mut frame: Option<Frame> = None;
         if self.coalescer.is_due(Instant::now()) {
             if let Some(f) = self.vt.frame() {
@@ -278,7 +322,9 @@ impl<B: VtBackend + VtSelection> OrzmaTerm<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::OrzmaTermError;
     use crate::test_support::{CaptureSink, FailingMaster};
+    use crossbeam_channel::{Sender, unbounded};
 
     fn detached_term() -> (OrzmaTerm<AlacrittyVtBackend>, CaptureSink) {
         let sink = CaptureSink::default();
@@ -473,7 +519,8 @@ mod tests {
         let seed: Vec<u8> = (0..history_rows + 23)
             .flat_map(|i| format!("l{i}\r\n").into_bytes())
             .collect();
-        term.vt_mut().interpret(&seed);
+        term.feed_bytes(&seed);
+        term.coalescer.disarm();
         (term, sink)
     }
 
@@ -561,7 +608,8 @@ mod tests {
     #[test]
     fn paste_while_scrolled_back_snaps_and_arms() {
         let (mut term, _sink) = term_with_history(10);
-        term.vt_mut().scroll(Scroll::Delta(3));
+        term.scroll(Scroll::Delta(3));
+        term.coalescer.disarm();
         assert!(
             !term.coalescer.is_armed(),
             "precondition: nothing armed yet"
@@ -602,5 +650,127 @@ mod tests {
         let (mut term, sink) = detached_term();
         term.write_paste("").expect("write_paste");
         assert_eq!(sink.contents(), b"");
+    }
+
+    /// A terminal whose PTY chunk and exit streams are fed by the
+    /// returned senders, so tests can inject output and child-exit
+    /// reports.
+    fn channelled_term() -> (
+        OrzmaTerm<AlacrittyVtBackend>,
+        Sender<Vec<u8>>,
+        Sender<Option<i32>>,
+    ) {
+        let (chunk_tx, chunk_rx) = unbounded();
+        let (exit_tx, exit_rx) = unbounded();
+        let term = OrzmaTerm {
+            vt: OrzmaVt::new(80, 24),
+            coalescer: Coalescer::default(),
+            pty: Pty::with_master_and_channels(
+                Box::new(FailingMaster),
+                Box::new(CaptureSink::default()),
+                chunk_rx,
+                exit_rx,
+            ),
+        };
+        (term, chunk_tx, exit_tx)
+    }
+
+    /// Collects the `ChildExit` codes out of a pumped signal batch.
+    fn child_exits(signals: &[TermSignal]) -> Vec<Option<i32>> {
+        signals
+            .iter()
+            .filter_map(|signal| match signal {
+                TermSignal::ChildExit { code } => Some(*code),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Reads the first `len` cells of the top viewport row back through
+    /// the selection API — the only text readout the VT exposes.
+    fn top_row_text(term: &mut OrzmaTerm<AlacrittyVtBackend>, len: u16) -> Option<String> {
+        let cell = |col| GridPoint {
+            line: GridLine(0),
+            column: GridColumn(col),
+        };
+        term.vt
+            .start_selection(cell(0), CellSide::Left, SelectionKind::Simple)
+            .expect("start_selection");
+        term.vt
+            .update_selection(cell(len - 1), CellSide::Right)
+            .expect("update_selection");
+        let text = term.vt.selected_text();
+        term.vt.clear_selection().expect("clear_selection");
+        text
+    }
+
+    /// Asserts that a pending child-exit report surfaces in `pump`'s
+    /// signals as `ChildExit` carrying the reported code.
+    ///
+    /// Case: the child exits with a nonzero code while the terminal is
+    /// otherwise idle, and the host pumps on the next frame.
+    #[test]
+    fn pump_surfaces_child_exit_with_the_reported_code() {
+        let (mut term, _chunk_tx, exit_tx) = channelled_term();
+        exit_tx.send(Some(3)).expect("send exit");
+        assert_eq!(child_exits(&term.pump().signals), vec![Some(3)]);
+    }
+
+    /// Asserts that a failed `wait` surfaces as `ChildExit` with
+    /// `code: None` rather than being dropped.
+    ///
+    /// Case: the reader thread's `wait` on the exited child fails, so
+    /// no exit code exists to report.
+    #[test]
+    fn pump_surfaces_a_wait_failure_as_code_none() {
+        let (mut term, _chunk_tx, exit_tx) = channelled_term();
+        exit_tx.send(None).expect("send exit");
+        assert_eq!(child_exits(&term.pump().signals), vec![None]);
+    }
+
+    /// Asserts that `ChildExit` appears in exactly one `pump` result
+    /// and never again on later calls.
+    ///
+    /// Case: the shell exits while the host keeps pumping every frame.
+    #[test]
+    fn child_exit_is_emitted_exactly_once_across_pumps() {
+        let (mut term, _chunk_tx, exit_tx) = channelled_term();
+        exit_tx.send(Some(0)).expect("send exit");
+        assert_eq!(child_exits(&term.pump().signals), vec![Some(0)]);
+        for _ in 0..3 {
+            assert_eq!(child_exits(&term.pump().signals), vec![]);
+        }
+    }
+
+    /// Asserts that a detached terminal never emits `ChildExit`.
+    ///
+    /// Its exit channel's sender is dropped at construction, so `pump`
+    /// observes a disconnected channel; the decided reading of that
+    /// state is "there is no child to report on", never "the child
+    /// died".
+    ///
+    /// Case: a detached test terminal is pumped every frame like a
+    /// live one.
+    #[test]
+    fn pump_on_a_detached_terminal_never_emits_child_exit() {
+        let (mut term, _sink) = detached_term();
+        for _ in 0..3 {
+            assert_eq!(child_exits(&term.pump().signals), vec![]);
+        }
+    }
+
+    /// Asserts that a `pump` which reports `ChildExit` has already
+    /// interpreted every pending output chunk.
+    ///
+    /// Case: `echo bye` — the reader thread delivers the final output
+    /// chunk and then the exit report, and the host pumps once after
+    /// both arrived.
+    #[test]
+    fn the_final_output_is_interpreted_when_the_exit_is_reported() {
+        let (mut term, chunk_tx, exit_tx) = channelled_term();
+        chunk_tx.send(b"bye".to_vec()).expect("send chunk");
+        exit_tx.send(Some(0)).expect("send exit");
+        assert_eq!(child_exits(&term.pump().signals), vec![Some(0)]);
+        assert_eq!(top_row_text(&mut term, 3).as_deref(), Some("bye"));
     }
 }
