@@ -1,7 +1,10 @@
 //! `TerminalGridPlugin` — applies snapshots and deltas to the per-entity
 //! `TerminalGrid` Component via two `EntityEvent` observers.
 
-use crate::schema::{Cell, FrameDelta, FrameSnapshot, Run, TerminalGrid};
+use crate::schema::{
+    FrameDelta, FrameSnapshot, GridCell, GridColumn, GridLine, GridPoint, Hyperlink, Run,
+    TerminalGrid,
+};
 use bevy::prelude::*;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -37,7 +40,14 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
     grid.cells = snap
         .rows_data
         .iter()
-        .map(|row| runs_to_cells(&row.runs))
+        .enumerate()
+        .map(|(row, contents)| {
+            runs_to_cells(
+                &contents.runs,
+                GridLine(row as i32 - snap.display_offset as i32),
+                &snap.hyperlinks,
+            )
+        })
         .collect();
 }
 
@@ -60,14 +70,23 @@ fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
     for dirty in &delta.dirty_rows {
         let row_idx = dirty.row as usize;
         if row_idx < grid.cells.len() {
-            grid.cells[row_idx] = runs_to_cells(&dirty.runs);
+            grid.cells[row_idx] = runs_to_cells(
+                &dirty.runs,
+                GridLine(i32::from(dirty.row) - delta.display_offset as i32),
+                &delta.hyperlinks,
+            );
         }
     }
 }
 
-fn runs_to_cells(runs: &[Run]) -> Vec<Cell> {
-    let mut out: Vec<Cell> = Vec::new();
+fn runs_to_cells(runs: &[Run], line: GridLine, hyperlinks: &[Hyperlink]) -> Vec<GridCell> {
+    let mut out: Vec<GridCell> = Vec::new();
+    let mut column: u16 = 0;
     for run in runs {
+        let hyperlink = run
+            .hyperlink_id
+            .and_then(|id| hyperlinks.iter().find(|h| h.id == id))
+            .cloned();
         for grapheme in run.text.graphemes(true) {
             let w = grapheme.width();
             let width = if w >= 2 {
@@ -77,14 +96,19 @@ fn runs_to_cells(runs: &[Run]) -> Vec<Cell> {
             } else {
                 1
             };
-            out.push(Cell {
+            out.push(GridCell {
                 text: grapheme.to_string(),
                 width,
+                point: GridPoint {
+                    line,
+                    column: GridColumn(column),
+                },
                 fg: run.fg,
                 bg: run.bg,
                 style: run.style,
-                hyperlink_id: run.hyperlink_id,
+                hyperlink: hyperlink.clone(),
             });
+            column = column.saturating_add(u16::from(width));
         }
     }
     out
@@ -93,7 +117,72 @@ fn runs_to_cells(runs: &[Run]) -> Vec<Cell> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{Hyperlink, HyperlinkId, HyperlinkUri, Row};
+    use crate::schema::{Color, Hyperlink, HyperlinkId, HyperlinkUri, Row};
+
+    fn run_with_link(text: &str, hyperlink_id: Option<HyperlinkId>) -> Run {
+        Run {
+            cols: 1,
+            fg: Color::DefaultForeground,
+            bg: Color::DefaultBackground,
+            style: 0,
+            text: text.to_string(),
+            hyperlink_id,
+        }
+    }
+
+    /// Asserts that a run's hyperlink id resolves against the frame's
+    /// hyperlink table when cells are built, and that an id absent
+    /// from the table leaves the cell unlinked.
+    ///
+    /// Case: a shell prints an OSC 8 link, so the emitted frame
+    /// carries the id → URI table next to the row runs that reference
+    /// it.
+    #[test]
+    fn runs_to_cells_resolves_hyperlink_ids_against_the_frame_table() {
+        let runs = vec![
+            run_with_link("a", Some(HyperlinkId(7))),
+            run_with_link("b", Some(HyperlinkId(9))),
+        ];
+        let table = vec![Hyperlink {
+            id: HyperlinkId(7),
+            uri: HyperlinkUri::new("https://example"),
+        }];
+        let cells = runs_to_cells(&runs, GridLine(0), &table);
+        assert_eq!(
+            cells[0].hyperlink.as_ref().map(|h| h.id),
+            Some(HyperlinkId(7))
+        );
+        assert_eq!(
+            cells[0].hyperlink.as_ref().map(|h| h.uri.as_str()),
+            Some("https://example")
+        );
+        assert!(cells[1].hyperlink.is_none());
+    }
+
+    /// Asserts that cell points carry the given line and a column walk
+    /// that advances by display width.
+    ///
+    /// Case: a row mixes a wide CJK grapheme with ASCII text on a
+    /// scrolled-back history line, so the ASCII cell's point must land
+    /// after both columns of the wide character.
+    #[test]
+    fn runs_to_cells_assigns_points_by_display_width() {
+        let cells = runs_to_cells(&[run_with_link("あb", None)], GridLine(-3), &[]);
+        assert_eq!(
+            cells[0].point,
+            GridPoint {
+                line: GridLine(-3),
+                column: GridColumn(0),
+            }
+        );
+        assert_eq!(
+            cells[1].point,
+            GridPoint {
+                line: GridLine(-3),
+                column: GridColumn(2),
+            }
+        );
+    }
 
     fn grid_with(seed: Vec<(HyperlinkId, HyperlinkUri)>) -> TerminalGrid {
         TerminalGrid {

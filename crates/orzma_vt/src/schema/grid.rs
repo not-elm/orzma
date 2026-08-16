@@ -124,6 +124,8 @@ pub struct GridCell {
     pub point: GridPoint,
     pub fg: Color,
     pub bg: Color,
+    /// Style bitmask, carried over unchanged from [`crate::schema::Run::style`].
+    pub style: u16,
     pub hyperlink: Option<Hyperlink>,
 }
 

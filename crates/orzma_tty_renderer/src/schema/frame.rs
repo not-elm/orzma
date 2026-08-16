@@ -1,11 +1,10 @@
 use crate::schema::{Cursor, Hyperlink, Row, Run, SelectionRange, ViCursor};
 use bevy::ecs::{entity::Entity, event::EntityEvent};
-use serde::{Deserialize, Serialize};
 
 /// Full snapshot of the visible viewport at a given seq.
 ///
 /// Carries all data needed to render the screen without prior state.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, EntityEvent)]
+#[derive(Debug, Clone, PartialEq, EntityEvent)]
 pub struct FrameSnapshot {
     #[event_target]
     pub entity: Entity,
@@ -26,29 +25,23 @@ pub struct FrameSnapshot {
     /// Hyperlinks referenced by row Runs.
     pub hyperlinks: Vec<Hyperlink>,
     /// Lines scrolled back from the live tail. `0` = at live tail.
-    #[serde(default)]
     pub display_offset: u32,
     /// Total scrollback history line count (upper bound for display_offset).
-    #[serde(default)]
     pub history_size: u32,
     /// Cumulative lines trimmed from the top of scrollback (monotonic;
     /// advances only on history-destroying folds — spec §3).
-    #[serde(default)]
     pub history_base: u64,
     /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<SelectionRange>,
     /// Terminal default background color from `term.colors()[NamedColor::Background]`
     /// (OSC 11). `[0, 0, 0]` when no override is present.
-    #[serde(default)]
     pub default_bg: [u8; 3],
 }
 
 /// Differential update relative to the prior frame.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, EntityEvent)]
+#[derive(Debug, Clone, PartialEq, EntityEvent)]
 pub struct FrameDelta {
     pub entity: Entity,
     /// Monotonic frame sequence number.
@@ -64,27 +57,22 @@ pub struct FrameDelta {
     /// only the ids referenced by this delta's dirty rows are included.
     pub hyperlinks: Vec<Hyperlink>,
     /// Lines scrolled back from the live tail. `0` = at live tail.
-    #[serde(default)]
     pub display_offset: u32,
     /// Total scrollback history line count (upper bound for display_offset).
-    #[serde(default)]
     pub history_size: u32,
     /// Cumulative lines trimmed from the top of scrollback (monotonic;
     /// advances only on history-destroying folds — spec §3).
-    #[serde(default)]
     pub history_base: u64,
     /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<SelectionRange>,
 }
 
 /// A dirty row entry inside a `FrameDelta`.
 ///
 /// `runs` represents the entire row (full row replacement, not partial).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DirtyRow {
     /// Row index, zero-based from the top of the screen.
     pub row: u16,
@@ -93,7 +81,7 @@ pub struct DirtyRow {
 }
 
 /// Reason a snapshot was sent.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SnapshotReason {
     /// Initial connect.
     #[default]

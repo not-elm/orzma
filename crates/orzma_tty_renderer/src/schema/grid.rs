@@ -1,6 +1,8 @@
-use crate::schema::{CURSOR_VISIBLE_BIT, Cursor, CursorShape, HyperlinkId, HyperlinkUri, ViCursor};
+use crate::schema::{
+    CURSOR_VISIBLE_BIT, Cursor, CursorShape, GridCell, HyperlinkId, HyperlinkUri, SelectionRange,
+    ViCursor,
+};
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 
 /// A structure represents the layout structure of the terminal grid.
 /// Each terminal entity owns this component.
@@ -11,7 +13,7 @@ pub struct TerminalGrid {
     /// Visible row count.
     pub rows: u16,
     /// Cell grid indexed `[row][col_grapheme_index]`.
-    pub cells: Vec<Vec<Cell>>,
+    pub cells: Vec<Vec<GridCell>>,
     /// Current cursor state, absent until the first frame arrives.
     pub cursor: Option<Cursor>,
     /// Lines scrolled back from the live tail; 0 = at live tail.
@@ -56,8 +58,7 @@ impl TerminalGrid {
     /// any. `col` is a column coordinate, not a grapheme index — wide
     /// cells (width=2) match both of their columns, and width-0
     /// trailers are skipped without consuming a column. Returns
-    /// `None` for out-of-bounds, unlinked cells, or when the id is
-    /// present on the cell but absent from the map.
+    /// `None` for out-of-bounds or unlinked cells.
     //
     // NOTE: `self.cells[row]` is grapheme-indexed (one entry per
     //       cluster from `runs_to_cells`), so a column-to-cell walk
@@ -75,12 +76,8 @@ impl TerminalGrid {
             }
             let cell_end = current_col.saturating_add(u32::from(cell.width));
             if target >= current_col && target < cell_end {
-                let id = cell.hyperlink_id?;
-                return self
-                    .hyperlinks
-                    .iter()
-                    .find(|(stored_id, _)| *stored_id == id)
-                    .map(|(stored_id, uri)| (*stored_id, uri));
+                let link = cell.hyperlink.as_ref()?;
+                return Some((link.id, &link.uri));
             }
             current_col = cell_end;
         }
@@ -116,7 +113,22 @@ impl TerminalGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{Cursor, CursorShape};
+    use crate::schema::{Color, Cursor, CursorShape, GridPoint, Hyperlink};
+
+    fn cell_with_link(text: &str, width: u8, link: Option<(u32, &str)>) -> GridCell {
+        GridCell {
+            text: text.to_string(),
+            width,
+            point: GridPoint::default(),
+            fg: Color::DefaultForeground,
+            bg: Color::DefaultBackground,
+            style: 0,
+            hyperlink: link.map(|(id, uri)| Hyperlink {
+                id: HyperlinkId(id),
+                uri: HyperlinkUri::new(uri),
+            }),
+        }
+    }
 
     fn visible_block_cursor() -> Cursor {
         Cursor {
@@ -167,6 +179,10 @@ mod tests {
         assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
     }
 
+    /// Asserts that a lookup outside the populated grid returns `None`.
+    ///
+    /// Case: the pointer hovers over the padding beyond the last row
+    /// or column while the grid is smaller than the window.
     #[test]
     fn hyperlink_at_returns_none_when_out_of_bounds() {
         let grid = TerminalGrid {
@@ -179,61 +195,35 @@ mod tests {
         assert!(grid.hyperlink_at(0, 99).is_none());
     }
 
+    /// Asserts that a linked width-0 trailer cell never resolves at a
+    /// column of its own.
+    ///
+    /// Case: a combining mark arrives as its own wire cell inside an
+    /// OSC 8 link, so the trailer carries the link but occupies no
+    /// column.
     #[test]
     fn hyperlink_at_returns_none_for_width_zero_trailer() {
-        let cell = Cell {
-            text: "\u{0301}".to_string(),
-            width: 0,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: Some(HyperlinkId(5)),
-        };
+        let cell = cell_with_link("\u{0301}", 0, Some((5, "https://example")));
         let grid = TerminalGrid {
             cols: 4,
             rows: 1,
             cells: vec![vec![cell]],
-            hyperlinks: vec![(HyperlinkId(5), HyperlinkUri::new("https://example"))],
             ..Default::default()
         };
         assert!(grid.hyperlink_at(0, 0).is_none());
     }
 
-    #[test]
-    fn hyperlink_at_returns_none_when_map_missing_id() {
-        let cell = Cell {
-            text: "x".to_string(),
-            width: 1,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: Some(HyperlinkId(7)),
-        };
-        let grid = TerminalGrid {
-            cols: 4,
-            rows: 1,
-            cells: vec![vec![cell]],
-            hyperlinks: vec![],
-            ..Default::default()
-        };
-        assert!(grid.hyperlink_at(0, 0).is_none());
-    }
-
+    /// Asserts that a linked cell resolves to its hyperlink id and URI.
+    ///
+    /// Case: the user hovers an OSC 8 link a shell printed, and the
+    /// input layer asks which link sits under the pointer.
     #[test]
     fn hyperlink_at_returns_id_and_uri_for_linked_cell() {
-        let cell = Cell {
-            text: "x".to_string(),
-            width: 1,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: Some(HyperlinkId(7)),
-        };
+        let cell = cell_with_link("x", 1, Some((7, "https://example")));
         let grid = TerminalGrid {
             cols: 4,
             rows: 1,
             cells: vec![vec![cell]],
-            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))],
             ..Default::default()
         };
         let (id, uri) = grid.hyperlink_at(0, 0).expect("hyperlink present");
@@ -241,105 +231,64 @@ mod tests {
         assert_eq!(uri.as_str(), "https://example");
     }
 
+    /// Asserts that an unlinked cell resolves to `None`.
+    ///
+    /// Case: the user hovers plain shell output that carries no
+    /// hyperlink.
     #[test]
     fn hyperlink_at_returns_none_for_unlinked_cell() {
-        let cell = Cell {
-            text: "x".to_string(),
-            width: 1,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: None,
-        };
+        let cell = cell_with_link("x", 1, None);
         let grid = TerminalGrid {
             cols: 4,
             rows: 1,
             cells: vec![vec![cell]],
-            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))],
             ..Default::default()
         };
         assert!(grid.hyperlink_at(0, 0).is_none());
     }
 
+    /// Asserts that both columns of a wide grapheme resolve to the
+    /// same hyperlink while the cell after it stays unlinked.
+    ///
+    /// Case: a CJK character inside an OSC 8 link spans two columns,
+    /// and the user may hover either half.
     #[test]
     fn hyperlink_at_resolves_both_halves_of_wide_char() {
-        // Wide CJK grapheme occupies 2 columns but only 1 cell entry.
-        // Both halves must resolve to the same hyperlink.
-        let wide_linked = Cell {
-            text: "あ".to_string(),
-            width: 2,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: Some(HyperlinkId(7)),
-        };
-        let trailing = Cell {
-            text: "b".to_string(),
-            width: 1,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: None,
-        };
+        let wide_linked = cell_with_link("あ", 2, Some((7, "https://example")));
+        let trailing = cell_with_link("b", 1, None);
         let grid = TerminalGrid {
             cols: 3,
             rows: 1,
             cells: vec![vec![wide_linked, trailing]],
-            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))],
             ..Default::default()
         };
-        // Column 0: left half of the wide char → linked.
         let (id, uri) = grid.hyperlink_at(0, 0).expect("left half should resolve");
         assert_eq!(id, HyperlinkId(7));
         assert_eq!(uri.as_str(), "https://example");
-        // Column 1: right half of the wide char → SAME link.
         let (id, uri) = grid.hyperlink_at(0, 1).expect("right half should resolve");
         assert_eq!(id, HyperlinkId(7));
         assert_eq!(uri.as_str(), "https://example");
-        // Column 2: trailing ASCII char → unlinked.
         assert!(grid.hyperlink_at(0, 2).is_none());
     }
 
+    /// Asserts that a width-0 trailer does not shift the columns of
+    /// the cells that follow it.
+    ///
+    /// Case: a combining mark emitted as its own wire cell sits
+    /// between a plain cell and a linked cell, and the user hovers the
+    /// linked cell's column.
     #[test]
     fn hyperlink_at_skips_width_zero_trailer_in_column_walk() {
-        // Width-0 trailer (e.g., a combining mark emitted as its own
-        // wire cell) consumes a grapheme slot but no columns. The
-        // following cell must still be reachable at its column.
-        let base = Cell {
-            text: "a".to_string(),
-            width: 1,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: None,
-        };
-        let trailer = Cell {
-            text: "\u{0301}".to_string(),
-            width: 0,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: None,
-        };
-        let linked = Cell {
-            text: "x".to_string(),
-            width: 1,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: Some(HyperlinkId(9)),
-        };
+        let base = cell_with_link("a", 1, None);
+        let trailer = cell_with_link("\u{0301}", 0, None);
+        let linked = cell_with_link("x", 1, Some((9, "https://x")));
         let grid = TerminalGrid {
             cols: 2,
             rows: 1,
             cells: vec![vec![base, trailer, linked]],
-            hyperlinks: vec![(HyperlinkId(9), HyperlinkUri::new("https://x"))],
             ..Default::default()
         };
-        // Column 0: 'a' (unlinked).
         assert!(grid.hyperlink_at(0, 0).is_none());
-        // Column 1: the linked cell — the width-0 trailer must not
-        // displace its column.
         let (id, _uri) = grid.hyperlink_at(0, 1).expect("linked cell at col 1");
         assert_eq!(id, HyperlinkId(9));
     }

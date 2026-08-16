@@ -4,7 +4,7 @@ use crate::{
         font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFontSize, TerminalFonts},
     },
     material::state::TerminalMaterialState,
-    schema::{Cell, HyperlinkHoverState, SelectionKind, TerminalGrid},
+    schema::{GridCell, HyperlinkHoverState, SelectionKind, TerminalGrid},
 };
 use bevy::{
     asset::{load_internal_asset, uuid_handle},
@@ -856,7 +856,7 @@ fn rebuild_cells(
                     fg_packed: fg,
                     bg_packed: bg,
                     style_flags,
-                    hyperlink_id: cell.hyperlink_id.map_or(0, |h| h.0),
+                    hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.0),
                 };
             }
 
@@ -877,7 +877,7 @@ fn rebuild_cells(
                         fg_packed: fg,
                         bg_packed: bg,
                         style_flags: style_flags | STYLE_WIDE_RIGHT_HALF,
-                        hyperlink_id: cell.hyperlink_id.map_or(0, |h| h.0),
+                        hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.0),
                     };
                 }
             }
@@ -924,7 +924,7 @@ fn style_bits_from_combining_marks(text: &str) -> u32 {
 }
 
 fn resolve_glyph_index(
-    cell: &Cell,
+    cell: &GridCell,
     state: &mut TerminalMaterialState,
     fonts: &TerminalFonts,
     atlas: &mut GlyphAtlas,
@@ -971,27 +971,34 @@ mod tests {
         assert_eq!(cell.hyperlink_id, 0);
     }
 
+    fn cell_with_link(text: &str, link: Option<u32>) -> GridCell {
+        use crate::schema::{Color as CellColor, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri};
+        GridCell {
+            text: text.to_string(),
+            width: 1,
+            point: GridPoint::default(),
+            fg: CellColor::DefaultForeground,
+            bg: CellColor::DefaultBackground,
+            style: 0,
+            hyperlink: link.map(|id| Hyperlink {
+                id: HyperlinkId(id),
+                uri: HyperlinkUri::new("https://example"),
+            }),
+        }
+    }
+
+    /// Asserts that a linked cell's wire id reaches its GPU slot while
+    /// an unlinked cell's slot keeps the 0 sentinel.
+    ///
+    /// Case: a row mixes OSC 8 linked text with plain text, and the
+    /// shader needs the per-cell id to underline only the hovered
+    /// link.
     #[test]
     fn rebuild_cells_writes_hyperlink_id_when_present() {
-        use crate::schema::HyperlinkId;
         use bevy::platform::collections::HashMap;
 
-        let linked = Cell {
-            text: "x".to_string(),
-            width: 1,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: Some(HyperlinkId(7)),
-        };
-        let unlinked = Cell {
-            text: "y".to_string(),
-            width: 1,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: None,
-        };
+        let linked = cell_with_link("x", Some(7));
+        let unlinked = cell_with_link("y", None);
         let grid = TerminalGrid {
             cols: 2,
             rows: 1,
