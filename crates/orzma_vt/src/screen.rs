@@ -46,6 +46,28 @@ impl Effects {
     }
 }
 
+/// Span selector for [`Screen::erase_in_line`] (`CSI K`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EraseLineMode {
+    /// From the cursor to the end of the row (`EL 0`).
+    ToEnd,
+    /// From the start of the row through the cursor column (`EL 1`).
+    ToStart,
+    /// The whole row (`EL 2`).
+    All,
+}
+
+/// Span selector for [`Screen::erase_in_display`] (`CSI J`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EraseScreenMode {
+    /// From the cursor cell to the end of the screen (`ED 0`).
+    Below,
+    /// From the top of the screen through the cursor cell (`ED 1`).
+    Above,
+    /// The whole visible screen (`ED 2`); history is untouched.
+    All,
+}
+
 /// One terminal screen: cell storage plus the write cursor, updated
 /// atomically by each operation.
 ///
@@ -125,6 +147,58 @@ impl Screen {
         Effects {
             damage: Some(Damage::Full),
             history: Some(history),
+        }
+    }
+
+    /// Erases part of the cursor row with the pen background (BCE);
+    /// [`EraseLineMode::ToEnd`] is a no-op while the deferred wrap is
+    /// armed.
+    pub fn erase_in_line(&mut self, mode: EraseLineMode) -> Effects {
+        if matches!(mode, EraseLineMode::ToEnd) && self.write.pending_wrap {
+            return Effects::default();
+        }
+        let cols = self.grid.size().cols;
+        let columns = match mode {
+            EraseLineMode::ToEnd => self.write.column..cols,
+            EraseLineMode::ToStart => 0..self.write.column + 1,
+            EraseLineMode::All => 0..cols,
+        };
+        self.grid
+            .fill_visible_row_range(self.write.line, columns, self.write.pen.erase_cell());
+        Effects::damage_rows(vec![self.write.line])
+    }
+
+    /// Erases part of the visible screen with the pen background
+    /// (BCE), in place; scrollback history is never touched.
+    pub fn erase_in_display(&mut self, mode: EraseScreenMode) -> Effects {
+        let GridSize { cols, rows } = self.grid.size();
+        let blank = self.write.pen.erase_cell();
+        match mode {
+            EraseScreenMode::Below => {
+                self.grid
+                    .fill_visible_row_range(self.write.line, self.write.column..cols, blank);
+                for line in self.write.line + 1..rows {
+                    self.grid.fill_visible_row_range(line, 0..cols, blank);
+                }
+                Effects::damage_rows((self.write.line..rows).collect())
+            }
+            EraseScreenMode::Above => {
+                for line in 0..self.write.line {
+                    self.grid.fill_visible_row_range(line, 0..cols, blank);
+                }
+                self.grid
+                    .fill_visible_row_range(self.write.line, 0..self.write.column + 1, blank);
+                Effects::damage_rows((0..=self.write.line).collect())
+            }
+            EraseScreenMode::All => {
+                for line in 0..rows {
+                    self.grid.fill_visible_row_range(line, 0..cols, blank);
+                }
+                Effects {
+                    damage: Some(Damage::Full),
+                    history: None,
+                }
+            }
         }
     }
 
@@ -398,6 +472,182 @@ mod tests {
             Effects {
                 damage: Some(Damage::Full),
                 history: Some(HistoryEvent::Pushed),
+            }
+        );
+    }
+
+    /// Asserts that erase-to-end clears from the cursor to the right
+    /// edge with the pen background.
+    ///
+    /// Case: an application with a colored background truncates the
+    /// tail of a line with `EL 0`, and the cleared cells must show
+    /// that background (BCE).
+    #[test]
+    fn erase_to_end_clears_from_the_cursor_with_the_pen_background() {
+        let mut screen = screen();
+        for c in ['a', 'b', 'c'] {
+            screen.print(c);
+        }
+        screen.write.column = 1;
+        screen.pen_mut().bg = Color::Indexed(2);
+        let effects = screen.erase_in_line(EraseLineMode::ToEnd);
+        assert_eq!(screen.grid.cell(0, 0).c, 'a');
+        assert_eq!(screen.grid.cell(0, 1).c, ' ');
+        assert_eq!(screen.grid.cell(0, 1).bg, Color::Indexed(2));
+        assert_eq!(screen.grid.cell(0, 3).bg, Color::Indexed(2));
+        assert_eq!(
+            effects,
+            Effects {
+                damage: Some(Damage::Delta(vec![0].into())),
+                history: None,
+            }
+        );
+    }
+
+    /// Asserts that erase-to-start clears through the cursor column
+    /// inclusively.
+    ///
+    /// The agreed convention matches `EL 1`: the erased span is
+    /// `0..=cursor.column`, the classic off-by-one of this operation.
+    ///
+    /// Case: an application rewrites the head of a line and clears
+    /// what it had written so far, cursor included.
+    #[test]
+    fn erase_to_start_includes_the_cursor_column() {
+        let mut screen = screen();
+        for c in ['a', 'b', 'c'] {
+            screen.print(c);
+        }
+        screen.write.column = 1;
+        screen.erase_in_line(EraseLineMode::ToStart);
+        assert_eq!(screen.grid.cell(0, 0).c, ' ');
+        assert_eq!(screen.grid.cell(0, 1).c, ' ');
+        assert_eq!(screen.grid.cell(0, 2).c, 'c');
+    }
+
+    /// Asserts that erase-to-end is a no-op while the deferred wrap is
+    /// armed.
+    ///
+    /// The agreed policy follows alacritty: with the wrap pending the
+    /// cursor logically sits past the row's last cell, so `EL 0`
+    /// erases nothing rather than the just-printed last cell.
+    ///
+    /// Case: an application fills a row to its last column and then
+    /// issues `EL 0` before printing anything further.
+    #[test]
+    fn erase_to_end_is_a_no_op_under_pending_wrap() {
+        let mut screen = screen();
+        for c in ['a', 'b', 'c', 'd'] {
+            screen.print(c);
+        }
+        let effects = screen.erase_in_line(EraseLineMode::ToEnd);
+        assert_eq!(screen.grid.cell(0, 3).c, 'd');
+        assert_eq!(effects, Effects::default());
+    }
+
+    /// Asserts that erase-all clears the whole row regardless of the
+    /// cursor column.
+    ///
+    /// Case: a full-screen application repaints a status line in place
+    /// by clearing the entire row with `EL 2` before rewriting it.
+    #[test]
+    fn erase_all_clears_the_whole_row() {
+        let mut screen = screen();
+        for c in ['a', 'b', 'c'] {
+            screen.print(c);
+        }
+        screen.write.column = 1;
+        screen.erase_in_line(EraseLineMode::All);
+        assert_eq!(screen.grid.cell(0, 0).c, ' ');
+        assert_eq!(screen.grid.cell(0, 2).c, ' ');
+    }
+
+    /// Asserts that erase-below clears from the cursor cell to the end
+    /// of the screen, leaving earlier content in place.
+    ///
+    /// Case: a full-screen application redraws everything under the
+    /// cursor with `ED 0` while the rows above stay intact.
+    #[test]
+    fn erase_display_below_clears_from_the_cursor_down() {
+        let mut screen = screen();
+        screen.print('a');
+        screen.linefeed();
+        screen.carriage_return();
+        for c in ['b', 'c'] {
+            screen.print(c);
+        }
+        screen.write.column = 1;
+        let effects = screen.erase_in_display(EraseScreenMode::Below);
+        assert_eq!(screen.grid.cell(0, 0).c, 'a');
+        assert_eq!(screen.grid.cell(1, 0).c, 'b');
+        assert_eq!(screen.grid.cell(1, 1).c, ' ');
+        assert_eq!(
+            effects,
+            Effects {
+                damage: Some(Damage::Delta(vec![1, 2].into())),
+                history: None,
+            }
+        );
+    }
+
+    /// Asserts that erase-above clears everything through the cursor
+    /// cell inclusively, leaving the rest of the cursor row intact.
+    ///
+    /// Case: a full-screen application discards everything already
+    /// drawn above and left of the cursor with `ED 1`.
+    #[test]
+    fn erase_display_above_clears_through_the_cursor() {
+        let mut screen = screen();
+        screen.print('a');
+        screen.linefeed();
+        screen.carriage_return();
+        for c in ['b', 'c', 'd'] {
+            screen.print(c);
+        }
+        screen.write.column = 1;
+        let effects = screen.erase_in_display(EraseScreenMode::Above);
+        assert_eq!(screen.grid.cell(0, 0).c, ' ');
+        assert_eq!(screen.grid.cell(1, 0).c, ' ');
+        assert_eq!(screen.grid.cell(1, 1).c, ' ');
+        assert_eq!(screen.grid.cell(1, 2).c, 'd');
+        assert_eq!(
+            effects,
+            Effects {
+                damage: Some(Damage::Delta(vec![0, 1].into())),
+                history: None,
+            }
+        );
+    }
+
+    /// Asserts that erase-all clears the visible screen in place while
+    /// scrollback history survives.
+    ///
+    /// The agreed policy is the classic xterm behavior: `ED 2` erases
+    /// in place and does not push the cleared rows into history (a
+    /// deliberate divergence from alacritty, which scrolls them out
+    /// first).
+    ///
+    /// Case: the user runs `clear` in a session that already
+    /// accumulated scrollback, then scrolls back to check older
+    /// output.
+    #[test]
+    fn erase_display_all_clears_the_screen_but_not_history() {
+        let mut screen = screen();
+        screen.write.line = 2;
+        screen.linefeed();
+        screen.carriage_return();
+        for c in ['a', 'b'] {
+            screen.print(c);
+        }
+        let effects = screen.erase_in_display(EraseScreenMode::All);
+        assert_eq!(screen.grid.cell(2, 0).c, ' ');
+        assert_eq!(screen.grid.cell(2, 1).c, ' ');
+        assert_eq!(screen.grid.history_len(), 1);
+        assert_eq!(
+            effects,
+            Effects {
+                damage: Some(Damage::Full),
+                history: None,
             }
         );
     }
