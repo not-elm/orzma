@@ -17,13 +17,21 @@ pub enum HistoryEvent {
 /// Storage-only grid: scrollback history plus the visible screen in
 /// one ring.
 ///
-/// The last `size.rows` entries of `rows` are the visible screen;
-/// every entry before them is history, oldest first. The grid knows
-/// nothing about cursors, pens, or viewports.
+/// The grid knows nothing about cursors, pens, or viewports.
 #[derive(Debug)]
 pub struct Grid {
+    /// One logical ring holding history and the active screen:
+    /// the last `size.rows` entries are the active screen, everything
+    /// before them is history, oldest first. Indices are logical
+    /// (`VecDeque` hides the physical rotation), so index `0` is
+    /// always the oldest surviving history row and the boundary sits
+    /// at `history_len`.
     rows: VecDeque<Row>,
+    /// Active-screen dimensions; `rows` always keeps at least this
+    /// many entries as its tail window.
     size: GridSize,
+    /// History row cap: `history_len` never exceeds it, and a scroll
+    /// at the cap recycles the evicted row as the incoming blank.
     max_history: usize,
 }
 
