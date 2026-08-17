@@ -16,7 +16,7 @@ pub enum HistoryEvent {
 
 /// A single storage row of cells.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Row(Vec<Cell>);
+struct Row(Vec<Cell>);
 
 impl Row {
     fn filled(cols: u16, fill: Cell) -> Self {
@@ -107,10 +107,7 @@ mod tests {
     use crate::schema::Color;
 
     fn grid(rows: u16, max_history: usize) -> Grid {
-        Grid::build(
-            GridSize { cols: 4, rows },
-            max_history,
-        )
+        Grid::build(GridSize { cols: 4, rows }, max_history)
     }
 
     /// Asserts that a freshly built grid holds only blank visible rows
