@@ -12,9 +12,10 @@ use crate::schema::{
 pub mod hyperlink;
 pub mod schema;
 pub mod vt;
+pub mod grid;
 
 pub mod prelude {
-    pub use crate::{Vt, VtUpdate, schema::*, vt::*};
+    pub use crate::{Vt, VtUpdate, schema::*, vt::*, grid::*};
 }
 
 /// The terminal-emulation contract `OrzmaTerm` drives and the host
