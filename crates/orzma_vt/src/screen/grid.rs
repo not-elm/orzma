@@ -3,7 +3,7 @@
 use crate::schema::GridSize;
 use crate::screen::cell::Cell;
 use std::collections::VecDeque;
-use std::ops::Range;
+use std::ops::{Index, IndexMut, Range};
 
 /// History effect of one bottom-line scroll, for placement bookkeeping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,17 +54,6 @@ impl Grid {
         self.size
     }
 
-    /// Reads the cell at visible-screen coordinates.
-    pub fn cell(&self, line: u16, column: u16) -> &Cell {
-        &self.rows[self.visible_index(line)].0[usize::from(column)]
-    }
-
-    /// Mutably borrows the cell at visible-screen coordinates.
-    pub fn cell_mut(&mut self, line: u16, column: u16) -> &mut Cell {
-        let index = self.visible_index(line);
-        &mut self.rows[index].0[usize::from(column)]
-    }
-
     /// Overwrites the given column range of one visible row with `fill`.
     pub fn fill_visible_row_range(&mut self, line: u16, columns: Range<u16>, fill: Cell) {
         let index = self.visible_index(line);
@@ -99,13 +88,45 @@ impl Grid {
     }
 }
 
+/// Indexes the row at a visible-screen line; history rows are
+/// structurally unreachable (the index is offset by `history_len`).
+impl Index<u16> for Grid {
+    type Output = Row;
+
+    fn index(&self, line: u16) -> &Row {
+        &self.rows[self.visible_index(line)]
+    }
+}
+
+impl IndexMut<u16> for Grid {
+    fn index_mut(&mut self, line: u16) -> &mut Row {
+        let index = self.visible_index(line);
+        &mut self.rows[index]
+    }
+}
+
 /// A single storage row of cells.
 #[derive(Debug, Clone, PartialEq)]
-struct Row(Vec<Cell>);
+pub struct Row<T = Cell>(Vec<T>);
 
-impl Row {
-    fn filled(cols: u16, fill: Cell) -> Self {
+impl<T: Clone> Row<T> {
+    pub fn filled(cols: u16, fill: T) -> Self {
         Self(vec![fill; usize::from(cols)])
+    }
+}
+
+/// Indexes the cell at a 0-based column.
+impl<T> Index<u16> for Row<T> {
+    type Output = T;
+
+    fn index(&self, column: u16) -> &T {
+        &self.0[usize::from(column)]
+    }
+}
+
+impl<T> IndexMut<u16> for Row<T> {
+    fn index_mut(&mut self, column: u16) -> &mut T {
+        &mut self.0[usize::from(column)]
     }
 }
 
@@ -128,8 +149,8 @@ mod tests {
         let grid = grid(3, 10);
         assert_eq!(grid.history_len(), 0);
         assert_eq!(grid.size(), GridSize { cols: 4, rows: 3 });
-        assert_eq!(*grid.cell(0, 0), Cell::default());
-        assert_eq!(*grid.cell(2, 3), Cell::default());
+        assert_eq!(grid[0][0], Cell::default());
+        assert_eq!(grid[2][3], Cell::default());
     }
 
     /// Asserts that a scroll below history capacity pushes the top
@@ -142,13 +163,13 @@ mod tests {
     #[test]
     fn a_scroll_with_room_pushes_into_history() {
         let mut grid = grid(2, 10);
-        grid.cell_mut(0, 0).c = 'a';
-        grid.cell_mut(1, 0).c = 'b';
+        grid[0][0].c = 'a';
+        grid[1][0].c = 'b';
         let fill = Cell::blank_with_bg(Color::Indexed(4));
         assert_eq!(grid.scroll_up_one(fill), HistoryEvent::Pushed);
         assert_eq!(grid.history_len(), 1);
-        assert_eq!(grid.cell(0, 0).c, 'b');
-        assert_eq!(*grid.cell(1, 0), fill);
+        assert_eq!(grid[0][0].c, 'b');
+        assert_eq!(grid[1][0], fill);
     }
 
     /// Asserts that a scroll at history capacity reports the eviction
@@ -176,14 +197,14 @@ mod tests {
     #[test]
     fn zero_capacity_history_evicts_on_every_scroll() {
         let mut grid = grid(2, 0);
-        grid.cell_mut(0, 0).c = 'a';
+        grid[0][0].c = 'a';
         assert_eq!(
             grid.scroll_up_one(Cell::default()),
             HistoryEvent::PushedWithEviction
         );
         assert_eq!(grid.history_len(), 0);
-        assert_eq!(grid.cell(0, 0).c, ' ');
-        assert_eq!(grid.cell(1, 0).c, ' ');
+        assert_eq!(grid[0][0].c, ' ');
+        assert_eq!(grid[1][0].c, ' ');
     }
 
     /// Asserts that a range fill overwrites exactly the given columns
@@ -195,12 +216,12 @@ mod tests {
     fn a_range_fill_overwrites_only_the_given_columns() {
         let mut grid = grid(2, 0);
         for column in 0..4 {
-            grid.cell_mut(0, column).c = 'x';
+            grid[0][column].c = 'x';
         }
         grid.fill_visible_row_range(0, 1..3, Cell::default());
-        assert_eq!(grid.cell(0, 0).c, 'x');
-        assert_eq!(grid.cell(0, 1).c, ' ');
-        assert_eq!(grid.cell(0, 2).c, ' ');
-        assert_eq!(grid.cell(0, 3).c, 'x');
+        assert_eq!(grid[0][0].c, 'x');
+        assert_eq!(grid[0][1].c, ' ');
+        assert_eq!(grid[0][2].c, ' ');
+        assert_eq!(grid[0][3].c, 'x');
     }
 }

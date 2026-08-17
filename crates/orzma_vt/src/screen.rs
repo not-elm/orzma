@@ -130,7 +130,7 @@ impl Screen {
         } else {
             effects.merge(Effects::damage_rows(vec![self.write.line]));
         }
-        *self.grid.cell_mut(self.write.line, self.write.column) = self.write.pen.stamp(c);
+        self.grid[self.write.line][self.write.column] = self.write.pen.stamp(c);
         if self.write.column + 1 < self.grid.size().cols {
             self.write.column += 1;
         } else {
@@ -373,8 +373,8 @@ mod tests {
         screen.pen_mut().bg = Color::Indexed(4);
         screen.write.line = 2;
         screen.linefeed();
-        assert_eq!(screen.grid.cell(2, 0).bg, Color::Indexed(4));
-        assert_eq!(screen.grid.cell(2, 3).bg, Color::Indexed(4));
+        assert_eq!(screen.grid[2][0].bg, Color::Indexed(4));
+        assert_eq!(screen.grid[2][3].bg, Color::Indexed(4));
     }
 
     /// Asserts that a linefeed preserves the deferred-wrap flag.
@@ -403,8 +403,8 @@ mod tests {
         let mut screen = screen();
         screen.pen_mut().fg = Color::Indexed(1);
         let effects = screen.print('a');
-        assert_eq!(screen.grid.cell(0, 0).c, 'a');
-        assert_eq!(screen.grid.cell(0, 0).fg, Color::Indexed(1));
+        assert_eq!(screen.grid[0][0].c, 'a');
+        assert_eq!(screen.grid[0][0].fg, Color::Indexed(1));
         assert_eq!((screen.write.line, screen.write.column), (0, 1));
         assert_eq!(
             effects,
@@ -426,7 +426,7 @@ mod tests {
         let mut screen = screen();
         screen.write.column = 3;
         screen.print('x');
-        assert_eq!(screen.grid.cell(0, 3).c, 'x');
+        assert_eq!(screen.grid[0][3].c, 'x');
         assert_eq!(screen.write.column, 3);
         assert!(screen.write.pending_wrap);
     }
@@ -443,7 +443,7 @@ mod tests {
             screen.print(c);
         }
         let effects = screen.print('e');
-        assert_eq!(screen.grid.cell(1, 0).c, 'e');
+        assert_eq!(screen.grid[1][0].c, 'e');
         assert_eq!((screen.write.line, screen.write.column), (1, 1));
         assert!(!screen.write.pending_wrap);
         assert_eq!(
@@ -467,7 +467,7 @@ mod tests {
         screen.write.column = 3;
         screen.print('x');
         let effects = screen.print('y');
-        assert_eq!(screen.grid.cell(2, 0).c, 'y');
+        assert_eq!(screen.grid[2][0].c, 'y');
         assert_eq!(
             effects,
             Effects {
@@ -491,10 +491,10 @@ mod tests {
         screen.write.column = 1;
         screen.pen_mut().bg = Color::Indexed(2);
         let effects = screen.erase_in_line(EraseLineMode::ToEnd);
-        assert_eq!(screen.grid.cell(0, 0).c, 'a');
-        assert_eq!(screen.grid.cell(0, 1).c, ' ');
-        assert_eq!(screen.grid.cell(0, 1).bg, Color::Indexed(2));
-        assert_eq!(screen.grid.cell(0, 3).bg, Color::Indexed(2));
+        assert_eq!(screen.grid[0][0].c, 'a');
+        assert_eq!(screen.grid[0][1].c, ' ');
+        assert_eq!(screen.grid[0][1].bg, Color::Indexed(2));
+        assert_eq!(screen.grid[0][3].bg, Color::Indexed(2));
         assert_eq!(
             effects,
             Effects {
@@ -520,9 +520,9 @@ mod tests {
         }
         screen.write.column = 1;
         screen.erase_in_line(EraseLineMode::ToStart);
-        assert_eq!(screen.grid.cell(0, 0).c, ' ');
-        assert_eq!(screen.grid.cell(0, 1).c, ' ');
-        assert_eq!(screen.grid.cell(0, 2).c, 'c');
+        assert_eq!(screen.grid[0][0].c, ' ');
+        assert_eq!(screen.grid[0][1].c, ' ');
+        assert_eq!(screen.grid[0][2].c, 'c');
     }
 
     /// Asserts that erase-to-end is a no-op while the deferred wrap is
@@ -541,7 +541,7 @@ mod tests {
             screen.print(c);
         }
         let effects = screen.erase_in_line(EraseLineMode::ToEnd);
-        assert_eq!(screen.grid.cell(0, 3).c, 'd');
+        assert_eq!(screen.grid[0][3].c, 'd');
         assert_eq!(effects, Effects::default());
     }
 
@@ -558,8 +558,8 @@ mod tests {
         }
         screen.write.column = 1;
         screen.erase_in_line(EraseLineMode::All);
-        assert_eq!(screen.grid.cell(0, 0).c, ' ');
-        assert_eq!(screen.grid.cell(0, 2).c, ' ');
+        assert_eq!(screen.grid[0][0].c, ' ');
+        assert_eq!(screen.grid[0][2].c, ' ');
     }
 
     /// Asserts that erase-below clears from the cursor cell to the end
@@ -578,9 +578,9 @@ mod tests {
         }
         screen.write.column = 1;
         let effects = screen.erase_in_display(EraseScreenMode::Below);
-        assert_eq!(screen.grid.cell(0, 0).c, 'a');
-        assert_eq!(screen.grid.cell(1, 0).c, 'b');
-        assert_eq!(screen.grid.cell(1, 1).c, ' ');
+        assert_eq!(screen.grid[0][0].c, 'a');
+        assert_eq!(screen.grid[1][0].c, 'b');
+        assert_eq!(screen.grid[1][1].c, ' ');
         assert_eq!(
             effects,
             Effects {
@@ -606,10 +606,10 @@ mod tests {
         }
         screen.write.column = 1;
         let effects = screen.erase_in_display(EraseScreenMode::Above);
-        assert_eq!(screen.grid.cell(0, 0).c, ' ');
-        assert_eq!(screen.grid.cell(1, 0).c, ' ');
-        assert_eq!(screen.grid.cell(1, 1).c, ' ');
-        assert_eq!(screen.grid.cell(1, 2).c, 'd');
+        assert_eq!(screen.grid[0][0].c, ' ');
+        assert_eq!(screen.grid[1][0].c, ' ');
+        assert_eq!(screen.grid[1][1].c, ' ');
+        assert_eq!(screen.grid[1][2].c, 'd');
         assert_eq!(
             effects,
             Effects {
@@ -640,8 +640,8 @@ mod tests {
             screen.print(c);
         }
         let effects = screen.erase_in_display(EraseScreenMode::All);
-        assert_eq!(screen.grid.cell(2, 0).c, ' ');
-        assert_eq!(screen.grid.cell(2, 1).c, ' ');
+        assert_eq!(screen.grid[2][0].c, ' ');
+        assert_eq!(screen.grid[2][1].c, ' ');
         assert_eq!(screen.grid.history_len(), 1);
         assert_eq!(
             effects,
