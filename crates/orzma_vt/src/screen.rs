@@ -30,7 +30,6 @@ impl Effects {
         }
     }
 
-    #[expect(dead_code, reason = "merge will be used when multiple effects combine")]
     fn merge(&mut self, other: Effects) {
         match (&mut self.damage, other.damage) {
             (Some(mine), Some(theirs)) => *mine |= theirs,
@@ -82,6 +81,28 @@ impl Screen {
                 bottom: size.rows - 1,
             },
         }
+    }
+
+    /// Prints one character at the cursor with the current pen,
+    /// wrapping first when the deferred wrap is armed.
+    ///
+    /// The caller dispatches control bytes itself; this method assumes
+    /// a printable character of display width one.
+    pub fn print(&mut self, c: char) -> Effects {
+        let mut effects = Effects::default();
+        if self.write.pending_wrap {
+            self.write.pending_wrap = false;
+            self.write.column = 0;
+            effects.merge(self.linefeed());
+        }
+        *self.grid.cell_mut(self.write.line, self.write.column) = self.write.pen.stamp(c);
+        effects.merge(Effects::damage_rows(vec![self.write.line]));
+        if self.write.column + 1 < self.grid.size().cols {
+            self.write.column += 1;
+        } else {
+            self.write.pending_wrap = true;
+        }
+        effects
     }
 
     /// Rewinds the cursor to column zero and disarms the deferred
@@ -295,5 +316,89 @@ mod tests {
         screen.write.pending_wrap = true;
         screen.linefeed();
         assert!(screen.write.pending_wrap);
+    }
+
+    /// Asserts that printing stamps the pen into the cell and advances
+    /// the cursor one column.
+    ///
+    /// Case: an application prints ordinary colored text at the start
+    /// of a row.
+    #[test]
+    fn print_stamps_the_pen_and_advances() {
+        let mut screen = screen();
+        screen.pen_mut().fg = Color::Indexed(1);
+        let effects = screen.print('a');
+        assert_eq!(screen.grid.cell(0, 0).c, 'a');
+        assert_eq!(screen.grid.cell(0, 0).fg, Color::Indexed(1));
+        assert_eq!((screen.write.line, screen.write.column), (0, 1));
+        assert_eq!(
+            effects,
+            Effects {
+                damage: Some(Damage::Delta(vec![0].into())),
+                history: None,
+            }
+        );
+    }
+
+    /// Asserts that printing into the last column arms the deferred
+    /// wrap and leaves the cursor in place.
+    ///
+    /// Case: an application emits a line exactly as wide as the
+    /// screen, and the terminal must not move to the next row until
+    /// more text actually arrives.
+    #[test]
+    fn print_at_the_last_column_arms_the_deferred_wrap() {
+        let mut screen = screen();
+        screen.write.column = 3;
+        screen.print('x');
+        assert_eq!(screen.grid.cell(0, 3).c, 'x');
+        assert_eq!(screen.write.column, 3);
+        assert!(screen.write.pending_wrap);
+    }
+
+    /// Asserts that the print following an armed deferred wrap lands
+    /// at the start of the next row.
+    ///
+    /// Case: an application prints past the right edge, and the
+    /// overflowing character continues on the next line.
+    #[test]
+    fn the_next_print_after_the_last_column_wraps() {
+        let mut screen = screen();
+        for c in ['a', 'b', 'c', 'd'] {
+            screen.print(c);
+        }
+        let effects = screen.print('e');
+        assert_eq!(screen.grid.cell(1, 0).c, 'e');
+        assert_eq!((screen.write.line, screen.write.column), (1, 1));
+        assert!(!screen.write.pending_wrap);
+        assert_eq!(
+            effects,
+            Effects {
+                damage: Some(Damage::Delta(vec![0, 1].into())),
+                history: None,
+            }
+        );
+    }
+
+    /// Asserts that a deferred wrap on the bottom row scrolls the
+    /// screen and reports the history push with full damage.
+    ///
+    /// Case: a shell fills the very last cell of the screen and keeps
+    /// printing, forcing a scroll in the middle of the wrap.
+    #[test]
+    fn a_wrap_on_the_bottom_row_scrolls() {
+        let mut screen = screen();
+        screen.write.line = 2;
+        screen.write.column = 3;
+        screen.print('x');
+        let effects = screen.print('y');
+        assert_eq!(screen.grid.cell(2, 0).c, 'y');
+        assert_eq!(
+            effects,
+            Effects {
+                damage: Some(Damage::Full),
+                history: Some(HistoryEvent::Pushed),
+            }
+        );
     }
 }
