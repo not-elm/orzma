@@ -1,8 +1,11 @@
 //! Frame vocabulary: what one emit hands to the renderer.
 
-use crate::schema::{
-    Cursor, DisplayOffset, GridSize, Hyperlink, Palette, ProjectedPlacement, Row, SelectionRange,
-    ViCursor, ViewportLine, VtModes,
+use crate::{
+    schema::{
+        Cursor, GridSize, Hyperlink, Palette, ProjectedPlacement, Row, SelectionRange, ViCursor,
+        ViewportLine, VtModes,
+    },
+    screen::viewport::DisplayOffset,
 };
 
 /// One emitted frame: a full repaint or a differential update.

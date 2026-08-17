@@ -14,16 +14,6 @@ pub enum HistoryEvent {
     PushedWithEviction,
 }
 
-/// A single storage row of cells.
-#[derive(Debug, Clone, PartialEq)]
-struct Row(Vec<Cell>);
-
-impl Row {
-    fn filled(cols: u16, fill: Cell) -> Self {
-        Self(vec![fill; usize::from(cols)])
-    }
-}
-
 /// Storage-only grid: scrollback history plus the visible screen in
 /// one ring.
 ///
@@ -98,6 +88,16 @@ impl Grid {
 
     fn visible_index(&self, line: u16) -> usize {
         self.history_len() + usize::from(line)
+    }
+}
+
+/// A single storage row of cells.
+#[derive(Debug, Clone, PartialEq)]
+struct Row(Vec<Cell>);
+
+impl Row {
+    fn filled(cols: u16, fill: Cell) -> Self {
+        Self(vec![fill; usize::from(cols)])
     }
 }
 

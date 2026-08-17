@@ -5,7 +5,10 @@
 //! owner. [`vt`] holds the superseded [`vt::OldOrzmaVt`] +
 //! [`vt::VtBackend`] pair until the migration to [`Vt`] completes.
 
-use crate::schema::{DamageVerdict, DisplayOffset, Frame, GridSize, Scroll, VtModes, VtSignal};
+use crate::{
+    schema::{DamageVerdict, Frame, GridSize, Scroll, VtModes, VtSignal},
+    screen::viewport::DisplayOffset,
+};
 
 pub mod hyperlink;
 pub mod schema;

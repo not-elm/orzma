@@ -6,10 +6,12 @@
 
 pub mod cell;
 pub mod grid;
+pub mod viewport;
 
 use self::cell::Pen;
 use self::grid::{Grid, HistoryEvent};
-use crate::schema::{Damage, DisplayOffset, GridSize};
+use self::viewport::{DisplayOffset, Viewport};
+use crate::schema::{Damage, GridSize};
 
 /// One mutation's observable effects, for the caller to stage.
 ///
@@ -104,9 +106,7 @@ impl Screen {
         );
         Self {
             grid: Grid::build(size, max_history),
-            viewport: Viewport {
-                offset: DisplayOffset(0),
-            },
+            viewport: Viewport::default(),
             write: WriteState::default(),
             saved: SavedCursorSlots::default(),
             margins: Margins {
@@ -214,9 +214,9 @@ impl Screen {
         &mut self.write.pen
     }
 
-    /// Number of scrollback rows the viewport sits above the live
-    /// tail; always zero until scroll operations arrive.
-    pub fn display_offset(&self) -> DisplayOffset {
+    /// Number of scrollback rows the viewport sits above the live tail; always zero until scroll operations arrive.
+    #[inline]
+    pub const fn display_offset(&self) -> DisplayOffset {
         self.viewport.offset
     }
 }
@@ -248,10 +248,6 @@ pub struct Margins {
     pub top: u16,
     /// Inclusive last row of the scroll region (default `rows - 1`).
     pub bottom: u16,
-}
-
-struct Viewport {
-    offset: DisplayOffset,
 }
 
 #[derive(Default)]

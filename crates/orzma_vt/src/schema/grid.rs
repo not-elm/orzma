@@ -1,21 +1,10 @@
-//! Grid vocabulary: [`DisplayOffset`], [`GridSize`], the active-grid
-//! coordinate types [`GridLine`], [`GridColumn`], and [`GridPoint`],
-//! and their viewport projection [`ViewportLine`].
+//! Grid vocabulary: [`GridSize`], the active-grid coordinate types
+//! [`GridLine`], [`GridColumn`], and [`GridPoint`], and their viewport
+//! projection [`ViewportLine`].
+
+use crate::screen::viewport::DisplayOffset;
 
 pub mod cell;
-
-/// Number of scrollback rows the viewport sits above the live tail.
-///
-/// `0` means the viewport is pinned to the live tail; a positive value
-/// counts the scrollback rows showing above it. The unit is grid rows.
-///
-/// # Invariants
-///
-/// The producing backend keeps the value within the scrollback
-/// capacity and at `0` while the alternate screen is active; this type
-/// does not enforce either bound itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DisplayOffset(pub u32);
 
 /// Grid dimensions in cells.
 ///

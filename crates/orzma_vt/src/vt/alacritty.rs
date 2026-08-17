@@ -2,10 +2,10 @@
 
 use crate::{
     schema::{
-        CellSide, Cursor, Damage, DisplayOffset, GridPoint, GridSize, MouseEncoding, MouseTracking,
-        Palette, Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult,
-        VtSignal,
+        CellSide, Cursor, Damage, GridPoint, GridSize, MouseEncoding, MouseTracking, Palette,
+        Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
     },
+    screen::viewport::DisplayOffset,
     vt::{VtBackend, VtSelection, apc::ApcState},
 };
 use alacritty_terminal::{

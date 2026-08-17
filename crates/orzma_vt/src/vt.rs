@@ -1,11 +1,13 @@
 //! Engine layer: the [`OldOrzmaVt`] contract and its backends.
 
-use crate::schema::{
-    CellSide, Cursor, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridPoint, GridSize,
-    Palette, Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult,
-    VtSignal,
+use crate::{
+    Vt, VtUpdate,
+    schema::{
+        CellSide, Cursor, Damage, DamageRows, DamageVerdict, Frame, GridPoint, GridSize, Palette,
+        Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
+    },
+    screen::viewport::DisplayOffset,
 };
-use crate::{Vt, VtUpdate};
 
 #[cfg(feature = "alacritty")]
 mod alacritty;

@@ -25,6 +25,7 @@ mod signal;
 mod vi;
 mod webview;
 
+pub use crate::screen::viewport::DisplayOffset;
 pub use color::*;
 pub use cursor::*;
 pub use damage::*;
