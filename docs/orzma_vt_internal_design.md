@@ -99,6 +99,8 @@ damage は「アクティブビューポート + カーソル + 将来の select
 - `Reflowed` — アンカーの再配置(eviction ではない)
 - placement の増減・射影ジオメトリ変化は damage を stage(「変化は必ず emit が追従する」契約)
 
+実装は eviction を独立イベントではなく push の変種 `HistoryEvent::{Pushed, PushedWithEviction}` として開始した(`crates/orzma_vt/src/screen/grid.rs`)。独立した `Evicted` / `Cleared` / `Reflowed` は、それらを発生させる操作(履歴クリア・reflow)の実装時に追加する。
+
 なお現行契約では `history_base` を外部に配らないため、専用の HistoryLedger フィールドは不要になり、簿記は PlacementStore に収まる(合議時点からの簡素化)。
 
 ### 4.6 シグナル・応答は呼び出しローカルの `Products`
@@ -118,16 +120,16 @@ placement は Grid の行に振る**安定 `LineId`** にアンカーし、`Plac
 ## 6. モジュール配置(mod.rs 禁止規約準拠)
 
 ```
-crates/orzma_vt/src/orzma.rs            … pub struct OrzmaVt + impl Vt(lib.rs から pub use)
-crates/orzma_vt/src/orzma/interpreter.rs … Interpreter(vtparse + ?2026)
-crates/orzma_vt/src/orzma/executor.rs    … Executor(コールバック実装)+ Products
-crates/orzma_vt/src/orzma/terminal.rs    … TerminalState / ModeState / TabStops / ColorTable / TitleState
-crates/orzma_vt/src/orzma/screen.rs      … Screen / Viewport / WriteState / SavedCursorSlots / Margins
-crates/orzma_vt/src/orzma/grid.rs        … Grid / HistoryEvent / LineId
-crates/orzma_vt/src/orzma/cell.rs        … 格納セル表現(schema GridCell とは別の内部表現)
-crates/orzma_vt/src/orzma/placement.rs   … PlacementStore / 占有スパン
-crates/orzma_vt/src/orzma/damage.rs      … DamageLedger
-crates/orzma_vt/src/orzma/frame.rs       … FrameEmitter(Row/Run 構築・射影・seq)
+crates/orzma_vt/src/lib.rs               … pub struct OrzmaVt + impl Vt(現状はスタブ)
+crates/orzma_vt/src/interpreter.rs       … Interpreter(vtparse + ?2026)〔未着手〕
+crates/orzma_vt/src/executor.rs          … Executor(コールバック実装)+ Products〔未着手〕
+crates/orzma_vt/src/terminal.rs          … TerminalState / ModeState / TabStops / ColorTable / TitleState〔未着手〕
+crates/orzma_vt/src/screen.rs            … Screen / Viewport / WriteState / SavedCursorSlots / Margins / Effects〔実装済み〕
+crates/orzma_vt/src/screen/grid.rs       … Grid / Row / HistoryEvent〔実装済み。LineId は placement 着手時に追加〕
+crates/orzma_vt/src/screen/cell.rs       … Cell / Pen(schema GridCell とは別の内部表現)〔実装済み〕
+crates/orzma_vt/src/placement.rs         … PlacementStore / 占有スパン〔未着手〕
+crates/orzma_vt/src/damage.rs            … DamageLedger〔未着手〕
+crates/orzma_vt/src/frame.rs             … FrameEmitter(Row/Run 構築・射影・seq)〔未着手〕
 ```
 
 ## 7. 実装順の示唆
