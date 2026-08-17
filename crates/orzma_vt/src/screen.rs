@@ -30,6 +30,13 @@ impl Effects {
         }
     }
 
+    fn full(history: Option<HistoryEvent>) -> Self {
+        Self {
+            damage: Some(Damage::Full),
+            history,
+        }
+    }
+
     fn merge(&mut self, other: Effects) {
         match (&mut self.damage, other.damage) {
             (Some(mine), Some(theirs)) => *mine |= theirs,
@@ -120,9 +127,10 @@ impl Screen {
             self.write.pending_wrap = false;
             self.write.column = 0;
             effects.merge(self.linefeed());
+        } else {
+            effects.merge(Effects::damage_rows(vec![self.write.line]));
         }
         *self.grid.cell_mut(self.write.line, self.write.column) = self.write.pen.stamp(c);
-        effects.merge(Effects::damage_rows(vec![self.write.line]));
         if self.write.column + 1 < self.grid.size().cols {
             self.write.column += 1;
         } else {
@@ -148,10 +156,7 @@ impl Screen {
             return Effects::damage_rows(vec![departed, self.write.line]);
         }
         let history = self.grid.scroll_up_one(self.write.pen.erase_cell());
-        Effects {
-            damage: Some(Damage::Full),
-            history: Some(history),
-        }
+        Effects::full(Some(history))
     }
 
     /// Erases part of the cursor row with the pen background (BCE);
@@ -198,10 +203,7 @@ impl Screen {
                 for line in 0..rows {
                     self.grid.fill_visible_row_range(line, 0..cols, blank);
                 }
-                Effects {
-                    damage: Some(Damage::Full),
-                    history: None,
-                }
+                Effects::full(None)
             }
         }
     }
