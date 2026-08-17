@@ -29,7 +29,7 @@ pub struct Grid {
 
 impl Grid {
     /// Builds a grid of blank visible rows with an empty history.
-    pub fn build(size: GridSize, max_history: usize) -> Self {
+    pub fn new(size: GridSize, max_history: usize) -> Self {
         let mut rows = VecDeque::with_capacity(usize::from(size.rows));
         for _ in 0..size.rows {
             rows.push_back(Row::filled(size.cols, Cell::default()));
@@ -107,7 +107,7 @@ mod tests {
     use crate::schema::Color;
 
     fn grid(rows: u16, max_history: usize) -> Grid {
-        Grid::build(GridSize { cols: 4, rows }, max_history)
+        Grid::new(GridSize { cols: 4, rows }, max_history)
     }
 
     /// Asserts that a freshly built grid holds only blank visible rows

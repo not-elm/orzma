@@ -10,8 +10,8 @@ pub mod viewport;
 
 use self::cell::Pen;
 use self::grid::{Grid, HistoryEvent};
-use self::viewport::{DisplayOffset, Viewport};
-use crate::schema::{Damage, GridSize};
+use crate::schema::{Damage, DisplayOffset, GridSize};
+use crate::screen::viewport::Viewport;
 
 /// One mutation's observable effects, for the caller to stage.
 ///
@@ -105,7 +105,7 @@ impl Screen {
             "degenerate grid sizes are rejected by the caller"
         );
         Self {
-            grid: Grid::build(size, max_history),
+            grid: Grid::new(size, max_history),
             viewport: Viewport::default(),
             write: WriteState::default(),
             saved: SavedCursorSlots::default(),
