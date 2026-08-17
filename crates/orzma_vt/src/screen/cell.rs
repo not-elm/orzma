@@ -124,8 +124,7 @@ mod tests {
     /// Asserts that the erase cell keeps only the pen's background.
     ///
     /// Case: an application sets a colored background and clears a
-    /// region, which must paint the cleared cells with that background
-    /// while dropping the foreground and style (BCE).
+    /// region of the screen.
     #[test]
     fn the_erase_cell_keeps_only_the_background() {
         let pen = Pen {

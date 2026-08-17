@@ -91,6 +91,10 @@ impl Screen {
     /// Builds a blank screen with the cursor at the origin and the
     /// viewport pinned to the live tail.
     pub fn build(size: GridSize, max_history: usize) -> Self {
+        debug_assert!(
+            size.cols > 0 && size.rows > 0,
+            "degenerate grid sizes are rejected by the caller"
+        );
         Self {
             grid: Grid::build(size, max_history),
             viewport: Viewport {
@@ -363,9 +367,8 @@ mod tests {
     /// Asserts that the row scrolled in at the bottom carries the
     /// current pen background.
     ///
-    /// Case: an application sets a colored background and scrolls, and
-    /// the freshly exposed bottom row must show that background (BCE),
-    /// not the default one.
+    /// Case: an application sets a colored background and scrolls at
+    /// the bottom of the screen.
     #[test]
     fn a_scrolled_in_row_carries_the_pen_background() {
         let mut screen = screen();
@@ -480,8 +483,7 @@ mod tests {
     /// edge with the pen background.
     ///
     /// Case: an application with a colored background truncates the
-    /// tail of a line with `EL 0`, and the cleared cells must show
-    /// that background (BCE).
+    /// tail of a line with `EL 0`.
     #[test]
     fn erase_to_end_clears_from_the_cursor_with_the_pen_background() {
         let mut screen = screen();
@@ -803,7 +805,7 @@ mod alacritty_oracle {
     /// converges with alacritty as a no-op.
     ///
     /// Case: an application fills the row completely and then issues
-    /// `EL 0`, which must leave the just-printed last cell intact.
+    /// `EL 0`.
     #[test]
     fn erase_to_end_under_pending_wrap_converges_with_alacritty() {
         let mut screen = screen();
