@@ -11,11 +11,11 @@ use crate::schema::{
 
 pub mod hyperlink;
 pub mod schema;
+pub mod screen;
 pub mod vt;
-pub mod grid;
 
 pub mod prelude {
-    pub use crate::{Vt, VtUpdate, schema::*, vt::*, grid::*};
+    pub use crate::{Vt, VtUpdate, schema::*, vt::*};
 }
 
 /// The terminal-emulation contract `OrzmaTerm` drives and the host
