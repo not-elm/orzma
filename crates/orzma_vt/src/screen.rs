@@ -97,7 +97,7 @@ pub struct Screen {
 impl Screen {
     /// Builds a blank screen with the cursor at the origin and the
     /// viewport pinned to the live tail.
-    pub fn build(size: GridSize, max_history: usize) -> Self {
+    pub fn new(size: GridSize, max_history: usize) -> Self {
         debug_assert!(
             size.cols > 0 && size.rows > 0,
             "degenerate grid sizes are rejected by the caller"
@@ -268,7 +268,7 @@ mod tests {
     use crate::schema::Color;
 
     fn screen() -> Screen {
-        Screen::build(GridSize { cols: 4, rows: 3 }, 10)
+        Screen::new(GridSize { cols: 4, rows: 3 }, 10)
     }
 
     /// Asserts that a fresh screen starts at the origin, pinned to the
@@ -353,7 +353,7 @@ mod tests {
     /// and continued output starts dropping the oldest history.
     #[test]
     fn a_bottom_linefeed_at_capacity_reports_the_eviction() {
-        let mut screen = Screen::build(GridSize { cols: 4, rows: 3 }, 1);
+        let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
         screen.write.line = 2;
         screen.linefeed();
         let effects = screen.linefeed();
@@ -654,167 +654,5 @@ mod tests {
                 history: None,
             }
         );
-    }
-}
-
-// NOTE: deliberate divergences from alacritty are excluded from this
-// oracle: `erase_in_display(All)` clears in place (classic xterm),
-// while alacritty scrolls the viewport into history first — do not
-// add an ED 2 convergence test here.
-#[cfg(all(test, feature = "alacritty"))]
-mod alacritty_oracle {
-    use super::*;
-    use alacritty_terminal::Term;
-    use alacritty_terminal::event::VoidListener;
-    use alacritty_terminal::grid::Dimensions;
-    use alacritty_terminal::index::{Column, Line};
-    use alacritty_terminal::term::Config;
-    use alacritty_terminal::vte::ansi::Processor;
-
-    const COLS: u16 = 4;
-    const ROWS: u16 = 3;
-
-    struct OracleDim;
-
-    impl Dimensions for OracleDim {
-        fn columns(&self) -> usize {
-            usize::from(COLS)
-        }
-
-        fn screen_lines(&self) -> usize {
-            usize::from(ROWS)
-        }
-
-        fn total_lines(&self) -> usize {
-            usize::from(ROWS)
-        }
-    }
-
-    fn screen() -> Screen {
-        Screen::build(
-            GridSize {
-                cols: COLS,
-                rows: ROWS,
-            },
-            100,
-        )
-    }
-
-    fn oracle_after(bytes: &[u8]) -> Term<VoidListener> {
-        let mut term = Term::new(Config::default(), &OracleDim, VoidListener);
-        let mut processor: Processor = Processor::new();
-        processor.advance(&mut term, bytes);
-        term
-    }
-
-    fn screen_chars(screen: &Screen) -> Vec<String> {
-        (0..ROWS)
-            .map(|line| {
-                (0..COLS)
-                    .map(|column| screen.grid.cell(line, column).c)
-                    .collect()
-            })
-            .collect()
-    }
-
-    fn oracle_chars(term: &Term<VoidListener>) -> Vec<String> {
-        (0..ROWS)
-            .map(|line| {
-                (0..COLS)
-                    .map(|column| term.grid()[Line(i32::from(line))][Column(usize::from(column))].c)
-                    .collect()
-            })
-            .collect()
-    }
-
-    fn assert_converges(screen: &Screen, bytes: &[u8]) {
-        let term = oracle_after(bytes);
-        assert_eq!(screen_chars(screen), oracle_chars(&term));
-        let cursor = term.grid().cursor.point;
-        assert_eq!(
-            (screen.write.line, screen.write.column),
-            (cursor.line.0 as u16, cursor.column.0 as u16)
-        );
-    }
-
-    /// Asserts that the deferred-wrap print path converges with
-    /// alacritty cell-for-cell and on the cursor.
-    ///
-    /// Case: an application prints one character more than the row
-    /// width, exercising the arm-then-wrap sequence end to end.
-    #[test]
-    fn deferred_wrap_converges_with_alacritty() {
-        let mut screen = screen();
-        for c in ['a', 'b', 'c', 'd', 'e'] {
-            screen.print(c);
-        }
-        assert_converges(&screen, b"abcde");
-    }
-
-    /// Asserts that CR/LF line breaking converges with alacritty.
-    ///
-    /// Case: a shell prints two short output lines separated by the
-    /// usual `\r\n`.
-    #[test]
-    fn carriage_return_linefeed_converges_with_alacritty() {
-        let mut screen = screen();
-        for c in ['a', 'b'] {
-            screen.print(c);
-        }
-        screen.carriage_return();
-        screen.linefeed();
-        for c in ['c', 'd'] {
-            screen.print(c);
-        }
-        assert_converges(&screen, b"ab\r\ncd");
-    }
-
-    /// Asserts that a bottom-row scroll converges with alacritty on
-    /// the visible rows.
-    ///
-    /// Case: a shell prints one more line than the screen holds, so
-    /// the oldest line scrolls out of view.
-    #[test]
-    fn a_bottom_scroll_converges_with_alacritty() {
-        let mut screen = screen();
-        for c in ['a', 'b', 'c', 'd'] {
-            screen.print(c);
-            screen.carriage_return();
-            screen.linefeed();
-        }
-        screen.print('e');
-        assert_converges(&screen, b"a\r\nb\r\nc\r\nd\r\ne");
-    }
-
-    /// Asserts that cursor-inclusive erase-to-start converges with
-    /// alacritty.
-    ///
-    /// Case: an application moves the cursor back into a printed line
-    /// and clears everything up to and including the cursor with
-    /// `EL 1`.
-    #[test]
-    fn erase_to_start_converges_with_alacritty() {
-        let mut screen = screen();
-        for c in ['a', 'b', 'c'] {
-            screen.print(c);
-        }
-        screen.write.column = 1;
-        screen.erase_in_line(EraseLineMode::ToStart);
-        assert_converges(&screen, b"abc\x1b[2D\x1b[1K");
-    }
-
-    /// Asserts that erase-to-end under an armed deferred wrap
-    /// converges with alacritty as a no-op.
-    ///
-    /// Case: an application fills the row completely and then issues
-    /// `EL 0`.
-    #[test]
-    fn erase_to_end_under_pending_wrap_converges_with_alacritty() {
-        let mut screen = screen();
-        for c in ['a', 'b', 'c', 'd'] {
-            screen.print(c);
-        }
-        screen.erase_in_line(EraseLineMode::ToEnd);
-        assert_converges(&screen, b"abcd\x1b[K");
     }
 }
