@@ -5,10 +5,11 @@ use crate::schema::Color;
 /// One stored character cell: a glyph plus the attributes it was
 /// printed with.
 ///
-/// This is the storage representation, distinct from the projection
-/// type [`crate::schema::GridCell`]: it carries no coordinate (position
-/// is implied by the cell's slot in the grid) and holds a single
-/// `char` (grapheme composition is a later extension).
+/// This is the storage representation, never exposed outside the
+/// crate: it carries no coordinate (position is implied by the cell's
+/// slot in the grid) and holds a single `char` (grapheme composition
+/// is a later extension). The host reads cells only through the
+/// emitted [`crate::schema::Row`] / [`crate::schema::Run`] projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cell {
     /// The stored glyph.

@@ -2,7 +2,7 @@
 //! plus one child module per exercised concern.
 
 use super::*;
-use crate::schema::{GridColumn, GridLine};
+use crate::schema::{GridColumn, GridLine, Row};
 
 mod frame;
 mod interpret;

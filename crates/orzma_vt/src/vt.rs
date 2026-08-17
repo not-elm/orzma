@@ -1,9 +1,9 @@
 //! Engine layer: the [`OldOrzmaVt`] contract and its backends.
 
 use crate::schema::{
-    CellSide, Cursor, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, FrameSnapshot,
-    GridCell, GridPoint, GridSize, Hyperlink, Palette, Row, Scroll, SelectionKind, SelectionRange,
-    ViCursor, ViModeSwitch, ViewportLine, VtModes, VtResult, VtSignal,
+    CellSide, Cursor, Damage, DamageRows, DamageVerdict, DisplayOffset, Frame, GridPoint, GridSize,
+    Palette, Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult,
+    VtSignal,
 };
 use crate::{Vt, VtUpdate};
 
@@ -260,10 +260,6 @@ impl<B: VtBackend + VtSelection> Vt for OldOrzmaVt<B> {
     fn modes(&self) -> VtModes {
         self.backend.modes()
     }
-
-    fn cell_at(&self, point: GridPoint) -> Option<GridCell> {
-        self.backend.cell_at(point)
-    }
 }
 
 pub trait VtBackend: Sized {
@@ -340,9 +336,6 @@ pub trait VtBackend: Sized {
     /// overlay appears or disappears outside the backing emulator's
     /// damage tracking. `Ok(None)` on an idempotent request.
     fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<Option<Damage>>;
-
-    /// Extract the cell at the target point.
-    fn cell_at(&self, point: GridPoint) -> Option<GridCell>;
 
     /// The live palette symbolic colors resolve against.
     fn palette(&self) -> Palette;

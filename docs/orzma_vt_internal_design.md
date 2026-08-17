@@ -6,10 +6,10 @@
 
 ## 1. 前提
 
-- 満たす契約は `Vt` トレイト(`crates/orzma_vt/src/lib.rs`)のみ: `interpret → VtUpdate`、`frame`、`resize`(reflow)、`scroll`、`grid_size` / `display_offset` / `modes` / `cell_at`。
+- 満たす契約は `Vt` トレイト(`crates/orzma_vt/src/lib.rs`)のみ: `interpret → VtUpdate`、`frame`、`resize`(reflow)、`scroll`、`grid_size` / `display_offset` / `modes`。読み出し面はフレーム粒度(`Row`/`Run`)のみで、セル粒度の read seam(旧 `cell_at`)は設けない — hover 等のセル単位機能は emit 済みの `Row`/`Run` に対してホスト側で解決し、storage セルはクレート外に出さない(セル実体化型 `GridCell` はレンダラ語彙として `orzma_tty_renderer::schema` が所有)。
 - Selection / vi モードは後日 capability トレイトとして追加する。レイアウトはその余地を残す。
 - webview は **VT が `PlacementId` を採番して placement テーブルを所有し、毎 emit でビューポート射影済みの一覧(`FrameSnapshot::placements` / `FrameDelta::placements`)を配る**契約。`history_base` の絶対行投影と seq 回り込み比較は廃止済みで、フレーム外部に露出する履歴カウンタは存在しない。
-- schema の既存語彙(`Damage` のマージ代数、`DamageVerdict::classify`、`Row`/`Run` + style ビット、`GridCell`、`Palette`、`VtModes`、`VtSignal`、`PlacementId` / `ProjectedPlacement`)と `HyperlinkInterner` を再利用する。
+- schema の既存語彙(`Damage` のマージ代数、`DamageVerdict::classify`、`Row`/`Run` + style ビット、`Palette`、`VtModes`、`VtSignal`、`PlacementId` / `ProjectedPlacement`)と `HyperlinkInterner` を再利用する。
 
 ## 2. トップレベル構成
 

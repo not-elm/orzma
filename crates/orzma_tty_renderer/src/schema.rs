@@ -10,7 +10,7 @@ pub use frame::*;
 pub use grid::*;
 pub use hover::*;
 pub use orzma_vt::schema::{
-    CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, GridCell, GridColumn, GridLine,
-    GridPoint, Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId, ProjectedPlacement, Rgb,
-    Row, Run, SelectionGeometry, SelectionKind, SelectionRange, ViCursor,
+    CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, GridColumn, GridLine, GridPoint,
+    Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId, ProjectedPlacement, Rgb, Row, Run,
+    SelectionGeometry, SelectionKind, SelectionRange, ViCursor,
 };

@@ -2,8 +2,7 @@
 
 use crate::schema::{Color, HyperlinkId};
 
-/// Style bitmask bits shared by [`Run::style`] and
-/// [`crate::schema::GridCell::style`].
+/// Style bitmask bits carried by [`Run::style`].
 ///
 /// The values are pinned by the renderer's shader constants; bits 7-15
 /// are reserved.

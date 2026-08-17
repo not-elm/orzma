@@ -2,8 +2,6 @@
 //! coordinate types [`GridLine`], [`GridColumn`], and [`GridPoint`],
 //! and their viewport projection [`ViewportLine`].
 
-use crate::schema::{Color, Hyperlink};
-
 pub mod cell;
 
 /// Number of scrollback rows the viewport sits above the live tail.
@@ -112,32 +110,6 @@ impl From<GridPoint> for alacritty_terminal::index::Point {
             line: alacritty_terminal::index::Line(value.line.0),
             column: alacritty_terminal::index::Column(usize::from(value.column.0)),
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct GridCell {
-    /// The grapheme cluster text for this cell.
-    pub text: String,
-    /// Display width: 2 for wide CJK, 0 for combining marks, 1 otherwise.
-    pub width: u8,
-    pub point: GridPoint,
-    pub fg: Color,
-    pub bg: Color,
-    /// Style bitmask, carried over unchanged from [`crate::schema::Run::style`].
-    pub style: u16,
-    pub hyperlink: Option<Hyperlink>,
-}
-
-impl GridCell {
-    /// Whether this cell paints no glyph: a zero-width cell (combining mark /
-    /// wide-char spacer) or one whose text is empty or all whitespace.
-    ///
-    /// Shared by the renderer's glyph resolution and the host paint-rescue's
-    /// blank-grid test so the two notions of "renders nothing" cannot drift.
-    #[inline]
-    pub fn is_blank(&self) -> bool {
-        self.width == 0 || self.text.trim().is_empty()
     }
 }
 

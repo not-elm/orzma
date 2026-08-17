@@ -1,8 +1,44 @@
 use crate::schema::{
-    CURSOR_VISIBLE_BIT, Cursor, CursorShape, DisplayOffset, GridCell, HyperlinkId, HyperlinkUri,
-    Palette, ProjectedPlacement, SelectionRange, ViCursor,
+    CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, GridPoint, Hyperlink,
+    HyperlinkId, HyperlinkUri, Palette, ProjectedPlacement, SelectionRange, ViCursor,
 };
 use bevy::prelude::*;
+
+/// One materialized cell of the renderer's CPU-side grid, expanded
+/// from the frame's [`crate::schema::Run`]s.
+///
+/// This is renderer vocabulary, not part of the VT contract: the VT
+/// emits attribute runs, and the renderer materializes them into cells
+/// for glyph resolution and hover hit-testing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridCell {
+    /// The grapheme cluster text for this cell.
+    pub text: String,
+    /// Display width: 2 for wide CJK, 0 for combining marks, 1 otherwise.
+    pub width: u8,
+    /// Active-grid coordinates of the cell.
+    pub point: GridPoint,
+    /// Foreground color, symbolic.
+    pub fg: Color,
+    /// Background color, symbolic.
+    pub bg: Color,
+    /// Style bitmask, carried over unchanged from [`crate::schema::Run::style`].
+    pub style: u16,
+    /// Hyperlink resolved from the frame's interner table, if any.
+    pub hyperlink: Option<Hyperlink>,
+}
+
+impl GridCell {
+    /// Whether this cell paints no glyph: a zero-width cell (combining mark /
+    /// wide-char spacer) or one whose text is empty or all whitespace.
+    ///
+    /// Shared by the renderer's glyph resolution and the host paint-rescue's
+    /// blank-grid test so the two notions of "renders nothing" cannot drift.
+    #[inline]
+    pub fn is_blank(&self) -> bool {
+        self.width == 0 || self.text.trim().is_empty()
+    }
+}
 
 /// A structure represents the layout structure of the terminal grid.
 /// Each terminal entity owns this component.

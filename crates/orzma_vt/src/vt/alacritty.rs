@@ -2,22 +2,19 @@
 
 use crate::{
     schema::{
-        CellSide, Cursor, Damage, DamageRows, DisplayOffset, GridCell, GridPoint, GridSize,
-        MouseEncoding, MouseTracking, Palette, Scroll, SelectionKind, SelectionRange, ViCursor,
-        ViModeSwitch, VtModes, VtResult, VtSignal, style,
+        CellSide, Cursor, Damage, DisplayOffset, GridPoint, GridSize, MouseEncoding, MouseTracking,
+        Palette, Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult,
+        VtSignal,
     },
     vt::{VtBackend, VtSelection, apc::ApcState},
 };
 use alacritty_terminal::{
     Term,
     event::EventListener,
-    grid::{Dimensions, Row},
-    index::{Column, Line, Point, Side},
+    grid::Dimensions,
+    index::{Point, Side},
     selection::Selection,
-    term::{
-        Config, TermMode,
-        cell::{Cell, Flags},
-    },
+    term::{Config, TermMode},
     vte::ansi::Processor,
 };
 use std::iter;
@@ -123,28 +120,6 @@ impl VtBackend for AlacrittyVtBackend {
         }
         self.term.toggle_vi_mode();
         Ok(Some(Damage::Full))
-    }
-
-    fn cell_at(&self, point: GridPoint) -> Option<GridCell> {
-        let grid = self.term.grid();
-        let history = grid.history_size() as i32;
-        let lines = -history..self.term.screen_lines() as i32;
-        if !lines.contains(&point.line.0) || usize::from(point.column.0) >= self.term.columns() {
-            return None;
-        }
-        let cell = &grid[Line(point.line.0)][Column(usize::from(point.column.0))];
-        Some(GridCell {
-            text: cell_text(cell),
-            width: cell_width(cell.flags),
-            point,
-            fg: cell.fg.into(),
-            bg: cell.bg.into(),
-            style: style_bits(cell.flags),
-            // TODO: resolve the hyperlink through the interner once the
-            // backend owns one; the id-carrying schema type cannot be
-            // built without it.
-            hyperlink: None,
-        })
     }
 
     fn palette(&self) -> Palette {
@@ -275,46 +250,6 @@ impl Dimensions for LocalDim {
     fn total_lines(&self) -> usize {
         self.rows
     }
-}
-
-/// Grapheme cluster for one cell: the primary character plus any
-/// zero-width followers.
-fn cell_text(cell: &Cell) -> String {
-    let mut text = String::new();
-    text.push(cell.c);
-    if let Some(zerowidth) = cell.zerowidth() {
-        text.extend(zerowidth);
-    }
-    text
-}
-
-/// Display width per the wide-char flags: spacers render nothing, wide
-/// glyphs span two columns.
-fn cell_width(flags: Flags) -> u8 {
-    if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
-        0
-    } else if flags.contains(Flags::WIDE_CHAR) {
-        2
-    } else {
-        1
-    }
-}
-
-/// Maps alacritty cell flags onto the shared style bitmask.
-fn style_bits(flags: Flags) -> u16 {
-    let pairs = [
-        (Flags::BOLD, style::BOLD),
-        (Flags::ITALIC, style::ITALIC),
-        (Flags::UNDERLINE, style::UNDERLINE),
-        (Flags::STRIKEOUT, style::STRIKE),
-        (Flags::INVERSE, style::REVERSE),
-        (Flags::DIM, style::DIM),
-        (Flags::HIDDEN, style::HIDDEN),
-    ];
-    pairs
-        .into_iter()
-        .filter(|(flag, _)| flags.contains(*flag))
-        .fold(0, |bits, (_, bit)| bits | bit)
 }
 
 #[cfg(test)]

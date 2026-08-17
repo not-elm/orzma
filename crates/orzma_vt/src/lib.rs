@@ -5,9 +5,7 @@
 //! owner. [`vt`] holds the superseded [`vt::OldOrzmaVt`] +
 //! [`vt::VtBackend`] pair until the migration to [`Vt`] completes.
 
-use crate::schema::{
-    DamageVerdict, DisplayOffset, Frame, GridCell, GridPoint, GridSize, Scroll, VtModes, VtSignal,
-};
+use crate::schema::{DamageVerdict, DisplayOffset, Frame, GridSize, Scroll, VtModes, VtSignal};
 
 pub mod hyperlink;
 pub mod schema;
@@ -27,6 +25,12 @@ pub mod prelude {
 /// configuration and injected; spawn geometry arrives via
 /// [`Vt::resize`]. Selection and vi mode arrive later as separate
 /// capability traits.
+///
+/// The read surface is deliberately frame-granular: cell-level host
+/// features (e.g. hyperlink hover) resolve against the emitted
+/// [`crate::schema::Row`] / [`crate::schema::Run`] data, so the trait
+/// exposes no per-cell read seam and the VT's storage cell never
+/// leaves the crate.
 pub trait Vt {
     /// Interprets one PTY chunk, staging its damage internally and
     /// returning everything else it produced.
@@ -106,13 +110,6 @@ pub trait Vt {
 
     /// Snapshot of the input-relevant terminal modes.
     fn modes(&self) -> VtModes;
-
-    /// Reads the cell at `point`; `None` when out of range — never a
-    /// panic. Negative lines reach scrollback history.
-    ///
-    /// No caller exists yet; this is the read seam for cell-level host
-    /// features such as hyperlink hover.
-    fn cell_at(&self, point: GridPoint) -> Option<GridCell>;
 }
 
 /// Everything one [`Vt::interpret`] call produced besides the staged
@@ -162,10 +159,6 @@ impl Vt for OrzmaVt {
     }
 
     fn modes(&self) -> VtModes {
-        todo!()
-    }
-
-    fn cell_at(&self, _point: GridPoint) -> Option<GridCell> {
         todo!()
     }
 }

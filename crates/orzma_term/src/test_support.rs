@@ -3,8 +3,7 @@
 //! the resize seam.
 
 use orzma_vt::prelude::{
-    DamageVerdict, DisplayOffset, Frame, GridCell, GridPoint, GridSize, Scroll, Vt, VtModes,
-    VtUpdate,
+    DamageVerdict, DisplayOffset, Frame, GridSize, Scroll, Vt, VtModes, VtUpdate,
 };
 #[cfg(test)]
 use portable_pty::{MasterPty, PtySize};
@@ -69,8 +68,6 @@ pub struct FakeVt {
     pub updates: VecDeque<VtUpdate>,
     /// Frames popped by `frame`.
     pub frames: VecDeque<Frame>,
-    /// Cells served by `cell_at`.
-    pub cells: Vec<GridCell>,
 }
 
 impl FakeVt {
@@ -87,7 +84,6 @@ impl FakeVt {
             resizes: Vec::new(),
             updates: VecDeque::new(),
             frames: VecDeque::new(),
-            cells: Vec::new(),
         }
     }
 }
@@ -135,10 +131,6 @@ impl Vt for FakeVt {
 
     fn modes(&self) -> VtModes {
         self.modes
-    }
-
-    fn cell_at(&self, point: GridPoint) -> Option<GridCell> {
-        self.cells.iter().find(|cell| cell.point == point).cloned()
     }
 }
 
