@@ -50,7 +50,7 @@ impl Grid {
     }
 
     /// Grid dimensions in cells.
-    pub fn size(&self) -> GridSize {
+    pub const fn size(&self) -> GridSize {
         self.size
     }
 
@@ -62,8 +62,7 @@ impl Grid {
 
     /// Scrolls the visible screen up by one row: the top visible row
     /// becomes the newest history row and a `fill`-filled row enters at
-    /// the bottom. At capacity the evicted row's allocation is
-    /// recycled as the incoming row.
+    /// the bottom.
     pub fn scroll_up_one(&mut self, fill: Cell) -> HistoryEvent {
         if self.history_len() < self.max_history {
             self.rows.push_back(Row::filled(self.size.cols, fill));
@@ -83,6 +82,7 @@ impl Grid {
         self.rows.len() - usize::from(self.size.rows)
     }
 
+    #[inline]
     fn visible_index(&self, line: u16) -> usize {
         self.history_len() + usize::from(line)
     }
