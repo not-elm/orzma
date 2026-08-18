@@ -12,6 +12,7 @@ use crate::{
 };
 
 pub mod damage;
+mod frame;
 pub mod hyperlink;
 pub mod schema;
 pub mod screen;
