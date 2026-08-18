@@ -40,7 +40,7 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
         .enumerate()
         .map(|(row, contents)| {
             runs_to_cells(
-                &contents.runs,
+                contents,
                 GridLine(row as i32 - snap.display_offset as i32),
                 &snap.hyperlinks,
             )
@@ -205,7 +205,7 @@ mod tests {
             cols: 1,
             rows: 1,
             cursor: Default::default(),
-            rows_data: vec![Row { runs: vec![] }],
+            rows_data: vec![Row::from(vec![])],
             reason: Default::default(),
             modes: vec![],
             hyperlinks: vec![Hyperlink {
@@ -291,7 +291,7 @@ mod tests {
             cols: 1,
             rows: 1,
             cursor: Default::default(),
-            rows_data: vec![Row { runs: vec![] }],
+            rows_data: vec![Row::from(vec![])],
             reason: Default::default(),
             modes: vec![],
             hyperlinks: vec![],

@@ -36,10 +36,7 @@ fn a_fresh_vt_emits_a_bootstrap_snapshot_of_the_full_viewport() {
     assert_eq!(snap.rows.len(), 24);
     assert!(row_text(&snap.rows[0]).starts_with("abc"));
     for row in &snap.rows {
-        assert_eq!(
-            row.runs.iter().map(|run| u32::from(run.cols)).sum::<u32>(),
-            80
-        );
+        assert_eq!(row.iter().map(|run| u32::from(run.cols)).sum::<u32>(), 80);
     }
     assert_eq!(snap.display_offset, DisplayOffset(0));
     assert_eq!(snap.vi_cursor, None);

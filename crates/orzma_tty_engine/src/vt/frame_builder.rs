@@ -48,10 +48,8 @@ pub(crate) fn build_snapshot<T>(
     let cols = term.columns() as u16;
     let rows = term.screen_lines() as u16;
     let mut hyperlinks_opt: Option<Vec<(HyperlinkId, HyperlinkUri)>> = None;
-    let rows_data: Vec<Row> = (0..rows as i32)
-        .map(|y| Row {
-            runs: coalesce_row(term, y, interner, &mut hyperlinks_opt),
-        })
+    let rows_data: Vec<Row<Run>> = (0..rows as i32)
+        .map(|y| Row::from(coalesce_row(term, y, interner, &mut hyperlinks_opt)))
         .collect();
     let default_bg: [u8; 3] = term.colors()[NamedColor::Background]
         .map(|rgb| [rgb.r, rgb.g, rgb.b])

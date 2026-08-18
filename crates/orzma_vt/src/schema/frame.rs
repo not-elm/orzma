@@ -2,8 +2,8 @@
 
 use crate::{
     schema::{
-        Cursor, GridSize, Hyperlink, Palette, ProjectedPlacement, Row, SelectionRange, ViCursor,
-        ViewportLine, VtModes,
+        Cursor, GridSize, Hyperlink, Palette, ProjectedPlacement, Row, Run, SelectionRange,
+        ViCursor, ViewportLine, VtModes,
     },
     screen::viewport::DisplayOffset,
 };
@@ -27,7 +27,7 @@ pub struct FrameSnapshot {
     /// Grid dimensions; a resize reaches the renderer through this.
     pub size: GridSize,
     /// Full viewport contents, top to bottom.
-    pub rows: Vec<Row>,
+    pub rows: Vec<Row<Run>>,
     /// Cursor state at emit time.
     pub cursor: Cursor,
     /// Lines scrolled back from the live tail.
@@ -92,5 +92,5 @@ pub struct DirtyRow {
     /// The viewport row the contents repaint.
     pub line: ViewportLine,
     /// The row contents.
-    pub contents: Row,
+    pub contents: Row<Run>,
 }

@@ -2,7 +2,7 @@
 //! plus one child module per exercised concern.
 
 use super::*;
-use crate::schema::{GridColumn, GridLine, Row};
+use crate::schema::{GridColumn, GridLine, Row, Run};
 
 mod frame;
 mod interpret;
@@ -41,8 +41,8 @@ fn start_simple(vt: &mut OldOrzmaVt<AlacrittyVtBackend>, x: u16, line: i32) -> b
     .unwrap()
 }
 
-fn row_text(row: &Row) -> String {
-    row.runs.iter().map(|run| run.text.as_str()).collect()
+fn row_text(row: &Row<Run>) -> String {
+    row.iter().map(|run| run.text.as_str()).collect()
 }
 
 /// Asserts that a fresh wrapper stages the bootstrap full repaint.

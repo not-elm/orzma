@@ -17,7 +17,7 @@ pub struct FrameSnapshot {
     /// Cursor state at emit time.
     pub cursor: Cursor,
     /// Row contents (length == rows).
-    pub rows_data: Vec<Row>,
+    pub rows_data: Vec<Row<Run>>,
     /// Why this snapshot was emitted (Initial, Reconnect, Resize, Lagged).
     pub reason: SnapshotReason,
     /// Currently active wire modes (e.g. "alt-screen", "mouse-vt200").

@@ -1,4 +1,7 @@
-//! Vocabulary for a row of attribute runs.
+//! One attribute run of an emitted row.
+//!
+//! The row itself is [`Row`](crate::screen::grid::row::Row); a run
+//! is one of its elements.
 
 use crate::schema::{Color, HyperlinkId};
 
@@ -21,13 +24,6 @@ pub mod style {
     pub const DIM: u16 = 32;
     /// Hidden (concealed) text.
     pub const HIDDEN: u16 = 64;
-}
-
-/// A row of runs ordered left-to-right.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Row {
-    /// Runs in left-to-right column order.
-    pub runs: Vec<Run>,
 }
 
 /// A run of cells sharing identical fg/bg/style attributes.

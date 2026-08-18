@@ -1,7 +1,11 @@
 //! Cell storage: the visible screen plus the scrollback ring.
 
+pub mod row;
+pub mod run;
+
 use crate::schema::GridSize;
 use crate::screen::cell::Cell;
+use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
 
@@ -26,7 +30,7 @@ pub struct Grid {
     /// (`VecDeque` hides the physical rotation), so index `0` is
     /// always the oldest surviving history row and the boundary sits
     /// at `history_len`.
-    rows: VecDeque<Row>,
+    rows: VecDeque<Row<Cell>>,
     /// Active-screen dimensions; `rows` always keeps at least this
     /// many entries as its tail window.
     size: GridSize,
@@ -57,7 +61,11 @@ impl Grid {
     /// Overwrites the given column range of one visible row with `fill`.
     pub fn fill_visible_row_range(&mut self, line: u16, columns: Range<u16>, fill: Cell) {
         let index = self.visible_index(line);
-        self.rows[index].0[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
+        // NOTE: `Row`'s own `Index<u16>` shadows the slice's range
+        // indexing, so the row has to reach the slice through `DerefMut`
+        // before a range can be applied.
+        let row: &mut [Cell] = &mut self.rows[index];
+        row[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
     }
 
     /// Scrolls the visible screen up by one row: the top visible row
@@ -72,7 +80,7 @@ impl Grid {
             .rows
             .pop_front()
             .expect("the ring always holds the visible rows");
-        recycled.0.fill(fill);
+        recycled.fill(fill);
         self.rows.push_back(recycled);
         HistoryEvent::PushedWithEviction
     }
@@ -91,42 +99,17 @@ impl Grid {
 /// Indexes the row at a visible-screen line; history rows are
 /// structurally unreachable (the index is offset by `history_len`).
 impl Index<u16> for Grid {
-    type Output = Row;
+    type Output = Row<Cell>;
 
-    fn index(&self, line: u16) -> &Row {
+    fn index(&self, line: u16) -> &Row<Cell> {
         &self.rows[self.visible_index(line)]
     }
 }
 
 impl IndexMut<u16> for Grid {
-    fn index_mut(&mut self, line: u16) -> &mut Row {
+    fn index_mut(&mut self, line: u16) -> &mut Row<Cell> {
         let index = self.visible_index(line);
         &mut self.rows[index]
-    }
-}
-
-/// A single storage row of cells.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Row<T = Cell>(Vec<T>);
-
-impl<T: Clone> Row<T> {
-    pub fn filled(cols: u16, fill: T) -> Self {
-        Self(vec![fill; usize::from(cols)])
-    }
-}
-
-/// Indexes the cell at a 0-based column.
-impl<T> Index<u16> for Row<T> {
-    type Output = T;
-
-    fn index(&self, column: u16) -> &T {
-        &self.0[usize::from(column)]
-    }
-}
-
-impl<T> IndexMut<u16> for Row<T> {
-    fn index_mut(&mut self, column: u16) -> &mut T {
-        &mut self.0[usize::from(column)]
     }
 }
 

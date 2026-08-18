@@ -9,7 +9,7 @@
 
 use crate::damage::Damage;
 use crate::hyperlink::HyperlinkInterner;
-use crate::schema::{Frame, FrameDelta, FrameSnapshot, Row, ViewportLine};
+use crate::schema::{Frame, FrameDelta, FrameSnapshot, Row, Run, ViewportLine};
 use crate::screen::Screen;
 
 /// Emission state: the hyperlink interner the emitted runs share.
@@ -57,7 +57,7 @@ impl FrameEmitter {
     // scrolled into history cannot be read through it.
     // TODO: Intern OSC 8 links here once `HyperlinkInterner` and the
     // frame schema agree on one `HyperlinkId`.
-    fn row(&mut self, _line: ViewportLine, _screen: &Screen) -> Row {
+    fn row(&mut self, _line: ViewportLine, _screen: &Screen) -> Row<Run> {
         todo!()
     }
 }
