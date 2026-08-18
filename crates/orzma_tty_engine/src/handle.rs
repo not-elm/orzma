@@ -856,12 +856,12 @@ impl TerminalHandle {
 
         let kind = decide_frame_kind(self, dirty);
         self.first_emit = false;
-        let seq = self.next_frame_seq();
+        self.next_frame_seq();
 
         self.announce_mode_change(commands, entity, prev_mode, curr_mode);
         match kind {
-            FrameKind::Snapshot { reason } => self.emit_snapshot(commands, entity, seq, reason),
-            FrameKind::Delta { rows } => self.emit_delta(commands, entity, seq, rows, kept_hashes),
+            FrameKind::Snapshot { reason } => self.emit_snapshot(commands, entity, reason),
+            FrameKind::Delta { rows } => self.emit_delta(commands, entity, rows, kept_hashes),
         }
 
         self.prev_cursor = Some(curr_cursor);
@@ -960,9 +960,8 @@ impl TerminalHandle {
     }
 
     /// Returns the current `frame_seq`, advancing it via
-    /// `wrapping_add(1)` for the next emit. The renderer's
-    /// `material::state` rebuild trigger compares `grid.last_seq !=
-    /// state.last_grid_seq`, so a stuck seq would freeze rendering.
+    /// `wrapping_add(1)` for the next emit. The counter no longer
+    /// reaches the wire; `InlineAnchor` is its remaining consumer.
     fn next_frame_seq(&mut self) -> u32 {
         let seq = self.frame_seq;
         self.frame_seq = self.frame_seq.wrapping_add(1);
@@ -1001,17 +1000,10 @@ impl TerminalHandle {
     /// Builds + triggers a `FrameSnapshot`, then rebuilds
     /// `row_hashes` from scratch so subsequent Delta emits can
     /// hash-filter against the snapshot baseline.
-    fn emit_snapshot(
-        &mut self,
-        commands: &mut Commands,
-        entity: Entity,
-        seq: u32,
-        reason: SnapshotReason,
-    ) {
+    fn emit_snapshot(&mut self, commands: &mut Commands, entity: Entity, reason: SnapshotReason) {
         let snap = build_snapshot(
             &self.term,
             entity,
-            seq,
             self.history_base,
             reason,
             &mut self.hyperlinks,
@@ -1042,14 +1034,12 @@ impl TerminalHandle {
         &mut self,
         commands: &mut Commands,
         entity: Entity,
-        seq: u32,
         rows: Vec<u16>,
         kept_hashes: Vec<(i32, u64)>,
     ) {
         let delta = build_delta(
             &self.term,
             entity,
-            seq,
             self.history_base,
             &rows,
             &mut self.hyperlinks,

@@ -27,7 +27,6 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
     grid.rows = snap.rows;
     grid.cursor = Some(snap.cursor.clone());
     grid.display_offset = snap.display_offset;
-    grid.last_seq = snap.seq;
     grid.hyperlinks.clear();
     grid.hyperlinks
         .extend(snap.hyperlinks.iter().map(|h| (h.id, h.uri.clone())));
@@ -55,7 +54,6 @@ fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
     };
     grid.cursor = Some(delta.cursor.clone());
     grid.display_offset = delta.display_offset;
-    grid.last_seq = delta.seq;
     grid.vi_cursor = delta.vi_cursor;
     grid.selection = delta.selection;
     grid.placements.clone_from(&delta.placements);
@@ -204,7 +202,6 @@ mod tests {
             .id();
         app.world_mut().trigger(FrameSnapshot {
             entity,
-            seq: 1,
             cols: 1,
             rows: 1,
             cursor: Default::default(),
@@ -250,7 +247,6 @@ mod tests {
         };
         app.world_mut().trigger(FrameDelta {
             entity,
-            seq: 2,
             cursor: Default::default(),
             dirty_rows: vec![],
             hyperlinks: vec![],
@@ -264,7 +260,6 @@ mod tests {
         assert_eq!(grid.placements, vec![placed]);
         app.world_mut().trigger(FrameDelta {
             entity,
-            seq: 3,
             cursor: Default::default(),
             dirty_rows: vec![],
             hyperlinks: vec![],
@@ -293,7 +288,6 @@ mod tests {
         };
         app.world_mut().trigger(FrameSnapshot {
             entity,
-            seq: 1,
             cols: 1,
             rows: 1,
             cursor: Default::default(),
@@ -325,7 +319,6 @@ mod tests {
             .id();
         app.world_mut().trigger(FrameDelta {
             entity,
-            seq: 2,
             cursor: Default::default(),
             dirty_rows: vec![],
             hyperlinks: vec![

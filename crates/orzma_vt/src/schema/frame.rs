@@ -24,8 +24,6 @@ pub enum Frame {
 /// viewport from scratch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrameSnapshot {
-    /// Wrapping emission sequence number, shared with deltas.
-    pub seq: u32,
     /// Grid dimensions; a resize reaches the renderer through this.
     pub size: GridSize,
     /// Full viewport contents, top to bottom.
@@ -62,8 +60,6 @@ pub struct FrameSnapshot {
 /// A differential update relative to the prior frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrameDelta {
-    /// Wrapping emission sequence number, shared with snapshots.
-    pub seq: u32,
     /// The dirty rows this delta repaints, ascending by line. May be
     /// empty — the metadata below is still current.
     pub dirty_rows: Vec<DirtyRow>,

@@ -3,15 +3,13 @@ use crate::schema::{
 };
 use bevy::ecs::{entity::Entity, event::EntityEvent};
 
-/// Full snapshot of the visible viewport at a given seq.
+/// Full snapshot of the visible viewport.
 ///
 /// Carries all data needed to render the screen without prior state.
 #[derive(Debug, Clone, PartialEq, EntityEvent)]
 pub struct FrameSnapshot {
     #[event_target]
     pub entity: Entity,
-    /// Monotonic emission sequence; matches the encoded `seq` in the ring.
-    pub seq: u32,
     /// Visible column count.
     pub cols: u16,
     /// Visible row count.
@@ -45,8 +43,6 @@ pub struct FrameSnapshot {
 #[derive(Debug, Clone, PartialEq, EntityEvent)]
 pub struct FrameDelta {
     pub entity: Entity,
-    /// Monotonic frame sequence number.
-    pub seq: u32,
     /// Cursor state at delta emit time. Always present so cursor-only motion
     /// (arrow keys, character input that doesn't change cell content) is
     /// faithfully tracked client-side without waiting for the next snapshot.

@@ -81,8 +81,6 @@ pub trait Vt {
     ///
     /// # Invariants
     ///
-    /// - The seq advances by one (wrapping) per emitted frame, never on
-    ///   `None`; consumers compare it wrap-aware (distance < `2^31`).
     /// - The first emitted frame, and every alternate-screen flip, is a
     ///   [`Frame::Snapshot`].
     /// - A frame's placements and display offset describe the

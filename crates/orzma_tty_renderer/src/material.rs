@@ -699,7 +699,7 @@ fn update_terminal_material(
         Entity,
         &MaterialNode<TerminalUiMaterial>,
         &mut TerminalMaterialState,
-        &TerminalGrid,
+        Ref<TerminalGrid>,
         Option<&PaneInactiveStyle>,
         Option<&TerminalOverlays>,
     )>,
@@ -724,7 +724,7 @@ fn update_terminal_material(
     // is also the overlay-texture rebind lifeline: a bevy_cef headless target
     // re-creates its GPU texture on resize, and only this rebuild repoints
     // the bind group at it (spec §4).
-    // NOTE: Skip the entire system when PrimaryWindow is transiently
+    // NOTE: Skip the per-entity work when PrimaryWindow is transiently
     // absent (display hotplug, brief winit reconnect). Trade-off: the
     // `mat.params = ...` write below would fire AssetEvent::Modified
     // every frame (load-bearing for bind-group rebuild — see NOTE above);
@@ -733,18 +733,22 @@ fn update_terminal_material(
     // ordered after this system, so atlas uploads defer in lock-step)
     // and far less disruptive than the previous .unwrap_or(1.0) flash
     // that would re-rasterize the entire atlas at half scale.
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let dpr = window.scale_factor();
-    let phys_font_size = (font_size.0 * dpr).round() as u16;
+    let dpr = windows.single().ok().map(|window| window.scale_factor());
 
     for (entity, handle, mut state, grid, pane_style, overlays) in terminals.iter_mut() {
+        // NOTE: Latch the grid's change signal before the bail-out below.
+        // Bevy clears it once this system has run, so a grid written on a
+        // frame that skips the upload would otherwise never reach the GPU.
+        state.grid_dirty |= grid.is_changed();
+        let Some(dpr) = dpr else {
+            continue;
+        };
+        let phys_font_size = (font_size.0 * dpr).round() as u16;
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
         let cols = grid.cols as u32;
         let rows = grid.rows as u32;
         let dims_changed = (grid.cols, grid.rows) != state.last_grid_dims;
-        let grid_changed = grid.last_seq != state.last_grid_seq;
+        let grid_changed = state.grid_dirty;
         let phys_size_changed = phys_font_size != state.last_phys_font_size;
 
         let needs_rebuild = !state.initialized
@@ -806,7 +810,7 @@ fn update_terminal_material(
             state.cpu_cells.resize(cell_count, GpuCell::default());
 
             if cols > 0 && rows > 0 {
-                rebuild_cells(grid, &mut state, &fonts, &mut atlas, phys_font_size, cols);
+                rebuild_cells(&grid, &mut state, &fonts, &mut atlas, phys_font_size, cols);
             }
 
             if state.cpu_cells.is_empty() {
@@ -824,7 +828,7 @@ fn update_terminal_material(
             }
 
             state.last_atlas_generation = atlas.generation;
-            state.last_grid_seq = grid.last_seq;
+            state.grid_dirty = false;
             state.last_grid_dims = (grid.cols, grid.rows);
             state.initialized = true;
         }
@@ -847,7 +851,7 @@ fn update_terminal_material(
             });
         if let Some(mut mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
-                grid,
+                &grid,
                 cell_size_phys,
                 Vec2::new(atlas.width() as f32, atlas.height() as f32),
                 ascent_phys,
@@ -1100,7 +1104,7 @@ mod tests {
             cpu_cells: vec![GpuCell::default(); 2],
             cpu_glyphs: Vec::new(),
             last_atlas_generation: 0,
-            last_grid_seq: 0,
+            grid_dirty: true,
             last_grid_dims: (0, 0),
             last_phys_font_size: 0,
             cached_metrics: None,

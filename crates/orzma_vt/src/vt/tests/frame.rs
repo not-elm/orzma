@@ -1,5 +1,5 @@
 //! Frame-emission tests: Snapshot/Delta classification, staged-damage
-//! consumption, sequence numbering, and payload contents.
+//! consumption, and payload contents.
 
 use super::*;
 use crate::schema::{FrameDelta, FrameSnapshot, Rgb, ViewportLine};
@@ -32,7 +32,6 @@ fn a_fresh_vt_emits_a_bootstrap_snapshot_of_the_full_viewport() {
     let mut vt = OldOrzmaVt::<AlacrittyVtBackend>::new(80, 24);
     vt.interpret(b"abc");
     let snap = snapshot(&mut vt);
-    assert_eq!(snap.seq, 0);
     assert_eq!(snap.size, GridSize { cols: 80, rows: 24 });
     assert_eq!(snap.rows.len(), 24);
     assert!(row_text(&snap.rows[0]).starts_with("abc"));
@@ -131,37 +130,6 @@ fn a_delta_reports_the_current_overlay_state() {
     assert!(delta.selection.is_some());
     assert_eq!(delta.display_offset, DisplayOffset(0));
     assert_eq!(delta.vi_cursor, None);
-}
-
-/// Asserts that the sequence number advances only when a frame is
-/// actually emitted.
-///
-/// Case: the emit loop polls between activity bursts; idle polls must
-/// not open gaps in the sequence the renderer tracks.
-#[test]
-fn seq_advances_only_when_a_frame_is_emitted() {
-    let mut vt = OldOrzmaVt::<AlacrittyVtBackend>::new(80, 24);
-    assert_eq!(snapshot(&mut vt).seq, 0);
-    assert!(vt.frame().is_none());
-    vt.interpret(b"a");
-    assert_eq!(delta(&mut vt).seq, 1);
-    vt.interpret(b"b");
-    assert_eq!(delta(&mut vt).seq, 2);
-}
-
-/// Asserts that the sequence wraps from `u32::MAX` to zero.
-///
-/// Case: a long-lived session eventually exhausts the counter; the
-/// renderer's not-equal comparison keeps working across the wrap, and
-/// the emitter must not panic on overflow.
-#[test]
-fn seq_wraps_at_u32_max() {
-    let mut vt = clean_vt();
-    vt.next_frame_seq = u32::MAX;
-    vt.interpret(b"a");
-    assert_eq!(delta(&mut vt).seq, u32::MAX);
-    vt.interpret(b"b");
-    assert_eq!(delta(&mut vt).seq, 0);
 }
 
 /// Asserts that a scrolled snapshot renders the viewport the user

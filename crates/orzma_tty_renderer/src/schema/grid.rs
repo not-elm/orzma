@@ -54,8 +54,6 @@ pub struct TerminalGrid {
     pub cursor: Option<Cursor>,
     /// Lines scrolled back from the live tail; 0 = at live tail.
     pub display_offset: u32,
-    /// Monotonic sequence number of the last applied frame.
-    pub last_seq: u32,
     /// Vi-mode cursor when the server is in vi mode; `None` otherwise.
     /// `ViModePlugin` reads this every frame to drive `ViModeState::active`.
     pub vi_cursor: Option<ViCursor>,

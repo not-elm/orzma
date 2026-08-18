@@ -25,9 +25,6 @@ pub struct OldOrzmaVt<B: VtBackend> {
     /// per-call damage, so an overwritten staged value would lose a
     /// repaint no later call re-reports.
     pending_damage: Option<Damage>,
-    /// Wrapping emission sequence stamped on the next frame; advances
-    /// only when a frame is actually emitted.
-    next_frame_seq: u32,
 }
 
 impl<B: VtBackend> OldOrzmaVt<B> {
@@ -36,7 +33,6 @@ impl<B: VtBackend> OldOrzmaVt<B> {
         Self {
             backend: B::new(cols, rows),
             pending_damage: Some(Damage::Full),
-            next_frame_seq: 0,
         }
     }
 
