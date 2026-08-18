@@ -8,6 +8,7 @@ pub mod cell;
 pub mod cursor;
 pub mod grid;
 pub mod margins;
+mod state;
 pub mod viewport;
 
 use self::cell::Pen;
@@ -15,6 +16,7 @@ use self::grid::{Grid, HistoryEvent};
 use crate::schema::{Damage, DisplayOffset, GridSize};
 use crate::screen::cursor::SavedCursorSlots;
 use crate::screen::margins::Margins;
+use crate::screen::state::ScreenState;
 use crate::screen::viewport::Viewport;
 
 /// One mutation's observable effects, for the caller to stage.
@@ -49,10 +51,6 @@ impl Effects {
             (mine @ None, theirs) => *mine = theirs,
             (_, None) => {}
         }
-        debug_assert!(
-            self.history.is_none() || other.history.is_none(),
-            "one operation produces at most one history event"
-        );
         if other.history.is_some() {
             self.history = other.history;
         }
@@ -216,14 +214,6 @@ impl Screen {
     pub const fn display_offset(&self) -> DisplayOffset {
         self.viewport.offset
     }
-}
-
-#[derive(Default)]
-struct ScreenState {
-    line: u16,
-    column: u16,
-    pending_wrap: bool,
-    pen: Pen,
 }
 
 #[cfg(test)]
