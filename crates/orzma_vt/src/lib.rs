@@ -10,6 +10,7 @@ use crate::{
     screen::viewport::DisplayOffset,
 };
 
+pub mod damage;
 pub mod hyperlink;
 pub mod schema;
 pub mod screen;
