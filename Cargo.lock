@@ -5097,6 +5097,7 @@ name = "orzma_vt"
 version = "0.2.0-dev"
 dependencies = [
  "alacritty_terminal",
+ "bitflags 2.13.0",
  "thiserror 2.0.18",
  "vtparse",
 ]

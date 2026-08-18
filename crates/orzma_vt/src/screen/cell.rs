@@ -1,6 +1,6 @@
 //! Internal storage cell and the SGR pen burned into it on print.
 
-use crate::schema::Color;
+use crate::schema::{Color, Style};
 
 /// One stored character cell: a glyph plus the attributes it was
 /// printed with.
@@ -18,8 +18,8 @@ pub struct Cell {
     pub fg: Color,
     /// Background color, symbolic.
     pub bg: Color,
-    /// Style bitmask (see [`crate::schema::style`]).
-    pub style: u16,
+    /// The SGR attributes the glyph was printed with.
+    pub style: Style,
 }
 
 impl Default for Cell {
@@ -28,7 +28,7 @@ impl Default for Cell {
             c: ' ',
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
-            style: 0,
+            style: Style::empty(),
         }
     }
 }
@@ -50,8 +50,8 @@ pub struct Pen {
     pub fg: Color,
     /// Background selected by SGR 40-48/49/100-107.
     pub bg: Color,
-    /// Style bitmask accumulated from SGR attributes.
-    pub style: u16,
+    /// The SGR attributes accumulated from SGR sequences.
+    pub style: Style,
 }
 
 impl Default for Pen {
@@ -59,7 +59,7 @@ impl Default for Pen {
         Self {
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
-            style: 0,
+            style: Style::empty(),
         }
     }
 }
@@ -97,7 +97,7 @@ mod tests {
         assert_eq!(cell.c, ' ');
         assert_eq!(cell.fg, Color::DefaultForeground);
         assert_eq!(cell.bg, Color::DefaultBackground);
-        assert_eq!(cell.style, 0);
+        assert_eq!(cell.style, Style::empty());
     }
 
     /// Asserts that stamping burns all pen attributes into the cell.
@@ -109,7 +109,7 @@ mod tests {
         let pen = Pen {
             fg: Color::Indexed(1),
             bg: Color::Indexed(4),
-            style: 1,
+            style: Style::BOLD,
         };
         assert_eq!(
             pen.stamp('a'),
@@ -117,7 +117,7 @@ mod tests {
                 c: 'a',
                 fg: Color::Indexed(1),
                 bg: Color::Indexed(4),
-                style: 1,
+                style: Style::BOLD,
             }
         );
     }
@@ -131,10 +131,10 @@ mod tests {
         let pen = Pen {
             fg: Color::Indexed(1),
             bg: Color::Indexed(4),
-            style: 1,
+            style: Style::BOLD,
         };
         assert_eq!(pen.erase_cell(), Cell::blank_with_bg(Color::Indexed(4)));
         assert_eq!(pen.erase_cell().fg, Color::DefaultForeground);
-        assert_eq!(pen.erase_cell().style, 0);
+        assert_eq!(pen.erase_cell().style, Style::empty());
     }
 }

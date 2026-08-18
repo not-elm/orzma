@@ -100,7 +100,7 @@ fn runs_to_cells(runs: &[Run], line: GridLine, hyperlinks: &[Hyperlink]) -> Vec<
                 },
                 fg: run.fg,
                 bg: run.bg,
-                style: run.style,
+                style: run.style.bits(),
                 hyperlink: hyperlink.clone(),
             });
             column = column.saturating_add(u16::from(width));
@@ -114,7 +114,7 @@ mod tests {
     use super::*;
     use crate::schema::{
         Color, Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId, ProjectedPlacement, Rgb,
-        Row,
+        Row, Style,
     };
 
     fn run_with_link(text: &str, hyperlink_id: Option<HyperlinkId>) -> Run {
@@ -122,7 +122,7 @@ mod tests {
             cols: 1,
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
-            style: 0,
+            style: Style::empty(),
             text: text.to_string(),
             hyperlink_id,
         }

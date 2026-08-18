@@ -24,7 +24,7 @@ mod vi;
 mod webview;
 
 pub use crate::screen::grid::row::Row;
-pub use crate::screen::grid::run::{Run, style};
+pub use crate::screen::grid::run::{Run, Style};
 pub use crate::screen::viewport::DisplayOffset;
 pub use color::*;
 pub use cursor::*;

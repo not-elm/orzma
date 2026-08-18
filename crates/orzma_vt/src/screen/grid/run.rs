@@ -4,26 +4,34 @@
 //! is one of its elements.
 
 use crate::schema::{Color, HyperlinkId};
+use bitflags::bitflags;
 
-/// Style bitmask bits carried by [`Run::style`].
-///
-/// The values are pinned by the renderer's shader constants; bits 7-15
-/// are reserved.
-pub mod style {
-    /// Bold weight.
-    pub const BOLD: u16 = 1;
-    /// Italic slant.
-    pub const ITALIC: u16 = 2;
-    /// Underline.
-    pub const UNDERLINE: u16 = 4;
-    /// Strikethrough.
-    pub const STRIKE: u16 = 8;
-    /// Reverse video (fg/bg swapped).
-    pub const REVERSE: u16 = 16;
-    /// Faint intensity.
-    pub const DIM: u16 = 32;
-    /// Hidden (concealed) text.
-    pub const HIDDEN: u16 = 64;
+bitflags! {
+    /// The SGR attributes a cell or a run carries.
+    ///
+    /// # Invariants
+    ///
+    /// The bit values are pinned by the renderer's shader constants,
+    /// which read the raw bits: renumbering a flag silently repaints
+    /// every cell with the wrong attribute. Bits 7-15 are reserved for
+    /// the underline variants SGR 4:2-4:5 adds.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+    pub struct Style: u16 {
+        /// Bold weight.
+        const BOLD = 1;
+        /// Italic slant.
+        const ITALIC = 1 << 1;
+        /// Underline.
+        const UNDERLINE = 1 << 2;
+        /// Strikethrough.
+        const STRIKE = 1 << 3;
+        /// Reverse video (fg/bg swapped).
+        const REVERSE = 1 << 4;
+        /// Faint intensity.
+        const DIM = 1 << 5;
+        /// Hidden (concealed) text.
+        const HIDDEN = 1 << 6;
+    }
 }
 
 /// A run of cells sharing identical fg/bg/style attributes.
@@ -38,9 +46,8 @@ pub struct Run {
     pub fg: Color,
     /// Background color.
     pub bg: Color,
-    /// Style bitmask (see the `style` module). Widened from u8 to u16 so
-    /// HIDDEN (bit 6) and future underline variants fit.
-    pub style: u16,
+    /// The SGR attributes every cell in the run shares.
+    pub style: Style,
     /// UTF-8 text; the consumer uses Unicode East Asian Width to position
     /// each grapheme cluster within the run.
     pub text: String,

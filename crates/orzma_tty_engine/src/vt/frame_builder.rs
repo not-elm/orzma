@@ -18,7 +18,7 @@ use bevy::ecs::entity::Entity;
 use bevy::prelude::Color;
 use orzma_tty_renderer::prelude::{
     Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkId, HyperlinkUri,
-    Row, Run, SelectionKind, SelectionRange, SnapshotReason, ViCursor, ViewportPoint,
+    Row, Run, SelectionKind, SelectionRange, SnapshotReason, Style, ViCursor, ViewportPoint,
 };
 use unicode_width::UnicodeWidthChar;
 
@@ -365,7 +365,7 @@ impl RunAttrs {
             cols,
             fg: self.fg,
             bg: self.bg,
-            style: self.style,
+            style: Style::from_bits_truncate(self.style),
             text,
             hyperlink_id: self.hyperlink_id,
         }
