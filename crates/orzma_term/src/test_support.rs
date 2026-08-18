@@ -177,29 +177,53 @@ impl MasterPty for FailingMaster {
 /// `MasterPty` recording every `PtySize` handed to `resize`, so tests
 /// can assert the exact struct the caller forwarded (field mapping and
 /// pixel-zero policy are unobservable through kernel readback alone).
+///
+/// It also answers `get_size` with whatever it was last resized to, so
+/// a caller that writes a size and reads it back sees what a real
+/// master would.
 #[cfg(test)]
 #[derive(Debug)]
-pub(crate) struct RecordingMaster(Arc<Mutex<Vec<PtySize>>>);
+pub(crate) struct RecordingMaster {
+    calls: Arc<Mutex<Vec<PtySize>>>,
+    size: Mutex<PtySize>,
+}
 
 #[cfg(test)]
 impl RecordingMaster {
-    /// Builds the fake plus the shared handle its `resize` calls are
-    /// recorded into.
-    pub(crate) fn new() -> (Self, Arc<Mutex<Vec<PtySize>>>) {
+    /// Builds the fake at `initial`, plus the shared handle its
+    /// `resize` calls are recorded into.
+    pub(crate) fn new(initial: PtySize) -> (Self, Arc<Mutex<Vec<PtySize>>>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        (Self(calls.clone()), calls)
+        (
+            Self {
+                calls: calls.clone(),
+                size: Mutex::new(initial),
+            },
+            calls,
+        )
+    }
+
+    /// Builds the fake at `cols` x `rows` with zero pixel dimensions.
+    pub(crate) fn at(cols: u16, rows: u16) -> (Self, Arc<Mutex<Vec<PtySize>>>) {
+        Self::new(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
     }
 }
 
 #[cfg(test)]
 impl MasterPty for RecordingMaster {
     fn resize(&self, size: PtySize) -> anyhow::Result<()> {
-        self.0.lock().unwrap().push(size);
+        self.calls.lock().unwrap().push(size);
+        *self.size.lock().unwrap() = size;
         Ok(())
     }
 
     fn get_size(&self) -> anyhow::Result<PtySize> {
-        Err(anyhow::anyhow!("not implemented for RecordingMaster"))
+        Ok(*self.size.lock().unwrap())
     }
 
     fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {

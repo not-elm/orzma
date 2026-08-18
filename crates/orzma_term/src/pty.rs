@@ -303,7 +303,7 @@ mod tests {
     /// zeroed, consistent with `spawn` / `detached`).
     #[test]
     fn resize_forwards_the_exact_pty_size_to_the_master() {
-        let (master, calls) = RecordingMaster::new();
+        let (master, calls) = RecordingMaster::at(80, 24);
         let mut pty = Pty::with_master(Box::new(master), Box::new(sink()));
         pty.resize(120, 40).expect("resize");
         assert_eq!(
@@ -327,7 +327,7 @@ mod tests {
     /// any layered test noticing.
     #[test]
     fn resize_forwards_degenerate_sizes_verbatim() {
-        let (master, calls) = RecordingMaster::new();
+        let (master, calls) = RecordingMaster::at(80, 24);
         let mut pty = Pty::with_master(Box::new(master), Box::new(sink()));
         for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
             pty.resize(cols, rows).expect("resize");

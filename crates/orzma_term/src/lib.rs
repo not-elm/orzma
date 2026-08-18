@@ -294,13 +294,30 @@ impl<V: Vt> OrzmaTerm<V> {
 mod tests {
     use super::*;
     use crate::error::OrzmaTermError;
-    use crate::test_support::{CaptureSink, FailingMaster, FakeVt};
+    use crate::test_support::{CaptureSink, FailingMaster, FakeVt, RecordingMaster};
     use crossbeam_channel::{Sender, unbounded};
 
+    /// Mirrors [`OrzmaTerm::detached`] over a fake master instead of a
+    /// real one.
+    ///
+    /// Opening a real one made every test sharing the run flaky.
+    /// Cycling master/slave pairs as fast as the parallel harness does
+    /// outruns the kernel's reclamation of pty slots, and `openpty`
+    /// then fails with `ENXIO`; measured on macOS at 5-10 failures per
+    /// 960 concurrent calls, and at zero once the slave side is left
+    /// out.
     fn detached_term() -> (OrzmaTerm<FakeVt>, CaptureSink) {
         let sink = CaptureSink::default();
-        let term = OrzmaTerm::detached(FakeVt::new(80, 24), 80, 24, Box::new(sink.clone()))
-            .expect("OrzmaTerm::detached");
+        let (master, _) = RecordingMaster::at(80, 24);
+        let mut vt = FakeVt::new(80, 24);
+        vt.resize(GridSize { cols: 80, rows: 24 });
+        let term = OrzmaTerm {
+            vt,
+            coalescer: Coalescer::default(),
+            pty: Pty::with_master(Box::new(master), Box::new(sink.clone())),
+            pending_signals: Vec::new(),
+            pending_replies: Vec::new(),
+        };
         (term, sink)
     }
 
