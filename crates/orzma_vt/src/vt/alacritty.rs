@@ -1,9 +1,10 @@
 //! Alacritty-backed [`OldOrzmaVt`] implementation.
 
 use crate::{
+    damage::Damage,
     schema::{
-        CellSide, Cursor, Damage, GridPoint, GridSize, MouseEncoding, MouseTracking, Palette,
-        Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
+        CellSide, Cursor, GridPoint, GridSize, MouseEncoding, MouseTracking, Palette, Scroll,
+        SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
     },
     screen::viewport::DisplayOffset,
     vt::{VtBackend, VtSelection, apc::ApcState},

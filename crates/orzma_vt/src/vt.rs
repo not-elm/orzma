@@ -2,9 +2,10 @@
 
 use crate::{
     Vt, VtUpdate,
+    damage::{Damage, DamageRows, DamageVerdict},
     schema::{
-        CellSide, Cursor, Damage, DamageRows, DamageVerdict, Frame, GridPoint, GridSize, Palette,
-        Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
+        CellSide, Cursor, Frame, GridPoint, GridSize, Palette, Scroll, SelectionKind,
+        SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
     },
     screen::viewport::DisplayOffset,
 };

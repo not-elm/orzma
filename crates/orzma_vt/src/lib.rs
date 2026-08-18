@@ -6,7 +6,8 @@
 //! [`vt::VtBackend`] pair until the migration to [`Vt`] completes.
 
 use crate::{
-    schema::{DamageVerdict, Frame, GridSize, Scroll, VtModes, VtSignal},
+    damage::DamageVerdict,
+    schema::{Frame, GridSize, Scroll, VtModes, VtSignal},
     screen::viewport::DisplayOffset,
 };
 
@@ -17,7 +18,7 @@ pub mod screen;
 pub mod vt;
 
 pub mod prelude {
-    pub use crate::{Vt, VtUpdate, schema::*, vt::*};
+    pub use crate::{Vt, VtUpdate, damage::*, schema::*, vt::*};
 }
 
 /// The terminal-emulation contract `OrzmaTerm` drives and the host

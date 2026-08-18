@@ -10,7 +10,7 @@ use crate::{
 
 /// One emitted frame: a full repaint or a differential update.
 ///
-/// Staged [`crate::schema::Damage::Full`] emits a [`Frame::Snapshot`];
+/// Staged [`crate::damage::Damage::Full`] emits a [`Frame::Snapshot`];
 /// staged row damage emits a [`Frame::Delta`].
 #[derive(Debug)]
 pub enum Frame {

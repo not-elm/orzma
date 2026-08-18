@@ -13,7 +13,8 @@ pub mod viewport;
 
 use self::cell::Pen;
 use self::grid::{Grid, HistoryEvent};
-use crate::schema::{Damage, DisplayOffset, GridSize};
+use crate::damage::Damage;
+use crate::schema::{DisplayOffset, GridSize};
 use crate::screen::cursor::SavedCursorSlots;
 use crate::screen::margins::Margins;
 use crate::screen::state::ScreenState;

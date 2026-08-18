@@ -12,7 +12,6 @@
 
 mod color;
 mod cursor;
-mod damage;
 mod error;
 mod frame;
 mod grid;
@@ -28,7 +27,6 @@ mod webview;
 pub use crate::screen::viewport::DisplayOffset;
 pub use color::*;
 pub use cursor::*;
-pub use damage::*;
 pub use error::*;
 pub use frame::*;
 pub use grid::*;

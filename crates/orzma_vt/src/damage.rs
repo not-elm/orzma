@@ -1,13 +1,130 @@
-//! Central staging point for the damage every source reports.
+//! Damage vocabulary and the ledger that stages it.
 //!
-//! [`DamageLedger`] accumulates the [`Damage`] that interpretation,
-//! scrolling, resizing, and placement changes each report per call, and
+//! [`Damage`] is what one source reports for a single damage cycle, and
+//! [`DamageVerdict`] classifies it for the coalescer's immediate-flush
+//! decision. [`DamageLedger`] accumulates what interpretation,
+//! scrolling, resizing, and placement changes each report per call and
 //! hands the merged result to the frame emitter. Staging merges rather
 //! than replaces: a source reports only what its own call produced, so
 //! an overwritten staged value would drop a repaint no later call
 //! re-reports.
 
-use crate::schema::{Damage, DamageRows};
+#[cfg(feature = "alacritty")]
+use alacritty_terminal::{Term, term::TermDamage};
+use std::ops::{BitOrAssign, Deref};
+
+/// Viewport damage the VT reported in a single damage cycle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Damage {
+    /// Entire viewport is dirty (resize, clear, alt-screen swap, reset).
+    Full,
+    /// Only the carried rows are dirty.
+    Delta(DamageRows),
+}
+
+impl Damage {
+    /// Reads alacritty's accumulated damage for one cycle.
+    ///
+    /// # Invariants
+    ///
+    /// `Term::damage()` consumes its own `last_cursor` bookkeeping, so it must
+    /// be called exactly once per cycle, and the caller must
+    /// `Term::reset_damage()` immediately after the read so the next cycle
+    /// reports only its own damage — a skipped reset latches `damage.full`
+    /// and every later cycle reports `Full`.
+    #[cfg(feature = "alacritty")]
+    pub fn from_alacritty_term<T>(term: &mut Term<T>) -> Self {
+        match term.damage() {
+            TermDamage::Full => Self::Full,
+            TermDamage::Partial(iter) => Self::Delta(iter.map(|d| d.line as u16).collect()),
+        }
+    }
+}
+
+/// Merges damage, keeping whichever repaint is the larger of the two.
+///
+/// [`Damage::Full`] absorbs anything and an empty
+/// [`Damage::Delta`] is the identity, so a staged value can start
+/// from an empty set and fold every later reading in.
+impl BitOrAssign for Damage {
+    fn bitor_assign(&mut self, rhs: Self) {
+        match (self, rhs) {
+            (Self::Full, _) => {}
+            (staged, Self::Full) => *staged = Self::Full,
+            (Self::Delta(staged), Self::Delta(incoming)) => {
+                if incoming.0.is_empty() {
+                    return;
+                }
+                if staged.0.is_empty() {
+                    *staged = incoming;
+                    return;
+                }
+                staged.0.extend(incoming.0);
+                staged.0.sort_unstable();
+                staged.0.dedup();
+            }
+        }
+    }
+}
+
+/// Dirty viewport row indices, ascending and without duplicates.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DamageRows(Vec<u16>);
+
+impl Deref for DamageRows {
+    type Target = [u16];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<Vec<u16>> for DamageRows {
+    fn from(mut rows: Vec<u16>) -> Self {
+        rows.sort_unstable();
+        rows.dedup();
+        Self(rows)
+    }
+}
+
+impl FromIterator<u16> for DamageRows {
+    fn from_iter<I: IntoIterator<Item = u16>>(iter: I) -> Self {
+        Self::from(iter.into_iter().collect::<Vec<u16>>())
+    }
+}
+
+/// Classification of collected damage that drives the immediate-flush decision.
+///
+/// The owner classifies once per interpreted chunk and keeps the matching
+/// [`Damage`] staged for the emit, so the backend's damage tracker is
+/// read exactly once per cycle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DamageVerdict {
+    /// Entire screen damaged (resize, clear, alt-screen swap).
+    Full,
+    /// At most one row is dirty (interactive echo).
+    AtMostOneRow,
+    /// Two or more rows dirty. The row count drives the PR-E2b
+    /// immediate-flush cap in `Coalescer::should_flush_immediately`.
+    ManyRows { rows: usize },
+    /// No visible dirty rows.
+    Idle,
+}
+
+impl DamageVerdict {
+    /// Classifies already-collected damage for the coalescer's
+    /// immediate-flush decision.
+    pub fn classify(damage: &Damage) -> Self {
+        match damage {
+            Damage::Full => Self::Full,
+            Damage::Delta(rows) => match rows.len() {
+                0 => Self::Idle,
+                1 => Self::AtMostOneRow,
+                n => Self::ManyRows { rows: n },
+            },
+        }
+    }
+}
 
 // NOTE: `#[expect]` is impractical on this type — the tests below
 // construct the ledger and call every method, so `dead_code` fires in
@@ -66,7 +183,105 @@ impl DamageLedger {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::DamageRows;
+
+    #[test]
+    fn full_damage_classifies_as_full() {
+        assert_eq!(DamageVerdict::classify(&Damage::Full), DamageVerdict::Full);
+    }
+
+    #[test]
+    fn no_dirty_rows_classifies_as_idle() {
+        assert_eq!(
+            DamageVerdict::classify(&Damage::Delta(DamageRows::default())),
+            DamageVerdict::Idle
+        );
+    }
+
+    #[test]
+    fn one_dirty_row_classifies_as_at_most_one_row() {
+        assert_eq!(
+            DamageVerdict::classify(&Damage::Delta(vec![7].into())),
+            DamageVerdict::AtMostOneRow
+        );
+    }
+
+    #[test]
+    fn many_dirty_rows_carry_the_row_count() {
+        assert_eq!(
+            DamageVerdict::classify(&Damage::Delta(vec![0, 3, 9].into())),
+            DamageVerdict::ManyRows { rows: 3 }
+        );
+    }
+
+    /// Asserts that merging partial damage yields the ascending,
+    /// duplicate-free union.
+    ///
+    /// Case: damage from an interpreted chunk and from a selection
+    /// change meets in the staged value before one emit. A single
+    /// backend read is already normalized, so this exists only for that
+    /// cross-read merge; keeping append order would leave a duplicate
+    /// that `classify` reports as `ManyRows` instead of `AtMostOneRow`.
+    #[test]
+    fn merging_partial_damage_unions_sorts_and_dedups_the_rows() {
+        let mut interleaved = Damage::Delta(vec![1, 3, 5].into());
+        interleaved |= Damage::Delta(vec![2, 3, 5].into());
+        assert_eq!(interleaved, Damage::Delta(vec![1, 2, 3, 5].into()));
+
+        let mut descending = Damage::Delta(vec![5].into());
+        descending |= Damage::Delta(vec![3].into());
+        assert_eq!(descending, Damage::Delta(vec![3, 5].into()));
+
+        let mut repeated = Damage::Delta(vec![0, 1].into());
+        repeated |= Damage::Delta(vec![0, 1].into());
+        assert_eq!(repeated, Damage::Delta(vec![0, 1].into()));
+    }
+
+    /// Asserts that `Full` absorbs partial damage from either side.
+    ///
+    /// Case: a selection change demands a whole repaint, then a one-row
+    /// echo arrives before the emit. Both orders are pinned because the
+    /// two arms are asymmetric; letting the newest damage win would
+    /// leave the screen stale.
+    #[test]
+    fn full_damage_absorbs_partial_damage_from_either_side() {
+        let mut staged_full = Damage::Full;
+        staged_full |= Damage::Delta(vec![0].into());
+        assert_eq!(staged_full, Damage::Full);
+
+        let mut incoming_full = Damage::Delta(vec![0, 1].into());
+        incoming_full |= Damage::Full;
+        assert_eq!(incoming_full, Damage::Full);
+
+        let mut both_full = Damage::Full;
+        both_full |= Damage::Full;
+        assert_eq!(both_full, Damage::Full);
+
+        let mut full_then_empty = Damage::Full;
+        full_then_empty |= Damage::Delta(DamageRows::default());
+        assert_eq!(full_then_empty, Damage::Full);
+    }
+
+    /// Asserts that an empty row set is the merge identity on both
+    /// sides.
+    ///
+    /// Case: the staging site folds an absent staged value in by merging
+    /// onto an empty `Delta`, so the identity is load-bearing. An empty
+    /// operand is a real reading — a viewport scrolled fully into
+    /// history — not a sentinel to discard the other side for.
+    #[test]
+    fn an_empty_row_set_is_the_merge_identity() {
+        let mut empty_incoming = Damage::Delta(vec![0, 2].into());
+        empty_incoming |= Damage::Delta(DamageRows::default());
+        assert_eq!(empty_incoming, Damage::Delta(vec![0, 2].into()));
+
+        let mut empty_staged = Damage::Delta(DamageRows::default());
+        empty_staged |= Damage::Delta(vec![0, 2].into());
+        assert_eq!(empty_staged, Damage::Delta(vec![0, 2].into()));
+
+        let mut both_empty = Damage::Delta(DamageRows::default());
+        both_empty |= Damage::Delta(DamageRows::default());
+        assert_eq!(both_empty, Damage::Delta(DamageRows::default()));
+    }
 
     /// A ledger whose seeded bootstrap repaint has been consumed, so a
     /// test observes only the damage it stages itself.

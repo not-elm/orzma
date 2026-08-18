@@ -2,7 +2,8 @@
 //! module per exercised concern.
 
 use super::*;
-use crate::schema::{CellSide, DamageRows, GridColumn, GridLine, GridPoint, SelectionGeometry};
+use crate::damage::DamageRows;
+use crate::schema::{CellSide, GridColumn, GridLine, GridPoint, SelectionGeometry};
 use alacritty_terminal::index::Point as AlacPoint;
 
 mod cursor;
