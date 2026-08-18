@@ -6,16 +6,23 @@
 //! [`vt::VtBackend`] pair until the migration to [`Vt`] completes.
 
 use crate::{
-    damage::DamageVerdict,
+    damage::{DamageLedger, DamageVerdict},
+    frame::FrameEmitter,
+    interpreter::Interpreter,
+    placement::PlacementStore,
     schema::{Frame, GridSize, Scroll, VtModes, VtSignal},
     screen::viewport::DisplayOffset,
+    terminal::TerminalState,
 };
 
 pub mod damage;
 mod frame;
 pub mod hyperlink;
+mod interpreter;
+mod placement;
 pub mod schema;
 pub mod screen;
+mod terminal;
 pub mod vt;
 
 pub mod prelude {
@@ -132,37 +139,75 @@ pub struct VtUpdate {
 /// The forthcoming self-contained implementation of [`Vt`], replacing
 /// the [`vt::OldOrzmaVt`] + [`vt::VtBackend`] pair.
 ///
-/// Every method is still a stub; the grid, damage tracking, and frame
-/// builder land with the migration tracked in
-/// `docs/orzma_tty_engine_replacement_gaps.md`.
-pub struct OrzmaVt {}
+/// The fields are wired; every method is still a stub. The components
+/// land one at a time, in the order
+/// `docs/orzma_vt_internal_design.md` §7 sets out.
+#[expect(
+    dead_code,
+    reason = "the Vt methods read these fields once their components land"
+)]
+pub struct OrzmaVt {
+    /// Byte decoding plus the CSI ?2026 synchronized-update buffer.
+    interpreter: Interpreter,
+    /// Everything the terminal means: screens, modes, tabs, colors,
+    /// title.
+    terminal: TerminalState,
+    /// Webview placements: minting, anchor tracking, projection.
+    placements: PlacementStore,
+    /// Damage staged for the next emit, from every source.
+    damage: DamageLedger,
+    /// Emission state: the hyperlink interner.
+    emitter: FrameEmitter,
+}
+
+impl OrzmaVt {
+    /// Builds a terminal whose first frame is a full snapshot.
+    ///
+    /// # Invariants
+    ///
+    /// The ledger must come from [`DamageLedger::new`]: its seeded full
+    /// damage is what makes that first frame a snapshot, so a
+    /// constructor that starts from an empty ledger paints nothing
+    /// until the first PTY output arrives.
+    pub fn new(_size: GridSize, _max_history: usize) -> Self {
+        todo!()
+    }
+}
 
 impl Vt for OrzmaVt {
-    fn interpret(&mut self, _chunk: &[u8]) -> VtUpdate {
+    // NOTE: The empty-chunk guard is load-bearing: the contract pins
+    // "an empty chunk returns VtUpdate::default()", and parsing zero
+    // bytes would still classify the damage a previous chunk left
+    // staged.
+    fn interpret(&mut self, chunk: &[u8]) -> VtUpdate {
+        if chunk.is_empty() {
+            return VtUpdate::default();
+        }
         todo!()
     }
 
     fn frame(&mut self) -> Option<Frame> {
-        todo!()
+        let damage = self.damage.take()?;
+        Some(self.emitter.emit(damage, self.terminal.active()))
     }
 
-    fn resize(&mut self, _size: GridSize) -> bool {
-        todo!()
+    fn resize(&mut self, size: GridSize) -> bool {
+        self.damage.stage_if_changed(self.terminal.resize(size))
     }
 
-    fn scroll(&mut self, _scroll: Scroll) -> bool {
-        todo!()
+    fn scroll(&mut self, scroll: Scroll) -> bool {
+        self.damage.stage_if_changed(self.terminal.scroll(scroll))
     }
 
     fn grid_size(&self) -> GridSize {
-        todo!()
+        self.terminal.grid_size()
     }
 
     fn display_offset(&self) -> DisplayOffset {
-        todo!()
+        self.terminal.display_offset()
     }
 
     fn modes(&self) -> VtModes {
-        todo!()
+        self.terminal.modes()
     }
 }
