@@ -48,15 +48,31 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
         .collect();
 }
 
+// NOTE: Every write here is guarded because a delta can legitimately
+// carry nothing to draw — the VT emits one whenever a damage cycle ran,
+// including while the user is scrolled far enough back that the output
+// is off-window. Assigning identical values would still deref
+// mutably, and `update_terminal_material` reads that as "this grid
+// changed" and rebuilds the GPU buffers for a screen nothing moved on.
 fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
     let Ok(mut grid) = terminals.get_mut(delta.entity) else {
         return;
     };
-    grid.cursor = Some(delta.cursor.clone());
-    grid.display_offset = delta.display_offset;
-    grid.vi_cursor = delta.vi_cursor;
-    grid.selection = delta.selection;
-    grid.placements.clone_from(&delta.placements);
+    if grid.cursor.as_ref() != Some(&delta.cursor) {
+        grid.cursor = Some(delta.cursor.clone());
+    }
+    if grid.display_offset != delta.display_offset {
+        grid.display_offset = delta.display_offset;
+    }
+    if grid.vi_cursor != delta.vi_cursor {
+        grid.vi_cursor = delta.vi_cursor;
+    }
+    if grid.selection != delta.selection {
+        grid.selection = delta.selection;
+    }
+    if grid.placements != delta.placements {
+        grid.placements.clone_from(&delta.placements);
+    }
     for h in &delta.hyperlinks {
         if !grid.hyperlinks.iter().any(|(id, _)| *id == h.id) {
             grid.hyperlinks.push((h.id, h.uri.clone()));
@@ -113,8 +129,8 @@ fn runs_to_cells(runs: &[Run], line: GridLine, hyperlinks: &[Hyperlink]) -> Vec<
 mod tests {
     use super::*;
     use crate::schema::{
-        Color, Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId, ProjectedPlacement, Rgb,
-        Row, Style,
+        Color, Cursor, Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId,
+        ProjectedPlacement, Rgb, Row, Style,
     };
 
     fn run_with_link(text: &str, hyperlink_id: Option<HyperlinkId>) -> Run {
@@ -126,6 +142,96 @@ mod tests {
             text: text.to_string(),
             hyperlink_id,
         }
+    }
+
+    #[derive(Resource, Default)]
+    struct ChangedGrids(usize);
+
+    fn count_changed_grids(
+        mut seen: ResMut<ChangedGrids>,
+        grids: Query<(), Changed<TerminalGrid>>,
+    ) {
+        seen.0 += grids.iter().count();
+    }
+
+    /// Asserts that a delta carrying nothing new leaves the grid
+    /// component unchanged.
+    ///
+    /// The agreed policy guards every write rather than assigning
+    /// unconditionally: a delta is emitted whenever a damage cycle ran,
+    /// so one arrives per PTY chunk even while the user is scrolled far
+    /// enough back that the output is off-window. An unconditional
+    /// assignment would still mark the component changed, and
+    /// `update_terminal_material` reads that as a reason to rebuild the
+    /// GPU buffers.
+    ///
+    /// Case: the user reads scrollback while a build keeps printing at
+    /// the live tail.
+    #[test]
+    fn a_delta_with_nothing_new_leaves_the_grid_unchanged() {
+        let mut app = App::new();
+        app.add_observer(apply_delta)
+            .init_resource::<ChangedGrids>()
+            .add_systems(Update, count_changed_grids);
+        let entity = app
+            .world_mut()
+            .spawn(TerminalGrid {
+                cursor: Some(Cursor::default()),
+                ..grid_with(vec![])
+            })
+            .id();
+        app.update();
+        app.world_mut().resource_mut::<ChangedGrids>().0 = 0;
+
+        app.world_mut().trigger(FrameDelta {
+            entity,
+            cursor: Cursor::default(),
+            dirty_rows: vec![],
+            hyperlinks: vec![],
+            display_offset: 0,
+            vi_cursor: None,
+            selection: None,
+            placements: vec![],
+        });
+        app.update();
+
+        assert_eq!(app.world().resource::<ChangedGrids>().0, 0);
+    }
+
+    /// Asserts that a delta whose metadata moved does mark the grid
+    /// changed.
+    ///
+    /// Case: the user presses an arrow key and the application moves
+    /// the caret without repainting a cell.
+    #[test]
+    fn a_delta_that_moves_the_cursor_marks_the_grid_changed() {
+        let mut app = App::new();
+        app.add_observer(apply_delta)
+            .init_resource::<ChangedGrids>()
+            .add_systems(Update, count_changed_grids);
+        let entity = app
+            .world_mut()
+            .spawn(TerminalGrid {
+                cursor: Some(Cursor::default()),
+                ..grid_with(vec![])
+            })
+            .id();
+        app.update();
+        app.world_mut().resource_mut::<ChangedGrids>().0 = 0;
+
+        app.world_mut().trigger(FrameDelta {
+            entity,
+            cursor: Cursor::default(),
+            dirty_rows: vec![],
+            hyperlinks: vec![],
+            display_offset: 7,
+            vi_cursor: None,
+            selection: None,
+            placements: vec![],
+        });
+        app.update();
+
+        assert_eq!(app.world().resource::<ChangedGrids>().0, 1);
     }
 
     /// Asserts that a run's hyperlink id resolves against the frame's
