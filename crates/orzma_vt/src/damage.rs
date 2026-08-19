@@ -9,6 +9,7 @@
 //! an overwritten staged value would drop a repaint no later call
 //! re-reports.
 
+use crate::schema::ViewportLine;
 #[cfg(feature = "alacritty")]
 use alacritty_terminal::{Term, term::TermDamage};
 use std::ops::{BitOrAssign, Deref};
@@ -36,7 +37,14 @@ impl Damage {
     pub fn from_alacritty_term<T>(term: &mut Term<T>) -> Self {
         match term.damage() {
             TermDamage::Full => Self::Full,
-            TermDamage::Partial(iter) => Self::Delta(iter.map(|d| d.line as u16).collect()),
+            TermDamage::Partial(iter) => Self::Delta(
+                iter.map(|d| {
+                    ViewportLine(
+                        u16::try_from(d.line).expect("a terminal's viewport rows fit in u16"),
+                    )
+                })
+                .collect(),
+            ),
         }
     }
 }
@@ -69,27 +77,27 @@ impl BitOrAssign for Damage {
 
 /// Dirty viewport row indices, ascending and without duplicates.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct DamageRows(Vec<u16>);
+pub struct DamageRows(Vec<ViewportLine>);
 
 impl Deref for DamageRows {
-    type Target = [u16];
+    type Target = [ViewportLine];
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl From<Vec<u16>> for DamageRows {
-    fn from(mut rows: Vec<u16>) -> Self {
+impl From<Vec<ViewportLine>> for DamageRows {
+    fn from(mut rows: Vec<ViewportLine>) -> Self {
         rows.sort_unstable();
         rows.dedup();
         Self(rows)
     }
 }
 
-impl FromIterator<u16> for DamageRows {
-    fn from_iter<I: IntoIterator<Item = u16>>(iter: I) -> Self {
-        Self::from(iter.into_iter().collect::<Vec<u16>>())
+impl FromIterator<ViewportLine> for DamageRows {
+    fn from_iter<I: IntoIterator<Item = ViewportLine>>(iter: I) -> Self {
+        Self::from(iter.into_iter().collect::<Vec<ViewportLine>>())
     }
 }
 
@@ -201,7 +209,7 @@ mod tests {
         #[test]
         fn one_dirty_row_classifies_as_at_most_one_row() {
             assert_eq!(
-                DamageVerdict::classify(&Damage::Delta(vec![7].into())),
+                DamageVerdict::classify(&Damage::Delta(vec![ViewportLine(7)].into())),
                 DamageVerdict::AtMostOneRow
             );
         }
@@ -209,7 +217,9 @@ mod tests {
         #[test]
         fn many_dirty_rows_carry_the_row_count() {
             assert_eq!(
-                DamageVerdict::classify(&Damage::Delta(vec![0, 3, 9].into())),
+                DamageVerdict::classify(&Damage::Delta(
+                    vec![ViewportLine(0), ViewportLine(3), ViewportLine(9)].into()
+                )),
                 DamageVerdict::ManyRows { rows: 3 }
             );
         }
@@ -225,17 +235,36 @@ mod tests {
         /// `AtMostOneRow`.
         #[test]
         fn merging_partial_damage_unions_sorts_and_dedups_the_rows() {
-            let mut interleaved = Damage::Delta(vec![1, 3, 5].into());
-            interleaved |= Damage::Delta(vec![2, 3, 5].into());
-            assert_eq!(interleaved, Damage::Delta(vec![1, 2, 3, 5].into()));
+            let mut interleaved =
+                Damage::Delta(vec![ViewportLine(1), ViewportLine(3), ViewportLine(5)].into());
+            interleaved |=
+                Damage::Delta(vec![ViewportLine(2), ViewportLine(3), ViewportLine(5)].into());
+            assert_eq!(
+                interleaved,
+                Damage::Delta(
+                    vec![
+                        ViewportLine(1),
+                        ViewportLine(2),
+                        ViewportLine(3),
+                        ViewportLine(5)
+                    ]
+                    .into()
+                )
+            );
 
-            let mut descending = Damage::Delta(vec![5].into());
-            descending |= Damage::Delta(vec![3].into());
-            assert_eq!(descending, Damage::Delta(vec![3, 5].into()));
+            let mut descending = Damage::Delta(vec![ViewportLine(5)].into());
+            descending |= Damage::Delta(vec![ViewportLine(3)].into());
+            assert_eq!(
+                descending,
+                Damage::Delta(vec![ViewportLine(3), ViewportLine(5)].into())
+            );
 
-            let mut repeated = Damage::Delta(vec![0, 1].into());
-            repeated |= Damage::Delta(vec![0, 1].into());
-            assert_eq!(repeated, Damage::Delta(vec![0, 1].into()));
+            let mut repeated = Damage::Delta(vec![ViewportLine(0), ViewportLine(1)].into());
+            repeated |= Damage::Delta(vec![ViewportLine(0), ViewportLine(1)].into());
+            assert_eq!(
+                repeated,
+                Damage::Delta(vec![ViewportLine(0), ViewportLine(1)].into())
+            );
         }
 
         /// Asserts that `Full` absorbs partial damage from either side.
@@ -247,10 +276,10 @@ mod tests {
         #[test]
         fn full_damage_absorbs_partial_damage_from_either_side() {
             let mut staged_full = Damage::Full;
-            staged_full |= Damage::Delta(vec![0].into());
+            staged_full |= Damage::Delta(vec![ViewportLine(0)].into());
             assert_eq!(staged_full, Damage::Full);
 
-            let mut incoming_full = Damage::Delta(vec![0, 1].into());
+            let mut incoming_full = Damage::Delta(vec![ViewportLine(0), ViewportLine(1)].into());
             incoming_full |= Damage::Full;
             assert_eq!(incoming_full, Damage::Full);
 
@@ -273,13 +302,19 @@ mod tests {
         /// other side for.
         #[test]
         fn an_empty_row_set_is_the_merge_identity() {
-            let mut empty_incoming = Damage::Delta(vec![0, 2].into());
+            let mut empty_incoming = Damage::Delta(vec![ViewportLine(0), ViewportLine(2)].into());
             empty_incoming |= Damage::Delta(DamageRows::default());
-            assert_eq!(empty_incoming, Damage::Delta(vec![0, 2].into()));
+            assert_eq!(
+                empty_incoming,
+                Damage::Delta(vec![ViewportLine(0), ViewportLine(2)].into())
+            );
 
             let mut empty_staged = Damage::Delta(DamageRows::default());
-            empty_staged |= Damage::Delta(vec![0, 2].into());
-            assert_eq!(empty_staged, Damage::Delta(vec![0, 2].into()));
+            empty_staged |= Damage::Delta(vec![ViewportLine(0), ViewportLine(2)].into());
+            assert_eq!(
+                empty_staged,
+                Damage::Delta(vec![ViewportLine(0), ViewportLine(2)].into())
+            );
 
             let mut both_empty = Damage::Delta(DamageRows::default());
             both_empty |= Damage::Delta(DamageRows::default());
@@ -311,9 +346,22 @@ mod tests {
         #[test]
         fn staging_merges_rather_than_replacing() {
             let mut ledger = drained();
-            ledger.stage(Damage::Delta(vec![1, 2, 3].into()));
-            ledger.stage(Damage::Delta(vec![7].into()));
-            assert_eq!(ledger.take(), Some(Damage::Delta(vec![1, 2, 3, 7].into())));
+            ledger.stage(Damage::Delta(
+                vec![ViewportLine(1), ViewportLine(2), ViewportLine(3)].into(),
+            ));
+            ledger.stage(Damage::Delta(vec![ViewportLine(7)].into()));
+            assert_eq!(
+                ledger.take(),
+                Some(Damage::Delta(
+                    vec![
+                        ViewportLine(1),
+                        ViewportLine(2),
+                        ViewportLine(3),
+                        ViewportLine(7)
+                    ]
+                    .into()
+                ))
+            );
         }
 
         /// Asserts that staging an empty row set leaves real staged
@@ -338,12 +386,18 @@ mod tests {
         #[test]
         fn take_hands_over_the_staged_damage_and_then_reports_nothing_staged() {
             let mut ledger = drained();
-            ledger.stage(Damage::Delta(vec![4].into()));
-            assert_eq!(ledger.take(), Some(Damage::Delta(vec![4].into())));
+            ledger.stage(Damage::Delta(vec![ViewportLine(4)].into()));
+            assert_eq!(
+                ledger.take(),
+                Some(Damage::Delta(vec![ViewportLine(4)].into()))
+            );
             assert_eq!(ledger.take(), None);
 
-            ledger.stage(Damage::Delta(vec![9].into()));
-            assert_eq!(ledger.take(), Some(Damage::Delta(vec![9].into())));
+            ledger.stage(Damage::Delta(vec![ViewportLine(9)].into()));
+            assert_eq!(
+                ledger.take(),
+                Some(Damage::Delta(vec![ViewportLine(9)].into()))
+            );
         }
 
         /// Asserts that staging an optional damage reports whether one
@@ -357,9 +411,12 @@ mod tests {
         #[test]
         fn stage_if_changed_reports_whether_anything_was_staged() {
             let mut ledger = drained();
-            ledger.stage(Damage::Delta(vec![2].into()));
+            ledger.stage(Damage::Delta(vec![ViewportLine(2)].into()));
             assert!(!ledger.stage_if_changed(None));
-            assert_eq!(ledger.take(), Some(Damage::Delta(vec![2].into())));
+            assert_eq!(
+                ledger.take(),
+                Some(Damage::Delta(vec![ViewportLine(2)].into()))
+            );
 
             assert!(ledger.stage_if_changed(Some(Damage::Full)));
             assert_eq!(ledger.take(), Some(Damage::Full));

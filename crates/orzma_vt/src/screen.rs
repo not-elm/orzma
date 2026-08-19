@@ -35,13 +35,6 @@ pub struct Effects {
 }
 
 impl Effects {
-    fn damage_rows(rows: Vec<u16>) -> Self {
-        Self {
-            damage: Some(Damage::Delta(rows.into())),
-            history: None,
-        }
-    }
-
     fn full(history: Option<HistoryEvent>) -> Self {
         Self {
             damage: Some(Damage::Full),
@@ -127,7 +120,7 @@ impl Screen {
             self.state.column = 0;
             effects.merge(self.linefeed());
         } else {
-            effects.merge(Effects::damage_rows(vec![self.state.line]));
+            effects.merge(self.damage_grid_rows([self.state.line]));
         }
         self.grid[self.state.line][self.state.column] = self.state.pen.stamp(c);
         if self.state.column + 1 < self.grid.size().cols {
@@ -143,7 +136,7 @@ impl Screen {
     pub fn carriage_return(&mut self) -> Effects {
         self.state.column = 0;
         self.state.pending_wrap = false;
-        Effects::damage_rows(vec![self.state.line])
+        self.damage_grid_rows([self.state.line])
     }
 
     /// Moves the cursor down one row, scrolling at the bottom margin;
@@ -152,7 +145,7 @@ impl Screen {
         if self.state.line < self.margins.bottom {
             let departed = self.state.line;
             self.state.line += 1;
-            return Effects::damage_rows(vec![departed, self.state.line]);
+            return self.damage_grid_rows([departed, self.state.line]);
         }
         let history = self.grid.scroll_up_one(self.state.pen.erase_cell());
         Effects::full(Some(history))
@@ -173,7 +166,7 @@ impl Screen {
         };
         self.grid
             .fill_visible_row_range(self.state.line, columns, self.state.pen.erase_cell());
-        Effects::damage_rows(vec![self.state.line])
+        self.damage_grid_rows([self.state.line])
     }
 
     /// Erases part of the visible screen with the pen background
@@ -188,7 +181,7 @@ impl Screen {
                 for line in self.state.line + 1..rows {
                     self.grid.fill_visible_row_range(line, 0..cols, blank);
                 }
-                Effects::damage_rows((self.state.line..rows).collect())
+                self.damage_grid_rows(self.state.line..rows)
             }
             EraseScreenMode::Above => {
                 for line in 0..self.state.line {
@@ -196,7 +189,7 @@ impl Screen {
                 }
                 self.grid
                     .fill_visible_row_range(self.state.line, 0..self.state.column + 1, blank);
-                Effects::damage_rows((0..=self.state.line).collect())
+                self.damage_grid_rows(0..=self.state.line)
             }
             EraseScreenMode::All => {
                 for line in 0..rows {
@@ -204,6 +197,27 @@ impl Screen {
                 }
                 Effects::full(None)
             }
+        }
+    }
+
+    /// Reports the given active-grid lines as damage, in the viewport
+    /// coordinates a frame repaints by.
+    ///
+    /// Lines the viewport does not show are dropped: damage is what
+    /// needs repainting, and a row scrolled out of view needs none.
+    /// Counting invisible rows would also let output the user cannot
+    /// see spend the coalescer's echo credit.
+    fn damage_grid_rows(&self, lines: impl IntoIterator<Item = u16>) -> Effects {
+        let offset = self.viewport.offset;
+        let rows = self.grid.size().rows;
+        Effects {
+            damage: Some(Damage::Delta(
+                lines
+                    .into_iter()
+                    .filter_map(|line| GridLine(i32::from(line)).to_viewport(offset, rows))
+                    .collect(),
+            )),
+            history: None,
         }
     }
 
@@ -262,6 +276,7 @@ impl Screen {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::damage::DamageRows;
     use crate::schema::Color;
 
     fn screen() -> Screen {
@@ -319,6 +334,82 @@ mod tests {
         assert!(cursor.visible);
     }
 
+    /// Asserts that damage from a scrolled screen names the viewport
+    /// row the write actually appears on.
+    ///
+    /// The agreed unit is the viewport row, not the active-grid row:
+    /// the renderer repaints by viewport row, and the coalescer counts
+    /// damage to decide how urgently to flush.
+    ///
+    /// Case: the user has scrolled back one line when the shell echoes
+    /// a character, so the live row it wrote sits one row lower in the
+    /// window.
+    #[test]
+    fn a_scrolled_screen_reports_damage_in_viewport_rows() {
+        let mut screen = screen();
+        screen.state.line = 2;
+        screen.linefeed();
+        screen.viewport.offset = DisplayOffset(1);
+        screen.state.line = 0;
+        assert_eq!(
+            screen.print('x'),
+            Effects {
+                damage: Some(Damage::Delta(vec![ViewportLine(1)].into())),
+                history: None,
+            }
+        );
+    }
+
+    /// Asserts that a write below the bottom of the scrolled window
+    /// reports no dirty row.
+    ///
+    /// The agreed policy drops it rather than reporting a row off the
+    /// window: damage is what needs repainting, and letting invisible
+    /// output count would spend the coalescer's echo credit on a screen
+    /// nothing changed on.
+    ///
+    /// Case: the user reads scrollback while a build keeps printing at
+    /// the live tail, which the window no longer shows.
+    #[test]
+    fn a_write_scrolled_out_of_the_window_reports_no_dirty_row() {
+        let mut screen = screen();
+        for _ in 0..3 {
+            screen.state.line = 2;
+            screen.linefeed();
+        }
+        screen.viewport.offset = DisplayOffset(3);
+        screen.state.line = 0;
+        assert_eq!(
+            screen.print('x'),
+            Effects {
+                damage: Some(Damage::Delta(DamageRows::default())),
+                history: None,
+            }
+        );
+    }
+
+    /// Asserts that an erase spanning the screen reports only the rows
+    /// the scrolled window still shows.
+    ///
+    /// Case: a full-screen application clears from the cursor down
+    /// while the user is scrolled back, so the lower part of the erased
+    /// span has already left the window.
+    #[test]
+    fn a_scrolled_erase_reports_only_the_rows_still_in_the_window() {
+        let mut screen = screen();
+        screen.state.line = 2;
+        screen.linefeed();
+        screen.viewport.offset = DisplayOffset(1);
+        screen.state.line = 0;
+        assert_eq!(
+            screen.erase_in_display(EraseScreenMode::Below),
+            Effects {
+                damage: Some(Damage::Delta(vec![ViewportLine(1), ViewportLine(2)].into())),
+                history: None,
+            }
+        );
+    }
+
     /// Asserts that a fresh screen starts at the origin, pinned to the
     /// live tail, with an empty history.
     ///
@@ -348,7 +439,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![0].into())),
+                damage: Some(Damage::Delta(vec![ViewportLine(0)].into())),
                 history: None,
             }
         );
@@ -367,7 +458,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![0, 1].into())),
+                damage: Some(Damage::Delta(vec![ViewportLine(0), ViewportLine(1)].into())),
                 history: None,
             }
         );
@@ -461,7 +552,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![0].into())),
+                damage: Some(Damage::Delta(vec![ViewportLine(0)].into())),
                 history: None,
             }
         );
@@ -501,7 +592,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![0, 1].into())),
+                damage: Some(Damage::Delta(vec![ViewportLine(0), ViewportLine(1)].into())),
                 history: None,
             }
         );
@@ -550,7 +641,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![0].into())),
+                damage: Some(Damage::Delta(vec![ViewportLine(0)].into())),
                 history: None,
             }
         );
@@ -636,7 +727,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![1, 2].into())),
+                damage: Some(Damage::Delta(vec![ViewportLine(1), ViewportLine(2)].into())),
                 history: None,
             }
         );
@@ -665,7 +756,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![0, 1].into())),
+                damage: Some(Damage::Delta(vec![ViewportLine(0), ViewportLine(1)].into())),
                 history: None,
             }
         );

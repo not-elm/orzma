@@ -33,8 +33,11 @@ pub struct GridLine(pub i32);
 impl GridLine {
     #[inline]
     pub fn to_viewport(&self, offset: DisplayOffset, rows: u16) -> Option<ViewportLine> {
-        let vl = self.0 + offset.0 as i32;
-        if !(0..(rows as i32)).contains(&vl) {
+        // NOTE: `DisplayOffset` is a `u32` and does not bound itself, so
+        // `as i32` on it would wrap past `i32::MAX` and report an
+        // off-screen line as visible.
+        let vl = i64::from(self.0) + i64::from(offset.0);
+        if !(0..i64::from(rows)).contains(&vl) {
             return None;
         }
         Some(ViewportLine(u16::try_from(vl).ok()?))
@@ -57,7 +60,10 @@ impl From<alacritty_terminal::index::Line> for GridLine {
 /// below it. Clamping off-viewport values to the `-1` / row-count
 /// sentinels is the responsibility of the conversion that produces
 /// the value, not of this type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// The ordering is spatial — where the row sits in the window this
+/// frame — not an identity: the same `ViewportLine` names different
+/// content once the user scrolls or the grid is resized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct ViewportLine(pub u16);
 
 /// A 0-based grid column.

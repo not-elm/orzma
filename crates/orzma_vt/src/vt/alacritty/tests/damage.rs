@@ -1,6 +1,7 @@
 //! Interpret and damage-reporting tests.
 
 use super::*;
+use crate::schema::ViewportLine;
 
 #[test]
 fn empty_chunk_is_not_a_cycle() {
@@ -19,7 +20,10 @@ fn the_first_interpret_on_a_fresh_vt_reports_full() {
 fn a_single_row_write_reports_one_dirty_row() {
     let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     vt.term.reset_damage();
-    assert_eq!(vt.interpret(b"hi"), Some(Damage::Delta(vec![0].into())));
+    assert_eq!(
+        vt.interpret(b"hi"),
+        Some(Damage::Delta(vec![ViewportLine(0)].into()))
+    );
 }
 
 #[test]
@@ -28,7 +32,9 @@ fn a_multi_row_write_reports_each_dirty_row() {
     vt.term.reset_damage();
     assert_eq!(
         vt.interpret(b"one\r\ntwo\r\nthree"),
-        Some(Damage::Delta(vec![0, 1, 2].into()))
+        Some(Damage::Delta(
+            vec![ViewportLine(0), ViewportLine(1), ViewportLine(2)].into()
+        ))
     );
 }
 
@@ -48,7 +54,10 @@ fn a_second_interpret_reports_only_new_damage() {
     let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     vt.term.reset_damage();
     vt.interpret(b"one\r\ntwo\r\nthree");
-    assert_eq!(vt.interpret(b"x"), Some(Damage::Delta(vec![2].into())));
+    assert_eq!(
+        vt.interpret(b"x"),
+        Some(Damage::Delta(vec![ViewportLine(2)].into()))
+    );
 }
 
 // NOTE: `TermDamageIterator::new` truncates the trailing `display_offset`

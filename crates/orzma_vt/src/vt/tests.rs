@@ -2,6 +2,7 @@
 //! plus one child module per exercised concern.
 
 use super::*;
+use crate::schema::ViewportLine;
 use crate::schema::{GridColumn, GridLine, Row, Run};
 
 mod frame;
@@ -65,7 +66,12 @@ fn interpret_stages_the_damage_it_classified() {
         vt.interpret(b"one\r\ntwo\r\nthree"),
         Some(DamageVerdict::ManyRows { rows: 3 })
     );
-    assert_eq!(vt.pending_damage, Some(Damage::Delta(vec![0, 1, 2].into())));
+    assert_eq!(
+        vt.pending_damage,
+        Some(Damage::Delta(
+            vec![ViewportLine(0), ViewportLine(1), ViewportLine(2)].into()
+        ))
+    );
 }
 
 /// Asserts that damage staged by an earlier chunk survives into the
@@ -83,8 +89,14 @@ fn staged_damage_accumulates_across_chunks() {
             vt.pending_damage
         );
     };
-    assert!(rows.contains(&0), "row from the first chunk, got {rows:?}");
-    assert!(rows.contains(&2), "row from the second chunk, got {rows:?}");
+    assert!(
+        rows.contains(&ViewportLine(0)),
+        "row from the first chunk, got {rows:?}"
+    );
+    assert!(
+        rows.contains(&ViewportLine(2)),
+        "row from the second chunk, got {rows:?}"
+    );
 }
 
 /// Asserts that an empty chunk neither reports a cycle nor disturbs
@@ -136,7 +148,7 @@ fn a_selection_change_stages_full_damage() {
 #[test]
 fn no_op_operations_preserve_staged_damage() {
     let mut vt = clean_vt();
-    vt.pending_damage = Some(Damage::Delta(vec![0].into()));
+    vt.pending_damage = Some(Damage::Delta(vec![ViewportLine(0)].into()));
     let staged = vt.pending_damage.clone();
     assert!(!vt.scroll(Scroll::Delta(0)));
     assert!(
