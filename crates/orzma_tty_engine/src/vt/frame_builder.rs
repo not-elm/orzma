@@ -18,7 +18,7 @@ use bevy::ecs::entity::Entity;
 use bevy::prelude::Color;
 use orzma_tty_renderer::prelude::{
     Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkId, HyperlinkUri,
-    Row, Run, SelectionKind, SelectionRange, SnapshotReason, Style, ViCursor, ViewportPoint,
+    Row, Run, SelectionKind, SelectionRange, Style, ViCursor, ViewportPoint,
 };
 use unicode_width::UnicodeWidthChar;
 
@@ -42,7 +42,6 @@ pub(crate) fn build_snapshot<T>(
     term: &Term<T>,
     entity: Entity,
     history_base: u64,
-    reason: SnapshotReason,
     interner: &mut HyperlinkInterner,
 ) -> FrameSnapshot {
     let cols = term.columns() as u16;
@@ -60,8 +59,6 @@ pub(crate) fn build_snapshot<T>(
         rows,
         cursor: extract_cursor(term),
         rows_data,
-        reason,
-        modes: snapshot_modes(*term.mode()),
         hyperlinks: hyperlinks_opt
             .unwrap_or_default()
             .into_iter()
@@ -253,14 +250,6 @@ pub(crate) fn viewport_row_to_line<T>(term: &Term<T>, y: i32) -> Line {
     );
     let off = term.grid().display_offset() as i32;
     Line(y - off)
-}
-
-fn snapshot_modes(curr: TermMode) -> Vec<String> {
-    TRACKED_MODES
-        .iter()
-        .filter(|(flag, _)| curr.contains(*flag))
-        .map(|(_, name)| (*name).to_string())
-        .collect()
 }
 
 /// Coalesces a row's cells into runs of identical attributes.
@@ -456,13 +445,7 @@ mod tests {
     fn snapshot_empty_grid_yields_empty_or_space_rows() {
         let term = make_term(10, 3);
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, Entity::PLACEHOLDER, 0, &mut interner);
         assert_eq!(snap.cols, 10);
         assert_eq!(snap.rows, 3);
         assert_eq!(snap.rows_data.len(), 3);
@@ -483,13 +466,7 @@ mod tests {
         let mut term = make_term(10, 1);
         install_text(&mut term, "abc");
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, Entity::PLACEHOLDER, 0, &mut interner);
         let row = &snap.rows_data[0];
         let merged: String = row.runs.iter().map(|r| r.text.as_str()).collect();
         assert!(merged.starts_with("abc"), "got: {merged:?}");
@@ -501,13 +478,7 @@ mod tests {
         // NOTE: "あ" is U+3042, East Asian Wide.
         install_text(&mut term, "あ");
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, Entity::PLACEHOLDER, 0, &mut interner);
         let row = &snap.rows_data[0];
         let merged: String = row.runs.iter().map(|r| r.text.as_str()).collect();
         assert!(merged.starts_with("あ"), "got: {merged:?}");
@@ -516,35 +487,10 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_modes_includes_alt_screen_when_set() {
-        let mut term = make_term(10, 1);
-        install_text(&mut term, "\x1b[?1049h");
-        let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
-        assert!(
-            snap.modes.iter().any(|s| s == "alt-screen"),
-            "expected alt-screen in modes; got {:?}",
-            snap.modes
-        );
-    }
-
-    #[test]
     fn snapshot_cursor_position_zero_zero_initially() {
         let term = make_term(10, 3);
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, Entity::PLACEHOLDER, 0, &mut interner);
         assert_eq!(snap.cursor.x, 0);
         assert_eq!(snap.cursor.y, 0);
         assert!(snap.cursor.visible);
@@ -651,13 +597,7 @@ mod tests {
         }
         term.scroll_display(Scroll::Delta(2));
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            4,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, Entity::PLACEHOLDER, 4, &mut interner);
         assert_eq!(snap.display_offset, 2);
         assert!(snap.history_size >= 2, "history_size={}", snap.history_size);
         assert_eq!(snap.history_base, 4);
@@ -752,13 +692,7 @@ mod tests {
         }
         term.scroll_display(Scroll::Top);
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, Entity::PLACEHOLDER, 0, &mut interner);
         let row0: String = snap.rows_data[0]
             .runs
             .iter()
@@ -947,13 +881,7 @@ mod tests {
         install_text(&mut term, "abc");
         term.toggle_vi_mode();
         let mut interner = HyperlinkInterner::new();
-        let snap = build_snapshot(
-            &term,
-            Entity::PLACEHOLDER,
-            0,
-            SnapshotReason::Initial,
-            &mut interner,
-        );
+        let snap = build_snapshot(&term, Entity::PLACEHOLDER, 0, &mut interner);
         assert!(
             snap.vi_cursor.is_some(),
             "vi mode on → snapshot must carry vi_cursor"

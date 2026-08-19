@@ -3,7 +3,7 @@
 use crate::{
     schema::{
         Cursor, GridSize, Hyperlink, Palette, ProjectedPlacement, Row, Run, SelectionRange,
-        ViCursor, ViewportLine, VtModes,
+        ViCursor, ViewportLine,
     },
     screen::viewport::DisplayOffset,
 };
@@ -39,10 +39,6 @@ pub struct FrameSnapshot {
     /// emission, so an otherwise-empty delta still carries the moved
     /// list.
     pub placements: Vec<ProjectedPlacement>,
-    /// Absolute terminal-mode state at emit time. Snapshot-only: a
-    /// mode flip consumers gate on stages full damage, so no delta
-    /// outlives its mode set.
-    pub modes: VtModes,
     /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.

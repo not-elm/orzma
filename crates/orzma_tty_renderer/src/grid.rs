@@ -206,8 +206,6 @@ mod tests {
             rows: 1,
             cursor: Default::default(),
             rows_data: vec![Row::from(vec![])],
-            reason: Default::default(),
-            modes: vec![],
             hyperlinks: vec![Hyperlink {
                 id: HyperlinkId(1),
                 uri: HyperlinkUri::new("https://new"),
@@ -292,8 +290,6 @@ mod tests {
             rows: 1,
             cursor: Default::default(),
             rows_data: vec![Row::from(vec![])],
-            reason: Default::default(),
-            modes: vec![],
             hyperlinks: vec![],
             display_offset: 0,
             vi_cursor: None,

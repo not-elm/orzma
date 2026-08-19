@@ -18,10 +18,6 @@ pub struct FrameSnapshot {
     pub cursor: Cursor,
     /// Row contents (length == rows).
     pub rows_data: Vec<Row<Run>>,
-    /// Why this snapshot was emitted (Initial, Reconnect, Resize, Lagged).
-    pub reason: SnapshotReason,
-    /// Currently active wire modes (e.g. "alt-screen", "mouse-vt200").
-    pub modes: Vec<String>,
     /// Hyperlinks referenced by row Runs.
     pub hyperlinks: Vec<Hyperlink>,
     /// Lines scrolled back from the live tail. `0` = at live tail.
@@ -73,18 +69,4 @@ pub struct DirtyRow {
     pub row: u16,
     /// Full set of runs for the row.
     pub runs: Vec<Run>,
-}
-
-/// Reason a snapshot was sent.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum SnapshotReason {
-    /// Initial connect.
-    #[default]
-    Initial,
-    /// Reconnect with no replay available.
-    Reconnect,
-    /// Receiver fell too far behind the broadcast.
-    Lagged,
-    /// Terminal was resized.
-    Resize,
 }

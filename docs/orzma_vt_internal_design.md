@@ -124,7 +124,7 @@ placement は Grid の行に振る**安定 `LineId`** にアンカーし、`Plac
 
 スクロール領域(DECSTBM / DECSLRM)/ insert・origin・newline・autowrap 等の内部モード / タブストップ / G0–G3 チャーセット + シフト状態 / スクリーン毎の DEC・ANSI 保存スロット / protected・selective erase / wrap マーカーとワイド文字(スペーサ)不変条件 / UTF-8・grapheme の合成(zerowidth)/ OSC 8 の「現在リンク」ペンとライフサイクル / タイトルスタック(CSI 22/23 t)/ DECSCUSR カーソル形状。
 
-発行規則として: **モード・パレットの変化は Snapshot を強制する**(delta は `modes` / `palette` を運ばないため)。Kitty graphics / keyboard・sixel は DCS/APC ハンドラの拡張点のみ確保し、ラスタ配置をテキストセルに入れない方針を placement と共有する。
+発行規則として: **パレットの変化は Snapshot を強制する**(delta は `palette` を運ばないため)。モードはフレームに載せない — 単一プロセス構成ではホストが `Vt::modes()` を直接読むため、フレーム同梱はワイヤ越しクライアント時代の遺物である。Kitty graphics / keyboard・sixel は DCS/APC ハンドラの拡張点のみ確保し、ラスタ配置をテキストセルに入れない方針を placement と共有する。
 
 ## 6. モジュール配置(mod.rs 禁止規約準拠)
 

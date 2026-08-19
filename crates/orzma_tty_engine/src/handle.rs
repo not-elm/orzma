@@ -28,7 +28,7 @@ use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::system::Commands;
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use orzma_tty_renderer::prelude::{Cursor, CursorShape, SelectionRange, SnapshotReason, ViCursor};
+use orzma_tty_renderer::prelude::{Cursor, CursorShape, SelectionRange, ViCursor};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -860,7 +860,7 @@ impl TerminalHandle {
 
         self.announce_mode_change(commands, entity, prev_mode, curr_mode);
         match kind {
-            FrameKind::Snapshot { reason } => self.emit_snapshot(commands, entity, reason),
+            FrameKind::Snapshot => self.emit_snapshot(commands, entity),
             FrameKind::Delta { rows } => self.emit_delta(commands, entity, rows, kept_hashes),
         }
 
@@ -1000,14 +1000,8 @@ impl TerminalHandle {
     /// Builds + triggers a `FrameSnapshot`, then rebuilds
     /// `row_hashes` from scratch so subsequent Delta emits can
     /// hash-filter against the snapshot baseline.
-    fn emit_snapshot(&mut self, commands: &mut Commands, entity: Entity, reason: SnapshotReason) {
-        let snap = build_snapshot(
-            &self.term,
-            entity,
-            self.history_base,
-            reason,
-            &mut self.hyperlinks,
-        );
+    fn emit_snapshot(&mut self, commands: &mut Commands, entity: Entity) {
+        let snap = build_snapshot(&self.term, entity, self.history_base, &mut self.hyperlinks);
         commands.trigger(snap);
         self.rebuild_full_row_hashes();
     }
@@ -1188,7 +1182,7 @@ impl TerminalHandle {
 /// Classification used by `decide_frame_kind` to select snapshot vs
 /// delta. Local to this module — `frame_builder` doesn't need it.
 enum FrameKind {
-    Snapshot { reason: SnapshotReason },
+    Snapshot,
     Delta { rows: Vec<u16> },
 }
 
@@ -1201,28 +1195,22 @@ const SNAPSHOT_THRESHOLD_NUM: u32 = 20;
 const SNAPSHOT_THRESHOLD_DEN: u32 = 17;
 
 /// Selects the frame type. Policy (priority order):
-/// 1. `state.first_emit` → `Snapshot { reason: Initial }`
-/// 2. `DirtyRows::Full` → `Snapshot { reason: Resize }`
-/// 3. Partial damage >= 85 % of total rows → `Snapshot { reason: Resize }`
+/// 1. `state.first_emit` → `Snapshot`
+/// 2. `DirtyRows::Full` → `Snapshot`
+/// 3. Partial damage >= 85 % of total rows → `Snapshot`
 /// 4. Otherwise → `Delta { rows }`
 fn decide_frame_kind(handle: &TerminalHandle, dirty: DirtyRows) -> FrameKind {
     let total_rows = handle.term.screen_lines() as u16;
     if handle.first_emit {
-        return FrameKind::Snapshot {
-            reason: SnapshotReason::Initial,
-        };
+        return FrameKind::Snapshot;
     }
     match dirty {
-        DirtyRows::Full => FrameKind::Snapshot {
-            reason: SnapshotReason::Resize,
-        },
+        DirtyRows::Full => FrameKind::Snapshot,
         DirtyRows::Rows(rows) => {
             if (rows.len() as u32) * SNAPSHOT_THRESHOLD_NUM
                 >= (total_rows as u32) * SNAPSHOT_THRESHOLD_DEN
             {
-                FrameKind::Snapshot {
-                    reason: SnapshotReason::Resize,
-                }
+                FrameKind::Snapshot
             } else {
                 FrameKind::Delta { rows }
             }

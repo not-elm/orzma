@@ -58,7 +58,7 @@ impl DeviceState {
         todo!()
     }
 
-    /// Grid dimensions of the active screen.
+    /// Returns the grid dimensions of the active screen.
     pub fn grid_size(&self) -> GridSize {
         todo!()
     }
