@@ -182,177 +182,187 @@ impl DamageLedger {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    mod damage {
+        use super::super::*;
 
-    #[test]
-    fn full_damage_classifies_as_full() {
-        assert_eq!(DamageVerdict::classify(&Damage::Full), DamageVerdict::Full);
+        #[test]
+        fn full_damage_classifies_as_full() {
+            assert_eq!(DamageVerdict::classify(&Damage::Full), DamageVerdict::Full);
+        }
+
+        #[test]
+        fn no_dirty_rows_classifies_as_idle() {
+            assert_eq!(
+                DamageVerdict::classify(&Damage::Delta(DamageRows::default())),
+                DamageVerdict::Idle
+            );
+        }
+
+        #[test]
+        fn one_dirty_row_classifies_as_at_most_one_row() {
+            assert_eq!(
+                DamageVerdict::classify(&Damage::Delta(vec![7].into())),
+                DamageVerdict::AtMostOneRow
+            );
+        }
+
+        #[test]
+        fn many_dirty_rows_carry_the_row_count() {
+            assert_eq!(
+                DamageVerdict::classify(&Damage::Delta(vec![0, 3, 9].into())),
+                DamageVerdict::ManyRows { rows: 3 }
+            );
+        }
+
+        /// Asserts that merging partial damage yields the ascending,
+        /// duplicate-free union.
+        ///
+        /// Case: damage from an interpreted chunk and from a selection
+        /// change meets in the staged value before one emit. A single
+        /// backend read is already normalized, so this exists only for
+        /// that cross-read merge; keeping append order would leave a
+        /// duplicate that `classify` reports as `ManyRows` instead of
+        /// `AtMostOneRow`.
+        #[test]
+        fn merging_partial_damage_unions_sorts_and_dedups_the_rows() {
+            let mut interleaved = Damage::Delta(vec![1, 3, 5].into());
+            interleaved |= Damage::Delta(vec![2, 3, 5].into());
+            assert_eq!(interleaved, Damage::Delta(vec![1, 2, 3, 5].into()));
+
+            let mut descending = Damage::Delta(vec![5].into());
+            descending |= Damage::Delta(vec![3].into());
+            assert_eq!(descending, Damage::Delta(vec![3, 5].into()));
+
+            let mut repeated = Damage::Delta(vec![0, 1].into());
+            repeated |= Damage::Delta(vec![0, 1].into());
+            assert_eq!(repeated, Damage::Delta(vec![0, 1].into()));
+        }
+
+        /// Asserts that `Full` absorbs partial damage from either side.
+        ///
+        /// Case: a selection change demands a whole repaint, then a
+        /// one-row echo arrives before the emit. Both orders are pinned
+        /// because the two arms are asymmetric; letting the newest
+        /// damage win would leave the screen stale.
+        #[test]
+        fn full_damage_absorbs_partial_damage_from_either_side() {
+            let mut staged_full = Damage::Full;
+            staged_full |= Damage::Delta(vec![0].into());
+            assert_eq!(staged_full, Damage::Full);
+
+            let mut incoming_full = Damage::Delta(vec![0, 1].into());
+            incoming_full |= Damage::Full;
+            assert_eq!(incoming_full, Damage::Full);
+
+            let mut both_full = Damage::Full;
+            both_full |= Damage::Full;
+            assert_eq!(both_full, Damage::Full);
+
+            let mut full_then_empty = Damage::Full;
+            full_then_empty |= Damage::Delta(DamageRows::default());
+            assert_eq!(full_then_empty, Damage::Full);
+        }
+
+        /// Asserts that an empty row set is the merge identity on both
+        /// sides.
+        ///
+        /// Case: the staging site folds an absent staged value in by
+        /// merging onto an empty `Delta`, so the identity is
+        /// load-bearing. An empty operand is a real reading — a viewport
+        /// scrolled fully into history — not a sentinel to discard the
+        /// other side for.
+        #[test]
+        fn an_empty_row_set_is_the_merge_identity() {
+            let mut empty_incoming = Damage::Delta(vec![0, 2].into());
+            empty_incoming |= Damage::Delta(DamageRows::default());
+            assert_eq!(empty_incoming, Damage::Delta(vec![0, 2].into()));
+
+            let mut empty_staged = Damage::Delta(DamageRows::default());
+            empty_staged |= Damage::Delta(vec![0, 2].into());
+            assert_eq!(empty_staged, Damage::Delta(vec![0, 2].into()));
+
+            let mut both_empty = Damage::Delta(DamageRows::default());
+            both_empty |= Damage::Delta(DamageRows::default());
+            assert_eq!(both_empty, Damage::Delta(DamageRows::default()));
+        }
     }
 
-    #[test]
-    fn no_dirty_rows_classifies_as_idle() {
-        assert_eq!(
-            DamageVerdict::classify(&Damage::Delta(DamageRows::default())),
-            DamageVerdict::Idle
-        );
-    }
+    mod ledger {
+        use super::super::*;
 
-    #[test]
-    fn one_dirty_row_classifies_as_at_most_one_row() {
-        assert_eq!(
-            DamageVerdict::classify(&Damage::Delta(vec![7].into())),
-            DamageVerdict::AtMostOneRow
-        );
-    }
+        /// A ledger whose seeded bootstrap repaint has been consumed, so
+        /// a test observes only the damage it stages itself.
+        fn drained() -> DamageLedger {
+            let mut ledger = DamageLedger::new();
+            ledger.take();
+            ledger
+        }
 
-    #[test]
-    fn many_dirty_rows_carry_the_row_count() {
-        assert_eq!(
-            DamageVerdict::classify(&Damage::Delta(vec![0, 3, 9].into())),
-            DamageVerdict::ManyRows { rows: 3 }
-        );
-    }
+        /// Asserts that a freshly built ledger already has full damage
+        /// staged.
+        #[test]
+        fn a_new_ledger_starts_with_full_damage_staged() {
+            let mut ledger = DamageLedger::new();
+            assert_eq!(ledger.take(), Some(Damage::Full));
+        }
 
-    /// Asserts that merging partial damage yields the ascending,
-    /// duplicate-free union.
-    ///
-    /// Case: damage from an interpreted chunk and from a selection
-    /// change meets in the staged value before one emit. A single
-    /// backend read is already normalized, so this exists only for that
-    /// cross-read merge; keeping append order would leave a duplicate
-    /// that `classify` reports as `ManyRows` instead of `AtMostOneRow`.
-    #[test]
-    fn merging_partial_damage_unions_sorts_and_dedups_the_rows() {
-        let mut interleaved = Damage::Delta(vec![1, 3, 5].into());
-        interleaved |= Damage::Delta(vec![2, 3, 5].into());
-        assert_eq!(interleaved, Damage::Delta(vec![1, 2, 3, 5].into()));
+        /// Asserts that a second stage unions into the staged value
+        /// instead of overwriting it.
+        #[test]
+        fn staging_merges_rather_than_replacing() {
+            let mut ledger = drained();
+            ledger.stage(Damage::Delta(vec![1, 2, 3].into()));
+            ledger.stage(Damage::Delta(vec![7].into()));
+            assert_eq!(ledger.take(), Some(Damage::Delta(vec![1, 2, 3, 7].into())));
+        }
 
-        let mut descending = Damage::Delta(vec![5].into());
-        descending |= Damage::Delta(vec![3].into());
-        assert_eq!(descending, Damage::Delta(vec![3, 5].into()));
+        /// Asserts that staging an empty row set leaves real staged
+        /// damage for a take to hand back, not an absent one.
+        ///
+        /// Case: the viewport sits fully scrolled back into history
+        /// while the shell keeps writing at the live tail.
+        #[test]
+        fn an_empty_row_set_stays_staged_damage_rather_than_collapsing_to_nothing() {
+            let mut ledger = drained();
+            ledger.stage(Damage::Delta(DamageRows::default()));
+            assert_eq!(ledger.take(), Some(Damage::Delta(DamageRows::default())));
+        }
 
-        let mut repeated = Damage::Delta(vec![0, 1].into());
-        repeated |= Damage::Delta(vec![0, 1].into());
-        assert_eq!(repeated, Damage::Delta(vec![0, 1].into()));
-    }
+        /// Asserts that a take hands over the staged damage and leaves
+        /// the ledger empty, so nothing it consumed reappears
+        /// afterwards.
+        ///
+        /// Case: the coalescer's deadline fires and builds one frame,
+        /// fires again with no PTY output in between, and then a later
+        /// chunk dirties a different row.
+        #[test]
+        fn take_hands_over_the_staged_damage_and_then_reports_nothing_staged() {
+            let mut ledger = drained();
+            ledger.stage(Damage::Delta(vec![4].into()));
+            assert_eq!(ledger.take(), Some(Damage::Delta(vec![4].into())));
+            assert_eq!(ledger.take(), None);
 
-    /// Asserts that `Full` absorbs partial damage from either side.
-    ///
-    /// Case: a selection change demands a whole repaint, then a one-row
-    /// echo arrives before the emit. Both orders are pinned because the
-    /// two arms are asymmetric; letting the newest damage win would
-    /// leave the screen stale.
-    #[test]
-    fn full_damage_absorbs_partial_damage_from_either_side() {
-        let mut staged_full = Damage::Full;
-        staged_full |= Damage::Delta(vec![0].into());
-        assert_eq!(staged_full, Damage::Full);
+            ledger.stage(Damage::Delta(vec![9].into()));
+            assert_eq!(ledger.take(), Some(Damage::Delta(vec![9].into())));
+        }
 
-        let mut incoming_full = Damage::Delta(vec![0, 1].into());
-        incoming_full |= Damage::Full;
-        assert_eq!(incoming_full, Damage::Full);
+        /// Asserts that staging an optional damage reports whether one
+        /// was present, and leaves the staged value untouched when it
+        /// was not.
+        ///
+        /// Case: the host resizes the window to the size it already had
+        /// while an earlier chunk's damage still waits for the next
+        /// emit, and later the user scrolls the viewport back into
+        /// scrollback history.
+        #[test]
+        fn stage_if_changed_reports_whether_anything_was_staged() {
+            let mut ledger = drained();
+            ledger.stage(Damage::Delta(vec![2].into()));
+            assert!(!ledger.stage_if_changed(None));
+            assert_eq!(ledger.take(), Some(Damage::Delta(vec![2].into())));
 
-        let mut both_full = Damage::Full;
-        both_full |= Damage::Full;
-        assert_eq!(both_full, Damage::Full);
-
-        let mut full_then_empty = Damage::Full;
-        full_then_empty |= Damage::Delta(DamageRows::default());
-        assert_eq!(full_then_empty, Damage::Full);
-    }
-
-    /// Asserts that an empty row set is the merge identity on both
-    /// sides.
-    ///
-    /// Case: the staging site folds an absent staged value in by merging
-    /// onto an empty `Delta`, so the identity is load-bearing. An empty
-    /// operand is a real reading — a viewport scrolled fully into
-    /// history — not a sentinel to discard the other side for.
-    #[test]
-    fn an_empty_row_set_is_the_merge_identity() {
-        let mut empty_incoming = Damage::Delta(vec![0, 2].into());
-        empty_incoming |= Damage::Delta(DamageRows::default());
-        assert_eq!(empty_incoming, Damage::Delta(vec![0, 2].into()));
-
-        let mut empty_staged = Damage::Delta(DamageRows::default());
-        empty_staged |= Damage::Delta(vec![0, 2].into());
-        assert_eq!(empty_staged, Damage::Delta(vec![0, 2].into()));
-
-        let mut both_empty = Damage::Delta(DamageRows::default());
-        both_empty |= Damage::Delta(DamageRows::default());
-        assert_eq!(both_empty, Damage::Delta(DamageRows::default()));
-    }
-
-    /// A ledger whose seeded bootstrap repaint has been consumed, so a
-    /// test observes only the damage it stages itself.
-    fn drained() -> DamageLedger {
-        let mut ledger = DamageLedger::new();
-        ledger.take();
-        ledger
-    }
-
-    /// Asserts that a freshly built ledger already has full damage
-    /// staged.
-    #[test]
-    fn a_new_ledger_starts_with_full_damage_staged() {
-        let mut ledger = DamageLedger::new();
-        assert_eq!(ledger.take(), Some(Damage::Full));
-    }
-
-    /// Asserts that a second stage unions into the staged value instead
-    /// of overwriting it.
-    #[test]
-    fn staging_merges_rather_than_replacing() {
-        let mut ledger = drained();
-        ledger.stage(Damage::Delta(vec![1, 2, 3].into()));
-        ledger.stage(Damage::Delta(vec![7].into()));
-        assert_eq!(ledger.take(), Some(Damage::Delta(vec![1, 2, 3, 7].into())));
-    }
-
-    /// Asserts that staging an empty row set leaves real staged damage
-    /// for a take to hand back, not an absent one.
-    ///
-    /// Case: the viewport sits fully scrolled back into history while
-    /// the shell keeps writing at the live tail.
-    #[test]
-    fn an_empty_row_set_stays_staged_damage_rather_than_collapsing_to_nothing() {
-        let mut ledger = drained();
-        ledger.stage(Damage::Delta(DamageRows::default()));
-        assert_eq!(ledger.take(), Some(Damage::Delta(DamageRows::default())));
-    }
-
-    /// Asserts that a take hands over the staged damage and leaves the
-    /// ledger empty, so nothing it consumed reappears afterwards.
-    ///
-    /// Case: the coalescer's deadline fires and builds one frame, fires
-    /// again with no PTY output in between, and then a later chunk
-    /// dirties a different row.
-    #[test]
-    fn take_hands_over_the_staged_damage_and_then_reports_nothing_staged() {
-        let mut ledger = drained();
-        ledger.stage(Damage::Delta(vec![4].into()));
-        assert_eq!(ledger.take(), Some(Damage::Delta(vec![4].into())));
-        assert_eq!(ledger.take(), None);
-
-        ledger.stage(Damage::Delta(vec![9].into()));
-        assert_eq!(ledger.take(), Some(Damage::Delta(vec![9].into())));
-    }
-
-    /// Asserts that staging an optional damage reports whether one was
-    /// present, and leaves the staged value untouched when it was not.
-    ///
-    /// Case: the host resizes the window to the size it already had
-    /// while an earlier chunk's damage still waits for the next emit,
-    /// and later the user scrolls the viewport back into scrollback
-    /// history.
-    #[test]
-    fn stage_if_changed_reports_whether_anything_was_staged() {
-        let mut ledger = drained();
-        ledger.stage(Damage::Delta(vec![2].into()));
-        assert!(!ledger.stage_if_changed(None));
-        assert_eq!(ledger.take(), Some(Damage::Delta(vec![2].into())));
-
-        assert!(ledger.stage_if_changed(Some(Damage::Full)));
-        assert_eq!(ledger.take(), Some(Damage::Full));
+            assert!(ledger.stage_if_changed(Some(Damage::Full)));
+            assert_eq!(ledger.take(), Some(Damage::Full));
+        }
     }
 }
