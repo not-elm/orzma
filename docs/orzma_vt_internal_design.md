@@ -8,8 +8,9 @@
 
 - 満たす契約は `Vt` トレイト(`crates/orzma_vt/src/lib.rs`)のみ: `interpret → VtUpdate`、`frame`、`resize`(reflow)、`scroll`、`grid_size` / `display_offset` / `modes`。読み出し面はフレーム粒度(`Row`/`Run`)のみで、セル粒度の read seam(旧 `cell_at`)は設けない — hover 等のセル単位機能は emit 済みの `Row`/`Run` に対してホスト側で解決し、storage セルはクレート外に出さない(セル実体化型 `GridCell` はレンダラ語彙として `orzma_tty_renderer::schema` が所有)。
 - Selection / vi モードは後日 capability トレイトとして追加する。レイアウトはその余地を残す。
+- フレームは連番(`seq`)を持たない。レンダラは `TerminalGrid` の変更検知で再アップロードの要否を判定する(`orzma_tty_renderer::material` が per-entity のラッチに畳む)。
 - webview は **VT が `PlacementId` を採番して placement テーブルを所有し、毎 emit でビューポート射影済みの一覧(`FrameSnapshot::placements` / `FrameDelta::placements`)を配る**契約。`history_base` の絶対行投影と seq 回り込み比較は廃止済みで、フレーム外部に露出する履歴カウンタは存在しない。
-- schema の既存語彙(`Damage` のマージ代数、`DamageVerdict::classify`、`Row`/`Run` + style ビット、`Palette`、`VtModes`、`VtSignal`、`PlacementId` / `ProjectedPlacement`)と `HyperlinkInterner` を再利用する。
+- 既存の語彙型(`Damage` のマージ代数、`DamageVerdict::classify`、`Row<T>` / `Run` / `Style`、`Palette`、`VtModes`、`VtSignal`、`PlacementId` / `ProjectedPlacement`)と `HyperlinkInterner` を再利用する。
 
 ## 2. トップレベル構成
 
@@ -22,10 +23,12 @@ pub struct OrzmaVt {
     terminal: TerminalState,
     /// webview 配置テーブル: 採番・アンカー追従・eviction・射影。
     placements: PlacementStore,
-    /// 次フレームまでの staged damage(schema `Damage` のマージ)。
+    /// 次フレームまでの staged damage(`Damage` のマージ)。構築時に
+    /// `Damage::Full` を種付けし、初回 emit の Snapshot を担保する。
     damage: DamageLedger,
-    /// フレーム発行: wrapping seq・first_emit・HyperlinkInterner・
-    /// Row/Run 構築・placement 射影の呼び出し。
+    /// フレーム発行: HyperlinkInterner・Row/Run 構築・placement 射影の
+    /// 呼び出し。Snapshot か Delta かは受け取った damage が決めるため、
+    /// 判定は責務外。
     emitter: FrameEmitter,
 }
 
@@ -61,8 +64,8 @@ struct Screen {
 | `ModeState` | DECSET フラグ(`VtModes` の供給源)+ 内部専用モード | — |
 | `ColorTable` | パレットと動的カラー上書き、`Palette` の供給 | — |
 | `PlacementStore` | `PlacementId` 採番、`(view_id, instance)` → 配置、行アンカー追従、占有スパン、eviction 判定、ビューポート射影 | GUI ポリシー(registry 照合等はホスト側) |
-| `DamageLedger` | 全ソース(interpret / scroll / resize / placement 変化 / 将来の selection)の staged damage を一元マージ | — |
-| `FrameEmitter` | seq(wrapping、emit 時のみ前進)・初回/alt 切替の Snapshot 保証・Row/Run 構築・`HyperlinkInterner`・placement 射影の組み込み | 状態変更 |
+| `DamageLedger` | 全ソース(interpret / scroll / resize / placement 変化 / 将来の selection)の staged damage を一元マージ。構築時の `Damage::Full` 種付けで初回 Snapshot を担保 | 分類(`DamageVerdict`)|
+| `FrameEmitter` | Row/Run 構築・`HyperlinkInterner`・placement 射影の組み込み | 端末意味状態と placement テーブルの変更。Snapshot / Delta の判定(受け取った damage が決める) |
 
 ## 4. 主要な設計判断と根拠
 
@@ -81,7 +84,7 @@ primary / alternate はカーソル・pending wrap・ペン・保存スロット
 ```rust
 let Self { interpreter: Interpreter { parser, sync }, terminal, placements, damage, emitter } = self;
 let mut out = Products::default();
-let mut exec = Executor { sync, terminal, placements, damage, next_seq: emitter.next_seq(), out: &mut out };
+let mut exec = Executor { sync, terminal, placements, damage, out: &mut out };
 parser.parse(chunk, &mut exec);
 ```
 
@@ -89,7 +92,13 @@ parser.parse(chunk, &mut exec);
 
 ### 4.4 DamageLedger は中央集約
 
-damage は「アクティブビューポート + カーソル + 将来の selection/vi オーバーレイ」の概念で、特定 grid に属さない。Grid/Screen の操作は damage 効果を**戻り値で返し**、Executor が ledger に stage する。スクリーン切替は Full を stage(「alt 切替は必ず Snapshot」不変条件の実装点)。schema `Damage` の `BitOrAssign` マージがそのまま使える。
+damage は「アクティブビューポート + カーソル + 将来の selection/vi オーバーレイ」の概念で、特定 grid に属さない。Grid/Screen の操作は damage 効果を**戻り値で返し**、Executor が ledger に stage する。スクリーン切替は Full を stage(「alt 切替は必ず Snapshot」不変条件の実装点)。`Damage` の `BitOrAssign` マージがそのまま使える。
+
+`DamageLedger::new` は `Damage::Full` を種付けする。これにより最初の `take()` が必ず `Full` になり、初回フレームは Snapshot になる。したがって `FrameEmitter` 側に `first_emit` フラグは持たない。
+
+ただし**「初回フレームを Snapshot にする」ことと「初回フレームをいつ発行するか」は別**である。後者は `orzma_term::Coalescer::needs_bootstrap` の責務で、ledger の種付けでは代替できない — PTY 出力が来なければ `frame()` がそもそも呼ばれないためである。
+
+`DamageVerdict` による分類は ledger の責務ではない。`DamageVerdict::classify` は `&Damage` からの純関数なので、呼び出しは `OrzmaVt::interpret` 側に置く。
 
 ### 4.5 履歴簿記はイベント駆動(frozen ベースライン方式の廃止)
 
@@ -120,22 +129,26 @@ placement は Grid の行に振る**安定 `LineId`** にアンカーし、`Plac
 ## 6. モジュール配置(mod.rs 禁止規約準拠)
 
 ```
-crates/orzma_vt/src/lib.rs               … pub struct OrzmaVt + impl Vt(現状はスタブ)
-crates/orzma_vt/src/interpreter.rs       … Interpreter(vtparse + ?2026)〔未着手〕
+crates/orzma_vt/src/lib.rs               … pub struct OrzmaVt + impl Vt〔フィールドは結線済み、メソッドはスタブ〕
+crates/orzma_vt/src/interpreter.rs       … Interpreter(vtparse + ?2026)〔スタブ〕
 crates/orzma_vt/src/executor.rs          … Executor(コールバック実装)+ Products〔未着手〕
-crates/orzma_vt/src/terminal.rs          … TerminalState / ModeState / TabStops / ColorTable / TitleState〔未着手〕
+crates/orzma_vt/src/terminal.rs          … TerminalState / ModeState / TabStops / ColorTable / TitleState〔スタブ〕
 crates/orzma_vt/src/screen.rs            … Screen / Viewport / WriteState / SavedCursorSlots / Margins / Effects〔実装済み〕
-crates/orzma_vt/src/screen/grid.rs       … Grid / Row / HistoryEvent〔実装済み。LineId は placement 着手時に追加〕
-crates/orzma_vt/src/screen/cell.rs       … Cell / Pen(schema GridCell とは別の内部表現)〔実装済み〕
-crates/orzma_vt/src/placement.rs         … PlacementStore / 占有スパン〔未着手〕
-crates/orzma_vt/src/damage.rs            … DamageLedger〔未着手〕
-crates/orzma_vt/src/frame.rs             … FrameEmitter(Row/Run 構築・射影・seq)〔未着手〕
+crates/orzma_vt/src/screen/grid.rs       … Grid / HistoryEvent〔実装済み。LineId は placement 着手時に追加〕
+crates/orzma_vt/src/screen/grid/row.rs   … Row<T>(格納は Row<Cell>、発行は Row<Run>)〔実装済み〕
+crates/orzma_vt/src/screen/grid/run.rs   … Run / Style(bitflags)〔実装済み〕
+crates/orzma_vt/src/screen/cell.rs       … Cell / Pen(レンダラの GridCell とは別の内部表現)〔実装済み〕
+crates/orzma_vt/src/placement.rs         … PlacementStore / 占有スパン〔スタブ〕
+crates/orzma_vt/src/damage.rs            … Damage / DamageRows / DamageVerdict / DamageLedger〔実装済み〕
+crates/orzma_vt/src/frame.rs             … FrameEmitter(Row/Run 構築・射影)〔スタブ〕
 ```
+
+`schema` モジュールは廃止方針である。型は「その概念を所有するモジュール」に置き、語彙を一箇所に集める層は設けない。`Row` / `Run` / `Damage` 系は移動済みで、`Color` / `Cursor` / `GridSize` などの行き先は未定。
 
 ## 7. 実装順の示唆
 
-1. `Grid` + `Screen` + `WriteState`(印字・行送り・erase の最小セット)と `DamageLedger` — `interpret` → `frame` の縦一本を最短で通す
-2. `FrameEmitter`(Snapshot のみ → Delta 追加)
+1. ~~`Grid` + `Screen` + `WriteState`(印字・行送り・erase の最小セット)と `DamageLedger`~~ — 完了
+2. `FrameEmitter`(Snapshot のみ → Delta 追加)← 現在地。着手前に `Screen` へクレート内の viewport / cursor 読み取り口が要る(`Grid` の添字は live tail に解決するため、スクロール中のビューポートを読めない)
 3. `ModeState` / `ColorTable` / タブ / チャーセット / スクロール領域
 4. `Interpreter` の `?2026` と APC、`PlacementStore`(採番 → 射影 → eviction)
 5. reflow(`Reflowed` イベント込み)
