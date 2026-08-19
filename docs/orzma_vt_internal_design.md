@@ -19,7 +19,7 @@ pub struct OrzmaVt {
     /// vtparse パーサ + CSI ?2026 同期更新バッファ。
     interpreter: Interpreter,
     /// エミュレート対象デバイスの状態: Screens(primary/alternate)+
-    /// ModeState + TabStops + ColorTable + タイトルスタック。
+    /// VtModes + TabStops + ColorTable + タイトルスタック。
     device: DeviceState,
     /// webview 配置テーブル: 採番・アンカー追従・eviction・射影。
     placements: PlacementStore,
@@ -34,7 +34,7 @@ pub struct OrzmaVt {
 
 struct DeviceState {
     screens: Screens,   // { primary: Screen, alternate: Screen, active }
-    modes: ModeState,   // DECSET 群 + 内部モード(insert/origin/autowrap …)
+    modes: VtModes,     // ホストが読む DECSET 群のみ
     tabs: TabStops,
     colors: ColorTable, // 基本パレット + OSC 4/10/11/12 動的上書き
     title: TitleState,  // 現在タイトル + タイトルスタック(CSI 22/23 t)
@@ -61,7 +61,6 @@ struct Screen {
 | `Viewport` | `display_offset` の保持とクランプ | セル内容 |
 | `WriteState` | 書き込みカーソル・pending wrap・SGR/OSC 8 ペン・G0–G3 チャーセットとシフト状態 | 格納 |
 | `Screen` | grid + カーソルを**原子的に**更新する操作単位(行送り・スクロール領域内スクロール・reflow) | 発行・damage 集約 |
-| `ModeState` | DECSET フラグ(`VtModes` の供給源)+ 内部専用モード | — |
 | `ColorTable` | パレットと動的カラー上書き、`Palette` の供給 | — |
 | `PlacementStore` | `PlacementId` 採番、`(view_id, instance)` → 配置、行アンカー追従、占有スパン、eviction 判定、ビューポート射影 | GUI ポリシー(registry 照合等はホスト側) |
 | `DamageLedger` | 全ソース(interpret / scroll / resize / placement 変化 / 将来の selection)の staged damage を一元マージ。構築時の `Damage::Full` 種付けで初回 Snapshot を担保 | 分類(`DamageVerdict`)|
@@ -89,6 +88,24 @@ parser.parse(chunk, &mut exec);
 ```
 
 `?2026` バッファは所有データとして持ち、APC mount はバッファ済み作業を適用してから placement を確定する(「APC バイト位置のカーソルでサンプリング」契約の実現手段)。
+
+### 4.3b モードは一箇所に集めない
+
+`ModeState` という「モードを集める袋」は設けない。`DeviceState` はホストが読む `VtModes` を直接保持し、エスケープシーケンスの適用側だけが読む内部モードは、それが支配する状態の隣に置く。DECTCEM が `VtModes` ではなく `Cursor::visible` にある既存の形に倣う。
+
+- DECAWM(autowrap)・IRM(insert) → `ScreenState`(`pending_wrap` の隣)
+- DECOM(origin) → `Screen`(`Margins` の隣)
+- LNM(newline) → `ScreenState`
+
+`VtModes` の性格は「**正規化済みかつ非冗長な状態のスナップショット**」である。生の DECSET ビットのミラーでもなければ、ホストの最終動作を判断済みの値でもない。基準は次の 3 つ:
+
+- 排他的なプロトコル状態は enum に正規化する(`MouseEncoding`・`MouseTracking`・`ScreenKind`)
+- 同じ構造体の別フィールドから完全に導出できる状態は**保存しない**
+- modifier・マウスプロトコルの優先順位・ホスト設定まで含む最終判断はホスト側(ホイールルータ)が行う
+
+alt screen かどうかは `VtModes::active_screen` だけが記録し、`Screens` は純粋な格納庫としてそのフラグを持たない。DECSET 1007 は `alternate_scroll` として生のまま保持し、実効条件は `VtModes::alternate_scroll_active()`(1007 かつ alternate 表示)が計算する。保存するのは基礎状態だけ、導出は関数、という切り分けである。
+
+なお「ホイールが矢印キーを送るか」は `alternate_scroll_active()` ではない — マウストラッキングが有効ならそちらが優先されるため、その順序の解決はホイールルータの責務である。
 
 ### 4.4 DamageLedger は中央集約
 
@@ -122,7 +139,7 @@ placement は Grid の行に振る**安定 `LineId`** にアンカーし、`Plac
 
 ## 5. 実装時に必要な状態(草案から漏れやすいもの)
 
-スクロール領域(DECSTBM / DECSLRM)/ insert・origin・newline・autowrap 等の内部モード / タブストップ / G0–G3 チャーセット + シフト状態 / スクリーン毎の DEC・ANSI 保存スロット / protected・selective erase / wrap マーカーとワイド文字(スペーサ)不変条件 / UTF-8・grapheme の合成(zerowidth)/ OSC 8 の「現在リンク」ペンとライフサイクル / タイトルスタック(CSI 22/23 t)/ DECSCUSR カーソル形状。
+スクロール領域(DECSTBM / DECSLRM)/ insert・origin・newline・autowrap 等の内部モード(後述のとおり `VtModes` ではなく、それぞれが支配する状態の隣に置く)/ タブストップ / G0–G3 チャーセット + シフト状態 / スクリーン毎の DEC・ANSI 保存スロット / protected・selective erase / wrap マーカーとワイド文字(スペーサ)不変条件 / UTF-8・grapheme の合成(zerowidth)/ OSC 8 の「現在リンク」ペンとライフサイクル / タイトルスタック(CSI 22/23 t)/ DECSCUSR カーソル形状。
 
 発行規則として: **パレットの変化は Snapshot を強制する**(delta は `palette` を運ばないため)。モードはフレームに載せない — 単一プロセス構成ではホストが `Vt::modes()` を直接読むため、フレーム同梱はワイヤ越しクライアント時代の遺物である。Kitty graphics / keyboard・sixel は DCS/APC ハンドラの拡張点のみ確保し、ラスタ配置をテキストセルに入れない方針を placement と共有する。
 

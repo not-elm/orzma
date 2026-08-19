@@ -78,7 +78,11 @@ fn scroll_without_scrollback_is_a_noop() {
 fn scroll_on_the_alternate_screen_is_a_noop() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
     vt.interpret(b"\x1b[?1049h");
-    assert!(vt.modes().alt_screen);
+    assert_eq!(
+        vt.modes().active_screen,
+        ScreenKind::Alternate,
+        "precondition: alt screen entered"
+    );
     vt.scroll(Scroll::Delta(5));
     assert_eq!(vt.display_offset(), DisplayOffset(0));
 }
@@ -154,6 +158,10 @@ fn a_no_op_scroll_reports_no_damage() {
 fn scrolling_the_alternate_screen_reports_no_damage() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
     vt.interpret(b"\x1b[?1049h");
-    assert!(vt.modes().alt_screen, "precondition: alt screen entered");
+    assert_eq!(
+        vt.modes().active_screen,
+        ScreenKind::Alternate,
+        "precondition: alt screen entered"
+    );
     assert_eq!(vt.scroll(Scroll::Delta(5)), None);
 }

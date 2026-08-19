@@ -17,14 +17,22 @@ use alacritty_terminal::term::TermMode;
 /// [Mouse Tracking]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Mouse-Tracking
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct VtModes {
+    /// DECSET 1049/47: which of the two screens the device shows.
+    ///
+    /// This is the only record of the active screen — the screen pair
+    /// itself is pure storage and keeps no such flag, so the two
+    /// cannot disagree.
+    pub active_screen: ScreenKind,
     /// DECCKM (DECSET 1): arrow keys send SS3 instead of CSI.
     pub app_cursor: bool,
     /// DECSET 2004: pastes are wrapped in `ESC[200~` / `ESC[201~`.
     pub bracketed_paste: bool,
-    /// DECSET 1049/47: the alternate screen is active.
-    pub alt_screen: bool,
-    /// DECSET 1007: wheel input on the alt screen translates to arrow
-    /// keys.
+    /// DECSET 1007: enables alternate-scroll translation.
+    ///
+    /// This stores the mode itself, which is not actionable on its own
+    /// — it takes effect only while [`Self::active_screen`] is
+    /// [`ScreenKind::Alternate`]. Read it through
+    /// [`Self::alternate_scroll_active`] rather than on its own.
     pub alternate_scroll: bool,
     /// DECSET 1004: the app wants `CSI I` / `CSI O` focus reports.
     pub focus_in_out: bool,
@@ -32,6 +40,28 @@ pub struct VtModes {
     pub mouse_encoding: MouseEncoding,
     /// Which mouse events the app asked to receive.
     pub mouse_tracking: MouseTracking,
+}
+
+impl VtModes {
+    /// Whether alternate-scroll translation is in effect: DECSET 1007
+    /// set *and* the alternate screen shown.
+    ///
+    /// This is not "the wheel sends arrow keys" — an active mouse
+    /// tracking mode outranks alternate scroll, and resolving that
+    /// order is the host's wheel routing, not this snapshot's.
+    pub const fn alternate_scroll_active(&self) -> bool {
+        matches!(self.active_screen, ScreenKind::Alternate) && self.alternate_scroll
+    }
+}
+
+/// Which of a device's two screens is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScreenKind {
+    /// The scrollback-backed screen a shell writes to.
+    #[default]
+    Primary,
+    /// The scrollback-free screen full-screen applications take over.
+    Alternate,
 }
 
 /// Mouse-report coordinate encoding.

@@ -11,7 +11,7 @@
 )]
 
 use crate::damage::Damage;
-use crate::schema::{DisplayOffset, GridSize, Palette, Scroll, VtModes};
+use crate::schema::{DisplayOffset, GridSize, Palette, ScreenKind, Scroll, VtModes};
 use crate::screen::Screen;
 
 /// The emulated terminal device: screens, modes, tabs, colors, and
@@ -22,7 +22,12 @@ use crate::screen::Screen;
 /// [`crate::OrzmaVt`].
 pub(crate) struct DeviceState {
     screens: Screens,
-    modes: ModeState,
+    // TODO: The modes only the executor consults — DECAWM, IRM, LNM,
+    // and DECOM — do not belong here. Each lands beside the state it
+    // governs, the way DECTCEM already lives in `Cursor::visible`:
+    // wrapping and insert next to `pending_wrap` in `ScreenState`,
+    // origin next to `Margins` in `Screen`.
+    modes: VtModes,
     tabs: TabStops,
     colors: ColorTable,
     title: TitleState,
@@ -36,12 +41,18 @@ impl DeviceState {
 
     /// The screen the device currently reads and writes.
     pub fn active(&self) -> &Screen {
-        todo!()
+        match self.modes.active_screen {
+            ScreenKind::Primary => &self.screens.primary,
+            ScreenKind::Alternate => &self.screens.alternate,
+        }
     }
 
     /// The screen the device currently reads and writes.
     pub fn active_mut(&mut self) -> &mut Screen {
-        todo!()
+        match self.modes.active_screen {
+            ScreenKind::Primary => &mut self.screens.primary,
+            ScreenKind::Alternate => &mut self.screens.alternate,
+        }
     }
 
     /// Resizes both screens, reflowing content; `None` when the
@@ -60,12 +71,12 @@ impl DeviceState {
 
     /// Returns the grid dimensions of the active screen.
     pub fn grid_size(&self) -> GridSize {
-        todo!()
+        self.active().grid_size()
     }
 
     /// Scrollback rows the active viewport sits above the live tail.
     pub fn display_offset(&self) -> DisplayOffset {
-        todo!()
+        self.active().display_offset()
     }
 
     /// Snapshot of the input-relevant device modes.
@@ -79,23 +90,14 @@ impl DeviceState {
     }
 }
 
-/// The primary / alternate pair and which of the two is shown.
+/// The primary / alternate pair.
+///
+/// Pure storage: which of the two is shown lives in
+/// [`VtModes::active_screen`], so this struct cannot contradict it.
 struct Screens {
     primary: Screen,
     alternate: Screen,
-    active: ScreenKind,
 }
-
-/// Which screen of a [`Screens`] pair is shown.
-enum ScreenKind {
-    Primary,
-    Alternate,
-}
-
-/// The DECSET flags plus the modes only the executor consults.
-// TODO: Carry the DECSET group behind `VtModes` alongside the internal
-// insert / origin / newline / autowrap modes.
-struct ModeState {}
 
 /// Horizontal tab stops.
 // TODO: Carry the stop set plus HTS / TBC editing.

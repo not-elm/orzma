@@ -26,7 +26,11 @@ fn an_alt_screen_swap_invalidates_selection_and_anchor() {
     let mut vt = vt_after(b"abcdef");
     start_simple(&mut vt, 0, 0);
     vt.interpret(b"\x1b[?1049h");
-    assert!(vt.modes().alt_screen, "precondition: alt screen entered");
+    assert_eq!(
+        vt.modes().active_screen,
+        ScreenKind::Alternate,
+        "precondition: alt screen entered"
+    );
     assert_eq!(vt.selection_range(), None);
     assert_eq!(vt.selection_kind(), None);
     vt.change_selection_kind(SelectionKind::Lines).unwrap();

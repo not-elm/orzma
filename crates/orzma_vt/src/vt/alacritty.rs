@@ -3,8 +3,8 @@
 use crate::{
     damage::Damage,
     schema::{
-        CellSide, Cursor, GridPoint, GridSize, MouseEncoding, MouseTracking, Palette, Scroll,
-        SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
+        CellSide, Cursor, GridPoint, GridSize, MouseEncoding, MouseTracking, Palette, ScreenKind,
+        Scroll, SelectionKind, SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
     },
     screen::viewport::DisplayOffset,
     vt::{VtBackend, VtSelection, apc::ApcState},
@@ -87,7 +87,11 @@ impl VtBackend for AlacrittyVtBackend {
         VtModes {
             app_cursor: mode.contains(TermMode::APP_CURSOR),
             bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
-            alt_screen: mode.contains(TermMode::ALT_SCREEN),
+            active_screen: if mode.contains(TermMode::ALT_SCREEN) {
+                ScreenKind::Alternate
+            } else {
+                ScreenKind::Primary
+            },
             alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
             focus_in_out: mode.contains(TermMode::FOCUS_IN_OUT),
             mouse_encoding: MouseEncoding::from_alacritty_term_mode(mode),

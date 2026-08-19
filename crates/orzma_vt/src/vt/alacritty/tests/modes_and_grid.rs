@@ -102,9 +102,10 @@ fn mouse_tracking_levels_replace_each_other() {
 #[test]
 fn alt_screen_and_decrst_roundtrip() {
     let vt = vt_after(b"\x1b[?1049h");
-    assert!(vt.modes().alt_screen);
+    assert_eq!(vt.modes().active_screen, ScreenKind::Alternate);
     let vt = vt_after(b"\x1b[?1006h\x1b[?1006l");
     assert_eq!(vt.modes().mouse_encoding, MouseEncoding::X10);
-    let vt = vt_after(b"\x1b[?1007l");
+    let vt = vt_after(b"\x1b[?1049h\x1b[?1007l");
     assert!(!vt.modes().alternate_scroll);
+    assert!(!vt.modes().alternate_scroll_active());
 }
