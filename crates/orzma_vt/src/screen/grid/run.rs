@@ -54,3 +54,16 @@ pub struct Run {
     /// Hyperlink id (OSC 8); always `None` until Phase 3.
     pub hyperlink_id: Option<HyperlinkId>,
 }
+
+impl Default for Run {
+    fn default() -> Self {
+        Self {
+            cols: Default::default(),
+            fg: Color::DefaultForeground,
+            bg: Color::DefaultBackground,
+            style: Default::default(),
+            text: Default::default(),
+            hyperlink_id: Default::default(),
+        }
+    }
+}
