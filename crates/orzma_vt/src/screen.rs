@@ -204,6 +204,11 @@ impl Screen {
         }
     }
 
+    /// Returns the grid size.
+    pub fn grid_size(&self) -> GridSize {
+        self.grid.size()
+    }
+
     /// Mutably borrows the SGR pen; applying SGR sequences is the
     /// caller's job.
     pub fn pen_mut(&mut self) -> &mut Pen {
