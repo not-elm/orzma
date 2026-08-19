@@ -1,9 +1,10 @@
-//! Terminal state: the screen pair plus the modal state around it.
+//! The character-terminal device this VT emulates.
 //!
-//! [`TerminalState`] holds everything the terminal means — cell storage
-//! and the write cursor per screen, the DECSET modes, tab stops, the
-//! color table, and the title stack. It owns no emission state and
-//! never decides when a frame goes out.
+//! [`DeviceState`] is the device model, not a layer of its own: the
+//! screens with their write cursors, the DECSET modes, the tab stops,
+//! the color table, and the title stack. `OrzmaTerm` one crate up is
+//! the live terminal — a VT wired to a PTY — so the device the VT
+//! emulates deliberately does not borrow that name.
 #![expect(
     dead_code,
     reason = "the executor and the frame emitter reach this state once they land"
@@ -13,8 +14,13 @@ use crate::damage::Damage;
 use crate::schema::{DisplayOffset, GridSize, Palette, Scroll, VtModes};
 use crate::screen::Screen;
 
-/// Everything the terminal means, independent of how it is emitted.
-pub(crate) struct TerminalState {
+/// The emulated terminal device: screens, modes, tabs, colors, and
+/// title.
+///
+/// It owns no parser, placement-extension, damage, or emission state —
+/// those are the VT's own machinery and sit beside it in
+/// [`crate::OrzmaVt`].
+pub(crate) struct DeviceState {
     screens: Screens,
     modes: ModeState,
     tabs: TabStops,
@@ -22,18 +28,18 @@ pub(crate) struct TerminalState {
     title: TitleState,
 }
 
-impl TerminalState {
-    /// Builds a blank terminal with the primary screen active.
+impl DeviceState {
+    /// Builds a blank device with the primary screen active.
     pub fn new(_size: GridSize, _max_history: usize) -> Self {
         todo!()
     }
 
-    /// The screen the terminal currently reads and writes.
+    /// The screen the device currently reads and writes.
     pub fn active(&self) -> &Screen {
         todo!()
     }
 
-    /// The screen the terminal currently reads and writes.
+    /// The screen the device currently reads and writes.
     pub fn active_mut(&mut self) -> &mut Screen {
         todo!()
     }
@@ -62,7 +68,7 @@ impl TerminalState {
         todo!()
     }
 
-    /// Snapshot of the input-relevant terminal modes.
+    /// Snapshot of the input-relevant device modes.
     pub fn modes(&self) -> VtModes {
         todo!()
     }

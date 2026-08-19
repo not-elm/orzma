@@ -2,7 +2,7 @@
 //! buffer.
 //!
 //! [`Interpreter`] turns PTY bytes into parser actions. It changes no
-//! terminal state itself — the executor it dispatches to does that —
+//! device state itself — the executor it dispatches to does that —
 //! and it owns the CSI ?2026 buffer, so a synchronized update holds its
 //! bytes here until the application closes it.
 #![expect(

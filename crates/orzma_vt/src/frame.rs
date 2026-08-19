@@ -1,9 +1,9 @@
 //! Frame emission: turning one staged damage into one [`Frame`].
 //!
 //! [`FrameEmitter`] holds only what persists across emits without
-//! belonging to the terminal — the hyperlink interner — and reads
-//! terminal and placement state
-//! immutably, so a frame describes a single instant. Deciding *whether*
+//! belonging to the device — the hyperlink interner — and reads
+//! device and placement state immutably, so a frame describes a
+//! single instant. Deciding *whether*
 //! a frame is a snapshot is not its job: it builds whatever the damage
 //! it receives classifies as.
 

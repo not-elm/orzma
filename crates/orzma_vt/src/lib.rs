@@ -7,22 +7,22 @@
 
 use crate::{
     damage::{DamageLedger, DamageVerdict},
+    device::DeviceState,
     frame::FrameEmitter,
     interpreter::Interpreter,
     placement::PlacementStore,
     schema::{Frame, GridSize, Scroll, VtModes, VtSignal},
     screen::viewport::DisplayOffset,
-    terminal::TerminalState,
 };
 
 pub mod damage;
+mod device;
 mod frame;
 pub mod hyperlink;
 mod interpreter;
 mod placement;
 pub mod schema;
 pub mod screen;
-mod terminal;
 pub mod vt;
 
 pub mod prelude {
@@ -149,9 +149,8 @@ pub struct VtUpdate {
 pub struct OrzmaVt {
     /// Byte decoding plus the CSI ?2026 synchronized-update buffer.
     interpreter: Interpreter,
-    /// Everything the terminal means: screens, modes, tabs, colors,
-    /// title.
-    terminal: TerminalState,
+    /// The emulated device: screens, modes, tabs, colors, title.
+    device: DeviceState,
     /// Webview placements: minting, anchor tracking, projection.
     placements: PlacementStore,
     /// Damage staged for the next emit, from every source.
@@ -188,26 +187,26 @@ impl Vt for OrzmaVt {
 
     fn frame(&mut self) -> Option<Frame> {
         let damage = self.damage.take()?;
-        Some(self.emitter.emit(damage, self.terminal.active()))
+        Some(self.emitter.emit(damage, self.device.active()))
     }
 
     fn resize(&mut self, size: GridSize) -> bool {
-        self.damage.stage_if_changed(self.terminal.resize(size))
+        self.damage.stage_if_changed(self.device.resize(size))
     }
 
     fn scroll(&mut self, scroll: Scroll) -> bool {
-        self.damage.stage_if_changed(self.terminal.scroll(scroll))
+        self.damage.stage_if_changed(self.device.scroll(scroll))
     }
 
     fn grid_size(&self) -> GridSize {
-        self.terminal.grid_size()
+        self.device.grid_size()
     }
 
     fn display_offset(&self) -> DisplayOffset {
-        self.terminal.display_offset()
+        self.device.display_offset()
     }
 
     fn modes(&self) -> VtModes {
-        self.terminal.modes()
+        self.device.modes()
     }
 }

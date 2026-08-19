@@ -18,9 +18,9 @@
 pub struct OrzmaVt {
     /// vtparse パーサ + CSI ?2026 同期更新バッファ。
     interpreter: Interpreter,
-    /// 端末状態の本体: Screens(primary/alternate)+ ModeState +
-    /// TabStops + ColorTable + タイトルスタック。
-    terminal: TerminalState,
+    /// エミュレート対象デバイスの状態: Screens(primary/alternate)+
+    /// ModeState + TabStops + ColorTable + タイトルスタック。
+    device: DeviceState,
     /// webview 配置テーブル: 採番・アンカー追従・eviction・射影。
     placements: PlacementStore,
     /// 次フレームまでの staged damage(`Damage` のマージ)。構築時に
@@ -32,7 +32,7 @@ pub struct OrzmaVt {
     emitter: FrameEmitter,
 }
 
-struct TerminalState {
+struct DeviceState {
     screens: Screens,   // { primary: Screen, alternate: Screen, active }
     modes: ModeState,   // DECSET 群 + 内部モード(insert/origin/autowrap …)
     tabs: TabStops,
@@ -65,7 +65,7 @@ struct Screen {
 | `ColorTable` | パレットと動的カラー上書き、`Palette` の供給 | — |
 | `PlacementStore` | `PlacementId` 採番、`(view_id, instance)` → 配置、行アンカー追従、占有スパン、eviction 判定、ビューポート射影 | GUI ポリシー(registry 照合等はホスト側) |
 | `DamageLedger` | 全ソース(interpret / scroll / resize / placement 変化 / 将来の selection)の staged damage を一元マージ。構築時の `Damage::Full` 種付けで初回 Snapshot を担保 | 分類(`DamageVerdict`)|
-| `FrameEmitter` | Row/Run 構築・`HyperlinkInterner`・placement 射影の組み込み | 端末意味状態と placement テーブルの変更。Snapshot / Delta の判定(受け取った damage が決める) |
+| `FrameEmitter` | Row/Run 構築・`HyperlinkInterner`・placement 射影の組み込み | デバイス状態と placement テーブルの変更。Snapshot / Delta の判定(受け取った damage が決める) |
 
 ## 4. 主要な設計判断と根拠
 
@@ -82,9 +82,9 @@ primary / alternate はカーソル・pending wrap・ペン・保存スロット
 旧エンジンの 3 パーサ fan-out(lead APC パーサ)は「alacritty の processor が不透明」なことへの補償だった。自前実装では **単一の `vtparse` + `Executor`(パーサ以外のフィールドを分割借用する一時ビュー構造体)** で APC は同期的に届く。
 
 ```rust
-let Self { interpreter: Interpreter { parser, sync }, terminal, placements, damage, emitter } = self;
+let Self { interpreter: Interpreter { parser, sync }, device, placements, damage, emitter } = self;
 let mut out = Products::default();
-let mut exec = Executor { sync, terminal, placements, damage, out: &mut out };
+let mut exec = Executor { sync, device, placements, damage, out: &mut out };
 parser.parse(chunk, &mut exec);
 ```
 
@@ -132,7 +132,7 @@ placement は Grid の行に振る**安定 `LineId`** にアンカーし、`Plac
 crates/orzma_vt/src/lib.rs               … pub struct OrzmaVt + impl Vt〔フィールドは結線済み、メソッドはスタブ〕
 crates/orzma_vt/src/interpreter.rs       … Interpreter(vtparse + ?2026)〔スタブ〕
 crates/orzma_vt/src/executor.rs          … Executor(コールバック実装)+ Products〔未着手〕
-crates/orzma_vt/src/terminal.rs          … TerminalState / ModeState / TabStops / ColorTable / TitleState〔スタブ〕
+crates/orzma_vt/src/device.rs            … DeviceState / ModeState / TabStops / ColorTable / TitleState〔スタブ〕
 crates/orzma_vt/src/screen.rs            … Screen / Viewport / WriteState / SavedCursorSlots / Margins / Effects〔実装済み〕
 crates/orzma_vt/src/screen/grid.rs       … Grid / HistoryEvent〔実装済み。LineId は placement 着手時に追加〕
 crates/orzma_vt/src/screen/grid/row.rs   … Row<T>(格納は Row<Cell>、発行は Row<Run>)〔実装済み〕
@@ -158,4 +158,4 @@ crates/orzma_vt/src/frame.rs             … FrameEmitter(Row/Run 構築・射�
 
 - 契約: `crates/orzma_vt/src/lib.rs`(`Vt` / `VtUpdate`、「Webview placements」節)、`crates/orzma_vt/src/schema/webview.rs`(`PlacementId` / `ProjectedPlacement`)、`schema/signal.rs`(`ApcWebview` / `WebviewEvicted`)
 - 旧エンジン参照: `crates/orzma_tty_engine/src/handle.rs`(3 パーサ fan-out・frozen ベースライン — いずれも本設計では不採用)、`vt/frame_builder.rs`(Row/Run 構築の移植元)
-- 経緯: Claude 草案 → Codex レビュー(TerminalState → Screen → Grid 階層、イベント駆動履歴、LineId + side table の提案)→ placement 契約確定後の整合(HistoryLedger の PlacementStore への縮退)
+- 経緯: Claude 草案 → Codex レビュー(DeviceState → Screen → Grid 階層、イベント駆動履歴、LineId + side table の提案)→ placement 契約確定後の整合(HistoryLedger の PlacementStore への縮退)→ `TerminalState` から `DeviceState` への改名(`OrzmaTerm` が上位層の `Terminal` を占有しているため、下層の VT が同じ語を名乗らない)
