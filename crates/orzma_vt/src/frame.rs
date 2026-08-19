@@ -12,15 +12,15 @@ use crate::schema::{FrameSnapshot, Palette, ProjectedPlacement, ViewportLine};
 use crate::screen::Screen;
 
 // NOTE: `#[expect]` is impractical here — the tests below call the
-// builder, so `dead_code` fires in the lib build but not in the test
+// constructor, so `dead_code` fires in the lib build but not in the test
 // build, leaving the expectation unfulfilled there.
 #[allow(
     dead_code,
-    reason = "`Frame::emit` reaches the builder once the delta path lands"
+    reason = "`Frame::emit` reaches the constructor once the delta path lands"
 )]
 impl FrameSnapshot {
     /// Builds a full repaint of the visible viewport.
-    fn build(screen: &Screen, placements: Vec<ProjectedPlacement>, palette: Palette) -> Self {
+    fn new(screen: &Screen, placements: Vec<ProjectedPlacement>, palette: Palette) -> Self {
         let size = screen.grid_size();
         Self {
             size,
@@ -50,7 +50,7 @@ mod tests {
     }
 
     fn snapshot(device: &DeviceState, placements: &PlacementStore) -> FrameSnapshot {
-        FrameSnapshot::build(
+        FrameSnapshot::new(
             device.active(),
             placements.project(
                 device.modes().active_screen,
