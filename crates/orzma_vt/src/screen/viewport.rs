@@ -13,8 +13,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DisplayOffset(pub u32);
 
-pub struct ViewportLine(u16);
-
 #[derive(Debug, Default)]
 pub struct Viewport {
     pub offset: DisplayOffset,

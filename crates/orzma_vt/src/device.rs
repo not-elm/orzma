@@ -35,8 +35,21 @@ pub(crate) struct DeviceState {
 
 impl DeviceState {
     /// Builds a blank device with the primary screen active.
-    pub fn new(_size: GridSize, _max_history: usize) -> Self {
-        todo!()
+    ///
+    /// The alternate screen is built without scrollback: a full-screen
+    /// application has nothing to scroll back to, and its viewport stays
+    /// pinned to the live tail.
+    pub fn new(size: GridSize, max_history: usize) -> Self {
+        Self {
+            screens: Screens {
+                primary: Screen::new(size, max_history),
+                alternate: Screen::new(size, 0),
+            },
+            modes: VtModes::default(),
+            tabs: TabStops {},
+            colors: ColorTable {},
+            title: TitleState {},
+        }
     }
 
     /// The screen the device currently reads and writes.
@@ -81,12 +94,14 @@ impl DeviceState {
 
     /// Snapshot of the input-relevant device modes.
     pub fn modes(&self) -> VtModes {
-        todo!()
+        self.modes
     }
 
     /// The live palette symbolic colors resolve against.
+    // TODO: Read the table from `ColorTable` once OSC 4 / 10 / 11 / 12
+    // can override it.
     pub fn palette(&self) -> Palette {
-        todo!()
+        Palette::default()
     }
 }
 

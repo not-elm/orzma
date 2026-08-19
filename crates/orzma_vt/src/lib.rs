@@ -8,7 +8,6 @@
 use crate::{
     damage::{DamageLedger, DamageVerdict},
     device::DeviceState,
-    frame::FrameEmitter,
     interpreter::Interpreter,
     placement::PlacementStore,
     schema::{Frame, GridSize, Scroll, VtModes, VtSignal},
@@ -155,8 +154,6 @@ pub struct OrzmaVt {
     placements: PlacementStore,
     /// Damage staged for the next emit, from every source.
     damage: DamageLedger,
-    /// Emission state: the hyperlink interner.
-    emitter: FrameEmitter,
 }
 
 impl OrzmaVt {
@@ -185,9 +182,12 @@ impl Vt for OrzmaVt {
         todo!()
     }
 
+    // TODO: Land with the delta path: `Damage::Full` already has a
+    // builder in `frame.rs`, but staged row damage has no `FrameDelta`
+    // to become, and returning a snapshot for it would break the
+    // contract above.
     fn frame(&mut self) -> Option<Frame> {
-        let damage = self.damage.take()?;
-        Some(self.emitter.emit(damage, self.device.active()))
+        todo!()
     }
 
     fn resize(&mut self, size: GridSize) -> bool {

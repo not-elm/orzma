@@ -3,7 +3,7 @@
 pub mod row;
 pub mod run;
 
-use crate::schema::GridSize;
+use crate::schema::{GridLine, GridSize};
 use crate::screen::cell::Cell;
 use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
@@ -85,6 +85,21 @@ impl Grid {
         HistoryEvent::PushedWithEviction
     }
 
+    /// Borrows the row at an active-grid line; a negative line reaches
+    /// into scrollback history.
+    ///
+    /// # Invariants
+    ///
+    /// The line must resolve inside the ring — `-history_len <= line`
+    /// and `line < rows`. [`crate::screen::Screen`] guarantees that by
+    /// clamping the viewport to the history it actually has.
+    #[allow(dead_code, reason = "`Screen::viewport_row` reaches this once wired")]
+    pub(super) fn row(&self, line: GridLine) -> &Row<Cell> {
+        let index = i64::from(self.history_len() as u32) + i64::from(line.0);
+        let index = usize::try_from(index).expect("the line resolves inside the ring");
+        &self.rows[index]
+    }
+
     /// Number of history rows currently retained.
     pub fn history_len(&self) -> usize {
         self.rows.len() - usize::from(self.size.rows)
@@ -120,6 +135,38 @@ mod tests {
 
     fn grid(rows: u16, max_history: usize) -> Grid {
         Grid::new(GridSize { cols: 4, rows }, max_history)
+    }
+
+    /// Asserts that grid line zero borrows the top row of the active
+    /// screen, whatever history sits before it.
+    ///
+    /// Case: the emitter reads the first visible row of a terminal that
+    /// has already scrolled output into scrollback.
+    #[test]
+    fn grid_line_zero_is_the_top_of_the_active_screen() {
+        let mut grid = grid(2, 10);
+        grid[0][0].c = 'a';
+        grid.scroll_up_one(Cell::default());
+        grid[0][0].c = 'b';
+        assert_eq!(grid.history_len(), 1);
+        assert_eq!(grid.row(GridLine(0))[0].c, 'b');
+    }
+
+    /// Asserts that a negative grid line reaches the scrollback row
+    /// that many lines above the active screen.
+    ///
+    /// Case: the user scrolls back and the emitter has to read rows
+    /// that no longer sit in the visible window.
+    #[test]
+    fn a_negative_grid_line_reaches_into_history() {
+        let mut grid = grid(2, 10);
+        grid[0][0].c = 'a';
+        grid.scroll_up_one(Cell::default());
+        grid[0][0].c = 'b';
+        grid.scroll_up_one(Cell::default());
+        assert_eq!(grid.history_len(), 2);
+        assert_eq!(grid.row(GridLine(-1))[0].c, 'b');
+        assert_eq!(grid.row(GridLine(-2))[0].c, 'a');
     }
 
     /// Asserts that a freshly built grid holds only blank visible rows

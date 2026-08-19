@@ -26,10 +26,6 @@ pub struct OrzmaVt {
     /// 次フレームまでの staged damage(`Damage` のマージ)。構築時に
     /// `Damage::Full` を種付けし、初回 emit の Snapshot を担保する。
     damage: DamageLedger,
-    /// フレーム発行: HyperlinkInterner・Row/Run 構築・placement 射影の
-    /// 呼び出し。Snapshot か Delta かは受け取った damage が決めるため、
-    /// 判定は責務外。
-    emitter: FrameEmitter,
 }
 
 struct DeviceState {
@@ -64,7 +60,7 @@ struct Screen {
 | `ColorTable` | パレットと動的カラー上書き、`Palette` の供給 | — |
 | `PlacementStore` | `PlacementId` 採番、`(view_id, instance)` → 配置、行アンカー追従、占有スパン、eviction 判定、ビューポート射影 | GUI ポリシー(registry 照合等はホスト側) |
 | `DamageLedger` | 全ソース(interpret / scroll / resize / placement 変化 / 将来の selection)の staged damage を一元マージ。構築時の `Damage::Full` 種付けで初回 Snapshot を担保 | 分類(`DamageVerdict`)|
-| `FrameEmitter` | Row/Run 構築・`HyperlinkInterner`・placement 射影の組み込み | デバイス状態と placement テーブルの変更。Snapshot / Delta の判定(受け取った damage が決める) |
+| `Frame` / `FrameSnapshot` / `FrameDelta` の関連関数 | フレームが運ぶ行の選択・組み立て・placement 射影の呼び出し | デバイス状態と placement テーブルの変更。セル→Run の変換(`Row::to_runs`)。Snapshot / Delta の判定(受け取った damage が決める) |
 
 ## 4. 主要な設計判断と根拠
 
@@ -88,6 +84,14 @@ parser.parse(chunk, &mut exec);
 ```
 
 `?2026` バッファは所有データとして持ち、APC mount はバッファ済み作業を適用してから placement を確定する(「APC バイト位置のカーソルでサンプリング」契約の実現手段)。
+
+### 4.3a フレーム組み立ては状態を持たない
+
+`FrameEmitter` という struct は設けない。組み立ては `Frame` / `FrameSnapshot` / `FrameDelta` の関連関数が行う(`.claude/rules/rust.md` の Constructors 規約により、ローカル型を作る自由関数は不可)。
+
+草案では `HyperlinkInterner` を持つ想定だったが、OSC 8 を実装しても emit 側に可変状態は要らない — `Cell` が `HyperlinkId` を保持し、intern は OSC 8 受信時にペン経由で行うため、emit 側は id→URI の解決に interner を**読む**だけで済む。将来も無状態なので struct にする理由がない。
+
+`Frame::emit` が同一の共有借用から rows・display_offset・placements を集めることで、`Vt::frame` の「A frame's placements and display offset describe the same instant as its rows」を 1 箇所で担保する。
 
 ### 4.3b モードは一箇所に集めない
 
@@ -149,15 +153,15 @@ placement は Grid の行に振る**安定 `LineId`** にアンカーし、`Plac
 crates/orzma_vt/src/lib.rs               … pub struct OrzmaVt + impl Vt〔フィールドは結線済み、メソッドはスタブ〕
 crates/orzma_vt/src/interpreter.rs       … Interpreter(vtparse + ?2026)〔スタブ〕
 crates/orzma_vt/src/executor.rs          … Executor(コールバック実装)+ Products〔未着手〕
-crates/orzma_vt/src/device.rs            … DeviceState / ModeState / TabStops / ColorTable / TitleState〔スタブ〕
+crates/orzma_vt/src/device.rs            … DeviceState / TabStops / ColorTable / TitleState〔読み取り面は実装済み〕
 crates/orzma_vt/src/screen.rs            … Screen / Viewport / WriteState / SavedCursorSlots / Margins / Effects〔実装済み〕
 crates/orzma_vt/src/screen/grid.rs       … Grid / HistoryEvent〔実装済み。LineId は placement 着手時に追加〕
-crates/orzma_vt/src/screen/grid/row.rs   … Row<T>(格納は Row<Cell>、発行は Row<Run>)〔実装済み〕
+crates/orzma_vt/src/screen/grid/row.rs   … Row<T>(格納は Row<Cell>、発行は Row<Run>)+ Row<Cell>::to_runs〔実装済み〕
 crates/orzma_vt/src/screen/grid/run.rs   … Run / Style(bitflags)〔実装済み〕
 crates/orzma_vt/src/screen/cell.rs       … Cell / Pen(レンダラの GridCell とは別の内部表現)〔実装済み〕
-crates/orzma_vt/src/placement.rs         … PlacementStore / 占有スパン〔スタブ〕
+crates/orzma_vt/src/placement.rs         … PlacementStore / 占有スパン〔空実装〕
 crates/orzma_vt/src/damage.rs            … Damage / DamageRows / DamageVerdict / DamageLedger〔実装済み〕
-crates/orzma_vt/src/frame.rs             … FrameEmitter(Row/Run 構築・射影)〔スタブ〕
+crates/orzma_vt/src/frame.rs             … Frame / FrameSnapshot / FrameDelta の組み立て〔Snapshot 実装済み、Delta 未着手〕
 ```
 
 `schema` モジュールは廃止方針である。型は「その概念を所有するモジュール」に置き、語彙を一箇所に集める層は設けない。`Row` / `Run` / `Damage` 系は移動済みで、`Color` / `Cursor` / `GridSize` などの行き先は未定。
@@ -165,7 +169,7 @@ crates/orzma_vt/src/frame.rs             … FrameEmitter(Row/Run 構築・射�
 ## 7. 実装順の示唆
 
 1. ~~`Grid` + `Screen` + `WriteState`(印字・行送り・erase の最小セット)と `DamageLedger`~~ — 完了
-2. `FrameEmitter`(Snapshot のみ → Delta 追加)← 現在地。着手前に `Screen` へクレート内の viewport / cursor 読み取り口が要る(`Grid` の添字は live tail に解決するため、スクロール中のビューポートを読めない)
+2. フレーム組み立て(Snapshot のみ → Delta 追加)← 現在地。Snapshot は完了(`Screen::viewport_row` / `Screen::cursor` / `Grid::row(GridLine)` の読み取り口込み)。Delta と `Vt::frame` への結線が残り
 3. `ModeState` / `ColorTable` / タブ / チャーセット / スクロール領域
 4. `Interpreter` の `?2026` と APC、`PlacementStore`(採番 → 射影 → eviction)
 5. reflow(`Reflowed` イベント込み)

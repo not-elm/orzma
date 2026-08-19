@@ -5,26 +5,33 @@
 //! anchored to, never a cell variant, so text writes and reflow cannot
 //! corrupt a placement. It converts to viewport coordinates only at
 //! emit time.
-#![expect(
+
+use crate::schema::{DisplayOffset, GridSize, ProjectedPlacement, ScreenKind};
+
+// NOTE: `#[expect]` is impractical here — `frame.rs`'s tests reach both
+// items, so `dead_code` fires in the lib build but not in the test
+// build, leaving the expectation unfulfilled there.
+#[allow(
     dead_code,
-    reason = "the executor and the frame emitter reach the store once they land"
+    reason = "`Frame::emit` reaches the store once the delta path lands"
 )]
-
-use crate::schema::{DisplayOffset, GridSize, ProjectedPlacement};
-
 /// The placement table: minted ids, line anchors, and occupancy spans.
 // TODO: Carry the id counter, the `(view_id, instance)` index, the
 // per-line occupancy spans, and the anchor bookkeeping `HistoryEvent`
 // drives.
 pub(crate) struct PlacementStore {}
 
+#[allow(
+    dead_code,
+    reason = "`Frame::emit` reaches the store once the delta path lands"
+)]
 impl PlacementStore {
     /// Builds an empty store whose first minted id is unused.
     pub fn new() -> Self {
-        todo!()
+        Self {}
     }
 
-    /// Projects every placement on the active screen into viewport
+    /// Projects every placement on `active_screen` into viewport
     /// coordinates — the complete list, not a diff.
     ///
     /// # Invariants
@@ -33,7 +40,15 @@ impl PlacementStore {
     /// refreshes a cache. Those belong to `HistoryEvent` handling,
     /// which runs while damage can still be staged — a mutation here
     /// would land after the ledger was drained and reach no frame.
-    pub fn project(&self, _offset: DisplayOffset, _size: GridSize) -> Vec<ProjectedPlacement> {
-        todo!()
+    // TODO: Return the placements anchored on `active_screen` once the
+    // table exists. An empty list is the honest answer while nothing can
+    // be mounted.
+    pub fn project(
+        &self,
+        _active_screen: ScreenKind,
+        _offset: DisplayOffset,
+        _size: GridSize,
+    ) -> Vec<ProjectedPlacement> {
+        Vec::new()
     }
 }

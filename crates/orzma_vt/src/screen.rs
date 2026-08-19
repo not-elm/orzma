@@ -11,10 +11,13 @@ pub mod margins;
 mod state;
 pub mod viewport;
 
-use self::cell::Pen;
+use self::cell::{Cell, Pen};
+use self::grid::row::Row;
 use self::grid::{Grid, HistoryEvent};
 use crate::damage::Damage;
-use crate::schema::{DisplayOffset, GridSize};
+use crate::schema::{
+    Cursor, CursorShape, DisplayOffset, GridColumn, GridLine, GridPoint, GridSize, ViewportLine,
+};
 use crate::screen::cursor::SavedCursorSlots;
 use crate::screen::margins::Margins;
 use crate::screen::state::ScreenState;
@@ -209,6 +212,40 @@ impl Screen {
         self.grid.size()
     }
 
+    // NOTE: `#[expect]` is impractical here — `frame.rs`'s tests reach
+    // these, so `dead_code` fires in the lib build but not in the test
+    // build, leaving the expectation unfulfilled there.
+    /// Borrows the cells shown at a viewport line.
+    ///
+    /// The viewport is the window the user sees: at the live tail it is
+    /// the active screen, and a scrolled viewport reaches back into
+    /// history. [`crate::screen::grid::Grid`]'s own index resolves
+    /// against the live tail alone, so a scrolled read has to come
+    /// through here.
+    #[allow(dead_code, reason = "`FrameSnapshot::build` reaches this once wired")]
+    pub(crate) fn viewport_row(&self, line: ViewportLine) -> &Row<Cell> {
+        let offset =
+            i32::try_from(self.viewport.offset.0).expect("scrollback never exceeds i32::MAX rows");
+        self.grid.row(GridLine(i32::from(line.0) - offset))
+    }
+
+    /// The write cursor as an emitted frame carries it.
+    // TODO: Report the real shape, blink, and visibility once DECSCUSR
+    // and DECTCEM land. Block / steady / visible is what the terminal
+    // starts at.
+    #[allow(dead_code, reason = "`FrameSnapshot::build` reaches this once wired")]
+    pub(crate) fn cursor(&self) -> Cursor {
+        Cursor {
+            point: GridPoint {
+                line: GridLine(i32::from(self.state.line)),
+                column: GridColumn(self.state.column),
+            },
+            shape: CursorShape::Block,
+            blinking: false,
+            visible: true,
+        }
+    }
+
     /// Mutably borrows the SGR pen; applying SGR sequences is the
     /// caller's job.
     pub fn pen_mut(&mut self) -> &mut Pen {
@@ -229,6 +266,57 @@ mod tests {
 
     fn screen() -> Screen {
         Screen::new(GridSize { cols: 4, rows: 3 }, 10)
+    }
+
+    /// Asserts that a viewport row at the live tail is the visible row
+    /// with the same index.
+    ///
+    /// Case: the emitter builds a snapshot for a terminal the user has
+    /// not scrolled.
+    #[test]
+    fn a_viewport_row_at_the_live_tail_is_the_visible_row() {
+        let mut screen = screen();
+        screen.grid[1][0].c = 'x';
+        assert_eq!(screen.viewport_row(ViewportLine(1))[0].c, 'x');
+    }
+
+    /// Asserts that a scrolled viewport reads the history rows it
+    /// shows rather than the live tail.
+    ///
+    /// Case: the user scrolls back one line, so the top of the window
+    /// is the newest scrollback row and the live rows shift down.
+    #[test]
+    fn a_scrolled_viewport_row_reads_history() {
+        let mut screen = screen();
+        screen.grid[0][0].c = 'a';
+        screen.state.line = 2;
+        screen.linefeed();
+        assert_eq!(screen.grid.history_len(), 1);
+        screen.viewport.offset = DisplayOffset(1);
+        assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+    }
+
+    /// Asserts that the reported cursor carries the write position and
+    /// is visible.
+    ///
+    /// The agreed placeholder is Block / steady / visible, matching what
+    /// a terminal starts at; `Cursor::default()` is deliberately not
+    /// used because its `visible` is `false`, which would hide the
+    /// caret until the first DECTCEM.
+    ///
+    /// Case: a shell prints its prompt and the next frame has to show
+    /// the caret after it.
+    #[test]
+    fn the_cursor_reports_the_write_position_and_is_visible() {
+        let mut screen = screen();
+        screen.print('a');
+        screen.print('b');
+        let cursor = screen.cursor();
+        assert_eq!(cursor.point.line, GridLine(0));
+        assert_eq!(cursor.point.column, GridColumn(2));
+        assert_eq!(cursor.shape, CursorShape::Block);
+        assert!(!cursor.blinking);
+        assert!(cursor.visible);
     }
 
     /// Asserts that a fresh screen starts at the origin, pinned to the
