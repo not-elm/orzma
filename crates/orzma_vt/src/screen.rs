@@ -148,6 +148,7 @@ impl Screen {
             return self.damage_grid_rows([departed, self.state.line]);
         }
         let history = self.grid.scroll_up_one(self.state.pen.erase_cell());
+        self.hold_scrolled_viewport();
         Effects::full(Some(history))
     }
 
@@ -198,6 +199,28 @@ impl Screen {
                 Effects::full(None)
             }
         }
+    }
+
+    /// Follows a one-row scroll with the offset that keeps a scrolled
+    /// viewport on the content it was showing.
+    ///
+    /// A viewport pinned to the live tail stays pinned — that is what
+    /// following the newest output means. A scrolled one counts one row
+    /// further back, because the row it shows just moved that far from
+    /// the tail.
+    ///
+    /// # Invariants
+    ///
+    /// The offset is clamped to the history that survives the scroll.
+    /// At capacity the row the user was reading has been evicted, so
+    /// the view drifts by one; there is nothing left to hold on.
+    fn hold_scrolled_viewport(&mut self) {
+        if self.viewport.offset == DisplayOffset(0) {
+            return;
+        }
+        let history =
+            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
+        self.viewport.offset = DisplayOffset(self.viewport.offset.0.saturating_add(1).min(history));
     }
 
     /// Reports the given active-grid lines as damage, in the viewport
@@ -332,6 +355,65 @@ mod tests {
         assert_eq!(cursor.shape, CursorShape::Block);
         assert!(!cursor.blinking);
         assert!(cursor.visible);
+    }
+
+    /// Asserts that output arriving while the user is scrolled back
+    /// leaves the viewed content where it was.
+    ///
+    /// The agreed policy holds the viewport still rather than letting
+    /// it drift with the live tail: `VtBackend::scroll` already pins
+    /// "the viewport holds its position while the PTY emits output",
+    /// and every terminal that keeps scrollback behaves this way.
+    ///
+    /// Case: the user is reading an earlier command's output when a
+    /// background build prints its next line.
+    #[test]
+    fn output_below_a_scrolled_viewport_holds_the_view_still() {
+        let mut screen = screen();
+        screen.grid[0][0].c = 'a';
+        screen.state.line = 2;
+        screen.linefeed();
+        screen.viewport.offset = DisplayOffset(1);
+        assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+
+        screen.state.line = 2;
+        screen.linefeed();
+        assert_eq!(screen.display_offset(), DisplayOffset(2));
+        assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+    }
+
+    /// Asserts that output at the live tail leaves the viewport pinned
+    /// there.
+    ///
+    /// Case: an unscrolled terminal keeps printing, and the window has
+    /// to follow the newest line rather than freeze.
+    #[test]
+    fn output_at_the_live_tail_keeps_the_viewport_pinned() {
+        let mut screen = screen();
+        screen.state.line = 2;
+        screen.linefeed();
+        assert_eq!(screen.display_offset(), DisplayOffset(0));
+    }
+
+    /// Asserts that a scroll at history capacity clamps the offset
+    /// instead of naming a row the ring no longer holds.
+    ///
+    /// The agreed policy accepts that the view drifts once scrollback
+    /// is full: the row the user was reading has been evicted, so there
+    /// is nothing left to hold still on.
+    ///
+    /// Case: the user is parked at the top of a full scrollback while
+    /// output keeps arriving.
+    #[test]
+    fn a_scroll_at_history_capacity_clamps_the_offset() {
+        let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
+        screen.state.line = 2;
+        screen.linefeed();
+        screen.viewport.offset = DisplayOffset(1);
+        screen.state.line = 2;
+        screen.linefeed();
+        assert_eq!(screen.grid.history_len(), 1);
+        assert_eq!(screen.display_offset(), DisplayOffset(1));
     }
 
     /// Asserts that damage from a scrolled screen names the viewport
