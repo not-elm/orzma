@@ -13,7 +13,6 @@
 mod color;
 mod cursor;
 mod error;
-mod frame;
 mod grid;
 mod hyperlink;
 mod modes;
@@ -23,13 +22,13 @@ mod signal;
 mod vi;
 mod webview;
 
+pub use crate::frame::{DirtyRow, Frame, FrameDelta, FrameSnapshot};
 pub use crate::screen::grid::row::Row;
 pub use crate::screen::grid::run::{Run, Style};
 pub use crate::screen::viewport::DisplayOffset;
 pub use color::*;
 pub use cursor::*;
 pub use error::*;
-pub use frame::*;
 pub use grid::*;
 pub use hyperlink::*;
 pub use modes::*;

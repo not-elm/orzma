@@ -16,7 +16,7 @@ use crate::{
 
 pub mod damage;
 mod device;
-mod frame;
+pub mod frame;
 pub mod hyperlink;
 mod interpreter;
 mod placement;
