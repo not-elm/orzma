@@ -8,23 +8,12 @@
 
 use crate::schema::{DisplayOffset, GridSize, ProjectedPlacement, ScreenKind};
 
-// NOTE: `#[expect]` is impractical here — `frame.rs`'s tests reach both
-// items, so `dead_code` fires in the lib build but not in the test
-// build, leaving the expectation unfulfilled there.
-#[allow(
-    dead_code,
-    reason = "`Frame::emit` reaches the store once the delta path lands"
-)]
 /// The placement table: minted ids, line anchors, and occupancy spans.
 // TODO: Carry the id counter, the `(view_id, instance)` index, the
 // per-line occupancy spans, and the anchor bookkeeping `HistoryEvent`
 // drives.
 pub(crate) struct PlacementStore {}
 
-#[allow(
-    dead_code,
-    reason = "`Frame::emit` reaches the store once the delta path lands"
-)]
 impl PlacementStore {
     /// Builds an empty store whose first minted id is unused.
     pub fn new() -> Self {

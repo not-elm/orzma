@@ -249,9 +249,6 @@ impl Screen {
         self.grid.size()
     }
 
-    // NOTE: `#[expect]` is impractical here — `frame.rs`'s tests reach
-    // these, so `dead_code` fires in the lib build but not in the test
-    // build, leaving the expectation unfulfilled there.
     /// Borrows the cells shown at a viewport line.
     ///
     /// The viewport is the window the user sees: at the live tail it is
@@ -259,7 +256,6 @@ impl Screen {
     /// history. [`crate::screen::grid::Grid`]'s own index resolves
     /// against the live tail alone, so a scrolled read has to come
     /// through here.
-    #[allow(dead_code, reason = "`FrameSnapshot::new` reaches this once wired")]
     pub(crate) fn viewport_row(&self, line: ViewportLine) -> &Row<Cell> {
         let offset =
             i32::try_from(self.viewport.offset.0).expect("scrollback never exceeds i32::MAX rows");
@@ -270,7 +266,6 @@ impl Screen {
     // TODO: Report the real shape, blink, and visibility once DECSCUSR
     // and DECTCEM land. Block / steady / visible is what the terminal
     // starts at.
-    #[allow(dead_code, reason = "`FrameSnapshot::new` reaches this once wired")]
     pub(crate) fn cursor(&self) -> Cursor {
         Cursor {
             point: GridPoint {

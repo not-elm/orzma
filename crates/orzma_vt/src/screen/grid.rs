@@ -93,7 +93,6 @@ impl Grid {
     /// The line must resolve inside the ring — `-history_len <= line`
     /// and `line < rows`. [`crate::screen::Screen`] guarantees that by
     /// clamping the viewport to the history it actually has.
-    #[allow(dead_code, reason = "`Screen::viewport_row` reaches this once wired")]
     pub(super) fn row(&self, line: GridLine) -> &Row<Cell> {
         let index = i64::from(self.history_len() as u32) + i64::from(line.0);
         let index = usize::try_from(index).expect("the line resolves inside the ring");

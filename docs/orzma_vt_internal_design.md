@@ -77,7 +77,7 @@ primary / alternate はカーソル・pending wrap・ペン・保存スロット
 旧エンジンの 3 パーサ fan-out(lead APC パーサ)は「alacritty の processor が不透明」なことへの補償だった。自前実装では **単一の `vtparse` + `Executor`(パーサ以外のフィールドを分割借用する一時ビュー構造体)** で APC は同期的に届く。
 
 ```rust
-let Self { interpreter: Interpreter { parser, sync }, device, placements, damage, emitter } = self;
+let Self { interpreter: Interpreter { parser, sync }, device, placements, damage } = self;
 let mut out = Products::default();
 let mut exec = Executor { sync, device, placements, damage, out: &mut out };
 parser.parse(chunk, &mut exec);
@@ -163,7 +163,7 @@ crates/orzma_vt/src/screen/grid/run.rs   … Run / Style(bitflags)〔実装済�
 crates/orzma_vt/src/screen/cell.rs       … Cell / Pen(レンダラの GridCell とは別の内部表現)〔実装済み〕
 crates/orzma_vt/src/placement.rs         … PlacementStore / 占有スパン〔空実装〕
 crates/orzma_vt/src/damage.rs            … Damage / DamageRows / DamageVerdict / DamageLedger〔実装済み〕
-crates/orzma_vt/src/frame.rs             … Frame / FrameSnapshot / FrameDelta の組み立て〔Snapshot 実装済み、Delta 未着手〕
+crates/orzma_vt/src/frame.rs             … Frame / FrameSnapshot / FrameDelta の組み立て〔実装済み〕
 ```
 
 `schema` モジュールは廃止方針である。型は「その概念を所有するモジュール」に置き、語彙を一箇所に集める層は設けない。`Row` / `Run` / `Damage` 系は移動済みで、`Color` / `Cursor` / `GridSize` などの行き先は未定。
@@ -171,8 +171,8 @@ crates/orzma_vt/src/frame.rs             … Frame / FrameSnapshot / FrameDelta 
 ## 7. 実装順の示唆
 
 1. ~~`Grid` + `Screen` + `WriteState`(印字・行送り・erase の最小セット)と `DamageLedger`~~ — 完了
-2. フレーム組み立て(Snapshot のみ → Delta 追加)← 現在地。Snapshot は完了(`Screen::viewport_row` / `Screen::cursor` / `Grid::row(GridLine)` の読み取り口込み)。Delta と `Vt::frame` への結線が残り
-3. `ModeState` / `ColorTable` / タブ / チャーセット / スクロール領域
+2. ~~フレーム組み立て(Snapshot / Delta)と `Vt::frame` への結線~~ — 完了。`OrzmaVt::new` も実装され、初回フレームが Snapshot になることは `DamageLedger` の種付け経由で end-to-end に固定されている
+3. `ModeState` / `ColorTable` / タブ / チャーセット / スクロール領域 ← 現在地
 4. `Interpreter` の `?2026` と APC、`PlacementStore`(採番 → 射影 → eviction)
 5. reflow(`Reflowed` イベント込み)
 6. capability トレイト(selection / vi)は全て安定後

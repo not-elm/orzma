@@ -161,12 +161,20 @@ impl OrzmaVt {
     ///
     /// # Invariants
     ///
+    /// Both grid axes are nonzero; degenerate sizes are rejected by the
+    /// caller (the same contract as [`Vt::resize`]).
+    ///
     /// The ledger must come from [`DamageLedger::new`]: its seeded full
     /// damage is what makes that first frame a snapshot, so a
     /// constructor that starts from an empty ledger paints nothing
     /// until the first PTY output arrives.
-    pub fn new(_size: GridSize, _max_history: usize) -> Self {
-        todo!()
+    pub fn new(size: GridSize, max_history: usize) -> Self {
+        Self {
+            interpreter: Interpreter::default(),
+            device: DeviceState::new(size, max_history),
+            placements: PlacementStore::new(),
+            damage: DamageLedger::new(),
+        }
     }
 }
 
@@ -182,12 +190,12 @@ impl Vt for OrzmaVt {
         todo!()
     }
 
-    // TODO: Land with the delta path: `Damage::Full` already has a
-    // builder in `frame.rs`, but staged row damage has no `FrameDelta`
-    // to become, and returning a snapshot for it would break the
-    // contract above.
     fn frame(&mut self) -> Option<Frame> {
-        todo!()
+        Some(Frame::emit(
+            self.damage.take()?,
+            &self.device,
+            &self.placements,
+        ))
     }
 
     fn resize(&mut self, size: GridSize) -> bool {
@@ -208,5 +216,40 @@ impl Vt for OrzmaVt {
 
     fn modes(&self) -> VtModes {
         self.device.modes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vt() -> OrzmaVt {
+        OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10)
+    }
+
+    /// Asserts that a fresh terminal's first frame is a full snapshot.
+    ///
+    /// The agreed mechanism is the ledger's seeded full damage rather
+    /// than a first-emit flag on the VT: a flag would have to be cleared
+    /// in every emit path, while the seed is spent by the same `take`
+    /// every other frame goes through.
+    ///
+    /// Case: a terminal spawns and the renderer has nothing on screen
+    /// yet, so the shell's first prompt must arrive with the whole
+    /// viewport behind it.
+    #[test]
+    fn the_first_frame_is_a_snapshot() {
+        assert!(matches!(vt().frame(), Some(Frame::Snapshot(_))));
+    }
+
+    /// Asserts that emitting drains the staged damage.
+    ///
+    /// Case: the host polls for a frame twice in one tick, and the
+    /// second poll must not repaint what the first one already sent.
+    #[test]
+    fn an_emitted_frame_leaves_nothing_staged() {
+        let mut vt = vt();
+        vt.frame();
+        assert!(vt.frame().is_none());
     }
 }

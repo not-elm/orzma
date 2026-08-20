@@ -8,6 +8,7 @@
 //! [`Row::to_runs`](crate::screen::grid::row::Row); deciding whether a
 //! frame is a snapshot belongs to the damage that produced it.
 
+use crate::damage::{Damage, DamageRows};
 use crate::device::DeviceState;
 use crate::placement::PlacementStore;
 use crate::schema::{
@@ -26,6 +27,16 @@ pub enum Frame {
     Snapshot(FrameSnapshot),
     /// A differential update relative to the prior frame.
     Delta(FrameDelta),
+}
+
+impl Frame {
+    /// Builds the frame the staged damage calls for.
+    pub(crate) fn emit(damage: Damage, device: &DeviceState, placements: &PlacementStore) -> Self {
+        match damage {
+            Damage::Full => Self::Snapshot(FrameSnapshot::new(device, placements)),
+            Damage::Delta(rows) => Self::Delta(FrameDelta::new(&rows, device, placements)),
+        }
+    }
 }
 
 /// A full repaint: everything the renderer needs to draw the visible
@@ -61,6 +72,35 @@ pub struct FrameSnapshot {
     pub palette: Palette,
 }
 
+impl FrameSnapshot {
+    /// Builds a full repaint of the visible viewport.
+    ///
+    /// # Invariants
+    ///
+    /// The rows, the cursor, the offset, and the projection all come
+    /// from one borrow of `device`, so a snapshot describes a single
+    /// instant. Projecting placements outside and passing the list in
+    /// would let a caller pair a stale offset with fresh rows.
+    fn new(device: &DeviceState, placements: &PlacementStore) -> Self {
+        let screen = device.active();
+        let size = screen.grid_size();
+        let display_offset = screen.display_offset();
+        Self {
+            size,
+            rows: (0..size.rows)
+                .map(|line| screen.viewport_row(ViewportLine(line)).to_runs())
+                .collect(),
+            cursor: screen.cursor(),
+            display_offset,
+            placements: placements.project(device.modes().active_screen, display_offset, size),
+            vi_cursor: None,
+            selection: None,
+            hyperlinks: Vec::new(),
+            palette: device.palette(),
+        }
+    }
+}
+
 /// A differential update relative to the prior frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrameDelta {
@@ -90,6 +130,46 @@ pub struct FrameDelta {
     pub hyperlinks: Vec<Hyperlink>,
 }
 
+impl FrameDelta {
+    /// Builds a differential update for the damaged rows.
+    ///
+    /// # Invariants
+    ///
+    /// Every staged row is below the current `size.rows` and names a
+    /// line in the active screen's viewport basis. Any intervening
+    /// offset, size, or active-screen change merges
+    /// [`Damage::Full`](crate::damage::Damage::Full), which replaces
+    /// these rows outright, so a delta never outlives the viewport its
+    /// rows were staged against.
+    ///
+    /// The rows, the cursor, the offset, and the projection all come
+    /// from one borrow of `device`, so a delta describes a single
+    /// instant.
+    fn new(rows: &DamageRows, device: &DeviceState, placements: &PlacementStore) -> Self {
+        let screen = device.active();
+        let display_offset = screen.display_offset();
+        Self {
+            dirty_rows: rows
+                .iter()
+                .map(|&line| DirtyRow {
+                    line,
+                    contents: screen.viewport_row(line).to_runs(),
+                })
+                .collect(),
+            cursor: screen.cursor(),
+            display_offset,
+            placements: placements.project(
+                device.modes().active_screen,
+                display_offset,
+                screen.grid_size(),
+            ),
+            vi_cursor: None,
+            selection: None,
+            hyperlinks: Vec::new(),
+        }
+    }
+}
+
 /// One repainted viewport row inside a [`FrameDelta`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct DirtyRow {
@@ -97,42 +177,6 @@ pub struct DirtyRow {
     pub line: ViewportLine,
     /// The row contents.
     pub contents: Row<Run>,
-}
-
-// NOTE: `#[expect]` is impractical here — the tests below call the
-// constructor, so `dead_code` fires in the lib build but not in the test
-// build, leaving the expectation unfulfilled there.
-#[allow(
-    dead_code,
-    reason = "`Frame::emit` reaches the constructor once the delta path lands"
-)]
-impl FrameSnapshot {
-    /// Builds a full repaint of the visible viewport.
-    ///
-    /// # Invariants
-    ///
-    /// The rows, the cursor, the offset, and the projection all come
-    /// from one borrow of `device`, so a snapshot describes a single
-    /// instant. Projecting placements outside and passing the list in
-    /// would let a caller pair a stale offset with fresh rows.
-    fn new(device: &DeviceState, placements: &PlacementStore) -> Self {
-        let screen = device.active();
-        let size = screen.grid_size();
-        let display_offset = screen.display_offset();
-        Self {
-            size,
-            rows: (0..size.rows)
-                .map(|line| screen.viewport_row(ViewportLine(line)).to_runs())
-                .collect(),
-            cursor: screen.cursor(),
-            display_offset,
-            placements: placements.project(device.modes().active_screen, display_offset, size),
-            vi_cursor: None,
-            selection: None,
-            hyperlinks: Vec::new(),
-            palette: device.palette(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -215,6 +259,171 @@ mod tests {
                 assert_eq!(row[0].fg, Color::DefaultForeground);
                 assert_eq!(row[0].bg, Color::DefaultBackground);
             }
+        }
+    }
+
+    mod delta {
+        use crate::damage::DamageRows;
+        use crate::device::DeviceState;
+        use crate::frame::FrameDelta;
+        use crate::placement::PlacementStore;
+        use crate::schema::{GridColumn, GridLine, GridSize, ViewportLine};
+
+        fn device() -> DeviceState {
+            DeviceState::new(GridSize { cols: 4, rows: 3 }, 10)
+        }
+
+        fn delta(device: &DeviceState, lines: &[u16]) -> FrameDelta {
+            let rows: DamageRows = lines.iter().copied().map(ViewportLine).collect();
+            FrameDelta::new(&rows, device, &PlacementStore::new())
+        }
+
+        /// Asserts that a delta repaints the damaged rows and no others.
+        ///
+        /// Case: a shell echoes a keystroke onto its prompt line, leaving
+        /// every other line of the window untouched.
+        #[test]
+        fn a_delta_repaints_only_the_damaged_rows() {
+            let mut device = device();
+            device.active_mut().print('a');
+            device.active_mut().carriage_return();
+            device.active_mut().linefeed();
+            device.active_mut().print('b');
+            let delta = delta(&device, &[1]);
+            assert_eq!(delta.dirty_rows.len(), 1);
+            assert_eq!(delta.dirty_rows[0].line, ViewportLine(1));
+            assert_eq!(delta.dirty_rows[0].contents[0].text, "b   ");
+        }
+
+        /// Asserts that a damaged row is repainted across its full width.
+        ///
+        /// The agreed policy repaints whole rows rather than cell spans:
+        /// the renderer replaces a row wholesale, so a partial row would
+        /// leave the untouched columns showing the previous frame.
+        ///
+        /// Case: an erase-in-line clears the tail of a row the cursor
+        /// sits in the middle of.
+        #[test]
+        fn a_dirty_row_spans_every_column() {
+            let mut device = device();
+            device.active_mut().print('a');
+            let delta = delta(&device, &[0]);
+            let contents = &delta.dirty_rows[0].contents;
+            assert_eq!(
+                contents.iter().map(|run| u32::from(run.cols)).sum::<u32>(),
+                4
+            );
+        }
+
+        /// Asserts that several damaged rows arrive ascending by line.
+        ///
+        /// Case: a program redraws a multi-line status area, damaging the
+        /// bottom row before the top one.
+        #[test]
+        fn several_dirty_rows_arrive_ascending() {
+            let delta = delta(&device(), &[2, 0, 1]);
+            let lines: Vec<_> = delta.dirty_rows.iter().map(|row| row.line).collect();
+            assert_eq!(lines, [ViewportLine(0), ViewportLine(1), ViewportLine(2)]);
+        }
+
+        /// Asserts that the bottom viewport row is a valid damage target.
+        ///
+        /// Case: a full-screen application repaints its last line, the
+        /// highest line number the viewport addresses.
+        #[test]
+        fn the_bottom_viewport_row_is_repaintable() {
+            let mut device = device();
+            device.active_mut().linefeed();
+            device.active_mut().linefeed();
+            device.active_mut().print('z');
+            let delta = delta(&device, &[2]);
+            assert_eq!(delta.dirty_rows[0].line, ViewportLine(2));
+            assert_eq!(delta.dirty_rows[0].contents[0].text, "z   ");
+        }
+
+        /// Asserts that a delta carries the write cursor and the offset.
+        ///
+        /// The agreed policy puts them on every delta, not just
+        /// snapshots: cursor-only motion damages no cell content, so a
+        /// delta that omitted them would strand the caret until the next
+        /// full repaint.
+        ///
+        /// Case: the user presses an arrow key and the caret has to move
+        /// without any row changing.
+        #[test]
+        fn a_delta_carries_the_cursor_and_the_offset() {
+            let mut device = device();
+            device.active_mut().print('a');
+            let delta = delta(&device, &[0]);
+            assert_eq!(delta.cursor.point.line, GridLine(0));
+            assert_eq!(delta.cursor.point.column, GridColumn(1));
+            assert!(delta.cursor.visible);
+            assert_eq!(delta.display_offset, device.display_offset());
+        }
+
+        /// Asserts that a delta with no damaged rows still carries
+        /// current metadata.
+        ///
+        /// The agreed policy keeps the empty delta rather than
+        /// suppressing the frame: its cursor, offset, and placement list
+        /// are what a metadata-only change has to deliver.
+        ///
+        /// Case: a webview placement moves while no cell content
+        /// changes.
+        #[test]
+        fn an_empty_delta_still_carries_its_metadata() {
+            let mut device = device();
+            device.active_mut().print('a');
+            let delta = delta(&device, &[]);
+            assert!(delta.dirty_rows.is_empty());
+            assert_eq!(delta.cursor.point.column, GridColumn(1));
+            assert_eq!(delta.display_offset, device.display_offset());
+        }
+
+        /// Asserts that the fields whose features have not landed are
+        /// emitted empty rather than omitted.
+        ///
+        /// Case: a terminal running before webviews, OSC 8, selection, or
+        /// vi mode exist repaints a row.
+        #[test]
+        fn a_delta_reserves_the_fields_their_features_have_not_reached() {
+            let delta = delta(&device(), &[0]);
+            assert!(delta.placements.is_empty());
+            assert!(delta.hyperlinks.is_empty());
+            assert_eq!(delta.vi_cursor, None);
+            assert_eq!(delta.selection, None);
+        }
+    }
+
+    mod emit {
+        use crate::damage::{Damage, DamageRows};
+        use crate::device::DeviceState;
+        use crate::frame::Frame;
+        use crate::placement::PlacementStore;
+        use crate::schema::{GridSize, ViewportLine};
+
+        fn emit(damage: Damage) -> Frame {
+            let device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
+            Frame::emit(damage, &device, &PlacementStore::new())
+        }
+
+        /// Asserts that full damage becomes a snapshot.
+        ///
+        /// Case: the window is resized, and the renderer needs the new
+        /// dimensions along with every row to redraw against them.
+        #[test]
+        fn full_damage_emits_a_snapshot() {
+            assert!(matches!(emit(Damage::Full), Frame::Snapshot(_)));
+        }
+
+        /// Asserts that row damage becomes a delta.
+        ///
+        /// Case: a shell echoes one character, and repainting the whole
+        /// window for it would waste the frame.
+        #[test]
+        fn row_damage_emits_a_delta() {
+            let rows: DamageRows = [ViewportLine(0)].into_iter().collect();
+            assert!(matches!(emit(Damage::Delta(rows)), Frame::Delta(_)));
         }
     }
 }

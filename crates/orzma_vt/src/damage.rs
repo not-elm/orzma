@@ -134,23 +134,11 @@ impl DamageVerdict {
     }
 }
 
-// NOTE: `#[expect]` is impractical on this type — the tests below
-// construct the ledger and call every method, so `dead_code` fires in
-// the lib build but not in the test build, leaving the expectation
-// unfulfilled there.
 /// Damage staged for the next frame emit.
-#[allow(
-    dead_code,
-    reason = "the executor and the frame emitter reach the ledger once they land"
-)]
 pub(crate) struct DamageLedger {
     staged: Option<Damage>,
 }
 
-#[allow(
-    dead_code,
-    reason = "the executor and the frame emitter reach the ledger once they land"
-)]
 impl DamageLedger {
     /// Builds a ledger with the bootstrap repaint already staged.
     pub fn new() -> Self {
