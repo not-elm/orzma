@@ -91,7 +91,9 @@ parser.parse(chunk, &mut exec);
 
 草案では `HyperlinkInterner` を持つ想定だったが、OSC 8 を実装しても emit 側に可変状態は要らない — `Cell` が `HyperlinkId` を保持し、intern は OSC 8 受信時にペン経由で行うため、emit 側は id→URI の解決に interner を**読む**だけで済む。将来も無状態なので struct にする理由がない。
 
-`Frame::emit` が同一の共有借用から rows・display_offset・placements を集めることで、`Vt::frame` の「A frame's placements and display offset describe the same instant as its rows」を 1 箇所で担保する。
+構築子は `&DeviceState` と `&PlacementStore` を受け、rows・cursor・display_offset・palette と placement の射影をすべてその借用の中で集める。射影を外で行って `Vec<ProjectedPlacement>` を渡す形にすると、呼び出し側が古い offset で射影した一覧を新しい rows と組にできてしまうため、`Vt::frame` の「A frame's placements and display offset describe the same instant as its rows」が呼び出し規約に落ちる。構築子の内側に入れることでこれを型で担保する。
+
+パレットが `Screen` ではなく `DeviceState` から来るのも同じ層の判断による。OSC 4 / 10 / 11 / 12 はデバイス単位の状態で、DECSET 1049 の切替はこれを保存も交換もしない(alacritty の `swap_alt` も `grid` / `inactive_grid` を入れ替えるだけで `colors` に触れない)。`Screen` 側に持たせると 2 スクリーン分のコピーが同期を要求されるか、`Screen` 自身が一度も読まない参照を抱えることになる。`Screen` はセル・カーソル・ビューポート・マージンの担当で、`Cell` の `fg` / `bg` はシンボリックな `Color` のまま出るため、パレットを必要としない。
 
 ### 4.3b モードは一箇所に集めない
 

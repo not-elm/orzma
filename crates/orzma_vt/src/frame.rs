@@ -8,11 +8,12 @@
 //! [`Row::to_runs`](crate::screen::grid::row::Row); deciding whether a
 //! frame is a snapshot belongs to the damage that produced it.
 
+use crate::device::DeviceState;
+use crate::placement::PlacementStore;
 use crate::schema::{
     Cursor, GridSize, Hyperlink, Palette, ProjectedPlacement, Row, Run, SelectionRange, ViCursor,
     ViewportLine,
 };
-use crate::screen::Screen;
 use crate::screen::viewport::DisplayOffset;
 
 /// One emitted frame: a full repaint or a differential update.
@@ -107,20 +108,29 @@ pub struct DirtyRow {
 )]
 impl FrameSnapshot {
     /// Builds a full repaint of the visible viewport.
-    fn new(screen: &Screen, placements: Vec<ProjectedPlacement>, palette: Palette) -> Self {
+    ///
+    /// # Invariants
+    ///
+    /// The rows, the cursor, the offset, and the projection all come
+    /// from one borrow of `device`, so a snapshot describes a single
+    /// instant. Projecting placements outside and passing the list in
+    /// would let a caller pair a stale offset with fresh rows.
+    fn new(device: &DeviceState, placements: &PlacementStore) -> Self {
+        let screen = device.active();
         let size = screen.grid_size();
+        let display_offset = screen.display_offset();
         Self {
             size,
             rows: (0..size.rows)
                 .map(|line| screen.viewport_row(ViewportLine(line)).to_runs())
                 .collect(),
             cursor: screen.cursor(),
-            display_offset: screen.display_offset(),
-            placements,
+            display_offset,
+            placements: placements.project(device.modes().active_screen, display_offset, size),
             vi_cursor: None,
             selection: None,
             hyperlinks: Vec::new(),
-            palette,
+            palette: device.palette(),
         }
     }
 }
@@ -137,18 +147,6 @@ mod tests {
             DeviceState::new(GridSize { cols: 4, rows: 3 }, 10)
         }
 
-        fn snapshot(device: &DeviceState, placements: &PlacementStore) -> FrameSnapshot {
-            FrameSnapshot::new(
-                device.active(),
-                placements.project(
-                    device.modes().active_screen,
-                    device.display_offset(),
-                    device.grid_size(),
-                ),
-                device.palette(),
-            )
-        }
-
         /// Asserts that a snapshot carries every viewport row, each spanning
         /// the full width.
         ///
@@ -158,7 +156,7 @@ mod tests {
         fn a_snapshot_covers_every_viewport_row_at_full_width() {
             let mut device = device();
             device.active_mut().print('a');
-            let snap = snapshot(&device, &PlacementStore::new());
+            let snap = FrameSnapshot::new(&device, &PlacementStore::new());
             assert_eq!(snap.size, GridSize { cols: 4, rows: 3 });
             assert_eq!(snap.rows.len(), 3);
             for row in &snap.rows {
@@ -176,7 +174,7 @@ mod tests {
         fn a_snapshot_carries_the_cursor_and_the_live_palette() {
             let mut device = device();
             device.active_mut().print('a');
-            let snap = snapshot(&device, &PlacementStore::new());
+            let snap = FrameSnapshot::new(&device, &PlacementStore::new());
             assert_eq!(snap.cursor.point.line, GridLine(0));
             assert_eq!(snap.cursor.point.column, GridColumn(1));
             assert_eq!(snap.cursor.shape, CursorShape::Block);
@@ -196,7 +194,7 @@ mod tests {
         /// mode exist emits its first frame.
         #[test]
         fn a_snapshot_reserves_the_fields_their_features_have_not_reached() {
-            let snap = snapshot(&device(), &PlacementStore::new());
+            let snap = FrameSnapshot::new(&device(), &PlacementStore::new());
             assert!(snap.placements.is_empty());
             assert!(snap.hyperlinks.is_empty());
             assert_eq!(snap.vi_cursor, None);
@@ -210,7 +208,7 @@ mod tests {
         /// window.
         #[test]
         fn a_blank_screen_emits_one_default_run_per_row() {
-            let snap = snapshot(&device(), &PlacementStore::new());
+            let snap = FrameSnapshot::new(&device(), &PlacementStore::new());
             for row in &snap.rows {
                 assert_eq!(row.len(), 1);
                 assert_eq!(row[0].text, "    ");
