@@ -1,6 +1,6 @@
 //! Grid vocabulary: [`GridSize`], the active-grid coordinate types
-//! [`GridLine`], [`GridColumn`], and [`GridPoint`], and their viewport
-//! projection [`ViewportLine`].
+//! [`GridLine`], [`GridColumn`], and [`GridPoint`], their viewport
+//! projection [`ViewportLine`], and the screen-relative [`ScreenLine`].
 
 use crate::screen::viewport::DisplayOffset;
 
@@ -65,6 +65,24 @@ impl From<alacritty_terminal::index::Line> for GridLine {
 /// content once the user scrolls or the grid is resized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct ViewportLine(pub u16);
+
+/// A row of the active screen: `0` is the top row, and the value never
+/// reaches history.
+///
+/// It is the non-negative half of [`GridLine`] — same origin, narrower
+/// domain — so writes and grid indexing that take one cannot address
+/// scrollback at all. [`ViewportLine`] measures the same row from the
+/// viewport's top instead, and the two coincide only at
+/// [`DisplayOffset`] zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct ScreenLine(pub u16);
+
+impl From<ScreenLine> for GridLine {
+    #[inline]
+    fn from(value: ScreenLine) -> Self {
+        GridLine(i32::from(value.0))
+    }
+}
 
 /// A 0-based grid column.
 ///
@@ -174,5 +192,18 @@ mod tests {
             GridLine(18).to_viewport(offset, ROWS),
             Some(ViewportLine(23))
         );
+    }
+
+    /// Asserts that widening a screen line to a grid line preserves the row
+    /// number, so the two name the same row.
+    ///
+    /// Case: the cursor sits on the third row of the visible screen and the
+    /// frame emitter needs that position in the grid coordinates
+    /// `GridPoint` carries.
+    #[test]
+    fn a_screen_line_widens_to_the_same_grid_line() {
+        assert_eq!(GridLine::from(ScreenLine(0)), GridLine(0));
+        assert_eq!(GridLine::from(ScreenLine(2)), GridLine(2));
+        assert_eq!(GridLine::from(ScreenLine(u16::MAX)), GridLine(65535));
     }
 }

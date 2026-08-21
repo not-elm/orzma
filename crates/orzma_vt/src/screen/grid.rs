@@ -3,7 +3,7 @@
 pub mod row;
 pub mod run;
 
-use crate::schema::{GridLine, GridSize};
+use crate::schema::{GridLine, GridSize, ScreenLine};
 use crate::screen::cell::Cell;
 use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
@@ -123,6 +123,23 @@ impl Index<u16> for Grid {
 impl IndexMut<u16> for Grid {
     fn index_mut(&mut self, line: u16) -> &mut Row<Cell> {
         let index = self.visible_index(line);
+        &mut self.rows[index]
+    }
+}
+
+/// Indexes the row at a screen line; history rows are structurally
+/// unreachable because [`ScreenLine`] cannot be negative.
+impl Index<ScreenLine> for Grid {
+    type Output = Row<Cell>;
+
+    fn index(&self, line: ScreenLine) -> &Row<Cell> {
+        &self.rows[self.visible_index(line.0)]
+    }
+}
+
+impl IndexMut<ScreenLine> for Grid {
+    fn index_mut(&mut self, line: ScreenLine) -> &mut Row<Cell> {
+        let index = self.visible_index(line.0);
         &mut self.rows[index]
     }
 }
