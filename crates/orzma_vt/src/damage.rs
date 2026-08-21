@@ -560,12 +560,12 @@ mod tests {
             let mut bits = span(0, 200);
             let len = bits.0.len();
             bits.clear();
+            assert_eq!(bits.0.len(), len, "clear must not shorten the buffer");
             assert_eq!(bits.count_ones(), 0);
             assert_eq!(rows_of(&bits), Vec::<u16>::new());
 
             bits.set_span(ViewportLine(200), ViewportLine(200));
             assert_eq!(rows_of(&bits), [200], "a cleared bit came back");
-            assert_eq!(bits.0.len(), len, "clear must not shorten the buffer");
         }
     }
 }
