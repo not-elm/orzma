@@ -137,7 +137,7 @@
 - **キーエンコード** — 同じ 14 キー語彙、Ctrl 文字 → C0、meta-sends-escape、DECCKM。新実装は Home/End にも DECCKM を適用(旧は固定 `CSI H/F`)する xterm 準拠方向の改善。F1-F12 / Insert / CSI-u / modifyOtherKeys 非対応は旧と同等。
 - **ペーストは新スタックが上位互換** — 旧エンジンにはペースト API がなくホストが括っていたが、新 `send_paste` は括弧付け + 埋め込みマーカー除去(ペーストインジェクション対策)+ 改行正規化 + scroll-on-input を内蔵し、テストで固定済み。
 - **マウスプロトコルエンコーダ** — SGR / X10、release センチネル、223 クランプ、alt/meta の単一 meta ビット合流、ホイールボタン 64..=67。UTF-8(1005)を X10 へフォールバックする決定も一致。
-- **Coalescer** — IDLE 3ms / MAX_CAP 12ms / MANY_ROWS_INSTANT_CAP 4、`Full` を即時フラッシュ対象から除外する不変条件まで忠実移植(未結線は §3.1)。
+- **Coalescer** — IDLE 3ms / MAX_CAP 12ms のデバウンスと bootstrap フラグは移植済み(未結線は §3.1)。`MANY_ROWS_INSTANT_CAP` を含む即時フラッシュ判定一式(`observe_chunk` / `qualifies_for_immediate_flush` / `note_user_input` / `FlushDecision` / `INPUT_ECHO_WINDOW`)は `DamageVerdict` の廃止に伴って削除されており、忠実移植ではなく意図的な不採用である。
 - **リサイズ** — ゼロ軸 / 上限(4096)ガードと PTY-first の失敗原子性は新規追加の改善。
 - **スクロール** — ページ量(全画面高)、クランプ時の no-op 判定、scroll-on-input ポリシー。
 - **選択コア(Simple / Lines)** — アンカー保持の粒度切替、vi カーソル起点開始、スクロールバックへのドラッグ。
@@ -161,11 +161,9 @@
 
 ### Phase 1 — pump の駆動系(§3.1〜3.3)
 
-- [x] `OrzmaTerm::pump` で `interpret` の `DamageVerdict` を受けて `Coalescer::arm_or_extend` を呼び、PTY 出力からフレームが emit されるようにする(§3.1)
-- [x] エコー即時化と bootstrap の状態を `Coalescer` に内包する(`last_input_at` タイムスタンプ + 150ms 期限、`bootstrap` フラグ、`observe_chunk` / `note_user_input` / `needs_bootstrap` / `settle_emit`)(§3.1。Codex レビュー反映済み: 判定は arm 前の状態で行い、消費は emit 成立時のみ)
-- [ ] `send_key` / `send_mouse` / `send_paste` の PTY 書き込み**成功後**に `Coalescer::note_user_input` を呼ぶ(§3.1。orzma_vt `frame()` 完成後の結線 PR で)
-- [ ] `feed_chunk` の `arm_or_extend` 直呼びを `observe_chunk` に置き換え、`FlushDecision::Now` で pump が同一呼び出し内に emit するようにする(§3.1。同上)
-- [ ] `pump` の emit ゲートを `needs_bootstrap() || is_due(now)` にして初回スナップショットを保証し、emit 成立時は `disarm` でなく `settle_emit` を呼ぶ(§3.1。同上。既存 pump テストのフィクスチャに bootstrap の settle が必要)
+- [x] `OrzmaTerm::pump` で `interpret` が返す `VtUpdate::damaged` を受けて `Coalescer::arm_or_extend` を呼び、PTY 出力からフレームが emit されるようにする(§3.1)
+- [x] エコー即時化と bootstrap の状態を `Coalescer` に内包する(`armed_at` / `last_chunk_at` タイムスタンプによる `IDLE` 3ms・`MAX_CAP` 12ms のデバウンス、`bootstrap` フラグ、`arm_or_extend` / `needs_bootstrap` / `settle_emit`)(§3.1。当初実装した `observe_chunk` / `note_user_input` の即時フラッシュ判定は `DamageVerdict` の廃止に伴って後日削除され、現在は純粋なデバウンスのみ)
+- [ ] `pump` の emit ゲートを `needs_bootstrap() || is_due(now)` にして初回スナップショットを保証し、emit 成立時は `disarm` でなく `settle_emit` を呼ぶ(§3.1。orzma_vt `frame()` 完成後の結線 PR で。既存 pump テストのフィクスチャに bootstrap の settle が必要)
 - [ ] ChildExit を返す `pump` は deadline を待たず staged frame を強制 emit する(§3.2 派生。ホストが ChildExit で即 teardown しても最終出力が描画されるように)
 - [x] `Pty` に exit 読み取り口を追加し、`pump` が `TermSignal::ChildExit` を一度だけ emit するようにする(§3.2)
 - [x] DSR/DA 応答バイトを `pump` が 1 回の `write_all` で PTY へ書き戻す(§3.3。`Vt::interpret` の `VtUpdate::replies` 経由で配管済み。応答の生成自体は新 VT 実装側)
@@ -199,7 +197,7 @@
 ### Phase 5 — webview 契約(§4.1、§4.2)
 
 - [x] `history_base` / `history_size` の「別アプローチ」を placement 契約(`PlacementId` 採番 + フレーム搭載の `ProjectedPlacement` 一覧 + `WebviewEvicted`)として確定し、フレームから履歴カウンタを撤去する(§4.1)
-- [ ] placement 契約を VT 側に実装する: APC バイト位置での受理判定と `PlacementId` 採番、placement テーブル、`?2026` フラッシュ後サンプリング、毎 emit の viewport 射影(alt-screen 中は primary 由来の placement を一覧から外す)、履歴トリム・alt-screen 終了・飽和時の `WebviewEvicted` 通知、placement 変化時のダメージステージ(§4.1。契約本文は `crates/orzma_vt/src/lib.rs`)
+- [ ] ストア実装済み・`Interpreter` 結線残: `PlacementId` 採番、placement テーブル、`mount` / `unmount`、毎 emit の viewport 射影(`project`。alt-screen 中は primary 由来の placement を一覧から外す)、`evict_lost_anchors`、`switch_screen` による alt-screen 離脱時のテーブル整理は `crates/orzma_vt/src/placement.rs` に実装済み。残るのは `Interpreter` 側の結線 — APC バイト位置での受理判定、`?2026` フラッシュ後サンプリング、履歴トリム・alt-screen 終了・飽和時に `evict_lost_anchors` / `switch_screen` を呼んで `WebviewEvicted` を発行する経路、placement 変化時のダメージステージ(§4.1。契約本文は `crates/orzma_vt/src/lib.rs`)
 - [ ] スナップショットでの絶対 mode 状態の再同期手段(旧 `modes: Vec<String>` 相当)と「alt-screen 遷移は必ず Snapshot で届く」不変条件の置き場所を決める(§4.2。alt-screen 中の webview 表示可否は placement 一覧側で解決済み)
 
 ### orzma_vt 側の実装時に併せて運ぶ仕様(§5)
