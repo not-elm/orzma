@@ -72,8 +72,8 @@ impl Grid {
     }
 
     /// Overwrites the given column range of one visible row with `fill`.
-    pub fn fill_visible_row_range(&mut self, line: u16, columns: Range<u16>, fill: Cell) {
-        let index = self.visible_index(line);
+    pub fn fill_visible_row_range(&mut self, line: ScreenLine, columns: Range<u16>, fill: Cell) {
+        let index = self.visible_index(line.0);
         // NOTE: `Row`'s own `Index<u16>` shadows the slice's range
         // indexing, so the row has to reach the slice through `DerefMut`
         // before a range can be applied.
@@ -275,7 +275,7 @@ mod tests {
         for column in 0..4 {
             grid[ScreenLine(0)][column].c = 'x';
         }
-        grid.fill_visible_row_range(0, 1..3, Cell::default());
+        grid.fill_visible_row_range(ScreenLine(0), 1..3, Cell::default());
         assert_eq!(grid[ScreenLine(0)][0].c, 'x');
         assert_eq!(grid[ScreenLine(0)][1].c, ' ');
         assert_eq!(grid[ScreenLine(0)][2].c, ' ');

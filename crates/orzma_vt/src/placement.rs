@@ -82,7 +82,7 @@ impl PlacementStore {
         instance_id: Option<String>,
     ) -> Option<PlacementId> {
         self.placements
-            .retain(|p| p.view_id != view_id || p.instance_id != instance_id);
+            .retain(|p| !p.addressed_by(&view_id, instance_id.as_deref()));
         if MAX_PLACEMENTS <= self.placements.len() {
             return None;
         }
@@ -117,9 +117,7 @@ impl PlacementStore {
         self.placements.retain(|p| match (view_id, instance_id) {
             (None, _) => false,
             (Some(view), None) => p.view_id != view,
-            (Some(view), Some(instance)) => {
-                p.view_id != view || p.instance_id.as_deref() != Some(instance)
-            }
+            (Some(view), Some(instance)) => !p.addressed_by(view, Some(instance)),
         });
         before != self.placements.len()
     }
@@ -137,15 +135,9 @@ impl PlacementStore {
         if self.is_empty() {
             return Vec::new();
         }
-        let mut evicted = Vec::new();
-        self.placements.retain(|p| {
-            if p.screen != active.kind() || active.viewport_row_of(p.anchor).is_some() {
-                return true;
-            }
-            evicted.push(p.id);
-            false
-        });
-        evicted
+        self.evict_where(|p| {
+            p.screen == active.kind() && active.viewport_row_of(p.anchor).is_none()
+        })
     }
 
     /// Applies an alternate-screen flip, tearing down the placements the
@@ -159,15 +151,7 @@ impl PlacementStore {
         if to == ScreenKind::Alternate {
             return Vec::new();
         }
-        let mut evicted = Vec::new();
-        self.placements.retain(|p| {
-            if p.screen == ScreenKind::Primary {
-                return true;
-            }
-            evicted.push(p.id);
-            false
-        });
-        evicted
+        self.evict_where(|p| p.screen != ScreenKind::Primary)
     }
 
     /// Number of live placements, across both screens.
@@ -179,6 +163,22 @@ impl PlacementStore {
     /// Whether the table holds no placements.
     fn is_empty(&self) -> bool {
         self.placements.is_empty()
+    }
+
+    /// Drops every placement `should_evict` accepts and returns their ids.
+    fn evict_where(
+        &mut self,
+        mut should_evict: impl FnMut(&Placement) -> bool,
+    ) -> Vec<PlacementId> {
+        let mut evicted = Vec::new();
+        self.placements.retain(|p| {
+            if should_evict(p) {
+                evicted.push(p.id);
+                return false;
+            }
+            true
+        });
+        evicted
     }
 }
 
@@ -192,6 +192,13 @@ struct Placement {
     cols: u16,
     view_id: String,
     instance_id: Option<String>,
+}
+
+impl Placement {
+    /// Whether this placement is the one `(view_id, instance_id)` addresses.
+    fn addressed_by(&self, view_id: &str, instance_id: Option<&str>) -> bool {
+        self.view_id == view_id && self.instance_id.as_deref() == instance_id
+    }
 }
 
 /// Upper bound on live placements per terminal, across both screens.

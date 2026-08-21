@@ -135,7 +135,7 @@ impl Screen {
             EraseLineMode::All => 0..cols,
         };
         self.grid
-            .fill_visible_row_range(self.state.line.0, columns, self.state.pen.erase_cell());
+            .fill_visible_row_range(self.state.line, columns, self.state.pen.erase_cell());
         Some(self.damage_span(self.state.line, self.state.line))
     }
 
@@ -146,22 +146,21 @@ impl Screen {
         let blank = self.state.pen.erase_cell();
         match mode {
             EraseScreenMode::Below => {
-                self.grid.fill_visible_row_range(
-                    self.state.line.0,
-                    self.state.column.0..cols,
-                    blank,
-                );
+                self.grid
+                    .fill_visible_row_range(self.state.line, self.state.column.0..cols, blank);
                 for line in self.state.line.0 + 1..rows {
-                    self.grid.fill_visible_row_range(line, 0..cols, blank);
+                    self.grid
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
                 }
                 Some(self.damage_span(self.state.line, ScreenLine(rows - 1)))
             }
             EraseScreenMode::Above => {
                 for line in 0..self.state.line.0 {
-                    self.grid.fill_visible_row_range(line, 0..cols, blank);
+                    self.grid
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
                 }
                 self.grid.fill_visible_row_range(
-                    self.state.line.0,
+                    self.state.line,
                     0..self.state.column.0 + 1,
                     blank,
                 );
@@ -169,7 +168,8 @@ impl Screen {
             }
             EraseScreenMode::All => {
                 for line in 0..rows {
-                    self.grid.fill_visible_row_range(line, 0..cols, blank);
+                    self.grid
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
                 }
                 Some(Damage::Full)
             }
