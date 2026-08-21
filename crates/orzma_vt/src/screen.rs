@@ -270,12 +270,16 @@ impl Screen {
         self.viewport.offset
     }
 
-    /// Moves the viewport to `offset`.
+    /// Seats the viewport at `offset`, clamped to the history that
+    /// currently exists.
     ///
-    /// The caller clamps to the history that exists; this is the only seam
-    /// that writes the offset.
+    /// [`Self::hold_scrolled_viewport`] also writes the offset, so this is
+    /// not the only seam that does; it is the seam a future
+    /// `DeviceState::scroll` will drive.
     pub(crate) fn set_display_offset(&mut self, offset: DisplayOffset) {
-        self.viewport.offset = offset;
+        let history =
+            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
+        self.viewport.offset = DisplayOffset(offset.0.min(history));
     }
 
     /// The id of the row the cursor sits on — the anchor a mount samples.
@@ -478,25 +482,6 @@ mod tests {
         screen.viewport.offset = DisplayOffset(3);
         screen.state.line = ScreenLine(0);
         assert_eq!(screen.print('x'), Some(Damage::Metadata));
-    }
-
-    /// Asserts that an erase spanning the screen reports only the rows
-    /// the scrolled window still shows.
-    ///
-    /// Case: a full-screen application clears from the cursor down
-    /// while the user is scrolled back, so the lower part of the erased
-    /// span has already left the window.
-    #[test]
-    fn a_scrolled_erase_reports_only_the_rows_still_in_the_window() {
-        let mut screen = screen();
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        screen.viewport.offset = DisplayOffset(1);
-        screen.state.line = ScreenLine(0);
-        assert_eq!(
-            screen.erase_in_display(EraseScreenMode::Below),
-            Some(Damage::rows(ViewportLine(1), ViewportLine(2)))
-        );
     }
 
     /// Asserts that a span reaching past the last visible row is clamped

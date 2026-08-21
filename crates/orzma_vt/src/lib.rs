@@ -223,6 +223,7 @@ impl Vt for OrzmaVt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schema::ViewportLine;
 
     fn vt() -> OrzmaVt {
         OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10)
@@ -252,5 +253,29 @@ mod tests {
         let mut vt = vt();
         vt.frame();
         assert!(vt.frame().is_none());
+    }
+
+    /// Asserts that a print's viewport-space damage survives the
+    /// `Screen` → `DamageLedger` → `Frame` seam without the row it names
+    /// being confused with the screen-space row it was computed from.
+    ///
+    /// Case: a shell prints at the top of a fresh screen, that row
+    /// scrolls into history, and the user has scrolled back to it by the
+    /// time the frame for that print is finally emitted.
+    #[test]
+    fn a_staged_print_survives_the_composed_pipeline() {
+        let mut vt = vt();
+        vt.frame();
+        let damage = vt.device.active_mut().print('x');
+        vt.damage.stage_if_changed(damage);
+        for _ in 0..3 {
+            vt.device.active_mut().lf();
+        }
+        vt.device.active_mut().set_display_offset(DisplayOffset(1));
+        let Some(Frame::Delta(delta)) = vt.frame() else {
+            panic!("staged row damage emits a delta");
+        };
+        assert_eq!(delta.dirty_rows[0].line, ViewportLine(0));
+        assert_eq!(delta.dirty_rows[0].contents[0].text, "x   ");
     }
 }

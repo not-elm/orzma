@@ -338,12 +338,13 @@ mod tests {
         /// Asserts that merging partial damage yields the ascending,
         /// duplicate-free union.
         ///
+        /// A single backend read already arrives normalized, so this
+        /// merge only has to handle the cross-read case: unioning damage
+        /// from two separate reads before one emit.
+        ///
         /// Case: damage from an interpreted chunk and from a selection
-        /// change meets in the staged value before one emit. A single
-        /// backend read is already normalized, so this exists only for
-        /// that cross-read merge; keeping append order would leave a
-        /// duplicate that `classify` reports as `ManyRows` instead of
-        /// `AtMostOneRow`.
+        /// change both land in the staged value before the same frame is
+        /// emitted.
         #[test]
         fn merging_partial_damage_unions_sorts_and_dedups_the_rows() {
             let mut interleaved =

@@ -15,7 +15,7 @@ use std::sync::mpsc::Sender;
 use crate::{
     damage::DamageLedger, device::DeviceState, placement::PlacementStore, schema::VtSignal,
 };
-use vtparse::{VTActor, VTParser};
+use vtparse::{CsiParam, VTActor, VTParser};
 
 /// The parser plus the bytes a synchronized update is holding back.
 pub(crate) struct Interpreter {
@@ -130,12 +130,7 @@ impl VTActor for Executor<'_> {
         todo!()
     }
 
-    fn csi_dispatch(
-        &mut self,
-        _params: &[vtparse::CsiParam],
-        _parameters_truncated: bool,
-        _byte: u8,
-    ) {
+    fn csi_dispatch(&mut self, _params: &[CsiParam], _parameters_truncated: bool, _byte: u8) {
         todo!()
     }
 

@@ -11,8 +11,9 @@ use crate::schema::{GridColumn, PlacementId, ProjectedPlacement, ScreenKind};
 use crate::screen::grid::LineId;
 
 /// The placement table: minted ids, line anchors, and occupancy spans.
-// TODO: Carry the per-line occupancy spans and the anchor bookkeeping
-// `HistoryEvent` drives.
+// TODO: Carry the per-line occupancy spans a mount reserves. Anchors
+// already resolve per emit as `LineId`s, so only that reservation
+// bookkeeping remains unimplemented.
 pub(crate) struct PlacementStore {
     next_id: PlacementId,
     placements: Vec<Placement>,
@@ -65,6 +66,9 @@ impl PlacementStore {
     /// the host re-points the same entity at the successor and would
     /// despawn it if the superseded id were named.
     ///
+    /// The caller stages `Damage::Metadata` when this returns `Some`, so
+    /// the placement list a mount changes always reaches the next frame.
+    ///
     /// # Invariants
     ///
     /// The replacement runs before the cap check: a re-mount frees the
@@ -105,6 +109,9 @@ impl PlacementStore {
     ///
     /// Client-initiated, so nothing is reported as evicted — the host
     /// acts on the verb itself.
+    ///
+    /// The caller stages `Damage::Metadata` when this returns `true`, so a
+    /// change to the placement list always reaches the next frame.
     pub fn unmount(&mut self, view_id: Option<&str>, instance_id: Option<&str>) -> bool {
         let before = self.placements.len();
         self.placements.retain(|p| match (view_id, instance_id) {
@@ -123,6 +130,9 @@ impl PlacementStore {
     /// Only the active screen can be checked, which is sound while the
     /// inactive grid never scrolls. Reflow breaks that and will have to
     /// sweep both.
+    ///
+    /// The caller stages `Damage::Metadata` when the returned list is
+    /// non-empty, so an eviction always reaches the next frame.
     pub fn evict_lost_anchors(&mut self, active: ActiveScreen<'_>) -> Vec<PlacementId> {
         if self.is_empty() {
             return Vec::new();
@@ -161,6 +171,7 @@ impl PlacementStore {
     }
 
     /// Number of live placements, across both screens.
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.placements.len()
     }
@@ -390,5 +401,26 @@ mod tests {
         let device = device();
         let mut store = PlacementStore::new();
         assert!(store.evict_lost_anchors(device.active_screen()).is_empty());
+    }
+
+    /// Asserts that a sweep skips a placement mounted on the other screen
+    /// instead of resolving its anchor against the active screen's grid.
+    ///
+    /// Case: a full-screen editor is open over a shell with a webview
+    /// mounted, and a sweep runs while the editor's alternate screen is
+    /// active.
+    #[test]
+    fn a_sweep_leaves_the_other_screens_placement_alone() {
+        let mut device = device();
+        let mut store = PlacementStore::new();
+        let primary = mount(&mut store, &device, "memo").expect("mount accepted");
+
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+        assert!(store.evict_lost_anchors(device.active_screen()).is_empty());
+
+        device.set_active_screen_for_test(ScreenKind::Primary);
+        let projected = store.project(device.active_screen());
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].id, primary);
     }
 }

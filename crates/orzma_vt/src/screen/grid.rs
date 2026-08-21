@@ -22,7 +22,7 @@ use std::ops::{Index, IndexMut, Range};
 /// alternate screens own separate grids that both start at zero, so
 /// resolving an id against the wrong one silently names a different row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LineId(u64);
+pub(crate) struct LineId(u64);
 
 /// Storage-only grid: scrollback history plus the visible screen in
 /// one ring.
