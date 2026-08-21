@@ -90,6 +90,10 @@ impl VTActor for Executor<'_> {
             0x07 => {
                 let _ = self.signal_tx.send(VtSignal::Bell);
             }
+            0x08 => {
+                let damage = self.device.active_mut().bs();
+                self.damage.stage_if_changed(damage);
+            }
             0x09 => {
                 let damage = self.device.active_mut().ht();
                 self.damage.stage_if_changed(damage);

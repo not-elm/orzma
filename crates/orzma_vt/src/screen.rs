@@ -114,6 +114,34 @@ impl Screen {
         }
     }
 
+    /// Moves the cursor one column left and disarms the deferred wrap.
+    ///
+    /// The cursor stops at column zero rather than wrapping back onto
+    /// the previous row: xterm reaches that row only under
+    /// reverse-wraparound (`DECSET 45` / `DECSET 1045`), which is off by
+    /// default and unimplemented here, and it additionally requires
+    /// autowrap to be on.
+    ///
+    /// Reports no damage when the cursor already sits at column zero
+    /// with the wrap disarmed, on the same reasoning as [`Screen::cr`].
+    ///
+    /// # Invariants
+    ///
+    /// The deferred wrap is disarmed even when the column does not
+    /// change, and the column steps back even when the wrap was armed.
+    /// xterm's `CursorBack` decrements unconditionally without
+    /// reverse-wraparound and ends in `ResetWrap`, so a backspace after
+    /// a full row lands one column short of the cell just written, not
+    /// on it.
+    pub fn bs(&mut self) -> Option<Damage> {
+        if self.state.column == GridColumn(0) && !self.state.pending_wrap {
+            return None;
+        }
+        self.state.column = GridColumn(self.state.column.0.saturating_sub(1));
+        self.state.pending_wrap = false;
+        Some(Damage::Metadata)
+    }
+
     /// Rewinds the cursor to column zero and disarms the deferred wrap.
     ///
     /// Reports no damage when the cursor already sits at column zero
@@ -561,6 +589,80 @@ mod tests {
             screen.viewport.offset = DisplayOffset(3);
             screen.state.line = ScreenLine(0);
             assert_eq!(screen.print('x'), Some(Damage::Metadata));
+        }
+    }
+
+    mod bs {
+        use super::*;
+
+        /// Asserts that a backspace steps the cursor one column left and
+        /// reports cursor-only damage.
+        ///
+        /// Case: a shell line editor erases the character the user just
+        /// typed, moving left before overwriting it with a space.
+        #[test]
+        fn backspace_moves_the_cursor_one_column_left() {
+            let mut screen = screen();
+            screen.state.column = GridColumn(2);
+            let damage = screen.bs();
+            assert_eq!(screen.state.column, GridColumn(1));
+            assert_eq!(damage, Some(Damage::Metadata));
+        }
+
+        /// Asserts that a backspace at column zero leaves the cursor
+        /// where it is and reports no damage.
+        ///
+        /// The agreed policy stops at the left edge rather than wrapping
+        /// back onto the previous row. xterm reaches that row only under
+        /// reverse-wraparound, which is off by default and additionally
+        /// requires autowrap.
+        ///
+        /// Case: a program emits more backspaces than it printed
+        /// characters, running past the start of the line.
+        #[test]
+        fn a_backspace_at_column_zero_does_not_move() {
+            let mut screen = screen();
+            assert_eq!(screen.bs(), None);
+            assert_eq!(screen.state.column, GridColumn(0));
+        }
+
+        /// Asserts that a backspace after a full row both steps back and
+        /// disarms the deferred wrap.
+        ///
+        /// The agreed policy lands one column short of the cell just
+        /// written rather than on it. xterm's `CursorBack` decrements
+        /// unconditionally without reverse-wraparound and then calls
+        /// `ResetWrap`, so the step and the disarm both happen.
+        ///
+        /// Case: an application fills a row to its last cell and then
+        /// backs up to overwrite the character before the last one.
+        #[test]
+        fn a_backspace_after_a_full_row_steps_back_and_disarms_the_wrap() {
+            let mut screen = screen();
+            for c in ['a', 'b', 'c', 'd'] {
+                screen.print(c);
+            }
+            assert!(screen.state.pending_wrap);
+            screen.bs();
+            assert_eq!(screen.state.column, GridColumn(2));
+            assert!(!screen.state.pending_wrap);
+        }
+
+        /// Asserts that a backspace at column zero still reports damage
+        /// while the deferred wrap is armed.
+        ///
+        /// Case: a one-column screen prints a character, which arms the
+        /// wrap without ever leaving column zero, and the application
+        /// then emits a backspace.
+        #[test]
+        fn a_backspace_at_column_zero_disarms_a_pending_wrap() {
+            let mut screen = Screen::new(GridSize { cols: 1, rows: 3 }, 10);
+            screen.print('x');
+            assert!(screen.state.pending_wrap);
+            let damage = screen.bs();
+            assert_eq!(screen.state.column, GridColumn(0));
+            assert!(!screen.state.pending_wrap);
+            assert_eq!(damage, Some(Damage::Metadata));
         }
     }
 
