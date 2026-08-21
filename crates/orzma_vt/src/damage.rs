@@ -201,8 +201,9 @@ impl RowBits {
     ///
     /// # Invariants
     ///
-    /// `first <= last`. A reversed span ORs two unrelated masks and
-    /// skips the middle fill, setting wrong bits without panicking.
+    /// `first <= last`. The `debug_assert!` catches a reversed span in a
+    /// debug build; in release the masks and the buffer sizing both
+    /// assume the ordering, so the result is meaningless.
     fn set_span(&mut self, first: ViewportLine, last: ViewportLine) {
         debug_assert!(first <= last, "a damage span runs top to bottom");
         let (first, last) = (usize::from(first.0), usize::from(last.0));
@@ -213,7 +214,7 @@ impl RowBits {
         // NOTE: both shift amounts stay within `0..=63` by construction.
         // The natural last-word mask `!(u64::MAX << (last % 64 + 1))`
         // shifts by 64 when `last % 64 == 63`, which Rust treats as
-        // arithmetic overflow and panics on in a debug build.
+        // arithmetic overflow and panics in a debug build.
         let head = u64::MAX << (first % 64);
         let tail = u64::MAX >> (63 - last % 64);
         let (first_word, last_word) = (first / 64, last / 64);
@@ -545,24 +546,26 @@ mod tests {
             assert_eq!(rows_of(&bits), [0, 20]);
         }
 
-        /// Asserts that clearing empties the set without releasing the
-        /// buffer, so later staging does not allocate again.
+        /// Asserts that clearing drops every set row, so a later span yields
+        /// exactly its own rows and none of the ones it replaced.
         ///
-        /// The distinction matters: `Vec::clear` would set the length to
-        /// zero and make the next span re-grow the buffer, which is exactly
-        /// the per-character allocation this type exists to remove.
+        /// The buffer itself is deliberately kept: `clear` is `fill(0)`, not
+        /// `Vec::clear`, so the element for every row ever staged stays
+        /// allocated and the length remains the high-water mark.
         ///
         /// Case: a frame is emitted and the next chunk starts staging into
         /// the same terminal's ledger.
         #[test]
-        fn clearing_empties_the_set_but_keeps_the_buffer() {
+        fn clearing_drops_every_set_row() {
             let mut bits = span(0, 200);
-            let capacity = bits.0.capacity();
+            let len = bits.0.len();
             bits.clear();
             assert_eq!(bits.count_ones(), 0);
             assert_eq!(rows_of(&bits), Vec::<u16>::new());
+
             bits.set_span(ViewportLine(200), ViewportLine(200));
-            assert_eq!(bits.0.capacity(), capacity, "staging re-allocated");
+            assert_eq!(rows_of(&bits), [200], "a cleared bit came back");
+            assert_eq!(bits.0.len(), len, "clear must not shorten the buffer");
         }
     }
 }
