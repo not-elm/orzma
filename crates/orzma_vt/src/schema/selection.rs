@@ -3,8 +3,6 @@
 //! range the VT reports back ([`SelectionRange`]).
 
 use crate::schema::GridPoint;
-#[cfg(feature = "alacritty")]
-use alacritty_terminal::{index::Side, selection::SelectionType};
 
 /// A renderable selection: normalized active-grid endpoints plus the
 /// shape they span.
@@ -63,27 +61,6 @@ pub enum SelectionKind {
     Lines,
 }
 
-#[cfg(feature = "alacritty")]
-impl From<SelectionType> for SelectionKind {
-    fn from(value: SelectionType) -> Self {
-        match value {
-            SelectionType::Simple => SelectionKind::Simple,
-            SelectionType::Lines => SelectionKind::Lines,
-            _ => todo!("Not supported yet"),
-        }
-    }
-}
-
-#[cfg(feature = "alacritty")]
-impl From<SelectionKind> for SelectionType {
-    fn from(value: SelectionKind) -> Self {
-        match value {
-            SelectionKind::Simple => Self::Simple,
-            SelectionKind::Lines => Self::Lines,
-        }
-    }
-}
-
 /// Which half of a cell a selection endpoint sits in.
 ///
 /// Decides whether the cell under the cursor is included: an endpoint on the
@@ -95,14 +72,4 @@ pub enum CellSide {
     Left,
     /// Right half.
     Right,
-}
-
-#[cfg(feature = "alacritty")]
-impl From<CellSide> for Side {
-    fn from(value: CellSide) -> Self {
-        match value {
-            CellSide::Left => Self::Left,
-            CellSide::Right => Self::Right,
-        }
-    }
 }

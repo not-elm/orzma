@@ -44,14 +44,6 @@ impl GridLine {
     }
 }
 
-#[cfg(feature = "alacritty")]
-impl From<alacritty_terminal::index::Line> for GridLine {
-    #[inline]
-    fn from(value: alacritty_terminal::index::Line) -> Self {
-        GridLine(value.0)
-    }
-}
-
 /// A line in viewport coordinates: `0` is the topmost visible row.
 ///
 /// It is the viewport projection of a [`GridLine`], related by
@@ -101,29 +93,6 @@ pub struct GridPoint {
     pub line: GridLine,
     /// 0-based grid column.
     pub column: GridColumn,
-}
-
-#[cfg(feature = "alacritty")]
-impl From<alacritty_terminal::index::Point> for GridPoint {
-    fn from(value: alacritty_terminal::index::Point) -> Self {
-        Self {
-            line: value.line.into(),
-            column: GridColumn(value.column.0 as u16),
-        }
-    }
-}
-
-#[cfg(feature = "alacritty")]
-impl From<GridPoint> for alacritty_terminal::index::Point {
-    /// Converts literally, without clamping: a selection drag that
-    /// left the viewport names a real scrollback line, and
-    /// `Selection::to_range` clamps to the grid on its own.
-    fn from(value: GridPoint) -> Self {
-        Self {
-            line: alacritty_terminal::index::Line(value.line.0),
-            column: alacritty_terminal::index::Column(usize::from(value.column.0)),
-        }
-    }
 }
 
 #[cfg(test)]

@@ -1,8 +1,5 @@
 //! `Scroll`: the viewport motion vocabulary a VT applies to its grid.
 
-#[cfg(feature = "alacritty")]
-use alacritty_terminal::grid::Scroll as AlacrittyScroll;
-
 /// A viewport motion over the scrollback, clamped by the VT at both
 /// the oldest retained line and the live tail.
 ///
@@ -27,23 +24,4 @@ pub enum Scroll {
     Top,
     /// The live tail.
     Bottom,
-}
-
-impl Scroll {
-    /// Converts to alacritty's `Scroll`, resolving the half-page
-    /// variants — which alacritty's enum lacks — into a `Delta` of
-    /// `screen_lines / 2` rows.
-    #[cfg(feature = "alacritty")]
-    pub fn to_alacritty_scroll(&self, screen_lines: u16) -> AlacrittyScroll {
-        let half_page = i32::from(screen_lines / 2);
-        match self {
-            Self::Delta(n) => AlacrittyScroll::Delta(*n),
-            Self::PageUp => AlacrittyScroll::PageUp,
-            Self::PageDown => AlacrittyScroll::PageDown,
-            Self::HalfPageUp => AlacrittyScroll::Delta(half_page),
-            Self::HalfPageDown => AlacrittyScroll::Delta(-half_page),
-            Self::Top => AlacrittyScroll::Top,
-            Self::Bottom => AlacrittyScroll::Bottom,
-        }
-    }
 }

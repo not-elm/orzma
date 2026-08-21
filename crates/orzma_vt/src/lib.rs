@@ -2,8 +2,7 @@
 //!
 //! [`schema`] declares the vocabulary; the crate root defines [`Vt`],
 //! the protocol between a self-contained terminal emulator and its
-//! owner. [`vt`] holds the superseded [`vt::OldOrzmaVt`] +
-//! [`vt::VtBackend`] pair until the migration to [`Vt`] completes.
+//! owner, and [`OrzmaVt`], the implementation of that protocol.
 
 use crate::{
     damage::DamageLedger,
@@ -22,10 +21,9 @@ mod interpreter;
 mod placement;
 pub mod schema;
 pub mod screen;
-pub mod vt;
 
 pub mod prelude {
-    pub use crate::{Vt, VtUpdate, damage::*, schema::*, vt::*};
+    pub use crate::{OrzmaVt, Vt, VtUpdate, damage::*, schema::*};
 }
 
 /// The terminal-emulation contract `OrzmaTerm` drives and the host
@@ -136,11 +134,10 @@ pub struct VtUpdate {
     pub replies: Vec<u8>,
 }
 
-/// The forthcoming self-contained implementation of [`Vt`], replacing
-/// the [`vt::OldOrzmaVt`] + [`vt::VtBackend`] pair.
+/// The self-contained implementation of [`Vt`].
 ///
-/// The fields are wired; every method is still a stub. The components
-/// land one at a time, in the order
+/// The fields are wired; several methods are still stubs. The
+/// components land one at a time, in the order
 /// `docs/orzma_vt_internal_design.md` §7 sets out.
 #[expect(
     dead_code,

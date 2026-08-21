@@ -3,8 +3,8 @@
 use crate::schema::{ApcWebviewVerb, PlacementId};
 use std::path::PathBuf;
 
-/// Out-of-band signal parsed from the VT byte stream, drained by the
-/// owner via `OldOrzmaVt::drain_signals`.
+/// Out-of-band signal parsed from the VT byte stream, handed to the
+/// owner in [`crate::VtUpdate::signals`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VtSignal {
     Bell,

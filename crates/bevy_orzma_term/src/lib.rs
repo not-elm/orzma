@@ -6,7 +6,7 @@ use bevy::prelude::*;
 #[cfg(any(test, feature = "test-support"))]
 use orzma_term::test_support::CaptureSink;
 use orzma_term::{OrzmaTerm, SpawnOptions, prelude::OrzmaTermResult};
-use orzma_vt::prelude::{AlacrittyVtBackend, OldOrzmaVt};
+use orzma_vt::prelude::{GridSize, OrzmaVt};
 
 mod requests;
 mod signals;
@@ -16,14 +16,23 @@ pub mod prelude {
 }
 
 /// A live terminal owned by one Bevy entity: the PTY-backed
-/// [`OrzmaTerm`] driving the legacy alacritty-backed VT.
+/// [`OrzmaTerm`] driving an [`OrzmaVt`].
 #[derive(Component, Deref, DerefMut)]
-pub struct OrzmaTermHandle(OrzmaTerm<OldOrzmaVt<AlacrittyVtBackend>>);
+pub struct OrzmaTermHandle(OrzmaTerm<OrzmaVt>);
 
 impl OrzmaTermHandle {
+    /// Scrollback rows every terminal retains on its primary screen.
+    const MAX_HISTORY: usize = 10_000;
+
     /// Spawns the login shell under a new PTY and wraps it in a handle.
     pub fn new(options: SpawnOptions) -> OrzmaTermResult<Self> {
-        let vt = OldOrzmaVt::<AlacrittyVtBackend>::new(options.cols, options.rows);
+        let vt = OrzmaVt::new(
+            GridSize {
+                cols: options.cols,
+                rows: options.rows,
+            },
+            Self::MAX_HISTORY,
+        );
         Ok(Self(OrzmaTerm::spawn(vt, options)?))
     }
 }
@@ -45,7 +54,7 @@ impl OrzmaTermHandle {
     /// the observers put on the PTY write seam.
     pub fn detached(cols: u16, rows: u16) -> (Self, CaptureSink) {
         let sink = CaptureSink::default();
-        let vt = OldOrzmaVt::<AlacrittyVtBackend>::new(cols, rows);
+        let vt = OrzmaVt::new(GridSize { cols, rows }, Self::MAX_HISTORY);
         let term = OrzmaTerm::detached(vt, cols, rows, Box::new(sink.clone()))
             .expect("OrzmaTerm::detached failed");
         (Self(term), sink)

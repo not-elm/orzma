@@ -11,12 +11,6 @@ publish.workspace = true
 [dependencies]
 bitflags = { workspace = true }
 vtparse = { version = "0.7.0" }
-alacritty_terminal = { version = "0.26", optional = true }
-thiserror = { workspace = true }
 
 [lints]
 workspace = true
-
-[features]
-default = ["alacritty"]
-alacritty = ["dep:alacritty_terminal"]

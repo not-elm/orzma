@@ -1,9 +1,8 @@
 //! Damage vocabulary and the ledger that stages it.
 //!
-//! [`StagedDamage`] is what one source reports for a single damage
-//! cycle. [`DamageLedger`] accumulates what interpretation, scrolling,
+//! [`DamageLedger`] accumulates what interpretation, scrolling,
 //! resizing, and placement changes each report per call and hands the
-//! merged result to the frame emitter.
+//! merged result to the frame emitter as a [`StagedDamage`].
 //! Staging merges rather than replaces: a source reports only what its
 //! own call produced, so an overwritten staged value would drop a
 //! repaint no later call re-reports.
@@ -14,12 +13,7 @@
 //! character would dominate the interpreter's cost.
 
 use crate::schema::ViewportLine;
-#[cfg(feature = "alacritty")]
-use alacritty_terminal::{Term, term::TermDamage};
-use std::{
-    iter,
-    ops::{BitOrAssign, Deref},
-};
+use std::{iter, ops::Deref};
 
 /// Viewport damage the VT reported in a single damage cycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,58 +22,6 @@ pub enum StagedDamage {
     Full,
     /// Only the carried rows are dirty.
     Delta(DamageRows),
-}
-
-impl StagedDamage {
-    /// Reads alacritty's accumulated damage for one cycle.
-    ///
-    /// # Invariants
-    ///
-    /// `Term::damage()` consumes its own `last_cursor` bookkeeping, so it must
-    /// be called exactly once per cycle, and the caller must
-    /// `Term::reset_damage()` immediately after the read so the next cycle
-    /// reports only its own damage — a skipped reset latches `damage.full`
-    /// and every later cycle reports `Full`.
-    #[cfg(feature = "alacritty")]
-    pub fn from_alacritty_term<T>(term: &mut Term<T>) -> Self {
-        match term.damage() {
-            TermDamage::Full => Self::Full,
-            TermDamage::Partial(iter) => Self::Delta(
-                iter.map(|d| {
-                    ViewportLine(
-                        u16::try_from(d.line).expect("a terminal's viewport rows fit in u16"),
-                    )
-                })
-                .collect(),
-            ),
-        }
-    }
-}
-
-/// Merges damage, keeping whichever repaint is the larger of the two.
-///
-/// [`StagedDamage::Full`] absorbs anything and an empty
-/// [`StagedDamage::Delta`] is the identity, so a staged value can start
-/// from an empty set and fold every later reading in.
-impl BitOrAssign for StagedDamage {
-    fn bitor_assign(&mut self, rhs: Self) {
-        match (self, rhs) {
-            (Self::Full, _) => {}
-            (staged, Self::Full) => *staged = Self::Full,
-            (Self::Delta(staged), Self::Delta(incoming)) => {
-                if incoming.0.is_empty() {
-                    return;
-                }
-                if staged.0.is_empty() {
-                    *staged = incoming;
-                    return;
-                }
-                staged.0.extend(incoming.0);
-                staged.0.sort_unstable();
-                staged.0.dedup();
-            }
-        }
-    }
 }
 
 /// Dirty viewport row indices, ascending and without duplicates.
@@ -94,17 +36,12 @@ impl Deref for DamageRows {
     }
 }
 
-impl From<Vec<ViewportLine>> for DamageRows {
-    fn from(mut rows: Vec<ViewportLine>) -> Self {
+impl FromIterator<ViewportLine> for DamageRows {
+    fn from_iter<I: IntoIterator<Item = ViewportLine>>(iter: I) -> Self {
+        let mut rows: Vec<ViewportLine> = iter.into_iter().collect();
         rows.sort_unstable();
         rows.dedup();
         Self(rows)
-    }
-}
-
-impl FromIterator<ViewportLine> for DamageRows {
-    fn from_iter<I: IntoIterator<Item = ViewportLine>>(iter: I) -> Self {
-        Self::from(iter.into_iter().collect::<Vec<ViewportLine>>())
     }
 }
 
@@ -331,110 +268,6 @@ mod tests {
                     last: ViewportLine(4),
                 }
             );
-        }
-    }
-
-    mod staged_damage {
-        use super::super::*;
-
-        /// Asserts that merging partial damage yields the ascending,
-        /// duplicate-free union.
-        ///
-        /// A single backend read already arrives normalized, so this
-        /// merge only has to handle the cross-read case: unioning damage
-        /// from two separate reads before one emit.
-        ///
-        /// Case: damage from an interpreted chunk and from a selection
-        /// change both land in the staged value before the same frame is
-        /// emitted.
-        #[test]
-        fn merging_partial_damage_unions_sorts_and_dedups_the_rows() {
-            let mut interleaved =
-                StagedDamage::Delta(vec![ViewportLine(1), ViewportLine(3), ViewportLine(5)].into());
-            interleaved |=
-                StagedDamage::Delta(vec![ViewportLine(2), ViewportLine(3), ViewportLine(5)].into());
-            assert_eq!(
-                interleaved,
-                StagedDamage::Delta(
-                    vec![
-                        ViewportLine(1),
-                        ViewportLine(2),
-                        ViewportLine(3),
-                        ViewportLine(5)
-                    ]
-                    .into()
-                )
-            );
-
-            let mut descending = StagedDamage::Delta(vec![ViewportLine(5)].into());
-            descending |= StagedDamage::Delta(vec![ViewportLine(3)].into());
-            assert_eq!(
-                descending,
-                StagedDamage::Delta(vec![ViewportLine(3), ViewportLine(5)].into())
-            );
-
-            let mut repeated = StagedDamage::Delta(vec![ViewportLine(0), ViewportLine(1)].into());
-            repeated |= StagedDamage::Delta(vec![ViewportLine(0), ViewportLine(1)].into());
-            assert_eq!(
-                repeated,
-                StagedDamage::Delta(vec![ViewportLine(0), ViewportLine(1)].into())
-            );
-        }
-
-        /// Asserts that `Full` absorbs partial damage from either side.
-        ///
-        /// Case: a selection change demands a whole repaint, then a
-        /// one-row echo arrives before the emit. Both orders are pinned
-        /// because the two arms are asymmetric; letting the newest
-        /// damage win would leave the screen stale.
-        #[test]
-        fn full_damage_absorbs_partial_damage_from_either_side() {
-            let mut staged_full = StagedDamage::Full;
-            staged_full |= StagedDamage::Delta(vec![ViewportLine(0)].into());
-            assert_eq!(staged_full, StagedDamage::Full);
-
-            let mut incoming_full =
-                StagedDamage::Delta(vec![ViewportLine(0), ViewportLine(1)].into());
-            incoming_full |= StagedDamage::Full;
-            assert_eq!(incoming_full, StagedDamage::Full);
-
-            let mut both_full = StagedDamage::Full;
-            both_full |= StagedDamage::Full;
-            assert_eq!(both_full, StagedDamage::Full);
-
-            let mut full_then_empty = StagedDamage::Full;
-            full_then_empty |= StagedDamage::Delta(DamageRows::default());
-            assert_eq!(full_then_empty, StagedDamage::Full);
-        }
-
-        /// Asserts that an empty row set is the merge identity on both
-        /// sides.
-        ///
-        /// Case: the staging site folds an absent staged value in by
-        /// merging onto an empty `Delta`, so the identity is
-        /// load-bearing. An empty operand is a real reading — a viewport
-        /// scrolled fully into history — not a sentinel to discard the
-        /// other side for.
-        #[test]
-        fn an_empty_row_set_is_the_merge_identity() {
-            let mut empty_incoming =
-                StagedDamage::Delta(vec![ViewportLine(0), ViewportLine(2)].into());
-            empty_incoming |= StagedDamage::Delta(DamageRows::default());
-            assert_eq!(
-                empty_incoming,
-                StagedDamage::Delta(vec![ViewportLine(0), ViewportLine(2)].into())
-            );
-
-            let mut empty_staged = StagedDamage::Delta(DamageRows::default());
-            empty_staged |= StagedDamage::Delta(vec![ViewportLine(0), ViewportLine(2)].into());
-            assert_eq!(
-                empty_staged,
-                StagedDamage::Delta(vec![ViewportLine(0), ViewportLine(2)].into())
-            );
-
-            let mut both_empty = StagedDamage::Delta(DamageRows::default());
-            both_empty |= StagedDamage::Delta(DamageRows::default());
-            assert_eq!(both_empty, StagedDamage::Delta(DamageRows::default()));
         }
     }
 

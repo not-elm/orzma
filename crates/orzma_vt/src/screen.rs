@@ -1309,9 +1309,10 @@ mod tests {
         /// leaves the viewed content where it was.
         ///
         /// The agreed policy holds the viewport still rather than letting
-        /// it drift with the live tail: `VtBackend::scroll` already pins
-        /// "the viewport holds its position while the PTY emits output",
-        /// and every terminal that keeps scrollback behaves this way.
+        /// it drift with the live tail: DECSET 1010 (`scrollTtyOutput`)
+        /// stays off, so the viewport holds its position while the PTY
+        /// emits output, and every terminal that keeps scrollback
+        /// behaves this way.
         ///
         /// Case: the user is reading an earlier command's output when a
         /// background build prints its next line.
