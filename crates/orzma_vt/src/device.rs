@@ -10,7 +10,7 @@
     reason = "the executor and the frame emitter reach this state once they land"
 )]
 
-use crate::damage::StagedDamage;
+use crate::damage::Damage;
 use crate::schema::{DisplayOffset, GridSize, Palette, ScreenKind, Scroll, VtModes};
 use crate::screen::Screen;
 
@@ -73,12 +73,12 @@ impl DeviceState {
     // TODO: Forward the `HistoryEvent::Reflowed` the reflow produces to
     // `PlacementStore` so anchors survive; the store is a sibling
     // field, so the caller has to route it.
-    pub fn resize(&mut self, _size: GridSize) -> Option<StagedDamage> {
+    pub fn resize(&mut self, _size: GridSize) -> Option<Damage> {
         todo!()
     }
 
     /// Moves the active viewport; `None` for a clamped or zero motion.
-    pub fn scroll(&mut self, _scroll: Scroll) -> Option<StagedDamage> {
+    pub fn scroll(&mut self, _scroll: Scroll) -> Option<Damage> {
         todo!()
     }
 

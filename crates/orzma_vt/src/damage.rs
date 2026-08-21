@@ -109,6 +109,25 @@ impl FromIterator<ViewportLine> for DamageRows {
     }
 }
 
+impl DamageRows {
+    /// Collects already-ascending, already-unique rows.
+    ///
+    /// # Invariants
+    ///
+    /// The iterator must yield rows ascending without repeats; the
+    /// ledger's bit walk does by construction. Feeding an unordered
+    /// iterator here silently violates this type's ordering contract.
+    fn from_ascending(count: usize, rows: impl Iterator<Item = ViewportLine>) -> Self {
+        let mut collected = Vec::with_capacity(count);
+        collected.extend(rows);
+        debug_assert!(
+            collected.is_sorted_by(|a, b| a < b),
+            "the ledger's bit walk yields rows ascending and unique"
+        );
+        Self(collected)
+    }
+}
+
 /// Classification of collected damage that drives the immediate-flush decision.
 ///
 /// The owner classifies once per interpreted chunk and keeps the matching
@@ -144,30 +163,49 @@ impl DamageVerdict {
 
 /// Damage staged for the next frame emit.
 pub(crate) struct DamageLedger {
-    staged: Option<StagedDamage>,
+    /// Damage staged for the next emit; `None` when nothing is.
+    staged: Option<Staged>,
+    /// Dirty-row bits, reused across frames so staging never allocates
+    /// on the per-character path. Meaningful only while `staged` is
+    /// `Some(Staged::Rows)`.
+    rows: RowBits,
 }
 
 impl DamageLedger {
     /// Builds a ledger with the bootstrap repaint already staged.
+    ///
+    /// # Invariants
+    ///
+    /// The seeded value is what makes the first emitted frame a
+    /// snapshot; a ledger that starts empty paints nothing until the
+    /// first PTY output arrives.
     pub fn new() -> Self {
         Self {
-            staged: Some(StagedDamage::Full),
+            staged: Some(Staged::Full),
+            rows: RowBits::default(),
         }
     }
 
     /// Merges `damage` into the staged value.
-    ///
-    /// Seeding an absent staged value with an empty row set is safe
-    /// because that set is the merge identity.
-    pub fn stage(&mut self, damage: StagedDamage) {
-        *self
-            .staged
-            .get_or_insert(StagedDamage::Delta(DamageRows::default())) |= damage;
+    pub fn stage(&mut self, damage: Damage) {
+        match (&self.staged, damage) {
+            (Some(Staged::Full), _) => {}
+            (_, Damage::Full) => {
+                self.staged = Some(Staged::Full);
+                self.rows.clear();
+            }
+            (_, Damage::Rows { first, last }) => {
+                self.staged = Some(Staged::Rows);
+                self.rows.set_span(first, last);
+            }
+            (None, Damage::Metadata) => self.staged = Some(Staged::Rows),
+            (Some(Staged::Rows), Damage::Metadata) => {}
+        }
     }
 
-    /// Stages the reported damage, if any; returns whether there was
-    /// any to stage.
-    pub fn stage_if_changed(&mut self, damage: Option<StagedDamage>) -> bool {
+    /// Stages the reported damage, if any; returns whether there was any
+    /// to stage.
+    pub fn stage_if_changed(&mut self, damage: Option<Damage>) -> bool {
         match damage {
             Some(damage) => {
                 self.stage(damage);
@@ -180,8 +218,26 @@ impl DamageLedger {
     /// Hands over the staged damage, leaving the ledger empty; `None`
     /// when nothing is staged.
     pub fn take(&mut self) -> Option<StagedDamage> {
-        self.staged.take()
+        let staged = self.staged.take()?;
+        let drained = match staged {
+            Staged::Full => StagedDamage::Full,
+            Staged::Rows => StagedDamage::Delta(DamageRows::from_ascending(
+                self.rows.count_ones(),
+                self.rows.rows(),
+            )),
+        };
+        self.rows.clear();
+        Some(drained)
     }
+}
+
+/// Which kind of damage the ledger holds.
+enum Staged {
+    /// Every viewport row.
+    Full,
+    /// The rows the ledger's bit set names. An empty set is the
+    /// metadata-only case: a frame must be emitted but repaints nothing.
+    Rows,
 }
 
 /// Viewport rows one operation damaged.
@@ -190,10 +246,6 @@ impl DamageLedger {
 /// between a screen operation and the ledger, where a `Vec` per printed
 /// character would dominate the interpreter's cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "the ledger and the screen producers reach this in later tasks"
-)]
 pub enum Damage {
     /// Entire viewport is dirty (resize, clear, alt-screen swap, reset).
     Full,
@@ -235,10 +287,6 @@ impl Damage {
 /// bits and draining turns them back into rows, so nothing is allocated
 /// once the buffer has grown to the viewport's height.
 #[derive(Debug, Default)]
-#[allow(
-    dead_code,
-    reason = "DamageLedger reaches this in Task 6; cfg(test) makes the lint conditional, so #[expect] would fire unfulfilled under cargo test"
-)]
 struct RowBits(Vec<u64>);
 
 impl RowBits {
@@ -458,104 +506,106 @@ mod tests {
     mod ledger {
         use super::super::*;
 
-        /// A ledger whose seeded bootstrap repaint has been consumed, so
-        /// a test observes only the damage it stages itself.
-        fn drained() -> DamageLedger {
+        fn rows(ledger: &mut DamageLedger) -> Vec<u16> {
+            match ledger.take() {
+                Some(StagedDamage::Delta(rows)) => rows.iter().map(|line| line.0).collect(),
+                other => panic!("expected a delta, got {other:?}"),
+            }
+        }
+
+        /// Asserts that a fresh ledger's first drain is a full repaint.
+        ///
+        /// Case: a terminal is spawned and paints its first frame before any
+        /// PTY output has arrived.
+        #[test]
+        fn a_fresh_ledger_drains_as_a_full_repaint() {
+            let mut ledger = DamageLedger::new();
+            assert!(matches!(ledger.take(), Some(StagedDamage::Full)));
+            assert!(ledger.take().is_none());
+        }
+
+        /// Asserts that row damage staged while a full repaint is pending is
+        /// discarded rather than retained.
+        ///
+        /// Leaving those bits set would leak them into a later
+        /// metadata-only frame, which repaints no rows and would then carry
+        /// rows staged against an older viewport.
+        ///
+        /// Case: a resize stages a full repaint and the shell keeps printing
+        /// before the frame is emitted.
+        #[test]
+        fn rows_staged_under_a_pending_full_repaint_are_discarded() {
             let mut ledger = DamageLedger::new();
             ledger.take();
-            ledger
+            ledger.stage(Damage::Full);
+            ledger.stage(Damage::rows(ViewportLine(5), ViewportLine(5)));
+            assert!(matches!(ledger.take(), Some(StagedDamage::Full)));
+            ledger.stage(Damage::Metadata);
+            assert_eq!(rows(&mut ledger), Vec::<u16>::new());
         }
 
-        /// Asserts that a freshly built ledger already has full damage
-        /// staged.
+        /// Asserts that spans accumulate across calls and drain ascending
+        /// without duplicates.
+        ///
+        /// Case: one PTY chunk prints on several rows before the coalescer's
+        /// window closes.
         #[test]
-        fn a_new_ledger_starts_with_full_damage_staged() {
+        fn staged_spans_accumulate_and_drain_ascending() {
             let mut ledger = DamageLedger::new();
-            assert_eq!(ledger.take(), Some(StagedDamage::Full));
+            ledger.take();
+            ledger.stage(Damage::rows(ViewportLine(3), ViewportLine(4)));
+            ledger.stage(Damage::rows(ViewportLine(0), ViewportLine(0)));
+            ledger.stage(Damage::rows(ViewportLine(3), ViewportLine(3)));
+            assert_eq!(rows(&mut ledger), [0, 3, 4]);
         }
 
-        /// Asserts that a second stage unions into the staged value
-        /// instead of overwriting it.
-        #[test]
-        fn staging_merges_rather_than_replacing() {
-            let mut ledger = drained();
-            ledger.stage(StagedDamage::Delta(
-                vec![ViewportLine(1), ViewportLine(2), ViewportLine(3)].into(),
-            ));
-            ledger.stage(StagedDamage::Delta(vec![ViewportLine(7)].into()));
-            assert_eq!(
-                ledger.take(),
-                Some(StagedDamage::Delta(
-                    vec![
-                        ViewportLine(1),
-                        ViewportLine(2),
-                        ViewportLine(3),
-                        ViewportLine(7)
-                    ]
-                    .into()
-                ))
-            );
-        }
-
-        /// Asserts that staging an empty row set leaves real staged
-        /// damage for a take to hand back, not an absent one.
+        /// Asserts that metadata-only damage still produces a frame, one
+        /// carrying no dirty rows.
         ///
-        /// Case: the viewport sits fully scrolled back into history
-        /// while the shell keeps writing at the live tail.
+        /// Case: a webview mounts while the viewport is scrolled back, so
+        /// the placement list changes with nothing on screen to repaint.
         #[test]
-        fn an_empty_row_set_stays_staged_damage_rather_than_collapsing_to_nothing() {
-            let mut ledger = drained();
-            ledger.stage(StagedDamage::Delta(DamageRows::default()));
-            assert_eq!(
-                ledger.take(),
-                Some(StagedDamage::Delta(DamageRows::default()))
-            );
+        fn metadata_damage_drains_as_a_delta_with_no_rows() {
+            let mut ledger = DamageLedger::new();
+            ledger.take();
+            ledger.stage(Damage::Metadata);
+            assert_eq!(rows(&mut ledger), Vec::<u16>::new());
+            assert!(ledger.take().is_none());
         }
 
-        /// Asserts that a take hands over the staged damage and leaves
-        /// the ledger empty, so nothing it consumed reappears
-        /// afterwards.
+        /// Asserts that `stage_if_changed` reports whether it staged
+        /// anything.
         ///
-        /// Case: the coalescer's deadline fires and builds one frame,
-        /// fires again with no PTY output in between, and then a later
-        /// chunk dirties a different row.
-        #[test]
-        fn take_hands_over_the_staged_damage_and_then_reports_nothing_staged() {
-            let mut ledger = drained();
-            ledger.stage(StagedDamage::Delta(vec![ViewportLine(4)].into()));
-            assert_eq!(
-                ledger.take(),
-                Some(StagedDamage::Delta(vec![ViewportLine(4)].into()))
-            );
-            assert_eq!(ledger.take(), None);
-
-            ledger.stage(StagedDamage::Delta(vec![ViewportLine(9)].into()));
-            assert_eq!(
-                ledger.take(),
-                Some(StagedDamage::Delta(vec![ViewportLine(9)].into()))
-            );
-        }
-
-        /// Asserts that staging an optional damage reports whether one
-        /// was present, and leaves the staged value untouched when it
-        /// was not.
-        ///
-        /// Case: the host resizes the window to the size it already had
-        /// while an earlier chunk's damage still waits for the next
-        /// emit, and later the user scrolls the viewport back into
-        /// scrollback history.
+        /// Case: a scroll request is clamped to a no-op and its caller must
+        /// learn the viewport did not move.
         #[test]
         fn stage_if_changed_reports_whether_anything_was_staged() {
-            let mut ledger = drained();
-            ledger.stage(StagedDamage::Delta(vec![ViewportLine(2)].into()));
+            let mut ledger = DamageLedger::new();
+            ledger.take();
             assert!(!ledger.stage_if_changed(None));
-            assert_eq!(
-                ledger.take(),
-                Some(StagedDamage::Delta(vec![ViewportLine(2)].into()))
-            );
+            assert!(ledger.take().is_none());
+            assert!(ledger.stage_if_changed(Some(Damage::Full)));
+            assert!(matches!(ledger.take(), Some(StagedDamage::Full)));
+        }
 
-            assert!(ledger.stage_if_changed(Some(StagedDamage::Full)));
-            assert_eq!(ledger.take(), Some(StagedDamage::Full));
+        /// Asserts that a full repaint clears the bits it supersedes, so a
+        /// later shrink cannot surface a row past the new viewport.
+        ///
+        /// The property is kept inside the ledger rather than resting on
+        /// `Vt::resize` always staging `Full`, so a later change to the
+        /// resize path cannot silently break it.
+        ///
+        /// Case: the window shrinks after output damaged a row that the
+        /// smaller viewport no longer has.
+        #[test]
+        fn a_full_repaint_clears_the_rows_it_supersedes() {
+            let mut ledger = DamageLedger::new();
+            ledger.take();
+            ledger.stage(Damage::rows(ViewportLine(90), ViewportLine(90)));
+            ledger.stage(Damage::Full);
+            assert!(matches!(ledger.take(), Some(StagedDamage::Full)));
+            ledger.stage(Damage::rows(ViewportLine(1), ViewportLine(1)));
+            assert_eq!(rows(&mut ledger), [1]);
         }
     }
 
