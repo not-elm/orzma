@@ -10,8 +10,12 @@
     reason = "OrzmaVt::interpret reaches the parser once the executor's callbacks land"
 )]
 
-use crate::{damage::DamageLedger, device::DeviceState, placement::PlacementStore};
-use vtparse::VTParser;
+use std::sync::mpsc::Sender;
+
+use crate::{
+    damage::DamageLedger, device::DeviceState, placement::PlacementStore, schema::VtSignal,
+};
+use vtparse::{VTActor, VTParser};
 
 /// The parser plus the bytes a synchronized update is holding back.
 pub(crate) struct Interpreter {
@@ -27,11 +31,20 @@ impl Interpreter {
     /// borrows [`SyncBuffer`], which `&mut self` already holds.
     pub fn parse(
         &mut self,
-        _device: &mut DeviceState,
-        _placements: &mut PlacementStore,
-        _damage: &mut DamageLedger,
-        _chunk: &[u8],
+        device: &mut DeviceState,
+        placements: &mut PlacementStore,
+        damage: &mut DamageLedger,
+        signal_tx: &mut Sender<VtSignal>,
+        chunk: &[u8],
     ) {
+        let mut executor = Executor {
+            sync: &mut self.sync,
+            device,
+            placements,
+            damage,
+            signal_tx,
+        };
+        self.parser.parse(chunk, &mut executor);
         todo!()
     }
 }
@@ -63,4 +76,61 @@ struct Executor<'a> {
     device: &'a mut DeviceState,
     placements: &'a mut PlacementStore,
     damage: &'a mut DamageLedger,
+    signal_tx: &'a mut Sender<VtSignal>,
+}
+
+impl VTActor for Executor<'_> {
+    fn print(&mut self, b: char) {
+        self.device.active_mut().print(b);
+    }
+
+    fn execute_c0_or_c1(&mut self, control: u8) {
+        match control {
+            0x07 => {
+                let _ = self.signal_tx.send(VtSignal::Bell);
+            }
+            0x0A => {}
+            _ => {}
+        }
+    }
+
+    fn dcs_hook(
+        &mut self,
+        mode: u8,
+        params: &[i64],
+        intermediates: &[u8],
+        ignored_excess_intermediates: bool,
+    ) {
+        todo!()
+    }
+
+    fn dcs_put(&mut self, byte: u8) {
+        todo!()
+    }
+
+    fn dcs_unhook(&mut self) {
+        todo!()
+    }
+
+    fn esc_dispatch(
+        &mut self,
+        params: &[i64],
+        intermediates: &[u8],
+        ignored_excess_intermediates: bool,
+        byte: u8,
+    ) {
+        todo!()
+    }
+
+    fn csi_dispatch(&mut self, params: &[vtparse::CsiParam], parameters_truncated: bool, byte: u8) {
+        todo!()
+    }
+
+    fn osc_dispatch(&mut self, params: &[&[u8]]) {
+        todo!()
+    }
+
+    fn apc_dispatch(&mut self, data: Vec<u8>) {
+        todo!()
+    }
 }
