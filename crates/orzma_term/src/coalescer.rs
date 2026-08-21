@@ -203,4 +203,42 @@ mod tests {
         assert!(coalescer.needs_bootstrap());
         assert!(!coalescer.is_armed());
     }
+
+    /// Asserts that settling a completed emit closes the coalesce window
+    /// and clears the bootstrap debt.
+    ///
+    /// Case: the terminal paints its initial snapshot, after which later
+    /// frames wait for the debounce deadline like any other output.
+    #[test]
+    fn settle_emit_closes_the_window_and_clears_the_bootstrap_debt() {
+        let t0 = base();
+        let mut coalescer = Coalescer::default();
+        coalescer.arm_or_extend(t0);
+        assert!(coalescer.is_armed());
+        assert!(coalescer.needs_bootstrap());
+
+        coalescer.settle_emit();
+        assert!(!coalescer.is_armed());
+        assert!(!coalescer.needs_bootstrap());
+    }
+
+    /// Asserts that disarming closes the window without clearing the
+    /// bootstrap debt.
+    ///
+    /// `disarm` serves resets that painted nothing, so it must not spend a
+    /// debt only a real emit can settle; `settle_emit` is the consuming
+    /// path.
+    ///
+    /// Case: a resize discards the staged damage before the initial
+    /// snapshot has ever been painted.
+    #[test]
+    fn disarm_closes_the_window_but_keeps_the_bootstrap_debt() {
+        let t0 = base();
+        let mut coalescer = Coalescer::default();
+        coalescer.arm_or_extend(t0);
+
+        coalescer.disarm();
+        assert!(!coalescer.is_armed());
+        assert!(coalescer.needs_bootstrap());
+    }
 }
