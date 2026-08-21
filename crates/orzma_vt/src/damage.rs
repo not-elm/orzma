@@ -12,7 +12,10 @@
 use crate::schema::ViewportLine;
 #[cfg(feature = "alacritty")]
 use alacritty_terminal::{Term, term::TermDamage};
-use std::ops::{BitOrAssign, Deref};
+use std::{
+    iter,
+    ops::{BitOrAssign, Deref},
+};
 
 /// Viewport damage the VT reported in a single damage cycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +176,78 @@ impl DamageLedger {
     /// when nothing is staged.
     pub fn take(&mut self) -> Option<Damage> {
         self.staged.take()
+    }
+}
+
+/// A reusable set of dirty viewport rows, one bit per row.
+///
+/// Bit `b` of element `w` is viewport row `w * 64 + b`, with `b` counted
+/// from the least significant bit. Walking elements in order and bits by
+/// `trailing_zeros` therefore yields rows ascending, which is what lets
+/// a drain build [`DamageRows`] without sorting.
+///
+/// The ledger keeps one for the terminal's lifetime: staging a span sets
+/// bits and draining turns them back into rows, so nothing is allocated
+/// once the buffer has grown to the viewport's height.
+#[derive(Debug, Default)]
+#[allow(
+    dead_code,
+    reason = "DamageLedger reaches this in Task 6; cfg(test) makes the lint conditional, so #[expect] would fire unfulfilled under cargo test"
+)]
+struct RowBits(Vec<u64>);
+
+impl RowBits {
+    /// Sets every row in the inclusive span.
+    ///
+    /// # Invariants
+    ///
+    /// `first <= last`. A reversed span ORs two unrelated masks and
+    /// skips the middle fill, setting wrong bits without panicking.
+    fn set_span(&mut self, first: ViewportLine, last: ViewportLine) {
+        debug_assert!(first <= last, "a damage span runs top to bottom");
+        let (first, last) = (usize::from(first.0), usize::from(last.0));
+        let needed = last / 64 + 1;
+        if self.0.len() < needed {
+            self.0.resize(needed, 0);
+        }
+        // NOTE: both shift amounts stay within `0..=63` by construction.
+        // The natural last-word mask `!(u64::MAX << (last % 64 + 1))`
+        // shifts by 64 when `last % 64 == 63`, which Rust treats as
+        // arithmetic overflow and panics on in a debug build.
+        let head = u64::MAX << (first % 64);
+        let tail = u64::MAX >> (63 - last % 64);
+        let (first_word, last_word) = (first / 64, last / 64);
+        if first_word == last_word {
+            self.0[first_word] |= head & tail;
+            return;
+        }
+        self.0[first_word] |= head;
+        self.0[first_word + 1..last_word].fill(u64::MAX);
+        self.0[last_word] |= tail;
+    }
+
+    /// Empties the set, keeping the buffer for the next frame.
+    fn clear(&mut self) {
+        self.0.fill(0);
+    }
+
+    /// Number of rows currently set.
+    fn count_ones(&self) -> usize {
+        self.0.iter().map(|word| word.count_ones() as usize).sum()
+    }
+
+    /// The set rows, ascending and without duplicates.
+    fn rows(&self) -> impl Iterator<Item = ViewportLine> + '_ {
+        self.0.iter().enumerate().flat_map(|(index, &word)| {
+            iter::successors((word != 0).then_some(word), |rest| {
+                let next = *rest & (*rest - 1);
+                (next != 0).then_some(next)
+            })
+            .map(move |rest| {
+                let bit = rest.trailing_zeros() as usize;
+                ViewportLine(u16::try_from(index * 64 + bit).expect("a viewport row fits in u16"))
+            })
+        })
     }
 }
 
@@ -408,6 +483,86 @@ mod tests {
 
             assert!(ledger.stage_if_changed(Some(Damage::Full)));
             assert_eq!(ledger.take(), Some(Damage::Full));
+        }
+    }
+
+    mod row_bits {
+        use super::super::*;
+
+        fn rows_of(bits: &RowBits) -> Vec<u16> {
+            bits.rows().map(|line| line.0).collect()
+        }
+
+        fn span(first: u16, last: u16) -> RowBits {
+            let mut bits = RowBits::default();
+            bits.set_span(ViewportLine(first), ViewportLine(last));
+            bits
+        }
+
+        /// Asserts that every span endpoint around a 64-row word boundary
+        /// sets exactly the rows it names.
+        ///
+        /// The boundary cases are the reason the last-word mask is written
+        /// as `u64::MAX >> (63 - last % 64)`: the arithmetically natural
+        /// `!(u64::MAX << (last % 64 + 1))` shifts by 64 exactly when
+        /// `last % 64 == 63`, which panics in a debug build.
+        ///
+        /// Case: a viewport whose height is a multiple of 64 erases from the
+        /// cursor to the last row.
+        #[test]
+        fn a_span_sets_exactly_its_rows_across_word_boundaries() {
+            assert_eq!(rows_of(&span(0, 0)), [0]);
+            assert_eq!(rows_of(&span(63, 63)), [63]);
+            assert_eq!(rows_of(&span(64, 64)), [64]);
+            assert_eq!(rows_of(&span(0, 63)), (0..=63).collect::<Vec<_>>());
+            assert_eq!(rows_of(&span(63, 64)), [63, 64]);
+            assert_eq!(rows_of(&span(64, 127)), (64..=127).collect::<Vec<_>>());
+            assert_eq!(rows_of(&span(1, 130)), (1..=130).collect::<Vec<_>>());
+        }
+
+        /// Asserts that overlapping spans union without duplicating a row.
+        ///
+        /// Case: a chunk prints on row 2, then a linefeed damages rows 2
+        /// and 3 before the frame is emitted.
+        #[test]
+        fn overlapping_spans_union_without_duplicates() {
+            let mut bits = RowBits::default();
+            bits.set_span(ViewportLine(2), ViewportLine(2));
+            bits.set_span(ViewportLine(2), ViewportLine(3));
+            assert_eq!(rows_of(&bits), [2, 3]);
+            assert_eq!(bits.count_ones(), 2);
+        }
+
+        /// Asserts that disjoint spans are both retained, ascending.
+        ///
+        /// Case: a full-screen application repaints its top status line and
+        /// its bottom mode line in one chunk.
+        #[test]
+        fn disjoint_spans_are_both_retained_in_ascending_order() {
+            let mut bits = RowBits::default();
+            bits.set_span(ViewportLine(20), ViewportLine(20));
+            bits.set_span(ViewportLine(0), ViewportLine(0));
+            assert_eq!(rows_of(&bits), [0, 20]);
+        }
+
+        /// Asserts that clearing empties the set without releasing the
+        /// buffer, so later staging does not allocate again.
+        ///
+        /// The distinction matters: `Vec::clear` would set the length to
+        /// zero and make the next span re-grow the buffer, which is exactly
+        /// the per-character allocation this type exists to remove.
+        ///
+        /// Case: a frame is emitted and the next chunk starts staging into
+        /// the same terminal's ledger.
+        #[test]
+        fn clearing_empties_the_set_but_keeps_the_buffer() {
+            let mut bits = span(0, 200);
+            let capacity = bits.0.capacity();
+            bits.clear();
+            assert_eq!(bits.count_ones(), 0);
+            assert_eq!(rows_of(&bits), Vec::<u16>::new());
+            bits.set_span(ViewportLine(200), ViewportLine(200));
+            assert_eq!(bits.0.capacity(), capacity, "staging re-allocated");
         }
     }
 }
