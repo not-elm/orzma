@@ -1,12 +1,15 @@
+//! Cursor state saved by DECSC and restored by DECRC.
+
+use crate::schema::{GridColumn, ScreenLine};
 use crate::screen::cell::Pen;
 
 /// Cursor state saved by DECSC, restored by DECRC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SavedCursor {
     /// Saved cursor row within the visible screen.
-    pub line: u16,
+    pub line: ScreenLine,
     /// Saved cursor column.
-    pub column: u16,
+    pub column: GridColumn,
     /// Saved SGR pen.
     pub pen: Pen,
     /// Saved deferred-wrap flag.

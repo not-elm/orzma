@@ -110,23 +110,6 @@ impl Grid {
     }
 }
 
-/// Indexes the row at a visible-screen line; history rows are
-/// structurally unreachable (the index is offset by `history_len`).
-impl Index<u16> for Grid {
-    type Output = Row<Cell>;
-
-    fn index(&self, line: u16) -> &Row<Cell> {
-        &self.rows[self.visible_index(line)]
-    }
-}
-
-impl IndexMut<u16> for Grid {
-    fn index_mut(&mut self, line: u16) -> &mut Row<Cell> {
-        let index = self.visible_index(line);
-        &mut self.rows[index]
-    }
-}
-
 /// Indexes the row at a screen line; history rows are structurally
 /// unreachable because [`ScreenLine`] cannot be negative.
 impl Index<ScreenLine> for Grid {
@@ -161,9 +144,9 @@ mod tests {
     #[test]
     fn grid_line_zero_is_the_top_of_the_active_screen() {
         let mut grid = grid(2, 10);
-        grid[0][0].c = 'a';
+        grid[ScreenLine(0)][0].c = 'a';
         grid.scroll_up_one(Cell::default());
-        grid[0][0].c = 'b';
+        grid[ScreenLine(0)][0].c = 'b';
         assert_eq!(grid.history_len(), 1);
         assert_eq!(grid.row(GridLine(0))[0].c, 'b');
     }
@@ -176,9 +159,9 @@ mod tests {
     #[test]
     fn a_negative_grid_line_reaches_into_history() {
         let mut grid = grid(2, 10);
-        grid[0][0].c = 'a';
+        grid[ScreenLine(0)][0].c = 'a';
         grid.scroll_up_one(Cell::default());
-        grid[0][0].c = 'b';
+        grid[ScreenLine(0)][0].c = 'b';
         grid.scroll_up_one(Cell::default());
         assert_eq!(grid.history_len(), 2);
         assert_eq!(grid.row(GridLine(-1))[0].c, 'b');
@@ -195,8 +178,8 @@ mod tests {
         let grid = grid(3, 10);
         assert_eq!(grid.history_len(), 0);
         assert_eq!(grid.size(), GridSize { cols: 4, rows: 3 });
-        assert_eq!(grid[0][0], Cell::default());
-        assert_eq!(grid[2][3], Cell::default());
+        assert_eq!(grid[ScreenLine(0)][0], Cell::default());
+        assert_eq!(grid[ScreenLine(2)][3], Cell::default());
     }
 
     /// Asserts that a scroll below history capacity pushes the top
@@ -209,13 +192,13 @@ mod tests {
     #[test]
     fn a_scroll_with_room_pushes_into_history() {
         let mut grid = grid(2, 10);
-        grid[0][0].c = 'a';
-        grid[1][0].c = 'b';
+        grid[ScreenLine(0)][0].c = 'a';
+        grid[ScreenLine(1)][0].c = 'b';
         let fill = Cell::blank_with_bg(Color::Indexed(4));
         assert_eq!(grid.scroll_up_one(fill), HistoryEvent::Pushed);
         assert_eq!(grid.history_len(), 1);
-        assert_eq!(grid[0][0].c, 'b');
-        assert_eq!(grid[1][0], fill);
+        assert_eq!(grid[ScreenLine(0)][0].c, 'b');
+        assert_eq!(grid[ScreenLine(1)][0], fill);
     }
 
     /// Asserts that a scroll at history capacity reports the eviction
@@ -243,14 +226,14 @@ mod tests {
     #[test]
     fn zero_capacity_history_evicts_on_every_scroll() {
         let mut grid = grid(2, 0);
-        grid[0][0].c = 'a';
+        grid[ScreenLine(0)][0].c = 'a';
         assert_eq!(
             grid.scroll_up_one(Cell::default()),
             HistoryEvent::PushedWithEviction
         );
         assert_eq!(grid.history_len(), 0);
-        assert_eq!(grid[0][0].c, ' ');
-        assert_eq!(grid[1][0].c, ' ');
+        assert_eq!(grid[ScreenLine(0)][0].c, ' ');
+        assert_eq!(grid[ScreenLine(1)][0].c, ' ');
     }
 
     /// Asserts that a range fill overwrites exactly the given columns
@@ -262,12 +245,12 @@ mod tests {
     fn a_range_fill_overwrites_only_the_given_columns() {
         let mut grid = grid(2, 0);
         for column in 0..4 {
-            grid[0][column].c = 'x';
+            grid[ScreenLine(0)][column].c = 'x';
         }
         grid.fill_visible_row_range(0, 1..3, Cell::default());
-        assert_eq!(grid[0][0].c, 'x');
-        assert_eq!(grid[0][1].c, ' ');
-        assert_eq!(grid[0][2].c, ' ');
-        assert_eq!(grid[0][3].c, 'x');
+        assert_eq!(grid[ScreenLine(0)][0].c, 'x');
+        assert_eq!(grid[ScreenLine(0)][1].c, ' ');
+        assert_eq!(grid[ScreenLine(0)][2].c, ' ');
+        assert_eq!(grid[ScreenLine(0)][3].c, 'x');
     }
 }

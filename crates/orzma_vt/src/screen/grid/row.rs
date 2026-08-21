@@ -1,5 +1,6 @@
 //! One row of elements, ordered left to right.
 
+use crate::schema::GridColumn;
 use crate::screen::cell::Cell;
 use crate::screen::grid::run::Run;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
@@ -89,6 +90,25 @@ impl<T> Index<u16> for Row<T> {
 impl<T> IndexMut<u16> for Row<T> {
     fn index_mut(&mut self, position: u16) -> &mut T {
         &mut self.0[usize::from(position)]
+    }
+}
+
+/// Indexes the cell at a grid column.
+///
+/// Meaningful only for `Row<Cell>`, where one element is one column; a
+/// [`Run`](crate::screen::grid::run::Run) spans as many columns as its
+/// text is wide.
+impl Index<GridColumn> for Row<Cell> {
+    type Output = Cell;
+
+    fn index(&self, column: GridColumn) -> &Cell {
+        &self.0[usize::from(column.0)]
+    }
+}
+
+impl IndexMut<GridColumn> for Row<Cell> {
+    fn index_mut(&mut self, column: GridColumn) -> &mut Cell {
+        &mut self.0[usize::from(column.0)]
     }
 }
 

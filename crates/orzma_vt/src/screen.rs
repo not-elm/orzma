@@ -117,14 +117,14 @@ impl Screen {
         let mut effects = Effects::default();
         if self.state.pending_wrap {
             self.state.pending_wrap = false;
-            self.state.column = 0;
+            self.state.column = GridColumn(0);
             effects.merge(self.linefeed());
         } else {
-            effects.merge(self.damage_grid_rows([self.state.line]));
+            effects.merge(self.damage_grid_rows([self.state.line.0]));
         }
         self.grid[self.state.line][self.state.column] = self.state.pen.stamp(c);
-        if self.state.column + 1 < self.grid.size().cols {
-            self.state.column += 1;
+        if self.state.column.0 + 1 < self.grid.size().cols {
+            self.state.column.0 += 1;
         } else {
             self.state.pending_wrap = true;
         }
@@ -134,9 +134,9 @@ impl Screen {
     /// Rewinds the cursor to column zero and disarms the deferred
     /// wrap.
     pub fn carriage_return(&mut self) -> Effects {
-        self.state.column = 0;
+        self.state.column = GridColumn(0);
         self.state.pending_wrap = false;
-        self.damage_grid_rows([self.state.line])
+        self.damage_grid_rows([self.state.line.0])
     }
 
     /// Moves the cursor down one row, scrolling at the bottom margin;
@@ -144,8 +144,8 @@ impl Screen {
     pub fn linefeed(&mut self) -> Effects {
         if self.state.line < self.margins.bottom {
             let departed = self.state.line;
-            self.state.line += 1;
-            return self.damage_grid_rows([departed, self.state.line]);
+            self.state.line.0 += 1;
+            return self.damage_grid_rows([departed.0, self.state.line.0]);
         }
         let history = self.grid.scroll_up_one(self.state.pen.erase_cell());
         self.hold_scrolled_viewport();
@@ -161,13 +161,13 @@ impl Screen {
         }
         let cols = self.grid.size().cols;
         let columns = match mode {
-            EraseLineMode::ToEnd => self.state.column..cols,
-            EraseLineMode::ToStart => 0..self.state.column + 1,
+            EraseLineMode::ToEnd => self.state.column.0..cols,
+            EraseLineMode::ToStart => 0..self.state.column.0 + 1,
             EraseLineMode::All => 0..cols,
         };
         self.grid
-            .fill_visible_row_range(self.state.line, columns, self.state.pen.erase_cell());
-        self.damage_grid_rows([self.state.line])
+            .fill_visible_row_range(self.state.line.0, columns, self.state.pen.erase_cell());
+        self.damage_grid_rows([self.state.line.0])
     }
 
     /// Erases part of the visible screen with the pen background
@@ -177,20 +177,26 @@ impl Screen {
         let blank = self.state.pen.erase_cell();
         match mode {
             EraseScreenMode::Below => {
-                self.grid
-                    .fill_visible_row_range(self.state.line, self.state.column..cols, blank);
-                for line in self.state.line + 1..rows {
+                self.grid.fill_visible_row_range(
+                    self.state.line.0,
+                    self.state.column.0..cols,
+                    blank,
+                );
+                for line in self.state.line.0 + 1..rows {
                     self.grid.fill_visible_row_range(line, 0..cols, blank);
                 }
-                self.damage_grid_rows(self.state.line..rows)
+                self.damage_grid_rows(self.state.line.0..rows)
             }
             EraseScreenMode::Above => {
-                for line in 0..self.state.line {
+                for line in 0..self.state.line.0 {
                     self.grid.fill_visible_row_range(line, 0..cols, blank);
                 }
-                self.grid
-                    .fill_visible_row_range(self.state.line, 0..self.state.column + 1, blank);
-                self.damage_grid_rows(0..=self.state.line)
+                self.grid.fill_visible_row_range(
+                    self.state.line.0,
+                    0..self.state.column.0 + 1,
+                    blank,
+                );
+                self.damage_grid_rows(0..=self.state.line.0)
             }
             EraseScreenMode::All => {
                 for line in 0..rows {
@@ -269,8 +275,8 @@ impl Screen {
     pub(crate) fn cursor(&self) -> Cursor {
         Cursor {
             point: GridPoint {
-                line: GridLine(i32::from(self.state.line)),
-                column: GridColumn(self.state.column),
+                line: GridLine::from(self.state.line),
+                column: self.state.column,
             },
             shape: CursorShape::Block,
             blinking: false,
@@ -295,7 +301,7 @@ impl Screen {
 mod tests {
     use super::*;
     use crate::damage::DamageRows;
-    use crate::schema::Color;
+    use crate::schema::{Color, ScreenLine};
 
     fn screen() -> Screen {
         Screen::new(GridSize { cols: 4, rows: 3 }, 10)
@@ -309,7 +315,7 @@ mod tests {
     #[test]
     fn a_viewport_row_at_the_live_tail_is_the_visible_row() {
         let mut screen = screen();
-        screen.grid[1][0].c = 'x';
+        screen.grid[ScreenLine(1)][0].c = 'x';
         assert_eq!(screen.viewport_row(ViewportLine(1))[0].c, 'x');
     }
 
@@ -321,8 +327,8 @@ mod tests {
     #[test]
     fn a_scrolled_viewport_row_reads_history() {
         let mut screen = screen();
-        screen.grid[0][0].c = 'a';
-        screen.state.line = 2;
+        screen.grid[ScreenLine(0)][0].c = 'a';
+        screen.state.line = ScreenLine(2);
         screen.linefeed();
         assert_eq!(screen.grid.history_len(), 1);
         screen.viewport.offset = DisplayOffset(1);
@@ -365,13 +371,13 @@ mod tests {
     #[test]
     fn output_below_a_scrolled_viewport_holds_the_view_still() {
         let mut screen = screen();
-        screen.grid[0][0].c = 'a';
-        screen.state.line = 2;
+        screen.grid[ScreenLine(0)][0].c = 'a';
+        screen.state.line = ScreenLine(2);
         screen.linefeed();
         screen.viewport.offset = DisplayOffset(1);
         assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
 
-        screen.state.line = 2;
+        screen.state.line = ScreenLine(2);
         screen.linefeed();
         assert_eq!(screen.display_offset(), DisplayOffset(2));
         assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
@@ -385,7 +391,7 @@ mod tests {
     #[test]
     fn output_at_the_live_tail_keeps_the_viewport_pinned() {
         let mut screen = screen();
-        screen.state.line = 2;
+        screen.state.line = ScreenLine(2);
         screen.linefeed();
         assert_eq!(screen.display_offset(), DisplayOffset(0));
     }
@@ -402,10 +408,10 @@ mod tests {
     #[test]
     fn a_scroll_at_history_capacity_clamps_the_offset() {
         let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
-        screen.state.line = 2;
+        screen.state.line = ScreenLine(2);
         screen.linefeed();
         screen.viewport.offset = DisplayOffset(1);
-        screen.state.line = 2;
+        screen.state.line = ScreenLine(2);
         screen.linefeed();
         assert_eq!(screen.grid.history_len(), 1);
         assert_eq!(screen.display_offset(), DisplayOffset(1));
@@ -424,10 +430,10 @@ mod tests {
     #[test]
     fn a_scrolled_screen_reports_damage_in_viewport_rows() {
         let mut screen = screen();
-        screen.state.line = 2;
+        screen.state.line = ScreenLine(2);
         screen.linefeed();
         screen.viewport.offset = DisplayOffset(1);
-        screen.state.line = 0;
+        screen.state.line = ScreenLine(0);
         assert_eq!(
             screen.print('x'),
             Effects {
@@ -451,11 +457,11 @@ mod tests {
     fn a_write_scrolled_out_of_the_window_reports_no_dirty_row() {
         let mut screen = screen();
         for _ in 0..3 {
-            screen.state.line = 2;
+            screen.state.line = ScreenLine(2);
             screen.linefeed();
         }
         screen.viewport.offset = DisplayOffset(3);
-        screen.state.line = 0;
+        screen.state.line = ScreenLine(0);
         assert_eq!(
             screen.print('x'),
             Effects {
@@ -474,10 +480,10 @@ mod tests {
     #[test]
     fn a_scrolled_erase_reports_only_the_rows_still_in_the_window() {
         let mut screen = screen();
-        screen.state.line = 2;
+        screen.state.line = ScreenLine(2);
         screen.linefeed();
         screen.viewport.offset = DisplayOffset(1);
-        screen.state.line = 0;
+        screen.state.line = ScreenLine(0);
         assert_eq!(
             screen.erase_in_display(EraseScreenMode::Below),
             Effects {
@@ -495,7 +501,10 @@ mod tests {
     #[test]
     fn a_fresh_screen_starts_at_the_origin() {
         let screen = screen();
-        assert_eq!((screen.state.line, screen.state.column), (0, 0));
+        assert_eq!(
+            (screen.state.line, screen.state.column),
+            (ScreenLine(0), GridColumn(0))
+        );
         assert_eq!(screen.display_offset(), DisplayOffset(0));
         assert_eq!(screen.grid.history_len(), 0);
     }
@@ -508,10 +517,10 @@ mod tests {
     #[test]
     fn carriage_return_rewinds_and_clears_pending_wrap() {
         let mut screen = screen();
-        screen.state.column = 2;
+        screen.state.column = GridColumn(2);
         screen.state.pending_wrap = true;
         let effects = screen.carriage_return();
-        assert_eq!(screen.state.column, 0);
+        assert_eq!(screen.state.column, GridColumn(0));
         assert!(!screen.state.pending_wrap);
         assert_eq!(
             effects,
@@ -531,7 +540,7 @@ mod tests {
     fn a_linefeed_above_the_bottom_moves_the_cursor() {
         let mut screen = screen();
         let effects = screen.linefeed();
-        assert_eq!(screen.state.line, 1);
+        assert_eq!(screen.state.line, ScreenLine(1));
         assert_eq!(
             effects,
             Effects {
@@ -549,9 +558,9 @@ mod tests {
     #[test]
     fn a_bottom_linefeed_scrolls_and_pushes_history() {
         let mut screen = screen();
-        screen.state.line = 2;
+        screen.state.line = ScreenLine(2);
         let effects = screen.linefeed();
-        assert_eq!(screen.state.line, 2);
+        assert_eq!(screen.state.line, ScreenLine(2));
         assert_eq!(
             effects,
             Effects {
@@ -570,7 +579,7 @@ mod tests {
     #[test]
     fn a_bottom_linefeed_at_capacity_reports_the_eviction() {
         let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
-        screen.state.line = 2;
+        screen.state.line = ScreenLine(2);
         screen.linefeed();
         let effects = screen.linefeed();
         assert_eq!(
@@ -591,10 +600,10 @@ mod tests {
     fn a_scrolled_in_row_carries_the_pen_background() {
         let mut screen = screen();
         screen.pen_mut().bg = Color::Indexed(4);
-        screen.state.line = 2;
+        screen.state.line = ScreenLine(2);
         screen.linefeed();
-        assert_eq!(screen.grid[2][0].bg, Color::Indexed(4));
-        assert_eq!(screen.grid[2][3].bg, Color::Indexed(4));
+        assert_eq!(screen.grid[ScreenLine(2)][0].bg, Color::Indexed(4));
+        assert_eq!(screen.grid[ScreenLine(2)][3].bg, Color::Indexed(4));
     }
 
     /// Asserts that a linefeed preserves the deferred-wrap flag.
@@ -623,9 +632,12 @@ mod tests {
         let mut screen = screen();
         screen.pen_mut().fg = Color::Indexed(1);
         let effects = screen.print('a');
-        assert_eq!(screen.grid[0][0].c, 'a');
-        assert_eq!(screen.grid[0][0].fg, Color::Indexed(1));
-        assert_eq!((screen.state.line, screen.state.column), (0, 1));
+        assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
+        assert_eq!(screen.grid[ScreenLine(0)][0].fg, Color::Indexed(1));
+        assert_eq!(
+            (screen.state.line, screen.state.column),
+            (ScreenLine(0), GridColumn(1))
+        );
         assert_eq!(
             effects,
             Effects {
@@ -644,10 +656,10 @@ mod tests {
     #[test]
     fn print_at_the_last_column_arms_the_deferred_wrap() {
         let mut screen = screen();
-        screen.state.column = 3;
+        screen.state.column = GridColumn(3);
         screen.print('x');
-        assert_eq!(screen.grid[0][3].c, 'x');
-        assert_eq!(screen.state.column, 3);
+        assert_eq!(screen.grid[ScreenLine(0)][3].c, 'x');
+        assert_eq!(screen.state.column, GridColumn(3));
         assert!(screen.state.pending_wrap);
     }
 
@@ -663,8 +675,11 @@ mod tests {
             screen.print(c);
         }
         let effects = screen.print('e');
-        assert_eq!(screen.grid[1][0].c, 'e');
-        assert_eq!((screen.state.line, screen.state.column), (1, 1));
+        assert_eq!(screen.grid[ScreenLine(1)][0].c, 'e');
+        assert_eq!(
+            (screen.state.line, screen.state.column),
+            (ScreenLine(1), GridColumn(1))
+        );
         assert!(!screen.state.pending_wrap);
         assert_eq!(
             effects,
@@ -683,11 +698,11 @@ mod tests {
     #[test]
     fn a_wrap_on_the_bottom_row_scrolls() {
         let mut screen = screen();
-        screen.state.line = 2;
-        screen.state.column = 3;
+        screen.state.line = ScreenLine(2);
+        screen.state.column = GridColumn(3);
         screen.print('x');
         let effects = screen.print('y');
-        assert_eq!(screen.grid[2][0].c, 'y');
+        assert_eq!(screen.grid[ScreenLine(2)][0].c, 'y');
         assert_eq!(
             effects,
             Effects {
@@ -708,13 +723,13 @@ mod tests {
         for c in ['a', 'b', 'c'] {
             screen.print(c);
         }
-        screen.state.column = 1;
+        screen.state.column = GridColumn(1);
         screen.pen_mut().bg = Color::Indexed(2);
         let effects = screen.erase_in_line(EraseLineMode::ToEnd);
-        assert_eq!(screen.grid[0][0].c, 'a');
-        assert_eq!(screen.grid[0][1].c, ' ');
-        assert_eq!(screen.grid[0][1].bg, Color::Indexed(2));
-        assert_eq!(screen.grid[0][3].bg, Color::Indexed(2));
+        assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
+        assert_eq!(screen.grid[ScreenLine(0)][1].c, ' ');
+        assert_eq!(screen.grid[ScreenLine(0)][1].bg, Color::Indexed(2));
+        assert_eq!(screen.grid[ScreenLine(0)][3].bg, Color::Indexed(2));
         assert_eq!(
             effects,
             Effects {
@@ -738,11 +753,11 @@ mod tests {
         for c in ['a', 'b', 'c'] {
             screen.print(c);
         }
-        screen.state.column = 1;
+        screen.state.column = GridColumn(1);
         screen.erase_in_line(EraseLineMode::ToStart);
-        assert_eq!(screen.grid[0][0].c, ' ');
-        assert_eq!(screen.grid[0][1].c, ' ');
-        assert_eq!(screen.grid[0][2].c, 'c');
+        assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
+        assert_eq!(screen.grid[ScreenLine(0)][1].c, ' ');
+        assert_eq!(screen.grid[ScreenLine(0)][2].c, 'c');
     }
 
     /// Asserts that erase-to-end is a no-op while the deferred wrap is
@@ -761,7 +776,7 @@ mod tests {
             screen.print(c);
         }
         let effects = screen.erase_in_line(EraseLineMode::ToEnd);
-        assert_eq!(screen.grid[0][3].c, 'd');
+        assert_eq!(screen.grid[ScreenLine(0)][3].c, 'd');
         assert_eq!(effects, Effects::default());
     }
 
@@ -776,10 +791,10 @@ mod tests {
         for c in ['a', 'b', 'c'] {
             screen.print(c);
         }
-        screen.state.column = 1;
+        screen.state.column = GridColumn(1);
         screen.erase_in_line(EraseLineMode::All);
-        assert_eq!(screen.grid[0][0].c, ' ');
-        assert_eq!(screen.grid[0][2].c, ' ');
+        assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
+        assert_eq!(screen.grid[ScreenLine(0)][2].c, ' ');
     }
 
     /// Asserts that erase-below clears from the cursor cell to the end
@@ -796,11 +811,11 @@ mod tests {
         for c in ['b', 'c'] {
             screen.print(c);
         }
-        screen.state.column = 1;
+        screen.state.column = GridColumn(1);
         let effects = screen.erase_in_display(EraseScreenMode::Below);
-        assert_eq!(screen.grid[0][0].c, 'a');
-        assert_eq!(screen.grid[1][0].c, 'b');
-        assert_eq!(screen.grid[1][1].c, ' ');
+        assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
+        assert_eq!(screen.grid[ScreenLine(1)][0].c, 'b');
+        assert_eq!(screen.grid[ScreenLine(1)][1].c, ' ');
         assert_eq!(
             effects,
             Effects {
@@ -824,12 +839,12 @@ mod tests {
         for c in ['b', 'c', 'd'] {
             screen.print(c);
         }
-        screen.state.column = 1;
+        screen.state.column = GridColumn(1);
         let effects = screen.erase_in_display(EraseScreenMode::Above);
-        assert_eq!(screen.grid[0][0].c, ' ');
-        assert_eq!(screen.grid[1][0].c, ' ');
-        assert_eq!(screen.grid[1][1].c, ' ');
-        assert_eq!(screen.grid[1][2].c, 'd');
+        assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
+        assert_eq!(screen.grid[ScreenLine(1)][0].c, ' ');
+        assert_eq!(screen.grid[ScreenLine(1)][1].c, ' ');
+        assert_eq!(screen.grid[ScreenLine(1)][2].c, 'd');
         assert_eq!(
             effects,
             Effects {
@@ -853,15 +868,15 @@ mod tests {
     #[test]
     fn erase_display_all_clears_the_screen_but_not_history() {
         let mut screen = screen();
-        screen.state.line = 2;
+        screen.state.line = ScreenLine(2);
         screen.linefeed();
         screen.carriage_return();
         for c in ['a', 'b'] {
             screen.print(c);
         }
         let effects = screen.erase_in_display(EraseScreenMode::All);
-        assert_eq!(screen.grid[2][0].c, ' ');
-        assert_eq!(screen.grid[2][1].c, ' ');
+        assert_eq!(screen.grid[ScreenLine(2)][0].c, ' ');
+        assert_eq!(screen.grid[ScreenLine(2)][1].c, ' ');
         assert_eq!(screen.grid.history_len(), 1);
         assert_eq!(
             effects,
