@@ -10,7 +10,7 @@
 - Selection / vi モードは後日 capability トレイトとして追加する。レイアウトはその余地を残す。
 - フレームは連番(`seq`)を持たない。レンダラは `TerminalGrid` の変更検知で再アップロードの要否を判定する(`orzma_tty_renderer::material` が per-entity のラッチに畳む)。
 - webview は **VT が `PlacementId` を採番して placement テーブルを所有し、毎 emit でビューポート射影済みの一覧(`FrameSnapshot::placements` / `FrameDelta::placements`)を配る**契約。`history_base` の絶対行投影と seq 回り込み比較は廃止済みで、フレーム外部に露出する履歴カウンタは存在しない。
-- 既存の語彙型(`Damage` のマージ代数、`DamageVerdict::classify`、`Row<T>` / `Run` / `Style`、`Palette`、`VtModes`、`VtSignal`、`PlacementId` / `ProjectedPlacement`)と `HyperlinkInterner` を再利用する。
+- 既存の語彙型(`StagedDamage` のマージ代数、`Row<T>` / `Run` / `Style`、`Palette`、`VtModes`、`VtSignal`、`PlacementId` / `ProjectedPlacement`)と `HyperlinkInterner` を再利用する。
 
 ## 2. トップレベル構成
 
@@ -146,7 +146,7 @@ vtparse のコールバックは戻り値を持てないため、`Executor` が�
 
 ### 4.7 webview はテキストセルの変種にしない
 
-placement は Grid の行に振る**安定 `LineId`** にアンカーし、`PlacementStore` が side table として所有する。行毎の占有スパンを保持して erase / scroll / eviction / reflow に追従し、emit 時にのみ `ProjectedPlacement`(viewport 射影)へ変換する。セル変種にすると文字書き込み・reflow がセルを壊す経路が無数に生じる。resize(reflow)で射影が動くケースは「一覧を毎 emit 配る + 変化が emit を強制する」契約が吸収する。
+placement は Grid の行に振る**安定 `LineId`** にアンカーし、`PlacementStore` が side table として所有する。アンカーは emit のたびに現在のビューポート行へ解決され、`ProjectedPlacement`(viewport 射影)としてのみ外部に出る — アンカーがリングを外れて解決できなくなることが、その placement を eviction 対象にする。セル変種にすると文字書き込み・reflow がセルを壊す経路が無数に生じる。resize(reflow)で射影が動くケースは「一覧を毎 emit 配る + 変化が emit を強制する」契約が吸収する。
 
 ## 5. 実装時に必要な状態(草案から漏れやすいもの)
 
@@ -160,16 +160,15 @@ placement は Grid の行に振る**安定 `LineId`** にアンカーし、`Plac
 
 ```
 crates/orzma_vt/src/lib.rs               … pub struct OrzmaVt + impl Vt〔フィールドは結線済み、メソッドはスタブ〕
-crates/orzma_vt/src/interpreter.rs       … Interpreter(vtparse + ?2026)〔スタブ〕
-crates/orzma_vt/src/executor.rs          … Executor(コールバック実装)+ Products〔未着手〕
+crates/orzma_vt/src/interpreter.rs       … Interpreter(vtparse + ?2026)+ Executor(`VTActor` コールバック実装、`executor.rs` に分けず同居)〔print・C0 ディスパッチのみ実装、他の `VTActor` メソッドと `Interpreter::parse` 自体は `todo!()`〕
 crates/orzma_vt/src/device.rs            … DeviceState / TabStops / ColorTable / TitleState〔読み取り面は実装済み〕
-crates/orzma_vt/src/screen.rs            … Screen / Viewport / WriteState / SavedCursorSlots / Margins〔実装済み〕
+crates/orzma_vt/src/screen.rs            … Screen / Viewport / ScreenState / SavedCursorSlots / Margins〔実装済み〕
 crates/orzma_vt/src/screen/grid.rs       … Grid〔実装済み〕
 crates/orzma_vt/src/screen/grid/row.rs   … Row<T>(格納は Row<Cell>、発行は Row<Run>)+ Row<Cell>::to_runs〔実装済み〕
 crates/orzma_vt/src/screen/grid/run.rs   … Run / Style(bitflags)〔実装済み〕
 crates/orzma_vt/src/screen/cell.rs       … Cell / Pen(レンダラの GridCell とは別の内部表現)〔実装済み〕
 crates/orzma_vt/src/placement.rs         … PlacementStore〔実装済み。占有スパンは未実装〕
-crates/orzma_vt/src/damage.rs            … Damage / DamageRows / DamageVerdict / DamageLedger〔実装済み〕
+crates/orzma_vt/src/damage.rs            … Damage / StagedDamage / DamageRows / RowBits / DamageLedger〔実装済み〕
 crates/orzma_vt/src/frame.rs             … Frame / FrameSnapshot / FrameDelta の組み立て〔実装済み〕
 ```
 
