@@ -9,15 +9,6 @@ use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
 
-/// History effect of one bottom-line scroll, for placement bookkeeping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HistoryEvent {
-    /// The top visible row moved into scrollback history.
-    Pushed,
-    /// The push also evicted the oldest history row (ring at capacity).
-    PushedWithEviction,
-}
-
 /// Stable identity of one grid row, minted when the row enters the ring.
 ///
 /// # Invariants
@@ -93,10 +84,10 @@ impl Grid {
     /// Scrolls the visible screen up by one row: the top visible row
     /// becomes the newest history row and a `fill`-filled row enters at
     /// the bottom.
-    pub fn scroll_up_one(&mut self, fill: Cell) -> HistoryEvent {
+    pub fn scroll_up_one(&mut self, fill: Cell) {
         if self.history_len() < self.max_history {
             self.rows.push_back(Row::filled(self.size.cols, fill));
-            return HistoryEvent::Pushed;
+            return;
         }
         let mut recycled = self
             .rows
@@ -108,7 +99,6 @@ impl Grid {
             .expect("a terminal cannot scroll u64::MAX rows in one session");
         recycled.fill(fill);
         self.rows.push_back(recycled);
-        HistoryEvent::PushedWithEviction
     }
 
     /// The id of the row at a screen line.
@@ -239,13 +229,13 @@ mod tests {
         grid[ScreenLine(0)][0].c = 'a';
         grid[ScreenLine(1)][0].c = 'b';
         let fill = Cell::blank_with_bg(Color::Indexed(4));
-        assert_eq!(grid.scroll_up_one(fill), HistoryEvent::Pushed);
+        grid.scroll_up_one(fill);
         assert_eq!(grid.history_len(), 1);
         assert_eq!(grid[ScreenLine(0)][0].c, 'b');
         assert_eq!(grid[ScreenLine(1)][0], fill);
     }
 
-    /// Asserts that a scroll at history capacity reports the eviction
+    /// Asserts that a scroll at history capacity evicts the oldest row
     /// and keeps the history length at the cap.
     ///
     /// Case: a long-running shell session has filled the scrollback
@@ -254,16 +244,13 @@ mod tests {
     #[test]
     fn a_scroll_at_capacity_evicts_the_oldest_row() {
         let mut grid = grid(2, 1);
-        assert_eq!(grid.scroll_up_one(Cell::default()), HistoryEvent::Pushed);
-        assert_eq!(
-            grid.scroll_up_one(Cell::default()),
-            HistoryEvent::PushedWithEviction
-        );
+        grid.scroll_up_one(Cell::default());
+        grid.scroll_up_one(Cell::default());
         assert_eq!(grid.history_len(), 1);
     }
 
-    /// Asserts that a zero-capacity grid reports every scroll as an
-    /// eviction and keeps no history.
+    /// Asserts that a zero-capacity grid evicts on every scroll and
+    /// keeps no history.
     ///
     /// Case: the user configures scrollback off, so a bottom-line
     /// newline discards the top visible row outright.
@@ -271,10 +258,7 @@ mod tests {
     fn zero_capacity_history_evicts_on_every_scroll() {
         let mut grid = grid(2, 0);
         grid[ScreenLine(0)][0].c = 'a';
-        assert_eq!(
-            grid.scroll_up_one(Cell::default()),
-            HistoryEvent::PushedWithEviction
-        );
+        grid.scroll_up_one(Cell::default());
         assert_eq!(grid.history_len(), 0);
         assert_eq!(grid[ScreenLine(0)][0].c, ' ');
         assert_eq!(grid[ScreenLine(1)][0].c, ' ');

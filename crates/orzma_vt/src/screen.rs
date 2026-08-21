@@ -1,8 +1,8 @@
 //! The atomic grid + cursor operation unit for one terminal screen.
 //!
 //! [`Screen`] owns cell storage ([`grid::Grid`]) and the write cursor,
-//! and updates them together; every mutation returns its observable
-//! [`Effects`] for the caller to stage instead of staging internally.
+//! and updates them together; every mutation returns the [`Damage`] it
+//! produced for the caller to stage instead of staging internally.
 
 pub mod cell;
 pub mod cursor;
@@ -12,47 +12,17 @@ mod state;
 pub mod viewport;
 
 use self::cell::{Cell, Pen};
+use self::grid::Grid;
 use self::grid::row::Row;
-use self::grid::{Grid, HistoryEvent};
-use crate::damage::StagedDamage;
+use crate::damage::Damage;
 use crate::schema::{
-    Cursor, CursorShape, DisplayOffset, GridColumn, GridLine, GridPoint, GridSize, ViewportLine,
+    Cursor, CursorShape, DisplayOffset, GridColumn, GridLine, GridPoint, GridSize, ScreenLine,
+    ViewportLine,
 };
 use crate::screen::cursor::SavedCursorSlots;
 use crate::screen::margins::Margins;
 use crate::screen::state::ScreenState;
 use crate::screen::viewport::Viewport;
-
-/// One mutation's observable effects, for the caller to stage.
-///
-/// Operations return their damage and history effect instead of
-/// staging them internally; the future executor folds these into the
-/// damage ledger and the placement store.
-#[derive(Debug, Default, PartialEq)]
-pub struct Effects {
-    damage: Option<StagedDamage>,
-    history: Option<HistoryEvent>,
-}
-
-impl Effects {
-    fn full(history: Option<HistoryEvent>) -> Self {
-        Self {
-            damage: Some(StagedDamage::Full),
-            history,
-        }
-    }
-
-    fn merge(&mut self, other: Effects) {
-        match (&mut self.damage, other.damage) {
-            (Some(mine), Some(theirs)) => *mine |= theirs,
-            (mine @ None, theirs) => *mine = theirs,
-            (_, None) => {}
-        }
-        if other.history.is_some() {
-            self.history = other.history;
-        }
-    }
-}
 
 /// Span selector for [`Screen::erase_in_line`] (`CSI K`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,51 +83,49 @@ impl Screen {
     ///
     /// The caller dispatches control bytes itself; this method assumes
     /// a printable character of display width one.
-    pub fn print(&mut self, c: char) -> Effects {
-        let mut effects = Effects::default();
-        if self.state.pending_wrap {
+    pub fn print(&mut self, c: char) -> Option<Damage> {
+        let damage = if self.state.pending_wrap {
             self.state.pending_wrap = false;
             self.state.column = GridColumn(0);
-            effects.merge(self.linefeed());
+            self.lf()
         } else {
-            effects.merge(self.damage_grid_rows([self.state.line.0]));
-        }
+            Some(self.damage_span(self.state.line, self.state.line))
+        };
         self.grid[self.state.line][self.state.column] = self.state.pen.stamp(c);
         if self.state.column.0 + 1 < self.grid.size().cols {
             self.state.column.0 += 1;
         } else {
             self.state.pending_wrap = true;
         }
-        effects
+        damage
     }
 
-    /// Rewinds the cursor to column zero and disarms the deferred
-    /// wrap.
-    pub fn carriage_return(&mut self) -> Effects {
+    /// Rewinds the cursor to column zero and disarms the deferred wrap.
+    pub fn cr(&mut self) -> Option<Damage> {
         self.state.column = GridColumn(0);
         self.state.pending_wrap = false;
-        self.damage_grid_rows([self.state.line.0])
+        Some(self.damage_span(self.state.line, self.state.line))
     }
 
     /// Moves the cursor down one row, scrolling at the bottom margin;
     /// the deferred-wrap flag is deliberately preserved.
-    pub fn linefeed(&mut self) -> Effects {
+    pub fn lf(&mut self) -> Option<Damage> {
         if self.state.line < self.margins.bottom {
             let departed = self.state.line;
             self.state.line.0 += 1;
-            return self.damage_grid_rows([departed.0, self.state.line.0]);
+            return Some(self.damage_span(departed, self.state.line));
         }
-        let history = self.grid.scroll_up_one(self.state.pen.erase_cell());
+        self.grid.scroll_up_one(self.state.pen.erase_cell());
         self.hold_scrolled_viewport();
-        Effects::full(Some(history))
+        Some(Damage::Full)
     }
 
     /// Erases part of the cursor row with the pen background (BCE);
     /// [`EraseLineMode::ToEnd`] is a no-op while the deferred wrap is
     /// armed.
-    pub fn erase_in_line(&mut self, mode: EraseLineMode) -> Effects {
+    pub fn erase_in_line(&mut self, mode: EraseLineMode) -> Option<Damage> {
         if matches!(mode, EraseLineMode::ToEnd) && self.state.pending_wrap {
-            return Effects::default();
+            return None;
         }
         let cols = self.grid.size().cols;
         let columns = match mode {
@@ -167,12 +135,12 @@ impl Screen {
         };
         self.grid
             .fill_visible_row_range(self.state.line.0, columns, self.state.pen.erase_cell());
-        self.damage_grid_rows([self.state.line.0])
+        Some(self.damage_span(self.state.line, self.state.line))
     }
 
     /// Erases part of the visible screen with the pen background
     /// (BCE), in place; scrollback history is never touched.
-    pub fn erase_in_display(&mut self, mode: EraseScreenMode) -> Effects {
+    pub fn erase_in_display(&mut self, mode: EraseScreenMode) -> Option<Damage> {
         let GridSize { cols, rows } = self.grid.size();
         let blank = self.state.pen.erase_cell();
         match mode {
@@ -185,7 +153,7 @@ impl Screen {
                 for line in self.state.line.0 + 1..rows {
                     self.grid.fill_visible_row_range(line, 0..cols, blank);
                 }
-                self.damage_grid_rows(self.state.line.0..rows)
+                Some(self.damage_span(self.state.line, ScreenLine(rows - 1)))
             }
             EraseScreenMode::Above => {
                 for line in 0..self.state.line.0 {
@@ -196,13 +164,13 @@ impl Screen {
                     0..self.state.column.0 + 1,
                     blank,
                 );
-                self.damage_grid_rows(0..=self.state.line.0)
+                Some(self.damage_span(ScreenLine(0), self.state.line))
             }
             EraseScreenMode::All => {
                 for line in 0..rows {
                     self.grid.fill_visible_row_range(line, 0..cols, blank);
                 }
-                Effects::full(None)
+                Some(Damage::Full)
             }
         }
     }
@@ -229,25 +197,30 @@ impl Screen {
         self.viewport.offset = DisplayOffset(self.viewport.offset.0.saturating_add(1).min(history));
     }
 
-    /// Reports the given active-grid lines as damage, in the viewport
+    /// Reports the given screen rows as damage, in the viewport
     /// coordinates a frame repaints by.
     ///
-    /// Lines the viewport does not show are dropped: damage is what
-    /// needs repainting, and a row scrolled out of view needs none.
-    /// Counting invisible rows would also let output the user cannot
-    /// see spend the coalescer's echo credit.
-    fn damage_grid_rows(&self, lines: impl IntoIterator<Item = u16>) -> Effects {
-        let offset = self.viewport.offset;
+    /// Rows the viewport does not show are not repainted, so a span that
+    /// starts past the last visible row becomes [`Damage::Metadata`]: the
+    /// frame is still emitted, it just carries no dirty rows.
+    fn damage_span(&self, first: ScreenLine, last: ScreenLine) -> Damage {
+        debug_assert!(first <= last, "a damage span runs top to bottom");
         let rows = self.grid.size().rows;
-        Effects {
-            damage: Some(StagedDamage::Delta(
-                lines
-                    .into_iter()
-                    .filter_map(|line| GridLine(i32::from(line)).to_viewport(offset, rows))
-                    .collect(),
-            )),
-            history: None,
+        // NOTE: `DisplayOffset` is a `u32` and does not bound itself, so the
+        // shift has to saturate — a wrapping add would report an off-screen
+        // row as visible.
+        let offset = self.viewport.offset.0;
+        let first = u32::from(first.0).saturating_add(offset);
+        if first >= u32::from(rows) {
+            return Damage::Metadata;
         }
+        let last = u32::from(last.0)
+            .saturating_add(offset)
+            .min(u32::from(rows - 1));
+        Damage::rows(
+            ViewportLine(u16::try_from(first).expect("guarded above by first < rows")),
+            ViewportLine(u16::try_from(last).expect("clamped to rows - 1 above")),
+        )
     }
 
     /// Returns the grid size.
@@ -295,13 +268,20 @@ impl Screen {
     pub const fn display_offset(&self) -> DisplayOffset {
         self.viewport.offset
     }
+
+    /// Moves the viewport to `offset`.
+    ///
+    /// The caller clamps to the history that exists; this is the only seam
+    /// that writes the offset.
+    pub(crate) fn set_display_offset(&mut self, offset: DisplayOffset) {
+        self.viewport.offset = offset;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::damage::DamageRows;
-    use crate::schema::{Color, ScreenLine};
+    use crate::schema::Color;
 
     fn screen() -> Screen {
         Screen::new(GridSize { cols: 4, rows: 3 }, 10)
@@ -329,7 +309,7 @@ mod tests {
         let mut screen = screen();
         screen.grid[ScreenLine(0)][0].c = 'a';
         screen.state.line = ScreenLine(2);
-        screen.linefeed();
+        screen.lf();
         assert_eq!(screen.grid.history_len(), 1);
         screen.viewport.offset = DisplayOffset(1);
         assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
@@ -373,12 +353,12 @@ mod tests {
         let mut screen = screen();
         screen.grid[ScreenLine(0)][0].c = 'a';
         screen.state.line = ScreenLine(2);
-        screen.linefeed();
+        screen.lf();
         screen.viewport.offset = DisplayOffset(1);
         assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
 
         screen.state.line = ScreenLine(2);
-        screen.linefeed();
+        screen.lf();
         assert_eq!(screen.display_offset(), DisplayOffset(2));
         assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
     }
@@ -392,7 +372,7 @@ mod tests {
     fn output_at_the_live_tail_keeps_the_viewport_pinned() {
         let mut screen = screen();
         screen.state.line = ScreenLine(2);
-        screen.linefeed();
+        screen.lf();
         assert_eq!(screen.display_offset(), DisplayOffset(0));
     }
 
@@ -409,47 +389,58 @@ mod tests {
     fn a_scroll_at_history_capacity_clamps_the_offset() {
         let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
         screen.state.line = ScreenLine(2);
-        screen.linefeed();
+        screen.lf();
         screen.viewport.offset = DisplayOffset(1);
         screen.state.line = ScreenLine(2);
-        screen.linefeed();
+        screen.lf();
         assert_eq!(screen.grid.history_len(), 1);
         assert_eq!(screen.display_offset(), DisplayOffset(1));
     }
 
-    /// Asserts that damage from a scrolled screen names the viewport
-    /// row the write actually appears on.
+    /// Asserts that damage is reported in viewport rows, not the grid rows
+    /// the write used.
     ///
-    /// The agreed unit is the viewport row, not the active-grid row:
-    /// the renderer repaints by viewport row, and the coalescer counts
-    /// damage to decide how urgently to flush.
-    ///
-    /// Case: the user has scrolled back one line when the shell echoes
-    /// a character, so the live row it wrote sits one row lower in the
-    /// window.
+    /// Case: the user scrolls back one row and the shell echoes a character
+    /// at the live tail, which now sits one row lower in the window.
     #[test]
     fn a_scrolled_screen_reports_damage_in_viewport_rows() {
         let mut screen = screen();
         screen.state.line = ScreenLine(2);
-        screen.linefeed();
-        screen.viewport.offset = DisplayOffset(1);
+        screen.lf();
+        screen.set_display_offset(DisplayOffset(1));
         screen.state.line = ScreenLine(0);
         assert_eq!(
-            screen.print('x'),
-            Effects {
-                damage: Some(StagedDamage::Delta(vec![ViewportLine(1)].into())),
-                history: None,
-            }
+            screen.cr(),
+            Some(Damage::rows(ViewportLine(1), ViewportLine(1)))
         );
+    }
+
+    /// Asserts that a write whose rows all sit below the viewport still
+    /// forces a frame, carrying no dirty rows.
+    ///
+    /// Dropping the damage entirely would suppress the emit, which the
+    /// ledger's own contract forbids — the frame still carries the current
+    /// cursor and offset.
+    ///
+    /// Case: the viewport sits fully scrolled back into history while the
+    /// shell keeps writing at the live tail.
+    #[test]
+    fn a_write_below_the_viewport_reports_metadata_damage() {
+        let mut screen = screen();
+        screen.state.line = ScreenLine(2);
+        screen.lf();
+        screen.set_display_offset(DisplayOffset(1));
+        screen.state.line = ScreenLine(2);
+        assert_eq!(screen.cr(), Some(Damage::Metadata));
     }
 
     /// Asserts that a write below the bottom of the scrolled window
     /// reports no dirty row.
     ///
-    /// The agreed policy drops it rather than reporting a row off the
-    /// window: damage is what needs repainting, and letting invisible
-    /// output count would spend the coalescer's echo credit on a screen
-    /// nothing changed on.
+    /// The agreed policy reports [`Damage::Metadata`] rather than
+    /// dropping the write outright: a frame still has to carry the
+    /// current cursor and offset even though the row the write landed
+    /// on has scrolled out of the window.
     ///
     /// Case: the user reads scrollback while a build keeps printing at
     /// the live tail, which the window no longer shows.
@@ -458,17 +449,11 @@ mod tests {
         let mut screen = screen();
         for _ in 0..3 {
             screen.state.line = ScreenLine(2);
-            screen.linefeed();
+            screen.lf();
         }
         screen.viewport.offset = DisplayOffset(3);
         screen.state.line = ScreenLine(0);
-        assert_eq!(
-            screen.print('x'),
-            Effects {
-                damage: Some(StagedDamage::Delta(DamageRows::default())),
-                history: None,
-            }
-        );
+        assert_eq!(screen.print('x'), Some(Damage::Metadata));
     }
 
     /// Asserts that an erase spanning the screen reports only the rows
@@ -481,17 +466,30 @@ mod tests {
     fn a_scrolled_erase_reports_only_the_rows_still_in_the_window() {
         let mut screen = screen();
         screen.state.line = ScreenLine(2);
-        screen.linefeed();
+        screen.lf();
         screen.viewport.offset = DisplayOffset(1);
         screen.state.line = ScreenLine(0);
         assert_eq!(
             screen.erase_in_display(EraseScreenMode::Below),
-            Effects {
-                damage: Some(StagedDamage::Delta(
-                    vec![ViewportLine(1), ViewportLine(2)].into()
-                )),
-                history: None,
-            }
+            Some(Damage::rows(ViewportLine(1), ViewportLine(2)))
+        );
+    }
+
+    /// Asserts that a span reaching past the last visible row is clamped
+    /// rather than reported out of range.
+    ///
+    /// Case: the user scrolls back and the application erases from the
+    /// cursor to the bottom of the screen.
+    #[test]
+    fn a_span_running_past_the_viewport_is_clamped_to_its_last_row() {
+        let mut screen = screen();
+        screen.state.line = ScreenLine(2);
+        screen.lf();
+        screen.set_display_offset(DisplayOffset(1));
+        screen.state.line = ScreenLine(0);
+        assert_eq!(
+            screen.erase_in_display(EraseScreenMode::Below),
+            Some(Damage::rows(ViewportLine(1), ViewportLine(2)))
         );
     }
 
@@ -521,16 +519,10 @@ mod tests {
         let mut screen = screen();
         screen.state.column = GridColumn(2);
         screen.state.pending_wrap = true;
-        let effects = screen.carriage_return();
+        let damage = screen.cr();
         assert_eq!(screen.state.column, GridColumn(0));
         assert!(!screen.state.pending_wrap);
-        assert_eq!(
-            effects,
-            Effects {
-                damage: Some(StagedDamage::Delta(vec![ViewportLine(0)].into())),
-                history: None,
-            }
-        );
+        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(0))));
     }
 
     /// Asserts that a linefeed above the bottom row only moves the
@@ -541,58 +533,23 @@ mod tests {
     #[test]
     fn a_linefeed_above_the_bottom_moves_the_cursor() {
         let mut screen = screen();
-        let effects = screen.linefeed();
+        let damage = screen.lf();
         assert_eq!(screen.state.line, ScreenLine(1));
-        assert_eq!(
-            effects,
-            Effects {
-                damage: Some(StagedDamage::Delta(
-                    vec![ViewportLine(0), ViewportLine(1)].into()
-                )),
-                history: None,
-            }
-        );
+        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(1))));
     }
 
-    /// Asserts that a bottom-row linefeed scrolls the screen, pushes
-    /// the top row into history, and reports full damage.
+    /// Asserts that a linefeed at the bottom margin scrolls the screen and
+    /// pushes the departing row into history.
     ///
-    /// Case: a shell at the last row keeps printing, and the oldest
-    /// visible line must survive as scrollback history.
+    /// Case: a shell prints past the last row and the earlier output has to
+    /// remain reachable by scrolling back.
     #[test]
     fn a_bottom_linefeed_scrolls_and_pushes_history() {
         let mut screen = screen();
+        screen.grid[ScreenLine(0)][GridColumn(0)].c = 'a';
         screen.state.line = ScreenLine(2);
-        let effects = screen.linefeed();
-        assert_eq!(screen.state.line, ScreenLine(2));
-        assert_eq!(
-            effects,
-            Effects {
-                damage: Some(StagedDamage::Full),
-                history: Some(HistoryEvent::Pushed),
-            }
-        );
+        assert_eq!(screen.lf(), Some(Damage::Full));
         assert_eq!(screen.grid.history_len(), 1);
-    }
-
-    /// Asserts that at history capacity a bottom-row linefeed reports
-    /// the eviction.
-    ///
-    /// Case: a long-running session has filled the scrollback limit,
-    /// and continued output starts dropping the oldest history.
-    #[test]
-    fn a_bottom_linefeed_at_capacity_reports_the_eviction() {
-        let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
-        screen.state.line = ScreenLine(2);
-        screen.linefeed();
-        let effects = screen.linefeed();
-        assert_eq!(
-            effects,
-            Effects {
-                damage: Some(StagedDamage::Full),
-                history: Some(HistoryEvent::PushedWithEviction),
-            }
-        );
     }
 
     /// Asserts that the row scrolled in at the bottom carries the
@@ -605,7 +562,7 @@ mod tests {
         let mut screen = screen();
         screen.pen_mut().bg = Color::Indexed(4);
         screen.state.line = ScreenLine(2);
-        screen.linefeed();
+        screen.lf();
         assert_eq!(screen.grid[ScreenLine(2)][0].bg, Color::Indexed(4));
         assert_eq!(screen.grid[ScreenLine(2)][3].bg, Color::Indexed(4));
     }
@@ -622,7 +579,7 @@ mod tests {
     fn a_linefeed_preserves_pending_wrap() {
         let mut screen = screen();
         screen.state.pending_wrap = true;
-        screen.linefeed();
+        screen.lf();
         assert!(screen.state.pending_wrap);
     }
 
@@ -635,20 +592,14 @@ mod tests {
     fn print_stamps_the_pen_and_advances() {
         let mut screen = screen();
         screen.pen_mut().fg = Color::Indexed(1);
-        let effects = screen.print('a');
+        let damage = screen.print('a');
         assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
         assert_eq!(screen.grid[ScreenLine(0)][0].fg, Color::Indexed(1));
         assert_eq!(
             (screen.state.line, screen.state.column),
             (ScreenLine(0), GridColumn(1))
         );
-        assert_eq!(
-            effects,
-            Effects {
-                damage: Some(StagedDamage::Delta(vec![ViewportLine(0)].into())),
-                history: None,
-            }
-        );
+        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(0))));
     }
 
     /// Asserts that printing into the last column arms the deferred
@@ -678,26 +629,18 @@ mod tests {
         for c in ['a', 'b', 'c', 'd'] {
             screen.print(c);
         }
-        let effects = screen.print('e');
+        let damage = screen.print('e');
         assert_eq!(screen.grid[ScreenLine(1)][0].c, 'e');
         assert_eq!(
             (screen.state.line, screen.state.column),
             (ScreenLine(1), GridColumn(1))
         );
         assert!(!screen.state.pending_wrap);
-        assert_eq!(
-            effects,
-            Effects {
-                damage: Some(StagedDamage::Delta(
-                    vec![ViewportLine(0), ViewportLine(1)].into()
-                )),
-                history: None,
-            }
-        );
+        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(1))));
     }
 
     /// Asserts that a deferred wrap on the bottom row scrolls the
-    /// screen and reports the history push with full damage.
+    /// screen and reports full damage.
     ///
     /// Case: a shell fills the very last cell of the screen and keeps
     /// printing, forcing a scroll in the middle of the wrap.
@@ -707,15 +650,9 @@ mod tests {
         screen.state.line = ScreenLine(2);
         screen.state.column = GridColumn(3);
         screen.print('x');
-        let effects = screen.print('y');
+        let damage = screen.print('y');
         assert_eq!(screen.grid[ScreenLine(2)][0].c, 'y');
-        assert_eq!(
-            effects,
-            Effects {
-                damage: Some(StagedDamage::Full),
-                history: Some(HistoryEvent::Pushed),
-            }
-        );
+        assert_eq!(damage, Some(Damage::Full));
     }
 
     /// Asserts that erase-to-end clears from the cursor to the right
@@ -731,18 +668,12 @@ mod tests {
         }
         screen.state.column = GridColumn(1);
         screen.pen_mut().bg = Color::Indexed(2);
-        let effects = screen.erase_in_line(EraseLineMode::ToEnd);
+        let damage = screen.erase_in_line(EraseLineMode::ToEnd);
         assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
         assert_eq!(screen.grid[ScreenLine(0)][1].c, ' ');
         assert_eq!(screen.grid[ScreenLine(0)][1].bg, Color::Indexed(2));
         assert_eq!(screen.grid[ScreenLine(0)][3].bg, Color::Indexed(2));
-        assert_eq!(
-            effects,
-            Effects {
-                damage: Some(StagedDamage::Delta(vec![ViewportLine(0)].into())),
-                history: None,
-            }
-        );
+        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(0))));
     }
 
     /// Asserts that erase-to-start clears through the cursor column
@@ -781,9 +712,9 @@ mod tests {
         for c in ['a', 'b', 'c', 'd'] {
             screen.print(c);
         }
-        let effects = screen.erase_in_line(EraseLineMode::ToEnd);
+        let damage = screen.erase_in_line(EraseLineMode::ToEnd);
         assert_eq!(screen.grid[ScreenLine(0)][3].c, 'd');
-        assert_eq!(effects, Effects::default());
+        assert_eq!(damage, None);
     }
 
     /// Asserts that erase-all clears the whole row regardless of the
@@ -812,25 +743,17 @@ mod tests {
     fn erase_display_below_clears_from_the_cursor_down() {
         let mut screen = screen();
         screen.print('a');
-        screen.linefeed();
-        screen.carriage_return();
+        screen.lf();
+        screen.cr();
         for c in ['b', 'c'] {
             screen.print(c);
         }
         screen.state.column = GridColumn(1);
-        let effects = screen.erase_in_display(EraseScreenMode::Below);
+        let damage = screen.erase_in_display(EraseScreenMode::Below);
         assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
         assert_eq!(screen.grid[ScreenLine(1)][0].c, 'b');
         assert_eq!(screen.grid[ScreenLine(1)][1].c, ' ');
-        assert_eq!(
-            effects,
-            Effects {
-                damage: Some(StagedDamage::Delta(
-                    vec![ViewportLine(1), ViewportLine(2)].into()
-                )),
-                history: None,
-            }
-        );
+        assert_eq!(damage, Some(Damage::rows(ViewportLine(1), ViewportLine(2))));
     }
 
     /// Asserts that erase-above clears everything through the cursor
@@ -842,26 +765,18 @@ mod tests {
     fn erase_display_above_clears_through_the_cursor() {
         let mut screen = screen();
         screen.print('a');
-        screen.linefeed();
-        screen.carriage_return();
+        screen.lf();
+        screen.cr();
         for c in ['b', 'c', 'd'] {
             screen.print(c);
         }
         screen.state.column = GridColumn(1);
-        let effects = screen.erase_in_display(EraseScreenMode::Above);
+        let damage = screen.erase_in_display(EraseScreenMode::Above);
         assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
         assert_eq!(screen.grid[ScreenLine(1)][0].c, ' ');
         assert_eq!(screen.grid[ScreenLine(1)][1].c, ' ');
         assert_eq!(screen.grid[ScreenLine(1)][2].c, 'd');
-        assert_eq!(
-            effects,
-            Effects {
-                damage: Some(StagedDamage::Delta(
-                    vec![ViewportLine(0), ViewportLine(1)].into()
-                )),
-                history: None,
-            }
-        );
+        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(1))));
     }
 
     /// Asserts that erase-all clears the visible screen in place while
@@ -879,21 +794,15 @@ mod tests {
     fn erase_display_all_clears_the_screen_but_not_history() {
         let mut screen = screen();
         screen.state.line = ScreenLine(2);
-        screen.linefeed();
-        screen.carriage_return();
+        screen.lf();
+        screen.cr();
         for c in ['a', 'b'] {
             screen.print(c);
         }
-        let effects = screen.erase_in_display(EraseScreenMode::All);
+        let damage = screen.erase_in_display(EraseScreenMode::All);
         assert_eq!(screen.grid[ScreenLine(2)][0].c, ' ');
         assert_eq!(screen.grid[ScreenLine(2)][1].c, ' ');
         assert_eq!(screen.grid.history_len(), 1);
-        assert_eq!(
-            effects,
-            Effects {
-                damage: Some(StagedDamage::Full),
-                history: None,
-            }
-        );
+        assert_eq!(damage, Some(Damage::Full));
     }
 }

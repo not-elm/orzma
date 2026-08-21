@@ -81,7 +81,8 @@ struct Executor<'a> {
 
 impl VTActor for Executor<'_> {
     fn print(&mut self, b: char) {
-        self.device.active_mut().print(b);
+        let damage = self.device.active_mut().print(b);
+        self.damage.stage_if_changed(damage);
     }
 
     fn execute_c0_or_c1(&mut self, control: u8) {
@@ -89,22 +90,29 @@ impl VTActor for Executor<'_> {
             0x07 => {
                 let _ = self.signal_tx.send(VtSignal::Bell);
             }
-            0x0A => {}
+            0x0A => {
+                let damage = self.device.active_mut().lf();
+                self.damage.stage_if_changed(damage);
+            }
+            0x0D => {
+                let damage = self.device.active_mut().cr();
+                self.damage.stage_if_changed(damage);
+            }
             _ => {}
         }
     }
 
     fn dcs_hook(
         &mut self,
-        mode: u8,
-        params: &[i64],
-        intermediates: &[u8],
-        ignored_excess_intermediates: bool,
+        _mode: u8,
+        _params: &[i64],
+        _intermediates: &[u8],
+        _ignored_excess_intermediates: bool,
     ) {
         todo!()
     }
 
-    fn dcs_put(&mut self, byte: u8) {
+    fn dcs_put(&mut self, _byte: u8) {
         todo!()
     }
 
@@ -114,23 +122,28 @@ impl VTActor for Executor<'_> {
 
     fn esc_dispatch(
         &mut self,
-        params: &[i64],
-        intermediates: &[u8],
-        ignored_excess_intermediates: bool,
-        byte: u8,
+        _params: &[i64],
+        _intermediates: &[u8],
+        _ignored_excess_intermediates: bool,
+        _byte: u8,
     ) {
         todo!()
     }
 
-    fn csi_dispatch(&mut self, params: &[vtparse::CsiParam], parameters_truncated: bool, byte: u8) {
+    fn csi_dispatch(
+        &mut self,
+        _params: &[vtparse::CsiParam],
+        _parameters_truncated: bool,
+        _byte: u8,
+    ) {
         todo!()
     }
 
-    fn osc_dispatch(&mut self, params: &[&[u8]]) {
+    fn osc_dispatch(&mut self, _params: &[&[u8]]) {
         todo!()
     }
 
-    fn apc_dispatch(&mut self, data: Vec<u8>) {
+    fn apc_dispatch(&mut self, _data: Vec<u8>) {
         todo!()
     }
 }
