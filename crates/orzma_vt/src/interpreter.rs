@@ -10,11 +10,10 @@
     reason = "OrzmaVt::interpret reaches the parser once the executor's callbacks land"
 )]
 
-use std::sync::mpsc::Sender;
-
 use crate::{
     damage::DamageLedger, device::DeviceState, placement::PlacementStore, schema::VtSignal,
 };
+use std::sync::mpsc::Sender;
 use vtparse::{CsiParam, VTActor, VTParser};
 
 /// The parser plus the bytes a synchronized update is holding back.
@@ -106,6 +105,11 @@ impl VTActor for Executor<'_> {
                 let damage = self.device.active_mut().cr();
                 self.damage.stage_if_changed(damage);
             }
+            0x85 => {
+                self.damage.stage_if_changed(self.device.active_mut().cr());
+                self.damage.stage_if_changed(self.device.active_mut().lf());
+            }
+            0x88 => self.device.active_mut().hts(),
             _ => {}
         }
     }

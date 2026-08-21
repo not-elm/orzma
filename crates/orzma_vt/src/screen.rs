@@ -256,8 +256,12 @@ impl Screen {
     }
 
     /// Sets a tabulation stop at the cursor column (HTS).
+    ///
+    /// Routed through the same edit vocabulary `CTC 0` uses, because the
+    /// two control functions request the identical edit. TABULATION STOP
+    /// MODE scoping, when it lands, has to reach HTS as well.
     pub fn hts(&mut self) {
-        self.tabs.set(self.state.column);
+        self.apply_tab_edit(CharacterTabEdit::SetColumn);
     }
 
     /// Applies a `TBC` (`CSI Ps g`) parameter; a value only line
@@ -919,6 +923,48 @@ mod tests {
             screen.state.column = GridColumn(0);
             screen.ht();
             assert_eq!(screen.state.column, GridColumn(3));
+        }
+
+        /// Asserts that setting a stop leaves the cursor where it was.
+        ///
+        /// HTS edits the stop table and nothing else; the neighbouring
+        /// name HT is the one that moves. Nothing on screen changes
+        /// either, which is why `hts` reports no damage to stage.
+        ///
+        /// Case: an application installs a tab position at the column it
+        /// is already writing at, then keeps printing on the same line.
+        #[test]
+        fn hts_does_not_move_the_cursor() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(3);
+            screen.hts();
+            assert_eq!(screen.state.column, GridColumn(3));
+        }
+
+        /// Asserts that HTS and `CTC 0` install the same stop.
+        ///
+        /// The two are one edit in the vocabulary rather than two
+        /// parallel implementations, so that a later TABULATION STOP
+        /// MODE cannot scope one of them and miss the other.
+        ///
+        /// Case: an application uses CTC rather than HTS to install its
+        /// tab positions, having found the CSI form easier to generate.
+        #[test]
+        fn hts_and_ctc_zero_install_the_same_stop() {
+            let mut by_hts = wide_screen();
+            by_hts.state.column = GridColumn(3);
+            by_hts.hts();
+
+            let mut by_ctc = wide_screen();
+            by_ctc.state.column = GridColumn(3);
+            by_ctc.ctc(0);
+
+            for screen in [&mut by_hts, &mut by_ctc] {
+                screen.state.column = GridColumn(0);
+                screen.ht();
+            }
+            assert_eq!(by_hts.state.column, GridColumn(3));
+            assert_eq!(by_ctc.state.column, by_hts.state.column);
         }
 
         /// Asserts that clearing the stop under the cursor makes the
