@@ -13,6 +13,7 @@ pub mod viewport;
 
 use self::cell::{Cell, Pen};
 use self::grid::Grid;
+use self::grid::LineId;
 use self::grid::row::Row;
 use crate::damage::Damage;
 use crate::schema::{
@@ -275,6 +276,24 @@ impl Screen {
     /// that writes the offset.
     pub(crate) fn set_display_offset(&mut self, offset: DisplayOffset) {
         self.viewport.offset = offset;
+    }
+
+    /// The id of the row the cursor sits on — the anchor a mount samples.
+    pub(crate) fn cursor_line_id(&self) -> LineId {
+        self.grid.line_id(self.state.line)
+    }
+
+    /// The signed viewport row `id`'s row now sits at; `None` once the row
+    /// has left the ring.
+    ///
+    /// Unlike damage projection this does not cull: a placement whose
+    /// anchor sits above the viewport reports a negative row and the
+    /// renderer clips it. The value saturates rather than reusing `None`,
+    /// which already means the row is gone.
+    pub(crate) fn viewport_row_of(&self, id: LineId) -> Option<i32> {
+        let line = self.grid.grid_line(id)?;
+        let row = i64::from(line.0) + i64::from(self.viewport.offset.0);
+        Some(row.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
     }
 }
 
@@ -804,5 +823,50 @@ mod tests {
         assert_eq!(screen.grid[ScreenLine(2)][1].c, ' ');
         assert_eq!(screen.grid.history_len(), 1);
         assert_eq!(damage, Some(Damage::Full));
+    }
+
+    /// Asserts that an anchor above the viewport reports a negative row
+    /// rather than being dropped.
+    ///
+    /// Case: a mounted webview scrolls off the top of the window while the
+    /// user keeps working below it.
+    #[test]
+    fn an_anchor_above_the_viewport_reports_a_negative_row() {
+        let mut screen = screen();
+        let id = screen.cursor_line_id();
+        assert_eq!(screen.viewport_row_of(id), Some(0));
+        screen.state.line = ScreenLine(2);
+        screen.lf();
+        assert_eq!(screen.viewport_row_of(id), Some(-1));
+    }
+
+    /// Asserts that scrolling the viewport back moves an anchor's reported
+    /// row down by the same amount.
+    ///
+    /// Case: the user scrolls up to re-read output, and a webview anchored
+    /// in that output must be painted where its text now sits.
+    #[test]
+    fn scrolling_back_moves_an_anchors_reported_row_down() {
+        let mut screen = screen();
+        let id = screen.cursor_line_id();
+        screen.state.line = ScreenLine(2);
+        screen.lf();
+        screen.set_display_offset(DisplayOffset(1));
+        assert_eq!(screen.viewport_row_of(id), Some(0));
+    }
+
+    /// Asserts that an anchor whose row left the ring stops resolving.
+    ///
+    /// Case: the scrollback fills and the row a webview was anchored to is
+    /// finally trimmed away.
+    #[test]
+    fn an_anchor_trimmed_from_the_ring_stops_resolving() {
+        let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
+        let id = screen.cursor_line_id();
+        for _ in 0..2 {
+            screen.state.line = ScreenLine(2);
+            screen.lf();
+        }
+        assert_eq!(screen.viewport_row_of(id), None);
     }
 }
