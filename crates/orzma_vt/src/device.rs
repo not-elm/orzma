@@ -112,6 +112,16 @@ impl DeviceState {
     pub fn palette(&self) -> Palette {
         Palette::default()
     }
+
+    /// Switches the active screen.
+    ///
+    /// The production path is the `?1049` handler, which is not
+    /// implemented yet; this exists so the placement tests can reach the
+    /// alternate screen.
+    #[cfg(test)]
+    pub(crate) fn set_active_screen_for_test(&mut self, kind: ScreenKind) {
+        self.modes.active_screen = kind;
+    }
 }
 
 /// The active screen together with which of the two it is.

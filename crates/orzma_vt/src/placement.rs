@@ -7,9 +7,7 @@
 //! emit time.
 
 use crate::device::ActiveScreen;
-use crate::schema::{
-    DisplayOffset, GridColumn, GridSize, PlacementId, ProjectedPlacement, ScreenKind,
-};
+use crate::schema::{GridColumn, PlacementId, ProjectedPlacement, ScreenKind};
 use crate::screen::grid::LineId;
 
 /// The placement table: minted ids, line anchors, and occupancy spans.
@@ -29,25 +27,34 @@ impl PlacementStore {
         }
     }
 
-    /// Projects every placement on `active_screen` into viewport
+    /// Projects every placement on the active screen into viewport
     /// coordinates — the complete list, not a diff.
     ///
     /// # Invariants
     ///
-    /// Projection reads; it never evicts, repairs an anchor, or
-    /// refreshes a cache. Those belong to `HistoryEvent` handling,
-    /// which runs while damage can still be staged — a mutation here
-    /// would land after the ledger was drained and reach no frame.
-    // TODO: Return the placements anchored on `active_screen` once the
-    // table exists. An empty list is the honest answer while nothing can
-    // be mounted.
-    pub fn project(
-        &self,
-        _active_screen: ScreenKind,
-        _offset: DisplayOffset,
-        _size: GridSize,
-    ) -> Vec<ProjectedPlacement> {
-        Vec::new()
+    /// Projection reads; it never evicts, repairs an anchor, or refreshes a
+    /// cache. Those belong to [`Self::evict_lost_anchors`], which runs while
+    /// damage can still be staged — a mutation here would land after the
+    /// ledger was drained and reach no frame.
+    ///
+    /// A placement whose anchor has left the ring is omitted rather than
+    /// removed, so it stays invisible but alive until the next eviction
+    /// sweep. Rows outside the viewport are not culled: a negative row
+    /// passes through for the renderer to clip.
+    pub fn project(&self, active: ActiveScreen<'_>) -> Vec<ProjectedPlacement> {
+        self.placements
+            .iter()
+            .filter(|p| p.screen == active.kind())
+            .filter_map(|p| {
+                Some(ProjectedPlacement {
+                    id: p.id,
+                    viewport_row: active.viewport_row_of(p.anchor)?,
+                    col: p.col,
+                    rows: p.rows,
+                    cols: p.cols,
+                })
+            })
+            .collect()
     }
 
     /// Registers a mount at the cursor and mints its id; `None` when
@@ -108,6 +115,49 @@ impl PlacementStore {
             }
         });
         before != self.placements.len()
+    }
+
+    /// Drops the placements whose anchor row left the grid ring and
+    /// returns their ids for `VtSignal::WebviewEvicted`.
+    ///
+    /// Only the active screen can be checked, which is sound while the
+    /// inactive grid never scrolls. Reflow breaks that and will have to
+    /// sweep both.
+    pub fn evict_lost_anchors(&mut self, active: ActiveScreen<'_>) -> Vec<PlacementId> {
+        if self.is_empty() {
+            return Vec::new();
+        }
+        let mut evicted = Vec::new();
+        self.placements.retain(|p| {
+            if p.screen != active.kind() || active.viewport_row_of(p.anchor).is_some() {
+                return true;
+            }
+            evicted.push(p.id);
+            false
+        });
+        evicted
+    }
+
+    /// Applies an alternate-screen flip, tearing down the placements the
+    /// abandoned alternate screen owned.
+    ///
+    /// Primary placements are hidden while the alternate screen is shown,
+    /// not destroyed. This operation stages no damage of its own: the
+    /// flip itself must stage `Damage::Full`, which carries the changed
+    /// list.
+    pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<PlacementId> {
+        if to == ScreenKind::Alternate {
+            return Vec::new();
+        }
+        let mut evicted = Vec::new();
+        self.placements.retain(|p| {
+            if p.screen == ScreenKind::Primary {
+                return true;
+            }
+            evicted.push(p.id);
+            false
+        });
+        evicted
     }
 
     /// Number of live placements, across both screens.
@@ -251,5 +301,94 @@ mod tests {
     fn an_unmount_matching_nothing_reports_no_change() {
         let mut store = PlacementStore::new();
         assert!(!store.unmount(Some("absent"), None));
+    }
+
+    /// Asserts that a placement's projected row follows its text as the
+    /// screen scrolls.
+    ///
+    /// Case: a webview is mounted mid-screen and the shell keeps printing
+    /// below it.
+    #[test]
+    fn a_projected_row_follows_its_text_as_content_scrolls() {
+        let mut device = device();
+        let mut store = PlacementStore::new();
+        let id = mount(&mut store, &device, "memo").expect("mount accepted");
+        assert_eq!(store.project(device.active_screen())[0].viewport_row, 0);
+
+        for _ in 0..3 {
+            device.active_mut().lf();
+        }
+        let projected = store.project(device.active_screen());
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].id, id);
+        assert_eq!(projected[0].viewport_row, -1);
+    }
+
+    /// Asserts that a placement mounted on one screen is omitted while the
+    /// other is shown, and returns when it is active again.
+    ///
+    /// Case: a full-screen editor opens over a shell that has a webview
+    /// mounted, and the user quits back to the shell.
+    #[test]
+    fn a_placement_is_hidden_while_the_other_screen_is_active() {
+        let mut device = device();
+        let mut store = PlacementStore::new();
+        mount(&mut store, &device, "memo").expect("mount accepted");
+
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+        assert!(store.project(device.active_screen()).is_empty());
+
+        device.set_active_screen_for_test(ScreenKind::Primary);
+        assert_eq!(store.project(device.active_screen()).len(), 1);
+    }
+
+    /// Asserts that leaving the alternate screen tears down the placements
+    /// mounted on it.
+    ///
+    /// Case: a full-screen application that mounted a panel exits, and the
+    /// panel must not outlive the screen it was drawn on.
+    #[test]
+    fn leaving_the_alternate_screen_evicts_its_placements() {
+        let mut device = device();
+        let mut store = PlacementStore::new();
+        let primary = mount(&mut store, &device, "shell").expect("mount accepted");
+
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+        let alternate = mount(&mut store, &device, "panel").expect("mount accepted");
+
+        assert_eq!(store.switch_screen(ScreenKind::Primary), vec![alternate]);
+        device.set_active_screen_for_test(ScreenKind::Primary);
+        let projected = store.project(device.active_screen());
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].id, primary);
+    }
+
+    /// Asserts that a placement whose anchor row left the ring is evicted
+    /// and named.
+    ///
+    /// Case: the scrollback reaches its cap and trims away the row a
+    /// webview was anchored to.
+    #[test]
+    fn a_placement_whose_anchor_left_the_ring_is_evicted() {
+        let mut device = DeviceState::new(GridSize { cols: 8, rows: 3 }, 1);
+        let mut store = PlacementStore::new();
+        let id = mount(&mut store, &device, "memo").expect("mount accepted");
+        for _ in 0..4 {
+            device.active_mut().lf();
+        }
+        assert!(store.project(device.active_screen()).is_empty());
+        assert_eq!(store.evict_lost_anchors(device.active_screen()), vec![id]);
+        assert_eq!(store.len(), 0);
+    }
+
+    /// Asserts that an empty table evicts nothing.
+    ///
+    /// Case: an ordinary shell session with no webview mounted scrolls its
+    /// output, which runs this check on every linefeed.
+    #[test]
+    fn an_empty_table_evicts_nothing() {
+        let device = device();
+        let mut store = PlacementStore::new();
+        assert!(store.evict_lost_anchors(device.active_screen()).is_empty());
     }
 }
