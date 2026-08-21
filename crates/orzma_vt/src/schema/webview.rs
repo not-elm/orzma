@@ -1,5 +1,7 @@
 //! Webview vocabulary: the APC verb (`ESC _ O <verb>[;<key>=<value>,...] ST`), the VT-minted placement identity, and its projected geometry.
 
+use crate::schema::GridColumn;
+
 const MAX_VIEW_ID: usize = 128;
 /// Upper bound on a mount's reserved rows, inherited from the OSC 5379
 /// implementation. With the ~2:1 terminal cell aspect and DPR 2, a
@@ -188,7 +190,7 @@ pub struct ProjectedPlacement {
     /// this stays a raw signed int.
     pub viewport_row: i32,
     /// Viewport column of the rect's left cell.
-    pub col: u16,
+    pub col: GridColumn,
     /// Rect height in cells (mount-time reservation).
     pub rows: u16,
     /// Rect width in cells (mount-time reservation).

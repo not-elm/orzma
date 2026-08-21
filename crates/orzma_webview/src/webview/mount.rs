@@ -603,7 +603,7 @@ fn project_webview_overlays(
                 let row = i64::from(projected.viewport_row);
                 if row + i64::from(projected.rows) <= 0
                     || row >= i64::from(grid.rows)
-                    || u32::from(projected.col) >= u32::from(grid.cols)
+                    || u32::from(projected.col.0) >= u32::from(grid.cols)
                 {
                     continue;
                 }
@@ -613,7 +613,7 @@ fn project_webview_overlays(
                 }
                 overlays.rects[slot] = IVec4::new(
                     projected.viewport_row,
-                    i32::from(projected.col),
+                    i32::from(projected.col.0),
                     i32::from(projected.rows),
                     i32::from(projected.cols),
                 );
@@ -668,7 +668,7 @@ mod tests {
     use bevy_cef::prelude::PreloadScripts;
     use bevy_orzma_term::prelude::{TermApcWebviewSignal, TermWebviewEvictedSignal};
     use orzma_tty_renderer::CellMetrics;
-    use orzma_vt::prelude::{ApcWebviewVerb, PlacementId, ProjectedPlacement};
+    use orzma_vt::prelude::{ApcWebviewVerb, GridColumn, PlacementId, ProjectedPlacement};
 
     fn make_test_app() -> App {
         let mut app = App::new();
@@ -777,7 +777,7 @@ mod tests {
         ProjectedPlacement {
             id,
             viewport_row: 2,
-            col: 3,
+            col: GridColumn(3),
             rows: 10,
             cols: 40,
         }
@@ -1392,7 +1392,7 @@ mod tests {
                 vec![ProjectedPlacement {
                     id: PlacementId(1),
                     viewport_row: -20,
-                    col: 0,
+                    col: GridColumn(0),
                     rows: 6,
                     cols: 10,
                 }],
@@ -1414,7 +1414,7 @@ mod tests {
                 vec![ProjectedPlacement {
                     id: PlacementId(1),
                     viewport_row: 30,
-                    col: 0,
+                    col: GridColumn(0),
                     rows: 6,
                     cols: 10,
                 }],
@@ -1436,7 +1436,7 @@ mod tests {
                 vec![ProjectedPlacement {
                     id: PlacementId(1),
                     viewport_row: 2,
-                    col: 80,
+                    col: GridColumn(80),
                     rows: 6,
                     cols: 10,
                 }],
@@ -1470,7 +1470,7 @@ mod tests {
                 vec![ProjectedPlacement {
                     id: PlacementId(1),
                     viewport_row: 2,
-                    col: 79,
+                    col: GridColumn(79),
                     rows: 10,
                     cols: 10,
                 }],
@@ -2294,7 +2294,7 @@ mod tests {
                 vec![ProjectedPlacement {
                     id: PlacementId(1),
                     viewport_row: -2,
-                    col: 4,
+                    col: GridColumn(4),
                     rows: 6,
                     cols: 20,
                 }],
@@ -2347,7 +2347,7 @@ mod tests {
                 vec![ProjectedPlacement {
                     id: PlacementId(9),
                     viewport_row: 1,
-                    col: 1,
+                    col: GridColumn(1),
                     rows: 2,
                     cols: 2,
                 }],
@@ -2366,7 +2366,7 @@ mod tests {
         let placed = ProjectedPlacement {
             id: PlacementId(1),
             viewport_row: 3,
-            col: 2,
+            col: GridColumn(2),
             rows: 10,
             cols: 40,
         };
@@ -2430,7 +2430,7 @@ mod tests {
                 vec![ProjectedPlacement {
                     id: PlacementId(2),
                     viewport_row: 5,
-                    col: 0,
+                    col: GridColumn(0),
                     rows: 10,
                     cols: 40,
                 }],

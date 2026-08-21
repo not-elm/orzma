@@ -129,7 +129,7 @@ fn runs_to_cells(runs: &[Run], line: GridLine, hyperlinks: &[Hyperlink]) -> Vec<
 mod tests {
     use super::*;
     use crate::schema::{
-        Color, Cursor, Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId,
+        Color, Cursor, GridColumn, Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId,
         ProjectedPlacement, Rgb, Row, Style,
     };
 
@@ -345,7 +345,7 @@ mod tests {
         let placed = ProjectedPlacement {
             id: PlacementId(1),
             viewport_row: 2,
-            col: 3,
+            col: GridColumn(3),
             rows: 4,
             cols: 5,
         };
