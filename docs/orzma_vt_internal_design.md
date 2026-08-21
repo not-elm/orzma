@@ -142,7 +142,7 @@ alt スクリーンから抜けるときは `switch_screen` がその画面が�
 
 ### 4.6 シグナル・応答は呼び出しローカルの `Products`
 
-vtparse のコールバックは戻り値を持てないため、`Executor` が借用する per-interpret の `Products { signals, replies }` に収集し、`VtUpdate` へ変換して返す。永続 drain 状態を持たないことで「空チャンク → `VtUpdate::default()`」の契約が構造的に保証される。
+vtparse のコールバックは戻り値を持てないため、`Executor` が借用する per-interpret の `Products { signals, replies }` に収集し、`VtUpdate` へ変換して返す。永続 drain 状態を持たないことで「空チャンク → `VtUpdate::default()`」の契約が構造的に保証される。現状は `Executor` が `Products` の代わりに `signal_tx: &mut Sender<VtSignal>` を暫定的に貫通させている。
 
 ### 4.7 webview はテキストセルの変種にしない
 

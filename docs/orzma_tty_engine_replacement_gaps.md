@@ -27,17 +27,13 @@
 
 ## 3. ブロッカー級の機能不足(orzma_term / bevy_orzma_term)
 
-### 3.1 PTY 出力でフレームが出ない
+### 3.1 起動直後の即時初回スナップショット保証がない
 
-[`OrzmaTerm::pump`](../crates/orzma_term/src/lib.rs) は `interpret` 後に coalescer を arm しない。`Coalescer::is_due` は disarm 状態で常に偽なので、emit の契機が scroll / resize / selection しかなく、**シェルが何を出力しても描画されない**。
+[`OrzmaTerm::feed_chunk`](../crates/orzma_term/src/lib.rs) は `interpret` の戻り値 `damaged` を見て `Coalescer::arm_or_extend` を呼ぶようになった。`pump` はその窓が `Coalescer::is_due` に達した時点で `Vt::frame` を読んで emit する。scroll / resize と合流する形で、PTY 出力からの emit 自体はすでに結線済みである。
 
-付随して次も未結線である。
+未結線として残るのは次の一点のみである。
 
-- `Coalescer::should_flush_immediately`(bootstrap 即時 emit、`pending_user_input` による入力エコーの低遅延化)は [coalescer.rs](../crates/orzma_term/src/coalescer.rs) に移植済みだが、呼び出し側が存在しない。
-- `pending_user_input` を立てる仕組み自体がない(旧エンジンは `TerminalHandle::write` が書き込み**前**にフラグを立てていた。この順序は load-bearing としてドキュメント化されていた)。
-- 旧 `flush_due_terminals` の bootstrap 救済(`needs_bootstrap_emit` → `force_bootstrap_damage`)に相当する初回スナップショット保証がない。
-
-`pump` 内の `TODO: DamageVerdictを使い、coalescerのdeadlineを調整する` がこの箇所を指す。
+- 旧 `flush_due_terminals` の bootstrap 救済(`needs_bootstrap_emit` → `force_bootstrap_damage`)に相当する、起動直後の即時初回スナップショット保証がない。`Coalescer` 自身は `needs_bootstrap` / `settle_emit` で bootstrap 債務を追跡しているが、`pump` はそれを読まず通常の `is_due` デッドラインにしか従わないため、最初のフレームも他のフレームと同じ debounce を待つ。
 
 ### 3.2 ChildExit が発火しない
 
