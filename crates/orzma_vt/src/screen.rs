@@ -295,6 +295,11 @@ impl Screen {
         let row = i64::from(line.0) + i64::from(self.viewport.offset.0);
         Some(row.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
     }
+
+    /// The cursor's column.
+    pub(crate) fn cursor_column(&self) -> GridColumn {
+        self.state.column
+    }
 }
 
 #[cfg(test)]

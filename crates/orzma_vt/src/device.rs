@@ -11,8 +11,9 @@
 )]
 
 use crate::damage::Damage;
-use crate::schema::{DisplayOffset, GridSize, Palette, ScreenKind, Scroll, VtModes};
+use crate::schema::{DisplayOffset, GridColumn, GridSize, Palette, ScreenKind, Scroll, VtModes};
 use crate::screen::Screen;
+use crate::screen::grid::LineId;
 
 /// The emulated terminal device: screens, modes, tabs, colors, and
 /// title.
@@ -68,6 +69,14 @@ impl DeviceState {
         }
     }
 
+    /// The screen the device reads and writes, paired with its kind.
+    pub fn active_screen(&self) -> ActiveScreen<'_> {
+        ActiveScreen {
+            kind: self.modes.active_screen,
+            screen: self.active(),
+        }
+    }
+
     /// Resizes both screens, reflowing content; `None` when the
     /// dimensions already matched.
     // TODO: Forward the `HistoryEvent::Reflowed` the reflow produces to
@@ -102,6 +111,40 @@ impl DeviceState {
     // can override it.
     pub fn palette(&self) -> Palette {
         Palette::default()
+    }
+}
+
+/// The active screen together with which of the two it is.
+///
+/// [`crate::screen::grid::LineId`] is unique per grid, so an anchor
+/// resolved against the other screen's grid silently names a different
+/// row. Pairing the two makes that mismatch unconstructible.
+#[derive(Clone, Copy)]
+pub(crate) struct ActiveScreen<'a> {
+    kind: ScreenKind,
+    screen: &'a Screen,
+}
+
+impl ActiveScreen<'_> {
+    /// Which of the two screens this is.
+    pub fn kind(&self) -> ScreenKind {
+        self.kind
+    }
+
+    /// The id of the row the cursor sits on.
+    pub fn cursor_line_id(&self) -> LineId {
+        self.screen.cursor_line_id()
+    }
+
+    /// The signed viewport row `id` now sits at; `None` once the row has
+    /// left the ring.
+    pub fn viewport_row_of(&self, id: LineId) -> Option<i32> {
+        self.screen.viewport_row_of(id)
+    }
+
+    /// The cursor's column.
+    pub fn cursor_column(&self) -> GridColumn {
+        self.screen.cursor_column()
     }
 }
 
