@@ -18,6 +18,21 @@ pub enum HistoryEvent {
     PushedWithEviction,
 }
 
+/// Stable identity of one grid row, minted when the row enters the ring.
+///
+/// # Invariants
+///
+/// Ids are minted monotonically per grid and never reused, and the ring
+/// holds a consecutive run of them, oldest at the front. A placement
+/// anchored to one can therefore never be re-pointed at later content
+/// on the same grid.
+///
+/// The uniqueness is per grid, NOT per terminal: the primary and
+/// alternate screens own separate grids that both start at zero, so
+/// resolving an id against the wrong one silently names a different row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LineId(u64);
+
 /// Storage-only grid: scrollback history plus the visible screen in
 /// one ring.
 ///
@@ -37,6 +52,12 @@ pub struct Grid {
     /// History row cap: `history_len` never exceeds it, and a scroll
     /// at the cap recycles the evicted row as the incoming blank.
     max_history: usize,
+    /// Id of the ring's front row — the oldest surviving line.
+    ///
+    /// Every row's id is `front_line_id + its index in the ring`, because
+    /// ids are minted at the back and dropped from the front, so the ring
+    /// always holds a consecutive run.
+    front_line_id: u64,
 }
 
 impl Grid {
@@ -50,6 +71,7 @@ impl Grid {
             rows,
             size,
             max_history,
+            front_line_id: 0,
         }
     }
 
@@ -80,9 +102,31 @@ impl Grid {
             .rows
             .pop_front()
             .expect("the ring always holds the visible rows");
+        self.front_line_id = self
+            .front_line_id
+            .checked_add(1)
+            .expect("a terminal cannot scroll u64::MAX rows in one session");
         recycled.fill(fill);
         self.rows.push_back(recycled);
         HistoryEvent::PushedWithEviction
+    }
+
+    /// The id of the row at a screen line.
+    pub(super) fn line_id(&self, line: ScreenLine) -> LineId {
+        LineId(self.front_line_id + self.history_len() as u64 + u64::from(line.0))
+    }
+
+    /// The active-grid line the row `id` now sits at; `None` once it has
+    /// left the ring.
+    pub(super) fn grid_line(&self, id: LineId) -> Option<GridLine> {
+        let index = id.0.checked_sub(self.front_line_id)?;
+        if index >= self.rows.len() as u64 {
+            return None;
+        }
+        let line = index as i64 - self.history_len() as i64;
+        Some(GridLine(
+            i32::try_from(line).expect("a ring index minus its history fits in i32"),
+        ))
     }
 
     /// Borrows the row at an active-grid line; a negative line reaches
@@ -252,5 +296,75 @@ mod tests {
         assert_eq!(grid[ScreenLine(0)][1].c, ' ');
         assert_eq!(grid[ScreenLine(0)][2].c, ' ');
         assert_eq!(grid[ScreenLine(0)][3].c, 'x');
+    }
+
+    /// Asserts that an id looked up from a screen line resolves back to the
+    /// same grid line while the row is still on screen.
+    ///
+    /// Case: a webview mounts at the cursor and, before anything scrolls,
+    /// the frame emitter projects it back to a row.
+    #[test]
+    fn a_line_id_round_trips_while_the_row_is_on_screen() {
+        let grid = grid(3, 10);
+        let id = grid.line_id(ScreenLine(1));
+        assert_eq!(grid.grid_line(id), Some(GridLine(1)));
+    }
+
+    /// Asserts that a scroll moves a row's grid line down by one while its
+    /// id keeps naming it.
+    ///
+    /// Case: a mounted webview stays anchored to its text as the shell
+    /// keeps printing below it.
+    #[test]
+    fn an_id_follows_its_row_into_history() {
+        let mut grid = grid(3, 10);
+        let id = grid.line_id(ScreenLine(0));
+        grid.scroll_up_one(Cell::default());
+        assert_eq!(grid.grid_line(id), Some(GridLine(-1)));
+        grid.scroll_up_one(Cell::default());
+        assert_eq!(grid.grid_line(id), Some(GridLine(-2)));
+    }
+
+    /// Asserts that an id whose row was trimmed out of the ring no longer
+    /// resolves.
+    ///
+    /// Case: the scrollback reaches its cap and the row a webview was
+    /// anchored to is finally dropped.
+    #[test]
+    fn a_trimmed_id_no_longer_resolves() {
+        let mut grid = grid(3, 1);
+        let id = grid.line_id(ScreenLine(0));
+        grid.scroll_up_one(Cell::default());
+        assert_eq!(grid.grid_line(id), Some(GridLine(-1)));
+        grid.scroll_up_one(Cell::default());
+        assert_eq!(grid.grid_line(id), None);
+    }
+
+    /// Asserts that a grid without scrollback drops its front id on every
+    /// scroll.
+    ///
+    /// Case: a full-screen application scrolls its alternate screen, where
+    /// no row can be scrolled back to.
+    #[test]
+    fn a_grid_without_history_drops_the_front_id_on_every_scroll() {
+        let mut grid = grid(3, 0);
+        let id = grid.line_id(ScreenLine(0));
+        grid.scroll_up_one(Cell::default());
+        assert_eq!(grid.grid_line(id), None);
+    }
+
+    /// Asserts that a freshly minted bottom row carries an id no earlier
+    /// row shares.
+    ///
+    /// Case: output scrolls the screen and the blank row entering at the
+    /// bottom must not inherit the identity of the row that left.
+    #[test]
+    fn a_scroll_mints_a_fresh_id_for_the_incoming_row() {
+        let mut grid = grid(3, 10);
+        let before = grid.line_id(ScreenLine(2));
+        grid.scroll_up_one(Cell::default());
+        let after = grid.line_id(ScreenLine(2));
+        assert_ne!(before, after);
+        assert_eq!(grid.grid_line(before), Some(GridLine(1)));
     }
 }
