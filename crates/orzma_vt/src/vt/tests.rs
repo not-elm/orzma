@@ -56,16 +56,13 @@ fn a_fresh_vt_stages_bootstrap_full_damage() {
     assert_eq!(vt.pending_damage, Some(StagedDamage::Full));
 }
 
-/// Asserts that `interpret` stages the damage it classified.
+/// Asserts that `interpret` reports the damage as staged and stages it.
 ///
 /// Case: ordinary shell output arrives between two emits.
 #[test]
-fn interpret_stages_the_damage_it_classified() {
+fn interpret_reports_damaged_and_stages_it() {
     let mut vt = clean_vt();
-    assert_eq!(
-        vt.interpret(b"one\r\ntwo\r\nthree"),
-        Some(DamageVerdict::ManyRows { rows: 3 })
-    );
+    assert!(vt.interpret(b"one\r\ntwo\r\nthree"));
     assert_eq!(
         vt.pending_damage,
         Some(StagedDamage::Delta(
@@ -112,7 +109,7 @@ fn an_empty_chunk_leaves_staged_damage_untouched() {
         staged.is_some(),
         "precondition: a real chunk must stage damage"
     );
-    assert_eq!(vt.interpret(b""), None);
+    assert!(!vt.interpret(b""));
     assert_eq!(vt.pending_damage, staged);
 }
 

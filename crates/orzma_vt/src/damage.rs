@@ -1,10 +1,9 @@
 //! Damage vocabulary and the ledger that stages it.
 //!
 //! [`StagedDamage`] is what one source reports for a single damage
-//! cycle, and [`DamageVerdict`] classifies it for the coalescer's
-//! immediate-flush decision. [`DamageLedger`] accumulates what
-//! interpretation, scrolling, resizing, and placement changes each
-//! report per call and hands the merged result to the frame emitter.
+//! cycle. [`DamageLedger`] accumulates what interpretation, scrolling,
+//! resizing, and placement changes each report per call and hands the
+//! merged result to the frame emitter.
 //! Staging merges rather than replaces: a source reports only what its
 //! own call produced, so an overwritten staged value would drop a
 //! repaint no later call re-reports.
@@ -125,39 +124,6 @@ impl DamageRows {
             "the ledger's bit walk yields rows ascending and unique"
         );
         Self(collected)
-    }
-}
-
-/// Classification of collected damage that drives the immediate-flush decision.
-///
-/// The owner classifies once per interpreted chunk and keeps the matching
-/// [`StagedDamage`] staged for the emit, so the backend's damage tracker is
-/// read exactly once per cycle.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DamageVerdict {
-    /// Entire screen damaged (resize, clear, alt-screen swap).
-    Full,
-    /// At most one row is dirty (interactive echo).
-    AtMostOneRow,
-    /// Two or more rows dirty. The row count drives the PR-E2b
-    /// immediate-flush cap in `Coalescer::should_flush_immediately`.
-    ManyRows { rows: usize },
-    /// No visible dirty rows.
-    Idle,
-}
-
-impl DamageVerdict {
-    /// Classifies already-collected damage for the coalescer's
-    /// immediate-flush decision.
-    pub fn classify(damage: &StagedDamage) -> Self {
-        match damage {
-            StagedDamage::Full => Self::Full,
-            StagedDamage::Delta(rows) => match rows.len() {
-                0 => Self::Idle,
-                1 => Self::AtMostOneRow,
-                n => Self::ManyRows { rows: n },
-            },
-        }
     }
 }
 
@@ -349,40 +315,6 @@ impl RowBits {
 mod tests {
     mod damage {
         use super::super::*;
-
-        #[test]
-        fn full_damage_classifies_as_full() {
-            assert_eq!(
-                DamageVerdict::classify(&StagedDamage::Full),
-                DamageVerdict::Full
-            );
-        }
-
-        #[test]
-        fn no_dirty_rows_classifies_as_idle() {
-            assert_eq!(
-                DamageVerdict::classify(&StagedDamage::Delta(DamageRows::default())),
-                DamageVerdict::Idle
-            );
-        }
-
-        #[test]
-        fn one_dirty_row_classifies_as_at_most_one_row() {
-            assert_eq!(
-                DamageVerdict::classify(&StagedDamage::Delta(vec![ViewportLine(7)].into())),
-                DamageVerdict::AtMostOneRow
-            );
-        }
-
-        #[test]
-        fn many_dirty_rows_carry_the_row_count() {
-            assert_eq!(
-                DamageVerdict::classify(&StagedDamage::Delta(
-                    vec![ViewportLine(0), ViewportLine(3), ViewportLine(9)].into()
-                )),
-                DamageVerdict::ManyRows { rows: 3 }
-            );
-        }
 
         /// Asserts that the span constructor keeps its endpoints and that a
         /// single row is the degenerate span.

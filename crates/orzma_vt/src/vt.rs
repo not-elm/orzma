@@ -2,7 +2,7 @@
 
 use crate::{
     Vt, VtUpdate,
-    damage::{DamageRows, DamageVerdict, StagedDamage},
+    damage::{DamageRows, StagedDamage},
     schema::{
         CellSide, Cursor, Frame, GridPoint, GridSize, Palette, Scroll, SelectionKind,
         SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
@@ -36,12 +36,17 @@ impl<B: VtBackend> OldOrzmaVt<B> {
         }
     }
 
-    /// Interprets a PTY chunk
-    pub fn interpret(&mut self, chunk: &[u8]) -> Option<DamageVerdict> {
-        let damage = self.backend.interpret(chunk)?;
-        let verdict = DamageVerdict::classify(&damage);
+    /// Interprets a PTY chunk; returns whether it staged any damage.
+    pub fn interpret(&mut self, chunk: &[u8]) -> bool {
+        let Some(damage) = self.backend.interpret(chunk) else {
+            return false;
+        };
+        let damaged = match &damage {
+            StagedDamage::Full => true,
+            StagedDamage::Delta(rows) => !rows.is_empty(),
+        };
         self.stage(damage);
-        Some(verdict)
+        damaged
     }
 
     /// Applies the viewport motion; returns whether the viewport moved.
@@ -217,12 +222,12 @@ impl<B: VtBackend + VtSelection> Vt for OldOrzmaVt<B> {
         if chunk.is_empty() {
             return VtUpdate::default();
         }
-        let verdict = OldOrzmaVt::interpret(self, chunk);
+        let damaged = OldOrzmaVt::interpret(self, chunk);
         let signals = OldOrzmaVt::drain_signals(self).collect();
         let mut replies = Vec::new();
         OldOrzmaVt::drain_replies_into(self, &mut replies);
         VtUpdate {
-            verdict,
+            damaged,
             signals,
             replies,
         }

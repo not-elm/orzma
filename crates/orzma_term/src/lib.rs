@@ -278,10 +278,8 @@ impl<V: Vt> OrzmaTerm<V> {
     /// damage, and buffers the update's signals and replies for the
     /// next pump.
     fn feed_chunk(&mut self, chunk: &[u8]) {
-        // TODO: Route the verdict through Coalescer::observe_chunk once
-        // the immediate-flush path is wired.
         let update = self.vt.interpret(chunk);
-        if update.verdict.is_some() {
+        if update.damaged {
             self.coalescer.arm_or_extend(Instant::now());
         }
         self.pending_signals
@@ -745,7 +743,7 @@ mod tests {
     fn vt_signals_are_forwarded_before_child_exit() {
         let (mut term, chunk_tx, exit_tx) = channelled_term();
         term.vt.updates.push_back(VtUpdate {
-            verdict: Some(DamageVerdict::Idle),
+            damaged: true,
             signals: vec![VtSignal::Bell],
             replies: Vec::new(),
         });
@@ -784,12 +782,33 @@ mod tests {
             pending_replies: Vec::new(),
         };
         term.vt.updates.push_back(VtUpdate {
-            verdict: Some(DamageVerdict::Idle),
+            damaged: true,
             signals: Vec::new(),
             replies: b"\x1b[1;1R".to_vec(),
         });
         chunk_tx.send(b"\x1b[6n".to_vec()).expect("send chunk");
         term.pump();
         assert_eq!(sink.contents(), b"\x1b[1;1R");
+    }
+
+    /// Asserts that a chunk which stages no damage leaves the coalesce
+    /// window closed.
+    ///
+    /// Arming on every non-empty chunk would wake the emit path for
+    /// output that changes nothing on screen, which is what the old
+    /// `verdict.is_some()` check did.
+    ///
+    /// Case: a program queries the cursor position, so the VT answers
+    /// with reply bytes and touches no cell.
+    #[test]
+    fn a_chunk_that_stages_no_damage_does_not_arm_the_window() {
+        let (mut term, _sink) = detached_term();
+        term.vt.updates.push_back(VtUpdate {
+            damaged: false,
+            signals: Vec::new(),
+            replies: b"\x1b[1;1R".to_vec(),
+        });
+        term.feed_bytes(b"\x1b[6n");
+        assert!(!term.coalescer.is_armed());
     }
 }

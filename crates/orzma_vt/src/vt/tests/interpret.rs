@@ -15,7 +15,7 @@ use super::*;
 fn an_empty_chunk_interprets_to_the_default_update() {
     let mut vt = clean_vt();
     let update = Vt::interpret(&mut vt, b"");
-    assert!(update.verdict.is_none());
+    assert!(!update.damaged);
     assert!(update.signals.is_empty());
     assert!(update.replies.is_empty());
 }

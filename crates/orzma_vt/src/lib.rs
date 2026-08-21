@@ -6,7 +6,7 @@
 //! [`vt::VtBackend`] pair until the migration to [`Vt`] completes.
 
 use crate::{
-    damage::{DamageLedger, DamageVerdict},
+    damage::DamageLedger,
     device::DeviceState,
     interpreter::Interpreter,
     placement::PlacementStore,
@@ -126,9 +126,10 @@ pub trait Vt {
 /// damage.
 #[derive(Debug, Default)]
 pub struct VtUpdate {
-    /// Damage classification for the owner's flush decision; `None`
-    /// when no damage cycle ran (an empty chunk).
-    pub verdict: Option<DamageVerdict>,
+    /// Whether this chunk staged any damage, so the owner knows to open
+    /// its coalesce window. Metadata-only damage counts: the frame that
+    /// carries the new placement list must still be emitted.
+    pub damaged: bool,
     /// Out-of-band signals, in byte-stream order.
     pub signals: Vec<VtSignal>,
     /// Reply bytes (DSR, DA, …) the owner must write back to the PTY.
