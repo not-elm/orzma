@@ -53,7 +53,7 @@ fn row_text(row: &Row<Run>) -> String {
 #[test]
 fn a_fresh_vt_stages_bootstrap_full_damage() {
     let vt = OldOrzmaVt::<AlacrittyVtBackend>::new(80, 24);
-    assert_eq!(vt.pending_damage, Some(Damage::Full));
+    assert_eq!(vt.pending_damage, Some(StagedDamage::Full));
 }
 
 /// Asserts that `interpret` stages the damage it classified.
@@ -68,7 +68,7 @@ fn interpret_stages_the_damage_it_classified() {
     );
     assert_eq!(
         vt.pending_damage,
-        Some(Damage::Delta(
+        Some(StagedDamage::Delta(
             vec![ViewportLine(0), ViewportLine(1), ViewportLine(2)].into()
         ))
     );
@@ -83,7 +83,7 @@ fn staged_damage_accumulates_across_chunks() {
     let mut vt = clean_vt();
     vt.interpret(b"a");
     vt.interpret(b"\r\n\r\nb");
-    let Some(Damage::Delta(rows)) = &vt.pending_damage else {
+    let Some(StagedDamage::Delta(rows)) = &vt.pending_damage else {
         panic!(
             "expected staged partial damage, got {:?}",
             vt.pending_damage
@@ -125,7 +125,7 @@ fn an_empty_chunk_leaves_staged_damage_untouched() {
 fn a_moving_scroll_stages_full_damage() {
     let mut vt = vt_with_history(17);
     assert!(vt.scroll(Scroll::Delta(3)));
-    assert_eq!(vt.pending_damage, Some(Damage::Full));
+    assert_eq!(vt.pending_damage, Some(StagedDamage::Full));
 }
 
 /// Asserts that a selection change stages full damage and reports the
@@ -137,7 +137,7 @@ fn a_moving_scroll_stages_full_damage() {
 fn a_selection_change_stages_full_damage() {
     let mut vt = clean_vt();
     assert!(start_simple(&mut vt, 0, 0));
-    assert_eq!(vt.pending_damage, Some(Damage::Full));
+    assert_eq!(vt.pending_damage, Some(StagedDamage::Full));
 }
 
 /// Asserts that no-op operations preserve the staged value exactly.
@@ -148,7 +148,7 @@ fn a_selection_change_stages_full_damage() {
 #[test]
 fn no_op_operations_preserve_staged_damage() {
     let mut vt = clean_vt();
-    vt.pending_damage = Some(Damage::Delta(vec![ViewportLine(0)].into()));
+    vt.pending_damage = Some(StagedDamage::Delta(vec![ViewportLine(0)].into()));
     let staged = vt.pending_damage.clone();
     assert!(!vt.scroll(Scroll::Delta(0)));
     assert!(

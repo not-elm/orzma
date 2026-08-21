@@ -14,7 +14,7 @@ pub mod viewport;
 use self::cell::{Cell, Pen};
 use self::grid::row::Row;
 use self::grid::{Grid, HistoryEvent};
-use crate::damage::Damage;
+use crate::damage::StagedDamage;
 use crate::schema::{
     Cursor, CursorShape, DisplayOffset, GridColumn, GridLine, GridPoint, GridSize, ViewportLine,
 };
@@ -30,14 +30,14 @@ use crate::screen::viewport::Viewport;
 /// damage ledger and the placement store.
 #[derive(Debug, Default, PartialEq)]
 pub struct Effects {
-    damage: Option<Damage>,
+    damage: Option<StagedDamage>,
     history: Option<HistoryEvent>,
 }
 
 impl Effects {
     fn full(history: Option<HistoryEvent>) -> Self {
         Self {
-            damage: Some(Damage::Full),
+            damage: Some(StagedDamage::Full),
             history,
         }
     }
@@ -240,7 +240,7 @@ impl Screen {
         let offset = self.viewport.offset;
         let rows = self.grid.size().rows;
         Effects {
-            damage: Some(Damage::Delta(
+            damage: Some(StagedDamage::Delta(
                 lines
                     .into_iter()
                     .filter_map(|line| GridLine(i32::from(line)).to_viewport(offset, rows))
@@ -437,7 +437,7 @@ mod tests {
         assert_eq!(
             screen.print('x'),
             Effects {
-                damage: Some(Damage::Delta(vec![ViewportLine(1)].into())),
+                damage: Some(StagedDamage::Delta(vec![ViewportLine(1)].into())),
                 history: None,
             }
         );
@@ -465,7 +465,7 @@ mod tests {
         assert_eq!(
             screen.print('x'),
             Effects {
-                damage: Some(Damage::Delta(DamageRows::default())),
+                damage: Some(StagedDamage::Delta(DamageRows::default())),
                 history: None,
             }
         );
@@ -487,7 +487,9 @@ mod tests {
         assert_eq!(
             screen.erase_in_display(EraseScreenMode::Below),
             Effects {
-                damage: Some(Damage::Delta(vec![ViewportLine(1), ViewportLine(2)].into())),
+                damage: Some(StagedDamage::Delta(
+                    vec![ViewportLine(1), ViewportLine(2)].into()
+                )),
                 history: None,
             }
         );
@@ -525,7 +527,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![ViewportLine(0)].into())),
+                damage: Some(StagedDamage::Delta(vec![ViewportLine(0)].into())),
                 history: None,
             }
         );
@@ -544,7 +546,9 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![ViewportLine(0), ViewportLine(1)].into())),
+                damage: Some(StagedDamage::Delta(
+                    vec![ViewportLine(0), ViewportLine(1)].into()
+                )),
                 history: None,
             }
         );
@@ -564,7 +568,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Full),
+                damage: Some(StagedDamage::Full),
                 history: Some(HistoryEvent::Pushed),
             }
         );
@@ -585,7 +589,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Full),
+                damage: Some(StagedDamage::Full),
                 history: Some(HistoryEvent::PushedWithEviction),
             }
         );
@@ -641,7 +645,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![ViewportLine(0)].into())),
+                damage: Some(StagedDamage::Delta(vec![ViewportLine(0)].into())),
                 history: None,
             }
         );
@@ -684,7 +688,9 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![ViewportLine(0), ViewportLine(1)].into())),
+                damage: Some(StagedDamage::Delta(
+                    vec![ViewportLine(0), ViewportLine(1)].into()
+                )),
                 history: None,
             }
         );
@@ -706,7 +712,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Full),
+                damage: Some(StagedDamage::Full),
                 history: Some(HistoryEvent::Pushed),
             }
         );
@@ -733,7 +739,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![ViewportLine(0)].into())),
+                damage: Some(StagedDamage::Delta(vec![ViewportLine(0)].into())),
                 history: None,
             }
         );
@@ -819,7 +825,9 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![ViewportLine(1), ViewportLine(2)].into())),
+                damage: Some(StagedDamage::Delta(
+                    vec![ViewportLine(1), ViewportLine(2)].into()
+                )),
                 history: None,
             }
         );
@@ -848,7 +856,9 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Delta(vec![ViewportLine(0), ViewportLine(1)].into())),
+                damage: Some(StagedDamage::Delta(
+                    vec![ViewportLine(0), ViewportLine(1)].into()
+                )),
                 history: None,
             }
         );
@@ -881,7 +891,7 @@ mod tests {
         assert_eq!(
             effects,
             Effects {
-                damage: Some(Damage::Full),
+                damage: Some(StagedDamage::Full),
                 history: None,
             }
         );

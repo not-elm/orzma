@@ -49,22 +49,22 @@ fn every_visible_selection_change_reports_full_damage() {
     assert_eq!(
         vt.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple)
             .unwrap(),
-        Some(Damage::Full),
+        Some(StagedDamage::Full),
         "start_selection"
     );
     assert_eq!(
         vt.update_selection(point(0, 4), CellSide::Right).unwrap(),
-        Some(Damage::Full),
+        Some(StagedDamage::Full),
         "update_selection"
     );
     assert_eq!(
         vt.change_selection_kind(SelectionKind::Lines).unwrap(),
-        Some(Damage::Full),
+        Some(StagedDamage::Full),
         "change_selection_kind"
     );
     assert_eq!(
         vt.clear_selection().unwrap(),
-        Some(Damage::Full),
+        Some(StagedDamage::Full),
         "clear_selection"
     );
 }

@@ -2,7 +2,7 @@
 
 use crate::{
     Vt, VtUpdate,
-    damage::{Damage, DamageRows, DamageVerdict},
+    damage::{DamageRows, DamageVerdict, StagedDamage},
     schema::{
         CellSide, Cursor, Frame, GridPoint, GridSize, Palette, Scroll, SelectionKind,
         SelectionRange, ViCursor, ViModeSwitch, VtModes, VtResult, VtSignal,
@@ -24,7 +24,7 @@ pub struct OldOrzmaVt<B: VtBackend> {
     /// Merged rather than replaced on each stage: the backend reports
     /// per-call damage, so an overwritten staged value would lose a
     /// repaint no later call re-reports.
-    pending_damage: Option<Damage>,
+    pending_damage: Option<StagedDamage>,
 }
 
 impl<B: VtBackend> OldOrzmaVt<B> {
@@ -32,7 +32,7 @@ impl<B: VtBackend> OldOrzmaVt<B> {
     pub fn new(cols: u16, rows: u16) -> Self {
         Self {
             backend: B::new(cols, rows),
-            pending_damage: Some(Damage::Full),
+            pending_damage: Some(StagedDamage::Full),
         }
     }
 
@@ -102,15 +102,15 @@ impl<B: VtBackend> OldOrzmaVt<B> {
     ///
     /// Seeding an absent staged value with an empty row set is safe
     /// because that set is the merge identity.
-    fn stage(&mut self, damage: Damage) {
+    fn stage(&mut self, damage: StagedDamage) {
         *self
             .pending_damage
-            .get_or_insert(Damage::Delta(DamageRows::default())) |= damage;
+            .get_or_insert(StagedDamage::Delta(DamageRows::default())) |= damage;
     }
 
     /// Stages the reported damage, if any; returns whether there was
     /// any to stage.
-    fn stage_if_changed(&mut self, damage: Option<Damage>) -> bool {
+    fn stage_if_changed(&mut self, damage: Option<StagedDamage>) -> bool {
         match damage {
             Some(damage) => {
                 self.stage(damage);
@@ -125,11 +125,11 @@ impl<B: VtBackend + VtSelection> OldOrzmaVt<B> {
     /// Builds the frame for the staged damage, consuming it.
     ///
     /// Returns `None` when nothing is staged. Staged
-    /// [`Damage::Full`] yields a [`Frame::Snapshot`]; staged row
+    /// [`StagedDamage::Full`] yields a [`Frame::Snapshot`]; staged row
     /// damage yields a [`Frame::Delta`] — including an empty one,
     /// whose metadata is still current.
     pub fn frame(&mut self) -> Option<Frame> {
-        return None;
+        None
         // Some(Frame::Snapshot(FrameSnapshot {
         //     seq: 0,
         //     size: self.grid_size(),
@@ -288,7 +288,7 @@ pub trait VtBackend: Sized {
     ///
     /// `None` for an empty chunk — not a damage cycle. Classifying and
     /// accumulating the damage is the caller's job.
-    fn interpret(&mut self, chunk: &[u8]) -> Option<Damage>;
+    fn interpret(&mut self, chunk: &[u8]) -> Option<StagedDamage>;
 
     fn drain_signals(&mut self) -> impl Iterator<Item = VtSignal> + '_;
 
@@ -297,7 +297,7 @@ pub trait VtBackend: Sized {
 
     /// Applies the given viewport motion.
     ///
-    /// Returns `Damage::Full` when the viewport actually moved; `None`
+    /// Returns `StagedDamage::Full` when the viewport actually moved; `None`
     /// for a clamped or zero motion.
     ///
     /// # References
@@ -309,14 +309,14 @@ pub trait VtBackend: Sized {
     ///   the viewport holds its position while the PTY emits output.
     ///
     /// [XTerm Control Sequences]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html
-    fn scroll(&mut self, scroll: Scroll) -> Option<Damage>;
+    fn scroll(&mut self, scroll: Scroll) -> Option<StagedDamage>;
 
     /// Snapshot of the input-relevant terminal modes.
     fn modes(&self) -> VtModes;
 
     /// Resizes the emulated grid to `cols` x `rows` cells.
     ///
-    /// Returns `Damage::Full` when the dimensions changed; `None` when
+    /// Returns `StagedDamage::Full` when the dimensions changed; `None` when
     /// they already matched.
     ///
     /// # Invariants
@@ -324,17 +324,17 @@ pub trait VtBackend: Sized {
     /// Both dimensions must be nonzero: degenerate-size validation is
     /// the caller's job (`OrzmaTerm::resize` ignores zero-axis and
     /// oversized requests before this method is reached).
-    fn resize(&mut self, cols: u16, rows: u16) -> Option<Damage>;
+    fn resize(&mut self, cols: u16, rows: u16) -> Option<StagedDamage>;
 
     /// Grid dimensions in cells.
     fn grid_size(&self) -> GridSize;
 
     /// Switches the vi-mode of the terminal to [`ViModeSwitch`].
     ///
-    /// `Ok(Some(Damage::Full))` on a real transition — the vi cursor
+    /// `Ok(Some(StagedDamage::Full))` on a real transition — the vi cursor
     /// overlay appears or disappears outside the backing emulator's
     /// damage tracking. `Ok(None)` on an idempotent request.
-    fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<Option<Damage>>;
+    fn switch_vi_mode(&mut self, vi_mode: ViModeSwitch) -> VtResult<Option<StagedDamage>>;
 
     /// The live palette symbolic colors resolve against.
     fn palette(&self) -> Palette;
@@ -359,26 +359,33 @@ pub trait VtSelection {
         cell: GridPoint,
         side: CellSide,
         kind: SelectionKind,
-    ) -> VtResult<Option<Damage>>;
+    ) -> VtResult<Option<StagedDamage>>;
 
     /// Anchors a new selection at the vi cursor (vi-mode `v` / `V`),
     /// whose position only the VT knows.
-    fn start_selection_at_vi_cursor(&mut self, kind: SelectionKind) -> VtResult<Option<Damage>>;
+    fn start_selection_at_vi_cursor(
+        &mut self,
+        kind: SelectionKind,
+    ) -> VtResult<Option<StagedDamage>>;
 
     /// Moves the moving end of the active selection to a grid cell
     /// (mouse drag). The cell may reach into scrollback history
     /// (a negative line) when the drag leaves the viewport. `Ok(None)`
     /// when nothing is selected.
-    fn update_selection(&mut self, cell: GridPoint, side: CellSide) -> VtResult<Option<Damage>>;
+    fn update_selection(
+        &mut self,
+        cell: GridPoint,
+        side: CellSide,
+    ) -> VtResult<Option<StagedDamage>>;
 
     /// Switches granularity while keeping the anchor (vi-mode `v`
     /// while `V` is active, and the reverse). `Ok(None)` when nothing
     /// is selected.
-    fn change_selection_kind(&mut self, kind: SelectionKind) -> VtResult<Option<Damage>>;
+    fn change_selection_kind(&mut self, kind: SelectionKind) -> VtResult<Option<StagedDamage>>;
 
     /// Drops any active selection. `Ok(None)` when nothing was
     /// selected.
-    fn clear_selection(&mut self) -> VtResult<Option<Damage>>;
+    fn clear_selection(&mut self) -> VtResult<Option<StagedDamage>>;
 
     /// The active selection in grid coordinates, normalized to
     /// `start <= end`.

@@ -41,7 +41,7 @@ fn resize_updates_the_grid_size() {
 #[test]
 fn resize_reports_full_damage() {
     let mut vt = AlacrittyVtBackend::new(80, 24);
-    assert_eq!(vt.resize(120, 40), Some(Damage::Full));
+    assert_eq!(vt.resize(120, 40), Some(StagedDamage::Full));
 }
 
 /// Asserts that a resize to the current dimensions reports no damage.

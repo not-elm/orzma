@@ -8,7 +8,7 @@
 //! [`Row::to_runs`](crate::screen::grid::row::Row); deciding whether a
 //! frame is a snapshot belongs to the damage that produced it.
 
-use crate::damage::{Damage, DamageRows};
+use crate::damage::{DamageRows, StagedDamage};
 use crate::device::DeviceState;
 use crate::placement::PlacementStore;
 use crate::schema::{
@@ -19,7 +19,7 @@ use crate::screen::viewport::DisplayOffset;
 
 /// One emitted frame: a full repaint or a differential update.
 ///
-/// Staged [`crate::damage::Damage::Full`] emits a [`Frame::Snapshot`];
+/// Staged [`crate::damage::StagedDamage::Full`] emits a [`Frame::Snapshot`];
 /// staged row damage emits a [`Frame::Delta`].
 #[derive(Debug)]
 pub enum Frame {
@@ -31,10 +31,14 @@ pub enum Frame {
 
 impl Frame {
     /// Builds the frame the staged damage calls for.
-    pub(crate) fn emit(damage: Damage, device: &DeviceState, placements: &PlacementStore) -> Self {
+    pub(crate) fn emit(
+        damage: StagedDamage,
+        device: &DeviceState,
+        placements: &PlacementStore,
+    ) -> Self {
         match damage {
-            Damage::Full => Self::Snapshot(FrameSnapshot::new(device, placements)),
-            Damage::Delta(rows) => Self::Delta(FrameDelta::new(&rows, device, placements)),
+            StagedDamage::Full => Self::Snapshot(FrameSnapshot::new(device, placements)),
+            StagedDamage::Delta(rows) => Self::Delta(FrameDelta::new(&rows, device, placements)),
         }
     }
 }
@@ -138,7 +142,7 @@ impl FrameDelta {
     /// Every staged row is below the current `size.rows` and names a
     /// line in the active screen's viewport basis. Any intervening
     /// offset, size, or active-screen change merges
-    /// [`Damage::Full`](crate::damage::Damage::Full), which replaces
+    /// [`StagedDamage::Full`](crate::damage::StagedDamage::Full), which replaces
     /// these rows outright, so a delta never outlives the viewport its
     /// rows were staged against.
     ///
@@ -396,13 +400,13 @@ mod tests {
     }
 
     mod emit {
-        use crate::damage::{Damage, DamageRows};
+        use crate::damage::{DamageRows, StagedDamage};
         use crate::device::DeviceState;
         use crate::frame::Frame;
         use crate::placement::PlacementStore;
         use crate::schema::{GridSize, ViewportLine};
 
-        fn emit(damage: Damage) -> Frame {
+        fn emit(damage: StagedDamage) -> Frame {
             let device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
             Frame::emit(damage, &device, &PlacementStore::new())
         }
@@ -413,7 +417,7 @@ mod tests {
         /// dimensions along with every row to redraw against them.
         #[test]
         fn full_damage_emits_a_snapshot() {
-            assert!(matches!(emit(Damage::Full), Frame::Snapshot(_)));
+            assert!(matches!(emit(StagedDamage::Full), Frame::Snapshot(_)));
         }
 
         /// Asserts that row damage becomes a delta.
@@ -423,7 +427,7 @@ mod tests {
         #[test]
         fn row_damage_emits_a_delta() {
             let rows: DamageRows = [ViewportLine(0)].into_iter().collect();
-            assert!(matches!(emit(Damage::Delta(rows)), Frame::Delta(_)));
+            assert!(matches!(emit(StagedDamage::Delta(rows)), Frame::Delta(_)));
         }
     }
 }

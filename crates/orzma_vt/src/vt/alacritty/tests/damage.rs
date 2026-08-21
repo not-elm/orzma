@@ -13,7 +13,7 @@ fn empty_chunk_is_not_a_cycle() {
 fn the_first_interpret_on_a_fresh_vt_reports_full() {
     // Whatever the chunk contains: the bootstrap `Full` outranks it.
     let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
-    assert_eq!(vt.interpret(b"x"), Some(Damage::Full));
+    assert_eq!(vt.interpret(b"x"), Some(StagedDamage::Full));
 }
 
 #[test]
@@ -22,7 +22,7 @@ fn a_single_row_write_reports_one_dirty_row() {
     vt.term.reset_damage();
     assert_eq!(
         vt.interpret(b"hi"),
-        Some(Damage::Delta(vec![ViewportLine(0)].into()))
+        Some(StagedDamage::Delta(vec![ViewportLine(0)].into()))
     );
 }
 
@@ -32,7 +32,7 @@ fn a_multi_row_write_reports_each_dirty_row() {
     vt.term.reset_damage();
     assert_eq!(
         vt.interpret(b"one\r\ntwo\r\nthree"),
-        Some(Damage::Delta(
+        Some(StagedDamage::Delta(
             vec![ViewportLine(0), ViewportLine(1), ViewportLine(2)].into()
         ))
     );
@@ -42,7 +42,7 @@ fn a_multi_row_write_reports_each_dirty_row() {
 fn insert_mode_reports_full_damage() {
     let mut vt = AlacrittyVtBackend::new(80, GRID_ROWS);
     vt.term.reset_damage();
-    assert_eq!(vt.interpret(b"\x1b[4h"), Some(Damage::Full));
+    assert_eq!(vt.interpret(b"\x1b[4h"), Some(StagedDamage::Full));
 }
 
 /// Asserts that each `interpret` reports only the damage its own
@@ -56,7 +56,7 @@ fn a_second_interpret_reports_only_new_damage() {
     vt.interpret(b"one\r\ntwo\r\nthree");
     assert_eq!(
         vt.interpret(b"x"),
-        Some(Damage::Delta(vec![ViewportLine(2)].into()))
+        Some(StagedDamage::Delta(vec![ViewportLine(2)].into()))
     );
 }
 
@@ -78,6 +78,6 @@ fn a_viewport_fully_in_scrollback_reports_empty_damage() {
     );
     assert_eq!(
         vt.interpret(b"\x1b[H"),
-        Some(Damage::Delta(DamageRows::default()))
+        Some(StagedDamage::Delta(DamageRows::default()))
     );
 }

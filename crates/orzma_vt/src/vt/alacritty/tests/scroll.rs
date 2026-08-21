@@ -134,7 +134,7 @@ fn absolute_and_paged_scrolls_map_to_their_directions() {
 #[test]
 fn scroll_reports_full_damage_when_the_viewport_moves() {
     let mut vt = vt_with_history(SEEDED_HISTORY_ROWS);
-    assert_eq!(vt.scroll(Scroll::Delta(3)), Some(Damage::Full));
+    assert_eq!(vt.scroll(Scroll::Delta(3)), Some(StagedDamage::Full));
 }
 
 /// Asserts that a scroll which did not move the viewport reports no

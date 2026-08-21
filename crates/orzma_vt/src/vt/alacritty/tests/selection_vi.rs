@@ -82,12 +82,12 @@ fn switch_vi_mode_transitions_and_reports_full_damage() {
     let mut vt = vt_after(b"hello");
     assert_eq!(
         vt.switch_vi_mode(ViModeSwitch::Enter).unwrap(),
-        Some(Damage::Full)
+        Some(StagedDamage::Full)
     );
     assert!(vt.term.mode().contains(TermMode::VI));
     assert_eq!(
         vt.switch_vi_mode(ViModeSwitch::Exit).unwrap(),
-        Some(Damage::Full)
+        Some(StagedDamage::Full)
     );
     assert!(!vt.term.mode().contains(TermMode::VI));
 }
