@@ -9,6 +9,7 @@ pub mod cursor;
 pub mod grid;
 pub mod margins;
 mod state;
+mod tabs;
 pub mod viewport;
 
 use self::cell::{Cell, Pen};
@@ -23,6 +24,7 @@ use crate::schema::{
 use crate::screen::cursor::SavedCursorSlots;
 use crate::screen::margins::Margins;
 use crate::screen::state::ScreenState;
+use crate::screen::tabs::{CharacterTabEdit, TabStops};
 use crate::screen::viewport::Viewport;
 
 /// Span selector for [`Screen::erase_in_line`] (`CSI K`).
@@ -64,6 +66,7 @@ pub struct Screen {
     )]
     saved: SavedCursorSlots,
     margins: Margins,
+    tabs: TabStops,
 }
 
 impl Screen {
@@ -76,6 +79,7 @@ impl Screen {
             state: ScreenState::default(),
             saved: SavedCursorSlots::default(),
             margins: Margins::new(size.rows),
+            tabs: TabStops::default(),
         }
     }
 
@@ -198,6 +202,148 @@ impl Screen {
         }
     }
 
+    /// Moves the cursor to the first stop past it (HT).
+    pub fn ht(&mut self) -> Option<Damage> {
+        self.cht(1)
+    }
+
+    /// Moves the cursor forward `count` tabulation stops (CHT).
+    ///
+    /// The right edge is this screen's last column, so the same stop
+    /// table lands the cursor differently on a narrow screen than on a
+    /// wide one.
+    pub fn cht(&mut self, count: u16) -> Option<Damage> {
+        let right_edge = GridColumn(self.grid_size().cols - 1);
+        let target = self.tabs.cht(self.state.column, count, right_edge);
+        self.tab_to(target)
+    }
+
+    /// Moves the cursor back `count` tabulation stops (CBT).
+    ///
+    /// The left edge is column zero until DECSLRM and DECOM land, at
+    /// which point the margin supplies it instead.
+    pub fn cbt(&mut self, count: u16) -> Option<Damage> {
+        let target = self.tabs.cbt(self.state.column, count, GridColumn(0));
+        self.tab_to(target)
+    }
+
+    /// Sets a tabulation stop at the cursor column (HTS).
+    pub fn hts(&mut self) {
+        self.tabs.set(self.state.column);
+    }
+
+    /// Applies a `TBC` (`CSI Ps g`) parameter; a value only line
+    /// tabulation stops answer does nothing.
+    pub fn tbc(&mut self, ps: u16) {
+        if let Some(edit) = CharacterTabEdit::from_tbc(ps) {
+            self.apply_tab_edit(edit);
+        }
+    }
+
+    /// Applies a `CTC` (`CSI Ps W`) parameter; a value only line
+    /// tabulation stops answer does nothing.
+    pub fn ctc(&mut self, ps: u16) {
+        if let Some(edit) = CharacterTabEdit::from_ctc(ps) {
+            self.apply_tab_edit(edit);
+        }
+    }
+
+    /// Reinstalls the default tabulation stride (DECST8C).
+    pub fn decst8c(&mut self) {
+        self.tabs.reset();
+    }
+
+    /// Returns the grid size.
+    pub fn grid_size(&self) -> GridSize {
+        self.grid.size()
+    }
+
+    /// Borrows the cells shown at a viewport line.
+    ///
+    /// The viewport is the window the user sees: at the live tail it is
+    /// the active screen, and a scrolled viewport reaches back into
+    /// history. [`crate::screen::grid::Grid`]'s own index resolves
+    /// against the live tail alone, so a scrolled read has to come
+    /// through here.
+    pub fn viewport_row(&self, line: ViewportLine) -> &Row<Cell> {
+        let offset =
+            i32::try_from(self.viewport.offset.0).expect("scrollback never exceeds i32::MAX rows");
+        self.grid.row(GridLine(i32::from(line.0) - offset))
+    }
+
+    /// The write cursor as an emitted frame carries it.
+    // TODO: Report the real shape, blink, and visibility once DECSCUSR
+    // and DECTCEM land. Block / steady / visible is what the terminal
+    // starts at.
+    pub fn cursor(&self) -> Cursor {
+        Cursor {
+            point: GridPoint {
+                line: GridLine::from(self.state.line),
+                column: self.state.column,
+            },
+            shape: CursorShape::Block,
+            blinking: false,
+            visible: true,
+        }
+    }
+
+    /// Mutably borrows the SGR pen; applying SGR sequences is the
+    /// caller's job.
+    pub fn pen_mut(&mut self) -> &mut Pen {
+        &mut self.state.pen
+    }
+
+    /// Number of scrollback rows the viewport sits above the live tail; always zero until scroll operations arrive.
+    #[inline]
+    pub const fn display_offset(&self) -> DisplayOffset {
+        self.viewport.offset
+    }
+
+    /// Seats the viewport at `offset`, clamped to the history that
+    /// currently exists.
+    ///
+    /// [`Self::hold_scrolled_viewport`] also writes the offset, so this is
+    /// not the only seam that does; it is the seam a future
+    /// `DeviceState::scroll` will drive.
+    pub fn set_display_offset(&mut self, offset: DisplayOffset) {
+        let history =
+            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
+        self.viewport.offset = DisplayOffset(offset.0.min(history));
+    }
+
+    /// The id of the row the cursor sits on — the anchor a mount samples.
+    pub fn cursor_line_id(&self) -> LineId {
+        self.grid.line_id(self.state.line)
+    }
+
+    /// The signed viewport row `id`'s row now sits at; `None` once the row
+    /// has left the ring.
+    ///
+    /// Unlike damage projection this does not cull: a placement whose
+    /// anchor sits above the viewport reports a negative row and the
+    /// renderer clips it. The value saturates rather than reusing `None`,
+    /// which already means the row is gone.
+    pub(crate) fn viewport_row_of(&self, id: LineId) -> Option<i32> {
+        let line = self.grid.grid_line(id)?;
+        let row = i64::from(line.0) + i64::from(self.viewport.offset.0);
+        Some(row.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
+    }
+
+    /// The cursor's column.
+    pub fn cursor_column(&self) -> GridColumn {
+        self.state.column
+    }
+
+    /// Applies one tabulation stop edit at the cursor column.
+    fn apply_tab_edit(&mut self, edit: CharacterTabEdit) {
+        let column = self.state.column;
+        match edit {
+            CharacterTabEdit::SetColumn => self.tabs.set(column),
+            CharacterTabEdit::ClearColumn => self.tabs.clear(column),
+            CharacterTabEdit::ClearAllColumns => self.tabs.clear_all(),
+        }
+    }
+
     /// Follows a one-row scroll with the offset that keeps a scrolled
     /// viewport on the content it was showing.
     ///
@@ -246,85 +392,25 @@ impl Screen {
         )
     }
 
-    /// Returns the grid size.
-    pub fn grid_size(&self) -> GridSize {
-        self.grid.size()
-    }
-
-    /// Borrows the cells shown at a viewport line.
+    /// Seats the cursor at a tabulation column.
     ///
-    /// The viewport is the window the user sees: at the live tail it is
-    /// the active screen, and a scrolled viewport reaches back into
-    /// history. [`crate::screen::grid::Grid`]'s own index resolves
-    /// against the live tail alone, so a scrolled read has to come
-    /// through here.
-    pub(crate) fn viewport_row(&self, line: ViewportLine) -> &Row<Cell> {
-        let offset =
-            i32::try_from(self.viewport.offset.0).expect("scrollback never exceeds i32::MAX rows");
-        self.grid.row(GridLine(i32::from(line.0) - offset))
-    }
-
-    /// The write cursor as an emitted frame carries it.
-    // TODO: Report the real shape, blink, and visibility once DECSCUSR
-    // and DECTCEM land. Block / steady / visible is what the terminal
-    // starts at.
-    pub(crate) fn cursor(&self) -> Cursor {
-        Cursor {
-            point: GridPoint {
-                line: GridLine::from(self.state.line),
-                column: self.state.column,
-            },
-            shape: CursorShape::Block,
-            blinking: false,
-            visible: true,
+    /// Reports no damage when the column does not change: the call
+    /// writes no cell and moves nothing, so the frame it would force
+    /// repeats the last one. A move reports [`Damage::Metadata`],
+    /// because no cell changed either way.
+    ///
+    /// # Invariants
+    ///
+    /// The deferred wrap is deliberately left as it is, unlike
+    /// [`Screen::cr`]. Disarming it would make a tab after a full row
+    /// seat the cursor back onto the row the application had already
+    /// filled.
+    fn tab_to(&mut self, column: GridColumn) -> Option<Damage> {
+        if self.state.column == column {
+            return None;
         }
-    }
-
-    /// Mutably borrows the SGR pen; applying SGR sequences is the
-    /// caller's job.
-    pub fn pen_mut(&mut self) -> &mut Pen {
-        &mut self.state.pen
-    }
-
-    /// Number of scrollback rows the viewport sits above the live tail; always zero until scroll operations arrive.
-    #[inline]
-    pub const fn display_offset(&self) -> DisplayOffset {
-        self.viewport.offset
-    }
-
-    /// Seats the viewport at `offset`, clamped to the history that
-    /// currently exists.
-    ///
-    /// [`Self::hold_scrolled_viewport`] also writes the offset, so this is
-    /// not the only seam that does; it is the seam a future
-    /// `DeviceState::scroll` will drive.
-    pub(crate) fn set_display_offset(&mut self, offset: DisplayOffset) {
-        let history =
-            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
-        self.viewport.offset = DisplayOffset(offset.0.min(history));
-    }
-
-    /// The id of the row the cursor sits on — the anchor a mount samples.
-    pub(crate) fn cursor_line_id(&self) -> LineId {
-        self.grid.line_id(self.state.line)
-    }
-
-    /// The signed viewport row `id`'s row now sits at; `None` once the row
-    /// has left the ring.
-    ///
-    /// Unlike damage projection this does not cull: a placement whose
-    /// anchor sits above the viewport reports a negative row and the
-    /// renderer clips it. The value saturates rather than reusing `None`,
-    /// which already means the row is gone.
-    pub(crate) fn viewport_row_of(&self, id: LineId) -> Option<i32> {
-        let line = self.grid.grid_line(id)?;
-        let row = i64::from(line.0) + i64::from(self.viewport.offset.0);
-        Some(row.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
-    }
-
-    /// The cursor's column.
-    pub(crate) fn cursor_column(&self) -> GridColumn {
-        self.state.column
+        self.state.column = column;
+        Some(Damage::Metadata)
     }
 }
 
@@ -534,6 +620,281 @@ mod tests {
             let damage = screen.cr();
             assert!(!screen.state.pending_wrap);
             assert_eq!(damage, Some(Damage::Metadata));
+        }
+    }
+
+    mod tab_to {
+        use super::*;
+
+        /// Asserts that seating the cursor at a new column reports
+        /// cursor-only damage.
+        ///
+        /// The agreed policy is [`Damage::Metadata`] rather than the
+        /// cursor row: the renderer draws the caret from the frame's
+        /// cursor rather than from cell data, so naming the row would
+        /// rebuild and re-upload contents that did not change.
+        ///
+        /// Case: the shell emits a tab while listing a directory in
+        /// aligned columns.
+        #[test]
+        fn a_tab_that_moves_the_cursor_reports_metadata_damage() {
+            let mut screen = screen();
+            let damage = screen.tab_to(GridColumn(2));
+            assert_eq!(screen.state.column, GridColumn(2));
+            assert_eq!(damage, Some(Damage::Metadata));
+        }
+
+        /// Asserts that seating the cursor at the column it already
+        /// occupies reports no damage at all.
+        ///
+        /// The agreed policy returns `None` rather than
+        /// [`Damage::Metadata`], which would force a frame that repeats
+        /// the one before it, because this call writes no cell and
+        /// moves the cursor nowhere.
+        ///
+        /// Case: a tab arrives with the cursor already parked on the
+        /// last column, so the clamp hands back the column it started
+        /// from.
+        #[test]
+        fn a_tab_to_the_current_column_reports_no_damage() {
+            let mut screen = screen();
+            screen.state.column = GridColumn(3);
+            assert_eq!(screen.tab_to(GridColumn(3)), None);
+        }
+
+        /// Asserts that seating the cursor leaves an armed deferred
+        /// wrap alone.
+        ///
+        /// The agreed policy preserves the flag, unlike [`Screen::cr`].
+        /// Disarming it would seat the cursor back onto the row the
+        /// application had already filled, which is the behaviour both
+        /// VTE and Windows Terminal found real DEC hardware never had.
+        ///
+        /// Case: an application fills a row to its last cell and then
+        /// emits a tab instead of more text.
+        #[test]
+        fn a_tab_keeps_the_deferred_wrap_armed() {
+            let mut screen = screen();
+            for c in ['a', 'b', 'c', 'd'] {
+                screen.print(c);
+            }
+            assert!(screen.state.pending_wrap);
+            screen.tab_to(GridColumn(0));
+            assert!(screen.state.pending_wrap);
+        }
+    }
+
+    /// Twenty columns put the right edge at 19, so the default stride's
+    /// stops at 8 and 16 are reachable and the one at 24 is not.
+    fn wide_screen() -> Screen {
+        Screen::new(GridSize { cols: 20, rows: 3 }, 10)
+    }
+
+    mod ht {
+        use super::*;
+
+        /// Asserts that a tab seats the cursor on the next stop.
+        ///
+        /// Case: the shell emits a tab at the start of a line while
+        /// printing aligned columns.
+        #[test]
+        fn ht_moves_to_the_next_stop() {
+            let mut screen = wide_screen();
+            screen.ht();
+            assert_eq!(screen.state.column, GridColumn(8));
+        }
+
+        /// Asserts that a tab past the last reachable stop lands on this
+        /// screen's own right edge.
+        ///
+        /// ECMA-48 § 6.1.7 leaves a movement to a non-existing position
+        /// undefined and lists seven options; the agreed policy clamps
+        /// to the right edge rather than wrapping to the next line or
+        /// refusing the move.
+        ///
+        /// Case: a twenty-column window shows text that has already run
+        /// past the last tab position it can display, and the shell
+        /// emits one more tab.
+        #[test]
+        fn ht_at_the_last_stop_clamps_to_the_screens_own_right_edge() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(16);
+            screen.ht();
+            assert_eq!(screen.state.column, GridColumn(19));
+        }
+
+        /// Asserts that a screen too narrow to reach any stop clamps to
+        /// its last column.
+        ///
+        /// Case: the user shrinks the window to four columns and the
+        /// shell keeps emitting tabs.
+        #[test]
+        fn ht_on_a_narrow_screen_clamps_without_reaching_any_stop() {
+            let mut screen = screen();
+            screen.ht();
+            assert_eq!(screen.state.column, GridColumn(3));
+        }
+
+        /// Asserts that a tab with nowhere left to go reports no damage.
+        ///
+        /// The agreed policy returns `None` rather than
+        /// [`Damage::Metadata`], which would force a frame that repeats
+        /// the one before it, because this call writes no cell and moves
+        /// the cursor nowhere.
+        ///
+        /// Case: a program emits consecutive tabs with the cursor
+        /// already parked on the last column.
+        #[test]
+        fn an_ht_that_does_not_move_reports_no_damage() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(19);
+            assert_eq!(screen.ht(), None);
+        }
+    }
+
+    mod cht {
+        use super::*;
+
+        /// Asserts that a counted forward tab skips the stops in
+        /// between.
+        ///
+        /// Case: an application emits `CSI 2 I` to jump two tab
+        /// positions in one step.
+        #[test]
+        fn cht_counts_multiple_stops() {
+            let mut screen = wide_screen();
+            screen.cht(2);
+            assert_eq!(screen.state.column, GridColumn(16));
+        }
+    }
+
+    mod cbt {
+        use super::*;
+
+        /// Asserts that a backward tab seats the cursor on the previous
+        /// stop.
+        ///
+        /// Case: the user presses Shift-Tab to step back to the
+        /// previous column of a form.
+        #[test]
+        fn cbt_moves_back_to_the_previous_stop() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(17);
+            screen.cbt(1);
+            assert_eq!(screen.state.column, GridColumn(16));
+        }
+
+        /// Asserts that a backward tab before the first stop lands on
+        /// column zero.
+        ///
+        /// The agreed policy makes the left edge a fallback rather than
+        /// a stop, because the reset stride leaves column zero empty.
+        ///
+        /// Case: the user presses Shift-Tab near the start of a line,
+        /// before the first tab position.
+        #[test]
+        fn cbt_before_the_first_stop_clamps_to_column_zero() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(5);
+            screen.cbt(1);
+            assert_eq!(screen.state.column, GridColumn(0));
+        }
+    }
+
+    mod tab_stop_edits {
+        use super::*;
+
+        /// Asserts that a stop set at the cursor is where the next tab
+        /// lands.
+        ///
+        /// Case: an application walks to the column it wants, sets a tab
+        /// position there, and returns to the start of the line.
+        #[test]
+        fn hts_adds_a_stop_the_next_ht_finds() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(3);
+            screen.hts();
+            screen.state.column = GridColumn(0);
+            screen.ht();
+            assert_eq!(screen.state.column, GridColumn(3));
+        }
+
+        /// Asserts that clearing the stop under the cursor makes the
+        /// next tab reach the one after it.
+        ///
+        /// Case: an application parks on a default tab position and
+        /// drops it so its own layout is one column wider.
+        #[test]
+        fn tbc_zero_clears_the_stop_under_the_cursor() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(8);
+            screen.tbc(0);
+            screen.state.column = GridColumn(0);
+            screen.ht();
+            assert_eq!(screen.state.column, GridColumn(16));
+        }
+
+        /// Asserts that clearing every stop leaves a tab nothing to
+        /// find.
+        ///
+        /// Case: a full-screen application clears the tab table before
+        /// installing a layout of its own.
+        #[test]
+        fn tbc_three_clears_every_stop() {
+            let mut screen = wide_screen();
+            screen.tbc(3);
+            screen.ht();
+            assert_eq!(screen.state.column, GridColumn(19));
+        }
+
+        /// Asserts that a TBC parameter only line tabulation stops
+        /// answer leaves the character stops alone.
+        ///
+        /// The agreed policy drops such a parameter rather than routing
+        /// it to the character stops, so a later line-tabulation layer
+        /// can claim it without changing what it already did.
+        ///
+        /// Case: an application written for a printer sends TBC 1 to
+        /// drop the line tab stop on the cursor's line.
+        #[test]
+        fn a_tbc_parameter_only_line_stops_answer_leaves_the_stops_alone() {
+            let mut screen = wide_screen();
+            screen.tbc(1);
+            screen.ht();
+            assert_eq!(screen.state.column, GridColumn(8));
+        }
+
+        /// Asserts that CTC sets and clears the stop under the cursor.
+        ///
+        /// Case: an application uses CTC rather than HTS and TBC to edit
+        /// the tab position it is parked on.
+        #[test]
+        fn ctc_zero_sets_and_ctc_two_clears_at_the_cursor() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(3);
+            screen.ctc(0);
+            screen.state.column = GridColumn(0);
+            screen.ht();
+            assert_eq!(screen.state.column, GridColumn(3));
+
+            screen.ctc(2);
+            screen.state.column = GridColumn(0);
+            screen.ht();
+            assert_eq!(screen.state.column, GridColumn(8));
+        }
+
+        /// Asserts that DECST8C brings the default stride back after a
+        /// full clear.
+        ///
+        /// Case: an application that cleared the tab table asks for the
+        /// default tab positions again before exiting.
+        #[test]
+        fn decst8c_reinstalls_the_stride_after_a_full_clear() {
+            let mut screen = wide_screen();
+            screen.tbc(3);
+            screen.decst8c();
+            screen.ht();
+            assert_eq!(screen.state.column, GridColumn(8));
         }
     }
 

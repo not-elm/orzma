@@ -29,7 +29,6 @@ pub(crate) struct DeviceState {
     // wrapping and insert next to `pending_wrap` in `ScreenState`,
     // origin next to `Margins` in `Screen`.
     modes: VtModes,
-    tabs: TabStops,
     colors: ColorTable,
     title: TitleState,
 }
@@ -47,7 +46,6 @@ impl DeviceState {
                 alternate: Screen::new(size, 0),
             },
             modes: VtModes::default(),
-            tabs: TabStops {},
             colors: ColorTable {},
             title: TitleState {},
         }
@@ -170,10 +168,6 @@ struct Screens {
     alternate: Screen,
 }
 
-/// Horizontal tab stops.
-// TODO: Carry the stop set plus HTS / TBC editing.
-struct TabStops {}
-
 /// The base palette and its dynamic overrides.
 // TODO: Carry the base palette plus the OSC 4 / 10 / 11 / 12 overrides.
 struct ColorTable {}
@@ -181,3 +175,37 @@ struct ColorTable {}
 /// The current window title and its stack.
 // TODO: Carry the current title plus the CSI 22 / 23 t stack.
 struct TitleState {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Asserts that a stop set on one screen is absent from the other.
+    ///
+    /// The agreed policy gives each screen its own table, so a
+    /// full-screen application cannot disturb the tab positions the
+    /// shell left on the primary screen. xterm, VTE, alacritty,
+    /// wezterm, ghostty, and Windows Terminal share one table across
+    /// both screens instead; ECMA-48 settles nothing here, because it
+    /// has no alternate screen at all.
+    ///
+    /// Case: a shell installs its own tab positions, then a full-screen
+    /// editor takes over the alternate screen and emits a tab.
+    #[test]
+    fn the_two_screens_carry_independent_tab_stops() {
+        let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
+        for c in ['a', 'b', 'c'] {
+            device.active_mut().print(c);
+        }
+        device.active_mut().hts();
+
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+        device.active_mut().ht();
+        assert_eq!(device.active().cursor_column(), GridColumn(8));
+
+        device.set_active_screen_for_test(ScreenKind::Primary);
+        device.active_mut().cr();
+        device.active_mut().ht();
+        assert_eq!(device.active().cursor_column(), GridColumn(3));
+    }
+}
