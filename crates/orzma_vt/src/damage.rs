@@ -573,6 +573,20 @@ mod tests {
             assert!(ledger.take().is_none());
         }
 
+        /// Asserts that metadata damage staged over pending rows leaves those
+        /// rows intact.
+        ///
+        /// Case: a program unmounts a webview in the same chunk that printed
+        /// output still waiting to be painted.
+        #[test]
+        fn metadata_damage_leaves_already_staged_rows_alone() {
+            let mut ledger = DamageLedger::new();
+            ledger.take();
+            ledger.stage(Damage::rows(ViewportLine(2), ViewportLine(3)));
+            ledger.stage(Damage::Metadata);
+            assert_eq!(rows(&mut ledger), [2, 3]);
+        }
+
         /// Asserts that `stage_if_changed` reports whether it staged
         /// anything.
         ///
