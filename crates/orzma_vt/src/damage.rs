@@ -225,7 +225,9 @@ pub enum Damage {
     /// No viewport row needs repainting, but a frame must still be
     /// emitted: either every row the operation touched sits outside the
     /// viewport, or the metadata a frame carries beside its rows — the
-    /// placement list — changed.
+    /// cursor and the placement list — changed. Cursor motion is the
+    /// second case, because the renderer draws the caret from the
+    /// frame's cursor rather than from the cells of the row it sits on.
     Metadata,
 }
 

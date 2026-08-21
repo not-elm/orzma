@@ -84,13 +84,19 @@ impl Screen {
     ///
     /// The caller dispatches control bytes itself; this method assumes
     /// a printable character of display width one.
+    ///
+    /// The reported damage always covers the row the character landed
+    /// on: a wrap that scrolled reports [`Damage::Full`], and every
+    /// other print reports its own row. [`Self::lf`] reports the wrap's
+    /// cursor motion alone, so passing that value through would leave
+    /// the character just written unpainted.
     pub fn print(&mut self, c: char) -> Option<Damage> {
-        let damage = if self.state.pending_wrap {
+        let wrap = if self.state.pending_wrap {
             self.state.pending_wrap = false;
             self.state.column = GridColumn(0);
             self.lf()
         } else {
-            Some(self.damage_span(self.state.line, self.state.line))
+            None
         };
         self.grid[self.state.line][self.state.column] = self.state.pen.stamp(c);
         if self.state.column.0 + 1 < self.grid.size().cols {
@@ -98,23 +104,39 @@ impl Screen {
         } else {
             self.state.pending_wrap = true;
         }
-        damage
+        match wrap {
+            Some(Damage::Full) => Some(Damage::Full),
+            _ => Some(self.damage_span(self.state.line, self.state.line)),
+        }
     }
 
     /// Rewinds the cursor to column zero and disarms the deferred wrap.
+    ///
+    /// Reports no damage when the cursor already sits at column zero
+    /// with the wrap disarmed: the call writes no cell and moves
+    /// nothing, so the frame it would force repeats the last one. A
+    /// rewind that does move the cursor reports [`Damage::Metadata`],
+    /// because no cell changed either way.
     pub fn cr(&mut self) -> Option<Damage> {
+        if self.state.column == GridColumn(0) && !self.state.pending_wrap {
+            return None;
+        }
         self.state.column = GridColumn(0);
         self.state.pending_wrap = false;
-        Some(self.damage_span(self.state.line, self.state.line))
+        Some(Damage::Metadata)
     }
 
     /// Moves the cursor down one row, scrolling at the bottom margin;
     /// the deferred-wrap flag is deliberately preserved.
+    ///
+    /// A move inside the screen reports [`Damage::Metadata`]: neither
+    /// the departed nor the arrived row changes contents, and the caret
+    /// reaches the renderer through the frame's cursor. Scrolling moves
+    /// content and reports [`Damage::Full`].
     pub fn lf(&mut self) -> Option<Damage> {
         if self.state.line < self.margins.bottom {
-            let departed = self.state.line;
             self.state.line.0 += 1;
-            return Some(self.damage_span(departed, self.state.line));
+            return Some(Damage::Metadata);
         }
         self.grid.scroll_up_one(self.state.pen.erase_cell());
         self.hold_scrolled_viewport();
@@ -315,548 +337,617 @@ mod tests {
         Screen::new(GridSize { cols: 4, rows: 3 }, 10)
     }
 
-    /// Asserts that a viewport row at the live tail is the visible row
-    /// with the same index.
-    ///
-    /// Case: the emitter builds a snapshot for a terminal the user has
-    /// not scrolled.
-    #[test]
-    fn a_viewport_row_at_the_live_tail_is_the_visible_row() {
-        let mut screen = screen();
-        screen.grid[ScreenLine(1)][0].c = 'x';
-        assert_eq!(screen.viewport_row(ViewportLine(1))[0].c, 'x');
+    mod new {
+        use super::*;
+
+        /// Asserts that a fresh screen starts at the origin, pinned to the
+        /// live tail, with an empty history.
+        ///
+        /// Case: a terminal spawns and the first shell output must land at
+        /// the top-left of an unscrolled screen.
+        #[test]
+        fn a_fresh_screen_starts_at_the_origin() {
+            let screen = screen();
+            assert_eq!(
+                (screen.state.line, screen.state.column),
+                (ScreenLine(0), GridColumn(0))
+            );
+            assert_eq!(screen.display_offset(), DisplayOffset(0));
+            assert_eq!(screen.grid.history_len(), 0);
+        }
     }
 
-    /// Asserts that a scrolled viewport reads the history rows it
-    /// shows rather than the live tail.
-    ///
-    /// Case: the user scrolls back one line, so the top of the window
-    /// is the newest scrollback row and the live rows shift down.
-    #[test]
-    fn a_scrolled_viewport_row_reads_history() {
-        let mut screen = screen();
-        screen.grid[ScreenLine(0)][0].c = 'a';
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        assert_eq!(screen.grid.history_len(), 1);
-        screen.viewport.offset = DisplayOffset(1);
-        assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
-    }
+    mod print {
+        use super::*;
 
-    /// Asserts that the reported cursor carries the write position and
-    /// is visible.
-    ///
-    /// The agreed placeholder is Block / steady / visible, matching what
-    /// a terminal starts at; `Cursor::default()` is deliberately not
-    /// used because its `visible` is `false`, which would hide the
-    /// caret until the first DECTCEM.
-    ///
-    /// Case: a shell prints its prompt and the next frame has to show
-    /// the caret after it.
-    #[test]
-    fn the_cursor_reports_the_write_position_and_is_visible() {
-        let mut screen = screen();
-        screen.print('a');
-        screen.print('b');
-        let cursor = screen.cursor();
-        assert_eq!(cursor.point.line, GridLine(0));
-        assert_eq!(cursor.point.column, GridColumn(2));
-        assert_eq!(cursor.shape, CursorShape::Block);
-        assert!(!cursor.blinking);
-        assert!(cursor.visible);
-    }
+        /// Asserts that printing stamps the pen into the cell and advances
+        /// the cursor one column.
+        ///
+        /// Case: an application prints ordinary colored text at the start
+        /// of a row.
+        #[test]
+        fn print_stamps_the_pen_and_advances() {
+            let mut screen = screen();
+            screen.pen_mut().fg = Color::Indexed(1);
+            let damage = screen.print('a');
+            assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
+            assert_eq!(screen.grid[ScreenLine(0)][0].fg, Color::Indexed(1));
+            assert_eq!(
+                (screen.state.line, screen.state.column),
+                (ScreenLine(0), GridColumn(1))
+            );
+            assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(0))));
+        }
 
-    /// Asserts that output arriving while the user is scrolled back
-    /// leaves the viewed content where it was.
-    ///
-    /// The agreed policy holds the viewport still rather than letting
-    /// it drift with the live tail: `VtBackend::scroll` already pins
-    /// "the viewport holds its position while the PTY emits output",
-    /// and every terminal that keeps scrollback behaves this way.
-    ///
-    /// Case: the user is reading an earlier command's output when a
-    /// background build prints its next line.
-    #[test]
-    fn output_below_a_scrolled_viewport_holds_the_view_still() {
-        let mut screen = screen();
-        screen.grid[ScreenLine(0)][0].c = 'a';
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        screen.viewport.offset = DisplayOffset(1);
-        assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+        /// Asserts that printing into the last column arms the deferred
+        /// wrap and leaves the cursor in place.
+        ///
+        /// Case: an application emits a line exactly as wide as the
+        /// screen, and the terminal must not move to the next row until
+        /// more text actually arrives.
+        #[test]
+        fn print_at_the_last_column_arms_the_deferred_wrap() {
+            let mut screen = screen();
+            screen.state.column = GridColumn(3);
+            screen.print('x');
+            assert_eq!(screen.grid[ScreenLine(0)][3].c, 'x');
+            assert_eq!(screen.state.column, GridColumn(3));
+            assert!(screen.state.pending_wrap);
+        }
 
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        assert_eq!(screen.display_offset(), DisplayOffset(2));
-        assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
-    }
+        /// Asserts that the print following an armed deferred wrap lands
+        /// at the start of the next row and damages that row alone.
+        ///
+        /// The agreed policy leaves the row the wrap left out of the
+        /// damage: its contents do not change, and the cursor that moved
+        /// off it reaches the renderer through the frame's cursor.
+        ///
+        /// Case: an application prints past the right edge, and the
+        /// overflowing character continues on the next line.
+        #[test]
+        fn the_next_print_after_the_last_column_wraps() {
+            let mut screen = screen();
+            for c in ['a', 'b', 'c', 'd'] {
+                screen.print(c);
+            }
+            let damage = screen.print('e');
+            assert_eq!(screen.grid[ScreenLine(1)][0].c, 'e');
+            assert_eq!(
+                (screen.state.line, screen.state.column),
+                (ScreenLine(1), GridColumn(1))
+            );
+            assert!(!screen.state.pending_wrap);
+            assert_eq!(damage, Some(Damage::rows(ViewportLine(1), ViewportLine(1))));
+        }
 
-    /// Asserts that output at the live tail leaves the viewport pinned
-    /// there.
-    ///
-    /// Case: an unscrolled terminal keeps printing, and the window has
-    /// to follow the newest line rather than freeze.
-    #[test]
-    fn output_at_the_live_tail_keeps_the_viewport_pinned() {
-        let mut screen = screen();
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        assert_eq!(screen.display_offset(), DisplayOffset(0));
-    }
-
-    /// Asserts that a scroll at history capacity clamps the offset
-    /// instead of naming a row the ring no longer holds.
-    ///
-    /// The agreed policy accepts that the view drifts once scrollback
-    /// is full: the row the user was reading has been evicted, so there
-    /// is nothing left to hold still on.
-    ///
-    /// Case: the user is parked at the top of a full scrollback while
-    /// output keeps arriving.
-    #[test]
-    fn a_scroll_at_history_capacity_clamps_the_offset() {
-        let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        screen.viewport.offset = DisplayOffset(1);
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        assert_eq!(screen.grid.history_len(), 1);
-        assert_eq!(screen.display_offset(), DisplayOffset(1));
-    }
-
-    /// Asserts that damage is reported in viewport rows, not the grid rows
-    /// the write used.
-    ///
-    /// Case: the user scrolls back one row and the shell echoes a character
-    /// at the live tail, which now sits one row lower in the window.
-    #[test]
-    fn a_scrolled_screen_reports_damage_in_viewport_rows() {
-        let mut screen = screen();
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        screen.set_display_offset(DisplayOffset(1));
-        screen.state.line = ScreenLine(0);
-        assert_eq!(
-            screen.cr(),
-            Some(Damage::rows(ViewportLine(1), ViewportLine(1)))
-        );
-    }
-
-    /// Asserts that a write whose rows all sit below the viewport still
-    /// forces a frame, carrying no dirty rows.
-    ///
-    /// Dropping the damage entirely would suppress the emit, which the
-    /// ledger's own contract forbids — the frame still carries the current
-    /// cursor and offset.
-    ///
-    /// Case: the viewport sits fully scrolled back into history while the
-    /// shell keeps writing at the live tail.
-    #[test]
-    fn a_write_below_the_viewport_reports_metadata_damage() {
-        let mut screen = screen();
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        screen.set_display_offset(DisplayOffset(1));
-        screen.state.line = ScreenLine(2);
-        assert_eq!(screen.cr(), Some(Damage::Metadata));
-    }
-
-    /// Asserts that a write below the bottom of the scrolled window
-    /// reports no dirty row.
-    ///
-    /// The agreed policy reports [`Damage::Metadata`] rather than
-    /// dropping the write outright: a frame still has to carry the
-    /// current cursor and offset even though the row the write landed
-    /// on has scrolled out of the window.
-    ///
-    /// Case: the user reads scrollback while a build keeps printing at
-    /// the live tail, which the window no longer shows.
-    #[test]
-    fn a_write_scrolled_out_of_the_window_reports_no_dirty_row() {
-        let mut screen = screen();
-        for _ in 0..3 {
+        /// Asserts that damage is reported in viewport rows, not the grid
+        /// rows the write used.
+        ///
+        /// Case: the user scrolls back one row and the shell echoes a
+        /// character at the live tail, which now sits one row lower in the
+        /// window.
+        #[test]
+        fn a_scrolled_screen_reports_damage_in_viewport_rows() {
+            let mut screen = screen();
             screen.state.line = ScreenLine(2);
             screen.lf();
+            screen.set_display_offset(DisplayOffset(1));
+            screen.state.line = ScreenLine(0);
+            assert_eq!(
+                screen.print('x'),
+                Some(Damage::rows(ViewportLine(1), ViewportLine(1)))
+            );
         }
-        screen.viewport.offset = DisplayOffset(3);
-        screen.state.line = ScreenLine(0);
-        assert_eq!(screen.print('x'), Some(Damage::Metadata));
-    }
 
-    /// Asserts that a span reaching past the last visible row is clamped
-    /// rather than reported out of range.
-    ///
-    /// Case: the user scrolls back and the application erases from the
-    /// cursor to the bottom of the screen.
-    #[test]
-    fn a_span_running_past_the_viewport_is_clamped_to_its_last_row() {
-        let mut screen = screen();
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        screen.set_display_offset(DisplayOffset(1));
-        screen.state.line = ScreenLine(0);
-        assert_eq!(
-            screen.erase_in_display(EraseScreenMode::Below),
-            Some(Damage::rows(ViewportLine(1), ViewportLine(2)))
-        );
-    }
-
-    /// Asserts that a fresh screen starts at the origin, pinned to the
-    /// live tail, with an empty history.
-    ///
-    /// Case: a terminal spawns and the first shell output must land at
-    /// the top-left of an unscrolled screen.
-    #[test]
-    fn a_fresh_screen_starts_at_the_origin() {
-        let screen = screen();
-        assert_eq!(
-            (screen.state.line, screen.state.column),
-            (ScreenLine(0), GridColumn(0))
-        );
-        assert_eq!(screen.display_offset(), DisplayOffset(0));
-        assert_eq!(screen.grid.history_len(), 0);
-    }
-
-    /// Asserts that a carriage return rewinds the column and clears the
-    /// deferred-wrap flag, damaging the cursor row.
-    ///
-    /// Case: a shell prints a partial line and returns to overwrite it,
-    /// as progress indicators do with a bare `\r`.
-    #[test]
-    fn carriage_return_rewinds_and_clears_pending_wrap() {
-        let mut screen = screen();
-        screen.state.column = GridColumn(2);
-        screen.state.pending_wrap = true;
-        let damage = screen.cr();
-        assert_eq!(screen.state.column, GridColumn(0));
-        assert!(!screen.state.pending_wrap);
-        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(0))));
-    }
-
-    /// Asserts that a linefeed above the bottom row only moves the
-    /// cursor, damaging the departed and arrived rows.
-    ///
-    /// Case: a shell prints multiple output lines while the screen
-    /// still has empty rows below the cursor.
-    #[test]
-    fn a_linefeed_above_the_bottom_moves_the_cursor() {
-        let mut screen = screen();
-        let damage = screen.lf();
-        assert_eq!(screen.state.line, ScreenLine(1));
-        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(1))));
-    }
-
-    /// Asserts that a linefeed at the bottom margin scrolls the screen and
-    /// pushes the departing row into history.
-    ///
-    /// Case: a shell prints past the last row and the earlier output has to
-    /// remain reachable by scrolling back.
-    #[test]
-    fn a_bottom_linefeed_scrolls_and_pushes_history() {
-        let mut screen = screen();
-        screen.grid[ScreenLine(0)][GridColumn(0)].c = 'a';
-        screen.state.line = ScreenLine(2);
-        assert_eq!(screen.lf(), Some(Damage::Full));
-        assert_eq!(screen.grid.history_len(), 1);
-    }
-
-    /// Asserts that the row scrolled in at the bottom carries the
-    /// current pen background.
-    ///
-    /// Case: an application sets a colored background and scrolls at
-    /// the bottom of the screen.
-    #[test]
-    fn a_scrolled_in_row_carries_the_pen_background() {
-        let mut screen = screen();
-        screen.pen_mut().bg = Color::Indexed(4);
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        assert_eq!(screen.grid[ScreenLine(2)][0].bg, Color::Indexed(4));
-        assert_eq!(screen.grid[ScreenLine(2)][3].bg, Color::Indexed(4));
-    }
-
-    /// Asserts that a linefeed preserves the deferred-wrap flag.
-    ///
-    /// The agreed policy follows alacritty: only a carriage return or
-    /// an explicit cursor motion clears the pending wrap; a bare
-    /// linefeed does not.
-    ///
-    /// Case: an application writes a full-width line, then emits a bare
-    /// linefeed before continuing to print on the next row.
-    #[test]
-    fn a_linefeed_preserves_pending_wrap() {
-        let mut screen = screen();
-        screen.state.pending_wrap = true;
-        screen.lf();
-        assert!(screen.state.pending_wrap);
-    }
-
-    /// Asserts that printing stamps the pen into the cell and advances
-    /// the cursor one column.
-    ///
-    /// Case: an application prints ordinary colored text at the start
-    /// of a row.
-    #[test]
-    fn print_stamps_the_pen_and_advances() {
-        let mut screen = screen();
-        screen.pen_mut().fg = Color::Indexed(1);
-        let damage = screen.print('a');
-        assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
-        assert_eq!(screen.grid[ScreenLine(0)][0].fg, Color::Indexed(1));
-        assert_eq!(
-            (screen.state.line, screen.state.column),
-            (ScreenLine(0), GridColumn(1))
-        );
-        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(0))));
-    }
-
-    /// Asserts that printing into the last column arms the deferred
-    /// wrap and leaves the cursor in place.
-    ///
-    /// Case: an application emits a line exactly as wide as the
-    /// screen, and the terminal must not move to the next row until
-    /// more text actually arrives.
-    #[test]
-    fn print_at_the_last_column_arms_the_deferred_wrap() {
-        let mut screen = screen();
-        screen.state.column = GridColumn(3);
-        screen.print('x');
-        assert_eq!(screen.grid[ScreenLine(0)][3].c, 'x');
-        assert_eq!(screen.state.column, GridColumn(3));
-        assert!(screen.state.pending_wrap);
-    }
-
-    /// Asserts that the print following an armed deferred wrap lands
-    /// at the start of the next row.
-    ///
-    /// Case: an application prints past the right edge, and the
-    /// overflowing character continues on the next line.
-    #[test]
-    fn the_next_print_after_the_last_column_wraps() {
-        let mut screen = screen();
-        for c in ['a', 'b', 'c', 'd'] {
-            screen.print(c);
+        /// Asserts that a deferred wrap on the bottom row scrolls the
+        /// screen and reports full damage.
+        ///
+        /// Case: a shell fills the very last cell of the screen and keeps
+        /// printing, forcing a scroll in the middle of the wrap.
+        #[test]
+        fn a_wrap_on_the_bottom_row_scrolls() {
+            let mut screen = screen();
+            screen.state.line = ScreenLine(2);
+            screen.state.column = GridColumn(3);
+            screen.print('x');
+            let damage = screen.print('y');
+            assert_eq!(screen.grid[ScreenLine(2)][0].c, 'y');
+            assert_eq!(damage, Some(Damage::Full));
         }
-        let damage = screen.print('e');
-        assert_eq!(screen.grid[ScreenLine(1)][0].c, 'e');
-        assert_eq!(
-            (screen.state.line, screen.state.column),
-            (ScreenLine(1), GridColumn(1))
-        );
-        assert!(!screen.state.pending_wrap);
-        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(1))));
-    }
 
-    /// Asserts that a deferred wrap on the bottom row scrolls the
-    /// screen and reports full damage.
-    ///
-    /// Case: a shell fills the very last cell of the screen and keeps
-    /// printing, forcing a scroll in the middle of the wrap.
-    #[test]
-    fn a_wrap_on_the_bottom_row_scrolls() {
-        let mut screen = screen();
-        screen.state.line = ScreenLine(2);
-        screen.state.column = GridColumn(3);
-        screen.print('x');
-        let damage = screen.print('y');
-        assert_eq!(screen.grid[ScreenLine(2)][0].c, 'y');
-        assert_eq!(damage, Some(Damage::Full));
-    }
-
-    /// Asserts that erase-to-end clears from the cursor to the right
-    /// edge with the pen background.
-    ///
-    /// Case: an application with a colored background truncates the
-    /// tail of a line with `EL 0`.
-    #[test]
-    fn erase_to_end_clears_from_the_cursor_with_the_pen_background() {
-        let mut screen = screen();
-        for c in ['a', 'b', 'c'] {
-            screen.print(c);
+        /// Asserts that a write below the bottom of the scrolled window
+        /// reports no dirty row.
+        ///
+        /// The agreed policy reports [`Damage::Metadata`] rather than
+        /// dropping the write outright: a frame still has to carry the
+        /// current cursor and offset even though the row the write landed
+        /// on has scrolled out of the window.
+        ///
+        /// Case: the user reads scrollback while a build keeps printing at
+        /// the live tail, which the window no longer shows.
+        #[test]
+        fn a_write_scrolled_out_of_the_window_reports_no_dirty_row() {
+            let mut screen = screen();
+            for _ in 0..3 {
+                screen.state.line = ScreenLine(2);
+                screen.lf();
+            }
+            screen.viewport.offset = DisplayOffset(3);
+            screen.state.line = ScreenLine(0);
+            assert_eq!(screen.print('x'), Some(Damage::Metadata));
         }
-        screen.state.column = GridColumn(1);
-        screen.pen_mut().bg = Color::Indexed(2);
-        let damage = screen.erase_in_line(EraseLineMode::ToEnd);
-        assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
-        assert_eq!(screen.grid[ScreenLine(0)][1].c, ' ');
-        assert_eq!(screen.grid[ScreenLine(0)][1].bg, Color::Indexed(2));
-        assert_eq!(screen.grid[ScreenLine(0)][3].bg, Color::Indexed(2));
-        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(0))));
     }
 
-    /// Asserts that erase-to-start clears through the cursor column
-    /// inclusively.
-    ///
-    /// The agreed convention matches `EL 1`: the erased span is
-    /// `0..=cursor.column`, the classic off-by-one of this operation.
-    ///
-    /// Case: an application rewrites the head of a line and clears
-    /// what it had written so far, cursor included.
-    #[test]
-    fn erase_to_start_includes_the_cursor_column() {
-        let mut screen = screen();
-        for c in ['a', 'b', 'c'] {
-            screen.print(c);
+    mod cr {
+        use super::*;
+
+        /// Asserts that a carriage return rewinds the column, clears the
+        /// deferred-wrap flag, and reports cursor-only damage.
+        ///
+        /// The agreed policy is [`Damage::Metadata`] rather than the
+        /// cursor row: the renderer draws the caret from the frame's
+        /// cursor rather than from cell data, so naming the row would
+        /// rebuild and re-upload contents that did not change.
+        ///
+        /// Case: a shell prints a partial line and returns to overwrite it,
+        /// as progress indicators do with a bare `\r`.
+        #[test]
+        fn carriage_return_rewinds_and_clears_pending_wrap() {
+            let mut screen = screen();
+            screen.state.column = GridColumn(2);
+            screen.state.pending_wrap = true;
+            let damage = screen.cr();
+            assert_eq!(screen.state.column, GridColumn(0));
+            assert!(!screen.state.pending_wrap);
+            assert_eq!(damage, Some(Damage::Metadata));
         }
-        screen.state.column = GridColumn(1);
-        screen.erase_in_line(EraseLineMode::ToStart);
-        assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
-        assert_eq!(screen.grid[ScreenLine(0)][1].c, ' ');
-        assert_eq!(screen.grid[ScreenLine(0)][2].c, 'c');
-    }
 
-    /// Asserts that erase-to-end is a no-op while the deferred wrap is
-    /// armed.
-    ///
-    /// The agreed policy follows alacritty: with the wrap pending the
-    /// cursor logically sits past the row's last cell, so `EL 0`
-    /// erases nothing rather than the just-printed last cell.
-    ///
-    /// Case: an application fills a row to its last column and then
-    /// issues `EL 0` before printing anything further.
-    #[test]
-    fn erase_to_end_is_a_no_op_under_pending_wrap() {
-        let mut screen = screen();
-        for c in ['a', 'b', 'c', 'd'] {
-            screen.print(c);
+        /// Asserts that a carriage return with nothing left to rewind
+        /// reports no damage at all.
+        ///
+        /// The agreed policy returns `None` rather than the cursor row or
+        /// [`Damage::Metadata`]: both would force a frame that repeats the
+        /// one before it, because this call writes no cell and moves the
+        /// cursor nowhere.
+        ///
+        /// Case: a program prints consecutive blank lines, so the `\r` of
+        /// each CRLF pair lands on a column the previous pair already
+        /// rewound.
+        #[test]
+        fn a_carriage_return_with_nothing_to_rewind_reports_no_damage() {
+            let mut screen = screen();
+            assert_eq!(screen.cr(), None);
         }
-        let damage = screen.erase_in_line(EraseLineMode::ToEnd);
-        assert_eq!(screen.grid[ScreenLine(0)][3].c, 'd');
-        assert_eq!(damage, None);
-    }
 
-    /// Asserts that erase-all clears the whole row regardless of the
-    /// cursor column.
-    ///
-    /// Case: a full-screen application repaints a status line in place
-    /// by clearing the entire row with `EL 2` before rewriting it.
-    #[test]
-    fn erase_all_clears_the_whole_row() {
-        let mut screen = screen();
-        for c in ['a', 'b', 'c'] {
-            screen.print(c);
+        /// Asserts that a carriage return at column zero still reports
+        /// damage while the deferred wrap is armed.
+        ///
+        /// Case: a one-column screen prints a character, which arms the
+        /// wrap without ever leaving column zero, and the application then
+        /// emits a bare `\r`.
+        #[test]
+        fn a_carriage_return_at_column_zero_disarms_a_pending_wrap() {
+            let mut screen = Screen::new(GridSize { cols: 1, rows: 3 }, 10);
+            screen.print('x');
+            assert_eq!(screen.state.column, GridColumn(0));
+            assert!(screen.state.pending_wrap);
+            let damage = screen.cr();
+            assert!(!screen.state.pending_wrap);
+            assert_eq!(damage, Some(Damage::Metadata));
         }
-        screen.state.column = GridColumn(1);
-        screen.erase_in_line(EraseLineMode::All);
-        assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
-        assert_eq!(screen.grid[ScreenLine(0)][2].c, ' ');
     }
 
-    /// Asserts that erase-below clears from the cursor cell to the end
-    /// of the screen, leaving earlier content in place.
-    ///
-    /// Case: a full-screen application redraws everything under the
-    /// cursor with `ED 0` while the rows above stay intact.
-    #[test]
-    fn erase_display_below_clears_from_the_cursor_down() {
-        let mut screen = screen();
-        screen.print('a');
-        screen.lf();
-        screen.cr();
-        for c in ['b', 'c'] {
-            screen.print(c);
+    mod lf {
+        use super::*;
+
+        /// Asserts that a linefeed above the bottom row only moves the
+        /// cursor and reports cursor-only damage.
+        ///
+        /// The agreed policy is [`Damage::Metadata`] rather than the
+        /// departed and arrived rows: neither row's contents change, and
+        /// the renderer draws the caret from the frame's cursor.
+        ///
+        /// Case: a shell prints multiple output lines while the screen
+        /// still has empty rows below the cursor.
+        #[test]
+        fn a_linefeed_above_the_bottom_moves_the_cursor() {
+            let mut screen = screen();
+            let damage = screen.lf();
+            assert_eq!(screen.state.line, ScreenLine(1));
+            assert_eq!(damage, Some(Damage::Metadata));
         }
-        screen.state.column = GridColumn(1);
-        let damage = screen.erase_in_display(EraseScreenMode::Below);
-        assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
-        assert_eq!(screen.grid[ScreenLine(1)][0].c, 'b');
-        assert_eq!(screen.grid[ScreenLine(1)][1].c, ' ');
-        assert_eq!(damage, Some(Damage::rows(ViewportLine(1), ViewportLine(2))));
-    }
 
-    /// Asserts that erase-above clears everything through the cursor
-    /// cell inclusively, leaving the rest of the cursor row intact.
-    ///
-    /// Case: a full-screen application discards everything already
-    /// drawn above and left of the cursor with `ED 1`.
-    #[test]
-    fn erase_display_above_clears_through_the_cursor() {
-        let mut screen = screen();
-        screen.print('a');
-        screen.lf();
-        screen.cr();
-        for c in ['b', 'c', 'd'] {
-            screen.print(c);
+        /// Asserts that a linefeed at the bottom margin scrolls the screen and
+        /// pushes the departing row into history.
+        ///
+        /// Case: a shell prints past the last row and the earlier output has to
+        /// remain reachable by scrolling back.
+        #[test]
+        fn a_bottom_linefeed_scrolls_and_pushes_history() {
+            let mut screen = screen();
+            screen.grid[ScreenLine(0)][GridColumn(0)].c = 'a';
+            screen.state.line = ScreenLine(2);
+            assert_eq!(screen.lf(), Some(Damage::Full));
+            assert_eq!(screen.grid.history_len(), 1);
         }
-        screen.state.column = GridColumn(1);
-        let damage = screen.erase_in_display(EraseScreenMode::Above);
-        assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
-        assert_eq!(screen.grid[ScreenLine(1)][0].c, ' ');
-        assert_eq!(screen.grid[ScreenLine(1)][1].c, ' ');
-        assert_eq!(screen.grid[ScreenLine(1)][2].c, 'd');
-        assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(1))));
-    }
 
-    /// Asserts that erase-all clears the visible screen in place while
-    /// scrollback history survives.
-    ///
-    /// The agreed policy is the classic xterm behavior: `ED 2` erases
-    /// in place and does not push the cleared rows into history (a
-    /// deliberate divergence from alacritty, which scrolls them out
-    /// first).
-    ///
-    /// Case: the user runs `clear` in a session that already
-    /// accumulated scrollback, then scrolls back to check older
-    /// output.
-    #[test]
-    fn erase_display_all_clears_the_screen_but_not_history() {
-        let mut screen = screen();
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        screen.cr();
-        for c in ['a', 'b'] {
-            screen.print(c);
-        }
-        let damage = screen.erase_in_display(EraseScreenMode::All);
-        assert_eq!(screen.grid[ScreenLine(2)][0].c, ' ');
-        assert_eq!(screen.grid[ScreenLine(2)][1].c, ' ');
-        assert_eq!(screen.grid.history_len(), 1);
-        assert_eq!(damage, Some(Damage::Full));
-    }
-
-    /// Asserts that an anchor above the viewport reports a negative row
-    /// rather than being dropped.
-    ///
-    /// Case: a mounted webview scrolls off the top of the window while the
-    /// user keeps working below it.
-    #[test]
-    fn an_anchor_above_the_viewport_reports_a_negative_row() {
-        let mut screen = screen();
-        let id = screen.cursor_line_id();
-        assert_eq!(screen.viewport_row_of(id), Some(0));
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        assert_eq!(screen.viewport_row_of(id), Some(-1));
-    }
-
-    /// Asserts that scrolling the viewport back moves an anchor's reported
-    /// row down by the same amount.
-    ///
-    /// Case: the user scrolls up to re-read output, and a webview anchored
-    /// in that output must be painted where its text now sits.
-    #[test]
-    fn scrolling_back_moves_an_anchors_reported_row_down() {
-        let mut screen = screen();
-        let id = screen.cursor_line_id();
-        screen.state.line = ScreenLine(2);
-        screen.lf();
-        screen.set_display_offset(DisplayOffset(1));
-        assert_eq!(screen.viewport_row_of(id), Some(0));
-    }
-
-    /// Asserts that an anchor whose row left the ring stops resolving.
-    ///
-    /// Case: the scrollback fills and the row a webview was anchored to is
-    /// finally trimmed away.
-    #[test]
-    fn an_anchor_trimmed_from_the_ring_stops_resolving() {
-        let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
-        let id = screen.cursor_line_id();
-        for _ in 0..2 {
+        /// Asserts that the row scrolled in at the bottom carries the
+        /// current pen background.
+        ///
+        /// Case: an application sets a colored background and scrolls at
+        /// the bottom of the screen.
+        #[test]
+        fn a_scrolled_in_row_carries_the_pen_background() {
+            let mut screen = screen();
+            screen.pen_mut().bg = Color::Indexed(4);
             screen.state.line = ScreenLine(2);
             screen.lf();
+            assert_eq!(screen.grid[ScreenLine(2)][0].bg, Color::Indexed(4));
+            assert_eq!(screen.grid[ScreenLine(2)][3].bg, Color::Indexed(4));
         }
-        assert_eq!(screen.viewport_row_of(id), None);
+
+        /// Asserts that a linefeed preserves the deferred-wrap flag.
+        ///
+        /// The agreed policy follows alacritty: only a carriage return or
+        /// an explicit cursor motion clears the pending wrap; a bare
+        /// linefeed does not.
+        ///
+        /// Case: an application writes a full-width line, then emits a bare
+        /// linefeed before continuing to print on the next row.
+        #[test]
+        fn a_linefeed_preserves_pending_wrap() {
+            let mut screen = screen();
+            screen.state.pending_wrap = true;
+            screen.lf();
+            assert!(screen.state.pending_wrap);
+        }
+    }
+
+    mod erase_in_line {
+        use super::*;
+
+        /// Asserts that erase-to-end clears from the cursor to the right
+        /// edge with the pen background.
+        ///
+        /// Case: an application with a colored background truncates the
+        /// tail of a line with `EL 0`.
+        #[test]
+        fn erase_to_end_clears_from_the_cursor_with_the_pen_background() {
+            let mut screen = screen();
+            for c in ['a', 'b', 'c'] {
+                screen.print(c);
+            }
+            screen.state.column = GridColumn(1);
+            screen.pen_mut().bg = Color::Indexed(2);
+            let damage = screen.erase_in_line(EraseLineMode::ToEnd);
+            assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
+            assert_eq!(screen.grid[ScreenLine(0)][1].c, ' ');
+            assert_eq!(screen.grid[ScreenLine(0)][1].bg, Color::Indexed(2));
+            assert_eq!(screen.grid[ScreenLine(0)][3].bg, Color::Indexed(2));
+            assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(0))));
+        }
+
+        /// Asserts that erase-to-start clears through the cursor column
+        /// inclusively.
+        ///
+        /// The agreed convention matches `EL 1`: the erased span is
+        /// `0..=cursor.column`, the classic off-by-one of this operation.
+        ///
+        /// Case: an application rewrites the head of a line and clears
+        /// what it had written so far, cursor included.
+        #[test]
+        fn erase_to_start_includes_the_cursor_column() {
+            let mut screen = screen();
+            for c in ['a', 'b', 'c'] {
+                screen.print(c);
+            }
+            screen.state.column = GridColumn(1);
+            screen.erase_in_line(EraseLineMode::ToStart);
+            assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
+            assert_eq!(screen.grid[ScreenLine(0)][1].c, ' ');
+            assert_eq!(screen.grid[ScreenLine(0)][2].c, 'c');
+        }
+
+        /// Asserts that erase-to-end is a no-op while the deferred wrap is
+        /// armed.
+        ///
+        /// The agreed policy follows alacritty: with the wrap pending the
+        /// cursor logically sits past the row's last cell, so `EL 0`
+        /// erases nothing rather than the just-printed last cell.
+        ///
+        /// Case: an application fills a row to its last column and then
+        /// issues `EL 0` before printing anything further.
+        #[test]
+        fn erase_to_end_is_a_no_op_under_pending_wrap() {
+            let mut screen = screen();
+            for c in ['a', 'b', 'c', 'd'] {
+                screen.print(c);
+            }
+            let damage = screen.erase_in_line(EraseLineMode::ToEnd);
+            assert_eq!(screen.grid[ScreenLine(0)][3].c, 'd');
+            assert_eq!(damage, None);
+        }
+
+        /// Asserts that erase-all clears the whole row regardless of the
+        /// cursor column.
+        ///
+        /// Case: a full-screen application repaints a status line in place
+        /// by clearing the entire row with `EL 2` before rewriting it.
+        #[test]
+        fn erase_all_clears_the_whole_row() {
+            let mut screen = screen();
+            for c in ['a', 'b', 'c'] {
+                screen.print(c);
+            }
+            screen.state.column = GridColumn(1);
+            screen.erase_in_line(EraseLineMode::All);
+            assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
+            assert_eq!(screen.grid[ScreenLine(0)][2].c, ' ');
+        }
+    }
+
+    mod erase_in_display {
+        use super::*;
+
+        /// Asserts that erase-below clears from the cursor cell to the end
+        /// of the screen, leaving earlier content in place.
+        ///
+        /// Case: a full-screen application redraws everything under the
+        /// cursor with `ED 0` while the rows above stay intact.
+        #[test]
+        fn erase_display_below_clears_from_the_cursor_down() {
+            let mut screen = screen();
+            screen.print('a');
+            screen.lf();
+            screen.cr();
+            for c in ['b', 'c'] {
+                screen.print(c);
+            }
+            screen.state.column = GridColumn(1);
+            let damage = screen.erase_in_display(EraseScreenMode::Below);
+            assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
+            assert_eq!(screen.grid[ScreenLine(1)][0].c, 'b');
+            assert_eq!(screen.grid[ScreenLine(1)][1].c, ' ');
+            assert_eq!(damage, Some(Damage::rows(ViewportLine(1), ViewportLine(2))));
+        }
+
+        /// Asserts that erase-above clears everything through the cursor
+        /// cell inclusively, leaving the rest of the cursor row intact.
+        ///
+        /// Case: a full-screen application discards everything already
+        /// drawn above and left of the cursor with `ED 1`.
+        #[test]
+        fn erase_display_above_clears_through_the_cursor() {
+            let mut screen = screen();
+            screen.print('a');
+            screen.lf();
+            screen.cr();
+            for c in ['b', 'c', 'd'] {
+                screen.print(c);
+            }
+            screen.state.column = GridColumn(1);
+            let damage = screen.erase_in_display(EraseScreenMode::Above);
+            assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
+            assert_eq!(screen.grid[ScreenLine(1)][0].c, ' ');
+            assert_eq!(screen.grid[ScreenLine(1)][1].c, ' ');
+            assert_eq!(screen.grid[ScreenLine(1)][2].c, 'd');
+            assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(1))));
+        }
+
+        /// Asserts that erase-all clears the visible screen in place while
+        /// scrollback history survives.
+        ///
+        /// The agreed policy is the classic xterm behavior: `ED 2` erases
+        /// in place and does not push the cleared rows into history (a
+        /// deliberate divergence from alacritty, which scrolls them out
+        /// first).
+        ///
+        /// Case: the user runs `clear` in a session that already
+        /// accumulated scrollback, then scrolls back to check older
+        /// output.
+        #[test]
+        fn erase_display_all_clears_the_screen_but_not_history() {
+            let mut screen = screen();
+            screen.state.line = ScreenLine(2);
+            screen.lf();
+            screen.cr();
+            for c in ['a', 'b'] {
+                screen.print(c);
+            }
+            let damage = screen.erase_in_display(EraseScreenMode::All);
+            assert_eq!(screen.grid[ScreenLine(2)][0].c, ' ');
+            assert_eq!(screen.grid[ScreenLine(2)][1].c, ' ');
+            assert_eq!(screen.grid.history_len(), 1);
+            assert_eq!(damage, Some(Damage::Full));
+        }
+
+        /// Asserts that a span reaching past the last visible row is clamped
+        /// rather than reported out of range.
+        ///
+        /// Case: the user scrolls back and the application erases from the
+        /// cursor to the bottom of the screen.
+        #[test]
+        fn a_span_running_past_the_viewport_is_clamped_to_its_last_row() {
+            let mut screen = screen();
+            screen.state.line = ScreenLine(2);
+            screen.lf();
+            screen.set_display_offset(DisplayOffset(1));
+            screen.state.line = ScreenLine(0);
+            assert_eq!(
+                screen.erase_in_display(EraseScreenMode::Below),
+                Some(Damage::rows(ViewportLine(1), ViewportLine(2)))
+            );
+        }
+    }
+
+    mod cursor {
+        use super::*;
+
+        /// Asserts that the reported cursor carries the write position and
+        /// is visible.
+        ///
+        /// The agreed placeholder is Block / steady / visible, matching what
+        /// a terminal starts at; `Cursor::default()` is deliberately not
+        /// used because its `visible` is `false`, which would hide the
+        /// caret until the first DECTCEM.
+        ///
+        /// Case: a shell prints its prompt and the next frame has to show
+        /// the caret after it.
+        #[test]
+        fn the_cursor_reports_the_write_position_and_is_visible() {
+            let mut screen = screen();
+            screen.print('a');
+            screen.print('b');
+            let cursor = screen.cursor();
+            assert_eq!(cursor.point.line, GridLine(0));
+            assert_eq!(cursor.point.column, GridColumn(2));
+            assert_eq!(cursor.shape, CursorShape::Block);
+            assert!(!cursor.blinking);
+            assert!(cursor.visible);
+        }
+    }
+
+    mod viewport_row {
+        use super::*;
+
+        /// Asserts that a viewport row at the live tail is the visible row
+        /// with the same index.
+        ///
+        /// Case: the emitter builds a snapshot for a terminal the user has
+        /// not scrolled.
+        #[test]
+        fn a_viewport_row_at_the_live_tail_is_the_visible_row() {
+            let mut screen = screen();
+            screen.grid[ScreenLine(1)][0].c = 'x';
+            assert_eq!(screen.viewport_row(ViewportLine(1))[0].c, 'x');
+        }
+
+        /// Asserts that a scrolled viewport reads the history rows it
+        /// shows rather than the live tail.
+        ///
+        /// Case: the user scrolls back one line, so the top of the window
+        /// is the newest scrollback row and the live rows shift down.
+        #[test]
+        fn a_scrolled_viewport_row_reads_history() {
+            let mut screen = screen();
+            screen.grid[ScreenLine(0)][0].c = 'a';
+            screen.state.line = ScreenLine(2);
+            screen.lf();
+            assert_eq!(screen.grid.history_len(), 1);
+            screen.viewport.offset = DisplayOffset(1);
+            assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+        }
+    }
+
+    mod display_offset {
+        use super::*;
+
+        /// Asserts that output arriving while the user is scrolled back
+        /// leaves the viewed content where it was.
+        ///
+        /// The agreed policy holds the viewport still rather than letting
+        /// it drift with the live tail: `VtBackend::scroll` already pins
+        /// "the viewport holds its position while the PTY emits output",
+        /// and every terminal that keeps scrollback behaves this way.
+        ///
+        /// Case: the user is reading an earlier command's output when a
+        /// background build prints its next line.
+        #[test]
+        fn output_below_a_scrolled_viewport_holds_the_view_still() {
+            let mut screen = screen();
+            screen.grid[ScreenLine(0)][0].c = 'a';
+            screen.state.line = ScreenLine(2);
+            screen.lf();
+            screen.viewport.offset = DisplayOffset(1);
+            assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+
+            screen.state.line = ScreenLine(2);
+            screen.lf();
+            assert_eq!(screen.display_offset(), DisplayOffset(2));
+            assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+        }
+
+        /// Asserts that output at the live tail leaves the viewport pinned
+        /// there.
+        ///
+        /// Case: an unscrolled terminal keeps printing, and the window has
+        /// to follow the newest line rather than freeze.
+        #[test]
+        fn output_at_the_live_tail_keeps_the_viewport_pinned() {
+            let mut screen = screen();
+            screen.state.line = ScreenLine(2);
+            screen.lf();
+            assert_eq!(screen.display_offset(), DisplayOffset(0));
+        }
+
+        /// Asserts that a scroll at history capacity clamps the offset
+        /// instead of naming a row the ring no longer holds.
+        ///
+        /// The agreed policy accepts that the view drifts once scrollback
+        /// is full: the row the user was reading has been evicted, so there
+        /// is nothing left to hold still on.
+        ///
+        /// Case: the user is parked at the top of a full scrollback while
+        /// output keeps arriving.
+        #[test]
+        fn a_scroll_at_history_capacity_clamps_the_offset() {
+            let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
+            screen.state.line = ScreenLine(2);
+            screen.lf();
+            screen.viewport.offset = DisplayOffset(1);
+            screen.state.line = ScreenLine(2);
+            screen.lf();
+            assert_eq!(screen.grid.history_len(), 1);
+            assert_eq!(screen.display_offset(), DisplayOffset(1));
+        }
+    }
+
+    mod viewport_row_of {
+        use super::*;
+
+        /// Asserts that an anchor above the viewport reports a negative row
+        /// rather than being dropped.
+        ///
+        /// Case: a mounted webview scrolls off the top of the window while the
+        /// user keeps working below it.
+        #[test]
+        fn an_anchor_above_the_viewport_reports_a_negative_row() {
+            let mut screen = screen();
+            let id = screen.cursor_line_id();
+            assert_eq!(screen.viewport_row_of(id), Some(0));
+            screen.state.line = ScreenLine(2);
+            screen.lf();
+            assert_eq!(screen.viewport_row_of(id), Some(-1));
+        }
+
+        /// Asserts that scrolling the viewport back moves an anchor's reported
+        /// row down by the same amount.
+        ///
+        /// Case: the user scrolls up to re-read output, and a webview anchored
+        /// in that output must be painted where its text now sits.
+        #[test]
+        fn scrolling_back_moves_an_anchors_reported_row_down() {
+            let mut screen = screen();
+            let id = screen.cursor_line_id();
+            screen.state.line = ScreenLine(2);
+            screen.lf();
+            screen.set_display_offset(DisplayOffset(1));
+            assert_eq!(screen.viewport_row_of(id), Some(0));
+        }
+
+        /// Asserts that an anchor whose row left the ring stops resolving.
+        ///
+        /// Case: the scrollback fills and the row a webview was anchored to is
+        /// finally trimmed away.
+        #[test]
+        fn an_anchor_trimmed_from_the_ring_stops_resolving() {
+            let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
+            let id = screen.cursor_line_id();
+            for _ in 0..2 {
+                screen.state.line = ScreenLine(2);
+                screen.lf();
+            }
+            assert_eq!(screen.viewport_row_of(id), None);
+        }
     }
 }

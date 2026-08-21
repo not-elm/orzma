@@ -117,6 +117,8 @@ alt screen かどうかは `VtModes::active_screen` だけが記録し、`Screen
 
 damage は「アクティブビューポート + カーソル + 将来の selection/vi オーバーレイ」の概念で、特定 grid に属さない。Grid/Screen の操作は**`Damage`(`Copy` かつアロケーションなし。`Full` / `Rows { first, last }` / `Metadata` の 3 値、`Damage::rows(first, last)` コンストラクタ)を戻り値で返し**、Executor が `DamageLedger` に stage する。スクリーン切替は `Damage::Full` を stage する(「alt 切替は必ず Snapshot」不変条件の実装点)。
 
+セルを書き換えない操作の damage は次の 2 段で決める。**カーソルだけが動く操作(`cr`、スクロールを伴わない `lf`、今後の CUP/CUU/CUF 等)は `Damage::Metadata` を返す** — renderer はキャレットをフレームの `cursor` から描き、行のセルデータからは描かないため、行を dirty にしても内容の変わらない行を再構築・再アップロードするだけになる。**カーソルすら動かない呼び出し(column 0 での `cr`、pending wrap 下の `EL 0`)は `None` を返す** — `None` は `VtUpdate::damaged` を通じて coalescer の武装可否を決めるので、ここで `Metadata` を返すと同一内容のフレームを 1 枚強制することになる。逆に `None` と `Metadata` を取り違えて本当のカーソル移動を `None` にすると、`frame()` はそもそも呼ばれず(`OrzmaTerm::feed_chunk` が `damaged` で武装する)キャレットが古い位置に取り残される。
+
 `DamageLedger` の内部表現は `{ staged: Option<Staged>, rows: RowBits }` である。`RowBits` はビューポート行 1 行につき 1 ビットを持つ再利用可能なビット集合で、terminal のライフタイムを通じてバッファを使い回すため、per-character の stage 経路でアロケーションが発生しない。`Staged` は `Full` か `Rows`(`RowBits` が指す行の集合)のいずれかで、`Rows` かつビットが 1 つも立っていない状態が「フレームは出すがどの行も汚れていない」というメタデータ専用ケースを表す。
 
 drain(`DamageLedger::take`)は `StagedDamage`(`Full`、または `DamageRows` を運ぶ `Delta`)を返し、`Frame::emit` が毎フレーム 1 回これを消費してフレームを組み立てる。`Rows` の drain は `RowBits` を昇順にビット走査してそのまま `DamageRows` を組み立てるため、ソートは発生しない — ビット走査自体が行を昇順・重複なしで返す構造になっている。
