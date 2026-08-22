@@ -84,9 +84,20 @@ pub struct CharacterSetsState {
 }
 
 impl CharacterSetsState {
-    /// Specifies the graphic character set to be used for the designated [GCode].
+    /// Designates `character_set` to `g_code` (`SCS`).
     pub fn designate(&mut self, g_code: GCode, character_set: CharacterSet) {
         self.g_sets[g_code] = character_set;
+    }
+
+    /// Invokes `g_code` into GL (`LS0` through `LS3`).
+    pub fn invoke(&mut self, g_code: GCode) {
+        todo!("テストケースを作成してから実装する。AIは実装禁止")
+    }
+
+    /// Invokes `single_shift` into GL for the next graphic character
+    /// (`SS2`, `SS3`).
+    pub fn invoke_single(&mut self, single_shift: SingleShift) {
+        todo!("テストケースを作成してから実装する。AIは実装禁止")
     }
 }
 
