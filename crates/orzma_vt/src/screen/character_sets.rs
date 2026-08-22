@@ -94,10 +94,6 @@ impl CharacterSetsState {
 mod tests {
     use super::*;
 
-    fn character_sets() -> CharacterSetsState {
-        CharacterSetsState::default()
-    }
-
     mod designate {
         use super::CharacterSet::{Ascii, DecSpecialGraphics};
         use super::*;
@@ -117,7 +113,7 @@ mod tests {
                 (GCode::G2, GSets([Ascii, Ascii, DecSpecialGraphics, Ascii])),
                 (GCode::G3, GSets([Ascii, Ascii, Ascii, DecSpecialGraphics])),
             ] {
-                let mut state = character_sets();
+                let mut state = CharacterSetsState::default();
                 state.designate(g_code, DecSpecialGraphics);
                 assert_eq!(state.g_sets, expected);
                 assert_eq!(state.g_sets[g_code], DecSpecialGraphics);
@@ -132,7 +128,7 @@ mod tests {
         /// prints as a letter again instead of a horizontal line.
         #[test]
         fn redesignating_a_g_code_replaces_the_previous_set() {
-            let mut state = character_sets();
+            let mut state = CharacterSetsState::default();
             state.designate(GCode::G0, DecSpecialGraphics);
             assert_eq!(state.g_sets[GCode::G0], DecSpecialGraphics);
             state.designate(GCode::G0, Ascii);
@@ -148,7 +144,7 @@ mod tests {
         /// arrives.
         #[test]
         fn designate_leaves_the_invocation_state_unchanged() {
-            let mut state = character_sets();
+            let mut state = CharacterSetsState::default();
             state.gl = GCode::G1;
             state.single_shift = Some(SingleShift::G2);
 
