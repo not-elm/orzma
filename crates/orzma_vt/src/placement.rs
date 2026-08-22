@@ -430,4 +430,76 @@ mod tests {
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].id, primary);
     }
+
+    /// Asserts that a placement inside the scrolled region follows its row
+    /// down.
+    ///
+    /// Case: a webview is mounted beside a line of output and a
+    /// full-screen application scrolls the screen backwards under it.
+    #[test]
+    fn a_reverse_scroll_moves_a_placement_down_with_its_row() {
+        let mut device = device();
+        let mut store = PlacementStore::new();
+        let id = mount(&mut store, &device, "memo").expect("mount accepted");
+        assert_eq!(store.project(device.active_screen())[0].viewport_row, 0);
+
+        device.active_mut().ri();
+
+        let projected = store.project(device.active_screen());
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].id, id);
+        assert_eq!(projected[0].viewport_row, 1);
+    }
+
+    /// Asserts that a placement on the row a reverse scroll discards stops
+    /// projecting, and that the next sweep names it.
+    ///
+    /// The agreed policy leaves the removal to `evict_lost_anchors` rather
+    /// than doing it inside the scroll: projection reads and never
+    /// mutates, so a discarded placement goes invisible at once and is
+    /// reclaimed when the sweep runs.
+    ///
+    /// Case: a webview sits on the last row of the screen and a
+    /// full-screen application scrolls backwards, pushing that row off the
+    /// bottom.
+    #[test]
+    fn a_placement_on_the_discarded_row_stops_projecting_and_is_swept() {
+        let mut device = device();
+        let mut store = PlacementStore::new();
+        device.active_mut().lf();
+        device.active_mut().lf();
+        let id = mount(&mut store, &device, "memo").expect("mount accepted");
+        assert_eq!(store.project(device.active_screen())[0].viewport_row, 2);
+
+        device.active_mut().ri();
+        device.active_mut().ri();
+        device.active_mut().ri();
+
+        assert!(store.project(device.active_screen()).is_empty());
+        assert_eq!(store.evict_lost_anchors(device.active_screen()), vec![id]);
+        assert_eq!(store.len(), 0);
+    }
+
+    /// Asserts that an anchor still resolves once the history holds ids
+    /// that are no longer ascending.
+    ///
+    /// Case: a full-screen application scrolls backwards — minting a row
+    /// with a high id above older rows — and then output pushes that row
+    /// into history ahead of the ones it was inserted above.
+    #[test]
+    fn an_anchor_still_resolves_once_the_history_ids_are_unordered() {
+        let mut device = device();
+        let mut store = PlacementStore::new();
+        let id = mount(&mut store, &device, "memo").expect("mount accepted");
+
+        device.active_mut().ri();
+        for _ in 0..3 {
+            device.active_mut().lf();
+        }
+
+        let projected = store.project(device.active_screen());
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].id, id);
+        assert_eq!(projected[0].viewport_row, 0);
+    }
 }
