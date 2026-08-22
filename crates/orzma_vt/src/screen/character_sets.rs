@@ -86,7 +86,7 @@ pub struct CharacterSetsState {
 impl CharacterSetsState {
     /// Specifies the graphic character set to be used for the designated [GCode].
     pub fn designate(&mut self, g_code: GCode, character_set: CharacterSet) {
-        todo!("テストケースを書いてから実装する。")
+        self.g_sets[g_code] = character_set;
     }
 }
 
@@ -141,13 +141,6 @@ mod tests {
 
         /// Asserts that a designation changes neither the G code a
         /// locking shift invoked into GL nor a pending single shift.
-        ///
-        /// The agreed policy keeps SCS designation separate from
-        /// invocation, following the VT220's own split between § 4.4.1
-        /// and §§ 4.4.3 through 4.4.4. Designating must not invoke the G
-        /// code into GL, and it must not consume a pending single shift;
-        /// folding the two together would make `ESC ) 0` silently act as
-        /// `SO` as well.
         ///
         /// Case: an application has shifted GL to G1 for line drawing
         /// and sent `SS2` for the character it is about to print, then
