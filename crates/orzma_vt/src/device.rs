@@ -78,11 +78,11 @@ impl DeviceState {
     /// Resizes both screens, reflowing content; `None` when the
     /// dimensions already matched.
     // TODO: A rewrap can insert or drop rows in the middle of the ring,
-    // which renumbers surviving rows out from under the plain
-    // `front_line_id` arithmetic `LineId` relies on for a scroll. Once
-    // reflow lands, route the row remapping it produces to
-    // `PlacementStore` (a sibling field, so the caller has to route it)
-    // so it can re-anchor each placement to its surviving row.
+    // and can split or merge them, so a surviving placement anchor has to
+    // be told which resulting row it now belongs to. Once reflow lands,
+    // route the row remapping it produces to `PlacementStore` (a sibling
+    // field, so the caller has to route it) so it can re-anchor each
+    // placement to its surviving row.
     pub fn resize(&mut self, _size: GridSize) -> Option<Damage> {
         todo!()
     }

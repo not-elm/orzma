@@ -13,15 +13,25 @@ use std::ops::{Index, IndexMut, Range};
 ///
 /// # Invariants
 ///
-/// Ids are minted monotonically per grid and never reused, and the ring
-/// holds a consecutive run of them, oldest at the front. A placement
-/// anchored to one can therefore never be re-pointed at later content
-/// on the same grid.
+/// An id is the row's identity, not its address: it follows the row
+/// wherever the row moves inside the ring. Ids are minted monotonically
+/// per grid and never reused, so a placement anchored to one can never be
+/// re-pointed at later content on the same grid.
+///
+/// Nothing orders the ring by id. A reverse scroll inserts a freshly
+/// minted row above rows minted earlier, and two consequences follow that
+/// each invalidate a short-circuit a reader would otherwise reach for.
+/// History becomes unordered as well, because such a row later scrolls
+/// into it like any other, so binary-searching the history segment alone
+/// is equally unsound. The front row is not necessarily the lowest id
+/// either, because on a grid built without history a reverse scroll
+/// inserts at ring index zero. The only sound constant-time rejection is
+/// `id >= next_line_id`, which no caller can produce.
 ///
 /// The uniqueness is per grid, NOT per terminal: the primary and
 /// alternate screens own separate grids that both start at zero, so
 /// resolving an id against the wrong one silently names a different row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LineId(u64);
 
 /// Storage-only grid: scrollback history plus the visible screen in
@@ -94,7 +104,7 @@ impl Grid {
     /// Scrolls the visible screen up by one row: the top visible row
     /// becomes the newest history row and a `fill`-filled row enters at
     /// the bottom.
-    pub fn scroll_up_one(&mut self, fill: Cell) {
+    pub(super) fn scroll_up_one(&mut self, fill: Cell) {
         let id = self.mint();
         if self.history_len() < self.max_history {
             self.rows.push_back(StoredRow {
