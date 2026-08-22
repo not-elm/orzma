@@ -7,20 +7,16 @@
 //! encoding instead, so such a set could never be selected. `LS1R`,
 //! `LS2R`, and `LS3R` stay out of scope until an 8-bit input mode
 //! exists.
-#![expect(
-    dead_code,
-    reason = "every designation and shift reaches this state once the ESC dispatch lands"
-)]
 
 use std::ops::{Index, IndexMut};
 
 /// A graphic character set an application designates to a G code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) enum CharacterSet {
-    /// ASCII graphics (`ESC ( B`), the designation every G code resets to.
+pub enum CharacterSet {
+    /// ASCII graphics, the designation every G code resets to.
     #[default]
     Ascii,
-    /// DEC Special Graphics (`ESC ( 0`).
+    /// DEC Special Graphics.
     ///
     /// This character set has about two-thirds of the ASCII graphic
     /// characters. It also has special symbols and short line segments.
@@ -30,7 +26,7 @@ pub(super) enum CharacterSet {
 
 /// One of the four G codes a character set is designated to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) enum GCode {
+pub enum GCode {
     #[default]
     G0,
     G1,
@@ -43,7 +39,7 @@ pub(super) enum GCode {
 /// SS2 and SS3 are the only single shifts the VT220 defines, so G0 and
 /// G1 are excluded by construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SingleShift {
+pub enum SingleShift {
     /// `SS2` (`ESC N`, or `0x8E` in its 8-bit form) invokes G2.
     G2,
     /// `SS3` (`ESC O`, or `0x8F` in its 8-bit form) invokes G3.
@@ -52,7 +48,7 @@ pub(super) enum SingleShift {
 
 /// The character set designated to each of the four G codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) struct GSets([CharacterSet; 4]);
+pub struct GSets([CharacterSet; 4]);
 
 impl Index<GCode> for GSets {
     type Output = CharacterSet;
@@ -77,9 +73,8 @@ impl IndexMut<GCode> for GSets {
 /// a locking shift leaves it alone: the two invocations are independent
 /// state, not one field the newer control function overwrites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) struct CharacterSetsState {
-    /// The G code the latest locking shift invoked into GL (`SI`, `SO`,
-    /// `ESC n`, `ESC o`); G0 at reset.
+pub struct CharacterSetsState {
+    /// The G code the latest locking shift invoked into GL.
     pub gl: GCode,
     /// The G code a pending `SS2` or `SS3` invokes into GL for the next
     /// graphic character.

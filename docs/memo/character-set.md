@@ -178,3 +178,8 @@ LS1R、LS2、LS2R、LS3、LS3RはVT200 modeでのみ使用できる。
 
 - [SS2 — Single Shift G2](https://vt100.net/docs/vt220-rm/chapter4.html#S4.4.4.1)
 - [SS3 — Single Shift G3](https://vt100.net/docs/vt220-rm/chapter4.html#S4.4.4.2)
+
+## 現代のターミナルにおける実装状況の変化
+
+元々GRはGLだけでは表現しきれない描画文字をサポートするためのものだったが、現代ではUTF-8を利用するのが主流となっており、更にUTF-8の先頭バイトがGRのコード範囲に重なっているという理由もあり多くのターミナルではGRは利用されなくなっている。
+GLに関しては引き続き利用されており実装する必要がある。
