@@ -1235,8 +1235,11 @@ mod tests {
         #[test]
         fn a_reverse_index_leaves_a_scrolled_viewport_where_it_is() {
             let mut screen = screen();
-            screen.grid[ScreenLine(0)][0].c = 'a';
+            for (line, glyph) in [(0u16, 'a'), (1, 'b'), (2, 'c')] {
+                screen.grid[ScreenLine(line)][0].c = glyph;
+            }
             screen.state.line = ScreenLine(2);
+            screen.lf();
             screen.lf();
             screen.set_display_offset(DisplayOffset(1));
             let showing = screen.viewport_row(ViewportLine(0))[0].c;
