@@ -97,7 +97,7 @@ impl VTActor for Executor<'_> {
                 let damage = self.device.active_mut().ht();
                 self.damage.stage_if_changed(damage);
             }
-            0x0A => {
+            0x0A | 0x0B | 0x0C | 0x84 => {
                 let damage = self.device.active_mut().lf();
                 self.damage.stage_if_changed(damage);
             }

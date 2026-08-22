@@ -33,7 +33,7 @@ use std::ops::{Index, IndexMut, Range};
 /// alternate screens own separate grids that both start at zero, so
 /// resolving an id against the wrong one silently names a different row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LineId(u64);
+pub struct LineId(u64);
 
 /// Storage-only grid: scrollback history plus the visible screen in
 /// one ring.
@@ -105,7 +105,7 @@ impl Grid {
     /// Scrolls the visible screen up by one row: the top visible row
     /// becomes the newest history row and a `fill`-filled row enters at
     /// the bottom.
-    pub(super) fn scroll_up_one(&mut self, fill: Cell) {
+    pub fn scroll_up_one(&mut self, fill: Cell) {
         let id = self.mint();
         if self.history_len() < self.max_history {
             self.rows.push_back(StoredRow {
@@ -125,28 +125,7 @@ impl Grid {
 
     /// Scrolls the region down by one row: a `fill`-filled row enters at
     /// `top` and the row at `bottom` is discarded.
-    ///
-    /// Deliberately not the inverse of [`Self::scroll_up_one`]. The row
-    /// leaving the bottom is lost rather than becoming history, and the
-    /// row entering at the top is blank rather than the newest history
-    /// row; history is neither grown, trimmed, nor read back from.
-    ///
-    /// # Invariants
-    ///
-    /// The region satisfies `top <= bottom < size.rows`. Under that,
-    /// `base + bottom` is at most the ring's last index and the later
-    /// insert at `base + top` is in range, which is why neither
-    /// `VecDeque` call can fail.
-    pub(super) fn scroll_down_one(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
-        debug_assert!(top <= bottom, "a scroll region runs top to bottom");
-        debug_assert!(
-            bottom.0 < self.size.rows,
-            "the region's bottom row is on screen"
-        );
-        // NOTE: `history_len` is `rows.len() - size.rows`, so reading it
-        // from the shortened ring underflows on a grid with no history —
-        // which is how the alternate screen is built. It has to be bound
-        // before the removal.
+    pub fn scroll_down_one(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
         let base = self.history_len();
         let mut recycled = self
             .rows
@@ -158,16 +137,13 @@ impl Grid {
     }
 
     /// The id of the row at a screen line.
-    pub(super) fn line_id(&self, line: ScreenLine) -> LineId {
+    pub fn line_id(&self, line: ScreenLine) -> LineId {
         self.rows[self.visible_index(line.0)].id
     }
 
     /// The active-grid line the row `id` now sits at; `None` once it has
     /// left the ring.
-    pub(super) fn grid_line(&self, id: LineId) -> Option<GridLine> {
-        // NOTE: the ring is not ordered by id, so this scan must not be
-        // turned into a binary search and must not be short-circuited on
-        // the front row's id — see the invariants on `LineId`.
+    pub fn grid_line(&self, id: LineId) -> Option<GridLine> {
         let index = self.rows.iter().rposition(|row| row.id == id)?;
         let line = index as i64 - self.history_len() as i64;
         Some(GridLine(
@@ -183,7 +159,7 @@ impl Grid {
     /// The line must resolve inside the ring — `-history_len <= line`
     /// and `line < rows`. [`crate::screen::Screen`] guarantees that by
     /// clamping the viewport to the history it actually has.
-    pub(super) fn row(&self, line: GridLine) -> &Row<Cell> {
+    pub fn row(&self, line: GridLine) -> &Row<Cell> {
         let index = i64::from(self.history_len() as u32) + i64::from(line.0);
         let index = usize::try_from(index).expect("the line resolves inside the ring");
         &self.rows[index].cells

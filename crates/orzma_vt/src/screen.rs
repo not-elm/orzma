@@ -115,24 +115,6 @@ impl Screen {
     }
 
     /// Moves the cursor one column left and disarms the deferred wrap.
-    ///
-    /// The cursor stops at column zero rather than wrapping back onto
-    /// the previous row: xterm reaches that row only under
-    /// reverse-wraparound (`DECSET 45` / `DECSET 1045`), which is off by
-    /// default and unimplemented here, and it additionally requires
-    /// autowrap to be on.
-    ///
-    /// Reports no damage when the cursor already sits at column zero
-    /// with the wrap disarmed, on the same reasoning as [`Screen::cr`].
-    ///
-    /// # Invariants
-    ///
-    /// The deferred wrap is disarmed even when the column does not
-    /// change, and the column steps back even when the wrap was armed.
-    /// xterm's `CursorBack` decrements unconditionally without
-    /// reverse-wraparound and ends in `ResetWrap`, so a backspace after
-    /// a full row lands one column short of the cell just written, not
-    /// on it.
     pub fn bs(&mut self) -> Option<Damage> {
         if self.state.column == GridColumn(0) && !self.state.pending_wrap {
             return None;
@@ -177,13 +159,6 @@ impl Screen {
 
     /// Moves the cursor up one row, scrolling the region at its top
     /// margin (RI).
-    ///
-    /// ECMA-48 § 6.1.7 leaves a movement past the first line undefined and
-    /// lists seven permitted behaviours; this takes (f), scrolling, which
-    /// is the DEC and xterm behaviour applications expect. Unlike
-    /// [`Self::lf`], the deferred wrap is disarmed: RI is an explicit
-    /// cursor movement, and xterm reaches its cursor-up helper — which
-    /// resets the flag — on both paths.
     ///
     /// A cursor above a non-zero top margin and already on the first row
     /// moves nothing and scrolls nothing, which is why the disarmed wrap
