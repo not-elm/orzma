@@ -97,23 +97,14 @@ impl VTActor for Executor<'_> {
                 let damage = self.device.active_mut().ht();
                 self.damage.stage_if_changed(damage);
             }
-            0x0A | 0x0B | 0x0C | 0x84 => {
-                let damage = self.device.active_mut().lf();
-                self.damage.stage_if_changed(damage);
-            }
+            0x0A | 0x0B | 0x0C | 0x84 => self.index(),
             0x0D => {
                 let damage = self.device.active_mut().cr();
                 self.damage.stage_if_changed(damage);
             }
-            0x85 => {
-                self.damage.stage_if_changed(self.device.active_mut().cr());
-                self.damage.stage_if_changed(self.device.active_mut().lf());
-            }
+            0x85 => self.next_line(),
             0x88 => self.device.active_mut().hts(),
-            0x8D => {
-                let damage = self.device.active_mut().ri();
-                self.damage.stage_if_changed(damage);
-            }
+            0x8D => self.reverse_index(),
             _ => {}
         }
     }
@@ -139,11 +130,17 @@ impl VTActor for Executor<'_> {
     fn esc_dispatch(
         &mut self,
         _params: &[i64],
-        _intermediates: &[u8],
+        intermediates: &[u8],
         _ignored_excess_intermediates: bool,
-        _byte: u8,
+        byte: u8,
     ) {
-        todo!()
+        match (byte, intermediates) {
+            (b'D', []) => self.index(),
+            (b'E', []) => self.next_line(),
+            (b'H', []) => self.device.active_mut().hts(),
+            (b'M', []) => self.reverse_index(),
+            _ => {}
+        }
     }
 
     fn csi_dispatch(&mut self, _params: &[CsiParam], _parameters_truncated: bool, _byte: u8) {
@@ -159,10 +156,33 @@ impl VTActor for Executor<'_> {
     }
 }
 
+/// The control functions an eight-bit C1 byte and its seven-bit `ESC`
+/// form both request, so the two spellings cannot drift apart.
+impl Executor<'_> {
+    /// Moves the cursor down a row, scrolling at the bottom margin (IND,
+    /// and the LF family that shares its effect).
+    fn index(&mut self) {
+        let damage = self.device.active_mut().lf();
+        self.damage.stage_if_changed(damage);
+    }
+
+    /// Returns the carriage and moves the cursor down a row (NEL).
+    fn next_line(&mut self) {
+        self.damage.stage_if_changed(self.device.active_mut().cr());
+        self.damage.stage_if_changed(self.device.active_mut().lf());
+    }
+
+    /// Moves the cursor up a row, scrolling at the top margin (RI).
+    fn reverse_index(&mut self) {
+        let damage = self.device.active_mut().ri();
+        self.damage.stage_if_changed(damage);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{GridSize, ViewportLine};
+    use crate::schema::{GridColumn, GridSize, ViewportLine};
     use std::sync::mpsc::channel;
 
     /// Runs `chunk` through a parser wired to a fresh executor and hands
@@ -204,6 +224,55 @@ mod tests {
     #[test]
     fn the_utf8_form_reverse_indexes() {
         let device = interpret(b"a\r\xc2\x8d");
+        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'a');
+    }
+
+    /// Asserts that `ESC D` moves the cursor down a row and leaves the
+    /// column where it stood.
+    ///
+    /// IND indexes and nothing more. The carriage return belongs to NEL
+    /// alone, so IND must not be folded into the arm that pairs the two.
+    ///
+    /// Case: a full-screen program walks down one column of a form,
+    /// emitting the seven-bit index between fields.
+    #[test]
+    fn the_seven_bit_index_keeps_the_column() {
+        let device = interpret(b"a\x1bDb");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'a');
+        assert_eq!(device.active().viewport_row(ViewportLine(1))[1].c, 'b');
+    }
+
+    /// Asserts that `ESC E` moves the cursor down a row and returns the
+    /// carriage.
+    ///
+    /// Case: a program ends a log line with the seven-bit next line
+    /// instead of writing a CR and an LF of its own.
+    #[test]
+    fn the_seven_bit_next_line_returns_the_carriage() {
+        let device = interpret(b"a\x1bEb");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'a');
+        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'b');
+    }
+
+    /// Asserts that `ESC H` plants a tabulation stop at the cursor
+    /// column.
+    ///
+    /// Case: a program sizes a column by walking the cursor to the width
+    /// it wants, setting a stop there, and tabbing to it on later rows.
+    #[test]
+    fn the_seven_bit_tab_set_plants_a_stop_at_the_cursor() {
+        let device = interpret(b"ab\x1bH\r\t");
+        assert_eq!(device.active().cursor_column(), GridColumn(2));
+    }
+
+    /// Asserts that `ESC M` scrolls the region down when the cursor
+    /// already sits on the top margin.
+    ///
+    /// Case: a pager walks backwards through a document with the
+    /// seven-bit reverse index while the cursor rests on the first row.
+    #[test]
+    fn the_seven_bit_reverse_index_scrolls_at_the_top_margin() {
+        let device = interpret(b"a\r\x1bM");
         assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'a');
     }
 }
