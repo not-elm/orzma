@@ -1240,6 +1240,7 @@ mod tests {
             screen.lf();
             screen.set_display_offset(DisplayOffset(1));
             let showing = screen.viewport_row(ViewportLine(0))[0].c;
+            screen.state.line = ScreenLine(0);
             screen.ri();
             assert_eq!(screen.display_offset(), DisplayOffset(1));
             assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, showing);
