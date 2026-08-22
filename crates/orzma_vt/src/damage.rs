@@ -209,10 +209,6 @@ impl RowBits {
         if self.0.len() < needed {
             self.0.resize(needed, 0);
         }
-        // NOTE: both shift amounts stay within `0..=63` by construction.
-        // The natural last-word mask `!(u64::MAX << (last % 64 + 1))`
-        // shifts by 64 when `last % 64 == 63`, which Rust treats as
-        // arithmetic overflow and panics in a debug build.
         let head = u64::MAX << (first % 64);
         let tail = u64::MAX >> (63 - last % 64);
         let (first_word, last_word) = (first / 64, last / 64);
