@@ -82,3 +82,10 @@ pub struct CharacterSetsState {
     /// The character set `SCS` designated to each G code.
     pub g_sets: GSets,
 }
+
+impl CharacterSetsState {
+    /// Specifies the graphic character set to be used for the designated [GCode].
+    pub fn designate(&mut self, g_code: GCode, character_set: CharacterSet) {
+        todo!("テストケースを書いてから実装する。")
+    }
+}
