@@ -36,33 +36,43 @@ pub struct Grid {
     /// (`VecDeque` hides the physical rotation), so index `0` is
     /// always the oldest surviving history row and the boundary sits
     /// at `history_len`.
-    rows: VecDeque<Row<Cell>>,
+    rows: VecDeque<StoredRow>,
     /// Active-screen dimensions; `rows` always keeps at least this
     /// many entries as its tail window.
     size: GridSize,
     /// History row cap: `history_len` never exceeds it, and a scroll
     /// at the cap recycles the evicted row as the incoming blank.
     max_history: usize,
-    /// Id of the ring's front row — the oldest surviving line.
-    ///
-    /// Every row's id is `front_line_id + its index in the ring`, because
-    /// ids are minted at the back and dropped from the front, so the ring
-    /// always holds a consecutive run.
-    front_line_id: u64,
+    /// The id the next row to enter the ring will carry.
+    next_line_id: u64,
+}
+
+/// One stored row: its identity together with its cells.
+///
+/// The id lives here rather than on [`Row`] because `Row<Cell>` is the
+/// storage row while `Row<Run>` is the emitted one, so a field on `Row`
+/// would carry grid identity into the frame's wire type.
+#[derive(Debug)]
+struct StoredRow {
+    id: LineId,
+    cells: Row<Cell>,
 }
 
 impl Grid {
     /// Builds a grid of blank visible rows with an empty history.
     pub fn new(size: GridSize, max_history: usize) -> Self {
         let mut rows = VecDeque::with_capacity(usize::from(size.rows));
-        for _ in 0..size.rows {
-            rows.push_back(Row::filled(size.cols, Cell::default()));
+        for id in 0..u64::from(size.rows) {
+            rows.push_back(StoredRow {
+                id: LineId(id),
+                cells: Row::filled(size.cols, Cell::default()),
+            });
         }
         Self {
             rows,
             size,
             max_history,
-            front_line_id: 0,
+            next_line_id: u64::from(size.rows),
         }
     }
 
@@ -77,7 +87,7 @@ impl Grid {
         // NOTE: `Row`'s own `Index<u16>` shadows the slice's range
         // indexing, so the row has to reach the slice through `DerefMut`
         // before a range can be applied.
-        let row: &mut [Cell] = &mut self.rows[index];
+        let row: &mut [Cell] = &mut self.rows[index].cells;
         row[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
     }
 
@@ -85,34 +95,35 @@ impl Grid {
     /// becomes the newest history row and a `fill`-filled row enters at
     /// the bottom.
     pub fn scroll_up_one(&mut self, fill: Cell) {
+        let id = self.mint();
         if self.history_len() < self.max_history {
-            self.rows.push_back(Row::filled(self.size.cols, fill));
+            self.rows.push_back(StoredRow {
+                id,
+                cells: Row::filled(self.size.cols, fill),
+            });
             return;
         }
         let mut recycled = self
             .rows
             .pop_front()
             .expect("the ring always holds the visible rows");
-        self.front_line_id = self
-            .front_line_id
-            .checked_add(1)
-            .expect("a terminal cannot scroll u64::MAX rows in one session");
-        recycled.fill(fill);
+        recycled.id = id;
+        recycled.cells.fill(fill);
         self.rows.push_back(recycled);
     }
 
     /// The id of the row at a screen line.
     pub(super) fn line_id(&self, line: ScreenLine) -> LineId {
-        LineId(self.front_line_id + self.history_len() as u64 + u64::from(line.0))
+        self.rows[self.visible_index(line.0)].id
     }
 
     /// The active-grid line the row `id` now sits at; `None` once it has
     /// left the ring.
     pub(super) fn grid_line(&self, id: LineId) -> Option<GridLine> {
-        let index = id.0.checked_sub(self.front_line_id)?;
-        if index >= self.rows.len() as u64 {
-            return None;
-        }
+        // NOTE: the ring is not ordered by id, so this scan must not be
+        // turned into a binary search and must not be short-circuited on
+        // the front row's id — see the invariants on `LineId`.
+        let index = self.rows.iter().rposition(|row| row.id == id)?;
         let line = index as i64 - self.history_len() as i64;
         Some(GridLine(
             i32::try_from(line).expect("a ring index minus its history fits in i32"),
@@ -130,12 +141,27 @@ impl Grid {
     pub(super) fn row(&self, line: GridLine) -> &Row<Cell> {
         let index = i64::from(self.history_len() as u32) + i64::from(line.0);
         let index = usize::try_from(index).expect("the line resolves inside the ring");
-        &self.rows[index]
+        &self.rows[index].cells
     }
 
     /// Number of history rows currently retained.
     pub fn history_len(&self) -> usize {
         self.rows.len() - usize::from(self.size.rows)
+    }
+
+    /// Hands out the next unused row id.
+    ///
+    /// # Invariants
+    ///
+    /// Ids only ever move forward, which is what makes them unique for
+    /// the grid's lifetime; the overflow guard is what keeps that true.
+    fn mint(&mut self) -> LineId {
+        let id = LineId(self.next_line_id);
+        self.next_line_id = self
+            .next_line_id
+            .checked_add(1)
+            .expect("a terminal cannot mint u64::MAX rows in one session");
+        id
     }
 
     #[inline]
@@ -150,14 +176,14 @@ impl Index<ScreenLine> for Grid {
     type Output = Row<Cell>;
 
     fn index(&self, line: ScreenLine) -> &Row<Cell> {
-        &self.rows[self.visible_index(line.0)]
+        &self.rows[self.visible_index(line.0)].cells
     }
 }
 
 impl IndexMut<ScreenLine> for Grid {
     fn index_mut(&mut self, line: ScreenLine) -> &mut Row<Cell> {
         let index = self.visible_index(line.0);
-        &mut self.rows[index]
+        &mut self.rows[index].cells
     }
 }
 
