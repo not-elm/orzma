@@ -95,6 +95,9 @@ impl Screen {
     /// cursor motion alone, so passing that value through would leave
     /// the character just written unpainted.
     pub fn print(&mut self, c: char) -> Option<Damage> {
+        //TODO: CharSetsを参照し描画文字をマッピングする。
+        // SS2/SS3がペンディングされているケースも考慮する必要がある。
+     
         let wrap = if self.state.pending_wrap {
             self.state.pending_wrap = false;
             self.state.column = GridColumn(0);
