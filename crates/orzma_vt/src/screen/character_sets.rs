@@ -89,3 +89,82 @@ impl CharacterSetsState {
         todo!("テストケースを書いてから実装する。")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn character_sets() -> CharacterSetsState {
+        CharacterSetsState::default()
+    }
+
+    mod designate {
+        use super::CharacterSet::{Ascii, DecSpecialGraphics};
+        use super::*;
+
+        /// Asserts that a designation writes the selected G code's slot
+        /// and leaves the other three holding ASCII.
+        ///
+        /// Case: an application prepares its banks one at a time, with
+        /// `ESC ( 0`, `ESC ) 0`, `ESC * 0`, and `ESC + 0` each targeting
+        /// a different G code, so that a later shift can pick the bank
+        /// it wants without sending a second SCS.
+        #[test]
+        fn designate_updates_only_the_selected_g_code() {
+            for (g_code, expected) in [
+                (GCode::G0, GSets([DecSpecialGraphics, Ascii, Ascii, Ascii])),
+                (GCode::G1, GSets([Ascii, DecSpecialGraphics, Ascii, Ascii])),
+                (GCode::G2, GSets([Ascii, Ascii, DecSpecialGraphics, Ascii])),
+                (GCode::G3, GSets([Ascii, Ascii, Ascii, DecSpecialGraphics])),
+            ] {
+                let mut state = character_sets();
+                state.designate(g_code, DecSpecialGraphics);
+                assert_eq!(state.g_sets, expected);
+                assert_eq!(state.g_sets[g_code], DecSpecialGraphics);
+            }
+        }
+
+        /// Asserts that a second designation to the same G code replaces
+        /// the character set the first one put there.
+        ///
+        /// Case: an application finishes drawing a box with DEC Special
+        /// Graphics on G0 and emits `ESC ( B`, so that the next `q`
+        /// prints as a letter again instead of a horizontal line.
+        #[test]
+        fn redesignating_a_g_code_replaces_the_previous_set() {
+            let mut state = character_sets();
+            state.designate(GCode::G0, DecSpecialGraphics);
+            assert_eq!(state.g_sets[GCode::G0], DecSpecialGraphics);
+            state.designate(GCode::G0, Ascii);
+            assert_eq!(state.g_sets[GCode::G0], Ascii);
+        }
+
+        /// Asserts that a designation changes neither the G code a
+        /// locking shift invoked into GL nor a pending single shift.
+        ///
+        /// The agreed policy keeps SCS designation separate from
+        /// invocation, following the VT220's own split between § 4.4.1
+        /// and §§ 4.4.3 through 4.4.4. Designating must not invoke the G
+        /// code into GL, and it must not consume a pending single shift;
+        /// folding the two together would make `ESC ) 0` silently act as
+        /// `SO` as well.
+        ///
+        /// Case: an application has shifted GL to G1 for line drawing
+        /// and sent `SS2` for the character it is about to print, then
+        /// emits `ESC * 0` to designate G2 before that character
+        /// arrives.
+        #[test]
+        fn designate_leaves_the_invocation_state_unchanged() {
+            let mut state = character_sets();
+            state.gl = GCode::G1;
+            state.single_shift = Some(SingleShift::G2);
+
+            state.designate(GCode::G2, DecSpecialGraphics);
+
+            assert_eq!(
+                (state.gl, state.single_shift),
+                (GCode::G1, Some(SingleShift::G2))
+            );
+        }
+    }
+}
