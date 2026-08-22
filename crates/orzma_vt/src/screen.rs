@@ -5,6 +5,7 @@
 //! produced for the caller to stage instead of staging internally.
 
 pub mod cell;
+mod character_sets;
 pub mod cursor;
 pub mod grid;
 pub mod margins;
@@ -97,7 +98,7 @@ impl Screen {
     pub fn print(&mut self, c: char) -> Option<Damage> {
         //TODO: CharSetsを参照し描画文字をマッピングする。
         // SS2/SS3がペンディングされているケースも考慮する必要がある。
-     
+
         let wrap = if self.state.pending_wrap {
             self.state.pending_wrap = false;
             self.state.column = GridColumn(0);
