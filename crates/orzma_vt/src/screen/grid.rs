@@ -122,6 +122,40 @@ impl Grid {
         self.rows.push_back(recycled);
     }
 
+    /// Scrolls the region down by one row: a `fill`-filled row enters at
+    /// `top` and the row at `bottom` is discarded.
+    ///
+    /// Deliberately not the inverse of [`Self::scroll_up_one`]. The row
+    /// leaving the bottom is lost rather than becoming history, and the
+    /// row entering at the top is blank rather than the newest history
+    /// row; history is neither grown, trimmed, nor read back from.
+    ///
+    /// # Invariants
+    ///
+    /// The region satisfies `top <= bottom < size.rows`. Under that,
+    /// `base + bottom` is at most the ring's last index and the later
+    /// insert at `base + top` is in range, which is why neither
+    /// `VecDeque` call can fail.
+    pub(super) fn scroll_down_one(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
+        debug_assert!(top <= bottom, "a scroll region runs top to bottom");
+        debug_assert!(
+            bottom.0 < self.size.rows,
+            "the region's bottom row is on screen"
+        );
+        // NOTE: `history_len` is `rows.len() - size.rows`, so reading it
+        // from the shortened ring underflows on a grid with no history —
+        // which is how the alternate screen is built. It has to be bound
+        // before the removal.
+        let base = self.history_len();
+        let mut recycled = self
+            .rows
+            .remove(base + usize::from(bottom.0))
+            .expect("the region's bottom row is inside the ring");
+        recycled.id = self.mint();
+        recycled.cells.fill(fill);
+        self.rows.insert(base + usize::from(top.0), recycled);
+    }
+
     /// The id of the row at a screen line.
     pub(super) fn line_id(&self, line: ScreenLine) -> LineId {
         self.rows[self.visible_index(line.0)].id
@@ -386,5 +420,160 @@ mod tests {
         let after = grid.line_id(ScreenLine(2));
         assert_ne!(before, after);
         assert_eq!(grid.grid_line(before), Some(GridLine(1)));
+    }
+
+    mod scroll_down {
+        use super::*;
+
+        /// A grid whose visible rows are labelled `a`, `b`, `c`, … in
+        /// column zero, so a scroll is legible in the row contents.
+        fn labelled(rows: u16, max_history: usize) -> Grid {
+            let mut grid = grid(rows, max_history);
+            for line in 0..rows {
+                grid[ScreenLine(line)][0].c = char::from(b'a' + line as u8);
+            }
+            grid
+        }
+
+        /// The full-screen region of a grid `rows` rows tall.
+        fn whole(rows: u16) -> (ScreenLine, ScreenLine) {
+            (ScreenLine(0), ScreenLine(rows - 1))
+        }
+
+        /// Asserts that a reverse scroll moves the region's content down
+        /// one row and drops the row that falls off its bottom.
+        ///
+        /// Case: a full-screen pager scrolls backwards past the first line
+        /// it is showing.
+        #[test]
+        fn a_reverse_scroll_moves_content_down_and_drops_the_bottom_row() {
+            let mut grid = labelled(3, 10);
+            let (top, bottom) = whole(3);
+            grid.scroll_down_one(top, bottom, Cell::default());
+            assert_eq!(grid[ScreenLine(0)][0].c, Cell::default().c);
+            assert_eq!(grid[ScreenLine(1)][0].c, 'a');
+            assert_eq!(grid[ScreenLine(2)][0].c, 'b');
+        }
+
+        /// Asserts that a reverse scroll leaves the history untouched.
+        ///
+        /// The agreed policy discards the row that falls off the bottom
+        /// rather than pushing it into history, and fills the incoming top
+        /// row blank rather than pulling the newest history row back. A
+        /// reverse scroll is deliberately not the inverse of a forward
+        /// one: scrollback records what the terminal has emitted, and a
+        /// reverse scroll emits nothing.
+        ///
+        /// Case: a full-screen editor scrolls its view backwards while the
+        /// shell's earlier output still sits in scrollback behind it.
+        #[test]
+        fn a_reverse_scroll_leaves_history_alone() {
+            let mut grid = labelled(3, 10);
+            grid.scroll_up_one(Cell::default());
+            let history_len = grid.history_len();
+            let oldest = grid.row(GridLine(-1))[0].c;
+            let (top, bottom) = whole(3);
+            grid.scroll_down_one(top, bottom, Cell::default());
+            assert_eq!(grid.history_len(), history_len);
+            assert_eq!(grid.row(GridLine(-1))[0].c, oldest);
+        }
+
+        /// Asserts that the row entering at the top carries the fill.
+        ///
+        /// Case: an application sets a background colour and scrolls
+        /// backwards, expecting the exposed row to carry that colour
+        /// rather than the terminal default.
+        #[test]
+        fn the_row_entering_at_the_top_carries_the_fill() {
+            let mut grid = labelled(3, 10);
+            let fill = Cell::blank_with_bg(Color::Indexed(4));
+            let (top, bottom) = whole(3);
+            grid.scroll_down_one(top, bottom, fill);
+            assert_eq!(grid[ScreenLine(0)][0], fill);
+        }
+
+        /// Asserts that the row entering at the top carries an id no
+        /// surviving row shares.
+        ///
+        /// Case: a webview is anchored to a row and the screen scrolls
+        /// backwards, so the blank row taking its place must not inherit
+        /// the anchor.
+        #[test]
+        fn the_incoming_row_carries_an_id_no_surviving_row_shares() {
+            let mut grid = grid(3, 10);
+            let before: Vec<LineId> = (0..3).map(|l| grid.line_id(ScreenLine(l))).collect();
+            let (top, bottom) = whole(3);
+            grid.scroll_down_one(top, bottom, Cell::default());
+            assert!(!before.contains(&grid.line_id(ScreenLine(0))));
+        }
+
+        /// Asserts that the discarded row's id stops resolving.
+        ///
+        /// Case: a webview anchored to the last row of the screen, which a
+        /// reverse scroll pushes off the bottom.
+        #[test]
+        fn the_discarded_rows_id_stops_resolving() {
+            let mut grid = grid(3, 10);
+            let discarded = grid.line_id(ScreenLine(2));
+            let (top, bottom) = whole(3);
+            grid.scroll_down_one(top, bottom, Cell::default());
+            assert_eq!(grid.grid_line(discarded), None);
+        }
+
+        /// Asserts that a surviving row's id resolves one line lower.
+        ///
+        /// Case: a webview anchored to the top row, which a reverse scroll
+        /// pushes down to make room for the blank.
+        #[test]
+        fn a_surviving_id_resolves_one_row_lower() {
+            let mut grid = grid(3, 10);
+            let survivor = grid.line_id(ScreenLine(0));
+            let (top, bottom) = whole(3);
+            grid.scroll_down_one(top, bottom, Cell::default());
+            assert_eq!(grid.grid_line(survivor), Some(GridLine(1)));
+        }
+
+        /// Asserts that a grid built without history scrolls down without
+        /// underflowing.
+        ///
+        /// Case: a full-screen application scrolls backwards on the
+        /// alternate screen, which is constructed with no scrollback at
+        /// all.
+        #[test]
+        fn a_grid_without_history_scrolls_down() {
+            let mut grid = labelled(3, 0);
+            let (top, bottom) = whole(3);
+            grid.scroll_down_one(top, bottom, Cell::default());
+            assert_eq!(grid.history_len(), 0);
+            assert_eq!(grid[ScreenLine(1)][0].c, 'a');
+        }
+
+        /// Asserts that a one-row screen replaces its only row.
+        ///
+        /// Case: the user drags the window down to a single line and the
+        /// program running in it scrolls backwards.
+        #[test]
+        fn a_one_row_screen_replaces_its_only_row() {
+            let mut grid = labelled(1, 10);
+            let only = grid.line_id(ScreenLine(0));
+            grid.scroll_down_one(ScreenLine(0), ScreenLine(0), Cell::default());
+            assert_eq!(grid.grid_line(only), None);
+            assert_eq!(grid[ScreenLine(0)][0].c, Cell::default().c);
+        }
+
+        /// Asserts that a region narrower than the screen moves only its
+        /// own rows and discards only its own bottom row.
+        ///
+        /// Case: an application sets a scroll region for a pager pane and
+        /// scrolls it backwards while a status line sits above it.
+        #[test]
+        fn a_narrow_region_moves_only_its_own_rows() {
+            let mut grid = labelled(4, 10);
+            grid.scroll_down_one(ScreenLine(1), ScreenLine(2), Cell::default());
+            assert_eq!(grid[ScreenLine(0)][0].c, 'a');
+            assert_eq!(grid[ScreenLine(1)][0].c, Cell::default().c);
+            assert_eq!(grid[ScreenLine(2)][0].c, 'b');
+            assert_eq!(grid[ScreenLine(3)][0].c, 'd');
+        }
     }
 }
