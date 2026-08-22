@@ -129,14 +129,18 @@ drain(`DamageLedger::take`)は `StagedDamage`(`Full`、または `DamageRows` �
 
 `DamageVerdict` は廃止された。旧エンジンの即時フラッシュ判定一式(`observe_chunk` / `qualifies_for_immediate_flush` / `note_user_input` / `FlushDecision` / `MANY_ROWS_INSTANT_CAP` / `INPUT_ECHO_WINDOW`)も `DamageVerdict` もろとも削除され、`VtUpdate::verdict: Option<DamageVerdict>` は `damaged: bool` に置き換わった。`Coalescer` は純粋なデバウンス(`IDLE` / `MAX_CAP`)とブートストラップフラグだけを持つ状態機械になっている。
 
-### 4.5 行識別は `LineId` の算術で解決する(frozen ベースライン方式の廃止)
+### 4.5 行識別は行ごとに保持した `LineId` で解決する(算術方式・frozen ベースライン方式の廃止)
 
-旧エンジンの `frozen_history` / `frozen_valid` は alacritty を外から観測するためのワークアラウンドであり、採用しない。イベント駆動の簿記も採らなかった。**`Grid` はリング先頭行の id を持つ単一のフィールド `front_line_id: u64` だけを持ち**、`LineId` はそこからの O(1) の算術で双方向に解決する — `line_id(ScreenLine)` は現在のスクリーン行から id を求め、`grid_line(LineId)` はその id が今どのグリッド行に相当するか(リングを外れていれば `None`)を返す。行ごとの補助コレクションは要らない。
+旧エンジンの `frozen_history` / `frozen_valid` は alacritty を外から観測するためのワークアラウンドであり、採用しない。イベント駆動の簿記も採らなかった。当初はリング先頭行の id を持つ単一フィールド `front_line_id: u64` からの O(1) 算術で双方向に解決していたが、この方式は**行がリングの末尾に追加される場合しか成立しない**。RI(逆スクロール)はリングの途中に行を挿入するため、生き残った行の id がずれ、新しく入る空行が直前まで別の内容を指していた id を再利用してしまう。そこで **id は `StoredRow { id: LineId, cells: Row<Cell> }` として行ごとに保持する**。`line_id(ScreenLine)` は該当行に保存された id を読むだけ、`grid_line(LineId)` はリングを後ろから線形走査して現在のグリッド行(リングを外れていれば `None`)を返す。`next_line_id` は単調増加の採番カウンタで、リングに入る行はすべてここから id を受け取る。
+
+**リング内の id は昇順ではない** — 逆スクロールがより古い行の上に新しく採番した行を挿し込むためで、履歴側も同様に昇順でなくなる。二分探索や「先頭行の id より小さければ不在」といった短絡は不健全であり、`LineId` は `PartialOrd` / `Ord` を実装しない。
 
 `PlacementStore` はこの解決を `ActiveScreen::viewport_row_of` 経由で毎 emit 呼び出し、`project` がアンカーの現在位置をビューポート座標へ変換する。アンカーがリングを外れて `None` になった placement は:
 
 - `project` では黙って一覧から外れる(除去はしない — 次の eviction スイープまで存在自体は保つ)
 - `evict_lost_anchors` が明示的に掃除して該当 `PlacementId` を返し、呼び出し側が `VtSignal::WebviewEvicted` を発行する
+
+`grid_line` が O(リング長) になったことで、**アンカーを失った placement を放置するコストが変わった**。`project` は毎 emit 呼ばれるが除去はしないため、リングを外れたアンカーは毎フレーム走査の最悪ケース(全走査して見つからない)を踏み続ける。APC mount を結線する変更では、`evict_lost_anchors` の本番呼び出しも同じ変更で入れる必要がある。
 
 alt スクリーンから抜けるときは `switch_screen` がその画面が持っていた placement を丸ごとテーブルから取り除き、id を返す。いずれの操作も damage は自分では stage しない — スクリーン切替自体が `Damage::Full` を stage する契約に乗る。
 

@@ -1270,6 +1270,27 @@ mod tests {
             assert_eq!(damage, None);
         }
 
+        /// Asserts that a cursor above a non-zero top margin still walks
+        /// up toward the first row.
+        ///
+        /// The agreed policy bounds this movement by the screen edge
+        /// rather than by the margin: the region gates the scroll alone,
+        /// so a cursor outside it moves like an ordinary cursor-up
+        /// instead of being pinned at the margin.
+        ///
+        /// Case: an application sets a scroll region below a two-line
+        /// header and emits a reverse index while the cursor sits on the
+        /// header's second line.
+        #[test]
+        fn a_reverse_index_above_a_top_margin_walks_toward_the_first_row() {
+            let mut screen = screen();
+            screen.margins.top = ScreenLine(2);
+            screen.state.line = ScreenLine(1);
+            let damage = screen.ri();
+            assert_eq!(screen.state.line, ScreenLine(0));
+            assert_eq!(damage, Some(Damage::Metadata));
+        }
+
         /// Asserts that a reverse index at a non-zero top margin scrolls
         /// the region and leaves the rows above it alone.
         ///

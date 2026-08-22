@@ -1,7 +1,7 @@
 //! Webview placement table: id minting, anchor tracking, and viewport
 //! projection.
 //!
-//! [`PlacementStore`] is a side table keyed by the grid line a mount
+//! [`PlacementStore`] is a side table keyed by the grid row a mount
 //! anchored to, never a cell variant, so text writes and reflow cannot
 //! corrupt a placement. It converts to viewport coordinates only at
 //! emit time.

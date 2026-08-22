@@ -21,6 +21,7 @@ use std::ops::{Index, IndexMut, Range};
 /// Nothing orders the ring by id. A reverse scroll inserts a freshly
 /// minted row above rows minted earlier, and two consequences follow that
 /// each invalidate a short-circuit a reader would otherwise reach for.
+///
 /// History becomes unordered as well, because such a row later scrolls
 /// into it like any other, so binary-searching the history segment alone
 /// is equally unsound. The front row is not necessarily the lowest id
@@ -496,8 +497,7 @@ mod tests {
         /// surviving row shares.
         ///
         /// Case: a webview is anchored to a row and the screen scrolls
-        /// backwards, so the blank row taking its place must not inherit
-        /// the anchor.
+        /// backwards, leaving a blank row where that row used to sit.
         #[test]
         fn the_incoming_row_carries_an_id_no_surviving_row_shares() {
             let mut grid = grid(3, 10);
@@ -509,8 +509,8 @@ mod tests {
 
         /// Asserts that the discarded row's id stops resolving.
         ///
-        /// Case: a webview anchored to the last row of the screen, which a
-        /// reverse scroll pushes off the bottom.
+        /// Case: a webview sits on the last row of the screen, and a
+        /// reverse scroll pushes that row off the bottom.
         #[test]
         fn the_discarded_rows_id_stops_resolving() {
             let mut grid = grid(3, 10);
@@ -522,8 +522,8 @@ mod tests {
 
         /// Asserts that a surviving row's id resolves one line lower.
         ///
-        /// Case: a webview anchored to the top row, which a reverse scroll
-        /// pushes down to make room for the blank.
+        /// Case: a webview sits on the top row, and a reverse scroll
+        /// pushes it down to make room for the blank.
         #[test]
         fn a_surviving_id_resolves_one_row_lower() {
             let mut grid = grid(3, 10);

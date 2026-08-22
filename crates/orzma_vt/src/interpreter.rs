@@ -200,8 +200,7 @@ mod tests {
 
     /// Asserts that the UTF-8 encoding of U+008D reaches the same arm.
     ///
-    /// Case: a program emits the reverse index as UTF-8 text, which is how
-    /// the C1 control has to travel once the stream is UTF-8.
+    /// Case: a program running on a UTF-8 stream emits the reverse index.
     #[test]
     fn the_utf8_form_reverse_indexes() {
         let device = interpret(b"a\r\xc2\x8d");
