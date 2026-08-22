@@ -110,6 +110,10 @@ impl VTActor for Executor<'_> {
                 self.damage.stage_if_changed(self.device.active_mut().lf());
             }
             0x88 => self.device.active_mut().hts(),
+            0x8D => {
+                let damage = self.device.active_mut().ri();
+                self.damage.stage_if_changed(damage);
+            }
             _ => {}
         }
     }
@@ -152,5 +156,55 @@ impl VTActor for Executor<'_> {
 
     fn apc_dispatch(&mut self, _data: Vec<u8>) {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::{GridSize, ViewportLine};
+    use std::sync::mpsc::channel;
+
+    /// Runs `chunk` through a parser wired to a fresh executor and hands
+    /// back the device it wrote to.
+    ///
+    /// `Interpreter::parse` is still `todo!()`, so the executor is built
+    /// here and driven directly rather than through the public entry
+    /// point.
+    fn interpret(chunk: &[u8]) -> DeviceState {
+        let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
+        let mut placements = PlacementStore::new();
+        let mut damage = DamageLedger::new();
+        let (mut signal_tx, _signal_rx) = channel();
+        let mut sync = SyncBuffer::default();
+        let mut executor = Executor {
+            sync: &mut sync,
+            device: &mut device,
+            placements: &mut placements,
+            damage: &mut damage,
+            signal_tx: &mut signal_tx,
+        };
+        VTParser::new().parse(chunk, &mut executor);
+        device
+    }
+
+    /// Asserts that the raw C1 byte for RI reaches the screen.
+    ///
+    /// Case: a program emits an eight-bit reverse index on a terminal not
+    /// running in UTF-8 mode.
+    #[test]
+    fn the_raw_c1_byte_reverse_indexes() {
+        let device = interpret(b"a\r\x8d");
+        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'a');
+    }
+
+    /// Asserts that the UTF-8 encoding of U+008D reaches the same arm.
+    ///
+    /// Case: a program emits the reverse index as UTF-8 text, which is how
+    /// the C1 control has to travel once the stream is UTF-8.
+    #[test]
+    fn the_utf8_form_reverse_indexes() {
+        let device = interpret(b"a\r\xc2\x8d");
+        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'a');
     }
 }
