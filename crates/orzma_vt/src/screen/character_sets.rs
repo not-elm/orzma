@@ -113,7 +113,7 @@ impl IndexMut<GCode> for GSets {
     }
 }
 
-/// The character set state one screen maps printed characters through.
+/// The character set mapping one screen prints characters through.
 ///
 /// # Invariants
 ///
@@ -123,7 +123,7 @@ impl IndexMut<GCode> for GSets {
 /// independent state, not one field the newer control function
 /// overwrites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct CharacterSetsState {
+pub struct CharacterSetMapping {
     /// The G code the latest locking shift invoked into GL.
     pub gl: GCode,
     /// The G code a pending `SS2` or `SS3` invokes into GL for the next
@@ -133,7 +133,7 @@ pub struct CharacterSetsState {
     pub g_sets: GSets,
 }
 
-impl CharacterSetsState {
+impl CharacterSetMapping {
     /// Designates `character_set` to `g_code`.
     ///
     /// # Control Functions
@@ -211,7 +211,7 @@ mod tests {
                 (GCode::G2, GSets([Ascii, Ascii, DecSpecialGraphics, Ascii])),
                 (GCode::G3, GSets([Ascii, Ascii, Ascii, DecSpecialGraphics])),
             ] {
-                let mut state = CharacterSetsState::default();
+                let mut state = CharacterSetMapping::default();
                 state.designate(g_code, DecSpecialGraphics);
                 assert_eq!(state.g_sets, expected);
                 assert_eq!(state.g_sets[g_code], DecSpecialGraphics);
@@ -226,7 +226,7 @@ mod tests {
         /// prints as a letter again instead of a horizontal line.
         #[test]
         fn redesignating_a_g_code_replaces_the_previous_set() {
-            let mut state = CharacterSetsState::default();
+            let mut state = CharacterSetMapping::default();
             state.designate(GCode::G0, DecSpecialGraphics);
             assert_eq!(state.g_sets[GCode::G0], DecSpecialGraphics);
             state.designate(GCode::G0, Ascii);
@@ -242,7 +242,7 @@ mod tests {
         /// arrives.
         #[test]
         fn designate_leaves_the_invocation_state_unchanged() {
-            let mut state = CharacterSetsState::default();
+            let mut state = CharacterSetMapping::default();
             state.gl = GCode::G1;
             state.pending_single_shift = Some(SingleShift::G2);
 
@@ -275,7 +275,7 @@ mod tests {
         /// character the single shift applies to.
         #[test]
         fn invoke_replaces_gl_and_leaves_a_pending_single_shift_armed() {
-            let mut state = CharacterSetsState::default();
+            let mut state = CharacterSetMapping::default();
             state.designate(GCode::G1, DecSpecialGraphics);
             state.pending_single_shift = Some(SingleShift::G2);
 
@@ -283,7 +283,7 @@ mod tests {
 
             assert_eq!(
                 state,
-                CharacterSetsState {
+                CharacterSetMapping {
                     gl: GCode::G1,
                     pending_single_shift: Some(SingleShift::G2),
                     g_sets: GSets([Ascii, DecSpecialGraphics, Ascii, Ascii]),
@@ -309,7 +309,7 @@ mod tests {
         /// `SS2`, then changes its mind and emits `SS3` before printing.
         #[test]
         fn a_later_single_shift_replaces_the_pending_one_and_leaves_gl_alone() {
-            let mut state = CharacterSetsState::default();
+            let mut state = CharacterSetMapping::default();
             state.gl = GCode::G1;
 
             state.single_shift(SingleShift::G2);
@@ -319,7 +319,7 @@ mod tests {
 
             assert_eq!(
                 state,
-                CharacterSetsState {
+                CharacterSetMapping {
                     gl: GCode::G1,
                     pending_single_shift: Some(SingleShift::G3),
                     g_sets: GSets::default(),

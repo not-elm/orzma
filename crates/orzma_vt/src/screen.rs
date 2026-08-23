@@ -22,6 +22,7 @@ use crate::schema::{
     Cursor, CursorShape, DisplayOffset, GridColumn, GridLine, GridPoint, GridSize, ScreenLine,
     ViewportLine,
 };
+use crate::screen::character_sets::CharacterSetMapping;
 use crate::screen::cursor::SavedCursorSlots;
 use crate::screen::margins::Margins;
 use crate::screen::state::ScreenState;
@@ -68,6 +69,7 @@ pub struct Screen {
     saved: SavedCursorSlots,
     margins: Margins,
     tabs: TabStops,
+    character_set_mapping: CharacterSetMapping,
 }
 
 impl Screen {
@@ -81,6 +83,7 @@ impl Screen {
             saved: SavedCursorSlots::default(),
             margins: Margins::new(size.rows),
             tabs: TabStops::default(),
+            character_set_mapping: CharacterSetMapping::default(),
         }
     }
 

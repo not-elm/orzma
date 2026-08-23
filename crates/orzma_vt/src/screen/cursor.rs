@@ -2,7 +2,7 @@
 
 use crate::schema::{GridColumn, ScreenLine};
 use crate::screen::cell::Pen;
-use crate::screen::character_sets::CharacterSetsState;
+use crate::screen::character_sets::CharacterSetMapping;
 
 /// Cursor state saved by DECSC, restored by DECRC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,8 +15,8 @@ pub struct SavedCursor {
     pub pen: Pen,
     /// Saved deferred-wrap flag.
     pub pending_wrap: bool,
-    /// Saved character sets.
-    pub character_sets: CharacterSetsState,
+    /// Saved character set mapping.
+    pub character_set_mapping: CharacterSetMapping,
 }
 
 /// Per-screen save slots for DECSC (the ANSI slot arrives later).
