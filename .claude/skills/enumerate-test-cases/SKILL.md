@@ -1,6 +1,6 @@
 ---
 name: enumerate-test-cases
-description: Enumerates the test cases one orzma_vt method owes, deriving every case from a citation in docs/references/ and verifying each citation before emitting it. Use when the user says "テストケースを洗い出して", "enumerate test cases", "/enumerate-test-cases", or asks which cases a VT control-function method needs before writing its tests.
+description: Enumerates the test cases one orzma_vt method owes, deriving every case from a citation in docs/references/ and verifying each citation before emitting it. Use when the user says "テストケースを洗い出して", "enumerate test cases", "/enumerate-test-cases", or asks which cases a VT method needs before writing its tests.
 argument-hint: [Screen::method]
 allowed-tools: Read, Grep, Glob, Bash(pdftotext:*), Bash(grep:*), Bash(awk:*), Bash(sed:*), Bash(head:*), Bash(wc:*), Bash(tr:*), Bash(mkdir:*), Bash(python3:*), AskUserQuestion
 ---
@@ -69,42 +69,37 @@ name can land in more than one file: `single_shift` matches in three places,
 Asking on every mirrored name would put a prompt in front of the majority of
 runs.
 
-## Phase 1 — Gate and extract the specification
+## Phase 1 — Find and extract the specification
 
-### 1a. The scope gate
+### 1a. Collect the search terms
 
-Read the method's doc comment — the contiguous `///` block immediately above
-its `fn` line, skipping any `#[...]` attributes. Admit the method when that
-block contains a `# Control Functions` section AND at least one control
-function named there can be found in `docs/references/` (1b below).
+There is no scope gate. Every method proceeds to 1b, and a method the manuals
+do not govern produces a report with no cases rather than a refusal. A
+`# Control Functions` section is a convenience where one exists, not a
+condition of admission: `ScrollRegion::scroll_span` names `DECSTBM` in prose
+and nowhere else, and DECSTBM governs it exactly as much either way.
 
-Run this to classify a method:
+What that section did supply was the search terms, feeding 1f directly.
+Collect them from four places instead. Exhaust every term a level offers, and
+descend only when none of them reached a statement of behaviour (1b–1d) — a
+level whose terms all dead-end is a level that yielded nothing.
 
-```bash
-awk -v m="<method>" '
-  /^[[:space:]]*\/\/\// { doc = doc $0 "\n"; next }
-  $0 ~ "fn " m "\\(" { print (doc ~ /# Control Functions/ ? "ADMIT" : "REJECT"); found=1; exit }
-  /^[[:space:]]*#\[/ { next }
-  { doc = "" }
-  END { if (!found) print "NOTFOUND" }
-' <file>
-```
+| Level | Source | `scroll_span` yields |
+| --- | --- | --- |
+| 1 | The method's whole `///` block, section or prose | `DECSTBM`, `OriginMode` |
+| 2 | The doc of the enclosing `struct` / `enum` / `impl` | `DECSTBM`, `DECOM` |
+| 3 | The file's `//!` header | `DECSTBM`, `DECOM` |
+| 4 | The signature's type names and the method name, expanded to specification vocabulary | "scrolling region", "top margin", "bottom margin" |
 
-On `REJECT`, stop and say so plainly: the method has no `# Control Functions`
-section, so no public specification governs it, so this skill has no
-trustworthy source. Name the method and the condition that failed. Do not
-improvise a contract from the signature, and do not fall back to reading the
-body.
-
-On `ADMIT`, read the doc comment with this extractor rather than a generic
-file read with a guessed line range. A `Read` call bounded by an offset and
-a limit does not know where the `///` block ends, and a plausible-looking
-limit can run past it into the very body this skill forbids reading:
+Read level 1 with this extractor rather than a generic file read with a
+guessed line range. A `Read` call bounded by an offset and a limit does not
+know where the `///` block ends, and a plausible-looking limit can run past it
+into the very body this skill forbids reading:
 
 ```bash
 awk -v m="<method>" '
   /^[[:space:]]*\/\/\// { doc = doc $0 "\n"; next }
-  $0 ~ "fn " m "\\(" { printf "%s", (doc == "" ? "NOTFOUND\n" : doc); found = 1; exit }
+  $0 ~ "fn " m "\\(" { printf "%s", (doc == "" ? "NODOC\n" : doc); found = 1; exit }
   /^[[:space:]]*#\[/ { next }
   { doc = "" }
   END { if (!found) print "NOTFOUND" }
@@ -112,43 +107,46 @@ awk -v m="<method>" '
 ```
 
 This prints exactly the accumulated `///` block and stops before the `fn`
-line, so it cannot show a line of the body.
+line, so it cannot show a line of the body. Its two markers mean different
+things, and neither is decoration.
 
-The `NOTFOUND` guard is not decoration. Without it the extractor prints
-nothing and exits 0 in two ordinary situations — the method is not in the file
-you passed, and the doc block is separated from its `fn` by a **multi-line**
-attribute, which the single-line `#\[` skip cannot span, so the `doc = ""`
-rule wipes the block. Both look identical to a clean run that happened to
-produce no output.
+**`NOTFOUND` means stop and report the extraction failure.** The `fn` line was
+never reached, so the method is not in the file you passed. **It never means
+fall back to a `Read` with a guessed offset and limit** — that unbounded read
+is the exact failure this extractor exists to prevent, and it lands in the
+method body this skill must not see. Report which file and method name were
+tried, and let the author correct them.
 
-**`NOTFOUND` means stop and report the extraction failure. It never means fall
-back to a `Read` with a guessed offset and limit** — that unbounded read is the
-exact failure this extractor exists to prevent, and it lands in the method body
-this skill must not see. Report which file and method name were tried, and let
-the author correct them.
+**`NODOC` means the method has no doc comment.** That is an ordinary input
+now, not a failure: descend to level 2 and carry on. One caveat earns it a
+second look first. A doc block separated from its `fn` by a **multi-line**
+attribute also arrives empty, because the single-line `#\[` skip cannot span
+it and the `doc = ""` rule wipes the block. Treat a `NODOC` on a method you
+expected to carry docs as that case until you have checked.
 
-Methods that reject today include `print` (it handles printable characters,
-not a control function), the accessors `grid_size` / `cursor` / `pen_mut` /
-`viewport_row`, `Screen::new`, `set_display_offset`, every dispatch point in
-`interpreter.rs` (that file has no `# Control Functions` section anywhere), and
-orzma's own extensions — OSC 5379 `mount` / `unmount`, the `window.orzma`
-back-channel, webview APC handling.
+Levels 2 and 3 share one recipe, which emits doc lines only and so cannot
+reach a method body:
 
-Methods that admit today: `backspace`, `carriage_return`, `line_feed`,
-`reverse_index`, `erase_in_line`, `erase_in_display`, `move_forward_tabs`,
-`move_backward_tabs`, `set_horizontal_tab_stop`, `edit_tab_stop`,
-`reset_tab_stops`, `designate_character_set`, `invoke_character_set`,
-`single_shift`, `save_checkpoint`, `restore_checkpoint`.
+```bash
+grep -n '^[[:space:]]*\(///\|//!\)' <file>
+```
 
-Both lists are illustrations of what the gate does, not a lookup table that
-stands in for it. They are a snapshot of one moment in one crate, they go stale
-whenever a doc comment gains or loses a `# Control Functions` section, and they
-are already incomplete: `CharacterSetMapping::reset`, in
-`crates/orzma_vt/src/screen/character_sets.rs`, ADMITs under the gate and
-appears in neither list. **Run the awk gate on every method, including one named
-above.** Its verdict is the authoritative one; a run that skips it because the
-name looked familiar has classified the method from a stale list rather than
-from the source.
+It prints every doc line in the file, the `#[cfg(test)]` ones included. Take
+the `//!` header and the block above the enclosing item, and leave the rest:
+a test's `Case:` paragraph is one author's scenario, not a specification term,
+and seeding a lookup from it searches the manuals for the tests you already
+have.
+
+Level 4 is the only level carrying judgement, so it is bounded: it maps
+identifiers to specification vocabulary and does nothing else. **It never
+invents a control function the code does not name.** `Margins` reaching "top
+margin" is the expansion the level exists for; `Margins` reaching DECSLRM
+because left and right margins also exist is the failure it forbids.
+
+Record every term tried and the level it came from, and report both under
+"Terms tried". No grep verdict stands behind a refusal any more, so that
+record is the only thing making "searched and found nothing" falsifiable —
+the same reasoning 1e already applies to descending the manual precedence.
 
 `save_checkpoint` and `restore_checkpoint` are the best case for this skill:
 both are empty bodies today and both name a documented control function
@@ -251,19 +249,24 @@ grep.
 A disagreement that survives this ordering is **not** resolved here. Report it
 as a specification conflict, with both citations, and derive no case from it.
 
-### 1f. Look up per control function
+### 1f. Look up per term
 
-A method's doc may name five — `line_feed` names LF, VT, FF, IND, and NEL — and
-each gets its own lookup. Control functions named in the doc but absent from
-`docs/references/` are dropped individually and listed in the report. Only when
-all of them are absent does the run stop.
+A level may offer five — `line_feed` names LF, VT, FF, IND, and NEL — and each
+gets its own lookup. Terms that reach nothing in `docs/references/` are dropped
+individually and listed under "Terms tried". When no term on any level reaches
+a statement of behaviour, the run still reports: 0 cases, carrying every term
+tried. That is an ordinary outcome, not an error, and not a refusal.
 
 ### 1g. Output: the contract table
 
-| ID | Control function | Shape | Statement | Citation |
+| ID | Governs | Shape | Statement | Citation |
 | --- | --- | --- | --- | --- |
 | C1 | RI | unconditional | The cursor moves up one line in the same column. | vt510.pdf p.64, L2435-2436 |
 | C2 | RI | conditional | At the top margin, the page scrolls down instead. | vt510.pdf p.64, L2435-2436 |
+
+`Governs` holds a mnemonic where one exists (`RI`, `DECSTBM`) and the
+specification section's title where none does. It is not restricted to control
+functions, because the method under enumeration need not implement one.
 
 `Shape` is one of unconditional, conditional, numeric parameter, bounded value,
 mode-dependent, or multi-function. It is the only classification the table
@@ -298,20 +301,19 @@ Merge cases that end up with the same setup, action, and expectation.
 The two parameter rows fire less often than they look. `Screen` receives
 parameters already decoded — `EraseLineMode`, `CharacterTabEdit`, a plain
 `count: u16` — because the `Ps` decode and its defaults live in
-`CharacterTabEdit::from_tbc` / `from_ctc` and in the CSI dispatcher, both
-outside the gate. At this layer the rows mostly apply to `move_forward_tabs`
-and `move_backward_tabs`.
+`CharacterTabEdit::from_tbc` / `from_ctc` and in the CSI dispatcher, both of
+which run before `Screen` sees the call. At this layer the rows mostly apply to
+`move_forward_tabs` and `move_backward_tabs`.
 
 ### Return value
 
-Eight in-scope methods return `()` — `set_horizontal_tab_stop`,
-`edit_tab_stop`, `reset_tab_stops`, `designate_character_set`,
-`invoke_character_set`, `single_shift`, `save_checkpoint`,
-`restore_checkpoint`. For those the expectation covers screen state alone
-and carries no return line.
+Several methods return `()` — `set_horizontal_tab_stop`, `edit_tab_stop`,
+`reset_tab_stops`, `designate_character_set`, `invoke_character_set`,
+`single_shift`, `save_checkpoint`, `restore_checkpoint`. For those the
+expectation covers screen state alone and carries no return line.
 
-The rest return `Option<Damage>`, which is orzma's own contract; no VT manual
-mentions it. Derive it from the spec-described state change:
+Most of the rest return `Option<Damage>`, which is orzma's own contract; no VT
+manual mentions it. Derive it from the spec-described state change:
 
 | Spec-described change | Expected return |
 | --- | --- |
@@ -331,6 +333,14 @@ viewport, not only cursor motion.
 
 The specification stays the source for *what changes*; this table maps that to
 *what is reported*.
+
+A return type outside those two shapes takes neither branch.
+`ScrollRegion::scroll_span` returns `RangeInclusive<ScreenLine>`, and no
+`Damage` reaches its caller at all. Derive the expected value from the
+specification-described state directly and have the `Expect:` line name the
+concrete value — the inclusive range from the top margin to the bottom margin,
+for that method. The Damage table does not apply, and neither does the
+`Expect:` source tag that cites it.
 
 ### Priority
 
@@ -356,10 +366,10 @@ modules and they do not map one-to-one onto methods: `tab_stop_edits` covers
 
 Grep the `mod` declarations inside the defining file's `#[cfg(test)] mod tests`
 block, pick the module whose tests already exercise the same control function,
-and fall back to naming a new module when none does. Five in-scope methods take
-that fallback today, because they have no tests anywhere:
-`save_checkpoint`, `restore_checkpoint`, `designate_character_set`,
-`invoke_character_set`, and `single_shift`.
+and fall back to naming a new module when none does. Five methods take that
+fallback today, because they have no tests anywhere: `save_checkpoint`,
+`restore_checkpoint`, `designate_character_set`, `invoke_character_set`, and
+`single_shift`.
 
 The last three carry a trap worth naming, because a module list alone walks
 into it. `crates/orzma_vt/src/screen/character_sets.rs` does contain
@@ -405,8 +415,9 @@ sentence that demands it, and **a case that cannot name one is not emitted.**
 That rule binds **per `Expect:` line, not per case**. Every `Expect:` line ends
 with its own source in brackets, and there are exactly three legitimate ones: a
 contract-table ID (`C1`, `C2`, …), the method's doc comment, or the Damage
-decision table in Phase 2. An `Expect:` line that can name none of the three is
-dropped, the same way an uncited case is.
+decision table in Phase 2 — the last available only to a method that returns
+`Option<Damage>`. An `Expect:` line that can name none of the three is dropped,
+the same way an uncited case is.
 
 Binding the rule to the case instead would let an unsourced assertion ride
 inside a case whose header cites a real sentence, and the reader has no way to
@@ -556,12 +567,14 @@ Terminal only. Never save it.
 ```
 # Test cases: Screen::reverse_index
 Destination: crates/orzma_vt/src/screen.rs  mod tests::reverse_index
-Control functions: RI (ESC M)   Specifications: vt510.pdf, ECMA-48.pdf
+Governs: RI (ESC M)   Specifications: vt510.pdf, ECMA-48.pdf
 
 ## Summary          N cases (High n / Medium n / Low n), High first
                     stopping after the High block still covers everything
                     the specification states outright
                     citations verified: N/N
+## Terms tried      every search term and the ladder level it came from,
+                    including the ones that reached nothing
 ## Contract table   with citations
 ## Test cases       TC-01 … TC-NN
 ## Excluded as unspecified
@@ -572,6 +585,13 @@ Control functions: RI (ESC M)   Specifications: vt510.pdf, ECMA-48.pdf
    does not represent, each with its citation and the missing state
 ## Specification conflicts     (omitted when none)
 ```
+
+A report with no cases uses the same shape — summary, terms tried, and the
+sections that have content — and says outright that the manuals govern nothing
+this method does. It is an ordinary result, so do not dress it up as an error
+or apologise for it. "Terms tried" is what makes it worth reading: it shows the
+reader the search that came back empty, which is the one thing distinguishing
+this outcome from a lazy run.
 
 There is no review section. Nothing reviewed this list but you, so do not
 present it as though something did. Say plainly that the list is
@@ -585,10 +605,10 @@ a citation or two before trusting the rest.
 | The name matches both `Screen` and `interpreter.rs` | Resolve to `Screen` without asking |
 | The name is ambiguous within `Screen` itself | `AskUserQuestion` with the candidates |
 | The method name resolves to nothing | Stop with an error naming the searched paths |
-| The doc comment has no `# Control Functions` section | Stop, reporting the method as out of scope and why |
-| Some named control functions are absent from `docs/references/` | Drop those, continue, list them in the report |
-| All named control functions are absent | Stop, reporting the method as out of scope |
-| A control function's hits are all contents, index, or cross-reference lines | Treat it as absent from that manual and descend the precedence order |
+| The method has no doc comment (`NODOC`) | Descend the ladder to level 2; if the method was expected to carry docs, check for a multi-line attribute first |
+| Some terms are absent from `docs/references/` | Drop those, continue, list them under "Terms tried" |
+| No term on any level reaches a statement of behaviour | Report 0 cases with every term tried; do not stop with an error |
+| A term's hits are all contents, index, or cross-reference lines | Treat it as absent from that manual and descend the precedence order |
 | A citation fails verification | Re-record it against the real text or drop the entry; never edit the quote to make it pass. Re-run `verify` on the re-recorded pair before it counts |
 | `verify` reports a dropped qualifier | Treat it as a rejection. Narrow the span if the word came from another line or column; never widen the quote to absorb it |
 | `verify` reports `SPAN TOO WIDE` | Not a result. Narrow the citation to the lines carrying the statement and run `verify` again |
