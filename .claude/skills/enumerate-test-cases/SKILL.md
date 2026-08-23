@@ -265,7 +265,7 @@ mentions it. Derive it from the spec-described state change:
 `Metadata` (`crates/orzma_vt/src/damage.rs:152`). Sending every content change
 to `Full` gives a wrong expectation for `erase_in_line` and for both partial
 `erase_in_display` modes, which return `Damage::rows(..)` and are already
-pinned by eight existing tests. It also loses the third row: `Metadata` means
+pinned by four existing tests. It also loses the third row: `Metadata` means
 "a frame is still needed" and covers changes that landed entirely outside the
 viewport, not only cursor motion.
 
