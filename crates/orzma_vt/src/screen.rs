@@ -2513,6 +2513,8 @@ mod tests {
             let mut screen = tall_screen();
             screen.set_scroll_region(Some(2), Some(4));
             screen.set_origin_mode(OriginMode::WithinMargins);
+            screen.state.line = ScreenLine(3);
+            screen.state.column = GridColumn(3);
             screen.move_cursor_to(Some(1), Some(1));
             assert_eq!(screen.state.line, ScreenLine(1));
         }
@@ -2530,6 +2532,8 @@ mod tests {
         fn an_upper_left_origin_reaches_outside_the_margins() {
             let mut screen = tall_screen();
             screen.set_scroll_region(Some(2), Some(4));
+            screen.state.line = ScreenLine(3);
+            screen.state.column = GridColumn(3);
             screen.move_cursor_to(Some(1), Some(1));
             assert_eq!(screen.state.line, ScreenLine(0));
         }
