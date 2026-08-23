@@ -26,7 +26,7 @@ use crate::screen::character_sets::{
     CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
 };
 use crate::screen::checkpoint::Checkpoint;
-use crate::screen::margins::{OriginMode, ScrollRegion};
+use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
 use crate::screen::viewport::Viewport;
@@ -471,6 +471,28 @@ impl Screen {
     /// The cursor's column.
     pub fn cursor_column(&self) -> GridColumn {
         self.state.column
+    }
+
+    /// Sets the scrolling region and seats the cursor at the resulting
+    /// home; a request the margins cannot satisfy is refused whole.
+    ///
+    /// Both parameters are one-based line numbers as sent, with `None`
+    /// for an omitted one; [`Margins::resolve`] owns the defaults, the
+    /// clamp, and the refusal.
+    ///
+    /// The cursor goes to the home the origin mode defines rather than
+    /// to the page's first line, because homing to the page while the
+    /// origin is within the margins would seat the cursor outside them.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECSTBM` (`CSI Pt ; Pb r`)
+    pub fn set_scroll_region(&mut self, top: Option<u16>, bottom: Option<u16>) -> Option<Damage> {
+        let margins = Margins::resolve(top, bottom, self.grid.size().rows)?;
+        let moved = margins != self.scroll_region.margins();
+        self.scroll_region.set_margins(margins);
+        let seated = self.seat_cursor(ScreenLine(0), GridColumn(0));
+        seated.or(moved.then_some(Damage::Metadata))
     }
 
     /// Follows a one-row scroll with the offset that keeps a scrolled
@@ -2212,6 +2234,115 @@ mod tests {
         fn seating_the_cursor_where_it_sits_reports_no_damage() {
             let mut screen = tall_screen();
             assert_eq!(screen.seat_cursor(ScreenLine(0), GridColumn(0)), None);
+        }
+    }
+
+    mod set_scroll_region {
+        use super::*;
+
+        /// Asserts that a resolved region reaches the scroll span the
+        /// line feed and reverse index scroll against.
+        ///
+        /// Case: an application reserves a status line on the last row
+        /// of a four-row screen.
+        #[test]
+        fn a_resolved_region_reaches_the_scroll_span() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(1), Some(3));
+            assert_eq!(
+                screen.scroll_region.scroll_span(),
+                ScreenLine(0)..=ScreenLine(2)
+            );
+        }
+
+        /// Asserts that applying a region seats the cursor at home.
+        ///
+        /// The agreed policy departs from VT510 p.276's "column 1, line 1
+        /// of the page" on purpose: homing to the page's first line
+        /// while origin mode is set would put the cursor outside the
+        /// margins, which p.195 forbids. xterm homes through the same
+        /// origin-aware path.
+        ///
+        /// Case: an application sets a region while its cursor sits
+        /// somewhere in the middle of the screen.
+        #[test]
+        fn applying_a_region_seats_the_cursor_at_home() {
+            let mut screen = tall_screen();
+            screen.state.line = ScreenLine(2);
+            screen.state.column = GridColumn(3);
+            let damage = screen.set_scroll_region(Some(1), Some(3));
+            assert_eq!(screen.state.line, ScreenLine(0));
+            assert_eq!(screen.state.column, GridColumn(0));
+            assert_eq!(damage, Some(Damage::Metadata));
+        }
+
+        /// Asserts that home follows the origin mode rather than the
+        /// page.
+        ///
+        /// Case: an application turns on origin mode and then moves its
+        /// pane down the screen with a second region.
+        #[test]
+        fn home_follows_the_origin_mode() {
+            let mut screen = tall_screen();
+            screen
+                .scroll_region
+                .set_origin_mode(OriginMode::WithinMargins);
+            screen.set_scroll_region(Some(2), Some(4));
+            assert_eq!(screen.state.line, ScreenLine(1));
+        }
+
+        /// Asserts that a refused request leaves both the margins and
+        /// the cursor untouched.
+        ///
+        /// The agreed policy is that a refusal is a whole-sequence
+        /// no-op, not a partial application: the margins must not move
+        /// and the cursor must not be homed.
+        ///
+        /// Case: an application inverts its two parameters and sends
+        /// `CSI 5 ; 3 r`.
+        #[test]
+        fn a_refused_request_changes_nothing() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(1), Some(3));
+            screen.state.line = ScreenLine(2);
+            let damage = screen.set_scroll_region(Some(5), Some(3));
+            assert_eq!(
+                screen.scroll_region.scroll_span(),
+                ScreenLine(0)..=ScreenLine(2)
+            );
+            assert_eq!(screen.state.line, ScreenLine(2));
+            assert_eq!(damage, None);
+        }
+
+        /// Asserts that re-sending an unchanged region with the cursor
+        /// already home reports no damage.
+        ///
+        /// The agreed policy keeps a TUI that re-sends its region every
+        /// frame from forcing an empty frame each time.
+        ///
+        /// Case: an application redraws, re-sending the same region it
+        /// sent last frame without having moved the cursor since.
+        #[test]
+        fn an_unchanged_region_with_the_cursor_home_reports_no_damage() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(1), Some(3));
+            assert_eq!(screen.set_scroll_region(Some(1), Some(3)), None);
+        }
+
+        /// Asserts that a changed region reports damage even when the
+        /// cursor was already home.
+        ///
+        /// Case: an application shrinks its pane by one row while its
+        /// cursor rests at the upper-left corner.
+        #[test]
+        fn a_changed_region_reports_damage_from_home() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(1), Some(4));
+            assert_eq!(screen.state.line, ScreenLine(0));
+            assert_eq!(
+                screen.set_scroll_region(Some(1), Some(3)),
+                Some(Damage::Metadata)
+            );
         }
     }
 }
