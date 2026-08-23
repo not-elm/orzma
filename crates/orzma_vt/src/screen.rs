@@ -530,8 +530,22 @@ impl Screen {
     }
 }
 
+// Checkpoint methods
 impl Screen {
+    /// Saves the current state in memory in accordance with DECSC.
+    ///
+    /// # Control Functions
+    ///
+    /// - DECSC(Save Cursor)
     pub fn save_checkpoint(&mut self) {}
+
+    /// Applies the state saved in memory to each actual state.
+    /// If no saved state exists, perform a DECRC-compliant action.
+    ///
+    /// # Control Functions
+    ///
+    /// - DECRC(Restore Cursor)
+    pub fn restore_checkpoint(&mut self) {}
 }
 
 #[cfg(test)]
