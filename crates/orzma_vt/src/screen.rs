@@ -517,6 +517,24 @@ impl Screen {
         }
     }
 
+    /// Addresses the cursor at a one-based line and column, `None` for
+    /// an omitted parameter.
+    ///
+    /// A zero addresses the first line or column, the same as a one.
+    /// [`Self::seat_cursor`] resolves the line against the origin mode
+    /// and clamps both axes, so a line outside the addressable region
+    /// stops at its edge rather than being refused.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CUP` (`CSI Pl ; Pc H`)
+    /// - `HVP` (`CSI Pl ; Pc f`)
+    pub fn move_cursor_to(&mut self, line: Option<u16>, column: Option<u16>) -> Option<Damage> {
+        let line = line.unwrap_or(1).max(1) - 1;
+        let column = column.unwrap_or(1).max(1) - 1;
+        self.seat_cursor(ScreenLine(line), GridColumn(column))
+    }
+
     /// Follows a one-row scroll with the offset that keeps a scrolled
     /// viewport on the content it was showing.
     ///
@@ -2434,6 +2452,111 @@ mod tests {
             let mut screen = tall_screen();
             screen.set_origin_mode(OriginMode::WithinMargins);
             assert_eq!(screen.set_origin_mode(OriginMode::WithinMargins), None);
+        }
+    }
+
+    mod move_cursor_to {
+        use super::*;
+
+        /// Asserts that omitted parameters address the first line and
+        /// column.
+        ///
+        /// Case: an application homes the cursor with a bare `CSI H`.
+        #[test]
+        fn omitted_parameters_address_the_first_cell() {
+            let mut screen = tall_screen();
+            screen.state.line = ScreenLine(2);
+            screen.state.column = GridColumn(3);
+            screen.move_cursor_to(None, None);
+            assert_eq!(screen.state.line, ScreenLine(0));
+            assert_eq!(screen.state.column, GridColumn(0));
+        }
+
+        /// Asserts that a zero addresses the first line and column, the
+        /// same as a one.
+        ///
+        /// The agreed policy follows VT510 p.116 — "If Pl or Pc is not
+        /// selected or selected as 0, then the cursor moves to the first
+        /// line or column".
+        ///
+        /// Case: a program that builds its sequences from zero-based
+        /// variables emits `CSI 0 ; 0 H`.
+        #[test]
+        fn a_zero_addresses_the_first_cell() {
+            let mut screen = tall_screen();
+            screen.state.line = ScreenLine(2);
+            screen.move_cursor_to(Some(0), Some(0));
+            assert_eq!(screen.state.line, ScreenLine(0));
+            assert_eq!(screen.state.column, GridColumn(0));
+        }
+
+        /// Asserts that one-based parameters land on zero-based cells.
+        ///
+        /// Case: a full-screen application draws a box corner by
+        /// addressing row 3, column 2.
+        #[test]
+        fn one_based_parameters_land_on_zero_based_cells() {
+            let mut screen = tall_screen();
+            let damage = screen.move_cursor_to(Some(3), Some(2));
+            assert_eq!(screen.state.line, ScreenLine(2));
+            assert_eq!(screen.state.column, GridColumn(1));
+            assert_eq!(damage, Some(Damage::Metadata));
+        }
+
+        /// Asserts that the line is measured from the top margin while
+        /// the origin is within the margins.
+        ///
+        /// Case: an application with a reserved header turns on origin
+        /// mode and addresses the first row of its own pane.
+        #[test]
+        fn a_margin_origin_measures_the_line_from_the_top_margin() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(2), Some(4));
+            screen.set_origin_mode(OriginMode::WithinMargins);
+            screen.move_cursor_to(Some(1), Some(1));
+            assert_eq!(screen.state.line, ScreenLine(1));
+        }
+
+        /// Asserts that the line is absolute and reaches outside the
+        /// margins while the origin is the upper-left corner.
+        ///
+        /// The agreed policy follows VT510 p.195: with `DECOM` reset the
+        /// line numbering is independent of the margins and the cursor
+        /// can move outside them.
+        ///
+        /// Case: an application keeps a scrolling pane but addresses the
+        /// header row above it to update a title.
+        #[test]
+        fn an_upper_left_origin_reaches_outside_the_margins() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(2), Some(4));
+            screen.move_cursor_to(Some(1), Some(1));
+            assert_eq!(screen.state.line, ScreenLine(0));
+        }
+
+        /// Asserts that a line past the region clamps to the bottom
+        /// margin while the origin is within the margins.
+        ///
+        /// Case: an application with origin mode on addresses a row
+        /// below the pane it reserved for itself.
+        #[test]
+        fn a_line_past_the_region_clamps_to_the_bottom_margin() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(1), Some(3));
+            screen.set_origin_mode(OriginMode::WithinMargins);
+            screen.move_cursor_to(Some(9), Some(1));
+            assert_eq!(screen.state.line, ScreenLine(2));
+        }
+
+        /// Asserts that addressing the cell the cursor already sits on
+        /// reports no damage.
+        ///
+        /// Case: an application re-addresses its current cell while
+        /// redrawing.
+        #[test]
+        fn addressing_the_current_cell_reports_no_damage() {
+            let mut screen = tall_screen();
+            assert_eq!(screen.move_cursor_to(Some(1), Some(1)), None);
         }
     }
 }
