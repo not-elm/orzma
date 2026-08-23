@@ -159,6 +159,12 @@ impl CharacterSetsState {
         };
         self.g_sets[g_code].graphic(c)
     }
+
+    /// Restores the power-up designations and invocations, dropping any
+    /// pending single shift (`DECSTR`, `RIS`).
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 #[cfg(test)]
