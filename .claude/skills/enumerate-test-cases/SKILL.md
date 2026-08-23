@@ -33,14 +33,32 @@ comments and this repository requires in-code comments to be English. The
 report's own narration — summary, change log, errors — follows the language
 of the conversation.
 
+## Shell conventions
+
+Two things hold for every `Bash` recipe below.
+
+`$SCRATCH` is this session's scratchpad directory, the one the system prompt
+names, which lives outside the repository. Set it yourself before the first
+recipe runs — `SCRATCH=<that path>` — or substitute the literal path wherever
+the recipes write `$SCRATCH`. No recipe here writes inside the repository.
+
+`page_of` and `verify` are shell functions, and the `Bash` tool starts a fresh
+shell for every call, so no function, variable, or working directory survives
+from the previous one. Redefine `SCRATCH` and whichever function you need
+inside each invocation that uses it. A call that relies on a definition from an
+earlier call fails with `command not found`, and a `verify` that never ran is
+worse than one that failed.
+
 ## Phase 0 — Resolve the method
 
 The argument may be a qualified name (`Screen::line_feed`), a bare method name
 (`line_feed`), or a path with a line (`crates/orzma_vt/src/screen.rs:174`).
 If no argument was given, ask for one with `AskUserQuestion`.
 
-Resolve with `Grep`. `interpreter.rs` mirrors many of `Screen`'s method names —
-`single_shift` matches in three places, `reverse_index` and `print` in two — so:
+Resolve with `Grep`. `interpreter.rs` mirrors four of `Screen`'s method names —
+`invoke_character_set`, `print`, `reverse_index`, and `single_shift` — so a bare
+name can land in more than one file: `single_shift` matches in three places,
+`reverse_index` and `print` in two. Therefore:
 
 - A bare name that matches both `Screen` and `interpreter.rs` resolves to the
   inherent method on `Screen`, silently.
@@ -86,14 +104,28 @@ limit can run past it into the very body this skill forbids reading:
 ```bash
 awk -v m="<method>" '
   /^[[:space:]]*\/\/\// { doc = doc $0 "\n"; next }
-  $0 ~ "fn " m "\\(" { printf "%s", doc; exit }
+  $0 ~ "fn " m "\\(" { printf "%s", (doc == "" ? "NOTFOUND\n" : doc); found = 1; exit }
   /^[[:space:]]*#\[/ { next }
   { doc = "" }
+  END { if (!found) print "NOTFOUND" }
 ' <file>
 ```
 
 This prints exactly the accumulated `///` block and stops before the `fn`
 line, so it cannot show a line of the body.
+
+The `NOTFOUND` guard is not decoration. Without it the extractor prints
+nothing and exits 0 in two ordinary situations — the method is not in the file
+you passed, and the doc block is separated from its `fn` by a **multi-line**
+attribute, which the single-line `#\[` skip cannot span, so the `doc = ""`
+rule wipes the block. Both look identical to a clean run that happened to
+produce no output.
+
+**`NOTFOUND` means stop and report the extraction failure. It never means fall
+back to a `Read` with a guessed offset and limit** — that unbounded read is the
+exact failure this extractor exists to prevent, and it lands in the method body
+this skill must not see. Report which file and method name were tried, and let
+the author correct them.
 
 Methods that reject today include `print` (it handles printable characters,
 not a control function), the accessors `grid_size` / `cursor` / `pen_mut` /
@@ -107,6 +139,16 @@ Methods that admit today: `backspace`, `carriage_return`, `line_feed`,
 `move_backward_tabs`, `set_horizontal_tab_stop`, `edit_tab_stop`,
 `reset_tab_stops`, `designate_character_set`, `invoke_character_set`,
 `single_shift`, `save_checkpoint`, `restore_checkpoint`.
+
+Both lists are illustrations of what the gate does, not a lookup table that
+stands in for it. They are a snapshot of one moment in one crate, they go stale
+whenever a doc comment gains or loses a `# Control Functions` section, and they
+are already incomplete: `CharacterSetMapping::reset`, in
+`crates/orzma_vt/src/screen/character_sets.rs`, ADMITs under the gate and
+appears in neither list. **Run the awk gate on every method, including one named
+above.** Its verdict is the authoritative one; a run that skips it because the
+name looked familiar has classified the method from a stale list rather than
+from the source.
 
 `save_checkpoint` and `restore_checkpoint` are the best case for this skill:
 both are empty bodies today and both name a documented control function
@@ -164,7 +206,7 @@ A citation records four things:
   column interleaved:
 
   ```
-  Reverse index        RI            Moves the cursor up one line in the same column. If the cursor is
+  Reverse index        RI            Moves the cursor up one line in the same column. If the cursor is at
                        8/13          the top margin, the page scrolls down.
   ```
 
@@ -310,18 +352,29 @@ Declarative English sentences with articles, matching `screen.rs`:
 
 Resolve it; do not assume `mod tests::<method>`. `screen.rs` holds sixteen test
 modules and they do not map one-to-one onto methods: `tab_stop_edits` covers
-`set_horizontal_tab_stop`, `edit_tab_stop`, and `reset_tab_stops` together, and
-the three character-set methods have no module in `screen.rs` at all — their
-tests live in `crates/orzma_vt/src/screen/character_sets.rs` under
-`mod tests::designate`, `invoke`, and `single_shift`.
+`set_horizontal_tab_stop`, `edit_tab_stop`, and `reset_tab_stops` together.
 
 Grep the `mod` declarations inside the defining file's `#[cfg(test)] mod tests`
 block, pick the module whose tests already exercise the same control function,
-and fall back to naming a new module when none does. `save_checkpoint` and
-`restore_checkpoint` take that fallback today: they have no tests anywhere.
+and fall back to naming a new module when none does. Five in-scope methods take
+that fallback today, because they have no tests anywhere:
+`save_checkpoint`, `restore_checkpoint`, `designate_character_set`,
+`invoke_character_set`, and `single_shift`.
 
-Report the file as well as the module, because for the three character-set
-methods the file is not `screen.rs`.
+The last three carry a trap worth naming, because a module list alone walks
+into it. `crates/orzma_vt/src/screen/character_sets.rs` does contain
+`mod tests::designate`, `mod tests::invoke`, and `mod tests::single_shift`, and
+the names line up almost exactly with the three `Screen` methods. They are not
+their tests: they exercise `CharacterSetMapping::{designate, invoke,
+single_shift}`, the mapping type that `Screen` delegates to. `Screen`'s own
+three methods are untested — grep finds each of them only at its definition in
+`screen.rs` and at its `interpreter.rs` call sites. Match the destination on
+the type under test, not on the module name.
+
+Report the file as well as the module. A module name does not say which file
+holds it, `orzma_vt` splits `Screen` across `screen.rs` and `screen/`, and the
+character-set case above shows two files can offer the same module name for
+different types.
 
 `Setup:` lines may reach private state such as `margins.top` directly, since
 the tests live in the same file as the type.
@@ -338,15 +391,30 @@ Case:   The top margin sits on the third row and the cursor is on it when RI arr
 Setup:  Screen::new(GridSize { cols: 80, rows: 24 }, 0); margins.top = ScreenLine(2);
         cursor on ScreenLine(2); each row carries a distinguishable character
 Act:    screen.reverse_index()
-Expect: the margin region scrolls down one row
-        the cursor stays on ScreenLine(2)
-        the top margin row holds erase cells
-        the deferred wrap is disarmed
-        returns Some(Damage::Full), because content moves across the screen
+Expect: the margin region scrolls down one row            [C2]
+        the cursor stays on ScreenLine(2)                 [C1 — "in the same column"]
+        the top margin row holds erase cells              [C2 — "the page scrolls down"]
+        the deferred wrap is disarmed                     [doc comment]
+        returns Some(Damage::Full)                        [Damage table — content moves
+                                                           across the screen]
 ```
 
 The `Source` line is the point of the whole skill: every case names the
 sentence that demands it, and **a case that cannot name one is not emitted.**
+
+That rule binds **per `Expect:` line, not per case**. Every `Expect:` line ends
+with its own source in brackets, and there are exactly three legitimate ones: a
+contract-table ID (`C1`, `C2`, …), the method's doc comment, or the Damage
+decision table in Phase 2. An `Expect:` line that can name none of the three is
+dropped, the same way an uncited case is.
+
+Binding the rule to the case instead would let an unsourced assertion ride
+inside a case whose header cites a real sentence, and the reader has no way to
+tell it apart from the sourced lines around it. That is the shape an
+implementation-derived expectation takes when it enters a specification-derived
+list: not a fabricated citation, but a well-cited case carrying one extra line
+nobody asked the manual about. Tagging each line makes the unsourced assertion
+visible instead of inferred.
 
 `Case:` carries the scenario and nothing else — no restatement of the
 assertions, no policy, no speculation about how a broken implementation would
@@ -368,11 +436,17 @@ safe.
 
 Normalize the quote and the cited span the same way — collapse all whitespace —
 and accept the quote when its content words appear as an ordered subsequence of
-the span, tolerating tokens from neighbouring table columns:
+the span, tolerating tokens from neighbouring table columns. Two guards bound
+that tolerance, because a bare subsequence test is far weaker than it looks:
 
 ```bash
 verify() {
   local file=$1 first=$2 last=$3 quote=$4
+  local width=$(( last - first + 1 ))
+  if [ "$width" -gt 10 ]; then
+    echo "SPAN TOO WIDE ($width lines; the bound is 10)"
+    return
+  fi
   sed -n "${first},${last}p" "$file" | tr -s '[:space:]' ' ' | tr -d '\n' > "$SCRATCH/_span.txt"
   python3 - "$quote" "$SCRATCH/_span.txt" <<'PY'
 import sys, re
@@ -380,19 +454,60 @@ quote, spanfile = sys.argv[1], sys.argv[2]
 span = open(spanfile).read()
 qt = re.findall(r"[A-Za-z0-9]+", quote.lower())
 st = re.findall(r"[A-Za-z0-9]+", span.lower())
-i = 0
+STOP = {"not", "no", "never", "cannot", "unless", "except",
+        "only", "must", "always", "before", "after"}
+i, started, skipped = 0, False, []
 for t in st:
     if i < len(qt) and t == qt[i]:
-        i += 1
-print("VERIFIED" if i == len(qt) else f"REJECTED ({i}/{len(qt)} matched)")
+        started, i = True, i + 1
+    elif started and i < len(qt):
+        skipped.append(t)
+if i < len(qt):
+    print(f"REJECTED ({i}/{len(qt)} matched)")
+else:
+    dropped = sorted({t for t in skipped if t in STOP})
+    print(f"REJECTED (dropped qualifier: {', '.join(dropped)})" if dropped else "VERIFIED")
 PY
 }
 ```
+
+**The dropped-qualifier guard.** A subsequence test passes on *any* subsequence
+of the span, so it cannot see a word the quote left out — including the word
+that carries the meaning. Against `vt510.pdf` L1353, which reads "Panning does
+**not** occur until the input buffer becomes empty and the cursor is
+displayed", the plain subsequence check returns `VERIFIED` for the quote with
+`not` and `VERIFIED` for the quote without it, approving a citation whose
+meaning is inverted. So after the subsequence match succeeds, the span tokens
+that were skipped inside the matched window are scanned, and a skipped token
+from the stop-list rejects the citation and names the word. `not`, `never`,
+`cannot`, `unless`, and `only` are the load-bearing entries; the rest are
+cheap to keep.
+
+A rejection naming a word your sentence never contained usually means the span
+is loose rather than the quote wrong — the skipped word came from an
+intervening line or a neighbouring column. Narrow the span until it covers the
+one statement you are quoting, then re-run. Never widen the quote to swallow a
+word from another column; that records text the sentence does not contain.
+
+**The span-width bound.** You choose both the span and the quote, so nothing
+except this bound stops the two from being chosen to fit each other. The check
+degrades as the span grows — it holds at 2 to 500 lines, weakens past roughly
+2000, and against the whole 13943-line file a wholly invented sentence
+assembled from common words verifies, because every one of its words appears
+somewhere in that order. A span wider than 10 lines is therefore refused
+outright rather than checked. `SPAN TOO WIDE` is not a verification result:
+narrow the citation to the lines that carry the statement and run `verify`
+again. A real table-row citation never needs more than a few lines.
 
 Do **not** use a literal `grep`. A literal search for the genuine RI statement
 returns zero hits against the file it was taken from, because the table splits
 it and injects `8/13` into the middle. That strict a check rejects nearly every
 citation these manuals can produce.
+
+Neither guard makes `verify` a proof. It still cannot see an ordinary word
+dropped from the middle of a sentence, so a truncated quote can pass. Read the
+span you cited; `verify` catches the failures that survive a careless read, not
+the ones that survive no read at all.
 
 ### What to do with each result
 
@@ -405,9 +520,34 @@ turns the one honest check in this skill into a rubber stamp. Go back to the
 extraction, read what the manual actually says, and either re-record the
 contract entry against the real text or drop it.
 
+**A re-recorded entry is not verified until `verify` has run on it again.** The
+re-recording changes the quote, the span, or both, so the earlier result says
+nothing about the new pair, and an entry that reaches the report on the
+strength of a run against text it no longer carries is exactly the unchecked
+citation this phase exists to catch. Re-run, and count it in `citations
+verified: N/N` only once it passes.
+
 A dropped entry goes under "Excluded as unspecified" with the quote that
 failed and its match ratio, so the reader can see what was attempted rather
 than only what survived.
+
+**SPECIFIED BUT NOT MODELLED** — the citation verifies, and the state it
+describes has no representation in the current API. `save_checkpoint` is the
+standing example: `vt510.pdf` has DECSC save the state of origin mode (DECOM)
+and the selective erase attribute, both quotes verify against the DECSC
+description list, and `Screen` models neither — so no `Setup:` can establish
+that state and no `Expect:` can observe it. `line_feed`'s LNM-set branch lands
+here too. On the acceptance run this outcome covered 2 of `save_checkpoint`'s
+7 contract entries, so it is a common result, not an edge case.
+
+**Do not file these under "Excluded as unspecified."** They are its opposite:
+the specification is explicit, verified to a page and a line, and the code has
+not caught up. Calling such an entry unspecified is a false statement about the
+manual, and it buries the one thing worth reporting. Section 1g already says a
+divergence between a spec-derived case and the current code is a finding, not a
+mistake to smooth over — this is where that finding gets written down. Give the
+entry its own report section, keep its citation intact, and name the state the
+API does not represent. Emit no case from it, because no case could be written.
 
 ### The report
 
@@ -427,6 +567,9 @@ Control functions: RI (ESC M)   Specifications: vt510.pdf, ECMA-48.pdf
 ## Excluded as unspecified
    entries with no citation, and entries whose citation failed
    verification (with the failed quote and its match ratio)
+## Specified but not modelled  (omitted when none)
+   entries whose citation verified but whose state the current API
+   does not represent, each with its citation and the missing state
 ## Specification conflicts     (omitted when none)
 ```
 
@@ -446,5 +589,9 @@ a citation or two before trusting the rest.
 | Some named control functions are absent from `docs/references/` | Drop those, continue, list them in the report |
 | All named control functions are absent | Stop, reporting the method as out of scope |
 | A control function's hits are all contents, index, or cross-reference lines | Treat it as absent from that manual and descend the precedence order |
-| A citation fails verification | Re-record it against the real text or drop the entry; never edit the quote to make it pass |
+| A citation fails verification | Re-record it against the real text or drop the entry; never edit the quote to make it pass. Re-run `verify` on the re-recorded pair before it counts |
+| `verify` reports a dropped qualifier | Treat it as a rejection. Narrow the span if the word came from another line or column; never widen the quote to absorb it |
+| `verify` reports `SPAN TOO WIDE` | Not a result. Narrow the citation to the lines carrying the statement and run `verify` again |
+| The doc-comment extractor prints `NOTFOUND` | Stop and report the file and method tried; never fall back to an unbounded `Read` |
+| A citation verifies but the API models no such state | Report it under "Specified but not modelled" with its citation; do not call it unspecified, and emit no case |
 | `pdftotext` is unavailable | Stop, suggesting `brew install poppler` |
