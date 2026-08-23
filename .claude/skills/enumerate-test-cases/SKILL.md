@@ -135,7 +135,7 @@ A citation records four things:
   ```
 
   A page number written from memory is the same fabricated citation that
-  Phase 4 exists to reject, arriving one step earlier and unchecked.
+  Phase 3 exists to reject, arriving one step earlier and unchecked.
 
 - **Line span** — a session-local hint that makes the quote quick to find. It
   carries no guarantee across poppler versions, so it is never the thing a
