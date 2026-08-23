@@ -69,6 +69,10 @@ pub struct ViewportLine(pub u16);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct ScreenLine(pub u16);
 
+impl ScreenLine {
+    pub const TOP: ScreenLine = ScreenLine(0);
+}
+
 impl From<ScreenLine> for GridLine {
     #[inline]
     fn from(value: ScreenLine) -> Self {

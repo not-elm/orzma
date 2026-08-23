@@ -67,7 +67,6 @@ pub struct Screen {
     margins: Margins,
     tabs: TabStops,
     character_set_mapping: CharacterSetMapping,
-    #[expect(dead_code, reason = "DECSC and DECRC arrive in a later step")]
     checkpoint: Option<Checkpoint>,
 }
 
