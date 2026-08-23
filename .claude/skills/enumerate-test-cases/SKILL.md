@@ -95,3 +95,106 @@ Methods that admit today: `backspace`, `carriage_return`, `line_feed`,
 both are empty bodies today and both name a documented control function
 (DECSC, DECRC), so a specification-derived list is the only list anyone can
 produce for them.
+
+### 1b. Extract the specifications
+
+`docs/references/` holds `ECMA-48.pdf`, `vt220.pdf`, and `vt510.pdf`. Extract
+each once per session into a scratchpad directory, skipping files already
+there:
+
+```bash
+mkdir -p "$SCRATCH/vt-refs"
+for f in ECMA-48 vt220 vt510; do
+  [ -f "$SCRATCH/vt-refs/$f.txt" ] || pdftotext -layout "docs/references/$f.pdf" "$SCRATCH/vt-refs/$f.txt"
+done
+```
+
+All three extract in about 0.6 s together. Search them with `Grep`.
+
+`-layout` is fixed, not incidental: the same PDF yields 13943 lines with
+`-layout`, 15183 with `-raw`, and 35996 with neither, so the flag set is part
+of any line-number citation.
+
+If `pdftotext` is unavailable, stop and suggest `brew install poppler`. Do not
+fall back to `Read`'s PDF page range: with no way to search a 13 MB manual,
+the run would cover whichever pages happened to be sampled, and a partial
+enumeration is indistinguishable from a complete one.
+
+### 1c. Cite what you find
+
+A citation records four things:
+
+```
+<pdf> p.<page>, L<first>-<last> — "<reassembled statement>"
+```
+
+- **PDF page index** — computed, never guessed:
+
+  ```bash
+  page_of() { head -"$2" "$1" | tr -cd '\f' | wc -c | awk '{print $1+1}'; }
+  ```
+
+  A page number written from memory is the same fabricated citation that
+  Phase 4 exists to reject, arriving one step earlier and unchecked.
+
+- **Line span** — a session-local hint that makes the quote quick to find. It
+  carries no guarantee across poppler versions, so it is never the thing a
+  reader is asked to trust.
+
+- **Reassembled statement** — the quote is rarely a clean line. DEC manuals
+  state behaviour inside multi-column tables and `-layout` preserves that
+  geometry, so a statement arrives split across lines with a neighbouring
+  column interleaved:
+
+  ```
+  Reverse index        RI            Moves the cursor up one line in the same column. If the cursor is
+                       8/13          the top margin, the page scrolls down.
+  ```
+
+  The statement is "Moves the cursor up one line in the same column. If the
+  cursor is at the top margin, the page scrolls down". `RI` and `8/13` are
+  other columns of the same table row. Record the reassembled statement and
+  the span it came from.
+
+### 1d. Reject hits that are not definitions
+
+Searching the ECMA-48 extraction for `RI` reaches the table of contents, the
+acronym index, and cross-references inside other entries before reaching the
+entry itself. Reject a hit when:
+
+- its line ends in a bare page number (contents),
+- it sits inside a contents or index table,
+- it states no behaviour.
+
+Keep reading hits until one states behaviour. Record how many were rejected.
+If every hit for a control function is a contents, index, or cross-reference
+line, treat that function as absent from that manual and descend the
+precedence order.
+
+### 1e. Precedence among the three manuals
+
+Applied only when they disagree:
+
+1. `vt510.pdf` — the terminal orzma emulates, and the most recent DEC
+   statement of any DEC-specific behaviour.
+2. `vt220.pdf` — where VT510 is silent, and the source of the naming
+   vocabulary this crate already follows.
+3. `ECMA-48.pdf` — the general definition of a control function, and the
+   fallback where both DEC manuals are silent.
+
+Descending a level requires evidence, not an impression. Before treating VT510
+as silent on a control function, try the mnemonic (`RI`), the expanded name
+(`Reverse index`), and the escape form (`ESC M`), and record which terms were
+tried beside the fallback citation. Otherwise the precedence descends on an
+unfalsifiable claim, and a reader cannot tell a thorough search from one failed
+grep.
+
+A disagreement that survives this ordering is **not** resolved here. Report it
+as a specification conflict, with both citations, and derive no case from it.
+
+### 1f. Look up per control function
+
+A method's doc may name five — `line_feed` names LF, VT, FF, IND, and NEL — and
+each gets its own lookup. Control functions named in the doc but absent from
+`docs/references/` are dropped individually and listed in the report. Only when
+all of them are absent does the run stop.
