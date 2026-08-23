@@ -72,27 +72,6 @@ impl ScrollRegion {
     pub(crate) fn set_margins(&mut self, margins: Margins) {
         self.margins = margins;
     }
-
-    /// Moves the top margin, leaving the bottom margin and the origin
-    /// mode alone.
-    ///
-    /// This exists for tests that need a region narrower than the page
-    /// while DECSTBM is still unwired; the real control function will
-    /// set both margins together.
-    #[cfg(test)]
-    pub(crate) fn set_top_margin(&mut self, top: ScreenLine) {
-        self.margins.top = top;
-    }
-
-    /// Moves the bottom margin, leaving the top margin and the origin
-    /// mode alone.
-    ///
-    /// This is the counterpart of [`Self::set_top_margin`] and carries
-    /// the same caveat.
-    #[cfg(test)]
-    pub(crate) fn set_bottom_margin(&mut self, bottom: ScreenLine) {
-        self.margins.bottom = bottom;
-    }
 }
 
 /// Whether the cursor origin and its motion bounds follow the margins.

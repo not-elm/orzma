@@ -1274,7 +1274,10 @@ mod tests {
         #[test]
         fn a_linefeed_below_a_bottom_margin_moves_the_cursor_down() {
             let mut screen = tall_screen();
-            screen.scroll_region.set_bottom_margin(ScreenLine(1));
+            screen.scroll_region.set_margins(Margins {
+                top: ScreenLine(0),
+                bottom: ScreenLine(1),
+            });
             screen.state.line = ScreenLine(2);
             let damage = screen.line_feed();
             assert_eq!(screen.state.line, ScreenLine(3));
@@ -1296,7 +1299,10 @@ mod tests {
         #[test]
         fn a_linefeed_below_a_bottom_margin_at_the_last_row_does_nothing() {
             let mut screen = tall_screen();
-            screen.scroll_region.set_bottom_margin(ScreenLine(1));
+            screen.scroll_region.set_margins(Margins {
+                top: ScreenLine(0),
+                bottom: ScreenLine(1),
+            });
             screen.grid[ScreenLine(0)][0].c = 'a';
             screen.state.line = ScreenLine(3);
             let damage = screen.line_feed();
@@ -1321,7 +1327,10 @@ mod tests {
         #[test]
         fn a_linefeed_below_a_top_margin_rotates_without_feeding_history() {
             let mut screen = tall_screen();
-            screen.scroll_region.set_top_margin(ScreenLine(1));
+            screen.scroll_region.set_margins(Margins {
+                top: ScreenLine(1),
+                bottom: ScreenLine(3),
+            });
             for (line, glyph) in [(0u16, 'a'), (1, 'b'), (2, 'c'), (3, 'd')] {
                 screen.grid[ScreenLine(line)][0].c = glyph;
             }
@@ -1344,7 +1353,10 @@ mod tests {
         #[test]
         fn a_linefeed_at_a_bottom_margin_feeds_history_and_holds_the_rows_below() {
             let mut screen = tall_screen();
-            screen.scroll_region.set_bottom_margin(ScreenLine(2));
+            screen.scroll_region.set_margins(Margins {
+                top: ScreenLine(0),
+                bottom: ScreenLine(2),
+            });
             for (line, glyph) in [(0u16, 'a'), (1, 'b'), (2, 'c'), (3, 'd')] {
                 screen.grid[ScreenLine(line)][0].c = glyph;
             }
@@ -1496,7 +1508,10 @@ mod tests {
         #[test]
         fn a_reverse_index_above_a_top_margin_at_row_zero_does_nothing() {
             let mut screen = screen();
-            screen.scroll_region.set_top_margin(ScreenLine(1));
+            screen.scroll_region.set_margins(Margins {
+                top: ScreenLine(1),
+                bottom: ScreenLine(2),
+            });
             screen.grid[ScreenLine(0)][0].c = 'a';
             let damage = screen.reverse_index();
             assert_eq!(screen.state.line, ScreenLine(0));
@@ -1518,7 +1533,10 @@ mod tests {
         #[test]
         fn a_reverse_index_above_a_top_margin_walks_toward_the_first_row() {
             let mut screen = screen();
-            screen.scroll_region.set_top_margin(ScreenLine(2));
+            screen.scroll_region.set_margins(Margins {
+                top: ScreenLine(2),
+                bottom: ScreenLine(2),
+            });
             screen.state.line = ScreenLine(1);
             let damage = screen.reverse_index();
             assert_eq!(screen.state.line, ScreenLine(0));
@@ -1533,7 +1551,10 @@ mod tests {
         #[test]
         fn a_reverse_index_at_a_top_margin_scrolls_only_the_region() {
             let mut screen = screen();
-            screen.scroll_region.set_top_margin(ScreenLine(1));
+            screen.scroll_region.set_margins(Margins {
+                top: ScreenLine(1),
+                bottom: ScreenLine(2),
+            });
             for (line, glyph) in [(0u16, 'a'), (1, 'b'), (2, 'c')] {
                 screen.grid[ScreenLine(line)][0].c = glyph;
             }
@@ -1831,7 +1852,10 @@ mod tests {
             assert_eq!(screen.grid.history_len(), 3);
             screen.viewport.offset = DisplayOffset(1);
 
-            screen.scroll_region.set_top_margin(ScreenLine(1));
+            screen.scroll_region.set_margins(Margins {
+                top: ScreenLine(1),
+                bottom: ScreenLine(3),
+            });
             screen.state.line = ScreenLine(3);
             screen.line_feed();
             assert_eq!(screen.display_offset(), DisplayOffset(1));
