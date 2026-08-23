@@ -609,4 +609,32 @@ mod tests {
         let device = interpret(b"\x1b*0\x1bN\x7fq");
         assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
     }
+
+    /// Asserts that a sequence whose intermediate falls out of the
+    /// parameter slice through `vtparse`'s own parameter limit still does
+    /// not reach the control function that shares its final byte.
+    ///
+    /// The agreed policy checks `parameters_truncated` as its own guard
+    /// rather than trusting `has_intermediates()` alone to catch every
+    /// intermediate the parser drops. `vtparse` promotes a trailing
+    /// intermediate into the parameter slice only while `num_params` has
+    /// room under its own 32-parameter limit; once a sequence's own
+    /// parameters already fill every slot, the promotion is refused and
+    /// the loss is reported through `parameters_truncated` instead, so
+    /// the intermediate never lands in the slice for `has_intermediates()`
+    /// to see. A dispatcher that trusted `has_intermediates()` alone would
+    /// read such a sequence as a bare `CSI 1 ; 2 r` and apply it as
+    /// DECSTBM instead of refusing it as the DECCARA-shaped sequence it
+    /// is.
+    ///
+    /// Case: an application changes the attributes of a rectangle with
+    /// `CSI 1 ; 2 $ r`, sent with a parameter list long enough to exhaust
+    /// `vtparse`'s own 32-parameter limit before the trailing `$`
+    /// arrives.
+    #[test]
+    fn a_truncated_intermediate_does_not_reach_the_scroll_region() {
+        let chunk = format!("\x1b[1;2{}$ra\n\nb", ";".repeat(29));
+        let device = interpret(chunk.as_bytes());
+        assert_eq!(device.active().viewport_row(ViewportLine(2))[1].c, 'b');
+    }
 }
