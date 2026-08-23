@@ -146,6 +146,11 @@ impl VTActor for Executor<'_> {
         byte: u8,
     ) {
         match (byte, intermediates) {
+            (b'7', []) => self.device.active_mut().save_checkpoint(),
+            (b'8', []) => {
+                let damage = self.device.active_mut().restore_checkpoint();
+                self.damage.stage_if_changed(damage);
+            }
             (b'D', []) => self.index(),
             (b'E', []) => self.next_line(),
             (b'H', []) => self.device.active_mut().set_horizontal_tab_stop(),
@@ -299,6 +304,20 @@ mod tests {
     fn the_seven_bit_tab_set_plants_a_stop_at_the_cursor() {
         let device = interpret(b"ab\x1bH\r\t");
         assert_eq!(device.active().cursor_column(), GridColumn(2));
+    }
+
+    /// Asserts that `ESC 7` and `ESC 8` bracket a detour, putting the
+    /// cursor back where the save found it.
+    ///
+    /// Case: a program saves its cursor, moves away to write a line
+    /// elsewhere on the screen, restores, and continues where it left
+    /// off.
+    #[test]
+    fn the_seven_bit_save_and_restore_bracket_a_detour() {
+        let device = interpret(b"ab\x1b7\r\x1bDxy\x1b8c");
+        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'x');
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[2].c, 'c');
+        assert_eq!(device.active().cursor_column(), GridColumn(3));
     }
 
     /// Asserts that `ESC M` scrolls the region down when the cursor

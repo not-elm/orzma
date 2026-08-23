@@ -34,6 +34,21 @@ impl ScrollRegion {
         self.margins.bottom
     }
 
+    /// Returns the cursor origin.
+    pub fn origin_mode(&self) -> OriginMode {
+        self.origin_mode
+    }
+
+    /// Replaces the cursor origin, and does nothing else.
+    ///
+    /// This is the plain assignment `DECRC` needs to put a saved mode
+    /// back. `DECOM` itself additionally homes the cursor, which this
+    /// type cannot do because it does not own one; that half belongs to
+    /// the `Screen` method the control function reaches.
+    pub fn set_origin_mode(&mut self, origin_mode: OriginMode) {
+        self.origin_mode = origin_mode;
+    }
+
     /// The rows a scroll moves: the top margin through the bottom
     /// margin, inclusive.
     ///

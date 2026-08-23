@@ -67,7 +67,7 @@ pub struct Screen {
     scroll_region: ScrollRegion,
     tabs: TabStops,
     character_set_mapping: CharacterSetMapping,
-    checkpoint: Option<Checkpoint>,
+    checkpoint: Checkpoint,
 }
 
 impl Screen {
@@ -81,7 +81,7 @@ impl Screen {
             state: ScreenState::default(),
             tabs: TabStops::default(),
             character_set_mapping: CharacterSetMapping::default(),
-            checkpoint: None,
+            checkpoint: Checkpoint::default(),
         }
     }
 
@@ -543,21 +543,53 @@ impl Screen {
     /// # Control Functions
     ///
     /// - DECSC(Save Cursor)
-    pub fn save_checkpoint(&mut self) {}
+    pub fn save_checkpoint(&mut self) {
+        self.checkpoint = self.capture_checkpoint();
+    }
 
     /// Applies the state saved in memory to each actual state.
     /// If no saved state exists, perform a DECRC-compliant action.
     ///
+    /// A screen that never saved holds [`Checkpoint::default`], which is
+    /// the state DECRC calls for in that case, so the unsaved path needs
+    /// no branch of its own.
+    ///
+    /// The saved position is put back verbatim. Restoring an origin mode
+    /// whose margins moved in between can therefore seat the cursor
+    /// outside them; DECSC saves no margins to clamp against, and the
+    /// manuals leave the collision undefined.
+    ///
     /// # Control Functions
     ///
     /// - DECRC(Restore Cursor)
-    pub fn restore_checkpoint(&mut self) {}
+    pub fn restore_checkpoint(&mut self) -> Option<Damage> {
+        let saved = self.checkpoint;
+        if self.capture_checkpoint() == saved {
+            return None;
+        }
+        self.state.line = saved.line;
+        self.state.column = saved.column;
+        self.state.pen = saved.pen;
+        self.state.pending_wrap = saved.pending_wrap;
+        self.scroll_region.set_origin_mode(saved.origin_mode);
+        self.character_set_mapping = saved.character_set_mapping;
+        Some(Damage::Metadata)
+    }
+
+    fn capture_checkpoint(&self) -> Checkpoint {
+        Checkpoint::capture(
+            &self.state,
+            self.scroll_region.origin_mode(),
+            self.character_set_mapping,
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::schema::Color;
+    use crate::screen::margins::OriginMode;
 
     fn screen() -> Screen {
         Screen::new(GridSize { cols: 4, rows: 3 }, 10)
@@ -1771,6 +1803,166 @@ mod tests {
                 screen.line_feed();
             }
             assert_eq!(screen.viewport_row_of(id), None);
+        }
+    }
+
+    /// Moves every item `DECSC` saves off its default, so a later
+    /// assertion that the state came back cannot pass by accident.
+    fn dirty_screen() -> Screen {
+        let mut screen = screen();
+        screen.state.line = ScreenLine(2);
+        screen.state.column = GridColumn(3);
+        screen.state.pending_wrap = true;
+        screen.pen_mut().bg = Color::Indexed(4);
+        screen
+            .scroll_region
+            .set_origin_mode(OriginMode::WithinMargins);
+        screen.invoke_character_set(GCode::G1);
+        screen.designate_character_set(GCode::G1, CharacterSet::DecSpecialGraphics);
+        screen
+    }
+
+    mod save_checkpoint {
+        use super::*;
+
+        /// Asserts that a save copies aside every item `DECSC` lists.
+        ///
+        /// Case: a full-screen application saves its cursor before
+        /// drawing a status line in another color and character set.
+        #[test]
+        fn a_save_copies_every_item_decsc_lists() {
+            let mut screen = dirty_screen();
+            screen.save_checkpoint();
+            assert_eq!(screen.checkpoint.line, ScreenLine(2));
+            assert_eq!(screen.checkpoint.column, GridColumn(3));
+            assert_eq!(screen.checkpoint.pen.bg, Color::Indexed(4));
+            assert!(screen.checkpoint.pending_wrap);
+            assert_eq!(screen.checkpoint.origin_mode, OriginMode::WithinMargins);
+            assert_eq!(screen.checkpoint.character_set_mapping.gl, GCode::G1);
+        }
+
+        /// Asserts that work done after a save leaves the saved copy
+        /// alone.
+        ///
+        /// Case: an application saves its cursor and then keeps printing,
+        /// expecting the save to still describe where it was.
+        #[test]
+        fn later_work_does_not_reach_the_saved_copy() {
+            let mut screen = dirty_screen();
+            screen.save_checkpoint();
+            screen.state.line = ScreenLine(0);
+            screen.pen_mut().bg = Color::DefaultBackground;
+            screen.invoke_character_set(GCode::G0);
+            assert_eq!(screen.checkpoint.line, ScreenLine(2));
+            assert_eq!(screen.checkpoint.pen.bg, Color::Indexed(4));
+            assert_eq!(screen.checkpoint.character_set_mapping.gl, GCode::G1);
+        }
+    }
+
+    mod restore_checkpoint {
+        use super::*;
+
+        /// Asserts that a restore puts back every item the save copied
+        /// aside and reports cursor-only damage.
+        ///
+        /// The agreed policy is [`Damage::Metadata`]: a restore writes no
+        /// cell, and the caret reaches the renderer through the frame's
+        /// cursor.
+        ///
+        /// Case: an application finishes drawing its status line and
+        /// returns to where it was working.
+        #[test]
+        fn a_restore_puts_back_every_saved_item() {
+            let mut screen = dirty_screen();
+            screen.save_checkpoint();
+            screen.state.line = ScreenLine(0);
+            screen.state.column = GridColumn(0);
+            screen.state.pending_wrap = false;
+            screen.pen_mut().bg = Color::DefaultBackground;
+            screen
+                .scroll_region
+                .set_origin_mode(OriginMode::UpperLeftCorner);
+            screen.invoke_character_set(GCode::G0);
+            let damage = screen.restore_checkpoint();
+            assert_eq!(screen.state.line, ScreenLine(2));
+            assert_eq!(screen.state.column, GridColumn(3));
+            assert_eq!(screen.state.pen.bg, Color::Indexed(4));
+            assert!(screen.state.pending_wrap);
+            assert_eq!(
+                screen.scroll_region.origin_mode(),
+                OriginMode::WithinMargins
+            );
+            assert_eq!(screen.character_set_mapping.gl, GCode::G1);
+            assert_eq!(damage, Some(Damage::Metadata));
+        }
+
+        /// Asserts that a restore with nothing ever saved returns the
+        /// screen to its power-up state.
+        ///
+        /// The agreed policy follows VT510's DECRC: an unsaved restore
+        /// homes the cursor, resets the origin mode, drops the character
+        /// attributes, and reinstates the default character set mapping,
+        /// rather than being ignored.
+        ///
+        /// Case: an application emits a restore during start-up, before
+        /// it has ever saved anything.
+        #[test]
+        fn an_unsaved_restore_returns_the_power_up_state() {
+            let mut screen = dirty_screen();
+            let damage = screen.restore_checkpoint();
+            assert_eq!(screen.state.line, ScreenLine(0));
+            assert_eq!(screen.state.column, GridColumn(0));
+            assert_eq!(screen.state.pen, Pen::default());
+            assert!(!screen.state.pending_wrap);
+            assert_eq!(
+                screen.scroll_region.origin_mode(),
+                OriginMode::UpperLeftCorner
+            );
+            assert_eq!(screen.character_set_mapping, CharacterSetMapping::default());
+            assert_eq!(damage, Some(Damage::Metadata));
+        }
+
+        /// Asserts that a restore onto the state already in place reports
+        /// no damage.
+        ///
+        /// The agreed policy matches [`Screen::carriage_return`]: a call
+        /// that changes nothing must not force a frame that repeats the
+        /// last one.
+        ///
+        /// Case: an application restores twice in a row without printing
+        /// between the two.
+        #[test]
+        fn a_restore_that_changes_nothing_reports_no_damage() {
+            let mut screen = dirty_screen();
+            screen.save_checkpoint();
+            screen.restore_checkpoint();
+            assert_eq!(screen.restore_checkpoint(), None);
+        }
+
+        /// Asserts that a restored deferred wrap really wraps the next
+        /// character.
+        ///
+        /// The flag is pinned through behaviour rather than by reading it
+        /// back, because only the wrap it produces is observable to the
+        /// application that saved it.
+        ///
+        /// Case: an application fills a row to its last column, saves,
+        /// goes away to draw elsewhere, restores, and prints one more
+        /// character.
+        #[test]
+        fn a_restored_deferred_wrap_still_wraps_the_next_character() {
+            let mut screen = screen();
+            for c in ['a', 'b', 'c', 'd'] {
+                screen.print(c);
+            }
+            screen.save_checkpoint();
+            screen.state.line = ScreenLine(2);
+            screen.state.column = GridColumn(0);
+            screen.state.pending_wrap = false;
+            screen.restore_checkpoint();
+            screen.print('e');
+            assert_eq!(screen.grid[ScreenLine(1)][0].c, 'e');
+            assert_eq!(screen.state.line, ScreenLine(1));
         }
     }
 }

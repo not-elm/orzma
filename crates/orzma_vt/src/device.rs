@@ -208,4 +208,36 @@ mod tests {
         device.active_mut().move_forward_tabs(1);
         assert_eq!(device.active().cursor_column(), GridColumn(3));
     }
+
+    /// Asserts that a checkpoint saved on one screen is unreachable from
+    /// the other.
+    ///
+    /// The agreed policy gives each screen its own checkpoint, so a
+    /// restore on the alternate screen returns its own power-up state
+    /// instead of consuming the save the shell left on the primary.
+    /// VT510 documents a separate `DECSC` buffer only for the main
+    /// display and the status line, so the alternate screen is this
+    /// terminal's own decision.
+    ///
+    /// Case: a shell saves its cursor, a full-screen editor takes over
+    /// the alternate screen and emits a restore of its own, and the
+    /// shell then restores after the editor exits.
+    #[test]
+    fn the_two_screens_carry_independent_checkpoints() {
+        let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
+        for c in ['a', 'b', 'c'] {
+            device.active_mut().print(c);
+        }
+        device.active_mut().save_checkpoint();
+
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+        device.active_mut().print('x');
+        device.active_mut().restore_checkpoint();
+        assert_eq!(device.active().cursor_column(), GridColumn(0));
+
+        device.set_active_screen_for_test(ScreenKind::Primary);
+        device.active_mut().carriage_return();
+        device.active_mut().restore_checkpoint();
+        assert_eq!(device.active().cursor_column(), GridColumn(3));
+    }
 }
