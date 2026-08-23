@@ -119,6 +119,10 @@ impl Screen {
     }
 
     /// Moves the cursor one column left and disarms the deferred wrap.
+    ///
+    /// # Control Functions
+    ///
+    /// - `BS` (`0x08`)
     pub fn backspace(&mut self) -> Option<Damage> {
         if self.state.column == GridColumn(0) && !self.state.pending_wrap {
             return None;
@@ -135,6 +139,11 @@ impl Screen {
     /// nothing, so the frame it would force repeats the last one. A
     /// rewind that does move the cursor reports [`Damage::Metadata`],
     /// because no cell changed either way.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CR` (`0x0D`)
+    /// - `NEL` (`0x85`, `ESC E`) — its first half
     pub fn carriage_return(&mut self) -> Option<Damage> {
         if self.state.column == GridColumn(0) && !self.state.pending_wrap {
             return None;
@@ -151,6 +160,17 @@ impl Screen {
     /// the departed nor the arrived row changes contents, and the caret
     /// reaches the renderer through the frame's cursor. Scrolling moves
     /// content and reports [`Damage::Full`].
+    ///
+    /// [`Self::print`] also calls this to complete a deferred wrap, so
+    /// the operation is not reached only from a control function.
+    ///
+    /// # Control Functions
+    ///
+    /// - `LF` (`0x0A`)
+    /// - `VT` (`0x0B`)
+    /// - `FF` (`0x0C`)
+    /// - `IND` (`0x84`, `ESC D`)
+    /// - `NEL` (`0x85`, `ESC E`) — after the carriage return
     pub fn line_feed(&mut self) -> Option<Damage> {
         if self.state.line < self.margins.bottom {
             self.state.line.0 += 1;
@@ -162,11 +182,15 @@ impl Screen {
     }
 
     /// Moves the cursor up one row, scrolling the region at its top
-    /// margin (RI).
+    /// margin.
     ///
     /// A cursor above a non-zero top margin and already on the first row
     /// moves nothing and scrolls nothing, which is why the disarmed wrap
     /// is the only thing left to report there.
+    ///
+    /// # Control Functions
+    ///
+    /// - `RI` (`0x8D`, `ESC M`)
     pub fn reverse_index(&mut self) -> Option<Damage> {
         let was_armed = self.state.pending_wrap;
         self.state.pending_wrap = false;
@@ -188,6 +212,10 @@ impl Screen {
     /// Erases part of the cursor row with the pen background (BCE);
     /// [`EraseLineMode::ToEnd`] is a no-op while the deferred wrap is
     /// armed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `EL` (`CSI Ps K`)
     pub fn erase_in_line(&mut self, mode: EraseLineMode) -> Option<Damage> {
         if matches!(mode, EraseLineMode::ToEnd) && self.state.pending_wrap {
             return None;
@@ -205,6 +233,10 @@ impl Screen {
 
     /// Erases part of the visible screen with the pen background
     /// (BCE), in place; scrollback history is never touched.
+    ///
+    /// # Control Functions
+    ///
+    /// - `ED` (`CSI Ps J`)
     pub fn erase_in_display(&mut self, mode: EraseScreenMode) -> Option<Damage> {
         let GridSize { cols, rows } = self.grid.size();
         let blank = self.state.pen.erase_cell();
@@ -240,31 +272,44 @@ impl Screen {
         }
     }
 
-    /// Moves the cursor forward `count` tabulation stops (CHT).
+    /// Moves the cursor forward `count` tabulation stops.
     ///
     /// The right edge is this screen's last column, so the same stop
     /// table lands the cursor differently on a narrow screen than on a
     /// wide one.
+    ///
+    /// # Control Functions
+    ///
+    /// - `HT` (`0x09`) — with a count of one
+    /// - `CHT` (`CSI Pn I`)
     pub fn move_forward_tabs(&mut self, count: u16) -> Option<Damage> {
         let right_edge = GridColumn(self.grid_size().cols - 1);
         let target = self.tabs.cht(self.state.column, count, right_edge);
         self.tab_to(target)
     }
 
-    /// Moves the cursor back `count` tabulation stops (CBT).
+    /// Moves the cursor back `count` tabulation stops.
     ///
     /// The left edge is column zero until DECSLRM and DECOM land, at
     /// which point the margin supplies it instead.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CBT` (`CSI Pn Z`)
     pub fn move_backward_tabs(&mut self, count: u16) -> Option<Damage> {
         let target = self.tabs.cbt(self.state.column, count, GridColumn(0));
         self.tab_to(target)
     }
 
-    /// Sets a tabulation stop at the cursor column (HTS).
+    /// Sets a tabulation stop at the cursor column.
     ///
     /// Routed through the same edit vocabulary `CTC 0` uses, because the
     /// two control functions request the identical edit. TABULATION STOP
     /// MODE scoping, when it lands, has to reach HTS as well.
+    ///
+    /// # Control Functions
+    ///
+    /// - `HTS` (`0x88`, `ESC H`)
     pub fn set_horizontal_tabstop(&mut self) {
         self.edit_tab_stop(CharacterTabEdit::SetColumn);
     }
@@ -275,6 +320,11 @@ impl Screen {
     /// caller decodes its own parameter space with
     /// [`CharacterTabEdit::from_tbc`] or
     /// [`CharacterTabEdit::from_ctc`] before calling this.
+    ///
+    /// # Control Functions
+    ///
+    /// - `TBC` (`CSI Ps g`)
+    /// - `CTC` (`CSI Ps W`)
     pub fn edit_tab_stop(&mut self, edit: CharacterTabEdit) {
         let column = self.state.column;
         match edit {
@@ -284,7 +334,12 @@ impl Screen {
         }
     }
 
-    /// Reinstalls the default tabulation stride (DECST8C).
+    /// Reinstalls the default tabulation stride.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECST8C` (`CSI ? 5 W`)
+    /// - `RIS` (`ESC c`)
     pub fn reset_tab_stops(&mut self) {
         self.tabs.reset();
     }

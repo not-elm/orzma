@@ -134,17 +134,33 @@ pub struct CharacterSetsState {
 }
 
 impl CharacterSetsState {
-    /// Designates `character_set` to `g_code` (`SCS`).
+    /// Designates `character_set` to `g_code`.
+    ///
+    /// # Control Functions
+    ///
+    /// - `SCS` (`ESC ( Dscs`, `ESC ) Dscs`, `ESC * Dscs`, `ESC + Dscs`)
     pub fn designate(&mut self, g_code: GCode, character_set: CharacterSet) {
         self.g_sets[g_code] = character_set;
     }
 
-    /// Invokes `g_code` into GL (`LS0` through `LS3`).
+    /// Invokes `g_code` into GL.
+    ///
+    /// # Control Functions
+    ///
+    /// - `LS0` (`SI`, `0x0F`)
+    /// - `LS1` (`SO`, `0x0E`)
+    /// - `LS2` (`ESC n`)
+    /// - `LS3` (`ESC o`)
     pub fn invoke(&mut self, g_code: GCode) {
         self.gl = g_code;
     }
 
-    /// Invokes `single_shift` into GL for the next graphic character (`SS2`, `SS3`).
+    /// Invokes `single_shift` into GL for the next graphic character.
+    ///
+    /// # Control Functions
+    ///
+    /// - `SS2` (`0x8E`, `ESC N`)
+    /// - `SS3` (`0x8F`, `ESC O`)
     pub fn single_shift(&mut self, single_shift: SingleShift) {
         self.pending_single_shift = Some(single_shift);
     }
@@ -161,7 +177,12 @@ impl CharacterSetsState {
     }
 
     /// Restores the power-up designations and invocations, dropping any
-    /// pending single shift (`DECSTR`, `RIS`).
+    /// pending single shift.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECSTR` (`CSI ! p`)
+    /// - `RIS` (`ESC c`)
     pub fn reset(&mut self) {
         *self = Self::default();
     }
