@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(store.project(device.active_screen())[0].viewport_row, 0);
 
         for _ in 0..3 {
-            device.active_mut().lf();
+            device.active_mut().line_feed();
         }
         let projected = store.project(device.active_screen());
         assert_eq!(projected.len(), 1);
@@ -392,7 +392,7 @@ mod tests {
         let mut store = PlacementStore::new();
         let id = mount(&mut store, &device, "memo").expect("mount accepted");
         for _ in 0..4 {
-            device.active_mut().lf();
+            device.active_mut().line_feed();
         }
         assert!(store.project(device.active_screen()).is_empty());
         assert_eq!(store.evict_lost_anchors(device.active_screen()), vec![id]);
@@ -443,7 +443,7 @@ mod tests {
         let id = mount(&mut store, &device, "memo").expect("mount accepted");
         assert_eq!(store.project(device.active_screen())[0].viewport_row, 0);
 
-        device.active_mut().ri();
+        device.active_mut().reverse_index();
 
         let projected = store.project(device.active_screen());
         assert_eq!(projected.len(), 1);
@@ -466,14 +466,14 @@ mod tests {
     fn a_placement_on_the_discarded_row_stops_projecting_and_is_swept() {
         let mut device = device();
         let mut store = PlacementStore::new();
-        device.active_mut().lf();
-        device.active_mut().lf();
+        device.active_mut().line_feed();
+        device.active_mut().line_feed();
         let id = mount(&mut store, &device, "memo").expect("mount accepted");
         assert_eq!(store.project(device.active_screen())[0].viewport_row, 2);
 
-        device.active_mut().ri();
-        device.active_mut().ri();
-        device.active_mut().ri();
+        device.active_mut().reverse_index();
+        device.active_mut().reverse_index();
+        device.active_mut().reverse_index();
 
         assert!(store.project(device.active_screen()).is_empty());
         assert_eq!(store.evict_lost_anchors(device.active_screen()), vec![id]);
@@ -492,9 +492,9 @@ mod tests {
         let mut store = PlacementStore::new();
         let id = mount(&mut store, &device, "memo").expect("mount accepted");
 
-        device.active_mut().ri();
+        device.active_mut().reverse_index();
         for _ in 0..3 {
-            device.active_mut().lf();
+            device.active_mut().line_feed();
         }
 
         let projected = store.project(device.active_screen());

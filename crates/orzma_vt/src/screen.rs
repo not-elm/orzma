@@ -92,7 +92,7 @@ impl Screen {
     ///
     /// The reported damage always covers the row the character landed
     /// on: a wrap that scrolled reports [`Damage::Full`], and every
-    /// other print reports its own row. [`Self::lf`] reports the wrap's
+    /// other print reports its own row. [`Self::line_feed`] reports the wrap's
     /// cursor motion alone, so passing that value through would leave
     /// the character just written unpainted.
     pub fn print(&mut self, c: char) -> Option<Damage> {
@@ -102,7 +102,7 @@ impl Screen {
         let wrap = if self.state.pending_wrap {
             self.state.pending_wrap = false;
             self.state.column = GridColumn(0);
-            self.lf()
+            self.line_feed()
         } else {
             None
         };
@@ -119,7 +119,7 @@ impl Screen {
     }
 
     /// Moves the cursor one column left and disarms the deferred wrap.
-    pub fn bs(&mut self) -> Option<Damage> {
+    pub fn backspace(&mut self) -> Option<Damage> {
         if self.state.column == GridColumn(0) && !self.state.pending_wrap {
             return None;
         }
@@ -135,7 +135,7 @@ impl Screen {
     /// nothing, so the frame it would force repeats the last one. A
     /// rewind that does move the cursor reports [`Damage::Metadata`],
     /// because no cell changed either way.
-    pub fn cr(&mut self) -> Option<Damage> {
+    pub fn carriage_return(&mut self) -> Option<Damage> {
         if self.state.column == GridColumn(0) && !self.state.pending_wrap {
             return None;
         }
@@ -151,7 +151,7 @@ impl Screen {
     /// the departed nor the arrived row changes contents, and the caret
     /// reaches the renderer through the frame's cursor. Scrolling moves
     /// content and reports [`Damage::Full`].
-    pub fn lf(&mut self) -> Option<Damage> {
+    pub fn line_feed(&mut self) -> Option<Damage> {
         if self.state.line < self.margins.bottom {
             self.state.line.0 += 1;
             return Some(Damage::Metadata);
@@ -167,7 +167,7 @@ impl Screen {
     /// A cursor above a non-zero top margin and already on the first row
     /// moves nothing and scrolls nothing, which is why the disarmed wrap
     /// is the only thing left to report there.
-    pub fn ri(&mut self) -> Option<Damage> {
+    pub fn reverse_index(&mut self) -> Option<Damage> {
         let was_armed = self.state.pending_wrap;
         self.state.pending_wrap = false;
         if self.state.line == self.margins.top {
@@ -240,17 +240,12 @@ impl Screen {
         }
     }
 
-    /// Moves the cursor to the first stop past it (HT).
-    pub fn ht(&mut self) -> Option<Damage> {
-        self.cht(1)
-    }
-
     /// Moves the cursor forward `count` tabulation stops (CHT).
     ///
     /// The right edge is this screen's last column, so the same stop
     /// table lands the cursor differently on a narrow screen than on a
     /// wide one.
-    pub fn cht(&mut self, count: u16) -> Option<Damage> {
+    pub fn move_forward_tabs(&mut self, count: u16) -> Option<Damage> {
         let right_edge = GridColumn(self.grid_size().cols - 1);
         let target = self.tabs.cht(self.state.column, count, right_edge);
         self.tab_to(target)
@@ -260,7 +255,7 @@ impl Screen {
     ///
     /// The left edge is column zero until DECSLRM and DECOM land, at
     /// which point the margin supplies it instead.
-    pub fn cbt(&mut self, count: u16) -> Option<Damage> {
+    pub fn move_backward_tabs(&mut self, count: u16) -> Option<Damage> {
         let target = self.tabs.cbt(self.state.column, count, GridColumn(0));
         self.tab_to(target)
     }
@@ -270,7 +265,7 @@ impl Screen {
     /// Routed through the same edit vocabulary `CTC 0` uses, because the
     /// two control functions request the identical edit. TABULATION STOP
     /// MODE scoping, when it lands, has to reach HTS as well.
-    pub fn hts(&mut self) {
+    pub fn set_horizontal_tabstop(&mut self) {
         self.edit_tab_stop(CharacterTabEdit::SetColumn);
     }
 
@@ -290,7 +285,7 @@ impl Screen {
     }
 
     /// Reinstalls the default tabulation stride (DECST8C).
-    pub fn decst8c(&mut self) {
+    pub fn reset_tab_stops(&mut self) {
         self.tabs.reset();
     }
 
@@ -433,7 +428,7 @@ impl Screen {
     /// # Invariants
     ///
     /// The deferred wrap is deliberately left as it is, unlike
-    /// [`Screen::cr`]. Disarming it would make a tab after a full row
+    /// [`Screen::carriage_return`]. Disarming it would make a tab after a full row
     /// seat the cursor back onto the row the application had already
     /// filled.
     fn tab_to(&mut self, column: GridColumn) -> Option<Damage> {
@@ -547,7 +542,7 @@ mod tests {
         fn a_scrolled_screen_reports_damage_in_viewport_rows() {
             let mut screen = screen();
             screen.state.line = ScreenLine(2);
-            screen.lf();
+            screen.line_feed();
             screen.set_display_offset(DisplayOffset(1));
             screen.state.line = ScreenLine(0);
             assert_eq!(
@@ -587,7 +582,7 @@ mod tests {
             let mut screen = screen();
             for _ in 0..3 {
                 screen.state.line = ScreenLine(2);
-                screen.lf();
+                screen.line_feed();
             }
             screen.viewport.offset = DisplayOffset(3);
             screen.state.line = ScreenLine(0);
@@ -595,7 +590,7 @@ mod tests {
         }
     }
 
-    mod bs {
+    mod backspace {
         use super::*;
 
         /// Asserts that a backspace steps the cursor one column left and
@@ -607,7 +602,7 @@ mod tests {
         fn backspace_moves_the_cursor_one_column_left() {
             let mut screen = screen();
             screen.state.column = GridColumn(2);
-            let damage = screen.bs();
+            let damage = screen.backspace();
             assert_eq!(screen.state.column, GridColumn(1));
             assert_eq!(damage, Some(Damage::Metadata));
         }
@@ -625,7 +620,7 @@ mod tests {
         #[test]
         fn a_backspace_at_column_zero_does_not_move() {
             let mut screen = screen();
-            assert_eq!(screen.bs(), None);
+            assert_eq!(screen.backspace(), None);
             assert_eq!(screen.state.column, GridColumn(0));
         }
 
@@ -646,7 +641,7 @@ mod tests {
                 screen.print(c);
             }
             assert!(screen.state.pending_wrap);
-            screen.bs();
+            screen.backspace();
             assert_eq!(screen.state.column, GridColumn(2));
             assert!(!screen.state.pending_wrap);
         }
@@ -662,14 +657,14 @@ mod tests {
             let mut screen = Screen::new(GridSize { cols: 1, rows: 3 }, 10);
             screen.print('x');
             assert!(screen.state.pending_wrap);
-            let damage = screen.bs();
+            let damage = screen.backspace();
             assert_eq!(screen.state.column, GridColumn(0));
             assert!(!screen.state.pending_wrap);
             assert_eq!(damage, Some(Damage::Metadata));
         }
     }
 
-    mod cr {
+    mod carriage_return {
         use super::*;
 
         /// Asserts that a carriage return rewinds the column, clears the
@@ -687,7 +682,7 @@ mod tests {
             let mut screen = screen();
             screen.state.column = GridColumn(2);
             screen.state.pending_wrap = true;
-            let damage = screen.cr();
+            let damage = screen.carriage_return();
             assert_eq!(screen.state.column, GridColumn(0));
             assert!(!screen.state.pending_wrap);
             assert_eq!(damage, Some(Damage::Metadata));
@@ -707,7 +702,7 @@ mod tests {
         #[test]
         fn a_carriage_return_with_nothing_to_rewind_reports_no_damage() {
             let mut screen = screen();
-            assert_eq!(screen.cr(), None);
+            assert_eq!(screen.carriage_return(), None);
         }
 
         /// Asserts that a carriage return at column zero still reports
@@ -722,7 +717,7 @@ mod tests {
             screen.print('x');
             assert_eq!(screen.state.column, GridColumn(0));
             assert!(screen.state.pending_wrap);
-            let damage = screen.cr();
+            let damage = screen.carriage_return();
             assert!(!screen.state.pending_wrap);
             assert_eq!(damage, Some(Damage::Metadata));
         }
@@ -770,7 +765,7 @@ mod tests {
         /// Asserts that seating the cursor leaves an armed deferred
         /// wrap alone.
         ///
-        /// The agreed policy preserves the flag, unlike [`Screen::cr`].
+        /// The agreed policy preserves the flag, unlike [`Screen::carriage_return`].
         /// Disarming it would seat the cursor back onto the row the
         /// application had already filled, which is the behaviour both
         /// VTE and Windows Terminal found real DEC hardware never had.
@@ -795,7 +790,7 @@ mod tests {
         Screen::new(GridSize { cols: 20, rows: 3 }, 10)
     }
 
-    mod ht {
+    mod move_forward_tabs {
         use super::*;
 
         /// Asserts that a tab seats the cursor on the next stop.
@@ -805,7 +800,7 @@ mod tests {
         #[test]
         fn ht_moves_to_the_next_stop() {
             let mut screen = wide_screen();
-            screen.ht();
+            screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(8));
         }
 
@@ -824,7 +819,7 @@ mod tests {
         fn ht_at_the_last_stop_clamps_to_the_screens_own_right_edge() {
             let mut screen = wide_screen();
             screen.state.column = GridColumn(16);
-            screen.ht();
+            screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(19));
         }
 
@@ -836,7 +831,7 @@ mod tests {
         #[test]
         fn ht_on_a_narrow_screen_clamps_without_reaching_any_stop() {
             let mut screen = screen();
-            screen.ht();
+            screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(3));
         }
 
@@ -853,12 +848,8 @@ mod tests {
         fn an_ht_that_does_not_move_reports_no_damage() {
             let mut screen = wide_screen();
             screen.state.column = GridColumn(19);
-            assert_eq!(screen.ht(), None);
+            assert_eq!(screen.move_forward_tabs(1), None);
         }
-    }
-
-    mod cht {
-        use super::*;
 
         /// Asserts that a counted forward tab skips the stops in
         /// between.
@@ -868,12 +859,12 @@ mod tests {
         #[test]
         fn cht_counts_multiple_stops() {
             let mut screen = wide_screen();
-            screen.cht(2);
+            screen.move_forward_tabs(2);
             assert_eq!(screen.state.column, GridColumn(16));
         }
     }
 
-    mod cbt {
+    mod move_backward_tabs {
         use super::*;
 
         /// Asserts that a backward tab seats the cursor on the previous
@@ -885,7 +876,7 @@ mod tests {
         fn cbt_moves_back_to_the_previous_stop() {
             let mut screen = wide_screen();
             screen.state.column = GridColumn(17);
-            screen.cbt(1);
+            screen.move_backward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(16));
         }
 
@@ -901,7 +892,7 @@ mod tests {
         fn cbt_before_the_first_stop_clamps_to_column_zero() {
             let mut screen = wide_screen();
             screen.state.column = GridColumn(5);
-            screen.cbt(1);
+            screen.move_backward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(0));
         }
     }
@@ -918,9 +909,9 @@ mod tests {
         fn hts_adds_a_stop_the_next_ht_finds() {
             let mut screen = wide_screen();
             screen.state.column = GridColumn(3);
-            screen.hts();
+            screen.set_horizontal_tabstop();
             screen.state.column = GridColumn(0);
-            screen.ht();
+            screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(3));
         }
 
@@ -936,7 +927,7 @@ mod tests {
         fn hts_does_not_move_the_cursor() {
             let mut screen = wide_screen();
             screen.state.column = GridColumn(3);
-            screen.hts();
+            screen.set_horizontal_tabstop();
             assert_eq!(screen.state.column, GridColumn(3));
         }
 
@@ -952,7 +943,7 @@ mod tests {
         fn hts_and_ctc_zero_install_the_same_stop() {
             let mut by_hts = wide_screen();
             by_hts.state.column = GridColumn(3);
-            by_hts.hts();
+            by_hts.set_horizontal_tabstop();
 
             let mut by_ctc = wide_screen();
             by_ctc.state.column = GridColumn(3);
@@ -960,7 +951,7 @@ mod tests {
 
             for screen in [&mut by_hts, &mut by_ctc] {
                 screen.state.column = GridColumn(0);
-                screen.ht();
+                screen.move_forward_tabs(1);
             }
             assert_eq!(by_hts.state.column, GridColumn(3));
             assert_eq!(by_ctc.state.column, by_hts.state.column);
@@ -977,7 +968,7 @@ mod tests {
             screen.state.column = GridColumn(8);
             screen.edit_tab_stop(CharacterTabEdit::from_tbc(0).unwrap());
             screen.state.column = GridColumn(0);
-            screen.ht();
+            screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(16));
         }
 
@@ -990,7 +981,7 @@ mod tests {
         fn tbc_three_clears_every_stop() {
             let mut screen = wide_screen();
             screen.edit_tab_stop(CharacterTabEdit::from_tbc(3).unwrap());
-            screen.ht();
+            screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(19));
         }
 
@@ -1004,12 +995,12 @@ mod tests {
             screen.state.column = GridColumn(3);
             screen.edit_tab_stop(CharacterTabEdit::from_ctc(0).unwrap());
             screen.state.column = GridColumn(0);
-            screen.ht();
+            screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(3));
 
             screen.edit_tab_stop(CharacterTabEdit::from_ctc(2).unwrap());
             screen.state.column = GridColumn(0);
-            screen.ht();
+            screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(8));
         }
 
@@ -1022,13 +1013,13 @@ mod tests {
         fn decst8c_reinstalls_the_stride_after_a_full_clear() {
             let mut screen = wide_screen();
             screen.edit_tab_stop(CharacterTabEdit::from_tbc(3).unwrap());
-            screen.decst8c();
-            screen.ht();
+            screen.reset_tab_stops();
+            screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(8));
         }
     }
 
-    mod lf {
+    mod line_feed {
         use super::*;
 
         /// Asserts that a linefeed above the bottom row only moves the
@@ -1043,7 +1034,7 @@ mod tests {
         #[test]
         fn a_linefeed_above_the_bottom_moves_the_cursor() {
             let mut screen = screen();
-            let damage = screen.lf();
+            let damage = screen.line_feed();
             assert_eq!(screen.state.line, ScreenLine(1));
             assert_eq!(damage, Some(Damage::Metadata));
         }
@@ -1058,7 +1049,7 @@ mod tests {
             let mut screen = screen();
             screen.grid[ScreenLine(0)][GridColumn(0)].c = 'a';
             screen.state.line = ScreenLine(2);
-            assert_eq!(screen.lf(), Some(Damage::Full));
+            assert_eq!(screen.line_feed(), Some(Damage::Full));
             assert_eq!(screen.grid.history_len(), 1);
         }
 
@@ -1072,7 +1063,7 @@ mod tests {
             let mut screen = screen();
             screen.pen_mut().bg = Color::Indexed(4);
             screen.state.line = ScreenLine(2);
-            screen.lf();
+            screen.line_feed();
             assert_eq!(screen.grid[ScreenLine(2)][0].bg, Color::Indexed(4));
             assert_eq!(screen.grid[ScreenLine(2)][3].bg, Color::Indexed(4));
         }
@@ -1089,12 +1080,12 @@ mod tests {
         fn a_linefeed_preserves_pending_wrap() {
             let mut screen = screen();
             screen.state.pending_wrap = true;
-            screen.lf();
+            screen.line_feed();
             assert!(screen.state.pending_wrap);
         }
     }
 
-    mod ri {
+    mod reverse_index {
         use super::*;
 
         /// Asserts that a reverse index below the top margin moves the
@@ -1106,7 +1097,7 @@ mod tests {
         fn a_reverse_index_below_the_top_moves_the_cursor_up() {
             let mut screen = screen();
             screen.state.line = ScreenLine(2);
-            let damage = screen.ri();
+            let damage = screen.reverse_index();
             assert_eq!(screen.state.line, ScreenLine(1));
             assert_eq!(damage, Some(Damage::Metadata));
         }
@@ -1125,7 +1116,7 @@ mod tests {
         fn a_reverse_index_at_the_top_margin_scrolls_the_screen_down() {
             let mut screen = screen();
             screen.grid[ScreenLine(0)][0].c = 'a';
-            let damage = screen.ri();
+            let damage = screen.reverse_index();
             assert_eq!(screen.state.line, ScreenLine(0));
             assert_eq!(screen.grid[ScreenLine(1)][0].c, 'a');
             assert_eq!(damage, Some(Damage::Full));
@@ -1138,7 +1129,7 @@ mod tests {
         /// reaches its cursor-up helper on both paths and resets the flag
         /// there. It is a deliberate divergence from ghostty, kitty, and
         /// wezterm, which clear it only when the cursor moves, and from
-        /// alacritty, which clears it on neither — and `Screen::lf`
+        /// alacritty, which clears it on neither — and `Screen::line_feed`
         /// preserves the flag, so the split is not accidental.
         ///
         /// Case: a program fills the last column of a row and then emits a
@@ -1149,12 +1140,12 @@ mod tests {
             let mut moved = screen();
             moved.state.line = ScreenLine(1);
             moved.state.pending_wrap = true;
-            moved.ri();
+            moved.reverse_index();
             assert!(!moved.state.pending_wrap);
 
             let mut scrolled = screen();
             scrolled.state.pending_wrap = true;
-            scrolled.ri();
+            scrolled.reverse_index();
             assert!(!scrolled.state.pending_wrap);
         }
 
@@ -1168,7 +1159,7 @@ mod tests {
         fn the_exposed_row_carries_the_pen_background() {
             let mut screen = screen();
             screen.pen_mut().bg = Color::Indexed(4);
-            screen.ri();
+            screen.reverse_index();
             assert_eq!(screen.grid[ScreenLine(0)][0].bg, Color::Indexed(4));
         }
 
@@ -1176,7 +1167,7 @@ mod tests {
         /// showing what it was showing.
         ///
         /// The agreed policy leaves the display offset alone rather than
-        /// adjusting it the way `Screen::lf` does. A forward scroll grows
+        /// adjusting it the way `Screen::line_feed` does. A forward scroll grows
         /// history, so holding the view still requires moving the offset;
         /// a reverse scroll leaves history untouched, so moving the offset
         /// would push the viewport onto different history instead.
@@ -1190,12 +1181,12 @@ mod tests {
                 screen.grid[ScreenLine(line)][0].c = glyph;
             }
             screen.state.line = ScreenLine(2);
-            screen.lf();
-            screen.lf();
+            screen.line_feed();
+            screen.line_feed();
             screen.set_display_offset(DisplayOffset(1));
             let showing = screen.viewport_row(ViewportLine(0))[0].c;
             screen.state.line = ScreenLine(0);
-            screen.ri();
+            screen.reverse_index();
             assert_eq!(screen.display_offset(), DisplayOffset(1));
             assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, showing);
         }
@@ -1215,7 +1206,7 @@ mod tests {
             let mut screen = screen();
             screen.margins.top = ScreenLine(1);
             screen.grid[ScreenLine(0)][0].c = 'a';
-            let damage = screen.ri();
+            let damage = screen.reverse_index();
             assert_eq!(screen.state.line, ScreenLine(0));
             assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
             assert_eq!(damage, None);
@@ -1237,7 +1228,7 @@ mod tests {
             let mut screen = screen();
             screen.margins.top = ScreenLine(2);
             screen.state.line = ScreenLine(1);
-            let damage = screen.ri();
+            let damage = screen.reverse_index();
             assert_eq!(screen.state.line, ScreenLine(0));
             assert_eq!(damage, Some(Damage::Metadata));
         }
@@ -1256,7 +1247,7 @@ mod tests {
             }
             screen.state.line = ScreenLine(1);
             let blank = screen.state.pen.erase_cell().c;
-            let damage = screen.ri();
+            let damage = screen.reverse_index();
             assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
             assert_eq!(screen.grid[ScreenLine(1)][0].c, blank);
             assert_eq!(screen.grid[ScreenLine(2)][0].c, 'b');
@@ -1359,8 +1350,8 @@ mod tests {
         fn erase_display_below_clears_from_the_cursor_down() {
             let mut screen = screen();
             screen.print('a');
-            screen.lf();
-            screen.cr();
+            screen.line_feed();
+            screen.carriage_return();
             for c in ['b', 'c'] {
                 screen.print(c);
             }
@@ -1381,8 +1372,8 @@ mod tests {
         fn erase_display_above_clears_through_the_cursor() {
             let mut screen = screen();
             screen.print('a');
-            screen.lf();
-            screen.cr();
+            screen.line_feed();
+            screen.carriage_return();
             for c in ['b', 'c', 'd'] {
                 screen.print(c);
             }
@@ -1410,8 +1401,8 @@ mod tests {
         fn erase_display_all_clears_the_screen_but_not_history() {
             let mut screen = screen();
             screen.state.line = ScreenLine(2);
-            screen.lf();
-            screen.cr();
+            screen.line_feed();
+            screen.carriage_return();
             for c in ['a', 'b'] {
                 screen.print(c);
             }
@@ -1431,7 +1422,7 @@ mod tests {
         fn a_span_running_past_the_viewport_is_clamped_to_its_last_row() {
             let mut screen = screen();
             screen.state.line = ScreenLine(2);
-            screen.lf();
+            screen.line_feed();
             screen.set_display_offset(DisplayOffset(1));
             screen.state.line = ScreenLine(0);
             assert_eq!(
@@ -1493,7 +1484,7 @@ mod tests {
             let mut screen = screen();
             screen.grid[ScreenLine(0)][0].c = 'a';
             screen.state.line = ScreenLine(2);
-            screen.lf();
+            screen.line_feed();
             assert_eq!(screen.grid.history_len(), 1);
             screen.viewport.offset = DisplayOffset(1);
             assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
@@ -1519,12 +1510,12 @@ mod tests {
             let mut screen = screen();
             screen.grid[ScreenLine(0)][0].c = 'a';
             screen.state.line = ScreenLine(2);
-            screen.lf();
+            screen.line_feed();
             screen.viewport.offset = DisplayOffset(1);
             assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
 
             screen.state.line = ScreenLine(2);
-            screen.lf();
+            screen.line_feed();
             assert_eq!(screen.display_offset(), DisplayOffset(2));
             assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
         }
@@ -1538,7 +1529,7 @@ mod tests {
         fn output_at_the_live_tail_keeps_the_viewport_pinned() {
             let mut screen = screen();
             screen.state.line = ScreenLine(2);
-            screen.lf();
+            screen.line_feed();
             assert_eq!(screen.display_offset(), DisplayOffset(0));
         }
 
@@ -1555,10 +1546,10 @@ mod tests {
         fn a_scroll_at_history_capacity_clamps_the_offset() {
             let mut screen = Screen::new(GridSize { cols: 4, rows: 3 }, 1);
             screen.state.line = ScreenLine(2);
-            screen.lf();
+            screen.line_feed();
             screen.viewport.offset = DisplayOffset(1);
             screen.state.line = ScreenLine(2);
-            screen.lf();
+            screen.line_feed();
             assert_eq!(screen.grid.history_len(), 1);
             assert_eq!(screen.display_offset(), DisplayOffset(1));
         }
@@ -1578,7 +1569,7 @@ mod tests {
             let id = screen.cursor_line_id();
             assert_eq!(screen.viewport_row_of(id), Some(0));
             screen.state.line = ScreenLine(2);
-            screen.lf();
+            screen.line_feed();
             assert_eq!(screen.viewport_row_of(id), Some(-1));
         }
 
@@ -1592,7 +1583,7 @@ mod tests {
             let mut screen = screen();
             let id = screen.cursor_line_id();
             screen.state.line = ScreenLine(2);
-            screen.lf();
+            screen.line_feed();
             screen.set_display_offset(DisplayOffset(1));
             assert_eq!(screen.viewport_row_of(id), Some(0));
         }
@@ -1607,7 +1598,7 @@ mod tests {
             let id = screen.cursor_line_id();
             for _ in 0..2 {
                 screen.state.line = ScreenLine(2);
-                screen.lf();
+                screen.line_feed();
             }
             assert_eq!(screen.viewport_row_of(id), None);
         }

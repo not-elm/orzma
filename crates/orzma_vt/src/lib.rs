@@ -266,7 +266,7 @@ mod tests {
         let damage = vt.device.active_mut().print('x');
         vt.damage.stage_if_changed(damage);
         for _ in 0..3 {
-            vt.device.active_mut().lf();
+            vt.device.active_mut().line_feed();
         }
         vt.device.active_mut().set_display_offset(DisplayOffset(1));
         let Some(Frame::Delta(delta)) = vt.frame() else {

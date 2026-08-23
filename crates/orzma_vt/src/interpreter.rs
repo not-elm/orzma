@@ -90,20 +90,20 @@ impl VTActor for Executor<'_> {
                 let _ = self.signal_tx.send(VtSignal::Bell);
             }
             0x08 => {
-                let damage = self.device.active_mut().bs();
+                let damage = self.device.active_mut().backspace();
                 self.damage.stage_if_changed(damage);
             }
             0x09 => {
-                let damage = self.device.active_mut().ht();
+                let damage = self.device.active_mut().move_forward_tabs(1);
                 self.damage.stage_if_changed(damage);
             }
             0x0A | 0x0B | 0x0C | 0x84 => self.index(),
             0x0D => {
-                let damage = self.device.active_mut().cr();
+                let damage = self.device.active_mut().carriage_return();
                 self.damage.stage_if_changed(damage);
             }
             0x85 => self.next_line(),
-            0x88 => self.device.active_mut().hts(),
+            0x88 => self.device.active_mut().set_horizontal_tabstop(),
             0x8D => self.reverse_index(),
             _ => {}
         }
@@ -137,7 +137,7 @@ impl VTActor for Executor<'_> {
         match (byte, intermediates) {
             (b'D', []) => self.index(),
             (b'E', []) => self.next_line(),
-            (b'H', []) => self.device.active_mut().hts(),
+            (b'H', []) => self.device.active_mut().set_horizontal_tabstop(),
             (b'M', []) => self.reverse_index(),
             _ => {}
         }
@@ -162,19 +162,21 @@ impl Executor<'_> {
     /// Moves the cursor down a row, scrolling at the bottom margin (IND,
     /// and the LF family that shares its effect).
     fn index(&mut self) {
-        let damage = self.device.active_mut().lf();
+        let damage = self.device.active_mut().line_feed();
         self.damage.stage_if_changed(damage);
     }
 
     /// Returns the carriage and moves the cursor down a row (NEL).
     fn next_line(&mut self) {
-        self.damage.stage_if_changed(self.device.active_mut().cr());
-        self.damage.stage_if_changed(self.device.active_mut().lf());
+        self.damage
+            .stage_if_changed(self.device.active_mut().carriage_return());
+        self.damage
+            .stage_if_changed(self.device.active_mut().line_feed());
     }
 
     /// Moves the cursor up a row, scrolling at the top margin (RI).
     fn reverse_index(&mut self) {
-        let damage = self.device.active_mut().ri();
+        let damage = self.device.active_mut().reverse_index();
         self.damage.stage_if_changed(damage);
     }
 }

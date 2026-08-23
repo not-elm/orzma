@@ -197,15 +197,15 @@ mod tests {
         for c in ['a', 'b', 'c'] {
             device.active_mut().print(c);
         }
-        device.active_mut().hts();
+        device.active_mut().set_horizontal_tabstop();
 
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device.active_mut().ht();
+        device.active_mut().move_forward_tabs(1);
         assert_eq!(device.active().cursor_column(), GridColumn(8));
 
         device.set_active_screen_for_test(ScreenKind::Primary);
-        device.active_mut().cr();
-        device.active_mut().ht();
+        device.active_mut().carriage_return();
+        device.active_mut().move_forward_tabs(1);
         assert_eq!(device.active().cursor_column(), GridColumn(3));
     }
 }

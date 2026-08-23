@@ -286,8 +286,8 @@ mod tests {
         fn a_delta_repaints_only_the_damaged_rows() {
             let mut device = device();
             device.active_mut().print('a');
-            device.active_mut().cr();
-            device.active_mut().lf();
+            device.active_mut().carriage_return();
+            device.active_mut().line_feed();
             device.active_mut().print('b');
             let delta = delta(&device, &[1]);
             assert_eq!(delta.dirty_rows.len(), 1);
@@ -333,8 +333,8 @@ mod tests {
         #[test]
         fn the_bottom_viewport_row_is_repaintable() {
             let mut device = device();
-            device.active_mut().lf();
-            device.active_mut().lf();
+            device.active_mut().line_feed();
+            device.active_mut().line_feed();
             device.active_mut().print('z');
             let delta = delta(&device, &[2]);
             assert_eq!(delta.dirty_rows[0].line, ViewportLine(2));
