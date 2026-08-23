@@ -103,7 +103,7 @@ impl VTActor for Executor<'_> {
                 self.damage.stage_if_changed(damage);
             }
             0x85 => self.next_line(),
-            0x88 => self.device.active_mut().set_horizontal_tabstop(),
+            0x88 => self.device.active_mut().set_horizontal_tab_stop(),
             0x8D => self.reverse_index(),
             _ => {}
         }
@@ -137,7 +137,7 @@ impl VTActor for Executor<'_> {
         match (byte, intermediates) {
             (b'D', []) => self.index(),
             (b'E', []) => self.next_line(),
-            (b'H', []) => self.device.active_mut().set_horizontal_tabstop(),
+            (b'H', []) => self.device.active_mut().set_horizontal_tab_stop(),
             (b'M', []) => self.reverse_index(),
             _ => {}
         }

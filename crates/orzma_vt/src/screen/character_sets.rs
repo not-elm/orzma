@@ -89,9 +89,9 @@ pub enum GCode {
 /// G1 are excluded by construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SingleShift {
-    /// `SS2` (`ESC N`, or `0x8E` in its 8-bit form) invokes G2.
+    /// `SS2` (`0x8E`, `ESC N`) invokes G2.
     G2,
-    /// `SS3` (`ESC O`, or `0x8F` in its 8-bit form) invokes G3.
+    /// `SS3` (`0x8F`, `ESC O`) invokes G3.
     G3,
 }
 

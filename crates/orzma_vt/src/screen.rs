@@ -92,9 +92,9 @@ impl Screen {
     ///
     /// The reported damage always covers the row the character landed
     /// on: a wrap that scrolled reports [`Damage::Full`], and every
-    /// other print reports its own row. [`Self::line_feed`] reports the wrap's
-    /// cursor motion alone, so passing that value through would leave
-    /// the character just written unpainted.
+    /// other print reports its own row. [`Self::line_feed`] reports the
+    /// wrap's cursor motion alone, so passing that value through would
+    /// leave the character just written unpainted.
     pub fn print(&mut self, c: char) -> Option<Damage> {
         //TODO: CharSetsを参照し描画文字をマッピングする。
         // SS2/SS3がペンディングされているケースも考慮する必要がある。
@@ -310,7 +310,7 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `HTS` (`0x88`, `ESC H`)
-    pub fn set_horizontal_tabstop(&mut self) {
+    pub fn set_horizontal_tab_stop(&mut self) {
         self.edit_tab_stop(CharacterTabEdit::SetColumn);
     }
 
@@ -483,9 +483,9 @@ impl Screen {
     /// # Invariants
     ///
     /// The deferred wrap is deliberately left as it is, unlike
-    /// [`Screen::carriage_return`]. Disarming it would make a tab after a full row
-    /// seat the cursor back onto the row the application had already
-    /// filled.
+    /// [`Screen::carriage_return`]. Disarming it would make a tab after
+    /// a full row seat the cursor back onto the row the application had
+    /// already filled.
     fn tab_to(&mut self, column: GridColumn) -> Option<Damage> {
         if self.state.column == column {
             return None;
@@ -820,10 +820,11 @@ mod tests {
         /// Asserts that seating the cursor leaves an armed deferred
         /// wrap alone.
         ///
-        /// The agreed policy preserves the flag, unlike [`Screen::carriage_return`].
-        /// Disarming it would seat the cursor back onto the row the
-        /// application had already filled, which is the behaviour both
-        /// VTE and Windows Terminal found real DEC hardware never had.
+        /// The agreed policy preserves the flag, unlike
+        /// [`Screen::carriage_return`]. Disarming it would seat the
+        /// cursor back onto the row the application had already filled,
+        /// which is the behaviour both VTE and Windows Terminal found
+        /// real DEC hardware never had.
         ///
         /// Case: an application fills a row to its last cell and then
         /// emits a tab instead of more text.
@@ -964,7 +965,7 @@ mod tests {
         fn hts_adds_a_stop_the_next_ht_finds() {
             let mut screen = wide_screen();
             screen.state.column = GridColumn(3);
-            screen.set_horizontal_tabstop();
+            screen.set_horizontal_tab_stop();
             screen.state.column = GridColumn(0);
             screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(3));
@@ -974,7 +975,8 @@ mod tests {
         ///
         /// HTS edits the stop table and nothing else; the neighbouring
         /// name HT is the one that moves. Nothing on screen changes
-        /// either, which is why `hts` reports no damage to stage.
+        /// either, which is why `set_horizontal_tab_stop` reports no
+        /// damage to stage.
         ///
         /// Case: an application installs a tab position at the column it
         /// is already writing at, then keeps printing on the same line.
@@ -982,7 +984,7 @@ mod tests {
         fn hts_does_not_move_the_cursor() {
             let mut screen = wide_screen();
             screen.state.column = GridColumn(3);
-            screen.set_horizontal_tabstop();
+            screen.set_horizontal_tab_stop();
             assert_eq!(screen.state.column, GridColumn(3));
         }
 
@@ -998,7 +1000,7 @@ mod tests {
         fn hts_and_ctc_zero_install_the_same_stop() {
             let mut by_hts = wide_screen();
             by_hts.state.column = GridColumn(3);
-            by_hts.set_horizontal_tabstop();
+            by_hts.set_horizontal_tab_stop();
 
             let mut by_ctc = wide_screen();
             by_ctc.state.column = GridColumn(3);
@@ -1181,11 +1183,12 @@ mod tests {
         /// the moving and the scrolling path.
         ///
         /// The agreed policy follows xterm and VTE, whose reverse index
-        /// reaches its cursor-up helper on both paths and resets the flag
-        /// there. It is a deliberate divergence from ghostty, kitty, and
-        /// wezterm, which clear it only when the cursor moves, and from
-        /// alacritty, which clears it on neither — and `Screen::line_feed`
-        /// preserves the flag, so the split is not accidental.
+        /// reaches its cursor-up helper on both paths and resets the
+        /// flag there. It is a deliberate divergence from ghostty,
+        /// kitty, and wezterm, which clear it only when the cursor
+        /// moves, and from alacritty, which clears it on neither —
+        /// and `Screen::line_feed` preserves the flag, so the split is
+        /// not accidental.
         ///
         /// Case: a program fills the last column of a row and then emits a
         /// reverse index instead of the newline the pending wrap was

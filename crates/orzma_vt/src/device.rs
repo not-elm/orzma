@@ -197,7 +197,7 @@ mod tests {
         for c in ['a', 'b', 'c'] {
             device.active_mut().print(c);
         }
-        device.active_mut().set_horizontal_tabstop();
+        device.active_mut().set_horizontal_tab_stop();
 
         device.set_active_screen_for_test(ScreenKind::Alternate);
         device.active_mut().move_forward_tabs(1);
