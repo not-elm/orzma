@@ -5,7 +5,7 @@
 //! produced for the caller to stage instead of staging internally.
 
 pub mod cell;
-mod character_sets;
+pub mod character_sets;
 pub mod cursor;
 pub mod grid;
 pub mod margins;
@@ -22,7 +22,9 @@ use crate::schema::{
     Cursor, CursorShape, DisplayOffset, GridColumn, GridLine, GridPoint, GridSize, ScreenLine,
     ViewportLine,
 };
-use crate::screen::character_sets::CharacterSetMapping;
+use crate::screen::character_sets::{
+    CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
+};
 use crate::screen::cursor::SavedCursorSlots;
 use crate::screen::margins::Margins;
 use crate::screen::state::ScreenState;
@@ -99,9 +101,7 @@ impl Screen {
     /// wrap's cursor motion alone, so passing that value through would
     /// leave the character just written unpainted.
     pub fn print(&mut self, c: char) -> Option<Damage> {
-        //TODO: CharSetsを参照し描画文字をマッピングする。
-        // SS2/SS3がペンディングされているケースも考慮する必要がある。
-
+        let GraphicChar(glyph) = self.character_set_mapping.translate(c);
         let wrap = if self.state.pending_wrap {
             self.state.pending_wrap = false;
             self.state.column = GridColumn(0);
@@ -109,7 +109,7 @@ impl Screen {
         } else {
             None
         };
-        self.grid[self.state.line][self.state.column] = self.state.pen.stamp(c);
+        self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph);
         if self.state.column.0 + 1 < self.grid.size().cols {
             self.state.column.0 += 1;
         } else {
@@ -345,6 +345,41 @@ impl Screen {
     /// - `RIS` (`ESC c`)
     pub fn reset_tab_stops(&mut self) {
         self.tabs.reset();
+    }
+
+    /// Designates `character_set` to `g_code`.
+    ///
+    /// The caller decodes the sequence's designator and final character
+    /// with [`GCode::from_designator`] and [`CharacterSet::from_dscs`]
+    /// before calling this.
+    ///
+    /// # Control Functions
+    ///
+    /// - `SCS` (`ESC ( Dscs`, `ESC ) Dscs`, `ESC * Dscs`, `ESC + Dscs`)
+    pub fn designate_character_set(&mut self, g_code: GCode, character_set: CharacterSet) {
+        self.character_set_mapping.designate(g_code, character_set);
+    }
+
+    /// Invokes `g_code` into GL until the next locking shift.
+    ///
+    /// # Control Functions
+    ///
+    /// - `LS0` (`SI`, `0x0F`)
+    /// - `LS1` (`SO`, `0x0E`)
+    /// - `LS2` (`ESC n`)
+    /// - `LS3` (`ESC o`)
+    pub fn invoke_character_set(&mut self, g_code: GCode) {
+        self.character_set_mapping.invoke(g_code);
+    }
+
+    /// Invokes `single_shift` into GL for the next graphic character.
+    ///
+    /// # Control Functions
+    ///
+    /// - `SS2` (`0x8E`, `ESC N`)
+    /// - `SS3` (`0x8F`, `ESC O`)
+    pub fn single_shift(&mut self, single_shift: SingleShift) {
+        self.character_set_mapping.single_shift(single_shift);
     }
 
     /// Returns the grid size.

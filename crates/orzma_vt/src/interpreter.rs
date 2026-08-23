@@ -10,6 +10,7 @@
     reason = "OrzmaVt::interpret reaches the parser once the executor's callbacks land"
 )]
 
+use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::{
     damage::DamageLedger, device::DeviceState, placement::PlacementStore, schema::VtSignal,
 };
@@ -80,6 +81,12 @@ struct Executor<'a> {
 
 impl VTActor for Executor<'_> {
     fn print(&mut self, b: char) {
+        // NOTE: DEL is dropped before `Screen::print` rather than inside
+        // it, so that it cannot spend a pending single shift — only a
+        // graphic character may do that.
+        if b == '\u{7f}' {
+            return;
+        }
         let damage = self.device.active_mut().print(b);
         self.damage.stage_if_changed(damage);
     }
@@ -102,9 +109,13 @@ impl VTActor for Executor<'_> {
                 let damage = self.device.active_mut().carriage_return();
                 self.damage.stage_if_changed(damage);
             }
+            0x0E => self.invoke_character_set(GCode::G1),
+            0x0F => self.invoke_character_set(GCode::G0),
             0x85 => self.next_line(),
             0x88 => self.device.active_mut().set_horizontal_tab_stop(),
             0x8D => self.reverse_index(),
+            0x8E => self.single_shift(SingleShift::G2),
+            0x8F => self.single_shift(SingleShift::G3),
             _ => {}
         }
     }
@@ -139,6 +150,17 @@ impl VTActor for Executor<'_> {
             (b'E', []) => self.next_line(),
             (b'H', []) => self.device.active_mut().set_horizontal_tab_stop(),
             (b'M', []) => self.reverse_index(),
+            (b'N', []) => self.single_shift(SingleShift::G2),
+            (b'O', []) => self.single_shift(SingleShift::G3),
+            (b'n', []) => self.invoke_character_set(GCode::G2),
+            (b'o', []) => self.invoke_character_set(GCode::G3),
+            (dscs, [designator @ (b'(' | b')' | b'*' | b'+')]) => {
+                if let Some(g_code) = GCode::from_designator(*designator) {
+                    self.device
+                        .active_mut()
+                        .designate_character_set(g_code, CharacterSet::from_dscs(dscs));
+                }
+            }
             _ => {}
         }
     }
@@ -178,6 +200,18 @@ impl Executor<'_> {
     fn reverse_index(&mut self) {
         let damage = self.device.active_mut().reverse_index();
         self.damage.stage_if_changed(damage);
+    }
+
+    /// Invokes a G code into GL until the next locking shift (the LS
+    /// family).
+    fn invoke_character_set(&mut self, g_code: GCode) {
+        self.device.active_mut().invoke_character_set(g_code);
+    }
+
+    /// Invokes a G code into GL for the next graphic character (SS2 and
+    /// SS3).
+    fn single_shift(&mut self, single_shift: SingleShift) {
+        self.device.active_mut().single_shift(single_shift);
     }
 }
 
@@ -276,5 +310,137 @@ mod tests {
     fn the_seven_bit_reverse_index_scrolls_at_the_top_margin() {
         let device = interpret(b"a\r\x1bM");
         assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'a');
+    }
+
+    /// Asserts that a set designated into G0 maps the characters
+    /// printed after it.
+    ///
+    /// Case: a program draws a horizontal rule by designating DEC
+    /// Special Graphics into G0 and printing `q`.
+    #[test]
+    fn a_set_designated_into_g0_maps_what_follows() {
+        let device = interpret(b"\x1b(0q");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
+    }
+
+    /// Asserts that designating ASCII over a G code restores letters.
+    ///
+    /// Case: a program finishes a box and emits `ESC ( B` so the next
+    /// `q` prints as a letter again.
+    #[test]
+    fn redesignating_ascii_restores_letters() {
+        let device = interpret(b"\x1b(0\x1b(Bq");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'q');
+    }
+
+    /// Asserts that a final with no set behind it designates ASCII
+    /// rather than leaving the previous set in force.
+    ///
+    /// The agreed policy is to fall back rather than drop the sequence:
+    /// leaving DEC Special Graphics designated would print the
+    /// application's text as line segments.
+    ///
+    /// Case: a program draws a box, then designates the Finnish
+    /// national replacement set with `ESC ( C` before writing a label.
+    #[test]
+    fn an_unsupported_designation_falls_back_to_ascii() {
+        let device = interpret(b"\x1b(0\x1b(Cq");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'q');
+    }
+
+    /// Asserts that `SO` invokes G1 into GL and `SI` returns G0 to it.
+    ///
+    /// Case: a program designates line drawing into G1 once, then
+    /// brackets each run of box characters with `SO` and `SI` instead of
+    /// redesignating G0 every time.
+    #[test]
+    fn the_shift_out_and_shift_in_pair_swaps_the_invoked_set() {
+        let device = interpret(b"\x1b)0\x0eq\x0fq");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, 'q');
+    }
+
+    /// Asserts that `ESC n` invokes G2 into GL for everything that
+    /// follows.
+    ///
+    /// Case: a program parks line drawing in G2 and locks it into GL
+    /// once, leaving G0 free to hold the set its text is written in.
+    #[test]
+    fn the_locking_shift_two_invokes_g2() {
+        let device = interpret(b"\x1b*0q\x1bnq");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'q');
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, '─');
+    }
+
+    /// Asserts that `ESC o` invokes G3 into GL for everything that
+    /// follows.
+    ///
+    /// Case: a program that already uses G2 parks a second set in G3 and
+    /// locks that one into GL instead.
+    #[test]
+    fn the_locking_shift_three_invokes_g3() {
+        let device = interpret(b"\x1b+0q\x1boq");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'q');
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, '─');
+    }
+
+    /// Asserts that the seven-bit `SS2` maps one character and then
+    /// stops applying.
+    ///
+    /// Case: a program prints one box character mid-sentence with
+    /// `ESC N` rather than shifting GL and shifting it back.
+    #[test]
+    fn the_seven_bit_single_shift_two_lasts_one_character() {
+        let device = interpret(b"\x1b*0\x1bNqq");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, 'q');
+    }
+
+    /// Asserts that the raw C1 byte for SS2 reaches the same arm.
+    ///
+    /// Case: a program emits an eight-bit single shift on a terminal not
+    /// running in UTF-8 mode.
+    #[test]
+    fn the_raw_c1_byte_single_shifts() {
+        let device = interpret(b"\x1b*0\x8eqq");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, 'q');
+    }
+
+    /// Asserts that the UTF-8 encoding of U+008E reaches the same arm.
+    ///
+    /// Case: a program running on a UTF-8 stream emits the single shift.
+    #[test]
+    fn the_utf8_form_single_shifts() {
+        let device = interpret(b"\x1b*0\xc2\x8eqq");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, 'q');
+    }
+
+    /// Asserts that DEL neither reaches a cell nor advances the cursor.
+    ///
+    /// vtparse hands DEL to the actor with the rest of GL and leaves the
+    /// decision here. Every set in this terminal's repertoire holds 94
+    /// characters, for which DEL displays nothing; a 96-character set
+    /// would make it printable, and that decision would then belong to
+    /// the character set mapping.
+    ///
+    /// Case: a program pads a fixed-width record with DEL, as a paper
+    /// tape editor does to strike a character out.
+    #[test]
+    fn delete_prints_nothing() {
+        let device = interpret(b"a\x7fb");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'a');
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, 'b');
+    }
+
+    /// Asserts that DEL does not spend a pending single shift.
+    ///
+    /// Case: a program pads with DEL between emitting `SS2` and the box
+    /// character the shift was meant for.
+    #[test]
+    fn delete_leaves_a_pending_single_shift_armed() {
+        let device = interpret(b"\x1b*0\x1bN\x7fq");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
     }
 }

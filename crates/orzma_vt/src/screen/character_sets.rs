@@ -29,6 +29,22 @@ pub enum CharacterSet {
 }
 
 impl CharacterSet {
+    /// The character set an `SCS` final character selects.
+    ///
+    /// A final this terminal has no set for resolves to ASCII instead
+    /// of leaving the previous designation standing. Leaving it would
+    /// keep an earlier `ESC ( 0` in force, so the text that followed
+    /// would print as line segments; the national replacement sets this
+    /// arm mostly catches differ from ASCII in a handful of positions,
+    /// which makes ASCII the closer answer.
+    pub fn from_dscs(dscs: u8) -> Self {
+        match dscs {
+            b'B' => Self::Ascii,
+            b'0' => Self::DecSpecialGraphics,
+            _ => Self::Ascii,
+        }
+    }
+
     /// The graphic character this set shows at `c`.
     fn graphic(self, c: char) -> GraphicChar {
         let graphic = match self {
@@ -81,6 +97,24 @@ pub enum GCode {
     G1,
     G2,
     G3,
+}
+
+impl GCode {
+    /// The G code an `SCS` designator selects; `None` for a byte that
+    /// designates nothing this terminal implements.
+    ///
+    /// The 96-character designators `-`, `.`, and `/` are among the
+    /// bytes answered with `None`: every set in the repertoire holds 94
+    /// characters, so there is nothing to designate through them.
+    pub fn from_designator(designator: u8) -> Option<Self> {
+        match designator {
+            b'(' => Some(Self::G0),
+            b')' => Some(Self::G1),
+            b'*' => Some(Self::G2),
+            b'+' => Some(Self::G3),
+            _ => None,
+        }
+    }
 }
 
 /// The G code a single shift invokes into GL for one graphic character.
@@ -191,6 +225,115 @@ impl CharacterSetMapping {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod from_designator {
+        use super::*;
+
+        /// Asserts that each of the four `SCS` designators selects its
+        /// own G code.
+        ///
+        /// Case: an application designates line drawing into a
+        /// different bank with each of `ESC ( 0`, `ESC ) 0`, `ESC * 0`,
+        /// and `ESC + 0`, so the four spellings have to be told apart by
+        /// the designator alone.
+        #[test]
+        fn each_designator_selects_its_own_g_code() {
+            assert_eq!(GCode::from_designator(b'('), Some(GCode::G0));
+            assert_eq!(GCode::from_designator(b')'), Some(GCode::G1));
+            assert_eq!(GCode::from_designator(b'*'), Some(GCode::G2));
+            assert_eq!(GCode::from_designator(b'+'), Some(GCode::G3));
+        }
+
+        /// Asserts that the 96-character designators select no G code.
+        ///
+        /// The agreed policy is to answer these with `None` rather than
+        /// fold them onto G1 through G3 alongside their 94-character
+        /// spellings: every set in the repertoire holds 94 characters,
+        /// so accepting the designator would designate a set that does
+        /// not exist.
+        ///
+        /// Case: an application designates ISO Latin-1 supplemental
+        /// into G1 with `ESC - A`.
+        #[test]
+        fn a_ninety_six_character_designator_selects_no_g_code() {
+            assert_eq!(GCode::from_designator(b'-'), None);
+            assert_eq!(GCode::from_designator(b'.'), None);
+            assert_eq!(GCode::from_designator(b'/'), None);
+        }
+    }
+
+    mod from_dscs {
+        use super::*;
+
+        /// Asserts that the two finals this terminal has sets for
+        /// select those sets.
+        ///
+        /// Case: an application draws a box with `ESC ( 0` and then
+        /// restores letters with `ESC ( B`.
+        #[test]
+        fn a_supported_final_selects_its_set() {
+            assert_eq!(CharacterSet::from_dscs(b'B'), CharacterSet::Ascii);
+            assert_eq!(
+                CharacterSet::from_dscs(b'0'),
+                CharacterSet::DecSpecialGraphics
+            );
+        }
+
+        /// Asserts that a final with no set behind it resolves to
+        /// ASCII.
+        ///
+        /// The agreed policy is to designate ASCII rather than drop the
+        /// sequence and leave the previous designation standing. Leaving
+        /// it would keep an earlier `ESC ( 0` in force and print the
+        /// following text as line segments, whereas the national
+        /// replacement sets this arm mostly catches differ from ASCII in
+        /// a handful of positions.
+        ///
+        /// Case: an application running under a Finnish locale
+        /// designates its national replacement set with `ESC ( C`.
+        #[test]
+        fn an_unsupported_final_falls_back_to_ascii() {
+            assert_eq!(CharacterSet::from_dscs(b'C'), CharacterSet::Ascii);
+            assert_eq!(CharacterSet::from_dscs(b'A'), CharacterSet::Ascii);
+        }
+    }
+
+    mod translate {
+        use super::*;
+
+        /// Asserts that a code position maps through the set the
+        /// locking shift invoked into GL.
+        ///
+        /// Case: an application designates line drawing into G1, shifts
+        /// to it, and draws a horizontal rule out of `q` characters.
+        #[test]
+        fn a_code_position_maps_through_the_set_invoked_into_gl() {
+            let mut mapping = CharacterSetMapping::default();
+            mapping.designate(GCode::G1, CharacterSet::DecSpecialGraphics);
+            assert_eq!(mapping.translate('q'), GraphicChar('q'));
+
+            mapping.invoke(GCode::G1);
+
+            assert_eq!(mapping.translate('q'), GraphicChar('─'));
+        }
+
+        /// Asserts that a single shift maps one character and then
+        /// stops applying.
+        ///
+        /// Case: an application prints a single degree sign out of G2
+        /// with `SS2 f` in the middle of a line of ordinary text.
+        #[test]
+        fn a_single_shift_is_spent_on_one_character() {
+            let mut mapping = CharacterSetMapping::default();
+            mapping.designate(GCode::G2, CharacterSet::DecSpecialGraphics);
+            mapping.single_shift(SingleShift::G2);
+
+            assert_eq!(mapping.translate('f'), GraphicChar('°'));
+
+            assert_eq!(mapping.pending_single_shift, None);
+            assert_eq!(mapping.translate('f'), GraphicChar('f'));
+        }
+    }
 
     mod designate {
         use super::CharacterSet::{Ascii, DecSpecialGraphics};
