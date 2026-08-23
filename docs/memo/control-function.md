@@ -32,28 +32,3 @@ ESCの中にはC1の制御関数を7ビット環境で再現するために各C1
 | PM | Privacy Message | `ESC ^` | `1B 5E` | `9E` |
 | APC | Application Program Command | `ESC _` | `1B 5F` | `9F` |
 
-## Save Cursor
-
-一時的にカーソル（や一部描画情報など）を保存、復元するための機能。
-現代ではALT-Screen/Primary-Screenを跨いでカーソルを復元するためにも使用される。
-
-### DECSC
-
-Reference: https://vt100.net/docs/vt510-rm/DECSC.html
-ESC: `ESC 7`
-
-以下の状態をメモリ上に保存する。命令には各種パラメータは割り当てられないため保存する状態は端末側で管理する必要がある。
-
-| 状態 | 説明 |
-| --- | --- |
-| カーソル位置 | 現在の行と列を保存する。 |
-| SGR文字属性 | SGRで設定された前景色、背景色、太字、下線などの文字属性を保存する。 |
-| G0–G3およびGL/GR | G0–G3に指示された文字集合と、GLおよびGRに呼び出されている文字集合を保存する。 |
-| Wrap flag | 自動折り返しを行うかどうかを示すDECAWMの状態を保存する。 |
-| Origin mode | カーソル位置の基準を画面全体またはスクロール領域とするDECOMの状態を保存する。 |
-| Selective erase attribute | 以後に書き込む文字を選択消去の対象とするか、保護対象とするかを示す属性を保存する。 |
-| SS2／SS3 | 次の1文字に対してG2またはG3を一時的に呼び出す、未適用のsingle shift状態を保存する。 |
-
-Orzmaでは`SavedCursor`という構造体を`Screen`内に保持している。保存時にはこの構造体に現在の状態を書き込む。
-保存する情報の一覧は以下。
-
