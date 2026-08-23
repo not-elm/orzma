@@ -50,7 +50,7 @@ VT510のPDF 77〜78ページにあるMargins and Scrollingの一覧をもとに�
 | `Pl` | 左マージンの列番号 | 1 |
 | `Pr` | 右マージンの列番号 | ページ幅（80列または132列） |
 
-DECSTBMでは`Pt < Pb`、DECSLRMでは`Pl < Pr`でなければならない。DECSLRMのスクロール領域は最低2列である。DECSTBMまたはDECSLRMを実行すると、カーソルはページの1行1列へ移動する。
+DECSTBMでは`Pt < Pb`、DECSLRMでは`Pl < Pr`でなければならない。DECSLRMのスクロール領域は最低2列である。DECSTBMまたはDECSLRMを実行すると、カーソルはホーム位置へ移動する。VT510はこれを「ページの1行1列」と書いているが、DECOMがsetの状態でページ1行目へ動かすとp.195の「カーソルはマージン領域外に移動できない」に反するため、orzmaではDECOMが定めるホーム（set時は上マージン、reset時は画面左上）へ移動する。
 
 DECSSCLSの`Ps`は次のスクロール速度を指定する。
 

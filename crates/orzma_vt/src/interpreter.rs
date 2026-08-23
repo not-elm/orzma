@@ -12,7 +12,9 @@
 
 mod csi;
 
+use crate::interpreter::csi::CsiParams;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
+use crate::screen::margins::OriginMode;
 use crate::{
     damage::DamageLedger, device::DeviceState, placement::PlacementStore, schema::VtSignal,
 };
@@ -172,8 +174,30 @@ impl VTActor for Executor<'_> {
         }
     }
 
-    fn csi_dispatch(&mut self, _params: &[CsiParam], _parameters_truncated: bool, _byte: u8) {
-        todo!()
+    fn csi_dispatch(&mut self, params: &[CsiParam], parameters_truncated: bool, byte: u8) {
+        let params = CsiParams::parse(params);
+        if parameters_truncated || params.has_intermediates() {
+            return;
+        }
+        match (params.private(), byte) {
+            (None, b'H' | b'f') => {
+                let damage = self
+                    .device
+                    .active_mut()
+                    .move_cursor_to(params.value(0), params.value(1));
+                self.damage.stage_if_changed(damage);
+            }
+            (None, b'r') => {
+                let damage = self
+                    .device
+                    .active_mut()
+                    .set_scroll_region(params.value(0), params.value(1));
+                self.damage.stage_if_changed(damage);
+            }
+            (Some(b'?'), b'h') => self.set_private_modes(&params, true),
+            (Some(b'?'), b'l') => self.set_private_modes(&params, false),
+            _ => {}
+        }
     }
 
     fn osc_dispatch(&mut self, _params: &[&[u8]]) {
@@ -219,6 +243,29 @@ impl Executor<'_> {
     /// SS3).
     fn single_shift(&mut self, single_shift: SingleShift) {
         self.device.active_mut().single_shift(single_shift);
+    }
+}
+
+/// The control functions a CSI sequence requests, where one final byte
+/// stands for a list of independent settings.
+impl Executor<'_> {
+    /// Applies every private mode this terminal implements out of one
+    /// `DECSET` or `DECRST` sequence, ignoring the numbers it does not.
+    ///
+    /// A sequence may carry several modes at once, and an unimplemented
+    /// one must not hide an implemented one later in the list.
+    fn set_private_modes(&mut self, params: &CsiParams<'_>, enabled: bool) {
+        for mode in params.values().flatten() {
+            if mode == 6 {
+                let origin_mode = if enabled {
+                    OriginMode::WithinMargins
+                } else {
+                    OriginMode::UpperLeftCorner
+                };
+                let damage = self.device.active_mut().set_origin_mode(origin_mode);
+                self.damage.stage_if_changed(damage);
+            }
+        }
     }
 }
 
@@ -320,6 +367,104 @@ mod tests {
         assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'x');
         assert_eq!(device.active().viewport_row(ViewportLine(0))[2].c, 'c');
         assert_eq!(device.active().cursor_column(), GridColumn(3));
+    }
+
+    /// Asserts that a scroll region set by `CSI r` is what a later
+    /// linefeed scrolls against.
+    ///
+    /// Case: a full-screen application reserves the last row for a
+    /// status line and fills the pane above it.
+    #[test]
+    fn a_scroll_region_reaches_the_linefeed() {
+        let device = interpret(b"\x1b[1;2ra\n\nb");
+        assert_eq!(device.active().viewport_row(ViewportLine(1))[1].c, 'b');
+        assert_eq!(device.active().viewport_row(ViewportLine(2))[1].c, ' ');
+    }
+
+    /// Asserts that `CSI H` addresses the cursor.
+    ///
+    /// Case: a full-screen application jumps to the second row and
+    /// second column to draw a box corner.
+    #[test]
+    fn the_cursor_position_sequence_addresses_the_cursor() {
+        let device = interpret(b"\x1b[2;2Hx");
+        assert_eq!(device.active().viewport_row(ViewportLine(1))[1].c, 'x');
+    }
+
+    /// Asserts that `CSI f` addresses the cursor the same way `CSI H`
+    /// does.
+    ///
+    /// Case: an older program uses the horizontal-and-vertical-position
+    /// spelling it was written against.
+    #[test]
+    fn the_position_sequence_matches_cursor_position() {
+        let device = interpret(b"\x1b[2;2fx");
+        assert_eq!(device.active().viewport_row(ViewportLine(1))[1].c, 'x');
+    }
+
+    /// Asserts that origin mode moves the cursor-addressing origin to
+    /// the top margin.
+    ///
+    /// Case: an application reserves a header row, turns on origin mode,
+    /// and addresses the first row of its own pane.
+    #[test]
+    fn origin_mode_moves_the_addressing_origin() {
+        let device = interpret(b"\x1b[2;3r\x1b[?6h\x1b[1;1Hx");
+        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'x');
+    }
+
+    /// Asserts that `CSI ? 6 l` seats the cursor at the upper-left
+    /// corner.
+    ///
+    /// Case: a full-screen application drops origin mode on its way out
+    /// and prints without addressing the cursor first.
+    #[test]
+    fn resetting_origin_mode_seats_the_cursor_at_the_corner() {
+        let device = interpret(b"\x1b[2;3r\x1b[?6h\x1b[?6lx");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'x');
+    }
+
+    /// Asserts that a private mode this terminal does not implement does
+    /// not hide one it does.
+    ///
+    /// Case: an application turns on application cursor keys and origin
+    /// mode in a single `CSI ? 1 ; 6 h`.
+    #[test]
+    fn an_unimplemented_private_mode_does_not_hide_origin_mode() {
+        let device = interpret(b"\x1b[2;3r\x1b[?1;6h\x1b[1;1Hx");
+        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'x');
+    }
+
+    /// Asserts that a control function this terminal does not implement
+    /// is ignored rather than fatal.
+    ///
+    /// The agreed policy follows what VT terminals do with sequences
+    /// they do not implement. It is also the point of the dispatcher:
+    /// before it existed every CSI sequence reached a `todo!()`.
+    ///
+    /// Case: a shell sets a colour with `CSI 0 m` on a terminal that has
+    /// no SGR yet.
+    #[test]
+    fn an_unimplemented_sequence_is_ignored() {
+        let device = interpret(b"\x1b[0ma");
+        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'a');
+    }
+
+    /// Asserts that a sequence carrying an intermediate does not reach
+    /// the control function that shares its final byte.
+    ///
+    /// The agreed policy refuses every intermediate rather than
+    /// whitelisting the ones this terminal implements. `vtparse` promotes
+    /// intermediates into the parameter slice, so DECCARA and DECSTBM
+    /// reach the dispatcher with the same final byte and differ only in
+    /// that trailing byte.
+    ///
+    /// Case: an application changes the attributes of a rectangle with
+    /// `CSI 1 ; 2 $ r`.
+    #[test]
+    fn an_intermediate_does_not_reach_the_scroll_region() {
+        let device = interpret(b"\x1b[1;2$ra\n\nb");
+        assert_eq!(device.active().viewport_row(ViewportLine(2))[1].c, 'b');
     }
 
     /// Asserts that `ESC M` scrolls the region down when the cursor
