@@ -1,8 +1,8 @@
 ---
 name: enumerate-test-cases
-description: Enumerates the test cases one orzma_vt method owes, deriving every case from a citation in docs/references/ and having Codex review the result. Use when the user says "テストケースを洗い出して", "enumerate test cases", "/enumerate-test-cases", or asks which cases a VT control-function method needs before writing its tests.
+description: Enumerates the test cases one orzma_vt method owes, deriving every case from a citation in docs/references/ and verifying each citation before emitting it. Use when the user says "テストケースを洗い出して", "enumerate test cases", "/enumerate-test-cases", or asks which cases a VT control-function method needs before writing its tests.
 argument-hint: [Screen::method]
-allowed-tools: Read, Grep, Glob, Bash(pdftotext:*), Bash(codex:*), Bash(grep:*), Bash(awk:*), Bash(sed:*), Bash(head:*), Bash(wc:*), Bash(tr:*), Bash(mkdir:*), Bash(python3:*), AskUserQuestion
+allowed-tools: Read, Grep, Glob, Bash(pdftotext:*), Bash(grep:*), Bash(awk:*), Bash(sed:*), Bash(head:*), Bash(wc:*), Bash(tr:*), Bash(mkdir:*), Bash(python3:*), AskUserQuestion
 ---
 
 # Enumerate test cases for one method
@@ -12,7 +12,7 @@ from its implementation, and report the list in the terminal.
 
 `Write` and `Edit` are deliberately absent from `allowed-tools`. This skill
 reports; it must not modify the repository. `Bash` is granted because
-`pdftotext` and `codex` need it, so the property is strong rather than
+`pdftotext` needs it, so the property is strong rather than
 airtight — do not use it to write into the repository.
 
 ## What this skill will not do
@@ -336,3 +336,97 @@ misbehave. `.claude/rules/rust.md` governs that paragraph, and the author
 transcribes it verbatim. The contract line and any policy paragraph the rule
 also requires are the author's to write, because both state a decision the
 specification does not make.
+
+## Phase 3 — Verify every citation, then report
+
+Verify **every** citation you are about to emit, not a sample. This is the
+only check standing between a plausible-sounding sentence and a case the
+author will trust, and a fabricated citation reads exactly like a real one —
+that is what makes it dangerous. You are verifying your own work, which is
+precisely the situation where skipping the check feels safest and is least
+safe.
+
+### Verifying a citation
+
+Normalize the quote and the cited span the same way — collapse all whitespace —
+and accept the quote when its content words appear as an ordered subsequence of
+the span, tolerating tokens from neighbouring table columns:
+
+```bash
+verify() {
+  local file=$1 first=$2 last=$3 quote=$4
+  sed -n "${first},${last}p" "$file" | tr -s '[:space:]' ' ' | tr -d '\n' > "$SCRATCH/_span.txt"
+  python3 - "$quote" "$SCRATCH/_span.txt" <<'PY'
+import sys, re
+quote, spanfile = sys.argv[1], sys.argv[2]
+span = open(spanfile).read()
+qt = re.findall(r"[A-Za-z0-9]+", quote.lower())
+st = re.findall(r"[A-Za-z0-9]+", span.lower())
+i = 0
+for t in st:
+    if i < len(qt) and t == qt[i]:
+        i += 1
+print("VERIFIED" if i == len(qt) else f"REJECTED ({i}/{len(qt)} matched)")
+PY
+}
+```
+
+Do **not** use a literal `grep`. A literal search for the genuine RI statement
+returns zero hits against the file it was taken from, because the table splits
+it and injects `8/13` into the middle. That strict a check rejects nearly every
+citation these manuals can produce.
+
+### What to do with each result
+
+**VERIFIED** — the contract entry stands, and the cases derived from it are
+emitted.
+
+**REJECTED** — the citation does not say what you recorded. **Do not edit the
+quote until it passes.** That is fitting the evidence to the claim, and it
+turns the one honest check in this skill into a rubber stamp. Go back to the
+extraction, read what the manual actually says, and either re-record the
+contract entry against the real text or drop it.
+
+A dropped entry goes under "Excluded as unspecified" with the quote that
+failed and its match ratio, so the reader can see what was attempted rather
+than only what survived.
+
+### The report
+
+Terminal only. Never save it.
+
+```
+# Test cases: Screen::reverse_index
+Destination: crates/orzma_vt/src/screen.rs  mod tests::reverse_index
+Control functions: RI (ESC M)   Specifications: vt510.pdf, ECMA-48.pdf
+
+## Summary          N cases (High n / Medium n / Low n), High first
+                    stopping after the High block still covers everything
+                    the specification states outright
+                    citations verified: N/N
+## Contract table   with citations
+## Test cases       TC-01 … TC-NN
+## Excluded as unspecified
+   entries with no citation, and entries whose citation failed
+   verification (with the failed quote and its match ratio)
+## Specification conflicts     (omitted when none)
+```
+
+There is no review section. Nothing reviewed this list but you, so do not
+present it as though something did. Say plainly that the list is
+specification-derived and self-verified, and that the author should spot-check
+a citation or two before trusting the rest.
+
+## Error handling
+
+| Situation | Behaviour |
+| --- | --- |
+| The name matches both `Screen` and `interpreter.rs` | Resolve to `Screen` without asking |
+| The name is ambiguous within `Screen` itself | `AskUserQuestion` with the candidates |
+| The method name resolves to nothing | Stop with an error naming the searched paths |
+| The doc comment has no `# Control Functions` section | Stop, reporting the method as out of scope and why |
+| Some named control functions are absent from `docs/references/` | Drop those, continue, list them in the report |
+| All named control functions are absent | Stop, reporting the method as out of scope |
+| A control function's hits are all contents, index, or cross-reference lines | Treat it as absent from that manual and descend the precedence order |
+| A citation fails verification | Re-record it against the real text or drop the entry; never edit the quote to make it pass |
+| `pdftotext` is unavailable | Stop, suggesting `brew install poppler` |
