@@ -6,9 +6,8 @@ use crate::screen::character_sets::CharacterSetMapping;
 
 /// What `DECSC` copies aside so that `DECRC` can put it back.
 ///
-/// This is a deliberate subset: it carries where the next character
-/// lands and how it will be drawn, and nothing of what is already on
-/// the screen. Restoring it never undoes a print.
+/// Although a name such as `Save(d) Cursor` is used in the VT510 specification,
+/// we use the name `Checkpoint` instead because the saved data actually includes information other than the cursor state.
 ///
 /// # Control Functions
 ///
