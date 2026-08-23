@@ -78,6 +78,23 @@ trustworthy source. Name the method and the condition that failed. Do not
 improvise a contract from the signature, and do not fall back to reading the
 body.
 
+On `ADMIT`, read the doc comment with this extractor rather than a generic
+file read with a guessed line range. A `Read` call bounded by an offset and
+a limit does not know where the `///` block ends, and a plausible-looking
+limit can run past it into the very body this skill forbids reading:
+
+```bash
+awk -v m="<method>" '
+  /^[[:space:]]*\/\/\// { doc = doc $0 "\n"; next }
+  $0 ~ "fn " m "\\(" { printf "%s", doc; exit }
+  /^[[:space:]]*#\[/ { next }
+  { doc = "" }
+' <file>
+```
+
+This prints exactly the accumulated `///` block and stops before the `fn`
+line, so it cannot show a line of the body.
+
 Methods that reject today include `print` (it handles printable characters,
 not a control function), the accessors `grid_size` / `cursor` / `pen_mut` /
 `viewport_row`, `Screen::new`, `set_display_offset`, every dispatch point in
@@ -245,10 +262,11 @@ and `move_backward_tabs`.
 
 ### Return value
 
-Six in-scope methods return `()` — `set_horizontal_tab_stop`, `edit_tab_stop`,
-`reset_tab_stops`, `designate_character_set`, `invoke_character_set`,
-`single_shift`. For those the expectation covers screen state alone and carries
-no return line.
+Eight in-scope methods return `()` — `set_horizontal_tab_stop`,
+`edit_tab_stop`, `reset_tab_stops`, `designate_character_set`,
+`invoke_character_set`, `single_shift`, `save_checkpoint`,
+`restore_checkpoint`. For those the expectation covers screen state alone
+and carries no return line.
 
 The rest return `Option<Damage>`, which is orzma's own contract; no VT manual
 mentions it. Derive it from the spec-described state change:
