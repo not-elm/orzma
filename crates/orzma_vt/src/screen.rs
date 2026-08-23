@@ -10,7 +10,7 @@ pub mod cursor;
 pub mod grid;
 pub mod margins;
 mod state;
-mod tabs;
+pub mod tabs;
 pub mod viewport;
 
 use self::cell::{Cell, Pen};
@@ -271,22 +271,21 @@ impl Screen {
     /// two control functions request the identical edit. TABULATION STOP
     /// MODE scoping, when it lands, has to reach HTS as well.
     pub fn hts(&mut self) {
-        self.apply_tab_edit(CharacterTabEdit::SetColumn);
+        self.edit_tab_stop(CharacterTabEdit::SetColumn);
     }
 
-    /// Applies a `TBC` (`CSI Ps g`) parameter; a value only line
-    /// tabulation stops answer does nothing.
-    pub fn tbc(&mut self, ps: u16) {
-        if let Some(edit) = CharacterTabEdit::from_tbc(ps) {
-            self.apply_tab_edit(edit);
-        }
-    }
-
-    /// Applies a `CTC` (`CSI Ps W`) parameter; a value only line
-    /// tabulation stops answer does nothing.
-    pub fn ctc(&mut self, ps: u16) {
-        if let Some(edit) = CharacterTabEdit::from_ctc(ps) {
-            self.apply_tab_edit(edit);
+    /// Applies one tabulation stop edit at the cursor column.
+    ///
+    /// `TBC` and `CTC` number their parameters differently, so the
+    /// caller decodes its own parameter space with
+    /// [`CharacterTabEdit::from_tbc`] or
+    /// [`CharacterTabEdit::from_ctc`] before calling this.
+    pub fn edit_tab_stop(&mut self, edit: CharacterTabEdit) {
+        let column = self.state.column;
+        match edit {
+            CharacterTabEdit::SetColumn => self.tabs.set(column),
+            CharacterTabEdit::ClearColumn => self.tabs.clear(column),
+            CharacterTabEdit::ClearAllColumns => self.tabs.clear_all(),
         }
     }
 
@@ -374,16 +373,6 @@ impl Screen {
     /// The cursor's column.
     pub fn cursor_column(&self) -> GridColumn {
         self.state.column
-    }
-
-    /// Applies one tabulation stop edit at the cursor column.
-    fn apply_tab_edit(&mut self, edit: CharacterTabEdit) {
-        let column = self.state.column;
-        match edit {
-            CharacterTabEdit::SetColumn => self.tabs.set(column),
-            CharacterTabEdit::ClearColumn => self.tabs.clear(column),
-            CharacterTabEdit::ClearAllColumns => self.tabs.clear_all(),
-        }
     }
 
     /// Follows a one-row scroll with the offset that keeps a scrolled
@@ -967,7 +956,7 @@ mod tests {
 
             let mut by_ctc = wide_screen();
             by_ctc.state.column = GridColumn(3);
-            by_ctc.ctc(0);
+            by_ctc.edit_tab_stop(CharacterTabEdit::from_ctc(0).unwrap());
 
             for screen in [&mut by_hts, &mut by_ctc] {
                 screen.state.column = GridColumn(0);
@@ -986,7 +975,7 @@ mod tests {
         fn tbc_zero_clears_the_stop_under_the_cursor() {
             let mut screen = wide_screen();
             screen.state.column = GridColumn(8);
-            screen.tbc(0);
+            screen.edit_tab_stop(CharacterTabEdit::from_tbc(0).unwrap());
             screen.state.column = GridColumn(0);
             screen.ht();
             assert_eq!(screen.state.column, GridColumn(16));
@@ -1000,26 +989,9 @@ mod tests {
         #[test]
         fn tbc_three_clears_every_stop() {
             let mut screen = wide_screen();
-            screen.tbc(3);
+            screen.edit_tab_stop(CharacterTabEdit::from_tbc(3).unwrap());
             screen.ht();
             assert_eq!(screen.state.column, GridColumn(19));
-        }
-
-        /// Asserts that a TBC parameter only line tabulation stops
-        /// answer leaves the character stops alone.
-        ///
-        /// The agreed policy drops such a parameter rather than routing
-        /// it to the character stops, so a later line-tabulation layer
-        /// can claim it without changing what it already did.
-        ///
-        /// Case: an application written for a printer sends TBC 1 to
-        /// drop the line tab stop on the cursor's line.
-        #[test]
-        fn a_tbc_parameter_only_line_stops_answer_leaves_the_stops_alone() {
-            let mut screen = wide_screen();
-            screen.tbc(1);
-            screen.ht();
-            assert_eq!(screen.state.column, GridColumn(8));
         }
 
         /// Asserts that CTC sets and clears the stop under the cursor.
@@ -1030,12 +1002,12 @@ mod tests {
         fn ctc_zero_sets_and_ctc_two_clears_at_the_cursor() {
             let mut screen = wide_screen();
             screen.state.column = GridColumn(3);
-            screen.ctc(0);
+            screen.edit_tab_stop(CharacterTabEdit::from_ctc(0).unwrap());
             screen.state.column = GridColumn(0);
             screen.ht();
             assert_eq!(screen.state.column, GridColumn(3));
 
-            screen.ctc(2);
+            screen.edit_tab_stop(CharacterTabEdit::from_ctc(2).unwrap());
             screen.state.column = GridColumn(0);
             screen.ht();
             assert_eq!(screen.state.column, GridColumn(8));
@@ -1049,7 +1021,7 @@ mod tests {
         #[test]
         fn decst8c_reinstalls_the_stride_after_a_full_clear() {
             let mut screen = wide_screen();
-            screen.tbc(3);
+            screen.edit_tab_stop(CharacterTabEdit::from_tbc(3).unwrap());
             screen.decst8c();
             screen.ht();
             assert_eq!(screen.state.column, GridColumn(8));

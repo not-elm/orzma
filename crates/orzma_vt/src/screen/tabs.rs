@@ -13,7 +13,7 @@ use crate::schema::GridColumn;
 /// `CTC 5` both mean "clear every character stop" — so the two
 /// parameter spaces are normalised into one vocabulary here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CharacterTabEdit {
+pub enum CharacterTabEdit {
     /// Set a stop at the cursor column (HTS, CTC 0).
     SetColumn,
     /// Clear the stop at the cursor column (TBC 0, CTC 2).
