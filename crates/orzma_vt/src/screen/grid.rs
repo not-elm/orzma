@@ -102,25 +102,51 @@ impl Grid {
         row[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
     }
 
-    /// Scrolls the visible screen up by one row: the top visible row
-    /// becomes the newest history row and a `fill`-filled row enters at
-    /// the bottom.
-    pub fn scroll_up_one(&mut self, fill: Cell) {
+    /// Scrolls the region up by one row: the row at `top` leaves and a
+    /// `fill`-filled row enters at `bottom`.
+    ///
+    /// The departing row becomes the newest history row only when `top`
+    /// is the first screen line. A region with content pinned above it
+    /// discards the row instead, because it never reached the top of the
+    /// screen and so was never something the user could scroll back to.
+    pub fn scroll_up_one(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
+        let base = self.history_len();
         let id = self.mint();
-        if self.history_len() < self.max_history {
-            self.rows.push_back(StoredRow {
-                id,
-                cells: Row::filled(self.size.cols, fill),
-            });
+        if top > ScreenLine(0) {
+            let mut recycled = self
+                .rows
+                .remove(base + usize::from(top.0))
+                .expect("the region's top row is inside the ring");
+            recycled.id = id;
+            recycled.cells.fill(fill);
+            self.rows.insert(base + usize::from(bottom.0), recycled);
             return;
         }
-        let mut recycled = self
-            .rows
-            .pop_front()
-            .expect("the ring always holds the visible rows");
-        recycled.id = id;
-        recycled.cells.fill(fill);
-        self.rows.push_back(recycled);
+        let grows_history = base < self.max_history;
+        let entering = if grows_history {
+            StoredRow {
+                id,
+                cells: Row::filled(self.size.cols, fill),
+            }
+        } else {
+            let mut recycled = self
+                .rows
+                .pop_front()
+                .expect("the ring always holds the visible rows");
+            recycled.id = id;
+            recycled.cells.fill(fill);
+            recycled
+        };
+        // NOTE: Seating the entering row just past the bottom margin is
+        // what hands the departing row to history: the ring grows by one,
+        // so the window of visible rows slides off it while the rows
+        // below the margin keep their distance from the new end.
+        let below_bottom = if grows_history {
+            base + usize::from(bottom.0) + 1
+        } else {
+            base + usize::from(bottom.0)
+        };
+        self.rows.insert(below_bottom, entering);
     }
 
     /// Scrolls the region down by one row: a `fill`-filled row enters at
@@ -217,6 +243,13 @@ mod tests {
         Grid::new(GridSize { cols: 4, rows }, max_history)
     }
 
+    /// Scrolls with the margins a screen carries before any `DECSTBM`,
+    /// which is the region every history assertion below is about.
+    fn scroll_up_whole_screen(grid: &mut Grid, fill: Cell) {
+        let bottom = ScreenLine(grid.size().rows - 1);
+        grid.scroll_up_one(ScreenLine(0), bottom, fill);
+    }
+
     /// Asserts that grid line zero borrows the top row of the active
     /// screen, whatever history sits before it.
     ///
@@ -226,7 +259,7 @@ mod tests {
     fn grid_line_zero_is_the_top_of_the_active_screen() {
         let mut grid = grid(2, 10);
         grid[ScreenLine(0)][0].c = 'a';
-        grid.scroll_up_one(Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
         grid[ScreenLine(0)][0].c = 'b';
         assert_eq!(grid.history_len(), 1);
         assert_eq!(grid.row(GridLine(0))[0].c, 'b');
@@ -241,9 +274,9 @@ mod tests {
     fn a_negative_grid_line_reaches_into_history() {
         let mut grid = grid(2, 10);
         grid[ScreenLine(0)][0].c = 'a';
-        grid.scroll_up_one(Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
         grid[ScreenLine(0)][0].c = 'b';
-        grid.scroll_up_one(Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
         assert_eq!(grid.history_len(), 2);
         assert_eq!(grid.row(GridLine(-1))[0].c, 'b');
         assert_eq!(grid.row(GridLine(-2))[0].c, 'a');
@@ -276,7 +309,7 @@ mod tests {
         grid[ScreenLine(0)][0].c = 'a';
         grid[ScreenLine(1)][0].c = 'b';
         let fill = Cell::blank_with_bg(Color::Indexed(4));
-        grid.scroll_up_one(fill);
+        scroll_up_whole_screen(&mut grid, fill);
         assert_eq!(grid.history_len(), 1);
         assert_eq!(grid[ScreenLine(0)][0].c, 'b');
         assert_eq!(grid[ScreenLine(1)][0], fill);
@@ -291,8 +324,8 @@ mod tests {
     #[test]
     fn a_scroll_at_capacity_evicts_the_oldest_row() {
         let mut grid = grid(2, 1);
-        grid.scroll_up_one(Cell::default());
-        grid.scroll_up_one(Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
         assert_eq!(grid.history_len(), 1);
     }
 
@@ -305,7 +338,7 @@ mod tests {
     fn zero_capacity_history_evicts_on_every_scroll() {
         let mut grid = grid(2, 0);
         grid[ScreenLine(0)][0].c = 'a';
-        grid.scroll_up_one(Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
         assert_eq!(grid.history_len(), 0);
         assert_eq!(grid[ScreenLine(0)][0].c, ' ');
         assert_eq!(grid[ScreenLine(1)][0].c, ' ');
@@ -350,9 +383,9 @@ mod tests {
     fn an_id_follows_its_row_into_history() {
         let mut grid = grid(3, 10);
         let id = grid.line_id(ScreenLine(0));
-        grid.scroll_up_one(Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
         assert_eq!(grid.grid_line(id), Some(GridLine(-1)));
-        grid.scroll_up_one(Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
         assert_eq!(grid.grid_line(id), Some(GridLine(-2)));
     }
 
@@ -365,9 +398,9 @@ mod tests {
     fn a_trimmed_id_no_longer_resolves() {
         let mut grid = grid(3, 1);
         let id = grid.line_id(ScreenLine(0));
-        grid.scroll_up_one(Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
         assert_eq!(grid.grid_line(id), Some(GridLine(-1)));
-        grid.scroll_up_one(Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
         assert_eq!(grid.grid_line(id), None);
     }
 
@@ -380,7 +413,7 @@ mod tests {
     fn a_grid_without_history_drops_the_front_id_on_every_scroll() {
         let mut grid = grid(3, 0);
         let id = grid.line_id(ScreenLine(0));
-        grid.scroll_up_one(Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
         assert_eq!(grid.grid_line(id), None);
     }
 
@@ -393,7 +426,7 @@ mod tests {
     fn a_scroll_mints_a_fresh_id_for_the_incoming_row() {
         let mut grid = grid(3, 10);
         let before = grid.line_id(ScreenLine(2));
-        grid.scroll_up_one(Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
         let after = grid.line_id(ScreenLine(2));
         assert_ne!(before, after);
         assert_eq!(grid.grid_line(before), Some(GridLine(1)));
@@ -446,7 +479,7 @@ mod tests {
         #[test]
         fn a_reverse_scroll_leaves_history_alone() {
             let mut grid = labelled(3, 10);
-            grid.scroll_up_one(Cell::default());
+            scroll_up_whole_screen(&mut grid, Cell::default());
             let history_len = grid.history_len();
             let oldest = grid.row(GridLine(-1))[0].c;
             let (top, bottom) = whole(3);

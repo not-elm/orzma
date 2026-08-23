@@ -176,8 +176,15 @@ impl Screen {
     /// - `NEL` (`0x85`, `ESC E`) — after the carriage return
     pub fn line_feed(&mut self) -> Option<Damage> {
         if self.state.line == self.scroll_region.bottom_margin() {
-            self.grid.scroll_up_one(self.state.pen.erase_cell());
-            self.hold_scrolled_viewport();
+            let top = self.scroll_region.top_margin();
+            self.grid.scroll_up_one(
+                top,
+                self.scroll_region.bottom_margin(),
+                self.state.pen.erase_cell(),
+            );
+            if top == ScreenLine(0) {
+                self.hold_scrolled_viewport();
+            }
             return Some(Damage::Full);
         }
         if self.state.line.0 + 1 < self.grid.size().rows {
@@ -1269,6 +1276,59 @@ mod tests {
             assert_eq!(damage, None);
         }
 
+        /// Asserts that a linefeed at the bottom of a region below a
+        /// non-zero top margin rotates the region and leaves history and
+        /// the rows above it alone.
+        ///
+        /// The agreed policy feeds scrollback only when the top margin is
+        /// row zero, following alacritty: rows leaving a region that has
+        /// content pinned above it never reached the top of the screen,
+        /// so treating them as scrollback would interleave them with
+        /// output the user never scrolled past.
+        ///
+        /// Case: an application pins a header on the first row and
+        /// scrolls the pane below it forward.
+        #[test]
+        fn a_linefeed_below_a_top_margin_rotates_without_feeding_history() {
+            let mut screen = tall_screen();
+            screen.scroll_region.set_top_margin(ScreenLine(1));
+            for (line, glyph) in [(0u16, 'a'), (1, 'b'), (2, 'c'), (3, 'd')] {
+                screen.grid[ScreenLine(line)][0].c = glyph;
+            }
+            screen.state.line = ScreenLine(3);
+            let blank = screen.state.pen.erase_cell().c;
+            screen.line_feed();
+            assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
+            assert_eq!(screen.grid[ScreenLine(1)][0].c, 'c');
+            assert_eq!(screen.grid[ScreenLine(2)][0].c, 'd');
+            assert_eq!(screen.grid[ScreenLine(3)][0].c, blank);
+            assert_eq!(screen.grid.history_len(), 0);
+        }
+
+        /// Asserts that a linefeed at a bottom margin above the last row
+        /// still feeds history and leaves the rows below the margin
+        /// standing.
+        ///
+        /// Case: an application keeps a status line on the last row and
+        /// scrolls the pane above it forward.
+        #[test]
+        fn a_linefeed_at_a_bottom_margin_feeds_history_and_holds_the_rows_below() {
+            let mut screen = tall_screen();
+            screen.scroll_region.set_bottom_margin(ScreenLine(2));
+            for (line, glyph) in [(0u16, 'a'), (1, 'b'), (2, 'c'), (3, 'd')] {
+                screen.grid[ScreenLine(line)][0].c = glyph;
+            }
+            screen.state.line = ScreenLine(2);
+            let blank = screen.state.pen.erase_cell().c;
+            screen.line_feed();
+            assert_eq!(screen.grid.history_len(), 1);
+            assert_eq!(screen.grid[ScreenLine(0)][0].c, 'b');
+            assert_eq!(screen.grid[ScreenLine(1)][0].c, 'c');
+            assert_eq!(screen.grid[ScreenLine(2)][0].c, blank);
+            assert_eq!(screen.grid[ScreenLine(3)][0].c, 'd');
+            assert_eq!(screen.grid.row(GridLine(-1))[0].c, 'a');
+        }
+
         /// Asserts that a linefeed preserves the deferred-wrap flag.
         ///
         /// The agreed policy follows alacritty: only a carriage return or
@@ -1720,6 +1780,31 @@ mod tests {
             screen.line_feed();
             assert_eq!(screen.display_offset(), DisplayOffset(2));
             assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+        }
+
+        /// Asserts that a scroll inside a region below a non-zero top
+        /// margin leaves a scrolled-back viewport's offset untouched.
+        ///
+        /// The offset counts rows of scrollback, and such a scroll adds
+        /// none, so advancing it would slide the view a row further back
+        /// than the user put it.
+        ///
+        /// Case: the user is reading scrollback while a full-screen
+        /// application with a pinned header scrolls its pane.
+        #[test]
+        fn a_scroll_that_adds_no_history_leaves_the_offset_alone() {
+            let mut screen = tall_screen();
+            for _ in 0..3 {
+                screen.state.line = ScreenLine(3);
+                screen.line_feed();
+            }
+            assert_eq!(screen.grid.history_len(), 3);
+            screen.viewport.offset = DisplayOffset(1);
+
+            screen.scroll_region.set_top_margin(ScreenLine(1));
+            screen.state.line = ScreenLine(3);
+            screen.line_feed();
+            assert_eq!(screen.display_offset(), DisplayOffset(1));
         }
 
         /// Asserts that output at the live tail leaves the viewport pinned
