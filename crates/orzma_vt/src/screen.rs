@@ -495,6 +495,28 @@ impl Screen {
         seated.or(moved.then_some(Damage::Metadata))
     }
 
+    /// Sets the cursor origin and seats the cursor at the home the new
+    /// mode defines.
+    ///
+    /// Both directions seat the cursor. VT510 says only what home *is*
+    /// under each setting and never that `DECOM` moves the cursor; xterm,
+    /// kitty, wezterm, Windows Terminal, and `vttest` settle it by homing
+    /// on set and on reset alike.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECOM` (`CSI ? 6 h` / `CSI ? 6 l`)
+    pub fn set_origin_mode(&mut self, origin_mode: OriginMode) -> Option<Damage> {
+        let switched = self.scroll_region.origin_mode() != origin_mode;
+        self.scroll_region.set_origin_mode(origin_mode);
+        let seated = self.seat_cursor(ScreenLine(0), GridColumn(0));
+        if switched {
+            Some(Damage::Metadata)
+        } else {
+            seated
+        }
+    }
+
     /// Follows a one-row scroll with the offset that keeps a scrolled
     /// viewport on the content it was showing.
     ///
@@ -2343,6 +2365,75 @@ mod tests {
                 screen.set_scroll_region(Some(1), Some(3)),
                 Some(Damage::Metadata)
             );
+        }
+    }
+
+    mod set_origin_mode {
+        use super::*;
+
+        /// Asserts that setting the origin within the margins seats the
+        /// cursor at the top margin.
+        ///
+        /// Case: an application reserves a header row, then turns on
+        /// origin mode so its own coordinates start below it.
+        #[test]
+        fn setting_the_origin_seats_the_cursor_at_the_top_margin() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(2), Some(4));
+            screen.state.line = ScreenLine(3);
+            let damage = screen.set_origin_mode(OriginMode::WithinMargins);
+            assert_eq!(screen.state.line, ScreenLine(1));
+            assert_eq!(screen.state.column, GridColumn(0));
+            assert_eq!(damage, Some(Damage::Metadata));
+        }
+
+        /// Asserts that resetting the origin also seats the cursor, at
+        /// the upper-left corner.
+        ///
+        /// The agreed policy homes on reset as well as on set. VT510
+        /// never says DECOM moves the cursor, so the behaviour is
+        /// settled by implementations: xterm, kitty, wezterm, Windows
+        /// Terminal, and `vttest` all home on both, and only alacritty
+        /// homes on set alone.
+        ///
+        /// Case: a full-screen application drops origin mode on its way
+        /// out and prints without addressing the cursor first.
+        #[test]
+        fn resetting_the_origin_seats_the_cursor_at_the_corner() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(2), Some(4));
+            screen.set_origin_mode(OriginMode::WithinMargins);
+            screen.state.line = ScreenLine(3);
+            let damage = screen.set_origin_mode(OriginMode::UpperLeftCorner);
+            assert_eq!(screen.state.line, ScreenLine(0));
+            assert_eq!(damage, Some(Damage::Metadata));
+        }
+
+        /// Asserts that the mode reaches the region the cursor motion
+        /// reads.
+        ///
+        /// Case: an application turns on origin mode and the terminal
+        /// has to answer later cursor addressing against the margins.
+        #[test]
+        fn the_mode_reaches_the_scroll_region() {
+            let mut screen = tall_screen();
+            screen.set_origin_mode(OriginMode::WithinMargins);
+            assert_eq!(
+                screen.scroll_region.origin_mode(),
+                OriginMode::WithinMargins
+            );
+        }
+
+        /// Asserts that re-sending the mode already in force with the
+        /// cursor already home reports no damage.
+        ///
+        /// Case: an application re-asserts origin mode during a redraw
+        /// without having moved the cursor since.
+        #[test]
+        fn an_unchanged_mode_with_the_cursor_home_reports_no_damage() {
+            let mut screen = tall_screen();
+            screen.set_origin_mode(OriginMode::WithinMargins);
+            assert_eq!(screen.set_origin_mode(OriginMode::WithinMargins), None);
         }
     }
 }
