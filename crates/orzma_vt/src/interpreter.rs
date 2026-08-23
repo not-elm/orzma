@@ -10,6 +10,8 @@
     reason = "OrzmaVt::interpret reaches the parser once the executor's callbacks land"
 )]
 
+mod csi;
+
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::{
     damage::DamageLedger, device::DeviceState, placement::PlacementStore, schema::VtSignal,
