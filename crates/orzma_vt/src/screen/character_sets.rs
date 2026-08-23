@@ -31,11 +31,45 @@ pub enum CharacterSet {
 impl CharacterSet {
     /// The graphic character this set shows at `c`.
     fn graphic(self, c: char) -> GraphicChar {
-        match self {
+        let graphic = match self {
             Self::Ascii => c,
-            Self::DecSpecialGraphics => {}
-        }
-        todo!("テストケースを作成してから実装する。AIは実装禁止")
+            Self::DecSpecialGraphics => match c {
+                '_' => ' ',
+                '`' => '◆',
+                'a' => '▒',
+                'b' => '␉',
+                'c' => '␌',
+                'd' => '␍',
+                'e' => '␊',
+                'f' => '°',
+                'g' => '±',
+                'h' => '␤',
+                'i' => '␋',
+                'j' => '┘',
+                'k' => '┐',
+                'l' => '┌',
+                'm' => '└',
+                'n' => '┼',
+                'o' => '⎺',
+                'p' => '⎻',
+                'q' => '─',
+                'r' => '⎼',
+                's' => '⎽',
+                't' => '├',
+                'u' => '┤',
+                'v' => '┴',
+                'w' => '┬',
+                'x' => '│',
+                'y' => '≤',
+                'z' => '≥',
+                '{' => 'π',
+                '|' => '≠',
+                '}' => '£',
+                '~' => '·',
+                _ => c,
+            },
+        };
+        GraphicChar(graphic)
     }
 }
 
@@ -83,17 +117,18 @@ impl IndexMut<GCode> for GSets {
 ///
 /// # Invariants
 ///
-/// A pending `single_shift` outranks `gl` for exactly one graphic
-/// character. The consumer clears it once that character is mapped, and
-/// a locking shift leaves it alone: the two invocations are independent
-/// state, not one field the newer control function overwrites.
+/// A `pending_single_shift` outranks `gl` for exactly one graphic
+/// character. [`Self::translate`] clears it as it maps that character,
+/// and a locking shift leaves it alone: the two invocations are
+/// independent state, not one field the newer control function
+/// overwrites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CharacterSetsState {
     /// The G code the latest locking shift invoked into GL.
     pub gl: GCode,
     /// The G code a pending `SS2` or `SS3` invokes into GL for the next
     /// graphic character.
-    pub single_shift: Option<SingleShift>,
+    pub pending_single_shift: Option<SingleShift>,
     /// The character set `SCS` designated to each G code.
     pub g_sets: GSets,
 }
@@ -111,11 +146,18 @@ impl CharacterSetsState {
 
     /// Invokes `single_shift` into GL for the next graphic character (`SS2`, `SS3`).
     pub fn single_shift(&mut self, single_shift: SingleShift) {
-        self.single_shift = Some(single_shift);
+        self.pending_single_shift = Some(single_shift);
     }
 
+    /// The graphic character `c` prints as, consuming a pending single
+    /// shift.
     pub fn translate(&mut self, c: char) -> GraphicChar {
-        todo!("テストケースを作成してから実装する。AIは実装禁止")
+        let g_code = match self.pending_single_shift.take() {
+            Some(SingleShift::G2) => GCode::G2,
+            Some(SingleShift::G3) => GCode::G3,
+            None => self.gl,
+        };
+        self.g_sets[g_code].graphic(c)
     }
 }
 
@@ -175,12 +217,12 @@ mod tests {
         fn designate_leaves_the_invocation_state_unchanged() {
             let mut state = CharacterSetsState::default();
             state.gl = GCode::G1;
-            state.single_shift = Some(SingleShift::G2);
+            state.pending_single_shift = Some(SingleShift::G2);
 
             state.designate(GCode::G2, DecSpecialGraphics);
 
             assert_eq!(
-                (state.gl, state.single_shift),
+                (state.gl, state.pending_single_shift),
                 (GCode::G1, Some(SingleShift::G2))
             );
         }
@@ -208,7 +250,7 @@ mod tests {
         fn invoke_replaces_gl_and_leaves_a_pending_single_shift_armed() {
             let mut state = CharacterSetsState::default();
             state.designate(GCode::G1, DecSpecialGraphics);
-            state.single_shift = Some(SingleShift::G2);
+            state.pending_single_shift = Some(SingleShift::G2);
 
             state.invoke(GCode::G1);
 
@@ -216,7 +258,7 @@ mod tests {
                 state,
                 CharacterSetsState {
                     gl: GCode::G1,
-                    single_shift: Some(SingleShift::G2),
+                    pending_single_shift: Some(SingleShift::G2),
                     g_sets: GSets([Ascii, DecSpecialGraphics, Ascii, Ascii]),
                 }
             );
@@ -244,7 +286,7 @@ mod tests {
             state.gl = GCode::G1;
 
             state.single_shift(SingleShift::G2);
-            assert_eq!(state.single_shift, Some(SingleShift::G2));
+            assert_eq!(state.pending_single_shift, Some(SingleShift::G2));
 
             state.single_shift(SingleShift::G3);
 
@@ -252,7 +294,7 @@ mod tests {
                 state,
                 CharacterSetsState {
                     gl: GCode::G1,
-                    single_shift: Some(SingleShift::G3),
+                    pending_single_shift: Some(SingleShift::G3),
                     g_sets: GSets::default(),
                 }
             );
