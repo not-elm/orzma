@@ -3,6 +3,7 @@
 use crate::schema::{GridColumn, ScreenLine};
 use crate::screen::cell::Pen;
 use crate::screen::character_sets::CharacterSetMapping;
+use crate::screen::margins::OriginMode;
 
 /// What `DECSC` copies aside so that `DECRC` can put it back.
 ///
@@ -23,6 +24,8 @@ pub struct Checkpoint {
     pub pen: Pen,
     /// Saved deferred-wrap flag.
     pub pending_wrap: bool,
+    /// Saved cursor origin (`DECOM`).
+    pub origin_mode: OriginMode,
     /// Saved character set mapping.
     pub character_set_mapping: CharacterSetMapping,
 }

@@ -24,6 +24,16 @@ impl ScrollRegion {
         }
     }
 
+    /// Returns the top margin.
+    pub fn top_margin(&self) -> ScreenLine {
+        self.margins.top
+    }
+
+    /// Returns the bottom margin.
+    pub fn bottom_margin(&self) -> ScreenLine {
+        self.margins.bottom
+    }
+
     /// The rows a scroll moves: the top margin through the bottom
     /// margin, inclusive.
     ///
@@ -31,6 +41,27 @@ impl ScrollRegion {
     /// scrolling to the margins whichever way the origin is set.
     pub fn scroll_span(&self) -> RangeInclusive<ScreenLine> {
         self.margins.top..=self.margins.bottom
+    }
+
+    /// Moves the top margin, leaving the bottom margin and the origin
+    /// mode alone.
+    ///
+    /// This exists for tests that need a region narrower than the page
+    /// while DECSTBM is still unwired; the real control function will
+    /// set both margins together.
+    #[cfg(test)]
+    pub(crate) fn set_top_margin(&mut self, top: ScreenLine) {
+        self.margins.top = top;
+    }
+
+    /// Moves the bottom margin, leaving the top margin and the origin
+    /// mode alone.
+    ///
+    /// This is the counterpart of [`Self::set_top_margin`] and carries
+    /// the same caveat.
+    #[cfg(test)]
+    pub(crate) fn set_bottom_margin(&mut self, bottom: ScreenLine) {
+        self.margins.bottom = bottom;
     }
 }
 
@@ -53,7 +84,7 @@ pub enum OriginMode {
 
 /// DECSTBM scroll region; `bottom` is the inclusive last row index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Margins {
+struct Margins {
     /// First row of the scroll region (0 = top of screen).
     pub top: ScreenLine,
     /// Inclusive last row of the scroll region (default `rows - 1`).

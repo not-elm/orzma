@@ -26,7 +26,7 @@ use crate::screen::character_sets::{
     CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
 };
 use crate::screen::checkpoint::Checkpoint;
-use crate::screen::margins::Margins;
+use crate::screen::margins::ScrollRegion;
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
 use crate::screen::viewport::Viewport;
@@ -64,7 +64,7 @@ pub struct Screen {
     grid: Grid,
     viewport: Viewport,
     state: ScreenState,
-    margins: Margins,
+    scroll_region: ScrollRegion,
     tabs: TabStops,
     character_set_mapping: CharacterSetMapping,
     checkpoint: Option<Checkpoint>,
@@ -75,10 +75,10 @@ impl Screen {
     /// viewport pinned to the live tail.
     pub fn new(size: GridSize, max_history: usize) -> Self {
         Self {
+            scroll_region: ScrollRegion::new(size.rows),
             grid: Grid::new(size, max_history),
             viewport: Viewport::default(),
             state: ScreenState::default(),
-            margins: Margins::new(size.rows),
             tabs: TabStops::default(),
             character_set_mapping: CharacterSetMapping::default(),
             checkpoint: None,
@@ -160,6 +160,10 @@ impl Screen {
     /// reaches the renderer through the frame's cursor. Scrolling moves
     /// content and reports [`Damage::Full`].
     ///
+    /// A cursor below a non-zero bottom margin and already on the last
+    /// row moves nothing and scrolls nothing; the preserved deferred
+    /// wrap leaves nothing to report there either.
+    ///
     /// [`Self::print`] also calls this to complete a deferred wrap, so
     /// the operation is not reached only from a control function.
     ///
@@ -171,13 +175,16 @@ impl Screen {
     /// - `IND` (`0x84`, `ESC D`)
     /// - `NEL` (`0x85`, `ESC E`) — after the carriage return
     pub fn line_feed(&mut self) -> Option<Damage> {
-        if self.state.line < self.margins.bottom {
+        if self.state.line == self.scroll_region.bottom_margin() {
+            self.grid.scroll_up_one(self.state.pen.erase_cell());
+            self.hold_scrolled_viewport();
+            return Some(Damage::Full);
+        }
+        if self.state.line.0 + 1 < self.grid.size().rows {
             self.state.line.0 += 1;
             return Some(Damage::Metadata);
         }
-        self.grid.scroll_up_one(self.state.pen.erase_cell());
-        self.hold_scrolled_viewport();
-        Some(Damage::Full)
+        None
     }
 
     /// Moves the cursor up one row, scrolling the region at its top
@@ -193,10 +200,10 @@ impl Screen {
     pub fn reverse_index(&mut self) -> Option<Damage> {
         let was_armed = self.state.pending_wrap;
         self.state.pending_wrap = false;
-        if self.state.line == self.margins.top {
+        if self.state.line == self.scroll_region.top_margin() {
             self.grid.scroll_down_one(
-                self.margins.top,
-                self.margins.bottom,
+                self.scroll_region.top_margin(),
+                self.scroll_region.bottom_margin(),
                 self.state.pen.erase_cell(),
             );
             return Some(Damage::Full);
@@ -560,6 +567,12 @@ mod tests {
     /// stops at 8 and 16 are reachable and the one at 24 is not.
     fn wide_screen() -> Screen {
         Screen::new(GridSize { cols: 20, rows: 3 }, 10)
+    }
+
+    /// Four rows leave two rows below a bottom margin at row 1, so a
+    /// cursor outside the region has somewhere left to move down to.
+    fn tall_screen() -> Screen {
+        Screen::new(GridSize { cols: 4, rows: 4 }, 10)
     }
 
     mod new {
@@ -1177,6 +1190,53 @@ mod tests {
             assert_eq!(screen.grid[ScreenLine(2)][3].bg, Color::Indexed(4));
         }
 
+        /// Asserts that a linefeed below the bottom margin moves the
+        /// cursor down and scrolls nothing.
+        ///
+        /// The agreed policy gates the scroll on the cursor sitting
+        /// exactly at the bottom margin, the way VT510 writes IND and
+        /// NEL, rather than on the cursor having reached it: a cursor
+        /// outside the region moves like an ordinary cursor-down instead
+        /// of scrolling rows it is not among.
+        ///
+        /// Case: an application reserves a two-row footer below its
+        /// scrolling pane and emits a linefeed while the cursor rests on
+        /// the footer's first row.
+        #[test]
+        fn a_linefeed_below_a_bottom_margin_moves_the_cursor_down() {
+            let mut screen = tall_screen();
+            screen.scroll_region.set_bottom_margin(ScreenLine(1));
+            screen.state.line = ScreenLine(2);
+            let damage = screen.line_feed();
+            assert_eq!(screen.state.line, ScreenLine(3));
+            assert_eq!(screen.grid.history_len(), 0);
+            assert_eq!(damage, Some(Damage::Metadata));
+        }
+
+        /// Asserts that a linefeed below the bottom margin, already on
+        /// the last row, moves and scrolls nothing.
+        ///
+        /// The agreed policy mirrors the reverse index above a top
+        /// margin: a cursor that hits the screen edge outside the
+        /// scrolling region stays put, rather than scrolling the region
+        /// it is not inside.
+        ///
+        /// Case: an application reserves a footer below its scrolling
+        /// pane and emits a linefeed while the cursor rests on the last
+        /// row of that footer.
+        #[test]
+        fn a_linefeed_below_a_bottom_margin_at_the_last_row_does_nothing() {
+            let mut screen = tall_screen();
+            screen.scroll_region.set_bottom_margin(ScreenLine(1));
+            screen.grid[ScreenLine(0)][0].c = 'a';
+            screen.state.line = ScreenLine(3);
+            let damage = screen.line_feed();
+            assert_eq!(screen.state.line, ScreenLine(3));
+            assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
+            assert_eq!(screen.grid.history_len(), 0);
+            assert_eq!(damage, None);
+        }
+
         /// Asserts that a linefeed preserves the deferred-wrap flag.
         ///
         /// The agreed policy follows alacritty: only a carriage return or
@@ -1314,7 +1374,7 @@ mod tests {
         #[test]
         fn a_reverse_index_above_a_top_margin_at_row_zero_does_nothing() {
             let mut screen = screen();
-            screen.margins.top = ScreenLine(1);
+            screen.scroll_region.set_top_margin(ScreenLine(1));
             screen.grid[ScreenLine(0)][0].c = 'a';
             let damage = screen.reverse_index();
             assert_eq!(screen.state.line, ScreenLine(0));
@@ -1336,7 +1396,7 @@ mod tests {
         #[test]
         fn a_reverse_index_above_a_top_margin_walks_toward_the_first_row() {
             let mut screen = screen();
-            screen.margins.top = ScreenLine(2);
+            screen.scroll_region.set_top_margin(ScreenLine(2));
             screen.state.line = ScreenLine(1);
             let damage = screen.reverse_index();
             assert_eq!(screen.state.line, ScreenLine(0));
@@ -1351,7 +1411,7 @@ mod tests {
         #[test]
         fn a_reverse_index_at_a_top_margin_scrolls_only_the_region() {
             let mut screen = screen();
-            screen.margins.top = ScreenLine(1);
+            screen.scroll_region.set_top_margin(ScreenLine(1));
             for (line, glyph) in [(0u16, 'a'), (1, 'b'), (2, 'c')] {
                 screen.grid[ScreenLine(line)][0].c = glyph;
             }
