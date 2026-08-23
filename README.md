@@ -2,6 +2,10 @@
 
 > [!CAUTION]
 > This app is still in early development and may introduce breaking changes.
+>
+> The entire codebase is currently being redesigned. The documentation in this
+> README and under `docs/` describes the previous design, so the actual
+> behavior may differ from what is documented here until the redesign lands.
 
 orzma is a terminal emulator that can render webviews directly inside the
 terminal.
