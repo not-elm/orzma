@@ -507,6 +507,12 @@ mod tests {
         Screen::new(GridSize { cols: 4, rows: 3 }, 10)
     }
 
+    /// Twenty columns put the right edge at 19, so the default stride's
+    /// stops at 8 and 16 are reachable and the one at 24 is not.
+    fn wide_screen() -> Screen {
+        Screen::new(GridSize { cols: 20, rows: 3 }, 10)
+    }
+
     mod new {
         use super::*;
 
@@ -841,12 +847,6 @@ mod tests {
             screen.tab_to(GridColumn(0));
             assert!(screen.state.pending_wrap);
         }
-    }
-
-    /// Twenty columns put the right edge at 19, so the default stride's
-    /// stops at 8 and 16 are reachable and the one at 24 is not.
-    fn wide_screen() -> Screen {
-        Screen::new(GridSize { cols: 20, rows: 3 }, 10)
     }
 
     mod move_forward_tabs {
