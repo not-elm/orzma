@@ -10,6 +10,10 @@
 
 use std::ops::{Index, IndexMut};
 
+/// A code position already mapped through the character set invoked into GL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GraphicChar(pub char);
+
 /// A graphic character set an application designates to a G code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CharacterSet {
@@ -22,6 +26,17 @@ pub enum CharacterSet {
     /// characters. It also has special symbols and short line segments.
     DecSpecialGraphics,
     // TODO: Support the remaining VT220 and VT510 graphic character sets.
+}
+
+impl CharacterSet {
+    /// The graphic character this set shows at `c`.
+    fn graphic(self, c: char) -> GraphicChar {
+        match self {
+            Self::Ascii => c,
+            Self::DecSpecialGraphics => {}
+        }
+        todo!("テストケースを作成してから実装する。AIは実装禁止")
+    }
 }
 
 /// One of the four G codes a character set is designated to.
@@ -91,12 +106,15 @@ impl CharacterSetsState {
 
     /// Invokes `g_code` into GL (`LS0` through `LS3`).
     pub fn invoke(&mut self, g_code: GCode) {
-        todo!("テストケースを作成してから実装する。AIは実装禁止")
+        self.gl = g_code;
     }
 
-    /// Invokes `single_shift` into GL for the next graphic character
-    /// (`SS2`, `SS3`).
-    pub fn invoke_single(&mut self, single_shift: SingleShift) {
+    /// Invokes `single_shift` into GL for the next graphic character (`SS2`, `SS3`).
+    pub fn single_shift(&mut self, single_shift: SingleShift) {
+        self.single_shift = Some(single_shift);
+    }
+
+    pub fn translate(&mut self, c: char) -> GraphicChar {
         todo!("テストケースを作成してから実装する。AIは実装禁止")
     }
 }
@@ -164,6 +182,79 @@ mod tests {
             assert_eq!(
                 (state.gl, state.single_shift),
                 (GCode::G1, Some(SingleShift::G2))
+            );
+        }
+    }
+
+    mod invoke {
+        use super::CharacterSet::{Ascii, DecSpecialGraphics};
+        use super::*;
+
+        /// Asserts that a locking shift replaces the G code in GL and
+        /// leaves a pending single shift armed.
+        ///
+        /// The agreed policy models GL and the pending single shift as
+        /// independent state, so a locking shift arriving between `SS2`
+        /// and the character it applies to changes neither. The VT220
+        /// describes a single shift as returning to "the previous
+        /// character set", which a save-and-restore model reads as
+        /// undoing the locking shift; foot implements that reading,
+        /// while xterm, Windows Terminal, and ghostty use the override
+        /// model pinned here.
+        ///
+        /// Case: an application emits `SS2`, then `SO` before the
+        /// character the single shift applies to.
+        #[test]
+        fn invoke_replaces_gl_and_leaves_a_pending_single_shift_armed() {
+            let mut state = CharacterSetsState::default();
+            state.designate(GCode::G1, DecSpecialGraphics);
+            state.single_shift = Some(SingleShift::G2);
+
+            state.invoke(GCode::G1);
+
+            assert_eq!(
+                state,
+                CharacterSetsState {
+                    gl: GCode::G1,
+                    single_shift: Some(SingleShift::G2),
+                    g_sets: GSets([Ascii, DecSpecialGraphics, Ascii, Ascii]),
+                }
+            );
+        }
+    }
+
+    mod single_shift {
+        use super::*;
+
+        /// Asserts that a later single shift replaces the pending one
+        /// and leaves the locking shift alone.
+        ///
+        /// The agreed policy is that successive single shifts replace
+        /// rather than queue, because only one graphic character
+        /// follows and the later control is the one that names it.
+        /// xterm and Windows Terminal each store a single scalar, which
+        /// forces the same choice; the VT220 manual does not settle the
+        /// collision.
+        ///
+        /// Case: an application has shifted GL to G1 with `SO`, emits
+        /// `SS2`, then changes its mind and emits `SS3` before printing.
+        #[test]
+        fn a_later_single_shift_replaces_the_pending_one_and_leaves_gl_alone() {
+            let mut state = CharacterSetsState::default();
+            state.gl = GCode::G1;
+
+            state.single_shift(SingleShift::G2);
+            assert_eq!(state.single_shift, Some(SingleShift::G2));
+
+            state.single_shift(SingleShift::G3);
+
+            assert_eq!(
+                state,
+                CharacterSetsState {
+                    gl: GCode::G1,
+                    single_shift: Some(SingleShift::G3),
+                    g_sets: GSets::default(),
+                }
             );
         }
     }
