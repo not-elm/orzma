@@ -198,3 +198,141 @@ A method's doc may name five — `line_feed` names LF, VT, FF, IND, and NEL — 
 each gets its own lookup. Control functions named in the doc but absent from
 `docs/references/` are dropped individually and listed in the report. Only when
 all of them are absent does the run stop.
+
+### 1g. Output: the contract table
+
+| ID | Control function | Shape | Statement | Citation |
+| --- | --- | --- | --- | --- |
+| C1 | RI | unconditional | The cursor moves up one line in the same column. | vt510.pdf p.64, L2435-2436 |
+| C2 | RI | conditional | At the top margin, the page scrolls down instead. | vt510.pdf p.64, L2435-2436 |
+
+`Shape` is one of unconditional, conditional, numeric parameter, bounded value,
+mode-dependent, or multi-function. It is the only classification the table
+carries, and Phase 2 keys on it directly.
+
+**An entry with no citation does not enter the table.** List entries dropped
+for that reason under "Excluded as unspecified" in the report, so the reader
+knows what the enumeration does not cover rather than mistaking the list for
+complete.
+
+**Do not read the method body.** Read the signature and the types it mentions
+(`Damage`, `EraseLineMode`, `GridSize`) — the output has to name real
+constructors and real variants, and that is API shape, not behaviour. A
+divergence between a spec-derived case and the current code is a finding, not
+a mistake to smooth over.
+
+## Phase 2 — Derive the cases
+
+Expand each contract entry by its shape:
+
+| Contract shape | Cases produced |
+| --- | --- |
+| Unconditional statement (`Moves the cursor down one line`) | one nominal case |
+| Conditional (`If the cursor is at the bottom margin, the page scrolls up`) | two cases, condition met and not met, with the boundary itself on the met side |
+| Numeric parameter (`Pn — default = 1`) | omitted default, explicit 1, a value above 1, and 0 handled as the spec defines it |
+| Bounded value (`Pt must be less than Pb`) | lower bound, upper bound, out of range |
+| Mode-dependent behaviour (DECOM, DECAWM, margins set or unset) | one case per mode |
+| Several control functions on one method | one case per point where they differ; identical behaviour collapses to one case annotated with the functions it covers |
+
+Merge cases that end up with the same setup, action, and expectation.
+
+The two parameter rows fire less often than they look. `Screen` receives
+parameters already decoded — `EraseLineMode`, `CharacterTabEdit`, a plain
+`count: u16` — because the `Ps` decode and its defaults live in
+`CharacterTabEdit::from_tbc` / `from_ctc` and in the CSI dispatcher, both
+outside the gate. At this layer the rows mostly apply to `move_forward_tabs`
+and `move_backward_tabs`.
+
+### Return value
+
+Six in-scope methods return `()` — `set_horizontal_tab_stop`, `edit_tab_stop`,
+`reset_tab_stops`, `designate_character_set`, `invoke_character_set`,
+`single_shift`. For those the expectation covers screen state alone and carries
+no return line.
+
+The rest return `Option<Damage>`, which is orzma's own contract; no VT manual
+mentions it. Derive it from the spec-described state change:
+
+| Spec-described change | Expected return |
+| --- | --- |
+| A bounded contiguous span of rows changes contents, and the span is inside the viewport | `Some(Damage::rows(first, last))` |
+| Content moves across the whole screen — a scroll, `ED 2`, a reset | `Some(Damage::Full)` |
+| Rows changed contents, but all of them sit outside the viewport | `Some(Damage::Metadata)` |
+| Only metadata changes — cursor position, pen, deferred-wrap flag | `Some(Damage::Metadata)` |
+| Nothing changes | `None` |
+
+`Damage` has three variants, not two: `Full`, `Rows { first, last }`, and
+`Metadata` (`crates/orzma_vt/src/damage.rs:152`). Sending every content change
+to `Full` gives a wrong expectation for `erase_in_line` and for both partial
+`erase_in_display` modes, which return `Damage::rows(..)` and are already
+pinned by eight existing tests. It also loses the third row: `Metadata` means
+"a frame is still needed" and covers changes that landed entirely outside the
+viewport, not only cursor motion.
+
+The specification stays the source for *what changes*; this table maps that to
+*what is reported*.
+
+### Priority
+
+- **High** — behaviour the spec states outright, and the boundaries of
+  conditions it states outright.
+- **Medium** — behaviour that follows from the spec but depends on a default
+  or a mode.
+- **Low** — combinations of modes the spec does not address individually.
+
+Emit cases in that order and say so in the report, so an author who stops after
+the High block still has every case the specification states outright.
+
+### Naming
+
+Declarative English sentences with articles, matching `screen.rs`:
+`a_reverse_index_at_the_top_margin_scrolls_the_screen_down`.
+
+### Destination
+
+Resolve it; do not assume `mod tests::<method>`. `screen.rs` holds sixteen test
+modules and they do not map one-to-one onto methods: `tab_stop_edits` covers
+`set_horizontal_tab_stop`, `edit_tab_stop`, and `reset_tab_stops` together, and
+the three character-set methods have no module in `screen.rs` at all — their
+tests live in `crates/orzma_vt/src/screen/character_sets.rs` under
+`mod tests::designate`, `invoke`, and `single_shift`.
+
+Grep the `mod` declarations inside the defining file's `#[cfg(test)] mod tests`
+block, pick the module whose tests already exercise the same control function,
+and fall back to naming a new module when none does. `save_checkpoint` and
+`restore_checkpoint` take that fallback today: they have no tests anywhere.
+
+Report the file as well as the module, because for the three character-set
+methods the file is not `screen.rs`.
+
+`Setup:` lines may reach private state such as `margins.top` directly, since
+the tests live in the same file as the type.
+
+### The per-case output block
+
+```
+### TC-03  a_reverse_index_at_the_top_margin_scrolls_the_screen_down
+Control function: RI    Shape: conditional    Priority: High
+Source: C2 (vt510.pdf p.64, L2435-2436 — "If the cursor is at the top margin,
+        the page scrolls down")
+
+Case:   The top margin sits on the third row and the cursor is on it when RI arrives.
+Setup:  Screen::new(GridSize { cols: 80, rows: 24 }, 0); margins.top = ScreenLine(2);
+        cursor on ScreenLine(2); each row carries a distinguishable character
+Act:    screen.reverse_index()
+Expect: the margin region scrolls down one row
+        the cursor stays on ScreenLine(2)
+        the top margin row holds erase cells
+        the deferred wrap is disarmed
+        returns Some(Damage::Full), because content moves across the screen
+```
+
+The `Source` line is the point of the whole skill: every case names the
+sentence that demands it, and **a case that cannot name one is not emitted.**
+
+`Case:` carries the scenario and nothing else — no restatement of the
+assertions, no policy, no speculation about how a broken implementation would
+misbehave. `.claude/rules/rust.md` governs that paragraph, and the author
+transcribes it verbatim. The contract line and any policy paragraph the rule
+also requires are the author's to write, because both state a decision the
+specification does not make.
