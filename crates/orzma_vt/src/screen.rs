@@ -491,8 +491,7 @@ impl Screen {
         let margins = Margins::resolve(top, bottom, self.grid.size().rows)?;
         let moved = margins != self.scroll_region.margins();
         self.scroll_region.set_margins(margins);
-        let seated = self.seat_cursor(ScreenLine(0), GridColumn(0));
-        seated.or(moved.then_some(Damage::Metadata))
+        self.seat_home(moved)
     }
 
     /// Sets the cursor origin and seats the cursor at the home the new
@@ -509,12 +508,7 @@ impl Screen {
     pub fn set_origin_mode(&mut self, origin_mode: OriginMode) -> Option<Damage> {
         let switched = self.scroll_region.origin_mode() != origin_mode;
         self.scroll_region.set_origin_mode(origin_mode);
-        let seated = self.seat_cursor(ScreenLine(0), GridColumn(0));
-        if switched {
-            Some(Damage::Metadata)
-        } else {
-            seated
-        }
+        self.seat_home(switched)
     }
 
     /// Addresses the cursor at a one-based line and column, `None` for
@@ -530,9 +524,15 @@ impl Screen {
     /// - `CUP` (`CSI Pl ; Pc H`)
     /// - `HVP` (`CSI Pl ; Pc f`)
     pub fn move_cursor_to(&mut self, line: Option<u16>, column: Option<u16>) -> Option<Damage> {
-        let line = line.unwrap_or(1).max(1) - 1;
-        let column = column.unwrap_or(1).max(1) - 1;
-        self.seat_cursor(ScreenLine(line), GridColumn(column))
+        let line = match line {
+            None | Some(0) => 1,
+            Some(value) => value,
+        };
+        let column = match column {
+            None | Some(0) => 1,
+            Some(value) => value,
+        };
+        self.seat_cursor(ScreenLine(line - 1), GridColumn(column - 1))
     }
 
     /// Follows a one-row scroll with the offset that keeps a scrolled
@@ -602,6 +602,18 @@ impl Screen {
         }
         self.state.column = column;
         Some(Damage::Metadata)
+    }
+
+    /// Seats the cursor at the home the current [`OriginMode`] defines,
+    /// for a control function that also changed a setting.
+    ///
+    /// `setting_changed` is that control function's own answer to
+    /// "did anything about me change", which the seating cannot see: a
+    /// region or a mode can be replaced while leaving the cursor where
+    /// it already was, and that still owes the renderer a frame.
+    fn seat_home(&mut self, setting_changed: bool) -> Option<Damage> {
+        let seated = self.seat_cursor(ScreenLine(0), GridColumn(0));
+        seated.or(setting_changed.then_some(Damage::Metadata))
     }
 
     /// Seats the cursor at `line` — measured from the origin the current

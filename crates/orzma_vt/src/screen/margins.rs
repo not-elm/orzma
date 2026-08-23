@@ -91,6 +91,17 @@ pub enum OriginMode {
     UpperLeftCorner,
 }
 
+impl OriginMode {
+    /// The origin `DECSET 6` selects when set and `DECRST 6` when reset.
+    pub fn from_decset(enabled: bool) -> Self {
+        if enabled {
+            Self::WithinMargins
+        } else {
+            Self::UpperLeftCorner
+        }
+    }
+}
+
 /// DECSTBM scroll region; `bottom` is the inclusive last row index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Margins {

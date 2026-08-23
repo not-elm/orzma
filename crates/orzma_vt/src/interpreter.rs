@@ -257,12 +257,10 @@ impl Executor<'_> {
     fn set_private_modes(&mut self, params: &CsiParams<'_>, enabled: bool) {
         for mode in params.values().flatten() {
             if mode == 6 {
-                let origin_mode = if enabled {
-                    OriginMode::WithinMargins
-                } else {
-                    OriginMode::UpperLeftCorner
-                };
-                let damage = self.device.active_mut().set_origin_mode(origin_mode);
+                let damage = self
+                    .device
+                    .active_mut()
+                    .set_origin_mode(OriginMode::from_decset(enabled));
                 self.damage.stage_if_changed(damage);
             }
         }
