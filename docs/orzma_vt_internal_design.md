@@ -40,7 +40,7 @@ struct Screen {
     grid: Grid,          // セル格納 + スクロールバックリング(storage 専任)
     viewport: Viewport,  // display_offset(alternate は常に 0 にクランプ)
     write: WriteState,   // カーソル位置・pending wrap・ペン(SGR + OSC 8 リンク)・チャーセット
-    saved: SavedCursorSlots, // DECSC / ANSI 保存スロット(スクリーン毎)
+    checkpoint: Option<Checkpoint>, // DECSC の退避先(スクリーン毎)
     margins: Margins,    // DECSTBM / DECSLRM スクロール領域
 }
 ```
@@ -66,7 +66,7 @@ struct Screen {
 
 ### 4.1 カーソルは Screen 毎(sibling でも Grid 内でもない)
 
-primary / alternate はカーソル・pending wrap・ペン・保存スロットを独立に持つため、単一の sibling カーソルは成立しない。一方 alacritty のように Grid へ埋めると storage と書き込み状態が癒着する。**`Grid` は storage 専任、reflow・スクロール・行挿入は「grid とカーソルを原子的に更新する Screen の操作」**とする。
+primary / alternate はカーソル・pending wrap・ペン・チェックポイントを独立に持つため、単一の sibling カーソルは成立しない。一方 alacritty のように Grid へ埋めると storage と書き込み状態が癒着する。**`Grid` は storage 専任、reflow・スクロール・行挿入は「grid とカーソルを原子的に更新する Screen の操作」**とする。
 
 ### 4.2 `display_offset` は `Viewport` として分離
 
@@ -156,7 +156,7 @@ placement は Grid の行に振る**安定 `LineId`** にアンカーし、`Plac
 
 ## 5. 実装時に必要な状態(草案から漏れやすいもの)
 
-スクロール領域(DECSTBM / DECSLRM)/ insert・origin・newline・autowrap 等の内部モード(後述のとおり `VtModes` ではなく、それぞれが支配する状態の隣に置く)/ タブストップ / G0–G3 チャーセット + シフト状態 / スクリーン毎の DEC・ANSI 保存スロット / protected・selective erase / wrap マーカーとワイド文字(スペーサ)不変条件 / UTF-8・grapheme の合成(zerowidth)/ OSC 8 の「現在リンク」ペンとライフサイクル / タイトルスタック(CSI 22/23 t)/ DECSCUSR カーソル形状。
+スクロール領域(DECSTBM / DECSLRM)/ insert・origin・newline・autowrap 等の内部モード(後述のとおり `VtModes` ではなく、それぞれが支配する状態の隣に置く)/ タブストップ / G0–G3 チャーセット + シフト状態 / スクリーン毎の DECSC チェックポイント(SCOSC / SCORC は VT510 §6.1 の通り SCO Console mode 専用なので実装しない) / protected・selective erase / wrap マーカーとワイド文字(スペーサ)不変条件 / UTF-8・grapheme の合成(zerowidth)/ OSC 8 の「現在リンク」ペンとライフサイクル / タイトルスタック(CSI 22/23 t)/ DECSCUSR カーソル形状。
 
 座標型として `ScreenLine(u16)` が可視スクリーン行(履歴には届かない、`GridLine` の非負半分)を型付けする。`Grid` と `Row<Cell>` はこれと `GridColumn` を使った添字(`Index<ScreenLine>` / `Index<GridColumn>`)で読み書きし、範囲操作や算術は `.0` を経由する — `std::iter::Step` が nightly 限定のため、型そのものをレンジに渡すことはできない。
 
@@ -168,7 +168,7 @@ placement は Grid の行に振る**安定 `LineId`** にアンカーし、`Plac
 crates/orzma_vt/src/lib.rs               … pub struct OrzmaVt + impl Vt〔フィールドは結線済み、メソッドはスタブ〕
 crates/orzma_vt/src/interpreter.rs       … Interpreter(vtparse + ?2026)+ Executor(`VTActor` コールバック実装、`executor.rs` に分けず同居)〔print・C0 ディスパッチのみ実装、他の `VTActor` メソッドと `Interpreter::parse` 自体は `todo!()`〕
 crates/orzma_vt/src/device.rs            … DeviceState / TabStops / ColorTable / TitleState〔読み取り面は実装済み〕
-crates/orzma_vt/src/screen.rs            … Screen / Viewport / ScreenState / SavedCursorSlots / Margins〔実装済み〕
+crates/orzma_vt/src/screen.rs            … Screen / Viewport / ScreenState / Margins〔実装済み〕
 crates/orzma_vt/src/screen/grid.rs       … Grid〔実装済み〕
 crates/orzma_vt/src/screen/grid/row.rs   … Row<T>(格納は Row<Cell>、発行は Row<Run>)+ Row<Cell>::to_runs〔実装済み〕
 crates/orzma_vt/src/screen/grid/run.rs   … Run / Style(bitflags)〔実装済み〕

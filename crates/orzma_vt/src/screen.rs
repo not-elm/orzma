@@ -6,7 +6,7 @@
 
 pub mod cell;
 pub mod character_sets;
-pub mod cursor;
+pub mod checkpoint;
 pub mod grid;
 pub mod margins;
 mod state;
@@ -25,7 +25,7 @@ use crate::schema::{
 use crate::screen::character_sets::{
     CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
 };
-use crate::screen::cursor::SavedCursorSlots;
+use crate::screen::checkpoint::Checkpoint;
 use crate::screen::margins::Margins;
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
@@ -64,14 +64,11 @@ pub struct Screen {
     grid: Grid,
     viewport: Viewport,
     state: ScreenState,
-    #[expect(
-        dead_code,
-        reason = "DECSC/DECRC arrive in a later step of the implementation order"
-    )]
-    saved: SavedCursorSlots,
     margins: Margins,
     tabs: TabStops,
     character_set_mapping: CharacterSetMapping,
+    #[expect(dead_code, reason = "DECSC and DECRC arrive in a later step")]
+    checkpoint: Option<Checkpoint>,
 }
 
 impl Screen {
@@ -82,10 +79,10 @@ impl Screen {
             grid: Grid::new(size, max_history),
             viewport: Viewport::default(),
             state: ScreenState::default(),
-            saved: SavedCursorSlots::default(),
             margins: Margins::new(size.rows),
             tabs: TabStops::default(),
             character_set_mapping: CharacterSetMapping::default(),
+            checkpoint: None,
         }
     }
 
@@ -531,6 +528,10 @@ impl Screen {
         self.state.column = column;
         Some(Damage::Metadata)
     }
+}
+
+impl Screen {
+    pub fn save_checkpoint(&mut self) {}
 }
 
 #[cfg(test)]
