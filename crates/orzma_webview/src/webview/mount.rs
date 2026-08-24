@@ -19,7 +19,7 @@ use bevy_cef::prelude::{
     FocusedWebview, PreloadScripts, WebviewGpuImageInjectSet, WebviewSize, WebviewSource,
     WebviewTextureTarget,
 };
-use bevy_orzma_term::prelude::TermWebviewEvictedSignal;
+use bevy_orzma_tty::prelude::TtyWebviewEvictedSignal;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use orzma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
@@ -204,8 +204,8 @@ pub(crate) fn resolve_mount(
 /// `tracing::debug!` + return): missing placement, unregistered view, duplicate
 /// `view_id` on this terminal, overlay-slot exhaustion.
 ///
-/// The parent (`ctx.terminal_surface`, the `TermApcWebviewSignal` target) is
-/// the owning `OrzmaTerminal` surface entity: both the `OrzmaTermHandle`
+/// The parent (`ctx.terminal_surface`, the `TtyApcWebviewSignal` target) is
+/// the owning `OrzmaTerminal` surface entity: both the `OrzmaTtyHandle`
 /// (which emits the APC signal) and the `TerminalRenderBundle`
 /// (`TerminalGrid`) live on that one entity, so the `ChildOf` parent is also
 /// the entity `project_webview_overlays` reads grid state from.
@@ -328,7 +328,7 @@ pub(crate) fn mount(
 /// `(Some(vid), Some(inst))` removes that one instance; `(Some(vid), None)`
 /// removes every instance of `vid`; `(None, _)` removes all inline children
 /// for a client-issued unmount-all. VT-side evictions (history trim,
-/// alternate-screen teardown) arrive separately as `TermWebviewEvictedSignal`
+/// alternate-screen teardown) arrive separately as `TtyWebviewEvictedSignal`
 /// handled by `on_webview_evicted`.
 pub(crate) fn unmount(
     params: &mut WebviewParams,
@@ -457,11 +457,11 @@ pub fn webview_local_dip(
 const FALLBACK_CELL_W_PHYS: f32 = 8.0;
 const FALLBACK_CELL_H_PHYS: f32 = 16.0;
 
-/// Despawns the placements named by a `TermWebviewEvictedSignal` on the
+/// Despawns the placements named by a `TtyWebviewEvictedSignal` on the
 /// signalling terminal. Unknown ids are ignored, so a re-delivered or
 /// stale eviction is a no-op.
 fn on_webview_evicted(
-    event: On<TermWebviewEvictedSignal>,
+    event: On<TtyWebviewEvictedSignal>,
     mut commands: Commands,
     children: Query<&Children>,
     placements: Query<&WebviewPlacement>,
@@ -666,7 +666,7 @@ mod tests {
     use crate::webview::osc::on_apc_webview_signal;
     use bevy::ecs::system::RunSystemOnce;
     use bevy_cef::prelude::PreloadScripts;
-    use bevy_orzma_term::prelude::{TermApcWebviewSignal, TermWebviewEvictedSignal};
+    use bevy_orzma_tty::prelude::{TtyApcWebviewSignal, TtyWebviewEvictedSignal};
     use orzma_tty_renderer::CellMetrics;
     use orzma_vt::prelude::{ApcWebviewVerb, GridColumn, PlacementId, ProjectedPlacement};
 
@@ -724,7 +724,7 @@ mod tests {
     }
 
     fn mount(app: &mut App, terminal: Entity, view_id: &str, placement: Option<PlacementId>) {
-        app.world_mut().trigger(TermApcWebviewSignal {
+        app.world_mut().trigger(TtyApcWebviewSignal {
             terminal,
             verb: ApcWebviewVerb::Mount {
                 view_id: view_id.into(),
@@ -738,7 +738,7 @@ mod tests {
     }
 
     fn unmount(app: &mut App, terminal: Entity, view_id: Option<&str>) {
-        app.world_mut().trigger(TermApcWebviewSignal {
+        app.world_mut().trigger(TtyApcWebviewSignal {
             terminal,
             verb: ApcWebviewVerb::Unmount {
                 view_id: view_id.map(str::to_string),
@@ -823,7 +823,7 @@ mod tests {
         instance_id: &str,
         placement: Option<PlacementId>,
     ) {
-        app.world_mut().trigger(TermApcWebviewSignal {
+        app.world_mut().trigger(TtyApcWebviewSignal {
             terminal,
             verb: ApcWebviewVerb::Mount {
                 view_id: view_id.into(),
@@ -837,7 +837,7 @@ mod tests {
     }
 
     fn unmount_instance(app: &mut App, terminal: Entity, view_id: &str, instance_id: &str) {
-        app.world_mut().trigger(TermApcWebviewSignal {
+        app.world_mut().trigger(TtyApcWebviewSignal {
             terminal,
             verb: ApcWebviewVerb::Unmount {
                 view_id: Some(view_id.into()),
@@ -941,7 +941,7 @@ mod tests {
         let entity = before[0];
         let slot_before = app.world().get::<Webview>(entity).unwrap().slot;
 
-        app.world_mut().trigger(TermApcWebviewSignal {
+        app.world_mut().trigger(TtyApcWebviewSignal {
             terminal,
             verb: ApcWebviewVerb::Mount {
                 view_id: "dash".into(),
@@ -2457,7 +2457,7 @@ mod tests {
         mount(&mut app, terminal, "memo", Some(PlacementId(1)));
         mount(&mut app, terminal, "clock", Some(PlacementId(2)));
         assert_eq!(webview_children_of(&app, terminal).len(), 2);
-        app.world_mut().trigger(TermWebviewEvictedSignal {
+        app.world_mut().trigger(TtyWebviewEvictedSignal {
             terminal,
             placements: vec![PlacementId(1), PlacementId(99)],
         });

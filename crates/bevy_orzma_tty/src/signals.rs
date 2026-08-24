@@ -1,29 +1,29 @@
-//! Outbound `Term*Signal` `EntityEvent` types for terminal entities,
-//! drained from the VT (`TermBellSignal`, `TermTitleChangedSignal`,
-//! `TermTitleResetSignal`, `TermClipboardStoreSignal`, `TermCwdChangedSignal`,
-//! `TermApcWebviewSignal`, `TermWebviewEvictedSignal`, `TermModeChangedSignal`, `TermChildExitSignal`,
-//! `TermFrameSnapshotSignal`, `TermFrameDeltaSignal`).
+//! Outbound `Tty*Signal` `EntityEvent` types for terminal entities,
+//! drained from the VT (`TtyBellSignal`, `TtyTitleChangedSignal`,
+//! `TtyTitleResetSignal`, `TtyClipboardStoreSignal`, `TtyCwdChangedSignal`,
+//! `TtyApcWebviewSignal`, `TtyWebviewEvictedSignal`, `TtyModeChangedSignal`, `TtyChildExitSignal`,
+//! `TtyFrameSnapshotSignal`, `TtyFrameDeltaSignal`).
 //! Inbound requests fired by the host UI live in `requests.rs`.
 
-use crate::OrzmaTermHandle;
+use crate::OrzmaTtyHandle;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::prelude::*;
-use orzma_term::prelude::*;
+use orzma_tty::prelude::*;
 use orzma_vt::prelude::*;
 use std::path::PathBuf;
 
 /// Fired when alacritty raises `Event::Bell`.
 /// Best-effort — no back-pressure observability (control channel is unbounded).
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TermBellSignal {
+pub struct TtyBellSignal {
     #[event_target]
     pub terminal: Entity,
 }
 
 /// Fired when the OSC terminal title changes.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TermTitleChangedSignal {
+pub struct TtyTitleChangedSignal {
     #[event_target]
     pub terminal: Entity,
     pub title: String,
@@ -31,7 +31,7 @@ pub struct TermTitleChangedSignal {
 
 /// Fired when the OSC terminal title resets.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TermTitleResetSignal {
+pub struct TtyTitleResetSignal {
     #[event_target]
     pub terminal: Entity,
 }
@@ -39,7 +39,7 @@ pub struct TermTitleResetSignal {
 /// Fired when tracked `TermMode` flags transition between coalescer
 /// emit cycles.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TermModeChangedSignal {
+pub struct TtyModeChangedSignal {
     #[event_target]
     pub entity: Entity,
     pub added: Vec<String>,
@@ -48,7 +48,7 @@ pub struct TermModeChangedSignal {
 
 /// Fired when alacritty raises `Event::ClipboardStore`.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TermClipboardStoreSignal {
+pub struct TtyClipboardStoreSignal {
     #[event_target]
     pub terminal: Entity,
     pub content: String,
@@ -57,7 +57,7 @@ pub struct TermClipboardStoreSignal {
 /// Fired exactly once when the child shell process exits.
 /// `code` is `None` if the `wait` itself failed.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TermChildExitSignal {
+pub struct TtyChildExitSignal {
     #[event_target]
     pub entity: Entity,
     pub code: Option<i32>,
@@ -66,7 +66,7 @@ pub struct TermChildExitSignal {
 /// Fired when a terminal reports a new current working directory via OSC 7.
 /// Targets the terminal host entity; carries the validated absolute path.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TermCwdChangedSignal {
+pub struct TtyCwdChangedSignal {
     #[event_target]
     pub terminal: Entity,
     pub path: PathBuf,
@@ -74,7 +74,7 @@ pub struct TermCwdChangedSignal {
 
 /// Fired for an APC webview mount/unmount request from the PTY.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TermApcWebviewSignal {
+pub struct TtyApcWebviewSignal {
     #[event_target]
     pub terminal: Entity,
     /// The mount/unmount verb parsed from the APC payload.
@@ -87,7 +87,7 @@ pub struct TermApcWebviewSignal {
 /// trim, alternate-screen teardown); consumers despawn the matching
 /// webviews by id and ignore unknown ids.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TermWebviewEvictedSignal {
+pub struct TtyWebviewEvictedSignal {
     #[event_target]
     pub terminal: Entity,
     pub placements: Vec<PlacementId>,
@@ -95,7 +95,7 @@ pub struct TermWebviewEvictedSignal {
 
 /// Fired when the terminal emits a full-repaint snapshot frame.
 #[derive(EntityEvent, Debug)]
-pub struct TermFrameSnapshotSignal {
+pub struct TtyFrameSnapshotSignal {
     #[event_target]
     pub terminal: Entity,
     /// The emitted snapshot.
@@ -104,38 +104,38 @@ pub struct TermFrameSnapshotSignal {
 
 /// Fired when the terminal emits a differential frame.
 #[derive(EntityEvent, Debug)]
-pub struct TermFrameDeltaSignal {
+pub struct TtyFrameDeltaSignal {
     #[event_target]
     pub terminal: Entity,
     /// The emitted delta.
     pub delta: FrameDelta,
 }
 
-pub(crate) struct OrzmaTermSignalPlugin;
+pub(crate) struct OrzmaTtySignalPlugin;
 
-impl Plugin for OrzmaTermSignalPlugin {
+impl Plugin for OrzmaTtySignalPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, pump_terminals);
     }
 }
 
-fn pump_terminals(mut commands: Commands, mut terms: Query<(Entity, &mut OrzmaTermHandle)>) {
+fn pump_terminals(mut commands: Commands, mut terms: Query<(Entity, &mut OrzmaTtyHandle)>) {
     for (terminal, mut term) in terms.iter_mut() {
         let o = term.pump();
         for signal in o.signals {
             match signal {
-                TermSignal::ChildExit { code } => commands.trigger(TermChildExitSignal {
+                TtySignal::ChildExit { code } => commands.trigger(TtyChildExitSignal {
                     entity: terminal,
                     code,
                 }),
-                TermSignal::Vt(signal) => trigger_vt_signal(&mut commands, terminal, signal),
+                TtySignal::Vt(signal) => trigger_vt_signal(&mut commands, terminal, signal),
             }
         }
         match o.frame {
             Some(Frame::Snapshot(frame)) => {
-                commands.trigger(TermFrameSnapshotSignal { terminal, frame })
+                commands.trigger(TtyFrameSnapshotSignal { terminal, frame })
             }
-            Some(Frame::Delta(delta)) => commands.trigger(TermFrameDeltaSignal { terminal, delta }),
+            Some(Frame::Delta(delta)) => commands.trigger(TtyFrameDeltaSignal { terminal, delta }),
             None => {}
         }
     }
@@ -143,26 +143,26 @@ fn pump_terminals(mut commands: Commands, mut terms: Query<(Entity, &mut OrzmaTe
 
 fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signal: VtSignal) {
     match signal {
-        VtSignal::Bell => commands.trigger(TermBellSignal { terminal }),
-        VtSignal::Title(title) => commands.trigger(TermTitleChangedSignal { terminal, title }),
-        VtSignal::ResetTitle => commands.trigger(TermTitleResetSignal { terminal }),
+        VtSignal::Bell => commands.trigger(TtyBellSignal { terminal }),
+        VtSignal::Title(title) => commands.trigger(TtyTitleChangedSignal { terminal, title }),
+        VtSignal::ResetTitle => commands.trigger(TtyTitleResetSignal { terminal }),
         VtSignal::Clipboard { content } => {
-            commands.trigger(TermClipboardStoreSignal { terminal, content })
+            commands.trigger(TtyClipboardStoreSignal { terminal, content })
         }
-        VtSignal::CurrentDir(path_buf) => commands.trigger(TermCwdChangedSignal {
+        VtSignal::CurrentDir(path_buf) => commands.trigger(TtyCwdChangedSignal {
             terminal,
             path: path_buf,
         }),
-        VtSignal::ApcWebview { verb, placement } => commands.trigger(TermApcWebviewSignal {
+        VtSignal::ApcWebview { verb, placement } => commands.trigger(TtyApcWebviewSignal {
             terminal,
             verb,
             placement,
         }),
-        VtSignal::WebviewEvicted { placements } => commands.trigger(TermWebviewEvictedSignal {
+        VtSignal::WebviewEvicted { placements } => commands.trigger(TtyWebviewEvictedSignal {
             terminal,
             placements,
         }),
-        VtSignal::ModeChange { added, removed } => commands.trigger(TermModeChangedSignal {
+        VtSignal::ModeChange { added, removed } => commands.trigger(TtyModeChangedSignal {
             entity: terminal,
             added: added.into_iter().map(String::from).collect(),
             removed: removed.into_iter().map(String::from).collect(),

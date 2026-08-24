@@ -1,5 +1,5 @@
 //! Inbound request `EntityEvent`s: commands the host UI fires AT a
-//! terminal entity, as opposed to the outbound `Term*Signal`s in
+//! terminal entity, as opposed to the outbound `Tty*Signal`s in
 //! `signals.rs` that are drained FROM the VT.
 
 use crate::requests::{
@@ -18,18 +18,18 @@ mod selection;
 mod vi_mode;
 mod vi_motion;
 
-pub use key_input::RequestTermKeyInput;
-pub use mouse_input::RequestTermMouseInput;
-pub use paste::RequestTermPaste;
-pub use resize::RequestTermResize;
-pub use scroll::RequestTermScroll;
+pub use key_input::RequestTtyKeyInput;
+pub use mouse_input::RequestTtyMouseInput;
+pub use paste::RequestTtyPaste;
+pub use resize::RequestTtyResize;
+pub use scroll::RequestTtyScroll;
 pub use selection::{
-    CellSide, GridPoint, RequestTermSelectionClear, RequestTermSelectionKindChange,
-    RequestTermSelectionStart, RequestTermSelectionStartAtViCursor, RequestTermSelectionUpdate,
+    CellSide, GridPoint, RequestTtySelectionClear, RequestTtySelectionKindChange,
+    RequestTtySelectionStart, RequestTtySelectionStartAtViCursor, RequestTtySelectionUpdate,
     SelectionKind,
 };
-pub use vi_mode::{RequestTermViMode, ViModeSwitch};
-pub use vi_motion::{RequestTermViMotion, ViMotion};
+pub use vi_mode::{RequestTtyViMode, ViModeSwitch};
+pub use vi_motion::{RequestTtyViMotion, ViMotion};
 
 pub(crate) struct OrzmaEventRequestPlugin;
 

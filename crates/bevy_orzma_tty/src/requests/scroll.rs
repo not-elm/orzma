@@ -1,10 +1,10 @@
-//! `RequestTermScroll`: the viewport movement the host UI asks a terminal
+//! `RequestTtyScroll`: the viewport movement the host UI asks a terminal
 //! entity to perform.
 
 use bevy::prelude::*;
 use orzma_vt::prelude::Scroll;
 
-use crate::OrzmaTermHandle;
+use crate::OrzmaTtyHandle;
 
 /// Fired by the host UI to move a specific terminal entity's viewport.
 ///
@@ -14,7 +14,7 @@ use crate::OrzmaTermHandle;
 /// and page-size resolution live in `orzma_vt` and are pinned by its
 /// tests, not re-asserted here.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct RequestTermScroll {
+pub struct RequestTtyScroll {
     #[event_target]
     pub terminal: Entity,
     /// The movement to perform.
@@ -29,7 +29,7 @@ impl Plugin for ScrollPlugin {
     }
 }
 
-fn apply_scroll(e: On<RequestTermScroll>, mut terms: Query<&mut OrzmaTermHandle>) {
+fn apply_scroll(e: On<RequestTtyScroll>, mut terms: Query<&mut OrzmaTtyHandle>) {
     if let Ok(mut tty) = terms.get_mut(e.terminal) {
         tty.scroll(e.scroll);
     }
@@ -38,7 +38,7 @@ fn apply_scroll(e: On<RequestTermScroll>, mut terms: Query<&mut OrzmaTermHandle>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::OrzmaTermHandle;
+    use crate::OrzmaTtyHandle;
     use orzma_vt::prelude::{DisplayOffset, Vt};
 
     // NOTE: on the 24-row grid the first 23 newlines only fill the
@@ -49,7 +49,7 @@ mod tests {
     fn app_with_terminal(history_rows: usize) -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(ScrollPlugin);
-        let (mut handle, _) = OrzmaTermHandle::detached(80, 24);
+        let (mut handle, _) = OrzmaTtyHandle::detached(80, 24);
         let seed: Vec<u8> = (0..history_rows + 23)
             .flat_map(|i| format!("l{i}\r\n").into_bytes())
             .collect();
@@ -60,12 +60,12 @@ mod tests {
 
     fn trigger_scroll(app: &mut App, terminal: Entity, scroll: Scroll) {
         app.world_mut()
-            .trigger(RequestTermScroll { terminal, scroll });
+            .trigger(RequestTtyScroll { terminal, scroll });
     }
 
     fn display_offset(app: &App, terminal: Entity) -> DisplayOffset {
         app.world()
-            .get::<OrzmaTermHandle>(terminal)
+            .get::<OrzmaTtyHandle>(terminal)
             .expect("terminal entity must keep its handle")
             .vt()
             .display_offset()
@@ -77,7 +77,7 @@ mod tests {
     /// Case: the user scrolls with the mouse wheel, where each notch
     /// fires one request and a fast spin delivers a burst of them.
     #[test]
-    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTermHandle::detached panics"]
+    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTtyHandle::detached panics"]
     fn scroll_up_and_down_move_the_viewport_relatively() {
         let (mut app, terminal) = app_with_terminal(10);
         trigger_scroll(&mut app, terminal, Scroll::Delta(3));
@@ -93,7 +93,7 @@ mod tests {
     /// Case: the user jumps to the oldest history and back to the
     /// live tail with the vi-mode `gg` and `G` motions.
     #[test]
-    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTermHandle::detached panics"]
+    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTtyHandle::detached panics"]
     fn scroll_top_and_bottom_jump_to_the_extremes() {
         let (mut app, terminal) = app_with_terminal(10);
         trigger_scroll(&mut app, terminal, Scroll::Top);
@@ -111,7 +111,7 @@ mod tests {
     /// is the full screen height (xterm-style, with no overlap line)
     /// rather than `rows - 1`.
     #[test]
-    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTermHandle::detached panics"]
+    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTtyHandle::detached panics"]
     fn paged_scrolls_move_by_screenfuls() {
         let (mut app, terminal) = app_with_terminal(40);
         trigger_scroll(&mut app, terminal, Scroll::PageUp);

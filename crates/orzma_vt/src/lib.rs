@@ -26,7 +26,7 @@ pub mod prelude {
     pub use crate::{OrzmaVt, Vt, VtUpdate, damage::*, schema::*};
 }
 
-/// The terminal-emulation contract `OrzmaTerm` drives and the host
+/// The terminal-emulation contract `OrzmaTty` drives and the host
 /// observes.
 ///
 /// An implementor is a complete VT: it interprets the PTY stream, owns

@@ -1,16 +1,16 @@
-//! `RequestTermResize`: the new grid size the host UI asks a terminal
+//! `RequestTtyResize`: the new grid size the host UI asks a terminal
 //! entity to adopt.
 
 use bevy::prelude::*;
 
-use crate::OrzmaTermHandle;
+use crate::OrzmaTtyHandle;
 
 /// Fired by the host UI to resize a specific terminal entity's grid.
 ///
 /// Carries the target size in cells, not pixels — the host owns the
 /// cell-metrics math and hands over an already-resolved column/row count.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct RequestTermResize {
+pub struct RequestTtyResize {
     #[event_target]
     pub terminal: Entity,
     /// Target column count.
@@ -27,7 +27,7 @@ impl Plugin for ResizePlugin {
     }
 }
 
-fn apply_resize(e: On<RequestTermResize>, mut terms: Query<&mut OrzmaTermHandle>) {
+fn apply_resize(e: On<RequestTtyResize>, mut terms: Query<&mut OrzmaTtyHandle>) {
     if let Ok(mut tty) = terms.get_mut(e.terminal)
         && let Err(e) = tty.resize(e.cols, e.rows)
     {
@@ -38,12 +38,12 @@ fn apply_resize(e: On<RequestTermResize>, mut terms: Query<&mut OrzmaTermHandle>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::OrzmaTermHandle;
+    use crate::OrzmaTtyHandle;
 
     fn app_with_terminal() -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(ResizePlugin);
-        let (handle, _) = OrzmaTermHandle::detached(80, 24);
+        let (handle, _) = OrzmaTtyHandle::detached(80, 24);
         let terminal = app.world_mut().spawn(handle).id();
         (app, terminal)
     }
@@ -53,7 +53,7 @@ mod tests {
         let handle = app
             .world()
             .entity(terminal)
-            .get::<OrzmaTermHandle>()
+            .get::<OrzmaTtyHandle>()
             .expect("terminal entity must keep its handle");
         let size = handle.pty_size();
         (size.cols, size.rows)
@@ -65,10 +65,10 @@ mod tests {
     /// Case: the user resizes the window; the host resolves pixels to
     /// cells and fires one request at the terminal it owns.
     #[test]
-    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTermHandle::detached panics"]
+    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTtyHandle::detached panics"]
     fn resize_applies_the_requested_size_to_the_pty() {
         let (mut app, terminal) = app_with_terminal();
-        app.world_mut().trigger(RequestTermResize {
+        app.world_mut().trigger(RequestTtyResize {
             terminal,
             cols: 120,
             rows: 40,
@@ -85,11 +85,11 @@ mod tests {
     /// 1x1 was rejected because shrinking the grid for a transient
     /// state risks reflow/scrollback loss on the way back.
     #[test]
-    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTermHandle::detached panics"]
+    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTtyHandle::detached panics"]
     fn a_degenerate_resize_is_ignored() {
         let (mut app, terminal) = app_with_terminal();
         for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
-            app.world_mut().trigger(RequestTermResize {
+            app.world_mut().trigger(RequestTtyResize {
                 terminal,
                 cols,
                 rows,

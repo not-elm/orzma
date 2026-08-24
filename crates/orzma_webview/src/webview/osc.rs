@@ -1,10 +1,10 @@
-//! Observes `TermApcWebviewSignal` and mounts/unmounts an inline dynamic
+//! Observes `TtyApcWebviewSignal` and mounts/unmounts an inline dynamic
 //! webview on the requesting terminal (the `Mount` / `Unmount` verbs).
 
 use super::mount::{WebviewMountContext, WebviewParams, mount, unmount};
 use crate::control_plane::OrzmaRegistry;
 use bevy::prelude::*;
-use bevy_orzma_term::prelude::TermApcWebviewSignal;
+use bevy_orzma_tty::prelude::TtyApcWebviewSignal;
 use orzma_vt::prelude::ApcWebviewVerb;
 
 /// Marks a webview as render-only (no pointer or keyboard input
@@ -22,7 +22,7 @@ impl Plugin for OscPlugin {
 }
 
 pub(crate) fn on_apc_webview_signal(
-    ev: On<TermApcWebviewSignal>,
+    ev: On<TtyApcWebviewSignal>,
     mut webview: WebviewParams,
     dynamic: Res<OrzmaRegistry>,
 ) {

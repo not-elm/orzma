@@ -1,5 +1,5 @@
 [package]
-name = "orzma_term"
+name = "orzma_tty"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -3,10 +3,10 @@
 
 use crate::{
     coalescer::Coalescer,
-    error::OrzmaTermResult,
+    error::OrzmaTtyResult,
     input::{MouseReport, PtyInput, TerminalKey, TerminalModifiers},
     pty::Pty,
-    signal::TermSignal,
+    signal::TtySignal,
 };
 use orzma_vt::prelude::*;
 use portable_pty::PtySize;
@@ -21,10 +21,10 @@ mod signal;
 pub mod test_support;
 
 pub mod prelude {
-    pub use crate::{OrzmaTerm, error::*, input::*, signal::*};
+    pub use crate::{OrzmaTty, error::*, input::*, signal::*};
 }
 
-/// Spawn parameters consumed exactly once by `OrzmaTerm::spawn`.
+/// Spawn parameters consumed exactly once by `OrzmaTty::spawn`.
 pub struct SpawnOptions {
     /// Terminal column count.
     pub cols: u16,
@@ -46,22 +46,22 @@ pub struct EnvValue(pub String);
 
 pub struct InterpretOutput {
     pub frame: Option<Frame>,
-    pub signals: Vec<TermSignal>,
+    pub signals: Vec<TtySignal>,
 }
 
 /// A live terminal: the VT emulation plus the PTY it is wired to.
-pub struct OrzmaTerm<V: Vt> {
+pub struct OrzmaTty<V: Vt> {
     vt: V,
     coalescer: Coalescer,
     pty: Pty,
     /// Signals produced by interpreted chunks, awaiting the next pump.
-    pending_signals: Vec<TermSignal>,
+    pending_signals: Vec<TtySignal>,
     /// Reply bytes produced by interpreted chunks, awaiting one PTY
     /// write in the next pump.
     pending_replies: Vec<u8>,
 }
 
-impl<V: Vt> OrzmaTerm<V> {
+impl<V: Vt> OrzmaTty<V> {
     /// Upper bound for a resize's column count; requests beyond it are
     /// ignored by [`Self::resize`].
     ///
@@ -75,7 +75,7 @@ impl<V: Vt> OrzmaTerm<V> {
 
     /// Spawns the login shell under a new PTY and sizes the injected VT
     /// to the spawn geometry.
-    pub fn spawn(mut vt: V, options: SpawnOptions) -> OrzmaTermResult<Self> {
+    pub fn spawn(mut vt: V, options: SpawnOptions) -> OrzmaTtyResult<Self> {
         let pty = Pty::spawn(&options)?;
         vt.resize(GridSize {
             cols: options.cols,
@@ -121,7 +121,7 @@ impl<V: Vt> OrzmaTerm<V> {
         cols: u16,
         rows: u16,
         writer: Box<dyn Write + Send>,
-    ) -> OrzmaTermResult<Self> {
+    ) -> OrzmaTtyResult<Self> {
         let pty = Pty::detached(cols, rows, writer)?;
         vt.resize(GridSize { cols, rows });
         Ok(Self {
@@ -160,13 +160,13 @@ impl<V: Vt> OrzmaTerm<V> {
     /// A request with a zero axis, or one exceeding [`Self::MAX_COLS`] /
     /// [`Self::MAX_ROWS`], is ignored with `Ok` — neither clamped nor
     /// an error. When the PTY resize fails the call returns
-    /// [`OrzmaTermError::PtyResize`] and leaves the VT grid and
+    /// [`OrzmaTtyError::PtyResize`] and leaves the VT grid and
     /// coalescer untouched (PTY first; nothing changes on failure).
     ///
     /// A request for the grid size the VT already has reflows nothing
     /// and reports no damage, so it arms nothing either — the same gate
     /// [`Self::scroll`] applies to a clamped motion.
-    pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTermResult {
+    pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTtyResult {
         if cols == 0 || rows == 0 || Self::MAX_COLS < cols || Self::MAX_ROWS < rows {
             return Ok(());
         }
@@ -181,7 +181,7 @@ impl<V: Vt> OrzmaTerm<V> {
     ///
     /// Snaps a scrolled-back viewport to the live tail first
     /// (scroll-on-input policy) so the echo is visible.
-    pub fn send_key(&mut self, key: &TerminalKey, mods: &TerminalModifiers) -> OrzmaTermResult {
+    pub fn send_key(&mut self, key: &TerminalKey, mods: &TerminalModifiers) -> OrzmaTtyResult {
         let modes = self.vt.modes();
         self.snap_to_live_tail();
         self.pty
@@ -196,7 +196,7 @@ impl<V: Vt> OrzmaTerm<V> {
     /// viewport the user is looking at, so yanking the view to the live
     /// tail on every report would make the screen jump under the
     /// pointer.
-    pub fn send_mouse(&mut self, report: MouseReport) -> OrzmaTermResult {
+    pub fn send_mouse(&mut self, report: MouseReport) -> OrzmaTtyResult {
         let sequence = report.encode(self.vt.modes().mouse_encoding);
         self.pty.write_all(&sequence)
     }
@@ -209,7 +209,7 @@ impl<V: Vt> OrzmaTerm<V> {
     /// (scroll-on-input policy), and the whole frame goes out in a
     /// single write — a partially-written frame would leave the
     /// receiving app inside an unterminated paste.
-    pub fn send_paste(&mut self, text: &str) -> OrzmaTermResult {
+    pub fn send_paste(&mut self, text: &str) -> OrzmaTtyResult {
         if text.is_empty() {
             return Ok(());
         }
@@ -245,7 +245,7 @@ impl<V: Vt> OrzmaTerm<V> {
 
         let mut signals = mem::take(&mut self.pending_signals);
         if let Some(code) = exit {
-            signals.push(TermSignal::ChildExit { code });
+            signals.push(TtySignal::ChildExit { code });
         }
 
         let mut frame: Option<Frame> = None;
@@ -283,7 +283,7 @@ impl<V: Vt> OrzmaTerm<V> {
             self.coalescer.arm_or_extend(Instant::now());
         }
         self.pending_signals
-            .extend(update.signals.into_iter().map(TermSignal::Vt));
+            .extend(update.signals.into_iter().map(TtySignal::Vt));
         self.pending_replies.extend(update.replies);
     }
 }
@@ -291,11 +291,11 @@ impl<V: Vt> OrzmaTerm<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::OrzmaTermError;
+    use crate::error::OrzmaTtyError;
     use crate::test_support::{CaptureSink, FailingMaster, FakeVt, RecordingMaster};
     use crossbeam_channel::{Sender, unbounded};
 
-    /// Mirrors [`OrzmaTerm::detached`] over a fake master instead of a
+    /// Mirrors [`OrzmaTty::detached`] over a fake master instead of a
     /// real one.
     ///
     /// Opening a real one made every test sharing the run flaky.
@@ -304,12 +304,12 @@ mod tests {
     /// then fails with `ENXIO`; measured on macOS at 5-10 failures per
     /// 960 concurrent calls, and at zero once the slave side is left
     /// out.
-    fn detached_term() -> (OrzmaTerm<FakeVt>, CaptureSink) {
+    fn detached_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
         let sink = CaptureSink::default();
         let (master, _) = RecordingMaster::at(80, 24);
         let mut vt = FakeVt::new(80, 24);
         vt.resize(GridSize { cols: 80, rows: 24 });
-        let term = OrzmaTerm {
+        let term = OrzmaTty {
             vt,
             coalescer: Coalescer::default(),
             pty: Pty::with_master(Box::new(master), Box::new(sink.clone())),
@@ -319,8 +319,8 @@ mod tests {
         (term, sink)
     }
 
-    fn failing_term() -> OrzmaTerm<FakeVt> {
-        OrzmaTerm {
+    fn failing_term() -> OrzmaTty<FakeVt> {
+        OrzmaTty {
             vt: FakeVt::new(80, 24),
             coalescer: Coalescer::default(),
             pty: Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default())),
@@ -332,10 +332,10 @@ mod tests {
     /// A terminal whose PTY chunk and exit streams are fed by the
     /// returned senders, so tests can inject output and child-exit
     /// reports.
-    fn channelled_term() -> (OrzmaTerm<FakeVt>, Sender<Vec<u8>>, Sender<Option<i32>>) {
+    fn channelled_term() -> (OrzmaTty<FakeVt>, Sender<Vec<u8>>, Sender<Option<i32>>) {
         let (chunk_tx, chunk_rx) = unbounded();
         let (exit_tx, exit_rx) = unbounded();
-        let term = OrzmaTerm {
+        let term = OrzmaTty {
             vt: FakeVt::new(80, 24),
             coalescer: Coalescer::default(),
             pty: Pty::with_master_and_channels(
@@ -351,17 +351,17 @@ mod tests {
     }
 
     /// Collects the `ChildExit` codes out of a pumped signal batch.
-    fn child_exits(signals: &[TermSignal]) -> Vec<Option<i32>> {
+    fn child_exits(signals: &[TtySignal]) -> Vec<Option<i32>> {
         signals
             .iter()
             .filter_map(|signal| match signal {
-                TermSignal::ChildExit { code } => Some(*code),
+                TtySignal::ChildExit { code } => Some(*code),
                 _ => None,
             })
             .collect()
     }
 
-    fn sizes(term: &OrzmaTerm<FakeVt>) -> ((u16, u16), (u16, u16)) {
+    fn sizes(term: &OrzmaTty<FakeVt>) -> ((u16, u16), (u16, u16)) {
         let pty = term.pty_size();
         let grid = term.vt.grid_size();
         ((pty.cols, pty.rows), (grid.cols, grid.rows))
@@ -442,8 +442,8 @@ mod tests {
     /// far larger than any real display.
     #[test]
     fn an_oversized_axis_resize_is_ignored() {
-        const MAX_COLS: u16 = OrzmaTerm::<FakeVt>::MAX_COLS;
-        const MAX_ROWS: u16 = OrzmaTerm::<FakeVt>::MAX_ROWS;
+        const MAX_COLS: u16 = OrzmaTty::<FakeVt>::MAX_COLS;
+        const MAX_ROWS: u16 = OrzmaTty::<FakeVt>::MAX_ROWS;
         let (mut term, _sink) = detached_term();
         for (cols, rows) in [(MAX_COLS + 1, 24), (80, MAX_ROWS + 1)] {
             term.resize(cols, rows).expect("ignored resize must be Ok");
@@ -464,7 +464,7 @@ mod tests {
     fn an_ignored_resize_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
         term.resize(0, 40).expect("ignored resize must be Ok");
-        term.resize(OrzmaTerm::<FakeVt>::MAX_COLS + 1, 24)
+        term.resize(OrzmaTty::<FakeVt>::MAX_COLS + 1, 24)
             .expect("ignored resize must be Ok");
         assert!(!term.coalescer.is_armed());
     }
@@ -519,7 +519,7 @@ mod tests {
         let mut term = failing_term();
         let result = term.resize(120, 40);
         assert!(
-            matches!(result, Err(OrzmaTermError::PtyResize(_))),
+            matches!(result, Err(OrzmaTtyError::PtyResize(_))),
             "expected PtyResize, got {result:?}"
         );
         assert!(term.vt.resizes.is_empty());
@@ -735,7 +735,7 @@ mod tests {
     }
 
     /// Asserts that VT signals from interpreted chunks surface as
-    /// `TermSignal::Vt`, ahead of a `ChildExit` in the same batch.
+    /// `TtySignal::Vt`, ahead of a `ChildExit` in the same batch.
     ///
     /// Case: the shell rings the bell in its final output and exits;
     /// the host must observe the bell before acting on the exit.
@@ -753,8 +753,8 @@ mod tests {
         assert_eq!(
             signals,
             vec![
-                TermSignal::Vt(VtSignal::Bell),
-                TermSignal::ChildExit { code: Some(0) }
+                TtySignal::Vt(VtSignal::Bell),
+                TtySignal::ChildExit { code: Some(0) }
             ]
         );
     }
@@ -769,7 +769,7 @@ mod tests {
         let (chunk_tx, chunk_rx) = unbounded();
         let (_exit_tx, exit_rx) = unbounded();
         let sink = CaptureSink::default();
-        let mut term = OrzmaTerm {
+        let mut term = OrzmaTty {
             vt: FakeVt::new(80, 24),
             coalescer: Coalescer::default(),
             pty: Pty::with_master_and_channels(

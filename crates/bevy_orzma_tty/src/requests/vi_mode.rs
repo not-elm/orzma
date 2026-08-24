@@ -1,4 +1,4 @@
-//! `RequestTermViMode`: the vi-mode switch the host UI asks a terminal
+//! `RequestTtyViMode`: the vi-mode switch the host UI asks a terminal
 //! entity to perform.
 
 use bevy::prelude::*;
@@ -7,7 +7,7 @@ pub use orzma_vt::prelude::ViModeSwitch;
 /// Fired by the host UI to enter or leave vi mode on a specific terminal
 /// entity.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct RequestTermViMode {
+pub struct RequestTtyViMode {
     #[event_target]
     pub terminal: Entity,
     /// Which direction to switch.
@@ -22,7 +22,7 @@ impl Plugin for ViModePlugin {
     }
 }
 
-fn apply_vi_mode(_e: On<RequestTermViMode>) {}
+fn apply_vi_mode(_e: On<RequestTtyViMode>) {}
 
 #[cfg(test)]
 mod tests {
@@ -33,7 +33,7 @@ mod tests {
     struct Seen(Vec<(Entity, ViModeSwitch)>);
 
     /// Observer that appends what it received to [`Seen`].
-    fn record(ev: On<RequestTermViMode>, mut seen: ResMut<Seen>) {
+    fn record(ev: On<RequestTtyViMode>, mut seen: ResMut<Seen>) {
         seen.0.push((ev.event_target(), ev.switch));
     }
 
@@ -52,7 +52,7 @@ mod tests {
 
         for switch in [ViModeSwitch::Enter, ViModeSwitch::Exit] {
             app.world_mut()
-                .trigger(RequestTermViMode { terminal, switch });
+                .trigger(RequestTtyViMode { terminal, switch });
         }
 
         assert_eq!(
@@ -77,7 +77,7 @@ mod tests {
         let terminal = app.world_mut().spawn_empty().id();
 
         for _ in 0..2 {
-            app.world_mut().trigger(RequestTermViMode {
+            app.world_mut().trigger(RequestTtyViMode {
                 terminal,
                 switch: ViModeSwitch::Enter,
             });

@@ -2,7 +2,7 @@
 //!
 //! [`DeviceState`] is the device model, not a layer of its own: the
 //! screens with their write cursors, the DECSET modes, the tab stops,
-//! the color table, and the title stack. `OrzmaTerm` one crate up is
+//! the color table, and the title stack. `OrzmaTty` one crate up is
 //! the live terminal — a VT wired to a PTY — so the device the VT
 //! emulates deliberately does not borrow that name.
 #![expect(

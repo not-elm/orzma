@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
 use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewSource};
-use bevy_orzma_term::prelude::OrzmaTermHandle;
+use bevy_orzma_tty::prelude::OrzmaTtyHandle;
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use orzma_webview_host::WebviewAssetRegistry;
@@ -399,7 +399,7 @@ impl Plugin for ControlPlanePlugin {
 }
 
 /// Purges a despawned surface's dynamic registrations + assets. Keyed on
-/// `RemovedComponents<OrzmaTermHandle>` so it fires for every terminal surface
+/// `RemovedComponents<OrzmaTtyHandle>` so it fires for every terminal surface
 /// with no multiplexer dependency.
 ///
 /// # Invariants
@@ -409,7 +409,7 @@ impl Plugin for ControlPlanePlugin {
 /// no-op) — gating it behind the handle would leak in that case.
 fn gc_despawned_surfaces(
     mut registry: ResMut<OrzmaRegistry>,
-    mut closed: RemovedComponents<OrzmaTermHandle>,
+    mut closed: RemovedComponents<OrzmaTtyHandle>,
     handle: Option<Res<ControlPlaneHandle>>,
     orzma_assets: Res<WebviewAssetRegistryRes>,
 ) {
@@ -853,7 +853,7 @@ mod gc_tests {
     use super::*;
 
     #[test]
-    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTermHandle::detached panics"]
+    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTtyHandle::detached panics"]
     fn gc_purges_registrations_when_owner_surface_despawns() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -861,7 +861,7 @@ mod gc_tests {
         app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         app.add_systems(Update, gc_despawned_surfaces);
 
-        let (handle, _sink) = OrzmaTermHandle::detached(4, 2);
+        let (handle, _sink) = OrzmaTtyHandle::detached(4, 2);
         let surface = app.world_mut().spawn(handle).id();
         app.world_mut().resource_mut::<OrzmaRegistry>().insert(
             "h0".into(),

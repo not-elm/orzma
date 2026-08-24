@@ -1,11 +1,11 @@
-//! Error surface for `orzma_term`.
+//! Error surface for `orzma_tty`.
 
 /// Crate-wide result alias defaulting to `()` on success.
-pub type OrzmaTermResult<T = ()> = Result<T, OrzmaTermError>;
+pub type OrzmaTtyResult<T = ()> = Result<T, OrzmaTtyError>;
 
 /// Failure while spawning or driving a terminal.
 #[derive(Debug, thiserror::Error)]
-pub enum OrzmaTermError {
+pub enum OrzmaTtyError {
     /// Opening the PTY pair failed.
     #[error("PTY open failed")]
     PtyOpen(#[source] anyhow::Error),

@@ -2,7 +2,7 @@
 
 use crate::{
     SpawnOptions,
-    error::{OrzmaTermError, OrzmaTermResult},
+    error::{OrzmaTtyError, OrzmaTtyResult},
 };
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -16,8 +16,8 @@ use std::thread;
 /// PTY ownership for one spawned shell.
 ///
 /// `Mutex` is required because `dyn MasterPty + Send` and `dyn Write +
-/// Send` are `!Sync`, while downstream wrappers (`bevy_orzma_term`'s
-/// `Component`) need the owning `OrzmaTerm` to be `Send + Sync`.
+/// Send` are `!Sync`, while downstream wrappers (`bevy_orzma_tty`'s
+/// `Component`) need the owning `OrzmaTty` to be `Send + Sync`.
 pub struct Pty {
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -30,7 +30,7 @@ impl Pty {
     /// Opens a PTY at the given grid size, spawns `options.shell` under
     /// it as a login shell, and starts the blocking reader/wait OS
     /// thread.
-    pub fn spawn(options: &SpawnOptions) -> OrzmaTermResult<Self> {
+    pub fn spawn(options: &SpawnOptions) -> OrzmaTtyResult<Self> {
         let pty_pair = native_pty_system()
             .openpty(PtySize {
                 rows: options.rows,
@@ -38,7 +38,7 @@ impl Pty {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(OrzmaTermError::PtyOpen)?;
+            .map_err(OrzmaTtyError::PtyOpen)?;
 
         let mut cmd = build_shell_command(&options.shell);
         if let Some(cwd) = options.cwd.as_ref() {
@@ -51,7 +51,7 @@ impl Pty {
         let child = pty_pair
             .slave
             .spawn_command(cmd)
-            .map_err(OrzmaTermError::SpawnShell)?;
+            .map_err(OrzmaTtyError::SpawnShell)?;
         let mut child_killer = child.clone_killer();
         drop(pty_pair.slave);
 
@@ -59,7 +59,7 @@ impl Pty {
             Ok(pipes) => pipes,
             Err(e) => {
                 let _ = child_killer.kill();
-                return Err(OrzmaTermError::PtyPipe(e));
+                return Err(OrzmaTtyError::PtyPipe(e));
             }
         };
 
@@ -87,22 +87,22 @@ impl Pty {
     }
 
     #[inline]
-    pub fn write_all(&mut self, buf: &[u8]) -> OrzmaTermResult {
+    pub fn write_all(&mut self, buf: &[u8]) -> OrzmaTtyResult {
         self.writer
             .lock()
             .unwrap()
             .write_all(buf)
-            .map_err(OrzmaTermError::PtyWrite)?;
+            .map_err(OrzmaTtyError::PtyWrite)?;
         Ok(())
     }
 
     /// Applies the given grid size to the PTY master (`TIOCSWINSZ`).
     ///
     /// A no-policy wrapper: forwards the values verbatim (validation is
-    /// `OrzmaTerm::resize`'s job) with the pixel fields explicitly
+    /// `OrzmaTty::resize`'s job) with the pixel fields explicitly
     /// zeroed, and maps the master's error to
-    /// [`OrzmaTermError::PtyResize`].
-    pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTermResult {
+    /// [`OrzmaTtyError::PtyResize`].
+    pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTtyResult {
         self.master
             .lock()
             .unwrap()
@@ -112,14 +112,14 @@ impl Pty {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(OrzmaTermError::PtyResize)
+            .map_err(OrzmaTtyError::PtyResize)
     }
 
     /// Reads the master's current size back from the kernel
     /// (`TIOCGWINSZ`).
     ///
     /// Panics on ioctl failure — the master fd is no longer valid at
-    /// that point (see `OrzmaTerm::pty_size`).
+    /// that point (see `OrzmaTty::pty_size`).
     pub fn size(&self) -> PtySize {
         self.master
             .lock()
@@ -130,8 +130,8 @@ impl Pty {
 
     /// Opens a PTY at the given grid size but routes writes to `writer`
     /// instead of the master, spawning no child process and no reader
-    /// thread — the injectable seam behind `OrzmaTerm::detached`.
-    pub fn detached(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> OrzmaTermResult<Self> {
+    /// thread — the injectable seam behind `OrzmaTty::detached`.
+    pub fn detached(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> OrzmaTtyResult<Self> {
         let pty_pair = native_pty_system()
             .openpty(PtySize {
                 rows,
@@ -139,7 +139,7 @@ impl Pty {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(OrzmaTermError::PtyOpen)?;
+            .map_err(OrzmaTtyError::PtyOpen)?;
         Ok(Self::with_master(pty_pair.master, writer))
     }
 
@@ -321,7 +321,7 @@ mod tests {
     /// call per request.
     ///
     /// Case: the layering pin. The zero-axis / oversize policy lives
-    /// only in `OrzmaTerm::resize`; this wrapper must not validate. A
+    /// only in `OrzmaTty::resize`; this wrapper must not validate. A
     /// guard sneaking in here would duplicate the policy and let the
     /// two layers drift (one clamping while the other ignores) without
     /// any layered test noticing.
@@ -342,10 +342,10 @@ mod tests {
     }
 
     /// Asserts that a master resize failure surfaces as
-    /// `OrzmaTermError::PtyResize`.
+    /// `OrzmaTtyError::PtyResize`.
     ///
     /// Case: the error-taxonomy pin, mirroring `write_all` →
-    /// `PtyWrite`. `OrzmaTerm::resize`'s failure-atomicity branch and
+    /// `PtyWrite`. `OrzmaTty::resize`'s failure-atomicity branch and
     /// the bevy layer's `error!` log both identify the failing
     /// subsystem by this variant.
     #[test]
@@ -353,7 +353,7 @@ mod tests {
         let mut pty = Pty::with_master(Box::new(FailingMaster), Box::new(sink()));
         let result = pty.resize(120, 40);
         assert!(
-            matches!(result, Err(OrzmaTermError::PtyResize(_))),
+            matches!(result, Err(OrzmaTtyError::PtyResize(_))),
             "expected PtyResize, got {result:?}"
         );
     }

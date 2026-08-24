@@ -1,4 +1,4 @@
-//! `RequestTermViMotion`: the vi-cursor motion the host UI asks a terminal
+//! `RequestTtyViMotion`: the vi-cursor motion the host UI asks a terminal
 //! entity to perform.
 //!
 //! [`ViMotion`] mirrors the motion vocabulary one-for-one. Its final home is
@@ -12,7 +12,7 @@ use bevy::prelude::*;
 /// Has no effect outside vi mode; the apply observer holds that state, so the
 /// host may fire without checking first.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct RequestTermViMotion {
+pub struct RequestTtyViMotion {
     #[event_target]
     pub terminal: Entity,
     /// The motion to apply to the vi cursor.
@@ -74,7 +74,7 @@ impl Plugin for ViMotionPlugin {
     }
 }
 
-fn apply_vi_motion(_e: On<RequestTermViMotion>) {}
+fn apply_vi_motion(_e: On<RequestTtyViMotion>) {}
 
 #[cfg(test)]
 mod tests {
@@ -85,7 +85,7 @@ mod tests {
     struct Seen(Vec<(Entity, ViMotion)>);
 
     /// Observer that appends what it received to [`Seen`].
-    fn record(ev: On<RequestTermViMotion>, mut seen: ResMut<Seen>) {
+    fn record(ev: On<RequestTtyViMotion>, mut seen: ResMut<Seen>) {
         seen.0.push((ev.event_target(), ev.motion));
     }
 
@@ -114,7 +114,7 @@ mod tests {
         ViMotion::ParagraphDown,
     ];
 
-    /// Asserts that a triggered `RequestTermViMotion` reaches an observer with
+    /// Asserts that a triggered `RequestTtyViMotion` reaches an observer with
     /// its target and motion intact.
     ///
     /// Case: one keymapped motion (`j`) resolved by the host and fired at the
@@ -125,7 +125,7 @@ mod tests {
         app.init_resource::<Seen>().add_observer(record);
         let terminal = app.world_mut().spawn_empty().id();
 
-        app.world_mut().trigger(RequestTermViMotion {
+        app.world_mut().trigger(RequestTtyViMotion {
             terminal,
             motion: ViMotion::Down,
         });
@@ -151,7 +151,7 @@ mod tests {
 
         for motion in ALL {
             app.world_mut()
-                .trigger(RequestTermViMotion { terminal, motion });
+                .trigger(RequestTtyViMotion { terminal, motion });
         }
 
         let seen: Vec<ViMotion> = app

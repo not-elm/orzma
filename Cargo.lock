@@ -1308,11 +1308,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 
 [[package]]
-name = "bevy_orzma_term"
+name = "bevy_orzma_tty"
 version = "0.2.0-dev"
 dependencies = [
  "bevy",
- "orzma_term",
+ "orzma_tty",
  "orzma_vt",
 ]
 
@@ -5048,7 +5048,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "orzma_term"
+name = "orzma_tty"
 version = "0.2.0-dev"
 dependencies = [
  "anyhow",
@@ -5106,7 +5106,7 @@ version = "0.2.0-dev"
 dependencies = [
  "bevy",
  "bevy_cef",
- "bevy_orzma_term",
+ "bevy_orzma_tty",
  "crossbeam-channel",
  "data-encoding",
  "getrandom 0.2.17",
