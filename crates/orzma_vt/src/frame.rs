@@ -113,7 +113,7 @@ impl Frame {
             hyperlinks: Vec::new(),
         };
         state.settle(
-            &frame.cursor,
+            frame.cursor,
             frame.display_offset,
             frame.placements.as_ref(),
             frame.palette.as_ref(),

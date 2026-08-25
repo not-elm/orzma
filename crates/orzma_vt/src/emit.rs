@@ -70,12 +70,12 @@ impl EmitState {
     /// same change again on the next attempt.
     pub fn settle(
         &mut self,
-        cursor: &Cursor,
+        cursor: Cursor,
         display_offset: DisplayOffset,
         placements: Option<&Vec<ProjectedPlacement>>,
         palette: Option<&Palette>,
     ) {
-        self.cursor.clone_from(cursor);
+        self.cursor = cursor;
         self.display_offset = display_offset;
         if let Some(placements) = placements {
             self.placements.clone_from(placements);
@@ -132,7 +132,7 @@ mod tests {
             .expect("a mount changes the projection");
         assert_eq!(listed.len(), 1);
         let cursor = device.active().cursor();
-        state.settle(&cursor, device.display_offset(), Some(&listed), None);
+        state.settle(cursor, device.display_offset(), Some(&listed), None);
         assert_eq!(state.diff_placements(&store, device.active_screen()), None);
     }
 
@@ -150,7 +150,7 @@ mod tests {
         let changed = state
             .diff_palette(&palette)
             .expect("an override changes the table");
-        state.settle(&Cursor::default(), DisplayOffset(0), None, Some(&changed));
+        state.settle(Cursor::default(), DisplayOffset(0), None, Some(&changed));
         assert_eq!(state.diff_palette(&palette), None);
     }
 }

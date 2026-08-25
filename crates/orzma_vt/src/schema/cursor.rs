@@ -24,7 +24,7 @@ pub struct ViCursor {
 }
 
 /// Cursor state at snapshot time.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Cursor {
     /// The grid position
     pub point: GridPoint,
