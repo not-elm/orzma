@@ -29,7 +29,8 @@ impl PlacementStore {
     }
 
     /// Projects every placement on the active screen into viewport
-    /// coordinates — the complete list, not a diff.
+    /// coordinates, into a caller-owned buffer — the complete list, not
+    /// a diff.
     ///
     /// # Invariants
     ///
@@ -42,20 +43,28 @@ impl PlacementStore {
     /// removed, so it stays invisible but alive until the next eviction
     /// sweep. Rows outside the viewport are not culled: a negative row
     /// passes through for the renderer to clip.
+    pub fn project_into(&self, out: &mut Vec<ProjectedPlacement>, active: ActiveScreen<'_>) {
+        out.extend(
+            self.placements
+                .iter()
+                .filter(|p| p.screen == active.kind())
+                .filter_map(|p| {
+                    Some(ProjectedPlacement {
+                        id: p.id,
+                        viewport_row: active.viewport_row_of(p.anchor)?,
+                        col: p.col,
+                        rows: p.rows,
+                        cols: p.cols,
+                    })
+                }),
+        );
+    }
+
+    /// Projects into a fresh `Vec`; see [`Self::project_into`].
     pub fn project(&self, active: ActiveScreen<'_>) -> Vec<ProjectedPlacement> {
-        self.placements
-            .iter()
-            .filter(|p| p.screen == active.kind())
-            .filter_map(|p| {
-                Some(ProjectedPlacement {
-                    id: p.id,
-                    viewport_row: active.viewport_row_of(p.anchor)?,
-                    col: p.col,
-                    rows: p.rows,
-                    cols: p.cols,
-                })
-            })
-            .collect()
+        let mut out = Vec::new();
+        self.project_into(&mut out, active);
+        out
     }
 
     /// Registers a mount at the cursor and mints its id; `None` when
