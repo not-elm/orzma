@@ -101,9 +101,42 @@ impl Grid {
         }
     }
 
+    /// Discards the history and rebuilds the visible rows blank.
+    ///
+    /// The grid keeps its size and its history cap.
+    ///
+    /// # Invariants
+    ///
+    /// Every rebuilt row is minted from the running counter rather than
+    /// renumbered from zero: a [`LineId`] an anchor still holds must never
+    /// come back around and name one of the new rows.
+    pub fn reset(&mut self) {
+        self.rows.clear();
+        for _ in 0..self.size.rows {
+            let id = self.mint();
+            self.rows.push_back(StoredRow {
+                id,
+                cells: Row::filled(self.size.cols, Cell::default()),
+            });
+        }
+    }
+
     /// Grid dimensions in cells.
     pub const fn size(&self) -> GridSize {
         self.size
+    }
+
+    /// Whether every visible cell is blank and no history survives.
+    ///
+    /// Content only: row ids and the mint counter are deliberately out of
+    /// scope, so a grid that has scrolled and then been erased still
+    /// reports blank.
+    pub fn is_blank(&self) -> bool {
+        self.history_len() == 0
+            && self
+                .rows
+                .iter()
+                .all(|row| row.cells.iter().all(|cell| *cell == Cell::default()))
     }
 
     /// Overwrites the given column range of one visible row with `fill`.
@@ -597,6 +630,56 @@ mod tests {
             assert_eq!(grid[ScreenLine(1)][0].c, Cell::default().c);
             assert_eq!(grid[ScreenLine(2)][0].c, 'b');
             assert_eq!(grid[ScreenLine(3)][0].c, 'd');
+        }
+    }
+
+    mod reset {
+        use super::*;
+
+        /// Asserts that a reset leaves the grid blank with no history.
+        ///
+        /// Case: the shell sends `RIS` to a terminal that has scrolled a
+        /// build log into its scrollback.
+        #[test]
+        fn a_reset_blanks_the_grid_and_drops_the_history() {
+            let mut grid = grid(3, 10);
+            grid[ScreenLine(0)][0].c = 'a';
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            grid[ScreenLine(0)][0].c = 'b';
+            grid.reset();
+            assert_eq!(grid.history_len(), 0);
+            assert!(grid.is_blank());
+        }
+
+        /// Asserts that a reset mints ids no anchor taken before it can
+        /// match, rather than renumbering the rows from zero.
+        ///
+        /// Case: a webview is anchored to a row when `RIS` arrives, and
+        /// the placement store has yet to sweep its lost anchors.
+        #[test]
+        fn a_reset_mints_ids_no_pre_reset_anchor_can_match() {
+            let mut grid = grid(3, 10);
+            let anchor = grid.line_id(ScreenLine(0));
+            grid.reset();
+            assert_eq!(grid.grid_line(anchor), None);
+        }
+
+        /// Asserts that the id counter keeps moving forward across
+        /// repeated resets.
+        ///
+        /// Case: an application sends `RIS` twice while a webview from
+        /// before the first one is still mounted.
+        #[test]
+        fn a_reset_does_not_rewind_the_id_counter() {
+            let mut grid = grid(3, 10);
+            grid.reset();
+            let first: Vec<LineId> = (0..3).map(|line| grid.line_id(ScreenLine(line))).collect();
+            grid.reset();
+            let second: Vec<LineId> = (0..3).map(|line| grid.line_id(ScreenLine(line))).collect();
+            assert!(second.iter().all(|id| !first.contains(id)));
+            for id in &first {
+                assert_eq!(grid.grid_line(*id), None);
+            }
         }
     }
 }

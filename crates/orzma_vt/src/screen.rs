@@ -81,6 +81,7 @@ pub(crate) enum EraseScreenMode {
 ///
 /// Both grid axes are nonzero; degenerate sizes are rejected by the
 /// caller (the same contract as [`crate::Vt::resize`]).
+#[derive(Debug)]
 pub struct Screen {
     grid: Grid,
     viewport: Viewport,
@@ -564,16 +565,23 @@ impl Screen {
     ///
     /// # Invariants
     ///
-    /// The margins and the origin mode are restored before the cursor
-    /// is seated: homing first would land on the old top margin under
-    /// [`OriginMode::WithinMargins`] instead of the screen's upper-left
-    /// corner.
+    /// The cursor lands at the screen's upper-left corner whatever
+    /// origin mode was in force, because the state is replaced wholesale
+    /// rather than homed through the origin.
     ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`) — its screen-scoped actions
     pub fn reset(&mut self) -> Option<DamageSpan> {
-        todo!("テストケースを追加 実装はまだしない")
+        let dirty = !self.grid.is_blank();
+        self.grid.reset();
+        self.viewport = Viewport::default();
+        self.scroll_region = ScrollRegion::new(self.grid.size().rows);
+        self.state = ScreenState::default();
+        self.tabs = TabStops::default();
+        self.character_set_mapping = CharacterSetMapping::default();
+        self.checkpoint = Checkpoint::default();
+        dirty.then_some(DamageSpan::Full)
     }
 
     /// Follows a one-row scroll with the offset that keeps a scrolled

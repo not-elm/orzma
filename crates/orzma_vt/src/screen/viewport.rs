@@ -55,7 +55,7 @@ pub enum Scroll {
     Bottom,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Viewport {
     pub offset: DisplayOffset,
 }

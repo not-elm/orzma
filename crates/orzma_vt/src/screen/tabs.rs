@@ -64,6 +64,7 @@ impl CharacterTabEdit {
 /// screen never reaches the primary. xterm shares a single table across
 /// both instead, and ECMA-48 settles nothing here because it has no
 /// alternate screen at all.
+#[derive(Debug, PartialEq)]
 pub(super) struct TabStops([u64; TabStops::WORDS]);
 
 impl TabStops {

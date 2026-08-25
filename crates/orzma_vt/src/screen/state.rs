@@ -3,7 +3,7 @@
 use crate::screen::cell::Pen;
 use crate::screen::grid::coords::{GridColumn, ScreenLine};
 
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq)]
 pub(super) struct ScreenState {
     pub line: ScreenLine,
     pub column: GridColumn,
