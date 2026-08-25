@@ -10,10 +10,17 @@
     reason = "the executor and the frame emitter reach this state once they land"
 )]
 
+pub(crate) mod color;
+pub(crate) mod modes;
+
+use crate::device::color::Palette;
+use crate::device::modes::{ScreenKind, VtModes};
 use crate::frame::damage::DamageSpan;
-use crate::schema::{DisplayOffset, GridColumn, GridSize, Palette, ScreenKind, Scroll, VtModes};
 use crate::screen::Screen;
+use crate::screen::grid::GridSize;
 use crate::screen::grid::LineId;
+use crate::screen::grid::coords::GridColumn;
+use crate::screen::viewport::{DisplayOffset, Scroll};
 
 /// The emulated terminal device: screens, modes, tabs, colors, and
 /// title.

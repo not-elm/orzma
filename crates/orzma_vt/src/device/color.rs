@@ -1,11 +1,5 @@
-//! Vocabulary for cell colors.
-//!
-//! Colors travel symbolically: [`Color::Indexed`] keeps its palette slot
-//! instead of a resolved triple. That is what lets an OSC 4 / OSC 104
-//! palette override or a theme change repaint without re-emitting every
-//! row, and what lets a consumer tell the terminal default background —
-//! which renders transparent so webview overlays show through — from an
-//! explicitly-set background that happens to carry the same RGB.
+//! The color vocabulary SGR writes into cells and the palette the
+//! device resolves it against.
 
 /// A cell color, carrying its source rather than a resolved value.
 ///
@@ -205,18 +199,27 @@ mod tests {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
+    /// Asserts that an indexed color stays distinct from the RGB value
+    /// it currently resolves to, so equality tracks the palette slot
+    /// rather than the resolved pixel.
+    ///
+    /// Case: an application selects palette slot 1 with SGR 38;5;1,
+    /// which currently resolves to the default xterm red, and the user
+    /// later issues an OSC 4 override that recolors that slot.
     #[test]
     fn indexed_stays_distinct_from_the_rgb_it_would_resolve_to() {
-        // The whole point of staying symbolic: slot 1 must not compare equal
-        // to the xterm default red, or an OSC 4 override could never change
-        // an already-emitted cell.
         assert_ne!(Color::Indexed(1), Color::Rgb(Rgb { r: 205, g: 0, b: 0 }));
     }
 
+    /// Asserts that the default background stays distinct from an
+    /// explicit RGB color carrying the same resolved value, so identity
+    /// does not collapse into the resolved pixel.
+    ///
+    /// Case: the current palette resolves the default background to
+    /// black, and a TUI in the same session explicitly paints a cell
+    /// with that same black RGB value.
     #[test]
     fn default_background_stays_distinct_from_an_equal_explicit_rgb() {
-        // Distinguishes "transparent, let the webview through" from "a TUI
-        // painted this exact color", which a resolved RGB value cannot.
         assert_ne!(
             Color::DefaultBackground,
             Color::Rgb(Rgb { r: 0, g: 0, b: 0 })
@@ -285,9 +288,15 @@ mod tests {
         );
     }
 
+    /// Asserts that Color values that compare equal also hash equally,
+    /// and that distinct colors hash differently.
+    ///
+    /// Case: a row of terminal output repeats the same indexed color
+    /// across adjacent cells for run coalescing to merge, while a
+    /// separate row switches between the default foreground and
+    /// background for the row-content hash to key on.
     #[test]
     fn equal_colors_hash_equally() {
-        // Run coalescing and the row-content hash both key off this.
         fn digest(c: Color) -> u64 {
             let mut h = DefaultHasher::new();
             c.hash(&mut h);

@@ -1,5 +1,5 @@
-//! Terminal-mode snapshot the VT exposes for input encoding and
-//! paste/scroll policy.
+//! The DECSET / DECRST modes the device carries and the enums they
+//! select among.
 
 /// Snapshot of the input-relevant terminal modes.
 ///
