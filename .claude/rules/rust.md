@@ -129,27 +129,29 @@ Complete does not mean long — keep comments concise:
 Every `#[test]` function carries a `///` doc comment that states the
 asserted contract AND the concrete case the test envisions:
 
-| Place                   | Style                                                                                                                                                          |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Every `#[test]` function | `///` — first line: what the test asserts; blank line; an optional policy paragraph; a `Case:` paragraph naming the envisioned scenario, and nothing else in it |
+| Place                   | Style                                                                                                                       |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Every `#[test]` function | `///` — first line: what the test asserts; blank line; a `Case:` paragraph naming the envisioned scenario — and nothing else |
 
 - The `Case:` paragraph describes the real-world scenario the test
   envisions — the user action and the terminal/app state it happens in.
   It is NOT a restatement of the assertions; a reader should learn
   which situation the contract serves, not what the `assert_eq!` lines
   already say.
-- When a test pins a decided policy (e.g. "a zero-axis resize is
-  ignored"), state the policy and the alternative it rejects in a
-  separate body paragraph between the first line and the `Case:`
-  paragraph, so a later reader does not "fix" the test toward the
-  rejected behavior. The policy never goes inside the `Case:`
-  paragraph.
+- A test doc holds exactly those two parts — no policy paragraph in
+  between. When a test pins a decided policy (e.g. "a zero-axis resize
+  is ignored"), fold the decision — including the rejected alternative
+  when it fits — into the first line ("Asserts that a request with a
+  zero axis is ignored rather than clamped."); the rationale behind
+  the decision lives in the production item's doc comment or the
+  design doc, not in the test.
 - Keep the `Case:` paragraph to the scenario and stop — 1–3 sentences.
   The scenario is the paragraph's ONLY content; in particular:
   - Do not restate what the test itself pins — the first line already
     says it.
   - Do not state policies, design decisions, or their rationale in the
-    `Case:` paragraph — they live in the policy paragraph above it.
+    `Case:` paragraph — fold the decision into the first line and
+    leave the rationale to the production doc.
   - Do not speculate about how a hypothetical broken implementation
     would misbehave ("a forward that drops the operation would paint no
     highlight") — that is the test's justification, not the case.
@@ -158,11 +160,8 @@ asserted contract AND the concrete case the test envisions:
     entirely rather than pointing at them.
 
 ```rust
-/// Asserts that a request with a zero axis leaves the PTY size untouched.
-///
-/// The agreed policy is to ignore such a request outright rather than
-/// clamp it: applying it would tear down the grid for a transient
-/// state.
+/// Asserts that a request with a zero axis is ignored rather than
+/// clamped, leaving the PTY size untouched.
 ///
 /// Case: a minimized window (or a frame before cell metrics load) makes
 /// the host compute 0 columns or rows.
@@ -597,7 +596,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Comment taxonomy — only `// TODO:` / `// NOTE:` / `// SAFETY:`
 - Comment prose — English prose in comment/doc bodies is written as complete, natural sentences, not telegraphic fragments, and kept concise (see "Comment prose — write complete English sentences")
 - File-level module `//!` requirement
-- Test doc comments — every `#[test]` fn documents its asserted contract plus a scenario-only `Case:` paragraph; pinned policies go in a separate paragraph before the `Case:` (see "Test doc comments")
+- Test doc comments — every `#[test]` fn documents its asserted contract plus a scenario-only `Case:` paragraph, and nothing else; pinned policies fold into the first line, never a paragraph of their own (see "Test doc comments")
 - "No blank lines between import groups"
 - `#[expect]` preference over `#[allow]`
 - Item ordering — private (no-modifier) items declared after `pub` / exported ones (see "Item ordering — private items last")
