@@ -10,8 +10,7 @@
 //! Submodules are private and re-exported flat, so callers inside the
 //! crate write `crate::schema::Color`, never `crate::schema::color::Color`.
 
-mod signal;
-
+pub use crate::VtSignal;
 pub use crate::device::color::{Color, Palette, Rgb};
 pub use crate::device::modes::{MouseEncoding, MouseTracking, ScreenKind, VtModes};
 pub use crate::frame::{DirtyRow, Frame};
@@ -26,4 +25,3 @@ pub use crate::screen::grid::run::{Run, Style};
 pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine};
 pub use crate::selection::{CellSide, SelectionGeometry, SelectionKind, SelectionRange};
 pub use crate::vi::{ViCursor, ViModeSwitch};
-pub use signal::*;

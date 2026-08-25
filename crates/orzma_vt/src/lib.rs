@@ -8,10 +8,12 @@ use crate::{
     device::DeviceState,
     frame::FrameTracker,
     interpreter::Interpreter,
-    placement::PlacementStore,
-    schema::{Frame, GridSize, Scroll, VtModes, VtSignal},
+    interpreter::apc::ApcWebviewVerb,
+    placement::{PlacementId, PlacementStore},
+    schema::{Frame, GridSize, Scroll, VtModes},
     screen::viewport::DisplayOffset,
 };
+use std::path::PathBuf;
 
 mod device;
 pub mod frame;
@@ -135,6 +137,56 @@ pub struct VtUpdate {
     pub signals: Vec<VtSignal>,
     /// Reply bytes (DSR, DA, …) the owner must write back to the PTY.
     pub replies: Vec<u8>,
+}
+
+/// Out-of-band signal parsed from the VT byte stream, handed to the
+/// owner in [`VtUpdate::signals`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VtSignal {
+    /// An audible bell has been requested; the consumer is responsible
+    /// for audio output or visual feedback (e.g. a flash).
+    Bell,
+    /// The application set an OS title string (OSC 0 or OSC 2). The owner
+    /// typically uses this to set the window or tab title.
+    Title(String),
+    /// The application reset the OS title strings to their defaults (OSC 1
+    /// or OSC 2 with an empty argument). The owner typically uses this to
+    /// restore the window or tab title.
+    ResetTitle,
+    /// The application copied data to the system clipboard via OSC 52.
+    Clipboard {
+        /// The clipboard content that was copied.
+        content: String,
+    },
+    /// A new current working directory reported via OSC 7.
+    CurrentDir(PathBuf),
+    /// An APC-driven webview mount/unmount request from the PTY.
+    /// The placement is the VT-minted id, `Some` only for a `Mount` the
+    /// VT accepted and registered; `None` is a policy rejection the
+    /// consumer drops.
+    ApcWebview {
+        /// The mount or unmount verb and associated metadata.
+        verb: ApcWebviewVerb,
+        /// The unique identifier for this placement, minted by the VT.
+        placement: Option<PlacementId>,
+    },
+    /// Placements the VT evicted on its own authority (history trim,
+    /// alternate-screen teardown). Consumers despawn them by id;
+    /// unknown ids are ignored. A remount's superseded id is never
+    /// named here — supersession shows only as the id vanishing from
+    /// the frame-carried placement lists.
+    WebviewEvicted {
+        /// The placement IDs that were evicted.
+        placements: Vec<PlacementId>,
+    },
+    /// Tracked `TermMode` flags that transitioned since the previous
+    /// signal drain, as mode names (e.g. "alt-screen").
+    ModeChange {
+        /// Mode names that were enabled.
+        added: Vec<&'static str>,
+        /// Mode names that were disabled.
+        removed: Vec<&'static str>,
+    },
 }
 
 /// The self-contained implementation of [`Vt`].
