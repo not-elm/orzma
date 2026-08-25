@@ -66,7 +66,7 @@ impl PlacementStore {
     /// the host re-points the same entity at the successor and would
     /// despawn it if the superseded id were named.
     ///
-    /// The caller stages `Damage::Metadata` when this returns `Some`, so
+    /// The caller raises the chunk liveness flag when this returns `Some`, so
     /// the placement list a mount changes always reaches the next frame.
     ///
     /// # Invariants
@@ -110,7 +110,7 @@ impl PlacementStore {
     /// Client-initiated, so nothing is reported as evicted — the host
     /// acts on the verb itself.
     ///
-    /// The caller stages `Damage::Metadata` when this returns `true`, so a
+    /// The caller raises the chunk liveness flag when this returns `true`, so a
     /// change to the placement list always reaches the next frame.
     pub fn unmount(&mut self, view_id: Option<&str>, instance_id: Option<&str>) -> bool {
         let before = self.placements.len();
@@ -129,7 +129,7 @@ impl PlacementStore {
     /// inactive grid never scrolls. Reflow breaks that and will have to
     /// sweep both.
     ///
-    /// The caller stages `Damage::Metadata` when the returned list is
+    /// The caller raises the chunk liveness flag when the returned list is
     /// non-empty, so an eviction always reaches the next frame.
     pub fn evict_lost_anchors(&mut self, active: ActiveScreen<'_>) -> Vec<PlacementId> {
         if self.is_empty() {

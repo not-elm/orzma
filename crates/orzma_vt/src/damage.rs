@@ -1,11 +1,11 @@
 //! Damage vocabulary and the ledger that stages it.
 //!
-//! [`DamageLedger`] accumulates what interpretation, scrolling,
-//! resizing, and placement changes each report per call and hands the
-//! merged result to the frame emitter as a [`StagedDamage`].
-//! Staging merges rather than replaces: a source reports only what its
-//! own call produced, so an overwritten staged value would drop a
-//! repaint no later call re-reports.
+//! [`DamageLedger`] accumulates what interpretation, scrolling, and
+//! resizing each report per call and hands the merged result to the
+//! frame emitter as a [`StagedDamage`]. Staging merges rather than
+//! replaces: a source reports only what its own call produced, so an
+//! overwritten staged value would drop a repaint no later call
+//! re-reports.
 //!
 //! [`Damage`] is the allocation-free counterpart a single screen
 //! operation reports: a `Copy` span rather than a `Vec`, because this
@@ -79,9 +79,9 @@ impl DamageLedger {
     ///
     /// # Invariants
     ///
-    /// The seeded value is what makes the first emitted frame a
-    /// snapshot; a ledger that starts empty paints nothing until the
-    /// first PTY output arrives.
+    /// Its seeded full damage is what makes the first emitted frame
+    /// carry every viewport row; a ledger that starts empty paints
+    /// nothing until the first PTY output arrives.
     pub fn new() -> Self {
         Self {
             staged: Some(Staged::Full),
@@ -101,8 +101,6 @@ impl DamageLedger {
                 self.staged = Some(Staged::Rows);
                 self.rows.set_span(first, last);
             }
-            (None, Damage::Metadata) => self.staged = Some(Staged::Rows),
-            (Some(Staged::Rows), Damage::Metadata) => {}
         }
     }
 
@@ -124,10 +122,16 @@ impl DamageLedger {
         let staged = self.staged.take()?;
         let drained = match staged {
             Staged::Full => StagedDamage::Full,
-            Staged::Rows => StagedDamage::Delta(DamageRows::from_ascending(
-                self.rows.count_ones(),
-                self.rows.rows(),
-            )),
+            Staged::Rows => {
+                debug_assert!(
+                    self.rows.count_ones() > 0,
+                    "Rows is staged only by a span, so the set cannot be empty"
+                );
+                StagedDamage::Delta(DamageRows::from_ascending(
+                    self.rows.count_ones(),
+                    self.rows.rows(),
+                ))
+            }
         };
         self.rows.clear();
         Some(drained)
@@ -138,8 +142,12 @@ impl DamageLedger {
 enum Staged {
     /// Every viewport row.
     Full,
-    /// The rows the ledger's bit set names. An empty set is the
-    /// metadata-only case: a frame must be emitted but repaints nothing.
+    /// The rows the ledger's bit set names.
+    ///
+    /// # Invariants
+    ///
+    /// At least one bit is set: `Rows` is staged only by a span, so an
+    /// empty set is unreachable.
     Rows,
 }
 
@@ -159,13 +167,6 @@ pub enum Damage {
         /// Bottommost damaged row, inclusive.
         last: ViewportLine,
     },
-    /// No viewport row needs repainting, but a frame must still be
-    /// emitted: either every row the operation touched sits outside the
-    /// viewport, or the metadata a frame carries beside its rows — the
-    /// cursor and the placement list — changed. Cursor motion is the
-    /// second case, because the renderer draws the caret from the
-    /// frame's cursor rather than from the cells of the row it sits on.
-    Metadata,
 }
 
 impl Damage {
@@ -291,10 +292,6 @@ mod tests {
         /// Asserts that row damage staged while a full repaint is pending is
         /// discarded rather than retained.
         ///
-        /// Leaving those bits set would leak them into a later
-        /// metadata-only frame, which repaints no rows and would then carry
-        /// rows staged against an older viewport.
-        ///
         /// Case: a resize stages a full repaint and the shell keeps printing
         /// before the frame is emitted.
         #[test]
@@ -304,8 +301,8 @@ mod tests {
             ledger.stage(Damage::Full);
             ledger.stage(Damage::rows(ViewportLine(5), ViewportLine(5)));
             assert!(matches!(ledger.take(), Some(StagedDamage::Full)));
-            ledger.stage(Damage::Metadata);
-            assert_eq!(rows(&mut ledger), Vec::<u16>::new());
+            ledger.stage(Damage::rows(ViewportLine(1), ViewportLine(1)));
+            assert_eq!(rows(&mut ledger), [1]);
         }
 
         /// Asserts that spans accumulate across calls and drain ascending
@@ -321,34 +318,6 @@ mod tests {
             ledger.stage(Damage::rows(ViewportLine(0), ViewportLine(0)));
             ledger.stage(Damage::rows(ViewportLine(3), ViewportLine(3)));
             assert_eq!(rows(&mut ledger), [0, 3, 4]);
-        }
-
-        /// Asserts that metadata-only damage still produces a frame, one
-        /// carrying no dirty rows.
-        ///
-        /// Case: a webview mounts while the viewport is scrolled back, so
-        /// the placement list changes with nothing on screen to repaint.
-        #[test]
-        fn metadata_damage_drains_as_a_delta_with_no_rows() {
-            let mut ledger = DamageLedger::new();
-            ledger.take();
-            ledger.stage(Damage::Metadata);
-            assert_eq!(rows(&mut ledger), Vec::<u16>::new());
-            assert!(ledger.take().is_none());
-        }
-
-        /// Asserts that metadata damage staged over pending rows leaves those
-        /// rows intact.
-        ///
-        /// Case: a program unmounts a webview in the same chunk that printed
-        /// output still waiting to be painted.
-        #[test]
-        fn metadata_damage_leaves_already_staged_rows_alone() {
-            let mut ledger = DamageLedger::new();
-            ledger.take();
-            ledger.stage(Damage::rows(ViewportLine(2), ViewportLine(3)));
-            ledger.stage(Damage::Metadata);
-            assert_eq!(rows(&mut ledger), [2, 3]);
         }
 
         /// Asserts that `stage_if_changed` reports whether it staged
