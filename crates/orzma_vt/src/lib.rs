@@ -5,24 +5,23 @@
 //! owner, and [`OrzmaVt`], the implementation of that protocol.
 
 use crate::{
-    damage::DamageLedger,
     device::DeviceState,
-    emit::EmitState,
+    frame::FrameTracker,
     interpreter::Interpreter,
     placement::PlacementStore,
     schema::{Frame, GridSize, Scroll, VtModes, VtSignal},
     screen::viewport::DisplayOffset,
 };
 
-pub mod damage;
 mod device;
-mod emit;
 pub mod frame;
 pub mod hyperlink;
 mod interpreter;
 mod placement;
 pub mod schema;
 pub mod screen;
+
+pub use frame::damage;
 
 pub mod prelude {
     pub use crate::{OrzmaVt, Vt, VtUpdate, damage::*, schema::*};
@@ -154,10 +153,8 @@ pub struct OrzmaVt {
     device: DeviceState,
     /// Webview placements: minting, anchor tracking, projection.
     placements: PlacementStore,
-    /// Damage staged for the next emit, from every source.
-    damage: DamageLedger,
-    /// Last-emitted values the frame diff compares against.
-    emit: EmitState,
+    /// The pending damage and the retained last-emitted values.
+    tracker: FrameTracker,
 }
 
 impl OrzmaVt {
@@ -168,17 +165,16 @@ impl OrzmaVt {
     /// Both grid axes are nonzero; degenerate sizes are rejected by the
     /// caller (the same contract as [`Vt::resize`]).
     ///
-    /// The ledger must come from [`DamageLedger::new`]: its seeded full
-    /// damage is what makes the first frame carry every viewport row,
-    /// so a constructor that starts from an empty ledger paints nothing
-    /// until the first PTY output arrives.
+    /// The tracker must come from [`FrameTracker::new`]: its seeded
+    /// full damage is what makes the first frame carry every viewport
+    /// row, so a constructor that starts from an empty ledger paints
+    /// nothing until the first PTY output arrives.
     pub fn new(size: GridSize, max_history: usize) -> Self {
         Self {
             interpreter: Interpreter::default(),
             device: DeviceState::new(size, max_history),
             placements: PlacementStore::new(),
-            damage: DamageLedger::new(),
-            emit: EmitState::default(),
+            tracker: FrameTracker::new(),
         }
     }
 }
@@ -196,20 +192,15 @@ impl Vt for OrzmaVt {
     }
 
     fn frame(&mut self) -> Option<Frame> {
-        Frame::emit(
-            &mut self.emit,
-            &mut self.damage,
-            &self.device,
-            &self.placements,
-        )
+        self.tracker.emit(&self.device, &self.placements)
     }
 
     fn resize(&mut self, size: GridSize) -> bool {
-        self.damage.stage_if_changed(self.device.resize(size))
+        self.tracker.stage_if_changed(self.device.resize(size))
     }
 
     fn scroll(&mut self, scroll: Scroll) -> bool {
-        self.damage.stage_if_changed(self.device.scroll(scroll))
+        self.tracker.stage_if_changed(self.device.scroll(scroll))
     }
 
     fn grid_size(&self) -> GridSize {
@@ -272,7 +263,7 @@ mod tests {
         let mut vt = vt();
         vt.frame();
         let damage = vt.device.active_mut().print('x');
-        vt.damage.stage_if_changed(damage);
+        vt.tracker.stage_if_changed(damage);
         for _ in 0..3 {
             vt.device.active_mut().line_feed();
         }
@@ -299,13 +290,13 @@ mod tests {
         assert_eq!(mounted.placements.as_ref().map(Vec::len), Some(1));
 
         vt.device.set_active_screen_for_test(ScreenKind::Alternate);
-        vt.damage.stage(Damage::Full);
+        vt.tracker.stage(Damage::Full);
         let flipped = vt.frame().expect("a flip emits a full frame");
         assert_eq!(flipped.placements, Some(Vec::new()));
         assert_eq!(flipped.rows.len(), 3);
 
         vt.device.set_active_screen_for_test(ScreenKind::Primary);
-        vt.damage.stage(Damage::Full);
+        vt.tracker.stage(Damage::Full);
         let restored = vt.frame().expect("the flip back emits");
         assert_eq!(restored.placements.as_ref().map(Vec::len), Some(1));
     }

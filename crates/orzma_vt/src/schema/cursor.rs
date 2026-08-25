@@ -171,7 +171,7 @@ mod tests {
                 line: GridLine(-9999),
                 column: GridColumn(511),
             },
-            ..at_origin.clone()
+            ..at_origin
         };
         assert_eq!(
             at_origin.pack_cursor_style(),

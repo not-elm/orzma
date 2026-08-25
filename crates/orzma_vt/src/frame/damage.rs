@@ -104,18 +104,6 @@ impl DamageLedger {
         }
     }
 
-    /// Stages the reported damage, if any; returns whether there was any
-    /// to stage.
-    pub fn stage_if_changed(&mut self, damage: Option<Damage>) -> bool {
-        match damage {
-            Some(damage) => {
-                self.stage(damage);
-                true
-            }
-            None => false,
-        }
-    }
-
     /// Hands over the staged damage, leaving the ledger empty; `None`
     /// when nothing is staged.
     pub fn take(&mut self) -> Option<StagedDamage> {
@@ -318,21 +306,6 @@ mod tests {
             ledger.stage(Damage::rows(ViewportLine(0), ViewportLine(0)));
             ledger.stage(Damage::rows(ViewportLine(3), ViewportLine(3)));
             assert_eq!(rows(&mut ledger), [0, 3, 4]);
-        }
-
-        /// Asserts that `stage_if_changed` reports whether it staged
-        /// anything.
-        ///
-        /// Case: a scroll request is clamped to a no-op and its caller must
-        /// learn the viewport did not move.
-        #[test]
-        fn stage_if_changed_reports_whether_anything_was_staged() {
-            let mut ledger = DamageLedger::new();
-            ledger.take();
-            assert!(!ledger.stage_if_changed(None));
-            assert!(ledger.take().is_none());
-            assert!(ledger.stage_if_changed(Some(Damage::Full)));
-            assert!(matches!(ledger.take(), Some(StagedDamage::Full)));
         }
 
         /// Asserts that a full repaint clears the bits it supersedes, so a

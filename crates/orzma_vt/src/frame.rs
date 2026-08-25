@@ -3,14 +3,15 @@
 //!
 //! A frame is one flat struct: a full repaint simply carries every
 //! viewport row, and the changed-only sections (`placements`,
-//! `palette`) are `Some` exactly when the emit-time diff against
-//! [`crate::emit::EmitState`] found them genuinely different. The
-//! pieces are read through one shared borrow of the device, so a frame
-//! describes a single instant.
+//! `palette`) are `Some` exactly when the emit-time diff against the
+//! [`FrameTracker`]'s retained values found them genuinely different.
+//! The pieces are read through one shared borrow of the device, so a
+//! frame describes a single instant.
 
-use crate::damage::{DamageLedger, StagedDamage};
-use crate::device::DeviceState;
-use crate::emit::EmitState;
+pub mod damage;
+
+use self::damage::{Damage, DamageLedger, StagedDamage};
+use crate::device::{ActiveScreen, DeviceState};
 use crate::placement::PlacementStore;
 use crate::schema::{
     Cursor, GridSize, Hyperlink, Palette, ProjectedPlacement, Row, Run, SelectionRange, ViCursor,
@@ -60,7 +61,74 @@ pub struct Frame {
     pub hyperlinks: Vec<Hyperlink>,
 }
 
-impl Frame {
+/// One repainted viewport row inside a [`Frame`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DirtyRow {
+    /// The viewport row the contents repaint.
+    pub line: ViewportLine,
+    /// The row contents.
+    pub contents: Row<Run>,
+}
+
+/// Tracks what the next frame owes and what the last frame carried.
+///
+/// One half is the pending [`DamageLedger`]; the other half is the
+/// retained last-emitted values the emit-time diffs compare against.
+///
+/// # Invariants
+///
+/// A retained value must mirror what the consumer last saw. The diff
+/// methods only compare; the emitted frame is settled into the tracker
+/// after [`Self::emit`]'s gate, so retention cannot outrun emission.
+pub(crate) struct FrameTracker {
+    /// Damage staged for the next emit, from every source.
+    damage: DamageLedger,
+    cursor: Cursor,
+    display_offset: DisplayOffset,
+    placements: Vec<ProjectedPlacement>,
+    palette: Palette,
+    /// Reusable projection buffer, so an unchanged emit attempt
+    /// allocates nothing.
+    scratch: Vec<ProjectedPlacement>,
+}
+
+impl FrameTracker {
+    /// Builds a tracker whose ledger is seeded with the bootstrap full
+    /// repaint, so the first emitted frame carries every viewport row.
+    ///
+    /// The retained defaults are sound even though the default cursor
+    /// differs from a fresh screen's visible cursor: the seeded full
+    /// damage forces the first frame out regardless of any diff, and
+    /// that emit settles the real cursor before the diffs are ever
+    /// load-bearing.
+    pub fn new() -> Self {
+        Self {
+            damage: DamageLedger::new(),
+            cursor: Cursor::default(),
+            display_offset: DisplayOffset::default(),
+            placements: Vec::new(),
+            palette: Palette::default(),
+            scratch: Vec::new(),
+        }
+    }
+
+    /// Merges `damage` into the staged value.
+    pub fn stage(&mut self, damage: Damage) {
+        self.damage.stage(damage);
+    }
+
+    /// Stages the reported damage, if any; returns whether there was
+    /// any to stage.
+    pub fn stage_if_changed(&mut self, damage: Option<Damage>) -> bool {
+        match damage {
+            Some(damage) => {
+                self.stage(damage);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Builds the frame for the staged damage and section diffs; `None`
     /// when nothing observable changed.
     ///
@@ -68,26 +136,21 @@ impl Frame {
     ///
     /// - The rows, the cursor, the offset, and the projection all come
     ///   from one borrow of `device`, so a frame describes one instant.
-    /// - `state` never retains a value the consumer does not see: the
-    ///   section diffs only compare, and the emitted frame is settled
-    ///   into `state` after the gate, so an attempt that returns `None`
+    /// - The tracker never retains a value the consumer does not see:
+    ///   the section diffs only compare, and the emitted frame is
+    ///   settled after the gate, so an attempt that returns `None`
     ///   retains nothing.
-    pub(crate) fn emit(
-        state: &mut EmitState,
-        damage: &mut DamageLedger,
-        device: &DeviceState,
-        placements: &PlacementStore,
-    ) -> Option<Self> {
+    pub fn emit(&mut self, device: &DeviceState, placements: &PlacementStore) -> Option<Frame> {
         let screen = device.active();
         let cursor = screen.cursor();
         let display_offset = screen.display_offset();
-        let staged = damage.take();
-        let placements = state.diff_placements(placements, device.active_screen());
-        let palette = state.diff_palette(device.palette());
+        let staged = self.damage.take();
+        let placements = self.diff_placements(placements, device.active_screen());
+        let palette = self.diff_palette(device.palette());
         if staged.is_none()
             && placements.is_none()
             && palette.is_none()
-            && !state.cursor_or_offset_changed(&cursor, display_offset)
+            && !self.cursor_or_offset_changed(&cursor, display_offset)
         {
             return None;
         }
@@ -101,7 +164,7 @@ impl Frame {
             Some(StagedDamage::Delta(dirty)) => dirty.iter().copied().map(dirty_row).collect(),
             None => Vec::new(),
         };
-        let frame = Self {
+        let frame = Frame {
             size,
             rows,
             cursor,
@@ -112,7 +175,7 @@ impl Frame {
             palette,
             hyperlinks: Vec::new(),
         };
-        state.settle(
+        self.settle(
             frame.cursor,
             frame.display_offset,
             frame.placements.as_ref(),
@@ -120,26 +183,68 @@ impl Frame {
         );
         Some(frame)
     }
-}
 
-/// One repainted viewport row inside a [`Frame`].
-#[derive(Debug, Clone, PartialEq)]
-pub struct DirtyRow {
-    /// The viewport row the contents repaint.
-    pub line: ViewportLine,
-    /// The row contents.
-    pub contents: Row<Run>,
+    /// Returns whether the unconditionally-carried small fields differ
+    /// from what the consumer last saw.
+    fn cursor_or_offset_changed(&self, cursor: &Cursor, display_offset: DisplayOffset) -> bool {
+        *cursor != self.cursor || display_offset != self.display_offset
+    }
+
+    /// Projects the placements and reports the complete new list when
+    /// it differs from the last-emitted one; `None` when unchanged.
+    fn diff_placements(
+        &mut self,
+        placements: &PlacementStore,
+        active: ActiveScreen<'_>,
+    ) -> Option<Vec<ProjectedPlacement>> {
+        self.scratch.clear();
+        placements.project_into(&mut self.scratch, active);
+        if self.scratch == self.placements {
+            return None;
+        }
+        Some(self.scratch.clone())
+    }
+
+    /// Reports the palette when it differs from the last-emitted one;
+    /// `None` when unchanged.
+    fn diff_palette(&self, palette: &Palette) -> Option<Palette> {
+        (*palette != self.palette).then(|| palette.clone())
+    }
+
+    /// Records what an emitted frame carried, so later diffs compare
+    /// against what the consumer last saw.
+    ///
+    /// # Invariants
+    ///
+    /// Every emitted frame settles here exactly once: a diff result
+    /// that reaches a frame without being settled would report the
+    /// same change again on the next attempt.
+    fn settle(
+        &mut self,
+        cursor: Cursor,
+        display_offset: DisplayOffset,
+        placements: Option<&Vec<ProjectedPlacement>>,
+        palette: Option<&Palette>,
+    ) {
+        self.cursor = cursor;
+        self.display_offset = display_offset;
+        if let Some(placements) = placements {
+            self.placements.clone_from(placements);
+        }
+        if let Some(palette) = palette {
+            self.palette.clone_from(palette);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::damage::Damage;
+    use crate::device::DeviceState;
     use crate::schema::{Color, GridColumn, GridLine, GridSize};
 
     struct Rig {
-        state: EmitState,
-        damage: DamageLedger,
+        tracker: FrameTracker,
         device: DeviceState,
         placements: PlacementStore,
     }
@@ -148,8 +253,7 @@ mod tests {
     /// already drained, so each test stages exactly what it means to.
     fn drained_rig() -> Rig {
         let mut rig = Rig {
-            state: EmitState::default(),
-            damage: DamageLedger::new(),
+            tracker: FrameTracker::new(),
             device: DeviceState::new(GridSize { cols: 4, rows: 3 }, 10),
             placements: PlacementStore::new(),
         };
@@ -158,12 +262,84 @@ mod tests {
     }
 
     fn emit(rig: &mut Rig) -> Option<Frame> {
-        Frame::emit(
-            &mut rig.state,
-            &mut rig.damage,
-            &rig.device,
-            &rig.placements,
-        )
+        rig.tracker.emit(&rig.device, &rig.placements)
+    }
+
+    /// Asserts that a new tracker's retained values match a fresh
+    /// device for the diffed sections, so a fresh consumer and a fresh
+    /// VT agree without a completeness flag.
+    ///
+    /// Case: a terminal spawns and its very first frame omits the
+    /// palette and placement sections.
+    #[test]
+    fn a_new_tracker_matches_a_fresh_device() {
+        let tracker = FrameTracker::new();
+        let device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
+        assert_eq!(tracker.display_offset, device.display_offset());
+        assert_eq!(&tracker.palette, device.palette());
+        assert!(tracker.placements.is_empty());
+    }
+
+    /// Asserts that an unchanged projection diffs to `None`, a mutated
+    /// store diffs to the complete new list, and settling that list
+    /// makes the next diff report `None` again.
+    ///
+    /// Case: frames are emitted before and after a program mounts a
+    /// webview at the cursor.
+    #[test]
+    fn diff_placements_reports_the_change_until_settled() {
+        let mut tracker = FrameTracker::new();
+        let device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
+        let mut store = PlacementStore::new();
+        assert_eq!(
+            tracker.diff_placements(&store, device.active_screen()),
+            None
+        );
+        store
+            .mount(device.active_screen(), 2, 4, "v".to_string(), None)
+            .expect("a mount under the cap is accepted");
+        let listed = tracker
+            .diff_placements(&store, device.active_screen())
+            .expect("a mount changes the projection");
+        assert_eq!(listed.len(), 1);
+        let cursor = device.active().cursor();
+        tracker.settle(cursor, device.display_offset(), Some(&listed), None);
+        assert_eq!(
+            tracker.diff_placements(&store, device.active_screen()),
+            None
+        );
+    }
+
+    /// Asserts that the palette diff reports the change until the
+    /// emitted table is settled.
+    ///
+    /// Case: an OSC palette override arrives, one frame carries the new
+    /// table, and the next frame omits it again.
+    #[test]
+    fn diff_palette_reports_the_change_until_settled() {
+        let mut tracker = FrameTracker::new();
+        let mut palette = Palette::default();
+        assert_eq!(tracker.diff_palette(&palette), None);
+        palette.foreground = palette.background;
+        let changed = tracker
+            .diff_palette(&palette)
+            .expect("an override changes the table");
+        tracker.settle(Cursor::default(), DisplayOffset(0), None, Some(&changed));
+        assert_eq!(tracker.diff_palette(&palette), None);
+    }
+
+    /// Asserts that `stage_if_changed` reports whether it staged
+    /// anything.
+    ///
+    /// Case: a scroll request is clamped to a no-op and its caller must
+    /// learn the viewport did not move.
+    #[test]
+    fn stage_if_changed_reports_whether_anything_was_staged() {
+        let mut rig = drained_rig();
+        assert!(!rig.tracker.stage_if_changed(None));
+        assert_eq!(emit(&mut rig), None);
+        assert!(rig.tracker.stage_if_changed(Some(Damage::Full)));
+        assert!(emit(&mut rig).is_some());
     }
 
     /// Asserts that full damage emits every viewport row at full width,
@@ -175,7 +351,7 @@ mod tests {
     fn full_damage_emits_every_viewport_row() {
         let mut rig = drained_rig();
         rig.device.active_mut().print('a');
-        rig.damage.stage(Damage::Full);
+        rig.tracker.stage(Damage::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert_eq!(frame.size, GridSize { cols: 4, rows: 3 });
         assert_eq!(frame.rows.len(), 3);
@@ -200,9 +376,9 @@ mod tests {
     #[test]
     fn row_damage_emits_exactly_the_staged_rows() {
         let mut rig = drained_rig();
-        rig.damage
+        rig.tracker
             .stage(Damage::rows(ViewportLine(2), ViewportLine(2)));
-        rig.damage
+        rig.tracker
             .stage(Damage::rows(ViewportLine(0), ViewportLine(0)));
         let frame = emit(&mut rig).expect("staged damage emits");
         let lines: Vec<_> = frame.rows.iter().map(|row| row.line).collect();
@@ -217,8 +393,7 @@ mod tests {
     #[test]
     fn the_first_frame_covers_every_row_and_omits_default_sections() {
         let mut rig = Rig {
-            state: EmitState::default(),
-            damage: DamageLedger::new(),
+            tracker: FrameTracker::new(),
             device: DeviceState::new(GridSize { cols: 4, rows: 3 }, 10),
             placements: PlacementStore::new(),
         };

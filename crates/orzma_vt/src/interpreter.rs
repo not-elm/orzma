@@ -16,8 +16,8 @@ use crate::interpreter::csi::CsiParams;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::{
-    damage::{Damage, DamageLedger},
     device::DeviceState,
+    frame::{FrameTracker, damage::Damage},
     placement::PlacementStore,
     schema::VtSignal,
 };
@@ -41,7 +41,7 @@ impl Interpreter {
         &mut self,
         device: &mut DeviceState,
         placements: &mut PlacementStore,
-        damage: &mut DamageLedger,
+        tracker: &mut FrameTracker,
         signal_tx: &mut Sender<VtSignal>,
         chunk: &[u8],
     ) -> bool {
@@ -52,7 +52,7 @@ impl Interpreter {
             sync: &mut self.sync,
             device,
             placements,
-            damage,
+            tracker,
             signal_tx,
         };
         self.parser.parse(chunk, &mut executor);
@@ -97,7 +97,7 @@ struct Executor<'a> {
     sync: &'a mut SyncBuffer,
     device: &'a mut DeviceState,
     placements: &'a mut PlacementStore,
-    damage: &'a mut DamageLedger,
+    tracker: &'a mut FrameTracker,
     signal_tx: &'a mut Sender<VtSignal>,
 }
 
@@ -247,7 +247,7 @@ impl Executor<'_> {
     /// Stages the reported damage and folds the result into the chunk
     /// liveness.
     fn stage(&mut self, damage: Option<Damage>) {
-        *self.damaged |= self.damage.stage_if_changed(damage);
+        *self.damaged |= self.tracker.stage_if_changed(damage);
     }
 }
 
@@ -286,7 +286,7 @@ mod tests {
     fn interpret_with(damaged: &mut bool, chunk: &[u8]) -> DeviceState {
         let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
         let mut placements = PlacementStore::new();
-        let mut damage = DamageLedger::new();
+        let mut tracker = FrameTracker::new();
         let (mut signal_tx, _signal_rx) = channel();
         let mut sync = SyncBuffer::default();
         let mut executor = Executor {
@@ -294,7 +294,7 @@ mod tests {
             sync: &mut sync,
             device: &mut device,
             placements: &mut placements,
-            damage: &mut damage,
+            tracker: &mut tracker,
             signal_tx: &mut signal_tx,
         };
         VTParser::new().parse(chunk, &mut executor);
