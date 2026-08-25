@@ -225,7 +225,8 @@ impl Vt for OrzmaVt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::ViewportLine;
+    use crate::damage::Damage;
+    use crate::schema::{ScreenKind, ViewportLine};
 
     fn vt() -> OrzmaVt {
         OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10)
@@ -276,5 +277,33 @@ mod tests {
         let frame = vt.frame().expect("staged row damage emits");
         assert_eq!(frame.rows[0].line, ViewportLine(0));
         assert_eq!(frame.rows[0].contents[0].text, "x   ");
+    }
+
+    /// Asserts that flipping screens replays the placement sections as
+    /// `Some(list)` → `Some(empty)` → `Some(list)`, with `None` between
+    /// unchanged emits.
+    ///
+    /// Case: a shell with a mounted webview opens a full-screen editor
+    /// on the alternate screen and closes it again.
+    #[test]
+    fn a_screen_flip_replays_the_placement_list() {
+        let mut vt = vt();
+        vt.frame();
+        vt.placements
+            .mount(vt.device.active_screen(), 2, 4, "v".to_string(), None)
+            .expect("a mount under the cap is accepted");
+        let mounted = vt.frame().expect("a placement change emits");
+        assert_eq!(mounted.placements.as_ref().map(Vec::len), Some(1));
+
+        vt.device.set_active_screen_for_test(ScreenKind::Alternate);
+        vt.damage.stage(Damage::Full);
+        let flipped = vt.frame().expect("a flip emits a full frame");
+        assert_eq!(flipped.placements, Some(Vec::new()));
+        assert_eq!(flipped.rows.len(), 3);
+
+        vt.device.set_active_screen_for_test(ScreenKind::Primary);
+        vt.damage.stage(Damage::Full);
+        let restored = vt.frame().expect("the flip back emits");
+        assert_eq!(restored.placements.as_ref().map(Vec::len), Some(1));
     }
 }
