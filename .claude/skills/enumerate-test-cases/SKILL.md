@@ -1,6 +1,6 @@
 ---
 name: enumerate-test-cases
-description: Enumerates the test cases one orzma_vt method owes, deriving every case from a citation in docs/references/ and verifying each citation before emitting it. Use when the user says "テストケースを洗い出して", "enumerate test cases", "/enumerate-test-cases", or asks which cases a VT method needs before writing its tests.
+description: Enumerates the test cases one orzma_vt method owes, deriving every case from a citation in docs/references/ and verifying each citation before emitting it. Negotiates with the author when a verified citation cannot become a case under the method's current signature. Use when the user says "テストケースを洗い出して", "enumerate test cases", "/enumerate-test-cases", or asks which cases a VT method needs before writing its tests.
 argument-hint: [Screen::method]
 allowed-tools: Read, Grep, Glob, Bash(pdftotext:*), Bash(grep:*), Bash(awk:*), Bash(sed:*), Bash(head:*), Bash(wc:*), Bash(tr:*), Bash(mkdir:*), Bash(python3:*), AskUserQuestion
 ---
@@ -23,6 +23,9 @@ airtight — do not use it to write into the repository.
 - It does not compare against tests that already exist.
 - It does not generate test code, and it does not write any file into the
   repository.
+- It does not change the method it enumerates. Phase 4 can settle with the
+  author that a signature is wrong; the agreement becomes a premise for this
+  enumeration and a record in the report, and the edit stays the author's.
 - It handles one method per run.
 
 ## Output language
@@ -437,9 +440,44 @@ transcribes it verbatim. The contract line and any policy paragraph the rule
 also requires are the author's to write, because both state a decision the
 specification does not make.
 
-## Phase 3 — Verify every citation, then report
+### When a case cannot be written
 
-Verify **every** citation you are about to emit, not a sample. This is the
+An entry sometimes arrives here carrying a statement of behaviour and no way
+to become a case, because the signature cannot say what the statement
+demands. Dropping it hides a specification the code does not serve, and
+writing the case anyway produces a `Setup:` or `Expect:` line the author
+cannot compile. Record it instead as a **blocker**, carrying its entry ID, its
+citation, and the exact line that could not be written.
+
+| Kind | The entry cannot become a case because |
+| --- | --- |
+| **R** — return contradiction | The return type, or the return contract the doc comment states, disagrees with what the specification-described state change demands. A doc comment promising that nothing is reported when the screen is already clear contradicts the Damage table's row for content moving across the whole screen, and no manual states the optimisation it describes. |
+| **P** — missing parameter | The specification states a condition, and no parameter lets a `Setup:` line establish it. |
+| **O** — unobservable effect | The specification states a state change, and neither the return value nor any state a test can reach lets an `Expect:` line observe it. |
+| **T** — parameter type mismatch | The parameter type rejects a value the specification gives meaning to, or admits one the specification forbids. |
+
+`save_checkpoint` is the standing **O**. `vt510.pdf` has DECSC save the state
+of origin mode (DECOM) and the selective erase attribute, both quotes verify
+against the DECSC description list, and `Screen` models neither, so no
+`Setup:` can establish that state and no `Expect:` can observe it.
+`line_feed`'s LNM-set branch is another. On the acceptance run this covered 2
+of `save_checkpoint`'s 7 contract entries, so it is a common outcome rather
+than an edge case.
+
+A blocker stands on exactly one thing: **a citation that cannot become a
+case.** An impression that the signature looks wrong is not a blocker, and
+neither is a preference about how the method ought to be shaped. Every claim
+this skill makes names a sentence in a manual, and a gate that opens on taste
+is the one hole through which unsourced design walks into the list.
+
+A blocker goes to Phase 3 before it goes anywhere else. Phase 4 settles it on
+the strength of its citation and on nothing else, so a blocker whose citation
+fails verification was never a blocker.
+
+## Phase 3 — Verify every citation
+
+Verify **every** citation the run recorded, not a sample — the ones behind
+cases you are about to emit and the ones behind blockers alike. This is the
 only check standing between a plausible-sounding sentence and a case the
 author will trust, and a fabricated citation reads exactly like a real one —
 that is what makes it dangerous. You are verifying your own work, which is
@@ -545,25 +583,80 @@ A dropped entry goes under "Excluded as unspecified" with the quote that
 failed and its match ratio, so the reader can see what was attempted rather
 than only what survived.
 
-**SPECIFIED BUT NOT MODELLED** — the citation verifies, and the state it
-describes has no representation in the current API. `save_checkpoint` is the
-standing example: `vt510.pdf` has DECSC save the state of origin mode (DECOM)
-and the selective erase attribute, both quotes verify against the DECSC
-description list, and `Screen` models neither — so no `Setup:` can establish
-that state and no `Expect:` can observe it. `line_feed`'s LNM-set branch lands
-here too. On the acceptance run this outcome covered 2 of `save_checkpoint`'s
-7 contract entries, so it is a common result, not an edge case.
+**VERIFIED, AND STILL A BLOCKER** — the citation stands, and Phase 2 could
+still not turn it into a case. It carries to Phase 4 with its citation
+intact and emits no case here.
 
-**Do not file these under "Excluded as unspecified."** They are its opposite:
-the specification is explicit, verified to a page and a line, and the code has
-not caught up. Calling such an entry unspecified is a false statement about the
-manual, and it buries the one thing worth reporting. Section 1g already says a
-divergence between a spec-derived case and the current code is a finding, not a
-mistake to smooth over — this is where that finding gets written down. Give the
-entry its own report section, keep its citation intact, and name the state the
-API does not represent. Emit no case from it, because no case could be written.
+**Do not file a blocker under "Excluded as unspecified."** It is that
+section's opposite: the specification is explicit, verified to a page and a
+line, and the API has not caught up. Calling such an entry unspecified is a
+false statement about the manual, and it buries the one thing worth
+reporting. Section 1g already says a divergence between a spec-derived case
+and the current code is a finding, not a mistake to smooth over — Phase 4 is
+where that finding gets settled.
 
-### The report
+## Phase 4 — Reconcile the signature
+
+**No blocker, no gate.** A run whose entries all became cases goes straight to
+Phase 5 without a prompt. Phase 0 already declines to ask about a mirrored
+method name because that would put a question in front of the majority of
+runs, and the same reasoning holds here.
+
+With one or more blockers, open the gate **once**, carrying all of them. A
+prompt per blocker turns a five-entry method into five interruptions, and it
+splits one decision — what shape this method should have — across five
+answers that cannot see each other.
+
+Print the blockers in the terminal first, then ask with `AskUserQuestion`. Its
+options are short, and a citation, an unwritable line, and a proposed
+signature do not fit inside one. The tool carries at most four questions per
+call, so more than four blockers ask in batches of four — still not one call
+per blocker.
+
+### What each blocker puts in front of the author
+
+- **The verified citation** that demands the case, with its page and line
+  span.
+- **The line that could not be written** — the `Setup:` or `Expect:` line
+  itself, not a summary of it. The author has to see what the current
+  signature makes unsayable.
+- **A concrete signature**, spelled out as the Rust line it would be in the
+  file, not as a description of the change. When it reaches past the method —
+  a new variant on a return type, a field on `Screen`, a parameter threaded
+  from the CSI dispatcher — name that too, because the author is deciding on
+  the whole change rather than on the one line.
+- **What each answer costs.** Keeping the current signature means the entry
+  emits no case, and the author should read that consequence rather than
+  infer it.
+
+Offer two options per blocker — take the proposed signature, or keep the
+current one — and let the tool's own free-text answer carry a third signature
+the author would rather have. State the cost once and then stop. The decision
+is the author's, and a skill that re-argues an answer it was given is worse
+than one that never asked.
+
+An answer that never arrives counts as keeping the current signature.
+
+### After the answers
+
+Return to Phase 2 and expand each unblocked entry by its shape, against the
+agreed signature.
+
+**The `Source:` rule does not relax here.** An agreed signature makes a
+sentence writable; it never makes a case justified. Every case emitted under
+one still names the contract entry that demands it, and every `Expect:` line
+still ends with its own source in brackets. A case whose only justification
+is that the signature was agreed is not a specification-derived case, and the
+list stops meaning anything the moment one enters it.
+
+An entry the author left alone emits no case and goes to the report's "left
+as is" list with its citation, so the reader sees which specification the API
+still does not serve.
+
+**Nothing here edits the repository.** The agreement is a premise for this
+enumeration and a record in the report. The author makes the edit.
+
+## Phase 5 — Report
 
 Terminal only. Never save it.
 
@@ -571,11 +664,15 @@ Terminal only. Never save it.
 # Test cases: Screen::reverse_index
 Destination: crates/orzma_vt/src/screen.rs  mod tests::reverse_index
 Governs: RI (ESC M)   Specifications: vt510.pdf, ECMA-48.pdf
+Enumerated against: the current signature — or, when Phase 4 agreed a
+                    change, the agreed signature (N changes), which is
+                    not the code as it stands
 
 ## Summary          N cases (High n / Medium n / Low n), High first
                     stopping after the High block still covers everything
                     the specification states outright
                     citations verified: N/N
+                    blockers: N (agreed n / left as is n)
 ## Terms tried      every search term and the ladder level it came from,
                     including the ones that reached nothing
 ## Contract table   with citations
@@ -583,9 +680,11 @@ Governs: RI (ESC M)   Specifications: vt510.pdf, ECMA-48.pdf
 ## Excluded as unspecified
    entries with no citation, and entries whose citation failed
    verification (with the failed quote and its match ratio)
-## Specified but not modelled  (omitted when none)
-   entries whose citation verified but whose state the current API
-   does not represent, each with its citation and the missing state
+## API reconciliation          (omitted when no blocker arose)
+   Agreed: each signature the author took, with the blocker it
+   resolves and the citation that demanded it
+   Left as is: blockers the author kept the current signature for,
+   each with its citation and the line that stays unwritable
 ## Specification conflicts     (omitted when none)
 ```
 
@@ -600,6 +699,10 @@ There is no review section. Nothing reviewed this list but you, so do not
 present it as though something did. Say plainly that the list is
 specification-derived and self-verified, and that the author should spot-check
 a citation or two before trusting the rest.
+
+When Phase 4 agreed a signature change, say so in the same breath: the cases
+below do not compile against the code as it stands. A reader who misses that
+transcribes a test for a method that does not exist yet.
 
 ## Error handling
 
@@ -616,5 +719,12 @@ a citation or two before trusting the rest.
 | `verify` reports a dropped qualifier | Treat it as a rejection. Narrow the span if the word came from another line or column; never widen the quote to absorb it |
 | `verify` reports `SPAN TOO WIDE` | Not a result. Narrow the citation to the lines carrying the statement and run `verify` again |
 | The doc-comment extractor prints `NOTFOUND` | Stop and report the file and method tried; never fall back to an unbounded `Read` |
-| A citation verifies but the API models no such state | Report it under "Specified but not modelled" with its citation; do not call it unspecified, and emit no case |
+| Phase 2 cannot write a `Setup:` or `Expect:` line for an entry | Record it as a blocker with its kind, citation, and the unwritable line; never drop it, and never emit a partial case |
+| A blocker's citation fails verification | It stops being a blocker: it goes under "Excluded as unspecified" and never reaches Phase 4 |
+| A citation verifies but the API models no such state | It is an **O** blocker; carry it to Phase 4 with its citation, do not call it unspecified, and emit no case yet |
+| The run produced no blocker | Skip Phase 4 entirely and ask nothing |
+| The run produced blockers | Phase 4 opens once carrying all of them; never one prompt per blocker |
+| The author takes or supplies a signature | Enumerate against it, and say in the report header that the list is not the code as it stands |
+| The author keeps the current signature, or answers nothing | Emit no case from that entry; record it under "API reconciliation" as left as is |
+| A case can be justified only by an agreed signature | Do not emit it. Phase 4 makes a sentence writable, never a case justified |
 | `pdftotext` is unavailable | Stop, suggesting `brew install poppler` |
