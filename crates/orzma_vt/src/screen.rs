@@ -11,11 +11,12 @@ pub mod character_sets;
 pub mod checkpoint;
 pub mod grid;
 pub mod margins;
-mod state;
 pub mod tabs;
 pub mod viewport;
 
 pub(crate) mod cursor;
+
+mod state;
 
 use self::cell::{Cell, Pen};
 use self::grid::Grid;
