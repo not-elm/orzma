@@ -83,9 +83,14 @@ pub struct DirtyRow {
 pub(crate) struct FrameTracker {
     /// Damage staged for the next emit, from every source.
     damage: DamageLedger,
+    /// The cursor the last emitted frame carried, compared against to
+    /// detect changes.
     cursor: Cursor,
+    /// The display offset the last emitted frame carried.
     display_offset: DisplayOffset,
+    /// The placement list the last emitted frame carried.
     placements: Vec<ProjectedPlacement>,
+    /// The palette the last emitted frame carried.
     palette: Palette,
     /// Reusable projection buffer, so an unchanged emit attempt
     /// allocates nothing.
