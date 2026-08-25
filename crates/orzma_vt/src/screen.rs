@@ -93,11 +93,11 @@ impl Screen {
     /// The caller dispatches control bytes itself; this method assumes
     /// a printable character of display width one.
     ///
-    /// The reported damage always covers the row the character landed
-    /// on: a wrap that scrolled reports [`Damage::Full`], and every
-    /// other print reports its own row. [`Self::line_feed`] reports the
-    /// wrap's cursor motion alone, so passing that value through would
-    /// leave the character just written unpainted.
+    /// A wrap that scrolled reports [`Damage::Full`]; every other print
+    /// reports the row the character landed on, or nothing when that row has
+    /// scrolled out of the window. [`Self::line_feed`] reports nothing for
+    /// the wrap's cursor motion, so passing its value through would leave
+    /// the character just written unpainted.
     pub fn print(&mut self, c: char) -> Option<Damage> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
         let wrap = if self.state.pending_wrap {
@@ -115,7 +115,7 @@ impl Screen {
         }
         match wrap {
             Some(Damage::Full) => Some(Damage::Full),
-            _ => Some(self.damage_span(self.state.line, self.state.line)),
+            _ => self.damage_span(self.state.line, self.state.line),
         }
     }
 
@@ -148,14 +148,13 @@ impl Screen {
     /// Moves the cursor down one row, scrolling at the bottom margin;
     /// the deferred-wrap flag is deliberately preserved.
     ///
-    /// A move inside the screen reports [`Damage::Metadata`]: neither
-    /// the departed nor the arrived row changes contents, and the caret
-    /// reaches the renderer through the frame's cursor. Scrolling moves
-    /// content and reports [`Damage::Full`].
+    /// A move inside the screen reports nothing: neither the departed nor
+    /// the arrived row changes contents, and the cursor motion reaches the
+    /// renderer through the per-chunk cursor diff. Scrolling moves content
+    /// and reports [`Damage::Full`].
     ///
     /// A cursor below a non-zero bottom margin and already on the last
-    /// row moves nothing and scrolls nothing; the preserved deferred
-    /// wrap leaves nothing to report there either.
+    /// row moves nothing and scrolls nothing.
     ///
     /// [`Self::print`] also calls this to complete a deferred wrap, so
     /// the operation is not reached only from a control function.
@@ -182,7 +181,7 @@ impl Screen {
         }
         if self.state.line.0 + 1 < self.grid.size().rows {
             self.state.line.0 += 1;
-            return Some(Damage::Metadata);
+            return None;
         }
         None
     }
@@ -191,14 +190,12 @@ impl Screen {
     /// margin.
     ///
     /// A cursor above a non-zero top margin and already on the first row
-    /// moves nothing and scrolls nothing, which is why the disarmed wrap
-    /// is the only thing left to report there.
+    /// moves nothing and scrolls nothing.
     ///
     /// # Control Functions
     ///
     /// - `RI` (`0x8D`, `ESC M`)
     pub fn reverse_index(&mut self) -> Option<Damage> {
-        let was_armed = self.state.pending_wrap;
         self.state.pending_wrap = false;
         if self.state.line == self.scroll_region.top_margin() {
             self.grid.scroll_down_one(
@@ -210,9 +207,9 @@ impl Screen {
         }
         if ScreenLine(0) < self.state.line {
             self.state.line.0 -= 1;
-            return Some(Damage::Metadata);
+            return None;
         }
-        was_armed.then_some(Damage::Metadata)
+        None
     }
 
     /// Erases part of the cursor row with the pen background (BCE);
@@ -234,7 +231,7 @@ impl Screen {
         };
         self.grid
             .fill_visible_row_range(self.state.line, columns, self.state.pen.erase_cell());
-        Some(self.damage_span(self.state.line, self.state.line))
+        self.damage_span(self.state.line, self.state.line)
     }
 
     /// Erases part of the visible screen with the pen background
@@ -254,7 +251,7 @@ impl Screen {
                     self.grid
                         .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
                 }
-                Some(self.damage_span(self.state.line, ScreenLine(rows - 1)))
+                self.damage_span(self.state.line, ScreenLine(rows - 1))
             }
             EraseScreenMode::Above => {
                 for line in 0..self.state.line.0 {
@@ -266,7 +263,7 @@ impl Screen {
                     0..self.state.column.0 + 1,
                     blank,
                 );
-                Some(self.damage_span(ScreenLine(0), self.state.line))
+                self.damage_span(ScreenLine(0), self.state.line)
             }
             EraseScreenMode::All => {
                 for line in 0..rows {
@@ -551,12 +548,9 @@ impl Screen {
     }
 
     /// Reports the given screen rows as damage, in the viewport
-    /// coordinates a frame repaints by.
-    ///
-    /// Rows the viewport does not show are not repainted, so a span that
-    /// starts past the last visible row becomes [`Damage::Metadata`]: the
-    /// frame is still emitted, it just carries no dirty rows.
-    fn damage_span(&self, first: ScreenLine, last: ScreenLine) -> Damage {
+    /// coordinates a frame repaints by; `None` when the whole span has
+    /// scrolled out of the window.
+    fn damage_span(&self, first: ScreenLine, last: ScreenLine) -> Option<Damage> {
         debug_assert!(first <= last, "a damage span runs top to bottom");
         let rows = self.grid.size().rows;
         // NOTE: `DisplayOffset` is a `u32` and does not bound itself, so the
@@ -565,15 +559,15 @@ impl Screen {
         let offset = self.viewport.offset.0;
         let first = u32::from(first.0).saturating_add(offset);
         if first >= u32::from(rows) {
-            return Damage::Metadata;
+            return None;
         }
         let last = u32::from(last.0)
             .saturating_add(offset)
             .min(u32::from(rows - 1));
-        Damage::rows(
+        Some(Damage::rows(
             ViewportLine(u16::try_from(first).expect("guarded above by first < rows")),
             ViewportLine(u16::try_from(last).expect("clamped to rows - 1 above")),
-        )
+        ))
     }
 
     /// Seats the cursor at a tabulation column.
@@ -802,17 +796,12 @@ mod tests {
         }
 
         /// Asserts that a write below the bottom of the scrolled window
-        /// reports no dirty row.
-        ///
-        /// The agreed policy reports [`Damage::Metadata`] rather than
-        /// dropping the write outright: a frame still has to carry the
-        /// current cursor and offset even though the row the write landed
-        /// on has scrolled out of the window.
+        /// reports no damage at all.
         ///
         /// Case: the user reads scrollback while a build keeps printing at
         /// the live tail, which the window no longer shows.
         #[test]
-        fn a_write_scrolled_out_of_the_window_reports_no_dirty_row() {
+        fn a_write_scrolled_out_of_the_window_reports_no_damage() {
             let mut screen = screen();
             for _ in 0..3 {
                 screen.state.line = ScreenLine(2);
@@ -820,7 +809,7 @@ mod tests {
             }
             screen.viewport.offset = DisplayOffset(3);
             screen.state.line = ScreenLine(0);
-            assert_eq!(screen.print('x'), Some(Damage::Metadata));
+            assert_eq!(screen.print('x'), None);
         }
     }
 
@@ -1185,11 +1174,7 @@ mod tests {
         use super::*;
 
         /// Asserts that a linefeed above the bottom row only moves the
-        /// cursor and reports cursor-only damage.
-        ///
-        /// The agreed policy is [`Damage::Metadata`] rather than the
-        /// departed and arrived rows: neither row's contents change, and
-        /// the renderer draws the caret from the frame's cursor.
+        /// cursor and reports no damage.
         ///
         /// Case: a shell prints multiple output lines while the screen
         /// still has empty rows below the cursor.
@@ -1198,7 +1183,7 @@ mod tests {
             let mut screen = screen();
             let damage = screen.line_feed();
             assert_eq!(screen.state.line, ScreenLine(1));
-            assert_eq!(damage, Some(Damage::Metadata));
+            assert_eq!(damage, None);
         }
 
         /// Asserts that a linefeed at the bottom margin scrolls the screen and
@@ -1253,7 +1238,7 @@ mod tests {
             let damage = screen.line_feed();
             assert_eq!(screen.state.line, ScreenLine(3));
             assert_eq!(screen.grid.history_len(), 0);
-            assert_eq!(damage, Some(Damage::Metadata));
+            assert_eq!(damage, None);
         }
 
         /// Asserts that a linefeed below the bottom margin, already on
@@ -1373,7 +1358,7 @@ mod tests {
             screen.state.line = ScreenLine(2);
             let damage = screen.reverse_index();
             assert_eq!(screen.state.line, ScreenLine(1));
-            assert_eq!(damage, Some(Damage::Metadata));
+            assert_eq!(damage, None);
         }
 
         /// Asserts that a reverse index at the top margin scrolls the
@@ -1511,7 +1496,7 @@ mod tests {
             screen.state.line = ScreenLine(1);
             let damage = screen.reverse_index();
             assert_eq!(screen.state.line, ScreenLine(0));
-            assert_eq!(damage, Some(Damage::Metadata));
+            assert_eq!(damage, None);
         }
 
         /// Asserts that a reverse index at a non-zero top margin scrolls
