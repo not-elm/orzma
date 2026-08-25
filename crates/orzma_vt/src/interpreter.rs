@@ -17,7 +17,7 @@ use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::{
     device::DeviceState,
-    frame::{FrameTracker, damage::Damage},
+    frame::{FrameTracker, damage::DamageSpan},
     placement::PlacementStore,
     schema::VtSignal,
 };
@@ -246,7 +246,7 @@ impl Executor<'_> {
 
     /// Stages the reported damage and folds the result into the chunk
     /// liveness.
-    fn stage(&mut self, damage: Option<Damage>) {
+    fn stage(&mut self, damage: Option<DamageSpan>) {
         *self.damaged |= self.tracker.stage_if_changed(damage);
     }
 }

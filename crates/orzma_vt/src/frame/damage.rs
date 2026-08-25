@@ -1,151 +1,27 @@
-//! Damage vocabulary and the ledger that stages it.
+//! Damage vocabulary: the span one operation reports and the
+//! accumulator that merges spans toward the next emit.
 //!
-//! [`DamageLedger`] accumulates what interpretation, scrolling, and
-//! resizing each report per call and hands the merged result to the
-//! frame emitter as a [`StagedDamage`]. Staging merges rather than
-//! replaces: a source reports only what its own call produced, so an
-//! overwritten staged value would drop a repaint no later call
-//! re-reports.
-//!
-//! [`Damage`] is the allocation-free counterpart a single screen
+//! [`DamageSpan`] is the allocation-free value a single screen
 //! operation reports: a `Copy` span rather than a `Vec`, because this
 //! value crosses the per-printed-character path where a `Vec` per
 //! character would dominate the interpreter's cost.
+//!
+//! [`Damage`] accumulates what interpretation, scrolling, and resizing
+//! each report per call and hands the merged rows to the frame emitter.
+//! Staging merges rather than replaces: a source reports only what its
+//! own call produced, so an overwritten value would drop a repaint no
+//! later call re-reports.
 
 use crate::schema::ViewportLine;
-use std::{iter, ops::Deref};
-
-/// Viewport damage the VT reported in a single damage cycle.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StagedDamage {
-    /// Entire viewport is dirty (resize, clear, alt-screen swap, reset).
-    Full,
-    /// Only the carried rows are dirty.
-    Delta(DamageRows),
-}
-
-/// Dirty viewport row indices, ascending and without duplicates.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct DamageRows(Vec<ViewportLine>);
-
-impl Deref for DamageRows {
-    type Target = [ViewportLine];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl FromIterator<ViewportLine> for DamageRows {
-    fn from_iter<I: IntoIterator<Item = ViewportLine>>(iter: I) -> Self {
-        let mut rows: Vec<ViewportLine> = iter.into_iter().collect();
-        rows.sort_unstable();
-        rows.dedup();
-        Self(rows)
-    }
-}
-
-impl DamageRows {
-    /// Collects already-ascending, already-unique rows.
-    ///
-    /// # Invariants
-    ///
-    /// The iterator must yield rows ascending without repeats; the
-    /// ledger's bit walk does by construction. Feeding an unordered
-    /// iterator here silently violates this type's ordering contract.
-    fn from_ascending(count: usize, rows: impl Iterator<Item = ViewportLine>) -> Self {
-        let mut collected = Vec::with_capacity(count);
-        collected.extend(rows);
-        debug_assert!(
-            collected.is_sorted_by(|a, b| a < b),
-            "the ledger's bit walk yields rows ascending and unique"
-        );
-        Self(collected)
-    }
-}
-
-/// Damage staged for the next frame emit.
-pub(crate) struct DamageLedger {
-    /// Damage staged for the next emit; `None` when nothing is.
-    staged: Option<Staged>,
-    /// Dirty-row bits, reused across frames so staging never allocates
-    /// on the per-character path. Meaningful only while `staged` is
-    /// `Some(Staged::Rows)`.
-    rows: RowBits,
-}
-
-impl DamageLedger {
-    /// Builds a ledger with the bootstrap repaint already staged.
-    ///
-    /// # Invariants
-    ///
-    /// Its seeded full damage is what makes the first emitted frame
-    /// carry every viewport row; a ledger that starts empty paints
-    /// nothing until the first PTY output arrives.
-    pub fn new() -> Self {
-        Self {
-            staged: Some(Staged::Full),
-            rows: RowBits::default(),
-        }
-    }
-
-    /// Merges `damage` into the staged value.
-    pub fn stage(&mut self, damage: Damage) {
-        match (&self.staged, damage) {
-            (Some(Staged::Full), _) => {}
-            (_, Damage::Full) => {
-                self.staged = Some(Staged::Full);
-                self.rows.clear();
-            }
-            (_, Damage::Rows { first, last }) => {
-                self.staged = Some(Staged::Rows);
-                self.rows.set_span(first, last);
-            }
-        }
-    }
-
-    /// Hands over the staged damage, leaving the ledger empty; `None`
-    /// when nothing is staged.
-    pub fn take(&mut self) -> Option<StagedDamage> {
-        let staged = self.staged.take()?;
-        let drained = match staged {
-            Staged::Full => StagedDamage::Full,
-            Staged::Rows => {
-                debug_assert!(
-                    self.rows.count_ones() > 0,
-                    "Rows is staged only by a span, so the set cannot be empty"
-                );
-                StagedDamage::Delta(DamageRows::from_ascending(
-                    self.rows.count_ones(),
-                    self.rows.rows(),
-                ))
-            }
-        };
-        self.rows.clear();
-        Some(drained)
-    }
-}
-
-/// Which kind of damage the ledger holds.
-enum Staged {
-    /// Every viewport row.
-    Full,
-    /// The rows the ledger's bit set names.
-    ///
-    /// # Invariants
-    ///
-    /// At least one bit is set: `Rows` is staged only by a span, so an
-    /// empty set is unreachable.
-    Rows,
-}
+use std::iter;
 
 /// Viewport rows one operation damaged.
 ///
 /// `Copy` and allocation-free: this value crosses the per-character path
-/// between a screen operation and the ledger, where a `Vec` per printed
-/// character would dominate the interpreter's cost.
+/// between a screen operation and the accumulator, where a `Vec` per
+/// printed character would dominate the interpreter's cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Damage {
+pub enum DamageSpan {
     /// Entire viewport is dirty (resize, clear, alt-screen swap, reset).
     Full,
     /// An inclusive viewport-row span; a single row is `first == last`.
@@ -157,16 +33,96 @@ pub enum Damage {
     },
 }
 
-impl Damage {
+impl DamageSpan {
     /// Builds an inclusive row span.
     ///
     /// # Invariants
     ///
-    /// `first <= last`; the ledger's span writer sets wrong bits without
-    /// panicking on a reversed pair.
+    /// `first <= last`; the accumulator's span writer sets wrong bits
+    /// without panicking on a reversed pair.
     pub fn rows(first: ViewportLine, last: ViewportLine) -> Self {
         debug_assert!(first <= last, "a damage span runs top to bottom");
         Self::Rows { first, last }
+    }
+}
+
+/// Damage accumulated toward the next frame emit.
+///
+/// # Invariants
+///
+/// While `full` is set the row bits are empty: staging `Full` clears
+/// them and a span staged under a pending `Full` is discarded, which is
+/// what lets [`Self::dirty_rows`] chain both sources unconditionally.
+pub(crate) struct Damage {
+    /// Whether the entire viewport is dirty. Height-independent: the
+    /// flag expands against the emit-time viewport height, so a resize
+    /// between staging and emitting cannot under- or over-cover.
+    full: bool,
+    /// Dirty-row bits, reused across frames so staging never allocates
+    /// on the per-character path.
+    rows: RowBits,
+}
+
+impl Damage {
+    /// Builds the accumulator with the bootstrap repaint already staged.
+    ///
+    /// # Invariants
+    ///
+    /// Its seeded full damage is what makes the first emitted frame
+    /// carry every viewport row; an accumulator that starts clean
+    /// paints nothing until the first PTY output arrives.
+    pub fn new() -> Self {
+        Self {
+            full: true,
+            rows: RowBits::default(),
+        }
+    }
+
+    /// Merges `span` into the accumulated damage.
+    pub fn stage(&mut self, span: DamageSpan) {
+        match span {
+            DamageSpan::Full => {
+                self.full = true;
+                self.rows.clear();
+            }
+            DamageSpan::Rows { first, last } => {
+                if !self.full {
+                    self.rows.set_span(first, last);
+                    debug_assert!(!self.rows.is_empty(), "a staged span sets at least one bit");
+                }
+            }
+        }
+    }
+
+    /// Returns whether nothing is staged, so the emit gate can treat
+    /// the accumulator like the other unchanged sections.
+    pub fn is_clean(&self) -> bool {
+        !self.full && self.rows.is_empty()
+    }
+
+    /// The staged rows against the emit-time viewport height, ascending
+    /// and without duplicates: every row below `height` when full,
+    /// otherwise the set bits.
+    ///
+    /// The clip on the bit path is release-build defense; staged bits
+    /// at or above the emit-time height are unreachable while every
+    /// basis change stages `Full`.
+    pub fn dirty_rows(&self, height: u16) -> impl Iterator<Item = ViewportLine> + '_ {
+        debug_assert!(
+            self.rows.rows().all(|line| line.0 < height),
+            "staged row damage must fit the emit-time viewport"
+        );
+        let full_span = if self.full { 0..height } else { 0..0 };
+        full_span
+            .map(ViewportLine)
+            .chain(self.rows.rows().filter(move |line| line.0 < height))
+    }
+
+    /// Empties the accumulator after an emit, keeping the bit buffer
+    /// for the next frame.
+    pub fn clear(&mut self) {
+        self.full = false;
+        self.rows.clear();
     }
 }
 
@@ -175,11 +131,11 @@ impl Damage {
 /// Bit `b` of element `w` is viewport row `w * 64 + b`, with `b` counted
 /// from the least significant bit. Walking elements in order and bits by
 /// `trailing_zeros` therefore yields rows ascending, which is what lets
-/// a drain build [`DamageRows`] without sorting.
+/// the emitter build dirty rows without sorting.
 ///
-/// The ledger keeps one for the terminal's lifetime: staging a span sets
-/// bits and draining turns them back into rows, so nothing is allocated
-/// once the buffer has grown to the viewport's height.
+/// The accumulator keeps one for the terminal's lifetime: staging a
+/// span sets bits and an emit turns them back into rows, so nothing is
+/// allocated once the buffer has grown to the viewport's height.
 #[derive(Debug, Default)]
 struct RowBits(Vec<u64>);
 
@@ -215,9 +171,9 @@ impl RowBits {
         self.0.fill(0);
     }
 
-    /// Number of rows currently set.
-    fn count_ones(&self) -> usize {
-        self.0.iter().map(|word| word.count_ones() as usize).sum()
+    /// Returns whether no row is set.
+    fn is_empty(&self) -> bool {
+        self.0.iter().all(|word| *word == 0)
     }
 
     /// The set rows, ascending and without duplicates.
@@ -237,7 +193,7 @@ impl RowBits {
 
 #[cfg(test)]
 mod tests {
-    mod damage {
+    mod span {
         use super::super::*;
 
         /// Asserts that the span constructor keeps its endpoints and that a
@@ -247,8 +203,8 @@ mod tests {
         #[test]
         fn a_single_row_span_carries_the_same_endpoint_twice() {
             assert_eq!(
-                Damage::rows(ViewportLine(4), ViewportLine(4)),
-                Damage::Rows {
+                DamageSpan::rows(ViewportLine(4), ViewportLine(4)),
+                DamageSpan::Rows {
                     first: ViewportLine(4),
                     last: ViewportLine(4),
                 }
@@ -256,76 +212,77 @@ mod tests {
         }
     }
 
-    mod ledger {
+    mod accumulator {
         use super::super::*;
 
-        fn rows(ledger: &mut DamageLedger) -> Vec<u16> {
-            match ledger.take() {
-                Some(StagedDamage::Delta(rows)) => rows.iter().map(|line| line.0).collect(),
-                other => panic!("expected a delta, got {other:?}"),
-            }
+        fn drain(damage: &mut Damage, height: u16) -> Vec<u16> {
+            let rows = damage.dirty_rows(height).map(|line| line.0).collect();
+            damage.clear();
+            rows
         }
 
-        /// Asserts that a fresh ledger's first drain is a full repaint.
+        /// Asserts that a fresh accumulator drains as a full repaint and
+        /// is clean afterwards.
         ///
-        /// Case: a terminal is spawned and paints its first frame before any
-        /// PTY output has arrived.
+        /// Case: a terminal is spawned and paints its first frame before
+        /// any PTY output has arrived.
         #[test]
-        fn a_fresh_ledger_drains_as_a_full_repaint() {
-            let mut ledger = DamageLedger::new();
-            assert!(matches!(ledger.take(), Some(StagedDamage::Full)));
-            assert!(ledger.take().is_none());
+        fn a_fresh_accumulator_drains_as_a_full_repaint() {
+            let mut damage = Damage::new();
+            assert!(!damage.is_clean());
+            assert_eq!(drain(&mut damage, 3), [0, 1, 2]);
+            assert!(damage.is_clean());
         }
 
-        /// Asserts that row damage staged while a full repaint is pending is
-        /// discarded rather than retained.
+        /// Asserts that row damage staged while a full repaint is pending
+        /// is discarded rather than retained.
         ///
-        /// Case: a resize stages a full repaint and the shell keeps printing
-        /// before the frame is emitted.
+        /// Case: a resize stages a full repaint and the shell keeps
+        /// printing before the frame is emitted.
         #[test]
         fn rows_staged_under_a_pending_full_repaint_are_discarded() {
-            let mut ledger = DamageLedger::new();
-            ledger.take();
-            ledger.stage(Damage::Full);
-            ledger.stage(Damage::rows(ViewportLine(5), ViewportLine(5)));
-            assert!(matches!(ledger.take(), Some(StagedDamage::Full)));
-            ledger.stage(Damage::rows(ViewportLine(1), ViewportLine(1)));
-            assert_eq!(rows(&mut ledger), [1]);
+            let mut damage = Damage::new();
+            damage.clear();
+            damage.stage(DamageSpan::Full);
+            damage.stage(DamageSpan::rows(ViewportLine(5), ViewportLine(5)));
+            assert_eq!(drain(&mut damage, 3), [0, 1, 2]);
+            damage.stage(DamageSpan::rows(ViewportLine(1), ViewportLine(1)));
+            assert_eq!(drain(&mut damage, 3), [1]);
         }
 
         /// Asserts that spans accumulate across calls and drain ascending
         /// without duplicates.
         ///
-        /// Case: one PTY chunk prints on several rows before the coalescer's
-        /// window closes.
+        /// Case: one PTY chunk prints on several rows before the
+        /// coalescer's window closes.
         #[test]
         fn staged_spans_accumulate_and_drain_ascending() {
-            let mut ledger = DamageLedger::new();
-            ledger.take();
-            ledger.stage(Damage::rows(ViewportLine(3), ViewportLine(4)));
-            ledger.stage(Damage::rows(ViewportLine(0), ViewportLine(0)));
-            ledger.stage(Damage::rows(ViewportLine(3), ViewportLine(3)));
-            assert_eq!(rows(&mut ledger), [0, 3, 4]);
+            let mut damage = Damage::new();
+            damage.clear();
+            damage.stage(DamageSpan::rows(ViewportLine(3), ViewportLine(4)));
+            damage.stage(DamageSpan::rows(ViewportLine(0), ViewportLine(0)));
+            damage.stage(DamageSpan::rows(ViewportLine(3), ViewportLine(3)));
+            assert_eq!(drain(&mut damage, 5), [0, 3, 4]);
         }
 
         /// Asserts that a full repaint clears the bits it supersedes, so a
         /// later shrink cannot surface a row past the new viewport.
         ///
-        /// The property is kept inside the ledger rather than resting on
-        /// `Vt::resize` always staging `Full`, so a later change to the
+        /// The property is kept inside the accumulator rather than resting
+        /// on `Vt::resize` always staging `Full`, so a later change to the
         /// resize path cannot silently break it.
         ///
         /// Case: the window shrinks after output damaged a row that the
         /// smaller viewport no longer has.
         #[test]
         fn a_full_repaint_clears_the_rows_it_supersedes() {
-            let mut ledger = DamageLedger::new();
-            ledger.take();
-            ledger.stage(Damage::rows(ViewportLine(90), ViewportLine(90)));
-            ledger.stage(Damage::Full);
-            assert!(matches!(ledger.take(), Some(StagedDamage::Full)));
-            ledger.stage(Damage::rows(ViewportLine(1), ViewportLine(1)));
-            assert_eq!(rows(&mut ledger), [1]);
+            let mut damage = Damage::new();
+            damage.clear();
+            damage.stage(DamageSpan::rows(ViewportLine(90), ViewportLine(90)));
+            damage.stage(DamageSpan::Full);
+            assert_eq!(drain(&mut damage, 3), [0, 1, 2]);
+            damage.stage(DamageSpan::rows(ViewportLine(1), ViewportLine(1)));
+            assert_eq!(drain(&mut damage, 3), [1]);
         }
     }
 
@@ -373,7 +330,6 @@ mod tests {
             bits.set_span(ViewportLine(2), ViewportLine(2));
             bits.set_span(ViewportLine(2), ViewportLine(3));
             assert_eq!(rows_of(&bits), [2, 3]);
-            assert_eq!(bits.count_ones(), 2);
         }
 
         /// Asserts that disjoint spans are both retained, ascending.
@@ -396,14 +352,14 @@ mod tests {
         /// allocated and the length remains the high-water mark.
         ///
         /// Case: a frame is emitted and the next chunk starts staging into
-        /// the same terminal's ledger.
+        /// the same terminal's accumulator.
         #[test]
         fn clearing_drops_every_set_row() {
             let mut bits = span(0, 200);
             let len = bits.0.len();
             bits.clear();
             assert_eq!(bits.0.len(), len, "clear must not shorten the buffer");
-            assert_eq!(bits.count_ones(), 0);
+            assert!(bits.is_empty());
             assert_eq!(rows_of(&bits), Vec::<u16>::new());
 
             bits.set_span(ViewportLine(200), ViewportLine(200));

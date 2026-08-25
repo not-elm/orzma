@@ -10,7 +10,7 @@
 
 pub mod damage;
 
-use self::damage::{Damage, DamageLedger, StagedDamage};
+use self::damage::{Damage, DamageSpan};
 use crate::device::{ActiveScreen, DeviceState};
 use crate::placement::PlacementStore;
 use crate::schema::{
@@ -73,7 +73,7 @@ pub struct DirtyRow {
 /// Tracks what the next frame owes and what the last frame carried.
 pub(crate) struct FrameTracker {
     /// Damage staged for the next emit, from every source.
-    damage: DamageLedger,
+    damage: Damage,
     /// The cursor the last emitted frame carried, compared against to
     /// detect changes.
     cursor: Cursor,
@@ -89,7 +89,7 @@ pub(crate) struct FrameTracker {
 }
 
 impl FrameTracker {
-    /// Builds a tracker whose ledger is seeded with the bootstrap full
+    /// Builds a tracker whose damage is seeded with the bootstrap full
     /// repaint, so the first emitted frame carries every viewport row.
     ///
     /// The retained defaults are sound even though the default cursor
@@ -99,7 +99,7 @@ impl FrameTracker {
     /// load-bearing.
     pub fn new() -> Self {
         Self {
-            damage: DamageLedger::new(),
+            damage: Damage::new(),
             cursor: Cursor::default(),
             display_offset: DisplayOffset::default(),
             placements: Vec::new(),
@@ -108,17 +108,17 @@ impl FrameTracker {
         }
     }
 
-    /// Merges `damage` into the staged value.
-    pub fn stage(&mut self, damage: Damage) {
-        self.damage.stage(damage);
+    /// Merges `span` into the staged damage.
+    pub fn stage(&mut self, span: DamageSpan) {
+        self.damage.stage(span);
     }
 
     /// Stages the reported damage, if any; returns whether there was
     /// any to stage.
-    pub fn stage_if_changed(&mut self, damage: Option<Damage>) -> bool {
-        match damage {
-            Some(damage) => {
-                self.stage(damage);
+    pub fn stage_if_changed(&mut self, span: Option<DamageSpan>) -> bool {
+        match span {
+            Some(span) => {
+                self.stage(span);
                 true
             }
             None => false,
@@ -140,10 +140,9 @@ impl FrameTracker {
         let screen = device.active();
         let cursor = screen.cursor();
         let display_offset = screen.display_offset();
-        let staged = self.damage.take();
         let placements = self.diff_placements(placements, device.active_screen());
         let palette = self.diff_palette(device.palette());
-        if staged.is_none()
+        if self.damage.is_clean()
             && placements.is_none()
             && palette.is_none()
             && !self.cursor_or_offset_changed(&cursor, display_offset)
@@ -155,11 +154,8 @@ impl FrameTracker {
             line,
             contents: screen.viewport_row(line).to_runs(),
         };
-        let rows = match staged {
-            Some(StagedDamage::Full) => (0..size.rows).map(ViewportLine).map(dirty_row).collect(),
-            Some(StagedDamage::Delta(dirty)) => dirty.iter().copied().map(dirty_row).collect(),
-            None => Vec::new(),
-        };
+        let rows = self.damage.dirty_rows(size.rows).map(dirty_row).collect();
+        self.damage.clear();
         let frame = Frame {
             size,
             rows,
@@ -334,7 +330,7 @@ mod tests {
         let mut rig = drained_rig();
         assert!(!rig.tracker.stage_if_changed(None));
         assert_eq!(emit(&mut rig), None);
-        assert!(rig.tracker.stage_if_changed(Some(Damage::Full)));
+        assert!(rig.tracker.stage_if_changed(Some(DamageSpan::Full)));
         assert!(emit(&mut rig).is_some());
     }
 
@@ -347,7 +343,7 @@ mod tests {
     fn full_damage_emits_every_viewport_row() {
         let mut rig = drained_rig();
         rig.device.active_mut().print('a');
-        rig.tracker.stage(Damage::Full);
+        rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert_eq!(frame.size, GridSize { cols: 4, rows: 3 });
         assert_eq!(frame.rows.len(), 3);
@@ -373,9 +369,9 @@ mod tests {
     fn row_damage_emits_exactly_the_staged_rows() {
         let mut rig = drained_rig();
         rig.tracker
-            .stage(Damage::rows(ViewportLine(2), ViewportLine(2)));
+            .stage(DamageSpan::rows(ViewportLine(2), ViewportLine(2)));
         rig.tracker
-            .stage(Damage::rows(ViewportLine(0), ViewportLine(0)));
+            .stage(DamageSpan::rows(ViewportLine(0), ViewportLine(0)));
         let frame = emit(&mut rig).expect("staged damage emits");
         let lines: Vec<_> = frame.rows.iter().map(|row| row.line).collect();
         assert_eq!(lines, [ViewportLine(0), ViewportLine(2)]);

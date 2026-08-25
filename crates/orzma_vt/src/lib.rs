@@ -21,10 +21,8 @@ mod placement;
 pub mod schema;
 pub mod screen;
 
-pub use frame::damage;
-
 pub mod prelude {
-    pub use crate::{OrzmaVt, Vt, VtUpdate, damage::*, schema::*};
+    pub use crate::{OrzmaVt, Vt, VtUpdate, schema::*};
 }
 
 /// The terminal-emulation contract `OrzmaTty` drives and the host
@@ -219,7 +217,7 @@ impl Vt for OrzmaVt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::damage::Damage;
+    use crate::frame::damage::DamageSpan;
     use crate::schema::{ScreenKind, ViewportLine};
 
     fn vt() -> OrzmaVt {
@@ -252,7 +250,7 @@ mod tests {
     }
 
     /// Asserts that a print's viewport-space damage survives the
-    /// `Screen` → `DamageLedger` → `Frame` seam without the row it names
+    /// `Screen` → `Damage` → `Frame` seam without the row it names
     /// being confused with the screen-space row it was computed from.
     ///
     /// Case: a shell prints at the top of a fresh screen, that row
@@ -290,13 +288,13 @@ mod tests {
         assert_eq!(mounted.placements.as_ref().map(Vec::len), Some(1));
 
         vt.device.set_active_screen_for_test(ScreenKind::Alternate);
-        vt.tracker.stage(Damage::Full);
+        vt.tracker.stage(DamageSpan::Full);
         let flipped = vt.frame().expect("a flip emits a full frame");
         assert_eq!(flipped.placements, Some(Vec::new()));
         assert_eq!(flipped.rows.len(), 3);
 
         vt.device.set_active_screen_for_test(ScreenKind::Primary);
-        vt.tracker.stage(Damage::Full);
+        vt.tracker.stage(DamageSpan::Full);
         let restored = vt.frame().expect("the flip back emits");
         assert_eq!(restored.placements.as_ref().map(Vec::len), Some(1));
     }

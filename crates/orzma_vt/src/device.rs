@@ -10,7 +10,7 @@
     reason = "the executor and the frame emitter reach this state once they land"
 )]
 
-use crate::damage::Damage;
+use crate::frame::damage::DamageSpan;
 use crate::schema::{DisplayOffset, GridColumn, GridSize, Palette, ScreenKind, Scroll, VtModes};
 use crate::screen::Screen;
 use crate::screen::grid::LineId;
@@ -83,7 +83,7 @@ impl DeviceState {
     /// # Invariants
     ///
     /// A resize that changes the dimensions must report
-    /// [`Damage::Full`]: every emitted frame carries the new size but
+    /// [`DamageSpan::Full`]: every emitted frame carries the new size but
     /// nothing diffs it, so partial row damage would hand the renderer
     /// new dimensions with stale rows behind them.
     // TODO: A rewrap can insert or drop rows in the middle of the ring,
@@ -92,7 +92,7 @@ impl DeviceState {
     // route the row remapping it produces to `PlacementStore` (a sibling
     // field, so the caller has to route it) so it can re-anchor each
     // placement to its surviving row.
-    pub fn resize(&mut self, _size: GridSize) -> Option<Damage> {
+    pub fn resize(&mut self, _size: GridSize) -> Option<DamageSpan> {
         todo!()
     }
 
@@ -100,11 +100,11 @@ impl DeviceState {
     ///
     /// # Invariants
     ///
-    /// A motion that moves the viewport must report [`Damage::Full`]:
+    /// A motion that moves the viewport must report [`DamageSpan::Full`]:
     /// the emit-time offset diff only guarantees that a frame is
     /// emitted, not that it carries rows, so anything less would
     /// repaint stale content at the new offset.
-    pub fn scroll(&mut self, _scroll: Scroll) -> Option<Damage> {
+    pub fn scroll(&mut self, _scroll: Scroll) -> Option<DamageSpan> {
         todo!()
     }
 

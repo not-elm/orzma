@@ -2,7 +2,7 @@
 //!
 //! [`Screen`] owns cell storage ([`grid::Grid`]) and the write cursor,
 //! and updates them together; a mutation that damages rows returns the
-//! [`Damage`] it produced for the caller to stage, and pure cursor
+//! [`DamageSpan`] it produced for the caller to stage, and pure cursor
 //! motion returns nothing, because the per-chunk cursor diff reports
 //! it.
 
@@ -19,7 +19,7 @@ use self::cell::{Cell, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
-use crate::damage::Damage;
+use crate::frame::damage::DamageSpan;
 use crate::schema::{
     Cursor, CursorShape, DisplayOffset, GridColumn, GridLine, GridPoint, GridSize, ScreenLine,
     ViewportLine,
@@ -93,12 +93,12 @@ impl Screen {
     /// The caller dispatches control bytes itself; this method assumes
     /// a printable character of display width one.
     ///
-    /// A wrap that scrolled reports [`Damage::Full`]; every other print
+    /// A wrap that scrolled reports [`DamageSpan::Full`]; every other print
     /// reports the row the character landed on, or nothing when that row has
     /// scrolled out of the window. [`Self::line_feed`] reports nothing for
     /// the wrap's cursor motion, so passing its value through would leave
     /// the character just written unpainted.
-    pub fn print(&mut self, c: char) -> Option<Damage> {
+    pub fn print(&mut self, c: char) -> Option<DamageSpan> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
         let wrap = if self.state.pending_wrap {
             self.state.pending_wrap = false;
@@ -114,7 +114,7 @@ impl Screen {
             self.state.pending_wrap = true;
         }
         match wrap {
-            Some(Damage::Full) => Some(Damage::Full),
+            Some(DamageSpan::Full) => Some(DamageSpan::Full),
             _ => self.damage_span(self.state.line, self.state.line),
         }
     }
@@ -151,7 +151,7 @@ impl Screen {
     /// A move inside the screen reports nothing: neither the departed nor
     /// the arrived row changes contents, and the cursor motion reaches the
     /// renderer through the per-chunk cursor diff. Scrolling moves content
-    /// and reports [`Damage::Full`].
+    /// and reports [`DamageSpan::Full`].
     ///
     /// A cursor below a non-zero bottom margin and already on the last
     /// row moves nothing and scrolls nothing.
@@ -166,7 +166,7 @@ impl Screen {
     /// - `FF` (`0x0C`)
     /// - `IND` (`0x84`, `ESC D`)
     /// - `NEL` (`0x85`, `ESC E`) — after the carriage return
-    pub fn line_feed(&mut self) -> Option<Damage> {
+    pub fn line_feed(&mut self) -> Option<DamageSpan> {
         if self.state.line == self.scroll_region.bottom_margin() {
             let top = self.scroll_region.top_margin();
             self.grid.scroll_up_one(
@@ -177,7 +177,7 @@ impl Screen {
             if top == ScreenLine(0) {
                 self.hold_scrolled_viewport();
             }
-            return Some(Damage::Full);
+            return Some(DamageSpan::Full);
         }
         if self.state.line.0 + 1 < self.grid.size().rows {
             self.state.line.0 += 1;
@@ -194,7 +194,7 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `RI` (`0x8D`, `ESC M`)
-    pub fn reverse_index(&mut self) -> Option<Damage> {
+    pub fn reverse_index(&mut self) -> Option<DamageSpan> {
         self.state.pending_wrap = false;
         if self.state.line == self.scroll_region.top_margin() {
             self.grid.scroll_down_one(
@@ -202,7 +202,7 @@ impl Screen {
                 self.scroll_region.bottom_margin(),
                 self.state.pen.erase_cell(),
             );
-            return Some(Damage::Full);
+            return Some(DamageSpan::Full);
         }
         if ScreenLine(0) < self.state.line {
             self.state.line.0 -= 1;
@@ -217,7 +217,7 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `EL` (`CSI Ps K`)
-    pub fn erase_in_line(&mut self, mode: EraseLineMode) -> Option<Damage> {
+    pub fn erase_in_line(&mut self, mode: EraseLineMode) -> Option<DamageSpan> {
         if matches!(mode, EraseLineMode::ToEnd) && self.state.pending_wrap {
             return None;
         }
@@ -238,7 +238,7 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `ED` (`CSI Ps J`)
-    pub fn erase_in_display(&mut self, mode: EraseScreenMode) -> Option<Damage> {
+    pub fn erase_in_display(&mut self, mode: EraseScreenMode) -> Option<DamageSpan> {
         let GridSize { cols, rows } = self.grid.size();
         let blank = self.state.pen.erase_cell();
         match mode {
@@ -268,7 +268,7 @@ impl Screen {
                     self.grid
                         .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
                 }
-                Some(Damage::Full)
+                Some(DamageSpan::Full)
             }
         }
     }
@@ -556,7 +556,7 @@ impl Screen {
     /// Reports the given screen rows as damage, in the viewport
     /// coordinates a frame repaints by; `None` when the whole span has
     /// scrolled out of the window.
-    fn damage_span(&self, first: ScreenLine, last: ScreenLine) -> Option<Damage> {
+    fn damage_span(&self, first: ScreenLine, last: ScreenLine) -> Option<DamageSpan> {
         debug_assert!(first <= last, "a damage span runs top to bottom");
         let rows = self.grid.size().rows;
         // NOTE: `DisplayOffset` is a `u32` and does not bound itself, so the
@@ -570,7 +570,7 @@ impl Screen {
         let last = u32::from(last.0)
             .saturating_add(offset)
             .min(u32::from(rows - 1));
-        Some(Damage::rows(
+        Some(DamageSpan::rows(
             ViewportLine(u16::try_from(first).expect("guarded above by first < rows")),
             ViewportLine(u16::try_from(last).expect("clamped to rows - 1 above")),
         ))
@@ -630,10 +630,6 @@ impl Screen {
 
     /// Applies the state saved in memory to each actual state.
     /// If no saved state exists, perform a DECRC-compliant action.
-    ///
-    /// A screen that never saved holds [`Checkpoint::default`], which is
-    /// the state DECRC calls for in that case, so the unsaved path needs
-    /// no branch of its own.
     ///
     /// The saved position is put back verbatim. Restoring an origin mode
     /// whose margins moved in between can therefore seat the cursor
@@ -723,7 +719,10 @@ mod tests {
                 (screen.state.line, screen.state.column),
                 (ScreenLine(0), GridColumn(1))
             );
-            assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(0))));
+            assert_eq!(
+                damage,
+                Some(DamageSpan::rows(ViewportLine(0), ViewportLine(0)))
+            );
         }
 
         /// Asserts that printing into the last column arms the deferred
@@ -764,7 +763,10 @@ mod tests {
                 (ScreenLine(1), GridColumn(1))
             );
             assert!(!screen.state.pending_wrap);
-            assert_eq!(damage, Some(Damage::rows(ViewportLine(1), ViewportLine(1))));
+            assert_eq!(
+                damage,
+                Some(DamageSpan::rows(ViewportLine(1), ViewportLine(1)))
+            );
         }
 
         /// Asserts that damage is reported in viewport rows, not the grid
@@ -782,7 +784,7 @@ mod tests {
             screen.state.line = ScreenLine(0);
             assert_eq!(
                 screen.print('x'),
-                Some(Damage::rows(ViewportLine(1), ViewportLine(1)))
+                Some(DamageSpan::rows(ViewportLine(1), ViewportLine(1)))
             );
         }
 
@@ -799,7 +801,7 @@ mod tests {
             screen.print('x');
             let damage = screen.print('y');
             assert_eq!(screen.grid[ScreenLine(2)][0].c, 'y');
-            assert_eq!(damage, Some(Damage::Full));
+            assert_eq!(damage, Some(DamageSpan::Full));
         }
 
         /// Asserts that a write below the bottom of the scrolled window
@@ -1198,7 +1200,7 @@ mod tests {
             let mut screen = screen();
             screen.grid[ScreenLine(0)][GridColumn(0)].c = 'a';
             screen.state.line = ScreenLine(2);
-            assert_eq!(screen.line_feed(), Some(Damage::Full));
+            assert_eq!(screen.line_feed(), Some(DamageSpan::Full));
             assert_eq!(screen.grid.history_len(), 1);
         }
 
@@ -1380,7 +1382,7 @@ mod tests {
             let damage = screen.reverse_index();
             assert_eq!(screen.state.line, ScreenLine(0));
             assert_eq!(screen.grid[ScreenLine(1)][0].c, 'a');
-            assert_eq!(damage, Some(Damage::Full));
+            assert_eq!(damage, Some(DamageSpan::Full));
         }
 
         /// Asserts that a reverse index disarms the deferred wrap on both
@@ -1522,7 +1524,7 @@ mod tests {
             assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
             assert_eq!(screen.grid[ScreenLine(1)][0].c, blank);
             assert_eq!(screen.grid[ScreenLine(2)][0].c, 'b');
-            assert_eq!(damage, Some(Damage::Full));
+            assert_eq!(damage, Some(DamageSpan::Full));
         }
     }
 
@@ -1547,7 +1549,10 @@ mod tests {
             assert_eq!(screen.grid[ScreenLine(0)][1].c, ' ');
             assert_eq!(screen.grid[ScreenLine(0)][1].bg, Color::Indexed(2));
             assert_eq!(screen.grid[ScreenLine(0)][3].bg, Color::Indexed(2));
-            assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(0))));
+            assert_eq!(
+                damage,
+                Some(DamageSpan::rows(ViewportLine(0), ViewportLine(0)))
+            );
         }
 
         /// Asserts that erase-to-start clears through the cursor column
@@ -1631,7 +1636,10 @@ mod tests {
             assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
             assert_eq!(screen.grid[ScreenLine(1)][0].c, 'b');
             assert_eq!(screen.grid[ScreenLine(1)][1].c, ' ');
-            assert_eq!(damage, Some(Damage::rows(ViewportLine(1), ViewportLine(2))));
+            assert_eq!(
+                damage,
+                Some(DamageSpan::rows(ViewportLine(1), ViewportLine(2)))
+            );
         }
 
         /// Asserts that erase-above clears everything through the cursor
@@ -1654,7 +1662,10 @@ mod tests {
             assert_eq!(screen.grid[ScreenLine(1)][0].c, ' ');
             assert_eq!(screen.grid[ScreenLine(1)][1].c, ' ');
             assert_eq!(screen.grid[ScreenLine(1)][2].c, 'd');
-            assert_eq!(damage, Some(Damage::rows(ViewportLine(0), ViewportLine(1))));
+            assert_eq!(
+                damage,
+                Some(DamageSpan::rows(ViewportLine(0), ViewportLine(1)))
+            );
         }
 
         /// Asserts that erase-all clears the visible screen in place while
@@ -1681,7 +1692,7 @@ mod tests {
             assert_eq!(screen.grid[ScreenLine(2)][0].c, ' ');
             assert_eq!(screen.grid[ScreenLine(2)][1].c, ' ');
             assert_eq!(screen.grid.history_len(), 1);
-            assert_eq!(damage, Some(Damage::Full));
+            assert_eq!(damage, Some(DamageSpan::Full));
         }
 
         /// Asserts that a span reaching past the last visible row is clamped
@@ -1698,7 +1709,7 @@ mod tests {
             screen.state.line = ScreenLine(0);
             assert_eq!(
                 screen.erase_in_display(EraseScreenMode::Below),
-                Some(Damage::rows(ViewportLine(1), ViewportLine(2)))
+                Some(DamageSpan::rows(ViewportLine(1), ViewportLine(2)))
             );
         }
     }
