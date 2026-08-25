@@ -100,19 +100,10 @@ impl VTActor for Executor<'_> {
             0x07 => {
                 let _ = self.signal_tx.send(VtSignal::Bell);
             }
-            0x08 => {
-                let damage = self.device.active_mut().backspace();
-                self.damage.stage_if_changed(damage);
-            }
-            0x09 => {
-                let damage = self.device.active_mut().move_forward_tabs(1);
-                self.damage.stage_if_changed(damage);
-            }
+            0x08 => self.device.active_mut().backspace(),
+            0x09 => self.device.active_mut().move_forward_tabs(1),
             0x0A | 0x0B | 0x0C | 0x84 => self.index(),
-            0x0D => {
-                let damage = self.device.active_mut().carriage_return();
-                self.damage.stage_if_changed(damage);
-            }
+            0x0D => self.device.active_mut().carriage_return(),
             0x0E => self.invoke_character_set(GCode::G1),
             0x0F => self.invoke_character_set(GCode::G0),
             0x85 => self.next_line(),
@@ -151,10 +142,7 @@ impl VTActor for Executor<'_> {
     ) {
         match (byte, intermediates) {
             (b'7', []) => self.device.active_mut().save_checkpoint(),
-            (b'8', []) => {
-                let damage = self.device.active_mut().restore_checkpoint();
-                self.damage.stage_if_changed(damage);
-            }
+            (b'8', []) => self.device.active_mut().restore_checkpoint(),
             (b'D', []) => self.index(),
             (b'E', []) => self.next_line(),
             (b'H', []) => self.device.active_mut().set_horizontal_tab_stop(),
@@ -180,20 +168,14 @@ impl VTActor for Executor<'_> {
             return;
         }
         match (params.private(), byte) {
-            (None, b'H' | b'f') => {
-                let damage = self
-                    .device
-                    .active_mut()
-                    .move_cursor_to(params.value(0), params.value(1));
-                self.damage.stage_if_changed(damage);
-            }
-            (None, b'r') => {
-                let damage = self
-                    .device
-                    .active_mut()
-                    .set_scroll_region(params.value(0), params.value(1));
-                self.damage.stage_if_changed(damage);
-            }
+            (None, b'H' | b'f') => self
+                .device
+                .active_mut()
+                .move_cursor_to(params.value(0), params.value(1)),
+            (None, b'r') => self
+                .device
+                .active_mut()
+                .set_scroll_region(params.value(0), params.value(1)),
             (Some(b'?'), b'h') => self.set_private_modes(&params, true),
             (Some(b'?'), b'l') => self.set_private_modes(&params, false),
             _ => {}
@@ -221,8 +203,7 @@ impl Executor<'_> {
 
     /// Returns the carriage and moves the cursor down a row (NEL).
     fn next_line(&mut self) {
-        self.damage
-            .stage_if_changed(self.device.active_mut().carriage_return());
+        self.device.active_mut().carriage_return();
         self.damage
             .stage_if_changed(self.device.active_mut().line_feed());
     }
@@ -257,11 +238,9 @@ impl Executor<'_> {
     fn set_private_modes(&mut self, params: &CsiParams<'_>, enabled: bool) {
         for mode in params.values().flatten() {
             if mode == 6 {
-                let damage = self
-                    .device
+                self.device
                     .active_mut()
                     .set_origin_mode(OriginMode::from_decset(enabled));
-                self.damage.stage_if_changed(damage);
             }
         }
     }

@@ -58,11 +58,6 @@ impl ScrollRegion {
         self.margins.top..=self.margins.bottom
     }
 
-    /// The margins, for a caller that needs to compare them as a pair.
-    pub(crate) fn margins(&self) -> Margins {
-        self.margins
-    }
-
     /// Replaces the margins, and does nothing else.
     ///
     /// This is the plain assignment `DECSTBM` needs. Seating the cursor

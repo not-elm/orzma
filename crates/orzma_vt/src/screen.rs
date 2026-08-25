@@ -1,8 +1,10 @@
 //! The atomic grid + cursor operation unit for one terminal screen.
 //!
 //! [`Screen`] owns cell storage ([`grid::Grid`]) and the write cursor,
-//! and updates them together; every mutation returns the [`Damage`] it
-//! produced for the caller to stage instead of staging internally.
+//! and updates them together; a mutation that damages rows returns the
+//! [`Damage`] it produced for the caller to stage, and pure cursor
+//! motion returns nothing, because the per-chunk cursor diff reports
+//! it.
 
 pub mod cell;
 pub mod character_sets;
@@ -119,37 +121,28 @@ impl Screen {
 
     /// Moves the cursor one column left and disarms the deferred wrap.
     ///
+    /// A backspace at column zero stays there: xterm reaches the
+    /// previous row only under reverse-wraparound, which is off by
+    /// default. Cursor motion reaches the renderer through the
+    /// per-chunk cursor diff, so nothing is reported here.
+    ///
     /// # Control Functions
     ///
     /// - `BS` (`0x08`)
-    pub fn backspace(&mut self) -> Option<Damage> {
-        if self.state.column == GridColumn(0) && !self.state.pending_wrap {
-            return None;
-        }
+    pub fn backspace(&mut self) {
         self.state.column = GridColumn(self.state.column.0.saturating_sub(1));
         self.state.pending_wrap = false;
-        Some(Damage::Metadata)
     }
 
     /// Rewinds the cursor to column zero and disarms the deferred wrap.
-    ///
-    /// Reports no damage when the cursor already sits at column zero
-    /// with the wrap disarmed: the call writes no cell and moves
-    /// nothing, so the frame it would force repeats the last one. A
-    /// rewind that does move the cursor reports [`Damage::Metadata`],
-    /// because no cell changed either way.
     ///
     /// # Control Functions
     ///
     /// - `CR` (`0x0D`)
     /// - `NEL` (`0x85`, `ESC E`) — its first half
-    pub fn carriage_return(&mut self) -> Option<Damage> {
-        if self.state.column == GridColumn(0) && !self.state.pending_wrap {
-            return None;
-        }
+    pub fn carriage_return(&mut self) {
         self.state.column = GridColumn(0);
         self.state.pending_wrap = false;
-        Some(Damage::Metadata)
     }
 
     /// Moves the cursor down one row, scrolling at the bottom margin;
@@ -295,10 +288,10 @@ impl Screen {
     ///
     /// - `HT` (`0x09`) — with a count of one
     /// - `CHT` (`CSI Pn I`)
-    pub fn move_forward_tabs(&mut self, count: u16) -> Option<Damage> {
+    pub fn move_forward_tabs(&mut self, count: u16) {
         let right_edge = GridColumn(self.grid_size().cols - 1);
         let target = self.tabs.cht(self.state.column, count, right_edge);
-        self.tab_to(target)
+        self.tab_to(target);
     }
 
     /// Moves the cursor back `count` tabulation stops.
@@ -309,9 +302,9 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `CBT` (`CSI Pn Z`)
-    pub fn move_backward_tabs(&mut self, count: u16) -> Option<Damage> {
+    pub fn move_backward_tabs(&mut self, count: u16) {
         let target = self.tabs.cbt(self.state.column, count, GridColumn(0));
-        self.tab_to(target)
+        self.tab_to(target);
     }
 
     /// Sets a tabulation stop at the cursor column.
@@ -487,11 +480,12 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `DECSTBM` (`CSI Pt ; Pb r`)
-    pub fn set_scroll_region(&mut self, top: Option<u16>, bottom: Option<u16>) -> Option<Damage> {
-        let margins = Margins::resolve(top, bottom, self.grid.size().rows)?;
-        let moved = margins != self.scroll_region.margins();
+    pub fn set_scroll_region(&mut self, top: Option<u16>, bottom: Option<u16>) {
+        let Some(margins) = Margins::resolve(top, bottom, self.grid.size().rows) else {
+            return;
+        };
         self.scroll_region.set_margins(margins);
-        self.seat_home(moved)
+        self.seat_home();
     }
 
     /// Sets the cursor origin and seats the cursor at the home the new
@@ -505,10 +499,9 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `DECOM` (`CSI ? 6 h` / `CSI ? 6 l`)
-    pub fn set_origin_mode(&mut self, origin_mode: OriginMode) -> Option<Damage> {
-        let switched = self.scroll_region.origin_mode() != origin_mode;
+    pub fn set_origin_mode(&mut self, origin_mode: OriginMode) {
         self.scroll_region.set_origin_mode(origin_mode);
-        self.seat_home(switched)
+        self.seat_home();
     }
 
     /// Addresses the cursor at a one-based line and column, `None` for
@@ -523,7 +516,7 @@ impl Screen {
     ///
     /// - `CUP` (`CSI Pl ; Pc H`)
     /// - `HVP` (`CSI Pl ; Pc f`)
-    pub fn move_cursor_to(&mut self, line: Option<u16>, column: Option<u16>) -> Option<Damage> {
+    pub fn move_cursor_to(&mut self, line: Option<u16>, column: Option<u16>) {
         let line = match line {
             None | Some(0) => 1,
             Some(value) => value,
@@ -532,7 +525,7 @@ impl Screen {
             None | Some(0) => 1,
             Some(value) => value,
         };
-        self.seat_cursor(ScreenLine(line - 1), GridColumn(column - 1))
+        self.seat_cursor(ScreenLine(line - 1), GridColumn(column - 1));
     }
 
     /// Follows a one-row scroll with the offset that keeps a scrolled
@@ -585,35 +578,20 @@ impl Screen {
 
     /// Seats the cursor at a tabulation column.
     ///
-    /// Reports no damage when the column does not change: the call
-    /// writes no cell and moves nothing, so the frame it would force
-    /// repeats the last one. A move reports [`Damage::Metadata`],
-    /// because no cell changed either way.
-    ///
     /// # Invariants
     ///
     /// The deferred wrap is deliberately left as it is, unlike
     /// [`Screen::carriage_return`]. Disarming it would make a tab after
     /// a full row seat the cursor back onto the row the application had
     /// already filled.
-    fn tab_to(&mut self, column: GridColumn) -> Option<Damage> {
-        if self.state.column == column {
-            return None;
-        }
+    fn tab_to(&mut self, column: GridColumn) {
         self.state.column = column;
-        Some(Damage::Metadata)
     }
 
     /// Seats the cursor at the home the current [`OriginMode`] defines,
     /// for a control function that also changed a setting.
-    ///
-    /// `setting_changed` is that control function's own answer to
-    /// "did anything about me change", which the seating cannot see: a
-    /// region or a mode can be replaced while leaving the cursor where
-    /// it already was, and that still owes the renderer a frame.
-    fn seat_home(&mut self, setting_changed: bool) -> Option<Damage> {
-        let seated = self.seat_cursor(ScreenLine(0), GridColumn(0));
-        seated.or(setting_changed.then_some(Damage::Metadata))
+    fn seat_home(&mut self) {
+        self.seat_cursor(ScreenLine(0), GridColumn(0));
     }
 
     /// Seats the cursor at `line` — measured from the origin the current
@@ -621,9 +599,9 @@ impl Screen {
     /// disarming the deferred wrap.
     ///
     /// Every control function that addresses the cursor ends here, so
-    /// the origin, the clamps, the wrap, and the damage are decided in
-    /// one place and cannot drift between them.
-    fn seat_cursor(&mut self, line: ScreenLine, column: GridColumn) -> Option<Damage> {
+    /// the origin, the clamps, and the wrap are decided in one place and
+    /// cannot drift between them.
+    fn seat_cursor(&mut self, line: ScreenLine, column: GridColumn) {
         let GridSize { cols, rows } = self.grid.size();
         let (origin, last) = match self.scroll_region.origin_mode() {
             OriginMode::WithinMargins => (
@@ -632,18 +610,9 @@ impl Screen {
             ),
             OriginMode::UpperLeftCorner => (ScreenLine(0), ScreenLine(rows - 1)),
         };
-        let seated_line = ScreenLine(line.0.saturating_add(origin.0).min(last.0));
-        let seated_column = GridColumn(column.0.min(cols - 1));
-        if self.state.line == seated_line
-            && self.state.column == seated_column
-            && !self.state.pending_wrap
-        {
-            return None;
-        }
-        self.state.line = seated_line;
-        self.state.column = seated_column;
+        self.state.line = ScreenLine(line.0.saturating_add(origin.0).min(last.0));
+        self.state.column = GridColumn(column.0.min(cols - 1));
         self.state.pending_wrap = false;
-        Some(Damage::Metadata)
     }
 }
 
@@ -673,18 +642,14 @@ impl Screen {
     /// # Control Functions
     ///
     /// - DECRC(Restore Cursor)
-    pub fn restore_checkpoint(&mut self) -> Option<Damage> {
+    pub fn restore_checkpoint(&mut self) {
         let saved = self.checkpoint;
-        if self.capture_checkpoint() == saved {
-            return None;
-        }
         self.state.line = saved.line;
         self.state.column = saved.column;
         self.state.pen = saved.pen;
         self.state.pending_wrap = saved.pending_wrap;
         self.scroll_region.set_origin_mode(saved.origin_mode);
         self.character_set_mapping = saved.character_set_mapping;
-        Some(Damage::Metadata)
     }
 
     fn capture_checkpoint(&self) -> Checkpoint {
@@ -862,8 +827,7 @@ mod tests {
     mod backspace {
         use super::*;
 
-        /// Asserts that a backspace steps the cursor one column left and
-        /// reports cursor-only damage.
+        /// Asserts that a backspace steps the cursor one column left.
         ///
         /// Case: a shell line editor erases the character the user just
         /// typed, moving left before overwriting it with a space.
@@ -871,13 +835,12 @@ mod tests {
         fn backspace_moves_the_cursor_one_column_left() {
             let mut screen = screen();
             screen.state.column = GridColumn(2);
-            let damage = screen.backspace();
+            screen.backspace();
             assert_eq!(screen.state.column, GridColumn(1));
-            assert_eq!(damage, Some(Damage::Metadata));
         }
 
         /// Asserts that a backspace at column zero leaves the cursor
-        /// where it is and reports no damage.
+        /// where it is.
         ///
         /// The agreed policy stops at the left edge rather than wrapping
         /// back onto the previous row. xterm reaches that row only under
@@ -889,7 +852,7 @@ mod tests {
         #[test]
         fn a_backspace_at_column_zero_does_not_move() {
             let mut screen = screen();
-            assert_eq!(screen.backspace(), None);
+            screen.backspace();
             assert_eq!(screen.state.column, GridColumn(0));
         }
 
@@ -915,8 +878,8 @@ mod tests {
             assert!(!screen.state.pending_wrap);
         }
 
-        /// Asserts that a backspace at column zero still reports damage
-        /// while the deferred wrap is armed.
+        /// Asserts that a backspace at column zero still disarms a
+        /// pending deferred wrap.
         ///
         /// Case: a one-column screen prints a character, which arms the
         /// wrap without ever leaving column zero, and the application
@@ -926,23 +889,17 @@ mod tests {
             let mut screen = Screen::new(GridSize { cols: 1, rows: 3 }, 10);
             screen.print('x');
             assert!(screen.state.pending_wrap);
-            let damage = screen.backspace();
+            screen.backspace();
             assert_eq!(screen.state.column, GridColumn(0));
             assert!(!screen.state.pending_wrap);
-            assert_eq!(damage, Some(Damage::Metadata));
         }
     }
 
     mod carriage_return {
         use super::*;
 
-        /// Asserts that a carriage return rewinds the column, clears the
-        /// deferred-wrap flag, and reports cursor-only damage.
-        ///
-        /// The agreed policy is [`Damage::Metadata`] rather than the
-        /// cursor row: the renderer draws the caret from the frame's
-        /// cursor rather than from cell data, so naming the row would
-        /// rebuild and re-upload contents that did not change.
+        /// Asserts that a carriage return rewinds the column and clears
+        /// the deferred-wrap flag.
         ///
         /// Case: a shell prints a partial line and returns to overwrite it,
         /// as progress indicators do with a bare `\r`.
@@ -951,31 +908,13 @@ mod tests {
             let mut screen = screen();
             screen.state.column = GridColumn(2);
             screen.state.pending_wrap = true;
-            let damage = screen.carriage_return();
+            screen.carriage_return();
             assert_eq!(screen.state.column, GridColumn(0));
             assert!(!screen.state.pending_wrap);
-            assert_eq!(damage, Some(Damage::Metadata));
         }
 
-        /// Asserts that a carriage return with nothing left to rewind
-        /// reports no damage at all.
-        ///
-        /// The agreed policy returns `None` rather than the cursor row or
-        /// [`Damage::Metadata`]: both would force a frame that repeats the
-        /// one before it, because this call writes no cell and moves the
-        /// cursor nowhere.
-        ///
-        /// Case: a program prints consecutive blank lines, so the `\r` of
-        /// each CRLF pair lands on a column the previous pair already
-        /// rewound.
-        #[test]
-        fn a_carriage_return_with_nothing_to_rewind_reports_no_damage() {
-            let mut screen = screen();
-            assert_eq!(screen.carriage_return(), None);
-        }
-
-        /// Asserts that a carriage return at column zero still reports
-        /// damage while the deferred wrap is armed.
+        /// Asserts that a carriage return at column zero still disarms
+        /// a pending deferred wrap.
         ///
         /// Case: a one-column screen prints a character, which arms the
         /// wrap without ever leaving column zero, and the application then
@@ -986,49 +925,23 @@ mod tests {
             screen.print('x');
             assert_eq!(screen.state.column, GridColumn(0));
             assert!(screen.state.pending_wrap);
-            let damage = screen.carriage_return();
+            screen.carriage_return();
             assert!(!screen.state.pending_wrap);
-            assert_eq!(damage, Some(Damage::Metadata));
         }
     }
 
     mod tab_to {
         use super::*;
 
-        /// Asserts that seating the cursor at a new column reports
-        /// cursor-only damage.
-        ///
-        /// The agreed policy is [`Damage::Metadata`] rather than the
-        /// cursor row: the renderer draws the caret from the frame's
-        /// cursor rather than from cell data, so naming the row would
-        /// rebuild and re-upload contents that did not change.
+        /// Asserts that a tab seats the cursor at the target column.
         ///
         /// Case: the shell emits a tab while listing a directory in
         /// aligned columns.
         #[test]
-        fn a_tab_that_moves_the_cursor_reports_metadata_damage() {
+        fn a_tab_seats_the_cursor_at_the_target_column() {
             let mut screen = screen();
-            let damage = screen.tab_to(GridColumn(2));
+            screen.tab_to(GridColumn(2));
             assert_eq!(screen.state.column, GridColumn(2));
-            assert_eq!(damage, Some(Damage::Metadata));
-        }
-
-        /// Asserts that seating the cursor at the column it already
-        /// occupies reports no damage at all.
-        ///
-        /// The agreed policy returns `None` rather than
-        /// [`Damage::Metadata`], which would force a frame that repeats
-        /// the one before it, because this call writes no cell and
-        /// moves the cursor nowhere.
-        ///
-        /// Case: a tab arrives with the cursor already parked on the
-        /// last column, so the clamp hands back the column it started
-        /// from.
-        #[test]
-        fn a_tab_to_the_current_column_reports_no_damage() {
-            let mut screen = screen();
-            screen.state.column = GridColumn(3);
-            assert_eq!(screen.tab_to(GridColumn(3)), None);
         }
 
         /// Asserts that seating the cursor leaves an armed deferred
@@ -1097,22 +1010,6 @@ mod tests {
             let mut screen = screen();
             screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(3));
-        }
-
-        /// Asserts that a tab with nowhere left to go reports no damage.
-        ///
-        /// The agreed policy returns `None` rather than
-        /// [`Damage::Metadata`], which would force a frame that repeats
-        /// the one before it, because this call writes no cell and moves
-        /// the cursor nowhere.
-        ///
-        /// Case: a program emits consecutive tabs with the cursor
-        /// already parked on the last column.
-        #[test]
-        fn an_ht_that_does_not_move_reports_no_damage() {
-            let mut screen = wide_screen();
-            screen.state.column = GridColumn(19);
-            assert_eq!(screen.move_forward_tabs(1), None);
         }
 
         /// Asserts that a counted forward tab skips the stops in
@@ -2076,11 +1973,7 @@ mod tests {
         use super::*;
 
         /// Asserts that a restore puts back every item the save copied
-        /// aside and reports cursor-only damage.
-        ///
-        /// The agreed policy is [`Damage::Metadata`]: a restore writes no
-        /// cell, and the caret reaches the renderer through the frame's
-        /// cursor.
+        /// aside.
         ///
         /// Case: an application finishes drawing its status line and
         /// returns to where it was working.
@@ -2096,7 +1989,7 @@ mod tests {
                 .scroll_region
                 .set_origin_mode(OriginMode::UpperLeftCorner);
             screen.invoke_character_set(GCode::G0);
-            let damage = screen.restore_checkpoint();
+            screen.restore_checkpoint();
             assert_eq!(screen.state.line, ScreenLine(2));
             assert_eq!(screen.state.column, GridColumn(3));
             assert_eq!(screen.state.pen.bg, Color::Indexed(4));
@@ -2106,7 +1999,6 @@ mod tests {
                 OriginMode::WithinMargins
             );
             assert_eq!(screen.character_set_mapping.gl, GCode::G1);
-            assert_eq!(damage, Some(Damage::Metadata));
         }
 
         /// Asserts that a restore with nothing ever saved returns the
@@ -2122,7 +2014,7 @@ mod tests {
         #[test]
         fn an_unsaved_restore_returns_the_power_up_state() {
             let mut screen = dirty_screen();
-            let damage = screen.restore_checkpoint();
+            screen.restore_checkpoint();
             assert_eq!(screen.state.line, ScreenLine(0));
             assert_eq!(screen.state.column, GridColumn(0));
             assert_eq!(screen.state.pen, Pen::default());
@@ -2132,24 +2024,6 @@ mod tests {
                 OriginMode::UpperLeftCorner
             );
             assert_eq!(screen.character_set_mapping, CharacterSetMapping::default());
-            assert_eq!(damage, Some(Damage::Metadata));
-        }
-
-        /// Asserts that a restore onto the state already in place reports
-        /// no damage.
-        ///
-        /// The agreed policy matches [`Screen::carriage_return`]: a call
-        /// that changes nothing must not force a frame that repeats the
-        /// last one.
-        ///
-        /// Case: an application restores twice in a row without printing
-        /// between the two.
-        #[test]
-        fn a_restore_that_changes_nothing_reports_no_damage() {
-            let mut screen = dirty_screen();
-            screen.save_checkpoint();
-            screen.restore_checkpoint();
-            assert_eq!(screen.restore_checkpoint(), None);
         }
 
         /// Asserts that a restored deferred wrap really wraps the next
@@ -2190,10 +2064,9 @@ mod tests {
         #[test]
         fn an_upper_left_origin_leaves_the_line_absolute() {
             let mut screen = tall_screen();
-            let damage = screen.seat_cursor(ScreenLine(2), GridColumn(1));
+            screen.seat_cursor(ScreenLine(2), GridColumn(1));
             assert_eq!(screen.state.line, ScreenLine(2));
             assert_eq!(screen.state.column, GridColumn(1));
-            assert_eq!(damage, Some(Damage::Metadata));
         }
 
         /// Asserts that with the origin within the margins a relative
@@ -2268,24 +2141,8 @@ mod tests {
         fn seating_the_cursor_disarms_the_deferred_wrap() {
             let mut screen = tall_screen();
             screen.state.pending_wrap = true;
-            let damage = screen.seat_cursor(ScreenLine(0), GridColumn(0));
+            screen.seat_cursor(ScreenLine(0), GridColumn(0));
             assert!(!screen.state.pending_wrap);
-            assert_eq!(damage, Some(Damage::Metadata));
-        }
-
-        /// Asserts that seating the cursor where it already sits reports
-        /// no damage.
-        ///
-        /// The agreed policy matches [`Screen::carriage_return`]: a call
-        /// that changes nothing must not force a frame that repeats the
-        /// last one.
-        ///
-        /// Case: an application re-addresses the cell it is already on
-        /// while redrawing.
-        #[test]
-        fn seating_the_cursor_where_it_sits_reports_no_damage() {
-            let mut screen = tall_screen();
-            assert_eq!(screen.seat_cursor(ScreenLine(0), GridColumn(0)), None);
         }
     }
 
@@ -2322,10 +2179,9 @@ mod tests {
             let mut screen = tall_screen();
             screen.state.line = ScreenLine(2);
             screen.state.column = GridColumn(3);
-            let damage = screen.set_scroll_region(Some(1), Some(3));
+            screen.set_scroll_region(Some(1), Some(3));
             assert_eq!(screen.state.line, ScreenLine(0));
             assert_eq!(screen.state.column, GridColumn(0));
-            assert_eq!(damage, Some(Damage::Metadata));
         }
 
         /// Asserts that home follows the origin mode rather than the
@@ -2357,44 +2213,12 @@ mod tests {
             let mut screen = tall_screen();
             screen.set_scroll_region(Some(1), Some(3));
             screen.state.line = ScreenLine(2);
-            let damage = screen.set_scroll_region(Some(5), Some(3));
+            screen.set_scroll_region(Some(5), Some(3));
             assert_eq!(
                 screen.scroll_region.scroll_span(),
                 ScreenLine(0)..=ScreenLine(2)
             );
             assert_eq!(screen.state.line, ScreenLine(2));
-            assert_eq!(damage, None);
-        }
-
-        /// Asserts that re-sending an unchanged region with the cursor
-        /// already home reports no damage.
-        ///
-        /// The agreed policy keeps a TUI that re-sends its region every
-        /// frame from forcing an empty frame each time.
-        ///
-        /// Case: an application redraws, re-sending the same region it
-        /// sent last frame without having moved the cursor since.
-        #[test]
-        fn an_unchanged_region_with_the_cursor_home_reports_no_damage() {
-            let mut screen = tall_screen();
-            screen.set_scroll_region(Some(1), Some(3));
-            assert_eq!(screen.set_scroll_region(Some(1), Some(3)), None);
-        }
-
-        /// Asserts that a changed region reports damage even when the
-        /// cursor was already home.
-        ///
-        /// Case: an application shrinks its pane by one row while its
-        /// cursor rests at the upper-left corner.
-        #[test]
-        fn a_changed_region_reports_damage_from_home() {
-            let mut screen = tall_screen();
-            screen.set_scroll_region(Some(1), Some(4));
-            assert_eq!(screen.state.line, ScreenLine(0));
-            assert_eq!(
-                screen.set_scroll_region(Some(1), Some(3)),
-                Some(Damage::Metadata)
-            );
         }
     }
 
@@ -2411,10 +2235,9 @@ mod tests {
             let mut screen = tall_screen();
             screen.set_scroll_region(Some(2), Some(4));
             screen.state.line = ScreenLine(3);
-            let damage = screen.set_origin_mode(OriginMode::WithinMargins);
+            screen.set_origin_mode(OriginMode::WithinMargins);
             assert_eq!(screen.state.line, ScreenLine(1));
             assert_eq!(screen.state.column, GridColumn(0));
-            assert_eq!(damage, Some(Damage::Metadata));
         }
 
         /// Asserts that resetting the origin also seats the cursor, at
@@ -2434,9 +2257,8 @@ mod tests {
             screen.set_scroll_region(Some(2), Some(4));
             screen.set_origin_mode(OriginMode::WithinMargins);
             screen.state.line = ScreenLine(3);
-            let damage = screen.set_origin_mode(OriginMode::UpperLeftCorner);
+            screen.set_origin_mode(OriginMode::UpperLeftCorner);
             assert_eq!(screen.state.line, ScreenLine(0));
-            assert_eq!(damage, Some(Damage::Metadata));
         }
 
         /// Asserts that the mode reaches the region the cursor motion
@@ -2452,18 +2274,6 @@ mod tests {
                 screen.scroll_region.origin_mode(),
                 OriginMode::WithinMargins
             );
-        }
-
-        /// Asserts that re-sending the mode already in force with the
-        /// cursor already home reports no damage.
-        ///
-        /// Case: an application re-asserts origin mode during a redraw
-        /// without having moved the cursor since.
-        #[test]
-        fn an_unchanged_mode_with_the_cursor_home_reports_no_damage() {
-            let mut screen = tall_screen();
-            screen.set_origin_mode(OriginMode::WithinMargins);
-            assert_eq!(screen.set_origin_mode(OriginMode::WithinMargins), None);
         }
     }
 
@@ -2509,10 +2319,9 @@ mod tests {
         #[test]
         fn one_based_parameters_land_on_zero_based_cells() {
             let mut screen = tall_screen();
-            let damage = screen.move_cursor_to(Some(3), Some(2));
+            screen.move_cursor_to(Some(3), Some(2));
             assert_eq!(screen.state.line, ScreenLine(2));
             assert_eq!(screen.state.column, GridColumn(1));
-            assert_eq!(damage, Some(Damage::Metadata));
         }
 
         /// Asserts that the line is measured from the top margin while
@@ -2562,17 +2371,6 @@ mod tests {
             screen.set_origin_mode(OriginMode::WithinMargins);
             screen.move_cursor_to(Some(9), Some(1));
             assert_eq!(screen.state.line, ScreenLine(2));
-        }
-
-        /// Asserts that addressing the cell the cursor already sits on
-        /// reports no damage.
-        ///
-        /// Case: an application re-addresses its current cell while
-        /// redrawing.
-        #[test]
-        fn addressing_the_current_cell_reports_no_damage() {
-            let mut screen = tall_screen();
-            assert_eq!(screen.move_cursor_to(Some(1), Some(1)), None);
         }
     }
 }
