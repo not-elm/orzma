@@ -22,8 +22,8 @@ pub struct Cursor {
     /// True when the application wants the cursor drawn — DECTCEM
     /// (`TermMode::SHOW_CURSOR`) and a non-Hidden DECSCUSR shape.
     /// Scroll visibility is not folded in: project `point` with
-    /// [`crate::screen::grid::coords::GridLine::to_viewport`] to decide
-    /// whether there is a cell to paint at all.
+    /// [`crate::prelude::GridLine::to_viewport`] to decide whether
+    /// there is a cell to paint at all.
     pub visible: bool,
 }
 

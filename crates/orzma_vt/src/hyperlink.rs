@@ -1,8 +1,9 @@
 //! OSC 8 hyperlink vocabulary and the id interner that dedupes it.
 //!
-//! The interner is the only way a `HyperlinkId` other than the `0`
-//! sentinel comes into existence, so the "callers must not construct
-//! `HyperlinkId(0)`" invariant is enforced by keeping minting here.
+//! [`HyperlinkInterner`] maps each `(source id, uri)` pair to a single
+//! [`HyperlinkId`], minting a fresh id the first time a pair is seen
+//! and returning the id already on file on repeats; it is where this
+//! crate mints hyperlink ids.
 // NOTE: the `#[cfg(test)]` module below uses every item this lint
 // would flag, so an unconditional `#[expect(dead_code)]` is fulfilled
 // in a plain build but unfulfilled — and denied under `-D warnings` —

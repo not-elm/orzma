@@ -60,9 +60,9 @@ pub mod prelude {
 ///
 /// The read surface is deliberately frame-granular: cell-level host
 /// features (e.g. hyperlink hover) resolve against the emitted
-/// [`crate::screen::grid::row::Row`] / [`crate::screen::grid::run::Run`] data, so the trait
-/// exposes no per-cell read seam and the VT's storage cell never
-/// leaves the crate.
+/// [`crate::prelude::Row`] / [`crate::prelude::Run`] data, so the
+/// trait exposes no per-cell read seam and the VT's storage cell
+/// never leaves the crate.
 pub trait Vt {
     /// Interprets one PTY chunk, staging its damage internally and
     /// returning everything else it produced.
@@ -77,16 +77,14 @@ pub trait Vt {
     /// # Webview placements
     ///
     /// An APC webview `mount` becomes a [`VtSignal::ApcWebview`] whose
-    /// [`crate::placement::PlacementId`] the VT mints itself; `placement:
-    /// None` is a policy rejection. The VT owns the placement table
-    /// and projects every placement into
-    /// [`crate::frame::Frame::placements`] on each emit; a mount,
-    /// unmount, eviction, or projected-geometry change always raises
-    /// the chunk liveness, so the frame carrying the new list is
-    /// guaranteed to follow. Evictions the VT performs on its own authority
-    /// (history trim, alternate-screen teardown) surface as
-    /// [`VtSignal::WebviewEvicted`]. Ids are never reused within a
-    /// session.
+    /// [`PlacementId`] the VT mints itself; `placement: None` is a policy
+    /// rejection. The VT owns the placement table and projects every
+    /// placement into [`Frame::placements`] on each emit; a mount, unmount,
+    /// eviction, or projected-geometry change always raises the chunk
+    /// liveness, so the frame carrying the new list is guaranteed to
+    /// follow. Evictions the VT performs on its own authority (history
+    /// trim, alternate-screen teardown) surface as
+    /// [`VtSignal::WebviewEvicted`]. Ids are never reused within a session.
     ///
     /// A placement projects only while the screen it was mounted on is
     /// active: while the alternate screen is shown, primary-screen
@@ -236,7 +234,7 @@ impl OrzmaVt {
     /// Both grid axes are nonzero; degenerate sizes are rejected by the
     /// caller (the same contract as [`Vt::resize`]).
     ///
-    /// The tracker must come from [`FrameTracker::new`]: its seeded
+    /// The tracker must come from `FrameTracker::new`: its seeded
     /// full damage is what makes the first frame carry every viewport
     /// row, so a constructor that starts from an empty ledger paints
     /// nothing until the first PTY output arrives.

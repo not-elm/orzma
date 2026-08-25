@@ -17,12 +17,12 @@ pub struct DisplayOffset(pub u32);
 
 /// A line in viewport coordinates: `0` is the topmost visible row.
 ///
-/// It is the viewport projection of a [`crate::screen::grid::coords::GridLine`],
-/// related by `viewport_line = grid_line + display_offset`. Negative values sit
-/// above the viewport, values at or past the viewport row count sit
-/// below it. Clamping off-viewport values to the `-1` / row-count
-/// sentinels is the responsibility of the conversion that produces
-/// the value, not of this type.
+/// It is the viewport projection of a [`crate::prelude::GridLine`],
+/// related by `viewport_line = grid_line + display_offset`. Negative
+/// values sit above the viewport, values at or past the viewport row
+/// count sit below it. Clamping off-viewport values to the `-1` /
+/// row-count sentinels is the responsibility of the conversion that
+/// produces the value, not of this type.
 /// The ordering is spatial — where the row sits in the window this
 /// frame — not an identity: the same `ViewportLine` names different
 /// content once the user scrolls or the grid is resized.

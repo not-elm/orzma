@@ -61,7 +61,7 @@ pub struct Frame {
     /// Definitions for hyperlink ids referenced by `rows`, merged into
     /// the consumer's retained table. Reserved: empty until the
     /// hyperlink interner is ported, which is safe while
-    /// [`crate::screen::grid::run::Run::hyperlink_id`] is always `None`.
+    /// [`crate::prelude::Run::hyperlink_id`] is always `None`.
     pub hyperlinks: Vec<Hyperlink>,
 }
 

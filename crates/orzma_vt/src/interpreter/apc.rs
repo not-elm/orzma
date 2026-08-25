@@ -5,7 +5,7 @@
 
 use std::str;
 
-/// Verb carried by `TtySignal::ApcWebview`: inline mount/unmount of a registered view.
+/// Verb carried by `VtSignal::ApcWebview`: inline mount/unmount of a registered view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApcWebviewVerb {
     /// Mount a registered webview INLINE at the cursor anchor, sized in cells.

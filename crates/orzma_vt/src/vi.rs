@@ -8,8 +8,8 @@ use crate::screen::grid::coords::GridPoint;
 /// history. The sign is not a visibility signal — scrolling clamps
 /// the vi cursor into the viewport, so a negative line can still be
 /// visible; project `point` with
-/// [`crate::screen::grid::coords::GridLine::to_viewport`] to decide
-/// whether there is a cell to paint.
+/// [`crate::prelude::GridLine::to_viewport`] to decide whether there
+/// is a cell to paint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViCursor {
     /// Grid cell the vi cursor sits on.

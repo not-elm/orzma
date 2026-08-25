@@ -10,8 +10,8 @@ use crate::screen::grid::coords::GridPoint;
 /// cells, both inclusive — anchor/moving-end order is already resolved
 /// and cell-side trimming applied by the VT. The endpoints are raw
 /// grid positions and do not move when the user scrolls; project them
-/// with [`crate::screen::grid::coords::GridLine::to_viewport`] to place
-/// the highlight on screen.
+/// with [`crate::prelude::GridLine::to_viewport`] to place the
+/// highlight on screen.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct SelectionRange {
     /// Top-left selected cell (inclusive).
@@ -24,10 +24,10 @@ pub struct SelectionRange {
 
 /// The shape a [`SelectionRange`] spans between its endpoints.
 ///
-/// Deliberately narrower than [`SelectionKind`]: kinds that differ only
-/// in how the range is built — word snapping, for one — all render as
-/// `Linear`, so the renderer needs this three-way split rather than the
-/// input granularity.
+/// Wider than [`SelectionKind`]: the two current selection kinds only
+/// ever convert to `Linear` or `Lines`. `Block` exists for the
+/// renderer to support once a future selection kind needs it, but the
+/// conversion does not produce it yet.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SelectionGeometry {
     /// A cell run wrapping at the end of each row.
