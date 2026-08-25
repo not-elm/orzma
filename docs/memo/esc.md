@@ -1,7 +1,5 @@
 # ESC
 
-ECMA-48: 8.3.48 ESC - ESCAPE
-
 ESCはC0の一種であり、制御関数を拡張するために使用される。
 `ESC(0x1B)`から始まるその命令を表すシーケンスはエスケープシーケンスと呼称され、命令によって細部の構造が異なる。
 
@@ -11,7 +9,6 @@ UTF8と競合が発生しないなどの理由から現代でもデフォルト�
 ## 7bit形式(ESC)と8bit形式(C1)
 
 ESCの中にはC1の制御関数を7ビット環境で再現するために各C1に対応した命令が用意されている。
-<!-- 形式の指定にはS7C1T(Select 7-bit C1 Control Transmission)とS8C1T(Select 8-bit C1 Control Transmission)が利用される。 -->
 
 | 制御関数 | 説明 | 7bit形式 | 7bitバイト列 | 8bit形式(C1) |
 | --- | --- | --- | --- | --- |
@@ -32,3 +29,6 @@ ESCの中にはC1の制御関数を7ビット環境で再現するために各C1
 | PM | Privacy Message | `ESC ^` | `1B 5E` | `9E` |
 | APC | Application Program Command | `ESC _` | `1B 5F` | `9F` |
 
+## 主要な関数一覧
+
+- [RIS - Reset to Initial State](../../docs/references/vt510.pdf#page=331)
