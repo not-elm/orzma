@@ -48,8 +48,10 @@ pub struct Frame {
     /// `Some(vec![])` means none are visible, which is not an unmount.
     pub placements: Option<Vec<ProjectedPlacement>>,
     /// The live palette symbolic colors resolve against: `None` when
-    /// unchanged. A palette change stages a full repaint, so `Some`
-    /// always accompanies full row coverage.
+    /// unchanged. A palette override owes a staged full repaint — the
+    /// emit-time diff guarantees only that a frame is emitted, not
+    /// that it carries rows — an obligation on the future
+    /// OSC 4 / 10 / 11 / 12 handler.
     pub palette: Option<Palette>,
     /// Definitions for hyperlink ids referenced by `rows`, merged into
     /// the consumer's retained table. Reserved: empty until the
@@ -81,7 +83,7 @@ impl Frame {
         let display_offset = screen.display_offset();
         let staged = damage.take();
         let placements = state.diff_placements(placements, device.active_screen());
-        let palette = state.diff_palette(&device.palette());
+        let palette = state.diff_palette(device.palette());
         // NOTE: The section diffs above retain eagerly, so any new
         // suppression condition added to this gate must keep "a Some
         // from a diff forces emission" true — otherwise the consumer

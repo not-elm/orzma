@@ -477,8 +477,10 @@ impl Screen {
     /// clamp, and the refusal.
     ///
     /// The cursor goes to the home the origin mode defines rather than
-    /// to the page's first line, because homing to the page while the
-    /// origin is within the margins would seat the cursor outside them.
+    /// to the "column 1, line 1 of the page" VT510 p.276 states,
+    /// because homing to the page while the origin is within the
+    /// margins would seat the cursor outside them, which p.195 forbids;
+    /// xterm homes through the same origin-aware path.
     ///
     /// # Control Functions
     ///
@@ -595,7 +597,9 @@ impl Screen {
 
     /// Seats the cursor at `line` — measured from the origin the current
     /// [`OriginMode`] defines — and `column`, clamping both axes and
-    /// disarming the deferred wrap.
+    /// disarming the deferred wrap. The disarm follows xterm, whose
+    /// `CursorSet` ends in `ResetWrap`, unlike a linefeed, which
+    /// preserves the wrap on purpose.
     ///
     /// Every control function that addresses the cursor ends here, so
     /// the origin, the clamps, and the wrap are decided in one place and
@@ -834,12 +838,7 @@ mod tests {
         }
 
         /// Asserts that a backspace at column zero leaves the cursor
-        /// where it is.
-        ///
-        /// The agreed policy stops at the left edge rather than wrapping
-        /// back onto the previous row. xterm reaches that row only under
-        /// reverse-wraparound, which is off by default and additionally
-        /// requires autowrap.
+        /// where it is rather than wrapping back onto the previous row.
         ///
         /// Case: a program emits more backspaces than it printed
         /// characters, running past the start of the line.
@@ -1992,12 +1991,7 @@ mod tests {
         }
 
         /// Asserts that a restore with nothing ever saved returns the
-        /// screen to its power-up state.
-        ///
-        /// The agreed policy follows VT510's DECRC: an unsaved restore
-        /// homes the cursor, resets the origin mode, drops the character
-        /// attributes, and reinstates the default character set mapping,
-        /// rather than being ignored.
+        /// screen to its power-up state rather than being ignored.
         ///
         /// Case: an application emits a restore during start-up, before
         /// it has ever saved anything.
@@ -2119,11 +2113,8 @@ mod tests {
             assert_eq!(screen.state.column, GridColumn(3));
         }
 
-        /// Asserts that seating the cursor disarms the deferred wrap.
-        ///
-        /// The agreed policy follows xterm, whose `CursorSet` ends in
-        /// `ResetWrap`: an explicit cursor move discards a pending wrap,
-        /// unlike a linefeed, which preserves it on purpose.
+        /// Asserts that seating the cursor discards a pending deferred
+        /// wrap rather than preserving it as a linefeed does.
         ///
         /// Case: an application fills a row to its last column and then
         /// addresses a cell elsewhere instead of printing again.
@@ -2154,13 +2145,9 @@ mod tests {
             );
         }
 
-        /// Asserts that applying a region seats the cursor at home.
-        ///
-        /// The agreed policy departs from VT510 p.276's "column 1, line 1
-        /// of the page" on purpose: homing to the page's first line
-        /// while origin mode is set would put the cursor outside the
-        /// margins, which p.195 forbids. xterm homes through the same
-        /// origin-aware path.
+        /// Asserts that applying a region seats the cursor at the
+        /// origin-aware home rather than VT510's "column 1, line 1 of
+        /// the page".
         ///
         /// Case: an application sets a region while its cursor sits
         /// somewhere in the middle of the screen.
@@ -2190,11 +2177,8 @@ mod tests {
         }
 
         /// Asserts that a refused request leaves both the margins and
-        /// the cursor untouched.
-        ///
-        /// The agreed policy is that a refusal is a whole-sequence
-        /// no-op, not a partial application: the margins must not move
-        /// and the cursor must not be homed.
+        /// the cursor untouched — a whole-sequence no-op rather than a
+        /// partial application.
         ///
         /// Case: an application inverts its two parameters and sends
         /// `CSI 5 ; 3 r`.
@@ -2230,14 +2214,8 @@ mod tests {
             assert_eq!(screen.state.column, GridColumn(0));
         }
 
-        /// Asserts that resetting the origin also seats the cursor, at
-        /// the upper-left corner.
-        ///
-        /// The agreed policy homes on reset as well as on set. VT510
-        /// never says DECOM moves the cursor, so the behaviour is
-        /// settled by implementations: xterm, kitty, wezterm, Windows
-        /// Terminal, and `vttest` all home on both, and only alacritty
-        /// homes on set alone.
+        /// Asserts that resetting the origin homes the cursor at the
+        /// upper-left corner rather than homing on set alone.
         ///
         /// Case: a full-screen application drops origin mode on its way
         /// out and prints without addressing the cursor first.

@@ -46,7 +46,9 @@ impl DeviceState {
                 alternate: Screen::new(size, 0),
             },
             modes: VtModes::default(),
-            colors: ColorTable {},
+            colors: ColorTable {
+                palette: Palette::default(),
+            },
             title: TitleState {},
         }
     }
@@ -77,6 +79,13 @@ impl DeviceState {
 
     /// Resizes both screens, reflowing content; `None` when the
     /// dimensions already matched.
+    ///
+    /// # Invariants
+    ///
+    /// A resize that changes the dimensions must report
+    /// [`Damage::Full`]: every emitted frame carries the new size but
+    /// nothing diffs it, so partial row damage would hand the renderer
+    /// new dimensions with stale rows behind them.
     // TODO: A rewrap can insert or drop rows in the middle of the ring,
     // and can split or merge them, so a surviving placement anchor has to
     // be told which resulting row it now belongs to. Once reflow lands,
@@ -88,6 +97,13 @@ impl DeviceState {
     }
 
     /// Moves the active viewport; `None` for a clamped or zero motion.
+    ///
+    /// # Invariants
+    ///
+    /// A motion that moves the viewport must report [`Damage::Full`]:
+    /// the emit-time offset diff only guarantees that a frame is
+    /// emitted, not that it carries rows, so anything less would
+    /// repaint stale content at the new offset.
     pub fn scroll(&mut self, _scroll: Scroll) -> Option<Damage> {
         todo!()
     }
@@ -108,10 +124,8 @@ impl DeviceState {
     }
 
     /// The live palette symbolic colors resolve against.
-    // TODO: Read the table from `ColorTable` once OSC 4 / 10 / 11 / 12
-    // can override it.
-    pub fn palette(&self) -> Palette {
-        Palette::default()
+    pub fn palette(&self) -> &Palette {
+        &self.colors.palette
     }
 
     /// Switches the active screen.
@@ -169,8 +183,11 @@ struct Screens {
 }
 
 /// The base palette and its dynamic overrides.
-// TODO: Carry the base palette plus the OSC 4 / 10 / 11 / 12 overrides.
-struct ColorTable {}
+// TODO: Apply the OSC 4 / 10 / 11 / 12 overrides to the carried
+// palette once their handlers land.
+struct ColorTable {
+    palette: Palette,
+}
 
 /// The current window title and its stack.
 // TODO: Carry the current title plus the CSI 22 / 23 t stack.

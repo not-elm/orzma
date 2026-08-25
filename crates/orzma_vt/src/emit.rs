@@ -109,7 +109,7 @@ mod tests {
         let device = device();
         assert_eq!(state.cursor, device.active().cursor());
         assert_eq!(state.display_offset, device.display_offset());
-        assert_eq!(state.palette, device.palette());
+        assert_eq!(&state.palette, device.palette());
         assert!(state.placements.is_empty());
         assert_eq!(state.cursor.shape, CursorShape::Block);
         assert!(state.cursor.visible);

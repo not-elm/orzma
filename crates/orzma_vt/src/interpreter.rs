@@ -85,6 +85,11 @@ struct SyncBuffer {}
 // TODO: Carry the call-local outbox the signals and replies collect
 // into, and implement `VTActor` — the callbacks land with it.
 struct Executor<'a> {
+    // TODO: The placement and palette handlers (the APC webview verbs
+    // and OSC 4 / 10 / 11 / 12) must set this flag when they mutate a
+    // frame-visible section — the `PlacementStore` docs promise that
+    // "the caller raises the chunk liveness flag", and until those
+    // handlers land no caller does.
     damaged: &'a mut bool,
     sync: &'a mut SyncBuffer,
     device: &'a mut DeviceState,
