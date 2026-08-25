@@ -1,8 +1,9 @@
 //! Cell storage: the visible screen plus the scrollback ring.
 
-pub(crate) mod coords;
 pub mod row;
 pub mod run;
+
+pub(crate) mod coords;
 
 use crate::screen::cell::Cell;
 use crate::screen::grid::coords::{GridLine, ScreenLine};
