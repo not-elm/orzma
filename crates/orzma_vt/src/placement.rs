@@ -7,8 +7,42 @@
 //! emit time.
 
 use crate::device::ActiveScreen;
-use crate::schema::{GridColumn, PlacementId, ProjectedPlacement, ScreenKind};
+use crate::device::modes::ScreenKind;
 use crate::screen::grid::LineId;
+use crate::screen::grid::coords::GridColumn;
+
+/// VT-assigned identity of one mounted webview placement.
+///
+/// # Invariants
+///
+/// Ids are minted monotonically per terminal and never reused within a
+/// session, so a delayed id-addressed lifecycle event can never target
+/// a successor placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PlacementId(pub u64);
+
+/// One placement's viewport-projected geometry at emit time.
+///
+/// # Invariants
+///
+/// `rows` / `cols` always equal the mount-time reservation for `id`;
+/// the VT treats a size change as a remount under a fresh id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectedPlacement {
+    /// The placement this geometry belongs to.
+    pub id: PlacementId,
+    /// Viewport row of the rect's top cell. Negative = the rect's top
+    /// sticks out above the viewport (the shader clips it).
+    /// `ViewportLine(u16)` cannot represent those negative rows, so
+    /// this stays a raw signed int.
+    pub viewport_row: i32,
+    /// Viewport column of the rect's left cell.
+    pub col: GridColumn,
+    /// Rect height in cells (mount-time reservation).
+    pub rows: u16,
+    /// Rect width in cells (mount-time reservation).
+    pub cols: u16,
+}
 
 /// The placement table: minted ids, line anchors, and occupancy spans.
 // TODO: Carry the per-line occupancy spans a mount reserves. Anchors

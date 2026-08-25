@@ -10,6 +10,8 @@
     reason = "OrzmaVt::interpret reaches the parser once the executor's callbacks land"
 )]
 
+pub(crate) mod apc;
+
 mod csi;
 
 use crate::interpreter::csi::CsiParams;

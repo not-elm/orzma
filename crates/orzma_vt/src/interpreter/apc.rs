@@ -1,26 +1,20 @@
-//! Webview vocabulary: the APC verb (`ESC _ O <verb>[;<key>=<value>,...] ST`), the VT-minted placement identity, and its projected geometry.
+//! The orzma APC webview verb and its wire parser.
+//!
+//! `Executor::apc_dispatch` hands raw APC payloads here; the verb it
+//! returns is what a `VtSignal::ApcWebview` carries.
 
-use crate::schema::GridColumn;
-
-const MAX_VIEW_ID: usize = 128;
-/// Upper bound on a mount's reserved rows, inherited from the OSC 5379
-/// implementation. With the ~2:1 terminal cell aspect and DPR 2, a
-/// 200-row x 400-col mount is a near-square pixel region staying under
-/// the common 8192 px GPU texture dimension limit.
-const MAX_ROWS: u16 = 200;
-/// Upper bound on a mount's reserved cols; see `MAX_ROWS` for the sizing
-/// envelope.
-const MAX_COLS: u16 = 400;
-const MAX_APC_LEN: usize = 1024;
-const ORZMA_APC_PREFIX: &[u8; 1] = b"O";
+use std::str;
 
 /// Verb carried by `TtySignal::ApcWebview`: inline mount/unmount of a registered view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApcWebviewVerb {
     /// Mount a registered webview INLINE at the cursor anchor, sized in cells.
     Mount {
+        /// The registered view's id, addressed later by unmount and eviction.
         view_id: String,
+        /// Reserved height in cells.
         rows: u16,
+        /// Reserved width in cells.
         cols: u16,
         /// Client-assigned instance id (Kitty placement model); `None` is the
         /// implicit default instance. `(view_id, instance_id)` is the address.
@@ -33,12 +27,16 @@ pub enum ApcWebviewVerb {
     /// `view_id == None` implies `instance_id == None` (an instance is
     /// addressable only alongside its view id; enforced at the capture stage).
     Unmount {
+        /// The view to unmount; `None` unmounts every view for this terminal.
         view_id: Option<String>,
+        /// The instance to unmount; `None` unmounts every instance of `view_id`.
         instance_id: Option<String>,
     },
 }
 
 impl ApcWebviewVerb {
+    /// Parses an orzma APC payload into the verb it names, or `None`
+    /// when the payload is not a well-formed orzma webview verb.
     pub fn parse(bytes: &[u8]) -> Option<Self> {
         if MAX_APC_LEN < bytes.len() {
             return None;
@@ -47,7 +45,7 @@ impl ApcWebviewVerb {
         if body.is_empty() {
             return None;
         }
-        let body = std::str::from_utf8(body).ok()?;
+        let body = str::from_utf8(body).ok()?;
         let mut fields = body.split(';');
         let action_name = fields.next()?;
         let payload = fields.next();
@@ -62,6 +60,18 @@ impl ApcWebviewVerb {
     }
 }
 
+const MAX_VIEW_ID: usize = 128;
+/// Upper bound on a mount's reserved rows, inherited from the OSC 5379
+/// implementation. With the ~2:1 terminal cell aspect and DPR 2, a
+/// 200-row x 400-col mount is a near-square pixel region staying under
+/// the common 8192 px GPU texture dimension limit.
+const MAX_ROWS: u16 = 200;
+/// Upper bound on a mount's reserved cols; see `MAX_ROWS` for the sizing
+/// envelope.
+const MAX_COLS: u16 = 400;
+const MAX_APC_LEN: usize = 1024;
+const ORZMA_APC_PREFIX: &[u8; 1] = b"O";
+
 fn parse_mount_action(payload: &str) -> Option<ApcWebviewVerb> {
     let fields = payload.split(',');
     let mut view_id = None;
@@ -72,7 +82,6 @@ fn parse_mount_action(payload: &str) -> Option<ApcWebviewVerb> {
         let mut params = f.split('=');
         let k = params.next()?;
         let v = params.next()?;
-        // Invalid if there is an extra orgs.
         if params.next().is_some() {
             return None;
         }
@@ -162,39 +171,6 @@ fn valid_view_id(view_id: &str) -> bool {
     view_id
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-}
-
-/// VT-assigned identity of one mounted webview placement.
-///
-/// # Invariants
-///
-/// Ids are minted monotonically per terminal and never reused within a
-/// session, so a delayed id-addressed lifecycle event can never target
-/// a successor placement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PlacementId(pub u64);
-
-/// One placement's viewport-projected geometry at emit time.
-///
-/// # Invariants
-///
-/// `rows` / `cols` always equal the mount-time reservation for `id`;
-/// the VT treats a size change as a remount under a fresh id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProjectedPlacement {
-    /// The placement this geometry belongs to.
-    pub id: PlacementId,
-    /// Viewport row of the rect's top cell. Negative = the rect's top
-    /// sticks out above the viewport (the shader clips it).
-    /// `ViewportLine(u16)` cannot represent those negative rows, so
-    /// this stays a raw signed int.
-    pub viewport_row: i32,
-    /// Viewport column of the rect's left cell.
-    pub col: GridColumn,
-    /// Rect height in cells (mount-time reservation).
-    pub rows: u16,
-    /// Rect width in cells (mount-time reservation).
-    pub cols: u16,
 }
 
 #[cfg(test)]
