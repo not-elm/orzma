@@ -181,7 +181,6 @@ impl Screen {
         }
         if self.state.line.0 + 1 < self.grid.size().rows {
             self.state.line.0 += 1;
-            return None;
         }
         None
     }
@@ -207,7 +206,6 @@ impl Screen {
         }
         if ScreenLine(0) < self.state.line {
             self.state.line.0 -= 1;
-            return None;
         }
         None
     }

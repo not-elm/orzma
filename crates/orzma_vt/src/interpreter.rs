@@ -16,7 +16,10 @@ use crate::interpreter::csi::CsiParams;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::{
-    damage::DamageLedger, device::DeviceState, placement::PlacementStore, schema::VtSignal,
+    damage::{Damage, DamageLedger},
+    device::DeviceState,
+    placement::PlacementStore,
+    schema::VtSignal,
 };
 use std::sync::mpsc::Sender;
 use vtparse::{CsiParam, VTActor, VTParser};
@@ -107,7 +110,7 @@ impl VTActor for Executor<'_> {
             return;
         }
         let damage = self.device.active_mut().print(b);
-        *self.damaged |= self.damage.stage_if_changed(damage);
+        self.stage(damage);
     }
 
     fn execute_c0_or_c1(&mut self, control: u8) {
@@ -213,21 +216,20 @@ impl Executor<'_> {
     /// and the LF family that shares its effect).
     fn index(&mut self) {
         let damage = self.device.active_mut().line_feed();
-        *self.damaged |= self.damage.stage_if_changed(damage);
+        self.stage(damage);
     }
 
     /// Returns the carriage and moves the cursor down a row (NEL).
     fn next_line(&mut self) {
         self.device.active_mut().carriage_return();
-        *self.damaged |= self
-            .damage
-            .stage_if_changed(self.device.active_mut().line_feed());
+        let damage = self.device.active_mut().line_feed();
+        self.stage(damage);
     }
 
     /// Moves the cursor up a row, scrolling at the top margin (RI).
     fn reverse_index(&mut self) {
         let damage = self.device.active_mut().reverse_index();
-        *self.damaged |= self.damage.stage_if_changed(damage);
+        self.stage(damage);
     }
 
     /// Invokes a G code into GL until the next locking shift (the LS
@@ -240,6 +242,12 @@ impl Executor<'_> {
     /// SS3).
     fn single_shift(&mut self, single_shift: SingleShift) {
         self.device.active_mut().single_shift(single_shift);
+    }
+
+    /// Stages the reported damage and folds the result into the chunk
+    /// liveness.
+    fn stage(&mut self, damage: Option<Damage>) {
+        *self.damaged |= self.damage.stage_if_changed(damage);
     }
 }
 

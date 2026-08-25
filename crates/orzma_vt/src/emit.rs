@@ -8,16 +8,14 @@
 use crate::device::ActiveScreen;
 use crate::placement::PlacementStore;
 use crate::schema::{Cursor, DisplayOffset, Palette, ProjectedPlacement};
-use std::mem;
 
 /// The last-emitted cursor, offset, placements, and palette.
 ///
 /// # Invariants
 ///
 /// A retained value must mirror what the consumer last saw. The diff
-/// methods retain eagerly during an emit attempt, which is sound only
-/// while a changed section forces that attempt to emit — the emitter's
-/// gate treats every `Some` diff as a reason to emit.
+/// methods only compare; [`Self::settle`] records what an emitted
+/// frame carried, so retention cannot outrun emission.
 pub(crate) struct EmitState {
     cursor: Cursor,
     display_offset: DisplayOffset,
@@ -66,24 +64,38 @@ impl EmitState {
         if self.scratch == self.placements {
             return None;
         }
-        mem::swap(&mut self.placements, &mut self.scratch);
-        Some(self.placements.clone())
+        Some(self.scratch.clone())
     }
 
     /// Reports the palette when it differs from the last-emitted one;
     /// `None` when unchanged.
-    pub fn diff_palette(&mut self, palette: &Palette) -> Option<Palette> {
-        if *palette == self.palette {
-            return None;
-        }
-        self.palette = palette.clone();
-        Some(palette.clone())
+    pub fn diff_palette(&self, palette: &Palette) -> Option<Palette> {
+        (*palette != self.palette).then(|| palette.clone())
     }
 
-    /// Records the small fields an emitted frame just carried.
-    pub fn settle_small_fields(&mut self, cursor: Cursor, display_offset: DisplayOffset) {
-        self.cursor = cursor;
+    /// Records what an emitted frame carried, so later diffs compare
+    /// against what the consumer last saw.
+    ///
+    /// # Invariants
+    ///
+    /// Every emitted frame settles here exactly once: a diff result
+    /// that reaches a frame without being settled would report the
+    /// same change again on the next attempt.
+    pub fn settle(
+        &mut self,
+        cursor: &Cursor,
+        display_offset: DisplayOffset,
+        placements: Option<&Vec<ProjectedPlacement>>,
+        palette: Option<&Palette>,
+    ) {
+        self.cursor.clone_from(cursor);
         self.display_offset = display_offset;
+        if let Some(placements) = placements {
+            self.placements.clone_from(placements);
+        }
+        if let Some(palette) = palette {
+            self.palette.clone_from(palette);
+        }
     }
 }
 
@@ -115,13 +127,14 @@ mod tests {
         assert!(state.cursor.visible);
     }
 
-    /// Asserts that an unchanged projection diffs to `None` and a
-    /// mutated store diffs to the complete new list.
+    /// Asserts that an unchanged projection diffs to `None`, a mutated
+    /// store diffs to the complete new list, and settling that list
+    /// makes the next diff report `None` again.
     ///
     /// Case: frames are emitted before and after a program mounts a
     /// webview at the cursor.
     #[test]
-    fn diff_placements_reports_only_a_real_change() {
+    fn diff_placements_reports_the_change_until_settled() {
         let mut state = EmitState::default();
         let device = device();
         let mut store = PlacementStore::new();
@@ -133,20 +146,30 @@ mod tests {
             .diff_placements(&store, device.active_screen())
             .expect("a mount changes the projection");
         assert_eq!(listed.len(), 1);
+        let cursor = device.active().cursor();
+        state.settle(&cursor, device.display_offset(), Some(&listed), None);
         assert_eq!(state.diff_placements(&store, device.active_screen()), None);
     }
 
-    /// Asserts that the palette diff reports a change exactly once.
+    /// Asserts that the palette diff reports the change until the
+    /// emitted table is settled.
     ///
     /// Case: an OSC palette override arrives, one frame carries the new
     /// table, and the next frame omits it again.
     #[test]
-    fn diff_palette_reports_a_change_exactly_once() {
+    fn diff_palette_reports_the_change_until_settled() {
         let mut state = EmitState::default();
         let mut palette = Palette::default();
         assert_eq!(state.diff_palette(&palette), None);
         palette.foreground = palette.background;
-        assert_eq!(state.diff_palette(&palette), Some(palette.clone()));
+        let changed = state
+            .diff_palette(&palette)
+            .expect("an override changes the table");
+        let cursor = Cursor {
+            visible: true,
+            ..Cursor::default()
+        };
+        state.settle(&cursor, DisplayOffset(0), None, Some(&changed));
         assert_eq!(state.diff_palette(&palette), None);
     }
 }

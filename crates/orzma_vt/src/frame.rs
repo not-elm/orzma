@@ -69,9 +69,9 @@ impl Frame {
     /// - The rows, the cursor, the offset, and the projection all come
     ///   from one borrow of `device`, so a frame describes one instant.
     /// - `state` never retains a value the consumer does not see: the
-    ///   section diffs retain eagerly during the attempt, and a `Some`
-    ///   from any of them is a gate disjunct, so an attempt that
-    ///   retains always emits.
+    ///   section diffs only compare, and the emitted frame is settled
+    ///   into `state` after the gate, so an attempt that returns `None`
+    ///   retains nothing.
     pub(crate) fn emit(
         state: &mut EmitState,
         damage: &mut DamageLedger,
@@ -84,10 +84,6 @@ impl Frame {
         let staged = damage.take();
         let placements = state.diff_placements(placements, device.active_screen());
         let palette = state.diff_palette(device.palette());
-        // NOTE: The section diffs above retain eagerly, so any new
-        // suppression condition added to this gate must keep "a Some
-        // from a diff forces emission" true — otherwise the consumer
-        // keeps a value the retained state claims it saw.
         if staged.is_none()
             && placements.is_none()
             && palette.is_none()
@@ -95,25 +91,17 @@ impl Frame {
         {
             return None;
         }
-        state.settle_small_fields(cursor.clone(), display_offset);
         let size = screen.grid_size();
+        let dirty_row = |line: ViewportLine| DirtyRow {
+            line,
+            contents: screen.viewport_row(line).to_runs(),
+        };
         let rows = match staged {
-            Some(StagedDamage::Full) => (0..size.rows)
-                .map(|line| DirtyRow {
-                    line: ViewportLine(line),
-                    contents: screen.viewport_row(ViewportLine(line)).to_runs(),
-                })
-                .collect(),
-            Some(StagedDamage::Delta(dirty)) => dirty
-                .iter()
-                .map(|&line| DirtyRow {
-                    line,
-                    contents: screen.viewport_row(line).to_runs(),
-                })
-                .collect(),
+            Some(StagedDamage::Full) => (0..size.rows).map(ViewportLine).map(dirty_row).collect(),
+            Some(StagedDamage::Delta(dirty)) => dirty.iter().copied().map(dirty_row).collect(),
             None => Vec::new(),
         };
-        Some(Self {
+        let frame = Self {
             size,
             rows,
             cursor,
@@ -123,7 +111,14 @@ impl Frame {
             placements,
             palette,
             hyperlinks: Vec::new(),
-        })
+        };
+        state.settle(
+            &frame.cursor,
+            frame.display_offset,
+            frame.placements.as_ref(),
+            frame.palette.as_ref(),
+        );
+        Some(frame)
     }
 }
 
