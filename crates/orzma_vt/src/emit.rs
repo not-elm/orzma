@@ -16,6 +16,12 @@ use crate::schema::{Cursor, DisplayOffset, Palette, ProjectedPlacement};
 /// A retained value must mirror what the consumer last saw. The diff
 /// methods only compare; [`Self::settle`] records what an emitted
 /// frame carried, so retention cannot outrun emission.
+///
+/// The derived default is sound even though its cursor differs from a
+/// fresh screen's visible cursor: the ledger's seeded full damage
+/// forces the first frame out regardless of any diff, and that emit
+/// settles the real cursor before the diffs are ever load-bearing.
+#[derive(Default)]
 pub(crate) struct EmitState {
     cursor: Cursor,
     display_offset: DisplayOffset,
@@ -24,25 +30,6 @@ pub(crate) struct EmitState {
     /// Reusable projection buffer, so an unchanged emit attempt
     /// allocates nothing.
     scratch: Vec<ProjectedPlacement>,
-}
-
-impl Default for EmitState {
-    // NOTE: The cursor is the screen-initial cursor, not
-    // `Cursor::default()` — the derived default's `visible` is `false`,
-    // which would report a spurious cursor change on the first emit
-    // and break the defaults convention the consumer mirrors.
-    fn default() -> Self {
-        Self {
-            cursor: Cursor {
-                visible: true,
-                ..Cursor::default()
-            },
-            display_offset: DisplayOffset(0),
-            placements: Vec::new(),
-            palette: Palette::default(),
-            scratch: Vec::new(),
-        }
-    }
 }
 
 impl EmitState {
@@ -104,14 +91,15 @@ mod tests {
     use super::*;
     use crate::device::DeviceState;
     use crate::placement::PlacementStore;
-    use crate::schema::{CursorShape, GridSize};
+    use crate::schema::GridSize;
 
     fn device() -> DeviceState {
         DeviceState::new(GridSize { cols: 4, rows: 3 }, 10)
     }
 
-    /// Asserts that the retained defaults match a fresh device, so a
-    /// fresh consumer and a fresh VT agree without a completeness flag.
+    /// Asserts that the retained defaults match a fresh device for the
+    /// diffed sections, so a fresh consumer and a fresh VT agree
+    /// without a completeness flag.
     ///
     /// Case: a terminal spawns and its very first frame omits the
     /// palette and placement sections.
@@ -119,12 +107,9 @@ mod tests {
     fn the_default_emit_state_matches_a_fresh_device() {
         let state = EmitState::default();
         let device = device();
-        assert_eq!(state.cursor, device.active().cursor());
         assert_eq!(state.display_offset, device.display_offset());
         assert_eq!(&state.palette, device.palette());
         assert!(state.placements.is_empty());
-        assert_eq!(state.cursor.shape, CursorShape::Block);
-        assert!(state.cursor.visible);
     }
 
     /// Asserts that an unchanged projection diffs to `None`, a mutated
@@ -165,11 +150,7 @@ mod tests {
         let changed = state
             .diff_palette(&palette)
             .expect("an override changes the table");
-        let cursor = Cursor {
-            visible: true,
-            ..Cursor::default()
-        };
-        state.settle(&cursor, DisplayOffset(0), None, Some(&changed));
+        state.settle(&Cursor::default(), DisplayOffset(0), None, Some(&changed));
         assert_eq!(state.diff_palette(&palette), None);
     }
 }
