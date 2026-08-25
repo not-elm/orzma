@@ -307,29 +307,32 @@ which run before `Screen` sees the call. At this layer the rows mostly apply to
 
 ### Return value
 
-Several methods return `()` — `set_horizontal_tab_stop`, `edit_tab_stop`,
+Most methods return `()` — `set_horizontal_tab_stop`, `edit_tab_stop`,
 `reset_tab_stops`, `designate_character_set`, `invoke_character_set`,
-`single_shift`, `save_checkpoint`, `restore_checkpoint`. For those the
-expectation covers screen state alone and carries no return line.
+`single_shift`, `save_checkpoint`, `restore_checkpoint`, `backspace`,
+`carriage_return`, `move_forward_tabs`, `move_backward_tabs`,
+`move_cursor_to`, `set_scroll_region`, and `set_origin_mode`. For those
+the expectation covers screen state alone and carries no return line;
+pure cursor motion reaches the renderer through the per-chunk cursor
+diff, not through a return value.
 
-Most of the rest return `Option<Damage>`, which is orzma's own contract; no VT
+The rest return `Option<Damage>`, which is orzma's own contract; no VT
 manual mentions it. Derive it from the spec-described state change:
 
 | Spec-described change | Expected return |
 | --- | --- |
 | A bounded contiguous span of rows changes contents, and the span is inside the viewport | `Some(Damage::rows(first, last))` |
 | Content moves across the whole screen — a scroll, `ED 2`, a reset | `Some(Damage::Full)` |
-| Rows changed contents, but all of them sit outside the viewport | `Some(Damage::Metadata)` |
-| Only metadata changes — cursor position, pen, deferred-wrap flag | `Some(Damage::Metadata)` |
-| Nothing changes | `None` |
+| Rows changed contents, but all of them sit outside the viewport | `None` |
+| Nothing on screen changes — cursor position, pen, deferred-wrap flag | `None` |
 
-`Damage` has three variants, not two: `Full`, `Rows { first, last }`, and
-`Metadata` (`crates/orzma_vt/src/damage.rs:152`). Sending every content change
+`Damage` has exactly two variants: `Full` and `Rows { first, last }`
+(`crates/orzma_vt/src/damage.rs:160`). Sending every content change
 to `Full` gives a wrong expectation for `erase_in_line` and for both partial
 `erase_in_display` modes, which return `Damage::rows(..)` and are already
-pinned by four existing tests. It also loses the third row: `Metadata` means
-"a frame is still needed" and covers changes that landed entirely outside the
-viewport, not only cursor motion.
+pinned by four existing tests. There is no metadata variant: a change no
+viewport row shows reports nothing, and the emit layer's own diffs decide
+whether a frame is still owed.
 
 The specification stays the source for *what changes*; this table maps that to
 *what is reported*.
