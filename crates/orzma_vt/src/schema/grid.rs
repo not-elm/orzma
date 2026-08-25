@@ -4,8 +4,6 @@
 
 use crate::screen::viewport::DisplayOffset;
 
-pub mod cell;
-
 /// Grid dimensions in cells.
 ///
 /// The row count is the source of truth for "one screenful" (scroll

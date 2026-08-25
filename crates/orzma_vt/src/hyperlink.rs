@@ -1,7 +1,83 @@
-use crate::schema::cell::SourceHyperlink;
+//! OSC 8 hyperlink vocabulary and the id interner that dedupes it.
+//!
+//! The interner is the only way a `HyperlinkId` other than the `0`
+//! sentinel comes into existence, so the "callers must not construct
+//! `HyperlinkId(0)`" invariant is enforced by keeping minting here.
+// NOTE: the `#[cfg(test)]` module below uses every item this lint
+// would flag, so an unconditional `#[expect(dead_code)]` is fulfilled
+// in a plain build but unfulfilled — and denied under `-D warnings` —
+// in a test build. Gating it to non-test builds keeps both clean.
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the frame builder reaches the interner once OSC 8 handling lands"
+    )
+)]
+
 use std::collections::HashMap;
 
-pub struct HyperlinkInterner {
+/// OSC 8 hyperlink: an interned id → URI mapping.
+///
+/// Cells reference these via `Run::hyperlink_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hyperlink {
+    /// This hyperlink's id.
+    pub id: HyperlinkId,
+    /// The hyperlink target URI.
+    pub uri: HyperlinkUri,
+}
+
+/// Monotonic hyperlink id.
+///
+/// # Invariants
+///
+/// Callers outside the interner MUST NOT construct `HyperlinkId(0)`;
+/// it is the universal "no hyperlink" sentinel the renderer's
+/// `hyperlink_id != 0u` branch depends on.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct HyperlinkId(pub u32);
+
+/// OSC 8 hyperlink target URI.
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+pub struct HyperlinkUri(String);
+
+impl HyperlinkUri {
+    /// Wraps a string as a hyperlink URI.
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    /// Returns the underlying string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Returns `true` when `uri` carries a scheme on the v1 allowlist
+/// (`http`, `https`, `mailto`, `ftp`), case-insensitive.
+pub fn is_allowed(uri: &str) -> bool {
+    scheme_of(uri)
+        .map(|s| s.to_ascii_lowercase())
+        .is_some_and(|s| ALLOWED_SCHEMES.contains(&s.as_str()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct HyperlinkSourceId(String);
+
+impl HyperlinkSourceId {
+    pub(crate) fn new(id: String) -> Self {
+        Self(id)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Hash)]
+pub(crate) struct SourceHyperlink {
+    pub id: HyperlinkSourceId,
+    pub uri: HyperlinkUri,
+}
+
+pub(crate) struct HyperlinkInterner {
     id: u32,
     id_to_uri: HashMap<HyperlinkId, HyperlinkUri>,
     source_to_id: HashMap<SourceHyperlink, HyperlinkId>,
@@ -13,7 +89,7 @@ impl HyperlinkInterner {
     /// The first id handed out is `HyperlinkId(1)`. `HyperlinkId(0)` is
     /// reserved as the "no hyperlink" sentinel across the wire, the CPU
     /// grid, and GPU storage.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             id: 1,
             id_to_uri: HashMap::new(),
@@ -21,7 +97,7 @@ impl HyperlinkInterner {
         }
     }
 
-    pub fn intern(&mut self, source: SourceHyperlink) -> HyperlinkId {
+    pub(crate) fn intern(&mut self, source: SourceHyperlink) -> HyperlinkId {
         if let Some(id) = self.source_to_id.get(&source) {
             return *id;
         }
@@ -34,19 +110,9 @@ impl HyperlinkInterner {
     }
 
     #[inline]
-    pub fn extract(&self, id: &HyperlinkId) -> Option<&HyperlinkUri> {
+    pub(crate) fn extract(&self, id: &HyperlinkId) -> Option<&HyperlinkUri> {
         self.id_to_uri.get(id)
     }
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Hash)]
-pub struct HyperlinkId(u32);
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct HyperlinkUri(pub String);
-
-pub struct Hyperlink {
-    pub id: HyperlinkId,
 }
 
 impl Default for HyperlinkInterner {
@@ -55,16 +121,32 @@ impl Default for HyperlinkInterner {
     }
 }
 
+const ALLOWED_SCHEMES: &[&str] = &["http", "https", "mailto", "ftp"];
+
+/// Parses an RFC 3986 scheme: first byte ALPHA, continuation
+/// ALPHA / DIGIT / `+` / `-` / `.`. Returns `None` for malformed input.
+fn scheme_of(uri: &str) -> Option<&str> {
+    let (scheme, _) = uri.split_once(':')?;
+    let mut bytes = scheme.bytes();
+    let first = bytes.next()?;
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+    if !bytes.all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.') {
+        return None;
+    }
+    Some(scheme)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::cell::HyperlinkSourceId;
     use std::collections::HashSet;
 
     fn source(id: &str, uri: &str) -> SourceHyperlink {
         SourceHyperlink {
             id: HyperlinkSourceId::new(id.to_owned()),
-            uri: HyperlinkUri(uri.to_owned()),
+            uri: HyperlinkUri::new(uri.to_owned()),
         }
     }
 
@@ -230,7 +312,7 @@ mod tests {
         assert_eq!(interner.intern(source("1", "https://a.example")), first);
         assert_eq!(
             interner.extract(&first),
-            Some(&HyperlinkUri("https://a.example".to_owned()))
+            Some(&HyperlinkUri::new("https://a.example".to_owned()))
         );
     }
 
@@ -244,7 +326,7 @@ mod tests {
         let id = interner.intern(source("1", "https://a.example"));
         assert_eq!(
             interner.extract(&id),
-            Some(&HyperlinkUri("https://a.example".to_owned()))
+            Some(&HyperlinkUri::new("https://a.example".to_owned()))
         );
     }
 
@@ -282,7 +364,7 @@ mod tests {
         let mut interner = HyperlinkInterner::new();
         let first = interner.intern(source("0_alacritty", "https://a.example"));
         let second = interner.intern(source("1_alacritty", "https://a.example"));
-        let expected = HyperlinkUri("https://a.example".to_owned());
+        let expected = HyperlinkUri::new("https://a.example".to_owned());
         assert_ne!(first, second);
         assert_eq!(interner.extract(&first), Some(&expected));
         assert_eq!(interner.extract(&second), Some(&expected));
@@ -300,7 +382,10 @@ mod tests {
         let mut interner = HyperlinkInterner::new();
         let id = interner.intern(source("1", ""));
         assert_ne!(id, HyperlinkId(0));
-        assert_eq!(interner.extract(&id), Some(&HyperlinkUri(String::new())));
+        assert_eq!(
+            interner.extract(&id),
+            Some(&HyperlinkUri::new(String::new()))
+        );
     }
 
     /// Asserts that a long uri round-trips whole and stays distinct from its prefix.
@@ -317,8 +402,8 @@ mod tests {
         let first = interner.intern(source("1", &long));
         let second = interner.intern(source("1", &longer));
         assert_ne!(first, second);
-        assert_eq!(interner.extract(&first), Some(&HyperlinkUri(long)));
-        assert_eq!(interner.extract(&second), Some(&HyperlinkUri(longer)));
+        assert_eq!(interner.extract(&first), Some(&HyperlinkUri::new(long)));
+        assert_eq!(interner.extract(&second), Some(&HyperlinkUri::new(longer)));
     }
 
     /// Asserts that uris differing only in encoding or case stay distinct.
@@ -343,7 +428,39 @@ mod tests {
         assert_eq!(ids.len(), variants.len());
         for uri in variants {
             let id = interner.intern(source("1", uri));
-            assert_eq!(interner.extract(&id), Some(&HyperlinkUri(uri.to_owned())));
+            assert_eq!(
+                interner.extract(&id),
+                Some(&HyperlinkUri::new(uri.to_owned()))
+            );
         }
+    }
+
+    /// Asserts that the scheme allowlist accepts the four canonical
+    /// schemes regardless of letter case.
+    ///
+    /// Case: a shell emits an OSC 8 link whose scheme the remote program
+    /// spelled `HTTPS:` rather than `https:`.
+    #[test]
+    fn is_allowed_accepts_canonical_schemes_case_insensitive() {
+        assert!(is_allowed("http://example.com"));
+        assert!(is_allowed("HTTPS://example.com"));
+        assert!(is_allowed("Mailto:foo@example"));
+        assert!(is_allowed("ftp://example.com"));
+    }
+
+    /// Asserts that the scheme allowlist rejects dangerous, unknown, and
+    /// malformed inputs rather than falling back to permitting them.
+    ///
+    /// Case: a hostile program prints an OSC 8 link with a `javascript:`
+    /// target, hoping the terminal will hand it to the OS opener.
+    #[test]
+    fn is_allowed_rejects_dangerous_or_unknown_schemes() {
+        assert!(!is_allowed("javascript:alert(1)"));
+        assert!(!is_allowed("file:///etc/passwd"));
+        assert!(!is_allowed("data:text/html,<script>"));
+        assert!(!is_allowed("vscode://"));
+        assert!(!is_allowed("vscode://example.com"));
+        assert!(!is_allowed(""));
+        assert!(!is_allowed("no-colon-here"));
     }
 }
