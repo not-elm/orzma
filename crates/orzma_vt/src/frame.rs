@@ -71,15 +71,6 @@ pub struct DirtyRow {
 }
 
 /// Tracks what the next frame owes and what the last frame carried.
-///
-/// One half is the pending [`DamageLedger`]; the other half is the
-/// retained last-emitted values the emit-time diffs compare against.
-///
-/// # Invariants
-///
-/// A retained value must mirror what the consumer last saw. The diff
-/// methods only compare; the emitted frame is settled into the tracker
-/// after [`Self::emit`]'s gate, so retention cannot outrun emission.
 pub(crate) struct FrameTracker {
     /// Damage staged for the next emit, from every source.
     damage: DamageLedger,
