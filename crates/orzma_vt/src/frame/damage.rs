@@ -21,7 +21,7 @@ use std::iter;
 /// between a screen operation and the accumulator, where a `Vec` per
 /// printed character would dominate the interpreter's cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DamageSpan {
+pub(crate) enum DamageSpan {
     /// Entire viewport is dirty (resize, clear, alt-screen swap, reset).
     Full,
     /// An inclusive viewport-row span; a single row is `first == last`.

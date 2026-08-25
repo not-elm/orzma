@@ -1,6 +1,6 @@
 //! Terminal emulation for orzma.
 //!
-//! [`schema`] declares the vocabulary; the crate root defines [`Vt`],
+//! [`prelude`] gathers the vocabulary; the crate root defines [`Vt`],
 //! the protocol between a self-contained terminal emulator and its
 //! owner, and [`OrzmaVt`], the implementation of that protocol.
 
@@ -17,17 +17,35 @@ use crate::{
 use std::path::PathBuf;
 
 mod device;
-pub mod frame;
-pub mod hyperlink;
+mod frame;
+mod hyperlink;
 mod interpreter;
 mod placement;
-pub mod schema;
-pub mod screen;
+mod screen;
 mod selection;
 mod vi;
 
+/// The crate's vocabulary, gathered for downstream consumers.
+///
+/// A consumer imports the terminal types from here rather than from the
+/// private modules that declare them, so the module tree stays free to
+/// move a type without breaking anyone.
 pub mod prelude {
-    pub use crate::{OrzmaVt, Vt, VtUpdate, schema::*};
+    pub use crate::device::color::{Color, Palette, Rgb};
+    pub use crate::device::modes::{MouseEncoding, MouseTracking, ScreenKind, VtModes};
+    pub use crate::frame::{DirtyRow, Frame};
+    pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
+    pub use crate::interpreter::apc::ApcWebviewVerb;
+    pub use crate::placement::{PlacementId, ProjectedPlacement};
+    pub use crate::screen::cursor::{CURSOR_VISIBLE_BIT, Cursor, CursorShape};
+    pub use crate::screen::grid::GridSize;
+    pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
+    pub use crate::screen::grid::row::Row;
+    pub use crate::screen::grid::run::{Run, Style};
+    pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine};
+    pub use crate::selection::{CellSide, SelectionGeometry, SelectionKind, SelectionRange};
+    pub use crate::vi::{ViCursor, ViModeSwitch};
+    pub use crate::{OrzmaVt, Vt, VtSignal, VtUpdate};
 }
 
 /// The terminal-emulation contract `OrzmaTty` drives and the host

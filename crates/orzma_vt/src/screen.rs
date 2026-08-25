@@ -6,6 +6,18 @@
 //! motion returns nothing, because the per-chunk cursor diff reports
 //! it.
 
+// NOTE: the `#[cfg(test)]` module below uses every item this lint
+// would flag, so an unconditional `#[expect(dead_code)]` is fulfilled
+// in a plain build but unfulfilled — and denied under `-D warnings` —
+// in a test build. Gating it to non-test builds keeps both clean.
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the executor reaches these screen operations once its CSI handlers land"
+    )
+)]
+
 pub mod cell;
 pub mod character_sets;
 pub mod checkpoint;
@@ -37,7 +49,7 @@ use crate::screen::viewport::{DisplayOffset, Viewport, ViewportLine};
 
 /// Span selector for [`Screen::erase_in_line`] (`CSI K`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EraseLineMode {
+pub(crate) enum EraseLineMode {
     /// From the cursor to the end of the row (`EL 0`).
     ToEnd,
     /// From the start of the row through the cursor column (`EL 1`).
@@ -48,7 +60,7 @@ pub enum EraseLineMode {
 
 /// Span selector for [`Screen::erase_in_display`] (`CSI J`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EraseScreenMode {
+pub(crate) enum EraseScreenMode {
     /// From the cursor cell to the end of the screen (`ED 0`).
     Below,
     /// From the top of the screen through the cursor cell (`ED 1`).
