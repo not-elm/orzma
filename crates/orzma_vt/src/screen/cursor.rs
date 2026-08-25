@@ -1,6 +1,6 @@
-//! Cursor vocabulary: the live cursor and the vi-mode cursor.
+//! The cursor snapshot a screen reports and the shape DECSCUSR selects.
 
-use crate::schema::GridPoint;
+use crate::screen::grid::coords::GridPoint;
 
 /// Bit 0 of the packed `cursor_style` u32 — set when the cursor
 /// should be drawn. The WGSL shader short-circuits when this bit is
@@ -8,20 +8,6 @@ use crate::schema::GridPoint;
 /// overrides (e.g., `TerminalGrid.suppress_cursor`) can mask it out
 /// without re-deriving the literal `1`.
 pub const CURSOR_VISIBLE_BIT: u32 = 1;
-
-/// Vi-mode cursor position in active-grid coordinates.
-///
-/// The line goes negative while the vi cursor sits in scrollback
-/// history. The sign is not a visibility signal — scrolling clamps
-/// the vi cursor into the viewport, so a negative line can still be
-/// visible; project `point` with
-/// [`crate::schema::GridLine::to_viewport`] to decide whether there
-/// is a cell to paint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ViCursor {
-    /// Grid cell the vi cursor sits on.
-    pub point: GridPoint,
-}
 
 /// Cursor state at snapshot time.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -36,8 +22,8 @@ pub struct Cursor {
     /// True when the application wants the cursor drawn — DECTCEM
     /// (`TermMode::SHOW_CURSOR`) and a non-Hidden DECSCUSR shape.
     /// Scroll visibility is not folded in: project `point` with
-    /// [`crate::schema::GridLine::to_viewport`] to decide whether
-    /// there is a cell to paint at all.
+    /// [`crate::screen::grid::coords::GridLine::to_viewport`] to decide
+    /// whether there is a cell to paint at all.
     pub visible: bool,
 }
 
@@ -73,7 +59,7 @@ pub enum CursorShape {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{GridColumn, GridLine};
+    use crate::screen::grid::coords::{GridColumn, GridLine};
 
     fn cursor(shape: CursorShape, blinking: bool, visible: bool) -> Cursor {
         Cursor {

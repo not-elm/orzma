@@ -11,24 +11,21 @@
 //! crate write `crate::schema::Color`, never `crate::schema::color::Color`.
 
 mod color;
-mod cursor;
 mod modes;
-mod selection;
 mod signal;
-mod vi;
 mod webview;
 
 pub use crate::frame::{DirtyRow, Frame};
 pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
+pub use crate::screen::cursor::{CURSOR_VISIBLE_BIT, Cursor, CursorShape};
 pub use crate::screen::grid::GridSize;
 pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 pub use crate::screen::grid::row::Row;
 pub use crate::screen::grid::run::{Run, Style};
 pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine};
+pub use crate::selection::{CellSide, SelectionGeometry, SelectionKind, SelectionRange};
+pub use crate::vi::{ViCursor, ViModeSwitch};
 pub use color::*;
-pub use cursor::*;
 pub use modes::*;
-pub use selection::*;
 pub use signal::*;
-pub use vi::*;
 pub use webview::*;

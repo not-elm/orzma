@@ -15,6 +15,8 @@ mod state;
 pub mod tabs;
 pub mod viewport;
 
+pub(crate) mod cursor;
+
 use self::cell::{Cell, Pen};
 use self::grid::Grid;
 use self::grid::LineId;

@@ -1,8 +1,7 @@
-//! Selection vocabulary: the parameter types of the VT's selection
-//! operations ([`SelectionKind`], [`CellSide`]) and the renderable
-//! range the VT reports back ([`SelectionRange`]).
+//! Selection vocabulary: the span a selection covers, how it is shaped,
+//! and which side of a cell an endpoint sits on.
 
-use crate::schema::GridPoint;
+use crate::screen::grid::coords::GridPoint;
 
 /// A renderable selection: normalized active-grid endpoints plus the
 /// shape they span.
@@ -11,8 +10,8 @@ use crate::schema::GridPoint;
 /// cells, both inclusive — anchor/moving-end order is already resolved
 /// and cell-side trimming applied by the VT. The endpoints are raw
 /// grid positions and do not move when the user scrolls; project them
-/// with [`crate::schema::GridLine::to_viewport`] to place the
-/// highlight on screen.
+/// with [`crate::screen::grid::coords::GridLine::to_viewport`] to place
+/// the highlight on screen.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct SelectionRange {
     /// Top-left selected cell (inclusive).
@@ -25,10 +24,10 @@ pub struct SelectionRange {
 
 /// The shape a [`SelectionRange`] spans between its endpoints.
 ///
-/// Deliberately narrower than [`SelectionKind`]: `Simple` and `Semantic`
-/// differ only in how the range is built (word snapping) and both render
-/// as `Linear`, so the renderer needs this three-way split rather than
-/// the four-way input granularity.
+/// Deliberately narrower than [`SelectionKind`]: kinds that differ only
+/// in how the range is built — word snapping, for one — all render as
+/// `Linear`, so the renderer needs this three-way split rather than the
+/// input granularity.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SelectionGeometry {
     /// A cell run wrapping at the end of each row.
@@ -49,14 +48,12 @@ impl From<SelectionKind> for SelectionGeometry {
 }
 
 /// Selection granularity.
+// TODO: Add the `Block` (rectangular column) and `Semantic` (snapped to
+// word boundaries) kinds once the selection capability trait lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionKind {
     /// Cell-by-cell, wrapping at the end of each line.
     Simple,
-    // /// A rectangular column block.
-    // Block,
-    /// Snapped outward to word boundaries.
-    // Semantic,
     /// Whole lines.
     Lines,
 }

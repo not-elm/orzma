@@ -20,6 +20,8 @@ mod interpreter;
 mod placement;
 pub mod schema;
 pub mod screen;
+mod selection;
+mod vi;
 
 pub mod prelude {
     pub use crate::{OrzmaVt, Vt, VtUpdate, schema::*};
