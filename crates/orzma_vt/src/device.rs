@@ -202,8 +202,8 @@ mod tests {
     /// The agreed policy gives each screen its own table, so a
     /// full-screen application cannot disturb the tab positions the
     /// shell left on the primary screen. xterm, VTE, alacritty,
-    /// wezterm, ghostty, and Windows Terminal share one table across
-    /// both screens instead; ECMA-48 settles nothing here, because it
+    /// wezterm, and Windows Terminal share one table across both
+    /// screens instead; ECMA-48 settles nothing here, because it
     /// has no alternate screen at all.
     ///
     /// Case: a shell installs its own tab positions, then a full-screen

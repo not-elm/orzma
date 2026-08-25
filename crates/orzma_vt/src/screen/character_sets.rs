@@ -411,8 +411,8 @@ mod tests {
         /// describes a single shift as returning to "the previous
         /// character set", which a save-and-restore model reads as
         /// undoing the locking shift; foot implements that reading,
-        /// while xterm, Windows Terminal, and ghostty use the override
-        /// model pinned here.
+        /// while xterm and Windows Terminal use the override model
+        /// pinned here.
         ///
         /// Case: an application emits `SS2`, then `SO` before the
         /// character the single shift applies to.

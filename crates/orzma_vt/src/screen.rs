@@ -1390,10 +1390,10 @@ mod tests {
         ///
         /// The agreed policy follows xterm and VTE, whose reverse index
         /// reaches its cursor-up helper on both paths and resets the
-        /// flag there. It is a deliberate divergence from ghostty,
-        /// kitty, and wezterm, which clear it only when the cursor
-        /// moves, and from alacritty, which clears it on neither —
-        /// and `Screen::line_feed` preserves the flag, so the split is
+        /// flag there. It is a deliberate divergence from kitty and
+        /// wezterm, which clear it only when the cursor moves, and
+        /// from alacritty, which clears it on neither — and
+        /// `Screen::line_feed` preserves the flag, so the split is
         /// not accidental.
         ///
         /// Case: a program fills the last column of a row and then emits a
