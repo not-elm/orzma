@@ -1,8 +1,8 @@
 //! The write position and attributes DECSC copies aside for DECRC.
 
-use crate::schema::{GridColumn, ScreenLine};
 use crate::screen::cell::Pen;
 use crate::screen::character_sets::CharacterSetMapping;
+use crate::screen::grid::coords::{GridColumn, ScreenLine};
 use crate::screen::margins::OriginMode;
 use crate::screen::state::ScreenState;
 

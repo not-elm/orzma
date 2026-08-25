@@ -1,6 +1,7 @@
 //! Internal storage cell and the SGR pen burned into it on print.
 
-use crate::schema::{Color, Style};
+use crate::device::color::Color;
+use crate::screen::grid::run::Style;
 
 /// One stored character cell: a glyph plus the attributes it was
 /// printed with.
@@ -9,7 +10,7 @@ use crate::schema::{Color, Style};
 /// crate: it carries no coordinate (position is implied by the cell's
 /// slot in the grid) and holds a single `char` (grapheme composition
 /// is a later extension). The host reads cells only through the
-/// emitted [`crate::schema::Row`] / [`crate::schema::Run`] projection.
+/// emitted [`crate::screen::grid::row::Row`] / [`crate::screen::grid::run::Run`] projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cell {
     /// The stored glyph.

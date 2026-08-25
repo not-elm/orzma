@@ -1,6 +1,6 @@
 //! The DECSTBM scroll region and the DECOM cursor origin.
 
-use crate::schema::ScreenLine;
+use crate::screen::grid::coords::ScreenLine;
 use std::ops::RangeInclusive;
 
 /// The scrolling region paired with the cursor origin it may impose.

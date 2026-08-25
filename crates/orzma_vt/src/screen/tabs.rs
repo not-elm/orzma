@@ -4,7 +4,7 @@
     reason = "every stop edit reaches this table once the CSI dispatch lands"
 )]
 
-use crate::schema::GridColumn;
+use crate::screen::grid::coords::GridColumn;
 
 /// One character tabulation stop edit, independent of which control
 /// function asked for it.

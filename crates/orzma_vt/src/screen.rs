@@ -23,18 +23,17 @@ use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
 use crate::frame::damage::DamageSpan;
-use crate::schema::{
-    Cursor, CursorShape, DisplayOffset, GridColumn, GridLine, GridPoint, GridSize, ScreenLine,
-    ViewportLine,
-};
 use crate::screen::character_sets::{
     CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
 };
 use crate::screen::checkpoint::Checkpoint;
+use crate::screen::cursor::{Cursor, CursorShape};
+use crate::screen::grid::GridSize;
+use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
-use crate::screen::viewport::Viewport;
+use crate::screen::viewport::{DisplayOffset, Viewport, ViewportLine};
 
 /// Span selector for [`Screen::erase_in_line`] (`CSI K`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -664,7 +663,7 @@ impl Screen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::Color;
+    use crate::device::color::Color;
     use crate::screen::margins::Margins;
 
     fn screen() -> Screen {

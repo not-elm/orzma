@@ -12,7 +12,7 @@
 //! own call produced, so an overwritten value would drop a repaint no
 //! later call re-reports.
 
-use crate::schema::ViewportLine;
+use crate::screen::viewport::ViewportLine;
 use std::iter;
 
 /// Viewport rows one operation damaged.

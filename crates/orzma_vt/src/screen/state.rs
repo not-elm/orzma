@@ -1,7 +1,7 @@
 //! The write cursor's mutable state: position, pen, and deferred wrap.
 
-use crate::schema::{GridColumn, ScreenLine};
 use crate::screen::cell::Pen;
+use crate::screen::grid::coords::{GridColumn, ScreenLine};
 
 #[derive(Default)]
 pub(super) struct ScreenState {

@@ -257,7 +257,7 @@ const MAX_PLACEMENTS: usize = 12;
 mod tests {
     use super::*;
     use crate::device::DeviceState;
-    use crate::schema::GridSize;
+    use crate::screen::grid::GridSize;
 
     fn device() -> DeviceState {
         DeviceState::new(GridSize { cols: 8, rows: 3 }, 10)

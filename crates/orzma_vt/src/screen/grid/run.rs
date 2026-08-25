@@ -3,7 +3,8 @@
 //! The row itself is [`Row`](crate::screen::grid::row::Row); a run
 //! is one of its elements.
 
-use crate::schema::{Color, HyperlinkId};
+use crate::device::color::Color;
+use crate::hyperlink::HyperlinkId;
 use bitflags::bitflags;
 
 bitflags! {

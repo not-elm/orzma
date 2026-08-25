@@ -6,12 +6,13 @@
 
 use crate::{
     device::DeviceState,
-    frame::FrameTracker,
+    device::modes::VtModes,
+    frame::{Frame, FrameTracker},
     interpreter::Interpreter,
     interpreter::apc::ApcWebviewVerb,
     placement::{PlacementId, PlacementStore},
-    schema::{Frame, GridSize, Scroll, VtModes},
-    screen::viewport::DisplayOffset,
+    screen::grid::GridSize,
+    screen::viewport::{DisplayOffset, Scroll},
 };
 use std::path::PathBuf;
 
@@ -41,7 +42,7 @@ pub mod prelude {
 ///
 /// The read surface is deliberately frame-granular: cell-level host
 /// features (e.g. hyperlink hover) resolve against the emitted
-/// [`crate::schema::Row`] / [`crate::schema::Run`] data, so the trait
+/// [`crate::screen::grid::row::Row`] / [`crate::screen::grid::run::Run`] data, so the trait
 /// exposes no per-cell read seam and the VT's storage cell never
 /// leaves the crate.
 pub trait Vt {
@@ -58,10 +59,10 @@ pub trait Vt {
     /// # Webview placements
     ///
     /// An APC webview `mount` becomes a [`VtSignal::ApcWebview`] whose
-    /// [`crate::schema::PlacementId`] the VT mints itself; `placement:
+    /// [`crate::placement::PlacementId`] the VT mints itself; `placement:
     /// None` is a policy rejection. The VT owns the placement table
     /// and projects every placement into
-    /// [`crate::schema::Frame::placements`] on each emit; a mount,
+    /// [`crate::frame::Frame::placements`] on each emit; a mount,
     /// unmount, eviction, or projected-geometry change always raises
     /// the chunk liveness, so the frame carrying the new list is
     /// guaranteed to follow. Evictions the VT performs on its own authority
@@ -271,8 +272,9 @@ impl Vt for OrzmaVt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::modes::ScreenKind;
     use crate::frame::damage::DamageSpan;
-    use crate::schema::{ScreenKind, ViewportLine};
+    use crate::screen::viewport::ViewportLine;
 
     fn vt() -> OrzmaVt {
         OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10)

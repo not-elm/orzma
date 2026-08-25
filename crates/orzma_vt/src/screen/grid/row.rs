@@ -1,7 +1,7 @@
 //! One row of elements, ordered left to right.
 
-use crate::schema::GridColumn;
 use crate::screen::cell::Cell;
+use crate::screen::grid::coords::GridColumn;
 use crate::screen::grid::run::Run;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 
@@ -115,7 +115,8 @@ impl IndexMut<GridColumn> for Row<Cell> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{Color, Style};
+    use crate::device::color::Color;
+    use crate::screen::grid::run::Style;
 
     fn cell(c: char, fg: Color, bg: Color, style: Style) -> Cell {
         Cell { c, fg, bg, style }

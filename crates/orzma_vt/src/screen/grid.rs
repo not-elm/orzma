@@ -251,7 +251,7 @@ impl IndexMut<ScreenLine> for Grid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::Color;
+    use crate::device::color::Color;
 
     fn grid(rows: u16, max_history: usize) -> Grid {
         Grid::new(GridSize { cols: 4, rows }, max_history)

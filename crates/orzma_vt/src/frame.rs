@@ -11,13 +11,17 @@
 pub mod damage;
 
 use self::damage::{Damage, DamageSpan};
+use crate::device::color::Palette;
 use crate::device::{ActiveScreen, DeviceState};
-use crate::placement::PlacementStore;
-use crate::schema::{
-    Cursor, GridSize, Hyperlink, Palette, ProjectedPlacement, Row, Run, SelectionRange, ViCursor,
-    ViewportLine,
-};
-use crate::screen::viewport::DisplayOffset;
+use crate::hyperlink::Hyperlink;
+use crate::placement::{PlacementStore, ProjectedPlacement};
+use crate::screen::cursor::Cursor;
+use crate::screen::grid::GridSize;
+use crate::screen::grid::row::Row;
+use crate::screen::grid::run::Run;
+use crate::screen::viewport::{DisplayOffset, ViewportLine};
+use crate::selection::SelectionRange;
+use crate::vi::ViCursor;
 
 /// One emitted frame.
 ///
@@ -57,7 +61,7 @@ pub struct Frame {
     /// Definitions for hyperlink ids referenced by `rows`, merged into
     /// the consumer's retained table. Reserved: empty until the
     /// hyperlink interner is ported, which is safe while
-    /// [`crate::schema::Run::hyperlink_id`] is always `None`.
+    /// [`crate::screen::grid::run::Run::hyperlink_id`] is always `None`.
     pub hyperlinks: Vec<Hyperlink>,
 }
 
@@ -233,7 +237,9 @@ impl FrameTracker {
 mod tests {
     use super::*;
     use crate::device::DeviceState;
-    use crate::schema::{Color, GridColumn, GridLine, GridSize};
+    use crate::device::color::Color;
+    use crate::screen::grid::GridSize;
+    use crate::screen::grid::coords::{GridColumn, GridLine};
 
     struct Rig {
         tracker: FrameTracker,

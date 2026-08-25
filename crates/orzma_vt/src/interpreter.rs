@@ -18,10 +18,10 @@ use crate::interpreter::csi::CsiParams;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::{
+    VtSignal,
     device::DeviceState,
     frame::{FrameTracker, damage::DamageSpan},
     placement::PlacementStore,
-    schema::VtSignal,
 };
 use std::sync::mpsc::Sender;
 use vtparse::{CsiParam, VTActor, VTParser};
@@ -275,7 +275,9 @@ impl Executor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{GridColumn, GridSize, ViewportLine};
+    use crate::screen::grid::GridSize;
+    use crate::screen::grid::coords::GridColumn;
+    use crate::screen::viewport::ViewportLine;
     use std::sync::mpsc::channel;
 
     /// Runs `chunk` through a parser wired to a fresh executor and hands
