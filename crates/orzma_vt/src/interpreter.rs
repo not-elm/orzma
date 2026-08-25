@@ -29,7 +29,8 @@ pub(crate) struct Interpreter {
 
 impl Interpreter {
     /// Decodes one chunk, applying each action to the borrowed
-    /// components through an [`Executor`].
+    /// components through an [`Executor`]; returns whether the chunk
+    /// staged damage or moved the cursor.
     ///
     /// The executor is built here rather than passed in because it
     /// borrows [`SyncBuffer`], which `&mut self` already holds.
@@ -40,8 +41,11 @@ impl Interpreter {
         damage: &mut DamageLedger,
         signal_tx: &mut Sender<VtSignal>,
         chunk: &[u8],
-    ) {
+    ) -> bool {
+        let cursor_before = device.active().cursor();
+        let mut damaged = false;
         let mut executor = Executor {
+            damaged: &mut damaged,
             sync: &mut self.sync,
             device,
             placements,
@@ -49,6 +53,11 @@ impl Interpreter {
             signal_tx,
         };
         self.parser.parse(chunk, &mut executor);
+        // NOTE: The liveness diff compares the whole emitted cursor —
+        // point, shape, blink, and visibility — because the renderer
+        // consumes all four; a point-only comparison would withhold a
+        // `CSI ?25l`-only chunk until unrelated output arrived.
+        *executor.damaged |= cursor_before != executor.device.active().cursor();
         todo!()
     }
 }
@@ -76,6 +85,7 @@ struct SyncBuffer {}
 // TODO: Carry the call-local outbox the signals and replies collect
 // into, and implement `VTActor` — the callbacks land with it.
 struct Executor<'a> {
+    damaged: &'a mut bool,
     sync: &'a mut SyncBuffer,
     device: &'a mut DeviceState,
     placements: &'a mut PlacementStore,
@@ -92,7 +102,7 @@ impl VTActor for Executor<'_> {
             return;
         }
         let damage = self.device.active_mut().print(b);
-        self.damage.stage_if_changed(damage);
+        *self.damaged |= self.damage.stage_if_changed(damage);
     }
 
     fn execute_c0_or_c1(&mut self, control: u8) {
@@ -198,20 +208,21 @@ impl Executor<'_> {
     /// and the LF family that shares its effect).
     fn index(&mut self) {
         let damage = self.device.active_mut().line_feed();
-        self.damage.stage_if_changed(damage);
+        *self.damaged |= self.damage.stage_if_changed(damage);
     }
 
     /// Returns the carriage and moves the cursor down a row (NEL).
     fn next_line(&mut self) {
         self.device.active_mut().carriage_return();
-        self.damage
+        *self.damaged |= self
+            .damage
             .stage_if_changed(self.device.active_mut().line_feed());
     }
 
     /// Moves the cursor up a row, scrolling at the top margin (RI).
     fn reverse_index(&mut self) {
         let damage = self.device.active_mut().reverse_index();
-        self.damage.stage_if_changed(damage);
+        *self.damaged |= self.damage.stage_if_changed(damage);
     }
 
     /// Invokes a G code into GL until the next locking shift (the LS
@@ -253,18 +264,20 @@ mod tests {
     use std::sync::mpsc::channel;
 
     /// Runs `chunk` through a parser wired to a fresh executor and hands
-    /// back the device it wrote to.
+    /// back the device it wrote to, accumulating chunk liveness into
+    /// `damaged`.
     ///
     /// `Interpreter::parse` is still `todo!()`, so the executor is built
     /// here and driven directly rather than through the public entry
     /// point.
-    fn interpret(chunk: &[u8]) -> DeviceState {
+    fn interpret_with(damaged: &mut bool, chunk: &[u8]) -> DeviceState {
         let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
         let mut placements = PlacementStore::new();
         let mut damage = DamageLedger::new();
         let (mut signal_tx, _signal_rx) = channel();
         let mut sync = SyncBuffer::default();
         let mut executor = Executor {
+            damaged,
             sync: &mut sync,
             device: &mut device,
             placements: &mut placements,
@@ -273,6 +286,24 @@ mod tests {
         };
         VTParser::new().parse(chunk, &mut executor);
         device
+    }
+
+    /// Runs `chunk` through a parser wired to a fresh executor and hands
+    /// back the device it wrote to.
+    fn interpret(chunk: &[u8]) -> DeviceState {
+        interpret_with(&mut false, chunk)
+    }
+
+    /// Asserts that staging row damage through the executor marks the
+    /// chunk damaged.
+    ///
+    /// Case: a shell echoes one character, and the owner must open its
+    /// coalesce window for the frame that repaints the row.
+    #[test]
+    fn staged_row_damage_marks_the_chunk_damaged() {
+        let mut damaged = false;
+        interpret_with(&mut damaged, b"a");
+        assert!(damaged);
     }
 
     /// Asserts that the raw C1 byte for RI reaches the screen.
