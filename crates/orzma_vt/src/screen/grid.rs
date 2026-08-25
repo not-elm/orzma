@@ -1,13 +1,26 @@
 //! Cell storage: the visible screen plus the scrollback ring.
 
+pub(crate) mod coords;
 pub mod row;
 pub mod run;
 
-use crate::schema::{GridLine, GridSize, ScreenLine};
 use crate::screen::cell::Cell;
+use crate::screen::grid::coords::{GridLine, ScreenLine};
 use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
+
+/// Grid dimensions in cells.
+///
+/// The row count is the source of truth for "one screenful" (scroll
+/// paging) and for verifying an applied resize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GridSize {
+    /// Visible column count.
+    pub cols: u16,
+    /// Visible row count.
+    pub rows: u16,
+}
 
 /// Stable identity of one grid row, minted when the row enters the ring.
 ///

@@ -12,9 +12,7 @@
 
 mod color;
 mod cursor;
-mod grid;
 mod modes;
-mod scroll;
 mod selection;
 mod signal;
 mod vi;
@@ -22,14 +20,14 @@ mod webview;
 
 pub use crate::frame::{DirtyRow, Frame};
 pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
+pub use crate::screen::grid::GridSize;
+pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 pub use crate::screen::grid::row::Row;
 pub use crate::screen::grid::run::{Run, Style};
-pub use crate::screen::viewport::DisplayOffset;
+pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine};
 pub use color::*;
 pub use cursor::*;
-pub use grid::*;
 pub use modes::*;
-pub use scroll::*;
 pub use selection::*;
 pub use signal::*;
 pub use vi::*;

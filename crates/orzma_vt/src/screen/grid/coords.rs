@@ -1,20 +1,8 @@
-//! Grid vocabulary: [`GridSize`], the active-grid coordinate types
-//! [`GridLine`], [`GridColumn`], and [`GridPoint`], their viewport
-//! projection [`ViewportLine`], and the screen-relative [`ScreenLine`].
+//! Active-grid coordinates: the line and column types writes and grid
+//! indexing address cells with, plus their projection into the
+//! viewport.
 
-use crate::screen::viewport::DisplayOffset;
-
-/// Grid dimensions in cells.
-///
-/// The row count is the source of truth for "one screenful" (scroll
-/// paging) and for verifying an applied resize.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GridSize {
-    /// Visible column count.
-    pub cols: u16,
-    /// Visible row count.
-    pub rows: u16,
-}
+use crate::screen::viewport::{DisplayOffset, ViewportLine};
 
 /// A line in active-grid coordinates: `0` is the top of the active
 /// screen area, negative values reach into scrollback history.
@@ -29,6 +17,8 @@ pub struct GridSize {
 pub struct GridLine(pub i32);
 
 impl GridLine {
+    /// Projects the line into viewport coordinates, or `None` when it
+    /// sits outside the visible rows.
     #[inline]
     pub fn to_viewport(&self, offset: DisplayOffset, rows: u16) -> Option<ViewportLine> {
         // NOTE: `DisplayOffset` is a `u32` and does not bound itself, so
@@ -42,20 +32,6 @@ impl GridLine {
     }
 }
 
-/// A line in viewport coordinates: `0` is the topmost visible row.
-///
-/// It is the viewport projection of a [`GridLine`], related by
-/// `viewport_line = grid_line + display_offset`. Negative values sit
-/// above the viewport, values at or past the viewport row count sit
-/// below it. Clamping off-viewport values to the `-1` / row-count
-/// sentinels is the responsibility of the conversion that produces
-/// the value, not of this type.
-/// The ordering is spatial — where the row sits in the window this
-/// frame — not an identity: the same `ViewportLine` names different
-/// content once the user scrolls or the grid is resized.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct ViewportLine(pub u16);
-
 /// A row of the active screen: `0` is the top row, and the value never
 /// reaches history.
 ///
@@ -68,6 +44,7 @@ pub struct ViewportLine(pub u16);
 pub struct ScreenLine(pub u16);
 
 impl ScreenLine {
+    /// The top row of the active screen.
     pub const TOP: ScreenLine = ScreenLine(0);
 }
 
