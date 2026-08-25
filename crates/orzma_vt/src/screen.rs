@@ -434,6 +434,12 @@ impl Screen {
     /// [`Self::hold_scrolled_viewport`] also writes the offset, so this is
     /// not the only seam that does; it is the seam a future
     /// `DeviceState::scroll` will drive.
+    ///
+    /// # Invariants
+    ///
+    /// The caller must stage full damage: this moves the viewport
+    /// basis, so a frame that carried the new offset without every row
+    /// would repaint stale content.
     pub fn set_display_offset(&mut self, offset: DisplayOffset) {
         let history =
             u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
@@ -582,8 +588,7 @@ impl Screen {
         self.state.column = column;
     }
 
-    /// Seats the cursor at the home the current [`OriginMode`] defines,
-    /// for a control function that also changed a setting.
+    /// Seats the cursor at the home the current [`OriginMode`] defines.
     fn seat_home(&mut self) {
         self.seat_cursor(ScreenLine(0), GridColumn(0));
     }

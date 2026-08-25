@@ -87,7 +87,10 @@ pub trait Vt {
     ///
     /// - The first emitted frame carries every viewport row, as does
     ///   every frame after a viewport-basis change (resize, offset,
-    ///   alternate-screen flip).
+    ///   alternate-screen flip), because every basis change stages full
+    ///   damage. The emit-time offset diff is only a liveness backstop:
+    ///   it guarantees such a frame is emitted, not that it carries
+    ///   rows.
     /// - A frame's placements and display offset describe the same
     ///   instant as its rows.
     fn frame(&mut self) -> Option<Frame>;
@@ -140,12 +143,12 @@ pub struct VtUpdate {
 /// The fields are wired; several methods are still stubs. The
 /// components land one at a time, in the order
 /// `docs/orzma_vt_internal_design.md` §7 sets out.
-#[expect(
-    dead_code,
-    reason = "the Vt methods read these fields once their components land"
-)]
 pub struct OrzmaVt {
     /// Byte decoding plus the CSI ?2026 synchronized-update buffer.
+    #[expect(
+        dead_code,
+        reason = "OrzmaVt::interpret reaches the parser once the executor's callbacks land"
+    )]
     interpreter: Interpreter,
     /// The emulated device: screens, modes, tabs, colors, title.
     device: DeviceState,

@@ -66,8 +66,10 @@ impl Frame {
     ///
     /// - The rows, the cursor, the offset, and the projection all come
     ///   from one borrow of `device`, so a frame describes one instant.
-    /// - `state` is updated only when a frame is returned, so the
-    ///   retained values always mirror what the consumer last saw.
+    /// - `state` never retains a value the consumer does not see: the
+    ///   section diffs retain eagerly during the attempt, and a `Some`
+    ///   from any of them is a gate disjunct, so an attempt that
+    ///   retains always emits.
     pub(crate) fn emit(
         state: &mut EmitState,
         damage: &mut DamageLedger,
@@ -80,6 +82,10 @@ impl Frame {
         let staged = damage.take();
         let placements = state.diff_placements(placements, device.active_screen());
         let palette = state.diff_palette(&device.palette());
+        // NOTE: The section diffs above retain eagerly, so any new
+        // suppression condition added to this gate must keep "a Some
+        // from a diff forces emission" true — otherwise the consumer
+        // keeps a value the retained state claims it saw.
         if staged.is_none()
             && placements.is_none()
             && palette.is_none()

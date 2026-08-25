@@ -14,9 +14,10 @@ use std::mem;
 ///
 /// # Invariants
 ///
-/// The retained values update only when a frame is actually emitted:
-/// they must mirror what the consumer last saw, so an update on a
-/// cancelled attempt would desync every later diff.
+/// A retained value must mirror what the consumer last saw. The diff
+/// methods retain eagerly during an emit attempt, which is sound only
+/// while a changed section forces that attempt to emit — the emitter's
+/// gate treats every `Some` diff as a reason to emit.
 pub(crate) struct EmitState {
     cursor: Cursor,
     display_offset: DisplayOffset,
