@@ -21,7 +21,7 @@ mod signal;
 mod vi;
 mod webview;
 
-pub use crate::frame::{DirtyRow, Frame, FrameDelta, FrameSnapshot};
+pub use crate::frame::{DirtyRow, Frame};
 pub use crate::screen::grid::row::Row;
 pub use crate::screen::grid::run::{Run, Style};
 pub use crate::screen::viewport::DisplayOffset;

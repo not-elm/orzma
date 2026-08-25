@@ -2,7 +2,7 @@
 //! drained from the VT (`TtyBellSignal`, `TtyTitleChangedSignal`,
 //! `TtyTitleResetSignal`, `TtyClipboardStoreSignal`, `TtyCwdChangedSignal`,
 //! `TtyApcWebviewSignal`, `TtyWebviewEvictedSignal`, `TtyModeChangedSignal`, `TtyChildExitSignal`,
-//! `TtyFrameSnapshotSignal`, `TtyFrameDeltaSignal`).
+//! `TtyFrameSignal`).
 //! Inbound requests fired by the host UI live in `requests.rs`.
 
 use crate::OrzmaTtyHandle;
@@ -93,22 +93,15 @@ pub struct TtyWebviewEvictedSignal {
     pub placements: Vec<PlacementId>,
 }
 
-/// Fired when the terminal emits a full-repaint snapshot frame.
+/// Fired when the terminal emits a frame; a full repaint carries every
+/// viewport row, and the changed-only sections (`placements`,
+/// `palette`) are `None` when unchanged since the previous frame.
 #[derive(EntityEvent, Debug)]
-pub struct TtyFrameSnapshotSignal {
+pub struct TtyFrameSignal {
     #[event_target]
     pub terminal: Entity,
-    /// The emitted snapshot.
-    pub frame: FrameSnapshot,
-}
-
-/// Fired when the terminal emits a differential frame.
-#[derive(EntityEvent, Debug)]
-pub struct TtyFrameDeltaSignal {
-    #[event_target]
-    pub terminal: Entity,
-    /// The emitted delta.
-    pub delta: FrameDelta,
+    /// The emitted frame.
+    pub frame: Frame,
 }
 
 pub(crate) struct OrzmaTtySignalPlugin;
@@ -131,12 +124,8 @@ fn pump_terminals(mut commands: Commands, mut terms: Query<(Entity, &mut OrzmaTt
                 TtySignal::Vt(signal) => trigger_vt_signal(&mut commands, terminal, signal),
             }
         }
-        match o.frame {
-            Some(Frame::Snapshot(frame)) => {
-                commands.trigger(TtyFrameSnapshotSignal { terminal, frame })
-            }
-            Some(Frame::Delta(delta)) => commands.trigger(TtyFrameDeltaSignal { terminal, delta }),
-            None => {}
+        if let Some(frame) = o.frame {
+            commands.trigger(TtyFrameSignal { terminal, frame });
         }
     }
 }

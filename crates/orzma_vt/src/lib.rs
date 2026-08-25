@@ -7,6 +7,7 @@
 use crate::{
     damage::DamageLedger,
     device::DeviceState,
+    emit::EmitState,
     interpreter::Interpreter,
     placement::PlacementStore,
     schema::{Frame, GridSize, Scroll, VtModes, VtSignal},
@@ -59,11 +60,10 @@ pub trait Vt {
     /// [`crate::schema::PlacementId`] the VT mints itself; `placement:
     /// None` is a policy rejection. The VT owns the placement table
     /// and projects every placement into
-    /// [`crate::schema::FrameSnapshot::placements`] /
-    /// [`crate::schema::FrameDelta::placements`] on each emit; a
-    /// mount, unmount, eviction, or projected-geometry change always
-    /// stages damage, so the frame carrying the new list is guaranteed
-    /// to follow. Evictions the VT performs on its own authority
+    /// [`crate::schema::Frame::placements`] on each emit; a mount,
+    /// unmount, eviction, or projected-geometry change always raises
+    /// the chunk liveness, so the frame carrying the new list is
+    /// guaranteed to follow. Evictions the VT performs on its own authority
     /// (history trim, alternate-screen teardown) surface as
     /// [`VtSignal::WebviewEvicted`]. Ids are never reused within a
     /// session.
@@ -78,18 +78,18 @@ pub trait Vt {
     /// [`VtSignal::WebviewEvicted`].
     fn interpret(&mut self, chunk: &[u8]) -> VtUpdate;
 
-    /// Builds the frame for the staged damage, consuming it; `None`
-    /// when nothing is staged.
-    ///
-    /// Staged full damage yields a [`Frame::Snapshot`]; row damage
-    /// yields a [`Frame::Delta`], possibly empty with current metadata.
+    /// Builds the frame for the staged damage and section diffs,
+    /// consuming the staged damage; `None` when nothing observable
+    /// changed — no rows staged and every diffed section equal to its
+    /// last-emitted value.
     ///
     /// # Invariants
     ///
-    /// - The first emitted frame, and every alternate-screen flip, is a
-    ///   [`Frame::Snapshot`].
-    /// - A frame's placements and display offset describe the
-    ///   same instant as its rows.
+    /// - The first emitted frame carries every viewport row, as does
+    ///   every frame after a viewport-basis change (resize, offset,
+    ///   alternate-screen flip).
+    /// - A frame's placements and display offset describe the same
+    ///   instant as its rows.
     fn frame(&mut self) -> Option<Frame>;
 
     /// Resizes the grid, reflowing content; returns whether the
@@ -125,9 +125,9 @@ pub trait Vt {
 /// damage.
 #[derive(Debug, Default)]
 pub struct VtUpdate {
-    /// Whether this chunk staged any damage, so the owner knows to open
-    /// its coalesce window. Metadata-only damage counts: the frame that
-    /// carries the new placement list must still be emitted.
+    /// Whether this chunk produced anything frame-relevant — staged row
+    /// damage, cursor motion, or a mutated frame-visible section — so
+    /// the owner knows to open its coalesce window.
     pub damaged: bool,
     /// Out-of-band signals, in byte-stream order.
     pub signals: Vec<VtSignal>,
@@ -153,10 +153,12 @@ pub struct OrzmaVt {
     placements: PlacementStore,
     /// Damage staged for the next emit, from every source.
     damage: DamageLedger,
+    /// Last-emitted values the frame diff compares against.
+    emit: EmitState,
 }
 
 impl OrzmaVt {
-    /// Builds a terminal whose first frame is a full snapshot.
+    /// Builds a terminal whose first frame carries every viewport row.
     ///
     /// # Invariants
     ///
@@ -164,8 +166,8 @@ impl OrzmaVt {
     /// caller (the same contract as [`Vt::resize`]).
     ///
     /// The ledger must come from [`DamageLedger::new`]: its seeded full
-    /// damage is what makes that first frame a snapshot, so a
-    /// constructor that starts from an empty ledger paints nothing
+    /// damage is what makes the first frame carry every viewport row,
+    /// so a constructor that starts from an empty ledger paints nothing
     /// until the first PTY output arrives.
     pub fn new(size: GridSize, max_history: usize) -> Self {
         Self {
@@ -173,6 +175,7 @@ impl OrzmaVt {
             device: DeviceState::new(size, max_history),
             placements: PlacementStore::new(),
             damage: DamageLedger::new(),
+            emit: EmitState::default(),
         }
     }
 }
@@ -190,11 +193,12 @@ impl Vt for OrzmaVt {
     }
 
     fn frame(&mut self) -> Option<Frame> {
-        Some(Frame::emit(
-            self.damage.take()?,
+        Frame::emit(
+            &mut self.emit,
+            &mut self.damage,
             &self.device,
             &self.placements,
-        ))
+        )
     }
 
     fn resize(&mut self, size: GridSize) -> bool {
@@ -227,27 +231,26 @@ mod tests {
         OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10)
     }
 
-    /// Asserts that a fresh terminal's first frame is a full snapshot.
-    ///
-    /// The agreed mechanism is the ledger's seeded full damage rather
-    /// than a first-emit flag on the VT: a flag would have to be cleared
-    /// in every emit path, while the seed is spent by the same `take`
-    /// every other frame goes through.
+    /// Asserts that a fresh terminal's first frame carries every
+    /// viewport row.
     ///
     /// Case: a terminal spawns and the renderer has nothing on screen
     /// yet, so the shell's first prompt must arrive with the whole
     /// viewport behind it.
     #[test]
-    fn the_first_frame_is_a_snapshot() {
-        assert!(matches!(vt().frame(), Some(Frame::Snapshot(_))));
+    fn the_first_frame_carries_every_viewport_row() {
+        let mut vt = vt();
+        let frame = vt.frame().expect("the seeded Full emits");
+        assert_eq!(frame.rows.len(), 3);
     }
 
-    /// Asserts that emitting drains the staged damage.
+    /// Asserts that emitting drains the staged damage and settles the
+    /// diffs, so an immediate second poll emits nothing.
     ///
     /// Case: the host polls for a frame twice in one tick, and the
     /// second poll must not repaint what the first one already sent.
     #[test]
-    fn an_emitted_frame_leaves_nothing_staged() {
+    fn an_emitted_frame_leaves_nothing_to_emit() {
         let mut vt = vt();
         vt.frame();
         assert!(vt.frame().is_none());
@@ -270,10 +273,8 @@ mod tests {
             vt.device.active_mut().line_feed();
         }
         vt.device.active_mut().set_display_offset(DisplayOffset(1));
-        let Some(Frame::Delta(delta)) = vt.frame() else {
-            panic!("staged row damage emits a delta");
-        };
-        assert_eq!(delta.dirty_rows[0].line, ViewportLine(0));
-        assert_eq!(delta.dirty_rows[0].contents[0].text, "x   ");
+        let frame = vt.frame().expect("staged row damage emits");
+        assert_eq!(frame.rows[0].line, ViewportLine(0));
+        assert_eq!(frame.rows[0].contents[0].text, "x   ");
     }
 }

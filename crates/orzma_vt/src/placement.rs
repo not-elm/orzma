@@ -61,6 +61,7 @@ impl PlacementStore {
     }
 
     /// Projects into a fresh `Vec`; see [`Self::project_into`].
+    #[cfg(test)]
     pub fn project(&self, active: ActiveScreen<'_>) -> Vec<ProjectedPlacement> {
         let mut out = Vec::new();
         self.project_into(&mut out, active);

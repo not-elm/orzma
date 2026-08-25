@@ -4,10 +4,6 @@
 //! detection: chunk-local liveness decides when to attempt an emit,
 //! and this diff decides what the frame carries — `Some` means
 //! genuinely different from what the consumer last saw.
-#![expect(
-    dead_code,
-    reason = "Frame::emit reaches this state when the flat frame lands"
-)]
 
 use crate::device::ActiveScreen;
 use crate::placement::PlacementStore;
