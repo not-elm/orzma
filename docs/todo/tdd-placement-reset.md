@@ -8,7 +8,7 @@
 | TC-04 | `a_reset_still_names_a_placement_whose_anchor_already_left_the_grid` | C3 + LC | High | 未実装。`screen.rs` の `mod placements` へ追加 |
 | TC-05 | `a_second_reset_reports_no_further_eviction` | C3 + LC | Medium | 未実装。`screen.rs` の `mod placements` へ追加 |
 | TC-06 | `a_mount_is_accepted_once_the_sweep_frees_the_cap` | CAP + C3 | Medium | 未実装。`device.rs` の `mod tests` へ追加 |
-| TC-A1 | `a_reset_does_not_rewind_the_device_placement_id_counter` | PI | High（実装上の罠） | 未実装。`device.rs` の `mod tests` へ追加 |
+| TC-A1 | `a_reset_does_not_rewind_the_device_placement_id_counter` | PI | High（実装上の罠） | 実装済み。`device.rs` の `mod tests` |
 
 Source タグ — **C3**: ECMA-48 p.69 L3214（初期状態への復帰）／**LC**: `VtSignal::WebviewEvicted` と
 `evict_lost_anchors` の doc が定めるライフサイクル契約／**CAP**: `MAX_PLACEMENTS` の doc／
@@ -20,11 +20,10 @@ TC-01 から TC-06 までが仕様契約 C3 とそのライフサイクル契約
 と `evict_lost_anchors()`（チャンク末尾の sweep）の 2 段へ変わった。`PlacementStore` は削除済みで、
 `Screen` が自分の表を、`DeviceState` が id 採番・cap・アドレス空間を持つ（設計は
 [placement-ownership-design.md](../superpowers/specs/2026-08-26-placement-ownership-design.md)）。
-`DeviceState::reset()`（[ris.md](ris.md) #3）はまだ実装されていないので、テストは `Screen::reset()`
-と `Screen::evict_lost_anchors()` / `DeviceState::evict_lost_anchors()` を直接呼ぶ形になる。単一
-スクリーンで足りるケースは `screen.rs` の `mod placements`（`fn screen()` / `fn mount()` ヘルパを使う）
-へ、cap や id 採番など端末スコープの契約が要るケースは `device.rs` の `mod tests`（`fn device()` /
-`fn mount()` ヘルパを使う）へ置く。
+`DeviceState::reset()`（[ris.md](ris.md) #3）は実装済みなので、cap や id 採番など端末スコープの
+契約が要るケースはそれを、単一スクリーンで足りるケースは `Screen::reset()` を直接呼ぶ。前者は
+`device.rs` の `mod tests`（`fn device()` / `fn mount()` ヘルパを使う）へ、後者は `screen.rs` の
+`mod placements`（`fn screen()` / `fn mount()` ヘルパを使う）へ置く。
 
 ## TC-01 — 全 placement を破棄し、その id を名指す
 
@@ -176,12 +175,12 @@ fn a_second_reset_reports_no_further_eviction() {
 | | |
 | - | - |
 | Setup | `device()`; `MAX_PLACEMENTS` 個の異なる view を mount し、次の mount が拒否される状態にする |
-| Act | アクティブスクリーンを `reset()` し、`device.evict_lost_anchors()` を呼んでから再度 mount する |
+| Act | `device.reset()` を呼び、続けて `device.evict_lost_anchors()` を呼んでから再度 mount する |
 | Expect | `evict_lost_anchors()` が `MAX_PLACEMENTS` 個の id を名指す **[CAP]** ／ その後の mount が受理される **[C3]** |
 
 cap は両スクリーンを合算して数える（`MAX_PLACEMENTS` の doc）。cap の解放はチャンク末尾の sweep
 まで遅延するので（[placement-ownership-design.md](../superpowers/specs/2026-08-26-placement-ownership-design.md)
-の「この一本化の代償 (c)」）、`reset()` を呼んだだけではまだ解放されておらず、`evict_lost_anchors()`
+の「この一本化の代償 (c)」）、`device.reset()` を呼んだだけではまだ解放されておらず、`evict_lost_anchors()`
 を挟んで初めて後続の mount が通ることを確かめる。
 
 ```rust
@@ -199,7 +198,7 @@ fn a_mount_is_accepted_once_the_sweep_frees_the_cap() {
     }
     assert!(mount(&mut device, "overflow").is_none());
 
-    assert_eq!(device.active_mut().reset(), None);
+    assert_eq!(device.reset(), None);
     assert_eq!(device.evict_lost_anchors().len(), MAX_PLACEMENTS);
 
     assert!(mount(&mut device, "after-reset").is_some());
@@ -211,11 +210,10 @@ fn a_mount_is_accepted_once_the_sweep_frees_the_cap() {
 出典が囲っている型の doc であってマニュアルではないため、他のケースから分離してある。対象は
 `Screen` の行 id ではなく `DeviceState::next_placement_id`（端末スコープの placement id 採番）に
 変わった。`Screen::reset()` はこのカウンタに一切触れない — id 採番は `DeviceState` の責務であって
-`Screen` の 8 フィールドのどれにも属さないため、reset の対象にそもそも入っていない。したがって
-このテストが今すぐ守っているのは「reset がカウンタを直接いじらない」という構造上自明な事実だが、
-[ris.md](ris.md) #3（`DeviceState::reset()`）が実装されて両スクリーンをまとめて作り直すようになった
-ときに、その実装が `*self = Self::new()` のような素朴な形を取って `next_placement_id` を巻き戻さない
-よう先回りして固定しておく。
+`Screen` の 8 フィールドのどれにも属さないため、reset の対象にそもそも入っていない。
+[ris.md](ris.md) #3（`DeviceState::reset()`）が実装された今、このテストが守っているのは、その実装が
+`*self = Self::new()` のような素朴な形を取って `next_placement_id` を巻き戻さないことそのものである。
+素朴な形へ書き換えるとこのテストだけが落ちることを確認してある。
 
 `PlacementId` の invariant「Ids are minted monotonically per terminal and never reused within a
 session, so a delayed id-addressed lifecycle event can never target a successor placement」を
@@ -226,8 +224,8 @@ session, so a delayed id-addressed lifecycle event can never target a successor 
 （`LineId` 側）と衝突しないよう `device_placement_id` を含めてある。
 
 ```rust
-/// Asserts that resetting a screen does not rewind the device's
-/// placement id counter.
+/// Asserts that a reset does not rewind the device's placement id
+/// counter.
 ///
 /// Case: a webview is mounted, the user runs `reset`, and the program
 /// mounts a fresh view while the eviction signal for the old one is
@@ -236,7 +234,7 @@ session, so a delayed id-addressed lifecycle event can never target a successor 
 fn a_reset_does_not_rewind_the_device_placement_id_counter() {
     let mut device = device();
     let old = mount(&mut device, "a").expect("mount accepted");
-    assert_eq!(device.active_mut().reset(), None);
+    assert_eq!(device.reset(), None);
     device.evict_lost_anchors();
 
     let new = mount(&mut device, "b").expect("mount after reset accepted");
