@@ -244,7 +244,7 @@ impl ScreenPlacements {
     /// complete list, not a diff.
     pub fn project(
         &self,
-        line_of: impl Fn(LineId) -> Option<GridLine>,
+        line_of: impl FnMut(LineId) -> Option<GridLine>,
     ) -> Vec<AnchoredPlacement>;
 
     /// Drops the placements `line_of` can no longer resolve and names them.
@@ -256,7 +256,7 @@ impl ScreenPlacements {
     /// placement can become unresolvable without also becoming evictable.
     pub fn evict_lost_anchors(
         &mut self,
-        line_of: impl Fn(LineId) -> Option<GridLine>,
+        line_of: impl FnMut(LineId) -> Option<GridLine>,
     ) -> Vec<PlacementId>;
 
     /// Empties the table and names every id it held.
@@ -280,7 +280,11 @@ struct Placement {
 必要が無いよう、`mount` が構成要素を受け取る形にした。
 
 anchor の解決をクロージャで受けるのは、`ScreenPlacements` が `Grid` を知らずに済ませるため。
-`project` と `evict_lost_anchors` は同じ `impl Fn(LineId) -> Option<GridLine>` を受ける。
+`project` と `evict_lost_anchors` は同じ `impl FnMut(LineId) -> Option<GridLine>` を受ける。
+`Fn` ではなく `FnMut` なのは、テストが呼び出し回数を数えるクロージャを渡せるようにするため。
+production のリゾルバ `|anchor| self.grid.grid_line(anchor)` は `Fn` なので、この緩和で
+失われるものは無い。片方だけを緩めると「両者は同じリゾルバを受ける」という設計の要点の
+ちょうど真上に型の継ぎ目ができるので、緩めるなら両方そろえる。
 
 生死判定は「射影が省く placement」と同義でなければならない。2 本の式に分けると、片方だけが
 将来変わったときに**射影されないのに sweep もされない** placement が生まれ、cap スロットと
