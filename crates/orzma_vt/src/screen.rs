@@ -92,6 +92,7 @@ pub(crate) enum EraseScreenMode {
     All,
 }
 
+/// Construction.
 impl Screen {
     /// Builds a blank screen with the cursor at the origin and the
     /// viewport pinned to the live tail.
@@ -106,7 +107,10 @@ impl Screen {
             checkpoint: Checkpoint::default(),
         }
     }
+}
 
+/// Graphic character output.
+impl Screen {
     /// Prints one character at the cursor with the current pen,
     /// wrapping first when the deferred wrap is armed.
     ///
@@ -138,7 +142,14 @@ impl Screen {
             _ => self.damage_span(self.state.line, self.state.line),
         }
     }
+}
 
+/// Cursor addressing.
+///
+/// None of these report damage. A move that only repositions the write
+/// cursor is carried by the per-chunk cursor diff, so returning a
+/// `DamageSpan` would repaint rows that did not change.
+impl Screen {
     /// Moves the cursor one column left and disarms the deferred wrap.
     ///
     /// A backspace at column zero stays there: xterm reaches the
@@ -165,6 +176,56 @@ impl Screen {
         self.state.pending_wrap = false;
     }
 
+    /// Addresses the cursor at a one-based line and column, `None` for
+    /// an omitted parameter.
+    ///
+    /// A zero addresses the first line or column, the same as a one.
+    /// [`Self::seat_cursor`] resolves the line against the origin mode
+    /// and clamps both axes, so a line outside the addressable region
+    /// stops at its edge rather than being refused.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CUP` (`CSI Pl ; Pc H`)
+    /// - `HVP` (`CSI Pl ; Pc f`)
+    pub fn move_cursor_to(&mut self, line: Option<u16>, column: Option<u16>) {
+        let line = match line {
+            None | Some(0) => 1,
+            Some(value) => value,
+        };
+        let column = match column {
+            None | Some(0) => 1,
+            Some(value) => value,
+        };
+        self.seat_cursor(ScreenLine(line - 1), GridColumn(column - 1));
+    }
+
+    /// Seats the cursor at `line` — measured from the origin the current
+    /// [`OriginMode`] defines — and `column`, clamping both axes and
+    /// disarming the deferred wrap. The disarm follows xterm, whose
+    /// `CursorSet` ends in `ResetWrap`, unlike a linefeed, which
+    /// preserves the wrap on purpose.
+    ///
+    /// Every control function that addresses the cursor ends here, so
+    /// the origin, the clamps, and the wrap are decided in one place and
+    /// cannot drift between them.
+    fn seat_cursor(&mut self, line: ScreenLine, column: GridColumn) {
+        let GridSize { cols, rows } = self.grid.size();
+        let (origin, last) = match self.scroll_region.origin_mode() {
+            OriginMode::WithinMargins => (
+                self.scroll_region.top_margin(),
+                self.scroll_region.bottom_margin(),
+            ),
+            OriginMode::UpperLeftCorner => (ScreenLine(0), ScreenLine(rows - 1)),
+        };
+        self.state.line = ScreenLine(line.0.saturating_add(origin.0).min(last.0));
+        self.state.column = GridColumn(column.0.min(cols - 1));
+        self.state.pending_wrap = false;
+    }
+}
+
+/// Line feeding and region scrolling.
+impl Screen {
     /// Moves the cursor down one row, scrolling at the bottom margin;
     /// the deferred-wrap flag is deliberately preserved.
     ///
@@ -230,6 +291,31 @@ impl Screen {
         None
     }
 
+    /// Follows a one-row scroll with the offset that keeps a scrolled
+    /// viewport on the content it was showing.
+    ///
+    /// A viewport pinned to the live tail stays pinned — that is what
+    /// following the newest output means. A scrolled one counts one row
+    /// further back, because the row it shows just moved that far from
+    /// the tail.
+    ///
+    /// # Invariants
+    ///
+    /// The offset is clamped to the history that survives the scroll.
+    /// At capacity the row the user was reading has been evicted, so
+    /// the view drifts by one; there is nothing left to hold on.
+    fn hold_scrolled_viewport(&mut self) {
+        if self.viewport.offset == DisplayOffset(0) {
+            return;
+        }
+        let history =
+            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
+        self.viewport.offset = DisplayOffset(self.viewport.offset.0.saturating_add(1).min(history));
+    }
+}
+
+/// Erasure.
+impl Screen {
     /// Erases part of the cursor row with the pen background (BCE);
     /// [`EraseLineMode::ToEnd`] is a no-op while the deferred wrap is
     /// armed.
@@ -292,7 +378,9 @@ impl Screen {
             }
         }
     }
+}
 
+impl Screen {
     /// Moves the cursor forward `count` tabulation stops.
     ///
     /// The right edge is this screen's last column, so the same stop
@@ -527,30 +615,6 @@ impl Screen {
         self.seat_home();
     }
 
-    /// Addresses the cursor at a one-based line and column, `None` for
-    /// an omitted parameter.
-    ///
-    /// A zero addresses the first line or column, the same as a one.
-    /// [`Self::seat_cursor`] resolves the line against the origin mode
-    /// and clamps both axes, so a line outside the addressable region
-    /// stops at its edge rather than being refused.
-    ///
-    /// # Control Functions
-    ///
-    /// - `CUP` (`CSI Pl ; Pc H`)
-    /// - `HVP` (`CSI Pl ; Pc f`)
-    pub fn move_cursor_to(&mut self, line: Option<u16>, column: Option<u16>) {
-        let line = match line {
-            None | Some(0) => 1,
-            Some(value) => value,
-        };
-        let column = match column {
-            None | Some(0) => 1,
-            Some(value) => value,
-        };
-        self.seat_cursor(ScreenLine(line - 1), GridColumn(column - 1));
-    }
-
     /// Resets the screen to its power-up state.
     ///
     /// Covers the screen-scoped actions of `RIS`: the grid and its
@@ -582,28 +646,6 @@ impl Screen {
         self.character_set_mapping = CharacterSetMapping::default();
         self.checkpoint = Checkpoint::default();
         dirty.then_some(DamageSpan::Full)
-    }
-
-    /// Follows a one-row scroll with the offset that keeps a scrolled
-    /// viewport on the content it was showing.
-    ///
-    /// A viewport pinned to the live tail stays pinned — that is what
-    /// following the newest output means. A scrolled one counts one row
-    /// further back, because the row it shows just moved that far from
-    /// the tail.
-    ///
-    /// # Invariants
-    ///
-    /// The offset is clamped to the history that survives the scroll.
-    /// At capacity the row the user was reading has been evicted, so
-    /// the view drifts by one; there is nothing left to hold on.
-    fn hold_scrolled_viewport(&mut self) {
-        if self.viewport.offset == DisplayOffset(0) {
-            return;
-        }
-        let history =
-            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
-        self.viewport.offset = DisplayOffset(self.viewport.offset.0.saturating_add(1).min(history));
     }
 
     /// Reports the given screen rows as damage, in the viewport
@@ -644,29 +686,6 @@ impl Screen {
     /// Seats the cursor at the home the current [`OriginMode`] defines.
     fn seat_home(&mut self) {
         self.seat_cursor(ScreenLine(0), GridColumn(0));
-    }
-
-    /// Seats the cursor at `line` — measured from the origin the current
-    /// [`OriginMode`] defines — and `column`, clamping both axes and
-    /// disarming the deferred wrap. The disarm follows xterm, whose
-    /// `CursorSet` ends in `ResetWrap`, unlike a linefeed, which
-    /// preserves the wrap on purpose.
-    ///
-    /// Every control function that addresses the cursor ends here, so
-    /// the origin, the clamps, and the wrap are decided in one place and
-    /// cannot drift between them.
-    fn seat_cursor(&mut self, line: ScreenLine, column: GridColumn) {
-        let GridSize { cols, rows } = self.grid.size();
-        let (origin, last) = match self.scroll_region.origin_mode() {
-            OriginMode::WithinMargins => (
-                self.scroll_region.top_margin(),
-                self.scroll_region.bottom_margin(),
-            ),
-            OriginMode::UpperLeftCorner => (ScreenLine(0), ScreenLine(rows - 1)),
-        };
-        self.state.line = ScreenLine(line.0.saturating_add(origin.0).min(last.0));
-        self.state.column = GridColumn(column.0.min(cols - 1));
-        self.state.pending_wrap = false;
     }
 }
 
