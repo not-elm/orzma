@@ -165,6 +165,10 @@ impl VTActor for Executor<'_> {
             (b'M', []) => self.reverse_index(),
             (b'N', []) => self.single_shift(SingleShift::G2),
             (b'O', []) => self.single_shift(SingleShift::G3),
+            (b'c', []) => {
+                let damage = self.device.reset();
+                self.stage(damage);
+            }
             (b'n', []) => self.invoke_character_set(GCode::G2),
             (b'o', []) => self.invoke_character_set(GCode::G3),
             (dscs, [designator @ (b'(' | b')' | b'*' | b'+')]) => {
@@ -271,6 +275,7 @@ impl Executor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::screen::cell::Cell;
     use crate::screen::grid::GridSize;
     use crate::screen::grid::coords::GridColumn;
     use crate::screen::viewport::ViewportLine;
@@ -303,6 +308,29 @@ mod tests {
     /// back the device it wrote to.
     fn interpret(chunk: &[u8]) -> DeviceState {
         interpret_with(&mut false, chunk)
+    }
+
+    /// Runs `setup` and then `chunk` over one device through separate
+    /// executors, and reports the liveness `chunk` alone produced.
+    fn liveness_after(setup: &[u8], chunk: &[u8]) -> bool {
+        let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
+        let mut tracker = FrameTracker::new();
+        let (mut signal_tx, _signal_rx) = channel();
+        let mut sync = SyncBuffer::default();
+        let mut parser = VTParser::new();
+        let mut damaged = false;
+        for bytes in [setup, chunk] {
+            damaged = false;
+            let mut executor = Executor {
+                damaged: &mut damaged,
+                sync: &mut sync,
+                device: &mut device,
+                tracker: &mut tracker,
+                signal_tx: &mut signal_tx,
+            };
+            parser.parse(bytes, &mut executor);
+        }
+        damaged
     }
 
     /// Asserts that staging row damage through the executor marks the
@@ -452,6 +480,30 @@ mod tests {
     fn an_unimplemented_private_mode_does_not_hide_origin_mode() {
         let device = interpret(b"\x1b[2;3r\x1b[?1;6h\x1b[1;1Hx");
         assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'x');
+    }
+
+    /// Asserts that `ESC c` blanks every visible row.
+    ///
+    /// Case: a program dies mid-redraw and leaves the screen unusable,
+    /// so the user runs `reset` to take the terminal back.
+    #[test]
+    fn the_seven_bit_reset_blanks_every_visible_row() {
+        let device = interpret(b"ab\r\nc\x1bc");
+        for line in 0..3 {
+            let row = device.active().viewport_row(ViewportLine(line));
+            assert!(row.iter().all(|cell| *cell == Cell::default()));
+        }
+    }
+
+    /// Asserts that the repaint `ESC c` calls for reaches the chunk
+    /// liveness rather than being dropped by the handler.
+    ///
+    /// Case: the user runs `reset` on a screen a previous command filled,
+    /// and the owner must open its coalesce window for the frame that
+    /// repaints it.
+    #[test]
+    fn the_seven_bit_reset_marks_its_own_chunk_damaged() {
+        assert!(liveness_after(b"a", b"\x1bc"));
     }
 
     /// Asserts that a control function this terminal does not implement

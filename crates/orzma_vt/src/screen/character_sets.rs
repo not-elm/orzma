@@ -219,7 +219,7 @@ impl CharacterSetMapping {
     /// - `RIS` (`ESC c`)
     #[expect(
         dead_code,
-        reason = "the executor reaches this reset once DECSTR and RIS land"
+        reason = "the executor reaches this reset once DECSTR lands; RIS goes through `Screen::reset`"
     )]
     pub fn reset(&mut self) {
         *self = Self::default();

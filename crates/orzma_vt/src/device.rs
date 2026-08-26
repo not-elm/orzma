@@ -109,6 +109,28 @@ impl DeviceState {
         todo!()
     }
 
+    /// Returns both screens and every mode to their power-up state;
+    /// `None` when the frame that follows needs no repaint.
+    ///
+    /// # Invariants
+    ///
+    /// Only the screen left active by the mode reset reaches a frame, so
+    /// the alternate screen's damage is dropped rather than folded in.
+    /// A reset that arrives while the alternate screen is shown always
+    /// repaints, because the implicit return to the primary screen
+    /// replaces the whole viewport.
+    ///
+    /// # Control Functions
+    ///
+    /// - `RIS` (`ESC c`)
+    pub fn reset(&mut self) -> Option<DamageSpan> {
+        let was_showing_alternate = matches!(self.modes.active_screen, ScreenKind::Alternate);
+        let primary = self.screens.primary.reset();
+        let _ = self.screens.alternate.reset();
+        self.modes = VtModes::default();
+        (was_showing_alternate || primary.is_some()).then_some(DamageSpan::Full)
+    }
+
     /// Returns the grid dimensions of the active screen.
     pub fn grid_size(&self) -> GridSize {
         self.active().grid_size()
@@ -274,7 +296,9 @@ struct TitleState {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::screen::cell::Cell;
     use crate::screen::grid::coords::GridColumn;
+    use crate::screen::viewport::ViewportLine;
 
     fn device() -> DeviceState {
         DeviceState::new(GridSize { cols: 8, rows: 3 }, 10)
@@ -343,6 +367,94 @@ mod tests {
         device.active_mut().carriage_return();
         device.active_mut().restore_checkpoint();
         assert_eq!(device.active().cursor_column(), GridColumn(3));
+    }
+
+    /// Asserts that a reset clears both screens rather than only the one
+    /// the device is showing.
+    ///
+    /// Case: a full-screen editor leaves its buffer on the alternate
+    /// screen, the user quits back to the shell, and the shell then
+    /// sends `ESC c`.
+    #[test]
+    fn a_reset_clears_both_screens() {
+        let mut device = device();
+        device.active_mut().print('p');
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+        device.active_mut().print('a');
+
+        let _ = device.reset();
+
+        for kind in [ScreenKind::Primary, ScreenKind::Alternate] {
+            device.set_active_screen_for_test(kind);
+            let row = device.active().viewport_row(ViewportLine(0));
+            assert!(row.iter().all(|cell| *cell == Cell::default()));
+        }
+    }
+
+    /// Asserts that a reset returns the device to the primary screen.
+    ///
+    /// Case: a full-screen application is killed while it still holds
+    /// the alternate screen, and the user runs `reset` to get a usable
+    /// shell back.
+    #[test]
+    fn a_reset_returns_the_device_to_the_primary_screen() {
+        let mut device = device();
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+
+        let _ = device.reset();
+
+        assert_eq!(device.modes().active_screen, ScreenKind::Primary);
+    }
+
+    /// Asserts that a reset of an untouched device reports no repaint.
+    ///
+    /// Case: a login script runs `tput reset` before anything has been
+    /// printed to the terminal.
+    #[test]
+    fn a_reset_of_an_untouched_device_reports_no_repaint() {
+        assert_eq!(device().reset(), None);
+    }
+
+    /// Asserts that a reset reports a full repaint for the content the
+    /// primary screen carried.
+    ///
+    /// Case: a program leaves garbage across the shell's screen and the
+    /// user runs `reset` to clear it.
+    #[test]
+    fn a_reset_of_a_written_primary_screen_reports_a_full_repaint() {
+        let mut device = device();
+        device.active_mut().print('x');
+
+        assert_eq!(device.reset(), Some(DamageSpan::Full));
+    }
+
+    /// Asserts that a reset reports a full repaint whenever the
+    /// alternate screen was showing, even with nothing on the primary
+    /// screen behind it.
+    ///
+    /// Case: a full-screen application that never wrote to the primary
+    /// screen is reset while it still holds the alternate screen.
+    #[test]
+    fn a_reset_of_a_shown_alternate_screen_reports_a_full_repaint() {
+        let mut device = device();
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+
+        assert_eq!(device.reset(), Some(DamageSpan::Full));
+    }
+
+    /// Asserts that a reset does not report the hidden screen's damage.
+    ///
+    /// Case: a full-screen editor leaves its buffer on the alternate
+    /// screen, the user quits back to a shell screen that nothing has
+    /// been printed to, and a startup script then sends `ESC c`.
+    #[test]
+    fn a_reset_does_not_report_the_hidden_screens_damage() {
+        let mut device = device();
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+        device.active_mut().print('x');
+        device.set_active_screen_for_test(ScreenKind::Primary);
+
+        assert_eq!(device.reset(), None);
     }
 
     /// Asserts that the cap counts both screens, so a mount is rejected
@@ -424,24 +536,40 @@ mod tests {
         assert_eq!(device.evict_lost_anchors(), vec![id]);
     }
 
-    /// Asserts that resetting both screens leaves every placement
-    /// unresolvable, so one terminal-wide sweep names all of them.
+    /// Asserts that a reset leaves every placement unresolvable, so one
+    /// terminal-wide sweep names all of them.
     ///
     /// Case: an application sends `RIS` while webviews are mounted on
     /// both the primary and the alternate screen.
     #[test]
-    fn a_screen_reset_leaves_every_placement_unresolvable() {
+    fn a_reset_leaves_every_placement_unresolvable() {
         let mut device = device();
         let primary = mount(&mut device, "shell").expect("primary mount accepted");
         device.set_active_screen_for_test(ScreenKind::Alternate);
         let alternate = mount(&mut device, "app").expect("alternate mount accepted");
-        for kind in [ScreenKind::Primary, ScreenKind::Alternate] {
-            device.set_active_screen_for_test(kind);
-            assert_eq!(device.active_mut().reset(), None);
-        }
-        device.set_active_screen_for_test(ScreenKind::Primary);
+
+        let _ = device.reset();
+
         assert_eq!(device.evict_lost_anchors(), vec![primary, alternate]);
         assert_eq!(device.placement_count(), 0);
+    }
+
+    /// Asserts that a reset does not rewind the device's placement id
+    /// counter.
+    ///
+    /// Case: a webview is mounted, the user runs `reset`, and the
+    /// program mounts a fresh view while the eviction signal for the old
+    /// one is still in flight.
+    #[test]
+    fn a_reset_does_not_rewind_the_device_placement_id_counter() {
+        let mut device = device();
+        let old = mount(&mut device, "a").expect("mount accepted");
+        assert_eq!(device.reset(), None);
+        device.evict_lost_anchors();
+
+        let new = mount(&mut device, "b").expect("mount after reset accepted");
+
+        assert!(old < new);
     }
 
     /// Asserts that a re-mount of a live address is accepted at the cap,
