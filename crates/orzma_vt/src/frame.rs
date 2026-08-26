@@ -11,10 +11,10 @@
 pub mod damage;
 
 use self::damage::{Damage, DamageSpan};
+use crate::device::DeviceState;
 use crate::device::color::Palette;
-use crate::device::{ActiveScreen, DeviceState};
 use crate::hyperlink::Hyperlink;
-use crate::placement::{AnchoredPlacement, PlacementStore};
+use crate::placement::AnchoredPlacement;
 use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::row::Row;
@@ -138,11 +138,11 @@ impl FrameTracker {
     ///   the section diffs only compare, and the emitted frame is
     ///   settled after the gate, so an attempt that returns `None`
     ///   retains nothing.
-    pub fn emit(&mut self, device: &DeviceState, placements: &PlacementStore) -> Option<Frame> {
+    pub fn emit(&mut self, device: &DeviceState) -> Option<Frame> {
         let screen = device.active();
         let cursor = screen.cursor();
         let display_offset = screen.display_offset();
-        let placements = self.diff_placements(placements, device.active_screen());
+        let placements = self.diff_placements(device);
         let palette = self.diff_palette(device.palette());
         if self.damage.is_clean()
             && placements.is_none()
@@ -184,14 +184,11 @@ impl FrameTracker {
         *cursor != self.cursor || display_offset != self.display_offset
     }
 
-    /// Projects the placements and reports the complete new list when
-    /// it differs from the last-emitted one; `None` when unchanged.
-    fn diff_placements(
-        &self,
-        placements: &PlacementStore,
-        active: ActiveScreen<'_>,
-    ) -> Option<Vec<AnchoredPlacement>> {
-        let projected = placements.project(active);
+    /// Resolves the active screen's placements and reports the complete
+    /// new list when it differs from the last-emitted one; `None` when
+    /// unchanged.
+    fn diff_placements(&self, device: &DeviceState) -> Option<Vec<AnchoredPlacement>> {
+        let projected = device.active().project_placements();
         (projected != self.placements).then_some(projected)
     }
 
@@ -239,7 +236,6 @@ mod tests {
     struct Rig {
         tracker: FrameTracker,
         device: DeviceState,
-        placements: PlacementStore,
     }
 
     /// Builds the emission rig with the seeded bootstrap repaint
@@ -248,14 +244,13 @@ mod tests {
         let mut rig = Rig {
             tracker: FrameTracker::new(),
             device: DeviceState::new(GridSize { cols: 4, rows: 3 }, 10),
-            placements: PlacementStore::new(),
         };
         emit(&mut rig).expect("the seeded Full drains as the first frame");
         rig
     }
 
     fn emit(rig: &mut Rig) -> Option<Frame> {
-        rig.tracker.emit(&rig.device, &rig.placements)
+        rig.tracker.emit(&rig.device)
     }
 
     /// Asserts that a new tracker's retained values match a fresh
@@ -282,30 +277,22 @@ mod tests {
     #[test]
     fn diff_placements_reports_the_change_until_settled() {
         let mut tracker = FrameTracker::new();
-        let device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
-        let mut store = PlacementStore::new();
-        assert_eq!(
-            tracker.diff_placements(&store, device.active_screen()),
-            None
-        );
-        store
-            .mount(
-                device.active_screen(),
-                PlacementSize { rows: 2, cols: 4 },
-                "v".to_string(),
-                None,
-            )
+        let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
+        assert_eq!(tracker.diff_placements(&device), None);
+        device
+            .mount_placement(PlacementSize { rows: 2, cols: 4 }, "v".to_string(), None)
             .expect("a mount under the cap is accepted");
         let listed = tracker
-            .diff_placements(&store, device.active_screen())
+            .diff_placements(&device)
             .expect("a mount changes the projection");
         assert_eq!(listed.len(), 1);
-        let cursor = device.active().cursor();
-        tracker.settle(cursor, device.display_offset(), Some(&listed), None);
-        assert_eq!(
-            tracker.diff_placements(&store, device.active_screen()),
-            None
+        tracker.settle(
+            device.active().cursor(),
+            device.display_offset(),
+            Some(&listed),
+            None,
         );
+        assert_eq!(tracker.diff_placements(&device), None);
     }
 
     /// Asserts that the palette diff reports the change until the
@@ -393,7 +380,6 @@ mod tests {
         let mut rig = Rig {
             tracker: FrameTracker::new(),
             device: DeviceState::new(GridSize { cols: 4, rows: 3 }, 10),
-            placements: PlacementStore::new(),
         };
         let frame = emit(&mut rig).expect("the seeded Full emits");
         assert_eq!(frame.rows.len(), 3);
@@ -459,19 +445,14 @@ mod tests {
     #[test]
     fn a_placement_change_alone_emits_the_complete_list() {
         let mut rig = drained_rig();
-        rig.placements
-            .mount(
-                rig.device.active_screen(),
-                PlacementSize { rows: 2, cols: 4 },
-                "v".to_string(),
-                None,
-            )
+        rig.device
+            .mount_placement(PlacementSize { rows: 2, cols: 4 }, "v".to_string(), None)
             .expect("a mount under the cap is accepted");
         let mounted = emit(&mut rig).expect("a placement change emits");
         assert_eq!(mounted.placements.as_ref().map(Vec::len), Some(1));
         assert!(mounted.rows.is_empty());
         assert_eq!(emit(&mut rig), None);
-        assert!(rig.placements.unmount(Some("v"), None));
+        assert!(rig.device.unmount_placement(Some("v"), None));
         let unmounted = emit(&mut rig).expect("an unmount emits");
         assert_eq!(unmounted.placements, Some(Vec::new()));
     }

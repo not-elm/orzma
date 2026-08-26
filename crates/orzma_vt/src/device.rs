@@ -19,8 +19,6 @@ use crate::frame::damage::DamageSpan;
 use crate::placement::{MAX_PLACEMENTS, PlacementId, PlacementSize};
 use crate::screen::Screen;
 use crate::screen::grid::GridSize;
-use crate::screen::grid::LineId;
-use crate::screen::grid::coords::{GridColumn, GridLine};
 use crate::screen::viewport::{DisplayOffset, Scroll};
 
 /// The emulated terminal device: screens, modes, tabs, colors, title,
@@ -81,14 +79,6 @@ impl DeviceState {
         }
     }
 
-    /// The screen the device reads and writes, paired with its kind.
-    pub fn active_screen(&self) -> ActiveScreen<'_> {
-        ActiveScreen {
-            kind: self.modes.active_screen,
-            screen: self.active(),
-        }
-    }
-
     /// Resizes both screens, reflowing content; `None` when the
     /// dimensions already matched.
     ///
@@ -101,9 +91,8 @@ impl DeviceState {
     // TODO: A rewrap can insert or drop rows in the middle of the ring,
     // and can split or merge them, so a surviving placement anchor has to
     // be told which resulting row it now belongs to. Once reflow lands,
-    // route the row remapping it produces to `PlacementStore` (a sibling
-    // field, so the caller has to route it) so it can re-anchor each
-    // placement to its surviving row.
+    // route the row remapping it produces to each screen's placement
+    // table so it can re-anchor each placement to its surviving row.
     pub fn resize(&mut self, _size: GridSize) -> Option<DamageSpan> {
         todo!()
     }
@@ -262,40 +251,6 @@ impl DeviceState {
     }
 }
 
-/// The active screen together with which of the two it is.
-///
-/// [`crate::screen::grid::LineId`] is unique per grid, so an anchor
-/// resolved against the other screen's grid silently names a different
-/// row. Pairing the two makes that mismatch unconstructible.
-#[derive(Clone, Copy)]
-pub(crate) struct ActiveScreen<'a> {
-    kind: ScreenKind,
-    screen: &'a Screen,
-}
-
-impl ActiveScreen<'_> {
-    /// Which of the two screens this is.
-    pub fn kind(&self) -> ScreenKind {
-        self.kind
-    }
-
-    /// The id of the row the cursor sits on.
-    pub fn cursor_line_id(&self) -> LineId {
-        self.screen.cursor_line_id()
-    }
-
-    /// The active-grid line `id` now sits at; `None` once the row has
-    /// left the ring.
-    pub fn grid_line_of(&self, id: LineId) -> Option<GridLine> {
-        self.screen.grid_line_of(id)
-    }
-
-    /// The cursor's column.
-    pub fn cursor_column(&self) -> GridColumn {
-        self.screen.cursor_column()
-    }
-}
-
 /// The primary / alternate pair.
 ///
 /// Pure storage: which of the two is shown lives in
@@ -320,6 +275,7 @@ struct TitleState {}
 mod tests {
     use super::*;
     use crate::placement::{MAX_PLACEMENTS, PlacementId, PlacementSize};
+    use crate::screen::grid::coords::GridColumn;
 
     fn device() -> DeviceState {
         DeviceState::new(GridSize { cols: 8, rows: 3 }, 10)

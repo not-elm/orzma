@@ -631,6 +631,24 @@ mod tests {
             assert_eq!(grid[ScreenLine(2)][0].c, 'b');
             assert_eq!(grid[ScreenLine(3)][0].c, 'd');
         }
+
+        /// Asserts that an anchor still resolves once the history holds
+        /// ids that are no longer ascending, which is why the lookup
+        /// scans rather than binary-searches.
+        ///
+        /// Case: a full-screen application scrolls backwards — minting a
+        /// row with a high id above older rows — and then output pushes
+        /// that row into history ahead of the ones it was inserted above.
+        #[test]
+        fn an_anchor_still_resolves_once_the_history_ids_are_unordered() {
+            let mut grid = grid(3, 10);
+            let anchor = grid.line_id(ScreenLine::TOP);
+            grid.scroll_down_one(ScreenLine(0), ScreenLine(2), Cell::default());
+            for _ in 0..3 {
+                scroll_up_whole_screen(&mut grid, Cell::default());
+            }
+            assert_eq!(grid.grid_line(anchor), Some(GridLine(-2)));
+        }
     }
 
     mod reset {

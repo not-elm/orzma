@@ -10,7 +10,7 @@ use crate::{
     frame::{Frame, FrameTracker},
     interpreter::Interpreter,
     interpreter::apc::ApcWebviewVerb,
-    placement::{PlacementId, PlacementStore},
+    placement::PlacementId,
     screen::grid::GridSize,
     screen::viewport::{DisplayOffset, Scroll},
 };
@@ -220,8 +220,6 @@ pub struct OrzmaVt {
     interpreter: Interpreter,
     /// The emulated device: screens, modes, tabs, colors, title.
     device: DeviceState,
-    /// Webview placements: minting, anchor tracking, projection.
-    placements: PlacementStore,
     /// The pending damage and the retained last-emitted values.
     tracker: FrameTracker,
 }
@@ -242,7 +240,6 @@ impl OrzmaVt {
         Self {
             interpreter: Interpreter::default(),
             device: DeviceState::new(size, max_history),
-            placements: PlacementStore::new(),
             tracker: FrameTracker::new(),
         }
     }
@@ -261,7 +258,7 @@ impl Vt for OrzmaVt {
     }
 
     fn frame(&mut self) -> Option<Frame> {
-        self.tracker.emit(&self.device, &self.placements)
+        self.tracker.emit(&self.device)
     }
 
     fn resize(&mut self, size: GridSize) -> bool {
@@ -354,13 +351,8 @@ mod tests {
     fn a_screen_flip_replays_the_placement_list() {
         let mut vt = vt();
         vt.frame();
-        vt.placements
-            .mount(
-                vt.device.active_screen(),
-                PlacementSize { rows: 2, cols: 4 },
-                "v".to_string(),
-                None,
-            )
+        vt.device
+            .mount_placement(PlacementSize { rows: 2, cols: 4 }, "memo".to_string(), None)
             .expect("a mount under the cap is accepted");
         let mounted = vt.frame().expect("a placement change emits");
         assert_eq!(mounted.placements.as_ref().map(Vec::len), Some(1));

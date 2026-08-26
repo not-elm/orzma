@@ -608,12 +608,6 @@ impl Screen {
             u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
         self.viewport.offset = DisplayOffset(offset.0.min(history));
     }
-
-    /// The active-grid line `id`'s row now sits at; `None` once the row
-    /// has left the ring.
-    pub fn grid_line_of(&self, id: LineId) -> Option<GridLine> {
-        self.grid.grid_line(id)
-    }
 }
 
 /// What an emitted frame reads back.

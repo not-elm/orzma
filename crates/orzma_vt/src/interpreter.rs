@@ -21,7 +21,6 @@ use crate::{
     VtSignal,
     device::DeviceState,
     frame::{FrameTracker, damage::DamageSpan},
-    placement::PlacementStore,
 };
 use std::sync::mpsc::Sender;
 use vtparse::{CsiParam, VTActor, VTParser};
@@ -42,7 +41,6 @@ impl Interpreter {
     pub fn parse(
         &mut self,
         device: &mut DeviceState,
-        placements: &mut PlacementStore,
         tracker: &mut FrameTracker,
         signal_tx: &mut Sender<VtSignal>,
         chunk: &[u8],
@@ -53,7 +51,6 @@ impl Interpreter {
             damaged: &mut damaged,
             sync: &mut self.sync,
             device,
-            placements,
             tracker,
             signal_tx,
         };
@@ -92,13 +89,12 @@ struct SyncBuffer {}
 struct Executor<'a> {
     // TODO: The placement and palette handlers (the APC webview verbs
     // and OSC 4 / 10 / 11 / 12) must set this flag when they mutate a
-    // frame-visible section — the `PlacementStore` docs promise that
-    // "the caller raises the chunk liveness flag", and until those
-    // handlers land no caller does.
+    // frame-visible section — the placement docs promise that "the
+    // caller raises the chunk liveness flag", and until those handlers
+    // land no caller does.
     damaged: &'a mut bool,
     sync: &'a mut SyncBuffer,
     device: &'a mut DeviceState,
-    placements: &'a mut PlacementStore,
     tracker: &'a mut FrameTracker,
     signal_tx: &'a mut Sender<VtSignal>,
 }
@@ -289,7 +285,6 @@ mod tests {
     /// point.
     fn interpret_with(damaged: &mut bool, chunk: &[u8]) -> DeviceState {
         let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
-        let mut placements = PlacementStore::new();
         let mut tracker = FrameTracker::new();
         let (mut signal_tx, _signal_rx) = channel();
         let mut sync = SyncBuffer::default();
@@ -297,7 +292,6 @@ mod tests {
             damaged,
             sync: &mut sync,
             device: &mut device,
-            placements: &mut placements,
             tracker: &mut tracker,
             signal_tx: &mut signal_tx,
         };
