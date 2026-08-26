@@ -11,7 +11,7 @@
 | コスト | 位置 |
 | - | - |
 | `ActiveScreen` 型（grid と kind を組にして取り違えを防ぐためだけに存在） | `device.rs:149-181` |
-| `p.screen == active.kind()` の絞り込み 2 箇所 | `placement.rs:84`, `:183` |
+| `p.screen == active.kind()` の絞り込み 2 箇所 | `placement.rs:93`, `:181` |
 | 「非アクティブ側の anchor をアクティブな grid で解決してしまう」バグ用の回帰テスト | `placement.rs:467` |
 | reflow の行リマップを「兄弟フィールドなので caller が配送する」必要 | `device.rs:96-101` の TODO |
 
@@ -32,6 +32,51 @@ xterm.js（`markers` が `Buffer` のフィールド）はいずれも per-scree
 
 ghostty が同じ形を採っている（テーブルは per-screen、識別子の採番だけ上位スコープ）。
 
+## この案と独立に実装済みの部分
+
+検討の途中で出てきたもののうち、所有権の移動と無関係に成立する 2 つは先に入れた。
+採否がどちらに転んでも巻き戻さない。
+
+### `PlacementSize`（`bb7a499`）
+
+`Placement` と `ProjectedPlacement` が別々に持っていた `rows` / `cols` を 1 つの型にまとめた。
+
+```rust
+/// The cell rectangle a mount reserves, without its position.
+pub struct PlacementSize {
+    pub rows: u16,
+    pub cols: u16,
+}
+```
+
+`GridSize` と形は同じだが別の型にした。`GridSize` の doc は「row count は
+"one screenful" の source of truth」と grid に紐づけており、placement の予約は
+grid の寸法ではない。型が分かれていれば取り違えもコンパイルで止まる。
+
+フィールド順は `rows` / `cols`。ワイヤ形式（`mount;<view_id>;<rows>;<cols>`）と
+`ApcWebviewVerb::Mount` に合わせた。`GridSize` は `cols` が先だが、そちらに
+合わせると placement 側の既存 API と食い違う。
+
+位置を含まないので viewport 空間の `ProjectedPlacement` とも共有した。結果として
+invariant が「projected な `size` は mount 時の `size` に等しい」と 1 フィールドで
+言えるようになった一方、`orzma_vt::prelude` → `orzma_tty_renderer::schema`
+（`schema.rs:12-15`）の再エクスポート経路に乗るので `PlacementSize` は 3 クレートに跨る
+公開語彙になった。`orzma_webview/src/webview/mount.rs:56` の
+`WebviewPlacement` の invariant もこれに追随済み。
+
+### 射影は `Vec` を返す
+
+`project_into(&self, out: &mut Vec<ProjectedPlacement>, ..)` を
+`project(&self, ..) -> Vec<ProjectedPlacement>` に変えた。`&mut Vec` は
+`FrameTracker::scratch` の使い回しのために存在していたが、収支を数えると
+差分ありの経路では `scratch.clone()` が 1 回走るので変更前後で同数、
+placement が 0 個なら `collect` もアロケートしないため、増えるのは
+「webview がマウント済みで、かつ配置が変わっていないフレーム」の
+最大 288 バイト 1 回だけだった。`scratch` フィールドは削除し、本番とテストで
+入口が分かれていた状態（テストだけ `#[cfg(test)] fn project` を通っていた）も解消した。
+
+下のコード骨子はこの形を前提にしている。
+
 ## コード骨子
 
 ### `Screen` 側
@@ -46,44 +91,12 @@ struct Placement {
     id: PlacementId,
     anchor: LineId,
     col: GridColumn,
-    size: PlacementSize,
+    size: PlacementSize,                 // 実装済み
     view_id: String,
     instance_id: Option<String>,
     // screen: ScreenKind ← 消える。所有者が答えになる
 }
-
-/// The cell rectangle a mount reserves, without its position.
-pub struct PlacementSize {
-    pub rows: u16,
-    pub cols: u16,
-}
 ```
-
-`GridSize` と形は同じだが別の型にする。`GridSize` の doc は「row count は
-"one screenful" の source of truth」と grid に紐づけており、placement の予約は
-grid の寸法ではない。型が分かれていれば取り違えもコンパイルで止まる。
-
-フィールド順は `rows` / `cols`。ワイヤ形式（`mount;<view_id>;<rows>;<cols>`）と
-`ApcWebviewVerb::Mount` に合わせる。`GridSize` は `cols` が先だが、そちらに
-合わせると placement 側の既存 API と食い違う。
-
-位置を含めないので、**viewport 空間の `ProjectedPlacement` とも共有できる**:
-
-```rust
-pub struct ProjectedPlacement {
-    pub id: PlacementId,
-    pub viewport_row: i32,      // anchor を解決した結果
-    pub col: GridColumn,
-    pub size: PlacementSize,    // rows / cols を置き換え
-}
-```
-
-こうすると `ProjectedPlacement` の invariant（"`rows` / `cols` always equal the
-mount-time reservation for `id`"）が「projected な `size` は mount 時の `size` に
-等しい」と 1 フィールドで言えるようになる。ただし `ProjectedPlacement` は
-`orzma_vt::prelude` から export され `orzma_tty_renderer::schema` が再エクスポート
-しているので（`schema.rs:12-15`）、共有すると `PlacementSize` も 3 クレートに跨る
-公開語彙になる。
 
 `Screen` が所有する。射影と sweep は `&Screen` ではなく解決関数を受ける — でないと
 `screen.placements.evict_lost_anchors(&screen)` が可変部分借用と共有借用で衝突する。
@@ -98,8 +111,8 @@ pub struct Screen {
 }
 
 impl Screen {
-    pub(crate) fn project_placements_into(&self, out: &mut Vec<ProjectedPlacement>) {
-        self.placements.project_into(out, |anchor| self.viewport_row_of(anchor));
+    pub(crate) fn project_placements(&self) -> Vec<ProjectedPlacement> {
+        self.placements.project(|anchor| self.viewport_row_of(anchor))
     }
 
     /// `self` を分解して借用を割る。
@@ -161,11 +174,11 @@ primary の placement はただそこに在り続ける。
 | - | - |
 | `ActiveScreen` 型ごと（4 メソッド + 30 行） | `device.rs:149-181` |
 | `DeviceState::active_screen()` | `device.rs:80-85` |
-| `Placement.screen: ScreenKind` | `placement.rs:235` |
-| kind 絞り込み 2 箇所 | `placement.rs:84`, `:183` |
-| `switch_screen` の `evict_where(\|p\| p.screen != Primary)` | `placement.rs:198` |
+| `Placement.screen: ScreenKind` | `placement.rs:233` |
+| kind 絞り込み 2 箇所 | `placement.rs:93`, `:181` |
+| `switch_screen` の `evict_where(\|p\| p.screen != Primary)` | `placement.rs:196` |
 | 回帰テスト `a_sweep_leaves_the_other_screens_placement_alone` | `placement.rs:467` — 守る失敗モードが存在しなくなる |
-| `FrameTracker::emit` の第 2 引数 | `frame.rs:143` → `emit(&mut self, device: &DeviceState)` |
+| `FrameTracker::emit` の第 2 引数 | `frame.rs:139` → `emit(&mut self, device: &DeviceState)` |
 
 ## 代償
 
@@ -179,8 +192,10 @@ drain する形もあるが、「変更は返り値で表す」という今の�
 ## 移行コスト
 
 `mount` / `unmount` / `switch_screen` / `evict_lost_anchors` を呼ぶ **production コードはまだ 1 行も無い**
-（`apc_dispatch` と `?1049` ハンドラが `todo!()`）。影響 34 箇所のうち production は `frame.rs` 3 行と
-`lib.rs:264` だけで、残りはテスト。APC と `?1049` を結線した後にやるとこの比率は悪化する。
+（`apc_dispatch` と `?1049` ハンドラが `todo!()`）。API 呼び出し 30 箇所のうち production は
+`frame.rs:192` の `project` 1 行だけで、残り 29 はテスト。ほかに型として通っているのが
+`lib.rs:224` / `:245` / `:264`、`frame.rs:17` / `:139` / `:189`、`interpreter.rs:24` / `:45` / `:101`。
+APC と `?1049` を結線した後にやるとこの比率は悪化する。
 
 ## 未決事項
 
@@ -189,9 +204,6 @@ drain する形もあるが、「変更は返り値で表す」という今の�
    それも「両 `Screen` の store を連結する」形に変わるだけで消えない。
 2. **着手タイミング。** 上記のとおり今が最も安いが、RIS と同時にやると関心が混ざる。
 3. **`Screen::reset` の戻り値の形。** 組を返すか `take_evicted()` にするか。
-4. **`PlacementSize` を `ProjectedPlacement` と共有するか。** 共有すると 3 クレートに跨る
-   公開語彙になり、`orzma_webview/src/webview/mount.rs:56` の doc も追随が要る。
-   共有しないなら `Placement` 内部だけの整理で、`pub` も不要。
 
 ## 検討済みで採らなかった案
 

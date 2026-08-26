@@ -87,9 +87,6 @@ pub(crate) struct FrameTracker {
     placements: Vec<ProjectedPlacement>,
     /// The palette the last emitted frame carried.
     palette: Palette,
-    /// Reusable projection buffer, so an unchanged emit attempt
-    /// allocates nothing.
-    scratch: Vec<ProjectedPlacement>,
 }
 
 impl FrameTracker {
@@ -108,7 +105,6 @@ impl FrameTracker {
             display_offset: DisplayOffset::default(),
             placements: Vec::new(),
             palette: Palette::default(),
-            scratch: Vec::new(),
         }
     }
 
@@ -189,16 +185,12 @@ impl FrameTracker {
     /// Projects the placements and reports the complete new list when
     /// it differs from the last-emitted one; `None` when unchanged.
     fn diff_placements(
-        &mut self,
+        &self,
         placements: &PlacementStore,
         active: ActiveScreen<'_>,
     ) -> Option<Vec<ProjectedPlacement>> {
-        self.scratch.clear();
-        placements.project_into(&mut self.scratch, active);
-        if self.scratch == self.placements {
-            return None;
-        }
-        Some(self.scratch.clone())
+        let projected = placements.project(active);
+        (projected != self.placements).then_some(projected)
     }
 
     /// Reports the palette when it differs from the last-emitted one;
