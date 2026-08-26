@@ -32,6 +32,7 @@ pub mod tabs;
 pub mod viewport;
 
 pub(crate) mod cursor;
+pub(crate) mod placements;
 
 mod state;
 

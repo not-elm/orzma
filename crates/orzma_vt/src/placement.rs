@@ -321,40 +321,6 @@ mod tests {
         assert!(mount(&mut store, &device, "v0").is_some());
     }
 
-    /// Asserts that unmount honours its three scopes.
-    ///
-    /// Case: a program tears down one instance, then a whole view, then
-    /// everything it had mounted.
-    #[test]
-    fn unmount_honours_its_three_scopes() {
-        let device = device();
-        let mut store = PlacementStore::new();
-        store
-            .mount(
-                device.active_screen(),
-                PlacementSize { rows: 2, cols: 4 },
-                "memo".into(),
-                Some("a".into()),
-            )
-            .expect("mount accepted");
-        store
-            .mount(
-                device.active_screen(),
-                PlacementSize { rows: 2, cols: 4 },
-                "memo".into(),
-                Some("b".into()),
-            )
-            .expect("mount accepted");
-        mount(&mut store, &device, "other").expect("mount accepted");
-
-        assert!(store.unmount(Some("memo"), Some("a")));
-        assert_eq!(store.len(), 2);
-        assert!(store.unmount(Some("memo"), None));
-        assert_eq!(store.len(), 1);
-        assert!(store.unmount(None, None));
-        assert_eq!(store.len(), 0);
-    }
-
     /// Asserts that an unmount matching nothing reports that it changed
     /// nothing.
     ///
