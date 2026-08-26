@@ -30,9 +30,9 @@ impl ScreenPlacements {
 
     /// Whether this screen holds no placement.
     ///
-    /// [`Self::evict_lost_anchors`] returns on this before resolving a
-    /// single anchor, which is what keeps sweeping a screen with no
-    /// webview free.
+    /// [`Self::evict_lost_anchors`] returns on this before it touches
+    /// the table, which states in one line that a screen holding no
+    /// webview resolves no anchor.
     pub fn is_empty(&self) -> bool {
         self.placements.is_empty()
     }

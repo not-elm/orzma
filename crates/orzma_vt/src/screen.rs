@@ -826,7 +826,6 @@ impl Screen {
 mod tests {
     use super::*;
     use crate::device::color::Color;
-    use crate::placement::{PlacementId, PlacementSize};
     use crate::screen::margins::Margins;
 
     fn screen() -> Screen {
@@ -2713,6 +2712,29 @@ mod tests {
             assert!(screen.project_placements().is_empty());
             assert_eq!(screen.evict_lost_anchors(), vec![PlacementId(1)]);
             assert_eq!(screen.placement_count(), 0);
+        }
+
+        /// Asserts that an anchor pushed into history projects to a
+        /// negative grid line and survives the sweep, and that a reset
+        /// is what makes that same placement evictable.
+        ///
+        /// Case: a webview was mounted beside a line of output that the
+        /// shell has since scrolled into the scrollback, and the shell
+        /// then sends `ESC c`.
+        #[test]
+        fn a_reset_drops_a_placement_the_sweep_alone_would_leave() {
+            let mut screen = screen();
+            screen.state.line = ScreenLine(2);
+            mount(&mut screen, 1, "memo");
+            for _ in 0..3 {
+                screen.line_feed();
+            }
+            assert_eq!(screen.project_placements()[0].point.line, GridLine(-1));
+            assert!(screen.evict_lost_anchors().is_empty());
+
+            assert_eq!(screen.reset(), Some(DamageSpan::Full));
+
+            assert_eq!(screen.evict_lost_anchors(), vec![PlacementId(1)]);
         }
 
         /// Asserts that a reset leaves this screen's placements

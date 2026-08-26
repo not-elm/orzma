@@ -3,7 +3,7 @@
 | # | 名前 | Source | 優先度 | 実装先 |
 | - | - | - | - | - |
 | TC-01 | `a_reset_leaves_this_screens_placements_unresolvable` | C3 + LC | High | 実装済み。`screen.rs` の `mod placements`（Task 3） |
-| TC-02 | `a_reset_drops_a_placement_the_sweep_alone_would_leave` | C3 + LC | High | 未実装。`screen.rs` の `mod placements` へ追加 |
+| TC-02 | `a_reset_drops_a_placement_the_sweep_alone_would_leave` | C3 + LC | High | 実装済み。`screen.rs` の `mod placements` |
 | TC-03 | — | C3 + LC | High | `a_sweep_reaches_the_inactive_screen`（`device.rs`、Task 4）に統合済み。単独のテストとしては存在しない |
 | TC-04 | `a_reset_still_names_a_placement_whose_anchor_already_left_the_grid` | C3 + LC | High | 未実装。`screen.rs` の `mod placements` へ追加 |
 | TC-05 | `a_second_reset_reports_no_further_eviction` | C3 + LC | Medium | 未実装。`screen.rs` の `mod placements` へ追加 |
@@ -53,12 +53,18 @@ fn a_reset_leaves_this_screens_placements_unresolvable() {
 
 | | |
 | - | - |
-| Setup | `screen()`; カーソルを最終行へ; `mount(&mut screen, 1, "memo")`; `line_feed()` を 1 回で履歴へ押し出す |
+| Setup | `screen()`; カーソルを最終行へ; `mount(&mut screen, 1, "memo")`; `line_feed()` を 3 回で anchor を履歴へ押し出す |
 | Act | 押し出し直後に `project_placements()` と `evict_lost_anchors()` を確認してから `screen.reset()`、さらに `evict_lost_anchors()` |
 | Expect | reset 前は `project_placements()` が解決し `evict_lost_anchors()` は何も落とさない **[LC]**。reset 後は `evict_lost_anchors()` が id を名指す **[C3]** |
 
 anchor は grid 空間の負の行（`GridLine(-1)`）に解決される。viewport の外だが grid のリングには
 まだ在るので、sweep 単独ではまだ evictable ではない。
+
+`line_feed()` が 3 回でなければならない理由: mount 時点で anchor は screen line 2、履歴は 0 行なので
+`GridLine(2)`。カーソルは既に最終行にいるので line feed のたびに `scroll_up_one(0, 2)` が走り、
+履歴が 1 行ずつ伸びて anchor の `GridLine` が 1 ずつ下がる（2 → 1 → 0 → -1）。1 回では
+`GridLine(1)` にしかならない。あわせて履歴が伸びるため `Grid::is_blank()` は false になり、
+`Screen::reset()` は `None` ではなく `Some(DamageSpan::Full)` を返す。
 
 元の TC-02 は「reset が sweep の述語（当時の `viewport_row_of(..).is_none()`）をそのまま流用する
 実装」を禁じるために書かれていた。理由は、viewport の外だが grid には生きている anchor をその
@@ -72,22 +78,25 @@ anchor は grid 空間の負の行（`GridLine(-1)`）に解決される。viewp
 結論を史料無しに再導出してしまう。
 
 ```rust
-/// Asserts that a reset drops a placement whose anchor still resolves
-/// before the reset ran.
+/// Asserts that an anchor pushed into history projects to a negative
+/// grid line and survives the sweep, and that a reset is what makes
+/// that same placement evictable.
 ///
-/// Case: a webview was mounted beside a line of output that has since
-/// scrolled into the history but is still within `max_history`, and the
-/// shell sends `ESC c`.
+/// Case: a webview was mounted beside a line of output that the shell
+/// has since scrolled into the scrollback, and the shell then sends
+/// `ESC c`.
 #[test]
 fn a_reset_drops_a_placement_the_sweep_alone_would_leave() {
     let mut screen = screen();
     screen.state.line = ScreenLine(2);
     mount(&mut screen, 1, "memo");
-    screen.line_feed();
+    for _ in 0..3 {
+        screen.line_feed();
+    }
     assert_eq!(screen.project_placements()[0].point.line, GridLine(-1));
     assert!(screen.evict_lost_anchors().is_empty());
 
-    assert_eq!(screen.reset(), None);
+    assert_eq!(screen.reset(), Some(DamageSpan::Full));
 
     assert_eq!(screen.evict_lost_anchors(), vec![PlacementId(1)]);
 }

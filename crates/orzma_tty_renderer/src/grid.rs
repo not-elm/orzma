@@ -58,7 +58,7 @@ fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
     let Ok(mut grid) = terminals.get_mut(delta.entity) else {
         return;
     };
-    if grid.cursor.as_ref() != Some(&delta.cursor) {
+    if grid.cursor != Some(delta.cursor) {
         grid.cursor = Some(delta.cursor);
     }
     if grid.display_offset != delta.display_offset {

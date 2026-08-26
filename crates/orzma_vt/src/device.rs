@@ -274,7 +274,6 @@ struct TitleState {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::placement::{MAX_PLACEMENTS, PlacementId, PlacementSize};
     use crate::screen::grid::coords::GridColumn;
 
     fn device() -> DeviceState {
@@ -354,11 +353,12 @@ mod tests {
     #[test]
     fn a_mount_at_the_cap_is_rejected_across_both_screens() {
         let mut device = device();
-        for index in 0..6 {
+        let per_screen = MAX_PLACEMENTS / 2;
+        for index in 0..per_screen {
             assert!(mount(&mut device, &format!("p{index}")).is_some());
         }
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        for index in 0..6 {
+        for index in 0..MAX_PLACEMENTS - per_screen {
             assert!(mount(&mut device, &format!("a{index}")).is_some());
         }
         assert!(mount(&mut device, "one-too-many").is_none());
