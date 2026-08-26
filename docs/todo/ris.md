@@ -54,10 +54,10 @@ RIS（`ESC c`、`1B 63`）は端末を初期状態へ戻す制御関数であり
    外部の前例も同じ向き: wezterm の `StableRowIndex` は `stable_row_index_offset` が `scroll_up` と `erase_scrollback` で前進するのみで、`full_reset` も RIS も巻き戻さない。xterm.js の `Marker._nextId` は class static で reset を跨いでもリセットされない（marker 側は全破棄する）。alacritty と kitty は行 identity 自体を持たない。identity を持つ端末で counter を巻き戻す前例は見つからなかった。
    u64 枯渇は検討に値しない: 採番は実際にスクロールが起きた 1 行につき 1 個で、10k 行/秒でも約 5,800 万年。`Grid::mint` の `checked_add(...).expect(...)` が既に正しい姿勢。
    回帰は `screen/grid.rs` の `mod tests::reset` の 2 件（`a_reset_mints_ids_no_pre_reset_anchor_can_match` と `a_reset_does_not_rewind_the_id_counter`）が押さえている。
-2. **placement を全破棄するか。** 1 と表裏の関係にある。全破棄（#4）すれば anchor の宙吊りは起きないが、RIS を送っただけで webview が落ちることになる。`switch_screen` が「Primary の placement は alternate 表示中も破棄せず隠すだけ」としている前例に照らすと、RIS の破壊力をどこまで認めるかの判断が要る。
+2. **placement を全破棄するか。** 1 と表裏の関係にある。全破棄（#4）すれば anchor の宙吊りは起きないが、RIS を送っただけで webview が落ちることになる。`switch_screen` が「Primary の placement は alternate 表示中も破棄せず隠すだけ」としている前例に照らすと、RIS の破壊力をどこまで認めるかの判断が要る。 ->  放棄する。
 3. ~~**スクロールバックを捨てるか。**~~ **決定済み（捨てる）。#1・#2 で実装。** p.331 は page memory の消去を明記しており（"Clears the screen and all off-screen page memory"、"Clears page memory. All data stored in page memory is lost."）、ページメモリを持たないこの端末では履歴がその位置に対応する。`Screen::erase_in_display` は「scrollback history is never touched」と doc で明言しているので、RIS だけが履歴を捨てる操作になる。`display_offset` も 0 に戻る（履歴が消えた後にスクロール位置を保つ意味が無く、`viewport_row` が範囲外を読む）。
 4. ~~**消去に BCE を通すか。**~~ **決定済み（通さない）。#1 に一本化して実装。** `erase_in_display(All)` は pen の背景色で埋めるが、RIS は `Grid::reset` が `Cell::default()` で作り直すので pen を持ち込まない。順序の依存自体が消えた。BCE は vt220 / vt510 / ECMA-48 のいずれにも記述が無く（terminfo の `bce` capability 由来）、vt220 p.36 の "Erasing a character also erases any character attribute of the character" はむしろ逆を向いている。
-5. **タイトルを戻すか。** `TitleState` は空の stub だが、`VtSignal::ResetTitle` はすでに存在する。ホスト側のタイトルを RIS で戻すかは別途決める。
+5. ~~**タイトルを戻すか。** `TitleState` は空の stub だが、`VtSignal::ResetTitle` はすでに存在する。ホスト側のタイトルを RIS で戻すかは別途決める。~~ 戻さない
 
 ## 機能追加時に RIS へ結線が必要になるもの
 
