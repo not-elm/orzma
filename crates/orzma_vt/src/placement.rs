@@ -249,7 +249,7 @@ impl Placement {
 /// accepts is always one the host can place. The two are not mirrors:
 /// the host allocates slots per terminal among live children, while this
 /// cap counts both screens, so it is strictly the stricter of the two.
-const MAX_PLACEMENTS: usize = 12;
+pub const MAX_PLACEMENTS: usize = 12;
 
 #[cfg(test)]
 mod tests {
