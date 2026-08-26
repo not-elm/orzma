@@ -130,7 +130,7 @@ mod tests {
     use super::*;
     use crate::schema::{
         Color, Cursor, GridColumn, Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId,
-        ProjectedPlacement, Rgb, Row, Style,
+        PlacementSize, ProjectedPlacement, Rgb, Row, Style,
     };
 
     fn run_with_link(text: &str, hyperlink_id: Option<HyperlinkId>) -> Run {
@@ -346,8 +346,7 @@ mod tests {
             id: PlacementId(1),
             viewport_row: 2,
             col: GridColumn(3),
-            rows: 4,
-            cols: 5,
+            size: PlacementSize { rows: 4, cols: 5 },
         };
         app.world_mut().trigger(FrameDelta {
             entity,

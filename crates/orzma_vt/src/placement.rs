@@ -25,8 +25,8 @@ pub struct PlacementId(pub u64);
 ///
 /// # Invariants
 ///
-/// `rows` / `cols` always equal the mount-time reservation for `id`;
-/// the VT treats a size change as a remount under a fresh id.
+/// `size` always equals the mount-time reservation for `id`; the VT
+/// treats a size change as a remount under a fresh id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectedPlacement {
     /// The placement this geometry belongs to.
@@ -38,9 +38,20 @@ pub struct ProjectedPlacement {
     pub viewport_row: i32,
     /// Viewport column of the rect's left cell.
     pub col: GridColumn,
-    /// Rect height in cells (mount-time reservation).
+    /// The rect's extent, unchanged from the mount that reserved it.
+    pub size: PlacementSize,
+}
+
+/// The cell rectangle a mount reserves, without its position.
+///
+/// This is deliberately not [`GridSize`], whose row count is the source
+/// of truth for one screenful; a placement's reservation is a sub-rectangle
+/// and must not be substitutable for a grid dimension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlacementSize {
+    /// Reserved height in cells.
     pub rows: u16,
-    /// Rect width in cells (mount-time reservation).
+    /// Reserved width in cells.
     pub cols: u16,
 }
 
@@ -87,8 +98,7 @@ impl PlacementStore {
                         id: p.id,
                         viewport_row: active.viewport_row_of(p.anchor)?,
                         col: p.col,
-                        rows: p.rows,
-                        cols: p.cols,
+                        size: p.size,
                     })
                 }),
         );
@@ -120,8 +130,7 @@ impl PlacementStore {
     pub fn mount(
         &mut self,
         active: ActiveScreen<'_>,
-        rows: u16,
-        cols: u16,
+        size: PlacementSize,
         view_id: String,
         instance_id: Option<String>,
     ) -> Option<PlacementId> {
@@ -140,8 +149,7 @@ impl PlacementStore {
             screen: active.kind(),
             anchor: active.cursor_line_id(),
             col: active.cursor_column(),
-            rows,
-            cols,
+            size,
             view_id,
             instance_id,
         });
@@ -198,6 +206,9 @@ impl PlacementStore {
         self.evict_where(|p| p.screen != ScreenKind::Primary)
     }
 
+    /// Resets the placement store.
+    pub fn reset(&mut self) {}
+
     /// Number of live placements, across both screens.
     #[cfg(test)]
     fn len(&self) -> usize {
@@ -232,8 +243,7 @@ struct Placement {
     screen: ScreenKind,
     anchor: LineId,
     col: GridColumn,
-    rows: u16,
-    cols: u16,
+    size: PlacementSize,
     view_id: String,
     instance_id: Option<String>,
 }
@@ -264,7 +274,12 @@ mod tests {
     }
 
     fn mount(store: &mut PlacementStore, device: &DeviceState, view: &str) -> Option<PlacementId> {
-        store.mount(device.active_screen(), 2, 4, view.to_string(), None)
+        store.mount(
+            device.active_screen(),
+            PlacementSize { rows: 2, cols: 4 },
+            view.to_string(),
+            None,
+        )
     }
 
     /// Asserts that ids are minted in ascending order and never repeat.
@@ -329,8 +344,7 @@ mod tests {
         store
             .mount(
                 device.active_screen(),
-                2,
-                4,
+                PlacementSize { rows: 2, cols: 4 },
                 "memo".into(),
                 Some("a".into()),
             )
@@ -338,8 +352,7 @@ mod tests {
         store
             .mount(
                 device.active_screen(),
-                2,
-                4,
+                PlacementSize { rows: 2, cols: 4 },
                 "memo".into(),
                 Some("b".into()),
             )

@@ -238,6 +238,7 @@ mod tests {
     use super::*;
     use crate::device::DeviceState;
     use crate::device::color::Color;
+    use crate::placement::PlacementSize;
     use crate::screen::grid::GridSize;
     use crate::screen::grid::coords::{GridColumn, GridLine};
 
@@ -294,7 +295,12 @@ mod tests {
             None
         );
         store
-            .mount(device.active_screen(), 2, 4, "v".to_string(), None)
+            .mount(
+                device.active_screen(),
+                PlacementSize { rows: 2, cols: 4 },
+                "v".to_string(),
+                None,
+            )
             .expect("a mount under the cap is accepted");
         let listed = tracker
             .diff_placements(&store, device.active_screen())
@@ -460,7 +466,12 @@ mod tests {
     fn a_placement_change_alone_emits_the_complete_list() {
         let mut rig = drained_rig();
         rig.placements
-            .mount(rig.device.active_screen(), 2, 4, "v".to_string(), None)
+            .mount(
+                rig.device.active_screen(),
+                PlacementSize { rows: 2, cols: 4 },
+                "v".to_string(),
+                None,
+            )
             .expect("a mount under the cap is accepted");
         let mounted = emit(&mut rig).expect("a placement change emits");
         assert_eq!(mounted.placements.as_ref().map(Vec::len), Some(1));

@@ -36,7 +36,7 @@ pub mod prelude {
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::interpreter::apc::ApcWebviewVerb;
-    pub use crate::placement::{PlacementId, ProjectedPlacement};
+    pub use crate::placement::{PlacementId, PlacementSize, ProjectedPlacement};
     pub use crate::screen::cursor::{CURSOR_VISIBLE_BIT, Cursor, CursorShape};
     pub use crate::screen::grid::GridSize;
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
@@ -290,6 +290,7 @@ mod tests {
     use super::*;
     use crate::device::modes::ScreenKind;
     use crate::frame::damage::DamageSpan;
+    use crate::placement::PlacementSize;
     use crate::screen::viewport::ViewportLine;
 
     fn vt() -> OrzmaVt {
@@ -354,7 +355,12 @@ mod tests {
         let mut vt = vt();
         vt.frame();
         vt.placements
-            .mount(vt.device.active_screen(), 2, 4, "v".to_string(), None)
+            .mount(
+                vt.device.active_screen(),
+                PlacementSize { rows: 2, cols: 4 },
+                "v".to_string(),
+                None,
+            )
             .expect("a mount under the cap is accepted");
         let mounted = vt.frame().expect("a placement change emits");
         assert_eq!(mounted.placements.as_ref().map(Vec::len), Some(1));

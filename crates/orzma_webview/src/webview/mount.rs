@@ -53,9 +53,9 @@ pub struct Webview {
 ///
 /// # Invariants
 ///
-/// `ProjectedPlacement.rows` / `cols` for this id always equal `rows` /
-/// `cols` here — the VT treats a size change as a remount, so a drift
-/// between the CEF surface size and the painted rect cannot arise.
+/// `ProjectedPlacement.size` for this id always equals `rows` / `cols`
+/// here — the VT treats a size change as a remount, so a drift between
+/// the CEF surface size and the painted rect cannot arise.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WebviewPlacement {
     /// The VT-minted id; frames address this placement by it.
@@ -601,7 +601,7 @@ fn project_webview_overlays(
                     continue;
                 };
                 let row = i64::from(projected.viewport_row);
-                if row + i64::from(projected.rows) <= 0
+                if row + i64::from(projected.size.rows) <= 0
                     || row >= i64::from(grid.rows)
                     || u32::from(projected.col.0) >= u32::from(grid.cols)
                 {
@@ -614,8 +614,8 @@ fn project_webview_overlays(
                 overlays.rects[slot] = IVec4::new(
                     projected.viewport_row,
                     i32::from(projected.col.0),
-                    i32::from(projected.rows),
-                    i32::from(projected.cols),
+                    i32::from(projected.size.rows),
+                    i32::from(projected.size.cols),
                 );
                 overlays.textures[slot] = Some(texture.0.clone());
                 if !already_notified {
@@ -668,7 +668,9 @@ mod tests {
     use bevy_cef::prelude::PreloadScripts;
     use bevy_orzma_tty::prelude::{TtyApcWebviewSignal, TtyWebviewEvictedSignal};
     use orzma_tty_renderer::CellMetrics;
-    use orzma_vt::prelude::{ApcWebviewVerb, GridColumn, PlacementId, ProjectedPlacement};
+    use orzma_vt::prelude::{
+        ApcWebviewVerb, GridColumn, PlacementId, PlacementSize, ProjectedPlacement,
+    };
 
     fn make_test_app() -> App {
         let mut app = App::new();
@@ -778,8 +780,7 @@ mod tests {
             id,
             viewport_row: 2,
             col: GridColumn(3),
-            rows: 10,
-            cols: 40,
+            size: PlacementSize { rows: 10, cols: 40 },
         }
     }
 
@@ -1393,8 +1394,7 @@ mod tests {
                     id: PlacementId(1),
                     viewport_row: -20,
                     col: GridColumn(0),
-                    rows: 6,
-                    cols: 10,
+                    size: PlacementSize { rows: 6, cols: 10 },
                 }],
             ));
         run_projection(&mut app);
@@ -1415,8 +1415,7 @@ mod tests {
                     id: PlacementId(1),
                     viewport_row: 30,
                     col: GridColumn(0),
-                    rows: 6,
-                    cols: 10,
+                    size: PlacementSize { rows: 6, cols: 10 },
                 }],
             ));
         run_projection(&mut app);
@@ -1437,8 +1436,7 @@ mod tests {
                     id: PlacementId(1),
                     viewport_row: 2,
                     col: GridColumn(80),
-                    rows: 6,
-                    cols: 10,
+                    size: PlacementSize { rows: 6, cols: 10 },
                 }],
             ));
         run_projection(&mut app);
@@ -1471,8 +1469,7 @@ mod tests {
                     id: PlacementId(1),
                     viewport_row: 2,
                     col: GridColumn(79),
-                    rows: 10,
-                    cols: 10,
+                    size: PlacementSize { rows: 10, cols: 10 },
                 }],
             ));
 
@@ -2295,8 +2292,7 @@ mod tests {
                     id: PlacementId(1),
                     viewport_row: -2,
                     col: GridColumn(4),
-                    rows: 6,
-                    cols: 20,
+                    size: PlacementSize { rows: 6, cols: 20 },
                 }],
             ));
         run_projection(&mut app);
@@ -2348,8 +2344,7 @@ mod tests {
                     id: PlacementId(9),
                     viewport_row: 1,
                     col: GridColumn(1),
-                    rows: 2,
-                    cols: 2,
+                    size: PlacementSize { rows: 2, cols: 2 },
                 }],
             ));
         run_projection(&mut app);
@@ -2367,8 +2362,7 @@ mod tests {
             id: PlacementId(1),
             viewport_row: 3,
             col: GridColumn(2),
-            rows: 10,
-            cols: 40,
+            size: PlacementSize { rows: 10, cols: 40 },
         };
         let mut first = make_test_app();
         let mounted_first = spawn_terminal(&mut first);
@@ -2431,8 +2425,7 @@ mod tests {
                     id: PlacementId(2),
                     viewport_row: 5,
                     col: GridColumn(0),
-                    rows: 10,
-                    cols: 40,
+                    size: PlacementSize { rows: 10, cols: 40 },
                 }],
             ));
         run_projection(&mut app);
