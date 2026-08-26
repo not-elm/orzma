@@ -41,6 +41,7 @@ use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
 use crate::frame::damage::DamageSpan;
+use crate::placement::{AnchoredPlacement, PlacementId, PlacementSize};
 use crate::screen::character_sets::{
     CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
 };
@@ -49,6 +50,7 @@ use crate::screen::cursor::{Cursor, CursorShape};
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
+use crate::screen::placements::ScreenPlacements;
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
 use crate::screen::viewport::{DisplayOffset, Viewport, ViewportLine};
@@ -69,6 +71,7 @@ pub struct Screen {
     tabs: TabStops,
     character_set_mapping: CharacterSetMapping,
     checkpoint: Checkpoint,
+    placements: ScreenPlacements,
 }
 
 /// Span selector for [`Screen::erase_in_line`] (`CSI K`).
@@ -106,6 +109,7 @@ impl Screen {
             tabs: TabStops::default(),
             character_set_mapping: CharacterSetMapping::default(),
             checkpoint: Checkpoint::default(),
+            placements: ScreenPlacements::new(),
         }
     }
 }
@@ -733,6 +737,14 @@ impl Screen {
     /// origin mode was in force, because the state is replaced wholesale
     /// rather than homed through the origin.
     ///
+    /// Every placement on this screen becomes evictable here without
+    /// this method touching the table: [`crate::screen::grid::Grid::reset`]
+    /// mints fresh row ids without rewinding its counter, so no anchor
+    /// taken before the reset can resolve afterwards and the next
+    /// [`Self::evict_lost_anchors`] names all of them. A rewrite of
+    /// `Grid::reset` that renumbers from zero would silently keep the
+    /// placements alive.
+    ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`) — its screen-scoped actions
@@ -749,10 +761,78 @@ impl Screen {
     }
 }
 
+/// Webview placements.
+///
+/// The anchor a mount records is a `LineId` from this screen's own grid,
+/// so a placement can only ever be resolved against the grid that minted
+/// its anchor.
+///
+/// Four of these forward to [`ScreenPlacements`] unchanged. They stay
+/// rather than exposing the table, so `DeviceState` never holds a
+/// `&mut ScreenPlacements` and every mutation of a screen's placements
+/// goes through the screen that owns them.
+impl Screen {
+    /// Registers a mount at the write cursor under an already-minted id.
+    pub fn mount_placement(
+        &mut self,
+        id: PlacementId,
+        size: PlacementSize,
+        view_id: String,
+        instance_id: Option<String>,
+    ) {
+        let anchor = self.cursor_line_id();
+        let col = self.cursor_column();
+        self.placements
+            .mount(id, anchor, col, size, view_id, instance_id);
+    }
+
+    /// Drops the placement a re-mount replaces, without reporting it.
+    pub fn supersede_placement(&mut self, view_id: &str, instance_id: Option<&str>) {
+        self.placements.supersede(view_id, instance_id);
+    }
+
+    /// Removes the placements a client `unmount` addresses; returns
+    /// whether anything went.
+    pub fn unmount_placement(&mut self, view_id: Option<&str>, instance_id: Option<&str>) -> bool {
+        self.placements.unmount(view_id, instance_id)
+    }
+
+    /// Empties this screen's table and names every id it held.
+    pub fn take_placements(&mut self) -> Vec<PlacementId> {
+        self.placements.take_all()
+    }
+
+    /// Number of placements this screen holds.
+    pub fn placement_count(&self) -> usize {
+        self.placements.len()
+    }
+
+    /// Resolves this screen's placements into grid coordinates.
+    ///
+    /// # Invariants
+    ///
+    /// The anchors resolve through the same expression
+    /// [`Self::evict_lost_anchors`] passes. A placement this omits is
+    /// exactly a placement the sweep evicts, so no placement can become
+    /// unresolvable without also becoming evictable.
+    pub fn project_placements(&self) -> Vec<AnchoredPlacement> {
+        self.placements
+            .project(|anchor| self.grid.grid_line(anchor))
+    }
+
+    /// Drops the placements whose anchor row left this screen's grid and
+    /// names them.
+    pub fn evict_lost_anchors(&mut self) -> Vec<PlacementId> {
+        self.placements
+            .evict_lost_anchors(|anchor| self.grid.grid_line(anchor))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::device::color::Color;
+    use crate::placement::{PlacementId, PlacementSize};
     use crate::screen::margins::Margins;
 
     fn screen() -> Screen {
@@ -2586,6 +2666,105 @@ mod tests {
             screen.line_feed();
             assert_eq!(screen.grid.history_len(), 1);
             assert_eq!(screen.reset(), Some(DamageSpan::Full));
+        }
+    }
+
+    mod placements {
+        use super::*;
+
+        fn mount(screen: &mut Screen, id: u64, view: &str) {
+            screen.mount_placement(
+                PlacementId(id),
+                PlacementSize { rows: 2, cols: 4 },
+                view.to_string(),
+                None,
+            );
+        }
+
+        /// Asserts that a mount anchors to the row the write cursor sits
+        /// on and to the cursor's column.
+        ///
+        /// Case: a program prints a header, moves the cursor down two
+        /// rows and across three columns, and mounts a webview there.
+        #[test]
+        fn a_mount_anchors_at_the_write_cursor() {
+            let mut screen = screen();
+            screen.state.line = ScreenLine(2);
+            screen.state.column = GridColumn(3);
+            mount(&mut screen, 1, "memo");
+            let projected = screen.project_placements();
+            assert_eq!(projected.len(), 1);
+            assert_eq!(projected[0].point.line, GridLine(2));
+            assert_eq!(projected[0].point.column, GridColumn(3));
+        }
+
+        /// Asserts that a placement whose anchor row left the ring is
+        /// omitted by the projection and named by the sweep, so the two
+        /// cannot disagree.
+        ///
+        /// Case: a webview sits on the last row of the screen and a
+        /// full-screen application scrolls backwards until that row is
+        /// discarded.
+        #[test]
+        fn a_placement_the_projection_omits_is_also_swept() {
+            let mut screen = screen();
+            screen.state.line = ScreenLine(2);
+            mount(&mut screen, 1, "memo");
+            assert_eq!(screen.project_placements().len(), 1);
+
+            for _ in 0..3 {
+                screen.reverse_index();
+            }
+
+            assert!(screen.project_placements().is_empty());
+            assert_eq!(screen.evict_lost_anchors(), vec![PlacementId(1)]);
+            assert_eq!(screen.placement_count(), 0);
+        }
+
+        /// Asserts that a reset leaves this screen's placements
+        /// unresolvable, so the next sweep names all of them.
+        ///
+        /// Case: an application sends `RIS` while webviews are mounted on
+        /// the screen it resets.
+        #[test]
+        fn a_reset_leaves_this_screens_placements_unresolvable() {
+            let mut screen = screen();
+            mount(&mut screen, 1, "memo");
+            mount(&mut screen, 2, "chart");
+            assert_eq!(screen.reset(), None);
+            assert!(screen.project_placements().is_empty());
+            assert_eq!(
+                screen.evict_lost_anchors(),
+                vec![PlacementId(1), PlacementId(2)]
+            );
+        }
+
+        /// Asserts that a re-mount at the same address supersedes the
+        /// live placement without naming the superseded id.
+        ///
+        /// Case: a program re-renders the same named view, and the host
+        /// must keep the entity it already spawned for that view.
+        #[test]
+        fn a_remount_supersedes_without_naming_the_superseded_id() {
+            let mut screen = screen();
+            mount(&mut screen, 1, "memo");
+            screen.supersede_placement("memo", None);
+            mount(&mut screen, 2, "memo");
+            assert_eq!(screen.placement_count(), 1);
+            assert_eq!(screen.take_placements(), vec![PlacementId(2)]);
+        }
+
+        /// Asserts that an unmount addressed to a view removes it and
+        /// reports that something went.
+        ///
+        /// Case: a program tears down one of two mounted views.
+        #[test]
+        fn an_unmount_removes_the_addressed_placement() {
+            let mut screen = screen();
+            mount(&mut screen, 1, "memo");
+            mount(&mut screen, 2, "chart");
+            assert!(screen.unmount_placement(Some("memo"), None));
+            assert_eq!(screen.placement_count(), 1);
         }
     }
 }
