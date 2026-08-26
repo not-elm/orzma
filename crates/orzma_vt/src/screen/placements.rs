@@ -89,7 +89,10 @@ impl ScreenPlacements {
     /// a cache. Those belong to [`Self::evict_lost_anchors`], which runs
     /// while damage can still be staged — a mutation here would land
     /// after the ledger was drained and reach no frame.
-    pub fn project(&self, line_of: impl Fn(LineId) -> Option<GridLine>) -> Vec<AnchoredPlacement> {
+    pub fn project(
+        &self,
+        mut line_of: impl FnMut(LineId) -> Option<GridLine>,
+    ) -> Vec<AnchoredPlacement> {
         self.placements
             .iter()
             .filter_map(|p| {
@@ -110,10 +113,11 @@ impl ScreenPlacements {
     ///
     /// # Invariants
     ///
-    /// `line_of` is the same resolver [`Self::project`] takes. A
-    /// placement this rejects is exactly a placement projection would
-    /// omit, so no placement can become unresolvable without also
-    /// becoming evictable.
+    /// `line_of` must resolve anchors exactly as the expression handed to
+    /// [`Self::project`] does; the matching bound does not enforce it, so
+    /// the owning screen passes one expression to both. A placement this
+    /// rejects is exactly a placement projection would omit, so no
+    /// placement can become unresolvable without also becoming evictable.
     pub fn evict_lost_anchors(
         &mut self,
         mut line_of: impl FnMut(LineId) -> Option<GridLine>,
@@ -202,7 +206,8 @@ mod tests {
     }
 
     /// Asserts that an unmount naming only a view id removes every
-    /// placement at that view, and that a `None` view id removes all.
+    /// placement at that view, an unmount naming an instance id too
+    /// removes just that instance, and a `None` view id removes all.
     ///
     /// Case: a program tears down one of its views, then exits and asks
     /// the terminal to drop whatever is left.
