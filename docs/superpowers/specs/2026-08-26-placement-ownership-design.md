@@ -12,8 +12,9 @@ placement について何も返さない形にする。
 その検討メモを実装可能な仕様まで落としたもので、メモの内容とは以下が異なる。
 
 - 表の置き場所を `screen/placements.rs` に確定した
-- メモの `row_of(grid, viewport, id)` 自由関数を `Viewport::row_of(GridLine) -> i32` に置き換えた。
-  射影と sweep が同じリゾルバを共有できる形にするため
+- メモの `row_of(grid, viewport, id)` 自由関数を廃した。フレームが運ぶ placement 座標を
+  viewport 空間から grid 空間へ移した（`ProjectedPlacement` → `AnchoredPlacement`）ので、
+  VT 側にオフセット適用そのものが要らなくなった
 - eviction を sweep に一本化したため、メモの未決 #3（`Screen::reset` の戻り値）が問題ごと消えた
 - sweep をアクティブスクリーン限定から両スクリーンへ広げた
 
@@ -23,6 +24,7 @@ placement について何も返さない形にする。
 
 - `PlacementStore` の解体と `ScreenPlacements` / `DeviceState` への再配置
 - `ActiveScreen` 型の削除
+- `ProjectedPlacement` の grid 空間化（`AnchoredPlacement`）と、消費側 `orzma_webview` の追随
 - sweep のアクティブスクリーン限定を解除し、両スクリーンを走査する形へ
 - `FrameTracker` と `Executor` の借用構成の追随
 - 上記に伴うテストの移設と追加
@@ -105,10 +107,11 @@ WGSL はテクスチャを動的インデックスできないため、オーバ
 ```rust
 pub struct PlacementId(pub u64);
 pub struct PlacementSize { pub rows: u16, pub cols: u16 }
-pub struct ProjectedPlacement {
+
+/// One placement's grid-space geometry at emit time.
+pub struct AnchoredPlacement {
     pub id: PlacementId,
-    pub viewport_row: i32,
-    pub col: GridColumn,
+    pub point: GridPoint,
     pub size: PlacementSize,
 }
 
@@ -118,7 +121,58 @@ pub const MAX_PLACEMENTS: usize = 12;
 
 `PlacementStore` と `Placement` は消える。`MAX_PLACEMENTS` は無修飾から `pub` へ広がる
 （`device.rs` が cap を執行するため）。3 つの型は `orzma_vt::prelude` から
-`orzma_tty_renderer::schema` へ再エクスポートされる現行の経路をそのまま維持する。
+`orzma_tty_renderer::schema` へ再エクスポートされる現行の経路をそのまま維持する
+（`schema.rs:12-16` の `ProjectedPlacement` を `AnchoredPlacement` へ差し替える。`GridPoint` は
+既に再エクスポート済み）。
+
+`ProjectedPlacement` からの改名は座標空間の変更を伴う。次節がその根拠を持つ。
+
+### 座標空間 — placement は grid 空間で出る
+
+`ProjectedPlacement.viewport_row: i32` は、フレームが運ぶ「アンカーされた内容」のうち唯一
+viewport 空間で出ていた。他はすべて grid 空間で、射影は消費側が行う。
+
+| 種別 | 空間 | 射影する側 |
+| - | - | - |
+| `DirtyRow.line: ViewportLine` | viewport | ——（リスト自体が再描画対象の viewport 行） |
+| `Cursor.point: GridPoint` | grid | 消費側（`orzma_tty_renderer/src/schema/grid.rs:127`） |
+| `ViCursor` | grid | 消費側（`schema/grid.rs:138`） |
+| `SelectionRange.start` / `.end` | grid | 消費側 |
+| `ProjectedPlacement.viewport_row` | **viewport** | **VT** |
+
+`SelectionRange` の doc（`selection.rs:11-14`）がこの規約を明文化している。
+
+> The endpoints are raw grid positions and do not move when the user scrolls; project them with
+> `GridLine::to_viewport` to place the highlight on screen.
+
+`AnchoredPlacement { id, point: GridPoint, size }` は placement をこの規約に戻す。
+`viewport_row: i32` と `col: GridColumn` は `GridPoint` に畳まれ、`Cursor` や `SelectionRange` と
+同じ形になる。フレームの契約から raw な `i32` 座標が消える。
+
+消費側の追随は 1 箇所で足りる。`project_webview_overlays`（`mount.rs:572`）は `&TerminalGrid` を
+取り、そこに `display_offset` が載っており（`schema/grid.rs:56`）、`Changed` ゲート無しで毎フレーム
+全 placement の rect を組み直している。既に `let row = i64::from(projected.viewport_row);` と `i64` へ
+昇格してカリング判定しているので、`i64::from(point.line.0) + i64::from(grid.display_offset)` に
+替わるだけになる。カリング（`row + size.rows <= 0 || row >= grid.rows`）は元から消費側にある。
+
+**`GridLine` に非カリングの射影ヘルパは足さない。** `GridLine::to_viewport` は `0..rows` の外を
+`None` にするので placement には使えない（上端がはみ出していても本体は描く）が、その隣に `-> i32`
+を返す 2 本目の変換を置くと `GridLine` の変換口が 2 つになり、`ViewportLine` との区別が曖昧になる。
+本設計の後、符号付きの行を計算するのは `orzma_webview` の 1 箇所だけであり、逆方向
+（viewport → grid）は既に `orzma_tty_renderer/src/grid.rs:44`, `:86` でベタ書きされている。
+2 箇所目が現れたら、`display_offset` を所有する `TerminalGrid` の側に置く。
+
+副次的に、`FrameTracker::diff_placements`（`frame.rs:186-193`）が**ユーザースクロールで発火しなく
+なる**。現行は viewport を 1 行動かすだけで全 `viewport_row` がずれ、リスト全体が再送される。
+grid 空間ではユーザースクロールに対して不変なので `placements: None` に落ちる。内容のスクロールでは
+依然として全件変わる —— `GridLine` は frame-local で、履歴へ押し出された行があると既存テキストの
+line が全て -1 されるため（`coords.rs:13-15`）。
+
+あわせて `ViewportLine` の doc（`screen/viewport.rs:21-25`）から、`u16` では表現できない負値と
+`-1` センチネルの記述を落とす。あの規約は `orzma_tty_engine` のワイヤ型（`ViCursor.row: i16` /
+`ViewportPoint.row: i16`、`frame_builder.rs:176-186`, `:222-223`）のもので、`orzma_vt` の
+`ViewportLine` は `Screen::viewport_row` の添字・`DamageSpan::rows`・`DirtyRow.line` にしか
+使われず、常に非負かつ範囲内である。
 
 ### 可視性の書き方
 
@@ -128,8 +182,8 @@ pub const MAX_PLACEMENTS: usize = 12;
 変わらず、宣言が長くなるだけになる。既存の `PlacementStore`（`pub(crate) struct`）も
 `DeviceState`（同）も、メソッドは全て `pub fn` で書かれている。
 
-例外は `Screen::viewport_row_of` で、これは現行コードが `pub(crate) fn` にしている
-（`screen.rs:614`）。本設計はこのメソッドの中身を差し替えるだけで可視性は触らない。
+現行で唯一 `pub(crate) fn` になっている `Screen::viewport_row_of`（`screen.rs:614`）は本設計で
+消えるので（後述）、例外は残らない。
 
 ### `screen/placements.rs`（新規）— 1 スクリーン分の表
 
@@ -138,8 +192,9 @@ pub const MAX_PLACEMENTS: usize = 12;
 その慣習に従う。
 
 ```rust
-//! The webview placements one screen owns: the mount table, its
-//! projection into viewport coordinates, and the eviction sweep.
+//! The webview placements one screen owns: the mount table, the
+//! resolution of its anchors into grid coordinates, and the eviction
+//! sweep.
 
 /// The placements mounted on one screen.
 ///
@@ -185,23 +240,23 @@ impl ScreenPlacements {
     /// whether anything went.
     pub fn unmount(&mut self, view_id: Option<&str>, instance_id: Option<&str>) -> bool;
 
-    /// Projects every placement into viewport coordinates through
-    /// `row_of` — the complete list, not a diff.
+    /// Resolves every placement's anchor through `line_of` — the
+    /// complete list, not a diff.
     pub fn project(
         &self,
-        row_of: impl Fn(LineId) -> Option<i32>,
-    ) -> Vec<ProjectedPlacement>;
+        line_of: impl Fn(LineId) -> Option<GridLine>,
+    ) -> Vec<AnchoredPlacement>;
 
-    /// Drops the placements `row_of` can no longer resolve and names them.
+    /// Drops the placements `line_of` can no longer resolve and names them.
     ///
     /// # Invariants
     ///
-    /// `row_of` is the same resolver [`Self::project`] takes. A placement
+    /// `line_of` is the same resolver [`Self::project`] takes. A placement
     /// this rejects is exactly a placement projection would omit, so no
-    /// placement can become invisible without also becoming evictable.
+    /// placement can become unresolvable without also becoming evictable.
     pub fn evict_lost_anchors(
         &mut self,
-        row_of: impl Fn(LineId) -> Option<i32>,
+        line_of: impl Fn(LineId) -> Option<GridLine>,
     ) -> Vec<PlacementId>;
 
     /// Empties the table and names every id it held.
@@ -225,37 +280,17 @@ struct Placement {
 必要が無いよう、`mount` が構成要素を受け取る形にした。
 
 anchor の解決をクロージャで受けるのは、`ScreenPlacements` が `Grid` を知らずに済ませるため。
-`project` と `evict_lost_anchors` は同じ `impl Fn(LineId) -> Option<i32>` を受ける。
+`project` と `evict_lost_anchors` は同じ `impl Fn(LineId) -> Option<GridLine>` を受ける。
 
 生死判定は「射影が省く placement」と同義でなければならない。2 本の式に分けると、片方だけが
 将来変わったときに**射影されないのに sweep もされない** placement が生まれ、cap スロットと
 host 側の webview 子エンティティを永久に占有したまま、どこにもエラーが出ない。
 
-ただし**シグネチャを揃えるだけでは同義性は保証されない。** 同じ `Fn(LineId) -> Option<i32>` を
-満たす独立した 2 つのクロージャを書くことは Rust が禁じないので、型は乖離を止めない。
-実装を 1 本にする必要がある。そのため `Screen` 側に private なリゾルバを 1 つ置き、射影・sweep・
-`viewport_row_of` の 3 者ともそれを通す（次節）。
-
-### `Viewport` — オフセット適用を型の上へ
-
-リゾルバを 1 本にするために `Viewport` へ 1 メソッド足す。
-
-```rust
-// screen/viewport.rs
-impl Viewport {
-    /// The signed viewport row an active-grid line sits at.
-    ///
-    /// Saturates rather than wrapping; the value is signed because a row
-    /// scrolled above the viewport reports a negative row that the
-    /// renderer clips.
-    pub fn row_of(&self, line: GridLine) -> i32;
-}
-```
-
-これで grid 引きとオフセット適用が分離され、両者の合成を `Screen` の private リゾルバ
-`anchor_row_of(grid, viewport, id)` 1 本にまとめられる（次節）。検討メモが用意していた
-`row_of(grid, viewport, id)` 自由関数と結局は同じ形に落ち着いたが、オフセット適用そのものは
-それを所有する `Viewport` の上に置く。
+**シグネチャを揃えるだけでは同義性は保証されない。** 同じ境界を満たす独立した 2 つのクロージャを
+書くことを Rust は禁じないので、型は乖離を止めない。ここでは両者に**同一の式**
+`|anchor| self.grid.grid_line(anchor)` を渡すことで解く。生死を決めているのは `Grid::grid_line` が返す
+`Option` ただ 1 つで、その手前にも後ろにも `None` を作りうる段が無い。placement を grid 空間で出す
+（前節）ことで VT からオフセット適用が消え、この形が可能になった。
 
 ### `Screen` — 14 番目の impl ブロック
 
@@ -300,56 +335,42 @@ impl Screen {
     pub fn take_placements(&mut self) -> Vec<PlacementId>;
     pub fn placement_count(&self) -> usize;
 
-    /// Projects this screen's placements into viewport coordinates.
-    pub fn project_placements(&self) -> Vec<ProjectedPlacement> {
-        let Self { placements, grid, viewport, .. } = self;
-        placements.project(|anchor| Self::anchor_row_of(grid, viewport, anchor))
+    /// Resolves this screen's placements into grid coordinates.
+    ///
+    /// # Invariants
+    ///
+    /// The anchors resolve through the same expression
+    /// [`Self::evict_lost_anchors`] passes. A placement this omits is
+    /// exactly a placement the sweep evicts, so no placement can become
+    /// unresolvable without also becoming evictable.
+    pub fn project_placements(&self) -> Vec<AnchoredPlacement> {
+        self.placements.project(|anchor| self.grid.grid_line(anchor))
     }
 
     /// Drops the placements whose anchor row left this screen's grid and
     /// names them.
     pub fn evict_lost_anchors(&mut self) -> Vec<PlacementId> {
-        let Self { placements, grid, viewport, .. } = self;
-        placements.evict_lost_anchors(|anchor| Self::anchor_row_of(grid, viewport, anchor))
-    }
-
-    /// The signed viewport row `id`'s row sits at; `None` once the row
-    /// has left the grid.
-    ///
-    /// # Invariants
-    ///
-    /// Projection, the eviction sweep, and [`Self::viewport_row_of`] all
-    /// resolve anchors through this one function. A placement it cannot
-    /// resolve is exactly a placement projection omits, so no placement
-    /// can become invisible without also becoming evictable. Two
-    /// closures of the same signature would not carry that guarantee.
-    ///
-    /// It takes the two fields rather than `&self` because the sweep
-    /// holds `placements` mutably and a `&self` receiver would capture
-    /// the whole struct (E0502).
-    fn anchor_row_of(grid: &Grid, viewport: &Viewport, id: LineId) -> Option<i32> {
-        grid.grid_line(id).map(|line| viewport.row_of(line))
+        self.placements.evict_lost_anchors(|anchor| self.grid.grid_line(anchor))
     }
 }
 ```
 
-既存の `Screen::viewport_row_of`（10 番目のブロック）も同じリゾルバへ委譲する形に書き換える。
+既存の `Screen::viewport_row_of`（10 番目のブロック、`screen.rs:614`）と、その委譲先である
+`ActiveScreen::viewport_row_of`（`device.rs:173`）は**消える**。呼び出し元は `placement.rs:97` と
+`:181` の 2 箇所しかなく、どちらも `Grid::grid_line` の直呼びに変わる。
 
-```rust
-pub(crate) fn viewport_row_of(&self, id: LineId) -> Option<i32> {
-    Self::anchor_row_of(&self.grid, &self.viewport, id)
-}
-```
+借用について。**フィールド分割（`let Self { placements, grid, .. } = self;`）は要らない。**
+sweep はレシーバに `&mut self.placements` を取りながらクロージャが `self.grid` を共有捕捉するが、
+RFC 2229 の精密キャプチャで捕捉されるのは `self.grid` という place だけで `*self` 全体ではないため、
+2 つの借用は disjoint として通る。
 
-借用について。以下は 1.95 / edition 2024 で実際にコンパイルして確かめてある（2 者が独立に検証）。
+これは private リゾルバを持たない形にした結果である。`&self` レシーバのメソッドを述語に渡す形
+（`|a| self.viewport_row_of(a)`）はクロージャが `*self` 全体を捕捉して `&mut self.placements` と
+衝突し、**E0502 で通らない** —— 精密キャプチャが place を絞れるのはフィールドを直接読むときだけで、
+メソッド呼び出しでは絞れない。当初案が private リゾルバに 2 フィールドを渡していたのはこの制約を
+避けるためだったが、フィールドを直に叩く今の形では制約そのものが現れない。
 
-- `project_placements` は `&self` なので本来フィールド分割を要さない（`self.placements` の共有借用と
-  クロージャが握る `self` の共有借用は両立する）。sweep と同じ形に揃えるために分割している
-- `evict_lost_anchors` の分割は RFC 2229 の精密キャプチャがあるため**必須ではない**が、
-  `anchor_row_of` に 2 フィールドを渡すのでどのみち必要になる
-- `viewport_row_of` を**そのまま**述語に渡す形（`|a| self.viewport_row_of(a)`）は
-  **E0502 で通らない**。クロージャが `*self` 全体を捕捉して `&mut self.placements` と衝突する。
-  `anchor_row_of` が `&self` ではなく 2 フィールドを取るのはこの制約のため
+以上 2 点は 1.95 / edition 2024 で最小再現をコンパイルして確認した。
 
 **`ScreenPlacements` と `Placement` には `#[derive(Debug)]` が要る。** `Screen` が
 `#[derive(Debug)]` を持つ（`screen.rs:62`）ので、derive できないフィールドを足すとその derive が壊れる。
@@ -410,15 +431,19 @@ impl DeviceState {
         view_id: Option<&str>,
         instance_id: Option<&str>,
     ) -> bool {
-        let mut removed = false;
-        for screen in self.both_mut() {
-            removed |= screen.unmount_placement(view_id, instance_id);
-        }
-        removed
+        let primary = self.screens.primary.unmount_placement(view_id, instance_id);
+        let alternate = self.screens.alternate.unmount_placement(view_id, instance_id);
+        primary || alternate
     }
 
     /// Sweeps both screens for placements whose anchor no longer resolves
     /// and names them.
+    ///
+    /// # Invariants
+    ///
+    /// The primary screen's ids come first. The order is observable —
+    /// the host acts on the returned list in sequence — and this is the
+    /// only operation that exposes it, so it is fixed here.
     pub fn evict_lost_anchors(&mut self) -> Vec<PlacementId>;
 
     /// Applies an alternate-screen flip, tearing down the placements the
@@ -427,16 +452,6 @@ impl DeviceState {
 
     /// Drops the placement a re-mount replaces on either screen.
     fn supersede_placement(&mut self, view_id: &str, instance_id: Option<&str>);
-
-    /// Both screens, primary first.
-    ///
-    /// The four placement operations that span the pair go through this
-    /// rather than reaching into `screens`, so the order an eviction list
-    /// is built in is stated once.
-    fn both(&self) -> [&Screen; 2];
-
-    /// Both screens, primary first.
-    fn both_mut(&mut self) -> [&mut Screen; 2];
 
     /// Live placements across both screens — what the cap counts.
     fn placement_count(&self) -> usize;
@@ -498,7 +513,7 @@ RIS の結線はスコープ外だが、この分担は本設計が前提にし�
 // frame.rs
 pub fn emit(&mut self, device: &DeviceState) -> Option<Frame>   // 第 2 引数が消える
 
-fn diff_placements(&self, device: &DeviceState) -> Option<Vec<ProjectedPlacement>> {
+fn diff_placements(&self, device: &DeviceState) -> Option<Vec<AnchoredPlacement>> {
     let projected = device.active().project_placements();
     (projected != self.placements).then_some(projected)
 }
@@ -653,6 +668,8 @@ placement レイヤに専用の回帰テストを足す（下記 T-N1）。
 | `switch_screen` の `evict_where(\|p\| p.screen != Primary)` の条件 | `placement.rs:196` |
 | `Executor` の借用フィールド 1 個（6 → 5） | `interpreter.rs:101` |
 | `FrameTracker::emit` の第 2 引数 | `frame.rs:139` |
+| `Screen::viewport_row_of`（`ActiveScreen` 側は上の型ごと消える行に含まれる） | `screen.rs:614` |
+| `ProjectedPlacement.viewport_row: i32`（`AnchoredPlacement.point: GridPoint` になる） | `placement.rs:38` |
 | `OrzmaVt::placements` フィールド | `lib.rs:224` / `:245` / `:264` |
 | 回帰テスト `a_sweep_leaves_the_other_screens_placement_alone` | `placement.rs:467` — 守る失敗モードが存在しなくなる |
 | `ris.md` #4 の `clear()` API | 未実装のまま不要になる |
@@ -668,13 +685,21 @@ placement レイヤに専用の回帰テストを足す（下記 T-N1）。
 | 現在の対象 | 移設先 |
 | - | - |
 | supersession、unmount のアドレス指定、`take_all` | `screen/placements.rs` の `mod tests` |
-| mount が cursor に anchor する、射影が viewport を通る、sweep が解決不能を落とす | `screen.rs` の 14 番目のテストモジュール |
+| mount が cursor に anchor する、射影が anchor を grid 行へ解決する、sweep が解決不能を落とす | `screen.rs` の 14 番目のテストモジュール |
 | cap、id 単調、`switch_screen` の teardown | `device.rs` の `mod tests` |
 
 ### 削除
 
 - `a_sweep_leaves_the_other_screens_placement_alone` —— 非アクティブ側の anchor を
   アクティブな grid で解決する経路が型として存在しなくなる
+- `screen.rs:2260` の `mod viewport_row_of` 3 本。`Screen::viewport_row_of` が消えるため:
+  - `an_anchor_above_the_viewport_reports_a_negative_row` と
+    `an_anchor_trimmed_from_the_ring_stops_resolving` は `screen/grid.rs:421-449` の
+    `grid_line` テストに吸収される
+  - `scrolling_back_moves_an_anchors_reported_row_down` が固定していた「ユーザーがスクロールすると
+    webview が追従する」契約は `orzma_vt` の外へ出る。移設先は `orzma_webview` の
+    `project_webview_overlays` テスト（`mount.rs`）で、`display_offset` と `placements` を載せた
+    `TerminalGrid` を組み、`TerminalOverlays` の rect の row を確かめる形になる
 
 ### 追加
 
@@ -684,7 +709,7 @@ placement レイヤに専用の回帰テストを足す（下記 T-N1）。
 | T-N2 | `a_sweep_reaches_the_inactive_screen` | 両スクリーン sweep。非アクティブ側の腐った anchor が回収される |
 | T-N3 | `a_mount_at_the_cap_is_rejected_across_both_screens` | cap が合算であること。片方 6 + もう片方 6 で 13 個目が拒否される |
 | T-N4 | `a_remount_supersedes_across_screens` | アドレス空間が端末単位であること |
-| T-N5 | `a_placement_the_projection_omits_is_also_swept` | 射影と sweep が同じリゾルバを使うこと。anchor を殺した状態で `project_placements()` が省き、かつ `evict_lost_anchors()` が名指すことを 1 つのテストで対にする。リゾルバが 2 本に分かれる将来の変更をここで落とす |
+| T-N5 | `a_placement_the_projection_omits_is_also_swept` | 射影と sweep が同一の式で anchor を解決すること。anchor を殺した状態で `project_placements()` が省き、かつ `evict_lost_anchors()` が名指すことを 1 つのテストで対にする。リゾルバが 2 本に分かれる将来の変更をここで落とす |
 | T-N6 | `a_broad_unmount_reaches_both_screens` | `unmount_placement` が短絡しないこと。同じ `view_id` を両スクリーンに mount し、`view_id` だけを指定した unmount で**両方**消えることを固定する。`.any(..)` や `a \|\| b` で書くと片方が残り、host は両方 despawn するので VT だけが cap スロットを抱える |
 
 ### `tdd-placement-reset.md` の 7 ケース
@@ -729,20 +754,27 @@ fn evict_where(&mut self, should_evict: impl FnMut(&mut Placement) -> bool) -> V
 
 ## 移行手順
 
-各段階で木がコンパイルでき、テストが通る形に分ける。段階 1〜3 の間は新旧の表が併存するが、
+各段階で木がコンパイルでき、テストが通る形に分ける。段階 2〜4 の間は新旧の表が併存するが、
 新しい側を読む本番コードが無いので二重管理にはならない（`device.rs` には既に
 `#![expect(dead_code)]` がある）。
 
-1. **`screen/placements.rs` を新設。** `ScreenPlacements` と `Placement` を実装し、
+1. **placement を grid 空間で出す。** `ProjectedPlacement` を
+   `AnchoredPlacement { id, point: GridPoint, size }` に置き換え、`PlacementStore::project` の
+   戻り値と `Screen::viewport_row_of` / `ActiveScreen::viewport_row_of` の削除、
+   `orzma_tty_renderer` の再エクスポートと `TerminalGrid.placements`、`orzma_webview` の
+   `project_webview_overlays`（`mount.rs:603-618`）とそのテストリテラル、`screen.rs:2260` の
+   `mod viewport_row_of` の処遇、`Frame.placements` と `ViewportLine` の doc 修正まで。
+   所有権の移動とは独立しており、この段階だけで木が通る
+2. **`screen/placements.rs` を新設。** `ScreenPlacements` と `Placement` を実装し、
    表操作のテストを `placement.rs` から移植する。この時点では誰も使わない
-2. **`Screen` に 8 番目のフィールドと 14 番目の impl ブロックを追加。** mount / supersede /
+3. **`Screen` に 8 番目のフィールドと 14 番目の impl ブロックを追加。** mount / supersede /
    unmount / project / sweep / take_all とそのテスト
-3. **`DeviceState` に採番・cap・アドレス空間・両スクリーン sweep を追加。** T-N1〜T-N4 を含むテスト
-4. **読み手を切り替えて旧実装を削除。** 下表の全箇所を一度に切り替える。ここが唯一の
+4. **`DeviceState` に採番・cap・アドレス空間・両スクリーン sweep を追加。** T-N1〜T-N4 を含むテスト
+5. **読み手を切り替えて旧実装を削除。** 下表の全箇所を一度に切り替える。ここが唯一の
    破壊的ステップで、分割できない
-5. **`Screen::reset` の doc に暗黙の結合を明記。** 代償 (a) の緩和
+6. **`Screen::reset` の doc に暗黙の結合を明記。** 代償 (a) の緩和
 
-段階 4 で触る箇所は次のとおり。`PlacementStore` を引数・フィールドとして持つコードが
+段階 5 で触る箇所は次のとおり。`PlacementStore` を引数・フィールドとして持つコードが
 production とテストの両方にあり、**全て同時にしか切り替えられない**。
 
 | 箇所 | 内容 |
@@ -758,7 +790,7 @@ production とテストの両方にあり、**全て同時にしか切り替え�
 | `device.rs:25-30` | `DeviceState` の doc が偽になる。「It owns no parser, **placement-extension**, damage, or emission state — those are the VT's own machinery and sit beside it in `OrzmaVt`」を、端末スコープの 3 つを持つ形へ書き換える |
 | `frame.rs:15-17`, `interpreter.rs:20-25`, `lib.rs:7-16` | `PlacementStore` / `ActiveScreen` の import 除去 |
 
-段階 1〜3 はいつでも中断でき、段階 4 に入ったら完走する。
+段階 1〜4 はいつでも中断でき、段階 5 に入ったら完走する。
 
 ## 追随が必要な文書
 
@@ -768,6 +800,8 @@ production とテストの両方にあり、**全て同時にしか切り替え�
 | `docs/todo/tdd-placement-reset.md` | 上表のとおり 7 ケースの対象を変更、T-N1 を追加 |
 | `docs/todo/placement-ownership.md` | 内容は本書が引き継ぐ。検討メモ側には「採用が決まった」旨と本書へのリンクだけを残す |
 | `placement.rs` の `evict_lost_anchors` doc | "Reflow breaks that and will have to sweep both" が実現済みになる |
+| `frame.rs:51-53` の `Frame.placements` doc | "Viewport-projected" を grid 空間へ。`Some(vec![])` の意味を「可視な placement が無い」から「anchor が生きている placement が無い」へ（カリングは元から消費側にある）。ユーザースクロールでは再送されなくなる旨も記す |
+| `screen/viewport.rs:21-25` の `ViewportLine` doc | `u16` では表現できない負値と `-1` センチネルの記述を落とす |
 | `device.rs:96-101` の reflow TODO | 「兄弟フィールドなので caller が配送する」必要が消え、各 `Screen` が自分の表を持つ形に書き換わる |
 
 ## 検討して採らなかった案
@@ -783,12 +817,14 @@ production とテストの両方にあり、**全て同時にしか切り替え�
 | `Screen::reset` が evicted を内部バッファし `take_evicted()` で drain | 「変更は返り値で表す」という現在の作りから外れる。sweep 一本化で問題ごと消えた |
 | RIS が sweep を待たず即座に両スクリーンを clear | 特例が 3 つ（専用 API・専用 liveness・専用戻り値）増える。cap 解放のタイミングも scroll 由来と食い違う |
 | `instance_id` を VT が採番して `PlacementId` を廃止 | supersession が死に、再 mount のたびに host の entity が despawn → ページリロード。加えて `mount` が fire-and-forget でなくなる。`PlacementId` はクライアントプロトコルに露出していない（`orzma_webview_protocol.md` に 0 件）ので、内部の重複 1 個のためにプロトコルの性質を変える交換になる |
-| sweep の述語を `grid.grid_line(..).is_some()` にする | 射影の `viewport_row_of` と生死判定が別の式になる。将来 `viewport_row_of` に 2 つ目の `None` 分岐が生えると、射影されないのに sweep もされない placement が cap スロットと host の子を永久に占有する。`Viewport::row_of` を切り出して合成を共有する形にした |
+| `Viewport::row_of(GridLine) -> i32` を足し、`Screen` の private リゾルバ `anchor_row_of(grid, viewport, id)` で grid 引きとオフセット適用を合成する | 当初案。VT が placement を viewport 空間で出す前提でのみ必要だった。grid 空間で出す形（`AnchoredPlacement`）にすると生死判定が `Grid::grid_line` 1 つに縮み、`Viewport::row_of` も `anchor_row_of` も要らなくなる。射影と sweep が同一の式を共有するという当初の目的はそのまま満たされ、`Screen` の private helper が 1 つ減る |
+| `DeviceState` に `both() -> [&Screen; 2]` / `both_mut() -> [&mut Screen; 2]` を置き、ペアに跨る操作をそこへ通す | フィールドが 2 つしか無い型に private helper を 2 つ足し、毎回一時配列を経由することになる。`self.screens.primary` と `.alternate` を並べて書くほうが短く、`unmount_placement` に至っては「短絡してはならない」不変条件が 2 本の束縛として構造に現れる。primary-first の順序が観測されるのは `evict_lost_anchors` の戻り値だけなので、順序の契約はそのメソッドの `# Invariants` に置いた |
+| `GridLine` に非カリングの射影メソッド（`to_viewport_row(offset) -> i32` 等）を足す | `GridLine` の変換口が 2 つになり、カリングする `to_viewport` との使い分けと `ViewportLine` との区別が曖昧になる。符号付きの行が要るのは `orzma_webview` の 1 箇所だけで、逆方向は既に `orzma_tty_renderer/src/grid.rs:44`, `:86` でベタ書きされている |
 | `Vec<Placement>` を `ArrayVec<Placement, 12>` に | cap は**両スクリーン合算**なので per-screen の型パラメータでは表現できず、24 を許してしまう。`Vec::new()` は最初の push まで確保しないので空表のコストも既にゼロ。依存が増えるだけで不変条件を得ない |
 | クロージャの代わりに `trait AnchorResolver` | 単相化は同じで、`ScreenPlacements` にトレイト境界を通す分だけ増える。crate は既に `evict_where` で述語をクロージャで渡している |
 | `HashMap<LineId, usize>` の側インデックスや `slotmap` / `generational-arena` | 索引は `VecDeque::insert` / `remove` のたび、つまりスクロールのたびに再構築が要り、支配的なケースでスキャンより遅い。arena は「同一性は行に、アドレスはスクロールで動く」というリングの性質と逆を向く |
 | `FrameTracker` に射影のスクラッチバッファを戻す | `14c5556` で収支を数えた上で削除したばかり。差分ありの経路では `clone` が消えて同数、placement 0 個なら `collect` も確保しない |
-| `placement.rs` を完全に解体する（`ProjectedPlacement` を `frame.rs` へ、`MAX_PLACEMENTS` を `device.rs` へ、残りを `screen/placements.rs` へ） | 方向としては正しい。4 項目 3 所有者の状態は本設計が 1 階層上で消している匂いと同じ。ただし段階 4 の差分をさらに広げるので **follow-up として分離する** |
+| `placement.rs` を完全に解体する（`AnchoredPlacement` を `frame.rs` へ、`MAX_PLACEMENTS` を `device.rs` へ、残りを `screen/placements.rs` へ） | 方向としては正しい。4 項目 3 所有者の状態は本設計が 1 階層上で消している匂いと同じ。ただし段階 5 の差分をさらに広げるので **follow-up として分離する** |
 
 ## 本設計が前提にしている、まだ結線されていないもの
 
@@ -800,7 +836,7 @@ production とテストの両方にあり、**全て同時にしか切り替え�
 | `Executor` が evicted id を `VtSignal::WebviewEvicted` に載せる | signal の outbox 自体が TODO（`interpreter.rs:91`） |
 | sweep の結果が非空なら chunk liveness を立てる | 同上（`interpreter.rs:93-97`） |
 
-VT より下（`Grid` のトリム、`grid_line` の `None`、`viewport_row_of`、表の sweep）と、
+VT より下（`Grid` のトリム、`grid_line` の `None`、表の sweep）と、
 VT より上（`signals.rs:150` の pump、`mount.rs:463` の `on_webview_evicted`）は実装済みで
 テストもある。欠けているのは `Executor` の 1 段だけで、本設計はその段が呼ぶ API の形を
 確定させる。
