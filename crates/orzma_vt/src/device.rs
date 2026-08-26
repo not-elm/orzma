@@ -19,7 +19,7 @@ use crate::frame::damage::DamageSpan;
 use crate::screen::Screen;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::LineId;
-use crate::screen::grid::coords::GridColumn;
+use crate::screen::grid::coords::{GridColumn, GridLine};
 use crate::screen::viewport::{DisplayOffset, Scroll};
 
 /// The emulated terminal device: screens, modes, tabs, colors, and
@@ -168,10 +168,10 @@ impl ActiveScreen<'_> {
         self.screen.cursor_line_id()
     }
 
-    /// The signed viewport row `id` now sits at; `None` once the row has
+    /// The active-grid line `id` now sits at; `None` once the row has
     /// left the ring.
-    pub fn viewport_row_of(&self, id: LineId) -> Option<i32> {
-        self.screen.viewport_row_of(id)
+    pub fn grid_line_of(&self, id: LineId) -> Option<GridLine> {
+        self.screen.grid_line_of(id)
     }
 
     /// The cursor's column.

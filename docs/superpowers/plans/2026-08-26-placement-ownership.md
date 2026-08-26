@@ -775,6 +775,8 @@ git commit -m "feat(orzma_vt): add the per-screen placement table"
 
 **Interfaces:**
 - Consumes: Task 2 の `ScreenPlacements`
+
+> `Screen::reset` は `Option<DamageSpan>` を返し、`Option` は `#[must_use]` なので裸で呼ぶと `unused_must_use` が出る。かつ **overlay はセルを書かないので、placement だけが乗った画面では `Grid::is_blank()` が true になり `reset()` は `None` を返す**（spec「帰結」節の当のケース）。テストでは戻り値を `assert_eq!(.., None)` で受けること —— 警告が消えるうえ、「damage は無いが placement は落ちる」という設計上の要点がテストに残る。
 - Produces:
   - `Screen::mount_placement(&mut self, id: PlacementId, size: PlacementSize, view_id: String, instance_id: Option<String>)`
   - `Screen::supersede_placement(&mut self, view_id: &str, instance_id: Option<&str>)`
@@ -851,7 +853,7 @@ git commit -m "feat(orzma_vt): add the per-screen placement table"
             let mut screen = screen();
             mount(&mut screen, 1, "memo");
             mount(&mut screen, 2, "chart");
-            screen.reset();
+            assert_eq!(screen.reset(), None);
             assert!(screen.project_placements().is_empty());
             assert_eq!(
                 screen.evict_lost_anchors(),
@@ -1131,7 +1133,7 @@ git commit -m "feat(orzma_vt): let Screen own its placement table"
         let mut device = device();
         device.set_active_screen_for_test(ScreenKind::Alternate);
         let id = mount(&mut device, "memo").expect("alternate mount accepted");
-        device.active_mut().reset();
+        assert_eq!(device.active_mut().reset(), None);
         device.set_active_screen_for_test(ScreenKind::Primary);
         assert_eq!(device.evict_lost_anchors(), vec![id]);
     }
@@ -1149,7 +1151,7 @@ git commit -m "feat(orzma_vt): let Screen own its placement table"
         let alternate = mount(&mut device, "app").expect("alternate mount accepted");
         for kind in [ScreenKind::Primary, ScreenKind::Alternate] {
             device.set_active_screen_for_test(kind);
-            device.active_mut().reset();
+            assert_eq!(device.active_mut().reset(), None);
         }
         device.set_active_screen_for_test(ScreenKind::Primary);
         assert_eq!(device.evict_lost_anchors(), vec![primary, alternate]);

@@ -1,6 +1,6 @@
 use crate::schema::{
-    CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, GridPoint, Hyperlink,
-    HyperlinkId, HyperlinkUri, Palette, ProjectedPlacement, SelectionRange, ViCursor,
+    AnchoredPlacement, CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, GridPoint,
+    Hyperlink, HyperlinkId, HyperlinkUri, Palette, SelectionRange, ViCursor,
 };
 use bevy::prelude::*;
 
@@ -76,10 +76,10 @@ pub struct TerminalGrid {
     /// The live palette from the last applied snapshot; symbolic cell
     /// colors resolve against it. Replaced on snapshot only.
     pub palette: Palette,
-    /// Viewport-projected webview placements mirrored from the last
-    /// applied frame. Replaced wholesale on snapshot AND delta —
-    /// absence from the list means "not visible this frame".
-    pub placements: Vec<ProjectedPlacement>,
+    /// Webview placements in active-grid coordinates, mirrored from the
+    /// last applied frame. Replaced wholesale on snapshot AND delta —
+    /// absence from the list means "no live anchor this frame".
+    pub placements: Vec<AnchoredPlacement>,
 }
 
 impl TerminalGrid {

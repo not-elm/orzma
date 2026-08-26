@@ -14,7 +14,7 @@ use self::damage::{Damage, DamageSpan};
 use crate::device::color::Palette;
 use crate::device::{ActiveScreen, DeviceState};
 use crate::hyperlink::Hyperlink;
-use crate::placement::{PlacementStore, ProjectedPlacement};
+use crate::placement::{AnchoredPlacement, PlacementStore};
 use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::row::Row;
@@ -48,10 +48,12 @@ pub struct Frame {
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.
     pub selection: Option<SelectionRange>,
-    /// Viewport-projected webview placements: `None` when unchanged
-    /// since the last emitted frame, otherwise the complete list —
-    /// `Some(vec![])` means none are visible, which is not an unmount.
-    pub placements: Option<Vec<ProjectedPlacement>>,
+    /// Webview placements in active-grid coordinates: `None` when
+    /// unchanged since the last emitted frame, otherwise the complete
+    /// list — `Some(vec![])` means no placement has a live anchor, which
+    /// is not an unmount. The consumer projects each point with
+    /// `display_offset` and culls what falls outside the viewport.
+    pub placements: Option<Vec<AnchoredPlacement>>,
     /// The live palette symbolic colors resolve against: `None` when
     /// unchanged. A palette override owes a staged full repaint — the
     /// emit-time diff guarantees only that a frame is emitted, not
@@ -84,7 +86,7 @@ pub(crate) struct FrameTracker {
     /// The display offset the last emitted frame carried.
     display_offset: DisplayOffset,
     /// The placement list the last emitted frame carried.
-    placements: Vec<ProjectedPlacement>,
+    placements: Vec<AnchoredPlacement>,
     /// The palette the last emitted frame carried.
     palette: Palette,
 }
@@ -188,7 +190,7 @@ impl FrameTracker {
         &self,
         placements: &PlacementStore,
         active: ActiveScreen<'_>,
-    ) -> Option<Vec<ProjectedPlacement>> {
+    ) -> Option<Vec<AnchoredPlacement>> {
         let projected = placements.project(active);
         (projected != self.placements).then_some(projected)
     }
@@ -211,7 +213,7 @@ impl FrameTracker {
         &mut self,
         cursor: Cursor,
         display_offset: DisplayOffset,
-        placements: Option<&Vec<ProjectedPlacement>>,
+        placements: Option<&Vec<AnchoredPlacement>>,
         palette: Option<&Palette>,
     ) {
         self.cursor = cursor;

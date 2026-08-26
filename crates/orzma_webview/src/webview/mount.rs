@@ -53,7 +53,7 @@ pub struct Webview {
 ///
 /// # Invariants
 ///
-/// `ProjectedPlacement.size` for this id always equals `rows` / `cols`
+/// `AnchoredPlacement.size` for this id always equals `rows` / `cols`
 /// here — the VT treats a size change as a remount, so a drift between
 /// the CEF surface size and the painted rect cannot arise.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -560,10 +560,11 @@ fn sync_webview_size(
 ///
 /// The list is authoritative and declarative: an id with no matching
 /// child is ignored (its mount signal has not landed yet), a mounted
-/// child whose id is absent paints nothing (hidden, not unmounted),
-/// and a negative `viewport_row` passes through for the shader to
-/// clip. Rects fully outside the viewport and columns at or past the
-/// right edge are culled defensively, mirroring the old projection.
+/// child whose id is absent paints nothing (hidden, not unmounted), and
+/// a rect whose top sits above the viewport passes through with a
+/// negative row for the shader to clip. Each point is projected with the
+/// grid's display offset; rects fully outside the viewport and columns
+/// at or past the right edge are culled here.
 ///
 /// The component is (re)inserted for every terminal that has inline
 /// children OR already carries `TerminalOverlays`, so a terminal whose
@@ -600,10 +601,10 @@ fn project_webview_overlays(
                 else {
                     continue;
                 };
-                let row = i64::from(projected.viewport_row);
+                let row = i64::from(projected.point.line.0) + i64::from(grid.display_offset);
                 if row + i64::from(projected.size.rows) <= 0
                     || row >= i64::from(grid.rows)
-                    || u32::from(projected.col.0) >= u32::from(grid.cols)
+                    || u32::from(projected.point.column.0) >= u32::from(grid.cols)
                 {
                     continue;
                 }
@@ -611,9 +612,11 @@ fn project_webview_overlays(
                 if slot >= OVERLAY_SLOTS {
                     continue;
                 }
+                let row =
+                    i32::try_from(row).expect("the cull above bounds the row to the viewport");
                 overlays.rects[slot] = IVec4::new(
-                    projected.viewport_row,
-                    i32::from(projected.col.0),
+                    row,
+                    i32::from(projected.point.column.0),
                     i32::from(projected.size.rows),
                     i32::from(projected.size.cols),
                 );
@@ -669,7 +672,8 @@ mod tests {
     use bevy_orzma_tty::prelude::{TtyApcWebviewSignal, TtyWebviewEvictedSignal};
     use orzma_tty_renderer::CellMetrics;
     use orzma_vt::prelude::{
-        ApcWebviewVerb, GridColumn, PlacementId, PlacementSize, ProjectedPlacement,
+        AnchoredPlacement, ApcWebviewVerb, GridColumn, GridLine, GridPoint, PlacementId,
+        PlacementSize,
     };
 
     fn make_test_app() -> App {
@@ -756,11 +760,21 @@ mod tests {
     fn grid_with_placements(
         rows: u16,
         cols: u16,
-        placements: Vec<ProjectedPlacement>,
+        placements: Vec<AnchoredPlacement>,
+    ) -> TerminalGrid {
+        grid_with_placements_at(rows, cols, 0, placements)
+    }
+
+    fn grid_with_placements_at(
+        rows: u16,
+        cols: u16,
+        display_offset: u32,
+        placements: Vec<AnchoredPlacement>,
     ) -> TerminalGrid {
         TerminalGrid {
             rows,
             cols,
+            display_offset,
             placements,
             ..Default::default()
         }
@@ -773,13 +787,15 @@ mod tests {
         app.world_mut().flush();
     }
 
-    /// The canonical 10x40 frame-carried rect at viewport row 2,
-    /// column 3 the projection tests share.
-    fn placed(id: PlacementId) -> ProjectedPlacement {
-        ProjectedPlacement {
+    /// The canonical 10x40 frame-carried rect at grid line 2, column 3
+    /// the projection tests share.
+    fn placed(id: PlacementId) -> AnchoredPlacement {
+        AnchoredPlacement {
             id,
-            viewport_row: 2,
-            col: GridColumn(3),
+            point: GridPoint {
+                line: GridLine(2),
+                column: GridColumn(3),
+            },
             size: PlacementSize { rows: 10, cols: 40 },
         }
     }
@@ -1390,10 +1406,12 @@ mod tests {
             .insert(grid_with_placements(
                 24,
                 80,
-                vec![ProjectedPlacement {
+                vec![AnchoredPlacement {
                     id: PlacementId(1),
-                    viewport_row: -20,
-                    col: GridColumn(0),
+                    point: GridPoint {
+                        line: GridLine(-20),
+                        column: GridColumn(0),
+                    },
                     size: PlacementSize { rows: 6, cols: 10 },
                 }],
             ));
@@ -1411,10 +1429,12 @@ mod tests {
             .insert(grid_with_placements(
                 24,
                 80,
-                vec![ProjectedPlacement {
+                vec![AnchoredPlacement {
                     id: PlacementId(1),
-                    viewport_row: 30,
-                    col: GridColumn(0),
+                    point: GridPoint {
+                        line: GridLine(30),
+                        column: GridColumn(0),
+                    },
                     size: PlacementSize { rows: 6, cols: 10 },
                 }],
             ));
@@ -1432,10 +1452,12 @@ mod tests {
             .insert(grid_with_placements(
                 24,
                 80,
-                vec![ProjectedPlacement {
+                vec![AnchoredPlacement {
                     id: PlacementId(1),
-                    viewport_row: 2,
-                    col: GridColumn(80),
+                    point: GridPoint {
+                        line: GridLine(2),
+                        column: GridColumn(80),
+                    },
                     size: PlacementSize { rows: 6, cols: 10 },
                 }],
             ));
@@ -1447,6 +1469,38 @@ mod tests {
             "a rect anchored at or past the right edge must be culled"
         );
         assert!(overlays.textures[0].is_none());
+    }
+
+    /// Asserts that a scrolled viewport moves a placement's rect down by
+    /// the display offset.
+    ///
+    /// Case: the user scrolls the terminal back over output that carries a
+    /// mounted webview, and the rect has to stay on the text it was
+    /// anchored to.
+    #[test]
+    fn a_scrolled_viewport_moves_the_rect_down() {
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        register_orzma(&mut app, "memo", terminal, true);
+        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(grid_with_placements_at(
+                24,
+                80,
+                3,
+                vec![AnchoredPlacement {
+                    id: PlacementId(1),
+                    point: GridPoint {
+                        line: GridLine(-2),
+                        column: GridColumn(0),
+                    },
+                    size: PlacementSize { rows: 6, cols: 10 },
+                }],
+            ));
+        run_projection(&mut app);
+        assert_eq!(overlays_of(&app, terminal).rects[0].x, 1);
     }
 
     /// Asserts that a placement anchored at the last valid column (`cols
@@ -1465,10 +1519,12 @@ mod tests {
             .insert(grid_with_placements(
                 24,
                 80,
-                vec![ProjectedPlacement {
+                vec![AnchoredPlacement {
                     id: PlacementId(1),
-                    viewport_row: 2,
-                    col: GridColumn(79),
+                    point: GridPoint {
+                        line: GridLine(2),
+                        column: GridColumn(79),
+                    },
                     size: PlacementSize { rows: 10, cols: 10 },
                 }],
             ));
@@ -2288,10 +2344,12 @@ mod tests {
             .insert(grid_with_placements(
                 24,
                 80,
-                vec![ProjectedPlacement {
+                vec![AnchoredPlacement {
                     id: PlacementId(1),
-                    viewport_row: -2,
-                    col: GridColumn(4),
+                    point: GridPoint {
+                        line: GridLine(-2),
+                        column: GridColumn(4),
+                    },
                     size: PlacementSize { rows: 6, cols: 20 },
                 }],
             ));
@@ -2340,10 +2398,12 @@ mod tests {
             .insert(grid_with_placements(
                 24,
                 80,
-                vec![ProjectedPlacement {
+                vec![AnchoredPlacement {
                     id: PlacementId(9),
-                    viewport_row: 1,
-                    col: GridColumn(1),
+                    point: GridPoint {
+                        line: GridLine(1),
+                        column: GridColumn(1),
+                    },
                     size: PlacementSize { rows: 2, cols: 2 },
                 }],
             ));
@@ -2358,10 +2418,12 @@ mod tests {
     /// coalescer windows for the same mount.
     #[test]
     fn mount_and_frame_order_converge() {
-        let placed = ProjectedPlacement {
+        let placed = AnchoredPlacement {
             id: PlacementId(1),
-            viewport_row: 3,
-            col: GridColumn(2),
+            point: GridPoint {
+                line: GridLine(3),
+                column: GridColumn(2),
+            },
             size: PlacementSize { rows: 10, cols: 40 },
         };
         let mut first = make_test_app();
@@ -2421,10 +2483,12 @@ mod tests {
             .insert(grid_with_placements(
                 24,
                 80,
-                vec![ProjectedPlacement {
+                vec![AnchoredPlacement {
                     id: PlacementId(2),
-                    viewport_row: 5,
-                    col: GridColumn(0),
+                    point: GridPoint {
+                        line: GridLine(5),
+                        column: GridColumn(0),
+                    },
                     size: PlacementSize { rows: 10, cols: 40 },
                 }],
             ));

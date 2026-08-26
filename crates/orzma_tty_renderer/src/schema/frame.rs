@@ -1,5 +1,5 @@
 use crate::schema::{
-    Cursor, Hyperlink, Palette, ProjectedPlacement, Row, Run, SelectionRange, ViCursor,
+    AnchoredPlacement, Cursor, Hyperlink, Palette, Row, Run, SelectionRange, ViCursor,
 };
 use bevy::ecs::{entity::Entity, event::EntityEvent};
 
@@ -26,9 +26,10 @@ pub struct FrameSnapshot {
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.
     pub selection: Option<SelectionRange>,
-    /// Viewport-projected webview placements — the complete list for
-    /// this frame. Absence means "not visible", not "unmounted".
-    pub placements: Vec<ProjectedPlacement>,
+    /// Webview placements in active-grid coordinates — the complete list
+    /// for this frame; the consumer projects each point with
+    /// `display_offset`.
+    pub placements: Vec<AnchoredPlacement>,
     /// The live palette symbolic colors resolve against. Snapshot-only:
     /// a palette override repaints fully, so no delta outlives the
     /// table it was rendered with.
@@ -55,9 +56,10 @@ pub struct FrameDelta {
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.
     pub selection: Option<SelectionRange>,
-    /// Viewport-projected webview placements — the complete list for
-    /// this frame. Absence means "not visible", not "unmounted".
-    pub placements: Vec<ProjectedPlacement>,
+    /// Webview placements in active-grid coordinates — the complete list
+    /// for this frame; the consumer projects each point with
+    /// `display_offset`.
+    pub placements: Vec<AnchoredPlacement>,
 }
 
 /// A dirty row entry inside a `FrameDelta`.

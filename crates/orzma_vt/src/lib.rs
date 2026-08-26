@@ -36,7 +36,7 @@ pub mod prelude {
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::interpreter::apc::ApcWebviewVerb;
-    pub use crate::placement::{PlacementId, PlacementSize, ProjectedPlacement};
+    pub use crate::placement::{AnchoredPlacement, PlacementId, PlacementSize};
     pub use crate::screen::cursor::{CURSOR_VISIBLE_BIT, Cursor, CursorShape};
     pub use crate::screen::grid::GridSize;
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};

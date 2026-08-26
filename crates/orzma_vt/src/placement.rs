@@ -1,15 +1,14 @@
-//! Webview placement table: id minting, anchor tracking, and viewport
-//! projection.
+//! Webview placement table: id minting, anchor tracking, and the
+//! grid-space geometry an emitted frame carries.
 //!
 //! [`PlacementStore`] is a side table keyed by the grid row a mount
 //! anchored to, never a cell variant, so text writes and reflow cannot
-//! corrupt a placement. It converts to viewport coordinates only at
-//! emit time.
+//! corrupt a placement.
 
 use crate::device::ActiveScreen;
 use crate::device::modes::ScreenKind;
 use crate::screen::grid::LineId;
-use crate::screen::grid::coords::GridColumn;
+use crate::screen::grid::coords::{GridColumn, GridPoint};
 
 /// VT-assigned identity of one mounted webview placement.
 ///
@@ -21,23 +20,22 @@ use crate::screen::grid::coords::GridColumn;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PlacementId(pub u64);
 
-/// One placement's viewport-projected geometry at emit time.
+/// One placement's grid-space geometry at emit time.
+///
+/// The point is in active-grid coordinates and does not move when the
+/// user scrolls, the same way a cursor point or a selection endpoint
+/// does not; the consumer projects it with the frame's display offset.
 ///
 /// # Invariants
 ///
 /// `size` always equals the mount-time reservation for `id`; the VT
 /// treats a size change as a remount under a fresh id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProjectedPlacement {
+pub struct AnchoredPlacement {
     /// The placement this geometry belongs to.
     pub id: PlacementId,
-    /// Viewport row of the rect's top cell. Negative = the rect's top
-    /// sticks out above the viewport (the shader clips it).
-    /// `ViewportLine(u16)` cannot represent those negative rows, so
-    /// this stays a raw signed int.
-    pub viewport_row: i32,
-    /// Viewport column of the rect's left cell.
-    pub col: GridColumn,
+    /// Active-grid cell the rect's top-left corner sits at.
+    pub point: GridPoint,
     /// The rect's extent, unchanged from the mount that reserved it.
     pub size: PlacementSize,
 }
@@ -73,7 +71,7 @@ impl PlacementStore {
         }
     }
 
-    /// Projects every placement on the active screen into viewport
+    /// Projects every placement on the active screen into active-grid
     /// coordinates — the complete list, not a diff.
     ///
     /// # Invariants
@@ -85,17 +83,19 @@ impl PlacementStore {
     ///
     /// A placement whose anchor has left the ring is omitted rather than
     /// removed, so it stays invisible but alive until the next eviction
-    /// sweep. Rows outside the viewport are not culled: a negative row
-    /// passes through for the renderer to clip.
-    pub fn project(&self, active: ActiveScreen<'_>) -> Vec<ProjectedPlacement> {
+    /// sweep. Nothing is culled here: a point outside the viewport passes
+    /// through for the consumer to clip.
+    pub fn project(&self, active: ActiveScreen<'_>) -> Vec<AnchoredPlacement> {
         self.placements
             .iter()
             .filter(|p| p.screen == active.kind())
             .filter_map(|p| {
-                Some(ProjectedPlacement {
+                Some(AnchoredPlacement {
                     id: p.id,
-                    viewport_row: active.viewport_row_of(p.anchor)?,
-                    col: p.col,
+                    point: GridPoint {
+                        line: active.grid_line_of(p.anchor)?,
+                        column: p.col,
+                    },
                     size: p.size,
                 })
             })
@@ -177,9 +177,7 @@ impl PlacementStore {
         if self.is_empty() {
             return Vec::new();
         }
-        self.evict_where(|p| {
-            p.screen == active.kind() && active.viewport_row_of(p.anchor).is_none()
-        })
+        self.evict_where(|p| p.screen == active.kind() && active.grid_line_of(p.anchor).is_none())
     }
 
     /// Applies an alternate-screen flip, tearing down the placements the
@@ -378,7 +376,7 @@ mod tests {
         let mut device = device();
         let mut store = PlacementStore::new();
         let id = mount(&mut store, &device, "memo").expect("mount accepted");
-        assert_eq!(store.project(device.active_screen())[0].viewport_row, 0);
+        assert_eq!(store.project(device.active_screen())[0].point.line.0, 0);
 
         for _ in 0..3 {
             device.active_mut().line_feed();
@@ -386,7 +384,7 @@ mod tests {
         let projected = store.project(device.active_screen());
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].id, id);
-        assert_eq!(projected[0].viewport_row, -1);
+        assert_eq!(projected[0].point.line.0, -1);
     }
 
     /// Asserts that a placement mounted on one screen is omitted while the
@@ -488,14 +486,14 @@ mod tests {
         let mut device = device();
         let mut store = PlacementStore::new();
         let id = mount(&mut store, &device, "memo").expect("mount accepted");
-        assert_eq!(store.project(device.active_screen())[0].viewport_row, 0);
+        assert_eq!(store.project(device.active_screen())[0].point.line.0, 0);
 
         device.active_mut().reverse_index();
 
         let projected = store.project(device.active_screen());
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].id, id);
-        assert_eq!(projected[0].viewport_row, 1);
+        assert_eq!(projected[0].point.line.0, 1);
     }
 
     /// Asserts that a placement on the row a reverse scroll discards stops
@@ -516,7 +514,7 @@ mod tests {
         device.active_mut().line_feed();
         device.active_mut().line_feed();
         let id = mount(&mut store, &device, "memo").expect("mount accepted");
-        assert_eq!(store.project(device.active_screen())[0].viewport_row, 2);
+        assert_eq!(store.project(device.active_screen())[0].point.line.0, 2);
 
         device.active_mut().reverse_index();
         device.active_mut().reverse_index();
@@ -547,6 +545,6 @@ mod tests {
         let projected = store.project(device.active_screen());
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].id, id);
-        assert_eq!(projected[0].viewport_row, 0);
+        assert_eq!(projected[0].point.line.0, 0);
     }
 }

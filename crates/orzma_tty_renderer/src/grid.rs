@@ -25,7 +25,7 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
     };
     grid.cols = snap.cols;
     grid.rows = snap.rows;
-    grid.cursor = Some(snap.cursor.clone());
+    grid.cursor = Some(snap.cursor);
     grid.display_offset = snap.display_offset;
     grid.hyperlinks.clear();
     grid.hyperlinks
@@ -59,7 +59,7 @@ fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
         return;
     };
     if grid.cursor.as_ref() != Some(&delta.cursor) {
-        grid.cursor = Some(delta.cursor.clone());
+        grid.cursor = Some(delta.cursor);
     }
     if grid.display_offset != delta.display_offset {
         grid.display_offset = delta.display_offset;
@@ -129,8 +129,8 @@ fn runs_to_cells(runs: &[Run], line: GridLine, hyperlinks: &[Hyperlink]) -> Vec<
 mod tests {
     use super::*;
     use crate::schema::{
-        Color, Cursor, GridColumn, Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId,
-        PlacementSize, ProjectedPlacement, Rgb, Row, Style,
+        AnchoredPlacement, Color, Cursor, GridColumn, Hyperlink, HyperlinkId, HyperlinkUri,
+        Palette, PlacementId, PlacementSize, Rgb, Row, Style,
     };
 
     fn run_with_link(text: &str, hyperlink_id: Option<HyperlinkId>) -> Run {
@@ -342,10 +342,12 @@ mod tests {
         let mut app = App::new();
         app.add_observer(apply_delta);
         let entity = app.world_mut().spawn(grid_with(vec![])).id();
-        let placed = ProjectedPlacement {
+        let placed = AnchoredPlacement {
             id: PlacementId(1),
-            viewport_row: 2,
-            col: GridColumn(3),
+            point: GridPoint {
+                line: GridLine(2),
+                column: GridColumn(3),
+            },
             size: PlacementSize { rows: 4, cols: 5 },
         };
         app.world_mut().trigger(FrameDelta {
