@@ -64,19 +64,6 @@ invariant が「projected な `size` は mount 時の `size` に等しい」と 
 公開語彙になった。`orzma_webview/src/webview/mount.rs:56` の
 `WebviewPlacement` の invariant もこれに追随済み。
 
-### 射影は `Vec` を返す
-
-`project_into(&self, out: &mut Vec<ProjectedPlacement>, ..)` を
-`project(&self, ..) -> Vec<ProjectedPlacement>` に変えた。`&mut Vec` は
-`FrameTracker::scratch` の使い回しのために存在していたが、収支を数えると
-差分ありの経路では `scratch.clone()` が 1 回走るので変更前後で同数、
-placement が 0 個なら `collect` もアロケートしないため、増えるのは
-「webview がマウント済みで、かつ配置が変わっていないフレーム」の
-最大 288 バイト 1 回だけだった。`scratch` フィールドは削除し、本番とテストで
-入口が分かれていた状態（テストだけ `#[cfg(test)] fn project` を通っていた）も解消した。
-
-下のコード骨子はこの形を前提にしている。
-
 ## コード骨子
 
 ### `Screen` 側
