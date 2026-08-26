@@ -380,6 +380,7 @@ impl Screen {
     }
 }
 
+/// Tabulation stops.
 impl Screen {
     /// Moves the cursor forward `count` tabulation stops.
     ///
@@ -453,6 +454,21 @@ impl Screen {
         self.tabs.reset();
     }
 
+    /// Seats the cursor at a tabulation column.
+    ///
+    /// # Invariants
+    ///
+    /// The deferred wrap is deliberately left as it is, unlike
+    /// [`Screen::carriage_return`]. Disarming it would make a tab after
+    /// a full row seat the cursor back onto the row the application had
+    /// already filled.
+    fn tab_to(&mut self, column: GridColumn) {
+        self.state.column = column;
+    }
+}
+
+/// Graphic character mapping.
+impl Screen {
     /// Designates `character_set` to `g_code`.
     ///
     /// The caller decodes the sequence's designator and final character
@@ -487,7 +503,70 @@ impl Screen {
     pub fn single_shift(&mut self, single_shift: SingleShift) {
         self.character_set_mapping.single_shift(single_shift);
     }
+}
 
+/// Graphic rendition.
+///
+/// The pen is handed out mutably because applying an `SGR` sequence is
+/// the caller's job; this screen only supplies the attributes a print
+/// stamps into a cell.
+impl Screen {
+    /// Mutably borrows the SGR pen; applying SGR sequences is the
+    /// caller's job.
+    pub fn pen_mut(&mut self) -> &mut Pen {
+        &mut self.state.pen
+    }
+}
+
+/// Scrolling margins and the cursor origin.
+impl Screen {
+    /// Sets the scrolling region and seats the cursor at the resulting
+    /// home; a request the margins cannot satisfy is refused whole.
+    ///
+    /// Both parameters are one-based line numbers as sent, with `None`
+    /// for an omitted one; [`Margins::resolve`] owns the defaults, the
+    /// clamp, and the refusal.
+    ///
+    /// The cursor goes to the home the origin mode defines rather than
+    /// to the "column 1, line 1 of the page" VT510 p.276 states,
+    /// because homing to the page while the origin is within the
+    /// margins would seat the cursor outside them, which p.195 forbids;
+    /// xterm homes through the same origin-aware path.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECSTBM` (`CSI Pt ; Pb r`)
+    pub fn set_scroll_region(&mut self, top: Option<u16>, bottom: Option<u16>) {
+        let Some(margins) = Margins::resolve(top, bottom, self.grid.size().rows) else {
+            return;
+        };
+        self.scroll_region.set_margins(margins);
+        self.seat_home();
+    }
+
+    /// Sets the cursor origin and seats the cursor at the home the new
+    /// mode defines.
+    ///
+    /// Both directions seat the cursor. VT510 says only what home *is*
+    /// under each setting and never that `DECOM` moves the cursor; xterm,
+    /// kitty, wezterm, Windows Terminal, and `vttest` settle it by homing
+    /// on set and on reset alike.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECOM` (`CSI ? 6 h` / `CSI ? 6 l`)
+    pub fn set_origin_mode(&mut self, origin_mode: OriginMode) {
+        self.scroll_region.set_origin_mode(origin_mode);
+        self.seat_home();
+    }
+
+    /// Seats the cursor at the home the current [`OriginMode`] defines.
+    fn seat_home(&mut self) {
+        self.seat_cursor(ScreenLine(0), GridColumn(0));
+    }
+}
+
+impl Screen {
     /// Returns the grid size.
     pub fn grid_size(&self) -> GridSize {
         self.grid.size()
@@ -520,12 +599,6 @@ impl Screen {
             blinking: false,
             visible: true,
         }
-    }
-
-    /// Mutably borrows the SGR pen; applying SGR sequences is the
-    /// caller's job.
-    pub fn pen_mut(&mut self) -> &mut Pen {
-        &mut self.state.pen
     }
 
     /// Number of scrollback rows the viewport sits above the live tail; always zero until scroll operations arrive.
@@ -573,46 +646,6 @@ impl Screen {
     /// The cursor's column.
     pub fn cursor_column(&self) -> GridColumn {
         self.state.column
-    }
-
-    /// Sets the scrolling region and seats the cursor at the resulting
-    /// home; a request the margins cannot satisfy is refused whole.
-    ///
-    /// Both parameters are one-based line numbers as sent, with `None`
-    /// for an omitted one; [`Margins::resolve`] owns the defaults, the
-    /// clamp, and the refusal.
-    ///
-    /// The cursor goes to the home the origin mode defines rather than
-    /// to the "column 1, line 1 of the page" VT510 p.276 states,
-    /// because homing to the page while the origin is within the
-    /// margins would seat the cursor outside them, which p.195 forbids;
-    /// xterm homes through the same origin-aware path.
-    ///
-    /// # Control Functions
-    ///
-    /// - `DECSTBM` (`CSI Pt ; Pb r`)
-    pub fn set_scroll_region(&mut self, top: Option<u16>, bottom: Option<u16>) {
-        let Some(margins) = Margins::resolve(top, bottom, self.grid.size().rows) else {
-            return;
-        };
-        self.scroll_region.set_margins(margins);
-        self.seat_home();
-    }
-
-    /// Sets the cursor origin and seats the cursor at the home the new
-    /// mode defines.
-    ///
-    /// Both directions seat the cursor. VT510 says only what home *is*
-    /// under each setting and never that `DECOM` moves the cursor; xterm,
-    /// kitty, wezterm, Windows Terminal, and `vttest` settle it by homing
-    /// on set and on reset alike.
-    ///
-    /// # Control Functions
-    ///
-    /// - `DECOM` (`CSI ? 6 h` / `CSI ? 6 l`)
-    pub fn set_origin_mode(&mut self, origin_mode: OriginMode) {
-        self.scroll_region.set_origin_mode(origin_mode);
-        self.seat_home();
     }
 
     /// Resets the screen to its power-up state.
@@ -669,23 +702,6 @@ impl Screen {
             ViewportLine(u16::try_from(first).expect("guarded above by first < rows")),
             ViewportLine(u16::try_from(last).expect("clamped to rows - 1 above")),
         ))
-    }
-
-    /// Seats the cursor at a tabulation column.
-    ///
-    /// # Invariants
-    ///
-    /// The deferred wrap is deliberately left as it is, unlike
-    /// [`Screen::carriage_return`]. Disarming it would make a tab after
-    /// a full row seat the cursor back onto the row the application had
-    /// already filled.
-    fn tab_to(&mut self, column: GridColumn) {
-        self.state.column = column;
-    }
-
-    /// Seats the cursor at the home the current [`OriginMode`] defines.
-    fn seat_home(&mut self) {
-        self.seat_cursor(ScreenLine(0), GridColumn(0));
     }
 }
 
