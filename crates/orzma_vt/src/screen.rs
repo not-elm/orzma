@@ -511,8 +511,7 @@ impl Screen {
 /// the caller's job; this screen only supplies the attributes a print
 /// stamps into a cell.
 impl Screen {
-    /// Mutably borrows the SGR pen; applying SGR sequences is the
-    /// caller's job.
+    /// Mutably borrows the SGR pen.
     pub fn pen_mut(&mut self) -> &mut Pen {
         &mut self.state.pen
     }
@@ -623,7 +622,7 @@ impl Screen {
 ///
 /// The damage projection lives here because it converts screen rows into
 /// the viewport coordinates a frame repaints by, which is the same
-/// coordinate space the readbacks above report in.
+/// coordinate space `viewport_row_of` reports in.
 impl Screen {
     /// Returns the grid size.
     pub fn grid_size(&self) -> GridSize {
@@ -721,7 +720,7 @@ impl Screen {
     }
 }
 
-/// Screen-wide state operations.
+/// Whole-screen state replacement.
 impl Screen {
     /// Resets the screen to its power-up state.
     ///
@@ -1765,43 +1764,6 @@ mod tests {
         }
     }
 
-    mod tab_to {
-        use super::*;
-
-        /// Asserts that a tab seats the cursor at the target column.
-        ///
-        /// Case: the shell emits a tab while listing a directory in
-        /// aligned columns.
-        #[test]
-        fn a_tab_seats_the_cursor_at_the_target_column() {
-            let mut screen = screen();
-            screen.tab_to(GridColumn(2));
-            assert_eq!(screen.state.column, GridColumn(2));
-        }
-
-        /// Asserts that seating the cursor leaves an armed deferred
-        /// wrap alone.
-        ///
-        /// The agreed policy preserves the flag, unlike
-        /// [`Screen::carriage_return`]. Disarming it would seat the
-        /// cursor back onto the row the application had already filled,
-        /// which is the behaviour both VTE and Windows Terminal found
-        /// real DEC hardware never had.
-        ///
-        /// Case: an application fills a row to its last cell and then
-        /// emits a tab instead of more text.
-        #[test]
-        fn a_tab_keeps_the_deferred_wrap_armed() {
-            let mut screen = screen();
-            for c in ['a', 'b', 'c', 'd'] {
-                screen.print(c);
-            }
-            assert!(screen.state.pending_wrap);
-            screen.tab_to(GridColumn(0));
-            assert!(screen.state.pending_wrap);
-        }
-    }
-
     mod move_forward_tabs {
         use super::*;
 
@@ -2013,6 +1975,43 @@ mod tests {
             screen.reset_tab_stops();
             screen.move_forward_tabs(1);
             assert_eq!(screen.state.column, GridColumn(8));
+        }
+    }
+
+    mod tab_to {
+        use super::*;
+
+        /// Asserts that a tab seats the cursor at the target column.
+        ///
+        /// Case: the shell emits a tab while listing a directory in
+        /// aligned columns.
+        #[test]
+        fn a_tab_seats_the_cursor_at_the_target_column() {
+            let mut screen = screen();
+            screen.tab_to(GridColumn(2));
+            assert_eq!(screen.state.column, GridColumn(2));
+        }
+
+        /// Asserts that seating the cursor leaves an armed deferred
+        /// wrap alone.
+        ///
+        /// The agreed policy preserves the flag, unlike
+        /// [`Screen::carriage_return`]. Disarming it would seat the
+        /// cursor back onto the row the application had already filled,
+        /// which is the behaviour both VTE and Windows Terminal found
+        /// real DEC hardware never had.
+        ///
+        /// Case: an application fills a row to its last cell and then
+        /// emits a tab instead of more text.
+        #[test]
+        fn a_tab_keeps_the_deferred_wrap_armed() {
+            let mut screen = screen();
+            for c in ['a', 'b', 'c', 'd'] {
+                screen.print(c);
+            }
+            assert!(screen.state.pending_wrap);
+            screen.tab_to(GridColumn(0));
+            assert!(screen.state.pending_wrap);
         }
     }
 
