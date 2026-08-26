@@ -779,6 +779,22 @@ mod tests {
         Screen::new(GridSize { cols: 4, rows: 4 }, 10)
     }
 
+    /// Moves every item `DECSC` saves off its default, so a later
+    /// assertion that the state came back cannot pass by accident.
+    fn dirty_screen() -> Screen {
+        let mut screen = screen();
+        screen.state.line = ScreenLine(2);
+        screen.state.column = GridColumn(3);
+        screen.state.pending_wrap = true;
+        screen.pen_mut().bg = Color::Indexed(4);
+        screen
+            .scroll_region
+            .set_origin_mode(OriginMode::WithinMargins);
+        screen.invoke_character_set(GCode::G1);
+        screen.designate_character_set(GCode::G1, CharacterSet::DecSpecialGraphics);
+        screen
+    }
+
     mod new {
         use super::*;
 
@@ -1022,254 +1038,190 @@ mod tests {
         }
     }
 
-    mod tab_to {
+    mod move_cursor_to {
         use super::*;
 
-        /// Asserts that a tab seats the cursor at the target column.
+        /// Asserts that omitted parameters address the first line and
+        /// column.
         ///
-        /// Case: the shell emits a tab while listing a directory in
-        /// aligned columns.
+        /// Case: an application homes the cursor with a bare `CSI H`.
         #[test]
-        fn a_tab_seats_the_cursor_at_the_target_column() {
-            let mut screen = screen();
-            screen.tab_to(GridColumn(2));
-            assert_eq!(screen.state.column, GridColumn(2));
-        }
-
-        /// Asserts that seating the cursor leaves an armed deferred
-        /// wrap alone.
-        ///
-        /// The agreed policy preserves the flag, unlike
-        /// [`Screen::carriage_return`]. Disarming it would seat the
-        /// cursor back onto the row the application had already filled,
-        /// which is the behaviour both VTE and Windows Terminal found
-        /// real DEC hardware never had.
-        ///
-        /// Case: an application fills a row to its last cell and then
-        /// emits a tab instead of more text.
-        #[test]
-        fn a_tab_keeps_the_deferred_wrap_armed() {
-            let mut screen = screen();
-            for c in ['a', 'b', 'c', 'd'] {
-                screen.print(c);
-            }
-            assert!(screen.state.pending_wrap);
-            screen.tab_to(GridColumn(0));
-            assert!(screen.state.pending_wrap);
-        }
-    }
-
-    mod move_forward_tabs {
-        use super::*;
-
-        /// Asserts that a tab seats the cursor on the next stop.
-        ///
-        /// Case: the shell emits a tab at the start of a line while
-        /// printing aligned columns.
-        #[test]
-        fn ht_moves_to_the_next_stop() {
-            let mut screen = wide_screen();
-            screen.move_forward_tabs(1);
-            assert_eq!(screen.state.column, GridColumn(8));
-        }
-
-        /// Asserts that a tab past the last reachable stop lands on this
-        /// screen's own right edge.
-        ///
-        /// ECMA-48 § 6.1.7 leaves a movement to a non-existing position
-        /// undefined and lists seven options; the agreed policy clamps
-        /// to the right edge rather than wrapping to the next line or
-        /// refusing the move.
-        ///
-        /// Case: a twenty-column window shows text that has already run
-        /// past the last tab position it can display, and the shell
-        /// emits one more tab.
-        #[test]
-        fn ht_at_the_last_stop_clamps_to_the_screens_own_right_edge() {
-            let mut screen = wide_screen();
-            screen.state.column = GridColumn(16);
-            screen.move_forward_tabs(1);
-            assert_eq!(screen.state.column, GridColumn(19));
-        }
-
-        /// Asserts that a screen too narrow to reach any stop clamps to
-        /// its last column.
-        ///
-        /// Case: the user shrinks the window to four columns and the
-        /// shell keeps emitting tabs.
-        #[test]
-        fn ht_on_a_narrow_screen_clamps_without_reaching_any_stop() {
-            let mut screen = screen();
-            screen.move_forward_tabs(1);
-            assert_eq!(screen.state.column, GridColumn(3));
-        }
-
-        /// Asserts that a counted forward tab skips the stops in
-        /// between.
-        ///
-        /// Case: an application emits `CSI 2 I` to jump two tab
-        /// positions in one step.
-        #[test]
-        fn cht_counts_multiple_stops() {
-            let mut screen = wide_screen();
-            screen.move_forward_tabs(2);
-            assert_eq!(screen.state.column, GridColumn(16));
-        }
-    }
-
-    mod move_backward_tabs {
-        use super::*;
-
-        /// Asserts that a backward tab seats the cursor on the previous
-        /// stop.
-        ///
-        /// Case: the user presses Shift-Tab to step back to the
-        /// previous column of a form.
-        #[test]
-        fn cbt_moves_back_to_the_previous_stop() {
-            let mut screen = wide_screen();
-            screen.state.column = GridColumn(17);
-            screen.move_backward_tabs(1);
-            assert_eq!(screen.state.column, GridColumn(16));
-        }
-
-        /// Asserts that a backward tab before the first stop lands on
-        /// column zero.
-        ///
-        /// The agreed policy makes the left edge a fallback rather than
-        /// a stop, because the reset stride leaves column zero empty.
-        ///
-        /// Case: the user presses Shift-Tab near the start of a line,
-        /// before the first tab position.
-        #[test]
-        fn cbt_before_the_first_stop_clamps_to_column_zero() {
-            let mut screen = wide_screen();
-            screen.state.column = GridColumn(5);
-            screen.move_backward_tabs(1);
+        fn omitted_parameters_address_the_first_cell() {
+            let mut screen = tall_screen();
+            screen.state.line = ScreenLine(2);
+            screen.state.column = GridColumn(3);
+            screen.move_cursor_to(None, None);
+            assert_eq!(screen.state.line, ScreenLine(0));
             assert_eq!(screen.state.column, GridColumn(0));
         }
+
+        /// Asserts that a zero addresses the first line and column, the
+        /// same as a one.
+        ///
+        /// The agreed policy follows VT510 p.116 — "If Pl or Pc is not
+        /// selected or selected as 0, then the cursor moves to the first
+        /// line or column".
+        ///
+        /// Case: a program that builds its sequences from zero-based
+        /// variables emits `CSI 0 ; 0 H`.
+        #[test]
+        fn a_zero_addresses_the_first_cell() {
+            let mut screen = tall_screen();
+            screen.state.line = ScreenLine(2);
+            screen.move_cursor_to(Some(0), Some(0));
+            assert_eq!(screen.state.line, ScreenLine(0));
+            assert_eq!(screen.state.column, GridColumn(0));
+        }
+
+        /// Asserts that one-based parameters land on zero-based cells.
+        ///
+        /// Case: a full-screen application draws a box corner by
+        /// addressing row 3, column 2.
+        #[test]
+        fn one_based_parameters_land_on_zero_based_cells() {
+            let mut screen = tall_screen();
+            screen.move_cursor_to(Some(3), Some(2));
+            assert_eq!(screen.state.line, ScreenLine(2));
+            assert_eq!(screen.state.column, GridColumn(1));
+        }
+
+        /// Asserts that the line is measured from the top margin while
+        /// the origin is within the margins.
+        ///
+        /// Case: an application with a reserved header turns on origin
+        /// mode and addresses the first row of its own pane.
+        #[test]
+        fn a_margin_origin_measures_the_line_from_the_top_margin() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(2), Some(4));
+            screen.set_origin_mode(OriginMode::WithinMargins);
+            screen.state.line = ScreenLine(3);
+            screen.state.column = GridColumn(3);
+            screen.move_cursor_to(Some(1), Some(1));
+            assert_eq!(screen.state.line, ScreenLine(1));
+        }
+
+        /// Asserts that the line is absolute and reaches outside the
+        /// margins while the origin is the upper-left corner.
+        ///
+        /// The agreed policy follows VT510 p.195: with `DECOM` reset the
+        /// line numbering is independent of the margins and the cursor
+        /// can move outside them.
+        ///
+        /// Case: an application keeps a scrolling pane but addresses the
+        /// header row above it to update a title.
+        #[test]
+        fn an_upper_left_origin_reaches_outside_the_margins() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(2), Some(4));
+            screen.state.line = ScreenLine(3);
+            screen.state.column = GridColumn(3);
+            screen.move_cursor_to(Some(1), Some(1));
+            assert_eq!(screen.state.line, ScreenLine(0));
+        }
+
+        /// Asserts that a line past the region clamps to the bottom
+        /// margin while the origin is within the margins.
+        ///
+        /// Case: an application with origin mode on addresses a row
+        /// below the pane it reserved for itself.
+        #[test]
+        fn a_line_past_the_region_clamps_to_the_bottom_margin() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(1), Some(3));
+            screen.set_origin_mode(OriginMode::WithinMargins);
+            screen.move_cursor_to(Some(9), Some(1));
+            assert_eq!(screen.state.line, ScreenLine(2));
+        }
     }
 
-    mod tab_stop_edits {
+    mod seat_cursor {
         use super::*;
 
-        /// Asserts that a stop set at the cursor is where the next tab
-        /// lands.
+        /// Asserts that with the origin at the upper-left corner a
+        /// relative line is an absolute one.
         ///
-        /// Case: an application walks to the column it wants, sets a tab
-        /// position there, and returns to the start of the line.
+        /// Case: a full-screen application addresses the third row of an
+        /// unrestricted screen.
         #[test]
-        fn hts_adds_a_stop_the_next_ht_finds() {
-            let mut screen = wide_screen();
-            screen.state.column = GridColumn(3);
-            screen.set_horizontal_tab_stop();
-            screen.state.column = GridColumn(0);
-            screen.move_forward_tabs(1);
+        fn an_upper_left_origin_leaves_the_line_absolute() {
+            let mut screen = tall_screen();
+            screen.seat_cursor(ScreenLine(2), GridColumn(1));
+            assert_eq!(screen.state.line, ScreenLine(2));
+            assert_eq!(screen.state.column, GridColumn(1));
+        }
+
+        /// Asserts that with the origin within the margins a relative
+        /// line is measured from the top margin.
+        ///
+        /// Case: an application pins a header on the first row, turns on
+        /// origin mode, and addresses the first row of its own pane.
+        #[test]
+        fn a_margin_origin_measures_from_the_top_margin() {
+            let mut screen = tall_screen();
+            screen.scroll_region.set_margins(
+                Margins::resolve(Some(2), Some(4), 4).expect("2..=4 is a legal region"),
+            );
+            screen
+                .scroll_region
+                .set_origin_mode(OriginMode::WithinMargins);
+            screen.seat_cursor(ScreenLine(0), GridColumn(0));
+            assert_eq!(screen.state.line, ScreenLine(1));
+        }
+
+        /// Asserts that a line past the bottom margin clamps to it while
+        /// the origin is within the margins.
+        ///
+        /// Case: an application with origin mode on addresses a row
+        /// below the pane it reserved for itself.
+        #[test]
+        fn a_line_past_the_bottom_margin_clamps_to_it() {
+            let mut screen = tall_screen();
+            screen.scroll_region.set_margins(
+                Margins::resolve(Some(1), Some(3), 4).expect("1..=3 is a legal region"),
+            );
+            screen
+                .scroll_region
+                .set_origin_mode(OriginMode::WithinMargins);
+            screen.seat_cursor(ScreenLine(9), GridColumn(0));
+            assert_eq!(screen.state.line, ScreenLine(2));
+        }
+
+        /// Asserts that a line past the last row clamps to it while the
+        /// origin is the upper-left corner.
+        ///
+        /// Case: an application sized for a taller window addresses row
+        /// 40 of a four-row screen.
+        #[test]
+        fn a_line_past_the_last_row_clamps_to_it() {
+            let mut screen = tall_screen();
+            screen.seat_cursor(ScreenLine(39), GridColumn(0));
+            assert_eq!(screen.state.line, ScreenLine(3));
+        }
+
+        /// Asserts that a column past the right edge clamps to the last
+        /// column.
+        ///
+        /// Case: an application sized for a wider window addresses
+        /// column 80 of a four-column screen.
+        #[test]
+        fn a_column_past_the_right_edge_clamps() {
+            let mut screen = tall_screen();
+            screen.seat_cursor(ScreenLine(0), GridColumn(79));
             assert_eq!(screen.state.column, GridColumn(3));
         }
 
-        /// Asserts that setting a stop leaves the cursor where it was.
+        /// Asserts that seating the cursor discards a pending deferred
+        /// wrap rather than preserving it as a linefeed does.
         ///
-        /// HTS edits the stop table and nothing else; the neighbouring
-        /// name HT is the one that moves. Nothing on screen changes
-        /// either, which is why `set_horizontal_tab_stop` reports no
-        /// damage to stage.
-        ///
-        /// Case: an application installs a tab position at the column it
-        /// is already writing at, then keeps printing on the same line.
+        /// Case: an application fills a row to its last column and then
+        /// addresses a cell elsewhere instead of printing again.
         #[test]
-        fn hts_does_not_move_the_cursor() {
-            let mut screen = wide_screen();
-            screen.state.column = GridColumn(3);
-            screen.set_horizontal_tab_stop();
-            assert_eq!(screen.state.column, GridColumn(3));
-        }
-
-        /// Asserts that HTS and `CTC 0` install the same stop.
-        ///
-        /// The two are one edit in the vocabulary rather than two
-        /// parallel implementations, so that a later TABULATION STOP
-        /// MODE cannot scope one of them and miss the other.
-        ///
-        /// Case: an application uses CTC rather than HTS to install its
-        /// tab positions, having found the CSI form easier to generate.
-        #[test]
-        fn hts_and_ctc_zero_install_the_same_stop() {
-            let mut by_hts = wide_screen();
-            by_hts.state.column = GridColumn(3);
-            by_hts.set_horizontal_tab_stop();
-
-            let mut by_ctc = wide_screen();
-            by_ctc.state.column = GridColumn(3);
-            by_ctc.edit_tab_stop(CharacterTabEdit::from_ctc(0).unwrap());
-
-            for screen in [&mut by_hts, &mut by_ctc] {
-                screen.state.column = GridColumn(0);
-                screen.move_forward_tabs(1);
-            }
-            assert_eq!(by_hts.state.column, GridColumn(3));
-            assert_eq!(by_ctc.state.column, by_hts.state.column);
-        }
-
-        /// Asserts that clearing the stop under the cursor makes the
-        /// next tab reach the one after it.
-        ///
-        /// Case: an application parks on a default tab position and
-        /// drops it so its own layout is one column wider.
-        #[test]
-        fn tbc_zero_clears_the_stop_under_the_cursor() {
-            let mut screen = wide_screen();
-            screen.state.column = GridColumn(8);
-            screen.edit_tab_stop(CharacterTabEdit::from_tbc(0).unwrap());
-            screen.state.column = GridColumn(0);
-            screen.move_forward_tabs(1);
-            assert_eq!(screen.state.column, GridColumn(16));
-        }
-
-        /// Asserts that clearing every stop leaves a tab nothing to
-        /// find.
-        ///
-        /// Case: a full-screen application clears the tab table before
-        /// installing a layout of its own.
-        #[test]
-        fn tbc_three_clears_every_stop() {
-            let mut screen = wide_screen();
-            screen.edit_tab_stop(CharacterTabEdit::from_tbc(3).unwrap());
-            screen.move_forward_tabs(1);
-            assert_eq!(screen.state.column, GridColumn(19));
-        }
-
-        /// Asserts that CTC sets and clears the stop under the cursor.
-        ///
-        /// Case: an application uses CTC rather than HTS and TBC to edit
-        /// the tab position it is parked on.
-        #[test]
-        fn ctc_zero_sets_and_ctc_two_clears_at_the_cursor() {
-            let mut screen = wide_screen();
-            screen.state.column = GridColumn(3);
-            screen.edit_tab_stop(CharacterTabEdit::from_ctc(0).unwrap());
-            screen.state.column = GridColumn(0);
-            screen.move_forward_tabs(1);
-            assert_eq!(screen.state.column, GridColumn(3));
-
-            screen.edit_tab_stop(CharacterTabEdit::from_ctc(2).unwrap());
-            screen.state.column = GridColumn(0);
-            screen.move_forward_tabs(1);
-            assert_eq!(screen.state.column, GridColumn(8));
-        }
-
-        /// Asserts that DECST8C brings the default stride back after a
-        /// full clear.
-        ///
-        /// Case: an application that cleared the tab table asks for the
-        /// default tab positions again before exiting.
-        #[test]
-        fn decst8c_reinstalls_the_stride_after_a_full_clear() {
-            let mut screen = wide_screen();
-            screen.edit_tab_stop(CharacterTabEdit::from_tbc(3).unwrap());
-            screen.reset_tab_stops();
-            screen.move_forward_tabs(1);
-            assert_eq!(screen.state.column, GridColumn(8));
+        fn seating_the_cursor_disarms_the_deferred_wrap() {
+            let mut screen = tall_screen();
+            screen.state.pending_wrap = true;
+            screen.seat_cursor(ScreenLine(0), GridColumn(0));
+            assert!(!screen.state.pending_wrap);
         }
     }
 
@@ -1813,30 +1765,372 @@ mod tests {
         }
     }
 
-    mod cursor {
+    mod tab_to {
         use super::*;
 
-        /// Asserts that the reported cursor carries the write position and
-        /// is visible.
+        /// Asserts that a tab seats the cursor at the target column.
         ///
-        /// The agreed placeholder is Block / steady / visible, matching what
-        /// a terminal starts at; `Cursor::default()` is deliberately not
-        /// used because its `visible` is `false`, which would hide the
-        /// caret until the first DECTCEM.
-        ///
-        /// Case: a shell prints its prompt and the next frame has to show
-        /// the caret after it.
+        /// Case: the shell emits a tab while listing a directory in
+        /// aligned columns.
         #[test]
-        fn the_cursor_reports_the_write_position_and_is_visible() {
+        fn a_tab_seats_the_cursor_at_the_target_column() {
             let mut screen = screen();
-            screen.print('a');
-            screen.print('b');
-            let cursor = screen.cursor();
-            assert_eq!(cursor.point.line, GridLine(0));
-            assert_eq!(cursor.point.column, GridColumn(2));
-            assert_eq!(cursor.shape, CursorShape::Block);
-            assert!(!cursor.blinking);
-            assert!(cursor.visible);
+            screen.tab_to(GridColumn(2));
+            assert_eq!(screen.state.column, GridColumn(2));
+        }
+
+        /// Asserts that seating the cursor leaves an armed deferred
+        /// wrap alone.
+        ///
+        /// The agreed policy preserves the flag, unlike
+        /// [`Screen::carriage_return`]. Disarming it would seat the
+        /// cursor back onto the row the application had already filled,
+        /// which is the behaviour both VTE and Windows Terminal found
+        /// real DEC hardware never had.
+        ///
+        /// Case: an application fills a row to its last cell and then
+        /// emits a tab instead of more text.
+        #[test]
+        fn a_tab_keeps_the_deferred_wrap_armed() {
+            let mut screen = screen();
+            for c in ['a', 'b', 'c', 'd'] {
+                screen.print(c);
+            }
+            assert!(screen.state.pending_wrap);
+            screen.tab_to(GridColumn(0));
+            assert!(screen.state.pending_wrap);
+        }
+    }
+
+    mod move_forward_tabs {
+        use super::*;
+
+        /// Asserts that a tab seats the cursor on the next stop.
+        ///
+        /// Case: the shell emits a tab at the start of a line while
+        /// printing aligned columns.
+        #[test]
+        fn ht_moves_to_the_next_stop() {
+            let mut screen = wide_screen();
+            screen.move_forward_tabs(1);
+            assert_eq!(screen.state.column, GridColumn(8));
+        }
+
+        /// Asserts that a tab past the last reachable stop lands on this
+        /// screen's own right edge.
+        ///
+        /// ECMA-48 § 6.1.7 leaves a movement to a non-existing position
+        /// undefined and lists seven options; the agreed policy clamps
+        /// to the right edge rather than wrapping to the next line or
+        /// refusing the move.
+        ///
+        /// Case: a twenty-column window shows text that has already run
+        /// past the last tab position it can display, and the shell
+        /// emits one more tab.
+        #[test]
+        fn ht_at_the_last_stop_clamps_to_the_screens_own_right_edge() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(16);
+            screen.move_forward_tabs(1);
+            assert_eq!(screen.state.column, GridColumn(19));
+        }
+
+        /// Asserts that a screen too narrow to reach any stop clamps to
+        /// its last column.
+        ///
+        /// Case: the user shrinks the window to four columns and the
+        /// shell keeps emitting tabs.
+        #[test]
+        fn ht_on_a_narrow_screen_clamps_without_reaching_any_stop() {
+            let mut screen = screen();
+            screen.move_forward_tabs(1);
+            assert_eq!(screen.state.column, GridColumn(3));
+        }
+
+        /// Asserts that a counted forward tab skips the stops in
+        /// between.
+        ///
+        /// Case: an application emits `CSI 2 I` to jump two tab
+        /// positions in one step.
+        #[test]
+        fn cht_counts_multiple_stops() {
+            let mut screen = wide_screen();
+            screen.move_forward_tabs(2);
+            assert_eq!(screen.state.column, GridColumn(16));
+        }
+    }
+
+    mod move_backward_tabs {
+        use super::*;
+
+        /// Asserts that a backward tab seats the cursor on the previous
+        /// stop.
+        ///
+        /// Case: the user presses Shift-Tab to step back to the
+        /// previous column of a form.
+        #[test]
+        fn cbt_moves_back_to_the_previous_stop() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(17);
+            screen.move_backward_tabs(1);
+            assert_eq!(screen.state.column, GridColumn(16));
+        }
+
+        /// Asserts that a backward tab before the first stop lands on
+        /// column zero.
+        ///
+        /// The agreed policy makes the left edge a fallback rather than
+        /// a stop, because the reset stride leaves column zero empty.
+        ///
+        /// Case: the user presses Shift-Tab near the start of a line,
+        /// before the first tab position.
+        #[test]
+        fn cbt_before_the_first_stop_clamps_to_column_zero() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(5);
+            screen.move_backward_tabs(1);
+            assert_eq!(screen.state.column, GridColumn(0));
+        }
+    }
+
+    mod tab_stop_edits {
+        use super::*;
+
+        /// Asserts that a stop set at the cursor is where the next tab
+        /// lands.
+        ///
+        /// Case: an application walks to the column it wants, sets a tab
+        /// position there, and returns to the start of the line.
+        #[test]
+        fn hts_adds_a_stop_the_next_ht_finds() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(3);
+            screen.set_horizontal_tab_stop();
+            screen.state.column = GridColumn(0);
+            screen.move_forward_tabs(1);
+            assert_eq!(screen.state.column, GridColumn(3));
+        }
+
+        /// Asserts that setting a stop leaves the cursor where it was.
+        ///
+        /// HTS edits the stop table and nothing else; the neighbouring
+        /// name HT is the one that moves. Nothing on screen changes
+        /// either, which is why `set_horizontal_tab_stop` reports no
+        /// damage to stage.
+        ///
+        /// Case: an application installs a tab position at the column it
+        /// is already writing at, then keeps printing on the same line.
+        #[test]
+        fn hts_does_not_move_the_cursor() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(3);
+            screen.set_horizontal_tab_stop();
+            assert_eq!(screen.state.column, GridColumn(3));
+        }
+
+        /// Asserts that HTS and `CTC 0` install the same stop.
+        ///
+        /// The two are one edit in the vocabulary rather than two
+        /// parallel implementations, so that a later TABULATION STOP
+        /// MODE cannot scope one of them and miss the other.
+        ///
+        /// Case: an application uses CTC rather than HTS to install its
+        /// tab positions, having found the CSI form easier to generate.
+        #[test]
+        fn hts_and_ctc_zero_install_the_same_stop() {
+            let mut by_hts = wide_screen();
+            by_hts.state.column = GridColumn(3);
+            by_hts.set_horizontal_tab_stop();
+
+            let mut by_ctc = wide_screen();
+            by_ctc.state.column = GridColumn(3);
+            by_ctc.edit_tab_stop(CharacterTabEdit::from_ctc(0).unwrap());
+
+            for screen in [&mut by_hts, &mut by_ctc] {
+                screen.state.column = GridColumn(0);
+                screen.move_forward_tabs(1);
+            }
+            assert_eq!(by_hts.state.column, GridColumn(3));
+            assert_eq!(by_ctc.state.column, by_hts.state.column);
+        }
+
+        /// Asserts that clearing the stop under the cursor makes the
+        /// next tab reach the one after it.
+        ///
+        /// Case: an application parks on a default tab position and
+        /// drops it so its own layout is one column wider.
+        #[test]
+        fn tbc_zero_clears_the_stop_under_the_cursor() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(8);
+            screen.edit_tab_stop(CharacterTabEdit::from_tbc(0).unwrap());
+            screen.state.column = GridColumn(0);
+            screen.move_forward_tabs(1);
+            assert_eq!(screen.state.column, GridColumn(16));
+        }
+
+        /// Asserts that clearing every stop leaves a tab nothing to
+        /// find.
+        ///
+        /// Case: a full-screen application clears the tab table before
+        /// installing a layout of its own.
+        #[test]
+        fn tbc_three_clears_every_stop() {
+            let mut screen = wide_screen();
+            screen.edit_tab_stop(CharacterTabEdit::from_tbc(3).unwrap());
+            screen.move_forward_tabs(1);
+            assert_eq!(screen.state.column, GridColumn(19));
+        }
+
+        /// Asserts that CTC sets and clears the stop under the cursor.
+        ///
+        /// Case: an application uses CTC rather than HTS and TBC to edit
+        /// the tab position it is parked on.
+        #[test]
+        fn ctc_zero_sets_and_ctc_two_clears_at_the_cursor() {
+            let mut screen = wide_screen();
+            screen.state.column = GridColumn(3);
+            screen.edit_tab_stop(CharacterTabEdit::from_ctc(0).unwrap());
+            screen.state.column = GridColumn(0);
+            screen.move_forward_tabs(1);
+            assert_eq!(screen.state.column, GridColumn(3));
+
+            screen.edit_tab_stop(CharacterTabEdit::from_ctc(2).unwrap());
+            screen.state.column = GridColumn(0);
+            screen.move_forward_tabs(1);
+            assert_eq!(screen.state.column, GridColumn(8));
+        }
+
+        /// Asserts that DECST8C brings the default stride back after a
+        /// full clear.
+        ///
+        /// Case: an application that cleared the tab table asks for the
+        /// default tab positions again before exiting.
+        #[test]
+        fn decst8c_reinstalls_the_stride_after_a_full_clear() {
+            let mut screen = wide_screen();
+            screen.edit_tab_stop(CharacterTabEdit::from_tbc(3).unwrap());
+            screen.reset_tab_stops();
+            screen.move_forward_tabs(1);
+            assert_eq!(screen.state.column, GridColumn(8));
+        }
+    }
+
+    mod set_scroll_region {
+        use super::*;
+
+        /// Asserts that a resolved region reaches the scroll span the
+        /// line feed and reverse index scroll against.
+        ///
+        /// Case: an application reserves a status line on the last row
+        /// of a four-row screen.
+        #[test]
+        fn a_resolved_region_reaches_the_scroll_span() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(1), Some(3));
+            assert_eq!(
+                screen.scroll_region.scroll_span(),
+                ScreenLine(0)..=ScreenLine(2)
+            );
+        }
+
+        /// Asserts that applying a region seats the cursor at the
+        /// origin-aware home rather than VT510's "column 1, line 1 of
+        /// the page".
+        ///
+        /// Case: an application sets a region while its cursor sits
+        /// somewhere in the middle of the screen.
+        #[test]
+        fn applying_a_region_seats_the_cursor_at_home() {
+            let mut screen = tall_screen();
+            screen.state.line = ScreenLine(2);
+            screen.state.column = GridColumn(3);
+            screen.set_scroll_region(Some(1), Some(3));
+            assert_eq!(screen.state.line, ScreenLine(0));
+            assert_eq!(screen.state.column, GridColumn(0));
+        }
+
+        /// Asserts that home follows the origin mode rather than the
+        /// page.
+        ///
+        /// Case: an application turns on origin mode and then moves its
+        /// pane down the screen with a second region.
+        #[test]
+        fn home_follows_the_origin_mode() {
+            let mut screen = tall_screen();
+            screen
+                .scroll_region
+                .set_origin_mode(OriginMode::WithinMargins);
+            screen.set_scroll_region(Some(2), Some(4));
+            assert_eq!(screen.state.line, ScreenLine(1));
+        }
+
+        /// Asserts that a refused request leaves both the margins and
+        /// the cursor untouched — a whole-sequence no-op rather than a
+        /// partial application.
+        ///
+        /// Case: an application inverts its two parameters and sends
+        /// `CSI 5 ; 3 r`.
+        #[test]
+        fn a_refused_request_changes_nothing() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(1), Some(3));
+            screen.state.line = ScreenLine(2);
+            screen.set_scroll_region(Some(5), Some(3));
+            assert_eq!(
+                screen.scroll_region.scroll_span(),
+                ScreenLine(0)..=ScreenLine(2)
+            );
+            assert_eq!(screen.state.line, ScreenLine(2));
+        }
+    }
+
+    mod set_origin_mode {
+        use super::*;
+
+        /// Asserts that setting the origin within the margins seats the
+        /// cursor at the top margin.
+        ///
+        /// Case: an application reserves a header row, then turns on
+        /// origin mode so its own coordinates start below it.
+        #[test]
+        fn setting_the_origin_seats_the_cursor_at_the_top_margin() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(2), Some(4));
+            screen.state.line = ScreenLine(3);
+            screen.set_origin_mode(OriginMode::WithinMargins);
+            assert_eq!(screen.state.line, ScreenLine(1));
+            assert_eq!(screen.state.column, GridColumn(0));
+        }
+
+        /// Asserts that resetting the origin homes the cursor at the
+        /// upper-left corner rather than homing on set alone.
+        ///
+        /// Case: a full-screen application drops origin mode on its way
+        /// out and prints without addressing the cursor first.
+        #[test]
+        fn resetting_the_origin_seats_the_cursor_at_the_corner() {
+            let mut screen = tall_screen();
+            screen.set_scroll_region(Some(2), Some(4));
+            screen.set_origin_mode(OriginMode::WithinMargins);
+            screen.state.line = ScreenLine(3);
+            screen.set_origin_mode(OriginMode::UpperLeftCorner);
+            assert_eq!(screen.state.line, ScreenLine(0));
+        }
+
+        /// Asserts that the mode reaches the region the cursor motion
+        /// reads.
+        ///
+        /// Case: an application turns on origin mode and the terminal
+        /// has to answer later cursor addressing against the margins.
+        #[test]
+        fn the_mode_reaches_the_scroll_region() {
+            let mut screen = tall_screen();
+            screen.set_origin_mode(OriginMode::WithinMargins);
+            assert_eq!(
+                screen.scroll_region.origin_mode(),
+                OriginMode::WithinMargins
+            );
         }
     }
 
@@ -2013,20 +2307,31 @@ mod tests {
         }
     }
 
-    /// Moves every item `DECSC` saves off its default, so a later
-    /// assertion that the state came back cannot pass by accident.
-    fn dirty_screen() -> Screen {
-        let mut screen = screen();
-        screen.state.line = ScreenLine(2);
-        screen.state.column = GridColumn(3);
-        screen.state.pending_wrap = true;
-        screen.pen_mut().bg = Color::Indexed(4);
-        screen
-            .scroll_region
-            .set_origin_mode(OriginMode::WithinMargins);
-        screen.invoke_character_set(GCode::G1);
-        screen.designate_character_set(GCode::G1, CharacterSet::DecSpecialGraphics);
-        screen
+    mod cursor {
+        use super::*;
+
+        /// Asserts that the reported cursor carries the write position and
+        /// is visible.
+        ///
+        /// The agreed placeholder is Block / steady / visible, matching what
+        /// a terminal starts at; `Cursor::default()` is deliberately not
+        /// used because its `visible` is `false`, which would hide the
+        /// caret until the first DECTCEM.
+        ///
+        /// Case: a shell prints its prompt and the next frame has to show
+        /// the caret after it.
+        #[test]
+        fn the_cursor_reports_the_write_position_and_is_visible() {
+            let mut screen = screen();
+            screen.print('a');
+            screen.print('b');
+            let cursor = screen.cursor();
+            assert_eq!(cursor.point.line, GridLine(0));
+            assert_eq!(cursor.point.column, GridColumn(2));
+            assert_eq!(cursor.shape, CursorShape::Block);
+            assert!(!cursor.blinking);
+            assert!(cursor.visible);
+        }
     }
 
     mod save_checkpoint {
@@ -2142,311 +2447,6 @@ mod tests {
             screen.print('e');
             assert_eq!(screen.grid[ScreenLine(1)][0].c, 'e');
             assert_eq!(screen.state.line, ScreenLine(1));
-        }
-    }
-
-    mod seat_cursor {
-        use super::*;
-
-        /// Asserts that with the origin at the upper-left corner a
-        /// relative line is an absolute one.
-        ///
-        /// Case: a full-screen application addresses the third row of an
-        /// unrestricted screen.
-        #[test]
-        fn an_upper_left_origin_leaves_the_line_absolute() {
-            let mut screen = tall_screen();
-            screen.seat_cursor(ScreenLine(2), GridColumn(1));
-            assert_eq!(screen.state.line, ScreenLine(2));
-            assert_eq!(screen.state.column, GridColumn(1));
-        }
-
-        /// Asserts that with the origin within the margins a relative
-        /// line is measured from the top margin.
-        ///
-        /// Case: an application pins a header on the first row, turns on
-        /// origin mode, and addresses the first row of its own pane.
-        #[test]
-        fn a_margin_origin_measures_from_the_top_margin() {
-            let mut screen = tall_screen();
-            screen.scroll_region.set_margins(
-                Margins::resolve(Some(2), Some(4), 4).expect("2..=4 is a legal region"),
-            );
-            screen
-                .scroll_region
-                .set_origin_mode(OriginMode::WithinMargins);
-            screen.seat_cursor(ScreenLine(0), GridColumn(0));
-            assert_eq!(screen.state.line, ScreenLine(1));
-        }
-
-        /// Asserts that a line past the bottom margin clamps to it while
-        /// the origin is within the margins.
-        ///
-        /// Case: an application with origin mode on addresses a row
-        /// below the pane it reserved for itself.
-        #[test]
-        fn a_line_past_the_bottom_margin_clamps_to_it() {
-            let mut screen = tall_screen();
-            screen.scroll_region.set_margins(
-                Margins::resolve(Some(1), Some(3), 4).expect("1..=3 is a legal region"),
-            );
-            screen
-                .scroll_region
-                .set_origin_mode(OriginMode::WithinMargins);
-            screen.seat_cursor(ScreenLine(9), GridColumn(0));
-            assert_eq!(screen.state.line, ScreenLine(2));
-        }
-
-        /// Asserts that a line past the last row clamps to it while the
-        /// origin is the upper-left corner.
-        ///
-        /// Case: an application sized for a taller window addresses row
-        /// 40 of a four-row screen.
-        #[test]
-        fn a_line_past_the_last_row_clamps_to_it() {
-            let mut screen = tall_screen();
-            screen.seat_cursor(ScreenLine(39), GridColumn(0));
-            assert_eq!(screen.state.line, ScreenLine(3));
-        }
-
-        /// Asserts that a column past the right edge clamps to the last
-        /// column.
-        ///
-        /// Case: an application sized for a wider window addresses
-        /// column 80 of a four-column screen.
-        #[test]
-        fn a_column_past_the_right_edge_clamps() {
-            let mut screen = tall_screen();
-            screen.seat_cursor(ScreenLine(0), GridColumn(79));
-            assert_eq!(screen.state.column, GridColumn(3));
-        }
-
-        /// Asserts that seating the cursor discards a pending deferred
-        /// wrap rather than preserving it as a linefeed does.
-        ///
-        /// Case: an application fills a row to its last column and then
-        /// addresses a cell elsewhere instead of printing again.
-        #[test]
-        fn seating_the_cursor_disarms_the_deferred_wrap() {
-            let mut screen = tall_screen();
-            screen.state.pending_wrap = true;
-            screen.seat_cursor(ScreenLine(0), GridColumn(0));
-            assert!(!screen.state.pending_wrap);
-        }
-    }
-
-    mod set_scroll_region {
-        use super::*;
-
-        /// Asserts that a resolved region reaches the scroll span the
-        /// line feed and reverse index scroll against.
-        ///
-        /// Case: an application reserves a status line on the last row
-        /// of a four-row screen.
-        #[test]
-        fn a_resolved_region_reaches_the_scroll_span() {
-            let mut screen = tall_screen();
-            screen.set_scroll_region(Some(1), Some(3));
-            assert_eq!(
-                screen.scroll_region.scroll_span(),
-                ScreenLine(0)..=ScreenLine(2)
-            );
-        }
-
-        /// Asserts that applying a region seats the cursor at the
-        /// origin-aware home rather than VT510's "column 1, line 1 of
-        /// the page".
-        ///
-        /// Case: an application sets a region while its cursor sits
-        /// somewhere in the middle of the screen.
-        #[test]
-        fn applying_a_region_seats_the_cursor_at_home() {
-            let mut screen = tall_screen();
-            screen.state.line = ScreenLine(2);
-            screen.state.column = GridColumn(3);
-            screen.set_scroll_region(Some(1), Some(3));
-            assert_eq!(screen.state.line, ScreenLine(0));
-            assert_eq!(screen.state.column, GridColumn(0));
-        }
-
-        /// Asserts that home follows the origin mode rather than the
-        /// page.
-        ///
-        /// Case: an application turns on origin mode and then moves its
-        /// pane down the screen with a second region.
-        #[test]
-        fn home_follows_the_origin_mode() {
-            let mut screen = tall_screen();
-            screen
-                .scroll_region
-                .set_origin_mode(OriginMode::WithinMargins);
-            screen.set_scroll_region(Some(2), Some(4));
-            assert_eq!(screen.state.line, ScreenLine(1));
-        }
-
-        /// Asserts that a refused request leaves both the margins and
-        /// the cursor untouched — a whole-sequence no-op rather than a
-        /// partial application.
-        ///
-        /// Case: an application inverts its two parameters and sends
-        /// `CSI 5 ; 3 r`.
-        #[test]
-        fn a_refused_request_changes_nothing() {
-            let mut screen = tall_screen();
-            screen.set_scroll_region(Some(1), Some(3));
-            screen.state.line = ScreenLine(2);
-            screen.set_scroll_region(Some(5), Some(3));
-            assert_eq!(
-                screen.scroll_region.scroll_span(),
-                ScreenLine(0)..=ScreenLine(2)
-            );
-            assert_eq!(screen.state.line, ScreenLine(2));
-        }
-    }
-
-    mod set_origin_mode {
-        use super::*;
-
-        /// Asserts that setting the origin within the margins seats the
-        /// cursor at the top margin.
-        ///
-        /// Case: an application reserves a header row, then turns on
-        /// origin mode so its own coordinates start below it.
-        #[test]
-        fn setting_the_origin_seats_the_cursor_at_the_top_margin() {
-            let mut screen = tall_screen();
-            screen.set_scroll_region(Some(2), Some(4));
-            screen.state.line = ScreenLine(3);
-            screen.set_origin_mode(OriginMode::WithinMargins);
-            assert_eq!(screen.state.line, ScreenLine(1));
-            assert_eq!(screen.state.column, GridColumn(0));
-        }
-
-        /// Asserts that resetting the origin homes the cursor at the
-        /// upper-left corner rather than homing on set alone.
-        ///
-        /// Case: a full-screen application drops origin mode on its way
-        /// out and prints without addressing the cursor first.
-        #[test]
-        fn resetting_the_origin_seats_the_cursor_at_the_corner() {
-            let mut screen = tall_screen();
-            screen.set_scroll_region(Some(2), Some(4));
-            screen.set_origin_mode(OriginMode::WithinMargins);
-            screen.state.line = ScreenLine(3);
-            screen.set_origin_mode(OriginMode::UpperLeftCorner);
-            assert_eq!(screen.state.line, ScreenLine(0));
-        }
-
-        /// Asserts that the mode reaches the region the cursor motion
-        /// reads.
-        ///
-        /// Case: an application turns on origin mode and the terminal
-        /// has to answer later cursor addressing against the margins.
-        #[test]
-        fn the_mode_reaches_the_scroll_region() {
-            let mut screen = tall_screen();
-            screen.set_origin_mode(OriginMode::WithinMargins);
-            assert_eq!(
-                screen.scroll_region.origin_mode(),
-                OriginMode::WithinMargins
-            );
-        }
-    }
-
-    mod move_cursor_to {
-        use super::*;
-
-        /// Asserts that omitted parameters address the first line and
-        /// column.
-        ///
-        /// Case: an application homes the cursor with a bare `CSI H`.
-        #[test]
-        fn omitted_parameters_address_the_first_cell() {
-            let mut screen = tall_screen();
-            screen.state.line = ScreenLine(2);
-            screen.state.column = GridColumn(3);
-            screen.move_cursor_to(None, None);
-            assert_eq!(screen.state.line, ScreenLine(0));
-            assert_eq!(screen.state.column, GridColumn(0));
-        }
-
-        /// Asserts that a zero addresses the first line and column, the
-        /// same as a one.
-        ///
-        /// The agreed policy follows VT510 p.116 — "If Pl or Pc is not
-        /// selected or selected as 0, then the cursor moves to the first
-        /// line or column".
-        ///
-        /// Case: a program that builds its sequences from zero-based
-        /// variables emits `CSI 0 ; 0 H`.
-        #[test]
-        fn a_zero_addresses_the_first_cell() {
-            let mut screen = tall_screen();
-            screen.state.line = ScreenLine(2);
-            screen.move_cursor_to(Some(0), Some(0));
-            assert_eq!(screen.state.line, ScreenLine(0));
-            assert_eq!(screen.state.column, GridColumn(0));
-        }
-
-        /// Asserts that one-based parameters land on zero-based cells.
-        ///
-        /// Case: a full-screen application draws a box corner by
-        /// addressing row 3, column 2.
-        #[test]
-        fn one_based_parameters_land_on_zero_based_cells() {
-            let mut screen = tall_screen();
-            screen.move_cursor_to(Some(3), Some(2));
-            assert_eq!(screen.state.line, ScreenLine(2));
-            assert_eq!(screen.state.column, GridColumn(1));
-        }
-
-        /// Asserts that the line is measured from the top margin while
-        /// the origin is within the margins.
-        ///
-        /// Case: an application with a reserved header turns on origin
-        /// mode and addresses the first row of its own pane.
-        #[test]
-        fn a_margin_origin_measures_the_line_from_the_top_margin() {
-            let mut screen = tall_screen();
-            screen.set_scroll_region(Some(2), Some(4));
-            screen.set_origin_mode(OriginMode::WithinMargins);
-            screen.state.line = ScreenLine(3);
-            screen.state.column = GridColumn(3);
-            screen.move_cursor_to(Some(1), Some(1));
-            assert_eq!(screen.state.line, ScreenLine(1));
-        }
-
-        /// Asserts that the line is absolute and reaches outside the
-        /// margins while the origin is the upper-left corner.
-        ///
-        /// The agreed policy follows VT510 p.195: with `DECOM` reset the
-        /// line numbering is independent of the margins and the cursor
-        /// can move outside them.
-        ///
-        /// Case: an application keeps a scrolling pane but addresses the
-        /// header row above it to update a title.
-        #[test]
-        fn an_upper_left_origin_reaches_outside_the_margins() {
-            let mut screen = tall_screen();
-            screen.set_scroll_region(Some(2), Some(4));
-            screen.state.line = ScreenLine(3);
-            screen.state.column = GridColumn(3);
-            screen.move_cursor_to(Some(1), Some(1));
-            assert_eq!(screen.state.line, ScreenLine(0));
-        }
-
-        /// Asserts that a line past the region clamps to the bottom
-        /// margin while the origin is within the margins.
-        ///
-        /// Case: an application with origin mode on addresses a row
-        /// below the pane it reserved for itself.
-        #[test]
-        fn a_line_past_the_region_clamps_to_the_bottom_margin() {
-            let mut screen = tall_screen();
-            screen.set_scroll_region(Some(1), Some(3));
-            screen.set_origin_mode(OriginMode::WithinMargins);
-            screen.move_cursor_to(Some(9), Some(1));
-            assert_eq!(screen.state.line, ScreenLine(2));
         }
     }
 
