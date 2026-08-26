@@ -52,6 +52,24 @@ use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
 use crate::screen::viewport::{DisplayOffset, Viewport, ViewportLine};
 
+/// One terminal screen: cell storage plus the write cursor, updated
+/// atomically by each operation.
+///
+/// # Invariants
+///
+/// Both grid axes are nonzero; degenerate sizes are rejected by the
+/// caller (the same contract as [`crate::Vt::resize`]).
+#[derive(Debug)]
+pub struct Screen {
+    grid: Grid,
+    viewport: Viewport,
+    state: ScreenState,
+    scroll_region: ScrollRegion,
+    tabs: TabStops,
+    character_set_mapping: CharacterSetMapping,
+    checkpoint: Checkpoint,
+}
+
 /// Span selector for [`Screen::erase_in_line`] (`CSI K`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EraseLineMode {
@@ -72,24 +90,6 @@ pub(crate) enum EraseScreenMode {
     Above,
     /// The whole visible screen (`ED 2`); history is untouched.
     All,
-}
-
-/// One terminal screen: cell storage plus the write cursor, updated
-/// atomically by each operation.
-///
-/// # Invariants
-///
-/// Both grid axes are nonzero; degenerate sizes are rejected by the
-/// caller (the same contract as [`crate::Vt::resize`]).
-#[derive(Debug)]
-pub struct Screen {
-    grid: Grid,
-    viewport: Viewport,
-    state: ScreenState,
-    scroll_region: ScrollRegion,
-    tabs: TabStops,
-    character_set_mapping: CharacterSetMapping,
-    checkpoint: Checkpoint,
 }
 
 impl Screen {
