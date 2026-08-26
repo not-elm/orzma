@@ -2758,8 +2758,7 @@ mod tests {
         /// Asserts that a re-mount at the same address supersedes the
         /// live placement without naming the superseded id.
         ///
-        /// Case: a program re-renders the same named view, and the host
-        /// must keep the entity it already spawned for that view.
+        /// Case: a program re-renders the same named view.
         #[test]
         fn a_remount_supersedes_without_naming_the_superseded_id() {
             let mut screen = screen();
