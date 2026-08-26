@@ -566,12 +566,8 @@ impl Screen {
     }
 }
 
+/// The viewport the user sees.
 impl Screen {
-    /// Returns the grid size.
-    pub fn grid_size(&self) -> GridSize {
-        self.grid.size()
-    }
-
     /// Borrows the cells shown at a viewport line.
     ///
     /// The viewport is the window the user sees: at the live tail it is
@@ -583,22 +579,6 @@ impl Screen {
         let offset =
             i32::try_from(self.viewport.offset.0).expect("scrollback never exceeds i32::MAX rows");
         self.grid.row(GridLine(i32::from(line.0) - offset))
-    }
-
-    /// The write cursor as an emitted frame carries it.
-    // TODO: Report the real shape, blink, and visibility once DECSCUSR
-    // and DECTCEM land. Block / steady / visible is what the terminal
-    // starts at.
-    pub fn cursor(&self) -> Cursor {
-        Cursor {
-            point: GridPoint {
-                line: GridLine::from(self.state.line),
-                column: self.state.column,
-            },
-            shape: CursorShape::Block,
-            blinking: false,
-            visible: true,
-        }
     }
 
     /// Number of scrollback rows the viewport sits above the live tail; always zero until scroll operations arrive.
@@ -625,11 +605,6 @@ impl Screen {
         self.viewport.offset = DisplayOffset(offset.0.min(history));
     }
 
-    /// The id of the row the cursor sits on — the anchor a mount samples.
-    pub fn cursor_line_id(&self) -> LineId {
-        self.grid.line_id(self.state.line)
-    }
-
     /// The signed viewport row `id`'s row now sits at; `None` once the row
     /// has left the ring.
     ///
@@ -642,43 +617,43 @@ impl Screen {
         let row = i64::from(line.0) + i64::from(self.viewport.offset.0);
         Some(row.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
     }
+}
+
+/// What an emitted frame reads back.
+///
+/// The damage projection lives here because it converts screen rows into
+/// the viewport coordinates a frame repaints by, which is the same
+/// coordinate space the readbacks above report in.
+impl Screen {
+    /// Returns the grid size.
+    pub fn grid_size(&self) -> GridSize {
+        self.grid.size()
+    }
+
+    /// The write cursor as an emitted frame carries it.
+    // TODO: Report the real shape, blink, and visibility once DECSCUSR
+    // and DECTCEM land. Block / steady / visible is what the terminal
+    // starts at.
+    pub fn cursor(&self) -> Cursor {
+        Cursor {
+            point: GridPoint {
+                line: GridLine::from(self.state.line),
+                column: self.state.column,
+            },
+            shape: CursorShape::Block,
+            blinking: false,
+            visible: true,
+        }
+    }
+
+    /// The id of the row the cursor sits on — the anchor a mount samples.
+    pub fn cursor_line_id(&self) -> LineId {
+        self.grid.line_id(self.state.line)
+    }
 
     /// The cursor's column.
     pub fn cursor_column(&self) -> GridColumn {
         self.state.column
-    }
-
-    /// Resets the screen to its power-up state.
-    ///
-    /// Covers the screen-scoped actions of `RIS`: the grid and its
-    /// history, the cursor, the SGR pen, the scrolling margins, the
-    /// origin mode, the tabulation stops, and the character set
-    /// mapping.
-    ///
-    /// Reports [`DamageSpan::Full`], or nothing when the grid was
-    /// already blank and carried no history; the cursor homes either
-    /// way, because cursor motion reaches the renderer through the
-    /// per-chunk cursor diff rather than through damage.
-    ///
-    /// # Invariants
-    ///
-    /// The cursor lands at the screen's upper-left corner whatever
-    /// origin mode was in force, because the state is replaced wholesale
-    /// rather than homed through the origin.
-    ///
-    /// # Control Functions
-    ///
-    /// - `RIS` (`ESC c`) — its screen-scoped actions
-    pub fn reset(&mut self) -> Option<DamageSpan> {
-        let dirty = !self.grid.is_blank();
-        self.grid.reset();
-        self.viewport = Viewport::default();
-        self.scroll_region = ScrollRegion::new(self.grid.size().rows);
-        self.state = ScreenState::default();
-        self.tabs = TabStops::default();
-        self.character_set_mapping = CharacterSetMapping::default();
-        self.checkpoint = Checkpoint::default();
-        dirty.then_some(DamageSpan::Full)
     }
 
     /// Reports the given screen rows as damage, in the viewport
@@ -705,7 +680,7 @@ impl Screen {
     }
 }
 
-// Checkpoint methods
+/// The state DECSC copies aside.
 impl Screen {
     /// Saves the current state in memory in accordance with DECSC.
     ///
@@ -743,6 +718,42 @@ impl Screen {
             self.scroll_region.origin_mode(),
             self.character_set_mapping,
         )
+    }
+}
+
+/// Screen-wide state operations.
+impl Screen {
+    /// Resets the screen to its power-up state.
+    ///
+    /// Covers the screen-scoped actions of `RIS`: the grid and its
+    /// history, the cursor, the SGR pen, the scrolling margins, the
+    /// origin mode, the tabulation stops, and the character set
+    /// mapping.
+    ///
+    /// Reports [`DamageSpan::Full`], or nothing when the grid was
+    /// already blank and carried no history; the cursor homes either
+    /// way, because cursor motion reaches the renderer through the
+    /// per-chunk cursor diff rather than through damage.
+    ///
+    /// # Invariants
+    ///
+    /// The cursor lands at the screen's upper-left corner whatever
+    /// origin mode was in force, because the state is replaced wholesale
+    /// rather than homed through the origin.
+    ///
+    /// # Control Functions
+    ///
+    /// - `RIS` (`ESC c`) — its screen-scoped actions
+    pub fn reset(&mut self) -> Option<DamageSpan> {
+        let dirty = !self.grid.is_blank();
+        self.grid.reset();
+        self.viewport = Viewport::default();
+        self.scroll_region = ScrollRegion::new(self.grid.size().rows);
+        self.state = ScreenState::default();
+        self.tabs = TabStops::default();
+        self.character_set_mapping = CharacterSetMapping::default();
+        self.checkpoint = Checkpoint::default();
+        dirty.then_some(DamageSpan::Full)
     }
 }
 
