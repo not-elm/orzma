@@ -139,7 +139,7 @@ impl FrameTracker {
     ///   settled after the gate, so an attempt that returns `None`
     ///   retains nothing.
     pub fn emit(&mut self, device: &DeviceState) -> Option<Frame> {
-        let screen = device.active();
+        let screen = device.active_screen();
         let cursor = screen.cursor();
         let display_offset = screen.display_offset();
         let placements = self.diff_placements(device);
@@ -188,7 +188,7 @@ impl FrameTracker {
     /// new list when it differs from the last-emitted one; `None` when
     /// unchanged.
     fn diff_placements(&self, device: &DeviceState) -> Option<Vec<AnchoredPlacement>> {
-        let projected = device.active().project_placements();
+        let projected = device.active_screen().project_placements();
         (projected != self.placements).then_some(projected)
     }
 
@@ -287,7 +287,7 @@ mod tests {
             .expect("a mount changes the projection");
         assert_eq!(listed.len(), 1);
         tracker.settle(
-            device.active().cursor(),
+            device.active_screen().cursor(),
             device.display_offset(),
             Some(&listed),
             None,
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn full_damage_emits_every_viewport_row() {
         let mut rig = drained_rig();
-        rig.device.active_mut().print('a');
+        rig.device.active_screen_mut().print('a');
         rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert_eq!(frame.size, GridSize { cols: 4, rows: 3 });
@@ -398,7 +398,9 @@ mod tests {
     #[test]
     fn a_cursor_only_change_emits_an_empty_rows_frame_once() {
         let mut rig = drained_rig();
-        rig.device.active_mut().move_cursor_to(Some(2), Some(3));
+        rig.device
+            .active_screen_mut()
+            .move_cursor_to(Some(2), Some(3));
         let frame = emit(&mut rig).expect("a moved cursor emits");
         assert!(frame.rows.is_empty());
         assert_eq!(frame.cursor.point.line, GridLine(1));
@@ -414,7 +416,7 @@ mod tests {
     #[test]
     fn an_unchanged_attempt_emits_nothing() {
         let mut rig = drained_rig();
-        rig.device.active_mut().pen_mut().fg = Color::Indexed(1);
+        rig.device.active_screen_mut().pen_mut().fg = Color::Indexed(1);
         assert_eq!(emit(&mut rig), None);
     }
 
@@ -426,10 +428,12 @@ mod tests {
     #[test]
     fn an_offset_only_change_emits_once() {
         let mut rig = drained_rig();
-        rig.device.active_mut().move_cursor_to(Some(3), None);
-        rig.device.active_mut().line_feed();
+        rig.device.active_screen_mut().move_cursor_to(Some(3), None);
+        rig.device.active_screen_mut().line_feed();
         emit(&mut rig).expect("the cursor motion and scroll emit");
-        rig.device.active_mut().set_display_offset(DisplayOffset(1));
+        rig.device
+            .active_screen_mut()
+            .set_display_offset(DisplayOffset(1));
         let frame = emit(&mut rig).expect("a moved viewport emits");
         assert!(frame.rows.is_empty());
         assert_eq!(frame.display_offset, DisplayOffset(1));

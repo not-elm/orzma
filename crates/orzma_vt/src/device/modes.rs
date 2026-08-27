@@ -22,6 +22,8 @@ pub struct VtModes {
     pub active_screen: ScreenKind,
     /// DECCKM (DECSET 1): arrow keys send SS3 instead of CSI.
     pub app_cursor: bool,
+    /// The mode selects whether the numeric keypad sends ASCII numerals or application function.
+    pub keypad_mode: KeypadMode,
     /// DECSET 2004: pastes are wrapped in `ESC[200~` / `ESC[201~`.
     pub bracketed_paste: bool,
     /// DECSET 1007: enables alternate-scroll translation.
@@ -49,6 +51,14 @@ impl VtModes {
     pub const fn alternate_scroll_active(&self) -> bool {
         matches!(self.active_screen, ScreenKind::Alternate) && self.alternate_scroll
     }
+}
+
+/// The mode selects whether the numeric keypad sends ASCII numerals or application function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeypadMode {
+    #[default]
+    Numeric,
+    Application,
 }
 
 /// Which of a device's two screens is shown.

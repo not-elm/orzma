@@ -64,7 +64,7 @@ impl DeviceState {
     }
 
     /// The screen the device currently reads and writes.
-    pub fn active(&self) -> &Screen {
+    pub fn active_screen(&self) -> &Screen {
         match self.modes.active_screen {
             ScreenKind::Primary => &self.screens.primary,
             ScreenKind::Alternate => &self.screens.alternate,
@@ -72,7 +72,7 @@ impl DeviceState {
     }
 
     /// The screen the device currently reads and writes.
-    pub fn active_mut(&mut self) -> &mut Screen {
+    pub fn active_screen_mut(&mut self) -> &mut Screen {
         match self.modes.active_screen {
             ScreenKind::Primary => &mut self.screens.primary,
             ScreenKind::Alternate => &mut self.screens.alternate,
@@ -133,12 +133,12 @@ impl DeviceState {
 
     /// Returns the grid dimensions of the active screen.
     pub fn grid_size(&self) -> GridSize {
-        self.active().grid_size()
+        self.active_screen().grid_size()
     }
 
     /// Scrollback rows the active viewport sits above the live tail.
     pub fn display_offset(&self) -> DisplayOffset {
-        self.active().display_offset()
+        self.active_screen().display_offset()
     }
 
     /// Snapshot of the input-relevant device modes.
@@ -187,7 +187,7 @@ impl DeviceState {
             return None;
         }
         let id = self.mint_placement_id();
-        self.active_mut()
+        self.active_screen_mut()
             .mount_placement(id, size, view_id, instance_id);
         Some(id)
     }
@@ -323,18 +323,18 @@ mod tests {
     fn the_two_screens_carry_independent_tab_stops() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device.active_mut().print(c);
+            device.active_screen_mut().print(c);
         }
-        device.active_mut().set_horizontal_tab_stop();
+        device.active_screen_mut().set_horizontal_tab_stop();
 
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device.active_mut().move_forward_tabs(1);
-        assert_eq!(device.active().cursor_column(), GridColumn(8));
+        device.active_screen_mut().move_forward_tabs(1);
+        assert_eq!(device.active_screen().cursor_column(), GridColumn(8));
 
         device.set_active_screen_for_test(ScreenKind::Primary);
-        device.active_mut().carriage_return();
-        device.active_mut().move_forward_tabs(1);
-        assert_eq!(device.active().cursor_column(), GridColumn(3));
+        device.active_screen_mut().carriage_return();
+        device.active_screen_mut().move_forward_tabs(1);
+        assert_eq!(device.active_screen().cursor_column(), GridColumn(3));
     }
 
     /// Asserts that a checkpoint saved on one screen is unreachable from
@@ -354,19 +354,19 @@ mod tests {
     fn the_two_screens_carry_independent_checkpoints() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device.active_mut().print(c);
+            device.active_screen_mut().print(c);
         }
-        device.active_mut().save_checkpoint();
+        device.active_screen_mut().save_checkpoint();
 
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device.active_mut().print('x');
-        device.active_mut().restore_checkpoint();
-        assert_eq!(device.active().cursor_column(), GridColumn(0));
+        device.active_screen_mut().print('x');
+        device.active_screen_mut().restore_checkpoint();
+        assert_eq!(device.active_screen().cursor_column(), GridColumn(0));
 
         device.set_active_screen_for_test(ScreenKind::Primary);
-        device.active_mut().carriage_return();
-        device.active_mut().restore_checkpoint();
-        assert_eq!(device.active().cursor_column(), GridColumn(3));
+        device.active_screen_mut().carriage_return();
+        device.active_screen_mut().restore_checkpoint();
+        assert_eq!(device.active_screen().cursor_column(), GridColumn(3));
     }
 
     /// Asserts that a reset clears both screens rather than only the one
@@ -378,15 +378,15 @@ mod tests {
     #[test]
     fn a_reset_clears_both_screens() {
         let mut device = device();
-        device.active_mut().print('p');
+        device.active_screen_mut().print('p');
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device.active_mut().print('a');
+        device.active_screen_mut().print('a');
 
         let _ = device.reset();
 
         for kind in [ScreenKind::Primary, ScreenKind::Alternate] {
             device.set_active_screen_for_test(kind);
-            let row = device.active().viewport_row(ViewportLine(0));
+            let row = device.active_screen().viewport_row(ViewportLine(0));
             assert!(row.iter().all(|cell| *cell == Cell::default()));
         }
     }
@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn a_reset_of_a_written_primary_screen_reports_a_full_repaint() {
         let mut device = device();
-        device.active_mut().print('x');
+        device.active_screen_mut().print('x');
 
         assert_eq!(device.reset(), Some(DamageSpan::Full));
     }
@@ -451,7 +451,7 @@ mod tests {
     fn a_reset_does_not_report_the_hidden_screens_damage() {
         let mut device = device();
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device.active_mut().print('x');
+        device.active_screen_mut().print('x');
         device.set_active_screen_for_test(ScreenKind::Primary);
 
         assert_eq!(device.reset(), None);
@@ -531,7 +531,7 @@ mod tests {
         let mut device = device();
         device.set_active_screen_for_test(ScreenKind::Alternate);
         let id = mount(&mut device, "memo").expect("alternate mount accepted");
-        assert_eq!(device.active_mut().reset(), None);
+        assert_eq!(device.active_screen_mut().reset(), None);
         device.set_active_screen_for_test(ScreenKind::Primary);
         assert_eq!(device.evict_lost_anchors(), vec![id]);
     }
@@ -601,6 +601,6 @@ mod tests {
         let dropped = mount(&mut device, "app").expect("alternate mount accepted");
         assert_eq!(device.switch_screen(ScreenKind::Primary), vec![dropped]);
         assert_eq!(device.placement_count(), 1);
-        assert_eq!(device.active_mut().take_placements(), vec![kept]);
+        assert_eq!(device.active_screen_mut().take_placements(), vec![kept]);
     }
 }

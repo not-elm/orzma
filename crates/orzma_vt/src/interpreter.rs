@@ -45,7 +45,7 @@ impl Interpreter {
         signal_tx: &mut Sender<VtSignal>,
         chunk: &[u8],
     ) -> bool {
-        let cursor_before = device.active().cursor();
+        let cursor_before = device.active_screen().cursor();
         let mut damaged = false;
         let mut executor = Executor {
             damaged: &mut damaged,
@@ -59,7 +59,7 @@ impl Interpreter {
         // point, shape, blink, and visibility — because the renderer
         // consumes all four; a point-only comparison would withhold a
         // `CSI ?25l`-only chunk until unrelated output arrived.
-        *executor.damaged |= cursor_before != executor.device.active().cursor();
+        *executor.damaged |= cursor_before != executor.device.active_screen().cursor();
         todo!()
     }
 }
@@ -107,7 +107,7 @@ impl VTActor for Executor<'_> {
         if b == '\u{7f}' {
             return;
         }
-        let damage = self.device.active_mut().print(b);
+        let damage = self.device.active_screen_mut().print(b);
         self.stage(damage);
     }
 
@@ -116,14 +116,14 @@ impl VTActor for Executor<'_> {
             0x07 => {
                 let _ = self.signal_tx.send(VtSignal::Bell);
             }
-            0x08 => self.device.active_mut().backspace(),
-            0x09 => self.device.active_mut().move_forward_tabs(1),
+            0x08 => self.device.active_screen_mut().backspace(),
+            0x09 => self.device.active_screen_mut().move_forward_tabs(1),
             0x0A | 0x0B | 0x0C | 0x84 => self.index(),
-            0x0D => self.device.active_mut().carriage_return(),
+            0x0D => self.device.active_screen_mut().carriage_return(),
             0x0E => self.invoke_character_set(GCode::G1),
             0x0F => self.invoke_character_set(GCode::G0),
             0x85 => self.next_line(),
-            0x88 => self.device.active_mut().set_horizontal_tab_stop(),
+            0x88 => self.device.active_screen_mut().set_horizontal_tab_stop(),
             0x8D => self.reverse_index(),
             0x8E => self.single_shift(SingleShift::G2),
             0x8F => self.single_shift(SingleShift::G3),
@@ -157,11 +157,11 @@ impl VTActor for Executor<'_> {
         byte: u8,
     ) {
         match (byte, intermediates) {
-            (b'7', []) => self.device.active_mut().save_checkpoint(),
-            (b'8', []) => self.device.active_mut().restore_checkpoint(),
+            (b'7', []) => self.device.active_screen_mut().save_checkpoint(),
+            (b'8', []) => self.device.active_screen_mut().restore_checkpoint(),
             (b'D', []) => self.index(),
             (b'E', []) => self.next_line(),
-            (b'H', []) => self.device.active_mut().set_horizontal_tab_stop(),
+            (b'H', []) => self.device.active_screen_mut().set_horizontal_tab_stop(),
             (b'M', []) => self.reverse_index(),
             (b'N', []) => self.single_shift(SingleShift::G2),
             (b'O', []) => self.single_shift(SingleShift::G3),
@@ -174,7 +174,7 @@ impl VTActor for Executor<'_> {
             (dscs, [designator @ (b'(' | b')' | b'*' | b'+')]) => {
                 if let Some(g_code) = GCode::from_designator(*designator) {
                     self.device
-                        .active_mut()
+                        .active_screen_mut()
                         .designate_character_set(g_code, CharacterSet::from_dscs(dscs));
                 }
             }
@@ -190,11 +190,11 @@ impl VTActor for Executor<'_> {
         match (params.private(), byte) {
             (None, b'H' | b'f') => self
                 .device
-                .active_mut()
+                .active_screen_mut()
                 .move_cursor_to(params.value(0), params.value(1)),
             (None, b'r') => self
                 .device
-                .active_mut()
+                .active_screen_mut()
                 .set_scroll_region(params.value(0), params.value(1)),
             (Some(b'?'), b'h') => self.set_private_modes(&params, true),
             (Some(b'?'), b'l') => self.set_private_modes(&params, false),
@@ -217,33 +217,33 @@ impl Executor<'_> {
     /// Moves the cursor down a row, scrolling at the bottom margin (IND,
     /// and the LF family that shares its effect).
     fn index(&mut self) {
-        let damage = self.device.active_mut().line_feed();
+        let damage = self.device.active_screen_mut().line_feed();
         self.stage(damage);
     }
 
     /// Returns the carriage and moves the cursor down a row (NEL).
     fn next_line(&mut self) {
-        self.device.active_mut().carriage_return();
-        let damage = self.device.active_mut().line_feed();
+        self.device.active_screen_mut().carriage_return();
+        let damage = self.device.active_screen_mut().line_feed();
         self.stage(damage);
     }
 
     /// Moves the cursor up a row, scrolling at the top margin (RI).
     fn reverse_index(&mut self) {
-        let damage = self.device.active_mut().reverse_index();
+        let damage = self.device.active_screen_mut().reverse_index();
         self.stage(damage);
     }
 
     /// Invokes a G code into GL until the next locking shift (the LS
     /// family).
     fn invoke_character_set(&mut self, g_code: GCode) {
-        self.device.active_mut().invoke_character_set(g_code);
+        self.device.active_screen_mut().invoke_character_set(g_code);
     }
 
     /// Invokes a G code into GL for the next graphic character (SS2 and
     /// SS3).
     fn single_shift(&mut self, single_shift: SingleShift) {
-        self.device.active_mut().single_shift(single_shift);
+        self.device.active_screen_mut().single_shift(single_shift);
     }
 
     /// Stages the reported damage and folds the result into the chunk
@@ -265,7 +265,7 @@ impl Executor<'_> {
         for mode in params.values().flatten() {
             if mode == 6 {
                 self.device
-                    .active_mut()
+                    .active_screen_mut()
                     .set_origin_mode(OriginMode::from_decset(enabled));
             }
         }
@@ -352,7 +352,10 @@ mod tests {
     #[test]
     fn the_raw_c1_byte_reverse_indexes() {
         let device = interpret(b"a\r\x8d");
-        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'a');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[0].c,
+            'a'
+        );
     }
 
     /// Asserts that the UTF-8 encoding of U+008D reaches the same arm.
@@ -361,7 +364,10 @@ mod tests {
     #[test]
     fn the_utf8_form_reverse_indexes() {
         let device = interpret(b"a\r\xc2\x8d");
-        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'a');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[0].c,
+            'a'
+        );
     }
 
     /// Asserts that `ESC D` moves the cursor down a row and leaves the
@@ -375,8 +381,14 @@ mod tests {
     #[test]
     fn the_seven_bit_index_keeps_the_column() {
         let device = interpret(b"a\x1bDb");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'a');
-        assert_eq!(device.active().viewport_row(ViewportLine(1))[1].c, 'b');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'a'
+        );
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[1].c,
+            'b'
+        );
     }
 
     /// Asserts that `ESC E` moves the cursor down a row and returns the
@@ -387,8 +399,14 @@ mod tests {
     #[test]
     fn the_seven_bit_next_line_returns_the_carriage() {
         let device = interpret(b"a\x1bEb");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'a');
-        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'b');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'a'
+        );
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[0].c,
+            'b'
+        );
     }
 
     /// Asserts that `ESC H` plants a tabulation stop at the cursor
@@ -399,7 +417,7 @@ mod tests {
     #[test]
     fn the_seven_bit_tab_set_plants_a_stop_at_the_cursor() {
         let device = interpret(b"ab\x1bH\r\t");
-        assert_eq!(device.active().cursor_column(), GridColumn(2));
+        assert_eq!(device.active_screen().cursor_column(), GridColumn(2));
     }
 
     /// Asserts that `ESC 7` and `ESC 8` bracket a detour, putting the
@@ -411,9 +429,15 @@ mod tests {
     #[test]
     fn the_seven_bit_save_and_restore_bracket_a_detour() {
         let device = interpret(b"ab\x1b7\r\x1bDxy\x1b8c");
-        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'x');
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[2].c, 'c');
-        assert_eq!(device.active().cursor_column(), GridColumn(3));
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[0].c,
+            'x'
+        );
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[2].c,
+            'c'
+        );
+        assert_eq!(device.active_screen().cursor_column(), GridColumn(3));
     }
 
     /// Asserts that a scroll region set by `CSI r` is what a later
@@ -424,8 +448,14 @@ mod tests {
     #[test]
     fn a_scroll_region_reaches_the_linefeed() {
         let device = interpret(b"\x1b[1;2ra\n\nb");
-        assert_eq!(device.active().viewport_row(ViewportLine(1))[1].c, 'b');
-        assert_eq!(device.active().viewport_row(ViewportLine(2))[1].c, ' ');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[1].c,
+            'b'
+        );
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(2))[1].c,
+            ' '
+        );
     }
 
     /// Asserts that `CSI H` addresses the cursor.
@@ -435,7 +465,10 @@ mod tests {
     #[test]
     fn the_cursor_position_sequence_addresses_the_cursor() {
         let device = interpret(b"\x1b[2;2Hx");
-        assert_eq!(device.active().viewport_row(ViewportLine(1))[1].c, 'x');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[1].c,
+            'x'
+        );
     }
 
     /// Asserts that `CSI f` addresses the cursor the same way `CSI H`
@@ -446,7 +479,10 @@ mod tests {
     #[test]
     fn the_position_sequence_matches_cursor_position() {
         let device = interpret(b"\x1b[2;2fx");
-        assert_eq!(device.active().viewport_row(ViewportLine(1))[1].c, 'x');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[1].c,
+            'x'
+        );
     }
 
     /// Asserts that origin mode moves the cursor-addressing origin to
@@ -457,7 +493,10 @@ mod tests {
     #[test]
     fn origin_mode_moves_the_addressing_origin() {
         let device = interpret(b"\x1b[2;3r\x1b[?6h\x1b[1;1Hx");
-        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'x');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[0].c,
+            'x'
+        );
     }
 
     /// Asserts that `CSI ? 6 l` seats the cursor at the upper-left
@@ -468,7 +507,10 @@ mod tests {
     #[test]
     fn resetting_origin_mode_seats_the_cursor_at_the_corner() {
         let device = interpret(b"\x1b[2;3r\x1b[?6h\x1b[?6lx");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'x');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'x'
+        );
     }
 
     /// Asserts that a private mode this terminal does not implement does
@@ -479,7 +521,10 @@ mod tests {
     #[test]
     fn an_unimplemented_private_mode_does_not_hide_origin_mode() {
         let device = interpret(b"\x1b[2;3r\x1b[?1;6h\x1b[1;1Hx");
-        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'x');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[0].c,
+            'x'
+        );
     }
 
     /// Asserts that `ESC c` blanks every visible row.
@@ -490,7 +535,7 @@ mod tests {
     fn the_seven_bit_reset_blanks_every_visible_row() {
         let device = interpret(b"ab\r\nc\x1bc");
         for line in 0..3 {
-            let row = device.active().viewport_row(ViewportLine(line));
+            let row = device.active_screen().viewport_row(ViewportLine(line));
             assert!(row.iter().all(|cell| *cell == Cell::default()));
         }
     }
@@ -518,7 +563,10 @@ mod tests {
     #[test]
     fn an_unimplemented_sequence_is_ignored() {
         let device = interpret(b"\x1b[0ma");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'a');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'a'
+        );
     }
 
     /// Asserts that a sequence carrying an intermediate does not reach
@@ -535,7 +583,10 @@ mod tests {
     #[test]
     fn an_intermediate_does_not_reach_the_scroll_region() {
         let device = interpret(b"\x1b[1;2$ra\n\nb");
-        assert_eq!(device.active().viewport_row(ViewportLine(2))[1].c, 'b');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(2))[1].c,
+            'b'
+        );
     }
 
     /// Asserts that `ESC M` scrolls the region down when the cursor
@@ -546,7 +597,10 @@ mod tests {
     #[test]
     fn the_seven_bit_reverse_index_scrolls_at_the_top_margin() {
         let device = interpret(b"a\r\x1bM");
-        assert_eq!(device.active().viewport_row(ViewportLine(1))[0].c, 'a');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[0].c,
+            'a'
+        );
     }
 
     /// Asserts that a set designated into G0 maps the characters
@@ -557,7 +611,10 @@ mod tests {
     #[test]
     fn a_set_designated_into_g0_maps_what_follows() {
         let device = interpret(b"\x1b(0q");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            '─'
+        );
     }
 
     /// Asserts that designating ASCII over a G code restores letters.
@@ -567,7 +624,10 @@ mod tests {
     #[test]
     fn redesignating_ascii_restores_letters() {
         let device = interpret(b"\x1b(0\x1b(Bq");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'q');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'q'
+        );
     }
 
     /// Asserts that a final with no set behind it designates ASCII
@@ -582,7 +642,10 @@ mod tests {
     #[test]
     fn an_unsupported_designation_falls_back_to_ascii() {
         let device = interpret(b"\x1b(0\x1b(Cq");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'q');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'q'
+        );
     }
 
     /// Asserts that `SO` invokes G1 into GL and `SI` returns G0 to it.
@@ -593,8 +656,14 @@ mod tests {
     #[test]
     fn the_shift_out_and_shift_in_pair_swaps_the_invoked_set() {
         let device = interpret(b"\x1b)0\x0eq\x0fq");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, 'q');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            '─'
+        );
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[1].c,
+            'q'
+        );
     }
 
     /// Asserts that `ESC n` invokes G2 into GL for everything that
@@ -605,8 +674,14 @@ mod tests {
     #[test]
     fn the_locking_shift_two_invokes_g2() {
         let device = interpret(b"\x1b*0q\x1bnq");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'q');
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, '─');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'q'
+        );
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[1].c,
+            '─'
+        );
     }
 
     /// Asserts that `ESC o` invokes G3 into GL for everything that
@@ -617,8 +692,14 @@ mod tests {
     #[test]
     fn the_locking_shift_three_invokes_g3() {
         let device = interpret(b"\x1b+0q\x1boq");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'q');
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, '─');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'q'
+        );
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[1].c,
+            '─'
+        );
     }
 
     /// Asserts that the seven-bit `SS2` maps one character and then
@@ -629,8 +710,14 @@ mod tests {
     #[test]
     fn the_seven_bit_single_shift_two_lasts_one_character() {
         let device = interpret(b"\x1b*0\x1bNqq");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, 'q');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            '─'
+        );
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[1].c,
+            'q'
+        );
     }
 
     /// Asserts that the raw C1 byte for SS2 reaches the same arm.
@@ -640,8 +727,14 @@ mod tests {
     #[test]
     fn the_raw_c1_byte_single_shifts() {
         let device = interpret(b"\x1b*0\x8eqq");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, 'q');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            '─'
+        );
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[1].c,
+            'q'
+        );
     }
 
     /// Asserts that the UTF-8 encoding of U+008E reaches the same arm.
@@ -650,8 +743,14 @@ mod tests {
     #[test]
     fn the_utf8_form_single_shifts() {
         let device = interpret(b"\x1b*0\xc2\x8eqq");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, 'q');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            '─'
+        );
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[1].c,
+            'q'
+        );
     }
 
     /// Asserts that DEL neither reaches a cell nor advances the cursor.
@@ -667,8 +766,14 @@ mod tests {
     #[test]
     fn delete_prints_nothing() {
         let device = interpret(b"a\x7fb");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, 'a');
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[1].c, 'b');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'a'
+        );
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[1].c,
+            'b'
+        );
     }
 
     /// Asserts that DEL does not spend a pending single shift.
@@ -678,7 +783,10 @@ mod tests {
     #[test]
     fn delete_leaves_a_pending_single_shift_armed() {
         let device = interpret(b"\x1b*0\x1bN\x7fq");
-        assert_eq!(device.active().viewport_row(ViewportLine(0))[0].c, '─');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            '─'
+        );
     }
 
     /// Asserts that a sequence whose intermediate falls out of the
@@ -706,6 +814,9 @@ mod tests {
     fn a_truncated_intermediate_does_not_reach_the_scroll_region() {
         let chunk = format!("\x1b[1;2{}$ra\n\nb", ";".repeat(29));
         let device = interpret(chunk.as_bytes());
-        assert_eq!(device.active().viewport_row(ViewportLine(2))[1].c, 'b');
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(2))[1].c,
+            'b'
+        );
     }
 }
