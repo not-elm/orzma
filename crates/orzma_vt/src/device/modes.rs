@@ -61,6 +61,17 @@ pub enum KeypadMode {
     Application,
 }
 
+impl KeypadMode {
+    /// The mode `DECSET 66` selects when set and `DECRST 66` when reset.
+    pub fn from_decset(enabled: bool) -> Self {
+        if enabled {
+            Self::Application
+        } else {
+            Self::Numeric
+        }
+    }
+}
+
 /// Which of a device's two screens is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScreenKind {

@@ -31,11 +31,6 @@ use crate::screen::viewport::{DisplayOffset, Scroll};
 /// pair, and the `(view_id, instance_id)` address space.
 pub(crate) struct DeviceState {
     screens: Screens,
-    // TODO: The modes only the executor consults — DECAWM, IRM, LNM,
-    // and DECOM — do not belong here. Each lands beside the state it
-    // governs, the way DECTCEM already lives in `Cursor::visible`:
-    // wrapping and insert next to `pending_wrap` in `ScreenState`,
-    // origin next to `Margins` in `Screen`.
     modes: VtModes,
     colors: ColorTable,
     title: TitleState,
@@ -144,6 +139,11 @@ impl DeviceState {
     /// Snapshot of the input-relevant device modes.
     pub fn modes(&self) -> VtModes {
         self.modes
+    }
+
+    /// Returns the mutable reference of [VtModes].
+    pub fn modes_mut(&mut self) -> &mut VtModes {
+        &mut self.modes
     }
 
     /// The live palette symbolic colors resolve against.

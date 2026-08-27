@@ -44,7 +44,7 @@ through  PF4 .2. The  Num Lock  key toggles the keypad keys, sending either nume
 
 ```
 CSI ? 6 6 h # Set: application sequences.
-CSI ? 6 6 I # eset: keypad characters.
+CSI ? 6 6 I # Reset: keypad characters.
 ```
 
 ## テンキーシーケンス

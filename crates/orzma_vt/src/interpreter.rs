@@ -14,6 +14,7 @@ pub(crate) mod apc;
 
 mod csi;
 
+use crate::device::modes::KeypadMode;
 use crate::interpreter::csi::CsiParams;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
@@ -113,19 +114,31 @@ impl VTActor for Executor<'_> {
 
     fn execute_c0_or_c1(&mut self, control: u8) {
         match control {
+            // BEL
             0x07 => {
                 let _ = self.signal_tx.send(VtSignal::Bell);
             }
+            // BS
             0x08 => self.device.active_screen_mut().backspace(),
+            // HT
             0x09 => self.device.active_screen_mut().move_forward_tabs(1),
+            // LF, VT, FF, IND
             0x0A | 0x0B | 0x0C | 0x84 => self.index(),
+            // CR
             0x0D => self.device.active_screen_mut().carriage_return(),
+            // SO (LS1)
             0x0E => self.invoke_character_set(GCode::G1),
+            // SI (LS0)
             0x0F => self.invoke_character_set(GCode::G0),
+            // NEL
             0x85 => self.next_line(),
+            // HTS
             0x88 => self.device.active_screen_mut().set_horizontal_tab_stop(),
+            // RI
             0x8D => self.reverse_index(),
+            // SS2
             0x8E => self.single_shift(SingleShift::G2),
+            // SS3
             0x8F => self.single_shift(SingleShift::G3),
             _ => {}
         }
@@ -157,20 +170,36 @@ impl VTActor for Executor<'_> {
         byte: u8,
     ) {
         match (byte, intermediates) {
+            // DECSC
             (b'7', []) => self.device.active_screen_mut().save_checkpoint(),
+            // DECRC
             (b'8', []) => self.device.active_screen_mut().restore_checkpoint(),
+            // DECKPAM
+            (b'=', []) => self.device.modes_mut().keypad_mode = KeypadMode::Application,
+            // DECKPNM
+            (b'>', []) => self.device.modes_mut().keypad_mode = KeypadMode::Numeric,
+            // IND
             (b'D', []) => self.index(),
+            // NEL
             (b'E', []) => self.next_line(),
+            // HTS
             (b'H', []) => self.device.active_screen_mut().set_horizontal_tab_stop(),
+            // RI
             (b'M', []) => self.reverse_index(),
+            // SS2
             (b'N', []) => self.single_shift(SingleShift::G2),
+            // SS3
             (b'O', []) => self.single_shift(SingleShift::G3),
+            // RIS
             (b'c', []) => {
                 let damage = self.device.reset();
                 self.stage(damage);
             }
+            // LS2
             (b'n', []) => self.invoke_character_set(GCode::G2),
+            // LS3
             (b'o', []) => self.invoke_character_set(GCode::G3),
+            // SCS
             (dscs, [designator @ (b'(' | b')' | b'*' | b'+')]) => {
                 if let Some(g_code) = GCode::from_designator(*designator) {
                     self.device
@@ -188,15 +217,19 @@ impl VTActor for Executor<'_> {
             return;
         }
         match (params.private(), byte) {
+            // CUP, HVP
             (None, b'H' | b'f') => self
                 .device
                 .active_screen_mut()
                 .move_cursor_to(params.value(0), params.value(1)),
+            // DECSTBM
             (None, b'r') => self
                 .device
                 .active_screen_mut()
                 .set_scroll_region(params.value(0), params.value(1)),
+            // DECSET
             (Some(b'?'), b'h') => self.set_private_modes(&params, true),
+            // DECRST
             (Some(b'?'), b'l') => self.set_private_modes(&params, false),
             _ => {}
         }
@@ -263,10 +296,15 @@ impl Executor<'_> {
     /// one must not hide an implemented one later in the list.
     fn set_private_modes(&mut self, params: &CsiParams<'_>, enabled: bool) {
         for mode in params.values().flatten() {
-            if mode == 6 {
-                self.device
+            match mode {
+                // DECOM
+                6 => self
+                    .device
                     .active_screen_mut()
-                    .set_origin_mode(OriginMode::from_decset(enabled));
+                    .set_origin_mode(OriginMode::from_decset(enabled)),
+                // DECNKM
+                66 => self.device.modes_mut().keypad_mode = KeypadMode::from_decset(enabled),
+                _ => {}
             }
         }
     }
@@ -525,6 +563,48 @@ mod tests {
             device.active_screen().viewport_row(ViewportLine(1))[0].c,
             'x'
         );
+    }
+
+    /// Asserts that `ESC =` puts the keypad in application mode.
+    ///
+    /// Case: a full-screen editor starts up and takes the numeric keypad
+    /// over so that its own bindings receive those keys.
+    #[test]
+    fn keypad_application_mode_selects_application_sequences() {
+        let device = interpret(b"\x1b=");
+        assert_eq!(device.modes().keypad_mode, KeypadMode::Application);
+    }
+
+    /// Asserts that `ESC >` puts the keypad back in numeric mode.
+    ///
+    /// Case: a full-screen editor exits and hands the keypad back to the
+    /// shell, where the digit keys must type digits again.
+    #[test]
+    fn keypad_numeric_mode_selects_ascii_numerals() {
+        let device = interpret(b"\x1b=\x1b>");
+        assert_eq!(device.modes().keypad_mode, KeypadMode::Numeric);
+    }
+
+    /// Asserts that `CSI ? 66 h` selects application mode, the same
+    /// state `ESC =` selects.
+    ///
+    /// Case: an application that manages its modes through the request
+    /// and report pair takes the numeric keypad over as it starts up.
+    #[test]
+    fn the_numeric_keypad_mode_set_matches_keypad_application_mode() {
+        let device = interpret(b"\x1b[?66h");
+        assert_eq!(device.modes().keypad_mode, KeypadMode::Application);
+    }
+
+    /// Asserts that `CSI ? 66 l` selects numeric mode, the same state
+    /// `ESC >` selects.
+    ///
+    /// Case: the same application hands the numeric keypad back as it
+    /// shuts down.
+    #[test]
+    fn the_numeric_keypad_mode_reset_matches_keypad_numeric_mode() {
+        let device = interpret(b"\x1b=\x1b[?66l");
+        assert_eq!(device.modes().keypad_mode, KeypadMode::Numeric);
     }
 
     /// Asserts that `ESC c` blanks every visible row.
