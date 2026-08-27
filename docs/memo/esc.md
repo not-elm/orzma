@@ -32,3 +32,4 @@ ESCの中にはC1の制御関数を7ビット環境で再現するために各C1
 ## 主要な関数一覧
 
 - [RIS - Reset to Initial State](../../docs/references/vt510.pdf#page=331)
+- [DECKPAM—Keypad Application Mode](../../docs/references/vt510.pdf#page=178)
