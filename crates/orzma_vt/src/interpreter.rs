@@ -5,10 +5,6 @@
 //! device state itself — the executor it dispatches to does that —
 //! and it owns the CSI ?2026 buffer, so a synchronized update holds its
 //! bytes here until the application closes it.
-#![expect(
-    dead_code,
-    reason = "OrzmaVt::interpret reaches the parser once the executor's callbacks land"
-)]
 
 pub(crate) mod apc;
 
@@ -75,8 +71,6 @@ impl Default for Interpreter {
 }
 
 /// Bytes held back while a synchronized update (CSI ?2026) is open.
-// TODO: Carry the buffered bytes plus the nesting depth, and flush them
-// before an APC mount samples the cursor.
 #[derive(Default)]
 struct SyncBuffer {}
 
@@ -85,14 +79,7 @@ struct SyncBuffer {}
 /// Every field is a borrow split from a component [`crate::OrzmaVt`]
 /// owns, so the view lives exactly as long as one [`Interpreter::parse`]
 /// call and carries no state between chunks.
-// TODO: Carry the call-local outbox the signals and replies collect
-// into, and implement `VTActor` — the callbacks land with it.
 struct Executor<'a> {
-    // TODO: The placement and palette handlers (the APC webview verbs
-    // and OSC 4 / 10 / 11 / 12) must set this flag when they mutate a
-    // frame-visible section — the placement docs promise that "the
-    // caller raises the chunk liveness flag", and until those handlers
-    // land no caller does.
     damaged: &'a mut bool,
     sync: &'a mut SyncBuffer,
     device: &'a mut DeviceState,
