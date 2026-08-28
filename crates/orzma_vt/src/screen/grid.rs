@@ -61,7 +61,7 @@ pub struct Grid {
     /// (`VecDeque` hides the physical rotation), so index `0` is
     /// always the oldest surviving history row and the boundary sits
     /// at `history_len`.
-    rows: VecDeque<StoredRow>,
+    rows: VecDeque<GlidRow>,
     /// Active-screen dimensions; `rows` always keeps at least this
     /// many entries as its tail window.
     size: GridSize,
@@ -78,7 +78,7 @@ pub struct Grid {
 /// storage row while `Row<Run>` is the emitted one, so a field on `Row`
 /// would carry grid identity into the frame's wire type.
 #[derive(Debug)]
-struct StoredRow {
+struct GlidRow {
     id: LineId,
     cells: Row<Cell>,
 }
@@ -88,7 +88,7 @@ impl Grid {
     pub fn new(size: GridSize, max_history: usize) -> Self {
         let mut rows = VecDeque::with_capacity(usize::from(size.rows));
         for id in 0..u64::from(size.rows) {
-            rows.push_back(StoredRow {
+            rows.push_back(GlidRow {
                 id: LineId(id),
                 cells: Row::filled(size.cols, Cell::default()),
             });
@@ -114,7 +114,7 @@ impl Grid {
         self.rows.clear();
         for _ in 0..self.size.rows {
             let id = self.mint();
-            self.rows.push_back(StoredRow {
+            self.rows.push_back(GlidRow {
                 id,
                 cells: Row::filled(self.size.cols, Cell::default()),
             });
@@ -168,7 +168,7 @@ impl Grid {
         }
         let grows_history = base < self.max_history;
         let entering = if grows_history {
-            StoredRow {
+            GlidRow {
                 id,
                 cells: Row::filled(self.size.cols, fill),
             }
