@@ -181,7 +181,7 @@ pub enum VtSignal {
     /// The placement is the VT-minted id, `Some` only for a `Mount` the
     /// VT accepted and registered; `None` is a policy rejection the
     /// consumer drops.
-    ApcWebview {
+    WebviewApc {
         /// The mount or unmount verb and associated metadata.
         verb: ApcWebviewVerb,
         /// The unique identifier for this placement, minted by the VT.

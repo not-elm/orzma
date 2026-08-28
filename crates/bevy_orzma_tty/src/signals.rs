@@ -142,7 +142,7 @@ fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signal: VtSignal
             terminal,
             path: path_buf,
         }),
-        VtSignal::ApcWebview { verb, placement } => commands.trigger(TtyApcWebviewSignal {
+        VtSignal::WebviewApc { verb, placement } => commands.trigger(TtyApcWebviewSignal {
             terminal,
             verb,
             placement,
