@@ -68,7 +68,8 @@ struct SyncBuffer {}
 
 /// The temporary view a parser callback applies its action through.
 ///
-/// `output` borrows the caller's per-call local in [`OrzmaVt::interpret`].
+/// `output` borrows the caller's per-call local in
+/// [`crate::OrzmaVt`]'s [`crate::Vt::interpret`].
 /// The other fields borrow state that outlives the call — `device` and
 /// `tracker` are components `OrzmaVt` owns, and `sync` reborrows
 /// [`Interpreter::sync`], which persists across chunks. The view itself

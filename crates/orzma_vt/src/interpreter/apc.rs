@@ -1,7 +1,8 @@
 //! The orzma APC webview verb and its wire parser.
 //!
-//! `Executor::apc_dispatch` hands raw APC payloads here; the verb it
-//! returns is what a `VtSignal::WebviewApc` carries.
+//! `Executor::apc_dispatch` will hand raw APC payloads here once its
+//! handler lands; the verb this module returns is what a
+//! `VtSignal::WebviewApc` carries.
 
 use std::str;
 
