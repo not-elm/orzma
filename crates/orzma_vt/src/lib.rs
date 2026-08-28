@@ -67,16 +67,16 @@ pub trait Vt {
     /// Interprets one PTY chunk, staging its damage internally and
     /// returning everything else it produced.
     ///
-    /// An empty chunk returns [`VtUpdate::default`].
+    /// An empty chunk returns [`InterpretOutput::default`].
     ///
     /// # Invariants
     ///
-    /// - [`VtUpdate::signals`] preserves byte-stream order.
-    /// - [`VtUpdate::replies`] must be written back to the PTY.
+    /// - [`InterpretOutput::signals`] preserves byte-stream order.
+    /// - [`InterpretOutput::replies`] must be written back to the PTY.
     ///
     /// # Webview placements
     ///
-    /// An APC webview `mount` becomes a [`VtSignal::ApcWebview`] whose
+    /// An APC webview `mount` becomes a [`VtSignal::WebviewApc`] whose
     /// [`PlacementId`] the VT mints itself; `placement: None` is a policy
     /// rejection. The VT owns the placement table and projects every
     /// placement into [`Frame::placements`] on each emit; a mount, unmount,
@@ -157,7 +157,7 @@ pub struct InterpretOutput {
 }
 
 /// Out-of-band signal parsed from the VT byte stream, handed to the
-/// owner in [`VtUpdate::signals`].
+/// owner in [`InterpretOutput::signals`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VtSignal {
     /// An audible bell has been requested; the consumer is responsible
@@ -246,7 +246,10 @@ impl Vt for OrzmaVt {
         if chunk.is_empty() {
             return InterpretOutput::default();
         }
-        todo!()
+        let mut output = InterpretOutput::default();
+        self.interpreter
+            .parse(&mut output, &mut self.device, &mut self.tracker, chunk);
+        output
     }
 
     fn frame(&mut self) -> Option<Frame> {
@@ -297,6 +300,17 @@ mod tests {
         let mut vt = vt();
         let frame = vt.frame().expect("the seeded Full emits");
         assert_eq!(frame.rows.len(), 3);
+    }
+
+    /// Asserts that interpreting a printable chunk reports the chunk as
+    /// damaged through the public entry point.
+    ///
+    /// Case: a shell echoes the first character of its prompt into a
+    /// freshly spawned terminal.
+    #[test]
+    fn interpreting_a_printable_chunk_reports_damage() {
+        let mut vt = vt();
+        assert!(vt.interpret(b"a").damaged);
     }
 
     /// Asserts that emitting drains the staged damage and settles the

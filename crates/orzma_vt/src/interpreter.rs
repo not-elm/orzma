@@ -15,11 +15,10 @@ use crate::interpreter::csi::CsiParams;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::{
-    VtSignal,
+    InterpretOutput, VtSignal,
     device::DeviceState,
     frame::{FrameTracker, damage::DamageSpan},
 };
-use std::sync::mpsc::Sender;
 use vtparse::{CsiParam, VTActor, VTParser};
 
 /// The parser plus the bytes a synchronized update is holding back.
@@ -30,30 +29,27 @@ pub(crate) struct Interpreter {
 
 impl Interpreter {
     /// Decodes one chunk, applying each action to the borrowed
-    /// components through an [`Executor`]; returns whether the chunk
-    /// staged damage or moved the cursor.
+    /// components through an [`Executor`] and collecting everything the
+    /// chunk produced into `output`.
     ///
     /// The executor is built here rather than passed in because it
     /// borrows [`SyncBuffer`], which `&mut self` already holds.
     pub fn parse(
         &mut self,
+        output: &mut InterpretOutput,
         device: &mut DeviceState,
         tracker: &mut FrameTracker,
-        signal_tx: &mut Sender<VtSignal>,
         chunk: &[u8],
-    ) -> bool {
+    ) {
         let cursor_before = device.active_screen().cursor();
-        let mut damaged = false;
         let mut executor = Executor {
-            damaged: &mut damaged,
+            output,
             sync: &mut self.sync,
             device,
             tracker,
-            signal_tx,
         };
         self.parser.parse(chunk, &mut executor);
-        *executor.damaged |= cursor_before != executor.device.active_screen().cursor();
-        *executor.damaged
+        executor.output.damaged |= cursor_before != executor.device.active_screen().cursor();
     }
 }
 
@@ -72,15 +68,14 @@ struct SyncBuffer {}
 
 /// The temporary view a parser callback applies its action through.
 ///
-/// Every field is a borrow split from a component [`crate::OrzmaVt`]
-/// owns, so the view lives exactly as long as one [`Interpreter::parse`]
-/// call and carries no state between chunks.
+/// Every field is a borrow from the frame of the one
+/// [`Interpreter::parse`] call that built it, so the view carries no
+/// state between chunks.
 struct Executor<'a> {
-    damaged: &'a mut bool,
+    output: &'a mut InterpretOutput,
     sync: &'a mut SyncBuffer,
     device: &'a mut DeviceState,
     tracker: &'a mut FrameTracker,
-    signal_tx: &'a mut Sender<VtSignal>,
 }
 
 impl VTActor for Executor<'_> {
@@ -98,9 +93,7 @@ impl VTActor for Executor<'_> {
     fn execute_c0_or_c1(&mut self, control: u8) {
         match control {
             // BEL
-            0x07 => {
-                let _ = self.signal_tx.send(VtSignal::Bell);
-            }
+            0x07 => self.signal(VtSignal::Bell),
             // BS
             0x08 => self.device.active_screen_mut().backspace(),
             // HT
@@ -277,7 +270,20 @@ impl Executor<'_> {
     /// Stages the reported damage and folds the result into the chunk
     /// liveness.
     fn stage(&mut self, damage: Option<DamageSpan>) {
-        *self.damaged |= self.tracker.stage_if_changed(damage);
+        self.output.damaged |= self.tracker.stage_if_changed(damage);
+    }
+
+    /// Queues an out-of-band signal, preserving byte-stream order.
+    fn signal(&mut self, signal: VtSignal) {
+        self.output.signals.push(signal);
+    }
+
+    /// Queues reply bytes for the owner to write back to the PTY.
+    ///
+    /// A reply changes nothing the renderer draws, so it deliberately
+    /// leaves the chunk liveness alone.
+    fn reply(&mut self, bytes: &[u8]) {
+        self.output.replies.extend_from_slice(bytes);
     }
 }
 
@@ -312,56 +318,51 @@ mod tests {
     use crate::screen::grid::GridSize;
     use crate::screen::grid::coords::GridColumn;
     use crate::screen::viewport::ViewportLine;
-    use std::sync::mpsc::channel;
+    use crate::{OrzmaVt, Vt};
 
-    /// Runs `chunk` through a parser wired to a fresh executor and hands
-    /// back the device it wrote to, accumulating chunk liveness into
-    /// `damaged`.
+    /// Runs `chunk` through a fresh interpreter and hands back the
+    /// device it wrote to together with everything the chunk produced.
     ///
-    /// `Interpreter::parse` is still `todo!()`, so the executor is built
-    /// here and driven directly rather than through the public entry
-    /// point.
-    fn interpret_with(damaged: &mut bool, chunk: &[u8]) -> DeviceState {
+    /// The interpreter is driven directly rather than through
+    /// [`OrzmaVt`] because these tests read [`DeviceState`], which the
+    /// [`Vt`] trait does not expose.
+    fn interpret_fully(chunk: &[u8]) -> (DeviceState, InterpretOutput) {
         let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
         let mut tracker = FrameTracker::new();
-        let (mut signal_tx, _signal_rx) = channel();
-        let mut sync = SyncBuffer::default();
-        let mut executor = Executor {
-            damaged,
-            sync: &mut sync,
-            device: &mut device,
-            tracker: &mut tracker,
-            signal_tx: &mut signal_tx,
-        };
-        VTParser::new().parse(chunk, &mut executor);
-        device
+        let mut output = InterpretOutput::default();
+        Interpreter::default().parse(&mut output, &mut device, &mut tracker, chunk);
+        (device, output)
     }
 
-    /// Runs `chunk` through a parser wired to a fresh executor and hands
-    /// back the device it wrote to.
+    /// Runs `chunk` through a fresh interpreter and hands back the
+    /// device it wrote to.
     fn interpret(chunk: &[u8]) -> DeviceState {
-        interpret_with(&mut false, chunk)
+        interpret_fully(chunk).0
     }
 
-    /// Runs `setup` and then `chunk` over one device through separate
-    /// executors, and reports the liveness `chunk` alone produced.
+    /// Reports the chunk liveness `chunk` produced from a fresh device.
+    fn damage_of(chunk: &[u8]) -> bool {
+        interpret_fully(chunk).1.damaged
+    }
+
+    /// Reports the reply bytes `chunk` produced, through the public
+    /// entry point rather than the crate-internal interpreter.
+    fn replies_of(chunk: &[u8]) -> Vec<u8> {
+        let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10);
+        vt.interpret(chunk).replies
+    }
+
+    /// Runs `setup` and then `chunk` over one interpreter and device,
+    /// and reports the liveness `chunk` alone produced.
     fn liveness_after(setup: &[u8], chunk: &[u8]) -> bool {
         let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
         let mut tracker = FrameTracker::new();
-        let (mut signal_tx, _signal_rx) = channel();
-        let mut sync = SyncBuffer::default();
-        let mut parser = VTParser::new();
+        let mut interpreter = Interpreter::default();
         let mut damaged = false;
         for bytes in [setup, chunk] {
-            damaged = false;
-            let mut executor = Executor {
-                damaged: &mut damaged,
-                sync: &mut sync,
-                device: &mut device,
-                tracker: &mut tracker,
-                signal_tx: &mut signal_tx,
-            };
-            parser.parse(bytes, &mut executor);
+            let mut output = InterpretOutput::default();
+            interpreter.parse(&mut output, &mut device, &mut tracker, bytes);
+            damaged = output.damaged;
         }
         damaged
     }
@@ -373,9 +374,19 @@ mod tests {
     /// coalesce window for the frame that repaints the row.
     #[test]
     fn staged_row_damage_marks_the_chunk_damaged() {
-        let mut damaged = false;
-        interpret_with(&mut damaged, b"a");
-        assert!(damaged);
+        assert!(damage_of(b"a"));
+    }
+
+    /// Asserts that a bell reaches the signals in the order it arrived
+    /// and leaves the chunk undamaged.
+    ///
+    /// Case: a shell rings the bell twice for an ambiguous completion,
+    /// printing nothing.
+    #[test]
+    fn a_bell_reaches_the_signals() {
+        let (_device, output) = interpret_fully(b"\x07\x07");
+        assert_eq!(output.signals, vec![VtSignal::Bell, VtSignal::Bell]);
+        assert!(!output.damaged);
     }
 
     /// Asserts that the raw C1 byte for RI reaches the screen.
