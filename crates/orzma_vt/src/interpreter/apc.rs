@@ -1,11 +1,11 @@
 //! The orzma APC webview verb and its wire parser.
 //!
 //! `Executor::apc_dispatch` hands raw APC payloads here; the verb it
-//! returns is what a `VtSignal::ApcWebview` carries.
+//! returns is what a `VtSignal::WebviewApc` carries.
 
 use std::str;
 
-/// Verb carried by `VtSignal::ApcWebview`: inline mount/unmount of a registered view.
+/// Verb carried by `VtSignal::WebviewApc`: inline mount/unmount of a registered view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApcWebviewVerb {
     /// Mount a registered webview INLINE at the cursor anchor, sized in cells.

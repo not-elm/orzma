@@ -68,9 +68,11 @@ struct SyncBuffer {}
 
 /// The temporary view a parser callback applies its action through.
 ///
-/// Every field is a borrow from the frame of the one
-/// [`Interpreter::parse`] call that built it, so the view carries no
-/// state between chunks.
+/// `output` borrows the caller's per-call local in [`OrzmaVt::interpret`].
+/// The other fields borrow state that outlives the call — `device` and
+/// `tracker` are components `OrzmaVt` owns, and `sync` reborrows
+/// [`Interpreter::sync`], which persists across chunks. The view itself
+/// still carries nothing between chunks: it is rebuilt fresh each call.
 struct Executor<'a> {
     output: &'a mut InterpretOutput,
     sync: &'a mut SyncBuffer,
@@ -124,8 +126,9 @@ impl VTActor for Executor<'_> {
 
     // TODO: Implement the device control strings — Sixel (`DCS q`),
     // DECRQSS, and the user-defined keys — once the grid can carry
-    // them. The three callbacks form one control function, so one note
-    // covers all of them.
+    // Sixel and DRCS glyphs and this crate can emit DCS replies for
+    // DECRQSS. The three callbacks form one control function, so one
+    // note covers all of them.
     fn dcs_hook(
         &mut self,
         _mode: u8,
@@ -284,6 +287,9 @@ impl Executor<'_> {
     }
 
     /// Queues an out-of-band signal, preserving byte-stream order.
+    ///
+    /// Queuing a signal does not itself raise the chunk liveness; a
+    /// signal whose effect is frame-relevant must stage its own damage.
     fn signal(&mut self, signal: VtSignal) {
         self.output.signals.push(signal);
     }
@@ -429,8 +435,8 @@ mod tests {
         assert!(damage_of(b"a"));
     }
 
-    /// Asserts that a bell reaches the signals in the order it arrived
-    /// and leaves the chunk undamaged.
+    /// Asserts that both bells reach the signals and leave the chunk
+    /// undamaged.
     ///
     /// Case: a shell rings the bell twice for an ambiguous completion,
     /// printing nothing.
@@ -788,7 +794,9 @@ mod tests {
     /// variable emits `CSI > 0 c`.
     #[test]
     fn an_explicit_zero_requests_the_same_secondary_attributes() {
-        assert_eq!(replies_of(b"\x1b[>0c"), replies_of(b"\x1b[>c"));
+        let reply = replies_of(b"\x1b[>0c");
+        assert!(!reply.is_empty());
+        assert_eq!(reply, replies_of(b"\x1b[>c"));
     }
 
     /// Asserts that a nonzero parameter requests no secondary
