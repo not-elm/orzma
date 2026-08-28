@@ -2,6 +2,10 @@
 //! into the byte sequence the PTY expects. No I/O, no Bevy types — kept
 //! pure so unit tests can cover every branch without an `App`.
 
+mod keypad;
+
+pub use keypad::KeypadKey;
+
 /// Non-empty UTF-8 text carried by [`TerminalKey::Character`].
 ///
 /// The non-empty invariant is what makes `encode_key` total: empty text has
@@ -43,33 +47,6 @@ pub enum TerminalKey {
     End,
     PageUp,
     PageDown,
-}
-
-/// A key on the PC-layout numeric keypad.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeypadKey {
-    Divide,
-    Multiply,
-    Subtract,
-    Add,
-    /// The `,` key, which German and French keypads carry where a US
-    /// keypad carries [`Self::Decimal`].
-    Comma,
-    /// The `=` key, which Macintosh and Sun keypads carry.
-    Equal,
-    /// The decimal keystation, whose typed character is locale-dependent.
-    Decimal,
-    Enter,
-    Zero,
-    One,
-    Two,
-    Three,
-    Four,
-    Five,
-    Six,
-    Seven,
-    Eight,
-    Nine,
 }
 
 /// Modifier flags carried alongside `TerminalKey`.

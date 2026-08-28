@@ -32,7 +32,7 @@ mod vi;
 /// move a type without breaking anyone.
 pub mod prelude {
     pub use crate::device::color::{Color, Palette, Rgb};
-    pub use crate::device::modes::{MouseEncoding, MouseTracking, ScreenKind, VtModes};
+    pub use crate::device::modes::{KeypadMode, MouseEncoding, MouseTracking, ScreenKind, VtModes};
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::interpreter::apc::ApcWebviewVerb;
