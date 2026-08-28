@@ -142,9 +142,6 @@ impl Grid {
     /// Overwrites the given column range of one visible row with `fill`.
     pub fn fill_visible_row_range(&mut self, line: ScreenLine, columns: Range<u16>, fill: Cell) {
         let index = self.visible_index(line.0);
-        // NOTE: `Row`'s own `Index<u16>` shadows the slice's range
-        // indexing, so the row has to reach the slice through `DerefMut`
-        // before a range can be applied.
         let row: &mut [Cell] = &mut self.rows[index].cells;
         row[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
     }
