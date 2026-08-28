@@ -22,21 +22,6 @@ alacritty_terminal 0.26 が ESC の解釈を委譲している `vte-0.15.0/src/a
 
 ## 優先度 A
 
-### A-1. `ESC =` / `ESC >` — DECKPAM / DECKPNM
-
-数値キーパッドが application sequence を送るか素の数字を送るかの切り替え。矢印
-キーの DECCKM と対になる入力側のモード。
-
-xterm-256color の terminfo が `smkx=\E[?1h\E=` / `rmkx=\E[?1l\E>` なので、keypad を
-使う ncurses アプリは起動と終了のたびにこれを吐く。現状は捨てている。この一覧で
-最優先。
-
-必要な下地は `VtModes` のフィールド 1 つ。RIS は `self.modes = VtModes::default()`
-を通るのでリセットは自動で揃う。VT510 は DECNKM（`CSI ? 66 h/l`）が同じ機能だと
-明記しているので、CSI 側を実装するときは同じフィールドを共有すること。
-
-典拠: vt510.pdf p.178 / p.180。vte 0.15 は `set_keypad_application_mode` を呼ぶ。
-
 ### A-2. `ESC # 8` — DECALN
 
 画面全体を `E` で埋める整列テストパターン。`Screen` に「特定の文字で埋める」操作が
@@ -65,17 +50,6 @@ xterm-256color の terminfo が `smkx=\E[?1h\E=` / `rmkx=\E[?1l\E>` なので、
 
 典拠: vt510.pdf p.89 Table 4–7。VT510 は脚注で「DECID はサポートされないことが
 ある。DA1 を使え」と書いているので、優先度は DA1 の後ろでよい。
-
-### A-4. `ESC \` / `ESC % G` / `ESC % @` — 明示的な no-op
-
-いずれも現状 `_ => {}` に落ちており、**動作としては既に正しい**。やることは明示
-アームを置くこと。将来「未知の ESC をログする／カウントする」経路を足したときに、
-正常系がそこへ流れ込まないようにするための予防線。
-
-- `ESC \` は ST。DCS / OSC / APC の正常な終端なので、未知として扱ってはならない。
-- `ESC % G`（UTF-8 選択）は現状と一致する no-op。`ESC % @`（ISO 8859-1 復帰）は
-  vtparse の外側にバイト単位の復号層を足さない限り**尊重できない**。現代のアプリは
-  まず要求しないので、捨てるのが現実的な答え。
 
 ### A-5. 複数バイト終端の SCS を取りこぼしている
 

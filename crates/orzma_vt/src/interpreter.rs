@@ -190,6 +190,8 @@ impl VTActor for Executor<'_> {
             (b'N', []) => self.single_shift(SingleShift::G2),
             // SS3
             (b'O', []) => self.single_shift(SingleShift::G3),
+            // ST
+            (b'\\', []) => {}
             // RIS
             (b'c', []) => {
                 let damage = self.device.reset();
@@ -199,6 +201,11 @@ impl VTActor for Executor<'_> {
             (b'n', []) => self.invoke_character_set(GCode::G2),
             // LS3
             (b'o', []) => self.invoke_character_set(GCode::G3),
+            // Select ISO 8859-1 (`ESC % @`) / UTF-8 (`ESC % G`)
+            // NOTE: Ground is always decoded as UTF-8, so the ISO 8859-1
+            // request is dropped rather than honored; honoring it needs a
+            // byte-level decoding layer outside vtparse.
+            (b'@' | b'G', [b'%']) => {}
             // SCS
             (dscs, [designator @ (b'(' | b')' | b'*' | b'+')]) => {
                 if let Some(g_code) = GCode::from_designator(*designator) {
