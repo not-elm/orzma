@@ -1,7 +1,7 @@
 //! Encoders that turn user input events into the byte sequences written to
 //! the PTY.
 
-use orzma_vt::prelude::MouseEncoding;
+use orzma_vt::prelude::{MouseEncoding, VtModes};
 
 mod keyboard;
 mod mouse;
@@ -33,8 +33,13 @@ impl PtyInput {
     /// [PC-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-PC-Style-Function-Keys
     /// [VT220-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-VT220-Style-Function-Keys
     /// [Alt and Meta Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Alt-and-Meta-Keys
-    pub fn encode_key(key: &TerminalKey, mods: &TerminalModifiers, app_cursor_keys: bool) -> Self {
-        Self(keyboard::encode_key(key, mods, app_cursor_keys))
+    pub fn encode_key(key: &TerminalKey, mods: &TerminalModifiers, modes: VtModes) -> Self {
+        Self(keyboard::encode_key(
+            key,
+            mods,
+            modes.app_cursor,
+            modes.keypad_mode,
+        ))
     }
 
     /// Encodes one mouse report in the given mouse encoding. UTF-8

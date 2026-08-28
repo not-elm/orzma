@@ -185,7 +185,7 @@ impl<V: Vt> OrzmaTty<V> {
         let modes = self.vt.modes();
         self.snap_to_live_tail();
         self.pty
-            .write_all(PtyInput::encode_key(key, mods, modes.app_cursor).as_bytes())
+            .write_all(PtyInput::encode_key(key, mods, modes).as_bytes())
     }
 
     /// Encodes one mouse report in the terminal's active mouse encoding

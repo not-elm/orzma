@@ -5,6 +5,7 @@
 mod keypad;
 
 pub use keypad::KeypadKey;
+use orzma_vt::prelude::KeypadMode;
 
 /// Non-empty UTF-8 text carried by [`TerminalKey::Character`].
 ///
@@ -34,6 +35,7 @@ impl KeyText {
 pub enum TerminalKey {
     /// UTF-8 text (single char or multi-codepoint composition).
     Character(KeyText),
+    Keypad(KeypadKey),
     Enter,
     Backspace,
     Tab,
@@ -74,9 +76,11 @@ pub(super) fn encode_key(
     key: &TerminalKey,
     mods: &TerminalModifiers,
     app_cursor_keys: bool,
+    keypad_mode: KeypadMode,
 ) -> Vec<u8> {
     match key {
         TerminalKey::Character(text) => encode_character(text, mods),
+        TerminalKey::Keypad(keypad) => keypad.encode(keypad_mode).to_vec(),
         TerminalKey::ArrowUp => cursor_key_bytes(b'A', app_cursor_keys),
         TerminalKey::ArrowDown => cursor_key_bytes(b'B', app_cursor_keys),
         TerminalKey::ArrowRight => cursor_key_bytes(b'C', app_cursor_keys),
@@ -170,7 +174,7 @@ mod tests {
     #[test]
     fn ascii_text_is_passthrough() {
         assert_eq!(
-            encode_key(&character("a"), &no_mods(), false),
+            encode_key(&character("a"), &no_mods(), false, KeypadMode::Numeric),
             b"a".to_vec()
         );
     }
@@ -178,7 +182,7 @@ mod tests {
     #[test]
     fn multibyte_text_is_utf8_passthrough() {
         assert_eq!(
-            encode_key(&character("あ"), &no_mods(), false),
+            encode_key(&character("あ"), &no_mods(), false, KeypadMode::Numeric),
             "あ".as_bytes().to_vec()
         );
     }
@@ -186,7 +190,7 @@ mod tests {
     #[test]
     fn enter_is_carriage_return() {
         assert_eq!(
-            encode_key(&TerminalKey::Enter, &no_mods(), false),
+            encode_key(&TerminalKey::Enter, &no_mods(), false, KeypadMode::Numeric),
             vec![0x0d]
         );
     }
@@ -194,20 +198,28 @@ mod tests {
     #[test]
     fn backspace_is_del() {
         assert_eq!(
-            encode_key(&TerminalKey::Backspace, &no_mods(), false),
+            encode_key(
+                &TerminalKey::Backspace,
+                &no_mods(),
+                false,
+                KeypadMode::Numeric
+            ),
             vec![0x7f]
         );
     }
 
     #[test]
     fn tab_is_horizontal_tab() {
-        assert_eq!(encode_key(&TerminalKey::Tab, &no_mods(), false), vec![0x09]);
+        assert_eq!(
+            encode_key(&TerminalKey::Tab, &no_mods(), false, KeypadMode::Numeric),
+            vec![0x09]
+        );
     }
 
     #[test]
     fn escape_is_esc() {
         assert_eq!(
-            encode_key(&TerminalKey::Escape, &no_mods(), false),
+            encode_key(&TerminalKey::Escape, &no_mods(), false, KeypadMode::Numeric),
             vec![0x1b]
         );
     }
@@ -215,15 +227,20 @@ mod tests {
     #[test]
     fn vt220_style_keys_use_tilde_sequences() {
         assert_eq!(
-            encode_key(&TerminalKey::Delete, &no_mods(), false),
+            encode_key(&TerminalKey::Delete, &no_mods(), false, KeypadMode::Numeric),
             b"\x1b[3~".to_vec()
         );
         assert_eq!(
-            encode_key(&TerminalKey::PageUp, &no_mods(), false),
+            encode_key(&TerminalKey::PageUp, &no_mods(), false, KeypadMode::Numeric),
             b"\x1b[5~".to_vec()
         );
         assert_eq!(
-            encode_key(&TerminalKey::PageDown, &no_mods(), false),
+            encode_key(
+                &TerminalKey::PageDown,
+                &no_mods(),
+                false,
+                KeypadMode::Numeric
+            ),
             b"\x1b[6~".to_vec()
         );
     }
@@ -231,11 +248,11 @@ mod tests {
     #[test]
     fn home_and_end_use_csi_in_normal_cursor_mode() {
         assert_eq!(
-            encode_key(&TerminalKey::Home, &no_mods(), false),
+            encode_key(&TerminalKey::Home, &no_mods(), false, KeypadMode::Numeric),
             b"\x1b[H".to_vec()
         );
         assert_eq!(
-            encode_key(&TerminalKey::End, &no_mods(), false),
+            encode_key(&TerminalKey::End, &no_mods(), false, KeypadMode::Numeric),
             b"\x1b[F".to_vec()
         );
     }
@@ -243,11 +260,11 @@ mod tests {
     #[test]
     fn home_and_end_use_ss3_in_application_cursor_mode() {
         assert_eq!(
-            encode_key(&TerminalKey::Home, &no_mods(), true),
+            encode_key(&TerminalKey::Home, &no_mods(), true, KeypadMode::Numeric),
             b"\x1bOH".to_vec()
         );
         assert_eq!(
-            encode_key(&TerminalKey::End, &no_mods(), true),
+            encode_key(&TerminalKey::End, &no_mods(), true, KeypadMode::Numeric),
             b"\x1bOF".to_vec()
         );
     }
@@ -256,15 +273,30 @@ mod tests {
     fn editing_keypad_ignores_cursor_mode() {
         for app_cursor in [false, true] {
             assert_eq!(
-                encode_key(&TerminalKey::Delete, &no_mods(), app_cursor),
+                encode_key(
+                    &TerminalKey::Delete,
+                    &no_mods(),
+                    app_cursor,
+                    KeypadMode::Numeric
+                ),
                 b"\x1b[3~".to_vec()
             );
             assert_eq!(
-                encode_key(&TerminalKey::PageUp, &no_mods(), app_cursor),
+                encode_key(
+                    &TerminalKey::PageUp,
+                    &no_mods(),
+                    app_cursor,
+                    KeypadMode::Numeric
+                ),
                 b"\x1b[5~".to_vec()
             );
             assert_eq!(
-                encode_key(&TerminalKey::PageDown, &no_mods(), app_cursor),
+                encode_key(
+                    &TerminalKey::PageDown,
+                    &no_mods(),
+                    app_cursor,
+                    KeypadMode::Numeric
+                ),
                 b"\x1b[6~".to_vec()
             );
         }
@@ -273,19 +305,39 @@ mod tests {
     #[test]
     fn arrows_use_csi_in_normal_cursor_mode() {
         assert_eq!(
-            encode_key(&TerminalKey::ArrowUp, &no_mods(), false),
+            encode_key(
+                &TerminalKey::ArrowUp,
+                &no_mods(),
+                false,
+                KeypadMode::Numeric
+            ),
             b"\x1b[A".to_vec()
         );
         assert_eq!(
-            encode_key(&TerminalKey::ArrowDown, &no_mods(), false),
+            encode_key(
+                &TerminalKey::ArrowDown,
+                &no_mods(),
+                false,
+                KeypadMode::Numeric
+            ),
             b"\x1b[B".to_vec()
         );
         assert_eq!(
-            encode_key(&TerminalKey::ArrowRight, &no_mods(), false),
+            encode_key(
+                &TerminalKey::ArrowRight,
+                &no_mods(),
+                false,
+                KeypadMode::Numeric
+            ),
             b"\x1b[C".to_vec()
         );
         assert_eq!(
-            encode_key(&TerminalKey::ArrowLeft, &no_mods(), false),
+            encode_key(
+                &TerminalKey::ArrowLeft,
+                &no_mods(),
+                false,
+                KeypadMode::Numeric
+            ),
             b"\x1b[D".to_vec()
         );
     }
@@ -293,49 +345,82 @@ mod tests {
     #[test]
     fn arrows_use_ss3_in_application_cursor_mode() {
         assert_eq!(
-            encode_key(&TerminalKey::ArrowUp, &no_mods(), true),
+            encode_key(&TerminalKey::ArrowUp, &no_mods(), true, KeypadMode::Numeric),
             b"\x1bOA".to_vec()
         );
         assert_eq!(
-            encode_key(&TerminalKey::ArrowDown, &no_mods(), true),
+            encode_key(
+                &TerminalKey::ArrowDown,
+                &no_mods(),
+                true,
+                KeypadMode::Numeric
+            ),
             b"\x1bOB".to_vec()
         );
         assert_eq!(
-            encode_key(&TerminalKey::ArrowRight, &no_mods(), true),
+            encode_key(
+                &TerminalKey::ArrowRight,
+                &no_mods(),
+                true,
+                KeypadMode::Numeric
+            ),
             b"\x1bOC".to_vec()
         );
         assert_eq!(
-            encode_key(&TerminalKey::ArrowLeft, &no_mods(), true),
+            encode_key(
+                &TerminalKey::ArrowLeft,
+                &no_mods(),
+                true,
+                KeypadMode::Numeric
+            ),
             b"\x1bOD".to_vec()
         );
     }
 
     #[test]
     fn ctrl_letter_collapses_to_c0_byte() {
-        assert_eq!(encode_key(&character("a"), &ctrl(), false), vec![0x01]);
-        assert_eq!(encode_key(&character("c"), &ctrl(), false), vec![0x03]);
-        assert_eq!(encode_key(&character("z"), &ctrl(), false), vec![0x1a]);
+        assert_eq!(
+            encode_key(&character("a"), &ctrl(), false, KeypadMode::Numeric),
+            vec![0x01]
+        );
+        assert_eq!(
+            encode_key(&character("c"), &ctrl(), false, KeypadMode::Numeric),
+            vec![0x03]
+        );
+        assert_eq!(
+            encode_key(&character("z"), &ctrl(), false, KeypadMode::Numeric),
+            vec![0x1a]
+        );
     }
 
     #[test]
     fn ctrl_uppercase_letter_collapses_to_same_byte() {
-        assert_eq!(encode_key(&character("C"), &ctrl(), false), vec![0x03]);
+        assert_eq!(
+            encode_key(&character("C"), &ctrl(), false, KeypadMode::Numeric),
+            vec![0x03]
+        );
     }
 
     #[test]
     fn ctrl_space_is_unmapped_in_mvp() {
-        assert_eq!(encode_key(&character(" "), &ctrl(), false), b" ".to_vec());
+        assert_eq!(
+            encode_key(&character(" "), &ctrl(), false, KeypadMode::Numeric),
+            b" ".to_vec()
+        );
     }
 
     #[test]
     fn ctrl_digit_is_text_passthrough() {
-        assert_eq!(encode_key(&character("1"), &ctrl(), false), b"1".to_vec());
+        assert_eq!(
+            encode_key(&character("1"), &ctrl(), false, KeypadMode::Numeric),
+            b"1".to_vec()
+        );
     }
 
     #[test]
     fn alt_letter_is_esc_prefixed() {
         assert_eq!(
-            encode_key(&character("h"), &alt(), false),
+            encode_key(&character("h"), &alt(), false, KeypadMode::Numeric),
             b"\x1bh".to_vec()
         );
     }
@@ -346,7 +431,10 @@ mod tests {
             meta: true,
             ..Default::default()
         };
-        assert_eq!(encode_key(&character("x"), &meta, false), b"\x1bx".to_vec());
+        assert_eq!(
+            encode_key(&character("x"), &meta, false, KeypadMode::Numeric),
+            b"\x1bx".to_vec()
+        );
     }
 
     #[test]
@@ -356,6 +444,9 @@ mod tests {
             alt: true,
             ..Default::default()
         };
-        assert_eq!(encode_key(&character("a"), &both, false), vec![0x01]);
+        assert_eq!(
+            encode_key(&character("a"), &both, false, KeypadMode::Numeric),
+            vec![0x01]
+        );
     }
 }
