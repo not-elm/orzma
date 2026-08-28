@@ -757,11 +757,26 @@ impl Screen {
     /// Fills the visible screen with the alignment pattern, returning to
     /// the page-wide scroll region and the absolute cursor origin.
     ///
+    /// The pattern is drawn with default attributes rather than the
+    /// current pen, because a screen tinted by the application's colors
+    /// is useless as an adjustment reference.
+    ///
     /// # Control Functions
     ///
     /// - `DECALN` (`ESC # 8`)
     pub fn fill_alignment_pattern(&mut self) -> DamageSpan {
-        todo!()
+        let size = self.grid.size();
+        let cell = Cell {
+            c: 'E',
+            ..Cell::default()
+        };
+        for line in 0..size.rows {
+            self.grid
+                .fill_visible_row_range(ScreenLine(line), 0..size.cols, cell);
+        }
+        self.scroll_region = ScrollRegion::new(size.rows);
+        self.seat_cursor(ScreenLine(0), GridColumn(0));
+        DamageSpan::Full
     }
 }
 
