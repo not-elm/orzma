@@ -20,24 +20,6 @@ alacritty_terminal 0.26 が ESC の解釈を委譲している `vte-0.15.0/src/a
 
 ---
 
-## 優先度 A
-
-### A-3. `ESC Z`（および C1 `0x9A`）— DECID
-
-端末 ID を返す。`CSI c`（DA1）の旧形式で、応答内容は DA1 と同一。
-
-`Executor` の doc コメントが TODO に挙げている返信 outbox がまだ無く、DA1 自体も
-`csi_dispatch` に未実装。**返す文字列の決定は DA1 と一緒に行う**（alacritty は
-`\x1b[?6c`）。
-
-`esc_dispatch` 直上の doc コメントが「8-bit C1 と 7-bit ESC の二つの綴りが乖離
-しないように」と宣言しているので、`ESC Z` を足すなら `execute_c0_or_c1` に `0x9A`
-のアームも同時に足す。
-
-典拠: vt510.pdf p.89 Table 4–7。VT510 は脚注で「DECID はサポートされないことが
-ある。DA1 を使え」と書いているので、優先度は DA1 の後ろでよい。
-
----
 
 ## 優先度 B
 

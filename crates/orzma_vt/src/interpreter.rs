@@ -116,6 +116,8 @@ impl VTActor for Executor<'_> {
             0x8E => self.single_shift(SingleShift::G2),
             // SS3
             0x8F => self.single_shift(SingleShift::G3),
+            // DECID
+            0x9A => self.reply(PRIMARY_ATTRIBUTES),
             _ => {}
         }
     }
@@ -165,6 +167,8 @@ impl VTActor for Executor<'_> {
             (b'N', []) => self.single_shift(SingleShift::G2),
             // SS3
             (b'O', []) => self.single_shift(SingleShift::G3),
+            // DECID
+            (b'Z', []) => self.reply(PRIMARY_ATTRIBUTES),
             // ST
             (b'\\', []) => {}
             // RIS
@@ -214,6 +218,8 @@ impl VTActor for Executor<'_> {
                 .device
                 .active_screen_mut()
                 .set_scroll_region(params.value(0), params.value(1)),
+            // DA1
+            (None, b'c') if params.value(0).unwrap_or(0) == 0 => self.reply(PRIMARY_ATTRIBUTES),
             // DECSET
             (Some(b'?'), b'h') => self.set_private_modes(&params, true),
             // DECRST
@@ -310,6 +316,11 @@ impl Executor<'_> {
         }
     }
 }
+
+/// The DA1 response: a VT102 with no extensions, the class alacritty
+/// reports. A higher class would advertise features — Sixel, DRCS,
+/// selective erase — this terminal does not implement.
+const PRIMARY_ATTRIBUTES: &[u8] = b"\x1b[?6c";
 
 #[cfg(test)]
 mod tests {
@@ -635,6 +646,82 @@ mod tests {
     #[test]
     fn the_seven_bit_reset_marks_its_own_chunk_damaged() {
         assert!(liveness_after(b"a", b"\x1bc"));
+    }
+
+    /// Asserts that a primary device attributes request reports the
+    /// terminal's architectural class.
+    ///
+    /// Case: an application probes the terminal's capabilities at
+    /// startup and blocks until the class arrives.
+    #[test]
+    fn a_primary_attributes_request_reports_the_terminal_class() {
+        assert_eq!(replies_of(b"\x1b[c"), b"\x1b[?6c");
+    }
+
+    /// Asserts that an explicit zero requests the same class an omitted
+    /// parameter does.
+    ///
+    /// Case: a program that builds its sequences from an unset integer
+    /// variable emits `CSI 0 c`.
+    #[test]
+    fn an_explicit_zero_requests_the_same_class() {
+        assert_eq!(replies_of(b"\x1b[0c"), b"\x1b[?6c");
+    }
+
+    /// Asserts that a nonzero parameter requests nothing.
+    ///
+    /// Case: an application sends a device attributes variant this
+    /// terminal does not answer.
+    #[test]
+    fn a_nonzero_parameter_requests_nothing() {
+        assert!(replies_of(b"\x1b[1c").is_empty());
+    }
+
+    /// Asserts that the seven-bit identify reports the primary class.
+    ///
+    /// Case: an application written for a VT100 probes the terminal
+    /// with the obsolete `ESC Z` spelling.
+    #[test]
+    fn the_seven_bit_identify_reports_the_primary_class() {
+        assert_eq!(replies_of(b"\x1bZ"), b"\x1b[?6c");
+    }
+
+    /// Asserts that the raw C1 byte for DECID reports the primary
+    /// class.
+    ///
+    /// Case: a program emits an eight-bit identify on a terminal not
+    /// running in UTF-8 mode.
+    #[test]
+    fn the_raw_c1_identify_reports_the_primary_class() {
+        assert_eq!(replies_of(b"\x9a"), b"\x1b[?6c");
+    }
+
+    /// Asserts that the UTF-8 encoding of U+009A reaches the same arm.
+    ///
+    /// Case: a program running on a UTF-8 stream emits the identify.
+    #[test]
+    fn the_utf8_form_identifies_the_terminal() {
+        assert_eq!(replies_of(b"\xc2\x9a"), b"\x1b[?6c");
+    }
+
+    /// Asserts that a reply leaves the chunk undamaged, so the owner
+    /// does not open a coalesce window for a frame with nothing in it.
+    ///
+    /// Case: an application probes the terminal while the screen sits
+    /// untouched at a prompt.
+    #[test]
+    fn a_reply_leaves_the_chunk_undamaged() {
+        assert!(!damage_of(b"\x1b[c"));
+    }
+
+    /// Asserts that two requests in one chunk both reach the replies,
+    /// concatenated in the order they arrived.
+    ///
+    /// Case: an application flushes its whole capability probe in a
+    /// single write.
+    #[test]
+    fn replies_accumulate_within_one_chunk() {
+        assert_eq!(replies_of(b"\x1b[c\x1b[c"), b"\x1b[?6c\x1b[?6c");
     }
 
     /// Asserts that `ESC # 8` fills every visible row with the alignment
