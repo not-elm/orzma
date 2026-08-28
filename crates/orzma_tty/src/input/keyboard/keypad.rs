@@ -53,6 +53,11 @@ impl KeypadKey {
     /// [VT220-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-VT220-Style-Function-Keys
     /// [PC-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-PC-Style-Function-Keys
     pub(super) fn encode(&self, mode: KeypadMode) -> &'static [u8] {
+        macro_rules! ss3 {
+            ($numeric:literal) => {
+                &[0x1b, b'O', $numeric + 0x40]
+            };
+        }
         match mode {
             KeypadMode::Numeric => match self {
                 KeypadKey::Divide => b"/",
@@ -74,9 +79,26 @@ impl KeypadKey {
                 KeypadKey::Eight => b"8",
                 KeypadKey::Nine => b"9",
             },
-            KeypadMode::Application => {
-                todo!()
-            }
+            KeypadMode::Application => match self {
+                KeypadKey::Divide => ss3!(b'/'),
+                KeypadKey::Multiply => ss3!(b'*'),
+                KeypadKey::Subtract => ss3!(b'-'),
+                KeypadKey::Add => ss3!(b'+'),
+                KeypadKey::Comma => ss3!(b','),
+                KeypadKey::Equal => todo!(),
+                KeypadKey::Decimal => todo!(),
+                KeypadKey::Enter => ss3!(b'\r'),
+                KeypadKey::Zero => todo!(),
+                KeypadKey::One => todo!(),
+                KeypadKey::Two => todo!(),
+                KeypadKey::Three => todo!(),
+                KeypadKey::Four => todo!(),
+                KeypadKey::Five => todo!(),
+                KeypadKey::Six => todo!(),
+                KeypadKey::Seven => todo!(),
+                KeypadKey::Eight => todo!(),
+                KeypadKey::Nine => todo!(),
+            },
         }
     }
 }
@@ -115,6 +137,27 @@ mod tests {
         ];
         for (key, expected) in cases {
             assert_eq!(key.encode(KeypadMode::Numeric), expected);
+        }
+    }
+
+    /// Asserts that the keypad operators and Enter send `SS3` followed by
+    /// their numeric-mode byte raised by 0x40.
+    ///
+    /// Case: a full-screen spreadsheet has taken the keypad over with
+    /// `DECKPAM` and the user types an operator into a cell, then presses the
+    /// keypad Enter to commit it.
+    #[test]
+    fn application_mode_shifts_the_numeric_byte_into_the_ss3_range() {
+        let cases: [(KeypadKey, &[u8]); 6] = [
+            (KeypadKey::Multiply, b"\x1bOj"),
+            (KeypadKey::Add, b"\x1bOk"),
+            (KeypadKey::Comma, b"\x1bOl"),
+            (KeypadKey::Subtract, b"\x1bOm"),
+            (KeypadKey::Divide, b"\x1bOo"),
+            (KeypadKey::Enter, b"\x1bOM"),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(key.encode(KeypadMode::Application), expected);
         }
     }
 }
