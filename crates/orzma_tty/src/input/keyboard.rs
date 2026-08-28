@@ -46,24 +46,6 @@ pub enum TerminalKey {
 }
 
 /// A key on the PC-layout numeric keypad.
-///
-/// The variants name the physical PC key, matching the `KeyCode::Numpad*`
-/// vocabulary the host produces, so the mapping from the window system is
-/// one-to-one. The DEC keypad's `PF1` through `PF4` are deliberately
-/// absent: they are separate keys that no PC keypad carries, not
-/// alternative names for [`Self::Divide`], [`Self::Multiply`], and
-/// [`Self::Subtract`]. `NumLock` is absent because it overrides
-/// application mode locally rather than being sent to the PTY.
-///
-/// # References
-///
-/// - [PC-Style Function Keys] — the keypad table xterm sends by default,
-///   where the digits carry the editing sequences in application mode.
-/// - [VT220-Style Function Keys] — the same keypad under `sunKeyboard`,
-///   where the digits send `SS3 p` through `SS3 y` instead.
-///
-/// [PC-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-PC-Style-Function-Keys
-/// [VT220-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-VT220-Style-Function-Keys
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeypadKey {
     Divide,
