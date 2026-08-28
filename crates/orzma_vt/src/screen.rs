@@ -753,6 +753,16 @@ impl Screen {
         self.checkpoint = Checkpoint::default();
         dirty.then_some(DamageSpan::Full)
     }
+
+    /// Fills the visible screen with the alignment pattern, returning to
+    /// the page-wide scroll region and the absolute cursor origin.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECALN` (`ESC # 8`)
+    pub fn fill_alignment_pattern(&mut self) -> DamageSpan {
+        todo!()
+    }
 }
 
 /// Webview placements.
