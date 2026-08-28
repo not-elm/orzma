@@ -51,17 +51,6 @@ alacritty_terminal 0.26 が ESC の解釈を委譲している `vte-0.15.0/src/a
 典拠: vt510.pdf p.89 Table 4–7。VT510 は脚注で「DECID はサポートされないことが
 ある。DA1 を使え」と書いているので、優先度は DA1 の後ろでよい。
 
-### A-5. 複数バイト終端の SCS を取りこぼしている
-
-`ESC ( " >`（Greek, VT500）や `ESC ( % 5`（DEC Supplemental Graphics, VT300）の
-ように終端が 2 バイトの SCS は `intermediates = [b'(', b'"']` の形で届くが、現在の
-アームは `[designator]` という 1 要素マッチなので落ちる。
-
-`CharacterSet::from_dscs` は「知らない終端は直前の指示を残さず ASCII へ倒す」と
-doc コメントで明文化しているのに、この経路だけその意図が効かず、直前の `ESC ( 0` が
-生き残って以降の文字が罫線素片として描かれる。アームを
-`[designator @ (b'(' | b')' | b'*' | b'+'), ..]` に広げるだけで意図と揃う。
-
 ---
 
 ## 優先度 B

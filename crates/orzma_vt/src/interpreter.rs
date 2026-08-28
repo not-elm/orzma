@@ -207,7 +207,7 @@ impl VTActor for Executor<'_> {
             // byte-level decoding layer outside vtparse.
             (b'@' | b'G', [b'%']) => {}
             // SCS
-            (dscs, [designator @ (b'(' | b')' | b'*' | b'+')]) => {
+            (dscs, [designator @ (b'(' | b')' | b'*' | b'+'), ..]) => {
                 if let Some(g_code) = GCode::from_designator(*designator) {
                     self.device
                         .active_screen_mut()
@@ -729,6 +729,21 @@ mod tests {
     #[test]
     fn an_unsupported_designation_falls_back_to_ascii() {
         let device = interpret(b"\x1b(0\x1b(Cq");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'q'
+        );
+    }
+
+    /// Asserts that a designation whose final takes two bytes reaches
+    /// the same ASCII fallback a one-byte final does.
+    ///
+    /// Case: a program draws a box with line drawing, then designates
+    /// the Greek supplemental set with `ESC ( " >` before writing a
+    /// label.
+    #[test]
+    fn a_two_byte_final_designation_falls_back_to_ascii() {
+        let device = interpret(b"\x1b(0\x1b(\">q");
         assert_eq!(
             device.active_screen().viewport_row(ViewportLine(0))[0].c,
             'q'
