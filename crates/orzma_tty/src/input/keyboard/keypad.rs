@@ -86,18 +86,18 @@ impl KeypadKey {
                 KeypadKey::Add => ss3!(b'+'),
                 KeypadKey::Comma => ss3!(b','),
                 KeypadKey::Equal => b"\x1bOX",
-                KeypadKey::Decimal => todo!(),
+                KeypadKey::Decimal => ss3!(b'.'),
                 KeypadKey::Enter => ss3!(b'\r'),
-                KeypadKey::Zero => todo!(),
-                KeypadKey::One => todo!(),
-                KeypadKey::Two => todo!(),
-                KeypadKey::Three => todo!(),
-                KeypadKey::Four => todo!(),
-                KeypadKey::Five => todo!(),
-                KeypadKey::Six => todo!(),
-                KeypadKey::Seven => todo!(),
-                KeypadKey::Eight => todo!(),
-                KeypadKey::Nine => todo!(),
+                KeypadKey::Zero => ss3!(b'0'),
+                KeypadKey::One => ss3!(b'1'),
+                KeypadKey::Two => ss3!(b'2'),
+                KeypadKey::Three => ss3!(b'3'),
+                KeypadKey::Four => ss3!(b'4'),
+                KeypadKey::Five => ss3!(b'5'),
+                KeypadKey::Six => ss3!(b'6'),
+                KeypadKey::Seven => ss3!(b'7'),
+                KeypadKey::Eight => ss3!(b'8'),
+                KeypadKey::Nine => ss3!(b'9'),
             },
         }
     }
@@ -140,21 +140,33 @@ mod tests {
         }
     }
 
-    /// Asserts that the keypad operators and Enter send `SS3` followed by
-    /// their numeric-mode byte raised by 0x40.
+    /// Asserts that every keypad key except `=` sends `SS3` followed by its
+    /// numeric-mode byte raised by 0x40, rather than the editing sequences
+    /// the digits' gray legends name.
     ///
     /// Case: a full-screen spreadsheet has taken the keypad over with
-    /// `DECKPAM` and the user types an operator into a cell, then presses the
-    /// keypad Enter to commit it.
+    /// `DECKPAM` and the user types a figure and an operator into a cell,
+    /// then presses the keypad Enter to commit it.
     #[test]
     fn application_mode_shifts_the_numeric_byte_into_the_ss3_range() {
-        let cases: [(KeypadKey, &[u8]); 6] = [
+        let cases: [(KeypadKey, &[u8]); 17] = [
+            (KeypadKey::Enter, b"\x1bOM"),
             (KeypadKey::Multiply, b"\x1bOj"),
             (KeypadKey::Add, b"\x1bOk"),
             (KeypadKey::Comma, b"\x1bOl"),
             (KeypadKey::Subtract, b"\x1bOm"),
+            (KeypadKey::Decimal, b"\x1bOn"),
             (KeypadKey::Divide, b"\x1bOo"),
-            (KeypadKey::Enter, b"\x1bOM"),
+            (KeypadKey::Zero, b"\x1bOp"),
+            (KeypadKey::One, b"\x1bOq"),
+            (KeypadKey::Two, b"\x1bOr"),
+            (KeypadKey::Three, b"\x1bOs"),
+            (KeypadKey::Four, b"\x1bOt"),
+            (KeypadKey::Five, b"\x1bOu"),
+            (KeypadKey::Six, b"\x1bOv"),
+            (KeypadKey::Seven, b"\x1bOw"),
+            (KeypadKey::Eight, b"\x1bOx"),
+            (KeypadKey::Nine, b"\x1bOy"),
         ];
         for (key, expected) in cases {
             assert_eq!(key.encode(KeypadMode::Application), expected);
@@ -170,31 +182,5 @@ mod tests {
     fn application_mode_equal_uses_ss3_x() {
         let expected: &[u8] = b"\x1bOX";
         assert_eq!(KeypadKey::Equal.encode(KeypadMode::Application), expected);
-    }
-
-    /// Asserts that the keypad digits and the decimal key send `SS3` followed
-    /// by their numeric-mode byte raised by 0x40, rather than the editing
-    /// sequences their gray legends name.
-    ///
-    /// Case: an application holding the keypad receives presses on the digit
-    /// keys and the decimal key.
-    #[test]
-    fn application_mode_digits_use_ss3_letters() {
-        let cases: [(KeypadKey, &[u8]); 11] = [
-            (KeypadKey::Decimal, b"\x1bOn"),
-            (KeypadKey::Zero, b"\x1bOp"),
-            (KeypadKey::One, b"\x1bOq"),
-            (KeypadKey::Two, b"\x1bOr"),
-            (KeypadKey::Three, b"\x1bOs"),
-            (KeypadKey::Four, b"\x1bOt"),
-            (KeypadKey::Five, b"\x1bOu"),
-            (KeypadKey::Six, b"\x1bOv"),
-            (KeypadKey::Seven, b"\x1bOw"),
-            (KeypadKey::Eight, b"\x1bOx"),
-            (KeypadKey::Nine, b"\x1bOy"),
-        ];
-        for (key, expected) in cases {
-            assert_eq!(key.encode(KeypadMode::Application), expected);
-        }
     }
 }
