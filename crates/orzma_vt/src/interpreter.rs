@@ -127,6 +127,10 @@ impl VTActor for Executor<'_> {
         }
     }
 
+    // TODO: Implement the device control strings — Sixel (`DCS q`),
+    // DECRQSS, and the user-defined keys — once the grid can carry
+    // them. The three callbacks form one control function, so one note
+    // covers all of them.
     fn dcs_hook(
         &mut self,
         _mode: u8,
@@ -134,16 +138,11 @@ impl VTActor for Executor<'_> {
         _intermediates: &[u8],
         _ignored_excess_intermediates: bool,
     ) {
-        todo!()
     }
 
-    fn dcs_put(&mut self, _byte: u8) {
-        todo!()
-    }
+    fn dcs_put(&mut self, _byte: u8) {}
 
-    fn dcs_unhook(&mut self) {
-        todo!()
-    }
+    fn dcs_unhook(&mut self) {}
 
     fn esc_dispatch(
         &mut self,
@@ -230,13 +229,14 @@ impl VTActor for Executor<'_> {
         }
     }
 
-    fn osc_dispatch(&mut self, _params: &[&[u8]]) {
-        todo!()
-    }
+    // TODO: Implement the OSC handlers — the title stack (OSC 0 / 1 /
+    // 2), the palette (OSC 4 / 10 / 11 / 12), the working directory
+    // (OSC 7), hyperlinks (OSC 8), and the clipboard (OSC 52).
+    fn osc_dispatch(&mut self, _params: &[&[u8]]) {}
 
-    fn apc_dispatch(&mut self, _data: Vec<u8>) {
-        todo!()
-    }
+    // TODO: Implement the APC webview verbs, which mint the placement
+    // ids a `VtSignal::WebviewApc` carries.
+    fn apc_dispatch(&mut self, _data: Vec<u8>) {}
 }
 
 /// The control functions an eight-bit C1 byte and its seven-bit `ESC`
@@ -663,6 +663,48 @@ mod tests {
     #[test]
     fn an_unimplemented_sequence_is_ignored() {
         let device = interpret(b"\x1b[0ma");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'a'
+        );
+    }
+
+    /// Asserts that an operating system command is ignored rather than
+    /// fatal, and that the parser returns to ground behind it.
+    ///
+    /// Case: a shell prompt sets the window title before printing, on a
+    /// terminal whose OSC handlers have not landed yet.
+    #[test]
+    fn a_title_sequence_is_ignored_rather_than_fatal() {
+        let device = interpret(b"\x1b]0;hi\x07a");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'a'
+        );
+    }
+
+    /// Asserts that an application program command is ignored rather
+    /// than fatal, and that the parser returns to ground behind it.
+    ///
+    /// Case: a program probes for the webview verbs on a terminal whose
+    /// APC handler has not landed yet.
+    #[test]
+    fn an_application_program_command_is_ignored_rather_than_fatal() {
+        let device = interpret(b"\x1b_hi\x1b\\a");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'a'
+        );
+    }
+
+    /// Asserts that a device control string is ignored rather than
+    /// fatal, and that the parser returns to ground behind it.
+    ///
+    /// Case: an application opens a Sixel image on a terminal that has
+    /// no DCS handlers.
+    #[test]
+    fn a_device_control_string_is_ignored_rather_than_fatal() {
+        let device = interpret(b"\x1bP0q\x1b\\a");
         assert_eq!(
             device.active_screen().viewport_row(ViewportLine(0))[0].c,
             'a'
