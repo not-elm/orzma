@@ -52,12 +52,8 @@ impl Interpreter {
             signal_tx,
         };
         self.parser.parse(chunk, &mut executor);
-        // NOTE: The liveness diff compares the whole emitted cursor —
-        // point, shape, blink, and visibility — because the renderer
-        // consumes all four; a point-only comparison would withhold a
-        // `CSI ?25l`-only chunk until unrelated output arrived.
         *executor.damaged |= cursor_before != executor.device.active_screen().cursor();
-        todo!()
+        *executor.damaged
     }
 }
 
