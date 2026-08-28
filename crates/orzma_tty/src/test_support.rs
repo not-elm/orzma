@@ -2,7 +2,7 @@
 //! a scriptable [`Vt`] fake, plus crate-internal `MasterPty` fakes for
 //! the resize seam.
 
-use orzma_vt::prelude::{DisplayOffset, Frame, GridSize, Scroll, Vt, VtModes, VtUpdate};
+use orzma_vt::prelude::{DisplayOffset, Frame, GridSize, Scroll, Vt, VtModes, InterpretOutput};
 #[cfg(test)]
 use portable_pty::{MasterPty, PtySize};
 use std::collections::VecDeque;
@@ -64,7 +64,7 @@ pub struct FakeVt {
     /// Every size `resize` received, in order.
     pub resizes: Vec<GridSize>,
     /// Updates popped by `interpret`.
-    pub updates: VecDeque<VtUpdate>,
+    pub updates: VecDeque<InterpretOutput>,
     /// Frames popped by `frame`.
     pub frames: VecDeque<Frame>,
 }
@@ -88,9 +88,9 @@ impl FakeVt {
 }
 
 impl Vt for FakeVt {
-    fn interpret(&mut self, chunk: &[u8]) -> VtUpdate {
+    fn interpret(&mut self, chunk: &[u8]) -> InterpretOutput {
         self.interpreted.push(chunk.to_vec());
-        self.updates.pop_front().unwrap_or(VtUpdate {
+        self.updates.pop_front().unwrap_or(InterpretOutput {
             damaged: true,
             signals: Vec::new(),
             replies: Vec::new(),

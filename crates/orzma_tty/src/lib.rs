@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn vt_signals_are_forwarded_before_child_exit() {
         let (mut term, chunk_tx, exit_tx) = channelled_term();
-        term.vt.updates.push_back(VtUpdate {
+        term.vt.updates.push_back(InterpretOutput {
             damaged: true,
             signals: vec![VtSignal::Bell],
             replies: Vec::new(),
@@ -781,7 +781,7 @@ mod tests {
             pending_signals: Vec::new(),
             pending_replies: Vec::new(),
         };
-        term.vt.updates.push_back(VtUpdate {
+        term.vt.updates.push_back(InterpretOutput {
             damaged: true,
             signals: Vec::new(),
             replies: b"\x1b[1;1R".to_vec(),
@@ -803,7 +803,7 @@ mod tests {
     #[test]
     fn a_chunk_that_stages_no_damage_does_not_arm_the_window() {
         let (mut term, _sink) = detached_term();
-        term.vt.updates.push_back(VtUpdate {
+        term.vt.updates.push_back(InterpretOutput {
             damaged: false,
             signals: Vec::new(),
             replies: b"\x1b[1;1R".to_vec(),

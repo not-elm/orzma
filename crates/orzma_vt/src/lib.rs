@@ -45,7 +45,7 @@ pub mod prelude {
     pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine};
     pub use crate::selection::{CellSide, SelectionGeometry, SelectionKind, SelectionRange};
     pub use crate::vi::{ViCursor, ViModeSwitch};
-    pub use crate::{OrzmaVt, Vt, VtSignal, VtUpdate};
+    pub use crate::{InterpretOutput, OrzmaVt, Vt, VtSignal};
 }
 
 /// The terminal-emulation contract `OrzmaTty` drives and the host
@@ -94,7 +94,7 @@ pub trait Vt {
     /// successor under a fresh id; the superseded id simply stops
     /// being listed and is never named by
     /// [`VtSignal::WebviewEvicted`].
-    fn interpret(&mut self, chunk: &[u8]) -> VtUpdate;
+    fn interpret(&mut self, chunk: &[u8]) -> InterpretOutput;
 
     /// Builds the frame for the staged damage and section diffs,
     /// consuming the staged damage; `None` when nothing observable
@@ -145,7 +145,7 @@ pub trait Vt {
 /// Everything one [`Vt::interpret`] call produced besides the staged
 /// damage.
 #[derive(Debug, Default)]
-pub struct VtUpdate {
+pub struct InterpretOutput {
     /// Whether this chunk produced anything frame-relevant — staged row
     /// damage, cursor motion, or a mutated frame-visible section — so
     /// the owner knows to open its coalesce window.
@@ -213,10 +213,6 @@ pub enum VtSignal {
 /// `docs/orzma_vt_internal_design.md` §7 sets out.
 pub struct OrzmaVt {
     /// Byte decoding plus the CSI ?2026 synchronized-update buffer.
-    #[expect(
-        dead_code,
-        reason = "OrzmaVt::interpret reaches the parser once the executor's callbacks land"
-    )]
     interpreter: Interpreter,
     /// The emulated device: screens, modes, tabs, colors, title.
     device: DeviceState,
@@ -246,13 +242,9 @@ impl OrzmaVt {
 }
 
 impl Vt for OrzmaVt {
-    // NOTE: The empty-chunk guard is load-bearing: the contract pins
-    // "an empty chunk returns VtUpdate::default()", and parsing zero
-    // bytes would still classify the damage a previous chunk left
-    // staged.
-    fn interpret(&mut self, chunk: &[u8]) -> VtUpdate {
+    fn interpret(&mut self, chunk: &[u8]) -> InterpretOutput {
         if chunk.is_empty() {
-            return VtUpdate::default();
+            return InterpretOutput::default();
         }
         todo!()
     }
@@ -335,7 +327,9 @@ mod tests {
         for _ in 0..3 {
             vt.device.active_screen_mut().line_feed();
         }
-        vt.device.active_screen_mut().set_display_offset(DisplayOffset(1));
+        vt.device
+            .active_screen_mut()
+            .set_display_offset(DisplayOffset(1));
         let frame = vt.frame().expect("staged row damage emits");
         assert_eq!(frame.rows[0].line, ViewportLine(0));
         assert_eq!(frame.rows[0].contents[0].text, "x   ");
