@@ -42,6 +42,7 @@ mod cursor;
 mod display_offset;
 mod erase_in_display;
 mod erase_in_line;
+mod fill_alignment_pattern;
 mod line_feed;
 mod move_backward_tabs;
 mod move_cursor_to;
