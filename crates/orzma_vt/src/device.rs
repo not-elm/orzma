@@ -116,8 +116,8 @@ impl DeviceState {
     /// the emit-time offset diff only guarantees that a frame is
     /// emitted, not that it carries rows, so anything less would
     /// repaint stale content at the new offset.
-    pub fn scroll(&mut self, _scroll: Scroll) -> Option<DamageSpan> {
-        todo!()
+    pub fn scroll(&mut self, scroll: Scroll) -> Option<DamageSpan> {
+        self.active_screen_mut().scroll(scroll)
     }
 
     /// Returns both screens and every mode to their power-up state;
@@ -388,6 +388,38 @@ mod tests {
 
     fn mount(device: &mut DeviceState, view: &str) -> Option<PlacementId> {
         device.mount_placement(PlacementSize { rows: 2, cols: 4 }, view.to_string(), None)
+    }
+
+    /// Asserts that a scroll moves the screen on show and leaves the
+    /// other one where it was.
+    ///
+    /// Case: the user scrolls back through shell output, then a
+    /// full-screen editor takes over the alternate screen.
+    #[test]
+    fn a_scroll_moves_only_the_screen_on_show() {
+        let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
+        for _ in 0..5 {
+            device.active_screen_mut().move_cursor_to(Some(3), None);
+            device.active_screen_mut().line_feed();
+        }
+        assert_eq!(device.scroll(Scroll::Top), Some(DamageSpan::Full));
+        assert_eq!(device.display_offset(), DisplayOffset(5));
+        device.switch_screen(ScreenKind::Alternate);
+        assert_eq!(device.display_offset(), DisplayOffset(0));
+    }
+
+    /// Asserts that a scroll on the alternate screen reports nothing,
+    /// because that screen keeps no history to move over.
+    ///
+    /// Case: the user rolls the wheel while a full-screen editor is
+    /// showing and alternate-scroll translation is off.
+    #[test]
+    fn a_scroll_on_the_alternate_screen_reports_nothing() {
+        let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
+        device.switch_screen(ScreenKind::Alternate);
+        assert_eq!(device.scroll(Scroll::Top), None);
+        assert_eq!(device.scroll(Scroll::PageUp), None);
+        assert_eq!(device.display_offset(), DisplayOffset(0));
     }
 
     /// Asserts that a resize to the size the device already has

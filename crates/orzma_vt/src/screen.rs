@@ -53,7 +53,7 @@ use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::placements::ScreenPlacements;
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
-use crate::screen::viewport::{DisplayOffset, Viewport, ViewportLine};
+use crate::screen::viewport::{DisplayOffset, Scroll, Viewport, ViewportLine};
 
 /// One terminal screen: cell storage plus the write cursor, updated
 /// atomically by each operation.
@@ -309,6 +309,26 @@ impl Screen {
     /// The offset is clamped to the history that survives the scroll.
     /// At capacity the row the user was reading has been evicted, so
     /// the view drifts by one; there is nothing left to hold on.
+    /// Resolves a motion into the offset it aims at, before clamping.
+    ///
+    /// A page is a whole screenful with no overlap, and a half page
+    /// truncates, so a one-row screen has a zero-sized half page.
+    fn scroll_target(&self, scroll: Scroll) -> DisplayOffset {
+        let rows = u32::from(self.grid.size().rows);
+        let history =
+            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
+        let offset = self.viewport.offset.0;
+        DisplayOffset(match scroll {
+            Scroll::Delta(delta) => offset.saturating_add_signed(delta),
+            Scroll::PageUp => offset.saturating_add(rows),
+            Scroll::PageDown => offset.saturating_sub(rows),
+            Scroll::HalfPageUp => offset.saturating_add(rows / 2),
+            Scroll::HalfPageDown => offset.saturating_sub(rows / 2),
+            Scroll::Top => history,
+            Scroll::Bottom => 0,
+        })
+    }
+
     fn hold_scrolled_viewport(&mut self) {
         if self.viewport.offset == DisplayOffset(0) {
             return;
@@ -589,6 +609,25 @@ impl Screen {
     #[inline]
     pub const fn display_offset(&self) -> DisplayOffset {
         self.viewport.offset
+    }
+
+    /// Moves the viewport by one [`Scroll`] motion; `None` when the
+    /// motion was zero or entirely clamped away.
+    ///
+    /// # Invariants
+    ///
+    /// A motion that moves the viewport reports [`DamageSpan::Full`]:
+    /// the emit-time offset diff only guarantees that a frame is
+    /// emitted, not that it carries rows, so anything less would
+    /// repaint stale content at the new offset.
+    ///
+    /// A screen that keeps no history never moves, because every target
+    /// clamps to the live tail. That is what makes this a silent no-op
+    /// on the alternate screen without a caller having to check.
+    pub fn scroll(&mut self, scroll: Scroll) -> Option<DamageSpan> {
+        let before = self.viewport.offset;
+        self.set_display_offset(self.scroll_target(scroll));
+        (self.viewport.offset != before).then_some(DamageSpan::Full)
     }
 
     /// Seats the viewport at `offset`, clamped to the history that
