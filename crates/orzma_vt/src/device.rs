@@ -5,7 +5,11 @@
 //! the color table, and the title stack. `OrzmaTty` one crate up is
 //! the live terminal — a VT wired to a PTY — so the device the VT
 //! emulates deliberately does not borrow that name.
-#![expect(
+// NOTE: `allow` rather than `expect`, because the lint fires in the lib
+// build and not in the test build: `DeviceState::title` reads the title
+// field that only `cfg(test)` used to reach, so an expectation would go
+// unfulfilled in one of the two builds whichever way it is written.
+#![allow(
     dead_code,
     reason = "the executor and the frame emitter reach this state once they land"
 )]
@@ -20,6 +24,7 @@ use crate::placement::{MAX_PLACEMENTS, PlacementId, PlacementSize};
 use crate::screen::Screen;
 use crate::screen::grid::GridSize;
 use crate::screen::viewport::{DisplayOffset, Scroll};
+use std::collections::VecDeque;
 
 /// The emulated terminal device: screens, modes, tabs, colors, title,
 /// and the terminal-scoped placement invariants.
@@ -53,7 +58,7 @@ impl DeviceState {
             colors: ColorTable {
                 palette: Palette::default(),
             },
-            title: TitleState {},
+            title: TitleState::default(),
             next_placement_id: PlacementId(0),
         }
     }
@@ -123,7 +128,50 @@ impl DeviceState {
         let primary = self.screens.primary.reset();
         let _ = self.screens.alternate.reset();
         self.modes = VtModes::default();
+        self.title = TitleState::default();
         (was_showing_alternate || primary.is_some()).then_some(DamageSpan::Full)
+    }
+
+    /// The window title the application last set, if any.
+    pub fn title(&self) -> Option<&str> {
+        self.title.current.as_deref()
+    }
+
+    /// Replaces the window title; `None` returns it to the host's
+    /// default.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 0` / `OSC 2`
+    pub fn set_title(&mut self, title: Option<String>) {
+        self.title.current = title;
+    }
+
+    /// Saves the current title on the stack, dropping the oldest entry
+    /// once the stack is full.
+    ///
+    /// # Control Functions
+    ///
+    /// - `XTWINOPS` (`CSI 22 t`)
+    pub fn push_title(&mut self) {
+        if self.title.stack.len() == MAX_TITLE_DEPTH {
+            self.title.stack.pop_front();
+        }
+        self.title.stack.push_back(self.title.current.clone());
+    }
+
+    /// Takes the most recently saved title off the stack without
+    /// applying it; `None` when the stack was empty.
+    ///
+    /// The two layers of `Option` mean different things: the outer one
+    /// reports whether the stack held anything at all, and the inner one
+    /// whether the entry it held was a title or the absence of one.
+    ///
+    /// # Control Functions
+    ///
+    /// - `XTWINOPS` (`CSI 23 t`)
+    pub fn pop_title(&mut self) -> Option<Option<String>> {
+        self.title.stack.pop_back()
     }
 
     /// Returns the grid dimensions of the active screen.
@@ -289,9 +337,20 @@ struct ColorTable {
     palette: Palette,
 }
 
-/// The current window title and its stack.
-// TODO: Carry the current title plus the CSI 22 / 23 t stack.
-struct TitleState {}
+/// The current window title and the stack `CSI 22 t` saves it on.
+#[derive(Default)]
+struct TitleState {
+    current: Option<String>,
+    stack: VecDeque<Option<String>>,
+}
+
+/// Titles `CSI 22 t` may stack before the oldest is dropped.
+///
+/// alacritty's 4096 is not spec-derived, and at the title length cap it
+/// would let one program retain about a megabyte of attacker-controlled
+/// text per terminal until the next reset. xterm documents direct stack
+/// access over slots 1 through 10, which this bound covers.
+const MAX_TITLE_DEPTH: usize = 16;
 
 #[cfg(test)]
 mod tests {
@@ -602,5 +661,85 @@ mod tests {
         assert_eq!(device.switch_screen(ScreenKind::Primary), vec![dropped]);
         assert_eq!(device.placement_count(), 1);
         assert_eq!(device.active_screen_mut().take_placements(), vec![kept]);
+    }
+
+    /// Asserts that a set title reads back.
+    ///
+    /// Case: a shell prompt sets the window title and the host asks the
+    /// device what it now says.
+    #[test]
+    fn a_set_title_reads_back() {
+        let mut device = device();
+        device.set_title(Some("hi".to_owned()));
+        assert_eq!(device.title(), Some("hi"));
+    }
+
+    /// Asserts that a pushed title comes back off the stack.
+    ///
+    /// Case: a full-screen editor saves the title, sets its own, and
+    /// restores the shell's on the way out.
+    #[test]
+    fn a_pushed_title_comes_back() {
+        let mut device = device();
+        device.set_title(Some("shell".to_owned()));
+        device.push_title();
+        device.set_title(Some("editor".to_owned()));
+        assert_eq!(device.pop_title(), Some(Some("shell".to_owned())));
+    }
+
+    /// Asserts that popping an empty stack reports that it was empty.
+    ///
+    /// Case: a program restores a title it never saved.
+    #[test]
+    fn popping_an_empty_stack_reports_it() {
+        let mut device = device();
+        assert_eq!(device.pop_title(), None);
+    }
+
+    /// Asserts that a title pushed before any title was set comes back
+    /// as the absence of one.
+    ///
+    /// Case: a program saves the title at startup, before the shell has
+    /// set any, then restores it.
+    #[test]
+    fn pushing_before_any_title_pops_an_absence() {
+        let mut device = device();
+        device.push_title();
+        device.set_title(Some("editor".to_owned()));
+        assert_eq!(device.pop_title(), Some(None));
+    }
+
+    /// Asserts that a full stack drops its oldest entry rather than
+    /// refusing the newest, and holds exactly its cap.
+    ///
+    /// Case: a runaway program pushes titles in a loop, and the device
+    /// must neither grow without bound nor lose the title just saved.
+    #[test]
+    fn a_full_stack_drops_its_oldest_entry() {
+        let mut device = device();
+        for n in 0..=MAX_TITLE_DEPTH {
+            device.set_title(Some(n.to_string()));
+            device.push_title();
+        }
+        let popped: Vec<Option<String>> = std::iter::from_fn(|| device.pop_title()).collect();
+        let expected: Vec<Option<String>> = (1..=MAX_TITLE_DEPTH)
+            .rev()
+            .map(|n| Some(n.to_string()))
+            .collect();
+        assert_eq!(popped, expected);
+    }
+
+    /// Asserts that a reset clears the title and its stack.
+    ///
+    /// Case: the shell sends `RIS` after a program left both a title
+    /// and a saved one behind.
+    #[test]
+    fn a_reset_clears_the_title_and_its_stack() {
+        let mut device = device();
+        device.set_title(Some("shell".to_owned()));
+        device.push_title();
+        let _ = device.reset();
+        assert_eq!(device.title(), None);
+        assert_eq!(device.pop_title(), None);
     }
 }
