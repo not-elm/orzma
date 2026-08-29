@@ -65,7 +65,6 @@ mod tests {
     /// Case: the user resizes the window; the host resolves pixels to
     /// cells and fires one request at the terminal it owns.
     #[test]
-    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTtyHandle::detached panics"]
     fn resize_applies_the_requested_size_to_the_pty() {
         let (mut app, terminal) = app_with_terminal();
         app.world_mut().trigger(RequestTtyResize {
@@ -85,7 +84,6 @@ mod tests {
     /// 1x1 was rejected because shrinking the grid for a transient
     /// state risks reflow/scrollback loss on the way back.
     #[test]
-    #[ignore = "OrzmaVt::resize/scroll are still todo!(), so OrzmaTtyHandle::detached panics"]
     fn a_degenerate_resize_is_ignored() {
         let (mut app, terminal) = app_with_terminal();
         for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
