@@ -8,7 +8,7 @@ use std::str;
 
 /// Verb carried by `VtSignal::WebviewApc`: inline mount/unmount of a registered view.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ApcWebviewVerb {
+pub enum WebviewApcVerb {
     /// Mount a registered webview INLINE at the cursor anchor, sized in cells.
     Mount {
         /// The registered view's id, addressed later by unmount and eviction.
@@ -35,7 +35,7 @@ pub enum ApcWebviewVerb {
     },
 }
 
-impl ApcWebviewVerb {
+impl WebviewApcVerb {
     /// Parses an orzma APC payload into the verb it names, or `None`
     /// when the payload is not a well-formed orzma webview verb.
     pub fn parse(bytes: &[u8]) -> Option<Self> {
@@ -73,7 +73,7 @@ const MAX_COLS: u16 = 400;
 const MAX_APC_LEN: usize = 1024;
 const ORZMA_APC_PREFIX: &[u8; 1] = b"O";
 
-fn parse_mount_action(payload: &str) -> Option<ApcWebviewVerb> {
+fn parse_mount_action(payload: &str) -> Option<WebviewApcVerb> {
     let fields = payload.split(',');
     let mut view_id = None;
     let mut rows = None;
@@ -118,7 +118,7 @@ fn parse_mount_action(payload: &str) -> Option<ApcWebviewVerb> {
             _ => return None,
         }
     }
-    Some(ApcWebviewVerb::Mount {
+    Some(WebviewApcVerb::Mount {
         cols: cols?,
         rows: rows?,
         view_id: view_id?,
@@ -126,7 +126,7 @@ fn parse_mount_action(payload: &str) -> Option<ApcWebviewVerb> {
     })
 }
 
-fn parse_unmount_action(payload: Option<&str>) -> Option<ApcWebviewVerb> {
+fn parse_unmount_action(payload: Option<&str>) -> Option<WebviewApcVerb> {
     let mut view_id = None;
     let mut instance_id = None;
     if let Some(payload) = payload {
@@ -154,7 +154,7 @@ fn parse_unmount_action(payload: Option<&str>) -> Option<ApcWebviewVerb> {
             }
         }
     }
-    Some(ApcWebviewVerb::Unmount {
+    Some(WebviewApcVerb::Unmount {
         view_id,
         instance_id,
     })
@@ -178,15 +178,15 @@ fn valid_view_id(view_id: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn parse(payload: &str) -> Option<ApcWebviewVerb> {
-        ApcWebviewVerb::parse(payload.as_bytes())
+    fn parse(payload: &str) -> Option<WebviewApcVerb> {
+        WebviewApcVerb::parse(payload.as_bytes())
     }
 
     #[test]
     fn mount_parses_required_keys() {
         assert_eq!(
             parse("Omount;v=memo,r=3,c=20"),
-            Some(ApcWebviewVerb::Mount {
+            Some(WebviewApcVerb::Mount {
                 view_id: "memo".into(),
                 rows: 3,
                 cols: 20,
@@ -199,7 +199,7 @@ mod tests {
     fn mount_parses_instance_id() {
         assert_eq!(
             parse("Omount;v=memo,r=3,c=20,n=a"),
-            Some(ApcWebviewVerb::Mount {
+            Some(WebviewApcVerb::Mount {
                 view_id: "memo".into(),
                 rows: 3,
                 cols: 20,
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn mount_keys_are_order_independent() {
-        let expected = Some(ApcWebviewVerb::Mount {
+        let expected = Some(WebviewApcVerb::Mount {
             view_id: "memo".into(),
             rows: 3,
             cols: 20,
@@ -235,7 +235,7 @@ mod tests {
         for id in ["mfrgg2lt2y", "DYN1", "my-view", "a.b_c"] {
             assert_eq!(
                 parse(&format!("Omount;v={id},r=3,c=20")),
-                Some(ApcWebviewVerb::Mount {
+                Some(WebviewApcVerb::Mount {
                     view_id: id.into(),
                     rows: 3,
                     cols: 20,
@@ -251,7 +251,7 @@ mod tests {
         let max = "x".repeat(MAX_VIEW_ID);
         assert_eq!(
             parse(&format!("Omount;v={max},r=3,c=20")),
-            Some(ApcWebviewVerb::Mount {
+            Some(WebviewApcVerb::Mount {
                 view_id: max.clone(),
                 rows: 3,
                 cols: 20,
@@ -271,7 +271,7 @@ mod tests {
     fn unmount_without_target_is_unmount_all() {
         assert_eq!(
             parse("Ounmount"),
-            Some(ApcWebviewVerb::Unmount {
+            Some(WebviewApcVerb::Unmount {
                 view_id: None,
                 instance_id: None,
             })
@@ -282,7 +282,7 @@ mod tests {
     fn unmount_view_only() {
         assert_eq!(
             parse("Ounmount;v=memo"),
-            Some(ApcWebviewVerb::Unmount {
+            Some(WebviewApcVerb::Unmount {
                 view_id: Some("memo".into()),
                 instance_id: None,
             })
@@ -293,7 +293,7 @@ mod tests {
     fn unmount_view_and_instance() {
         assert_eq!(
             parse("Ounmount;v=memo,n=a"),
-            Some(ApcWebviewVerb::Unmount {
+            Some(WebviewApcVerb::Unmount {
                 view_id: Some("memo".into()),
                 instance_id: Some("a".into()),
             })
@@ -449,10 +449,10 @@ mod tests {
 
     #[test]
     fn out_of_charset_bytes_rejected() {
-        assert_eq!(ApcWebviewVerb::parse(b"Omount;v=me\x07mo,r=3,c=20"), None);
-        assert_eq!(ApcWebviewVerb::parse(b"Omount;v=me\x1bmo,r=3,c=20"), None);
+        assert_eq!(WebviewApcVerb::parse(b"Omount;v=me\x07mo,r=3,c=20"), None);
+        assert_eq!(WebviewApcVerb::parse(b"Omount;v=me\x1bmo,r=3,c=20"), None);
         assert_eq!(
-            ApcWebviewVerb::parse("Omount;v=めも,r=3,c=20".as_bytes()),
+            WebviewApcVerb::parse("Omount;v=めも,r=3,c=20".as_bytes()),
             None,
             "multi-byte UTF-8 is outside the APC command-string charset"
         );
@@ -463,7 +463,7 @@ mod tests {
         let mut huge = b"O".to_vec();
         huge.resize(MAX_APC_LEN + 1, b'a');
         assert_eq!(
-            ApcWebviewVerb::parse(&huge),
+            WebviewApcVerb::parse(&huge),
             None,
             "payloads beyond MAX_APC_LEN are rejected before field parsing"
         );

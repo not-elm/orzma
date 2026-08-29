@@ -5,7 +5,7 @@ use super::mount::{WebviewMountContext, WebviewParams, mount, unmount};
 use crate::control_plane::OrzmaRegistry;
 use bevy::prelude::*;
 use bevy_orzma_tty::prelude::TtyApcWebviewSignal;
-use orzma_vt::prelude::ApcWebviewVerb;
+use orzma_vt::prelude::WebviewApcVerb;
 
 /// Marks a webview as render-only (no pointer or keyboard input
 /// forwarded to the embedded page).
@@ -29,7 +29,7 @@ pub(crate) fn on_apc_webview_signal(
     let req = ev.event();
     let terminal_surface = req.terminal;
     match &req.verb {
-        ApcWebviewVerb::Mount {
+        WebviewApcVerb::Mount {
             view_id,
             rows,
             cols,
@@ -48,7 +48,7 @@ pub(crate) fn on_apc_webview_signal(
                 },
             );
         }
-        ApcWebviewVerb::Unmount {
+        WebviewApcVerb::Unmount {
             view_id,
             instance_id,
         } => {

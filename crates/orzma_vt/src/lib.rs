@@ -9,7 +9,7 @@ use crate::{
     device::modes::VtModes,
     frame::{Frame, FrameTracker},
     interpreter::Interpreter,
-    interpreter::apc::ApcWebviewVerb,
+    interpreter::apc::WebviewApcVerb,
     placement::PlacementId,
     screen::grid::GridSize,
     screen::viewport::{DisplayOffset, Scroll},
@@ -35,7 +35,7 @@ pub mod prelude {
     pub use crate::device::modes::{KeypadMode, MouseEncoding, MouseTracking, ScreenKind, VtModes};
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
-    pub use crate::interpreter::apc::ApcWebviewVerb;
+    pub use crate::interpreter::apc::WebviewApcVerb;
     pub use crate::placement::{AnchoredPlacement, PlacementId, PlacementSize};
     pub use crate::screen::cursor::{CURSOR_VISIBLE_BIT, Cursor, CursorShape};
     pub use crate::screen::grid::GridSize;
@@ -183,7 +183,7 @@ pub enum VtSignal {
     /// consumer drops.
     WebviewApc {
         /// The mount or unmount verb and associated metadata.
-        verb: ApcWebviewVerb,
+        verb: WebviewApcVerb,
         /// The unique identifier for this placement, minted by the VT.
         placement: Option<PlacementId>,
     },

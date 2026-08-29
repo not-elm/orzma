@@ -78,7 +78,7 @@ pub struct TtyApcWebviewSignal {
     #[event_target]
     pub terminal: Entity,
     /// The mount/unmount verb parsed from the APC payload.
-    pub verb: ApcWebviewVerb,
+    pub verb: WebviewApcVerb,
     /// The VT-minted placement id; `Some` only for an accepted `Mount`.
     pub placement: Option<PlacementId>,
 }

@@ -672,7 +672,7 @@ mod tests {
     use bevy_orzma_tty::prelude::{TtyApcWebviewSignal, TtyWebviewEvictedSignal};
     use orzma_tty_renderer::CellMetrics;
     use orzma_vt::prelude::{
-        AnchoredPlacement, ApcWebviewVerb, GridColumn, GridLine, GridPoint, PlacementId,
+        AnchoredPlacement, WebviewApcVerb, GridColumn, GridLine, GridPoint, PlacementId,
         PlacementSize,
     };
 
@@ -732,7 +732,7 @@ mod tests {
     fn mount(app: &mut App, terminal: Entity, view_id: &str, placement: Option<PlacementId>) {
         app.world_mut().trigger(TtyApcWebviewSignal {
             terminal,
-            verb: ApcWebviewVerb::Mount {
+            verb: WebviewApcVerb::Mount {
                 view_id: view_id.into(),
                 rows: 10,
                 cols: 40,
@@ -746,7 +746,7 @@ mod tests {
     fn unmount(app: &mut App, terminal: Entity, view_id: Option<&str>) {
         app.world_mut().trigger(TtyApcWebviewSignal {
             terminal,
-            verb: ApcWebviewVerb::Unmount {
+            verb: WebviewApcVerb::Unmount {
                 view_id: view_id.map(str::to_string),
                 instance_id: None,
             },
@@ -842,7 +842,7 @@ mod tests {
     ) {
         app.world_mut().trigger(TtyApcWebviewSignal {
             terminal,
-            verb: ApcWebviewVerb::Mount {
+            verb: WebviewApcVerb::Mount {
                 view_id: view_id.into(),
                 rows: 10,
                 cols: 40,
@@ -856,7 +856,7 @@ mod tests {
     fn unmount_instance(app: &mut App, terminal: Entity, view_id: &str, instance_id: &str) {
         app.world_mut().trigger(TtyApcWebviewSignal {
             terminal,
-            verb: ApcWebviewVerb::Unmount {
+            verb: WebviewApcVerb::Unmount {
                 view_id: Some(view_id.into()),
                 instance_id: Some(instance_id.into()),
             },
@@ -960,7 +960,7 @@ mod tests {
 
         app.world_mut().trigger(TtyApcWebviewSignal {
             terminal,
-            verb: ApcWebviewVerb::Mount {
+            verb: WebviewApcVerb::Mount {
                 view_id: "dash".into(),
                 rows: 12,
                 cols: 50,
