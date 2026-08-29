@@ -841,7 +841,12 @@ impl Screen {
         }
         let reclaimed = self.reclaimable_rows(old.rows, size.rows);
         self.grid.resize(size);
-        self.shift_cursor_row(reclaimed, required_scrolling);
+        self.state.line.0 = self
+            .state
+            .line
+            .0
+            .saturating_add(reclaimed)
+            .saturating_sub(required_scrolling);
         self.clamp_cursors(size);
         if old.cols != size.cols {
             self.state.pending_wrap = false;
@@ -887,10 +892,6 @@ impl Screen {
         }
         let reclaimed = usize::from(rows - old_rows).min(self.grid.history_len());
         u16::try_from(reclaimed).expect("a growth never exceeds u16::MAX rows")
-    }
-
-    fn shift_cursor_row(&mut self, down: u16, up: u16) {
-        self.state.line.0 = self.state.line.0.saturating_add(down).saturating_sub(up);
     }
 
     fn clamp_cursors(&mut self, size: GridSize) {

@@ -41,10 +41,7 @@ impl DeviceState {
     /// application has nothing to scroll back to, and its viewport stays
     /// pinned to the live tail.
     pub fn new(size: GridSize, max_history: usize) -> Self {
-        debug_assert!(
-            size.cols > 0 && size.rows > 0,
-            "a degenerate grid size is rejected before it reaches the device"
-        );
+        Self::assert_nonzero_size(size);
         Self {
             screens: Screens {
                 primary: Screen::new(size, max_history),
@@ -90,6 +87,10 @@ impl DeviceState {
     /// `Screen::new`, so construction asserts the same precondition
     /// before this method is ever called.
     ///
+    /// Both screens are always the same size, so they always agree on
+    /// whether the dimensions changed; the primary's answer stands for
+    /// the pair, whichever one is on show.
+    ///
     /// Placements this strands are not named here. The anchors simply
     /// stop resolving, and the next [`Self::evict_lost_anchors`] names
     /// them — the same contract [`Screen::reset`] relies on.
@@ -98,14 +99,18 @@ impl DeviceState {
     /// where it defers a wrap; the placement table would then need each
     /// anchor re-pointed at the row its content survived on.
     pub fn resize(&mut self, size: GridSize) -> Option<DamageSpan> {
+        Self::assert_nonzero_size(size);
+        let primary = self.screens.primary.resize(size);
+        let _ = self.screens.alternate.resize(size);
+        primary
+    }
+
+    /// Rejects a degenerate grid size in debug builds.
+    fn assert_nonzero_size(size: GridSize) {
         debug_assert!(
             size.cols > 0 && size.rows > 0,
             "a degenerate grid size is rejected before it reaches the device"
         );
-        let showing_primary = matches!(self.modes.active_screen, ScreenKind::Primary);
-        let primary = self.screens.primary.resize(size);
-        let alternate = self.screens.alternate.resize(size);
-        if showing_primary { primary } else { alternate }
     }
 
     /// Moves the active viewport; `None` for a clamped or zero motion.

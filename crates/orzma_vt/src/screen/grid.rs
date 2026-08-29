@@ -104,20 +104,10 @@ impl Grid {
     /// Discards the history and rebuilds the visible rows blank.
     ///
     /// The grid keeps its size and its history cap.
-    ///
-    /// # Invariants
-    ///
-    /// Every rebuilt row is minted from the running counter rather than
-    /// renumbered from zero: a [`LineId`] an anchor still holds must never
-    /// come back around and name one of the new rows.
     pub fn reset(&mut self) {
         self.rows.clear();
         for _ in 0..self.size.rows {
-            let id = self.mint();
-            self.rows.push_back(GridRow {
-                id,
-                cells: Row::filled(self.size.cols, Cell::default()),
-            });
+            self.push_blank_row();
         }
     }
 
@@ -264,6 +254,21 @@ impl Grid {
         true
     }
 
+    /// Appends one blank row at the live tail.
+    ///
+    /// # Invariants
+    ///
+    /// The row is minted from the running counter rather than renumbered
+    /// from zero: a [`LineId`] an anchor still holds must never come back
+    /// around and name one of the rows this appends.
+    fn push_blank_row(&mut self) {
+        let id = self.mint();
+        self.rows.push_back(GridRow {
+            id,
+            cells: Row::filled(self.size.cols, Cell::default()),
+        });
+    }
+
     fn resize_rows(&mut self, rows: u16) {
         let old = self.size.rows;
         if rows < old {
@@ -273,11 +278,7 @@ impl Grid {
             let growth = usize::from(rows - old);
             let appended = growth.saturating_sub(self.history_len());
             for _ in 0..appended {
-                let id = self.mint();
-                self.rows.push_back(GridRow {
-                    id,
-                    cells: Row::filled(self.size.cols, Cell::default()),
-                });
+                self.push_blank_row();
             }
         }
         self.size.rows = rows;
