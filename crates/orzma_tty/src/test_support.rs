@@ -2,7 +2,7 @@
 //! a scriptable [`Vt`] fake, plus crate-internal `MasterPty` fakes for
 //! the resize seam.
 
-use orzma_vt::prelude::{DisplayOffset, Frame, GridSize, Scroll, Vt, VtModes, InterpretOutput};
+use orzma_vt::prelude::{DisplayOffset, Frame, GridSize, InterpretOutput, Scroll, Vt, VtModes};
 #[cfg(test)]
 use portable_pty::{MasterPty, PtySize};
 use std::collections::VecDeque;

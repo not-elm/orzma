@@ -44,8 +44,16 @@ pub struct EnvKey(pub String);
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct EnvValue(pub String);
 
-pub struct InterpretOutput {
+/// Everything one [`OrzmaTty::pump`] call produced.
+///
+/// This is the pump's batch, not the VT's: [`orzma_vt::InterpretOutput`]
+/// is what a single chunk produced, and one pump folds several of those
+/// into at most one frame plus the signals they raised.
+pub struct PumpOutput {
+    /// The frame to draw, present only when the coalesce window came due.
     pub frame: Option<Frame>,
+    /// Signals raised since the previous pump, in order, with
+    /// `ChildExit` last.
     pub signals: Vec<TtySignal>,
 }
 
@@ -223,7 +231,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// queued chunks, writes pending replies back to the PTY, surfaces
     /// buffered signals (with `ChildExit` last), and emits a frame when
     /// the coalesce window is due.
-    pub fn pump(&mut self) -> InterpretOutput {
+    pub fn pump(&mut self) -> PumpOutput {
         self.drain_chunks();
         let exit = self.pty.try_recv_exit();
         if exit.is_some() {
@@ -255,7 +263,7 @@ impl<V: Vt> OrzmaTty<V> {
             }
             self.coalescer.disarm();
         }
-        InterpretOutput { frame, signals }
+        PumpOutput { frame, signals }
     }
 
     /// Snaps a scrolled-back viewport to the live tail (scroll-on-input
