@@ -309,6 +309,15 @@ impl Screen {
     /// The offset is clamped to the history that survives the scroll.
     /// At capacity the row the user was reading has been evicted, so
     /// the view drifts by one; there is nothing left to hold on.
+    fn hold_scrolled_viewport(&mut self) {
+        if self.viewport.offset == DisplayOffset(0) {
+            return;
+        }
+        let history =
+            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
+        self.viewport.offset = DisplayOffset(self.viewport.offset.0.saturating_add(1).min(history));
+    }
+
     /// Resolves a motion into the offset it aims at, before clamping.
     ///
     /// A page is a whole screenful with no overlap, and a half page
@@ -327,15 +336,6 @@ impl Screen {
             Scroll::Top => history,
             Scroll::Bottom => 0,
         })
-    }
-
-    fn hold_scrolled_viewport(&mut self) {
-        if self.viewport.offset == DisplayOffset(0) {
-            return;
-        }
-        let history =
-            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
-        self.viewport.offset = DisplayOffset(self.viewport.offset.0.saturating_add(1).min(history));
     }
 }
 
@@ -781,6 +781,18 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`) — its screen-scoped actions
+    pub fn reset(&mut self) -> Option<DamageSpan> {
+        let dirty = !self.grid.is_blank();
+        self.grid.reset();
+        self.viewport = Viewport::default();
+        self.scroll_region = ScrollRegion::new(self.grid.size().rows);
+        self.state = ScreenState::default();
+        self.tabs = TabStops::default();
+        self.character_set_mapping = CharacterSetMapping::default();
+        self.checkpoint = Checkpoint::default();
+        dirty.then_some(DamageSpan::Full)
+    }
+
     /// Resizes the grid, truncating rather than reflowing; `None` when
     /// the dimensions already matched.
     ///
@@ -800,6 +812,12 @@ impl Screen {
     /// The cursor and the saved cursor both land inside the new grid.
     /// Leaving either out of bounds would panic the next write, which is
     /// why the saved one is clamped here rather than on restore.
+    ///
+    /// Only the live cursor follows the rows a resize moves; the saved
+    /// one is clamped and otherwise left where `DECSC` put it. Shifting
+    /// it too would walk the never-saved checkpoint off the home
+    /// position [`Checkpoint`] documents as the answer a `DECRC`
+    /// without a preceding `DECSC` restores.
     ///
     /// A height change returns the margins to the whole page. Keeping a
     /// region whose rows still fit would leave a cursor below its bottom
@@ -823,7 +841,7 @@ impl Screen {
         }
         let reclaimed = self.reclaimable_rows(old.rows, size.rows);
         self.grid.resize(size);
-        self.shift_cursor_rows(reclaimed, required_scrolling);
+        self.shift_cursor_row(reclaimed, required_scrolling);
         self.clamp_cursors(size);
         if old.cols != size.cols {
             self.state.pending_wrap = false;
@@ -832,48 +850,10 @@ impl Screen {
         if old.rows != size.rows {
             self.scroll_region.set_margins(Margins::new(size.rows));
         }
-        self.viewport.offset.0 = self.viewport.offset.0.saturating_sub(u32::from(reclaimed));
-        let history =
-            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
-        self.viewport.offset = DisplayOffset(self.viewport.offset.0.min(history));
+        self.set_display_offset(DisplayOffset(
+            self.viewport.offset.0.saturating_sub(u32::from(reclaimed)),
+        ));
         Some(DamageSpan::Full)
-    }
-
-    pub fn reset(&mut self) -> Option<DamageSpan> {
-        let dirty = !self.grid.is_blank();
-        self.grid.reset();
-        self.viewport = Viewport::default();
-        self.scroll_region = ScrollRegion::new(self.grid.size().rows);
-        self.state = ScreenState::default();
-        self.tabs = TabStops::default();
-        self.character_set_mapping = CharacterSetMapping::default();
-        self.checkpoint = Checkpoint::default();
-        dirty.then_some(DamageSpan::Full)
-    }
-
-    fn reclaimable_rows(&self, old_rows: u16, rows: u16) -> u16 {
-        if rows <= old_rows {
-            return 0;
-        }
-        let reclaimed = usize::from(rows - old_rows).min(self.grid.history_len());
-        u16::try_from(reclaimed).expect("a growth never exceeds u16::MAX rows")
-    }
-
-    fn shift_cursor_rows(&mut self, down: u16, up: u16) {
-        self.state.line.0 = self.state.line.0.saturating_add(down).saturating_sub(up);
-        self.checkpoint.line.0 = self
-            .checkpoint
-            .line
-            .0
-            .saturating_add(down)
-            .saturating_sub(up);
-    }
-
-    fn clamp_cursors(&mut self, size: GridSize) {
-        self.state.line.0 = self.state.line.0.min(size.rows - 1);
-        self.state.column.0 = self.state.column.0.min(size.cols - 1);
-        self.checkpoint.line.0 = self.checkpoint.line.0.min(size.rows - 1);
-        self.checkpoint.column.0 = self.checkpoint.column.0.min(size.cols - 1);
     }
 
     /// Fills the visible screen with the alignment pattern, returning to
@@ -899,6 +879,25 @@ impl Screen {
         self.scroll_region = ScrollRegion::new(size.rows);
         self.seat_cursor(ScreenLine(0), GridColumn(0));
         DamageSpan::Full
+    }
+
+    fn reclaimable_rows(&self, old_rows: u16, rows: u16) -> u16 {
+        if rows <= old_rows {
+            return 0;
+        }
+        let reclaimed = usize::from(rows - old_rows).min(self.grid.history_len());
+        u16::try_from(reclaimed).expect("a growth never exceeds u16::MAX rows")
+    }
+
+    fn shift_cursor_row(&mut self, down: u16, up: u16) {
+        self.state.line.0 = self.state.line.0.saturating_add(down).saturating_sub(up);
+    }
+
+    fn clamp_cursors(&mut self, size: GridSize) {
+        self.state.line.0 = self.state.line.0.min(size.rows - 1);
+        self.state.column.0 = self.state.column.0.min(size.cols - 1);
+        self.checkpoint.line.0 = self.checkpoint.line.0.min(size.rows - 1);
+        self.checkpoint.column.0 = self.checkpoint.column.0.min(size.cols - 1);
     }
 }
 

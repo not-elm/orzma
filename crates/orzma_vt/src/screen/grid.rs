@@ -256,8 +256,11 @@ impl Grid {
         if self.size == size {
             return false;
         }
-        self.resize_rows(size.rows);
+        // NOTE: the column pass runs first so the rows the row pass
+        // appends are built at the target width; the other order builds
+        // them at the old width and immediately reallocates each one.
         self.resize_cols(size.cols);
+        self.resize_rows(size.rows);
         true
     }
 

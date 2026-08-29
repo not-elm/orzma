@@ -167,8 +167,8 @@ mod tests {
     /// Asserts that a resize to the length the row already has leaves it
     /// unchanged.
     ///
-    /// Case: a height-only resize runs the width pass over every row
-    /// even though the column count did not move.
+    /// Case: the window manager replays the same geometry after a focus
+    /// change, so every stored row is asked for the width it already has.
     #[test]
     fn a_resize_to_the_same_length_changes_nothing() {
         let mut row = Row::from(vec![plain('a'), plain('b'), plain('c')]);

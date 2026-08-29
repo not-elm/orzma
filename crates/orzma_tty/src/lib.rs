@@ -162,8 +162,8 @@ impl<V: Vt> OrzmaTty<V> {
     }
 
     /// Resizes both the PTY (kernel winsize) and the VT grid, then arms
-    /// the coalescer so the reflow repaints at the next deadline even
-    /// on an otherwise idle terminal.
+    /// the coalescer so the new geometry repaints at the next deadline
+    /// even on an otherwise idle terminal.
     ///
     /// A request with a zero axis, or one exceeding [`Self::MAX_COLS`] /
     /// [`Self::MAX_ROWS`], is ignored with `Ok` — neither clamped nor
@@ -171,7 +171,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// [`OrzmaTtyError::PtyResize`] and leaves the VT grid and
     /// coalescer untouched (PTY first; nothing changes on failure).
     ///
-    /// A request for the grid size the VT already has reflows nothing
+    /// A request for the grid size the VT already has changes nothing
     /// and reports no damage, so it arms nothing either — the same gate
     /// [`Self::scroll`] applies to a clamped motion.
     pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTtyResult {
@@ -470,7 +470,7 @@ mod tests {
     /// Asserts that a successful resize arms the coalescer.
     ///
     /// Case: the user resizes the window at an idle shell prompt, where
-    /// the reflow is the only thing that changes.
+    /// the new grid geometry is the only thing that changes.
     #[test]
     fn resize_arms_the_coalescer() {
         let (mut term, _sink) = detached_term();

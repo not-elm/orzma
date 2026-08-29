@@ -305,3 +305,25 @@ fn a_placement_beyond_the_new_right_edge_survives() {
     assert!(screen.evict_lost_anchors().is_empty());
     assert_eq!(screen.project_placements()[0].point.column, GridColumn(19));
 }
+
+/// Asserts that a growth leaves a never-saved checkpoint on the home
+/// position rather than walking it down with the reclaimed rows.
+///
+/// Case: an application emits a bare `DECRC` to home the cursor, and
+/// the user had already dragged the window taller over output that
+/// had scrolled off the top.
+#[test]
+fn a_growth_leaves_a_never_saved_checkpoint_at_home() {
+    let mut screen = screen();
+    screen.state.line = ScreenLine(2);
+    screen.line_feed();
+    screen.line_feed();
+    assert_eq!(screen.grid.history_len(), 2);
+    assert_eq!(
+        screen.resize(GridSize { cols: 4, rows: 5 }),
+        Some(DamageSpan::Full)
+    );
+    screen.restore_checkpoint();
+    assert_eq!(screen.state.line, ScreenLine(0));
+    assert_eq!(screen.state.column, GridColumn(0));
+}

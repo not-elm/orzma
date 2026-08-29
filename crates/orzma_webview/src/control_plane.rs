@@ -852,6 +852,12 @@ const MAX_INLINE_HTML: usize = 4 * 1024 * 1024;
 mod gc_tests {
     use super::*;
 
+    /// Asserts that the garbage collector drops a view registration once
+    /// the surface that owns it is despawned, and leaves it alone while
+    /// that surface is alive.
+    ///
+    /// Case: the user closes a pane whose shell had registered a webview
+    /// over the control socket.
     #[test]
     fn gc_purges_registrations_when_owner_surface_despawns() {
         let mut app = App::new();
