@@ -195,7 +195,84 @@ impl Screen {
     ///
     /// - `BS` (`0x08`)
     pub fn backspace(&mut self) {
-        self.state.column = GridColumn(self.state.column.0.saturating_sub(1));
+        self.move_cursor_left(1);
+    }
+
+    /// Moves the cursor up `count` rows in the same column, never
+    /// scrolling.
+    ///
+    /// The top margin is the barrier: a cursor at or below it stops
+    /// there, and only a cursor already above it reaches the first row.
+    ///
+    /// `DECOM` needs no branch here. Setting it seats the cursor inside
+    /// the vertical region, and this clamp keeps it there, so a cursor
+    /// origin mode confined can never step out of the region.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CUU` (`CSI Pn A`)
+    /// - `CPL` (`CSI Pn F`) — before its carriage return
+    pub fn move_cursor_up(&mut self, count: u16) {
+        let top = self.scroll_region.top_margin();
+        let limit = if self.state.line >= top {
+            top
+        } else {
+            ScreenLine(0)
+        };
+        self.state.line = ScreenLine(self.state.line.0.saturating_sub(count).max(limit.0));
+        self.state.pending_wrap = false;
+    }
+
+    /// Moves the cursor down `count` rows in the same column, never
+    /// scrolling.
+    ///
+    /// The bottom margin is the barrier, mirroring
+    /// [`Self::move_cursor_up`]: a cursor at or above it stops there,
+    /// and only a cursor already below it reaches the last row.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CUD` (`CSI Pn B`)
+    /// - `CNL` (`CSI Pn E`) — before its carriage return
+    pub fn move_cursor_down(&mut self, count: u16) {
+        let bottom = self.scroll_region.bottom_margin();
+        let limit = if self.state.line <= bottom {
+            bottom
+        } else {
+            ScreenLine(self.grid.size().rows - 1)
+        };
+        self.state.line = ScreenLine(self.state.line.0.saturating_add(count).min(limit.0));
+        self.state.pending_wrap = false;
+    }
+
+    /// Moves the cursor `count` columns left, stopping at the first
+    /// column.
+    ///
+    /// The page border is the barrier, not a margin: this terminal has
+    /// no left margin, because `DECSLRM` needs the vertical split screen
+    /// mode it does not implement.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CUB` (`CSI Pn D`)
+    /// - `BS` (`0x08`) — with a count of one
+    pub fn move_cursor_left(&mut self, count: u16) {
+        self.state.column = GridColumn(self.state.column.0.saturating_sub(count));
+        self.state.pending_wrap = false;
+    }
+
+    /// Moves the cursor `count` columns right, stopping at the last
+    /// column.
+    ///
+    /// The page border is the barrier, mirroring
+    /// [`Self::move_cursor_left`].
+    ///
+    /// # Control Functions
+    ///
+    /// - `CUF` (`CSI Pn C`)
+    pub fn move_cursor_right(&mut self, count: u16) {
+        let last = self.grid.size().cols - 1;
+        self.state.column = GridColumn(self.state.column.0.saturating_add(count).min(last));
         self.state.pending_wrap = false;
     }
 

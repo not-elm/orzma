@@ -237,6 +237,38 @@ impl VTActor for Executor<'_> {
             (None, b't') if params.value(0) == Some(22) => self.device.push_title(),
             // XTWINOPS 23
             (None, b't') if params.value(0) == Some(23) => self.pop_title(),
+            // CUU
+            (None, b'A') => self
+                .device
+                .active_screen_mut()
+                .move_cursor_up(repeat_count(params.value(0))),
+            // CUD
+            (None, b'B') => self
+                .device
+                .active_screen_mut()
+                .move_cursor_down(repeat_count(params.value(0))),
+            // CUF
+            (None, b'C') => self
+                .device
+                .active_screen_mut()
+                .move_cursor_right(repeat_count(params.value(0))),
+            // CUB
+            (None, b'D') => self
+                .device
+                .active_screen_mut()
+                .move_cursor_left(repeat_count(params.value(0))),
+            // CNL
+            (None, b'E') => {
+                let screen = self.device.active_screen_mut();
+                screen.move_cursor_down(repeat_count(params.value(0)));
+                screen.carriage_return();
+            }
+            // CPL
+            (None, b'F') => {
+                let screen = self.device.active_screen_mut();
+                screen.move_cursor_up(repeat_count(params.value(0)));
+                screen.carriage_return();
+            }
             // ED
             (None, b'J') => {
                 if let Some(mode) = EraseScreenMode::from_ed(params.value(0).unwrap_or(0)) {
@@ -419,8 +451,11 @@ impl Executor<'_> {
 
 /// A repeat count parameter, where an omitted or zero value means one.
 ///
-/// ECMA-48 gives every `Pn` a default of 1, and a zero selects that
-/// default rather than a no-op.
+/// ECMA-48 gives the default to an *empty* parameter only (§ 5.4.2 e);
+/// an explicit zero selecting the default is ZERO DEFAULT MODE, which
+/// its annex F deprecates. DEC spells the rule out per function instead
+/// — VT220 states "a parameter of 0 or 1" for these counts — and that
+/// is what applications expect, so a zero resolves to one here.
 fn repeat_count(value: Option<u16>) -> u16 {
     match value {
         None | Some(0) => 1,
@@ -775,6 +810,84 @@ mod tests {
             device.active_screen().viewport_row(ViewportLine(2))[1].c,
             ' '
         );
+    }
+
+    /// Asserts that `CSI A` and `CSI B` move the cursor by whole rows
+    /// and leave it in the column it was already in.
+    ///
+    /// Case: a full-screen application redraws a column of a table by
+    /// stepping down it and back up.
+    #[test]
+    fn the_cursor_up_and_down_sequences_move_by_rows() {
+        let device = interpret(b"\x1b[2;2H\x1b[1Bx\x1b[2Ay");
+        let screen = device.active_screen();
+        assert_eq!(screen.viewport_row(ViewportLine(2))[1].c, 'x');
+        assert_eq!(screen.viewport_row(ViewportLine(0))[2].c, 'y');
+    }
+
+    /// Asserts that `CSI C` and `CSI D` move the cursor by whole
+    /// columns in the same row.
+    ///
+    /// Case: a program spaces a label away from the left edge without
+    /// emitting the blanks between.
+    #[test]
+    fn the_cursor_forward_and_back_sequences_move_by_columns() {
+        let device = interpret(b"\x1b[2Cx\x1b[2Dy");
+        let screen = device.active_screen();
+        assert_eq!(screen.viewport_row(ViewportLine(0))[2].c, 'x');
+        assert_eq!(screen.viewport_row(ViewportLine(0))[1].c, 'y');
+    }
+
+    /// Asserts that an omitted count moves one row, the default DEC
+    /// gives every `Pn`.
+    ///
+    /// Case: a program emits the bare `CSI B` spelling to step down a
+    /// single row.
+    #[test]
+    fn an_omitted_cursor_motion_count_moves_one_row() {
+        let device = interpret(b"\x1b[Bx");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(1))[0].c,
+            'x'
+        );
+    }
+
+    /// Asserts that `CSI E` moves down and returns to the first
+    /// column, without scrolling the way `NEL` would.
+    ///
+    /// Case: a program starts the next record of a listing at the left
+    /// edge two rows down.
+    #[test]
+    fn the_next_line_sequence_moves_down_and_returns_to_column_one() {
+        let device = interpret(b"\x1b[1;3Hab\x1b[2Ex");
+        let screen = device.active_screen();
+        assert_eq!(screen.viewport_row(ViewportLine(0))[2].c, 'a');
+        assert_eq!(screen.viewport_row(ViewportLine(2))[0].c, 'x');
+    }
+
+    /// Asserts that `CSI F` moves up and returns to the first column.
+    ///
+    /// Case: a program rewrites the heading two rows above the row it
+    /// was filling.
+    #[test]
+    fn the_preceding_line_sequence_moves_up_and_returns_to_column_one() {
+        let device = interpret(b"\x1b[3;3Hab\x1b[2Fx");
+        let screen = device.active_screen();
+        assert_eq!(screen.viewport_row(ViewportLine(2))[2].c, 'a');
+        assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'x');
+    }
+
+    /// Asserts that `CSI E` at the bottom margin stays put rather than
+    /// scrolling the region.
+    ///
+    /// Case: a program emits a next-line at the foot of its pane, where
+    /// `NEL` would have scrolled but `CNL` must not.
+    #[test]
+    fn the_next_line_sequence_does_not_scroll_at_the_bottom() {
+        let device = interpret(b"a\x1b[3;1Hb\x1b[Ex");
+        let screen = device.active_screen();
+        assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+        assert_eq!(screen.viewport_row(ViewportLine(2))[0].c, 'x');
     }
 
     /// Asserts that `CSI J` erases from the cursor to the end of the
