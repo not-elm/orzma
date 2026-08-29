@@ -113,13 +113,31 @@ pub trait Vt {
     ///   instant as its rows.
     fn frame(&mut self) -> Option<Frame>;
 
-    /// Resizes the grid, reflowing content; returns whether the
-    /// dimensions changed. Only a real change stages (full) damage.
+    /// Evicts every placement whose anchor row no longer resolves and
+    /// names them, so the owner can despawn what the VT destroyed.
+    ///
+    /// # Invariants
+    ///
+    /// The owner calls this before draining its signal queue and before
+    /// asking for a frame, so the eviction still reaches that frame's
+    /// placement list — a sweep after the damage ledger drained would
+    /// reach no frame at all.
+    ///
+    /// A placement is named once. The sweep removes what it names, so a
+    /// second sweep with nothing further lost raises nothing.
+    fn sweep_evictions(&mut self) -> Vec<VtSignal>;
+
+    /// Resizes the grid, truncating rather than reflowing; returns
+    /// whether the dimensions changed. Only a real change stages (full)
+    /// damage.
     ///
     /// # Invariants
     ///
     /// Both axes are nonzero; degenerate sizes are rejected by the
     /// caller.
+    ///
+    /// Placements the resize strands are not reported here. The owner's
+    /// next [`Vt::sweep_evictions`] names them.
     fn resize(&mut self, size: GridSize) -> bool;
 
     /// Applies the viewport motion; returns whether the viewport
@@ -156,8 +174,10 @@ pub struct InterpretOutput {
     pub replies: Vec<u8>,
 }
 
-/// Out-of-band signal parsed from the VT byte stream, handed to the
-/// owner in [`InterpretOutput::signals`].
+/// Out-of-band signal the VT raised, handed to the owner in
+/// [`InterpretOutput::signals`] when it was parsed from the byte
+/// stream, or returned from [`Vt::sweep_evictions`] when the VT raised
+/// it on its own authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VtSignal {
     /// An audible bell has been requested; the consumer is responsible
@@ -259,6 +279,14 @@ impl Vt for OrzmaVt {
         self.tracker.emit(&self.device)
     }
 
+    fn sweep_evictions(&mut self) -> Vec<VtSignal> {
+        let placements = self.device.evict_lost_anchors();
+        if placements.is_empty() {
+            return Vec::new();
+        }
+        vec![VtSignal::WebviewEvicted { placements }]
+    }
+
     fn resize(&mut self, size: GridSize) -> bool {
         self.tracker.stage_if_changed(self.device.resize(size))
     }
@@ -290,6 +318,76 @@ mod tests {
 
     fn vt() -> OrzmaVt {
         OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10)
+    }
+
+    /// Asserts that a sweep with nothing to evict raises no signal.
+    ///
+    /// Case: the host pumps a terminal that has no webviews mounted,
+    /// which is every pump on a plain shell session.
+    #[test]
+    fn a_sweep_with_nothing_lost_raises_no_signal() {
+        let mut vt = vt();
+        assert!(vt.sweep_evictions().is_empty());
+    }
+
+    /// Asserts that a sweep after a reset names every placement the
+    /// reset stranded, in one signal.
+    ///
+    /// Case: a webview is mounted and the shell sends `RIS`, so the
+    /// host must despawn it.
+    #[test]
+    fn a_sweep_after_a_reset_names_the_stranded_placements() {
+        let mut vt = vt();
+        let id = vt
+            .device
+            .mount_placement(PlacementSize { rows: 1, cols: 1 }, "v".to_string(), None)
+            .expect("a mount under the cap is accepted");
+        vt.device.reset();
+        assert_eq!(
+            vt.sweep_evictions(),
+            vec![VtSignal::WebviewEvicted {
+                placements: vec![id]
+            }]
+        );
+    }
+
+    /// Asserts that a sweep after a shrink names the placement whose
+    /// anchor row the shrink dropped out of history.
+    ///
+    /// Case: a webview is mounted on a short-scrollback terminal and
+    /// the user drags the window shorter, pushing its anchor row past
+    /// the history cap.
+    #[test]
+    fn a_sweep_after_a_shrink_names_the_placement_it_stranded() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 4 }, 0);
+        let id = vt
+            .device
+            .mount_placement(PlacementSize { rows: 1, cols: 1 }, "v".to_string(), None)
+            .expect("a mount under the cap is accepted");
+        vt.device.active_screen_mut().move_cursor_to(Some(4), None);
+        assert!(vt.resize(GridSize { cols: 4, rows: 2 }));
+        assert_eq!(
+            vt.sweep_evictions(),
+            vec![VtSignal::WebviewEvicted {
+                placements: vec![id]
+            }]
+        );
+    }
+
+    /// Asserts that a second sweep after the first raises nothing, so
+    /// a per-pump sweep does not re-report what it already named.
+    ///
+    /// Case: the host pumps again on the frame after a reset despawned
+    /// a webview.
+    #[test]
+    fn a_second_sweep_raises_nothing() {
+        let mut vt = vt();
+        vt.device
+            .mount_placement(PlacementSize { rows: 1, cols: 1 }, "v".to_string(), None)
+            .expect("a mount under the cap is accepted");
+        vt.device.reset();
+        assert_eq!(vt.sweep_evictions().len(), 1);
+        assert!(vt.sweep_evictions().is_empty());
     }
 
     /// Asserts that a fresh terminal's first frame carries every
