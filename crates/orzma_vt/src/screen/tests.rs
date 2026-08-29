@@ -51,6 +51,7 @@ mod new;
 mod placements;
 mod print;
 mod reset;
+mod resize;
 mod restore_checkpoint;
 mod reverse_index;
 mod save_checkpoint;

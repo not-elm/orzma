@@ -742,6 +742,64 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`) — its screen-scoped actions
+    /// Resizes the grid, truncating rather than reflowing; `None` when
+    /// the dimensions already matched.
+    ///
+    /// A shrink pushes as many rows off the top as it takes to keep the
+    /// cursor on screen and drops the rest from the bottom, so a prompt
+    /// at the bottom survives and a mostly-blank screen keeps its
+    /// content. A growth reclaims rows from history before it appends
+    /// blank ones.
+    ///
+    /// # Invariants
+    ///
+    /// A resize that changes the dimensions reports [`DamageSpan::Full`]:
+    /// every emitted frame carries the new size but nothing diffs it, so
+    /// partial row damage would hand the renderer new dimensions with
+    /// stale rows behind them.
+    ///
+    /// The cursor and the saved cursor both land inside the new grid.
+    /// Leaving either out of bounds would panic the next write, which is
+    /// why the saved one is clamped here rather than on restore.
+    ///
+    /// A height change returns the margins to the whole page. Keeping a
+    /// region whose rows still fit would leave a cursor below its bottom
+    /// margin, and [`Self::line_feed`] scrolls only on an exact match
+    /// with that margin, so the screen would never scroll again.
+    ///
+    /// A scrolled-back viewport tracks the rows it was showing: each
+    /// scroll pairs with [`Self::hold_scrolled_viewport`] the way line
+    /// feeding does, and a growth walks the offset back by the rows it
+    /// reclaims.
+    pub fn resize(&mut self, size: GridSize) -> Option<DamageSpan> {
+        let old = self.grid.size();
+        if old == size {
+            return None;
+        }
+        let required_scrolling = (self.state.line.0 + 1).saturating_sub(size.rows);
+        for _ in 0..required_scrolling {
+            self.grid
+                .scroll_up_one(ScreenLine(0), ScreenLine(old.rows - 1), Cell::default());
+            self.hold_scrolled_viewport();
+        }
+        let reclaimed = self.reclaimable_rows(old.rows, size.rows);
+        self.grid.resize(size);
+        self.shift_cursor_rows(reclaimed, required_scrolling);
+        self.clamp_cursors(size);
+        if old.cols != size.cols {
+            self.state.pending_wrap = false;
+            self.checkpoint.pending_wrap = false;
+        }
+        if old.rows != size.rows {
+            self.scroll_region.set_margins(Margins::new(size.rows));
+        }
+        self.viewport.offset.0 = self.viewport.offset.0.saturating_sub(u32::from(reclaimed));
+        let history =
+            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
+        self.viewport.offset = DisplayOffset(self.viewport.offset.0.min(history));
+        Some(DamageSpan::Full)
+    }
+
     pub fn reset(&mut self) -> Option<DamageSpan> {
         let dirty = !self.grid.is_blank();
         self.grid.reset();
@@ -752,6 +810,31 @@ impl Screen {
         self.character_set_mapping = CharacterSetMapping::default();
         self.checkpoint = Checkpoint::default();
         dirty.then_some(DamageSpan::Full)
+    }
+
+    fn reclaimable_rows(&self, old_rows: u16, rows: u16) -> u16 {
+        if rows <= old_rows {
+            return 0;
+        }
+        let reclaimed = usize::from(rows - old_rows).min(self.grid.history_len());
+        u16::try_from(reclaimed).expect("a growth never exceeds u16::MAX rows")
+    }
+
+    fn shift_cursor_rows(&mut self, down: u16, up: u16) {
+        self.state.line.0 = self.state.line.0.saturating_add(down).saturating_sub(up);
+        self.checkpoint.line.0 = self
+            .checkpoint
+            .line
+            .0
+            .saturating_add(down)
+            .saturating_sub(up);
+    }
+
+    fn clamp_cursors(&mut self, size: GridSize) {
+        self.state.line.0 = self.state.line.0.min(size.rows - 1);
+        self.state.column.0 = self.state.column.0.min(size.cols - 1);
+        self.checkpoint.line.0 = self.checkpoint.line.0.min(size.rows - 1);
+        self.checkpoint.column.0 = self.checkpoint.column.0.min(size.cols - 1);
     }
 
     /// Fills the visible screen with the alignment pattern, returning to
