@@ -5,14 +5,6 @@
 //! the color table, and the title stack. `OrzmaTty` one crate up is
 //! the live terminal — a VT wired to a PTY — so the device the VT
 //! emulates deliberately does not borrow that name.
-// NOTE: `allow` rather than `expect`, because the lint fires in the lib
-// build and not in the test build: `DeviceState::title` reads the title
-// field that only `cfg(test)` used to reach, so an expectation would go
-// unfulfilled in one of the two builds whichever way it is written.
-#![allow(
-    dead_code,
-    reason = "the executor and the frame emitter reach this state once they land"
-)]
 
 pub(crate) mod color;
 pub(crate) mod modes;
