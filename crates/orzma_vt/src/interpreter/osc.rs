@@ -3,8 +3,6 @@
 //! Only the window title (OSC 0 and OSC 2) is implemented; the palette,
 //! the working directory, hyperlinks, and the clipboard land later.
 
-use std::iter::once;
-
 /// The sanitized window title an `OSC 0` or `OSC 2` sets, or `None` for
 /// every other operating system command. An `OSC 0` or `OSC 2` that
 /// carries no text at all also returns `None`, rather than emptying the
@@ -30,7 +28,9 @@ const MAX_LEN: usize = 256;
 ///
 /// Stripping runs before trimming: removing a zero-width character can
 /// expose fresh edge whitespace, and trimming first would leave a title
-/// that indents itself in the tab bar.
+/// that indents itself in the tab bar. A truncation trims once more
+/// before appending the ellipsis, because the cut can land inside the
+/// padding the first trim was too early to see.
 ///
 /// Filtering and truncation are deliberately not grapheme-aware. The
 /// stripped set includes U+200D ZERO WIDTH JOINER, so an emoji sequence
@@ -41,7 +41,10 @@ fn sanitize(raw: &str) -> String {
     let stripped: String = raw.chars().filter(|c| !is_disallowed(*c)).collect();
     let trimmed = stripped.trim();
     if trimmed.chars().count() > MAX_LEN {
-        trimmed.chars().take(MAX_LEN - 1).chain(once('…')).collect()
+        let mut truncated: String = trimmed.chars().take(MAX_LEN - 1).collect();
+        truncated.truncate(truncated.trim_end().len());
+        truncated.push('…');
+        truncated
     } else {
         trimmed.to_owned()
     }
@@ -51,20 +54,30 @@ fn sanitize(raw: &str) -> String {
 ///
 /// Three groups are refused. The control characters are refused because
 /// a title is rendered as text and must not steer the surface drawing
-/// it. The whole `Bidi_Control` property — U+061C, U+200E..U+200F,
-/// U+202A..U+202E, and U+2066..U+2069 — is refused because a title that
-/// reorders itself can impersonate another program. And the zero-width
-/// characters U+200B..U+200D and U+FEFF are refused because text that
-/// occupies no space can hide inside a title that looks benign.
+/// it, and U+2028 and U+2029 are refused beside them because they break
+/// a line without being control characters. The whole `Bidi_Control`
+/// property — U+061C, U+200E..U+200F, U+202A..U+202E, and
+/// U+2066..U+2069 — is refused because a title that reorders itself can
+/// impersonate another program. And the characters that occupy no space
+/// — U+00AD, U+180E, U+200B..U+200D, U+2060..U+2064, U+FEFF,
+/// U+FFF9..U+FFFB, and the U+E0000..U+E007F tag block — are refused
+/// because text the reader cannot see can hide inside a title that
+/// looks benign.
 fn is_disallowed(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
-            '\u{061C}'
+            '\u{00AD}'
+                | '\u{061C}'
+                | '\u{180E}'
                 | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{2029}'
                 | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{2064}'
                 | '\u{2066}'..='\u{2069}'
                 | '\u{FEFF}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{E0000}'..='\u{E007F}'
         )
 }
 
@@ -130,7 +143,8 @@ mod tests {
     /// Asserts that an empty title is carried through as an empty
     /// string rather than being treated as a reset.
     ///
-    /// Case: a shell clears the title with `OSC 0` and no text.
+    /// Case: a shell blanks its prompt title by emitting `OSC 0` with
+    /// the separator but nothing after it.
     #[test]
     fn an_empty_title_stays_empty() {
         assert_eq!(window_title(&[b"0", b""]).as_deref(), Some(""));
@@ -156,6 +170,29 @@ mod tests {
         assert_eq!(window_title(&[b"0", raw]).as_deref(), Some("ab"));
     }
 
+    /// Asserts that the Unicode line and paragraph separators are
+    /// stripped wherever they sit, as the C0 line breaks already are.
+    ///
+    /// Case: a hostile program embeds a line separator in the title so
+    /// the tab bar draws a second line under the one beside it.
+    #[test]
+    fn unicode_line_breaks_are_stripped() {
+        let raw = "a\u{2028}\u{2029}b".as_bytes();
+        assert_eq!(window_title(&[b"0", raw]).as_deref(), Some("ab"));
+    }
+
+    /// Asserts that the characters occupying no space outside
+    /// U+200B..U+200D are stripped too, including the word joiner that
+    /// replaced U+FEFF and the tag block.
+    ///
+    /// Case: a hostile program hides tag-encoded text inside a title
+    /// that reads as another program's name.
+    #[test]
+    fn invisible_characters_are_stripped() {
+        let raw = "a\u{00ad}\u{180e}\u{2060}\u{fff9}\u{e0041}b".as_bytes();
+        assert_eq!(window_title(&[b"0", raw]).as_deref(), Some("ab"));
+    }
+
     /// Asserts that whitespace exposed by stripping a zero-width
     /// character is trimmed, so a title cannot carry indentation.
     ///
@@ -177,6 +214,18 @@ mod tests {
         let title = window_title(&[b"0", raw.as_bytes()]).expect("OSC 0 sets a title");
         assert_eq!(title.chars().count(), 256);
         assert!(title.ends_with('…'));
+    }
+
+    /// Asserts that a truncation drops the whitespace it cut against
+    /// instead of leaving it in front of the ellipsis.
+    ///
+    /// Case: a hostile program pads a long title so the cut lands in a
+    /// run of spaces and the tab reads as indented from its ellipsis.
+    #[test]
+    fn a_truncation_trims_before_the_ellipsis() {
+        let raw = format!("{}{}{}", "x".repeat(250), " ".repeat(10), "y".repeat(100));
+        let title = window_title(&[b"0", raw.as_bytes()]).expect("OSC 0 sets a title");
+        assert_eq!(title, format!("{}…", "x".repeat(250)));
     }
 
     /// Asserts that a title of exactly the maximum length passes through

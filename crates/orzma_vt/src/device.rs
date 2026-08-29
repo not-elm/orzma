@@ -150,7 +150,10 @@ impl DeviceState {
     ///
     /// # Control Functions
     ///
-    /// - `XTWINOPS` (`CSI 22 t`)
+    /// - `XTWINOPS` (`CSI 22 t`); the icon/window selector and the
+    ///   direct slot number xterm accepts after it are both ignored,
+    ///   because this terminal carries one title and no addressable
+    ///   slots, so a slot store arrives here as an ordinary push.
     pub fn push_title(&mut self) {
         if self.title.stack.len() == MAX_TITLE_DEPTH {
             self.title.stack.pop_front();
@@ -167,7 +170,9 @@ impl DeviceState {
     ///
     /// # Control Functions
     ///
-    /// - `XTWINOPS` (`CSI 23 t`)
+    /// - `XTWINOPS` (`CSI 23 t`); its sub-parameters are ignored on the
+    ///   same terms as [`DeviceState::push_title`]'s, so a slot fetch
+    ///   arrives here as an ordinary pop.
     pub fn pop_title(&mut self) -> Option<Option<String>> {
         self.title.stack.pop_back()
     }
@@ -356,6 +361,7 @@ mod tests {
     use crate::screen::cell::Cell;
     use crate::screen::grid::coords::GridColumn;
     use crate::screen::viewport::ViewportLine;
+    use std::iter::from_fn;
 
     fn device() -> DeviceState {
         DeviceState::new(GridSize { cols: 8, rows: 3 }, 10)
@@ -719,7 +725,7 @@ mod tests {
             device.set_title(Some(n.to_string()));
             device.push_title();
         }
-        let popped: Vec<Option<String>> = std::iter::from_fn(|| device.pop_title()).collect();
+        let popped: Vec<Option<String>> = from_fn(|| device.pop_title()).collect();
         let expected: Vec<Option<String>> = (1..=MAX_TITLE_DEPTH)
             .rev()
             .map(|n| Some(n.to_string()))
