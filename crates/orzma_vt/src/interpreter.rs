@@ -436,6 +436,8 @@ impl Executor<'_> {
     fn set_private_modes(&mut self, params: &CsiParams<'_>, enabled: bool) {
         for mode in params.values().flatten() {
             match mode {
+                // DECCKM
+                1 => self.device.modes_mut().app_cursor = enabled,
                 // DECOM
                 6 => self
                     .device
@@ -443,8 +445,29 @@ impl Executor<'_> {
                     .set_origin_mode(OriginMode::from_decset(enabled)),
                 // DECNKM
                 66 => self.device.modes_mut().keypad_mode = KeypadMode::from_decset(enabled),
-                _ => {}
+                // XTFOCUS
+                1004 => self.device.modes_mut().focus_in_out = enabled,
+                // Alternate scroll
+                1007 => self.device.modes_mut().alternate_scroll = enabled,
+                // Bracketed paste
+                2004 => self.device.modes_mut().bracketed_paste = enabled,
+                _ => self.set_mouse_mode(mode, enabled),
             }
+        }
+    }
+
+    /// Applies a mouse tracking level or report encoding; a number
+    /// neither answers is ignored.
+    ///
+    /// The numbers live on the two enums rather than here, so the
+    /// tracking levels and the encodings each keep their mapping beside
+    /// the type that models them.
+    fn set_mouse_mode(&mut self, mode: u16, enabled: bool) {
+        let modes = self.device.modes_mut();
+        if let Some(tracking) = modes.mouse_tracking.with_decset(mode, enabled) {
+            modes.mouse_tracking = tracking;
+        } else if let Some(encoding) = modes.mouse_encoding.with_decset(mode, enabled) {
+            modes.mouse_encoding = encoding;
         }
     }
 }
@@ -508,6 +531,7 @@ fn pack_version(major: u32, minor: u32, patch: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::modes::{MouseEncoding, MouseTracking};
     use crate::screen::cell::Cell;
     use crate::screen::grid::GridSize;
     use crate::screen::grid::coords::GridColumn;
@@ -810,6 +834,108 @@ mod tests {
             device.active_screen().viewport_row(ViewportLine(2))[1].c,
             ' '
         );
+    }
+
+    /// Asserts that the flag-shaped private modes reach their fields
+    /// on set and go back on reset.
+    ///
+    /// Case: a full-screen application turns on the modes it needs at
+    /// startup and turns them off again on the way out.
+    #[test]
+    fn the_flag_private_modes_reach_their_fields() {
+        let device = interpret(b"\x1b[?1;1004;1007;2004h");
+        let modes = device.modes();
+        assert!(modes.app_cursor);
+        assert!(modes.focus_in_out);
+        assert!(modes.alternate_scroll);
+        assert!(modes.bracketed_paste);
+
+        let device = interpret(b"\x1b[?1;1004;1007;2004h\x1b[?1;1004;1007;2004l");
+        let modes = device.modes();
+        assert!(!modes.app_cursor);
+        assert!(!modes.focus_in_out);
+        assert!(!modes.alternate_scroll);
+        assert!(!modes.bracketed_paste);
+    }
+
+    /// Asserts that each mouse tracking number selects its own level,
+    /// the levels replacing one another.
+    ///
+    /// Case: an editor raises its tracking from clicks to any-event
+    /// motion when the user starts a drag selection.
+    #[test]
+    fn each_mouse_tracking_number_selects_its_level() {
+        assert_eq!(
+            interpret(b"\x1b[?1000h").modes().mouse_tracking,
+            MouseTracking::Clicks
+        );
+        assert_eq!(
+            interpret(b"\x1b[?1002h").modes().mouse_tracking,
+            MouseTracking::Drag
+        );
+        assert_eq!(
+            interpret(b"\x1b[?1000h\x1b[?1003h").modes().mouse_tracking,
+            MouseTracking::Motion
+        );
+    }
+
+    /// Asserts that resetting a tracking number that is not the active
+    /// level leaves that level alone.
+    ///
+    /// Case: an application tears down every tracking mode it knows,
+    /// including ones it never set, and must not disable the one it did.
+    #[test]
+    fn resetting_an_inactive_tracking_number_keeps_the_active_level() {
+        assert_eq!(
+            interpret(b"\x1b[?1002h\x1b[?1000l").modes().mouse_tracking,
+            MouseTracking::Drag
+        );
+        assert_eq!(
+            interpret(b"\x1b[?1002h\x1b[?1002l").modes().mouse_tracking,
+            MouseTracking::Off
+        );
+    }
+
+    /// Asserts that `DECSET 1006` selects SGR reports and its reset
+    /// returns to the default framing.
+    ///
+    /// Case: an application asks for SGR reports so it can address a
+    /// window wider than the legacy coordinate cap.
+    #[test]
+    fn the_sgr_mouse_number_selects_its_encoding() {
+        assert_eq!(
+            interpret(b"\x1b[?1006h").modes().mouse_encoding,
+            MouseEncoding::Sgr
+        );
+        assert_eq!(
+            interpret(b"\x1b[?1006h\x1b[?1006l").modes().mouse_encoding,
+            MouseEncoding::X10
+        );
+    }
+
+    /// Asserts that `DECSET 1005` is not answered, leaving the default
+    /// framing in force.
+    ///
+    /// Case: an application asks for the UTF-8 coordinate extension,
+    /// which `MouseReport::encode` does not implement — selecting it
+    /// would report wrong coordinates past column 95.
+    #[test]
+    fn the_utf8_mouse_number_is_not_answered() {
+        assert_eq!(
+            interpret(b"\x1b[?1005h").modes().mouse_encoding,
+            MouseEncoding::X10
+        );
+    }
+
+    /// Asserts that an unknown private mode is ignored rather than
+    /// disturbing the modes around it.
+    ///
+    /// Case: an application probes for a feature this terminal does not
+    /// implement while other modes are already in force.
+    #[test]
+    fn an_unknown_private_mode_is_ignored() {
+        let device = interpret(b"\x1b[?2004h\x1b[?9999h");
+        assert!(device.modes().bracketed_paste);
     }
 
     /// Asserts that `CSI A` and `CSI B` move the cursor by whole rows

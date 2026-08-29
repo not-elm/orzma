@@ -93,7 +93,6 @@ mod tests {
     /// with the markers gone. Encoding branch coverage itself lives
     /// with `PtyInput::encode_paste`'s tests in `orzma_tty`.
     #[test]
-    #[ignore = "DECSET 2004 is not wired yet, so bracketed paste mode never turns on"]
     fn paste_honours_live_bracketed_paste_mode() {
         for (text, expected) in [
             ("hi", b"\x1b[200~hi\x1b[201~".as_slice()),

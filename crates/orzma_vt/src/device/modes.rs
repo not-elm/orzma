@@ -105,6 +105,31 @@ pub enum MouseEncoding {
     Sgr,
 }
 
+impl MouseEncoding {
+    /// The encoding `mode` selects, applied to the current one; `None`
+    /// when the number names no encoding this terminal answers.
+    ///
+    /// A `DECRST` returns to [`Self::X10`] only when the number names
+    /// the encoding currently in force. The variants and the numbers
+    /// correspond one to one, so an application that resets an encoding
+    /// it never set would otherwise disable the one it did.
+    // TODO: Answer DECSET 1005 here once `MouseReport::encode` really
+    // implements the UTF-8 coordinate extension. Selecting `Utf8` while
+    // the encoder falls back to X10 would advertise a protocol whose
+    // reports go wrong past column 95.
+    pub fn with_decset(self, mode: u16, enabled: bool) -> Option<Self> {
+        let encoding = match mode {
+            1006 => Self::Sgr,
+            _ => return None,
+        };
+        Some(match (enabled, self == encoding) {
+            (true, _) => encoding,
+            (false, true) => Self::X10,
+            (false, false) => self,
+        })
+    }
+}
+
 /// Mouse-tracking level.
 ///
 /// The levels are mutually exclusive: each DECSET below replaces the
@@ -133,4 +158,26 @@ pub enum MouseTracking {
     Drag,
     /// DECSET 1003: all motion.
     Motion,
+}
+
+impl MouseTracking {
+    /// The level `mode` selects, applied to the current one; `None`
+    /// when the number names no tracking level.
+    ///
+    /// A `DECSET` replaces the level outright. A `DECRST` clears it only
+    /// when the number names the level currently in force, for the same
+    /// reason [`MouseEncoding::with_decset`] records.
+    pub fn with_decset(self, mode: u16, enabled: bool) -> Option<Self> {
+        let level = match mode {
+            1000 => Self::Clicks,
+            1002 => Self::Drag,
+            1003 => Self::Motion,
+            _ => return None,
+        };
+        Some(match (enabled, self == level) {
+            (true, _) => level,
+            (false, true) => Self::Off,
+            (false, false) => self,
+        })
+    }
 }
