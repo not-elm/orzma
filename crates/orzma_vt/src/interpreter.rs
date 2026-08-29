@@ -16,6 +16,8 @@ use crate::interpreter::csi::CsiParams;
 use crate::interpreter::osc::window_title;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
+use crate::screen::tabs::CharacterTabEdit;
+use crate::screen::{EraseLineMode, EraseScreenMode};
 use crate::{
     InterpretOutput, VtSignal,
     device::DeviceState,
@@ -235,6 +237,46 @@ impl VTActor for Executor<'_> {
             (None, b't') if params.value(0) == Some(22) => self.device.push_title(),
             // XTWINOPS 23
             (None, b't') if params.value(0) == Some(23) => self.pop_title(),
+            // ED
+            (None, b'J') => {
+                if let Some(mode) = EraseScreenMode::from_ed(params.value(0).unwrap_or(0)) {
+                    let damage = self.device.active_screen_mut().erase_in_display(mode);
+                    self.stage(damage);
+                }
+            }
+            // EL
+            (None, b'K') => {
+                if let Some(mode) = EraseLineMode::from_el(params.value(0).unwrap_or(0)) {
+                    let damage = self.device.active_screen_mut().erase_in_line(mode);
+                    self.stage(damage);
+                }
+            }
+            // CHT
+            (None, b'I') => self
+                .device
+                .active_screen_mut()
+                .move_forward_tabs(repeat_count(params.value(0))),
+            // CBT
+            (None, b'Z') => self
+                .device
+                .active_screen_mut()
+                .move_backward_tabs(repeat_count(params.value(0))),
+            // TBC
+            (None, b'g') => {
+                if let Some(edit) = CharacterTabEdit::from_tbc(params.value(0).unwrap_or(0)) {
+                    self.device.active_screen_mut().edit_tab_stop(edit);
+                }
+            }
+            // CTC
+            (None, b'W') => {
+                if let Some(edit) = CharacterTabEdit::from_ctc(params.value(0).unwrap_or(0)) {
+                    self.device.active_screen_mut().edit_tab_stop(edit);
+                }
+            }
+            // DECST8C
+            (Some(b'?'), b'W') if params.value(0) == Some(5) => {
+                self.device.active_screen_mut().reset_tab_stops()
+            }
             // DECSET
             (Some(b'?'), b'h') => self.set_private_modes(&params, true),
             // DECRST
@@ -375,6 +417,17 @@ impl Executor<'_> {
     }
 }
 
+/// A repeat count parameter, where an omitted or zero value means one.
+///
+/// ECMA-48 gives every `Pn` a default of 1, and a zero selects that
+/// default rather than a no-op.
+fn repeat_count(value: Option<u16>) -> u16 {
+    match value {
+        None | Some(0) => 1,
+        Some(count) => count,
+    }
+}
+
 /// The DA1 response: a VT102 with no extensions, the class alacritty
 /// reports. A higher class would advertise features — Sixel, DRCS,
 /// selective erase — this terminal does not implement.
@@ -433,7 +486,18 @@ mod tests {
     /// [`OrzmaVt`] because these tests read [`DeviceState`], which the
     /// [`Vt`] trait does not expose.
     fn interpret_fully(chunk: &[u8]) -> (DeviceState, InterpretOutput) {
-        let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
+        interpret_sized(4, chunk)
+    }
+
+    /// Runs `chunk` on a grid wide enough for the default tabulation
+    /// stride: twenty columns put the right edge at 19, so the stops at
+    /// 8 and 16 are reachable and the one at 24 is not.
+    fn interpret_wide(chunk: &[u8]) -> DeviceState {
+        interpret_sized(20, chunk).0
+    }
+
+    fn interpret_sized(cols: u16, chunk: &[u8]) -> (DeviceState, InterpretOutput) {
+        let mut device = DeviceState::new(GridSize { cols, rows: 3 }, 10);
         let mut tracker = FrameTracker::new();
         let mut output = InterpretOutput::default();
         Interpreter::default().parse(&mut output, &mut device, &mut tracker, chunk);
@@ -710,6 +774,167 @@ mod tests {
         assert_eq!(
             device.active_screen().viewport_row(ViewportLine(2))[1].c,
             ' '
+        );
+    }
+
+    /// Asserts that `CSI J` erases from the cursor to the end of the
+    /// screen and leaves what precedes it.
+    ///
+    /// Case: a program finishes drawing a short menu and clears the
+    /// stale rows a longer one left below it.
+    #[test]
+    fn the_erase_in_display_sequence_clears_below_the_cursor() {
+        let device = interpret(b"ab\x1b[2;1Hcd\x1b[2;2H\x1b[J");
+        let screen = device.active_screen();
+        assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+        assert_eq!(screen.viewport_row(ViewportLine(1))[0].c, 'c');
+        assert_eq!(screen.viewport_row(ViewportLine(1))[1].c, ' ');
+    }
+
+    /// Asserts that `CSI 2 J` clears the whole visible screen.
+    ///
+    /// Case: a full-screen application takes over and wipes whatever
+    /// the shell left behind before its first paint.
+    #[test]
+    fn the_erase_in_display_sequence_clears_the_whole_screen() {
+        let device = interpret(b"ab\x1b[2;1Hcd\x1b[2J");
+        let screen = device.active_screen();
+        assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, ' ');
+        assert_eq!(screen.viewport_row(ViewportLine(1))[0].c, ' ');
+    }
+
+    /// Asserts that an `ED` parameter this terminal does not answer
+    /// leaves the screen alone rather than erasing something.
+    ///
+    /// Case: an application asks for `ED 3` to drop the scrollback,
+    /// which this terminal does not model.
+    #[test]
+    fn an_unanswered_erase_in_display_parameter_erases_nothing() {
+        let device = interpret(b"ab\x1b[3J");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            'a'
+        );
+    }
+
+    /// Asserts that `CSI K` erases from the cursor to the end of the
+    /// row and leaves the rows around it.
+    ///
+    /// Case: a shell redraws a prompt line after the user deletes the
+    /// tail of what they typed.
+    #[test]
+    fn the_erase_in_line_sequence_clears_to_the_end_of_the_row() {
+        let device = interpret(b"abc\x1b[1;2H\x1b[K");
+        let screen = device.active_screen();
+        assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+        assert_eq!(screen.viewport_row(ViewportLine(0))[1].c, ' ');
+    }
+
+    /// Asserts that `CSI 2 K` clears the whole row the cursor sits on.
+    ///
+    /// Case: a status line is rewritten from scratch each time its
+    /// contents change.
+    #[test]
+    fn the_erase_in_line_sequence_clears_the_whole_row() {
+        let device = interpret(b"abc\x1b[1;2H\x1b[2K");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[0].c,
+            ' '
+        );
+    }
+
+    /// Asserts that `CSI I` advances the cursor by whole tab stops.
+    ///
+    /// Case: a program lays out a table by asking for two tab stops
+    /// rather than emitting two horizontal tabs.
+    #[test]
+    fn the_forward_tabulation_sequence_advances_by_stops() {
+        let device = interpret_wide(b"\x1b[2Ix");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[16].c,
+            'x'
+        );
+    }
+
+    /// Asserts that `CSI Z` walks the cursor back by whole tab stops.
+    ///
+    /// Case: a program aligning a column overshoots and steps back one
+    /// stop to line up with the header above it.
+    #[test]
+    fn the_backward_tabulation_sequence_retreats_by_stops() {
+        let device = interpret_wide(b"\x1b[1;20H\x1b[Zx");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[16].c,
+            'x'
+        );
+    }
+
+    /// Asserts that an omitted tabulation count moves one stop, the
+    /// default every `Pn` carries.
+    ///
+    /// Case: a program emits the bare `CSI I` spelling for a single
+    /// tab.
+    #[test]
+    fn an_omitted_tabulation_count_moves_one_stop() {
+        let device = interpret_wide(b"\x1b[Ix");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[8].c,
+            'x'
+        );
+    }
+
+    /// Asserts that a zero tabulation count moves one stop rather than
+    /// standing still.
+    ///
+    /// Case: a program computes its tab count and emits `CSI 0 I` when
+    /// the computation yields nothing to skip.
+    #[test]
+    fn a_zero_tabulation_count_moves_one_stop() {
+        let device = interpret_wide(b"\x1b[0Ix");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[8].c,
+            'x'
+        );
+    }
+
+    /// Asserts that `CSI 3 g` clears every tab stop, so a later tab
+    /// runs to the right edge.
+    ///
+    /// Case: a program installs its own column layout and clears the
+    /// default eight-column stride first.
+    #[test]
+    fn the_tabulation_clear_sequence_clears_every_stop() {
+        let device = interpret_wide(b"\x1b[3g\tx");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[19].c,
+            'x'
+        );
+    }
+
+    /// Asserts that `CSI 0 W` sets a tab stop at the cursor column.
+    ///
+    /// Case: a program installs a stop with the cursor-tabulation
+    /// spelling rather than `HTS`.
+    #[test]
+    fn the_cursor_tabulation_control_sequence_sets_a_stop() {
+        let device = interpret_wide(b"\x1b[3g\x1b[1;4H\x1b[0W\x1b[1;1H\tx");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[3].c,
+            'x'
+        );
+    }
+
+    /// Asserts that `CSI ? 5 W` reinstalls the default eight-column
+    /// stride.
+    ///
+    /// Case: a program clears every stop, lays out its own table, and
+    /// restores the defaults before handing the terminal back.
+    #[test]
+    fn the_tab_stop_reset_sequence_reinstalls_the_default_stride() {
+        let device = interpret_wide(b"\x1b[3g\x1b[?5W\tx");
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(0))[8].c,
+            'x'
         );
     }
 

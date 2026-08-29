@@ -96,6 +96,35 @@ pub(crate) enum EraseScreenMode {
     All,
 }
 
+impl EraseLineMode {
+    /// The span an `EL` (`CSI Ps K`) parameter selects; `None` for a
+    /// value this terminal does not answer.
+    pub fn from_el(ps: u16) -> Option<Self> {
+        match ps {
+            0 => Some(Self::ToEnd),
+            1 => Some(Self::ToStart),
+            2 => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+impl EraseScreenMode {
+    /// The span an `ED` (`CSI Ps J`) parameter selects; `None` for a
+    /// value this terminal does not answer.
+    ///
+    /// `ED 3` erases the scrollback, which this terminal does not model:
+    /// every span here is confined to the visible screen.
+    pub fn from_ed(ps: u16) -> Option<Self> {
+        match ps {
+            0 => Some(Self::Below),
+            1 => Some(Self::Above),
+            2 => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
 /// Construction.
 impl Screen {
     /// Builds a blank screen with the cursor at the origin and the
