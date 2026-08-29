@@ -163,12 +163,13 @@ pub enum VtSignal {
     /// An audible bell has been requested; the consumer is responsible
     /// for audio output or visual feedback (e.g. a flash).
     Bell,
-    /// The application set an OS title string (OSC 0 or OSC 2). The owner
-    /// typically uses this to set the window or tab title.
+    /// The application set an OS title string (OSC 0 or OSC 2). An icon
+    /// name (OSC 1) is ignored, because this terminal carries one title.
     Title(String),
-    /// The application reset the OS title strings to their defaults (OSC 1
-    /// or OSC 2 with an empty argument). The owner typically uses this to
-    /// restore the window or tab title.
+    /// The OS title string returned to the host's default, either
+    /// because `CSI 23 t` restored a saved absence or because `RIS`
+    /// reset the terminal. An empty title is [`VtSignal::Title`] with an
+    /// empty string, not this.
     ResetTitle,
     /// The application copied data to the system clipboard via OSC 52.
     Clipboard {

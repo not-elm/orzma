@@ -13,6 +13,7 @@ mod osc;
 
 use crate::device::modes::KeypadMode;
 use crate::interpreter::csi::CsiParams;
+use crate::interpreter::osc::window_title;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::{
@@ -177,10 +178,7 @@ impl VTActor for Executor<'_> {
             // ST
             (b'\\', []) => {}
             // RIS
-            (b'c', []) => {
-                let damage = self.device.reset();
-                self.stage(damage);
-            }
+            (b'c', []) => self.reset_device(),
             // LS2
             (b'n', []) => self.invoke_character_set(GCode::G2),
             // LS3
@@ -225,6 +223,10 @@ impl VTActor for Executor<'_> {
                 .set_scroll_region(params.value(0), params.value(1)),
             // DA1
             (None, b'c') if params.value(0).unwrap_or(0) == 0 => self.reply(PRIMARY_ATTRIBUTES),
+            // XTWINOPS 22
+            (None, b't') if params.value(0) == Some(22) => self.device.push_title(),
+            // XTWINOPS 23
+            (None, b't') if params.value(0) == Some(23) => self.pop_title(),
             // DECSET
             (Some(b'?'), b'h') => self.set_private_modes(&params, true),
             // DECRST
@@ -237,10 +239,15 @@ impl VTActor for Executor<'_> {
         }
     }
 
-    // TODO: Implement the OSC handlers — the title stack (OSC 0 / 1 /
-    // 2), the palette (OSC 4 / 10 / 11 / 12), the working directory
-    // (OSC 7), hyperlinks (OSC 8), and the clipboard (OSC 52).
-    fn osc_dispatch(&mut self, _params: &[&[u8]]) {}
+    // TODO: Implement the remaining OSC handlers — the palette (OSC 4 /
+    // 10 / 11 / 12), the working directory (OSC 7), hyperlinks (OSC 8),
+    // and the clipboard (OSC 52).
+    fn osc_dispatch(&mut self, params: &[&[u8]]) {
+        if let Some(title) = window_title(params) {
+            self.device.set_title(Some(title.clone()));
+            self.signal(VtSignal::Title(title));
+        }
+    }
 
     // TODO: Implement the APC webview verbs, which mint the placement
     // ids a `VtSignal::WebviewApc` carries.
@@ -302,6 +309,37 @@ impl Executor<'_> {
     /// leaves the chunk liveness alone.
     fn reply(&mut self, bytes: &[u8]) {
         self.output.replies.extend_from_slice(bytes);
+    }
+
+    /// Restores the most recently saved title, reporting the change
+    /// (`XTWINOPS 23`).
+    ///
+    /// A pop that finds the stack empty reports nothing, and one that
+    /// finds an entry holding no title reports the return to the host's
+    /// default rather than an empty title.
+    fn pop_title(&mut self) {
+        let Some(restored) = self.device.pop_title() else {
+            return;
+        };
+        self.device.set_title(restored.clone());
+        match restored {
+            Some(title) => self.signal(VtSignal::Title(title)),
+            None => self.signal(VtSignal::ResetTitle),
+        }
+    }
+
+    /// Returns every screen and mode to its power-up state (RIS),
+    /// reporting the title's return to the host's default.
+    ///
+    /// A reset that finds no title reports nothing, so a terminal that
+    /// was never titled does not wake the host.
+    fn reset_device(&mut self) {
+        let had_title = self.device.title().is_some();
+        let damage = self.device.reset();
+        self.stage(damage);
+        if had_title {
+            self.signal(VtSignal::ResetTitle);
+        }
     }
 }
 
@@ -447,6 +485,109 @@ mod tests {
         let (_device, output) = interpret_fully(b"\x07\x07");
         assert_eq!(output.signals, vec![VtSignal::Bell, VtSignal::Bell]);
         assert!(!output.damaged);
+    }
+
+    /// Asserts that an OS command sets the window title and reports it.
+    ///
+    /// Case: a shell prompt sets the title before printing.
+    #[test]
+    fn a_title_sequence_reports_the_new_title() {
+        let (_device, output) = interpret_fully(b"\x1b]0;hi\x07");
+        assert_eq!(output.signals, vec![VtSignal::Title("hi".to_owned())]);
+    }
+
+    /// Asserts that setting a title leaves the chunk undamaged.
+    ///
+    /// Case: a prompt sets the title without printing anything, and the
+    /// owner must not open a coalesce window for an empty frame.
+    #[test]
+    fn a_title_sequence_leaves_the_chunk_undamaged() {
+        assert!(!damage_of(b"\x1b]0;hi\x07"));
+    }
+
+    /// Asserts that a saved title is restored by a pop.
+    ///
+    /// Case: a full-screen editor saves the shell's title, sets its
+    /// own, and restores it on the way out.
+    #[test]
+    fn a_popped_title_is_restored() {
+        let (_device, output) =
+            interpret_fully(b"\x1b]0;shell\x07\x1b[22t\x1b]0;editor\x07\x1b[23t");
+        assert_eq!(
+            output.signals,
+            vec![
+                VtSignal::Title("shell".to_owned()),
+                VtSignal::Title("editor".to_owned()),
+                VtSignal::Title("shell".to_owned()),
+            ]
+        );
+    }
+
+    /// Asserts that popping an empty stack reports nothing.
+    ///
+    /// Case: a program restores a title it never saved.
+    #[test]
+    fn popping_an_empty_title_stack_reports_nothing() {
+        let (_device, output) = interpret_fully(b"\x1b[23t");
+        assert!(output.signals.is_empty());
+    }
+
+    /// Asserts that popping a title saved before any was set reports a
+    /// reset rather than an empty title.
+    ///
+    /// Case: a program saves the title at startup, sets its own, and
+    /// restores on exit, with the shell having set none.
+    #[test]
+    fn popping_an_unset_title_reports_a_reset() {
+        let (_device, output) = interpret_fully(b"\x1b[22t\x1b]0;editor\x07\x1b[23t");
+        assert_eq!(
+            output.signals,
+            vec![VtSignal::Title("editor".to_owned()), VtSignal::ResetTitle]
+        );
+    }
+
+    /// Asserts that a reset returns the title to its default and says
+    /// so, rather than leaving the host showing a stale one.
+    ///
+    /// Case: the user runs `reset` after a program left a title behind.
+    #[test]
+    fn a_reset_reports_the_title_returning_to_its_default() {
+        let (_device, output) = interpret_fully(b"\x1b]0;hi\x07\x1bc");
+        assert_eq!(
+            output.signals,
+            vec![VtSignal::Title("hi".to_owned()), VtSignal::ResetTitle]
+        );
+    }
+
+    /// Asserts that a reset with no title set reports nothing.
+    ///
+    /// Case: the user runs `reset` twice in a row.
+    #[test]
+    fn a_reset_without_a_title_reports_nothing() {
+        let (_device, output) = interpret_fully(b"\x1bc");
+        assert!(output.signals.is_empty());
+    }
+
+    /// Asserts that a title terminated by ST reaches the same handler
+    /// as one terminated by BEL.
+    ///
+    /// Case: a program that emits the seven-bit string terminator sets
+    /// the window title.
+    #[test]
+    fn a_string_terminator_ends_a_title_too() {
+        let (_device, output) = interpret_fully(b"\x1b]0;hi\x1b\\");
+        assert_eq!(output.signals, vec![VtSignal::Title("hi".to_owned())]);
+    }
+
+    /// Asserts that a window operation carrying a private marker does
+    /// not reach the title stack.
+    ///
+    /// Case: an application sends `CSI > 22 t` to set the title
+    /// modifier, which this terminal does not implement.
+    #[test]
+    fn a_private_window_operation_does_not_reach_the_title_stack() {
+        let (_device, output) = interpret_fully(b"\x1b]0;hi\x07\x1b[>22t\x1b[23t");
+        assert_eq!(output.signals, vec![VtSignal::Title("hi".to_owned())]);
     }
 
     /// Asserts that the raw C1 byte for RI reaches the screen.
