@@ -251,6 +251,16 @@ impl<V: Vt> OrzmaTty<V> {
             let _ = self.pty.write_all(&replies);
         }
 
+        let evicted = self.vt.sweep_evictions();
+        if !evicted.is_empty() {
+            // NOTE: the sweep can strand placements without staging row
+            // damage — RIS on an already-blank screen does — so arming
+            // here is what makes the frame carrying the shortened
+            // placement list get asked for at all.
+            self.coalescer.arm_or_extend(Instant::now());
+            self.pending_signals
+                .extend(evicted.into_iter().map(TtySignal::Vt));
+        }
         let mut signals = mem::take(&mut self.pending_signals);
         if let Some(code) = exit {
             signals.push(TtySignal::ChildExit { code });
@@ -325,6 +335,55 @@ mod tests {
             pending_replies: Vec::new(),
         };
         (term, sink)
+    }
+
+    /// Asserts that a pump reports the signals its eviction sweep
+    /// raised, without any PTY output to carry them.
+    ///
+    /// Case: the user drags the window shorter, dropping the anchor
+    /// row of a mounted webview out of scrollback, and types nothing
+    /// afterwards.
+    #[test]
+    fn a_pump_reports_what_the_eviction_sweep_raised() {
+        let (mut tty, _sink) = detached_term();
+        tty.vt.sweeps.push_back(vec![VtSignal::WebviewEvicted {
+            placements: vec![PlacementId(7)],
+        }]);
+        let output = tty.pump();
+        assert_eq!(
+            output.signals,
+            vec![TtySignal::Vt(VtSignal::WebviewEvicted {
+                placements: vec![PlacementId(7)]
+            })]
+        );
+    }
+
+    /// Asserts that an eviction arms the coalesce window, so the frame
+    /// carrying the shortened placement list is asked for.
+    ///
+    /// Case: `RIS` strands a webview on an already-blank screen, which
+    /// stages no row damage of its own.
+    #[test]
+    fn an_eviction_arms_the_coalesce_window() {
+        let (mut tty, _sink) = detached_term();
+        tty.vt.sweeps.push_back(vec![VtSignal::WebviewEvicted {
+            placements: vec![PlacementId(7)],
+        }]);
+        tty.pump();
+        assert!(tty.coalescer.is_armed());
+    }
+
+    /// Asserts that a pump with nothing evicted raises no signal and
+    /// arms nothing.
+    ///
+    /// Case: the host pumps a quiet terminal that has no webviews
+    /// mounted, which is every pump on a plain shell session.
+    #[test]
+    fn a_pump_with_nothing_evicted_raises_nothing() {
+        let (mut tty, _sink) = detached_term();
+        let output = tty.pump();
+        assert!(output.signals.is_empty());
+        assert!(!tty.coalescer.is_armed());
     }
 
     fn failing_term() -> OrzmaTty<FakeVt> {
