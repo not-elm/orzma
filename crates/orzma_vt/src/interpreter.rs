@@ -9,6 +9,7 @@
 pub(crate) mod apc;
 
 mod csi;
+mod osc;
 
 use crate::device::modes::KeypadMode;
 use crate::interpreter::csi::CsiParams;
