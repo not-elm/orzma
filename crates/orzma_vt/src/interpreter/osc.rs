@@ -8,6 +8,10 @@
 /// carries no text at all also returns `None`, rather than emptying the
 /// title.
 ///
+/// The parser splits an operating system command on every `;`, so a
+/// title carrying one arrives in pieces and the tail is rejoined before
+/// anything else runs.
+///
 /// The title is sanitized before it leaves this function because
 /// `OSC 0` and `OSC 2` content is fully attacker-controlled, and
 /// [`crate::VtSignal::Title`] carries it across the crate boundary.
@@ -40,14 +44,17 @@ const MAX_LEN: usize = 256;
 fn sanitize(raw: &str) -> String {
     let stripped: String = raw.chars().filter(|c| !is_disallowed(*c)).collect();
     let trimmed = stripped.trim();
-    if trimmed.chars().count() > MAX_LEN {
-        let mut truncated: String = trimmed.chars().take(MAX_LEN - 1).collect();
-        truncated.truncate(truncated.trim_end().len());
-        truncated.push('…');
-        truncated
-    } else {
-        trimmed.to_owned()
+    let mut boundary = trimmed.char_indices().skip(MAX_LEN - 1);
+    let Some((cut, _)) = boundary.next() else {
+        return trimmed.to_owned();
+    };
+    if boundary.next().is_none() {
+        return trimmed.to_owned();
     }
+    let mut truncated = trimmed[..cut].to_owned();
+    truncated.truncate(truncated.trim_end().len());
+    truncated.push('…');
+    truncated
 }
 
 /// Whether a character must not reach a window title.
@@ -64,17 +71,22 @@ fn sanitize(raw: &str) -> String {
 /// because text the reader cannot see can hide inside a title that
 /// looks benign.
 fn is_disallowed(c: char) -> bool {
+    // NOTE: the arms are grouped to match the three groups the doc
+    // above names, so the two can be checked against each other line by
+    // line. Merging the adjacent ranges across groups would be shorter
+    // and would break that correspondence.
     c.is_control()
+        || matches!(c, '\u{2028}'..='\u{2029}')
+        || matches!(
+            c,
+            '\u{061C}' | '\u{200E}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
         || matches!(
             c,
             '\u{00AD}'
-                | '\u{061C}'
                 | '\u{180E}'
-                | '\u{200B}'..='\u{200F}'
-                | '\u{2028}'..='\u{2029}'
-                | '\u{202A}'..='\u{202E}'
+                | '\u{200B}'..='\u{200D}'
                 | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{2069}'
                 | '\u{FEFF}'
                 | '\u{FFF9}'..='\u{FFFB}'
                 | '\u{E0000}'..='\u{E007F}'
