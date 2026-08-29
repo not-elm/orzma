@@ -24,6 +24,12 @@ impl<T: Clone> Row<T> {
     pub fn filled(len: u16, fill: T) -> Self {
         Self(vec![fill; usize::from(len)])
     }
+
+    /// Grows the row to `len` with copies of `fill`, or truncates it
+    /// to `len`, keeping the elements the two lengths share.
+    pub fn resize(&mut self, len: u16, fill: T) {
+        self.0.resize(usize::from(len), fill);
+    }
 }
 
 impl Row<Cell> {
@@ -127,6 +133,48 @@ mod tests {
             c,
             ..Cell::default()
         }
+    }
+
+    /// Asserts that a resize to a longer length appends copies of the
+    /// fill and leaves the existing elements untouched.
+    ///
+    /// Case: the user widens the terminal window, so every stored row
+    /// has to gain blank cells on its right.
+    #[test]
+    fn a_resize_to_a_longer_length_appends_the_fill() {
+        let mut row = Row::from(vec![plain('a'), plain('b')]);
+        row.resize(4, plain('.'));
+        assert_eq!(row.len(), 4);
+        assert_eq!(row[0].c, 'a');
+        assert_eq!(row[2].c, '.');
+        assert_eq!(row[3].c, '.');
+    }
+
+    /// Asserts that a resize to a shorter length drops the elements past
+    /// the new end and keeps the ones before it.
+    ///
+    /// Case: the user drags the window narrower, so every stored row
+    /// loses the columns that no longer fit.
+    #[test]
+    fn a_resize_to_a_shorter_length_drops_the_tail() {
+        let mut row = Row::from(vec![plain('a'), plain('b'), plain('c'), plain('d')]);
+        row.resize(2, Cell::default());
+        assert_eq!(row.len(), 2);
+        assert_eq!(row[0].c, 'a');
+        assert_eq!(row[1].c, 'b');
+    }
+
+    /// Asserts that a resize to the length the row already has leaves it
+    /// unchanged.
+    ///
+    /// Case: a height-only resize runs the width pass over every row
+    /// even though the column count did not move.
+    #[test]
+    fn a_resize_to_the_same_length_changes_nothing() {
+        let mut row = Row::from(vec![plain('a'), plain('b'), plain('c')]);
+        row.resize(3, Cell::default());
+        assert_eq!(row.len(), 3);
+        assert_eq!(row[1].c, 'b');
     }
 
     /// Asserts that adjacent cells with identical attributes become one
