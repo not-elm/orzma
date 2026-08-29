@@ -672,8 +672,8 @@ mod tests {
     use bevy_orzma_tty::prelude::{TtyApcWebviewSignal, TtyWebviewEvictedSignal};
     use orzma_tty_renderer::CellMetrics;
     use orzma_vt::prelude::{
-        AnchoredPlacement, WebviewApcVerb, GridColumn, GridLine, GridPoint, PlacementId,
-        PlacementSize,
+        AnchoredPlacement, GridColumn, GridLine, GridPoint, PlacementId, PlacementSize,
+        WebviewApcVerb,
     };
 
     fn make_test_app() -> App {
