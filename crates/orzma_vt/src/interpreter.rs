@@ -223,6 +223,14 @@ impl VTActor for Executor<'_> {
                 .set_scroll_region(params.value(0), params.value(1)),
             // DA1
             (None, b'c') if params.value(0).unwrap_or(0) == 0 => self.reply(PRIMARY_ATTRIBUTES),
+            // NOTE: Title reporting (`CSI 20 t` for the icon label, `CSI
+            // 21 t` for the window title) is deliberately not implemented.
+            // The real attack surface of terminal titles is the report
+            // direction, not the set direction: an attacker sets a title
+            // containing a shell command and then asks the terminal to
+            // report it back into the shell's input. Several terminals
+            // shipped exploitable versions of this (ConEmu's variant was
+            // CVE-2022-46387 and CVE-2023-39150).
             // XTWINOPS 22
             (None, b't') if params.value(0) == Some(22) => self.device.push_title(),
             // XTWINOPS 23
@@ -511,7 +519,7 @@ mod tests {
     /// own, and restores it on the way out.
     #[test]
     fn a_popped_title_is_restored() {
-        let (_device, output) =
+        let (device, output) =
             interpret_fully(b"\x1b]0;shell\x07\x1b[22t\x1b]0;editor\x07\x1b[23t");
         assert_eq!(
             output.signals,
@@ -521,6 +529,7 @@ mod tests {
                 VtSignal::Title("shell".to_owned()),
             ]
         );
+        assert_eq!(device.title(), Some("shell"));
     }
 
     /// Asserts that popping an empty stack reports nothing.
@@ -539,11 +548,12 @@ mod tests {
     /// restores on exit, with the shell having set none.
     #[test]
     fn popping_an_unset_title_reports_a_reset() {
-        let (_device, output) = interpret_fully(b"\x1b[22t\x1b]0;editor\x07\x1b[23t");
+        let (device, output) = interpret_fully(b"\x1b[22t\x1b]0;editor\x07\x1b[23t");
         assert_eq!(
             output.signals,
             vec![VtSignal::Title("editor".to_owned()), VtSignal::ResetTitle]
         );
+        assert_eq!(device.title(), None);
     }
 
     /// Asserts that a reset returns the title to its default and says

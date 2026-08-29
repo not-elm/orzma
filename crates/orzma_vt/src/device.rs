@@ -112,6 +112,12 @@ impl DeviceState {
     /// repaints, because the implicit return to the primary screen
     /// replaces the whole viewport.
     ///
+    /// The title is cleared too: `self.title` returns to
+    /// [`TitleState::default`], dropping both the current title and the
+    /// whole save stack. This is a deliberate departure from alacritty,
+    /// which clears its title silently and leaves the host showing a
+    /// stale one.
+    ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`)

@@ -6,7 +6,9 @@
 use std::iter::once;
 
 /// The sanitized window title an `OSC 0` or `OSC 2` sets, or `None` for
-/// every other operating system command.
+/// every other operating system command. An `OSC 0` or `OSC 2` that
+/// carries no text at all also returns `None`, rather than emptying the
+/// title.
 ///
 /// The title is sanitized before it leaves this function because
 /// `OSC 0` and `OSC 2` content is fully attacker-controlled, and
@@ -47,13 +49,13 @@ fn sanitize(raw: &str) -> String {
 
 /// Whether a character must not reach a window title.
 ///
-/// Three groups are refused. The control characters, because a title is
-/// rendered as text and must not steer the surface drawing it. The
-/// whole `Bidi_Control` property — U+061C, U+200E..U+200F,
-/// U+202A..U+202E, and U+2066..U+2069 — because a title that reorders
-/// itself can impersonate another program. And the zero-width
-/// characters U+200B..U+200D and U+FEFF, because text that occupies no
-/// space can hide inside a title that looks benign.
+/// Three groups are refused. The control characters are refused because
+/// a title is rendered as text and must not steer the surface drawing
+/// it. The whole `Bidi_Control` property — U+061C, U+200E..U+200F,
+/// U+202A..U+202E, and U+2066..U+2069 — is refused because a title that
+/// reorders itself can impersonate another program. And the zero-width
+/// characters U+200B..U+200D and U+FEFF are refused because text that
+/// occupies no space can hide inside a title that looks benign.
 fn is_disallowed(c: char) -> bool {
     c.is_control()
         || matches!(
@@ -175,5 +177,17 @@ mod tests {
         let title = window_title(&[b"0", raw.as_bytes()]).expect("OSC 0 sets a title");
         assert_eq!(title.chars().count(), 256);
         assert!(title.ends_with('…'));
+    }
+
+    /// Asserts that a title of exactly the maximum length passes through
+    /// untouched, rather than being truncated at the boundary.
+    ///
+    /// Case: a program sets a title exactly `MAX_LEN` characters long.
+    #[test]
+    fn a_title_at_the_max_length_is_not_truncated() {
+        let raw = "x".repeat(MAX_LEN);
+        let title = window_title(&[b"0", raw.as_bytes()]).expect("OSC 0 sets a title");
+        assert_eq!(title.chars().count(), MAX_LEN);
+        assert!(!title.ends_with('…'));
     }
 }
