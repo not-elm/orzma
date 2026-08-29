@@ -240,6 +240,56 @@ impl Grid {
         self.rows.len() - usize::from(self.size.rows)
     }
 
+    /// Resizes the grid, truncating rather than reflowing; returns
+    /// whether the dimensions changed.
+    ///
+    /// A shrink drops rows from the bottom. Pushing rows off the top
+    /// into history is the caller's job, done before this call: it owns
+    /// the cursor that decides how many rows must go, and the viewport
+    /// that has to follow them.
+    ///
+    /// # Invariants
+    ///
+    /// Rows this appends carry freshly minted ids, so an anchor taken
+    /// before the resize can never resolve to one of them.
+    pub fn resize(&mut self, size: GridSize) -> bool {
+        if self.size == size {
+            return false;
+        }
+        self.resize_rows(size.rows);
+        self.resize_cols(size.cols);
+        true
+    }
+
+    fn resize_rows(&mut self, rows: u16) {
+        let old = self.size.rows;
+        if rows < old {
+            let dropped = usize::from(old - rows);
+            self.rows.truncate(self.rows.len() - dropped);
+        } else if old < rows {
+            let growth = usize::from(rows - old);
+            let appended = growth.saturating_sub(self.history_len());
+            for _ in 0..appended {
+                let id = self.mint();
+                self.rows.push_back(GridRow {
+                    id,
+                    cells: Row::filled(self.size.cols, Cell::default()),
+                });
+            }
+        }
+        self.size.rows = rows;
+    }
+
+    fn resize_cols(&mut self, cols: u16) {
+        if self.size.cols == cols {
+            return;
+        }
+        for row in &mut self.rows {
+            row.cells.resize(cols, Cell::default());
+        }
+        self.size.cols = cols;
+    }
+
     /// Hands out the next unused row id.
     ///
     /// # Invariants
@@ -292,6 +342,164 @@ mod tests {
     fn scroll_up_whole_screen(grid: &mut Grid, fill: Cell) {
         let bottom = ScreenLine(grid.size().rows - 1);
         grid.scroll_up_one(ScreenLine(0), bottom, fill);
+    }
+
+    /// Asserts that a resize to the size the grid already has reports
+    /// no change and leaves the ring alone.
+    ///
+    /// Case: the window manager replays the same geometry after a
+    /// focus change, so the host forwards a size the VT already holds.
+    #[test]
+    fn a_resize_to_the_current_size_reports_no_change() {
+        let mut grid = grid(3, 10);
+        grid[ScreenLine(0)][0].c = 'a';
+        assert!(!grid.resize(GridSize { cols: 4, rows: 3 }));
+        assert_eq!(grid[ScreenLine(0)][0].c, 'a');
+    }
+
+    /// Asserts that a shrink drops rows from the bottom and leaves the
+    /// top ones on screen.
+    ///
+    /// Case: a short `ls` leaves its output near the top of a tall
+    /// window and the user drags the window shorter.
+    #[test]
+    fn a_shrink_drops_rows_from_the_bottom() {
+        let mut grid = grid(4, 10);
+        grid[ScreenLine(0)][0].c = 'a';
+        grid[ScreenLine(1)][0].c = 'b';
+        assert!(grid.resize(GridSize { cols: 4, rows: 2 }));
+        assert_eq!(grid.size().rows, 2);
+        assert_eq!(grid.history_len(), 0);
+        assert_eq!(grid[ScreenLine(0)][0].c, 'a');
+        assert_eq!(grid[ScreenLine(1)][0].c, 'b');
+    }
+
+    /// Asserts that a shrink keeps the rows a preceding scroll handed
+    /// to history and drops only the blanks that scroll left behind.
+    ///
+    /// Case: the shell's prompt sits on the last row of a tall window
+    /// and the user drags the window shorter, so `Screen::resize`
+    /// scrolls before it resizes.
+    #[test]
+    fn a_shrink_after_a_scroll_keeps_what_the_scroll_saved() {
+        let mut grid = grid(4, 10);
+        for line in 0..4 {
+            grid[ScreenLine(line)][0].c = char::from(b'a' + line as u8);
+        }
+        scroll_up_whole_screen(&mut grid, Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
+        assert!(grid.resize(GridSize { cols: 4, rows: 2 }));
+        assert_eq!(grid.size().rows, 2);
+        assert_eq!(grid.history_len(), 2);
+        assert_eq!(grid[ScreenLine(0)][0].c, 'c');
+        assert_eq!(grid[ScreenLine(1)][0].c, 'd');
+        assert_eq!(grid.row(GridLine(-1))[0].c, 'b');
+        assert_eq!(grid.row(GridLine(-2))[0].c, 'a');
+    }
+
+    /// Asserts that the same shrink works when the preceding scrolls
+    /// ran against a full history and so recycled rows instead of
+    /// lengthening the ring.
+    ///
+    /// Case: a long-running session has filled its scrollback to the
+    /// cap when the user drags the window shorter.
+    #[test]
+    fn a_shrink_after_a_scroll_at_the_history_cap_keeps_what_the_scroll_saved() {
+        let mut grid = grid(4, 2);
+        for line in 0..4 {
+            grid[ScreenLine(line)][0].c = char::from(b'a' + line as u8);
+        }
+        scroll_up_whole_screen(&mut grid, Cell::default());
+        scroll_up_whole_screen(&mut grid, Cell::default());
+        assert_eq!(grid.history_len(), 2);
+        scroll_up_whole_screen(&mut grid, Cell::default());
+        assert_eq!(grid.history_len(), 2);
+        assert!(grid.resize(GridSize { cols: 4, rows: 2 }));
+        assert_eq!(grid.size().rows, 2);
+        assert_eq!(grid.history_len(), 2);
+        assert_eq!(grid[ScreenLine(0)][0].c, 'd');
+        assert_eq!(grid.row(GridLine(-1))[0].c, 'c');
+    }
+
+    /// Asserts that a growth pulls rows back out of history before it
+    /// appends blank ones.
+    ///
+    /// Case: the user drags a window taller after scrolling output
+    /// off the top, and expects the earlier lines back rather than
+    /// blank space.
+    #[test]
+    fn a_growth_reclaims_history_before_it_appends_blanks() {
+        let mut grid = grid(2, 10);
+        grid[ScreenLine(0)][0].c = 'a';
+        grid[ScreenLine(1)][0].c = 'b';
+        scroll_up_whole_screen(&mut grid, Cell::default());
+        assert_eq!(grid.history_len(), 1);
+        assert!(grid.resize(GridSize { cols: 4, rows: 3 }));
+        assert_eq!(grid.size().rows, 3);
+        assert_eq!(grid.history_len(), 0);
+        assert_eq!(grid[ScreenLine(0)][0].c, 'a');
+        assert_eq!(grid[ScreenLine(1)][0].c, 'b');
+    }
+
+    /// Asserts that a growth beyond the history that exists appends
+    /// blank rows at the bottom for the remainder.
+    ///
+    /// Case: the user drags a fresh window taller before any output
+    /// has scrolled off, so there is no history to reclaim.
+    #[test]
+    fn a_growth_past_the_history_appends_blank_rows() {
+        let mut grid = grid(2, 10);
+        grid[ScreenLine(0)][0].c = 'a';
+        assert!(grid.resize(GridSize { cols: 4, rows: 4 }));
+        assert_eq!(grid.size().rows, 4);
+        assert_eq!(grid.history_len(), 0);
+        assert_eq!(grid[ScreenLine(0)][0].c, 'a');
+        assert_eq!(grid[ScreenLine(3)][0], Cell::default());
+    }
+
+    /// Asserts that a narrowing truncates the history rows as well as
+    /// the visible ones.
+    ///
+    /// Case: the user narrows a window whose earlier output has
+    /// already scrolled into scrollback.
+    #[test]
+    fn a_narrowing_truncates_the_history_rows_too() {
+        let mut grid = grid(2, 10);
+        grid[ScreenLine(0)][3].c = 'x';
+        scroll_up_whole_screen(&mut grid, Cell::default());
+        assert_eq!(grid.history_len(), 1);
+        assert!(grid.resize(GridSize { cols: 2, rows: 2 }));
+        assert_eq!(grid.row(GridLine(-1)).len(), 2);
+        assert_eq!(grid[ScreenLine(0)].len(), 2);
+    }
+
+    /// Asserts that a widening pads every row in the ring with default
+    /// cells.
+    ///
+    /// Case: the user widens a window whose earlier output has already
+    /// scrolled into scrollback.
+    #[test]
+    fn a_widening_pads_every_row_in_the_ring() {
+        let mut grid = grid(2, 10);
+        scroll_up_whole_screen(&mut grid, Cell::default());
+        assert!(grid.resize(GridSize { cols: 6, rows: 2 }));
+        assert_eq!(grid.row(GridLine(-1)).len(), 6);
+        assert_eq!(grid[ScreenLine(0)].len(), 6);
+        assert_eq!(grid[ScreenLine(0)][5], Cell::default());
+    }
+
+    /// Asserts that the rows a growth appends carry freshly minted
+    /// ids rather than ids an anchor may still hold.
+    ///
+    /// Case: a webview is anchored to a row, the window shrinks so the
+    /// row leaves, and the window grows again.
+    #[test]
+    fn a_growth_mints_fresh_ids_for_the_rows_it_appends() {
+        let mut grid = grid(2, 10);
+        let before = grid.line_id(ScreenLine(1));
+        assert!(grid.resize(GridSize { cols: 4, rows: 4 }));
+        assert_ne!(grid.line_id(ScreenLine(2)), before);
+        assert_ne!(grid.line_id(ScreenLine(3)), before);
     }
 
     /// Asserts that grid line zero borrows the top row of the active
