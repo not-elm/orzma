@@ -41,6 +41,10 @@ impl DeviceState {
     /// application has nothing to scroll back to, and its viewport stays
     /// pinned to the live tail.
     pub fn new(size: GridSize, max_history: usize) -> Self {
+        debug_assert!(
+            size.cols > 0 && size.rows > 0,
+            "a degenerate grid size is rejected before it reaches the device"
+        );
         Self {
             screens: Screens {
                 primary: Screen::new(size, max_history),
@@ -71,8 +75,8 @@ impl DeviceState {
         }
     }
 
-    /// Resizes both screens, reflowing content; `None` when the
-    /// dimensions already matched.
+    /// Resizes both screens, truncating rather than reflowing; `None`
+    /// when the dimensions already matched.
     ///
     /// # Invariants
     ///
@@ -80,13 +84,28 @@ impl DeviceState {
     /// [`DamageSpan::Full`]: every emitted frame carries the new size but
     /// nothing diffs it, so partial row damage would hand the renderer
     /// new dimensions with stale rows behind them.
-    // TODO: A rewrap can insert or drop rows in the middle of the ring,
-    // and can split or merge them, so a surviving placement anchor has to
-    // be told which resulting row it now belongs to. Once reflow lands,
-    // route the row remapping it produces to each screen's placement
-    // table so it can re-anchor each placement to its surviving row.
-    pub fn resize(&mut self, _size: GridSize) -> Option<DamageSpan> {
-        todo!()
+    ///
+    /// Both axes are nonzero. A zero row count underflows
+    /// `Margins::new`, which [`Self::new`] already reaches through
+    /// `Screen::new`, so construction asserts the same precondition
+    /// before this method is ever called.
+    ///
+    /// Placements this strands are not named here. The anchors simply
+    /// stop resolving, and the next [`Self::evict_lost_anchors`] names
+    /// them — the same contract [`Screen::reset`] relies on.
+    ///
+    /// Reflow would land in `Grid`, on a wrap flag `Screen::print` sets
+    /// where it defers a wrap; the placement table would then need each
+    /// anchor re-pointed at the row its content survived on.
+    pub fn resize(&mut self, size: GridSize) -> Option<DamageSpan> {
+        debug_assert!(
+            size.cols > 0 && size.rows > 0,
+            "a degenerate grid size is rejected before it reaches the device"
+        );
+        let showing_primary = matches!(self.modes.active_screen, ScreenKind::Primary);
+        let primary = self.screens.primary.resize(size);
+        let alternate = self.screens.alternate.resize(size);
+        if showing_primary { primary } else { alternate }
     }
 
     /// Moves the active viewport; `None` for a clamped or zero motion.
@@ -369,6 +388,57 @@ mod tests {
 
     fn mount(device: &mut DeviceState, view: &str) -> Option<PlacementId> {
         device.mount_placement(PlacementSize { rows: 2, cols: 4 }, view.to_string(), None)
+    }
+
+    /// Asserts that a resize to the size the device already has
+    /// reports no damage.
+    ///
+    /// Case: the window manager replays the same geometry after a
+    /// focus change, so the host forwards a size the VT already holds.
+    #[test]
+    fn a_resize_to_the_current_size_reports_nothing() {
+        let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
+        assert_eq!(device.resize(GridSize { cols: 4, rows: 3 }), None);
+    }
+
+    /// Asserts that a resize reports full damage and applies to both
+    /// screens, not only the one on show.
+    ///
+    /// Case: the user resizes the window while a full-screen editor is
+    /// running, then quits it back to the shell.
+    #[test]
+    fn a_resize_applies_to_both_screens() {
+        let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
+        assert_eq!(
+            device.resize(GridSize { cols: 8, rows: 5 }),
+            Some(DamageSpan::Full)
+        );
+        assert_eq!(
+            device.active_screen().grid_size(),
+            GridSize { cols: 8, rows: 5 }
+        );
+        device.switch_screen(ScreenKind::Alternate);
+        assert_eq!(
+            device.active_screen().grid_size(),
+            GridSize { cols: 8, rows: 5 }
+        );
+    }
+
+    /// Asserts that a shrink deep enough to drop an anchor row out of
+    /// history leaves that placement evictable.
+    ///
+    /// Case: a webview is mounted near the top of a short-scrollback
+    /// window and the user drags the window much shorter.
+    #[test]
+    fn a_shrink_past_the_history_cap_leaves_its_placements_evictable() {
+        let mut device = DeviceState::new(GridSize { cols: 4, rows: 4 }, 0);
+        let id = mount(&mut device, "v").expect("a mount under the cap is accepted");
+        device.active_screen_mut().move_cursor_to(Some(4), None);
+        assert_eq!(
+            device.resize(GridSize { cols: 4, rows: 2 }),
+            Some(DamageSpan::Full)
+        );
+        assert_eq!(device.evict_lost_anchors(), vec![id]);
     }
 
     /// Asserts that a stop set on one screen is absent from the other.
