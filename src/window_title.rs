@@ -94,6 +94,11 @@ mod tests {
             .clone()
     }
 
+    /// Asserts that the primary window's title follows the focused
+    /// terminal's `TtyTitle`.
+    ///
+    /// Case: the user runs `vim` in the terminal that currently holds
+    /// keyboard focus.
     #[test]
     fn system_sets_focused_terminal_title() {
         let mut app = App::new();
@@ -129,6 +134,11 @@ mod tests {
         assert_eq!(primary_window_title(&mut app), "orzma");
     }
 
+    /// Asserts that the primary window keeps its last title when a
+    /// terminal exists but none is focused.
+    ///
+    /// Case: focus moves away from the terminal, such as to a webview,
+    /// while the terminal keeps running in the background.
     #[test]
     fn holds_last_title_when_terminal_exists_but_unfocused() {
         let mut app = App::new();
