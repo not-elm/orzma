@@ -61,8 +61,9 @@ DECRPMの`Pm`は 0=未認識 / 1=設定 / 2=解除 / 3=恒久設定 / 4=恒久�
 Xterm自身がterminfoベースのアプリには47ではなくこれを使えと書いている。ctlseqsの散文は1049のresetを
 「1047と1048の合成」と書くが、xtermの実装（`charproc.c`）は`?1049l`で消去しない。本実装は実装側に従う。
 
-- **べき等**: 代替画面上でのDECSET、通常画面上でのDECRSTは完全なno-op（damageもsignalも出ず、1049の
-  DECSC/DECRCも走らない）。alacrittyと同じ。xtermは切替が起きなくてもCursorSave/CursorRestoreする。
+- **べき等**: 代替画面上での DECSET（47 / 1047 / 1049）、通常画面上での DECRST は完全な no-op
+  （damageもsignalも出ず、1049のDECSC/DECRCも走らない）。alacrittyと同じ。xtermは切替が起きなくても
+  CursorSave/CursorRestoreする。
 - **カーソルは画面ごと**: flipは位置もpenも持ち越さない。1049の往復はprimary側の`Checkpoint`で復元される
   （xtermのDECSCスロットも`sc[whichBuf]`でバッファごと）。alt画面のcursor/pen/margins/tabsは前回の
   altセッションから残り、1049の消去はその残ったpenの背景でセルを埋める。

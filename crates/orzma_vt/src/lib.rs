@@ -493,6 +493,7 @@ mod tests {
         vt.interpret(b"\x1b[?1049h");
         let entered = vt.frame().expect("a flip emits");
         assert_eq!(entered.display_offset, DisplayOffset(0));
+        assert_eq!(entered.rows.len(), 3);
 
         vt.interpret(b"\x1b[?1049l");
         let returned = vt.frame().expect("the flip back emits");

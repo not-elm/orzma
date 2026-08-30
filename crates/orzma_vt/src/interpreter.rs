@@ -495,20 +495,20 @@ impl Executor<'_> {
     ///
     /// The set checks the active screen itself instead of trusting the
     /// flip helper's guard, because the save has to run before the flip
-    /// and must not run at all when the alternate screen is already
-    /// shown — it would overwrite that screen's DECSC slot. `DeviceState`
-    /// has no primary-screen accessor, so "save on the primary" is
-    /// expressible only while the primary is the active screen.
+    /// and must run only while the primary screen is the one shown —
+    /// saving on the alternate screen would overwrite that screen's
+    /// DECSC slot. `DeviceState` has no primary-screen accessor, so
+    /// "save on the primary" is expressible only while the primary is
+    /// the active screen.
     ///
     /// The reset restores only when a flip happened, so a stray
     /// `DECRST 1049` on the primary screen leaves the cursor alone.
     fn set_alternate_screen_with_cursor(&mut self, enabled: bool) {
         if enabled {
-            if self.device.modes().active_screen == ScreenKind::Alternate {
-                return;
+            if self.device.modes().active_screen == ScreenKind::Primary {
+                self.device.active_screen_mut().save_checkpoint();
+                self.switch_to_alternate_screen(true);
             }
-            self.device.active_screen_mut().save_checkpoint();
-            self.switch_to_alternate_screen(true);
         } else if self.switch_to_primary_screen() {
             self.device.active_screen_mut().restore_checkpoint();
         }
@@ -521,8 +521,8 @@ impl Executor<'_> {
     /// The erase runs before the flip because it must reach the
     /// alternate screen, and it is guarded on the alternate screen being
     /// active so a stray reset on the primary screen erases nothing.
-    /// The row damage it stages is harmless: the flip's `Full` replaces
-    /// it, and the damage ledger records no screen.
+    /// The `Full` damage it stages is redundant with the flip's own
+    /// `Full`, and the damage ledger records no screen.
     fn set_alternate_screen_erased_on_exit(&mut self, enabled: bool) {
         if enabled {
             self.switch_to_alternate_screen(false);
@@ -538,8 +538,9 @@ impl Executor<'_> {
         self.switch_to_primary_screen();
     }
 
-    /// Shows the alternate screen, erasing it first when `erase` is
-    /// set. Already showing it is a no-op: no repaint, no erase.
+    /// Shows the alternate screen, blanking it on the way in when
+    /// `erase` is set. Already showing it is a no-op: no repaint, no
+    /// erase.
     ///
     /// The erase runs after the flip because it must reach the
     /// alternate screen, and `active_screen_mut` is the only way to a
