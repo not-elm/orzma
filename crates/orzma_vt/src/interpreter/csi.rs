@@ -48,45 +48,51 @@ impl<'a> CsiParams<'a> {
         !self.intermediates.is_empty()
     }
 
+    /// The `;`-separated groups, each carrying its own `:`
+    /// subparameters and their separators.
+    ///
+    /// # Invariants
+    ///
+    /// An empty sequence yields ONE empty group, not none: a bare
+    /// `CSI m` is `SGR 0`, and an empty group is every control
+    /// function's own default. [`Self::values`] deliberately reports no
+    /// slots for that same input, because a bare `CSI H` listed no
+    /// parameters at all — the two views answer different questions.
+    pub(crate) fn groups(&self) -> impl Iterator<Item = &'a [CsiParam]> {
+        self.values
+            .split(|param| matches!(param, CsiParam::P(b';')))
+    }
+
     /// The first value of the `index`-th separated slot; `None` when the
     /// slot was omitted or does not exist.
     ///
     /// A zero reads as `Some(0)`: whether a zero means the default is
     /// each control function's own rule.
     pub(crate) fn value(&self, index: usize) -> Option<u16> {
-        let mut slot = 0;
-        for param in self.values {
-            match param {
-                CsiParam::P(b';') => {
-                    if slot == index {
-                        return None;
-                    }
-                    slot += 1;
-                }
-                CsiParam::Integer(value) if slot == index => {
-                    return Some(u16::try_from(*value).unwrap_or(u16::MAX));
-                }
-                _ => {}
-            }
-        }
-        None
+        self.values().nth(index).flatten()
     }
 
     /// Every separated slot in order, which is what `SM` and `RM` need
     /// to find the modes they implement among the ones they do not.
     pub(crate) fn values(&self) -> impl Iterator<Item = Option<u16>> + '_ {
-        (0..self.slot_count()).map(|index| self.value(index))
+        let listed = (!self.values.is_empty()).then(|| self.groups());
+        listed.into_iter().flatten().map(Self::first_value)
     }
 
-    fn slot_count(&self) -> usize {
-        if self.values.is_empty() {
-            return 0;
-        }
-        1 + self
-            .values
-            .iter()
-            .filter(|param| matches!(param, CsiParam::P(b';')))
-            .count()
+    /// The saturating `u16` a slot's first integer reads as; `None` for
+    /// a slot that carries none.
+    ///
+    /// # Invariants
+    ///
+    /// Saturation is right for a slot count or a mode number, where an
+    /// oversized value is out of range whichever way it is clamped. It
+    /// is wrong for a colour component, so `SGR` decodes its own
+    /// subparameters rather than reading them through here.
+    fn first_value(group: &[CsiParam]) -> Option<u16> {
+        group.iter().find_map(|param| match param {
+            CsiParam::Integer(value) => Some(u16::try_from(*value).unwrap_or(u16::MAX)),
+            _ => None,
+        })
     }
 }
 
@@ -208,6 +214,63 @@ mod tests {
         ];
         let params = CsiParams::parse(&params);
         assert_eq!(params.values().collect::<Vec<_>>(), vec![Some(1), Some(6)]);
+    }
+
+    /// Asserts that an empty sequence yields one empty group, which is
+    /// how a bare `CSI m` reads as `SGR 0`.
+    ///
+    /// Case: an application resets every attribute with the shortest
+    /// spelling the standard allows.
+    #[test]
+    fn an_empty_sequence_yields_one_empty_group() {
+        let params = CsiParams::parse(&[]);
+        let groups: Vec<_> = params.groups().collect();
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0].is_empty());
+    }
+
+    /// Asserts that a colon group arrives whole, with its separators
+    /// and every subparameter still in place.
+    ///
+    /// Case: an application sets a direct colour with the standard
+    /// colon spelling `CSI 38:2::1:2:3 m`.
+    #[test]
+    fn a_colon_group_arrives_whole() {
+        let params = [
+            CsiParam::Integer(38),
+            CsiParam::P(b':'),
+            CsiParam::Integer(2),
+            CsiParam::P(b':'),
+            CsiParam::P(b':'),
+            CsiParam::Integer(1),
+            CsiParam::P(b':'),
+            CsiParam::Integer(2),
+            CsiParam::P(b':'),
+            CsiParam::Integer(3),
+        ];
+        let params = CsiParams::parse(&params);
+        let groups: Vec<_> = params.groups().collect();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 10);
+    }
+
+    /// Asserts that an omitted slot arrives as an empty group rather
+    /// than vanishing.
+    ///
+    /// Case: an application spells `CSI 1;;31 m`, where the middle slot
+    /// is a reset.
+    #[test]
+    fn an_omitted_slot_is_an_empty_group() {
+        let params = [
+            CsiParam::Integer(1),
+            CsiParam::P(b';'),
+            CsiParam::P(b';'),
+            CsiParam::Integer(31),
+        ];
+        let params = CsiParams::parse(&params);
+        let groups: Vec<_> = params.groups().collect();
+        assert_eq!(groups.len(), 3);
+        assert!(groups[1].is_empty());
     }
 
     /// Asserts that a sequence with no parameters yields no slots.
