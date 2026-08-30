@@ -27,6 +27,69 @@ pub enum Color {
     Rgb(Rgb),
 }
 
+impl Color {
+    /// The colour an `SGR 38` / `48` / `58` selector and its operands
+    /// spell; `None` when the selector is not one this terminal answers
+    /// or a component does not fit a byte.
+    ///
+    /// # Invariants
+    ///
+    /// A component is rejected rather than clamped. Saturating a
+    /// palette index would turn `SGR 38;5;99999` into slot 255 — a
+    /// colour the application never asked for, rather than one it does
+    /// not get.
+    pub fn from_sgr(selector: u16, operands: &[u16]) -> Option<Self> {
+        match (selector, operands) {
+            (5, [index]) => Some(Self::Indexed(u8::try_from(*index).ok()?)),
+            (2, [r, g, b]) => Some(Self::Rgb(Rgb {
+                r: u8::try_from(*r).ok()?,
+                g: u8::try_from(*g).ok()?,
+                b: u8::try_from(*b).ok()?,
+            })),
+            _ => None,
+        }
+    }
+
+    /// The colour one `SGR` selector group's own `:` subparameters
+    /// spell, everything after the `38` / `48` / `58` itself.
+    ///
+    /// # Invariants
+    ///
+    /// The colour-space slot is optional. `2:Pi:r:g:b` is the spelling
+    /// the standard gives, but many programs omit `Pi` entirely and
+    /// every emulator checked accepts `2:r:g:b`, so the components are
+    /// located by the group's length. Subparameters after blue are the
+    /// tolerance tail the standard permits and are ignored.
+    pub fn from_sgr_group(subs: &[Option<u16>]) -> Option<Self> {
+        let selector = subs.first().copied().flatten()?;
+        let mut operands = [0u16; 3];
+        let taken = match (selector, subs.len()) {
+            (5, _) => {
+                operands[0] = subs.get(1).copied().flatten()?;
+                1
+            }
+            (2, 4) => {
+                Self::fill(&mut operands, &subs[1..4]);
+                3
+            }
+            (2, len) if len >= 5 => {
+                Self::fill(&mut operands, &subs[2..5]);
+                3
+            }
+            _ => return None,
+        };
+        Self::from_sgr(selector, &operands[..taken])
+    }
+
+    /// Copies `subs` into `operands`, an omitted subparameter reading
+    /// as zero.
+    fn fill(operands: &mut [u16; 3], subs: &[Option<u16>]) {
+        for (slot, sub) in operands.iter_mut().zip(subs) {
+            *slot = sub.unwrap_or(0);
+        }
+    }
+}
+
 /// A 24-bit sRGB color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb {

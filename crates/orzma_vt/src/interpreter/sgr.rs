@@ -4,7 +4,7 @@
 //! `vtparse`. Applying a control sequence to it is interpretation, so
 //! the `impl` sits here and the screen layer stays free of the parser.
 
-use crate::device::color::{Color, Rgb};
+use crate::device::color::Color;
 use crate::interpreter::csi::CsiParams;
 use crate::screen::cell::Pen;
 use crate::screen::grid::run::Style;
@@ -123,10 +123,7 @@ impl Pen {
     ) -> ColorRead {
         let subs = group.as_slice();
         if subs.len() > 1 {
-            return match Self::colon_color(&subs[1..]) {
-                Some(color) => ColorRead::Done(color),
-                None => ColorRead::Discarded,
-            };
+            return Color::from_sgr_group(&subs[1..]).map_or(ColorRead::Discarded, ColorRead::Done);
         }
         let Some(selector) = Self::next_value(groups) else {
             return ColorRead::Discarded;
@@ -143,58 +140,8 @@ impl Pen {
             };
             *slot = value;
         }
-        match Self::color_from(selector, &operands[..operand_count]) {
-            Some(color) => ColorRead::Done(color),
-            None => ColorRead::Discarded,
-        }
-    }
-
-    /// The colour a selector group's own subparameters spell, the
-    /// colour-space slot optional and any tail ignored.
-    fn colon_color(subs: &[Option<u16>]) -> Option<Color> {
-        let selector = subs.first().copied().flatten()?;
-        let mut operands = [0u16; 3];
-        let taken = match (selector, subs.len()) {
-            (5, _) => {
-                operands[0] = subs.get(1).copied().flatten()?;
-                1
-            }
-            // NOTE: The shortened spelling omits the colour-space slot,
-            // so the components start one earlier. Many programs emit
-            // it, and every emulator checked accepts both.
-            (2, 4) => {
-                Self::fill(&mut operands, &subs[1..4]);
-                3
-            }
-            (2, len) if len >= 5 => {
-                Self::fill(&mut operands, &subs[2..5]);
-                3
-            }
-            _ => return None,
-        };
-        Self::color_from(selector, &operands[..taken])
-    }
-
-    /// Copies `subs` into `operands`, an omitted subparameter reading
-    /// as zero.
-    fn fill(operands: &mut [u16; 3], subs: &[Option<u16>]) {
-        for (slot, sub) in operands.iter_mut().zip(subs) {
-            *slot = sub.unwrap_or(0);
-        }
-    }
-
-    /// The colour `operands` spell for `selector`; `None` when a
-    /// component does not fit a byte.
-    fn color_from(selector: u16, operands: &[u16]) -> Option<Color> {
-        match (selector, operands) {
-            (5, [index]) => Some(Color::Indexed(u8::try_from(*index).ok()?)),
-            (2, [r, g, b]) => Some(Color::Rgb(Rgb {
-                r: u8::try_from(*r).ok()?,
-                g: u8::try_from(*g).ok()?,
-                b: u8::try_from(*b).ok()?,
-            })),
-            _ => None,
-        }
+        Color::from_sgr(selector, &operands[..operand_count])
+            .map_or(ColorRead::Discarded, ColorRead::Done)
     }
 
     /// The next group's first value, an omitted or malformed one
@@ -271,6 +218,7 @@ impl Group {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::color::Rgb;
 
     /// Runs one SGR sequence's parameters against a fresh pen.
     fn applied(tokens: &[CsiParam]) -> Pen {
