@@ -71,8 +71,8 @@ struct ButtonEvent {
 /// What [`route_locally`] decided for the local-selection path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalButtonAction {
-    /// Nothing to do this event (Release on the local path, or a
-    /// Middle/Right button, which has no primary-selection paste).
+    /// Nothing to do for this event: a release on the local path, or a
+    /// middle / right button, which has no primary-selection paste.
     Noop,
     /// A single-click left-press has occurred. The caller should arm a
     /// pending drag at `(cell, side)` of granularity `kind` and clear any

@@ -310,10 +310,10 @@ mod tests {
         );
     }
 
-    /// Asserts a purely horizontal wheel gesture never scrolls the viewport.
+    /// Asserts that a purely horizontal wheel gesture is ignored rather than
+    /// routed anywhere, so the viewport never scrolls.
     ///
-    /// Case: the user swipes a trackpad left/right over a terminal — D17a
-    /// drops horizontal wheel handling entirely.
+    /// Case: the user swipes a trackpad left or right over a terminal.
     #[test]
     fn dispatch_horizontal_wheel_never_scrolls_the_viewport() {
         let mut app = make_wheel_app();
@@ -327,14 +327,12 @@ mod tests {
         );
     }
 
-    /// Asserts a horizontal-dominant diagonal gesture is fully absorbed by
-    /// the dominant-axis lock and does not scroll the viewport, even though
-    /// its vertical component alone would exceed the notch threshold.
+    /// Asserts that the dominant-axis lock absorbs a horizontal-dominant
+    /// diagonal gesture whose vertical component alone would exceed the
+    /// notch threshold, so the viewport does not scroll.
     ///
     /// Case: an imprecise trackpad swipe intended as a horizontal gesture
-    /// carries a small vertical component that must not leak into scrollback;
-    /// the vertical share here (0.29 of the gesture's length) sits under the
-    /// default 0.9 axis-lock ratio, so the lock zeros it.
+    /// carries a small vertical component.
     #[test]
     fn horizontal_dominant_gesture_never_scrolls_the_viewport() {
         let mut app = make_wheel_app();

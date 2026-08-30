@@ -58,8 +58,8 @@ fn on_any_mouse_message() -> impl SystemCondition<()> {
 
 /// Host-private decision IR for the button path: `decide_button` returns an
 /// ordered `Vec` of these, which `trigger_mouse_effects` fans out to
-/// per-operation `EntityEvent`s on the target terminal. (The wheel path triggers
-/// its `EntityEvent`s directly from `WheelAction`, bypassing this IR.)
+/// per-operation `EntityEvent`s on the target terminal. The wheel path does
+/// not go through this IR; it triggers `TerminalViewportScroll` directly.
 #[derive(Debug, Clone, PartialEq)]
 enum MouseEffect {
     SelStart {
