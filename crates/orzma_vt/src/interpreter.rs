@@ -460,6 +460,8 @@ impl Executor<'_> {
                 1004 => self.device.modes_mut().focus_in_out = enabled,
                 // Alternate scroll
                 1007 => self.device.modes_mut().alternate_scroll = enabled,
+                // Alternate screen with the cursor saved and restored
+                1049 => self.set_alternate_screen_with_cursor(enabled),
                 // Bracketed paste
                 2004 => self.device.modes_mut().bracketed_paste = enabled,
                 _ => self.set_mouse_mode(mode, enabled),
@@ -479,6 +481,31 @@ impl Executor<'_> {
             modes.mouse_tracking = tracking;
         } else if let Some(encoding) = modes.mouse_encoding.with_decset(mode, enabled) {
             modes.mouse_encoding = encoding;
+        }
+    }
+
+    /// Applies `DECSET 1049` / `DECRST 1049`: a set saves the primary
+    /// screen's cursor, flips, and erases the alternate screen; a reset
+    /// flips back and restores that cursor.
+    ///
+    /// The set checks the active screen itself instead of trusting the
+    /// flip helper's guard, because the save has to run before the flip
+    /// and must not run at all when the alternate screen is already
+    /// shown — it would overwrite that screen's DECSC slot. `DeviceState`
+    /// has no primary-screen accessor, so "save on the primary" is
+    /// expressible only while the primary is the active screen.
+    ///
+    /// The reset restores only when a flip happened, so a stray
+    /// `DECRST 1049` on the primary screen leaves the cursor alone.
+    fn set_alternate_screen_with_cursor(&mut self, enabled: bool) {
+        if enabled {
+            if self.device.modes().active_screen == ScreenKind::Alternate {
+                return;
+            }
+            self.device.active_screen_mut().save_checkpoint();
+            self.switch_to_alternate_screen(true);
+        } else if self.switch_to_primary_screen() {
+            self.device.active_screen_mut().restore_checkpoint();
         }
     }
 
@@ -2034,5 +2061,153 @@ mod tests {
             .map(|placement| placement.id)
             .collect();
         assert_eq!(listed, vec![kept]);
+    }
+
+    /// Asserts that `?1049h` shows the alternate screen erased, whatever
+    /// the previous full-screen program left on it.
+    ///
+    /// Case: vim starts after a program that used the bare `?47` pair
+    /// exited with its last frame still on the alternate screen.
+    #[test]
+    fn decset_1049_erases_the_alternate_screen() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[?47hx\x1b[?47l");
+        let output = session.feed(b"\x1b[?1049h");
+        assert_eq!(session.active_screen(), ScreenKind::Alternate);
+        assert!(output.damaged);
+        assert_eq!(session.char_at(0, 0), ' ');
+    }
+
+    /// Asserts that `?1049l` leaves the alternate screen's contents in
+    /// place rather than erasing them on the way out.
+    ///
+    /// Case: vim exits, and a later program enters with the bare `?47h`
+    /// and finds vim's last frame still there, as it would under xterm.
+    #[test]
+    fn decrst_1049_does_not_erase_the_alternate_screen() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[?1049hx\x1b[?1049l");
+        session.feed(b"\x1b[?47h");
+        assert_eq!(session.char_at(0, 0), 'x');
+    }
+
+    /// Asserts that `?1049h` saves the cursor into the primary screen's
+    /// own DECSC slot, so a later `ESC 8` on the primary finds the
+    /// position the flip saved rather than the shell's earlier save.
+    ///
+    /// Case: a shell saves its cursor with `ESC 7`, runs a full-screen
+    /// program whose `?1049h` overwrites that save, and restores with
+    /// `ESC 8` after the program exits.
+    #[test]
+    fn decset_1049_saves_the_cursor_into_the_primary_checkpoint() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[1;2H\x1b7\x1b[1;4H\x1b[?1049h\x1b[?1049l\x1b8");
+        assert_eq!(session.cursor_column(), 3);
+    }
+
+    /// Asserts that `?1049l` restores the cursor `?1049h` saved, moving
+    /// it from wherever the primary screen's cursor was left in between.
+    ///
+    /// Case: a program enters with `?1049h`, drops back to the primary
+    /// screen with `?47l` to print a line, returns with `?47h`, and
+    /// finally exits with `?1049l`.
+    #[test]
+    fn decrst_1049_restores_the_saved_primary_cursor() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[1;2H\x1b[?1049h\x1b[?47l\x1b[1;4H\x1b[?47h");
+        let output = session.feed(b"\x1b[?1049l");
+        assert_eq!(session.active_screen(), ScreenKind::Primary);
+        assert!(output.damaged);
+        assert_eq!(session.cursor_column(), 1);
+    }
+
+    /// Asserts that `?1049h` while already on the alternate screen does
+    /// nothing: no repaint, no signal, and the alternate screen's own
+    /// DECSC slot left alone.
+    ///
+    /// Case: a program re-sends its terminal initialisation string
+    /// while it is already running full-screen.
+    #[test]
+    fn a_redundant_decset_1049_leaves_the_alternate_checkpoint_alone() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[?1049h\x1b[1;2H\x1b7\x1b[1;4H");
+        assert_eq!(session.active_screen(), ScreenKind::Alternate);
+        let output = session.feed(b"\x1b[?1049h");
+        assert!(!output.damaged);
+        assert!(output.signals.is_empty());
+        assert_eq!(session.char_at(0, 0), ' ');
+        session.feed(b"\x1b8");
+        assert_eq!(session.cursor_column(), 1);
+    }
+
+    /// Asserts that `?1049l` while already on the primary screen does
+    /// nothing, not even the DECRC.
+    ///
+    /// Case: a wrapper script runs a program's `rmcup` string although
+    /// the program was killed before it sent `smcup`.
+    #[test]
+    fn a_redundant_decrst_1049_does_not_restore_the_cursor() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[1;2H\x1b7\x1b[1;4H");
+        let output = session.feed(b"\x1b[?1049l");
+        assert!(!output.damaged);
+        assert!(output.signals.is_empty());
+        assert_eq!(session.cursor_column(), 3);
+    }
+
+    /// Asserts that `?1049l` after a bare `?47h` restores whatever the
+    /// primary screen's DECSC slot holds, which is the home position
+    /// when nothing was ever saved.
+    ///
+    /// Case: a program enters with the old `?47h` but exits with the
+    /// terminfo `?1049l`.
+    #[test]
+    fn decrst_1049_after_decset_47_restores_the_existing_checkpoint() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[1;4H\x1b[?47h\x1b[?1049l");
+        assert_eq!(session.cursor_column(), 0);
+    }
+
+    /// Asserts that a `?47l` between `?1049h` and `?1049l` leaves the
+    /// saved cursor unrestored.
+    ///
+    /// Case: a program enters with `?1049h`, leaves with the bare
+    /// `?47l`, and its `rmcup` string sends `?1049l` afterwards.
+    #[test]
+    fn decrst_47_then_decrst_1049_never_restores_the_saved_cursor() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[1;2H\x1b[?1049h\x1b[?47l\x1b[1;4H\x1b[?1049l");
+        assert_eq!(session.cursor_column(), 3);
+    }
+
+    /// Asserts that in `CSI ? 47;1049 h` the 47 enters first and the
+    /// 1049 then does nothing: no save, no erase.
+    ///
+    /// Case: a program lists both alternate-screen numbers in one
+    /// DECSET to satisfy old and new terminals at once.
+    #[test]
+    fn decset_47_and_1049_in_one_sequence_enters_without_saving() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[?47hx\x1b[?47l\x1b[1;2H\x1b7\x1b[1;4H");
+        session.feed(b"\x1b[?47;1049h");
+        assert_eq!(session.active_screen(), ScreenKind::Alternate);
+        assert_eq!(session.char_at(0, 0), 'x');
+        session.feed(b"\x1b[?1049l");
+        assert_eq!(session.cursor_column(), 1);
+    }
+
+    /// Asserts that in `CSI ? 1049;47 l` the 1049 flips back and
+    /// restores, and the 47 then does nothing.
+    ///
+    /// Case: a program lists both alternate-screen numbers in one
+    /// DECRST on the way out.
+    #[test]
+    fn decrst_1049_and_47_in_one_sequence_restores_once() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[1;2H\x1b[?1049h\x1b[?47l\x1b[1;4H\x1b[?47h");
+        let output = session.feed(b"\x1b[?1049;47l");
+        assert_eq!(session.active_screen(), ScreenKind::Primary);
+        assert!(output.damaged);
+        assert_eq!(session.cursor_column(), 1);
     }
 }

@@ -226,11 +226,12 @@ impl DeviceState {
         &self.colors.palette
     }
 
-    /// Switches the active screen.
+    /// Switches the active screen without a flip's side effects.
     ///
-    /// The production path is the `?1049` handler, which is not
-    /// implemented yet; this exists so the placement tests can reach the
-    /// alternate screen.
+    /// The production path is [`Self::switch_screen`], driven by the
+    /// interpreter's alternate-screen modes, which tears down the
+    /// abandoned alternate screen's placements; the placement tests use
+    /// this to reach the other screen while leaving every table intact.
     #[cfg(test)]
     pub(crate) fn set_active_screen_for_test(&mut self, kind: ScreenKind) {
         self.modes.active_screen = kind;
