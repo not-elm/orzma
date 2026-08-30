@@ -40,7 +40,9 @@ mod tests {
         AnchoredPlacement, Cursor, DisplayOffset, GridColumn, GridLine, GridPoint, PlacementId,
         PlacementSize,
     };
+    use bevy_orzma_tty::prelude::{OrzmaTtyHandle, OrzmaTtyPlugin};
     use orzma_vt::prelude::{Frame, GridSize};
+    use std::time::Duration;
 
     #[derive(Resource, Default)]
     struct ChangedGrids(usize);
@@ -177,5 +179,32 @@ mod tests {
             frame: quiet_frame(),
         });
         assert!(app.world().get::<TerminalGrid>(bare).is_none());
+    }
+
+    /// Asserts that bytes fed to a terminal handle reach its grid
+    /// through the signal pump and the frame observer.
+    ///
+    /// Case: the shell prints its first prompt after the terminal
+    /// spawns.
+    #[test]
+    fn fed_bytes_reach_the_grid_through_the_pump() {
+        let mut app = App::new();
+        app.add_plugins((OrzmaTtyPlugin, TerminalGridPlugin));
+        let (mut handle, _sink) = OrzmaTtyHandle::detached(4, 3);
+        handle.feed_bytes(b"hi");
+        let terminal = app
+            .world_mut()
+            .spawn((handle, TerminalGrid::default()))
+            .id();
+        // NOTE: The coalescer decides on wall-clock time — 3 ms of
+        // idle after the last chunk, 12 ms at most — so the pump must
+        // run after that window closed or the frame is still pending.
+        std::thread::sleep(Duration::from_millis(20));
+        app.update();
+
+        let grid = app.world().get::<TerminalGrid>(terminal).unwrap();
+        assert_eq!((grid.cols, grid.rows), (4, 3));
+        assert_eq!(grid.cells[0][0].text, "h");
+        assert_eq!(grid.cells[0][1].text, "i");
     }
 }
