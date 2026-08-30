@@ -460,6 +460,11 @@ impl Executor<'_> {
                 1004 => self.device.modes_mut().focus_in_out = enabled,
                 // Alternate scroll
                 1007 => self.device.modes_mut().alternate_scroll = enabled,
+                // Alternate screen, erased on the way out
+                1047 => self.set_alternate_screen_erased_on_exit(enabled),
+                // Save / restore cursor
+                1048 if enabled => self.device.active_screen_mut().save_checkpoint(),
+                1048 => self.device.active_screen_mut().restore_checkpoint(),
                 // Alternate screen with the cursor saved and restored
                 1049 => self.set_alternate_screen_with_cursor(enabled),
                 // Bracketed paste
@@ -507,6 +512,30 @@ impl Executor<'_> {
         } else if self.switch_to_primary_screen() {
             self.device.active_screen_mut().restore_checkpoint();
         }
+    }
+
+    /// Applies `DECSET 1047` / `DECRST 1047`: a set is a bare flip; a
+    /// reset erases the alternate screen first, when it is the one
+    /// shown, and then flips back.
+    ///
+    /// The erase runs before the flip because it must reach the
+    /// alternate screen, and it is guarded on the alternate screen being
+    /// active so a stray reset on the primary screen erases nothing.
+    /// The row damage it stages is harmless: the flip's `Full` replaces
+    /// it, and the damage ledger records no screen.
+    fn set_alternate_screen_erased_on_exit(&mut self, enabled: bool) {
+        if enabled {
+            self.switch_to_alternate_screen(false);
+            return;
+        }
+        if self.device.modes().active_screen == ScreenKind::Alternate {
+            let damage = self
+                .device
+                .active_screen_mut()
+                .erase_in_display(EraseScreenMode::All);
+            self.stage(damage);
+        }
+        self.switch_to_primary_screen();
     }
 
     /// Shows the alternate screen, erasing it first when `erase` is
@@ -2208,6 +2237,83 @@ mod tests {
         let output = session.feed(b"\x1b[?1049;47l");
         assert_eq!(session.active_screen(), ScreenKind::Primary);
         assert!(output.damaged);
+        assert_eq!(session.cursor_column(), 1);
+    }
+
+    /// Asserts that `?1047l` erases the alternate screen before
+    /// returning to the primary screen.
+    ///
+    /// Case: a program that uses the 1047 pair exits, and the next
+    /// program to enter with the bare `?47h` finds a blank screen.
+    #[test]
+    fn decrst_1047_erases_the_alternate_screen() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[?1047hx");
+        assert_eq!(session.active_screen(), ScreenKind::Alternate);
+        let output = session.feed(b"\x1b[?1047l");
+        assert_eq!(session.active_screen(), ScreenKind::Primary);
+        assert!(output.damaged);
+        session.feed(b"\x1b[?47h");
+        assert_eq!(session.char_at(0, 0), ' ');
+    }
+
+    /// Asserts that `?1047h` neither saves the cursor nor erases the
+    /// alternate screen on the way in.
+    ///
+    /// Case: a shell saves its cursor with `ESC 7`, runs a program that
+    /// enters with `?1047h` onto a screen a previous program left text
+    /// on, and restores with `ESC 8` after it exits.
+    #[test]
+    fn decset_1047_neither_saves_nor_erases() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[?47hx\x1b[?47l\x1b[1;2H\x1b7\x1b[1;4H\x1b[?1047h");
+        assert_eq!(session.char_at(0, 0), 'x');
+        session.feed(b"\x1b[?1047l\x1b8");
+        assert_eq!(session.cursor_column(), 1);
+    }
+
+    /// Asserts that `?1047l` while already on the primary screen erases
+    /// nothing and repaints nothing.
+    ///
+    /// Case: a wrapper script runs a program's exit string although the
+    /// program never entered the alternate screen, while the shell's
+    /// output is on the primary.
+    #[test]
+    fn a_redundant_decrst_1047_does_not_erase_the_primary_screen() {
+        let mut session = Session::new();
+        session.feed(b"x");
+        let output = session.feed(b"\x1b[?1047l");
+        assert!(!output.damaged);
+        assert!(output.signals.is_empty());
+        assert_eq!(session.char_at(0, 0), 'x');
+    }
+
+    /// Asserts that `?1048h` and `?1048l` save and restore the cursor
+    /// exactly as `ESC 7` and `ESC 8` do, the restore keeping the chunk
+    /// live through the cursor move.
+    ///
+    /// Case: a program parks the cursor with `?1048h`, draws elsewhere,
+    /// and brings it back with `?1048l`.
+    #[test]
+    fn mode_1048_saves_and_restores_the_cursor() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[1;2H\x1b[?1048h\x1b[1;4H");
+        let output = session.feed(b"\x1b[?1048l");
+        assert_eq!(session.cursor_column(), 1);
+        assert!(output.damaged);
+    }
+
+    /// Asserts that `?1048` acts on the active screen's own DECSC slot,
+    /// so a save on the alternate screen leaves the primary screen's
+    /// untouched.
+    ///
+    /// Case: a shell saves its cursor, a full-screen program saves its
+    /// own with `?1048h` while on the alternate screen, and the shell
+    /// restores after the program exits.
+    #[test]
+    fn mode_1048_uses_the_active_screens_own_checkpoint() {
+        let mut session = Session::new();
+        session.feed(b"\x1b[1;2H\x1b7\x1b[?47h\x1b[1;4H\x1b[?1048h\x1b[?47l\x1b8");
         assert_eq!(session.cursor_column(), 1);
     }
 }
