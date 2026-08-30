@@ -10,6 +10,7 @@ pub(crate) mod apc;
 
 mod csi;
 mod osc;
+mod sgr;
 
 use crate::device::modes::KeypadMode;
 use crate::interpreter::csi::CsiParams;
@@ -309,6 +310,11 @@ impl VTActor for Executor<'_> {
             (Some(b'?'), b'W') if params.value(0) == Some(5) => {
                 self.device.active_screen_mut().reset_tab_stops()
             }
+            // SGR
+            (None, b'm') => {
+                let pen = self.device.active_screen_mut().pen_mut();
+                *pen = pen.applied(&params);
+            }
             // DECSET
             (Some(b'?'), b'h') => self.set_private_modes(&params, true),
             // DECRST
@@ -531,10 +537,12 @@ fn pack_version(major: u32, minor: u32, patch: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::color::Color;
     use crate::device::modes::{MouseEncoding, MouseTracking};
     use crate::screen::cell::Cell;
     use crate::screen::grid::GridSize;
     use crate::screen::grid::coords::GridColumn;
+    use crate::screen::grid::run::Style;
     use crate::screen::viewport::ViewportLine;
     use crate::{OrzmaVt, Vt};
 
@@ -1014,6 +1022,31 @@ mod tests {
         let screen = device.active_screen();
         assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
         assert_eq!(screen.viewport_row(ViewportLine(2))[0].c, 'x');
+    }
+
+    /// Asserts that `CSI m` reaches the pen, so a printed cell carries
+    /// the attributes the sequence selected.
+    ///
+    /// Case: a build tool prints a red error message.
+    #[test]
+    fn the_select_graphic_rendition_sequence_reaches_the_pen() {
+        let device = interpret(b"\x1b[31;1mx");
+        let cell = device.active_screen().viewport_row(ViewportLine(0))[0];
+        assert_eq!(cell.fg, Color::Indexed(1));
+        assert!(cell.style.contains(Style::BOLD));
+    }
+
+    /// Asserts that the pen survives between sequences, so a run keeps
+    /// its attributes until something changes them.
+    ///
+    /// Case: a program colours a word, prints it, and resets before the
+    /// rest of the line.
+    #[test]
+    fn the_pen_survives_between_sequences() {
+        let device = interpret(b"\x1b[31ma\x1b[mb");
+        let row = device.active_screen().viewport_row(ViewportLine(0));
+        assert_eq!(row[0].fg, Color::Indexed(1));
+        assert_eq!(row[1].fg, Color::DefaultForeground);
     }
 
     /// Asserts that `CSI J` erases from the cursor to the end of the
