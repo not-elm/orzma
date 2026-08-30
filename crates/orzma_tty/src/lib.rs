@@ -230,8 +230,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// Drains the PTY and the VT into one output batch: interprets
     /// queued chunks, writes pending replies back to the PTY, surfaces
     /// buffered signals (with `ChildExit` last), and emits a frame when
-    /// the coalesce window is due.
+    /// the coalesce window is due or the bootstrap snapshot is still
+    /// owed.
     pub fn pump(&mut self) -> PumpOutput {
+        let now = Instant::now();
         self.drain_chunks();
         let exit = self.pty.try_recv_exit();
         if exit.is_some() {
@@ -257,7 +259,7 @@ impl<V: Vt> OrzmaTty<V> {
             // damage — RIS on an already-blank screen does — so arming
             // here is what makes the frame carrying the shortened
             // placement list get asked for at all.
-            self.coalescer.arm_or_extend(Instant::now());
+            self.coalescer.arm_or_extend(now);
             self.pending_signals
                 .extend(evicted.into_iter().map(TtySignal::Vt));
         }
@@ -267,11 +269,13 @@ impl<V: Vt> OrzmaTty<V> {
         }
 
         let mut frame: Option<Frame> = None;
-        if self.coalescer.is_due(Instant::now()) {
+        if self.coalescer.needs_bootstrap() || self.coalescer.is_due(now) {
             if let Some(f) = self.vt.frame() {
-                frame.replace(f);
+                frame = Some(f);
+                self.coalescer.settle_emit();
+            } else {
+                self.coalescer.disarm();
             }
-            self.coalescer.disarm();
         }
         PumpOutput { frame, signals }
     }
@@ -337,6 +341,77 @@ mod tests {
         (term, sink)
     }
 
+    /// A minimal frame for scripting `FakeVt::frames`; the values are
+    /// arbitrary placeholders, since these tests only care whether a
+    /// frame came back, not its contents.
+    fn a_frame() -> Frame {
+        Frame {
+            size: GridSize { cols: 80, rows: 24 },
+            rows: Vec::new(),
+            cursor: Cursor::default(),
+            display_offset: DisplayOffset(0),
+            vi_cursor: None,
+            selection: None,
+            placements: None,
+            palette: None,
+            hyperlinks: Vec::new(),
+        }
+    }
+
+    /// Asserts that the first pump returns the bootstrap frame with no
+    /// PTY output having arrived, and that a second pump right after
+    /// returns none.
+    ///
+    /// Case: a freshly spawned terminal is pumped before the shell
+    /// prints its first byte, such as a silent shell sitting at an
+    /// empty prompt.
+    #[test]
+    fn the_first_pump_returns_the_bootstrap_frame_even_with_no_output() {
+        let (mut tty, _sink) = detached_term();
+        tty.vt.frames.push_back(a_frame());
+        let first = tty.pump();
+        assert!(first.frame.is_some());
+        let second = tty.pump();
+        assert!(second.frame.is_none());
+    }
+
+    /// Asserts that a bootstrap pump whose VT has no frame ready yet
+    /// keeps the bootstrap debt owed, so the very next pump still asks
+    /// for it instead of skipping the initial snapshot.
+    ///
+    /// Case: the coalescer's bootstrap flag comes due before the VT has
+    /// assembled anything to hand back.
+    #[test]
+    fn a_bootstrap_pump_with_no_frame_ready_keeps_the_debt_for_the_next_pump() {
+        let (mut tty, _sink) = detached_term();
+        let first = tty.pump();
+        assert!(first.frame.is_none());
+        assert!(tty.coalescer.needs_bootstrap());
+
+        tty.vt.frames.push_back(a_frame());
+        let second = tty.pump();
+        assert!(second.frame.is_some());
+    }
+
+    /// Asserts that a chunk arriving before the first pump — which both
+    /// arms the coalescer and owes the bootstrap emit — still produces
+    /// exactly one frame, not two.
+    ///
+    /// Case: the shell prints its prompt before the host's first pump
+    /// call after spawn, so the bootstrap debt and a real armed window
+    /// are both live at once.
+    #[test]
+    fn a_pre_pump_chunk_does_not_double_emit_the_bootstrap_frame() {
+        let (mut tty, _sink) = detached_term();
+        tty.vt.frames.push_back(a_frame());
+        tty.vt.frames.push_back(a_frame());
+        tty.feed_bytes(b"$ ");
+        let first = tty.pump();
+        assert!(first.frame.is_some());
+        let second = tty.pump();
+        assert!(second.frame.is_none());
+    }
+
     /// Asserts that a pump reports the signals its eviction sweep
     /// raised, without any PTY output to carry them.
     ///
@@ -366,6 +441,8 @@ mod tests {
     #[test]
     fn an_eviction_arms_the_coalesce_window() {
         let (mut tty, _sink) = detached_term();
+        tty.vt.frames.push_back(a_frame());
+        tty.pump();
         tty.vt.sweeps.push_back(vec![VtSignal::WebviewEvicted {
             placements: vec![PlacementId(7)],
         }]);
