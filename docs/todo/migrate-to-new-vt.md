@@ -15,9 +15,14 @@
 したがって切り替えの完了条件は「vi モードと選択を除いて、旧 engine と同じことが
 できる」であり、切り替え直後は vi モードと選択が一時的に動かない状態を受け入れる。
 
-## 現状: まだ切り替えられない
+## 現状: 新スタックは動く。残るのは接続作業
 
 `src/main.rs` は今も `orzma_tty_engine::TerminalHandlePlugin` を配線している。
+
+以前のブロッカーは「新スタックが動かない」ことだったが、それは解消した。`orzma_vt` に
+`todo!()` は1つも残っておらず、workspace の `#[ignore]` もゼロ、画面には色が出る。
+**いま残っているのは、新スタックを `src/` に繋ぎ直す作業と、全画面アプリを動かすための
+代替画面切替である。**
 
 各クレートのビルド状態（`cargo check -p <crate> --all-targets`）:
 
@@ -28,6 +33,9 @@
 | `bevy_orzma_tty` | OK |
 | `orzma_tty_engine` | **FAIL**（移行とは無関係の既存破損。`orzma_tty_renderer::prelude::ViewportPoint` の未解決 import と `Entity` の未 import） |
 
+`orzma_tty_engine` が壊れているため **`cargo build` は今この瞬間も通らない**。移行は
+「余裕があればやる改善」ではなく、アプリが再びビルドできるようになる唯一の道筋である。
+
 ---
 
 # 切り替えのブロッカー
@@ -36,29 +44,54 @@
 
 `DeviceState::resize` と `scroll` はどちらも実装済み。`OrzmaTty::spawn` /
 `detached` が構築時に呼ぶ `vt.resize(...)` はもう panic せず、`OrzmaTtyHandle`
-を作れるようになった。`bevy_orzma_tty` で `#[ignore]` が残るのは bracketed paste
-の1件だけで、理由も DECSET 2004 の未配線に変わっている。
+を作れるようになった。**workspace に `#[ignore]` はもう1件も無い。**
 
 `resize` はリフローせず切り詰める方式を採った。関連する仕様の洗い出しは
 [`resize-spec.md`](resize-spec.md) にまとめてある。要点として、リフローは VT510
 にも xterm ctlseqs にも規定が無く（VT510 の答えは「切り詰める」）、placement
 アンカーの行再割り当ては、リフローを入れると判断したときに初めて必要になる。
 
-## 2. VT の実装がまだ薄い
+## 2. VT の実装 → 実用域に入った
 
-`csi_dispatch` に配線済みなのは8つだけ — CUP/HVP、DECSTBM、DA1、DA2、
-XTWINOPS 22/23、DECSET、DECRST。**SGR（色・装飾）が丸ごと未配線**なので画面は
-モノクロになる。`Screen::erase_in_display` / `erase_in_line` は実装・テスト済みなのに
-`J` / `K` のアームが無い、という「あと一歩」の項目もある。
+`csi_dispatch` は8アームから **22アーム**になり、配線済みの終端バイトは
+`A B C D E F H I J K W Z c f g h l m r t`。
 
-`set_private_modes` は DECOM と DECNKM の2つだけ。alt-screen 切替（`?1049`）、
-bracketed paste、マウス報告、app-cursor キーはいずれも escape sequence から
-動かせない。
+| 追加された制御機能 | |
+| --- | --- |
+| SGR（`m`） | 色と装飾。**画面がモノクロでなくなった** |
+| ED / EL（`J` / `K`） | 画面・行の消去 |
+| CUU / CUD / CUF / CUB（`A`–`D`） | 相対カーソル移動。マージンが障壁 |
+| CNL / CPL（`E` / `F`） | 行頭付き縦移動 |
+| CHT / CBT（`I` / `Z`） | タブストップ単位の移動 |
+| TBC / CTC / DECST8C（`g` / `W`） | タブストップの編集 |
+
+`set_private_modes` は2モードから **10モード**に。DECCKM（`?1`）、マウストラッキング
+（`?1000` / `?1002` / `?1003`）、フォーカス報告（`?1004`）、SGR マウス（`?1006`）、
+Alternate Scroll（`?1007`）、Bracketed Paste（`?2004`）。
+
+**まだ未配線で、切り替えに効くもの:**
+
+- **`?1049`（代替画面）** — `DeviceState::switch_screen` は実装済みだがインタプリタから
+  呼ばれていない。**vim や less が一切使えない**ので実用検証ができない。実装時は
+  `switch_screen` が `take_placements()` で返す placement を発生源で
+  `VtSignal::WebviewEvicted` にする必要がある（pump の掃引では拾えない）
+- **`?7`（DECAWM）/ `?25`（DECTCEM）** — `VtModes` にフィールドが無く、`Screen::print` と
+  `Screen::cursor` の振る舞い変更を伴う
+- **`?1005`（UTF-8 マウス）** — 意図的に答えていない。`MouseReport::encode` が `Utf8` を
+  X10 にフォールバックさせるため、配線すると96桁を超えるウィンドウで座標が壊れる
+- **絶対指定の CHA / VPA / HPA（`G` / `d` / `` ` ``）** — `move_cursor_to` の再利用で済む
+- **文字編集の ICH / DCH / IL / DL / ECH（`@` / `P` / `L` / `M` / `X`）** — `Screen` 側にも
+  実装が無い
+- **DSR（`n`）** — カーソル位置報告。返信経路は DA1/DA2 で確立済み
 
 `osc_dispatch` はタイトル（OSC 0 / 2）のみ実装済み。パレット（OSC 4 / 10 / 11 / 12）、
 作業ディレクトリ（OSC 7）、ハイパーリンク（OSC 8）、クリップボード（OSC 52）は未実装で、
 `VtSignal` の `Clipboard` / `CurrentDir` は発火元を持たない。`apc_dispatch` も
-未実装なので `WebviewApc` も同様。
+空実装（`fn apc_dispatch(&mut self, _data: Vec<u8>) {}`）なので `WebviewApc` も同様。
+
+なお SGR は `Pen` が表現できる属性だけを実装し、点滅（`5` / `6` / `25`）・上線
+（`53` / `55`）・下線の色（`58` / `59`）・下線の種類（`4:1`–`4:5`）は意図的に落として
+いる。設計の経緯は `docs/memo/decset.md` と実装の doc に記録がある。
 
 ## 3. 未移植のモジュール
 
@@ -165,17 +198,27 @@ fn clear_selection(_e: On<RequestTtySelectionClear>) {}
 
 **切り替えまで:**
 
-1. ~~**`DeviceState::resize` / `scroll`**~~ — 実装済み。end-to-end 検証は
-   解放された
-2. **`csi_dispatch` に SGR / ED / EL / 相対カーソル移動** — 色が付き、画面を消せるように。
-   ED / EL は `Screen` 側が実装済みでアーム追加だけ
-3. **`set_private_modes` の拡張** — alt-screen、bracketed paste、マウス報告、
-   app-cursor キー。あわせて mode 差分機構（`VtSignal::ModeChange` の発火元）
-4. **`osc_dispatch` の残り** — パレット、cwd、ハイパーリンク、クリップボード
-5. **`wheel.rs` の復活と `buttons.rs` のマウス報告側の移植**
-6. **タイトルコンポーネントと observer**（ブロッカー5節）と `sanitize_title` の統合
-7. **`src/` の ECS 形状の書き換え** — あわせて読み取り側の受け皿を決める
-8. **`orzma_tty_engine` の削除、`orzma_webview` → `bevy_orzma_webview` のリネーム**
+1. ~~**`DeviceState::resize` / `scroll`**~~ — 実装済み
+2. ~~**`csi_dispatch` に SGR / ED / EL / 相対カーソル移動**~~ — 実装済み。8→22アーム
+3. ~~**`set_private_modes` の拡張**~~ — 2→10モード。ただし `?1049` は下記に残る
+4. **`?1049`（代替画面）** — これが次の一手。**vim や less が動くようになり、そこで初めて
+   新スタックを実用的に検証できる。** `switch_screen` が返す placement を発生源で
+   `WebviewEvicted` にする設計判断を含む
+5. **`osc_dispatch` の残り** — パレット、cwd、ハイパーリンク、クリップボード。
+   `apc_dispatch` も空実装なので webview が出ない
+6. **`wheel.rs` の復活と `buttons.rs` のマウス報告側の移植** — `mouse_tracking` は
+   書き手ができたが読み手がまだいない。マウス転送は現在も無条件
+7. **タイトルコンポーネントと observer**（ブロッカー5節）と `sanitize_title` の統合
+8. **`src/` の ECS 形状の書き換え** — 分量は最大だが、設計判断は「読み取り側の受け皿」の
+   1つに絞られている。22ファイル36箇所
+9. **`orzma_tty_engine` の削除、`orzma_webview` → `bevy_orzma_webview` のリネーム**
+
+**あると望ましいが切り替えの必須ではないもの:**
+
+- 絶対指定の CHA / VPA / HPA — `move_cursor_to` の再利用で安い
+- 文字編集の ICH / DCH / IL / DL / ECH — `Screen` 側から実装が要る
+- DSR（カーソル位置報告）— 返信経路は確立済み
+- DECAWM / DECTCEM — `VtModes` へのフィールド追加を伴う
 
 **切り替え後:**
 
