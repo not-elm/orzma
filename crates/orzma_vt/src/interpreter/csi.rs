@@ -85,9 +85,10 @@ impl<'a> CsiParams<'a> {
     /// # Invariants
     ///
     /// Saturation is right for a slot count or a mode number, where an
-    /// oversized value is out of range whichever way it is clamped. It
-    /// is wrong for a colour component, so `SGR` decodes its own
-    /// subparameters rather than reading them through here.
+    /// oversized value is out of range whichever way it is clamped. A
+    /// slot also collapses to one integer here, which loses the `:`
+    /// structure a direct colour is spelled with, so `SGR` walks
+    /// [`Self::groups`] itself rather than reading them through here.
     fn first_value(group: &[CsiParam]) -> Option<u16> {
         group.iter().find_map(|param| match param {
             CsiParam::Integer(value) => Some(u16::try_from(*value).unwrap_or(u16::MAX)),

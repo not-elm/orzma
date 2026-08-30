@@ -14,9 +14,9 @@ use vtparse::CsiParam;
 /// The most subparameters any form this terminal answers carries.
 ///
 /// The longest is the direct colour with the tolerance tail ITU T.416
-/// permits: `2 : Pi : r : g : b : tolerance : colour-space` is eight
-/// counting the selector.
-const MAX_SUBPARAMS: usize = 8;
+/// permits: `2 : Pi : r : g : b : unused : tolerance : colour-space` is
+/// nine counting the selector.
+const MAX_SUBPARAMS: usize = 9;
 
 impl Pen {
     /// The pen this one becomes after `params`, applied left to right.
@@ -67,9 +67,10 @@ impl Pen {
             1 => self.style.insert(Style::BOLD),
             2 => self.style.insert(Style::DIM),
             3 => self.style.insert(Style::ITALIC),
-            4 => self
-                .style
-                .set(Style::UNDERLINE, subs.get(1).copied().flatten() != Some(0)),
+            4 => self.style.set(
+                Style::UNDERLINE,
+                subs.get(1).map(|sub| sub.unwrap_or(0)) != Some(0),
+            ),
             7 => self.style.insert(Style::REVERSE),
             8 => self.style.insert(Style::HIDDEN),
             9 => self.style.insert(Style::STRIKE),
@@ -196,11 +197,23 @@ impl Pen {
         }
     }
 
-    /// The first value of the next group; `None` when the list ended or
-    /// the group was malformed.
+    /// The next group's first value, an omitted or malformed one
+    /// reading as zero; `None` only when the list has ended.
+    ///
+    /// # Invariants
+    ///
+    /// A group that is present but carries no value MUST still be
+    /// counted, because the caller consumes a fixed number of operands
+    /// and reads `None` as the end of the list. Reporting an omitted
+    /// operand as absent would leave the remaining operands of
+    /// `38;2;;0;0` to read as ordinary attributes, and the two zeroes
+    /// there reset the whole pen.
     fn next_value<'a>(groups: &mut impl Iterator<Item = &'a [CsiParam]>) -> Option<u16> {
         let tokens = groups.next()?;
-        Group::decode(tokens)?.as_slice().first().copied().flatten()
+        let value = Group::decode(tokens)
+            .and_then(|group| group.as_slice().first().copied().flatten())
+            .unwrap_or(0);
+        Some(value)
     }
 }
 
@@ -229,7 +242,7 @@ impl Group {
     /// # Invariants
     ///
     /// A group longer than [`MAX_SUBPARAMS`] is discarded whole rather
-    /// than truncated. The longest form this terminal answers is eight
+    /// than truncated. The longest form this terminal answers is nine
     /// subparameters, so a longer one is malformed rather than a
     /// tolerance tail to ignore.
     fn decode(tokens: &[CsiParam]) -> Option<Self> {
@@ -483,6 +496,22 @@ mod tests {
         assert!(!after.style.contains(Style::UNDERLINE));
     }
 
+    /// Asserts that an omitted underline variant reads as zero and
+    /// cancels the underline, the same as spelling the zero out.
+    ///
+    /// Case: an editor builds `CSI 4:Pv m` from a variant field that
+    /// came out empty.
+    #[test]
+    fn an_omitted_underline_variant_cancels_the_underline() {
+        let tokens = [CsiParam::Integer(4), CsiParam::P(b':')];
+        let pen = Pen {
+            style: Style::UNDERLINE,
+            ..Pen::default()
+        };
+        let after = pen.applied(&CsiParams::parse(&tokens));
+        assert!(!after.style.contains(Style::UNDERLINE));
+    }
+
     /// Asserts that a group carrying a token that is neither an integer
     /// nor a subparameter separator is discarded.
     ///
@@ -547,11 +576,13 @@ mod tests {
     /// Asserts that subparameters after the blue channel are ignored,
     /// which is what the tolerance tail the standard permits needs.
     ///
-    /// Case: an application spells its colour with the full T.416 form
-    /// including the tolerance fields.
+    /// Case: an application spells its colour with the full T.416 form,
+    /// whose three fields after blue are the unused slot, the tolerance,
+    /// and the colour space the tolerance is measured in.
     #[test]
     fn subparameters_after_blue_are_ignored() {
-        let tokens = colons(&[
+        let expected = Color::Rgb(Rgb { r: 1, g: 2, b: 3 });
+        let two_field_tail = colons(&[
             Some(38),
             Some(2),
             None,
@@ -561,7 +592,19 @@ mod tests {
             Some(0),
             Some(0),
         ]);
-        assert_eq!(applied(&tokens).fg, Color::Rgb(Rgb { r: 1, g: 2, b: 3 }));
+        let three_field_tail = colons(&[
+            Some(38),
+            Some(2),
+            None,
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(0),
+            Some(0),
+            Some(0),
+        ]);
+        assert_eq!(applied(&two_field_tail).fg, expected);
+        assert_eq!(applied(&three_field_tail).fg, expected);
     }
 
     /// Asserts that the background selector reaches the background
@@ -622,12 +665,51 @@ mod tests {
     /// resynchronise on.
     ///
     /// Case: an application asks for a colour space this terminal does
-    /// not answer, and its operands must not read as attributes.
+    /// not answer, then spells an attribute after it.
     #[test]
     fn an_unknown_colour_selector_abandons_the_rest() {
         let pen = applied(&semicolons(&[38, 9, 1]));
         assert!(!pen.style.contains(Style::BOLD));
         assert_eq!(pen.fg, Color::DefaultForeground);
+    }
+
+    /// Asserts that an omitted operand of a direct colour reads as zero
+    /// rather than ending the colour, so the operands after it never
+    /// reach the pen as ordinary attributes.
+    ///
+    /// Case: a script builds `CSI 38;2;R;G;B m` by joining shell
+    /// variables and leaves the red one unset.
+    #[test]
+    fn an_omitted_colour_operand_reads_as_zero() {
+        let mut tokens = semicolons(&[38, 2]);
+        tokens.push(CsiParam::P(b';'));
+        tokens.push(CsiParam::P(b';'));
+        tokens.push(CsiParam::Integer(0));
+        tokens.push(CsiParam::P(b';'));
+        tokens.push(CsiParam::Integer(0));
+        let pen = Pen {
+            style: Style::BOLD,
+            ..Pen::default()
+        };
+        let after = pen.applied(&CsiParams::parse(&tokens));
+        assert_eq!(after.fg, Color::Rgb(Rgb { r: 0, g: 0, b: 0 }));
+        assert!(after.style.contains(Style::BOLD));
+    }
+
+    /// Asserts that an omitted index of an indexed colour reads as zero
+    /// and leaves the group after it to apply on its own.
+    ///
+    /// Case: an application emits `CSI 38;5;;3 m`, whose index field
+    /// came out empty.
+    #[test]
+    fn an_omitted_colour_index_reads_as_zero() {
+        let mut tokens = semicolons(&[38, 5]);
+        tokens.push(CsiParam::P(b';'));
+        tokens.push(CsiParam::P(b';'));
+        tokens.push(CsiParam::Integer(3));
+        let pen = applied(&tokens);
+        assert_eq!(pen.fg, Color::Indexed(0));
+        assert!(pen.style.contains(Style::ITALIC));
     }
 
     /// Asserts that a colour selector at the end of the list is
@@ -647,10 +729,8 @@ mod tests {
     /// as ordinary attributes.
     ///
     /// Case: Vim's default `t_8u` emits `CSI 58;2;r;g;b m` for a
-    /// coloured undercurl; ignoring the selector alone would read the
-    /// `2` as faint and a zero component as a full reset. The trailing
-    /// italic pins the far side of the boundary: consuming one operand
-    /// too many would swallow it.
+    /// coloured undercurl, and the italic that follows it on the same
+    /// line is the next attribute the editor asks for.
     #[test]
     fn the_underline_colour_consumes_its_operands() {
         let pen = Pen {
