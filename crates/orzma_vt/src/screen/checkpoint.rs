@@ -16,7 +16,10 @@ use crate::screen::state::ScreenState;
 /// origin mode, no character attributes, and the default character set
 /// mapping. The manual's fourth item also maps a set into GR, and its
 /// separate selective erase attribute has no field here; both stay out
-/// of scope for the reasons [`super::character_sets`] records.
+/// of scope for the reasons [`super::character_sets`] records. A
+/// resize moves the saved row with the grid, so after one the
+/// never-saved position may sit below home; [`super::Screen::resize`]
+/// records why.
 ///
 /// `DECSTR` and `RIS` reset the saved state as well, and put back this
 /// same default rather than leaving the last `DECSC` reachable.

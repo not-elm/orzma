@@ -306,24 +306,50 @@ fn a_placement_beyond_the_new_right_edge_survives() {
     assert_eq!(screen.project_placements()[0].point.column, GridColumn(19));
 }
 
-/// Asserts that a growth leaves a never-saved checkpoint on the home
-/// position rather than walking it down with the reclaimed rows.
+/// Asserts that a growth moves the saved cursor down with the rows it
+/// reclaims, so a restore lands on the row that was saved rather than
+/// the reclaimed rows above it.
 ///
-/// Case: an application emits a bare `DECRC` to home the cursor, and
-/// the user had already dragged the window taller over output that
-/// had scrolled off the top.
+/// Case: a shell saves its cursor on the prompt row before a
+/// full-screen program takes over, and the user drags the window
+/// taller over output that had scrolled off the top before the program
+/// exits and restores it.
 #[test]
-fn a_growth_leaves_a_never_saved_checkpoint_at_home() {
+fn a_growth_moves_the_saved_cursor_down_with_the_reclaimed_rows() {
     let mut screen = screen();
     screen.state.line = ScreenLine(2);
     screen.line_feed();
     screen.line_feed();
+    screen.state.column = GridColumn(1);
+    screen.save_checkpoint();
     assert_eq!(screen.grid.history_len(), 2);
     assert_eq!(
         screen.resize(GridSize { cols: 4, rows: 5 }),
         Some(DamageSpan::Full)
     );
+    screen.state.line = ScreenLine(0);
+    screen.restore_checkpoint();
+    assert_eq!(screen.state.line, ScreenLine(4));
+    assert_eq!(screen.state.column, GridColumn(1));
+}
+
+/// Asserts that a shrink that scrolls rows into history moves the saved
+/// cursor up with the row it sits on.
+///
+/// Case: a program saves its cursor above the bottom row, and the user
+/// drags the window short enough that rows scroll off the top before
+/// the program restores it.
+#[test]
+fn a_shrink_that_scrolls_moves_the_saved_cursor_up_with_its_row() {
+    let mut screen = tall_screen();
+    screen.state.line = ScreenLine(2);
+    screen.save_checkpoint();
+    screen.state.line = ScreenLine(3);
+    assert_eq!(
+        screen.resize(GridSize { cols: 4, rows: 2 }),
+        Some(DamageSpan::Full)
+    );
+    assert_eq!(screen.state.line, ScreenLine(1));
     screen.restore_checkpoint();
     assert_eq!(screen.state.line, ScreenLine(0));
-    assert_eq!(screen.state.column, GridColumn(0));
 }

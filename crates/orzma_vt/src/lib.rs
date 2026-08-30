@@ -89,11 +89,12 @@ pub trait Vt {
     /// A placement projects only while the screen it was mounted on is
     /// active: while the alternate screen is shown, primary-screen
     /// placements are omitted from the emitted lists (hidden, not
-    /// evicted), and the reverse on returning to the primary screen. A
-    /// re-issued `mount` for a live `(view_id, instance)` registers a
-    /// successor under a fresh id; the superseded id simply stops
-    /// being listed and is never named by
-    /// [`VtSignal::WebviewEvicted`].
+    /// evicted). Returning to the primary screen tears the alternate
+    /// screen's placements down instead, naming them in that chunk's
+    /// [`VtSignal::WebviewEvicted`]. A re-issued `mount` for a live
+    /// `(view_id, instance)` registers a successor under a fresh id;
+    /// the superseded id simply stops being listed and is never named
+    /// by [`VtSignal::WebviewEvicted`].
     fn interpret(&mut self, chunk: &[u8]) -> InterpretOutput;
 
     /// Builds the frame for the staged damage and section diffs,
@@ -175,9 +176,10 @@ pub struct InterpretOutput {
 }
 
 /// Out-of-band signal the VT raised, handed to the owner in
-/// [`InterpretOutput::signals`] when it was parsed from the byte
-/// stream, or returned from [`Vt::sweep_evictions`] when the VT raised
-/// it on its own authority.
+/// [`InterpretOutput::signals`] when a chunk produced it — an
+/// alternate-screen teardown included — or returned from
+/// [`Vt::sweep_evictions`] when the VT raised it between chunks on its
+/// own authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VtSignal {
     /// An audible bell has been requested; the consumer is responsible
@@ -227,6 +229,15 @@ pub enum VtSignal {
         /// Mode names that were disabled.
         removed: Vec<&'static str>,
     },
+}
+
+impl VtSignal {
+    /// The eviction naming `placements`; `None` when there is nothing
+    /// to name, so neither an empty sweep nor a flip that tore nothing
+    /// down wakes the owner.
+    pub(crate) fn evicted(placements: Vec<PlacementId>) -> Option<Self> {
+        (!placements.is_empty()).then_some(Self::WebviewEvicted { placements })
+    }
 }
 
 /// The self-contained implementation of [`Vt`].
@@ -280,11 +291,9 @@ impl Vt for OrzmaVt {
     }
 
     fn sweep_evictions(&mut self) -> Vec<VtSignal> {
-        let placements = self.device.evict_lost_anchors();
-        if placements.is_empty() {
-            return Vec::new();
-        }
-        vec![VtSignal::WebviewEvicted { placements }]
+        VtSignal::evicted(self.device.evict_lost_anchors())
+            .into_iter()
+            .collect()
     }
 
     fn resize(&mut self, size: GridSize) -> bool {
@@ -311,9 +320,8 @@ impl Vt for OrzmaVt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::modes::ScreenKind;
-    use crate::frame::damage::DamageSpan;
     use crate::placement::PlacementSize;
+    use crate::screen::grid::coords::GridLine;
     use crate::screen::viewport::ViewportLine;
 
     fn vt() -> OrzmaVt {
@@ -466,14 +474,12 @@ mod tests {
         let mounted = vt.frame().expect("a placement change emits");
         assert_eq!(mounted.placements.as_ref().map(Vec::len), Some(1));
 
-        vt.device.set_active_screen_for_test(ScreenKind::Alternate);
-        vt.tracker.stage(DamageSpan::Full);
+        vt.interpret(b"\x1b[?47h");
         let flipped = vt.frame().expect("a flip emits a full frame");
         assert_eq!(flipped.placements, Some(Vec::new()));
         assert_eq!(flipped.rows.len(), 3);
 
-        vt.device.set_active_screen_for_test(ScreenKind::Primary);
-        vt.tracker.stage(DamageSpan::Full);
+        vt.interpret(b"\x1b[?47l");
         let restored = vt.frame().expect("the flip back emits");
         assert_eq!(restored.placements.as_ref().map(Vec::len), Some(1));
     }
@@ -499,5 +505,24 @@ mod tests {
         let returned = vt.frame().expect("the flip back emits");
         assert_eq!(returned.rows.len(), 3);
         assert_eq!(returned.display_offset, DisplayOffset(2));
+    }
+
+    /// Asserts that a return from the alternate screen after the window
+    /// grew seats the restored cursor on the prompt row the growth moved
+    /// down, not on the reclaimed rows above it.
+    ///
+    /// Case: the shell prompt sits on the bottom row, the user runs a
+    /// full-screen program, maximises the window while it is up, and
+    /// quits it.
+    #[test]
+    fn a_flip_back_after_a_growth_restores_the_cursor_onto_its_row() {
+        let mut vt = vt();
+        vt.interpret(b"1\r\n2\r\n3\r\n4\r\n5");
+        vt.interpret(b"\x1b[?1049h");
+        assert!(vt.resize(GridSize { cols: 4, rows: 5 }));
+        vt.interpret(b"\x1b[?1049l");
+        let returned = vt.frame().expect("the flip back emits");
+        assert_eq!(returned.rows[4].contents[0].text, "5   ");
+        assert_eq!(returned.cursor.point.line, GridLine(4));
     }
 }

@@ -82,6 +82,17 @@ pub enum ScreenKind {
     Alternate,
 }
 
+impl ScreenKind {
+    /// The screen `DECSET 47` shows when set and `DECRST 47` when reset.
+    pub fn from_decset(enabled: bool) -> Self {
+        if enabled {
+            Self::Alternate
+        } else {
+            Self::Primary
+        }
+    }
+}
+
 /// Mouse-report coordinate encoding.
 ///
 /// The encodings are mutually exclusive: xterm keeps DECSET 1005/1006

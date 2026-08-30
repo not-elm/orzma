@@ -919,11 +919,13 @@ impl Screen {
     /// Leaving either out of bounds would panic the next write, which is
     /// why the saved one is clamped here rather than on restore.
     ///
-    /// Only the live cursor follows the rows a resize moves; the saved
-    /// one is clamped and otherwise left where `DECSC` put it. Shifting
-    /// it too would walk the never-saved checkpoint off the home
-    /// position [`Checkpoint`] documents as the answer a `DECRC`
-    /// without a preceding `DECSC` restores.
+    /// The saved cursor follows the rows a resize moves exactly as the
+    /// live one does, so a `DECRC` after the resize — the one
+    /// `DECRST 1049` performs on the way back from the alternate screen
+    /// included — lands on the row `DECSC` saved rather than the rows
+    /// the resize reclaimed above it. A never-saved checkpoint drifts
+    /// off the home position by the same amount, the trade alacritty
+    /// makes too.
     ///
     /// A height change returns the margins to the whole page. Keeping a
     /// region whose rows still fit would leave a cursor below its bottom
@@ -947,12 +949,15 @@ impl Screen {
         }
         let reclaimed = self.reclaimable_rows(old.rows, size.rows);
         self.grid.resize(size);
-        self.state.line.0 = self
-            .state
-            .line
-            .0
-            .saturating_add(reclaimed)
-            .saturating_sub(required_scrolling);
+        let follow_moved_rows = |line: ScreenLine| {
+            ScreenLine(
+                line.0
+                    .saturating_add(reclaimed)
+                    .saturating_sub(required_scrolling),
+            )
+        };
+        self.state.line = follow_moved_rows(self.state.line);
+        self.checkpoint.line = follow_moved_rows(self.checkpoint.line);
         self.clamp_cursors(size);
         if old.cols != size.cols {
             self.state.pending_wrap = false;

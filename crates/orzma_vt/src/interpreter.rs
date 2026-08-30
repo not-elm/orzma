@@ -273,8 +273,7 @@ impl VTActor for Executor<'_> {
             // ED
             (None, b'J') => {
                 if let Some(mode) = EraseScreenMode::from_ed(params.value(0).unwrap_or(0)) {
-                    let damage = self.device.active_screen_mut().erase_in_display(mode);
-                    self.stage(damage);
+                    self.erase_in_display(mode);
                 }
             }
             // EL
@@ -365,6 +364,14 @@ impl Executor<'_> {
         self.stage(damage);
     }
 
+    /// Erases part of the active screen with its pen background (ED,
+    /// and the alternate-screen modes that blank the screen they show
+    /// or leave).
+    fn erase_in_display(&mut self, mode: EraseScreenMode) {
+        let damage = self.device.active_screen_mut().erase_in_display(mode);
+        self.stage(damage);
+    }
+
     /// Invokes a G code into GL until the next locking shift (the LS
     /// family).
     fn invoke_character_set(&mut self, g_code: GCode) {
@@ -450,22 +457,19 @@ impl Executor<'_> {
                     .active_screen_mut()
                     .set_origin_mode(OriginMode::from_decset(enabled)),
                 // Alternate screen
-                47 if enabled => self.switch_to_alternate_screen(false),
-                47 => {
-                    self.switch_to_primary_screen();
-                }
+                47 => self.switch_screen(ScreenKind::from_decset(enabled)),
                 // DECNKM
                 66 => self.device.modes_mut().keypad_mode = KeypadMode::from_decset(enabled),
                 // XTFOCUS
                 1004 => self.device.modes_mut().focus_in_out = enabled,
                 // Alternate scroll
                 1007 => self.device.modes_mut().alternate_scroll = enabled,
-                // Alternate screen, erased on the way out
+                // Alternate screen, erased on exit
                 1047 => self.set_alternate_screen_erased_on_exit(enabled),
-                // Save / restore cursor
+                // DECSC / DECRC
                 1048 if enabled => self.device.active_screen_mut().save_checkpoint(),
                 1048 => self.device.active_screen_mut().restore_checkpoint(),
-                // Alternate screen with the cursor saved and restored
+                // Alternate screen with DECSC / DECRC
                 1049 => self.set_alternate_screen_with_cursor(enabled),
                 // Bracketed paste
                 2004 => self.device.modes_mut().bracketed_paste = enabled,
@@ -490,107 +494,75 @@ impl Executor<'_> {
     }
 
     /// Applies `DECSET 1049` / `DECRST 1049`: a set saves the primary
-    /// screen's cursor, flips, and erases the alternate screen; a reset
-    /// flips back and restores that cursor.
+    /// screen's cursor, shows the alternate screen, and erases it; a
+    /// reset shows the primary screen and restores that cursor.
     ///
-    /// The set checks the active screen itself instead of trusting the
-    /// flip helper's guard, because the save has to run before the flip
-    /// and must run only while the primary screen is the one shown —
-    /// saving on the alternate screen would overwrite that screen's
-    /// DECSC slot. `DeviceState` has no primary-screen accessor, so
-    /// "save on the primary" is expressible only while the primary is
-    /// the active screen.
-    ///
-    /// The reset restores only when a flip happened, so a stray
-    /// `DECRST 1049` on the primary screen leaves the cursor alone.
+    /// Each direction runs only from the other screen, so a set already
+    /// on the alternate screen cannot overwrite that screen's own DECSC
+    /// slot, and a stray reset on the primary screen leaves the cursor
+    /// alone. The save precedes the flip because `active_screen_mut` is
+    /// the only way to a screen; the erase follows it for the same
+    /// reason, and fills with the pen the alternate screen kept from
+    /// its previous use rather than the primary screen's — each screen
+    /// owns its pen — which is a known departure from xterm's shared
+    /// pen.
     fn set_alternate_screen_with_cursor(&mut self, enabled: bool) {
-        if enabled {
-            if self.device.modes().active_screen == ScreenKind::Primary {
+        match (enabled, self.device.modes().active_screen) {
+            (true, ScreenKind::Primary) => {
                 self.device.active_screen_mut().save_checkpoint();
-                self.switch_to_alternate_screen(true);
+                self.switch_screen(ScreenKind::Alternate);
+                self.erase_in_display(EraseScreenMode::All);
             }
-        } else if self.switch_to_primary_screen() {
-            self.device.active_screen_mut().restore_checkpoint();
+            (false, ScreenKind::Alternate) => {
+                self.switch_screen(ScreenKind::Primary);
+                self.device.active_screen_mut().restore_checkpoint();
+            }
+            (true, ScreenKind::Alternate) | (false, ScreenKind::Primary) => {}
         }
     }
 
     /// Applies `DECSET 1047` / `DECRST 1047`: a set is a bare flip; a
-    /// reset erases the alternate screen first, when it is the one
-    /// shown, and then flips back.
+    /// reset erases the alternate screen, when it is the one shown, and
+    /// then flips back.
     ///
-    /// The erase runs before the flip because it must reach the
-    /// alternate screen, and it is guarded on the alternate screen being
-    /// active so a stray reset on the primary screen erases nothing.
-    /// The `Full` damage it stages is redundant with the flip's own
-    /// `Full`, and the damage ledger records no screen.
+    /// The erase precedes the flip because it must reach the alternate
+    /// screen, and it runs only while that screen is shown so a stray
+    /// reset on the primary screen erases nothing. The `Full` it stages
+    /// is redundant with the flip's own, and the damage ledger records
+    /// no screen.
     fn set_alternate_screen_erased_on_exit(&mut self, enabled: bool) {
-        if enabled {
-            self.switch_to_alternate_screen(false);
-            return;
+        match (enabled, self.device.modes().active_screen) {
+            (true, _) => self.switch_screen(ScreenKind::Alternate),
+            (false, ScreenKind::Alternate) => {
+                self.erase_in_display(EraseScreenMode::All);
+                self.switch_screen(ScreenKind::Primary);
+            }
+            (false, ScreenKind::Primary) => {}
         }
-        if self.device.modes().active_screen == ScreenKind::Alternate {
-            let damage = self
-                .device
-                .active_screen_mut()
-                .erase_in_display(EraseScreenMode::All);
-            self.stage(damage);
-        }
-        self.switch_to_primary_screen();
     }
 
-    /// Shows the alternate screen, blanking it on the way in when
-    /// `erase` is set. Already showing it is a no-op: no repaint, no
-    /// erase.
+    /// Shows `to`, naming the placements a return to the primary screen
+    /// tears down. Already showing `to` is a no-op: no repaint, no
+    /// signal.
     ///
-    /// The erase runs after the flip because it must reach the
-    /// alternate screen, and `active_screen_mut` is the only way to a
-    /// screen. It fills with the pen the alternate screen kept from its
-    /// previous use, not the primary screen's — each screen owns its
-    /// pen — which is a known departure from xterm's shared pen.
+    /// The eviction is raised here rather than left to the owner's
+    /// sweep because [`DeviceState::switch_screen`] takes the placements
+    /// out of the table, so no later sweep can find them.
     ///
     /// # Invariants
     ///
     /// The flip and the staged `Full` are never separated by an early
     /// return: a frame after a screen flip must carry every viewport
-    /// row, and `switch_screen` stages nothing itself.
-    fn switch_to_alternate_screen(&mut self, erase: bool) {
-        if self.device.modes().active_screen == ScreenKind::Alternate {
+    /// row, and [`DeviceState::switch_screen`] stages nothing itself.
+    fn switch_screen(&mut self, to: ScreenKind) {
+        if self.device.modes().active_screen == to {
             return;
         }
-        self.device.switch_screen(ScreenKind::Alternate);
-        if erase {
-            let damage = self
-                .device
-                .active_screen_mut()
-                .erase_in_display(EraseScreenMode::All);
-            self.stage(damage);
+        let placements = self.device.switch_screen(to);
+        if let Some(evicted) = VtSignal::evicted(placements) {
+            self.signal(evicted);
         }
         self.stage(Some(DamageSpan::Full));
-    }
-
-    /// Returns to the primary screen and names the placements the
-    /// alternate screen owned; reports whether a flip happened. Already
-    /// showing the primary screen is a no-op.
-    ///
-    /// The eviction is raised here rather than left to the owner's
-    /// sweep because `switch_screen` takes the placements out of the
-    /// table, so no later sweep can find them.
-    ///
-    /// # Invariants
-    ///
-    /// The flip and the staged `Full` are never separated by an early
-    /// return, for the reason [`Self::switch_to_alternate_screen`]
-    /// gives.
-    fn switch_to_primary_screen(&mut self) -> bool {
-        if self.device.modes().active_screen == ScreenKind::Primary {
-            return false;
-        }
-        let placements = self.device.switch_screen(ScreenKind::Primary);
-        if !placements.is_empty() {
-            self.signal(VtSignal::WebviewEvicted { placements });
-        }
-        self.stage(Some(DamageSpan::Full));
-        true
     }
 }
 
@@ -664,12 +636,8 @@ mod tests {
     use crate::screen::viewport::ViewportLine;
     use crate::{OrzmaVt, Vt};
 
-    /// Runs `chunk` through a fresh interpreter and hands back the
-    /// device it wrote to together with everything the chunk produced.
-    ///
-    /// The interpreter is driven directly rather than through
-    /// [`OrzmaVt`] because these tests read [`DeviceState`], which the
-    /// [`Vt`] trait does not expose.
+    /// Runs `chunk` through a fresh terminal and hands back the device
+    /// it wrote to together with everything the chunk produced.
     fn interpret_fully(chunk: &[u8]) -> (DeviceState, InterpretOutput) {
         interpret_sized(4, chunk)
     }
@@ -682,11 +650,9 @@ mod tests {
     }
 
     fn interpret_sized(cols: u16, chunk: &[u8]) -> (DeviceState, InterpretOutput) {
-        let mut device = DeviceState::new(GridSize { cols, rows: 3 }, 10);
-        let mut tracker = FrameTracker::new();
-        let mut output = InterpretOutput::default();
-        Interpreter::default().parse(&mut output, &mut device, &mut tracker, chunk);
-        (device, output)
+        let mut vt = OrzmaVt::new(GridSize { cols, rows: 3 }, 10);
+        let output = vt.interpret(chunk);
+        (vt.device, output)
     }
 
     /// Runs `chunk` through a fresh interpreter and hands back the
@@ -707,54 +673,48 @@ mod tests {
         vt.interpret(chunk).replies
     }
 
-    /// One interpreter, device, and tracker kept across chunks, so a
-    /// test can build up state with one chunk and then observe what a
-    /// later chunk alone produced.
-    struct Session {
-        interpreter: Interpreter,
-        device: DeviceState,
-        tracker: FrameTracker,
-    }
+    /// One terminal kept across chunks, so a test can build up state
+    /// with one chunk and then observe what a later chunk alone
+    /// produced, through the same entry points the owner uses.
+    struct Session(OrzmaVt);
 
     impl Session {
         fn new() -> Self {
-            Self {
-                interpreter: Interpreter::default(),
-                device: DeviceState::new(GridSize { cols: 4, rows: 3 }, 10),
-                tracker: FrameTracker::new(),
-            }
+            Self(OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10))
         }
 
         /// Interprets `chunk` and hands back what it alone produced.
         fn feed(&mut self, chunk: &[u8]) -> InterpretOutput {
-            let mut output = InterpretOutput::default();
-            self.interpreter
-                .parse(&mut output, &mut self.device, &mut self.tracker, chunk);
-            output
+            self.0.interpret(chunk)
         }
 
         /// Emits the pending frame, if anything observable changed.
         fn frame(&mut self) -> Option<Frame> {
-            self.tracker.emit(&self.device)
+            self.0.frame()
         }
 
         /// Mounts a one-cell placement at the active screen's cursor.
         fn mount(&mut self, view: &str) -> PlacementId {
-            self.device
+            self.0
+                .device
                 .mount_placement(PlacementSize { rows: 1, cols: 1 }, view.to_string(), None)
                 .expect("a mount under the cap is accepted")
         }
 
         fn active_screen(&self) -> ScreenKind {
-            self.device.modes().active_screen
+            self.0.device.modes().active_screen
         }
 
         fn cursor_column(&self) -> u16 {
-            self.device.active_screen().cursor_column().0
+            self.0.device.active_screen().cursor_column().0
         }
 
         fn char_at(&self, line: u16, column: u16) -> char {
-            self.device.active_screen().viewport_row(ViewportLine(line))[column].c
+            self.0
+                .device
+                .active_screen()
+                .viewport_row(ViewportLine(line))[column]
+                .c
         }
     }
 
@@ -2074,8 +2034,10 @@ mod tests {
     fn leaving_the_alternate_screen_evicts_only_its_placements() {
         let mut session = Session::new();
         let kept = session.mount("shell");
+        session.frame();
         session.feed(b"\x1b[?47h");
         let dropped = session.mount("app");
+        session.frame();
         let output = session.feed(b"\x1b[?47l");
         assert_eq!(
             output.signals,
@@ -2112,7 +2074,7 @@ mod tests {
     /// place rather than erasing them on the way out.
     ///
     /// Case: vim exits, and a later program enters with the bare `?47h`
-    /// and finds vim's last frame still there, as it would under xterm.
+    /// and finds vim's last frame still there.
     #[test]
     fn decrst_1049_does_not_erase_the_alternate_screen() {
         let mut session = Session::new();
@@ -2152,20 +2114,20 @@ mod tests {
     }
 
     /// Asserts that `?1049h` while already on the alternate screen does
-    /// nothing: no repaint, no signal, and the alternate screen's own
-    /// DECSC slot left alone.
+    /// nothing: no erase, no repaint, no signal, and the alternate
+    /// screen's own DECSC slot left alone.
     ///
     /// Case: a program re-sends its terminal initialisation string
     /// while it is already running full-screen.
     #[test]
     fn a_redundant_decset_1049_leaves_the_alternate_checkpoint_alone() {
         let mut session = Session::new();
-        session.feed(b"\x1b[?1049h\x1b[1;2H\x1b7\x1b[1;4H");
+        session.feed(b"\x1b[?1049hx\x1b[1;2H\x1b7\x1b[1;4H");
         assert_eq!(session.active_screen(), ScreenKind::Alternate);
         let output = session.feed(b"\x1b[?1049h");
         assert!(!output.damaged);
         assert!(output.signals.is_empty());
-        assert_eq!(session.char_at(0, 0), ' ');
+        assert_eq!(session.char_at(0, 0), 'x');
         session.feed(b"\x1b8");
         assert_eq!(session.cursor_column(), 1);
     }
@@ -2211,17 +2173,20 @@ mod tests {
     }
 
     /// Asserts that in `CSI ? 47;1049 h` the 47 enters first and the
-    /// 1049 then does nothing: no save, no erase.
+    /// 1049 then does nothing: no save into the alternate screen's DECSC
+    /// slot, no erase.
     ///
     /// Case: a program lists both alternate-screen numbers in one
     /// DECSET to satisfy old and new terminals at once.
     #[test]
     fn decset_47_and_1049_in_one_sequence_enters_without_saving() {
         let mut session = Session::new();
-        session.feed(b"\x1b[?47hx\x1b[?47l\x1b[1;2H\x1b7\x1b[1;4H");
+        session.feed(b"\x1b[?47hx\x1b[1;3H\x1b7\x1b[1;4H\x1b[?47l\x1b[1;2H\x1b7\x1b[1;4H");
         session.feed(b"\x1b[?47;1049h");
         assert_eq!(session.active_screen(), ScreenKind::Alternate);
         assert_eq!(session.char_at(0, 0), 'x');
+        session.feed(b"\x1b8");
+        assert_eq!(session.cursor_column(), 2);
         session.feed(b"\x1b[?1049l");
         assert_eq!(session.cursor_column(), 1);
     }

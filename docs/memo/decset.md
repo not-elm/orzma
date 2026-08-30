@@ -87,8 +87,15 @@ Xtermの一覧には47として「Use Alternate Screen Buffer」と「Enable Gra
 ### 代替画面を離れるときのplacement退避
 
 `DeviceState::switch_screen(Primary)`は`take_placements()`でalt画面のplacementをテーブルから外してidを返す。
-**pumpの掃引（`Vt::sweep_evictions`）では拾えない**ので、`Executor::switch_to_primary_screen`が発生源で
+**pumpの掃引（`Vt::sweep_evictions`）では拾えない**ので、`Executor::switch_screen`が発生源で
 `VtSignal::WebviewEvicted`を出す。liveness はsignalではなく、flipが積む`DamageSpan::Full`が上げる。
+
+### alt 中のリサイズと 1049 の DECRC
+
+`DeviceState::resize`は隠れているprimaryも同じ大きさにする。primaryの`Screen::resize`は
+履歴から行を取り戻す（伸長）か行を履歴へ押し出す（縮小）ので、生カーソルだけでなく
+`Checkpoint`の行も同じ平行移動を受ける。そうでないと`?1049l`のDECRCが、プロンプト行より
+取り戻した行数ぶん上にカーソルを置く。
 
 ### 未実装モードは黙って無視する
 
