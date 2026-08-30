@@ -112,21 +112,24 @@ mod tests {
         app.world_mut().spawn(handle).id()
     }
 
+    #[derive(Debug, PartialEq)]
+    enum SeenRequest {
+        Clear(Entity),
+        Switch(Entity, ViModeSwitch),
+    }
+
     #[derive(Resource, Default)]
-    struct SeenClears(Vec<Entity>);
-    #[derive(Resource, Default)]
-    struct SeenSwitches(Vec<(Entity, ViModeSwitch)>);
+    struct SeenRequests(Vec<SeenRequest>);
 
     fn capture_requests(app: &mut App) {
-        app.init_resource::<SeenClears>()
-            .init_resource::<SeenSwitches>()
+        app.init_resource::<SeenRequests>()
             .add_observer(
-                |ev: On<RequestTtySelectionClear>, mut seen: ResMut<SeenClears>| {
-                    seen.0.push(ev.terminal);
+                |ev: On<RequestTtySelectionClear>, mut seen: ResMut<SeenRequests>| {
+                    seen.0.push(SeenRequest::Clear(ev.terminal));
                 },
             )
-            .add_observer(|ev: On<RequestTtyViMode>, mut seen: ResMut<SeenSwitches>| {
-                seen.0.push((ev.terminal, ev.switch));
+            .add_observer(|ev: On<RequestTtyViMode>, mut seen: ResMut<SeenRequests>| {
+                seen.0.push(SeenRequest::Switch(ev.terminal, ev.switch));
             });
     }
 
@@ -147,10 +150,12 @@ mod tests {
         app.update();
 
         assert!(app.world().get::<ViModeState>(entity).is_some());
-        assert_eq!(app.world().resource::<SeenClears>().0, vec![entity]);
         assert_eq!(
-            app.world().resource::<SeenSwitches>().0,
-            vec![(entity, ViModeSwitch::Enter)]
+            app.world().resource::<SeenRequests>().0,
+            vec![
+                SeenRequest::Clear(entity),
+                SeenRequest::Switch(entity, ViModeSwitch::Enter),
+            ]
         );
     }
 
@@ -171,8 +176,7 @@ mod tests {
         app.update();
 
         assert!(app.world().get::<ViModeState>(entity).is_none());
-        assert!(app.world().resource::<SeenClears>().0.is_empty());
-        assert!(app.world().resource::<SeenSwitches>().0.is_empty());
+        assert!(app.world().resource::<SeenRequests>().0.is_empty());
     }
 
     /// Asserts that entering vi mode marks the entity `KeyboardDisabled`
@@ -232,13 +236,14 @@ mod tests {
 
         assert!(app.world().get::<ViModeState>(entity).is_none());
         assert_eq!(
-            app.world().resource::<SeenClears>().0,
-            vec![entity, entity],
-            "a clear is requested on both enter and exit"
-        );
-        assert_eq!(
-            app.world().resource::<SeenSwitches>().0,
-            vec![(entity, ViModeSwitch::Enter), (entity, ViModeSwitch::Exit)]
+            app.world().resource::<SeenRequests>().0,
+            vec![
+                SeenRequest::Clear(entity),
+                SeenRequest::Switch(entity, ViModeSwitch::Enter),
+                SeenRequest::Clear(entity),
+                SeenRequest::Switch(entity, ViModeSwitch::Exit),
+            ],
+            "each mode switch is preceded by its own selection clear"
         );
     }
 }

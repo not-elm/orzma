@@ -346,10 +346,10 @@ fn decide_button(
     effects
 }
 
-/// Ports the local-selection branches of the old engine's
-/// `ButtonAction::route` (`crates/orzma_tty_engine/src/buttons.rs:129-171`).
-/// The app-forward branch (mouse-mode PTY reporting) is not ported — that is
-/// out of scope until mouse routing returns against `orzma_tty` (D17b).
+/// Ports the local-selection branches of the removed engine's
+/// `ButtonAction::route`. The app-forward branch (mouse-mode PTY reporting)
+/// is not ported — that is out of scope until mouse routing returns against
+/// `orzma_tty` (D17b).
 fn route_locally(evt: ButtonEvent, mods: ProtocolModifiers) -> LocalButtonAction {
     match (evt.kind, evt.button) {
         (MouseReportKind::Press, MouseButtonKind::Left) => {

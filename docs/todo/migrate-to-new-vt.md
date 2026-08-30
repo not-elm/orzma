@@ -15,7 +15,7 @@
 したがって切り替えの完了条件は「vi モードと選択を除いて、旧 engine と同じことが
 できる」であり、切り替え直後は vi モードと選択が一時的に動かない状態を受け入れる。
 
-#### 現状: 切り替え完了。次はサブプロジェクト C 以降
+## 現状: 切り替え完了。次はサブプロジェクト C 以降
 
 `src/main.rs` は `bevy_orzma_tty::OrzmaTtyPlugin` を配線している。`crates/orzma_tty_engine`
 は削除され、`crates/orzma_webview` は `crates/bevy_orzma_webview` にリネームされた。
@@ -93,39 +93,33 @@ SGR マウス（`?1006`）、Alternate Scroll（`?1007`）、Bracketed Paste（`
 | `buttons.rs` | なし | クリックがローカル選択になるかマウスプロトコルのバイト列になるかを決める routing。低レベルの SGR/X10 エンコーダだけが `orzma_tty/src/input/mouse.rs` に移植済みで、**判断ロジックは未移植**。選択側の分岐は切り替え後に回せるが、マウス報告側は切り替えに必要 |
 | `wheel.rs` | `orzma_tty/src/input/wheel.rs` | 201行あるが**非コメント行が0行**。`input.rs` から公開もされていない完全な死蔵コード。`alacritty_terminal::TermMode` を `orzma_vt::VtModes` に読み替えて復活させる |
 | `palette.rs` | なし | `orzma_vt` の `Rgb` を `bevy::Color` に変換する箇所がレンダラ側に存在しない |
-| `title.rs` | なし | `sanitize_title` と永続タイトルコンポーネント。**`orzma_vt` 側に強化版のサニタイザが入ったが、実際のウィンドウタイトルを駆動しているのは今も旧 `title.rs` の弱い方**（U+061C 欠落、strip-before-trim なし） |
+| `title.rs` | `bevy_orzma_tty::title` | **移植済み。** `TtyTitle` コンポーネントと `TtyTitlePlugin` が実装され、`src/window_title.rs` がそれを読んでいる |
 | `input_codec.rs` | `orzma_tty/src/input/keyboard.rs` | **移植済み。** 優先順位も同一で、キーパッド対応が追加されている |
 
-## 4. `src/` の ECS 形状の書き換え
+## 4. `src/` の ECS 形状の書き換え → 解消済み
 
-これは機能不足ではなく設計判断。旧 engine は `TerminalHandle` / `PtyHandle` /
+これは機能不足ではなく設計判断だった。旧 engine は `TerminalHandle` / `PtyHandle` /
 `Coalescer` を**独立したコンポーネント**として公開しており、`src/` はそれぞれを
-個別にクエリしている。
+個別にクエリしていた。新スタックはこれらを不透明な `OrzmaTtyHandle` 1つに閉じ込め、
+22ファイル36箇所の呼び出し側を `OrzmaTtyHandle` / `RequestTty*` に書き換え済み
+（着手順8）。読み取り側の受け皿はスタブ側を選び、`selection_to_string` /
+`selection_type` は `None`、`vi_indicator_snapshot` は
+`(vt().display_offset().0, 0)` を返す。
 
-- `src/action/terminal.rs:50-66` — `Option<&mut PtyHandle>` と `Option<&mut Coalescer>`
-- `src/action/vi/mode.rs:55` — `Query<(&mut TerminalHandle, &mut Coalescer)>`
-- `src/ui/vi_mode_indicator.rs:285` — `entity.take::<Coalescer>()`
-
-新スタックはこれらを不透明な `OrzmaTtyHandle` 1つに閉じ込めているため、
-`action/terminal.rs`、`action/clipboard/paste.rs`、`action/vi/*`、`session/layout.rs`、
-`ui/vi_mode_indicator.rs` の呼び出し側は全面的な書き換えが要る。
-
-型名の対応も変わる。alacritty の re-export だった `Point` / `Column` / `Line` /
+型名の対応も変わった。alacritty の re-export だった `Point` / `Column` / `Line` /
 `Side` / `SelectionType` / `TermMode` / `ViMotion` は、それぞれ
 `orzma_vt::prelude` の `GridPoint` / `GridColumn` / `GridLine` / `CellSide` /
 `SelectionKind` / `VtModes` に対応する（`ViMotion` は `orzma_vt` にまだ無く、
 `bevy_orzma_tty/src/requests/vi_motion.rs` が「`orzma_vt` が型を持つまで」の
 断りつきで重複定義している）。
 
-## 5. 受け手だけ先行している箇所
+## 5. 受け手だけ先行している箇所 → 解消済み
 
-`bevy_orzma_tty/src/signals.rs` は `VtSignal` の8バリアント全てを Bevy イベントに
-変換しているが、**そのイベントを観測するコードがリポジトリ内に1つも無い**。
-`src/window_title.rs` は今も `orzma_tty_engine::TerminalTitle` を読んでいる。
-
-タイトルを実際に画面へ出すには、`bevy_orzma_tty` 側にタイトルを保持する
-コンポーネントと observer が要る（旧 `orzma_tty_engine/src/title.rs` の
-`TerminalTitle` に相当するもの）。
+`bevy_orzma_tty/src/signals.rs` が変換する `VtSignal` の Bevy イベントには、
+今は3つの受け手がいる。`src/session/exit.rs` が `TtyChildExitSignal` を、
+`crates/orzma_tty_renderer/src/grid.rs` が `TtyFrameSignal` を、
+`src/window_title.rs` が `TtyTitle`（`bevy_orzma_tty::title` が
+`TtyTitleChangedSignal` / `TtyTitleResetSignal` から書き込む）をそれぞれ読んでいる。
 
 ---
 

@@ -124,7 +124,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// Builds a terminal around a fake PTY master instead of a spawned
     /// shell, so writes land on `writer` and no real PTY is opened.
     ///
-    /// The master is a [`test_support::RecordingMaster`], so resize
+    /// The master is a `test_support::RecordingMaster`, so resize
     /// calls still round-trip through `pty_size()`; no child process or
     /// reader thread is started, so everything the input methods emit
     /// can be observed on `writer` — typically a

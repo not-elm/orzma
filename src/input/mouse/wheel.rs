@@ -148,9 +148,9 @@ fn apply_vertical_scroll(
 }
 
 /// Converts a signed notch count into a viewport-scroll line count, honoring
-/// the fine-scroll modifier. Ports the scrollback branch of the old engine's
-/// `WheelAction::route` (`crates/orzma_tty_engine/src/wheel.rs:205-211`), which
-/// received `-raw_v` and returned `-(-raw_v) * lines_per`. `raw_v` carries
+/// the fine-scroll modifier. Ports the scrollback branch of the removed
+/// engine's `WheelAction::route`, which received `-raw_v` and returned
+/// `-(-raw_v) * lines_per`. `raw_v` carries
 /// Bevy's wheel sign (positive = wheel up = toward older output), which is
 /// also the positive direction of `Scroll::Delta`, so no negation is applied:
 /// `TerminalViewportScroll.lines` positive = deeper into scrollback.
@@ -251,10 +251,11 @@ mod tests {
         );
     }
 
-    /// Asserts a vertical wheel notch scrolls the target's viewport by a
-    /// non-zero multiple of the configured `lines_per_notch` (3 by default),
-    /// unscaled — guards against `apply_vertical_scroll` clamping or
-    /// rescaling the count.
+    /// Asserts a vertical wheel-up notch scrolls the target's viewport
+    /// toward older output by a positive, non-zero multiple of the
+    /// configured `lines_per_notch` (3 by default), unscaled — guards
+    /// against `apply_vertical_scroll` clamping, rescaling, or flipping the
+    /// sign of the count.
     ///
     /// Case: the user spins the wheel while the cursor sits over a terminal
     /// with no app mouse mode active.
@@ -268,8 +269,8 @@ mod tests {
         let scrolls = app.world().resource::<CapturedScrolls>();
         let total: i32 = scrolls.0.iter().sum();
         assert!(
-            total != 0 && total.rem_euclid(3) == 0,
-            "viewport scroll must pass lines_per_notch (3) through unscaled, got {total} from {:?}",
+            total > 0 && total.rem_euclid(3) == 0,
+            "wheel up must pass lines_per_notch (3) through unscaled as a positive count, got {total} from {:?}",
             scrolls.0
         );
     }
@@ -304,6 +305,7 @@ mod tests {
                 .iter()
                 .sum::<i32>()
         };
+        assert!(up > 0, "wheel up must scroll toward older output");
         assert!(
             up != 0 && down != 0 && up.signum() != down.signum(),
             "wheel up and down must scroll the viewport in opposite directions, got up={up} down={down}"

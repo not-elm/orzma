@@ -119,7 +119,7 @@ fn on_terminal_selection_clear(ev: On<TerminalSelectionClear>, mut commands: Com
 /// Applies a `TerminalSelectionCopy`: writes the selection text (if any) to
 /// the clipboard.
 // TODO: `bevy_orzma_tty` exposes no selection-reading capability yet
-// (docs/todo/migrate-to-new-vt.md item 10), so a copy request currently
+// (docs/todo/migrate-to-new-vt.md item 11), so a copy request currently
 // finds nothing to copy.
 fn on_terminal_selection_copy(_ev: On<TerminalSelectionCopy>) {}
 

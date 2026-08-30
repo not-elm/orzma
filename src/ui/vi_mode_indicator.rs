@@ -106,7 +106,7 @@ fn attach_indicator_to_surface_host(
 /// host's live scroll offset. Gated by `any_with_component::<ViModeState>`
 /// so the schedule short-circuits when nothing is in vi mode.
 // TODO: `total` is stubbed to 0 until `bevy_orzma_tty` exposes a
-// history-size read (docs/todo/migrate-to-new-vt.md item 10); only the
+// history-size read (docs/todo/migrate-to-new-vt.md item 11); only the
 // live scroll offset is real.
 fn refresh_indicator(
     hosts: Query<(&OrzmaTtyHandle, &Children), With<ViModeState>>,

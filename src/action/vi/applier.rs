@@ -118,14 +118,14 @@ fn resolve_selection_toggle(
 }
 
 // TODO: read the live selection kind from the VT once a selection
-// capability exists (docs/todo/migrate-to-new-vt.md item 10); until then
+// capability exists (docs/todo/migrate-to-new-vt.md item 11); until then
 // every toggle resolves to `SelectionOp::Start`.
 fn selection_type() -> Option<SelectionKind> {
     None
 }
 
 // TODO: read the live selection text from the VT once a selection
-// capability exists (docs/todo/migrate-to-new-vt.md item 10); until then
+// capability exists (docs/todo/migrate-to-new-vt.md item 11); until then
 // yank never has anything to copy.
 fn selection_to_string() -> Option<String> {
     None
@@ -272,7 +272,7 @@ mod tests {
 
     /// Asserts that yank always exits vi mode and — since
     /// `selection_to_string` is stubbed to `None` until a selection-reading
-    /// capability lands (docs/todo/migrate-to-new-vt.md item 10) — never
+    /// capability lands (docs/todo/migrate-to-new-vt.md item 11) — never
     /// emits a `CopyAction`.
     ///
     /// Case: the user presses the yank key in vi mode, with or without an
