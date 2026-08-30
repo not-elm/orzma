@@ -46,6 +46,10 @@ impl Cell {
 }
 
 /// The current SGR attributes applied to subsequently printed cells.
+///
+/// Applying an `SGR` sequence to one lives in `interpreter::sgr`, which
+/// holds this type's other `impl` block so the screen layer stays free
+/// of the parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pen {
     /// Foreground selected by SGR 30-38/39/90-97.

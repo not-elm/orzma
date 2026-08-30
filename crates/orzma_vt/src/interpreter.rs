@@ -537,7 +537,7 @@ fn pack_version(major: u32, minor: u32, patch: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::color::Color;
+    use crate::device::color::{Color, Rgb};
     use crate::device::modes::{MouseEncoding, MouseTracking};
     use crate::screen::cell::Cell;
     use crate::screen::grid::GridSize;
@@ -1022,6 +1022,19 @@ mod tests {
         let screen = device.active_screen();
         assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
         assert_eq!(screen.viewport_row(ViewportLine(2))[0].c, 'x');
+    }
+
+    /// Asserts that a parameter list long enough to hit the parser's
+    /// own cap loses its tail, which this terminal cannot detect.
+    ///
+    /// Case: an application sets nine attributes and two direct colours
+    /// in one sequence, and the background never arrives.
+    #[test]
+    fn a_parameter_list_past_the_parser_cap_loses_its_tail() {
+        let device = interpret(b"\x1b[0;1;2;3;4;5;7;8;9;38;2;255;0;0;48;2;0;0;255mx");
+        let cell = device.active_screen().viewport_row(ViewportLine(0))[0];
+        assert_eq!(cell.fg, Color::Rgb(Rgb { r: 255, g: 0, b: 0 }));
+        assert_eq!(cell.bg, Color::DefaultBackground);
     }
 
     /// Asserts that `CSI m` reaches the pen, so a printed cell carries
@@ -1509,11 +1522,11 @@ mod tests {
     /// they do not implement. It is also the point of the dispatcher:
     /// before it existed every CSI sequence reached a `todo!()`.
     ///
-    /// Case: a shell sets a colour with `CSI 0 m` on a terminal that has
-    /// no SGR yet.
+    /// Case: a program inserts blanks with `ICH` on a terminal that has
+    /// no character-editing functions yet.
     #[test]
     fn an_unimplemented_sequence_is_ignored() {
-        let device = interpret(b"\x1b[0ma");
+        let device = interpret(b"\x1b[2@a");
         assert_eq!(
             device.active_screen().viewport_row(ViewportLine(0))[0].c,
             'a'

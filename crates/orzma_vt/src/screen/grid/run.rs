@@ -15,7 +15,8 @@ bitflags! {
     /// The bit values are pinned by the renderer's shader constants,
     /// which read the raw bits: renumbering a flag silently repaints
     /// every cell with the wrong attribute. Bits 7-15 are reserved for
-    /// the underline variants SGR 4:2-4:5 adds.
+    /// the SGR attributes this terminal parses but cannot yet paint —
+    /// the underline variants `4:2`-`4:5`, blink, and overline.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
     pub struct Style: u16 {
         /// Bold weight.
