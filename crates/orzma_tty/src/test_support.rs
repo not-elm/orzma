@@ -5,13 +5,13 @@
 use orzma_vt::prelude::{
     DisplayOffset, Frame, GridSize, InterpretOutput, Scroll, Vt, VtModes, VtSignal,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use portable_pty::{MasterPty, PtySize};
 use std::collections::VecDeque;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::io::Read;
 use std::io::{Result as IoResult, Write};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -189,14 +189,14 @@ impl MasterPty for FailingMaster {
 /// It also answers `get_size` with whatever it was last resized to, so
 /// a caller that writes a size and reads it back sees what a real
 /// master would.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 pub(crate) struct RecordingMaster {
     calls: Arc<Mutex<Vec<PtySize>>>,
     size: Mutex<PtySize>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl RecordingMaster {
     /// Builds the fake at `initial`, plus the shared handle its
     /// `resize` calls are recorded into.
@@ -222,7 +222,7 @@ impl RecordingMaster {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl MasterPty for RecordingMaster {
     fn resize(&self, size: PtySize) -> anyhow::Result<()> {
         self.calls.lock().unwrap().push(size);

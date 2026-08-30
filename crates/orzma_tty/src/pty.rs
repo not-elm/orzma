@@ -6,6 +6,7 @@ use crate::{
 };
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+#[cfg(any(test, feature = "test-support"))]
 use std::io::Result as IoResult;
 use std::io::{Read, Write};
 #[cfg(target_os = "macos")]
@@ -128,9 +129,15 @@ impl Pty {
             .expect("MasterPty::get_size")
     }
 
-    /// Opens a PTY at the given grid size but routes writes to `writer`
-    /// instead of the master, spawning no child process and no reader
-    /// thread — the injectable seam behind `OrzmaTty::detached`.
+    /// Opens a real PTY at the given grid size but routes writes to
+    /// `writer` instead of the master, spawning no child process and no
+    /// reader thread.
+    ///
+    /// `orzma_tty`'s own `#[cfg(test)]` tests are the only remaining
+    /// caller — `OrzmaTty::detached` builds around
+    /// [`crate::test_support::RecordingMaster`] instead so that
+    /// downstream test fixtures never open a real PTY.
+    #[cfg(test)]
     pub fn detached(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> OrzmaTtyResult<Self> {
         let pty_pair = native_pty_system()
             .openpty(PtySize {
@@ -146,6 +153,7 @@ impl Pty {
     /// Builds a `Pty` around an arbitrary master and writer, with no
     /// child process and no reader thread — lets tests inject a fake
     /// master (e.g. one whose `resize` fails).
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_master(master: Box<dyn MasterPty + Send>, writer: Box<dyn Write + Send>) -> Self {
         let (_, chunk_rx) = unbounded::<Vec<u8>>();
         let (_, exit_rx) = unbounded::<Option<i32>>();
@@ -155,6 +163,7 @@ impl Pty {
     /// Builds a `Pty` like [`Self::with_master`], but with the chunk
     /// and exit streams fed by the given receivers — lets tests inject
     /// PTY output and child-exit reports.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_master_and_channels(
         master: Box<dyn MasterPty + Send>,
         writer: Box<dyn Write + Send>,
@@ -255,11 +264,13 @@ fn spawn_reader_thread(
     });
 }
 
-/// Stand-in child killer for [`Pty::detached`], which has no child
-/// process to kill.
+/// Stand-in child killer for the PTY-less constructors, which have no
+/// child process to kill.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug)]
 struct DetachedKiller;
 
+#[cfg(any(test, feature = "test-support"))]
 impl ChildKiller for DetachedKiller {
     fn kill(&mut self) -> IoResult<()> {
         Ok(())

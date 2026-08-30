@@ -10,8 +10,12 @@ use crate::{
 };
 use orzma_vt::prelude::*;
 use portable_pty::PtySize;
+#[cfg(any(test, feature = "test-support"))]
+use std::io::Write;
 use std::path::PathBuf;
-use std::{io::Write, mem, time::Instant};
+use std::{mem, time::Instant};
+#[cfg(any(test, feature = "test-support"))]
+use test_support::RecordingMaster;
 
 mod coalescer;
 mod error;
@@ -117,20 +121,25 @@ impl<V: Vt> OrzmaTty<V> {
         &self.vt
     }
 
-    /// Builds a terminal whose PTY writes land on `writer` instead of a
-    /// spawned shell.
+    /// Builds a terminal around a fake PTY master instead of a spawned
+    /// shell, so writes land on `writer` and no real PTY is opened.
     ///
-    /// A PTY is still opened at the grid size, but no child process or
+    /// The master is a [`test_support::RecordingMaster`], so resize
+    /// calls still round-trip through `pty_size()`; no child process or
     /// reader thread is started, so everything the input methods emit
     /// can be observed on `writer` — typically a
     /// [`test_support::CaptureSink`].
+    ///
+    /// Available to tests only: in-crate under `cfg(test)`, downstream
+    /// via the `test-support` feature.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn detached(
         mut vt: V,
         cols: u16,
         rows: u16,
         writer: Box<dyn Write + Send>,
     ) -> OrzmaTtyResult<Self> {
-        let pty = Pty::detached(cols, rows, writer)?;
+        let pty = Pty::with_master(Box::new(RecordingMaster::at(cols, rows).0), writer);
         vt.resize(GridSize { cols, rows });
         Ok(Self {
             vt,
@@ -410,6 +419,27 @@ mod tests {
         assert!(first.frame.is_some());
         let second = tty.pump();
         assert!(second.frame.is_none());
+    }
+
+    /// Asserts that a detached terminal's resize round-trips through the
+    /// fake master and that pumping it never reports a child exit.
+    ///
+    /// Case: a `src/` fixture builds a terminal the same way dozens of
+    /// unit tests in this workspace do, resizes it to the test window,
+    /// and pumps it for a few frames.
+    #[test]
+    fn detached_resizes_through_the_fake_master_and_never_exits() {
+        let sink = CaptureSink::default();
+        let mut term = OrzmaTty::detached(FakeVt::new(80, 24), 80, 24, Box::new(sink))
+            .expect("OrzmaTty::detached");
+
+        term.resize(120, 40).expect("resize");
+        let size = term.pty_size();
+        assert_eq!((size.cols, size.rows), (120, 40));
+
+        for _ in 0..3 {
+            assert_eq!(child_exits(&term.pump().signals), vec![]);
+        }
     }
 
     /// Asserts that a pump reports the signals its eviction sweep
