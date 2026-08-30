@@ -354,7 +354,9 @@ mod tests {
 
     #[test]
     fn hover_over_terminal_link_sets_state_and_pointer() {
-        use orzma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
+        use orzma_tty_renderer::schema::{
+            Color, GridCell, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri,
+        };
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -387,15 +389,18 @@ mod tests {
         let grid = TerminalGrid {
             cols: 10,
             rows: 5,
-            cells: vec![vec![Cell {
+            cells: vec![vec![GridCell {
                 text: "x".to_string(),
                 width: 1,
-                fg: Color::WHITE,
-                bg: Color::BLACK,
+                point: GridPoint::default(),
+                fg: Color::DefaultForeground,
+                bg: Color::DefaultBackground,
                 style: 0,
-                hyperlink_id: Some(HyperlinkId(7)),
+                hyperlink: Some(Hyperlink {
+                    id: HyperlinkId(7),
+                    uri: HyperlinkUri::new("https://example.com"),
+                }),
             }]],
-            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example.com"))],
             ..default()
         };
         let term = app
@@ -435,7 +440,9 @@ mod tests {
 
     #[test]
     fn hover_skips_mouse_disabled_surface() {
-        use orzma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
+        use orzma_tty_renderer::schema::{
+            Color, GridCell, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri,
+        };
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -468,15 +475,18 @@ mod tests {
         let grid = TerminalGrid {
             cols: 10,
             rows: 5,
-            cells: vec![vec![Cell {
+            cells: vec![vec![GridCell {
                 text: "x".to_string(),
                 width: 1,
-                fg: Color::WHITE,
-                bg: Color::BLACK,
+                point: GridPoint::default(),
+                fg: Color::DefaultForeground,
+                bg: Color::DefaultBackground,
                 style: 0,
-                hyperlink_id: Some(HyperlinkId(7)),
+                hyperlink: Some(Hyperlink {
+                    id: HyperlinkId(7),
+                    uri: HyperlinkUri::new("https://example.com"),
+                }),
             }]],
-            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example.com"))],
             ..default()
         };
         app.world_mut().spawn((
@@ -508,7 +518,9 @@ mod tests {
 
     #[test]
     fn hover_over_webview_host_leaves_cursor_to_cef() {
-        use orzma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
+        use orzma_tty_renderer::schema::{
+            Color, GridCell, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri,
+        };
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -535,15 +547,18 @@ mod tests {
         let grid = TerminalGrid {
             cols: 10,
             rows: 5,
-            cells: vec![vec![Cell {
+            cells: vec![vec![GridCell {
                 text: "x".to_string(),
                 width: 1,
-                fg: Color::WHITE,
-                bg: Color::BLACK,
+                point: GridPoint::default(),
+                fg: Color::DefaultForeground,
+                bg: Color::DefaultBackground,
                 style: 0,
-                hyperlink_id: Some(HyperlinkId(7)),
+                hyperlink: Some(Hyperlink {
+                    id: HyperlinkId(7),
+                    uri: HyperlinkUri::new("https://example.com"),
+                }),
             }]],
-            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example.com"))],
             ..default()
         };
         app.world_mut().spawn((
