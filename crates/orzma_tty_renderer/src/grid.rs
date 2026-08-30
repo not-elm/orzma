@@ -4,15 +4,24 @@
 
 use crate::schema::TerminalGrid;
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::TtyFrameSignal;
+use bevy_orzma_tty::prelude::{OrzmaTtyHandle, TtyFrameSignal};
 
-/// Registers the `apply_frame` observer.
+/// Registers the `apply_frame` observer and makes every terminal
+/// handle carry a `TerminalGrid`.
+///
+/// The grid is a required component of [`OrzmaTtyHandle`] because the
+/// VT emits its bootstrap repaint exactly once: a frame delivered to a
+/// handle without a grid would be dropped, and `orzma_tty` offers no
+/// repaint request to recover it. Bevy registers a requirement only
+/// before the first entity carrying the handle exists, so the plugin
+/// must be added before any terminal is spawned.
 #[derive(Default)]
 pub struct TerminalGridPlugin;
 
 impl Plugin for TerminalGridPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_frame);
+        app.register_required_components::<OrzmaTtyHandle, TerminalGrid>()
+            .add_observer(apply_frame);
     }
 }
 
@@ -29,10 +38,9 @@ impl Plugin for TerminalGridPlugin {
 /// rebuild the GPU buffers, so a spurious write here would rebuild
 /// them for nothing.
 ///
-/// A terminal entity must carry a `TerminalGrid` from the same spawn
-/// as its handle: a frame delivered to an entity without one is
-/// dropped silently, and `orzma_tty` offers no repaint request to
-/// recover the bootstrap frame that was lost.
+/// A frame addressed to an entity without a grid is ignored; with the
+/// plugin registered that is only an entity that never carried a
+/// handle.
 fn apply_frame(signal: On<TtyFrameSignal>, mut terminals: Query<&mut TerminalGrid>) {
     let Ok(grid) = terminals.get_mut(signal.terminal) else {
         return;
@@ -46,12 +54,12 @@ fn apply_frame(signal: On<TtyFrameSignal>, mut terminals: Query<&mut TerminalGri
 mod tests {
     use super::*;
     use crate::schema::{
-        AnchoredPlacement, Cursor, DisplayOffset, GridColumn, GridLine, GridPoint, PlacementId,
-        PlacementSize,
+        AnchoredPlacement, DisplayOffset, GridColumn, GridLine, GridPoint, PlacementId,
+        PlacementSize, quiet_frame,
     };
-    use bevy_orzma_tty::prelude::{OrzmaTtyHandle, OrzmaTtyPlugin};
-    use orzma_vt::prelude::{Frame, GridSize};
-    use std::time::Duration;
+    use bevy_orzma_tty::prelude::OrzmaTtyPlugin;
+    use orzma_vt::prelude::Frame;
+    use std::{thread::sleep, time::Duration};
 
     #[derive(Resource, Default)]
     struct ChangedGrids(usize);
@@ -63,21 +71,6 @@ mod tests {
         seen.0 += grids.iter().count();
     }
 
-    /// A frame for a one-by-one grid that changes nothing on its own.
-    fn quiet_frame() -> Frame {
-        Frame {
-            size: GridSize { cols: 1, rows: 1 },
-            rows: vec![],
-            cursor: Cursor::default(),
-            display_offset: DisplayOffset(0),
-            vi_cursor: None,
-            selection: None,
-            placements: None,
-            palette: None,
-            hyperlinks: vec![],
-        }
-    }
-
     /// Builds an app with the observer and one settled grid entity,
     /// with the spawn's own change notification already drained.
     fn app_with_grid() -> (App, Entity) {
@@ -85,16 +78,7 @@ mod tests {
         app.add_plugins(TerminalGridPlugin)
             .init_resource::<ChangedGrids>()
             .add_systems(Update, count_changed_grids);
-        let terminal = app
-            .world_mut()
-            .spawn(TerminalGrid {
-                cols: 1,
-                rows: 1,
-                cells: vec![vec![]],
-                cursor: Some(Cursor::default()),
-                ..Default::default()
-            })
-            .id();
+        let terminal = app.world_mut().spawn(TerminalGrid::settled()).id();
         app.update();
         app.world_mut().resource_mut::<ChangedGrids>().0 = 0;
         (app, terminal)
@@ -103,9 +87,8 @@ mod tests {
     /// Asserts that a frame carrying nothing new leaves the grid
     /// component unchanged.
     ///
-    /// Case: a frame's every section already equals what the mirror
-    /// holds, because the coalescer folded in a change the mirror had
-    /// already settled to before this frame reached it.
+    /// Case: a synthetic frame repeats what the mirror already holds, a
+    /// shape the VT's emit gate never produces on its own.
     #[test]
     fn a_frame_with_nothing_new_leaves_the_grid_unchanged() {
         let (mut app, terminal) = app_with_grid();
@@ -120,8 +103,9 @@ mod tests {
     /// Asserts that a frame whose metadata moved does mark the grid
     /// changed.
     ///
-    /// Case: the user scrolls back through history without the shell
-    /// repainting any cell.
+    /// Case: a synthetic offset-only frame reaches a settled mirror, a
+    /// shape the VT itself never emits because a scroll repaints every
+    /// row.
     #[test]
     fn a_frame_that_moves_the_viewport_marks_the_grid_changed() {
         let (mut app, terminal) = app_with_grid();
@@ -174,11 +158,11 @@ mod tests {
         );
     }
 
-    /// Asserts that a frame addressed to a terminal without a grid is
+    /// Asserts that a frame addressed to an entity without a grid is
     /// ignored rather than panicking.
     ///
-    /// Case: the host spawns the handle a frame before it attaches the
-    /// renderer's grid component.
+    /// Case: a signal names an entity that never carried a terminal
+    /// handle.
     #[test]
     fn a_frame_for_an_entity_without_a_grid_is_ignored() {
         let mut app = App::new();
@@ -191,25 +175,23 @@ mod tests {
         assert!(app.world().get::<TerminalGrid>(bare).is_none());
     }
 
-    /// Asserts that bytes fed to a terminal handle reach its grid
-    /// through the signal pump and the frame observer.
+    /// Asserts that bytes fed to a terminal handle reach the grid the
+    /// handle brings with it, through the signal pump and the frame
+    /// observer.
     ///
     /// Case: the shell prints its first prompt after the terminal
-    /// spawns.
+    /// spawns from its handle alone.
     #[test]
     fn fed_bytes_reach_the_grid_through_the_pump() {
         let mut app = App::new();
         app.add_plugins((OrzmaTtyPlugin, TerminalGridPlugin));
         let (mut handle, _sink) = OrzmaTtyHandle::detached(4, 3);
         handle.feed_bytes(b"hi");
-        let terminal = app
-            .world_mut()
-            .spawn((handle, TerminalGrid::default()))
-            .id();
+        let terminal = app.world_mut().spawn(handle).id();
         // NOTE: The coalescer decides on wall-clock time — 3 ms of
         // idle after the last chunk, 12 ms at most — so the pump must
         // run after that window closed or the frame is still pending.
-        std::thread::sleep(Duration::from_millis(20));
+        sleep(Duration::from_millis(20));
         app.update();
 
         let grid = app.world().get::<TerminalGrid>(terminal).unwrap();

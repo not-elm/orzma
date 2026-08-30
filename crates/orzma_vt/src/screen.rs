@@ -156,6 +156,11 @@ impl Screen {
     /// scrolled out of the window. [`Self::line_feed`] reports nothing for
     /// the wrap's cursor motion, so passing its value through would leave
     /// the character just written unpainted.
+    // TODO: Store wide characters as a cell plus a spacer and compose
+    // zero-width marks into the previous cell, so that `Run::cols` sums
+    // display widths as its doc promises; the renderer's `runs_to_cells`
+    // already advances by display width, and until then every cell after
+    // a wide character lands one column right of the VT's own cursor.
     pub fn print(&mut self, c: char) -> Option<DamageSpan> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
         let wrap = if self.state.pending_wrap {
@@ -706,9 +711,7 @@ impl Screen {
     /// against the live tail alone, so a scrolled read has to come
     /// through here.
     pub fn viewport_row(&self, line: ViewportLine) -> &Row<Cell> {
-        let offset =
-            i32::try_from(self.viewport.offset.0).expect("scrollback never exceeds i32::MAX rows");
-        self.grid.row(GridLine(i32::from(line.0) - offset))
+        self.grid.row(line.to_grid(self.viewport.offset))
     }
 
     /// Number of scrollback rows the viewport sits above the live tail; always zero until scroll operations arrive.

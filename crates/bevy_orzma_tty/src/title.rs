@@ -9,7 +9,9 @@ use bevy::prelude::*;
 /// title's return to the host's default.
 ///
 /// The string arrives already sanitized by the VT's OSC parser, so
-/// hosts can show it as is.
+/// hosts can show it as is. A signal that repeats the state already
+/// held leaves the component untouched, so a host gated on
+/// `Changed<TtyTitle>` re-runs only when the title really moves.
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
 pub struct TtyTitle(pub Option<String>);
 
@@ -25,8 +27,10 @@ impl Plugin for TtyTitlePlugin {
 }
 
 fn on_title_changed(event: On<TtyTitleChangedSignal>, mut titles: Query<&mut TtyTitle>) {
-    if let Ok(mut title) = titles.get_mut(event.terminal) {
-        title.set_if_neq(TtyTitle(Some(event.title.clone())));
+    if let Ok(mut title) = titles.get_mut(event.terminal)
+        && title.0.as_deref() != Some(event.title.as_str())
+    {
+        title.0 = Some(event.title.clone());
     }
 }
 
@@ -64,8 +68,8 @@ mod tests {
     /// Asserts that a title signal sets the component and a reset
     /// signal clears it.
     ///
-    /// Case: vim sets the window title on start and the shell's prompt
-    /// resets it after vim exits.
+    /// Case: vim sets the window title on start and, on exit, pops the
+    /// empty title it had saved on the title stack.
     #[test]
     fn the_title_signals_write_the_component() {
         let (mut app, terminal) = app_with_title();
@@ -83,11 +87,11 @@ mod tests {
 
     /// Asserts that a signal carrying the state already shown — the
     /// same title, or a reset of an already-reset title — leaves the
-    /// component unchanged, so hosts gated on `Changed<TtyTitle>` do
-    /// not re-run.
+    /// component unchanged rather than rewriting it.
     ///
     /// Case: a shell prompt re-sends the same title on every command,
-    /// and later resets the title twice.
+    /// and a program later pops an empty saved title from the title
+    /// stack twice.
     #[test]
     fn a_repeated_title_does_not_mark_the_component_changed() {
         let (mut app, terminal) = app_with_title();

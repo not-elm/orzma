@@ -2,6 +2,8 @@
 //! tail, the coordinates measured from its top, and the motions that
 //! move it.
 
+use crate::screen::grid::coords::GridLine;
+
 /// Number of scrollback rows the viewport sits above the live tail.
 ///
 /// `0` means the viewport is pinned to the live tail; a positive value
@@ -25,6 +27,22 @@ pub struct DisplayOffset(pub u32);
 /// user scrolls or the grid is resized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct ViewportLine(pub u16);
+
+impl ViewportLine {
+    /// Projects the line into active-grid coordinates, the inverse of
+    /// [`GridLine::to_viewport`]: `grid_line = viewport_line - offset`.
+    ///
+    /// # Invariants
+    ///
+    /// The offset must fit `i32`, which the scrollback capacity
+    /// guarantees for every offset the VT produces; a larger one is a
+    /// producer bug and panics rather than wrapping.
+    #[inline]
+    pub fn to_grid(self, offset: DisplayOffset) -> GridLine {
+        let offset = i32::try_from(offset.0).expect("scrollback never exceeds i32::MAX rows");
+        GridLine(i32::from(self.0) - offset)
+    }
+}
 
 /// A viewport motion over the scrollback, clamped by the VT at both
 /// the oldest retained line and the live tail.
@@ -55,4 +73,23 @@ pub enum Scroll {
 #[derive(Debug, Default, PartialEq)]
 pub struct Viewport {
     pub offset: DisplayOffset,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Asserts that a viewport line projects to the grid line the
+    /// display offset places it on, and that the projection round-trips
+    /// through `GridLine::to_viewport`.
+    ///
+    /// Case: the user has scrolled three rows back and the renderer
+    /// materializes the second visible row.
+    #[test]
+    fn to_grid_inverts_to_viewport() {
+        let offset = DisplayOffset(3);
+        let line = ViewportLine(1).to_grid(offset);
+        assert_eq!(line, GridLine(-2));
+        assert_eq!(line.to_viewport(offset, 5), Some(ViewportLine(1)));
+    }
 }
