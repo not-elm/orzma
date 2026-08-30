@@ -49,16 +49,25 @@ DECRPMの`Pm`は 0=未認識 / 1=設定 / 2=解除 / 3=恒久設定 / 4=恒久�
 | 7 | DECAWM — 自動折り返し | `Screen::print`が右端で無条件に`pending_wrap`を立てるため常時オン相当 |
 | 25 | DECTCEM — カーソル表示 | `Screen::cursor`にDECSCUSRと合わせて実装するTODOがある |
 
-代替画面。単なるフラグではなく合成的な意味を持つ。
+代替画面（**実装済み**）。単なるフラグではなく合成的な意味を持つ。
 
 | Ps | Set | Reset |
 | - | - | - |
 | 47 | 代替画面へ | 通常画面へ |
-| 1047 | 代替画面へ | 通常画面へ。**代替画面にいたなら先に消去** |
+| 1047 | 代替画面へ | 代替画面にいたなら**先に消去** → 通常画面へ |
 | 1048 | DECSCでカーソル保存のみ | DECRCで復元のみ |
-| 1049 | カーソル保存 → 代替画面へ → **消去** | 通常画面へ → カーソル復元 |
+| 1049 | primaryでDECSC → 代替画面へ → **消去** | 通常画面へ → primaryでDECRC。**消去しない** |
 
-1049は1047と1048の合成。Xterm自身がterminfoベースのアプリには47ではなくこれを使えと書いている。
+Xterm自身がterminfoベースのアプリには47ではなくこれを使えと書いている。ctlseqsの散文は1049のresetを
+「1047と1048の合成」と書くが、xtermの実装（`charproc.c`）は`?1049l`で消去しない。本実装は実装側に従う。
+
+- **べき等**: 代替画面上でのDECSET、通常画面上でのDECRSTは完全なno-op（damageもsignalも出ず、1049の
+  DECSC/DECRCも走らない）。alacrittyと同じ。xtermは切替が起きなくてもCursorSave/CursorRestoreする。
+- **カーソルは画面ごと**: flipは位置もpenも持ち越さない。1049の往復はprimary側の`Checkpoint`で復元される
+  （xtermのDECSCスロットも`sc[whichBuf]`でバッファごと）。alt画面のcursor/pen/margins/tabsは前回の
+  altセッションから残り、1049の消去はその残ったpenの背景でセルを埋める。
+- 混用（`?47h`→`?1049l`など）は上のべき等規則の帰結どおりで、特別扱いしない。
+  `?1049h`→`?47l`→`?1049l`では保存したカーソルは復元されない（xtermは復元する）。
 
 ## 注意点
 
@@ -74,9 +83,11 @@ Xtermの一覧には47として「Use Alternate Screen Buffer」と「Enable Gra
 
 `Screen::new(size, 0)`で構築されるため、`DeviceState::scroll`は代替画面で自然にno-opになる。
 
-### 1049実装時のplacement退避
+### 代替画面を離れるときのplacement退避
 
-`DeviceState::switch_screen`は`take_placements()`でplacementをテーブルから外してidを返す。**pumpの掃引（`Vt::sweep_evictions`）では拾えない**ので、発生源で`VtSignal::WebviewEvicted`を出す必要がある。
+`DeviceState::switch_screen(Primary)`は`take_placements()`でalt画面のplacementをテーブルから外してidを返す。
+**pumpの掃引（`Vt::sweep_evictions`）では拾えない**ので、`Executor::switch_to_primary_screen`が発生源で
+`VtSignal::WebviewEvicted`を出す。liveness はsignalではなく、flipが積む`DamageSpan::Full`が上げる。
 
 ### 未実装モードは黙って無視する
 

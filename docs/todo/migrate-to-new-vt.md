@@ -21,8 +21,8 @@
 
 以前のブロッカーは「新スタックが動かない」ことだったが、それは解消した。`orzma_vt` に
 `todo!()` は1つも残っておらず、workspace の `#[ignore]` もゼロ、画面には色が出る。
-**いま残っているのは、新スタックを `src/` に繋ぎ直す作業と、全画面アプリを動かすための
-代替画面切替である。**
+**いま残っているのは、新スタックを `src/` に繋ぎ直す作業である。** 代替画面は配線済みで、
+vim / less で実用検証できる。
 
 各クレートのビルド状態（`cargo check -p <crate> --all-targets`）:
 
@@ -65,16 +65,13 @@
 | CHT / CBT（`I` / `Z`） | タブストップ単位の移動 |
 | TBC / CTC / DECST8C（`g` / `W`） | タブストップの編集 |
 
-`set_private_modes` は2モードから **10モード**に。DECCKM（`?1`）、マウストラッキング
-（`?1000` / `?1002` / `?1003`）、フォーカス報告（`?1004`）、SGR マウス（`?1006`）、
-Alternate Scroll（`?1007`）、Bracketed Paste（`?2004`）。
+`set_private_modes` は2モードから **14モード**に。DECCKM（`?1`）、代替画面（`?47` / `?1047` /
+`?1048` / `?1049`）、マウストラッキング（`?1000` / `?1002` / `?1003`）、フォーカス報告（`?1004`）、
+SGR マウス（`?1006`）、Alternate Scroll（`?1007`）、Bracketed Paste（`?2004`）。
+**vim や less が動くようになった。**
 
 **まだ未配線で、切り替えに効くもの:**
 
-- **`?1049`（代替画面）** — `DeviceState::switch_screen` は実装済みだがインタプリタから
-  呼ばれていない。**vim や less が一切使えない**ので実用検証ができない。実装時は
-  `switch_screen` が `take_placements()` で返す placement を発生源で
-  `VtSignal::WebviewEvicted` にする必要がある（pump の掃引では拾えない）
 - **`?7`（DECAWM）/ `?25`（DECTCEM）** — `VtModes` にフィールドが無く、`Screen::print` と
   `Screen::cursor` の振る舞い変更を伴う
 - **`?1005`（UTF-8 マウス）** — 意図的に答えていない。`MouseReport::encode` が `Utf8` を
@@ -200,10 +197,9 @@ fn clear_selection(_e: On<RequestTtySelectionClear>) {}
 
 1. ~~**`DeviceState::resize` / `scroll`**~~ — 実装済み
 2. ~~**`csi_dispatch` に SGR / ED / EL / 相対カーソル移動**~~ — 実装済み。8→22アーム
-3. ~~**`set_private_modes` の拡張**~~ — 2→10モード。ただし `?1049` は下記に残る
-4. **`?1049`（代替画面）** — これが次の一手。**vim や less が動くようになり、そこで初めて
-   新スタックを実用的に検証できる。** `switch_screen` が返す placement を発生源で
-   `WebviewEvicted` にする設計判断を含む
+3. ~~**`set_private_modes` の拡張**~~ — 2→14モード
+4. ~~**`?1049`（代替画面）**~~ — 実装済み（47 / 1047 / 1048 / 1049）。placement は発生源で
+   `WebviewEvicted` にした。設計は `docs/memo/decset.md` の代替画面の節
 5. **`osc_dispatch` の残り** — パレット、cwd、ハイパーリンク、クリップボード。
    `apc_dispatch` も空実装なので webview が出ない
 6. **`wheel.rs` の復活と `buttons.rs` のマウス報告側の移植** — `mouse_tracking` は
