@@ -286,12 +286,12 @@ fn ime_policy_system(
     let scale = window.resolution.scale_factor().max(f32::EPSILON);
     let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
-    let cursor_cell = grid.cursor.clone().unwrap_or_default();
+    let (cursor_col, cursor_row) = grid.cursor_viewport_cell().unwrap_or((0, 0));
     let host_origin_phys = ui_xform.translation - 0.5 * node.size();
     let cell_origin_phys = host_origin_phys
         + Vec2::new(
-            cursor_cell.x as f32 * cell_w_phys,
-            (cursor_cell.y as f32 + 1.0) * cell_h_phys,
+            f32::from(cursor_col) * cell_w_phys,
+            (f32::from(cursor_row) + 1.0) * cell_h_phys,
         );
     let pos_logical = cell_origin_phys / scale;
     if window.ime_position != pos_logical {

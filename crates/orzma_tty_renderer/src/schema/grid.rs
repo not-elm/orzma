@@ -123,6 +123,18 @@ impl TerminalGrid {
         None
     }
 
+    /// Projects the cursor into viewport cells as `(column, row)`, or
+    /// `None` when no frame has arrived yet or the cursor's line is
+    /// scrolled out of the visible rows.
+    pub fn cursor_viewport_cell(&self) -> Option<(u16, u16)> {
+        let cursor = self.cursor.as_ref()?;
+        let row = cursor
+            .point
+            .line
+            .to_viewport(DisplayOffset(self.display_offset), self.rows)?;
+        Some((cursor.point.column.0, row.0))
+    }
+
     /// Returns the viewport cursor cell and the packed style the
     /// shader decodes, preferring the vi cursor over the live cursor.
     ///
@@ -410,6 +422,40 @@ mod tests {
         let (pos, style) = grid.current_cursor_pos_and_style();
         assert_eq!(pos, UVec2::new(3, 5));
         assert_eq!(style & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
+    }
+
+    /// Asserts that `cursor_viewport_cell` follows the display offset and
+    /// yields `None` once the cursor's line scrolls out of view.
+    ///
+    /// Case: the user scrolls back through history while the shell's
+    /// cursor sits on the bottom row of a 24-row screen.
+    #[test]
+    fn cursor_viewport_cell_follows_the_display_offset() {
+        let mut grid = TerminalGrid {
+            cols: 80,
+            rows: 24,
+            ..TerminalGrid::default()
+        };
+        grid.cursor = Some(Cursor {
+            point: GridPoint {
+                line: GridLine(23),
+                column: GridColumn(5),
+            },
+            ..Cursor::default()
+        });
+        assert_eq!(grid.cursor_viewport_cell(), Some((5, 23)));
+
+        grid.display_offset = 3;
+        assert_eq!(grid.cursor_viewport_cell(), None);
+
+        grid.cursor = Some(Cursor {
+            point: GridPoint {
+                line: GridLine(10),
+                column: GridColumn(0),
+            },
+            ..Cursor::default()
+        });
+        assert_eq!(grid.cursor_viewport_cell(), Some((0, 13)));
     }
 
     /// Asserts that suppression clears the visible bit of the packed
