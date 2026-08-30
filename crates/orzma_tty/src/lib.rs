@@ -130,8 +130,9 @@ impl<V: Vt> OrzmaTty<V> {
     /// can be observed on `writer` — typically a
     /// [`test_support::CaptureSink`].
     ///
-    /// Available to tests only: in-crate under `cfg(test)`, downstream
-    /// via the `test-support` feature.
+    /// The constructor is compiled for tests only: in-crate under
+    /// `cfg(test)`, and for downstream crates through the `test-support`
+    /// feature.
     #[cfg(any(test, feature = "test-support"))]
     pub fn detached(
         mut vt: V,

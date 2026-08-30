@@ -216,8 +216,8 @@ impl CellContext<'_> {
 }
 
 /// Resolves `target` to its `CellContext` at the given cell pitch, or `None`
-/// when it is no longer a live surface. Shared by the button and wheel
-/// dispatchers so both build a hit-test context the same way.
+/// when it is no longer a live surface. The button dispatcher builds its
+/// hit-test context through this for both live events and synthesized drags.
 fn cell_context_for<'a>(
     terminals: &'a TerminalSurfaces<'_, '_>,
     target: Entity,
@@ -313,6 +313,12 @@ mod test_support {
 mod tests {
     use super::*;
 
+    /// Asserts that `cell_at_local` yields 1-indexed cell coordinates,
+    /// clamps them to the grid bounds, and reports which half of the cell
+    /// was hit.
+    ///
+    /// Case: the user clicks the pane's top-left corner, a point far past
+    /// the bottom-right cell, and the right half of a cell in the top row.
     #[test]
     fn cell_at_local_is_one_indexed_and_clamped() {
         let (cell, side) = cell_at_local(Vec2::new(0.0, 0.0), 10.0, 20.0, 80, 24);

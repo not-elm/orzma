@@ -81,9 +81,10 @@ pub(crate) struct CompositeNotified;
 ///
 /// The projection is scheduled in `PostUpdate` before
 /// `TerminalMaterialSystems::UpdateMaterial`: grid state settles during
-/// `Update` (the PTY drain systems flush the `FrameSnapshot` / `FrameDelta`
-/// observers there), so projecting just before the material rebuild hands the
-/// same frame's overlays to the shader.
+/// `Update` (`bevy_orzma_tty`'s pump emits `TtyFrameSignal` there and the
+/// renderer's `apply_frame` observer mirrors it into `TerminalGrid`), so
+/// projecting just before the material rebuild hands the same frame's
+/// overlays to the shader.
 pub(crate) struct WebviewPlugin;
 
 impl Plugin for WebviewPlugin {

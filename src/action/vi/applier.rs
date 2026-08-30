@@ -47,7 +47,7 @@ fn on_vi_scroll(ev: On<ViScrollRequest>, mut commands: Commands) {
 /// Resolves a selection toggle against the (currently stubbed) current
 /// selection and requests the matching operation.
 fn on_vi_selection_toggle(ev: On<ViSelectionToggleRequest>, mut commands: Commands) {
-    match resolve_selection_toggle(selection_type(), ev.ty) {
+    match SelectionOp::resolve(selection_type(), ev.ty) {
         SelectionOp::Start(kind) => {
             commands.trigger(RequestTtySelectionStartAtViCursor {
                 terminal: ev.entity,
@@ -104,16 +104,15 @@ enum SelectionOp {
     Clear,
 }
 
-/// Resolves a selection toggle against the current selection: same kind
-/// clears, a different kind switches, none starts.
-fn resolve_selection_toggle(
-    current: Option<SelectionKind>,
-    requested: SelectionKind,
-) -> SelectionOp {
-    match current {
-        Some(c) if c == requested => SelectionOp::Clear,
-        Some(_) => SelectionOp::Change(requested),
-        None => SelectionOp::Start(requested),
+impl SelectionOp {
+    /// Resolves a selection toggle against the current selection: same kind
+    /// clears, a different kind switches, none starts.
+    fn resolve(current: Option<SelectionKind>, requested: SelectionKind) -> Self {
+        match current {
+            Some(c) if c == requested => Self::Clear,
+            Some(_) => Self::Change(requested),
+            None => Self::Start(requested),
+        }
     }
 }
 
@@ -143,15 +142,15 @@ mod tests {
     #[test]
     fn selection_toggle_resolution() {
         assert_eq!(
-            resolve_selection_toggle(None, SelectionKind::Simple),
+            SelectionOp::resolve(None, SelectionKind::Simple),
             SelectionOp::Start(SelectionKind::Simple)
         );
         assert_eq!(
-            resolve_selection_toggle(Some(SelectionKind::Simple), SelectionKind::Simple),
+            SelectionOp::resolve(Some(SelectionKind::Simple), SelectionKind::Simple),
             SelectionOp::Clear
         );
         assert_eq!(
-            resolve_selection_toggle(Some(SelectionKind::Simple), SelectionKind::Lines),
+            SelectionOp::resolve(Some(SelectionKind::Simple), SelectionKind::Lines),
             SelectionOp::Change(SelectionKind::Lines)
         );
     }

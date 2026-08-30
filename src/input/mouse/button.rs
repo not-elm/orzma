@@ -1,6 +1,6 @@
 //! Mouse-button dispatch for every `OrzmaTerminal` surface: local text
 //! selection + copy, and Cmd-click hyperlink open. Hit-tests the cursor to a
-//! cell, drives the local-only `route_locally` router, and fans the decided
+//! cell, drives the local-only `LocalButtonAction::route` router, and fans
 //! effects out via the shared `trigger_mouse_effects`. App-forward mouse
 //! reporting is out of scope until mouse routing is reintroduced against
 //! `orzma_tty` (D17 of the engine-swap design). Registered by
@@ -68,7 +68,7 @@ struct ButtonEvent {
     click_count: u8,
 }
 
-/// What [`route_locally`] decided for the local-selection path.
+/// What [`LocalButtonAction::route`] decided for the local-selection path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalButtonAction {
     /// Nothing to do for this event: a release on the local path, or a
@@ -92,6 +92,55 @@ enum LocalButtonAction {
     },
     /// Extend the current local selection's moving end to `(cell, side)`.
     UpdateLocalSelection { cell: CellCoord, side: CellSide },
+}
+
+impl LocalButtonAction {
+    /// Ports the local-selection branches of the removed engine's
+    /// `ButtonAction::route`. The app-forward branch (mouse-mode PTY
+    /// reporting) is not ported — that is out of scope until mouse routing
+    /// returns against `orzma_tty` (D17b).
+    fn route(evt: ButtonEvent, mods: ProtocolModifiers) -> Self {
+        match (evt.kind, evt.button) {
+            (MouseReportKind::Press, MouseButtonKind::Left) => {
+                if mods.alt {
+                    // TODO: switch to `SelectionKind::Block` once `orzma_vt`
+                    // gains it (D16); an Alt+click rounds down to `Lines`
+                    // until then.
+                    return Self::StartLocalSelection {
+                        kind: SelectionKind::Lines,
+                        cell: evt.cell,
+                        side: evt.side,
+                    };
+                }
+                match evt.click_count {
+                    1 => Self::ArmDrag {
+                        kind: SelectionKind::Simple,
+                        cell: evt.cell,
+                        side: evt.side,
+                    },
+                    // TODO: switch to a word-snapped Semantic kind once
+                    // `orzma_vt` gains one (D16); a double-click rounds down
+                    // to plain `Simple` until then.
+                    2 => Self::StartLocalSelection {
+                        kind: SelectionKind::Simple,
+                        cell: evt.cell,
+                        side: evt.side,
+                    },
+                    _ => Self::StartLocalSelection {
+                        kind: SelectionKind::Lines,
+                        cell: evt.cell,
+                        side: evt.side,
+                    },
+                }
+            }
+            (MouseReportKind::Drag, MouseButtonKind::Left) => Self::UpdateLocalSelection {
+                cell: evt.cell,
+                side: evt.side,
+            },
+            (MouseReportKind::Release, MouseButtonKind::Left) => Self::Noop,
+            _ => Self::Noop,
+        }
+    }
 }
 
 /// Per-frame constants computed once and threaded into the per-event and
@@ -192,16 +241,6 @@ fn resolve_frame(
     })
 }
 
-/// Resolves `target` to its `CellContext` for this frame, or `None` when the
-/// entity is no longer a live surface (the caller resets the gesture).
-fn ctx_for<'a>(
-    terminals: &'a TerminalSurfaces<'_, '_>,
-    target: Entity,
-    frame: &FrameContext,
-) -> Option<CellContext<'a>> {
-    cell_context_for(terminals, target, frame.cell_w, frame.cell_h)
-}
-
 /// Processes one `MouseButtonInput`: hit-tests the target (press) or the locked
 /// held entity (release), drives `resolve_button_event` + `decide_button`,
 /// updates the held-pointer state, and triggers the decided effects.
@@ -223,7 +262,7 @@ fn process_button_event(
     let Some(target) = target else {
         return;
     };
-    let Some(ctx) = ctx_for(terminals, target, frame) else {
+    let Some(ctx) = cell_context_for(terminals, target, frame.cell_w, frame.cell_h) else {
         gesture.reset();
         return;
     };
@@ -270,7 +309,7 @@ fn synthesize_held_drag(
     let Some(held) = gesture.held else {
         return;
     };
-    let Some(ctx) = ctx_for(terminals, held.entity, frame) else {
+    let Some(ctx) = cell_context_for(terminals, held.entity, frame.cell_w, frame.cell_h) else {
         gesture.reset();
         return;
     };
@@ -290,9 +329,9 @@ fn synthesize_held_drag(
 
 /// Pure per-event decision for a mouse button. Mutates `gesture` (drag phase /
 /// click state) and returns the effects to apply. A Cmd/Ctrl-click on a linked
-/// cell opens the URL and consumes the event; otherwise `route_locally`
-/// decides the local-selection response — app-forward reporting is out of
-/// scope (D17b of the engine-swap design).
+/// cell opens the URL and consumes the event; otherwise
+/// `LocalButtonAction::route` decides the local-selection response —
+/// app-forward reporting is out of scope (D17b of the engine-swap design).
 fn decide_button(
     gesture: &mut OrzmaMouseGesture,
     evt: ButtonEvent,
@@ -308,7 +347,7 @@ fn decide_button(
         return vec![MouseEffect::OpenUri(uri)];
     }
 
-    let mut effects = match route_locally(evt, mods) {
+    let mut effects = match LocalButtonAction::route(evt, mods) {
         LocalButtonAction::Noop => Vec::new(),
         LocalButtonAction::ArmDrag { kind, cell, side } => {
             gesture.drag = Some(DragGesture {
@@ -344,52 +383,6 @@ fn decide_button(
         gesture.drag = None;
     }
     effects
-}
-
-/// Ports the local-selection branches of the removed engine's
-/// `ButtonAction::route`. The app-forward branch (mouse-mode PTY reporting)
-/// is not ported — that is out of scope until mouse routing returns against
-/// `orzma_tty` (D17b).
-fn route_locally(evt: ButtonEvent, mods: ProtocolModifiers) -> LocalButtonAction {
-    match (evt.kind, evt.button) {
-        (MouseReportKind::Press, MouseButtonKind::Left) => {
-            if mods.alt {
-                // TODO: SelectionKind::Block once orzma_vt gains it (D16);
-                // Alt+click rounds down to Lines in the meantime.
-                return LocalButtonAction::StartLocalSelection {
-                    kind: SelectionKind::Lines,
-                    cell: evt.cell,
-                    side: evt.side,
-                };
-            }
-            match evt.click_count {
-                1 => LocalButtonAction::ArmDrag {
-                    kind: SelectionKind::Simple,
-                    cell: evt.cell,
-                    side: evt.side,
-                },
-                // TODO: SelectionKind::Simple word-snapped once orzma_vt gains
-                // a Semantic kind (D16); double-click rounds down to plain
-                // Simple in the meantime.
-                2 => LocalButtonAction::StartLocalSelection {
-                    kind: SelectionKind::Simple,
-                    cell: evt.cell,
-                    side: evt.side,
-                },
-                _ => LocalButtonAction::StartLocalSelection {
-                    kind: SelectionKind::Lines,
-                    cell: evt.cell,
-                    side: evt.side,
-                },
-            }
-        }
-        (MouseReportKind::Drag, MouseButtonKind::Left) => LocalButtonAction::UpdateLocalSelection {
-            cell: evt.cell,
-            side: evt.side,
-        },
-        (MouseReportKind::Release, MouseButtonKind::Left) => LocalButtonAction::Noop,
-        _ => LocalButtonAction::Noop,
-    }
 }
 
 /// The physical cursor position to drive the gesture with this frame.

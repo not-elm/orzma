@@ -135,6 +135,16 @@ impl TerminalGrid {
         Some((cursor.point.column.0, row.0))
     }
 
+    /// Projects the cursor like [`Self::cursor_viewport_cell`], but never
+    /// yields `None`: a cursor whose line is scrolled out of the visible
+    /// rows keeps its column on row `0`, and a missing cursor maps to the
+    /// origin, so IME anchoring stays at the cursor's column while the
+    /// user is scrolled back.
+    pub fn cursor_viewport_cell_or_top(&self) -> (u16, u16) {
+        self.cursor_viewport_cell()
+            .unwrap_or_else(|| (self.cursor.as_ref().map_or(0, |c| c.point.column.0), 0))
+    }
+
     /// Returns the viewport cursor cell and the packed style the
     /// shader decodes, preferring the vi cursor over the live cursor.
     ///
@@ -456,6 +466,32 @@ mod tests {
             ..Cursor::default()
         });
         assert_eq!(grid.cursor_viewport_cell(), Some((0, 13)));
+    }
+
+    /// Asserts that the `_or_top` fallback keeps the cursor's column on row
+    /// `0` when the line is scrolled out of view, and yields the origin when
+    /// no cursor exists.
+    ///
+    /// Case: the user scrolls back through history during an IME
+    /// composition, pushing the prompt's cursor row out of the viewport.
+    #[test]
+    fn cursor_viewport_cell_or_top_keeps_the_column_when_off_viewport() {
+        let mut grid = TerminalGrid {
+            cols: 80,
+            rows: 24,
+            ..TerminalGrid::default()
+        };
+        assert_eq!(grid.cursor_viewport_cell_or_top(), (0, 0));
+
+        grid.cursor = Some(Cursor {
+            point: GridPoint {
+                line: GridLine(23),
+                column: GridColumn(5),
+            },
+            ..Cursor::default()
+        });
+        grid.display_offset = 3;
+        assert_eq!(grid.cursor_viewport_cell_or_top(), (5, 0));
     }
 
     /// Asserts that suppression clears the visible bit of the packed

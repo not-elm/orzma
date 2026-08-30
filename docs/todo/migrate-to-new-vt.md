@@ -22,7 +22,11 @@
 
 `cargo build`、`cargo clippy --workspace --all-targets`、`cargo test --workspace` は green で、
 `cargo run` でシェル作業ができる。vi モード・選択・マウス routing は「切り替え後に実装」節の
-とおり縮退したままで、これは受け入れ済みの状態である。
+とおり縮退したままで、これは受け入れ済みの状態である。同じく受け入れ済みの縮退として、
+代替画面でのホイールスクロール（less / vim では旧 engine の矢印キー変換が未移植でホイールが
+効かない）、webview の mount（`apc_dispatch` が空実装で、`sdk/ratatui_orzma` が出すシーケンスを
+解釈する層がまだ無い）、OSC 8 ハイパーリンク（`Frame.hyperlinks` が常に空で hover / クリックが
+働かない）がある。
 
 各クレートのビルド状態（`cargo check -p <crate> --all-targets`）:
 
@@ -94,7 +98,7 @@ SGR マウス（`?1006`）、Alternate Scroll（`?1007`）、Bracketed Paste（`
 | `wheel.rs` | `orzma_tty/src/input/wheel.rs` | 201行あるが**非コメント行が0行**。`input.rs` から公開もされていない完全な死蔵コード。`alacritty_terminal::TermMode` を `orzma_vt::VtModes` に読み替えて復活させる |
 | `palette.rs` | なし | `orzma_vt` の `Rgb` を `bevy::Color` に変換する箇所がレンダラ側に存在しない |
 | `title.rs` | `bevy_orzma_tty::title` | **移植済み。** `TtyTitle` コンポーネントと `TtyTitlePlugin` が実装され、`src/window_title.rs` がそれを読んでいる |
-| `input_codec.rs` | `orzma_tty/src/input/keyboard.rs` | **移植済み。** 優先順位も同一で、キーパッド対応が追加されている |
+| `input_codec.rs` | `orzma_tty/src/input/keyboard.rs` | **移植済み。** 優先順位も同一。エンコーダ側にはキーパッド（DECKPAM）対応も入っているが、ホストは `TerminalKey::Keypad` をまだ組み立てないため未配線（物理キー routing が要るので C で接続） |
 
 ## 4. `src/` の ECS 形状の書き換え → 解消済み
 

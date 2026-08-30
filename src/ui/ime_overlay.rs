@@ -230,7 +230,7 @@ fn position_ime_overlay(
     // scale factor would make every cell metric inf/NaN and fling the overlay
     // off-screen during composition.
     let scale = window.resolution.scale_factor().max(f32::EPSILON);
-    let cursor_cell = grid.cursor_viewport_cell().unwrap_or((0, 0));
+    let cursor_cell = grid.cursor_viewport_cell_or_top();
 
     let layout = compute_overlay_layout(
         comp.text(),

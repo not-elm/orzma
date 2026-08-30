@@ -286,7 +286,7 @@ fn ime_policy_system(
     let scale = window.resolution.scale_factor().max(f32::EPSILON);
     let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
-    let (cursor_col, cursor_row) = grid.cursor_viewport_cell().unwrap_or((0, 0));
+    let (cursor_col, cursor_row) = grid.cursor_viewport_cell_or_top();
     let host_origin_phys = ui_xform.translation - 0.5 * node.size();
     let cell_origin_phys = host_origin_phys
         + Vec2::new(

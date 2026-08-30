@@ -197,9 +197,6 @@ mod tests {
         let mut app = make_app_with_plugin();
         let host = spawn_terminal_entity(&mut app);
 
-        // One tick: attach system observes Added<OrzmaTtyHandle> and
-        // queues the chip spawn; the deferred commands flush at the
-        // end-of-schedule sync point.
         app.update();
 
         let chip = find_indicator_child(&app, host).expect("chip must exist");

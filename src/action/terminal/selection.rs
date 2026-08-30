@@ -3,10 +3,11 @@
 
 use bevy::prelude::*;
 use bevy_orzma_tty::prelude::{
-    CellSide, GridPoint, OrzmaTtyHandle, RequestTtySelectionClear, RequestTtySelectionStart,
+    CellSide, GridPoint, RequestTtySelectionClear, RequestTtySelectionStart,
     RequestTtySelectionUpdate, SelectionKind,
 };
-use orzma_vt::prelude::{DisplayOffset, GridLine, Vt};
+use orzma_tty_renderer::schema::TerminalGrid;
+use orzma_vt::prelude::{DisplayOffset, ViewportLine};
 
 /// Starts a new local selection on `entity` at `point`.
 #[derive(EntityEvent, Debug, Clone)]
@@ -73,19 +74,20 @@ impl Plugin for SelectionPlugin {
 }
 
 /// Applies a `TerminalSelectionStart`: converts the viewport-relative point
-/// to active-grid coordinates against the target's live display offset, then
-/// requests the same start on the underlying tty.
+/// to active-grid coordinates against the displayed frame's display offset —
+/// the basis the click was hit-tested against — then requests the same start
+/// on the underlying tty.
 fn on_terminal_selection_start(
     ev: On<TerminalSelectionStart>,
     mut commands: Commands,
-    terminals: Query<&OrzmaTtyHandle>,
+    terminals: Query<&TerminalGrid>,
 ) {
-    let Ok(handle) = terminals.get(ev.entity) else {
+    let Ok(grid) = terminals.get(ev.entity) else {
         return;
     };
     commands.trigger(RequestTtySelectionStart {
         terminal: ev.entity,
-        cell: to_grid_point(ev.point, handle.vt().display_offset()),
+        cell: to_grid_point(ev.point, DisplayOffset(grid.display_offset)),
         side: ev.side,
         kind: ev.ty,
     });
@@ -96,14 +98,14 @@ fn on_terminal_selection_start(
 fn on_terminal_selection_update(
     ev: On<TerminalSelectionUpdate>,
     mut commands: Commands,
-    terminals: Query<&OrzmaTtyHandle>,
+    terminals: Query<&TerminalGrid>,
 ) {
-    let Ok(handle) = terminals.get(ev.entity) else {
+    let Ok(grid) = terminals.get(ev.entity) else {
         return;
     };
     commands.trigger(RequestTtySelectionUpdate {
         terminal: ev.entity,
-        cell: to_grid_point(ev.point, handle.vt().display_offset()),
+        cell: to_grid_point(ev.point, DisplayOffset(grid.display_offset)),
         side: ev.side,
     });
 }
@@ -126,13 +128,13 @@ fn on_terminal_selection_copy(_ev: On<TerminalSelectionCopy>) {}
 /// Converts a viewport-relative point (`mouse.rs`'s contract: line `0` is
 /// the top of the displayed viewport) into the active-grid coordinates
 /// `RequestTtySelectionStart`/`RequestTtySelectionUpdate` document their
-/// `cell` field as expecting, using the same
-/// `grid_line = viewport_line - display_offset` relation as
+/// `cell` field as expecting, delegating the projection to
 /// `ViewportLine::to_grid`.
 fn to_grid_point(viewport_point: GridPoint, offset: DisplayOffset) -> GridPoint {
-    let offset = i32::try_from(offset.0).expect("scrollback never exceeds i32::MAX rows");
+    let viewport_line = u16::try_from(viewport_point.line.0)
+        .expect("the selection events document a non-negative viewport line");
     GridPoint {
-        line: GridLine(viewport_point.line.0 - offset),
+        line: ViewportLine(viewport_line).to_grid(offset),
         column: viewport_point.column,
     }
 }
@@ -140,7 +142,7 @@ fn to_grid_point(viewport_point: GridPoint, offset: DisplayOffset) -> GridPoint 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orzma_vt::prelude::{GridColumn, Scroll};
+    use orzma_vt::prelude::{GridColumn, GridLine};
 
     #[derive(Resource, Default)]
     struct SeenStarts(Vec<(Entity, GridPoint, CellSide, SelectionKind)>);
@@ -149,19 +151,18 @@ mod tests {
     #[derive(Resource, Default)]
     struct SeenClears(Vec<Entity>);
 
-    fn spawn_scrolled_terminal(app: &mut App, scroll_lines: i32) -> Entity {
-        let (mut handle, _sink) = OrzmaTtyHandle::detached(10, 5);
-        let seed: Vec<u8> = (0..30)
-            .flat_map(|i| format!("l{i}\r\n").into_bytes())
-            .collect();
-        handle.feed_bytes(&seed);
-        handle.scroll(Scroll::Delta(scroll_lines));
-        app.world_mut().spawn(handle).id()
+    fn spawn_scrolled_grid(app: &mut App, display_offset: u32) -> Entity {
+        app.world_mut()
+            .spawn(TerminalGrid {
+                display_offset,
+                ..TerminalGrid::default()
+            })
+            .id()
     }
 
     /// Asserts that `TerminalSelectionStart` converts its viewport-relative
-    /// point into active-grid coordinates by subtracting the terminal's live
-    /// display offset, before forwarding as `RequestTtySelectionStart`.
+    /// point into active-grid coordinates by subtracting the displayed
+    /// frame's display offset, before forwarding as `RequestTtySelectionStart`.
     ///
     /// Case: the user presses the mouse button on a cell while the viewport
     /// is scrolled back into history, so the clicked row's grid line differs
@@ -177,7 +178,7 @@ mod tests {
                     seen.0.push((ev.terminal, ev.cell, ev.side, ev.kind));
                 },
             );
-        let entity = spawn_scrolled_terminal(&mut app, 4);
+        let entity = spawn_scrolled_grid(&mut app, 4);
         let viewport_point = GridPoint {
             line: GridLine(1),
             column: GridColumn(2),
@@ -202,7 +203,7 @@ mod tests {
     }
 
     /// Asserts that a selection start aimed at an entity without a terminal
-    /// handle triggers nothing — there is no display offset to convert
+    /// grid triggers nothing — there is no display offset to convert
     /// against.
     ///
     /// Case: a press event in flight while its target pane is torn down.
@@ -246,7 +247,7 @@ mod tests {
                     seen.0.push((ev.terminal, ev.cell, ev.side));
                 },
             );
-        let entity = spawn_scrolled_terminal(&mut app, 2);
+        let entity = spawn_scrolled_grid(&mut app, 2);
         let viewport_point = GridPoint {
             line: GridLine(0),
             column: GridColumn(5),

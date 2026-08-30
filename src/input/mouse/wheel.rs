@@ -253,9 +253,7 @@ mod tests {
 
     /// Asserts a vertical wheel-up notch scrolls the target's viewport
     /// toward older output by a positive, non-zero multiple of the
-    /// configured `lines_per_notch` (3 by default), unscaled — guards
-    /// against `apply_vertical_scroll` clamping, rescaling, or flipping the
-    /// sign of the count.
+    /// configured `lines_per_notch` (3 by default), unscaled.
     ///
     /// Case: the user spins the wheel while the cursor sits over a terminal
     /// with no app mouse mode active.
