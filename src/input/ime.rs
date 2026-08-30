@@ -24,15 +24,16 @@ use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
+use bevy_orzma_tty::prelude::RequestTtyKeyInput;
 use bevy_orzma_webview::{Webview, focused_webview_of};
-use orzma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
+use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
 ///
 /// The `apply_ime_commit_to_terminal` observer below applies it, writing the
-/// local PTY via `TerminalKeyInput`.
+/// local PTY via `RequestTtyKeyInput`.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ImeCommit {
     #[event_target]
@@ -383,9 +384,12 @@ fn apply_ime_commit_to_terminal(
     if terminals.get(ev.entity).is_err() {
         return;
     }
-    commands.trigger(TerminalKeyInput {
-        entity: ev.entity,
-        key: TerminalKey::Text(ev.text.clone()),
+    let Some(text) = KeyText::new(ev.text.clone()) else {
+        return;
+    };
+    commands.trigger(RequestTtyKeyInput {
+        terminal: ev.entity,
+        key: TerminalKey::Character(text),
         modifiers: TerminalModifiers::default(),
     });
 }
@@ -955,11 +959,16 @@ mod tests {
         );
     }
 
+    /// Asserts an `ImeCommit` on a plain terminal fires `RequestTtyKeyInput`
+    /// carrying the committed text as `TerminalKey::Character`.
+    ///
+    /// Case: the user finishes an IME composition (e.g. types `あ` via a
+    /// Japanese input method) over a terminal with no active webview.
     #[test]
-    fn ime_commit_fires_terminal_key_input_for_plain_terminal() {
+    fn ime_commit_fires_request_tty_key_input_for_plain_terminal() {
         use crate::input::ime::ImeCommit;
         use crate::surface::OrzmaTerminal;
-        use orzma_tty_engine::TerminalKey;
+        use orzma_tty::prelude::TerminalKey;
 
         #[derive(Resource, Default)]
         struct Hits(Vec<(Entity, TerminalKey)>);
@@ -968,8 +977,8 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<Hits>()
             .add_observer(apply_ime_commit_to_terminal)
-            .add_observer(|ev: On<TerminalKeyInput>, mut h: ResMut<Hits>| {
-                h.0.push((ev.entity, ev.key.clone()));
+            .add_observer(|ev: On<RequestTtyKeyInput>, mut h: ResMut<Hits>| {
+                h.0.push((ev.terminal, ev.key.clone()));
             });
 
         let term = app.world_mut().spawn(OrzmaTerminal).id();
@@ -981,7 +990,7 @@ mod tests {
 
         assert_eq!(
             app.world().resource::<Hits>().0,
-            vec![(term, TerminalKey::Text("あ".into()))]
+            vec![(term, TerminalKey::Character(KeyText::new("あ").unwrap()))]
         );
     }
 }

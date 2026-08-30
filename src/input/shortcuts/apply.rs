@@ -14,8 +14,9 @@ use crate::{
     },
 };
 use bevy::prelude::*;
+use bevy_orzma_tty::prelude::RequestTtyKeyInput;
 use orzma_configs::shortcuts::Shortcut;
-use orzma_tty_engine::{TerminalKeyInput, TerminalModifiers};
+use orzma_tty::prelude::TerminalModifiers;
 
 pub(super) struct ShortcutsApplyPlugin;
 
@@ -93,7 +94,7 @@ fn apply_vi_mode(mut commands: Commands, mut vi_mode: MessageReader<ViModeMessag
 }
 
 /// Types raw keys from `TypeMessage` into the focused terminal as
-/// `TerminalKeyInput`. Runs after the shortcut/copy appliers. Registered in
+/// `RequestTtyKeyInput`. Runs after the shortcut/copy appliers. Registered in
 /// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>`.
 fn apply_type(mut commands: Commands, mut type_keys: MessageReader<TypeMessage>) {
     for msg in type_keys.read() {
@@ -106,8 +107,8 @@ fn apply_type(mut commands: Commands, mut type_keys: MessageReader<TypeMessage>)
                 alt: msg.mods.alt,
                 meta: msg.mods.meta,
             };
-            commands.trigger(TerminalKeyInput {
-                entity,
+            commands.trigger(RequestTtyKeyInput {
+                terminal: entity,
                 key,
                 modifiers: terminal_mods,
             });
@@ -126,7 +127,7 @@ mod tests {
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
     use orzma_configs::shortcuts::Modifiers;
-    use orzma_tty_engine::TerminalKey;
+    use orzma_tty::prelude::{KeyText, TerminalKey};
 
     #[derive(Resource, Default)]
     struct Captured {
@@ -163,7 +164,7 @@ mod tests {
             .add_observer(|_ev: On<TerminalSelectionCopy>, mut c: ResMut<Captured>| {
                 c.copy += 1;
             })
-            .add_observer(|ev: On<TerminalKeyInput>, mut c: ResMut<Captured>| {
+            .add_observer(|ev: On<RequestTtyKeyInput>, mut c: ResMut<Captured>| {
                 c.keys.push(ev.key.clone());
             });
         app
@@ -226,8 +227,13 @@ mod tests {
         KeyEffect::Shortcut { action, via_leader }
     }
 
+    /// Asserts a `Type` key effect on a focused terminal fires
+    /// `RequestTtyKeyInput` carrying the typed character.
+    ///
+    /// Case: the user types the plain character `a` with no shortcut chord
+    /// matched, and the focused terminal must receive it as typed text.
     #[test]
-    fn plain_key_triggers_terminal_key_input() {
+    fn plain_key_triggers_request_tty_key_input() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
@@ -238,8 +244,8 @@ mod tests {
         );
         assert_eq!(
             app.world().resource::<Captured>().keys,
-            vec![TerminalKey::Text("a".into())],
-            "a Type effect must forward to the focused terminal as a TerminalKeyInput"
+            vec![TerminalKey::Character(KeyText::new("a").unwrap())],
+            "a Type effect must forward to the focused terminal as a RequestTtyKeyInput"
         );
     }
 
