@@ -2,7 +2,7 @@
 
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use orzma_tty_engine::TerminalChildExit;
+use bevy_orzma_tty::prelude::TtyChildExitSignal;
 
 /// Registers the shell-exit observer.
 pub(super) struct ExitPlugin;
@@ -14,11 +14,11 @@ impl Plugin for ExitPlugin {
 }
 
 fn on_child_exit(
-    ev: On<TerminalChildExit>,
+    ev: On<TtyChildExitSignal>,
     mut exit: MessageWriter<AppExit>,
     terminals: Query<(), With<OrzmaTerminal>>,
 ) {
-    if terminals.get(ev.event_target()).is_ok() {
+    if terminals.get(ev.entity).is_ok() {
         exit.write(AppExit::Success);
     }
 }
@@ -28,8 +28,12 @@ mod tests {
     use super::*;
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::message::MessageReader;
-    use orzma_tty_engine::TerminalChildExit;
+    use bevy_orzma_tty::prelude::TtyChildExitSignal;
 
+    /// Asserts that a `TtyChildExitSignal` on an `OrzmaTerminal` entity
+    /// sends `AppExit`.
+    ///
+    /// Case: the user types `exit` and the login shell terminates.
     #[test]
     fn child_exit_sends_app_exit() {
         #[derive(Resource, Default)]
@@ -48,7 +52,7 @@ mod tests {
         app.add_systems(Update, capture);
 
         let entity = app.world_mut().spawn(OrzmaTerminal).id();
-        app.world_mut().trigger(TerminalChildExit {
+        app.world_mut().trigger(TtyChildExitSignal {
             entity,
             code: Some(0),
         });
@@ -56,7 +60,7 @@ mod tests {
 
         assert!(
             app.world().resource::<GotExit>().0,
-            "AppExit should have been sent on TerminalChildExit",
+            "AppExit should have been sent on TtyChildExitSignal",
         );
     }
 }

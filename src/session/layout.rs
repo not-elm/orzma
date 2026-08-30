@@ -6,7 +6,7 @@ use bevy::ecs::lifecycle::Add;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized};
-use orzma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
+use bevy_orzma_tty::prelude::OrzmaTtyHandle;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 
 /// Registers the window-fill resize system.
@@ -39,19 +39,15 @@ fn reset_last_size(_trigger: On<Add, OrzmaTerminal>, mut last_size: ResMut<Orzma
 }
 
 fn resize_to_window(
-    mut commands: Commands,
     mut last_size: ResMut<OrzmaLastSize>,
-    mut terminal: Query<
-        (Entity, &mut TerminalHandle, &mut PtyHandle, &mut Coalescer),
-        With<OrzmaTerminal>,
-    >,
+    mut terminal: Query<&mut OrzmaTtyHandle, With<OrzmaTerminal>>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
     let Ok(window) = window.single() else {
         return;
     };
-    let Ok((entity, mut handle, mut pty, mut coalescer)) = terminal.single_mut() else {
+    let Ok(mut handle) = terminal.single_mut() else {
         return;
     };
 
@@ -68,11 +64,8 @@ fn resize_to_window(
         return;
     }
 
-    match handle.resize(&mut pty, &mut coalescer, cols, rows) {
-        Ok(()) => {
-            last_size.0 = Some((cols, rows));
-            handle.emit_pending(&mut commands, entity);
-        }
+    match handle.resize(cols, rows) {
+        Ok(()) => last_size.0 = Some((cols, rows)),
         Err(e) => tracing::warn!(?e, cols, rows, "failed to resize orzma terminal"),
     }
 }

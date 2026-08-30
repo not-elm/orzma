@@ -5,7 +5,7 @@ use crate::input::focus::KeyboardFocused;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
-use orzma_tty_engine::TerminalTitle;
+use bevy_orzma_tty::prelude::TtyTitle;
 
 /// Keeps the primary OS window title in sync with the focused terminal's OSC
 /// title.
@@ -23,7 +23,7 @@ const SUFFIX: &str = " — orzma";
 
 fn update_window_title(
     mut window: Query<&mut Window, With<PrimaryWindow>>,
-    focused: Query<&TerminalTitle, (With<OrzmaTerminal>, With<KeyboardFocused>)>,
+    focused: Query<&TtyTitle, (With<OrzmaTerminal>, With<KeyboardFocused>)>,
     terminals: Query<(), With<OrzmaTerminal>>,
 ) {
     let Ok(mut window) = window.single_mut() else {
@@ -103,7 +103,7 @@ mod tests {
         app.world_mut().spawn((
             OrzmaTerminal,
             KeyboardFocused,
-            TerminalTitle(Some("vim".to_string())),
+            TtyTitle(Some("vim".to_string())),
         ));
 
         app.update();
@@ -142,7 +142,7 @@ mod tests {
             PrimaryWindow,
         ));
         app.world_mut()
-            .spawn((OrzmaTerminal, TerminalTitle(Some("vim".to_string()))));
+            .spawn((OrzmaTerminal, TtyTitle(Some("vim".to_string()))));
 
         app.update();
 
