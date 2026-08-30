@@ -531,14 +531,10 @@ impl Executor<'_> {
     /// is redundant with the flip's own, and the damage ledger records
     /// no screen.
     fn set_alternate_screen_erased_on_exit(&mut self, enabled: bool) {
-        match (enabled, self.device.modes().active_screen) {
-            (true, _) => self.switch_screen(ScreenKind::Alternate),
-            (false, ScreenKind::Alternate) => {
-                self.erase_in_display(EraseScreenMode::All);
-                self.switch_screen(ScreenKind::Primary);
-            }
-            (false, ScreenKind::Primary) => {}
+        if !enabled && self.device.modes().active_screen == ScreenKind::Alternate {
+            self.erase_in_display(EraseScreenMode::All);
         }
+        self.switch_screen(ScreenKind::from_decset(enabled));
     }
 
     /// Shows `to`, naming the placements a return to the primary screen

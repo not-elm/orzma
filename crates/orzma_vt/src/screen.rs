@@ -949,15 +949,7 @@ impl Screen {
         }
         let reclaimed = self.reclaimable_rows(old.rows, size.rows);
         self.grid.resize(size);
-        let follow_moved_rows = |line: ScreenLine| {
-            ScreenLine(
-                line.0
-                    .saturating_add(reclaimed)
-                    .saturating_sub(required_scrolling),
-            )
-        };
-        self.state.line = follow_moved_rows(self.state.line);
-        self.checkpoint.line = follow_moved_rows(self.checkpoint.line);
+        self.shift_cursors(reclaimed, required_scrolling);
         self.clamp_cursors(size);
         if old.cols != size.cols {
             self.state.pending_wrap = false;
@@ -1003,6 +995,20 @@ impl Screen {
         }
         let reclaimed = usize::from(rows - old_rows).min(self.grid.history_len());
         u16::try_from(reclaimed).expect("a growth never exceeds u16::MAX rows")
+    }
+
+    /// Moves the live cursor and the saved one down by the rows a resize
+    /// reclaimed from history and up by the rows it scrolled away, so
+    /// both keep pointing at the row they were on.
+    fn shift_cursors(&mut self, reclaimed: u16, required_scrolling: u16) {
+        let follow_moved_rows = |line: &mut ScreenLine| {
+            line.0 = line
+                .0
+                .saturating_add(reclaimed)
+                .saturating_sub(required_scrolling);
+        };
+        follow_moved_rows(&mut self.state.line);
+        follow_moved_rows(&mut self.checkpoint.line);
     }
 
     fn clamp_cursors(&mut self, size: GridSize) {
