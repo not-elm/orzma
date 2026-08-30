@@ -276,7 +276,7 @@ mod tests {
     /// emits a `CopyAction`.
     ///
     /// Case: the user presses the yank key in vi mode, with or without an
-    /// active selection; today's stub makes the copy a no-op either way.
+    /// active selection.
     #[test]
     fn yank_exits_vi_mode_and_currently_never_copies() {
         use crate::action::clipboard::test_support::{CapturedCopyActions, capture_copy_actions};
@@ -297,11 +297,10 @@ mod tests {
         assert!(app.world().resource::<CapturedCopyActions>().0.is_empty());
     }
 
-    /// Asserts that `ViExitRequest` on any entity — including one with no
-    /// terminal handle — always triggers `ExitViMode` without panicking.
+    /// Asserts that a `ViExitRequest` always triggers `ExitViMode`, even for
+    /// an entity without a terminal handle, rather than gating locally.
     ///
-    /// Case: an exit key fired while the target pane is mid-teardown; the
-    /// applier is a pure relay with nothing left to gate on locally.
+    /// Case: an exit key is pressed while the target pane is mid-teardown.
     #[test]
     fn vi_exit_always_triggers_exit_vi_mode() {
         let mut app = app_with_applier();

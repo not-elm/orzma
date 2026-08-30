@@ -235,6 +235,10 @@ mod tests {
         assert_eq!(indicator_count, 1, "exactly one chip after 10 ticks");
     }
 
+    /// Asserts that the chip becomes visible and shows `[0/0]` the first
+    /// frame after `ViModeState` is inserted on a fresh terminal.
+    ///
+    /// Case: the user enters vi mode on a terminal that has not scrolled.
     #[test]
     fn refresh_shows_when_vi_mode_state_inserted() {
         let mut app = make_app_with_plugin();
