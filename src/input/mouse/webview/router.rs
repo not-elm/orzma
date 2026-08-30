@@ -30,7 +30,7 @@ use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::TerminalOverlays;
-use orzma_webview::{NonInteractive, Webview};
+use bevy_orzma_webview::{NonInteractive, Webview};
 
 /// Registers the webview pointer systems. The shared
 /// `WebviewPress` resource is owned by the parent `MouseWebviewPlugin`.

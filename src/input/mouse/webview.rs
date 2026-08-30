@@ -4,7 +4,7 @@
 //! (`crate::input::mouse::webview::router`) resolves which surface is
 //! under the cursor — the single shell surface — and then delegates the
 //! CEF forwarding + focus to the helpers here. Inline webviews are Node/Mesh-free
-//! `ChildOf` children (`orzma_webview`), so `bevy_cef`'s native picking cannot
+//! `ChildOf` children (`bevy_orzma_webview`), so `bevy_cef`'s native picking cannot
 //! reach them; this manual forwarding is the only path that delivers clicks to
 //! them.
 
@@ -21,7 +21,7 @@ use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::TerminalOverlays;
-use orzma_webview::{
+use bevy_orzma_webview::{
     NonInteractive, Webview, focused_webview_of, webview_hit_at, webview_local_dip,
 };
 

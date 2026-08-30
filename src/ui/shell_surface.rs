@@ -6,7 +6,7 @@ use crate::input::focus::KeyboardFocused;
 use crate::session::spawn::{OrzmaSpawnOptions, OrzmaTerminalBundle, OrzmaTerminalConfig};
 use crate::ui::UiRoot;
 use bevy::prelude::*;
-use orzma_webview::ControlPlaneHandle;
+use bevy_orzma_webview::ControlPlaneHandle;
 
 /// Root of the shell-surface subtree, mounted under `UiRoot`.
 #[derive(Component)]
@@ -96,7 +96,7 @@ fn spawn_shell_surface_container(commands: &mut Commands, ui_root: Entity) -> En
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orzma_webview::TokenRegistry;
+    use bevy_orzma_webview::TokenRegistry;
     use std::path::PathBuf;
 
     fn build_app() -> App {

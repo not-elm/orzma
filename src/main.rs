@@ -21,7 +21,7 @@ use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
 use orzma_tty_engine::TerminalHandlePlugin;
 use orzma_tty_renderer::TerminalRendererPlugin;
-use orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
+use bevy_orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use orzma_webview_host::WebviewAssetRegistry;
 use session::SessionPlugin;
 use ui::OrzmaUiPlugin;

@@ -1317,6 +1317,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_orzma_webview"
+version = "0.2.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_cef",
+ "bevy_orzma_tty",
+ "crossbeam-channel",
+ "data-encoding",
+ "getrandom 0.2.17",
+ "libc",
+ "orzma_tty_renderer",
+ "orzma_vt",
+ "orzma_webview_host",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "bevy_pbr"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5013,6 +5034,8 @@ dependencies = [
  "bevy",
  "bevy_cef",
  "bevy_cef_core",
+ "bevy_orzma_tty",
+ "bevy_orzma_webview",
  "crossbeam-channel",
  "data-encoding",
  "fontique",
@@ -5020,9 +5043,9 @@ dependencies = [
  "libc",
  "open",
  "orzma_configs",
- "orzma_tty_engine",
+ "orzma_tty",
  "orzma_tty_renderer",
- "orzma_webview",
+ "orzma_vt",
  "orzma_webview_host",
  "serde",
  "serde_json",
@@ -5099,27 +5122,6 @@ version = "0.2.0-dev"
 dependencies = [
  "bitflags 2.13.0",
  "vtparse",
-]
-
-[[package]]
-name = "orzma_webview"
-version = "0.2.0-dev"
-dependencies = [
- "bevy",
- "bevy_cef",
- "bevy_orzma_tty",
- "crossbeam-channel",
- "data-encoding",
- "getrandom 0.2.17",
- "libc",
- "orzma_tty_renderer",
- "orzma_vt",
- "orzma_webview_host",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
- "url",
 ]
 
 [[package]]

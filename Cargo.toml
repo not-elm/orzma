@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [features]
 default = ["debug"]
-debug = ["orzma_webview/debug"]
+debug = ["bevy_orzma_webview/debug"]
 
 [dependencies]
 ab_glyph = "0.2"
@@ -28,9 +28,11 @@ arboard = { version = "3.6.1", default-features = false, features = [
 bevy = { workspace = true }
 bevy_cef = { workspace = true }
 bevy_cef_core = { workspace = true }
+bevy_orzma_tty = { path = "crates/bevy_orzma_tty" }
+bevy_orzma_webview = { path = "crates/bevy_orzma_webview" }
+orzma_tty = { path = "crates/orzma_tty" }
 orzma_tty_renderer = { path = "crates/orzma_tty_renderer" }
-orzma_tty_engine = { path = "crates/orzma_tty_engine" }
-orzma_webview = { path = "crates/orzma_webview" }
+orzma_vt = { path = "crates/orzma_vt" }
 crossbeam-channel = "0.5"
 data-encoding = "2"
 fontique = { version = "0.9", default-features = false, features = ["std"] }
@@ -47,6 +49,7 @@ unicode-segmentation = { workspace = true }
 url = "2"
 
 [dev-dependencies]
+bevy_orzma_tty = { path = "crates/bevy_orzma_tty", features = ["test-support"] }
 tempfile = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

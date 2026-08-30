@@ -27,7 +27,7 @@ use bevy_cef::prelude::FocusedWebview;
 use orzma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
-use orzma_webview::{Webview, focused_webview_of};
+use bevy_orzma_webview::{Webview, focused_webview_of};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
 ///
