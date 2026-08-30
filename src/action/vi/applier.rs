@@ -1,6 +1,6 @@
-//! Local VI applier: applies the shared VI action events to the local
-//! terminal engine (`TerminalHandle` vi/selection/scroll APIs) for every
-//! terminal entity.
+//! Local VI applier: forwards each shared VI action event to the matching
+//! `bevy_orzma_tty` request `EntityEvent`, and to the vi-mode exit event
+//! `mode.rs` owns for selection toggling, yank, and exit.
 
 use crate::action::clipboard::CopyAction;
 use crate::action::vi::mode::ExitViMode;
@@ -8,8 +8,12 @@ use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
 use bevy::prelude::*;
+use bevy_orzma_tty::prelude::{
+    RequestTtyScroll, RequestTtySelectionClear, RequestTtySelectionKindChange,
+    RequestTtySelectionStartAtViCursor, RequestTtyViMotion, SelectionKind,
+};
 use orzma_configs::vi_mode::ViModeScroll;
-use orzma_tty_engine::{Coalescer, SelectionType, TerminalHandle};
+use orzma_vt::prelude::Scroll;
 
 /// Registers the local VI apply observers.
 pub(super) struct ViApplierPlugin;
@@ -24,19 +28,87 @@ impl Plugin for ViApplierPlugin {
     }
 }
 
+/// Forwards a `ViMotionRequest` as a `RequestTtyViMotion`.
+fn on_vi_motion(ev: On<ViMotionRequest>, mut commands: Commands) {
+    commands.trigger(RequestTtyViMotion {
+        terminal: ev.entity,
+        motion: ev.motion,
+    });
+}
+
+/// Forwards a `ViScrollRequest` as a `RequestTtyScroll`.
+fn on_vi_scroll(ev: On<ViScrollRequest>, mut commands: Commands) {
+    commands.trigger(RequestTtyScroll {
+        terminal: ev.entity,
+        scroll: scroll_for(ev.kind),
+    });
+}
+
+/// Resolves a selection toggle against the (currently stubbed) current
+/// selection and requests the matching operation.
+fn on_vi_selection_toggle(ev: On<ViSelectionToggleRequest>, mut commands: Commands) {
+    match resolve_selection_toggle(selection_type(), ev.ty) {
+        SelectionOp::Start(kind) => {
+            commands.trigger(RequestTtySelectionStartAtViCursor {
+                terminal: ev.entity,
+                kind,
+            });
+        }
+        SelectionOp::Change(kind) => {
+            commands.trigger(RequestTtySelectionKindChange {
+                terminal: ev.entity,
+                kind,
+            });
+        }
+        SelectionOp::Clear => {
+            commands.trigger(RequestTtySelectionClear {
+                terminal: ev.entity,
+            });
+        }
+    }
+}
+
+/// Copies the current selection (currently stubbed to nothing) and always
+/// leaves vi mode.
+fn on_vi_yank(ev: On<ViYankRequest>, mut commands: Commands) {
+    if let Some(text) = selection_to_string() {
+        commands.trigger(CopyAction { text });
+    }
+    commands.trigger(ExitViMode { entity: ev.entity });
+}
+
+/// Forwards a `ViExitRequest` as an `ExitViMode`.
+fn on_vi_exit(ev: On<ViExitRequest>, mut commands: Commands) {
+    commands.trigger(ExitViMode { entity: ev.entity });
+}
+
+/// Maps a `ViModeScroll` to the `Scroll` motion `bevy_orzma_tty` applies.
+fn scroll_for(kind: ViModeScroll) -> Scroll {
+    match kind {
+        ViModeScroll::PageUp => Scroll::PageUp,
+        ViModeScroll::PageDown => Scroll::PageDown,
+        ViModeScroll::HalfPageUp => Scroll::HalfPageUp,
+        ViModeScroll::HalfPageDown => Scroll::HalfPageDown,
+        ViModeScroll::ScrollUp => Scroll::Delta(1),
+        ViModeScroll::ScrollDown => Scroll::Delta(-1),
+        ViModeScroll::HistoryTop => Scroll::Top,
+        ViModeScroll::HistoryBottom => Scroll::Bottom,
+    }
+}
+
 /// A resolved selection-toggle operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectionOp {
-    Start(SelectionType),
-    Change(SelectionType),
+    Start(SelectionKind),
+    Change(SelectionKind),
     Clear,
 }
 
 /// Resolves a selection toggle against the current selection: same kind
 /// clears, a different kind switches, none starts.
 fn resolve_selection_toggle(
-    current: Option<SelectionType>,
-    requested: SelectionType,
+    current: Option<SelectionKind>,
+    requested: SelectionKind,
 ) -> SelectionOp {
     match current {
         Some(c) if c == requested => SelectionOp::Clear,
@@ -45,185 +117,204 @@ fn resolve_selection_toggle(
     }
 }
 
-type LocalTerminal<'w, 's> = Query<'w, 's, (&'static mut TerminalHandle, &'static mut Coalescer)>;
-
-fn on_vi_motion(ev: On<ViMotionRequest>, mut terminals: LocalTerminal) {
-    let Ok((mut handle, mut coalescer)) = terminals.get_mut(ev.entity) else {
-        return;
-    };
-    handle.vi_motion(&mut coalescer, ev.motion);
+// TODO: read the live selection kind from the VT once a selection
+// capability exists (docs/todo/migrate-to-new-vt.md item 10); until then
+// every toggle resolves to `SelectionOp::Start`.
+fn selection_type() -> Option<SelectionKind> {
+    None
 }
 
-fn on_vi_scroll(ev: On<ViScrollRequest>, mut terminals: LocalTerminal) {
-    let Ok((mut handle, mut coalescer)) = terminals.get_mut(ev.entity) else {
-        return;
-    };
-    apply_scroll(&mut handle, &mut coalescer, ev.kind);
-}
-
-fn on_vi_selection_toggle(ev: On<ViSelectionToggleRequest>, mut terminals: LocalTerminal) {
-    let Ok((mut handle, mut coalescer)) = terminals.get_mut(ev.entity) else {
-        return;
-    };
-    let op = resolve_selection_toggle(handle.selection_type(), ev.ty);
-    match op {
-        SelectionOp::Start(ty) => handle.selection_start(&mut coalescer, ty),
-        SelectionOp::Change(ty) => {
-            if !handle.selection_change_type(&mut coalescer, ty) {
-                handle.selection_start(&mut coalescer, ty);
-            }
-        }
-        SelectionOp::Clear => handle.selection_clear(&mut coalescer),
-    }
-}
-
-fn on_vi_yank(ev: On<ViYankRequest>, mut commands: Commands, mut terminals: LocalTerminal) {
-    let Ok((handle, _)) = terminals.get_mut(ev.entity) else {
-        return;
-    };
-    if let Some(text) = handle.selection_to_string() {
-        commands.trigger(CopyAction { text });
-    }
-    commands.trigger(ExitViMode { entity: ev.entity });
-}
-
-fn on_vi_exit(ev: On<ViExitRequest>, mut commands: Commands, terminals: LocalTerminal) {
-    if terminals.get(ev.entity).is_err() {
-        return;
-    }
-    commands.trigger(ExitViMode { entity: ev.entity });
-}
-
-/// Applies a scroll. Relative scrolls move the vi cursor with the viewport;
-/// `Top`/`Bottom` snap to the buffer extremes.
-fn apply_scroll(handle: &mut TerminalHandle, coalescer: &mut Coalescer, kind: ViModeScroll) {
-    match kind {
-        ViModeScroll::PageUp => handle.scroll_page_up(coalescer),
-        ViModeScroll::PageDown => handle.scroll_page_down(coalescer),
-        ViModeScroll::HalfPageUp => {
-            let half = half_page(handle);
-            handle.scroll(coalescer, half);
-        }
-        ViModeScroll::HalfPageDown => {
-            let half = half_page(handle);
-            handle.scroll(coalescer, -half);
-        }
-        ViModeScroll::ScrollUp => handle.scroll(coalescer, 1),
-        ViModeScroll::ScrollDown => handle.scroll(coalescer, -1),
-        ViModeScroll::HistoryTop => handle.scroll_to_top(coalescer),
-        ViModeScroll::HistoryBottom => handle.scroll_to_bottom(coalescer),
-    }
-}
-
-/// Half the visible row count (at least 1).
-fn half_page(handle: &TerminalHandle) -> i32 {
-    (handle.read_geometry().1 as i32 / 2).max(1)
+// TODO: read the live selection text from the VT once a selection
+// capability exists (docs/todo/migrate-to-new-vt.md item 10); until then
+// yank never has anything to copy.
+fn selection_to_string() -> Option<String> {
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy_orzma_tty::prelude::ViMotion;
 
+    /// Asserts that a toggle starts a selection when none exists, clears
+    /// one of the same kind, and switches one of a different kind.
+    ///
+    /// Case: the user presses `v`, then `v` again, then `V` in vi mode.
     #[test]
     fn selection_toggle_resolution() {
         assert_eq!(
-            resolve_selection_toggle(None, SelectionType::Simple),
-            SelectionOp::Start(SelectionType::Simple)
+            resolve_selection_toggle(None, SelectionKind::Simple),
+            SelectionOp::Start(SelectionKind::Simple)
         );
         assert_eq!(
-            resolve_selection_toggle(Some(SelectionType::Simple), SelectionType::Simple),
+            resolve_selection_toggle(Some(SelectionKind::Simple), SelectionKind::Simple),
             SelectionOp::Clear
         );
         assert_eq!(
-            resolve_selection_toggle(Some(SelectionType::Simple), SelectionType::Lines),
-            SelectionOp::Change(SelectionType::Lines)
+            resolve_selection_toggle(Some(SelectionKind::Simple), SelectionKind::Lines),
+            SelectionOp::Change(SelectionKind::Lines)
         );
     }
 
+    /// Asserts that every `ViModeScroll` maps to the intended `Scroll`
+    /// motion, with line scrolls as one-line deltas.
+    ///
+    /// Case: the user presses each configured vi-mode scroll key in turn.
     #[test]
-    fn appliers_ignore_entities_missing_coalescer() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_observer(on_vi_exit);
-        app.add_observer(on_vi_yank);
-        let entity = app.world_mut().spawn(TerminalHandle::detached(10, 5)).id();
-        // No Coalescer on this entity, so the query does not match — no panic.
-        app.world_mut().trigger(ViExitRequest { entity });
-        app.world_mut().trigger(ViYankRequest { entity });
-        app.update();
+    fn scroll_for_maps_every_vi_mode_scroll_kind() {
+        assert_eq!(scroll_for(ViModeScroll::PageUp), Scroll::PageUp);
+        assert_eq!(scroll_for(ViModeScroll::PageDown), Scroll::PageDown);
+        assert_eq!(scroll_for(ViModeScroll::HalfPageUp), Scroll::HalfPageUp);
+        assert_eq!(scroll_for(ViModeScroll::HalfPageDown), Scroll::HalfPageDown);
+        assert_eq!(scroll_for(ViModeScroll::ScrollUp), Scroll::Delta(1));
+        assert_eq!(scroll_for(ViModeScroll::ScrollDown), Scroll::Delta(-1));
+        assert_eq!(scroll_for(ViModeScroll::HistoryTop), Scroll::Top);
+        assert_eq!(scroll_for(ViModeScroll::HistoryBottom), Scroll::Bottom);
     }
 
-    #[test]
-    fn vi_scroll_applies_to_a_detached_terminal_entity() {
-        use orzma_configs::vi_mode::ViModeScroll;
-        use orzma_tty_engine::{Coalescer, TerminalHandle};
-
+    fn app_with_applier() -> App {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_observer(on_vi_scroll);
-        let mut handle = TerminalHandle::detached(20, 5);
-        handle.advance(b"l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\nl7\r\nl8\r\nl9\r\nl10\r\n");
-        let entity = app.world_mut().spawn((handle, Coalescer::default())).id();
+        app.add_plugins(MinimalPlugins).add_plugins(ViApplierPlugin);
+        app
+    }
+
+    #[derive(Resource, Default)]
+    struct SeenMotions(Vec<(Entity, ViMotion)>);
+
+    /// Asserts that `ViMotionRequest` is forwarded as a `RequestTtyViMotion`
+    /// carrying the same entity and motion.
+    ///
+    /// Case: a vi-mode motion key (`j`) resolved by the keymap and fired at
+    /// the focused terminal.
+    #[test]
+    fn vi_motion_triggers_the_matching_request() {
+        let mut app = app_with_applier();
+        app.init_resource::<SeenMotions>().add_observer(
+            |ev: On<RequestTtyViMotion>, mut seen: ResMut<SeenMotions>| {
+                seen.0.push((ev.terminal, ev.motion));
+            },
+        );
+        let entity = app.world_mut().spawn_empty().id();
+
+        app.world_mut().trigger(ViMotionRequest {
+            entity,
+            motion: ViMotion::Down,
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SeenMotions>().0,
+            vec![(entity, ViMotion::Down)]
+        );
+    }
+
+    #[derive(Resource, Default)]
+    struct SeenScrolls(Vec<(Entity, Scroll)>);
+
+    /// Asserts that `ViScrollRequest` is forwarded as a `RequestTtyScroll`
+    /// through `scroll_for`'s mapping.
+    ///
+    /// Case: the user pages through scrollback with `Ctrl-F` in vi mode.
+    #[test]
+    fn vi_scroll_triggers_the_matching_request() {
+        let mut app = app_with_applier();
+        app.init_resource::<SeenScrolls>().add_observer(
+            |ev: On<RequestTtyScroll>, mut seen: ResMut<SeenScrolls>| {
+                seen.0.push((ev.terminal, ev.scroll));
+            },
+        );
+        let entity = app.world_mut().spawn_empty().id();
+
         app.world_mut().trigger(ViScrollRequest {
             entity,
-            kind: ViModeScroll::ScrollUp,
+            kind: ViModeScroll::PageDown,
         });
-        let snapshot = app
-            .world()
-            .get::<TerminalHandle>(entity)
-            .unwrap()
-            .vi_indicator_snapshot();
-        assert!(
-            snapshot.scroll_offset > 0,
-            "applier did not run on a detached terminal entity"
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SeenScrolls>().0,
+            vec![(entity, Scroll::PageDown)]
         );
     }
 
-    #[test]
-    fn yank_writes_selection_to_clipboard_and_exits() {
-        use crate::action::vi::mode::{EnterViModeActionEvent, ViModePlugin, ViModeState};
-        use bevy::ecs::system::RunSystemOnce;
-        use orzma_tty_engine::{SpawnOptions, TerminalBundle, ViMotion};
+    #[derive(Resource, Default)]
+    struct SeenStarts(Vec<(Entity, SelectionKind)>);
 
+    /// Asserts that a selection toggle — always resolving to `Start` while
+    /// `selection_type` is stubbed to `None` — triggers
+    /// `RequestTtySelectionStartAtViCursor` with the requested kind.
+    ///
+    /// Case: the user presses `v` in vi mode with no selection active.
+    #[test]
+    fn vi_selection_toggle_starts_at_the_vi_cursor() {
+        let mut app = app_with_applier();
+        app.init_resource::<SeenStarts>().add_observer(
+            |ev: On<RequestTtySelectionStartAtViCursor>, mut seen: ResMut<SeenStarts>| {
+                seen.0.push((ev.terminal, ev.kind));
+            },
+        );
+        let entity = app.world_mut().spawn_empty().id();
+
+        app.world_mut().trigger(ViSelectionToggleRequest {
+            entity,
+            ty: SelectionKind::Lines,
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SeenStarts>().0,
+            vec![(entity, SelectionKind::Lines)]
+        );
+    }
+
+    #[derive(Resource, Default)]
+    struct SeenExits(Vec<Entity>);
+
+    /// Asserts that yank always exits vi mode and — since
+    /// `selection_to_string` is stubbed to `None` until a selection-reading
+    /// capability lands (docs/todo/migrate-to-new-vt.md item 10) — never
+    /// emits a `CopyAction`.
+    ///
+    /// Case: the user presses the yank key in vi mode, with or without an
+    /// active selection; today's stub makes the copy a no-op either way.
+    #[test]
+    fn yank_exits_vi_mode_and_currently_never_copies() {
         use crate::action::clipboard::test_support::{CapturedCopyActions, capture_copy_actions};
 
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(ViModePlugin);
-        app.add_observer(on_vi_yank);
-        // Capture the write-seam request instead of round-tripping a real
-        // clipboard: headless-safe and never clobbers the developer's clipboard.
+        let mut app = app_with_applier();
+        app.init_resource::<SeenExits>().add_observer(
+            |ev: On<ExitViMode>, mut seen: ResMut<SeenExits>| {
+                seen.0.push(ev.entity);
+            },
+        );
         capture_copy_actions(&mut app);
-
-        let opts = SpawnOptions {
-            cols: 20,
-            rows: 5,
-            shell: "/bin/sh".into(),
-            cwd: None,
-            env: Vec::new(),
-        };
-        let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
-        let entity = app.world_mut().spawn(bundle).id();
-
-        app.world_mut().trigger(EnterViModeActionEvent { entity });
-        app.update();
-        app.world_mut()
-            .run_system_once(move |mut q: Query<(&mut TerminalHandle, &mut Coalescer)>| {
-                let (mut h, mut c) = q.get_mut(entity).unwrap();
-                h.advance(b"hello world");
-                h.selection_start(&mut c, SelectionType::Simple);
-                h.vi_motion(&mut c, ViMotion::Last);
-            })
-            .unwrap();
+        let entity = app.world_mut().spawn_empty().id();
 
         app.world_mut().trigger(ViYankRequest { entity });
         app.update();
 
-        assert!(app.world().get::<ViModeState>(entity).is_none());
-        let captured = &app.world().resource::<CapturedCopyActions>().0;
-        assert!(
-            captured.iter().any(|t| !t.is_empty()),
-            "yank must emit a non-empty CopyAction"
+        assert_eq!(app.world().resource::<SeenExits>().0, vec![entity]);
+        assert!(app.world().resource::<CapturedCopyActions>().0.is_empty());
+    }
+
+    /// Asserts that `ViExitRequest` on any entity — including one with no
+    /// terminal handle — always triggers `ExitViMode` without panicking.
+    ///
+    /// Case: an exit key fired while the target pane is mid-teardown; the
+    /// applier is a pure relay with nothing left to gate on locally.
+    #[test]
+    fn vi_exit_always_triggers_exit_vi_mode() {
+        let mut app = app_with_applier();
+        app.init_resource::<SeenExits>().add_observer(
+            |ev: On<ExitViMode>, mut seen: ResMut<SeenExits>| {
+                seen.0.push(ev.entity);
+            },
         );
+        let entity = app.world_mut().spawn_empty().id();
+
+        app.world_mut().trigger(ViExitRequest { entity });
+        app.update();
+
+        assert_eq!(app.world().resource::<SeenExits>().0, vec![entity]);
     }
 }

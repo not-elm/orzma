@@ -1,9 +1,8 @@
-//! Vi mode state. The vi cursor lives in alacritty
-//! (`Term::vi_mode_cursor`) and the active selection lives in
-//! `Term::selection`. This component is a pure marker — its presence
-//! on a Surface entity means "vi mode is active". The v / V
-//! toggle predicate reads `TerminalHandle::selection_type()` to
-//! decide between "start new selection of kind X" and "clear existing".
+//! Vi mode state. This component is a pure marker — its presence on a
+//! Surface entity means "vi mode is active". Entering and exiting request a
+//! selection clear and a `RequestTtyViMode` switch on the underlying tty;
+//! where the vi cursor and the active selection actually live is an
+//! implementation detail of whatever `Vt` capability eventually backs them.
 
 use crate::input::focus::{KeyboardDisabled, MouseDisabled};
 use bevy::app::{App, Plugin};
@@ -12,7 +11,9 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::system::{Commands, Query};
-use orzma_tty_engine::{Coalescer, TerminalHandle};
+use bevy_orzma_tty::prelude::{
+    OrzmaTtyHandle, RequestTtySelectionClear, RequestTtyViMode, ViModeSwitch,
+};
 
 /// Bevy Plugin: registers the two observers. The `Clipboard` resource is
 /// provided by `DefaultPlugins` (`bevy_clipboard::ClipboardPlugin`); orzma's
@@ -39,8 +40,8 @@ pub struct EnterViModeActionEvent {
     pub entity: Entity,
 }
 
-/// Request to exit vi mode. The observer calls `TerminalHandle::exit_vi_mode`,
-/// clears any selection, and removes `ViModeState`.
+/// Request to exit vi mode. The observer requests a selection clear and a
+/// `RequestTtyViMode { switch: Exit }`, and removes `ViModeState`.
 #[derive(EntityEvent, Debug)]
 pub struct ExitViMode {
     /// The Surface entity to exit vi mode on.
@@ -48,41 +49,49 @@ pub struct ExitViMode {
 }
 
 /// Observer for `EnterViModeActionEvent`. Inserts `ViModeState` on the
-/// target entity and calls `TerminalHandle::enter_vi_mode`.
+/// target entity and requests a selection clear followed by the vi-mode
+/// enter switch.
 fn handle_enter_vi_mode_request(
     ev: On<EnterViModeActionEvent>,
     mut commands: Commands,
-    mut q: Query<(&mut TerminalHandle, &mut Coalescer)>,
+    terminals: Query<&OrzmaTtyHandle>,
 ) {
-    let Ok((mut handle, mut coalescer)) = q.get_mut(ev.entity) else {
+    if terminals.get(ev.entity).is_err() {
         return;
-    };
-    // NOTE: must clear before entering vi mode — the v/V toggle predicate
-    // (`resolve_selection_toggle`) reads `TerminalHandle::selection_type()` to
-    // decide "start new selection" vs. "clear existing"; a leftover mouse-drag
-    // selection would otherwise be misread as an already-started vi
-    // selection, so the first post-entry `v` press would clear it instead of
-    // starting a fresh one.
-    handle.selection_clear(&mut coalescer);
-    handle.enter_vi_mode(&mut coalescer);
+    }
+    // NOTE: clear before entering vi mode — once a selection-reading
+    // capability lands, the v/V toggle predicate must not misread a
+    // leftover mouse-drag selection as an already-started vi selection.
+    commands.trigger(RequestTtySelectionClear {
+        terminal: ev.entity,
+    });
+    commands.trigger(RequestTtyViMode {
+        terminal: ev.entity,
+        switch: ViModeSwitch::Enter,
+    });
     commands
         .entity(ev.entity)
         .insert((ViModeState, KeyboardDisabled, MouseDisabled));
 }
 
-/// Observer for `ExitViMode`. Removes `ViModeState`, clears any
-/// selection, and calls `TerminalHandle::exit_vi_mode` (which snaps
-/// the viewport to the live tail).
+/// Observer for `ExitViMode`. Removes `ViModeState`, and requests a
+/// selection clear followed by the vi-mode exit switch (which snaps the
+/// viewport to the live tail).
 fn handle_exit_vi_mode(
     ev: On<ExitViMode>,
     mut commands: Commands,
-    mut q: Query<(&mut TerminalHandle, &mut Coalescer)>,
+    terminals: Query<&OrzmaTtyHandle>,
 ) {
-    let Ok((mut handle, mut coalescer)) = q.get_mut(ev.entity) else {
+    if terminals.get(ev.entity).is_err() {
         return;
-    };
-    handle.selection_clear(&mut coalescer);
-    handle.exit_vi_mode(&mut coalescer);
+    }
+    commands.trigger(RequestTtySelectionClear {
+        terminal: ev.entity,
+    });
+    commands.trigger(RequestTtyViMode {
+        terminal: ev.entity,
+        switch: ViModeSwitch::Exit,
+    });
     commands
         .entity(ev.entity)
         .remove::<ViModeState>()
@@ -94,75 +103,87 @@ fn handle_exit_vi_mode(
 mod tests {
     use super::*;
     use bevy::app::App;
+    use bevy::ecs::resource::Resource;
+    use bevy::ecs::system::ResMut;
     use bevy::prelude::MinimalPlugins;
-    use orzma_tty_engine::{SelectionType, SpawnOptions, TerminalBundle, TerminalHandle};
 
     fn spawn_terminal_entity(app: &mut App) -> Entity {
-        let opts = SpawnOptions {
-            cols: 10,
-            rows: 5,
-            shell: "/bin/sh".into(),
-            cwd: None,
-            env: Vec::new(),
-        };
-        let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
-        app.world_mut().spawn(bundle).id()
+        let (handle, _sink) = OrzmaTtyHandle::detached(10, 5);
+        app.world_mut().spawn(handle).id()
     }
 
-    #[test]
-    fn enter_observer_inserts_vi_mode_state_and_does_not_create_selection() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_observer(handle_enter_vi_mode_request);
+    #[derive(Resource, Default)]
+    struct SeenClears(Vec<Entity>);
+    #[derive(Resource, Default)]
+    struct SeenSwitches(Vec<(Entity, ViModeSwitch)>);
 
+    fn capture_requests(app: &mut App) {
+        app.init_resource::<SeenClears>()
+            .init_resource::<SeenSwitches>()
+            .add_observer(
+                |ev: On<RequestTtySelectionClear>, mut seen: ResMut<SeenClears>| {
+                    seen.0.push(ev.terminal);
+                },
+            )
+            .add_observer(|ev: On<RequestTtyViMode>, mut seen: ResMut<SeenSwitches>| {
+                seen.0.push((ev.terminal, ev.switch));
+            });
+    }
+
+    /// Asserts that entering vi mode inserts `ViModeState` and requests a
+    /// selection clear before the vi-mode-enter switch.
+    ///
+    /// Case: the user presses the vi-mode shortcut on a terminal that may
+    /// carry a leftover mouse-drag selection from before entry.
+    #[test]
+    fn enter_observer_inserts_vi_mode_state_and_clears_selection_first() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_observer(handle_enter_vi_mode_request);
+        capture_requests(&mut app);
         let entity = spawn_terminal_entity(&mut app);
 
         app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
 
         assert!(app.world().get::<ViModeState>(entity).is_some());
-        let h = app.world().get::<TerminalHandle>(entity).unwrap();
-        assert!(
-            h.selection_type().is_none(),
-            "enter must not auto-create a selection",
+        assert_eq!(app.world().resource::<SeenClears>().0, vec![entity]);
+        assert_eq!(
+            app.world().resource::<SeenSwitches>().0,
+            vec![(entity, ViModeSwitch::Enter)]
         );
     }
 
+    /// Asserts that entering vi mode on an entity without a terminal handle
+    /// neither inserts `ViModeState` nor fires any request.
+    ///
+    /// Case: a stray `EnterViModeActionEvent` aimed at an entity that never
+    /// had a terminal handle, or whose pane was already torn down.
     #[test]
-    fn enter_observer_clears_a_pre_existing_selection() {
-        // Regression: a leftover mouse-drag selection from before vi mode
-        // was entered must not be misread by the v/V toggle predicate as an
-        // already-started vi selection.
+    fn enter_request_on_a_bare_entity_is_a_no_op() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_observer(handle_enter_vi_mode_request);
-
-        let entity = spawn_terminal_entity(&mut app);
-        {
-            let mut e = app.world_mut().entity_mut(entity);
-            let (mut h, mut coalescer) = (
-                e.take::<TerminalHandle>().unwrap(),
-                e.take::<Coalescer>().unwrap(),
-            );
-            h.selection_start(&mut coalescer, SelectionType::Simple);
-            e.insert((h, coalescer));
-        }
+        app.add_plugins(MinimalPlugins)
+            .add_observer(handle_enter_vi_mode_request);
+        capture_requests(&mut app);
+        let entity = app.world_mut().spawn_empty().id();
 
         app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
 
-        let h = app.world().get::<TerminalHandle>(entity).unwrap();
-        assert!(
-            h.selection_type().is_none(),
-            "entering vi mode must clear a pre-existing selection",
-        );
+        assert!(app.world().get::<ViModeState>(entity).is_none());
+        assert!(app.world().resource::<SeenClears>().0.is_empty());
+        assert!(app.world().resource::<SeenSwitches>().0.is_empty());
     }
 
+    /// Asserts that entering vi mode marks the entity `KeyboardDisabled`
+    /// and `MouseDisabled`.
+    ///
+    /// Case: the user enters vi mode on the focused terminal.
     #[test]
     fn enter_observer_disables_keyboard_and_mouse() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_observer(handle_enter_vi_mode_request);
+        app.add_plugins(MinimalPlugins)
+            .add_observer(handle_enter_vi_mode_request);
         let entity = spawn_terminal_entity(&mut app);
         app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
@@ -170,12 +191,16 @@ mod tests {
         assert!(app.world().get::<MouseDisabled>(entity).is_some());
     }
 
+    /// Asserts that exiting vi mode removes `KeyboardDisabled` and
+    /// `MouseDisabled` again.
+    ///
+    /// Case: the user leaves vi mode with `Esc`.
     #[test]
     fn exit_observer_reenables_keyboard_and_mouse() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_observer(handle_enter_vi_mode_request);
-        app.add_observer(handle_exit_vi_mode);
+        app.add_plugins(MinimalPlugins)
+            .add_observer(handle_enter_vi_mode_request)
+            .add_observer(handle_exit_vi_mode);
         let entity = spawn_terminal_entity(&mut app);
         app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
@@ -185,34 +210,35 @@ mod tests {
         assert!(app.world().get::<MouseDisabled>(entity).is_none());
     }
 
+    /// Asserts that exiting vi mode removes `ViModeState` and requests a
+    /// selection clear before the vi-mode-exit switch.
+    ///
+    /// Case: the user presses `Esc` to leave vi mode, possibly with an
+    /// active vi selection.
     #[test]
-    fn exit_observer_removes_vi_mode_state_and_clears_selection() {
+    fn exit_observer_removes_vi_mode_state_and_clears_selection_first() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_observer(handle_enter_vi_mode_request);
-        app.add_observer(handle_exit_vi_mode);
+        app.add_plugins(MinimalPlugins)
+            .add_observer(handle_enter_vi_mode_request)
+            .add_observer(handle_exit_vi_mode);
+        capture_requests(&mut app);
 
         let entity = spawn_terminal_entity(&mut app);
         app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
-        {
-            let mut e = app.world_mut().entity_mut(entity);
-            let (mut h, mut coalescer) = (
-                e.take::<TerminalHandle>().unwrap(),
-                e.take::<Coalescer>().unwrap(),
-            );
-            h.selection_start(&mut coalescer, SelectionType::Simple);
-            e.insert((h, coalescer));
-        }
 
         app.world_mut().trigger(ExitViMode { entity });
         app.update();
 
         assert!(app.world().get::<ViModeState>(entity).is_none());
-        let h = app.world().get::<TerminalHandle>(entity).unwrap();
-        assert!(
-            h.selection_type().is_none(),
-            "exit must clear the selection"
+        assert_eq!(
+            app.world().resource::<SeenClears>().0,
+            vec![entity, entity],
+            "a clear is requested on both enter and exit"
+        );
+        assert_eq!(
+            app.world().resource::<SeenSwitches>().0,
+            vec![(entity, ViModeSwitch::Enter), (entity, ViModeSwitch::Exit)]
         );
     }
 }
