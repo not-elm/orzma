@@ -19,11 +19,11 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use orzma_tty_renderer::TerminalCellMetricsResource;
-use orzma_tty_renderer::prelude::TerminalOverlays;
 use bevy_orzma_webview::{
     NonInteractive, Webview, focused_webview_of, webview_hit_at, webview_local_dip,
 };
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::prelude::TerminalOverlays;
 
 mod router;
 

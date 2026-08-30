@@ -25,8 +25,8 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
-use orzma_configs::shortcuts::Shortcut;
 use bevy_orzma_webview::ForwardKeys;
+use orzma_configs::shortcuts::Shortcut;
 
 /// Registers `resolve_key_effects` and the `ShortcutSet` ordering.
 pub(super) struct KeyboardHandlerPlugin;

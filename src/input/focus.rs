@@ -15,9 +15,9 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::{FocusedWebview, WebviewSource};
+use bevy_orzma_webview::{NonInteractive, Webview, webview_hit_at};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::TerminalOverlays;
-use bevy_orzma_webview::{NonInteractive, Webview, webview_hit_at};
 
 /// When present on an `OrzmaTerminal` entity, the crate's default keyboard
 /// dispatcher skips it entirely — the host withholds keyboard input for it

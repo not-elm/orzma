@@ -9,9 +9,9 @@ use crate::input::shortcuts::{
 };
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
+use bevy_orzma_webview::NormalizedChord;
 use orzma_configs::shortcuts::{Modifiers, Shortcut};
 use orzma_configs::vi_mode::ViModeAction;
-use bevy_orzma_webview::NormalizedChord;
 use std::time::Duration;
 
 /// One decided effect of a single pressed key, produced by `classify_key_batch`.

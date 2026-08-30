@@ -28,9 +28,9 @@ use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
+use bevy_orzma_webview::{NonInteractive, Webview};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::TerminalOverlays;
-use bevy_orzma_webview::{NonInteractive, Webview};
 
 /// Registers the webview pointer systems. The shared
 /// `WebviewPress` resource is owned by the parent `MouseWebviewPlugin`.
