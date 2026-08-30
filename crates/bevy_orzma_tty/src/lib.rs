@@ -1,9 +1,11 @@
 //! Bevy integration for `orzma_tty`: the terminal handle component,
-//! inbound request observers, and the outbound signal pump.
+//! the title component, inbound request observers, and the outbound
+//! signal pump.
 
 use crate::{
-    requests::OrzmaEventRequestPlugin, signals::OrzmaTtySignalPlugin, title::TtyTitle,
-    title::TtyTitlePlugin,
+    requests::OrzmaEventRequestPlugin,
+    signals::OrzmaTtySignalPlugin,
+    title::{TtyTitle, TtyTitlePlugin},
 };
 use bevy::prelude::*;
 #[cfg(any(test, feature = "test-support"))]

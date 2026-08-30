@@ -19,11 +19,20 @@ impl Plugin for TerminalGridPlugin {
 /// Applies the signalled frame to its terminal's grid, touching the
 /// component mutably only when the frame changes something.
 ///
-/// A frame arrives whenever a damage cycle ran — one per PTY chunk,
-/// including while the user is scrolled far enough back that the
-/// output is off-window — and `update_terminal_material` reads a
-/// changed grid as a reason to rebuild the GPU buffers, so the gate is
-/// what keeps an idle terminal idle on the GPU.
+/// `orzma_tty` emits at most one frame per coalesce window, and
+/// `FrameTracker::emit` already returns `None` when nothing changed, so
+/// a signalled frame is usually real damage. The gate here is what
+/// keeps the mirror honest on the frames that are not: a frame naming
+/// only rows outside the mirror's range, only hyperlink ids the mirror
+/// already knows, or sections that already equal the mirror's own.
+/// `update_terminal_material` reads a changed grid as a reason to
+/// rebuild the GPU buffers, so a spurious write here would rebuild
+/// them for nothing.
+///
+/// A terminal entity must carry a `TerminalGrid` from the same spawn
+/// as its handle: a frame delivered to an entity without one is
+/// dropped silently, and `orzma_tty` offers no repaint request to
+/// recover the bootstrap frame that was lost.
 fn apply_frame(signal: On<TtyFrameSignal>, mut terminals: Query<&mut TerminalGrid>) {
     let Ok(grid) = terminals.get_mut(signal.terminal) else {
         return;
@@ -94,8 +103,9 @@ mod tests {
     /// Asserts that a frame carrying nothing new leaves the grid
     /// component unchanged.
     ///
-    /// Case: the user reads scrollback while a build keeps printing at
-    /// the live tail.
+    /// Case: a frame's every section already equals what the mirror
+    /// holds, because the coalescer folded in a change the mirror had
+    /// already settled to before this frame reached it.
     #[test]
     fn a_frame_with_nothing_new_leaves_the_grid_unchanged() {
         let (mut app, terminal) = app_with_grid();
@@ -110,10 +120,10 @@ mod tests {
     /// Asserts that a frame whose metadata moved does mark the grid
     /// changed.
     ///
-    /// Case: the user presses an arrow key and the application moves
-    /// the caret without repainting a cell.
+    /// Case: the user scrolls back through history without the shell
+    /// repainting any cell.
     #[test]
-    fn a_frame_that_moves_the_cursor_marks_the_grid_changed() {
+    fn a_frame_that_moves_the_viewport_marks_the_grid_changed() {
         let (mut app, terminal) = app_with_grid();
         app.world_mut().trigger(TtyFrameSignal {
             terminal,

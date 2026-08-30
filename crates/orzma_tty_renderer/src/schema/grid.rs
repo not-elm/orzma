@@ -210,6 +210,14 @@ impl TerminalGrid {
     /// so they resolve against it, and the `None` sections are left
     /// alone. Row damage is not diffed against the cells already there:
     /// a row's presence is the VT's statement that it changed.
+    ///
+    /// # Invariants
+    ///
+    /// After `apply` returns, `self.cells.len() == self.rows as usize`.
+    /// [`Self::differs_from`] relies on this invariant when it reads
+    /// `self.cells.len()` to decide whether a row is in range, which it
+    /// does before this method has run the resize for the frame under
+    /// consideration.
     pub fn apply(&mut self, frame: &Frame) {
         // NOTE: Keep the fields written here in step with the list
         // `differs_from` reads, for the reason its NOTE gives.
@@ -254,7 +262,7 @@ impl TerminalGrid {
 /// Column advance follows display width — a wide grapheme takes two
 /// columns and a combining mark none — which `material::rebuild_cells`
 /// mirrors.
-pub(crate) fn runs_to_cells(
+fn runs_to_cells(
     runs: &[Run],
     line: GridLine,
     hyperlinks: &[(HyperlinkId, HyperlinkUri)],
@@ -624,24 +632,73 @@ mod tests {
 
     /// Asserts that a frame carrying nothing new reports no difference.
     ///
-    /// Case: the VT emits a frame for a damage cycle whose output landed
-    /// off-window while the user reads scrollback.
+    /// Case: a frame's every section already equals what the mirror
+    /// holds, because the coalescer folded in a change the mirror had
+    /// already settled to before this frame reached it.
     #[test]
     fn a_quiet_frame_does_not_differ() {
         assert!(!settled_grid().differs_from(&quiet_frame()));
     }
 
-    /// Asserts that a moved cursor or display offset is a difference.
+    /// Asserts that a moved cursor is a difference, and that applying
+    /// the frame settles the grid so the cursor round-trips to a
+    /// matching state.
     ///
     /// Case: the user presses an arrow key and the application moves
     /// the caret without repainting a cell.
     #[test]
     fn a_moved_cursor_differs() {
+        let mut grid = settled_grid();
+        let frame = Frame {
+            cursor: Cursor {
+                point: GridPoint {
+                    line: GridLine(1),
+                    column: GridColumn(2),
+                },
+                ..Cursor::default()
+            },
+            ..quiet_frame()
+        };
+        assert!(grid.differs_from(&frame));
+        grid.apply(&frame);
+        assert!(!grid.differs_from(&frame));
+    }
+
+    /// Asserts that a moved viewport (display offset) is a difference,
+    /// and that applying the frame settles the grid so the offset
+    /// round-trips to a matching state.
+    ///
+    /// Case: the user scrolls back through history without the shell
+    /// repainting any cell.
+    #[test]
+    fn a_moved_viewport_differs() {
+        let mut grid = settled_grid();
         let frame = Frame {
             display_offset: DisplayOffset(7),
             ..quiet_frame()
         };
-        assert!(settled_grid().differs_from(&frame));
+        assert!(grid.differs_from(&frame));
+        grid.apply(&frame);
+        assert!(!grid.differs_from(&frame));
+    }
+
+    /// Asserts that a size change alone is a difference, and that
+    /// applying the frame resizes the cell rows to match even though
+    /// the frame carries no rows of its own.
+    ///
+    /// Case: the user resizes the window and the VT's first frame at
+    /// the new size arrives before any output repaints a row.
+    #[test]
+    fn a_new_size_alone_differs() {
+        let mut grid = settled_grid();
+        let frame = Frame {
+            size: GridSize { cols: 3, rows: 2 },
+            ..quiet_frame()
+        };
+        assert!(grid.differs_from(&frame));
+        grid.apply(&frame);
+        assert_eq!(grid.cells.len(), 2);
+        assert!(!grid.differs_from(&frame));
     }
 
     /// Asserts that a row inside the grid is applied at the line the
@@ -675,8 +732,7 @@ mod tests {
     /// Asserts that a row beyond the grid is ignored and is not a
     /// difference.
     ///
-    /// Case: a frame for a taller grid arrives after the host shrank
-    /// its own mirror.
+    /// Case: a malformed frame names a row past the mirror's last row.
     #[test]
     fn a_row_out_of_range_is_ignored() {
         let mut grid = settled_grid();
