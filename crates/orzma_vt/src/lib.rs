@@ -477,4 +477,26 @@ mod tests {
         let restored = vt.frame().expect("the flip back emits");
         assert_eq!(restored.placements.as_ref().map(Vec::len), Some(1));
     }
+
+    /// Asserts that returning to a scrolled-back primary screen repaints
+    /// every viewport row at the offset the user left it at.
+    ///
+    /// Case: the user scrolls the shell back two lines, runs a
+    /// full-screen program, and exits it.
+    #[test]
+    fn a_flip_back_keeps_the_primary_screens_scroll_position() {
+        let mut vt = vt();
+        vt.interpret(b"1\r\n2\r\n3\r\n4\r\n5");
+        assert!(vt.scroll(Scroll::Delta(2)));
+        vt.frame();
+
+        vt.interpret(b"\x1b[?1049h");
+        let entered = vt.frame().expect("a flip emits");
+        assert_eq!(entered.display_offset, DisplayOffset(0));
+
+        vt.interpret(b"\x1b[?1049l");
+        let returned = vt.frame().expect("the flip back emits");
+        assert_eq!(returned.rows.len(), 3);
+        assert_eq!(returned.display_offset, DisplayOffset(2));
+    }
 }
