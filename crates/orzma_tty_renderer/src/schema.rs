@@ -1,12 +1,10 @@
-//! Renderer-facing schema: the Bevy-side frame events, the
-//! `TerminalGrid` component, and hover state, plus the shared terminal
-//! vocabulary re-exported flat from [`orzma_vt::prelude`].
+//! Renderer-facing schema: the `TerminalGrid` component and hover
+//! state, plus the shared terminal vocabulary re-exported flat from
+//! [`orzma_vt::prelude`].
 
-mod frame;
 mod grid;
 mod hover;
 
-pub use frame::*;
 pub use grid::*;
 pub use hover::*;
 pub use orzma_vt::prelude::{
