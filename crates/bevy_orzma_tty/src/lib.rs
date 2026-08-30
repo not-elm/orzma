@@ -1,7 +1,10 @@
 //! Bevy integration for `orzma_tty`: the terminal handle component,
 //! inbound request observers, and the outbound signal pump.
 
-use crate::{requests::OrzmaEventRequestPlugin, signals::OrzmaTtySignalPlugin};
+use crate::{
+    requests::OrzmaEventRequestPlugin, signals::OrzmaTtySignalPlugin, title::TtyTitle,
+    title::TtyTitlePlugin,
+};
 use bevy::prelude::*;
 #[cfg(any(test, feature = "test-support"))]
 use orzma_tty::test_support::CaptureSink;
@@ -10,14 +13,16 @@ use orzma_vt::prelude::{GridSize, OrzmaVt};
 
 mod requests;
 mod signals;
+mod title;
 
 pub mod prelude {
-    pub use crate::{OrzmaTtyHandle, OrzmaTtyPlugin, requests::*, signals::*};
+    pub use crate::{OrzmaTtyHandle, OrzmaTtyPlugin, requests::*, signals::*, title::TtyTitle};
 }
 
 /// A live terminal owned by one Bevy entity: the PTY-backed
 /// [`OrzmaTty`] driving an [`OrzmaVt`].
 #[derive(Component, Deref, DerefMut)]
+#[require(TtyTitle)]
 pub struct OrzmaTtyHandle(OrzmaTty<OrzmaVt>);
 
 impl OrzmaTtyHandle {
@@ -37,13 +42,17 @@ impl OrzmaTtyHandle {
     }
 }
 
-/// Registers the terminal signal pump and the inbound request
-/// observers.
+/// Registers the terminal signal pump, the inbound request observers,
+/// and the title component's observers.
 pub struct OrzmaTtyPlugin;
 
 impl Plugin for OrzmaTtyPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((OrzmaTtySignalPlugin, OrzmaEventRequestPlugin));
+        app.add_plugins((
+            OrzmaTtySignalPlugin,
+            OrzmaEventRequestPlugin,
+            TtyTitlePlugin,
+        ));
     }
 }
 
