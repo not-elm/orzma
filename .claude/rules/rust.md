@@ -511,10 +511,10 @@ Split such systems along the gather → decide → apply seam.
   the effect targets a specific entity and should apply at command flush. The
   gather system queries the target **immutably**, computes effects, and
   `commands.trigger(...)`s them; the observer holds the `&mut` access and writes
-  the world. See `dispatch_input` (`src/input/keyboard.rs`) → `TerminalKeyInput`
-  (`crates/orzma_tty_engine/src/events.rs`) → `on_terminal_key_input`
-  (`crates/orzma_tty_engine/src/lib.rs`) and `PasteAction` / `on_paste`
-  (`src/action/terminal/paste.rs`).
+  the world. See `apply_type` (`src/input/shortcuts/apply.rs`) → `RequestTtyKeyInput`
+  (`crates/bevy_orzma_tty/src/requests/key_input.rs`) → `apply_key_input`
+  (same file) and `PasteAction` / `on_paste`
+  (`src/action/clipboard/paste.rs`).
 - **Hand off with a `Message`** (`MessageWriter` → `MessageReader`, the consumer
   gated with `on_message::<T>`) when a producer system decouples work to one or
   more consumer systems in a later phase or frame — a buffered broadcast rather

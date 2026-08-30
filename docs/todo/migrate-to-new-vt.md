@@ -15,14 +15,14 @@
 したがって切り替えの完了条件は「vi モードと選択を除いて、旧 engine と同じことが
 できる」であり、切り替え直後は vi モードと選択が一時的に動かない状態を受け入れる。
 
-## 現状: 新スタックは動く。残るのは接続作業
+#### 現状: 切り替え完了。次はサブプロジェクト C 以降
 
-`src/main.rs` は今も `orzma_tty_engine::TerminalHandlePlugin` を配線している。
+`src/main.rs` は `bevy_orzma_tty::OrzmaTtyPlugin` を配線している。`crates/orzma_tty_engine`
+は削除され、`crates/orzma_webview` は `crates/bevy_orzma_webview` にリネームされた。
 
-以前のブロッカーは「新スタックが動かない」ことだったが、それは解消した。`orzma_vt` に
-`todo!()` は1つも残っておらず、workspace の `#[ignore]` もゼロ、画面には色が出る。
-**いま残っているのは、新スタックを `src/` に繋ぎ直す作業である。** 代替画面は配線済み。
-vim / less の実用検証は、絶対指定の CHA / VPA / HPA と行編集 CSI が入ってから。
+`cargo build`、`cargo clippy --workspace --all-targets`、`cargo test --workspace` は green で、
+`cargo run` でシェル作業ができる。vi モード・選択・マウス routing は「切り替え後に実装」節の
+とおり縮退したままで、これは受け入れ済みの状態である。
 
 各クレートのビルド状態（`cargo check -p <crate> --all-targets`）:
 
@@ -31,10 +31,7 @@ vim / less の実用検証は、絶対指定の CHA / VPA / HPA と行編集 CSI
 | `orzma_vt` | OK |
 | `orzma_tty` | OK |
 | `bevy_orzma_tty` | OK |
-| `orzma_tty_engine` | **FAIL**（移行とは無関係の既存破損。`orzma_tty_renderer::prelude::ViewportPoint` の未解決 import と `Entity` の未 import） |
-
-`orzma_tty_engine` が壊れているため **`cargo build` は今この瞬間も通らない**。移行は
-「余裕があればやる改善」ではなく、アプリが再びビルドできるようになる唯一の道筋である。
+| `bevy_orzma_webview` | OK |
 
 ---
 
@@ -192,7 +189,7 @@ fn clear_selection(_e: On<RequestTtySelectionClear>) {}
 
 # 着手順
 
-**切り替えまで:**
+**切り替えまで（完了）:**
 
 1. ~~**`DeviceState::resize` / `scroll`**~~ — 実装済み
 2. ~~**`csi_dispatch` に SGR / ED / EL / 相対カーソル移動**~~ — 実装済み。8→22アーム
@@ -200,13 +197,31 @@ fn clear_selection(_e: On<RequestTtySelectionClear>) {}
 4. ~~**`?1049`（代替画面）**~~ — 実装済み（47 / 1047 / 1048 / 1049）。placement は発生源で
    `WebviewEvicted` にした。設計は `docs/memo/decset.md` の代替画面の節
 5. **`osc_dispatch` の残り** — パレット、cwd、ハイパーリンク、クリップボード。
-   `apc_dispatch` も空実装なので webview が出ない
-6. **`wheel.rs` の復活と `buttons.rs` のマウス報告側の移植** — `mouse_tracking` は
-   書き手ができたが読み手がまだいない。マウス転送は現在も無条件
-7. **タイトルコンポーネントと observer**（ブロッカー5節）と `sanitize_title` の統合
-8. **`src/` の ECS 形状の書き換え** — 分量は最大だが、設計判断は「読み取り側の受け皿」の
-   1つに絞られている。22ファイル36箇所
-9. **`orzma_tty_engine` の削除、`orzma_webview` → `bevy_orzma_webview` のリネーム**
+   `apc_dispatch` も空実装なので webview が出ない。未着手のまま C 以降に持ち越し
+6. **`wheel.rs` の復活と `buttons.rs` のマウス報告側の移植** — サブプロジェクト C に
+   切り出し済み（下記）。B の間はマウス routing は一切繋がっていない
+7. ~~**タイトルコンポーネントと observer**~~ — 実装済み（`bevy_orzma_tty::title::TtyTitle`
+   と `TtyTitlePlugin`）
+8. ~~**`src/` の ECS 形状の書き換え**~~ — 実装済み。22ファイル36箇所を `OrzmaTtyHandle` /
+   `RequestTty*` に載せ替えた。「読み取り側の受け皿」はスタブ側を選んだ
+   （`selection_to_string` / `selection_type` → `None`、`vi_indicator_snapshot` →
+   `(vt().display_offset().0, 0)`）
+9. ~~**`orzma_tty_engine` の削除、`orzma_webview` → `bevy_orzma_webview` のリネーム**~~ —
+   実装済み
+
+**次はサブプロジェクト C 以降:**
+
+- **マウス routing** — `orzma_tty::input::wheel` の復活、`buttons.rs` の `MouseReport`
+  ベース移植、`RequestTtyMouseInput` への接続、`ButtonConfig` / `WheelConfig` の
+  `src/input/bindings.rs` から `orzma_tty` への移動
+- **vi モード / 選択の capability** — `Vt` トレイトへの選択 / vi モード capability 追加、
+  6つの空 observer（`vi_mode.rs` / `vi_motion.rs` / `selection.rs`）の実装、読み取り側3種
+  （`selection_to_string` / `selection_type` / `vi_indicator_snapshot`）の実装、
+  `SelectionKind` への `Block` / `Semantic` 追加、`ViMotion` の `orzma_vt` への移動
+- **`osc_dispatch` / `apc_dispatch` の穴** — パレット、cwd、ハイパーリンク、クリップボード
+  （OSC 4 / 7 / 8 / 52）、webview を出すための APC
+- **wide-char 幅モデル** — 絶対指定の CHA / VPA / HPA、文字編集の ICH / DCH / IL / DL / ECH、
+  DSR、DECAWM / DECTCEM
 
 **あると望ましいが切り替えの必須ではないもの:**
 

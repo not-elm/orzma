@@ -28,8 +28,9 @@ pub enum FineModifier {
 
 /// Fully-resolved `[mouse]` config block. Consumed by the Bevy
 /// mouse-wheel and mouse-button input systems; the wheel-relevant
-/// subset is mapped to `orzma_tty_engine::WheelConfig`, and the
-/// button-relevant subset to `orzma_tty_engine::ButtonConfig`.
+/// subset is mapped to the root binary's `WheelConfig`, and the
+/// button-relevant subset to its `ButtonConfig` (both defined in
+/// `src/input/bindings.rs`, per D18).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct MouseConfig {
