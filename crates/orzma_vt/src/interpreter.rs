@@ -12,7 +12,7 @@ mod csi;
 mod osc;
 mod sgr;
 
-use crate::device::modes::KeypadMode;
+use crate::device::modes::{KeypadMode, ScreenKind};
 use crate::interpreter::csi::CsiParams;
 use crate::interpreter::osc::window_title;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
@@ -449,6 +449,11 @@ impl Executor<'_> {
                     .device
                     .active_screen_mut()
                     .set_origin_mode(OriginMode::from_decset(enabled)),
+                // Alternate screen
+                47 if enabled => self.switch_to_alternate_screen(false),
+                47 => {
+                    self.switch_to_primary_screen();
+                }
                 // DECNKM
                 66 => self.device.modes_mut().keypad_mode = KeypadMode::from_decset(enabled),
                 // XTFOCUS
@@ -475,6 +480,60 @@ impl Executor<'_> {
         } else if let Some(encoding) = modes.mouse_encoding.with_decset(mode, enabled) {
             modes.mouse_encoding = encoding;
         }
+    }
+
+    /// Shows the alternate screen, erasing it first when `erase` is
+    /// set. Already showing it is a no-op: no repaint, no erase.
+    ///
+    /// The erase runs after the flip because it must reach the
+    /// alternate screen, and `active_screen_mut` is the only way to a
+    /// screen. It fills with the pen the alternate screen kept from its
+    /// previous use, not the primary screen's — each screen owns its
+    /// pen — which is a known departure from xterm's shared pen.
+    ///
+    /// # Invariants
+    ///
+    /// The flip and the staged `Full` are never separated by an early
+    /// return: a frame after a screen flip must carry every viewport
+    /// row, and `switch_screen` stages nothing itself.
+    fn switch_to_alternate_screen(&mut self, erase: bool) {
+        if self.device.modes().active_screen == ScreenKind::Alternate {
+            return;
+        }
+        self.device.switch_screen(ScreenKind::Alternate);
+        if erase {
+            let damage = self
+                .device
+                .active_screen_mut()
+                .erase_in_display(EraseScreenMode::All);
+            self.stage(damage);
+        }
+        self.stage(Some(DamageSpan::Full));
+    }
+
+    /// Returns to the primary screen and names the placements the
+    /// alternate screen owned; reports whether a flip happened. Already
+    /// showing the primary screen is a no-op.
+    ///
+    /// The eviction is raised here rather than left to the owner's
+    /// sweep because `switch_screen` takes the placements out of the
+    /// table, so no later sweep can find them.
+    ///
+    /// # Invariants
+    ///
+    /// The flip and the staged `Full` are never separated by an early
+    /// return, for the reason [`Self::switch_to_alternate_screen`]
+    /// gives.
+    fn switch_to_primary_screen(&mut self) -> bool {
+        if self.device.modes().active_screen == ScreenKind::Primary {
+            return false;
+        }
+        let placements = self.device.switch_screen(ScreenKind::Primary);
+        if !placements.is_empty() {
+            self.signal(VtSignal::WebviewEvicted { placements });
+        }
+        self.stage(Some(DamageSpan::Full));
+        true
     }
 }
 
@@ -539,6 +598,8 @@ mod tests {
     use super::*;
     use crate::device::color::{Color, Rgb};
     use crate::device::modes::{MouseEncoding, MouseTracking};
+    use crate::frame::Frame;
+    use crate::placement::{PlacementId, PlacementSize};
     use crate::screen::cell::Cell;
     use crate::screen::grid::GridSize;
     use crate::screen::grid::coords::GridColumn;
@@ -589,19 +650,63 @@ mod tests {
         vt.interpret(chunk).replies
     }
 
-    /// Runs `setup` and then `chunk` over one interpreter and device,
-    /// and reports the liveness `chunk` alone produced.
-    fn liveness_after(setup: &[u8], chunk: &[u8]) -> bool {
-        let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
-        let mut tracker = FrameTracker::new();
-        let mut interpreter = Interpreter::default();
-        let mut damaged = false;
-        for bytes in [setup, chunk] {
-            let mut output = InterpretOutput::default();
-            interpreter.parse(&mut output, &mut device, &mut tracker, bytes);
-            damaged = output.damaged;
+    /// One interpreter, device, and tracker kept across chunks, so a
+    /// test can build up state with one chunk and then observe what a
+    /// later chunk alone produced.
+    struct Session {
+        interpreter: Interpreter,
+        device: DeviceState,
+        tracker: FrameTracker,
+    }
+
+    impl Session {
+        fn new() -> Self {
+            Self {
+                interpreter: Interpreter::default(),
+                device: DeviceState::new(GridSize { cols: 4, rows: 3 }, 10),
+                tracker: FrameTracker::new(),
+            }
         }
-        damaged
+
+        /// Interprets `chunk` and hands back what it alone produced.
+        fn feed(&mut self, chunk: &[u8]) -> InterpretOutput {
+            let mut output = InterpretOutput::default();
+            self.interpreter
+                .parse(&mut output, &mut self.device, &mut self.tracker, chunk);
+            output
+        }
+
+        /// Emits the pending frame, if anything observable changed.
+        fn frame(&mut self) -> Option<Frame> {
+            self.tracker.emit(&self.device)
+        }
+
+        /// Mounts a one-cell placement at the active screen's cursor.
+        fn mount(&mut self, view: &str) -> PlacementId {
+            self.device
+                .mount_placement(PlacementSize { rows: 1, cols: 1 }, view.to_string(), None)
+                .expect("a mount under the cap is accepted")
+        }
+
+        fn active_screen(&self) -> ScreenKind {
+            self.device.modes().active_screen
+        }
+
+        fn cursor_column(&self) -> u16 {
+            self.device.active_screen().cursor_column().0
+        }
+
+        fn char_at(&self, line: u16, column: u16) -> char {
+            self.device.active_screen().viewport_row(ViewportLine(line))[column].c
+        }
+    }
+
+    /// Runs `setup` and then `chunk` over one session, and reports the
+    /// liveness `chunk` alone produced.
+    fn liveness_after(setup: &[u8], chunk: &[u8]) -> bool {
+        let mut session = Session::new();
+        session.feed(setup);
+        session.feed(chunk).damaged
     }
 
     /// Asserts that staging row damage through the executor marks the
@@ -1839,5 +1944,95 @@ mod tests {
             device.active_screen().viewport_row(ViewportLine(2))[1].c,
             'b'
         );
+    }
+
+    /// Asserts that `?47h` shows the alternate screen and repaints the
+    /// whole viewport, leaving the primary screen's contents in place
+    /// behind it.
+    ///
+    /// Case: a program built against the old termcap pair opens on the
+    /// alternate screen while the shell's prompt sits on the primary.
+    #[test]
+    fn decset_47_shows_the_alternate_screen() {
+        let mut session = Session::new();
+        session.feed(b"a");
+        session.frame();
+        let output = session.feed(b"\x1b[?47h");
+        assert_eq!(session.active_screen(), ScreenKind::Alternate);
+        assert!(output.damaged);
+        assert_eq!(session.char_at(0, 0), ' ');
+        let frame = session.frame().expect("a flip emits a full frame");
+        assert_eq!(frame.rows.len(), 3);
+    }
+
+    /// Asserts that `?47l` returns to the primary screen with its
+    /// contents intact, repaints the whole viewport, and raises no
+    /// eviction when the alternate screen held no placements.
+    ///
+    /// Case: the program exits and the shell's prompt from before it
+    /// must reappear.
+    #[test]
+    fn decrst_47_returns_to_the_primary_screen() {
+        let mut session = Session::new();
+        session.feed(b"a\x1b[?47h");
+        session.frame();
+        let output = session.feed(b"\x1b[?47l");
+        assert_eq!(session.active_screen(), ScreenKind::Primary);
+        assert!(output.damaged);
+        assert!(output.signals.is_empty());
+        assert_eq!(session.char_at(0, 0), 'a');
+        let frame = session.frame().expect("the flip back emits a full frame");
+        assert_eq!(frame.rows.len(), 3);
+    }
+
+    /// Asserts that a DECSET already on the alternate screen and a
+    /// DECRST already on the primary screen are complete no-ops rather
+    /// than repaints.
+    ///
+    /// Case: a wrapper script runs a program's `rmcup` string although
+    /// the program never got to send `smcup`, and later a program
+    /// re-sends its initialisation string while already full-screen.
+    #[test]
+    fn a_redundant_alternate_screen_switch_does_nothing() {
+        let mut session = Session::new();
+        let output = session.feed(b"\x1b[?47l");
+        assert!(!output.damaged);
+        assert!(output.signals.is_empty());
+        assert_eq!(session.active_screen(), ScreenKind::Primary);
+
+        session.feed(b"\x1b[?47h");
+        let output = session.feed(b"\x1b[?47h");
+        assert!(!output.damaged);
+        assert!(output.signals.is_empty());
+        assert_eq!(session.active_screen(), ScreenKind::Alternate);
+    }
+
+    /// Asserts that leaving the alternate screen names its placements
+    /// in the chunk's own signals and leaves the primary screen's
+    /// placement in the next frame.
+    ///
+    /// Case: a full-screen program that mounted a webview exits, and
+    /// the shell's own webview from before it must survive.
+    #[test]
+    fn leaving_the_alternate_screen_evicts_only_its_placements() {
+        let mut session = Session::new();
+        let kept = session.mount("shell");
+        session.feed(b"\x1b[?47h");
+        let dropped = session.mount("app");
+        let output = session.feed(b"\x1b[?47l");
+        assert_eq!(
+            output.signals,
+            vec![VtSignal::WebviewEvicted {
+                placements: vec![dropped]
+            }]
+        );
+        let frame = session.frame().expect("the flip back emits");
+        let listed: Vec<PlacementId> = frame
+            .placements
+            .expect("a placement change is listed")
+            .iter()
+            .map(|placement| placement.id)
+            .collect();
+        assert_eq!(listed, vec![kept]);
     }
 }
