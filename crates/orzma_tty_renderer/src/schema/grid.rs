@@ -214,7 +214,9 @@ impl TerminalGrid {
     /// # Invariants
     ///
     /// After `apply` returns, `self.cells.len() == self.rows as usize`,
-    /// whatever length the grid was built with.
+    /// whatever length the grid was built with. Every field written here
+    /// has a matching predicate in [`Self::differs_from`]; a change to
+    /// how one field is applied must change how it is compared.
     pub fn apply(&mut self, frame: &Frame) {
         let Frame {
             size,
@@ -255,32 +257,44 @@ impl TerminalGrid {
     }
 
     fn knows_hyperlink(&self, id: HyperlinkId) -> bool {
-        self.hyperlinks.iter().any(|(known, _)| *known == id)
+        lookup_hyperlink(&self.hyperlinks, id).is_some()
     }
+}
+
+/// Finds the URI the retained table holds for `id`.
+fn lookup_hyperlink(
+    table: &[(HyperlinkId, HyperlinkUri)],
+    id: HyperlinkId,
+) -> Option<&HyperlinkUri> {
+    table
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map(|(_, uri)| uri)
 }
 
 /// Materializes one row's attribute runs into cells, resolving each
 /// run's hyperlink id against the retained table.
 ///
 /// Column advance follows display width — a wide grapheme takes two
-/// columns and a combining mark none — which `material::rebuild_cells`
-/// mirrors.
+/// columns and a combining mark none.
 fn runs_to_cells(
     runs: &[Run],
     line: GridLine,
     hyperlinks: &[(HyperlinkId, HyperlinkUri)],
 ) -> Vec<GridCell> {
-    let mut out: Vec<GridCell> = Vec::new();
+    // NOTE: The column walk here must advance exactly as
+    // `material::rebuild_cells` re-derives it from `GridCell::width`;
+    // a change to one without the other misaligns every glyph after
+    // the first wide character.
+    let mut out: Vec<GridCell> =
+        Vec::with_capacity(runs.iter().map(|run| usize::from(run.cols)).sum());
     let mut column: u16 = 0;
     for run in runs {
         let hyperlink = run.hyperlink_id.and_then(|id| {
-            hyperlinks
-                .iter()
-                .find(|(known, _)| *known == id)
-                .map(|(id, uri)| Hyperlink {
-                    id: *id,
-                    uri: uri.clone(),
-                })
+            lookup_hyperlink(hyperlinks, id).map(|uri| Hyperlink {
+                id,
+                uri: uri.clone(),
+            })
         });
         for grapheme in run.text.graphemes(true) {
             let width = grapheme.width().min(2) as u8;
@@ -623,14 +637,6 @@ mod tests {
         );
     }
 
-    /// A quiet frame for a grid of the given size.
-    fn quiet_frame_sized(cols: u16, rows: u16) -> Frame {
-        Frame {
-            size: GridSize { cols, rows },
-            ..quiet_frame()
-        }
-    }
-
     fn dirty_row(line: u16, text: &str) -> DirtyRow {
         DirtyRow {
             line: ViewportLine(line),
@@ -761,7 +767,10 @@ mod tests {
         grid.apply(&frame);
         assert_eq!(grid.cells.len(), 2);
         assert_eq!(grid.cells[1][0].text, "b");
-        assert!(!grid.differs_from(&quiet_frame_sized(2, 2)));
+        assert!(!grid.differs_from(&Frame {
+            size: GridSize { cols: 2, rows: 2 },
+            ..quiet_frame()
+        }));
     }
 
     /// Asserts that a frame with fewer rows than the grid truncates the
