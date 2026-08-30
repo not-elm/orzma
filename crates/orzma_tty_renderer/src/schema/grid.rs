@@ -141,8 +141,15 @@ impl TerminalGrid {
     /// origin, so IME anchoring stays at the cursor's column while the
     /// user is scrolled back.
     pub fn cursor_viewport_cell_or_top(&self) -> (u16, u16) {
-        self.cursor_viewport_cell()
-            .unwrap_or_else(|| (self.cursor.as_ref().map_or(0, |c| c.point.column.0), 0))
+        let Some(cursor) = self.cursor.as_ref() else {
+            return (0, 0);
+        };
+        let row = cursor
+            .point
+            .line
+            .to_viewport(DisplayOffset(self.display_offset), self.rows)
+            .map_or(0, |row| row.0);
+        (cursor.point.column.0, row)
     }
 
     /// Returns the viewport cursor cell and the packed style the
