@@ -4,10 +4,11 @@
 //! `vtparse`. Applying a control sequence to it is interpretation, so
 //! the `impl` sits here and the screen layer stays free of the parser.
 
-use crate::device::color::Color;
+use crate::device::color::{Color, Rgb};
 use crate::interpreter::csi::CsiParams;
 use crate::screen::cell::Pen;
 use crate::screen::grid::run::Style;
+use std::ops::ControlFlow;
 use vtparse::CsiParam;
 
 /// The most subparameters any form this terminal answers carries.
@@ -40,16 +41,25 @@ impl Pen {
     /// tail silently, and a cut can land inside a direct colour.
     pub(crate) fn applied(self, params: &CsiParams<'_>) -> Self {
         let mut pen = self;
-        for tokens in params.groups() {
-            if let Some(group) = Group::decode(tokens) {
-                pen.apply_group(&group);
+        let mut groups = params.groups();
+        while let Some(tokens) = groups.next() {
+            let Some(group) = Group::decode(tokens) else {
+                continue;
+            };
+            if pen.apply_group(&mut groups, &group).is_break() {
+                break;
             }
         }
         pen
     }
 
-    /// Applies one group to this pen.
-    fn apply_group(&mut self, group: &Group) {
+    /// Applies one group; `Break` when the rest of the sequence can no
+    /// longer be resynchronised and must be abandoned.
+    fn apply_group<'a>(
+        &mut self,
+        groups: &mut impl Iterator<Item = &'a [CsiParam]>,
+        group: &Group,
+    ) -> ControlFlow<()> {
         let subs = group.as_slice();
         let attribute = subs.first().copied().flatten().unwrap_or(0);
         match attribute {
@@ -76,6 +86,24 @@ impl Pen {
             49 => self.bg = Color::DefaultBackground,
             90..=97 => self.fg = Color::Indexed((attribute - 90 + 8) as u8),
             100..=107 => self.bg = Color::Indexed((attribute - 100 + 8) as u8),
+            38 => match Self::read_color(groups, group) {
+                ColorRead::Done(color) => self.fg = color,
+                ColorRead::Discarded => {}
+                ColorRead::Abandon => return ControlFlow::Break(()),
+            },
+            48 => match Self::read_color(groups, group) {
+                ColorRead::Done(color) => self.bg = color,
+                ColorRead::Discarded => {}
+                ColorRead::Abandon => return ControlFlow::Break(()),
+            },
+            // NOTE: The underline colour has no home in `Pen`, but its
+            // operands must still be consumed. Ignoring the selector
+            // alone would let `58;2;255;0;0` read as faint, an unknown
+            // number, and two full resets.
+            58 => match Self::read_color(groups, group) {
+                ColorRead::Done(_) | ColorRead::Discarded => {}
+                ColorRead::Abandon => return ControlFlow::Break(()),
+            },
             // NOTE: These carry no operands, so dropping them cannot
             // desynchronise the walk. They are listed rather than left
             // to the fallthrough so the set/reset pairing stays
@@ -83,7 +111,108 @@ impl Pen {
             5 | 6 | 25 | 53 | 55 | 59 => {}
             _ => {}
         }
+        ControlFlow::Continue(())
     }
+
+    /// Reads the colour a selector group introduces, consuming the
+    /// following groups when the legacy spelling needs them.
+    fn read_color<'a>(
+        groups: &mut impl Iterator<Item = &'a [CsiParam]>,
+        group: &Group,
+    ) -> ColorRead {
+        let subs = group.as_slice();
+        if subs.len() > 1 {
+            return match Self::colon_color(&subs[1..]) {
+                Some(color) => ColorRead::Done(color),
+                None => ColorRead::Discarded,
+            };
+        }
+        let Some(selector) = Self::next_value(groups) else {
+            return ColorRead::Discarded;
+        };
+        let operand_count = match selector {
+            5 => 1,
+            2 => 3,
+            _ => return ColorRead::Abandon,
+        };
+        let mut operands = [0u16; 3];
+        for slot in operands.iter_mut().take(operand_count) {
+            let Some(value) = Self::next_value(groups) else {
+                return ColorRead::Discarded;
+            };
+            *slot = value;
+        }
+        match Self::color_from(selector, &operands[..operand_count]) {
+            Some(color) => ColorRead::Done(color),
+            None => ColorRead::Discarded,
+        }
+    }
+
+    /// The colour a selector group's own subparameters spell, the
+    /// colour-space slot optional and any tail ignored.
+    fn colon_color(subs: &[Option<u16>]) -> Option<Color> {
+        let selector = subs.first().copied().flatten()?;
+        let mut operands = [0u16; 3];
+        let taken = match (selector, subs.len()) {
+            (5, _) => {
+                operands[0] = subs.get(1).copied().flatten()?;
+                1
+            }
+            // NOTE: The shortened spelling omits the colour-space slot,
+            // so the components start one earlier. Many programs emit
+            // it, and every emulator checked accepts both.
+            (2, 4) => {
+                Self::fill(&mut operands, &subs[1..4]);
+                3
+            }
+            (2, len) if len >= 5 => {
+                Self::fill(&mut operands, &subs[2..5]);
+                3
+            }
+            _ => return None,
+        };
+        Self::color_from(selector, &operands[..taken])
+    }
+
+    /// Copies `subs` into `operands`, an omitted subparameter reading
+    /// as zero.
+    fn fill(operands: &mut [u16; 3], subs: &[Option<u16>]) {
+        for (slot, sub) in operands.iter_mut().zip(subs) {
+            *slot = sub.unwrap_or(0);
+        }
+    }
+
+    /// The colour `operands` spell for `selector`; `None` when a
+    /// component does not fit a byte.
+    fn color_from(selector: u16, operands: &[u16]) -> Option<Color> {
+        match (selector, operands) {
+            (5, [index]) => Some(Color::Indexed(u8::try_from(*index).ok()?)),
+            (2, [r, g, b]) => Some(Color::Rgb(Rgb {
+                r: u8::try_from(*r).ok()?,
+                g: u8::try_from(*g).ok()?,
+                b: u8::try_from(*b).ok()?,
+            })),
+            _ => None,
+        }
+    }
+
+    /// The first value of the next group; `None` when the list ended or
+    /// the group was malformed.
+    fn next_value<'a>(groups: &mut impl Iterator<Item = &'a [CsiParam]>) -> Option<u16> {
+        let tokens = groups.next()?;
+        Group::decode(tokens)?.as_slice().first().copied().flatten()
+    }
+}
+
+/// What reading a colour selector produced.
+enum ColorRead {
+    /// A colour to apply.
+    Done(Color),
+    /// The operands were consumed and the colour rejected.
+    Discarded,
+    /// The selector is not one this terminal answers, so the rest of the
+    /// sequence cannot be resynchronised.
+    Abandon,
 }
 
 /// One `;`-separated group, decoded once.
@@ -143,6 +272,21 @@ mod tests {
                 tokens.push(CsiParam::P(b';'));
             }
             tokens.push(CsiParam::Integer(*value));
+        }
+        tokens
+    }
+
+    /// Builds the token slice a colon-separated group spells, an entry
+    /// of `None` standing for an omitted subparameter.
+    fn colons(subs: &[Option<i64>]) -> Vec<CsiParam> {
+        let mut tokens = Vec::new();
+        for (index, sub) in subs.iter().enumerate() {
+            if index > 0 {
+                tokens.push(CsiParam::P(b':'));
+            }
+            if let Some(value) = sub {
+                tokens.push(CsiParam::Integer(*value));
+            }
         }
         tokens
     }
@@ -356,5 +500,178 @@ mod tests {
         let pen = applied(&tokens);
         assert!(pen.style.contains(Style::BOLD));
         assert_eq!(pen.fg, Color::Indexed(1));
+    }
+
+    /// Asserts that both spellings of an indexed colour reach the same
+    /// palette slot.
+    ///
+    /// Case: one application uses the legacy semicolon spelling and
+    /// another the standard colon spelling for the same colour.
+    #[test]
+    fn both_spellings_of_an_indexed_colour_agree() {
+        assert_eq!(applied(&semicolons(&[38, 5, 196])).fg, Color::Indexed(196));
+        assert_eq!(
+            applied(&colons(&[Some(38), Some(5), Some(196)])).fg,
+            Color::Indexed(196)
+        );
+    }
+
+    /// Asserts that every spelling of a direct colour reaches the same
+    /// value, including the omitted colour-space slot and the shortened
+    /// form many programs emit.
+    ///
+    /// Case: terminfo's `alacritty-direct` emits the omitted-slot form
+    /// while other programs drop the slot entirely.
+    #[test]
+    fn every_spelling_of_a_direct_colour_agrees() {
+        let expected = Color::Rgb(Rgb { r: 1, g: 2, b: 3 });
+        assert_eq!(applied(&semicolons(&[38, 2, 1, 2, 3])).fg, expected);
+        assert_eq!(
+            applied(&colons(&[
+                Some(38),
+                Some(2),
+                None,
+                Some(1),
+                Some(2),
+                Some(3)
+            ]))
+            .fg,
+            expected
+        );
+        assert_eq!(
+            applied(&colons(&[Some(38), Some(2), Some(1), Some(2), Some(3)])).fg,
+            expected
+        );
+    }
+
+    /// Asserts that subparameters after the blue channel are ignored,
+    /// which is what the tolerance tail the standard permits needs.
+    ///
+    /// Case: an application spells its colour with the full T.416 form
+    /// including the tolerance fields.
+    #[test]
+    fn subparameters_after_blue_are_ignored() {
+        let tokens = colons(&[
+            Some(38),
+            Some(2),
+            None,
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(0),
+            Some(0),
+        ]);
+        assert_eq!(applied(&tokens).fg, Color::Rgb(Rgb { r: 1, g: 2, b: 3 }));
+    }
+
+    /// Asserts that the background selector reaches the background
+    /// axis and leaves the foreground alone.
+    ///
+    /// Case: a syntax highlighter paints a selection background.
+    #[test]
+    fn the_background_selector_reaches_the_background() {
+        let pen = applied(&semicolons(&[48, 5, 17]));
+        assert_eq!(pen.bg, Color::Indexed(17));
+        assert_eq!(pen.fg, Color::DefaultForeground);
+    }
+
+    /// Asserts that a colour component beyond a byte is rejected rather
+    /// than saturated, leaving the axis as it was.
+    ///
+    /// Case: a program computes a component from an unbounded value and
+    /// emits `CSI 38;5;99999 m`.
+    #[test]
+    fn an_oversized_colour_component_is_rejected() {
+        assert_eq!(
+            applied(&semicolons(&[38, 5, 99999])).fg,
+            Color::DefaultForeground
+        );
+        assert_eq!(
+            applied(&semicolons(&[38, 2, 1, 300, 3])).fg,
+            Color::DefaultForeground
+        );
+    }
+
+    /// Asserts that a malformed direct colour leaves the pen as it was
+    /// rather than applying part of itself.
+    ///
+    /// Case: a truncated sequence loses its blue channel.
+    #[test]
+    fn a_malformed_direct_colour_leaves_the_pen_alone() {
+        assert_eq!(
+            applied(&semicolons(&[31, 38, 2, 1, 2])).fg,
+            Color::Indexed(1)
+        );
+    }
+
+    /// Asserts that the walk continues past a malformed colour in the
+    /// colon spelling, whose group boundary is unambiguous.
+    ///
+    /// Case: an application emits a truncated colon colour followed by
+    /// an attribute it still expects to take effect.
+    #[test]
+    fn a_malformed_colon_colour_does_not_stop_the_walk() {
+        let mut tokens = colons(&[Some(38), Some(2), None, Some(1)]);
+        tokens.push(CsiParam::P(b';'));
+        tokens.push(CsiParam::Integer(1));
+        assert!(applied(&tokens).style.contains(Style::BOLD));
+    }
+
+    /// Asserts that an unknown colour selector abandons the rest of the
+    /// sequence, because the semicolon spelling gives no point to
+    /// resynchronise on.
+    ///
+    /// Case: an application asks for a colour space this terminal does
+    /// not answer, and its operands must not read as attributes.
+    #[test]
+    fn an_unknown_colour_selector_abandons_the_rest() {
+        let pen = applied(&semicolons(&[38, 9, 1]));
+        assert!(!pen.style.contains(Style::BOLD));
+        assert_eq!(pen.fg, Color::DefaultForeground);
+    }
+
+    /// Asserts that a colour selector at the end of the list is
+    /// discarded without disturbing what came before it.
+    ///
+    /// Case: `MAX_PARAMS` truncation cuts a sequence immediately after
+    /// its colour selector.
+    #[test]
+    fn a_colour_selector_at_the_end_is_discarded() {
+        let pen = applied(&semicolons(&[1, 38]));
+        assert!(pen.style.contains(Style::BOLD));
+        assert_eq!(pen.fg, Color::DefaultForeground);
+    }
+
+    /// Asserts that the underline colour consumes its operands even
+    /// though this terminal cannot paint it, so the operands never read
+    /// as ordinary attributes.
+    ///
+    /// Case: Vim's default `t_8u` emits `CSI 58;2;r;g;b m` for a
+    /// coloured undercurl; ignoring the selector alone would read the
+    /// `2` as faint and a zero component as a full reset. The trailing
+    /// italic pins the far side of the boundary: consuming one operand
+    /// too many would swallow it.
+    #[test]
+    fn the_underline_colour_consumes_its_operands() {
+        let pen = Pen {
+            style: Style::BOLD,
+            fg: Color::Indexed(1),
+            ..Pen::default()
+        };
+        let after = pen.applied(&CsiParams::parse(&semicolons(&[58, 2, 255, 0, 0, 3])));
+        assert_eq!(after.fg, pen.fg);
+        assert!(after.style.contains(Style::BOLD));
+        assert!(after.style.contains(Style::ITALIC));
+    }
+
+    /// Asserts that the underline colour's colon spelling is consumed
+    /// whole as well.
+    ///
+    /// Case: an editor emits the standard colon spelling for the same
+    /// coloured underline.
+    #[test]
+    fn the_underline_colour_consumes_its_colon_spelling() {
+        let tokens = colons(&[Some(58), Some(2), None, Some(255), Some(0), Some(0)]);
+        assert_eq!(applied(&tokens), Pen::default());
     }
 }
