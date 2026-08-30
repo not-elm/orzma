@@ -2,9 +2,11 @@
 //! state, and wheel-notch accumulation) consumed by the shared mouse dispatch in
 //! `crate::input::mouse`.
 
+use crate::input::mouse::button::MouseButtonKind;
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::prelude::*;
-use orzma_tty_engine::{CellCoord, MouseButtonKind, SelectionType, Side};
+use bevy_orzma_tty::prelude::{CellSide, SelectionKind};
+use orzma_tty::prelude::CellCoord;
 use std::time::Duration;
 
 /// Phase of an in-progress left-drag: `Armed` after a single-click press (no
@@ -23,9 +25,9 @@ pub(in crate::input::mouse) struct DragGesture {
     /// The cell where the gesture originated.
     pub origin: CellCoord,
     /// The half of the origin cell where the gesture started.
-    pub side: Side,
+    pub side: CellSide,
     /// The selection granularity (word, line, etc.).
-    pub ty: SelectionType,
+    pub ty: SelectionKind,
     /// Current phase of the drag.
     pub phase: DragPhase,
 }
@@ -230,18 +232,22 @@ mod tests {
         assert_eq!(t.register(Duration::from_millis(0), Vec2::ZERO, cfg), 1);
     }
 
+    /// Asserts that a `DragGesture` carries its origin, side, and kind through
+    /// the `Armed` to `Started` phase transition.
+    ///
+    /// Case: the user presses on a cell and then drags off it.
     #[test]
     fn drag_gesture_phase_transitions() {
         let armed = DragGesture {
             origin: CellCoord { col: 1, row: 1 },
-            side: Side::Left,
-            ty: SelectionType::Simple,
+            side: CellSide::Left,
+            ty: SelectionKind::Simple,
             phase: DragPhase::Armed,
         };
         assert_eq!(armed.phase, DragPhase::Armed);
         assert_eq!((armed.origin.col, armed.origin.row), (1, 1));
-        assert_eq!(armed.side, Side::Left);
-        assert_eq!(armed.ty, SelectionType::Simple);
+        assert_eq!(armed.side, CellSide::Left);
+        assert_eq!(armed.ty, SelectionKind::Simple);
 
         let started = DragGesture {
             phase: DragPhase::Started,

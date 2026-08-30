@@ -7,8 +7,8 @@
 //! so dispatch runs for every surface that still owns the mouse.
 
 use crate::action::terminal::{
-    TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy,
-    TerminalSelectionStart, TerminalSelectionUpdate,
+    TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart,
+    TerminalSelectionUpdate,
 };
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::focus::MouseDisabled;
@@ -19,7 +19,8 @@ use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::CursorMoved;
-use orzma_tty_engine::{CellCoord, Point, SelectionType, Side, TermMode, TerminalHandle};
+use bevy_orzma_tty::prelude::{CellSide, GridPoint, SelectionKind};
+use orzma_tty::prelude::CellCoord;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::schema::TerminalGrid;
 
@@ -61,15 +62,14 @@ fn on_any_mouse_message() -> impl SystemCondition<()> {
 /// its `EntityEvent`s directly from `WheelAction`, bypassing this IR.)
 #[derive(Debug, Clone, PartialEq)]
 enum MouseEffect {
-    Write(Vec<u8>),
     SelStart {
-        point: Point,
-        side: Side,
-        ty: SelectionType,
+        point: GridPoint,
+        side: CellSide,
+        ty: SelectionKind,
     },
     SelUpdate {
-        point: Point,
-        side: Side,
+        point: GridPoint,
+        side: CellSide,
     },
     SelClear,
     Copy,
@@ -82,7 +82,6 @@ enum MouseEffect {
 fn trigger_mouse_effects(commands: &mut Commands, entity: Entity, effects: Vec<MouseEffect>) {
     for effect in effects {
         match effect {
-            MouseEffect::Write(bytes) => commands.trigger(TerminalMouseWrite { entity, bytes }),
             MouseEffect::SelStart { point, side, ty } => {
                 commands.trigger(TerminalSelectionStart {
                     entity,
@@ -119,24 +118,31 @@ fn cell_at_cursor(
     cell_h: f32,
     cols: u16,
     rows: u16,
-) -> Option<(CellCoord, Side)> {
+) -> Option<(CellCoord, CellSide)> {
     let local = node
         .normalize_point(*transform, cursor_phys)
         .map(|n| (n + Vec2::splat(0.5)) * node.size)?;
     Some(cell_at_local(local, cell_w, cell_h, cols, rows))
 }
 
-/// 1-indexed `(CellCoord, Side)` of the cell at pane-local physical `local`,
-/// clamped to `1..=cols` × `1..=rows`. `Side` is `Left` in the left half.
-fn cell_at_local(local: Vec2, cell_w: f32, cell_h: f32, cols: u16, rows: u16) -> (CellCoord, Side) {
+/// 1-indexed `(CellCoord, CellSide)` of the cell at pane-local physical
+/// `local`, clamped to `1..=cols` × `1..=rows`. `CellSide` is `Left` in the
+/// left half.
+fn cell_at_local(
+    local: Vec2,
+    cell_w: f32,
+    cell_h: f32,
+    cols: u16,
+    rows: u16,
+) -> (CellCoord, CellSide) {
     let col_f = (local.x / cell_w).max(0.0);
     let row_f = (local.y / cell_h).max(0.0);
     let col = (col_f.floor() as u32 + 1).min(cols as u32).max(1);
     let row = (row_f.floor() as u32 + 1).min(rows as u32).max(1);
     let side = if col_f - col_f.floor() < 0.5 {
-        Side::Left
+        CellSide::Left
     } else {
-        Side::Right
+        CellSide::Right
     };
     (CellCoord { col, row }, side)
 }
@@ -148,7 +154,6 @@ type TerminalSurfaces<'w, 's> = Query<
     's,
     (
         Entity,
-        &'static TerminalHandle,
         &'static ComputedNode,
         &'static ComputedStackIndex,
         &'static UiGlobalTransform,
@@ -172,7 +177,7 @@ fn hit_candidates<'a>(
 > {
     terminals
         .iter()
-        .map(|(e, _, node, stack, transform, _)| (e, node, stack, transform))
+        .map(|(e, node, stack, transform, _)| (e, node, stack, transform))
 }
 
 /// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to `>= 1` so
@@ -197,7 +202,7 @@ struct CellContext<'a> {
 }
 
 impl CellContext<'_> {
-    fn hit(&self, cursor_phys: Vec2) -> Option<(CellCoord, Side)> {
+    fn hit(&self, cursor_phys: Vec2) -> Option<(CellCoord, CellSide)> {
         cell_at_cursor(
             self.node,
             self.transform,
@@ -210,24 +215,23 @@ impl CellContext<'_> {
     }
 }
 
-/// Resolves `target` to its `(CellContext, TermMode)` at the given cell pitch,
-/// or `None` when it is no longer a live surface. Shared by the button and wheel
+/// Resolves `target` to its `CellContext` at the given cell pitch, or `None`
+/// when it is no longer a live surface. Shared by the button and wheel
 /// dispatchers so both build a hit-test context the same way.
 fn cell_context_for<'a>(
     terminals: &'a TerminalSurfaces<'_, '_>,
     target: Entity,
     cell_w: f32,
     cell_h: f32,
-) -> Option<(CellContext<'a>, TermMode)> {
-    let (_, handle, node, _, transform, grid) = terminals.get(target).ok()?;
-    let ctx = CellContext {
+) -> Option<CellContext<'a>> {
+    let (_, node, _, transform, grid) = terminals.get(target).ok()?;
+    Some(CellContext {
         node,
         transform,
         grid,
         cell_w,
         cell_h,
-    };
-    Some((ctx, handle.current_modes()))
+    })
 }
 
 #[cfg(test)]
@@ -241,11 +245,6 @@ mod test_support {
 
     pub(super) fn add_effect_capture_observers(app: &mut App) {
         app.add_observer(
-            |ev: On<TerminalMouseWrite>, mut cap: ResMut<CapturedEffects>| {
-                cap.0.push(MouseEffect::Write(ev.bytes.clone()));
-            },
-        )
-        .add_observer(
             |ev: On<TerminalSelectionStart>, mut cap: ResMut<CapturedEffects>| {
                 cap.0.push(MouseEffect::SelStart {
                     point: ev.point,
@@ -318,12 +317,12 @@ mod tests {
     fn cell_at_local_is_one_indexed_and_clamped() {
         let (cell, side) = cell_at_local(Vec2::new(0.0, 0.0), 10.0, 20.0, 80, 24);
         assert_eq!((cell.col, cell.row), (1, 1));
-        assert_eq!(side, Side::Left);
+        assert_eq!(side, CellSide::Left);
         let (cell, _) = cell_at_local(Vec2::new(10_000.0, 10_000.0), 10.0, 20.0, 80, 24);
         assert_eq!((cell.col, cell.row), (80, 24));
         let (cell, side) = cell_at_local(Vec2::new(17.0, 5.0), 10.0, 20.0, 80, 24);
         assert_eq!(cell.col, 2);
-        assert_eq!(side, Side::Right);
+        assert_eq!(side, CellSide::Right);
     }
 
     #[test]
