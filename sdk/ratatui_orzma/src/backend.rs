@@ -1,4 +1,4 @@
-//! A ratatui `Backend` wrapper that emits webview OSC during `terminal.draw()`.
+//! A ratatui `Backend` wrapper that emits the webview APC verbs during `terminal.draw()`.
 
 use crate::error::OrzmaError;
 use crate::session::{FlushState, FramePlacements, Orzma, ReconnectHandle};
@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// A ratatui [`Backend`] that wraps another backend and emits orzma webview
-/// mount/unmount OSC (and the control-plane focus op) after each frame's cell
+/// mount/unmount APC verbs (and the control-plane focus op) after each frame's cell
 /// diff — so an app needs no separate post-draw flush call.
 ///
 /// Construct it with [`OrzmaBackend::new`], passing the [`Orzma`] session it links

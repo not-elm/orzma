@@ -1,9 +1,9 @@
 //! The Orzma session: socket connection, reader thread, flush.
 
 use crate::error::{OrzmaError, OrzmaResult};
+use crate::escape::{clamp_dims, cursor_to, mount, unmount, valid_handle};
 use crate::events::{EventQueues, EventRegistry};
 use crate::handler::BoxedHandler;
-use crate::osc::{clamp_dims, cursor_to, mount, unmount, valid_handle};
 use crate::protocol::{ClientMsg, IncomingCall, IncomingEvent, RegisterKind, RegisterReply};
 use crate::webview::{SharedWriter, Webview, WebviewHandle};
 use crossbeam_channel::{Sender, bounded};
@@ -79,7 +79,7 @@ pub(crate) struct FlushState {
 }
 
 impl FlushState {
-    /// Emits this frame's geometry (mount/unmount OSC) to `out` and, when focus
+    /// Emits this frame's geometry (mount/unmount APC verbs) to `out` and, when focus
     /// changed since the last frame, the control-plane focus op to `socket`.
     pub(crate) fn emit_frame(
         &mut self,
@@ -706,7 +706,7 @@ mod tests {
         flush_placements(&mut buf, &mut state, &placements).unwrap();
         let first = String::from_utf8(buf).unwrap();
         assert!(first.contains("\x1b[4;3H"));
-        assert!(first.contains("mount;h1;12;48"));
+        assert!(first.contains("Omount;v=h1,r=12,c=48"));
 
         let mut buf2 = Vec::new();
         flush_placements(&mut buf2, &mut state, &placements).unwrap();
@@ -718,7 +718,11 @@ mod tests {
         placements[0].area = rect(2, 3, 50, 12);
         let mut buf3 = Vec::new();
         flush_placements(&mut buf3, &mut state, &placements).unwrap();
-        assert!(String::from_utf8(buf3).unwrap().contains("mount;h1;12;50"));
+        assert!(
+            String::from_utf8(buf3)
+                .unwrap()
+                .contains("Omount;v=h1,r=12,c=50")
+        );
     }
 
     #[test]
@@ -732,7 +736,7 @@ mod tests {
 
         let mut buf = Vec::new();
         flush_placements(&mut buf, &mut state, &[]).unwrap();
-        assert!(String::from_utf8(buf).unwrap().contains("unmount;h1"));
+        assert!(String::from_utf8(buf).unwrap().contains("Ounmount;v=h1"));
     }
 
     #[test]

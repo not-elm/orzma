@@ -42,7 +42,7 @@ impl Write for SharedBuf {
 }
 
 #[test]
-fn backend_draw_emits_mount_osc_and_focus_op() {
+fn backend_draw_emits_mount_apc_and_focus_op() {
     let server = FakeServer::start("view-1");
     with_env(&server.sock_path.clone(), || {
         let orzma = Orzma::connect().unwrap();
@@ -69,8 +69,8 @@ fn backend_draw_emits_mount_osc_and_focus_op() {
 
         let out = String::from_utf8(term_bytes.0.lock().unwrap().clone()).unwrap();
         assert!(
-            out.contains("mount;view-1;12;48"),
-            "terminal output missing mount OSC: {out:?}"
+            out.contains("Omount;v=view-1,r=12,c=48"),
+            "terminal output missing mount APC verb: {out:?}"
         );
 
         let msg = server.next_message();

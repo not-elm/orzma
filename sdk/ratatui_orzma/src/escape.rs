@@ -1,4 +1,4 @@
-//! OSC 5379 and CUP escape-sequence builders.
+//! APC webview verbs and CUP escape-sequence builders.
 
 use crate::error::{OrzmaError, OrzmaResult};
 
@@ -7,8 +7,8 @@ pub(crate) const MAX_ROWS: u16 = 200;
 /// Max webview cols accepted by the VT layer (`1..=MAX_COLS`).
 pub(crate) const MAX_COLS: u16 = 400;
 
-/// Returns the `mount` OSC 5379 sequence, or an error if the handle
-/// charset is invalid or the dimensions are out of range.
+/// Returns the `mount` APC verb, or an error if the handle charset is
+/// invalid or the dimensions are out of range.
 pub(crate) fn mount(handle: &str, rows: u16, cols: u16) -> OrzmaResult<String> {
     validate_handle(handle)?;
     if !(1..=MAX_ROWS).contains(&rows) || !(1..=MAX_COLS).contains(&cols) {
@@ -16,12 +16,12 @@ pub(crate) fn mount(handle: &str, rows: u16, cols: u16) -> OrzmaResult<String> {
             reason: format!("geometry out of range: {rows}x{cols}"),
         });
     }
-    Ok(format!("\x1b]5379;mount;{handle};{rows};{cols}\x1b\\"))
+    Ok(format!("\x1b_Omount;v={handle},r={rows},c={cols}\x1b\\"))
 }
 
-/// Returns the `unmount` OSC 5379 sequence for a single view handle.
+/// Returns the `unmount` APC verb for a single view handle.
 pub(crate) fn unmount(handle: &str) -> String {
-    format!("\x1b]5379;unmount;{handle}\x1b\\")
+    format!("\x1b_Ounmount;v={handle}\x1b\\")
 }
 
 /// Returns a CUP (cursor position) sequence for a 0-based viewport cell.
@@ -56,15 +56,24 @@ fn validate_handle(handle: &str) -> OrzmaResult<()> {
 mod tests {
     use super::*;
 
+    /// Asserts that a mount renders as the APC webview verb, with the
+    /// reservation carried as `r=` / `c=` key-value fields.
+    ///
+    /// Case: a companion app reserves a 12x48 region for a registered
+    /// view and writes the sequence to its terminal.
     #[test]
     fn mount_sequence_is_canonical() {
         let s = mount("memo.main", 12, 48).unwrap();
-        assert_eq!(s, "\x1b]5379;mount;memo.main;12;48\x1b\\");
+        assert_eq!(s, "\x1b_Omount;v=memo.main,r=12,c=48\x1b\\");
     }
 
+    /// Asserts that an unmount renders as the APC webview verb naming
+    /// only the view.
+    ///
+    /// Case: a companion app tears its view down on the way out.
     #[test]
     fn unmount_sequence_is_canonical() {
-        assert_eq!(unmount("memo.main"), "\x1b]5379;unmount;memo.main\x1b\\");
+        assert_eq!(unmount("memo.main"), "\x1b_Ounmount;v=memo.main\x1b\\");
     }
 
     #[test]
