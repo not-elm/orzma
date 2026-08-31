@@ -12,7 +12,7 @@ page. It spans three surfaces:
 
 1. **The control socket** — a local Unix-socket connection over which a program
    registers content, manages it, and routes the page back-channel.
-2. **OSC 5379** — terminal escape sequences that mount and unmount registered
+2. **APC verbs** — terminal escape sequences that mount and unmount registered
    content at a cell rectangle.
 3. **The `window.orzma` bridge** — an in-page JavaScript API the webview uses to
    call, subscribe to, and emit events to the registering program.
@@ -22,7 +22,7 @@ Three actors participate: the **registering program** (running in a pane), the
 runtime-registered) webview — the only kind this protocol describes.
 
 End to end: a program connects to the control socket, registers content and
-receives an opaque **handle**, writes an `OSC 5379;mount;<handle>;…` sequence to
+receives an opaque **handle**, writes an `ESC _ Omount;v=<handle>,…` sequence to
 display it, and then talks to the page through the `window.orzma` bridge routed
 over the same control socket. Unmounting (or disconnecting) tears it down.
 
@@ -35,17 +35,17 @@ over the same control socket. Unmounting (or disconnecting) tears it down.
         │  hello{token} ───────────────►│
         │  register{kind,…} ───────────►│
         │◄─────────────── {ok,handle} ──│
-        │  OSC 5379;mount;handle;r;c ──►│  mount orzma://handle/ ───►│ load page
+        │  APC Omount;v=h,r=n,c=n ─────►│  mount orzma://handle/ ───►│ load page
         │                               │◄──── window.orzma.call ────│
         │◄──── {op:call,reqId,method} ──│                           │
         │  {op:reply,reqId,value} ─────►│──── resolve Promise ─────►│
         │  {op:emit,event,payload} ────►│──── window.orzma.on ──────►│
         │◄──── {op:event,…} ◄ window.orzma.emit ─────────────────────│
-        │  OSC 5379;unmount;handle ────►│  remove webview ──────────►│
+        │  APC Ounmount;v=handle ──────►│  remove webview ──────────►│
 ```
 
 The control socket carries every horizontal arrow between the program and the
-host; OSC 5379 carries the mount/unmount; the page bridge carries the
+host; the APC verbs carry the mount/unmount; the page bridge carries the
 `window.orzma` arrows on the right.
 
 ## The control socket
@@ -195,7 +195,7 @@ replies `{"ok":false,"error":"<code>"}`:
 ### Handle semantics
 
 A handle is opaque, unique per registration, lowercase, and matches
-`^[a-z0-9._-]{1,128}$` (a subset of the OSC `view_id` charset, so a handle is
+`^[a-z0-9._-]{1,128}$` (a subset of the APC `view_id` charset, so a handle is
 always a valid `mount` argument). Treat it as a token: do not parse it. Each
 handle owns one isolated `orzma://<handle>/` origin.
 
@@ -212,28 +212,37 @@ C→S {"op":"reply","reqId":"0","ok":true,"value":{"saved":true}}
 C→S {"op":"emit","handle":"nf2k7q5w3x3m5a6b2c4d6e7f","event":"tick","payload":{"n":1}}
 ```
 
-## OSC 5379 — mount / unmount
+## APC webview verbs — mount / unmount
 
-Once a handle is registered, the program mounts it by writing an OSC 5379 escape
-sequence to its terminal. The sequence is framed `ESC ] 5379 ; <params> ST`,
-where `ST` (string terminator) is `ESC \` or `BEL`. In raw bytes:
+Once a handle is registered, the program mounts it by writing an APC escape
+sequence to its terminal. The sequence is framed `ESC _ <payload> ST`, where
+`ST` (string terminator) is `ESC \`. Unlike an OSC, a `BEL` does not terminate
+an APC — it is taken as payload data. The payload opens with `O` (orzma), so a
+sequence another program owns — kitty's `G`, for example — is left alone. In
+raw bytes:
 
 ```text
-mount:    \x1b]5379;mount;<view_id>;<rows>;<cols>\x1b\
-unmount:  \x1b]5379;unmount;<view_id>\x1b\
+mount:    \x1b_Omount;v=<view_id>,r=<rows>,c=<cols>\x1b\
+unmount:  \x1b_Ounmount;v=<view_id>\x1b\
 ```
+
+The payload is at most 1024 bytes and is ASCII only; a multi-byte character
+anywhere in it is malformed.
 
 ### mount
 
 ```text
-OSC 5379 ; mount ; <view_id> ; <rows> ; <cols> [ ; <instance_id> ] ST
+ESC _ O mount ; v=<view_id>,r=<rows>,c=<cols>[,n=<instance_id>] ST
 ```
 
 - `view_id` — the handle from `register`; charset `^[A-Za-z0-9._-]{1,128}$`.
 - `rows` — decimal `1`–`200`. `cols` — decimal `1`–`400`. Digits only, no sign.
 - `instance_id` — optional, same charset as `view_id`. It lets one handle mount
-  several independent placements. A trailing empty field (`mount;<id>;3;20;`) is
-  malformed.
+  several independent placements.
+
+Keys are order-independent (`c=20,r=3,v=memo` is the same mount as
+`v=memo,r=3,c=20`). A repeated key, an unknown key, a missing `v` / `r` / `c`,
+or an empty params section (`Omount;`) is malformed.
 
 The view occupies a `rows`×`cols` rectangle of terminal cells, inline at the
 cursor.
@@ -241,29 +250,35 @@ cursor.
 ### unmount
 
 ```text
-OSC 5379 ; unmount [ ; <view_id> [ ; <instance_id> ] ] ST
+ESC _ O unmount [ ; v=<view_id>[,n=<instance_id>] ] ST
 ```
 
-- No `view_id` → unmount all of this program's inline views on the terminal.
-- `view_id` only → unmount that handle's default instance.
-- `view_id` + `instance_id` → unmount that specific placement.
+- No params section → unmount every inline view this program has on the terminal.
+- `v=` only → unmount **every instance** of that handle.
+- `v=` + `n=` → unmount that specific placement.
 
-An `instance_id` is addressable only alongside a `view_id`.
+Unlike `mount`, the unmount keys are **not** order-independent: `n=` is accepted
+only once `v=` has been seen, so `v=memo,n=a` is valid and `n=a,v=memo` is
+malformed. An empty params section (`Ounmount;`) is malformed, as is an empty
+value (`Ounmount;v=`).
 
 ### Ownership and malformed sequences
 
-A `mount;<handle>` takes effect only in the pane whose `$ORZMA_TOKEN` registered
-that handle — a program mounts its own handles in its own pane. Any malformed
-sequence (bad charset, out-of-range dimensions, empty fields) is silently
-dropped; the host reports no error.
+A `mount` takes effect only in the pane whose `$ORZMA_TOKEN` registered that
+handle — a program mounts its own handles in its own pane. Any malformed
+sequence (bad charset, out-of-range dimensions, unknown or repeated keys) is
+silently dropped; the host reports no error.
+
+A mount the terminal accepts but cannot place — the per-terminal placement cap
+is full — is also dropped, and the host logs it at debug level.
 
 ### Example
 
 Mount handle `nf2k7q5w3x3m5a6b2c4d6e7f` as a 24×80 view, then unmount it:
 
 ```text
-\x1b]5379;mount;nf2k7q5w3x3m5a6b2c4d6e7f;24;80\x1b\
-\x1b]5379;unmount;nf2k7q5w3x3m5a6b2c4d6e7f\x1b\
+\x1b_Omount;v=nf2k7q5w3x3m5a6b2c4d6e7f,r=24,c=80\x1b\
+\x1b_Ounmount;v=nf2k7q5w3x3m5a6b2c4d6e7f\x1b\
 ```
 
 ## The `orzma://` origin
