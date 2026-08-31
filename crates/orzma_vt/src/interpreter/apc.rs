@@ -4,6 +4,7 @@
 //! handler lands; the verb this module returns is what a
 //! `VtSignal::WebviewApc` carries.
 
+use crate::placement::PlacementSize;
 use std::str;
 
 /// Verb carried by `VtSignal::WebviewApc`: inline mount/unmount of a registered view.
@@ -13,10 +14,8 @@ pub enum WebviewApcVerb {
     Mount {
         /// The registered view's id, addressed later by unmount and eviction.
         view_id: String,
-        /// Reserved height in cells.
-        rows: u16,
-        /// Reserved width in cells.
-        cols: u16,
+        /// The cell rectangle the mount reserves.
+        size: PlacementSize,
         /// Client-assigned instance id (Kitty placement model); `None` is the
         /// implicit default instance. `(view_id, instance_id)` is the address.
         instance_id: Option<String>,
@@ -119,8 +118,10 @@ fn parse_mount_action(payload: &str) -> Option<WebviewApcVerb> {
         }
     }
     Some(WebviewApcVerb::Mount {
-        cols: cols?,
-        rows: rows?,
+        size: PlacementSize {
+            rows: rows?,
+            cols: cols?,
+        },
         view_id: view_id?,
         instance_id,
     })
@@ -188,8 +189,7 @@ mod tests {
             parse("Omount;v=memo,r=3,c=20"),
             Some(WebviewApcVerb::Mount {
                 view_id: "memo".into(),
-                rows: 3,
-                cols: 20,
+                size: PlacementSize { rows: 3, cols: 20 },
                 instance_id: None,
             })
         );
@@ -201,8 +201,7 @@ mod tests {
             parse("Omount;v=memo,r=3,c=20,n=a"),
             Some(WebviewApcVerb::Mount {
                 view_id: "memo".into(),
-                rows: 3,
-                cols: 20,
+                size: PlacementSize { rows: 3, cols: 20 },
                 instance_id: Some("a".into()),
             })
         );
@@ -212,8 +211,7 @@ mod tests {
     fn mount_keys_are_order_independent() {
         let expected = Some(WebviewApcVerb::Mount {
             view_id: "memo".into(),
-            rows: 3,
-            cols: 20,
+            size: PlacementSize { rows: 3, cols: 20 },
             instance_id: None,
         });
         for payload in ["Omount;c=20,r=3,v=memo", "Omount;r=3,v=memo,c=20"] {
@@ -237,8 +235,7 @@ mod tests {
                 parse(&format!("Omount;v={id},r=3,c=20")),
                 Some(WebviewApcVerb::Mount {
                     view_id: id.into(),
-                    rows: 3,
-                    cols: 20,
+                    size: PlacementSize { rows: 3, cols: 20 },
                     instance_id: None,
                 }),
                 "id={id}"
@@ -253,8 +250,7 @@ mod tests {
             parse(&format!("Omount;v={max},r=3,c=20")),
             Some(WebviewApcVerb::Mount {
                 view_id: max.clone(),
-                rows: 3,
-                cols: 20,
+                size: PlacementSize { rows: 3, cols: 20 },
                 instance_id: None,
             }),
             "a view id of exactly MAX_VIEW_ID chars is the accepted maximum"

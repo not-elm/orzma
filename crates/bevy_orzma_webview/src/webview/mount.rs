@@ -735,8 +735,7 @@ mod tests {
             terminal,
             verb: WebviewApcVerb::Mount {
                 view_id: view_id.into(),
-                rows: 10,
-                cols: 40,
+                size: PlacementSize { rows: 10, cols: 40 },
                 instance_id: None,
             },
             placement,
@@ -845,8 +844,7 @@ mod tests {
             terminal,
             verb: WebviewApcVerb::Mount {
                 view_id: view_id.into(),
-                rows: 10,
-                cols: 40,
+                size: PlacementSize { rows: 10, cols: 40 },
                 instance_id: Some(instance_id.into()),
             },
             placement,
@@ -963,8 +961,7 @@ mod tests {
             terminal,
             verb: WebviewApcVerb::Mount {
                 view_id: "dash".into(),
-                rows: 12,
-                cols: 50,
+                size: PlacementSize { rows: 12, cols: 50 },
                 instance_id: None,
             },
             placement: Some(PlacementId(2)),

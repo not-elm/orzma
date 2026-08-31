@@ -31,8 +31,7 @@ pub(crate) fn on_apc_webview_signal(
     match &req.verb {
         WebviewApcVerb::Mount {
             view_id,
-            rows,
-            cols,
+            size,
             instance_id,
         } => {
             mount(
@@ -42,8 +41,8 @@ pub(crate) fn on_apc_webview_signal(
                     terminal_surface,
                     view_id,
                     instance_id: instance_id.as_deref(),
-                    rows: *rows,
-                    cols: *cols,
+                    rows: size.rows,
+                    cols: size.cols,
                     placement: req.placement,
                 },
             );
