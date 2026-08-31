@@ -39,7 +39,7 @@ pub struct AnchoredPlacement {
 
 /// The cell rectangle a mount reserves, without its position.
 ///
-/// This is deliberately not [`GridSize`], whose row count is the source
+/// This is deliberately not [`GridSize`](crate::prelude::GridSize), whose row count is the source
 /// of truth for one screenful; a placement's reservation is a sub-rectangle
 /// and must not be substitutable for a grid dimension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

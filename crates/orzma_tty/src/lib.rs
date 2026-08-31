@@ -175,10 +175,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// the coalescer so the new geometry repaints at the next deadline
     /// even on an otherwise idle terminal.
     ///
-    /// A request with a zero axis, or one exceeding [`Self::MAX_COLS`] /
-    /// [`Self::MAX_ROWS`], is ignored with `Ok` — neither clamped nor
+    /// A request with a zero axis, or one exceeding `Self::MAX_COLS` /
+    /// `Self::MAX_ROWS`, is ignored with `Ok` — neither clamped nor
     /// an error. When the PTY resize fails the call returns
-    /// [`OrzmaTtyError::PtyResize`] and leaves the VT grid and
+    /// `OrzmaTtyError::PtyResize` and leaves the VT grid and
     /// coalescer untouched (PTY first; nothing changes on failure).
     ///
     /// A request for the grid size the VT already has changes nothing

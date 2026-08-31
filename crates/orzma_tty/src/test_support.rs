@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 /// Cloneable in-memory `Write` sink capturing every byte written to it.
 ///
-/// Clones share one buffer: hand one clone to [`crate::OrzmaTty::detached`]
+/// Clones share one buffer: hand one clone to `crate::OrzmaTty::detached`
 /// as the PTY writer and keep another to assert on [`CaptureSink::contents`].
 #[derive(Clone, Default)]
 pub struct CaptureSink(Arc<Mutex<Vec<u8>>>);
