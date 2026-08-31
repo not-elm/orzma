@@ -79,8 +79,9 @@ pub(crate) struct FlushState {
 }
 
 impl FlushState {
-    /// Emits this frame's geometry (mount/unmount APC verbs) to `out` and, when focus
-    /// changed since the last frame, the control-plane focus op to `socket`.
+    /// Emits this frame's geometry (mount/unmount APC verbs) to `out`
+    /// and, when focus changed since the last frame, the control-plane
+    /// focus op to `socket`.
     pub(crate) fn emit_frame(
         &mut self,
         out: &mut impl Write,

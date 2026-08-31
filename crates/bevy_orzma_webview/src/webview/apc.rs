@@ -24,6 +24,7 @@ impl Plugin for ApcPlugin {
     }
 }
 
+/// Mounts (or updates the placement of) the webview the VT signal names.
 pub(crate) fn on_webview_mount(
     ev: On<TtyWebviewMountSignal>,
     mut webview: WebviewParams,
@@ -56,6 +57,7 @@ pub(crate) fn on_webview_mount_rejected(ev: On<TtyWebviewMountRejectedSignal>) {
     );
 }
 
+/// Unmounts the webview(s) the VT signal names.
 pub(crate) fn on_webview_unmount(ev: On<TtyWebviewUnmountSignal>, mut webview: WebviewParams) {
     let req = ev.event();
     unmount(

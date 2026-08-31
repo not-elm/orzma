@@ -4,7 +4,6 @@ use super::*;
 use crate::device::color::{Color, Rgb};
 use crate::device::modes::{MouseEncoding, MouseTracking};
 use crate::frame::Frame;
-
 use crate::placement::{MAX_PLACEMENTS, PlacementId, PlacementSize};
 use crate::screen::cell::Cell;
 use crate::screen::grid::GridSize;

@@ -55,9 +55,9 @@ impl<W> WebviewWidget<W> {
     ///
     /// Focusing a webview on the same frame it is first mounted may race the
     /// mount on the host (the focus op travels the control socket while the
-    /// mount APC verb travels the terminal output), so the focus op can be silently
-    /// dropped; focus a webview on a frame after its first mount, or re-assert
-    /// focus if needed.
+    /// mount APC verb travels the terminal output), so the focus op can be
+    /// silently dropped; focus a webview on a frame after its first mount,
+    /// or re-assert focus if needed.
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
         self

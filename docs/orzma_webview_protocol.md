@@ -226,8 +226,9 @@ mount:    \x1b_Omount;v=<view_id>,r=<rows>,c=<cols>\x1b\
 unmount:  \x1b_Ounmount;v=<view_id>\x1b\
 ```
 
-The payload is at most 1024 bytes and is ASCII only; a multi-byte character
-anywhere in it is malformed.
+The payload is at most 1024 bytes. A multi-byte character inside a key or a
+value makes that field malformed, but one outside a key or a value is
+silently dropped by the terminal's APC collector rather than rejected.
 
 ### mount
 

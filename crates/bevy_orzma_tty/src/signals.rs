@@ -2,8 +2,8 @@
 //! drained from the VT (`TtyBellSignal`, `TtyTitleChangedSignal`,
 //! `TtyTitleResetSignal`, `TtyClipboardStoreSignal`, `TtyCwdChangedSignal`,
 //! `TtyWebviewMountSignal`, `TtyWebviewMountRejectedSignal`,
-//! `TtyWebviewUnmountSignal`, `TtyWebviewEvictedSignal`, `TtyModeChangedSignal`, `TtyChildExitSignal`,
-//! `TtyFrameSignal`).
+//! `TtyWebviewUnmountSignal`, `TtyWebviewEvictedSignal`,
+//! `TtyModeChangedSignal`, `TtyChildExitSignal`, `TtyFrameSignal`).
 //! Inbound requests fired by the host UI live in `requests.rs`.
 
 use crate::OrzmaTtyHandle;

@@ -107,3 +107,39 @@ fn an_apc_mount_past_the_cap_is_rejected() {
         }]
     );
 }
+
+/// Asserts that an accepted mount raises the chunk liveness.
+///
+/// Case: a companion app mounts its view in the very first chunk the
+/// terminal ever interprets, with no other output alongside it.
+#[test]
+fn an_accepted_mount_raises_the_chunk_liveness() {
+    assert!(damage_of(b"\x1b_Omount;v=memo,r=2,c=3\x1b\\"));
+}
+
+/// Asserts that a hit unmount raises the chunk liveness.
+///
+/// Case: a companion app tears its view down in a chunk that carries no
+/// other terminal output.
+#[test]
+fn a_hit_unmount_raises_the_chunk_liveness() {
+    assert!(liveness_after(
+        b"\x1b_Omount;v=memo,r=2,c=3\x1b\\",
+        b"\x1b_Ounmount;v=memo\x1b\\"
+    ));
+}
+
+/// Asserts that a mount the cap rejected does not raise the chunk
+/// liveness.
+///
+/// Case: a program mounts past the per-terminal overlay-slot cap in a
+/// chunk that carries no other terminal output.
+#[test]
+fn a_capped_mount_does_not_raise_the_chunk_liveness() {
+    let mut session = Session::new();
+    for i in 0..MAX_PLACEMENTS {
+        session.mount(&format!("v{i}"));
+    }
+    let output = session.feed(b"\x1b_Omount;v=over,r=1,c=1\x1b\\");
+    assert!(!output.damaged);
+}

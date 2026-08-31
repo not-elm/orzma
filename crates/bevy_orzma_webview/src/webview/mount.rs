@@ -202,9 +202,10 @@ pub(crate) fn resolve_mount(
 }
 
 /// Mounts a registered view as a webview child of the requesting
-/// terminal surface, applying the policy gates in order (each rejection is a
-/// `tracing::debug!` + return): unregistered view, duplicate `view_id` on
-/// this terminal, overlay-slot exhaustion.
+/// terminal surface, applying the policy gates in order: a duplicate
+/// `view_id` / `instance_id` on this terminal updates the existing
+/// placement instead of minting a new one; an unregistered or unowned
+/// view and overlay-slot exhaustion are each a `tracing::debug!` + return.
 ///
 /// The parent (`ctx.terminal_surface`, the `TtyWebviewMountSignal` target) is
 /// the owning `OrzmaTerminal` surface entity: both the `OrzmaTtyHandle`

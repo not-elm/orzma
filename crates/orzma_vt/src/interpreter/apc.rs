@@ -12,7 +12,7 @@ use std::str;
 /// What an orzma APC payload asked for: an inline mount or unmount of a
 /// registered view.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WebviewApcRequest {
+pub(crate) enum WebviewApcRequest {
     /// Mount a registered webview INLINE at the cursor anchor, sized in cells.
     Mount {
         /// The registered view's id, addressed later by unmount and eviction.
@@ -40,7 +40,7 @@ pub enum WebviewApcRequest {
 impl WebviewApcRequest {
     /// Parses an orzma APC payload into the verb it names, or `None`
     /// when the payload is not a well-formed orzma webview verb.
-    pub fn parse(bytes: &[u8]) -> Option<Self> {
+    pub(crate) fn parse(bytes: &[u8]) -> Option<Self> {
         if MAX_APC_LEN < bytes.len() {
             return None;
         }
@@ -64,10 +64,9 @@ impl WebviewApcRequest {
 }
 
 const MAX_VIEW_ID: usize = 128;
-/// Upper bound on a mount's reserved rows, inherited from the OSC 5379
-/// implementation. With the ~2:1 terminal cell aspect and DPR 2, a
-/// 200-row x 400-col mount is a near-square pixel region staying under
-/// the common 8192 px GPU texture dimension limit.
+/// Upper bound on a mount's reserved rows. With the ~2:1 terminal cell
+/// aspect and DPR 2, a 200-row x 400-col mount is a near-square pixel
+/// region staying under the common 8192 px GPU texture dimension limit.
 const MAX_ROWS: u16 = 200;
 /// Upper bound on a mount's reserved cols; see `MAX_ROWS` for the sizing
 /// envelope.
