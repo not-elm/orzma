@@ -13,6 +13,7 @@ mod osc;
 mod sgr;
 
 use crate::device::modes::{KeypadMode, ScreenKind};
+use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
 use crate::interpreter::osc::window_title;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
@@ -340,9 +341,52 @@ impl VTActor for Executor<'_> {
         }
     }
 
-    // TODO: Implement the APC webview verbs, which mint the placement
-    // ids a `VtSignal::WebviewApc` carries.
-    fn apc_dispatch(&mut self, _data: Vec<u8>) {}
+    fn apc_dispatch(&mut self, data: Vec<u8>) {
+        let Some(request) = WebviewApcRequest::parse(&data) else {
+            return;
+        };
+        // NOTE: An accepted mount and a hit unmount must raise the chunk
+        // liveness themselves. `signal` deliberately does not, so dropping
+        // these assignments would leave the changed placement list without
+        // a frame to carry it — the webview would register and never draw.
+        let signal = match request {
+            WebviewApcRequest::Mount {
+                view_id,
+                size,
+                instance_id,
+            } => match self
+                .device
+                .mount_placement(size, view_id.clone(), instance_id.clone())
+            {
+                Some(placement) => {
+                    self.output.damaged = true;
+                    VtSignal::WebviewMount {
+                        view_id,
+                        size,
+                        instance_id,
+                        placement,
+                    }
+                }
+                None => VtSignal::WebviewMountRejected {
+                    view_id,
+                    instance_id,
+                },
+            },
+            WebviewApcRequest::Unmount {
+                view_id,
+                instance_id,
+            } => {
+                self.output.damaged |= self
+                    .device
+                    .unmount_placement(view_id.as_deref(), instance_id.as_deref());
+                VtSignal::WebviewUnmount {
+                    view_id,
+                    instance_id,
+                }
+            }
+        };
+        self.signal(signal);
+    }
 }
 
 /// The control functions an eight-bit C1 byte and its seven-bit `ESC`

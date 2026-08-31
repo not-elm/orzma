@@ -11,12 +11,12 @@ use bevy::prelude::*;
 use control_plane::ControlPlanePlugin;
 pub use control_plane::{ControlPlaneHandle, NormalizedChord, TokenRegistry};
 use orzma_webview_host::WebviewAssetRegistry;
+use webview::apc::ApcPlugin;
+pub use webview::apc::NonInteractive;
 use webview::mount::WebviewPlugin;
 pub use webview::mount::{
     ForwardKeys, Webview, WebviewHit, focused_webview_of, webview_hit_at, webview_local_dip,
 };
-pub use webview::osc::NonInteractive;
-use webview::osc::OscPlugin;
 use webview::render::RenderPlugin;
 pub use webview::render::cef_plugin;
 
@@ -35,7 +35,7 @@ impl Plugin for OrzmaWebviewPlugin {
         app.add_plugins((
             ControlPlanePlugin::new(self.orzma_assets.clone()),
             RenderPlugin,
-            OscPlugin,
+            ApcPlugin,
             WebviewPlugin,
         ));
     }

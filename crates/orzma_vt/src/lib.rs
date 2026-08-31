@@ -9,8 +9,7 @@ use crate::{
     device::modes::VtModes,
     frame::{Frame, FrameTracker},
     interpreter::Interpreter,
-    interpreter::apc::WebviewApcVerb,
-    placement::PlacementId,
+    placement::{PlacementId, PlacementSize},
     screen::grid::GridSize,
     screen::viewport::{DisplayOffset, Scroll},
 };
@@ -35,7 +34,6 @@ pub mod prelude {
     pub use crate::device::modes::{KeypadMode, MouseEncoding, MouseTracking, ScreenKind, VtModes};
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
-    pub use crate::interpreter::apc::WebviewApcVerb;
     pub use crate::placement::{AnchoredPlacement, PlacementId, PlacementSize};
     pub use crate::screen::cursor::{CURSOR_VISIBLE_BIT, Cursor, CursorShape};
     pub use crate::screen::grid::GridSize;
@@ -76,9 +74,11 @@ pub trait Vt {
     ///
     /// # Webview placements
     ///
-    /// An APC webview `mount` becomes a [`VtSignal::WebviewApc`] whose
-    /// [`PlacementId`] the VT mints itself; `placement: None` is a policy
-    /// rejection. The VT owns the placement table and projects every
+    /// An APC webview `mount` the VT accepts becomes a
+    /// [`VtSignal::WebviewMount`] carrying the [`PlacementId`] the VT
+    /// minted for it; one the placement cap refuses becomes a
+    /// [`VtSignal::WebviewMountRejected`] instead, which registers
+    /// nothing. The VT owns the placement table and projects every
     /// placement into [`Frame::placements`] on each emit; a mount, unmount,
     /// eviction, or projected-geometry change always raises the chunk
     /// liveness, so the frame carrying the new list is guaranteed to
@@ -202,15 +202,37 @@ pub enum VtSignal {
     },
     /// A new current working directory reported via OSC 7.
     CurrentDir(PathBuf),
-    /// An APC-driven webview mount/unmount request from the PTY.
-    /// The placement is the VT-minted id, `Some` only for a `Mount` the
-    /// VT accepted and registered; `None` is a policy rejection the
-    /// consumer drops.
-    WebviewApc {
-        /// The mount or unmount verb and associated metadata.
-        verb: WebviewApcVerb,
-        /// The unique identifier for this placement, minted by the VT.
-        placement: Option<PlacementId>,
+    /// A webview the PTY mounted inline, which the VT accepted and
+    /// registered at the cursor anchor.
+    WebviewMount {
+        /// The registered view's id, addressed later by unmount and eviction.
+        view_id: String,
+        /// The cell rectangle the mount reserved.
+        size: PlacementSize,
+        /// The client-assigned instance id; `None` is the implicit
+        /// default instance. `(view_id, instance_id)` is the address.
+        instance_id: Option<String>,
+        /// The id the VT minted for this placement.
+        placement: PlacementId,
+    },
+    /// A mount the VT refused because the per-terminal placement cap was
+    /// already full. Nothing was registered and no id was minted, so
+    /// there is nothing for the consumer to place; it exists so a
+    /// webview that never appears is diagnosable rather than silent.
+    WebviewMountRejected {
+        /// The view the refused mount named.
+        view_id: String,
+        /// The instance the refused mount named.
+        instance_id: Option<String>,
+    },
+    /// Webview placements the PTY unmounted: a specific
+    /// `(view_id, instance_id)`, every instance of a `view_id`, or —
+    /// when `view_id` is `None` — every placement on this terminal.
+    WebviewUnmount {
+        /// The view to unmount; `None` unmounts every view.
+        view_id: Option<String>,
+        /// The instance to unmount; `None` unmounts every instance.
+        instance_id: Option<String>,
     },
     /// Placements the VT evicted on its own authority (history trim,
     /// alternate-screen teardown). Consumers despawn them by id;
