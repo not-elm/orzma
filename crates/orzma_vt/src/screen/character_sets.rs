@@ -389,9 +389,11 @@ mod tests {
         /// arrives.
         #[test]
         fn designate_leaves_the_invocation_state_unchanged() {
-            let mut state = CharacterSetMapping::default();
-            state.gl = GCode::G1;
-            state.pending_single_shift = Some(SingleShift::G2);
+            let mut state = CharacterSetMapping {
+                gl: GCode::G1,
+                pending_single_shift: Some(SingleShift::G2),
+                ..Default::default()
+            };
 
             state.designate(GCode::G2, DecSpecialGraphics);
 
@@ -456,8 +458,10 @@ mod tests {
         /// `SS2`, then changes its mind and emits `SS3` before printing.
         #[test]
         fn a_later_single_shift_replaces_the_pending_one_and_leaves_gl_alone() {
-            let mut state = CharacterSetMapping::default();
-            state.gl = GCode::G1;
+            let mut state = CharacterSetMapping {
+                gl: GCode::G1,
+                ..Default::default()
+            };
 
             state.single_shift(SingleShift::G2);
             assert_eq!(state.pending_single_shift, Some(SingleShift::G2));

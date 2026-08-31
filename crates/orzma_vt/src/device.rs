@@ -252,6 +252,13 @@ impl DeviceState {
     ///
     /// Supersession runs before the cap check: a re-mount frees the slot
     /// it takes, so it must succeed even at the limit.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the sub-project C APC webview path mounts placements again"
+        )
+    )]
     pub fn mount_placement(
         &mut self,
         size: PlacementSize,
@@ -279,6 +286,13 @@ impl DeviceState {
     /// terminal in one pass, so a VT that stopped at the first match
     /// would keep a placement holding a cap slot whose host child is
     /// already gone.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the sub-project C APC webview path unmounts placements again"
+        )
+    )]
     pub fn unmount_placement(&mut self, view_id: Option<&str>, instance_id: Option<&str>) -> bool {
         let primary = self.screens.primary.unmount_placement(view_id, instance_id);
         let alternate = self

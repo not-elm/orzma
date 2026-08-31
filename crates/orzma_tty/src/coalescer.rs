@@ -45,6 +45,13 @@ impl Coalescer {
     const MAX_CAP: Duration = Duration::from_millis(12);
 
     /// Returns true while a window is open (deadline armed).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the coalescer and pump tests read the armed state directly"
+        )
+    )]
     #[inline]
     pub const fn is_armed(&self) -> bool {
         self.armed_at.is_some()

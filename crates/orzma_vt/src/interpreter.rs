@@ -81,6 +81,10 @@ struct SyncBuffer {}
 /// still carries nothing between chunks: it is rebuilt fresh each call.
 struct Executor<'a> {
     output: &'a mut InterpretOutput,
+    #[expect(
+        dead_code,
+        reason = "the CSI ?2026 synchronized-update buffering will read this seam"
+    )]
     sync: &'a mut SyncBuffer,
     device: &'a mut DeviceState,
     tracker: &'a mut FrameTracker,
