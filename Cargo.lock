@@ -117,31 +117,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alacritty_terminal"
-version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bda177466b9524d59f1b12f0dd30b68696788e9992a7e959021c4a0ed96fcf59"
-dependencies = [
- "base64",
- "bitflags 2.13.0",
- "home",
- "libc",
- "log",
- "miow",
- "parking_lot",
- "piper",
- "polling",
- "regex-automata",
- "rustix 1.1.4",
- "rustix-openpty",
- "serde",
- "signal-hook 0.4.4",
- "unicode-width 0.2.0",
- "vte",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1306,6 +1281,36 @@ name = "bevy_mikktspace"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
+
+[[package]]
+name = "bevy_orzma_tty"
+version = "0.2.0-dev"
+dependencies = [
+ "bevy",
+ "orzma_tty",
+ "orzma_vt",
+]
+
+[[package]]
+name = "bevy_orzma_webview"
+version = "0.2.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_cef",
+ "bevy_orzma_tty",
+ "crossbeam-channel",
+ "data-encoding",
+ "getrandom 0.2.17",
+ "libc",
+ "orzma_tty_renderer",
+ "orzma_vt",
+ "orzma_webview_host",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "url",
+]
 
 [[package]]
 name = "bevy_pbr"
@@ -2623,7 +2628,7 @@ dependencies = [
  "mio 1.2.1",
  "parking_lot",
  "rustix 0.38.44",
- "signal-hook 0.3.18",
+ "signal-hook",
  "signal-hook-mio",
  "winapi",
 ]
@@ -3544,15 +3549,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
-name = "home"
-version = "0.5.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
-dependencies = [
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "http"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4271,15 +4267,6 @@ dependencies = [
  "libc",
  "log",
  "wasi",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "miow"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "536bfad37a309d62069485248eeaba1e8d9853aaf951caaeaed0585a95346f08"
-dependencies = [
  "windows-sys 0.61.2",
 ]
 
@@ -5004,6 +4991,8 @@ dependencies = [
  "bevy",
  "bevy_cef",
  "bevy_cef_core",
+ "bevy_orzma_tty",
+ "bevy_orzma_webview",
  "crossbeam-channel",
  "data-encoding",
  "fontique",
@@ -5011,9 +5000,9 @@ dependencies = [
  "libc",
  "open",
  "orzma_configs",
- "orzma_tty_engine",
+ "orzma_tty",
  "orzma_tty_renderer",
- "orzma_webview",
+ "orzma_vt",
  "orzma_webview_host",
  "serde",
  "serde_json",
@@ -5039,20 +5028,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "orzma_tty_engine"
+name = "orzma_tty"
 version = "0.2.0-dev"
 dependencies = [
- "alacritty_terminal",
  "anyhow",
- "bevy",
  "crossbeam-channel",
- "gethostname",
- "orzma_tty_renderer",
- "percent-encoding",
+ "orzma_vt",
  "portable-pty",
- "tracing",
- "unicode-width 0.2.0",
- "vte",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5061,6 +5044,8 @@ version = "0.2.0-dev"
 dependencies = [
  "ab_glyph",
  "bevy",
+ "bevy_orzma_tty",
+ "orzma_vt",
  "rmp-serde",
  "serde",
  "serde_bytes",
@@ -5072,23 +5057,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "orzma_webview"
+name = "orzma_vt"
 version = "0.2.0-dev"
 dependencies = [
- "bevy",
- "bevy_cef",
- "crossbeam-channel",
- "data-encoding",
- "getrandom 0.2.17",
- "libc",
- "orzma_tty_engine",
- "orzma_tty_renderer",
- "orzma_webview_host",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
- "url",
+ "bitflags 2.13.0",
+ "vtparse",
 ]
 
 [[package]]
@@ -5790,17 +5763,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustix-openpty"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1de16c7c59892b870a6336f185dc10943517f1327447096bbb7bb32cd85e2393"
-dependencies = [
- "errno",
- "libc",
- "rustix 1.1.4",
-]
-
-[[package]]
 name = "rustls"
 version = "0.23.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6038,16 +6000,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "signal-hook"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2a0c28ca5908dbdbcd52e6fdaa00358ab88637f8ab33e1f188dd510eb44b53d"
-dependencies = [
- "libc",
- "signal-hook-registry",
-]
-
-[[package]]
 name = "signal-hook-mio"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6055,7 +6007,7 @@ checksum = "b75a19a7a740b25bc7944bdee6172368f988763b744e3d4dfe753f6b4ece40cc"
 dependencies = [
  "libc",
  "mio 1.2.1",
- "signal-hook 0.3.18",
+ "signal-hook",
 ]
 
 [[package]]
@@ -6864,17 +6816,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "vte"
-version = "0.15.0"
+name = "vtparse"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+checksum = "1726b5dabcf18909219a11c1ae3b85fff931b6e5ccf7321d998fc7665f52661b"
 dependencies = [
- "arrayvec",
- "bitflags 2.13.0",
- "cursor-icon",
- "log",
- "memchr",
- "serde",
+ "utf8parse",
 ]
 
 [[package]]

@@ -1,0 +1,1093 @@
+//! The atomic grid + cursor operation unit for one terminal screen.
+//!
+//! [`Screen`] owns cell storage ([`grid::Grid`]) and the write cursor,
+//! and updates them together; a mutation that damages rows returns the
+//! [`DamageSpan`] it produced for the caller to stage, and pure cursor
+//! motion returns nothing, because the per-chunk cursor diff reports
+//! it.
+
+// TODO: This attribute is file-level, so it silences dead_code across
+// the whole `screen/` subtree (12 files, ~5,400 lines), though only
+// about 8 items actually need it. Narrow it to item-level `#[expect]`s
+// once the executor's CSI handlers land and most of those items go
+// live.
+// NOTE: the `#[cfg(test)]` module below uses every item this lint
+// would flag, so an unconditional `#[expect(dead_code)]` is fulfilled
+// in a plain build but unfulfilled — and denied under `-D warnings` —
+// in a test build. Gating it to non-test builds keeps both clean.
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the executor reaches these screen operations once its CSI handlers land"
+    )
+)]
+
+pub mod cell;
+pub mod character_sets;
+pub mod checkpoint;
+pub mod grid;
+pub mod margins;
+pub mod tabs;
+pub mod viewport;
+
+pub(crate) mod cursor;
+pub(crate) mod placements;
+
+mod state;
+
+use self::cell::{Cell, Pen};
+use self::grid::Grid;
+use self::grid::LineId;
+use self::grid::row::Row;
+use crate::frame::damage::DamageSpan;
+use crate::placement::{AnchoredPlacement, PlacementId, PlacementSize};
+use crate::screen::character_sets::{
+    CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
+};
+use crate::screen::checkpoint::Checkpoint;
+use crate::screen::cursor::{Cursor, CursorShape};
+use crate::screen::grid::GridSize;
+use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
+use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
+use crate::screen::placements::ScreenPlacements;
+use crate::screen::state::ScreenState;
+use crate::screen::tabs::{CharacterTabEdit, TabStops};
+use crate::screen::viewport::{DisplayOffset, Scroll, Viewport, ViewportLine};
+
+/// One terminal screen: cell storage plus the write cursor, updated
+/// atomically by each operation.
+///
+/// # Invariants
+///
+/// Both grid axes are nonzero; degenerate sizes are rejected by the
+/// caller (the same contract as [`crate::Vt::resize`]).
+#[derive(Debug)]
+pub struct Screen {
+    grid: Grid,
+    viewport: Viewport,
+    state: ScreenState,
+    scroll_region: ScrollRegion,
+    tabs: TabStops,
+    character_set_mapping: CharacterSetMapping,
+    checkpoint: Checkpoint,
+    placements: ScreenPlacements,
+}
+
+/// Span selector for [`Screen::erase_in_line`] (`CSI K`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EraseLineMode {
+    /// From the cursor to the end of the row (`EL 0`).
+    ToEnd,
+    /// From the start of the row through the cursor column (`EL 1`).
+    ToStart,
+    /// The whole row (`EL 2`).
+    All,
+}
+
+/// Span selector for [`Screen::erase_in_display`] (`CSI J`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EraseScreenMode {
+    /// From the cursor cell to the end of the screen (`ED 0`).
+    Below,
+    /// From the top of the screen through the cursor cell (`ED 1`).
+    Above,
+    /// The whole visible screen (`ED 2`); history is untouched.
+    All,
+}
+
+impl EraseLineMode {
+    /// The span an `EL` (`CSI Ps K`) parameter selects; `None` for a
+    /// value this terminal does not answer.
+    pub fn from_el(ps: u16) -> Option<Self> {
+        match ps {
+            0 => Some(Self::ToEnd),
+            1 => Some(Self::ToStart),
+            2 => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+impl EraseScreenMode {
+    /// The span an `ED` (`CSI Ps J`) parameter selects; `None` for a
+    /// value this terminal does not answer.
+    ///
+    /// `ED 3` erases the scrollback, which this terminal does not model:
+    /// every span here is confined to the visible screen.
+    pub fn from_ed(ps: u16) -> Option<Self> {
+        match ps {
+            0 => Some(Self::Below),
+            1 => Some(Self::Above),
+            2 => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+/// Construction.
+impl Screen {
+    /// Builds a blank screen with the cursor at the origin and the
+    /// viewport pinned to the live tail.
+    pub fn new(size: GridSize, max_history: usize) -> Self {
+        Self {
+            scroll_region: ScrollRegion::new(size.rows),
+            grid: Grid::new(size, max_history),
+            viewport: Viewport::default(),
+            state: ScreenState::default(),
+            tabs: TabStops::default(),
+            character_set_mapping: CharacterSetMapping::default(),
+            checkpoint: Checkpoint::default(),
+            placements: ScreenPlacements::new(),
+        }
+    }
+}
+
+/// Graphic character output.
+impl Screen {
+    /// Prints one character at the cursor with the current pen,
+    /// wrapping first when the deferred wrap is armed.
+    ///
+    /// The caller dispatches control bytes itself; this method assumes
+    /// a printable character of display width one.
+    ///
+    /// A wrap that scrolled reports [`DamageSpan::Full`]; every other print
+    /// reports the row the character landed on, or nothing when that row has
+    /// scrolled out of the window. [`Self::line_feed`] reports nothing for
+    /// the wrap's cursor motion, so passing its value through would leave
+    /// the character just written unpainted.
+    // TODO: Store wide characters as a cell plus a spacer and compose
+    // zero-width marks into the previous cell, so that `Run::cols` sums
+    // display widths as its doc promises; the renderer's `runs_to_cells`
+    // already advances by display width, and until then every cell after
+    // a wide character lands one column right of the VT's own cursor.
+    pub fn print(&mut self, c: char) -> Option<DamageSpan> {
+        let GraphicChar(glyph) = self.character_set_mapping.translate(c);
+        let wrap = if self.state.pending_wrap {
+            self.state.pending_wrap = false;
+            self.state.column = GridColumn(0);
+            self.line_feed()
+        } else {
+            None
+        };
+        self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph);
+        if self.state.column.0 + 1 < self.grid.size().cols {
+            self.state.column.0 += 1;
+        } else {
+            self.state.pending_wrap = true;
+        }
+        match wrap {
+            Some(DamageSpan::Full) => Some(DamageSpan::Full),
+            _ => self.damage_span(self.state.line, self.state.line),
+        }
+    }
+}
+
+/// Cursor addressing.
+///
+/// None of these report damage. A move that only repositions the write
+/// cursor is carried by the per-chunk cursor diff, so returning a
+/// `DamageSpan` would repaint rows that did not change.
+impl Screen {
+    /// Moves the cursor one column left and disarms the deferred wrap.
+    ///
+    /// A backspace at column zero stays there: xterm reaches the
+    /// previous row only under reverse-wraparound, which is off by
+    /// default. Cursor motion reaches the renderer through the
+    /// per-chunk cursor diff, so nothing is reported here.
+    ///
+    /// # Control Functions
+    ///
+    /// - `BS` (`0x08`)
+    pub fn backspace(&mut self) {
+        self.move_cursor_left(1);
+    }
+
+    /// Moves the cursor up `count` rows in the same column, never
+    /// scrolling.
+    ///
+    /// The top margin is the barrier: a cursor at or below it stops
+    /// there, and only a cursor already above it reaches the first row.
+    ///
+    /// `DECOM` needs no branch here. Setting it seats the cursor inside
+    /// the vertical region, and this clamp keeps it there, so a cursor
+    /// origin mode confined can never step out of the region.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CUU` (`CSI Pn A`)
+    /// - `CPL` (`CSI Pn F`) — before its carriage return
+    pub fn move_cursor_up(&mut self, count: u16) {
+        let top = self.scroll_region.top_margin();
+        let limit = if self.state.line >= top {
+            top
+        } else {
+            ScreenLine(0)
+        };
+        self.state.line = ScreenLine(self.state.line.0.saturating_sub(count).max(limit.0));
+        self.state.pending_wrap = false;
+    }
+
+    /// Moves the cursor down `count` rows in the same column, never
+    /// scrolling.
+    ///
+    /// The bottom margin is the barrier, mirroring
+    /// [`Self::move_cursor_up`]: a cursor at or above it stops there,
+    /// and only a cursor already below it reaches the last row.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CUD` (`CSI Pn B`)
+    /// - `CNL` (`CSI Pn E`) — before its carriage return
+    pub fn move_cursor_down(&mut self, count: u16) {
+        let bottom = self.scroll_region.bottom_margin();
+        let limit = if self.state.line <= bottom {
+            bottom
+        } else {
+            ScreenLine(self.grid.size().rows - 1)
+        };
+        self.state.line = ScreenLine(self.state.line.0.saturating_add(count).min(limit.0));
+        self.state.pending_wrap = false;
+    }
+
+    /// Moves the cursor `count` columns left, stopping at the first
+    /// column.
+    ///
+    /// The page border is the barrier, not a margin: this terminal has
+    /// no left margin, because `DECSLRM` needs the vertical split screen
+    /// mode it does not implement.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CUB` (`CSI Pn D`)
+    /// - `BS` (`0x08`) — with a count of one
+    pub fn move_cursor_left(&mut self, count: u16) {
+        self.state.column = GridColumn(self.state.column.0.saturating_sub(count));
+        self.state.pending_wrap = false;
+    }
+
+    /// Moves the cursor `count` columns right, stopping at the last
+    /// column.
+    ///
+    /// The page border is the barrier, mirroring
+    /// [`Self::move_cursor_left`].
+    ///
+    /// # Control Functions
+    ///
+    /// - `CUF` (`CSI Pn C`)
+    pub fn move_cursor_right(&mut self, count: u16) {
+        let last = self.grid.size().cols - 1;
+        self.state.column = GridColumn(self.state.column.0.saturating_add(count).min(last));
+        self.state.pending_wrap = false;
+    }
+
+    /// Rewinds the cursor to column zero and disarms the deferred wrap.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CR` (`0x0D`)
+    /// - `NEL` (`0x85`, `ESC E`) — its first half
+    pub fn carriage_return(&mut self) {
+        self.state.column = GridColumn(0);
+        self.state.pending_wrap = false;
+    }
+
+    /// Addresses the cursor at a one-based line and column, `None` for
+    /// an omitted parameter.
+    ///
+    /// A zero addresses the first line or column, the same as a one.
+    /// [`Self::seat_cursor`] resolves the line against the origin mode
+    /// and clamps both axes, so a line outside the addressable region
+    /// stops at its edge rather than being refused.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CUP` (`CSI Pl ; Pc H`)
+    /// - `HVP` (`CSI Pl ; Pc f`)
+    pub fn move_cursor_to(&mut self, line: Option<u16>, column: Option<u16>) {
+        let line = match line {
+            None | Some(0) => 1,
+            Some(value) => value,
+        };
+        let column = match column {
+            None | Some(0) => 1,
+            Some(value) => value,
+        };
+        self.seat_cursor(ScreenLine(line - 1), GridColumn(column - 1));
+    }
+
+    /// Seats the cursor at `line` — measured from the origin the current
+    /// [`OriginMode`] defines — and `column`, clamping both axes and
+    /// disarming the deferred wrap. The disarm follows xterm, whose
+    /// `CursorSet` ends in `ResetWrap`, unlike a linefeed, which
+    /// preserves the wrap on purpose.
+    ///
+    /// Every control function that addresses the cursor ends here, so
+    /// the origin, the clamps, and the wrap are decided in one place and
+    /// cannot drift between them.
+    fn seat_cursor(&mut self, line: ScreenLine, column: GridColumn) {
+        let GridSize { cols, rows } = self.grid.size();
+        let (origin, last) = match self.scroll_region.origin_mode() {
+            OriginMode::WithinMargins => (
+                self.scroll_region.top_margin(),
+                self.scroll_region.bottom_margin(),
+            ),
+            OriginMode::UpperLeftCorner => (ScreenLine(0), ScreenLine(rows - 1)),
+        };
+        self.state.line = ScreenLine(line.0.saturating_add(origin.0).min(last.0));
+        self.state.column = GridColumn(column.0.min(cols - 1));
+        self.state.pending_wrap = false;
+    }
+}
+
+/// Line feeding and region scrolling.
+impl Screen {
+    /// Moves the cursor down one row, scrolling at the bottom margin;
+    /// the deferred-wrap flag is deliberately preserved.
+    ///
+    /// A move inside the screen reports nothing: neither the departed nor
+    /// the arrived row changes contents, and the cursor motion reaches the
+    /// renderer through the per-chunk cursor diff. Scrolling moves content
+    /// and reports [`DamageSpan::Full`].
+    ///
+    /// A cursor below a non-zero bottom margin and already on the last
+    /// row moves nothing and scrolls nothing.
+    ///
+    /// [`Self::print`] also calls this to complete a deferred wrap, so
+    /// the operation is not reached only from a control function.
+    ///
+    /// # Control Functions
+    ///
+    /// - `LF` (`0x0A`)
+    /// - `VT` (`0x0B`)
+    /// - `FF` (`0x0C`)
+    /// - `IND` (`0x84`, `ESC D`)
+    /// - `NEL` (`0x85`, `ESC E`) — after the carriage return
+    pub fn line_feed(&mut self) -> Option<DamageSpan> {
+        if self.state.line == self.scroll_region.bottom_margin() {
+            let top = self.scroll_region.top_margin();
+            self.grid.scroll_up_one(
+                top,
+                self.scroll_region.bottom_margin(),
+                self.state.pen.erase_cell(),
+            );
+            if top == ScreenLine(0) {
+                self.hold_scrolled_viewport();
+            }
+            return Some(DamageSpan::Full);
+        }
+        if self.state.line.0 + 1 < self.grid.size().rows {
+            self.state.line.0 += 1;
+        }
+        None
+    }
+
+    /// Moves the cursor up one row, scrolling the region at its top
+    /// margin.
+    ///
+    /// A cursor above a non-zero top margin and already on the first row
+    /// moves nothing and scrolls nothing.
+    ///
+    /// # Control Functions
+    ///
+    /// - `RI` (`0x8D`, `ESC M`)
+    pub fn reverse_index(&mut self) -> Option<DamageSpan> {
+        self.state.pending_wrap = false;
+        if self.state.line == self.scroll_region.top_margin() {
+            self.grid.scroll_down_one(
+                self.scroll_region.top_margin(),
+                self.scroll_region.bottom_margin(),
+                self.state.pen.erase_cell(),
+            );
+            return Some(DamageSpan::Full);
+        }
+        if ScreenLine(0) < self.state.line {
+            self.state.line.0 -= 1;
+        }
+        None
+    }
+
+    /// Follows a one-row scroll with the offset that keeps a scrolled
+    /// viewport on the content it was showing.
+    ///
+    /// A viewport pinned to the live tail stays pinned — that is what
+    /// following the newest output means. A scrolled one counts one row
+    /// further back, because the row it shows just moved that far from
+    /// the tail.
+    ///
+    /// # Invariants
+    ///
+    /// The offset is clamped to the history that survives the scroll.
+    /// At capacity the row the user was reading has been evicted, so
+    /// the view drifts by one; there is nothing left to hold on.
+    fn hold_scrolled_viewport(&mut self) {
+        if self.viewport.offset == DisplayOffset(0) {
+            return;
+        }
+        let history =
+            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
+        self.viewport.offset = DisplayOffset(self.viewport.offset.0.saturating_add(1).min(history));
+    }
+
+    /// Resolves a motion into the offset it aims at, before clamping.
+    ///
+    /// A page is a whole screenful with no overlap, and a half page
+    /// truncates, so a one-row screen has a zero-sized half page.
+    fn scroll_target(&self, scroll: Scroll) -> DisplayOffset {
+        let rows = u32::from(self.grid.size().rows);
+        let history =
+            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
+        let offset = self.viewport.offset.0;
+        DisplayOffset(match scroll {
+            Scroll::Delta(delta) => offset.saturating_add_signed(delta),
+            Scroll::PageUp => offset.saturating_add(rows),
+            Scroll::PageDown => offset.saturating_sub(rows),
+            Scroll::HalfPageUp => offset.saturating_add(rows / 2),
+            Scroll::HalfPageDown => offset.saturating_sub(rows / 2),
+            Scroll::Top => history,
+            Scroll::Bottom => 0,
+        })
+    }
+}
+
+/// Erasure.
+impl Screen {
+    /// Erases part of the cursor row with the pen background (BCE);
+    /// [`EraseLineMode::ToEnd`] is a no-op while the deferred wrap is
+    /// armed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `EL` (`CSI Ps K`)
+    pub fn erase_in_line(&mut self, mode: EraseLineMode) -> Option<DamageSpan> {
+        if matches!(mode, EraseLineMode::ToEnd) && self.state.pending_wrap {
+            return None;
+        }
+        let cols = self.grid.size().cols;
+        let columns = match mode {
+            EraseLineMode::ToEnd => self.state.column.0..cols,
+            EraseLineMode::ToStart => 0..self.state.column.0 + 1,
+            EraseLineMode::All => 0..cols,
+        };
+        self.grid
+            .fill_visible_row_range(self.state.line, columns, self.state.pen.erase_cell());
+        self.damage_span(self.state.line, self.state.line)
+    }
+
+    /// Erases part of the visible screen with the pen background
+    /// (BCE), in place; scrollback history is never touched.
+    ///
+    /// # Control Functions
+    ///
+    /// - `ED` (`CSI Ps J`)
+    pub fn erase_in_display(&mut self, mode: EraseScreenMode) -> Option<DamageSpan> {
+        let GridSize { cols, rows } = self.grid.size();
+        let blank = self.state.pen.erase_cell();
+        match mode {
+            EraseScreenMode::Below => {
+                self.grid
+                    .fill_visible_row_range(self.state.line, self.state.column.0..cols, blank);
+                for line in self.state.line.0 + 1..rows {
+                    self.grid
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                }
+                self.damage_span(self.state.line, ScreenLine(rows - 1))
+            }
+            EraseScreenMode::Above => {
+                for line in 0..self.state.line.0 {
+                    self.grid
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                }
+                self.grid.fill_visible_row_range(
+                    self.state.line,
+                    0..self.state.column.0 + 1,
+                    blank,
+                );
+                self.damage_span(ScreenLine(0), self.state.line)
+            }
+            EraseScreenMode::All => {
+                for line in 0..rows {
+                    self.grid
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                }
+                Some(DamageSpan::Full)
+            }
+        }
+    }
+}
+
+/// Tabulation stops.
+impl Screen {
+    /// Moves the cursor forward `count` tabulation stops.
+    ///
+    /// The right edge is this screen's last column, so the same stop
+    /// table lands the cursor differently on a narrow screen than on a
+    /// wide one.
+    ///
+    /// # Control Functions
+    ///
+    /// - `HT` (`0x09`) — with a count of one
+    /// - `CHT` (`CSI Pn I`)
+    pub fn move_forward_tabs(&mut self, count: u16) {
+        let right_edge = GridColumn(self.grid_size().cols - 1);
+        let target = self.tabs.cht(self.state.column, count, right_edge);
+        self.tab_to(target);
+    }
+
+    /// Moves the cursor back `count` tabulation stops.
+    ///
+    /// The left edge is column zero until DECSLRM and DECOM land, at
+    /// which point the margin supplies it instead.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CBT` (`CSI Pn Z`)
+    pub fn move_backward_tabs(&mut self, count: u16) {
+        let target = self.tabs.cbt(self.state.column, count, GridColumn(0));
+        self.tab_to(target);
+    }
+
+    /// Sets a tabulation stop at the cursor column.
+    ///
+    /// Routed through the same edit vocabulary `CTC 0` uses, because the
+    /// two control functions request the identical edit. TABULATION STOP
+    /// MODE scoping, when it lands, has to reach HTS as well.
+    ///
+    /// # Control Functions
+    ///
+    /// - `HTS` (`0x88`, `ESC H`)
+    pub fn set_horizontal_tab_stop(&mut self) {
+        self.edit_tab_stop(CharacterTabEdit::SetColumn);
+    }
+
+    /// Applies one tabulation stop edit at the cursor column.
+    ///
+    /// `TBC` and `CTC` number their parameters differently, so the
+    /// caller decodes its own parameter space with
+    /// [`CharacterTabEdit::from_tbc`] or
+    /// [`CharacterTabEdit::from_ctc`] before calling this.
+    ///
+    /// # Control Functions
+    ///
+    /// - `TBC` (`CSI Ps g`)
+    /// - `CTC` (`CSI Ps W`)
+    pub fn edit_tab_stop(&mut self, edit: CharacterTabEdit) {
+        let column = self.state.column;
+        match edit {
+            CharacterTabEdit::SetColumn => self.tabs.set(column),
+            CharacterTabEdit::ClearColumn => self.tabs.clear(column),
+            CharacterTabEdit::ClearAllColumns => self.tabs.clear_all(),
+        }
+    }
+
+    /// Reinstalls the default tabulation stride.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECST8C` (`CSI ? 5 W`)
+    /// - `RIS` (`ESC c`)
+    pub fn reset_tab_stops(&mut self) {
+        self.tabs.reset();
+    }
+
+    /// Seats the cursor at a tabulation column.
+    ///
+    /// # Invariants
+    ///
+    /// The deferred wrap is deliberately left as it is, unlike
+    /// [`Screen::carriage_return`]. Disarming it would make a tab after
+    /// a full row seat the cursor back onto the row the application had
+    /// already filled.
+    fn tab_to(&mut self, column: GridColumn) {
+        self.state.column = column;
+    }
+}
+
+/// Graphic character mapping.
+impl Screen {
+    /// Designates `character_set` to `g_code`.
+    ///
+    /// The caller decodes the sequence's designator and final character
+    /// with [`GCode::from_designator`] and [`CharacterSet::from_dscs`]
+    /// before calling this.
+    ///
+    /// # Control Functions
+    ///
+    /// - `SCS` (`ESC ( Dscs`, `ESC ) Dscs`, `ESC * Dscs`, `ESC + Dscs`)
+    pub fn designate_character_set(&mut self, g_code: GCode, character_set: CharacterSet) {
+        self.character_set_mapping.designate(g_code, character_set);
+    }
+
+    /// Invokes `g_code` into GL until the next locking shift.
+    ///
+    /// # Control Functions
+    ///
+    /// - `LS0` (`SI`, `0x0F`)
+    /// - `LS1` (`SO`, `0x0E`)
+    /// - `LS2` (`ESC n`)
+    /// - `LS3` (`ESC o`)
+    pub fn invoke_character_set(&mut self, g_code: GCode) {
+        self.character_set_mapping.invoke(g_code);
+    }
+
+    /// Invokes `single_shift` into GL for the next graphic character.
+    ///
+    /// # Control Functions
+    ///
+    /// - `SS2` (`0x8E`, `ESC N`)
+    /// - `SS3` (`0x8F`, `ESC O`)
+    pub fn single_shift(&mut self, single_shift: SingleShift) {
+        self.character_set_mapping.single_shift(single_shift);
+    }
+}
+
+/// Graphic rendition.
+///
+/// The pen is handed out mutably because applying an `SGR` sequence is
+/// the caller's job; this screen only supplies the attributes a print
+/// stamps into a cell.
+impl Screen {
+    /// Mutably borrows the SGR pen.
+    pub fn pen_mut(&mut self) -> &mut Pen {
+        &mut self.state.pen
+    }
+}
+
+/// Scrolling margins and the cursor origin.
+impl Screen {
+    /// Sets the scrolling region and seats the cursor at the resulting
+    /// home; a request the margins cannot satisfy is refused whole.
+    ///
+    /// Both parameters are one-based line numbers as sent, with `None`
+    /// for an omitted one; [`Margins::resolve`] owns the defaults, the
+    /// clamp, and the refusal.
+    ///
+    /// The cursor goes to the home the origin mode defines rather than
+    /// to the "column 1, line 1 of the page" VT510 p.276 states,
+    /// because homing to the page while the origin is within the
+    /// margins would seat the cursor outside them, which p.195 forbids;
+    /// xterm homes through the same origin-aware path.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECSTBM` (`CSI Pt ; Pb r`)
+    pub fn set_scroll_region(&mut self, top: Option<u16>, bottom: Option<u16>) {
+        let Some(margins) = Margins::resolve(top, bottom, self.grid.size().rows) else {
+            return;
+        };
+        self.scroll_region.set_margins(margins);
+        self.seat_home();
+    }
+
+    /// Sets the cursor origin and seats the cursor at the home the new
+    /// mode defines.
+    ///
+    /// Both directions seat the cursor. VT510 says only what home *is*
+    /// under each setting and never that `DECOM` moves the cursor; xterm,
+    /// kitty, wezterm, Windows Terminal, and `vttest` settle it by homing
+    /// on set and on reset alike.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECOM` (`CSI ? 6 h` / `CSI ? 6 l`)
+    pub fn set_origin_mode(&mut self, origin_mode: OriginMode) {
+        self.scroll_region.set_origin_mode(origin_mode);
+        self.seat_home();
+    }
+
+    /// Seats the cursor at the home the current [`OriginMode`] defines.
+    fn seat_home(&mut self) {
+        self.seat_cursor(ScreenLine(0), GridColumn(0));
+    }
+}
+
+/// The viewport the user sees.
+impl Screen {
+    /// Borrows the cells shown at a viewport line.
+    ///
+    /// The viewport is the window the user sees: at the live tail it is
+    /// the active screen, and a scrolled viewport reaches back into
+    /// history. [`crate::screen::grid::Grid`]'s own index resolves
+    /// against the live tail alone, so a scrolled read has to come
+    /// through here.
+    pub fn viewport_row(&self, line: ViewportLine) -> &Row<Cell> {
+        self.grid.row(line.to_grid(self.viewport.offset))
+    }
+
+    /// Number of scrollback rows the viewport sits above the live tail; always zero until scroll operations arrive.
+    #[inline]
+    pub const fn display_offset(&self) -> DisplayOffset {
+        self.viewport.offset
+    }
+
+    /// Moves the viewport by one [`Scroll`] motion; `None` when the
+    /// motion was zero or entirely clamped away.
+    ///
+    /// # Invariants
+    ///
+    /// A motion that moves the viewport reports [`DamageSpan::Full`]:
+    /// the emit-time offset diff only guarantees that a frame is
+    /// emitted, not that it carries rows, so anything less would
+    /// repaint stale content at the new offset.
+    ///
+    /// A screen that keeps no history never moves, because every target
+    /// clamps to the live tail. That is what makes this a silent no-op
+    /// on the alternate screen without a caller having to check.
+    pub fn scroll(&mut self, scroll: Scroll) -> Option<DamageSpan> {
+        let before = self.viewport.offset;
+        self.set_display_offset(self.scroll_target(scroll));
+        (self.viewport.offset != before).then_some(DamageSpan::Full)
+    }
+
+    /// Seats the viewport at `offset`, clamped to the history that
+    /// currently exists.
+    ///
+    /// [`Self::hold_scrolled_viewport`] also writes the offset, so this is
+    /// not the only seam that does; it is the seam a future
+    /// `DeviceState::scroll` will drive.
+    ///
+    /// # Invariants
+    ///
+    /// The caller must stage full damage: this moves the viewport
+    /// basis, so a frame that carried the new offset without every row
+    /// would repaint stale content.
+    pub fn set_display_offset(&mut self, offset: DisplayOffset) {
+        let history =
+            u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
+        self.viewport.offset = DisplayOffset(offset.0.min(history));
+    }
+}
+
+/// What an emitted frame reads back.
+///
+/// The damage projection lives here because it converts screen rows into
+/// the viewport coordinates a frame repaints by.
+impl Screen {
+    /// Returns the grid size.
+    pub fn grid_size(&self) -> GridSize {
+        self.grid.size()
+    }
+
+    /// The write cursor as an emitted frame carries it.
+    // TODO: Report the real shape, blink, and visibility once DECSCUSR
+    // and DECTCEM land. Block / steady / visible is what the terminal
+    // starts at.
+    pub fn cursor(&self) -> Cursor {
+        Cursor {
+            point: GridPoint {
+                line: GridLine::from(self.state.line),
+                column: self.state.column,
+            },
+            shape: CursorShape::Block,
+            blinking: false,
+            visible: true,
+        }
+    }
+
+    /// The id of the row the cursor sits on — the anchor a mount samples.
+    pub fn cursor_line_id(&self) -> LineId {
+        self.grid.line_id(self.state.line)
+    }
+
+    /// The cursor's column.
+    pub fn cursor_column(&self) -> GridColumn {
+        self.state.column
+    }
+
+    /// Reports the given screen rows as damage, in the viewport
+    /// coordinates a frame repaints by; `None` when the whole span has
+    /// scrolled out of the window.
+    fn damage_span(&self, first: ScreenLine, last: ScreenLine) -> Option<DamageSpan> {
+        debug_assert!(first <= last, "a damage span runs top to bottom");
+        let rows = self.grid.size().rows;
+        // NOTE: `DisplayOffset` is a `u32` and does not bound itself, so the
+        // shift has to saturate — a wrapping add would report an off-screen
+        // row as visible.
+        let offset = self.viewport.offset.0;
+        let first = u32::from(first.0).saturating_add(offset);
+        if first >= u32::from(rows) {
+            return None;
+        }
+        let last = u32::from(last.0)
+            .saturating_add(offset)
+            .min(u32::from(rows - 1));
+        Some(DamageSpan::rows(
+            ViewportLine(u16::try_from(first).expect("guarded above by first < rows")),
+            ViewportLine(u16::try_from(last).expect("clamped to rows - 1 above")),
+        ))
+    }
+}
+
+/// The state DECSC copies aside.
+impl Screen {
+    /// Saves the current state in memory in accordance with DECSC.
+    ///
+    /// # Control Functions
+    ///
+    /// - DECSC(Save Cursor)
+    pub fn save_checkpoint(&mut self) {
+        self.checkpoint = self.capture_checkpoint();
+    }
+
+    /// Applies the state saved in memory to each actual state.
+    /// If no saved state exists, perform a DECRC-compliant action.
+    ///
+    /// The saved position is put back verbatim. Restoring an origin mode
+    /// whose margins moved in between can therefore seat the cursor
+    /// outside them; DECSC saves no margins to clamp against, and the
+    /// manuals leave the collision undefined.
+    ///
+    /// # Control Functions
+    ///
+    /// - DECRC(Restore Cursor)
+    pub fn restore_checkpoint(&mut self) {
+        let saved = self.checkpoint;
+        self.state.line = saved.line;
+        self.state.column = saved.column;
+        self.state.pen = saved.pen;
+        self.state.pending_wrap = saved.pending_wrap;
+        self.scroll_region.set_origin_mode(saved.origin_mode);
+        self.character_set_mapping = saved.character_set_mapping;
+    }
+
+    fn capture_checkpoint(&self) -> Checkpoint {
+        Checkpoint::capture(
+            &self.state,
+            self.scroll_region.origin_mode(),
+            self.character_set_mapping,
+        )
+    }
+}
+
+/// Whole-screen state replacement.
+impl Screen {
+    /// Resets the screen to its power-up state.
+    ///
+    /// Covers the screen-scoped actions of `RIS`: the grid and its
+    /// history, the cursor, the SGR pen, the scrolling margins, the
+    /// origin mode, the tabulation stops, and the character set
+    /// mapping.
+    ///
+    /// Reports [`DamageSpan::Full`], or nothing when the grid was
+    /// already blank and carried no history; the cursor homes either
+    /// way, because cursor motion reaches the renderer through the
+    /// per-chunk cursor diff rather than through damage.
+    ///
+    /// # Invariants
+    ///
+    /// The cursor lands at the screen's upper-left corner whatever
+    /// origin mode was in force, because the state is replaced wholesale
+    /// rather than homed through the origin.
+    ///
+    /// Every placement on this screen becomes evictable here without
+    /// this method touching the table: [`crate::screen::grid::Grid::reset`]
+    /// mints fresh row ids without rewinding its counter, so no anchor
+    /// taken before the reset can resolve afterwards and the next
+    /// [`Self::evict_lost_anchors`] names all of them. A rewrite of
+    /// `Grid::reset` that renumbers from zero would silently keep the
+    /// placements alive.
+    ///
+    /// # Control Functions
+    ///
+    /// - `RIS` (`ESC c`) — its screen-scoped actions
+    pub fn reset(&mut self) -> Option<DamageSpan> {
+        let dirty = !self.grid.is_blank();
+        self.grid.reset();
+        self.viewport = Viewport::default();
+        self.scroll_region = ScrollRegion::new(self.grid.size().rows);
+        self.state = ScreenState::default();
+        self.tabs = TabStops::default();
+        self.character_set_mapping = CharacterSetMapping::default();
+        self.checkpoint = Checkpoint::default();
+        dirty.then_some(DamageSpan::Full)
+    }
+
+    /// Resizes the grid, truncating rather than reflowing; `None` when
+    /// the dimensions already matched.
+    ///
+    /// A shrink pushes as many rows off the top as it takes to keep the
+    /// cursor on screen and drops the rest from the bottom, so a prompt
+    /// at the bottom survives and a mostly-blank screen keeps its
+    /// content. A growth reclaims rows from history before it appends
+    /// blank ones.
+    ///
+    /// # Invariants
+    ///
+    /// A resize that changes the dimensions reports [`DamageSpan::Full`]:
+    /// every emitted frame carries the new size but nothing diffs it, so
+    /// partial row damage would hand the renderer new dimensions with
+    /// stale rows behind them.
+    ///
+    /// The cursor and the saved cursor both land inside the new grid.
+    /// Leaving either out of bounds would panic the next write, which is
+    /// why the saved one is clamped here rather than on restore.
+    ///
+    /// The saved cursor follows the rows a resize moves exactly as the
+    /// live one does, so a `DECRC` after the resize — the one
+    /// `DECRST 1049` performs on the way back from the alternate screen
+    /// included — lands on the row `DECSC` saved rather than the rows
+    /// the resize reclaimed above it. A never-saved checkpoint drifts
+    /// off the home position by the same amount, the trade alacritty
+    /// makes too.
+    ///
+    /// A height change returns the margins to the whole page. Keeping a
+    /// region whose rows still fit would leave a cursor below its bottom
+    /// margin, and [`Self::line_feed`] scrolls only on an exact match
+    /// with that margin, so the screen would never scroll again.
+    ///
+    /// A scrolled-back viewport tracks the rows it was showing: each
+    /// scroll pairs with [`Self::hold_scrolled_viewport`] the way line
+    /// feeding does, and a growth walks the offset back by the rows it
+    /// reclaims.
+    pub fn resize(&mut self, size: GridSize) -> Option<DamageSpan> {
+        let old = self.grid.size();
+        if old == size {
+            return None;
+        }
+        let required_scrolling = (self.state.line.0 + 1).saturating_sub(size.rows);
+        for _ in 0..required_scrolling {
+            self.grid
+                .scroll_up_one(ScreenLine(0), ScreenLine(old.rows - 1), Cell::default());
+            self.hold_scrolled_viewport();
+        }
+        let reclaimed = self.reclaimable_rows(old.rows, size.rows);
+        self.grid.resize(size);
+        self.shift_cursors(reclaimed, required_scrolling);
+        self.clamp_cursors(size);
+        if old.cols != size.cols {
+            self.state.pending_wrap = false;
+            self.checkpoint.pending_wrap = false;
+        }
+        if old.rows != size.rows {
+            self.scroll_region.set_margins(Margins::new(size.rows));
+        }
+        self.set_display_offset(DisplayOffset(
+            self.viewport.offset.0.saturating_sub(u32::from(reclaimed)),
+        ));
+        Some(DamageSpan::Full)
+    }
+
+    /// Fills the visible screen with the alignment pattern, returning to
+    /// the page-wide scroll region and the absolute cursor origin.
+    ///
+    /// The pattern is drawn with default attributes rather than the
+    /// current pen, because a screen tinted by the application's colors
+    /// is useless as an adjustment reference.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECALN` (`ESC # 8`)
+    pub fn fill_alignment_pattern(&mut self) -> DamageSpan {
+        let size = self.grid.size();
+        let cell = Cell {
+            c: 'E',
+            ..Cell::default()
+        };
+        for line in 0..size.rows {
+            self.grid
+                .fill_visible_row_range(ScreenLine(line), 0..size.cols, cell);
+        }
+        self.scroll_region = ScrollRegion::new(size.rows);
+        self.seat_cursor(ScreenLine(0), GridColumn(0));
+        DamageSpan::Full
+    }
+
+    fn reclaimable_rows(&self, old_rows: u16, rows: u16) -> u16 {
+        if rows <= old_rows {
+            return 0;
+        }
+        let reclaimed = usize::from(rows - old_rows).min(self.grid.history_len());
+        u16::try_from(reclaimed).expect("a growth never exceeds u16::MAX rows")
+    }
+
+    /// Moves the live cursor and the saved one down by the rows a resize
+    /// reclaimed from history and up by the rows it scrolled away, so
+    /// both keep pointing at the row they were on.
+    fn shift_cursors(&mut self, reclaimed: u16, required_scrolling: u16) {
+        let follow_moved_rows = |line: &mut ScreenLine| {
+            line.0 = line
+                .0
+                .saturating_add(reclaimed)
+                .saturating_sub(required_scrolling);
+        };
+        follow_moved_rows(&mut self.state.line);
+        follow_moved_rows(&mut self.checkpoint.line);
+    }
+
+    fn clamp_cursors(&mut self, size: GridSize) {
+        self.state.line.0 = self.state.line.0.min(size.rows - 1);
+        self.state.column.0 = self.state.column.0.min(size.cols - 1);
+        self.checkpoint.line.0 = self.checkpoint.line.0.min(size.rows - 1);
+        self.checkpoint.column.0 = self.checkpoint.column.0.min(size.cols - 1);
+    }
+}
+
+/// Webview placements.
+///
+/// The anchor a mount records is a `LineId` from this screen's own grid,
+/// so a placement can only ever be resolved against the grid that minted
+/// its anchor.
+///
+/// Four of these forward to [`ScreenPlacements`] unchanged. They stay
+/// rather than exposing the table, so `DeviceState` never holds a
+/// `&mut ScreenPlacements` and every mutation of a screen's placements
+/// goes through the screen that owns them.
+impl Screen {
+    /// Registers a mount at the write cursor under an already-minted id.
+    pub fn mount_placement(
+        &mut self,
+        id: PlacementId,
+        size: PlacementSize,
+        view_id: String,
+        instance_id: Option<String>,
+    ) {
+        let anchor = self.cursor_line_id();
+        let col = self.cursor_column();
+        self.placements
+            .mount(id, anchor, col, size, view_id, instance_id);
+    }
+
+    /// Drops the placement a re-mount replaces, without reporting it.
+    pub fn supersede_placement(&mut self, view_id: &str, instance_id: Option<&str>) {
+        self.placements.supersede(view_id, instance_id);
+    }
+
+    /// Removes the placements a client `unmount` addresses; returns
+    /// whether anything went.
+    pub fn unmount_placement(&mut self, view_id: Option<&str>, instance_id: Option<&str>) -> bool {
+        self.placements.unmount(view_id, instance_id)
+    }
+
+    /// Empties this screen's table and names every id it held.
+    pub fn take_placements(&mut self) -> Vec<PlacementId> {
+        self.placements.take_all()
+    }
+
+    /// Number of placements this screen holds.
+    pub fn placement_count(&self) -> usize {
+        self.placements.len()
+    }
+
+    /// Resolves this screen's placements into grid coordinates.
+    ///
+    /// # Invariants
+    ///
+    /// The anchors resolve through the same expression
+    /// [`Self::evict_lost_anchors`] passes. A placement this omits is
+    /// exactly a placement the sweep evicts, so no placement can become
+    /// unresolvable without also becoming evictable.
+    pub fn project_placements(&self) -> Vec<AnchoredPlacement> {
+        self.placements
+            .project(|anchor| self.grid.grid_line(anchor))
+    }
+
+    /// Drops the placements whose anchor row left this screen's grid and
+    /// names them.
+    pub fn evict_lost_anchors(&mut self) -> Vec<PlacementId> {
+        self.placements
+            .evict_lost_anchors(|anchor| self.grid.grid_line(anchor))
+    }
+}
+
+#[cfg(test)]
+mod tests;

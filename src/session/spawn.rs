@@ -3,7 +3,8 @@
 
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use orzma_tty_engine::{SpawnOptions, TerminalBundle};
+use bevy_orzma_tty::OrzmaTtyHandle;
+use orzma_tty::{EnvKey, EnvValue, SpawnOptions};
 use std::path::PathBuf;
 
 /// Shell override resource.
@@ -26,13 +27,13 @@ pub(crate) struct OrzmaSpawnOptions {
     pub env: Vec<(String, String)>,
 }
 
-/// Self-contained spawn bundle for a standalone Orzma terminal: the engine PTY
-/// bundle, the `OrzmaTerminal` marker, and a default full-screen `Node`. The
-/// GPU render bundle is injected by `crate::surface`'s add-observer on
+/// Self-contained spawn bundle for a standalone Orzma terminal: the PTY-backed
+/// terminal handle, the `OrzmaTerminal` marker, and a default full-screen `Node`.
+/// The render material is injected by `crate::surface`'s add-observer on
 /// insertion.
 #[derive(Bundle)]
 pub(crate) struct OrzmaTerminalBundle {
-    terminal: TerminalBundle,
+    terminal: OrzmaTtyHandle,
     marker: OrzmaTerminal,
     node: Node,
 }
@@ -46,12 +47,16 @@ impl OrzmaTerminalBundle {
             opts.shell.as_deref(),
             std::env::var("SHELL").ok().as_deref(),
         );
-        let terminal = TerminalBundle::spawn_login_shell(SpawnOptions {
+        let terminal = OrzmaTtyHandle::new(SpawnOptions {
             cols: 80,
             rows: 24,
             shell,
             cwd: opts.cwd,
-            env: opts.env,
+            env: opts
+                .env
+                .into_iter()
+                .map(|(k, v)| (EnvKey(k), EnvValue(v)))
+                .collect(),
         })?;
         Ok(Self {
             terminal,

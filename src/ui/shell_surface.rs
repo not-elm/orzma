@@ -6,7 +6,7 @@ use crate::input::focus::KeyboardFocused;
 use crate::session::spawn::{OrzmaSpawnOptions, OrzmaTerminalBundle, OrzmaTerminalConfig};
 use crate::ui::UiRoot;
 use bevy::prelude::*;
-use orzma_webview::ControlPlaneHandle;
+use bevy_orzma_webview::ControlPlaneHandle;
 
 /// Root of the shell-surface subtree, mounted under `UiRoot`.
 #[derive(Component)]
@@ -59,7 +59,7 @@ fn ensure_shell_surface_ui(
                 ChildOf(mode_ui),
             ));
             // NOTE: bind the token only after a successful spawn. gc keys on
-            // RemovedComponents<TerminalHandle> (never added on the error path),
+            // RemovedComponents<OrzmaTtyHandle> (never added on the error path),
             // so a pre-spawn bind would leak the token if the spawn failed.
             if let Some(c) = control.as_deref() {
                 c.bind_surface(shell);
@@ -96,7 +96,7 @@ fn spawn_shell_surface_container(commands: &mut Commands, ui_root: Entity) -> En
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orzma_webview::TokenRegistry;
+    use bevy_orzma_webview::TokenRegistry;
     use std::path::PathBuf;
 
     fn build_app() -> App {

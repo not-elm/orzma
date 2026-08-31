@@ -5,7 +5,7 @@
 
 use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
-use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
+use crate::input::bindings::{ButtonConfig, FineModifier, OrzmaMouseConfig, WheelConfig};
 use crate::input::shortcuts::apply::ShortcutsApplyPlugin;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -20,7 +20,6 @@ use orzma_configs::shortcuts::{
     Key as ConfigKey, KeyChord, Leader, Modifiers, Shortcut, TapModifier,
 };
 use orzma_configs::vi_mode::ViModeAction;
-use orzma_tty_engine::{ButtonConfig, WheelConfig};
 use std::time::Duration;
 
 mod apply;

@@ -8,7 +8,7 @@ use crate::input::current_modifiers;
 use crate::input::keyboard::handler::KeyboardHandlerPlugin;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use orzma_tty_engine::{TerminalKey, TerminalModifiers};
+use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
 
 mod handler;
 pub mod key_effect;
@@ -34,12 +34,13 @@ pub(crate) fn current_terminal_modifiers(keys: &ButtonInput<KeyCode>) -> Termina
     }
 }
 
-/// Maps a Bevy logical `Key` to the engine's `TerminalKey`, or `None` for keys
-/// with no terminal representation (bare modifiers, function keys, etc.).
+/// Maps a Bevy logical `Key` to `orzma_tty`'s `TerminalKey`, or `None` for
+/// keys with no terminal representation (bare modifiers, function keys, or
+/// character text that encodes to an empty string).
 pub(crate) fn bevy_key_to_terminal_key(logical_key: &Key) -> Option<TerminalKey> {
     match logical_key {
-        Key::Character(s) => Some(TerminalKey::Text(s.to_string())),
-        Key::Space => Some(TerminalKey::Text(" ".to_string())),
+        Key::Character(s) => KeyText::new(s.to_string()).map(TerminalKey::Character),
+        Key::Space => KeyText::new(" ").map(TerminalKey::Character),
         Key::Enter => Some(TerminalKey::Enter),
         Key::Backspace => Some(TerminalKey::Backspace),
         Key::Tab => Some(TerminalKey::Tab),
@@ -61,23 +62,31 @@ pub(crate) fn bevy_key_to_terminal_key(logical_key: &Key) -> Option<TerminalKey>
 mod tests {
     use super::*;
 
+    /// Asserts printable characters map to `TerminalKey::Character`, wrapping a
+    /// non-empty `KeyText` — ASCII and multibyte alike.
+    ///
+    /// Case: the user types `a` or an IME-composed `あ` and the key handler
+    /// forwards it to the terminal.
     #[test]
-    fn printable_char_maps_to_text() {
+    fn printable_char_maps_to_character() {
         assert_eq!(
             bevy_key_to_terminal_key(&Key::Character("a".into())),
-            Some(TerminalKey::Text("a".to_string()))
+            Some(TerminalKey::Character(KeyText::new("a").unwrap()))
         );
         assert_eq!(
             bevy_key_to_terminal_key(&Key::Character("あ".into())),
-            Some(TerminalKey::Text("あ".to_string()))
+            Some(TerminalKey::Character(KeyText::new("あ").unwrap()))
         );
     }
 
+    /// Asserts the space bar maps to `TerminalKey::Character(" ")`.
+    ///
+    /// Case: the user presses Space in the terminal.
     #[test]
-    fn space_maps_to_text() {
+    fn space_maps_to_character() {
         assert_eq!(
             bevy_key_to_terminal_key(&Key::Space),
-            Some(TerminalKey::Text(" ".to_string()))
+            Some(TerminalKey::Character(KeyText::new(" ").unwrap()))
         );
     }
 
@@ -135,6 +144,11 @@ mod tests {
         );
     }
 
+    /// Asserts bare modifier keys and unmapped keys (e.g. function keys, Insert)
+    /// return `None`.
+    ///
+    /// Case: the user presses a lone Shift/Ctrl/Alt/Super, or a key this codec
+    /// does not wire, and the dispatcher must send nothing to the PTY.
     #[test]
     fn modifier_and_unrecognized_keys_return_none() {
         assert_eq!(bevy_key_to_terminal_key(&Key::Shift), None);
@@ -143,5 +157,16 @@ mod tests {
         assert_eq!(bevy_key_to_terminal_key(&Key::Super), None);
         assert_eq!(bevy_key_to_terminal_key(&Key::F1), None);
         assert_eq!(bevy_key_to_terminal_key(&Key::Insert), None);
+    }
+
+    /// Asserts an empty character payload maps to `None` rather than a
+    /// zero-length `TerminalKey::Character`, since `KeyText` cannot represent
+    /// empty text (D12 of the engine-swap design).
+    ///
+    /// Case: a platform IME or compose sequence delivers a `Key::Character`
+    /// event carrying an empty string.
+    #[test]
+    fn empty_character_text_maps_to_none() {
+        assert_eq!(bevy_key_to_terminal_key(&Key::Character("".into())), None);
     }
 }

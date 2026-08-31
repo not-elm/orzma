@@ -5,7 +5,7 @@ use crate::input::focus::KeyboardFocused;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
-use orzma_tty_engine::TerminalTitle;
+use bevy_orzma_tty::prelude::TtyTitle;
 
 /// Keeps the primary OS window title in sync with the focused terminal's OSC
 /// title.
@@ -23,7 +23,7 @@ const SUFFIX: &str = " — orzma";
 
 fn update_window_title(
     mut window: Query<&mut Window, With<PrimaryWindow>>,
-    focused: Query<&TerminalTitle, (With<OrzmaTerminal>, With<KeyboardFocused>)>,
+    focused: Query<&TtyTitle, (With<OrzmaTerminal>, With<KeyboardFocused>)>,
     terminals: Query<(), With<OrzmaTerminal>>,
 ) {
     let Ok(mut window) = window.single_mut() else {
@@ -94,6 +94,11 @@ mod tests {
             .clone()
     }
 
+    /// Asserts that the primary window's title follows the focused
+    /// terminal's `TtyTitle`.
+    ///
+    /// Case: the user runs `vim` in the terminal that currently holds
+    /// keyboard focus.
     #[test]
     fn system_sets_focused_terminal_title() {
         let mut app = App::new();
@@ -103,7 +108,7 @@ mod tests {
         app.world_mut().spawn((
             OrzmaTerminal,
             KeyboardFocused,
-            TerminalTitle(Some("vim".to_string())),
+            TtyTitle(Some("vim".to_string())),
         ));
 
         app.update();
@@ -129,6 +134,11 @@ mod tests {
         assert_eq!(primary_window_title(&mut app), "orzma");
     }
 
+    /// Asserts that the primary window keeps its last title when a
+    /// terminal exists but none is focused.
+    ///
+    /// Case: focus moves away from the terminal, such as to a webview,
+    /// while the terminal keeps running in the background.
     #[test]
     fn holds_last_title_when_terminal_exists_but_unfocused() {
         let mut app = App::new();
@@ -142,7 +152,7 @@ mod tests {
             PrimaryWindow,
         ));
         app.world_mut()
-            .spawn((OrzmaTerminal, TerminalTitle(Some("vim".to_string()))));
+            .spawn((OrzmaTerminal, TtyTitle(Some("vim".to_string()))));
 
         app.update();
 

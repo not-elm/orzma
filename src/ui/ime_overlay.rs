@@ -230,7 +230,7 @@ fn position_ime_overlay(
     // scale factor would make every cell metric inf/NaN and fling the overlay
     // off-screen during composition.
     let scale = window.resolution.scale_factor().max(f32::EPSILON);
-    let cursor_cell = grid.cursor.as_ref().map(|c| (c.x, c.y)).unwrap_or((0, 0));
+    let cursor_cell = grid.cursor_viewport_cell_or_top();
 
     let layout = compute_overlay_layout(
         comp.text(),
@@ -252,7 +252,8 @@ fn position_ime_overlay(
     );
     set_node_display(&mut nodes, bg_entity, Display::Flex);
     if let Ok(mut bg) = overlay_bg.single_mut() {
-        let occluding = Color::srgb_u8(grid.default_bg[0], grid.default_bg[1], grid.default_bg[2]);
+        let palette_bg = grid.palette.background;
+        let occluding = Color::srgb_u8(palette_bg.r, palette_bg.g, palette_bg.b);
         if bg.0 != occluding {
             bg.0 = occluding;
         }
@@ -762,11 +763,16 @@ mod tests {
         );
     }
 
+    /// Asserts that the overlay's background takes the focused pane's
+    /// palette background while a composition is active.
+    ///
+    /// Case: the user composes IME text over a terminal whose
+    /// application recolored the background with OSC 11.
     #[test]
-    fn overlay_background_matches_pane_default_bg_while_composing() {
+    fn overlay_background_matches_pane_palette_background_while_composing() {
         use crate::surface::OrzmaTerminal;
         use bevy::window::WindowResolution;
-        use orzma_tty_renderer::prelude::Cursor;
+        use orzma_tty_renderer::prelude::{Cursor, Palette, Rgb};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -807,7 +813,14 @@ mod tests {
             UiGlobalTransform::from_xy(400.0, 300.0),
             TerminalGrid {
                 cursor: Some(Cursor::default()),
-                default_bg: [10, 20, 30],
+                palette: Palette {
+                    background: Rgb {
+                        r: 10,
+                        g: 20,
+                        b: 30,
+                    },
+                    ..Palette::default()
+                },
                 ..TerminalGrid::default()
             },
         ));
@@ -829,7 +842,7 @@ mod tests {
         assert_eq!(
             bg.0,
             Color::srgb_u8(10, 20, 30),
-            "overlay background must match the focused pane's default_bg so it occludes the underlying line",
+            "overlay background must match the focused pane's palette background so it occludes the underlying line",
         );
         assert_eq!(
             app.world().get::<Node>(overlay).unwrap().display,
@@ -841,7 +854,7 @@ mod tests {
     fn run_overlay_with_composition(value: &str, caret: Option<(usize, usize)>) -> App {
         use crate::surface::OrzmaTerminal;
         use bevy::window::WindowResolution;
-        use orzma_tty_renderer::prelude::Cursor;
+        use orzma_tty_renderer::prelude::{Cursor, Palette, Rgb};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -883,7 +896,10 @@ mod tests {
             UiGlobalTransform::from_xy(400.0, 300.0),
             TerminalGrid {
                 cursor: Some(Cursor::default()),
-                default_bg: [0, 0, 0],
+                palette: Palette {
+                    background: Rgb { r: 0, g: 0, b: 0 },
+                    ..Palette::default()
+                },
                 ..TerminalGrid::default()
             },
         ));
@@ -959,7 +975,7 @@ mod tests {
         use bevy::app::Update;
         use bevy::ecs::query::{Changed, Or};
         use bevy::window::WindowResolution;
-        use orzma_tty_renderer::prelude::Cursor;
+        use orzma_tty_renderer::prelude::{Cursor, Palette, Rgb};
 
         #[derive(Resource, Default)]
         struct ChangedOverlayNodes(usize);
@@ -1027,7 +1043,10 @@ mod tests {
             UiGlobalTransform::from_xy(400.0, 300.0),
             TerminalGrid {
                 cursor: Some(Cursor::default()),
-                default_bg: [0, 0, 0],
+                palette: Palette {
+                    background: Rgb { r: 0, g: 0, b: 0 },
+                    ..Palette::default()
+                },
                 ..TerminalGrid::default()
             },
         ));
@@ -1105,7 +1124,7 @@ mod tests {
         use crate::surface::OrzmaTerminal;
         use bevy::app::PostUpdate;
         use bevy::window::WindowResolution;
-        use orzma_tty_renderer::prelude::Cursor;
+        use orzma_tty_renderer::prelude::{Cursor, Palette, Rgb};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -1145,7 +1164,10 @@ mod tests {
             UiGlobalTransform::from_xy(400.0, 300.0),
             TerminalGrid {
                 cursor: Some(Cursor::default()),
-                default_bg: [0, 0, 0],
+                palette: Palette {
+                    background: Rgb { r: 0, g: 0, b: 0 },
+                    ..Palette::default()
+                },
                 ..TerminalGrid::default()
             },
         ));

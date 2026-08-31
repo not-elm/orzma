@@ -1,225 +1,202 @@
-//! `TerminalGridPlugin` — applies snapshots and deltas to the per-entity
-//! `TerminalGrid` Component via two `EntityEvent` observers.
+//! `TerminalGridPlugin` — applies each `TtyFrameSignal`'s frame to the
+//! per-entity `TerminalGrid` component through one `EntityEvent`
+//! observer.
 
-use crate::schema::{Cell, FrameDelta, FrameSnapshot, Run, TerminalGrid};
+use crate::schema::TerminalGrid;
 use bevy::prelude::*;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+use bevy_orzma_tty::prelude::{OrzmaTtyHandle, TtyFrameSignal};
 
-/// Registers the `apply_snapshot` and `apply_delta` observers.
+/// Registers the `apply_frame` observer and makes every terminal
+/// handle carry a `TerminalGrid`.
+///
+/// The grid is a required component of [`OrzmaTtyHandle`] because the
+/// VT emits its bootstrap repaint exactly once: a frame delivered to a
+/// handle without a grid would be dropped, and `orzma_tty` offers no
+/// repaint request to recover it. Bevy registers a requirement only
+/// before the first entity carrying the handle exists, so the plugin
+/// must be added before any terminal is spawned.
 #[derive(Default)]
 pub struct TerminalGridPlugin;
 
 impl Plugin for TerminalGridPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_snapshot).add_observer(apply_delta);
+        app.register_required_components::<OrzmaTtyHandle, TerminalGrid>()
+            .add_observer(apply_frame);
     }
 }
 
-fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGrid>) {
-    let Ok(mut grid) = terminals.get_mut(snap.entity) else {
+/// Applies the signalled frame to its terminal's grid, touching the
+/// component mutably only when the frame changes something.
+///
+/// `orzma_tty` emits at most one frame per coalesce window, and
+/// `FrameTracker::emit` already returns `None` when nothing changed, so
+/// a signalled frame is usually real damage. The gate here is what
+/// keeps the mirror honest on the frames that are not: a frame naming
+/// only rows outside the mirror's range, only hyperlink ids the mirror
+/// already knows, or sections that already equal the mirror's own.
+/// `update_terminal_material` reads a changed grid as a reason to
+/// rebuild the GPU buffers, so a spurious write here would rebuild
+/// them for nothing.
+///
+/// A frame addressed to an entity without a grid is ignored; with the
+/// plugin registered that is only an entity that never carried a
+/// handle.
+fn apply_frame(signal: On<TtyFrameSignal>, mut terminals: Query<&mut TerminalGrid>) {
+    let Ok(grid) = terminals.get_mut(signal.terminal) else {
         return;
     };
-    grid.cols = snap.cols;
-    grid.rows = snap.rows;
-    grid.cursor = Some(snap.cursor.clone());
-    grid.display_offset = snap.display_offset;
-    grid.history_size = snap.history_size;
-    grid.history_base = snap.history_base;
-    grid.last_seq = snap.seq;
-    grid.modes = snap.modes.clone();
-    grid.hyperlinks.clear();
-    grid.hyperlinks
-        .extend(snap.hyperlinks.iter().map(|h| (h.id, h.uri.clone())));
-    grid.vi_cursor = snap.vi_cursor;
-    grid.selection = snap.selection;
-    grid.default_bg = snap.default_bg;
-    grid.cells = snap
-        .rows_data
-        .iter()
-        .map(|row| runs_to_cells(&row.runs))
-        .collect();
-}
-
-fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
-    let Ok(mut grid) = terminals.get_mut(delta.entity) else {
-        return;
-    };
-    grid.cursor = Some(delta.cursor.clone());
-    grid.display_offset = delta.display_offset;
-    grid.history_size = delta.history_size;
-    grid.history_base = delta.history_base;
-    grid.last_seq = delta.seq;
-    grid.vi_cursor = delta.vi_cursor;
-    grid.selection = delta.selection;
-    for h in &delta.hyperlinks {
-        if !grid.hyperlinks.iter().any(|(id, _)| *id == h.id) {
-            grid.hyperlinks.push((h.id, h.uri.clone()));
-        }
+    if grid.differs_from(&signal.frame) {
+        grid.into_inner().apply(&signal.frame);
     }
-    for dirty in &delta.dirty_rows {
-        let row_idx = dirty.row as usize;
-        if row_idx < grid.cells.len() {
-            grid.cells[row_idx] = runs_to_cells(&dirty.runs);
-        }
-    }
-}
-
-fn runs_to_cells(runs: &[Run]) -> Vec<Cell> {
-    let mut out: Vec<Cell> = Vec::new();
-    for run in runs {
-        for grapheme in run.text.graphemes(true) {
-            let w = grapheme.width();
-            let width = if w >= 2 {
-                2u8
-            } else if w == 0 {
-                0
-            } else {
-                1
-            };
-            out.push(Cell {
-                text: grapheme.to_string(),
-                width,
-                fg: run.fg,
-                bg: run.bg,
-                style: run.style,
-                hyperlink_id: run.hyperlink_id,
-            });
-        }
-    }
-    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{Hyperlink, HyperlinkId, HyperlinkUri, Row};
+    use crate::schema::{
+        AnchoredPlacement, DisplayOffset, GridColumn, GridLine, GridPoint, PlacementId,
+        PlacementSize, quiet_frame,
+    };
+    use bevy_orzma_tty::prelude::OrzmaTtyPlugin;
+    use orzma_vt::prelude::Frame;
+    use std::{thread::sleep, time::Duration};
 
-    fn grid_with(seed: Vec<(HyperlinkId, HyperlinkUri)>) -> TerminalGrid {
-        TerminalGrid {
-            cols: 1,
-            rows: 1,
-            cells: vec![vec![]],
-            hyperlinks: seed,
-            ..Default::default()
-        }
+    #[derive(Resource, Default)]
+    struct ChangedGrids(usize);
+
+    fn count_changed_grids(
+        mut seen: ResMut<ChangedGrids>,
+        grids: Query<(), Changed<TerminalGrid>>,
+    ) {
+        seen.0 += grids.iter().count();
     }
 
-    #[test]
-    fn apply_snapshot_clears_and_extends_hyperlinks() {
+    /// Builds an app with the observer and one settled grid entity,
+    /// with the spawn's own change notification already drained.
+    fn app_with_grid() -> (App, Entity) {
         let mut app = App::new();
-        app.add_observer(apply_snapshot);
-        let entity = app
-            .world_mut()
-            .spawn(grid_with(vec![(HyperlinkId(99), HyperlinkUri::new("old"))]))
-            .id();
-        app.world_mut().trigger(FrameSnapshot {
-            entity,
-            seq: 1,
-            cols: 1,
-            rows: 1,
-            cursor: Default::default(),
-            rows_data: vec![Row { runs: vec![] }],
-            reason: Default::default(),
-            modes: vec![],
-            hyperlinks: vec![Hyperlink {
-                id: HyperlinkId(1),
-                uri: HyperlinkUri::new("https://new"),
-            }],
-            display_offset: 0,
-            history_size: 0,
-            history_base: 0,
-            vi_cursor: None,
-            selection: None,
-            default_bg: [0, 0, 0],
-        });
+        app.add_plugins(TerminalGridPlugin)
+            .init_resource::<ChangedGrids>()
+            .add_systems(Update, count_changed_grids);
+        let terminal = app.world_mut().spawn(TerminalGrid::settled()).id();
         app.update();
-        let grid = app.world().get::<TerminalGrid>(entity).unwrap();
-        assert_eq!(grid.hyperlinks.len(), 1);
-        assert_eq!(grid.hyperlinks[0].0, HyperlinkId(1));
-        assert_eq!(grid.hyperlinks[0].1.as_str(), "https://new");
+        app.world_mut().resource_mut::<ChangedGrids>().0 = 0;
+        (app, terminal)
     }
 
+    /// Asserts that a frame carrying nothing new leaves the grid
+    /// component unchanged.
+    ///
+    /// Case: a synthetic frame repeats what the mirror already holds, a
+    /// shape the VT's emit gate never produces on its own.
     #[test]
-    fn apply_delta_mirrors_history_fields() {
-        let mut app = App::new();
-        app.add_observer(apply_snapshot).add_observer(apply_delta);
-        let entity = app.world_mut().spawn(grid_with(vec![])).id();
-        app.world_mut().trigger(FrameSnapshot {
-            entity,
-            seq: 1,
-            cols: 1,
-            rows: 1,
-            cursor: Default::default(),
-            rows_data: vec![Row { runs: vec![] }],
-            reason: Default::default(),
-            modes: vec![],
-            hyperlinks: vec![],
-            display_offset: 0,
-            history_size: 7,
-            history_base: 3,
-            vi_cursor: None,
-            selection: None,
-            default_bg: [0, 0, 0],
+    fn a_frame_with_nothing_new_leaves_the_grid_unchanged() {
+        let (mut app, terminal) = app_with_grid();
+        app.world_mut().trigger(TtyFrameSignal {
+            terminal,
+            frame: quiet_frame(),
         });
         app.update();
-        let grid = app.world().get::<TerminalGrid>(entity).unwrap();
-        assert_eq!(grid.history_size, 7);
-        assert_eq!(grid.history_base, 3);
-        app.world_mut().trigger(FrameDelta {
-            entity,
-            seq: 2,
-            cursor: Default::default(),
-            dirty_rows: vec![],
-            hyperlinks: vec![],
-            display_offset: 0,
-            history_size: 9,
-            history_base: 5,
-            vi_cursor: None,
-            selection: None,
-        });
-        app.update();
-        let grid = app.world().get::<TerminalGrid>(entity).unwrap();
-        assert_eq!(grid.history_size, 9);
-        assert_eq!(grid.history_base, 5);
+        assert_eq!(app.world().resource::<ChangedGrids>().0, 0);
     }
 
+    /// Asserts that a frame whose metadata moved does mark the grid
+    /// changed.
+    ///
+    /// Case: a synthetic offset-only frame reaches a settled mirror, a
+    /// shape the VT itself never emits because a scroll repaints every
+    /// row.
     #[test]
-    fn apply_delta_merges_hyperlinks_without_overwrite() {
-        let mut app = App::new();
-        app.add_observer(apply_delta);
-        let entity = app
-            .world_mut()
-            .spawn(grid_with(vec![(
-                HyperlinkId(1),
-                HyperlinkUri::new("https://old"),
-            )]))
-            .id();
-        app.world_mut().trigger(FrameDelta {
-            entity,
-            seq: 2,
-            cursor: Default::default(),
-            dirty_rows: vec![],
-            hyperlinks: vec![
-                Hyperlink {
-                    id: HyperlinkId(1),
-                    uri: HyperlinkUri::new("https://CHANGED"),
-                },
-                Hyperlink {
-                    id: HyperlinkId(2),
-                    uri: HyperlinkUri::new("https://new"),
-                },
-            ],
-            display_offset: 0,
-            history_size: 0,
-            history_base: 0,
-            vi_cursor: None,
-            selection: None,
+    fn a_frame_that_moves_the_viewport_marks_the_grid_changed() {
+        let (mut app, terminal) = app_with_grid();
+        app.world_mut().trigger(TtyFrameSignal {
+            terminal,
+            frame: Frame {
+                display_offset: DisplayOffset(7),
+                ..quiet_frame()
+            },
         });
         app.update();
-        let grid = app.world().get::<TerminalGrid>(entity).unwrap();
-        assert_eq!(grid.hyperlinks.len(), 2);
-        assert_eq!(grid.hyperlinks[0].1.as_str(), "https://old");
-        assert_eq!(grid.hyperlinks[1].1.as_str(), "https://new");
+        assert_eq!(app.world().resource::<ChangedGrids>().0, 1);
+        assert_eq!(
+            app.world()
+                .get::<TerminalGrid>(terminal)
+                .unwrap()
+                .display_offset,
+            7
+        );
+    }
+
+    /// Asserts that a frame's placements list reaches the grid through
+    /// the observer.
+    ///
+    /// Case: a program mounts a webview and the next frame lists it.
+    #[test]
+    fn a_frame_delivers_its_placements() {
+        let (mut app, terminal) = app_with_grid();
+        let placed = AnchoredPlacement {
+            id: PlacementId(1),
+            point: GridPoint {
+                line: GridLine(2),
+                column: GridColumn(3),
+            },
+            size: PlacementSize { rows: 4, cols: 5 },
+        };
+        app.world_mut().trigger(TtyFrameSignal {
+            terminal,
+            frame: Frame {
+                placements: Some(vec![placed]),
+                ..quiet_frame()
+            },
+        });
+        assert_eq!(
+            app.world()
+                .get::<TerminalGrid>(terminal)
+                .unwrap()
+                .placements,
+            vec![placed]
+        );
+    }
+
+    /// Asserts that a frame addressed to an entity without a grid is
+    /// ignored rather than panicking.
+    ///
+    /// Case: a signal names an entity that never carried a terminal
+    /// handle.
+    #[test]
+    fn a_frame_for_an_entity_without_a_grid_is_ignored() {
+        let mut app = App::new();
+        app.add_plugins(TerminalGridPlugin);
+        let bare = app.world_mut().spawn_empty().id();
+        app.world_mut().trigger(TtyFrameSignal {
+            terminal: bare,
+            frame: quiet_frame(),
+        });
+        assert!(app.world().get::<TerminalGrid>(bare).is_none());
+    }
+
+    /// Asserts that bytes fed to a terminal handle reach the grid the
+    /// handle brings with it, through the signal pump and the frame
+    /// observer.
+    ///
+    /// Case: the shell prints its first prompt after the terminal
+    /// spawns from its handle alone.
+    #[test]
+    fn fed_bytes_reach_the_grid_through_the_pump() {
+        let mut app = App::new();
+        app.add_plugins((OrzmaTtyPlugin, TerminalGridPlugin));
+        let (mut handle, _sink) = OrzmaTtyHandle::detached(4, 3);
+        handle.feed_bytes(b"hi");
+        let terminal = app.world_mut().spawn(handle).id();
+        // NOTE: The coalescer decides on wall-clock time — 3 ms of
+        // idle after the last chunk, 12 ms at most — so the pump must
+        // run after that window closed or the frame is still pending.
+        sleep(Duration::from_millis(20));
+        app.update();
+
+        let grid = app.world().get::<TerminalGrid>(terminal).unwrap();
+        assert_eq!((grid.cols, grid.rows), (4, 3));
+        assert_eq!(grid.cells[0][0].text, "h");
+        assert_eq!(grid.cells[0][1].text, "i");
     }
 }

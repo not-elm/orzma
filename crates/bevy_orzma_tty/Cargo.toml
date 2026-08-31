@@ -1,0 +1,23 @@
+[package]
+name = "bevy_orzma_tty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+bevy = { workspace = true }
+orzma_vt = { path = "../orzma_vt" }
+orzma_tty = { path = "../orzma_tty" }
+
+[features]
+test-support = ["orzma_tty/test-support"]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+orzma_tty = { path = "../orzma_tty", features = ["test-support"] }

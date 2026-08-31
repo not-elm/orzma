@@ -18,6 +18,11 @@ serde_json = { workspace = true }
 serde_bytes = "0.11"
 rmp-serde = "1"
 thiserror = { workspace = true }
+orzma_vt = { path = "../orzma_vt/" }
+bevy_orzma_tty = { path = "../bevy_orzma_tty" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+bevy_orzma_tty = { path = "../bevy_orzma_tty", features = ["test-support"] }

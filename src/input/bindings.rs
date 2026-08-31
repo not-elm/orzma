@@ -3,7 +3,6 @@
 //! (`crate::input::shortcuts::populate_mouse_config`).
 
 use bevy::prelude::*;
-use orzma_tty_engine::{ButtonConfig, WheelConfig};
 use std::time::Duration;
 
 /// Which modifier activates "fine" (1 line per notch) wheel scrolling.
@@ -22,11 +21,67 @@ pub(crate) enum FineModifier {
     None,
 }
 
+/// Host-side burst cap for PTY-bound button reports, mirroring the old
+/// engine's `ButtonConfig`. Unused until mouse-button routing is
+/// reintroduced against `orzma_tty` (tracked as out-of-scope work in the
+/// engine-swap design); kept so `OrzmaMouseConfig` and its `orzma_configs`
+/// populate path (`orzma_mouse_config`) keep compiling unchanged.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ButtonConfig {
+    /// Hard cap on the number of PTY-bound reports emitted per route call.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read again when sub-project C ports button reporting"
+        )
+    )]
+    pub max_protocol_events_per_frame: u32,
+}
+
+/// Host-side wheel-routing policy, mirroring the old engine's `WheelConfig`.
+/// `lines_per_notch` / `fine_lines` still drive the local viewport-scroll
+/// computation in `mouse::wheel`; `max_protocol_events_per_frame` is unused
+/// until mouse-wheel PTY reporting is reintroduced against `orzma_tty`.
+#[derive(Clone, Debug)]
+pub(crate) struct WheelConfig {
+    /// Lines scrolled per notch in the scrollback path.
+    pub lines_per_notch: u32,
+    /// Lines scrolled per notch when the fine-scroll modifier is held.
+    pub fine_lines: u32,
+    /// Upper bound on PTY-bound wheel reports emitted per dispatch call.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read again when sub-project C ports wheel reporting"
+        )
+    )]
+    pub max_protocol_events_per_frame: u32,
+}
+
+impl Default for WheelConfig {
+    fn default() -> Self {
+        Self {
+            lines_per_notch: 3,
+            fine_lines: 1,
+            max_protocol_events_per_frame: 8,
+        }
+    }
+}
+
 /// Host-supplied mouse policy. `Default` is a working spawn-and-go config; the
 /// host overrides it from `orzma_configs`.
 #[derive(Resource)]
 pub(crate) struct OrzmaMouseConfig {
     /// Button-report burst cap. MUST be non-zero or forwarded clicks are dropped.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read again when sub-project C ports button reporting"
+        )
+    )]
     pub buttons: ButtonConfig,
     /// Wheel routing config (lines-per-notch, fine lines, burst cap).
     pub wheel: WheelConfig,

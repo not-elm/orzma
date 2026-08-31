@@ -4,7 +4,10 @@ use crate::{
         font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFontSize, TerminalFonts},
     },
     material::state::TerminalMaterialState,
-    schema::{Cell, HyperlinkHoverState, SelectionKind, TerminalGrid},
+    schema::{
+        Color as CellColor, GridCell, GridLine, HyperlinkHoverState, Palette, Rgb,
+        SelectionGeometry, SelectionRange, TerminalGrid,
+    },
 };
 use bevy::{
     asset::{load_internal_asset, uuid_handle},
@@ -351,8 +354,9 @@ impl Default for TerminalOverlays {
 ///   `cursor_style` (and leaving `cursor_pos` at any value). The shader
 ///   short-circuits on `cursor_visible == 0u`, so we deliberately keep
 ///   `cursor_pos` as `UVec2` rather than introducing a signed sentinel —
-///   the existing visibility bit already does that job. The vi cursor in
-///   scrollback uses the same path: `cursor_visible = 0`.
+///   the existing visibility bit already does that job. A cursor (vi or
+///   live) whose grid line projects outside the viewport takes the same
+///   path: `cursor_visible = 0`.
 ///
 /// # Layout (std140, encase derive)
 ///
@@ -407,7 +411,7 @@ struct TerminalParams {
     sel_start_col: u32,
     sel_end_row: i32,
     sel_end_col: u32,
-    /// 0 = none, 1 = char, 2 = line. See `SelectionKind` in the wire protocol.
+    /// 0 = none, 1 = char, 2 = line. See `SelectionGeometry`.
     sel_kind: u32,
     underline_position_phys: f32,
     underline_thickness_phys: f32,
@@ -482,10 +486,11 @@ impl TerminalParams {
     ///
     /// # Invariants
     ///
-    /// - When `grid.vi_cursor` is present and inside the viewport, it
-    ///   overrides `grid.cursor` and the resulting `cursor_visible` bit is
-    ///   forced to `1`. When the vi cursor is in scrollback, `cursor_visible`
-    ///   is cleared so the shader skips cursor rendering entirely.
+    /// - When `grid.vi_cursor` is present and its grid point projects into
+    ///   the viewport, it overrides `grid.cursor` and the resulting
+    ///   `cursor_visible` bit is forced to `1`. When the projection falls
+    ///   outside the viewport, `cursor_visible` is cleared so the shader
+    ///   skips cursor rendering entirely.
     /// - When `grid.selection` is `None`, `sel_kind == 0` and the shader's
     ///   `is_in_selection_uniform` short-circuits to `false`.
     fn new(
@@ -511,19 +516,7 @@ impl TerminalParams {
 
         let (cursor_pos, cursor_style) = grid.current_cursor_pos_and_style();
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
-            match grid.selection {
-                Some(sel) => (
-                    i32::from(sel.start.row),
-                    u32::from(sel.start.column),
-                    i32::from(sel.end.row),
-                    u32::from(sel.end.column),
-                    match sel.kind {
-                        SelectionKind::Char => 1u32,
-                        SelectionKind::Line => 2,
-                    },
-                ),
-                None => (0, 0, 0, 0, 0),
-            };
+            selection_uniforms(grid.selection.as_ref(), grid.display_offset, grid.rows);
 
         Self {
             grid_size: UVec2::new(cols.max(1), rows.max(1)),
@@ -624,14 +617,78 @@ impl GpuGlyph {
     }
 }
 
-fn padding_color(default_bg: [u8; 3], fallback: [u8; 3]) -> Vec4 {
-    let [r, g, b] = if default_bg == [0, 0, 0] {
+fn padding_color(default_bg: Rgb, fallback: [u8; 3]) -> Vec4 {
+    let [r, g, b] = if default_bg == (Rgb { r: 0, g: 0, b: 0 }) {
         fallback
     } else {
-        default_bg
+        [default_bg.r, default_bg.g, default_bg.b]
     };
     let c = Color::srgb_u8(r, g, b).to_linear();
     Vec4::new(c.red, c.green, c.blue, 1.0)
+}
+
+/// The transparent cell-background packing (`alpha == 0`) the shader
+/// treats as "terminal default background".
+const TRANSPARENT_BG: u32 = 0;
+
+/// The grid palette pre-packed to the shader's linear `u32` encoding,
+/// built once per cell rebuild so symbolic colors resolve by table
+/// lookup instead of a per-cell sRGB-to-linear conversion.
+struct PackedPalette {
+    indexed: [u32; 256],
+    foreground: u32,
+    background: u32,
+}
+
+impl PackedPalette {
+    /// Packs every slot of `palette` once.
+    fn build(palette: &Palette) -> Self {
+        Self {
+            indexed: palette.indexed.map(pack_linear),
+            foreground: pack_linear(palette.foreground),
+            background: pack_linear(palette.background),
+        }
+    }
+
+    /// Packs a cell foreground, resolving symbolic colors to their
+    /// palette slot.
+    //
+    // NOTE: The variant-to-slot mapping mirrors `Palette::resolve` in
+    //       `orzma_vt`, pre-packed here for the per-cell hot path; a
+    //       change to either mapping must be applied to both, or
+    //       symbolic colors silently diverge between producers.
+    fn cell_fg(&self, color: CellColor) -> u32 {
+        match color {
+            CellColor::DefaultForeground => self.foreground,
+            CellColor::DefaultBackground => self.background,
+            CellColor::Indexed(index) => self.indexed[usize::from(index)],
+            CellColor::Rgb(rgb) => pack_linear(rgb),
+        }
+    }
+
+    /// Packs a cell background.
+    ///
+    /// # Invariants
+    ///
+    /// `DefaultBackground` packs [`TRANSPARENT_BG`], never the opaque
+    /// palette background: the shader keys on `bg.a == 0` to composite
+    /// webview overlays and the padding base through the cell and to
+    /// resolve reverse video (`resolve_cell_colors` / `tint_bg` in
+    /// `terminal_ui_material.wgsl`), and the sentinel is what keeps an
+    /// equal explicit RGB background distinguishable per the
+    /// `schema::Color` invariant. An opaque pack here occludes every
+    /// webview rect.
+    fn cell_bg(&self, color: CellColor) -> u32 {
+        match color {
+            CellColor::DefaultBackground => TRANSPARENT_BG,
+            other => self.cell_fg(other),
+        }
+    }
+}
+
+/// sRGB byte triple → the opaque linear u32 packing the shader decodes.
+fn pack_linear(rgb: Rgb) -> u32 {
+    Color::srgb_u8(rgb.r, rgb.g, rgb.b).to_linear().as_u32()
 }
 
 fn update_terminal_material(
@@ -642,7 +699,7 @@ fn update_terminal_material(
         Entity,
         &MaterialNode<TerminalUiMaterial>,
         &mut TerminalMaterialState,
-        &TerminalGrid,
+        Ref<TerminalGrid>,
         Option<&PaneInactiveStyle>,
         Option<&TerminalOverlays>,
     )>,
@@ -667,7 +724,7 @@ fn update_terminal_material(
     // is also the overlay-texture rebind lifeline: a bevy_cef headless target
     // re-creates its GPU texture on resize, and only this rebuild repoints
     // the bind group at it (spec §4).
-    // NOTE: Skip the entire system when PrimaryWindow is transiently
+    // NOTE: Skip the per-entity work when PrimaryWindow is transiently
     // absent (display hotplug, brief winit reconnect). Trade-off: the
     // `mat.params = ...` write below would fire AssetEvent::Modified
     // every frame (load-bearing for bind-group rebuild — see NOTE above);
@@ -676,18 +733,22 @@ fn update_terminal_material(
     // ordered after this system, so atlas uploads defer in lock-step)
     // and far less disruptive than the previous .unwrap_or(1.0) flash
     // that would re-rasterize the entire atlas at half scale.
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let dpr = window.scale_factor();
-    let phys_font_size = (font_size.0 * dpr).round() as u16;
+    let dpr = windows.single().ok().map(|window| window.scale_factor());
 
     for (entity, handle, mut state, grid, pane_style, overlays) in terminals.iter_mut() {
+        // NOTE: Latch the grid's change signal before the bail-out below.
+        // Bevy clears it once this system has run, so a grid written on a
+        // frame that skips the upload would otherwise never reach the GPU.
+        state.grid_dirty |= grid.is_changed();
+        let Some(dpr) = dpr else {
+            continue;
+        };
+        let phys_font_size = (font_size.0 * dpr).round() as u16;
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
         let cols = grid.cols as u32;
         let rows = grid.rows as u32;
         let dims_changed = (grid.cols, grid.rows) != state.last_grid_dims;
-        let grid_changed = grid.last_seq != state.last_grid_seq;
+        let grid_changed = state.grid_dirty;
         let phys_size_changed = phys_font_size != state.last_phys_font_size;
 
         let needs_rebuild = !state.initialized
@@ -749,7 +810,7 @@ fn update_terminal_material(
             state.cpu_cells.resize(cell_count, GpuCell::default());
 
             if cols > 0 && rows > 0 {
-                rebuild_cells(grid, &mut state, &fonts, &mut atlas, phys_font_size, cols);
+                rebuild_cells(&grid, &mut state, &fonts, &mut atlas, phys_font_size, cols);
             }
 
             if state.cpu_cells.is_empty() {
@@ -767,12 +828,12 @@ fn update_terminal_material(
             }
 
             state.last_atlas_generation = atlas.generation;
-            state.last_grid_seq = grid.last_seq;
+            state.grid_dirty = false;
             state.last_grid_dims = (grid.cols, grid.rows);
             state.initialized = true;
         }
 
-        let bg_padding_color = padding_color(grid.default_bg, fallback.0);
+        let bg_padding_color = padding_color(grid.palette.background, fallback.0);
 
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
             (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),
@@ -790,7 +851,7 @@ fn update_terminal_material(
             });
         if let Some(mut mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
-                grid,
+                &grid,
                 cell_size_phys,
                 Vec2::new(atlas.width() as f32, atlas.height() as f32),
                 ascent_phys,
@@ -829,6 +890,7 @@ fn rebuild_cells(
     phys_font_size: u16,
     cols: u32,
 ) {
+    let packed_palette = PackedPalette::build(&grid.palette);
     for (row_idx, row) in grid.cells.iter().enumerate() {
         let mut col: u32 = 0;
         for cell in row {
@@ -845,8 +907,8 @@ fn rebuild_cells(
             }
             let cell_width = u32::from(cell.width);
             let glyph_index = resolve_glyph_index(cell, state, fonts, atlas, phys_font_size);
-            let fg = cell.fg.to_linear().as_u32();
-            let bg = cell.bg.to_linear().as_u32();
+            let fg = packed_palette.cell_fg(cell.fg);
+            let bg = packed_palette.cell_bg(cell.bg);
             let style_flags = u32::from(cell.style) | style_bits_from_combining_marks(&cell.text);
 
             let target = (row_idx as u32 * cols + col) as usize;
@@ -856,7 +918,7 @@ fn rebuild_cells(
                     fg_packed: fg,
                     bg_packed: bg,
                     style_flags,
-                    hyperlink_id: cell.hyperlink_id.map_or(0, |h| h.0),
+                    hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.0),
                 };
             }
 
@@ -877,7 +939,7 @@ fn rebuild_cells(
                         fg_packed: fg,
                         bg_packed: bg,
                         style_flags: style_flags | STYLE_WIDE_RIGHT_HALF,
-                        hyperlink_id: cell.hyperlink_id.map_or(0, |h| h.0),
+                        hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.0),
                     };
                 }
             }
@@ -924,7 +986,7 @@ fn style_bits_from_combining_marks(text: &str) -> u32 {
 }
 
 fn resolve_glyph_index(
-    cell: &Cell,
+    cell: &GridCell,
     state: &mut TerminalMaterialState,
     fonts: &TerminalFonts,
     atlas: &mut GlyphAtlas,
@@ -955,6 +1017,38 @@ fn resolve_glyph_index(
     idx
 }
 
+/// Projects a grid-space selection into the clamped viewport-space
+/// uniform tuple the shader consumes. Rows widen to i64 before adding
+/// the display offset (a signed line plus an unsigned offset must not
+/// wrap) and clamp to the -1 (above) / `rows` (below) sentinels so a
+/// partially visible selection still paints its on-screen span.
+fn selection_uniforms(
+    selection: Option<&SelectionRange>,
+    display_offset: u32,
+    rows: u16,
+) -> (i32, u32, i32, u32, u32) {
+    let Some(sel) = selection else {
+        return (0, 0, 0, 0, 0);
+    };
+    let clamp_row = |line: GridLine| -> i32 {
+        (i64::from(line.0) + i64::from(display_offset)).clamp(-1, i64::from(rows)) as i32
+    };
+    let kind = match sel.geometry {
+        // NOTE: Block degrades to the char encoding until the shader
+        // grows a rectangular mode; SelectionKind cannot currently
+        // produce Block, so no user-visible selection takes this arm.
+        SelectionGeometry::Linear | SelectionGeometry::Block => 1u32,
+        SelectionGeometry::Lines => 2,
+    };
+    (
+        clamp_row(sel.start.line),
+        u32::from(sel.start.column.0),
+        clamp_row(sel.end.line),
+        u32::from(sel.end.column.0),
+        kind,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -971,27 +1065,34 @@ mod tests {
         assert_eq!(cell.hyperlink_id, 0);
     }
 
+    fn cell_with_link(text: &str, link: Option<u32>) -> GridCell {
+        use crate::schema::{Color as CellColor, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri};
+        GridCell {
+            text: text.to_string(),
+            width: 1,
+            point: GridPoint::default(),
+            fg: CellColor::DefaultForeground,
+            bg: CellColor::DefaultBackground,
+            style: 0,
+            hyperlink: link.map(|id| Hyperlink {
+                id: HyperlinkId(id),
+                uri: HyperlinkUri::new("https://example"),
+            }),
+        }
+    }
+
+    /// Asserts that a linked cell's wire id reaches its GPU slot while
+    /// an unlinked cell's slot keeps the 0 sentinel.
+    ///
+    /// Case: a row mixes OSC 8 linked text with plain text, and the
+    /// shader needs the per-cell id to underline only the hovered
+    /// link.
     #[test]
     fn rebuild_cells_writes_hyperlink_id_when_present() {
-        use crate::schema::HyperlinkId;
         use bevy::platform::collections::HashMap;
 
-        let linked = Cell {
-            text: "x".to_string(),
-            width: 1,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: Some(HyperlinkId(7)),
-        };
-        let unlinked = Cell {
-            text: "y".to_string(),
-            width: 1,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: None,
-        };
+        let linked = cell_with_link("x", Some(7));
+        let unlinked = cell_with_link("y", None);
         let grid = TerminalGrid {
             cols: 2,
             rows: 1,
@@ -1003,7 +1104,7 @@ mod tests {
             cpu_cells: vec![GpuCell::default(); 2],
             cpu_glyphs: Vec::new(),
             last_atlas_generation: 0,
-            last_grid_seq: 0,
+            grid_dirty: true,
             last_grid_dims: (0, 0),
             last_phys_font_size: 0,
             cached_metrics: None,
@@ -1104,14 +1205,21 @@ mod tests {
 
     #[test]
     fn padding_color_falls_back_when_default_bg_is_black() {
-        let got = padding_color([0, 0, 0], [30, 32, 40]);
+        let got = padding_color(Rgb { r: 0, g: 0, b: 0 }, [30, 32, 40]);
         let c = Color::srgb_u8(30, 32, 40).to_linear();
         assert_eq!(got, Vec4::new(c.red, c.green, c.blue, 1.0));
     }
 
     #[test]
     fn padding_color_uses_default_bg_when_set() {
-        let got = padding_color([10, 20, 30], [99, 99, 99]);
+        let got = padding_color(
+            Rgb {
+                r: 10,
+                g: 20,
+                b: 30,
+            },
+            [99, 99, 99],
+        );
         let c = Color::srgb_u8(10, 20, 30).to_linear();
         assert_eq!(got, Vec4::new(c.red, c.green, c.blue, 1.0));
     }
@@ -1164,5 +1272,106 @@ mod tests {
                 "slot {i} call must pair overlay_rects[{i}] with overlay{i}_tex"
             );
         }
+    }
+
+    /// Asserts that in-viewport selection endpoints map to their
+    /// viewport rows and the geometry maps to the shader encoding.
+    ///
+    /// Case: the user drags a whole-line selection across two visible rows
+    /// at the live tail.
+    #[test]
+    fn selection_uniforms_projects_in_viewport_endpoints() {
+        use crate::schema::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
+        let sel = SelectionRange {
+            start: GridPoint {
+                line: GridLine(1),
+                column: GridColumn(2),
+            },
+            end: GridPoint {
+                line: GridLine(3),
+                column: GridColumn(4),
+            },
+            geometry: SelectionGeometry::Lines,
+        };
+        assert_eq!(selection_uniforms(Some(&sel), 0, 24), (1, 2, 3, 4, 2));
+        assert_eq!(selection_uniforms(None, 0, 24), (0, 0, 0, 0, 0));
+    }
+
+    /// Asserts that endpoints outside the viewport clamp to the -1 /
+    /// `rows` sentinels instead of disappearing.
+    ///
+    /// Case: the user scrolls partway back through a selection that
+    /// spans from scrollback history down past the visible window, so
+    /// only the middle of it is on screen.
+    #[test]
+    fn selection_uniforms_clamps_off_viewport_endpoints() {
+        use crate::schema::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
+        let sel = SelectionRange {
+            start: GridPoint {
+                line: GridLine(-40),
+                column: GridColumn(0),
+            },
+            end: GridPoint {
+                line: GridLine(30),
+                column: GridColumn(5),
+            },
+            geometry: SelectionGeometry::Linear,
+        };
+        assert_eq!(selection_uniforms(Some(&sel), 10, 24), (-1, 0, 24, 5, 1));
+    }
+
+    /// Asserts that fg and bg packing resolve symbolic colors through
+    /// the live palette, and that the default background packs the
+    /// transparent sentinel instead of the palette value.
+    ///
+    /// The sentinel policy rejects packing the opaque palette
+    /// background for `DefaultBackground`: the shader keys on
+    /// `bg.a == 0` to composite webview overlays and the padding base
+    /// through default-background cells, so an opaque pack would
+    /// occlude both and erase the explicit-vs-default distinction the
+    /// `schema::Color` invariant requires.
+    ///
+    /// Case: OSC 4 recolors an indexed slot and OSC 10 the default
+    /// foreground while a webview overlay is mounted behind
+    /// default-background cells.
+    #[test]
+    fn cell_packing_resolves_through_the_live_palette() {
+        use crate::schema::{Color as CellColor, Palette, Rgb};
+        let mut palette = Palette {
+            foreground: Rgb {
+                r: 10,
+                g: 20,
+                b: 30,
+            },
+            ..Palette::default()
+        };
+        palette.indexed[1] = Rgb {
+            r: 40,
+            g: 50,
+            b: 60,
+        };
+        let packed = PackedPalette::build(&palette);
+        assert_eq!(
+            packed.cell_fg(CellColor::DefaultForeground),
+            pack_linear(Rgb {
+                r: 10,
+                g: 20,
+                b: 30,
+            })
+        );
+        assert_eq!(
+            packed.cell_fg(CellColor::Indexed(1)),
+            pack_linear(Rgb {
+                r: 40,
+                g: 50,
+                b: 60,
+            })
+        );
+        assert_eq!(packed.cell_bg(CellColor::DefaultBackground), TRANSPARENT_BG);
+        assert_ne!(
+            packed.cell_bg(CellColor::Rgb(palette.background)),
+            TRANSPARENT_BG,
+            "an explicit RGB equal to the palette background must stay opaque"
+        );
     }
 }

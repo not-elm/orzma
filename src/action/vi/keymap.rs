@@ -9,11 +9,11 @@ use crate::action::vi::{
 use crate::configs::OrzmaConfigsResource;
 use bevy::input::keyboard::{Key, KeyCode};
 use bevy::prelude::*;
+use bevy_orzma_tty::prelude::{SelectionKind, ViMotion};
 use orzma_configs::shortcuts::Modifiers;
 use orzma_configs::vi_mode::{
     ViModeAction, ViModeBaseKey, ViModeKey, ViModeMotion, ViModeNamedKey, ViModeSelection,
 };
-use orzma_tty_engine::{SelectionType, ViMotion};
 use std::collections::HashMap;
 
 /// Registers the `Startup` resolution of the `[vi-mode]` table.
@@ -223,11 +223,14 @@ fn vi_motion(motion: ViModeMotion) -> ViMotion {
     }
 }
 
-fn selection_type(selection: ViModeSelection) -> SelectionType {
+fn selection_type(selection: ViModeSelection) -> SelectionKind {
     match selection {
-        ViModeSelection::Simple => SelectionType::Simple,
-        ViModeSelection::Lines => SelectionType::Lines,
-        ViModeSelection::Rect => SelectionType::Block,
+        ViModeSelection::Simple => SelectionKind::Simple,
+        ViModeSelection::Lines => SelectionKind::Lines,
+        // TODO: `SelectionKind::Block` doesn't exist yet
+        // (docs/todo/migrate-to-new-vt.md item 10); round a rectangular
+        // vi-mode selection down to Lines until it lands.
+        ViModeSelection::Rect => SelectionKind::Lines,
     }
 }
 

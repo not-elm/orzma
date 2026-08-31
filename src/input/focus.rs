@@ -15,9 +15,9 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::{FocusedWebview, WebviewSource};
+use bevy_orzma_webview::{NonInteractive, Webview, webview_hit_at};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::TerminalOverlays;
-use orzma_webview::{NonInteractive, Webview, webview_hit_at};
 
 /// When present on an `OrzmaTerminal` entity, the crate's default keyboard
 /// dispatcher skips it entirely — the host withholds keyboard input for it
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn sync_preserves_app_declared_inline_focus() {
-        // NOTE: orzma_webview's apply_control_events and its supporting resource types
+        // NOTE: bevy_orzma_webview's apply_control_events and its supporting resource types
         // (OrzmaRegistry, ControlEvents, etc.) are pub(crate) and unreachable from the
         // binary. Setting FocusedWebview directly produces the same world state that
         // apply_control_events(SetFocus) would — the sync behavior under test is

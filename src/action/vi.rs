@@ -8,9 +8,9 @@ mod applier;
 mod keymap;
 
 use bevy::prelude::*;
+use bevy_orzma_tty::prelude::{SelectionKind, ViMotion};
 pub(crate) use keymap::{ResolvedViModeKeys, trigger_vi_mode_action};
 use orzma_configs::vi_mode::ViModeScroll;
-use orzma_tty_engine::{SelectionType, ViMotion};
 
 /// Moves the copy cursor on `entity`.
 #[derive(EntityEvent, Debug, Clone)]
@@ -39,7 +39,7 @@ pub(crate) struct ViSelectionToggleRequest {
     #[event_target]
     pub entity: Entity,
     /// The selection kind to toggle.
-    pub ty: SelectionType,
+    pub ty: SelectionKind,
 }
 
 /// Copies `entity`'s selection to the clipboard and leaves vi mode.

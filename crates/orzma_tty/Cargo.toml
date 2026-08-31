@@ -1,0 +1,22 @@
+[package]
+name = "orzma_tty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+orzma_vt = { path = "../orzma_vt" }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+portable-pty = { workspace = true }
+crossbeam-channel = "0.5"
+
+[lints]
+workspace = true
+
+[features]
+test-support = []

@@ -352,9 +352,40 @@ mod tests {
         );
     }
 
+    /// A 10x5 grid whose top-left cell links to `https://example.com` as
+    /// `HyperlinkId(7)`, shared by the hover tests.
+    fn linked_grid() -> TerminalGrid {
+        use orzma_tty_renderer::schema::{
+            Color, GridCell, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri,
+        };
+        TerminalGrid {
+            cols: 10,
+            rows: 5,
+            cells: vec![vec![GridCell {
+                text: "x".to_string(),
+                width: 1,
+                point: GridPoint::default(),
+                fg: Color::DefaultForeground,
+                bg: Color::DefaultBackground,
+                style: 0,
+                hyperlink: Some(Hyperlink {
+                    id: HyperlinkId(7),
+                    uri: HyperlinkUri::new("https://example.com"),
+                }),
+            }]],
+            ..default()
+        }
+    }
+
+    /// Asserts that hovering a linked cell with the activation modifier held
+    /// records the surface and hyperlink id in the hover state and switches
+    /// the window cursor to a pointer.
+    ///
+    /// Case: the user holds Cmd (Ctrl off macOS) and moves the mouse over an
+    /// OSC 8 hyperlink in the terminal.
     #[test]
     fn hover_over_terminal_link_sets_state_and_pointer() {
-        use orzma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
+        use orzma_tty_renderer::schema::HyperlinkId;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -384,20 +415,7 @@ mod tests {
             ))
             .id();
 
-        let grid = TerminalGrid {
-            cols: 10,
-            rows: 5,
-            cells: vec![vec![Cell {
-                text: "x".to_string(),
-                width: 1,
-                fg: Color::WHITE,
-                bg: Color::BLACK,
-                style: 0,
-                hyperlink_id: Some(HyperlinkId(7)),
-            }]],
-            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example.com"))],
-            ..default()
-        };
+        let grid = linked_grid();
         let term = app
             .world_mut()
             .spawn((
@@ -433,10 +451,14 @@ mod tests {
         );
     }
 
+    /// Asserts that a `MouseDisabled` surface is never hovered: the hover
+    /// state stays empty and the cursor keeps the default arrow even over a
+    /// linked cell.
+    ///
+    /// Case: the pointer crosses a hyperlink on a terminal whose mouse input
+    /// is suppressed, such as one in vi mode.
     #[test]
     fn hover_skips_mouse_disabled_surface() {
-        use orzma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseMotion>();
@@ -465,20 +487,7 @@ mod tests {
             ))
             .id();
 
-        let grid = TerminalGrid {
-            cols: 10,
-            rows: 5,
-            cells: vec![vec![Cell {
-                text: "x".to_string(),
-                width: 1,
-                fg: Color::WHITE,
-                bg: Color::BLACK,
-                style: 0,
-                hyperlink_id: Some(HyperlinkId(7)),
-            }]],
-            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example.com"))],
-            ..default()
-        };
+        let grid = linked_grid();
         app.world_mut().spawn((
             OrzmaTerminal,
             MouseDisabled,
@@ -506,10 +515,14 @@ mod tests {
         );
     }
 
+    /// Asserts that a surface hosting a webview is not treated as a
+    /// terminal: the hover state stays empty and the window cursor is left
+    /// untouched for CEF to own.
+    ///
+    /// Case: the pointer moves over an inline webview overlay whose page
+    /// manages its own cursor.
     #[test]
     fn hover_over_webview_host_leaves_cursor_to_cef() {
-        use orzma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseMotion>();
@@ -532,20 +545,7 @@ mod tests {
 
         // A webview host: an OrzmaTerminal carrying WebviewSource. `on_add_inject_render`
         // would also give it a (rendered-over) grid, so the webview check must win.
-        let grid = TerminalGrid {
-            cols: 10,
-            rows: 5,
-            cells: vec![vec![Cell {
-                text: "x".to_string(),
-                width: 1,
-                fg: Color::WHITE,
-                bg: Color::BLACK,
-                style: 0,
-                hyperlink_id: Some(HyperlinkId(7)),
-            }]],
-            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example.com"))],
-            ..default()
-        };
+        let grid = linked_grid();
         app.world_mut().spawn((
             OrzmaTerminal,
             WebviewSource::new("orzma://example/index.html"),

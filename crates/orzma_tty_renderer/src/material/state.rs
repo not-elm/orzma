@@ -33,7 +33,12 @@ pub(crate) struct TerminalMaterialState {
     pub cpu_cells: Vec<GpuCell>,
     pub cpu_glyphs: Vec<GpuGlyph>,
     pub last_atlas_generation: u64,
-    pub last_grid_seq: u32,
+    /// Set from `TerminalGrid`'s change detection and cleared only
+    /// once the rebuild actually uploads. It has to latch: Bevy
+    /// clears the change signal as soon as the system runs, so a
+    /// grid written on a frame whose rebuild bails out would never
+    /// reach the GPU.
+    pub grid_dirty: bool,
     pub last_grid_dims: (u16, u16),
     /// Last physical font size used for glyph rasterization. Reset to 0 in
     /// `on_add_material_node` so the first `update_terminal_material` for
@@ -55,14 +60,14 @@ impl TerminalMaterialState {
     /// - `last_phys_font_size` — the caller writes it after invalidation
     ///   so the next frame's diff detection still works.
     /// - `cpu_cells` — re-populated wholesale by `rebuild_cells` on the
-    ///   next rebuild (forced here by `last_grid_seq = 0`).
+    ///   next rebuild (forced here by `grid_dirty = true`).
     /// - `initialized` — stays `true`; the rebuild path is re-entered via
     ///   `grid_changed`, not via `!initialized`.
     pub(crate) fn invalidate_all(&mut self) {
         self.glyph_index_map.clear();
         self.cpu_glyphs.clear();
         self.last_atlas_generation = 0;
-        self.last_grid_seq = 0;
+        self.grid_dirty = true;
         self.cached_metrics = None;
     }
 }
@@ -108,7 +113,7 @@ fn on_add_material_node(mut world: DeferredWorld, ctx: HookContext) {
             cpu_cells: Vec::new(),
             cpu_glyphs: Vec::new(),
             last_atlas_generation: 0,
-            last_grid_seq: 0,
+            grid_dirty: true,
             last_grid_dims: (0, 0),
             last_phys_font_size: 0,
             cached_metrics: None,
@@ -127,7 +132,7 @@ mod tests {
             cpu_cells: Vec::new(),
             cpu_glyphs: vec![GpuGlyph::default(), GpuGlyph::default()],
             last_atlas_generation: 42,
-            last_grid_seq: 99,
+            grid_dirty: false,
             last_grid_dims: (80, 24),
             last_phys_font_size: 24,
             cached_metrics: Some(CellMetrics {
@@ -159,7 +164,7 @@ mod tests {
         assert!(state.glyph_index_map.is_empty());
         assert!(state.cpu_glyphs.is_empty());
         assert_eq!(state.last_atlas_generation, 0);
-        assert_eq!(state.last_grid_seq, 0);
+        assert!(state.grid_dirty);
         assert!(state.cached_metrics.is_none());
     }
 

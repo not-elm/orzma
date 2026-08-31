@@ -1,11 +1,14 @@
-mod cursor;
-mod frame;
+//! Renderer-facing schema: the `TerminalGrid` component and hover
+//! state, plus the shared terminal vocabulary re-exported flat from
+//! [`orzma_vt::prelude`].
+
 mod grid;
 mod hover;
-mod hyperlink;
 
-pub use cursor::*;
-pub use frame::*;
 pub use grid::*;
 pub use hover::*;
-pub use hyperlink::*;
+pub use orzma_vt::prelude::{
+    AnchoredPlacement, CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, GridColumn,
+    GridLine, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId, PlacementSize,
+    Rgb, Row, Run, SelectionGeometry, SelectionKind, SelectionRange, Style, ViCursor, is_allowed,
+};

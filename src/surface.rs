@@ -1,12 +1,11 @@
 //! Shared terminal-surface identity: the `OrzmaTerminal` marker and the
-//! render-bundle injection observer, which fire for every surface. Surface
+//! material-injection observer, which fire for every surface. Surface
 //! geometry helpers live in `geometry`.
 
 pub(crate) mod geometry;
 
 use bevy::prelude::*;
 use orzma_tty_renderer::material::TerminalUiMaterial;
-use orzma_tty_renderer::prelude::TerminalRenderBundle;
 
 /// Marker component identifying an Orzma-mode terminal entity.
 ///
@@ -16,7 +15,7 @@ use orzma_tty_renderer::prelude::TerminalRenderBundle;
 #[derive(Component)]
 pub(crate) struct OrzmaTerminal;
 
-/// Registers the render-bundle injection observer.
+/// Registers the material-injection observer.
 pub(crate) struct SurfacePlugin;
 
 impl Plugin for SurfacePlugin {
@@ -25,8 +24,9 @@ impl Plugin for SurfacePlugin {
     }
 }
 
-/// Bevy observer that injects a `TerminalRenderBundle` whenever `OrzmaTerminal`
-/// is added to an entity, allocating the GPU material on demand.
+/// Bevy observer that injects a `MaterialNode<TerminalUiMaterial>` whenever
+/// `OrzmaTerminal` is added to an entity, allocating the GPU material on
+/// demand.
 fn on_add_inject_render(
     ev: On<Add, OrzmaTerminal>,
     mut commands: Commands,
@@ -35,17 +35,20 @@ fn on_add_inject_render(
     let material = materials.add(TerminalUiMaterial::default());
     commands
         .entity(ev.event_target())
-        .insert(TerminalRenderBundle::new(material));
+        .insert(MaterialNode(material));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Asserts that adding `OrzmaTerminal` to an entity injects the
+    /// `MaterialNode<TerminalUiMaterial>` the renderer draws through.
+    ///
+    /// Case: the shell surface spawns its terminal entity at startup.
     #[test]
-    fn on_add_injects_render_bundle() {
+    fn on_add_injects_material_node() {
         use bevy::asset::AssetPlugin;
-        use orzma_tty_renderer::schema::TerminalGrid;
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
@@ -54,8 +57,10 @@ mod tests {
         let entity = app.world_mut().spawn(OrzmaTerminal).id();
         app.update();
         assert!(
-            app.world().entity(entity).contains::<TerminalGrid>(),
-            "On<Add, OrzmaTerminal> must inject TerminalRenderBundle (TerminalGrid)",
+            app.world()
+                .entity(entity)
+                .contains::<MaterialNode<TerminalUiMaterial>>(),
+            "On<Add, OrzmaTerminal> must inject MaterialNode<TerminalUiMaterial>",
         );
     }
 }

@@ -57,7 +57,7 @@ pub(super) struct OverlayLayout {
 /// Pure: composes [`compute_overlay_pos`], [`layout_preedit_cells`], and
 /// [`caret_cell_offsets`] with the underline / caret / clause cell arithmetic,
 /// returning logical-px rects relative to the window origin. The occlusion
-/// color is intentionally not returned — the caller reads `grid.default_bg`.
+/// color is intentionally not returned — the caller reads `grid.palette.background`.
 pub(super) fn compute_overlay_layout(
     text: &str,
     caret: Option<(usize, usize)>,
