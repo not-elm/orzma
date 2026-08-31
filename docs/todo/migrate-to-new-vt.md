@@ -24,9 +24,8 @@
 `cargo run` でシェル作業ができる。vi モード・選択・マウス routing は「切り替え後に実装」節の
 とおり縮退したままで、これは受け入れ済みの状態である。同じく受け入れ済みの縮退として、
 代替画面でのホイールスクロール（less / vim では旧 engine の矢印キー変換が未移植でホイールが
-効かない）、webview の mount（`apc_dispatch` が空実装で、`sdk/ratatui_orzma` が出すシーケンスを
-解釈する層がまだ無い）、OSC 8 ハイパーリンク（`Frame.hyperlinks` が常に空で hover / クリックが
-働かない）がある。
+効かない）、OSC 8 ハイパーリンク（`Frame.hyperlinks` が常に空で hover / クリックが働かない）
+がある。
 
 各クレートのビルド状態（`cargo check -p <crate> --all-targets`）:
 
@@ -83,8 +82,8 @@ SGR マウス（`?1006`）、Alternate Scroll（`?1007`）、Bracketed Paste（`
 
 `osc_dispatch` はタイトル（OSC 0 / 2）のみ実装済み。パレット（OSC 4 / 10 / 11 / 12）、
 作業ディレクトリ（OSC 7）、ハイパーリンク（OSC 8）、クリップボード（OSC 52）は未実装で、
-`VtSignal` の `Clipboard` / `CurrentDir` は発火元を持たない。`apc_dispatch` も
-空実装（`fn apc_dispatch(&mut self, _data: Vec<u8>) {}`）なので `WebviewApc` も同様。
+`VtSignal` の `Clipboard` / `CurrentDir` は発火元を持たない。`apc_dispatch` は
+339d95d で実装済みで、webview の mount / unmount は signal を発火する。
 
 なお SGR は `Pen` が表現できる属性だけを実装し、点滅（`5` / `6` / `25`）・上線
 （`53` / `55`）・下線の色（`58` / `59`）・下線の種類（`4:1`–`4:5`）は意図的に落として
@@ -195,7 +194,7 @@ fn clear_selection(_e: On<RequestTtySelectionClear>) {}
 4. ~~**`?1049`（代替画面）**~~ — 実装済み（47 / 1047 / 1048 / 1049）。placement は発生源で
    `WebviewEvicted` にした。設計は `docs/memo/decset.md` の代替画面の節
 5. **`osc_dispatch` の残り** — パレット、cwd、ハイパーリンク、クリップボード。
-   `apc_dispatch` も空実装なので webview が出ない。未着手のまま C 以降に持ち越し
+   `apc_dispatch` は実装済み（339d95d）
 6. **`wheel.rs` の復活と `buttons.rs` のマウス報告側の移植** — サブプロジェクト C に
    切り出し済み（下記）。B の間はマウス routing は一切繋がっていない
 7. ~~**タイトルコンポーネントと observer**~~ — 実装済み（`bevy_orzma_tty::title::TtyTitle`
@@ -216,8 +215,8 @@ fn clear_selection(_e: On<RequestTtySelectionClear>) {}
   6つの空 observer（`vi_mode.rs` / `vi_motion.rs` / `selection.rs`）の実装、読み取り側3種
   （`selection_to_string` / `selection_type` / `vi_indicator_snapshot`）の実装、
   `SelectionKind` への `Block` / `Semantic` 追加、`ViMotion` の `orzma_vt` への移動
-- **`osc_dispatch` / `apc_dispatch` の穴** — パレット、cwd、ハイパーリンク、クリップボード
-  （OSC 4 / 7 / 8 / 52）、webview を出すための APC
+- **`osc_dispatch` の穴** — パレット、cwd、ハイパーリンク、クリップボード
+  （OSC 4 / 7 / 8 / 52）
 - **wide-char 幅モデル** — 絶対指定の CHA / VPA / HPA、文字編集の ICH / DCH / IL / DL / ECH、
   DSR、DECAWM / DECTCEM
 

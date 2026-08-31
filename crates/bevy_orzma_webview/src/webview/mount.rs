@@ -1,11 +1,11 @@
 //! Webview mount module: `ChildOf` children of a terminal surface that render a
 //! registered view into the terminal's text flow. This module owns the
 //! components, the mount/unmount policy executed by the `Mount` /
-//! `Unmount` arms of `osc::on_apc_webview_signal`, and the
+//! `Unmount` observers in `apc`, and the
 //! `WebviewPlugin` runtime systems that keep `WebviewSize` in
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
-use super::osc::NonInteractive;
+use super::apc::NonInteractive;
 use super::render::preload::build_preload;
 use crate::control_plane::{
     ConnectionWriters, NormalizedChord, OrzmaRegistry, OrzmaSource, PushMsg, WebviewOwner,
@@ -126,12 +126,13 @@ pub(crate) struct WebviewMountContext<'a> {
     pub(crate) rows: u16,
     /// Rect width in terminal cells (validated 1..=400 by `orzma_vt`).
     pub(crate) cols: u16,
-    /// The VT-minted placement id; `None` is a policy rejection (gate 1).
-    pub(crate) placement: Option<PlacementId>,
+    /// The VT-minted placement id. A mount the VT refused never reaches
+    /// here — it arrives as `TtyWebviewMountRejectedSignal` instead.
+    pub(crate) placement: PlacementId,
 }
 
 /// The system params `mount` / `unmount` need, bundled so the
-/// `on_apc_webview_signal` observer gains a single extra parameter.
+/// `on_webview_mount` observer gains a single extra parameter.
 #[derive(SystemParam)]
 pub(crate) struct WebviewParams<'w, 's> {
     commands: Commands<'w, 's>,
@@ -201,11 +202,12 @@ pub(crate) fn resolve_mount(
 }
 
 /// Mounts a registered view as a webview child of the requesting
-/// terminal surface, applying the policy gates in order (each rejection is a
-/// `tracing::debug!` + return): missing placement, unregistered view, duplicate
-/// `view_id` on this terminal, overlay-slot exhaustion.
+/// terminal surface, applying the policy gates in order: a duplicate
+/// `view_id` / `instance_id` on this terminal updates the existing
+/// placement instead of minting a new one; an unregistered or unowned
+/// view and overlay-slot exhaustion are each a `tracing::debug!` + return.
 ///
-/// The parent (`ctx.terminal_surface`, the `TtyApcWebviewSignal` target) is
+/// The parent (`ctx.terminal_surface`, the `TtyWebviewMountSignal` target) is
 /// the owning `OrzmaTerminal` surface entity: both the `OrzmaTtyHandle`
 /// (which emits the APC signal) and the required `TerminalGrid` component
 /// live on that one entity, so the `ChildOf` parent is also the entity
@@ -222,10 +224,7 @@ pub(crate) fn mount(
     dynamic: &OrzmaRegistry,
     ctx: WebviewMountContext<'_>,
 ) {
-    let Some(placement) = ctx.placement else {
-        tracing::debug!(view_id = %ctx.view_id, "apc-webview: mount rejected by the VT, dropping");
-        return;
-    };
+    let placement = ctx.placement;
     let live = live_webview_children(&params.children, &params.views, ctx.terminal_surface);
     if let Some((existing, _)) = live
         .iter()
@@ -667,14 +666,16 @@ fn on_placement_removed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webview::osc::on_apc_webview_signal;
+    use crate::webview::apc::{on_webview_mount, on_webview_unmount};
     use bevy::ecs::system::RunSystemOnce;
     use bevy_cef::prelude::PreloadScripts;
-    use bevy_orzma_tty::prelude::{TtyApcWebviewSignal, TtyWebviewEvictedSignal};
+    use bevy_orzma_tty::prelude::{
+        TtyWebviewEvictedSignal, TtyWebviewMountRejectedSignal, TtyWebviewMountSignal,
+        TtyWebviewUnmountSignal,
+    };
     use orzma_tty_renderer::CellMetrics;
     use orzma_vt::prelude::{
         AnchoredPlacement, GridColumn, GridLine, GridPoint, PlacementId, PlacementSize,
-        WebviewApcVerb,
     };
 
     fn make_test_app() -> App {
@@ -683,7 +684,8 @@ mod tests {
             .init_resource::<OrzmaRegistry>()
             .init_resource::<Assets<Image>>()
             .init_resource::<ConnectionWriters>()
-            .add_observer(on_apc_webview_signal)
+            .add_observer(on_webview_mount)
+            .add_observer(on_webview_unmount)
             .add_observer(on_placement_removed)
             .add_observer(on_webview_evicted);
         app
@@ -730,28 +732,22 @@ mod tests {
         surface
     }
 
-    fn mount(app: &mut App, terminal: Entity, view_id: &str, placement: Option<PlacementId>) {
-        app.world_mut().trigger(TtyApcWebviewSignal {
+    fn mount(app: &mut App, terminal: Entity, view_id: &str, placement: PlacementId) {
+        app.world_mut().trigger(TtyWebviewMountSignal {
             terminal,
-            verb: WebviewApcVerb::Mount {
-                view_id: view_id.into(),
-                rows: 10,
-                cols: 40,
-                instance_id: None,
-            },
+            view_id: view_id.into(),
+            size: PlacementSize { rows: 10, cols: 40 },
+            instance_id: None,
             placement,
         });
         app.world_mut().flush();
     }
 
     fn unmount(app: &mut App, terminal: Entity, view_id: Option<&str>) {
-        app.world_mut().trigger(TtyApcWebviewSignal {
+        app.world_mut().trigger(TtyWebviewUnmountSignal {
             terminal,
-            verb: WebviewApcVerb::Unmount {
-                view_id: view_id.map(str::to_string),
-                instance_id: None,
-            },
-            placement: None,
+            view_id: view_id.map(str::to_string),
+            instance_id: None,
         });
         app.world_mut().flush();
         // NOTE: despawn is deferred; a flush + update applies it.
@@ -839,29 +835,23 @@ mod tests {
         terminal: Entity,
         view_id: &str,
         instance_id: &str,
-        placement: Option<PlacementId>,
+        placement: PlacementId,
     ) {
-        app.world_mut().trigger(TtyApcWebviewSignal {
+        app.world_mut().trigger(TtyWebviewMountSignal {
             terminal,
-            verb: WebviewApcVerb::Mount {
-                view_id: view_id.into(),
-                rows: 10,
-                cols: 40,
-                instance_id: Some(instance_id.into()),
-            },
+            view_id: view_id.into(),
+            size: PlacementSize { rows: 10, cols: 40 },
+            instance_id: Some(instance_id.into()),
             placement,
         });
         app.world_mut().flush();
     }
 
     fn unmount_instance(app: &mut App, terminal: Entity, view_id: &str, instance_id: &str) {
-        app.world_mut().trigger(TtyApcWebviewSignal {
+        app.world_mut().trigger(TtyWebviewUnmountSignal {
             terminal,
-            verb: WebviewApcVerb::Unmount {
-                view_id: Some(view_id.into()),
-                instance_id: Some(instance_id.into()),
-            },
-            placement: None,
+            view_id: Some(view_id.into()),
+            instance_id: Some(instance_id.into()),
         });
         app.world_mut().flush();
         app.update();
@@ -889,7 +879,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
 
-        mount(&mut app, terminal, "dash", Some(PlacementId(1)));
+        mount(&mut app, terminal, "dash", PlacementId(1));
 
         let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 1, "mount must spawn one inline child");
@@ -953,21 +943,18 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
 
-        mount(&mut app, terminal, "dash", Some(PlacementId(1)));
+        mount(&mut app, terminal, "dash", PlacementId(1));
         let before = webview_children_of(&app, terminal);
         assert_eq!(before.len(), 1, "first mount spawns one child");
         let entity = before[0];
         let slot_before = app.world().get::<Webview>(entity).unwrap().slot;
 
-        app.world_mut().trigger(TtyApcWebviewSignal {
+        app.world_mut().trigger(TtyWebviewMountSignal {
             terminal,
-            verb: WebviewApcVerb::Mount {
-                view_id: "dash".into(),
-                rows: 12,
-                cols: 50,
-                instance_id: None,
-            },
-            placement: Some(PlacementId(2)),
+            view_id: "dash".into(),
+            size: PlacementSize { rows: 12, cols: 50 },
+            instance_id: None,
+            placement: PlacementId(2),
         });
         app.world_mut().flush();
 
@@ -1003,12 +990,12 @@ mod tests {
         }
 
         for (i, id) in ids.iter().take(OVERLAY_SLOTS).enumerate() {
-            mount(&mut app, terminal, id, Some(PlacementId(1)));
+            mount(&mut app, terminal, id, PlacementId(1));
             assert_eq!(slot_of(&app, terminal, id), Some(i as u8));
         }
 
         let overflow = &ids[OVERLAY_SLOTS];
-        mount(&mut app, terminal, overflow, Some(PlacementId(1)));
+        mount(&mut app, terminal, overflow, PlacementId(1));
         assert_eq!(
             webview_children_of(&app, terminal).len(),
             OVERLAY_SLOTS,
@@ -1025,8 +1012,8 @@ mod tests {
             register_orzma(&mut app, id, terminal, true);
         }
 
-        mount(&mut app, terminal, "a", Some(PlacementId(1)));
-        mount(&mut app, terminal, "b", Some(PlacementId(1)));
+        mount(&mut app, terminal, "a", PlacementId(1));
+        mount(&mut app, terminal, "b", PlacementId(1));
         unmount(&mut app, terminal, Some("a"));
         assert_eq!(
             webview_children_of(&app, terminal).len(),
@@ -1034,7 +1021,7 @@ mod tests {
             "unmounting one view must despawn exactly its child"
         );
 
-        mount(&mut app, terminal, "c", Some(PlacementId(1)));
+        mount(&mut app, terminal, "c", PlacementId(1));
         assert_eq!(
             slot_of(&app, terminal, "c"),
             Some(0),
@@ -1050,8 +1037,8 @@ mod tests {
         for id in ["a", "b"] {
             register_orzma(&mut app, id, terminal, true);
         }
-        mount(&mut app, terminal, "a", Some(PlacementId(1)));
-        mount(&mut app, terminal, "b", Some(PlacementId(1)));
+        mount(&mut app, terminal, "a", PlacementId(1));
+        mount(&mut app, terminal, "b", PlacementId(1));
         let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 2);
 
@@ -1075,7 +1062,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "hud", terminal, false);
 
-        mount(&mut app, terminal, "hud", Some(PlacementId(1)));
+        mount(&mut app, terminal, "hud", PlacementId(1));
 
         let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 1);
@@ -1085,26 +1072,27 @@ mod tests {
         );
     }
 
-    /// Asserts that a mount whose placement id is `None` spawns no
-    /// child.
+    /// Asserts that a mount the VT refused spawns no child, rather than
+    /// one no frame's placement list will ever address.
     ///
-    /// `None` is the VT's policy rejection, so the decided behavior is
-    /// to drop the mount outright rather than spawn a child no frame
-    /// list will ever address.
-    ///
-    /// Case: the VT rejects a program's mount by policy and the signal
-    /// reaches the GUI with `placement: None`.
+    /// Case: a program mounts past the terminal's placement cap, and the
+    /// refusal reaches the GUI on its own signal.
     #[test]
-    fn mount_without_placement_is_dropped() {
+    fn a_rejected_mount_spawns_no_child() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
 
-        mount(&mut app, terminal, "dash", None);
+        app.world_mut().trigger(TtyWebviewMountRejectedSignal {
+            terminal,
+            view_id: "dash".into(),
+            instance_id: None,
+        });
+        app.world_mut().flush();
 
         assert!(
             webview_children_of(&app, terminal).is_empty(),
-            "a mount without a placement must be dropped"
+            "a mount the VT refused must spawn nothing"
         );
     }
 
@@ -1113,7 +1101,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
 
-        mount(&mut app, terminal, "ghost", Some(PlacementId(1)));
+        mount(&mut app, terminal, "ghost", PlacementId(1));
 
         assert!(
             webview_children_of(&app, terminal).is_empty(),
@@ -1127,8 +1115,8 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
 
-        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
-        mount_instance(&mut app, terminal, "memo", "b", Some(PlacementId(1)));
+        mount_instance(&mut app, terminal, "memo", "a", PlacementId(1));
+        mount_instance(&mut app, terminal, "memo", "b", PlacementId(1));
 
         assert_eq!(
             webview_children_of(&app, terminal).len(),
@@ -1145,8 +1133,8 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
 
-        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
-        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
+        mount_instance(&mut app, terminal, "memo", "a", PlacementId(1));
+        mount_instance(&mut app, terminal, "memo", "a", PlacementId(1));
 
         assert_eq!(
             webview_children_of(&app, terminal).len(),
@@ -1161,8 +1149,8 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
 
-        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
-        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
+        mount(&mut app, terminal, "memo", PlacementId(1));
+        mount_instance(&mut app, terminal, "memo", "a", PlacementId(1));
 
         assert_eq!(
             webview_children_of(&app, terminal).len(),
@@ -1179,8 +1167,8 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
 
-        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
-        mount_instance(&mut app, terminal, "memo", "b", Some(PlacementId(1)));
+        mount_instance(&mut app, terminal, "memo", "a", PlacementId(1));
+        mount_instance(&mut app, terminal, "memo", "b", PlacementId(1));
 
         unmount_instance(&mut app, terminal, "memo", "a");
 
@@ -1200,9 +1188,9 @@ mod tests {
         register_orzma(&mut app, "memo", terminal, true);
         register_orzma(&mut app, "other", terminal, true);
 
-        mount_instance(&mut app, terminal, "memo", "a", Some(PlacementId(1)));
-        mount_instance(&mut app, terminal, "memo", "b", Some(PlacementId(1)));
-        mount(&mut app, terminal, "other", Some(PlacementId(1)));
+        mount_instance(&mut app, terminal, "memo", "a", PlacementId(1));
+        mount_instance(&mut app, terminal, "memo", "b", PlacementId(1));
+        mount(&mut app, terminal, "other", PlacementId(1));
 
         unmount(&mut app, terminal, Some("memo"));
 
@@ -1222,12 +1210,12 @@ mod tests {
 
         let insts: Vec<String> = (0..=OVERLAY_SLOTS).map(|i| format!("i{i}")).collect();
         for inst in insts.iter().take(OVERLAY_SLOTS) {
-            mount_instance(&mut app, terminal, "memo", inst, Some(PlacementId(1)));
+            mount_instance(&mut app, terminal, "memo", inst, PlacementId(1));
         }
         assert_eq!(webview_children_of(&app, terminal).len(), OVERLAY_SLOTS);
 
         let overflow = &insts[OVERLAY_SLOTS];
-        mount_instance(&mut app, terminal, "memo", overflow, Some(PlacementId(1)));
+        mount_instance(&mut app, terminal, "memo", overflow, PlacementId(1));
         assert_eq!(
             webview_children_of(&app, terminal).len(),
             OVERLAY_SLOTS,
@@ -1374,7 +1362,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
 
-        mount(&mut app, terminal, "dash", Some(PlacementId(1)));
+        mount(&mut app, terminal, "dash", PlacementId(1));
         app.world_mut()
             .entity_mut(terminal)
             .insert(grid_with_placements(24, 80, vec![placed(PlacementId(1))]));
@@ -1400,7 +1388,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
-        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+        mount(&mut app, terminal, "memo", PlacementId(1));
 
         app.world_mut()
             .entity_mut(terminal)
@@ -1483,7 +1471,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
-        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+        mount(&mut app, terminal, "memo", PlacementId(1));
 
         app.world_mut()
             .entity_mut(terminal)
@@ -1514,7 +1502,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
-        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+        mount(&mut app, terminal, "memo", PlacementId(1));
         app.world_mut()
             .entity_mut(terminal)
             .insert(grid_with_placements(
@@ -1544,7 +1532,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
-        mount(&mut app, terminal, "dash", Some(PlacementId(1)));
+        mount(&mut app, terminal, "dash", PlacementId(1));
         let child = webview_children_of(&app, terminal)[0];
         assert_eq!(
             app.world().get::<WebviewSize>(child),
@@ -1593,7 +1581,7 @@ mod tests {
         );
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "dash", terminal, true);
-        mount(&mut app, terminal, "dash", Some(PlacementId(1)));
+        mount(&mut app, terminal, "dash", PlacementId(1));
 
         app.update();
         assert!(
@@ -1824,7 +1812,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma_dir(&mut app, "DYN1", terminal);
 
-        mount(&mut app, terminal, "DYN1", Some(PlacementId(1)));
+        mount(&mut app, terminal, "DYN1", PlacementId(1));
 
         let children = webview_children_of(&app, terminal);
         assert_eq!(
@@ -1913,7 +1901,7 @@ mod tests {
             },
         );
 
-        mount(&mut app, terminal, "HANDLE", Some(PlacementId(1)));
+        mount(&mut app, terminal, "HANDLE", PlacementId(1));
 
         let children = webview_children_of(&app, terminal);
         assert_eq!(
@@ -1981,7 +1969,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_url(&mut app, "disp", terminal, "https://example.com", false);
 
-        mount(&mut app, terminal, "disp", Some(PlacementId(1)));
+        mount(&mut app, terminal, "disp", PlacementId(1));
 
         let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 1);
@@ -2019,7 +2007,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_url(&mut app, "appv", terminal, "https://app.example.com", true);
 
-        mount(&mut app, terminal, "appv", Some(PlacementId(1)));
+        mount(&mut app, terminal, "appv", PlacementId(1));
 
         let child = webview_children_of(&app, terminal)[0];
         let preload = app
@@ -2240,7 +2228,7 @@ mod tests {
             },
         );
 
-        mount(&mut app, terminal, "h", Some(PlacementId(1)));
+        mount(&mut app, terminal, "h", PlacementId(1));
 
         let child = webview_children_of(&app, terminal)[0];
         let preload = app
@@ -2276,7 +2264,7 @@ mod tests {
             },
         );
 
-        mount(&mut app, terminal, "u", Some(PlacementId(1)));
+        mount(&mut app, terminal, "u", PlacementId(1));
 
         let child = webview_children_of(&app, terminal)[0];
         let preload = app
@@ -2311,7 +2299,7 @@ mod tests {
             },
         );
 
-        mount(&mut app, terminal, "disp", Some(PlacementId(1)));
+        mount(&mut app, terminal, "disp", PlacementId(1));
 
         let child = webview_children_of(&app, terminal)[0];
         let preload = app
@@ -2339,7 +2327,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
-        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+        mount(&mut app, terminal, "memo", PlacementId(1));
         app.world_mut()
             .entity_mut(terminal)
             .insert(grid_with_placements(
@@ -2373,7 +2361,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
-        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
+        mount(&mut app, terminal, "memo", PlacementId(1));
         app.world_mut()
             .entity_mut(terminal)
             .insert(grid_with_placements(24, 80, vec![]));
@@ -2430,7 +2418,7 @@ mod tests {
         let mut first = make_test_app();
         let mounted_first = spawn_terminal(&mut first);
         register_orzma(&mut first, "memo", mounted_first, true);
-        mount(&mut first, mounted_first, "memo", Some(PlacementId(1)));
+        mount(&mut first, mounted_first, "memo", PlacementId(1));
         first
             .world_mut()
             .entity_mut(mounted_first)
@@ -2455,7 +2443,7 @@ mod tests {
                 .get::<TerminalOverlays>(framed_first)
                 .is_none()
         );
-        mount(&mut second, framed_first, "memo", Some(PlacementId(1)));
+        mount(&mut second, framed_first, "memo", PlacementId(1));
         run_projection(&mut second);
         let rect_b = second
             .world()
@@ -2476,8 +2464,8 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
-        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
-        mount(&mut app, terminal, "memo", Some(PlacementId(2)));
+        mount(&mut app, terminal, "memo", PlacementId(1));
+        mount(&mut app, terminal, "memo", PlacementId(2));
         assert_eq!(webview_children_of(&app, terminal).len(), 1);
         app.world_mut()
             .entity_mut(terminal)
@@ -2512,8 +2500,8 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_orzma(&mut app, "memo", terminal, true);
         register_orzma(&mut app, "clock", terminal, true);
-        mount(&mut app, terminal, "memo", Some(PlacementId(1)));
-        mount(&mut app, terminal, "clock", Some(PlacementId(2)));
+        mount(&mut app, terminal, "memo", PlacementId(1));
+        mount(&mut app, terminal, "clock", PlacementId(2));
         assert_eq!(webview_children_of(&app, terminal).len(), 2);
         app.world_mut().trigger(TtyWebviewEvictedSignal {
             terminal,

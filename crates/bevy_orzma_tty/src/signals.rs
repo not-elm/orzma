@@ -1,8 +1,9 @@
 //! Outbound `Tty*Signal` `EntityEvent` types for terminal entities,
 //! drained from the VT (`TtyBellSignal`, `TtyTitleChangedSignal`,
 //! `TtyTitleResetSignal`, `TtyClipboardStoreSignal`, `TtyCwdChangedSignal`,
-//! `TtyApcWebviewSignal`, `TtyWebviewEvictedSignal`, `TtyModeChangedSignal`, `TtyChildExitSignal`,
-//! `TtyFrameSignal`).
+//! `TtyWebviewMountSignal`, `TtyWebviewMountRejectedSignal`,
+//! `TtyWebviewUnmountSignal`, `TtyWebviewEvictedSignal`,
+//! `TtyModeChangedSignal`, `TtyChildExitSignal`, `TtyFrameSignal`).
 //! Inbound requests fired by the host UI live in `requests.rs`.
 
 use crate::OrzmaTtyHandle;
@@ -72,15 +73,42 @@ pub struct TtyCwdChangedSignal {
     pub path: PathBuf,
 }
 
-/// Fired for an APC webview mount/unmount request from the PTY.
+/// Fired for a webview the PTY mounted inline and the VT registered.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TtyApcWebviewSignal {
+pub struct TtyWebviewMountSignal {
     #[event_target]
     pub terminal: Entity,
-    /// The mount/unmount verb parsed from the APC payload.
-    pub verb: WebviewApcVerb,
-    /// The VT-minted placement id; `Some` only for an accepted `Mount`.
-    pub placement: Option<PlacementId>,
+    /// The registered view's id.
+    pub view_id: String,
+    /// The cell rectangle the mount reserved.
+    pub size: PlacementSize,
+    /// The client-assigned instance id; `None` is the default instance.
+    pub instance_id: Option<String>,
+    /// The id the VT minted for this placement.
+    pub placement: PlacementId,
+}
+
+/// Fired for a mount the VT refused because the placement cap was full;
+/// nothing was registered, so consumers only report it.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct TtyWebviewMountRejectedSignal {
+    #[event_target]
+    pub terminal: Entity,
+    /// The view the refused mount named.
+    pub view_id: String,
+    /// The instance the refused mount named.
+    pub instance_id: Option<String>,
+}
+
+/// Fired for webview placements the PTY unmounted.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct TtyWebviewUnmountSignal {
+    #[event_target]
+    pub terminal: Entity,
+    /// The view to unmount; `None` unmounts every view.
+    pub view_id: Option<String>,
+    /// The instance to unmount; `None` unmounts every instance.
+    pub instance_id: Option<String>,
 }
 
 /// Fired when the VT evicts placements on its own authority (history
@@ -142,10 +170,33 @@ fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signal: VtSignal
             terminal,
             path: path_buf,
         }),
-        VtSignal::WebviewApc { verb, placement } => commands.trigger(TtyApcWebviewSignal {
-            terminal,
-            verb,
+        VtSignal::WebviewMount {
+            view_id,
+            size,
+            instance_id,
             placement,
+        } => commands.trigger(TtyWebviewMountSignal {
+            terminal,
+            view_id,
+            size,
+            instance_id,
+            placement,
+        }),
+        VtSignal::WebviewMountRejected {
+            view_id,
+            instance_id,
+        } => commands.trigger(TtyWebviewMountRejectedSignal {
+            terminal,
+            view_id,
+            instance_id,
+        }),
+        VtSignal::WebviewUnmount {
+            view_id,
+            instance_id,
+        } => commands.trigger(TtyWebviewUnmountSignal {
+            terminal,
+            view_id,
+            instance_id,
         }),
         VtSignal::WebviewEvicted { placements } => commands.trigger(TtyWebviewEvictedSignal {
             terminal,

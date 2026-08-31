@@ -5,8 +5,8 @@
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, NavAction, RegisterKind, ServerMsg};
+use crate::webview::apc::NonInteractive;
 use crate::webview::mount::Webview;
-use crate::webview::osc::NonInteractive;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
