@@ -150,7 +150,7 @@ pub(crate) enum ServerMsg {
     Ok {
         /// Always `true`.
         ok: bool,
-        /// The opaque handle to mount via `OSC mount;<handle>`.
+        /// The opaque handle to mount via `APC Omount;v=<handle>`.
         handle: String,
     },
     /// A rejected request.
