@@ -373,7 +373,7 @@ fn event_loop(
                 f,
                 &mut orzma.frame(),
                 &session.state,
-                &view.id(),
+                &view.instance_id(),
                 &session.file_name,
                 session.live,
                 percent,

@@ -25,7 +25,7 @@ pub(crate) fn draw(
     frame: &mut Frame<'_>,
     placements: &mut FramePlacements,
     app: &App,
-    handle_id: &str,
+    instance_id: &str,
     file_name: &str,
     live: LiveStatus,
     scroll_percent: u16,
@@ -43,7 +43,7 @@ pub(crate) fn draw(
         .split(frame.area());
 
     draw_status(frame, vchunks[0], file_name, live, scroll_percent, flash);
-    draw_body(frame, placements, vchunks[1], app, handle_id);
+    draw_body(frame, placements, vchunks[1], app, instance_id);
     if search_open {
         draw_search(frame, vchunks[2], app, search);
     }
@@ -77,7 +77,7 @@ fn draw_body(
     placements: &mut FramePlacements,
     area: Rect,
     app: &App,
-    handle_id: &str,
+    instance_id: &str,
 ) {
     let webview_area = if app.outline_open() {
         let cols = Layout::default()
@@ -89,7 +89,7 @@ fn draw_body(
     } else {
         area
     };
-    frame.render_stateful_widget(WebviewWidget::new(handle_id), webview_area, placements);
+    frame.render_stateful_widget(WebviewWidget::new(instance_id), webview_area, placements);
 }
 
 fn draw_outline(frame: &mut Frame<'_>, area: Rect, app: &App) {
