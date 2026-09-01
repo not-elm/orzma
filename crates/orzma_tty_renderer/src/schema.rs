@@ -9,6 +9,6 @@ pub use grid::*;
 pub use hover::*;
 pub use orzma_vt::prelude::{
     AnchoredPlacement, CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, GridColumn,
-    GridLine, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri, Palette, PlacementId, PlacementSize,
+    GridLine, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri, InstanceId, Palette, PlacementSize,
     Rgb, Row, Run, SelectionGeometry, SelectionKind, SelectionRange, Style, ViCursor, is_allowed,
 };

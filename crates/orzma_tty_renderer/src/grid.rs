@@ -54,7 +54,7 @@ fn apply_frame(signal: On<TtyFrameSignal>, mut terminals: Query<&mut TerminalGri
 mod tests {
     use super::*;
     use crate::schema::{
-        AnchoredPlacement, DisplayOffset, GridColumn, GridLine, GridPoint, PlacementId,
+        AnchoredPlacement, DisplayOffset, GridColumn, GridLine, GridPoint, InstanceId,
         PlacementSize, quiet_frame,
     };
     use bevy_orzma_tty::prelude::OrzmaTtyPlugin;
@@ -135,7 +135,7 @@ mod tests {
     fn a_frame_delivers_its_placements() {
         let (mut app, terminal) = app_with_grid();
         let placed = AnchoredPlacement {
-            id: PlacementId(1),
+            id: InstanceId(1),
             point: GridPoint {
                 line: GridLine(2),
                 column: GridColumn(3),
