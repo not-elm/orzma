@@ -11,17 +11,22 @@ use ratatui::widgets::{Clear, StatefulWidget, Widget};
 /// into the frame the [`crate::OrzmaBackend`] emits on the next draw. Optionally
 /// paints a fallback under-layer (shown on non-macOS or before the page composites).
 pub struct WebviewWidget<W = WebviewDefaultPlaceholder> {
-    handle: String,
+    instance: String,
     fallback: W,
     focused: bool,
     on_compositing_change: Option<Box<dyn Fn(bool) + 'static>>,
 }
 
 impl WebviewWidget<WebviewDefaultPlaceholder> {
-    /// Creates a widget for the given webview handle id.
-    pub fn new(handle: impl Into<String>) -> Self {
+    /// Creates a widget for the given placement instance id, as returned by
+    /// [`crate::WebviewHandle::instance_id`] or [`crate::WebviewInstance::id`].
+    ///
+    /// A registration handle is not an instance id and will never mount; the
+    /// [`crate::HandleId`] that [`crate::WebviewHandle::handle_id`] returns is
+    /// deliberately not accepted here.
+    pub fn new(instance: impl Into<String>) -> Self {
         Self {
-            handle: handle.into(),
+            instance: instance.into(),
             fallback: WebviewDefaultPlaceholder,
             focused: false,
             on_compositing_change: None,
@@ -33,7 +38,7 @@ impl<W> WebviewWidget<W> {
     /// Sets a fallback widget painted into the cells under the webview.
     pub fn fallback<W2: Widget>(self, widget: W2) -> WebviewWidget<W2> {
         WebviewWidget {
-            handle: self.handle,
+            instance: self.instance,
             fallback: widget,
             focused: self.focused,
             on_compositing_change: self.on_compositing_change,
@@ -41,7 +46,7 @@ impl<W> WebviewWidget<W> {
     }
 
     /// Registers a callback invoked during [`StatefulWidget::render`] when a
-    /// compositing-state change for this handle is pending in the frame state.
+    /// compositing-state change for this instance is pending in the frame state.
     ///
     /// The callback receives `true` when the webview starts compositing (the
     /// page is live and painting) and `false` when it stops.
@@ -78,11 +83,11 @@ impl<W: Widget> StatefulWidget for WebviewWidget<W> {
         }
         Clear.render(area, buf);
         self.fallback.render(area, buf);
-        state.record(self.handle.clone(), area);
+        state.record(self.instance.clone(), area);
         if self.focused {
-            state.set_focused(self.handle.clone());
+            state.set_focused(self.instance.clone());
         }
-        if let Some(active) = state.take_compositing(&self.handle)
+        if let Some(active) = state.take_compositing(&self.instance)
             && let Some(cb) = &self.on_compositing_change
         {
             cb(active);
@@ -107,6 +112,9 @@ mod tests {
     use ratatui::text::Text;
     use ratatui::widgets::StatefulWidget;
 
+    const INSTANCE: &str = "3f5a9c02d1e84b7690ab3cde12f45678";
+    const OTHER_INSTANCE: &str = "81b4e77c05a3492fd6180e29ba735fc1";
+
     #[test]
     fn records_placement_and_blanks_cells() {
         let area = Rect {
@@ -118,10 +126,10 @@ mod tests {
         let mut buf = Buffer::filled(Rect::new(0, 0, 10, 5), ratatui::buffer::Cell::new("Z"));
         let mut state = FramePlacements::default();
 
-        WebviewWidget::new("view-x").render(area, &mut buf, &mut state);
+        WebviewWidget::new(INSTANCE).render(area, &mut buf, &mut state);
 
         assert_eq!(state.placements_for_test().len(), 1);
-        assert_eq!(state.placements_for_test()[0].handle, "view-x");
+        assert_eq!(state.placements_for_test()[0].instance, INSTANCE);
         assert_eq!(buf[(1, 1)].symbol(), " ");
     }
 
@@ -136,7 +144,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let mut state = FramePlacements::default();
 
-        WebviewWidget::new("v")
+        WebviewWidget::new(INSTANCE)
             .fallback(Text::raw("hi"))
             .render(area, &mut buf, &mut state);
 
@@ -153,7 +161,7 @@ mod tests {
         };
         let mut buf = Buffer::empty(area);
         let mut state = FramePlacements::default();
-        WebviewWidget::new("v")
+        WebviewWidget::new(INSTANCE)
             .focused(true)
             .render(area, &mut buf, &mut state);
         assert_eq!(state.placements_for_test().len(), 1);
@@ -169,10 +177,10 @@ mod tests {
         };
         let mut buf = Buffer::empty(area);
         let mut state = FramePlacements::default();
-        WebviewWidget::new("v")
+        WebviewWidget::new(INSTANCE)
             .focused(true)
             .render(area, &mut buf, &mut state);
-        assert_eq!(state.focused_for_test(), Some("v"));
+        assert_eq!(state.focused_for_test(), Some(INSTANCE));
     }
 
     #[test]
@@ -185,7 +193,7 @@ mod tests {
         };
         let mut buf = Buffer::empty(area);
         let mut state = FramePlacements::default();
-        WebviewWidget::new("v").render(area, &mut buf, &mut state);
+        WebviewWidget::new(INSTANCE).render(area, &mut buf, &mut state);
         assert_eq!(state.focused_for_test(), None);
     }
 
@@ -201,13 +209,13 @@ mod tests {
         };
         let mut buf = Buffer::empty(area);
         let mut state = FramePlacements::default();
-        state.pending_compositing.insert("v".into(), true);
+        state.pending_compositing.insert(INSTANCE.into(), true);
 
         let fired = Rc::new(Cell::new(false));
         let fired_val = Rc::new(Cell::new(false));
         let fired2 = fired.clone();
         let fired_val2 = fired_val.clone();
-        WebviewWidget::new("v")
+        WebviewWidget::new(INSTANCE)
             .on_compositing_change(move |active| {
                 fired2.set(true);
                 fired_val2.set(active);
@@ -232,13 +240,49 @@ mod tests {
 
         let fired = Rc::new(std::cell::Cell::new(false));
         let fired2 = fired.clone();
-        WebviewWidget::new("v")
+        WebviewWidget::new(INSTANCE)
             .on_compositing_change(move |_| fired2.set(true))
             .render(area, &mut buf, &mut state);
 
         assert!(
             !fired.get(),
             "callback must not fire when no pending compositing"
+        );
+    }
+
+    /// Asserts that a widget consumes only its own instance's pending
+    /// compositing state, leaving another placement's buffered for the widget
+    /// that renders it.
+    ///
+    /// Case: an app shows one registration in two panes, and only the second
+    /// pane's page has started painting.
+    #[test]
+    fn on_compositing_change_ignores_another_instances_pending_state() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 1,
+        };
+        let mut buf = Buffer::empty(area);
+        let mut state = FramePlacements::default();
+        state
+            .pending_compositing
+            .insert(OTHER_INSTANCE.into(), true);
+
+        let fired = Rc::new(Cell::new(false));
+        let fired2 = fired.clone();
+        WebviewWidget::new(INSTANCE)
+            .on_compositing_change(move |_| fired2.set(true))
+            .render(area, &mut buf, &mut state);
+
+        assert!(!fired.get(), "another placement's state must not fire here");
+        assert_eq!(
+            state.pending_compositing_for_test().get(OTHER_INSTANCE),
+            Some(&true),
+            "the other placement's state must stay buffered for its own widget"
         );
     }
 
@@ -254,11 +298,11 @@ mod tests {
         };
         let mut buf = Buffer::empty(area);
         let mut state = FramePlacements::default();
-        state.pending_compositing.insert("v".into(), false);
+        state.pending_compositing.insert(INSTANCE.into(), false);
 
         let fired_val = Rc::new(Cell::new(true));
         let fired_val2 = fired_val.clone();
-        WebviewWidget::new("v")
+        WebviewWidget::new(INSTANCE)
             .on_compositing_change(move |active| {
                 fired_val2.set(active);
             })
@@ -277,9 +321,9 @@ mod tests {
         };
         let mut buf = Buffer::empty(area);
         let mut state = FramePlacements::default();
-        state.pending_compositing.insert("v".into(), true);
+        state.pending_compositing.insert(INSTANCE.into(), true);
 
-        WebviewWidget::new("v")
+        WebviewWidget::new(INSTANCE)
             .on_compositing_change(move |_| {})
             .render(area, &mut buf, &mut state);
 
@@ -302,11 +346,11 @@ mod tests {
         };
         let mut buf = Buffer::empty(area);
         let mut state = FramePlacements::default();
-        state.pending_compositing.insert("v".into(), true);
+        state.pending_compositing.insert(INSTANCE.into(), true);
 
         let fired = Rc::new(Cell::new(false));
         let fired2 = fired.clone();
-        WebviewWidget::new("v")
+        WebviewWidget::new(INSTANCE)
             .on_compositing_change(move |_| fired2.set(true))
             .fallback(Text::raw("x"))
             .render(area, &mut buf, &mut state);

@@ -1,7 +1,7 @@
 //! The Orzma session: socket connection, reader thread, flush.
 
 use crate::error::{OrzmaError, OrzmaResult};
-use crate::escape::{clamp_dims, cursor_to, mount, unmount, valid_handle};
+use crate::escape::{clamp_dims, cursor_to, mount, unmount, valid_instance};
 use crate::events::{EventQueues, EventRegistry};
 use crate::handler::BoxedHandler;
 use crate::protocol::{ClientMsg, IncomingCall, IncomingEvent, RegisterKind, RegisterReply};
@@ -15,14 +15,17 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
-/// One webview's requested position this frame.
+/// One placement's requested position this frame.
 #[derive(Debug, Clone)]
 pub(crate) struct Placement {
-    pub(crate) handle: String,
-    pub(crate) area: Rect,
+    pub instance: String,
+    pub area: Rect,
 }
 
 /// The per-frame collector handed to the [`crate::WebviewWidget`] as its state.
+///
+/// Everything it holds is keyed by placement instance, so two placements of one
+/// registration are two independent entries rather than one shared key.
 #[derive(Debug, Default)]
 pub struct FramePlacements {
     placements: Vec<Placement>,
@@ -31,25 +34,25 @@ pub struct FramePlacements {
 }
 
 impl FramePlacements {
-    pub(crate) fn record(&mut self, handle: String, area: Rect) {
-        self.placements.push(Placement { handle, area });
+    pub(crate) fn record(&mut self, instance: String, area: Rect) {
+        self.placements.push(Placement { instance, area });
     }
 
-    /// Marks `handle` focused for this frame. Last writer wins; a debug build
+    /// Marks `instance` focused for this frame. Last writer wins; a debug build
     /// trips an assertion if more than one widget claims focus in a single frame
-    /// (the app must focus at most one webview at a time).
-    pub(crate) fn set_focused(&mut self, handle: String) {
+    /// (the app must focus at most one placement at a time).
+    pub(crate) fn set_focused(&mut self, instance: String) {
         debug_assert!(
             self.focused.is_none(),
-            "multiple webviews marked focused in one frame (last wins): had {:?}, now {handle:?}",
+            "multiple webviews marked focused in one frame (last wins): had {:?}, now {instance:?}",
             self.focused
         );
-        self.focused = Some(handle);
+        self.focused = Some(instance);
     }
 
-    /// Removes and returns the buffered compositing state for `handle`, if any.
-    pub(crate) fn take_compositing(&mut self, handle: &str) -> Option<bool> {
-        self.pending_compositing.remove(handle)
+    /// Removes and returns the buffered compositing state for `instance`, if any.
+    pub(crate) fn take_compositing(&mut self, instance: &str) -> Option<bool> {
+        self.pending_compositing.remove(instance)
     }
 
     #[cfg(test)]
@@ -68,11 +71,11 @@ impl FramePlacements {
     }
 }
 
-/// Last-emitted geometry per handle, for diff-driven flush.
+/// Last-emitted geometry per instance, for diff-driven flush.
 #[derive(Debug, Default)]
 pub(crate) struct FlushState {
     #[cfg(test)]
-    pub(crate) last: HashMap<String, Rect>,
+    pub last: HashMap<String, Rect>,
     #[cfg(not(test))]
     last: HashMap<String, Rect>,
     last_focused: Option<String>,
@@ -82,7 +85,7 @@ impl FlushState {
     /// Emits this frame's geometry (mount/unmount APC verbs) to `out`
     /// and, when focus changed since the last frame, the control-plane
     /// focus op to `socket`.
-    pub(crate) fn emit_frame(
+    pub fn emit_frame(
         &mut self,
         out: &mut impl Write,
         socket: &SharedWriter,
@@ -99,7 +102,7 @@ impl FlushState {
         flush_focus(&mut *w, &mut self.last_focused, &frame.focused)
     }
 
-    pub(crate) fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.last.clear();
         self.last_focused = None;
     }
@@ -351,8 +354,14 @@ fn connect_sock(sock: &str) -> OrzmaResult<UnixStream> {
     }
 }
 
-/// Emits CUP + mount for new/changed placements and unmount for vanished
-/// handles, updating `state` to the new frame. Degenerate rects are skipped.
+/// Emits CUP + mount for new and moved placements, and unmount for instances
+/// that vanished, updating `state` to the new frame.
+///
+/// A placement whose rect is degenerate, or whose id is not a minted instance,
+/// is skipped and logged rather than propagated as an error: a single bad
+/// placement must not abort the flush, which would also desync `state` for
+/// every placement behind it. Such an id can never mount, so the log is the
+/// only trace the caller would otherwise get.
 fn flush_placements(
     out: &mut impl Write,
     state: &mut FlushState,
@@ -360,11 +369,11 @@ fn flush_placements(
 ) -> OrzmaResult<()> {
     let mut current: HashMap<String, Rect> = HashMap::new();
     for p in placements {
-        // Skip degenerate rects and invalid handles so a single bad placement
-        // can't abort the whole flush (which would also desync flush state for
-        // every later placement). An invalid handle never came from a minted
-        // WebviewHandle, so it can never mount.
-        if p.area.width == 0 || p.area.height == 0 || !valid_handle(&p.handle) {
+        if p.area.width == 0 || p.area.height == 0 || !valid_instance(&p.instance) {
+            tracing::debug!(
+                instance = %p.instance,
+                "skipping a placement with a degenerate area or an unusable instance id"
+            );
             continue;
         }
         let (rows, cols) = clamp_dims(p.area.height, p.area.width);
@@ -374,15 +383,15 @@ fn flush_placements(
             width: cols,
             height: rows,
         };
-        current.insert(p.handle.clone(), key);
-        if state.last.get(&p.handle) != Some(&key) {
-            let seq = mount(&p.handle, rows, cols)?;
+        current.insert(p.instance.clone(), key);
+        if state.last.get(&p.instance) != Some(&key) {
+            let seq = mount(&p.instance, rows, cols)?;
             write!(out, "{}{}", cursor_to(p.area.y, p.area.x), seq)?;
         }
     }
-    for handle in state.last.keys() {
-        if !current.contains_key(handle) {
-            write!(out, "{}", unmount(handle))?;
+    for instance in state.last.keys() {
+        if !current.contains_key(instance) {
+            write!(out, "{}", unmount(instance))?;
         }
     }
     out.flush()?;
@@ -390,9 +399,10 @@ fn flush_placements(
     Ok(())
 }
 
-/// Emits the control-plane focus op (`ClientMsg::Focus`) when the focused handle
-/// changed from the last flush. `Some(h)` focuses handle `h`; `None` blurs. No
-/// write when unchanged (diff-driven, like geometry in `flush_placements`).
+/// Emits the control-plane focus op (`ClientMsg::Focus`) when the focused
+/// instance changed from the last flush. `Some(i)` focuses placement `i`;
+/// `None` blurs. No write when unchanged (diff-driven, like geometry in
+/// `flush_placements`).
 fn flush_focus(
     out: &mut impl Write,
     last_focused: &mut Option<String>,
@@ -402,8 +412,7 @@ fn flush_focus(
         return Ok(());
     }
     let line = serde_json::to_string(&ClientMsg::Focus {
-        handle: focused.clone(),
-        instance: None,
+        instance: focused.clone(),
     })?;
     writeln!(out, "{line}")?;
     out.flush()?;
@@ -441,11 +450,11 @@ fn spawn_reader(
                 }
             } else if op == "compositing" {
                 if let Some(v) = parsed.as_ref()
-                    && let Some(handle) = v["handle"].as_str()
+                    && let Some(instance) = v["instance"].as_str()
                     && let Some(active) = v["active"].as_bool()
                     && let Ok(mut map) = pending_compositing.lock()
                 {
-                    map.insert(handle.to_owned(), active);
+                    map.insert(instance.to_owned(), active);
                 }
             } else if op == "event" {
                 if let Ok(ev) = serde_json::from_str::<IncomingEvent>(trimmed) {
@@ -673,6 +682,9 @@ mod tests {
     use super::*;
     use ratatui::layout::Rect;
 
+    const INSTANCE_A: &str = "3f5a9c02d1e84b7690ab3cde12f45678";
+    const INSTANCE_B: &str = "81b4e77c05a3492fd6180e29ba735fc1";
+
     fn rect(x: u16, y: u16, w: u16, h: u16) -> Rect {
         Rect {
             x,
@@ -680,6 +692,68 @@ mod tests {
             width: w,
             height: h,
         }
+    }
+
+    /// Asserts that two instances of one registration recorded in the same
+    /// frame each get their own mount, rather than the later one replacing
+    /// the earlier.
+    ///
+    /// Case: an app shows the same view in a split, side by side.
+    #[test]
+    fn two_instances_of_one_registration_each_mount() {
+        let a = INSTANCE_A;
+        let b = INSTANCE_B;
+        let mut state = FlushState::default();
+        let mut frame = FramePlacements::default();
+        frame.record(a.into(), rect(0, 0, 10, 5));
+        frame.record(b.into(), rect(0, 6, 10, 5));
+
+        let mut out = Vec::new();
+        flush_placements(&mut out, &mut state, frame.placements_for_test()).unwrap();
+        let written = String::from_utf8(out).unwrap();
+        assert!(written.contains(&format!("n={a}")));
+        assert!(written.contains(&format!("n={b}")));
+        assert_eq!(state.last.len(), 2);
+    }
+
+    /// Asserts that only the instance whose rect moved is re-mounted.
+    ///
+    /// Case: a split is dragged, resizing one pane and leaving the other.
+    #[test]
+    fn only_the_moved_instance_is_remounted() {
+        let a = INSTANCE_A;
+        let b = INSTANCE_B;
+        let mut state = FlushState::default();
+        let first = vec![
+            Placement {
+                instance: a.into(),
+                area: rect(0, 0, 10, 5),
+            },
+            Placement {
+                instance: b.into(),
+                area: rect(0, 6, 10, 5),
+            },
+        ];
+        flush_placements(&mut Vec::new(), &mut state, &first).unwrap();
+
+        let second = vec![
+            Placement {
+                instance: a.into(),
+                area: rect(0, 0, 10, 5),
+            },
+            Placement {
+                instance: b.into(),
+                area: rect(0, 6, 10, 8),
+            },
+        ];
+        let mut out = Vec::new();
+        flush_placements(&mut out, &mut state, &second).unwrap();
+        let written = String::from_utf8(out).unwrap();
+        assert!(
+            !written.contains(&format!("n={a}")),
+            "the unchanged instance is not re-mounted"
+        );
+        assert!(written.contains(&format!("n={b}")));
     }
 
     #[test]
@@ -695,19 +769,24 @@ mod tests {
         );
     }
 
+    /// Asserts that a placement is mounted at its cursor position when new or
+    /// moved, and emits nothing on a frame where it did not move.
+    ///
+    /// Case: an app draws the same webview pane for several frames, then the
+    /// user widens the window.
     #[test]
     fn flush_emits_mount_then_skips_unchanged() {
-        let mut state = FlushState::default();
         let mut placements = vec![Placement {
-            handle: "h1".into(),
+            instance: INSTANCE_A.into(),
             area: rect(2, 3, 48, 12),
         }];
+        let mut state = FlushState::default();
 
         let mut buf = Vec::new();
         flush_placements(&mut buf, &mut state, &placements).unwrap();
         let first = String::from_utf8(buf).unwrap();
         assert!(first.contains("\x1b[4;3H"));
-        assert!(first.contains("Omount;v=h1,r=12,c=48"));
+        assert!(first.contains(&format!("Omount;n={INSTANCE_A},r=12,c=48")));
 
         let mut buf2 = Vec::new();
         flush_placements(&mut buf2, &mut state, &placements).unwrap();
@@ -722,34 +801,64 @@ mod tests {
         assert!(
             String::from_utf8(buf3)
                 .unwrap()
-                .contains("Omount;v=h1,r=12,c=50")
+                .contains(&format!("Omount;n={INSTANCE_A},r=12,c=50"))
         );
     }
 
+    /// Asserts that an instance drawn last frame but not this one is unmounted.
+    ///
+    /// Case: the user closes the pane that held the only placement of a view.
     #[test]
-    fn flush_unmounts_vanished_handle() {
+    fn flush_unmounts_vanished_instance() {
         let mut state = FlushState::default();
         let placements = vec![Placement {
-            handle: "h1".into(),
+            instance: INSTANCE_A.into(),
             area: rect(0, 0, 10, 5),
         }];
         flush_placements(&mut Vec::new(), &mut state, &placements).unwrap();
 
         let mut buf = Vec::new();
         flush_placements(&mut buf, &mut state, &[]).unwrap();
-        assert!(String::from_utf8(buf).unwrap().contains("Ounmount;v=h1"));
+        assert!(
+            String::from_utf8(buf)
+                .unwrap()
+                .contains(&format!("Ounmount;n={INSTANCE_A}"))
+        );
     }
 
+    /// Asserts that a zero-width area is skipped even when the instance is a
+    /// well-formed one, so the area gate alone decides.
+    ///
+    /// Case: a layout collapses a pane to nothing while its widget still
+    /// renders.
     #[test]
     fn flush_skips_degenerate_area() {
         let mut state = FlushState::default();
         let placements = vec![Placement {
-            handle: "h1".into(),
+            instance: INSTANCE_A.into(),
             area: rect(0, 0, 0, 5),
         }];
         let mut buf = Vec::new();
         flush_placements(&mut buf, &mut state, &placements).unwrap();
         assert!(String::from_utf8(buf).unwrap().is_empty());
+    }
+
+    /// Asserts that an id which is not a minted instance is skipped rather
+    /// than mounted or propagated as an error.
+    ///
+    /// Case: a caller passes a registration handle where the widget wants an
+    /// instance id.
+    #[test]
+    fn flush_skips_an_id_that_is_not_an_instance() {
+        let mut state = FlushState::default();
+        let placements = vec![Placement {
+            instance: "nf2k7q5w3x3m5a6b2c4d6e7f".into(),
+            area: rect(0, 0, 10, 5),
+        }];
+        let mut buf = Vec::new();
+        flush_placements(&mut buf, &mut state, &placements).unwrap();
+        assert!(String::from_utf8(buf).unwrap().is_empty());
+        assert!(state.last.is_empty());
     }
 
     #[test]
@@ -833,6 +942,10 @@ mod tests {
         }
     }
 
+    /// Asserts that a compositing push is buffered under the instance it
+    /// names, not the handle it also carries.
+    ///
+    /// Case: one of two placements of a registration starts painting.
     #[test]
     fn reader_thread_inserts_compositing_into_shared_map() {
         use std::os::unix::net::UnixListener;
@@ -864,7 +977,7 @@ mod tests {
         let mut server = server_conn;
         writeln!(
             server,
-            r#"{{"op":"compositing","handle":"h1","active":true}}"#
+            r#"{{"op":"compositing","handle":"h1","instance":"{INSTANCE_A}","active":true}}"#
         )
         .unwrap();
         server.flush().unwrap();
@@ -872,9 +985,13 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         let map = pending_compositing.lock().unwrap();
-        assert_eq!(map.get("h1"), Some(&true));
+        assert_eq!(map.get(INSTANCE_A), Some(&true));
     }
 
+    /// Asserts that a later push for the same instance replaces the buffered
+    /// state rather than being ignored.
+    ///
+    /// Case: a placement is unmounted after having composited.
     #[test]
     fn reader_thread_updates_compositing_to_false() {
         use std::os::unix::net::UnixListener;
@@ -906,7 +1023,7 @@ mod tests {
         let mut server = server_conn;
         writeln!(
             server,
-            r#"{{"op":"compositing","handle":"h1","active":false}}"#
+            r#"{{"op":"compositing","handle":"h1","instance":"{INSTANCE_A}","active":false}}"#
         )
         .unwrap();
         server.flush().unwrap();
@@ -914,7 +1031,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         let map = pending_compositing.lock().unwrap();
-        assert_eq!(map.get("h1"), Some(&false));
+        assert_eq!(map.get(INSTANCE_A), Some(&false));
     }
 
     #[test]
