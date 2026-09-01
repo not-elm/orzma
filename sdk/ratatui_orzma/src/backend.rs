@@ -79,10 +79,6 @@ impl<B: Backend + Write> Backend for OrzmaBackend<B> {
             }
         }
 
-        // NOTE: a dropped connection has to reset as well. A replay that fails
-        // part way refills only some id slots and never bumps the generation,
-        // so gating the reset on the generation alone would keep diffing
-        // against dead instance keys and never re-mount the placements.
         if current_gen != self.last_gen || (disconnected && !self.was_disconnected) {
             self.flush_state.reset();
             self.last_gen = current_gen;
@@ -226,8 +222,6 @@ mod tests {
             f.set_focused(INSTANCE.into());
         }
 
-        // A socket whose peer is gone: every write to it fails, the way the
-        // real one does once orzma has exited.
         let (near, far) = UnixStream::pair().unwrap();
         drop(far);
 

@@ -106,6 +106,7 @@ mod tests {
         assert!(!valid_instance(&ID.to_uppercase()));
         assert!(!valid_instance(&ID[..31]));
         assert!(valid_instance(ID));
+        assert!(mount("nf2k7q5w3x3m5a6b2c4d6e7f", 10, 10).is_err());
     }
 
     #[test]

@@ -123,6 +123,15 @@ impl FlushState {
         flush_placements(out, self, &frame.placements)
     }
 
+    /// Drops the record of what was last emitted, so the next flush re-asserts
+    /// this frame's geometry and focus from scratch.
+    ///
+    /// Called when the connection the record described has gone: the host
+    /// forgets every mount when the socket drops, so diffing against it would
+    /// be diffing against state that no longer exists anywhere. Re-registering
+    /// also mints fresh instance ids, which the diff already treats as new
+    /// placements; what clearing adds is that the vanished-instance pass then
+    /// emits no unmount for an id the host has already dropped.
     pub fn reset(&mut self) {
         self.last.clear();
         self.last_focused = None;
