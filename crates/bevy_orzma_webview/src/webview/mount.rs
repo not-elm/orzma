@@ -135,8 +135,8 @@ pub(crate) struct WebviewParams<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
 }
 
-/// The resolved content + trust facts for a `mount;<handle>`: the URL to
-/// load (an `orzma://<handle>/…` origin for `Dir`/`Inline` sources, or the
+/// The resolved content + trust facts for an `Omount;n=<instance>`: the URL
+/// to load (an `orzma://<handle>/…` origin for `Dir`/`Inline` sources, or the
 /// verbatim remote URL for a `Url` source), the input policy, and the
 /// registering program's `(connection_id, handle)` for back-channel routing.
 pub(crate) struct ResolvedWebviewMount {
@@ -158,13 +158,14 @@ pub(crate) struct ResolvedWebviewMount {
     pub preload: Vec<String>,
 }
 
-/// Resolves a `mount` `<handle>` against the `OrzmaRegistry` (Tier 1).
-/// `Dir`/`Inline` handles resolve to an `orzma://<handle>/…` URL (one origin
-/// per handle); a `Url` handle resolves to its verbatim remote URL. A handle
-/// resolves ONLY when `requesting_surface` is its `owner_surface` — the scoping
-/// gate that stops one surface from mounting another's handle. `owner` is
-/// populated only for a bridged registration (a display-only `Url` view leaves it
-/// `None`). Returns `None` for an unregistered or unowned handle.
+/// Resolves a handle (already looked up from an `Omount;n=<instance>`'s
+/// instance) against the `OrzmaRegistry` (Tier 1). `Dir`/`Inline` handles
+/// resolve to an `orzma://<handle>/…` URL (one origin per handle); a `Url`
+/// handle resolves to its verbatim remote URL. A handle resolves ONLY when
+/// `requesting_surface` is its `owner_surface` — the scoping gate that stops
+/// one surface from mounting another's handle. `owner` is populated only for
+/// a bridged registration (a display-only `Url` view leaves it `None`).
+/// Returns `None` for an unregistered or unowned handle.
 pub(crate) fn resolve_mount(
     id: &HandleId,
     requesting_surface: Entity,
