@@ -652,6 +652,26 @@ mod tests {
         assert_eq!(device.placement_count(), 0);
     }
 
+    /// Asserts that a host removal naming one instance per screen clears
+    /// both rather than stopping at the first match, and reports that
+    /// something went.
+    ///
+    /// Case: a program that mounted a view on each screen disconnects from
+    /// the control socket, so the host names every instance it registered
+    /// in one removal.
+    #[test]
+    fn a_host_removal_reaches_both_screens() {
+        let mut device = device();
+        let primary = InstanceId(1);
+        let alternate = InstanceId(2);
+        assert!(mount(&mut device, primary));
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+        assert!(mount(&mut device, alternate));
+
+        assert!(device.remove_placements(&[primary, alternate]));
+        assert_eq!(device.placement_count(), 0);
+    }
+
     /// Asserts that the sweep reaches the inactive screen, so a placement
     /// whose anchor died there is still reclaimed.
     ///

@@ -203,20 +203,6 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
-    /// Removes the placements the host names like [`Self::remove_placements`],
-    /// additionally reporting whether one actually went.
-    ///
-    /// Available to tests only: in-crate under `cfg(test)`, downstream via
-    /// the `test-support` feature.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn remove_placements_reported_removal(&mut self, instances: &[InstanceId]) -> bool {
-        let removed = self.vt.remove_placements(instances);
-        if removed {
-            self.coalescer.arm_or_extend(Instant::now());
-        }
-        removed
-    }
-
     /// Encodes a key press and writes it to the PTY.
     ///
     /// Snaps a scrolled-back viewport to the live tail first
@@ -1035,14 +1021,14 @@ mod tests {
         // and the 3 ms IDLE window has not elapsed — so the assertion below
         // would read the arming left by the first removal.
         tty.coalescer.disarm();
-        assert!(tty.remove_placements_reported_removal(&[id]));
+        tty.remove_placements(&[id]);
         assert!(
             tty.coalescer.is_armed(),
             "a real removal arms the coalescer"
         );
 
         tty.coalescer.disarm();
-        assert!(!tty.remove_placements_reported_removal(&[id]));
+        tty.remove_placements(&[id]);
         assert!(
             !tty.coalescer.is_armed(),
             "a removal that names nothing does not"

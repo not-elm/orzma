@@ -870,6 +870,10 @@ fn replay_registration(
 mod tests {
     use super::*;
     use ratatui::layout::Rect;
+    use std::fmt::Debug;
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Level, Metadata, Subscriber};
 
     const INSTANCE_A: &str = "3f5a9c02d1e84b7690ab3cde12f45678";
     const INSTANCE_B: &str = "81b4e77c05a3492fd6180e29ba735fc1";
@@ -880,6 +884,48 @@ mod tests {
             y,
             width: w,
             height: h,
+        }
+    }
+
+    /// A `tracing` subscriber that renders every DEBUG event's fields into a
+    /// shared buffer, so a test can assert on a diagnostic the code emits
+    /// instead of returns. Install it with `tracing::subscriber::with_default`,
+    /// which scopes it to the calling thread.
+    #[derive(Clone, Default)]
+    struct CapturedLogs(Arc<Mutex<Vec<String>>>);
+
+    impl Subscriber for CapturedLogs {
+        fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+            *metadata.level() == Level::DEBUG
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let mut rendered = String::new();
+            event.record(&mut FieldText(&mut rendered));
+            self.0
+                .lock()
+                .expect("the capture buffer is uncontended")
+                .push(rendered);
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    struct FieldText<'a>(&'a mut String);
+
+    impl Visit for FieldText<'_> {
+        fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
+            self.0.push_str(&format!("{}={value:?} ", field.name()));
         }
     }
 
@@ -1158,6 +1204,32 @@ mod tests {
         flush_placements(&mut buf, &mut state, &placements).unwrap();
         assert!(String::from_utf8(buf).unwrap().is_empty());
         assert!(state.last.is_empty());
+    }
+
+    /// Asserts that skipping a placement emits one debug event naming the
+    /// rejected id, so the skip leaves a trace the caller can find.
+    ///
+    /// Case: a caller passes a registration handle where the widget wants an
+    /// instance id, sees no webview, and turns on debug logging to find out
+    /// which id the flush refused.
+    #[test]
+    fn flush_logs_the_placement_it_skips() {
+        let logs = CapturedLogs::default();
+        let mut state = FlushState::default();
+        let placements = vec![Placement {
+            instance: "nf2k7q5w3x3m5a6b2c4d6e7f".into(),
+            area: rect(0, 0, 10, 5),
+        }];
+        let mut buf = Vec::new();
+
+        tracing::subscriber::with_default(logs.clone(), || {
+            flush_placements(&mut buf, &mut state, &placements).unwrap();
+        });
+
+        let captured = logs.0.lock().expect("the capture buffer is uncontended");
+        assert_eq!(captured.len(), 1);
+        assert!(captured[0].contains("nf2k7q5w3x3m5a6b2c4d6e7f"));
+        assert!(captured[0].contains("skipping a placement"));
     }
 
     /// Asserts that a focus op names the newly-focused instance, and that a
