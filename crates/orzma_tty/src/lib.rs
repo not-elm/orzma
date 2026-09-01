@@ -453,13 +453,13 @@ mod tests {
     fn a_pump_reports_what_the_eviction_sweep_raised() {
         let (mut tty, _sink) = detached_term();
         tty.vt.sweeps.push_back(vec![VtSignal::WebviewEvicted {
-            placements: vec![PlacementId(7)],
+            placements: vec![InstanceId(7)],
         }]);
         let output = tty.pump();
         assert_eq!(
             output.signals,
             vec![TtySignal::Vt(VtSignal::WebviewEvicted {
-                placements: vec![PlacementId(7)]
+                placements: vec![InstanceId(7)]
             })]
         );
     }
@@ -475,7 +475,7 @@ mod tests {
         tty.vt.frames.push_back(a_frame());
         tty.pump();
         tty.vt.sweeps.push_back(vec![VtSignal::WebviewEvicted {
-            placements: vec![PlacementId(7)],
+            placements: vec![InstanceId(7)],
         }]);
         tty.pump();
         assert!(tty.coalescer.is_armed());
