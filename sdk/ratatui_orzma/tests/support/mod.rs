@@ -5,9 +5,26 @@ use std::os::unix::net::UnixListener;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
+/// A deterministic 32-lowercase-hex instance id derived from `seed`, in the
+/// form the control plane mints and the APC verbs accept.
+pub fn instance_for(seed: &str) -> String {
+    format!(
+        "{:016x}{:016x}",
+        fnv1a(seed, 0xcbf2_9ce4_8422_2325),
+        fnv1a(seed, 0x8422_2325_cbf2_9ce4)
+    )
+}
+
+fn fnv1a(seed: &str, basis: u64) -> u64 {
+    seed.bytes().fold(basis, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
 /// A fake control server: accepts one client, auto-replies to the first
-/// `register` with a fixed handle, forwards every client line over `received`,
-/// and pushes lines to the client via `to_client`.
+/// `register` with a fixed handle and its instance, mints a fresh instance for
+/// every `new_instance`, forwards every client line over `received`, and pushes
+/// lines to the client via `to_client`.
 ///
 /// `start` is non-blocking: it binds the socket and spawns the accept/reader and
 /// writer threads, then returns immediately so the client can connect afterward.
@@ -17,6 +34,9 @@ use std::thread;
 /// client's reader see EOF.
 pub struct FakeServer {
     pub sock_path: std::path::PathBuf,
+    /// The instance the auto-replied `register` mints, as the client will
+    /// address its default placement by.
+    pub instance: String,
     received: Receiver<Value>,
     to_client: Sender<Value>,
     _dir: tempfile::TempDir,
@@ -33,6 +53,8 @@ impl FakeServer {
         let (to_client, client_rx) = mpsc::channel::<Value>();
         let reply_tx = to_client.clone();
         let handle = handle.to_owned();
+        let instance = instance_for(&handle);
+        let reply_instance = instance.clone();
         let (close_tx, close_rx) = mpsc::sync_channel::<()>(0);
 
         thread::spawn(move || {
@@ -60,6 +82,7 @@ impl FakeServer {
             let mut reader = BufReader::new(stream);
             let mut line = String::new();
             let mut replied = false;
+            let mut minted = 0u32;
             loop {
                 line.clear();
                 if reader.read_line(&mut line).unwrap_or(0) == 0 {
@@ -68,7 +91,13 @@ impl FakeServer {
                 if let Ok(v) = serde_json::from_str::<Value>(line.trim()) {
                     if !replied && v["op"] == "register" {
                         replied = true;
-                        let _ = reply_tx.send(json!({ "ok": true, "handle": handle }));
+                        let _ = reply_tx.send(
+                            json!({ "ok": true, "handle": handle, "instance": reply_instance }),
+                        );
+                    } else if v["op"] == "new_instance" {
+                        minted += 1;
+                        let extra = instance_for(&format!("{handle}/{minted}"));
+                        let _ = reply_tx.send(json!({ "ok": true, "instance": extra }));
                     }
                     let _ = recv_tx.send(v);
                 }
@@ -77,6 +106,7 @@ impl FakeServer {
 
         Self {
             sock_path,
+            instance,
             received,
             to_client,
             _dir: dir,
@@ -114,6 +144,7 @@ impl FakeServer {
 
         Self {
             sock_path,
+            instance: instance_for("dropping"),
             received,
             to_client,
             _dir: dir,
@@ -126,11 +157,13 @@ impl FakeServer {
         self.to_client.send(v).unwrap();
     }
 
-    /// Blocks for the next post-handshake line the client sent (skips hello/register).
+    /// Blocks for the next post-handshake line the client sent, skipping the
+    /// requests this server auto-replies to (`hello`, `register`,
+    /// `new_instance`) so they cannot leak into a caller's assertion.
     pub fn next_message(&self) -> Value {
         loop {
             let v = self.received.recv().unwrap();
-            if v["op"] != "hello" && v["op"] != "register" {
+            if v["op"] != "hello" && v["op"] != "register" && v["op"] != "new_instance" {
                 return v;
             }
         }

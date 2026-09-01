@@ -56,11 +56,9 @@ fn backend_draw_emits_mount_apc_and_focus_op() {
         {
             let mut scratch = Buffer::empty(Rect::new(0, 0, 80, 40));
             let mut frame = orzma.frame();
-            WebviewWidget::new(handle.id()).focused(true).render(
-                Rect::new(2, 3, 48, 12),
-                &mut scratch,
-                &mut *frame,
-            );
+            WebviewWidget::new(handle.instance_id())
+                .focused(true)
+                .render(Rect::new(2, 3, 48, 12), &mut scratch, &mut *frame);
         }
 
         // Terminal::flush calls Backend::draw once per frame; drive it directly.
@@ -68,14 +66,97 @@ fn backend_draw_emits_mount_apc_and_focus_op() {
         Backend::draw(&mut backend, no_cells.into_iter()).unwrap();
 
         let out = String::from_utf8(term_bytes.0.lock().unwrap().clone()).unwrap();
+        let instance = &server.instance;
         assert!(
-            out.contains("Omount;v=view-1,r=12,c=48"),
+            out.contains(&format!("Omount;n={instance},r=12,c=48")),
             "terminal output missing mount APC verb: {out:?}"
         );
 
         let msg = server.next_message();
         assert_eq!(msg["op"], "focus");
-        assert_eq!(msg["handle"], "view-1");
+        assert_eq!(msg["instance"], instance.as_str());
+    });
+}
+
+#[test]
+fn new_instance_mints_a_second_placement_that_mounts_on_its_own() {
+    let server = FakeServer::start("view-multi");
+    with_env(&server.sock_path.clone(), || {
+        let orzma = Orzma::connect().unwrap();
+        let handle = orzma.register(Webview::inline("x")).unwrap();
+        let extra = orzma.new_instance(&handle).unwrap();
+        assert_ne!(
+            extra.id(),
+            handle.instance_id(),
+            "an extra placement must not reuse the default instance"
+        );
+
+        let term_bytes = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let mut backend = OrzmaBackend::new(CrosstermBackend::new(term_bytes.clone()), &orzma);
+        {
+            let mut scratch = Buffer::empty(Rect::new(0, 0, 80, 40));
+            let mut frame = orzma.frame();
+            WebviewWidget::new(handle.instance_id()).render(
+                Rect::new(0, 0, 10, 5),
+                &mut scratch,
+                &mut frame,
+            );
+            WebviewWidget::new(extra.id()).render(Rect::new(0, 6, 10, 5), &mut scratch, &mut frame);
+        }
+        Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
+
+        let out = String::from_utf8(term_bytes.0.lock().unwrap().clone()).unwrap();
+        let default = handle.instance_id();
+        let second = extra.id();
+        assert!(
+            out.contains(&format!("Omount;n={default},")),
+            "the default placement did not mount: {out:?}"
+        );
+        assert!(
+            out.contains(&format!("Omount;n={second},")),
+            "the minted placement did not mount: {out:?}"
+        );
+    });
+}
+
+#[test]
+fn reconnect_remints_every_instance_of_a_registration() {
+    use std::time::Duration;
+    let pair = support::ReconnectPair::start("view-mi1", "view-mi2");
+    with_env(&pair.first.sock_path.clone(), || {
+        let orzma = Orzma::connect().unwrap();
+        let handle = orzma.register(Webview::inline("x")).unwrap();
+        let extra = orzma.new_instance(&handle).unwrap();
+        let before = extra.id();
+
+        let term_bytes = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let mut backend = OrzmaBackend::new(CrosstermBackend::new(term_bytes.clone()), &orzma);
+        Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
+
+        drop(pair.first);
+        std::thread::sleep(Duration::from_millis(200));
+        // NOTE: ENV_LOCK is held by with_env, serializing env var access.
+        unsafe { std::env::set_var("ORZMA_SOCK", &pair.second.sock_path) };
+        Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while extra.id() == before {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the extra placement was never re-minted"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            handle.instance_id(),
+            pair.second.instance,
+            "the default placement must follow the re-registration"
+        );
+        assert_eq!(
+            extra.id(),
+            support::instance_for("view-mi2/1"),
+            "the extra placement must be re-minted on the new connection"
+        );
     });
 }
 
@@ -89,7 +170,8 @@ fn call_is_dispatched_and_replied() {
             .unwrap();
 
         server.send(json!({
-            "op": "call", "handle": "view-1", "reqId": "7", "method": "ping", "params": "hi"
+            "op": "call", "handle": "view-1", "instance": server.instance,
+            "reqId": "7", "method": "ping", "params": "hi"
         }));
 
         let reply = server.next_message();
@@ -107,7 +189,8 @@ fn unknown_method_replies_error() {
         let orzma = Orzma::connect().unwrap();
         let _h = orzma.register(Webview::inline("x")).unwrap();
         server.send(json!({
-            "op": "call", "handle": "view-2", "reqId": "1", "method": "nope", "params": null
+            "op": "call", "handle": "view-2", "instance": server.instance,
+            "reqId": "1", "method": "nope", "params": null
         }));
         let reply = server.next_message();
         assert_eq!(reply["ok"], false);
@@ -198,17 +281,19 @@ fn panicking_handler_does_not_kill_reader() {
 
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        server.send(
-            json!({ "op": "call", "handle": "view-5", "reqId": "1", "method": "boom", "params": null }),
-        );
+        server.send(json!({
+            "op": "call", "handle": "view-5", "instance": server.instance,
+            "reqId": "1", "method": "boom", "params": null
+        }));
         let boom = server.next_message();
         std::panic::set_hook(prev);
         assert_eq!(boom["reqId"], "1");
         assert_eq!(boom["ok"], false);
 
-        server.send(
-            json!({ "op": "call", "handle": "view-5", "reqId": "2", "method": "ping", "params": null }),
-        );
+        server.send(json!({
+            "op": "call", "handle": "view-5", "instance": server.instance,
+            "reqId": "2", "method": "ping", "params": null
+        }));
         let ping = server.next_message();
         assert_eq!(ping["reqId"], "2");
         assert_eq!(ping["ok"], true);
@@ -224,7 +309,7 @@ fn reconnect_updates_handle_id_and_reregisters() {
         let orzma = Orzma::connect().unwrap();
         let handle = orzma.register(Webview::inline("<h1>rc</h1>")).unwrap();
         assert_eq!(
-            handle.id(),
+            handle.handle_id().to_string(),
             "view-rc1",
             "initial registration must get first handle"
         );
@@ -243,7 +328,7 @@ fn reconnect_updates_handle_id_and_reregisters() {
         Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while handle.id() == "view-rc1" {
+        while handle.handle_id().to_string() == "view-rc1" {
             assert!(
                 std::time::Instant::now() < deadline,
                 "reconnect did not complete within 5 seconds"
@@ -251,7 +336,7 @@ fn reconnect_updates_handle_id_and_reregisters() {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert_eq!(
-            handle.id(),
+            handle.handle_id().to_string(),
             "view-rc2",
             "handle ID must update to second server's handle after reconnect"
         );
@@ -302,7 +387,7 @@ fn reconnect_preserves_inbound_events() {
         Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while handle.id() == "view-ev1" {
+        while handle.handle_id().to_string() == "view-ev1" {
             assert!(
                 std::time::Instant::now() < deadline,
                 "reconnect did not complete"

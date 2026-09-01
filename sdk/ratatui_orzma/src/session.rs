@@ -4,9 +4,11 @@ use crate::error::{OrzmaError, OrzmaResult};
 use crate::escape::{clamp_dims, cursor_to, mount, unmount, valid_instance};
 use crate::events::{EventQueues, EventRegistry};
 use crate::handler::BoxedHandler;
-use crate::protocol::{ClientMsg, IncomingCall, IncomingEvent, RegisterKind, RegisterReply};
-use crate::webview::{SharedWriter, Webview, WebviewHandle};
-use crossbeam_channel::{Sender, bounded};
+use crate::protocol::{
+    ClientMsg, HandleId, IncomingCall, IncomingEvent, RegisterKind, ServerReply,
+};
+use crate::webview::{SharedWriter, Webview, WebviewHandle, WebviewInstance};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use ratatui::layout::Rect;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
@@ -14,6 +16,11 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
+use std::time::Duration;
+
+/// How long a blocking control-socket request waits for its reply before
+/// giving up on it.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One placement's requested position this frame.
 #[derive(Debug, Clone)]
@@ -109,25 +116,44 @@ impl FlushState {
 }
 
 type HandlerRegistry = Arc<Mutex<HashMap<String, Arc<HashMap<String, BoxedHandler>>>>>;
-type PendingRegisters = Arc<Mutex<VecDeque<PendingRegister>>>;
+type PendingReplies = Arc<Mutex<VecDeque<Pending>>>;
 
-/// One in-flight `register` awaiting its untagged reply: the oneshot to wake the
-/// caller, plus the handlers and event queues to install once the control plane
-/// mints the handle.
-struct PendingRegister {
-    reply: Sender<OrzmaResult<String>>,
-    handlers: Arc<HashMap<String, BoxedHandler>>,
-    events: Arc<EventQueues>,
+/// One in-flight request awaiting its op-less reply.
+enum Pending {
+    /// A `register`: the oneshot carries the minted `(handle, instance)` pair,
+    /// and the handlers and event queues are installed under that handle
+    /// before the caller is woken.
+    Register {
+        reply: Sender<OrzmaResult<(String, String)>>,
+        handlers: Arc<HashMap<String, BoxedHandler>>,
+        events: Arc<EventQueues>,
+    },
+    /// A `new_instance`: the oneshot carries the minted instance.
+    NewInstance { reply: Sender<OrzmaResult<String>> },
 }
 
 type PendingCompositing = Arc<Mutex<HashMap<String, bool>>>;
 
-/// A saved webview registration for replay on reconnect.
+/// A saved webview registration for replay on reconnect, holding every id slot
+/// a reconnect has to refill: the handle, the default instance, and one slot
+/// per instance minted by [`Orzma::new_instance`].
 struct Registration {
     kind: RegisterKind,
-    handle_slot: Arc<Mutex<String>>,
+    handle_slot: Arc<Mutex<HandleId>>,
+    instance_slot: Arc<Mutex<String>>,
+    extra_instances: Vec<Arc<Mutex<String>>>,
     handlers: Arc<HashMap<String, BoxedHandler>>,
     events: Arc<EventQueues>,
+}
+
+impl Registration {
+    /// The handle this registration currently answers to.
+    fn handle_id(&self) -> HandleId {
+        self.handle_slot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
 }
 
 /// The minimal shared state passed to [`OrzmaBackend`] for reconnect signalling.
@@ -140,7 +166,7 @@ pub(crate) struct ReconnectHandle {
 /// An orzma session: owns the control-socket connection and reader thread.
 pub struct Orzma {
     writer: SharedWriter,
-    pending: PendingRegisters,
+    pending: PendingReplies,
     frame: Arc<Mutex<FramePlacements>>,
     pending_compositing: PendingCompositing,
     disconnected: Arc<AtomicBool>,
@@ -164,7 +190,7 @@ impl Orzma {
         let stream = connect_sock(&sock)?;
         let writer: SharedWriter = Arc::new(Mutex::new(stream.try_clone()?));
         let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
-        let pending: PendingRegisters = Arc::new(Mutex::new(VecDeque::new()));
+        let pending: PendingReplies = Arc::new(Mutex::new(VecDeque::new()));
         let pending_compositing: PendingCompositing = Arc::new(Mutex::new(HashMap::new()));
         let disconnected: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let generation: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
@@ -230,7 +256,11 @@ impl Orzma {
         })
     }
 
-    /// Registers a webview, blocking until the control plane mints its handle.
+    /// Registers a webview, blocking until the control plane mints its handle
+    /// and that registration's first placement instance.
+    ///
+    /// Blocks on a control-socket round trip, so call it while setting the app
+    /// up — never from inside the draw loop.
     pub fn register(&self, webview: Webview) -> OrzmaResult<WebviewHandle> {
         let Webview {
             kind,
@@ -241,43 +271,75 @@ impl Orzma {
         let events = Arc::new(EventQueues::from_decls(&event_decls));
         let (tx, rx) = bounded(1);
         let line = serde_json::to_string(&ClientMsg::Register(kind.clone()))?;
-        {
-            let mut w = self.writer.lock()?;
-            // NOTE: push the pending entry while holding the writer lock so the
-            // FIFO order matches the on-wire order — register replies are untagged,
-            // so concurrent registrants would otherwise mismatch their handles.
-            self.pending.lock()?.push_back(PendingRegister {
+        send_request(
+            &self.writer,
+            &self.pending,
+            Pending::Register {
                 reply: tx,
                 handlers: handlers.clone(),
                 events: events.clone(),
-            });
-            if let Err(e) = writeln!(w, "{line}").and_then(|()| w.flush()) {
-                // The register never went out, so no reply will arrive for this
-                // entry; drop it so it can't consume a later registrant's reply.
-                self.pending.lock()?.pop_back();
-                return Err(e.into());
-            }
-        }
-
-        // NOTE: the reader thread installs the event queues under the minted
-        // handle BEFORE sending this reply (mirroring the handler install), so an
-        // event pipelined right behind the register reply finds its queues rather
-        // than racing this main thread; do not move the install back here.
-        let handle = rx.recv().map_err(|_| OrzmaError::Disconnected)??;
-        let handle_slot = Arc::new(Mutex::new(handle));
+            },
+            &line,
+        )?;
+        let (handle, instance) = await_reply(&rx)?;
+        let handle_slot = Arc::new(Mutex::new(HandleId::from(handle)));
+        let instance_slot = Arc::new(Mutex::new(instance));
         if let Ok(mut regs) = self.registrations.lock() {
             regs.push(Registration {
                 kind,
                 handle_slot: handle_slot.clone(),
+                instance_slot: instance_slot.clone(),
+                extra_instances: Vec::new(),
                 handlers: handlers.clone(),
                 events: events.clone(),
             });
         }
         Ok(WebviewHandle::new_shared(
             handle_slot,
+            instance_slot,
             events,
             self.writer.clone(),
         ))
+    }
+
+    /// Mints an additional placement on `handle`, blocking until the control
+    /// plane replies.
+    ///
+    /// A registration always has one placement, addressed by
+    /// [`WebviewHandle::instance_id`]; every instance minted here is another
+    /// place the same content can be mounted, at the same time as the others.
+    /// The returned instance is replayed alongside its registration when the
+    /// session reconnects.
+    ///
+    /// Blocks on a control-socket round trip, so call it while setting the app
+    /// up — never from inside the draw loop.
+    pub fn new_instance(&self, handle: &WebviewHandle) -> OrzmaResult<WebviewInstance> {
+        let handle_id = handle.handle_id();
+        let (tx, rx) = bounded(1);
+        let line = serde_json::to_string(&ClientMsg::NewInstance {
+            handle: handle_id.clone(),
+        })?;
+        send_request(
+            &self.writer,
+            &self.pending,
+            Pending::NewInstance { reply: tx },
+            &line,
+        )?;
+        let slot = Arc::new(Mutex::new(await_reply(&rx)?));
+        let mut replayable = false;
+        if let Ok(mut regs) = self.registrations.lock()
+            && let Some(reg) = regs.iter_mut().find(|r| r.handle_id() == handle_id)
+        {
+            reg.extra_instances.push(slot.clone());
+            replayable = true;
+        }
+        if !replayable {
+            tracing::debug!(
+                handle = %handle_id,
+                "minted an instance for a handle with no saved registration; it will not survive a reconnect"
+            );
+        }
+        Ok(WebviewInstance::new_shared(slot, self.writer.clone()))
     }
 
     /// Locks and clears the per-frame placement collector for `render_stateful_widget`.
@@ -424,7 +486,7 @@ fn spawn_reader(
     stream: UnixStream,
     writer: SharedWriter,
     handlers: HandlerRegistry,
-    pending: PendingRegisters,
+    pending: PendingReplies,
     pending_compositing: PendingCompositing,
     events: EventRegistry,
     disconnected: Arc<AtomicBool>,
@@ -479,34 +541,8 @@ fn spawn_reader(
                         ),
                     }
                 }
-            } else if let Ok(reply) = serde_json::from_str::<RegisterReply>(trimmed)
-                && let Some(reg) = pending.lock().ok().and_then(|mut q| q.pop_front())
-            {
-                let outcome = if reply.ok {
-                    match reply.handle {
-                        // Install handlers under the minted handle on this thread,
-                        // before the next line is read, so a `call` pipelined right
-                        // after the reply finds its handlers rather than racing the
-                        // registrant's main thread.
-                        Some(h) => {
-                            if let Ok(mut map) = handlers.lock() {
-                                map.insert(h.clone(), reg.handlers);
-                            }
-                            if let Ok(mut map) = events.lock() {
-                                map.insert(h.clone(), reg.events);
-                            }
-                            Ok(h)
-                        }
-                        None => Err(OrzmaError::Register {
-                            reason: "missing handle".into(),
-                        }),
-                    }
-                } else {
-                    Err(OrzmaError::Register {
-                        reason: reply.error.unwrap_or_else(|| "unknown".into()),
-                    })
-                };
-                let _ = reg.reply.send(outcome);
+            } else if parsed.as_ref().is_some_and(|v| v.get("op").is_none()) {
+                settle_reply(&pending, &handlers, &events, trimmed);
             }
         }
         // The socket closed: drop every pending sender so any in-flight
@@ -519,7 +555,105 @@ fn spawn_reader(
     });
 }
 
+/// Settles the oldest outstanding request with one op-less reply line.
+fn settle_reply(
+    pending: &PendingReplies,
+    handlers: &HandlerRegistry,
+    events: &EventRegistry,
+    line: &str,
+) {
+    let Ok(reply) = serde_json::from_str::<ServerReply>(line) else {
+        return;
+    };
+    // NOTE: pop before validating. Leaving the entry on a shape mismatch would
+    // desync the queue permanently, since replies arrive strictly in request
+    // order.
+    let Some(entry) = pending.lock().ok().and_then(|mut q| q.pop_front()) else {
+        return;
+    };
+    match entry {
+        Pending::Register {
+            reply: waiter,
+            handlers: methods,
+            events: queues,
+        } => {
+            let outcome = match (reply.ok, reply.handle, reply.instance) {
+                (true, Some(handle), Some(instance)) => {
+                    let handle = handle.to_string();
+                    // NOTE: install on this thread, before the next line is
+                    // read, so a `call` or `event` pipelined right behind the
+                    // reply finds its handlers and queues rather than racing
+                    // the registrant's thread.
+                    if let Ok(mut map) = handlers.lock() {
+                        map.insert(handle.clone(), methods);
+                    }
+                    if let Ok(mut map) = events.lock() {
+                        map.insert(handle.clone(), queues);
+                    }
+                    Ok((handle, instance))
+                }
+                (true, _, _) => Err(OrzmaError::Register {
+                    reason: "register reply missing handle or instance".into(),
+                }),
+                (false, _, _) => Err(OrzmaError::Register {
+                    reason: reply.error.unwrap_or_else(|| "unknown".into()),
+                }),
+            };
+            let _ = waiter.send(outcome);
+        }
+        Pending::NewInstance { reply: waiter } => {
+            let outcome = match (reply.ok, reply.instance) {
+                (true, Some(instance)) => Ok(instance),
+                (true, None) => Err(OrzmaError::Instance {
+                    reason: "new_instance reply missing instance".into(),
+                }),
+                (false, _) => Err(OrzmaError::Instance {
+                    reason: reply.error.unwrap_or_else(|| "unknown".into()),
+                }),
+            };
+            let _ = waiter.send(outcome);
+        }
+    }
+}
+
+/// Queues `entry` and writes its request line, both under the writer lock.
+///
+/// # Invariants
+///
+/// The pending entry is pushed while the writer lock is held so the queue order
+/// matches the on-wire order; a reply carries no request id, so a concurrent
+/// requester would otherwise settle this caller's waiter. A failed write pops
+/// the entry back off, since no reply will ever arrive for a request that never
+/// went out.
+fn send_request(
+    writer: &SharedWriter,
+    pending: &PendingReplies,
+    entry: Pending,
+    line: &str,
+) -> OrzmaResult<()> {
+    let mut w = writer.lock()?;
+    pending.lock()?.push_back(entry);
+    if let Err(e) = writeln!(w, "{line}").and_then(|()| w.flush()) {
+        pending.lock()?.pop_back();
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+/// Blocks for one request's reply, reporting both a closed channel and an
+/// expired [`REPLY_TIMEOUT`] as [`OrzmaError::Disconnected`].
+fn await_reply<T>(rx: &Receiver<OrzmaResult<T>>) -> OrzmaResult<T> {
+    rx.recv_timeout(REPLY_TIMEOUT)
+        .unwrap_or(Err(OrzmaError::Disconnected))
+}
+
 fn dispatch_call(writer: &SharedWriter, handlers: &HandlerRegistry, call: IncomingCall) {
+    tracing::debug!(
+        handle = call.handle,
+        instance = call.instance,
+        method = call.method,
+        "dispatching an inbound call"
+    );
     let handler = handlers
         .lock()
         .ok()
@@ -554,7 +688,7 @@ fn dispatch_call(writer: &SharedWriter, handlers: &HandlerRegistry, call: Incomi
 fn attempt_reconnect(
     writer: &SharedWriter,
     handlers: &HandlerRegistry,
-    pending: &PendingRegisters,
+    pending: &PendingReplies,
     pending_compositing: &PendingCompositing,
     disconnected: &Arc<AtomicBool>,
     generation: &Arc<AtomicU64>,
@@ -613,68 +747,96 @@ fn attempt_reconnect(
     let Ok(regs) = registrations.lock() else {
         return;
     };
-    let Ok(mut w) = writer.lock() else { return };
     for reg in regs.iter() {
-        let (tx, rx) = bounded::<OrzmaResult<String>>(1);
-        {
-            let Ok(mut pq) = pending.lock() else {
-                disconnected.store(true, Ordering::Relaxed);
-                return;
-            };
-            pq.push_back(PendingRegister {
-                reply: tx,
-                handlers: reg.handlers.clone(),
-                events: reg.events.clone(),
-            });
-        }
-        let line = match serde_json::to_string(&ClientMsg::Register(reg.kind.clone())) {
-            Ok(l) => l,
-            Err(e) => {
-                tracing::debug!("reconnect: serialize register failed: {e}");
-                disconnected.store(true, Ordering::Relaxed);
-                return;
-            }
-        };
-        if writeln!(w, "{line}").and_then(|()| w.flush()).is_err() {
-            tracing::debug!("reconnect: register write failed");
+        if !replay_registration(writer, handlers, pending, events, reg) {
             disconnected.store(true, Ordering::Relaxed);
             return;
         }
-        // NOTE: release writer lock while awaiting the reader-thread reply so
-        // the reader can write focus/emit responses without deadlocking.
-        drop(w);
-        let new_handle = match rx.recv().unwrap_or(Err(OrzmaError::Disconnected)) {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::debug!("reconnect: re-registration failed: {e}");
-                disconnected.store(true, Ordering::Relaxed);
-                return;
-            }
-        };
-        let old = reg
-            .handle_slot
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        if let Ok(mut map) = handlers.lock() {
-            map.remove(&old);
-            map.insert(new_handle.clone(), reg.handlers.clone());
-        }
-        if let Ok(mut map) = events.lock() {
-            map.remove(&old);
-            map.insert(new_handle.clone(), reg.events.clone());
-        }
-        if let Ok(mut slot) = reg.handle_slot.lock() {
-            *slot = new_handle;
-        }
-        w = match writer.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
     }
-    drop(w);
     generation.fetch_add(1, Ordering::Relaxed);
     tracing::debug!("reconnect: completed successfully");
+}
+
+/// Re-registers one saved registration on the fresh connection and refills
+/// every id slot it owns — the handle, the default instance, and one
+/// `new_instance` round trip per extra instance — returning whether the whole
+/// replay succeeded.
+///
+/// A partial replay leaves the slots it already refilled in place. The caller
+/// marks the session disconnected without bumping the generation, so the next
+/// attempt replays this registration from the start.
+fn replay_registration(
+    writer: &SharedWriter,
+    handlers: &HandlerRegistry,
+    pending: &PendingReplies,
+    events: &EventRegistry,
+    reg: &Registration,
+) -> bool {
+    let (tx, rx) = bounded(1);
+    let line = match serde_json::to_string(&ClientMsg::Register(reg.kind.clone())) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::debug!("reconnect: serialize register failed: {e}");
+            return false;
+        }
+    };
+    if let Err(e) = send_request(
+        writer,
+        pending,
+        Pending::Register {
+            reply: tx,
+            handlers: reg.handlers.clone(),
+            events: reg.events.clone(),
+        },
+        &line,
+    ) {
+        tracing::debug!("reconnect: register write failed: {e}");
+        return false;
+    }
+    let (new_handle, new_instance) = match await_reply(&rx) {
+        Ok(minted) => minted,
+        Err(e) => {
+            tracing::debug!("reconnect: re-registration failed: {e}");
+            return false;
+        }
+    };
+    let old = reg.handle_id();
+    if let Ok(mut map) = handlers.lock() {
+        map.remove(old.as_str());
+        map.insert(new_handle.clone(), reg.handlers.clone());
+    }
+    if let Ok(mut map) = events.lock() {
+        map.remove(old.as_str());
+        map.insert(new_handle.clone(), reg.events.clone());
+    }
+    *reg.instance_slot.lock().unwrap_or_else(|e| e.into_inner()) = new_instance;
+    let handle_id = HandleId::from(new_handle);
+    *reg.handle_slot.lock().unwrap_or_else(|e| e.into_inner()) = handle_id.clone();
+
+    for slot in &reg.extra_instances {
+        let (tx, rx) = bounded(1);
+        let line = match serde_json::to_string(&ClientMsg::NewInstance {
+            handle: handle_id.clone(),
+        }) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::debug!("reconnect: serialize new_instance failed: {e}");
+                return false;
+            }
+        };
+        if let Err(e) = send_request(writer, pending, Pending::NewInstance { reply: tx }, &line) {
+            tracing::debug!("reconnect: new_instance write failed: {e}");
+            return false;
+        }
+        match await_reply(&rx) {
+            Ok(instance) => *slot.lock().unwrap_or_else(|e| e.into_inner()) = instance,
+            Err(e) => {
+                tracing::debug!("reconnect: re-minting an instance failed: {e}");
+                return false;
+            }
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -692,6 +854,92 @@ mod tests {
             width: w,
             height: h,
         }
+    }
+
+    /// Asserts that a register waiter and a new-instance waiter each receive
+    /// their own reply when both are outstanding, so a mismatch cannot desync
+    /// the queue.
+    ///
+    /// Case: one thread registers a second view while another is already
+    /// asking for an extra placement.
+    #[test]
+    fn a_mixed_pending_queue_routes_each_reply_to_its_waiter() {
+        let pending: PendingReplies = Arc::new(Mutex::new(VecDeque::new()));
+        let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let events: EventRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let (reg_tx, reg_rx) = bounded(1);
+        let (inst_tx, inst_rx) = bounded(1);
+        pending.lock().unwrap().push_back(Pending::Register {
+            reply: reg_tx,
+            handlers: Arc::new(HashMap::new()),
+            events: Arc::new(EventQueues::from_decls(&[])),
+        });
+        pending
+            .lock()
+            .unwrap()
+            .push_back(Pending::NewInstance { reply: inst_tx });
+
+        settle_reply(
+            &pending,
+            &handlers,
+            &events,
+            r#"{"ok":true,"handle":"h","instance":"i1"}"#,
+        );
+        settle_reply(
+            &pending,
+            &handlers,
+            &events,
+            r#"{"ok":true,"instance":"i2"}"#,
+        );
+
+        assert_eq!(
+            reg_rx.recv().unwrap().unwrap(),
+            ("h".to_string(), "i1".to_string())
+        );
+        assert_eq!(inst_rx.recv().unwrap().unwrap(), "i2".to_string());
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    /// Asserts that a reply whose shape does not match the waiting request
+    /// still consumes that request's queue entry and fails its waiter.
+    ///
+    /// Case: the host answers a `new_instance` with a rejection, and another
+    /// request is already queued behind it.
+    #[test]
+    fn a_mismatched_reply_consumes_its_entry_rather_than_desyncing_the_queue() {
+        let pending: PendingReplies = Arc::new(Mutex::new(VecDeque::new()));
+        let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let events: EventRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let (first_tx, first_rx) = bounded(1);
+        let (second_tx, second_rx) = bounded(1);
+        pending
+            .lock()
+            .unwrap()
+            .push_back(Pending::NewInstance { reply: first_tx });
+        pending
+            .lock()
+            .unwrap()
+            .push_back(Pending::NewInstance { reply: second_tx });
+
+        settle_reply(
+            &pending,
+            &handlers,
+            &events,
+            r#"{"ok":false,"error":"not_owner"}"#,
+        );
+        settle_reply(
+            &pending,
+            &handlers,
+            &events,
+            r#"{"ok":true,"instance":"i2"}"#,
+        );
+
+        assert!(matches!(
+            first_rx.recv().unwrap(),
+            Err(OrzmaError::Instance { .. })
+        ));
+        assert_eq!(second_rx.recv().unwrap().unwrap(), "i2".to_string());
+        assert!(pending.lock().unwrap().is_empty());
     }
 
     /// Asserts that two instances of one registration recorded in the same
@@ -861,33 +1109,42 @@ mod tests {
         assert!(state.last.is_empty());
     }
 
+    /// Asserts that a focus op names the newly-focused instance, and that a
+    /// frame focusing the same instance again writes nothing.
+    ///
+    /// Case: the user clicks into a webview pane and then keeps typing in it
+    /// across many frames.
     #[test]
     fn flush_focus_emits_on_change_and_skips_unchanged() {
         let mut last = None;
         let mut buf = Vec::new();
-        flush_focus(&mut buf, &mut last, &Some("v".to_string())).unwrap();
+        flush_focus(&mut buf, &mut last, &Some(INSTANCE_A.to_string())).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
         assert_eq!(v["op"], "focus");
-        assert_eq!(v["handle"], "v");
+        assert_eq!(v["instance"], INSTANCE_A);
 
         let mut buf2 = Vec::new();
-        flush_focus(&mut buf2, &mut last, &Some("v".to_string())).unwrap();
+        flush_focus(&mut buf2, &mut last, &Some(INSTANCE_A.to_string())).unwrap();
         assert!(
             String::from_utf8(buf2).unwrap().is_empty(),
             "unchanged focus emits nothing"
         );
     }
 
+    /// Asserts that dropping focus emits a focus op with a null instance and
+    /// clears the remembered target.
+    ///
+    /// Case: the user moves focus from a webview pane back to a native widget.
     #[test]
     fn flush_focus_emits_blur_on_none() {
-        let mut last = Some("v".to_string());
+        let mut last = Some(INSTANCE_A.to_string());
         let mut buf = Vec::new();
         flush_focus(&mut buf, &mut last, &None).unwrap();
         let v: serde_json::Value =
             serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
         assert_eq!(v["op"], "focus");
-        assert_eq!(v["handle"], serde_json::Value::Null);
+        assert_eq!(v["instance"], serde_json::Value::Null);
         assert_eq!(last, None);
     }
 
@@ -957,7 +1214,7 @@ mod tests {
         let pending_compositing: Arc<Mutex<HashMap<String, bool>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
-        let pending: PendingRegisters = Arc::new(Mutex::new(VecDeque::new()));
+        let pending: PendingReplies = Arc::new(Mutex::new(VecDeque::new()));
 
         let client = UnixStream::connect(&sock_path).unwrap();
         let writer: SharedWriter = Arc::new(Mutex::new(client.try_clone().unwrap()));
@@ -1003,7 +1260,7 @@ mod tests {
         let pending_compositing: Arc<Mutex<HashMap<String, bool>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
-        let pending: PendingRegisters = Arc::new(Mutex::new(VecDeque::new()));
+        let pending: PendingReplies = Arc::new(Mutex::new(VecDeque::new()));
 
         let client = UnixStream::connect(&sock_path).unwrap();
         let writer: SharedWriter = Arc::new(Mutex::new(client.try_clone().unwrap()));
@@ -1058,7 +1315,7 @@ mod tests {
             .insert("h1".to_owned(), queues.clone());
 
         let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
-        let pending: PendingRegisters = Arc::new(Mutex::new(VecDeque::new()));
+        let pending: PendingReplies = Arc::new(Mutex::new(VecDeque::new()));
         let pending_compositing: PendingCompositing = Arc::new(Mutex::new(HashMap::new()));
 
         let client = UnixStream::connect(&sock_path).unwrap();

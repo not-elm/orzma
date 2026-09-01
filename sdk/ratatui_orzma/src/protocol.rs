@@ -184,16 +184,18 @@ pub(crate) struct ServerReply {
 /// An inbound `call` frame forwarded from a page's `window.orzma.call`.
 #[derive(Debug, Deserialize)]
 pub(crate) struct IncomingCall {
-    /// The view handle the call targets.
-    pub(crate) handle: String,
+    /// The registration the call targets.
+    pub handle: String,
+    /// The placement the calling page is mounted in.
+    pub instance: String,
     /// The global request id to echo in the reply.
     #[serde(rename = "reqId")]
-    pub(crate) req_id: Value,
+    pub req_id: Value,
     /// The invoked method name.
-    pub(crate) method: String,
+    pub method: String,
     /// The single params value (any JSON shape; absent deserializes as null).
     #[serde(default)]
-    pub(crate) params: Value,
+    pub params: Value,
 }
 
 /// An inbound one-way `event` frame forwarded from a page's `window.orzma.emit`.
@@ -320,22 +322,33 @@ mod tests {
         assert_eq!(v["handle"], "H");
     }
 
+    /// Asserts that an inbound call carries the placement it came from
+    /// alongside the registration it targets.
+    ///
+    /// Case: a page mounted in one of two placements of a view calls back into
+    /// the app, and the handler needs to know which one asked.
     #[test]
     fn call_deserializes() {
         let c: IncomingCall = serde_json::from_str(
-            r#"{"op":"call","handle":"h","reqId":"3","method":"ping","params":"x"}"#,
+            r#"{"op":"call","handle":"h","instance":"i1","reqId":"3","method":"ping","params":"x"}"#,
         )
         .unwrap();
         assert_eq!(c.handle, "h");
+        assert_eq!(c.instance, "i1");
         assert_eq!(c.method, "ping");
         assert_eq!(c.params, serde_json::json!("x"));
     }
 
+    /// Asserts that an omitted `params` deserializes as null rather than
+    /// failing the whole frame.
+    ///
+    /// Case: a page calls a method that takes no argument.
     #[test]
     fn call_without_params_deserializes_as_null() {
-        let c: IncomingCall =
-            serde_json::from_str(r#"{"op":"call","handle":"h","reqId":"3","method":"ping"}"#)
-                .unwrap();
+        let c: IncomingCall = serde_json::from_str(
+            r#"{"op":"call","handle":"h","instance":"i1","reqId":"3","method":"ping"}"#,
+        )
+        .unwrap();
         assert_eq!(c.params, Value::Null);
     }
 

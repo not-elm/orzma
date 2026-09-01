@@ -22,5 +22,5 @@ pub use error::{OrzmaError, OrzmaResult, RpcError};
 pub use keychord::KeyChord;
 pub use protocol::HandleId;
 pub use session::{FramePlacements, Orzma};
-pub use webview::{Webview, WebviewHandle};
+pub use webview::{Webview, WebviewHandle, WebviewInstance};
 pub use widget::{WebviewDefaultPlaceholder, WebviewWidget};

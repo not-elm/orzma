@@ -60,8 +60,13 @@ impl<B: Backend + Write> Backend for OrzmaBackend<B> {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
+        // NOTE: a disconnect must reset the flush state as well. A replay that
+        // fails part way refills only some id slots and never bumps the
+        // generation, so gating the reset on the generation alone would keep
+        // diffing against dead instance keys and never re-mount the placements.
         let current_gen = self.reconnect.generation.load(Ordering::Relaxed);
-        if current_gen != self.last_gen {
+        let disconnected = self.reconnect.disconnected.load(Ordering::Relaxed);
+        if current_gen != self.last_gen || disconnected {
             self.flush_state.reset();
             self.last_gen = current_gen;
         }
@@ -74,7 +79,7 @@ impl<B: Backend + Write> Backend for OrzmaBackend<B> {
             .map_err(to_io)?;
         drop(frame);
 
-        if self.reconnect.disconnected.load(Ordering::Relaxed) {
+        if disconnected {
             let should_retry = self
                 .last_attempt
                 .is_none_or(|t| t.elapsed() >= Duration::from_secs(2));
@@ -188,6 +193,45 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Backend::flush(&mut self.0)
         }
+    }
+
+    /// Asserts that a draw taken while the session is disconnected clears the
+    /// flush state, without waiting for a generation bump.
+    ///
+    /// Case: a reconnect replay fails part way, so some of a registration's ids
+    /// were re-minted and the generation never advanced.
+    #[test]
+    fn a_disconnected_draw_resets_flush_state() {
+        use std::os::unix::net::UnixStream;
+        use std::sync::{Arc, Mutex};
+        let disconnected = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let (tx, _rx) = crossbeam_channel::bounded::<()>(1);
+        let mut backend = OrzmaBackend {
+            inner: WritableTestBackend(ratatui::backend::TestBackend::new(80, 24)),
+            frame: Arc::new(Mutex::new(crate::session::FramePlacements::default())),
+            writer: Arc::new(Mutex::new(UnixStream::pair().unwrap().0)),
+            flush_state: FlushState::default(),
+            reconnect: ReconnectHandle {
+                disconnected,
+                generation,
+                reconnect_tx: tx,
+            },
+            last_gen: 0,
+            last_attempt: None,
+        };
+        backend
+            .flush_state
+            .last
+            .insert("stale".into(), ratatui::layout::Rect::new(0, 0, 10, 5));
+
+        let no_cells: Vec<(u16, u16, &ratatui::buffer::Cell)> = Vec::new();
+        Backend::draw(&mut backend, no_cells.into_iter()).unwrap();
+
+        assert!(
+            backend.flush_state.last.is_empty(),
+            "a disconnected draw must not keep diffing against dead instance keys"
+        );
     }
 
     #[test]

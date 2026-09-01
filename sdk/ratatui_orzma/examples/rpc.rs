@@ -51,7 +51,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     rows[0],
                 );
                 f.render_stateful_widget(
-                    WebviewWidget::new(view.id()).fallback(Block::bordered().title("loading…")),
+                    WebviewWidget::new(view.instance_id())
+                        .fallback(Block::bordered().title("loading…")),
                     rows[1],
                     &mut *orzma.frame(),
                 );
