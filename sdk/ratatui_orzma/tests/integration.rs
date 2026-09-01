@@ -78,6 +78,10 @@ fn backend_draw_emits_mount_apc_and_focus_op() {
     });
 }
 
+/// Asserts that an instance minted on an existing registration is distinct
+/// from its default one and mounts alongside it in the same frame.
+///
+/// Case: an app shows one view in a split, side by side.
 #[test]
 fn new_instance_mints_a_second_placement_that_mounts_on_its_own() {
     let server = FakeServer::start("view-multi");
@@ -119,6 +123,10 @@ fn new_instance_mints_a_second_placement_that_mounts_on_its_own() {
     });
 }
 
+/// Asserts that a reconnect re-mints a registration's extra placements, not
+/// just its default one, into the slots the app already holds.
+///
+/// Case: orzma restarts while an app is drawing the same view in two panes.
 #[test]
 fn reconnect_remints_every_instance_of_a_registration() {
     use std::time::Duration;
@@ -135,7 +143,7 @@ fn reconnect_remints_every_instance_of_a_registration() {
 
         drop(pair.first);
         std::thread::sleep(Duration::from_millis(200));
-        // NOTE: ENV_LOCK is held by with_env, serializing env var access.
+        // SAFETY: ENV_LOCK is held by with_env, serializing all env var access.
         unsafe { std::env::set_var("ORZMA_SOCK", &pair.second.sock_path) };
         Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
 

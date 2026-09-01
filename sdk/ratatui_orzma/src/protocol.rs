@@ -166,7 +166,7 @@ pub(crate) enum RegisterKind {
 }
 
 /// The untagged reply to a `register` or `new_instance` request.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub(crate) struct ServerReply {
     /// Whether the request succeeded.
     pub ok: bool,

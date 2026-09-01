@@ -53,7 +53,7 @@ pub enum OrzmaError {
 
     /// The connection closed, or no reply arrived in time, while a request was
     /// pending.
-    #[error("control socket closed before the reply arrived")]
+    #[error("no reply to a control-socket request: the socket closed or the reply timed out")]
     Disconnected,
 
     /// A serde (de)serialization failure.

@@ -38,6 +38,7 @@ pub struct OrzmaBackend<B> {
     reconnect: ReconnectHandle,
     last_gen: u64,
     last_attempt: Option<Instant>,
+    was_disconnected: bool,
 }
 
 impl<B> OrzmaBackend<B> {
@@ -51,6 +52,7 @@ impl<B> OrzmaBackend<B> {
             reconnect: orzma.reconnect_handle(),
             last_gen: 0,
             last_attempt: None,
+            was_disconnected: false,
         }
     }
 }
@@ -60,25 +62,13 @@ impl<B: Backend + Write> Backend for OrzmaBackend<B> {
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
-        // NOTE: a disconnect must reset the flush state as well. A replay that
-        // fails part way refills only some id slots and never bumps the
-        // generation, so gating the reset on the generation alone would keep
-        // diffing against dead instance keys and never re-mount the placements.
         let current_gen = self.reconnect.generation.load(Ordering::Relaxed);
         let disconnected = self.reconnect.disconnected.load(Ordering::Relaxed);
-        if current_gen != self.last_gen || disconnected {
-            self.flush_state.reset();
-            self.last_gen = current_gen;
-        }
 
-        self.inner.draw(content)?;
-
-        let frame = self.frame.lock().unwrap_or_else(|e| e.into_inner());
-        self.flush_state
-            .emit_frame(&mut self.inner, &self.writer, &frame)
-            .map_err(to_io)?;
-        drop(frame);
-
+        // NOTE: schedule the retry before anything below can return early. This
+        // is the crate's only reconnect_tx sender, so a draw that bails out
+        // first leaves the session with no way back and every later draw takes
+        // the same path.
         if disconnected {
             let should_retry = self
                 .last_attempt
@@ -88,6 +78,28 @@ impl<B: Backend + Write> Backend for OrzmaBackend<B> {
                 self.last_attempt = Some(Instant::now());
             }
         }
+
+        // NOTE: a dropped connection has to reset as well. A replay that fails
+        // part way refills only some id slots and never bumps the generation,
+        // so gating the reset on the generation alone would keep diffing
+        // against dead instance keys and never re-mount the placements.
+        if current_gen != self.last_gen || (disconnected && !self.was_disconnected) {
+            self.flush_state.reset();
+            self.last_gen = current_gen;
+        }
+        self.was_disconnected = disconnected;
+
+        self.inner.draw(content)?;
+
+        let frame = self.frame.lock().unwrap_or_else(|e| e.into_inner());
+        let flushed = if disconnected {
+            self.flush_state.emit_placements(&mut self.inner, &frame)
+        } else {
+            self.flush_state
+                .emit_frame(&mut self.inner, &self.writer, &frame)
+        };
+        drop(frame);
+        flushed.map_err(to_io)?;
 
         Ok(())
     }
@@ -195,6 +207,60 @@ mod tests {
         }
     }
 
+    /// Asserts that a draw taken while the control socket is down still
+    /// succeeds and schedules a reconnect, even when a widget claims focus.
+    ///
+    /// Case: the user is typing in a focused webview when the orzma that owns
+    /// the control socket goes away.
+    #[test]
+    fn a_disconnected_draw_with_a_focused_widget_still_schedules_a_reconnect() {
+        use std::os::unix::net::UnixStream;
+        use std::sync::{Arc, Mutex};
+        const INSTANCE: &str = "3f5a9c02d1e84b7690ab3cde12f45678";
+
+        let frame = crate::session::FramePlacements::default();
+        let frame = Arc::new(Mutex::new(frame));
+        {
+            let mut f = frame.lock().unwrap();
+            f.record(INSTANCE.into(), ratatui::layout::Rect::new(0, 0, 10, 5));
+            f.set_focused(INSTANCE.into());
+        }
+
+        // A socket whose peer is gone: every write to it fails, the way the
+        // real one does once orzma has exited.
+        let (near, far) = UnixStream::pair().unwrap();
+        drop(far);
+
+        let (tx, rx) = crossbeam_channel::bounded::<()>(1);
+        let mut backend = OrzmaBackend {
+            inner: WritableTestBackend(ratatui::backend::TestBackend::new(80, 24)),
+            frame,
+            writer: Arc::new(Mutex::new(near)),
+            flush_state: FlushState::default(),
+            reconnect: ReconnectHandle {
+                disconnected: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                reconnect_tx: tx,
+            },
+            last_gen: 0,
+            last_attempt: None,
+            was_disconnected: false,
+        };
+
+        let no_cells: Vec<(u16, u16, &ratatui::buffer::Cell)> = Vec::new();
+        let drawn = Backend::draw(&mut backend, no_cells.into_iter());
+
+        assert!(
+            drawn.is_ok(),
+            "a dead control socket must not fail the draw: {:?}",
+            drawn.err()
+        );
+        assert!(
+            rx.try_recv().is_ok(),
+            "the draw must have scheduled a reconnect"
+        );
+    }
+
     /// Asserts that a draw taken while the session is disconnected clears the
     /// flush state, without waiting for a generation bump.
     ///
@@ -219,6 +285,7 @@ mod tests {
             },
             last_gen: 0,
             last_attempt: None,
+            was_disconnected: false,
         };
         backend
             .flush_state
@@ -255,6 +322,7 @@ mod tests {
             reconnect,
             last_gen: 0,
             last_attempt: None,
+            was_disconnected: false,
         };
         backend
             .flush_state

@@ -98,7 +98,7 @@ impl FlushState {
         socket: &SharedWriter,
         frame: &FramePlacements,
     ) -> OrzmaResult<()> {
-        flush_placements(out, self, &frame.placements)?;
+        self.emit_placements(out, frame)?;
         // NOTE: only take the writer lock (shared with the reader thread and
         // every WebviewHandle::emit) when focus actually changed; this runs every
         // render frame and the unchanged path must not contend the lock.
@@ -107,6 +107,20 @@ impl FlushState {
         }
         let mut w = socket.lock()?;
         flush_focus(&mut *w, &mut self.last_focused, &frame.focused)
+    }
+
+    /// Emits this frame's geometry to `out` alone, leaving the focus op unsent.
+    ///
+    /// This is the flush to use while the control socket is down. Geometry
+    /// rides the PTY, which outlives the socket, and there is nothing at the
+    /// other end of the socket to receive a focus op — attempting one would
+    /// only fail the whole draw.
+    pub fn emit_placements(
+        &mut self,
+        out: &mut impl Write,
+        frame: &FramePlacements,
+    ) -> OrzmaResult<()> {
+        flush_placements(out, self, &frame.placements)
     }
 
     pub fn reset(&mut self) {
@@ -119,6 +133,10 @@ type HandlerRegistry = Arc<Mutex<HashMap<String, Arc<HashMap<String, BoxedHandle
 type PendingReplies = Arc<Mutex<VecDeque<Pending>>>;
 
 /// One in-flight request awaiting its op-less reply.
+///
+/// An entry outlives its waiter's [`REPLY_TIMEOUT`] on purpose: a late reply
+/// still corresponds to this entry by position, so dropping the entry would
+/// hand that reply to the next waiter in line.
 enum Pending {
     /// A `register`: the oneshot carries the minted `(handle, instance)` pair,
     /// and the handlers and event queues are installed under that handle
@@ -900,26 +918,35 @@ mod tests {
         assert!(pending.lock().unwrap().is_empty());
     }
 
-    /// Asserts that a reply whose shape does not match the waiting request
-    /// still consumes that request's queue entry and fails its waiter.
+    /// Asserts that every reply a waiting request cannot be satisfied by — a
+    /// rejection, or a success missing the id it should carry — still consumes
+    /// that request's queue entry and fails only its own waiter.
     ///
-    /// Case: the host answers a `new_instance` with a rejection, and another
-    /// request is already queued behind it.
+    /// Case: the host rejects a `new_instance` for a handle this connection
+    /// does not own, then answers two more requests malformed, while a further
+    /// request waits behind them.
     #[test]
-    fn a_mismatched_reply_consumes_its_entry_rather_than_desyncing_the_queue() {
+    fn an_unusable_reply_consumes_its_entry_rather_than_desyncing_the_queue() {
         let pending: PendingReplies = Arc::new(Mutex::new(VecDeque::new()));
         let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
         let events: EventRegistry = Arc::new(Mutex::new(HashMap::new()));
-        let (first_tx, first_rx) = bounded(1);
-        let (second_tx, second_rx) = bounded(1);
-        pending
-            .lock()
-            .unwrap()
-            .push_back(Pending::NewInstance { reply: first_tx });
-        pending
-            .lock()
-            .unwrap()
-            .push_back(Pending::NewInstance { reply: second_tx });
+        let (rejected_tx, rejected_rx) = bounded(1);
+        let (no_instance_tx, no_instance_rx) = bounded(1);
+        let (no_handle_tx, no_handle_rx) = bounded(1);
+        let (survivor_tx, survivor_rx) = bounded(1);
+        {
+            let mut q = pending.lock().unwrap();
+            q.push_back(Pending::NewInstance { reply: rejected_tx });
+            q.push_back(Pending::NewInstance {
+                reply: no_instance_tx,
+            });
+            q.push_back(Pending::Register {
+                reply: no_handle_tx,
+                handlers: Arc::new(HashMap::new()),
+                events: Arc::new(EventQueues::from_decls(&[])),
+            });
+            q.push_back(Pending::NewInstance { reply: survivor_tx });
+        }
 
         settle_reply(
             &pending,
@@ -927,18 +954,33 @@ mod tests {
             &events,
             r#"{"ok":false,"error":"not_owner"}"#,
         );
+        settle_reply(&pending, &handlers, &events, r#"{"ok":true}"#);
         settle_reply(
             &pending,
             &handlers,
             &events,
-            r#"{"ok":true,"instance":"i2"}"#,
+            r#"{"ok":true,"instance":"i3"}"#,
+        );
+        settle_reply(
+            &pending,
+            &handlers,
+            &events,
+            r#"{"ok":true,"instance":"i4"}"#,
         );
 
         assert!(matches!(
-            first_rx.recv().unwrap(),
+            rejected_rx.recv().unwrap(),
             Err(OrzmaError::Instance { .. })
         ));
-        assert_eq!(second_rx.recv().unwrap().unwrap(), "i2".to_string());
+        assert!(matches!(
+            no_instance_rx.recv().unwrap(),
+            Err(OrzmaError::Instance { .. })
+        ));
+        assert!(matches!(
+            no_handle_rx.recv().unwrap(),
+            Err(OrzmaError::Register { .. })
+        ));
+        assert_eq!(survivor_rx.recv().unwrap().unwrap(), "i4".to_string());
         assert!(pending.lock().unwrap().is_empty());
     }
 
