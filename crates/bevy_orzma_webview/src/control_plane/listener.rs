@@ -8,6 +8,7 @@
 //! through a single owner.
 
 use crate::control_plane::ConnectionWriters;
+use crate::control_plane::HandleId;
 use crate::control_plane::TokenRegistry;
 use crate::control_plane::protocol::{ClientMsg, NavAction, RegisterKind, ServerMsg};
 use bevy::prelude::Entity;
@@ -37,7 +38,17 @@ pub(crate) enum ControlEvent {
         /// Connection id (ownership check).
         connection_id: u64,
         /// The handle to release.
-        handle: String,
+        handle: HandleId,
+    },
+    /// A `new_instance` from a hello'd connection; the apply system mints an
+    /// instance on a handle this connection owns and replies on `reply`.
+    NewInstance {
+        /// Connection id (ownership check).
+        connection_id: u64,
+        /// The handle to mint an additional instance for.
+        handle: HandleId,
+        /// Where the apply system returns the `ServerMsg` reply.
+        reply: Sender<ServerMsg>,
     },
     /// A connection closed; purge all its handles.
     Disconnect {
@@ -62,7 +73,7 @@ pub(crate) enum ControlEvent {
         /// The connection that sent the emit (ownership is checked in apply).
         connection_id: u64,
         /// The target handle.
-        handle: String,
+        handle: HandleId,
         /// The event name.
         event: String,
         /// The event payload.
@@ -74,19 +85,17 @@ pub(crate) enum ControlEvent {
         connection_id: u64,
         /// The surface the connection's token resolved to.
         owner_surface: Entity,
-        /// The handle to focus, or `None` to blur.
-        handle: Option<String>,
-        /// The mount instance id, or `None` for the default instance.
+        /// The instance to focus, or `None` to blur.
         instance: Option<String>,
     },
-    /// An app-initiated in-place navigation of a handle's mounted webview.
+    /// An app-initiated in-place navigation of one mounted placement.
     Navigate {
         /// Connection id (ownership check in apply).
         connection_id: u64,
         /// The surface the connection's token resolved to.
         owner_surface: Entity,
-        /// The target handle.
-        handle: String,
+        /// The target instance.
+        instance: String,
         /// What to do.
         action: NavAction,
     },
@@ -292,6 +301,29 @@ fn handle_client_msg(
                 handle,
             });
         }
+        // NOTE: blocking on reply_rx.recv() before the reader reads the next
+        // line is what keeps one connection's replies in request order; the
+        // SDK matches them to its pending requests by position.
+        ClientMsg::NewInstance { handle } => {
+            let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+            if events
+                .send(ControlEvent::NewInstance {
+                    connection_id,
+                    handle,
+                    reply: reply_tx,
+                })
+                .is_err()
+            {
+                return ControlFlow::Break(());
+            }
+            let reply = reply_rx
+                .recv()
+                .unwrap_or_else(|_| ServerMsg::err("internal"));
+            let line = serde_json::to_string(&reply).expect("ServerMsg serializes infallibly");
+            if out_tx.send(line).is_err() {
+                return ControlFlow::Break(());
+            }
+        }
         ClientMsg::Hello { .. } => {}
         ClientMsg::Reply {
             req_id,
@@ -319,19 +351,18 @@ fn handle_client_msg(
                 payload,
             });
         }
-        ClientMsg::Focus { handle, instance } => {
+        ClientMsg::Focus { instance } => {
             let _ = events.send(ControlEvent::SetFocus {
                 connection_id,
                 owner_surface,
-                handle,
                 instance,
             });
         }
-        ClientMsg::Navigate { handle, action } => {
+        ClientMsg::Navigate { instance, action } => {
             let _ = events.send(ControlEvent::Navigate {
                 connection_id,
                 owner_surface,
-                handle,
+                instance,
                 action,
             });
         }
@@ -378,7 +409,7 @@ mod tests {
             }
             _ => panic!("expected a Register event"),
         };
-        reply.send(ServerMsg::ok("HANDLE1")).unwrap();
+        reply.send(ServerMsg::registered("HANDLE1", "i1")).unwrap();
 
         let mut line = String::new();
         BufReader::new(client.try_clone().unwrap())
@@ -484,7 +515,7 @@ mod tests {
             if let Ok(ControlEvent::Emit { handle, event, .. }) =
                 events.recv_timeout(Duration::from_millis(50))
             {
-                assert_eq!(handle, "H");
+                assert_eq!(handle, HandleId::from("H"));
                 assert_eq!(event, "tick");
                 break;
             }
@@ -503,19 +534,19 @@ mod tests {
 
         let mut client = UnixStream::connect(&sock).unwrap();
         writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
-        writeln!(client, r#"{{"op":"focus","handle":"h1","instance":null}}"#).unwrap();
+        writeln!(client, r#"{{"op":"focus","instance":"3f5a"}}"#).unwrap();
         client.flush().unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             if let Ok(ControlEvent::SetFocus {
                 owner_surface,
-                handle,
+                instance,
                 ..
             }) = events.recv_timeout(Duration::from_millis(50))
             {
                 assert_eq!(owner_surface, surface);
-                assert_eq!(handle.as_deref(), Some("h1"));
+                assert_eq!(instance.as_deref(), Some("3f5a"));
                 break;
             }
             assert!(Instant::now() < deadline, "no SetFocus within 2s");
@@ -565,7 +596,7 @@ mod tests {
 
         let flow = handle_client_msg(
             ClientMsg::Navigate {
-                handle: "H".into(),
+                instance: "3f5a".into(),
                 action: NavAction::Reload,
             },
             7,
@@ -579,12 +610,12 @@ mod tests {
             ControlEvent::Navigate {
                 connection_id,
                 owner_surface,
-                handle,
+                instance,
                 action,
             } => {
                 assert_eq!(connection_id, 7);
                 assert_eq!(owner_surface, surface);
-                assert_eq!(handle, "H");
+                assert_eq!(instance, "3f5a");
                 assert_eq!(action, NavAction::Reload);
             }
             _ => panic!("expected Navigate"),

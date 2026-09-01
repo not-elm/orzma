@@ -602,13 +602,47 @@ fn apply_control_events(
                     OrzmaSource::Url { .. } => {}
                 }
                 registry.insert(handle.clone(), view);
-                let _ = reply.send(ServerMsg::ok(handle.to_string()));
+                // NOTE: a failed mint must not leave a registered handle with
+                // no instance — the program could never mount it, and the
+                // asset entry would leak until the connection drops.
+                let Some(instance) = registry.mint_instance(&handle) else {
+                    registry.remove(&handle);
+                    orzma_assets.0.remove(handle.as_str());
+                    let _ = reply.send(ServerMsg::err("internal"));
+                    continue;
+                };
+                let _ = reply.send(ServerMsg::registered(handle, instance.to_string()));
+            }
+            ControlEvent::NewInstance {
+                connection_id,
+                handle,
+                reply,
+            } => {
+                let owned = registry
+                    .get(&handle)
+                    .is_some_and(|v| v.connection_id == connection_id);
+                if !owned {
+                    let code = if registry.get(&handle).is_some() {
+                        "not_owner"
+                    } else {
+                        "unknown_handle"
+                    };
+                    let _ = reply.send(ServerMsg::err(code));
+                    continue;
+                }
+                match registry.mint_instance(&handle) {
+                    Some(instance) => {
+                        let _ = reply.send(ServerMsg::instanced(instance.to_string()));
+                    }
+                    None => {
+                        let _ = reply.send(ServerMsg::err("internal"));
+                    }
+                }
             }
             ControlEvent::Unregister {
                 connection_id,
                 handle,
             } => {
-                let handle = HandleId::from(handle);
                 let removed: Vec<RemovedRegistration> = if registry
                     .get(&handle)
                     .is_some_and(|v| v.connection_id == connection_id)
@@ -659,7 +693,6 @@ fn apply_control_events(
                 event,
                 payload,
             } => {
-                let handle = HandleId::from(handle);
                 let deliver = registry
                     .get(&handle)
                     .is_some_and(|v| v.connection_id == connection_id && v.source.is_bridged());
@@ -676,73 +709,72 @@ fn apply_control_events(
             ControlEvent::SetFocus {
                 connection_id,
                 owner_surface,
-                handle,
                 instance,
             } => {
                 let Some(focused) = focused.as_mut() else {
                     continue;
                 };
-                match handle {
-                    Some(h) => {
-                        let h = HandleId::from(h);
-                        let owned = registry
-                            .get(&h)
-                            .is_some_and(|v| v.connection_id == connection_id);
-                        if !owned {
-                            tracing::debug!(handle = %h, "focus op for unowned handle, dropping");
-                            continue;
-                        }
-                        let target = webviews.iter().find(|(entity, view)| {
-                            view.view_id == h.as_str()
-                                && view.instance_id.as_deref() == instance.as_deref()
-                                && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
-                                && !non_interactive.contains(*entity)
-                        });
-                        match target {
-                            Some((entity, _)) => focused.0 = Some(entity),
-                            None => tracing::debug!(
-                                handle = %h,
-                                "focus op for unmounted/non-interactive view, dropping"
-                            ),
-                        }
+                let Some(instance) = instance else {
+                    let owned_current = focused
+                        .0
+                        .is_some_and(|e| child_of.get(e).map(|c| c.parent()) == Ok(owner_surface));
+                    if owned_current {
+                        focused.0 = None;
                     }
-                    None => {
-                        let owned_current = focused.0.is_some_and(|e| {
-                            child_of.get(e).map(|c| c.parent()) == Ok(owner_surface)
-                        });
-                        if owned_current {
-                            focused.0 = None;
-                        }
-                    }
+                    continue;
+                };
+                let Ok(id) = instance.parse::<InstanceId>() else {
+                    continue;
+                };
+                let owned = registry
+                    .resolve_instance(id)
+                    .is_some_and(|(_, v)| v.connection_id == connection_id);
+                if !owned {
+                    tracing::debug!(%instance, "focus op for an unowned instance, dropping");
+                    continue;
+                }
+                let target = webviews.iter().find(|(entity, view)| {
+                    view.instance == id
+                        && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
+                        && !non_interactive.contains(*entity)
+                });
+                match target {
+                    Some((entity, _)) => focused.0 = Some(entity),
+                    None => tracing::debug!(
+                        %instance,
+                        "focus op for an unmounted/non-interactive instance, dropping"
+                    ),
                 }
             }
             ControlEvent::Navigate {
                 connection_id,
                 owner_surface,
-                handle,
+                instance,
                 action,
             } => {
-                let handle = HandleId::from(handle);
-                let Some(view) = registry.get(&handle) else {
+                let Ok(id) = instance.parse::<InstanceId>() else {
+                    continue;
+                };
+                let Some((_, view)) = registry.resolve_instance(id) else {
                     continue;
                 };
                 if view.connection_id != connection_id {
-                    tracing::debug!(handle = %handle, "navigate for unowned handle, dropping");
+                    tracing::debug!(%instance, "navigate for an unowned instance, dropping");
                     continue;
                 }
                 let is_url = view.source.is_url();
                 let target = webviews.iter().find(|(entity, v)| {
-                    v.view_id == handle.as_str()
+                    v.instance == id
                         && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
                 });
                 let Some((entity, _)) = target else {
-                    tracing::debug!(handle = %handle, "navigate for unmounted view, dropping");
+                    tracing::debug!(%instance, "navigate for an unmounted instance, dropping");
                     continue;
                 };
                 match action {
                     NavAction::To(url) => {
                         if !is_url {
-                            tracing::debug!(handle = %handle, "navigate To on a non-url view, dropping");
+                            tracing::debug!(%instance, "navigate To on a non-url view, dropping");
                             continue;
                         }
                         match validate_url_source(&url) {
@@ -761,7 +793,7 @@ fn apply_control_events(
                                 }
                             }
                             Err(e) => {
-                                tracing::debug!(handle = %handle, error = e, "navigate To rejected url");
+                                tracing::debug!(%instance, error = e, "navigate To rejected url");
                             }
                         }
                     }
@@ -1258,17 +1290,17 @@ mod apply_tests {
         app.update();
 
         let handle = match reply_rx.try_recv().expect("apply must reply") {
-            ServerMsg::Ok { handle, .. } => handle,
-            ServerMsg::Err { error, .. } => panic!("unexpected err: {error}"),
+            ServerMsg::Registered { handle, .. } => handle,
+            other => panic!("unexpected reply: {other:?}"),
         };
         assert!(
-            orzma_assets.get(&handle).is_some(),
+            orzma_assets.get(handle.as_str()).is_some(),
             "WebviewAssetRegistry populated for Dir"
         );
         assert!(
             app.world()
                 .resource::<OrzmaRegistry>()
-                .get(&HandleId::from(handle.as_str()))
+                .get(&handle)
                 .is_some(),
             "OrzmaRegistry populated"
         );
@@ -1304,11 +1336,11 @@ mod apply_tests {
         app.update();
 
         let handle = match reply_rx.try_recv().expect("apply must reply") {
-            ServerMsg::Ok { handle, .. } => handle,
-            ServerMsg::Err { error, .. } => panic!("unexpected err: {error}"),
+            ServerMsg::Registered { handle, .. } => handle,
+            other => panic!("unexpected reply: {other:?}"),
         };
         assert!(
-            matches!(orzma_assets.get(&handle), Some(WebviewAsset::Inline(bytes)) if bytes == b"<h1>x</h1>"),
+            matches!(orzma_assets.get(handle.as_str()), Some(WebviewAsset::Inline(bytes)) if bytes == b"<h1>x</h1>"),
             "WebviewAssetRegistry must carry the inline HTML bytes for the minted handle"
         );
     }
@@ -1415,12 +1447,17 @@ mod apply_tests {
             },
         );
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let instance = reg
+            .mint_instance(&HandleId::from("HMOUNT"))
+            .expect("the handle mints");
         let mounted = app
             .world_mut()
             .spawn(Webview {
-                view_id: "HMOUNT".into(),
-                instance_id: None,
+                handle: "HMOUNT".into(),
+                instance,
                 slot: 0,
+                rows: 10,
+                cols: 40,
             })
             .id();
         app.insert_resource(reg);
@@ -1560,10 +1597,15 @@ mod apply_tests {
                 instances: Vec::new(),
             },
         );
+        let instance = reg
+            .mint_instance(&HandleId::from("disp"))
+            .expect("the handle mints");
         app.world_mut().spawn(Webview {
-            view_id: "disp".into(),
-            instance_id: None,
+            handle: "disp".into(),
+            instance,
             slot: 0,
+            rows: 10,
+            cols: 40,
         });
         app.insert_resource(reg);
         app.insert_resource(OrzmaRpc::default());
@@ -1620,18 +1662,18 @@ mod apply_tests {
         app.update();
 
         let handle = match reply_rx.try_recv().expect("apply must reply") {
-            ServerMsg::Ok { handle, .. } => handle,
-            ServerMsg::Err { error, .. } => panic!("unexpected err: {error}"),
+            ServerMsg::Registered { handle, .. } => handle,
+            other => panic!("unexpected reply: {other:?}"),
         };
         assert!(
             app.world()
                 .resource::<OrzmaRegistry>()
-                .get(&HandleId::from(handle.as_str()))
+                .get(&handle)
                 .is_some(),
             "OrzmaRegistry populated"
         );
         assert!(
-            orzma_assets.get(&handle).is_none(),
+            orzma_assets.get(handle.as_str()).is_none(),
             "WebviewAssetRegistry must NOT be populated for a url handle"
         );
     }
@@ -1655,17 +1697,23 @@ mod apply_tests {
                 instances: Vec::new(),
             },
         );
+        let instance = reg
+            .mint_instance(&HandleId::from("H"))
+            .expect("the handle mints");
         let mounted = app
             .world_mut()
             .spawn((
                 Webview {
-                    view_id: "H".into(),
-                    instance_id: None,
+                    handle: "H".into(),
+                    instance,
                     slot: 0,
+                    rows: 10,
+                    cols: 40,
                 },
                 WebviewOwner {
                     connection_id: 5,
                     handle: "H".into(),
+                    instance,
                 },
             ))
             .id();
@@ -1726,13 +1774,18 @@ mod apply_tests {
                 instances: Vec::new(),
             },
         );
+        let instance = reg
+            .mint_instance(&HandleId::from("H"))
+            .expect("the handle mints");
         let child = app
             .world_mut()
             .spawn((
                 Webview {
-                    view_id: "H".into(),
-                    instance_id: None,
+                    handle: "H".into(),
+                    instance,
                     slot: 0,
+                    rows: 10,
+                    cols: 40,
                 },
                 WebviewSource::new("https://example.com"),
                 ChildOf(surface),
@@ -1748,7 +1801,7 @@ mod apply_tests {
             .send(ControlEvent::Navigate {
                 connection_id: 5,
                 owner_surface: surface,
-                handle: "H".into(),
+                instance: instance.to_string(),
                 action: NavAction::To("https://example.com/next".into()),
             })
             .unwrap();
@@ -1783,13 +1836,18 @@ mod apply_tests {
                 instances: Vec::new(),
             },
         );
+        let instance = reg
+            .mint_instance(&HandleId::from("H"))
+            .expect("the handle mints");
         let child = app
             .world_mut()
             .spawn((
                 Webview {
-                    view_id: "H".into(),
-                    instance_id: None,
+                    handle: "H".into(),
+                    instance,
                     slot: 0,
+                    rows: 10,
+                    cols: 40,
                 },
                 WebviewSource::new("https://example.com"),
                 ChildOf(surface),
@@ -1809,7 +1867,7 @@ mod apply_tests {
             .send(ControlEvent::Navigate {
                 connection_id: 5,
                 owner_surface: surface,
-                handle: "H".into(),
+                instance: instance.to_string(),
                 action: NavAction::Back,
             })
             .unwrap();
@@ -1841,13 +1899,18 @@ mod apply_tests {
                 instances: Vec::new(),
             },
         );
+        let instance = reg
+            .mint_instance(&HandleId::from("H"))
+            .expect("the handle mints");
         let child = app
             .world_mut()
             .spawn((
                 Webview {
-                    view_id: "H".into(),
-                    instance_id: None,
+                    handle: "H".into(),
+                    instance,
                     slot: 0,
+                    rows: 10,
+                    cols: 40,
                 },
                 WebviewSource::new("https://example.com"),
                 ChildOf(surface),
@@ -1863,7 +1926,7 @@ mod apply_tests {
             .send(ControlEvent::Navigate {
                 connection_id: 9, // not the owner (5)
                 owner_surface: surface,
-                handle: "H".into(),
+                instance: instance.to_string(),
                 action: NavAction::To("https://evil.example/x".into()),
             })
             .unwrap();
@@ -1885,49 +1948,75 @@ mod focus_tests {
     use bevy_cef::prelude::FocusedWebview;
     use crossbeam_channel::unbounded;
 
-    #[test]
-    fn set_focus_points_focused_webview_at_the_owned_inline_child() {
-        let mut app = bevy::app::App::new();
-        app.add_plugins(bevy::MinimalPlugins)
+    fn focus_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
             .init_resource::<OrzmaRegistry>()
             .init_resource::<OrzmaRpc>()
             .init_resource::<FocusedWebview>()
             .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        app
+    }
 
-        let surface = app.world_mut().spawn_empty().id();
-
-        app.world_mut().resource_mut::<OrzmaRegistry>().insert(
-            "h1".into(),
+    /// Registers an inline view owned by `owner_surface` / `connection_id`
+    /// and mints its first instance, the way `register` does at runtime.
+    fn register_and_mint(
+        app: &mut App,
+        handle: &str,
+        owner_surface: Entity,
+        connection_id: u64,
+    ) -> InstanceId {
+        let handle = HandleId::from(handle);
+        let mut registry = app.world_mut().resource_mut::<OrzmaRegistry>();
+        registry.insert(
+            handle.clone(),
             OrzmaView {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                owner_surface: surface,
-                connection_id: 1,
+                owner_surface,
+                connection_id,
                 forward_keys: vec![],
                 preload: vec![],
                 instances: Vec::new(),
             },
         );
-        let child = app
-            .world_mut()
+        registry.mint_instance(&handle).expect("the handle mints")
+    }
+
+    fn spawn_mounted(app: &mut App, surface: Entity, handle: &str, instance: InstanceId) -> Entity {
+        app.world_mut()
             .spawn((
                 ChildOf(surface),
                 Webview {
-                    view_id: "h1".into(),
-                    instance_id: None,
+                    handle: handle.into(),
+                    instance,
                     slot: 0,
+                    rows: 10,
+                    cols: 40,
                 },
             ))
-            .id();
+            .id()
+    }
+
+    /// Asserts that a focus op names the mounted child holding that
+    /// instance, and that a null instance from the owning surface clears it.
+    ///
+    /// Case: an app moves keyboard focus into the placement it just
+    /// mounted, then hands focus back to the shell.
+    #[test]
+    fn set_focus_points_focused_webview_at_the_owned_inline_child() {
+        let mut app = focus_app();
+        let surface = app.world_mut().spawn_empty().id();
+        let instance = register_and_mint(&mut app, "h1", surface, 1);
+        let child = spawn_mounted(&mut app, surface, "h1", instance);
 
         let (tx, rx) = unbounded::<ControlEvent>();
         app.insert_resource(ControlEvents(rx));
         tx.send(ControlEvent::SetFocus {
             connection_id: 1,
             owner_surface: surface,
-            handle: Some("h1".into()),
-            instance: None,
+            instance: Some(instance.to_string()),
         })
         .unwrap();
         app.world_mut()
@@ -1943,7 +2032,6 @@ mod focus_tests {
         tx.send(ControlEvent::SetFocus {
             connection_id: 1,
             owner_surface: surface,
-            handle: None,
             instance: None,
         })
         .unwrap();
@@ -1953,48 +2041,29 @@ mod focus_tests {
         assert_eq!(app.world().resource::<FocusedWebview>().0, None);
     }
 
+    /// Asserts that a focus op from a connection that does not own the
+    /// instance is dropped even though a focusable child is mounted.
+    ///
+    /// Case: a second program on the same surface guesses an instance id
+    /// another program's registration minted.
     #[test]
-    fn set_focus_rejects_unowned_handle() {
-        let mut app = bevy::app::App::new();
-        app.add_plugins(bevy::MinimalPlugins)
-            .init_resource::<OrzmaRegistry>()
-            .init_resource::<OrzmaRpc>()
-            .init_resource::<FocusedWebview>()
-            .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+    fn set_focus_rejects_an_unowned_instance() {
+        let mut app = focus_app();
         let surface = app.world_mut().spawn_empty().id();
-        app.world_mut().resource_mut::<OrzmaRegistry>().insert(
-            "h1".into(),
-            OrzmaView {
-                source: OrzmaSource::Inline("<h1>x</h1>".into()),
-                entry: "index.html".into(),
-                interactive: true,
-                owner_surface: surface,
-                connection_id: 99,
-                forward_keys: vec![],
-                preload: vec![],
-                instances: Vec::new(),
-            },
-        );
+        let instance = register_and_mint(&mut app, "h1", surface, 99);
         // Spawn a VALID interactive inline child that WOULD be focused if the
         // ownership check passed. This ensures the guard is the sole gate:
         // deleting the `connection_id` check would let focus be granted and
         // this assertion would FAIL.
-        app.world_mut().spawn((
-            ChildOf(surface),
-            Webview {
-                view_id: "h1".into(),
-                instance_id: None,
-                slot: 0,
-            },
-        ));
+        spawn_mounted(&mut app, surface, "h1", instance);
+
         let (tx, rx) = unbounded::<ControlEvent>();
         app.insert_resource(ControlEvents(rx));
         // connection_id 1 ≠ owner 99 — ownership guard must reject this.
         tx.send(ControlEvent::SetFocus {
             connection_id: 1,
             owner_surface: surface,
-            handle: Some("h1".into()),
-            instance: None,
+            instance: Some(instance.to_string()),
         })
         .unwrap();
         app.world_mut()
@@ -2007,44 +2076,19 @@ mod focus_tests {
         );
     }
 
+    /// Asserts that a blur only clears focus the requesting surface owns,
+    /// and does clear it when the owning surface asks.
+    ///
+    /// Case: a program on a second pane blurs while a webview on the first
+    /// pane holds keyboard focus.
     #[test]
     fn blur_does_not_clobber_another_surfaces_focus() {
-        let mut app = bevy::app::App::new();
-        app.add_plugins(bevy::MinimalPlugins)
-            .init_resource::<OrzmaRegistry>()
-            .init_resource::<OrzmaRpc>()
-            .init_resource::<FocusedWebview>()
-            .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
-
+        let mut app = focus_app();
         let surface_a = app.world_mut().spawn_empty().id();
         let surface_b = app.world_mut().spawn_empty().id();
 
-        // Register "ha" owned by connection 1 / surface_a.
-        app.world_mut().resource_mut::<OrzmaRegistry>().insert(
-            "ha".into(),
-            OrzmaView {
-                source: OrzmaSource::Inline("<h1>a</h1>".into()),
-                entry: "index.html".into(),
-                interactive: true,
-                owner_surface: surface_a,
-                connection_id: 1,
-                forward_keys: vec![],
-                preload: vec![],
-                instances: Vec::new(),
-            },
-        );
-        // Spawn the matching interactive inline child on surface_a.
-        let child_a = app
-            .world_mut()
-            .spawn((
-                ChildOf(surface_a),
-                Webview {
-                    view_id: "ha".into(),
-                    instance_id: None,
-                    slot: 0,
-                },
-            ))
-            .id();
+        let instance = register_and_mint(&mut app, "ha", surface_a, 1);
+        let child_a = spawn_mounted(&mut app, surface_a, "ha", instance);
 
         let (tx, rx) = unbounded::<ControlEvent>();
         app.insert_resource(ControlEvents(rx));
@@ -2053,8 +2097,7 @@ mod focus_tests {
         tx.send(ControlEvent::SetFocus {
             connection_id: 1,
             owner_surface: surface_a,
-            handle: Some("ha".into()),
-            instance: None,
+            instance: Some(instance.to_string()),
         })
         .unwrap();
         app.world_mut()
@@ -2071,7 +2114,6 @@ mod focus_tests {
         tx.send(ControlEvent::SetFocus {
             connection_id: 2,
             owner_surface: surface_b,
-            handle: None,
             instance: None,
         })
         .unwrap();
@@ -2088,7 +2130,6 @@ mod focus_tests {
         tx.send(ControlEvent::SetFocus {
             connection_id: 1,
             owner_surface: surface_a,
-            handle: None,
             instance: None,
         })
         .unwrap();
