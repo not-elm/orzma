@@ -96,7 +96,7 @@ pub struct AnchoredPlacement {
     pub id: InstanceId,
     /// Active-grid cell the rect's top-left corner sits at.
     pub point: GridPoint,
-    /// The rect's extent, unchanged from the mount that reserved it.
+    /// The rect's extent in cells.
     pub size: PlacementSize,
 }
 

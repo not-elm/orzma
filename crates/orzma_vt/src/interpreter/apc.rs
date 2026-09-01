@@ -151,8 +151,6 @@ mod tests {
             instance: ID.parse().expect("the fixture is a valid id"),
             size: PlacementSize { rows: 24, cols: 80 },
         };
-        // NOTE: WebviewApcRequest is Clone but not Copy, so each comparison
-        // needs its own value.
         assert_eq!(
             parse(&format!("Omount;n={ID},r=24,c=80")),
             Some(expected.clone())
@@ -173,10 +171,6 @@ mod tests {
         assert_eq!(parse(&format!("Omount;v=abc,n={ID},r=24,c=80")), None);
         assert_eq!(parse("Omount;v=abc,r=24,c=80"), None);
     }
-
-    // NOTE: use a plain string literal wherever there is no interpolation —
-    // `format!` with no placeholder trips clippy::useless_format under
-    // `-D warnings`.
 
     /// Asserts that a mount whose instance is not exactly 32 lowercase
     /// hex digits is malformed, and that a repeated key is too.

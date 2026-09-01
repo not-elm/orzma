@@ -140,8 +140,8 @@ pub(crate) struct WebviewParams<'w, 's> {
 /// verbatim remote URL for a `Url` source), the input policy, and the
 /// registering program's `(connection_id, handle)` for back-channel routing.
 pub(crate) struct ResolvedWebviewMount {
-    /// The URL to load (`WebviewSource::Url`). `None` signals a policy rejection.
-    pub url: Option<String>,
+    /// The URL to load (`WebviewSource::Url`).
+    pub url: String,
     /// Whether the page receives pointer/keyboard input.
     pub interactive: bool,
     /// `(connection_id, handle)` of the registering program, used to stamp
@@ -185,7 +185,7 @@ pub(crate) fn resolve_mount(
         .is_bridged()
         .then(|| (view.connection_id, id.clone()));
     Some(ResolvedWebviewMount {
-        url: Some(url),
+        url,
         interactive: view.interactive,
         owner,
         forward_keys: view.forward_keys.clone(),
@@ -242,11 +242,6 @@ pub(crate) fn mount(params: &mut WebviewParams, dynamic: &OrzmaRegistry, ctx: We
         reclaim(params, ctx.terminal_surface, ctx.instance);
         return;
     };
-    let Some(url) = resolved.url.clone() else {
-        tracing::debug!(%handle, "apc-webview: resolved mount had no url, dropping");
-        reclaim(params, ctx.terminal_surface, ctx.instance);
-        return;
-    };
     let Some(slot) = smallest_free_slot(&live) else {
         tracing::debug!(%handle, "apc-webview: all inline overlay slots occupied, dropping");
         reclaim(params, ctx.terminal_surface, ctx.instance);
@@ -261,7 +256,7 @@ pub(crate) fn mount(params: &mut WebviewParams, dynamic: &OrzmaRegistry, ctx: We
     let (cell_w_phys, cell_h_phys) = cell_size_phys(params.metrics.as_deref());
     let size = seed_logical_size(ctx.rows, ctx.cols, cell_w_phys, cell_h_phys, scale_factor);
     let texture = WebviewTextureTarget(params.images.add(Image::default()));
-    let source = WebviewSource::new(url);
+    let source = WebviewSource::new(resolved.url);
     let webview = params.commands.spawn_empty().id();
     // NOTE: keep this entity free of Node / Mesh2d / Mesh3d / Sprite /
     // MaterialNode (even for debug visualization). bevy_cef's mesh/sprite
@@ -1982,7 +1977,7 @@ mod tests {
         dynamic.insert(handle.clone(), dir_view(owner, false));
 
         let d = resolve_mount(&handle, owner, &dynamic).expect("dynamic resolves");
-        assert_eq!(d.url.as_deref(), Some("orzma://DYNHANDLE/index.html"));
+        assert_eq!(d.url, "orzma://DYNHANDLE/index.html");
         assert!(!d.interactive);
 
         assert!(
@@ -1999,7 +1994,7 @@ mod tests {
         let mut dynamic = OrzmaRegistry::default();
         dynamic.insert(handle.clone(), inline_view(owner, true));
         let r = resolve_mount(&handle, owner, &dynamic).expect("inline resolves");
-        assert_eq!(r.url.as_deref(), Some("orzma://INLINEH/index.html"));
+        assert_eq!(r.url, "orzma://INLINEH/index.html");
         assert!(r.owner.is_some());
     }
 
@@ -2057,11 +2052,11 @@ mod tests {
         );
 
         let disp = resolve_mount(&disp_handle, surface, &reg).expect("registered");
-        assert_eq!(disp.url.as_deref(), Some("https://example.com"));
+        assert_eq!(disp.url, "https://example.com");
         assert!(disp.owner.is_none(), "display-only url must have no owner");
 
         let appv = resolve_mount(&app_handle, surface, &reg).expect("registered");
-        assert_eq!(appv.url.as_deref(), Some("https://app.example.com"));
+        assert_eq!(appv.url, "https://app.example.com");
         assert_eq!(appv.owner, Some((7, app_handle)));
     }
 

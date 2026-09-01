@@ -110,6 +110,8 @@ pub struct TtyWebviewUnmountSignal {
 pub struct TtyWebviewEvictedSignal {
     #[event_target]
     pub terminal: Entity,
+    /// The instances the VT evicted. It has already dropped them, so a
+    /// consumer despawns its own side without asking for a second removal.
     pub placements: Vec<InstanceId>,
 }
 

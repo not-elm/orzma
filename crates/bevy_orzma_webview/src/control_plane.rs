@@ -236,8 +236,11 @@ impl OrzmaRegistry {
     /// Mints an instance for `handle`; `None` only when the handle is
     /// unknown.
     ///
-    /// This is the ONLY path that produces an [`InstanceId`], which is what
-    /// makes "every allocated instance is unique across the registry" hold.
+    /// This is the ONLY path that produces an [`InstanceId`], so every
+    /// allocated instance is a fresh 128-bit CSPRNG draw. Registry-wide
+    /// uniqueness rests on that draw rather than on a structural check: the
+    /// `debug_assert!` below is a tripwire for a broken CSPRNG, and it
+    /// compiles out in release.
     pub fn mint_instance(&mut self, handle: &HandleId) -> Option<InstanceId> {
         if !self.by_handle.contains_key(handle) {
             return None;
@@ -927,6 +930,7 @@ fn on_navigate(
         return;
     };
     let Some((_, view)) = registry.resolve_instance(id) else {
+        tracing::debug!(%instance, "navigate for an unknown instance, dropping");
         return;
     };
     if view.connection_id != connection_id {

@@ -178,8 +178,11 @@ socket 往復なしで回る。
 
 1. **allocated な `InstanceId` は host の registry 全体で一意。** mounted かどうかは
    関係ない。unmount 済みでも handle 存続中は再 mount 可能＝allocated なので、
-   instance → handle の逆引きが一意である必要がある。128bit CSPRNG に加えて
-   vacant-entry チェックで構造的に保証する（確率任せにしない）。
+   instance → handle の逆引きが一意である必要がある。根拠は 128bit の OS CSPRNG
+   であり、数千エントリ対 2^128 の衝突確率は到達不能である。この一意性は構造的では
+   なく確率的であり、mint 時の `debug_assert!`（§3.1）はその前提が破れたことを
+   デバッグビルドで捕まえる tripwire であって、リリースビルドで一意性を強制する
+   ものではない。
 2. **ある瞬間に live な `InstanceId` は端末内で一意。** `supersede` が両スクリーンを
    走査するので既存挙動のまま満たされる。端末間は、instance が handle に属し handle が
    `owner_surface` に属することから、既存の所有権ゲートが担保する。
@@ -556,11 +559,15 @@ ECS state の二重管理になるうえ、その整合性のための不変条�
 2. この端末に同じ instance  → in-place 更新して return
 3. resolve_mount(handle)    → 未登録 / owner_surface 不一致    → debug + 回収 + return
 4. overlay スロット枯渇                                        → debug + 回収 + return
-5. url が解決できない                                          → debug + 回収 + return
 ```
 
 1 を先頭に置くのは、handle が取れないと 3 以降が書けないためである。「回収」は §6 の
 VT 側 placement の削除を指す。
+
+url に対応するゲートは無い。url は登録時に検証済み（`invalid_url` /
+`unsupported_scheme`）であり、`resolve_mount` は3種の source すべてで必ず url を
+組み立てるためである。したがって `ResolvedWebviewMount::url` は `Option<String>`
+ではなく `String` である。
 
 ### 3.4 コンポーネントの統合
 
