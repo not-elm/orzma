@@ -350,39 +350,17 @@ impl VTActor for Executor<'_> {
         // these assignments would leave the changed placement list without
         // a frame to carry it — the webview would register and never draw.
         let signal = match request {
-            WebviewApcRequest::Mount {
-                view_id,
-                size,
-                instance_id,
-            } => match self
-                .device
-                .mount_placement(size, view_id.clone(), instance_id.clone())
-            {
-                Some(placement) => {
+            WebviewApcRequest::Mount { instance, size } => {
+                if self.device.mount_placement(size, instance) {
                     self.output.damaged = true;
-                    VtSignal::WebviewMount {
-                        view_id,
-                        size,
-                        instance_id,
-                        placement,
-                    }
+                    VtSignal::WebviewMount { instance, size }
+                } else {
+                    VtSignal::WebviewMountRejected { instance }
                 }
-                None => VtSignal::WebviewMountRejected {
-                    view_id,
-                    instance_id,
-                },
-            },
-            WebviewApcRequest::Unmount {
-                view_id,
-                instance_id,
-            } => {
-                self.output.damaged |= self
-                    .device
-                    .unmount_placement(view_id.as_deref(), instance_id.as_deref());
-                VtSignal::WebviewUnmount {
-                    view_id,
-                    instance_id,
-                }
+            }
+            WebviewApcRequest::Unmount { instance } => {
+                self.output.damaged |= self.device.unmount_placement(instance);
+                VtSignal::WebviewUnmount { instance }
             }
         };
         self.signal(signal);

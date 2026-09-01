@@ -3,6 +3,8 @@
 
 use super::*;
 
+const ID: &str = "3f5a9c02d1e84b7690ab3cde12f45678";
+
 /// Asserts that an application program command is ignored rather
 /// than fatal, and that the parser returns to ground behind it.
 ///
@@ -17,21 +19,20 @@ fn an_application_program_command_is_ignored_rather_than_fatal() {
     );
 }
 
-/// Asserts that an APC mount mints a placement and reports it with the
-/// reservation the payload asked for.
+/// Asserts that an APC mount registers a placement and reports it with
+/// the reservation the payload asked for.
 ///
-/// Case: a companion app registers a view over the control socket
+/// Case: a companion app registers an instance over the control socket
 /// and writes the mount sequence to reserve room for its page.
 #[test]
-fn an_apc_mount_reports_the_placement_it_minted() {
-    let (_device, output) = interpret_fully(b"\x1b_Omount;v=memo,r=2,c=3\x1b\\");
+fn an_apc_mount_reports_the_placement_it_registered() {
+    let id: InstanceId = ID.parse().expect("the fixture is a valid id");
+    let (_device, output) = interpret_fully(format!("\x1b_Omount;n={id},r=2,c=3\x1b\\").as_bytes());
     assert_eq!(
         output.signals,
         vec![VtSignal::WebviewMount {
-            view_id: "memo".to_owned(),
+            instance: id,
             size: PlacementSize { rows: 2, cols: 3 },
-            instance_id: None,
-            placement: PlacementId(0),
         }]
     );
 }
@@ -39,38 +40,37 @@ fn an_apc_mount_reports_the_placement_it_minted() {
 /// Asserts that an APC-mounted placement is listed in the next
 /// emitted frame.
 ///
-/// Case: a companion app mounts its view, and the host must be told
+/// Case: a companion app mounts its instance, and the host must be told
 /// where to draw the webview on the frame that follows.
 #[test]
 fn an_apc_mount_reaches_the_next_frame() {
+    let id: InstanceId = ID.parse().expect("the fixture is a valid id");
     let mut session = Session::new();
-    session.feed(b"\x1b_Omount;v=memo,r=2,c=3\x1b\\");
+    session.feed(format!("\x1b_Omount;n={id},r=2,c=3\x1b\\").as_bytes());
     let frame = session.frame().expect("a mount emits");
-    let listed: Vec<PlacementId> = frame
+    let listed: Vec<InstanceId> = frame
         .placements
         .expect("a placement change is listed")
         .iter()
         .map(|placement| placement.id)
         .collect();
-    assert_eq!(listed, vec![PlacementId(0)]);
+    assert_eq!(listed, vec![id]);
 }
 
-/// Asserts that an APC unmount reports the address it named and drops
-/// the mounted view from the next frame.
+/// Asserts that an APC unmount reports the instance it named and drops
+/// the mounted placement from the next frame.
 ///
-/// Case: a companion app tears its view down on the way out.
+/// Case: a companion app tears its instance down on the way out.
 #[test]
 fn an_apc_unmount_reports_the_address_it_named() {
+    let id: InstanceId = ID.parse().expect("the fixture is a valid id");
     let mut session = Session::new();
-    session.feed(b"\x1b_Omount;v=memo,r=2,c=3\x1b\\");
+    session.feed(format!("\x1b_Omount;n={id},r=2,c=3\x1b\\").as_bytes());
     session.frame();
-    let output = session.feed(b"\x1b_Ounmount;v=memo\x1b\\");
+    let output = session.feed(format!("\x1b_Ounmount;n={id}\x1b\\").as_bytes());
     assert_eq!(
         output.signals,
-        vec![VtSignal::WebviewUnmount {
-            view_id: Some("memo".to_owned()),
-            instance_id: None,
-        }]
+        vec![VtSignal::WebviewUnmount { instance: Some(id) }]
     );
     let frame = session.frame().expect("the unmount emits");
     assert_eq!(frame.placements, Some(vec![]));
@@ -88,44 +88,44 @@ fn a_foreign_apc_payload_raises_no_signal() {
 }
 
 /// Asserts that a mount past the per-terminal cap is reported as a
-/// rejection naming the address it refused, rather than as a mount.
+/// rejection naming the instance it refused, rather than as a mount.
 ///
-/// Case: a program mounts more views than the terminal has overlay
+/// Case: a program mounts more instances than the terminal has overlay
 /// slots for.
 #[test]
 fn an_apc_mount_past_the_cap_is_rejected() {
     let mut session = Session::new();
-    for i in 0..MAX_PLACEMENTS {
-        session.mount(&format!("v{i}"));
+    for i in 0..MAX_PLACEMENTS as u128 {
+        session.mount(InstanceId(i));
     }
-    let output = session.feed(b"\x1b_Omount;v=over,r=1,c=1\x1b\\");
+    let over: InstanceId = ID.parse().expect("the fixture is a valid id");
+    let output = session.feed(format!("\x1b_Omount;n={over},r=1,c=1\x1b\\").as_bytes());
     assert_eq!(
         output.signals,
-        vec![VtSignal::WebviewMountRejected {
-            view_id: "over".to_owned(),
-            instance_id: None,
-        }]
+        vec![VtSignal::WebviewMountRejected { instance: over }]
     );
 }
 
 /// Asserts that an accepted mount raises the chunk liveness.
 ///
-/// Case: a companion app mounts its view in the very first chunk the
-/// terminal ever interprets, with no other output alongside it.
+/// Case: a companion app mounts its instance in the very first chunk
+/// the terminal ever interprets, with no other output alongside it.
 #[test]
 fn an_accepted_mount_raises_the_chunk_liveness() {
-    assert!(damage_of(b"\x1b_Omount;v=memo,r=2,c=3\x1b\\"));
+    assert!(damage_of(
+        format!("\x1b_Omount;n={ID},r=2,c=3\x1b\\").as_bytes()
+    ));
 }
 
 /// Asserts that a hit unmount raises the chunk liveness.
 ///
-/// Case: a companion app tears its view down in a chunk that carries no
-/// other terminal output.
+/// Case: a companion app tears its instance down in a chunk that
+/// carries no other terminal output.
 #[test]
 fn a_hit_unmount_raises_the_chunk_liveness() {
     assert!(liveness_after(
-        b"\x1b_Omount;v=memo,r=2,c=3\x1b\\",
-        b"\x1b_Ounmount;v=memo\x1b\\"
+        format!("\x1b_Omount;n={ID},r=2,c=3\x1b\\").as_bytes(),
+        format!("\x1b_Ounmount;n={ID}\x1b\\").as_bytes()
     ));
 }
 
@@ -137,9 +137,34 @@ fn a_hit_unmount_raises_the_chunk_liveness() {
 #[test]
 fn a_capped_mount_does_not_raise_the_chunk_liveness() {
     let mut session = Session::new();
-    for i in 0..MAX_PLACEMENTS {
-        session.mount(&format!("v{i}"));
+    for i in 0..MAX_PLACEMENTS as u128 {
+        session.mount(InstanceId(i));
     }
-    let output = session.feed(b"\x1b_Omount;v=over,r=1,c=1\x1b\\");
+    let output = session.feed(format!("\x1b_Omount;n={ID},r=1,c=1\x1b\\").as_bytes());
     assert!(!output.damaged);
+}
+
+/// Asserts that a re-mount of a live instance keeps the id and reports
+/// the new reservation, rather than minting a successor id.
+///
+/// Case: a program redraws the same view one row shorter after the
+/// surrounding layout changed.
+#[test]
+fn a_remount_of_a_live_instance_keeps_its_id() {
+    let id: InstanceId = ID.parse().expect("the fixture is a valid id");
+    let mut vt = OrzmaVt::new(GridSize { cols: 80, rows: 24 }, 100);
+    vt.interpret(format!("\x1b_Omount;n={id},r=10,c=40\x1b\\").as_bytes());
+    let out = vt.interpret(format!("\x1b_Omount;n={id},r=9,c=40\x1b\\").as_bytes());
+    assert_eq!(
+        out.signals,
+        vec![VtSignal::WebviewMount {
+            instance: id,
+            size: PlacementSize { rows: 9, cols: 40 },
+        }]
+    );
+    let frame = vt.frame().expect("the remount damages the chunk");
+    let placements = frame.placements.expect("the list changed");
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].id, id);
+    assert_eq!(placements[0].size, PlacementSize { rows: 9, cols: 40 });
 }

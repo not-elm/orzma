@@ -277,6 +277,10 @@ impl DeviceState {
     /// Removes the placements the host names on either screen; returns
     /// whether anything went. Visits both screens without short-circuiting,
     /// for the same reason [`Self::unmount_placement`] does.
+    // NOTE: this is public API for the control plane's connection-drop
+    // handler, landing in a later task; nothing in this crate calls it yet,
+    // so the lint expectation is correctly fulfilled.
+    #[expect(dead_code, reason = "consumed by a later task's disconnect handler")]
     pub fn remove_placements(&mut self, ids: &[InstanceId]) -> bool {
         let primary = self.screens.primary.remove_placements(ids);
         let alternate = self.screens.alternate.remove_placements(ids);
@@ -366,8 +370,8 @@ mod tests {
         DeviceState::new(GridSize { cols: 8, rows: 3 }, 10)
     }
 
-    fn mount(device: &mut DeviceState, view: &str) -> Option<PlacementId> {
-        device.mount_placement(PlacementSize { rows: 2, cols: 4 }, view.to_string(), None)
+    fn mount(device: &mut DeviceState, id: InstanceId) -> bool {
+        device.mount_placement(PlacementSize { rows: 2, cols: 4 }, id)
     }
 
     /// Asserts that a scroll moves the screen on show and leaves the
@@ -444,7 +448,8 @@ mod tests {
     #[test]
     fn a_shrink_past_the_history_cap_leaves_its_placements_evictable() {
         let mut device = DeviceState::new(GridSize { cols: 4, rows: 4 }, 0);
-        let id = mount(&mut device, "v").expect("a mount under the cap is accepted");
+        let id = InstanceId(1);
+        assert!(mount(&mut device, id));
         device.active_screen_mut().move_cursor_to(Some(4), None);
         assert_eq!(
             device.resize(GridSize { cols: 4, rows: 2 }),
@@ -612,41 +617,42 @@ mod tests {
         let mut device = device();
         let per_screen = MAX_PLACEMENTS / 2;
         for index in 0..per_screen {
-            assert!(mount(&mut device, &format!("p{index}")).is_some());
+            assert!(mount(&mut device, InstanceId(index as u128)));
         }
         device.set_active_screen_for_test(ScreenKind::Alternate);
         for index in 0..MAX_PLACEMENTS - per_screen {
-            assert!(mount(&mut device, &format!("a{index}")).is_some());
+            assert!(mount(&mut device, InstanceId(1000 + index as u128)));
         }
-        assert!(mount(&mut device, "one-too-many").is_none());
+        assert!(!mount(&mut device, InstanceId(9999)));
     }
 
-    /// Asserts that a re-mount of the same address supersedes across the
+    /// Asserts that a re-mount of the same id supersedes across the
     /// screen pair rather than leaving a twin on the other screen.
     ///
-    /// Case: a program mounts a named view on the primary screen, flips
-    /// to the alternate screen, and re-mounts the same name there.
+    /// Case: a program mounts a view on the primary screen, flips
+    /// to the alternate screen, and re-mounts the same id there.
     #[test]
     fn a_remount_supersedes_across_screens() {
         let mut device = device();
-        mount(&mut device, "memo").expect("first mount accepted");
+        let id = InstanceId(1);
+        assert!(mount(&mut device, id));
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        mount(&mut device, "memo").expect("re-mount accepted");
+        assert!(mount(&mut device, id));
         assert_eq!(device.placement_count(), 1);
     }
 
     /// Asserts that a broad unmount reaches both screens rather than
     /// stopping at the first match.
     ///
-    /// Case: a program mounted the same view on both screens and exits,
-    /// so the host despawns every child at that address in one pass.
+    /// Case: a program mounted a view on each screen and exits, so the
+    /// host despawns every child across the terminal in one pass.
     #[test]
     fn a_broad_unmount_reaches_both_screens() {
         let mut device = device();
-        mount(&mut device, "memo").expect("primary mount accepted");
+        assert!(mount(&mut device, InstanceId(1)));
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        mount(&mut device, "chart").expect("alternate mount accepted");
-        assert!(device.unmount_placement(None, None));
+        assert!(mount(&mut device, InstanceId(2)));
+        assert!(device.unmount_placement(None));
         assert_eq!(device.placement_count(), 0);
     }
 
@@ -659,7 +665,8 @@ mod tests {
     fn a_sweep_reaches_the_inactive_screen() {
         let mut device = device();
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        let id = mount(&mut device, "memo").expect("alternate mount accepted");
+        let id = InstanceId(1);
+        assert!(mount(&mut device, id));
         assert_eq!(device.active_screen_mut().reset(), None);
         device.set_active_screen_for_test(ScreenKind::Primary);
         assert_eq!(device.evict_lost_anchors(), vec![id]);
@@ -673,9 +680,11 @@ mod tests {
     #[test]
     fn a_reset_leaves_every_placement_unresolvable() {
         let mut device = device();
-        let primary = mount(&mut device, "shell").expect("primary mount accepted");
+        let primary = InstanceId(1);
+        assert!(mount(&mut device, primary));
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        let alternate = mount(&mut device, "app").expect("alternate mount accepted");
+        let alternate = InstanceId(2);
+        assert!(mount(&mut device, alternate));
 
         let _ = device.reset();
 
@@ -683,18 +692,18 @@ mod tests {
         assert_eq!(device.placement_count(), 0);
     }
 
-    /// Asserts that a re-mount of a live address is accepted at the cap,
+    /// Asserts that a re-mount of a live id is accepted at the cap,
     /// because supersession frees the slot it takes before the check.
     ///
     /// Case: a program holding the terminal's last placement slot
-    /// re-renders that same named view.
+    /// re-renders that same view.
     #[test]
     fn re_mounting_a_live_address_succeeds_at_the_cap() {
         let mut device = device();
         for index in 0..MAX_PLACEMENTS {
-            mount(&mut device, &format!("v{index}")).expect("a mount under the cap is accepted");
+            assert!(mount(&mut device, InstanceId(index as u128)));
         }
-        assert!(mount(&mut device, "v0").is_some());
+        assert!(mount(&mut device, InstanceId(0)));
         assert_eq!(device.placement_count(), MAX_PLACEMENTS);
     }
 
@@ -707,9 +716,11 @@ mod tests {
     #[test]
     fn a_flip_to_primary_tears_down_only_the_alternate_placements() {
         let mut device = device();
-        let kept = mount(&mut device, "shell").expect("primary mount accepted");
+        let kept = InstanceId(1);
+        assert!(mount(&mut device, kept));
         assert!(device.switch_screen(ScreenKind::Alternate).is_empty());
-        let dropped = mount(&mut device, "app").expect("alternate mount accepted");
+        let dropped = InstanceId(2);
+        assert!(mount(&mut device, dropped));
         assert_eq!(device.switch_screen(ScreenKind::Primary), vec![dropped]);
         assert_eq!(device.placement_count(), 1);
         assert_eq!(device.active_screen_mut().take_placements(), vec![kept]);

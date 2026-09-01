@@ -9,7 +9,7 @@ use crate::{
     device::modes::VtModes,
     frame::{Frame, FrameTracker},
     interpreter::Interpreter,
-    placement::{PlacementId, PlacementSize},
+    placement::{InstanceId, PlacementSize},
     screen::grid::GridSize,
     screen::viewport::{DisplayOffset, Scroll},
 };
@@ -75,8 +75,8 @@ pub trait Vt {
     /// # Webview placements
     ///
     /// An APC webview `mount` the VT accepts becomes a
-    /// [`VtSignal::WebviewMount`] carrying the [`PlacementId`] the VT
-    /// minted for it; one the placement cap refuses becomes a
+    /// [`VtSignal::WebviewMount`] carrying the [`InstanceId`] the mount
+    /// named; one the placement cap refuses becomes a
     /// [`VtSignal::WebviewMountRejected`] instead, which registers
     /// nothing. The VT owns the placement table and projects every
     /// placement into [`Frame::placements`] on each emit; a mount, unmount,
@@ -84,7 +84,7 @@ pub trait Vt {
     /// liveness, so the frame carrying the new list is guaranteed to
     /// follow. Evictions the VT performs on its own authority (history
     /// trim, alternate-screen teardown) surface as
-    /// [`VtSignal::WebviewEvicted`]. Ids are never reused within a session.
+    /// [`VtSignal::WebviewEvicted`]. At any instant the live ids are unique.
     ///
     /// A placement projects only while the screen it was mounted on is
     /// active: while the alternate screen is shown, primary-screen
@@ -92,9 +92,8 @@ pub trait Vt {
     /// evicted). Returning to the primary screen tears the alternate
     /// screen's placements down instead, naming them in that chunk's
     /// [`VtSignal::WebviewEvicted`]. A re-issued `mount` for a live
-    /// `(view_id, instance)` registers a successor under a fresh id;
-    /// the superseded id simply stops being listed and is never named
-    /// by [`VtSignal::WebviewEvicted`].
+    /// instance updates that placement in place — the id does not
+    /// change, and nothing is named by [`VtSignal::WebviewEvicted`].
     fn interpret(&mut self, chunk: &[u8]) -> InterpretOutput;
 
     /// Builds the frame for the staged damage and section diffs,
@@ -205,43 +204,33 @@ pub enum VtSignal {
     /// A webview the PTY mounted inline, which the VT accepted and
     /// registered at the cursor anchor.
     WebviewMount {
-        /// The registered view's id, addressed later by unmount and eviction.
-        view_id: String,
+        /// The host-minted instance this mount registered.
+        instance: InstanceId,
         /// The cell rectangle the mount reserved.
         size: PlacementSize,
-        /// The client-assigned instance id; `None` is the implicit
-        /// default instance. `(view_id, instance_id)` is the address.
-        instance_id: Option<String>,
-        /// The id the VT minted for this placement.
-        placement: PlacementId,
     },
     /// A mount the VT refused because the per-terminal placement cap was
-    /// already full. Nothing was registered and no id was minted, so
-    /// there is nothing for the consumer to place; it exists so a
-    /// webview that never appears is diagnosable rather than silent.
+    /// already full. Nothing was registered, so there is nothing for the
+    /// consumer to place; it exists so a webview that never appears is
+    /// diagnosable rather than silent.
     WebviewMountRejected {
-        /// The view the refused mount named.
-        view_id: String,
         /// The instance the refused mount named.
-        instance_id: Option<String>,
+        instance: InstanceId,
     },
-    /// Webview placements the PTY unmounted: a specific
-    /// `(view_id, instance_id)`, every instance of a `view_id`, or —
-    /// when `view_id` is `None` — every placement on this terminal.
+    /// The placement the PTY unmounted, or — when `instance` is `None` —
+    /// every placement on this terminal.
     WebviewUnmount {
-        /// The view to unmount; `None` unmounts every view.
-        view_id: Option<String>,
-        /// The instance to unmount; `None` unmounts every instance.
-        instance_id: Option<String>,
+        /// The instance to unmount; `None` unmounts every placement.
+        instance: Option<InstanceId>,
     },
     /// Placements the VT evicted on its own authority (history trim,
     /// alternate-screen teardown). Consumers despawn them by id;
     /// unknown ids are ignored. A remount's superseded id is never
-    /// named here — supersession shows only as the id vanishing from
+    /// named here — supersession shows only as the geometry changing in
     /// the frame-carried placement lists.
     WebviewEvicted {
-        /// The placement IDs that were evicted.
-        placements: Vec<PlacementId>,
+        /// The instances that were evicted.
+        placements: Vec<InstanceId>,
     },
     /// Tracked `TermMode` flags that transitioned since the previous
     /// signal drain, as mode names (e.g. "alt-screen").
@@ -257,7 +246,7 @@ impl VtSignal {
     /// The eviction naming `placements`; `None` when there is nothing
     /// to name, so neither an empty sweep nor a flip that tore nothing
     /// down wakes the owner.
-    pub(crate) fn evicted(placements: Vec<PlacementId>) -> Option<Self> {
+    pub(crate) fn evicted(placements: Vec<InstanceId>) -> Option<Self> {
         (!placements.is_empty()).then_some(Self::WebviewEvicted { placements })
     }
 }
@@ -342,7 +331,7 @@ impl Vt for OrzmaVt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::placement::PlacementSize;
+    use crate::placement::{InstanceId, PlacementSize};
     use crate::screen::grid::coords::GridLine;
     use crate::screen::viewport::ViewportLine;
 
@@ -368,10 +357,11 @@ mod tests {
     #[test]
     fn a_sweep_after_a_reset_names_the_stranded_placements() {
         let mut vt = vt();
-        let id = vt
-            .device
-            .mount_placement(PlacementSize { rows: 1, cols: 1 }, "v".to_string(), None)
-            .expect("a mount under the cap is accepted");
+        let id = InstanceId(1);
+        assert!(
+            vt.device
+                .mount_placement(PlacementSize { rows: 1, cols: 1 }, id)
+        );
         vt.device.reset();
         assert_eq!(
             vt.sweep_evictions(),
@@ -390,10 +380,11 @@ mod tests {
     #[test]
     fn a_sweep_after_a_shrink_names_the_placement_it_stranded() {
         let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 4 }, 0);
-        let id = vt
-            .device
-            .mount_placement(PlacementSize { rows: 1, cols: 1 }, "v".to_string(), None)
-            .expect("a mount under the cap is accepted");
+        let id = InstanceId(1);
+        assert!(
+            vt.device
+                .mount_placement(PlacementSize { rows: 1, cols: 1 }, id)
+        );
         vt.device.active_screen_mut().move_cursor_to(Some(4), None);
         assert!(vt.resize(GridSize { cols: 4, rows: 2 }));
         assert_eq!(
@@ -412,9 +403,10 @@ mod tests {
     #[test]
     fn a_second_sweep_raises_nothing() {
         let mut vt = vt();
-        vt.device
-            .mount_placement(PlacementSize { rows: 1, cols: 1 }, "v".to_string(), None)
-            .expect("a mount under the cap is accepted");
+        assert!(
+            vt.device
+                .mount_placement(PlacementSize { rows: 1, cols: 1 }, InstanceId(1))
+        );
         vt.device.reset();
         assert_eq!(vt.sweep_evictions().len(), 1);
         assert!(vt.sweep_evictions().is_empty());
@@ -490,9 +482,10 @@ mod tests {
     fn a_screen_flip_replays_the_placement_list() {
         let mut vt = vt();
         vt.frame();
-        vt.device
-            .mount_placement(PlacementSize { rows: 2, cols: 4 }, "memo".to_string(), None)
-            .expect("a mount under the cap is accepted");
+        assert!(
+            vt.device
+                .mount_placement(PlacementSize { rows: 2, cols: 4 }, InstanceId(1))
+        );
         let mounted = vt.frame().expect("a placement change emits");
         assert_eq!(mounted.placements.as_ref().map(Vec::len), Some(1));
 

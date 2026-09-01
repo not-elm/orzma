@@ -229,7 +229,7 @@ mod tests {
     use super::*;
     use crate::device::DeviceState;
     use crate::device::color::Color;
-    use crate::placement::PlacementSize;
+    use crate::placement::{InstanceId, PlacementSize};
     use crate::screen::grid::GridSize;
     use crate::screen::grid::coords::{GridColumn, GridLine};
 
@@ -279,9 +279,7 @@ mod tests {
         let mut tracker = FrameTracker::new();
         let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
         assert_eq!(tracker.diff_placements(&device), None);
-        device
-            .mount_placement(PlacementSize { rows: 2, cols: 4 }, "v".to_string(), None)
-            .expect("a mount under the cap is accepted");
+        assert!(device.mount_placement(PlacementSize { rows: 2, cols: 4 }, InstanceId(1)));
         let listed = tracker
             .diff_placements(&device)
             .expect("a mount changes the projection");
@@ -449,14 +447,15 @@ mod tests {
     #[test]
     fn a_placement_change_alone_emits_the_complete_list() {
         let mut rig = drained_rig();
-        rig.device
-            .mount_placement(PlacementSize { rows: 2, cols: 4 }, "v".to_string(), None)
-            .expect("a mount under the cap is accepted");
+        assert!(
+            rig.device
+                .mount_placement(PlacementSize { rows: 2, cols: 4 }, InstanceId(1))
+        );
         let mounted = emit(&mut rig).expect("a placement change emits");
         assert_eq!(mounted.placements.as_ref().map(Vec::len), Some(1));
         assert!(mounted.rows.is_empty());
         assert_eq!(emit(&mut rig), None);
-        assert!(rig.device.unmount_placement(Some("v"), None));
+        assert!(rig.device.unmount_placement(Some(InstanceId(1))));
         let unmounted = emit(&mut rig).expect("an unmount emits");
         assert_eq!(unmounted.placements, Some(Vec::new()));
     }
