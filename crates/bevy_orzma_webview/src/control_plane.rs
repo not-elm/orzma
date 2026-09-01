@@ -1434,9 +1434,7 @@ mod registry_tests {
     /// its handle.
     ///
     /// Case: a handle is reused for a fresh registration before its previous
-    /// one was explicitly removed — production handles are CSPRNG-minted and
-    /// this cannot happen there, but the registry's own invariant must still
-    /// hold for a caller that reuses a literal handle.
+    /// one was explicitly removed.
     #[test]
     fn insert_over_an_existing_handle_purges_its_stale_instances() {
         let mut registry = OrzmaRegistry::default();
