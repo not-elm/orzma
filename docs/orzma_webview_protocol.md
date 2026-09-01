@@ -22,9 +22,10 @@ Three actors participate: the **registering program** (running in a pane), the
 runtime-registered) webview — the only kind this protocol describes.
 
 End to end: a program connects to the control socket, registers content and
-receives an opaque **handle**, writes an `ESC _ Omount;v=<handle>,…` sequence to
-display it, and then talks to the page through the `window.orzma` bridge routed
-over the same control socket. Unmounting (or disconnecting) tears it down.
+receives an opaque **handle** together with its first placement **instance**,
+writes an `ESC _ Omount;n=<instance>,…` sequence to display it, and then talks to
+the page through the `window.orzma` bridge routed over the same control socket.
+Unmounting (or disconnecting) tears it down.
 
 ## Architecture at a glance
 
@@ -34,14 +35,14 @@ over the same control socket. Unmounting (or disconnecting) tears it down.
         │  reads $ORZMA_SOCK / $ORZMA_TOKEN from its env
         │  hello{token} ───────────────►│
         │  register{kind,…} ───────────►│
-        │◄─────────────── {ok,handle} ──│
-        │  APC Omount;v=h,r=n,c=n ─────►│  mount orzma://handle/ ───►│ load page
+        │◄────── {ok,handle,instance} ──│
+        │  APC Omount;n=i,r=n,c=n ─────►│  mount orzma://handle/ ───►│ load page
         │                               │◄──── window.orzma.call ────│
         │◄──── {op:call,reqId,method} ──│                           │
         │  {op:reply,reqId,value} ─────►│──── resolve Promise ─────►│
         │  {op:emit,event,payload} ────►│──── window.orzma.on ──────►│
         │◄──── {op:event,…} ◄ window.orzma.emit ─────────────────────│
-        │  APC Ounmount;v=handle ──────►│  remove webview ──────────►│
+        │  APC Ounmount;n=instance ────►│  remove webview ──────────►│
 ```
 
 The control socket carries every horizontal arrow between the program and the
@@ -94,21 +95,23 @@ connection is ignored.
 After the handshake, two kinds of line arrive **from** the host on the same
 connection, and a client must tell them apart:
 
-- A **register reply** is the only host line with **no `op` field** — it is
-  either `{"ok":true,"handle":"…"}` or `{"ok":false,"error":"…"}`.
+- A **request reply** is the only host line with **no `op` field**. Both
+  `register` and `new_instance` are answered this way, and either can also
+  reply `{"ok":false,"error":"…"}`.
 - Every **host-initiated push** (`call`, `event`, `compositing`) carries an
   `op` field.
 
-So: a line with an `op` is a push; a line without one is the reply to your most
-recent `register`. This is the one framing rule a from-scratch client must get
-right.
+So: a line with an `op` is a push; a line without one is the reply to your
+oldest outstanding request. This is the one framing rule a from-scratch client
+must get right.
 
-### Register ordering
+### Request ordering
 
-Registrations are processed one at a time per connection, and each
-`register`'s reply arrives in request order. `register` has no request id —
-correlation is positional. (The back-channel `call`/`reply` pair below uses an
-explicit `reqId` instead.)
+`register` and `new_instance` are processed one at a time per connection, and
+each reply arrives in request order. Neither carries a request id, so
+correlation is positional: a client matches replies to its pending requests by
+their order. (The back-channel `call`/`reply` pair below uses an explicit
+`reqId` instead.)
 
 ### Program → host messages
 
@@ -117,12 +120,13 @@ Every program line carries an `op`:
 | `op` | Fields | Meaning |
 | --- | --- | --- |
 | `hello` | `token` | Handshake; first line only. |
-| `register` | `kind` + per-kind fields | Register content, mint a handle. |
+| `register` | `kind` + per-kind fields | Register content; mints a handle and its first instance. |
+| `new_instance` | `handle` | Mint an additional instance on a handle this connection owns. |
 | `unregister` | `handle` | Release a handle owned by this connection; removes its mounted views. |
 | `reply` | `reqId`, `ok`, `value?`, `error?` | Answer a host `call` (use the `call`'s `reqId`). |
-| `emit` | `handle`, `event`, `payload` | Push an event to the handle's pages (delivered to `window.orzma.on`). |
-| `focus` | `handle` (string or `null`), `instance` (string or `null`) | Set app-owned focus to a mounted view, or `null` to blur. |
-| `navigate` | `handle`, `action` | Navigate a mounted view in place. |
+| `emit` | `handle`, `event`, `payload` | Push an event to every page mounted from the handle (delivered to `window.orzma.on`). |
+| `focus` | `instance` (string or `null`) | Set app-owned focus to a mounted placement, or `null` to blur. |
+| `navigate` | `instance`, `action` | Navigate one mounted placement in place. |
 
 `navigate.action` is one of the strings `"back"`, `"forward"`, `"reload"`, or
 the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
@@ -163,9 +167,9 @@ Every host push carries an `op`:
 
 | `op` | Fields | Meaning / response |
 | --- | --- | --- |
-| `call` | `handle`, `reqId`, `method`, `params` | A page `window.orzma.call(method, params)`. Respond with a `reply` carrying the same `reqId`. |
+| `call` | `handle`, `instance`, `reqId`, `method`, `params` | A page `window.orzma.call(method, params)`. Respond with a `reply` carrying the same `reqId`. |
 | `event` | `handle`, `event`, `payload` | A page `window.orzma.emit(event, payload)`. Fire-and-forget; no response. |
-| `compositing` | `handle`, `active` (bool) | The view first composited (`true`) or was unmounted after compositing (`false`). |
+| `compositing` | `handle`, `instance`, `active` (bool) | The placement first composited (`true`) or was unmounted after compositing (`false`). |
 
 Two directional details that are easy to get wrong:
 
@@ -178,10 +182,13 @@ Two directional details that are easy to get wrong:
   Despite the `call` shape it is fire-and-forget — any `reply` is discarded. Use
   it to track page-driven navigation.
 
-### Register reply & error codes
+### Request replies & error codes
 
-A successful `register` replies `{"ok":true,"handle":"<handle>"}`. A rejected one
-replies `{"ok":false,"error":"<code>"}`:
+A successful `register` replies
+`{"ok":true,"handle":"<handle>","instance":"<instance>"}` — the handle owns the
+registration, and the instance is its first placement. A successful
+`new_instance` replies `{"ok":true,"instance":"<instance>"}`. A rejected request
+of either kind replies `{"ok":false,"error":"<code>"}`:
 
 | `error` | Cause |
 | --- | --- |
@@ -190,14 +197,33 @@ replies `{"ok":false,"error":"<code>"}`:
 | `html_too_large` | `inline.html` exceeds 4 MiB. |
 | `invalid_url` | `url.url` does not parse or has no host. |
 | `unsupported_scheme` | `url.url` is not `http`/`https`. |
+| `unknown_handle` | `new_instance.handle` names no live registration. |
+| `not_owner` | `new_instance.handle` is registered, but by another connection. |
 | `internal` | The host failed to process the request. |
 
 ### Handle semantics
 
-A handle is opaque, unique per registration, lowercase, and matches
-`^[a-z0-9._-]{1,128}$` (a subset of the APC `view_id` charset, so a handle is
-always a valid `mount` argument). Treat it as a token: do not parse it. Each
-handle owns one isolated `orzma://<handle>/` origin.
+A handle is opaque, unique per registration, and lowercase: 128 CSPRNG bits
+base32-encoded over the alphabet `a-z2-7`, which keeps it spellable as a URL
+host. Treat it as a token: do not parse it. Each handle owns one isolated
+`orzma://<handle>/` origin, and it is what `unregister`, `emit`, and
+`new_instance` address. A handle is never mounted — a mount addresses an
+instance.
+
+### Instance semantics
+
+An instance is one placement of a registration, and it is the unit `mount`,
+`unmount`, `focus`, and `navigate` address. Its wire spelling is exactly 32
+lowercase hex digits (128 CSPRNG bits); any other spelling is malformed. Only
+the host mints instances — `register` mints the first, `new_instance` each
+additional one — so uniqueness is structural and nothing on the wire negotiates
+it.
+
+An instance stays valid for as long as its handle is registered, whether or not
+it is currently mounted. Mounting an instance that is already live updates its
+rectangle in place and leaves the page untouched; mounting one after it was
+unmounted builds the page again from scratch. Every instance of a handle serves
+that handle's registered content, and each one mounts independently.
 
 ### Example exchange
 
@@ -206,15 +232,17 @@ Program-to-host lines are marked `C→S`, host-to-program lines `S→C`:
 ```json
 C→S {"op":"hello","token":"orzma:4294967306"}
 C→S {"op":"register","kind":"inline","html":"<!doctype html><body>hi</body>"}
-S→C {"ok":true,"handle":"nf2k7q5w3x3m5a6b2c4d6e7f"}
-S→C {"op":"call","handle":"nf2k7q5w3x3m5a6b2c4d6e7f","reqId":"0","method":"save","params":{"text":"hi"}}
+S→C {"ok":true,"handle":"nf2k7q5w3x3m5a6b2c4d6e7f","instance":"3f5a9c02d1e84b7690ab3cde12f45678"}
+S→C {"op":"call","handle":"nf2k7q5w3x3m5a6b2c4d6e7f","instance":"3f5a9c02d1e84b7690ab3cde12f45678","reqId":"0","method":"save","params":{"text":"hi"}}
 C→S {"op":"reply","reqId":"0","ok":true,"value":{"saved":true}}
 C→S {"op":"emit","handle":"nf2k7q5w3x3m5a6b2c4d6e7f","event":"tick","payload":{"n":1}}
+C→S {"op":"new_instance","handle":"nf2k7q5w3x3m5a6b2c4d6e7f"}
+S→C {"ok":true,"instance":"a1b2c3d4e5f60718293a4b5c6d7e8f90"}
 ```
 
 ## APC webview verbs — mount / unmount
 
-Once a handle is registered, the program mounts it by writing an APC escape
+Once an instance is minted, the program mounts it by writing an APC escape
 sequence to its terminal. The sequence is framed `ESC _ <payload> ST`, where
 `ST` (string terminator) is `ESC \`. Unlike an OSC, a `BEL` does not terminate
 an APC — it is taken as payload data. The payload opens with `O` (orzma), so a
@@ -222,8 +250,8 @@ sequence another program owns — kitty's `G`, for example — is left alone. In
 raw bytes:
 
 ```text
-mount:    \x1b_Omount;v=<view_id>,r=<rows>,c=<cols>\x1b\
-unmount:  \x1b_Ounmount;v=<view_id>\x1b\
+mount:    \x1b_Omount;n=<instance>,r=<rows>,c=<cols>\x1b\
+unmount:  \x1b_Ounmount;n=<instance>\x1b\
 ```
 
 The payload is at most 1024 bytes. A multi-byte character inside a key or a
@@ -233,53 +261,55 @@ silently dropped by the terminal's APC collector rather than rejected.
 ### mount
 
 ```text
-ESC _ O mount ; v=<view_id>,r=<rows>,c=<cols>[,n=<instance_id>] ST
+ESC _ O mount ; n=<instance>,r=<rows>,c=<cols> ST
 ```
 
-- `view_id` — the handle from `register`; charset `^[A-Za-z0-9._-]{1,128}$`.
+- `instance` — an instance from `register` or `new_instance`; exactly 32
+  lowercase hex digits.
 - `rows` — decimal `1`–`200`. `cols` — decimal `1`–`400`. Digits only, no sign.
-- `instance_id` — optional, same charset as `view_id`. It lets one handle mount
-  several independent placements.
 
-Keys are order-independent (`c=20,r=3,v=memo` is the same mount as
-`v=memo,r=3,c=20`). A repeated key, an unknown key, a missing `v` / `r` / `c`,
-or an empty params section (`Omount;`) is malformed.
+All three keys are required and order-independent (`c=80,n=<instance>,r=24` is
+the same mount as `n=<instance>,r=24,c=80`). A repeated key, an unknown key —
+the retired `v=` included — a missing `n` / `r` / `c`, or an empty params
+section (`Omount;`) is malformed.
 
-The view occupies a `rows`×`cols` rectangle of terminal cells, inline at the
-cursor.
+The placement occupies a `rows`×`cols` rectangle of terminal cells, inline at
+the cursor.
 
 ### unmount
 
 ```text
-ESC _ O unmount [ ; v=<view_id>[,n=<instance_id>] ] ST
+ESC _ O unmount [ ; n=<instance> ] ST
 ```
 
-- No params section → unmount every inline view this program has on the terminal.
-- `v=` only → unmount **every instance** of that handle.
-- `v=` + `n=` → unmount that specific placement.
+- No params section → unmount every inline placement this program has on the
+  terminal.
+- `n=` → unmount that one placement.
 
-Unlike `mount`, the unmount keys are **not** order-independent: `n=` is accepted
-only once `v=` has been seen, so `v=memo,n=a` is valid and `n=a,v=memo` is
-malformed. An empty params section (`Ounmount;`) is malformed, as is an empty
-value (`Ounmount;v=`).
+`n` is the only key an unmount accepts, so no key-ordering rule applies. An
+empty params section (`Ounmount;`) is malformed, as are an empty value
+(`Ounmount;n=`) and the retired `v=` key.
 
 ### Ownership and malformed sequences
 
-A `mount` takes effect only in the pane whose `$ORZMA_TOKEN` registered that
-handle — a program mounts its own handles in its own pane. Any malformed
-sequence (bad charset, out-of-range dimensions, unknown or repeated keys) is
-silently dropped; the host reports no error.
+A `mount` takes effect only in the pane whose `$ORZMA_TOKEN` registered the
+instance's handle — a program mounts its own instances in its own pane. An
+instance the host never minted, or one whose handle belongs to another pane, is
+silently dropped, as is any malformed sequence (a bad instance spelling,
+out-of-range dimensions, an unknown or repeated key); the host reports no
+error.
 
 A mount the terminal accepts but cannot place — the per-terminal placement cap
 is full — is also dropped, and the host logs it at debug level.
 
 ### Example
 
-Mount handle `nf2k7q5w3x3m5a6b2c4d6e7f` as a 24×80 view, then unmount it:
+Mount instance `3f5a9c02d1e84b7690ab3cde12f45678` as a 24×80 placement, then
+unmount it:
 
 ```text
-\x1b_Omount;v=nf2k7q5w3x3m5a6b2c4d6e7f,r=24,c=80\x1b\
-\x1b_Ounmount;v=nf2k7q5w3x3m5a6b2c4d6e7f\x1b\
+\x1b_Omount;n=3f5a9c02d1e84b7690ab3cde12f45678,r=24,c=80\x1b\
+\x1b_Ounmount;n=3f5a9c02d1e84b7690ab3cde12f45678\x1b\
 ```
 
 ## The `orzma://` origin
@@ -349,21 +379,23 @@ if (isOrzmaAvailable()) {
 
 ## Lifecycle & teardown
 
-- `unregister{handle}` releases a handle and removes its mounted views.
+- `unregister{handle}` releases a handle, invalidates every instance minted
+  from it, and removes its mounted views.
 - Closing the control connection purges all of that program's handles, removes
   their views, and rejects every in-flight `call` with `owner_disconnected`.
-- The `compositing` push reports a view's first paint (`active:true`) and its
-  teardown after compositing (`active:false`).
+- The `compositing` push reports one placement's first paint (`active:true`) and
+  its teardown after compositing (`active:false`), naming both the `handle` and
+  the `instance` it belongs to.
 
 ## Security model
 
 - **Same user only.** The host rejects any control connection whose peer user id
   differs from orzma's.
 - **Scoped to one pane.** A connection's token binds it to the pane that issued
-  `$ORZMA_TOKEN`; a program may only mount, focus, navigate, and emit to handles
-  it registered.
-- **Unguessable, isolated handles.** Handles are 128-bit random values, each its
-  own `orzma://` origin.
+  `$ORZMA_TOKEN`; a program may only mount, focus, navigate, and emit to
+  registrations it made itself.
+- **Unguessable, isolated identifiers.** Handles and instances are both 128-bit
+  CSPRNG values, and each handle is its own `orzma://` origin.
 - **Authorized replies.** Back-channel `reqId`s are a shared, monotonic counter
   and therefore guessable, so the host authorizes a `reply` by its originating
   connection: a program replaying another connection's `reqId` can neither

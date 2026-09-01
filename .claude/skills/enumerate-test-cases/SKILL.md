@@ -430,7 +430,7 @@ A case whose `Expect:` lines are all kind 2 has no manual behind it at all.
 Number it `TC-A1`, `TC-A2`, … rather than `TC-01`, keep it in the same list, and
 say in one sentence why it is there. `PlacementStore::reset` earns one: the most
 natural implementation, `*self = Self::new()`, rewinds the id counter and breaks
-the invariant `PlacementId` states, and no manual has an opinion about that.
+the invariant `InstanceId` states, and no manual has an opinion about that.
 
 The separate numbering is the whole mechanism. The list stays complete, and a
 reader can still tell at a glance which rows the specification demands from the
@@ -897,9 +897,9 @@ the one case where the path does not mean what it appears to.
 `docs/todo/` already holds hand-written design notes, and they propose APIs.
 Search it for the target type, the method, and each control function the run
 touched, and list what disagrees under "Conflicts with docs/todo" in the
-appendix. `ris.md` proposes `pub(crate) fn clear(&mut self) -> Vec<PlacementId>`
+appendix. `ris.md` proposes `pub(crate) fn clear(&mut self) -> Vec<InstanceId>`
 for dropping every placement, while `tdd-placement-reset.md` is written against
-`pub(crate) fn reset(&mut self) -> Vec<PlacementId>` — one operation under two
+`pub(crate) fn reset(&mut self) -> Vec<InstanceId>` — one operation under two
 names, which is exactly what nobody notices unless something looks.
 
 Report the conflict; do not resolve it, and do not adopt the note's version. A
