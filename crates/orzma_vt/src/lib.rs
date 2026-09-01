@@ -127,6 +127,27 @@ pub trait Vt {
     /// second sweep with nothing further lost raises nothing.
     fn sweep_evictions(&mut self) -> Vec<VtSignal>;
 
+    /// Removes the placements the host names, on either screen; returns
+    /// whether anything went.
+    ///
+    /// This is the control plane's entry point, used when a registration
+    /// is released, its connection drops, or a mount the host refuses
+    /// left a reservation behind. The VT cannot know any of those facts —
+    /// they live on the control socket — so without this the placements
+    /// keep a cap slot until their anchor scrolls out of history.
+    ///
+    /// # Invariants
+    ///
+    /// Unlike [`Vt::resize`], this stages no row damage. A placement list
+    /// is an emit-time diffed section, so a changed list is enough to
+    /// guarantee the frame that carries it; staging rows here would
+    /// repaint the whole viewport on every release.
+    ///
+    /// No [`VtSignal::WebviewEvicted`] is raised: the caller already
+    /// knows the ids and drops its own entities in the same pass, so a
+    /// signal would hand it back its own removal.
+    fn remove_placements(&mut self, instances: &[InstanceId]) -> bool;
+
     /// Resizes the grid, truncating rather than reflowing; returns
     /// whether the dimensions changed. Only a real change stages (full)
     /// damage.
@@ -305,6 +326,10 @@ impl Vt for OrzmaVt {
         VtSignal::evicted(self.device.evict_lost_anchors())
             .into_iter()
             .collect()
+    }
+
+    fn remove_placements(&mut self, instances: &[InstanceId]) -> bool {
+        self.device.remove_placements(instances)
     }
 
     fn resize(&mut self, size: GridSize) -> bool {
@@ -539,5 +564,38 @@ mod tests {
         let returned = vt.frame().expect("the flip back emits");
         assert_eq!(returned.rows[4].contents[0].text, "5   ");
         assert_eq!(returned.cursor.point.line, GridLine(4));
+    }
+
+    /// Asserts that a host-driven removal drops the named placements,
+    /// reports whether anything went, and — unlike a resize — stages no
+    /// row damage of its own.
+    ///
+    /// Case: a program's control-plane connection drops while two of its
+    /// views are mounted, and the host clears what the registrations had
+    /// reserved.
+    #[test]
+    fn a_host_removal_drops_the_named_placements_without_staging_rows() {
+        let a: InstanceId = "3f5a9c02d1e84b7690ab3cde12f45678"
+            .parse()
+            .expect("valid id");
+        let b: InstanceId = "81b4e77c05a3492fd6180e29ba735fc1"
+            .parse()
+            .expect("valid id");
+        let mut vt = OrzmaVt::new(GridSize { cols: 80, rows: 24 }, 100);
+        vt.interpret(format!("\x1b_Omount;n={a},r=4,c=8\x1b\\").as_bytes());
+        vt.interpret(format!("\x1b_Omount;n={b},r=4,c=8\x1b\\").as_bytes());
+        vt.frame().expect("the mounts damage the chunk");
+
+        assert!(vt.remove_placements(&[a]));
+        let frame = vt.frame().expect("the placement list changed");
+        assert!(frame.rows.is_empty(), "a removal stages no row damage");
+        let placements = frame.placements.expect("the list changed");
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].id, b);
+
+        assert!(
+            !vt.remove_placements(&[a]),
+            "a second removal names nothing"
+        );
     }
 }

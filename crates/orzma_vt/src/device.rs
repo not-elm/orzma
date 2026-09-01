@@ -277,10 +277,6 @@ impl DeviceState {
     /// Removes the placements the host names on either screen; returns
     /// whether anything went. Visits both screens without short-circuiting,
     /// for the same reason [`Self::unmount_placement`] does.
-    // NOTE: this is public API for the control plane's connection-drop
-    // handler, landing in a later task; nothing in this crate calls it yet,
-    // so the lint expectation is correctly fulfilled.
-    #[expect(dead_code, reason = "consumed by a later task's disconnect handler")]
     pub fn remove_placements(&mut self, ids: &[InstanceId]) -> bool {
         let primary = self.screens.primary.remove_placements(ids);
         let alternate = self.screens.alternate.remove_placements(ids);
