@@ -773,10 +773,12 @@ replay ループが registration ごとに、re-register で `handle_slot` と `
 `pending_compositing` を `mem::take` で奪うので、その フレームで描画されなかった
 instance の通知は落ちる。これは再キーとは直交する問題で、この変更では扱わない。
 
-**この再キーは host と SDK をまたぐ原子的な切り替えである。** reader は
-`v["handle"]` と `v["active"]` が両方揃わない push を黙って捨てるので、§3.5（host が
-`instance` を載せる）と §4.6（SDK が `instance` でキーする）が同じコミットに入らないと、
-compositing コールバックが**無診断で発火しなくなる**。片方だけ先行させないこと。
+**この再キーは原子的な切り替えではない。** host は `instance` を足しても `handle` と
+`active` を送り続け、reader は未知フィールドを無視するので、§3.5（host が `instance` を
+載せる）だけが先行しても compositing コールバックはそのまま発火する。中間状態で起きるのは
+同一 handle の複数配置が1つのマップキーに衝突することだけ — それは §4.6 が解消しようと
+している既存欠陥そのものであって、この変更が持ち込む新たな破壊ではない。したがって
+§4.6 は「切り替えを壊さないため」ではなく、単に正しいから入れる。
 
 ### 4.7 navigate と call の SDK 側
 
@@ -898,7 +900,7 @@ mount() が却下（未知 instance / 非所有 / スロット枯渇 / url 解�
 | --- | --- |
 | `Omount;v=…` の廃止 | **破壊的**。古い SDK の mount は malformed として捨てられる |
 | `register` 応答への `instance` 追加 | 無害。現行 SDK の `RegisterReply` は未知フィールドを無視する |
-| `compositing` push への `instance` 追加 | 無害（読まれないだけ）。ただし §4.6 の再キーと同時に入る必要がある |
+| `compositing` push への `instance` 追加 | 無害（読まれないだけ）。§4.6 の再キーと同時である必要はない — 先行しても reader は `handle` で発火し続ける |
 | `focus` / `navigate` の instance 化 | **破壊的**。host 側のフィールドが変わる |
 
 SDK と `apps/` 配下の呼び出し元は同じ PR で追随する。
