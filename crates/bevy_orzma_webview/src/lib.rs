@@ -9,7 +9,7 @@ mod webview;
 
 use bevy::prelude::*;
 use control_plane::ControlPlanePlugin;
-pub use control_plane::{ControlPlaneHandle, NormalizedChord, TokenRegistry};
+pub use control_plane::{ControlPlaneHandle, HandleId, NormalizedChord, TokenRegistry};
 use orzma_webview_host::WebviewAssetRegistry;
 use webview::apc::ApcPlugin;
 pub use webview::apc::NonInteractive;

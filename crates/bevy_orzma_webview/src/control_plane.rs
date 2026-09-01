@@ -14,9 +14,13 @@ use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewS
 use bevy_orzma_tty::prelude::OrzmaTtyHandle;
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
+use orzma_vt::prelude::InstanceId;
 use orzma_webview_host::WebviewAssetRegistry;
 use orzma_webview_host::host::RuntimeRoot;
+use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use url::Url;
@@ -85,26 +89,30 @@ impl OrzmaSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OrzmaView {
     /// The content source.
-    pub(crate) source: OrzmaSource,
+    pub source: OrzmaSource,
     /// HTML entry path relative to a `Dir` root (ignored for `Inline` and `Url`).
-    pub(crate) entry: String,
+    pub entry: String,
     /// Whether the mounted webview accepts pointer/keyboard input.
-    pub(crate) interactive: bool,
+    pub interactive: bool,
     /// The terminal surface a `mount;<handle>` must originate from. The
     /// registering program's PTY env token resolved to this surface, so only
     /// that surface may mount the handle (tighter than the spec's pane wording).
-    pub(crate) owner_surface: Entity,
+    pub owner_surface: Entity,
     /// The control-plane connection that registered it.
-    pub(crate) connection_id: u64,
+    pub connection_id: u64,
     /// The normalized forward-key chords for this view, derived from the
     /// `register` wire payload. Copied onto the mounted webview entity as
     /// `ForwardKeys` so Phase-4 systems can read them off the focused child.
-    pub(crate) forward_keys: Vec<NormalizedChord>,
+    pub forward_keys: Vec<NormalizedChord>,
     /// User-supplied preload scripts, copied verbatim from the register wire
     /// and injected onto the mounted webview's `PreloadScripts` after the host
     /// bridge/hints. No size cap or validation (the registering program is
     /// local and trusted).
-    pub(crate) preload: Vec<String>,
+    pub preload: Vec<String>,
+    /// Every instance minted for this registration, in mint order. The
+    /// registry keeps this list and its `by_instance` reverse index in
+    /// lockstep, so releasing the handle releases exactly these ids.
+    pub instances: Vec<InstanceId>,
 }
 
 /// Stamped on a Tier 1 webview entity at mount: the control-plane
@@ -117,53 +125,167 @@ pub(crate) struct WebviewOwner {
     pub(crate) handle: String,
 }
 
-/// Maps an opaque `handle` to its dynamic registration. The single Bevy-side
-/// registry for Tier 1 (the CEF scheme handler reads the thin `WebviewAssetRegistry`
-/// separately). Carries scoped removal for teardown.
+/// The opaque identity of one dynamic registration.
+///
+/// It is the host of that registration's `orzma://<handle>/` origin, the
+/// routing key for its back-channel, and the ownership unit `unregister`
+/// and connection teardown act on.
+///
+/// # Invariants
+///
+/// There is deliberately no `From<HandleId> for String`. That absence is
+/// what stops a handle from flowing into an `impl Into<String>` parameter
+/// that wants an instance id; adding the conversion for convenience
+/// silently reopens that path.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct HandleId(String);
+
+impl HandleId {
+    /// Borrows the wire spelling.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+// NOTE: the inbound direction is safe and needed (the wire hands us
+// strings); it is the outbound `From<HandleId> for String` that must not
+// exist, or a handle flows into an `impl Into<String>` slot wanting an
+// instance id.
+impl From<&str> for HandleId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for HandleId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl Borrow<str> for HandleId {
+    // NOTE: lets `HashMap<HandleId, _>` be looked up by `&str` without
+    // allocating a HandleId for every probe.
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for HandleId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Maps an opaque `handle` to its dynamic registration, and every minted
+/// instance back to the handle it belongs to.
+///
+/// The single Bevy-side registry for Tier 1 (the CEF scheme handler reads
+/// the thin `WebviewAssetRegistry` separately). Carries scoped removal for
+/// teardown.
+///
+/// # Invariants
+///
+/// The two maps are only ever touched through `&mut self` methods on this
+/// type, so an instance is in `by_instance` exactly while its handle's
+/// `OrzmaView.instances` lists it.
 #[derive(Resource, Default)]
 pub(crate) struct OrzmaRegistry {
-    by_handle: HashMap<String, OrzmaView>,
+    by_handle: HashMap<HandleId, OrzmaView>,
+    by_instance: HashMap<InstanceId, HandleId>,
+}
+
+/// One registration the registry released, with everything its teardown
+/// needs: the asset key, the terminal to clear, and the placements it
+/// reserved.
+pub(crate) struct RemovedRegistration {
+    /// The released handle, still the `WebviewAssetRegistry` key.
+    pub handle: HandleId,
+    /// The surface that owned the registration.
+    pub owner_surface: Entity,
+    /// Every instance the released handle had minted.
+    pub instances: Vec<InstanceId>,
 }
 
 impl OrzmaRegistry {
     /// Resolves a `handle` to its registration, if any.
-    pub(crate) fn get(&self, handle: &str) -> Option<&OrzmaView> {
+    pub fn get(&self, handle: &HandleId) -> Option<&OrzmaView> {
         self.by_handle.get(handle)
     }
 
-    /// Inserts/replaces a registration.
-    pub(crate) fn insert(&mut self, handle: String, view: OrzmaView) {
+    /// Resolves an instance to its handle and registration, if any.
+    pub fn resolve_instance(&self, instance: InstanceId) -> Option<(&HandleId, &OrzmaView)> {
+        let handle = self.by_instance.get(&instance)?;
+        let view = self.by_handle.get(handle)?;
+        Some((handle, view))
+    }
+
+    /// Inserts a registration with no instances yet.
+    ///
+    /// The caller mints its first instance with [`Self::mint_instance`]
+    /// immediately afterwards, so every id — the first one included —
+    /// comes from the one minting path.
+    pub fn insert(&mut self, handle: HandleId, view: OrzmaView) {
         self.by_handle.insert(handle, view);
     }
 
-    /// Removes one `handle`, returning its `owner_surface` when it existed.
-    pub(crate) fn remove(&mut self, handle: &str) -> Option<Entity> {
-        self.by_handle.remove(handle).map(|v| v.owner_surface)
+    /// Mints an instance for `handle`; `None` only when the handle is
+    /// unknown.
+    ///
+    /// This is the ONLY path that produces an [`InstanceId`], which is what
+    /// makes "every allocated instance is unique across the registry" hold.
+    pub fn mint_instance(&mut self, handle: &HandleId) -> Option<InstanceId> {
+        if !self.by_handle.contains_key(handle) {
+            return None;
+        }
+        let mut bytes = [0u8; 16];
+        getrandom::getrandom(&mut bytes).expect("OS CSPRNG is available");
+        let id = InstanceId::from_bytes(bytes);
+        debug_assert!(
+            !self.by_instance.contains_key(&id),
+            "128 bits of CSPRNG collided; the draw is broken"
+        );
+        self.by_instance.insert(id, handle.clone());
+        self.by_handle
+            .get_mut(handle)
+            .expect("the handle was present above")
+            .instances
+            .push(id);
+        Some(id)
     }
 
-    /// Removes every handle owned by `connection_id`, returning the removed
-    /// handles (so the caller can purge the `WebviewAssetRegistry` too).
-    pub(crate) fn remove_by_connection(&mut self, connection_id: u64) -> Vec<String> {
+    /// Removes one `handle` and everything its teardown needs.
+    pub fn remove(&mut self, handle: &HandleId) -> Option<RemovedRegistration> {
+        let view = self.by_handle.remove(handle)?;
+        for id in &view.instances {
+            self.by_instance.remove(id);
+        }
+        Some(RemovedRegistration {
+            handle: handle.clone(),
+            owner_surface: view.owner_surface,
+            instances: view.instances,
+        })
+    }
+
+    /// Removes every handle owned by `connection_id`.
+    pub fn remove_by_connection(&mut self, connection_id: u64) -> Vec<RemovedRegistration> {
         self.drain_where(|v| v.connection_id == connection_id)
     }
 
-    /// Removes every handle owned by `owner_surface`, returning the removed
-    /// handles (so the caller can purge the `WebviewAssetRegistry` too).
-    pub(crate) fn remove_by_surface(&mut self, owner_surface: Entity) -> Vec<String> {
+    /// Removes every handle owned by `owner_surface`.
+    pub fn remove_by_surface(&mut self, owner_surface: Entity) -> Vec<RemovedRegistration> {
         self.drain_where(|v| v.owner_surface == owner_surface)
     }
 
-    fn drain_where(&mut self, pred: impl Fn(&OrzmaView) -> bool) -> Vec<String> {
-        let drained: Vec<String> = self
+    fn drain_where(&mut self, pred: impl Fn(&OrzmaView) -> bool) -> Vec<RemovedRegistration> {
+        let handles: Vec<HandleId> = self
             .by_handle
             .iter()
             .filter(|(_, v)| pred(v))
             .map(|(h, _)| h.clone())
             .collect();
-        for h in &drained {
-            self.by_handle.remove(h);
-        }
-        drained
+        handles.iter().filter_map(|h| self.remove(h)).collect()
     }
 }
 
@@ -295,19 +417,19 @@ impl ConnectionWriters {
     }
 }
 
-/// Mints an opaque 128-bit identifier (CSPRNG), base32-encoded (unpadded) and
-/// lowercased. The alphabet `a-z2-7` is a subset of the OSC `view_id` charset
-/// `^[A-Za-z0-9._-]{1,128}$`, so a minted handle is a valid `mount;<id>`.
+/// Mints an opaque 128-bit [`HandleId`] (CSPRNG), base32-encoded (unpadded)
+/// and lowercased. The alphabet `a-z2-7` keeps a minted handle spellable in
+/// a URL host, which is where it is used.
 ///
 /// # Invariants
 /// The output MUST be lowercase. A handle is used as the host of the
 /// `orzma://<handle>/` URL, and Chromium canonicalizes (lowercases) the host
 /// of a STANDARD-scheme URL before it reaches the scheme handler; an uppercase
 /// handle would then miss the case-sensitive `WebviewAssetRegistry` lookup → 404.
-fn mint_id() -> String {
+fn mint_handle_id() -> HandleId {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).expect("OS CSPRNG is available");
-    BASE32_NOPAD.encode(&bytes).to_ascii_lowercase()
+    HandleId(BASE32_NOPAD.encode(&bytes).to_ascii_lowercase())
 }
 
 /// The receiver of `ControlEvent`s from the listener threads.
@@ -414,8 +536,8 @@ fn gc_despawned_surfaces(
     orzma_assets: Res<WebviewAssetRegistryRes>,
 ) {
     for entity in closed.read() {
-        for handle_str in registry.remove_by_surface(entity) {
-            orzma_assets.0.remove(&handle_str);
+        for removed in registry.remove_by_surface(entity) {
+            orzma_assets.0.remove(removed.handle.as_str());
         }
         if let Some(handle) = handle.as_ref() {
             handle.tokens.remove_entity(entity);
@@ -467,32 +589,32 @@ fn apply_control_events(
                         continue;
                     }
                 };
-                let handle = mint_id();
+                let handle = mint_handle_id();
                 match &view.source {
                     OrzmaSource::Dir(root) => {
-                        orzma_assets.0.insert_dir(handle.clone(), root.clone())
+                        orzma_assets.0.insert_dir(handle.as_str(), root.clone())
                     }
                     OrzmaSource::Inline(html) => {
                         orzma_assets
                             .0
-                            .insert_inline(handle.clone(), html.clone().into_bytes());
+                            .insert_inline(handle.as_str(), html.clone().into_bytes());
                     }
                     OrzmaSource::Url { .. } => {}
                 }
                 registry.insert(handle.clone(), view);
-                let _ = reply.send(ServerMsg::ok(handle));
+                let _ = reply.send(ServerMsg::ok(handle.to_string()));
             }
             ControlEvent::Unregister {
                 connection_id,
                 handle,
             } => {
-                let removed = if registry
+                let handle = HandleId::from(handle);
+                let removed: Vec<RemovedRegistration> = if registry
                     .get(&handle)
                     .is_some_and(|v| v.connection_id == connection_id)
                 {
-                    registry.remove(&handle);
-                    orzma_assets.0.remove(&handle);
-                    vec![handle]
+                    orzma_assets.0.remove(handle.as_str());
+                    registry.remove(&handle).into_iter().collect()
                 } else {
                     vec![]
                 };
@@ -500,8 +622,8 @@ fn apply_control_events(
             }
             ControlEvent::Disconnect { connection_id } => {
                 let removed = registry.remove_by_connection(connection_id);
-                for h in &removed {
-                    orzma_assets.0.remove(h);
+                for entry in &removed {
+                    orzma_assets.0.remove(entry.handle.as_str());
                 }
                 despawn_mounted(&mut commands, &webviews, &removed);
                 for (webview, page_req) in rpc.drain_connection(connection_id) {
@@ -537,6 +659,7 @@ fn apply_control_events(
                 event,
                 payload,
             } => {
+                let handle = HandleId::from(handle);
                 let deliver = registry
                     .get(&handle)
                     .is_some_and(|v| v.connection_id == connection_id && v.source.is_bridged());
@@ -545,7 +668,7 @@ fn apply_control_events(
                 }
                 let frame = serde_json::json!({ "event": event, "payload": payload });
                 for (entity, view) in &webviews {
-                    if view.view_id == handle {
+                    if view.view_id == handle.as_str() {
                         commands.trigger(HostEmitEvent::new(entity, "orzma.event", &frame));
                     }
                 }
@@ -561,6 +684,7 @@ fn apply_control_events(
                 };
                 match handle {
                     Some(h) => {
+                        let h = HandleId::from(h);
                         let owned = registry
                             .get(&h)
                             .is_some_and(|v| v.connection_id == connection_id);
@@ -569,7 +693,7 @@ fn apply_control_events(
                             continue;
                         }
                         let target = webviews.iter().find(|(entity, view)| {
-                            view.view_id == h
+                            view.view_id == h.as_str()
                                 && view.instance_id.as_deref() == instance.as_deref()
                                 && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
                                 && !non_interactive.contains(*entity)
@@ -598,6 +722,7 @@ fn apply_control_events(
                 handle,
                 action,
             } => {
+                let handle = HandleId::from(handle);
                 let Some(view) = registry.get(&handle) else {
                     continue;
                 };
@@ -607,7 +732,7 @@ fn apply_control_events(
                 }
                 let is_url = view.source.is_url();
                 let target = webviews.iter().find(|(entity, v)| {
-                    v.view_id == handle
+                    v.view_id == handle.as_str()
                         && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
                 });
                 let Some((entity, _)) = target else {
@@ -652,10 +777,13 @@ fn apply_control_events(
 fn despawn_mounted(
     commands: &mut Commands,
     webviews: &Query<(Entity, &Webview)>,
-    removed: &[String],
+    removed: &[RemovedRegistration],
 ) {
     for (entity, view) in webviews {
-        if removed.contains(&view.view_id) {
+        if removed
+            .iter()
+            .any(|entry| entry.handle.as_str() == view.view_id)
+        {
             commands.entity(entity).despawn();
         }
     }
@@ -691,6 +819,7 @@ fn build_view(
                 connection_id,
                 forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
                 preload,
+                instances: Vec::new(),
             })
         }
         RegisterKind::Inline {
@@ -710,6 +839,7 @@ fn build_view(
                 connection_id,
                 forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
                 preload,
+                instances: Vec::new(),
             })
         }
         RegisterKind::Url {
@@ -728,6 +858,7 @@ fn build_view(
                 connection_id,
                 forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
                 preload,
+                instances: Vec::new(),
             })
         }
     }
@@ -878,15 +1009,24 @@ mod gc_tests {
                 connection_id: 1,
                 forward_keys: vec![],
                 preload: vec![],
+                instances: Vec::new(),
             },
         );
         app.update(); // no despawn yet
-        assert!(app.world().resource::<OrzmaRegistry>().get("h0").is_some());
+        assert!(
+            app.world()
+                .resource::<OrzmaRegistry>()
+                .get(&HandleId::from("h0"))
+                .is_some()
+        );
 
         app.world_mut().entity_mut(surface).despawn();
         app.update();
         assert!(
-            app.world().resource::<OrzmaRegistry>().get("h0").is_none(),
+            app.world()
+                .resource::<OrzmaRegistry>()
+                .get(&HandleId::from("h0"))
+                .is_none(),
             "despawning the owner surface purges its registrations"
         );
     }
@@ -900,7 +1040,8 @@ mod token_tests {
     #[test]
     fn minted_ids_match_the_osc_view_id_charset() {
         for _ in 0..50 {
-            let id = mint_id();
+            let id = mint_handle_id();
+            let id = id.as_str();
             assert!(
                 !id.is_empty() && id.len() <= 128,
                 "id length out of range: {id:?}"
@@ -919,8 +1060,8 @@ mod token_tests {
 
     #[test]
     fn minted_ids_are_unique() {
-        let a = mint_id();
-        let b = mint_id();
+        let a = mint_handle_id();
+        let b = mint_handle_id();
         assert_ne!(a, b);
     }
 
@@ -989,53 +1130,82 @@ mod registry_tests {
     #[test]
     fn insert_then_get_roundtrips() {
         let mut reg = OrzmaRegistry::default();
-        reg.insert(
-            "h1".into(),
-            OrzmaView {
-                source: OrzmaSource::Inline("<h1>x</h1>".into()),
-                entry: "index.html".into(),
-                interactive: true,
-                owner_surface: surface(1),
-                connection_id: 7,
-                forward_keys: vec![],
-                preload: vec![],
-            },
+        reg.insert(HandleId::from("h1"), view(surface(1), 7));
+        assert_eq!(
+            reg.get(&HandleId::from("h1")).map(|v| v.interactive),
+            Some(true)
         );
-        assert_eq!(reg.get("h1").map(|v| v.interactive), Some(true));
-        assert!(reg.get("missing").is_none());
+        assert!(reg.get(&HandleId::from("missing")).is_none());
     }
 
     #[test]
     fn remove_by_connection_drops_only_that_connections_handles() {
         let mut reg = OrzmaRegistry::default();
-        reg.insert("a".into(), view(surface(1), 7));
-        reg.insert("b".into(), view(surface(1), 7));
-        reg.insert("c".into(), view(surface(2), 8));
+        reg.insert(HandleId::from("a"), view(surface(1), 7));
+        reg.insert(HandleId::from("b"), view(surface(1), 7));
+        reg.insert(HandleId::from("c"), view(surface(2), 8));
 
         let removed = reg.remove_by_connection(7);
         assert_eq!(removed.len(), 2);
-        assert!(reg.get("a").is_none() && reg.get("b").is_none());
-        assert!(reg.get("c").is_some());
+        assert!(reg.get(&HandleId::from("a")).is_none() && reg.get(&HandleId::from("b")).is_none());
+        assert!(reg.get(&HandleId::from("c")).is_some());
     }
 
     #[test]
     fn remove_by_surface_drops_only_that_surfaces_handles() {
         let mut reg = OrzmaRegistry::default();
-        reg.insert("a".into(), view(surface(1), 7));
-        reg.insert("c".into(), view(surface(2), 8));
+        reg.insert(HandleId::from("a"), view(surface(1), 7));
+        reg.insert(HandleId::from("c"), view(surface(2), 8));
 
         let removed = reg.remove_by_surface(surface(1));
-        assert_eq!(removed, vec!["a".to_string()]);
-        assert!(reg.get("a").is_none());
-        assert!(reg.get("c").is_some());
+        assert_eq!(
+            removed.iter().map(|r| r.handle.clone()).collect::<Vec<_>>(),
+            vec![HandleId::from("a")]
+        );
+        assert!(reg.get(&HandleId::from("a")).is_none());
+        assert!(reg.get(&HandleId::from("c")).is_some());
     }
 
     #[test]
     fn remove_one_returns_the_owner_surface_when_present() {
         let mut reg = OrzmaRegistry::default();
-        reg.insert("a".into(), view(surface(3), 9));
-        assert_eq!(reg.remove("a"), Some(surface(3)));
-        assert_eq!(reg.remove("a"), None);
+        reg.insert(HandleId::from("a"), view(surface(3), 9));
+        assert_eq!(
+            reg.remove(&HandleId::from("a")).map(|r| r.owner_surface),
+            Some(surface(3))
+        );
+        assert!(reg.remove(&HandleId::from("a")).is_none());
+    }
+
+    /// Asserts that minting binds an instance to its handle, that the
+    /// reverse lookup resolves it, and that releasing the handle takes
+    /// every instance with it.
+    ///
+    /// Case: a program registers one view, asks for a second placement,
+    /// then unregisters while both are mounted.
+    #[test]
+    fn minting_binds_an_instance_to_its_handle_and_release_takes_both() {
+        let mut registry = OrzmaRegistry::default();
+        // NOTE: Bevy 0.19 has no Entity::from_raw; the repo's other tests use
+        // from_bits.
+        let owner = Entity::from_bits(7);
+        let h = HandleId::from("h");
+        registry.insert(h.clone(), view(owner, 1));
+        let first = registry.mint_instance(&h).expect("a known handle mints");
+        let second = registry.mint_instance(&h).expect("a second mint succeeds");
+        assert_ne!(first, second, "each mint draws a distinct id");
+
+        assert_eq!(registry.resolve_instance(first).map(|(h, _)| h), Some(&h));
+        assert_eq!(registry.resolve_instance(second).map(|(h, _)| h), Some(&h));
+        assert!(registry.mint_instance(&HandleId::from("nope")).is_none());
+
+        let removed = registry.remove(&h).expect("the handle was registered");
+        assert_eq!(removed.owner_surface, owner);
+        assert_eq!(removed.instances.len(), 2);
+        assert!(removed.instances.contains(&first));
+        assert!(removed.instances.contains(&second));
+        assert!(registry.resolve_instance(first).is_none());
+        assert!(registry.resolve_instance(second).is_none());
     }
 
     fn view(owner: Entity, conn: u64) -> OrzmaView {
@@ -1047,6 +1217,7 @@ mod registry_tests {
             connection_id: conn,
             forward_keys: vec![],
             preload: vec![],
+            instances: Vec::new(),
         }
     }
 }
@@ -1097,7 +1268,7 @@ mod apply_tests {
         assert!(
             app.world()
                 .resource::<OrzmaRegistry>()
-                .get(&handle)
+                .get(&HandleId::from(handle.as_str()))
                 .is_some(),
             "OrzmaRegistry populated"
         );
@@ -1190,6 +1361,7 @@ mod apply_tests {
                 connection_id: 5,
                 forward_keys: vec![],
                 preload: vec![],
+                instances: Vec::new(),
             },
         );
         orzma_assets.insert_dir("h", "/x".into());
@@ -1203,7 +1375,12 @@ mod apply_tests {
             .send(ControlEvent::Disconnect { connection_id: 5 })
             .unwrap();
         app.update();
-        assert!(app.world().resource::<OrzmaRegistry>().get("h").is_none());
+        assert!(
+            app.world()
+                .resource::<OrzmaRegistry>()
+                .get(&HandleId::from("h"))
+                .is_none()
+        );
         assert!(orzma_assets.get("h").is_none());
     }
 
@@ -1234,6 +1411,7 @@ mod apply_tests {
                 connection_id: 9,
                 forward_keys: vec![],
                 preload: vec![],
+                instances: Vec::new(),
             },
         );
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
@@ -1261,7 +1439,7 @@ mod apply_tests {
         assert!(
             app.world()
                 .resource::<OrzmaRegistry>()
-                .get("HMOUNT")
+                .get(&HandleId::from("HMOUNT"))
                 .is_none()
         );
     }
@@ -1379,6 +1557,7 @@ mod apply_tests {
                 connection_id: 5,
                 forward_keys: vec![],
                 preload: vec![],
+                instances: Vec::new(),
             },
         );
         app.world_mut().spawn(Webview {
@@ -1447,7 +1626,7 @@ mod apply_tests {
         assert!(
             app.world()
                 .resource::<OrzmaRegistry>()
-                .get(&handle)
+                .get(&HandleId::from(handle.as_str()))
                 .is_some(),
             "OrzmaRegistry populated"
         );
@@ -1473,6 +1652,7 @@ mod apply_tests {
                 connection_id: 5,
                 forward_keys: vec![],
                 preload: vec![],
+                instances: Vec::new(),
             },
         );
         let mounted = app
@@ -1543,6 +1723,7 @@ mod apply_tests {
                 connection_id: 5,
                 forward_keys: vec![],
                 preload: vec![],
+                instances: Vec::new(),
             },
         );
         let child = app
@@ -1599,6 +1780,7 @@ mod apply_tests {
                 connection_id: 5,
                 forward_keys: vec![],
                 preload: vec![],
+                instances: Vec::new(),
             },
         );
         let child = app
@@ -1656,6 +1838,7 @@ mod apply_tests {
                 connection_id: 5,
                 forward_keys: vec![],
                 preload: vec![],
+                instances: Vec::new(),
             },
         );
         let child = app
@@ -1723,6 +1906,7 @@ mod focus_tests {
                 connection_id: 1,
                 forward_keys: vec![],
                 preload: vec![],
+                instances: Vec::new(),
             },
         );
         let child = app
@@ -1788,6 +1972,7 @@ mod focus_tests {
                 connection_id: 99,
                 forward_keys: vec![],
                 preload: vec![],
+                instances: Vec::new(),
             },
         );
         // Spawn a VALID interactive inline child that WOULD be focused if the
@@ -1845,6 +2030,7 @@ mod focus_tests {
                 connection_id: 1,
                 forward_keys: vec![],
                 preload: vec![],
+                instances: Vec::new(),
             },
         );
         // Spawn the matching interactive inline child on surface_a.
