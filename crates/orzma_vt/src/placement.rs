@@ -82,6 +82,8 @@ impl fmt::Debug for InstanceId {
 
 impl InstanceId {
     /// Digits in this id's wire spelling.
+    // NOTE: WIRE_DIGITS is unused outside of tests until Task 2 wires the
+    // parser and adds this type to the prelude, making the suppression transient.
     #[allow(dead_code, reason = "public API not yet integrated; removed in Task 2")]
     pub const WIRE_DIGITS: usize = 32;
 
