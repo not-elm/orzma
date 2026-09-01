@@ -222,9 +222,15 @@ impl OrzmaRegistry {
     ///
     /// The caller mints its first instance with [`Self::mint_instance`]
     /// immediately afterwards, so every id — the first one included —
-    /// comes from the one minting path.
+    /// comes from the one minting path. Inserting over an existing `handle`
+    /// first purges that handle's previous instances from `by_instance`, so
+    /// the two maps stay in lockstep even when a caller reuses a handle.
     pub fn insert(&mut self, handle: HandleId, view: OrzmaView) {
-        self.by_handle.insert(handle, view);
+        if let Some(previous) = self.by_handle.insert(handle, view) {
+            for id in previous.instances {
+                self.by_instance.remove(&id);
+            }
+        }
     }
 
     /// Mints an instance for `handle`; `None` only when the handle is
@@ -877,6 +883,7 @@ fn on_set_focus(
         return;
     };
     let Ok(id) = instance.parse::<InstanceId>() else {
+        tracing::debug!(%instance, "focus op for an unparseable instance, dropping");
         return;
     };
     let owned = registry
@@ -916,6 +923,7 @@ fn on_navigate(
     action: NavAction,
 ) {
     let Ok(id) = instance.parse::<InstanceId>() else {
+        tracing::debug!(%instance, "navigate for an unparseable instance, dropping");
         return;
     };
     let Some((_, view)) = registry.resolve_instance(id) else {
@@ -1414,6 +1422,35 @@ mod registry_tests {
         assert!(removed.instances.contains(&second));
         assert!(registry.resolve_instance(first).is_none());
         assert!(registry.resolve_instance(second).is_none());
+    }
+
+    /// Asserts that inserting over an existing handle purges that handle's
+    /// stale instances from the reverse `by_instance` index, so a released
+    /// registration's instances never keep resolving after a new one takes
+    /// its handle.
+    ///
+    /// Case: a handle is reused for a fresh registration before its previous
+    /// one was explicitly removed — production handles are CSPRNG-minted and
+    /// this cannot happen there, but the registry's own invariant must still
+    /// hold for a caller that reuses a literal handle.
+    #[test]
+    fn insert_over_an_existing_handle_purges_its_stale_instances() {
+        let mut registry = OrzmaRegistry::default();
+        let h = HandleId::from("h");
+        registry.insert(h.clone(), view(Entity::from_bits(1), 1));
+        let stale = registry.mint_instance(&h).expect("a known handle mints");
+
+        registry.insert(h.clone(), view(Entity::from_bits(2), 2));
+
+        assert!(
+            registry.resolve_instance(stale).is_none(),
+            "the previous registration's instance must no longer resolve"
+        );
+        assert_eq!(
+            registry.get(&h).map(|v| v.connection_id),
+            Some(2),
+            "the new registration must be the one in place"
+        );
     }
 
     fn view(owner: Entity, conn: u64) -> OrzmaView {

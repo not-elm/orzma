@@ -1145,6 +1145,11 @@ mod tests {
         );
     }
 
+    /// Asserts that two instances minted for the same handle mount as two
+    /// separate children, each in its own overlay slot.
+    ///
+    /// Case: a program calls `new_instance` on a handle it already mounted
+    /// once, then mounts the second instance on the same terminal.
     #[test]
     fn two_instances_of_one_handle_mount_in_separate_slots() {
         let (mut app, terminal, first) = app_with_registration();
