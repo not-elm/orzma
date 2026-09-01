@@ -374,6 +374,7 @@ fn handle_client_msg(
 mod tests {
     use super::*;
     use crate::control_plane::ConnectionWriters;
+    use orzma_vt::prelude::InstanceId;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -409,7 +410,9 @@ mod tests {
             }
             _ => panic!("expected a Register event"),
         };
-        reply.send(ServerMsg::registered("HANDLE1", "i1")).unwrap();
+        reply
+            .send(ServerMsg::registered("HANDLE1", InstanceId(1)))
+            .unwrap();
 
         let mut line = String::new();
         BufReader::new(client.try_clone().unwrap())

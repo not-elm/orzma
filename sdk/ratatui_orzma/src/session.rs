@@ -150,8 +150,12 @@ enum Pending {
     /// A `register`: the oneshot carries the minted `(handle, instance)` pair,
     /// and the handlers and event queues are installed under that handle
     /// before the caller is woken.
+    ///
+    /// The handle stays a [`HandleId`] across the channel. The two ids are
+    /// otherwise distinguished only by tuple position, and a consumer that
+    /// swapped them would mount a handle — which the host can never resolve.
     Register {
-        reply: Sender<OrzmaResult<(String, String)>>,
+        reply: Sender<OrzmaResult<(HandleId, String)>>,
         handlers: Arc<HashMap<String, BoxedHandler>>,
         events: Arc<EventQueues>,
     },
@@ -309,7 +313,7 @@ impl Orzma {
             &line,
         )?;
         let (handle, instance) = await_reply(&rx)?;
-        let handle_slot = Arc::new(Mutex::new(HandleId::from(handle)));
+        let handle_slot = Arc::new(Mutex::new(handle));
         let instance_slot = Arc::new(Mutex::new(instance));
         if let Ok(mut regs) = self.registrations.lock() {
             regs.push(Registration {
@@ -606,16 +610,16 @@ fn settle_reply(
         } => {
             let outcome = match (reply.ok, reply.handle, reply.instance) {
                 (true, Some(handle), Some(instance)) => {
-                    let handle = handle.to_string();
+                    let key = handle.to_string();
                     // NOTE: install on this thread, before the next line is
                     // read, so a `call` or `event` pipelined right behind the
                     // reply finds its handlers and queues rather than racing
                     // the registrant's thread.
                     if let Ok(mut map) = handlers.lock() {
-                        map.insert(handle.clone(), methods);
+                        map.insert(key.clone(), methods);
                     }
                     if let Ok(mut map) = events.lock() {
-                        map.insert(handle.clone(), queues);
+                        map.insert(key, queues);
                     }
                     Ok((handle, instance))
                 }
@@ -828,16 +832,17 @@ fn replay_registration(
         }
     };
     let old = reg.handle_id();
+    let key = new_handle.to_string();
     if let Ok(mut map) = handlers.lock() {
         map.remove(old.as_str());
-        map.insert(new_handle.clone(), reg.handlers.clone());
+        map.insert(key.clone(), reg.handlers.clone());
     }
     if let Ok(mut map) = events.lock() {
         map.remove(old.as_str());
-        map.insert(new_handle.clone(), reg.events.clone());
+        map.insert(key, reg.events.clone());
     }
     *reg.instance_slot.lock().unwrap_or_else(|e| e.into_inner()) = new_instance;
-    let handle_id = HandleId::from(new_handle);
+    let handle_id = new_handle;
     *reg.handle_slot.lock().unwrap_or_else(|e| e.into_inner()) = handle_id.clone();
 
     for slot in &reg.extra_instances {
@@ -967,7 +972,7 @@ mod tests {
 
         assert_eq!(
             reg_rx.recv().unwrap().unwrap(),
-            ("h".to_string(), "i1".to_string())
+            (HandleId::from("h".to_string()), "i1".to_string())
         );
         assert_eq!(inst_rx.recv().unwrap().unwrap(), "i2".to_string());
         assert!(pending.lock().unwrap().is_empty());

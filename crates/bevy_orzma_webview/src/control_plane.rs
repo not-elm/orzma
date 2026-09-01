@@ -722,7 +722,7 @@ fn on_register(
         let _ = reply.send(ServerMsg::err("internal"));
         return;
     };
-    let _ = reply.send(ServerMsg::registered(handle, instance.to_string()));
+    let _ = reply.send(ServerMsg::registered(handle, instance));
 }
 
 /// Applies a `new_instance`: mints an additional instance on a handle
@@ -749,7 +749,7 @@ fn on_new_instance(
     }
     match registry.mint_instance(&handle) {
         Some(instance) => {
-            let _ = reply.send(ServerMsg::instanced(instance.to_string()));
+            let _ = reply.send(ServerMsg::instanced(instance));
         }
         None => {
             let _ = reply.send(ServerMsg::err("internal"));

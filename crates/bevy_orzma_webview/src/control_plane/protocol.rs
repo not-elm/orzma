@@ -4,6 +4,7 @@
 //! OSC parser ethos).
 
 use crate::control_plane::HandleId;
+use orzma_vt::prelude::InstanceId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -176,19 +177,22 @@ pub(crate) enum ServerMsg {
 
 impl ServerMsg {
     /// A `register` reply carrying the minted handle and its first instance.
-    pub fn registered(handle: impl Into<HandleId>, instance: impl Into<String>) -> Self {
+    ///
+    /// Both id slots are typed, so neither can take the other's value: the
+    /// wire spelling is produced here rather than at the call site.
+    pub fn registered(handle: impl Into<HandleId>, instance: InstanceId) -> Self {
         Self::Registered {
             ok: true,
             handle: handle.into(),
-            instance: instance.into(),
+            instance: instance.to_string(),
         }
     }
 
     /// A `new_instance` reply carrying the minted instance.
-    pub fn instanced(instance: impl Into<String>) -> Self {
+    pub fn instanced(instance: InstanceId) -> Self {
         Self::Instanced {
             ok: true,
-            instance: instance.into(),
+            instance: instance.to_string(),
         }
     }
 
@@ -434,12 +438,12 @@ mod tests {
     #[test]
     fn serializes_the_three_reply_shapes() {
         assert_eq!(
-            serde_json::to_string(&ServerMsg::registered("h1", "i1")).unwrap(),
-            r#"{"ok":true,"handle":"h1","instance":"i1"}"#
+            serde_json::to_string(&ServerMsg::registered("h1", InstanceId(1))).unwrap(),
+            r#"{"ok":true,"handle":"h1","instance":"00000000000000000000000000000001"}"#
         );
         assert_eq!(
-            serde_json::to_string(&ServerMsg::instanced("i2")).unwrap(),
-            r#"{"ok":true,"instance":"i2"}"#
+            serde_json::to_string(&ServerMsg::instanced(InstanceId(2))).unwrap(),
+            r#"{"ok":true,"instance":"00000000000000000000000000000002"}"#
         );
         assert_eq!(
             serde_json::to_string(&ServerMsg::err("unknown_handle")).unwrap(),

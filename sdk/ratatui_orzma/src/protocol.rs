@@ -3,7 +3,6 @@
 use crate::keychord::KeyChord;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::borrow::Borrow;
 use std::fmt;
 
 /// The opaque identity of one registration, as minted by the control plane.
@@ -38,12 +37,6 @@ impl From<String> for HandleId {
 impl fmt::Display for HandleId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
-    }
-}
-
-impl Borrow<str> for HandleId {
-    fn borrow(&self) -> &str {
-        &self.0
     }
 }
 
