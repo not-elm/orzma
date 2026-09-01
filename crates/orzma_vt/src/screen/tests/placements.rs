@@ -2,13 +2,8 @@
 
 use super::*;
 
-fn mount(screen: &mut Screen, id: u64, view: &str) {
-    screen.mount_placement(
-        PlacementId(id),
-        PlacementSize { rows: 2, cols: 4 },
-        view.to_string(),
-        None,
-    );
+fn mount(screen: &mut Screen, id: InstanceId) {
+    screen.mount_placement(id, PlacementSize { rows: 2, cols: 4 });
 }
 
 /// Asserts that a mount anchors to the row the write cursor sits
@@ -21,7 +16,7 @@ fn a_mount_anchors_at_the_write_cursor() {
     let mut screen = screen();
     screen.state.line = ScreenLine(2);
     screen.state.column = GridColumn(3);
-    mount(&mut screen, 1, "memo");
+    mount(&mut screen, InstanceId(1));
     let projected = screen.project_placements();
     assert_eq!(projected.len(), 1);
     assert_eq!(projected[0].point.line, GridLine(2));
@@ -39,7 +34,7 @@ fn a_mount_anchors_at_the_write_cursor() {
 fn a_placement_the_projection_omits_is_also_swept() {
     let mut screen = screen();
     screen.state.line = ScreenLine(2);
-    mount(&mut screen, 1, "memo");
+    mount(&mut screen, InstanceId(1));
     assert_eq!(screen.project_placements().len(), 1);
 
     for _ in 0..3 {
@@ -47,7 +42,7 @@ fn a_placement_the_projection_omits_is_also_swept() {
     }
 
     assert!(screen.project_placements().is_empty());
-    assert_eq!(screen.evict_lost_anchors(), vec![PlacementId(1)]);
+    assert_eq!(screen.evict_lost_anchors(), vec![InstanceId(1)]);
     assert_eq!(screen.placement_count(), 0);
 }
 
@@ -62,7 +57,7 @@ fn a_placement_the_projection_omits_is_also_swept() {
 fn a_reset_drops_a_placement_the_sweep_alone_would_leave() {
     let mut screen = screen();
     screen.state.line = ScreenLine(2);
-    mount(&mut screen, 1, "memo");
+    mount(&mut screen, InstanceId(1));
     for _ in 0..3 {
         screen.line_feed();
     }
@@ -71,7 +66,7 @@ fn a_reset_drops_a_placement_the_sweep_alone_would_leave() {
 
     assert_eq!(screen.reset(), Some(DamageSpan::Full));
 
-    assert_eq!(screen.evict_lost_anchors(), vec![PlacementId(1)]);
+    assert_eq!(screen.evict_lost_anchors(), vec![InstanceId(1)]);
 }
 
 /// Asserts that a reset leaves this screen's placements
@@ -82,39 +77,39 @@ fn a_reset_drops_a_placement_the_sweep_alone_would_leave() {
 #[test]
 fn a_reset_leaves_this_screens_placements_unresolvable() {
     let mut screen = screen();
-    mount(&mut screen, 1, "memo");
-    mount(&mut screen, 2, "chart");
+    mount(&mut screen, InstanceId(1));
+    mount(&mut screen, InstanceId(2));
     assert_eq!(screen.reset(), None);
     assert!(screen.project_placements().is_empty());
     assert_eq!(
         screen.evict_lost_anchors(),
-        vec![PlacementId(1), PlacementId(2)]
+        vec![InstanceId(1), InstanceId(2)]
     );
 }
 
-/// Asserts that a re-mount at the same address supersedes the
-/// live placement without naming the superseded id.
+/// Asserts that a re-mount of a live id supersedes the placement it
+/// held without naming the superseded id.
 ///
-/// Case: a program re-renders the same named view.
+/// Case: a program re-renders the same view.
 #[test]
 fn a_remount_supersedes_without_naming_the_superseded_id() {
     let mut screen = screen();
-    mount(&mut screen, 1, "memo");
-    screen.supersede_placement("memo", None);
-    mount(&mut screen, 2, "memo");
+    mount(&mut screen, InstanceId(1));
+    screen.supersede_placement(InstanceId(1));
+    mount(&mut screen, InstanceId(1));
     assert_eq!(screen.placement_count(), 1);
-    assert_eq!(screen.take_placements(), vec![PlacementId(2)]);
+    assert_eq!(screen.take_placements(), vec![InstanceId(1)]);
 }
 
-/// Asserts that an unmount addressed to a view removes it and
+/// Asserts that an unmount addressed to an instance removes it and
 /// reports that something went.
 ///
 /// Case: a program tears down one of two mounted views.
 #[test]
 fn an_unmount_removes_the_addressed_placement() {
     let mut screen = screen();
-    mount(&mut screen, 1, "memo");
-    mount(&mut screen, 2, "chart");
-    assert!(screen.unmount_placement(Some("memo"), None));
+    mount(&mut screen, InstanceId(1));
+    mount(&mut screen, InstanceId(2));
+    assert!(screen.unmount_placement(Some(InstanceId(1))));
     assert_eq!(screen.placement_count(), 1);
 }

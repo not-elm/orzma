@@ -12,7 +12,7 @@ pub(crate) mod modes;
 use crate::device::color::Palette;
 use crate::device::modes::{ScreenKind, VtModes};
 use crate::frame::damage::DamageSpan;
-use crate::placement::{MAX_PLACEMENTS, PlacementId, PlacementSize};
+use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::Screen;
 use crate::screen::grid::GridSize;
 use crate::screen::viewport::{DisplayOffset, Scroll};
@@ -24,14 +24,13 @@ use std::collections::VecDeque;
 /// It owns no parser, damage, or emission state — those are the VT's own
 /// machinery and sit beside it in [`crate::OrzmaVt`]. The placement
 /// table itself belongs to each [`Screen`]; what lives here is only what
-/// one screen cannot decide alone: the id counter, the cap across the
-/// pair, and the `(view_id, instance_id)` address space.
+/// one screen cannot decide alone: the cap across the pair, and a live
+/// id's uniqueness across it.
 pub(crate) struct DeviceState {
     screens: Screens,
     modes: VtModes,
     colors: ColorTable,
     title: TitleState,
-    next_placement_id: PlacementId,
 }
 
 impl DeviceState {
@@ -52,7 +51,6 @@ impl DeviceState {
                 palette: Palette::default(),
             },
             title: TitleState::default(),
-            next_placement_id: PlacementId(0),
         }
     }
 
@@ -240,51 +238,48 @@ impl DeviceState {
 
 /// Webview placements.
 ///
-/// The three terminal-scoped invariants live here because none of them
-/// can be satisfied by one screen alone: ids are minted per terminal,
-/// the cap counts both screens, and a `(view_id, instance_id)` address
-/// is unique across the pair.
+/// These terminal-scoped invariants live here because neither screen can
+/// satisfy them alone: the cap counts both screens, and a live id is
+/// unique across the pair.
 impl DeviceState {
-    /// Registers a mount at the active screen's cursor and mints its id;
-    /// `None` when the cap rejects it.
+    /// Registers a mount at the active screen's cursor under the id the
+    /// host minted; `false` when the cap rejects it.
     ///
     /// # Invariants
     ///
     /// Supersession runs before the cap check: a re-mount frees the slot
     /// it takes, so it must succeed even at the limit.
-    pub fn mount_placement(
-        &mut self,
-        size: PlacementSize,
-        view_id: String,
-        instance_id: Option<String>,
-    ) -> Option<PlacementId> {
-        self.supersede_placement(&view_id, instance_id.as_deref());
+    pub fn mount_placement(&mut self, size: PlacementSize, id: InstanceId) -> bool {
+        self.supersede_placement(id);
         if MAX_PLACEMENTS <= self.placement_count() {
-            return None;
+            return false;
         }
-        let id = self.mint_placement_id();
-        self.active_screen_mut()
-            .mount_placement(id, size, view_id, instance_id);
-        Some(id)
+        self.active_screen_mut().mount_placement(id, size);
+        true
     }
 
-    /// Removes the placements a client `unmount` addresses on either
+    /// Removes the placement a client `unmount` addresses on either
     /// screen; returns whether anything went.
     ///
     /// # Invariants
     ///
     /// Every screen is visited — the accumulation must not short-circuit.
-    /// A broad scope (`view_id` alone, or unmount-all) can match on both
-    /// screens, and the host despawns every matching child across the
-    /// terminal in one pass, so a VT that stopped at the first match
-    /// would keep a placement holding a cap slot whose host child is
-    /// already gone.
-    pub fn unmount_placement(&mut self, view_id: Option<&str>, instance_id: Option<&str>) -> bool {
-        let primary = self.screens.primary.unmount_placement(view_id, instance_id);
-        let alternate = self
-            .screens
-            .alternate
-            .unmount_placement(view_id, instance_id);
+    /// An unmount-all matches on both screens, and the host despawns every
+    /// matching child across the terminal in one pass, so a VT that stopped
+    /// at the first match would keep a placement holding a cap slot whose
+    /// host child is already gone.
+    pub fn unmount_placement(&mut self, id: Option<InstanceId>) -> bool {
+        let primary = self.screens.primary.unmount_placement(id);
+        let alternate = self.screens.alternate.unmount_placement(id);
+        primary || alternate
+    }
+
+    /// Removes the placements the host names on either screen; returns
+    /// whether anything went. Visits both screens without short-circuiting,
+    /// for the same reason [`Self::unmount_placement`] does.
+    pub fn remove_placements(&mut self, ids: &[InstanceId]) -> bool {
+        let primary = self.screens.primary.remove_placements(ids);
+        let alternate = self.screens.alternate.remove_placements(ids);
         primary || alternate
     }
 
@@ -296,7 +291,7 @@ impl DeviceState {
     /// The primary screen's ids come first. The order is observable —
     /// the host acts on the returned list in sequence — and this is the
     /// only operation that exposes it, so it is fixed here.
-    pub fn evict_lost_anchors(&mut self) -> Vec<PlacementId> {
+    pub fn evict_lost_anchors(&mut self) -> Vec<InstanceId> {
         let mut evicted = self.screens.primary.evict_lost_anchors();
         evicted.extend(self.screens.alternate.evict_lost_anchors());
         evicted
@@ -309,7 +304,7 @@ impl DeviceState {
     /// not destroyed. This operation stages no damage of its own: the
     /// flip itself must stage `DamageSpan::Full`, which carries the
     /// changed list.
-    pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<PlacementId> {
+    pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
         self.modes.active_screen = to;
         match to {
             ScreenKind::Alternate => Vec::new(),
@@ -317,35 +312,14 @@ impl DeviceState {
         }
     }
 
-    /// Drops the placement a re-mount replaces on either screen.
-    fn supersede_placement(&mut self, view_id: &str, instance_id: Option<&str>) {
-        self.screens
-            .primary
-            .supersede_placement(view_id, instance_id);
-        self.screens
-            .alternate
-            .supersede_placement(view_id, instance_id);
+    fn supersede_placement(&mut self, id: InstanceId) {
+        self.screens.primary.supersede_placement(id);
+        self.screens.alternate.supersede_placement(id);
     }
 
     /// Live placements across both screens — what the cap counts.
     fn placement_count(&self) -> usize {
         self.screens.primary.placement_count() + self.screens.alternate.placement_count()
-    }
-
-    /// Hands out the next unused placement id.
-    ///
-    /// # Invariants
-    ///
-    /// Ids only ever move forward, which is what lets a delayed
-    /// id-addressed lifecycle event be matched against a placement that
-    /// may already be gone; the overflow guard is what keeps that true.
-    fn mint_placement_id(&mut self) -> PlacementId {
-        let id = self.next_placement_id;
-        self.next_placement_id = PlacementId(
-            id.0.checked_add(1)
-                .expect("a session cannot mint u64::MAX placements"),
-        );
-        id
     }
 }
 
@@ -647,22 +621,6 @@ mod tests {
         assert!(mount(&mut device, "one-too-many").is_none());
     }
 
-    /// Asserts that ids keep moving forward across screens and across
-    /// unmounts, so a delayed id-addressed event can never name a
-    /// successor.
-    ///
-    /// Case: a program mounts on one screen, unmounts, flips screens, and
-    /// mounts again while the host is still acting on the first id.
-    #[test]
-    fn placement_ids_are_minted_ascending_across_screens() {
-        let mut device = device();
-        let first = mount(&mut device, "a").expect("first mount accepted");
-        device.unmount_placement(None, None);
-        device.set_active_screen_for_test(ScreenKind::Alternate);
-        let second = mount(&mut device, "b").expect("second mount accepted");
-        assert!(first < second);
-    }
-
     /// Asserts that a re-mount of the same address supersedes across the
     /// screen pair rather than leaving a twin on the other screen.
     ///
@@ -723,24 +681,6 @@ mod tests {
 
         assert_eq!(device.evict_lost_anchors(), vec![primary, alternate]);
         assert_eq!(device.placement_count(), 0);
-    }
-
-    /// Asserts that a reset does not rewind the device's placement id
-    /// counter.
-    ///
-    /// Case: a webview is mounted, the user runs `reset`, and the
-    /// program mounts a fresh view while the eviction signal for the old
-    /// one is still in flight.
-    #[test]
-    fn a_reset_does_not_rewind_the_device_placement_id_counter() {
-        let mut device = device();
-        let old = mount(&mut device, "a").expect("mount accepted");
-        assert_eq!(device.reset(), None);
-        device.evict_lost_anchors();
-
-        let new = mount(&mut device, "b").expect("mount after reset accepted");
-
-        assert!(old < new);
     }
 
     /// Asserts that a re-mount of a live address is accepted at the cap,

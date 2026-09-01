@@ -41,7 +41,7 @@ use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
 use crate::frame::damage::DamageSpan;
-use crate::placement::{AnchoredPlacement, PlacementId, PlacementSize};
+use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::character_sets::{
     CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
 };
@@ -1028,38 +1028,38 @@ impl Screen {
 /// so a placement can only ever be resolved against the grid that minted
 /// its anchor.
 ///
-/// Four of these forward to [`ScreenPlacements`] unchanged. They stay
+/// Five of these forward to [`ScreenPlacements`] unchanged. They stay
 /// rather than exposing the table, so `DeviceState` never holds a
 /// `&mut ScreenPlacements` and every mutation of a screen's placements
 /// goes through the screen that owns them.
 impl Screen {
-    /// Registers a mount at the write cursor under an already-minted id.
-    pub fn mount_placement(
-        &mut self,
-        id: PlacementId,
-        size: PlacementSize,
-        view_id: String,
-        instance_id: Option<String>,
-    ) {
+    /// Registers a mount at the write cursor under the id the host minted.
+    pub fn mount_placement(&mut self, id: InstanceId, size: PlacementSize) {
         let anchor = self.cursor_line_id();
         let col = self.cursor_column();
-        self.placements
-            .mount(id, anchor, col, size, view_id, instance_id);
+        self.placements.mount(id, anchor, col, size);
     }
 
     /// Drops the placement a re-mount replaces, without reporting it.
-    pub fn supersede_placement(&mut self, view_id: &str, instance_id: Option<&str>) {
-        self.placements.supersede(view_id, instance_id);
+    pub fn supersede_placement(&mut self, id: InstanceId) {
+        self.placements.supersede(id);
     }
 
-    /// Removes the placements a client `unmount` addresses; returns
-    /// whether anything went.
-    pub fn unmount_placement(&mut self, view_id: Option<&str>, instance_id: Option<&str>) -> bool {
-        self.placements.unmount(view_id, instance_id)
+    /// Removes the placement a client `unmount` addresses (`None`
+    /// removes every placement on this screen); returns whether
+    /// anything went.
+    pub fn unmount_placement(&mut self, id: Option<InstanceId>) -> bool {
+        self.placements.unmount(id)
+    }
+
+    /// Removes the placements the host names; returns whether anything
+    /// went.
+    pub fn remove_placements(&mut self, ids: &[InstanceId]) -> bool {
+        self.placements.remove_many(ids)
     }
 
     /// Empties this screen's table and names every id it held.
-    pub fn take_placements(&mut self) -> Vec<PlacementId> {
+    pub fn take_placements(&mut self) -> Vec<InstanceId> {
         self.placements.take_all()
     }
 
@@ -1083,7 +1083,7 @@ impl Screen {
 
     /// Drops the placements whose anchor row left this screen's grid and
     /// names them.
-    pub fn evict_lost_anchors(&mut self) -> Vec<PlacementId> {
+    pub fn evict_lost_anchors(&mut self) -> Vec<InstanceId> {
         self.placements
             .evict_lost_anchors(|anchor| self.grid.grid_line(anchor))
     }
