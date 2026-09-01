@@ -254,8 +254,8 @@ mod tests {
     /// compositing state, leaving another placement's buffered for the widget
     /// that renders it.
     ///
-    /// Case: an app shows one registration in two panes, and only the second
-    /// pane's page has started painting.
+    /// Case: one placement's page starts painting, and the next widget drawn
+    /// belongs to a different placement.
     #[test]
     fn on_compositing_change_ignores_another_instances_pending_state() {
         use std::cell::Cell;
