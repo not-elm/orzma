@@ -31,13 +31,17 @@ pub struct PlacementId(pub u64);
 /// its spelling are in bijection. At any instant the live ids on one
 /// terminal are unique: `supersede` drops the existing entry for an id
 /// across both screens before a re-mount registers its successor.
+// NOTE: InstanceId and InstanceIdParseError are public API added in Task 1
+// but not yet used by the prelude or any non-test code; Task 2 will add
+// them to the prelude and integrate them into the mount handler. Until
+// then, this module is private, so the suppression is transient.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[allow(dead_code)]
+#[allow(dead_code, reason = "public API not yet integrated; removed in Task 2")]
 pub struct InstanceId(pub u128);
 
 /// The reason a wire spelling is not a valid [`InstanceId`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(dead_code, reason = "public API not yet integrated; removed in Task 2")]
 pub struct InstanceIdParseError;
 
 impl FromStr for InstanceId {
@@ -78,7 +82,7 @@ impl fmt::Debug for InstanceId {
 
 impl InstanceId {
     /// Digits in this id's wire spelling.
-    #[allow(dead_code)]
+    #[allow(dead_code, reason = "public API not yet integrated; removed in Task 2")]
     pub const WIRE_DIGITS: usize = 32;
 
     /// Builds an id from 16 bytes of caller-supplied entropy.
@@ -86,7 +90,11 @@ impl InstanceId {
     /// The randomness stays with the caller: the control plane mints
     /// ids, and putting a self-seeding constructor here would leave a
     /// way for the VT to start minting again.
-    #[allow(dead_code)]
+    // NOTE: from_bytes is public API added for the control plane but is
+    // not called in any code path yet, not even in tests, so the lint
+    // expectation is correctly fulfilled. Task 2 will wire the mount
+    // handler that calls this.
+    #[expect(dead_code, reason = "public API not yet integrated; called in Task 2")]
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(u128::from_be_bytes(bytes))
     }
