@@ -1550,7 +1550,7 @@ mod tests {
     /// Case: the frame carrying a fresh mount's placement is applied a
     /// Bevy tick before the mount signal's observer runs.
     #[test]
-    fn projection_ignores_an_unknown_placement_id() {
+    fn projection_ignores_an_unknown_instance() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         app.world_mut()
