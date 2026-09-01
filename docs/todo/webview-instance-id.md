@@ -274,7 +274,7 @@ h.emit("tick", &n)?;   // コンテンツスコープ: 両方のページに届�
 
 ```rust
 // host 側（bevy_orzma_webview）
-pub(crate) struct HandleId(String);
+pub struct HandleId(String);   // pub — Webview.handle が pub でルートバイナリが構築するため
 
 // SDK 側（ratatui_orzma、orzma_vt に依存しない独立クレートなので自前で定義）
 pub struct HandleId(String);
