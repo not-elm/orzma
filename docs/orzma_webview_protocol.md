@@ -171,6 +171,11 @@ Every host push carries an `op`:
 | `event` | `handle`, `event`, `payload` | A page `window.orzma.emit(event, payload)`. Fire-and-forget; no response. |
 | `compositing` | `handle`, `instance`, `active` (bool) | The placement first composited (`true`) or was unmounted after compositing (`false`). |
 
+`call` names the instance whose page called; `event` does not, because a
+program reads events per handle rather than per placement. A program running
+two placements of one handle can therefore tell which page called it, but not
+which page emitted an event.
+
 Two directional details that are easy to get wrong:
 
 - **`emit` vs. `event`.** A page's `window.orzma.emit(name, …)` arrives at the
@@ -205,7 +210,8 @@ of either kind replies `{"ok":false,"error":"<code>"}`:
 
 A handle is opaque, unique per registration, and lowercase: 128 CSPRNG bits
 base32-encoded over the alphabet `a-z2-7`, which keeps it spellable as a URL
-host. Treat it as a token: do not parse it. Each handle owns one isolated
+host. That encoding is unpadded, so a handle is always 26 characters. Treat
+it as a token: do not parse it. Each handle owns one isolated
 `orzma://<handle>/` origin, and it is what `unregister`, `emit`, and
 `new_instance` address. A handle is never mounted — a mount addresses an
 instance.
@@ -232,11 +238,11 @@ Program-to-host lines are marked `C→S`, host-to-program lines `S→C`:
 ```json
 C→S {"op":"hello","token":"orzma:4294967306"}
 C→S {"op":"register","kind":"inline","html":"<!doctype html><body>hi</body>"}
-S→C {"ok":true,"handle":"nf2k7q5w3x3m5a6b2c4d6e7f","instance":"3f5a9c02d1e84b7690ab3cde12f45678"}
-S→C {"op":"call","handle":"nf2k7q5w3x3m5a6b2c4d6e7f","instance":"3f5a9c02d1e84b7690ab3cde12f45678","reqId":"0","method":"save","params":{"text":"hi"}}
+S→C {"ok":true,"handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh","instance":"3f5a9c02d1e84b7690ab3cde12f45678"}
+S→C {"op":"call","handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh","instance":"3f5a9c02d1e84b7690ab3cde12f45678","reqId":"0","method":"save","params":{"text":"hi"}}
 C→S {"op":"reply","reqId":"0","ok":true,"value":{"saved":true}}
-C→S {"op":"emit","handle":"nf2k7q5w3x3m5a6b2c4d6e7f","event":"tick","payload":{"n":1}}
-C→S {"op":"new_instance","handle":"nf2k7q5w3x3m5a6b2c4d6e7f"}
+C→S {"op":"emit","handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh","event":"tick","payload":{"n":1}}
+C→S {"op":"new_instance","handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh"}
 S→C {"ok":true,"instance":"a1b2c3d4e5f60718293a4b5c6d7e8f90"}
 ```
 
@@ -300,7 +306,9 @@ out-of-range dimensions, an unknown or repeated key); the host reports no
 error.
 
 A mount the terminal accepts but cannot place — the per-terminal placement cap
-is full — is also dropped, and the host logs it at debug level.
+of 12 is full — is also dropped, and the host logs it at debug level. The cap
+counts both screens, so it is reached before the renderer runs out of overlay
+slots.
 
 ### Example
 
