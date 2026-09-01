@@ -78,14 +78,10 @@ pub struct TtyCwdChangedSignal {
 pub struct TtyWebviewMountSignal {
     #[event_target]
     pub terminal: Entity,
-    /// The registered view's id.
-    pub view_id: String,
+    /// The host-minted instance this mount registered.
+    pub instance: InstanceId,
     /// The cell rectangle the mount reserved.
     pub size: PlacementSize,
-    /// The client-assigned instance id; `None` is the default instance.
-    pub instance_id: Option<String>,
-    /// The id the VT minted for this placement.
-    pub placement: PlacementId,
 }
 
 /// Fired for a mount the VT refused because the placement cap was full;
@@ -94,10 +90,8 @@ pub struct TtyWebviewMountSignal {
 pub struct TtyWebviewMountRejectedSignal {
     #[event_target]
     pub terminal: Entity,
-    /// The view the refused mount named.
-    pub view_id: String,
     /// The instance the refused mount named.
-    pub instance_id: Option<String>,
+    pub instance: InstanceId,
 }
 
 /// Fired for webview placements the PTY unmounted.
@@ -105,10 +99,8 @@ pub struct TtyWebviewMountRejectedSignal {
 pub struct TtyWebviewUnmountSignal {
     #[event_target]
     pub terminal: Entity,
-    /// The view to unmount; `None` unmounts every view.
-    pub view_id: Option<String>,
-    /// The instance to unmount; `None` unmounts every instance.
-    pub instance_id: Option<String>,
+    /// The instance to unmount; `None` unmounts every placement.
+    pub instance: Option<InstanceId>,
 }
 
 /// Fired when the VT evicts placements on its own authority (history
@@ -118,7 +110,7 @@ pub struct TtyWebviewUnmountSignal {
 pub struct TtyWebviewEvictedSignal {
     #[event_target]
     pub terminal: Entity,
-    pub placements: Vec<PlacementId>,
+    pub placements: Vec<InstanceId>,
 }
 
 /// Fired when the terminal emits a frame; a full repaint carries every
@@ -170,34 +162,17 @@ fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signal: VtSignal
             terminal,
             path: path_buf,
         }),
-        VtSignal::WebviewMount {
-            view_id,
+        VtSignal::WebviewMount { instance, size } => commands.trigger(TtyWebviewMountSignal {
+            terminal,
+            instance,
             size,
-            instance_id,
-            placement,
-        } => commands.trigger(TtyWebviewMountSignal {
-            terminal,
-            view_id,
-            size,
-            instance_id,
-            placement,
         }),
-        VtSignal::WebviewMountRejected {
-            view_id,
-            instance_id,
-        } => commands.trigger(TtyWebviewMountRejectedSignal {
-            terminal,
-            view_id,
-            instance_id,
-        }),
-        VtSignal::WebviewUnmount {
-            view_id,
-            instance_id,
-        } => commands.trigger(TtyWebviewUnmountSignal {
-            terminal,
-            view_id,
-            instance_id,
-        }),
+        VtSignal::WebviewMountRejected { instance } => {
+            commands.trigger(TtyWebviewMountRejectedSignal { terminal, instance })
+        }
+        VtSignal::WebviewUnmount { instance } => {
+            commands.trigger(TtyWebviewUnmountSignal { terminal, instance })
+        }
         VtSignal::WebviewEvicted { placements } => commands.trigger(TtyWebviewEvictedSignal {
             terminal,
             placements,

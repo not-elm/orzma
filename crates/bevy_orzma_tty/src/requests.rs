@@ -5,7 +5,7 @@
 use crate::requests::{
     key_input::KeyInputPlugin, mouse_input::MouseInputPlugin, paste::PastePlugin,
     resize::ResizePlugin, scroll::ScrollPlugin, selection::SelectionPlugin, vi_mode::ViModePlugin,
-    vi_motion::ViMotionPlugin,
+    vi_motion::ViMotionPlugin, webview_remove::WebviewRemovePlugin,
 };
 use bevy::prelude::*;
 
@@ -17,6 +17,7 @@ mod scroll;
 mod selection;
 mod vi_mode;
 mod vi_motion;
+mod webview_remove;
 
 pub use key_input::RequestTtyKeyInput;
 pub use mouse_input::RequestTtyMouseInput;
@@ -30,6 +31,7 @@ pub use selection::{
 };
 pub use vi_mode::{RequestTtyViMode, ViModeSwitch};
 pub use vi_motion::{RequestTtyViMotion, ViMotion};
+pub use webview_remove::RequestTtyWebviewRemove;
 
 pub(crate) struct OrzmaEventRequestPlugin;
 
@@ -44,6 +46,7 @@ impl Plugin for OrzmaEventRequestPlugin {
             SelectionPlugin,
             ViModePlugin,
             ViMotionPlugin,
+            WebviewRemovePlugin,
         ));
     }
 }
