@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
 use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewSource};
-use bevy_orzma_tty::prelude::OrzmaTtyHandle;
+use bevy_orzma_tty::prelude::{OrzmaTtyHandle, RequestTtyWebviewRemove};
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use orzma_vt::prelude::InstanceId;
@@ -116,13 +116,17 @@ pub(crate) struct OrzmaView {
 }
 
 /// Stamped on a Tier 1 webview entity at mount: the control-plane
-/// connection that registered it (back-channel routing target) and its handle.
+/// connection that registered it (back-channel routing target), its handle,
+/// and the instance the mount was addressed by.
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WebviewOwner {
     /// The owning connection (push `call` frames here).
-    pub(crate) connection_id: u64,
+    pub connection_id: u64,
     /// The registration handle (for `emit` fan-out + ownership checks).
-    pub(crate) handle: String,
+    pub handle: HandleId,
+    /// The placement this webview was mounted under, so a back-channel
+    /// frame names which of a handle's placements it came from.
+    pub instance: InstanceId,
 }
 
 /// The opaque identity of one dynamic registration.
@@ -652,14 +656,14 @@ fn apply_control_events(
                 } else {
                     vec![]
                 };
-                despawn_mounted(&mut commands, &webviews, &removed);
+                release_registrations(&mut commands, &webviews, &removed);
             }
             ControlEvent::Disconnect { connection_id } => {
                 let removed = registry.remove_by_connection(connection_id);
                 for entry in &removed {
                     orzma_assets.0.remove(entry.handle.as_str());
                 }
-                despawn_mounted(&mut commands, &webviews, &removed);
+                release_registrations(&mut commands, &webviews, &removed);
                 for (webview, page_req) in rpc.drain_connection(connection_id) {
                     let payload = serde_json::json!({ "reqId": page_req, "ok": false, "error": "owner_disconnected" });
                     commands.trigger(HostEmitEvent::new(webview, "orzma", &payload));
@@ -701,7 +705,7 @@ fn apply_control_events(
                 }
                 let frame = serde_json::json!({ "event": event, "payload": payload });
                 for (entity, view) in &webviews {
-                    if view.view_id == handle.as_str() {
+                    if view.handle == handle {
                         commands.trigger(HostEmitEvent::new(entity, "orzma.event", &frame));
                     }
                 }
@@ -806,18 +810,31 @@ fn apply_control_events(
     }
 }
 
-fn despawn_mounted(
+/// Tears down the registrations `removed` released: despawns their mounted
+/// webviews and hands the reservations back to the VT on the surface that
+/// owned them.
+///
+/// The VT cannot learn that a registration is gone — that fact lives on the
+/// control socket — so without the second step each released placement keeps
+/// a per-terminal cap slot until its anchor scrolls out of history.
+fn release_registrations(
     commands: &mut Commands,
     webviews: &Query<(Entity, &Webview)>,
     removed: &[RemovedRegistration],
 ) {
     for (entity, view) in webviews {
-        if removed
-            .iter()
-            .any(|entry| entry.handle.as_str() == view.view_id)
-        {
+        if removed.iter().any(|entry| entry.handle == view.handle) {
             commands.entity(entity).despawn();
         }
+    }
+    for entry in removed {
+        if entry.instances.is_empty() {
+            continue;
+        }
+        commands.trigger(RequestTtyWebviewRemove {
+            terminal: entry.owner_surface,
+            instances: entry.instances.clone(),
+        });
     }
 }
 
@@ -1478,6 +1495,62 @@ mod apply_tests {
                 .resource::<OrzmaRegistry>()
                 .get(&HandleId::from("HMOUNT"))
                 .is_none()
+        );
+    }
+
+    /// Asserts that releasing a handle hands the placements it had minted
+    /// back to the VT on the surface that owned them.
+    ///
+    /// Case: a program unregisters a view whose placements the terminal
+    /// still holds, so their cap slots must be freed without waiting for
+    /// the anchors to scroll out of history.
+    #[test]
+    fn unregister_reclaims_the_released_placements_from_the_vt() {
+        #[derive(Resource, Default)]
+        struct Reclaimed(Vec<(Entity, Vec<InstanceId>)>);
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let surface = app.world_mut().spawn_empty().id();
+        let handle = HandleId::from("h");
+        let mut reg = OrzmaRegistry::default();
+        reg.insert(
+            handle.clone(),
+            OrzmaView {
+                source: OrzmaSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 5,
+                forward_keys: vec![],
+                preload: vec![],
+                instances: Vec::new(),
+            },
+        );
+        let instance = reg.mint_instance(&handle).expect("the handle mints");
+        app.insert_resource(reg);
+        app.insert_resource(OrzmaRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        app.init_resource::<Reclaimed>();
+        app.add_observer(
+            |e: On<RequestTtyWebviewRemove>, mut reclaimed: ResMut<Reclaimed>| {
+                reclaimed.0.push((e.terminal, e.instances.clone()));
+            },
+        );
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Unregister {
+                connection_id: 5,
+                handle,
+            })
+            .unwrap();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Reclaimed>().0,
+            vec![(surface, vec![instance])],
+            "unregister must drop the released placements on the owning surface"
         );
     }
 

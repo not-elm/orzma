@@ -406,6 +406,7 @@ mod tests {
     use bevy::window::{Ime, Window, WindowResolution};
     use orzma_tty_renderer::CellMetrics;
     use orzma_tty_renderer::prelude::{Cursor, TerminalGrid};
+    use orzma_vt::prelude::InstanceId;
 
     #[test]
     fn try_new_returns_none_for_empty_text() {
@@ -726,9 +727,11 @@ mod tests {
             .spawn((
                 ChildOf(terminal),
                 Webview {
-                    view_id: "webview".into(),
-                    instance_id: None,
+                    handle: "webview".into(),
+                    instance: InstanceId(1),
                     slot: 0,
+                    rows: 10,
+                    cols: 40,
                 },
             ))
             .id();
@@ -771,9 +774,11 @@ mod tests {
             .spawn((
                 ChildOf(terminal_entity),
                 Webview {
-                    view_id: "webview".into(),
-                    instance_id: None,
+                    handle: "webview".into(),
+                    instance: InstanceId(1),
                     slot: 0,
+                    rows: 10,
+                    cols: 40,
                 },
             ))
             .id();

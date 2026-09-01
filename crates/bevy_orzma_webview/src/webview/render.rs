@@ -124,7 +124,12 @@ fn on_orzma_call_frame(
     };
     let global_id = rpc.mint();
     let line = serde_json::json!({
-        "op": "call", "handle": owner.handle, "reqId": global_id, "method": method, "params": params
+        "op": "call",
+        "handle": owner.handle,
+        "instance": owner.instance.to_string(),
+        "reqId": global_id,
+        "method": method,
+        "params": params,
     })
     .to_string();
     if !writers.send(owner.connection_id, line) {
@@ -179,7 +184,7 @@ fn on_orzma_emit_frame(
     .to_string();
     if !writers.send(owner.connection_id, line) {
         tracing::debug!(
-            handle = owner.handle,
+            handle = %owner.handle,
             "orzma.emit owner connection unavailable; dropping"
         );
     }
@@ -211,6 +216,7 @@ fn on_webview_address_changed(
     let line = serde_json::json!({
         "op": "call",
         "handle": owner.handle,
+        "instance": owner.instance.to_string(),
         "reqId": rpc.mint(),
         "method": "urlChanged",
         "params": { "url": addr.url },
@@ -258,6 +264,7 @@ fn log_webview_load_error(load: On<LoadError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orzma_vt::prelude::InstanceId;
 
     #[test]
     fn orzma_frame_deserializes_from_bare_emitted_object() {
@@ -286,6 +293,7 @@ mod tests {
             .spawn(WebviewOwner {
                 connection_id: 7,
                 handle: "H".into(),
+                instance: InstanceId(1),
             })
             .id();
 
@@ -345,6 +353,7 @@ mod tests {
             .spawn(WebviewOwner {
                 connection_id: 7,
                 handle: "H".into(),
+                instance: InstanceId(1),
             })
             .id();
         app.world_mut().trigger(Receive {
@@ -378,6 +387,7 @@ mod tests {
             .spawn(WebviewOwner {
                 connection_id: 7,
                 handle: "H".into(),
+                instance: InstanceId(1),
             })
             .id();
 
@@ -425,6 +435,7 @@ mod tests {
                 WebviewOwner {
                     connection_id: 7,
                     handle: "H".into(),
+                    instance: InstanceId(1),
                 },
                 WebviewSource::new("https://example.com"),
             ))
@@ -461,6 +472,7 @@ mod tests {
                 WebviewOwner {
                     connection_id: 7,
                     handle: "H".into(),
+                    instance: InstanceId(1),
                 },
                 WebviewSource::new("orzma://H/index.html"),
             ))

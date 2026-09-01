@@ -36,11 +36,9 @@ pub(crate) fn on_webview_mount(
         &dynamic,
         WebviewMountContext {
             terminal_surface: req.terminal,
-            view_id: &req.view_id,
-            instance_id: req.instance_id.as_deref(),
+            instance: req.instance,
             rows: req.size.rows,
             cols: req.size.cols,
-            placement: req.placement,
         },
     );
 }
@@ -51,8 +49,7 @@ pub(crate) fn on_webview_mount(
 pub(crate) fn on_webview_mount_rejected(ev: On<TtyWebviewMountRejectedSignal>) {
     let req = ev.event();
     tracing::debug!(
-        view_id = %req.view_id,
-        instance_id = ?req.instance_id,
+        instance = %req.instance,
         "apc-webview: mount rejected by the VT, dropping"
     );
 }
@@ -60,10 +57,5 @@ pub(crate) fn on_webview_mount_rejected(ev: On<TtyWebviewMountRejectedSignal>) {
 /// Unmounts the webview(s) the VT signal names.
 pub(crate) fn on_webview_unmount(ev: On<TtyWebviewUnmountSignal>, mut webview: WebviewParams) {
     let req = ev.event();
-    unmount(
-        &mut webview,
-        req.terminal,
-        req.view_id.as_deref(),
-        req.instance_id.as_deref(),
-    );
+    unmount(&mut webview, req.terminal, req.instance);
 }

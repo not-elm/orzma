@@ -205,6 +205,7 @@ fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orzma_vt::prelude::InstanceId;
 
     #[test]
     fn focused_webview_follows_active_pane() {
@@ -287,9 +288,11 @@ mod tests {
             .spawn((
                 ChildOf(pane),
                 Webview {
-                    view_id: "v".into(),
-                    instance_id: None,
+                    handle: "v".into(),
+                    instance: InstanceId(1),
                     slot: 0,
+                    rows: 10,
+                    cols: 40,
                 },
             ))
             .id();
@@ -317,9 +320,11 @@ mod tests {
             .spawn((
                 ChildOf(pane),
                 Webview {
-                    view_id: "v".into(),
-                    instance_id: None,
+                    handle: "v".into(),
+                    instance: InstanceId(1),
                     slot: 0,
+                    rows: 10,
+                    cols: 40,
                 },
             ))
             .id();
@@ -354,9 +359,11 @@ mod tests {
             .spawn((
                 ChildOf(surface),
                 Webview {
-                    view_id: "h1".into(),
-                    instance_id: None,
+                    handle: "h1".into(),
+                    instance: InstanceId(1),
                     slot: 0,
+                    rows: 10,
+                    cols: 40,
                 },
             ))
             .id();
@@ -431,9 +438,11 @@ mod tests {
         app.world_mut().spawn((
             ChildOf(shell),
             Webview {
-                view_id: "w".into(),
-                instance_id: None,
+                handle: "w".into(),
+                instance: InstanceId(1),
                 slot: 0,
+                rows: 10,
+                cols: 40,
             },
         ));
         app.world_mut().spawn((
