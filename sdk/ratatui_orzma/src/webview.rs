@@ -290,6 +290,16 @@ impl WebviewHandle {
             .collect()
     }
 
+    /// Whether `slot` is the very slot this handle reads its handle id from.
+    ///
+    /// Registrations are matched against a handle by this identity rather than
+    /// by the id the slot currently holds: a reconnect refills the slot in
+    /// place, so an id read before a round trip can no longer be found by value
+    /// once the replay lands.
+    pub(crate) fn shares_handle_slot(&self, slot: &Arc<Mutex<HandleId>>) -> bool {
+        Arc::ptr_eq(&self.handle, slot)
+    }
+
     /// Creates a handle over pre-existing shared id slots, which the reconnect
     /// replay refills in place.
     pub(crate) fn new_shared(

@@ -345,6 +345,12 @@ impl Orzma {
     /// Blocks on a control-socket round trip, so call it while setting the app
     /// up — never from inside the draw loop.
     pub fn new_instance(&self, handle: &WebviewHandle) -> OrzmaResult<WebviewInstance> {
+        // NOTE: the saved registrations stay locked from before the request goes
+        // out until after the minted slot is recorded. A reconnect replays them
+        // under this same lock, so releasing it any earlier would let a replay
+        // complete in between and leave this slot holding an instance minted on
+        // the connection that just died — one the app can never mount.
+        let mut regs = self.registrations.lock().unwrap_or_else(|e| e.into_inner());
         let handle_id = handle.handle_id();
         let (tx, rx) = bounded(1);
         let line = serde_json::to_string(&ClientMsg::NewInstance {
@@ -357,18 +363,15 @@ impl Orzma {
             &line,
         )?;
         let slot = Arc::new(Mutex::new(await_reply(&rx)?));
-        let mut replayable = false;
-        if let Ok(mut regs) = self.registrations.lock()
-            && let Some(reg) = regs.iter_mut().find(|r| r.handle_id() == handle_id)
+        match regs
+            .iter_mut()
+            .find(|r| handle.shares_handle_slot(&r.handle_slot))
         {
-            reg.extra_instances.push(slot.clone());
-            replayable = true;
-        }
-        if !replayable {
-            tracing::debug!(
+            Some(reg) => reg.extra_instances.push(slot.clone()),
+            None => tracing::debug!(
                 handle = %handle_id,
                 "minted an instance for a handle with no saved registration; it will not survive a reconnect"
-            );
+            ),
         }
         Ok(WebviewInstance::new_shared(slot, self.writer.clone()))
     }
@@ -1042,6 +1045,104 @@ mod tests {
         ));
         assert_eq!(survivor_rx.recv().unwrap().unwrap(), "i4".to_string());
         assert!(pending.lock().unwrap().is_empty());
+    }
+
+    /// A session holding one saved registration, returned with a handle over
+    /// that registration's id slots and the far end of its socket. No reader
+    /// thread runs, so a request the session writes waits until the test
+    /// settles it by hand.
+    fn session_with_one_registration() -> (Orzma, WebviewHandle, UnixStream) {
+        let (client, server) = UnixStream::pair().unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client));
+        let handle_slot = Arc::new(Mutex::new(HandleId::from("h-old".to_owned())));
+        let instance_slot = Arc::new(Mutex::new(INSTANCE_A.to_owned()));
+        let events = Arc::new(EventQueues::from_decls(&[]));
+        let orzma = Orzma {
+            writer: writer.clone(),
+            pending: Arc::new(Mutex::new(VecDeque::new())),
+            frame: Arc::new(Mutex::new(FramePlacements::default())),
+            pending_compositing: Arc::new(Mutex::new(HashMap::new())),
+            disconnected: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(0)),
+            registrations: Arc::new(Mutex::new(vec![Registration {
+                kind: Webview::inline("x").kind,
+                handle_slot: handle_slot.clone(),
+                instance_slot: instance_slot.clone(),
+                extra_instances: Vec::new(),
+                handlers: Arc::new(HashMap::new()),
+                events: events.clone(),
+            }])),
+            reconnect_tx: bounded::<()>(1).0,
+        };
+        let handle = WebviewHandle::new_shared(handle_slot, instance_slot, events, writer);
+        (orzma, handle, server)
+    }
+
+    /// Asserts that an instance minted while a reconnect replaces the handle it
+    /// was requested under is still recorded for replay.
+    ///
+    /// Case: orzma restarts in the moment between the host answering an app's
+    /// request for a second placement and the app taking delivery of it.
+    #[test]
+    fn a_mint_racing_a_reconnect_still_records_the_placement_for_replay() {
+        let (orzma, handle, server) = session_with_one_registration();
+        let refilled = orzma.registrations.lock().unwrap()[0].handle_slot.clone();
+        let pending = orzma.pending.clone();
+
+        let host = thread::spawn(move || {
+            let mut line = String::new();
+            BufReader::new(server).read_line(&mut line).unwrap();
+            *refilled.lock().unwrap() = HandleId::from("h-new".to_owned());
+            settle_reply(
+                &pending,
+                &Arc::new(Mutex::new(HashMap::new())),
+                &Arc::new(Mutex::new(HashMap::new())),
+                &format!(r#"{{"ok":true,"instance":"{INSTANCE_B}"}}"#),
+            );
+        });
+
+        let extra = orzma.new_instance(&handle).unwrap();
+        host.join().unwrap();
+
+        assert_eq!(extra.id(), INSTANCE_B);
+        assert_eq!(
+            orzma.registrations.lock().unwrap()[0].extra_instances.len(),
+            1,
+            "the minted placement must be recorded for replay"
+        );
+    }
+
+    /// Asserts that a mint holds the saved registrations from before it sends
+    /// its request until after it records the placement, so a reconnect replay
+    /// can neither run between the two nor answer the request itself.
+    ///
+    /// Case: the socket dies while an app is asking for a second placement, and
+    /// the reconnect thread reaches the registrations it has to replay.
+    #[test]
+    fn a_reconnect_replay_cannot_interleave_with_a_mint_in_flight() {
+        let (orzma, handle, server) = session_with_one_registration();
+        let pending = orzma.pending.clone();
+        let registrations = orzma.registrations.clone();
+
+        let host = thread::spawn(move || {
+            let mut line = String::new();
+            BufReader::new(server).read_line(&mut line).unwrap();
+            let held_while_in_flight = registrations.try_lock().is_err();
+            settle_reply(
+                &pending,
+                &Arc::new(Mutex::new(HashMap::new())),
+                &Arc::new(Mutex::new(HashMap::new())),
+                &format!(r#"{{"ok":true,"instance":"{INSTANCE_B}"}}"#),
+            );
+            held_while_in_flight
+        });
+
+        orzma.new_instance(&handle).unwrap();
+
+        assert!(
+            host.join().unwrap(),
+            "the request went out with the registrations unlocked, leaving a replay free to interleave"
+        );
     }
 
     /// Asserts that two instances of one registration recorded in the same
