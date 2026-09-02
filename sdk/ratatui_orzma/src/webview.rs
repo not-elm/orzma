@@ -1,10 +1,11 @@
 //! Webview builder and registered handle.
 
-use crate::error::OrzmaResult;
+use crate::error::{OrzmaError, OrzmaResult};
 use crate::events::{EventDecl, EventQueues};
 use crate::handler::{BoxedHandler, make_handler};
 use crate::keychord::KeyChord;
 use crate::protocol::{ClientMsg, HandleId, NavAction, RegisterKind};
+use crate::session::SessionCore;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::TypeId;
@@ -12,7 +13,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 /// The shared write half of the control socket.
 pub(crate) type SharedWriter = Arc<Mutex<UnixStream>>;
@@ -187,17 +188,18 @@ impl Webview {
 }
 
 /// A registered webview: emit events to its page(s), drive its default
-/// placement, and read the two ids it is addressed by.
+/// placement, mint further placements, and read the two ids it is addressed by.
 ///
 /// A registration is addressed by a [`HandleId`], and each of its placements by
 /// an instance id. [`WebviewHandle::instance_id`] returns the default
-/// placement's; extra placements come from [`crate::Orzma::new_instance`].
+/// placement's; extra placements come from [`WebviewHandle::new_instance`].
 #[derive(Clone, Debug)]
 pub struct WebviewHandle {
     handle: Arc<Mutex<HandleId>>,
     instance: Arc<Mutex<String>>,
     events: Arc<EventQueues>,
     writer: SharedWriter,
+    session: Weak<SessionCore>,
 }
 
 impl PartialEq for WebviewHandle {
@@ -207,11 +209,38 @@ impl PartialEq for WebviewHandle {
 }
 
 impl WebviewHandle {
+    /// Mints an additional placement of this registration, blocking until the
+    /// control plane replies.
+    ///
+    /// A registration always has one placement, addressed by
+    /// [`WebviewHandle::instance_id`]; every instance minted here is another
+    /// place the same content can be mounted, at the same time as the others.
+    /// The returned instance is replayed alongside its registration when the
+    /// session reconnects.
+    ///
+    /// Blocks on a control-socket round trip, so call it while setting the app
+    /// up. Two places must never call it:
+    ///
+    /// - the draw loop, which the round trip would stall;
+    /// - an RPC handler registered with [`Webview::on`], which runs on the
+    ///   reader thread that would have to deliver this very reply — the call
+    ///   cannot be answered until it gives that thread back, so it blocks until
+    ///   the reply times out.
+    ///
+    /// Returns [`OrzmaError::SessionClosed`] once the [`crate::Orzma`] this
+    /// handle was registered through has been dropped. Minting is the only
+    /// thing a dropped session revokes: the methods above keep writing to the
+    /// control socket, which outlives the session object.
+    pub fn new_instance(&self) -> OrzmaResult<WebviewInstance> {
+        let core = self.session.upgrade().ok_or(OrzmaError::SessionClosed)?;
+        core.mint_instance(&self.writer, self)
+    }
+
     /// Returns the opaque handle the control plane minted for this
     /// registration.
     ///
     /// This addresses the registration itself, which is what
-    /// [`crate::Orzma::new_instance`] mints from. It is not what a placement is
+    /// [`WebviewHandle::new_instance`] mints from. It is not what a placement is
     /// mounted or navigated by: pass [`WebviewHandle::instance_id`] to
     /// [`crate::WebviewWidget::new`].
     pub fn handle_id(&self) -> HandleId {
@@ -307,18 +336,20 @@ impl WebviewHandle {
         instance: Arc<Mutex<String>>,
         events: Arc<EventQueues>,
         writer: SharedWriter,
+        session: Weak<SessionCore>,
     ) -> Self {
         Self {
             handle,
             instance,
             events,
             writer,
+            session,
         }
     }
 }
 
 /// One extra placement of a registration, minted by
-/// [`crate::Orzma::new_instance`].
+/// [`WebviewHandle::new_instance`].
 ///
 /// It can be mounted at the same time as the registration's default placement
 /// and as its other extra placements, each showing the same content
@@ -549,6 +580,7 @@ mod tests {
             instance_slot.clone(),
             Arc::new(crate::events::EventQueues::from_decls(&[])),
             writer,
+            Weak::new(),
         );
         assert_eq!(handle.handle_id().to_string(), "old-handle");
         assert_eq!(handle.instance_id(), "old-instance");
@@ -574,6 +606,7 @@ mod tests {
             Arc::new(Mutex::new("i1".to_owned())),
             Arc::new(crate::events::EventQueues::from_decls(&[])),
             writer,
+            Weak::new(),
         );
 
         handle.navigate("https://example.com").unwrap();
@@ -632,6 +665,7 @@ mod tests {
             Arc::new(Mutex::new("i1".to_owned())),
             events,
             writer,
+            Weak::new(),
         );
 
         let got = handle.read_events::<Hello>();

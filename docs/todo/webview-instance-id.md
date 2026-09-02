@@ -245,13 +245,13 @@ host は serialize しかしないので untagged の曖昧さは発生しない
 ### D6. SDK は `WebviewHandle` が既定 instance を兼ねる
 
 ```rust
-let h  = session.register(wv)?;      // handle + 既定 instance
-let h2 = session.new_instance(&h)?;  // WebviewInstance
+let h  = session.register(wv)?;   // handle + 既定 instance
+let h2 = h.new_instance()?;       // WebviewInstance
 
 frame.render_stateful_widget(
-    WebviewWidget::new(h.instance_id()),  area_a, &mut placements);
+    WebviewWidget::new(h.instance_id()), area_a, &mut placements);
 frame.render_stateful_widget(
-    WebviewWidget::new(h2.instance_id()), area_b, &mut placements);
+    WebviewWidget::new(h2.id()),         area_b, &mut placements);
 
 h.emit("tick", &n)?;   // コンテンツスコープ: 両方のページに届く
 ```
@@ -643,6 +643,7 @@ pub struct WebviewHandle {
     instance: Arc<Mutex<String>>,   // 既定 instance
     events:   Arc<EventQueues>,
     writer:   SharedWriter,
+    session:  Weak<SessionCore>,    // pending FIFO + registrations
 }
 
 pub struct WebviewInstance {
@@ -654,11 +655,21 @@ pub struct WebviewInstance {
 id スロットが両方 `Arc<Mutex<..>>` なのは、reconnect が中身を差し替えるだけで
 クローン済みのハンドルが追随するためである（handle が既に使っている仕組みの踏襲）。
 
-採番は **`Orzma::new_instance(&self, handle: &WebviewHandle) -> OrzmaResult<WebviewInstance>`**
-に置く。`WebviewHandle` には置けない — pending FIFO（`PendingRegisters`）にも
-`registrations` にも到達できないためで、`Clone` されるハンドルに `Arc` を2つ増やすのも
-避けたい。`Orzma` 側に置けば §4.5 の replay スロット登録を `Registration` の構築と同じ場所で
-行える。
+採番は **`WebviewHandle::new_instance(&self) -> OrzmaResult<WebviewInstance>`** に置く。
+ハンドルが pending FIFO と `registrations` に到達できないという当初の制約は、その2つを
+`SessionCore` にまとめ、ハンドルに `Weak<SessionCore>` を1本持たせることで外した。`Weak`
+なのは `SessionCore → Registration → ハンドラのクロージャ → アプリ → WebviewHandle` と
+戻る参照循環を構造的に断つためである。`writer` は `SessionCore` に入れずハンドル側に残す
+ので、`emit` / `navigate` などの既存メソッドは `Orzma` の生存に依存しない — 失効するのは
+採番だけで、`Orzma` を drop した後の `new_instance` は `OrzmaError::SessionClosed` を返す。
+
+本体は `SessionCore::mint_instance` に置き、`WebviewHandle::new_instance` はその委譲に
+する。こうすると webview.rs が session.rs から取り込むのは `SessionCore` 一つで済み、
+`Pending` / `Registration` / `send_request` を `pub(crate)` に広げずに済む。
+
+**RPC ハンドラの中から呼んではならない。** ハンドラは reader スレッド上で同期実行され、
+採番はその同じ reader が応答を捌くのを待つので、ハンドラ内から呼ぶと応答が
+タイムアウトするまで停止する。この禁止はメソッドの doc に明記する。
 
 `WebviewHandle::handle_id()` は `HandleId` を、`instance_id()` は既定 instance の
 `String` を返す。**無印の `id()` は残さない** — 自然に手が伸びる名前が handle を返すのが
@@ -753,8 +764,8 @@ replay ループが registration ごとに、re-register で `handle_slot` と `
 既存の `generation.fetch_add(1)` はループを抜けた後にあるので、全スロットが埋まるまで
 世代は上がらず、`FlushState::reset()` → 全再 mount の順序は自動的に守られる。
 
-`Session` は生成した `WebviewInstance` のスロットを `Registration` に登録する経路が要る
-（§4.1 で `new_instance` を `Orzma` 側に置いたのはこのためでもある）。
+生成した `WebviewInstance` のスロットを `Registration` に登録する経路が要る。`SessionCore`
+が `registrations` を持つのはこのためで、`WebviewHandle` はそこへ `Weak` 経由で到達する。
 
 **失敗パスを設計に含める。** 現在の replay ループは、途中の失敗でどこからでも
 `disconnected = true` を立てて `return` し、generation を上げず、既に再登録済みの

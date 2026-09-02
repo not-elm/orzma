@@ -56,6 +56,13 @@ pub enum OrzmaError {
     #[error("no reply to a control-socket request: the socket closed or the reply timed out")]
     Disconnected,
 
+    /// The [`crate::Orzma`] a handle was registered through has been dropped, so
+    /// there is nothing left to track a request through. Distinct from
+    /// [`OrzmaError::Disconnected`], which means a request went out and was
+    /// never answered; here none is sent at all.
+    #[error("the orzma session has been dropped")]
+    SessionClosed,
+
     /// A serde (de)serialization failure.
     #[error("serialization error: {0}")]
     Serde(#[from] serde_json::Error),

@@ -167,7 +167,7 @@ type PendingCompositing = Arc<Mutex<HashMap<String, bool>>>;
 
 /// A saved webview registration for replay on reconnect, holding every id slot
 /// a reconnect has to refill: the handle, the default instance, and one slot
-/// per instance minted by [`Orzma::new_instance`].
+/// per instance minted by [`WebviewHandle::new_instance`].
 struct Registration {
     kind: RegisterKind,
     handle_slot: Arc<Mutex<HandleId>>,
@@ -194,15 +194,68 @@ pub(crate) struct ReconnectHandle {
     pub(crate) reconnect_tx: Sender<()>,
 }
 
+/// The request and replay plumbing a [`WebviewHandle`] needs in order to mint
+/// on its own registration: the pending-reply queue a request is tracked
+/// through, and the registrations a reconnect replays.
+///
+/// A handle reaches this through a [`std::sync::Weak`], so holding one never
+/// keeps a session alive. The fields stay behind their own `Arc`s because the
+/// reader and reconnect threads capture those directly — dropping the [`Orzma`]
+/// therefore drops this core (failing every later `upgrade`) while leaving the
+/// threads their own view of the same state.
+pub(crate) struct SessionCore {
+    pending: PendingReplies,
+    registrations: Arc<Mutex<Vec<Registration>>>,
+}
+
+impl SessionCore {
+    /// Mints an additional placement on `handle`, writing the request through
+    /// `writer` and blocking until the control plane answers it.
+    pub(crate) fn mint_instance(
+        &self,
+        writer: &SharedWriter,
+        handle: &WebviewHandle,
+    ) -> OrzmaResult<WebviewInstance> {
+        // NOTE: the saved registrations stay locked from before the request goes
+        // out until after the minted slot is recorded. A reconnect replays them
+        // under this same lock, so releasing it any earlier would let a replay
+        // complete in between and leave this slot holding an instance minted on
+        // the connection that just died — one the app can never mount.
+        let mut regs = self.registrations.lock().unwrap_or_else(|e| e.into_inner());
+        let handle_id = handle.handle_id();
+        let (tx, rx) = bounded(1);
+        let line = serde_json::to_string(&ClientMsg::NewInstance {
+            handle: handle_id.clone(),
+        })?;
+        send_request(
+            writer,
+            &self.pending,
+            Pending::NewInstance { reply: tx },
+            &line,
+        )?;
+        let slot = Arc::new(Mutex::new(await_reply(&rx)?));
+        match regs
+            .iter_mut()
+            .find(|r| handle.shares_handle_slot(&r.handle_slot))
+        {
+            Some(reg) => reg.extra_instances.push(slot.clone()),
+            None => tracing::debug!(
+                handle = %handle_id,
+                "minted an instance for a handle with no saved registration; it will not survive a reconnect"
+            ),
+        }
+        Ok(WebviewInstance::new_shared(slot, writer.clone()))
+    }
+}
+
 /// An orzma session: owns the control-socket connection and reader thread.
 pub struct Orzma {
     writer: SharedWriter,
-    pending: PendingReplies,
+    core: Arc<SessionCore>,
     frame: Arc<Mutex<FramePlacements>>,
     pending_compositing: PendingCompositing,
     disconnected: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
-    registrations: Arc<Mutex<Vec<Registration>>>,
     reconnect_tx: crossbeam_channel::Sender<()>,
 }
 
@@ -277,12 +330,14 @@ impl Orzma {
 
         Ok(Self {
             writer,
-            pending,
+            core: Arc::new(SessionCore {
+                pending,
+                registrations,
+            }),
             frame: Arc::new(Mutex::new(FramePlacements::default())),
             pending_compositing,
             disconnected,
             generation,
-            registrations,
             reconnect_tx,
         })
     }
@@ -304,7 +359,7 @@ impl Orzma {
         let line = serde_json::to_string(&ClientMsg::Register(kind.clone()))?;
         send_request(
             &self.writer,
-            &self.pending,
+            &self.core.pending,
             Pending::Register {
                 reply: tx,
                 handlers: handlers.clone(),
@@ -315,8 +370,14 @@ impl Orzma {
         let (handle, instance) = await_reply(&rx)?;
         let handle_slot = Arc::new(Mutex::new(handle));
         let instance_slot = Arc::new(Mutex::new(instance));
-        if let Ok(mut regs) = self.registrations.lock() {
-            regs.push(Registration {
+        // NOTE: save through a poisoned lock rather than skipping the push. A
+        // returned handle whose registration was never saved mints placements
+        // no reconnect can replay, and reports nothing when it does.
+        self.core
+            .registrations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Registration {
                 kind,
                 handle_slot: handle_slot.clone(),
                 instance_slot: instance_slot.clone(),
@@ -324,56 +385,13 @@ impl Orzma {
                 handlers: handlers.clone(),
                 events: events.clone(),
             });
-        }
         Ok(WebviewHandle::new_shared(
             handle_slot,
             instance_slot,
             events,
             self.writer.clone(),
+            Arc::downgrade(&self.core),
         ))
-    }
-
-    /// Mints an additional placement on `handle`, blocking until the control
-    /// plane replies.
-    ///
-    /// A registration always has one placement, addressed by
-    /// [`WebviewHandle::instance_id`]; every instance minted here is another
-    /// place the same content can be mounted, at the same time as the others.
-    /// The returned instance is replayed alongside its registration when the
-    /// session reconnects.
-    ///
-    /// Blocks on a control-socket round trip, so call it while setting the app
-    /// up — never from inside the draw loop.
-    pub fn new_instance(&self, handle: &WebviewHandle) -> OrzmaResult<WebviewInstance> {
-        // NOTE: the saved registrations stay locked from before the request goes
-        // out until after the minted slot is recorded. A reconnect replays them
-        // under this same lock, so releasing it any earlier would let a replay
-        // complete in between and leave this slot holding an instance minted on
-        // the connection that just died — one the app can never mount.
-        let mut regs = self.registrations.lock().unwrap_or_else(|e| e.into_inner());
-        let handle_id = handle.handle_id();
-        let (tx, rx) = bounded(1);
-        let line = serde_json::to_string(&ClientMsg::NewInstance {
-            handle: handle_id.clone(),
-        })?;
-        send_request(
-            &self.writer,
-            &self.pending,
-            Pending::NewInstance { reply: tx },
-            &line,
-        )?;
-        let slot = Arc::new(Mutex::new(await_reply(&rx)?));
-        match regs
-            .iter_mut()
-            .find(|r| handle.shares_handle_slot(&r.handle_slot))
-        {
-            Some(reg) => reg.extra_instances.push(slot.clone()),
-            None => tracing::debug!(
-                handle = %handle_id,
-                "minted an instance for a handle with no saved registration; it will not survive a reconnect"
-            ),
-        }
-        Ok(WebviewInstance::new_shared(slot, self.writer.clone()))
     }
 
     /// Locks and clears the per-frame placement collector for `render_stateful_widget`.
@@ -1057,13 +1075,8 @@ mod tests {
         let handle_slot = Arc::new(Mutex::new(HandleId::from("h-old".to_owned())));
         let instance_slot = Arc::new(Mutex::new(INSTANCE_A.to_owned()));
         let events = Arc::new(EventQueues::from_decls(&[]));
-        let orzma = Orzma {
-            writer: writer.clone(),
+        let core = Arc::new(SessionCore {
             pending: Arc::new(Mutex::new(VecDeque::new())),
-            frame: Arc::new(Mutex::new(FramePlacements::default())),
-            pending_compositing: Arc::new(Mutex::new(HashMap::new())),
-            disconnected: Arc::new(AtomicBool::new(false)),
-            generation: Arc::new(AtomicU64::new(0)),
             registrations: Arc::new(Mutex::new(vec![Registration {
                 kind: Webview::inline("x").kind,
                 handle_slot: handle_slot.clone(),
@@ -1072,9 +1085,23 @@ mod tests {
                 handlers: Arc::new(HashMap::new()),
                 events: events.clone(),
             }])),
+        });
+        let handle = WebviewHandle::new_shared(
+            handle_slot,
+            instance_slot,
+            events,
+            writer.clone(),
+            Arc::downgrade(&core),
+        );
+        let orzma = Orzma {
+            writer,
+            core,
+            frame: Arc::new(Mutex::new(FramePlacements::default())),
+            pending_compositing: Arc::new(Mutex::new(HashMap::new())),
+            disconnected: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(0)),
             reconnect_tx: bounded::<()>(1).0,
         };
-        let handle = WebviewHandle::new_shared(handle_slot, instance_slot, events, writer);
         (orzma, handle, server)
     }
 
@@ -1086,8 +1113,10 @@ mod tests {
     #[test]
     fn a_mint_racing_a_reconnect_still_records_the_placement_for_replay() {
         let (orzma, handle, server) = session_with_one_registration();
-        let refilled = orzma.registrations.lock().unwrap()[0].handle_slot.clone();
-        let pending = orzma.pending.clone();
+        let refilled = orzma.core.registrations.lock().unwrap()[0]
+            .handle_slot
+            .clone();
+        let pending = orzma.core.pending.clone();
 
         let host = thread::spawn(move || {
             let mut line = String::new();
@@ -1101,12 +1130,14 @@ mod tests {
             );
         });
 
-        let extra = orzma.new_instance(&handle).unwrap();
+        let extra = handle.new_instance().unwrap();
         host.join().unwrap();
 
         assert_eq!(extra.id(), INSTANCE_B);
         assert_eq!(
-            orzma.registrations.lock().unwrap()[0].extra_instances.len(),
+            orzma.core.registrations.lock().unwrap()[0]
+                .extra_instances
+                .len(),
             1,
             "the minted placement must be recorded for replay"
         );
@@ -1121,8 +1152,8 @@ mod tests {
     #[test]
     fn a_reconnect_replay_cannot_interleave_with_a_mint_in_flight() {
         let (orzma, handle, server) = session_with_one_registration();
-        let pending = orzma.pending.clone();
-        let registrations = orzma.registrations.clone();
+        let pending = orzma.core.pending.clone();
+        let registrations = orzma.core.registrations.clone();
 
         let host = thread::spawn(move || {
             let mut line = String::new();
@@ -1137,12 +1168,62 @@ mod tests {
             held_while_in_flight
         });
 
-        orzma.new_instance(&handle).unwrap();
+        handle.new_instance().unwrap();
 
         assert!(
             host.join().unwrap(),
             "the request went out with the registrations unlocked, leaving a replay free to interleave"
         );
+    }
+
+    /// Asserts that a handle mints an extra placement of its own registration
+    /// and records it for replay, without the caller holding the session.
+    ///
+    /// Case: an app splits a pane and shows the view it is already drawing a
+    /// second time alongside the first.
+    #[test]
+    fn a_handle_mints_its_own_placement() {
+        let (orzma, handle, server) = session_with_one_registration();
+        let pending = orzma.core.pending.clone();
+
+        let host = thread::spawn(move || {
+            let mut line = String::new();
+            BufReader::new(server).read_line(&mut line).unwrap();
+            settle_reply(
+                &pending,
+                &Arc::new(Mutex::new(HashMap::new())),
+                &Arc::new(Mutex::new(HashMap::new())),
+                &format!(r#"{{"ok":true,"instance":"{INSTANCE_B}"}}"#),
+            );
+        });
+
+        let extra = handle.new_instance().unwrap();
+        host.join().unwrap();
+
+        assert_eq!(extra.id(), INSTANCE_B);
+        assert_eq!(
+            orzma.core.registrations.lock().unwrap()[0]
+                .extra_instances
+                .len(),
+            1,
+            "the minted placement must be recorded for replay"
+        );
+    }
+
+    /// Asserts that a handle whose session is gone reports the closed session
+    /// rather than writing a request nothing is left to track.
+    ///
+    /// Case: an app tears its session down while a widget still holds the
+    /// handle it was drawing.
+    #[test]
+    fn a_handle_outliving_its_session_cannot_mint() {
+        let (orzma, handle, _server) = session_with_one_registration();
+        drop(orzma);
+
+        assert!(matches!(
+            handle.new_instance(),
+            Err(OrzmaError::SessionClosed)
+        ));
     }
 
     /// Asserts that two instances of one registration recorded in the same

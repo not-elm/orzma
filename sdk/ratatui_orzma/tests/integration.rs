@@ -88,7 +88,7 @@ fn new_instance_mints_a_second_placement_that_mounts_on_its_own() {
     with_env(&server.sock_path.clone(), || {
         let orzma = Orzma::connect().unwrap();
         let handle = orzma.register(Webview::inline("x")).unwrap();
-        let extra = orzma.new_instance(&handle).unwrap();
+        let extra = handle.new_instance().unwrap();
         assert_ne!(
             extra.id(),
             handle.instance_id(),
@@ -134,7 +134,7 @@ fn reconnect_remints_every_instance_of_a_registration() {
     with_env(&pair.first.sock_path.clone(), || {
         let orzma = Orzma::connect().unwrap();
         let handle = orzma.register(Webview::inline("x")).unwrap();
-        let extra = orzma.new_instance(&handle).unwrap();
+        let extra = handle.new_instance().unwrap();
         let before = extra.id();
 
         let term_bytes = SharedBuf(Arc::new(Mutex::new(Vec::new())));
