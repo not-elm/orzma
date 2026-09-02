@@ -761,6 +761,9 @@ struct Registration {
 
 replay ループが registration ごとに、re-register で `handle_slot` と `instance_slot` を
 埋め、続けて `extra_instances` の数だけ `new_instance` を発行してスロットを埋める。
+`registrations` のロックは**新しいソケットへ接続する前**に取り、replay を抜けるまで保持する。
+採番も同じロックを往復越しに握るので、両者は「完全に先行する」か「完全に後続する」かの
+どちらかになり、古い handle id の要求が新しい接続に乗ることがない。
 既存の `generation.fetch_add(1)` はループを抜けた後にあるので、全スロットが埋まるまで
 世代は上がらず、`FlushState::reset()` → 全再 mount の順序は自動的に守られる。
 

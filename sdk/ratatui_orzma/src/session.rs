@@ -752,6 +752,14 @@ fn attempt_reconnect(
         tracing::debug!("reconnect: ORZMA_SOCK is unset, will retry on next signal");
         return;
     };
+    // NOTE: claim the registrations before dialing, and hold them through the
+    // replay. A mint holds the same lock across its own round trip, so taking
+    // it any later would let this swap the writer under a request the mint has
+    // already prepared for the old connection — which the new one answers with
+    // `unknown_handle`.
+    let Ok(regs) = registrations.lock() else {
+        return;
+    };
     let new_stream = match connect_sock(&sock) {
         Ok(s) => s,
         Err(e) => {
@@ -796,9 +804,6 @@ fn attempt_reconnect(
         events.clone(),
         disconnected.clone(),
     );
-    let Ok(regs) = registrations.lock() else {
-        return;
-    };
     for reg in regs.iter() {
         if !replay_registration(writer, handlers, pending, events, reg) {
             disconnected.store(true, Ordering::Relaxed);
@@ -903,6 +908,9 @@ mod tests {
 
     const INSTANCE_A: &str = "3f5a9c02d1e84b7690ab3cde12f45678";
     const INSTANCE_B: &str = "81b4e77c05a3492fd6180e29ba735fc1";
+
+    /// Serializes the tests that write `$ORZMA_SOCK`, which is process-global.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn rect(x: u16, y: u16, w: u16, h: u16) -> Rect {
         Rect {
@@ -1224,6 +1232,78 @@ mod tests {
             handle.new_instance(),
             Err(OrzmaError::SessionClosed)
         ));
+    }
+
+    /// Asserts that a reconnect claims the saved registrations before it dials
+    /// the new socket, so a mint already holding them cannot have the writer
+    /// swapped out from under the request it is about to send.
+    ///
+    /// Case: orzma restarts in the moment an app is asking for a second
+    /// placement of a view it registered earlier.
+    #[test]
+    fn a_reconnect_waits_for_the_registrations_before_it_dials() {
+        use std::os::unix::net::UnixListener;
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("new.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        // SAFETY: ENV_LOCK is held, serializing every test in this module that
+        // writes the environment.
+        unsafe { std::env::set_var("ORZMA_SOCK", &sock_path) };
+
+        let (old_client, _old_server) = UnixStream::pair().unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(old_client));
+        let pending: PendingReplies = Arc::new(Mutex::new(VecDeque::new()));
+        let pending_compositing: PendingCompositing = Arc::new(Mutex::new(HashMap::new()));
+        let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let events: EventRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let registrations: Arc<Mutex<Vec<Registration>>> = Arc::new(Mutex::new(Vec::new()));
+        let disconnected = Arc::new(AtomicBool::new(true));
+        let generation = Arc::new(AtomicU64::new(0));
+
+        let held = registrations.lock().unwrap();
+        let reconnect = {
+            let (writer, pending, pending_compositing, handlers, events, registrations) = (
+                writer.clone(),
+                pending.clone(),
+                pending_compositing.clone(),
+                handlers.clone(),
+                events.clone(),
+                registrations.clone(),
+            );
+            let (disconnected, generation) = (disconnected.clone(), generation.clone());
+            thread::spawn(move || {
+                attempt_reconnect(
+                    &writer,
+                    &handlers,
+                    &pending,
+                    &pending_compositing,
+                    &disconnected,
+                    &generation,
+                    &registrations,
+                    &events,
+                    "tok",
+                );
+            })
+        };
+
+        thread::sleep(Duration::from_millis(250));
+        assert!(
+            matches!(listener.accept(), Err(e) if e.kind() == ErrorKind::WouldBlock),
+            "the reconnect dialed the new socket while the registrations were held"
+        );
+
+        drop(held);
+        listener.set_nonblocking(false).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        assert!(
+            line.contains(r#""op":"hello""#),
+            "expected the handshake on the new socket, got {line:?}"
+        );
+        reconnect.join().unwrap();
     }
 
     /// Asserts that two instances of one registration recorded in the same
