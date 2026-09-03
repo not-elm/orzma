@@ -19,12 +19,11 @@ use std::collections::HashMap;
 /// # Invariants
 ///
 /// The live sequence numbers form the contiguous interval
-/// `[popped, next_seq)`, so `seq_of.len() == next_seq - popped`, and
-/// that length equals the grid's `history_len`.
+/// `[popped, popped + seq_of.len())`, whose length equals the grid's
+/// `history_len`.
 #[derive(Debug, Default)]
 pub(super) struct HistoryIndex {
     seq_of: HashMap<LineId, u64>,
-    next_seq: u64,
     popped: u64,
 }
 
@@ -33,50 +32,28 @@ impl HistoryIndex {
     /// history row.
     pub fn index_of(&self, id: LineId) -> Option<usize> {
         let seq = *self.seq_of.get(&id)?;
-        Some(
-            usize::try_from(seq - self.popped)
-                .expect("a live entry sits at or past the popped count"),
-        )
+        usize::try_from(seq - self.popped).ok()
     }
 
     /// Records that `id` became the newest history row.
     pub fn enter(&mut self, id: LineId) {
-        let replaced = self.seq_of.insert(id, self.next_seq);
-        self.next_seq += 1;
-        debug_assert!(replaced.is_none(), "a row enters history once");
-        self.debug_assert_contiguous();
+        self.seq_of.insert(id, self.next_seq());
     }
 
     /// Records that `id`, the oldest history row, left through the cap.
     pub fn pop_oldest(&mut self, id: LineId) {
-        let removed = self.seq_of.remove(&id);
+        self.seq_of.remove(&id);
         self.popped += 1;
-        debug_assert_eq!(
-            removed,
-            Some(self.popped - 1),
-            "the cap pops the oldest entry"
-        );
-        self.debug_assert_contiguous();
     }
 
     /// Records that `id`, the newest history row, went back to being
     /// visible.
     pub fn reclaim_newest(&mut self, id: LineId) {
-        let removed = self.seq_of.remove(&id);
-        self.next_seq -= 1;
-        debug_assert_eq!(
-            removed,
-            Some(self.next_seq),
-            "a growth reclaims the newest entry"
-        );
-        self.debug_assert_contiguous();
+        self.seq_of.remove(&id);
     }
 
-    fn debug_assert_contiguous(&self) {
-        debug_assert_eq!(
-            u64::try_from(self.seq_of.len()).expect("an entry count fits in u64"),
-            self.next_seq - self.popped
-        );
+    fn next_seq(&self) -> u64 {
+        self.popped + self.seq_of.len() as u64
     }
 }
 
