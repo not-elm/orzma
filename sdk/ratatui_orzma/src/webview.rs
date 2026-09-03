@@ -1,10 +1,11 @@
 //! Webview builder and registered handle.
 
-use crate::error::OrzmaResult;
+use crate::error::{OrzmaError, OrzmaResult};
 use crate::events::{EventDecl, EventQueues};
 use crate::handler::{BoxedHandler, make_handler};
 use crate::keychord::KeyChord;
-use crate::protocol::{ClientMsg, NavAction, RegisterKind};
+use crate::protocol::{ClientMsg, HandleId, NavAction, RegisterKind};
+use crate::session::SessionCore;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::TypeId;
@@ -12,7 +13,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 /// The shared write half of the control socket.
 pub(crate) type SharedWriter = Arc<Mutex<UnixStream>>;
@@ -186,32 +187,86 @@ impl Webview {
     }
 }
 
-/// A registered webview handle: emit events to the page, read its id.
+/// A registered webview: emit events to its page(s), drive its default
+/// placement, mint further placements, and read the two ids it is addressed by.
+///
+/// A registration is addressed by a [`HandleId`], and each of its placements by
+/// an instance id. [`WebviewHandle::instance_id`] returns the default
+/// placement's; extra placements come from [`WebviewHandle::new_instance`].
 #[derive(Clone, Debug)]
 pub struct WebviewHandle {
-    id: Arc<Mutex<String>>,
+    handle: Arc<Mutex<HandleId>>,
+    instance: Arc<Mutex<String>>,
     events: Arc<EventQueues>,
     writer: SharedWriter,
+    session: Weak<SessionCore>,
 }
 
 impl PartialEq for WebviewHandle {
     fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id()
+        self.handle_id() == other.handle_id()
     }
 }
 
 impl WebviewHandle {
-    /// Returns the opaque handle id minted by the control plane.
-    pub fn id(&self) -> String {
-        self.id.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    /// Mints an additional placement of this registration, blocking until the
+    /// control plane replies.
+    ///
+    /// A registration always has one placement, addressed by
+    /// [`WebviewHandle::instance_id`]; every instance minted here is another
+    /// place the same content can be mounted, at the same time as the others.
+    /// The returned instance is replayed alongside its registration when the
+    /// session reconnects.
+    ///
+    /// Blocks on a control-socket round trip, so call it while setting the app
+    /// up. Two places must never call it:
+    ///
+    /// - the draw loop, which the round trip would stall;
+    /// - an RPC handler registered with [`Webview::on`], which runs on the
+    ///   reader thread that would have to deliver this very reply — the call
+    ///   cannot be answered until it gives that thread back, so it blocks until
+    ///   the reply times out.
+    ///
+    /// Returns [`OrzmaError::SessionClosed`] once the [`crate::Orzma`] this
+    /// handle was registered through has been dropped. Minting is the only
+    /// thing a dropped session revokes: the methods above keep writing to the
+    /// control socket, which outlives the session object.
+    pub fn new_instance(&self) -> OrzmaResult<WebviewInstance> {
+        let core = self.session.upgrade().ok_or(OrzmaError::SessionClosed)?;
+        core.mint_instance(&self.writer, self)
     }
 
-    /// Pushes an event to the currently-mounted page(s) of this handle.
+    /// Returns the opaque handle the control plane minted for this
+    /// registration.
+    ///
+    /// This addresses the registration itself, which is what
+    /// [`WebviewHandle::new_instance`] mints from. It is not what a placement is
+    /// mounted or navigated by: pass [`WebviewHandle::instance_id`] to
+    /// [`crate::WebviewWidget::new`].
+    pub fn handle_id(&self) -> HandleId {
+        self.handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Returns the id of this registration's default placement.
+    ///
+    /// This is the id [`crate::WebviewWidget::new`] mounts and the navigation
+    /// methods below drive.
+    pub fn instance_id(&self) -> String {
+        self.instance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Pushes an event to every currently-mounted page of this registration.
     ///
     /// Mount-scoped: a no-op (still `Ok`) when nothing is mounted.
     pub fn emit<T: Serialize>(&self, event: &str, payload: &T) -> OrzmaResult<()> {
         let msg = ClientMsg::Emit {
-            handle: self.id(),
+            handle: self.handle_id(),
             event: event.to_owned(),
             payload: serde_json::to_value(payload)?,
         };
@@ -222,26 +277,29 @@ impl WebviewHandle {
         Ok(())
     }
 
-    /// Navigates this handle's mounted webview to `url` in place (no
+    /// Navigates this registration's default placement to `url` in place (no
     /// re-registration). Mount-scoped: a no-op (still `Ok`) when nothing is
-    /// mounted.
+    /// mounted under that instance. Other placements are left where they are.
     pub fn navigate(&self, url: impl Into<String>) -> OrzmaResult<()> {
-        self.send_nav(NavAction::To(url.into()))
+        send_nav(&self.writer, self.instance_id(), NavAction::To(url.into()))
     }
 
-    /// Goes back in the webview's native session history. Mount-scoped.
+    /// Goes back in the default placement's native session history.
+    /// Mount-scoped; other placements are unaffected.
     pub fn go_back(&self) -> OrzmaResult<()> {
-        self.send_nav(NavAction::Back)
+        send_nav(&self.writer, self.instance_id(), NavAction::Back)
     }
 
-    /// Goes forward in the webview's native session history. Mount-scoped.
+    /// Goes forward in the default placement's native session history.
+    /// Mount-scoped; other placements are unaffected.
     pub fn go_forward(&self) -> OrzmaResult<()> {
-        self.send_nav(NavAction::Forward)
+        send_nav(&self.writer, self.instance_id(), NavAction::Forward)
     }
 
-    /// Reloads the current page. Mount-scoped.
+    /// Reloads the default placement's page. Mount-scoped; other placements are
+    /// unaffected.
     pub fn reload(&self) -> OrzmaResult<()> {
-        self.send_nav(NavAction::Reload)
+        send_nav(&self.writer, self.instance_id(), NavAction::Reload)
     }
 
     /// Drains and returns every buffered event of type `T`, oldest first.
@@ -261,27 +319,93 @@ impl WebviewHandle {
             .collect()
     }
 
-    /// Creates a handle from a pre-existing shared ID slot for callers that need
-    /// to share the ID slot across threads.
-    pub(crate) fn new_shared(
-        id: Arc<Mutex<String>>,
-        events: Arc<EventQueues>,
-        writer: SharedWriter,
-    ) -> Self {
-        Self { id, events, writer }
+    /// Whether `slot` is the very slot this handle reads its handle id from.
+    ///
+    /// Registrations are matched against a handle by this identity rather than
+    /// by the id the slot currently holds: a reconnect refills the slot in
+    /// place, so an id read before a round trip can no longer be found by value
+    /// once the replay lands.
+    pub(crate) fn shares_handle_slot(&self, slot: &Arc<Mutex<HandleId>>) -> bool {
+        Arc::ptr_eq(&self.handle, slot)
     }
 
-    fn send_nav(&self, action: NavAction) -> OrzmaResult<()> {
-        let msg = ClientMsg::Navigate {
-            handle: self.id(),
-            action,
-        };
-        let line = serde_json::to_string(&msg)?;
-        let mut w = self.writer.lock()?;
-        writeln!(w, "{line}")?;
-        w.flush()?;
-        Ok(())
+    /// Creates a handle over pre-existing shared id slots, which the reconnect
+    /// replay refills in place.
+    pub(crate) fn new_shared(
+        handle: Arc<Mutex<HandleId>>,
+        instance: Arc<Mutex<String>>,
+        events: Arc<EventQueues>,
+        writer: SharedWriter,
+        session: Weak<SessionCore>,
+    ) -> Self {
+        Self {
+            handle,
+            instance,
+            events,
+            writer,
+            session,
+        }
     }
+}
+
+/// One extra placement of a registration, minted by
+/// [`WebviewHandle::new_instance`].
+///
+/// It can be mounted at the same time as the registration's default placement
+/// and as its other extra placements, each showing the same content
+/// independently.
+#[derive(Clone, Debug)]
+pub struct WebviewInstance {
+    instance: Arc<Mutex<String>>,
+    writer: SharedWriter,
+}
+
+impl WebviewInstance {
+    /// Returns the id of this placement, to pass to
+    /// [`crate::WebviewWidget::new`].
+    pub fn id(&self) -> String {
+        self.instance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Navigates this placement to `url` in place. Mount-scoped: a no-op (still
+    /// `Ok`) when nothing is mounted under this instance.
+    pub fn navigate(&self, url: impl Into<String>) -> OrzmaResult<()> {
+        send_nav(&self.writer, self.id(), NavAction::To(url.into()))
+    }
+
+    /// Goes back in this placement's native session history. Mount-scoped.
+    pub fn go_back(&self) -> OrzmaResult<()> {
+        send_nav(&self.writer, self.id(), NavAction::Back)
+    }
+
+    /// Goes forward in this placement's native session history. Mount-scoped.
+    pub fn go_forward(&self) -> OrzmaResult<()> {
+        send_nav(&self.writer, self.id(), NavAction::Forward)
+    }
+
+    /// Reloads this placement's page. Mount-scoped.
+    pub fn reload(&self) -> OrzmaResult<()> {
+        send_nav(&self.writer, self.id(), NavAction::Reload)
+    }
+
+    /// Creates a placement over a pre-existing shared instance slot, which the
+    /// reconnect replay refills in place.
+    pub(crate) fn new_shared(instance: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
+        Self { instance, writer }
+    }
+}
+
+/// Writes one `navigate` op addressed to `instance`.
+fn send_nav(writer: &SharedWriter, instance: String, action: NavAction) -> OrzmaResult<()> {
+    let msg = ClientMsg::Navigate { instance, action };
+    let line = serde_json::to_string(&msg)?;
+    let mut w = writer.lock()?;
+    writeln!(w, "{line}")?;
+    w.flush()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -440,19 +564,82 @@ mod tests {
         assert!(v.get("preload").is_none(), "empty preload must be skipped");
     }
 
+    /// Asserts that both ids a handle exposes are read through their shared
+    /// slots, so a refill is visible to a handle already in a caller's hands.
+    ///
+    /// Case: the session reconnects and re-registers, which mints a fresh
+    /// handle and instance for a view the app is still holding and drawing.
     #[test]
-    fn id_reflects_slot_update() {
-        let slot = Arc::new(Mutex::new("old-id".to_owned()));
+    fn both_ids_reflect_a_slot_update() {
+        let handle_slot = Arc::new(Mutex::new(HandleId::from("old-handle".to_owned())));
+        let instance_slot = Arc::new(Mutex::new("old-instance".to_owned()));
         let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
         let writer: SharedWriter = Arc::new(Mutex::new(a));
         let handle = WebviewHandle::new_shared(
-            slot.clone(),
+            handle_slot.clone(),
+            instance_slot.clone(),
             Arc::new(crate::events::EventQueues::from_decls(&[])),
             writer,
+            Weak::new(),
         );
-        assert_eq!(handle.id(), "old-id");
-        *slot.lock().unwrap() = "new-id".to_owned();
-        assert_eq!(handle.id(), "new-id");
+        assert_eq!(handle.handle_id().to_string(), "old-handle");
+        assert_eq!(handle.instance_id(), "old-instance");
+
+        *handle_slot.lock().unwrap() = HandleId::from("new-handle".to_owned());
+        *instance_slot.lock().unwrap() = "new-instance".to_owned();
+        assert_eq!(handle.handle_id().to_string(), "new-handle");
+        assert_eq!(handle.instance_id(), "new-instance");
+    }
+
+    /// Asserts that a navigation names the placement it drives, so a handle
+    /// with several placements moves only its default one.
+    ///
+    /// Case: the app follows a link in the pane showing a view's default
+    /// placement while a second placement of that view stays where it is.
+    #[test]
+    fn a_handle_navigation_addresses_its_default_instance() {
+        use std::io::{BufRead, BufReader};
+        let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client));
+        let handle = WebviewHandle::new_shared(
+            Arc::new(Mutex::new(HandleId::from("h".to_owned()))),
+            Arc::new(Mutex::new("i1".to_owned())),
+            Arc::new(crate::events::EventQueues::from_decls(&[])),
+            writer,
+            Weak::new(),
+        );
+
+        handle.navigate("https://example.com").unwrap();
+
+        let mut line = String::new();
+        BufReader::new(server).read_line(&mut line).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["op"], "navigate");
+        assert_eq!(v["instance"], "i1");
+        assert_eq!(v["action"]["to"], "https://example.com");
+    }
+
+    /// Asserts that a minted placement drives its own instance rather than the
+    /// registration's default one.
+    ///
+    /// Case: an app reloads the right-hand pane of a split showing one view
+    /// twice, leaving the left-hand pane untouched.
+    #[test]
+    fn an_extra_instance_navigates_itself() {
+        use std::io::{BufRead, BufReader};
+        let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client));
+        let instance = WebviewInstance::new_shared(Arc::new(Mutex::new("i2".to_owned())), writer);
+
+        assert_eq!(instance.id(), "i2");
+        instance.reload().unwrap();
+
+        let mut line = String::new();
+        BufReader::new(server).read_line(&mut line).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["op"], "navigate");
+        assert_eq!(v["instance"], "i2");
+        assert_eq!(v["action"], "reload");
     }
 
     #[test]
@@ -473,8 +660,13 @@ mod tests {
 
         let (sock, _b) = std::os::unix::net::UnixStream::pair().unwrap();
         let writer: SharedWriter = Arc::new(Mutex::new(sock));
-        let handle =
-            WebviewHandle::new_shared(Arc::new(Mutex::new("h".to_owned())), events, writer);
+        let handle = WebviewHandle::new_shared(
+            Arc::new(Mutex::new(HandleId::from("h".to_owned()))),
+            Arc::new(Mutex::new("i1".to_owned())),
+            events,
+            writer,
+            Weak::new(),
+        );
 
         let got = handle.read_events::<Hello>();
         assert_eq!(

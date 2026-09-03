@@ -27,7 +27,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(f.area());
                 f.render_widget(Paragraph::new("simple webview · q to quit"), rows[0]);
                 f.render_stateful_widget(
-                    WebviewWidget::new(view.id()).fallback(Block::bordered().title("loading…")),
+                    WebviewWidget::new(view.instance_id())
+                        .fallback(Block::bordered().title("loading…")),
                     rows[1],
                     &mut *orzma.frame(),
                 );

@@ -14,7 +14,7 @@ pub(crate) fn draw(
     frame: &mut Frame<'_>,
     placements: &mut FramePlacements,
     app: &App,
-    handle_id: &str,
+    instance_id: &str,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -27,7 +27,7 @@ pub(crate) fn draw(
     }
 
     frame.render_stateful_widget(
-        WebviewWidget::new(handle_id).focused(app.mode() == Mode::Insert),
+        WebviewWidget::new(instance_id).focused(app.mode() == Mode::Insert),
         chunks[1],
         placements,
     );

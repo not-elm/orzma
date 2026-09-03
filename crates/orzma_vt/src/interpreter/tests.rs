@@ -4,7 +4,7 @@ use super::*;
 use crate::device::color::{Color, Rgb};
 use crate::device::modes::{MouseEncoding, MouseTracking};
 use crate::frame::Frame;
-use crate::placement::{MAX_PLACEMENTS, PlacementId, PlacementSize};
+use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::cell::Cell;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::GridColumn;
@@ -70,11 +70,13 @@ impl Session {
     }
 
     /// Mounts a one-cell placement at the active screen's cursor.
-    fn mount(&mut self, view: &str) -> PlacementId {
-        self.0
-            .device
-            .mount_placement(PlacementSize { rows: 1, cols: 1 }, view.to_string(), None)
-            .expect("a mount under the cap is accepted")
+    fn mount(&mut self, id: InstanceId) {
+        assert!(
+            self.0
+                .device
+                .mount_placement(PlacementSize { rows: 1, cols: 1 }, id),
+            "a mount under the cap is accepted"
+        );
     }
 
     fn active_screen(&self) -> ScreenKind {

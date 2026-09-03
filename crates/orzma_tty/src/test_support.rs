@@ -3,7 +3,7 @@
 //! the resize seam.
 
 use orzma_vt::prelude::{
-    DisplayOffset, Frame, GridSize, InterpretOutput, Scroll, Vt, VtModes, VtSignal,
+    DisplayOffset, Frame, GridSize, InstanceId, InterpretOutput, Scroll, Vt, VtModes, VtSignal,
 };
 #[cfg(any(test, feature = "test-support"))]
 use portable_pty::{MasterPty, PtySize};
@@ -108,6 +108,10 @@ impl Vt for FakeVt {
 
     fn sweep_evictions(&mut self) -> Vec<VtSignal> {
         self.sweeps.pop_front().unwrap_or_default()
+    }
+
+    fn remove_placements(&mut self, _instances: &[InstanceId]) -> bool {
+        false
     }
 
     fn resize(&mut self, size: GridSize) -> bool {

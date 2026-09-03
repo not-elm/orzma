@@ -291,12 +291,7 @@ fn a_narrowing_does_not_wrap_the_dropped_columns_onto_the_next_row() {
 fn a_placement_beyond_the_new_right_edge_survives() {
     let mut screen = wide_screen();
     screen.state.column = GridColumn(19);
-    screen.mount_placement(
-        PlacementId(1),
-        PlacementSize { rows: 1, cols: 1 },
-        "memo".to_string(),
-        None,
-    );
+    screen.mount_placement(InstanceId(1), PlacementSize { rows: 1, cols: 1 });
     assert_eq!(
         screen.resize(GridSize { cols: 4, rows: 3 }),
         Some(DamageSpan::Full)

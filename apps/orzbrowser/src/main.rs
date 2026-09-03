@@ -94,7 +94,7 @@ fn event_loop(
         }
 
         terminal.draw(|f| {
-            ui::draw(f, &mut orzma.frame(), &app, &view.id());
+            ui::draw(f, &mut orzma.frame(), &app, &view.instance_id());
         })?;
 
         if event::poll(Duration::from_millis(33))?

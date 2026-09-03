@@ -73,10 +73,12 @@ fn a_redundant_alternate_screen_switch_does_nothing() {
 #[test]
 fn leaving_the_alternate_screen_evicts_only_its_placements() {
     let mut session = Session::new();
-    let kept = session.mount("shell");
+    let kept = InstanceId(1);
+    session.mount(kept);
     session.frame();
     session.feed(b"\x1b[?47h");
-    let dropped = session.mount("app");
+    let dropped = InstanceId(2);
+    session.mount(dropped);
     session.frame();
     let output = session.feed(b"\x1b[?47l");
     assert_eq!(
@@ -86,7 +88,7 @@ fn leaving_the_alternate_screen_evicts_only_its_placements() {
         }]
     );
     let frame = session.frame().expect("the flip back emits");
-    let listed: Vec<PlacementId> = frame
+    let listed: Vec<InstanceId> = frame
         .placements
         .expect("a placement change is listed")
         .iter()

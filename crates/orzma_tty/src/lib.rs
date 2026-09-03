@@ -195,6 +195,14 @@ impl<V: Vt> OrzmaTty<V> {
         Ok(())
     }
 
+    /// Removes the placements the host names, arming the coalescer only
+    /// when one actually went so an unchanged frame is not woken.
+    pub fn remove_placements(&mut self, instances: &[InstanceId]) {
+        if self.vt.remove_placements(instances) {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
+    }
+
     /// Encodes a key press and writes it to the PTY.
     ///
     /// Snaps a scrolled-back viewport to the live tail first
@@ -453,13 +461,13 @@ mod tests {
     fn a_pump_reports_what_the_eviction_sweep_raised() {
         let (mut tty, _sink) = detached_term();
         tty.vt.sweeps.push_back(vec![VtSignal::WebviewEvicted {
-            placements: vec![PlacementId(7)],
+            placements: vec![InstanceId(7)],
         }]);
         let output = tty.pump();
         assert_eq!(
             output.signals,
             vec![TtySignal::Vt(VtSignal::WebviewEvicted {
-                placements: vec![PlacementId(7)]
+                placements: vec![InstanceId(7)]
             })]
         );
     }
@@ -475,7 +483,7 @@ mod tests {
         tty.vt.frames.push_back(a_frame());
         tty.pump();
         tty.vt.sweeps.push_back(vec![VtSignal::WebviewEvicted {
-            placements: vec![PlacementId(7)],
+            placements: vec![InstanceId(7)],
         }]);
         tty.pump();
         assert!(tty.coalescer.is_armed());
@@ -985,5 +993,45 @@ mod tests {
         });
         term.feed_bytes(b"\x1b[6n");
         assert!(!term.coalescer.is_armed());
+    }
+
+    /// Asserts that a host-driven removal arms the coalescer only when a
+    /// placement actually went, so a removal naming nothing does not wake
+    /// the owner for an unchanged frame.
+    ///
+    /// Case: two connections drop in the same tick and the host issues a
+    /// removal for each, but only the first names a live placement.
+    #[test]
+    fn a_host_removal_arms_the_coalescer_only_when_something_went() {
+        let id: InstanceId = "3f5a9c02d1e84b7690ab3cde12f45678"
+            .parse()
+            .expect("valid id");
+        let mut tty = OrzmaTty::detached(
+            OrzmaVt::new(GridSize { cols: 80, rows: 24 }, 100),
+            80,
+            24,
+            Box::new(CaptureSink::default()),
+        )
+        .expect("the detached constructor succeeds");
+        tty.feed_bytes(format!("\x1b_Omount;n={id},r=4,c=8\x1b\\").as_bytes());
+        let _ = tty.pump();
+
+        // NOTE: disarm explicitly between the two probes. A second pump()
+        // would not disarm on its own — the bootstrap debt is already spent
+        // and the 3 ms IDLE window has not elapsed — so the assertion below
+        // would read the arming left by the first removal.
+        tty.coalescer.disarm();
+        tty.remove_placements(&[id]);
+        assert!(
+            tty.coalescer.is_armed(),
+            "a real removal arms the coalescer"
+        );
+
+        tty.coalescer.disarm();
+        tty.remove_placements(&[id]);
+        assert!(
+            !tty.coalescer.is_armed(),
+            "a removal that names nothing does not"
+        );
     }
 }

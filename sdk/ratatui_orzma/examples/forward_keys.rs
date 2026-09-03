@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     rows[0],
                 );
                 f.render_stateful_widget(
-                    WebviewWidget::new(view.id())
+                    WebviewWidget::new(view.instance_id())
                         .focused(web_focused)
                         .fallback(Block::bordered().title("webview")),
                     rows[1],

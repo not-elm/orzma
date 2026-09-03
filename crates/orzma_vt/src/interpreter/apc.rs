@@ -6,34 +6,25 @@
 //! `VtSignal::WebviewMount` or `VtSignal::WebviewMountRejected` — is the
 //! dispatcher's job, which is why this module needs no device state.
 
-use crate::placement::PlacementSize;
+use crate::placement::{InstanceId, PlacementSize};
 use std::str;
 
 /// What an orzma APC payload asked for: an inline mount or unmount of a
-/// registered view.
+/// registered webview instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WebviewApcRequest {
     /// Mount a registered webview INLINE at the cursor anchor, sized in cells.
     Mount {
-        /// The registered view's id, addressed later by unmount and eviction.
-        view_id: String,
+        /// The host-minted instance this mount registers.
+        instance: InstanceId,
         /// The cell rectangle the mount reserves.
         size: PlacementSize,
-        /// Client-assigned instance id (Kitty placement model); `None` is the
-        /// implicit default instance. `(view_id, instance_id)` is the address.
-        instance_id: Option<String>,
     },
-    /// Unmount webview(s): a specific `(view_id, instance_id)`, all
-    /// instances of a `view_id`, or all for this terminal.
-    ///
-    /// # Invariants
-    /// `view_id == None` implies `instance_id == None` (an instance is
-    /// addressable only alongside its view id; enforced at the capture stage).
+    /// Unmount one instance, or — with no params section — every
+    /// placement on this terminal.
     Unmount {
-        /// The view to unmount; `None` unmounts every view for this terminal.
-        view_id: Option<String>,
-        /// The instance to unmount; `None` unmounts every instance of `view_id`.
-        instance_id: Option<String>,
+        /// The instance to unmount; `None` unmounts every placement.
+        instance: Option<InstanceId>,
     },
 }
 
@@ -63,7 +54,6 @@ impl WebviewApcRequest {
     }
 }
 
-const MAX_VIEW_ID: usize = 128;
 /// Upper bound on a mount's reserved rows. With the ~2:1 terminal cell
 /// aspect and DPR 2, a 200-row x 400-col mount is a near-square pixel
 /// region staying under the common 8192 px GPU texture dimension limit.
@@ -76,10 +66,9 @@ const ORZMA_APC_PREFIX: &[u8; 1] = b"O";
 
 fn parse_mount_action(payload: &str) -> Option<WebviewApcRequest> {
     let fields = payload.split(',');
-    let mut view_id = None;
+    let mut instance = None;
     let mut rows = None;
     let mut cols = None;
-    let mut instance_id = None;
     for f in fields {
         let mut params = f.split('=');
         let k = params.next()?;
@@ -102,221 +91,129 @@ fn parse_mount_action(payload: &str) -> Option<WebviewApcRequest> {
                 }
                 rows.replace(r);
             }
-            "v" if view_id.is_none() => {
-                let v = v.parse::<String>().ok()?;
-                if !valid_view_id(&v) {
-                    return None;
-                }
-                view_id.replace(v);
-            }
-            "n" if instance_id.is_none() => {
-                let v = v.parse::<String>().ok()?;
-                if !valid_view_id(&v) {
-                    return None;
-                }
-                instance_id.replace(v);
+            "n" if instance.is_none() => {
+                instance.replace(v.parse::<InstanceId>().ok()?);
             }
             _ => return None,
         }
     }
     Some(WebviewApcRequest::Mount {
+        instance: instance?,
         size: PlacementSize {
             rows: rows?,
             cols: cols?,
         },
-        view_id: view_id?,
-        instance_id,
     })
 }
 
 fn parse_unmount_action(payload: Option<&str>) -> Option<WebviewApcRequest> {
-    let mut view_id = None;
-    let mut instance_id = None;
-    if let Some(payload) = payload {
-        for f in payload.split(',') {
-            let mut p = f.split('=');
-            let k = p.next()?;
-            let v = p.next()?;
-            if p.next().is_some() {
-                return None;
+    let Some(payload) = payload else {
+        return Some(WebviewApcRequest::Unmount { instance: None });
+    };
+    let mut instance = None;
+    for f in payload.split(',') {
+        let mut p = f.split('=');
+        let k = p.next()?;
+        let v = p.next()?;
+        if p.next().is_some() {
+            return None;
+        }
+        match k {
+            "n" if instance.is_none() => {
+                instance.replace(v.parse::<InstanceId>().ok()?);
             }
-            match k {
-                "v" if view_id.is_none() => {
-                    if !valid_view_id(v) {
-                        return None;
-                    }
-                    view_id.replace(v.to_string());
-                }
-                "n" if instance_id.is_none() & view_id.is_some() => {
-                    if !valid_view_id(v) {
-                        return None;
-                    }
-                    instance_id.replace(v.to_string());
-                }
-                _ => return None,
-            }
+            _ => return None,
         }
     }
     Some(WebviewApcRequest::Unmount {
-        view_id,
-        instance_id,
+        instance: Some(instance?),
     })
-}
-
-fn valid_view_id(view_id: &str) -> bool {
-    if view_id.is_empty() || MAX_VIEW_ID < view_id.len() {
-        return false;
-    }
-    // NOTE: The accepted set must stay the documented view-id charset
-    // `[A-Za-z0-9._-]` (docs/orzma_webview_protocol.md): the control
-    // plane's mint_id() guarantees its base32 handles (`a-z2-7`) are
-    // valid view ids, so narrowing this — e.g. to alphabetic only —
-    // rejects nearly every minted handle.
-    view_id
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const ID: &str = "3f5a9c02d1e84b7690ab3cde12f45678";
+
     fn parse(payload: &str) -> Option<WebviewApcRequest> {
         WebviewApcRequest::parse(payload.as_bytes())
     }
 
-    #[test]
-    fn mount_parses_required_keys() {
-        assert_eq!(
-            parse("Omount;v=memo,r=3,c=20"),
-            Some(WebviewApcRequest::Mount {
-                view_id: "memo".into(),
-                size: PlacementSize { rows: 3, cols: 20 },
-                instance_id: None,
-            })
-        );
-    }
-
-    #[test]
-    fn mount_parses_instance_id() {
-        assert_eq!(
-            parse("Omount;v=memo,r=3,c=20,n=a"),
-            Some(WebviewApcRequest::Mount {
-                view_id: "memo".into(),
-                size: PlacementSize { rows: 3, cols: 20 },
-                instance_id: Some("a".into()),
-            })
-        );
-    }
-
-    #[test]
-    fn mount_keys_are_order_independent() {
-        let expected = Some(WebviewApcRequest::Mount {
-            view_id: "memo".into(),
-            size: PlacementSize { rows: 3, cols: 20 },
-            instance_id: None,
-        });
-        for payload in ["Omount;c=20,r=3,v=memo", "Omount;r=3,v=memo,c=20"] {
-            assert_eq!(parse(payload), expected, "payload={payload}");
-        }
-    }
-
-    /// Asserts that every character class of the documented view-id
-    /// charset `[A-Za-z0-9._-]` is accepted.
+    /// Asserts that a mount parses from the `n` / `r` / `c` trio in any
+    /// order and rejects a payload that omits any of them.
     ///
-    /// The control plane mints lowercase base32 handles from `a-z2-7`
-    /// and guarantees they are valid view ids, so the parser must not
-    /// be stricter than the documented charset.
+    /// Case: a program reserves a 24x80 rectangle for an instance the
+    /// control plane just handed it.
+    #[test]
+    fn a_mount_parses_its_three_required_keys_in_any_order() {
+        let expected = WebviewApcRequest::Mount {
+            instance: ID.parse().expect("the fixture is a valid id"),
+            size: PlacementSize { rows: 24, cols: 80 },
+        };
+        assert_eq!(
+            parse(&format!("Omount;n={ID},r=24,c=80")),
+            Some(expected.clone())
+        );
+        assert_eq!(parse(&format!("Omount;c=80,n={ID},r=24")), Some(expected));
+        assert_eq!(parse("Omount;r=24,c=80"), None);
+        assert_eq!(parse(&format!("Omount;n={ID},c=80")), None);
+        assert_eq!(parse(&format!("Omount;n={ID},r=24")), None);
+    }
+
+    /// Asserts that a mount naming the retired `v=` key is malformed
+    /// rather than silently ignoring the key.
     ///
-    /// Case: a program mounts the handle the control socket handed it,
-    /// digits and all.
+    /// Case: a program built against the previous protocol writes the
+    /// handle-addressed form.
     #[test]
-    fn view_id_accepts_the_documented_charset() {
-        for id in ["mfrgg2lt2y", "DYN1", "my-view", "a.b_c"] {
-            assert_eq!(
-                parse(&format!("Omount;v={id},r=3,c=20")),
-                Some(WebviewApcRequest::Mount {
-                    view_id: id.into(),
-                    size: PlacementSize { rows: 3, cols: 20 },
-                    instance_id: None,
-                }),
-                "id={id}"
-            );
-        }
+    fn a_mount_naming_the_retired_view_key_is_malformed() {
+        assert_eq!(parse(&format!("Omount;v=abc,n={ID},r=24,c=80")), None);
+        assert_eq!(parse("Omount;v=abc,r=24,c=80"), None);
     }
 
+    /// Asserts that a mount whose instance is not exactly 32 lowercase
+    /// hex digits is malformed, and that a repeated key is too.
+    ///
+    /// Case: a program fabricates an instance id instead of using the one
+    /// the control plane minted.
     #[test]
-    fn view_id_length_boundary() {
-        let max = "x".repeat(MAX_VIEW_ID);
+    fn a_mount_with_a_malformed_instance_or_a_repeated_key_is_rejected() {
+        assert_eq!(parse("Omount;n=abc,r=24,c=80"), None);
         assert_eq!(
-            parse(&format!("Omount;v={max},r=3,c=20")),
-            Some(WebviewApcRequest::Mount {
-                view_id: max.clone(),
-                size: PlacementSize { rows: 3, cols: 20 },
-                instance_id: None,
-            }),
-            "a view id of exactly MAX_VIEW_ID chars is the accepted maximum"
+            parse(&format!("Omount;n={},r=24,c=80", ID.to_uppercase())),
+            None
         );
-        let over = "x".repeat(MAX_VIEW_ID + 1);
-        assert_eq!(
-            parse(&format!("Omount;v={over},r=3,c=20")),
-            None,
-            "a view id beyond MAX_VIEW_ID chars is rejected"
-        );
+        assert_eq!(parse(&format!("Omount;n={ID},n={ID},r=24,c=80")), None);
     }
 
+    /// Asserts that an unmount takes the instance key alone, in any
+    /// position, and that an empty params section stays malformed.
+    ///
+    /// Case: a program tears one placement down and later asks the
+    /// terminal to drop every placement it still holds.
     #[test]
-    fn unmount_without_target_is_unmount_all() {
+    fn an_unmount_addresses_one_instance_or_all() {
+        let one = WebviewApcRequest::Unmount {
+            instance: Some(ID.parse().expect("the fixture is a valid id")),
+        };
+        assert_eq!(parse(&format!("Ounmount;n={ID}")), Some(one));
         assert_eq!(
             parse("Ounmount"),
-            Some(WebviewApcRequest::Unmount {
-                view_id: None,
-                instance_id: None,
-            })
+            Some(WebviewApcRequest::Unmount { instance: None })
         );
-    }
-
-    #[test]
-    fn unmount_view_only() {
-        assert_eq!(
-            parse("Ounmount;v=memo"),
-            Some(WebviewApcRequest::Unmount {
-                view_id: Some("memo".into()),
-                instance_id: None,
-            })
-        );
-    }
-
-    #[test]
-    fn unmount_view_and_instance() {
-        assert_eq!(
-            parse("Ounmount;v=memo,n=a"),
-            Some(WebviewApcRequest::Unmount {
-                view_id: Some("memo".into()),
-                instance_id: Some("a".into()),
-            })
-        );
-    }
-
-    #[test]
-    fn mount_missing_required_key_rejected() {
-        for payload in [
-            "Omount",
-            "Omount;r=3,c=20",
-            "Omount;v=memo,c=20",
-            "Omount;v=memo,r=3",
-        ] {
-            assert_eq!(parse(payload), None, "payload={payload}");
-        }
+        assert_eq!(parse("Ounmount;"), None);
+        assert_eq!(parse("Ounmount;n="), None);
+        assert_eq!(parse(&format!("Ounmount;v=abc,n={ID}")), None);
     }
 
     #[test]
     fn mount_out_of_range_dims_rejected() {
         for payload in [
-            "Omount;v=memo,r=0,c=20".to_string(),
-            format!("Omount;v=memo,r={},c=20", MAX_ROWS + 1),
-            "Omount;v=memo,r=3,c=0".to_string(),
-            format!("Omount;v=memo,r=3,c={}", MAX_COLS + 1),
+            format!("Omount;n={ID},r=0,c=20"),
+            format!("Omount;n={ID},r={},c=20", MAX_ROWS + 1),
+            format!("Omount;n={ID},r=3,c=0"),
+            format!("Omount;n={ID},r=3,c={}", MAX_COLS + 1),
         ] {
             assert_eq!(parse(&payload), None, "payload={payload}");
         }
@@ -324,30 +221,11 @@ mod tests {
 
     #[test]
     fn mount_non_digit_dims_rejected() {
-        for payload in ["Omount;v=memo,r=x,c=20", "Omount;v=memo,r=,c=20"] {
-            assert_eq!(parse(payload), None, "payload={payload}");
-        }
-    }
-
-    #[test]
-    fn bad_view_id_rejected() {
         for payload in [
-            "Omount;v=../etc/passwd,r=3,c=20",
-            "Omount;v=,r=3,c=20",
-            "Omount;v=me mo,r=3,c=20",
-            "Omount;v=me=mo,r=3,c=20",
+            format!("Omount;n={ID},r=x,c=20"),
+            format!("Omount;n={ID},r=,c=20"),
         ] {
-            assert_eq!(parse(payload), None, "payload={payload}");
-        }
-    }
-
-    #[test]
-    fn mount_bad_instance_id_rejected() {
-        for payload in [
-            "Omount;v=memo,r=3,c=20,n=",
-            "Omount;v=memo,r=3,c=20,n=../etc",
-        ] {
-            assert_eq!(parse(payload), None, "payload={payload}");
+            assert_eq!(parse(&payload), None, "payload={payload}");
         }
     }
 
@@ -364,9 +242,12 @@ mod tests {
 
     #[test]
     fn extra_section_rejected() {
-        for payload in ["Omount;v=memo,r=3,c=20;x", "Ounmount;v=memo;x"] {
+        for payload in [
+            format!("Omount;n={ID},r=3,c=20;x"),
+            format!("Ounmount;n={ID};x"),
+        ] {
             assert_eq!(
-                parse(payload),
+                parse(&payload),
                 None,
                 "a third ';' section is reserved and rejected; payload={payload}"
             );
@@ -374,89 +255,67 @@ mod tests {
     }
 
     #[test]
-    fn unmount_empty_view_value_rejected() {
-        assert_eq!(
-            parse("Ounmount;v="),
-            None,
-            "an absent v key means unmount-all; an empty value is malformed"
-        );
-    }
-
-    #[test]
-    fn unmount_instance_without_view_rejected() {
-        assert_eq!(
-            parse("Ounmount;n=a"),
-            None,
-            "an instance id is addressable only alongside a view id"
-        );
-    }
-
-    #[test]
-    fn unmount_bad_instance_rejected() {
-        assert_eq!(parse("Ounmount;v=memo,n=../x"), None);
-    }
-
-    #[test]
-    fn unmount_with_mount_only_keys_rejected() {
-        for payload in ["Ounmount;v=memo,r=3", "Ounmount;c=20"] {
-            assert_eq!(parse(payload), None, "payload={payload}");
-        }
-    }
-
-    #[test]
     fn unknown_verb_rejected() {
         for payload in [
-            "Oresize;v=memo",
-            "OMOUNT;v=memo,r=3,c=20",
-            "Om;v=memo,r=3,c=20",
+            format!("Oresize;n={ID}"),
+            format!("OMOUNT;n={ID},r=3,c=20"),
+            format!("Om;n={ID},r=3,c=20"),
         ] {
-            assert_eq!(parse(payload), None, "payload={payload}");
+            assert_eq!(parse(&payload), None, "payload={payload}");
         }
     }
 
     #[test]
     fn foreign_or_missing_prefix_rejected() {
-        for payload in ["Ga=T,f=100", "mount;v=memo,r=3,c=20", "", "O"] {
-            assert_eq!(parse(payload), None, "payload={payload:?}");
+        for payload in [
+            "Ga=T,f=100".to_string(),
+            format!("mount;n={ID},r=3,c=20"),
+            String::new(),
+            "O".to_string(),
+        ] {
+            assert_eq!(parse(&payload), None, "payload={payload:?}");
         }
     }
 
     #[test]
     fn unknown_key_rejected() {
-        assert_eq!(parse("Omount;v=memo,r=3,c=20,z=9"), None);
+        assert_eq!(parse(&format!("Omount;n={ID},r=3,c=20,z=9")), None);
     }
 
     #[test]
     fn duplicate_key_rejected() {
-        for payload in ["Omount;v=memo,v=memo,r=3,c=20", "Omount;v=a,r=3,r=4,c=20"] {
-            assert_eq!(parse(payload), None, "payload={payload}");
+        for payload in [
+            format!("Omount;n={ID},n={ID},r=3,c=20"),
+            format!("Omount;n={ID},r=3,r=4,c=20"),
+        ] {
+            assert_eq!(parse(&payload), None, "payload={payload}");
         }
     }
 
     #[test]
     fn malformed_pair_rejected() {
         for payload in [
-            "Omount;vmemo,r=3,c=20",
-            "Ounmount;v=memo,",
-            "Omount;,v=memo,r=3,c=20",
-            "Ounmount;v=memo,,n=a",
+            "Omount;vmemo,r=3,c=20".to_string(),
+            format!("Ounmount;n={ID},"),
+            format!("Omount;,n={ID},r=3,c=20"),
+            format!("Ounmount;n={ID},,n=a"),
         ] {
-            assert_eq!(parse(payload), None, "payload={payload}");
+            assert_eq!(parse(&payload), None, "payload={payload}");
         }
     }
 
     #[test]
     fn out_of_charset_bytes_rejected() {
         assert_eq!(
-            WebviewApcRequest::parse(b"Omount;v=me\x07mo,r=3,c=20"),
+            WebviewApcRequest::parse(b"Omount;n=me\x07mo,r=3,c=20"),
             None
         );
         assert_eq!(
-            WebviewApcRequest::parse(b"Omount;v=me\x1bmo,r=3,c=20"),
+            WebviewApcRequest::parse(b"Omount;n=me\x1bmo,r=3,c=20"),
             None
         );
         assert_eq!(
-            WebviewApcRequest::parse("Omount;v=めも,r=3,c=20".as_bytes()),
+            WebviewApcRequest::parse("Omount;n=めも,r=3,c=20".as_bytes()),
             None,
             "multi-byte UTF-8 is outside the APC command-string charset"
         );

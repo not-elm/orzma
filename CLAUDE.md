@@ -36,7 +36,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (crate
 ### How the pieces connect at runtime
 
 1. `orzma` boots a single Bevy `App` and spawns one PTY-backed `OrzmaTerminal` entity: `bevy_orzma_tty` wraps an `orzma_tty`-owned PTY driving an `orzma_vt::OrzmaVt`, pumping coalesced frames as `TtyFrameSignal`s that `orzma_tty_renderer` draws on the GPU. Layout, input, vi mode, IME, and shortcuts are all plugins in the same world.
-2. A program registers webview content over the control socket (`OrzmaWebviewPlugin`, from `crates/bevy_orzma_webview`) to mint an opaque handle, then writes an APC `Omount;v=<handle>` sequence to mount it as an in-process `bevy_cef` webview (assets served from disk/memory via `orzma://`, one origin per handle). The page talks back to the registering program through `window.orzma.call/on` routed over the control socket.
+2. A program registers webview content over the control socket (`OrzmaWebviewPlugin`, from `crates/bevy_orzma_webview`) to mint an opaque handle and its first placement instance, then writes an APC `Omount;n=<instance>` sequence to mount it as an in-process `bevy_cef` webview (assets served from disk/memory via `orzma://`, one origin per handle). Additional placements of the same handle are minted with `new_instance` over the same socket. The page talks back to the registering program through `window.orzma.call/on` routed over the control socket.
 
 ### `src/` module map
 

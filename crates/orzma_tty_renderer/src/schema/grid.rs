@@ -380,7 +380,7 @@ pub(crate) fn quiet_frame() -> Frame {
 mod tests {
     use super::*;
     use crate::schema::{
-        Color, Cursor, CursorShape, GridColumn, GridLine, GridPoint, Hyperlink, PlacementId,
+        Color, Cursor, CursorShape, GridColumn, GridLine, GridPoint, Hyperlink, InstanceId,
         PlacementSize, Rgb, Row, Style,
     };
     use orzma_vt::prelude::{DirtyRow, ViewportLine};
@@ -956,7 +956,7 @@ mod tests {
     fn placements_replace_wholesale_and_none_keeps_them() {
         let mut grid = TerminalGrid::settled();
         let placed = AnchoredPlacement {
-            id: PlacementId(1),
+            id: InstanceId(1),
             point: GridPoint {
                 line: GridLine(2),
                 column: GridColumn(3),

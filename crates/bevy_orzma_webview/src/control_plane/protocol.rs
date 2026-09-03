@@ -3,6 +3,8 @@
 //! per request line. Unknown `op` values fail to parse (strict, matching the
 //! OSC parser ethos).
 
+use crate::control_plane::HandleId;
+use orzma_vt::prelude::InstanceId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -21,7 +23,12 @@ pub(crate) enum ClientMsg {
     /// Releases a previously-registered handle owned by this connection.
     Unregister {
         /// The handle returned by a prior `register`.
-        handle: String,
+        handle: HandleId,
+    },
+    /// Mints an additional placement slot for a handle this connection owns.
+    NewInstance {
+        /// The handle returned by a prior `register`.
+        handle: HandleId,
     },
     /// A program's reply to an orzma-initiated `call` (back-channel).
     Reply {
@@ -40,33 +47,30 @@ pub(crate) enum ClientMsg {
     /// A program-initiated push event to its handle's mounted webviews.
     Emit {
         /// The handle whose mounted webviews receive the event.
-        handle: String,
+        handle: HandleId,
         /// The event name dispatched to page `window.orzma.on(name, …)`.
         event: String,
         /// The event payload.
         #[serde(default)]
         payload: Value,
     },
-    /// Sets (or clears, with `handle: None`) the app-owned focus target for
-    /// this connection's surface.
+    /// Sets (or clears, with `instance: None`) the app-owned focus target
+    /// for this connection's surface.
     Focus {
-        /// The handle to focus, or `None` to blur.
-        #[serde(default)]
-        handle: Option<String>,
-        /// The mount instance id, or `None` for the default instance.
+        /// The instance to focus, or `None` to blur.
         #[serde(default)]
         instance: Option<String>,
     },
-    /// Navigate a handle's mounted webview in place.
+    /// Navigate one mounted placement in place.
     Navigate {
-        /// The target handle.
-        handle: String,
+        /// The target instance.
+        instance: String,
         /// What to do.
         action: NavAction,
     },
 }
 
-/// A navigation action on an already-registered handle's mounted webview.
+/// A navigation action on one mounted placement.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NavAction {
@@ -146,12 +150,21 @@ pub(crate) enum RegisterKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub(crate) enum ServerMsg {
-    /// A successful `register` carrying the minted handle.
-    Ok {
+    /// A successful `register`: the minted handle and its first instance.
+    Registered {
         /// Always `true`.
         ok: bool,
-        /// The opaque handle to mount via `APC Omount;v=<handle>`.
-        handle: String,
+        /// The opaque handle the registration is owned and released by.
+        handle: HandleId,
+        /// The instance to mount via `APC Omount;n=<instance>`.
+        instance: String,
+    },
+    /// A successful `new_instance`: the minted instance.
+    Instanced {
+        /// Always `true`.
+        ok: bool,
+        /// The instance to mount via `APC Omount;n=<instance>`.
+        instance: String,
     },
     /// A rejected request.
     Err {
@@ -163,16 +176,28 @@ pub(crate) enum ServerMsg {
 }
 
 impl ServerMsg {
-    /// An `ok` reply carrying the minted handle.
-    pub(crate) fn ok(handle: impl Into<String>) -> Self {
-        Self::Ok {
+    /// A `register` reply carrying the minted handle and its first instance.
+    ///
+    /// Both id slots are typed, so neither can take the other's value: the
+    /// wire spelling is produced here rather than at the call site.
+    pub fn registered(handle: impl Into<HandleId>, instance: InstanceId) -> Self {
+        Self::Registered {
             ok: true,
             handle: handle.into(),
+            instance: instance.to_string(),
+        }
+    }
+
+    /// A `new_instance` reply carrying the minted instance.
+    pub fn instanced(instance: InstanceId) -> Self {
+        Self::Instanced {
+            ok: true,
+            instance: instance.to_string(),
         }
     }
 
     /// An error reply carrying a short code.
-    pub(crate) fn err(error: impl Into<String>) -> Self {
+    pub fn err(error: impl Into<String>) -> Self {
         Self::Err {
             ok: false,
             error: error.into(),
@@ -189,7 +214,9 @@ pub(crate) enum PushMsg {
     /// unmounted after compositing (`active: false`).
     Compositing {
         /// The registered handle whose compositing state changed.
-        handle: String,
+        handle: HandleId,
+        /// The placement instance whose compositing state changed.
+        instance: String,
         /// `true` when compositing starts; `false` when it stops.
         active: bool,
     },
@@ -255,6 +282,22 @@ mod tests {
         );
     }
 
+    /// Asserts that a `new_instance` line parses into its own variant
+    /// carrying the handle the extra placement is minted under.
+    ///
+    /// Case: a program that already registered a view asks for a second
+    /// placement slot before writing its mount.
+    #[test]
+    fn parses_new_instance() {
+        let m: ClientMsg = serde_json::from_str(r#"{"op":"new_instance","handle":"h1"}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::NewInstance {
+                handle: "h1".into()
+            }
+        );
+    }
+
     #[test]
     fn rejects_unknown_op() {
         assert!(serde_json::from_str::<ClientMsg>(r#"{"op":"nope"}"#).is_err());
@@ -302,29 +345,22 @@ mod tests {
         );
     }
 
+    /// Asserts that a `focus` line addresses one instance, and that a null
+    /// instance parses as the blur request.
+    ///
+    /// Case: an app moves keyboard focus onto one of its two mounted
+    /// placements, then hands focus back to the terminal.
     #[test]
-    fn parses_focus_with_handle() {
-        let m: ClientMsg =
-            serde_json::from_str(r#"{"op":"focus","handle":"h1","instance":null}"#).unwrap();
+    fn parses_focus_and_blur_by_instance() {
+        let focus: ClientMsg = serde_json::from_str(r#"{"op":"focus","instance":"3f5a"}"#).unwrap();
         assert_eq!(
-            m,
+            focus,
             ClientMsg::Focus {
-                handle: Some("h1".into()),
-                instance: None,
+                instance: Some("3f5a".into())
             }
         );
-    }
-
-    #[test]
-    fn parses_blur_with_null_handle() {
-        let m: ClientMsg = serde_json::from_str(r#"{"op":"focus","handle":null}"#).unwrap();
-        assert_eq!(
-            m,
-            ClientMsg::Focus {
-                handle: None,
-                instance: None,
-            }
-        );
+        let blur: ClientMsg = serde_json::from_str(r#"{"op":"focus","instance":null}"#).unwrap();
+        assert_eq!(blur, ClientMsg::Focus { instance: None });
     }
 
     #[test]
@@ -394,65 +430,78 @@ mod tests {
         );
     }
 
+    /// Asserts that each of the three reply shapes serializes to the exact
+    /// line the SDK's position-matched FIFO reads back.
+    ///
+    /// Case: one connection registers a view, asks for a second placement,
+    /// then sends a request the host rejects.
     #[test]
-    fn serializes_ok_and_err() {
+    fn serializes_the_three_reply_shapes() {
         assert_eq!(
-            serde_json::to_string(&ServerMsg::ok("h1")).unwrap(),
-            r#"{"ok":true,"handle":"h1"}"#
+            serde_json::to_string(&ServerMsg::registered("h1", InstanceId(1))).unwrap(),
+            r#"{"ok":true,"handle":"h1","instance":"00000000000000000000000000000001"}"#
         );
         assert_eq!(
-            serde_json::to_string(&ServerMsg::err("invalid_root")).unwrap(),
-            r#"{"ok":false,"error":"invalid_root"}"#
+            serde_json::to_string(&ServerMsg::instanced(InstanceId(2))).unwrap(),
+            r#"{"ok":true,"instance":"00000000000000000000000000000002"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ServerMsg::err("unknown_handle")).unwrap(),
+            r#"{"ok":false,"error":"unknown_handle"}"#
         );
     }
 
+    /// Asserts that a compositing push names the placement it is about, not
+    /// only the registration it came from.
+    ///
+    /// Case: a program holding two placements of one handle is told that
+    /// the second of them started painting.
     #[test]
-    fn serializes_compositing_start() {
+    fn serializes_compositing_with_its_instance() {
         let msg = PushMsg::Compositing {
             handle: "abc123".into(),
+            instance: "i1".into(),
             active: true,
         };
         assert_eq!(
             serde_json::to_string(&msg).unwrap(),
-            r#"{"op":"compositing","handle":"abc123","active":true}"#
+            r#"{"op":"compositing","handle":"abc123","instance":"i1","active":true}"#
         );
     }
 
+    /// Asserts that a `navigate` line addresses one instance and carries a
+    /// history action.
+    ///
+    /// Case: an embedded browser UI sends Back for the placement the user
+    /// is looking at.
     #[test]
-    fn serializes_compositing_stop() {
-        let msg = PushMsg::Compositing {
-            handle: "abc123".into(),
-            active: false,
-        };
-        assert_eq!(
-            serde_json::to_string(&msg).unwrap(),
-            r#"{"op":"compositing","handle":"abc123","active":false}"#
-        );
-    }
-
-    #[test]
-    fn parses_navigate_back() {
+    fn parses_navigate_by_instance() {
         let m: ClientMsg =
-            serde_json::from_str(r#"{"op":"navigate","handle":"H","action":"back"}"#).unwrap();
+            serde_json::from_str(r#"{"op":"navigate","instance":"3f5a","action":"back"}"#).unwrap();
         assert_eq!(
             m,
             ClientMsg::Navigate {
-                handle: "H".into(),
+                instance: "3f5a".into(),
                 action: NavAction::Back,
             }
         );
     }
 
+    /// Asserts that the `to` action carries its target URL through the
+    /// instance-addressed navigate line.
+    ///
+    /// Case: an embedded browser UI loads a new page into the placement
+    /// the user typed the address for.
     #[test]
     fn parses_navigate_to_url() {
         let m: ClientMsg = serde_json::from_str(
-            r#"{"op":"navigate","handle":"H","action":{"to":"https://example.com"}}"#,
+            r#"{"op":"navigate","instance":"3f5a","action":{"to":"https://example.com"}}"#,
         )
         .unwrap();
         assert_eq!(
             m,
             ClientMsg::Navigate {
-                handle: "H".into(),
+                instance: "3f5a".into(),
                 action: NavAction::To("https://example.com".into()),
             }
         );

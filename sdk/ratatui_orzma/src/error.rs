@@ -42,9 +42,26 @@ pub enum OrzmaError {
         reason: String,
     },
 
-    /// The connection closed while a `register` reply was pending.
-    #[error("control socket closed before register reply")]
+    /// The control plane rejected a `new_instance` request, or a value that
+    /// had to be a minted instance id was not one.
+    #[error("instance rejected: {reason}")]
+    Instance {
+        /// The control-plane error string (e.g. `unknown_handle`, `not_owner`),
+        /// or a description of how the value failed to be an instance id.
+        reason: String,
+    },
+
+    /// The connection closed, or no reply arrived in time, while a request was
+    /// pending.
+    #[error("no reply to a control-socket request: the socket closed or the reply timed out")]
     Disconnected,
+
+    /// The [`crate::Orzma`] a handle was registered through has been dropped, so
+    /// there is nothing left to track a request through. Distinct from
+    /// [`OrzmaError::Disconnected`], which means a request went out and was
+    /// never answered; here none is sent at all.
+    #[error("the orzma session has been dropped")]
+    SessionClosed,
 
     /// A serde (de)serialization failure.
     #[error("serialization error: {0}")]
