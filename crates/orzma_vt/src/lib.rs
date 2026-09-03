@@ -83,9 +83,8 @@ pub trait Vt {
     ///
     /// # Invariants
     ///
-    /// - [`InterpretOutput::signals`] holds the parser-raised signals in
-    ///   byte-stream order, followed by the chunk-end
-    ///   [`VtSignal::WebviewEvicted`] when the chunk stranded a placement.
+    /// - [`InterpretOutput::signals`] keeps the order its own doc
+    ///   states: parser-raised signals first, the chunk-end eviction last.
     /// - [`InterpretOutput::replies`] must be written back to the PTY.
     ///
     /// # Webview placements
