@@ -280,16 +280,6 @@ impl<V: Vt> OrzmaTty<V> {
             let _ = self.pty.write_all(&replies);
         }
 
-        let evicted = self.vt.sweep_evictions();
-        if !evicted.is_empty() {
-            // NOTE: the sweep can strand placements without staging row
-            // damage — RIS on an already-blank screen does — so arming
-            // here is what makes the frame carrying the shortened
-            // placement list get asked for at all.
-            self.coalescer.arm_or_extend(now);
-            self.pending_signals
-                .extend(evicted.into_iter().map(TtySignal::Vt));
-        }
         let mut signals = mem::take(&mut self.pending_signals);
         if let Some(code) = exit {
             signals.push(TtySignal::ChildExit { code });
@@ -471,27 +461,6 @@ mod tests {
         }
     }
 
-    /// Asserts that a pump reports the signals its eviction sweep
-    /// raised, without any PTY output to carry them.
-    ///
-    /// Case: the user drags the window shorter, dropping the anchor
-    /// row of a mounted webview out of scrollback, and types nothing
-    /// afterwards.
-    #[test]
-    fn a_pump_reports_what_the_eviction_sweep_raised() {
-        let (mut tty, _sink) = detached_term();
-        tty.vt.sweeps.push_back(vec![VtSignal::WebviewEvicted {
-            placements: vec![InstanceId(7)],
-        }]);
-        let output = tty.pump();
-        assert_eq!(
-            output.signals,
-            vec![TtySignal::Vt(VtSignal::WebviewEvicted {
-                placements: vec![InstanceId(7)]
-            })]
-        );
-    }
-
     /// Asserts that the placements a resize strands arm the coalesce
     /// window and reach the next pump's signals, without any PTY
     /// output to carry them.
@@ -513,21 +482,32 @@ mod tests {
         );
     }
 
-    /// Asserts that an eviction arms the coalesce window, so the frame
-    /// carrying the shortened placement list is asked for.
+    /// Asserts that a chunk whose eviction is its only frame-relevant
+    /// change arms the coalesce window and hands the eviction to the
+    /// next pump.
     ///
     /// Case: `RIS` strands a webview on an already-blank screen, which
     /// stages no row damage of its own.
     #[test]
-    fn an_eviction_arms_the_coalesce_window() {
+    fn an_evicting_chunk_arms_the_coalesce_window() {
         let (mut tty, _sink) = detached_term();
         tty.vt.frames.push_back(a_frame());
         tty.pump();
-        tty.vt.sweeps.push_back(vec![VtSignal::WebviewEvicted {
-            placements: vec![InstanceId(7)],
-        }]);
-        tty.pump();
+        tty.vt.updates.push_back(InterpretOutput {
+            damaged: true,
+            signals: vec![VtSignal::WebviewEvicted {
+                placements: vec![InstanceId(7)],
+            }],
+            replies: Vec::new(),
+        });
+        tty.feed_bytes(b"\x1bc");
         assert!(tty.coalescer.is_armed());
+        assert_eq!(
+            tty.pump().signals,
+            vec![TtySignal::Vt(VtSignal::WebviewEvicted {
+                placements: vec![InstanceId(7)]
+            })]
+        );
     }
 
     /// Asserts that a pump with nothing evicted raises no signal and

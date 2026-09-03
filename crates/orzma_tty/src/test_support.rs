@@ -3,8 +3,7 @@
 //! the resize seam.
 
 use orzma_vt::prelude::{
-    DisplayOffset, Frame, GridSize, InstanceId, InterpretOutput, ResizeChanged, Scroll, Vt,
-    VtModes, VtSignal,
+    DisplayOffset, Frame, GridSize, InstanceId, InterpretOutput, ResizeChanged, Scroll, Vt, VtModes,
 };
 #[cfg(any(test, feature = "test-support"))]
 use portable_pty::{MasterPty, PtySize};
@@ -71,8 +70,6 @@ pub struct FakeVt {
     pub updates: VecDeque<InterpretOutput>,
     /// Frames popped by `frame`.
     pub frames: VecDeque<Frame>,
-    /// Signals popped by `sweep_evictions`.
-    pub sweeps: VecDeque<Vec<VtSignal>>,
     /// Placements a `resize` that changed the size reports as
     /// stranded, popped one list per such resize; an empty script
     /// reports none.
@@ -93,7 +90,6 @@ impl FakeVt {
             resizes: Vec::new(),
             updates: VecDeque::new(),
             frames: VecDeque::new(),
-            sweeps: VecDeque::new(),
             evictions: VecDeque::new(),
         }
     }
@@ -111,10 +107,6 @@ impl Vt for FakeVt {
 
     fn frame(&mut self) -> Option<Frame> {
         self.frames.pop_front()
-    }
-
-    fn sweep_evictions(&mut self) -> Vec<VtSignal> {
-        self.sweeps.pop_front().unwrap_or_default()
     }
 
     fn remove_placements(&mut self, _instances: &[InstanceId]) -> bool {

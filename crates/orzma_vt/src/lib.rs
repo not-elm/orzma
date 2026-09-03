@@ -61,6 +61,18 @@ pub mod prelude {
 /// [`crate::prelude::Row`] / [`crate::prelude::Run`] data, so the
 /// trait exposes no per-cell read seam and the VT's storage cell
 /// never leaves the crate.
+///
+/// # Invariants
+///
+/// - Every operation that can strand a placement names it in its own
+///   result — [`Vt::interpret`] in [`InterpretOutput::signals`],
+///   [`Vt::resize`] in [`ResizeChanged::evicted`] — and nothing else
+///   evicts. There is no sweep for the owner to run.
+/// - An owner that forwards [`InterpretOutput::signals`] and
+///   [`ResizeChanged::evicted`] before it requests the next frame
+///   delivers every eviction no later than the first frame that
+///   reflects it; the VT does not promise that the two arrive in the
+///   same batch.
 pub trait Vt {
     /// Interprets one PTY chunk, staging its damage internally and
     /// returning everything else it produced.
@@ -114,20 +126,6 @@ pub trait Vt {
     /// - A frame's placements and display offset describe the same
     ///   instant as its rows.
     fn frame(&mut self) -> Option<Frame>;
-
-    /// Evicts every placement whose anchor row no longer resolves and
-    /// names them, so the owner can despawn what the VT destroyed.
-    ///
-    /// # Invariants
-    ///
-    /// The owner calls this before draining its signal queue and before
-    /// asking for a frame, so the eviction still reaches that frame's
-    /// placement list — a sweep after the damage ledger drained would
-    /// reach no frame at all.
-    ///
-    /// A placement is named once. The sweep removes what it names, so a
-    /// second sweep with nothing further lost raises nothing.
-    fn sweep_evictions(&mut self) -> Vec<VtSignal>;
 
     /// Removes the placements the host names, on either screen; returns
     /// whether anything went.
@@ -214,10 +212,7 @@ pub struct ResizeChanged {
 }
 
 /// Out-of-band signal the VT raised, handed to the owner in
-/// [`InterpretOutput::signals`] when a chunk produced it — an
-/// alternate-screen teardown included — or returned from
-/// [`Vt::sweep_evictions`] when the VT raised it between chunks on its
-/// own authority.
+/// [`InterpretOutput::signals`] by the chunk that produced it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VtSignal {
     /// An audible bell has been requested; the consumer is responsible
@@ -341,12 +336,6 @@ impl Vt for OrzmaVt {
         self.tracker.emit(&self.device)
     }
 
-    fn sweep_evictions(&mut self) -> Vec<VtSignal> {
-        VtSignal::evicted(self.device.evict_lost_anchors())
-            .into_iter()
-            .collect()
-    }
-
     fn remove_placements(&mut self, instances: &[InstanceId]) -> bool {
         self.device.remove_placements(instances)
     }
@@ -387,38 +376,6 @@ mod tests {
         OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10)
     }
 
-    /// Asserts that a sweep with nothing to evict raises no signal.
-    ///
-    /// Case: the host pumps a terminal that has no webviews mounted,
-    /// which is every pump on a plain shell session.
-    #[test]
-    fn a_sweep_with_nothing_lost_raises_no_signal() {
-        let mut vt = vt();
-        assert!(vt.sweep_evictions().is_empty());
-    }
-
-    /// Asserts that a sweep after a reset names every placement the
-    /// reset stranded, in one signal.
-    ///
-    /// Case: a webview is mounted and the shell sends `RIS`, so the
-    /// host must despawn it.
-    #[test]
-    fn a_sweep_after_a_reset_names_the_stranded_placements() {
-        let mut vt = vt();
-        let id = InstanceId(1);
-        assert!(
-            vt.device
-                .mount_placement(PlacementSize { rows: 1, cols: 1 }, id)
-        );
-        vt.device.reset();
-        assert_eq!(
-            vt.sweep_evictions(),
-            vec![VtSignal::WebviewEvicted {
-                placements: vec![id]
-            }]
-        );
-    }
-
     /// Asserts that a resize to the size the grid already has returns
     /// `None`, so it neither stages damage nor names anything.
     ///
@@ -449,23 +406,6 @@ mod tests {
             vt.resize(GridSize { cols: 4, rows: 2 }),
             Some(ResizeChanged { evicted: vec![id] })
         );
-    }
-
-    /// Asserts that a second sweep after the first raises nothing, so
-    /// a per-pump sweep does not re-report what it already named.
-    ///
-    /// Case: the host pumps again on the frame after a reset despawned
-    /// a webview.
-    #[test]
-    fn a_second_sweep_raises_nothing() {
-        let mut vt = vt();
-        assert!(
-            vt.device
-                .mount_placement(PlacementSize { rows: 1, cols: 1 }, InstanceId(1))
-        );
-        vt.device.reset();
-        assert_eq!(vt.sweep_evictions().len(), 1);
-        assert!(vt.sweep_evictions().is_empty());
     }
 
     /// Asserts that a fresh terminal's first frame carries every
