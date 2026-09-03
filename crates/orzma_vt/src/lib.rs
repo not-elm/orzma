@@ -43,7 +43,7 @@ pub mod prelude {
     pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine};
     pub use crate::selection::{CellSide, SelectionGeometry, SelectionKind, SelectionRange};
     pub use crate::vi::{ViCursor, ViModeSwitch};
-    pub use crate::{InterpretOutput, OrzmaVt, Vt, VtSignal};
+    pub use crate::{InterpretOutput, OrzmaVt, ResizeChanged, Vt, VtSignal};
 }
 
 /// The terminal-emulation contract `OrzmaTty` drives and the host
@@ -150,8 +150,8 @@ pub trait Vt {
     /// signal would hand it back its own removal.
     fn remove_placements(&mut self, instances: &[InstanceId]) -> bool;
 
-    /// Resizes the grid, truncating rather than reflowing; returns
-    /// whether the dimensions changed. Only a real change stages (full)
+    /// Resizes the grid, truncating rather than reflowing; `None` when
+    /// the dimensions did not change. Only a real change stages (full)
     /// damage.
     ///
     /// # Invariants
@@ -159,9 +159,11 @@ pub trait Vt {
     /// Both axes are nonzero; degenerate sizes are rejected by the
     /// caller.
     ///
-    /// Placements the resize strands are not reported here. The owner's
-    /// next [`Vt::sweep_evictions`] names them.
-    fn resize(&mut self, size: GridSize) -> bool;
+    /// The placements the resize strands are named in the returned
+    /// [`ResizeChanged::evicted`] and are already gone from the VT.
+    /// Nothing else reports them, so the caller must forward them.
+    #[must_use = "the evicted placements must reach the owner's signal queue"]
+    fn resize(&mut self, size: GridSize) -> Option<ResizeChanged>;
 
     /// Applies the viewport motion; returns whether the viewport
     /// moved. Only a real move stages (full) damage.
@@ -195,6 +197,20 @@ pub struct InterpretOutput {
     pub signals: Vec<VtSignal>,
     /// Reply bytes (DSR, DA, …) the owner must write back to the PTY.
     pub replies: Vec<u8>,
+}
+
+/// What a [`Vt::resize`] that changed the dimensions caused besides the
+/// grid change.
+///
+/// # Invariants
+///
+/// This value exists only when the dimensions changed; a resize to the
+/// size the grid already has returns `None` and strands nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResizeChanged {
+    /// The placements whose anchor row the resize dropped out of
+    /// history; empty when every anchor survived.
+    pub evicted: Vec<InstanceId>,
 }
 
 /// Out-of-band signal the VT raised, handed to the owner in
@@ -267,9 +283,10 @@ pub enum VtSignal {
 
 impl VtSignal {
     /// The eviction naming `placements`; `None` when there is nothing
-    /// to name, so neither an empty sweep nor a flip that tore nothing
-    /// down wakes the owner.
-    pub(crate) fn evicted(placements: Vec<InstanceId>) -> Option<Self> {
+    /// to name, so neither a sweep that found nothing, a resize that
+    /// stranded nothing, nor a flip that tore nothing down wakes the
+    /// owner.
+    pub fn evicted(placements: Vec<InstanceId>) -> Option<Self> {
         (!placements.is_empty()).then_some(Self::WebviewEvicted { placements })
     }
 }
@@ -334,8 +351,12 @@ impl Vt for OrzmaVt {
         self.device.remove_placements(instances)
     }
 
-    fn resize(&mut self, size: GridSize) -> bool {
-        self.tracker.stage_if_changed(self.device.resize(size))
+    fn resize(&mut self, size: GridSize) -> Option<ResizeChanged> {
+        let damage = self.device.resize(size)?;
+        self.tracker.stage(damage);
+        Some(ResizeChanged {
+            evicted: self.device.evict_lost_anchors(),
+        })
     }
 
     fn scroll(&mut self, scroll: Scroll) -> bool {
@@ -398,14 +419,25 @@ mod tests {
         );
     }
 
-    /// Asserts that a sweep after a shrink names the placement whose
-    /// anchor row the shrink dropped out of history.
+    /// Asserts that a resize to the size the grid already has returns
+    /// `None`, so it neither stages damage nor names anything.
+    ///
+    /// Case: the window manager re-sends the geometry the terminal
+    /// already has after a focus change.
+    #[test]
+    fn a_same_size_resize_returns_none() {
+        let mut vt = vt();
+        assert_eq!(vt.resize(GridSize { cols: 4, rows: 3 }), None);
+    }
+
+    /// Asserts that a shrink names the placement whose anchor row it
+    /// dropped out of history in its own result.
     ///
     /// Case: a webview is mounted on a short-scrollback terminal and
     /// the user drags the window shorter, pushing its anchor row past
     /// the history cap.
     #[test]
-    fn a_sweep_after_a_shrink_names_the_placement_it_stranded() {
+    fn a_shrink_names_the_placement_it_stranded() {
         let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 4 }, 0);
         let id = InstanceId(1);
         assert!(
@@ -413,12 +445,9 @@ mod tests {
                 .mount_placement(PlacementSize { rows: 1, cols: 1 }, id)
         );
         vt.device.active_screen_mut().move_cursor_to(Some(4), None);
-        assert!(vt.resize(GridSize { cols: 4, rows: 2 }));
         assert_eq!(
-            vt.sweep_evictions(),
-            vec![VtSignal::WebviewEvicted {
-                placements: vec![id]
-            }]
+            vt.resize(GridSize { cols: 4, rows: 2 }),
+            Some(ResizeChanged { evicted: vec![id] })
         );
     }
 
@@ -561,7 +590,7 @@ mod tests {
         let mut vt = vt();
         vt.interpret(b"1\r\n2\r\n3\r\n4\r\n5");
         vt.interpret(b"\x1b[?1049h");
-        assert!(vt.resize(GridSize { cols: 4, rows: 5 }));
+        assert!(vt.resize(GridSize { cols: 4, rows: 5 }).is_some());
         vt.interpret(b"\x1b[?1049l");
         let returned = vt.frame().expect("the flip back emits");
         assert_eq!(returned.rows[4].contents[0].text, "5   ");

@@ -86,20 +86,24 @@ impl<V: Vt> OrzmaTty<V> {
     const MAX_ROWS: u16 = 4096;
 
     /// Spawns the login shell under a new PTY and sizes the injected VT
-    /// to the spawn geometry.
-    pub fn spawn(mut vt: V, options: SpawnOptions) -> OrzmaTtyResult<Self> {
+    /// to the spawn geometry through the same path [`Self::resize`]
+    /// uses, so a VT handed in with placements mounted reports what the
+    /// sizing strands.
+    pub fn spawn(vt: V, options: SpawnOptions) -> OrzmaTtyResult<Self> {
         let pty = Pty::spawn(&options)?;
-        vt.resize(GridSize {
-            cols: options.cols,
-            rows: options.rows,
-        });
-        Ok(Self {
+        let mut tty = Self {
             vt,
             coalescer: Coalescer::default(),
             pty,
             pending_signals: Vec::new(),
             pending_replies: Vec::new(),
-        })
+        };
+        let changed = tty.vt.resize(GridSize {
+            cols: options.cols,
+            rows: options.rows,
+        });
+        tty.absorb_resize(changed);
+        Ok(tty)
     }
 
     /// Reads the PTY master's current grid size back from the kernel
@@ -130,25 +134,31 @@ impl<V: Vt> OrzmaTty<V> {
     /// can be observed on `writer` — typically a
     /// [`test_support::CaptureSink`].
     ///
+    /// The initial sizing goes through the same path [`Self::resize`]
+    /// uses, so a VT handed in with placements mounted reports what the
+    /// sizing strands.
+    ///
     /// The constructor is compiled for tests only: in-crate under
     /// `cfg(test)`, and for downstream crates through the `test-support`
     /// feature.
     #[cfg(any(test, feature = "test-support"))]
     pub fn detached(
-        mut vt: V,
+        vt: V,
         cols: u16,
         rows: u16,
         writer: Box<dyn Write + Send>,
     ) -> OrzmaTtyResult<Self> {
         let pty = Pty::with_master(Box::new(RecordingMaster::at(cols, rows).0), writer);
-        vt.resize(GridSize { cols, rows });
-        Ok(Self {
+        let mut tty = Self {
             vt,
             coalescer: Coalescer::default(),
             pty,
             pending_signals: Vec::new(),
             pending_replies: Vec::new(),
-        })
+        };
+        let changed = tty.vt.resize(GridSize { cols, rows });
+        tty.absorb_resize(changed);
+        Ok(tty)
     }
 
     /// Feeds bytes through the same seam [`Self::pump`] runs PTY chunks
@@ -189,9 +199,8 @@ impl<V: Vt> OrzmaTty<V> {
             return Ok(());
         }
         self.pty.resize(cols, rows)?;
-        if self.vt.resize(GridSize { cols, rows }) {
-            self.coalescer.arm_or_extend(Instant::now());
-        }
+        let changed = self.vt.resize(GridSize { cols, rows });
+        self.absorb_resize(changed);
         Ok(())
     }
 
@@ -298,6 +307,18 @@ impl<V: Vt> OrzmaTty<V> {
         PumpOutput { frame, signals }
     }
 
+    /// Arms the coalescer for a resize that changed the grid and queues
+    /// the placements it stranded for the next pump.
+    fn absorb_resize(&mut self, changed: Option<ResizeChanged>) {
+        let Some(changed) = changed else {
+            return;
+        };
+        self.coalescer.arm_or_extend(Instant::now());
+        if let Some(evicted) = VtSignal::evicted(changed.evicted) {
+            self.pending_signals.push(TtySignal::Vt(evicted));
+        }
+    }
+
     /// Snaps a scrolled-back viewport to the live tail (scroll-on-input
     /// policy), gated on [`Vt::is_at_live_tail`] so a no-op call stages
     /// no damage.
@@ -347,8 +368,7 @@ mod tests {
     fn detached_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
         let sink = CaptureSink::default();
         let (master, _) = RecordingMaster::at(80, 24);
-        let mut vt = FakeVt::new(80, 24);
-        vt.resize(GridSize { cols: 80, rows: 24 });
+        let vt = FakeVt::new(80, 24);
         let term = OrzmaTty {
             vt,
             coalescer: Coalescer::default(),
@@ -466,6 +486,27 @@ mod tests {
         let output = tty.pump();
         assert_eq!(
             output.signals,
+            vec![TtySignal::Vt(VtSignal::WebviewEvicted {
+                placements: vec![InstanceId(7)]
+            })]
+        );
+    }
+
+    /// Asserts that the placements a resize strands arm the coalesce
+    /// window and reach the next pump's signals, without any PTY
+    /// output to carry them.
+    ///
+    /// Case: the user drags the window shorter, dropping the anchor
+    /// row of a mounted webview out of scrollback, and types nothing
+    /// afterwards.
+    #[test]
+    fn a_resize_eviction_reaches_the_next_pump() {
+        let (mut tty, _sink) = detached_term();
+        tty.vt.evictions.push_back(vec![InstanceId(7)]);
+        tty.resize(100, 30).expect("resize");
+        assert!(tty.coalescer.is_armed());
+        assert_eq!(
+            tty.pump().signals,
             vec![TtySignal::Vt(VtSignal::WebviewEvicted {
                 placements: vec![InstanceId(7)]
             })]
