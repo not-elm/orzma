@@ -286,11 +286,9 @@ impl VtSignal {
     }
 }
 
-/// The self-contained implementation of [`Vt`].
-///
-/// The fields are wired; several methods are still stubs. The
-/// components land one at a time, in the order
-/// `docs/orzma_vt_internal_design.md` §7 sets out.
+/// The self-contained implementation of [`Vt`]: a byte interpreter, the
+/// emulated device it writes to, and the frame tracker that turns the
+/// staged damage into frames.
 pub struct OrzmaVt {
     /// Byte decoding plus the CSI ?2026 synchronized-update buffer.
     interpreter: Interpreter,

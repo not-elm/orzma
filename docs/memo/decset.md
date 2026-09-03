@@ -87,7 +87,7 @@ Xtermの一覧には47として「Use Alternate Screen Buffer」と「Enable Gra
 ### 代替画面を離れるときのplacement退避
 
 `DeviceState::switch_screen(Primary)`は`take_placements()`でalt画面のplacementをテーブルから外してidを返す。
-**pumpの掃引（`Vt::sweep_evictions`）では拾えない**ので、`Executor::switch_screen`が発生源で
+**チャンク末尾の掃引（`Executor::sweep_evictions`）では拾えない**ので、`Executor::switch_screen`が発生源で
 `VtSignal::WebviewEvicted`を出す。liveness はsignalではなく、flipが積む`DamageSpan::Full`が上げる。
 
 ### alt 中のリサイズと 1049 の DECRC

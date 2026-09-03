@@ -196,8 +196,9 @@ flip、resize による anchor の孤立、history trim、RIS、複数チャン�
 anchor が解決しなくなるだけである）。
 
 補足として、signal の順序自体も byte stream 順で保存される（`OrzmaTty::pump` は
-drain_chunks で chunk の signal を byte 順に積み、最後に `sweep_evictions` の分を足して
-1本で返す）。ただし「eviction が必ず最後に来る」わけではない — alternate screen の flip は
+drain_chunks で chunk の signal を byte 順に積んで 1 本で返し、各 chunk の末尾で
+`Executor::sweep_evictions` が取り残しを `WebviewEvicted` として足す）。ただし
+「eviction が必ず最後に来る」わけではない — alternate screen の flip は
 `Executor::switch_screen`（`crates/orzma_vt/src/interpreter.rs`）が interpret 中にその場で
 `WebviewEvicted` を出すので、`Evicted{X} → Mount{X}` の順序は実際に起こる。その順序が
 安全に処理されることは §5 で保証されている。
@@ -422,8 +423,9 @@ WebviewEvicted       { placements: Vec<InstanceId> },
 
 ### 2.5 host 駆動の削除（`Vt` トレイトのメソッド）
 
-D7 の受け口は `Vt` トレイトに載せる。`sweep_evictions` が既にトレイト上の placement 専用
-メソッドなので、`remove_placements` はその隣に並ぶ形になり、新しいカテゴリを持ち込まない。
+D7 の受け口は `Vt` トレイトに載せる。`remove_placements` はトレイト上の placement 専用
+メソッドであり、退避の報告は `interpret` と `resize` が各自の戻り値で行う
+（`docs/todo/eviction-at-source.md`）。
 
 ```rust
 // orzma_vt — Vt トレイト
@@ -442,8 +444,7 @@ impl<V: Vt> OrzmaTty<V> {
 ```
 
 代償: `orzma_tty` のテスト用 `FakeVt` にスタブが1つ増える。`pub mod test_support` は
-無条件公開なので、そのスタブは `orzma_tty` の公開 API に出る。`FakeVt` は既に
-`sweep_evictions` を実装しているため増分は1つ分で、既存の形と対称である。
+無条件公開なので、そのスタブは `orzma_tty` の公開 API に出る。
 
 ### なぜこの経路が必要か
 

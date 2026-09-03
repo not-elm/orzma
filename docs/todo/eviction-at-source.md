@@ -118,7 +118,7 @@ resize は grid に触れず、何も取り残さない。`Screen::resize` と
 ```rust
 fn resize(&mut self, size: GridSize) -> Option<ResizeChanged> {
     let damage = self.device.resize(size)?;
-    self.tracker.stage_if_changed(Some(damage));
+    self.tracker.stage(damage);
     Some(ResizeChanged {
         evicted: self.device.evict_lost_anchors(),
     })
@@ -185,16 +185,24 @@ impl Executor<'_> {
 ```rust
 pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTtyResult {
     // (degenerate-size gate and pty.resize unchanged)
-    if let Some(changed) = self.vt.resize(GridSize { cols, rows }) {
-        self.coalescer.arm_or_extend(Instant::now());
-        if let Some(evicted) = VtSignal::evicted(changed.evicted) {
-            self.pending_signals.push(TtySignal::Vt(evicted));
-        }
-    }
+    let changed = self.vt.resize(GridSize { cols, rows });
+    self.absorb_resize(changed);
     Ok(())
+}
+
+fn absorb_resize(&mut self, changed: Option<ResizeChanged>) {
+    let Some(changed) = changed else {
+        return;
+    };
+    self.coalescer.arm_or_extend(Instant::now());
+    if let Some(evicted) = VtSignal::evicted(changed.evicted) {
+        self.pending_signals.push(TtySignal::Vt(evicted));
+    }
 }
 ```
 
+- `spawn` と `detached` も同じ `absorb_resize` を通し、初期サイズ設定が取り残した
+  placement を捨てない。
 - `feed_chunk` は無変更。`damaged` が arm を駆動し、signal は
   `pending_signals` へ。
 - `pump` から掃引ブロックとその `NOTE` を削除する。`ChildExit` を最後に
@@ -204,16 +212,12 @@ pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTtyResult {
 
 ### 安全網
 
-掃引を消すと catch-all が無くなり、ホスト起点でアンカーを失わせる操作を
-将来追加したとき（現状は `resize` だけ）に報告を忘れると webview entity が
-黙って残る。`FrameTracker::emit`（`frame.rs:141`）が `project_placements` を
-呼ぶ箇所で「frame を出す時点で解決不能なアンカーが残っていない」ことを
-`debug_assert!` する。報告漏れがテストで即座に落ちる。
-
-この assert は「frame の前に必ず掃引か報告が済んでいる」を前提にするので、
-`orzma_vt` の単体テストで `device.reset()` などを直接呼んだ後に `frame()`
-を要求する書き方はできなくなる。退避を伴うテストは `interpret` か
-`resize` を経由する。
+実行時の `debug_assert!` は置かない。代わりに `Vt::resize` に
+`#[must_use = "the evicted placements must reach the owner's signal queue"]` を付け、
+戻り値を捨てる呼び手を CI（`-D warnings`）で落とす。`Vt` トレイトの doc に
+「アンカーを失わせうる操作はすべて自分の戻り値で名前を挙げ、それ以外は退避しない」を
+不変条件として明記する。`OrzmaTty` では `resize`・`spawn`・`detached` の 3 呼び手が
+private な `absorb_resize` を通り、退避リストを取りこぼさない。
 
 ### 挙動の差
 
@@ -268,3 +272,19 @@ pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTtyResult {
 - `Vt::scroll` と `Vt::remove_placements` の戻り値は広げない。
 - `OrzmaTty::resize` や `RequestTtyResize` observer から signal を同期的に
   Bevy へ流す設計は採らない。
+
+## レビューでの決定
+
+`docs/superpowers/specs/2026-09-04-eviction-at-source-design.md`（git 管理外）に
+基づく変更点。
+
+- `InterpretOutput::signals` の byte 順契約は二段階になる: parser が出した signal は
+  byte 順、チャンク末尾の `WebviewEvicted` はその後ろ。
+- `FakeVt` は `Option<ResizeChanged>` 全体ではなく `evictions: VecDeque<Vec<InstanceId>>`
+  だけを script し、`changed` は従来どおりサイズ比較で決める。
+- `ResizeChanged` は `orzma_vt::prelude` から export し、`Debug, Clone, PartialEq, Eq` を
+  derive する。
+- `interpret` 経路のテストは `lib.rs` ではなく `interpreter/tests/reset.rs` と
+  `interpreter/tests/webview_apc.rs` に置き、履歴上限を越える出力の退避テストを追加する。
+- `Vt::resize` から `InterpretOutput` を返す案は不採用（`replies` が常に空になり、
+  `Option<DamageSpan>` と揃えた「変わったときだけ `Some`」の形が失われる）。
