@@ -55,7 +55,6 @@ fn the_seven_bit_reset_names_the_placements_it_strands() {
 fn a_reset_that_only_strands_a_placement_marks_the_chunk_damaged() {
     let mut session = Session::new();
     session.mount(InstanceId(1));
-    session.frame();
     let output = session.feed(b"\x1bc");
     assert!(output.damaged);
 }

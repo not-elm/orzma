@@ -65,9 +65,9 @@ pub mod prelude {
 /// # Invariants
 ///
 /// - Every operation that can strand a placement names it in its own
-///   result — [`Vt::interpret`] in [`InterpretOutput::signals`],
-///   [`Vt::resize`] in [`ResizeChanged::evicted`]. The only other
-///   removal is the host-driven [`Vt::remove_placements`], which
+///   result: [`Vt::interpret`] names it in [`InterpretOutput::signals`],
+///   and [`Vt::resize`] names it in [`ResizeChanged::evicted`]. The only
+///   other removal is the host-driven [`Vt::remove_placements`], which
 ///   reports nothing because the caller already named the ids. There
 ///   is no sweep for the owner to run.
 /// - An owner that forwards [`InterpretOutput::signals`] and
@@ -99,7 +99,7 @@ pub trait Vt {
     /// eviction, or projected-geometry change always raises the chunk
     /// liveness, so the frame carrying the new list is guaranteed to
     /// follow. Evictions the VT performs on its own authority (history
-    /// trim, alternate-screen teardown) surface as
+    /// trim, reset, alternate-screen teardown) surface as
     /// [`VtSignal::WebviewEvicted`]. At any instant the live ids are unique.
     ///
     /// A placement projects only while the screen it was mounted on is
@@ -161,7 +161,6 @@ pub trait Vt {
     ///
     /// The placements the resize strands are named in the returned
     /// [`ResizeChanged::evicted`] and are already gone from the VT.
-    /// Nothing else reports them, so the caller must forward them.
     #[must_use = "the evicted placements must reach the owner's signal queue"]
     fn resize(&mut self, size: GridSize) -> Option<ResizeChanged>;
 
@@ -193,7 +192,9 @@ pub struct InterpretOutput {
     /// damage, cursor motion, or a mutated frame-visible section — so
     /// the owner knows to open its coalesce window.
     pub damaged: bool,
-    /// Out-of-band signals, in byte-stream order.
+    /// Out-of-band signals: the parser-raised ones in byte-stream order,
+    /// then the chunk-end [`VtSignal::WebviewEvicted`] when the chunk
+    /// stranded a placement.
     pub signals: Vec<VtSignal>,
     /// Reply bytes (DSR, DA, …) the owner must write back to the PTY.
     pub replies: Vec<u8>,
@@ -201,11 +202,6 @@ pub struct InterpretOutput {
 
 /// What a [`Vt::resize`] that changed the dimensions caused besides the
 /// grid change.
-///
-/// # Invariants
-///
-/// This value exists only when the dimensions changed; a resize to the
-/// size the grid already has returns `None` and strands nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResizeChanged {
     /// The placements whose anchor row the resize dropped out of
@@ -213,8 +209,12 @@ pub struct ResizeChanged {
     pub evicted: Vec<InstanceId>,
 }
 
-/// Out-of-band signal the VT raised, handed to the owner in
-/// [`InterpretOutput::signals`] by the chunk that produced it.
+/// Out-of-band signal the VT raised.
+///
+/// A chunk hands the signals it produced to the owner in
+/// [`InterpretOutput::signals`]. A resize reports the placements it
+/// stranded as ids in [`ResizeChanged::evicted`], and the owner wraps
+/// them with [`Self::evicted`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VtSignal {
     /// An audible bell has been requested; the consumer is responsible
@@ -259,11 +259,11 @@ pub enum VtSignal {
         /// The instance to unmount; `None` unmounts every placement.
         instance: Option<InstanceId>,
     },
-    /// Placements the VT evicted on its own authority (history trim,
-    /// alternate-screen teardown). Consumers despawn them by id;
-    /// unknown ids are ignored. A remount's superseded id is never
-    /// named here — supersession shows only as the geometry changing in
-    /// the frame-carried placement lists.
+    /// Placements the VT dropped without the host naming them (history
+    /// trim, reset, alternate-screen teardown, resize). Consumers despawn
+    /// them by id; unknown ids are ignored. A remount's superseded id is
+    /// never named here — supersession shows only as the geometry
+    /// changing in the frame-carried placement lists.
     WebviewEvicted {
         /// The instances that were evicted.
         placements: Vec<InstanceId>,

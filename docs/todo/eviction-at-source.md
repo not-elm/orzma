@@ -185,13 +185,12 @@ impl Executor<'_> {
 ```rust
 pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTtyResult {
     // (degenerate-size gate and pty.resize unchanged)
-    let changed = self.vt.resize(GridSize { cols, rows });
-    self.absorb_resize(changed);
+    self.resize_vt(GridSize { cols, rows });
     Ok(())
 }
 
-fn absorb_resize(&mut self, changed: Option<ResizeChanged>) {
-    let Some(changed) = changed else {
+fn resize_vt(&mut self, size: GridSize) {
+    let Some(changed) = self.vt.resize(size) else {
         return;
     };
     self.coalescer.arm_or_extend(Instant::now());
@@ -201,7 +200,7 @@ fn absorb_resize(&mut self, changed: Option<ResizeChanged>) {
 }
 ```
 
-- `spawn` と `detached` も同じ `absorb_resize` を通し、初期サイズ設定が取り残した
+- `spawn` と `detached` も同じ `resize_vt` を通し、初期サイズ設定が取り残した
   placement を捨てない。
 - `feed_chunk` は無変更。`damaged` が arm を駆動し、signal は
   `pending_signals` へ。
@@ -217,7 +216,7 @@ fn absorb_resize(&mut self, changed: Option<ResizeChanged>) {
 戻り値を捨てる呼び手を CI（`-D warnings`）で落とす。`Vt` トレイトの doc に
 「アンカーを失わせうる操作はすべて自分の戻り値で名前を挙げ、それ以外は退避しない」を
 不変条件として明記する。`OrzmaTty` では `resize`・`spawn`・`detached` の 3 呼び手が
-private な `absorb_resize` を通り、退避リストを取りこぼさない。
+private な `resize_vt` を通り、退避リストを取りこぼさない。
 
 ### 挙動の差
 
@@ -230,28 +229,32 @@ private な `absorb_resize` を通り、退避リストを取りこぼさない�
 
 ## テスト
 
-### `orzma_vt/src/lib.rs`
+### `orzma_vt`
 
-掃引テスト 4 本を置き換える。
+`lib.rs` の掃引テスト 4 本を置き換える。`interpret` 経路のものは
+`interpreter/tests/` に置く（レビューでの決定を参照）。
 
-| 現在 | 変更後 |
-| --- | --- |
-| 何も失っていない掃引は signal を出さない | webview の無い端末に出力を流しても `WebviewEvicted` は出ない |
-| reset 後の掃引が名前を挙げる | `RIS` を含むチャンクの `InterpretOutput` が名前を挙げ、`damaged` が真 |
-| shrink 後の掃引が名前を挙げる | `resize` の `ResizeChanged::evicted` が名前を挙げる。同サイズは `None` |
-| 二度目の掃引は何も出さない | 退避を出した次のチャンクは何も出さない |
+| 現在 | 変更後 | 置き場所 |
+| --- | --- | --- |
+| 何も失っていない掃引は signal を出さない | 履歴上限に達しない出力は `WebviewEvicted` を出さず、placement は次の frame に履歴行として載る | `interpreter/tests/webview_apc.rs` |
+| reset 後の掃引が名前を挙げる | `RIS` を含むチャンクの `InterpretOutput` が名前を挙げる | `interpreter/tests/reset.rs` |
+| shrink 後の掃引が名前を挙げる | `resize` の `ResizeChanged::evicted` が名前を挙げる。同サイズは `None` | `lib.rs` |
+| 二度目の掃引は何も出さない | 退避を出した次のチャンクは何も出さない | `interpreter/tests/reset.rs` |
 
-追加: 空画面での `RIS`（row damage を積まない）でも `damaged` が真になる。
+追加: 空画面での `RIS`（row damage を積まない）でも `damaged` が真になる
+（`reset.rs`）。履歴上限を越える出力は同じチャンクで名前を挙げ、`damaged` が真になる
+（`webview_apc.rs`）。
 
 ### `orzma_tty/src/lib.rs`
 
 - `a_pump_reports_what_the_eviction_sweep_raised`（`:461`）:
-  「resize してから pump」で退避が `PumpOutput::signals` に乗る形に。
-- `an_eviction_arms_the_coalesce_window`（`:481`）: 「resize の退避が
-  arm する」と「退避を含む interpret（`damaged = true`）が arm する」の
-  2 本に分ける。
+  `a_resize_eviction_reaches_the_next_pump` に改め、「resize してから pump」で
+  退避が `PumpOutput::signals` に乗る形に。
+- `an_eviction_arms_the_coalesce_window`（`:481`）: 削除する。resize が arm する
+  ことは `resize_arms_the_coalescer` が、退避を含むチャンクが `damaged` になることは
+  `orzma_vt` の `reset.rs` / `webview_apc.rs` が押さえる（レビューでの決定を参照）。
 - `FakeVt`（`test_support.rs:73`）: `sweeps` を消し、
-  `resize_outcomes: VecDeque<Option<ResizeChanged>>` を持たせる。
+  `evictions: VecDeque<Vec<InstanceId>>` を持たせる。
 
 ## ドキュメントの追随
 
@@ -264,6 +267,8 @@ private な `absorb_resize` を通り、退避リストを取りこぼさない�
 | `docs/todo/webview-instance-id.md:199`、`:425`〜`:446` | `sweep_evictions` 前提の記述を更新 |
 | `docs/memo/decset.md:90` | 「pump の掃引では拾えない」を「チャンク末尾の掃引では拾えない」に |
 | `orzma_vt/src/lib.rs:279` | 参照先 `docs/orzma_vt_internal_design.md` はワークツリーに無い。今回の変更と独立だが、doc を触るついでに直す |
+| `TtySignal::Vt` の doc（`orzma_tty/src/signal.rs:13`） | 「owner が pump ごとに走らせる掃引が出す」を「resize が報告した退避」に |
+| `OrzmaTty::pending_signals` の doc（`orzma_tty/src/lib.rs:69`） | resize の退避も積まれることを書く |
 
 ## スコープ外
 
@@ -288,3 +293,18 @@ private な `absorb_resize` を通り、退避リストを取りこぼさない�
   `interpreter/tests/webview_apc.rs` に置き、履歴上限を越える出力の退避テストを追加する。
 - `Vt::resize` から `InterpretOutput` を返す案は不採用（`replies` が常に空になり、
   `Option<DamageSpan>` と揃えた「変わったときだけ `Some`」の形が失われる）。
+- `absorb_resize(Option<ResizeChanged>)` は `Vt::resize` の呼び出しごと
+  `resize_vt(GridSize)` に畳み、`resize`・`spawn`・`detached` はそれを 1 行で呼ぶ。
+  5 フィールドの構築リテラルは private な `OrzmaTty::wired(vt, pty)` に集め、
+  `detached_term` fixture は `OrzmaTty::detached` をそのまま呼ぶ。
+- `an_eviction_arms_the_coalesce_window` の 2 本への分割は行わない。`FakeVt` は
+  `damaged` を script するので「退避が arm する」を owner 層では pin できず、
+  `a_resize_eviction_reaches_the_next_pump` からも `is_armed` の assert を外す。
+  arm の契約は `resize_arms_the_coalescer` と `a_chunk_that_stages_damage_arms_the_window`
+  （`damaged` なチャンクが arm する）が、退避チャンクの `damaged` は `orzma_vt` の
+  `reset.rs` / `webview_apc.rs` が pin する。
+- `output_that_keeps_the_anchor_in_history_evicts_nothing` は mount 後に frame を
+  1 枚 settle してから出力を流し、placement が `GridLine(-3)` に載ることまで assert する
+  （settle 無しでは初回掲載と区別できない）。frame の placement 一覧は
+  `Session::listed_placements` で取り出し、`reset.rs` / `webview_apc.rs` の
+  `damaged` / `signals` だけを見るテストからは不要な settle を外す。

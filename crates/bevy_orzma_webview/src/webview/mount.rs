@@ -318,8 +318,9 @@ pub(crate) fn mount(params: &mut WebviewParams, dynamic: &OrzmaRegistry, ctx: We
 /// Despawns the webview child(ren) of `terminal_surface` matching the
 /// scope: `Some(id)` removes that one instance; `None` removes every
 /// webview child, the shape a client-issued unmount-all takes. VT-side
-/// evictions (history trim, alternate-screen teardown) arrive separately as
-/// `TtyWebviewEvictedSignal` handled by `on_webview_evicted`.
+/// evictions (history trim, reset, alternate-screen teardown, resize)
+/// arrive separately as `TtyWebviewEvictedSignal` handled by
+/// `on_webview_evicted`.
 pub(crate) fn unmount(
     params: &mut WebviewParams,
     terminal_surface: Entity,

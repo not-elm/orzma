@@ -87,14 +87,9 @@ fn leaving_the_alternate_screen_evicts_only_its_placements() {
             placements: vec![dropped]
         }]
     );
-    let frame = session.frame().expect("the flip back emits");
-    let listed: Vec<InstanceId> = frame
-        .placements
-        .expect("a placement change is listed")
-        .iter()
-        .map(|placement| placement.id)
-        .collect();
-    assert_eq!(listed, vec![kept]);
+    let placements = session.listed_placements();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].id, kept);
 }
 
 /// Asserts that `?1049h` shows the alternate screen erased, whatever

@@ -47,14 +47,9 @@ fn an_apc_mount_reaches_the_next_frame() {
     let id: InstanceId = ID.parse().expect("the fixture is a valid id");
     let mut session = Session::new();
     session.feed(format!("\x1b_Omount;n={id},r=2,c=3\x1b\\").as_bytes());
-    let frame = session.frame().expect("a mount emits");
-    let listed: Vec<InstanceId> = frame
-        .placements
-        .expect("a placement change is listed")
-        .iter()
-        .map(|placement| placement.id)
-        .collect();
-    assert_eq!(listed, vec![id]);
+    let placements = session.listed_placements();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].id, id);
 }
 
 /// Asserts that an APC unmount reports the instance it named and drops
@@ -185,7 +180,6 @@ fn output_past_the_history_cap_evicts_the_placement_in_its_own_chunk() {
     let mut session = Session::new();
     let id = InstanceId(1);
     session.mount(id);
-    session.frame();
     let output = session.feed(&b"\n".repeat(LINE_FEEDS_PAST_THE_CAP));
     assert_eq!(
         output.signals,
@@ -197,8 +191,8 @@ fn output_past_the_history_cap_evicts_the_placement_in_its_own_chunk() {
 }
 
 /// Asserts that output which only scrolls a placement's anchor row
-/// into history, below the cap, evicts nothing and keeps the
-/// placement in the next frame.
+/// into history, below the cap, evicts nothing and lists the placement
+/// at the history line its anchor scrolled to.
 ///
 /// Case: a companion app mounted a webview beside a prompt and the
 /// shell printed a few more lines under it.
@@ -207,14 +201,11 @@ fn output_that_keeps_the_anchor_in_history_evicts_nothing() {
     let mut session = Session::new();
     let id = InstanceId(1);
     session.mount(id);
+    session.frame();
     let output = session.feed(&b"\n".repeat(5));
     assert!(output.signals.is_empty());
-    let frame = session.frame().expect("the scroll emits");
-    let listed: Vec<InstanceId> = frame
-        .placements
-        .expect("a moved placement is listed")
-        .iter()
-        .map(|placement| placement.id)
-        .collect();
-    assert_eq!(listed, vec![id]);
+    let placements = session.listed_placements();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].id, id);
+    assert_eq!(placements[0].point.line, GridLine(-3));
 }
