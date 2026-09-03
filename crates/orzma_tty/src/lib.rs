@@ -86,9 +86,11 @@ impl<V: Vt> OrzmaTty<V> {
     const MAX_ROWS: u16 = 4096;
 
     /// Spawns the login shell under a new PTY and sizes the injected VT
-    /// to the spawn geometry through the same path [`Self::resize`]
-    /// uses, so a VT handed in with placements mounted reports what the
-    /// sizing strands.
+    /// to the spawn geometry.
+    ///
+    /// The sizing goes through the same path [`Self::resize`] uses, so
+    /// a VT handed in with placements mounted reports what the sizing
+    /// strands.
     pub fn spawn(vt: V, options: SpawnOptions) -> OrzmaTtyResult<Self> {
         let pty = Pty::spawn(&options)?;
         let mut tty = Self {

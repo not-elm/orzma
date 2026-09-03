@@ -472,6 +472,10 @@ impl Executor<'_> {
     /// The sweep runs once, after the whole chunk, so a placement the
     /// chunk strands and then re-mounts is updated in place rather than
     /// evicted and re-created.
+    ///
+    /// Every parser invocation ends with this sweep. A future
+    /// synchronized-update replay that runs outside a chunk must end
+    /// with it too, or the anchors that replay strands go unreported.
     fn sweep_evictions(&mut self) {
         let Some(evicted) = VtSignal::evicted(self.device.evict_lost_anchors()) else {
             return;

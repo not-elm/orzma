@@ -66,8 +66,10 @@ pub mod prelude {
 ///
 /// - Every operation that can strand a placement names it in its own
 ///   result — [`Vt::interpret`] in [`InterpretOutput::signals`],
-///   [`Vt::resize`] in [`ResizeChanged::evicted`] — and nothing else
-///   evicts. There is no sweep for the owner to run.
+///   [`Vt::resize`] in [`ResizeChanged::evicted`]. The only other
+///   removal is the host-driven [`Vt::remove_placements`], which
+///   reports nothing because the caller already named the ids. There
+///   is no sweep for the owner to run.
 /// - An owner that forwards [`InterpretOutput::signals`] and
 ///   [`ResizeChanged::evicted`] before it requests the next frame
 ///   delivers every eviction no later than the first frame that
