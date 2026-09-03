@@ -55,6 +55,7 @@ impl Interpreter {
             tracker,
         };
         self.parser.parse(chunk, &mut executor);
+        executor.sweep_evictions();
         executor.output.damaged |= cursor_before != executor.device.active_screen().cursor();
     }
 }
@@ -462,6 +463,22 @@ impl Executor<'_> {
             self.signal(VtSignal::ResetTitle);
         }
     }
+
+    /// Names the placements this chunk stranded — a reset, or rows the
+    /// output pushed past the history cap — and raises the chunk
+    /// liveness, because a shortened placement list is a frame-visible
+    /// section change even when no row was damaged.
+    ///
+    /// The sweep runs once, after the whole chunk, so a placement the
+    /// chunk strands and then re-mounts is updated in place rather than
+    /// evicted and re-created.
+    fn sweep_evictions(&mut self) {
+        let Some(evicted) = VtSignal::evicted(self.device.evict_lost_anchors()) else {
+            return;
+        };
+        self.signal(evicted);
+        self.output.damaged = true;
+    }
 }
 
 /// The control functions a CSI sequence requests, where one final byte
@@ -567,9 +584,9 @@ impl Executor<'_> {
     /// tears down. Already showing `to` is a no-op: no repaint, no
     /// signal.
     ///
-    /// The eviction is raised here rather than left to the owner's
+    /// The eviction is raised here rather than left to the chunk-end
     /// sweep because [`DeviceState::switch_screen`] takes the placements
-    /// out of the table, so no later sweep can find them.
+    /// out of the table, so the sweep could not find them.
     ///
     /// # Invariants
     ///
