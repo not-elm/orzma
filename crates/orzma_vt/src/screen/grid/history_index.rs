@@ -52,6 +52,12 @@ impl HistoryIndex {
         self.seq_of.remove(&id);
     }
 
+    /// Number of history rows the index names.
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.seq_of.len()
+    }
+
     fn next_seq(&self) -> u64 {
         self.popped + self.seq_of.len() as u64
     }
