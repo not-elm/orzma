@@ -4,6 +4,7 @@ pub mod row;
 pub mod run;
 
 pub(crate) mod coords;
+mod history_index;
 
 use crate::screen::cell::Cell;
 use crate::screen::grid::coords::{GridLine, ScreenLine};
@@ -46,7 +47,7 @@ pub struct GridSize {
 /// The uniqueness is per grid, NOT per terminal: the primary and
 /// alternate screens own separate grids that both start at zero, so
 /// resolving an id against the wrong one silently names a different row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LineId(u64);
 
 /// Storage-only grid: scrollback history plus the visible screen in
