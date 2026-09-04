@@ -4,9 +4,11 @@ pub mod row;
 pub mod run;
 
 pub(crate) mod coords;
+mod history_index;
 
 use crate::screen::cell::Cell;
 use crate::screen::grid::coords::{GridLine, ScreenLine};
+use crate::screen::grid::history_index::HistoryIndex;
 use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
@@ -40,13 +42,14 @@ pub struct GridSize {
 /// into it like any other, so binary-searching the history segment alone
 /// is equally unsound. The front row is not necessarily the lowest id
 /// either, because on a grid built without history a reverse scroll
-/// inserts at ring index zero. The only sound constant-time rejection is
-/// `id >= next_line_id`, which no caller can produce.
+/// inserts at ring index zero. History is therefore resolved through an
+/// id-keyed index rather than by position, and only the visible rows are
+/// scanned.
 ///
 /// The uniqueness is per grid, NOT per terminal: the primary and
 /// alternate screens own separate grids that both start at zero, so
 /// resolving an id against the wrong one silently names a different row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LineId(u64);
 
 /// Storage-only grid: scrollback history plus the visible screen in
@@ -70,6 +73,8 @@ pub struct Grid {
     max_history: usize,
     /// The id the next row to enter the ring will carry.
     next_line_id: u64,
+    /// Constant-time lookup of a history row's ring index by its id.
+    history_index: HistoryIndex,
 }
 
 /// One stored row: its identity together with its cells.
@@ -98,6 +103,7 @@ impl Grid {
             size,
             max_history,
             next_line_id: u64::from(size.rows),
+            history_index: HistoryIndex::default(),
         }
     }
 
@@ -106,6 +112,7 @@ impl Grid {
     /// The grid keeps its size and its history cap.
     pub fn reset(&mut self) {
         self.rows.clear();
+        self.history_index = HistoryIndex::default();
         for _ in 0..self.size.rows {
             self.push_blank_row();
         }
@@ -157,6 +164,7 @@ impl Grid {
             return;
         }
         let grows_history = base < self.max_history;
+        let departing = self.rows[base].id;
         let entering = if grows_history {
             GridRow {
                 id,
@@ -167,10 +175,16 @@ impl Grid {
                 .rows
                 .pop_front()
                 .expect("the ring always holds the visible rows");
+            if self.max_history > 0 {
+                self.history_index.pop_oldest(recycled.id);
+            }
             recycled.id = id;
             recycled.cells.fill(fill);
             recycled
         };
+        if self.max_history > 0 {
+            self.history_index.enter(departing);
+        }
         // NOTE: Seating the entering row just past the bottom margin is
         // what hands the departing row to history: the ring grows by one,
         // so the window of visible rows slides off it while the rows
@@ -203,12 +217,22 @@ impl Grid {
 
     /// The active-grid line the row `id` now sits at; `None` once it has
     /// left the ring.
+    ///
+    /// A history row resolves in constant time through the history
+    /// index; a visible row is found by a scan bounded by the screen
+    /// height.
     pub fn grid_line(&self, id: LineId) -> Option<GridLine> {
-        let index = self.rows.iter().rposition(|row| row.id == id)?;
-        let line = index as i64 - self.history_len() as i64;
-        Some(GridLine(
-            i32::try_from(line).expect("a ring index minus its history fits in i32"),
-        ))
+        let history = self.history_len();
+        if let Some(index) = self.history_index.index_of(id) {
+            let line = index as i64 - history as i64;
+            return Some(GridLine(
+                i32::try_from(line).expect("a ring index minus its history fits in i32"),
+            ));
+        }
+        self.rows
+            .range(history..)
+            .position(|row| row.id == id)
+            .map(|line| GridLine(i32::try_from(line).expect("a screen line fits in i32")))
     }
 
     /// Borrows the row at an active-grid line; a negative line reaches
@@ -276,8 +300,12 @@ impl Grid {
             self.rows.truncate(self.rows.len() - dropped);
         } else if old < rows {
             let growth = usize::from(rows - old);
-            let appended = growth.saturating_sub(self.history_len());
-            for _ in 0..appended {
+            let history = self.history_len();
+            let reclaimed = growth.min(history);
+            for row in self.rows.range(history - reclaimed..history) {
+                self.history_index.reclaim_newest(row.id);
+            }
+            for _ in 0..growth - reclaimed {
                 self.push_blank_row();
             }
         }
@@ -312,6 +340,18 @@ impl Grid {
     #[inline]
     fn visible_index(&self, line: u16) -> usize {
         self.history_len() + usize::from(line)
+    }
+
+    /// Checks that the history index names exactly the history rows, each
+    /// at its ring index, and no visible row.
+    #[cfg(test)]
+    fn assert_history_index_matches_ring(&self) {
+        let history = self.history_len();
+        assert_eq!(self.history_index.len(), history);
+        for (index, row) in self.rows.iter().enumerate() {
+            let expected = (index < history).then_some(index);
+            assert_eq!(self.history_index.index_of(row.id), expected);
+        }
     }
 }
 
@@ -843,7 +883,7 @@ mod tests {
 
         /// Asserts that an anchor still resolves once the history holds
         /// ids that are no longer ascending, which is why the lookup
-        /// scans rather than binary-searches.
+        /// indexes history by id rather than binary-searching it.
         ///
         /// Case: a full-screen application scrolls backwards — minting a
         /// row with a high id above older rows — and then output pushes
@@ -907,6 +947,283 @@ mod tests {
             for id in &first {
                 assert_eq!(grid.grid_line(*id), None);
             }
+        }
+    }
+
+    mod history_index {
+        use super::*;
+
+        fn ids(grid: &Grid) -> Vec<LineId> {
+            (0..grid.size().rows)
+                .map(|line| grid.line_id(ScreenLine(line)))
+                .collect()
+        }
+
+        /// Asserts that a growth brings the newest history row back onto
+        /// the screen at line zero while the older ones stay in history.
+        ///
+        /// Case: two lines have scrolled into history and the user drags
+        /// the window one row taller.
+        #[test]
+        fn a_growth_reclaims_the_newest_history_row() {
+            let mut grid = grid(2, 10);
+            let [a, b] = ids(&grid)[..] else {
+                unreachable!()
+            };
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            assert!(grid.resize(GridSize { cols: 4, rows: 3 }));
+            assert_eq!(grid.grid_line(a), Some(GridLine(-1)));
+            assert_eq!(grid.grid_line(b), Some(GridLine(0)));
+            grid.assert_history_index_matches_ring();
+        }
+
+        /// Asserts that one growth reclaiming several rows resolves each
+        /// of them to consecutive screen lines.
+        ///
+        /// Case: three lines sit in history and the user drags the
+        /// window two rows taller in one motion.
+        #[test]
+        fn a_growth_reclaims_several_rows_in_order() {
+            let mut grid = grid(2, 10);
+            let [a, b] = ids(&grid)[..] else {
+                unreachable!()
+            };
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            let c = grid.line_id(ScreenLine(1));
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            assert_eq!(grid.history_len(), 3);
+            assert!(grid.resize(GridSize { cols: 4, rows: 4 }));
+            assert_eq!(grid.grid_line(a), Some(GridLine(-1)));
+            assert_eq!(grid.grid_line(b), Some(GridLine(0)));
+            assert_eq!(grid.grid_line(c), Some(GridLine(1)));
+            grid.assert_history_index_matches_ring();
+        }
+
+        /// Asserts that a growth larger than the history reclaims every
+        /// history row and appends fresh ones below.
+        ///
+        /// Case: one line sits in history and the user maximizes the
+        /// window, asking for far more rows than history can supply.
+        #[test]
+        fn a_growth_larger_than_the_history_reclaims_it_all() {
+            let mut grid = grid(2, 10);
+            let [a, b] = ids(&grid)[..] else {
+                unreachable!()
+            };
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            assert!(grid.resize(GridSize { cols: 4, rows: 5 }));
+            assert_eq!(grid.history_len(), 0);
+            assert_eq!(grid.grid_line(a), Some(GridLine(0)));
+            assert_eq!(grid.grid_line(b), Some(GridLine(1)));
+            grid.assert_history_index_matches_ring();
+        }
+
+        /// Asserts that a row reclaimed after the cap has popped rows
+        /// re-enters history at the right line when output scrolls again.
+        ///
+        /// Case: on a terminal at its scrollback cap the user drags the
+        /// window taller and the shell then prints another line.
+        #[test]
+        fn a_reclaimed_row_re_enters_history_after_the_cap_has_popped() {
+            let mut grid = grid(3, 2);
+            let [a, b, c] = ids(&grid)[..] else {
+                unreachable!()
+            };
+            for _ in 0..3 {
+                scroll_up_whole_screen(&mut grid, Cell::default());
+            }
+            assert_eq!(grid.grid_line(a), None);
+            assert!(grid.resize(GridSize { cols: 4, rows: 4 }));
+            assert_eq!(grid.grid_line(b), Some(GridLine(-1)));
+            assert_eq!(grid.grid_line(c), Some(GridLine(0)));
+            grid.assert_history_index_matches_ring();
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            assert_eq!(grid.grid_line(b), Some(GridLine(-2)));
+            assert_eq!(grid.grid_line(c), Some(GridLine(-1)));
+            grid.assert_history_index_matches_ring();
+        }
+
+        /// Asserts that a shrink stops the dropped bottom rows from
+        /// resolving and leaves history where it was.
+        ///
+        /// Case: one line sits in history and the user drags the window
+        /// two rows shorter with the cursor near the top.
+        #[test]
+        fn a_shrink_drops_the_bottom_ids_and_keeps_history() {
+            let mut grid = grid(4, 10);
+            let a = grid.line_id(ScreenLine(0));
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            let [b, c, d, e] = ids(&grid)[..] else {
+                unreachable!()
+            };
+            assert!(grid.resize(GridSize { cols: 4, rows: 2 }));
+            assert_eq!(grid.grid_line(a), Some(GridLine(-1)));
+            assert_eq!(grid.grid_line(b), Some(GridLine(0)));
+            assert_eq!(grid.grid_line(c), Some(GridLine(1)));
+            assert_eq!(grid.grid_line(d), None);
+            assert_eq!(grid.grid_line(e), None);
+            grid.assert_history_index_matches_ring();
+        }
+
+        /// Asserts that a columns-only resize leaves every id where it was.
+        ///
+        /// Case: one line sits in history and the user drags the window
+        /// wider without changing its height.
+        #[test]
+        fn a_columns_only_resize_moves_no_id() {
+            let mut grid = grid(3, 10);
+            let a = grid.line_id(ScreenLine(0));
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            let b = grid.line_id(ScreenLine(0));
+            assert!(grid.resize(GridSize { cols: 6, rows: 3 }));
+            assert_eq!(grid.grid_line(a), Some(GridLine(-1)));
+            assert_eq!(grid.grid_line(b), Some(GridLine(0)));
+            grid.assert_history_index_matches_ring();
+        }
+
+        /// Asserts that a scroll whose region starts at the top but ends
+        /// above the last line still hands the top row to history while
+        /// the rows below the region keep their lines.
+        ///
+        /// Case: an application pins a status line to the bottom row with
+        /// `DECSTBM` and the pane above it scrolls.
+        #[test]
+        fn a_top_anchored_region_scroll_hands_the_top_row_to_history() {
+            let mut grid = grid(4, 10);
+            let [a, b, _, d] = ids(&grid)[..] else {
+                unreachable!()
+            };
+            grid.scroll_up_one(ScreenLine(0), ScreenLine(2), Cell::default());
+            assert_eq!(grid.history_len(), 1);
+            assert_eq!(grid.grid_line(a), Some(GridLine(-1)));
+            assert_eq!(grid.grid_line(b), Some(GridLine(0)));
+            assert_eq!(grid.grid_line(d), Some(GridLine(3)));
+            grid.assert_history_index_matches_ring();
+        }
+
+        /// Asserts that a scroll inside a region below the top discards
+        /// the region's top row without touching history.
+        ///
+        /// Case: a line has scrolled into history, then an application
+        /// sets a scroll region under a header line and scrolls it.
+        #[test]
+        fn a_region_scroll_below_the_top_discards_without_touching_history() {
+            let mut grid = grid(4, 10);
+            let a = grid.line_id(ScreenLine(0));
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            let [b, c, d, e] = ids(&grid)[..] else {
+                unreachable!()
+            };
+            grid.scroll_up_one(ScreenLine(1), ScreenLine(2), Cell::default());
+            assert_eq!(grid.grid_line(a), Some(GridLine(-1)));
+            assert_eq!(grid.grid_line(b), Some(GridLine(0)));
+            assert_eq!(grid.grid_line(c), None);
+            assert_eq!(grid.grid_line(d), Some(GridLine(1)));
+            assert_eq!(grid.grid_line(e), Some(GridLine(3)));
+            grid.assert_history_index_matches_ring();
+        }
+
+        /// Asserts that a reverse scroll after history exists discards the
+        /// bottom row without touching history.
+        ///
+        /// Case: a line has scrolled into history and an application then
+        /// scrolls the whole screen backwards.
+        #[test]
+        fn a_reverse_scroll_after_history_exists_leaves_history_alone() {
+            let mut grid = grid(3, 10);
+            let a = grid.line_id(ScreenLine(0));
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            let [b, _, d] = ids(&grid)[..] else {
+                unreachable!()
+            };
+            grid.scroll_down_one(ScreenLine(0), ScreenLine(2), Cell::default());
+            assert_eq!(grid.grid_line(a), Some(GridLine(-1)));
+            assert_eq!(grid.grid_line(b), Some(GridLine(1)));
+            assert_eq!(grid.grid_line(d), None);
+            grid.assert_history_index_matches_ring();
+        }
+
+        /// Asserts that scrolling after a reset fills history afresh and
+        /// a second reset empties it again.
+        ///
+        /// Case: an application sends `RIS`, prints a screenful, and
+        /// sends `RIS` again.
+        #[test]
+        fn history_refills_between_repeated_resets() {
+            let mut grid = grid(3, 10);
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            grid.reset();
+            grid.assert_history_index_matches_ring();
+            let a = grid.line_id(ScreenLine(0));
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            assert_eq!(grid.grid_line(a), Some(GridLine(-1)));
+            grid.assert_history_index_matches_ring();
+            grid.reset();
+            assert_eq!(grid.grid_line(a), None);
+            grid.assert_history_index_matches_ring();
+        }
+
+        /// Asserts that a grid without history never indexes a row.
+        ///
+        /// Case: a full-screen application scrolls its alternate screen
+        /// forwards and backwards.
+        #[test]
+        fn a_grid_without_history_indexes_nothing() {
+            let mut grid = grid(3, 0);
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            grid.scroll_down_one(ScreenLine(0), ScreenLine(2), Cell::default());
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            assert_eq!(grid.history_len(), 0);
+            grid.assert_history_index_matches_ring();
+        }
+
+        /// Asserts that the index agrees with the ring after every step of
+        /// a session that mixes every ring mutation.
+        ///
+        /// Case: a long session scrolls to the cap, keeps scrolling, runs
+        /// a full-screen pager with region scrolls, resizes both ways,
+        /// resets, and scrolls again.
+        #[test]
+        fn the_index_agrees_with_the_ring_through_a_mixed_session() {
+            let mut grid = grid(4, 3);
+            let mut seen: Vec<LineId> = ids(&grid);
+            let mut step = |grid: &mut Grid| {
+                grid.assert_history_index_matches_ring();
+                for id in &seen {
+                    if let Some(line) = grid.grid_line(*id) {
+                        let index = usize::try_from(i64::from(line.0) + grid.history_len() as i64)
+                            .expect("a resolved line sits inside the ring");
+                        assert_eq!(grid.rows[index].id, *id);
+                    }
+                }
+                seen.extend(ids(grid));
+            };
+            for _ in 0..5 {
+                scroll_up_whole_screen(&mut grid, Cell::default());
+                step(&mut grid);
+            }
+            grid.scroll_up_one(ScreenLine(1), ScreenLine(2), Cell::default());
+            step(&mut grid);
+            grid.scroll_down_one(ScreenLine(0), ScreenLine(3), Cell::default());
+            step(&mut grid);
+            grid.scroll_up_one(ScreenLine(0), ScreenLine(2), Cell::default());
+            step(&mut grid);
+            assert!(grid.resize(GridSize { cols: 4, rows: 6 }));
+            step(&mut grid);
+            assert!(grid.resize(GridSize { cols: 6, rows: 6 }));
+            step(&mut grid);
+            assert!(grid.resize(GridSize { cols: 6, rows: 2 }));
+            step(&mut grid);
+            for _ in 0..4 {
+                scroll_up_whole_screen(&mut grid, Cell::default());
+                step(&mut grid);
+            }
+            grid.reset();
+            step(&mut grid);
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            step(&mut grid);
         }
     }
 }
