@@ -28,6 +28,7 @@ pub mod character_sets;
 pub mod checkpoint;
 pub mod grid;
 pub mod margins;
+pub mod selection;
 pub mod tabs;
 pub mod viewport;
 

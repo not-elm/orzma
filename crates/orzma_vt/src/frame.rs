@@ -19,8 +19,8 @@ use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::row::Row;
 use crate::screen::grid::run::Run;
+use crate::screen::selection::SelectionRange;
 use crate::screen::viewport::{DisplayOffset, ViewportLine};
-use crate::selection::SelectionRange;
 use crate::vi::ViCursor;
 
 /// One emitted frame.
