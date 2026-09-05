@@ -11,6 +11,8 @@ use crate::{
     interpreter::Interpreter,
     placement::{InstanceId, PlacementSize},
     screen::grid::GridSize,
+    screen::grid::coords::GridPoint,
+    screen::selection::{CellSide, SelectionKind},
     screen::viewport::{DisplayOffset, Scroll},
 };
 use std::path::PathBuf;
@@ -54,14 +56,13 @@ pub mod prelude {
 /// the grid and scrollback, tracks damage, and builds frames. The
 /// trait has no constructor — a concrete VT is built with its own
 /// configuration and injected; spawn geometry arrives via
-/// [`Vt::resize`]. Selection and vi mode arrive later as separate
-/// capability traits.
+/// [`Vt::resize`]. Vi mode arrives later.
 ///
-/// The read surface is deliberately frame-granular: cell-level host
-/// features (e.g. hyperlink hover) resolve against the emitted
-/// [`crate::prelude::Row`] / [`crate::prelude::Run`] data, so the
-/// trait exposes no per-cell read seam and the VT's storage cell
-/// never leaves the crate.
+/// The read surface exposes no per-cell seam: cell-level host features
+/// (e.g. hyperlink hover) resolve against the emitted
+/// [`crate::prelude::Row`] / [`crate::prelude::Run`] data, and the only
+/// text read, [`Vt::selection_text`], is a derived value, so the VT's
+/// storage cell never leaves the crate.
 ///
 /// # Invariants
 ///
@@ -167,6 +168,35 @@ pub trait Vt {
     /// Applies the viewport motion; returns whether the viewport
     /// moved. Only a real move stages (full) damage.
     fn scroll(&mut self, scroll: Scroll) -> bool;
+
+    /// Anchors a new selection at `cell`, replacing any active one;
+    /// returns whether the selection state changed. A cell outside the
+    /// grid (a line already evicted from history, or a column past the
+    /// width) is rejected, leaving the current selection untouched.
+    ///
+    /// The return value reports the stored state, not the projection:
+    /// a start whose projection is empty still returns `true`, and the
+    /// emit-time diff decides on its own whether a frame is owed.
+    fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool;
+
+    /// Moves the active selection's moving end to `cell`; returns
+    /// whether the moving end changed. A no-op returning `false` when
+    /// there is no active selection or `cell` is outside the grid.
+    ///
+    /// Two cells naming the same boundary — the right half of one and
+    /// the left half of the next — are the same moving end.
+    fn extend_selection(&mut self, cell: GridPoint, side: CellSide) -> bool;
+
+    /// Drops the active selection; returns whether there was one.
+    ///
+    /// A selection whose rows have left the ring still counts: it holds
+    /// state even though it projects nothing.
+    fn clear_selection(&mut self) -> bool;
+
+    /// The text the active selection covers; `None` exactly when
+    /// [`Frame::selection`] would be `None` — no selection, an empty
+    /// span, or an endpoint whose line has left the ring.
+    fn selection_text(&self) -> Option<String>;
 
     /// Grid dimensions in cells.
     fn grid_size(&self) -> GridSize;
@@ -352,6 +382,24 @@ impl Vt for OrzmaVt {
         self.tracker.stage_if_changed(self.device.scroll(scroll))
     }
 
+    fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool {
+        self.device
+            .active_screen_mut()
+            .start_selection(cell, side, kind)
+    }
+
+    fn extend_selection(&mut self, cell: GridPoint, side: CellSide) -> bool {
+        self.device.active_screen_mut().extend_selection(cell, side)
+    }
+
+    fn clear_selection(&mut self) -> bool {
+        self.device.active_screen_mut().clear_selection()
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        self.device.active_screen().selection_text()
+    }
+
     fn grid_size(&self) -> GridSize {
         self.device.grid_size()
     }
@@ -369,11 +417,467 @@ impl Vt for OrzmaVt {
 mod tests {
     use super::*;
     use crate::placement::{InstanceId, PlacementSize};
-    use crate::screen::grid::coords::GridLine;
+    use crate::screen::grid::coords::{GridColumn, GridLine};
+    use crate::screen::selection::{SelectionGeometry, SelectionRange};
     use crate::screen::viewport::ViewportLine;
 
     fn vt() -> OrzmaVt {
         OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10)
+    }
+
+    /// A 4×3 terminal whose rows read `abcd` / `efgh` / `ijkl`, with the
+    /// bootstrap frame already drained.
+    fn filled() -> OrzmaVt {
+        let mut vt = vt();
+        vt.interpret(b"abcd\r\nefgh\r\nijkl");
+        vt.frame();
+        vt
+    }
+
+    fn cell(line: i32, column: u16) -> GridPoint {
+        GridPoint {
+            line: GridLine(line),
+            column: GridColumn(column),
+        }
+    }
+
+    /// The selection the active screen projects right now, read without
+    /// consuming a frame.
+    fn projected(vt: &OrzmaVt) -> Option<SelectionRange> {
+        vt.device.active_screen().selection_range()
+    }
+
+    /// Asserts that the next frame repaints no rows and carries
+    /// `selection`, which is what an idle selection change owes.
+    fn assert_rowless_frame(vt: &mut OrzmaVt, selection: Option<SelectionRange>) {
+        let frame = vt.frame().expect("an idle selection change emits");
+        assert!(frame.rows.is_empty());
+        assert_eq!(frame.selection, selection);
+    }
+
+    fn range(start: (i32, u16), end: (i32, u16), geometry: SelectionGeometry) -> SelectionRange {
+        SelectionRange {
+            start: cell(start.0, start.1),
+            end: cell(end.0, end.1),
+            geometry,
+        }
+    }
+
+    /// Asserts that a Lines start projects the anchored row from its first
+    /// to its last column.
+    ///
+    /// Case: the user triple-clicks the middle row of the terminal.
+    #[test]
+    fn a_lines_start_projects_the_whole_row() {
+        let mut vt = filled();
+        assert!(vt.start_selection(cell(1, 2), CellSide::Left, SelectionKind::Lines));
+        assert_eq!(
+            projected(&vt),
+            Some(range((1, 0), (1, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a start identical to the active selection reports no
+    /// change and owes no frame.
+    ///
+    /// Case: the host re-fires the same start request for a repeated
+    /// triple-click on the row that is already selected.
+    #[test]
+    fn an_identical_start_is_a_no_op() {
+        let mut vt = filled();
+        vt.start_selection(cell(1, 0), CellSide::Left, SelectionKind::Lines);
+        vt.frame();
+        assert!(!vt.start_selection(cell(1, 0), CellSide::Left, SelectionKind::Lines));
+        assert!(vt.frame().is_none());
+    }
+
+    /// Asserts that a start on a line the ring does not hold is rejected and
+    /// leaves the active selection untouched.
+    ///
+    /// Case: the press was hit-tested against a frame that still showed a
+    /// history row, which the terminal has since trimmed away.
+    #[test]
+    fn a_start_on_a_line_outside_the_ring_is_rejected() {
+        let mut vt = filled();
+        vt.start_selection(cell(1, 0), CellSide::Left, SelectionKind::Lines);
+        assert!(!vt.start_selection(cell(-1, 0), CellSide::Left, SelectionKind::Lines));
+        assert_eq!(
+            projected(&vt),
+            Some(range((1, 0), (1, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a start whose column is past the grid width is rejected
+    /// even for a Lines selection that would ignore the column.
+    ///
+    /// Case: a shrink resize lands between the host's hit test and the
+    /// request reaching the terminal.
+    #[test]
+    fn a_start_past_the_last_column_is_rejected() {
+        let mut vt = filled();
+        vt.start_selection(cell(1, 0), CellSide::Left, SelectionKind::Lines);
+        assert!(!vt.start_selection(cell(0, 4), CellSide::Left, SelectionKind::Lines));
+        assert_eq!(
+            projected(&vt),
+            Some(range((1, 0), (1, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a start on a history line the ring still holds is
+    /// accepted and projects there.
+    ///
+    /// Case: the user scrolls back and triple-clicks a row that has already
+    /// left the live screen.
+    #[test]
+    fn a_start_on_a_history_line_is_accepted() {
+        let mut vt = filled();
+        vt.interpret(b"\r\n\r\n");
+        assert!(vt.start_selection(cell(-1, 0), CellSide::Left, SelectionKind::Lines));
+        assert_eq!(
+            projected(&vt),
+            Some(range((-1, 0), (-1, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a fresh Simple start returns `true` even though its
+    /// empty projection leaves `frame()` with nothing to emit.
+    ///
+    /// Case: the user presses the mouse button on a cell and the host
+    /// anchors a selection before the pointer has moved.
+    #[test]
+    fn a_fresh_simple_start_changes_state_but_projects_nothing() {
+        let mut vt = filled();
+        assert!(vt.start_selection(cell(0, 1), CellSide::Left, SelectionKind::Simple));
+        assert_eq!(projected(&vt), None);
+        assert!(vt.frame().is_none());
+    }
+
+    /// Asserts that clearing when nothing is selected reports no change and
+    /// owes no frame.
+    ///
+    /// Case: the user clicks in the terminal with no selection active, and
+    /// the host sends its usual clear.
+    #[test]
+    fn a_clear_without_a_selection_is_a_no_op() {
+        let mut vt = filled();
+        assert!(!vt.clear_selection());
+        assert!(vt.frame().is_none());
+    }
+
+    /// Asserts that clearing on an idle terminal emits a frame that drops
+    /// the selection and repaints no rows.
+    ///
+    /// Case: the user clicks elsewhere to dismiss a selection while the
+    /// shell is quiet.
+    #[test]
+    fn an_idle_clear_emits_a_frame_without_the_selection() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.frame();
+        assert!(vt.clear_selection());
+        assert_rowless_frame(&mut vt, None);
+    }
+
+    /// Asserts that a second clear finds nothing to drop.
+    ///
+    /// Case: the host sends a clear on every click, and the user clicks
+    /// twice after dismissing a selection.
+    #[test]
+    fn a_repeated_clear_is_a_no_op() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        assert!(vt.clear_selection());
+        assert!(!vt.clear_selection());
+    }
+
+    /// Asserts that a Lines start on an idle terminal emits a frame that
+    /// carries the new range and repaints no rows.
+    ///
+    /// Case: the user triple-clicks a row while the shell is quiet.
+    #[test]
+    fn an_idle_start_emits_a_rowless_frame_carrying_the_selection() {
+        let mut vt = filled();
+        assert!(vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines));
+        assert_rowless_frame(
+            &mut vt,
+            Some(range((0, 0), (0, 3), SelectionGeometry::Lines)),
+        );
+    }
+
+    /// Asserts that a start while a selection is active replaces it rather
+    /// than extending or keeping it.
+    ///
+    /// Case: with two rows selected, the user triple-clicks a different row.
+    #[test]
+    fn a_start_replaces_the_active_selection() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.extend_selection(cell(1, 0), CellSide::Left);
+        assert!(vt.start_selection(cell(2, 1), CellSide::Left, SelectionKind::Lines));
+        assert_eq!(
+            projected(&vt),
+            Some(range((2, 0), (2, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that an anchor on the right half of a cell starts the
+    /// selection on the following cell.
+    ///
+    /// Case: the user presses on the right half of column 1 and drags to
+    /// the left half of column 3.
+    #[test]
+    fn a_right_side_anchor_starts_on_the_next_boundary() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 1), CellSide::Right, SelectionKind::Simple);
+        assert!(vt.extend_selection(cell(0, 3), CellSide::Left));
+        assert_eq!(
+            projected(&vt),
+            Some(range((0, 2), (0, 2), SelectionGeometry::Linear))
+        );
+    }
+
+    /// Asserts that an extend with no active selection reports no change
+    /// and creates nothing.
+    ///
+    /// Case: a drag update arrives after a click elsewhere already cleared
+    /// the selection.
+    #[test]
+    fn an_extend_without_a_selection_is_a_no_op() {
+        let mut vt = filled();
+        assert!(!vt.extend_selection(cell(0, 2), CellSide::Right));
+        assert_eq!(projected(&vt), None);
+        assert!(vt.frame().is_none());
+    }
+
+    /// Asserts that dragging the moving end to the right projects the cells
+    /// from the anchor through the cell under the pointer.
+    ///
+    /// Case: the user presses on the first cell of a row and drags across
+    /// two more.
+    #[test]
+    fn a_forward_extend_projects_the_span() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Simple);
+        assert!(vt.extend_selection(cell(0, 2), CellSide::Right));
+        assert_eq!(
+            projected(&vt),
+            Some(range((0, 0), (0, 2), SelectionGeometry::Linear))
+        );
+    }
+
+    /// Asserts that extending an idle terminal's selection emits a frame
+    /// that carries the new range and repaints no rows.
+    ///
+    /// Case: the shell is quiet while the user keeps dragging.
+    #[test]
+    fn an_idle_extend_emits_a_rowless_frame() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Simple);
+        vt.extend_selection(cell(0, 2), CellSide::Right);
+        vt.frame();
+        assert!(vt.extend_selection(cell(0, 3), CellSide::Right));
+        assert_rowless_frame(
+            &mut vt,
+            Some(range((0, 0), (0, 3), SelectionGeometry::Linear)),
+        );
+    }
+
+    /// Asserts that dragging above and left of the anchor swaps the ends so
+    /// the projected range still reads top-left to bottom-right.
+    ///
+    /// Case: the user presses in the middle of the second row and drags up
+    /// into the first.
+    #[test]
+    fn a_backward_drag_normalizes_the_endpoints() {
+        let mut vt = filled();
+        vt.start_selection(cell(1, 2), CellSide::Left, SelectionKind::Simple);
+        assert!(vt.extend_selection(cell(0, 1), CellSide::Left));
+        assert_eq!(
+            projected(&vt),
+            Some(range((0, 1), (1, 1), SelectionGeometry::Linear))
+        );
+    }
+
+    /// Asserts that an extend to the same cell boundary the moving end already
+    /// occupies reports no change, even when the column and side differ.
+    ///
+    /// Case: the pointer crosses from the right half of one cell into the
+    /// left half of the next without moving the boundary.
+    #[test]
+    fn an_extend_to_the_same_boundary_is_a_no_op() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 1), CellSide::Right, SelectionKind::Simple);
+        vt.frame();
+        assert!(!vt.extend_selection(cell(0, 2), CellSide::Left));
+        assert!(vt.frame().is_none());
+    }
+
+    /// Asserts that an anchor on the right edge of a row begins the range on
+    /// the first cell of the row below.
+    ///
+    /// Case: the user presses on the right half of the last column and drags
+    /// down into the next row.
+    #[test]
+    fn a_right_edge_anchor_wraps_to_the_next_row() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 3), CellSide::Right, SelectionKind::Simple);
+        assert!(vt.extend_selection(cell(1, 1), CellSide::Right));
+        assert_eq!(
+            projected(&vt),
+            Some(range((1, 0), (1, 1), SelectionGeometry::Linear))
+        );
+    }
+
+    /// Asserts that a moving end on the left edge of a row ends the range on
+    /// the last cell of the row above.
+    ///
+    /// Case: the user drags down and lands on the left half of the first
+    /// column of the next row.
+    #[test]
+    fn a_left_edge_end_wraps_to_the_previous_row() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 1), CellSide::Left, SelectionKind::Simple);
+        assert!(vt.extend_selection(cell(1, 0), CellSide::Left));
+        assert_eq!(
+            projected(&vt),
+            Some(range((0, 1), (0, 3), SelectionGeometry::Linear))
+        );
+    }
+
+    /// Asserts that a range whose ends wrap past each other projects nothing.
+    ///
+    /// Case: the user presses on the right half of the last column and drags
+    /// onto the left half of the first column of the next row.
+    #[test]
+    fn a_wrap_that_crosses_itself_is_empty() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 3), CellSide::Right, SelectionKind::Simple);
+        assert!(vt.extend_selection(cell(1, 0), CellSide::Left));
+        assert_eq!(projected(&vt), None);
+    }
+
+    /// Asserts that a Lines drag spans whole rows from the anchor's row to
+    /// the pointer's row regardless of the columns involved.
+    ///
+    /// Case: the user triple-clicks a row and drags two rows down.
+    #[test]
+    fn a_lines_extend_takes_whole_rows() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 2), CellSide::Left, SelectionKind::Lines);
+        assert!(vt.extend_selection(cell(2, 1), CellSide::Left));
+        assert_eq!(
+            projected(&vt),
+            Some(range((0, 0), (2, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that moving the end of a Lines selection within its row
+    /// changes the state but owes no frame.
+    ///
+    /// Case: the user drags sideways inside the triple-clicked row.
+    #[test]
+    fn a_column_only_move_under_lines_changes_no_projection() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 2), CellSide::Left, SelectionKind::Lines);
+        vt.frame();
+        assert!(vt.extend_selection(cell(0, 3), CellSide::Right));
+        assert!(vt.frame().is_none());
+    }
+
+    /// Asserts that an extend to a line the ring does not hold is rejected
+    /// and leaves the moving end where it was.
+    ///
+    /// Case: the drag reaches above the viewport on a terminal with no
+    /// scrollback yet.
+    #[test]
+    fn an_extend_to_a_line_outside_the_ring_is_rejected() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Simple);
+        vt.extend_selection(cell(0, 2), CellSide::Right);
+        assert!(!vt.extend_selection(cell(-1, 0), CellSide::Left));
+        assert_eq!(
+            projected(&vt),
+            Some(range((0, 0), (0, 2), SelectionGeometry::Linear))
+        );
+    }
+
+    /// Asserts that an extend whose column is past the grid width is
+    /// rejected rather than folded onto the row's right edge.
+    ///
+    /// Case: a shrink resize lands between the host's hit test and the drag
+    /// update reaching the terminal.
+    #[test]
+    fn an_extend_past_the_last_column_is_rejected() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Simple);
+        vt.extend_selection(cell(0, 2), CellSide::Right);
+        assert!(!vt.extend_selection(cell(0, 4), CellSide::Left));
+        assert_eq!(
+            projected(&vt),
+            Some(range((0, 0), (0, 2), SelectionGeometry::Linear))
+        );
+    }
+
+    /// Asserts that a drag into scrollback the ring still holds extends the
+    /// selection there.
+    ///
+    /// Case: the user triple-clicks the top live row and drags up into the
+    /// history the terminal has retained.
+    #[test]
+    fn an_extend_into_history_is_accepted() {
+        let mut vt = filled();
+        vt.interpret(b"\r\n\r\n");
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        assert!(vt.extend_selection(cell(-2, 0), CellSide::Left));
+        assert_eq!(
+            projected(&vt),
+            Some(range((-2, 0), (0, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a selection stays on the rows it was made on when output
+    /// pushes those rows into history.
+    ///
+    /// Case: the user has two lines selected when the shell prints two more.
+    #[test]
+    fn a_selection_follows_its_rows_into_history() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.extend_selection(cell(1, 0), CellSide::Left);
+        vt.interpret(b"\r\n\r\n");
+        assert_eq!(
+            projected(&vt),
+            Some(range((-2, 0), (-1, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a selection whose end lies past a shrunken width projects
+    /// onto the new last column instead of past the grid.
+    ///
+    /// Case: the user has a full row selected and narrows the window.
+    #[test]
+    fn a_width_shrink_clamps_the_projected_column() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Simple);
+        vt.extend_selection(cell(0, 3), CellSide::Right);
+        assert!(vt.resize(GridSize { cols: 2, rows: 3 }).is_some());
+        assert_eq!(
+            projected(&vt),
+            Some(range((0, 0), (0, 1), SelectionGeometry::Linear))
+        );
+    }
+
+    /// Asserts that a drag update after a clear has no selection to extend.
+    ///
+    /// Case: a stale drag update arrives after the click that cleared the
+    /// selection.
+    #[test]
+    fn an_extend_after_a_clear_is_a_no_op() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.clear_selection();
+        assert!(!vt.extend_selection(cell(1, 0), CellSide::Left));
+        assert_eq!(projected(&vt), None);
     }
 
     /// Asserts that a resize to the size the grid already has returns
@@ -568,5 +1072,187 @@ mod tests {
             !vt.remove_placements(&[a]),
             "a second removal names nothing"
         );
+    }
+
+    /// Asserts that a primary-screen selection is hidden while the alternate
+    /// screen is shown and comes back unchanged on return.
+    ///
+    /// Case: the user selects a shell line, opens a full-screen editor, and
+    /// quits it.
+    #[test]
+    fn a_primary_selection_hides_behind_the_alternate_screen() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\x1b[?1049h");
+        assert_eq!(projected(&vt), None);
+        vt.interpret(b"\x1b[?1049l");
+        assert_eq!(
+            projected(&vt),
+            Some(range((0, 0), (0, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a selection made on the alternate screen is dropped when
+    /// the terminal returns to the primary screen, so a later alternate
+    /// session does not inherit it.
+    ///
+    /// Case: the user selects a line inside a pager, quits it, and opens
+    /// another full-screen program.
+    #[test]
+    fn an_alternate_selection_is_discarded_on_return() {
+        let mut vt = filled();
+        vt.interpret(b"\x1b[?1049h");
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\x1b[?1049l");
+        assert_eq!(projected(&vt), None);
+        vt.interpret(b"\x1b[?1049h");
+        assert_eq!(projected(&vt), None);
+    }
+
+    /// Asserts that a reset on an otherwise blank grid still marks the chunk
+    /// damaged and emits a frame without the selection.
+    ///
+    /// Case: a blank terminal has a line selected when a program issues RIS.
+    #[test]
+    fn a_reset_clears_the_selection_and_reports_it() {
+        let mut vt = vt();
+        vt.frame();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.frame();
+        let output = vt.interpret(b"\x1bc");
+        assert!(output.damaged);
+        assert_eq!(vt.frame().expect("the reset emits").selection, None);
+    }
+
+    /// Asserts that a selection whose row has left the ring still counts as
+    /// present for `clear_selection`, even though it no longer projects.
+    ///
+    /// Case: on a terminal with no scrollback the user selects the top row,
+    /// the shell scrolls it away, and the user clicks to dismiss.
+    #[test]
+    fn a_clear_of_a_dead_selection_still_reports_true() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 0);
+        vt.interpret(b"abcd\r\nefgh\r\nijkl");
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\r\n");
+        assert_eq!(projected(&vt), None);
+        assert!(vt.clear_selection());
+    }
+
+    /// Asserts that a terminal with no selection has no text to copy.
+    ///
+    /// Case: the user presses the copy shortcut without having selected
+    /// anything.
+    #[test]
+    fn no_selection_yields_no_text() {
+        let vt = filled();
+        assert_eq!(vt.selection_text(), None);
+    }
+
+    /// Asserts that a single-row Simple selection reads exactly the cells
+    /// between its two boundaries.
+    ///
+    /// Case: the user drags across the middle two characters of a word.
+    #[test]
+    fn a_simple_span_reads_the_cells_between_its_ends() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 1), CellSide::Left, SelectionKind::Simple);
+        vt.extend_selection(cell(0, 2), CellSide::Right);
+        assert_eq!(vt.selection_text().as_deref(), Some("bc"));
+    }
+
+    /// Asserts that a Simple selection spanning three rows takes the tail of
+    /// the first, the whole middle row, and the head of the last, joined by
+    /// newlines with none at the end.
+    ///
+    /// Case: the user drags from the middle of one line down into the
+    /// middle of the line two below it.
+    #[test]
+    fn a_multi_row_span_joins_rows_with_newlines() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 2), CellSide::Left, SelectionKind::Simple);
+        vt.extend_selection(cell(2, 1), CellSide::Right);
+        assert_eq!(vt.selection_text().as_deref(), Some("cd\nefgh\nij"));
+    }
+
+    /// Asserts that the blank cells past a row's last printed character are
+    /// not copied.
+    ///
+    /// Case: the user selects two short lines on a wide terminal.
+    #[test]
+    fn trailing_blanks_are_trimmed_per_row() {
+        let mut vt = vt();
+        vt.interpret(b"ab\r\ncd");
+        vt.frame();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.extend_selection(cell(1, 0), CellSide::Left);
+        assert_eq!(vt.selection_text().as_deref(), Some("ab\ncd"));
+    }
+
+    /// Asserts that a Lines selection copies whole rows regardless of the
+    /// columns the drag touched.
+    ///
+    /// Case: the user triple-clicks a line and drags into the next.
+    #[test]
+    fn a_lines_selection_reads_whole_rows() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 2), CellSide::Left, SelectionKind::Lines);
+        vt.extend_selection(cell(1, 1), CellSide::Left);
+        assert_eq!(vt.selection_text().as_deref(), Some("abcd\nefgh"));
+    }
+
+    /// Asserts that a selection whose two ends sit on the same boundary
+    /// yields no text, matching the frame that paints nothing.
+    ///
+    /// Case: the user presses the mouse button and releases it without
+    /// crossing a cell.
+    #[test]
+    fn an_empty_simple_selection_yields_no_text() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 1), CellSide::Left, SelectionKind::Simple);
+        assert_eq!(vt.selection_text(), None);
+    }
+
+    /// Asserts that a selection whose row has been recycled out of the ring
+    /// yields no text rather than the row now in its place.
+    ///
+    /// Case: on a terminal with no scrollback the user selects the top row
+    /// and the shell scrolls it away before the copy.
+    #[test]
+    fn a_selection_whose_line_left_the_ring_yields_no_text() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 0);
+        vt.interpret(b"abcd\r\nefgh\r\nijkl");
+        vt.frame();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\r\n");
+        assert_eq!(vt.selection_text(), None);
+    }
+
+    /// Asserts that the copied text is the row the user selected, not the
+    /// row that has since scrolled into its screen position.
+    ///
+    /// Case: the user selects a line and the shell prints two more before
+    /// the copy shortcut lands.
+    #[test]
+    fn the_text_follows_the_rows_after_a_scroll() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\r\n\r\n");
+        assert_eq!(vt.selection_text().as_deref(), Some("abcd"));
+    }
+
+    /// Asserts that a primary-screen selection yields no text while the
+    /// alternate screen is shown and its text again once it is back.
+    ///
+    /// Case: the user selects a shell line, opens a pager, presses copy
+    /// inside it, quits, and presses copy again.
+    #[test]
+    fn a_hidden_primary_selection_yields_no_text() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\x1b[?1049h");
+        assert_eq!(vt.selection_text(), None);
+        vt.interpret(b"\x1b[?1049l");
+        assert_eq!(vt.selection_text().as_deref(), Some("abcd"));
     }
 }

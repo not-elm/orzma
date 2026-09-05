@@ -7,7 +7,7 @@ pub(crate) mod coords;
 mod history_index;
 
 use crate::screen::cell::Cell;
-use crate::screen::grid::coords::{GridLine, ScreenLine};
+use crate::screen::grid::coords::{GridLine, GridPoint, ScreenLine};
 use crate::screen::grid::history_index::HistoryIndex;
 use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
@@ -215,6 +215,21 @@ impl Grid {
         self.rows[self.visible_index(line.0)].id
     }
 
+    /// The id of the row at an active-grid line; `None` when the line
+    /// is outside the ring.
+    pub fn line_id_at(&self, line: GridLine) -> Option<LineId> {
+        self.ring_index(line).map(|index| self.rows[index].id)
+    }
+
+    /// The id of the row a cell sits on; `None` when the cell's line is
+    /// outside the ring or its column is past the width.
+    pub fn line_id_at_point(&self, point: GridPoint) -> Option<LineId> {
+        if point.column.0 >= self.size.cols {
+            return None;
+        }
+        self.line_id_at(point.line)
+    }
+
     /// The active-grid line the row `id` now sits at; `None` once it has
     /// left the ring.
     ///
@@ -244,8 +259,9 @@ impl Grid {
     /// and `line < rows`. [`crate::screen::Screen`] guarantees that by
     /// clamping the viewport to the history it actually has.
     pub fn row(&self, line: GridLine) -> &Row<Cell> {
-        let index = i64::from(self.history_len() as u32) + i64::from(line.0);
-        let index = usize::try_from(index).expect("the line resolves inside the ring");
+        let index = self
+            .ring_index(line)
+            .expect("the line resolves inside the ring");
         &self.rows[index].cells
     }
 
@@ -342,6 +358,13 @@ impl Grid {
         self.history_len() + usize::from(line)
     }
 
+    /// The ring index of an active-grid line; `None` outside the ring.
+    fn ring_index(&self, line: GridLine) -> Option<usize> {
+        let index = i64::from(self.history_len() as u32) + i64::from(line.0);
+        let index = usize::try_from(index).ok()?;
+        (index < self.rows.len()).then_some(index)
+    }
+
     /// Checks that the history index names exactly the history rows, each
     /// at its ring index, and no visible row.
     #[cfg(test)]
@@ -381,11 +404,45 @@ mod tests {
         Grid::new(GridSize { cols: 4, rows }, max_history)
     }
 
+    fn grid_with_history(history_rows: usize) -> Grid {
+        let mut grid = Grid::new(GridSize { cols: 4, rows: 3 }, 10);
+        for _ in 0..history_rows {
+            grid.scroll_up_one(ScreenLine(0), ScreenLine(2), Cell::default());
+        }
+        grid
+    }
+
     /// Scrolls with the margins a screen carries before any `DECSTBM`,
     /// which is the region every history assertion below is about.
     fn scroll_up_whole_screen(grid: &mut Grid, fill: Cell) {
         let bottom = ScreenLine(grid.size().rows - 1);
         grid.scroll_up_one(ScreenLine(0), bottom, fill);
+    }
+
+    /// Asserts that a screen line and a history line both resolve to an
+    /// id that `grid_line` maps back to the same line.
+    ///
+    /// Case: the host names a cell by its active-grid line and the VT
+    /// needs the row identity behind it, on the live screen and in
+    /// scrollback alike.
+    #[test]
+    fn line_id_at_round_trips_through_grid_line() {
+        let grid = grid_with_history(2);
+        for line in [-2, -1, 0, 2] {
+            let id = grid.line_id_at(GridLine(line)).expect("inside the ring");
+            assert_eq!(grid.grid_line(id), Some(GridLine(line)));
+        }
+    }
+
+    /// Asserts that a line above the retained history or below the
+    /// screen resolves to `None`.
+    ///
+    /// Case: a request names a row the terminal has since trimmed.
+    #[test]
+    fn line_id_at_rejects_lines_outside_the_ring() {
+        let grid = grid_with_history(2);
+        assert_eq!(grid.line_id_at(GridLine(-3)), None);
+        assert_eq!(grid.line_id_at(GridLine(3)), None);
     }
 
     /// Asserts that a resize to the size the grid already has reports

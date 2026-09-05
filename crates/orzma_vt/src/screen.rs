@@ -52,6 +52,9 @@ use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::placements::ScreenPlacements;
+use crate::screen::selection::{
+    CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionKind, SelectionRange,
+};
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
 use crate::screen::viewport::{DisplayOffset, Scroll, Viewport, ViewportLine};
@@ -73,6 +76,7 @@ pub struct Screen {
     character_set_mapping: CharacterSetMapping,
     checkpoint: Checkpoint,
     placements: ScreenPlacements,
+    selection: ScreenSelection,
 }
 
 /// Span selector for [`Screen::erase_in_line`] (`CSI K`).
@@ -140,6 +144,7 @@ impl Screen {
             character_set_mapping: CharacterSetMapping::default(),
             checkpoint: Checkpoint::default(),
             placements: ScreenPlacements::new(),
+            selection: ScreenSelection::new(),
         }
     }
 }
@@ -785,6 +790,20 @@ impl Screen {
         }
     }
 
+    /// The selection as an emitted frame carries it: normalized,
+    /// cell-side trimmed, in active-grid coordinates; `None` when there
+    /// is no selection, its span is empty, or an endpoint's row has
+    /// left the ring.
+    pub fn selection_range(&self) -> Option<SelectionRange> {
+        match self
+            .selection
+            .resolve(|id| self.grid.grid_line(id), self.grid.size().cols)
+        {
+            Resolved::Range(range) => Some(range),
+            Resolved::None | Resolved::Empty => None,
+        }
+    }
+
     /// The id of the row the cursor sits on — the anchor a mount samples.
     pub fn cursor_line_id(&self) -> LineId {
         self.grid.line_id(self.state.line)
@@ -872,7 +891,9 @@ impl Screen {
     /// Reports [`DamageSpan::Full`], or nothing when the grid was
     /// already blank and carried no history; the cursor homes either
     /// way, because cursor motion reaches the renderer through the
-    /// per-chunk cursor diff rather than through damage.
+    /// per-chunk cursor diff rather than through damage. A selection the
+    /// reset drops also reports `Full`, so the frame that no longer
+    /// carries it is owed even on a blank grid.
     ///
     /// # Invariants
     ///
@@ -892,7 +913,8 @@ impl Screen {
     ///
     /// - `RIS` (`ESC c`) — its screen-scoped actions
     pub fn reset(&mut self) -> Option<DamageSpan> {
-        let dirty = !self.grid.is_blank();
+        let cleared = self.selection.clear();
+        let dirty = !self.grid.is_blank() || cleared;
         self.grid.reset();
         self.viewport = Viewport::default();
         self.scroll_region = ScrollRegion::new(self.grid.size().rows);
@@ -1087,6 +1109,77 @@ impl Screen {
     pub fn evict_lost_anchors(&mut self) -> Vec<InstanceId> {
         self.placements
             .evict_lost_anchors(|anchor| self.grid.grid_line(anchor))
+    }
+}
+
+/// The selection this screen owns.
+///
+/// The endpoints are resolved through the same expression
+/// [`Self::project_placements`] passes for anchors, so a selection can
+/// only ever be resolved against the grid that minted its rows.
+impl Screen {
+    /// Anchors a new selection at `cell`, replacing any active one;
+    /// returns whether the state changed. A cell outside the grid is
+    /// rejected and leaves the current selection untouched.
+    pub fn start_selection(
+        &mut self,
+        cell: GridPoint,
+        side: CellSide,
+        kind: SelectionKind,
+    ) -> bool {
+        let Some(end) = self.selection_end(cell, side) else {
+            return false;
+        };
+        self.selection.start(end, kind)
+    }
+
+    /// Moves the active selection's moving end to `cell`; returns
+    /// whether it moved. A no-op without an active selection or for a
+    /// cell outside the grid.
+    pub fn extend_selection(&mut self, cell: GridPoint, side: CellSide) -> bool {
+        let Some(end) = self.selection_end(cell, side) else {
+            return false;
+        };
+        self.selection.extend(end)
+    }
+
+    /// Drops the active selection; returns whether there was one, even
+    /// one whose rows have already left the ring.
+    pub fn clear_selection(&mut self) -> bool {
+        self.selection.clear()
+    }
+
+    /// The text the active selection covers, row by row; `None` exactly
+    /// when [`Self::selection_range`] is `None`.
+    ///
+    /// Each row's span comes from [`SelectionRange::span_on`], with
+    /// trailing blanks trimmed. Rows are joined by `\n` with none after
+    /// the last.
+    // TODO: Join soft-wrapped rows without a newline once `Row` records
+    // the wrap.
+    pub fn selection_text(&self) -> Option<String> {
+        let range = self.selection_range()?;
+        let last_column = self.grid.size().cols - 1;
+        let mut text = String::new();
+        for line in range.start.line.0..=range.end.line.0 {
+            let (first, last) = range.span_on(line, last_column);
+            let row = self.grid.row(GridLine(line));
+            let row_text: String = (first..=last)
+                .map(|column| row[GridColumn(column)].c)
+                .collect();
+            if line != range.start.line.0 {
+                text.push('\n');
+            }
+            text.push_str(row_text.trim_end());
+        }
+        Some(text)
+    }
+
+    /// The endpoint a host cell stands for; `None` when the cell is
+    /// outside the ring or past the width.
+    fn selection_end(&self, cell: GridPoint, side: CellSide) -> Option<SelectionEnd> {
+        let line = self.grid.line_id_at_point(cell)?;
+        Some(SelectionEnd::at(line, cell.column, side))
     }
 }
 

@@ -167,6 +167,30 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
+    /// Anchors a selection, arming the coalescer only when the VT's
+    /// state changed so an unchanged frame is not woken.
+    pub fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) {
+        if self.vt.start_selection(cell, side, kind) {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
+    }
+
+    /// Moves the selection's moving end, arming the coalescer only when
+    /// it moved.
+    pub fn extend_selection(&mut self, cell: GridPoint, side: CellSide) {
+        if self.vt.extend_selection(cell, side) {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
+    }
+
+    /// Drops the selection, arming the coalescer only when there was
+    /// one.
+    pub fn clear_selection(&mut self) {
+        if self.vt.clear_selection() {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
+    }
+
     /// Resizes both the PTY (kernel winsize) and the VT grid, then arms
     /// the coalescer so the new geometry repaints at the next deadline
     /// even on an otherwise idle terminal.
@@ -565,6 +589,29 @@ mod tests {
     fn resize_arms_the_coalescer() {
         let (mut term, _sink) = detached_term();
         term.resize(120, 40).expect("resize");
+        assert!(term.coalescer.is_armed());
+    }
+
+    /// Asserts that a selection operation the VT reports as a change arms
+    /// the coalescer, and one it reports as unchanged does not.
+    ///
+    /// Case: the user starts a selection on an idle shell, then the host
+    /// re-sends a request the VT treats as a no-op.
+    #[test]
+    fn selection_operations_arm_the_coalescer_only_on_a_change() {
+        let (mut term, _sink) = detached_term();
+        let cell = GridPoint {
+            line: GridLine(0),
+            column: GridColumn(0),
+        };
+        term.vt.selection_changes = false;
+        term.start_selection(cell, CellSide::Left, SelectionKind::Simple);
+        term.extend_selection(cell, CellSide::Right);
+        term.clear_selection();
+        assert!(!term.coalescer.is_armed());
+
+        term.vt.selection_changes = true;
+        term.start_selection(cell, CellSide::Left, SelectionKind::Simple);
         assert!(term.coalescer.is_armed());
     }
 
