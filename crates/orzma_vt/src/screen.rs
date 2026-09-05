@@ -52,6 +52,9 @@ use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::placements::ScreenPlacements;
+use crate::screen::selection::{
+    CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionKind, SelectionRange,
+};
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
 use crate::screen::viewport::{DisplayOffset, Scroll, Viewport, ViewportLine};
@@ -73,6 +76,7 @@ pub struct Screen {
     character_set_mapping: CharacterSetMapping,
     checkpoint: Checkpoint,
     placements: ScreenPlacements,
+    selection: ScreenSelection,
 }
 
 /// Span selector for [`Screen::erase_in_line`] (`CSI K`).
@@ -140,6 +144,7 @@ impl Screen {
             character_set_mapping: CharacterSetMapping::default(),
             checkpoint: Checkpoint::default(),
             placements: ScreenPlacements::new(),
+            selection: ScreenSelection::new(),
         }
     }
 }
@@ -785,6 +790,20 @@ impl Screen {
         }
     }
 
+    /// The selection as an emitted frame carries it: normalized,
+    /// cell-side trimmed, in active-grid coordinates; `None` when there
+    /// is no selection, its span is empty, or an endpoint's row has
+    /// left the ring.
+    pub fn selection_range(&self) -> Option<SelectionRange> {
+        match self
+            .selection
+            .resolve(|id| self.grid.grid_line(id), self.grid.size().cols)
+        {
+            Resolved::Range(range) => Some(range),
+            Resolved::None | Resolved::Empty => None,
+        }
+    }
+
     /// The id of the row the cursor sits on — the anchor a mount samples.
     pub fn cursor_line_id(&self) -> LineId {
         self.grid.line_id(self.state.line)
@@ -1087,6 +1106,38 @@ impl Screen {
     pub fn evict_lost_anchors(&mut self) -> Vec<InstanceId> {
         self.placements
             .evict_lost_anchors(|anchor| self.grid.grid_line(anchor))
+    }
+}
+
+/// The selection this screen owns.
+///
+/// The endpoints are resolved through the same expression
+/// [`Self::project_placements`] passes for anchors, so a selection can
+/// only ever be resolved against the grid that minted its rows.
+impl Screen {
+    /// Anchors a new selection at `cell`, replacing any active one;
+    /// returns whether the state changed. A cell outside the grid is
+    /// rejected and leaves the current selection untouched.
+    pub fn start_selection(
+        &mut self,
+        cell: GridPoint,
+        side: CellSide,
+        kind: SelectionKind,
+    ) -> bool {
+        let Some(end) = self.selection_end(cell, side) else {
+            return false;
+        };
+        self.selection.start(end, kind)
+    }
+
+    /// The endpoint a host cell stands for; `None` when the cell is
+    /// outside the ring or past the width.
+    fn selection_end(&self, cell: GridPoint, side: CellSide) -> Option<SelectionEnd> {
+        if cell.column.0 >= self.grid.size().cols {
+            return None;
+        }
+        let line = self.grid.line_id_at(cell.line)?;
+        Some(SelectionEnd::at(line, cell.column, side))
     }
 }
 

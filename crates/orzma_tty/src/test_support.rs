@@ -3,7 +3,8 @@
 //! the resize seam.
 
 use orzma_vt::prelude::{
-    DisplayOffset, Frame, GridSize, InstanceId, InterpretOutput, ResizeChanged, Scroll, Vt, VtModes,
+    CellSide, DisplayOffset, Frame, GridPoint, GridSize, InstanceId, InterpretOutput,
+    ResizeChanged, Scroll, SelectionKind, Vt, VtModes,
 };
 #[cfg(any(test, feature = "test-support"))]
 use portable_pty::{MasterPty, PtySize};
@@ -134,6 +135,10 @@ impl Vt for FakeVt {
         } else {
             self.scroll_moves
         }
+    }
+
+    fn start_selection(&mut self, _cell: GridPoint, _side: CellSide, _kind: SelectionKind) -> bool {
+        false
     }
 
     fn grid_size(&self) -> GridSize {

@@ -11,6 +11,8 @@ use crate::{
     interpreter::Interpreter,
     placement::{InstanceId, PlacementSize},
     screen::grid::GridSize,
+    screen::grid::coords::GridPoint,
+    screen::selection::{CellSide, SelectionKind},
     screen::viewport::{DisplayOffset, Scroll},
 };
 use std::path::PathBuf;
@@ -167,6 +169,16 @@ pub trait Vt {
     /// Applies the viewport motion; returns whether the viewport
     /// moved. Only a real move stages (full) damage.
     fn scroll(&mut self, scroll: Scroll) -> bool;
+
+    /// Anchors a new selection at `cell`, replacing any active one;
+    /// returns whether the selection state changed. A cell outside the
+    /// grid (a line already evicted from history, or a column past the
+    /// width) is rejected, leaving the current selection untouched.
+    ///
+    /// The return value reports the stored state, not the projection:
+    /// a start whose projection is empty still returns `true`, and the
+    /// emit-time diff decides on its own whether a frame is owed.
+    fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool;
 
     /// Grid dimensions in cells.
     fn grid_size(&self) -> GridSize;
@@ -352,6 +364,12 @@ impl Vt for OrzmaVt {
         self.tracker.stage_if_changed(self.device.scroll(scroll))
     }
 
+    fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool {
+        self.device
+            .active_screen_mut()
+            .start_selection(cell, side, kind)
+    }
+
     fn grid_size(&self) -> GridSize {
         self.device.grid_size()
     }
@@ -369,11 +387,131 @@ impl Vt for OrzmaVt {
 mod tests {
     use super::*;
     use crate::placement::{InstanceId, PlacementSize};
-    use crate::screen::grid::coords::GridLine;
+    use crate::screen::grid::coords::{GridColumn, GridLine};
+    use crate::screen::selection::{SelectionGeometry, SelectionRange};
     use crate::screen::viewport::ViewportLine;
 
     fn vt() -> OrzmaVt {
         OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10)
+    }
+
+    /// A 4×3 terminal whose rows read `abcd` / `efgh` / `ijkl`, with the
+    /// bootstrap frame already drained.
+    fn filled() -> OrzmaVt {
+        let mut vt = vt();
+        vt.interpret(b"abcd\r\nefgh\r\nijkl");
+        vt.frame();
+        vt
+    }
+
+    fn cell(line: i32, column: u16) -> GridPoint {
+        GridPoint {
+            line: GridLine(line),
+            column: GridColumn(column),
+        }
+    }
+
+    /// The selection the active screen projects right now, read without
+    /// consuming a frame.
+    fn projected(vt: &OrzmaVt) -> Option<SelectionRange> {
+        vt.device.active_screen().selection_range()
+    }
+
+    fn range(start: (i32, u16), end: (i32, u16), geometry: SelectionGeometry) -> SelectionRange {
+        SelectionRange {
+            start: cell(start.0, start.1),
+            end: cell(end.0, end.1),
+            geometry,
+        }
+    }
+
+    /// Asserts that a Lines start projects the anchored row from its first
+    /// to its last column.
+    ///
+    /// Case: the user triple-clicks the middle row of the terminal.
+    #[test]
+    fn a_lines_start_projects_the_whole_row() {
+        let mut vt = filled();
+        assert!(vt.start_selection(cell(1, 2), CellSide::Left, SelectionKind::Lines));
+        assert_eq!(
+            projected(&vt),
+            Some(range((1, 0), (1, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a start identical to the active selection reports no
+    /// change and owes no frame.
+    ///
+    /// Case: the host re-fires the same start request for a repeated
+    /// triple-click on the row that is already selected.
+    #[test]
+    fn an_identical_start_is_a_no_op() {
+        let mut vt = filled();
+        vt.start_selection(cell(1, 0), CellSide::Left, SelectionKind::Lines);
+        vt.frame();
+        assert!(!vt.start_selection(cell(1, 0), CellSide::Left, SelectionKind::Lines));
+        assert!(vt.frame().is_none());
+    }
+
+    /// Asserts that a start on a line the ring does not hold is rejected and
+    /// leaves the active selection untouched.
+    ///
+    /// Case: the press was hit-tested against a frame that still showed a
+    /// history row, which the terminal has since trimmed away.
+    #[test]
+    fn a_start_on_a_line_outside_the_ring_is_rejected() {
+        let mut vt = filled();
+        vt.start_selection(cell(1, 0), CellSide::Left, SelectionKind::Lines);
+        assert!(!vt.start_selection(cell(-1, 0), CellSide::Left, SelectionKind::Lines));
+        assert_eq!(
+            projected(&vt),
+            Some(range((1, 0), (1, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a start whose column is past the grid width is rejected
+    /// even for a Lines selection that would ignore the column.
+    ///
+    /// Case: a shrink resize lands between the host's hit test and the
+    /// request reaching the terminal.
+    #[test]
+    fn a_start_past_the_last_column_is_rejected() {
+        let mut vt = filled();
+        vt.start_selection(cell(1, 0), CellSide::Left, SelectionKind::Lines);
+        assert!(!vt.start_selection(cell(0, 4), CellSide::Left, SelectionKind::Lines));
+        assert_eq!(
+            projected(&vt),
+            Some(range((1, 0), (1, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a start on a history line the ring still holds is
+    /// accepted and projects there.
+    ///
+    /// Case: the user scrolls back and triple-clicks a row that has already
+    /// left the live screen.
+    #[test]
+    fn a_start_on_a_history_line_is_accepted() {
+        let mut vt = filled();
+        vt.interpret(b"\r\n\r\n");
+        assert!(vt.start_selection(cell(-1, 0), CellSide::Left, SelectionKind::Lines));
+        assert_eq!(
+            projected(&vt),
+            Some(range((-1, 0), (-1, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a fresh Simple start returns `true` even though its
+    /// empty projection leaves `frame()` with nothing to emit.
+    ///
+    /// Case: the user presses the mouse button on a cell and the host
+    /// anchors a selection before the pointer has moved.
+    #[test]
+    fn a_fresh_simple_start_changes_state_but_projects_nothing() {
+        let mut vt = filled();
+        assert!(vt.start_selection(cell(0, 1), CellSide::Left, SelectionKind::Simple));
+        assert_eq!(projected(&vt), None);
+        assert!(vt.frame().is_none());
     }
 
     /// Asserts that a resize to the size the grid already has returns
