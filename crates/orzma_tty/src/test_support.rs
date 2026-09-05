@@ -51,7 +51,9 @@ impl Write for CaptureSink {
 /// size did not change) and names the next scripted `evictions` entry
 /// when it did. `scroll` records the motion:
 /// `Scroll::Bottom` snaps `display_offset` to zero, every other motion
-/// returns the scripted `scroll_moves`.
+/// returns the scripted `scroll_moves`. The selection operations return
+/// the scripted `selection_changes` and `selection_text` is always
+/// `None`.
 pub struct FakeVt {
     /// Grid size reported and updated by `resize`.
     pub grid_size: GridSize,
@@ -61,6 +63,8 @@ pub struct FakeVt {
     pub modes: VtModes,
     /// Scripted return for non-`Bottom` scrolls.
     pub scroll_moves: bool,
+    /// Scripted return for the selection operations.
+    pub selection_changes: bool,
     /// Every chunk `interpret` received, in order.
     pub interpreted: Vec<Vec<u8>>,
     /// Every motion `scroll` received, in order.
@@ -86,6 +90,7 @@ impl FakeVt {
             display_offset: DisplayOffset(0),
             modes: VtModes::default(),
             scroll_moves: false,
+            selection_changes: false,
             interpreted: Vec::new(),
             scrolls: Vec::new(),
             resizes: Vec::new(),
@@ -138,15 +143,15 @@ impl Vt for FakeVt {
     }
 
     fn start_selection(&mut self, _cell: GridPoint, _side: CellSide, _kind: SelectionKind) -> bool {
-        false
+        self.selection_changes
     }
 
     fn extend_selection(&mut self, _cell: GridPoint, _side: CellSide) -> bool {
-        false
+        self.selection_changes
     }
 
     fn clear_selection(&mut self) -> bool {
-        false
+        self.selection_changes
     }
 
     fn selection_text(&self) -> Option<String> {
