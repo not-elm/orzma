@@ -5036,6 +5036,7 @@ dependencies = [
  "orzma_vt",
  "portable-pty",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

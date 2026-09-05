@@ -4,7 +4,7 @@
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use bevy_orzma_tty::OrzmaTtyHandle;
-use orzma_tty::{EnvKey, EnvValue, SpawnOptions};
+use orzma_tty::{CellPixels, EnvKey, EnvValue, SpawnOptions};
 use std::path::PathBuf;
 
 /// Shell override resource.
@@ -50,6 +50,7 @@ impl OrzmaTerminalBundle {
         let terminal = OrzmaTtyHandle::new(SpawnOptions {
             cols: 80,
             rows: 24,
+            cell_px: CellPixels::default(),
             shell,
             cwd: opts.cwd,
             env: opts

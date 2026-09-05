@@ -7,6 +7,7 @@ use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized};
 use bevy_orzma_tty::prelude::OrzmaTtyHandle;
+use orzma_tty::CellPixels;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 
 /// Registers the window-fill resize system.
@@ -64,7 +65,7 @@ fn resize_to_window(
         return;
     }
 
-    match handle.resize(cols, rows) {
+    match handle.resize(cols, rows, CellPixels::default()) {
         Ok(()) => last_size.0 = Some((cols, rows)),
         Err(e) => tracing::warn!(?e, cols, rows, "failed to resize orzma terminal"),
     }

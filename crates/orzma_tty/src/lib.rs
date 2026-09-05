@@ -17,6 +17,7 @@ use std::{mem, time::Instant};
 #[cfg(any(test, feature = "test-support"))]
 use test_support::RecordingMaster;
 
+mod cell_pixels;
 mod coalescer;
 mod error;
 mod input;
@@ -24,8 +25,10 @@ mod pty;
 mod signal;
 pub mod test_support;
 
+pub use cell_pixels::CellPixels;
+
 pub mod prelude {
-    pub use crate::{OrzmaTty, error::*, input::*, signal::*};
+    pub use crate::{CellPixels, OrzmaTty, error::*, input::*, signal::*};
 }
 
 /// Spawn parameters consumed exactly once by `OrzmaTty::spawn`.
@@ -34,6 +37,8 @@ pub struct SpawnOptions {
     pub cols: u16,
     /// Terminal row count.
     pub rows: u16,
+    /// Physical pixels per cell, projected onto the PTY winsize.
+    pub cell_px: CellPixels,
     /// Shell program to launch (absolute path or `$PATH`-resolvable name).
     pub shell: String,
     /// Initial working directory for the spawned shell.
@@ -191,9 +196,10 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
-    /// Resizes both the PTY (kernel winsize) and the VT grid, then arms
-    /// the coalescer so the new geometry repaints at the next deadline
-    /// even on an otherwise idle terminal.
+    /// Resizes both the PTY (kernel winsize, with `cell_px × cells` as
+    /// the pixel extent) and the VT grid, then arms the coalescer so the
+    /// new geometry repaints at the next deadline even on an otherwise
+    /// idle terminal.
     ///
     /// A request with a zero axis, or one exceeding `Self::MAX_COLS` /
     /// `Self::MAX_ROWS`, is ignored with `Ok` — neither clamped nor
@@ -208,11 +214,11 @@ impl<V: Vt> OrzmaTty<V> {
     /// The placements the new geometry strands reach the next pump as a
     /// [`VtSignal::WebviewEvicted`] signal; no PTY output is needed to
     /// carry them.
-    pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTtyResult {
+    pub fn resize(&mut self, cols: u16, rows: u16, cell_px: CellPixels) -> OrzmaTtyResult {
         if cols == 0 || rows == 0 || Self::MAX_COLS < cols || Self::MAX_ROWS < rows {
             return Ok(());
         }
-        self.pty.resize(cols, rows)?;
+        self.pty.resize(cols, rows, cell_px)?;
         self.resize_vt(GridSize { cols, rows });
         Ok(())
     }
@@ -468,7 +474,7 @@ mod tests {
         let mut term = OrzmaTty::detached(FakeVt::new(80, 24), 80, 24, Box::new(sink))
             .expect("OrzmaTty::detached");
 
-        term.resize(120, 40).expect("resize");
+        term.resize(120, 40, CellPixels::default()).expect("resize");
         let size = term.pty_size();
         assert_eq!((size.cols, size.rows), (120, 40));
 
@@ -487,7 +493,7 @@ mod tests {
     fn a_resize_eviction_reaches_the_next_pump() {
         let (mut tty, _sink) = detached_term();
         tty.vt.evictions.push_back(vec![InstanceId(7)]);
-        tty.resize(100, 30).expect("resize");
+        tty.resize(100, 30, CellPixels::default()).expect("resize");
         assert_eq!(
             tty.pump().signals,
             vec![TtySignal::Vt(VtSignal::WebviewEvicted {
@@ -555,7 +561,7 @@ mod tests {
     #[test]
     fn resize_applies_the_size_to_both_seams() {
         let (mut term, _sink) = detached_term();
-        term.resize(120, 40).expect("resize");
+        term.resize(120, 40, CellPixels::default()).expect("resize");
         assert_eq!(sizes(&term), ((120, 40), (120, 40)));
         assert_eq!(
             term.vt.resizes.last(),
@@ -577,7 +583,7 @@ mod tests {
     #[test]
     fn resize_does_not_write_through_the_pty_writer() {
         let (mut term, sink) = detached_term();
-        term.resize(120, 40).expect("resize");
+        term.resize(120, 40, CellPixels::default()).expect("resize");
         assert_eq!(sink.contents(), b"");
     }
 
@@ -588,7 +594,7 @@ mod tests {
     #[test]
     fn resize_arms_the_coalescer() {
         let (mut term, _sink) = detached_term();
-        term.resize(120, 40).expect("resize");
+        term.resize(120, 40, CellPixels::default()).expect("resize");
         assert!(term.coalescer.is_armed());
     }
 
@@ -626,10 +632,11 @@ mod tests {
     #[test]
     fn a_zero_axis_resize_is_ignored() {
         let (mut term, _sink) = detached_term();
-        term.resize(120, 40).expect("resize");
+        term.resize(120, 40, CellPixels::default()).expect("resize");
         let baseline = term.vt.resizes.len();
         for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
-            term.resize(cols, rows).expect("ignored resize must be Ok");
+            term.resize(cols, rows, CellPixels::default())
+                .expect("ignored resize must be Ok");
             assert_eq!(
                 sizes(&term),
                 ((120, 40), (120, 40)),
@@ -650,14 +657,16 @@ mod tests {
         const MAX_ROWS: u16 = OrzmaTty::<FakeVt>::MAX_ROWS;
         let (mut term, _sink) = detached_term();
         for (cols, rows) in [(MAX_COLS + 1, 24), (80, MAX_ROWS + 1)] {
-            term.resize(cols, rows).expect("ignored resize must be Ok");
+            term.resize(cols, rows, CellPixels::default())
+                .expect("ignored resize must be Ok");
             assert_eq!(
                 sizes(&term),
                 ((80, 24), (80, 24)),
                 "resize {cols}x{rows} must be ignored"
             );
         }
-        term.resize(MAX_COLS, 24).expect("resize");
+        term.resize(MAX_COLS, 24, CellPixels::default())
+            .expect("resize");
         assert_eq!(sizes(&term), ((MAX_COLS, 24), (MAX_COLS, 24)));
     }
 
@@ -667,8 +676,9 @@ mod tests {
     #[test]
     fn an_ignored_resize_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
-        term.resize(0, 40).expect("ignored resize must be Ok");
-        term.resize(OrzmaTty::<FakeVt>::MAX_COLS + 1, 24)
+        term.resize(0, 40, CellPixels::default())
+            .expect("ignored resize must be Ok");
+        term.resize(OrzmaTty::<FakeVt>::MAX_COLS + 1, 24, CellPixels::default())
             .expect("ignored resize must be Ok");
         assert!(!term.coalescer.is_armed());
     }
@@ -681,7 +691,8 @@ mod tests {
     #[test]
     fn a_same_size_resize_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
-        term.resize(80, 24).expect("same-size resize must be Ok");
+        term.resize(80, 24, CellPixels::default())
+            .expect("same-size resize must be Ok");
         assert!(!term.coalescer.is_armed());
     }
 
@@ -693,10 +704,11 @@ mod tests {
     #[test]
     fn a_same_size_resize_does_not_extend_the_deadline() {
         let (mut term, _sink) = detached_term();
-        term.resize(120, 40).expect("resize");
+        term.resize(120, 40, CellPixels::default()).expect("resize");
         let deadline = term.coalescer.next_deadline();
         assert!(deadline.is_some(), "precondition: a real resize arms");
-        term.resize(120, 40).expect("same-size resize must be Ok");
+        term.resize(120, 40, CellPixels::default())
+            .expect("same-size resize must be Ok");
         assert_eq!(term.coalescer.next_deadline(), deadline);
     }
 
@@ -707,8 +719,8 @@ mod tests {
     #[test]
     fn sequential_resizes_settle_on_the_last_size() {
         let (mut term, _sink) = detached_term();
-        term.resize(120, 40).expect("resize");
-        term.resize(90, 30).expect("resize");
+        term.resize(120, 40, CellPixels::default()).expect("resize");
+        term.resize(90, 30, CellPixels::default()).expect("resize");
         assert_eq!(sizes(&term), ((90, 30), (90, 30)));
     }
 
@@ -721,7 +733,7 @@ mod tests {
     #[test]
     fn a_failing_pty_resize_leaves_the_vt_untouched() {
         let mut term = failing_term();
-        let result = term.resize(120, 40);
+        let result = term.resize(120, 40, CellPixels::default());
         assert!(
             matches!(result, Err(OrzmaTtyError::PtyResize(_))),
             "expected PtyResize, got {result:?}"

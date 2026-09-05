@@ -1,9 +1,9 @@
 //! `RequestTtyResize`: the new grid size the host UI asks a terminal
 //! entity to adopt.
 
-use bevy::prelude::*;
-
 use crate::OrzmaTtyHandle;
+use bevy::prelude::*;
+use orzma_tty::CellPixels;
 
 /// Fired by the host UI to resize a specific terminal entity's grid.
 ///
@@ -29,7 +29,7 @@ impl Plugin for ResizePlugin {
 
 fn apply_resize(e: On<RequestTtyResize>, mut terms: Query<&mut OrzmaTtyHandle>) {
     if let Ok(mut tty) = terms.get_mut(e.terminal)
-        && let Err(e) = tty.resize(e.cols, e.rows)
+        && let Err(e) = tty.resize(e.cols, e.rows, CellPixels::default())
     {
         error!(%e);
     }
