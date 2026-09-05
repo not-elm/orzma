@@ -7,6 +7,7 @@
 
 use crate::{
     drain::DrainPlugin,
+    layout::LayoutPlugin,
     requests::OrzmaEventRequestPlugin,
     signals::OrzmaTtySignalPlugin,
     title::{TtyTitle, TtyTitlePlugin},
@@ -29,7 +30,7 @@ pub mod prelude {
     pub use crate::{
         MuxConnection, MuxPane, MuxSystems, OrzmaMuxPlugin, OrzmaTtyHandle, OrzmaTtyPlugin,
         drain::{MuxPaneSpawnFailed, MuxSessionEnded},
-        layout::CurrentLayout,
+        layout::{CurrentLayout, MuxActivePaneChanged, MuxSeparator, PaneGeometry, pane_node},
         registry::PaneRegistry,
         requests::*,
         signals::*,
@@ -121,6 +122,6 @@ pub struct OrzmaMuxPlugin;
 impl Plugin for OrzmaMuxPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, (MuxSystems::Drain, MuxSystems::ApplyLayout).chain())
-            .add_plugins((DrainPlugin, TtyTitlePlugin));
+            .add_plugins((DrainPlugin, LayoutPlugin, TtyTitlePlugin));
     }
 }
