@@ -53,7 +53,8 @@ use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::placements::ScreenPlacements;
 use crate::screen::selection::{
-    CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionKind, SelectionRange,
+    CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionGeometry, SelectionKind,
+    SelectionRange,
 };
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
@@ -1147,6 +1148,48 @@ impl Screen {
     /// one whose rows have already left the ring.
     pub fn clear_selection(&mut self) -> bool {
         self.selection.clear()
+    }
+
+    /// The text the active selection covers, row by row; `None` exactly
+    /// when [`Self::selection_range`] is `None`.
+    ///
+    /// Each row's span is the same one the range describes — a Linear
+    /// range takes the columns between its ends on the first and last
+    /// rows and whole rows between, a Lines range whole rows throughout —
+    /// with trailing blanks trimmed. Rows are joined by `\n` with none
+    /// after the last.
+    // TODO: Join soft-wrapped rows without a newline once `Row` records
+    // the wrap.
+    pub fn selection_text(&self) -> Option<String> {
+        let range = self.selection_range()?;
+        let last_column = self.grid.size().cols - 1;
+        let mut text = String::new();
+        for line in range.start.line.0..=range.end.line.0 {
+            let (first, last) = match range.geometry {
+                SelectionGeometry::Lines => (0, last_column),
+                SelectionGeometry::Linear | SelectionGeometry::Block => (
+                    if line == range.start.line.0 {
+                        range.start.column.0
+                    } else {
+                        0
+                    },
+                    if line == range.end.line.0 {
+                        range.end.column.0
+                    } else {
+                        last_column
+                    },
+                ),
+            };
+            let row = self.grid.row(GridLine(line));
+            let row_text: String = (first..=last)
+                .map(|column| row[GridColumn(column)].c)
+                .collect();
+            if line != range.start.line.0 {
+                text.push('\n');
+            }
+            text.push_str(row_text.trim_end());
+        }
+        Some(text)
     }
 
     /// The endpoint a host cell stands for; `None` when the cell is

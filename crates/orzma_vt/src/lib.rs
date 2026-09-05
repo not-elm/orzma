@@ -194,6 +194,11 @@ pub trait Vt {
     /// state even though it projects nothing.
     fn clear_selection(&mut self) -> bool;
 
+    /// The text the active selection covers; `None` exactly when
+    /// [`Frame::selection`] would be `None` — no selection, an empty
+    /// span, or an endpoint whose line has left the ring.
+    fn selection_text(&self) -> Option<String>;
+
     /// Grid dimensions in cells.
     fn grid_size(&self) -> GridSize;
 
@@ -390,6 +395,10 @@ impl Vt for OrzmaVt {
 
     fn clear_selection(&mut self) -> bool {
         self.device.active_screen_mut().clear_selection()
+    }
+
+    fn selection_text(&self) -> Option<String> {
+        self.device.active_screen().selection_text()
     }
 
     fn grid_size(&self) -> GridSize {
@@ -1127,5 +1136,122 @@ mod tests {
         vt.interpret(b"\r\n");
         assert_eq!(projected(&vt), None);
         assert!(vt.clear_selection());
+    }
+
+    /// Asserts that a terminal with no selection has no text to copy.
+    ///
+    /// Case: the user presses the copy shortcut without having selected
+    /// anything.
+    #[test]
+    fn no_selection_yields_no_text() {
+        let vt = filled();
+        assert_eq!(vt.selection_text(), None);
+    }
+
+    /// Asserts that a single-row Simple selection reads exactly the cells
+    /// between its two boundaries.
+    ///
+    /// Case: the user drags across the middle two characters of a word.
+    #[test]
+    fn a_simple_span_reads_the_cells_between_its_ends() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 1), CellSide::Left, SelectionKind::Simple);
+        vt.extend_selection(cell(0, 2), CellSide::Right);
+        assert_eq!(vt.selection_text().as_deref(), Some("bc"));
+    }
+
+    /// Asserts that a Simple selection spanning three rows takes the tail of
+    /// the first, the whole middle row, and the head of the last, joined by
+    /// newlines with none at the end.
+    ///
+    /// Case: the user drags from the middle of one line down into the
+    /// middle of the line two below it.
+    #[test]
+    fn a_multi_row_span_joins_rows_with_newlines() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 2), CellSide::Left, SelectionKind::Simple);
+        vt.extend_selection(cell(2, 1), CellSide::Right);
+        assert_eq!(vt.selection_text().as_deref(), Some("cd\nefgh\nij"));
+    }
+
+    /// Asserts that the blank cells past a row's last printed character are
+    /// not copied.
+    ///
+    /// Case: the user selects two short lines on a wide terminal.
+    #[test]
+    fn trailing_blanks_are_trimmed_per_row() {
+        let mut vt = vt();
+        vt.interpret(b"ab\r\ncd");
+        vt.frame();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.extend_selection(cell(1, 0), CellSide::Left);
+        assert_eq!(vt.selection_text().as_deref(), Some("ab\ncd"));
+    }
+
+    /// Asserts that a Lines selection copies whole rows regardless of the
+    /// columns the drag touched.
+    ///
+    /// Case: the user triple-clicks a line and drags into the next.
+    #[test]
+    fn a_lines_selection_reads_whole_rows() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 2), CellSide::Left, SelectionKind::Lines);
+        vt.extend_selection(cell(1, 1), CellSide::Left);
+        assert_eq!(vt.selection_text().as_deref(), Some("abcd\nefgh"));
+    }
+
+    /// Asserts that a selection whose two ends sit on the same boundary
+    /// yields no text, matching the frame that paints nothing.
+    ///
+    /// Case: the user presses the mouse button and releases it without
+    /// crossing a cell.
+    #[test]
+    fn an_empty_simple_selection_yields_no_text() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 1), CellSide::Left, SelectionKind::Simple);
+        assert_eq!(vt.selection_text(), None);
+    }
+
+    /// Asserts that a selection whose row has been recycled out of the ring
+    /// yields no text rather than the row now in its place.
+    ///
+    /// Case: on a terminal with no scrollback the user selects the top row
+    /// and the shell scrolls it away before the copy.
+    #[test]
+    fn a_selection_whose_line_left_the_ring_yields_no_text() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 0);
+        vt.interpret(b"abcd\r\nefgh\r\nijkl");
+        vt.frame();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\r\n");
+        assert_eq!(vt.selection_text(), None);
+    }
+
+    /// Asserts that the copied text is the row the user selected, not the
+    /// row that has since scrolled into its screen position.
+    ///
+    /// Case: the user selects a line and the shell prints two more before
+    /// the copy shortcut lands.
+    #[test]
+    fn the_text_follows_the_rows_after_a_scroll() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\r\n\r\n");
+        assert_eq!(vt.selection_text().as_deref(), Some("abcd"));
+    }
+
+    /// Asserts that a primary-screen selection yields no text while the
+    /// alternate screen is shown and its text again once it is back.
+    ///
+    /// Case: the user selects a shell line, opens a pager, presses copy
+    /// inside it, quits, and presses copy again.
+    #[test]
+    fn a_hidden_primary_selection_yields_no_text() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\x1b[?1049h");
+        assert_eq!(vt.selection_text(), None);
+        vt.interpret(b"\x1b[?1049l");
+        assert_eq!(vt.selection_text().as_deref(), Some("abcd"));
     }
 }

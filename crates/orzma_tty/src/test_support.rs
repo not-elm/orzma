@@ -149,6 +149,10 @@ impl Vt for FakeVt {
         false
     }
 
+    fn selection_text(&self) -> Option<String> {
+        None
+    }
+
     fn grid_size(&self) -> GridSize {
         self.grid_size
     }
