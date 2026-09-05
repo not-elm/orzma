@@ -10,7 +10,7 @@ use crate::protocol::{
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::CellPixels;
 use orzma_tty::prelude::{PumpOutput, TtySignal};
-use orzma_vt::prelude::{Frame, GridSize, VtSignal};
+use orzma_vt::prelude::{Frame, GridSize, Vt, VtSignal};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -372,19 +372,106 @@ impl Backend {
         }
     }
 
-    /// Task 6 fills this in; until then every pane-level command is
-    /// dropped with a debug log.
+    /// Applies a pane-level command. Unknown panes and an unresolvable
+    /// `Active` are dropped with a debug log; `CopySelection` always
+    /// answers and `SelectPane*` always publishes a layout.
     fn handle_pane_command(&mut self, command: MuxCommand) {
-        tracing::debug!(?command, "pane command not yet handled");
+        match command {
+            MuxCommand::KillPane { pane } => {
+                if let Some(id) = self.resolve(pane) {
+                    self.close_pane(id, CloseReason::Killed);
+                }
+            }
+            MuxCommand::SelectPane { pane } => {
+                if !self.tree.select(pane) {
+                    tracing::debug!(?pane, "select of an unknown pane refused");
+                }
+                self.publish_layout();
+            }
+            MuxCommand::SelectPaneDirection { direction } => {
+                if let Some(geometry) = self.geometry {
+                    self.tree.select_direction(direction, geometry.size);
+                }
+                self.publish_layout();
+            }
+            MuxCommand::KeyInput { pane, key, mods } => {
+                if let Some(p) = self.resolve(pane).and_then(|id| self.panes.get_mut(&id))
+                    && let Err(err) = p.tty.send_key(&key, &mods)
+                {
+                    tracing::error!(%err, "key write failed");
+                }
+            }
+            MuxCommand::Paste { pane, text } => {
+                if let Some(p) = self.resolve(pane).and_then(|id| self.panes.get_mut(&id))
+                    && let Err(err) = p.tty.send_paste(&text)
+                {
+                    tracing::error!(%err, "paste write failed");
+                }
+            }
+            MuxCommand::MouseInput { pane, report } => {
+                if let Some(p) = self.panes.get_mut(&pane)
+                    && let Err(err) = p.tty.send_mouse(report)
+                {
+                    tracing::error!(%err, "mouse write failed");
+                }
+            }
+            MuxCommand::Scroll { pane, scroll } => {
+                if let Some(p) = self.panes.get_mut(&pane) {
+                    p.tty.scroll(scroll);
+                }
+            }
+            MuxCommand::SelectionStart {
+                pane,
+                cell,
+                side,
+                kind,
+            } => {
+                if let Some(p) = self.panes.get_mut(&pane) {
+                    p.tty.start_selection(cell, side, kind);
+                }
+            }
+            MuxCommand::SelectionUpdate { pane, cell, side } => {
+                if let Some(p) = self.panes.get_mut(&pane) {
+                    p.tty.extend_selection(cell, side);
+                }
+            }
+            MuxCommand::SelectionClear { pane } => {
+                if let Some(p) = self.panes.get_mut(&pane) {
+                    p.tty.clear_selection();
+                }
+            }
+            MuxCommand::CopySelection { pane, request } => {
+                let resolved = self.resolve(pane);
+                let text = resolved
+                    .and_then(|id| self.panes.get(&id))
+                    .and_then(|p| p.tty.vt().selection_text())
+                    .filter(|t| !t.is_empty());
+                self.emit(MuxEvent::SelectionText {
+                    request,
+                    pane: resolved,
+                    text,
+                });
+            }
+            MuxCommand::RemovePlacements { pane, instances } => {
+                if let Some(p) = self.panes.get_mut(&pane) {
+                    p.tty.remove_placements(&instances);
+                }
+            }
+            MuxCommand::Resize { .. } | MuxCommand::NewPane { .. } => {
+                unreachable!("handled by handle_command")
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prelude::SplitOrientation;
+    use crate::prelude::{PaneDirection, SplitOrientation};
     use crossbeam_channel::{Receiver, Sender, unbounded};
-    use orzma_tty::prelude::{OrzmaTty, OrzmaTtyError, OrzmaTtyResult};
+    use orzma_tty::prelude::{
+        KeyText, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, TerminalKey, TerminalModifiers,
+    };
     use orzma_tty::test_support::CaptureSink;
     use orzma_vt::prelude::OrzmaVt;
     use std::collections::VecDeque;
@@ -394,15 +481,7 @@ mod tests {
     /// The test's ends of one spawned pane's streams.
     struct FakePane {
         chunk_tx: Sender<Vec<u8>>,
-        #[expect(
-            dead_code,
-            reason = "read by Task 6's pane-command tests added to this module"
-        )]
         exit_tx: Sender<Option<i32>>,
-        #[expect(
-            dead_code,
-            reason = "read by Task 6's pane-command tests added to this module"
-        )]
         sink: CaptureSink,
     }
 
@@ -702,6 +781,224 @@ mod tests {
             events
                 .iter()
                 .any(|e| matches!(e, MuxEvent::Frame { pane, .. } if *pane == root))
+        );
+    }
+
+    /// Splits the active pane and returns the new pane's id and its
+    /// spawned fake terminal.
+    fn split_active(h: &mut Harness, request: u64) -> (PaneId, FakePane) {
+        h.send(MuxCommand::NewPane {
+            request: RequestId(request),
+            at: NewPaneAt::Split {
+                pane: PaneTarget::Active,
+                orientation: SplitOrientation::Vertical,
+            },
+            cwd: None,
+            env: vec![],
+        });
+        let events = h.drain();
+        let Some(MuxEvent::PaneOpened { pane, .. }) = events.front() else {
+            panic!("expected PaneOpened, got {events:?}");
+        };
+        (*pane, h.panes.try_recv().expect("one spawned pane"))
+    }
+
+    /// Asserts that `Active` targets resolve in command order, so a kill
+    /// queued right after a split removes the new pane.
+    ///
+    /// Case: the user presses split then kill within one GUI frame,
+    /// before any `Layout` has come back.
+    #[test]
+    fn active_targets_resolve_in_command_order() {
+        let mut h = Harness::new();
+        let (root, _root_pane) = h.open_root();
+        let (new, _new_pane) = split_active(&mut h, 2);
+        h.send(MuxCommand::KillPane {
+            pane: PaneTarget::Active,
+        });
+        let events = h.drain();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            MuxEvent::PaneClosed {
+                pane,
+                reason: CloseReason::Killed
+            } if *pane == new
+        )));
+        assert_eq!(h.backend.tree.panes(), vec![root]);
+        assert_eq!(h.backend.tree.active(), Some(root));
+    }
+
+    /// Asserts that a kill flushes the pane's pending output before
+    /// `PaneClosed`, and that the survivor's resized frame rides in the
+    /// following `Layout`.
+    ///
+    /// Case: the user kills a pane that had just printed something the
+    /// coalescer had not yet emitted.
+    #[test]
+    fn kill_flushes_the_pane_then_closes_and_reflows() {
+        let mut h = Harness::new();
+        let (root, _root_pane) = h.open_root();
+        let (new, new_pane) = split_active(&mut h, 2);
+        // NOTE: this pump settles the new pane's bootstrap frame so the
+        // write below lands inside an ordinary debounce window instead of
+        // being swept into the bootstrap snapshot, which the coalescer
+        // always emits on a pane's very first pump regardless of damage.
+        h.backend.pump_pane(new);
+        h.drain();
+        new_pane.chunk_tx.send(b"last words".to_vec()).unwrap();
+        h.backend.pump_pane(new);
+        h.drain();
+        h.send(MuxCommand::KillPane {
+            pane: PaneTarget::Id(new),
+        });
+        let events: Vec<MuxEvent> = h.drain().into_iter().collect();
+        let closed_at = events
+            .iter()
+            .position(|e| matches!(e, MuxEvent::PaneClosed { pane, .. } if *pane == new))
+            .expect("PaneClosed");
+        let frame_at = events
+            .iter()
+            .position(|e| matches!(e, MuxEvent::Frame { pane, .. } if *pane == new))
+            .expect("a final Frame for the killed pane");
+        assert!(frame_at < closed_at, "the final frame precedes PaneClosed");
+        let Some(MuxEvent::Layout { layout, frames }) = events.last() else {
+            panic!("Layout must be last");
+        };
+        assert_eq!(layout.panes.len(), 1);
+        assert_eq!(
+            frames.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
+            vec![root]
+        );
+    }
+
+    /// Asserts that a child exit closes its pane after the remaining
+    /// output, and that closing the last pane yields an empty layout.
+    ///
+    /// Case: the user types `exit` in the only pane.
+    #[test]
+    fn a_child_exit_closes_the_pane_and_the_last_one_empties_the_layout() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx.send(b"logout\r\n".to_vec()).unwrap();
+        pane.exit_tx.send(Some(0)).unwrap();
+        drop(pane.chunk_tx);
+        drop(pane.exit_tx);
+        h.backend.pump_pane(root);
+        let events: Vec<MuxEvent> = h.drain().into_iter().collect();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            MuxEvent::PaneClosed {
+                pane,
+                reason: CloseReason::ChildExit { code: Some(0) }
+            } if *pane == root
+        )));
+        let Some(MuxEvent::Layout { layout, .. }) = events.last() else {
+            panic!("Layout must be last");
+        };
+        assert!(layout.panes.is_empty());
+        assert!(h.backend.tree.is_empty());
+    }
+
+    /// Asserts that keyboard input reaches the active pane's PTY and that
+    /// a `SelectPane` always answers with a `Layout`, even when refused.
+    ///
+    /// Case: the user clicks a pane that closed a moment ago, then types.
+    #[test]
+    fn select_pane_always_answers_with_a_layout_and_keys_reach_the_active_pane() {
+        let mut h = Harness::new();
+        let (root, root_pane) = h.open_root();
+        let seq = h.send(MuxCommand::SelectPane { pane: PaneId(99) });
+        let events = h.drain();
+        let Some(MuxEvent::Layout { layout, .. }) = events.front() else {
+            panic!("a refused SelectPane still answers with a Layout");
+        };
+        assert_eq!(layout.seq, seq);
+        assert_eq!(layout.active, Some(root));
+
+        h.send(MuxCommand::KeyInput {
+            pane: PaneTarget::Active,
+            key: TerminalKey::Character(KeyText::new("a").unwrap()),
+            mods: TerminalModifiers::default(),
+        });
+        assert_eq!(root_pane.sink.contents(), b"a");
+    }
+
+    /// Asserts that directional selection moves the active pane and
+    /// answers with a `Layout` carrying the new active.
+    ///
+    /// Case: the user presses select-left-pane from the right pane.
+    #[test]
+    fn select_direction_changes_the_active_pane() {
+        let mut h = Harness::new();
+        let (root, _root_pane) = h.open_root();
+        let (_new, _new_pane) = split_active(&mut h, 2);
+        h.send(MuxCommand::SelectPaneDirection {
+            direction: PaneDirection::Left,
+        });
+        let events = h.drain();
+        let Some(MuxEvent::Layout { layout, .. }) = events.front() else {
+            panic!("expected Layout");
+        };
+        assert_eq!(layout.active, Some(root));
+    }
+
+    /// Asserts that every `CopySelection` is answered exactly once, with
+    /// `None`s when the target cannot be resolved.
+    ///
+    /// Case: the user presses copy with no selection, and a stale copy
+    /// aimed at a pane that no longer exists arrives.
+    #[test]
+    fn copy_selection_is_always_answered() {
+        let mut h = Harness::new();
+        let (root, _root_pane) = h.open_root();
+        h.send(MuxCommand::CopySelection {
+            pane: PaneTarget::Id(root),
+            request: RequestId(5),
+        });
+        h.send(MuxCommand::CopySelection {
+            pane: PaneTarget::Id(PaneId(42)),
+            request: RequestId(6),
+        });
+        let events: Vec<MuxEvent> = h.drain().into_iter().collect();
+        assert!(events.contains(&MuxEvent::SelectionText {
+            request: RequestId(5),
+            pane: Some(root),
+            text: None,
+        }));
+        assert!(events.contains(&MuxEvent::SelectionText {
+            request: RequestId(6),
+            pane: None,
+            text: None,
+        }));
+    }
+
+    /// Asserts that a split inherits the target pane's last OSC 7
+    /// directory when the GUI passes `cwd: None`.
+    ///
+    /// Case: the shell `cd`s into a project and the user splits the pane.
+    // TODO: `orzma_vt`'s `osc_dispatch` (crates/orzma_vt/src/interpreter.rs)
+    // only parses OSC 0 / OSC 2 today; OSC 7 never reaches
+    // `VtSignal::CurrentDir`, so this pane's `cwd` field can never be set.
+    // Un-ignore once `orzma_vt` gains OSC 7 support.
+    #[test]
+    #[ignore = "blocked on OSC 7 parsing in orzma_vt; see the TODO above"]
+    fn a_split_inherits_the_target_panes_reported_cwd() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx
+            .send(b"\x1b]7;file://localhost/tmp/project\x1b\\".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        h.drain();
+        assert_eq!(
+            h.backend.panes[&root].cwd.as_deref(),
+            Some(std::path::Path::new("/tmp/project"))
+        );
+        h.log.cwds.lock().unwrap().clear();
+        split_active(&mut h, 2);
+        assert_eq!(
+            h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
+            Some(std::path::Path::new("/tmp/project"))
         );
     }
 }

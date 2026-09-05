@@ -264,7 +264,7 @@ impl Default for Layout {
 }
 
 /// An event the backend emits to the GUI.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MuxEvent {
     /// A pane requested by `NewPane` was spawned successfully.
     PaneOpened {
