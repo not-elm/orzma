@@ -141,6 +141,10 @@ impl Vt for FakeVt {
         false
     }
 
+    fn extend_selection(&mut self, _cell: GridPoint, _side: CellSide) -> bool {
+        false
+    }
+
     fn clear_selection(&mut self) -> bool {
         false
     }

@@ -1130,6 +1130,16 @@ impl Screen {
         self.selection.start(end, kind)
     }
 
+    /// Moves the active selection's moving end to `cell`; returns
+    /// whether it moved. A no-op without an active selection or for a
+    /// cell outside the grid.
+    pub fn extend_selection(&mut self, cell: GridPoint, side: CellSide) -> bool {
+        let Some(end) = self.selection_end(cell, side) else {
+            return false;
+        };
+        self.selection.extend(end)
+    }
+
     /// Drops the active selection; returns whether there was one, even
     /// one whose rows have already left the ring.
     pub fn clear_selection(&mut self) -> bool {
