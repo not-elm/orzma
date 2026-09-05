@@ -7,6 +7,7 @@ use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, NavAction, RegisterKind, ServerMsg};
 use crate::webview::apc::NonInteractive;
 use crate::webview::mount::Webview;
+use bevy::ecs::entity::Entities;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
@@ -573,8 +574,11 @@ struct ControlRuntime(
 /// and purges a connection's handles on `Disconnect`.
 ///
 /// `Register` and `NewInstance` are refused with `owner_gone` when the owning
-/// pane entity is no longer alive, so a connection that outlives its pane's
+/// entity is no longer alive, so a connection that outlives its pane's
 /// despawn (and the GC that follows) cannot recreate registrations for it.
+/// Liveness, not the `MuxPane` marker, gates the refusal: a fast shell can
+/// register before the GUI has drained the backend's `PaneOpened` and
+/// inserted `MuxPane`, and that pending owner must still be accepted.
 fn apply_control_events(
     mut commands: Commands,
     mut registry: ResMut<OrzmaRegistry>,
@@ -586,7 +590,7 @@ fn apply_control_events(
     webviews: Query<(Entity, &Webview)>,
     child_of: Query<&ChildOf>,
     non_interactive: Query<(), With<NonInteractive>>,
-    panes: Query<(), With<MuxPane>>,
+    entities: &Entities,
 ) {
     let Some(events) = events else {
         return;
@@ -599,7 +603,7 @@ fn apply_control_events(
                 kind,
                 reply,
             } => {
-                if panes.get(owner_surface).is_err() {
+                if !entities.contains(owner_surface) {
                     let _ = reply.send(ServerMsg::err("owner_gone"));
                     continue;
                 }
@@ -619,7 +623,7 @@ fn apply_control_events(
             } => {
                 let owner_surface = registry.get(&handle).map(|view| view.owner_surface);
                 if let Some(owner_surface) = owner_surface
-                    && panes.get(owner_surface).is_err()
+                    && !entities.contains(owner_surface)
                 {
                     let _ = reply.send(ServerMsg::err("owner_gone"));
                     continue;
@@ -1537,6 +1541,52 @@ mod apply_tests {
         let reply = reply_rx.try_recv().expect("one reply");
         assert!(matches!(reply, ServerMsg::Err { ref error, .. } if error == "owner_gone"));
         assert!(app.world().resource::<OrzmaRegistry>().is_empty());
+    }
+
+    /// Asserts that a `register` from a live but still-pending owner (no
+    /// `MuxPane` yet) is accepted, since the liveness gate must not
+    /// reintroduce the race the token pre-binding was designed to avoid.
+    ///
+    /// Case: the new pane's shell connects and registers before the GUI has
+    /// drained the backend's `PaneOpened`.
+    #[test]
+    fn register_from_a_pending_owner_is_accepted() {
+        let mut app = App::new();
+        app.insert_resource(OrzmaRegistry::default());
+        app.insert_resource(OrzmaRpc::default());
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        app.insert_resource(ControlEvents(ev_rx));
+        app.add_systems(Update, apply_control_events);
+
+        let owner = app.world_mut().spawn_empty().id();
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::Register {
+                connection_id: 1,
+                owner_surface: owner,
+                kind: RegisterKind::Inline {
+                    html: "<h1>x</h1>".into(),
+                    interactive: true,
+                    forward_keys: vec![],
+                    preload: vec![],
+                },
+                reply: reply_tx,
+            })
+            .unwrap();
+        app.update();
+
+        let reply = reply_rx.try_recv().expect("one reply");
+        assert!(matches!(reply, ServerMsg::Registered { .. }));
+        let ServerMsg::Registered { handle, .. } = reply else {
+            unreachable!("checked above")
+        };
+        assert!(
+            app.world()
+                .resource::<OrzmaRegistry>()
+                .get(&handle)
+                .is_some()
+        );
     }
 
     /// Asserts that a `new_instance` for a handle whose owner surface has
