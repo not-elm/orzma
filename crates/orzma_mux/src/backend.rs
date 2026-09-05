@@ -976,12 +976,7 @@ mod tests {
     /// directory when the GUI passes `cwd: None`.
     ///
     /// Case: the shell `cd`s into a project and the user splits the pane.
-    // TODO: `orzma_vt`'s `osc_dispatch` (crates/orzma_vt/src/interpreter.rs)
-    // only parses OSC 0 / OSC 2 today; OSC 7 never reaches
-    // `VtSignal::CurrentDir`, so this pane's `cwd` field can never be set.
-    // Un-ignore once `orzma_vt` gains OSC 7 support.
     #[test]
-    #[ignore = "blocked on OSC 7 parsing in orzma_vt; see the TODO above"]
     fn a_split_inherits_the_target_panes_reported_cwd() {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
