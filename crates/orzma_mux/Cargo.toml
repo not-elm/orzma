@@ -19,6 +19,7 @@ test-support = ["orzma_tty/test-support"]
 
 [dev-dependencies]
 orzma_tty = { path = "../orzma_tty", features = ["test-support"] }
+anyhow = { workspace = true }
 
 [lints]
 workspace = true

@@ -5031,6 +5031,7 @@ dependencies = [
 name = "orzma_mux"
 version = "0.2.0-dev"
 dependencies = [
+ "anyhow",
  "crossbeam-channel",
  "orzma_tty",
  "orzma_vt",
