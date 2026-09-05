@@ -350,6 +350,10 @@ mod tests {
         assert_eq!(c.pane_actions, vec![PaneAction::Kill]);
     }
 
+    /// Asserts that `SelectPane` maps to `RequestPaneAction::SelectDirection`
+    /// carrying the direction converted to the mux backend's type.
+    ///
+    /// Case: the user presses a leader-scoped select-left-pane binding.
     #[test]
     fn select_pane_maps_to_request_pane_action() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -371,6 +375,10 @@ mod tests {
         );
     }
 
+    /// Asserts that a pane action with no backend mapping yet resolves to a
+    /// no-op: no triggered event, spawn request, or pane action.
+    ///
+    /// Case: the user presses a leader-scoped zoom-pane binding.
     #[test]
     fn pane_action_without_backend_variant_is_noop() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
