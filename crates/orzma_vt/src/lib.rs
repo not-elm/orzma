@@ -56,14 +56,13 @@ pub mod prelude {
 /// the grid and scrollback, tracks damage, and builds frames. The
 /// trait has no constructor — a concrete VT is built with its own
 /// configuration and injected; spawn geometry arrives via
-/// [`Vt::resize`]. Selection and vi mode arrive later as separate
-/// capability traits.
+/// [`Vt::resize`]. Vi mode arrives later.
 ///
-/// The read surface is deliberately frame-granular: cell-level host
-/// features (e.g. hyperlink hover) resolve against the emitted
-/// [`crate::prelude::Row`] / [`crate::prelude::Run`] data, so the
-/// trait exposes no per-cell read seam and the VT's storage cell
-/// never leaves the crate.
+/// The read surface exposes no per-cell seam: cell-level host features
+/// (e.g. hyperlink hover) resolve against the emitted
+/// [`crate::prelude::Row`] / [`crate::prelude::Run`] data, and the only
+/// text read, [`Vt::selection_text`], is a derived value, so the VT's
+/// storage cell never leaves the crate.
 ///
 /// # Invariants
 ///
