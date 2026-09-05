@@ -4,11 +4,13 @@ use crate::{
     CellPixels, SpawnOptions,
     error::{OrzmaTtyError, OrzmaTtyResult},
 };
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 #[cfg(any(test, feature = "test-support"))]
 use std::io::Result as IoResult;
 use std::io::{Read, Write};
+#[cfg(any(test, feature = "test-support"))]
+use std::mem;
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -25,6 +27,28 @@ pub struct Pty {
     chunk_rx: Receiver<Vec<u8>>,
     exit_rx: Receiver<Option<i32>>,
     child_killer: Box<dyn ChildKiller + Send + Sync>,
+}
+
+/// One non-blocking read of the PTY output stream.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ChunkPoll {
+    /// A chunk of PTY output.
+    Chunk(Vec<u8>),
+    /// Nothing queued right now; the reader thread is still alive.
+    Empty,
+    /// The reader thread is gone and nothing remains queued.
+    Disconnected,
+}
+
+/// One non-blocking read of the child-exit stream.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ExitPoll {
+    /// The child exited; `None` if the `wait` itself failed.
+    Exited(Option<i32>),
+    /// The child is still running (or its status is not yet sent).
+    Pending,
+    /// The reader thread is gone without ever sending a status.
+    Disconnected,
 }
 
 impl Pty {
@@ -78,14 +102,42 @@ impl Pty {
         })
     }
 
+    /// Polls the output stream once (see [`ChunkPoll`]).
     #[inline]
-    pub fn try_recv_exit(&mut self) -> Option<Option<i32>> {
-        self.exit_rx.try_recv().ok()
+    pub fn poll_chunk(&self) -> ChunkPoll {
+        match self.chunk_rx.try_recv() {
+            Ok(chunk) => ChunkPoll::Chunk(chunk),
+            Err(TryRecvError::Empty) => ChunkPoll::Empty,
+            Err(TryRecvError::Disconnected) => ChunkPoll::Disconnected,
+        }
     }
 
+    /// Polls the exit stream once (see [`ExitPoll`]).
     #[inline]
-    pub fn try_read_chunk(&mut self) -> Option<Vec<u8>> {
-        self.chunk_rx.try_recv().ok()
+    pub fn poll_exit(&self) -> ExitPoll {
+        match self.exit_rx.try_recv() {
+            Ok(code) => ExitPoll::Exited(code),
+            Err(TryRecvError::Empty) => ExitPoll::Pending,
+            Err(TryRecvError::Disconnected) => ExitPoll::Disconnected,
+        }
+    }
+
+    /// Whether output chunks are queued and unread.
+    #[inline]
+    pub fn chunks_pending(&self) -> bool {
+        !self.chunk_rx.is_empty()
+    }
+
+    /// The output stream, for a `Select` that waits on many terminals.
+    #[inline]
+    pub fn chunk_receiver(&self) -> &Receiver<Vec<u8>> {
+        &self.chunk_rx
+    }
+
+    /// The exit stream, for a `Select` that waits on many terminals.
+    #[inline]
+    pub fn exit_receiver(&self) -> &Receiver<Option<i32>> {
+        &self.exit_rx
     }
 
     #[inline]
@@ -158,8 +210,15 @@ impl Pty {
     /// master (e.g. one whose `resize` fails).
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_master(master: Box<dyn MasterPty + Send>, writer: Box<dyn Write + Send>) -> Self {
-        let (_, chunk_rx) = unbounded::<Vec<u8>>();
-        let (_, exit_rx) = unbounded::<Option<i32>>();
+        let (chunk_tx, chunk_rx) = unbounded::<Vec<u8>>();
+        let (exit_tx, exit_rx) = unbounded::<Option<i32>>();
+        // NOTE: the senders are leaked, not dropped: a disconnected
+        // receiver reads as "the reader thread is gone" to
+        // `OrzmaTty::pump`, which would synthesize a spurious
+        // `ChildExit` for a fixture that never had a child process at
+        // all. Leaking keeps both streams `Pending` forever instead.
+        mem::forget(chunk_tx);
+        mem::forget(exit_tx);
         Self::with_master_and_channels(master, writer, chunk_rx, exit_rx)
     }
 
@@ -262,6 +321,12 @@ fn spawn_reader_thread(
                 Err(_) => break,
             }
         }
+        // NOTE: the exit status must be sent before this closure returns
+        // and drops `chunk_tx` / `exit_tx`: `OrzmaTty::pump` treats a
+        // disconnected chunk stream as fully drained, and the backend's
+        // `Select` treats a disconnected receiver as permanently ready, so
+        // dropping the senders first would leave the pane unclosable and
+        // spinning until the synthesized `ChildExit` fallback fires.
         let code = child.wait().ok().map(|s| s.exit_code() as i32);
         let _ = exit_tx.send(code);
     });
@@ -373,14 +438,15 @@ mod tests {
     }
 
     /// Asserts that the child's exit is reported exactly once: the
-    /// first successful read yields the exit code and every later call
-    /// yields `None`.
+    /// first successful poll yields the exit code, and every later poll
+    /// finds the reader thread gone and reports `Disconnected` rather
+    /// than replaying the code.
     ///
     /// Case: the shell process exits while the host keeps polling every
     /// frame for output and exit state.
     #[test]
     fn exit_is_reported_once_after_the_child_terminates() {
-        let mut pty = Pty::spawn(&SpawnOptions {
+        let pty = Pty::spawn(&SpawnOptions {
             cols: 80,
             rows: 24,
             cell_px: CellPixels::default(),
@@ -391,7 +457,7 @@ mod tests {
         .expect("Pty::spawn failed");
         let deadline = Instant::now() + Duration::from_secs(10);
         let code = loop {
-            if let Some(code) = pty.try_recv_exit() {
+            if let ExitPoll::Exited(code) = pty.poll_exit() {
                 break code;
             }
             assert!(Instant::now() < deadline, "no exit report arrived");
@@ -400,8 +466,8 @@ mod tests {
         assert_eq!(code, Some(0));
         for _ in 0..3 {
             assert_eq!(
-                pty.try_recv_exit(),
-                None,
+                pty.poll_exit(),
+                ExitPoll::Disconnected,
                 "the exit must not be re-reported"
             );
         }
@@ -414,11 +480,11 @@ mod tests {
     /// master) is polled for an exit the same way a live terminal is.
     #[test]
     fn a_detached_pty_never_reports_an_exit() {
-        let mut detached = Pty::detached(80, 24, Box::new(sink())).expect("Pty::detached");
-        let mut injected = Pty::with_master(Box::new(FailingMaster), Box::new(sink()));
+        let detached = Pty::detached(80, 24, Box::new(sink())).expect("Pty::detached");
+        let injected = Pty::with_master(Box::new(FailingMaster), Box::new(sink()));
         for _ in 0..3 {
-            assert_eq!(detached.try_recv_exit(), None);
-            assert_eq!(injected.try_recv_exit(), None);
+            assert_eq!(detached.poll_exit(), ExitPoll::Pending);
+            assert_eq!(injected.poll_exit(), ExitPoll::Pending);
         }
     }
 

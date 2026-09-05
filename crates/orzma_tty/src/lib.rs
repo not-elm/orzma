@@ -5,9 +5,10 @@ use crate::{
     coalescer::Coalescer,
     error::OrzmaTtyResult,
     input::{MouseReport, PtyInput, TerminalKey, TerminalModifiers},
-    pty::Pty,
+    pty::{ChunkPoll, ExitPoll, Pty},
     signal::TtySignal,
 };
+use crossbeam_channel::Receiver;
 use orzma_vt::prelude::*;
 use portable_pty::PtySize;
 #[cfg(any(test, feature = "test-support"))]
@@ -28,7 +29,7 @@ pub mod test_support;
 pub use cell_pixels::CellPixels;
 
 pub mod prelude {
-    pub use crate::{CellPixels, OrzmaTty, error::*, input::*, signal::*};
+    pub use crate::{CellPixels, OrzmaTty, PumpOutput, Readiness, error::*, input::*, signal::*};
 }
 
 /// Spawn parameters consumed exactly once by `OrzmaTty::spawn`.
@@ -64,6 +65,33 @@ pub struct PumpOutput {
     /// Signals raised since the previous pump, in order, with
     /// `ChildExit` last.
     pub signals: Vec<TtySignal>,
+    /// Whether output chunks remain queued after this pump's budget was
+    /// spent, so the owner should pump again before waiting.
+    pub more_pending: bool,
+}
+
+/// The receivers a multiplexer registers in a `Select` to learn when a
+/// terminal has work: its output stream, and its exit stream until the
+/// exit has been observed.
+pub struct Readiness<'a> {
+    /// The PTY output stream.
+    pub chunks: &'a Receiver<Vec<u8>>,
+    /// The child-exit stream, or `None` once [`OrzmaTty::pump`] latched
+    /// the exit (a disconnected receiver is permanently ready, so it
+    /// must leave the `Select`).
+    pub exit: Option<&'a Receiver<Option<i32>>>,
+}
+
+/// Where a terminal stands in reporting its child's exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExitLatch {
+    /// The child is running as far as the terminal knows.
+    Running,
+    /// The exit status was observed; `ChildExit` is owed once the output
+    /// stream drains.
+    Observed(Option<i32>),
+    /// `ChildExit` was reported; nothing more to say.
+    Reported,
 }
 
 /// A live terminal: the VT emulation plus the PTY it is wired to.
@@ -77,9 +105,15 @@ pub struct OrzmaTty<V: Vt> {
     /// Reply bytes produced by interpreted chunks, awaiting one PTY
     /// write in the next pump.
     pending_replies: Vec<u8>,
+    exit: ExitLatch,
 }
 
 impl<V: Vt> OrzmaTty<V> {
+    /// Upper bound on chunks one [`Self::pump`] interprets (64 × the 4 KiB
+    /// reader buffer ≈ 256 KiB), so a flooding terminal cannot monopolize
+    /// its owner's loop.
+    pub const MAX_CHUNKS_PER_PUMP: usize = 64;
+
     /// Upper bound for a resize's column count; requests beyond it are
     /// ignored by [`Self::resize`].
     ///
@@ -147,6 +181,29 @@ impl<V: Vt> OrzmaTty<V> {
         writer: Box<dyn Write + Send>,
     ) -> OrzmaTtyResult<Self> {
         let pty = Pty::with_master(Box::new(RecordingMaster::at(cols, rows).0), writer);
+        let mut tty = Self::wired(vt, pty);
+        tty.resize_vt(GridSize { cols, rows });
+        Ok(tty)
+    }
+
+    /// Like [`Self::detached`], but with the chunk and exit streams fed by
+    /// the given receivers, so a test can queue output, exhaust the pump
+    /// budget, and report or withhold the child's exit.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn detached_with_channels(
+        vt: V,
+        cols: u16,
+        rows: u16,
+        writer: Box<dyn Write + Send>,
+        chunk_rx: Receiver<Vec<u8>>,
+        exit_rx: Receiver<Option<i32>>,
+    ) -> OrzmaTtyResult<Self> {
+        let pty = Pty::with_master_and_channels(
+            Box::new(RecordingMaster::at(cols, rows).0),
+            writer,
+            chunk_rx,
+            exit_rx,
+        );
         let mut tty = Self::wired(vt, pty);
         tty.resize_vt(GridSize { cols, rows });
         Ok(tty)
@@ -273,23 +330,57 @@ impl<V: Vt> OrzmaTty<V> {
             .write_all(PtyInput::encode_paste(text, bracketed).as_bytes())
     }
 
-    /// Drains the PTY and the VT into one output batch: interprets
-    /// queued chunks, writes pending replies back to the PTY, surfaces
-    /// buffered signals (with `ChildExit` last), and emits a frame when
-    /// the coalesce window is due or the bootstrap snapshot is still
-    /// owed.
-    pub fn pump(&mut self) -> PumpOutput {
-        let now = Instant::now();
-        self.drain_chunks();
-        let exit = self.pty.try_recv_exit();
-        if exit.is_some() {
-            // NOTE: the reader thread sends every chunk before the exit
-            // report, so one more drain here closes the race where the
-            // final output lands between the drain above and the poll —
-            // without it, a host that tears down on ChildExit loses the
-            // child's last output.
-            self.drain_chunks();
+    /// The receivers to wait on for this terminal (see [`Readiness`]).
+    pub fn readiness(&self) -> Readiness<'_> {
+        let exit = match self.exit {
+            ExitLatch::Running => Some(self.pty.exit_receiver()),
+            ExitLatch::Observed(_) | ExitLatch::Reported => None,
+        };
+        Readiness {
+            chunks: self.pty.chunk_receiver(),
+            exit,
         }
+    }
+
+    /// When the coalescer next wants a pump: `Some(now)` while the
+    /// bootstrap frame is owed, the armed window's deadline while output
+    /// is pending, `None` when idle.
+    pub fn next_deadline(&self) -> Option<Instant> {
+        if self.coalescer.needs_bootstrap() {
+            return Some(Instant::now());
+        }
+        self.coalescer.next_deadline()
+    }
+
+    /// Emits the pending signals and an immediate frame without reading
+    /// the PTY or waiting for the coalesce window.
+    ///
+    /// Used after a resize so the repaint travels with the new layout.
+    /// Never reports `ChildExit`; that stays with [`Self::pump`].
+    pub fn flush_now(&mut self) -> PumpOutput {
+        let signals = mem::take(&mut self.pending_signals);
+        let frame = self.emit_frame();
+        PumpOutput {
+            frame,
+            signals,
+            more_pending: false,
+        }
+    }
+
+    /// Drains the PTY and the VT into one output batch: interprets up to
+    /// [`Self::MAX_CHUNKS_PER_PUMP`] queued chunks, writes pending replies
+    /// back to the PTY, surfaces buffered signals, and emits a frame when
+    /// the coalesce window is due or the bootstrap snapshot is still owed.
+    ///
+    /// The child's exit is latched when observed and reported as a
+    /// trailing `ChildExit` only on the pump that finds no chunk left, so
+    /// the last output always precedes it. A reader thread that vanished
+    /// without a status (both streams disconnected) reports
+    /// `ChildExit { code: None }` once.
+    pub fn pump(&mut self) -> PumpOutput {
+        let chunks_disconnected = self.drain_chunks();
+        let more_pending = !chunks_disconnected && self.pty.chunks_pending();
+        self.latch_exit(chunks_disconnected);
 
         if !self.pending_replies.is_empty() {
             let replies = mem::take(&mut self.pending_replies);
@@ -300,20 +391,22 @@ impl<V: Vt> OrzmaTty<V> {
         }
 
         let mut signals = mem::take(&mut self.pending_signals);
-        if let Some(code) = exit {
+        if !more_pending && let ExitLatch::Observed(code) = self.exit {
             signals.push(TtySignal::ChildExit { code });
+            self.exit = ExitLatch::Reported;
         }
 
-        let mut frame: Option<Frame> = None;
-        if self.coalescer.needs_bootstrap() || self.coalescer.is_due(now) {
-            if let Some(f) = self.vt.frame() {
-                frame = Some(f);
-                self.coalescer.settle_emit();
-            } else {
-                self.coalescer.disarm();
-            }
+        let now = Instant::now();
+        let frame = if self.coalescer.needs_bootstrap() || self.coalescer.is_due(now) {
+            self.emit_frame()
+        } else {
+            None
+        };
+        PumpOutput {
+            frame,
+            signals,
+            more_pending,
         }
-        PumpOutput { frame, signals }
     }
 
     /// Wires a VT to a PTY with an idle coalescer and nothing pending,
@@ -325,6 +418,7 @@ impl<V: Vt> OrzmaTty<V> {
             pty,
             pending_signals: Vec::new(),
             pending_replies: Vec::new(),
+            exit: ExitLatch::Running,
         }
     }
 
@@ -354,11 +448,44 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
-    /// Drains every queued PTY chunk into the VT.
-    fn drain_chunks(&mut self) {
-        while let Some(chunk) = self.pty.try_read_chunk() {
-            self.feed_chunk(&chunk);
+    /// Interprets queued chunks up to the budget. Returns whether the
+    /// output stream is disconnected (the reader thread is gone).
+    fn drain_chunks(&mut self) -> bool {
+        for _ in 0..Self::MAX_CHUNKS_PER_PUMP {
+            match self.pty.poll_chunk() {
+                ChunkPoll::Chunk(chunk) => self.feed_chunk(&chunk),
+                ChunkPoll::Empty => return false,
+                ChunkPoll::Disconnected => return true,
+            }
         }
+        false
+    }
+
+    /// Records the child's exit once it is observable, synthesizing a
+    /// `None` status when both streams vanished without one.
+    fn latch_exit(&mut self, chunks_disconnected: bool) {
+        if self.exit != ExitLatch::Running {
+            return;
+        }
+        match self.pty.poll_exit() {
+            ExitPoll::Exited(code) => self.exit = ExitLatch::Observed(code),
+            ExitPoll::Disconnected if chunks_disconnected => {
+                self.exit = ExitLatch::Observed(None);
+            }
+            ExitPoll::Pending | ExitPoll::Disconnected => {}
+        }
+    }
+
+    /// Asks the VT for a frame and settles the coalescer on success or
+    /// disarms it when there was nothing to paint.
+    fn emit_frame(&mut self) -> Option<Frame> {
+        let frame = self.vt.frame();
+        if frame.is_some() {
+            self.coalescer.settle_emit();
+        } else {
+            self.coalescer.disarm();
+        }
+        frame
     }
 
     /// Interprets one PTY chunk, arms the coalescer when it staged
@@ -389,6 +516,153 @@ mod tests {
         let term = OrzmaTty::detached(FakeVt::new(80, 24), 80, 24, Box::new(sink.clone()))
             .expect("OrzmaTty::detached");
         (term, sink)
+    }
+
+    /// An 80x24 terminal whose chunk and exit streams the test feeds
+    /// through the returned senders.
+    fn channelled_term() -> (OrzmaTty<FakeVt>, Sender<Vec<u8>>, Sender<Option<i32>>) {
+        let (chunk_tx, chunk_rx) = unbounded::<Vec<u8>>();
+        let (exit_tx, exit_rx) = unbounded::<Option<i32>>();
+        let term = OrzmaTty::detached_with_channels(
+            FakeVt::new(80, 24),
+            80,
+            24,
+            Box::new(CaptureSink::default()),
+            chunk_rx,
+            exit_rx,
+        )
+        .expect("OrzmaTty::detached_with_channels");
+        (term, chunk_tx, exit_tx)
+    }
+
+    /// Asserts that one pump interprets at most `MAX_CHUNKS_PER_PUMP`
+    /// chunks and reports the remainder as pending.
+    ///
+    /// Case: a `cat` of a large file floods the PTY faster than one pump
+    /// can drain it while other panes wait their turn.
+    #[test]
+    fn a_pump_drains_at_most_the_chunk_budget() {
+        let (mut tty, chunk_tx, _exit_tx) = channelled_term();
+        for _ in 0..(OrzmaTty::<FakeVt>::MAX_CHUNKS_PER_PUMP + 6) {
+            chunk_tx.send(b"x".to_vec()).unwrap();
+        }
+        let first = tty.pump();
+        assert!(first.more_pending);
+        assert_eq!(
+            tty.vt.interpreted.len(),
+            OrzmaTty::<FakeVt>::MAX_CHUNKS_PER_PUMP
+        );
+        let second = tty.pump();
+        assert!(!second.more_pending);
+        assert_eq!(
+            tty.vt.interpreted.len(),
+            OrzmaTty::<FakeVt>::MAX_CHUNKS_PER_PUMP + 6
+        );
+    }
+
+    /// Asserts that `ChildExit` is withheld while chunks remain and is
+    /// then reported once, last, on the pump that drains the rest.
+    ///
+    /// Case: the shell prints a long farewell and exits; the reader
+    /// thread queues every chunk before the exit status.
+    #[test]
+    fn child_exit_waits_for_the_remaining_chunks_and_is_reported_once() {
+        let (mut tty, chunk_tx, exit_tx) = channelled_term();
+        for _ in 0..(OrzmaTty::<FakeVt>::MAX_CHUNKS_PER_PUMP + 1) {
+            chunk_tx.send(b"bye".to_vec()).unwrap();
+        }
+        exit_tx.send(Some(0)).unwrap();
+        drop(chunk_tx);
+        drop(exit_tx);
+
+        let first = tty.pump();
+        assert!(first.more_pending);
+        assert!(
+            !first
+                .signals
+                .iter()
+                .any(|s| matches!(s, TtySignal::ChildExit { .. }))
+        );
+        assert!(
+            tty.readiness().exit.is_none(),
+            "exit is latched after the first pump"
+        );
+
+        let second = tty.pump();
+        assert!(!second.more_pending);
+        assert_eq!(
+            second.signals.last(),
+            Some(&TtySignal::ChildExit { code: Some(0) })
+        );
+
+        let third = tty.pump();
+        assert!(
+            !third
+                .signals
+                .iter()
+                .any(|s| matches!(s, TtySignal::ChildExit { .. }))
+        );
+    }
+
+    /// Asserts that a reader thread that vanished without sending an exit
+    /// status still yields exactly one `ChildExit { code: None }`.
+    ///
+    /// Case: the reader thread panics, dropping both senders before the
+    /// exit status was sent.
+    #[test]
+    fn both_streams_disconnected_without_a_status_synthesize_one_child_exit() {
+        let (mut tty, chunk_tx, exit_tx) = channelled_term();
+        drop(chunk_tx);
+        drop(exit_tx);
+        let first = tty.pump();
+        assert_eq!(first.signals, vec![TtySignal::ChildExit { code: None }]);
+        assert!(!first.more_pending);
+        assert!(tty.readiness().exit.is_none());
+        let second = tty.pump();
+        assert!(second.signals.is_empty());
+    }
+
+    /// Asserts that `next_deadline` is due immediately while the
+    /// bootstrap frame is owed and `None` once it settled with nothing
+    /// armed.
+    ///
+    /// Case: the backend computes its select timeout for a freshly
+    /// spawned, silent pane.
+    #[test]
+    fn next_deadline_is_now_until_the_bootstrap_frame_settles() {
+        let (mut tty, _chunk_tx, _exit_tx) = channelled_term();
+        assert!(tty.next_deadline().is_some());
+        tty.vt.frames.push_back(a_frame());
+        tty.pump();
+        assert!(tty.next_deadline().is_none());
+    }
+
+    /// Asserts that `flush_now` returns the pending signals and an
+    /// immediate frame without reading the PTY.
+    ///
+    /// Case: the backend resized a pane and wants the repaint in the same
+    /// batch as the new layout, before the coalescer window closes.
+    #[test]
+    fn flush_now_returns_pending_signals_and_an_immediate_frame() {
+        let (mut tty, chunk_tx, _exit_tx) = channelled_term();
+        tty.vt.evictions.push_back(vec![InstanceId(7)]);
+        tty.resize(40, 12, CellPixels::default()).unwrap();
+        tty.vt.frames.push_back(a_frame());
+        chunk_tx.send(b"unread".to_vec()).unwrap();
+
+        let out = tty.flush_now();
+        assert!(out.frame.is_some());
+        assert_eq!(
+            out.signals,
+            vec![TtySignal::Vt(VtSignal::WebviewEvicted {
+                placements: vec![InstanceId(7)]
+            })]
+        );
+        assert!(!out.more_pending);
+        assert!(
+            tty.vt.interpreted.is_empty(),
+            "flush_now must not read the PTY"
+        );
     }
 
     /// A minimal frame for scripting `FakeVt::frames`; the values are
@@ -520,21 +794,6 @@ mod tests {
     fn failing_term() -> OrzmaTty<FakeVt> {
         let pty = Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default()));
         OrzmaTty::wired(FakeVt::new(80, 24), pty)
-    }
-
-    /// A terminal whose PTY chunk and exit streams are fed by the
-    /// returned senders, so tests can inject output and child-exit
-    /// reports.
-    fn channelled_term() -> (OrzmaTty<FakeVt>, Sender<Vec<u8>>, Sender<Option<i32>>) {
-        let (chunk_tx, chunk_rx) = unbounded();
-        let (exit_tx, exit_rx) = unbounded();
-        let pty = Pty::with_master_and_channels(
-            Box::new(FailingMaster),
-            Box::new(CaptureSink::default()),
-            chunk_rx,
-            exit_rx,
-        );
-        (OrzmaTty::wired(FakeVt::new(80, 24), pty), chunk_tx, exit_tx)
     }
 
     /// Collects the `ChildExit` codes out of a pumped signal batch.
