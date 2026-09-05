@@ -4,12 +4,16 @@
 //! `TtyWebviewMountSignal`, `TtyWebviewMountRejectedSignal`,
 //! `TtyWebviewUnmountSignal`, `TtyWebviewEvictedSignal`,
 //! `TtyModeChangedSignal`, `TtyChildExitSignal`, `TtyFrameSignal`).
-//! Inbound requests fired by the host UI live in `requests.rs`.
+//! `TtySelectionTextSignal` answers a mux `CopySelection` request instead
+//! of draining from a VT, so it is a plain `Event` rather than an
+//! `EntityEvent`. Inbound requests fired by the host UI live in
+//! `requests.rs`.
 
 use crate::OrzmaTtyHandle;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::prelude::*;
+use orzma_mux::prelude::RequestId;
 use orzma_tty::prelude::*;
 use orzma_vt::prelude::*;
 use std::path::PathBuf;
@@ -126,6 +130,16 @@ pub struct TtyFrameSignal {
     pub frame: Frame,
 }
 
+/// The backend's answer to a `RequestTtyCopySelection`: the selected
+/// text of the requesting entity (`None` when the pane was gone or the
+/// selection empty). A plain `Event` because `terminal` may be `None`.
+#[derive(Event, Debug, Clone)]
+pub struct TtySelectionTextSignal {
+    pub terminal: Option<Entity>,
+    pub request: RequestId,
+    pub text: Option<String>,
+}
+
 pub(crate) struct OrzmaTtySignalPlugin;
 
 impl Plugin for OrzmaTtySignalPlugin {
@@ -152,7 +166,7 @@ fn pump_terminals(mut commands: Commands, mut terms: Query<(Entity, &mut OrzmaTt
     }
 }
 
-fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signal: VtSignal) {
+pub(crate) fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signal: VtSignal) {
     match signal {
         VtSignal::Bell => commands.trigger(TtyBellSignal { terminal }),
         VtSignal::Title(title) => commands.trigger(TtyTitleChangedSignal { terminal, title }),

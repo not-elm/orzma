@@ -1,24 +1,41 @@
 //! Bevy integration for the multiplexer backend: the terminal handle
 //! component, the title component, inbound request observers, and the
-//! outbound signal pump.
+//! outbound signal pump. `MuxConnection`, `MuxPane`, and the `drain`
+//! module bridge the same world to the out-of-process `orzma_mux`
+//! backend, alongside the entity-owned `OrzmaTtyHandle` design until it
+//! is removed.
 
 use crate::{
+    drain::DrainPlugin,
     requests::OrzmaEventRequestPlugin,
     signals::OrzmaTtySignalPlugin,
     title::{TtyTitle, TtyTitlePlugin},
 };
 use bevy::prelude::*;
+use orzma_mux::prelude::{MuxClient, PaneId};
 #[cfg(any(test, feature = "test-support"))]
 use orzma_tty::test_support::CaptureSink;
 use orzma_tty::{OrzmaTty, SpawnOptions, prelude::OrzmaTtyResult};
 use orzma_vt::prelude::{GridSize, OrzmaVt};
 
+mod drain;
+mod layout;
+mod registry;
 mod requests;
 mod signals;
 mod title;
 
 pub mod prelude {
-    pub use crate::{OrzmaTtyHandle, OrzmaTtyPlugin, requests::*, signals::*, title::TtyTitle};
+    pub use crate::{
+        MuxConnection, MuxPane, MuxSystems, OrzmaMuxPlugin, OrzmaTtyHandle, OrzmaTtyPlugin,
+        drain::{MuxPaneSpawnFailed, MuxSessionEnded},
+        layout::CurrentLayout,
+        registry::PaneRegistry,
+        requests::*,
+        signals::*,
+        title::TtyTitle,
+    };
+    pub use orzma_mux::prelude::{MuxClient, MuxConfig, MuxSpawnError};
 }
 
 /// A live terminal owned by one Bevy entity: the PTY-backed
@@ -69,5 +86,41 @@ impl OrzmaTtyHandle {
         let term = OrzmaTty::detached(vt, cols, rows, Box::new(sink.clone()))
             .expect("OrzmaTty::detached failed");
         (Self(term), sink)
+    }
+}
+
+/// The GUI's connection to the multiplexer backend.
+#[derive(Resource)]
+pub struct MuxConnection(pub MuxClient);
+
+/// The backend pane an entity mirrors. Present from `PaneOpened` until
+/// the entity despawns on `PaneClosed`.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[require(TtyTitle)]
+pub struct MuxPane(pub PaneId);
+
+/// Ordering slots for the bridge's `Update` systems. The host chains
+/// `Drain → ApplyLayout → its input phases`.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MuxSystems {
+    /// `drain_mux_events`.
+    Drain,
+    /// `apply_layout`.
+    ApplyLayout,
+}
+
+/// Registers the drain, the layout applier, the request observers, and
+/// the title component's observers.
+///
+/// `OrzmaEventRequestPlugin` is left out here for now: `OrzmaTtyPlugin`
+/// still registers it, and adding both plugins to the same app would
+/// double the request observers. Task 10 moves that registration here
+/// once the requests read `MuxConnection` instead of `OrzmaTtyHandle`.
+pub struct OrzmaMuxPlugin;
+
+impl Plugin for OrzmaMuxPlugin {
+    fn build(&self, app: &mut App) {
+        app.configure_sets(Update, (MuxSystems::Drain, MuxSystems::ApplyLayout).chain())
+            .add_plugins((DrainPlugin, TtyTitlePlugin));
     }
 }

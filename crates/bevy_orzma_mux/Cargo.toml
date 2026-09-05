@@ -12,12 +12,16 @@ publish.workspace = true
 bevy = { workspace = true }
 orzma_vt = { path = "../orzma_vt" }
 orzma_tty = { path = "../orzma_tty" }
+orzma_mux = { path = "../orzma_mux" }
+tracing = { workspace = true }
 
 [features]
-test-support = ["orzma_tty/test-support"]
+test-support = ["orzma_tty/test-support", "orzma_mux/test-support"]
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 orzma_tty = { path = "../orzma_tty", features = ["test-support"] }
+orzma_mux = { path = "../orzma_mux", features = ["test-support"] }
+crossbeam-channel = "0.5"

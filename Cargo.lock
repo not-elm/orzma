@@ -1287,8 +1287,11 @@ name = "bevy_orzma_mux"
 version = "0.2.0-dev"
 dependencies = [
  "bevy",
+ "crossbeam-channel",
+ "orzma_mux",
  "orzma_tty",
  "orzma_vt",
+ "tracing",
 ]
 
 [[package]]
