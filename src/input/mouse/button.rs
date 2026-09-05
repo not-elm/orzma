@@ -421,7 +421,8 @@ fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
 /// viewport-relative `GridPoint` (row 0 = top of the currently displayed
 /// viewport). This dispatcher has no read access to the VT (a pane entity's
 /// `MuxPane` names the backend pane, but the VT itself lives on the
-/// out-of-process mux backend), so it cannot resolve scrollback itself —
+/// multiplexer backend thread, a backend that may later run out of
+/// process), so it cannot resolve scrollback itself —
 /// `action/terminal/selection.rs`'s apply observer offsets this by the
 /// terminal's live display offset before firing `RequestTtySelectionStart`
 /// / `RequestTtySelectionUpdate`.

@@ -1,5 +1,5 @@
-//! The latest layout snapshot the drain received, and (from Task 9) the
-//! system that applies it to pane nodes.
+//! The latest layout snapshot the drain received, and the system that
+//! applies it to pane nodes.
 
 use crate::registry::PaneRegistry;
 use crate::{MuxPane, MuxSystems};
@@ -76,7 +76,10 @@ fn apply_layout(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
     mut nodes: Query<&mut Node, With<MuxPane>>,
-    mut separators: Query<(Entity, &mut Node), (With<MuxSeparator>, Without<MuxPane>)>,
+    mut separators: Query<
+        (Entity, &mut Node, Option<&ChildOf>),
+        (With<MuxSeparator>, Without<MuxPane>),
+    >,
     current: Res<CurrentLayout>,
     geometry: Res<PaneGeometry>,
     parents: Query<&ChildOf, With<MuxPane>>,
@@ -135,22 +138,32 @@ fn container_of(
         .find_map(|entity| parents.get(entity).ok().map(ChildOf::parent))
 }
 
-/// Spawns, updates, or despawns separator nodes to match the layout.
+/// Spawns, updates, or despawns separator nodes to match the layout. An
+/// existing separator with no `ChildOf` yet (spawned before `container`
+/// was known) is re-parented once `container` resolves.
 fn reconcile_separators(
     commands: &mut Commands,
-    separators: &mut Query<(Entity, &mut Node), (With<MuxSeparator>, Without<MuxPane>)>,
+    separators: &mut Query<
+        (Entity, &mut Node, Option<&ChildOf>),
+        (With<MuxSeparator>, Without<MuxPane>),
+    >,
     layout: &Layout,
     geometry: &PaneGeometry,
     container: Option<Entity>,
 ) {
-    let mut existing: Vec<Entity> = separators.iter().map(|(entity, _)| entity).collect();
+    let mut existing: Vec<Entity> = separators.iter().map(|(entity, ..)| entity).collect();
     existing.sort();
     for (index, separator) in layout.separators.iter().enumerate() {
         let wanted = separator_node(separator, geometry);
         match existing.get(index) {
             Some(entity) => {
-                if let Ok((_, mut node)) = separators.get_mut(*entity) {
+                if let Ok((_, mut node, child_of)) = separators.get_mut(*entity) {
                     apply_pane_node(&mut node, &wanted);
+                    if child_of.is_none()
+                        && let Some(container) = container
+                    {
+                        commands.entity(*entity).try_insert(ChildOf(container));
+                    }
                 }
             }
             None => {
@@ -362,6 +375,44 @@ mod tests {
         });
         app.update();
         assert_eq!(app.world().get::<Node>(a).unwrap().width, Val::Px(400.0));
+    }
+
+    /// Asserts that a separator spawned before any pane was parented is
+    /// re-parented under the container once one becomes resolvable,
+    /// rather than staying parentless for its whole life.
+    ///
+    /// Case: the first `Layout` arrives before the shell surface has
+    /// parented the pane entities, so `container_of` first resolves to
+    /// `None`; a later frame parents the panes and reapplies the layout.
+    #[test]
+    fn an_unparented_separator_is_reparented_once_a_container_resolves() {
+        let mut app = app();
+        let (a, b) = two_panes(&mut app);
+        set_layout(&mut app, 1, PaneId(1));
+        app.update();
+        let separator = app
+            .world_mut()
+            .query_filtered::<Entity, With<MuxSeparator>>()
+            .single(app.world())
+            .unwrap();
+        assert!(app.world().get::<ChildOf>(separator).is_none());
+
+        let container = app.world_mut().spawn(Node::default()).id();
+        app.world_mut().entity_mut(a).insert(ChildOf(container));
+        app.world_mut().entity_mut(b).insert(ChildOf(container));
+        app.world_mut().insert_resource(PaneGeometry {
+            cell_px: CellPixels {
+                width: 20,
+                height: 20,
+            },
+            scale_factor: 2.0,
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().get::<ChildOf>(separator).map(ChildOf::parent),
+            Some(container)
+        );
     }
 
     /// Asserts that reapplying a layout whose pane rectangles are

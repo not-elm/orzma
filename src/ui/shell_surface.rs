@@ -57,8 +57,8 @@ fn ensure_shell_surface_ui(mut commands: Commands, ui_root: Query<Entity, With<U
     ));
 }
 
-/// Asks for the first pane once the geometry has been sent (D17: the
-/// backend refuses `NewPane` before its first `Resize`).
+/// Asks for the first pane once the geometry has been sent: the backend
+/// refuses `NewPane` before its first `Resize`.
 fn request_root_pane(mut commands: Commands, mut requested: ResMut<RootRequested>) {
     requested.0 = true;
     commands.trigger(PaneSpawnRequest {
@@ -79,9 +79,11 @@ fn on_spawn_failed(
         control.tokens.remove_entity(ev.entity);
     }
     commands.entity(ev.entity).despawn();
-    tracing::error!(error = %ev.error, "pane spawn failed");
     if panes.is_empty() {
+        tracing::error!(error = %ev.error, "root pane spawn failed, no pane left");
         exit.write(AppExit::Success);
+    } else {
+        tracing::warn!(error = %ev.error, "pane split failed");
     }
 }
 

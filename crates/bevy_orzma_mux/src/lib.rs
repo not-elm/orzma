@@ -2,7 +2,7 @@
 //! every pane entity carries, the title component, inbound request
 //! observers, and the outbound signal types the drain triggers.
 //! `MuxConnection`, `MuxPane`, and the `drain` module bridge the same
-//! world to the out-of-process `orzma_mux` backend.
+//! world to the multiplexer backend thread.
 
 use crate::{
     drain::DrainPlugin,
