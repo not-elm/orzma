@@ -97,7 +97,15 @@ fn apply_layout(
 
 /// Writes `wanted`'s absolute geometry into `node` only when it
 /// differs, so an unchanged pane produces no `Node` mutation.
-fn apply_pane_node(node: &mut Node, wanted: &Node) {
+///
+/// Takes `Mut<'_, Node>` rather than `&mut Node`: coercing a query
+/// item's `Mut<Node>` to a plain `&mut Node` at the call site would
+/// already call `DerefMut::deref_mut` (which marks the component
+/// changed) before this comparison ever ran. Reading fields through
+/// `node` here goes through `Mut`'s immutable `Deref` instead, so only
+/// the assignments inside the branch below — reached exclusively when
+/// a field actually differs — mark the component changed.
+fn apply_pane_node(node: &mut Mut<'_, Node>, wanted: &Node) {
     if node.position_type == wanted.position_type
         && node.left == wanted.left
         && node.top == wanted.top
@@ -354,5 +362,35 @@ mod tests {
         });
         app.update();
         assert_eq!(app.world().get::<Node>(a).unwrap().width, Val::Px(400.0));
+    }
+
+    /// Asserts that reapplying a layout whose pane rectangles are
+    /// unchanged leaves every pane `Node` unflagged, so a system gated
+    /// on `Changed<Node>` does not re-run on a no-op layout update.
+    ///
+    /// Case: the backend resends the same layout as part of an
+    /// unrelated event batch, such as a `Layout` carrying only a fresh
+    /// bootstrap `Frame` for an already-placed pane.
+    #[test]
+    fn reapplying_an_unchanged_layout_does_not_mark_pane_nodes_changed() {
+        #[derive(Resource, Default)]
+        struct ChangedPaneNodes(usize);
+
+        let mut app = app();
+        app.init_resource::<ChangedPaneNodes>().add_systems(
+            Update,
+            (|mut changed: ResMut<ChangedPaneNodes>,
+              changed_nodes: Query<(), (Changed<Node>, With<MuxPane>)>| {
+                changed.0 = changed_nodes.iter().count();
+            })
+            .after(MuxSystems::ApplyLayout),
+        );
+        two_panes(&mut app);
+        set_layout(&mut app, 1, PaneId(1));
+        app.update();
+
+        set_layout(&mut app, 1, PaneId(1));
+        app.update();
+        assert_eq!(app.world().resource::<ChangedPaneNodes>().0, 0);
     }
 }
