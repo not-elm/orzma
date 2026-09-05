@@ -4,7 +4,7 @@
 
 use crate::schema::TerminalGrid;
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::{OrzmaTtyHandle, TtyFrameSignal};
+use bevy_orzma_mux::prelude::{OrzmaTtyHandle, TtyFrameSignal};
 
 /// Registers the `apply_frame` observer and makes every terminal
 /// handle carry a `TerminalGrid`.
@@ -57,7 +57,7 @@ mod tests {
         AnchoredPlacement, DisplayOffset, GridColumn, GridLine, GridPoint, InstanceId,
         PlacementSize, quiet_frame,
     };
-    use bevy_orzma_tty::prelude::OrzmaTtyPlugin;
+    use bevy_orzma_mux::prelude::OrzmaTtyPlugin;
     use orzma_vt::prelude::Frame;
     use std::{thread::sleep, time::Duration};
 

@@ -19,7 +19,7 @@ use bevy_cef::prelude::{
     FocusedWebview, PreloadScripts, WebviewGpuImageInjectSet, WebviewSize, WebviewSource,
     WebviewTextureTarget,
 };
-use bevy_orzma_tty::prelude::{RequestTtyWebviewRemove, TtyWebviewEvictedSignal};
+use bevy_orzma_mux::prelude::{RequestTtyWebviewRemove, TtyWebviewEvictedSignal};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use orzma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
@@ -75,7 +75,7 @@ pub(crate) struct CompositeNotified;
 ///
 /// The projection is scheduled in `PostUpdate` before
 /// `TerminalMaterialSystems::UpdateMaterial`: grid state settles during
-/// `Update` (`bevy_orzma_tty`'s pump emits `TtyFrameSignal` there and the
+/// `Update` (`bevy_orzma_mux`'s pump emits `TtyFrameSignal` there and the
 /// renderer's `apply_frame` observer mirrors it into `TerminalGrid`), so
 /// projecting just before the material rebuild hands the same frame's
 /// overlays to the shader.
@@ -675,7 +675,7 @@ mod tests {
     use crate::webview::apc::{on_webview_mount, on_webview_unmount};
     use bevy::ecs::system::RunSystemOnce;
     use bevy_cef::prelude::PreloadScripts;
-    use bevy_orzma_tty::prelude::{
+    use bevy_orzma_mux::prelude::{
         TtyWebviewEvictedSignal, TtyWebviewMountRejectedSignal, TtyWebviewMountSignal,
         TtyWebviewUnmountSignal,
     };

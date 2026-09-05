@@ -1,5 +1,5 @@
 //! Local VI applier: forwards each shared VI action event to the matching
-//! `bevy_orzma_tty` request `EntityEvent`, and to the vi-mode exit event
+//! `bevy_orzma_mux` request `EntityEvent`, and to the vi-mode exit event
 //! `mode.rs` owns for selection toggling, yank, and exit.
 
 use crate::action::terminal::copy_selection_of;
@@ -9,7 +9,7 @@ use crate::action::vi::{
 };
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::{
+use bevy_orzma_mux::prelude::{
     OrzmaTtyHandle, RequestTtyScroll, RequestTtySelectionClear, RequestTtySelectionKindChange,
     RequestTtySelectionStartAtViCursor, RequestTtyViMotion, SelectionKind,
 };
@@ -86,7 +86,7 @@ fn on_vi_exit(ev: On<ViExitRequest>, mut commands: Commands) {
     commands.trigger(ExitViMode { entity: ev.entity });
 }
 
-/// Maps a `ViModeScroll` to the `Scroll` motion `bevy_orzma_tty` applies.
+/// Maps a `ViModeScroll` to the `Scroll` motion `bevy_orzma_mux` applies.
 fn scroll_for(kind: ViModeScroll) -> Scroll {
     match kind {
         ViModeScroll::PageUp => Scroll::PageUp,
@@ -129,7 +129,7 @@ fn selection_type() -> Option<SelectionKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy_orzma_tty::prelude::ViMotion;
+    use bevy_orzma_mux::prelude::ViMotion;
 
     /// Asserts that a toggle starts a selection when none exists, clears
     /// one of the same kind, and switches one of a different kind.

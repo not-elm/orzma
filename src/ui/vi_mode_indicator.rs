@@ -12,7 +12,7 @@ use bevy::ecs::lifecycle::Remove;
 use bevy::ecs::observer::On;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::OrzmaTtyHandle;
+use bevy_orzma_mux::prelude::OrzmaTtyHandle;
 use orzma_vt::prelude::Vt;
 
 /// Background color of the vi-mode indicator chip. Bright
@@ -105,7 +105,7 @@ fn attach_indicator_to_surface_host(
 /// Updates each visible chip's `Text` and `IndicatorCache` from the
 /// host's live scroll offset. Gated by `any_with_component::<ViModeState>`
 /// so the schedule short-circuits when nothing is in vi mode.
-// TODO: `total` is stubbed to 0 until `bevy_orzma_tty` exposes a
+// TODO: `total` is stubbed to 0 until `bevy_orzma_mux` exposes a
 // history-size read (docs/todo/migrate-to-new-vt.md item 11); only the
 // live scroll offset is real.
 fn refresh_indicator(

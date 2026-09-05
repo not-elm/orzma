@@ -24,7 +24,7 @@ use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use bevy_orzma_tty::prelude::RequestTtyKeyInput;
+use bevy_orzma_mux::prelude::RequestTtyKeyInput;
 use bevy_orzma_webview::{Webview, focused_webview_of};
 use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
 use orzma_tty_renderer::TerminalCellMetricsResource;

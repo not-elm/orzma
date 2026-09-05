@@ -1,6 +1,6 @@
-//! Bevy integration for `orzma_tty`: the terminal handle component,
-//! the title component, inbound request observers, and the outbound
-//! signal pump.
+//! Bevy integration for the multiplexer backend: the terminal handle
+//! component, the title component, inbound request observers, and the
+//! outbound signal pump.
 
 use crate::{
     requests::OrzmaEventRequestPlugin,

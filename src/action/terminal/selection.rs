@@ -4,7 +4,7 @@
 use crate::action::clipboard::CopyAction;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::{
+use bevy_orzma_mux::prelude::{
     CellSide, GridPoint, OrzmaTtyHandle, RequestTtySelectionClear, RequestTtySelectionStart,
     RequestTtySelectionUpdate, SelectionKind,
 };

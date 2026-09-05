@@ -512,7 +512,7 @@ Split such systems along the gather → decide → apply seam.
   gather system queries the target **immutably**, computes effects, and
   `commands.trigger(...)`s them; the observer holds the `&mut` access and writes
   the world. See `apply_type` (`src/input/shortcuts/apply.rs`) → `RequestTtyKeyInput`
-  (`crates/bevy_orzma_tty/src/requests/key_input.rs`) → `apply_key_input`
+  (`crates/bevy_orzma_mux/src/requests/key_input.rs`) → `apply_key_input`
   (same file) and `PasteAction` / `on_paste`
   (`src/action/clipboard/paste.rs`).
 - **Hand off with a `Message`** (`MessageWriter` → `MessageReader`, the consumer

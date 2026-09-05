@@ -4,7 +4,7 @@
 
 use crate::surface::OrzmaTerminal;
 use bevy::{clipboard::ClipboardError, prelude::*};
-use bevy_orzma_tty::prelude::RequestTtyPaste;
+use bevy_orzma_mux::prelude::RequestTtyPaste;
 
 /// Pastes the system clipboard into the target terminal entity.
 #[derive(EntityEvent, Debug, Clone)]

@@ -19,7 +19,7 @@ use std::thread;
 /// PTY ownership for one spawned shell.
 ///
 /// `Mutex` is required because `dyn MasterPty + Send` and `dyn Write +
-/// Send` are `!Sync`, while downstream wrappers (`bevy_orzma_tty`'s
+/// Send` are `!Sync`, while downstream wrappers (`bevy_orzma_mux`'s
 /// `Component`) need the owning `OrzmaTty` to be `Send + Sync`.
 pub struct Pty {
     master: Mutex<Box<dyn MasterPty + Send>>,

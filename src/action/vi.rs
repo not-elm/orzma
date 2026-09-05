@@ -8,7 +8,7 @@ mod applier;
 mod keymap;
 
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::{SelectionKind, ViMotion};
+use bevy_orzma_mux::prelude::{SelectionKind, ViMotion};
 pub(crate) use keymap::{ResolvedViModeKeys, trigger_vi_mode_action};
 use orzma_configs::vi_mode::ViModeScroll;
 

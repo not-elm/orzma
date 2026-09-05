@@ -6,7 +6,7 @@ use bevy::ecs::lifecycle::Add;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized};
-use bevy_orzma_tty::prelude::OrzmaTtyHandle;
+use bevy_orzma_mux::prelude::OrzmaTtyHandle;
 use orzma_tty::CellPixels;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 

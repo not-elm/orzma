@@ -1,5 +1,5 @@
 [package]
-name = "bevy_orzma_tty"
+name = "bevy_orzma_mux"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

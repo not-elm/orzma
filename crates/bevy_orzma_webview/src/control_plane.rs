@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
 use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewSource};
-use bevy_orzma_tty::prelude::{OrzmaTtyHandle, RequestTtyWebviewRemove};
+use bevy_orzma_mux::prelude::{OrzmaTtyHandle, RequestTtyWebviewRemove};
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use orzma_vt::prelude::InstanceId;

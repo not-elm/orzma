@@ -2,7 +2,7 @@
 
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::TtyChildExitSignal;
+use bevy_orzma_mux::prelude::TtyChildExitSignal;
 
 /// Registers the shell-exit observer.
 pub(super) struct ExitPlugin;
@@ -28,7 +28,7 @@ mod tests {
     use super::*;
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::message::MessageReader;
-    use bevy_orzma_tty::prelude::TtyChildExitSignal;
+    use bevy_orzma_mux::prelude::TtyChildExitSignal;
 
     /// Asserts that a `TtyChildExitSignal` on an `OrzmaTerminal` entity
     /// sends `AppExit`.

@@ -11,7 +11,7 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::system::{Commands, Query};
-use bevy_orzma_tty::prelude::{
+use bevy_orzma_mux::prelude::{
     OrzmaTtyHandle, RequestTtySelectionClear, RequestTtyViMode, ViModeSwitch,
 };
 

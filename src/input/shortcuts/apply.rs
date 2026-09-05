@@ -14,7 +14,7 @@ use crate::{
     },
 };
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::RequestTtyKeyInput;
+use bevy_orzma_mux::prelude::RequestTtyKeyInput;
 use orzma_configs::shortcuts::Shortcut;
 use orzma_tty::prelude::TerminalModifiers;
 

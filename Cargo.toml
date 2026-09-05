@@ -28,7 +28,7 @@ arboard = { version = "3.6.1", default-features = false, features = [
 bevy = { workspace = true }
 bevy_cef = { workspace = true }
 bevy_cef_core = { workspace = true }
-bevy_orzma_tty = { path = "crates/bevy_orzma_tty" }
+bevy_orzma_mux = { path = "crates/bevy_orzma_mux" }
 bevy_orzma_webview = { path = "crates/bevy_orzma_webview" }
 orzma_tty = { path = "crates/orzma_tty" }
 orzma_tty_renderer = { path = "crates/orzma_tty_renderer" }
@@ -49,7 +49,7 @@ unicode-segmentation = { workspace = true }
 url = "2"
 
 [dev-dependencies]
-bevy_orzma_tty = { path = "crates/bevy_orzma_tty", features = ["test-support"] }
+bevy_orzma_mux = { path = "crates/bevy_orzma_mux", features = ["test-support"] }
 tempfile = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

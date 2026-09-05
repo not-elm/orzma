@@ -3,7 +3,7 @@
 
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use bevy_orzma_tty::OrzmaTtyHandle;
+use bevy_orzma_mux::OrzmaTtyHandle;
 use orzma_tty::{CellPixels, EnvKey, EnvValue, SpawnOptions};
 use std::path::PathBuf;
 

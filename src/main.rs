@@ -16,7 +16,7 @@ use crate::cef_profile::CefProfileDir;
 use crate::surface::SurfacePlugin;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
-use bevy_orzma_tty::OrzmaTtyPlugin;
+use bevy_orzma_mux::OrzmaTtyPlugin;
 use bevy_orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use configs::OrzmaConfigsPlugin;
 use font::FontBridgePlugin;
