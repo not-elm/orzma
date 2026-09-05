@@ -201,10 +201,10 @@ pub(crate) fn resolve_mount(
 /// `tracing::debug!` plus a reclaim of the VT-side reservation.
 ///
 /// The parent (`ctx.terminal_surface`, the `TtyWebviewMountSignal` target) is
-/// the owning `OrzmaTerminal` surface entity: both the `OrzmaTtyHandle`
-/// (which emits the APC signal) and the required `TerminalGrid` component
-/// live on that one entity, so the `ChildOf` parent is also the entity
-/// `project_webview_overlays` reads grid state from.
+/// the owning pane entity: both `MuxPane` (whose drained signals include the
+/// APC mount) and the required `TerminalGrid` component live on that one
+/// entity, so the `ChildOf` parent is also the entity `project_webview_overlays`
+/// reads grid state from.
 ///
 /// `WebviewSize` is seeded here because `bevy_cef` builds the CEF browser
 /// from it at creation. The seed is `(cols × cell_w, rows × cell_h) /

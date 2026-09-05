@@ -1305,6 +1305,7 @@ dependencies = [
  "data-encoding",
  "getrandom 0.2.17",
  "libc",
+ "orzma_mux",
  "orzma_tty_renderer",
  "orzma_vt",
  "orzma_webview_host",
