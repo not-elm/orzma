@@ -366,6 +366,24 @@ impl Backend {
         }
     }
 
+    /// Resolves a target, logging a debug line naming `command` when it
+    /// does not resolve (an unknown `PaneId`, or `Active` with no active
+    /// pane).
+    fn resolve_or_log(&self, target: PaneTarget, command: &'static str) -> Option<PaneId> {
+        let resolved = self.resolve(target);
+        if resolved.is_none() {
+            tracing::debug!(?target, command, "pane command dropped: no such pane");
+        }
+        resolved
+    }
+
+    /// Resolves a target to its pane's mutable state, logging via
+    /// [`Self::resolve_or_log`] when it does not resolve.
+    fn pane_mut(&mut self, target: PaneTarget, command: &'static str) -> Option<&mut Pane> {
+        let id = self.resolve_or_log(target, command)?;
+        self.panes.get_mut(&id)
+    }
+
     fn emit(&mut self, event: MuxEvent) {
         if self.events.send(event).is_err() {
             self.gui_gone = true;
@@ -378,7 +396,7 @@ impl Backend {
     fn handle_pane_command(&mut self, command: MuxCommand) {
         match command {
             MuxCommand::KillPane { pane } => {
-                if let Some(id) = self.resolve(pane) {
+                if let Some(id) = self.resolve_or_log(pane, "KillPane") {
                     self.close_pane(id, CloseReason::Killed);
                 }
             }
@@ -395,28 +413,28 @@ impl Backend {
                 self.publish_layout();
             }
             MuxCommand::KeyInput { pane, key, mods } => {
-                if let Some(p) = self.resolve(pane).and_then(|id| self.panes.get_mut(&id))
+                if let Some(p) = self.pane_mut(pane, "KeyInput")
                     && let Err(err) = p.tty.send_key(&key, &mods)
                 {
                     tracing::error!(%err, "key write failed");
                 }
             }
             MuxCommand::Paste { pane, text } => {
-                if let Some(p) = self.resolve(pane).and_then(|id| self.panes.get_mut(&id))
+                if let Some(p) = self.pane_mut(pane, "Paste")
                     && let Err(err) = p.tty.send_paste(&text)
                 {
                     tracing::error!(%err, "paste write failed");
                 }
             }
             MuxCommand::MouseInput { pane, report } => {
-                if let Some(p) = self.panes.get_mut(&pane)
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "MouseInput")
                     && let Err(err) = p.tty.send_mouse(report)
                 {
                     tracing::error!(%err, "mouse write failed");
                 }
             }
             MuxCommand::Scroll { pane, scroll } => {
-                if let Some(p) = self.panes.get_mut(&pane) {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "Scroll") {
                     p.tty.scroll(scroll);
                 }
             }
@@ -426,17 +444,17 @@ impl Backend {
                 side,
                 kind,
             } => {
-                if let Some(p) = self.panes.get_mut(&pane) {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionStart") {
                     p.tty.start_selection(cell, side, kind);
                 }
             }
             MuxCommand::SelectionUpdate { pane, cell, side } => {
-                if let Some(p) = self.panes.get_mut(&pane) {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionUpdate") {
                     p.tty.extend_selection(cell, side);
                 }
             }
             MuxCommand::SelectionClear { pane } => {
-                if let Some(p) = self.panes.get_mut(&pane) {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionClear") {
                     p.tty.clear_selection();
                 }
             }
@@ -453,7 +471,7 @@ impl Backend {
                 });
             }
             MuxCommand::RemovePlacements { pane, instances } => {
-                if let Some(p) = self.panes.get_mut(&pane) {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "RemovePlacements") {
                     p.tty.remove_placements(&instances);
                 }
             }
@@ -921,6 +939,24 @@ mod tests {
             mods: TerminalModifiers::default(),
         });
         assert_eq!(root_pane.sink.contents(), b"a");
+    }
+
+    /// Asserts that a `KeyInput` for an unknown pane writes nothing and
+    /// produces no event, rather than panicking or falling back to
+    /// another pane.
+    ///
+    /// Case: a stale keystroke arrives for a pane the user already closed.
+    #[test]
+    fn key_input_for_an_unknown_pane_is_dropped_silently() {
+        let mut h = Harness::new();
+        let (_root, root_pane) = h.open_root();
+        h.send(MuxCommand::KeyInput {
+            pane: PaneTarget::Id(PaneId(99)),
+            key: TerminalKey::Character(KeyText::new("a").unwrap()),
+            mods: TerminalModifiers::default(),
+        });
+        assert!(h.drain().is_empty());
+        assert!(root_pane.sink.contents().is_empty());
     }
 
     /// Asserts that directional selection moves the active pane and
