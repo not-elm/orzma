@@ -6,6 +6,7 @@
 //! the active pane.
 
 use crate::action::vi::mode::ViModeState;
+use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::ime::ImeState;
 use crate::surface::OrzmaTerminal;
@@ -15,9 +16,11 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::{FocusedWebview, WebviewSource};
+use bevy_orzma_mux::prelude::{MuxActivePaneChanged, MuxPane, PaneAction, RequestPaneAction};
 use bevy_orzma_webview::{NonInteractive, Webview, webview_hit_at};
+use orzma_configs::inactive_pane::InactivePaneConfig;
 use orzma_tty_renderer::TerminalCellMetricsResource;
-use orzma_tty_renderer::prelude::TerminalOverlays;
+use orzma_tty_renderer::prelude::{PaneInactiveStyle, TerminalOverlays};
 
 /// When present on an `OrzmaTerminal` entity, the crate's default keyboard
 /// dispatcher skips it entirely — the host withholds keyboard input for it
@@ -41,7 +44,15 @@ pub(crate) struct KeyboardFocused;
 #[derive(Component)]
 pub(crate) struct MouseDisabled;
 
-/// Registers `maintain_input_gates` and the webview focus-sync system.
+/// A press landed on a pane surface.
+#[derive(EntityEvent, Debug, Clone, Copy)]
+pub(crate) struct PaneClicked {
+    #[event_target]
+    pub entity: Entity,
+}
+
+/// Registers `maintain_input_gates`, the webview focus-sync system, and the
+/// active-pane / click-to-focus observers.
 pub(super) struct FocusSyncPlugin;
 
 impl Plugin for FocusSyncPlugin {
@@ -52,7 +63,79 @@ impl Plugin for FocusSyncPlugin {
                 maintain_input_gates.before(InputPhase::Hover),
                 sync_focused_webview.after(InputPhase::FocusedKey),
             ),
-        );
+        )
+        .add_observer(on_active_pane_changed)
+        .add_observer(on_pane_clicked);
+    }
+}
+
+/// Applies an accepted active-pane change: moves `KeyboardFocused`,
+/// releases a focused webview, and swaps `PaneInactiveStyle` between
+/// the previous and current panes. `previous` may already be despawned
+/// (a `PaneClosed` in the same drain), hence the fallible commands.
+fn on_active_pane_changed(
+    ev: On<MuxActivePaneChanged>,
+    mut commands: Commands,
+    mut focused_webview: ResMut<FocusedWebview>,
+    configs: Res<OrzmaConfigsResource>,
+    focused: Query<Entity, With<KeyboardFocused>>,
+) {
+    for entity in focused.iter() {
+        if Some(entity) != ev.current {
+            commands.entity(entity).remove::<KeyboardFocused>();
+        }
+    }
+    if let Some(previous) = ev.previous
+        && let Ok(mut previous) = commands.get_entity(previous)
+    {
+        previous.try_insert(inactive_style(&configs.inactive_pane));
+    }
+    if let Some(current) = ev.current
+        && let Ok(mut current) = commands.get_entity(current)
+    {
+        current.try_insert(KeyboardFocused);
+        current.remove::<PaneInactiveStyle>();
+    }
+    if focused_webview.0.is_some() {
+        focused_webview.0 = None;
+    }
+}
+
+/// Optimistic click-to-focus: moves `KeyboardFocused` now (so this
+/// frame's keys already go to the clicked pane) and asks the backend to
+/// make it active; the confirming `Layout` reconciles.
+fn on_pane_clicked(
+    ev: On<PaneClicked>,
+    mut commands: Commands,
+    focused: Query<Entity, With<KeyboardFocused>>,
+    panes: Query<(), With<MuxPane>>,
+) {
+    if panes.get(ev.entity).is_err() {
+        return;
+    }
+    for entity in focused.iter() {
+        if entity != ev.entity {
+            commands.entity(entity).remove::<KeyboardFocused>();
+        }
+    }
+    commands.entity(ev.entity).insert(KeyboardFocused);
+    commands.trigger(RequestPaneAction {
+        action: PaneAction::Select(ev.entity),
+    });
+}
+
+/// The renderer style for an inactive pane, from `[inactive_pane]`.
+fn inactive_style(config: &InactivePaneConfig) -> PaneInactiveStyle {
+    if !config.enabled {
+        return PaneInactiveStyle::default();
+    }
+    let (r, g, b) = config.tint_color_rgb();
+    let rgb = Color::srgb_u8(r, g, b).to_linear();
+    PaneInactiveStyle {
+        dim: config.dim,
+        tint: Vec4::new(rgb.red, rgb.green, rgb.blue, config.tint),
+        overlay_dim: config.webview_dim,
+        overlay_desaturate: config.webview_desaturate,
     }
 }
 
@@ -205,6 +288,7 @@ fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orzma_mux::prelude::PaneId;
     use orzma_vt::prelude::InstanceId;
 
     #[test]
@@ -383,6 +467,83 @@ mod tests {
             app.world().resource::<FocusedWebview>().0,
             None,
             "app-declared focus must clear once its inline child despawns"
+        );
+    }
+
+    /// Asserts that an accepted active change moves `KeyboardFocused`,
+    /// tints the previous pane, and tolerates a despawned previous.
+    ///
+    /// Case: the backend confirms select-right; later the previously
+    /// active pane is already gone when its inactive style would apply.
+    #[test]
+    fn active_pane_change_moves_focus_and_inactive_style() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
+            .insert_resource(OrzmaConfigsResource::default())
+            .add_observer(on_active_pane_changed);
+        let a = app
+            .world_mut()
+            .spawn((OrzmaTerminal, MuxPane(PaneId(1)), KeyboardFocused))
+            .id();
+        let b = app
+            .world_mut()
+            .spawn((OrzmaTerminal, MuxPane(PaneId(2))))
+            .id();
+        app.world_mut().trigger(MuxActivePaneChanged {
+            previous: Some(a),
+            current: Some(b),
+        });
+        app.update();
+        assert!(app.world().get::<KeyboardFocused>(a).is_none());
+        assert!(app.world().get::<KeyboardFocused>(b).is_some());
+        assert!(app.world().get::<PaneInactiveStyle>(a).is_some());
+        assert!(app.world().get::<PaneInactiveStyle>(b).is_none());
+
+        app.world_mut().entity_mut(b).despawn();
+        app.world_mut().trigger(MuxActivePaneChanged {
+            previous: Some(b),
+            current: Some(a),
+        });
+        app.update();
+        assert!(
+            app.world().get::<KeyboardFocused>(a).is_some(),
+            "a despawned previous must not panic"
+        );
+    }
+
+    /// Asserts that a click focuses optimistically and asks the backend
+    /// to select the same pane.
+    ///
+    /// Case: the user clicks an inactive pane and starts typing in the
+    /// same frame.
+    #[test]
+    fn a_click_focuses_optimistically_and_requests_the_selection() {
+        #[derive(Resource, Default)]
+        struct Seen(Vec<PaneAction>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Seen>()
+            .add_observer(on_pane_clicked)
+            .add_observer(|ev: On<RequestPaneAction>, mut seen: ResMut<Seen>| {
+                seen.0.push(ev.action)
+            });
+        let a = app
+            .world_mut()
+            .spawn((OrzmaTerminal, MuxPane(PaneId(1)), KeyboardFocused))
+            .id();
+        let b = app
+            .world_mut()
+            .spawn((OrzmaTerminal, MuxPane(PaneId(2))))
+            .id();
+        app.world_mut().trigger(PaneClicked { entity: b });
+        app.update();
+        assert!(app.world().get::<KeyboardFocused>(a).is_none());
+        assert!(app.world().get::<KeyboardFocused>(b).is_some());
+        assert_eq!(
+            app.world().resource::<Seen>().0,
+            vec![PaneAction::Select(b)]
         );
     }
 

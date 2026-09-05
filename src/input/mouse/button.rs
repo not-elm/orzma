@@ -1,10 +1,12 @@
 //! Mouse-button dispatch for every `OrzmaTerminal` surface: local text
-//! selection + copy, and Cmd-click hyperlink open. Hit-tests the cursor to a
-//! cell, drives the local-only `LocalButtonAction::route` router, and fans
-//! effects out via the shared `trigger_mouse_effects`. App-forward mouse
-//! reporting is out of scope until mouse routing is reintroduced against
-//! `orzma_tty` (D17 of the engine-swap design). Registered by
-//! `MouseButtonInputPlugin`; skips `MouseDisabled` surfaces.
+//! selection + copy, Cmd-click hyperlink open, and click-to-focus. Hit-tests
+//! the cursor to a cell, drives the local-only `LocalButtonAction::route`
+//! router, and fans effects out via the shared `trigger_mouse_effects`. A
+//! press that a URI open did not consume also triggers `PaneClicked` on the
+//! target surface. App-forward mouse reporting is out of scope until mouse
+//! routing is reintroduced against `orzma_tty` (D17 of the engine-swap
+//! design). Registered by `MouseButtonInputPlugin`; skips `MouseDisabled`
+//! surfaces.
 
 use super::{
     CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_dims, hit_candidates,
@@ -13,6 +15,7 @@ use super::{
 use crate::input::InputPhase;
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::current_modifiers;
+use crate::input::focus::PaneClicked;
 use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
 use crate::input::mouse::gesture::{DragGesture, DragPhase, HeldPointer, OrzmaMouseGesture};
@@ -282,6 +285,7 @@ fn process_button_event(
     let opened = matches!(decided.as_slice(), [MouseEffect::OpenUri(_)]);
     match evt.kind {
         MouseReportKind::Press if !opened => {
+            commands.trigger(PaneClicked { entity: target });
             gesture.held = Some(HeldPointer {
                 entity: target,
                 button: evt.button,
@@ -818,23 +822,35 @@ mod tests {
         assert!(app.world().resource::<OrzmaMouseGesture>().drag.is_none());
     }
 
-    /// Asserts that a single left press arms a drag and clears any existing
-    /// selection without starting a new one.
+    /// Asserts that a single left press arms a drag, clears any existing
+    /// selection without starting a new one, and triggers `PaneClicked`
+    /// exactly once so click-to-focus can react to it.
     ///
     /// Case: the user clicks once on a cell with no modifier held.
     #[test]
     fn local_single_press_arms_drag_and_clears() {
-        let mut g = OrzmaMouseGesture::default();
-        let fx = decide_button(
-            &mut g,
-            ev(MouseReportKind::Press, 5, 5, 1),
-            ProtocolModifiers::default(),
-            false,
-            None,
+        #[derive(Resource, Default)]
+        struct Clicks(u32);
+
+        let mut app = make_selection_app();
+        app.init_resource::<Clicks>()
+            .add_observer(|_ev: On<PaneClicked>, mut clicks: ResMut<Clicks>| clicks.0 += 1);
+
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_left(&mut app, ButtonState::Pressed);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Clicks>().0,
+            1,
+            "a press must trigger PaneClicked exactly once"
         );
-        assert_eq!(fx, vec![MouseEffect::SelClear]);
+        assert_eq!(
+            app.world().resource::<CapturedEffects>().0,
+            vec![MouseEffect::SelClear]
+        );
         assert!(matches!(
-            g.drag,
+            app.world().resource::<OrzmaMouseGesture>().drag,
             Some(DragGesture {
                 phase: DragPhase::Armed,
                 ..
