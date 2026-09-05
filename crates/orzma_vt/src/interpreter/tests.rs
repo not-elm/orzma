@@ -4,10 +4,10 @@ use super::*;
 use crate::device::color::{Color, Rgb};
 use crate::device::modes::{MouseEncoding, MouseTracking};
 use crate::frame::Frame;
-use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
+use crate::placement::{AnchoredPlacement, InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::cell::Cell;
 use crate::screen::grid::GridSize;
-use crate::screen::grid::coords::GridColumn;
+use crate::screen::grid::coords::{GridColumn, GridLine};
 use crate::screen::grid::run::Style;
 use crate::screen::viewport::ViewportLine;
 use crate::{OrzmaVt, Vt};
@@ -77,6 +77,15 @@ impl Session {
                 .mount_placement(PlacementSize { rows: 1, cols: 1 }, id),
             "a mount under the cap is accepted"
         );
+    }
+
+    /// Emits the pending frame and hands back the placement list it
+    /// carries.
+    fn listed_placements(&mut self) -> Vec<AnchoredPlacement> {
+        self.frame()
+            .expect("the chunk emits a frame")
+            .placements
+            .expect("the placement list changed")
     }
 
     fn active_screen(&self) -> ScreenKind {

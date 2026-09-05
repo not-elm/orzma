@@ -3,7 +3,7 @@
 //! the resize seam.
 
 use orzma_vt::prelude::{
-    DisplayOffset, Frame, GridSize, InstanceId, InterpretOutput, Scroll, Vt, VtModes, VtSignal,
+    DisplayOffset, Frame, GridSize, InstanceId, InterpretOutput, ResizeChanged, Scroll, Vt, VtModes,
 };
 #[cfg(any(test, feature = "test-support"))]
 use portable_pty::{MasterPty, PtySize};
@@ -46,8 +46,9 @@ impl Write for CaptureSink {
 /// `interpret` records each chunk and pops the next scripted update; an
 /// empty script yields an update with `damaged: true`, matching the
 /// window-arming behavior of a real interpreted chunk when no test
-/// script overrides it. `resize` applies honestly
-/// (returns whether the size changed). `scroll` records the motion:
+/// script overrides it. `resize` applies honestly (`None` when the
+/// size did not change) and names the next scripted `evictions` entry
+/// when it did. `scroll` records the motion:
 /// `Scroll::Bottom` snaps `display_offset` to zero, every other motion
 /// returns the scripted `scroll_moves`.
 pub struct FakeVt {
@@ -69,8 +70,10 @@ pub struct FakeVt {
     pub updates: VecDeque<InterpretOutput>,
     /// Frames popped by `frame`.
     pub frames: VecDeque<Frame>,
-    /// Signals popped by `sweep_evictions`.
-    pub sweeps: VecDeque<Vec<VtSignal>>,
+    /// Placements a `resize` that changed the size reports as
+    /// stranded, popped one list per such resize; an empty script
+    /// reports none.
+    pub evictions: VecDeque<Vec<InstanceId>>,
 }
 
 impl FakeVt {
@@ -87,7 +90,7 @@ impl FakeVt {
             resizes: Vec::new(),
             updates: VecDeque::new(),
             frames: VecDeque::new(),
-            sweeps: VecDeque::new(),
+            evictions: VecDeque::new(),
         }
     }
 }
@@ -106,19 +109,19 @@ impl Vt for FakeVt {
         self.frames.pop_front()
     }
 
-    fn sweep_evictions(&mut self) -> Vec<VtSignal> {
-        self.sweeps.pop_front().unwrap_or_default()
-    }
-
     fn remove_placements(&mut self, _instances: &[InstanceId]) -> bool {
         false
     }
 
-    fn resize(&mut self, size: GridSize) -> bool {
+    fn resize(&mut self, size: GridSize) -> Option<ResizeChanged> {
         self.resizes.push(size);
-        let changed = self.grid_size != size;
+        if self.grid_size == size {
+            return None;
+        }
         self.grid_size = size;
-        changed
+        Some(ResizeChanged {
+            evicted: self.evictions.pop_front().unwrap_or_default(),
+        })
     }
 
     fn scroll(&mut self, scroll: Scroll) -> bool {

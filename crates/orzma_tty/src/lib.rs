@@ -66,7 +66,8 @@ pub struct OrzmaTty<V: Vt> {
     vt: V,
     coalescer: Coalescer,
     pty: Pty,
-    /// Signals produced by interpreted chunks, awaiting the next pump.
+    /// Signals produced by interpreted chunks or reported by a resize,
+    /// awaiting the next pump.
     pending_signals: Vec<TtySignal>,
     /// Reply bytes produced by interpreted chunks, awaiting one PTY
     /// write in the next pump.
@@ -87,19 +88,16 @@ impl<V: Vt> OrzmaTty<V> {
 
     /// Spawns the login shell under a new PTY and sizes the injected VT
     /// to the spawn geometry.
-    pub fn spawn(mut vt: V, options: SpawnOptions) -> OrzmaTtyResult<Self> {
-        let pty = Pty::spawn(&options)?;
-        vt.resize(GridSize {
+    ///
+    /// The initial sizing reports the placements it strands exactly as
+    /// [`Self::resize`] does.
+    pub fn spawn(vt: V, options: SpawnOptions) -> OrzmaTtyResult<Self> {
+        let mut tty = Self::wired(vt, Pty::spawn(&options)?);
+        tty.resize_vt(GridSize {
             cols: options.cols,
             rows: options.rows,
         });
-        Ok(Self {
-            vt,
-            coalescer: Coalescer::default(),
-            pty,
-            pending_signals: Vec::new(),
-            pending_replies: Vec::new(),
-        })
+        Ok(tty)
     }
 
     /// Reads the PTY master's current grid size back from the kernel
@@ -130,25 +128,23 @@ impl<V: Vt> OrzmaTty<V> {
     /// can be observed on `writer` — typically a
     /// [`test_support::CaptureSink`].
     ///
+    /// The initial sizing reports the placements it strands exactly as
+    /// [`Self::resize`] does.
+    ///
     /// The constructor is compiled for tests only: in-crate under
     /// `cfg(test)`, and for downstream crates through the `test-support`
     /// feature.
     #[cfg(any(test, feature = "test-support"))]
     pub fn detached(
-        mut vt: V,
+        vt: V,
         cols: u16,
         rows: u16,
         writer: Box<dyn Write + Send>,
     ) -> OrzmaTtyResult<Self> {
         let pty = Pty::with_master(Box::new(RecordingMaster::at(cols, rows).0), writer);
-        vt.resize(GridSize { cols, rows });
-        Ok(Self {
-            vt,
-            coalescer: Coalescer::default(),
-            pty,
-            pending_signals: Vec::new(),
-            pending_replies: Vec::new(),
-        })
+        let mut tty = Self::wired(vt, pty);
+        tty.resize_vt(GridSize { cols, rows });
+        Ok(tty)
     }
 
     /// Feeds bytes through the same seam [`Self::pump`] runs PTY chunks
@@ -184,14 +180,16 @@ impl<V: Vt> OrzmaTty<V> {
     /// A request for the grid size the VT already has changes nothing
     /// and reports no damage, so it arms nothing either — the same gate
     /// [`Self::scroll`] applies to a clamped motion.
+    ///
+    /// The placements the new geometry strands reach the next pump as a
+    /// [`VtSignal::WebviewEvicted`] signal; no PTY output is needed to
+    /// carry them.
     pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTtyResult {
         if cols == 0 || rows == 0 || Self::MAX_COLS < cols || Self::MAX_ROWS < rows {
             return Ok(());
         }
         self.pty.resize(cols, rows)?;
-        if self.vt.resize(GridSize { cols, rows }) {
-            self.coalescer.arm_or_extend(Instant::now());
-        }
+        self.resize_vt(GridSize { cols, rows });
         Ok(())
     }
 
@@ -271,16 +269,6 @@ impl<V: Vt> OrzmaTty<V> {
             let _ = self.pty.write_all(&replies);
         }
 
-        let evicted = self.vt.sweep_evictions();
-        if !evicted.is_empty() {
-            // NOTE: the sweep can strand placements without staging row
-            // damage — RIS on an already-blank screen does — so arming
-            // here is what makes the frame carrying the shortened
-            // placement list get asked for at all.
-            self.coalescer.arm_or_extend(now);
-            self.pending_signals
-                .extend(evicted.into_iter().map(TtySignal::Vt));
-        }
         let mut signals = mem::take(&mut self.pending_signals);
         if let Some(code) = exit {
             signals.push(TtySignal::ChildExit { code });
@@ -296,6 +284,35 @@ impl<V: Vt> OrzmaTty<V> {
             }
         }
         PumpOutput { frame, signals }
+    }
+
+    /// Wires a VT to a PTY with an idle coalescer and nothing pending,
+    /// leaving the VT at whatever size it arrived with.
+    fn wired(vt: V, pty: Pty) -> Self {
+        Self {
+            vt,
+            coalescer: Coalescer::default(),
+            pty,
+            pending_signals: Vec::new(),
+            pending_replies: Vec::new(),
+        }
+    }
+
+    /// Sizes the VT grid, arming the coalescer when the grid changed
+    /// and queuing the placements the change stranded for the next
+    /// pump.
+    ///
+    /// Both constructors and [`Self::resize`] size the VT through this
+    /// one path, so a VT handed in with placements mounted reports what
+    /// the initial sizing strands exactly as a later resize would.
+    fn resize_vt(&mut self, size: GridSize) {
+        let Some(changed) = self.vt.resize(size) else {
+            return;
+        };
+        self.coalescer.arm_or_extend(Instant::now());
+        if let Some(evicted) = VtSignal::evicted(changed.evicted) {
+            self.pending_signals.push(TtySignal::Vt(evicted));
+        }
     }
 
     /// Snaps a scrolled-back viewport to the live tail (scroll-on-input
@@ -332,30 +349,15 @@ impl<V: Vt> OrzmaTty<V> {
 mod tests {
     use super::*;
     use crate::error::OrzmaTtyError;
-    use crate::test_support::{CaptureSink, FailingMaster, FakeVt, RecordingMaster};
+    use crate::test_support::{CaptureSink, FailingMaster, FakeVt};
     use crossbeam_channel::{Sender, unbounded};
 
-    /// Mirrors [`OrzmaTty::detached`] over a fake master instead of a
-    /// real one.
-    ///
-    /// Opening a real one made every test sharing the run flaky.
-    /// Cycling master/slave pairs as fast as the parallel harness does
-    /// outruns the kernel's reclamation of pty slots, and `openpty`
-    /// then fails with `ENXIO`; measured on macOS at 5-10 failures per
-    /// 960 concurrent calls, and at zero once the slave side is left
-    /// out.
+    /// An 80x24 [`OrzmaTty::detached`] terminal over a `FakeVt`, plus
+    /// the sink its PTY writes land on.
     fn detached_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
         let sink = CaptureSink::default();
-        let (master, _) = RecordingMaster::at(80, 24);
-        let mut vt = FakeVt::new(80, 24);
-        vt.resize(GridSize { cols: 80, rows: 24 });
-        let term = OrzmaTty {
-            vt,
-            coalescer: Coalescer::default(),
-            pty: Pty::with_master(Box::new(master), Box::new(sink.clone())),
-            pending_signals: Vec::new(),
-            pending_replies: Vec::new(),
-        };
+        let term = OrzmaTty::detached(FakeVt::new(80, 24), 80, 24, Box::new(sink.clone()))
+            .expect("OrzmaTty::detached");
         (term, sink)
     }
 
@@ -451,42 +453,23 @@ mod tests {
         }
     }
 
-    /// Asserts that a pump reports the signals its eviction sweep
-    /// raised, without any PTY output to carry them.
+    /// Asserts that the placements a resize strands reach the next
+    /// pump's signals, without any PTY output to carry them.
     ///
     /// Case: the user drags the window shorter, dropping the anchor
     /// row of a mounted webview out of scrollback, and types nothing
     /// afterwards.
     #[test]
-    fn a_pump_reports_what_the_eviction_sweep_raised() {
+    fn a_resize_eviction_reaches_the_next_pump() {
         let (mut tty, _sink) = detached_term();
-        tty.vt.sweeps.push_back(vec![VtSignal::WebviewEvicted {
-            placements: vec![InstanceId(7)],
-        }]);
-        let output = tty.pump();
+        tty.vt.evictions.push_back(vec![InstanceId(7)]);
+        tty.resize(100, 30).expect("resize");
         assert_eq!(
-            output.signals,
+            tty.pump().signals,
             vec![TtySignal::Vt(VtSignal::WebviewEvicted {
                 placements: vec![InstanceId(7)]
             })]
         );
-    }
-
-    /// Asserts that an eviction arms the coalesce window, so the frame
-    /// carrying the shortened placement list is asked for.
-    ///
-    /// Case: `RIS` strands a webview on an already-blank screen, which
-    /// stages no row damage of its own.
-    #[test]
-    fn an_eviction_arms_the_coalesce_window() {
-        let (mut tty, _sink) = detached_term();
-        tty.vt.frames.push_back(a_frame());
-        tty.pump();
-        tty.vt.sweeps.push_back(vec![VtSignal::WebviewEvicted {
-            placements: vec![InstanceId(7)],
-        }]);
-        tty.pump();
-        assert!(tty.coalescer.is_armed());
     }
 
     /// Asserts that a pump with nothing evicted raises no signal and
@@ -502,14 +485,11 @@ mod tests {
         assert!(!tty.coalescer.is_armed());
     }
 
+    /// A terminal whose PTY refuses every resize, wired without the
+    /// initial sizing pass so `vt.resizes` starts empty.
     fn failing_term() -> OrzmaTty<FakeVt> {
-        OrzmaTty {
-            vt: FakeVt::new(80, 24),
-            coalescer: Coalescer::default(),
-            pty: Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default())),
-            pending_signals: Vec::new(),
-            pending_replies: Vec::new(),
-        }
+        let pty = Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default()));
+        OrzmaTty::wired(FakeVt::new(80, 24), pty)
     }
 
     /// A terminal whose PTY chunk and exit streams are fed by the
@@ -518,19 +498,13 @@ mod tests {
     fn channelled_term() -> (OrzmaTty<FakeVt>, Sender<Vec<u8>>, Sender<Option<i32>>) {
         let (chunk_tx, chunk_rx) = unbounded();
         let (exit_tx, exit_rx) = unbounded();
-        let term = OrzmaTty {
-            vt: FakeVt::new(80, 24),
-            coalescer: Coalescer::default(),
-            pty: Pty::with_master_and_channels(
-                Box::new(FailingMaster),
-                Box::new(CaptureSink::default()),
-                chunk_rx,
-                exit_rx,
-            ),
-            pending_signals: Vec::new(),
-            pending_replies: Vec::new(),
-        };
-        (term, chunk_tx, exit_tx)
+        let pty = Pty::with_master_and_channels(
+            Box::new(FailingMaster),
+            Box::new(CaptureSink::default()),
+            chunk_rx,
+            exit_rx,
+        );
+        (OrzmaTty::wired(FakeVt::new(80, 24), pty), chunk_tx, exit_tx)
     }
 
     /// Collects the `ChildExit` codes out of a pumped signal batch.
@@ -952,18 +926,13 @@ mod tests {
         let (chunk_tx, chunk_rx) = unbounded();
         let (_exit_tx, exit_rx) = unbounded();
         let sink = CaptureSink::default();
-        let mut term = OrzmaTty {
-            vt: FakeVt::new(80, 24),
-            coalescer: Coalescer::default(),
-            pty: Pty::with_master_and_channels(
-                Box::new(FailingMaster),
-                Box::new(sink.clone()),
-                chunk_rx,
-                exit_rx,
-            ),
-            pending_signals: Vec::new(),
-            pending_replies: Vec::new(),
-        };
+        let pty = Pty::with_master_and_channels(
+            Box::new(FailingMaster),
+            Box::new(sink.clone()),
+            chunk_rx,
+            exit_rx,
+        );
+        let mut term = OrzmaTty::wired(FakeVt::new(80, 24), pty);
         term.vt.updates.push_back(InterpretOutput {
             damaged: true,
             signals: Vec::new(),
@@ -972,6 +941,17 @@ mod tests {
         chunk_tx.send(b"\x1b[6n".to_vec()).expect("send chunk");
         term.pump();
         assert_eq!(sink.contents(), b"\x1b[1;1R");
+    }
+
+    /// Asserts that a chunk which stages damage arms the coalesce
+    /// window.
+    ///
+    /// Case: the shell echoes a typed character at an idle prompt.
+    #[test]
+    fn a_chunk_that_stages_damage_arms_the_window() {
+        let (mut term, _sink) = detached_term();
+        term.feed_bytes(b"a");
+        assert!(term.coalescer.is_armed());
     }
 
     /// Asserts that a chunk which stages no damage leaves the coalesce

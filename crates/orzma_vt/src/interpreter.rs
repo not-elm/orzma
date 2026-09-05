@@ -40,6 +40,15 @@ impl Interpreter {
     ///
     /// The executor is built here rather than passed in because it
     /// borrows [`SyncBuffer`], which `&mut self` already holds.
+    ///
+    /// # Invariants
+    ///
+    /// Every run of the parser ends with [`Executor::sweep_evictions`],
+    /// after the chunk's last action: [`crate::Vt::interpret`] promises
+    /// that a chunk names the placements it strands in its own
+    /// [`InterpretOutput::signals`]. A run without the sweep would leave
+    /// them unnamed until a later chunk sweeps, while every frame in
+    /// between already omits them.
     pub fn parse(
         &mut self,
         output: &mut InterpretOutput,
@@ -55,6 +64,7 @@ impl Interpreter {
             tracker,
         };
         self.parser.parse(chunk, &mut executor);
+        executor.sweep_evictions();
         executor.output.damaged |= cursor_before != executor.device.active_screen().cursor();
     }
 }
@@ -462,6 +472,27 @@ impl Executor<'_> {
             self.signal(VtSignal::ResetTitle);
         }
     }
+
+    /// Names the placements this chunk stranded and raises the chunk
+    /// liveness, because a shortened placement list is a frame-visible
+    /// section change even when no row was damaged.
+    ///
+    /// A chunk strands a placement when its anchor row leaves the grid:
+    /// a reset mints every row afresh, and a scroll that recycles a row
+    /// rather than keeping it in history — past the cap, inside a scroll
+    /// region, downward at the top margin, or on a screen without
+    /// scrollback — re-mints it under an id no anchor holds.
+    ///
+    /// The sweep runs once, after the whole chunk, so a placement the
+    /// chunk strands and then re-mounts is updated in place rather than
+    /// evicted and re-created.
+    fn sweep_evictions(&mut self) {
+        let Some(evicted) = VtSignal::evicted(self.device.evict_lost_anchors()) else {
+            return;
+        };
+        self.signal(evicted);
+        self.output.damaged = true;
+    }
 }
 
 /// The control functions a CSI sequence requests, where one final byte
@@ -567,9 +598,9 @@ impl Executor<'_> {
     /// tears down. Already showing `to` is a no-op: no repaint, no
     /// signal.
     ///
-    /// The eviction is raised here rather than left to the owner's
+    /// The eviction is raised here rather than left to the chunk-end
     /// sweep because [`DeviceState::switch_screen`] takes the placements
-    /// out of the table, so no later sweep can find them.
+    /// out of the table, so the sweep could not find them.
     ///
     /// # Invariants
     ///

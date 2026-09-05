@@ -47,14 +47,9 @@ fn an_apc_mount_reaches_the_next_frame() {
     let id: InstanceId = ID.parse().expect("the fixture is a valid id");
     let mut session = Session::new();
     session.feed(format!("\x1b_Omount;n={id},r=2,c=3\x1b\\").as_bytes());
-    let frame = session.frame().expect("a mount emits");
-    let listed: Vec<InstanceId> = frame
-        .placements
-        .expect("a placement change is listed")
-        .iter()
-        .map(|placement| placement.id)
-        .collect();
-    assert_eq!(listed, vec![id]);
+    let placements = session.listed_placements();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].id, id);
 }
 
 /// Asserts that an APC unmount reports the instance it named and drops
@@ -167,4 +162,50 @@ fn a_remount_of_a_live_instance_keeps_its_id() {
     assert_eq!(placements.len(), 1);
     assert_eq!(placements[0].id, id);
     assert_eq!(placements[0].size, PlacementSize { rows: 9, cols: 40 });
+}
+
+/// Line feeds that carry row 0 of the harness's 3-row, 10-row-history
+/// session out of the ring: two reach the bottom row, ten fill the
+/// history, and one more discards the oldest row.
+const LINE_FEEDS_PAST_THE_CAP: usize = 13;
+
+/// Asserts that output pushing a placement's anchor row past the
+/// history cap names the placement in that chunk's signals and marks
+/// the chunk damaged.
+///
+/// Case: a companion app mounted a webview beside a prompt, and a
+/// long build then prints more lines than the scrollback keeps.
+#[test]
+fn output_past_the_history_cap_evicts_the_placement_in_its_own_chunk() {
+    let mut session = Session::new();
+    let id = InstanceId(1);
+    session.mount(id);
+    let output = session.feed(&b"\n".repeat(LINE_FEEDS_PAST_THE_CAP));
+    assert_eq!(
+        output.signals,
+        vec![VtSignal::WebviewEvicted {
+            placements: vec![id]
+        }]
+    );
+    assert!(output.damaged);
+}
+
+/// Asserts that output which only scrolls a placement's anchor row
+/// into history, below the cap, evicts nothing and lists the placement
+/// at the history line its anchor scrolled to.
+///
+/// Case: a companion app mounted a webview beside a prompt and the
+/// shell printed a few more lines under it.
+#[test]
+fn output_that_keeps_the_anchor_in_history_evicts_nothing() {
+    let mut session = Session::new();
+    let id = InstanceId(1);
+    session.mount(id);
+    session.frame();
+    let output = session.feed(&b"\n".repeat(5));
+    assert!(output.signals.is_empty());
+    let placements = session.listed_placements();
+    assert_eq!(placements.len(), 1);
+    assert_eq!(placements[0].id, id);
+    assert_eq!(placements[0].point.line, GridLine(-3));
 }

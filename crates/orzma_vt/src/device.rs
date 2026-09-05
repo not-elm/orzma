@@ -90,8 +90,9 @@ impl DeviceState {
     /// the pair, whichever one is on show.
     ///
     /// Placements this strands are not named here. The anchors simply
-    /// stop resolving, and the next [`Self::evict_lost_anchors`] names
-    /// them — the same contract [`Screen::reset`] relies on.
+    /// stop resolving, and [`crate::Vt::resize`] names them through
+    /// [`Self::evict_lost_anchors`] — the same contract
+    /// [`Screen::reset`] relies on.
     ///
     /// Reflow would land in `Grid`, on a wrap flag `Screen::print` sets
     /// where it defers a wrap; the placement table would then need each

@@ -103,9 +103,9 @@ pub struct TtyWebviewUnmountSignal {
     pub instance: Option<InstanceId>,
 }
 
-/// Fired when the VT evicts placements on its own authority (history
-/// trim, alternate-screen teardown); consumers despawn the matching
-/// webviews by id and ignore unknown ids.
+/// Fired when the VT drops placements without the host naming them
+/// (history trim, reset, alternate-screen teardown, resize); consumers
+/// despawn the matching webviews by id and ignore unknown ids.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct TtyWebviewEvictedSignal {
     #[event_target]

@@ -9,7 +9,7 @@ pub enum TtySignal {
     /// The child shell exited; `code` is `None` if the `wait` itself
     /// failed. Fired exactly once per terminal.
     ChildExit { code: Option<i32> },
-    /// A signal the VT raised — parsed from its byte stream, or raised
-    /// by the eviction sweep the owner runs each pump.
+    /// A signal the VT raised — one an interpreted chunk produced, or the
+    /// eviction a resize reported.
     Vt(VtSignal),
 }
