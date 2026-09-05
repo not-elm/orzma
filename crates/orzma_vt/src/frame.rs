@@ -89,6 +89,8 @@ pub(crate) struct FrameTracker {
     placements: Vec<AnchoredPlacement>,
     /// The palette the last emitted frame carried.
     palette: Palette,
+    /// The selection the last emitted frame carried.
+    selection: Option<SelectionRange>,
 }
 
 impl FrameTracker {
@@ -107,6 +109,7 @@ impl FrameTracker {
             display_offset: DisplayOffset::default(),
             placements: Vec::new(),
             palette: Palette::default(),
+            selection: None,
         }
     }
 
@@ -142,12 +145,13 @@ impl FrameTracker {
         let screen = device.active_screen();
         let cursor = screen.cursor();
         let display_offset = screen.display_offset();
+        let selection = screen.selection_range();
         let placements = self.diff_placements(device);
         let palette = self.diff_palette(device.palette());
         if self.damage.is_clean()
             && placements.is_none()
             && palette.is_none()
-            && !self.cursor_or_offset_changed(&cursor, display_offset)
+            && !self.carried_changed(&cursor, display_offset, selection)
         {
             return None;
         }
@@ -164,7 +168,7 @@ impl FrameTracker {
             cursor,
             display_offset,
             vi_cursor: None,
-            selection: None,
+            selection,
             placements,
             palette,
             hyperlinks: Vec::new(),
@@ -172,16 +176,24 @@ impl FrameTracker {
         self.settle(
             frame.cursor,
             frame.display_offset,
+            frame.selection,
             frame.placements.as_ref(),
             frame.palette.as_ref(),
         );
         Some(frame)
     }
 
-    /// Returns whether the unconditionally-carried small fields differ
+    /// Returns whether the unconditionally-carried small sections differ
     /// from what the consumer last saw.
-    fn cursor_or_offset_changed(&self, cursor: &Cursor, display_offset: DisplayOffset) -> bool {
-        *cursor != self.cursor || display_offset != self.display_offset
+    fn carried_changed(
+        &self,
+        cursor: &Cursor,
+        display_offset: DisplayOffset,
+        selection: Option<SelectionRange>,
+    ) -> bool {
+        *cursor != self.cursor
+            || display_offset != self.display_offset
+            || selection != self.selection
     }
 
     /// Resolves the active screen's placements and reports the complete
@@ -210,11 +222,13 @@ impl FrameTracker {
         &mut self,
         cursor: Cursor,
         display_offset: DisplayOffset,
+        selection: Option<SelectionRange>,
         placements: Option<&Vec<AnchoredPlacement>>,
         palette: Option<&Palette>,
     ) {
         self.cursor = cursor;
         self.display_offset = display_offset;
+        self.selection = selection;
         if let Some(placements) = placements {
             self.placements.clone_from(placements);
         }
@@ -266,6 +280,7 @@ mod tests {
         assert_eq!(tracker.display_offset, device.display_offset());
         assert_eq!(&tracker.palette, device.palette());
         assert!(tracker.placements.is_empty());
+        assert_eq!(tracker.selection, None);
     }
 
     /// Asserts that an unchanged projection diffs to `None`, a mutated
@@ -287,6 +302,7 @@ mod tests {
         tracker.settle(
             device.active_screen().cursor(),
             device.display_offset(),
+            None,
             Some(&listed),
             None,
         );
@@ -307,7 +323,13 @@ mod tests {
         let changed = tracker
             .diff_palette(&palette)
             .expect("an override changes the table");
-        tracker.settle(Cursor::default(), DisplayOffset(0), None, Some(&changed));
+        tracker.settle(
+            Cursor::default(),
+            DisplayOffset(0),
+            None,
+            None,
+            Some(&changed),
+        );
         assert_eq!(tracker.diff_palette(&palette), None);
     }
 

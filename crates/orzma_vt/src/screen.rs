@@ -1130,6 +1130,12 @@ impl Screen {
         self.selection.start(end, kind)
     }
 
+    /// Drops the active selection; returns whether there was one, even
+    /// one whose rows have already left the ring.
+    pub fn clear_selection(&mut self) -> bool {
+        self.selection.clear()
+    }
+
     /// The endpoint a host cell stands for; `None` when the cell is
     /// outside the ring or past the width.
     fn selection_end(&self, cell: GridPoint, side: CellSide) -> Option<SelectionEnd> {

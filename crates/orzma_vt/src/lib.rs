@@ -180,6 +180,12 @@ pub trait Vt {
     /// emit-time diff decides on its own whether a frame is owed.
     fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool;
 
+    /// Drops the active selection; returns whether there was one.
+    ///
+    /// A selection whose rows have left the ring still counts: it holds
+    /// state even though it projects nothing.
+    fn clear_selection(&mut self) -> bool;
+
     /// Grid dimensions in cells.
     fn grid_size(&self) -> GridSize;
 
@@ -370,6 +376,10 @@ impl Vt for OrzmaVt {
             .start_selection(cell, side, kind)
     }
 
+    fn clear_selection(&mut self) -> bool {
+        self.device.active_screen_mut().clear_selection()
+    }
+
     fn grid_size(&self) -> GridSize {
         self.device.grid_size()
     }
@@ -512,6 +522,62 @@ mod tests {
         assert!(vt.start_selection(cell(0, 1), CellSide::Left, SelectionKind::Simple));
         assert_eq!(projected(&vt), None);
         assert!(vt.frame().is_none());
+    }
+
+    /// Asserts that clearing when nothing is selected reports no change and
+    /// owes no frame.
+    ///
+    /// Case: the user clicks in the terminal with no selection active, and
+    /// the host sends its usual clear.
+    #[test]
+    fn a_clear_without_a_selection_is_a_no_op() {
+        let mut vt = filled();
+        assert!(!vt.clear_selection());
+        assert!(vt.frame().is_none());
+    }
+
+    /// Asserts that clearing on an idle terminal emits a frame that drops
+    /// the selection and repaints no rows.
+    ///
+    /// Case: the user clicks elsewhere to dismiss a selection while the
+    /// shell is quiet.
+    #[test]
+    fn an_idle_clear_emits_a_frame_without_the_selection() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.frame();
+        assert!(vt.clear_selection());
+        let frame = vt.frame().expect("an idle clear emits");
+        assert!(frame.rows.is_empty());
+        assert_eq!(frame.selection, None);
+    }
+
+    /// Asserts that a second clear finds nothing to drop.
+    ///
+    /// Case: the host sends a clear on every click, and the user clicks
+    /// twice after dismissing a selection.
+    #[test]
+    fn a_repeated_clear_is_a_no_op() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        assert!(vt.clear_selection());
+        assert!(!vt.clear_selection());
+    }
+
+    /// Asserts that a Lines start on an idle terminal emits a frame that
+    /// carries the new range and repaints no rows.
+    ///
+    /// Case: the user triple-clicks a row while the shell is quiet.
+    #[test]
+    fn an_idle_start_emits_a_rowless_frame_carrying_the_selection() {
+        let mut vt = filled();
+        assert!(vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines));
+        let frame = vt.frame().expect("an idle start emits");
+        assert!(frame.rows.is_empty());
+        assert_eq!(
+            frame.selection,
+            Some(range((0, 0), (0, 3), SelectionGeometry::Lines))
+        );
     }
 
     /// Asserts that a resize to the size the grid already has returns

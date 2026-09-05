@@ -141,6 +141,10 @@ impl Vt for FakeVt {
         false
     }
 
+    fn clear_selection(&mut self) -> bool {
+        false
+    }
+
     fn grid_size(&self) -> GridSize {
         self.grid_size
     }
