@@ -1177,12 +1177,8 @@ mod tests {
         }
     }
 
-    /// Asserts that a detached terminal never emits `ChildExit`.
-    ///
-    /// Its exit channel's sender is dropped at construction, so `pump`
-    /// observes a disconnected channel; the decided reading of that
-    /// state is "there is no child to report on", never "the child
-    /// died".
+    /// Asserts that a detached terminal — one with no reader thread and
+    /// so no child to report on — never emits `ChildExit`.
     ///
     /// Case: a detached test terminal is pumped every frame like a
     /// live one.
