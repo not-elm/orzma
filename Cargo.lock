@@ -5028,6 +5028,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "orzma_mux"
+version = "0.2.0-dev"
+dependencies = [
+ "crossbeam-channel",
+ "orzma_tty",
+ "orzma_vt",
+ "tracing",
+]
+
+[[package]]
 name = "orzma_tty"
 version = "0.2.0-dev"
 dependencies = [
