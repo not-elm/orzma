@@ -1,23 +1,17 @@
-//! Bevy integration for the multiplexer backend: the terminal handle
-//! component, the title component, inbound request observers, and the
-//! outbound signal pump. `MuxConnection`, `MuxPane`, and the `drain`
-//! module bridge the same world to the out-of-process `orzma_mux`
-//! backend, alongside the entity-owned `OrzmaTtyHandle` design until it
-//! is removed.
+//! Bevy integration for the multiplexer backend: the `MuxPane` component
+//! every pane entity carries, the title component, inbound request
+//! observers, and the outbound signal types the drain triggers.
+//! `MuxConnection`, `MuxPane`, and the `drain` module bridge the same
+//! world to the out-of-process `orzma_mux` backend.
 
 use crate::{
     drain::DrainPlugin,
     layout::LayoutPlugin,
     requests::OrzmaEventRequestPlugin,
-    signals::OrzmaTtySignalPlugin,
     title::{TtyTitle, TtyTitlePlugin},
 };
 use bevy::prelude::*;
 use orzma_mux::prelude::{MuxClient, PaneId};
-#[cfg(any(test, feature = "test-support"))]
-use orzma_tty::test_support::CaptureSink;
-use orzma_tty::{OrzmaTty, SpawnOptions, prelude::OrzmaTtyResult};
-use orzma_vt::prelude::{GridSize, OrzmaVt};
 
 mod drain;
 mod layout;
@@ -28,7 +22,7 @@ mod title;
 
 pub mod prelude {
     pub use crate::{
-        MuxConnection, MuxPane, MuxSystems, OrzmaMuxPlugin, OrzmaTtyHandle, OrzmaTtyPlugin,
+        MuxConnection, MuxPane, MuxSystems, OrzmaMuxPlugin,
         drain::{MuxPaneSpawnFailed, MuxSessionEnded},
         layout::{CurrentLayout, MuxActivePaneChanged, MuxSeparator, PaneGeometry, pane_node},
         registry::PaneRegistry,
@@ -37,58 +31,6 @@ pub mod prelude {
         title::TtyTitle,
     };
     pub use orzma_mux::prelude::{MuxClient, MuxConfig, MuxSpawnError};
-}
-
-/// A live terminal owned by one Bevy entity: the PTY-backed
-/// [`OrzmaTty`] driving an [`OrzmaVt`].
-#[derive(Component, Deref, DerefMut)]
-#[require(TtyTitle)]
-pub struct OrzmaTtyHandle(OrzmaTty<OrzmaVt>);
-
-impl OrzmaTtyHandle {
-    /// Scrollback rows every terminal retains on its primary screen.
-    const MAX_HISTORY: usize = 10_000;
-
-    /// Spawns the login shell under a new PTY and wraps it in a handle.
-    pub fn new(options: SpawnOptions) -> OrzmaTtyResult<Self> {
-        let vt = OrzmaVt::new(
-            GridSize {
-                cols: options.cols,
-                rows: options.rows,
-            },
-            Self::MAX_HISTORY,
-        );
-        Ok(Self(OrzmaTty::spawn(vt, options)?))
-    }
-}
-
-/// Registers the terminal signal pump and the title component's
-/// observers.
-///
-/// The inbound request observers moved to [`OrzmaMuxPlugin`] once they
-/// started reading `MuxConnection` instead of `OrzmaTtyHandle`: an app
-/// still using this plugin's entity-owned handles has no `MuxConnection`
-/// resource for them to read.
-pub struct OrzmaTtyPlugin;
-
-impl Plugin for OrzmaTtyPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_plugins((OrzmaTtySignalPlugin, TtyTitlePlugin));
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-impl OrzmaTtyHandle {
-    /// Builds a handle around a PTY-less terminal whose writes land on
-    /// the returned [`CaptureSink`], so tests can assert the exact bytes
-    /// the observers put on the PTY write seam.
-    pub fn detached(cols: u16, rows: u16) -> (Self, CaptureSink) {
-        let sink = CaptureSink::default();
-        let vt = OrzmaVt::new(GridSize { cols, rows }, Self::MAX_HISTORY);
-        let term = OrzmaTty::detached(vt, cols, rows, Box::new(sink.clone()))
-            .expect("OrzmaTty::detached failed");
-        (Self(term), sink)
-    }
 }
 
 /// The GUI's connection to the multiplexer backend.

@@ -125,14 +125,14 @@ release-webview-focus = "<Leader>u"
 quit                  = "Cmd+Q"
 enter-vi-mode         = "<Leader>s"    # Enters Alacritty vi mode.
 
-# --- pane actions (no effect until the built-in multiplexer lands) ---
+# --- pane actions ---
 select-left-pane      = "<Leader>h"    # select-pane -L
 select-down-pane      = "<Leader>j"    # select-pane -D
 select-up-pane        = "<Leader>k"    # select-pane -U
 select-right-pane     = "<Leader>l"    # select-pane -R
 split-vertical-pane   = "<Leader>i"    # split-window -h (side-by-side)
 split-horizontal-pane = "<Leader>o"    # split-window -v (stacked)
-kill-pane             = "<Leader>p"    # kill-pane, after a confirm prompt
+kill-pane             = "<Leader>p"    # kill-pane
 zoom-pane             = "<Leader>z"    # resize-pane -Z
 resize-left-pane      = "<Leader:r>Shift+H"  # resize-pane -L 5 (repeatable)
 resize-down-pane      = "<Leader:r>Shift+J"  # resize-pane -D 5 (repeatable)

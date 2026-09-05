@@ -419,10 +419,11 @@ fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
 
 /// Converts a 1-indexed protocol `CellCoord` into a 0-indexed,
 /// viewport-relative `GridPoint` (row 0 = top of the currently displayed
-/// viewport). This dispatcher has no read access to the VT (D17d drops
-/// `OrzmaTtyHandle` from `TerminalSurfaces`), so it cannot resolve scrollback
-/// itself — `action/terminal/selection.rs`'s apply observer offsets this by
-/// the terminal's live display offset before firing `RequestTtySelectionStart`
+/// viewport). This dispatcher has no read access to the VT (a pane entity's
+/// `MuxPane` names the backend pane, but the VT itself lives on the
+/// out-of-process mux backend), so it cannot resolve scrollback itself —
+/// `action/terminal/selection.rs`'s apply observer offsets this by the
+/// terminal's live display offset before firing `RequestTtySelectionStart`
 /// / `RequestTtySelectionUpdate`.
 fn to_grid_point(cell: CellCoord) -> GridPoint {
     GridPoint {

@@ -511,7 +511,7 @@ Split such systems along the gather → decide → apply seam.
   the effect targets a specific entity and should apply at command flush. The
   gather system queries the target **immutably**, computes effects, and
   `commands.trigger(...)`s them; the observer holds the `&mut` access and writes
-  the world. See `apply_type` (`src/input/shortcuts/apply.rs`) → `RequestTtyKeyInput`
+  the world. See `apply_key_effects` (`src/input/shortcuts/apply.rs`) → `RequestTtyKeyInput`
   (`crates/bevy_orzma_mux/src/requests/key_input.rs`) → `apply_key_input`
   (same file) and `PasteAction` / `on_paste`
   (`src/action/clipboard/paste.rs`).
@@ -607,6 +607,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Naming — `Query` parameters must not use a `_q` suffix; use a descriptive singular or plural noun (see "Naming — Query parameters")
 - Constructors — a function that builds a value of a local struct/enum must be an associated function on that type (`T::build`), not a free `fn build_t(…) -> T` (see "Constructors — type-building functions are associated functions")
 - System composition — long systems that interleave gather/decide/apply must be split: pure decision helpers returning effect values, hand off across the seam via an `EntityEvent`+observer or a `Message` (`MessageWriter`/`MessageReader`) — never inline sequencing — bulky inline blocks extracted to helpers, and each system body kept within ~150 lines (see "System composition — keep systems focused; split by responsibility")
+- Protocol purity — `orzma_mux::protocol` types carry no `Entity` / bevy types / GPU handles (spec D7), so the multiplexer backend stays a Bevy-free thread and the channel types can later cross a socket boundary unchanged
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
 

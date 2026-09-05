@@ -43,7 +43,8 @@ fn on_title_reset(event: On<TtyTitleResetSignal>, mut titles: Query<&mut TtyTitl
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::OrzmaTtyHandle;
+    use crate::MuxPane;
+    use orzma_mux::prelude::PaneId;
 
     #[derive(Resource, Default)]
     struct ChangedTitles(usize);
@@ -134,16 +135,14 @@ mod tests {
         assert_eq!(app.world().get::<TtyTitle>(other), Some(&TtyTitle(None)));
     }
 
-    /// Asserts that spawning a terminal handle brings a default title
-    /// with it.
+    /// Asserts that spawning a pane brings a default title with it.
     ///
-    /// Case: the host spawns a terminal entity from the handle alone and
-    /// queries its title on the same frame.
+    /// Case: the backend opens a pane and the host queries its title on
+    /// the same frame, before any title signal has arrived.
     #[test]
-    fn a_terminal_handle_requires_a_title() {
+    fn a_pane_requires_a_title() {
         let mut app = App::new();
-        let (handle, _sink) = OrzmaTtyHandle::detached(4, 3);
-        let terminal = app.world_mut().spawn(handle).id();
+        let terminal = app.world_mut().spawn(MuxPane(PaneId(1))).id();
         assert_eq!(app.world().get::<TtyTitle>(terminal), Some(&TtyTitle(None)));
     }
 }
