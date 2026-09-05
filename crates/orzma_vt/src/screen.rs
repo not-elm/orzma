@@ -1153,11 +1153,9 @@ impl Screen {
     /// The text the active selection covers, row by row; `None` exactly
     /// when [`Self::selection_range`] is `None`.
     ///
-    /// Each row's span is the same one the range describes — a Linear
-    /// range takes the columns between its ends on the first and last
-    /// rows and whole rows between, a Lines range whole rows throughout —
-    /// with trailing blanks trimmed. Rows are joined by `\n` with none
-    /// after the last.
+    /// Each row's span comes from [`Self::selection_span_on`], with
+    /// trailing blanks trimmed. Rows are joined by `\n` with none after
+    /// the last.
     // TODO: Join soft-wrapped rows without a newline once `Row` records
     // the wrap.
     pub fn selection_text(&self) -> Option<String> {
@@ -1165,21 +1163,7 @@ impl Screen {
         let last_column = self.grid.size().cols - 1;
         let mut text = String::new();
         for line in range.start.line.0..=range.end.line.0 {
-            let (first, last) = match range.geometry {
-                SelectionGeometry::Lines => (0, last_column),
-                SelectionGeometry::Linear | SelectionGeometry::Block => (
-                    if line == range.start.line.0 {
-                        range.start.column.0
-                    } else {
-                        0
-                    },
-                    if line == range.end.line.0 {
-                        range.end.column.0
-                    } else {
-                        last_column
-                    },
-                ),
-            };
+            let (first, last) = Self::selection_span_on(&range, line, last_column);
             let row = self.grid.row(GridLine(line));
             let row_text: String = (first..=last)
                 .map(|column| row[GridColumn(column)].c)
@@ -1200,6 +1184,27 @@ impl Screen {
         }
         let line = self.grid.line_id_at(cell.line)?;
         Some(SelectionEnd::at(line, cell.column, side))
+    }
+
+    /// The inclusive column span the selection covers on `line`: the
+    /// same expression the renderer's shader evaluates, so the copied
+    /// text and the painted highlight always agree.
+    fn selection_span_on(range: &SelectionRange, line: i32, last_column: u16) -> (u16, u16) {
+        match range.geometry {
+            SelectionGeometry::Lines => (0, last_column),
+            SelectionGeometry::Linear | SelectionGeometry::Block => (
+                if line == range.start.line.0 {
+                    range.start.column.0
+                } else {
+                    0
+                },
+                if line == range.end.line.0 {
+                    range.end.column.0
+                } else {
+                    last_column
+                },
+            ),
+        }
     }
 }
 

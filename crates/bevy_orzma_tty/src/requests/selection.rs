@@ -108,7 +108,6 @@ fn clear_selection(e: On<RequestTtySelectionClear>, mut terms: Query<&mut OrzmaT
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::OrzmaTtyHandle;
     use orzma_vt::prelude::{GridColumn, GridLine, Vt};
 
     fn app_with_terminal() -> (App, Entity) {

@@ -410,8 +410,8 @@ mod tests {
         grid.scroll_up_one(ScreenLine(0), bottom, fill);
     }
 
-    /// Asserts that a screen line and a history line both resolve to the
-    /// id `grid_line` maps back to the same line.
+    /// Asserts that a screen line and a history line both resolve to an
+    /// id that `grid_line` maps back to the same line.
     ///
     /// Case: the host names a cell by its active-grid line and the VT
     /// needs the row identity behind it, on the live screen and in

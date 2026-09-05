@@ -296,8 +296,6 @@ mod tests {
     #[test]
     fn yank_copies_the_selection_and_exits_vi_mode() {
         use crate::action::clipboard::test_support::{CapturedCopyActions, capture_copy_actions};
-        use crate::surface::OrzmaTerminal;
-        use bevy_orzma_tty::prelude::OrzmaTtyHandle;
         use orzma_vt::prelude::{CellSide, GridColumn, GridLine, GridPoint};
 
         let mut app = app_with_applier();

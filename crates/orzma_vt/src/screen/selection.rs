@@ -98,8 +98,9 @@ pub(crate) struct SelectionEnd {
 
 /// What a selection resolves to at one instant.
 ///
-/// `None` and `Empty` both project nothing; they differ in whether any
-/// state exists, which `clear` reports and the projection does not.
+/// `None` and `Empty` both project nothing; `Empty` records that a
+/// selection exists whose ends enclose no cell, so a caller can tell an
+/// empty selection from no selection at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Resolved {
     /// No selection, or an endpoint whose row has left the ring.
