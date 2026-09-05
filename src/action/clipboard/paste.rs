@@ -1,10 +1,10 @@
 //! Paste action pipeline: `on_paste` reads the system clipboard for a
-//! `PasteAction` target and requests the paste on the underlying tty as
-//! `RequestTtyPaste`.
+//! `PasteAction` target and requests the paste on the backend's active
+//! pane as `RequestActivePaste`.
 
 use crate::surface::OrzmaTerminal;
 use bevy::{clipboard::ClipboardError, prelude::*};
-use bevy_orzma_mux::prelude::RequestTtyPaste;
+use bevy_orzma_mux::prelude::RequestActivePaste;
 
 /// Pastes the system clipboard into the target terminal entity.
 #[derive(EntityEvent, Debug, Clone)]
@@ -67,10 +67,7 @@ fn on_paste(
     }
     match PasteRead::classify(clipboard.fetch_text().poll_result()) {
         PasteRead::Ready(text) => {
-            commands.trigger(RequestTtyPaste {
-                terminal: ev.entity,
-                text,
-            });
+            commands.trigger(RequestActivePaste { text });
         }
         PasteRead::Nothing => {}
         PasteRead::Unavailable => {
@@ -108,16 +105,18 @@ mod tests {
             .init_resource::<Clipboard>()
             .init_resource::<Emitted>()
             .add_observer(on_paste)
-            .add_observer(|_ev: On<RequestTtyPaste>, mut emitted: ResMut<Emitted>| {
-                emitted.0 += 1;
-            });
+            .add_observer(
+                |_ev: On<RequestActivePaste>, mut emitted: ResMut<Emitted>| {
+                    emitted.0 += 1;
+                },
+            );
         let entity = app.world_mut().spawn_empty().id();
         app.world_mut().trigger(PasteAction { entity });
         app.update();
         assert_eq!(
             app.world().resource::<Emitted>().0,
             0,
-            "a PasteAction on a non-terminal entity must not read the clipboard or emit RequestTtyPaste"
+            "a PasteAction on a non-terminal entity must not read the clipboard or emit RequestActivePaste"
         );
     }
 
