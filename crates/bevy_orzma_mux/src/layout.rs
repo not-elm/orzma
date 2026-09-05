@@ -4,7 +4,7 @@
 use crate::registry::PaneRegistry;
 use crate::{MuxPane, MuxSystems};
 use bevy::prelude::*;
-use orzma_mux::prelude::{Layout, PaneId, PaneRect, Separator, SplitOrientation};
+use orzma_mux::prelude::{Layout, PaneRect, Separator, SplitOrientation};
 use orzma_tty::CellPixels;
 
 /// The latest layout snapshot. Written by the drain only when it
@@ -70,6 +70,10 @@ impl Plugin for LayoutPlugin {
 
 /// Separator colour until it is configurable.
 const SEPARATOR_COLOR: Color = Color::srgb(0.35, 0.35, 0.40);
+
+/// Logical-px thickness of the line painted inside a reserved separator
+/// cell, before rounding to whole physical px (never below one).
+const SEPARATOR_THICKNESS_LOGICAL_PX: f32 = 1.0;
 
 /// Runs when `CurrentLayout` or `PaneGeometry` changed (see the plugin).
 fn apply_layout(
@@ -182,21 +186,44 @@ fn reconcile_separators(
 
 /// The absolute node for one separator, expressed as a one-cell-thick
 /// `PaneRect` along its orientation.
+/// The node for a separator: a line `SEPARATOR_THICKNESS_LOGICAL_PX`
+/// thick, centred inside the one cell the layout reserves for it, spanning
+/// the separator's full length.
+///
+/// The thickness and the centring offset are whole physical px so the UI
+/// layout, which rounds node edges to physical px, cannot collapse the
+/// line to nothing; the division by the scale factor happens last.
 fn separator_node(separator: &Separator, geometry: &PaneGeometry) -> Node {
-    let rect = PaneRect {
-        pane: PaneId(0),
-        x: separator.x,
-        y: separator.y,
-        cols: match separator.orientation {
-            SplitOrientation::Vertical => 1,
-            SplitOrientation::Horizontal => separator.len,
-        },
-        rows: match separator.orientation {
-            SplitOrientation::Vertical => separator.len,
-            SplitOrientation::Horizontal => 1,
-        },
+    let scale = geometry.scale_factor;
+    let cell_w = f32::from(geometry.cell_px.width);
+    let cell_h = f32::from(geometry.cell_px.height);
+    let thickness = (SEPARATOR_THICKNESS_LOGICAL_PX * scale).round().max(1.0);
+    let centred = |cell: f32| ((cell - thickness) / 2.0).floor().max(0.0);
+    let x = f32::from(separator.x);
+    let y = f32::from(separator.y);
+    let len = f32::from(separator.len);
+    let (left, top, width, height) = match separator.orientation {
+        SplitOrientation::Vertical => (
+            x * cell_w + centred(cell_w),
+            y * cell_h,
+            thickness,
+            len * cell_h,
+        ),
+        SplitOrientation::Horizontal => (
+            x * cell_w,
+            y * cell_h + centred(cell_h),
+            len * cell_w,
+            thickness,
+        ),
     };
-    pane_node(&rect, geometry)
+    Node {
+        position_type: PositionType::Absolute,
+        left: Val::Px(left / scale),
+        top: Val::Px(top / scale),
+        width: Val::Px(width / scale),
+        height: Val::Px(height / scale),
+        ..default()
+    }
 }
 
 /// Accepts `layout.active` unless it predates the GUI's last
@@ -294,7 +321,8 @@ mod tests {
     }
 
     /// Asserts that pane nodes are positioned in logical px from integral
-    /// physical px, and that one separator node exists per separator.
+    /// physical px, and that each separator is a one-logical-px line
+    /// centred inside its reserved cell.
     ///
     /// Case: two panes side by side at a 10×20 px cell on a 2× display.
     #[test]
@@ -317,8 +345,64 @@ mod tests {
             .collect();
         assert_eq!(seps.len(), 1);
         assert_eq!(
-            (seps[0].left, seps[0].width, seps[0].height),
-            (Val::Px(200.0), Val::Px(5.0), Val::Px(240.0))
+            (seps[0].left, seps[0].top, seps[0].width, seps[0].height),
+            (Val::Px(202.0), Val::Px(0.0), Val::Px(1.0), Val::Px(240.0))
+        );
+    }
+
+    /// Asserts that a separator line is centred in its reserved cell on
+    /// the axis it divides, with a thickness of one logical px rounded to
+    /// whole physical px, for both orientations and on a 1× display.
+    ///
+    /// Case: a stacked split on a 2× display and a side-by-side split on
+    /// a 1× display, each with a different cell pitch.
+    #[test]
+    fn separator_nodes_are_thin_lines_centred_in_the_reserved_cell() {
+        let hidpi = PaneGeometry {
+            cell_px: CellPixels {
+                width: 10,
+                height: 20,
+            },
+            scale_factor: 2.0,
+        };
+        let horizontal = separator_node(
+            &Separator {
+                orientation: SplitOrientation::Horizontal,
+                x: 0,
+                y: 12,
+                len: 81,
+            },
+            &hidpi,
+        );
+        assert_eq!(
+            (
+                horizontal.left,
+                horizontal.top,
+                horizontal.width,
+                horizontal.height
+            ),
+            (Val::Px(0.0), Val::Px(124.5), Val::Px(405.0), Val::Px(1.0))
+        );
+
+        let lodpi = PaneGeometry {
+            cell_px: CellPixels {
+                width: 8,
+                height: 16,
+            },
+            scale_factor: 1.0,
+        };
+        let vertical = separator_node(
+            &Separator {
+                orientation: SplitOrientation::Vertical,
+                x: 3,
+                y: 0,
+                len: 24,
+            },
+            &lodpi,
+        );
+        assert_eq!(
+            (vertical.left, vertical.top, vertical.width, vertical.height),
+            (Val::Px(27.0), Val::Px(0.0), Val::Px(1.0), Val::Px(384.0))
         );
     }
 
