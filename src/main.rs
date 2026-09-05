@@ -14,9 +14,10 @@ mod window_title;
 use crate::action::ActionPlugin;
 use crate::cef_profile::CefProfileDir;
 use crate::surface::SurfacePlugin;
+use crate::system_set::OrzmaSystems;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
-use bevy_orzma_mux::OrzmaTtyPlugin;
+use bevy_orzma_mux::prelude::{MuxClient, MuxConfig, MuxConnection, MuxSystems, OrzmaMuxPlugin};
 use bevy_orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use configs::OrzmaConfigsPlugin;
 use font::FontBridgePlugin;
@@ -26,6 +27,9 @@ use orzma_webview_host::WebviewAssetRegistry;
 use session::SessionPlugin;
 use ui::OrzmaUiPlugin;
 
+/// Scrollback rows every pane retains on its primary screen.
+const SCROLLBACK_ROWS: usize = 10_000;
+
 fn main() {
     // NOTE: must run before App::new() spawns any thread — they write process
     // env vars, which is unsound once other threads may read the environment.
@@ -33,6 +37,16 @@ fn main() {
     ensure_utf8_locale_env();
 
     let pre_configs = orzma_configs::OrzmaConfigs::load().unwrap_or_default();
+    let mux = match MuxClient::spawn(MuxConfig {
+        shell: pre_configs.orzma.shell.clone(),
+        scrollback_rows: SCROLLBACK_ROWS,
+    }) {
+        Ok(client) => client,
+        Err(err) => {
+            eprintln!("orzma: {err}");
+            std::process::exit(1);
+        }
+    };
     let orzma_registry = WebviewAssetRegistry::default();
     let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
     App::new()
@@ -45,10 +59,8 @@ fn main() {
         ))
         .add_plugins((
             SurfacePlugin,
-            SessionPlugin {
-                shell: pre_configs.orzma.shell.clone(),
-            },
-            OrzmaTtyPlugin,
+            SessionPlugin,
+            OrzmaMuxPlugin,
             TerminalRendererPlugin,
             ActionPlugin,
             OrzmaConfigsPlugin,
@@ -62,6 +74,16 @@ fn main() {
             },
             WindowTitlePlugin,
         ))
+        .insert_resource(MuxConnection(mux))
+        .configure_sets(
+            Update,
+            (
+                MuxSystems::Drain,
+                MuxSystems::ApplyLayout,
+                OrzmaSystems::Input,
+            )
+                .chain(),
+        )
         .run();
 }
 

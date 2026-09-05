@@ -1,126 +1,132 @@
-//! Standalone terminal spawn: the PTY bundle, spawn options, and
-//! the shell-override config resource.
+//! Pane spawn requests: pre-spawns the pane entity, binds its control
+//! token, and asks the backend for the PTY.
 
 use crate::surface::OrzmaTerminal;
+use crate::ui::ShellSurfaceUi;
 use bevy::prelude::*;
-use bevy_orzma_mux::OrzmaTtyHandle;
-use orzma_tty::{CellPixels, EnvKey, EnvValue, SpawnOptions};
-use std::path::PathBuf;
+use bevy_orzma_mux::prelude::{MuxConnection, PaneRegistry};
+use bevy_orzma_webview::ControlPlaneHandle;
+use orzma_mux::prelude::{MuxCommand, NewPaneAt, RequestId};
 
-/// Shell override resource.
-///
-/// `None` means fall back to `$SHELL` at spawn time.
-#[derive(Resource)]
-pub(crate) struct OrzmaTerminalConfig {
-    /// Optional shell path. When set, overrides `$SHELL` and `/bin/sh`.
-    pub shell: Option<String>,
+/// Asks for a new pane at `at`.
+#[derive(Event, Debug, Clone, Copy)]
+pub(crate) struct PaneSpawnRequest {
+    /// Where the new pane goes in the layout tree.
+    pub at: NewPaneAt,
 }
 
-/// Options for spawning a standalone Orzma terminal.
-#[derive(Default)]
-pub(crate) struct OrzmaSpawnOptions {
-    /// Shell override; `None` falls back to `$SHELL` then `/bin/sh`.
-    pub shell: Option<String>,
-    /// Working directory for the PTY; `None` inherits the process cwd.
-    pub cwd: Option<PathBuf>,
-    /// Extra environment variables for the PTY.
-    pub env: Vec<(String, String)>,
-}
+/// Registers the spawn observer.
+pub(super) struct SpawnPlugin;
 
-/// Self-contained spawn bundle for a standalone Orzma terminal: the PTY-backed
-/// terminal handle, the `OrzmaTerminal` marker, and a default full-screen `Node`.
-/// The render material is injected by `crate::surface`'s add-observer on
-/// insertion.
-#[derive(Bundle)]
-pub(crate) struct OrzmaTerminalBundle {
-    terminal: OrzmaTtyHandle,
-    marker: OrzmaTerminal,
-    node: Node,
-}
-
-impl OrzmaTerminalBundle {
-    /// Spawns the PTY at a provisional 80x24 (the window-fill resize system
-    /// corrects it on the first frame) and returns the bundle. Errors when the
-    /// PTY fails to spawn.
-    pub(crate) fn spawn(opts: OrzmaSpawnOptions) -> anyhow::Result<Self> {
-        let shell = resolve_shell(
-            opts.shell.as_deref(),
-            std::env::var("SHELL").ok().as_deref(),
-        );
-        let terminal = OrzmaTtyHandle::new(SpawnOptions {
-            cols: 80,
-            rows: 24,
-            cell_px: CellPixels::default(),
-            shell,
-            cwd: opts.cwd,
-            env: opts
-                .env
-                .into_iter()
-                .map(|(k, v)| (EnvKey(k), EnvValue(v)))
-                .collect(),
-        })?;
-        Ok(Self {
-            terminal,
-            marker: OrzmaTerminal,
-            node: full_size_node(),
-        })
+impl Plugin for SpawnPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(on_pane_spawn_request);
     }
 }
 
-/// Full-window absolute layout for the standalone terminal.
-fn full_size_node() -> Node {
+/// Pre-spawns the entity (zero-sized until its first layout), binds the
+/// control-plane token so a fast shell can connect before `PaneOpened`
+/// is drained, then sends `NewPane`.
+fn on_pane_spawn_request(
+    ev: On<PaneSpawnRequest>,
+    mut commands: Commands,
+    mut registry: ResMut<PaneRegistry>,
+    connection: Res<MuxConnection>,
+    container: Query<Entity, With<ShellSurfaceUi>>,
+    control: Option<Res<ControlPlaneHandle>>,
+) {
+    let Ok(container) = container.single() else {
+        return;
+    };
+    let entity = commands
+        .spawn((OrzmaTerminal, pending_pane_node(), ChildOf(container)))
+        .id();
+    let env = control
+        .as_deref()
+        .map(|c| {
+            c.bind_surface(entity);
+            c.surface_env(entity).to_vec()
+        })
+        .unwrap_or_default();
+    let request = RequestId::next();
+    registry.pending_spawns.insert(request, entity);
+    connection.0.send(MuxCommand::NewPane {
+        request,
+        at: ev.at,
+        cwd: None,
+        env,
+    });
+}
+
+/// A zero-sized absolute node, so a pending pane covers nothing until
+/// its first `Layout`.
+fn pending_pane_node() -> Node {
     Node {
         position_type: PositionType::Absolute,
         left: Val::Px(0.0),
         top: Val::Px(0.0),
-        width: Val::Percent(100.0),
-        height: Val::Percent(100.0),
+        width: Val::Px(0.0),
+        height: Val::Px(0.0),
         ..default()
     }
-}
-
-/// Inserts the shell-override config resource read by `ensure_shell_surface_ui`.
-pub(super) struct SpawnPlugin {
-    /// Shell override from the loaded configs; `None` defers to `$SHELL`.
-    pub shell: Option<String>,
-}
-
-impl Plugin for SpawnPlugin {
-    fn build(&self, app: &mut App) {
-        app.insert_resource(OrzmaTerminalConfig {
-            shell: self.shell.clone(),
-        });
-    }
-}
-
-/// Resolves the shell path: config → `$SHELL` → `/bin/sh`.
-fn resolve_shell(config: Option<&str>, env_shell: Option<&str>) -> String {
-    config
-        .filter(|s| !s.is_empty())
-        .or_else(|| env_shell.filter(|s| !s.is_empty()))
-        .unwrap_or("/bin/sh")
-        .to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy_orzma_webview::TokenRegistry;
+    use orzma_mux::prelude::MuxClient;
+    use std::path::PathBuf;
 
+    /// Asserts that a spawn request pre-spawns the pane entity, binds its
+    /// token, and sends `NewPane` carrying that token in `env`.
+    ///
+    /// Case: the user splits a pane; the new shell connects to the
+    /// control socket before the backend's `PaneOpened` is drained.
     #[test]
-    fn shell_resolution_uses_config() {
-        assert_eq!(
-            resolve_shell(Some("/bin/fish"), Some("/bin/zsh")),
-            "/bin/fish"
-        );
-    }
+    fn a_spawn_request_binds_the_token_then_sends_new_pane() {
+        let (client, _events, commands) = MuxClient::detached();
+        let tokens = TokenRegistry::default();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(SpawnPlugin)
+            .init_resource::<PaneRegistry>()
+            .insert_resource(MuxConnection(client))
+            .insert_resource(ControlPlaneHandle {
+                sock_path: PathBuf::from("/tmp/ctl.sock"),
+                tokens: tokens.clone(),
+            });
+        app.world_mut().spawn((Node::default(), ShellSurfaceUi));
+        app.world_mut().trigger(PaneSpawnRequest {
+            at: NewPaneAt::Root,
+        });
+        app.update();
 
-    #[test]
-    fn shell_resolution_falls_back_to_env() {
-        assert_eq!(resolve_shell(None, Some("/bin/zsh")), "/bin/zsh");
-    }
+        let registry = app.world().resource::<PaneRegistry>();
+        assert_eq!(registry.pending_spawns.len(), 1);
+        let (request, entity) = registry
+            .pending_spawns
+            .iter()
+            .next()
+            .map(|(r, e)| (*r, *e))
+            .unwrap();
+        assert!(app.world().get::<OrzmaTerminal>(entity).is_some());
+        let token = format!("orzma:{}", entity.to_bits());
+        assert_eq!(tokens.resolve(&token), Some(entity));
 
-    #[test]
-    fn shell_resolution_falls_back_to_sh() {
-        assert_eq!(resolve_shell(None, None), "/bin/sh");
+        let sent: Vec<MuxCommand> = commands.try_iter().map(|(_, c)| c).collect();
+        let [
+            MuxCommand::NewPane {
+                request: sent_request,
+                at: NewPaneAt::Root,
+                cwd: None,
+                env,
+            },
+        ] = sent.as_slice()
+        else {
+            panic!("expected one NewPane, got {sent:?}");
+        };
+        assert_eq!(*sent_request, request);
+        assert!(env.contains(&("ORZMA_TOKEN".to_string(), token)));
     }
 }

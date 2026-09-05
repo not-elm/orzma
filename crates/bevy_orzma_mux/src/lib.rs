@@ -62,17 +62,18 @@ impl OrzmaTtyHandle {
     }
 }
 
-/// Registers the terminal signal pump, the inbound request observers,
-/// and the title component's observers.
+/// Registers the terminal signal pump and the title component's
+/// observers.
+///
+/// The inbound request observers moved to [`OrzmaMuxPlugin`] once they
+/// started reading `MuxConnection` instead of `OrzmaTtyHandle`: an app
+/// still using this plugin's entity-owned handles has no `MuxConnection`
+/// resource for them to read.
 pub struct OrzmaTtyPlugin;
 
 impl Plugin for OrzmaTtyPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            OrzmaTtySignalPlugin,
-            OrzmaEventRequestPlugin,
-            TtyTitlePlugin,
-        ));
+        app.add_plugins((OrzmaTtySignalPlugin, TtyTitlePlugin));
     }
 }
 
@@ -112,16 +113,16 @@ pub enum MuxSystems {
 
 /// Registers the drain, the layout applier, the request observers, and
 /// the title component's observers.
-///
-/// `OrzmaEventRequestPlugin` is left out here for now: `OrzmaTtyPlugin`
-/// still registers it, and adding both plugins to the same app would
-/// double the request observers. Task 10 moves that registration here
-/// once the requests read `MuxConnection` instead of `OrzmaTtyHandle`.
 pub struct OrzmaMuxPlugin;
 
 impl Plugin for OrzmaMuxPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, (MuxSystems::Drain, MuxSystems::ApplyLayout).chain())
-            .add_plugins((DrainPlugin, LayoutPlugin, TtyTitlePlugin));
+            .add_plugins((
+                DrainPlugin,
+                LayoutPlugin,
+                OrzmaEventRequestPlugin,
+                TtyTitlePlugin,
+            ));
     }
 }

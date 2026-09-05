@@ -1,16 +1,18 @@
 //! `RequestTtyWebviewRemove`: the placements the control plane asks a
-//! terminal entity to drop when a registration is released.
+//! terminal entity to drop when a registration is released, sent as
+//! `MuxCommand::RemovePlacements`.
 
-use crate::OrzmaTtyHandle;
+use crate::{MuxConnection, MuxPane};
 use bevy::prelude::*;
+use orzma_mux::prelude::MuxCommand;
 use orzma_vt::prelude::InstanceId;
 
 /// Fired by the control plane to drop placements a terminal still holds
 /// for registrations that are gone.
 ///
-/// The VT cannot know that a registration was released — that fact lives
-/// on the control socket — so without this the placements keep a cap slot
-/// until their anchor scrolls out of history.
+/// The backend cannot know that a registration was released — that
+/// fact lives on the control socket — so without this the placements
+/// keep a cap slot until their anchor scrolls out of history.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyWebviewRemove {
     #[event_target]
@@ -27,53 +29,51 @@ impl Plugin for WebviewRemovePlugin {
     }
 }
 
-fn apply_webview_remove(e: On<RequestTtyWebviewRemove>, mut terms: Query<&mut OrzmaTtyHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal) {
-        tty.remove_placements(&e.instances);
+fn apply_webview_remove(
+    e: On<RequestTtyWebviewRemove>,
+    connection: Res<MuxConnection>,
+    panes: Query<&MuxPane>,
+) {
+    if let Ok(pane) = panes.get(e.terminal) {
+        connection.0.send(MuxCommand::RemovePlacements {
+            pane: pane.0,
+            instances: e.instances.clone(),
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
+    use orzma_mux::prelude::PaneId;
 
-    /// Asserts that the request drops the named placement from the
-    /// terminal it targets and leaves an unnamed one standing.
+    /// Asserts that a webview-remove request for a pane entity becomes
+    /// a `RemovePlacements` command carrying the same instance list.
     ///
     /// Case: one of two registrations on a pane is unregistered while
     /// both of its views are mounted.
     #[test]
-    fn a_remove_request_drops_only_the_instances_it_names() {
+    fn webview_remove_requests_become_remove_placements_commands() {
+        let (mut app, commands) = app_with_connection(WebviewRemovePlugin);
+        let pane = spawn_pane(&mut app, PaneId(6));
         let a: InstanceId = "3f5a9c02d1e84b7690ab3cde12f45678"
             .parse()
             .expect("valid id");
-        let b: InstanceId = "81b4e77c05a3492fd6180e29ba735fc1"
-            .parse()
-            .expect("valid id");
-        let mut app = App::new();
-        app.add_plugins(WebviewRemovePlugin);
-        let (mut handle, _master) = OrzmaTtyHandle::detached(80, 24);
-        handle.feed_bytes(format!("\x1b_Omount;n={a},r=4,c=8\x1b\\").as_bytes());
-        handle.feed_bytes(format!("\x1b_Omount;n={b},r=4,c=8\x1b\\").as_bytes());
-        let terminal = app.world_mut().spawn(handle).id();
-
         app.world_mut().trigger(RequestTtyWebviewRemove {
-            terminal,
+            terminal: pane,
             instances: vec![a],
         });
-        app.world_mut().flush();
-
-        let mut handle = app
-            .world_mut()
-            .get_mut::<OrzmaTtyHandle>(terminal)
-            .expect("the terminal keeps its handle");
-        let frame = handle.pump().frame.expect("the removal changed the list");
-        let ids: Vec<InstanceId> = frame
-            .placements
-            .expect("the placement list changed")
-            .into_iter()
-            .map(|p| p.id)
-            .collect();
-        assert_eq!(ids, vec![b]);
+        let sent = sent(&commands);
+        let [
+            MuxCommand::RemovePlacements {
+                pane: PaneId(6),
+                instances,
+            },
+        ] = sent.as_slice()
+        else {
+            panic!("expected one RemovePlacements, got {sent:?}");
+        };
+        assert_eq!(instances, &vec![a]);
     }
 }

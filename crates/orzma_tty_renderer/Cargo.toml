@@ -26,3 +26,4 @@ workspace = true
 
 [dev-dependencies]
 bevy_orzma_mux = { path = "../bevy_orzma_mux", features = ["test-support"] }
+orzma_mux = { path = "../orzma_mux" }

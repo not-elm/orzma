@@ -1,11 +1,15 @@
-//! `RequestTtyKeyInput` and the observer that forwards it to the
-//! target terminal's PTY.
+//! `RequestTtyKeyInput` (a specific pane) and `RequestActiveKeyInput`
+//! (the backend's active pane): both become `MuxCommand::KeyInput`.
 
-use crate::OrzmaTtyHandle;
+use crate::{MuxConnection, MuxPane};
 use bevy::prelude::*;
+use orzma_mux::prelude::{MuxCommand, PaneTarget};
 use orzma_tty::prelude::{TerminalKey, TerminalModifiers};
 
-/// Fired by the host UI to forward a key press to a specific terminal entity.
+/// A key for one specific pane entity (webview forwards and other
+/// entity-addressed paths). Keyboard and IME input use
+/// [`RequestActiveKeyInput`] instead so it resolves against the
+/// backend's active pane in command order.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyKeyInput {
     #[event_target]
@@ -16,19 +20,86 @@ pub struct RequestTtyKeyInput {
     pub modifiers: TerminalModifiers,
 }
 
-/// Registers the [`RequestTtyKeyInput`] apply observer.
+/// A key for whichever pane is active when the backend processes it.
+#[derive(Event, Debug, Clone)]
+pub struct RequestActiveKeyInput {
+    /// The logical key pressed (character or named key, pre-encoding).
+    pub key: TerminalKey,
+    /// Modifier state at press time; feeds the encoder, not a raw HID state.
+    pub modifiers: TerminalModifiers,
+}
+
 pub(super) struct KeyInputPlugin;
 
 impl Plugin for KeyInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_key_input);
+        app.add_observer(apply_key_input)
+            .add_observer(apply_active_key_input);
     }
 }
 
-fn apply_key_input(e: On<RequestTtyKeyInput>, mut terms: Query<&mut OrzmaTtyHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal)
-        && let Err(err) = tty.send_key(&e.key, &e.modifiers)
-    {
-        error!(%err);
+fn apply_key_input(
+    e: On<RequestTtyKeyInput>,
+    connection: Res<MuxConnection>,
+    panes: Query<&MuxPane>,
+) {
+    if let Ok(pane) = panes.get(e.terminal) {
+        connection.0.send(MuxCommand::KeyInput {
+            pane: PaneTarget::Id(pane.0),
+            key: e.key.clone(),
+            mods: e.modifiers,
+        });
+    }
+}
+
+fn apply_active_key_input(e: On<RequestActiveKeyInput>, connection: Res<MuxConnection>) {
+    connection.0.send(MuxCommand::KeyInput {
+        pane: PaneTarget::Active,
+        key: e.key.clone(),
+        mods: e.modifiers,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
+    use orzma_mux::prelude::PaneId;
+    use orzma_tty::prelude::KeyText;
+
+    /// Asserts that an entity-addressed key targets that pane by id and
+    /// an active-addressed key targets `Active`.
+    ///
+    /// Case: a webview forwards a chord to its host pane while the user
+    /// types into the focused pane.
+    #[test]
+    fn entity_keys_target_the_pane_id_and_active_keys_target_active() {
+        let (mut app, commands) = app_with_connection(KeyInputPlugin);
+        let entity = spawn_pane(&mut app, PaneId(4));
+        let key = TerminalKey::Character(KeyText::new("x").unwrap());
+        app.world_mut().trigger(RequestTtyKeyInput {
+            terminal: entity,
+            key: key.clone(),
+            modifiers: TerminalModifiers::default(),
+        });
+        app.world_mut().trigger(RequestActiveKeyInput {
+            key,
+            modifiers: TerminalModifiers::default(),
+        });
+        let sent = sent(&commands);
+        assert!(matches!(
+            sent[0],
+            MuxCommand::KeyInput {
+                pane: PaneTarget::Id(PaneId(4)),
+                ..
+            }
+        ));
+        assert!(matches!(
+            sent[1],
+            MuxCommand::KeyInput {
+                pane: PaneTarget::Active,
+                ..
+            }
+        ));
     }
 }

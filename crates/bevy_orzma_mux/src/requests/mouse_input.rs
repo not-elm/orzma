@@ -1,8 +1,9 @@
-//! `RequestTtyMouseInput` and the observer that forwards it to the
-//! target terminal's PTY.
+//! `RequestTtyMouseInput`: a mouse-protocol report the host UI asks a
+//! terminal entity to receive, sent as `MuxCommand::MouseInput`.
 
-use crate::OrzmaTtyHandle;
+use crate::{MuxConnection, MuxPane};
 use bevy::prelude::*;
+use orzma_mux::prelude::MuxCommand;
 use orzma_tty::prelude::MouseReport;
 
 /// Fired by the host UI to forward one mouse-protocol report to a specific
@@ -25,10 +26,62 @@ impl Plugin for MouseInputPlugin {
     }
 }
 
-fn apply_mouse_input(e: On<RequestTtyMouseInput>, mut terms: Query<&mut OrzmaTtyHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal)
-        && let Err(err) = tty.send_mouse(e.mouse)
-    {
-        error!(%err);
+fn apply_mouse_input(
+    e: On<RequestTtyMouseInput>,
+    connection: Res<MuxConnection>,
+    panes: Query<&MuxPane>,
+) {
+    if let Ok(pane) = panes.get(e.terminal) {
+        connection.0.send(MuxCommand::MouseInput {
+            pane: pane.0,
+            report: e.mouse,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
+    use orzma_mux::prelude::PaneId;
+    use orzma_tty::prelude::{CellCoord, MouseButton, MouseReportKind, ProtocolModifiers};
+
+    fn report() -> MouseReport {
+        MouseReport {
+            button: MouseButton::Left,
+            kind: MouseReportKind::Press,
+            cell: CellCoord { col: 1, row: 1 },
+            mods: ProtocolModifiers::default(),
+        }
+    }
+
+    /// Asserts that a mouse request for a pane entity becomes a
+    /// `MouseInput` command for that pane id, and one for a non-pane
+    /// entity sends nothing.
+    ///
+    /// Case: the user clicks over a pane's grid, then over the
+    /// separator between two panes.
+    #[test]
+    fn mouse_requests_become_mouse_input_commands_for_the_pane() {
+        let (mut app, commands) = app_with_connection(MouseInputPlugin);
+        let pane = spawn_pane(&mut app, PaneId(2));
+        let stray = app.world_mut().spawn_empty().id();
+        app.world_mut().trigger(RequestTtyMouseInput {
+            terminal: pane,
+            mouse: report(),
+        });
+        app.world_mut().trigger(RequestTtyMouseInput {
+            terminal: stray,
+            mouse: report(),
+        });
+        let sent = sent(&commands);
+        assert_eq!(sent.len(), 1);
+        assert!(matches!(
+            sent[0],
+            MuxCommand::MouseInput {
+                pane: PaneId(2),
+                ..
+            }
+        ));
     }
 }

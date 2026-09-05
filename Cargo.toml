@@ -30,6 +30,7 @@ bevy_cef = { workspace = true }
 bevy_cef_core = { workspace = true }
 bevy_orzma_mux = { path = "crates/bevy_orzma_mux" }
 bevy_orzma_webview = { path = "crates/bevy_orzma_webview" }
+orzma_mux = { path = "crates/orzma_mux" }
 orzma_tty = { path = "crates/orzma_tty" }
 orzma_tty_renderer = { path = "crates/orzma_tty_renderer" }
 orzma_vt = { path = "crates/orzma_vt" }
@@ -50,6 +51,7 @@ url = "2"
 
 [dev-dependencies]
 bevy_orzma_mux = { path = "crates/bevy_orzma_mux", features = ["test-support"] }
+orzma_mux = { path = "crates/orzma_mux", features = ["test-support"] }
 tempfile = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
