@@ -298,18 +298,21 @@ impl DeviceState {
         evicted
     }
 
-    /// Applies an alternate-screen flip, tearing down the placements the
-    /// abandoned alternate screen owned.
+    /// Applies an alternate-screen flip, tearing down the placements and
+    /// the selection the abandoned alternate screen owned.
     ///
-    /// Primary placements are hidden while the alternate screen is shown,
-    /// not destroyed. This operation stages no damage of its own: the
-    /// flip itself must stage `DamageSpan::Full`, which carries the
-    /// changed list.
+    /// Primary placements and the primary selection are hidden while the
+    /// alternate screen is shown, not destroyed. This operation stages no
+    /// damage of its own: the flip itself must stage `DamageSpan::Full`,
+    /// which carries the changed list.
     pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
         self.modes.active_screen = to;
         match to {
             ScreenKind::Alternate => Vec::new(),
-            ScreenKind::Primary => self.screens.alternate.take_placements(),
+            ScreenKind::Primary => {
+                self.screens.alternate.clear_selection();
+                self.screens.alternate.take_placements()
+            }
         }
     }
 

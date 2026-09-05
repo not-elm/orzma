@@ -1063,4 +1063,69 @@ mod tests {
             "a second removal names nothing"
         );
     }
+
+    /// Asserts that a primary-screen selection is hidden while the alternate
+    /// screen is shown and comes back unchanged on return.
+    ///
+    /// Case: the user selects a shell line, opens a full-screen editor, and
+    /// quits it.
+    #[test]
+    fn a_primary_selection_hides_behind_the_alternate_screen() {
+        let mut vt = filled();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\x1b[?1049h");
+        assert_eq!(projected(&vt), None);
+        vt.interpret(b"\x1b[?1049l");
+        assert_eq!(
+            projected(&vt),
+            Some(range((0, 0), (0, 3), SelectionGeometry::Lines))
+        );
+    }
+
+    /// Asserts that a selection made on the alternate screen is dropped when
+    /// the terminal returns to the primary screen, so a later alternate
+    /// session does not inherit it.
+    ///
+    /// Case: the user selects a line inside a pager, quits it, and opens
+    /// another full-screen program.
+    #[test]
+    fn an_alternate_selection_is_discarded_on_return() {
+        let mut vt = filled();
+        vt.interpret(b"\x1b[?1049h");
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\x1b[?1049l");
+        assert_eq!(projected(&vt), None);
+        vt.interpret(b"\x1b[?1049h");
+        assert_eq!(projected(&vt), None);
+    }
+
+    /// Asserts that a reset on an otherwise blank grid still marks the chunk
+    /// damaged and emits a frame without the selection.
+    ///
+    /// Case: a blank terminal has a line selected when a program issues RIS.
+    #[test]
+    fn a_reset_clears_the_selection_and_reports_it() {
+        let mut vt = vt();
+        vt.frame();
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.frame();
+        let output = vt.interpret(b"\x1bc");
+        assert!(output.damaged);
+        assert_eq!(vt.frame().expect("the reset emits").selection, None);
+    }
+
+    /// Asserts that a selection whose row has left the ring still counts as
+    /// present for `clear_selection`, even though it no longer projects.
+    ///
+    /// Case: on a terminal with no scrollback the user selects the top row,
+    /// the shell scrolls it away, and the user clicks to dismiss.
+    #[test]
+    fn a_clear_of_a_dead_selection_still_reports_true() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 0);
+        vt.interpret(b"abcd\r\nefgh\r\nijkl");
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
+        vt.interpret(b"\r\n");
+        assert_eq!(projected(&vt), None);
+        assert!(vt.clear_selection());
+    }
 }

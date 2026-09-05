@@ -891,7 +891,9 @@ impl Screen {
     /// Reports [`DamageSpan::Full`], or nothing when the grid was
     /// already blank and carried no history; the cursor homes either
     /// way, because cursor motion reaches the renderer through the
-    /// per-chunk cursor diff rather than through damage.
+    /// per-chunk cursor diff rather than through damage. A selection the
+    /// reset drops also reports `Full`, so the frame that no longer
+    /// carries it is owed even on a blank grid.
     ///
     /// # Invariants
     ///
@@ -911,7 +913,8 @@ impl Screen {
     ///
     /// - `RIS` (`ESC c`) — its screen-scoped actions
     pub fn reset(&mut self) -> Option<DamageSpan> {
-        let dirty = !self.grid.is_blank();
+        let cleared = self.selection.clear();
+        let dirty = !self.grid.is_blank() || cleared;
         self.grid.reset();
         self.viewport = Viewport::default();
         self.scroll_region = ScrollRegion::new(self.grid.size().rows);
