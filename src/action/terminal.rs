@@ -14,7 +14,7 @@ use bevy::prelude::*;
 pub(crate) use open_uri::TerminalOpenUri;
 pub(crate) use selection::{
     TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
-    trigger_selection_copy,
+    copy_selection_of, trigger_selection_copy,
 };
 pub(crate) use viewport_scroll::TerminalViewportScroll;
 

@@ -2,14 +2,15 @@
 //! `bevy_orzma_tty` request `EntityEvent`, and to the vi-mode exit event
 //! `mode.rs` owns for selection toggling, yank, and exit.
 
-use crate::action::clipboard::CopyAction;
+use crate::action::terminal::copy_selection_of;
 use crate::action::vi::mode::ExitViMode;
 use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
+use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use bevy_orzma_tty::prelude::{
-    RequestTtyScroll, RequestTtySelectionClear, RequestTtySelectionKindChange,
+    OrzmaTtyHandle, RequestTtyScroll, RequestTtySelectionClear, RequestTtySelectionKindChange,
     RequestTtySelectionStartAtViCursor, RequestTtyViMotion, SelectionKind,
 };
 use orzma_configs::vi_mode::ViModeScroll;
@@ -68,11 +69,14 @@ fn on_vi_selection_toggle(ev: On<ViSelectionToggleRequest>, mut commands: Comman
     }
 }
 
-/// Copies the current selection (currently stubbed to nothing) and always
-/// leaves vi mode.
-fn on_vi_yank(ev: On<ViYankRequest>, mut commands: Commands) {
-    if let Some(text) = selection_to_string() {
-        commands.trigger(CopyAction { text });
+/// Copies the current selection and always leaves vi mode.
+fn on_vi_yank(
+    ev: On<ViYankRequest>,
+    mut commands: Commands,
+    terminals: Query<&OrzmaTtyHandle, With<OrzmaTerminal>>,
+) {
+    if let Ok(handle) = terminals.get(ev.entity) {
+        copy_selection_of(&mut commands, handle);
     }
     commands.trigger(ExitViMode { entity: ev.entity });
 }
@@ -116,17 +120,9 @@ impl SelectionOp {
     }
 }
 
-// TODO: read the live selection kind from the VT once a selection
-// capability exists (docs/todo/migrate-to-new-vt.md item 11); until then
-// every toggle resolves to `SelectionOp::Start`.
+// TODO: Read the live selection kind from the VT once vi mode lands there;
+// until then every toggle resolves to `SelectionOp::Start`.
 fn selection_type() -> Option<SelectionKind> {
-    None
-}
-
-// TODO: read the live selection text from the VT once a selection
-// capability exists (docs/todo/migrate-to-new-vt.md item 11); until then
-// yank never has anything to copy.
-fn selection_to_string() -> Option<String> {
     None
 }
 
@@ -269,15 +265,12 @@ mod tests {
     #[derive(Resource, Default)]
     struct SeenExits(Vec<Entity>);
 
-    /// Asserts that yank always exits vi mode and — since
-    /// `selection_to_string` is stubbed to `None` until a selection-reading
-    /// capability lands (docs/todo/migrate-to-new-vt.md item 11) — never
-    /// emits a `CopyAction`.
+    /// Asserts that a yank on an entity without a terminal handle still
+    /// exits vi mode and copies nothing.
     ///
-    /// Case: the user presses the yank key in vi mode, with or without an
-    /// active selection.
+    /// Case: the yank key lands while the focused pane is being torn down.
     #[test]
-    fn yank_exits_vi_mode_and_currently_never_copies() {
+    fn yank_without_a_handle_exits_vi_mode_and_copies_nothing() {
         use crate::action::clipboard::test_support::{CapturedCopyActions, capture_copy_actions};
 
         let mut app = app_with_applier();
@@ -294,6 +287,46 @@ mod tests {
 
         assert_eq!(app.world().resource::<SeenExits>().0, vec![entity]);
         assert!(app.world().resource::<CapturedCopyActions>().0.is_empty());
+    }
+
+    /// Asserts that a yank copies the terminal's selected text and then
+    /// exits vi mode.
+    ///
+    /// Case: the user selects a line in vi mode and presses the yank key.
+    #[test]
+    fn yank_copies_the_selection_and_exits_vi_mode() {
+        use crate::action::clipboard::test_support::{CapturedCopyActions, capture_copy_actions};
+        use crate::surface::OrzmaTerminal;
+        use bevy_orzma_tty::prelude::OrzmaTtyHandle;
+        use orzma_vt::prelude::{CellSide, GridColumn, GridLine, GridPoint};
+
+        let mut app = app_with_applier();
+        app.init_resource::<SeenExits>().add_observer(
+            |ev: On<ExitViMode>, mut seen: ResMut<SeenExits>| {
+                seen.0.push(ev.entity);
+            },
+        );
+        capture_copy_actions(&mut app);
+        let (mut handle, _sink) = OrzmaTtyHandle::detached(4, 3);
+        handle.feed_bytes(b"abcd\r\nefgh\r\nijkl");
+        handle.start_selection(
+            GridPoint {
+                line: GridLine(0),
+                column: GridColumn(0),
+            },
+            CellSide::Left,
+            SelectionKind::Lines,
+        );
+        let entity = app.world_mut().spawn((handle, OrzmaTerminal)).id();
+
+        app.world_mut().trigger(ViYankRequest { entity });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<CapturedCopyActions>().0,
+            vec!["abcd".to_string()]
+        );
+        assert_eq!(app.world().resource::<SeenExits>().0, vec![entity]);
     }
 
     /// Asserts that a `ViExitRequest` always triggers `ExitViMode`, even for
