@@ -39,14 +39,21 @@ pub struct MuxActivePaneChanged {
 
 /// The absolute node for `rect`: physical px are integral
 /// (`cells × cell_px`), divided by the scale factor for `Val::Px`.
-pub fn pane_node(rect: &PaneRect, geometry: &PaneGeometry) -> Node {
-    let px = |cells: u16, pitch: u16| f32::from(cells) * f32::from(pitch) / geometry.scale_factor;
+///
+/// A right or bottom edge that meets a separator grows into the reserved
+/// cell by everything but the line, so the pane's own background, which
+/// the renderer paints over the whole node, runs up to the line and only
+/// the line's thickness separates two panes on either axis.
+pub fn pane_node(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Node {
+    let scale = geometry.scale_factor;
+    let (cell_w, cell_h) = cell_pitch_phys(geometry);
+    let bleed = bleed_phys(rect, layout, geometry);
     Node {
         position_type: PositionType::Absolute,
-        left: Val::Px(px(rect.x, geometry.cell_px.width)),
-        top: Val::Px(px(rect.y, geometry.cell_px.height)),
-        width: Val::Px(px(rect.cols, geometry.cell_px.width)),
-        height: Val::Px(px(rect.rows, geometry.cell_px.height)),
+        left: Val::Px(f32::from(rect.x) * cell_w / scale),
+        top: Val::Px(f32::from(rect.y) * cell_h / scale),
+        width: Val::Px((f32::from(rect.cols) * cell_w + bleed.x) / scale),
+        height: Val::Px((f32::from(rect.rows) * cell_h + bleed.y) / scale),
         ..default()
     }
 }
@@ -94,7 +101,7 @@ fn apply_layout(
             continue;
         };
         if let Ok(mut node) = nodes.get_mut(entity) {
-            apply_pane_node(&mut node, &pane_node(rect, &geometry));
+            apply_pane_node(&mut node, &pane_node(rect, layout, &geometry));
         }
     }
     let container = container_of(&registry, layout, &parents);
@@ -158,7 +165,7 @@ fn reconcile_separators(
     let mut existing: Vec<Entity> = separators.iter().map(|(entity, ..)| entity).collect();
     existing.sort();
     for (index, separator) in layout.separators.iter().enumerate() {
-        let wanted = separator_node(separator, geometry);
+        let wanted = separator_node(separator, layout, geometry);
         match existing.get(index) {
             Some(entity) => {
                 if let Ok((_, mut node, child_of)) = separators.get_mut(*entity) {
@@ -171,8 +178,12 @@ fn reconcile_separators(
                 }
             }
             None => {
-                let mut spawned =
-                    commands.spawn((MuxSeparator, wanted, BackgroundColor(SEPARATOR_COLOR)));
+                let mut spawned = commands.spawn((
+                    MuxSeparator,
+                    wanted,
+                    BackgroundColor(SEPARATOR_COLOR),
+                    ZIndex(1),
+                ));
                 if let Some(container) = container {
                     spawned.insert(ChildOf(container));
                 }
@@ -184,37 +195,53 @@ fn reconcile_separators(
     }
 }
 
-/// The absolute node for one separator, expressed as a one-cell-thick
-/// `PaneRect` along its orientation.
 /// The node for a separator: a line `SEPARATOR_THICKNESS_LOGICAL_PX`
-/// thick, centred inside the one cell the layout reserves for it, spanning
-/// the separator's full length.
+/// thick occupying the far end of the one cell the layout reserves for
+/// it, flush against the pane that follows, spanning the separator's
+/// full length.
 ///
-/// The thickness and the centring offset are whole physical px so the UI
-/// layout, which rounds node edges to physical px, cannot collapse the
-/// line to nothing; the division by the scale factor happens last.
-fn separator_node(separator: &Separator, geometry: &PaneGeometry) -> Node {
+/// A separator that stops short of the window edge ends inside the cell
+/// reserved for a crossing line, so its far end is extended across that
+/// cell to meet the crossing line. All offsets are whole physical px so
+/// the UI layout, which rounds node edges to physical px, cannot collapse
+/// the line to nothing; the division by the scale factor happens last.
+fn separator_node(separator: &Separator, layout: &Layout, geometry: &PaneGeometry) -> Node {
     let scale = geometry.scale_factor;
-    let cell_w = f32::from(geometry.cell_px.width);
-    let cell_h = f32::from(geometry.cell_px.height);
-    let thickness = (SEPARATOR_THICKNESS_LOGICAL_PX * scale).round().max(1.0);
-    let centred = |cell: f32| ((cell - thickness) / 2.0).floor().max(0.0);
+    let (cell_w, cell_h) = cell_pitch_phys(geometry);
+    let thickness = line_thickness_phys(geometry);
+    let before_line = |cell: f32| (cell - thickness).max(0.0);
     let x = f32::from(separator.x);
     let y = f32::from(separator.y);
     let len = f32::from(separator.len);
     let (left, top, width, height) = match separator.orientation {
-        SplitOrientation::Vertical => (
-            x * cell_w + centred(cell_w),
-            y * cell_h,
-            thickness,
-            len * cell_h,
-        ),
-        SplitOrientation::Horizontal => (
-            x * cell_w,
-            y * cell_h + centred(cell_h),
-            len * cell_w,
-            thickness,
-        ),
+        SplitOrientation::Vertical => {
+            let meets_crossing_line = separator.y + separator.len < layout.size.rows;
+            let extension = if meets_crossing_line {
+                before_line(cell_h)
+            } else {
+                0.0
+            };
+            (
+                x * cell_w + before_line(cell_w),
+                y * cell_h,
+                thickness,
+                len * cell_h + extension,
+            )
+        }
+        SplitOrientation::Horizontal => {
+            let meets_crossing_line = separator.x + separator.len < layout.size.cols;
+            let extension = if meets_crossing_line {
+                before_line(cell_w)
+            } else {
+                0.0
+            };
+            (
+                x * cell_w,
+                y * cell_h + before_line(cell_h),
+                len * cell_w + extension,
+                thickness,
+            )
+        }
     };
     Node {
         position_type: PositionType::Absolute,
@@ -224,6 +251,49 @@ fn separator_node(separator: &Separator, geometry: &PaneGeometry) -> Node {
         height: Val::Px(height / scale),
         ..default()
     }
+}
+
+/// Physical px `rect` grows on its right and bottom edges: the reserved
+/// cell minus the line where the edge meets a separator of the matching
+/// orientation, zero where it reaches the window or sits after a line.
+fn bleed_phys(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Vec2 {
+    let (cell_w, cell_h) = cell_pitch_phys(geometry);
+    let thickness = line_thickness_phys(geometry);
+    let overlaps = |start: u16, len: u16, from: u16, to: u16| start < to && from < start + len;
+    let mut bleed = Vec2::ZERO;
+    for separator in &layout.separators {
+        match separator.orientation {
+            SplitOrientation::Vertical
+                if separator.x == rect.x + rect.cols
+                    && overlaps(separator.y, separator.len, rect.y, rect.y + rect.rows) =>
+            {
+                bleed.x = (cell_w - thickness).max(0.0);
+            }
+            SplitOrientation::Horizontal
+                if separator.y == rect.y + rect.rows
+                    && overlaps(separator.x, separator.len, rect.x, rect.x + rect.cols) =>
+            {
+                bleed.y = (cell_h - thickness).max(0.0);
+            }
+            _ => {}
+        }
+    }
+    bleed
+}
+
+/// The cell pitch as `(width, height)` in physical px.
+fn cell_pitch_phys(geometry: &PaneGeometry) -> (f32, f32) {
+    (
+        f32::from(geometry.cell_px.width),
+        f32::from(geometry.cell_px.height),
+    )
+}
+
+/// The separator line's thickness in whole physical px, never below one.
+fn line_thickness_phys(geometry: &PaneGeometry) -> f32 {
+    (SEPARATOR_THICKNESS_LOGICAL_PX * geometry.scale_factor)
+        .round()
+        .max(1.0)
 }
 
 /// Accepts `layout.active` unless it predates the GUI's last
@@ -321,8 +391,9 @@ mod tests {
     }
 
     /// Asserts that pane nodes are positioned in logical px from integral
-    /// physical px, and that each separator is a one-logical-px line
-    /// centred inside its reserved cell.
+    /// physical px, that the pane before a separator grows into the
+    /// reserved cell up to the line, and that the line sits flush against
+    /// the pane after it.
     ///
     /// Case: two panes side by side at a 10×20 px cell on a 2× display.
     #[test]
@@ -332,7 +403,7 @@ mod tests {
         set_layout(&mut app, 1, PaneId(1));
         app.update();
         let node_a = app.world().get::<Node>(a).unwrap();
-        assert_eq!((node_a.left, node_a.width), (Val::Px(0.0), Val::Px(200.0)));
+        assert_eq!((node_a.left, node_a.width), (Val::Px(0.0), Val::Px(204.0)));
         let node_b = app.world().get::<Node>(b).unwrap();
         assert_eq!(
             (node_b.left, node_b.top, node_b.width, node_b.height),
@@ -346,18 +417,22 @@ mod tests {
         assert_eq!(seps.len(), 1);
         assert_eq!(
             (seps[0].left, seps[0].top, seps[0].width, seps[0].height),
-            (Val::Px(202.0), Val::Px(0.0), Val::Px(1.0), Val::Px(240.0))
+            (Val::Px(204.0), Val::Px(0.0), Val::Px(1.0), Val::Px(240.0))
         );
     }
 
-    /// Asserts that a separator line is centred in its reserved cell on
-    /// the axis it divides, with a thickness of one logical px rounded to
-    /// whole physical px, for both orientations and on a 1× display.
+    /// Asserts that a separator line occupies the last one logical px,
+    /// rounded to whole physical px, of its reserved cell on the axis it
+    /// divides, for both orientations and on a 1× display.
     ///
     /// Case: a stacked split on a 2× display and a side-by-side split on
     /// a 1× display, each with a different cell pitch.
     #[test]
-    fn separator_nodes_are_thin_lines_centred_in_the_reserved_cell() {
+    fn separator_lines_sit_flush_against_the_following_pane() {
+        let full_width = Layout {
+            size: GridSize { cols: 81, rows: 24 },
+            ..Layout::default()
+        };
         let hidpi = PaneGeometry {
             cell_px: CellPixels {
                 width: 10,
@@ -372,6 +447,7 @@ mod tests {
                 y: 12,
                 len: 81,
             },
+            &full_width,
             &hidpi,
         );
         assert_eq!(
@@ -381,7 +457,7 @@ mod tests {
                 horizontal.width,
                 horizontal.height
             ),
-            (Val::Px(0.0), Val::Px(124.5), Val::Px(405.0), Val::Px(1.0))
+            (Val::Px(0.0), Val::Px(129.0), Val::Px(405.0), Val::Px(1.0))
         );
 
         let lodpi = PaneGeometry {
@@ -398,12 +474,154 @@ mod tests {
                 y: 0,
                 len: 24,
             },
+            &full_width,
             &lodpi,
         );
         assert_eq!(
             (vertical.left, vertical.top, vertical.width, vertical.height),
-            (Val::Px(27.0), Val::Px(0.0), Val::Px(1.0), Val::Px(384.0))
+            (Val::Px(31.0), Val::Px(0.0), Val::Px(1.0), Val::Px(384.0))
         );
+    }
+
+    fn stacked_then_side_by_side() -> Layout {
+        Layout {
+            seq: CommandSeq(1),
+            size: GridSize { cols: 81, rows: 24 },
+            active: Some(PaneId(1)),
+            panes: vec![
+                PaneRect {
+                    pane: PaneId(1),
+                    x: 0,
+                    y: 0,
+                    cols: 40,
+                    rows: 12,
+                },
+                PaneRect {
+                    pane: PaneId(2),
+                    x: 0,
+                    y: 13,
+                    cols: 40,
+                    rows: 11,
+                },
+                PaneRect {
+                    pane: PaneId(3),
+                    x: 41,
+                    y: 0,
+                    cols: 40,
+                    rows: 24,
+                },
+            ],
+            separators: vec![
+                Separator {
+                    orientation: SplitOrientation::Horizontal,
+                    x: 0,
+                    y: 12,
+                    len: 40,
+                },
+                Separator {
+                    orientation: SplitOrientation::Vertical,
+                    x: 40,
+                    y: 0,
+                    len: 24,
+                },
+            ],
+        }
+    }
+
+    /// Asserts that a pane grows by the reserved cell minus the line on
+    /// each edge that meets a separator, and not at all on edges that
+    /// reach the window or sit after a line.
+    ///
+    /// Case: the left half is split top and bottom, so the top-left pane
+    /// meets a separator on its right and bottom, the bottom-left pane
+    /// only on its right, and the right pane on neither.
+    #[test]
+    fn panes_bleed_into_the_reserved_cell_only_on_edges_that_meet_a_separator() {
+        let layout = stacked_then_side_by_side();
+        let geometry = PaneGeometry {
+            cell_px: CellPixels {
+                width: 10,
+                height: 20,
+            },
+            scale_factor: 2.0,
+        };
+        let size = |node: Node| (node.left, node.top, node.width, node.height);
+        assert_eq!(
+            size(pane_node(&layout.panes[0], &layout, &geometry)),
+            (Val::Px(0.0), Val::Px(0.0), Val::Px(204.0), Val::Px(129.0))
+        );
+        assert_eq!(
+            size(pane_node(&layout.panes[1], &layout, &geometry)),
+            (Val::Px(0.0), Val::Px(130.0), Val::Px(204.0), Val::Px(110.0))
+        );
+        assert_eq!(
+            size(pane_node(&layout.panes[2], &layout, &geometry)),
+            (Val::Px(205.0), Val::Px(0.0), Val::Px(200.0), Val::Px(240.0))
+        );
+    }
+
+    /// Asserts that a separator which stops short of the window edge is
+    /// extended across the reserved cell it ends in, so it meets the
+    /// crossing line instead of leaving a gap at the junction.
+    ///
+    /// Case: the horizontal divider of a stacked left half ends at the
+    /// column reserved for the vertical divider.
+    #[test]
+    fn a_separator_ending_at_a_crossing_line_extends_to_meet_it() {
+        let layout = stacked_then_side_by_side();
+        let geometry = PaneGeometry {
+            cell_px: CellPixels {
+                width: 10,
+                height: 20,
+            },
+            scale_factor: 2.0,
+        };
+        let horizontal = separator_node(&layout.separators[0], &layout, &geometry);
+        assert_eq!(
+            (horizontal.left, horizontal.width),
+            (Val::Px(0.0), Val::Px(204.0))
+        );
+        let vertical = separator_node(&layout.separators[1], &layout, &geometry);
+        assert_eq!(
+            (vertical.top, vertical.height),
+            (Val::Px(0.0), Val::Px(240.0))
+        );
+    }
+
+    /// Asserts that a separator sharing an edge coordinate with a pane
+    /// but not overlapping its extent does not make the pane grow.
+    ///
+    /// Case: the right half is split top and bottom; the bottom-right
+    /// pane's horizontal divider starts at the top-right pane's right
+    /// edge column but runs below it.
+    #[test]
+    fn a_separator_that_only_shares_a_coordinate_does_not_cause_bleed() {
+        let layout = Layout {
+            size: GridSize { cols: 81, rows: 24 },
+            separators: vec![Separator {
+                orientation: SplitOrientation::Vertical,
+                x: 40,
+                y: 13,
+                len: 11,
+            }],
+            ..Layout::default()
+        };
+        let rect = PaneRect {
+            pane: PaneId(1),
+            x: 0,
+            y: 0,
+            cols: 40,
+            rows: 12,
+        };
+        let geometry = PaneGeometry {
+            cell_px: CellPixels {
+                width: 10,
+                height: 20,
+            },
+            scale_factor: 2.0,
+        };
+        let node = pane_node(&rect, &layout, &geometry);
+        assert_eq!((node.width, node.height), (Val::Px(200.0), Val::Px(120.0)));
     }
 
     /// Asserts that an accepted active change fires
@@ -458,7 +676,7 @@ mod tests {
             scale_factor: 2.0,
         });
         app.update();
-        assert_eq!(app.world().get::<Node>(a).unwrap().width, Val::Px(400.0));
+        assert_eq!(app.world().get::<Node>(a).unwrap().width, Val::Px(409.0));
     }
 
     /// Asserts that a separator spawned before any pane was parented is
