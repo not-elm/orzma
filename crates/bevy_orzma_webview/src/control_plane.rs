@@ -1539,6 +1539,89 @@ mod apply_tests {
         assert!(app.world().resource::<OrzmaRegistry>().is_empty());
     }
 
+    /// Asserts that a `new_instance` for a handle whose owner surface has
+    /// despawned is refused with `owner_gone`, mirroring the `register`
+    /// refusal.
+    ///
+    /// Case: a program's pane was killed while its control connection
+    /// stayed open, and it asks for another placement of a handle it
+    /// registered earlier.
+    #[test]
+    fn new_instance_for_a_dead_owner_is_refused() {
+        let mut app = App::new();
+        app.insert_resource(OrzmaRegistry::default());
+        app.insert_resource(OrzmaRpc::default());
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        app.insert_resource(ControlEvents(ev_rx));
+        app.add_systems(Update, apply_control_events);
+
+        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let (register_tx, register_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::Register {
+                connection_id: 1,
+                owner_surface: owner,
+                kind: RegisterKind::Inline {
+                    html: "<h1>x</h1>".into(),
+                    interactive: true,
+                    forward_keys: vec![],
+                    preload: vec![],
+                },
+                reply: register_tx,
+            })
+            .unwrap();
+        app.update();
+        let handle = match register_rx.try_recv().expect("one reply") {
+            ServerMsg::Registered { handle, .. } => handle,
+            other => panic!("unexpected reply: {other:?}"),
+        };
+
+        app.world_mut().entity_mut(owner).despawn();
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::NewInstance {
+                connection_id: 1,
+                handle,
+                reply: reply_tx,
+            })
+            .unwrap();
+        app.update();
+
+        let reply = reply_rx.try_recv().expect("one reply");
+        assert!(matches!(reply, ServerMsg::Err { ref error, .. } if error == "owner_gone"));
+    }
+
+    /// Asserts that a `new_instance` naming an unknown handle still
+    /// replies `unknown_handle`, unaffected by the owner-liveness gate
+    /// added for the `owner_gone` refusal.
+    ///
+    /// Case: a program sends `new_instance` for a handle nobody
+    /// registered, such as a stale id left over from an earlier session.
+    #[test]
+    fn new_instance_for_an_unknown_handle_still_replies_unknown_handle() {
+        let mut app = App::new();
+        app.insert_resource(OrzmaRegistry::default());
+        app.insert_resource(OrzmaRpc::default());
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        app.insert_resource(ControlEvents(ev_rx));
+        app.add_systems(Update, apply_control_events);
+
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::NewInstance {
+                connection_id: 1,
+                handle: HandleId::from("missing"),
+                reply: reply_tx,
+            })
+            .unwrap();
+        app.update();
+
+        let reply = reply_rx.try_recv().expect("one reply");
+        assert!(matches!(reply, ServerMsg::Err { ref error, .. } if error == "unknown_handle"));
+    }
+
     #[test]
     fn apply_register_dir_mints_handle_and_populates_both_registries() {
         let dir = tempfile::tempdir().unwrap();
