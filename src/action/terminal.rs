@@ -12,11 +12,9 @@ use crate::action::terminal::{
 use bevy::prelude::*;
 
 pub(crate) use open_uri::TerminalOpenUri;
-#[cfg(test)]
-pub(crate) use selection::test_support;
 pub(crate) use selection::{
     TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
-    copy_selection_of, trigger_selection_copy,
+    trigger_selection_copy,
 };
 pub(crate) use viewport_scroll::TerminalViewportScroll;
 

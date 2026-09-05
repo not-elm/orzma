@@ -1,6 +1,6 @@
 //! Vi-mode indicator chip. A `Display::None` chip Node is
 //! attached as a child of each Surface host the first frame
-//! `OrzmaTtyHandle` is observed there; it becomes visible while the
+//! `MuxPane` is observed there; it becomes visible while the
 //! host carries `ViModeState` and shows `[offset/total]` over the
 //! pane's top-right corner.
 
@@ -12,8 +12,8 @@ use bevy::ecs::lifecycle::Remove;
 use bevy::ecs::observer::On;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::OrzmaTtyHandle;
-use orzma_vt::prelude::Vt;
+use bevy_orzma_mux::prelude::MuxPane;
+use orzma_tty_renderer::schema::TerminalGrid;
 
 /// Background color of the vi-mode indicator chip. Bright
 /// yellow so the chip reads as a deliberate HUD element on top of the
@@ -50,7 +50,7 @@ impl Plugin for ViModeIndicatorPlugin {
 }
 
 /// Marker for the chip Node child of a Surface host. Exactly one
-/// per host; created on `Added<OrzmaTtyHandle>` and never despawned
+/// per host; created on `Added<MuxPane>` and never despawned
 /// (visibility toggled via `Node.display`).
 #[derive(Component)]
 pub struct ViModeIndicator;
@@ -69,11 +69,11 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
 }
 
 /// Spawns a `ViModeIndicator` chip as a child of every pane host
-/// the first frame `OrzmaTtyHandle` is observed there. The
-/// `Added<OrzmaTtyHandle>` filter fires exactly once per surface host.
+/// the first frame `MuxPane` is observed there. The
+/// `Added<MuxPane>` filter fires exactly once per surface host.
 fn attach_indicator_to_surface_host(
     mut commands: Commands,
-    hosts: Query<Entity, Added<OrzmaTtyHandle>>,
+    hosts: Query<Entity, Added<MuxPane>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     for host in hosts.iter() {
@@ -109,17 +109,17 @@ fn attach_indicator_to_surface_host(
 // history-size read (docs/todo/migrate-to-new-vt.md item 11); only the
 // live scroll offset is real.
 fn refresh_indicator(
-    hosts: Query<(&OrzmaTtyHandle, &Children), With<ViModeState>>,
+    hosts: Query<(&TerminalGrid, &Children), With<ViModeState>>,
     mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<ViModeIndicator>>,
 ) {
-    for (handle, children) in hosts.iter() {
+    for (grid, children) in hosts.iter() {
         let Some(chip) = children.iter().find(|c| chips.get(*c).is_ok()) else {
             continue;
         };
         let Ok((mut text, mut node, mut cache)) = chips.get_mut(chip) else {
             continue;
         };
-        let (offset, total) = (handle.vt().display_offset().0, 0);
+        let (offset, total) = (grid.display_offset, 0);
         let new_cache = IndicatorCache { offset, total };
         // NOTE: the first-show path (Display::None → Flex) must always
         // write the text even when the cache already matches the snapshot,
@@ -163,7 +163,7 @@ mod tests {
     use super::*;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
-    use orzma_vt::prelude::Scroll;
+    use orzma_mux::prelude::PaneId;
 
     #[test]
     fn format_indicator_renders_offset_over_total() {
@@ -180,8 +180,9 @@ mod tests {
     }
 
     fn spawn_terminal_entity(app: &mut App) -> Entity {
-        let (handle, _sink) = OrzmaTtyHandle::detached(10, 5);
-        app.world_mut().spawn(handle).id()
+        app.world_mut()
+            .spawn((MuxPane(PaneId(1)), TerminalGrid::default()))
+            .id()
     }
 
     fn find_indicator_child(app: &App, host: Entity) -> Option<Entity> {
@@ -255,10 +256,7 @@ mod tests {
             "chip becomes visible while ViModeState is on the host"
         );
         let text = app.world().get::<Text>(chip).expect("Text");
-        assert_eq!(
-            text.0, "[0/0]",
-            "a fresh detached terminal starts at offset 0"
-        );
+        assert_eq!(text.0, "[0/0]", "a fresh terminal grid starts at offset 0");
         let cache = app.world().get::<IndicatorCache>(chip).expect("cache");
         assert_eq!(cache.offset, 0);
     }
@@ -266,25 +264,19 @@ mod tests {
     /// Asserts that the chip's text and cache follow the display offset
     /// after the viewport scrolls into history.
     ///
-    /// Case: the terminal has printed thirty lines of scrollback and the
-    /// user pages up while in vi mode.
+    /// Case: the terminal has scrolled back five lines into history and
+    /// the user is in vi mode.
     #[test]
     fn refresh_updates_text_after_scroll_page_up() {
         let mut app = make_app_with_plugin();
         let host = spawn_terminal_entity(&mut app);
         app.update();
 
-        {
-            let mut entity = app.world_mut().entity_mut(host);
-            let mut handle = entity
-                .get_mut::<OrzmaTtyHandle>()
-                .expect("OrzmaTtyHandle on host");
-            let seed: Vec<u8> = (0..30)
-                .flat_map(|i| format!("l{i}\r\n").into_bytes())
-                .collect();
-            handle.feed_bytes(&seed);
-            handle.scroll(Scroll::PageUp);
-        }
+        app.world_mut()
+            .entity_mut(host)
+            .get_mut::<TerminalGrid>()
+            .expect("TerminalGrid on host")
+            .display_offset = 5;
         app.world_mut()
             .entity_mut(host)
             .insert(crate::action::vi::mode::ViModeState);
@@ -293,9 +285,8 @@ mod tests {
         let chip = find_indicator_child(&app, host).expect("chip");
         let cache = app.world().get::<IndicatorCache>(chip).expect("cache");
         let text = app.world().get::<Text>(chip).expect("Text");
-        assert!(cache.offset > 0, "PageUp must move the display offset");
-        let expected = format_indicator(cache.offset, cache.total);
-        assert_eq!(text.0, expected);
+        assert_eq!(cache.offset, 5);
+        assert_eq!(text.0, "[5/0]");
     }
 
     #[test]
