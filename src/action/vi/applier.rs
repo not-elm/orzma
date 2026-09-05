@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn yank_copies_the_selection_and_exits_vi_mode() {
         use crate::action::clipboard::test_support::{CapturedCopyActions, capture_copy_actions};
-        use orzma_vt::prelude::{CellSide, GridColumn, GridLine, GridPoint};
+        use crate::action::terminal::test_support::spawn_terminal;
 
         let mut app = app_with_applier();
         app.init_resource::<SeenExits>().add_observer(
@@ -305,17 +305,7 @@ mod tests {
             },
         );
         capture_copy_actions(&mut app);
-        let (mut handle, _sink) = OrzmaTtyHandle::detached(4, 3);
-        handle.feed_bytes(b"abcd\r\nefgh\r\nijkl");
-        handle.start_selection(
-            GridPoint {
-                line: GridLine(0),
-                column: GridColumn(0),
-            },
-            CellSide::Left,
-            SelectionKind::Lines,
-        );
-        let entity = app.world_mut().spawn((handle, OrzmaTerminal)).id();
+        let entity = spawn_terminal(&mut app, b"abcd\r\nefgh\r\nijkl", true);
 
         app.world_mut().trigger(ViYankRequest { entity });
         app.update();

@@ -447,6 +447,14 @@ mod tests {
         vt.device.active_screen().selection_range()
     }
 
+    /// Asserts that the next frame repaints no rows and carries
+    /// `selection`, which is what an idle selection change owes.
+    fn assert_rowless_frame(vt: &mut OrzmaVt, selection: Option<SelectionRange>) {
+        let frame = vt.frame().expect("an idle selection change emits");
+        assert!(frame.rows.is_empty());
+        assert_eq!(frame.selection, selection);
+    }
+
     fn range(start: (i32, u16), end: (i32, u16), geometry: SelectionGeometry) -> SelectionRange {
         SelectionRange {
             start: cell(start.0, start.1),
@@ -567,9 +575,7 @@ mod tests {
         vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines);
         vt.frame();
         assert!(vt.clear_selection());
-        let frame = vt.frame().expect("an idle clear emits");
-        assert!(frame.rows.is_empty());
-        assert_eq!(frame.selection, None);
+        assert_rowless_frame(&mut vt, None);
     }
 
     /// Asserts that a second clear finds nothing to drop.
@@ -592,11 +598,9 @@ mod tests {
     fn an_idle_start_emits_a_rowless_frame_carrying_the_selection() {
         let mut vt = filled();
         assert!(vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Lines));
-        let frame = vt.frame().expect("an idle start emits");
-        assert!(frame.rows.is_empty());
-        assert_eq!(
-            frame.selection,
-            Some(range((0, 0), (0, 3), SelectionGeometry::Lines))
+        assert_rowless_frame(
+            &mut vt,
+            Some(range((0, 0), (0, 3), SelectionGeometry::Lines)),
         );
     }
 
@@ -672,11 +676,9 @@ mod tests {
         vt.extend_selection(cell(0, 2), CellSide::Right);
         vt.frame();
         assert!(vt.extend_selection(cell(0, 3), CellSide::Right));
-        let frame = vt.frame().expect("an idle extend emits");
-        assert!(frame.rows.is_empty());
-        assert_eq!(
-            frame.selection,
-            Some(range((0, 0), (0, 3), SelectionGeometry::Linear))
+        assert_rowless_frame(
+            &mut vt,
+            Some(range((0, 0), (0, 3), SelectionGeometry::Linear)),
         );
     }
 

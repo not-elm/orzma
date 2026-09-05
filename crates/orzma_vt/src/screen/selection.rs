@@ -24,6 +24,29 @@ pub struct SelectionRange {
     pub geometry: SelectionGeometry,
 }
 
+impl SelectionRange {
+    /// The inclusive column span the selection covers on `line`: the
+    /// same expression the renderer's shader evaluates, so the copied
+    /// text and the painted highlight always agree.
+    pub(crate) fn span_on(&self, line: i32, last_column: u16) -> (u16, u16) {
+        match self.geometry {
+            SelectionGeometry::Lines => (0, last_column),
+            SelectionGeometry::Linear | SelectionGeometry::Block => (
+                if line == self.start.line.0 {
+                    self.start.column.0
+                } else {
+                    0
+                },
+                if line == self.end.line.0 {
+                    self.end.column.0
+                } else {
+                    last_column
+                },
+            ),
+        }
+    }
+}
+
 /// The shape a [`SelectionRange`] spans between its endpoints.
 ///
 /// Wider than [`SelectionKind`]: the two current selection kinds only
@@ -175,9 +198,9 @@ impl ScreenSelection {
     /// normalized by `(line, boundary)`, then each boundary becomes an
     /// inclusive cell: a start on a row's right edge moves to the next
     /// row's first cell and an end on a row's left edge moves to the
-    /// previous row's last cell; ends that cross after that enclose no
-    /// cell. A Lines selection spans whole rows between the two
-    /// endpoints' rows and never wraps.
+    /// previous row's last cell; ends that coincide or cross after that
+    /// enclose no cell. A Lines selection spans whole rows between the
+    /// two endpoints' rows and never wraps.
     ///
     /// # Invariants
     ///
@@ -208,9 +231,6 @@ impl ScreenSelection {
         let (start, end) = match state.kind {
             SelectionKind::Lines => ((start.0, 0), (end.0, last_column)),
             SelectionKind::Simple => {
-                if start == end {
-                    return Resolved::Empty;
-                }
                 let start = if start.1 == cols {
                     (start.0 + 1, 0)
                 } else {

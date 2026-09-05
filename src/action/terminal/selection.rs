@@ -160,9 +160,35 @@ fn to_grid_point(viewport_point: GridPoint, offset: DisplayOffset) -> GridPoint 
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use orzma_vt::prelude::{GridColumn, GridLine};
+
+    /// Spawns a detached terminal showing `rows` as an `OrzmaTerminal`,
+    /// with row 0 selected as Lines when `select` is set, so copy and
+    /// yank observers can be exercised against real selected text.
+    pub(crate) fn spawn_terminal(app: &mut App, rows: &[u8], select: bool) -> Entity {
+        let (mut handle, _sink) = OrzmaTtyHandle::detached(4, 3);
+        handle.feed_bytes(rows);
+        if select {
+            handle.start_selection(
+                GridPoint {
+                    line: GridLine(0),
+                    column: GridColumn(0),
+                },
+                CellSide::Left,
+                SelectionKind::Lines,
+            );
+        }
+        app.world_mut().spawn((handle, OrzmaTerminal)).id()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::action::clipboard::test_support::{CapturedCopyActions, capture_copy_actions};
+    use crate::action::terminal::selection::test_support::spawn_terminal;
     use orzma_vt::prelude::{GridColumn, GridLine};
 
     #[derive(Resource, Default)]
@@ -320,24 +346,6 @@ mod tests {
             .add_observer(on_terminal_selection_copy);
         capture_copy_actions(&mut app);
         app
-    }
-
-    /// Spawns a terminal showing `rows`, with row 0 selected as Lines when
-    /// `select` is set.
-    fn spawn_terminal(app: &mut App, rows: &[u8], select: bool) -> Entity {
-        let (mut handle, _sink) = OrzmaTtyHandle::detached(4, 3);
-        handle.feed_bytes(rows);
-        if select {
-            handle.start_selection(
-                GridPoint {
-                    line: GridLine(0),
-                    column: GridColumn(0),
-                },
-                CellSide::Left,
-                SelectionKind::Lines,
-            );
-        }
-        app.world_mut().spawn((handle, OrzmaTerminal)).id()
     }
 
     fn captured(app: &App) -> &[String] {

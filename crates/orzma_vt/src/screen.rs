@@ -53,8 +53,7 @@ use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::placements::ScreenPlacements;
 use crate::screen::selection::{
-    CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionGeometry, SelectionKind,
-    SelectionRange,
+    CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionKind, SelectionRange,
 };
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
@@ -1153,7 +1152,7 @@ impl Screen {
     /// The text the active selection covers, row by row; `None` exactly
     /// when [`Self::selection_range`] is `None`.
     ///
-    /// Each row's span comes from [`Self::selection_span_on`], with
+    /// Each row's span comes from [`SelectionRange::span_on`], with
     /// trailing blanks trimmed. Rows are joined by `\n` with none after
     /// the last.
     // TODO: Join soft-wrapped rows without a newline once `Row` records
@@ -1163,7 +1162,7 @@ impl Screen {
         let last_column = self.grid.size().cols - 1;
         let mut text = String::new();
         for line in range.start.line.0..=range.end.line.0 {
-            let (first, last) = Self::selection_span_on(&range, line, last_column);
+            let (first, last) = range.span_on(line, last_column);
             let row = self.grid.row(GridLine(line));
             let row_text: String = (first..=last)
                 .map(|column| row[GridColumn(column)].c)
@@ -1179,32 +1178,8 @@ impl Screen {
     /// The endpoint a host cell stands for; `None` when the cell is
     /// outside the ring or past the width.
     fn selection_end(&self, cell: GridPoint, side: CellSide) -> Option<SelectionEnd> {
-        if cell.column.0 >= self.grid.size().cols {
-            return None;
-        }
-        let line = self.grid.line_id_at(cell.line)?;
+        let line = self.grid.line_id_at_point(cell)?;
         Some(SelectionEnd::at(line, cell.column, side))
-    }
-
-    /// The inclusive column span the selection covers on `line`: the
-    /// same expression the renderer's shader evaluates, so the copied
-    /// text and the painted highlight always agree.
-    fn selection_span_on(range: &SelectionRange, line: i32, last_column: u16) -> (u16, u16) {
-        match range.geometry {
-            SelectionGeometry::Lines => (0, last_column),
-            SelectionGeometry::Linear | SelectionGeometry::Block => (
-                if line == range.start.line.0 {
-                    range.start.column.0
-                } else {
-                    0
-                },
-                if line == range.end.line.0 {
-                    range.end.column.0
-                } else {
-                    last_column
-                },
-            ),
-        }
     }
 }
 

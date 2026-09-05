@@ -7,7 +7,7 @@ pub(crate) mod coords;
 mod history_index;
 
 use crate::screen::cell::Cell;
-use crate::screen::grid::coords::{GridLine, ScreenLine};
+use crate::screen::grid::coords::{GridLine, GridPoint, ScreenLine};
 use crate::screen::grid::history_index::HistoryIndex;
 use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
@@ -219,6 +219,15 @@ impl Grid {
     /// is outside the ring.
     pub fn line_id_at(&self, line: GridLine) -> Option<LineId> {
         self.ring_index(line).map(|index| self.rows[index].id)
+    }
+
+    /// The id of the row a cell sits on; `None` when the cell's line is
+    /// outside the ring or its column is past the width.
+    pub fn line_id_at_point(&self, point: GridPoint) -> Option<LineId> {
+        if point.column.0 >= self.size.cols {
+            return None;
+        }
+        self.line_id_at(point.line)
     }
 
     /// The active-grid line the row `id` now sits at; `None` once it has
