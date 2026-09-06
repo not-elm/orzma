@@ -102,10 +102,6 @@ pub(crate) enum ControlEvent {
         action: NavAction,
     },
     /// A socket `mount` for one of the connection's instances.
-    #[expect(
-        dead_code,
-        reason = "fields are read by the apply handler Task 5 adds; the no-op arm in control_plane.rs is temporary"
-    )]
     Mount {
         /// Connection id (ownership check in apply).
         connection_id: u64,
@@ -123,10 +119,6 @@ pub(crate) enum ControlEvent {
         cols: u16,
     },
     /// A socket `unmount` for one of the connection's instances.
-    #[expect(
-        dead_code,
-        reason = "fields are read by the apply handler Task 5 adds; the no-op arm in control_plane.rs is temporary"
-    )]
     Unmount {
         /// Connection id (ownership check in apply).
         connection_id: u64,
