@@ -119,6 +119,7 @@ mod character_set;
 mod cursor;
 mod cursor_checkpoint;
 mod device_attributes;
+mod device_status;
 mod erase;
 mod interpret_output;
 mod keypad;

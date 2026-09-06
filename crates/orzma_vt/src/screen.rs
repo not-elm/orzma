@@ -790,6 +790,19 @@ impl Screen {
         }
     }
 
+    /// The cursor position as a `CSI 6 n` report carries it: 1-based,
+    /// and relative to the top margin while origin mode confines the
+    /// cursor to the scroll region.
+    pub fn cursor_position_report(&self) -> (u16, u16) {
+        let origin = match self.scroll_region.origin_mode() {
+            OriginMode::WithinMargins => self.scroll_region.top_margin(),
+            OriginMode::UpperLeftCorner => ScreenLine(0),
+        };
+        let row = self.state.line.0.saturating_sub(origin.0) + 1;
+        let column = self.state.column.0 + 1;
+        (row, column)
+    }
+
     /// The selection as an emitted frame carries it: normalized,
     /// cell-side trimmed, in active-grid coordinates; `None` when there
     /// is no selection, its span is empty, or an endpoint's row has
