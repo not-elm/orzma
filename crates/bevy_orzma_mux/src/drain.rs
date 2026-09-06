@@ -24,10 +24,6 @@ pub struct MuxPaneSpawnFailed {
     pub error: String,
 }
 
-/// Whether `MuxSessionEnded` was already triggered for a disconnect.
-#[derive(Resource, Default)]
-struct DisconnectReported(bool);
-
 /// Registers the drain.
 pub(crate) struct DrainPlugin;
 
@@ -39,6 +35,10 @@ impl Plugin for DrainPlugin {
             .add_systems(Update, drain_mux_events.in_set(MuxSystems::Drain));
     }
 }
+
+/// Whether `MuxSessionEnded` was already triggered for a disconnect.
+#[derive(Resource, Default)]
+struct DisconnectReported(bool);
 
 /// Drains every queued event in order. Not gated on change detection:
 /// channel arrivals are invisible to it.
@@ -97,14 +97,7 @@ fn apply_event(
             request,
             pane: _,
             text,
-        } => {
-            let terminal = registry.pending_copies.remove(&request);
-            commands.trigger(TtySelectionTextSignal {
-                terminal,
-                request,
-                text,
-            });
-        }
+        } => commands.trigger(TtySelectionTextSignal { request, text }),
         MuxEvent::PaneClosed { pane, reason } => {
             if let Some(entity) = registry.panes.remove(&pane) {
                 let code = match reason {
@@ -138,7 +131,7 @@ mod tests {
         ended: usize,
         spawn_failed: Vec<(Entity, String)>,
         frames: Vec<Entity>,
-        texts: Vec<(Option<Entity>, RequestId, Option<String>)>,
+        texts: Vec<(RequestId, Option<String>)>,
         layout_changes: usize,
     }
 
@@ -157,7 +150,7 @@ mod tests {
                 seen.frames.push(ev.terminal)
             })
             .add_observer(|ev: On<TtySelectionTextSignal>, mut seen: ResMut<Seen>| {
-                seen.texts.push((ev.terminal, ev.request, ev.text.clone()));
+                seen.texts.push((ev.request, ev.text.clone()));
             })
             .add_systems(
                 Update,
@@ -334,19 +327,15 @@ mod tests {
         assert!(app.world().resource::<PaneRegistry>().panes.is_empty());
     }
 
-    /// Asserts that `SelectionText` resolves the requesting entity from
-    /// the pending copies and reports `None` for an unresolved pane.
+    /// Asserts that `SelectionText` is forwarded as
+    /// `TtySelectionTextSignal` with its request and text, including a
+    /// `None` answer.
     ///
     /// Case: the user copies from a pane that closed before the backend
     /// answered.
     #[test]
-    fn selection_text_resolves_the_requester() {
+    fn selection_text_is_forwarded_with_its_request() {
         let (mut app, events) = app();
-        let entity = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .resource_mut::<PaneRegistry>()
-            .pending_copies
-            .insert(RequestId(9), entity);
         events
             .send(MuxEvent::SelectionText {
                 request: RequestId(9),
@@ -357,7 +346,7 @@ mod tests {
         app.update();
         assert_eq!(
             app.world().resource::<Seen>().texts,
-            vec![(Some(entity), RequestId(9), None)]
+            vec![(RequestId(9), None)]
         );
     }
 

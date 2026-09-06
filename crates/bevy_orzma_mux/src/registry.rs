@@ -1,6 +1,6 @@
 //! The bridge's correlation tables: which entity mirrors which backend
-//! pane, which spawn / copy requests are in flight, and the focus state
-//! the GUI last accepted.
+//! pane, which spawn requests are in flight, and the focus state the GUI
+//! last accepted.
 
 use bevy::prelude::*;
 use orzma_mux::prelude::{CommandSeq, PaneId, RequestId};
@@ -14,11 +14,11 @@ pub struct PaneRegistry {
     pub panes: HashMap<PaneId, Entity>,
     /// Entities pre-spawned for a `NewPane` whose answer is pending.
     pub pending_spawns: HashMap<RequestId, Entity>,
-    /// Entities whose `CopySelection` answer is pending.
-    pub pending_copies: HashMap<RequestId, Entity>,
     /// The sequence of the last `SelectPane` the GUI sent.
     pub last_select: Option<CommandSeq>,
-    /// The active pane the GUI last accepted from a `Layout`.
+    /// The active pane the GUI applied: accepted from a `Layout`, or
+    /// taken optimistically from a click while its `SelectPane` is in
+    /// flight.
     pub applied_active: Option<PaneId>,
 }
 

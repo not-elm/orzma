@@ -11,7 +11,8 @@ pub(crate) struct Pane {
     pub(crate) tty: OrzmaTty<OrzmaVt>,
     /// The `(cols, rows, cell_px)` the PTY was last successfully sized to.
     pub(crate) applied: (u16, u16, CellPixels),
-    /// The last directory the shell reported through OSC 7.
+    /// The last directory the shell reported through OSC 7, or the
+    /// directory the pane was spawned in until it reports one.
     pub(crate) cwd: Option<PathBuf>,
 }
 

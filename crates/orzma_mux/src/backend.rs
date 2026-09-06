@@ -18,20 +18,6 @@ use std::time::Instant;
 pub(crate) mod pane;
 pub(crate) use pane::ShellFactory;
 
-/// The window geometry the GUI last reported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Geometry {
-    size: GridSize,
-    cell_px: CellPixels,
-}
-
-/// What one ready `Select` index refers to.
-#[derive(Debug, Clone, Copy)]
-enum Ready {
-    Commands,
-    Pane(PaneId),
-}
-
 /// The backend state, driven by [`Backend::run`] on its own thread.
 pub(crate) struct Backend {
     factory: Box<dyn PaneFactory>,
@@ -45,9 +31,6 @@ pub(crate) struct Backend {
     /// Set when the GUI's event receiver is gone; the loop exits.
     gui_gone: bool,
 }
-
-/// How many queued commands one iteration applies before pumping panes.
-const COMMAND_BATCH: usize = 64;
 
 impl Backend {
     /// A backend with no panes and no geometry.
@@ -245,9 +228,10 @@ impl Backend {
             cols: rect.cols,
             rows: rect.rows,
         };
+        let spawn_cwd = cwd.or(inherited_cwd);
         match self
             .factory
-            .spawn(size, geometry.cell_px, cwd.or(inherited_cwd), env)
+            .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
         {
             Ok(tty) => {
                 self.panes.insert(
@@ -255,7 +239,7 @@ impl Backend {
                     Pane {
                         tty,
                         applied: (size.cols, size.rows, geometry.cell_px),
-                        cwd: None,
+                        cwd: spawn_cwd,
                     },
                 );
                 self.emit(MuxEvent::PaneOpened { pane: new, request });
@@ -481,6 +465,23 @@ impl Backend {
         }
     }
 }
+
+/// The window geometry the GUI last reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Geometry {
+    size: GridSize,
+    cell_px: CellPixels,
+}
+
+/// What one ready `Select` index refers to.
+#[derive(Debug, Clone, Copy)]
+enum Ready {
+    Commands,
+    Pane(PaneId),
+}
+
+/// How many queued commands one iteration applies before pumping panes.
+const COMMAND_BATCH: usize = 64;
 
 #[cfg(test)]
 mod tests {
@@ -1027,6 +1028,30 @@ mod tests {
         );
         h.log.cwds.lock().unwrap().clear();
         split_active(&mut h, 2);
+        assert_eq!(
+            h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
+            Some(std::path::Path::new("/tmp/project"))
+        );
+    }
+
+    /// Asserts that a pane spawned in an inherited directory passes that
+    /// directory on when it is split before its own shell has reported
+    /// one.
+    ///
+    /// Case: the user splits twice in quick succession while the new
+    /// shell is still starting up and has not printed its first prompt.
+    #[test]
+    fn a_split_from_a_pane_that_has_not_reported_a_cwd_passes_on_its_spawn_cwd() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx
+            .send(b"\x1b]7;file://localhost/tmp/project\x1b\\".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        h.drain();
+        split_active(&mut h, 2);
+        h.log.cwds.lock().unwrap().clear();
+        split_active(&mut h, 3);
         assert_eq!(
             h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
             Some(std::path::Path::new("/tmp/project"))

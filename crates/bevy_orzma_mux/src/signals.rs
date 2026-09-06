@@ -130,11 +130,10 @@ pub struct TtyFrameSignal {
 }
 
 /// The backend's answer to a `RequestTtyCopySelection`: the selected
-/// text of the requesting entity (`None` when the pane was gone or the
-/// selection empty). A plain `Event` because `terminal` may be `None`.
+/// text (`None` when the pane was gone or the selection empty). A plain
+/// `Event` because the requesting pane may already be gone.
 #[derive(Event, Debug, Clone)]
 pub struct TtySelectionTextSignal {
-    pub terminal: Option<Entity>,
     pub request: RequestId,
     pub text: Option<String>,
 }

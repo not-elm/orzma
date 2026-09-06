@@ -13,18 +13,51 @@ use std::path::PathBuf;
 /// absolute path after its authority. The host — `localhost`, a real
 /// hostname, or the empty host of `file:///…` — is ignored, because
 /// every one of them names the local machine as far as a
-/// working-directory report is concerned.
+/// working-directory report is concerned. Percent-encoded octets in the
+/// path (`%20` for a space, the UTF-8 octets of a non-ASCII name) are
+/// decoded, since every shell integration escapes them and the path is
+/// handed to the next spawned shell as its working directory.
 pub(crate) fn current_dir(params: &[&[u8]]) -> Option<PathBuf> {
     let [b"7", parts @ ..] = params else {
         return None;
     };
     let joined = parts.join(&b';');
-    let uri = String::from_utf8_lossy(&joined);
-    let rest = uri.strip_prefix("file://")?;
-    let index = rest.find('/')?;
-    // TODO: percent-encoded octets in the path (e.g. `%20` for a space)
-    // are not decoded; the caller receives the escape sequence verbatim.
-    Some(PathBuf::from(&rest[index..]))
+    let rest = joined.strip_prefix(b"file://")?;
+    let index = rest.iter().position(|byte| *byte == b'/')?;
+    let decoded = percent_decode(&rest[index..]);
+    Some(PathBuf::from(
+        String::from_utf8_lossy(&decoded).into_owned(),
+    ))
+}
+
+/// The bytes of `encoded` with every `%XX` escape replaced by the octet
+/// it names; a `%` not followed by two hex digits is kept verbatim.
+fn percent_decode(encoded: &[u8]) -> Vec<u8> {
+    let mut decoded = Vec::with_capacity(encoded.len());
+    let mut index = 0;
+    while index < encoded.len() {
+        if encoded[index] == b'%'
+            && let Some(hex) = encoded.get(index + 1..index + 3)
+            && let Some(octet) = hex_octet(hex)
+        {
+            decoded.push(octet);
+            index += 3;
+        } else {
+            decoded.push(encoded[index]);
+            index += 1;
+        }
+    }
+    decoded
+}
+
+/// The octet two hex digits name, or `None` when either is not hex.
+fn hex_octet(hex: &[u8]) -> Option<u8> {
+    let [high, low] = hex else {
+        return None;
+    };
+    let high = char::from(*high).to_digit(16)?;
+    let low = char::from(*low).to_digit(16)?;
+    u8::try_from(high * 16 + low).ok()
 }
 
 /// The sanitized window title an `OSC 0` or `OSC 2` sets, or `None` for
@@ -164,6 +197,27 @@ mod tests {
     #[test]
     fn a_uri_missing_a_path_is_rejected() {
         assert!(current_dir(&[b"7", b"file://localhost"]).is_none());
+    }
+
+    /// Asserts that percent-encoded octets in the path are decoded, so
+    /// a directory with a space or a non-ASCII name comes back as the
+    /// directory itself, while a stray `%` is kept verbatim.
+    ///
+    /// Case: a fish or zsh integration reports `cd ~/My Project/ドキュメント`
+    /// with every reserved and non-ASCII byte escaped.
+    #[test]
+    fn percent_encoded_octets_in_the_path_are_decoded() {
+        assert_eq!(
+            current_dir(&[
+                b"7",
+                b"file:///Users/x/My%20Project/%E3%83%89%E3%82%AD%E3%83%A5"
+            ]),
+            Some(PathBuf::from("/Users/x/My Project/ドキュ"))
+        );
+        assert_eq!(
+            current_dir(&[b"7", b"file:///tmp/100%25/x%2"]),
+            Some(PathBuf::from("/tmp/100%/x%2"))
+        );
     }
 
     /// Asserts that OSC 0 and OSC 2 set the same window title.

@@ -43,6 +43,7 @@ struct LastGeometry(Option<(u16, u16, CellPixels)>);
 fn send_window_geometry(
     mut commands: Commands,
     mut last: ResMut<LastGeometry>,
+    mut geometry: Option<ResMut<PaneGeometry>>,
     connection: Res<MuxConnection>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
@@ -62,14 +63,20 @@ fn send_window_geometry(
         width: cell_w as u16,
         height: cell_h as u16,
     };
+    let wanted = PaneGeometry {
+        cell_px,
+        scale_factor: window.scale_factor(),
+    };
+    match geometry.as_mut() {
+        Some(geometry) => {
+            geometry.set_if_neq(wanted);
+        }
+        None => commands.insert_resource(wanted),
+    }
     if last.0 == Some((cols, rows, cell_px)) {
         return;
     }
     last.0 = Some((cols, rows, cell_px));
-    commands.insert_resource(PaneGeometry {
-        cell_px,
-        scale_factor: window.scale_factor(),
-    });
     connection.0.send(MuxCommand::Resize {
         cols,
         rows,

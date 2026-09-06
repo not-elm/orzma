@@ -25,11 +25,11 @@ pub struct SplitRefused;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RootOccupied;
 
-/// The split tree plus the active pane and its activation history.
+/// The split tree plus the activation history, whose last entry is the
+/// active pane.
 #[derive(Debug, Default)]
 pub struct LayoutTree {
     root: Option<Node>,
-    active: Option<PaneId>,
     history: Vec<PaneId>,
 }
 
@@ -66,9 +66,9 @@ impl LayoutTree {
         self.root.is_none()
     }
 
-    /// The active pane, if any.
+    /// The active pane, if any: the most recently activated survivor.
     pub fn active(&self) -> Option<PaneId> {
-        self.active
+        self.history.last().copied()
     }
 
     /// Every pane in the tree, left-to-right / top-to-bottom.
@@ -136,9 +136,6 @@ impl LayoutTree {
             return false;
         }
         self.history.retain(|p| *p != pane);
-        if self.active == Some(pane) {
-            self.active = self.history.last().copied();
-        }
         removed
     }
 
@@ -157,7 +154,7 @@ impl LayoutTree {
     /// candidate wins, never-visited candidates tie to the top / left.
     /// Returns whether the active pane changed.
     pub fn select_direction(&mut self, direction: PaneDirection, window: GridSize) -> bool {
-        let Some(active) = self.active else {
+        let Some(active) = self.active() else {
             return false;
         };
         let solved = self.solve(window);
@@ -205,9 +202,12 @@ impl LayoutTree {
         }
     }
 
+    /// Forgets every activation but the active pane's own.
     #[cfg(test)]
     fn clear_history_for_test(&mut self) {
+        let active = self.history.pop();
         self.history.clear();
+        self.history.extend(active);
     }
 
     fn contains(&self, pane: PaneId) -> bool {
@@ -217,7 +217,6 @@ impl LayoutTree {
     fn activate(&mut self, pane: PaneId) {
         self.history.retain(|p| *p != pane);
         self.history.push(pane);
-        self.active = Some(pane);
     }
 
     /// Position in the activation history (higher is more recent), or

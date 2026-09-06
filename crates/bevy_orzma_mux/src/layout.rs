@@ -40,10 +40,11 @@ pub struct MuxActivePaneChanged {
 /// The absolute node for `rect`: physical px are integral
 /// (`cells × cell_px`), divided by the scale factor for `Val::Px`.
 ///
-/// A right or bottom edge that meets a separator grows into the reserved
-/// cell by everything but the line, so the pane's own background, which
-/// the renderer paints over the whole node, runs up to the line and only
-/// the line's thickness separates two panes on either axis.
+/// A right or bottom edge that stops short of the layout size grows into
+/// the reserved separator cell by everything but the line, so the pane's
+/// own background, which the renderer paints over the whole node, runs
+/// up to the line and only the line's thickness separates two panes on
+/// either axis.
 pub fn pane_node(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Node {
     let scale = geometry.scale_factor;
     let (cell_w, cell_h) = cell_pitch_phys(geometry);
@@ -101,38 +102,12 @@ fn apply_layout(
             continue;
         };
         if let Ok(mut node) = nodes.get_mut(entity) {
-            apply_pane_node(&mut node, &pane_node(rect, layout, &geometry));
+            node.set_if_neq(pane_node(rect, layout, &geometry));
         }
     }
     let container = container_of(&registry, layout, &parents);
     reconcile_separators(&mut commands, &mut separators, layout, &geometry, container);
     apply_active(&mut commands, &mut registry, layout);
-}
-
-/// Writes `wanted`'s absolute geometry into `node` only when it
-/// differs, so an unchanged pane produces no `Node` mutation.
-///
-/// Takes `Mut<'_, Node>` rather than `&mut Node`: coercing a query
-/// item's `Mut<Node>` to a plain `&mut Node` at the call site would
-/// already call `DerefMut::deref_mut` (which marks the component
-/// changed) before this comparison ever ran. Reading fields through
-/// `node` here goes through `Mut`'s immutable `Deref` instead, so only
-/// the assignments inside the branch below — reached exclusively when
-/// a field actually differs — mark the component changed.
-fn apply_pane_node(node: &mut Mut<'_, Node>, wanted: &Node) {
-    if node.position_type == wanted.position_type
-        && node.left == wanted.left
-        && node.top == wanted.top
-        && node.width == wanted.width
-        && node.height == wanted.height
-    {
-        return;
-    }
-    node.position_type = wanted.position_type;
-    node.left = wanted.left;
-    node.top = wanted.top;
-    node.width = wanted.width;
-    node.height = wanted.height;
 }
 
 /// The container the pane entities live under, so separators become
@@ -169,7 +144,7 @@ fn reconcile_separators(
         match existing.get(index) {
             Some(entity) => {
                 if let Ok((_, mut node, child_of)) = separators.get_mut(*entity) {
-                    apply_pane_node(&mut node, &wanted);
+                    node.set_if_neq(wanted);
                     if child_of.is_none()
                         && let Some(container) = container
                     {
@@ -254,31 +229,26 @@ fn separator_node(separator: &Separator, layout: &Layout, geometry: &PaneGeometr
 }
 
 /// Physical px `rect` grows on its right and bottom edges: the reserved
-/// cell minus the line where the edge meets a separator of the matching
-/// orientation, zero where it reaches the window or sits after a line.
+/// cell minus the line where the edge stops short of the layout size,
+/// zero where it reaches the window. The split tree tiles the layout
+/// size, so every edge short of it is followed by exactly one separator
+/// cell, the same fact `separator_node` uses to extend a line to a
+/// crossing.
 fn bleed_phys(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Vec2 {
     let (cell_w, cell_h) = cell_pitch_phys(geometry);
     let thickness = line_thickness_phys(geometry);
-    let overlaps = |start: u16, len: u16, from: u16, to: u16| start < to && from < start + len;
-    let mut bleed = Vec2::ZERO;
-    for separator in &layout.separators {
-        match separator.orientation {
-            SplitOrientation::Vertical
-                if separator.x == rect.x + rect.cols
-                    && overlaps(separator.y, separator.len, rect.y, rect.y + rect.rows) =>
-            {
-                bleed.x = (cell_w - thickness).max(0.0);
-            }
-            SplitOrientation::Horizontal
-                if separator.y == rect.y + rect.rows
-                    && overlaps(separator.x, separator.len, rect.x, rect.x + rect.cols) =>
-            {
-                bleed.y = (cell_h - thickness).max(0.0);
-            }
-            _ => {}
-        }
-    }
-    bleed
+    let before_line = |cell: f32| (cell - thickness).max(0.0);
+    let x = if rect.x + rect.cols < layout.size.cols {
+        before_line(cell_w)
+    } else {
+        0.0
+    };
+    let y = if rect.y + rect.rows < layout.size.rows {
+        before_line(cell_h)
+    } else {
+        0.0
+    };
+    Vec2::new(x, y)
 }
 
 /// The cell pitch as `(width, height)` in physical px.
@@ -297,9 +267,17 @@ fn line_thickness_phys(geometry: &PaneGeometry) -> f32 {
 }
 
 /// Accepts `layout.active` unless it predates the GUI's last
-/// `SelectPane`, and reports a change against the last accepted active.
+/// `SelectPane` while the applied active pane is still open, and
+/// reports a change against the applied active. A stale layout is
+/// accepted once the applied pane is gone, since the select in flight
+/// can no longer confirm it and focus would otherwise sit on nothing
+/// until the backend answers.
 fn apply_active(commands: &mut Commands, registry: &mut PaneRegistry, layout: &Layout) {
-    if registry.last_select.is_some_and(|sent| layout.seq < sent) {
+    let stale = registry.last_select.is_some_and(|sent| layout.seq < sent);
+    let applied_open = registry
+        .applied_active
+        .is_none_or(|active| registry.entity_of(active).is_some());
+    if stale && applied_open {
         return;
     }
     if registry.applied_active == layout.active {
@@ -588,42 +566,6 @@ mod tests {
         );
     }
 
-    /// Asserts that a separator sharing an edge coordinate with a pane
-    /// but not overlapping its extent does not make the pane grow.
-    ///
-    /// Case: the right half is split top and bottom; the bottom-right
-    /// pane's horizontal divider starts at the top-right pane's right
-    /// edge column but runs below it.
-    #[test]
-    fn a_separator_that_only_shares_a_coordinate_does_not_cause_bleed() {
-        let layout = Layout {
-            size: GridSize { cols: 81, rows: 24 },
-            separators: vec![Separator {
-                orientation: SplitOrientation::Vertical,
-                x: 40,
-                y: 13,
-                len: 11,
-            }],
-            ..Layout::default()
-        };
-        let rect = PaneRect {
-            pane: PaneId(1),
-            x: 0,
-            y: 0,
-            cols: 40,
-            rows: 12,
-        };
-        let geometry = PaneGeometry {
-            cell_px: CellPixels {
-                width: 10,
-                height: 20,
-            },
-            scale_factor: 2.0,
-        };
-        let node = pane_node(&rect, &layout, &geometry);
-        assert_eq!((node.width, node.height), (Val::Px(200.0), Val::Px(120.0)));
-    }
-
     /// Asserts that an accepted active change fires
     /// `MuxActivePaneChanged` with the previously applied active, and
     /// that a stale layout leaves the applied active untouched.
@@ -656,6 +598,33 @@ mod tests {
         assert_eq!(
             app.world().resource::<Changes>().0.last(),
             Some(&(Some(a), Some(b)))
+        );
+    }
+
+    /// Asserts that a layout predating the last `SelectPane` is still
+    /// accepted once the applied active pane is gone, reporting the
+    /// change with no previous entity.
+    ///
+    /// Case: the user clicks pane two and its shell exits before the
+    /// backend handles the click, so the exit's layout naming pane one
+    /// arrives with an older sequence than the click's.
+    #[test]
+    fn a_stale_layout_is_accepted_once_the_applied_pane_is_gone() {
+        let mut app = app();
+        let (a, b) = two_panes(&mut app);
+        {
+            let mut registry = app.world_mut().resource_mut::<PaneRegistry>();
+            registry.applied_active = Some(PaneId(2));
+            registry.last_select = Some(CommandSeq(10));
+            registry.panes.remove(&PaneId(2));
+        }
+        app.world_mut().entity_mut(b).despawn();
+        set_layout(&mut app, 9, PaneId(1));
+        app.update();
+        assert_eq!(app.world().resource::<Changes>().0, vec![(None, Some(a))]);
+        assert_eq!(
+            app.world().resource::<PaneRegistry>().applied_active,
+            Some(PaneId(1))
         );
     }
 

@@ -11,16 +11,12 @@ use crate::input::InputPhase;
 use crate::input::ime::ImeState;
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::{phys_to_pane_local, topmost_surface_at};
-use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::{FocusedWebview, WebviewSource};
-use bevy_orzma_mux::prelude::{
-    CurrentLayout, MuxActivePaneChanged, MuxPane, MuxSystems, PaneAction, PaneRegistry,
-    RequestPaneAction,
-};
+use bevy_orzma_mux::prelude::{MuxActivePaneChanged, MuxPane, PaneAction, RequestPaneAction};
 use bevy_orzma_webview::{NonInteractive, Webview, webview_hit_at};
 use orzma_configs::inactive_pane::InactivePaneConfig;
 use orzma_tty_renderer::TerminalCellMetricsResource;
@@ -66,10 +62,6 @@ impl Plugin for FocusSyncPlugin {
             (
                 maintain_input_gates.before(InputPhase::Hover),
                 sync_focused_webview.after(InputPhase::FocusedKey),
-                reassert_focus_from_layout
-                    .after(MuxSystems::ApplyLayout)
-                    .before(InputPhase::Hover)
-                    .run_if(resource_exists_and_changed::<CurrentLayout>),
             ),
         )
         .add_observer(on_active_pane_changed)
@@ -77,11 +69,12 @@ impl Plugin for FocusSyncPlugin {
     }
 }
 
-/// Applies an accepted active-pane change: moves `KeyboardFocused`,
-/// releases a focused webview that is not an inline child of the new
-/// active pane, and swaps `PaneInactiveStyle` between the previous and
-/// current panes. `previous` may already be despawned (a `PaneClosed`
-/// in the same drain), hence the fallible commands.
+/// Applies an applied active-pane change, whether accepted from a
+/// `Layout` or taken optimistically from a click: moves
+/// `KeyboardFocused`, releases a focused webview that is not an inline
+/// child of the new active pane, and swaps `PaneInactiveStyle` between
+/// the previous and current panes. `previous` may already be despawned
+/// (a `PaneClosed` in the same drain), hence the fallible commands.
 fn on_active_pane_changed(
     ev: On<MuxActivePaneChanged>,
     mut commands: Commands,
@@ -118,60 +111,17 @@ fn on_active_pane_changed(
     }
 }
 
-/// Optimistic click-to-focus: moves `KeyboardFocused` now (so this
-/// frame's keys already go to the clicked pane) and asks the backend to
-/// make it active; the confirming `Layout` reconciles.
-fn on_pane_clicked(
-    ev: On<PaneClicked>,
-    mut commands: Commands,
-    focused: Query<Entity, With<KeyboardFocused>>,
-    panes: Query<(), With<MuxPane>>,
-) {
+/// Click-to-focus: asks the bridge to select the clicked pane. The
+/// bridge applies it as active at once and reports the change through
+/// `MuxActivePaneChanged`, so this frame's keys already go to the
+/// clicked pane; the confirming `Layout` reconciles.
+fn on_pane_clicked(ev: On<PaneClicked>, mut commands: Commands, panes: Query<(), With<MuxPane>>) {
     if panes.get(ev.entity).is_err() {
         return;
     }
-    for entity in focused.iter() {
-        if entity != ev.entity {
-            commands.entity(entity).remove::<KeyboardFocused>();
-        }
-    }
-    commands.entity(ev.entity).insert(KeyboardFocused);
     commands.trigger(RequestPaneAction {
         action: PaneAction::Select(ev.entity),
     });
-}
-
-/// Re-asserts `KeyboardFocused` on the applied active pane when no entity
-/// currently holds it. Runs after `MuxSystems::ApplyLayout` whenever
-/// `CurrentLayout` changes, and is a no-op whenever some entity already
-/// holds focus, leaving the optimistic click and `MuxActivePaneChanged`
-/// paths authoritative.
-///
-/// Case: a click targets a pane that despawns in the same frame, before
-/// the GUI ever accepts a new active pane, so no `MuxActivePaneChanged`
-/// fires to move focus onto a live entity.
-fn reassert_focus_from_layout(
-    mut commands: Commands,
-    registry: Res<PaneRegistry>,
-    focused: Query<(), With<KeyboardFocused>>,
-    panes: Query<(), With<MuxPane>>,
-) {
-    if !focused.is_empty() {
-        return;
-    }
-    let Some(active) = registry.applied_active else {
-        return;
-    };
-    let Some(entity) = registry.entity_of(active) else {
-        return;
-    };
-    if !panes.contains(entity) {
-        return;
-    }
-    if let Ok(mut entity) = commands.get_entity(entity) {
-        entity.try_insert(KeyboardFocused);
-        entity.remove::<PaneInactiveStyle>();
-    }
 }
 
 /// The renderer style for an inactive pane, from `[inactive_pane]`.
@@ -562,13 +512,13 @@ mod tests {
         );
     }
 
-    /// Asserts that a click focuses optimistically and asks the backend
-    /// to select the same pane.
+    /// Asserts that a click on a pane asks the bridge to select it, and
+    /// that a click on a non-pane entity asks nothing.
     ///
-    /// Case: the user clicks an inactive pane and starts typing in the
-    /// same frame.
+    /// Case: the user clicks an inactive pane, then clicks a webview
+    /// child that is not itself a pane.
     #[test]
-    fn a_click_focuses_optimistically_and_requests_the_selection() {
+    fn a_click_requests_the_selection_of_a_pane_only() {
         #[derive(Resource, Default)]
         struct Seen(Vec<PaneAction>);
 
@@ -579,100 +529,18 @@ mod tests {
             .add_observer(|ev: On<RequestPaneAction>, mut seen: ResMut<Seen>| {
                 seen.0.push(ev.action)
             });
-        let a = app
-            .world_mut()
-            .spawn((OrzmaTerminal, MuxPane(PaneId(1)), KeyboardFocused))
-            .id();
-        let b = app
+        let pane = app
             .world_mut()
             .spawn((OrzmaTerminal, MuxPane(PaneId(2))))
             .id();
-        app.world_mut().trigger(PaneClicked { entity: b });
+        let other = app.world_mut().spawn(OrzmaTerminal).id();
+        app.world_mut().trigger(PaneClicked { entity: pane });
+        app.world_mut().trigger(PaneClicked { entity: other });
         app.update();
-        assert!(app.world().get::<KeyboardFocused>(a).is_none());
-        assert!(app.world().get::<KeyboardFocused>(b).is_some());
         assert_eq!(
             app.world().resource::<Seen>().0,
-            vec![PaneAction::Select(b)]
+            vec![PaneAction::Select(pane)]
         );
-    }
-
-    /// Builds a `PaneRegistry` mapping two `MuxPane` entities and an
-    /// accepted-active `CurrentLayout` naming the first, for the
-    /// `reassert_focus_from_layout` tests below.
-    fn app_with_layout_active_on_pane_one() -> (App, Entity, Entity) {
-        use orzma_mux::prelude::{CommandSeq, Layout, PaneRect};
-        use orzma_vt::prelude::GridSize;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<PaneRegistry>()
-            .init_resource::<CurrentLayout>()
-            .add_systems(
-                Update,
-                reassert_focus_from_layout.run_if(resource_exists_and_changed::<CurrentLayout>),
-            );
-
-        let a = app
-            .world_mut()
-            .spawn((OrzmaTerminal, MuxPane(PaneId(1))))
-            .id();
-        let b = app
-            .world_mut()
-            .spawn((OrzmaTerminal, MuxPane(PaneId(2))))
-            .id();
-        {
-            let mut registry = app.world_mut().resource_mut::<PaneRegistry>();
-            registry.panes.insert(PaneId(1), a);
-            registry.panes.insert(PaneId(2), b);
-            registry.applied_active = Some(PaneId(1));
-        }
-        app.world_mut().resource_mut::<CurrentLayout>().0 = Layout {
-            seq: CommandSeq(1),
-            size: GridSize { cols: 80, rows: 24 },
-            active: Some(PaneId(1)),
-            panes: vec![PaneRect {
-                pane: PaneId(1),
-                x: 0,
-                y: 0,
-                cols: 80,
-                rows: 24,
-            }],
-            separators: vec![],
-        };
-        (app, a, b)
-    }
-
-    /// Asserts that the applied active pane regains `KeyboardFocused`
-    /// when no entity currently holds it.
-    ///
-    /// Case: the user clicks pane two, which despawns in the same frame
-    /// before the GUI ever accepts a new active pane, leaving no entity
-    /// holding keyboard focus.
-    #[test]
-    fn focus_is_reasserted_after_the_focused_pane_vanishes() {
-        let (mut app, a, _b) = app_with_layout_active_on_pane_one();
-
-        app.update();
-
-        assert!(app.world().get::<KeyboardFocused>(a).is_some());
-    }
-
-    /// Asserts that the reassertion is a no-op when some entity already
-    /// holds `KeyboardFocused`, leaving the optimistic click and
-    /// `MuxActivePaneChanged` paths authoritative.
-    ///
-    /// Case: the click-to-focus path already moved `KeyboardFocused`
-    /// onto the clicked pane before the confirming layout arrives.
-    #[test]
-    fn focus_reassertion_does_not_move_focus_already_held() {
-        let (mut app, a, b) = app_with_layout_active_on_pane_one();
-        app.world_mut().entity_mut(b).insert(KeyboardFocused);
-
-        app.update();
-
-        assert!(app.world().get::<KeyboardFocused>(a).is_none());
-        assert!(app.world().get::<KeyboardFocused>(b).is_some());
     }
 
     #[test]

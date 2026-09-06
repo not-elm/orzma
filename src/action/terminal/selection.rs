@@ -337,17 +337,14 @@ mod tests {
         app.world_mut()
             .trigger(TerminalSelectionCopy { entity: terminal });
         app.world_mut().trigger(TtySelectionTextSignal {
-            terminal: Some(terminal),
             request: RequestId(1),
             text: Some("hello".into()),
         });
         app.world_mut().trigger(TtySelectionTextSignal {
-            terminal: Some(terminal),
             request: RequestId(2),
             text: Some(String::new()),
         });
         app.world_mut().trigger(TtySelectionTextSignal {
-            terminal: None,
             request: RequestId(3),
             text: None,
         });

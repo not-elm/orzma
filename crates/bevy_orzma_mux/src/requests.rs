@@ -60,7 +60,7 @@ impl Plugin for OrzmaEventRequestPlugin {
 /// pane entity and drain what the observer sent.
 #[cfg(test)]
 pub(crate) mod test_support {
-    use crate::{MuxConnection, MuxPane, registry::PaneRegistry};
+    use crate::{MuxConnection, MuxPane, layout::CurrentLayout, registry::PaneRegistry};
     use bevy::prelude::*;
     use crossbeam_channel::Receiver;
     use orzma_mux::prelude::{CommandSeq, MuxClient, MuxCommand, PaneId};
@@ -74,6 +74,7 @@ pub(crate) mod test_support {
         app.add_plugins(MinimalPlugins)
             .add_plugins(plugin)
             .init_resource::<PaneRegistry>()
+            .init_resource::<CurrentLayout>()
             .insert_resource(MuxConnection(client));
         (app, commands)
     }
