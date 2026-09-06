@@ -22,11 +22,13 @@ orzma_webview_host = { path = "../webview_host", features = ["cef"] }
 crossbeam-channel = "0.5"
 data-encoding = "2"
 getrandom = "0.2"
-libc = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 url = "2"
 tracing = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 bevy_orzma_mux = { path = "../bevy_orzma_mux", features = ["test-support"] }

@@ -53,7 +53,9 @@ host; the APC verbs carry the mount/unmount; the page bridge carries the
 
 ### Transport
 
-The control socket is a local Unix **stream** socket speaking **NDJSON**:
+The control socket is a local Unix-domain **stream** socket speaking **NDJSON**
+(on Windows, an AF_UNIX socket, available since Windows 10 1809; the endpoint
+is a filesystem path on every platform):
 exactly one JSON object per line, terminated by `\n` (a trailing `\r` is
 tolerated). Each line travels in one direction. The connection is long-lived —
 it stays open for as long as the program wants its registrations to live.
@@ -73,9 +75,11 @@ and cannot use the protocol.
 
 ### Peer authentication
 
-The host checks that the connecting peer's user id equals orzma's own user id
-and silently drops the connection otherwise. Only processes running as the same
-user can connect.
+The host restricts the control socket to orzma's own user. On Unix it checks
+that the connecting peer's user id equals its own and silently drops the
+connection otherwise. On Windows the socket lives in a directory whose DACL
+grants access to the current user only, so other users cannot connect at all.
+Either way, only processes running as the same user can reach the handshake.
 
 ### Handshake
 
@@ -398,8 +402,8 @@ if (isOrzmaAvailable()) {
 
 ## Security model
 
-- **Same user only.** The host rejects any control connection whose peer user id
-  differs from orzma's.
+- **Same user only.** The host restricts the control socket to orzma's own
+  user: by peer user id on Unix, by the socket directory's DACL on Windows.
 - **Scoped to one pane.** A connection's token binds it to the pane that issued
   `$ORZMA_TOKEN`; a program may only mount, focus, navigate, and emit to
   registrations it made itself.
