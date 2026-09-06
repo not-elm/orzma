@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 #[cfg(any(test, feature = "test-support"))]
 use std::io::Read;
 use std::io::{Result as IoResult, Write};
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(all(unix, any(test, feature = "test-support")))]
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
