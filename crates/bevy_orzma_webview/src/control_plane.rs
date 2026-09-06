@@ -710,6 +710,7 @@ fn apply_control_events(
                 &instance,
                 action,
             ),
+            ControlEvent::Mount { .. } | ControlEvent::Unmount { .. } => {}
         }
     }
 }

@@ -101,6 +101,40 @@ pub(crate) enum ControlEvent {
         /// What to do.
         action: NavAction,
     },
+    /// A socket `mount` for one of the connection's instances.
+    #[expect(
+        dead_code,
+        reason = "fields are read by the apply handler Task 5 adds; the no-op arm in control_plane.rs is temporary"
+    )]
+    Mount {
+        /// Connection id (ownership check in apply).
+        connection_id: u64,
+        /// The surface the connection's token resolved to.
+        owner_surface: Entity,
+        /// The target instance.
+        instance: String,
+        /// 0-based visible row of the rect's top edge.
+        row: u16,
+        /// 0-based column of the rect's left edge.
+        col: u16,
+        /// Rect height in cells.
+        rows: u16,
+        /// Rect width in cells.
+        cols: u16,
+    },
+    /// A socket `unmount` for one of the connection's instances.
+    #[expect(
+        dead_code,
+        reason = "fields are read by the apply handler Task 5 adds; the no-op arm in control_plane.rs is temporary"
+    )]
+    Unmount {
+        /// Connection id (ownership check in apply).
+        connection_id: u64,
+        /// The surface the connection's token resolved to.
+        owner_surface: Entity,
+        /// The target instance.
+        instance: String,
+    },
 }
 
 /// Binds `sock_path`, spawns the accept loop, and returns the receiver of
@@ -385,6 +419,30 @@ fn handle_client_msg(
                 action,
             });
         }
+        ClientMsg::Mount {
+            instance,
+            row,
+            col,
+            rows,
+            cols,
+        } => {
+            let _ = events.send(ControlEvent::Mount {
+                connection_id,
+                owner_surface,
+                instance,
+                row,
+                col,
+                rows,
+                cols,
+            });
+        }
+        ClientMsg::Unmount { instance } => {
+            let _ = events.send(ControlEvent::Unmount {
+                connection_id,
+                owner_surface,
+                instance,
+            });
+        }
     }
     ControlFlow::Continue(())
 }
@@ -572,6 +630,64 @@ mod tests {
                 break;
             }
             assert!(Instant::now() < deadline, "no SetFocus within 2s");
+        }
+    }
+
+    /// Asserts that a `mount` line from a hello'd client becomes a
+    /// `ControlEvent::Mount` bound to the token's surface, carrying the
+    /// cell and size verbatim.
+    ///
+    /// Case: orzmd in a Windows pane sends its first socket `mount`.
+    #[test]
+    fn client_mount_line_emits_a_mount_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let tokens = TokenRegistry::default();
+        let surface = Entity::from_bits(7);
+        tokens.insert("tok", surface);
+        let events = spawn_listener(&sock, tokens, ConnectionWriters::default()).unwrap();
+
+        let mut client = UnixStream::connect(&sock).unwrap();
+        writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
+        writeln!(
+            client,
+            r#"{{"op":"mount","instance":"3f5a","row":2,"col":3,"rows":12,"cols":48}}"#
+        )
+        .unwrap();
+        writeln!(client, r#"{{"op":"unmount","instance":"3f5a"}}"#).unwrap();
+        client.flush().unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut saw_mount = false;
+        loop {
+            match events.recv_timeout(Duration::from_millis(50)) {
+                Ok(ControlEvent::Mount {
+                    owner_surface,
+                    instance,
+                    row,
+                    col,
+                    rows,
+                    cols,
+                    ..
+                }) => {
+                    assert_eq!(owner_surface, surface);
+                    assert_eq!(instance, "3f5a");
+                    assert_eq!((row, col, rows, cols), (2, 3, 12, 48));
+                    saw_mount = true;
+                }
+                Ok(ControlEvent::Unmount {
+                    owner_surface,
+                    instance,
+                    ..
+                }) => {
+                    assert!(saw_mount, "the mount precedes the unmount");
+                    assert_eq!(owner_surface, surface);
+                    assert_eq!(instance, "3f5a");
+                    break;
+                }
+                _ => {}
+            }
+            assert!(Instant::now() < deadline, "no Mount + Unmount within 2s");
         }
     }
 
