@@ -17,6 +17,8 @@ use crate::surface::SurfacePlugin;
 use crate::system_set::OrzmaSystems;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
+#[cfg(not(target_os = "macos"))]
+use bevy_cef::prelude::early_exit_if_subprocess;
 use bevy_orzma_mux::prelude::{MuxClient, MuxConfig, MuxConnection, MuxSystems, OrzmaMuxPlugin};
 use bevy_orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use configs::OrzmaConfigsPlugin;
@@ -31,6 +33,11 @@ use ui::OrzmaUiPlugin;
 const SCROLLBACK_ROWS: usize = 10_000;
 
 fn main() {
+    // NOTE: CEF re-launches this executable for its subprocesses when the
+    // dedicated render process binary is absent; those instances must exit
+    // here, before any window or thread exists.
+    #[cfg(not(target_os = "macos"))]
+    early_exit_if_subprocess();
     // NOTE: must run before App::new() spawns any thread — they write process
     // env vars, which is unsound once other threads may read the environment.
     ensure_terminfo_env();

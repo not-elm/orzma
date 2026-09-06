@@ -2,9 +2,16 @@
 //! instance so concurrent instances never collide on Chromium's per-profile
 //! singleton lock.
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use orzma_webview_host::restrict_to_current_user;
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, WAIT_OBJECT_0};
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+};
 
 /// A per-process CEF profile directory (`$TMPDIR/orzma-cef/<pid>/`), removed on drop.
 ///
@@ -22,8 +29,7 @@ impl CefProfileDir {
     pub(crate) fn acquire() -> std::io::Result<Self> {
         let base = std::env::temp_dir().join("orzma-cef");
         std::fs::create_dir_all(&base)?;
-        #[cfg(unix)]
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))?;
+        restrict_to_current_user(&base)?;
         let pid = std::process::id();
         sweep_in(&base, pid_alive, pid);
         Self::resolve_in(&base, pid)
@@ -42,8 +48,7 @@ impl CefProfileDir {
         // state — a reused stale SingletonLock would otherwise mislead Chromium.
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path)?;
-        #[cfg(unix)]
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+        restrict_to_current_user(&path)?;
         Ok(Self { path })
     }
 }
@@ -94,17 +99,53 @@ fn pid_alive(pid: u32) -> bool {
     std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-#[cfg(not(unix))]
-fn pid_alive(_pid: u32) -> bool {
-    true
+/// Whether `pid` names a live process, deciding "alive" whenever the
+/// answer is not a clear no.
+///
+/// PID 0 (the System Idle Process) is never probed. `OpenProcess` failing
+/// with `ERROR_INVALID_PARAMETER` is the one "no such process" answer;
+/// any other failure (access denied for another user's or a protected
+/// process) counts as alive. A signaled process handle means the process
+/// has exited. Windows reuses PIDs quickly, so a directory left by a dead
+/// process whose PID a live process now holds stays until that process
+/// exits — the conservative direction.
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return true;
+    }
+    // SAFETY: `OpenProcess` has no preconditions; a null result is handled
+    // below and a non-null one is wrapped so it is closed exactly once.
+    let raw = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if raw.is_null() {
+        // NOTE: misclassifying a live PID as dead would let the sweep delete a
+        // running instance's profile directory, so only the documented
+        // "no such process" error may return false.
+        return std::io::Error::last_os_error().raw_os_error()
+            != Some(ERROR_INVALID_PARAMETER as i32);
+    }
+    // SAFETY: `raw` is a valid handle `OpenProcess` just returned and nothing
+    // else owns it.
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+    // SAFETY: the handle is valid for the call, and a zero timeout never blocks.
+    let waited = unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) };
+    waited != WAIT_OBJECT_0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    use orzma_webview_host::private_dir::security_descriptor_sddl;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
+    /// Asserts that the profile directory is private to the current user and
+    /// removed on drop.
+    ///
+    /// Case: orzma starts, claims its CEF profile directory, and exits.
     #[test]
-    fn resolve_in_creates_0700_dir_and_drops() {
+    fn resolve_in_creates_a_private_dir_and_drops() {
         let parent = tempfile::tempdir().unwrap();
         let path = {
             let profile = CefProfileDir::resolve_in(parent.path(), 4242).unwrap();
@@ -118,6 +159,14 @@ mod tests {
                     .mode()
                     & 0o777;
                 assert_eq!(mode, 0o700);
+            }
+            #[cfg(windows)]
+            {
+                let sddl = security_descriptor_sddl(profile.path()).unwrap();
+                assert!(
+                    sddl.starts_with("D:P"),
+                    "the DACL must be protected: {sddl}"
+                );
             }
             profile.path().to_path_buf()
         };
@@ -179,5 +228,40 @@ mod tests {
             !base.path().join("200").exists(),
             "numeric dead owner swept"
         );
+    }
+
+    /// Asserts that a running process is reported alive.
+    ///
+    /// Case: two orzma instances run side by side and one sweeps the
+    /// shared profile base while the other is still up.
+    #[cfg(windows)]
+    #[test]
+    fn pid_alive_reports_the_current_process_alive() {
+        assert!(pid_alive(std::process::id()));
+    }
+
+    /// Asserts that a process that has exited is reported dead.
+    ///
+    /// Case: an earlier orzma instance crashed and left its profile
+    /// directory behind.
+    #[cfg(windows)]
+    #[test]
+    fn pid_alive_reports_an_exited_process_dead() {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "exit"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert!(!pid_alive(pid));
+    }
+
+    /// Asserts that PID 0 is treated as alive rather than probed.
+    ///
+    /// Case: a stray directory named `0` sits under the profile base.
+    #[cfg(windows)]
+    #[test]
+    fn pid_alive_treats_pid_zero_as_alive() {
+        assert!(pid_alive(0));
     }
 }
