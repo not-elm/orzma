@@ -102,14 +102,25 @@ impl FlushState {
         frame: &FramePlacements,
     ) -> OrzmaResult<()> {
         if cfg!(windows) {
-            // NOTE: one lock for the whole frame — the writer is shared with
-            // the reader thread and every WebviewHandle::emit, and geometry
-            // plus focus must not interleave with a concurrent emit line.
-            let mut w = socket.lock()?;
-            flush_placements_over_socket(&mut *w, self, &frame.placements)?;
-            if self.last_focused != frame.focused {
-                flush_focus(&mut *w, &mut self.last_focused, &frame.focused)?;
+            let (verbs, current) = PlacementVerb::diff(self, &frame.placements);
+            let focus_changed = self.last_focused != frame.focused;
+            // NOTE: only take the writer lock (shared with the reader thread
+            // and every WebviewHandle::emit) when there is something to send;
+            // this runs every render frame and the unchanged path must not
+            // contend the lock. When it is taken, one lock covers the whole
+            // frame's writes so geometry and focus cannot interleave with a
+            // concurrent emit line.
+            if !verbs.is_empty() || focus_changed {
+                let mut w = socket.lock()?;
+                if !verbs.is_empty() {
+                    write_socket_verbs(&mut *w, &verbs)?;
+                    w.flush()?;
+                }
+                if focus_changed {
+                    flush_focus(&mut *w, &mut self.last_focused, &frame.focused)?;
+                }
             }
+            self.last = current;
             return Ok(());
         }
         self.emit_placements(out, frame)?;
@@ -588,16 +599,9 @@ fn flush_placements(
     Ok(())
 }
 
-/// Emits the socket `mount` op for new and moved placements and the socket
-/// `unmount` op for instances that vanished, updating `state` to the new
-/// frame: the control-socket spelling of [`PlacementVerb::diff`], for hosts
-/// whose PTY drops APC (ConPTY on Windows). One NDJSON line per verb.
-fn flush_placements_over_socket(
-    socket: &mut impl Write,
-    state: &mut FlushState,
-    placements: &[Placement],
-) -> OrzmaResult<()> {
-    let (verbs, current) = PlacementVerb::diff(state, placements);
+/// Writes each of `verbs` to `socket` as one NDJSON line, without flushing —
+/// the control-socket spelling of a [`PlacementVerb`].
+fn write_socket_verbs(socket: &mut impl Write, verbs: &[PlacementVerb]) -> OrzmaResult<()> {
     for verb in verbs {
         let msg = match verb {
             PlacementVerb::Mount {
@@ -607,17 +611,41 @@ fn flush_placements_over_socket(
                 rows,
                 cols,
             } => ClientMsg::Mount {
-                instance,
-                row,
-                col,
-                rows,
-                cols,
+                instance: instance.clone(),
+                row: *row,
+                col: *col,
+                rows: *rows,
+                cols: *cols,
             },
-            PlacementVerb::Unmount { instance } => ClientMsg::Unmount { instance },
+            PlacementVerb::Unmount { instance } => ClientMsg::Unmount {
+                instance: instance.clone(),
+            },
         };
-        serde_json::to_writer(&mut *socket, &msg)?;
-        socket.write_all(b"\n")?;
+        let mut line = serde_json::to_string(&msg)?;
+        line.push('\n');
+        socket.write_all(line.as_bytes())?;
     }
+    Ok(())
+}
+
+/// Emits the socket `mount` op for new and moved placements and the socket
+/// `unmount` op for instances that vanished, updating `state` to the new
+/// frame: the control-socket spelling of [`PlacementVerb::diff`], for hosts
+/// whose PTY drops APC (ConPTY on Windows). One NDJSON line per verb.
+///
+/// Test-only: [`FlushState::emit_frame`] needs the diff before deciding
+/// whether to take the writer lock, so it calls [`PlacementVerb::diff`] and
+/// [`write_socket_verbs`] itself rather than through this all-in-one form.
+/// This wrapper stays as the direct way to exercise the diff-write-flush
+/// sequence in isolation.
+#[cfg(test)]
+fn flush_placements_over_socket(
+    socket: &mut impl Write,
+    state: &mut FlushState,
+    placements: &[Placement],
+) -> OrzmaResult<()> {
+    let (verbs, current) = PlacementVerb::diff(state, placements);
+    write_socket_verbs(socket, &verbs)?;
     socket.flush()?;
     state.last = current;
     Ok(())
@@ -1629,6 +1657,29 @@ mod tests {
         let mut line = String::new();
         BufReader::new(server).read_line(&mut line).unwrap();
         assert!(line.contains(r#""op":"mount""#), "got: {line}");
+    }
+
+    /// Asserts that on Windows the socket-down flush emits nothing to the
+    /// PTY and leaves `state.last` empty, since geometry needs the socket
+    /// there and there is nothing to diff against once it reconnects.
+    ///
+    /// Case: orzmd keeps drawing in a Windows pane while its control socket
+    /// is down after orzma restarted.
+    #[cfg(windows)]
+    #[test]
+    fn emit_placements_sends_nothing_while_the_socket_is_down_on_windows() {
+        let mut state = FlushState::default();
+        let mut frame = FramePlacements::default();
+        frame.record(INSTANCE_A.into(), rect(0, 0, 10, 5));
+
+        let mut pty = Vec::new();
+        state.emit_placements(&mut pty, &frame).unwrap();
+
+        assert!(pty.is_empty(), "nothing rides the PTY on Windows");
+        assert!(
+            state.last.is_empty(),
+            "nothing was sent, so there is nothing to diff against next flush"
+        );
     }
 
     /// Asserts that on Unix a connected frame flush writes its geometry to

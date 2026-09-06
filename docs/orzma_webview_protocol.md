@@ -286,10 +286,10 @@ two verbs as control-socket ops:
 rect's top-left corner occupies: the cell an APC mount reaches by first moving
 the cursor with `CUP row+1;col+1`. Unlike `CUP`, they are absolute even when
 DECOM origin mode is on. `rows` and `cols` obey the APC bounds (`1`–`200`,
-`1`–`400`). A `mount` naming an instance the connection does not own, a
-size out of range, or a cell outside the grid is dropped; a mount past the
-per-terminal placement cap is refused by the terminal exactly as an APC mount
-is. The socket `unmount` names one instance; there is no unmount-all form.
+`1`–`400`). The host drops a `mount` naming an instance the connection does
+not own or a size out of range; the terminal refuses a cell outside the grid
+or a mount past the per-terminal placement cap exactly as it refuses an APC
+mount. The socket `unmount` names one instance; there is no unmount-all form.
 The `ratatui_orzma` SDK sends the socket form on Windows and the APC form
 elsewhere.
 

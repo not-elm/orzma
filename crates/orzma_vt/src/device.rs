@@ -275,7 +275,7 @@ impl DeviceState {
         size: PlacementSize,
         id: InstanceId,
     ) -> bool {
-        // NOTE: the bounds check must precede supersession. `Screen::line_id`
+        // NOTE: the bounds check must precede supersession. `Grid::line_id`
         // indexes the ring unchecked and panics on a row past the grid, and
         // supersession drops the live placement under `id`, so a rejected
         // re-mount must return here and leave that placement untouched.

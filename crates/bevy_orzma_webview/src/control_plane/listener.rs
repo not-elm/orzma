@@ -625,13 +625,14 @@ mod tests {
         }
     }
 
-    /// Asserts that a `mount` line from a hello'd client becomes a
-    /// `ControlEvent::Mount` bound to the token's surface, carrying the
-    /// cell and size verbatim.
+    /// Asserts that a `mount` line and a following `unmount` line from a
+    /// hello'd client become a `ControlEvent::Mount` and a
+    /// `ControlEvent::Unmount` bound to the token's surface, the mount
+    /// carrying the cell and size verbatim.
     ///
     /// Case: orzmd in a Windows pane sends its first socket `mount`.
     #[test]
-    fn client_mount_line_emits_a_mount_event() {
+    fn client_mount_and_unmount_lines_emit_their_events() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("ctl.sock");
         let tokens = TokenRegistry::default();
