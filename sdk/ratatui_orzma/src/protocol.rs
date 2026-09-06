@@ -90,6 +90,26 @@ pub(crate) enum ClientMsg {
         /// What to do.
         action: NavAction,
     },
+    /// Registers a placement at a visible cell of the pane over the socket,
+    /// the counterpart of the APC `mount` for hosts whose PTY drops APC
+    /// (ConPTY on Windows).
+    Mount {
+        /// The target placement.
+        instance: String,
+        /// 0-based visible row of the rect's top edge.
+        row: u16,
+        /// 0-based column of the rect's left edge.
+        col: u16,
+        /// Rect height in cells (`1..=MAX_ROWS`).
+        rows: u16,
+        /// Rect width in cells (`1..=MAX_COLS`).
+        cols: u16,
+    },
+    /// Removes one placement mounted over the socket.
+    Unmount {
+        /// The target placement.
+        instance: String,
+    },
 }
 
 /// A navigation action on one mounted placement.
