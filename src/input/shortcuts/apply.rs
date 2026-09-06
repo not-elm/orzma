@@ -1,7 +1,10 @@
-//! The shortcut appliers: reads `ShortcutMessage`, `ViModeMessage`, and
-//! `TypeMessage` from `resolve_key_effects` and applies vi-mode entry, paste,
-//! copy, and raw-key typing to the focused terminal.
+//! The single key-effect dispatcher: reads `KeyEffectMessage` in press
+//! order and, for each effect, `commands.trigger`s the matching event —
+//! vi-mode entry, paste, copy, pane split/select/kill, or typed input —
+//! so the mux backend receives every effect in the order the keys were
+//! pressed.
 
+use crate::input::keyboard::terminal_modifiers;
 use crate::{
     action::{
         clipboard::PasteAction,
@@ -9,14 +12,20 @@ use crate::{
         vi::{mode::EnterViModeActionEvent, trigger_vi_mode_action},
     },
     input::{
-        keyboard::bevy_key_to_terminal_key,
-        shortcuts::{ShortcutMessage, ShortcutSet, TypeMessage, ViModeMessage},
+        keyboard::{bevy_key_to_terminal_key, key_effect::KeyEffect},
+        shortcuts::{KeyEffectMessage, ShortcutSet},
     },
+    session::spawn::PaneSpawnRequest,
 };
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::RequestTtyKeyInput;
-use orzma_configs::shortcuts::Shortcut;
-use orzma_tty::prelude::TerminalModifiers;
+use bevy_orzma_mux::prelude::{PaneAction, RequestActiveKeyInput, RequestPaneAction};
+use orzma_configs::shortcuts::{
+    PaneDirection as ConfigPaneDirection, Shortcut, SplitOrientation as ConfigSplitOrientation,
+};
+use orzma_mux::prelude::{
+    NewPaneAt, PaneDirection as MuxPaneDirection, PaneTarget,
+    SplitOrientation as MuxSplitOrientation,
+};
 
 pub(super) struct ShortcutsApplyPlugin;
 
@@ -24,95 +33,121 @@ impl Plugin for ShortcutsApplyPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (
-                apply_shortcuts
-                    .in_set(ShortcutSet::Apply)
-                    .run_if(on_message::<ShortcutMessage>),
-                apply_vi_mode
-                    .in_set(ShortcutSet::Apply)
-                    .run_if(on_message::<ViModeMessage>)
-                    .after(apply_shortcuts),
-                apply_type
-                    .in_set(ShortcutSet::Apply)
-                    .run_if(on_message::<TypeMessage>)
-                    .after(apply_shortcuts)
-                    .after(apply_vi_mode),
-            ),
+            apply_key_effects
+                .in_set(ShortcutSet::Apply)
+                .run_if(on_message::<KeyEffectMessage>),
         );
     }
 }
 
-/// Applies keyboard shortcuts from `ShortcutMessage`: vi-mode entry, paste
-/// (direct paste fires outside vi mode; a leader paste fires unconditionally),
-/// and copy (fires unconditionally — vi mode included; no-selection is a
-/// no-op downstream). `Quit` / `ReleaseWebviewFocus` are handled upstream in
-/// `resolve_key_effects`; pane/window actions are no-ops until the built-in
-/// multiplexer lands.
-/// Registered in `ShortcutSet::Apply`, gated on `on_message::<ShortcutMessage>`.
-fn apply_shortcuts(mut commands: Commands, mut shortcuts: MessageReader<ShortcutMessage>) {
-    for msg in shortcuts.read() {
-        match msg.action {
-            Shortcut::EnterViMode => {
+/// Applies the frame's key effects in press order: shortcuts, vi-mode
+/// keys, and typed keys all go through `commands.trigger`, never a
+/// direct backend send, so the mux receives them in this order.
+/// Registered in `ShortcutSet::Apply`, gated on
+/// `on_message::<KeyEffectMessage>`.
+fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffectMessage>) {
+    for msg in effects.read() {
+        match &msg.effect {
+            KeyEffect::Shortcut { action, via_leader } => {
+                apply_shortcut(
+                    &mut commands,
+                    *action,
+                    *via_leader,
+                    msg.focused,
+                    msg.in_vi_mode,
+                );
+            }
+            KeyEffect::ViMode(action) => {
                 if let Some(entity) = msg.focused {
-                    commands.trigger(EnterViModeActionEvent { entity });
+                    trigger_vi_mode_action(&mut commands, entity, *action);
                 }
             }
-            Shortcut::Paste => {
-                if let Some(entity) = msg.focused
-                    && (msg.via_leader || !msg.in_vi_mode)
+            KeyEffect::Type { logical, .. } => {
+                if msg.focused.is_some()
+                    && let Some(key) = bevy_key_to_terminal_key(logical)
                 {
-                    commands.trigger(PasteAction { entity });
+                    commands.trigger(RequestActiveKeyInput {
+                        key,
+                        modifiers: terminal_modifiers(msg.mods),
+                    });
                 }
             }
-            Shortcut::Copy => trigger_selection_copy(&mut commands, msg.focused),
-            Shortcut::SelectPane(_)
-            | Shortcut::ResizePane(_)
-            | Shortcut::SplitPane(_)
-            | Shortcut::KillPane
-            | Shortcut::ZoomPane
-            | Shortcut::NewWindow
-            | Shortcut::KillWindow
-            | Shortcut::NextWindow
-            | Shortcut::PreviousWindow
-            | Shortcut::SelectWindow(_)
-            | Shortcut::RenameWindow
-            | Shortcut::Quit
-            | Shortcut::ReleaseWebviewFocus => {}
+            KeyEffect::WebviewForward { .. } => {}
         }
     }
 }
 
-/// Applies matched `[vi-mode]` keys from `ViModeMessage` on the focused
-/// terminal. Registered in `ShortcutSet::Apply`, gated on
-/// `on_message::<ViModeMessage>`.
-fn apply_vi_mode(mut commands: Commands, mut vi_mode: MessageReader<ViModeMessage>) {
-    for msg in vi_mode.read() {
-        if let Some(entity) = msg.focused {
-            trigger_vi_mode_action(&mut commands, entity, msg.action);
+/// Applies one resolved `Shortcut`: vi-mode entry, paste (a direct paste
+/// fires outside vi mode; a leader paste fires unconditionally), copy
+/// (fires unconditionally — vi mode included; no-selection is a no-op
+/// downstream), and the pane actions (select/split/kill, targeting the
+/// backend's active pane). Window actions and `Quit` /
+/// `ReleaseWebviewFocus` (handled upstream in `resolve_key_effects`) are
+/// no-ops until the built-in multiplexer grows window support.
+fn apply_shortcut(
+    commands: &mut Commands,
+    action: Shortcut,
+    via_leader: bool,
+    focused: Option<Entity>,
+    in_vi_mode: bool,
+) {
+    match action {
+        Shortcut::EnterViMode => {
+            if let Some(entity) = focused {
+                commands.trigger(EnterViModeActionEvent { entity });
+            }
         }
+        Shortcut::Paste => {
+            if let Some(entity) = focused
+                && (via_leader || !in_vi_mode)
+            {
+                commands.trigger(PasteAction { entity });
+            }
+        }
+        Shortcut::Copy => trigger_selection_copy(commands, focused),
+        Shortcut::SelectPane(direction) => commands.trigger(RequestPaneAction {
+            action: PaneAction::SelectDirection(pane_direction(direction)),
+        }),
+        Shortcut::SplitPane(orientation) => commands.trigger(PaneSpawnRequest {
+            at: NewPaneAt::Split {
+                pane: PaneTarget::Active,
+                orientation: split_orientation(orientation),
+            },
+        }),
+        Shortcut::KillPane => commands.trigger(RequestPaneAction {
+            action: PaneAction::Kill,
+        }),
+        Shortcut::ResizePane(_)
+        | Shortcut::ZoomPane
+        | Shortcut::NewWindow
+        | Shortcut::KillWindow
+        | Shortcut::NextWindow
+        | Shortcut::PreviousWindow
+        | Shortcut::SelectWindow(_)
+        | Shortcut::RenameWindow
+        | Shortcut::Quit
+        | Shortcut::ReleaseWebviewFocus => {}
     }
 }
 
-/// Types raw keys from `TypeMessage` into the focused terminal as
-/// `RequestTtyKeyInput`. Runs after the shortcut/copy appliers. Registered in
-/// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>`.
-fn apply_type(mut commands: Commands, mut type_keys: MessageReader<TypeMessage>) {
-    for msg in type_keys.read() {
-        if let Some(entity) = msg.focused
-            && let Some(key) = bevy_key_to_terminal_key(&msg.logical)
-        {
-            let terminal_mods = TerminalModifiers {
-                ctrl: msg.mods.ctrl,
-                shift: msg.mods.shift,
-                alt: msg.mods.alt,
-                meta: msg.mods.meta,
-            };
-            commands.trigger(RequestTtyKeyInput {
-                terminal: entity,
-                key,
-                modifiers: terminal_mods,
-            });
-        }
+/// Converts `orzma_configs`' shortcut-facing pane direction to the mux
+/// backend's. The two crates must not depend on each other, so orphan
+/// rules forbid a `From` impl here; this match is the conversion.
+fn pane_direction(direction: ConfigPaneDirection) -> MuxPaneDirection {
+    match direction {
+        ConfigPaneDirection::Left => MuxPaneDirection::Left,
+        ConfigPaneDirection::Down => MuxPaneDirection::Down,
+        ConfigPaneDirection::Up => MuxPaneDirection::Up,
+        ConfigPaneDirection::Right => MuxPaneDirection::Right,
+    }
+}
+
+/// Converts `orzma_configs`' shortcut-facing split orientation to the mux
+/// backend's, for the same orphan-rule reason as `pane_direction`.
+fn split_orientation(orientation: ConfigSplitOrientation) -> MuxSplitOrientation {
+    match orientation {
+        ConfigSplitOrientation::Vertical => MuxSplitOrientation::Vertical,
+        ConfigSplitOrientation::Horizontal => MuxSplitOrientation::Horizontal,
     }
 }
 
@@ -120,53 +155,59 @@ fn apply_type(mut commands: Commands, mut type_keys: MessageReader<TypeMessage>)
 mod tests {
     use super::*;
     use crate::action::terminal::TerminalSelectionCopy;
-    use crate::input::keyboard::key_effect::KeyEffect;
     use crate::input::shortcuts::Shortcuts;
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::resource::Resource;
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
-    use orzma_configs::shortcuts::Modifiers;
-    use orzma_tty::prelude::{KeyText, TerminalKey};
+    use orzma_configs::shortcuts::{Modifiers, PaneDirection, SplitOrientation};
+    use orzma_mux::prelude::PaneDirection as MuxDirection;
+    use orzma_tty::prelude::TerminalKey;
 
     #[derive(Resource, Default)]
     struct Captured {
-        vi_mode: u32,
+        order: Vec<String>,
+        spawns: Vec<NewPaneAt>,
+        pane_actions: Vec<PaneAction>,
         paste: u32,
         copy: u32,
-        keys: Vec<TerminalKey>,
+        vi_mode: u32,
     }
 
-    /// Builds an app running the three appliers as bare
-    /// per-message consumers, capturing the events they trigger.
+    /// Builds an app running the dispatcher as a bare per-message
+    /// consumer, capturing every event it triggers in trigger order.
     fn build_dispatch_app(shortcuts: Shortcuts) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_message::<ShortcutMessage>()
-            .add_message::<ViModeMessage>()
-            .add_message::<TypeMessage>()
+            .add_message::<KeyEffectMessage>()
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
-            .add_systems(
-                Update,
-                (
-                    apply_shortcuts,
-                    apply_vi_mode.after(apply_shortcuts),
-                    apply_type.after(apply_shortcuts).after(apply_vi_mode),
-                ),
-            )
+            .add_systems(Update, apply_key_effects)
             .add_observer(|_ev: On<EnterViModeActionEvent>, mut c: ResMut<Captured>| {
                 c.vi_mode += 1;
+                c.order.push("vi".into());
             })
             .add_observer(|_ev: On<PasteAction>, mut c: ResMut<Captured>| {
                 c.paste += 1;
+                c.order.push("paste".into());
             })
             .add_observer(|_ev: On<TerminalSelectionCopy>, mut c: ResMut<Captured>| {
                 c.copy += 1;
+                c.order.push("copy".into());
             })
-            .add_observer(|ev: On<RequestTtyKeyInput>, mut c: ResMut<Captured>| {
-                c.keys.push(ev.key.clone());
-            });
+            .add_observer(|ev: On<RequestActiveKeyInput>, mut c: ResMut<Captured>| {
+                let TerminalKey::Character(text) = &ev.key else {
+                    return;
+                };
+                c.order.push(format!("key:{}", text.as_str()));
+            })
+            .add_observer(|ev: On<RequestPaneAction>, mut c: ResMut<Captured>| {
+                c.pane_actions.push(ev.action);
+                if let PaneAction::SelectDirection(d) = ev.action {
+                    c.order.push(format!("pane:{d:?}"));
+                }
+            })
+            .add_observer(|ev: On<PaneSpawnRequest>, mut c: ResMut<Captured>| c.spawns.push(ev.at));
         app
     }
 
@@ -193,30 +234,13 @@ mod tests {
         mods: Modifiers,
     ) {
         for effect in effects {
-            match effect {
-                KeyEffect::Shortcut { action, via_leader } => {
-                    app.world_mut().write_message(ShortcutMessage {
-                        action,
-                        via_leader,
-                        focused,
-                        in_vi_mode,
-                    });
-                }
-                KeyEffect::ViMode(action) => {
-                    app.world_mut()
-                        .write_message(ViModeMessage { action, focused });
-                }
-                KeyEffect::Type { logical, .. } => {
-                    app.world_mut().write_message(TypeMessage {
-                        logical,
-                        focused,
-                        mods,
-                    });
-                }
-                KeyEffect::WebviewForward { .. } => {}
-            }
+            app.world_mut().write_message(KeyEffectMessage {
+                effect,
+                focused,
+                in_vi_mode,
+                mods,
+            });
         }
-        app.update();
     }
 
     fn type_effect(logical: Key, key_code: KeyCode) -> KeyEffect {
@@ -228,12 +252,12 @@ mod tests {
     }
 
     /// Asserts a `Type` key effect on a focused terminal fires
-    /// `RequestTtyKeyInput` carrying the typed character.
+    /// `RequestActiveKeyInput` carrying the typed character.
     ///
     /// Case: the user types the plain character `a` with no shortcut chord
     /// matched, and the focused terminal must receive it as typed text.
     #[test]
-    fn plain_key_triggers_request_tty_key_input() {
+    fn plain_key_triggers_request_active_key_input() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
@@ -242,15 +266,116 @@ mod tests {
             false,
             Modifiers::default(),
         );
+        app.update();
         assert_eq!(
-            app.world().resource::<Captured>().keys,
-            vec![TerminalKey::Character(KeyText::new("a").unwrap())],
-            "a Type effect must forward to the focused terminal as a RequestTtyKeyInput"
+            app.world().resource::<Captured>().order,
+            vec!["key:a"],
+            "a Type effect must forward to the active pane as a RequestActiveKeyInput"
         );
     }
 
+    /// Asserts that same-frame effects are applied in press order, so a
+    /// pane switch between two typed keys lands between them.
+    ///
+    /// Case: the user types `x`, presses select-right-pane, and types `y`
+    /// within one frame.
     #[test]
-    fn pane_action_is_noop() {
+    fn effects_apply_in_press_order() {
+        let (mut app, term) = dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![
+                KeyEffect::Type {
+                    logical: Key::Character("x".into()),
+                    key_code: KeyCode::KeyX,
+                },
+                KeyEffect::Shortcut {
+                    action: Shortcut::SelectPane(PaneDirection::Right),
+                    via_leader: true,
+                },
+                KeyEffect::Type {
+                    logical: Key::Character("y".into()),
+                    key_code: KeyCode::KeyY,
+                },
+            ],
+            Some(term),
+            false,
+            Modifiers::default(),
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().order,
+            vec!["key:x", "pane:Right", "key:y"],
+            "a same-frame pane switch must land between the two typed keys, not after both"
+        );
+    }
+
+    /// Asserts that split / kill map to their pane requests with an
+    /// `Active` target.
+    ///
+    /// Case: the user presses split-vertical-pane then kill-pane.
+    #[test]
+    fn split_and_kill_map_to_pane_requests() {
+        let (mut app, term) = dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![
+                KeyEffect::Shortcut {
+                    action: Shortcut::SplitPane(SplitOrientation::Vertical),
+                    via_leader: true,
+                },
+                KeyEffect::Shortcut {
+                    action: Shortcut::KillPane,
+                    via_leader: true,
+                },
+            ],
+            Some(term),
+            false,
+            Modifiers::default(),
+        );
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert!(matches!(
+            c.spawns.as_slice(),
+            [NewPaneAt::Split {
+                pane: PaneTarget::Active,
+                orientation: MuxSplitOrientation::Vertical,
+            }]
+        ));
+        assert_eq!(c.pane_actions, vec![PaneAction::Kill]);
+    }
+
+    /// Asserts that `SelectPane` maps to `RequestPaneAction::SelectDirection`
+    /// carrying the direction converted to the mux backend's type.
+    ///
+    /// Case: the user presses a leader-scoped select-left-pane binding.
+    #[test]
+    fn select_pane_maps_to_request_pane_action() {
+        let (mut app, term) = dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![action_effect(
+                Shortcut::SelectPane(PaneDirection::Left),
+                true,
+            )],
+            Some(term),
+            false,
+            Modifiers::default(),
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().pane_actions,
+            vec![PaneAction::SelectDirection(MuxDirection::Left)],
+            "SelectPane must map to RequestPaneAction::SelectDirection with the converted direction"
+        );
+    }
+
+    /// Asserts that a pane action with no backend mapping yet resolves to a
+    /// no-op: no triggered event, spawn request, or pane action.
+    ///
+    /// Case: the user presses a leader-scoped zoom-pane binding.
+    #[test]
+    fn pane_action_without_backend_variant_is_noop() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
@@ -259,11 +384,11 @@ mod tests {
             false,
             Modifiers::default(),
         );
+        app.update();
         let c = app.world().resource::<Captured>();
-        assert_eq!(
-            (c.vi_mode, c.paste, c.keys.len()),
-            (0, 0, 0),
-            "a pane action resolves to a no-op: no event, no typing"
+        assert!(
+            c.order.is_empty() && c.spawns.is_empty() && c.pane_actions.is_empty(),
+            "a pane action with no backend mapping yet must resolve to a no-op"
         );
     }
 
@@ -277,6 +402,7 @@ mod tests {
             false,
             meta_mods(),
         );
+        app.update();
         assert_eq!(
             app.world().resource::<Captured>().paste,
             1,
@@ -294,6 +420,7 @@ mod tests {
             false,
             meta_mods(),
         );
+        app.update();
         assert_eq!(
             app.world().resource::<Captured>().copy,
             1,
@@ -311,6 +438,7 @@ mod tests {
             true,
             meta_mods(),
         );
+        app.update();
         assert_eq!(
             app.world().resource::<Captured>().copy,
             1,
@@ -328,6 +456,7 @@ mod tests {
             true,
             meta_mods(),
         );
+        app.update();
         assert_eq!(
             app.world().resource::<Captured>().paste,
             0,
@@ -345,6 +474,7 @@ mod tests {
             true,
             Modifiers::default(),
         );
+        app.update();
         assert_eq!(
             app.world().resource::<Captured>().paste,
             1,
@@ -362,6 +492,7 @@ mod tests {
             true,
             Modifiers::default(),
         );
+        app.update();
         assert_eq!(
             app.world().resource::<Captured>().vi_mode,
             1,

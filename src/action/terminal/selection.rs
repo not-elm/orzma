@@ -4,12 +4,12 @@
 use crate::action::clipboard::CopyAction;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::{
-    CellSide, GridPoint, OrzmaTtyHandle, RequestTtySelectionClear, RequestTtySelectionStart,
-    RequestTtySelectionUpdate, SelectionKind,
+use bevy_orzma_mux::prelude::{
+    CellSide, GridPoint, RequestTtyCopySelection, RequestTtySelectionClear,
+    RequestTtySelectionStart, RequestTtySelectionUpdate, SelectionKind, TtySelectionTextSignal,
 };
 use orzma_tty_renderer::schema::TerminalGrid;
-use orzma_vt::prelude::{DisplayOffset, ViewportLine, Vt};
+use orzma_vt::prelude::{DisplayOffset, ViewportLine};
 
 /// Starts a new local selection on `entity` at `point`.
 #[derive(EntityEvent, Debug, Clone)]
@@ -63,18 +63,6 @@ pub(crate) fn trigger_selection_copy(commands: &mut Commands, focused: Option<En
     }
 }
 
-/// Triggers a `CopyAction` carrying `handle`'s selected text, or nothing
-/// when there is no selection or the selection covers only blanks, so the
-/// clipboard is never overwritten with an empty string. Shared by the
-/// mouse copy and the vi yank.
-pub(crate) fn copy_selection_of(commands: &mut Commands, handle: &OrzmaTtyHandle) {
-    if let Some(text) = handle.vt().selection_text()
-        && !text.is_empty()
-    {
-        commands.trigger(CopyAction { text });
-    }
-}
-
 /// Registers the selection apply observers.
 pub(super) struct SelectionPlugin;
 
@@ -83,7 +71,8 @@ impl Plugin for SelectionPlugin {
         app.add_observer(on_terminal_selection_start)
             .add_observer(on_terminal_selection_update)
             .add_observer(on_terminal_selection_clear)
-            .add_observer(on_terminal_selection_copy);
+            .add_observer(on_terminal_selection_copy)
+            .add_observer(on_selection_text);
     }
 }
 
@@ -132,17 +121,26 @@ fn on_terminal_selection_clear(ev: On<TerminalSelectionClear>, mut commands: Com
     });
 }
 
-/// Applies a `TerminalSelectionCopy`: writes the selection text (if any) to
-/// the clipboard. Needs only read access to the handle.
+/// Applies a `TerminalSelectionCopy`: asks the backend for the pane's
+/// selected text. The answer arrives as `TtySelectionTextSignal`.
 fn on_terminal_selection_copy(
     ev: On<TerminalSelectionCopy>,
     mut commands: Commands,
-    terminals: Query<&OrzmaTtyHandle, With<OrzmaTerminal>>,
+    terminals: Query<(), With<OrzmaTerminal>>,
 ) {
-    let Ok(handle) = terminals.get(ev.entity) else {
-        return;
-    };
-    copy_selection_of(&mut commands, handle);
+    if terminals.get(ev.entity).is_ok() {
+        commands.trigger(RequestTtyCopySelection {
+            terminal: ev.entity,
+        });
+    }
+}
+
+/// Writes an answered copy to the clipboard, skipping empty text so the
+/// clipboard is never overwritten with nothing.
+fn on_selection_text(ev: On<TtySelectionTextSignal>, mut commands: Commands) {
+    if let Some(text) = ev.text.as_ref().filter(|t| !t.is_empty()) {
+        commands.trigger(CopyAction { text: text.clone() });
+    }
 }
 
 /// Converts a viewport-relative point (`mouse.rs`'s contract: line `0` is
@@ -160,35 +158,8 @@ fn to_grid_point(viewport_point: GridPoint, offset: DisplayOffset) -> GridPoint 
 }
 
 #[cfg(test)]
-pub(crate) mod test_support {
-    use super::*;
-    use orzma_vt::prelude::{GridColumn, GridLine};
-
-    /// Spawns a detached terminal showing `rows` as an `OrzmaTerminal`,
-    /// with row 0 selected as Lines when `select` is set, so copy and
-    /// yank observers can be exercised against real selected text.
-    pub(crate) fn spawn_terminal(app: &mut App, rows: &[u8], select: bool) -> Entity {
-        let (mut handle, _sink) = OrzmaTtyHandle::detached(4, 3);
-        handle.feed_bytes(rows);
-        if select {
-            handle.start_selection(
-                GridPoint {
-                    line: GridLine(0),
-                    column: GridColumn(0),
-                },
-                CellSide::Left,
-                SelectionKind::Lines,
-            );
-        }
-        app.world_mut().spawn((handle, OrzmaTerminal)).id()
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::clipboard::test_support::{CapturedCopyActions, capture_copy_actions};
-    use crate::action::terminal::selection::test_support::spawn_terminal;
     use orzma_vt::prelude::{GridColumn, GridLine};
 
     #[derive(Resource, Default)]
@@ -340,55 +311,41 @@ mod tests {
         assert_eq!(app.world().resource::<SeenClears>().0, vec![entity]);
     }
 
-    fn app_capturing_copies() -> App {
+    /// Asserts that a copy on a terminal entity asks the backend for its
+    /// selection, and that an answered text becomes a clipboard write
+    /// while an empty answer does not.
+    ///
+    /// Case: the user presses Cmd+C once with a selection and once with
+    /// nothing selected.
+    #[test]
+    fn copy_asks_the_backend_and_writes_only_non_empty_answers() {
+        #[derive(Resource, Default)]
+        struct Seen {
+            requests: Vec<Entity>,
+            copies: Vec<String>,
+        }
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_observer(on_terminal_selection_copy);
-        capture_copy_actions(&mut app);
-        app
-    }
-
-    fn captured(app: &App) -> &[String] {
-        &app.world().resource::<CapturedCopyActions>().0
-    }
-
-    /// Asserts that a copy request writes the terminal's selected text
-    /// through `CopyAction`.
-    ///
-    /// Case: the user selects a row and presses the copy shortcut.
-    #[test]
-    fn selection_copy_writes_the_selected_text() {
-        let mut app = app_capturing_copies();
-        let entity = spawn_terminal(&mut app, b"abcd\r\nefgh\r\nijkl", true);
-        app.world_mut().trigger(TerminalSelectionCopy { entity });
+            .add_plugins(SelectionPlugin)
+            .init_resource::<Seen>()
+            .add_observer(|ev: On<RequestTtyCopySelection>, mut s: ResMut<Seen>| {
+                s.requests.push(ev.terminal)
+            })
+            .add_observer(|ev: On<CopyAction>, mut s: ResMut<Seen>| s.copies.push(ev.text.clone()));
+        let terminal = app.world_mut().spawn(OrzmaTerminal).id();
+        app.world_mut()
+            .trigger(TerminalSelectionCopy { entity: terminal });
+        app.world_mut().trigger(TtySelectionTextSignal {
+            text: Some("hello".into()),
+        });
+        app.world_mut().trigger(TtySelectionTextSignal {
+            text: Some(String::new()),
+        });
+        app.world_mut()
+            .trigger(TtySelectionTextSignal { text: None });
         app.update();
-        assert_eq!(captured(&app), ["abcd".to_string()]);
-    }
-
-    /// Asserts that a copy request with no selection triggers nothing, so
-    /// the clipboard keeps its previous contents.
-    ///
-    /// Case: the user presses the copy shortcut without selecting.
-    #[test]
-    fn selection_copy_without_a_selection_triggers_nothing() {
-        let mut app = app_capturing_copies();
-        let entity = spawn_terminal(&mut app, b"abcd\r\nefgh\r\nijkl", false);
-        app.world_mut().trigger(TerminalSelectionCopy { entity });
-        app.update();
-        assert!(captured(&app).is_empty());
-    }
-
-    /// Asserts that a selection covering only blank cells triggers nothing,
-    /// so an empty string never overwrites the clipboard.
-    ///
-    /// Case: the user triple-clicks an empty line and presses the copy
-    /// shortcut.
-    #[test]
-    fn selection_copy_of_a_blank_row_triggers_nothing() {
-        let mut app = app_capturing_copies();
-        let entity = spawn_terminal(&mut app, b"\r\nefgh", true);
-        app.world_mut().trigger(TerminalSelectionCopy { entity });
-        app.update();
-        assert!(captured(&app).is_empty());
+        let seen = app.world().resource::<Seen>();
+        assert_eq!(seen.requests, vec![terminal]);
+        assert_eq!(seen.copies, vec!["hello".to_string()]);
     }
 }

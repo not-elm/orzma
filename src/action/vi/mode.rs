@@ -10,10 +10,9 @@ use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
+use bevy::ecs::query::With;
 use bevy::ecs::system::{Commands, Query};
-use bevy_orzma_tty::prelude::{
-    OrzmaTtyHandle, RequestTtySelectionClear, RequestTtyViMode, ViModeSwitch,
-};
+use bevy_orzma_mux::prelude::{MuxPane, RequestTtySelectionClear, RequestTtyViMode, ViModeSwitch};
 
 /// Bevy Plugin: registers the two observers. The `Clipboard` resource is
 /// provided by `DefaultPlugins` (`bevy_clipboard::ClipboardPlugin`); orzma's
@@ -54,7 +53,7 @@ pub struct ExitViMode {
 fn handle_enter_vi_mode_request(
     ev: On<EnterViModeActionEvent>,
     mut commands: Commands,
-    terminals: Query<&OrzmaTtyHandle>,
+    terminals: Query<(), With<MuxPane>>,
 ) {
     if terminals.get(ev.entity).is_err() {
         return;
@@ -80,7 +79,7 @@ fn handle_enter_vi_mode_request(
 fn handle_exit_vi_mode(
     ev: On<ExitViMode>,
     mut commands: Commands,
-    terminals: Query<&OrzmaTtyHandle>,
+    terminals: Query<(), With<MuxPane>>,
 ) {
     if terminals.get(ev.entity).is_err() {
         return;
@@ -106,10 +105,10 @@ mod tests {
     use bevy::ecs::resource::Resource;
     use bevy::ecs::system::ResMut;
     use bevy::prelude::MinimalPlugins;
+    use orzma_mux::prelude::PaneId;
 
     fn spawn_terminal_entity(app: &mut App) -> Entity {
-        let (handle, _sink) = OrzmaTtyHandle::detached(10, 5);
-        app.world_mut().spawn(handle).id()
+        app.world_mut().spawn(MuxPane(PaneId(1))).id()
     }
 
     #[derive(Debug, PartialEq)]
@@ -159,11 +158,11 @@ mod tests {
         );
     }
 
-    /// Asserts that entering vi mode on an entity without a terminal handle
+    /// Asserts that entering vi mode on an entity without a `MuxPane`
     /// neither inserts `ViModeState` nor fires any request.
     ///
     /// Case: a stray `EnterViModeActionEvent` aimed at an entity that never
-    /// had a terminal handle, or whose pane was already torn down.
+    /// had a `MuxPane`, or whose pane was already torn down.
     #[test]
     fn enter_request_on_a_bare_entity_is_a_no_op() {
         let mut app = App::new();

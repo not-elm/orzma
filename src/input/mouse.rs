@@ -19,7 +19,7 @@ use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::CursorMoved;
-use bevy_orzma_tty::prelude::{CellSide, GridPoint, SelectionKind};
+use bevy_orzma_mux::prelude::{CellSide, GridPoint, SelectionKind};
 use orzma_tty::prelude::CellCoord;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::schema::TerminalGrid;

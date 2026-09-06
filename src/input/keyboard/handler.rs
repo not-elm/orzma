@@ -1,11 +1,10 @@
 //! Resolves the frame's pressed keys through the pure
 //! `crate::input::resolve::classify_key_batch` decider, handles the two
 //! mode-independent effects inline (Quit → `AppExit`, release-webview-focus →
-//! clear `FocusedWebview`), and fans out the remaining effects as the three
-//! per-responsibility shortcut messages (`ShortcutMessage`, `ViModeMessage`,
-//! `TypeMessage`). The appliers (`crate::input::shortcuts::apply`) consume
-//! those messages and apply the events. This is the sole system that steps
-//! `LeaderPhase`.
+//! clear `FocusedWebview`), and fans out the remaining effects as a single
+//! press-order `KeyEffectMessage` stream. `apply_key_effects`
+//! (`crate::input::shortcuts::apply`) consumes that stream and applies the
+//! events. This is the sole system that steps `LeaderPhase`.
 
 use crate::action::vi::ResolvedViModeKeys;
 use crate::action::vi::mode::ViModeState;
@@ -16,8 +15,8 @@ use crate::input::keyboard::key_effect::{
     BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch,
 };
 use crate::input::shortcuts::{
-    HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
-    Shortcuts, TypeMessage, ViModeMessage, clear_leader_phase,
+    HeldRepeatKey, KeyEffectMessage, LeaderGate, LeaderPhase, ShortcutSet, Shortcuts,
+    clear_leader_phase,
 };
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -55,16 +54,15 @@ struct ClassifyInputs<'w> {
     time: Res<'w, Time<Real>>,
 }
 
-/// Resolves the frame's pressed keys and fans out the per-responsibility
-/// shortcut messages. Runs unconditionally (gated only on
+/// Resolves the frame's pressed keys and fans out `KeyEffectMessage` in
+/// press order. Runs unconditionally (gated only on
 /// `on_message::<KeyboardInput>`), in `InputPhase::FocusedKey` /
 /// `ShortcutSet::Resolve` / `LeaderGate::Advance`. The sole `LeaderPhase`-stepping
 /// system: on a coarse guard (IME composition or an unfocused window) it
 /// clears the leader, drains the frame's keys, and writes no messages;
 /// otherwise it classifies the keys, applies `Quit` (`AppExit`) and
-/// `ReleaseWebviewFocus` (clear `FocusedWebview`) inline, and writes every other
-/// effect to its typed message (`ShortcutMessage`, `ViModeMessage`,
-/// `TypeMessage`).
+/// `ReleaseWebviewFocus` (clear `FocusedWebview`) inline, and writes every
+/// other effect to `KeyEffectMessage`.
 fn resolve_key_effects(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
@@ -72,7 +70,7 @@ fn resolve_key_effects(
     mut cef_filter: ResMut<CefKeyboardFilter>,
     mut leader_phase: ResMut<LeaderPhase>,
     mut held_repeat: ResMut<HeldRepeatKey>,
-    mut messages: ShortcutMessages,
+    mut messages: MessageWriter<KeyEffectMessage>,
     ime: Res<ImeState>,
     inputs: ClassifyInputs,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -140,28 +138,18 @@ fn resolve_key_effects(
                 action: Shortcut::ReleaseWebviewFocus,
                 ..
             } => focused_webview.0 = None,
-            KeyEffect::Shortcut { action, via_leader } => {
-                messages.shortcut.write(ShortcutMessage {
-                    action,
-                    via_leader,
-                    focused,
-                    in_vi_mode,
-                });
-            }
-            KeyEffect::ViMode(action) => {
-                messages.vi_mode.write(ViModeMessage { action, focused });
-            }
-            KeyEffect::Type { logical, .. } => {
-                messages.type_keys.write(TypeMessage {
-                    logical,
-                    focused,
-                    mods,
-                });
-            }
             // NOTE: WebviewForward is classified (not suppressed, not typed) so
             // the chord reaches the focused webview through CEF's native
             // keyboard path; there is no message to deliver host-side.
             KeyEffect::WebviewForward { .. } => {}
+            effect => {
+                messages.write(KeyEffectMessage {
+                    effect,
+                    focused,
+                    in_vi_mode,
+                    mods,
+                });
+            }
         }
     }
     let ms = ModifiersState {
@@ -202,41 +190,38 @@ mod tests {
     #[derive(Resource, Default)]
     struct Captured {
         app_exit: usize,
-        shortcuts: Vec<(Shortcut, bool)>,
-        vi_mode: usize,
-        typed: usize,
+        effects: Vec<KeyEffect>,
         focused: Option<Entity>,
         in_vi_mode: Option<bool>,
         mods: Option<Modifiers>,
-        last_typed: Option<Key>,
     }
 
     impl Captured {
         fn message_count(&self) -> usize {
-            self.shortcuts.len() + self.vi_mode + self.typed
+            self.effects.len()
+        }
+
+        fn typed_count(&self) -> usize {
+            self.effects
+                .iter()
+                .filter(|effect| matches!(effect, KeyEffect::Type { .. }))
+                .count()
+        }
+
+        fn last_typed(&self) -> Option<Key> {
+            self.effects.iter().rev().find_map(|effect| match effect {
+                KeyEffect::Type { logical, .. } => Some(logical.clone()),
+                _ => None,
+            })
         }
     }
 
-    fn capture_messages(
-        mut cap: ResMut<Captured>,
-        mut shortcuts: MessageReader<ShortcutMessage>,
-        mut vi_mode: MessageReader<ViModeMessage>,
-        mut typed: MessageReader<TypeMessage>,
-    ) {
-        for m in shortcuts.read() {
-            cap.shortcuts.push((m.action, m.via_leader));
+    fn capture_messages(mut cap: ResMut<Captured>, mut effects: MessageReader<KeyEffectMessage>) {
+        for m in effects.read() {
+            cap.effects.push(m.effect.clone());
             cap.focused = m.focused;
             cap.in_vi_mode = Some(m.in_vi_mode);
-        }
-        for m in vi_mode.read() {
-            cap.vi_mode += 1;
-            cap.focused = m.focused;
-        }
-        for m in typed.read() {
-            cap.typed += 1;
-            cap.focused = m.focused;
             cap.mods = Some(m.mods);
-            cap.last_typed = Some(m.logical.clone());
         }
     }
 
@@ -249,9 +234,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(KeyboardHandlerPlugin)
             .add_message::<KeyboardInput>()
-            .add_message::<ShortcutMessage>()
-            .add_message::<ViModeMessage>()
-            .add_message::<TypeMessage>()
+            .add_message::<KeyEffectMessage>()
             .add_message::<AppExit>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ImeState>()
@@ -303,9 +286,9 @@ mod tests {
             "exactly one shortcut message resolves per keyboard frame"
         );
         assert_eq!(
-            cap.last_typed,
+            cap.last_typed(),
             Some(Key::Character("a".into())),
-            "a plain key resolves to one TypeMessage"
+            "a plain key resolves to one KeyEffectMessage carrying a Type effect"
         );
         assert_eq!(cap.focused, Some(term));
         assert_eq!(
@@ -375,7 +358,7 @@ mod tests {
         assert_eq!(
             cap.message_count(),
             0,
-            "Quit is handled inline and never reaches a ShortcutMessage"
+            "Quit is handled inline and never reaches a KeyEffectMessage"
         );
     }
 
@@ -409,7 +392,7 @@ mod tests {
         assert_eq!(
             cap.message_count(),
             0,
-            "ReleaseWebviewFocus is handled inline and never reaches a ShortcutMessage"
+            "ReleaseWebviewFocus is handled inline and never reaches a KeyEffectMessage"
         );
     }
 
@@ -427,7 +410,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().in_vi_mode,
             Some(true),
-            "a focused surface in vi mode sets ShortcutMessage.in_vi_mode"
+            "a focused surface in vi mode sets KeyEffectMessage.in_vi_mode"
         );
     }
 
@@ -444,7 +427,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().in_vi_mode,
             Some(false),
-            "a focused surface NOT in vi mode sets ShortcutMessage.in_vi_mode to false"
+            "a focused surface NOT in vi mode sets KeyEffectMessage.in_vi_mode to false"
         );
     }
 
@@ -455,7 +438,7 @@ mod tests {
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         assert_eq!(
-            app.world().resource::<Captured>().typed,
+            app.world().resource::<Captured>().typed_count(),
             1,
             "the ShortcutSet Resolve->Apply chain lets the applier consume the message \
              the same frame it is written, not the next"
@@ -480,7 +463,7 @@ mod tests {
         assert_eq!(
             cap.message_count(),
             0,
-            "no ShortcutMessage is written even when nothing is focused"
+            "no KeyEffectMessage is written even when nothing is focused"
         );
     }
 

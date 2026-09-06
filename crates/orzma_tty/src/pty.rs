@@ -1,14 +1,16 @@
 //! `Pty` — owns the PTY master, writer, child killer, and the
 
 use crate::{
-    SpawnOptions,
+    CellPixels, SpawnOptions,
     error::{OrzmaTtyError, OrzmaTtyResult},
 };
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 #[cfg(any(test, feature = "test-support"))]
 use std::io::Result as IoResult;
 use std::io::{Read, Write};
+#[cfg(any(test, feature = "test-support"))]
+use std::mem;
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -17,7 +19,7 @@ use std::thread;
 /// PTY ownership for one spawned shell.
 ///
 /// `Mutex` is required because `dyn MasterPty + Send` and `dyn Write +
-/// Send` are `!Sync`, while downstream wrappers (`bevy_orzma_tty`'s
+/// Send` are `!Sync`, while downstream wrappers (`bevy_orzma_mux`'s
 /// `Component`) need the owning `OrzmaTty` to be `Send + Sync`.
 pub struct Pty {
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -27,17 +29,40 @@ pub struct Pty {
     child_killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
+/// One non-blocking read of the PTY output stream.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ChunkPoll {
+    /// A chunk of PTY output.
+    Chunk(Vec<u8>),
+    /// Nothing queued right now; the reader thread is still alive.
+    Empty,
+    /// The reader thread is gone and nothing remains queued.
+    Disconnected,
+}
+
+/// One non-blocking read of the child-exit stream.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ExitPoll {
+    /// The child exited; `None` if the `wait` itself failed.
+    Exited(Option<i32>),
+    /// The child is still running (or its status is not yet sent).
+    Pending,
+    /// The reader thread is gone without ever sending a status.
+    Disconnected,
+}
+
 impl Pty {
     /// Opens a PTY at the given grid size, spawns `options.shell` under
     /// it as a login shell, and starts the blocking reader/wait OS
     /// thread.
     pub fn spawn(options: &SpawnOptions) -> OrzmaTtyResult<Self> {
+        let (pixel_width, pixel_height) = options.cell_px.window_pixels(options.cols, options.rows);
         let pty_pair = native_pty_system()
             .openpty(PtySize {
                 rows: options.rows,
                 cols: options.cols,
-                pixel_width: 0,
-                pixel_height: 0,
+                pixel_width,
+                pixel_height,
             })
             .map_err(OrzmaTtyError::PtyOpen)?;
 
@@ -77,14 +102,42 @@ impl Pty {
         })
     }
 
+    /// Polls the output stream once (see [`ChunkPoll`]).
     #[inline]
-    pub fn try_recv_exit(&mut self) -> Option<Option<i32>> {
-        self.exit_rx.try_recv().ok()
+    pub fn poll_chunk(&self) -> ChunkPoll {
+        match self.chunk_rx.try_recv() {
+            Ok(chunk) => ChunkPoll::Chunk(chunk),
+            Err(TryRecvError::Empty) => ChunkPoll::Empty,
+            Err(TryRecvError::Disconnected) => ChunkPoll::Disconnected,
+        }
     }
 
+    /// Polls the exit stream once (see [`ExitPoll`]).
     #[inline]
-    pub fn try_read_chunk(&mut self) -> Option<Vec<u8>> {
-        self.chunk_rx.try_recv().ok()
+    pub fn poll_exit(&self) -> ExitPoll {
+        match self.exit_rx.try_recv() {
+            Ok(code) => ExitPoll::Exited(code),
+            Err(TryRecvError::Empty) => ExitPoll::Pending,
+            Err(TryRecvError::Disconnected) => ExitPoll::Disconnected,
+        }
+    }
+
+    /// Whether output chunks are queued and unread.
+    #[inline]
+    pub fn chunks_pending(&self) -> bool {
+        !self.chunk_rx.is_empty()
+    }
+
+    /// The output stream, for a `Select` that waits on many terminals.
+    #[inline]
+    pub fn chunk_receiver(&self) -> &Receiver<Vec<u8>> {
+        &self.chunk_rx
+    }
+
+    /// The exit stream, for a `Select` that waits on many terminals.
+    #[inline]
+    pub fn exit_receiver(&self) -> &Receiver<Option<i32>> {
+        &self.exit_rx
     }
 
     #[inline]
@@ -97,21 +150,23 @@ impl Pty {
         Ok(())
     }
 
-    /// Applies the given grid size to the PTY master (`TIOCSWINSZ`).
+    /// Applies the given grid size to the PTY master (`TIOCSWINSZ`),
+    /// with the pixel fields set to the total window pixels
+    /// `cell_px × cells` (see [`CellPixels::window_pixels`]).
     ///
-    /// A no-policy wrapper: forwards the values verbatim (validation is
-    /// `OrzmaTty::resize`'s job) with the pixel fields explicitly
-    /// zeroed, and maps the master's error to
+    /// A no-policy wrapper: forwards the cell counts verbatim (validation
+    /// is `OrzmaTty::resize`'s job) and maps the master's error to
     /// [`OrzmaTtyError::PtyResize`].
-    pub fn resize(&mut self, cols: u16, rows: u16) -> OrzmaTtyResult {
+    pub fn resize(&mut self, cols: u16, rows: u16, cell_px: CellPixels) -> OrzmaTtyResult {
+        let (pixel_width, pixel_height) = cell_px.window_pixels(cols, rows);
         self.master
             .lock()
             .unwrap()
             .resize(PtySize {
                 rows,
                 cols,
-                pixel_width: 0,
-                pixel_height: 0,
+                pixel_width,
+                pixel_height,
             })
             .map_err(OrzmaTtyError::PtyResize)
     }
@@ -155,8 +210,15 @@ impl Pty {
     /// master (e.g. one whose `resize` fails).
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_master(master: Box<dyn MasterPty + Send>, writer: Box<dyn Write + Send>) -> Self {
-        let (_, chunk_rx) = unbounded::<Vec<u8>>();
-        let (_, exit_rx) = unbounded::<Option<i32>>();
+        let (chunk_tx, chunk_rx) = unbounded::<Vec<u8>>();
+        let (exit_tx, exit_rx) = unbounded::<Option<i32>>();
+        // NOTE: the senders are leaked, not dropped: a disconnected
+        // receiver reads as "the reader thread is gone" to
+        // `OrzmaTty::pump`, which would synthesize a spurious
+        // `ChildExit` for a fixture that never had a child process at
+        // all. Leaking keeps both streams `Pending` forever instead.
+        mem::forget(chunk_tx);
+        mem::forget(exit_tx);
         Self::with_master_and_channels(master, writer, chunk_rx, exit_rx)
     }
 
@@ -259,6 +321,12 @@ fn spawn_reader_thread(
                 Err(_) => break,
             }
         }
+        // NOTE: the exit status must be sent before this closure returns
+        // and drops `chunk_tx` / `exit_tx`: `OrzmaTty::pump` treats a
+        // disconnected chunk stream as fully drained, and the backend's
+        // `Select` treats a disconnected receiver as permanently ready, so
+        // dropping the senders first would leave the pane unclosable and
+        // spinning until the synthesized `ChildExit` fallback fires.
         let code = child.wait().ok().map(|s| s.exit_code() as i32);
         let _ = exit_tx.send(code);
     });
@@ -299,33 +367,32 @@ mod tests {
     #[test]
     fn resize_applies_the_size_to_the_kernel() {
         let mut pty = Pty::detached(80, 24, Box::new(sink())).expect("Pty::detached");
-        pty.resize(120, 40).expect("resize");
+        pty.resize(120, 40, CellPixels::default()).expect("resize");
         let size = pty.size();
         assert_eq!((size.cols, size.rows), (120, 40));
     }
 
-    /// Asserts the exact `PtySize` handed to the master: the requested
-    /// cols/rows in the right fields and both pixel fields zero.
+    /// Asserts that a resize writes `cell_px × cells` into the winsize
+    /// pixel fields, not the per-cell pitch.
     ///
-    /// Case: the kernel-readback test cannot see this — a detached
-    /// master already starts at pixel 0, so "explicitly wrote 0" and
-    /// "preserved the old value" are indistinguishable there. Recording
-    /// the forwarded struct pins the decided pixel policy (explicitly
-    /// zeroed, consistent with `spawn` / `detached`).
+    /// Case: the host reports an 8×16 px cell and resizes the pane to
+    /// 100×40; a program reading `TIOCGWINSZ` must see 800×640.
     #[test]
-    fn resize_forwards_the_exact_pty_size_to_the_master() {
+    fn resize_writes_the_total_window_pixels() {
         let (master, calls) = RecordingMaster::at(80, 24);
         let mut pty = Pty::with_master(Box::new(master), Box::new(sink()));
-        pty.resize(120, 40).expect("resize");
-        assert_eq!(
-            *calls.lock().unwrap(),
-            vec![PtySize {
-                rows: 40,
-                cols: 120,
-                pixel_width: 0,
-                pixel_height: 0
-            }]
-        );
+        pty.resize(
+            100,
+            40,
+            CellPixels {
+                width: 8,
+                height: 16,
+            },
+        )
+        .expect("resize");
+        let last = *calls.lock().unwrap().last().expect("one resize call");
+        assert_eq!((last.cols, last.rows), (100, 40));
+        assert_eq!((last.pixel_width, last.pixel_height), (800, 640));
     }
 
     /// Asserts that degenerate sizes are forwarded verbatim, one master
@@ -341,7 +408,8 @@ mod tests {
         let (master, calls) = RecordingMaster::at(80, 24);
         let mut pty = Pty::with_master(Box::new(master), Box::new(sink()));
         for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
-            pty.resize(cols, rows).expect("resize");
+            pty.resize(cols, rows, CellPixels::default())
+                .expect("resize");
         }
         let recorded: Vec<(u16, u16)> = calls
             .lock()
@@ -362,7 +430,7 @@ mod tests {
     #[test]
     fn a_failing_master_maps_to_pty_resize_error() {
         let mut pty = Pty::with_master(Box::new(FailingMaster), Box::new(sink()));
-        let result = pty.resize(120, 40);
+        let result = pty.resize(120, 40, CellPixels::default());
         assert!(
             matches!(result, Err(OrzmaTtyError::PtyResize(_))),
             "expected PtyResize, got {result:?}"
@@ -370,16 +438,18 @@ mod tests {
     }
 
     /// Asserts that the child's exit is reported exactly once: the
-    /// first successful read yields the exit code and every later call
-    /// yields `None`.
+    /// first successful poll yields the exit code, and every later poll
+    /// finds the reader thread gone and reports `Disconnected` rather
+    /// than replaying the code.
     ///
     /// Case: the shell process exits while the host keeps polling every
     /// frame for output and exit state.
     #[test]
     fn exit_is_reported_once_after_the_child_terminates() {
-        let mut pty = Pty::spawn(&SpawnOptions {
+        let pty = Pty::spawn(&SpawnOptions {
             cols: 80,
             rows: 24,
+            cell_px: CellPixels::default(),
             shell: "/bin/echo".into(),
             cwd: None,
             env: Vec::new(),
@@ -387,7 +457,7 @@ mod tests {
         .expect("Pty::spawn failed");
         let deadline = Instant::now() + Duration::from_secs(10);
         let code = loop {
-            if let Some(code) = pty.try_recv_exit() {
+            if let ExitPoll::Exited(code) = pty.poll_exit() {
                 break code;
             }
             assert!(Instant::now() < deadline, "no exit report arrived");
@@ -396,8 +466,8 @@ mod tests {
         assert_eq!(code, Some(0));
         for _ in 0..3 {
             assert_eq!(
-                pty.try_recv_exit(),
-                None,
+                pty.poll_exit(),
+                ExitPoll::Disconnected,
                 "the exit must not be re-reported"
             );
         }
@@ -410,11 +480,11 @@ mod tests {
     /// master) is polled for an exit the same way a live terminal is.
     #[test]
     fn a_detached_pty_never_reports_an_exit() {
-        let mut detached = Pty::detached(80, 24, Box::new(sink())).expect("Pty::detached");
-        let mut injected = Pty::with_master(Box::new(FailingMaster), Box::new(sink()));
+        let detached = Pty::detached(80, 24, Box::new(sink())).expect("Pty::detached");
+        let injected = Pty::with_master(Box::new(FailingMaster), Box::new(sink()));
         for _ in 0..3 {
-            assert_eq!(detached.try_recv_exit(), None);
-            assert_eq!(injected.try_recv_exit(), None);
+            assert_eq!(detached.poll_exit(), ExitPoll::Pending);
+            assert_eq!(injected.poll_exit(), ExitPoll::Pending);
         }
     }
 
@@ -423,6 +493,7 @@ mod tests {
         let pty = Pty::spawn(&SpawnOptions {
             cols: 80,
             rows: 24,
+            cell_px: CellPixels::default(),
             shell: "/bin/echo".into(),
             cwd: None,
             env: Vec::new(),

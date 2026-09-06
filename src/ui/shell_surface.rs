@@ -1,122 +1,116 @@
-//! Shell-surface subtree: lazily (re)spawns the single `OrzmaTerminal` shell
-//! under `UiRoot`. Owns the surface entity's UI-side lifecycle;
-//! `crate::session` owns the PTY-side policy (spawn config, layout, exit).
+//! Shell-surface subtree: the clipping container every pane lives under,
+//! the one-shot root spawn, and the spawn-failure handler.
 
-use crate::input::focus::KeyboardFocused;
-use crate::session::spawn::{OrzmaSpawnOptions, OrzmaTerminalBundle, OrzmaTerminalConfig};
+use crate::session::spawn::PaneSpawnRequest;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
+use bevy_orzma_mux::prelude::{MuxPane, MuxPaneContainer, MuxPaneSpawnFailed, PaneGeometry};
 use bevy_orzma_webview::ControlPlaneHandle;
+use orzma_mux::prelude::NewPaneAt;
 
-/// Root of the shell-surface subtree, mounted under `UiRoot`.
+/// Root of the shell-surface subtree, mounted under `UiRoot`. Clips its
+/// children so a layout wider than the window overflows invisibly.
 #[derive(Component)]
 pub(crate) struct ShellSurfaceUi;
 
-/// Bevy plugin that ensures the shell-surface subtree exists. Gated by the
-/// absence of `ShellSurfaceUi`.
 pub(super) struct ShellSurfacePlugin;
 
 impl Plugin for ShellSurfacePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            ensure_shell_surface_ui.run_if(not(any_with_component::<ShellSurfaceUi>)),
-        );
+            (
+                ensure_shell_surface_ui.run_if(not(any_with_component::<ShellSurfaceUi>)),
+                request_root_pane
+                    .run_if(any_with_component::<ShellSurfaceUi>)
+                    .run_if(resource_exists::<PaneGeometry>),
+            ),
+        )
+        .add_observer(on_spawn_failed);
     }
 }
 
-fn ensure_shell_surface_ui(
-    mut commands: Commands,
-    mut exit: MessageWriter<AppExit>,
-    ui_root: Query<Entity, With<UiRoot>>,
-    config: Res<OrzmaTerminalConfig>,
-    control: Option<Res<ControlPlaneHandle>>,
-) {
+fn ensure_shell_surface_ui(mut commands: Commands, ui_root: Query<Entity, With<UiRoot>>) {
     let Ok(ui_root) = ui_root.single() else {
         return;
     };
-    // NOTE: spawn the ShellSurfaceUi container before attempting the PTY spawn.
-    // The run condition gates on `ShellSurfaceUi` being absent; if the PTY spawn
-    // failed and we returned without the container, this Update system would
-    // re-fire every frame — re-attempting the PTY and re-writing AppExit.
-    // Spawning the container first makes a failure a single attempt.
-    let mode_ui = spawn_shell_surface_container(&mut commands, ui_root);
-    let shell = commands.spawn_empty().id();
-    let env = control
-        .as_deref()
-        .map(|c| c.surface_env(shell).to_vec())
-        .unwrap_or_default();
-    match OrzmaTerminalBundle::spawn(OrzmaSpawnOptions {
-        shell: config.shell.clone(),
-        env,
-        ..default()
-    }) {
-        Ok(bundle) => {
-            commands.entity(shell).insert((
-                bundle,
-                KeyboardFocused,
-                ShellTerminal,
-                ChildOf(mode_ui),
-            ));
-            // NOTE: bind the token only after a successful spawn. gc keys on
-            // RemovedComponents<OrzmaTtyHandle> (never added on the error path),
-            // so a pre-spawn bind would leak the token if the spawn failed.
-            if let Some(c) = control.as_deref() {
-                c.bind_surface(shell);
-            }
-        }
-        Err(e) => {
-            commands.entity(shell).despawn();
-            tracing::error!(?e, "failed to spawn orzma terminal");
-            exit.write(AppExit::Success);
-        }
-    }
+    commands.spawn((
+        Name::new("Shell Surface UI"),
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        ShellSurfaceUi,
+        MuxPaneContainer,
+        ChildOf(ui_root),
+    ));
 }
 
-/// Marker for the single shell terminal entity.
-#[derive(Component)]
-struct ShellTerminal;
+/// Asks for the first pane once, after the geometry has been sent: the
+/// backend refuses `NewPane` before its first `Resize`.
+fn request_root_pane(mut commands: Commands, mut requested: Local<bool>) {
+    if *requested {
+        return;
+    }
+    *requested = true;
+    commands.trigger(PaneSpawnRequest {
+        at: NewPaneAt::Root,
+    });
+}
 
-/// Spawns the `ShellSurfaceUi` container node under `ui_root` and returns it.
-fn spawn_shell_surface_container(commands: &mut Commands, ui_root: Entity) -> Entity {
-    commands
-        .spawn((
-            Name::new("Shell Surface UI"),
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                ..default()
-            },
-            ShellSurfaceUi,
-            ChildOf(ui_root),
-        ))
-        .id()
+/// Unbinds the token and despawns the pending entity; a failed root
+/// spawn (no pane at all) exits.
+fn on_spawn_failed(
+    ev: On<MuxPaneSpawnFailed>,
+    mut commands: Commands,
+    mut exit: MessageWriter<AppExit>,
+    control: Option<Res<ControlPlaneHandle>>,
+    panes: Query<(), With<MuxPane>>,
+) {
+    if let Some(control) = control.as_deref() {
+        control.tokens.remove_entity(ev.entity);
+    }
+    commands.entity(ev.entity).despawn();
+    if panes.is_empty() {
+        tracing::error!(error = %ev.error, "root pane spawn failed, no pane left");
+        exit.write(AppExit::Success);
+    } else {
+        tracing::warn!(error = %ev.error, "pane split failed");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy_orzma_webview::TokenRegistry;
-    use std::path::PathBuf;
+    use bevy::ecs::message::Messages;
+    use orzma_tty::CellPixels;
 
-    fn build_app() -> App {
+    fn app_with_ui_root() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.world_mut().spawn((Node::default(), UiRoot));
-        app.add_plugins((
-            crate::session::SessionPlugin { shell: None },
-            ShellSurfacePlugin,
-        ));
+        app.add_plugins(ShellSurfacePlugin);
         app
     }
 
+    /// Asserts that the container spawns exactly once, with clipping
+    /// enabled so an oversized layout never bleeds outside the window.
+    ///
+    /// Case: the app starts, and the system keeps running on later
+    /// frames once the container already exists.
     #[test]
     fn spawns_shell_surface_ui_once() {
-        let mut app = build_app();
+        let mut app = app_with_ui_root();
         app.update();
-        let world = app.world_mut();
-        let mut q = world.query_filtered::<(), With<ShellSurfaceUi>>();
-        assert_eq!(q.iter(world).count(), 1, "exactly one ShellSurfaceUi");
+        {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<&Node, With<ShellSurfaceUi>>();
+            let nodes: Vec<&Node> = q.iter(world).collect();
+            assert_eq!(nodes.len(), 1, "exactly one ShellSurfaceUi");
+            assert_eq!(nodes[0].overflow, Overflow::clip());
+        }
         app.update();
         let world = app.world_mut();
         let mut q = world.query_filtered::<(), With<ShellSurfaceUi>>();
@@ -127,28 +121,64 @@ mod tests {
         );
     }
 
+    /// Asserts that the root pane is requested only once geometry
+    /// exists, and only once even across many frames.
+    ///
+    /// Case: the app starts before font metrics load (no
+    /// `PaneGeometry` yet), then the geometry arrives.
     #[test]
-    fn shell_terminal_registers_a_resolvable_webview_token() {
-        let mut app = build_app();
-        let tokens = TokenRegistry::default();
-        app.world_mut().insert_resource(ControlPlaneHandle {
-            sock_path: PathBuf::from("/tmp/ctl.sock"),
-            tokens: tokens.clone(),
+    fn root_pane_is_requested_once_geometry_exists_and_only_once() {
+        #[derive(Resource, Default)]
+        struct Spawns(u32);
+
+        let mut app = app_with_ui_root();
+        app.init_resource::<Spawns>()
+            .add_observer(|_ev: On<PaneSpawnRequest>, mut spawns: ResMut<Spawns>| spawns.0 += 1);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Spawns>().0,
+            0,
+            "no geometry yet, so no spawn request"
+        );
+
+        app.world_mut().insert_resource(PaneGeometry {
+            cell_px: CellPixels {
+                width: 8,
+                height: 16,
+            },
+            scale_factor: 1.0,
+        });
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().resource::<Spawns>().0,
+            1,
+            "exactly one spawn request once geometry exists"
+        );
+    }
+
+    /// Asserts that a spawn failure unbinds the token, despawns the
+    /// pending entity, and exits the app when no pane is left.
+    ///
+    /// Case: the only pane (the root) fails to spawn its shell.
+    #[test]
+    fn root_spawn_failure_unbinds_and_exits() {
+        let mut app = app_with_ui_root();
+        app.add_message::<AppExit>();
+        let entity = app.world_mut().spawn_empty().id();
+
+        app.world_mut().trigger(MuxPaneSpawnFailed {
+            entity,
+            error: "no space".into(),
         });
         app.update();
 
-        let shell = {
-            let world = app.world_mut();
-            world
-                .query_filtered::<Entity, With<ShellTerminal>>()
-                .single(world)
-                .expect("ShellTerminal spawned")
-        };
-        let token = format!("orzma:{}", shell.to_bits());
+        assert!(app.world().get_entity(entity).is_err());
+        let mut messages = app.world_mut().resource_mut::<Messages<AppExit>>();
         assert_eq!(
-            tokens.resolve(&token),
-            Some(shell),
-            "the shell terminal's $ORZMA_TOKEN must resolve to its own surface entity"
+            messages.drain().count(),
+            1,
+            "the last pane's spawn failure exits"
         );
     }
 }

@@ -15,7 +15,7 @@ mod sgr;
 use crate::device::modes::{KeypadMode, ScreenKind};
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
-use crate::interpreter::osc::window_title;
+use crate::interpreter::osc::{current_dir, window_title};
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::screen::tabs::CharacterTabEdit;
@@ -342,12 +342,14 @@ impl VTActor for Executor<'_> {
     }
 
     // TODO: Implement the remaining OSC handlers — the palette (OSC 4 /
-    // 10 / 11 / 12), the working directory (OSC 7), hyperlinks (OSC 8),
-    // and the clipboard (OSC 52).
+    // 10 / 11 / 12), hyperlinks (OSC 8), and the clipboard (OSC 52).
     fn osc_dispatch(&mut self, params: &[&[u8]]) {
         if let Some(title) = window_title(params) {
             self.device.set_title(Some(title.clone()));
             self.signal(VtSignal::Title(title));
+        }
+        if let Some(path) = current_dir(params) {
+            self.signal(VtSignal::CurrentDir(path));
         }
     }
 

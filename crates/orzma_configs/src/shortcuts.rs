@@ -361,43 +361,43 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub enter_vi_mode: Option<Binding>,
-    /// Focus the pane to the left (no effect until the built-in multiplexer lands).
+    /// Focus the pane to the left.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_left_pane: Option<Binding>,
-    /// Focus the pane below (no effect until the built-in multiplexer lands).
+    /// Focus the pane below.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_down_pane: Option<Binding>,
-    /// Focus the pane above (no effect until the built-in multiplexer lands).
+    /// Focus the pane above.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_up_pane: Option<Binding>,
-    /// Focus the pane to the right (no effect until the built-in multiplexer lands).
+    /// Focus the pane to the right.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_right_pane: Option<Binding>,
-    /// Split the active pane side-by-side — vertical divider (no effect until the built-in multiplexer lands).
+    /// Split the active pane side-by-side — vertical divider.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub split_vertical_pane: Option<Binding>,
-    /// Split the active pane stacked — horizontal divider (no effect until the built-in multiplexer lands).
+    /// Split the active pane stacked — horizontal divider.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub split_horizontal_pane: Option<Binding>,
-    /// Kill the active pane, after a confirm prompt (no effect until the built-in multiplexer lands).
+    /// Kill the active pane.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
@@ -773,8 +773,10 @@ pub enum SplitOrientation {
     Horizontal,
 }
 
-/// Shortcut actions. GUI-local actions plus the pane/window operations
-/// (the latter have no effect until the built-in multiplexer lands).
+/// Shortcut actions. GUI-local actions, the multiplexer's pane operations
+/// (`SelectPane`, `SplitPane`, `KillPane`), and the remaining pane/window
+/// operations that still have no effect until the built-in multiplexer
+/// grows zoom, resize, and window support.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shortcut {
     /// Paste the system clipboard into the active terminal.
@@ -787,11 +789,11 @@ pub enum Shortcut {
     Quit,
     /// Enters vi mode: Alacritty vi mode on the focused terminal.
     EnterViMode,
-    /// Focuses the neighbor pane in the given direction (no effect until the built-in multiplexer lands).
+    /// Focuses the neighbor pane in the given direction.
     SelectPane(PaneDirection),
-    /// Splits the active pane (no effect until the built-in multiplexer lands).
+    /// Splits the active pane.
     SplitPane(SplitOrientation),
-    /// Kills the active pane after a confirm prompt (no effect until the built-in multiplexer lands).
+    /// Kills the active pane.
     KillPane,
     /// Toggles zoom on the active pane (no effect until the built-in multiplexer lands).
     ZoomPane,

@@ -8,6 +8,7 @@ use crate::input::current_modifiers;
 use crate::input::keyboard::handler::KeyboardHandlerPlugin;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+use orzma_configs::shortcuts::Modifiers;
 use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
 
 mod handler;
@@ -25,7 +26,11 @@ impl Plugin for KeyboardInputPlugin {
 
 /// Returns the terminal modifier state from the `ButtonInput<KeyCode>` resource.
 pub(crate) fn current_terminal_modifiers(keys: &ButtonInput<KeyCode>) -> TerminalModifiers {
-    let m = current_modifiers(keys);
+    terminal_modifiers(current_modifiers(keys))
+}
+
+/// The terminal encoder's view of a host modifier state.
+pub(crate) fn terminal_modifiers(m: Modifiers) -> TerminalModifiers {
     TerminalModifiers {
         ctrl: m.ctrl,
         shift: m.shift,

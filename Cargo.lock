@@ -1283,12 +1283,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 
 [[package]]
-name = "bevy_orzma_tty"
+name = "bevy_orzma_mux"
 version = "0.2.0-dev"
 dependencies = [
  "bevy",
+ "crossbeam-channel",
+ "orzma_mux",
  "orzma_tty",
  "orzma_vt",
+ "tracing",
 ]
 
 [[package]]
@@ -1297,11 +1300,12 @@ version = "0.2.0-dev"
 dependencies = [
  "bevy",
  "bevy_cef",
- "bevy_orzma_tty",
+ "bevy_orzma_mux",
  "crossbeam-channel",
  "data-encoding",
  "getrandom 0.2.17",
  "libc",
+ "orzma_mux",
  "orzma_tty_renderer",
  "orzma_vt",
  "orzma_webview_host",
@@ -4991,7 +4995,7 @@ dependencies = [
  "bevy",
  "bevy_cef",
  "bevy_cef_core",
- "bevy_orzma_tty",
+ "bevy_orzma_mux",
  "bevy_orzma_webview",
  "crossbeam-channel",
  "data-encoding",
@@ -5000,6 +5004,7 @@ dependencies = [
  "libc",
  "open",
  "orzma_configs",
+ "orzma_mux",
  "orzma_tty",
  "orzma_tty_renderer",
  "orzma_vt",
@@ -5028,6 +5033,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "orzma_mux"
+version = "0.2.0-dev"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "orzma_tty",
+ "orzma_vt",
+ "tracing",
+]
+
+[[package]]
 name = "orzma_tty"
 version = "0.2.0-dev"
 dependencies = [
@@ -5036,6 +5052,7 @@ dependencies = [
  "orzma_vt",
  "portable-pty",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -5044,7 +5061,8 @@ version = "0.2.0-dev"
 dependencies = [
  "ab_glyph",
  "bevy",
- "bevy_orzma_tty",
+ "bevy_orzma_mux",
+ "orzma_mux",
  "orzma_vt",
  "rmp-serde",
  "serde",
@@ -5061,6 +5079,7 @@ name = "orzma_vt"
 version = "0.2.0-dev"
 dependencies = [
  "bitflags 2.13.0",
+ "percent-encoding",
  "vtparse",
 ]
 

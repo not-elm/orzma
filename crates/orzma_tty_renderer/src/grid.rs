@@ -4,23 +4,23 @@
 
 use crate::schema::TerminalGrid;
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::{OrzmaTtyHandle, TtyFrameSignal};
+use bevy_orzma_mux::prelude::{MuxPane, TtyFrameSignal};
 
-/// Registers the `apply_frame` observer and makes every terminal
-/// handle carry a `TerminalGrid`.
+/// Registers the `apply_frame` observer and makes every pane entity
+/// carry a `TerminalGrid`.
 ///
-/// The grid is a required component of [`OrzmaTtyHandle`] because the
-/// VT emits its bootstrap repaint exactly once: a frame delivered to a
-/// handle without a grid would be dropped, and `orzma_tty` offers no
-/// repaint request to recover it. Bevy registers a requirement only
-/// before the first entity carrying the handle exists, so the plugin
-/// must be added before any terminal is spawned.
+/// The grid is a required component of [`MuxPane`] because the backend
+/// emits its bootstrap repaint exactly once: a frame delivered to a
+/// pane entity without a grid would be dropped, and the backend offers
+/// no repaint request to recover it. Bevy registers a requirement only
+/// before the first entity carrying `MuxPane` exists, so the plugin
+/// must be added before any pane is promoted.
 #[derive(Default)]
 pub struct TerminalGridPlugin;
 
 impl Plugin for TerminalGridPlugin {
     fn build(&self, app: &mut App) {
-        app.register_required_components::<OrzmaTtyHandle, TerminalGrid>()
+        app.register_required_components::<MuxPane, TerminalGrid>()
             .add_observer(apply_frame);
     }
 }
@@ -57,9 +57,8 @@ mod tests {
         AnchoredPlacement, DisplayOffset, GridColumn, GridLine, GridPoint, InstanceId,
         PlacementSize, quiet_frame,
     };
-    use bevy_orzma_tty::prelude::OrzmaTtyPlugin;
-    use orzma_vt::prelude::Frame;
-    use std::{thread::sleep, time::Duration};
+    use orzma_mux::prelude::PaneId;
+    use orzma_vt::prelude::{Frame, GridSize};
 
     #[derive(Resource, Default)]
     struct ChangedGrids(usize);
@@ -175,28 +174,20 @@ mod tests {
         assert!(app.world().get::<TerminalGrid>(bare).is_none());
     }
 
-    /// Asserts that bytes fed to a terminal handle reach the grid the
-    /// handle brings with it, through the signal pump and the frame
-    /// observer.
+    /// Asserts that a frame signalled at a `MuxPane` entity lands in the
+    /// grid the required component gave it.
     ///
-    /// Case: the shell prints its first prompt after the terminal
-    /// spawns from its handle alone.
+    /// Case: the backend sends a pane's bootstrap frame right after the
+    /// GUI promoted its entity.
     #[test]
-    fn fed_bytes_reach_the_grid_through_the_pump() {
+    fn a_signalled_frame_reaches_the_required_grid() {
         let mut app = App::new();
-        app.add_plugins((OrzmaTtyPlugin, TerminalGridPlugin));
-        let (mut handle, _sink) = OrzmaTtyHandle::detached(4, 3);
-        handle.feed_bytes(b"hi");
-        let terminal = app.world_mut().spawn(handle).id();
-        // NOTE: The coalescer decides on wall-clock time — 3 ms of
-        // idle after the last chunk, 12 ms at most — so the pump must
-        // run after that window closed or the frame is still pending.
-        sleep(Duration::from_millis(20));
-        app.update();
-
+        app.add_plugins(TerminalGridPlugin);
+        let terminal = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let mut frame = quiet_frame();
+        frame.size = GridSize { cols: 4, rows: 3 };
+        app.world_mut().trigger(TtyFrameSignal { terminal, frame });
         let grid = app.world().get::<TerminalGrid>(terminal).unwrap();
         assert_eq!((grid.cols, grid.rows), (4, 3));
-        assert_eq!(grid.cells[0][0].text, "h");
-        assert_eq!(grid.cells[0][1].text, "i");
     }
 }

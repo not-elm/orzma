@@ -1,7 +1,33 @@
 //! The operating system commands this terminal implements.
 //!
-//! Only the window title (OSC 0 and OSC 2) is implemented; the palette,
-//! the working directory, hyperlinks, and the clipboard land later.
+//! The window title (OSC 0 and OSC 2) and the working directory (OSC 7)
+//! are implemented; the palette, hyperlinks, and the clipboard land
+//! later.
+
+use percent_encoding::percent_decode;
+use std::path::PathBuf;
+
+/// The directory an `OSC 7` reports, or `None` for every other
+/// operating system command and for a URI this parser does not accept.
+///
+/// Only the `file` scheme is accepted, and only a URI that carries an
+/// absolute path after its authority. The host — `localhost`, a real
+/// hostname, or the empty host of `file:///…` — is ignored, because
+/// every one of them names the local machine as far as a
+/// working-directory report is concerned. Percent-encoded octets in the
+/// path (`%20` for a space, the UTF-8 octets of a non-ASCII name) are
+/// decoded, since every shell integration escapes them and the path is
+/// handed to the next spawned shell as its working directory.
+pub(crate) fn current_dir(params: &[&[u8]]) -> Option<PathBuf> {
+    let [b"7", parts @ ..] = params else {
+        return None;
+    };
+    let joined = parts.join(&b';');
+    let rest = joined.strip_prefix(b"file://")?;
+    let index = rest.iter().position(|byte| *byte == b'/')?;
+    let decoded = percent_decode(&rest[index..]).decode_utf8_lossy();
+    Some(PathBuf::from(decoded.into_owned()))
+}
 
 /// The sanitized window title an `OSC 0` or `OSC 2` sets, or `None` for
 /// every other operating system command. An `OSC 0` or `OSC 2` that
@@ -96,6 +122,72 @@ fn is_disallowed(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Asserts that a `file://` URI naming an explicit host reports the
+    /// path after it.
+    ///
+    /// Case: a shell reports its directory with `OSC 7
+    /// file://localhost/tmp/project` after a `cd`.
+    #[test]
+    fn a_localhost_uri_reports_its_path() {
+        assert_eq!(
+            current_dir(&[b"7", b"file://localhost/tmp/project"]),
+            Some(PathBuf::from("/tmp/project"))
+        );
+    }
+
+    /// Asserts that a `file://` URI with an empty host reports the same
+    /// path as one naming `localhost`.
+    ///
+    /// Case: a shell reports its directory with the terser
+    /// `file:///tmp/project` form some prompts emit instead.
+    #[test]
+    fn an_empty_host_uri_reports_its_path() {
+        assert_eq!(
+            current_dir(&[b"7", b"file:///tmp/project"]),
+            Some(PathBuf::from("/tmp/project"))
+        );
+    }
+
+    /// Asserts that a URI outside the `file` scheme reports no directory.
+    ///
+    /// Case: a misbehaving program sends `OSC 7` with an `http://` URI
+    /// instead of a local path.
+    #[test]
+    fn a_foreign_scheme_is_rejected() {
+        assert!(current_dir(&[b"7", b"http://localhost/tmp/project"]).is_none());
+    }
+
+    /// Asserts that a `file://` URI with no path after its host reports
+    /// no directory.
+    ///
+    /// Case: a shell emits `OSC 7 file://localhost` without ever naming a
+    /// directory.
+    #[test]
+    fn a_uri_missing_a_path_is_rejected() {
+        assert!(current_dir(&[b"7", b"file://localhost"]).is_none());
+    }
+
+    /// Asserts that percent-encoded octets in the path are decoded, so
+    /// a directory with a space or a non-ASCII name comes back as the
+    /// directory itself, while a stray `%` is kept verbatim.
+    ///
+    /// Case: a fish or zsh integration reports `cd ~/My Project/ドキュメント`
+    /// with every reserved and non-ASCII byte escaped.
+    #[test]
+    fn percent_encoded_octets_in_the_path_are_decoded() {
+        assert_eq!(
+            current_dir(&[
+                b"7",
+                b"file:///Users/x/My%20Project/%E3%83%89%E3%82%AD%E3%83%A5"
+            ]),
+            Some(PathBuf::from("/Users/x/My Project/ドキュ"))
+        );
+        assert_eq!(
+            current_dir(&[b"7", b"file:///tmp/100%25/x%2"]),
+            Some(PathBuf::from("/tmp/100%/x%2"))
+        );
+    }
 
     /// Asserts that OSC 0 and OSC 2 set the same window title.
     ///

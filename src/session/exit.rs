@@ -1,41 +1,32 @@
-//! Child-process exit observer: sends `AppExit` when the shell quits.
+//! Session end: `MuxSessionEnded` (the last pane closed, or the backend
+//! is gone) sends `AppExit`.
 
-use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::TtyChildExitSignal;
+use bevy_orzma_mux::prelude::MuxSessionEnded;
 
-/// Registers the shell-exit observer.
+/// Registers the session-end observer.
 pub(super) struct ExitPlugin;
 
 impl Plugin for ExitPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_child_exit);
+        app.add_observer(on_session_ended);
     }
 }
 
-fn on_child_exit(
-    ev: On<TtyChildExitSignal>,
-    mut exit: MessageWriter<AppExit>,
-    terminals: Query<(), With<OrzmaTerminal>>,
-) {
-    if terminals.get(ev.entity).is_ok() {
-        exit.write(AppExit::Success);
-    }
+fn on_session_ended(_ev: On<MuxSessionEnded>, mut exit: MessageWriter<AppExit>) {
+    exit.write(AppExit::Success);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surface::OrzmaTerminal;
     use bevy::ecs::message::MessageReader;
-    use bevy_orzma_tty::prelude::TtyChildExitSignal;
 
-    /// Asserts that a `TtyChildExitSignal` on an `OrzmaTerminal` entity
-    /// sends `AppExit`.
+    /// Asserts that a `MuxSessionEnded` event sends `AppExit`.
     ///
-    /// Case: the user types `exit` and the login shell terminates.
+    /// Case: the last pane's shell exits, or the backend thread panics.
     #[test]
-    fn child_exit_sends_app_exit() {
+    fn session_end_sends_app_exit() {
         #[derive(Resource, Default)]
         struct GotExit(bool);
 
@@ -47,20 +38,16 @@ mod tests {
 
         let mut app = App::new();
         app.add_message::<AppExit>();
-        app.add_observer(on_child_exit);
+        app.add_observer(on_session_ended);
         app.init_resource::<GotExit>();
         app.add_systems(Update, capture);
 
-        let entity = app.world_mut().spawn(OrzmaTerminal).id();
-        app.world_mut().trigger(TtyChildExitSignal {
-            entity,
-            code: Some(0),
-        });
+        app.world_mut().trigger(MuxSessionEnded);
         app.update();
 
         assert!(
             app.world().resource::<GotExit>().0,
-            "AppExit should have been sent on TtyChildExitSignal",
+            "AppExit should have been sent on MuxSessionEnded",
         );
     }
 }

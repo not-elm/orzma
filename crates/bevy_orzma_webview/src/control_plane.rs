@@ -7,11 +7,12 @@ use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, NavAction, RegisterKind, ServerMsg};
 use crate::webview::apc::NonInteractive;
 use crate::webview::mount::Webview;
+use bevy::ecs::entity::Entities;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
 use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewSource};
-use bevy_orzma_tty::prelude::{OrzmaTtyHandle, RequestTtyWebviewRemove};
+use bevy_orzma_mux::prelude::{MuxPane, RequestTtyWebviewRemove};
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use orzma_vt::prelude::InstanceId;
@@ -284,6 +285,12 @@ impl OrzmaRegistry {
         self.drain_where(|v| v.owner_surface == owner_surface)
     }
 
+    /// Whether the registry holds no registrations at all.
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.by_handle.is_empty()
+    }
+
     fn drain_where(&mut self, pred: impl Fn(&OrzmaView) -> bool) -> Vec<RemovedRegistration> {
         let handles: Vec<HandleId> = self
             .by_handle
@@ -527,8 +534,8 @@ impl Plugin for ControlPlanePlugin {
 }
 
 /// Purges a despawned surface's dynamic registrations + assets. Keyed on
-/// `RemovedComponents<OrzmaTtyHandle>` so it fires for every terminal surface
-/// with no multiplexer dependency.
+/// `RemovedComponents<MuxPane>` so it fires for every pane entity the
+/// multiplexer backend closes.
 ///
 /// # Invariants
 /// Must stay ungated and run every frame: `RemovedComponents` buffers clear at
@@ -537,7 +544,7 @@ impl Plugin for ControlPlanePlugin {
 /// no-op) — gating it behind the handle would leak in that case.
 fn gc_despawned_surfaces(
     mut registry: ResMut<OrzmaRegistry>,
-    mut closed: RemovedComponents<OrzmaTtyHandle>,
+    mut closed: RemovedComponents<MuxPane>,
     handle: Option<Res<ControlPlaneHandle>>,
     orzma_assets: Res<WebviewAssetRegistryRes>,
 ) {
@@ -565,6 +572,13 @@ struct ControlRuntime(
 /// Drains queued `ControlEvent`s: mints handles for `register` and populates the
 /// `OrzmaRegistry` (+ `WebviewAssetRegistry` for `Dir`), releases on `unregister`,
 /// and purges a connection's handles on `Disconnect`.
+///
+/// `Register` and `NewInstance` are refused with `owner_gone` when the owning
+/// entity is no longer alive, so a connection that outlives its pane's
+/// despawn (and the GC that follows) cannot recreate registrations for it.
+/// Liveness, not the `MuxPane` marker, gates the refusal: a fast shell can
+/// register before the GUI has drained the backend's `PaneOpened` and
+/// inserted `MuxPane`, and that pending owner must still be accepted.
 fn apply_control_events(
     mut commands: Commands,
     mut registry: ResMut<OrzmaRegistry>,
@@ -576,6 +590,7 @@ fn apply_control_events(
     webviews: Query<(Entity, &Webview)>,
     child_of: Query<&ChildOf>,
     non_interactive: Query<(), With<NonInteractive>>,
+    entities: &Entities,
 ) {
     let Some(events) = events else {
         return;
@@ -587,19 +602,32 @@ fn apply_control_events(
                 owner_surface,
                 kind,
                 reply,
-            } => on_register(
-                &mut registry,
-                &orzma_assets,
-                connection_id,
-                owner_surface,
-                kind,
-                &reply,
-            ),
+            } => {
+                if refused_for_dead_owner(&reply, entities, owner_surface) {
+                    continue;
+                }
+                on_register(
+                    &mut registry,
+                    &orzma_assets,
+                    connection_id,
+                    owner_surface,
+                    kind,
+                    &reply,
+                )
+            }
             ControlEvent::NewInstance {
                 connection_id,
                 handle,
                 reply,
-            } => on_new_instance(&mut registry, connection_id, handle.as_str(), &reply),
+            } => {
+                let owner_surface = registry.get(&handle).map(|view| view.owner_surface);
+                if owner_surface
+                    .is_some_and(|owner| refused_for_dead_owner(&reply, entities, owner))
+                {
+                    continue;
+                }
+                on_new_instance(&mut registry, connection_id, handle.as_str(), &reply)
+            }
             ControlEvent::Unregister {
                 connection_id,
                 handle,
@@ -726,6 +754,16 @@ fn on_register(
         return;
     };
     let _ = reply.send(ServerMsg::registered(handle, instance));
+}
+
+/// Answers `owner_gone` on `reply` when `owner` no longer exists.
+/// Returns whether the request was refused.
+fn refused_for_dead_owner(reply: &Sender<ServerMsg>, entities: &Entities, owner: Entity) -> bool {
+    if entities.contains(owner) {
+        return false;
+    }
+    let _ = reply.send(ServerMsg::err("owner_gone"));
+    true
 }
 
 /// Applies a `new_instance`: mints an additional instance on a handle
@@ -1198,6 +1236,7 @@ const MAX_INLINE_HTML: usize = 4 * 1024 * 1024;
 #[cfg(test)]
 mod gc_tests {
     use super::*;
+    use orzma_mux::prelude::PaneId;
 
     /// Asserts that the garbage collector drops a view registration once
     /// the surface that owns it is despawned, and leaves it alone while
@@ -1213,8 +1252,7 @@ mod gc_tests {
         app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         app.add_systems(Update, gc_despawned_surfaces);
 
-        let (handle, _sink) = OrzmaTtyHandle::detached(4, 2);
-        let surface = app.world_mut().spawn(handle).id();
+        let surface = app.world_mut().spawn(MuxPane(PaneId(1))).id();
         app.world_mut().resource_mut::<OrzmaRegistry>().insert(
             "h0".into(),
             OrzmaView {
@@ -1473,6 +1511,163 @@ mod registry_tests {
 mod apply_tests {
     use super::*;
     use crossbeam_channel::{bounded, unbounded};
+    use orzma_mux::prelude::PaneId;
+
+    /// An app running `apply_control_events` over empty registries, and
+    /// the control-event sender that feeds it.
+    fn apply_app() -> (App, Sender<ControlEvent>) {
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        app.init_resource::<OrzmaRegistry>()
+            .init_resource::<OrzmaRpc>()
+            .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()))
+            .insert_resource(ControlEvents(ev_rx))
+            .add_systems(Update, apply_control_events);
+        (app, ev_tx)
+    }
+
+    /// Asserts that a `register` from a connection whose owner surface is
+    /// gone is refused, so GC cannot be undone by a late registration.
+    ///
+    /// Case: a program keeps its control connection open after its pane
+    /// was killed and sends another `register`.
+    #[test]
+    fn register_from_a_dead_owner_is_refused() {
+        let (mut app, ev_tx) = apply_app();
+
+        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        app.world_mut().entity_mut(owner).despawn();
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::Register {
+                connection_id: 1,
+                owner_surface: owner,
+                kind: RegisterKind::Inline {
+                    html: "<h1>x</h1>".into(),
+                    interactive: true,
+                    forward_keys: vec![],
+                    preload: vec![],
+                },
+                reply: reply_tx,
+            })
+            .unwrap();
+        app.update();
+
+        let reply = reply_rx.try_recv().expect("one reply");
+        assert!(matches!(reply, ServerMsg::Err { ref error, .. } if error == "owner_gone"));
+        assert!(app.world().resource::<OrzmaRegistry>().is_empty());
+    }
+
+    /// Asserts that a `register` from a live but still-pending owner (no
+    /// `MuxPane` yet) is accepted, since the liveness gate must not
+    /// reintroduce the race the token pre-binding was designed to avoid.
+    ///
+    /// Case: the new pane's shell connects and registers before the GUI has
+    /// drained the backend's `PaneOpened`.
+    #[test]
+    fn register_from_a_pending_owner_is_accepted() {
+        let (mut app, ev_tx) = apply_app();
+
+        let owner = app.world_mut().spawn_empty().id();
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::Register {
+                connection_id: 1,
+                owner_surface: owner,
+                kind: RegisterKind::Inline {
+                    html: "<h1>x</h1>".into(),
+                    interactive: true,
+                    forward_keys: vec![],
+                    preload: vec![],
+                },
+                reply: reply_tx,
+            })
+            .unwrap();
+        app.update();
+
+        let reply = reply_rx.try_recv().expect("one reply");
+        assert!(matches!(reply, ServerMsg::Registered { .. }));
+        let ServerMsg::Registered { handle, .. } = reply else {
+            unreachable!("checked above")
+        };
+        assert!(
+            app.world()
+                .resource::<OrzmaRegistry>()
+                .get(&handle)
+                .is_some()
+        );
+    }
+
+    /// Asserts that a `new_instance` for a handle whose owner surface has
+    /// despawned is refused with `owner_gone`, mirroring the `register`
+    /// refusal.
+    ///
+    /// Case: a program's pane was killed while its control connection
+    /// stayed open, and it asks for another placement of a handle it
+    /// registered earlier.
+    #[test]
+    fn new_instance_for_a_dead_owner_is_refused() {
+        let (mut app, ev_tx) = apply_app();
+
+        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let (register_tx, register_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::Register {
+                connection_id: 1,
+                owner_surface: owner,
+                kind: RegisterKind::Inline {
+                    html: "<h1>x</h1>".into(),
+                    interactive: true,
+                    forward_keys: vec![],
+                    preload: vec![],
+                },
+                reply: register_tx,
+            })
+            .unwrap();
+        app.update();
+        let handle = match register_rx.try_recv().expect("one reply") {
+            ServerMsg::Registered { handle, .. } => handle,
+            other => panic!("unexpected reply: {other:?}"),
+        };
+
+        app.world_mut().entity_mut(owner).despawn();
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::NewInstance {
+                connection_id: 1,
+                handle,
+                reply: reply_tx,
+            })
+            .unwrap();
+        app.update();
+
+        let reply = reply_rx.try_recv().expect("one reply");
+        assert!(matches!(reply, ServerMsg::Err { ref error, .. } if error == "owner_gone"));
+    }
+
+    /// Asserts that a `new_instance` naming an unknown handle still
+    /// replies `unknown_handle`, unaffected by the owner-liveness gate
+    /// added for the `owner_gone` refusal.
+    ///
+    /// Case: a program sends `new_instance` for a handle nobody
+    /// registered, such as a stale id left over from an earlier session.
+    #[test]
+    fn new_instance_for_an_unknown_handle_still_replies_unknown_handle() {
+        let (mut app, ev_tx) = apply_app();
+
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::NewInstance {
+                connection_id: 1,
+                handle: HandleId::from("missing"),
+                reply: reply_tx,
+            })
+            .unwrap();
+        app.update();
+
+        let reply = reply_rx.try_recv().expect("one reply");
+        assert!(matches!(reply, ServerMsg::Err { ref error, .. } if error == "unknown_handle"));
+    }
 
     #[test]
     fn apply_register_dir_mints_handle_and_populates_both_registries() {
@@ -1486,11 +1681,12 @@ mod apply_tests {
         app.insert_resource(WebviewAssetRegistryRes(orzma_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
+        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
         ev_tx
             .send(ControlEvent::Register {
                 connection_id: 1,
-                owner_surface: Entity::from_bits(11),
+                owner_surface: owner,
                 kind: RegisterKind::Dir {
                     root: dir.path().to_string_lossy().into_owned(),
                     entry: "index.html".into(),
@@ -1533,11 +1729,12 @@ mod apply_tests {
         app.insert_resource(WebviewAssetRegistryRes(orzma_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
+        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
         ev_tx
             .send(ControlEvent::Register {
                 connection_id: 1,
-                owner_surface: Entity::from_bits(11),
+                owner_surface: owner,
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
@@ -1570,11 +1767,12 @@ mod apply_tests {
         app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         app.add_systems(Update, apply_control_events);
 
+        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
         ev_tx
             .send(ControlEvent::Register {
                 connection_id: 1,
-                owner_surface: Entity::from_bits(1),
+                owner_surface: owner,
                 kind: RegisterKind::Dir {
                     root: "/nonexistent/abs/xyz".into(),
                     entry: "index.html".into(),
@@ -1915,11 +2113,12 @@ mod apply_tests {
         app.insert_resource(WebviewAssetRegistryRes(orzma_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
+        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
         ev_tx
             .send(ControlEvent::Register {
                 connection_id: 1,
-                owner_surface: Entity::from_bits(11),
+                owner_surface: owner,
                 kind: RegisterKind::Url {
                     url: "https://example.com".into(),
                     interactive: true,

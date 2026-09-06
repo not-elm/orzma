@@ -4,14 +4,15 @@
 //! The payload vocabulary ([`SelectionKind`], [`CellSide`],
 //! [`GridPoint`]) is owned by the VT layer; this module re-exports
 //! it so the requests and their payload types travel together — each
-//! request carries exactly what the VT applies.
+//! request carries exactly what the backend applies.
 //!
-//! The start, update, and clear observers route to the targeted
-//! entity's handle; the vi-cursor start and the kind change stay stubs
-//! until vi mode lands in the VT.
+//! The start, update, and clear observers send the matching
+//! `MuxCommand`; the vi-cursor start and the kind change stay stubs
+//! until vi mode lands in the backend.
 
-use crate::OrzmaTtyHandle;
+use crate::requests::PaneSender;
 use bevy::prelude::*;
+use orzma_mux::prelude::MuxCommand;
 pub use orzma_vt::prelude::{CellSide, GridPoint, SelectionKind};
 
 /// Fired by the host UI to anchor a new selection at an explicit
@@ -83,41 +84,37 @@ impl Plugin for SelectionPlugin {
     }
 }
 
-fn start_selection(e: On<RequestTtySelectionStart>, mut terms: Query<&mut OrzmaTtyHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal) {
-        tty.start_selection(e.cell, e.side, e.kind);
-    }
+fn start_selection(e: On<RequestTtySelectionStart>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::SelectionStart {
+        pane,
+        cell: e.cell,
+        side: e.side,
+        kind: e.kind,
+    });
 }
 
 fn start_selection_at_vi_cursor(_e: On<RequestTtySelectionStartAtViCursor>) {}
 
-fn update_selection(e: On<RequestTtySelectionUpdate>, mut terms: Query<&mut OrzmaTtyHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal) {
-        tty.extend_selection(e.cell, e.side);
-    }
+fn update_selection(e: On<RequestTtySelectionUpdate>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::SelectionUpdate {
+        pane,
+        cell: e.cell,
+        side: e.side,
+    });
 }
 
 fn change_selection_kind(_e: On<RequestTtySelectionKindChange>) {}
 
-fn clear_selection(e: On<RequestTtySelectionClear>, mut terms: Query<&mut OrzmaTtyHandle>) {
-    if let Ok(mut tty) = terms.get_mut(e.terminal) {
-        tty.clear_selection();
-    }
+fn clear_selection(e: On<RequestTtySelectionClear>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::SelectionClear { pane });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orzma_vt::prelude::{GridColumn, GridLine, Vt};
-
-    fn app_with_terminal() -> (App, Entity) {
-        let mut app = App::new();
-        app.add_plugins(SelectionPlugin);
-        let (mut handle, _) = OrzmaTtyHandle::detached(4, 3);
-        handle.feed_bytes(b"abcd\r\nefgh\r\nijkl");
-        let terminal = app.world_mut().spawn(handle).id();
-        (app, terminal)
-    }
+    use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
+    use orzma_mux::prelude::PaneId;
+    use orzma_vt::prelude::{GridColumn, GridLine};
 
     fn cell(line: i32, column: u16) -> GridPoint {
         GridPoint {
@@ -126,66 +123,58 @@ mod tests {
         }
     }
 
-    fn selection_text(app: &App, terminal: Entity) -> Option<String> {
-        app.world()
-            .get::<OrzmaTtyHandle>(terminal)
-            .expect("terminal entity must keep its handle")
-            .vt()
-            .selection_text()
-    }
-
-    /// Asserts that a start followed by an update reaches the VT as one
-    /// selection whose text the handle can read back.
+    /// Asserts that start, update, and clear each become their matching
+    /// `MuxCommand` for the addressed pane, and a non-pane entity sends
+    /// nothing.
     ///
-    /// Case: the user presses on a cell and drags across two more.
+    /// Case: the user presses on a cell, drags to another, then clicks
+    /// elsewhere to clear it, while a stray request targets the
+    /// separator entity.
     #[test]
-    fn start_and_update_reach_the_vt() {
-        let (mut app, terminal) = app_with_terminal();
+    fn selection_requests_become_their_matching_commands_for_the_pane() {
+        let (mut app, commands) = app_with_connection(SelectionPlugin);
+        let pane = spawn_pane(&mut app, PaneId(3));
+        let stray = app.world_mut().spawn_empty().id();
         app.world_mut().trigger(RequestTtySelectionStart {
-            terminal,
+            terminal: pane,
             cell: cell(0, 1),
             side: CellSide::Left,
             kind: SelectionKind::Simple,
         });
         app.world_mut().trigger(RequestTtySelectionUpdate {
-            terminal,
+            terminal: pane,
             cell: cell(0, 2),
             side: CellSide::Right,
         });
-        assert_eq!(selection_text(&app, terminal).as_deref(), Some("bc"));
-    }
-
-    /// Asserts that a clear request drops the selection the VT holds.
-    ///
-    /// Case: the user clicks elsewhere after selecting a row.
-    #[test]
-    fn clear_reaches_the_vt() {
-        let (mut app, terminal) = app_with_terminal();
-        app.world_mut().trigger(RequestTtySelectionStart {
-            terminal,
-            cell: cell(0, 0),
-            side: CellSide::Left,
-            kind: SelectionKind::Lines,
-        });
-        assert!(selection_text(&app, terminal).is_some());
         app.world_mut()
-            .trigger(RequestTtySelectionClear { terminal });
-        assert_eq!(selection_text(&app, terminal), None);
-    }
-
-    /// Asserts that a request aimed at an entity without a handle is
-    /// ignored rather than panicking.
-    ///
-    /// Case: a drag update is in flight while its pane is torn down.
-    #[test]
-    fn a_request_on_a_bare_entity_is_ignored() {
-        let mut app = App::new();
-        app.add_plugins(SelectionPlugin);
-        let terminal = app.world_mut().spawn_empty().id();
+            .trigger(RequestTtySelectionClear { terminal: pane });
         app.world_mut().trigger(RequestTtySelectionUpdate {
-            terminal,
+            terminal: stray,
             cell: cell(0, 0),
             side: CellSide::Left,
         });
+        let sent = sent(&commands);
+        assert_eq!(sent.len(), 3);
+        assert!(matches!(
+            sent[0],
+            MuxCommand::SelectionStart {
+                pane: PaneId(3),
+                side: CellSide::Left,
+                kind: SelectionKind::Simple,
+                ..
+            }
+        ));
+        assert!(matches!(
+            sent[1],
+            MuxCommand::SelectionUpdate {
+                pane: PaneId(3),
+                side: CellSide::Right,
+                ..
+            }
+        ));
+        assert!(matches!(
+            sent[2],
+            MuxCommand::SelectionClear { pane: PaneId(3) }
+        ));
     }
 }

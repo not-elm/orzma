@@ -6,10 +6,10 @@
 use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::bindings::{ButtonConfig, FineModifier, OrzmaMouseConfig, WheelConfig};
+use crate::input::keyboard::key_effect::KeyEffect;
 use crate::input::shortcuts::apply::ShortcutsApplyPlugin;
-use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
-use bevy::input::keyboard::{Key, KeyboardInput};
+use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
 use bevy::time::Real;
@@ -19,7 +19,6 @@ use orzma_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
 use orzma_configs::shortcuts::{
     Key as ConfigKey, KeyChord, Leader, Modifiers, Shortcut, TapModifier,
 };
-use orzma_configs::vi_mode::ViModeAction;
 use std::time::Duration;
 
 mod apply;
@@ -35,9 +34,7 @@ impl Plugin for ShortcutsPlugin {
                     .chain()
                     .in_set(InputPhase::FocusedKey),
             )
-            .add_message::<ShortcutMessage>()
-            .add_message::<ViModeMessage>()
-            .add_message::<TypeMessage>()
+            .add_message::<KeyEffectMessage>()
             .init_resource::<Shortcuts>()
             .init_resource::<LeaderPhase>()
             .init_resource::<HeldRepeatKey>()
@@ -65,64 +62,31 @@ impl Plugin for ShortcutsPlugin {
     }
 }
 
-/// One resolved keyboard shortcut action, fanned out from `resolve_key_effects`
-/// to the appliers (`crate::input::shortcuts::apply`).
-/// Excludes `Quit` / `ReleaseWebviewFocus` (handled
-/// inline in `resolve_key_effects`). `focused` is the `KeyboardFocused` surface;
-/// `in_vi_mode` gates the vi-mode re-entry and paste-suppression rules.
+/// One decided key effect with the frame context the applier needs, in
+/// press order. Replaces the three per-kind messages so a pane switch
+/// keeps its place between typed keys.
 #[derive(Message)]
-pub(in crate::input) struct ShortcutMessage {
-    /// The action to run.
-    pub action: Shortcut,
-    /// Whether the action was reached through the leader rather than a direct chord.
-    pub via_leader: bool,
+pub(in crate::input) struct KeyEffectMessage {
+    /// The decided effect to apply.
+    pub effect: KeyEffect,
     /// The `KeyboardFocused` surface, or `None` when none is focused.
     pub focused: Option<Entity>,
     /// Whether the focused surface is in vi mode.
     pub in_vi_mode: bool,
-}
-
-/// One matched `[vi-mode]` key, fanned out to the appliers
-/// (`crate::input::shortcuts::apply`).
-#[derive(Message)]
-pub(in crate::input) struct ViModeMessage {
-    /// The vi-mode action to run.
-    pub action: ViModeAction,
-    /// The `KeyboardFocused` surface, or `None` when none is focused.
-    pub focused: Option<Entity>,
-}
-
-/// One raw key to type into / forward to the focused terminal.
-#[derive(Message)]
-pub(in crate::input) struct TypeMessage {
-    /// The logical key, for text/printable-key mapping.
-    pub logical: Key,
-    /// The `KeyboardFocused` surface, or `None` when none is focused.
-    pub focused: Option<Entity>,
     /// The frame's modifier snapshot.
     pub mods: Modifiers,
 }
 
-/// The three shortcut-effect message writers `resolve_key_effects` fans out to,
-/// bundled to stay within Bevy's system-parameter limit.
-#[derive(SystemParam)]
-pub(in crate::input) struct ShortcutMessages<'w> {
-    pub shortcut: MessageWriter<'w, ShortcutMessage>,
-    pub vi_mode: MessageWriter<'w, ViModeMessage>,
-    pub type_keys: MessageWriter<'w, TypeMessage>,
-}
-
 /// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
-/// `resolve_key_effects` (`Resolve`) fans out the per-responsibility messages
-/// before the appliers (`crate::input::shortcuts::apply`,
-/// `Apply`) read them, so every message is consumed the same frame it is
-/// written.
+/// `resolve_key_effects` (`Resolve`) fans out `KeyEffectMessage` in press
+/// order before `apply_key_effects` (`Apply`) reads it, so every message is
+/// consumed the same frame it is written.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::input) enum ShortcutSet {
-    /// `resolve_key_effects`: classifies keys and fans out the typed messages.
+    /// `resolve_key_effects`: classifies keys and fans out `KeyEffectMessage`.
     Resolve,
-    /// The appliers (`crate::input::shortcuts::apply`):
-    /// read the typed messages and apply their effects.
+    /// `apply_key_effects` (`crate::input::shortcuts::apply`): reads
+    /// `KeyEffectMessage` in press order and applies each effect.
     Apply,
 }
 

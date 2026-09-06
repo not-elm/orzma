@@ -204,6 +204,7 @@ of either kind replies `{"ok":false,"error":"<code>"}`:
 | `unsupported_scheme` | `url.url` is not `http`/`https`. |
 | `unknown_handle` | `new_instance.handle` names no live registration. |
 | `not_owner` | `new_instance.handle` is registered, but by another connection. |
+| `owner_gone` | The `register`/`new_instance` request's owner surface has already despawned. |
 | `internal` | The host failed to process the request. |
 
 ### Handle semantics

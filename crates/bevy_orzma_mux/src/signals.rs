@@ -1,16 +1,18 @@
-//! Outbound `Tty*Signal` `EntityEvent` types for terminal entities,
-//! drained from the VT (`TtyBellSignal`, `TtyTitleChangedSignal`,
-//! `TtyTitleResetSignal`, `TtyClipboardStoreSignal`, `TtyCwdChangedSignal`,
-//! `TtyWebviewMountSignal`, `TtyWebviewMountRejectedSignal`,
-//! `TtyWebviewUnmountSignal`, `TtyWebviewEvictedSignal`,
-//! `TtyModeChangedSignal`, `TtyChildExitSignal`, `TtyFrameSignal`).
-//! Inbound requests fired by the host UI live in `requests.rs`.
+//! Outbound signal types the drain triggers (`TtyBellSignal`,
+//! `TtyTitleChangedSignal`, `TtyTitleResetSignal`, `TtyClipboardStoreSignal`,
+//! `TtyCwdChangedSignal`, `TtyWebviewMountSignal`,
+//! `TtyWebviewMountRejectedSignal`, `TtyWebviewUnmountSignal`,
+//! `TtyWebviewEvictedSignal`, `TtyModeChangedSignal`, `TtyChildExitSignal`,
+//! `TtyFrameSignal`), plus `trigger_vt_signal`, the helper that turns one
+//! drained `VtSignal` into its matching `EntityEvent`.
+//! `TtySelectionTextSignal` answers a mux `CopySelection` request instead
+//! of draining from a VT, so it is a plain `Event` rather than an
+//! `EntityEvent`. Inbound requests fired by the host UI live in
+//! `requests.rs`.
 
-use crate::OrzmaTtyHandle;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::prelude::*;
-use orzma_tty::prelude::*;
 use orzma_vt::prelude::*;
 use std::path::PathBuf;
 
@@ -126,33 +128,15 @@ pub struct TtyFrameSignal {
     pub frame: Frame,
 }
 
-pub(crate) struct OrzmaTtySignalPlugin;
-
-impl Plugin for OrzmaTtySignalPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Update, pump_terminals);
-    }
+/// The backend's answer to a `RequestTtyCopySelection`: the selected
+/// text (`None` when the pane was gone or the selection empty). A plain
+/// `Event` because the requesting pane may already be gone.
+#[derive(Event, Debug, Clone)]
+pub struct TtySelectionTextSignal {
+    pub text: Option<String>,
 }
 
-fn pump_terminals(mut commands: Commands, mut terms: Query<(Entity, &mut OrzmaTtyHandle)>) {
-    for (terminal, mut term) in terms.iter_mut() {
-        let o = term.pump();
-        for signal in o.signals {
-            match signal {
-                TtySignal::ChildExit { code } => commands.trigger(TtyChildExitSignal {
-                    entity: terminal,
-                    code,
-                }),
-                TtySignal::Vt(signal) => trigger_vt_signal(&mut commands, terminal, signal),
-            }
-        }
-        if let Some(frame) = o.frame {
-            commands.trigger(TtyFrameSignal { terminal, frame });
-        }
-    }
-}
-
-fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signal: VtSignal) {
+pub(crate) fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signal: VtSignal) {
     match signal {
         VtSignal::Bell => commands.trigger(TtyBellSignal { terminal }),
         VtSignal::Title(title) => commands.trigger(TtyTitleChangedSignal { terminal, title }),

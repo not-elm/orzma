@@ -44,24 +44,3 @@ fn on_copy(ev: On<CopyAction>, mut clipboard: ResMut<Clipboard>) {
         }
     }
 }
-
-#[cfg(test)]
-pub(crate) mod test_support {
-    use super::*;
-
-    /// Test-only sink recording every `CopyAction`'s text, so copy / yank
-    /// observers can be verified without round-tripping a real OS clipboard
-    /// (unavailable when headless, and clobbering the developer's clipboard).
-    #[derive(Resource, Default)]
-    pub(crate) struct CapturedCopyActions(pub(crate) Vec<String>);
-
-    /// Registers `CapturedCopyActions` plus an observer that appends each
-    /// triggered `CopyAction`'s text to it.
-    pub(crate) fn capture_copy_actions(app: &mut App) {
-        app.init_resource::<CapturedCopyActions>().add_observer(
-            |ev: On<CopyAction>, mut captured: ResMut<CapturedCopyActions>| {
-                captured.0.push(ev.text.clone());
-            },
-        );
-    }
-}

@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 bitflags = { workspace = true }
+percent-encoding = "2"
 vtparse = { version = "0.7.0" }
 
 [lints]

@@ -4,7 +4,7 @@
 use super::mount::{WebviewMountContext, WebviewParams, mount, unmount};
 use crate::control_plane::OrzmaRegistry;
 use bevy::prelude::*;
-use bevy_orzma_tty::prelude::{
+use bevy_orzma_mux::prelude::{
     TtyWebviewMountRejectedSignal, TtyWebviewMountSignal, TtyWebviewUnmountSignal,
 };
 

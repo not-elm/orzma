@@ -125,14 +125,14 @@ release-webview-focus = "<Leader>u"
 quit                  = "Cmd+Q"
 enter-vi-mode         = "<Leader>s"    # Enters Alacritty vi mode.
 
-# --- pane actions (no effect until the built-in multiplexer lands) ---
+# --- pane actions ---
 select-left-pane      = "<Leader>h"    # select-pane -L
 select-down-pane      = "<Leader>j"    # select-pane -D
 select-up-pane        = "<Leader>k"    # select-pane -U
 select-right-pane     = "<Leader>l"    # select-pane -R
 split-vertical-pane   = "<Leader>i"    # split-window -h (side-by-side)
 split-horizontal-pane = "<Leader>o"    # split-window -v (stacked)
-kill-pane             = "<Leader>p"    # kill-pane, after a confirm prompt
+kill-pane             = "<Leader>p"    # kill-pane
 zoom-pane             = "<Leader>z"    # resize-pane -Z
 resize-left-pane      = "<Leader:r>Shift+H"  # resize-pane -L 5 (repeatable)
 resize-down-pane      = "<Leader:r>Shift+J"  # resize-pane -D 5 (repeatable)
@@ -255,17 +255,17 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `release-webview-focus` | `<Leader>u` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit orzma. |
 | `enter-vi-mode` | `<Leader>s` | Enter vi mode. |
-| `select-left-pane` | `<Leader>h` | Focus the pane to the left (no effect until the built-in multiplexer lands). |
-| `select-down-pane` | `<Leader>j` | Focus the pane below (no effect until the built-in multiplexer lands). |
-| `select-up-pane` | `<Leader>k` | Focus the pane above (no effect until the built-in multiplexer lands). |
-| `select-right-pane` | `<Leader>l` | Focus the pane to the right (no effect until the built-in multiplexer lands). |
+| `select-left-pane` | `<Leader>h` | Focus the pane to the left. |
+| `select-down-pane` | `<Leader>j` | Focus the pane below. |
+| `select-up-pane` | `<Leader>k` | Focus the pane above. |
+| `select-right-pane` | `<Leader>l` | Focus the pane to the right. |
 | `resize-left-pane` | `<Leader:r>Shift+H` | Resize the active pane's border left by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
 | `resize-down-pane` | `<Leader:r>Shift+J` | Resize the active pane's border down by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
 | `resize-up-pane` | `<Leader:r>Shift+K` | Resize the active pane's border up by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
 | `resize-right-pane` | `<Leader:r>Shift+L` | Resize the active pane's border right by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
-| `split-vertical-pane` | `<Leader>i` | Split the active pane side-by-side (no effect until the built-in multiplexer lands). |
-| `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (no effect until the built-in multiplexer lands). |
-| `kill-pane` | `<Leader>p` | Kill the active pane, after a confirm prompt (no effect until the built-in multiplexer lands). |
+| `split-vertical-pane` | `<Leader>i` | Split the active pane side by side (vertical divider); the new pane becomes active. |
+| `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (horizontal divider); the new pane becomes active. |
+| `kill-pane` | `<Leader>p` | Kill the active pane; its shell is terminated. |
 | `zoom-pane` | `<Leader>z` | Toggle zoom on the active pane (no effect until the built-in multiplexer lands). |
 | `new-window` | `<Leader>c` | Open a new window (no effect until the built-in multiplexer lands). |
 | `kill-window` | `<Leader>Shift+X` | Kill the active window, after a confirm prompt (no effect until the built-in multiplexer lands). |
@@ -283,14 +283,15 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `select-window-9` | `<Leader>9` | Switch to the window at index 9 (no effect until the built-in multiplexer lands). |
 | `rename-window` | `<Leader>r` | Open the rename prompt for the active window (no effect until the built-in multiplexer lands). |
 
-Note: some actions have no effect yet. `enter-vi-mode` works today (Alacritty
-vi mode). All 27 pane/window/rename actions above (`select-*-pane`,
-`split-*-pane`, `kill-pane`, `zoom-pane`, `resize-*-pane`, `new-window`,
-`kill-window`, `next-window`, `previous-window`, `select-window-0`…`9`,
-`rename-window`) are no-ops until the built-in multiplexer lands — the
+Note: some actions have no effect yet. `paste`, `copy`, `quit`,
+`release-webview-focus`, `enter-vi-mode` (Alacritty vi mode), `select-*-pane`,
+`split-*-pane`, and `kill-pane` all work today through the built-in
+multiplexer backend. The remaining 20 window/zoom/resize/rename actions above
+(`zoom-pane`, `resize-*-pane`, `new-window`, `kill-window`, `next-window`,
+`previous-window`, `select-window-0`…`9`, `rename-window`) are no-ops until
+the built-in multiplexer grows zoom, resize, and window support — the
 bindings are accepted and validated at startup, but pressing them does
-nothing. `paste`, `copy`, `quit`, `release-webview-focus`, and `enter-vi-mode`
-work today. This applies whether an action is bound directly or as a
+nothing. This applies whether an action is bound directly or as a
 leader-scoped key (e.g. `<Leader>s`), and regardless of whether the leader is
 a chord or a modifier tap.
 
