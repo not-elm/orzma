@@ -21,11 +21,6 @@ cargo_bin_dir := if env("CARGO_HOME", "") == "" { home_directory() / ".cargo" / 
 
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
-# Workspace members that are not yet ported to Windows (see
-# docs/superpowers/specs/2026-09-06-windows-platform-support-design.md).
-windows_excludes := "--exclude ratatui_orzma --exclude orzmd --exclude orzbrowser"
-workspace_excludes := if os() == "windows" { windows_excludes } else { "" }
-
 # list all recipes (also the default when run with no arguments)
 default: help
 
@@ -55,14 +50,14 @@ build:
 build:
     if (-not $env:CEF_PATH) { $env:CEF_PATH = "{{ cef_cache_dir }}" }; cargo build
 
-# run every Rust test (skips the crates not yet ported on Windows)
+# run every Rust test
 [unix]
 test:
     cargo test --workspace
 
 [windows]
 test:
-    if (-not $env:CEF_PATH) { $env:CEF_PATH = "{{ cef_cache_dir }}" }; $env:PATH = "$PWD\target\debug;$env:PATH"; cargo test --workspace {{ windows_excludes }}
+    if (-not $env:CEF_PATH) { $env:CEF_PATH = "{{ cef_cache_dir }}" }; $env:PATH = "$PWD\target\debug;$env:PATH"; cargo test --workspace
 
 install-apps:
     pnpm i
@@ -76,7 +71,7 @@ clean:
 
 # clippy --fix + rustfmt + biome lint:fix
 fix-lint:
-    cargo clippy --workspace {{ workspace_excludes }} --fix --allow-dirty --allow-staged
+    cargo clippy --workspace --fix --allow-dirty --allow-staged
     cargo fmt
     pnpm lint:fix
 

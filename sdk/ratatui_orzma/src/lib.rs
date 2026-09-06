@@ -14,6 +14,7 @@ mod handler;
 mod keychord;
 mod protocol;
 mod session;
+mod uds;
 mod webview;
 mod widget;
 

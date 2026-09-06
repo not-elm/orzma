@@ -27,8 +27,9 @@ The workspace root package is the one and only binary; library crates live under
 - `crates/orzma_configs` (`orzma_configs`) — config loader. Reads `~/.config/orzma/config.toml` (or `$ORZMA_CONFIG` / `$XDG_CONFIG_HOME` overrides) and resolves it against built-in defaults.
 - **Platforms.** macOS is the primary platform. Windows 10 1809+ / 11 (x64) is
   supported for the `orzma` binary; `sdk/ratatui_orzma`, `apps/orzmd`, and
-  `apps/orzbrowser` are Unix-only and are excluded from Windows `--workspace`
-  commands by the justfile (`windows_excludes`). Linux is planned.
+  `apps/orzbrowser` build, test, and install there and reach the control
+  socket through `uds_windows`, but ConPTY strips the APC `mount` sequence, so
+  a webview cannot yet be mounted from a Windows pane. Linux is planned.
 
 In-process webview rendering is provided by the external `bevy_cef` crate (crates.io `0.12`, CEF v149 pinned to `149.3.0+149.0.6` in the justfile). Both the renderer and the helper render process come from `bevy_cef` / `export-cef-dir`; see `just setup-cef`.
 

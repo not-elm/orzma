@@ -7,12 +7,12 @@ use crate::handler::BoxedHandler;
 use crate::protocol::{
     ClientMsg, HandleId, IncomingCall, IncomingEvent, RegisterKind, ServerReply,
 };
+use crate::uds::UnixStream;
 use crate::webview::{SharedWriter, Webview, WebviewHandle, WebviewInstance};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use ratatui::layout::Rect;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
-use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -453,19 +453,23 @@ fn resolve_orzma_token() -> Option<String> {
 fn connect_sock(sock: &str) -> OrzmaResult<UnixStream> {
     match UnixStream::connect(sock) {
         Ok(stream) => Ok(stream),
-        Err(cause)
-            if matches!(
-                cause.kind(),
-                ErrorKind::NotFound | ErrorKind::ConnectionRefused
-            ) =>
-        {
-            Err(OrzmaError::SocketUnavailable {
-                path: sock.to_owned(),
-                cause,
-            })
-        }
+        Err(cause) if is_stale_socket_error(cause.kind()) => Err(OrzmaError::SocketUnavailable {
+            path: sock.to_owned(),
+            cause,
+        }),
         Err(e) => Err(OrzmaError::Io(e)),
     }
+}
+
+/// Whether a connect failure means the socket's orzma is gone rather than a
+/// genuine IO fault.
+///
+/// Windows AF_UNIX reports a socket whose parent directory has been removed as
+/// `WSAENETDOWN` (`NetworkDown`), and a missing file or dead listener as
+/// `ConnectionRefused`; Unix reports `NotFound` / `ConnectionRefused`.
+fn is_stale_socket_error(kind: ErrorKind) -> bool {
+    matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused)
+        || (cfg!(windows) && kind == ErrorKind::NetworkDown)
 }
 
 /// Emits CUP + mount for new and moved placements, and unmount for instances
@@ -1242,7 +1246,7 @@ mod tests {
     /// placement of a view it registered earlier.
     #[test]
     fn a_reconnect_waits_for_the_registrations_before_it_dials() {
-        use std::os::unix::net::UnixListener;
+        use crate::uds::UnixListener;
         let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("new.sock");
@@ -1595,7 +1599,7 @@ mod tests {
     /// Case: one of two placements of a registration starts painting.
     #[test]
     fn reader_thread_inserts_compositing_into_shared_map() {
-        use std::os::unix::net::UnixListener;
+        use crate::uds::UnixListener;
 
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("test.sock");
@@ -1641,7 +1645,7 @@ mod tests {
     /// Case: a placement is unmounted after having composited.
     #[test]
     fn reader_thread_updates_compositing_to_false() {
-        use std::os::unix::net::UnixListener;
+        use crate::uds::UnixListener;
 
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("test2.sock");
@@ -1684,9 +1688,9 @@ mod tests {
     #[test]
     fn reader_thread_routes_event_into_registered_queues() {
         use crate::events::{EventDecl, EventQueues, EventRegistry};
+        use crate::uds::UnixListener;
         use std::any::TypeId;
         use std::io::Write;
-        use std::os::unix::net::UnixListener;
 
         struct Hello;
         let dir = tempfile::tempdir().unwrap();

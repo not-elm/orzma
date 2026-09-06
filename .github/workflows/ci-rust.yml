@@ -85,10 +85,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "ci"
-      - if: runner.os == 'Linux'
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - if: runner.os == 'Windows'
-        run: cargo clippy --workspace --exclude ratatui_orzma --exclude orzmd --exclude orzbrowser --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     name: test (${{ matrix.os }})
@@ -134,7 +131,7 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "$env:GITHUB_WORKSPACE\target\debug;$env:PATH"
-          cargo test --workspace --exclude ratatui_orzma --exclude orzmd --exclude orzbrowser --tests -- --test-threads=1
+          cargo test --workspace --tests -- --test-threads=1
 
   doc:
     name: doc

@@ -48,9 +48,10 @@ the exported directory is not version-checked.
 The first pane opens PowerShell 7 if `pwsh` is on `PATH`, else Windows
 PowerShell, else `cmd.exe`; set `[orzma] shell` in
 `~/.config/orzma/config.toml` to override (a configured path must carry its
-`.exe` extension). `orzmd`, `orzbrowser`, and the `ratatui_orzma` SDK are not
-yet available on Windows; `cargo build --workspace` is Unix-only for now (use
-`just build` / `just test`).
+`.exe` extension). `just install-apps` builds and installs `orzmd` and
+`orzbrowser` into the cargo bin directory, the same as on macOS. They connect
+to orzma's control socket from a Windows pane, but ConPTY strips the APC
+sequence that mounts a webview, so no webview appears in a Windows pane yet.
 
 ## Features
 
