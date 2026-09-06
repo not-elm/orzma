@@ -333,7 +333,7 @@ pub(crate) fn unmount(
             .map(|live| live.entity)
             .collect();
     for entity in targets {
-        params.commands.entity(entity).despawn();
+        params.commands.entity(entity).try_despawn();
     }
 }
 
@@ -470,7 +470,7 @@ fn on_webview_evicted(
         if let Ok(view) = views.get(child)
             && event.placements.contains(&view.instance)
         {
-            commands.entity(child).despawn();
+            commands.entity(child).try_despawn();
         }
     }
 }
@@ -1668,6 +1668,28 @@ mod tests {
         app.update();
         assert_eq!(webview_children_of(&app, terminal).len(), 1);
         assert_eq!(slot_of(&app, terminal, clock), Some(1));
+    }
+
+    /// Asserts that two evictions naming the same live placement in one batch
+    /// despawn it once and raise no error for the second.
+    ///
+    /// Case: orzmd exits — leaving the alternate screen evicts its placement in
+    /// the same frame the control socket's disconnect releases it.
+    #[test]
+    fn a_re_delivered_eviction_in_the_same_batch_is_a_no_op() {
+        use crate::test_support::warnings_containing;
+        let (mut app, terminal, memo) = app_with_registration();
+        mount(&mut app, terminal, memo);
+        let before = warnings_containing("Entity despawned").len();
+
+        batch(&mut app, terminal, vec![Op::Evict(memo), Op::Evict(memo)]);
+
+        assert!(webview_children_of(&app, terminal).is_empty());
+        assert_eq!(
+            warnings_containing("Entity despawned").len(),
+            before,
+            "the second eviction must not report a despawn error"
+        );
     }
 
     #[test]

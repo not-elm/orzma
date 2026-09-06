@@ -5,6 +5,8 @@
 //! drives `KeyboardFocused`.
 
 mod control_plane;
+#[cfg(test)]
+mod test_support;
 mod webview;
 
 use bevy::prelude::*;
@@ -17,6 +19,7 @@ use webview::mount::WebviewPlugin;
 pub use webview::mount::{
     ForwardKeys, Webview, WebviewHit, focused_webview_of, webview_hit_at, webview_local_dip,
 };
+use webview::paint::PaintPlugin;
 use webview::render::RenderPlugin;
 pub use webview::render::cef_plugin;
 
@@ -37,6 +40,7 @@ impl Plugin for OrzmaWebviewPlugin {
             RenderPlugin,
             ApcPlugin,
             WebviewPlugin,
+            PaintPlugin,
         ));
     }
 }

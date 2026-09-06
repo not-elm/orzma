@@ -1105,7 +1105,7 @@ fn on_unmount(
     };
     for (entity, view) in webviews {
         if view.instance == id && child_of.get(entity).map(|c| c.parent()) == Ok(owner_surface) {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
     commands.trigger(RequestTtyWebviewRemove {
@@ -1128,7 +1128,7 @@ fn release_registrations(
 ) {
     for (entity, view) in webviews {
         if removed.iter().any(|entry| entry.handle == view.handle) {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
     for entry in removed {
@@ -1937,6 +1937,66 @@ mod apply_tests {
         app.add_systems(Update, apply_control_events);
         app.update();
         assert!(app.world().get_resource::<ControlEvents>().is_none());
+    }
+
+    /// Asserts that releasing a registration whose webview was already
+    /// despawned earlier in the same flush is a no-op rather than an error.
+    ///
+    /// Case: orzmd exits — the alternate-screen eviction and the socket
+    /// disconnect tear down the same webview in one frame.
+    #[test]
+    fn release_after_an_eviction_in_the_same_flush_is_a_no_op() {
+        use crate::test_support::warnings_containing;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        let surface = app.world_mut().spawn_empty().id();
+        let handle = HandleId::from("h");
+        let mut reg = OrzmaRegistry::default();
+        reg.insert(
+            handle.clone(),
+            OrzmaView {
+                source: OrzmaSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 5,
+                forward_keys: vec![],
+                preload: vec![],
+                instances: Vec::new(),
+            },
+        );
+        let instance = reg.mint_instance(&handle).expect("the handle mints");
+        let child = app
+            .world_mut()
+            .spawn((
+                Webview {
+                    handle: handle.clone(),
+                    instance,
+                    slot: 0,
+                    rows: 10,
+                    cols: 40,
+                },
+                ChildOf(surface),
+            ))
+            .id();
+        let removed = reg.remove_by_connection(5);
+        let before = warnings_containing("Entity despawned").len();
+
+        app.world_mut()
+            .run_system_once(
+                move |mut commands: Commands, webviews: Query<(Entity, &Webview)>| {
+                    commands.entity(child).despawn();
+                    release_registrations(&mut commands, &webviews, &removed);
+                },
+            )
+            .expect("the teardown system runs");
+
+        assert!(app.world().get_entity(child).is_err());
+        assert_eq!(
+            warnings_containing("Entity despawned").len(),
+            before,
+            "the release must not report a despawn error for the evicted webview"
+        );
     }
 
     #[test]
