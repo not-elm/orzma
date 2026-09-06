@@ -6,7 +6,8 @@
 use crate::requests::{
     copy::CopyPlugin, key_input::KeyInputPlugin, mouse_input::MouseInputPlugin,
     pane::PaneActionPlugin, paste::PastePlugin, scroll::ScrollPlugin, selection::SelectionPlugin,
-    vi_mode::ViModePlugin, vi_motion::ViMotionPlugin, webview_remove::WebviewRemovePlugin,
+    vi_mode::ViModePlugin, vi_motion::ViMotionPlugin, webview_mount::WebviewMountPlugin,
+    webview_remove::WebviewRemovePlugin,
 };
 use crate::{MuxConnection, MuxPane};
 use bevy::ecs::system::SystemParam;
@@ -22,6 +23,7 @@ mod scroll;
 mod selection;
 mod vi_mode;
 mod vi_motion;
+mod webview_mount;
 mod webview_remove;
 
 pub use copy::RequestTtyCopySelection;
@@ -37,6 +39,7 @@ pub use selection::{
 };
 pub use vi_mode::{RequestTtyViMode, ViModeSwitch};
 pub use vi_motion::{RequestTtyViMotion, ViMotion};
+pub use webview_mount::RequestTtyWebviewMount;
 pub use webview_remove::RequestTtyWebviewRemove;
 
 pub(crate) struct OrzmaEventRequestPlugin;
@@ -53,6 +56,7 @@ impl Plugin for OrzmaEventRequestPlugin {
             SelectionPlugin,
             ViModePlugin,
             ViMotionPlugin,
+            WebviewMountPlugin,
             WebviewRemovePlugin,
         ));
     }
