@@ -8,12 +8,22 @@ use orzma_vt::prelude::GridSize;
 use std::cmp::Reverse;
 
 /// The solved geometry of every pane and separator.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Solved {
+    /// The extent the panes tile: the window, widened per axis to the
+    /// tree's minimum when the window is smaller.
+    pub size: GridSize,
     /// Every pane's rectangle in whole-window cell coordinates.
     pub panes: Vec<PaneRect>,
     /// Every divider between adjacent panes.
     pub separators: Vec<Separator>,
+}
+
+impl Solved {
+    /// The rectangle of `pane`, when it is in the tree.
+    pub fn rect_of(&self, pane: PaneId) -> Option<PaneRect> {
+        self.panes.iter().find(|r| r.pane == pane).copied()
+    }
 }
 
 /// A split was refused because the target leaf is narrower than three
@@ -100,12 +110,7 @@ impl LayoutTree {
         new: PaneId,
         window: GridSize,
     ) -> Result<(), SplitRefused> {
-        let solved = self.solve(window);
-        let rect = solved
-            .panes
-            .iter()
-            .find(|r| r.pane == target)
-            .ok_or(SplitRefused)?;
+        let rect = self.solve(window).rect_of(target).ok_or(SplitRefused)?;
         let along = match orientation {
             SplitOrientation::Vertical => rect.cols,
             SplitOrientation::Horizontal => rect.rows,
@@ -132,10 +137,9 @@ impl LayoutTree {
         };
         let (next, removed) = root.without(pane);
         self.root = next;
-        if !removed {
-            return false;
+        if removed {
+            self.history.retain(|p| *p != pane);
         }
-        self.history.retain(|p| *p != pane);
         removed
     }
 
@@ -158,7 +162,7 @@ impl LayoutTree {
             return false;
         };
         let solved = self.solve(window);
-        let Some(from) = solved.panes.iter().find(|r| r.pane == active).copied() else {
+        let Some(from) = solved.rect_of(active) else {
             return false;
         };
         let best = solved
@@ -180,16 +184,24 @@ impl LayoutTree {
     /// per axis so every pane keeps at least one cell; the caller clips
     /// what overflows.
     pub fn solve(&self, window: GridSize) -> Solved {
-        let mut solved = Solved::default();
+        let mut solved = Solved {
+            size: window,
+            panes: Vec::new(),
+            separators: Vec::new(),
+        };
         let Some(root) = &self.root else {
             return solved;
         };
         let min = root.min_size();
+        solved.size = GridSize {
+            cols: window.cols.max(min.cols),
+            rows: window.rows.max(min.rows),
+        };
         let rect = Rect {
             x: 0,
             y: 0,
-            cols: window.cols.max(min.cols),
-            rows: window.rows.max(min.rows),
+            cols: solved.size.cols,
+            rows: solved.size.rows,
         };
         root.solve_into(&mut solved, rect);
         solved
@@ -211,7 +223,7 @@ impl LayoutTree {
     }
 
     fn contains(&self, pane: PaneId) -> bool {
-        self.panes().contains(&pane)
+        self.root.as_ref().is_some_and(|root| root.has_leaf(pane))
     }
 
     fn activate(&mut self, pane: PaneId) {
@@ -227,6 +239,13 @@ impl LayoutTree {
 }
 
 impl Node {
+    fn has_leaf(&self, pane: PaneId) -> bool {
+        match self {
+            Node::Leaf(id) => *id == pane,
+            Node::Split(s) => s.first.has_leaf(pane) || s.second.has_leaf(pane),
+        }
+    }
+
     fn collect_leaves(&self, out: &mut Vec<PaneId>) {
         match self {
             Node::Leaf(id) => out.push(*id),
@@ -349,58 +368,33 @@ impl Node {
     }
 
     /// The tree without `pane`: the split immediately containing the
-    /// removed leaf collapses into its sibling, but an ancestor split
-    /// whose child only shrank (rather than emptied) keeps its own
-    /// sibling and structure, updated with that shrunk child. Returns
-    /// `(new subtree or None when emptied, removed)`.
+    /// removed leaf collapses into its sibling, while an ancestor split
+    /// whose child only shrank keeps its structure around that child.
+    /// Returns `(new subtree or None when emptied, removed)`. Both
+    /// children are walked; pane ids are unique, so at most one removes.
     fn without(self, pane: PaneId) -> (Option<Node>, bool) {
         match self {
             Node::Leaf(id) if id == pane => (None, true),
             Node::Leaf(id) => (Some(Node::Leaf(id)), false),
-            Node::Split(s) => {
-                let Split {
-                    orientation,
-                    ratio,
-                    first,
-                    second,
-                } = s;
+            Node::Split(Split {
+                orientation,
+                ratio,
+                first,
+                second,
+            }) => {
                 let (first, removed_first) = first.without(pane);
-                if removed_first {
-                    let rebuilt = match first {
-                        None => *second,
-                        Some(first) => Node::Split(Split {
-                            orientation,
-                            ratio,
-                            first: Box::new(first),
-                            second,
-                        }),
-                    };
-                    return (Some(rebuilt), true);
-                }
-                let first = first.expect("an unremoved subtree is never emptied");
                 let (second, removed_second) = second.without(pane);
-                if removed_second {
-                    let rebuilt = match second {
-                        None => first,
-                        Some(second) => Node::Split(Split {
-                            orientation,
-                            ratio,
-                            first: Box::new(first),
-                            second: Box::new(second),
-                        }),
-                    };
-                    return (Some(rebuilt), true);
-                }
-                let second = second.expect("an unremoved subtree is never emptied");
-                (
-                    Some(Node::Split(Split {
+                let node = match (first, second) {
+                    (Some(first), Some(second)) => Some(Node::Split(Split {
                         orientation,
                         ratio,
                         first: Box::new(first),
                         second: Box::new(second),
                     })),
-                    false,
-                )
+                    (Some(only), None) | (None, Some(only)) => Some(only),
+                    (None, None) => None,
+                };
+                (node, removed_first || removed_second)
             }
         }
     }
@@ -434,11 +428,7 @@ mod tests {
     const W: GridSize = GridSize { cols: 80, rows: 24 };
 
     fn rect_of(solved: &Solved, pane: PaneId) -> PaneRect {
-        *solved
-            .panes
-            .iter()
-            .find(|r| r.pane == pane)
-            .expect("pane rect")
+        solved.rect_of(pane).expect("pane rect")
     }
 
     fn two_side_by_side() -> LayoutTree {

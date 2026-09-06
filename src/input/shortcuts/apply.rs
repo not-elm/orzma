@@ -4,6 +4,7 @@
 //! so the mux backend receives every effect in the order the keys were
 //! pressed.
 
+use crate::input::keyboard::terminal_modifiers;
 use crate::{
     action::{
         clipboard::PasteAction,
@@ -25,7 +26,6 @@ use orzma_mux::prelude::{
     NewPaneAt, PaneDirection as MuxPaneDirection, PaneTarget,
     SplitOrientation as MuxSplitOrientation,
 };
-use orzma_tty::prelude::TerminalModifiers;
 
 pub(super) struct ShortcutsApplyPlugin;
 
@@ -68,12 +68,7 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
                 {
                     commands.trigger(RequestActiveKeyInput {
                         key,
-                        modifiers: TerminalModifiers {
-                            ctrl: msg.mods.ctrl,
-                            shift: msg.mods.shift,
-                            alt: msg.mods.alt,
-                            meta: msg.mods.meta,
-                        },
+                        modifiers: terminal_modifiers(msg.mods),
                     });
                 }
             }

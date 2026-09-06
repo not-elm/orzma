@@ -4,7 +4,7 @@
 use crate::surface::OrzmaTerminal;
 use crate::ui::ShellSurfaceUi;
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::{MuxConnection, PaneRegistry};
+use bevy_orzma_mux::prelude::{MuxConnection, PaneRegistry, absolute_px_node};
 use bevy_orzma_webview::ControlPlaneHandle;
 use orzma_mux::prelude::{MuxCommand, NewPaneAt, RequestId};
 
@@ -61,14 +61,7 @@ fn on_pane_spawn_request(
 /// A zero-sized absolute node, so a pending pane covers nothing until
 /// its first `Layout`.
 fn pending_pane_node() -> Node {
-    Node {
-        position_type: PositionType::Absolute,
-        left: Val::Px(0.0),
-        top: Val::Px(0.0),
-        width: Val::Px(0.0),
-        height: Val::Px(0.0),
-        ..default()
-    }
+    absolute_px_node(0.0, 0.0, 0.0, 0.0)
 }
 
 #[cfg(test)]

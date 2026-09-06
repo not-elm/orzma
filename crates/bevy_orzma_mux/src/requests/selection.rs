@@ -10,7 +10,7 @@
 //! `MuxCommand`; the vi-cursor start and the kind change stay stubs
 //! until vi mode lands in the backend.
 
-use crate::{MuxConnection, MuxPane};
+use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzma_mux::prelude::MuxCommand;
 pub use orzma_vt::prelude::{CellSide, GridPoint, SelectionKind};
@@ -84,49 +84,29 @@ impl Plugin for SelectionPlugin {
     }
 }
 
-fn start_selection(
-    e: On<RequestTtySelectionStart>,
-    connection: Res<MuxConnection>,
-    panes: Query<&MuxPane>,
-) {
-    if let Ok(pane) = panes.get(e.terminal) {
-        connection.0.send(MuxCommand::SelectionStart {
-            pane: pane.0,
-            cell: e.cell,
-            side: e.side,
-            kind: e.kind,
-        });
-    }
+fn start_selection(e: On<RequestTtySelectionStart>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::SelectionStart {
+        pane,
+        cell: e.cell,
+        side: e.side,
+        kind: e.kind,
+    });
 }
 
 fn start_selection_at_vi_cursor(_e: On<RequestTtySelectionStartAtViCursor>) {}
 
-fn update_selection(
-    e: On<RequestTtySelectionUpdate>,
-    connection: Res<MuxConnection>,
-    panes: Query<&MuxPane>,
-) {
-    if let Ok(pane) = panes.get(e.terminal) {
-        connection.0.send(MuxCommand::SelectionUpdate {
-            pane: pane.0,
-            cell: e.cell,
-            side: e.side,
-        });
-    }
+fn update_selection(e: On<RequestTtySelectionUpdate>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::SelectionUpdate {
+        pane,
+        cell: e.cell,
+        side: e.side,
+    });
 }
 
 fn change_selection_kind(_e: On<RequestTtySelectionKindChange>) {}
 
-fn clear_selection(
-    e: On<RequestTtySelectionClear>,
-    connection: Res<MuxConnection>,
-    panes: Query<&MuxPane>,
-) {
-    if let Ok(pane) = panes.get(e.terminal) {
-        connection
-            .0
-            .send(MuxCommand::SelectionClear { pane: pane.0 });
-    }
+fn clear_selection(e: On<RequestTtySelectionClear>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::SelectionClear { pane });
 }
 
 #[cfg(test)]

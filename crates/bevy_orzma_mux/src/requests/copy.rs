@@ -1,9 +1,9 @@
 //! `RequestTtyCopySelection`: asks the backend for a pane's selected
 //! text; the answer arrives as `TtySelectionTextSignal`.
 
-use crate::{MuxConnection, MuxPane};
+use crate::requests::PaneSender;
 use bevy::prelude::*;
-use orzma_mux::prelude::{MuxCommand, PaneTarget, RequestId};
+use orzma_mux::prelude::{MuxCommand, PaneTarget};
 
 /// Copy the selection of one pane entity.
 #[derive(EntityEvent, Debug, Clone)]
@@ -20,17 +20,9 @@ impl Plugin for CopyPlugin {
     }
 }
 
-fn apply_copy_selection(
-    e: On<RequestTtyCopySelection>,
-    connection: Res<MuxConnection>,
-    panes: Query<&MuxPane>,
-) {
-    let Ok(pane) = panes.get(e.terminal) else {
-        return;
-    };
-    connection.0.send(MuxCommand::CopySelection {
-        pane: PaneTarget::Id(pane.0),
-        request: RequestId::next(),
+fn apply_copy_selection(e: On<RequestTtyCopySelection>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::CopySelection {
+        pane: PaneTarget::Id(pane),
     });
 }
 

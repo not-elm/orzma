@@ -20,9 +20,8 @@ pub struct PaneId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct WindowId(pub u32);
 
-/// A GUI-minted correlation id for a request the backend answers later
-/// (`NewPane` → `PaneOpened` / `SpawnFailed`, `CopySelection` →
-/// `SelectionText`).
+/// A GUI-minted correlation id for a `NewPane` request, echoed by the
+/// `PaneOpened` / `SpawnFailed` that answers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RequestId(pub u64);
 
@@ -105,6 +104,8 @@ pub enum MuxCommand {
         /// Where the new pane goes in the layout tree.
         at: NewPaneAt,
         /// The working directory to spawn the shell in, when given.
+        /// Reserved for a client-chosen directory (tmux's `-c`); the
+        /// host sends `None` today.
         cwd: Option<PathBuf>,
         /// Extra environment variables forwarded to the shell.
         env: Vec<(String, String)>,
@@ -183,8 +184,6 @@ pub enum MuxCommand {
     CopySelection {
         /// The pane to read the selection from.
         pane: PaneTarget,
-        /// The id the resulting `SelectionText` correlates to.
-        request: RequestId,
     },
     /// Release webview placement instances a pane no longer displays.
     RemovePlacements {
@@ -241,7 +240,8 @@ pub struct Separator {
 pub struct Layout {
     /// The last command the backend processed before building this.
     pub seq: CommandSeq,
-    /// The window size in cells this layout was solved for.
+    /// The extent the panes tile: the window size in cells, widened per
+    /// axis to the tree's minimum when the window is smaller.
     pub size: GridSize,
     /// The pane the backend considers active, when any pane exists.
     pub active: Option<PaneId>,
@@ -302,13 +302,9 @@ pub enum MuxEvent {
         /// The signal itself.
         signal: VtSignal,
     },
-    /// Exactly one per `CopySelection`; `pane` / `text` are `None` when
-    /// the target could not be resolved.
+    /// Exactly one per `CopySelection`; `text` is `None` when the target
+    /// could not be resolved or had no selection.
     SelectionText {
-        /// The `CopySelection` request this answers.
-        request: RequestId,
-        /// The pane the selection was read from, when it resolved.
-        pane: Option<PaneId>,
         /// The selection's text, when a selection existed.
         text: Option<String>,
     },

@@ -4,7 +4,7 @@
 use crate::session::spawn::PaneSpawnRequest;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::{MuxPane, MuxPaneSpawnFailed, PaneGeometry};
+use bevy_orzma_mux::prelude::{MuxPane, MuxPaneContainer, MuxPaneSpawnFailed, PaneGeometry};
 use bevy_orzma_webview::ControlPlaneHandle;
 use orzma_mux::prelude::NewPaneAt;
 
@@ -17,27 +17,17 @@ pub(super) struct ShellSurfacePlugin;
 
 impl Plugin for ShellSurfacePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RootRequested>()
-            .add_systems(
-                Update,
-                (
-                    ensure_shell_surface_ui.run_if(not(any_with_component::<ShellSurfaceUi>)),
-                    request_root_pane
-                        .run_if(any_with_component::<ShellSurfaceUi>)
-                        .run_if(resource_exists::<PaneGeometry>)
-                        .run_if(root_not_requested),
-                ),
-            )
-            .add_observer(on_spawn_failed);
+        app.add_systems(
+            Update,
+            (
+                ensure_shell_surface_ui.run_if(not(any_with_component::<ShellSurfaceUi>)),
+                request_root_pane
+                    .run_if(any_with_component::<ShellSurfaceUi>)
+                    .run_if(resource_exists::<PaneGeometry>),
+            ),
+        )
+        .add_observer(on_spawn_failed);
     }
-}
-
-/// Marks that the root pane was requested once.
-#[derive(Resource, Default)]
-struct RootRequested(bool);
-
-fn root_not_requested(requested: Res<RootRequested>) -> bool {
-    !requested.0
 }
 
 fn ensure_shell_surface_ui(mut commands: Commands, ui_root: Query<Entity, With<UiRoot>>) {
@@ -53,14 +43,18 @@ fn ensure_shell_surface_ui(mut commands: Commands, ui_root: Query<Entity, With<U
             ..default()
         },
         ShellSurfaceUi,
+        MuxPaneContainer,
         ChildOf(ui_root),
     ));
 }
 
-/// Asks for the first pane once the geometry has been sent: the backend
-/// refuses `NewPane` before its first `Resize`.
-fn request_root_pane(mut commands: Commands, mut requested: ResMut<RootRequested>) {
-    requested.0 = true;
+/// Asks for the first pane once, after the geometry has been sent: the
+/// backend refuses `NewPane` before its first `Resize`.
+fn request_root_pane(mut commands: Commands, mut requested: Local<bool>) {
+    if *requested {
+        return;
+    }
+    *requested = true;
     commands.trigger(PaneSpawnRequest {
         at: NewPaneAt::Root,
     });

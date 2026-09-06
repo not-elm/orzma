@@ -21,12 +21,13 @@ impl CellPixels {
     /// `xpixel * cols`, and portable-pty forwards `pixel_width` verbatim
     /// into `ws_xpixel` despite documenting it as a per-cell width.
     pub fn window_pixels(self, cols: u16, rows: u16) -> (u16, u16) {
-        let width = self.width.saturating_mul(cols);
-        let height = self.height.saturating_mul(rows);
-        if (self.width != 0 && width == u16::MAX) || (self.height != 0 && height == u16::MAX) {
+        if self.width.checked_mul(cols).is_none() || self.height.checked_mul(rows).is_none() {
             tracing::debug!(cols, rows, ?self, "pixel winsize saturated at u16::MAX");
         }
-        (width, height)
+        (
+            self.width.saturating_mul(cols),
+            self.height.saturating_mul(rows),
+        )
     }
 }
 

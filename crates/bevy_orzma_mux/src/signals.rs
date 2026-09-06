@@ -13,7 +13,6 @@
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::prelude::*;
-use orzma_mux::prelude::RequestId;
 use orzma_vt::prelude::*;
 use std::path::PathBuf;
 
@@ -134,7 +133,6 @@ pub struct TtyFrameSignal {
 /// `Event` because the requesting pane may already be gone.
 #[derive(Event, Debug, Clone)]
 pub struct TtySelectionTextSignal {
-    pub request: RequestId,
     pub text: Option<String>,
 }
 

@@ -75,15 +75,7 @@ fn main() {
             WindowTitlePlugin,
         ))
         .insert_resource(MuxConnection(mux))
-        .configure_sets(
-            Update,
-            (
-                MuxSystems::Drain,
-                MuxSystems::ApplyLayout,
-                OrzmaSystems::Input,
-            )
-                .chain(),
-        )
+        .configure_sets(Update, OrzmaSystems::Input.after(MuxSystems::ApplyLayout))
         .run();
 }
 

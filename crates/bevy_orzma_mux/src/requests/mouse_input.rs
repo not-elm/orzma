@@ -1,7 +1,7 @@
 //! `RequestTtyMouseInput`: a mouse-protocol report the host UI asks a
 //! terminal entity to receive, sent as `MuxCommand::MouseInput`.
 
-use crate::{MuxConnection, MuxPane};
+use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzma_mux::prelude::MuxCommand;
 use orzma_tty::prelude::MouseReport;
@@ -26,17 +26,11 @@ impl Plugin for MouseInputPlugin {
     }
 }
 
-fn apply_mouse_input(
-    e: On<RequestTtyMouseInput>,
-    connection: Res<MuxConnection>,
-    panes: Query<&MuxPane>,
-) {
-    if let Ok(pane) = panes.get(e.terminal) {
-        connection.0.send(MuxCommand::MouseInput {
-            pane: pane.0,
-            report: e.mouse,
-        });
-    }
+fn apply_mouse_input(e: On<RequestTtyMouseInput>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::MouseInput {
+        pane,
+        report: e.mouse,
+    });
 }
 
 #[cfg(test)]

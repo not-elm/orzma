@@ -30,6 +30,9 @@ pub(crate) struct Backend {
     processed: CommandSeq,
     /// Set when the GUI's event receiver is gone; the loop exits.
     gui_gone: bool,
+    /// What each `Select` index of the last `wait_ready` referred to;
+    /// kept so the table is not reallocated on every wake.
+    sources: Vec<Ready>,
 }
 
 impl Backend {
@@ -49,6 +52,7 @@ impl Backend {
             next_pane_id: 1,
             processed: CommandSeq::default(),
             gui_gone: false,
+            sources: Vec::new(),
         }
     }
 
@@ -70,8 +74,11 @@ impl Backend {
         }
     }
 
-    /// Applies one command. `pub(crate)` so tests drive the backend
-    /// without a thread.
+    /// Applies one command. Unknown panes and an unresolvable `Active`
+    /// are dropped with a debug log; `CopySelection` always answers,
+    /// `SelectPane` always publishes a layout, and `SelectPaneDirection`
+    /// publishes one only when the active pane moved. `pub(crate)` so
+    /// tests drive the backend without a thread.
     pub(crate) fn handle_command(&mut self, seq: CommandSeq, command: MuxCommand) {
         self.processed = seq;
         match command {
@@ -86,20 +93,104 @@ impl Backend {
                 cwd,
                 env,
             } => self.on_new_pane(request, at, cwd, env),
-            other => self.handle_pane_command(other),
+            MuxCommand::KillPane { pane } => {
+                if let Some(id) = self.resolve_or_log(pane, "KillPane") {
+                    self.close_pane(id, CloseReason::Killed);
+                }
+            }
+            MuxCommand::SelectPane { pane } => {
+                if !self.tree.select(pane) {
+                    tracing::debug!(?pane, "select of an unknown pane refused");
+                }
+                self.publish_layout();
+            }
+            MuxCommand::SelectPaneDirection { direction } => {
+                let moved = self
+                    .geometry
+                    .is_some_and(|geometry| self.tree.select_direction(direction, geometry.size));
+                if moved {
+                    self.publish_layout();
+                }
+            }
+            MuxCommand::KeyInput { pane, key, mods } => {
+                if let Some(p) = self.pane_mut(pane, "KeyInput")
+                    && let Err(err) = p.tty.send_key(&key, &mods)
+                {
+                    tracing::error!(%err, "key write failed");
+                }
+            }
+            MuxCommand::Paste { pane, text } => {
+                if let Some(p) = self.pane_mut(pane, "Paste")
+                    && let Err(err) = p.tty.send_paste(&text)
+                {
+                    tracing::error!(%err, "paste write failed");
+                }
+            }
+            MuxCommand::MouseInput { pane, report } => {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "MouseInput")
+                    && let Err(err) = p.tty.send_mouse(report)
+                {
+                    tracing::error!(%err, "mouse write failed");
+                }
+            }
+            MuxCommand::Scroll { pane, scroll } => {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "Scroll") {
+                    p.tty.scroll(scroll);
+                }
+            }
+            MuxCommand::SelectionStart {
+                pane,
+                cell,
+                side,
+                kind,
+            } => {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionStart") {
+                    p.tty.start_selection(cell, side, kind);
+                }
+            }
+            MuxCommand::SelectionUpdate { pane, cell, side } => {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionUpdate") {
+                    p.tty.extend_selection(cell, side);
+                }
+            }
+            MuxCommand::SelectionClear { pane } => {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionClear") {
+                    p.tty.clear_selection();
+                }
+            }
+            MuxCommand::CopySelection { pane } => {
+                let text = self
+                    .resolve(pane)
+                    .and_then(|id| self.panes.get(&id))
+                    .and_then(|p| p.tty.vt().selection_text())
+                    .filter(|t| !t.is_empty());
+                self.emit(MuxEvent::SelectionText { text });
+            }
+            MuxCommand::RemovePlacements { pane, instances } => {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "RemovePlacements") {
+                    p.tty.remove_placements(&instances);
+                }
+            }
         }
     }
 
-    /// Pumps one pane and forwards its output; closes the pane on
+    /// Pumps one pane and forwards its output, pumping again up to
+    /// `PUMP_ROUNDS` times while chunks remain queued; closes the pane on
     /// `ChildExit`.
     pub(crate) fn pump_pane(&mut self, id: PaneId) {
-        let Some(pane) = self.panes.get_mut(&id) else {
-            return;
-        };
-        let output = pane.tty.pump();
-        let exited = self.emit_pump_output(id, output);
-        if let Some(code) = exited {
-            self.close_pane(id, CloseReason::ChildExit { code });
+        for _ in 0..PUMP_ROUNDS {
+            let Some(pane) = self.panes.get_mut(&id) else {
+                return;
+            };
+            let output = pane.tty.pump();
+            let more_pending = output.more_pending;
+            if let Some(code) = self.emit_pump_output(id, output) {
+                self.close_pane(id, CloseReason::ChildExit { code });
+                return;
+            }
+            if !more_pending {
+                return;
+            }
         }
     }
 
@@ -121,18 +212,18 @@ impl Backend {
     /// coalescer deadline passes. Returns the ready source, `None` on
     /// timeout. The `Select` is dropped before returning so the pane
     /// receivers it borrowed can be pumped.
-    fn wait_ready(&self) -> Option<Ready> {
+    fn wait_ready(&mut self) -> Option<Ready> {
         let mut select = Select::new();
-        let mut sources: Vec<Ready> = Vec::with_capacity(1 + self.panes.len() * 2);
+        self.sources.clear();
         select.recv(&self.commands);
-        sources.push(Ready::Commands);
+        self.sources.push(Ready::Commands);
         for (id, pane) in &self.panes {
             let readiness = pane.tty.readiness();
             select.recv(readiness.chunks);
-            sources.push(Ready::Pane(*id));
+            self.sources.push(Ready::Pane(*id));
             if let Some(exit) = readiness.exit {
                 select.recv(exit);
-                sources.push(Ready::Pane(*id));
+                self.sources.push(Ready::Pane(*id));
             }
         }
         let deadline = self
@@ -144,7 +235,7 @@ impl Backend {
             Some(deadline) => select.ready_deadline(deadline).ok()?,
             None => select.ready(),
         };
-        Some(sources[index])
+        Some(self.sources[index])
     }
 
     /// Applies up to `COMMAND_BATCH` queued commands. Returns `false`
@@ -185,44 +276,20 @@ impl Backend {
         let new = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
         let previous_active = self.tree.active();
-        let inherited_cwd = match at {
-            NewPaneAt::Root => {
-                if self.tree.insert_root(new).is_err() {
-                    self.emit(MuxEvent::SpawnFailed {
-                        request,
-                        error: "root already open".to_string(),
-                    });
-                    return;
-                }
-                None
-            }
-            NewPaneAt::Split { pane, orientation } => {
-                let Some(target) = self.resolve(pane) else {
-                    self.emit(MuxEvent::SpawnFailed {
-                        request,
-                        error: "no target pane".to_string(),
-                    });
-                    return;
-                };
-                if self
-                    .tree
-                    .split(target, orientation, new, geometry.size)
-                    .is_err()
-                {
-                    self.emit(MuxEvent::SpawnFailed {
-                        request,
-                        error: "no space".to_string(),
-                    });
-                    return;
-                }
-                self.panes.get(&target).and_then(|p| p.cwd.clone())
+        let inherited_cwd = match self.insert_pane(new, at, geometry.size) {
+            Ok(inherited_cwd) => inherited_cwd,
+            Err(error) => {
+                self.emit(MuxEvent::SpawnFailed {
+                    request,
+                    error: error.to_string(),
+                });
+                return;
             }
         };
-        let solved = self.tree.solve(geometry.size);
-        let rect = solved
-            .panes
-            .iter()
-            .find(|r| r.pane == new)
+        let rect = self
+            .tree
+            .solve(geometry.size)
+            .rect_of(new)
             .expect("the new pane is in the tree");
         let size = GridSize {
             cols: rect.cols,
@@ -254,6 +321,31 @@ impl Backend {
                     request,
                     error: err.to_string(),
                 });
+            }
+        }
+    }
+
+    /// Inserts `new` into the tree at `at`. Returns the directory a split
+    /// inherits from its target, or why the insertion was refused.
+    fn insert_pane(
+        &mut self,
+        new: PaneId,
+        at: NewPaneAt,
+        window: GridSize,
+    ) -> Result<Option<PathBuf>, &'static str> {
+        match at {
+            NewPaneAt::Root => {
+                self.tree
+                    .insert_root(new)
+                    .map_err(|_| "root already open")?;
+                Ok(None)
+            }
+            NewPaneAt::Split { pane, orientation } => {
+                let target = self.resolve(pane).ok_or("no target pane")?;
+                self.tree
+                    .split(target, orientation, new, window)
+                    .map_err(|_| "no space")?;
+                Ok(self.panes.get(&target).and_then(|p| p.cwd.clone()))
             }
         }
     }
@@ -298,7 +390,7 @@ impl Backend {
         }
         let layout = Layout {
             seq: self.processed,
-            size: geometry.size,
+            size: solved.size,
             active: self.tree.active(),
             panes: solved.panes,
             separators: solved.separators,
@@ -373,97 +465,6 @@ impl Backend {
             self.gui_gone = true;
         }
     }
-
-    /// Applies a pane-level command. Unknown panes and an unresolvable
-    /// `Active` are dropped with a debug log; `CopySelection` always
-    /// answers and `SelectPane*` always publishes a layout.
-    fn handle_pane_command(&mut self, command: MuxCommand) {
-        match command {
-            MuxCommand::KillPane { pane } => {
-                if let Some(id) = self.resolve_or_log(pane, "KillPane") {
-                    self.close_pane(id, CloseReason::Killed);
-                }
-            }
-            MuxCommand::SelectPane { pane } => {
-                if !self.tree.select(pane) {
-                    tracing::debug!(?pane, "select of an unknown pane refused");
-                }
-                self.publish_layout();
-            }
-            MuxCommand::SelectPaneDirection { direction } => {
-                if let Some(geometry) = self.geometry {
-                    self.tree.select_direction(direction, geometry.size);
-                }
-                self.publish_layout();
-            }
-            MuxCommand::KeyInput { pane, key, mods } => {
-                if let Some(p) = self.pane_mut(pane, "KeyInput")
-                    && let Err(err) = p.tty.send_key(&key, &mods)
-                {
-                    tracing::error!(%err, "key write failed");
-                }
-            }
-            MuxCommand::Paste { pane, text } => {
-                if let Some(p) = self.pane_mut(pane, "Paste")
-                    && let Err(err) = p.tty.send_paste(&text)
-                {
-                    tracing::error!(%err, "paste write failed");
-                }
-            }
-            MuxCommand::MouseInput { pane, report } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "MouseInput")
-                    && let Err(err) = p.tty.send_mouse(report)
-                {
-                    tracing::error!(%err, "mouse write failed");
-                }
-            }
-            MuxCommand::Scroll { pane, scroll } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "Scroll") {
-                    p.tty.scroll(scroll);
-                }
-            }
-            MuxCommand::SelectionStart {
-                pane,
-                cell,
-                side,
-                kind,
-            } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionStart") {
-                    p.tty.start_selection(cell, side, kind);
-                }
-            }
-            MuxCommand::SelectionUpdate { pane, cell, side } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionUpdate") {
-                    p.tty.extend_selection(cell, side);
-                }
-            }
-            MuxCommand::SelectionClear { pane } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionClear") {
-                    p.tty.clear_selection();
-                }
-            }
-            MuxCommand::CopySelection { pane, request } => {
-                let resolved = self.resolve(pane);
-                let text = resolved
-                    .and_then(|id| self.panes.get(&id))
-                    .and_then(|p| p.tty.vt().selection_text())
-                    .filter(|t| !t.is_empty());
-                self.emit(MuxEvent::SelectionText {
-                    request,
-                    pane: resolved,
-                    text,
-                });
-            }
-            MuxCommand::RemovePlacements { pane, instances } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "RemovePlacements") {
-                    p.tty.remove_placements(&instances);
-                }
-            }
-            MuxCommand::Resize { .. } | MuxCommand::NewPane { .. } => {
-                unreachable!("handled by handle_command")
-            }
-        }
-    }
 }
 
 /// The window geometry the GUI last reported.
@@ -482,6 +483,10 @@ enum Ready {
 
 /// How many queued commands one iteration applies before pumping panes.
 const COMMAND_BATCH: usize = 64;
+
+/// How many times one wake pumps the same pane while its chunks stay
+/// queued, before other panes and the command channel get a turn.
+const PUMP_ROUNDS: usize = 4;
 
 #[cfg(test)]
 mod tests {
@@ -979,6 +984,22 @@ mod tests {
         assert_eq!(layout.active, Some(root));
     }
 
+    /// Asserts that a directional selection with no neighbour in that
+    /// direction publishes nothing.
+    ///
+    /// Case: the user holds select-left with the leftmost pane already
+    /// active.
+    #[test]
+    fn select_direction_into_a_wall_publishes_nothing() {
+        let mut h = Harness::new();
+        let (_root, _root_pane) = h.open_root();
+        h.drain();
+        h.send(MuxCommand::SelectPaneDirection {
+            direction: PaneDirection::Left,
+        });
+        assert!(h.drain().is_empty());
+    }
+
     /// Asserts that every `CopySelection` is answered exactly once, with
     /// `None`s when the target cannot be resolved.
     ///
@@ -990,23 +1011,16 @@ mod tests {
         let (root, _root_pane) = h.open_root();
         h.send(MuxCommand::CopySelection {
             pane: PaneTarget::Id(root),
-            request: RequestId(5),
         });
         h.send(MuxCommand::CopySelection {
             pane: PaneTarget::Id(PaneId(42)),
-            request: RequestId(6),
         });
-        let events: Vec<MuxEvent> = h.drain().into_iter().collect();
-        assert!(events.contains(&MuxEvent::SelectionText {
-            request: RequestId(5),
-            pane: Some(root),
-            text: None,
-        }));
-        assert!(events.contains(&MuxEvent::SelectionText {
-            request: RequestId(6),
-            pane: None,
-            text: None,
-        }));
+        let answers = h
+            .drain()
+            .into_iter()
+            .filter(|event| *event == MuxEvent::SelectionText { text: None })
+            .count();
+        assert_eq!(answers, 2);
     }
 
     /// Asserts that a split inherits the target pane's last OSC 7

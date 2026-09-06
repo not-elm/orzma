@@ -10,7 +10,7 @@ use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::ime::ImeState;
 use crate::surface::OrzmaTerminal;
-use crate::surface::geometry::{phys_to_pane_local, topmost_surface_at};
+use crate::surface::geometry::{cell_pitch_phys, phys_to_pane_local, topmost_surface_at};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
@@ -149,15 +149,14 @@ fn inactive_style(config: &InactivePaneConfig) -> PaneInactiveStyle {
 /// blurs the webview on focus-leave (`bevy_cef`'s `apply_webview_focus` releases
 /// CEF focus when `FocusedWebview` becomes `None`).
 ///
-/// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
+/// One case is PRESERVED instead of driven: when `FocusedWebview` holds a
 /// webview child (`Webview`) whose `ChildOf` parent is a live
-/// `OrzmaTerminal` surface — active or not — that inline focus stands (spec §7, single
-/// focus source). This covers click-granted focus and the app-declared focus
-/// set via the control-plane `SetFocus` op, and means switching the active
-/// pane does NOT clear a webview's focus: the webview keeps keyboard
-/// focus until its child despawns (or focus moves off it), at which point the
-/// sync falls through to the clear path below, which maps the active terminal
-/// pane to `None`.
+/// `OrzmaTerminal` surface, that inline focus stands (spec §7, single
+/// focus source). This covers click-granted focus and the app-declared
+/// focus set via the control-plane `SetFocus` op. Releasing that focus
+/// when the active pane moves elsewhere is `on_active_pane_changed`'s
+/// job; this sync only clears it once the child despawns or focus moves
+/// off it, falling through to the clear path below.
 fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     active_pane: Query<Entity, (With<OrzmaTerminal>, With<KeyboardFocused>)>,
@@ -265,8 +264,7 @@ fn maintain_input_gates(
 fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<Entity> {
     let metrics = claim.metrics.as_deref()?;
     let scale = window.scale_factor();
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let (cell_w, cell_h) = cell_pitch_phys(&metrics.metrics);
     let cursor_phys = window.cursor_position()? * scale;
     let terminal = topmost_surface_at(cursor_phys, claim.surfaces.iter())?;
     let (_, node, _, transform) = claim.surfaces.get(terminal).ok()?;

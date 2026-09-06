@@ -24,7 +24,7 @@ pub mod prelude {
     pub use crate::{
         MuxConnection, MuxPane, MuxSystems, OrzmaMuxPlugin,
         drain::{MuxPaneSpawnFailed, MuxSessionEnded},
-        layout::{CurrentLayout, MuxActivePaneChanged, MuxSeparator, PaneGeometry, pane_node},
+        layout::{MuxActivePaneChanged, MuxPaneContainer, PaneGeometry, absolute_px_node},
         registry::PaneRegistry,
         requests::*,
         signals::*,

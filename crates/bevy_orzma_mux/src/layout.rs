@@ -10,7 +10,7 @@ use orzma_tty::CellPixels;
 /// The latest layout snapshot. Written by the drain only when it
 /// differs; the non-empty → empty transition is detected there.
 #[derive(Resource, Default, Debug, PartialEq)]
-pub struct CurrentLayout(pub Layout);
+pub(crate) struct CurrentLayout(pub Layout);
 
 /// What the host needs to turn cells into logical px.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
@@ -21,9 +21,15 @@ pub struct PaneGeometry {
     pub scale_factor: f32,
 }
 
+/// The node every pane entity is parented under; separators are spawned
+/// as its children too. The host marks its clipping container with it
+/// before requesting the first pane.
+#[derive(Component, Debug)]
+pub struct MuxPaneContainer;
+
 /// A separator node between two panes.
 #[derive(Component, Debug)]
-pub struct MuxSeparator;
+pub(crate) struct MuxSeparator;
 
 /// The GUI accepted a new active pane from a `Layout`. `previous` is
 /// the last accepted active's entity; it may already be despawned (a
@@ -37,24 +43,14 @@ pub struct MuxActivePaneChanged {
     pub current: Option<Entity>,
 }
 
-/// The absolute node for `rect`: physical px are integral
-/// (`cells × cell_px`), divided by the scale factor for `Val::Px`.
-///
-/// A right or bottom edge that stops short of the layout size grows into
-/// the reserved separator cell by everything but the line, so the pane's
-/// own background, which the renderer paints over the whole node, runs
-/// up to the line and only the line's thickness separates two panes on
-/// either axis.
-pub fn pane_node(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Node {
-    let scale = geometry.scale_factor;
-    let (cell_w, cell_h) = cell_pitch_phys(geometry);
-    let bleed = bleed_phys(rect, layout, geometry);
+/// An absolutely positioned node with the given logical-px edges.
+pub fn absolute_px_node(left: f32, top: f32, width: f32, height: f32) -> Node {
     Node {
         position_type: PositionType::Absolute,
-        left: Val::Px(f32::from(rect.x) * cell_w / scale),
-        top: Val::Px(f32::from(rect.y) * cell_h / scale),
-        width: Val::Px((f32::from(rect.cols) * cell_w + bleed.x) / scale),
-        height: Val::Px((f32::from(rect.rows) * cell_h + bleed.y) / scale),
+        left: Val::Px(left),
+        top: Val::Px(top),
+        width: Val::Px(width),
+        height: Val::Px(height),
         ..default()
     }
 }
@@ -88,13 +84,10 @@ fn apply_layout(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
     mut nodes: Query<&mut Node, With<MuxPane>>,
-    mut separators: Query<
-        (Entity, &mut Node, Option<&ChildOf>),
-        (With<MuxSeparator>, Without<MuxPane>),
-    >,
+    mut separators: Query<(Entity, &mut Node), (With<MuxSeparator>, Without<MuxPane>)>,
     current: Res<CurrentLayout>,
     geometry: Res<PaneGeometry>,
-    parents: Query<&ChildOf, With<MuxPane>>,
+    container: Query<Entity, With<MuxPaneContainer>>,
 ) {
     let layout = &current.0;
     for rect in &layout.panes {
@@ -105,60 +98,33 @@ fn apply_layout(
             node.set_if_neq(pane_node(rect, layout, &geometry));
         }
     }
-    let container = container_of(&registry, layout, &parents);
+    let container = container.single().ok();
     reconcile_separators(&mut commands, &mut separators, layout, &geometry, container);
     apply_active(&mut commands, &mut registry, layout);
 }
 
-/// The container the pane entities live under, so separators become
-/// its children too; `None` before the first pane is parented.
-fn container_of(
-    registry: &PaneRegistry,
-    layout: &Layout,
-    parents: &Query<&ChildOf, With<MuxPane>>,
-) -> Option<Entity> {
-    layout
-        .panes
-        .iter()
-        .filter_map(|rect| registry.entity_of(rect.pane))
-        .find_map(|entity| parents.get(entity).ok().map(ChildOf::parent))
-}
-
-/// Spawns, updates, or despawns separator nodes to match the layout. An
-/// existing separator with no `ChildOf` yet (spawned before `container`
-/// was known) is re-parented once `container` resolves.
+/// Spawns, updates, or despawns separator nodes to match the layout,
+/// parenting new ones under `container` when the host has marked one.
 fn reconcile_separators(
     commands: &mut Commands,
-    separators: &mut Query<
-        (Entity, &mut Node, Option<&ChildOf>),
-        (With<MuxSeparator>, Without<MuxPane>),
-    >,
+    separators: &mut Query<(Entity, &mut Node), (With<MuxSeparator>, Without<MuxPane>)>,
     layout: &Layout,
     geometry: &PaneGeometry,
     container: Option<Entity>,
 ) {
-    let mut existing: Vec<Entity> = separators.iter().map(|(entity, ..)| entity).collect();
+    let mut existing: Vec<Entity> = separators.iter().map(|(entity, _)| entity).collect();
     existing.sort();
     for (index, separator) in layout.separators.iter().enumerate() {
         let wanted = separator_node(separator, layout, geometry);
         match existing.get(index) {
             Some(entity) => {
-                if let Ok((_, mut node, child_of)) = separators.get_mut(*entity) {
+                if let Ok((_, mut node)) = separators.get_mut(*entity) {
                     node.set_if_neq(wanted);
-                    if child_of.is_none()
-                        && let Some(container) = container
-                    {
-                        commands.entity(*entity).try_insert(ChildOf(container));
-                    }
                 }
             }
             None => {
-                let mut spawned = commands.spawn((
-                    MuxSeparator,
-                    wanted,
-                    BackgroundColor(SEPARATOR_COLOR),
-                    ZIndex(1),
-                ));
+                let mut spawned =
+                    commands.spawn((MuxSeparator, wanted, BackgroundColor(SEPARATOR_COLOR)));
                 if let Some(container) = container {
                     spawned.insert(ChildOf(container));
                 }
@@ -170,12 +136,34 @@ fn reconcile_separators(
     }
 }
 
+/// The absolute node for `rect`: physical px are integral
+/// (`cells × cell_px`), divided by the scale factor for `Val::Px`.
+///
+/// A right or bottom edge that stops short of the layout size grows into
+/// the reserved separator cell by everything but the line, so the pane's
+/// own background, which the renderer paints over the whole node, runs
+/// up to the line and only the line's thickness separates two panes on
+/// either axis.
+fn pane_node(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Node {
+    let scale = geometry.scale_factor;
+    let (cell_w, cell_h) = cell_pitch_phys(geometry);
+    let thickness = line_thickness_phys(geometry);
+    let bleed_x = gap_before_line(rect.x, rect.cols, layout.size.cols, cell_w, thickness);
+    let bleed_y = gap_before_line(rect.y, rect.rows, layout.size.rows, cell_h, thickness);
+    absolute_px_node(
+        f32::from(rect.x) * cell_w / scale,
+        f32::from(rect.y) * cell_h / scale,
+        (f32::from(rect.cols) * cell_w + bleed_x) / scale,
+        (f32::from(rect.rows) * cell_h + bleed_y) / scale,
+    )
+}
+
 /// The node for a separator: a line `SEPARATOR_THICKNESS_LOGICAL_PX`
 /// thick occupying the far end of the one cell the layout reserves for
 /// it, flush against the pane that follows, spanning the separator's
 /// full length.
 ///
-/// A separator that stops short of the window edge ends inside the cell
+/// A separator that stops short of the layout size ends inside the cell
 /// reserved for a crossing line, so its far end is extended across that
 /// cell to meet the crossing line. All offsets are whole physical px so
 /// the UI layout, which rounds node edges to physical px, cannot collapse
@@ -184,71 +172,52 @@ fn separator_node(separator: &Separator, layout: &Layout, geometry: &PaneGeometr
     let scale = geometry.scale_factor;
     let (cell_w, cell_h) = cell_pitch_phys(geometry);
     let thickness = line_thickness_phys(geometry);
-    let before_line = |cell: f32| (cell - thickness).max(0.0);
     let x = f32::from(separator.x);
     let y = f32::from(separator.y);
     let len = f32::from(separator.len);
     let (left, top, width, height) = match separator.orientation {
-        SplitOrientation::Vertical => {
-            let meets_crossing_line = separator.y + separator.len < layout.size.rows;
-            let extension = if meets_crossing_line {
-                before_line(cell_h)
-            } else {
-                0.0
-            };
-            (
-                x * cell_w + before_line(cell_w),
-                y * cell_h,
-                thickness,
-                len * cell_h + extension,
-            )
-        }
-        SplitOrientation::Horizontal => {
-            let meets_crossing_line = separator.x + separator.len < layout.size.cols;
-            let extension = if meets_crossing_line {
-                before_line(cell_w)
-            } else {
-                0.0
-            };
-            (
-                x * cell_w,
-                y * cell_h + before_line(cell_h),
-                len * cell_w + extension,
-                thickness,
-            )
-        }
+        SplitOrientation::Vertical => (
+            x * cell_w + (cell_w - thickness).max(0.0),
+            y * cell_h,
+            thickness,
+            len * cell_h
+                + gap_before_line(
+                    separator.y,
+                    separator.len,
+                    layout.size.rows,
+                    cell_h,
+                    thickness,
+                ),
+        ),
+        SplitOrientation::Horizontal => (
+            x * cell_w,
+            y * cell_h + (cell_h - thickness).max(0.0),
+            len * cell_w
+                + gap_before_line(
+                    separator.x,
+                    separator.len,
+                    layout.size.cols,
+                    cell_w,
+                    thickness,
+                ),
+            thickness,
+        ),
     };
-    Node {
-        position_type: PositionType::Absolute,
-        left: Val::Px(left / scale),
-        top: Val::Px(top / scale),
-        width: Val::Px(width / scale),
-        height: Val::Px(height / scale),
-        ..default()
-    }
+    absolute_px_node(left / scale, top / scale, width / scale, height / scale)
 }
 
-/// Physical px `rect` grows on its right and bottom edges: the reserved
-/// cell minus the line where the edge stops short of the layout size,
-/// zero where it reaches the window. The split tree tiles the layout
-/// size, so every edge short of it is followed by exactly one separator
-/// cell, the same fact `separator_node` uses to extend a line to a
-/// crossing.
-fn bleed_phys(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Vec2 {
-    let (cell_w, cell_h) = cell_pitch_phys(geometry);
-    let thickness = line_thickness_phys(geometry);
-    let before_line = |cell: f32| (cell - thickness).max(0.0);
-    let x = if rect.x + rect.cols < layout.size.cols {
-        before_line(cell_w)
+/// The physical px between an extent's far edge and the separator line
+/// that follows it: the reserved cell minus the line when the extent
+/// stops short of `limit`, zero when it reaches the layout edge. The
+/// split tree tiles the layout size, so every edge short of it is
+/// followed by exactly one separator cell; panes grow into that gap and
+/// separators extend across it to meet a crossing line.
+fn gap_before_line(start: u16, extent: u16, limit: u16, cell: f32, thickness: f32) -> f32 {
+    if start + extent < limit {
+        (cell - thickness).max(0.0)
     } else {
         0.0
-    };
-    let y = if rect.y + rect.rows < layout.size.rows {
-        before_line(cell_h)
-    } else {
-        0.0
-    };
-    Vec2::new(x, y)
+    }
 }
 
 /// The cell pitch as `(width, height)` in physical px.
@@ -294,6 +263,7 @@ fn apply_active(commands: &mut Commands, registry: &mut PaneRegistry, layout: &L
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::requests::test_support::{app_with_connection, spawn_pane};
     use orzma_mux::prelude::{CommandSeq, Layout, PaneId, PaneRect, Separator, SplitOrientation};
     use orzma_tty::CellPixels;
     use orzma_vt::prelude::GridSize;
@@ -301,13 +271,11 @@ mod tests {
     #[derive(Resource, Default)]
     struct Changes(Vec<(Option<Entity>, Option<Entity>)>);
 
+    /// An app with the layout applier, a 10×20 px cell on a 2× display,
+    /// and a marked pane container.
     fn app() -> App {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(LayoutPlugin)
-            .init_resource::<PaneRegistry>()
-            .init_resource::<CurrentLayout>()
-            .init_resource::<Changes>()
+        let (mut app, _commands) = app_with_connection(LayoutPlugin);
+        app.init_resource::<Changes>()
             .insert_resource(PaneGeometry {
                 cell_px: CellPixels {
                     width: 10,
@@ -320,21 +288,16 @@ mod tests {
                     changes.0.push((ev.previous, ev.current))
                 },
             );
+        app.world_mut().spawn((MuxPaneContainer, Node::default()));
         app
     }
 
     fn two_panes(app: &mut App) -> (Entity, Entity) {
-        let a = app
-            .world_mut()
-            .spawn((MuxPane(PaneId(1)), Node::default()))
-            .id();
-        let b = app
-            .world_mut()
-            .spawn((MuxPane(PaneId(2)), Node::default()))
-            .id();
-        let mut registry = app.world_mut().resource_mut::<PaneRegistry>();
-        registry.panes.insert(PaneId(1), a);
-        registry.panes.insert(PaneId(2), b);
+        let a = spawn_pane(app, PaneId(1));
+        let b = spawn_pane(app, PaneId(2));
+        for entity in [a, b] {
+            app.world_mut().entity_mut(entity).insert(Node::default());
+        }
         (a, b)
     }
 
@@ -370,8 +333,9 @@ mod tests {
 
     /// Asserts that pane nodes are positioned in logical px from integral
     /// physical px, that the pane before a separator grows into the
-    /// reserved cell up to the line, and that the line sits flush against
-    /// the pane after it.
+    /// reserved cell up to the line, that the line sits flush against
+    /// the pane after it, and that the separator is a child of the
+    /// marked container.
     ///
     /// Case: two panes side by side at a 10×20 px cell on a 2× display.
     #[test]
@@ -380,6 +344,20 @@ mod tests {
         let (a, b) = two_panes(&mut app);
         set_layout(&mut app, 1, PaneId(1));
         app.update();
+        let container = app
+            .world_mut()
+            .query_filtered::<Entity, With<MuxPaneContainer>>()
+            .single(app.world())
+            .unwrap();
+        let separator = app
+            .world_mut()
+            .query_filtered::<Entity, With<MuxSeparator>>()
+            .single(app.world())
+            .unwrap();
+        assert_eq!(
+            app.world().get::<ChildOf>(separator).map(ChildOf::parent),
+            Some(container)
+        );
         let node_a = app.world().get::<Node>(a).unwrap();
         assert_eq!((node_a.left, node_a.width), (Val::Px(0.0), Val::Px(204.0)));
         let node_b = app.world().get::<Node>(b).unwrap();
@@ -646,44 +624,6 @@ mod tests {
         });
         app.update();
         assert_eq!(app.world().get::<Node>(a).unwrap().width, Val::Px(409.0));
-    }
-
-    /// Asserts that a separator spawned before any pane was parented is
-    /// re-parented under the container once one becomes resolvable,
-    /// rather than staying parentless for its whole life.
-    ///
-    /// Case: the first `Layout` arrives before the shell surface has
-    /// parented the pane entities, so `container_of` first resolves to
-    /// `None`; a later frame parents the panes and reapplies the layout.
-    #[test]
-    fn an_unparented_separator_is_reparented_once_a_container_resolves() {
-        let mut app = app();
-        let (a, b) = two_panes(&mut app);
-        set_layout(&mut app, 1, PaneId(1));
-        app.update();
-        let separator = app
-            .world_mut()
-            .query_filtered::<Entity, With<MuxSeparator>>()
-            .single(app.world())
-            .unwrap();
-        assert!(app.world().get::<ChildOf>(separator).is_none());
-
-        let container = app.world_mut().spawn(Node::default()).id();
-        app.world_mut().entity_mut(a).insert(ChildOf(container));
-        app.world_mut().entity_mut(b).insert(ChildOf(container));
-        app.world_mut().insert_resource(PaneGeometry {
-            cell_px: CellPixels {
-                width: 20,
-                height: 20,
-            },
-            scale_factor: 2.0,
-        });
-        app.update();
-
-        assert_eq!(
-            app.world().get::<ChildOf>(separator).map(ChildOf::parent),
-            Some(container)
-        );
     }
 
     /// Asserts that reapplying a layout whose pane rectangles are

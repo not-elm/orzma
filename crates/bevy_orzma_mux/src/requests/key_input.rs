@@ -1,7 +1,8 @@
 //! `RequestTtyKeyInput` (a specific pane) and `RequestActiveKeyInput`
 //! (the backend's active pane): both become `MuxCommand::KeyInput`.
 
-use crate::{MuxConnection, MuxPane};
+use crate::MuxConnection;
+use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzma_mux::prelude::{MuxCommand, PaneTarget};
 use orzma_tty::prelude::{TerminalKey, TerminalModifiers};
@@ -38,18 +39,12 @@ impl Plugin for KeyInputPlugin {
     }
 }
 
-fn apply_key_input(
-    e: On<RequestTtyKeyInput>,
-    connection: Res<MuxConnection>,
-    panes: Query<&MuxPane>,
-) {
-    if let Ok(pane) = panes.get(e.terminal) {
-        connection.0.send(MuxCommand::KeyInput {
-            pane: PaneTarget::Id(pane.0),
-            key: e.key.clone(),
-            mods: e.modifiers,
-        });
-    }
+fn apply_key_input(e: On<RequestTtyKeyInput>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::KeyInput {
+        pane: PaneTarget::Id(pane),
+        key: e.key.clone(),
+        mods: e.modifiers,
+    });
 }
 
 fn apply_active_key_input(e: On<RequestActiveKeyInput>, connection: Res<MuxConnection>) {

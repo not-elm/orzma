@@ -2,7 +2,7 @@
 //! pitch from the primary window and the font metrics, records them in
 //! `PaneGeometry`, and sends `MuxCommand::Resize`.
 
-use crate::surface::geometry::cells_for;
+use crate::surface::geometry::{cell_pitch_phys, cells_for};
 use bevy::ecs::schedule::common_conditions::on_message;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized};
@@ -51,8 +51,7 @@ fn send_window_geometry(
     let Ok(window) = window.single() else {
         return;
     };
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let (cell_w, cell_h) = cell_pitch_phys(&metrics.metrics);
     let (cols, rows) = cells_for(
         window.resolution.physical_width(),
         window.resolution.physical_height(),

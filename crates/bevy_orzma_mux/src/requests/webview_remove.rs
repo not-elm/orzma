@@ -2,7 +2,7 @@
 //! terminal entity to drop when a registration is released, sent as
 //! `MuxCommand::RemovePlacements`.
 
-use crate::{MuxConnection, MuxPane};
+use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzma_mux::prelude::MuxCommand;
 use orzma_vt::prelude::InstanceId;
@@ -29,17 +29,11 @@ impl Plugin for WebviewRemovePlugin {
     }
 }
 
-fn apply_webview_remove(
-    e: On<RequestTtyWebviewRemove>,
-    connection: Res<MuxConnection>,
-    panes: Query<&MuxPane>,
-) {
-    if let Ok(pane) = panes.get(e.terminal) {
-        connection.0.send(MuxCommand::RemovePlacements {
-            pane: pane.0,
-            instances: e.instances.clone(),
-        });
-    }
+fn apply_webview_remove(e: On<RequestTtyWebviewRemove>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::RemovePlacements {
+        pane,
+        instances: e.instances.clone(),
+    });
 }
 
 #[cfg(test)]

@@ -1,7 +1,8 @@
 //! `RequestTtyPaste` (a specific pane) and `RequestActivePaste` (the
 //! backend's active pane): both become `MuxCommand::Paste`.
 
-use crate::{MuxConnection, MuxPane};
+use crate::MuxConnection;
+use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzma_mux::prelude::{MuxCommand, PaneTarget};
 
@@ -37,13 +38,11 @@ impl Plugin for PastePlugin {
     }
 }
 
-fn apply_paste(e: On<RequestTtyPaste>, connection: Res<MuxConnection>, panes: Query<&MuxPane>) {
-    if let Ok(pane) = panes.get(e.terminal) {
-        connection.0.send(MuxCommand::Paste {
-            pane: PaneTarget::Id(pane.0),
-            text: e.text.clone(),
-        });
-    }
+fn apply_paste(e: On<RequestTtyPaste>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::Paste {
+        pane: PaneTarget::Id(pane),
+        text: e.text.clone(),
+    });
 }
 
 fn apply_active_paste(e: On<RequestActivePaste>, connection: Res<MuxConnection>) {

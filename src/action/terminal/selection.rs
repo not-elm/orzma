@@ -160,7 +160,6 @@ fn to_grid_point(viewport_point: GridPoint, offset: DisplayOffset) -> GridPoint 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orzma_mux::prelude::RequestId;
     use orzma_vt::prelude::{GridColumn, GridLine};
 
     #[derive(Resource, Default)]
@@ -337,17 +336,13 @@ mod tests {
         app.world_mut()
             .trigger(TerminalSelectionCopy { entity: terminal });
         app.world_mut().trigger(TtySelectionTextSignal {
-            request: RequestId(1),
             text: Some("hello".into()),
         });
         app.world_mut().trigger(TtySelectionTextSignal {
-            request: RequestId(2),
             text: Some(String::new()),
         });
-        app.world_mut().trigger(TtySelectionTextSignal {
-            request: RequestId(3),
-            text: None,
-        });
+        app.world_mut()
+            .trigger(TtySelectionTextSignal { text: None });
         app.update();
         let seen = app.world().resource::<Seen>();
         assert_eq!(seen.requests, vec![terminal]);

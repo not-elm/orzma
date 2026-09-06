@@ -4,6 +4,7 @@
 //! are implemented; the palette, hyperlinks, and the clipboard land
 //! later.
 
+use percent_encoding::percent_decode;
 use std::path::PathBuf;
 
 /// The directory an `OSC 7` reports, or `None` for every other
@@ -24,40 +25,8 @@ pub(crate) fn current_dir(params: &[&[u8]]) -> Option<PathBuf> {
     let joined = parts.join(&b';');
     let rest = joined.strip_prefix(b"file://")?;
     let index = rest.iter().position(|byte| *byte == b'/')?;
-    let decoded = percent_decode(&rest[index..]);
-    Some(PathBuf::from(
-        String::from_utf8_lossy(&decoded).into_owned(),
-    ))
-}
-
-/// The bytes of `encoded` with every `%XX` escape replaced by the octet
-/// it names; a `%` not followed by two hex digits is kept verbatim.
-fn percent_decode(encoded: &[u8]) -> Vec<u8> {
-    let mut decoded = Vec::with_capacity(encoded.len());
-    let mut index = 0;
-    while index < encoded.len() {
-        if encoded[index] == b'%'
-            && let Some(hex) = encoded.get(index + 1..index + 3)
-            && let Some(octet) = hex_octet(hex)
-        {
-            decoded.push(octet);
-            index += 3;
-        } else {
-            decoded.push(encoded[index]);
-            index += 1;
-        }
-    }
-    decoded
-}
-
-/// The octet two hex digits name, or `None` when either is not hex.
-fn hex_octet(hex: &[u8]) -> Option<u8> {
-    let [high, low] = hex else {
-        return None;
-    };
-    let high = char::from(*high).to_digit(16)?;
-    let low = char::from(*low).to_digit(16)?;
-    u8::try_from(high * 16 + low).ok()
+    let decoded = percent_decode(&rest[index..]).decode_utf8_lossy();
+    Some(PathBuf::from(decoded.into_owned()))
 }
 
 /// The sanitized window title an `OSC 0` or `OSC 2` sets, or `None` for

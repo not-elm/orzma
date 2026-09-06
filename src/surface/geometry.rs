@@ -6,12 +6,24 @@
 use bevy::ecs::entity::Entity;
 use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
+use orzma_tty_renderer::CellMetrics;
 
 /// Which half of a cell the pointer fell in (left vs. right of the midline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Side {
     Left,
     Right,
+}
+
+/// The `(width, height)` cell pitch in whole physical px, never below one
+/// on either axis: the pitch the renderer paints at and the PTY winsize
+/// is derived from, so every hit-test and resize divides by the same
+/// numbers.
+pub(crate) fn cell_pitch_phys(metrics: &CellMetrics) -> (f32, f32) {
+    (
+        metrics.advance_phys.floor().max(1.0),
+        metrics.line_height_phys.floor().max(1.0),
+    )
 }
 
 /// Pointer in pane-local physical px (origin = pane node top-left), or `None`

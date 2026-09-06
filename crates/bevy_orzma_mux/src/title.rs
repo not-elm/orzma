@@ -27,10 +27,8 @@ impl Plugin for TtyTitlePlugin {
 }
 
 fn on_title_changed(event: On<TtyTitleChangedSignal>, mut titles: Query<&mut TtyTitle>) {
-    if let Ok(mut title) = titles.get_mut(event.terminal)
-        && title.0.as_deref() != Some(event.title.as_str())
-    {
-        title.0 = Some(event.title.clone());
+    if let Ok(mut title) = titles.get_mut(event.terminal) {
+        title.set_if_neq(TtyTitle(Some(event.title.clone())));
     }
 }
 

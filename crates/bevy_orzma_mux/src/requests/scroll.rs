@@ -1,7 +1,7 @@
 //! `RequestTtyScroll`: the viewport movement the host UI asks a terminal
 //! entity to perform, sent as `MuxCommand::Scroll`.
 
-use crate::{MuxConnection, MuxPane};
+use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzma_mux::prelude::MuxCommand;
 use orzma_vt::prelude::Scroll;
@@ -29,13 +29,11 @@ impl Plugin for ScrollPlugin {
     }
 }
 
-fn apply_scroll(e: On<RequestTtyScroll>, connection: Res<MuxConnection>, panes: Query<&MuxPane>) {
-    if let Ok(pane) = panes.get(e.terminal) {
-        connection.0.send(MuxCommand::Scroll {
-            pane: pane.0,
-            scroll: e.scroll,
-        });
-    }
+fn apply_scroll(e: On<RequestTtyScroll>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| MuxCommand::Scroll {
+        pane,
+        scroll: e.scroll,
+    });
 }
 
 #[cfg(test)]

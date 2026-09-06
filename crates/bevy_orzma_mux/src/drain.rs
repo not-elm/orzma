@@ -93,11 +93,7 @@ fn apply_event(
             Some(terminal) => trigger_vt_signal(commands, terminal, signal),
             None => tracing::debug!(?pane, "signal for an unknown pane dropped"),
         },
-        MuxEvent::SelectionText {
-            request,
-            pane: _,
-            text,
-        } => commands.trigger(TtySelectionTextSignal { request, text }),
+        MuxEvent::SelectionText { text } => commands.trigger(TtySelectionTextSignal { text }),
         MuxEvent::PaneClosed { pane, reason } => {
             if let Some(entity) = registry.panes.remove(&pane) {
                 let code = match reason {
@@ -121,9 +117,10 @@ fn trigger_frame(commands: &mut Commands, registry: &PaneRegistry, pane: PaneId,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::requests::test_support::app_with_channels;
     use crate::signals::TtyFrameSignal;
     use crossbeam_channel::Sender;
-    use orzma_mux::prelude::{CloseReason, CommandSeq, Layout, MuxClient, PaneRect, RequestId};
+    use orzma_mux::prelude::{CloseReason, CommandSeq, Layout, PaneRect, RequestId};
     use orzma_vt::prelude::{Cursor, DisplayOffset, GridSize};
 
     #[derive(Resource, Default)]
@@ -131,17 +128,13 @@ mod tests {
         ended: usize,
         spawn_failed: Vec<(Entity, String)>,
         frames: Vec<Entity>,
-        texts: Vec<(RequestId, Option<String>)>,
+        texts: Vec<Option<String>>,
         layout_changes: usize,
     }
 
     fn app() -> (App, Sender<MuxEvent>) {
-        let (client, events, _commands) = MuxClient::detached();
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(DrainPlugin)
-            .insert_resource(MuxConnection(client))
-            .init_resource::<Seen>()
+        let (mut app, events, _commands) = app_with_channels(DrainPlugin);
+        app.init_resource::<Seen>()
             .add_observer(|_: On<MuxSessionEnded>, mut seen: ResMut<Seen>| seen.ended += 1)
             .add_observer(|ev: On<MuxPaneSpawnFailed>, mut seen: ResMut<Seen>| {
                 seen.spawn_failed.push((ev.entity, ev.error.clone()));
@@ -150,7 +143,7 @@ mod tests {
                 seen.frames.push(ev.terminal)
             })
             .add_observer(|ev: On<TtySelectionTextSignal>, mut seen: ResMut<Seen>| {
-                seen.texts.push((ev.request, ev.text.clone()));
+                seen.texts.push(ev.text.clone());
             })
             .add_systems(
                 Update,
@@ -328,26 +321,16 @@ mod tests {
     }
 
     /// Asserts that `SelectionText` is forwarded as
-    /// `TtySelectionTextSignal` with its request and text, including a
-    /// `None` answer.
+    /// `TtySelectionTextSignal`, including a `None` answer.
     ///
     /// Case: the user copies from a pane that closed before the backend
     /// answered.
     #[test]
-    fn selection_text_is_forwarded_with_its_request() {
+    fn selection_text_is_forwarded() {
         let (mut app, events) = app();
-        events
-            .send(MuxEvent::SelectionText {
-                request: RequestId(9),
-                pane: None,
-                text: None,
-            })
-            .unwrap();
+        events.send(MuxEvent::SelectionText { text: None }).unwrap();
         app.update();
-        assert_eq!(
-            app.world().resource::<Seen>().texts,
-            vec![(RequestId(9), None)]
-        );
+        assert_eq!(app.world().resource::<Seen>().texts, vec![None]);
     }
 
     /// Asserts that a vanished backend ends the session once.

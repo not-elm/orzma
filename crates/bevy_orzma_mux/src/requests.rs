@@ -8,7 +8,10 @@ use crate::requests::{
     pane::PaneActionPlugin, paste::PastePlugin, scroll::ScrollPlugin, selection::SelectionPlugin,
     vi_mode::ViModePlugin, vi_motion::ViMotionPlugin, webview_remove::WebviewRemovePlugin,
 };
+use crate::{MuxConnection, MuxPane};
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use orzma_mux::prelude::{CommandSeq, MuxCommand, PaneId};
 
 mod copy;
 mod key_input;
@@ -55,27 +58,59 @@ impl Plugin for OrzmaEventRequestPlugin {
     }
 }
 
-/// Test-only fixtures shared by every request observer's tests: a
-/// detached [`MuxClient`]-backed app plus helpers to spawn a mirrored
-/// pane entity and drain what the observer sent.
+/// Sends a pane-addressed command for a terminal entity: the one place
+/// that maps an entity to its `PaneId` and drops requests aimed at an
+/// entity that is not (or no longer) a pane.
+#[derive(SystemParam)]
+pub(crate) struct PaneSender<'w, 's> {
+    connection: Res<'w, MuxConnection>,
+    panes: Query<'w, 's, &'static MuxPane>,
+}
+
+impl PaneSender<'_, '_> {
+    /// Sends the command `build` makes for `entity`'s pane, returning its
+    /// sequence number, or `None` (nothing sent) when `entity` is not a
+    /// pane.
+    pub(crate) fn send_for(
+        &self,
+        entity: Entity,
+        build: impl FnOnce(PaneId) -> MuxCommand,
+    ) -> Option<CommandSeq> {
+        let pane = self.panes.get(entity).ok()?;
+        Some(self.connection.0.send(build(pane.0)))
+    }
+}
+
+/// Test-only fixtures shared by this crate's tests: a detached
+/// [`MuxClient`]-backed app plus helpers to spawn a mirrored pane entity
+/// and drain what an observer sent.
 #[cfg(test)]
 pub(crate) mod test_support {
     use crate::{MuxConnection, MuxPane, layout::CurrentLayout, registry::PaneRegistry};
     use bevy::prelude::*;
-    use crossbeam_channel::Receiver;
-    use orzma_mux::prelude::{CommandSeq, MuxClient, MuxCommand, PaneId};
+    use crossbeam_channel::{Receiver, Sender};
+    use orzma_mux::prelude::{CommandSeq, MuxClient, MuxCommand, MuxEvent, PaneId};
 
-    /// An app with a detached client; returns the backend's command end.
-    pub(crate) fn app_with_connection(
+    /// An app with a detached client; returns the backend's ends of both
+    /// channels.
+    pub(crate) fn app_with_channels(
         plugin: impl Plugin,
-    ) -> (App, Receiver<(CommandSeq, MuxCommand)>) {
-        let (client, _events, commands) = MuxClient::detached();
+    ) -> (App, Sender<MuxEvent>, Receiver<(CommandSeq, MuxCommand)>) {
+        let (client, events, commands) = MuxClient::detached();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(plugin)
             .init_resource::<PaneRegistry>()
             .init_resource::<CurrentLayout>()
             .insert_resource(MuxConnection(client));
+        (app, events, commands)
+    }
+
+    /// An app with a detached client; returns the backend's command end.
+    pub(crate) fn app_with_connection(
+        plugin: impl Plugin,
+    ) -> (App, Receiver<(CommandSeq, MuxCommand)>) {
+        let (app, _events, commands) = app_with_channels(plugin);
         (app, commands)
     }
 
