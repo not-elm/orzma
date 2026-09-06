@@ -178,7 +178,7 @@ pub fn security_descriptor_sddl(path: &Path) -> io::Result<String> {
 }
 
 /// Asserts that `path` is private to the current user, for this crate's
-/// tests and its dependents' tests.
+/// tests.
 #[cfg(all(test, unix))]
 pub(crate) fn assert_private_dir(path: &Path) {
     let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
@@ -186,7 +186,7 @@ pub(crate) fn assert_private_dir(path: &Path) {
 }
 
 /// Asserts that `path` is private to the current user, for this crate's
-/// tests and its dependents' tests.
+/// tests.
 #[cfg(all(test, windows))]
 pub(crate) fn assert_private_dir(path: &Path) {
     let sddl = security_descriptor_sddl(path).unwrap();

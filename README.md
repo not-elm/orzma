@@ -42,8 +42,7 @@ just setup-cef   # one-time: CEF framework + render process into ~/.local/share/
 just run
 ```
 
-Builds download the pinned CEF once into `~/.cache/orzma/cef` (set `CEF_PATH`
-to use another directory). Re-run `just setup-cef` after a CEF version bump:
+`just`-driven builds download the pinned CEF once into `~/.cache/orzma/cef`; bare `cargo` commands download it into the build directory instead, so set `CEF_PATH` to that cache directory persistently in your environment if you prefer plain `cargo` (switching between the two relinks CEF each time). Re-run `just setup-cef` after a CEF version bump:
 the exported directory is not version-checked.
 
 The first pane opens PowerShell 7 if `pwsh` is on `PATH`, else Windows

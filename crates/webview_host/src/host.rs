@@ -31,8 +31,9 @@ pub struct RuntimeRoot {
 }
 
 impl RuntimeRoot {
-    /// Resolves a runtime root under `parent/<pid>/<name>/`, falling back to
-    /// `/tmp/orzma-webview` when the socket path would overflow the `sun_path` limit.
+    /// Resolves a runtime root under `parent/<pid>/<name>/`, falling back on
+    /// Unix to `/tmp/orzma-webview` when the socket path would overflow the
+    /// `sun_path` limit; on Windows an overflow is an error.
     pub fn resolve_in(parent: &Path, pid: u32, name: &str) -> Result<Self, RuntimeRootError> {
         if socket_path_fits(parent, pid, name) {
             return Self::new_in(parent, pid, name);

@@ -19,8 +19,7 @@ pnpm_licenses_version := "2.4.2"
 # set-but-empty case is handled explicitly to match Make's $(if ...).
 cargo_bin_dir := if env("CARGO_HOME", "") == "" { home_directory() / ".cargo" / "bin" } else { env("CARGO_HOME", "") / "bin" }
 
-[windows]
-set shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
 # Workspace members that are not yet ported to Windows (see
 # docs/superpowers/specs/2026-09-06-windows-platform-support-design.md).
