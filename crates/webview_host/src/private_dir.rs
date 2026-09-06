@@ -177,6 +177,49 @@ pub fn security_descriptor_sddl(path: &Path) -> io::Result<String> {
     Ok(unsafe { wide_to_string(owned.0.cast()) })
 }
 
+/// Normalizes an SDDL string the way Windows renders it: the descriptor is
+/// parsed and rendered back, so well-known SIDs come out as their two-letter
+/// aliases (for example `LA` for the built-in Administrator) exactly as
+/// [`security_descriptor_sddl`] would report them.
+#[cfg(windows)]
+pub fn canonical_sddl(sddl: &str) -> io::Result<String> {
+    let wide_sddl = wide(sddl);
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: `wide_sddl` is NUL-terminated UTF-16 that outlives the call, and
+    // `descriptor` is a valid out-pointer; the result is freed by `LocalOwned`.
+    let ok = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            wide_sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let descriptor = LocalOwned(descriptor.cast());
+    let mut out: *mut u16 = std::ptr::null_mut();
+    let mut out_len = 0u32;
+    // SAFETY: `descriptor.0` is a valid self-relative security descriptor for
+    // the duration of the call; `out` is a valid out-pointer freed by `LocalOwned`.
+    let ok = unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor.0.cast(),
+            SDDL_REVISION_1,
+            DACL_SECURITY_INFORMATION,
+            &mut out,
+            &mut out_len,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let owned = LocalOwned(out.cast());
+    // SAFETY: `out` is a NUL-terminated UTF-16 string the API allocated.
+    Ok(unsafe { wide_to_string(owned.0.cast()) })
+}
+
 /// Asserts that `path` is private to the current user, for this crate's
 /// tests.
 #[cfg(all(test, unix))]
@@ -191,15 +234,10 @@ pub(crate) fn assert_private_dir(path: &Path) {
 pub(crate) fn assert_private_dir(path: &Path) {
     let sddl = security_descriptor_sddl(path).unwrap();
     let sid = current_user_sid().unwrap();
-    assert!(
-        sddl.starts_with("D:P"),
-        "the DACL must be protected: {sddl}"
-    );
-    assert_eq!(sddl.matches("(A;").count(), 1, "one ACE expected: {sddl}");
-    assert!(sddl.contains("OICI"), "the ACE must be inheritable: {sddl}");
-    assert!(
-        sddl.contains(&sid),
-        "the ACE must name the current user: {sddl}"
+    let expected = canonical_sddl(&format!("D:P(A;OICI;FA;;;{sid})")).unwrap();
+    assert_eq!(
+        sddl, expected,
+        "the directory must carry exactly one inheritable current-user ACE"
     );
 }
 
@@ -282,10 +320,10 @@ mod tests {
         std::fs::write(&file, b"").unwrap();
         let sddl = security_descriptor_sddl(&file).unwrap();
         let sid = current_user_sid().unwrap();
-        assert_eq!(sddl.matches("(A;").count(), 1, "one ACE expected: {sddl}");
-        assert!(
-            sddl.contains(&sid),
-            "the ACE must name the current user: {sddl}"
+        let expected = canonical_sddl(&format!("D:(A;;FA;;;{sid})")).unwrap();
+        assert_eq!(
+            sddl, expected,
+            "the file must carry exactly the inherited current-user ACE"
         );
     }
 }

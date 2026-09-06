@@ -653,7 +653,9 @@ mod tests {
     #[test]
     fn the_bound_socket_file_is_private_to_the_current_user() {
         use orzma_webview_host::host::RuntimeRoot;
-        use orzma_webview_host::private_dir::{current_user_sid, security_descriptor_sddl};
+        use orzma_webview_host::private_dir::{
+            canonical_sddl, current_user_sid, security_descriptor_sddl,
+        };
         let dir = tempfile::tempdir().unwrap();
         let root = RuntimeRoot::resolve_in(dir.path(), 4244, "control").unwrap();
         let sock = root.socket_path("control");
@@ -665,10 +667,10 @@ mod tests {
         .unwrap();
         let sddl = security_descriptor_sddl(&sock).unwrap();
         let sid = current_user_sid().unwrap();
-        assert_eq!(sddl.matches("(A;").count(), 1, "one ACE expected: {sddl}");
-        assert!(
-            sddl.contains(&sid),
-            "the ACE must name the current user: {sddl}"
+        let expected = canonical_sddl(&format!("D:(A;;FA;;;{sid})")).unwrap();
+        assert_eq!(
+            sddl, expected,
+            "the socket file must carry exactly the inherited current-user ACE"
         );
     }
 }
