@@ -103,6 +103,7 @@ bitflags = "2"
 [workspace.lints.clippy]
 too_many_arguments = "allow"
 type_complexity = "allow"
+result_large_err = "allow"
 
 [profile.dist]
 inherits = "release"
