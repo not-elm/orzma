@@ -34,11 +34,9 @@ just install-apps
 This requires the orzma app itself — see the
 [root README](../../README.md#installation) for installing orzma.
 
-On Windows, orzmd installs and connects to orzma, but the webview does not
-appear yet because ConPTY strips the APC sequence that mounts it (see the
-root README). Local images are staged as symlinks when Developer Mode is on
-and copied otherwise; a copied image does not refresh until orzmd is
-restarted.
+On Windows, local images referenced by a document are staged as symlinks when
+Developer Mode is on and copied otherwise; a copied image does not refresh
+until orzmd is restarted.
 
 ## Usage
 

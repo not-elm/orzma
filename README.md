@@ -49,9 +49,9 @@ The first pane opens PowerShell 7 if `pwsh` is on `PATH`, else Windows
 PowerShell, else `cmd.exe`; set `[orzma] shell` in
 `~/.config/orzma/config.toml` to override (a configured path must carry its
 `.exe` extension). `just install-apps` builds and installs `orzmd` and
-`orzbrowser` into the cargo bin directory, the same as on macOS. They connect
-to orzma's control socket from a Windows pane, but ConPTY strips the APC
-sequence that mounts a webview, so no webview appears in a Windows pane yet.
+`orzbrowser` into the cargo bin directory, the same as on macOS. On Windows
+the SDK mounts webviews over the control socket instead of the PTY, because
+ConPTY drops the APC sequence; nothing changes for programs that use the SDK.
 
 ## Features
 

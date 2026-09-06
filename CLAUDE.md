@@ -26,10 +26,10 @@ The workspace root package is the one and only binary; library crates live under
 - `crates/webview_host` (`orzma_webview_host`) — Tokio-free webview host integration for orzma: a per-handle `RuntimeRoot` runtime directory tree (the 0700 socket dir the control plane mints), and (behind the `cef` feature) serving dynamically-registered Tier 1 webview assets from disk/memory through a `bevy_cef` `orzma://` custom scheme via the `bevy_cef_core` path dep. The `cef` feature is off by default so the core builds/tests with std only. Exposes `WebviewAsset`, `WebviewAssetRegistry`, `custom_orzma_scheme`, and `RuntimeRoot`.
 - `crates/orzma_configs` (`orzma_configs`) — config loader. Reads `~/.config/orzma/config.toml` (or `$ORZMA_CONFIG` / `$XDG_CONFIG_HOME` overrides) and resolves it against built-in defaults.
 - **Platforms.** macOS is the primary platform. Windows 10 1809+ / 11 (x64) is
-  supported for the `orzma` binary; `sdk/ratatui_orzma`, `apps/orzmd`, and
-  `apps/orzbrowser` build, test, and install there and reach the control
-  socket through `uds_windows`, but ConPTY strips the APC `mount` sequence, so
-  a webview cannot yet be mounted from a Windows pane. Linux is planned.
+  supported for the `orzma` binary, the `ratatui_orzma` SDK, and the companion
+  apps (`apps/orzmd`, `apps/orzbrowser`); the SDK reaches the control socket
+  through `uds_windows` there and mounts webviews with the socket `mount` op,
+  since ConPTY drops the APC verb. Linux is planned.
 
 In-process webview rendering is provided by the external `bevy_cef` crate (crates.io `0.12`, CEF v149 pinned to `149.3.0+149.0.6` in the justfile). Both the renderer and the helper render process come from `bevy_cef` / `export-cef-dir`; see `just setup-cef`.
 
