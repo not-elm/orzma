@@ -25,6 +25,10 @@ The workspace root package is the one and only binary; library crates live under
 - `crates/bevy_orzma_webview` (`bevy_orzma_webview`) — the in-process webview feature: depends on `orzma_vt`, `bevy_orzma_mux`, `orzma_tty_renderer`, `orzma_webview_host`, and `bevy_cef`. Aggregates CEF render wiring, the APC `mount` / `unmount` handler, the `window.orzma` back-channel, the control-socket listener that mints Tier 1 dynamic webview handles, and focus management. Exposes `OrzmaWebviewPlugin` and `cef_plugin`.
 - `crates/webview_host` (`orzma_webview_host`) — Tokio-free webview host integration for orzma: a per-handle `RuntimeRoot` runtime directory tree (the 0700 socket dir the control plane mints), and (behind the `cef` feature) serving dynamically-registered Tier 1 webview assets from disk/memory through a `bevy_cef` `orzma://` custom scheme via the `bevy_cef_core` path dep. The `cef` feature is off by default so the core builds/tests with std only. Exposes `WebviewAsset`, `WebviewAssetRegistry`, `custom_orzma_scheme`, and `RuntimeRoot`.
 - `crates/orzma_configs` (`orzma_configs`) — config loader. Reads `~/.config/orzma/config.toml` (or `$ORZMA_CONFIG` / `$XDG_CONFIG_HOME` overrides) and resolves it against built-in defaults.
+- **Platforms.** macOS is the primary platform. Windows 10 1809+ / 11 (x64) is
+  supported for the `orzma` binary; `sdk/ratatui_orzma`, `apps/orzmd`, and
+  `apps/orzbrowser` are Unix-only and are excluded from Windows `--workspace`
+  commands by the justfile (`windows_excludes`). Linux is planned.
 
 In-process webview rendering is provided by the external `bevy_cef` crate (crates.io `0.12`, CEF v149 pinned to `149.3.0+149.0.6` in the justfile). Both the renderer and the helper render process come from `bevy_cef` / `export-cef-dir`; see `just setup-cef`.
 
@@ -55,7 +59,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (crate
 | Run one crate's tests   | `cargo test -p orzma_configs` (e.g. `cargo test -p orzma_configs <name>`)          |
 | Lint + format (Rust)    | `cargo clippy --workspace --fix --allow-dirty --allow-staged && cargo fmt`         |
 | Fix everything          | `just fix-lint` (runs clippy fix, rustfmt, and `pnpm lint:fix`)                     |
-| Provision CEF (one-time) | `just setup-cef` (installs the CEF framework + debug render process; macOS)        |
+| Provision CEF (one-time) | `just setup-cef` (installs the CEF framework + render process; macOS and Windows) |
 
 Logs go through `tracing-subscriber`; override the filter with `RUST_LOG`.
 
