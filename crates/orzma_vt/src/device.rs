@@ -15,6 +15,7 @@ use crate::frame::damage::DamageSpan;
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::Screen;
 use crate::screen::grid::GridSize;
+use crate::screen::grid::coords::{GridColumn, ScreenLine};
 use crate::screen::viewport::{DisplayOffset, Scroll};
 use std::collections::VecDeque;
 
@@ -256,6 +257,38 @@ impl DeviceState {
             return false;
         }
         self.active_screen_mut().mount_placement(id, size);
+        true
+    }
+
+    /// Registers a mount anchored at the active screen's visible cell
+    /// (`row`, `column`) under the id the host minted; `false` when the
+    /// cell lies outside the grid or the cap rejects it.
+    ///
+    /// # Invariants
+    ///
+    /// Supersession runs before the cap check, as for
+    /// [`Self::mount_placement`].
+    pub fn mount_placement_at(
+        &mut self,
+        row: ScreenLine,
+        column: GridColumn,
+        size: PlacementSize,
+        id: InstanceId,
+    ) -> bool {
+        // NOTE: the bounds check must precede supersession. `Screen::line_id`
+        // indexes the ring unchecked and panics on a row past the grid, and
+        // supersession drops the live placement under `id`, so a rejected
+        // re-mount must return here and leave that placement untouched.
+        let grid = self.active_screen().grid_size();
+        if grid.rows <= row.0 || grid.cols <= column.0 {
+            return false;
+        }
+        self.supersede_placement(id);
+        if MAX_PLACEMENTS <= self.placement_count() {
+            return false;
+        }
+        self.active_screen_mut()
+            .mount_placement_at(id, row, column, size);
         true
     }
 

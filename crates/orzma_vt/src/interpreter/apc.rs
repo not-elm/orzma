@@ -6,7 +6,7 @@
 //! `VtSignal::WebviewMount` or `VtSignal::WebviewMountRejected` — is the
 //! dispatcher's job, which is why this module needs no device state.
 
-use crate::placement::{InstanceId, PlacementSize};
+use crate::placement::{InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};
 use std::str;
 
 /// What an orzma APC payload asked for: an inline mount or unmount of a
@@ -54,13 +54,6 @@ impl WebviewApcRequest {
     }
 }
 
-/// Upper bound on a mount's reserved rows. With the ~2:1 terminal cell
-/// aspect and DPR 2, a 200-row x 400-col mount is a near-square pixel
-/// region staying under the common 8192 px GPU texture dimension limit.
-const MAX_ROWS: u16 = 200;
-/// Upper bound on a mount's reserved cols; see `MAX_ROWS` for the sizing
-/// envelope.
-const MAX_COLS: u16 = 400;
 const MAX_APC_LEN: usize = 1024;
 const ORZMA_APC_PREFIX: &[u8; 1] = b"O";
 

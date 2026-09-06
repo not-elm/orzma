@@ -1076,6 +1076,25 @@ impl Screen {
         self.placements.mount(id, anchor, col, size);
     }
 
+    /// Registers a mount anchored at the visible row `row` and column
+    /// `column` under the id the host minted.
+    ///
+    /// # Invariants
+    ///
+    /// `row` and `column` lie inside the grid: `Grid::line_id` indexes the
+    /// ring unchecked, so the device bounds-checks against `grid_size`
+    /// before calling this.
+    pub fn mount_placement_at(
+        &mut self,
+        id: InstanceId,
+        row: ScreenLine,
+        column: GridColumn,
+        size: PlacementSize,
+    ) {
+        let anchor = self.grid.line_id(row);
+        self.placements.mount(id, anchor, column, size);
+    }
+
     /// Drops the placement a re-mount replaces, without reporting it.
     pub fn supersede_placement(&mut self, id: InstanceId) {
         self.placements.supersede(id);

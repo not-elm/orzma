@@ -121,6 +121,15 @@ pub struct PlacementSize {
 /// cap counts both screens, so it is strictly the stricter of the two.
 pub const MAX_PLACEMENTS: usize = 12;
 
+/// Upper bound on a mount's reserved rows. With the ~2:1 terminal cell
+/// aspect and DPR 2, a 200-row x 400-col mount is a near-square pixel
+/// region staying under the common 8192 px GPU texture dimension limit.
+pub const MAX_ROWS: u16 = 200;
+
+/// Upper bound on a mount's reserved cols; see [`MAX_ROWS`] for the sizing
+/// envelope.
+pub const MAX_COLS: u16 = 400;
+
 #[cfg(test)]
 mod tests {
     use super::*;
