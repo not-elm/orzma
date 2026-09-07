@@ -53,7 +53,9 @@ host; the APC verbs carry the mount/unmount; the page bridge carries the
 
 ### Transport
 
-The control socket is a local Unix **stream** socket speaking **NDJSON**:
+The control socket is a local Unix-domain **stream** socket speaking **NDJSON**
+(on Windows, an AF_UNIX socket, available since Windows 10 1809; the endpoint
+is a filesystem path on every platform):
 exactly one JSON object per line, terminated by `\n` (a trailing `\r` is
 tolerated). Each line travels in one direction. The connection is long-lived —
 it stays open for as long as the program wants its registrations to live.
@@ -73,9 +75,11 @@ and cannot use the protocol.
 
 ### Peer authentication
 
-The host checks that the connecting peer's user id equals orzma's own user id
-and silently drops the connection otherwise. Only processes running as the same
-user can connect.
+The host restricts the control socket to orzma's own user. On Unix it checks
+that the connecting peer's user id equals its own and silently drops the
+connection otherwise. On Windows the socket lives in a directory whose DACL
+grants access to the current user only, so other users cannot connect at all.
+Either way, only processes running as the same user can reach the handshake.
 
 ### Handshake
 
@@ -127,6 +131,8 @@ Every program line carries an `op`:
 | `emit` | `handle`, `event`, `payload` | Push an event to every page mounted from the handle (delivered to `window.orzma.on`). |
 | `focus` | `instance` (string or `null`) | Set app-owned focus to a mounted placement, or `null` to blur. |
 | `navigate` | `instance`, `action` | Navigate one mounted placement in place. |
+| `mount` | `instance`, `row`, `col`, `rows`, `cols` | Mount one placement at a 0-based cell of the pane's active screen, the socket form of the APC `mount` (see below). |
+| `unmount` | `instance` | Remove one placement mounted with the socket `mount`. |
 
 `navigate.action` is one of the strings `"back"`, `"forward"`, `"reload"`, or
 the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
@@ -265,6 +271,28 @@ The payload is at most 1024 bytes. A multi-byte character inside a key or a
 value makes that field malformed, but one outside a key or a value is
 silently dropped by the terminal's APC collector rather than rejected.
 
+### Socket form
+
+A PTY that re-renders its child's output rather than passing it through —
+ConPTY on Windows — drops APC strings, so every host also accepts the same
+two verbs as control-socket ops:
+
+```json
+{"op":"mount","instance":"<instance>","row":<row>,"col":<col>,"rows":<rows>,"cols":<cols>}
+{"op":"unmount","instance":"<instance>"}
+```
+
+`row` and `col` are the 0-based cell of the pane's active screen that the
+rect's top-left corner occupies: the cell an APC mount reaches by first moving
+the cursor with `CUP row+1;col+1`. Unlike `CUP`, they are absolute even when
+DECOM origin mode is on. `rows` and `cols` obey the APC bounds (`1`–`200`,
+`1`–`400`). The host drops a `mount` naming an instance the connection does
+not own or a size out of range; the terminal refuses a cell outside the grid
+or a mount past the per-terminal placement cap exactly as it refuses an APC
+mount. The socket `unmount` names one instance; there is no unmount-all form.
+The `ratatui_orzma` SDK sends the socket form on Windows and the APC form
+elsewhere.
+
 ### mount
 
 ```text
@@ -398,8 +426,8 @@ if (isOrzmaAvailable()) {
 
 ## Security model
 
-- **Same user only.** The host rejects any control connection whose peer user id
-  differs from orzma's.
+- **Same user only.** The host restricts the control socket to orzma's own
+  user: by peer user id on Unix, by the socket directory's DACL on Windows.
 - **Scoped to one pane.** A connection's token binds it to the pane that issued
   `$ORZMA_TOKEN`; a program may only mount, focus, navigate, and emit to
   registrations it made itself.

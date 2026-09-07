@@ -17,8 +17,14 @@ thiserror = { workspace = true }
 crossbeam-channel = "0.5"
 tracing = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1.2"
+
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+uds_windows = "1.2"
 
 [lints]
 workspace = true

@@ -11,7 +11,7 @@ use crate::{
     interpreter::Interpreter,
     placement::{InstanceId, PlacementSize},
     screen::grid::GridSize,
-    screen::grid::coords::GridPoint,
+    screen::grid::coords::{GridColumn, GridPoint, ScreenLine},
     screen::selection::{CellSide, SelectionKind},
     screen::viewport::{DisplayOffset, Scroll},
 };
@@ -35,7 +35,7 @@ pub mod prelude {
     pub use crate::device::modes::{KeypadMode, MouseEncoding, MouseTracking, ScreenKind, VtModes};
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
-    pub use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
+    pub use crate::placement::{AnchoredPlacement, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};
     pub use crate::screen::cursor::{CURSOR_VISIBLE_BIT, Cursor, CursorShape};
     pub use crate::screen::grid::GridSize;
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
@@ -129,6 +129,25 @@ pub trait Vt {
     /// - A frame's placements and display offset describe the same
     ///   instant as its rows.
     fn frame(&mut self) -> Option<Frame>;
+
+    /// Registers a host-driven mount anchored at the visible cell (`row`,
+    /// `column`) of the active screen; `true` when the placement was
+    /// registered, `false` when the cell lies outside the grid or the
+    /// per-terminal cap is full.
+    ///
+    /// This is the control-socket counterpart of the APC `mount`, for PTYs
+    /// that drop APC (ConPTY). The caller raises
+    /// [`VtSignal::WebviewMount`] or [`VtSignal::WebviewMountRejected`]
+    /// itself from the returned verdict. Like [`Vt::remove_placements`], it
+    /// stages no row damage: the changed placement list alone carries the
+    /// next frame.
+    fn mount_placement_at(
+        &mut self,
+        row: ScreenLine,
+        column: GridColumn,
+        size: PlacementSize,
+        instance: InstanceId,
+    ) -> bool;
 
     /// Removes the placements the host names, on either screen; returns
     /// whether anything went.
@@ -366,6 +385,16 @@ impl Vt for OrzmaVt {
         self.tracker.emit(&self.device)
     }
 
+    fn mount_placement_at(
+        &mut self,
+        row: ScreenLine,
+        column: GridColumn,
+        size: PlacementSize,
+        instance: InstanceId,
+    ) -> bool {
+        self.device.mount_placement_at(row, column, size, instance)
+    }
+
     fn remove_placements(&mut self, instances: &[InstanceId]) -> bool {
         self.device.remove_placements(instances)
     }
@@ -416,8 +445,8 @@ impl Vt for OrzmaVt {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::placement::{InstanceId, PlacementSize};
-    use crate::screen::grid::coords::{GridColumn, GridLine};
+    use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
+    use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
     use crate::screen::selection::{SelectionGeometry, SelectionRange};
     use crate::screen::viewport::ViewportLine;
 
@@ -1071,6 +1100,110 @@ mod tests {
         assert!(
             !vt.remove_placements(&[a]),
             "a second removal names nothing"
+        );
+    }
+
+    /// Asserts that a host-driven mount anchors at the named visible cell
+    /// and the next frame carries the placement there, staging no row
+    /// damage and needing no interpreted bytes.
+    ///
+    /// Case: an SDK program in a Windows pane, where ConPTY drops the APC
+    /// verb, mounts its view over the control socket at row 1, column 2.
+    #[test]
+    fn a_host_mount_anchors_at_the_named_cell_and_emits_a_frame() {
+        let id: InstanceId = "3f5a9c02d1e84b7690ab3cde12f45678"
+            .parse()
+            .expect("valid id");
+        let size = PlacementSize { rows: 4, cols: 8 };
+        let mut vt = OrzmaVt::new(GridSize { cols: 80, rows: 24 }, 100);
+        let _ = vt.frame();
+
+        assert!(vt.mount_placement_at(ScreenLine(1), GridColumn(2), size, id));
+        let frame = vt.frame().expect("the placement list changed");
+        assert!(frame.rows.is_empty(), "a host mount stages no row damage");
+        let placements = frame.placements.expect("the list changed");
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].id, id);
+        assert_eq!(placements[0].point.line, GridLine(1));
+        assert_eq!(placements[0].point.column, GridColumn(2));
+        assert_eq!(placements[0].size, size);
+    }
+
+    /// Asserts that a host-driven mount naming a cell outside the grid is
+    /// rejected and leaves a live placement under the same id untouched.
+    ///
+    /// Case: an SDK program re-mounts its view after the window shrank,
+    /// naming a row the smaller grid no longer has.
+    #[test]
+    fn a_host_mount_outside_the_grid_is_rejected_without_touching_the_live_placement() {
+        let id: InstanceId = "3f5a9c02d1e84b7690ab3cde12f45678"
+            .parse()
+            .expect("valid id");
+        let size = PlacementSize { rows: 4, cols: 8 };
+        let mut vt = OrzmaVt::new(GridSize { cols: 80, rows: 24 }, 100);
+        assert!(vt.mount_placement_at(ScreenLine(1), GridColumn(2), size, id));
+        let _ = vt.frame();
+
+        assert!(!vt.mount_placement_at(ScreenLine(24), GridColumn(2), size, id));
+        assert!(!vt.mount_placement_at(ScreenLine(1), GridColumn(80), size, id));
+        assert!(vt.frame().is_none(), "a rejected mount changes nothing");
+        assert!(
+            vt.remove_placements(&[id]),
+            "the earlier placement is still live"
+        );
+    }
+
+    /// Asserts that a host-driven mount is rejected once the per-terminal
+    /// cap is full, the same as an APC mount.
+    ///
+    /// Case: a program mounts one placement more than the terminal can
+    /// display.
+    #[test]
+    fn a_host_mount_past_the_cap_is_rejected() {
+        let size = PlacementSize { rows: 1, cols: 1 };
+        let mut vt = OrzmaVt::new(GridSize { cols: 80, rows: 24 }, 100);
+        for n in 0..MAX_PLACEMENTS {
+            assert!(vt.mount_placement_at(
+                ScreenLine(0),
+                GridColumn(0),
+                size,
+                InstanceId(n as u128 + 1)
+            ));
+        }
+        assert!(!vt.mount_placement_at(ScreenLine(0), GridColumn(0), size, InstanceId(u128::MAX)));
+    }
+
+    /// Asserts that a host-driven mount issued while the alternate screen
+    /// is active lands on the alternate screen, so returning to the
+    /// primary screen evicts it exactly as an APC mount's placement.
+    ///
+    /// Case: orzmd, a full-screen program, mounts its view over the socket
+    /// and later exits back to the shell.
+    #[test]
+    fn a_host_mount_during_the_alternate_screen_lands_on_it() {
+        let id: InstanceId = "3f5a9c02d1e84b7690ab3cde12f45678"
+            .parse()
+            .expect("valid id");
+        let mut vt = OrzmaVt::new(GridSize { cols: 80, rows: 24 }, 100);
+        vt.interpret(b"\x1b[?1049h");
+        let _ = vt.frame();
+
+        assert!(vt.mount_placement_at(
+            ScreenLine(1),
+            GridColumn(2),
+            PlacementSize { rows: 4, cols: 8 },
+            id
+        ));
+        let frame = vt.frame().expect("the placement list changed");
+        assert_eq!(frame.placements.expect("the list changed")[0].id, id);
+
+        let out = vt.interpret(b"\x1b[?1049l");
+        assert!(
+            out.signals.contains(&VtSignal::WebviewEvicted {
+                placements: vec![id]
+            }),
+            "leaving the alternate screen evicts the placement, got {:?}",
+            out.signals
         );
     }
 

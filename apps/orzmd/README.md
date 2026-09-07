@@ -34,6 +34,10 @@ just install-apps
 This requires the orzma app itself — see the
 [root README](../../README.md#installation) for installing orzma.
 
+On Windows, local images referenced by a document are staged as symlinks when
+Developer Mode is on and copied otherwise; a copied image does not refresh
+until orzmd is restarted.
+
 ## Usage
 
 ```bash

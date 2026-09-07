@@ -1,11 +1,12 @@
 //! Tokio-free control-plane listener: an accept loop thread plus one reader
-//! thread and one writer thread per connection. Each connection is
-//! peer-UID-checked, must `hello` with a valid token (resolved via
-//! `TokenRegistry` to its surface), then its `register`/`unregister` lines
-//! and its disconnect are emitted as `ControlEvent`s. A bounded reply channel
-//! per request carries the minted handle back from the ECS apply system; the
-//! reply is relayed through the per-connection writer thread so all writes go
-//! through a single owner.
+//! thread and one writer thread per connection. Each connection must come
+//! from orzma's own user (checked by peer UID on Unix, and enforced by the
+//! socket directory's DACL on Windows), must `hello` with a valid token
+//! (resolved via `TokenRegistry` to its surface), then its
+//! `register`/`unregister` lines and its disconnect are emitted as
+//! `ControlEvent`s. A bounded reply channel per request carries the minted
+//! handle back from the ECS apply system; the reply is relayed through the
+//! per-connection writer thread so all writes go through a single owner.
 
 use crate::control_plane::ConnectionWriters;
 use crate::control_plane::HandleId;
@@ -13,11 +14,12 @@ use crate::control_plane::TokenRegistry;
 use crate::control_plane::protocol::{ClientMsg, NavAction, RegisterKind, ServerMsg};
 use bevy::prelude::Entity;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+use orzma_webview_host::uds::{UnixListener, UnixStream};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::ops::ControlFlow;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
-use std::os::unix::net::{UnixListener, UnixStream};
 
 /// An event the listener emits to the ECS apply system.
 pub(crate) enum ControlEvent {
@@ -99,6 +101,32 @@ pub(crate) enum ControlEvent {
         /// What to do.
         action: NavAction,
     },
+    /// A socket `mount` for one of the connection's instances.
+    Mount {
+        /// Connection id (ownership check in apply).
+        connection_id: u64,
+        /// The surface the connection's token resolved to.
+        owner_surface: Entity,
+        /// The target instance.
+        instance: String,
+        /// 0-based visible row of the rect's top edge.
+        row: u16,
+        /// 0-based column of the rect's left edge.
+        col: u16,
+        /// Rect height in cells.
+        rows: u16,
+        /// Rect width in cells.
+        cols: u16,
+    },
+    /// A socket `unmount` for one of the connection's instances.
+    Unmount {
+        /// Connection id (ownership check in apply).
+        connection_id: u64,
+        /// The surface the connection's token resolved to.
+        owner_surface: Entity,
+        /// The target instance.
+        instance: String,
+    },
 }
 
 /// Binds `sock_path`, spawns the accept loop, and returns the receiver of
@@ -114,12 +142,10 @@ pub(crate) fn spawn_listener(
     let listener = UnixListener::bind(sock_path)?;
     let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
     let mut next_id: u64 = 1;
-    // SAFETY: `getuid` has no preconditions and cannot fail.
-    let own_uid = unsafe { libc::getuid() } as u32;
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
-            if peer_uid(&stream) != Some(own_uid) {
+            if !accepts(&stream) {
                 continue;
             }
             let connection_id = next_id;
@@ -133,6 +159,25 @@ pub(crate) fn spawn_listener(
         }
     });
     Ok(ev_rx)
+}
+
+/// Whether a freshly accepted connection may proceed to the handshake.
+///
+/// Unix: the peer's UID must equal orzma's own. Windows: always true —
+/// the socket directory's current-user DACL (see
+/// `orzma_webview_host::restrict_to_current_user`) already keeps other
+/// users from connecting, and AF_UNIX on Windows offers no peer
+/// credentials to double-check.
+#[cfg(unix)]
+fn accepts(stream: &UnixStream) -> bool {
+    // SAFETY: `getuid` has no preconditions and cannot fail.
+    let own_uid = unsafe { libc::getuid() } as u32;
+    peer_uid(stream) == Some(own_uid)
+}
+
+#[cfg(windows)]
+fn accepts(_stream: &UnixStream) -> bool {
+    true
 }
 
 /// Returns the connecting peer's UID via `getpeereid` (Apple/BSD), or `None` on
@@ -366,6 +411,30 @@ fn handle_client_msg(
                 action,
             });
         }
+        ClientMsg::Mount {
+            instance,
+            row,
+            col,
+            rows,
+            cols,
+        } => {
+            let _ = events.send(ControlEvent::Mount {
+                connection_id,
+                owner_surface,
+                instance,
+                row,
+                col,
+                rows,
+                cols,
+            });
+        }
+        ClientMsg::Unmount { instance } => {
+            let _ = events.send(ControlEvent::Unmount {
+                connection_id,
+                owner_surface,
+                instance,
+            });
+        }
     }
     ControlFlow::Continue(())
 }
@@ -556,6 +625,65 @@ mod tests {
         }
     }
 
+    /// Asserts that a `mount` line and a following `unmount` line from a
+    /// hello'd client become a `ControlEvent::Mount` and a
+    /// `ControlEvent::Unmount` bound to the token's surface, the mount
+    /// carrying the cell and size verbatim.
+    ///
+    /// Case: orzmd in a Windows pane sends its first socket `mount`.
+    #[test]
+    fn client_mount_and_unmount_lines_emit_their_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let tokens = TokenRegistry::default();
+        let surface = Entity::from_bits(7);
+        tokens.insert("tok", surface);
+        let events = spawn_listener(&sock, tokens, ConnectionWriters::default()).unwrap();
+
+        let mut client = UnixStream::connect(&sock).unwrap();
+        writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
+        writeln!(
+            client,
+            r#"{{"op":"mount","instance":"3f5a","row":2,"col":3,"rows":12,"cols":48}}"#
+        )
+        .unwrap();
+        writeln!(client, r#"{{"op":"unmount","instance":"3f5a"}}"#).unwrap();
+        client.flush().unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut saw_mount = false;
+        loop {
+            match events.recv_timeout(Duration::from_millis(50)) {
+                Ok(ControlEvent::Mount {
+                    owner_surface,
+                    instance,
+                    row,
+                    col,
+                    rows,
+                    cols,
+                    ..
+                }) => {
+                    assert_eq!(owner_surface, surface);
+                    assert_eq!(instance, "3f5a");
+                    assert_eq!((row, col, rows, cols), (2, 3, 12, 48));
+                    saw_mount = true;
+                }
+                Ok(ControlEvent::Unmount {
+                    owner_surface,
+                    instance,
+                    ..
+                }) => {
+                    assert!(saw_mount, "the mount precedes the unmount");
+                    assert_eq!(owner_surface, surface);
+                    assert_eq!(instance, "3f5a");
+                    break;
+                }
+                _ => {}
+            }
+            assert!(Instant::now() < deadline, "no Mount + Unmount within 2s");
+        }
+    }
+
     #[test]
     fn server_push_reaches_a_hello_d_client() {
         let dir = tempfile::tempdir().unwrap();
@@ -623,5 +751,35 @@ mod tests {
             }
             _ => panic!("expected Navigate"),
         }
+    }
+
+    /// Asserts that the bound socket file inherits the runtime
+    /// directory's current-user restriction.
+    ///
+    /// Case: orzma binds its control socket under `%TEMP%` on Windows,
+    /// where the endpoint ACL is the only thing keeping other users out.
+    #[cfg(windows)]
+    #[test]
+    fn the_bound_socket_file_is_private_to_the_current_user() {
+        use orzma_webview_host::host::RuntimeRoot;
+        use orzma_webview_host::private_dir::{
+            canonical_sddl, current_user_sid, security_descriptor_sddl,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let root = RuntimeRoot::resolve_in(dir.path(), 4244, "control").unwrap();
+        let sock = root.socket_path("control");
+        let _events = spawn_listener(
+            &sock,
+            TokenRegistry::default(),
+            ConnectionWriters::default(),
+        )
+        .unwrap();
+        let sddl = security_descriptor_sddl(&sock).unwrap();
+        let sid = current_user_sid().unwrap();
+        let expected = canonical_sddl(&format!("D:(A;;FA;;;{sid})")).unwrap();
+        assert_eq!(
+            sddl, expected,
+            "the socket file must carry exactly the inherited current-user ACE"
+        );
     }
 }

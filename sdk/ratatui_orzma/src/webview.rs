@@ -6,12 +6,12 @@ use crate::handler::{BoxedHandler, make_handler};
 use crate::keychord::KeyChord;
 use crate::protocol::{ClientMsg, HandleId, NavAction, RegisterKind};
 use crate::session::SessionCore;
+use crate::uds::UnixStream;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::io::Write;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 
@@ -573,7 +573,7 @@ mod tests {
     fn both_ids_reflect_a_slot_update() {
         let handle_slot = Arc::new(Mutex::new(HandleId::from("old-handle".to_owned())));
         let instance_slot = Arc::new(Mutex::new("old-instance".to_owned()));
-        let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (a, _b) = UnixStream::pair().unwrap();
         let writer: SharedWriter = Arc::new(Mutex::new(a));
         let handle = WebviewHandle::new_shared(
             handle_slot.clone(),
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn a_handle_navigation_addresses_its_default_instance() {
         use std::io::{BufRead, BufReader};
-        let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (client, server) = UnixStream::pair().unwrap();
         let writer: SharedWriter = Arc::new(Mutex::new(client));
         let handle = WebviewHandle::new_shared(
             Arc::new(Mutex::new(HandleId::from("h".to_owned()))),
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn an_extra_instance_navigates_itself() {
         use std::io::{BufRead, BufReader};
-        let (client, server) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (client, server) = UnixStream::pair().unwrap();
         let writer: SharedWriter = Arc::new(Mutex::new(client));
         let instance = WebviewInstance::new_shared(Arc::new(Mutex::new("i2".to_owned())), writer);
 
@@ -658,7 +658,7 @@ mod tests {
         events.ingest("hello", json!({"nope": 1}));
         events.ingest("hello", json!({"message": "b"}));
 
-        let (sock, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (sock, _b) = UnixStream::pair().unwrap();
         let writer: SharedWriter = Arc::new(Mutex::new(sock));
         let handle = WebviewHandle::new_shared(
             Arc::new(Mutex::new(HandleId::from("h".to_owned()))),

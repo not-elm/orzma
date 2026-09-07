@@ -7,12 +7,12 @@ use crate::handler::BoxedHandler;
 use crate::protocol::{
     ClientMsg, HandleId, IncomingCall, IncomingEvent, RegisterKind, ServerReply,
 };
+use crate::uds::UnixStream;
 use crate::webview::{SharedWriter, Webview, WebviewHandle, WebviewInstance};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use ratatui::layout::Rect;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
-use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -89,15 +89,40 @@ pub(crate) struct FlushState {
 }
 
 impl FlushState {
-    /// Emits this frame's geometry (mount/unmount APC verbs) to `out`
-    /// and, when focus changed since the last frame, the control-plane
-    /// focus op to `socket`.
+    /// Emits this frame's geometry and, when focus changed since the last
+    /// frame, the control-plane focus op.
+    ///
+    /// On Unix the geometry rides the PTY as APC verbs (`out`) and only the
+    /// focus op takes the socket; on Windows ConPTY drops APC, so the
+    /// geometry takes the socket too, as `mount` / `unmount` ops.
     pub fn emit_frame(
         &mut self,
         out: &mut impl Write,
         socket: &SharedWriter,
         frame: &FramePlacements,
     ) -> OrzmaResult<()> {
+        if cfg!(windows) {
+            let (verbs, current) = PlacementVerb::diff(self, &frame.placements);
+            let focus_changed = self.last_focused != frame.focused;
+            // NOTE: only take the writer lock (shared with the reader thread
+            // and every WebviewHandle::emit) when there is something to send;
+            // this runs every render frame and the unchanged path must not
+            // contend the lock. When it is taken, one lock covers the whole
+            // frame's writes so geometry and focus cannot interleave with a
+            // concurrent emit line.
+            if !verbs.is_empty() || focus_changed {
+                let mut w = socket.lock()?;
+                if !verbs.is_empty() {
+                    write_socket_verbs(&mut *w, &verbs)?;
+                    w.flush()?;
+                }
+                if focus_changed {
+                    flush_focus(&mut *w, &mut self.last_focused, &frame.focused)?;
+                }
+            }
+            self.last = current;
+            return Ok(());
+        }
         self.emit_placements(out, frame)?;
         // NOTE: only take the writer lock (shared with the reader thread and
         // every WebviewHandle::emit) when focus actually changed; this runs every
@@ -111,15 +136,20 @@ impl FlushState {
 
     /// Emits this frame's geometry to `out` alone, leaving the focus op unsent.
     ///
-    /// This is the flush to use while the control socket is down. Geometry
-    /// rides the PTY, which outlives the socket, and there is nothing at the
-    /// other end of the socket to receive a focus op — attempting one would
-    /// only fail the whole draw.
+    /// This is the flush to use while the control socket is down. On Unix
+    /// geometry rides the PTY, which outlives the socket, and there is nothing
+    /// at the other end of the socket to receive a focus op — attempting one
+    /// would only fail the whole draw. On Windows geometry needs the socket
+    /// too, so nothing is emitted until the reconnect, after which
+    /// [`Self::reset`] re-asserts every placement.
     pub fn emit_placements(
         &mut self,
         out: &mut impl Write,
         frame: &FramePlacements,
     ) -> OrzmaResult<()> {
+        if cfg!(windows) {
+            return Ok(());
+        }
         flush_placements(out, self, &frame.placements)
     }
 
@@ -453,62 +483,170 @@ fn resolve_orzma_token() -> Option<String> {
 fn connect_sock(sock: &str) -> OrzmaResult<UnixStream> {
     match UnixStream::connect(sock) {
         Ok(stream) => Ok(stream),
-        Err(cause)
-            if matches!(
-                cause.kind(),
-                ErrorKind::NotFound | ErrorKind::ConnectionRefused
-            ) =>
-        {
-            Err(OrzmaError::SocketUnavailable {
-                path: sock.to_owned(),
-                cause,
-            })
-        }
+        Err(cause) if is_stale_socket_error(cause.kind()) => Err(OrzmaError::SocketUnavailable {
+            path: sock.to_owned(),
+            cause,
+        }),
         Err(e) => Err(OrzmaError::Io(e)),
     }
 }
 
-/// Emits CUP + mount for new and moved placements, and unmount for instances
-/// that vanished, updating `state` to the new frame.
+/// Whether a connect failure means the socket's orzma is gone rather than a
+/// genuine IO fault.
 ///
-/// A placement whose rect is degenerate, or whose id is not a minted instance,
-/// is skipped and logged rather than propagated as an error: a single bad
-/// placement must not abort the flush, which would also desync `state` for
-/// every placement behind it. Such an id can never mount, so the log is the
-/// only trace the caller would otherwise get.
+/// Windows AF_UNIX reports a socket whose parent directory has been removed as
+/// `WSAENETDOWN` (`NetworkDown`), and a missing file or dead listener as
+/// `ConnectionRefused`; Unix reports `NotFound` / `ConnectionRefused`.
+fn is_stale_socket_error(kind: ErrorKind) -> bool {
+    matches!(kind, ErrorKind::NotFound | ErrorKind::ConnectionRefused)
+        || (cfg!(windows) && kind == ErrorKind::NetworkDown)
+}
+
+/// One geometry change a flush must announce, before it is spelled as an
+/// APC verb or a socket op.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PlacementVerb {
+    /// Mount (or re-mount) `instance` at the 0-based cell (`row`, `col`)
+    /// with the clamped size.
+    Mount {
+        instance: String,
+        row: u16,
+        col: u16,
+        rows: u16,
+        cols: u16,
+    },
+    /// Unmount `instance`, which was drawn last flush but not this one.
+    Unmount { instance: String },
+}
+
+impl PlacementVerb {
+    /// Diffs `placements` against `state.last`: a placement whose rect is
+    /// new or moved yields a `Mount`, an instance seen last flush but absent
+    /// now yields an `Unmount`. Returns the verbs and the map that becomes
+    /// `state.last` once they are written.
+    ///
+    /// A placement whose rect is degenerate, or whose id is not a minted
+    /// instance, is skipped and logged rather than propagated as an error: a
+    /// single bad placement must not abort the flush, which would also
+    /// desync `state` for every placement behind it. Such an id can never
+    /// mount, so the log is the only trace the caller would otherwise get.
+    fn diff(state: &FlushState, placements: &[Placement]) -> (Vec<Self>, HashMap<String, Rect>) {
+        let mut current: HashMap<String, Rect> = HashMap::new();
+        let mut verbs = Vec::new();
+        for p in placements {
+            if p.area.width == 0 || p.area.height == 0 || !valid_instance(&p.instance) {
+                tracing::debug!(
+                    instance = %p.instance,
+                    "skipping a placement with a degenerate area or an unusable instance id"
+                );
+                continue;
+            }
+            let (rows, cols) = clamp_dims(p.area.height, p.area.width);
+            let key = Rect {
+                x: p.area.x,
+                y: p.area.y,
+                width: cols,
+                height: rows,
+            };
+            current.insert(p.instance.clone(), key);
+            if state.last.get(&p.instance) != Some(&key) {
+                verbs.push(Self::Mount {
+                    instance: p.instance.clone(),
+                    row: p.area.y,
+                    col: p.area.x,
+                    rows,
+                    cols,
+                });
+            }
+        }
+        for instance in state.last.keys() {
+            if !current.contains_key(instance) {
+                verbs.push(Self::Unmount {
+                    instance: instance.clone(),
+                });
+            }
+        }
+        (verbs, current)
+    }
+}
+
+/// Emits CUP + mount for new and moved placements, and unmount for instances
+/// that vanished, updating `state` to the new frame: the APC spelling of
+/// [`PlacementVerb::diff`], for hosts whose PTY passes APC through.
 fn flush_placements(
     out: &mut impl Write,
     state: &mut FlushState,
     placements: &[Placement],
 ) -> OrzmaResult<()> {
-    let mut current: HashMap<String, Rect> = HashMap::new();
-    for p in placements {
-        if p.area.width == 0 || p.area.height == 0 || !valid_instance(&p.instance) {
-            tracing::debug!(
-                instance = %p.instance,
-                "skipping a placement with a degenerate area or an unusable instance id"
-            );
-            continue;
-        }
-        let (rows, cols) = clamp_dims(p.area.height, p.area.width);
-        let key = Rect {
-            x: p.area.x,
-            y: p.area.y,
-            width: cols,
-            height: rows,
-        };
-        current.insert(p.instance.clone(), key);
-        if state.last.get(&p.instance) != Some(&key) {
-            let seq = mount(&p.instance, rows, cols)?;
-            write!(out, "{}{}", cursor_to(p.area.y, p.area.x), seq)?;
-        }
-    }
-    for instance in state.last.keys() {
-        if !current.contains_key(instance) {
-            write!(out, "{}", unmount(instance))?;
+    let (verbs, current) = PlacementVerb::diff(state, placements);
+    for verb in verbs {
+        match verb {
+            PlacementVerb::Mount {
+                instance,
+                row,
+                col,
+                rows,
+                cols,
+            } => {
+                let seq = mount(&instance, rows, cols)?;
+                write!(out, "{}{}", cursor_to(row, col), seq)?;
+            }
+            PlacementVerb::Unmount { instance } => write!(out, "{}", unmount(&instance))?,
         }
     }
     out.flush()?;
+    state.last = current;
+    Ok(())
+}
+
+/// Writes each of `verbs` to `socket` as one NDJSON line, without flushing —
+/// the control-socket spelling of a [`PlacementVerb`].
+fn write_socket_verbs(socket: &mut impl Write, verbs: &[PlacementVerb]) -> OrzmaResult<()> {
+    for verb in verbs {
+        let msg = match verb {
+            PlacementVerb::Mount {
+                instance,
+                row,
+                col,
+                rows,
+                cols,
+            } => ClientMsg::Mount {
+                instance: instance.clone(),
+                row: *row,
+                col: *col,
+                rows: *rows,
+                cols: *cols,
+            },
+            PlacementVerb::Unmount { instance } => ClientMsg::Unmount {
+                instance: instance.clone(),
+            },
+        };
+        let mut line = serde_json::to_string(&msg)?;
+        line.push('\n');
+        socket.write_all(line.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// Emits the socket `mount` op for new and moved placements and the socket
+/// `unmount` op for instances that vanished, updating `state` to the new
+/// frame: the control-socket spelling of [`PlacementVerb::diff`], for hosts
+/// whose PTY drops APC (ConPTY on Windows). One NDJSON line per verb.
+///
+/// Test-only: [`FlushState::emit_frame`] needs the diff before deciding
+/// whether to take the writer lock, so it calls [`PlacementVerb::diff`] and
+/// [`write_socket_verbs`] itself rather than through this all-in-one form.
+/// This wrapper stays as the direct way to exercise the diff-write-flush
+/// sequence in isolation.
+#[cfg(test)]
+fn flush_placements_over_socket(
+    socket: &mut impl Write,
+    state: &mut FlushState,
+    placements: &[Placement],
+) -> OrzmaResult<()> {
+    let (verbs, current) = PlacementVerb::diff(state, placements);
+    write_socket_verbs(socket, &verbs)?;
+    socket.flush()?;
     state.last = current;
     Ok(())
 }
@@ -1242,7 +1380,7 @@ mod tests {
     /// placement of a view it registered earlier.
     #[test]
     fn a_reconnect_waits_for_the_registrations_before_it_dials() {
-        use std::os::unix::net::UnixListener;
+        use crate::uds::UnixListener;
         let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("new.sock");
@@ -1438,6 +1576,139 @@ mod tests {
         );
     }
 
+    /// Asserts that the socket flush writes one `mount` op line per new
+    /// placement, carrying the 0-based cell and the clamped size, and
+    /// writes nothing for an unchanged frame.
+    ///
+    /// Case: orzmd in a Windows pane draws its webview for the first time,
+    /// then redraws with nothing moved.
+    #[test]
+    fn socket_flush_emits_a_mount_op_then_skips_unchanged() {
+        let placements = vec![Placement {
+            instance: INSTANCE_A.into(),
+            area: rect(2, 3, 48, 12),
+        }];
+        let mut state = FlushState::default();
+
+        let mut buf = Vec::new();
+        flush_placements_over_socket(&mut buf, &mut state, &placements).unwrap();
+        let line: serde_json::Value =
+            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
+        assert_eq!(
+            line,
+            serde_json::json!({
+                "op": "mount",
+                "instance": INSTANCE_A,
+                "row": 3,
+                "col": 2,
+                "rows": 12,
+                "cols": 48
+            })
+        );
+
+        let mut buf2 = Vec::new();
+        flush_placements_over_socket(&mut buf2, &mut state, &placements).unwrap();
+        assert!(buf2.is_empty(), "unchanged frame emits nothing");
+    }
+
+    /// Asserts that the socket flush writes an `unmount` op for an
+    /// instance drawn last frame but absent now.
+    ///
+    /// Case: the user closes the pane that held the only placement of a
+    /// view, in a Windows pane.
+    #[test]
+    fn socket_flush_unmounts_a_vanished_instance() {
+        let mut state = FlushState::default();
+        let placements = vec![Placement {
+            instance: INSTANCE_A.into(),
+            area: rect(0, 0, 10, 5),
+        }];
+        flush_placements_over_socket(&mut Vec::new(), &mut state, &placements).unwrap();
+
+        let mut buf = Vec::new();
+        flush_placements_over_socket(&mut buf, &mut state, &[]).unwrap();
+        let line: serde_json::Value =
+            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
+        assert_eq!(
+            line,
+            serde_json::json!({ "op": "unmount", "instance": INSTANCE_A })
+        );
+        assert!(state.last.is_empty());
+    }
+
+    /// Asserts that on Windows a connected frame flush sends its geometry
+    /// over the control socket and writes nothing to the PTY.
+    ///
+    /// Case: orzmd draws inside a Windows pane, where ConPTY would drop an
+    /// APC written to the PTY.
+    #[cfg(windows)]
+    #[test]
+    fn emit_frame_sends_geometry_over_the_socket_on_windows() {
+        let (client, server) = UnixStream::pair().unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client));
+        let mut state = FlushState::default();
+        let mut frame = FramePlacements::default();
+        frame.record(INSTANCE_A.into(), rect(0, 0, 10, 5));
+
+        let mut pty = Vec::new();
+        state.emit_frame(&mut pty, &writer, &frame).unwrap();
+
+        assert!(pty.is_empty(), "nothing rides the PTY on Windows");
+        let mut line = String::new();
+        BufReader::new(server).read_line(&mut line).unwrap();
+        assert!(line.contains(r#""op":"mount""#), "got: {line}");
+    }
+
+    /// Asserts that on Windows the socket-down flush emits nothing to the
+    /// PTY and leaves `state.last` empty, since geometry needs the socket
+    /// there and there is nothing to diff against once it reconnects.
+    ///
+    /// Case: orzmd keeps drawing in a Windows pane while its control socket
+    /// is down after orzma restarted.
+    #[cfg(windows)]
+    #[test]
+    fn emit_placements_sends_nothing_while_the_socket_is_down_on_windows() {
+        let mut state = FlushState::default();
+        let mut frame = FramePlacements::default();
+        frame.record(INSTANCE_A.into(), rect(0, 0, 10, 5));
+
+        let mut pty = Vec::new();
+        state.emit_placements(&mut pty, &frame).unwrap();
+
+        assert!(pty.is_empty(), "nothing rides the PTY on Windows");
+        assert!(
+            state.last.is_empty(),
+            "nothing was sent, so there is nothing to diff against next flush"
+        );
+    }
+
+    /// Asserts that on Unix a connected frame flush writes its geometry to
+    /// the PTY as APC verbs and sends nothing over the control socket.
+    ///
+    /// Case: orzmd draws inside a macOS pane.
+    #[cfg(not(windows))]
+    #[test]
+    fn emit_frame_sends_geometry_over_the_pty_on_unix() {
+        use std::io::Read;
+        let (client, server) = UnixStream::pair().unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client));
+        let mut state = FlushState::default();
+        let mut frame = FramePlacements::default();
+        frame.record(INSTANCE_A.into(), rect(0, 0, 10, 5));
+
+        let mut pty = Vec::new();
+        state.emit_frame(&mut pty, &writer, &frame).unwrap();
+
+        assert!(String::from_utf8(pty).unwrap().contains("Omount;n="));
+        server.set_nonblocking(true).unwrap();
+        let mut probe = [0u8; 1];
+        let read = (&server).read(&mut probe);
+        assert!(
+            matches!(read, Err(ref e) if e.kind() == ErrorKind::WouldBlock),
+            "nothing rides the socket on Unix, got {read:?}"
+        );
+    }
+
     /// Asserts that a zero-width area is skipped even when the instance is a
     /// well-formed one, so the area gate alone decides.
     ///
@@ -1595,7 +1866,7 @@ mod tests {
     /// Case: one of two placements of a registration starts painting.
     #[test]
     fn reader_thread_inserts_compositing_into_shared_map() {
-        use std::os::unix::net::UnixListener;
+        use crate::uds::UnixListener;
 
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("test.sock");
@@ -1641,7 +1912,7 @@ mod tests {
     /// Case: a placement is unmounted after having composited.
     #[test]
     fn reader_thread_updates_compositing_to_false() {
-        use std::os::unix::net::UnixListener;
+        use crate::uds::UnixListener;
 
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("test2.sock");
@@ -1684,9 +1955,9 @@ mod tests {
     #[test]
     fn reader_thread_routes_event_into_registered_queues() {
         use crate::events::{EventDecl, EventQueues, EventRegistry};
+        use crate::uds::UnixListener;
         use std::any::TypeId;
         use std::io::Write;
-        use std::os::unix::net::UnixListener;
 
         struct Hello;
         let dir = tempfile::tempdir().unwrap();

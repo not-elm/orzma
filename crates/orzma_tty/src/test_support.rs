@@ -3,8 +3,8 @@
 //! the resize seam.
 
 use orzma_vt::prelude::{
-    CellSide, DisplayOffset, Frame, GridPoint, GridSize, InstanceId, InterpretOutput,
-    ResizeChanged, Scroll, SelectionKind, Vt, VtModes,
+    CellSide, DisplayOffset, Frame, GridColumn, GridPoint, GridSize, InstanceId, InterpretOutput,
+    PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind, Vt, VtModes,
 };
 #[cfg(any(test, feature = "test-support"))]
 use portable_pty::{MasterPty, PtySize};
@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 #[cfg(any(test, feature = "test-support"))]
 use std::io::Read;
 use std::io::{Result as IoResult, Write};
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(all(unix, any(test, feature = "test-support")))]
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -79,6 +79,10 @@ pub struct FakeVt {
     /// stranded, popped one list per such resize; an empty script
     /// reports none.
     pub evictions: VecDeque<Vec<InstanceId>>,
+    /// Every host-driven mount received, in order.
+    pub mounts: Vec<(ScreenLine, GridColumn, PlacementSize, InstanceId)>,
+    /// Scripted verdict for host-driven mounts.
+    pub mount_accepts: bool,
 }
 
 impl FakeVt {
@@ -97,6 +101,8 @@ impl FakeVt {
             updates: VecDeque::new(),
             frames: VecDeque::new(),
             evictions: VecDeque::new(),
+            mounts: Vec::new(),
+            mount_accepts: true,
         }
     }
 }
@@ -113,6 +119,17 @@ impl Vt for FakeVt {
 
     fn frame(&mut self) -> Option<Frame> {
         self.frames.pop_front()
+    }
+
+    fn mount_placement_at(
+        &mut self,
+        row: ScreenLine,
+        column: GridColumn,
+        size: PlacementSize,
+        instance: InstanceId,
+    ) -> bool {
+        self.mounts.push((row, column, size, instance));
+        self.mount_accepts
     }
 
     fn remove_placements(&mut self, _instances: &[InstanceId]) -> bool {

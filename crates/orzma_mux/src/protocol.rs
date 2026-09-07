@@ -6,7 +6,8 @@
 
 use orzma_tty::prelude::{CellPixels, MouseReport, TerminalKey, TerminalModifiers};
 use orzma_vt::prelude::{
-    CellSide, Frame, GridPoint, GridSize, InstanceId, Scroll, SelectionKind, VtSignal,
+    CellSide, Frame, GridColumn, GridPoint, GridSize, InstanceId, PlacementSize, ScreenLine,
+    Scroll, SelectionKind, VtSignal,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -191,6 +192,21 @@ pub enum MuxCommand {
         pane: PaneId,
         /// The placement instances to release.
         instances: Vec<InstanceId>,
+    },
+    /// Register a host-driven webview placement at a visible cell of a
+    /// pane — the socket-op counterpart of the APC `mount` for PTYs that
+    /// drop APC (ConPTY).
+    MountPlacement {
+        /// The pane the placement belongs to.
+        pane: PaneId,
+        /// The host-minted instance the mount registers.
+        instance: InstanceId,
+        /// The visible row the rect's top edge sits on.
+        row: ScreenLine,
+        /// The column the rect's left edge sits on.
+        column: GridColumn,
+        /// The rect's extent in cells.
+        size: PlacementSize,
     },
 }
 

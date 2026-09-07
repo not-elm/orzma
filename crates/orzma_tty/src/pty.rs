@@ -13,8 +13,12 @@ use std::io::{Read, Write};
 use std::mem;
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
+#[cfg(windows)]
+use std::time::{Duration, Instant};
 
 /// PTY ownership for one spawned shell.
 ///
@@ -55,6 +59,11 @@ impl Pty {
     /// Opens a PTY at the given grid size, spawns `options.shell` under
     /// it as a login shell, and starts the blocking reader/wait OS
     /// thread.
+    ///
+    /// On Windows, ConPTY writes `CSI 6 n` before it starts the child and
+    /// holds the child until a cursor-position report arrives; the owner
+    /// must write that reply through [`Self::write_all`]. `OrzmaTty` does
+    /// so with the VT's replies (see `Screen::cursor_position_report`).
     pub fn spawn(options: &SpawnOptions) -> OrzmaTtyResult<Self> {
         let (pixel_width, pixel_height) = options.cell_px.window_pixels(options.cols, options.rows);
         let pty_pair = native_pty_system()
@@ -302,6 +311,7 @@ fn master_pipes(
 ///
 /// The OS thread (vs. an async task) is required because the PTY read
 /// syscall is blocking.
+#[cfg(unix)]
 fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn Child + Send + Sync>,
@@ -332,6 +342,72 @@ fn spawn_reader_thread(
     });
 }
 
+/// Spawns the reader thread that drains PTY output into `chunk_tx`, and a
+/// second thread that waits for the child and sends the single `exit_tx`
+/// message once the output has gone quiet.
+///
+/// ConPTY keeps the output pipe open after the child exits until the
+/// pseudoconsole is closed, so the reader cannot learn about the exit from
+/// EOF the way the Unix reader does. The watcher waits [`OUTPUT_QUIESCENCE`]
+/// after the reader's last completed read so the child's final output is
+/// queued before the exit is reported; `OrzmaTty::pump` then reports
+/// `ChildExit` only once the queue is drained. The reader ends when the
+/// master is dropped by the pane teardown the exit triggers.
+#[cfg(windows)]
+fn spawn_reader_thread(
+    mut reader: Box<dyn Read + Send>,
+    mut child: Box<dyn Child + Send + Sync>,
+    chunk_tx: Sender<Vec<u8>>,
+    exit_tx: Sender<Option<i32>>,
+) {
+    let last_read = Arc::new(Mutex::new(Instant::now()));
+    let reader_clock = Arc::clone(&last_read);
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    *reader_clock.lock().unwrap() = Instant::now();
+                    if chunk_tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    thread::spawn(move || {
+        let code = child.wait().ok().map(|s| s.exit_code() as i32);
+        wait_for_output_quiescence(&last_read);
+        let _ = exit_tx.send(code);
+    });
+}
+
+/// How long the output stream must stay idle after the child exits
+/// before the exit is reported.
+#[cfg(windows)]
+const OUTPUT_QUIESCENCE: Duration = Duration::from_millis(50);
+
+/// The longest the watcher waits for the output to go quiet, so a
+/// pseudoconsole that keeps streaming cannot delay the exit forever.
+#[cfg(windows)]
+const OUTPUT_QUIESCENCE_CAP: Duration = Duration::from_secs(2);
+
+/// Blocks until no read has completed for [`OUTPUT_QUIESCENCE`], or
+/// [`OUTPUT_QUIESCENCE_CAP`] has passed.
+#[cfg(windows)]
+fn wait_for_output_quiescence(last_read: &Mutex<Instant>) {
+    let cap = Instant::now() + OUTPUT_QUIESCENCE_CAP;
+    loop {
+        let idle = last_read.lock().unwrap().elapsed();
+        if idle >= OUTPUT_QUIESCENCE || Instant::now() >= cap {
+            return;
+        }
+        thread::sleep(OUTPUT_QUIESCENCE - idle);
+    }
+}
+
 /// Stand-in child killer for the PTY-less constructors, which have no
 /// child process to kill.
 #[cfg(any(test, feature = "test-support"))]
@@ -356,6 +432,21 @@ mod tests {
     use std::io::sink;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    /// A program that prints one line and exits 0 on the host platform.
+    fn echo_program() -> &'static str {
+        if cfg!(windows) { "whoami" } else { "/bin/echo" }
+    }
+
+    /// Answers the cursor-position query ConPTY writes before it starts
+    /// the child. A `Pty` driven without a VT must reply itself.
+    #[cfg(windows)]
+    fn answer_cursor_query(pty: &mut Pty) {
+        pty.write_all(b"\x1b[1;1R").expect("reply to CSI 6 n");
+    }
+
+    #[cfg(unix)]
+    fn answer_cursor_query(_pty: &mut Pty) {}
 
     /// Asserts that a resize round-trips through the kernel: the size
     /// read back via `TIOCGWINSZ` is the size just applied.
@@ -446,15 +537,16 @@ mod tests {
     /// frame for output and exit state.
     #[test]
     fn exit_is_reported_once_after_the_child_terminates() {
-        let pty = Pty::spawn(&SpawnOptions {
+        let mut pty = Pty::spawn(&SpawnOptions {
             cols: 80,
             rows: 24,
             cell_px: CellPixels::default(),
-            shell: "/bin/echo".into(),
+            shell: echo_program().into(),
             cwd: None,
             env: Vec::new(),
         })
         .expect("Pty::spawn failed");
+        answer_cursor_query(&mut pty);
         let deadline = Instant::now() + Duration::from_secs(10);
         let code = loop {
             if let ExitPoll::Exited(code) = pty.poll_exit() {
@@ -490,15 +582,16 @@ mod tests {
 
     #[test]
     fn spawn_emits_chunk_and_exit_zero() {
-        let pty = Pty::spawn(&SpawnOptions {
+        let mut pty = Pty::spawn(&SpawnOptions {
             cols: 80,
             rows: 24,
             cell_px: CellPixels::default(),
-            shell: "/bin/echo".into(),
+            shell: echo_program().into(),
             cwd: None,
             env: Vec::new(),
         })
         .expect("Pty::spawn failed");
+        answer_cursor_query(&mut pty);
         let chunk = pty
             .chunk_rx
             .recv_timeout(Duration::from_secs(10))
@@ -509,5 +602,42 @@ mod tests {
             .recv_timeout(Duration::from_secs(10))
             .expect("no exit code arrived");
         assert_eq!(code, Some(0));
+    }
+
+    /// Asserts that the child's last output is delivered before its
+    /// exit is reported.
+    ///
+    /// Case: a Windows shell prints a farewell line and exits; the pane
+    /// must show the line before it closes.
+    #[cfg(windows)]
+    #[test]
+    fn the_final_output_precedes_the_exit_report() {
+        let mut pty = Pty::spawn(&SpawnOptions {
+            cols: 80,
+            rows: 24,
+            cell_px: CellPixels::default(),
+            shell: echo_program().into(),
+            cwd: None,
+            env: Vec::new(),
+        })
+        .expect("Pty::spawn failed");
+        answer_cursor_query(&mut pty);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut saw_output = false;
+        loop {
+            if let ChunkPoll::Chunk(chunk) = pty.poll_chunk() {
+                saw_output |= !chunk.is_empty();
+            }
+            if let ExitPoll::Exited(code) = pty.poll_exit() {
+                assert_eq!(code, Some(0));
+                assert!(
+                    saw_output,
+                    "the exit was reported before any output arrived"
+                );
+                break;
+            }
+            assert!(Instant::now() < deadline, "no exit report arrived");
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 }

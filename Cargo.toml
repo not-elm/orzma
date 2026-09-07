@@ -38,7 +38,6 @@ crossbeam-channel = "0.5"
 data-encoding = "2"
 fontique = { version = "0.9", default-features = false, features = ["std"] }
 getrandom = "0.2"
-libc = "0.2"
 open = { workspace = true }
 orzma_configs = { path = "crates/orzma_configs" }
 orzma_webview_host = { path = "crates/webview_host", features = ["cef"] }
@@ -56,6 +55,12 @@ tempfile = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 winit = "0.30"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [lints]
 workspace = true
@@ -98,6 +103,7 @@ bitflags = "2"
 [workspace.lints.clippy]
 too_many_arguments = "allow"
 type_complexity = "allow"
+result_large_err = "allow"
 
 [profile.dist]
 inherits = "release"

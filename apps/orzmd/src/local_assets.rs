@@ -1,15 +1,19 @@
-//! Stages local image files referenced by a Markdown document as symlinks
-//! under the served asset root's `_local/` directory, so the webview can load
-//! them as `orzma://<handle>/_local/<token>.<ext>` subresources.
+//! Stages local image files referenced by a Markdown document under the served
+//! asset root's `_local/` directory, so the webview can load them as
+//! `orzma://<handle>/_local/<token>.<ext>` subresources. Each entry is a
+//! symlink to the source file, or on Windows a copy when the user may not
+//! create symlinks.
 
 use crate::document::resolve_link;
 use std::fs;
-use std::io::ErrorKind;
-use std::os::unix::ffi::OsStrExt;
+use std::io::{self, ErrorKind};
+#[cfg(unix)]
 use std::os::unix::fs::symlink;
+#[cfg(windows)]
+use std::os::windows::fs::symlink_file;
 use std::path::Path;
 
-/// Stages the local file `raw` (resolved against `base_dir`) as a symlink under
+/// Stages the local file `raw` (resolved against `base_dir`) under
 /// `local_root/_local/` and returns its root-relative served URL, or `None` if
 /// `raw` does not resolve to a regular file.
 ///
@@ -21,12 +25,36 @@ pub(crate) fn stage(local_root: &Path, base_dir: &Path, raw: &str) -> Option<Str
     let dir = local_root.join("_local");
     fs::create_dir_all(&dir).ok()?;
     let link = dir.join(&token);
-    match symlink(&resolved, &link) {
+    match link_or_copy(&resolved, &link) {
         Ok(()) => {}
         Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
         Err(_) => return None,
     }
     Some(format!("_local/{token}"))
+}
+
+/// Creates `link` as a symlink to `target`.
+#[cfg(unix)]
+fn link_or_copy(target: &Path, link: &Path) -> io::Result<()> {
+    symlink(target, link)
+}
+
+/// Creates `link` as a symlink to `target`, or as a copy of it when the
+/// symlink cannot be created (a file symlink needs Developer Mode or
+/// administrator rights). An existing `link` is reported as `AlreadyExists`
+/// rather than overwritten.
+#[cfg(windows)]
+fn link_or_copy(target: &Path, link: &Path) -> io::Result<()> {
+    match symlink_file(target, link) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => Err(e),
+        Err(_) => {
+            if link.exists() {
+                return Err(io::Error::from(ErrorKind::AlreadyExists));
+            }
+            fs::copy(target, link).map(|_| ())
+        }
+    }
 }
 
 /// A content-addressed, filename-safe token for `resolved`: the blake3 hex of
@@ -40,7 +68,7 @@ pub(crate) fn stage(local_root: &Path, base_dir: &Path, raw: &str) -> Option<Str
 /// symlink, silently breaking the image. Dropping such an extension falls back
 /// to MIME sniffing rather than a broken request.
 fn token_for(resolved: &Path) -> String {
-    let hash = blake3::hash(resolved.as_os_str().as_bytes()).to_hex();
+    let hash = blake3::hash(resolved.as_os_str().as_encoded_bytes()).to_hex();
     match resolved.extension().and_then(|e| e.to_str()) {
         Some(ext) if ext.chars().all(|c| c.is_ascii_alphanumeric()) => format!("{hash}.{ext}"),
         _ => hash.to_string(),
@@ -74,8 +102,13 @@ mod tests {
         assert!(!t.contains('.'));
     }
 
+    /// Asserts that staging serves the resolved image's bytes under a
+    /// `_local/` URL and that a repeat call returns the same URL.
+    ///
+    /// Case: a Markdown file references `pic.png` next to it, and a later
+    /// re-render references the same image again.
     #[test]
-    fn stage_creates_symlink_to_resolved_target_and_is_idempotent() {
+    fn stage_serves_the_resolved_target_and_is_idempotent() {
         let base = tempfile::tempdir().unwrap();
         let img = base.path().join("pic.png");
         fs::write(&img, b"\x89PNG\r\n").unwrap();
@@ -85,16 +118,56 @@ mod tests {
         assert!(url1.starts_with("_local/"));
         assert!(url1.ends_with(".png"));
 
-        let link = root.path().join(&url1);
-        assert!(link.exists());
-        assert_eq!(
-            fs::read_link(&link).unwrap(),
-            fs::canonicalize(&img).unwrap()
-        );
+        let staged = root.path().join(&url1);
+        assert_eq!(fs::read(&staged).unwrap(), fs::read(&img).unwrap());
 
         assert_eq!(stage(root.path(), base.path(), "pic.png").unwrap(), url1);
     }
 
+    /// Asserts that on Unix the staged entry is a symlink to the canonical
+    /// target rather than a copy.
+    ///
+    /// Case: the user edits an image in place after the document has been
+    /// rendered once, and the next render should show the new bytes.
+    #[cfg(unix)]
+    #[test]
+    fn stage_symlinks_to_the_canonical_target_on_unix() {
+        let base = tempfile::tempdir().unwrap();
+        let img = base.path().join("pic.png");
+        fs::write(&img, b"x").unwrap();
+        let root = tempfile::tempdir().unwrap();
+
+        let url = stage(root.path(), base.path(), "pic.png").unwrap();
+        assert_eq!(
+            fs::read_link(root.path().join(&url)).unwrap(),
+            fs::canonicalize(&img).unwrap()
+        );
+    }
+
+    /// Asserts that on Windows the staged entry serves the target's bytes
+    /// whether or not the user may create symlinks.
+    ///
+    /// Case: orzmd runs on a Windows machine without Developer Mode, where a
+    /// file symlink needs administrator rights.
+    #[cfg(windows)]
+    #[test]
+    fn stage_serves_the_target_bytes_without_symlink_rights_on_windows() {
+        let base = tempfile::tempdir().unwrap();
+        let img = base.path().join("pic.png");
+        fs::write(&img, b"x").unwrap();
+        let root = tempfile::tempdir().unwrap();
+
+        let url = stage(root.path(), base.path(), "pic.png").unwrap();
+        let staged = root.path().join(&url);
+        assert!(staged.is_file());
+        assert_eq!(fs::read(&staged).unwrap(), b"x");
+    }
+
+    /// Asserts that a relative link is resolved against the document's base
+    /// directory, not the process working directory.
+    ///
+    /// Case: `img/a.gif` is referenced from a document opened by absolute
+    /// path from a different working directory.
     #[test]
     fn stage_relative_resolves_against_base_dir() {
         let base = tempfile::tempdir().unwrap();
@@ -105,10 +178,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
 
         let url = stage(root.path(), base.path(), "img/a.gif").unwrap();
-        let link = root.path().join(&url);
         assert_eq!(
-            fs::read_link(&link).unwrap(),
-            fs::canonicalize(&img).unwrap()
+            fs::read(root.path().join(&url)).unwrap(),
+            fs::read(&img).unwrap()
         );
     }
 

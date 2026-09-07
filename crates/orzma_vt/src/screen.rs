@@ -790,6 +790,19 @@ impl Screen {
         }
     }
 
+    /// The cursor position as a `CSI 6 n` report carries it: 1-based,
+    /// and relative to the top margin while origin mode confines the
+    /// cursor to the scroll region.
+    pub fn cursor_position_report(&self) -> (u16, u16) {
+        let origin = match self.scroll_region.origin_mode() {
+            OriginMode::WithinMargins => self.scroll_region.top_margin(),
+            OriginMode::UpperLeftCorner => ScreenLine(0),
+        };
+        let row = self.state.line.0.saturating_sub(origin.0) + 1;
+        let column = self.state.column.0 + 1;
+        (row, column)
+    }
+
     /// The selection as an emitted frame carries it: normalized,
     /// cell-side trimmed, in active-grid coordinates; `None` when there
     /// is no selection, its span is empty, or an endpoint's row has
@@ -1061,6 +1074,25 @@ impl Screen {
         let anchor = self.cursor_line_id();
         let col = self.cursor_column();
         self.placements.mount(id, anchor, col, size);
+    }
+
+    /// Registers a mount anchored at the visible row `row` and column
+    /// `column` under the id the host minted.
+    ///
+    /// # Invariants
+    ///
+    /// `row` and `column` lie inside the grid: `Grid::line_id` indexes the
+    /// ring unchecked, so the device bounds-checks against `grid_size`
+    /// before calling this.
+    pub fn mount_placement_at(
+        &mut self,
+        id: InstanceId,
+        row: ScreenLine,
+        column: GridColumn,
+        size: PlacementSize,
+    ) {
+        let anchor = self.grid.line_id(row);
+        self.placements.mount(id, anchor, column, size);
     }
 
     /// Drops the placement a re-mount replaces, without reporting it.

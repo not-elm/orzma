@@ -241,6 +241,15 @@ impl VTActor for Executor<'_> {
                 .set_scroll_region(params.value(0), params.value(1)),
             // DA1
             (None, b'c') if params.value(0).unwrap_or(0) == 0 => self.reply(PRIMARY_ATTRIBUTES),
+            // DSR
+            (None, b'n') => match params.value(0) {
+                Some(5) => self.reply(DEVICE_OK),
+                Some(6) => {
+                    let (row, column) = self.device.active_screen().cursor_position_report();
+                    self.reply(format!("\x1b[{row};{column}R").as_bytes());
+                }
+                _ => {}
+            },
             // NOTE: Title reporting (`CSI 20 t` for the icon label, `CSI
             // 21 t` for the window title) is deliberately not implemented.
             // The real attack surface of terminal titles is the report
@@ -639,6 +648,9 @@ fn repeat_count(value: Option<u16>) -> u16 {
 /// reports. A higher class would advertise features — Sixel, DRCS,
 /// selective erase — this terminal does not implement.
 const PRIMARY_ATTRIBUTES: &[u8] = b"\x1b[?6c";
+
+/// The DSR 5 response: the terminal is operating normally.
+const DEVICE_OK: &[u8] = b"\x1b[0n";
 
 /// Builds the DA2 response.
 ///

@@ -210,7 +210,7 @@ mod tests {
     /// the control socket goes away.
     #[test]
     fn a_disconnected_draw_with_a_focused_widget_still_schedules_a_reconnect() {
-        use std::os::unix::net::UnixStream;
+        use crate::uds::UnixStream;
         use std::sync::{Arc, Mutex};
         const INSTANCE: &str = "3f5a9c02d1e84b7690ab3cde12f45678";
 
@@ -262,7 +262,7 @@ mod tests {
     /// were re-minted and the generation never advanced.
     #[test]
     fn a_disconnected_draw_resets_flush_state() {
-        use std::os::unix::net::UnixStream;
+        use crate::uds::UnixStream;
         use std::sync::{Arc, Mutex};
         let disconnected = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn generation_change_resets_flush_state() {
-        use std::os::unix::net::UnixStream;
+        use crate::uds::UnixStream;
         use std::sync::{Arc, Mutex};
         let flush = FlushState::default();
         let disconnected = Arc::new(std::sync::atomic::AtomicBool::new(false));

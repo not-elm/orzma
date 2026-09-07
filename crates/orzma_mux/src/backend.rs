@@ -171,6 +171,17 @@ impl Backend {
                     p.tty.remove_placements(&instances);
                 }
             }
+            MuxCommand::MountPlacement {
+                pane,
+                instance,
+                row,
+                column,
+                size,
+            } => {
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "MountPlacement") {
+                    p.tty.mount_placement_at(instance, row, column, size);
+                }
+            }
         }
     }
 

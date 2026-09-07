@@ -288,6 +288,26 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
+    /// Registers a host-driven mount at the visible cell (`row`, `column`)
+    /// and queues the VT's verdict as the signal the mux forwards: an
+    /// accepted mount arms the coalescer and queues `WebviewMount`, a
+    /// rejected one queues `WebviewMountRejected` without arming.
+    pub fn mount_placement_at(
+        &mut self,
+        instance: InstanceId,
+        row: ScreenLine,
+        column: GridColumn,
+        size: PlacementSize,
+    ) {
+        let signal = if self.vt.mount_placement_at(row, column, size, instance) {
+            self.coalescer.arm_or_extend(Instant::now());
+            VtSignal::WebviewMount { instance, size }
+        } else {
+            VtSignal::WebviewMountRejected { instance }
+        };
+        self.pending_signals.push(TtySignal::Vt(signal));
+    }
+
     /// Encodes a key press and writes it to the PTY.
     ///
     /// Snaps a scrolled-back viewport to the live tail first
@@ -1326,6 +1346,65 @@ mod tests {
         assert!(
             !tty.coalescer.is_armed(),
             "a removal that names nothing does not"
+        );
+    }
+
+    /// Asserts that an accepted host-driven mount queues `WebviewMount`
+    /// for the next pump and arms the coalescer so a frame follows.
+    ///
+    /// Case: the control plane relays a socket `mount` from orzmd running
+    /// in a Windows pane.
+    #[test]
+    fn a_host_mount_queues_the_mount_signal_and_arms_the_coalescer() {
+        let (mut tty, _sink) = detached_term();
+        let size = PlacementSize { rows: 4, cols: 8 };
+        tty.coalescer.disarm();
+
+        tty.mount_placement_at(InstanceId(7), ScreenLine(1), GridColumn(2), size);
+
+        assert!(
+            tty.coalescer.is_armed(),
+            "an accepted mount arms the coalescer"
+        );
+        assert_eq!(
+            tty.vt.mounts,
+            vec![(ScreenLine(1), GridColumn(2), size, InstanceId(7))]
+        );
+        let out = tty.flush_now();
+        assert_eq!(
+            out.signals,
+            vec![TtySignal::Vt(VtSignal::WebviewMount {
+                instance: InstanceId(7),
+                size
+            })]
+        );
+    }
+
+    /// Asserts that a rejected host-driven mount queues
+    /// `WebviewMountRejected` and leaves the coalescer alone.
+    ///
+    /// Case: the socket `mount` names a row the pane no longer has after a
+    /// resize, so the VT refuses it.
+    #[test]
+    fn a_rejected_host_mount_queues_the_rejection_without_arming() {
+        let (mut tty, _sink) = detached_term();
+        tty.vt.mount_accepts = false;
+        tty.coalescer.disarm();
+
+        tty.mount_placement_at(
+            InstanceId(7),
+            ScreenLine(99),
+            GridColumn(2),
+            PlacementSize { rows: 4, cols: 8 },
+        );
+
+        assert!(!tty.coalescer.is_armed(), "a rejected mount arms nothing");
+        let out = tty.flush_now();
+        assert_eq!(
+            out.signals,
+            vec![TtySignal::Vt(VtSignal::WebviewMountRejected {
+                instance: InstanceId(7)
+            })]
         );
     }
 }

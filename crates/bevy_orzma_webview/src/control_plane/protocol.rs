@@ -68,6 +68,26 @@ pub(crate) enum ClientMsg {
         /// What to do.
         action: NavAction,
     },
+    /// Registers a webview placement at a visible cell of this connection's
+    /// surface: the socket counterpart of the APC `mount`, for panes whose
+    /// PTY drops APC (ConPTY).
+    Mount {
+        /// The target instance.
+        instance: String,
+        /// 0-based visible row of the rect's top edge.
+        row: u16,
+        /// 0-based column of the rect's left edge.
+        col: u16,
+        /// Rect height in cells (`1..=MAX_ROWS`).
+        rows: u16,
+        /// Rect width in cells (`1..=MAX_COLS`).
+        cols: u16,
+    },
+    /// Removes one placement this connection mounted.
+    Unmount {
+        /// The target instance.
+        instance: String,
+    },
 }
 
 /// A navigation action on one mounted placement.
@@ -361,6 +381,43 @@ mod tests {
         );
         let blur: ClientMsg = serde_json::from_str(r#"{"op":"focus","instance":null}"#).unwrap();
         assert_eq!(blur, ClientMsg::Focus { instance: None });
+    }
+
+    /// Asserts that the socket `mount` and `unmount` ops parse with their
+    /// 0-based cell and size, and that a `mount` missing its size is
+    /// rejected.
+    ///
+    /// Case: orzmd in a Windows pane mounts its view over the socket at
+    /// row 2, column 3, twelve rows by forty-eight columns.
+    #[test]
+    fn parses_mount_and_unmount() {
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"op":"mount","instance":"3f5a","row":2,"col":3,"rows":12,"cols":48}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Mount {
+                instance: "3f5a".into(),
+                row: 2,
+                col: 3,
+                rows: 12,
+                cols: 48,
+            }
+        );
+        let u: ClientMsg = serde_json::from_str(r#"{"op":"unmount","instance":"3f5a"}"#).unwrap();
+        assert_eq!(
+            u,
+            ClientMsg::Unmount {
+                instance: "3f5a".into()
+            }
+        );
+        assert!(
+            serde_json::from_str::<ClientMsg>(
+                r#"{"op":"mount","instance":"3f5a","row":2,"col":3}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

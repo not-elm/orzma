@@ -12,10 +12,10 @@ use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
 use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewSource};
-use bevy_orzma_mux::prelude::{MuxPane, RequestTtyWebviewRemove};
+use bevy_orzma_mux::prelude::{MuxPane, RequestTtyWebviewMount, RequestTtyWebviewRemove};
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
-use orzma_vt::prelude::InstanceId;
+use orzma_vt::prelude::{GridColumn, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize, ScreenLine};
 use orzma_webview_host::WebviewAssetRegistry;
 use orzma_webview_host::host::RuntimeRoot;
 use serde::{Deserialize, Serialize};
@@ -217,6 +217,31 @@ impl OrzmaRegistry {
         let handle = self.by_instance.get(&instance)?;
         let view = self.by_handle.get(handle)?;
         Some((handle, view))
+    }
+
+    /// Parses `instance` and resolves it to a registration owned by
+    /// `connection_id`, returning the id and the registration; `None`,
+    /// with a debug line naming `verb`, when the spelling is invalid, the
+    /// instance is unknown, or another connection owns it.
+    pub fn owned_instance(
+        &self,
+        connection_id: u64,
+        verb: &str,
+        instance: &str,
+    ) -> Option<(InstanceId, &OrzmaView)> {
+        let Ok(id) = instance.parse::<InstanceId>() else {
+            tracing::debug!(%instance, verb, "op for an unparseable instance, dropping");
+            return None;
+        };
+        let Some((_, view)) = self.resolve_instance(id) else {
+            tracing::debug!(%instance, verb, "op for an unknown instance, dropping");
+            return None;
+        };
+        if view.connection_id != connection_id {
+            tracing::debug!(%instance, verb, "op for an unowned instance, dropping");
+            return None;
+        }
+        Some((id, view))
     }
 
     /// Inserts a registration with no instances yet.
@@ -710,6 +735,38 @@ fn apply_control_events(
                 &instance,
                 action,
             ),
+            ControlEvent::Mount {
+                connection_id,
+                owner_surface,
+                instance,
+                row,
+                col,
+                rows,
+                cols,
+            } => on_mount(
+                &mut commands,
+                &registry,
+                connection_id,
+                owner_surface,
+                &instance,
+                row,
+                col,
+                rows,
+                cols,
+            ),
+            ControlEvent::Unmount {
+                connection_id,
+                owner_surface,
+                instance,
+            } => on_unmount(
+                &mut commands,
+                &registry,
+                &webviews,
+                &child_of,
+                connection_id,
+                owner_surface,
+                &instance,
+            ),
         }
     }
 }
@@ -923,17 +980,9 @@ fn on_set_focus(
         }
         return;
     };
-    let Ok(id) = instance.parse::<InstanceId>() else {
-        tracing::debug!(%instance, "focus op for an unparseable instance, dropping");
+    let Some((id, _)) = registry.owned_instance(connection_id, "focus", instance) else {
         return;
     };
-    let owned = registry
-        .resolve_instance(id)
-        .is_some_and(|(_, v)| v.connection_id == connection_id);
-    if !owned {
-        tracing::debug!(%instance, "focus op for an unowned instance, dropping");
-        return;
-    }
     let target = webviews.iter().find(|(entity, view)| {
         view.instance == id
             && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
@@ -963,18 +1012,9 @@ fn on_navigate(
     instance: &str,
     action: NavAction,
 ) {
-    let Ok(id) = instance.parse::<InstanceId>() else {
-        tracing::debug!(%instance, "navigate for an unparseable instance, dropping");
+    let Some((id, view)) = registry.owned_instance(connection_id, "navigate", instance) else {
         return;
     };
-    let Some((_, view)) = registry.resolve_instance(id) else {
-        tracing::debug!(%instance, "navigate for an unknown instance, dropping");
-        return;
-    };
-    if view.connection_id != connection_id {
-        tracing::debug!(%instance, "navigate for an unowned instance, dropping");
-        return;
-    }
     let is_url = view.source.is_url();
     let target = webviews.iter().find(|(entity, v)| {
         v.instance == id && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
@@ -1015,6 +1055,65 @@ fn on_navigate(
     }
 }
 
+/// Applies a socket `mount`: registers a placement for `instance` at the
+/// visible cell `(row, col)` of `owner_surface` when `connection_id` owns
+/// the instance and `(rows, cols)` lies within the VT's bounds. The VT's
+/// verdict arrives as the same `TtyWebviewMountSignal` /
+/// `TtyWebviewMountRejectedSignal` an APC mount produces.
+fn on_mount(
+    commands: &mut Commands,
+    registry: &OrzmaRegistry,
+    connection_id: u64,
+    owner_surface: Entity,
+    instance: &str,
+    row: u16,
+    col: u16,
+    rows: u16,
+    cols: u16,
+) {
+    let Some((id, _)) = registry.owned_instance(connection_id, "mount", instance) else {
+        return;
+    };
+    if rows == 0 || MAX_ROWS < rows || cols == 0 || MAX_COLS < cols {
+        tracing::debug!(%instance, rows, cols, "mount op with an out-of-range size, dropping");
+        return;
+    }
+    commands.trigger(RequestTtyWebviewMount {
+        terminal: owner_surface,
+        instance: id,
+        row: ScreenLine(row),
+        column: GridColumn(col),
+        size: PlacementSize { rows, cols },
+    });
+}
+
+/// Applies a socket `unmount`: despawns the webview mounted for `instance`
+/// under `owner_surface` and hands its reservation back to the VT, the two
+/// steps a registration release performs, when `connection_id` owns the
+/// instance.
+fn on_unmount(
+    commands: &mut Commands,
+    registry: &OrzmaRegistry,
+    webviews: &Query<(Entity, &Webview)>,
+    child_of: &Query<&ChildOf>,
+    connection_id: u64,
+    owner_surface: Entity,
+    instance: &str,
+) {
+    let Some((id, _)) = registry.owned_instance(connection_id, "unmount", instance) else {
+        return;
+    };
+    for (entity, view) in webviews {
+        if view.instance == id && child_of.get(entity).map(|c| c.parent()) == Ok(owner_surface) {
+            commands.entity(entity).try_despawn();
+        }
+    }
+    commands.trigger(RequestTtyWebviewRemove {
+        terminal: owner_surface,
+        instances: vec![id],
+    });
+}
+
 /// Tears down the registrations `removed` released: despawns their mounted
 /// webviews and hands the reservations back to the VT on the surface that
 /// owned them.
@@ -1029,7 +1128,7 @@ fn release_registrations(
 ) {
     for (entity, view) in webviews {
         if removed.iter().any(|entry| entry.handle == view.handle) {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
     for entry in removed {
@@ -1840,6 +1939,66 @@ mod apply_tests {
         assert!(app.world().get_resource::<ControlEvents>().is_none());
     }
 
+    /// Asserts that releasing a registration whose webview was already
+    /// despawned earlier in the same flush is a no-op rather than an error.
+    ///
+    /// Case: orzmd exits — the alternate-screen eviction and the socket
+    /// disconnect tear down the same webview in one frame.
+    #[test]
+    fn release_after_an_eviction_in_the_same_flush_is_a_no_op() {
+        use crate::test_support::warnings_containing;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        let surface = app.world_mut().spawn_empty().id();
+        let handle = HandleId::from("h");
+        let mut reg = OrzmaRegistry::default();
+        reg.insert(
+            handle.clone(),
+            OrzmaView {
+                source: OrzmaSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 5,
+                forward_keys: vec![],
+                preload: vec![],
+                instances: Vec::new(),
+            },
+        );
+        let instance = reg.mint_instance(&handle).expect("the handle mints");
+        let child = app
+            .world_mut()
+            .spawn((
+                Webview {
+                    handle: handle.clone(),
+                    instance,
+                    slot: 0,
+                    rows: 10,
+                    cols: 40,
+                },
+                ChildOf(surface),
+            ))
+            .id();
+        let removed = reg.remove_by_connection(5);
+        let before = warnings_containing("Entity despawned").len();
+
+        app.world_mut()
+            .run_system_once(
+                move |mut commands: Commands, webviews: Query<(Entity, &Webview)>| {
+                    commands.entity(child).despawn();
+                    release_registrations(&mut commands, &webviews, &removed);
+                },
+            )
+            .expect("the teardown system runs");
+
+        assert!(app.world().get_entity(child).is_err());
+        assert_eq!(
+            warnings_containing("Entity despawned").len(),
+            before,
+            "the release must not report a despawn error for the evicted webview"
+        );
+    }
+
     #[test]
     fn disconnect_despawns_mounted_webviews_for_its_handles() {
         use crate::webview::mount::Webview;
@@ -2344,6 +2503,175 @@ mod apply_tests {
         app.update();
 
         assert_eq!(app.world().resource::<BackOn>().0, vec![child]);
+    }
+
+    /// Asserts that a socket `mount` for an owned instance becomes a
+    /// `RequestTtyWebviewMount` on the owning surface carrying the cell
+    /// and size, and that an unowned instance or an out-of-range size is
+    /// dropped.
+    ///
+    /// Case: orzmd in a Windows pane mounts its view at row 2, column 3;
+    /// a second connection then tries to mount the same instance.
+    #[test]
+    fn apply_mount_requests_a_webview_mount_for_an_owned_instance_only() {
+        #[derive(Resource, Default)]
+        struct Mounted(Vec<(Entity, InstanceId, ScreenLine, GridColumn, PlacementSize)>);
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let surface = app.world_mut().spawn_empty().id();
+        let handle = HandleId::from("h");
+        let mut reg = OrzmaRegistry::default();
+        reg.insert(
+            handle.clone(),
+            OrzmaView {
+                source: OrzmaSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 5,
+                forward_keys: vec![],
+                preload: vec![],
+                instances: Vec::new(),
+            },
+        );
+        let instance = reg.mint_instance(&handle).expect("the handle mints");
+        app.insert_resource(reg);
+        app.insert_resource(OrzmaRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        app.init_resource::<Mounted>();
+        app.add_observer(
+            |e: On<RequestTtyWebviewMount>, mut mounted: ResMut<Mounted>| {
+                mounted
+                    .0
+                    .push((e.terminal, e.instance, e.row, e.column, e.size));
+            },
+        );
+        app.add_systems(Update, apply_control_events);
+
+        let mount = |connection_id: u64, rows: u16, cols: u16| ControlEvent::Mount {
+            connection_id,
+            owner_surface: surface,
+            instance: instance.to_string(),
+            row: 2,
+            col: 3,
+            rows,
+            cols,
+        };
+        ev_tx.send(mount(5, 12, 48)).unwrap();
+        ev_tx.send(mount(6, 12, 48)).unwrap();
+        ev_tx.send(mount(5, 0, 48)).unwrap();
+        ev_tx.send(mount(5, 12, MAX_COLS + 1)).unwrap();
+        ev_tx
+            .send(ControlEvent::Mount {
+                connection_id: 5,
+                owner_surface: surface,
+                instance: "not-an-id".into(),
+                row: 2,
+                col: 3,
+                rows: 12,
+                cols: 48,
+            })
+            .unwrap();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Mounted>().0,
+            vec![(
+                surface,
+                instance,
+                ScreenLine(2),
+                GridColumn(3),
+                PlacementSize { rows: 12, cols: 48 }
+            )],
+            "only the owned, in-range mount is relayed"
+        );
+    }
+
+    /// Asserts that a socket `unmount` for an owned instance despawns its
+    /// mounted webview under the owning surface and hands the placement
+    /// back to the VT, and that an unowned instance is dropped.
+    ///
+    /// Case: orzmd's widget is removed from its layout and the SDK sends
+    /// the socket `unmount` for the placement that vanished.
+    #[test]
+    fn apply_unmount_despawns_the_child_and_reclaims_the_placement() {
+        #[derive(Resource, Default)]
+        struct Reclaimed(Vec<(Entity, Vec<InstanceId>)>);
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let surface = app.world_mut().spawn_empty().id();
+        let handle = HandleId::from("h");
+        let mut reg = OrzmaRegistry::default();
+        reg.insert(
+            handle.clone(),
+            OrzmaView {
+                source: OrzmaSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 5,
+                forward_keys: vec![],
+                preload: vec![],
+                instances: Vec::new(),
+            },
+        );
+        let instance = reg.mint_instance(&handle).expect("the handle mints");
+        let child = app
+            .world_mut()
+            .spawn((
+                Webview {
+                    handle: handle.clone(),
+                    instance,
+                    slot: 0,
+                    rows: 10,
+                    cols: 40,
+                },
+                ChildOf(surface),
+            ))
+            .id();
+        app.insert_resource(reg);
+        app.insert_resource(OrzmaRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        app.init_resource::<Reclaimed>();
+        app.add_observer(
+            |e: On<RequestTtyWebviewRemove>, mut reclaimed: ResMut<Reclaimed>| {
+                reclaimed.0.push((e.terminal, e.instances.clone()));
+            },
+        );
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Unmount {
+                connection_id: 6,
+                owner_surface: surface,
+                instance: instance.to_string(),
+            })
+            .unwrap();
+        app.update();
+        assert!(
+            app.world().get_entity(child).is_ok(),
+            "an unowned unmount leaves the webview alone"
+        );
+        assert!(app.world().resource::<Reclaimed>().0.is_empty());
+
+        ev_tx
+            .send(ControlEvent::Unmount {
+                connection_id: 5,
+                owner_surface: surface,
+                instance: instance.to_string(),
+            })
+            .unwrap();
+        app.update();
+        assert!(
+            app.world().get_entity(child).is_err(),
+            "the owned unmount despawns the webview"
+        );
+        assert_eq!(
+            app.world().resource::<Reclaimed>().0,
+            vec![(surface, vec![instance])]
+        );
     }
 
     #[test]

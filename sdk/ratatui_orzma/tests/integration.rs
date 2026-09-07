@@ -41,6 +41,11 @@ impl Write for SharedBuf {
     }
 }
 
+/// Asserts that a draw mounts a focused placement through the platform's
+/// geometry channel — the PTY as an APC verb on Unix, the control socket as
+/// a `mount` op on Windows — and always sends the focus op over the socket.
+///
+/// Case: an app focuses and renders a webview placement for the first time.
 #[test]
 fn backend_draw_emits_mount_apc_and_focus_op() {
     let server = FakeServer::start("view-1");
@@ -67,10 +72,20 @@ fn backend_draw_emits_mount_apc_and_focus_op() {
 
         let out = String::from_utf8(term_bytes.0.lock().unwrap().clone()).unwrap();
         let instance = &server.instance;
-        assert!(
-            out.contains(&format!("Omount;n={instance},r=12,c=48")),
-            "terminal output missing mount APC verb: {out:?}"
-        );
+        if cfg!(windows) {
+            assert!(
+                !out.contains("Omount"),
+                "the mount must not ride the PTY on Windows: {out:?}"
+            );
+            let mount = server.next_message();
+            assert_eq!(mount["op"], "mount");
+            assert_eq!(mount["instance"], instance.as_str());
+        } else {
+            assert!(
+                out.contains(&format!("Omount;n={instance},r=12,c=48")),
+                "terminal output missing mount APC verb: {out:?}"
+            );
+        }
 
         let msg = server.next_message();
         assert_eq!(msg["op"], "focus");
@@ -79,7 +94,9 @@ fn backend_draw_emits_mount_apc_and_focus_op() {
 }
 
 /// Asserts that an instance minted on an existing registration is distinct
-/// from its default one and mounts alongside it in the same frame.
+/// from its default one and mounts alongside it in the same frame, through
+/// the platform's geometry channel — the PTY as an APC verb on Unix, the
+/// control socket as a `mount` op on Windows.
 ///
 /// Case: an app shows one view in a split, side by side.
 #[test]
@@ -112,14 +129,27 @@ fn new_instance_mints_a_second_placement_that_mounts_on_its_own() {
         let out = String::from_utf8(term_bytes.0.lock().unwrap().clone()).unwrap();
         let default = handle.instance_id();
         let second = extra.id();
-        assert!(
-            out.contains(&format!("Omount;n={default},")),
-            "the default placement did not mount: {out:?}"
-        );
-        assert!(
-            out.contains(&format!("Omount;n={second},")),
-            "the minted placement did not mount: {out:?}"
-        );
+        if cfg!(windows) {
+            assert!(
+                !out.contains("Omount"),
+                "no mount must ride the PTY on Windows: {out:?}"
+            );
+            let first_mount = server.next_message();
+            assert_eq!(first_mount["op"], "mount");
+            assert_eq!(first_mount["instance"], default.as_str());
+            let second_mount = server.next_message();
+            assert_eq!(second_mount["op"], "mount");
+            assert_eq!(second_mount["instance"], second.as_str());
+        } else {
+            assert!(
+                out.contains(&format!("Omount;n={default},")),
+                "the default placement did not mount: {out:?}"
+            );
+            assert!(
+                out.contains(&format!("Omount;n={second},")),
+                "the minted placement did not mount: {out:?}"
+            );
+        }
     });
 }
 

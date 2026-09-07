@@ -1,9 +1,12 @@
 //! A fake orzma control server for integration tests.
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+#[cfg(windows)]
+use uds_windows::UnixListener;
 
 /// A deterministic 32-lowercase-hex instance id derived from `seed`, in the
 /// form the control plane mints and the APC verbs accept.

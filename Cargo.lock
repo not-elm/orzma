@@ -1300,11 +1300,13 @@ version = "0.2.0-dev"
 dependencies = [
  "bevy",
  "bevy_cef",
+ "bevy_cef_core",
  "bevy_orzma_mux",
  "crossbeam-channel",
  "data-encoding",
  "getrandom 0.2.17",
  "libc",
+ "log",
  "orzma_mux",
  "orzma_tty_renderer",
  "orzma_vt",
@@ -4241,6 +4243,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "memoffset"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5016,6 +5027,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width 0.2.0",
  "url",
+ "windows-sys 0.61.2",
  "winit",
 ]
 
@@ -5091,6 +5103,8 @@ dependencies = [
  "bevy_cef_core",
  "tempfile",
  "thiserror 2.0.18",
+ "uds_windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5527,6 +5541,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
+ "uds_windows",
 ]
 
 [[package]]
@@ -6670,6 +6685,17 @@ name = "typewit"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "214ca0b2191785cbc06209b9ca1861e048e39b5ba33574b3cedd58363d5bb5f6"
+
+[[package]]
+name = "uds_windows"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
+dependencies = [
+ "memoffset",
+ "tempfile",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "unicase"
