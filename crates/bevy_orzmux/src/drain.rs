@@ -70,7 +70,7 @@ fn drain_orzmux_events(
         reported.0 = true;
         commands.trigger(OrzmuxSessionEnded);
     }
-    if frames > DRAIN_REPORT_THRESHOLD {
+    if DRAIN_REPORT_THRESHOLD < frames {
         tracing::debug!(
             target: "orzmux::queues",
             frames,
