@@ -362,6 +362,13 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
+    /// How many output chunks wait unread in the PTY stream, in units
+    /// of one reader `read(2)` result of up to 4 KiB.
+    #[inline]
+    pub fn pending_chunk_count(&self) -> usize {
+        self.pty.chunk_receiver().len()
+    }
+
     /// When the coalescer next wants a pump: `Some(now)` while the
     /// bootstrap frame is owed, the armed window's deadline while output
     /// is pending, `None` when idle.
@@ -578,6 +585,23 @@ mod tests {
             tty.vt.interpreted.len(),
             OrzmaTty::<FakeVt>::MAX_CHUNKS_PER_PUMP + 6
         );
+    }
+
+    /// Asserts that `pending_chunk_count` reports the chunks queued and
+    /// unread, and drops to zero once a pump interprets them.
+    ///
+    /// Case: the backend samples a pane's chunk queue right after its
+    /// `Select` woke and before it pumps the pane.
+    #[test]
+    fn pending_chunk_count_reports_the_unread_queue() {
+        let (mut tty, chunk_tx, _exit_tx) = channelled_term();
+        assert_eq!(tty.pending_chunk_count(), 0);
+        for _ in 0..3 {
+            chunk_tx.send(b"x".to_vec()).unwrap();
+        }
+        assert_eq!(tty.pending_chunk_count(), 3);
+        tty.pump();
+        assert_eq!(tty.pending_chunk_count(), 0);
     }
 
     /// Asserts that `ChildExit` is withheld while chunks remain and is
