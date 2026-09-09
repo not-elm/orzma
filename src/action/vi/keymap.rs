@@ -9,7 +9,7 @@ use crate::action::vi::{
 use crate::configs::OrzmaConfigsResource;
 use bevy::input::keyboard::{Key, KeyCode};
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::{SelectionKind, ViMotion};
+use bevy_orzmux::prelude::{SelectionKind, ViMotion};
 use orzma_configs::shortcuts::Modifiers;
 use orzma_configs::vi_mode::{
     ViModeAction, ViModeBaseKey, ViModeKey, ViModeMotion, ViModeNamedKey, ViModeSelection,

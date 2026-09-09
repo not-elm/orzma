@@ -1,11 +1,11 @@
 //! `RequestTtyWebviewRemove`: the placements the control plane asks a
 //! terminal entity to drop when a registration is released, sent as
-//! `MuxCommand::RemovePlacements`.
+//! `OrzmuxCommand::RemovePlacements`.
 
 use crate::requests::PaneSender;
 use bevy::prelude::*;
-use orzma_mux::prelude::MuxCommand;
 use orzma_vt::prelude::InstanceId;
+use orzmux::prelude::OrzmuxCommand;
 
 /// Fired by the control plane to drop placements a terminal still holds
 /// for registrations that are gone.
@@ -30,7 +30,7 @@ impl Plugin for WebviewRemovePlugin {
 }
 
 fn apply_webview_remove(e: On<RequestTtyWebviewRemove>, panes: PaneSender) {
-    panes.send_for(e.terminal, |pane| MuxCommand::RemovePlacements {
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::RemovePlacements {
         pane,
         instances: e.instances.clone(),
     });
@@ -40,7 +40,7 @@ fn apply_webview_remove(e: On<RequestTtyWebviewRemove>, panes: PaneSender) {
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
-    use orzma_mux::prelude::PaneId;
+    use orzmux::prelude::PaneId;
 
     /// Asserts that a webview-remove request for a pane entity becomes
     /// a `RemovePlacements` command carrying the same instance list.
@@ -60,7 +60,7 @@ mod tests {
         });
         let sent = sent(&commands);
         let [
-            MuxCommand::RemovePlacements {
+            OrzmuxCommand::RemovePlacements {
                 pane: PaneId(6),
                 instances,
             },

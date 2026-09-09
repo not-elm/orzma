@@ -4,9 +4,9 @@
 use crate::surface::OrzmaTerminal;
 use crate::ui::ShellSurfaceUi;
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::{MuxConnection, PaneRegistry, absolute_px_node};
 use bevy_orzma_webview::ControlPlaneHandle;
-use orzma_mux::prelude::{MuxCommand, NewPaneAt, RequestId};
+use bevy_orzmux::prelude::{OrzmuxConnection, PaneRegistry, absolute_px_node};
+use orzmux::prelude::{NewPaneAt, OrzmuxCommand, RequestId};
 
 /// Asks for a new pane at `at`.
 #[derive(Event, Debug, Clone, Copy)]
@@ -31,7 +31,7 @@ fn on_pane_spawn_request(
     ev: On<PaneSpawnRequest>,
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
-    connection: Res<MuxConnection>,
+    connection: Res<OrzmuxConnection>,
     container: Query<Entity, With<ShellSurfaceUi>>,
     control: Option<Res<ControlPlaneHandle>>,
 ) {
@@ -50,7 +50,7 @@ fn on_pane_spawn_request(
         .unwrap_or_default();
     let request = RequestId::next();
     registry.pending_spawns.insert(request, entity);
-    connection.0.send(MuxCommand::NewPane {
+    connection.0.send(OrzmuxCommand::NewPane {
         request,
         at: ev.at,
         cwd: None,
@@ -68,7 +68,7 @@ fn pending_pane_node() -> Node {
 mod tests {
     use super::*;
     use bevy_orzma_webview::TokenRegistry;
-    use orzma_mux::prelude::MuxClient;
+    use orzmux::prelude::OrzmuxClient;
     use std::path::PathBuf;
 
     /// Asserts that a spawn request pre-spawns the pane entity, binds its
@@ -78,13 +78,13 @@ mod tests {
     /// control socket before the backend's `PaneOpened` is drained.
     #[test]
     fn a_spawn_request_binds_the_token_then_sends_new_pane() {
-        let (client, _events, commands) = MuxClient::detached();
+        let (client, _events, commands) = OrzmuxClient::detached();
         let tokens = TokenRegistry::default();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(SpawnPlugin)
             .init_resource::<PaneRegistry>()
-            .insert_resource(MuxConnection(client))
+            .insert_resource(OrzmuxConnection(client))
             .insert_resource(ControlPlaneHandle {
                 sock_path: PathBuf::from("/tmp/ctl.sock"),
                 tokens: tokens.clone(),
@@ -107,9 +107,9 @@ mod tests {
         let token = format!("orzma:{}", entity.to_bits());
         assert_eq!(tokens.resolve(&token), Some(entity));
 
-        let sent: Vec<MuxCommand> = commands.try_iter().map(|(_, c)| c).collect();
+        let sent: Vec<OrzmuxCommand> = commands.try_iter().map(|(_, c)| c).collect();
         let [
-            MuxCommand::NewPane {
+            OrzmuxCommand::NewPane {
                 request: sent_request,
                 at: NewPaneAt::Root,
                 cwd: None,

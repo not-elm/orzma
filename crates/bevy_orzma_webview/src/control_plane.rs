@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
 use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewSource};
-use bevy_orzma_mux::prelude::{MuxPane, RequestTtyWebviewMount, RequestTtyWebviewRemove};
+use bevy_orzmux::prelude::{OrzmuxPane, RequestTtyWebviewMount, RequestTtyWebviewRemove};
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use orzma_vt::prelude::{GridColumn, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize, ScreenLine};
@@ -559,7 +559,7 @@ impl Plugin for ControlPlanePlugin {
 }
 
 /// Purges a despawned surface's dynamic registrations + assets. Keyed on
-/// `RemovedComponents<MuxPane>` so it fires for every pane entity the
+/// `RemovedComponents<OrzmuxPane>` so it fires for every pane entity the
 /// multiplexer backend closes.
 ///
 /// # Invariants
@@ -569,7 +569,7 @@ impl Plugin for ControlPlanePlugin {
 /// no-op) — gating it behind the handle would leak in that case.
 fn gc_despawned_surfaces(
     mut registry: ResMut<OrzmaRegistry>,
-    mut closed: RemovedComponents<MuxPane>,
+    mut closed: RemovedComponents<OrzmuxPane>,
     handle: Option<Res<ControlPlaneHandle>>,
     orzma_assets: Res<WebviewAssetRegistryRes>,
 ) {
@@ -601,9 +601,9 @@ struct ControlRuntime(
 /// `Register` and `NewInstance` are refused with `owner_gone` when the owning
 /// entity is no longer alive, so a connection that outlives its pane's
 /// despawn (and the GC that follows) cannot recreate registrations for it.
-/// Liveness, not the `MuxPane` marker, gates the refusal: a fast shell can
+/// Liveness, not the `OrzmuxPane` marker, gates the refusal: a fast shell can
 /// register before the GUI has drained the backend's `PaneOpened` and
-/// inserted `MuxPane`, and that pending owner must still be accepted.
+/// inserted `OrzmuxPane`, and that pending owner must still be accepted.
 fn apply_control_events(
     mut commands: Commands,
     mut registry: ResMut<OrzmaRegistry>,
@@ -1335,7 +1335,7 @@ const MAX_INLINE_HTML: usize = 4 * 1024 * 1024;
 #[cfg(test)]
 mod gc_tests {
     use super::*;
-    use orzma_mux::prelude::PaneId;
+    use orzmux::prelude::PaneId;
 
     /// Asserts that the garbage collector drops a view registration once
     /// the surface that owns it is despawned, and leaves it alone while
@@ -1351,7 +1351,7 @@ mod gc_tests {
         app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         app.add_systems(Update, gc_despawned_surfaces);
 
-        let surface = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let surface = app.world_mut().spawn(OrzmuxPane(PaneId(1))).id();
         app.world_mut().resource_mut::<OrzmaRegistry>().insert(
             "h0".into(),
             OrzmaView {
@@ -1610,7 +1610,7 @@ mod registry_tests {
 mod apply_tests {
     use super::*;
     use crossbeam_channel::{bounded, unbounded};
-    use orzma_mux::prelude::PaneId;
+    use orzmux::prelude::PaneId;
 
     /// An app running `apply_control_events` over empty registries, and
     /// the control-event sender that feeds it.
@@ -1634,7 +1634,7 @@ mod apply_tests {
     fn register_from_a_dead_owner_is_refused() {
         let (mut app, ev_tx) = apply_app();
 
-        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let owner = app.world_mut().spawn(OrzmuxPane(PaneId(1))).id();
         app.world_mut().entity_mut(owner).despawn();
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
         ev_tx
@@ -1658,7 +1658,7 @@ mod apply_tests {
     }
 
     /// Asserts that a `register` from a live but still-pending owner (no
-    /// `MuxPane` yet) is accepted, since the liveness gate must not
+    /// `OrzmuxPane` yet) is accepted, since the liveness gate must not
     /// reintroduce the race the token pre-binding was designed to avoid.
     ///
     /// Case: the new pane's shell connects and registers before the GUI has
@@ -1708,7 +1708,7 @@ mod apply_tests {
     fn new_instance_for_a_dead_owner_is_refused() {
         let (mut app, ev_tx) = apply_app();
 
-        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let owner = app.world_mut().spawn(OrzmuxPane(PaneId(1))).id();
         let (register_tx, register_rx) = bounded::<ServerMsg>(1);
         ev_tx
             .send(ControlEvent::Register {
@@ -1780,7 +1780,7 @@ mod apply_tests {
         app.insert_resource(WebviewAssetRegistryRes(orzma_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
-        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let owner = app.world_mut().spawn(OrzmuxPane(PaneId(1))).id();
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
         ev_tx
             .send(ControlEvent::Register {
@@ -1828,7 +1828,7 @@ mod apply_tests {
         app.insert_resource(WebviewAssetRegistryRes(orzma_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
-        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let owner = app.world_mut().spawn(OrzmuxPane(PaneId(1))).id();
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
         ev_tx
             .send(ControlEvent::Register {
@@ -1866,7 +1866,7 @@ mod apply_tests {
         app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         app.add_systems(Update, apply_control_events);
 
-        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let owner = app.world_mut().spawn(OrzmuxPane(PaneId(1))).id();
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
         ev_tx
             .send(ControlEvent::Register {
@@ -2272,7 +2272,7 @@ mod apply_tests {
         app.insert_resource(WebviewAssetRegistryRes(orzma_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
-        let owner = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let owner = app.world_mut().spawn(OrzmuxPane(PaneId(1))).id();
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
         ev_tx
             .send(ControlEvent::Register {

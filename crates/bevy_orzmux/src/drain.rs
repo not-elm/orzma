@@ -1,4 +1,4 @@
-//! `drain_mux_events`: empties the backend's event channel every frame
+//! `drain_orzmux_events`: empties the backend's event channel every frame
 //! and turns each event into entity state or an `EntityEvent` the host
 //! observes.
 
@@ -7,18 +7,18 @@ use crate::registry::PaneRegistry;
 use crate::signals::{
     TtyChildExitSignal, TtyFrameSignal, TtySelectionTextSignal, trigger_vt_signal,
 };
-use crate::{MuxConnection, MuxPane, MuxSystems};
+use crate::{OrzmuxConnection, OrzmuxPane, OrzmuxSystems};
 use bevy::prelude::*;
-use orzma_mux::prelude::{CloseReason, MuxEvent, PaneId};
 use orzma_vt::prelude::Frame;
+use orzmux::prelude::{CloseReason, OrzmuxEvent, PaneId};
 
 /// The session is over: the last pane closed, or the backend is gone.
 #[derive(Event, Debug, Clone, Copy)]
-pub struct MuxSessionEnded;
+pub struct OrzmuxSessionEnded;
 
 /// A `NewPane` the backend refused; the host unbinds and despawns.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct MuxPaneSpawnFailed {
+pub struct OrzmuxPaneSpawnFailed {
     #[event_target]
     pub entity: Entity,
     pub error: String,
@@ -32,29 +32,29 @@ impl Plugin for DrainPlugin {
         app.init_resource::<PaneRegistry>()
             .init_resource::<CurrentLayout>()
             .init_resource::<DisconnectReported>()
-            .add_systems(Update, drain_mux_events.in_set(MuxSystems::Drain));
+            .add_systems(Update, drain_orzmux_events.in_set(OrzmuxSystems::Drain));
     }
 }
 
-/// Whether `MuxSessionEnded` was already triggered for a disconnect.
+/// Whether `OrzmuxSessionEnded` was already triggered for a disconnect.
 #[derive(Resource, Default)]
 struct DisconnectReported(bool);
 
 /// Drains every queued event in order. Not gated on change detection:
 /// channel arrivals are invisible to it.
-fn drain_mux_events(
+fn drain_orzmux_events(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
     mut current: ResMut<CurrentLayout>,
     mut reported: ResMut<DisconnectReported>,
-    connection: Res<MuxConnection>,
+    connection: Res<OrzmuxConnection>,
 ) {
     for event in connection.0.try_iter() {
         apply_event(&mut commands, &mut registry, &mut current, event);
     }
     if connection.0.is_disconnected() && !reported.0 {
         reported.0 = true;
-        commands.trigger(MuxSessionEnded);
+        commands.trigger(OrzmuxSessionEnded);
     }
 }
 
@@ -65,36 +65,36 @@ fn apply_event(
     commands: &mut Commands,
     registry: &mut PaneRegistry,
     current: &mut ResMut<CurrentLayout>,
-    event: MuxEvent,
+    event: OrzmuxEvent,
 ) {
     match event {
-        MuxEvent::PaneOpened { pane, request } => {
+        OrzmuxEvent::PaneOpened { pane, request } => {
             if let Some(entity) = registry.pending_spawns.remove(&request) {
                 registry.panes.insert(pane, entity);
-                commands.entity(entity).insert(MuxPane(pane));
+                commands.entity(entity).insert(OrzmuxPane(pane));
             }
         }
-        MuxEvent::SpawnFailed { request, error } => {
+        OrzmuxEvent::SpawnFailed { request, error } => {
             if let Some(entity) = registry.pending_spawns.remove(&request) {
-                commands.trigger(MuxPaneSpawnFailed { entity, error });
+                commands.trigger(OrzmuxPaneSpawnFailed { entity, error });
             }
         }
-        MuxEvent::Layout { layout, frames } => {
+        OrzmuxEvent::Layout { layout, frames } => {
             if !current.0.panes.is_empty() && layout.panes.is_empty() {
-                commands.trigger(MuxSessionEnded);
+                commands.trigger(OrzmuxSessionEnded);
             }
             current.set_if_neq(CurrentLayout(layout));
             for (pane, frame) in frames {
                 trigger_frame(commands, registry, pane, frame);
             }
         }
-        MuxEvent::Frame { pane, frame } => trigger_frame(commands, registry, pane, frame),
-        MuxEvent::Signal { pane, signal } => match registry.entity_of(pane) {
+        OrzmuxEvent::Frame { pane, frame } => trigger_frame(commands, registry, pane, frame),
+        OrzmuxEvent::Signal { pane, signal } => match registry.entity_of(pane) {
             Some(terminal) => trigger_vt_signal(commands, terminal, signal),
             None => tracing::debug!(?pane, "signal for an unknown pane dropped"),
         },
-        MuxEvent::SelectionText { text } => commands.trigger(TtySelectionTextSignal { text }),
-        MuxEvent::PaneClosed { pane, reason } => {
+        OrzmuxEvent::SelectionText { text } => commands.trigger(TtySelectionTextSignal { text }),
+        OrzmuxEvent::PaneClosed { pane, reason } => {
             if let Some(entity) = registry.panes.remove(&pane) {
                 let code = match reason {
                     CloseReason::ChildExit { code } => code,
@@ -120,8 +120,8 @@ mod tests {
     use crate::requests::test_support::app_with_channels;
     use crate::signals::TtyFrameSignal;
     use crossbeam_channel::Sender;
-    use orzma_mux::prelude::{CloseReason, CommandSeq, Layout, PaneRect, RequestId};
     use orzma_vt::prelude::{Cursor, DisplayOffset, GridSize};
+    use orzmux::prelude::{CloseReason, CommandSeq, Layout, PaneRect, RequestId};
 
     #[derive(Resource, Default)]
     struct Seen {
@@ -132,11 +132,11 @@ mod tests {
         layout_changes: usize,
     }
 
-    fn app() -> (App, Sender<MuxEvent>) {
+    fn app() -> (App, Sender<OrzmuxEvent>) {
         let (mut app, events, _commands) = app_with_channels(DrainPlugin);
         app.init_resource::<Seen>()
-            .add_observer(|_: On<MuxSessionEnded>, mut seen: ResMut<Seen>| seen.ended += 1)
-            .add_observer(|ev: On<MuxPaneSpawnFailed>, mut seen: ResMut<Seen>| {
+            .add_observer(|_: On<OrzmuxSessionEnded>, mut seen: ResMut<Seen>| seen.ended += 1)
+            .add_observer(|ev: On<OrzmuxPaneSpawnFailed>, mut seen: ResMut<Seen>| {
                 seen.spawn_failed.push((ev.entity, ev.error.clone()));
             })
             .add_observer(|ev: On<TtyFrameSignal>, mut seen: ResMut<Seen>| {
@@ -152,7 +152,7 @@ mod tests {
                         seen.layout_changes += 1;
                     }
                 })
-                .after(MuxSystems::Drain),
+                .after(OrzmuxSystems::Drain),
             );
         (app, events)
     }
@@ -191,7 +191,7 @@ mod tests {
     }
 
     /// Asserts that `PaneOpened` promotes the pending entity to a
-    /// `MuxPane` and that a `Frame` in the same drain reaches it.
+    /// `OrzmuxPane` and that a `Frame` in the same drain reaches it.
     ///
     /// Case: the backend answers a spawn and immediately sends the
     /// pane's bootstrap frame in the same batch.
@@ -204,21 +204,21 @@ mod tests {
             .pending_spawns
             .insert(RequestId(1), entity);
         events
-            .send(MuxEvent::PaneOpened {
+            .send(OrzmuxEvent::PaneOpened {
                 pane: PaneId(7),
                 request: RequestId(1),
             })
             .unwrap();
         events
-            .send(MuxEvent::Frame {
+            .send(OrzmuxEvent::Frame {
                 pane: PaneId(7),
                 frame: frame(80, 24),
             })
             .unwrap();
         app.update();
         assert_eq!(
-            app.world().get::<MuxPane>(entity),
-            Some(&MuxPane(PaneId(7)))
+            app.world().get::<OrzmuxPane>(entity),
+            Some(&OrzmuxPane(PaneId(7)))
         );
         assert_eq!(app.world().resource::<Seen>().frames, vec![entity]);
         assert!(
@@ -230,7 +230,7 @@ mod tests {
     }
 
     /// Asserts that `SpawnFailed` hands the pending entity to the host
-    /// through `MuxPaneSpawnFailed`.
+    /// through `OrzmuxPaneSpawnFailed`.
     ///
     /// Case: the shell could not be spawned for a split.
     #[test]
@@ -242,7 +242,7 @@ mod tests {
             .pending_spawns
             .insert(RequestId(1), entity);
         events
-            .send(MuxEvent::SpawnFailed {
+            .send(OrzmuxEvent::SpawnFailed {
                 request: RequestId(1),
                 error: "no space".into(),
             })
@@ -262,19 +262,19 @@ mod tests {
     fn session_ends_on_the_non_empty_to_empty_transition_within_one_drain() {
         let (mut app, events) = app();
         events
-            .send(MuxEvent::Layout {
+            .send(OrzmuxEvent::Layout {
                 layout: layout(1, &[(PaneId(1), 0)]),
                 frames: vec![],
             })
             .unwrap();
         events
-            .send(MuxEvent::PaneClosed {
+            .send(OrzmuxEvent::PaneClosed {
                 pane: PaneId(1),
                 reason: CloseReason::ChildExit { code: Some(0) },
             })
             .unwrap();
         events
-            .send(MuxEvent::Layout {
+            .send(OrzmuxEvent::Layout {
                 layout: layout(2, &[]),
                 frames: vec![],
             })
@@ -282,7 +282,7 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<Seen>().ended, 1);
         events
-            .send(MuxEvent::Layout {
+            .send(OrzmuxEvent::Layout {
                 layout: layout(3, &[]),
                 frames: vec![],
             })
@@ -302,14 +302,14 @@ mod tests {
     #[test]
     fn pane_closed_despawns_the_entity_recursively() {
         let (mut app, events) = app();
-        let entity = app.world_mut().spawn(MuxPane(PaneId(3))).id();
+        let entity = app.world_mut().spawn(OrzmuxPane(PaneId(3))).id();
         let child = app.world_mut().spawn(ChildOf(entity)).id();
         app.world_mut()
             .resource_mut::<PaneRegistry>()
             .panes
             .insert(PaneId(3), entity);
         events
-            .send(MuxEvent::PaneClosed {
+            .send(OrzmuxEvent::PaneClosed {
                 pane: PaneId(3),
                 reason: CloseReason::Killed,
             })
@@ -328,7 +328,9 @@ mod tests {
     #[test]
     fn selection_text_is_forwarded() {
         let (mut app, events) = app();
-        events.send(MuxEvent::SelectionText { text: None }).unwrap();
+        events
+            .send(OrzmuxEvent::SelectionText { text: None })
+            .unwrap();
         app.update();
         assert_eq!(app.world().resource::<Seen>().texts, vec![None]);
     }
@@ -363,7 +365,7 @@ mod tests {
             .panes
             .insert(PaneId(1), entity);
         events
-            .send(MuxEvent::Frame {
+            .send(OrzmuxEvent::Frame {
                 pane: PaneId(1),
                 frame: frame(80, 24),
             })
@@ -372,7 +374,7 @@ mod tests {
         assert_eq!(app.world().resource::<Seen>().layout_changes, 0);
 
         events
-            .send(MuxEvent::Layout {
+            .send(OrzmuxEvent::Layout {
                 layout: layout(1, &[(PaneId(1), 0)]),
                 frames: vec![],
             })

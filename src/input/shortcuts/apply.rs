@@ -18,13 +18,13 @@ use crate::{
     session::spawn::PaneSpawnRequest,
 };
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::{PaneAction, RequestActiveKeyInput, RequestPaneAction};
+use bevy_orzmux::prelude::{PaneAction, RequestActiveKeyInput, RequestPaneAction};
 use orzma_configs::shortcuts::{
     PaneDirection as ConfigPaneDirection, Shortcut, SplitOrientation as ConfigSplitOrientation,
 };
-use orzma_mux::prelude::{
-    NewPaneAt, PaneDirection as MuxPaneDirection, PaneTarget,
-    SplitOrientation as MuxSplitOrientation,
+use orzmux::prelude::{
+    NewPaneAt, PaneDirection as OrzmuxPaneDirection, PaneTarget,
+    SplitOrientation as OrzmuxSplitOrientation,
 };
 
 pub(super) struct ShortcutsApplyPlugin;
@@ -133,21 +133,21 @@ fn apply_shortcut(
 /// Converts `orzma_configs`' shortcut-facing pane direction to the mux
 /// backend's. The two crates must not depend on each other, so orphan
 /// rules forbid a `From` impl here; this match is the conversion.
-fn pane_direction(direction: ConfigPaneDirection) -> MuxPaneDirection {
+fn pane_direction(direction: ConfigPaneDirection) -> OrzmuxPaneDirection {
     match direction {
-        ConfigPaneDirection::Left => MuxPaneDirection::Left,
-        ConfigPaneDirection::Down => MuxPaneDirection::Down,
-        ConfigPaneDirection::Up => MuxPaneDirection::Up,
-        ConfigPaneDirection::Right => MuxPaneDirection::Right,
+        ConfigPaneDirection::Left => OrzmuxPaneDirection::Left,
+        ConfigPaneDirection::Down => OrzmuxPaneDirection::Down,
+        ConfigPaneDirection::Up => OrzmuxPaneDirection::Up,
+        ConfigPaneDirection::Right => OrzmuxPaneDirection::Right,
     }
 }
 
 /// Converts `orzma_configs`' shortcut-facing split orientation to the mux
 /// backend's, for the same orphan-rule reason as `pane_direction`.
-fn split_orientation(orientation: ConfigSplitOrientation) -> MuxSplitOrientation {
+fn split_orientation(orientation: ConfigSplitOrientation) -> OrzmuxSplitOrientation {
     match orientation {
-        ConfigSplitOrientation::Vertical => MuxSplitOrientation::Vertical,
-        ConfigSplitOrientation::Horizontal => MuxSplitOrientation::Horizontal,
+        ConfigSplitOrientation::Vertical => OrzmuxSplitOrientation::Vertical,
+        ConfigSplitOrientation::Horizontal => OrzmuxSplitOrientation::Horizontal,
     }
 }
 
@@ -161,8 +161,8 @@ mod tests {
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
     use orzma_configs::shortcuts::{Modifiers, PaneDirection, SplitOrientation};
-    use orzma_mux::prelude::PaneDirection as MuxDirection;
     use orzma_tty::prelude::TerminalKey;
+    use orzmux::prelude::PaneDirection as OrzmuxDirection;
 
     #[derive(Resource, Default)]
     struct Captured {
@@ -339,7 +339,7 @@ mod tests {
             c.spawns.as_slice(),
             [NewPaneAt::Split {
                 pane: PaneTarget::Active,
-                orientation: MuxSplitOrientation::Vertical,
+                orientation: OrzmuxSplitOrientation::Vertical,
             }]
         ));
         assert_eq!(c.pane_actions, vec![PaneAction::Kill]);
@@ -365,7 +365,7 @@ mod tests {
         app.update();
         assert_eq!(
             app.world().resource::<Captured>().pane_actions,
-            vec![PaneAction::SelectDirection(MuxDirection::Left)],
+            vec![PaneAction::SelectDirection(OrzmuxDirection::Left)],
             "SelectPane must map to RequestPaneAction::SelectDirection with the converted direction"
         );
     }

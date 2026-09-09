@@ -17,7 +17,7 @@ bevy = { workspace = true }
 bevy_cef = { workspace = true }
 bevy_cef_core = { workspace = true }
 orzma_vt = { path = "../orzma_vt/" }
-bevy_orzma_mux = { path = "../bevy_orzma_mux" }
+bevy_orzmux = { path = "../bevy_orzmux" }
 orzma_tty_renderer = { path = "../orzma_tty_renderer" }
 orzma_webview_host = { path = "../webview_host", features = ["cef"] }
 crossbeam-channel = "0.5"
@@ -34,8 +34,8 @@ libc = "0.2"
 
 [dev-dependencies]
 log = "0.4"
-bevy_orzma_mux = { path = "../bevy_orzma_mux", features = ["test-support"] }
-orzma_mux = { path = "../orzma_mux" }
+bevy_orzmux = { path = "../bevy_orzmux", features = ["test-support"] }
+orzmux = { path = "../orzmux" }
 tempfile = { workspace = true }
 
 [lints]

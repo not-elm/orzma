@@ -9,10 +9,10 @@ use crate::requests::{
     vi_mode::ViModePlugin, vi_motion::ViMotionPlugin, webview_mount::WebviewMountPlugin,
     webview_remove::WebviewRemovePlugin,
 };
-use crate::{MuxConnection, MuxPane};
+use crate::{OrzmuxConnection, OrzmuxPane};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use orzma_mux::prelude::{CommandSeq, MuxCommand, PaneId};
+use orzmux::prelude::{CommandSeq, OrzmuxCommand, PaneId};
 
 mod copy;
 mod key_input;
@@ -67,8 +67,8 @@ impl Plugin for OrzmaEventRequestPlugin {
 /// entity that is not (or no longer) a pane.
 #[derive(SystemParam)]
 pub(crate) struct PaneSender<'w, 's> {
-    connection: Res<'w, MuxConnection>,
-    panes: Query<'w, 's, &'static MuxPane>,
+    connection: Res<'w, OrzmuxConnection>,
+    panes: Query<'w, 's, &'static OrzmuxPane>,
 }
 
 impl PaneSender<'_, '_> {
@@ -78,7 +78,7 @@ impl PaneSender<'_, '_> {
     pub(crate) fn send_for(
         &self,
         entity: Entity,
-        build: impl FnOnce(PaneId) -> MuxCommand,
+        build: impl FnOnce(PaneId) -> OrzmuxCommand,
     ) -> Option<CommandSeq> {
         let pane = self.panes.get(entity).ok()?;
         Some(self.connection.0.send(build(pane.0)))
@@ -86,41 +86,45 @@ impl PaneSender<'_, '_> {
 }
 
 /// Test-only fixtures shared by this crate's tests: a detached
-/// [`MuxClient`]-backed app plus helpers to spawn a mirrored pane entity
+/// [`OrzmuxClient`]-backed app plus helpers to spawn a mirrored pane entity
 /// and drain what an observer sent.
 #[cfg(test)]
 pub(crate) mod test_support {
-    use crate::{MuxConnection, MuxPane, layout::CurrentLayout, registry::PaneRegistry};
+    use crate::{OrzmuxConnection, OrzmuxPane, layout::CurrentLayout, registry::PaneRegistry};
     use bevy::prelude::*;
     use crossbeam_channel::{Receiver, Sender};
-    use orzma_mux::prelude::{CommandSeq, MuxClient, MuxCommand, MuxEvent, PaneId};
+    use orzmux::prelude::{CommandSeq, OrzmuxClient, OrzmuxCommand, OrzmuxEvent, PaneId};
 
     /// An app with a detached client; returns the backend's ends of both
     /// channels.
     pub(crate) fn app_with_channels(
         plugin: impl Plugin,
-    ) -> (App, Sender<MuxEvent>, Receiver<(CommandSeq, MuxCommand)>) {
-        let (client, events, commands) = MuxClient::detached();
+    ) -> (
+        App,
+        Sender<OrzmuxEvent>,
+        Receiver<(CommandSeq, OrzmuxCommand)>,
+    ) {
+        let (client, events, commands) = OrzmuxClient::detached();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(plugin)
             .init_resource::<PaneRegistry>()
             .init_resource::<CurrentLayout>()
-            .insert_resource(MuxConnection(client));
+            .insert_resource(OrzmuxConnection(client));
         (app, events, commands)
     }
 
     /// An app with a detached client; returns the backend's command end.
     pub(crate) fn app_with_connection(
         plugin: impl Plugin,
-    ) -> (App, Receiver<(CommandSeq, MuxCommand)>) {
+    ) -> (App, Receiver<(CommandSeq, OrzmuxCommand)>) {
         let (app, _events, commands) = app_with_channels(plugin);
         (app, commands)
     }
 
     /// Spawns a pane entity mirroring `pane` and registers it.
     pub(crate) fn spawn_pane(app: &mut App, pane: PaneId) -> Entity {
-        let entity = app.world_mut().spawn(MuxPane(pane)).id();
+        let entity = app.world_mut().spawn(OrzmuxPane(pane)).id();
         app.world_mut()
             .resource_mut::<PaneRegistry>()
             .panes
@@ -129,7 +133,7 @@ pub(crate) mod test_support {
     }
 
     /// The commands sent so far, in order.
-    pub(crate) fn sent(commands: &Receiver<(CommandSeq, MuxCommand)>) -> Vec<MuxCommand> {
+    pub(crate) fn sent(commands: &Receiver<(CommandSeq, OrzmuxCommand)>) -> Vec<OrzmuxCommand> {
         commands.try_iter().map(|(_, c)| c).collect()
     }
 }

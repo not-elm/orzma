@@ -8,6 +8,6 @@ pub mod layout;
 pub mod protocol;
 
 pub mod prelude {
-    pub use crate::client::{MuxClient, MuxConfig, MuxSpawnError};
+    pub use crate::client::{OrzmuxClient, OrzmuxConfig, OrzmuxSpawnError};
     pub use crate::protocol::*;
 }

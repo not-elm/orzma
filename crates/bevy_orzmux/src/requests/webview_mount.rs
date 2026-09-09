@@ -1,11 +1,11 @@
 //! `RequestTtyWebviewMount`: the host-driven mount the control plane asks
 //! a terminal entity to register when a program mounts over the socket
-//! rather than the PTY, sent as `MuxCommand::MountPlacement`.
+//! rather than the PTY, sent as `OrzmuxCommand::MountPlacement`.
 
 use crate::requests::PaneSender;
 use bevy::prelude::*;
-use orzma_mux::prelude::MuxCommand;
 use orzma_vt::prelude::{GridColumn, InstanceId, PlacementSize, ScreenLine};
+use orzmux::prelude::OrzmuxCommand;
 
 /// Fired by the control plane to register a webview placement at a
 /// visible cell of the terminal, on behalf of a program whose PTY drops
@@ -33,7 +33,7 @@ impl Plugin for WebviewMountPlugin {
 }
 
 fn apply_webview_mount(e: On<RequestTtyWebviewMount>, panes: PaneSender) {
-    panes.send_for(e.terminal, |pane| MuxCommand::MountPlacement {
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::MountPlacement {
         pane,
         instance: e.instance,
         row: e.row,
@@ -46,7 +46,7 @@ fn apply_webview_mount(e: On<RequestTtyWebviewMount>, panes: PaneSender) {
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
-    use orzma_mux::prelude::PaneId;
+    use orzmux::prelude::PaneId;
 
     /// Asserts that a webview-mount request for a pane entity becomes a
     /// `MountPlacement` command carrying the same instance, cell, and size.
@@ -69,7 +69,7 @@ mod tests {
         });
         let sent = sent(&commands);
         let [
-            MuxCommand::MountPlacement {
+            OrzmuxCommand::MountPlacement {
                 pane: PaneId(6),
                 instance,
                 row,

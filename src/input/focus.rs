@@ -16,8 +16,8 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::{FocusedWebview, WebviewSource};
-use bevy_orzma_mux::prelude::{MuxActivePaneChanged, MuxPane, PaneAction, RequestPaneAction};
 use bevy_orzma_webview::{NonInteractive, Webview, webview_hit_at};
+use bevy_orzmux::prelude::{OrzmuxActivePaneChanged, OrzmuxPane, PaneAction, RequestPaneAction};
 use orzma_configs::inactive_pane::InactivePaneConfig;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::{PaneInactiveStyle, TerminalOverlays};
@@ -76,7 +76,7 @@ impl Plugin for FocusSyncPlugin {
 /// the previous and current panes. `previous` may already be despawned
 /// (a `PaneClosed` in the same drain), hence the fallible commands.
 fn on_active_pane_changed(
-    ev: On<MuxActivePaneChanged>,
+    ev: On<OrzmuxActivePaneChanged>,
     mut commands: Commands,
     mut focused_webview: ResMut<FocusedWebview>,
     configs: Res<OrzmaConfigsResource>,
@@ -113,9 +113,13 @@ fn on_active_pane_changed(
 
 /// Click-to-focus: asks the bridge to select the clicked pane. The
 /// bridge applies it as active at once and reports the change through
-/// `MuxActivePaneChanged`, so this frame's keys already go to the
+/// `OrzmuxActivePaneChanged`, so this frame's keys already go to the
 /// clicked pane; the confirming `Layout` reconciles.
-fn on_pane_clicked(ev: On<PaneClicked>, mut commands: Commands, panes: Query<(), With<MuxPane>>) {
+fn on_pane_clicked(
+    ev: On<PaneClicked>,
+    mut commands: Commands,
+    panes: Query<(), With<OrzmuxPane>>,
+) {
     if panes.get(ev.entity).is_err() {
         return;
     }
@@ -286,8 +290,8 @@ fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orzma_mux::prelude::PaneId;
     use orzma_vt::prelude::InstanceId;
+    use orzmux::prelude::PaneId;
 
     #[test]
     fn focused_webview_follows_active_pane() {
@@ -482,13 +486,13 @@ mod tests {
             .add_observer(on_active_pane_changed);
         let a = app
             .world_mut()
-            .spawn((OrzmaTerminal, MuxPane(PaneId(1)), KeyboardFocused))
+            .spawn((OrzmaTerminal, OrzmuxPane(PaneId(1)), KeyboardFocused))
             .id();
         let b = app
             .world_mut()
-            .spawn((OrzmaTerminal, MuxPane(PaneId(2))))
+            .spawn((OrzmaTerminal, OrzmuxPane(PaneId(2))))
             .id();
-        app.world_mut().trigger(MuxActivePaneChanged {
+        app.world_mut().trigger(OrzmuxActivePaneChanged {
             previous: Some(a),
             current: Some(b),
         });
@@ -499,7 +503,7 @@ mod tests {
         assert!(app.world().get::<PaneInactiveStyle>(b).is_none());
 
         app.world_mut().entity_mut(b).despawn();
-        app.world_mut().trigger(MuxActivePaneChanged {
+        app.world_mut().trigger(OrzmuxActivePaneChanged {
             previous: Some(b),
             current: Some(a),
         });
@@ -529,7 +533,7 @@ mod tests {
             });
         let pane = app
             .world_mut()
-            .spawn((OrzmaTerminal, MuxPane(PaneId(2))))
+            .spawn((OrzmaTerminal, OrzmuxPane(PaneId(2))))
             .id();
         let other = app.world_mut().spawn(OrzmaTerminal).id();
         app.world_mut().trigger(PaneClicked { entity: pane });

@@ -25,7 +25,7 @@ use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
 use bevy::time::{Real, Time};
 use bevy::window::{CursorMoved, PrimaryWindow};
-use bevy_orzma_mux::prelude::{CellSide, GridPoint, SelectionKind};
+use bevy_orzmux::prelude::{CellSide, GridPoint, SelectionKind};
 use orzma_tty::prelude::{CellCoord, MouseReportKind, ProtocolModifiers};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_vt::prelude::{GridColumn, GridLine};
@@ -420,7 +420,7 @@ fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
 /// Converts a 1-indexed protocol `CellCoord` into a 0-indexed,
 /// viewport-relative `GridPoint` (row 0 = top of the currently displayed
 /// viewport). This dispatcher has no read access to the VT (a pane entity's
-/// `MuxPane` names the backend pane, but the VT itself lives on the
+/// `OrzmuxPane` names the backend pane, but the VT itself lives on the
 /// multiplexer backend thread, a backend that may later run out of
 /// process), so it cannot resolve scrollback itself —
 /// `action/terminal/selection.rs`'s apply observer offsets this by the

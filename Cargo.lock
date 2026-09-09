@@ -1283,39 +1283,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 
 [[package]]
-name = "bevy_orzma_mux"
-version = "0.2.0-dev"
-dependencies = [
- "bevy",
- "crossbeam-channel",
- "orzma_mux",
- "orzma_tty",
- "orzma_vt",
- "tracing",
-]
-
-[[package]]
 name = "bevy_orzma_webview"
 version = "0.2.0-dev"
 dependencies = [
  "bevy",
  "bevy_cef",
  "bevy_cef_core",
- "bevy_orzma_mux",
+ "bevy_orzmux",
  "crossbeam-channel",
  "data-encoding",
  "getrandom 0.2.17",
  "libc",
  "log",
- "orzma_mux",
  "orzma_tty_renderer",
  "orzma_vt",
  "orzma_webview_host",
+ "orzmux",
  "serde",
  "serde_json",
  "tempfile",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "bevy_orzmux"
+version = "0.2.0-dev"
+dependencies = [
+ "bevy",
+ "crossbeam-channel",
+ "orzma_tty",
+ "orzma_vt",
+ "orzmux",
+ "tracing",
 ]
 
 [[package]]
@@ -5006,8 +5006,8 @@ dependencies = [
  "bevy",
  "bevy_cef",
  "bevy_cef_core",
- "bevy_orzma_mux",
  "bevy_orzma_webview",
+ "bevy_orzmux",
  "crossbeam-channel",
  "data-encoding",
  "fontique",
@@ -5015,11 +5015,11 @@ dependencies = [
  "libc",
  "open",
  "orzma_configs",
- "orzma_mux",
  "orzma_tty",
  "orzma_tty_renderer",
  "orzma_vt",
  "orzma_webview_host",
+ "orzmux",
  "serde",
  "serde_json",
  "tempfile",
@@ -5045,17 +5045,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "orzma_mux"
-version = "0.2.0-dev"
-dependencies = [
- "anyhow",
- "crossbeam-channel",
- "orzma_tty",
- "orzma_vt",
- "tracing",
-]
-
-[[package]]
 name = "orzma_tty"
 version = "0.2.0-dev"
 dependencies = [
@@ -5073,9 +5062,9 @@ version = "0.2.0-dev"
 dependencies = [
  "ab_glyph",
  "bevy",
- "bevy_orzma_mux",
- "orzma_mux",
+ "bevy_orzmux",
  "orzma_vt",
+ "orzmux",
  "rmp-serde",
  "serde",
  "serde_bytes",
@@ -5121,6 +5110,17 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "orzmux"
+version = "0.2.0-dev"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "orzma_tty",
+ "orzma_vt",
+ "tracing",
 ]
 
 [[package]]

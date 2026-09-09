@@ -5,7 +5,7 @@ use crate::input::focus::KeyboardFocused;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
-use bevy_orzma_mux::prelude::TtyTitle;
+use bevy_orzmux::prelude::TtyTitle;
 
 /// Keeps the primary OS window title in sync with the focused terminal's OSC
 /// title.

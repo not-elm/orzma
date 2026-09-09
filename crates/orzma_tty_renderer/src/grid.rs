@@ -4,23 +4,23 @@
 
 use crate::schema::TerminalGrid;
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::{MuxPane, TtyFrameSignal};
+use bevy_orzmux::prelude::{OrzmuxPane, TtyFrameSignal};
 
 /// Registers the `apply_frame` observer and makes every pane entity
 /// carry a `TerminalGrid`.
 ///
-/// The grid is a required component of [`MuxPane`] because the backend
+/// The grid is a required component of [`OrzmuxPane`] because the backend
 /// emits its bootstrap repaint exactly once: a frame delivered to a
 /// pane entity without a grid would be dropped, and the backend offers
 /// no repaint request to recover it. Bevy registers a requirement only
-/// before the first entity carrying `MuxPane` exists, so the plugin
+/// before the first entity carrying `OrzmuxPane` exists, so the plugin
 /// must be added before any pane is promoted.
 #[derive(Default)]
 pub struct TerminalGridPlugin;
 
 impl Plugin for TerminalGridPlugin {
     fn build(&self, app: &mut App) {
-        app.register_required_components::<MuxPane, TerminalGrid>()
+        app.register_required_components::<OrzmuxPane, TerminalGrid>()
             .add_observer(apply_frame);
     }
 }
@@ -57,8 +57,8 @@ mod tests {
         AnchoredPlacement, DisplayOffset, GridColumn, GridLine, GridPoint, InstanceId,
         PlacementSize, quiet_frame,
     };
-    use orzma_mux::prelude::PaneId;
     use orzma_vt::prelude::{Frame, GridSize};
+    use orzmux::prelude::PaneId;
 
     #[derive(Resource, Default)]
     struct ChangedGrids(usize);
@@ -174,7 +174,7 @@ mod tests {
         assert!(app.world().get::<TerminalGrid>(bare).is_none());
     }
 
-    /// Asserts that a frame signalled at a `MuxPane` entity lands in the
+    /// Asserts that a frame signalled at an `OrzmuxPane` entity lands in the
     /// grid the required component gave it.
     ///
     /// Case: the backend sends a pane's bootstrap frame right after the
@@ -183,7 +183,7 @@ mod tests {
     fn a_signalled_frame_reaches_the_required_grid() {
         let mut app = App::new();
         app.add_plugins(TerminalGridPlugin);
-        let terminal = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let terminal = app.world_mut().spawn(OrzmuxPane(PaneId(1))).id();
         let mut frame = quiet_frame();
         frame.size = GridSize { cols: 4, rows: 3 };
         app.world_mut().trigger(TtyFrameSignal { terminal, frame });

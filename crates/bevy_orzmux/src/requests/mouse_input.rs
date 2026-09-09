@@ -1,10 +1,10 @@
 //! `RequestTtyMouseInput`: a mouse-protocol report the host UI asks a
-//! terminal entity to receive, sent as `MuxCommand::MouseInput`.
+//! terminal entity to receive, sent as `OrzmuxCommand::MouseInput`.
 
 use crate::requests::PaneSender;
 use bevy::prelude::*;
-use orzma_mux::prelude::MuxCommand;
 use orzma_tty::prelude::MouseReport;
+use orzmux::prelude::OrzmuxCommand;
 
 /// Fired by the host UI to forward one mouse-protocol report to a specific
 /// terminal entity.
@@ -27,7 +27,7 @@ impl Plugin for MouseInputPlugin {
 }
 
 fn apply_mouse_input(e: On<RequestTtyMouseInput>, panes: PaneSender) {
-    panes.send_for(e.terminal, |pane| MuxCommand::MouseInput {
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::MouseInput {
         pane,
         report: e.mouse,
     });
@@ -37,8 +37,8 @@ fn apply_mouse_input(e: On<RequestTtyMouseInput>, panes: PaneSender) {
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
-    use orzma_mux::prelude::PaneId;
     use orzma_tty::prelude::{CellCoord, MouseButton, MouseReportKind, ProtocolModifiers};
+    use orzmux::prelude::PaneId;
 
     fn report() -> MouseReport {
         MouseReport {
@@ -72,7 +72,7 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert!(matches!(
             sent[0],
-            MuxCommand::MouseInput {
+            OrzmuxCommand::MouseInput {
                 pane: PaneId(2),
                 ..
             }

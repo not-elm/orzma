@@ -1,5 +1,5 @@
 //! Local VI applier: forwards each shared VI action event to the matching
-//! `bevy_orzma_mux` request `EntityEvent`, and to the vi-mode exit event
+//! `bevy_orzmux` request `EntityEvent`, and to the vi-mode exit event
 //! `mode.rs` owns for selection toggling, yank, and exit.
 
 use crate::action::vi::mode::ExitViMode;
@@ -7,8 +7,8 @@ use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::{
-    MuxPane, RequestTtyCopySelection, RequestTtyScroll, RequestTtySelectionClear,
+use bevy_orzmux::prelude::{
+    OrzmuxPane, RequestTtyCopySelection, RequestTtyScroll, RequestTtySelectionClear,
     RequestTtySelectionKindChange, RequestTtySelectionStartAtViCursor, RequestTtyViMotion,
     SelectionKind,
 };
@@ -71,7 +71,11 @@ fn on_vi_selection_toggle(ev: On<ViSelectionToggleRequest>, mut commands: Comman
 /// Asks for the selection's text (answered later as a clipboard write)
 /// and always leaves vi mode. FIFO on the backend keeps the copy ahead
 /// of the exit's selection clear.
-fn on_vi_yank(ev: On<ViYankRequest>, mut commands: Commands, terminals: Query<(), With<MuxPane>>) {
+fn on_vi_yank(
+    ev: On<ViYankRequest>,
+    mut commands: Commands,
+    terminals: Query<(), With<OrzmuxPane>>,
+) {
     if terminals.get(ev.entity).is_ok() {
         commands.trigger(RequestTtyCopySelection {
             terminal: ev.entity,
@@ -85,7 +89,7 @@ fn on_vi_exit(ev: On<ViExitRequest>, mut commands: Commands) {
     commands.trigger(ExitViMode { entity: ev.entity });
 }
 
-/// Maps a `ViModeScroll` to the `Scroll` motion `bevy_orzma_mux` applies.
+/// Maps a `ViModeScroll` to the `Scroll` motion `bevy_orzmux` applies.
 fn scroll_for(kind: ViModeScroll) -> Scroll {
     match kind {
         ViModeScroll::PageUp => Scroll::PageUp,
@@ -128,7 +132,7 @@ fn selection_type() -> Option<SelectionKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy_orzma_mux::prelude::ViMotion;
+    use bevy_orzmux::prelude::ViMotion;
 
     /// Asserts that a toggle starts a selection when none exists, clears
     /// one of the same kind, and switches one of a different kind.
@@ -264,7 +268,7 @@ mod tests {
     #[derive(Resource, Default)]
     struct SeenExits(Vec<Entity>);
 
-    /// Asserts that a yank on an entity without a `MuxPane` still exits vi
+    /// Asserts that a yank on an entity without an `OrzmuxPane` still exits vi
     /// mode, requesting no copy.
     ///
     /// Case: the yank key lands while the focused pane is being torn down.
@@ -291,7 +295,7 @@ mod tests {
     #[test]
     fn yank_requests_the_copy_then_exits_vi_mode() {
         use crate::surface::OrzmaTerminal;
-        use orzma_mux::prelude::PaneId;
+        use orzmux::prelude::PaneId;
 
         #[derive(Resource, Default)]
         struct Order(Vec<&'static str>);
@@ -301,7 +305,7 @@ mod tests {
             .add_observer(|_: On<ExitViMode>, mut o: ResMut<Order>| o.0.push("exit"));
         let entity = app
             .world_mut()
-            .spawn((OrzmaTerminal, MuxPane(PaneId(1))))
+            .spawn((OrzmaTerminal, OrzmuxPane(PaneId(1))))
             .id();
         app.world_mut().trigger(ViYankRequest { entity });
         app.update();

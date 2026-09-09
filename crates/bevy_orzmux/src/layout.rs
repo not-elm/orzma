@@ -2,10 +2,10 @@
 //! applies it to pane nodes.
 
 use crate::registry::PaneRegistry;
-use crate::{MuxPane, MuxSystems};
+use crate::{OrzmuxPane, OrzmuxSystems};
 use bevy::prelude::*;
-use orzma_mux::prelude::{Layout, PaneRect, Separator, SplitOrientation};
 use orzma_tty::CellPixels;
+use orzmux::prelude::{Layout, PaneRect, Separator, SplitOrientation};
 
 /// The latest layout snapshot. Written by the drain only when it
 /// differs; the non-empty → empty transition is detected there.
@@ -25,18 +25,18 @@ pub struct PaneGeometry {
 /// as its children too. The host marks its clipping container with it
 /// before requesting the first pane.
 #[derive(Component, Debug)]
-pub struct MuxPaneContainer;
+pub struct OrzmuxPaneContainer;
 
 /// A separator node between two panes.
 #[derive(Component, Debug)]
-pub(crate) struct MuxSeparator;
+pub(crate) struct OrzmuxSeparator;
 
 /// The GUI accepted a new active pane from a `Layout`. `previous` is
 /// the last accepted active's entity; it may already be despawned (a
 /// `PaneClosed` in the same drain), in which case it resolves to
 /// `None`.
 #[derive(Event, Debug, Clone, Copy)]
-pub struct MuxActivePaneChanged {
+pub struct OrzmuxActivePaneChanged {
     /// The entity that was the applied active before this change.
     pub previous: Option<Entity>,
     /// The entity that is the applied active after this change.
@@ -62,7 +62,7 @@ impl Plugin for LayoutPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            apply_layout.in_set(MuxSystems::ApplyLayout).run_if(
+            apply_layout.in_set(OrzmuxSystems::ApplyLayout).run_if(
                 resource_exists::<PaneGeometry>.and_then(
                     resource_exists_and_changed::<CurrentLayout>
                         .or_else(resource_exists_and_changed::<PaneGeometry>),
@@ -83,11 +83,11 @@ const SEPARATOR_THICKNESS_LOGICAL_PX: f32 = 1.0;
 fn apply_layout(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
-    mut nodes: Query<&mut Node, With<MuxPane>>,
-    mut separators: Query<(Entity, &mut Node), (With<MuxSeparator>, Without<MuxPane>)>,
+    mut nodes: Query<&mut Node, With<OrzmuxPane>>,
+    mut separators: Query<(Entity, &mut Node), (With<OrzmuxSeparator>, Without<OrzmuxPane>)>,
     current: Res<CurrentLayout>,
     geometry: Res<PaneGeometry>,
-    container: Query<Entity, With<MuxPaneContainer>>,
+    container: Query<Entity, With<OrzmuxPaneContainer>>,
 ) {
     let layout = &current.0;
     for rect in &layout.panes {
@@ -107,7 +107,7 @@ fn apply_layout(
 /// parenting new ones under `container` when the host has marked one.
 fn reconcile_separators(
     commands: &mut Commands,
-    separators: &mut Query<(Entity, &mut Node), (With<MuxSeparator>, Without<MuxPane>)>,
+    separators: &mut Query<(Entity, &mut Node), (With<OrzmuxSeparator>, Without<OrzmuxPane>)>,
     layout: &Layout,
     geometry: &PaneGeometry,
     container: Option<Entity>,
@@ -124,7 +124,7 @@ fn reconcile_separators(
             }
             None => {
                 let mut spawned =
-                    commands.spawn((MuxSeparator, wanted, BackgroundColor(SEPARATOR_COLOR)));
+                    commands.spawn((OrzmuxSeparator, wanted, BackgroundColor(SEPARATOR_COLOR)));
                 if let Some(container) = container {
                     spawned.insert(ChildOf(container));
                 }
@@ -257,16 +257,16 @@ fn apply_active(commands: &mut Commands, registry: &mut PaneRegistry, layout: &L
         .and_then(|pane| registry.entity_of(pane));
     let current = layout.active.and_then(|pane| registry.entity_of(pane));
     registry.applied_active = layout.active;
-    commands.trigger(MuxActivePaneChanged { previous, current });
+    commands.trigger(OrzmuxActivePaneChanged { previous, current });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, spawn_pane};
-    use orzma_mux::prelude::{CommandSeq, Layout, PaneId, PaneRect, Separator, SplitOrientation};
     use orzma_tty::CellPixels;
     use orzma_vt::prelude::GridSize;
+    use orzmux::prelude::{CommandSeq, Layout, PaneId, PaneRect, Separator, SplitOrientation};
 
     #[derive(Resource, Default)]
     struct Changes(Vec<(Option<Entity>, Option<Entity>)>);
@@ -284,11 +284,12 @@ mod tests {
                 scale_factor: 2.0,
             })
             .add_observer(
-                |ev: On<MuxActivePaneChanged>, mut changes: ResMut<Changes>| {
+                |ev: On<OrzmuxActivePaneChanged>, mut changes: ResMut<Changes>| {
                     changes.0.push((ev.previous, ev.current))
                 },
             );
-        app.world_mut().spawn((MuxPaneContainer, Node::default()));
+        app.world_mut()
+            .spawn((OrzmuxPaneContainer, Node::default()));
         app
     }
 
@@ -346,12 +347,12 @@ mod tests {
         app.update();
         let container = app
             .world_mut()
-            .query_filtered::<Entity, With<MuxPaneContainer>>()
+            .query_filtered::<Entity, With<OrzmuxPaneContainer>>()
             .single(app.world())
             .unwrap();
         let separator = app
             .world_mut()
-            .query_filtered::<Entity, With<MuxSeparator>>()
+            .query_filtered::<Entity, With<OrzmuxSeparator>>()
             .single(app.world())
             .unwrap();
         assert_eq!(
@@ -367,7 +368,7 @@ mod tests {
         );
         let world = app.world_mut();
         let seps: Vec<&Node> = world
-            .query_filtered::<&Node, With<MuxSeparator>>()
+            .query_filtered::<&Node, With<OrzmuxSeparator>>()
             .iter(world)
             .collect();
         assert_eq!(seps.len(), 1);
@@ -545,7 +546,7 @@ mod tests {
     }
 
     /// Asserts that an accepted active change fires
-    /// `MuxActivePaneChanged` with the previously applied active, and
+    /// `OrzmuxActivePaneChanged` with the previously applied active, and
     /// that a stale layout leaves the applied active untouched.
     ///
     /// Case: the user presses select-right (seq 10) then clicks the left
@@ -642,10 +643,10 @@ mod tests {
         app.init_resource::<ChangedPaneNodes>().add_systems(
             Update,
             (|mut changed: ResMut<ChangedPaneNodes>,
-              changed_nodes: Query<(), (Changed<Node>, With<MuxPane>)>| {
+              changed_nodes: Query<(), (Changed<Node>, With<OrzmuxPane>)>| {
                 changed.0 = changed_nodes.iter().count();
             })
-            .after(MuxSystems::ApplyLayout),
+            .after(OrzmuxSystems::ApplyLayout),
         );
         two_panes(&mut app);
         set_layout(&mut app, 1, PaneId(1));

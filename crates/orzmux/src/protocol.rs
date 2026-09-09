@@ -87,7 +87,7 @@ pub enum NewPaneAt {
 
 /// A command the GUI sends to the backend.
 #[derive(Debug, Clone)]
-pub enum MuxCommand {
+pub enum OrzmuxCommand {
     /// The whole window's size in cells plus the cell pixel pitch.
     Resize {
         /// The window's width in cells.
@@ -281,7 +281,7 @@ impl Default for Layout {
 
 /// An event the backend emits to the GUI.
 #[derive(Debug, Clone, PartialEq)]
-pub enum MuxEvent {
+pub enum OrzmuxEvent {
     /// A pane requested by `NewPane` was spawned successfully.
     PaneOpened {
         /// The newly spawned pane.
@@ -334,8 +334,8 @@ pub enum MuxEvent {
 }
 
 const fn assert_send_static<T: Send + 'static>() {}
-const _: () = assert_send_static::<MuxEvent>();
-const _: () = assert_send_static::<MuxCommand>();
+const _: () = assert_send_static::<OrzmuxEvent>();
+const _: () = assert_send_static::<OrzmuxCommand>();
 
 #[cfg(test)]
 mod tests {

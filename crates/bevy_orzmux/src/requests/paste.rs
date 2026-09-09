@@ -1,10 +1,10 @@
 //! `RequestTtyPaste` (a specific pane) and `RequestActivePaste` (the
-//! backend's active pane): both become `MuxCommand::Paste`.
+//! backend's active pane): both become `OrzmuxCommand::Paste`.
 
-use crate::MuxConnection;
+use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
 use bevy::prelude::*;
-use orzma_mux::prelude::{MuxCommand, PaneTarget};
+use orzmux::prelude::{OrzmuxCommand, PaneTarget};
 
 /// Fired by the host UI to paste text into a specific terminal entity.
 ///
@@ -39,14 +39,14 @@ impl Plugin for PastePlugin {
 }
 
 fn apply_paste(e: On<RequestTtyPaste>, panes: PaneSender) {
-    panes.send_for(e.terminal, |pane| MuxCommand::Paste {
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::Paste {
         pane: PaneTarget::Id(pane),
         text: e.text.clone(),
     });
 }
 
-fn apply_active_paste(e: On<RequestActivePaste>, connection: Res<MuxConnection>) {
-    connection.0.send(MuxCommand::Paste {
+fn apply_active_paste(e: On<RequestActivePaste>, connection: Res<OrzmuxConnection>) {
+    connection.0.send(OrzmuxCommand::Paste {
         pane: PaneTarget::Active,
         text: e.text.clone(),
     });
@@ -56,7 +56,7 @@ fn apply_active_paste(e: On<RequestActivePaste>, connection: Res<MuxConnection>)
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
-    use orzma_mux::prelude::PaneId;
+    use orzmux::prelude::PaneId;
 
     /// Asserts that an entity-addressed paste targets that pane by id
     /// and an active-addressed paste targets `Active`.
@@ -77,14 +77,14 @@ mod tests {
         let sent = sent(&commands);
         assert!(matches!(
             sent[0],
-            MuxCommand::Paste {
+            OrzmuxCommand::Paste {
                 pane: PaneTarget::Id(PaneId(4)),
                 ..
             }
         ));
         assert!(matches!(
             sent[1],
-            MuxCommand::Paste {
+            OrzmuxCommand::Paste {
                 pane: PaneTarget::Active,
                 ..
             }

@@ -1,5 +1,5 @@
 //! Per-command PTY-level terminal action events: mode-neutral apply observers
-//! that trigger `bevy_orzma_mux` requests against a terminal surface. This
+//! that trigger `bevy_orzmux` requests against a terminal surface. This
 //! root aggregates their per-file plugins.
 
 mod open_uri;

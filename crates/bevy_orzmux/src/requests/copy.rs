@@ -3,7 +3,7 @@
 
 use crate::requests::PaneSender;
 use bevy::prelude::*;
-use orzma_mux::prelude::{MuxCommand, PaneTarget};
+use orzmux::prelude::{OrzmuxCommand, PaneTarget};
 
 /// Copy the selection of one pane entity.
 #[derive(EntityEvent, Debug, Clone)]
@@ -21,7 +21,7 @@ impl Plugin for CopyPlugin {
 }
 
 fn apply_copy_selection(e: On<RequestTtyCopySelection>, panes: PaneSender) {
-    panes.send_for(e.terminal, |pane| MuxCommand::CopySelection {
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::CopySelection {
         pane: PaneTarget::Id(pane),
     });
 }
@@ -30,7 +30,7 @@ fn apply_copy_selection(e: On<RequestTtyCopySelection>, panes: PaneSender) {
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
-    use orzma_mux::prelude::PaneId;
+    use orzmux::prelude::PaneId;
 
     /// Asserts that a copy request sends `CopySelection` addressed by
     /// pane id.
@@ -46,7 +46,7 @@ mod tests {
         assert!(
             matches!(
                 sent.as_slice(),
-                [MuxCommand::CopySelection {
+                [OrzmuxCommand::CopySelection {
                     pane: PaneTarget::Id(PaneId(5)),
                     ..
                 }]
