@@ -752,14 +752,31 @@ mod tests {
         (chunk_rx, progress, reader)
     }
 
+    /// Polls `condition` every millisecond and reports whether it held
+    /// before `within` elapsed.
+    fn holds_within(mut condition: impl FnMut() -> bool, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        while !condition() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+
+    /// Whether `handle` finishes within `within`.
+    fn finishes_within(handle: &JoinHandle<()>, within: Duration) -> bool {
+        holds_within(|| handle.is_finished(), within)
+    }
+
     /// Blocks until `progress` reports the reader parked, failing after
     /// ten seconds.
     fn wait_until_parked(progress: &ReaderProgress) {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !progress.is_parked() {
-            assert!(Instant::now() < deadline, "the reader never parked");
-            thread::sleep(Duration::from_millis(1));
-        }
+        assert!(
+            holds_within(|| progress.is_parked(), Duration::from_secs(10)),
+            "the reader never parked"
+        );
     }
 
     /// Asserts that the reader parks once the queue holds
@@ -791,11 +808,10 @@ mod tests {
             forwarding(vec![0u8; 2 * 1024 * 1024], Pty::CHUNK_QUEUE_CAPACITY);
         wait_until_parked(&progress);
         drop(chunk_rx);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !reader.is_finished() {
-            assert!(Instant::now() < deadline, "the parked reader did not end");
-            thread::sleep(Duration::from_millis(1));
-        }
+        assert!(
+            finishes_within(&reader, Duration::from_secs(10)),
+            "the parked reader did not end"
+        );
         reader
             .join()
             .expect("the reader thread ends on a gone receiver");
@@ -809,18 +825,6 @@ mod tests {
     ) -> JoinHandle<()> {
         let progress = Arc::clone(progress);
         thread::spawn(move || wait_for_output_quiescence(&progress, quiescence, cap))
-    }
-
-    /// Whether `handle` finishes within `within`.
-    fn finishes_within(handle: &JoinHandle<()>, within: Duration) -> bool {
-        let deadline = Instant::now() + within;
-        while !handle.is_finished() {
-            if Instant::now() >= deadline {
-                return false;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-        true
     }
 
     /// Asserts that the watcher does not return while the reader is
