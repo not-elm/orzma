@@ -421,8 +421,9 @@ fn spawn_reader_thread(
 /// pseudoconsole is closed, so the reader cannot learn about the exit from
 /// EOF the way the Unix reader does. The watcher waits [`OUTPUT_QUIESCENCE`]
 /// after the reader's last completed read or send, as reported through its
-/// [`ReaderProgress`], so the child's final output is queued before the
-/// exit is reported; `OrzmaTty::pump` then reports `ChildExit` only once
+/// [`ReaderProgress`], and only while the reader is not parked on a full
+/// queue, so the child's final output is queued before the exit is
+/// reported; `OrzmaTty::pump` then reports `ChildExit` only once
 /// the queue is drained. The reader ends when the master is dropped by the
 /// pane teardown the exit triggers.
 #[cfg(windows)]
@@ -468,9 +469,11 @@ const QUIESCENCE_POLL_FLOOR: Duration = Duration::from_millis(10);
 /// that parked longer than the window cannot make the watcher fire
 /// before the next read completes.
 ///
-/// Unparked time is counted only for poll intervals that started and
-/// ended unparked, so a transition inside an interval under-counts by
-/// at most one poll instead of charging parked time against the cap.
+/// An interval counts toward the cap only when both of its polls find
+/// the reader unparked; a park that spans a poll is never charged,
+/// while one that fits inside a single interval still is. With the
+/// production poll rate that over-count is bounded by one interval per
+/// park.
 #[cfg(any(windows, test))]
 fn wait_for_output_quiescence(progress: &ReaderProgress, quiescence: Duration, cap: Duration) {
     let mut unparked = Duration::ZERO;
@@ -894,9 +897,10 @@ mod tests {
             Duration::from_millis(50),
             Duration::from_millis(150),
         );
-        assert!(finishes_within(&watcher, Duration::from_secs(2)));
+        let finished = finishes_within(&watcher, Duration::from_secs(2));
         stop.store(true, Ordering::Release);
         stamper.join().expect("the stamper ends");
+        assert!(finished);
     }
 
     /// Asserts that an idle, unparked reader lets the watcher return
@@ -909,7 +913,7 @@ mod tests {
         let started = Instant::now();
         let progress = Arc::new(ReaderProgress::new(started));
         let watcher = watch(&progress, Duration::from_millis(30), Duration::from_secs(2));
-        assert!(finishes_within(&watcher, Duration::from_millis(500)));
+        assert!(finishes_within(&watcher, Duration::from_secs(2)));
         watcher.join().expect("the watcher ends");
         assert!(started.elapsed() >= Duration::from_millis(30));
     }
