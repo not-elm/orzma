@@ -40,7 +40,7 @@ fontique = { version = "0.9", default-features = false, features = ["std"] }
 getrandom = "0.2"
 open = { workspace = true }
 orzma_configs = { path = "crates/orzma_configs" }
-orzma_webview_host = { path = "crates/webview_host", features = ["cef"] }
+orzma_webview_host = { path = "crates/orzma_webview_host", features = ["cef"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
