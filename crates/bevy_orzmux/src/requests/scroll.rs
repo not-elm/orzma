@@ -1,10 +1,10 @@
 //! `RequestTtyScroll`: the viewport movement the host UI asks a terminal
-//! entity to perform, sent as `MuxCommand::Scroll`.
+//! entity to perform, sent as `OrzmuxCommand::Scroll`.
 
 use crate::requests::PaneSender;
 use bevy::prelude::*;
-use orzma_mux::prelude::MuxCommand;
 use orzma_vt::prelude::Scroll;
+use orzmux::prelude::OrzmuxCommand;
 
 /// Fired by the host UI to move a specific terminal entity's viewport.
 ///
@@ -30,7 +30,7 @@ impl Plugin for ScrollPlugin {
 }
 
 fn apply_scroll(e: On<RequestTtyScroll>, panes: PaneSender) {
-    panes.send_for(e.terminal, |pane| MuxCommand::Scroll {
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::Scroll {
         pane,
         scroll: e.scroll,
     });
@@ -40,7 +40,7 @@ fn apply_scroll(e: On<RequestTtyScroll>, panes: PaneSender) {
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
-    use orzma_mux::prelude::PaneId;
+    use orzmux::prelude::PaneId;
 
     /// Asserts that a scroll request for a pane entity becomes a
     /// `Scroll` command for that pane id, and one for a non-pane entity
@@ -65,7 +65,7 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert!(matches!(
             sent[0],
-            MuxCommand::Scroll {
+            OrzmuxCommand::Scroll {
                 pane: PaneId(2),
                 scroll: Scroll::Delta(3)
             }

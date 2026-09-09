@@ -3,14 +3,14 @@
 //! last accepted.
 
 use bevy::prelude::*;
-use orzma_mux::prelude::{CommandSeq, PaneId, RequestId};
+use orzmux::prelude::{CommandSeq, PaneId, RequestId};
 use std::collections::HashMap;
 
 /// Correlation state between backend ids and entities.
 #[derive(Resource, Default, Debug)]
 pub struct PaneRegistry {
     /// Lookup cache, filled on `PaneOpened` and emptied on `PaneClosed`.
-    /// Never the source of session-end detection (see `drain_mux_events`).
+    /// Never the source of session-end detection (see `drain_orzmux_events`).
     pub panes: HashMap<PaneId, Entity>,
     /// Entities pre-spawned for a `NewPane` whose answer is pending.
     pub pending_spawns: HashMap<RequestId, Entity>,

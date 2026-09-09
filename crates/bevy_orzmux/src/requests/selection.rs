@@ -7,13 +7,13 @@
 //! request carries exactly what the backend applies.
 //!
 //! The start, update, and clear observers send the matching
-//! `MuxCommand`; the vi-cursor start and the kind change stay stubs
+//! `OrzmuxCommand`; the vi-cursor start and the kind change stay stubs
 //! until vi mode lands in the backend.
 
 use crate::requests::PaneSender;
 use bevy::prelude::*;
-use orzma_mux::prelude::MuxCommand;
 pub use orzma_vt::prelude::{CellSide, GridPoint, SelectionKind};
+use orzmux::prelude::OrzmuxCommand;
 
 /// Fired by the host UI to anchor a new selection at an explicit
 /// grid cell (mouse press).
@@ -85,7 +85,7 @@ impl Plugin for SelectionPlugin {
 }
 
 fn start_selection(e: On<RequestTtySelectionStart>, panes: PaneSender) {
-    panes.send_for(e.terminal, |pane| MuxCommand::SelectionStart {
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::SelectionStart {
         pane,
         cell: e.cell,
         side: e.side,
@@ -96,7 +96,7 @@ fn start_selection(e: On<RequestTtySelectionStart>, panes: PaneSender) {
 fn start_selection_at_vi_cursor(_e: On<RequestTtySelectionStartAtViCursor>) {}
 
 fn update_selection(e: On<RequestTtySelectionUpdate>, panes: PaneSender) {
-    panes.send_for(e.terminal, |pane| MuxCommand::SelectionUpdate {
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::SelectionUpdate {
         pane,
         cell: e.cell,
         side: e.side,
@@ -106,15 +106,15 @@ fn update_selection(e: On<RequestTtySelectionUpdate>, panes: PaneSender) {
 fn change_selection_kind(_e: On<RequestTtySelectionKindChange>) {}
 
 fn clear_selection(e: On<RequestTtySelectionClear>, panes: PaneSender) {
-    panes.send_for(e.terminal, |pane| MuxCommand::SelectionClear { pane });
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::SelectionClear { pane });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
-    use orzma_mux::prelude::PaneId;
     use orzma_vt::prelude::{GridColumn, GridLine};
+    use orzmux::prelude::PaneId;
 
     fn cell(line: i32, column: u16) -> GridPoint {
         GridPoint {
@@ -124,7 +124,7 @@ mod tests {
     }
 
     /// Asserts that start, update, and clear each become their matching
-    /// `MuxCommand` for the addressed pane, and a non-pane entity sends
+    /// `OrzmuxCommand` for the addressed pane, and a non-pane entity sends
     /// nothing.
     ///
     /// Case: the user presses on a cell, drags to another, then clicks
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(sent.len(), 3);
         assert!(matches!(
             sent[0],
-            MuxCommand::SelectionStart {
+            OrzmuxCommand::SelectionStart {
                 pane: PaneId(3),
                 side: CellSide::Left,
                 kind: SelectionKind::Simple,
@@ -166,7 +166,7 @@ mod tests {
         ));
         assert!(matches!(
             sent[1],
-            MuxCommand::SelectionUpdate {
+            OrzmuxCommand::SelectionUpdate {
                 pane: PaneId(3),
                 side: CellSide::Right,
                 ..
@@ -174,7 +174,7 @@ mod tests {
         ));
         assert!(matches!(
             sent[2],
-            MuxCommand::SelectionClear { pane: PaneId(3) }
+            OrzmuxCommand::SelectionClear { pane: PaneId(3) }
         ));
     }
 }

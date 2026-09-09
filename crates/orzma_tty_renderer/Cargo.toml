@@ -19,11 +19,11 @@ serde_bytes = "0.11"
 rmp-serde = "1"
 thiserror = { workspace = true }
 orzma_vt = { path = "../orzma_vt/" }
-bevy_orzma_mux = { path = "../bevy_orzma_mux" }
+bevy_orzmux = { path = "../bevy_orzmux" }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-bevy_orzma_mux = { path = "../bevy_orzma_mux", features = ["test-support"] }
-orzma_mux = { path = "../orzma_mux" }
+bevy_orzmux = { path = "../bevy_orzmux", features = ["test-support"] }
+orzmux = { path = "../orzmux" }

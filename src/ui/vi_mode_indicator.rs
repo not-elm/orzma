@@ -1,6 +1,6 @@
 //! Vi-mode indicator chip. A `Display::None` chip Node is
 //! attached as a child of each Surface host the first frame
-//! `MuxPane` is observed there; it becomes visible while the
+//! `OrzmuxPane` is observed there; it becomes visible while the
 //! host carries `ViModeState` and shows `[offset/total]` over the
 //! pane's top-right corner.
 
@@ -12,7 +12,7 @@ use bevy::ecs::lifecycle::Remove;
 use bevy::ecs::observer::On;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::MuxPane;
+use bevy_orzmux::prelude::OrzmuxPane;
 use orzma_tty_renderer::schema::TerminalGrid;
 
 /// Background color of the vi-mode indicator chip. Bright
@@ -50,7 +50,7 @@ impl Plugin for ViModeIndicatorPlugin {
 }
 
 /// Marker for the chip Node child of a Surface host. Exactly one
-/// per host; created on `Added<MuxPane>` and never despawned
+/// per host; created on `Added<OrzmuxPane>` and never despawned
 /// (visibility toggled via `Node.display`).
 #[derive(Component)]
 pub struct ViModeIndicator;
@@ -69,11 +69,11 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
 }
 
 /// Spawns a `ViModeIndicator` chip as a child of every pane host
-/// the first frame `MuxPane` is observed there. The
-/// `Added<MuxPane>` filter fires exactly once per surface host.
+/// the first frame `OrzmuxPane` is observed there. The
+/// `Added<OrzmuxPane>` filter fires exactly once per surface host.
 fn attach_indicator_to_surface_host(
     mut commands: Commands,
-    hosts: Query<Entity, Added<MuxPane>>,
+    hosts: Query<Entity, Added<OrzmuxPane>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     for host in hosts.iter() {
@@ -105,7 +105,7 @@ fn attach_indicator_to_surface_host(
 /// Updates each visible chip's `Text` and `IndicatorCache` from the
 /// host's live scroll offset. Gated by `any_with_component::<ViModeState>`
 /// so the schedule short-circuits when nothing is in vi mode.
-// TODO: `total` is stubbed to 0 until `bevy_orzma_mux` exposes a
+// TODO: `total` is stubbed to 0 until `bevy_orzmux` exposes a
 // history-size read (docs/todo/migrate-to-new-vt.md item 11); only the
 // live scroll offset is real.
 fn refresh_indicator(
@@ -163,7 +163,7 @@ mod tests {
     use super::*;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
-    use orzma_mux::prelude::PaneId;
+    use orzmux::prelude::PaneId;
 
     #[test]
     fn format_indicator_renders_offset_over_total() {
@@ -181,7 +181,7 @@ mod tests {
 
     fn spawn_terminal_entity(app: &mut App) -> Entity {
         app.world_mut()
-            .spawn((MuxPane(PaneId(1)), TerminalGrid::default()))
+            .spawn((OrzmuxPane(PaneId(1)), TerminalGrid::default()))
             .id()
     }
 

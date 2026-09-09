@@ -1,11 +1,11 @@
 //! `RequestTtyKeyInput` (a specific pane) and `RequestActiveKeyInput`
-//! (the backend's active pane): both become `MuxCommand::KeyInput`.
+//! (the backend's active pane): both become `OrzmuxCommand::KeyInput`.
 
-use crate::MuxConnection;
+use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
 use bevy::prelude::*;
-use orzma_mux::prelude::{MuxCommand, PaneTarget};
 use orzma_tty::prelude::{TerminalKey, TerminalModifiers};
+use orzmux::prelude::{OrzmuxCommand, PaneTarget};
 
 /// A key for one specific pane entity (webview forwards and other
 /// entity-addressed paths). Keyboard and IME input use
@@ -40,15 +40,15 @@ impl Plugin for KeyInputPlugin {
 }
 
 fn apply_key_input(e: On<RequestTtyKeyInput>, panes: PaneSender) {
-    panes.send_for(e.terminal, |pane| MuxCommand::KeyInput {
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::KeyInput {
         pane: PaneTarget::Id(pane),
         key: e.key.clone(),
         mods: e.modifiers,
     });
 }
 
-fn apply_active_key_input(e: On<RequestActiveKeyInput>, connection: Res<MuxConnection>) {
-    connection.0.send(MuxCommand::KeyInput {
+fn apply_active_key_input(e: On<RequestActiveKeyInput>, connection: Res<OrzmuxConnection>) {
+    connection.0.send(OrzmuxCommand::KeyInput {
         pane: PaneTarget::Active,
         key: e.key.clone(),
         mods: e.modifiers,
@@ -59,8 +59,8 @@ fn apply_active_key_input(e: On<RequestActiveKeyInput>, connection: Res<MuxConne
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
-    use orzma_mux::prelude::PaneId;
     use orzma_tty::prelude::KeyText;
+    use orzmux::prelude::PaneId;
 
     /// Asserts that an entity-addressed key targets that pane by id and
     /// an active-addressed key targets `Active`.
@@ -84,14 +84,14 @@ mod tests {
         let sent = sent(&commands);
         assert!(matches!(
             sent[0],
-            MuxCommand::KeyInput {
+            OrzmuxCommand::KeyInput {
                 pane: PaneTarget::Id(PaneId(4)),
                 ..
             }
         ));
         assert!(matches!(
             sent[1],
-            MuxCommand::KeyInput {
+            OrzmuxCommand::KeyInput {
                 pane: PaneTarget::Active,
                 ..
             }

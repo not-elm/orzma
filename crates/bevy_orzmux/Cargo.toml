@@ -1,5 +1,5 @@
 [package]
-name = "orzma_mux"
+name = "bevy_orzmux"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,17 +9,18 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+bevy = { workspace = true }
 orzma_vt = { path = "../orzma_vt" }
 orzma_tty = { path = "../orzma_tty" }
-crossbeam-channel = "0.5"
+orzmux = { path = "../orzmux" }
 tracing = { workspace = true }
 
 [features]
-test-support = ["orzma_tty/test-support"]
-
-[dev-dependencies]
-orzma_tty = { path = "../orzma_tty", features = ["test-support"] }
-anyhow = { workspace = true }
+test-support = ["orzmux/test-support"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+orzmux = { path = "../orzmux", features = ["test-support"] }
+crossbeam-channel = "0.5"

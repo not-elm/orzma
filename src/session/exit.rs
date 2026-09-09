@@ -1,8 +1,8 @@
-//! Session end: `MuxSessionEnded` (the last pane closed, or the backend
+//! Session end: `OrzmuxSessionEnded` (the last pane closed, or the backend
 //! is gone) sends `AppExit`.
 
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::MuxSessionEnded;
+use bevy_orzmux::prelude::OrzmuxSessionEnded;
 
 /// Registers the session-end observer.
 pub(super) struct ExitPlugin;
@@ -13,7 +13,7 @@ impl Plugin for ExitPlugin {
     }
 }
 
-fn on_session_ended(_ev: On<MuxSessionEnded>, mut exit: MessageWriter<AppExit>) {
+fn on_session_ended(_ev: On<OrzmuxSessionEnded>, mut exit: MessageWriter<AppExit>) {
     exit.write(AppExit::Success);
 }
 
@@ -22,7 +22,7 @@ mod tests {
     use super::*;
     use bevy::ecs::message::MessageReader;
 
-    /// Asserts that a `MuxSessionEnded` event sends `AppExit`.
+    /// Asserts that an `OrzmuxSessionEnded` event sends `AppExit`.
     ///
     /// Case: the last pane's shell exits, or the backend thread panics.
     #[test]
@@ -42,12 +42,12 @@ mod tests {
         app.init_resource::<GotExit>();
         app.add_systems(Update, capture);
 
-        app.world_mut().trigger(MuxSessionEnded);
+        app.world_mut().trigger(OrzmuxSessionEnded);
         app.update();
 
         assert!(
             app.world().resource::<GotExit>().0,
-            "AppExit should have been sent on MuxSessionEnded",
+            "AppExit should have been sent on OrzmuxSessionEnded",
         );
     }
 }

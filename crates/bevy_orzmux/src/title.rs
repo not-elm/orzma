@@ -41,8 +41,8 @@ fn on_title_reset(event: On<TtyTitleResetSignal>, mut titles: Query<&mut TtyTitl
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MuxPane;
-    use orzma_mux::prelude::PaneId;
+    use crate::OrzmuxPane;
+    use orzmux::prelude::PaneId;
 
     #[derive(Resource, Default)]
     struct ChangedTitles(usize);
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn a_pane_requires_a_title() {
         let mut app = App::new();
-        let terminal = app.world_mut().spawn(MuxPane(PaneId(1))).id();
+        let terminal = app.world_mut().spawn(OrzmuxPane(PaneId(1))).id();
         assert_eq!(app.world().get::<TtyTitle>(terminal), Some(&TtyTitle(None)));
     }
 }

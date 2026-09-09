@@ -5,7 +5,8 @@
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::layout::LayoutTree;
 use crate::protocol::{
-    CloseReason, CommandSeq, Layout, MuxCommand, MuxEvent, NewPaneAt, PaneId, PaneTarget, RequestId,
+    CloseReason, CommandSeq, Layout, NewPaneAt, OrzmuxCommand, OrzmuxEvent, PaneId, PaneTarget,
+    RequestId,
 };
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::CellPixels;
@@ -24,8 +25,8 @@ pub(crate) struct Backend {
     panes: HashMap<PaneId, Pane>,
     tree: LayoutTree,
     geometry: Option<Geometry>,
-    commands: Receiver<(CommandSeq, MuxCommand)>,
-    events: Sender<MuxEvent>,
+    commands: Receiver<(CommandSeq, OrzmuxCommand)>,
+    events: Sender<OrzmuxEvent>,
     next_pane_id: u32,
     processed: CommandSeq,
     /// Set when the GUI's event receiver is gone; the loop exits.
@@ -39,8 +40,8 @@ impl Backend {
     /// A backend with no panes and no geometry.
     pub(crate) fn new(
         factory: Box<dyn PaneFactory>,
-        commands: Receiver<(CommandSeq, MuxCommand)>,
-        events: Sender<MuxEvent>,
+        commands: Receiver<(CommandSeq, OrzmuxCommand)>,
+        events: Sender<OrzmuxEvent>,
     ) -> Self {
         Self {
             factory,
@@ -79,32 +80,32 @@ impl Backend {
     /// `SelectPane` always publishes a layout, and `SelectPaneDirection`
     /// publishes one only when the active pane moved. `pub(crate)` so
     /// tests drive the backend without a thread.
-    pub(crate) fn handle_command(&mut self, seq: CommandSeq, command: MuxCommand) {
+    pub(crate) fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.processed = seq;
         match command {
-            MuxCommand::Resize {
+            OrzmuxCommand::Resize {
                 cols,
                 rows,
                 cell_px,
             } => self.on_resize(cols, rows, cell_px),
-            MuxCommand::NewPane {
+            OrzmuxCommand::NewPane {
                 request,
                 at,
                 cwd,
                 env,
             } => self.on_new_pane(request, at, cwd, env),
-            MuxCommand::KillPane { pane } => {
+            OrzmuxCommand::KillPane { pane } => {
                 if let Some(id) = self.resolve_or_log(pane, "KillPane") {
                     self.close_pane(id, CloseReason::Killed);
                 }
             }
-            MuxCommand::SelectPane { pane } => {
+            OrzmuxCommand::SelectPane { pane } => {
                 if !self.tree.select(pane) {
                     tracing::debug!(?pane, "select of an unknown pane refused");
                 }
                 self.publish_layout();
             }
-            MuxCommand::SelectPaneDirection { direction } => {
+            OrzmuxCommand::SelectPaneDirection { direction } => {
                 let moved = self
                     .geometry
                     .is_some_and(|geometry| self.tree.select_direction(direction, geometry.size));
@@ -112,33 +113,33 @@ impl Backend {
                     self.publish_layout();
                 }
             }
-            MuxCommand::KeyInput { pane, key, mods } => {
+            OrzmuxCommand::KeyInput { pane, key, mods } => {
                 if let Some(p) = self.pane_mut(pane, "KeyInput")
                     && let Err(err) = p.tty.send_key(&key, &mods)
                 {
                     tracing::error!(%err, "key write failed");
                 }
             }
-            MuxCommand::Paste { pane, text } => {
+            OrzmuxCommand::Paste { pane, text } => {
                 if let Some(p) = self.pane_mut(pane, "Paste")
                     && let Err(err) = p.tty.send_paste(&text)
                 {
                     tracing::error!(%err, "paste write failed");
                 }
             }
-            MuxCommand::MouseInput { pane, report } => {
+            OrzmuxCommand::MouseInput { pane, report } => {
                 if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "MouseInput")
                     && let Err(err) = p.tty.send_mouse(report)
                 {
                     tracing::error!(%err, "mouse write failed");
                 }
             }
-            MuxCommand::Scroll { pane, scroll } => {
+            OrzmuxCommand::Scroll { pane, scroll } => {
                 if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "Scroll") {
                     p.tty.scroll(scroll);
                 }
             }
-            MuxCommand::SelectionStart {
+            OrzmuxCommand::SelectionStart {
                 pane,
                 cell,
                 side,
@@ -148,30 +149,30 @@ impl Backend {
                     p.tty.start_selection(cell, side, kind);
                 }
             }
-            MuxCommand::SelectionUpdate { pane, cell, side } => {
+            OrzmuxCommand::SelectionUpdate { pane, cell, side } => {
                 if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionUpdate") {
                     p.tty.extend_selection(cell, side);
                 }
             }
-            MuxCommand::SelectionClear { pane } => {
+            OrzmuxCommand::SelectionClear { pane } => {
                 if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionClear") {
                     p.tty.clear_selection();
                 }
             }
-            MuxCommand::CopySelection { pane } => {
+            OrzmuxCommand::CopySelection { pane } => {
                 let text = self
                     .resolve(pane)
                     .and_then(|id| self.panes.get(&id))
                     .and_then(|p| p.tty.vt().selection_text())
                     .filter(|t| !t.is_empty());
-                self.emit(MuxEvent::SelectionText { text });
+                self.emit(OrzmuxEvent::SelectionText { text });
             }
-            MuxCommand::RemovePlacements { pane, instances } => {
+            OrzmuxCommand::RemovePlacements { pane, instances } => {
                 if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "RemovePlacements") {
                     p.tty.remove_placements(&instances);
                 }
             }
-            MuxCommand::MountPlacement {
+            OrzmuxCommand::MountPlacement {
                 pane,
                 instance,
                 row,
@@ -278,7 +279,7 @@ impl Backend {
         env: Vec<(String, String)>,
     ) {
         let Some(geometry) = self.geometry else {
-            self.emit(MuxEvent::SpawnFailed {
+            self.emit(OrzmuxEvent::SpawnFailed {
                 request,
                 error: "no geometry".to_string(),
             });
@@ -290,7 +291,7 @@ impl Backend {
         let inherited_cwd = match self.insert_pane(new, at, geometry.size) {
             Ok(inherited_cwd) => inherited_cwd,
             Err(error) => {
-                self.emit(MuxEvent::SpawnFailed {
+                self.emit(OrzmuxEvent::SpawnFailed {
                     request,
                     error: error.to_string(),
                 });
@@ -320,7 +321,7 @@ impl Backend {
                         cwd: spawn_cwd,
                     },
                 );
-                self.emit(MuxEvent::PaneOpened { pane: new, request });
+                self.emit(OrzmuxEvent::PaneOpened { pane: new, request });
                 self.publish_layout();
             }
             Err(err) => {
@@ -328,7 +329,7 @@ impl Backend {
                 if let Some(previous) = previous_active {
                     self.tree.select(previous);
                 }
-                self.emit(MuxEvent::SpawnFailed {
+                self.emit(OrzmuxEvent::SpawnFailed {
                     request,
                     error: err.to_string(),
                 });
@@ -397,7 +398,7 @@ impl Backend {
             }
         }
         for (pane, signal) in signals {
-            self.emit(MuxEvent::Signal { pane, signal });
+            self.emit(OrzmuxEvent::Signal { pane, signal });
         }
         let layout = Layout {
             seq: self.processed,
@@ -406,7 +407,7 @@ impl Backend {
             panes: solved.panes,
             separators: solved.separators,
         };
-        self.emit(MuxEvent::Layout { layout, frames });
+        self.emit(OrzmuxEvent::Layout { layout, frames });
     }
 
     /// Forwards a pump's frame and signals. Returns `Some(code)` when the
@@ -422,12 +423,12 @@ impl Backend {
                     {
                         pane.cwd = Some(path.clone());
                     }
-                    self.emit(MuxEvent::Signal { pane: id, signal });
+                    self.emit(OrzmuxEvent::Signal { pane: id, signal });
                 }
             }
         }
         if let Some(frame) = output.frame {
-            self.emit(MuxEvent::Frame { pane: id, frame });
+            self.emit(OrzmuxEvent::Frame { pane: id, frame });
         }
         exited
     }
@@ -441,7 +442,7 @@ impl Backend {
         }
         self.tree.remove(id);
         self.panes.remove(&id);
-        self.emit(MuxEvent::PaneClosed { pane: id, reason });
+        self.emit(OrzmuxEvent::PaneClosed { pane: id, reason });
         self.publish_layout();
     }
 
@@ -471,7 +472,7 @@ impl Backend {
         self.panes.get_mut(&id)
     }
 
-    fn emit(&mut self, event: MuxEvent) {
+    fn emit(&mut self, event: OrzmuxEvent) {
         if self.events.send(event).is_err() {
             self.gui_gone = true;
         }
@@ -570,7 +571,7 @@ mod tests {
 
     struct Harness {
         backend: Backend,
-        events: Receiver<MuxEvent>,
+        events: Receiver<OrzmuxEvent>,
         panes: Receiver<FakePane>,
         log: Arc<FactoryLog>,
         seq: u64,
@@ -595,19 +596,19 @@ mod tests {
             }
         }
 
-        fn send(&mut self, command: MuxCommand) -> CommandSeq {
+        fn send(&mut self, command: OrzmuxCommand) -> CommandSeq {
             self.seq += 1;
             let seq = CommandSeq(self.seq);
             self.backend.handle_command(seq, command);
             seq
         }
 
-        fn drain(&self) -> VecDeque<MuxEvent> {
+        fn drain(&self) -> VecDeque<OrzmuxEvent> {
             self.events.try_iter().collect()
         }
 
         fn resize(&mut self, cols: u16, rows: u16) {
-            self.send(MuxCommand::Resize {
+            self.send(OrzmuxCommand::Resize {
                 cols,
                 rows,
                 cell_px: CellPixels {
@@ -620,14 +621,14 @@ mod tests {
         fn open_root(&mut self) -> (PaneId, FakePane) {
             self.resize(80, 24);
             self.drain();
-            self.send(MuxCommand::NewPane {
+            self.send(OrzmuxCommand::NewPane {
                 request: RequestId(1),
                 at: NewPaneAt::Root,
                 cwd: None,
                 env: vec![],
             });
             let events = self.drain();
-            let Some(MuxEvent::PaneOpened { pane, .. }) = events.front() else {
+            let Some(OrzmuxEvent::PaneOpened { pane, .. }) = events.front() else {
                 panic!("expected PaneOpened, got {events:?}");
             };
             (*pane, self.panes.try_recv().expect("one spawned pane"))
@@ -642,7 +643,7 @@ mod tests {
     #[test]
     fn a_root_pane_before_geometry_is_refused() {
         let mut h = Harness::new();
-        h.send(MuxCommand::NewPane {
+        h.send(OrzmuxCommand::NewPane {
             request: RequestId(9),
             at: NewPaneAt::Root,
             cwd: None,
@@ -651,7 +652,7 @@ mod tests {
         let events = h.drain();
         assert!(matches!(
             events.front(),
-            Some(MuxEvent::SpawnFailed {
+            Some(OrzmuxEvent::SpawnFailed {
                 request: RequestId(9),
                 ..
             })
@@ -667,7 +668,7 @@ mod tests {
         let mut h = Harness::new();
         h.resize(80, 24);
         h.drain();
-        h.send(MuxCommand::NewPane {
+        h.send(OrzmuxCommand::NewPane {
             request: RequestId(1),
             at: NewPaneAt::Root,
             cwd: None,
@@ -676,12 +677,12 @@ mod tests {
         let mut events = h.drain();
         assert!(matches!(
             events.pop_front(),
-            Some(MuxEvent::PaneOpened {
+            Some(OrzmuxEvent::PaneOpened {
                 request: RequestId(1),
                 ..
             })
         ));
-        let Some(MuxEvent::Layout { layout, frames }) = events.pop_front() else {
+        let Some(OrzmuxEvent::Layout { layout, frames }) = events.pop_front() else {
             panic!("expected Layout");
         };
         assert_eq!(layout.panes.len(), 1);
@@ -699,7 +700,7 @@ mod tests {
         let mut h = Harness::new();
         let (root, _pane) = h.open_root();
         h.log.fail_next.store(true, Ordering::Release);
-        h.send(MuxCommand::NewPane {
+        h.send(OrzmuxCommand::NewPane {
             request: RequestId(2),
             at: NewPaneAt::Split {
                 pane: PaneTarget::Id(root),
@@ -712,7 +713,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert!(matches!(
             events.front(),
-            Some(MuxEvent::SpawnFailed {
+            Some(OrzmuxEvent::SpawnFailed {
                 request: RequestId(2),
                 ..
             })
@@ -729,7 +730,7 @@ mod tests {
     fn a_split_resizes_the_target_and_bundles_its_frame_with_the_layout() {
         let mut h = Harness::new();
         let (root, _pane) = h.open_root();
-        h.send(MuxCommand::NewPane {
+        h.send(OrzmuxCommand::NewPane {
             request: RequestId(2),
             at: NewPaneAt::Split {
                 pane: PaneTarget::Active,
@@ -741,12 +742,12 @@ mod tests {
         let mut events = h.drain();
         assert!(matches!(
             events.pop_front(),
-            Some(MuxEvent::PaneOpened {
+            Some(OrzmuxEvent::PaneOpened {
                 request: RequestId(2),
                 ..
             })
         ));
-        let Some(MuxEvent::Layout { layout, frames }) = events.pop_front() else {
+        let Some(OrzmuxEvent::Layout { layout, frames }) = events.pop_front() else {
             panic!("expected Layout");
         };
         assert_eq!(layout.panes.len(), 2);
@@ -768,7 +769,7 @@ mod tests {
     fn a_window_resize_reflows_every_pane() {
         let mut h = Harness::new();
         let (root, _pane) = h.open_root();
-        h.send(MuxCommand::NewPane {
+        h.send(OrzmuxCommand::NewPane {
             request: RequestId(2),
             at: NewPaneAt::Split {
                 pane: PaneTarget::Active,
@@ -780,7 +781,7 @@ mod tests {
         h.drain();
         h.resize(120, 24);
         let mut events = h.drain();
-        let Some(MuxEvent::Layout { layout, frames }) = events.pop_front() else {
+        let Some(OrzmuxEvent::Layout { layout, frames }) = events.pop_front() else {
             panic!("expected Layout");
         };
         assert_eq!(
@@ -815,14 +816,14 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|e| matches!(e, MuxEvent::Frame { pane, .. } if *pane == root))
+                .any(|e| matches!(e, OrzmuxEvent::Frame { pane, .. } if *pane == root))
         );
     }
 
     /// Splits the active pane and returns the new pane's id and its
     /// spawned fake terminal.
     fn split_active(h: &mut Harness, request: u64) -> (PaneId, FakePane) {
-        h.send(MuxCommand::NewPane {
+        h.send(OrzmuxCommand::NewPane {
             request: RequestId(request),
             at: NewPaneAt::Split {
                 pane: PaneTarget::Active,
@@ -832,7 +833,7 @@ mod tests {
             env: vec![],
         });
         let events = h.drain();
-        let Some(MuxEvent::PaneOpened { pane, .. }) = events.front() else {
+        let Some(OrzmuxEvent::PaneOpened { pane, .. }) = events.front() else {
             panic!("expected PaneOpened, got {events:?}");
         };
         (*pane, h.panes.try_recv().expect("one spawned pane"))
@@ -848,13 +849,13 @@ mod tests {
         let mut h = Harness::new();
         let (root, _root_pane) = h.open_root();
         let (new, _new_pane) = split_active(&mut h, 2);
-        h.send(MuxCommand::KillPane {
+        h.send(OrzmuxCommand::KillPane {
             pane: PaneTarget::Active,
         });
         let events = h.drain();
         assert!(events.iter().any(|e| matches!(
             e,
-            MuxEvent::PaneClosed {
+            OrzmuxEvent::PaneClosed {
                 pane,
                 reason: CloseReason::Killed
             } if *pane == new
@@ -883,20 +884,20 @@ mod tests {
         new_pane.chunk_tx.send(b"last words".to_vec()).unwrap();
         h.backend.pump_pane(new);
         h.drain();
-        h.send(MuxCommand::KillPane {
+        h.send(OrzmuxCommand::KillPane {
             pane: PaneTarget::Id(new),
         });
-        let events: Vec<MuxEvent> = h.drain().into_iter().collect();
+        let events: Vec<OrzmuxEvent> = h.drain().into_iter().collect();
         let closed_at = events
             .iter()
-            .position(|e| matches!(e, MuxEvent::PaneClosed { pane, .. } if *pane == new))
+            .position(|e| matches!(e, OrzmuxEvent::PaneClosed { pane, .. } if *pane == new))
             .expect("PaneClosed");
         let frame_at = events
             .iter()
-            .position(|e| matches!(e, MuxEvent::Frame { pane, .. } if *pane == new))
+            .position(|e| matches!(e, OrzmuxEvent::Frame { pane, .. } if *pane == new))
             .expect("a final Frame for the killed pane");
         assert!(frame_at < closed_at, "the final frame precedes PaneClosed");
-        let Some(MuxEvent::Layout { layout, frames }) = events.last() else {
+        let Some(OrzmuxEvent::Layout { layout, frames }) = events.last() else {
             panic!("Layout must be last");
         };
         assert_eq!(layout.panes.len(), 1);
@@ -919,15 +920,15 @@ mod tests {
         drop(pane.chunk_tx);
         drop(pane.exit_tx);
         h.backend.pump_pane(root);
-        let events: Vec<MuxEvent> = h.drain().into_iter().collect();
+        let events: Vec<OrzmuxEvent> = h.drain().into_iter().collect();
         assert!(events.iter().any(|e| matches!(
             e,
-            MuxEvent::PaneClosed {
+            OrzmuxEvent::PaneClosed {
                 pane,
                 reason: CloseReason::ChildExit { code: Some(0) }
             } if *pane == root
         )));
-        let Some(MuxEvent::Layout { layout, .. }) = events.last() else {
+        let Some(OrzmuxEvent::Layout { layout, .. }) = events.last() else {
             panic!("Layout must be last");
         };
         assert!(layout.panes.is_empty());
@@ -942,15 +943,15 @@ mod tests {
     fn select_pane_always_answers_with_a_layout_and_keys_reach_the_active_pane() {
         let mut h = Harness::new();
         let (root, root_pane) = h.open_root();
-        let seq = h.send(MuxCommand::SelectPane { pane: PaneId(99) });
+        let seq = h.send(OrzmuxCommand::SelectPane { pane: PaneId(99) });
         let events = h.drain();
-        let Some(MuxEvent::Layout { layout, .. }) = events.front() else {
+        let Some(OrzmuxEvent::Layout { layout, .. }) = events.front() else {
             panic!("a refused SelectPane still answers with a Layout");
         };
         assert_eq!(layout.seq, seq);
         assert_eq!(layout.active, Some(root));
 
-        h.send(MuxCommand::KeyInput {
+        h.send(OrzmuxCommand::KeyInput {
             pane: PaneTarget::Active,
             key: TerminalKey::Character(KeyText::new("a").unwrap()),
             mods: TerminalModifiers::default(),
@@ -967,7 +968,7 @@ mod tests {
     fn key_input_for_an_unknown_pane_is_dropped_silently() {
         let mut h = Harness::new();
         let (_root, root_pane) = h.open_root();
-        h.send(MuxCommand::KeyInput {
+        h.send(OrzmuxCommand::KeyInput {
             pane: PaneTarget::Id(PaneId(99)),
             key: TerminalKey::Character(KeyText::new("a").unwrap()),
             mods: TerminalModifiers::default(),
@@ -985,11 +986,11 @@ mod tests {
         let mut h = Harness::new();
         let (root, _root_pane) = h.open_root();
         let (_new, _new_pane) = split_active(&mut h, 2);
-        h.send(MuxCommand::SelectPaneDirection {
+        h.send(OrzmuxCommand::SelectPaneDirection {
             direction: PaneDirection::Left,
         });
         let events = h.drain();
-        let Some(MuxEvent::Layout { layout, .. }) = events.front() else {
+        let Some(OrzmuxEvent::Layout { layout, .. }) = events.front() else {
             panic!("expected Layout");
         };
         assert_eq!(layout.active, Some(root));
@@ -1005,7 +1006,7 @@ mod tests {
         let mut h = Harness::new();
         let (_root, _root_pane) = h.open_root();
         h.drain();
-        h.send(MuxCommand::SelectPaneDirection {
+        h.send(OrzmuxCommand::SelectPaneDirection {
             direction: PaneDirection::Left,
         });
         assert!(h.drain().is_empty());
@@ -1020,16 +1021,16 @@ mod tests {
     fn copy_selection_is_always_answered() {
         let mut h = Harness::new();
         let (root, _root_pane) = h.open_root();
-        h.send(MuxCommand::CopySelection {
+        h.send(OrzmuxCommand::CopySelection {
             pane: PaneTarget::Id(root),
         });
-        h.send(MuxCommand::CopySelection {
+        h.send(OrzmuxCommand::CopySelection {
             pane: PaneTarget::Id(PaneId(42)),
         });
         let answers = h
             .drain()
             .into_iter()
-            .filter(|event| *event == MuxEvent::SelectionText { text: None })
+            .filter(|event| *event == OrzmuxEvent::SelectionText { text: None })
             .count();
         assert_eq!(answers, 2);
     }

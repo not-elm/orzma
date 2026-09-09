@@ -4,9 +4,9 @@
 use crate::session::spawn::PaneSpawnRequest;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::{MuxPane, MuxPaneContainer, MuxPaneSpawnFailed, PaneGeometry};
 use bevy_orzma_webview::ControlPlaneHandle;
-use orzma_mux::prelude::NewPaneAt;
+use bevy_orzmux::prelude::{OrzmuxPane, OrzmuxPaneContainer, OrzmuxPaneSpawnFailed, PaneGeometry};
+use orzmux::prelude::NewPaneAt;
 
 /// Root of the shell-surface subtree, mounted under `UiRoot`. Clips its
 /// children so a layout wider than the window overflows invisibly.
@@ -43,7 +43,7 @@ fn ensure_shell_surface_ui(mut commands: Commands, ui_root: Query<Entity, With<U
             ..default()
         },
         ShellSurfaceUi,
-        MuxPaneContainer,
+        OrzmuxPaneContainer,
         ChildOf(ui_root),
     ));
 }
@@ -63,11 +63,11 @@ fn request_root_pane(mut commands: Commands, mut requested: Local<bool>) {
 /// Unbinds the token and despawns the pending entity; a failed root
 /// spawn (no pane at all) exits.
 fn on_spawn_failed(
-    ev: On<MuxPaneSpawnFailed>,
+    ev: On<OrzmuxPaneSpawnFailed>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
     control: Option<Res<ControlPlaneHandle>>,
-    panes: Query<(), With<MuxPane>>,
+    panes: Query<(), With<OrzmuxPane>>,
 ) {
     if let Some(control) = control.as_deref() {
         control.tokens.remove_entity(ev.entity);
@@ -167,7 +167,7 @@ mod tests {
         app.add_message::<AppExit>();
         let entity = app.world_mut().spawn_empty().id();
 
-        app.world_mut().trigger(MuxPaneSpawnFailed {
+        app.world_mut().trigger(OrzmuxPaneSpawnFailed {
             entity,
             error: "no space".into(),
         });

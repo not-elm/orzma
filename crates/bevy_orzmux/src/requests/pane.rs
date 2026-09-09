@@ -1,11 +1,11 @@
 //! `RequestPaneAction`: pane management the host asks for (directional
-//! selection, kill, click-to-focus), sent as the matching `MuxCommand`.
+//! selection, kill, click-to-focus), sent as the matching `OrzmuxCommand`.
 
-use crate::layout::{CurrentLayout, MuxActivePaneChanged};
+use crate::layout::{CurrentLayout, OrzmuxActivePaneChanged};
 use crate::registry::PaneRegistry;
-use crate::{MuxConnection, MuxPane};
+use crate::{OrzmuxConnection, OrzmuxPane};
 use bevy::prelude::*;
-use orzma_mux::prelude::{MuxCommand, PaneDirection, PaneTarget};
+use orzmux::prelude::{OrzmuxCommand, PaneDirection, PaneTarget};
 
 /// A pane-management action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,19 +43,19 @@ fn apply_pane_action(
     e: On<RequestPaneAction>,
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
-    connection: Res<MuxConnection>,
+    connection: Res<OrzmuxConnection>,
     current: Res<CurrentLayout>,
-    panes: Query<&MuxPane>,
+    panes: Query<&OrzmuxPane>,
 ) {
     match e.action {
         PaneAction::SelectDirection(direction) => {
             let seq = connection
                 .0
-                .send(MuxCommand::SelectPaneDirection { direction });
+                .send(OrzmuxCommand::SelectPaneDirection { direction });
             registry.last_select = Some(seq);
         }
         PaneAction::Kill => {
-            connection.0.send(MuxCommand::KillPane {
+            connection.0.send(OrzmuxCommand::KillPane {
                 pane: PaneTarget::Active,
             });
         }
@@ -70,14 +70,16 @@ fn apply_pane_action(
             if already_applied && confirmed {
                 return;
             }
-            let seq = connection.0.send(MuxCommand::SelectPane { pane: pane.0 });
+            let seq = connection
+                .0
+                .send(OrzmuxCommand::SelectPane { pane: pane.0 });
             registry.last_select = Some(seq);
             if !already_applied {
                 let previous = registry
                     .applied_active
                     .and_then(|active| registry.entity_of(active));
                 registry.applied_active = Some(pane.0);
-                commands.trigger(MuxActivePaneChanged {
+                commands.trigger(OrzmuxActivePaneChanged {
                     previous,
                     current: Some(entity),
                 });
@@ -90,7 +92,7 @@ fn apply_pane_action(
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
-    use orzma_mux::prelude::{CommandSeq, PaneId};
+    use orzmux::prelude::{CommandSeq, PaneId};
 
     /// Asserts that every pane action becomes its command and that
     /// selections record their sequence for stale-layout filtering.
@@ -112,19 +114,19 @@ mod tests {
         let sent = sent(&commands);
         assert!(matches!(
             sent[0],
-            MuxCommand::SelectPaneDirection {
+            OrzmuxCommand::SelectPaneDirection {
                 direction: PaneDirection::Right
             }
         ));
         assert!(matches!(
             sent[1],
-            MuxCommand::KillPane {
+            OrzmuxCommand::KillPane {
                 pane: PaneTarget::Active
             }
         ));
         assert!(matches!(
             sent[2],
-            MuxCommand::SelectPane { pane: PaneId(5) }
+            OrzmuxCommand::SelectPane { pane: PaneId(5) }
         ));
         assert_eq!(
             app.world().resource::<PaneRegistry>().last_select,
@@ -145,7 +147,7 @@ mod tests {
 
         let (mut app, commands) = app_with_connection(PaneActionPlugin);
         app.init_resource::<Changes>().add_observer(
-            |ev: On<MuxActivePaneChanged>, mut changes: ResMut<Changes>| {
+            |ev: On<OrzmuxActivePaneChanged>, mut changes: ResMut<Changes>| {
                 changes.0.push((ev.previous, ev.current))
             },
         );
@@ -169,7 +171,7 @@ mod tests {
         );
         assert!(matches!(
             sent(&commands).as_slice(),
-            [MuxCommand::SelectPane { pane: PaneId(2) }]
+            [OrzmuxCommand::SelectPane { pane: PaneId(2) }]
         ));
 
         app.world_mut().resource_mut::<CurrentLayout>().0.seq = CommandSeq(1);

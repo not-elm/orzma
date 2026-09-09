@@ -5,7 +5,7 @@
 use crate::input::mouse::button::MouseButtonKind;
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::{CellSide, SelectionKind};
+use bevy_orzmux::prelude::{CellSide, SelectionKind};
 use orzma_tty::prelude::CellCoord;
 use std::time::Duration;
 

@@ -19,8 +19,10 @@ use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 #[cfg(not(target_os = "macos"))]
 use bevy_cef::prelude::early_exit_if_subprocess;
-use bevy_orzma_mux::prelude::{MuxClient, MuxConfig, MuxConnection, MuxSystems, OrzmaMuxPlugin};
 use bevy_orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
+use bevy_orzmux::prelude::{
+    OrzmuxClient, OrzmuxConfig, OrzmuxConnection, OrzmuxPlugin, OrzmuxSystems,
+};
 use configs::OrzmaConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
@@ -44,7 +46,7 @@ fn main() {
     ensure_utf8_locale_env();
 
     let pre_configs = orzma_configs::OrzmaConfigs::load().unwrap_or_default();
-    let mux = match MuxClient::spawn(MuxConfig {
+    let orzmux = match OrzmuxClient::spawn(OrzmuxConfig {
         shell: pre_configs.orzma.shell.clone(),
         scrollback_rows: SCROLLBACK_ROWS,
     }) {
@@ -67,7 +69,7 @@ fn main() {
         .add_plugins((
             SurfacePlugin,
             SessionPlugin,
-            OrzmaMuxPlugin,
+            OrzmuxPlugin,
             TerminalRendererPlugin,
             ActionPlugin,
             OrzmaConfigsPlugin,
@@ -81,8 +83,11 @@ fn main() {
             },
             WindowTitlePlugin,
         ))
-        .insert_resource(MuxConnection(mux))
-        .configure_sets(Update, OrzmaSystems::Input.after(MuxSystems::ApplyLayout))
+        .insert_resource(OrzmuxConnection(orzmux))
+        .configure_sets(
+            Update,
+            OrzmaSystems::Input.after(OrzmuxSystems::ApplyLayout),
+        )
         .run();
 }
 

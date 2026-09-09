@@ -2,7 +2,7 @@
 //! scrollback.
 
 use bevy::prelude::*;
-use bevy_orzma_mux::prelude::RequestTtyScroll;
+use bevy_orzmux::prelude::RequestTtyScroll;
 use orzma_vt::prelude::Scroll;
 
 /// Scrolls `entity`'s viewport by `lines`, in the same sign convention as
