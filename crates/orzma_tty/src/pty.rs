@@ -331,26 +331,12 @@ impl ReaderProgress {
 
     /// Whether a `send` is waiting on a full queue right now.
     #[cfg(any(windows, test))]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the Windows watcher of the next task is its caller"
-        )
-    )]
     fn is_parked(&self) -> bool {
         self.parked.load(Ordering::Acquire)
     }
 
     /// How long before `now` the reader last completed a read or a send.
     #[cfg(any(windows, test))]
-    #[cfg_attr(
-        not(windows),
-        expect(
-            dead_code,
-            reason = "the Windows watcher is its caller until the next task"
-        )
-    )]
     fn idle_for(&self, now: Instant) -> Duration {
         now.saturating_duration_since(*self.last_activity.lock().unwrap())
     }
@@ -451,7 +437,7 @@ fn spawn_reader_thread(
     thread::spawn(move || forward_chunks(reader.as_mut(), &chunk_tx, &reader_progress));
     thread::spawn(move || {
         let code = child.wait().ok().map(|s| s.exit_code() as i32);
-        wait_for_output_quiescence(&progress);
+        wait_for_output_quiescence(&progress, OUTPUT_QUIESCENCE, OUTPUT_QUIESCENCE_CAP);
         let _ = exit_tx.send(code);
     });
 }
@@ -461,22 +447,53 @@ fn spawn_reader_thread(
 #[cfg(windows)]
 const OUTPUT_QUIESCENCE: Duration = Duration::from_millis(50);
 
-/// The longest the watcher waits for the output to go quiet, so a
-/// pseudoconsole that keeps streaming cannot delay the exit forever.
+/// The longest the watcher lets an unparked reader stream after the
+/// child exits, so a pseudoconsole that keeps streaming cannot delay
+/// the exit forever.
 #[cfg(windows)]
 const OUTPUT_QUIESCENCE_CAP: Duration = Duration::from_secs(2);
 
-/// Blocks until no read or send has completed for [`OUTPUT_QUIESCENCE`],
-/// or [`OUTPUT_QUIESCENCE_CAP`] has passed.
-#[cfg(windows)]
-fn wait_for_output_quiescence(progress: &ReaderProgress) {
-    let cap = Instant::now() + OUTPUT_QUIESCENCE_CAP;
+/// The shortest sleep between two polls of the reader's progress.
+#[cfg(any(windows, test))]
+const QUIESCENCE_POLL_FLOOR: Duration = Duration::from_millis(10);
+
+/// Blocks until the reader is not parked and no read or send has
+/// completed for `quiescence`, or until the reader has spent `cap` in
+/// total not parked.
+///
+/// A parked reader is not streaming, so time spent parked counts
+/// toward neither the idle window nor the cap: the exit is not reported
+/// while the child's output still waits in the pipe behind a full
+/// queue. The send stamp restarts the idle window on unpark, so a send
+/// that parked longer than the window cannot make the watcher fire
+/// before the next read completes.
+///
+/// Unparked time is counted only for poll intervals that started and
+/// ended unparked, so a transition inside an interval under-counts by
+/// at most one poll instead of charging parked time against the cap.
+#[cfg(any(windows, test))]
+fn wait_for_output_quiescence(progress: &ReaderProgress, quiescence: Duration, cap: Duration) {
+    let mut unparked = Duration::ZERO;
+    let mut last_poll = Instant::now();
+    let mut was_parked = progress.is_parked();
     loop {
-        let idle = progress.idle_for(Instant::now());
-        if idle >= OUTPUT_QUIESCENCE || Instant::now() >= cap {
+        let now = Instant::now();
+        let parked = progress.is_parked();
+        if !parked && !was_parked {
+            unparked += now.saturating_duration_since(last_poll);
+        }
+        was_parked = parked;
+        last_poll = now;
+        let idle = progress.idle_for(now);
+        if (!parked && idle >= quiescence) || unparked >= cap {
             return;
         }
-        thread::sleep(OUTPUT_QUIESCENCE - idle);
+        let wait = if parked {
+            quiescence
+        } else {
+            quiescence.saturating_sub(idle)
+        };
+        thread::sleep(wait.max(QUIESCENCE_POLL_FLOOR));
     }
 }
 
@@ -505,6 +522,7 @@ mod tests {
     use std::io::Cursor;
     use std::io::sink;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread::JoinHandle;
 
     /// A program that prints one line and exits 0 on the host platform.
@@ -778,5 +796,121 @@ mod tests {
         reader
             .join()
             .expect("the reader thread ends on a gone receiver");
+    }
+
+    /// Runs the watcher on its own thread with the given windows.
+    fn watch(
+        progress: &Arc<ReaderProgress>,
+        quiescence: Duration,
+        cap: Duration,
+    ) -> JoinHandle<()> {
+        let progress = Arc::clone(progress);
+        thread::spawn(move || wait_for_output_quiescence(&progress, quiescence, cap))
+    }
+
+    /// Whether `handle` finishes within `within`.
+    fn finishes_within(handle: &JoinHandle<()>, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        while !handle.is_finished() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+
+    /// Asserts that the watcher does not return while the reader is
+    /// parked, even after the idle window elapsed and even past the cap.
+    ///
+    /// Case: the child exits with its last output still in the pipe
+    /// behind a full queue, and the parser takes longer than the cap to
+    /// catch up.
+    #[test]
+    fn the_watcher_waits_while_the_reader_is_parked_even_past_the_cap() {
+        let progress = Arc::new(ReaderProgress::new(Instant::now()));
+        progress.parked.store(true, Ordering::Release);
+        let watcher = watch(
+            &progress,
+            Duration::from_millis(20),
+            Duration::from_millis(100),
+        );
+        assert!(
+            !finishes_within(&watcher, Duration::from_millis(300)),
+            "the watcher returned while the reader was parked"
+        );
+        progress.stamp(Instant::now());
+        progress.parked.store(false, Ordering::Release);
+        assert!(finishes_within(&watcher, Duration::from_secs(2)));
+    }
+
+    /// Asserts that after an unpark the watcher waits a fresh idle window
+    /// from the send stamp, even though the read stamp is already older
+    /// than the window.
+    ///
+    /// Case: a send parked longer than the idle window returns, and the
+    /// child's next read has not completed yet.
+    #[test]
+    fn an_unpark_restarts_the_idle_window_from_the_send_stamp() {
+        let quiescence = Duration::from_millis(50);
+        let stale = Instant::now()
+            .checked_sub(Duration::from_millis(200))
+            .expect("a monotonic instant 200 ms ago exists");
+        let progress = Arc::new(ReaderProgress::new(stale));
+        progress.parked.store(true, Ordering::Release);
+        let watcher = watch(&progress, quiescence, Duration::from_secs(2));
+        thread::sleep(Duration::from_millis(100));
+        let unparked_at = Instant::now();
+        progress.stamp(unparked_at);
+        progress.parked.store(false, Ordering::Release);
+        assert!(finishes_within(&watcher, Duration::from_secs(2)));
+        assert!(
+            unparked_at.elapsed() >= quiescence,
+            "the watcher returned before a fresh idle window elapsed"
+        );
+    }
+
+    /// Asserts that the cap still bounds an unparked reader that never
+    /// goes idle.
+    ///
+    /// Case: a pseudoconsole keeps streaming after the child exited and
+    /// the reader keeps completing reads.
+    #[test]
+    fn the_cap_bounds_an_unparked_reader_that_never_goes_idle() {
+        let progress = Arc::new(ReaderProgress::new(Instant::now()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stamper = {
+            let progress = Arc::clone(&progress);
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                while !stop.load(Ordering::Acquire) {
+                    progress.stamp(Instant::now());
+                    thread::sleep(Duration::from_millis(5));
+                }
+            })
+        };
+        let watcher = watch(
+            &progress,
+            Duration::from_millis(50),
+            Duration::from_millis(150),
+        );
+        assert!(finishes_within(&watcher, Duration::from_secs(2)));
+        stop.store(true, Ordering::Release);
+        stamper.join().expect("the stamper ends");
+    }
+
+    /// Asserts that an idle, unparked reader lets the watcher return
+    /// after one idle window.
+    ///
+    /// Case: the child printed its farewell, the reader queued it, and
+    /// nothing else arrives.
+    #[test]
+    fn an_idle_unparked_reader_returns_after_one_window() {
+        let started = Instant::now();
+        let progress = Arc::new(ReaderProgress::new(started));
+        let watcher = watch(&progress, Duration::from_millis(30), Duration::from_secs(2));
+        assert!(finishes_within(&watcher, Duration::from_millis(500)));
+        watcher.join().expect("the watcher ends");
+        assert!(started.elapsed() >= Duration::from_millis(30));
     }
 }
