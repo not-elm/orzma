@@ -39,8 +39,9 @@ coalescing for B whose PR ships only if measurement shows B growing.
 
 In scope, as four ordered PRs:
 
-1. **(a) Instrumentation.** Sampled queue-depth logging in the backend
-   plus a frames-drained count and drain time in the GUI drain.
+1. **(a) Instrumentation.** Sampled queue-depth logging in the backend.
+   A frames-drained count in the GUI drain was part of the measurement
+   and was removed once it settled (c); see §3.2.
 2. **(b) Bounded chunk channel.** Path A becomes `bounded(256)`.
 3. **(e) Row allocation.** `Row::to_runs` stops reserving one `Run` per
    column.
@@ -141,40 +142,37 @@ design gets without instrumenting the reader thread.
 ### 3.2 Measurement protocol
 
 The backend cannot see path B grow while it is blocked in `wait_ready`,
-and event depth mixes frames with layouts and signals, so the GUI drain
-carries the second half of the instrumentation: `drain_orzmux_events`
-counts the frames it drained in one `Update` (standalone `Frame` events
-plus the frames bundled in `Layout`s) and times the drain, and logs both
-under the same `orzmux::queues` target at `debug` when the count
-exceeds 8. That is the exact moment a stalled GUI resumes, which is the
-scenario (c) targets. The timed span is the drain system itself: the
-`TtyFrameSignal` observers apply the frames to each `TerminalGrid` at
-command flush, after the system returns, so their cost is outside the
-logged figure. The drain time is therefore informational: it bounds
-the loop that queues the triggers, not the work of applying the
-frames.
+and event depth mixes frames with layouts and signals, so for the
+measurement the GUI drain carried the second half of the
+instrumentation: `drain_orzmux_events` counted the frames it drained in
+one `Update` (standalone `Frame` events plus the frames bundled in
+`Layout`s) and logged the count under the same `orzmux::queues` target
+when it exceeded 8, the exact moment a stalled GUI resumes. That count
+served only the (c) decision and was removed from PR (a) once the
+decision was made; the backend sampler is what ships.
 
-After PR (a) lands, run each load case for at least ten seconds with
-`RUST_LOG=orzmux::queues=debug` and record, in
-the results table of `docs/todo/orzmux-buffer-saturation.md`, the peak
-chunk depth, event depth, and command depth from the backend, and the
-largest frames drained per `Update` with its drain time from the GUI:
+Run each load case for at least ten seconds with
+`RUST_LOG=orzmux::queues=debug` and record, in the results table of
+`docs/todo/orzmux-buffer-saturation.md`, the peak chunk depth, event
+depth, and command depth from the backend:
 
 1. `cat` on a file of at least 100 MiB.
 2. `yes`.
 3. Holding a key down during a continuous live window resize.
 4. A CEF webview pane rendering alongside case 1.
 
-The (c) PR ships if any case logs a drain of more than 8 frames in one
-`Update`. The count is the criterion because it is exact for path B
-and every counted frame costs one observer dispatch and one
-`runs_to_cells` pass that coalescing would fold away; the drain time
-is not part of the criterion. The event-depth peak
-stays informational: (c) merges frames only after the GUI wakes, so it
-cannot shrink the queue that builds during the stall, only the work of
-draining it. The chunk depth (A) result is informational too; PR (b)
-ships regardless because the missing back-pressure is a defect
-independent of measured growth.
+The (c) PR was to ship if any case logged a drain of more than 8
+frames in one `Update`, the count being exact for path B and every
+counted frame costing one observer dispatch and one `runs_to_cells`
+pass that coalescing would fold away. The measurement on 2026-09-10
+found no such drain (the results and decision are in the notes file),
+so (c) does not ship. Reopen it only if a live-resize run shows an
+event-depth peak in the dozens on the backend's next wake, which is
+how a stalled GUI still surfaces without the drain count. (c) merges
+frames only after the GUI wakes, so it could never shrink the queue
+that builds during a stall, only the work of draining it. The chunk
+depth (A) result is informational; PR (b) ships regardless because the
+missing back-pressure is a defect independent of measured growth.
 
 ## 4. (b) Bounded chunk channel
 
@@ -462,13 +460,6 @@ All tests run without a PTY or GPU unless stated.
 
 **bevy_orzmux**
 
-- The drain's frame count sums standalone frames and the frames
-  bundled in layouts and counts nothing for other events. The count is
-  computed by a helper (`frame_count`) the test calls directly, so no
-  log capture is needed; the comparison against
-  `DRAIN_REPORT_THRESHOLD` (8) is one line in the system and is not
-  tested on its own.
-
 - Two `Frame`s for one pane in one drain produce one `TtyFrameSignal`
   whose rows are the merged set.
 - `Frame`, `Signal`, `Frame` for one pane produce two frame signals with
@@ -484,7 +475,7 @@ All tests run without a PTY or GPU unless stated.
 
 | PR | Content | Crates |
 | --- | --- | --- |
-| 1 | (a) `OrzmaTty::pending_chunk_count`, `QueueSampler`, wiring in `Backend::run` and `wait_ready`, drain frame count and timing | orzma_tty, orzmux, bevy_orzmux |
+| 1 | (a) `OrzmaTty::pending_chunk_count`, `QueueSampler`, wiring in `Backend::run` and `wait_ready` | orzma_tty, orzmux |
 | 2 | (b) `CHUNK_QUEUE_CAPACITY`, `ReaderProgress`, `forward_chunks`, Windows watcher guard | orzma_tty |
 | 3 | (e) `to_runs` allocation | orzma_vt |
 | 4 | (c) `BitOrAssign for Frame`, `FrameCoalescer`, drain loop | orzma_vt, bevy_orzmux |
@@ -507,8 +498,9 @@ growing. PRs 1 to 3 are independent of that result.
   a consumer is a torn-down pane, whose dropped receiver unparks the
   reader with an error.
 - **Sampling is best-effort.** The backend records once per wake, so a
-  queue that fills and drains inside one pump is invisible to it; the
-  drain-side frame count is exact but only for path B.
+  queue that fills and drains inside one pump is invisible to it, and a
+  GUI stall shows only as the event depth the backend sees on its next
+  wake.
 - **`|=` trusts the full-repaint invariant.** If a future change
   stops staging `DamageSpan::Full` on a viewport motion, merged frames
   could carry rows from two bases. The invariant is pinned by

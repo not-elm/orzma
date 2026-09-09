@@ -17,20 +17,24 @@ stays at its default level.
 RUST_LOG=orzmux::queues=debug cargo run
 ```
 
-The three log lines to watch, all under the `orzmux::queues` target at
+The two log lines to watch, both under the `orzmux::queues` target at
 `debug`:
 
 | Line | Fields | Source |
 | --- | --- | --- |
 | `chunk queue peak` | `pane`, `depth` | backend, once a second per pane, only when the depth exceeded 1 |
 | `event and command queue peaks` | `events`, `commands` | backend, once a second, only when either exceeded 1 |
-| `drained more frames than the threshold in one update` | `frames`, `elapsed` | GUI drain, every `Update` that applied more than 8 frames |
 
 `depth` counts unread reader chunks of up to 4 KiB each. `events` and
 `commands` are the lengths of the backend-to-GUI and GUI-to-backend
-channels. `frames` counts standalone frames plus the frames bundled in
-layouts. `elapsed` times only the drain loop, not the observers that
-apply the frames, so treat it as informational.
+channels. A stalled GUI shows as an event depth far above the steady
+2 or 3, because the backend sees the whole backlog on its next wake.
+
+During the measurement below the GUI drain also logged
+`drained more frames than the threshold in one update` with `frames`
+and `elapsed` whenever one `Update` applied more than 8 frames. That
+line was removed with the decision, so the last two columns of the
+table cannot be reproduced on the merged code.
 
 ## Load cases
 
@@ -90,4 +94,4 @@ Case 3 (a held key during a continuous live resize) was not isolated
 in the logs. It is the one scenario that could still change this
 decision, because a live resize can block the winit event loop and
 queue frames behind it. Reopen the decision only if a run of case 3
-logs a drain of more than 8 frames.
+shows an event-depth peak in the dozens.
