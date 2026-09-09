@@ -251,17 +251,22 @@ impl Backend {
                 self.sources.push(Ready::Pane(*id));
             }
         }
-        let deadline = self
-            .panes
-            .values()
-            .filter_map(|p| p.tty.next_deadline())
-            .chain(self.sampler.report_deadline())
-            .min();
-        let index = match deadline {
+        let index = match self.next_wake_deadline() {
             Some(deadline) => select.ready_deadline(deadline).ok()?,
             None => select.ready(),
         };
         Some(self.sources[index])
+    }
+
+    /// The earliest of the coalescer deadlines and the sampler's report
+    /// deadline, or `None` when every pane is idle and no peak waits to
+    /// be reported.
+    fn next_wake_deadline(&self) -> Option<Instant> {
+        self.panes
+            .values()
+            .filter_map(|p| p.tty.next_deadline())
+            .chain(self.sampler.report_deadline())
+            .min()
     }
 
     /// Applies up to `COMMAND_BATCH` queued commands. Returns `false`
@@ -504,8 +509,8 @@ impl Backend {
     }
 
     /// Logs the sample the sampler hands out at `now`, if one is due:
-    /// one line per pane with a non-zero chunk peak and one line for
-    /// the channels when either peak is non-zero.
+    /// one line per pane with a recorded chunk peak and one line for
+    /// the channels when either has a recorded peak.
     fn report_queue_sample(&mut self, now: Instant) {
         let Some(sample) = self.sampler.sample(now) else {
             return;
@@ -563,6 +568,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::thread;
     use std::time::Duration;
 
     /// The test's ends of one spawned pane's streams.
@@ -866,7 +872,7 @@ mod tests {
         pane.chunk_tx.send(b"hello".to_vec()).unwrap();
         h.backend.pump_pane(root);
         h.drain();
-        std::thread::sleep(Duration::from_millis(15));
+        thread::sleep(Duration::from_millis(15));
         h.backend.service_deadlines();
         let events = h.drain();
         assert!(
@@ -897,32 +903,35 @@ mod tests {
         assert_eq!(sample.chunks, vec![(root, ChunkDepth(2))]);
     }
 
-    /// Asserts that `wait_ready` wakes at the sampler's report deadline
-    /// when no pane deadline is earlier and no source is ready.
+    /// Asserts that the wake deadline is the sampler's report deadline
+    /// while every pane is idle, and the earlier coalescer deadline
+    /// once a pane has output pending.
     ///
     /// Case: a burst of output was recorded, then every pane went idle
     /// before the second elapsed, and the peak still has to be logged.
     #[test]
-    fn wait_ready_wakes_at_the_report_deadline_when_no_pane_deadline_is_earlier() {
+    fn the_wake_deadline_is_the_report_deadline_when_no_pane_deadline_is_earlier() {
         let mut h = Harness::new();
-        let (root, _pane) = h.open_root();
+        let (root, pane) = h.open_root();
         h.backend.pump_pane(root);
         h.drain();
-        assert!(
-            h.backend.panes[&root].tty.next_deadline().is_none(),
-            "precondition: the pane is idle after its bootstrap frame"
+        assert_eq!(
+            h.backend.next_wake_deadline(),
+            None,
+            "precondition: the pane is idle after its bootstrap frame and no peak is recorded"
         );
-        let due_in = Duration::from_millis(100);
-        h.backend.sampler =
-            QueueSampler::new(Instant::now() - (QueueSampler::SAMPLE_INTERVAL - due_in));
-        h.backend.sampler.record_pane_depth(root, ChunkDepth(1));
-        let started = Instant::now();
-        let ready = h.backend.wait_ready();
-        assert!(ready.is_none(), "a deadline wake reports no ready source");
-        assert!(
-            started.elapsed() < Duration::from_millis(900),
-            "the wake must come at the report deadline, not a second later"
-        );
+        h.backend.sampler.record_pane_depth(root, ChunkDepth(2));
+        let report_deadline = h.backend.sampler.report_deadline();
+        assert!(report_deadline.is_some());
+        assert_eq!(h.backend.next_wake_deadline(), report_deadline);
+        pane.chunk_tx.send(b"x".to_vec()).unwrap();
+        h.backend.pump_pane(root);
+        let pane_deadline = h.backend.panes[&root]
+            .tty
+            .next_deadline()
+            .expect("pending output arms the coalescer");
+        assert!(Some(pane_deadline) < report_deadline);
+        assert_eq!(h.backend.next_wake_deadline(), Some(pane_deadline));
     }
 
     /// Splits the active pane and returns the new pane's id and its

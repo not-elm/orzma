@@ -11,7 +11,7 @@ use crate::{OrzmuxConnection, OrzmuxPane, OrzmuxSystems};
 use bevy::prelude::*;
 use orzma_vt::prelude::Frame;
 use orzmux::prelude::{CloseReason, OrzmuxEvent, PaneId};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// The session is over: the last pane closed, or the backend is gone.
 #[derive(Event, Debug, Clone, Copy)]
@@ -41,31 +41,18 @@ impl Plugin for DrainPlugin {
 #[derive(Resource, Default)]
 struct DisconnectReported(bool);
 
-/// One `Update` that drained more frames than [`Self::THRESHOLD`],
-/// with how long the drain took.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DrainReport {
-    /// Standalone frames plus the frames bundled in layouts.
-    frames: usize,
-    /// Wall time of the whole drain.
-    elapsed: Duration,
-}
-
-impl DrainReport {
-    /// A drain of more frames than this is reported.
-    const THRESHOLD: usize = 8;
-
-    /// The report for a drain of `frames` frames, or `None` when the
-    /// count is within the threshold.
-    fn over_threshold(frames: usize, elapsed: Duration) -> Option<Self> {
-        (frames > Self::THRESHOLD).then_some(Self { frames, elapsed })
-    }
-}
+/// An `Update` that drains more frames than this (standalone frames plus
+/// the frames bundled in layouts) is logged under `orzmux::queues`.
+const DRAIN_REPORT_THRESHOLD: usize = 8;
 
 /// Drains every queued event in order. Not gated on change detection:
-/// channel arrivals are invisible to it. A drain of more than
-/// [`DrainReport::THRESHOLD`] frames is logged under `orzmux::queues`
-/// with its wall time.
+/// channel arrivals are invisible to it.
+///
+/// A drain of more than [`DRAIN_REPORT_THRESHOLD`] frames is logged
+/// under `orzmux::queues` with the wall time of the drain itself. The
+/// frames are applied by the `TtyFrameSignal` observers at command
+/// flush, after this system returns, so that time is not part of the
+/// logged figure.
 fn drain_orzmux_events(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
@@ -83,11 +70,11 @@ fn drain_orzmux_events(
         reported.0 = true;
         commands.trigger(OrzmuxSessionEnded);
     }
-    if let Some(report) = DrainReport::over_threshold(frames, started.elapsed()) {
+    if frames > DRAIN_REPORT_THRESHOLD {
         tracing::debug!(
             target: "orzmux::queues",
-            frames = report.frames,
-            elapsed = ?report.elapsed,
+            frames,
+            elapsed = ?started.elapsed(),
             "drained more frames than the threshold in one update"
         );
     }
@@ -150,12 +137,17 @@ fn trigger_frame(commands: &mut Commands, registry: &PaneRegistry, pane: PaneId,
 }
 
 /// How many frames one event carries: one for `Frame`, the bundled
-/// count for `Layout`, zero for everything else.
+/// count for `Layout`, zero for the rest. The match is exhaustive so a
+/// new frame-carrying variant is counted here or fails to build.
 fn frame_count(event: &OrzmuxEvent) -> usize {
     match event {
         OrzmuxEvent::Frame { .. } => 1,
         OrzmuxEvent::Layout { frames, .. } => frames.len(),
-        _ => 0,
+        OrzmuxEvent::PaneOpened { .. }
+        | OrzmuxEvent::SpawnFailed { .. }
+        | OrzmuxEvent::Signal { .. }
+        | OrzmuxEvent::SelectionText { .. }
+        | OrzmuxEvent::PaneClosed { .. } => 0,
     }
 }
 
@@ -429,14 +421,13 @@ mod tests {
     }
 
     /// Asserts that the frame count sums standalone frames and the
-    /// frames bundled in layouts, and that only a count above the
-    /// threshold produces a report.
+    /// frames bundled in layouts, and counts nothing for other events.
     ///
     /// Case: the GUI resumes after a live-resize stall with seven
     /// frames, a layout carrying two repaints, and a bell queued behind
     /// them.
     #[test]
-    fn a_drain_over_the_frame_threshold_is_reported_and_one_within_it_is_not() {
+    fn the_frame_count_sums_standalone_frames_and_those_bundled_in_layouts() {
         let mut events: Vec<OrzmuxEvent> = (0..7)
             .map(|_| OrzmuxEvent::Frame {
                 pane: PaneId(1),
@@ -453,11 +444,5 @@ mod tests {
         });
         let frames: usize = events.iter().map(frame_count).sum();
         assert_eq!(frames, 9);
-        let elapsed = Duration::from_millis(3);
-        assert_eq!(
-            DrainReport::over_threshold(frames, elapsed),
-            Some(DrainReport { frames: 9, elapsed })
-        );
-        assert_eq!(DrainReport::over_threshold(8, elapsed), None);
     }
 }

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 /// How many reader chunks wait unparsed in one pane's chunk channel
 /// (path A), in units of one `read(2)` result of up to 4 KiB.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ChunkDepth(pub usize);
 
 /// Tracks per-queue peaks between samples and hands them out at most
@@ -18,24 +18,21 @@ pub(crate) struct QueueSampler {
     /// When the last sample was handed out, or when the sampler was
     /// built.
     last_sample: Instant,
-    /// The non-zero chunk peaks recorded since the last sample, one
-    /// entry per pane in first-recorded order.
-    chunks: Vec<(PaneId, ChunkDepth)>,
-    /// The event channel (path B) peak since the last sample.
-    events: usize,
-    /// The command channel (path C) peak since the last sample.
-    commands: usize,
+    /// The peaks recorded since the last sample.
+    peaks: QueueSample,
 }
 
-/// The peaks one sample reports.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The peaks one sample reports: every depth above
+/// [`QueueSampler::BACKLOG_FLOOR`] recorded since the previous sample.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct QueueSample {
-    /// Every pane whose chunk peak was non-zero, in first-recorded
+    /// Every pane whose chunk peak was recorded, in first-recorded
     /// order.
     pub chunks: Vec<(PaneId, ChunkDepth)>,
-    /// The event channel (path B) peak.
+    /// The event channel (path B) peak, or zero when none was recorded.
     pub events: usize,
-    /// The command channel (path C) peak.
+    /// The command channel (path C) peak, or zero when none was
+    /// recorded.
     pub commands: usize,
 }
 
@@ -43,59 +40,78 @@ impl QueueSampler {
     /// The shortest time between two handed-out samples.
     pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
+    /// The depth a wake implies on its own: the `Select` returns only
+    /// once the woken queue holds one item, and one emitted frame waits
+    /// in the event channel until the GUI's next update. A depth at or
+    /// below the floor is not a peak and records nothing, so an
+    /// interactive terminal neither logs nor adds a wake.
+    pub const BACKLOG_FLOOR: usize = 1;
+
     /// A sampler with no peaks whose first sample is due one interval
     /// after `now`.
     pub fn new(now: Instant) -> Self {
         Self {
             last_sample: now,
-            chunks: Vec::new(),
-            events: 0,
-            commands: 0,
+            peaks: QueueSample::default(),
         }
     }
 
     /// Records one pane's chunk depth, retaining the maximum since the
-    /// last sample. A zero depth records nothing.
+    /// last sample. A depth at or below [`Self::BACKLOG_FLOOR`] records
+    /// nothing.
     pub fn record_pane_depth(&mut self, pane: PaneId, depth: ChunkDepth) {
-        if depth == ChunkDepth(0) {
+        if depth.0 <= Self::BACKLOG_FLOOR {
             return;
         }
-        match self.chunks.iter_mut().find(|(id, _)| *id == pane) {
+        match self.peaks.chunks.iter_mut().find(|(id, _)| *id == pane) {
             Some((_, peak)) => *peak = (*peak).max(depth),
-            None => self.chunks.push((pane, depth)),
+            None => self.peaks.chunks.push((pane, depth)),
         }
     }
 
     /// Records the event and command channel depths, retaining each
-    /// maximum since the last sample.
+    /// maximum since the last sample. A depth at or below
+    /// [`Self::BACKLOG_FLOOR`] records nothing.
     pub fn record_channel_depths(&mut self, events: usize, commands: usize) {
-        self.events = self.events.max(events);
-        self.commands = self.commands.max(commands);
+        self.peaks.events = self.peaks.events.max(Self::above_floor(events));
+        self.peaks.commands = self.peaks.commands.max(Self::above_floor(commands));
     }
 
-    /// Returns the peaks and resets them once [`Self::SAMPLE_INTERVAL`]
-    /// has elapsed since the last sample and any peak is non-zero.
+    /// Returns the peaks and resets them once the
+    /// [report deadline](Self::report_deadline) has passed.
+    ///
+    /// The interval is anchored on the previous hand-out, so the first
+    /// peak after more than an interval of quiet is handed out on the
+    /// wake that recorded it; each later sample of a burst covers one
+    /// full interval.
     pub fn sample(&mut self, now: Instant) -> Option<QueueSample> {
-        if !self.has_peak() || now < self.last_sample + Self::SAMPLE_INTERVAL {
+        let due = self.report_deadline()?;
+        if now < due {
             return None;
         }
         self.last_sample = now;
-        Some(QueueSample {
-            chunks: mem::take(&mut self.chunks),
-            events: mem::take(&mut self.events),
-            commands: mem::take(&mut self.commands),
-        })
+        Some(mem::take(&mut self.peaks))
     }
 
-    /// When an unreported non-zero peak exists, the instant the next
-    /// sample is due; `None` otherwise.
+    /// When an unreported peak exists, the instant the next sample is
+    /// due; `None` otherwise.
     pub fn report_deadline(&self) -> Option<Instant> {
-        self.has_peak()
-            .then(|| self.last_sample + Self::SAMPLE_INTERVAL)
+        (!self.peaks.is_empty()).then(|| self.last_sample + Self::SAMPLE_INTERVAL)
     }
 
-    fn has_peak(&self) -> bool {
-        !self.chunks.is_empty() || self.events > 0 || self.commands > 0
+    fn above_floor(depth: usize) -> usize {
+        if depth > Self::BACKLOG_FLOOR {
+            depth
+        } else {
+            0
+        }
+    }
+}
+
+impl QueueSample {
+    /// Whether no peak was recorded.
+    pub fn is_empty(&self) -> bool {
+        self.chunks.is_empty() && self.events == 0 && self.commands == 0
     }
 }
 
@@ -137,19 +153,19 @@ mod tests {
     fn a_sample_is_none_before_the_interval_and_some_after_it() {
         let (mut sampler, start) = sampler();
         sampler.record_pane_depth(PANE, ChunkDepth(2));
-        sampler.record_channel_depths(5, 1);
+        sampler.record_channel_depths(5, 2);
         assert_eq!(sampler.sample(start + Duration::from_millis(500)), None);
         let sample = sampler
             .sample(start + QueueSampler::SAMPLE_INTERVAL)
             .expect("a sample is due");
         assert_eq!(sample.chunks, vec![(PANE, ChunkDepth(2))]);
-        assert_eq!((sample.events, sample.commands), (5, 1));
+        assert_eq!((sample.events, sample.commands), (5, 2));
     }
 
     /// Asserts that the peaks start over after a sample.
     ///
     /// Case: a burst of output fills a queue, the sample reports it,
-    /// and the next second is quiet apart from one small chunk.
+    /// and the next second is quiet apart from two chunks on one wake.
     #[test]
     fn the_peaks_start_over_after_a_sample() {
         let (mut sampler, start) = sampler();
@@ -158,24 +174,28 @@ mod tests {
         let first = start + QueueSampler::SAMPLE_INTERVAL;
         sampler.sample(first).expect("a sample is due");
         assert_eq!(sampler.sample(first + QueueSampler::SAMPLE_INTERVAL), None);
-        sampler.record_pane_depth(PANE, ChunkDepth(1));
+        sampler.record_pane_depth(PANE, ChunkDepth(2));
         let second = sampler
             .sample(first + QueueSampler::SAMPLE_INTERVAL)
             .expect("a sample is due");
-        assert_eq!(second.chunks, vec![(PANE, ChunkDepth(1))]);
+        assert_eq!(second.chunks, vec![(PANE, ChunkDepth(2))]);
         assert_eq!((second.events, second.commands), (0, 0));
     }
 
-    /// Asserts that a sample is `None` when every recorded peak is
-    /// zero, however much time has passed.
+    /// Asserts that a sample is `None` when every recorded depth is at
+    /// or below the backlog floor, however much time has passed.
     ///
-    /// Case: an idle shell sits at its prompt for minutes while the
-    /// backend keeps recording empty queues.
+    /// Case: a user types at a shell prompt for minutes, and each
+    /// keystroke leaves the backend one chunk to wake for and one echo
+    /// frame the GUI has yet to drain.
     #[test]
-    fn a_sample_is_none_when_every_peak_is_zero() {
+    fn a_sample_is_none_when_every_depth_is_at_or_below_the_floor() {
         let (mut sampler, start) = sampler();
         sampler.record_pane_depth(PANE, ChunkDepth(0));
+        sampler.record_pane_depth(PANE, ChunkDepth(1));
         sampler.record_channel_depths(0, 0);
+        sampler.record_channel_depths(1, 1);
+        assert_eq!(sampler.report_deadline(), None);
         assert_eq!(
             sampler.sample(start + 10 * QueueSampler::SAMPLE_INTERVAL),
             None
@@ -183,7 +203,7 @@ mod tests {
     }
 
     /// Asserts that the report deadline exists only while an unreported
-    /// non-zero peak does, and names the end of the current interval.
+    /// peak does, and names the end of the current interval.
     ///
     /// Case: the backend goes idle right after one wake recorded a
     /// depth, and must wake once more to log it.

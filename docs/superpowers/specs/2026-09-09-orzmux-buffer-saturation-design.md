@@ -62,15 +62,18 @@ defines:
 ```rust
 /// How many reader chunks wait unparsed in one pane's chunk channel
 /// (path A), in units of one `read(2)` result of up to 4 KiB.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ChunkDepth(pub usize);
 
 /// Tracks per-queue peaks between samples and hands them out at most
 /// once per `SAMPLE_INTERVAL`.
-pub struct QueueSampler { .. }
+pub struct QueueSampler { last_sample: Instant, peaks: QueueSample }
 
 impl QueueSampler {
     pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+    /// The depth a wake implies on its own; a depth at or below it is
+    /// not a peak and records nothing.
+    pub const BACKLOG_FLOOR: usize = 1;
     pub fn new(now: Instant) -> Self;
     /// Records one pane's chunk depth, retaining the maximum since the
     /// last sample.
@@ -78,15 +81,17 @@ impl QueueSampler {
     /// Records the event and command channel depths, retaining each
     /// maximum since the last sample.
     pub fn record_channel_depths(&mut self, events: usize, commands: usize);
-    /// Returns the peaks and resets them once `SAMPLE_INTERVAL` has
-    /// elapsed since the last sample and any peak is non-zero.
+    /// Returns the peaks and resets them once the report deadline has
+    /// passed.
     pub fn sample(&mut self, now: Instant) -> Option<QueueSample>;
-    /// When an unreported non-zero peak exists, the instant the next
-    /// sample is due; `None` otherwise.
+    /// When an unreported peak exists, the instant the next sample is
+    /// due (`SAMPLE_INTERVAL` after the last sample); `None` otherwise.
     pub fn report_deadline(&self) -> Option<Instant>;
 }
 
-/// The peaks one sample reports.
+/// The peaks one sample reports; also the sampler's accumulator, so
+/// `sample` is one `mem::take`.
+#[derive(Default)]
 pub struct QueueSample {
     pub chunks: Vec<(PaneId, ChunkDepth)>,
     pub events: usize,
@@ -110,18 +115,22 @@ bounded capacity) chunks before anything after the pump could look:
 
 After `service_deadlines`, `Backend::run` calls `sample(now)` and logs a
 returned sample inline with `tracing::debug!` under the target
-`orzmux::queues`: one line per pane whose chunk peak is non-zero and one
-line for B and C when either peak is non-zero. `wait_ready` folds
+`orzmux::queues`: one line per pane with a recorded chunk peak and one
+line for B and C when either has a recorded peak. `wait_ready` folds
 `report_deadline()` into its deadline so a backend that goes idle with
-an unreported peak wakes once to report it; an idle terminal with no
-peak logs nothing and adds no wake. Keeping the decision (`sample`)
+an unreported peak wakes once to report it. A depth at or below
+`BACKLOG_FLOOR` (1) records nothing, because a wake implies one item in
+the woken queue and one emitted frame waits in B until the GUI's next
+update; without the floor every keystroke would arm the deadline and
+log a tautological `depth=1` line. An interactive terminal therefore
+logs nothing and adds no wake. Keeping the decision (`sample`)
 apart from the effect (the log call) keeps the sampler testable without
 capturing log output.
 
 Each recorded depth is one `len()` load per queue, a lock-free head and
 tail read that retries only when the tail moved between the two loads,
-and the per-pane fold allocates only when a pane's first non-zero depth
-after a sample grows the peak list; the sampler is therefore always
+and the per-pane fold allocates only when a pane's first depth above
+the floor after a sample grows the peak list; the sampler is therefore always
 compiled in, and `RUST_LOG=orzmux::queues=debug` turns the output on.
 
 Depths are recorded peaks, not high-water marks: a queue that fills and
@@ -138,7 +147,11 @@ counts the frames it drained in one `Update` (standalone `Frame` events
 plus the frames bundled in `Layout`s) and times the drain, and logs both
 under the same `orzmux::queues` target at `debug` when the count
 exceeds 8. That is the exact moment a stalled GUI resumes, which is the
-scenario (c) targets.
+scenario (c) targets. The timed span is the drain system itself: the
+`TtyFrameSignal` observers apply the frames to each `TerminalGrid` at
+command flush, after the system returns, so their cost is outside the
+logged figure and the 16 ms criterion below should be read against
+that span, not against the frame budget as a whole.
 
 After PR (a) lands, run each load case for at least ten seconds with
 `RUST_LOG=orzmux::queues=debug` and record, in
@@ -434,19 +447,23 @@ All tests run without a PTY or GPU unless stated.
 - `QueueSampler`: two `record_pane_depth` calls within one interval keep the
   higher depth; `sample` returns `None` before the interval elapses and
   `Some` carrying the peaks after it; after a sample the peaks start
-  over; `sample` returns `None` when every peak is zero;
-  `report_deadline` is `Some` only while an unreported non-zero peak
-  exists. Tests assert on the returned `QueueSample`, never on captured
-  log output.
-- `Backend::wait_ready` wakes at `report_deadline` when no pane deadline
-  is earlier.
+  over; `sample` returns `None` when every recorded depth is at or
+  below `BACKLOG_FLOOR`; `report_deadline` is `Some` only while an
+  unreported peak exists. Tests assert on the returned `QueueSample`,
+  never on captured log output.
+- `Backend::next_wake_deadline` (the deadline `wait_ready` passes to
+  the `Select`) is `report_deadline` when no pane deadline is earlier
+  and the pane deadline otherwise; asserted on the computed instant so
+  the test never blocks.
 
 **bevy_orzmux**
 
-- The drain counts standalone and bundled frames in one `Update` and
-  reports the count with the drain time when it exceeds 8; a drain of 8
-  or fewer reports nothing. The count is computed by a helper the test
-  calls directly, so no log capture is needed.
+- The drain's frame count sums standalone frames and the frames
+  bundled in layouts and counts nothing for other events. The count is
+  computed by a helper (`frame_count`) the test calls directly, so no
+  log capture is needed; the comparison against
+  `DRAIN_REPORT_THRESHOLD` (8) is one line in the system and is not
+  tested on its own.
 
 - Two `Frame`s for one pane in one drain produce one `TtyFrameSignal`
   whose rows are the merged set.
