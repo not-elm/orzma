@@ -866,7 +866,7 @@ mod tests {
         pane.chunk_tx.send(b"hello".to_vec()).unwrap();
         h.backend.pump_pane(root);
         h.drain();
-        std::thread::sleep(std::time::Duration::from_millis(15));
+        std::thread::sleep(Duration::from_millis(15));
         h.backend.service_deadlines();
         let events = h.drain();
         assert!(

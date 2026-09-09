@@ -120,7 +120,8 @@ capturing log output.
 
 Each recorded depth is one `len()` load per queue, a lock-free head and
 tail read that retries only when the tail moved between the two loads,
-and the per-pane fold allocates nothing; the sampler is therefore always
+and the per-pane fold allocates only when a pane's first non-zero depth
+after a sample grows the peak list; the sampler is therefore always
 compiled in, and `RUST_LOG=orzmux::queues=debug` turns the output on.
 
 Depths are recorded peaks, not high-water marks: a queue that fills and
@@ -202,7 +203,8 @@ by both platform variants:
 struct ReaderProgress {
     /// When the reader last completed a read or a send.
     last_activity: Mutex<Instant>,
-    /// `true` exactly while a `send` is waiting on a full queue.
+    /// `true` from the moment `try_send` finds the queue full until
+    /// the blocking `send` returns.
     parked: AtomicBool,
 }
 
@@ -216,12 +218,14 @@ fn forward_chunks(
 ```
 
 `forward_chunks` stamps `last_activity` after every completed read and
-again after every `send` returns, and holds `parked` true from just
-before a `send` until it returns. Both `spawn_reader_thread` variants
-share one `Arc<ReaderProgress>` with the thread; only the Windows exit
-watcher (§4.3) reads it today. The function carries no platform code,
-and the extraction exists so the parking behavior can be tested with an
-in-memory `Read` and no PTY, against the production progress type.
+again after every `send` returns, and sets `parked` only after
+`try_send` reports a full queue, holds it until the blocking `send`
+returns, and stamps the returned send before clearing it. Both
+`spawn_reader_thread` variants share one `Arc<ReaderProgress>` with the
+thread; only the Windows exit watcher (§4.3) reads it today. The
+function carries no platform code, and the extraction exists so the
+parking behavior can be tested with an in-memory `Read` and no PTY,
+against the production progress type.
 
 ### 4.3 Windows exit-watcher guard
 
@@ -263,7 +267,7 @@ reader today; it is not zero.
 `RUNS_RESERVE` is a private constant of 8. A single-attribute row then
 carries capacity for 8 runs instead of one per column, and a
 syntax-highlighted wide row with 20 to 40 runs reaches its size in one
-or two reallocations instead of five or six from an empty vector.
+to three reallocations instead of five or six from an empty vector.
 Geometric growth bounds the final capacity at twice the run count.
 Output is unchanged. This lands as its own PR because it is independent
 of every other change.
