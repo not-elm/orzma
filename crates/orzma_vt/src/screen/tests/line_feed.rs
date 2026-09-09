@@ -171,3 +171,18 @@ fn a_linefeed_preserves_pending_wrap() {
     screen.line_feed();
     assert!(screen.state.pending_wrap);
 }
+
+/// Asserts that a linefeed preserves the deferred-wrap flag on the
+/// scrolling path as well as on the moving one.
+///
+/// Case: an application fills the last column of the bottom row of
+/// the screen and then emits a bare linefeed, so the screen scrolls
+/// instead of moving the cursor down.
+#[test]
+fn a_linefeed_that_scrolls_preserves_pending_wrap() {
+    let mut screen = screen();
+    screen.state.line = ScreenLine(2);
+    screen.state.pending_wrap = true;
+    assert_eq!(screen.line_feed(), Some(DamageSpan::Full));
+    assert!(screen.state.pending_wrap);
+}
