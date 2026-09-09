@@ -6,23 +6,6 @@
 //! motion returns nothing, because the per-chunk cursor diff reports
 //! it.
 
-// TODO: This attribute is file-level, so it silences dead_code across
-// the whole `screen/` subtree (12 files, ~5,400 lines), though only
-// about 8 items actually need it. Narrow it to item-level `#[expect]`s
-// once the executor's CSI handlers land and most of those items go
-// live.
-// NOTE: the `#[cfg(test)]` module below uses every item this lint
-// would flag, so an unconditional `#[expect(dead_code)]` is fulfilled
-// in a plain build but unfulfilled — and denied under `-D warnings` —
-// in a test build. Gating it to non-test builds keeps both clean.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the executor reaches these screen operations once its CSI handlers land"
-    )
-)]
-
 pub mod cell;
 pub mod character_sets;
 pub mod checkpoint;

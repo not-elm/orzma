@@ -56,7 +56,13 @@ struct Session(OrzmaVt);
 
 impl Session {
     fn new() -> Self {
-        Self(OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10))
+        Self::sized(GridSize { cols: 4, rows: 3 })
+    }
+
+    /// One terminal of the given size, for a capture whose scroll
+    /// region needs more rows than the default three.
+    fn sized(size: GridSize) -> Self {
+        Self(OrzmaVt::new(size, 10))
     }
 
     /// Interprets `chunk` and hands back what it alone produced.
@@ -123,6 +129,7 @@ mod device_status;
 mod erase;
 mod interpret_output;
 mod keypad;
+mod line_editing;
 mod line_movement;
 mod mouse;
 mod parser_limits;
