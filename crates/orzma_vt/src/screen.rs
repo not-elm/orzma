@@ -413,6 +413,31 @@ impl Screen {
         None
     }
 
+    /// Inserts `count` blank rows at the cursor inside the scroll
+    /// region: the cursor row and the rows below it move down, the
+    /// rows pushed past the bottom margin are lost, and the pen's erase
+    /// cell fills the rows that open. The cursor is homed to column
+    /// zero and the deferred wrap is disarmed.
+    ///
+    /// A cursor outside the margins inserts nothing (VT510 "IL — Insert
+    /// Line"). The count is clamped to the rows from the cursor through
+    /// the bottom margin. An insert never feeds history: the rows it
+    /// discards leave from the bottom margin, not the top of the page.
+    /// The cursor homing follows xterm, kitty, and ECMA-48 § 8.3.67
+    /// rather than alacritty and wezterm, which leave the column alone.
+    ///
+    /// # Control Functions
+    ///
+    /// - `IL` (`CSI Pn L`)
+    pub fn insert_lines(&mut self, count: u16) -> Option<DamageSpan> {
+        if !self.scroll_region.scroll_span().contains(&self.state.line) {
+            return None;
+        }
+        let damage = self.shift_rows_down(self.state.line, count)?;
+        self.carriage_return();
+        Some(damage)
+    }
+
     /// Deletes `count` rows at the cursor inside the scroll region: the
     /// rows below move up and the pen's erase cell fills the rows that
     /// open at the bottom margin. The cursor is homed to column zero
@@ -478,6 +503,23 @@ impl Screen {
             if first == ScreenLine(0) {
                 self.hold_scrolled_viewport();
             }
+        }
+        Some(DamageSpan::Full)
+    }
+
+    /// Shifts the rows from `first` through the bottom margin down by
+    /// `count` rows, filling the rows that open at `first` with the
+    /// pen's erase cell; `None` when the clamped count is zero.
+    ///
+    /// The rows pushed past the bottom margin are discarded. Nothing
+    /// reaches history on this path, because the rows that leave do so
+    /// at the bottom margin rather than at the top of the page.
+    fn shift_rows_down(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
+        let bottom = self.scroll_region.bottom_margin();
+        let count = self.clamped_rows(first, count)?;
+        let fill = self.state.pen.erase_cell();
+        for _ in 0..count {
+            self.grid.scroll_down_one(first, bottom, fill);
         }
         Some(DamageSpan::Full)
     }
