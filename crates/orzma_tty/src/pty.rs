@@ -314,7 +314,8 @@ fn master_pipes(
 struct ReaderProgress {
     /// When the reader last completed a read or a send.
     last_activity: Mutex<Instant>,
-    /// `true` exactly while a `send` is waiting on a full queue.
+    /// `true` from the moment `try_send` finds the queue full until the
+    /// blocking `send` returns.
     parked: AtomicBool,
 }
 
@@ -330,18 +331,26 @@ impl ReaderProgress {
 
     /// Whether a `send` is waiting on a full queue right now.
     #[cfg(any(windows, test))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the Windows watcher of the next task is its caller"
+        )
+    )]
     fn is_parked(&self) -> bool {
         self.parked.load(Ordering::Acquire)
     }
 
     /// How long before `now` the reader last completed a read or a send.
-    // NOTE: only the Windows-only `wait_for_output_quiescence` calls this
-    // today; Task 8 wires a cross-platform watcher onto it. Until then a
-    // non-Windows test build finds no caller, so the lint is allowed only
-    // on that build (`#[expect]` would fail on Windows, where the call
-    // above already uses it).
     #[cfg(any(windows, test))]
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(
+        not(windows),
+        expect(
+            dead_code,
+            reason = "the Windows watcher is its caller until the next task"
+        )
+    )]
     fn idle_for(&self, now: Instant) -> Duration {
         now.saturating_duration_since(*self.last_activity.lock().unwrap())
     }
@@ -355,9 +364,10 @@ impl ReaderProgress {
 /// Returns when the reader ends or the receiver is gone.
 ///
 /// `progress` is stamped after every completed read and again after a
-/// blocking `send` returns, and its parked flag holds exactly while a
-/// `send` waits on a full queue, so a watcher can tell a reader parked
-/// on a full queue from one whose child went quiet.
+/// blocking `send` returns, and its parked flag holds from the moment
+/// `try_send` finds the queue full until the blocking `send` returns, so
+/// a watcher can tell a reader parked on a full queue from one whose
+/// child went quiet.
 ///
 /// # Invariants
 ///
@@ -456,8 +466,8 @@ const OUTPUT_QUIESCENCE: Duration = Duration::from_millis(50);
 #[cfg(windows)]
 const OUTPUT_QUIESCENCE_CAP: Duration = Duration::from_secs(2);
 
-/// Blocks until no read has completed for [`OUTPUT_QUIESCENCE`], or
-/// [`OUTPUT_QUIESCENCE_CAP`] has passed.
+/// Blocks until no read or send has completed for [`OUTPUT_QUIESCENCE`],
+/// or [`OUTPUT_QUIESCENCE_CAP`] has passed.
 #[cfg(windows)]
 fn wait_for_output_quiescence(progress: &ReaderProgress) {
     let cap = Instant::now() + OUTPUT_QUIESCENCE_CAP;
