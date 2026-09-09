@@ -74,6 +74,8 @@ mod restore_checkpoint;
 mod reverse_index;
 mod save_checkpoint;
 mod scroll;
+mod scroll_region_down;
+mod scroll_region_up;
 mod seat_cursor;
 mod set_origin_mode;
 mod set_scroll_region;

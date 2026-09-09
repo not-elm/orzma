@@ -463,6 +463,37 @@ impl Screen {
         Some(damage)
     }
 
+    /// Scrolls the whole scroll region up by `count` rows: the rows at
+    /// the top margin leave and the pen's erase cell fills the rows that
+    /// open at the bottom margin. The cursor does not move.
+    ///
+    /// The count is clamped to the region height. A region whose top
+    /// margin is the first row of the page feeds the departing rows to
+    /// history, as a line feed there would, and it does so even when a
+    /// bottom margin pins content below the region.
+    ///
+    /// # Control Functions
+    ///
+    /// - `SU` (`CSI Pn S`)
+    pub fn scroll_region_up(&mut self, count: u16) -> Option<DamageSpan> {
+        self.shift_rows_up(self.scroll_region.top_margin(), count)
+    }
+
+    /// Scrolls the whole scroll region down by `count` rows: the pen's
+    /// erase cell fills the rows that open at the top margin and the
+    /// rows pushed past the bottom margin are lost. The cursor does not
+    /// move.
+    ///
+    /// The count is clamped to the region height. Nothing is fed to
+    /// history.
+    ///
+    /// # Control Functions
+    ///
+    /// - `SD` (`CSI Pn T`)
+    pub fn scroll_region_down(&mut self, count: u16) -> Option<DamageSpan> {
+        self.shift_rows_down(self.scroll_region.top_margin(), count)
+    }
+
     /// Follows a one-row scroll with the offset that keeps a scrolled
     /// viewport on the content it was showing.
     ///
