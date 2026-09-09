@@ -72,10 +72,12 @@ pub struct QueueSampler { .. }
 impl QueueSampler {
     pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
     pub fn new(now: Instant) -> Self;
-    /// Folds one pane's chunk depth into its running peak.
-    pub fn observe_pane(&mut self, pane: PaneId, depth: ChunkDepth);
-    /// Folds the event and command depths into their running peaks.
-    pub fn observe_channels(&mut self, events: usize, commands: usize);
+    /// Records one pane's chunk depth, retaining the maximum since the
+    /// last sample.
+    pub fn record_pane_depth(&mut self, pane: PaneId, depth: ChunkDepth);
+    /// Records the event and command channel depths, retaining each
+    /// maximum since the last sample.
+    pub fn record_channel_depths(&mut self, events: usize, commands: usize);
     /// Returns the peaks and resets them once `SAMPLE_INTERVAL` has
     /// elapsed since the last sample and any peak is non-zero.
     pub fn sample(&mut self, now: Instant) -> Option<QueueSample>;
@@ -92,17 +94,18 @@ pub struct QueueSample {
 }
 ```
 
-`Backend` owns one `QueueSampler`. Observation happens at the top of
+`Backend` owns one `QueueSampler`. Recording happens at the top of
 each `Backend::run` iteration, immediately after `wait_ready` returns
 and before `pump_pane` or `drain_commands` runs, because a pane wake
 drains up to `PUMP_ROUNDS × MAX_CHUNKS_PER_PUMP` (256, the whole
 bounded capacity) chunks before anything after the pump could look:
 
-- for each pane, `observe_pane(id, ChunkDepth(pane.tty.pending_chunks()))`,
-  where `pending_chunks` is a new `OrzmaTty` accessor wrapping
+- for each pane,
+  `record_pane_depth(id, ChunkDepth(pane.tty.pending_chunk_count()))`,
+  where `pending_chunk_count` is a new `OrzmaTty` accessor wrapping
   `Pty::chunk_receiver().len()`; the newtype lives in `orzmux` so
   `orzma_tty` keeps returning a plain `usize`;
-- `observe_channels(self.events.len(), self.commands.len())`, the
+- `record_channel_depths(self.events.len(), self.commands.len())`, the
   backend's `Sender` end of B and `Receiver` end of C.
 
 After `service_deadlines`, `Backend::run` calls `sample(now)` and logs a
@@ -115,13 +118,13 @@ peak logs nothing and adds no wake. Keeping the decision (`sample`)
 apart from the effect (the log call) keeps the sampler testable without
 capturing log output.
 
-Each observation is one `len()` load per queue, a lock-free head and
+Each recorded depth is one `len()` load per queue, a lock-free head and
 tail read that retries only when the tail moved between the two loads,
 and the per-pane fold allocates nothing; the sampler is therefore always
 compiled in, and `RUST_LOG=orzmux::queues=debug` turns the output on.
 
-Depths are observed peaks, not high-water marks: a queue that fills and
-drains between two observations is not seen. Sampling before the pump
+Depths are recorded peaks, not high-water marks: a queue that fills and
+drains between two recordings is not seen. Sampling before the pump
 makes that window one `Select` wake, which is as tight as a sampling
 design gets without instrumenting the reader thread.
 
@@ -186,7 +189,7 @@ The workspace stays on crossbeam-channel 0.5.15 or later (the lock pins
 the unbounded flavor that paths B and C still use.
 
 The blast radius is `crates/orzma_tty/src/pty.rs` (plus the
-`pending_chunks` accessor from §3, which lands in PR (a)).
+`pending_chunk_count` accessor from §3, which lands in PR (a)).
 
 ### 4.2 Read loop extraction
 
@@ -424,7 +427,7 @@ All tests run without a PTY or GPU unless stated.
 
 **orzmux**
 
-- `QueueSampler`: two `observe_pane` calls within one interval keep the
+- `QueueSampler`: two `record_pane_depth` calls within one interval keep the
   higher depth; `sample` returns `None` before the interval elapses and
   `Some` carrying the peaks after it; after a sample the peaks start
   over; `sample` returns `None` when every peak is zero;
@@ -456,7 +459,7 @@ All tests run without a PTY or GPU unless stated.
 
 | PR | Content | Crates |
 | --- | --- | --- |
-| 1 | (a) `OrzmaTty::pending_chunks`, `QueueSampler`, wiring in `Backend::run` and `wait_ready`, drain frame count and timing | orzma_tty, orzmux, bevy_orzmux |
+| 1 | (a) `OrzmaTty::pending_chunk_count`, `QueueSampler`, wiring in `Backend::run` and `wait_ready`, drain frame count and timing | orzma_tty, orzmux, bevy_orzmux |
 | 2 | (b) `CHUNK_QUEUE_CAPACITY`, `ReaderProgress`, `forward_chunks`, Windows watcher guard | orzma_tty |
 | 3 | (e) `to_runs` allocation | orzma_vt |
 | 4 | (c) `BitOrAssign for Frame`, `FrameCoalescer`, drain loop | orzma_vt, bevy_orzmux |
@@ -478,7 +481,7 @@ growing. PRs 1 to 3 are independent of that result.
   consumer that never drains would delay the exit indefinitely, but such
   a consumer is a torn-down pane, whose dropped receiver unparks the
   reader with an error.
-- **Sampling is best-effort.** The backend observes once per wake, so a
+- **Sampling is best-effort.** The backend records once per wake, so a
   queue that fills and drains inside one pump is invisible to it; the
   drain-side frame count is exact but only for path B.
 - **`|=` trusts the full-repaint invariant.** If a future change
