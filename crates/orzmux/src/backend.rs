@@ -3,6 +3,7 @@
 //! layout / frame / signal events to the GUI.
 
 use crate::backend::pane::{Pane, PaneFactory};
+use crate::backend::queue_sample::{ChunkDepth, QueueSampler};
 use crate::layout::LayoutTree;
 use crate::protocol::{
     CloseReason, CommandSeq, Layout, NewPaneAt, OrzmuxCommand, OrzmuxEvent, PaneId, PaneTarget,
@@ -17,6 +18,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 pub(crate) mod pane;
+pub(crate) mod queue_sample;
 pub(crate) use pane::ShellFactory;
 
 /// The backend state, driven by [`Backend::run`] on its own thread.
@@ -34,6 +36,8 @@ pub(crate) struct Backend {
     /// What each `Select` index of the last `wait_ready` referred to;
     /// kept so the table is not reallocated on every wake.
     sources: Vec<Ready>,
+    /// Per-queue peaks between samples; logged once a second.
+    sampler: QueueSampler,
 }
 
 impl Backend {
@@ -54,21 +58,29 @@ impl Backend {
             processed: CommandSeq::default(),
             gui_gone: false,
             sources: Vec::new(),
+            sampler: QueueSampler::new(Instant::now()),
         }
     }
 
     /// Runs until the command channel disconnects (the GUI dropped its
     /// client) or the GUI stops receiving events. Dropping the panes on
     /// return kills every child.
+    ///
+    /// Queue depths are recorded right after the wake, before any pump
+    /// or command drain shrinks a queue, and the sample is reported
+    /// after the deadlines are serviced.
     pub(crate) fn run(mut self) {
         loop {
-            match self.wait_ready() {
+            let ready = self.wait_ready();
+            self.record_queue_depths();
+            match ready {
                 Some(Ready::Commands) if !self.drain_commands() => return,
                 Some(Ready::Commands) => {}
                 Some(Ready::Pane(pane)) => self.pump_pane(pane),
                 None => {}
             }
             self.service_deadlines();
+            self.report_queue_sample(Instant::now());
             if self.gui_gone {
                 return;
             }
@@ -221,9 +233,10 @@ impl Backend {
     }
 
     /// Blocks until a command or a pane stream is ready, or the earliest
-    /// coalescer deadline passes. Returns the ready source, `None` on
-    /// timeout. The `Select` is dropped before returning so the pane
-    /// receivers it borrowed can be pumped.
+    /// of the coalescer deadlines and the sampler's report deadline
+    /// passes. Returns the ready source, `None` on timeout. The
+    /// `Select` is dropped before returning so the pane receivers it
+    /// borrowed can be pumped.
     fn wait_ready(&mut self) -> Option<Ready> {
         let mut select = Select::new();
         self.sources.clear();
@@ -242,6 +255,7 @@ impl Backend {
             .panes
             .values()
             .filter_map(|p| p.tty.next_deadline())
+            .chain(self.sampler.report_deadline())
             .min();
         let index = match deadline {
             Some(deadline) => select.ready_deadline(deadline).ok()?,
@@ -477,6 +491,42 @@ impl Backend {
             self.gui_gone = true;
         }
     }
+
+    /// Records every queue's current depth into the sampler: each pane's
+    /// unread chunk count, the event channel, and the command channel.
+    fn record_queue_depths(&mut self) {
+        for (id, pane) in &self.panes {
+            self.sampler
+                .record_pane_depth(*id, ChunkDepth(pane.tty.pending_chunk_count()));
+        }
+        self.sampler
+            .record_channel_depths(self.events.len(), self.commands.len());
+    }
+
+    /// Logs the sample the sampler hands out at `now`, if one is due:
+    /// one line per pane with a non-zero chunk peak and one line for
+    /// the channels when either peak is non-zero.
+    fn report_queue_sample(&mut self, now: Instant) {
+        let Some(sample) = self.sampler.sample(now) else {
+            return;
+        };
+        for (pane, depth) in sample.chunks {
+            tracing::debug!(
+                target: "orzmux::queues",
+                ?pane,
+                depth = depth.0,
+                "chunk queue peak"
+            );
+        }
+        if sample.events > 0 || sample.commands > 0 {
+            tracing::debug!(
+                target: "orzmux::queues",
+                events = sample.events,
+                commands = sample.commands,
+                "event and command queue peaks"
+            );
+        }
+    }
 }
 
 /// The window geometry the GUI last reported.
@@ -513,6 +563,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     /// The test's ends of one spawned pane's streams.
     struct FakePane {
@@ -575,12 +626,16 @@ mod tests {
         panes: Receiver<FakePane>,
         log: Arc<FactoryLog>,
         seq: u64,
+        /// Held so the command channel stays connected; a disconnected
+        /// channel is permanently ready and would wake `wait_ready` at
+        /// once.
+        _commands: Sender<(CommandSeq, OrzmuxCommand)>,
     }
 
     impl Harness {
         fn new() -> Self {
             let (spawned_tx, spawned_rx) = unbounded();
-            let (_command_tx, command_rx) = unbounded();
+            let (command_tx, command_rx) = unbounded();
             let (event_tx, event_rx) = unbounded();
             let log = Arc::new(FactoryLog::default());
             let factory = FakeFactory {
@@ -593,6 +648,7 @@ mod tests {
                 panes: spawned_rx,
                 log,
                 seq: 0,
+                _commands: command_tx,
             }
         }
 
@@ -817,6 +873,55 @@ mod tests {
             events
                 .iter()
                 .any(|e| matches!(e, OrzmuxEvent::Frame { pane, .. } if *pane == root))
+        );
+    }
+
+    /// Asserts that the depths recorded after a wake are the chunks
+    /// still queued before the pump drains them.
+    ///
+    /// Case: a pane's reader queued two chunks while the backend slept
+    /// and the `Select` just woke for that pane.
+    #[test]
+    fn record_queue_depths_sees_the_chunks_queued_before_the_pump() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx.send(b"a".to_vec()).unwrap();
+        pane.chunk_tx.send(b"b".to_vec()).unwrap();
+        h.backend.record_queue_depths();
+        h.backend.pump_pane(root);
+        let sample = h
+            .backend
+            .sampler
+            .sample(Instant::now() + QueueSampler::SAMPLE_INTERVAL)
+            .expect("a peak was recorded");
+        assert_eq!(sample.chunks, vec![(root, ChunkDepth(2))]);
+    }
+
+    /// Asserts that `wait_ready` wakes at the sampler's report deadline
+    /// when no pane deadline is earlier and no source is ready.
+    ///
+    /// Case: a burst of output was recorded, then every pane went idle
+    /// before the second elapsed, and the peak still has to be logged.
+    #[test]
+    fn wait_ready_wakes_at_the_report_deadline_when_no_pane_deadline_is_earlier() {
+        let mut h = Harness::new();
+        let (root, _pane) = h.open_root();
+        h.backend.pump_pane(root);
+        h.drain();
+        assert!(
+            h.backend.panes[&root].tty.next_deadline().is_none(),
+            "precondition: the pane is idle after its bootstrap frame"
+        );
+        let due_in = Duration::from_millis(100);
+        h.backend.sampler =
+            QueueSampler::new(Instant::now() - (QueueSampler::SAMPLE_INTERVAL - due_in));
+        h.backend.sampler.record_pane_depth(root, ChunkDepth(1));
+        let started = Instant::now();
+        let ready = h.backend.wait_ready();
+        assert!(ready.is_none(), "a deadline wake reports no ready source");
+        assert!(
+            started.elapsed() < Duration::from_millis(900),
+            "the wake must come at the report deadline, not a second later"
         );
     }
 
