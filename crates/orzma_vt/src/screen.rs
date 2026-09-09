@@ -413,6 +413,31 @@ impl Screen {
         None
     }
 
+    /// Deletes `count` rows at the cursor inside the scroll region: the
+    /// rows below move up and the pen's erase cell fills the rows that
+    /// open at the bottom margin. The cursor is homed to column zero
+    /// and the deferred wrap is disarmed.
+    ///
+    /// A cursor outside the margins deletes nothing (VT510 "DL — Delete
+    /// Line"). The count is clamped to the rows from the cursor through
+    /// the bottom margin. A delete with the cursor on the first row of
+    /// the page feeds the deleted rows to history, as xterm, alacritty,
+    /// and wezterm do; the cursor homing follows xterm, kitty, and
+    /// ECMA-48 § 8.3.32 rather than alacritty and wezterm, which leave
+    /// the column alone.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DL` (`CSI Pn M`)
+    pub fn delete_lines(&mut self, count: u16) -> Option<DamageSpan> {
+        if !self.scroll_region.scroll_span().contains(&self.state.line) {
+            return None;
+        }
+        let damage = self.shift_rows_up(self.state.line, count)?;
+        self.carriage_return();
+        Some(damage)
+    }
+
     /// Follows a one-row scroll with the offset that keeps a scrolled
     /// viewport on the content it was showing.
     ///
@@ -433,6 +458,49 @@ impl Screen {
         let history =
             u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
         self.viewport.offset = DisplayOffset(self.viewport.offset.0.saturating_add(1).min(history));
+    }
+
+    /// Shifts the rows from `first` through the bottom margin up by
+    /// `count` rows, filling the rows that open at the bottom margin
+    /// with the pen's erase cell; `None` when the clamped count is
+    /// zero.
+    ///
+    /// A shift that starts on the first row of the page feeds each
+    /// departing row to history and holds a scrolled-back viewport on
+    /// the row it was showing, one row at a time, the way
+    /// [`Self::line_feed`] does.
+    fn shift_rows_up(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
+        let bottom = self.scroll_region.bottom_margin();
+        let count = self.clamped_rows(first, count)?;
+        let fill = self.state.pen.erase_cell();
+        for _ in 0..count {
+            self.grid.scroll_up_one(first, bottom, fill);
+            if first == ScreenLine(0) {
+                self.hold_scrolled_viewport();
+            }
+        }
+        Some(DamageSpan::Full)
+    }
+
+    /// The rows a shift starting at `first` may actually move: `count`
+    /// clamped to the rows through the bottom margin, and `None` when
+    /// that leaves nothing to do.
+    ///
+    /// # Invariants
+    ///
+    /// `first` is at or above the bottom margin; the callers guarantee
+    /// it by checking the cursor against the margins or by passing the
+    /// top margin itself. The debug assertion catches a future caller
+    /// that does neither, which would otherwise underflow the
+    /// subtraction below.
+    fn clamped_rows(&self, first: ScreenLine, count: u16) -> Option<u16> {
+        let bottom = self.scroll_region.bottom_margin();
+        debug_assert!(
+            first <= bottom,
+            "a row shift starts at or above the bottom margin"
+        );
+        let count = count.min(bottom.0 - first.0 + 1);
+        (count > 0).then_some(count)
     }
 
     /// Resolves a motion into the offset it aims at, before clamping.

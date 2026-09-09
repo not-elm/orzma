@@ -36,9 +36,25 @@ fn dirty_screen() -> Screen {
     screen
 }
 
+/// Seeds one glyph into the first column of each leading row, so a
+/// shifted row can be told apart from an erased one.
+fn seed(screen: &mut Screen, glyphs: &[char]) {
+    for (line, glyph) in (0u16..).zip(glyphs) {
+        screen.grid[ScreenLine(line)][0].c = *glyph;
+    }
+}
+
+/// The first-column glyph of each of the leading `rows` screen rows.
+fn glyphs(screen: &Screen, rows: u16) -> Vec<char> {
+    (0..rows)
+        .map(|line| screen.grid[ScreenLine(line)][0].c)
+        .collect()
+}
+
 mod backspace;
 mod carriage_return;
 mod cursor;
+mod delete_lines;
 mod display_offset;
 mod erase_in_display;
 mod erase_in_line;
