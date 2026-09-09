@@ -6,7 +6,7 @@ macOS.
 ## Symptom
 
 Scrolling a file in Neovim repaints only the rows at the scroll edge. In
-`bug.png` (a 210x51 window editing `src/cef_profile.rs`) the cursor is at
+`docs/todo/bug.png` (a 210x51 window editing `src/cef_profile.rs`) the cursor is at
 line 105, yet screen rows 1-46 still show file lines 1-46 and only the
 last two rows show lines 104-105. The stale rows also carry scattered
 one-cell corruption: a `{` replacing a single character on several rows
