@@ -1,6 +1,7 @@
 # orzmux buffer saturation: measurement record
 
-Status: waiting for measurements. Spec:
+Status: measured on 2026-09-10; PR 4 does not ship on this evidence
+(see Decision). Spec:
 `docs/superpowers/specs/2026-09-09-orzmux-buffer-saturation-design.md`
 (§3.2 is the protocol this file records).
 
@@ -47,15 +48,46 @@ each field seen during the run.
 Fill in one row per case. Leave a cell as `none` when the line never
 appeared.
 
-| Case | Peak chunk depth | Peak event depth | Peak command depth | Largest frames per `Update` | Its drain time | Date, build |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1. `cat` 100 MiB | | | | | | |
-| 2. `yes` | | | | | | |
-| 3. key held during live resize | | | | | | |
-| 4. webview beside case 1 | | | | | | |
+All rows: 2026-09-10, release build of the full stack at `4ff6c97`
+(PR 1 + PR 2 + PR 3), macOS 26.6.2 on an Apple M4 Pro. `none` means
+the line never appeared.
+
+| Case | Peak chunk depth | Peak event depth | Peak command depth | Largest frames per `Update` | Its drain time |
+| --- | --- | --- | --- | --- | --- |
+| 1. `cat` 100 MiB (two runs, ~15 s and ~9 s) | 256, held at the cap for every sampled second | 3 | 0 | none | none |
+| 2. `yes` | not isolated in the log | | | | |
+| 3. key held during live resize | not isolated in the log; no command backlog was seen during any load | | | | |
+| 4. `orzbrowser` on YouTube beside `cat` 100 MiB (~13 s) | 256 in the `cat` pane, 3 in the browser pane | 2 | 0 | none | none |
+| 5. `cargo build --release` inside the terminal (~5 min, PR 1 build) | 5 | 8 | 0 | 9 | 17.75 µs |
+
+Reading the chunk depth: 256 is `Pty::CHUNK_QUEUE_CAPACITY`, so the
+reader parked for the whole `cat` and the child's `write(2)` blocked
+on the kernel PTY buffer. The VT parser, not the reader, is the
+bottleneck on a 100 MiB stream, and the bound is what keeps that
+backlog at 1 MiB instead of growing without limit as it would on PR 1
+alone.
+
+Reading the event depth: a steady 2 to 3 is one frame plus whatever
+else was queued when the backend sampled. The GUI drained every frame
+within the `Update` it arrived in; the only drain over the threshold
+was one 9-frame hiccup in five minutes of compiler output, roughly a
+30 to 100 ms GUI stall.
 
 ## Decision
 
 PR 4 ships if any case logs a drain of more than 8 frames in one
-`Update`. Record the decision here with the date once the table is
-filled in.
+`Update`.
+
+2026-09-10: PR 4 does not ship. Cases 1 and 4 never produced a drain
+above the threshold, and the one 9-frame drain in case 5 is a single
+brief hiccup whose cost (nine observer dispatches and nine
+`runs_to_cells` passes) is not worth a coalescer. Path B never backed
+up even with a CEF webview painting beside a saturated `cat`. Path A
+saturates on `cat`, which PR 2 now bounds; that is the defect this
+work set out to fix.
+
+Case 3 (a held key during a continuous live resize) was not isolated
+in the logs. It is the one scenario that could still change this
+decision, because a live resize can block the winit event loop and
+queue frames behind it. Reopen the decision only if a run of case 3
+logs a drain of more than 8 frames.
