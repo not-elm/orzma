@@ -121,7 +121,7 @@ impl IndexMut<GridColumn> for Row<Cell> {
 /// How many runs [`Row::to_runs`] reserves up front. A single-attribute
 /// row then carries capacity for a few runs instead of one per column,
 /// and geometric growth reaches a highlighted row's twenty to forty runs
-/// in one or two reallocations.
+/// in one to three reallocations.
 const RUNS_RESERVE: usize = 8;
 
 #[cfg(test)]
@@ -240,8 +240,8 @@ mod tests {
     /// Asserts that a single-attribute row's run vector reserves at most
     /// `RUNS_RESERVE` runs rather than one per column.
     ///
-    /// Case: a frame carries a hundred unstyled blank lines of a wide
-    /// terminal, each of which coalesces into one run.
+    /// Case: a frame carries one unstyled blank line of a wide terminal,
+    /// which coalesces into a single run.
     #[test]
     fn a_single_attribute_row_reserves_at_most_the_run_reserve() {
         let row = Row::filled(200, Cell::default());
