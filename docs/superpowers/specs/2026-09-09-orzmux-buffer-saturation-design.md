@@ -150,22 +150,26 @@ exceeds 8. That is the exact moment a stalled GUI resumes, which is the
 scenario (c) targets. The timed span is the drain system itself: the
 `TtyFrameSignal` observers apply the frames to each `TerminalGrid` at
 command flush, after the system returns, so their cost is outside the
-logged figure and the 16 ms criterion below should be read against
-that span, not against the frame budget as a whole.
+logged figure. The drain time is therefore informational: it bounds
+the loop that queues the triggers, not the work of applying the
+frames.
 
 After PR (a) lands, run each load case for at least ten seconds with
 `RUST_LOG=orzmux::queues=debug` and record, in
-`docs/todo/orzmux-buffer-saturation.md` §7, the peak chunk depth, event
-depth, and command depth from the backend, and the largest frames
-drained per `Update` with its drain time from the GUI:
+the results table of `docs/todo/orzmux-buffer-saturation.md`, the peak
+chunk depth, event depth, and command depth from the backend, and the
+largest frames drained per `Update` with its drain time from the GUI:
 
 1. `cat` on a file of at least 100 MiB.
 2. `yes`.
 3. Holding a key down during a continuous live window resize.
 4. A CEF webview pane rendering alongside case 1.
 
-The (c) PR ships if any case logs a drain of more than 8 frames whose
-wall time exceeds 16 ms, one GUI frame budget. The event-depth peak
+The (c) PR ships if any case logs a drain of more than 8 frames in one
+`Update`. The count is the criterion because it is exact for path B
+and every counted frame costs one observer dispatch and one
+`runs_to_cells` pass that coalescing would fold away; the drain time
+is not part of the criterion. The event-depth peak
 stays informational: (c) merges frames only after the GUI wakes, so it
 cannot shrink the queue that builds during the stall, only the work of
 draining it. The chunk depth (A) result is informational too; PR (b)
