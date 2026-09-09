@@ -354,16 +354,7 @@ impl Screen {
     /// - `NEL` (`0x85`, `ESC E`) — after the carriage return
     pub fn line_feed(&mut self) -> Option<DamageSpan> {
         if self.state.line == self.scroll_region.bottom_margin() {
-            let top = self.scroll_region.top_margin();
-            self.grid.scroll_up_one(
-                top,
-                self.scroll_region.bottom_margin(),
-                self.state.pen.erase_cell(),
-            );
-            if top == ScreenLine(0) {
-                self.hold_scrolled_viewport();
-            }
-            return Some(DamageSpan::Full);
+            return self.scroll_region_up(1);
         }
         if self.state.line.0 + 1 < self.grid.size().rows {
             self.state.line.0 += 1;
@@ -383,12 +374,7 @@ impl Screen {
     pub fn reverse_index(&mut self) -> Option<DamageSpan> {
         self.state.pending_wrap = false;
         if self.state.line == self.scroll_region.top_margin() {
-            self.grid.scroll_down_one(
-                self.scroll_region.top_margin(),
-                self.scroll_region.bottom_margin(),
-                self.state.pen.erase_cell(),
-            );
-            return Some(DamageSpan::Full);
+            return self.scroll_region_down(1);
         }
         if ScreenLine(0) < self.state.line {
             self.state.line.0 -= 1;
@@ -512,9 +498,10 @@ impl Screen {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
         let fill = self.state.pen.erase_cell();
+        let feeds_history = first == ScreenLine(0);
         for _ in 0..count {
             self.grid.scroll_up_one(first, bottom, fill);
-            if first == ScreenLine(0) {
+            if feeds_history {
                 self.hold_scrolled_viewport();
             }
         }
@@ -542,20 +529,15 @@ impl Screen {
     /// clamped to the rows through the bottom margin, and `None` when
     /// that leaves nothing to do.
     ///
-    /// # Invariants
-    ///
-    /// `first` is at or above the bottom margin; the callers guarantee
-    /// it by checking the cursor against the margins or by passing the
-    /// top margin itself. The debug assertion catches a future caller
-    /// that does neither, which would otherwise underflow the
-    /// subtraction below.
+    /// A `first` below the bottom margin also yields `None`, because it
+    /// names no row the shift could move. The callers never produce one
+    /// — they check the cursor against the margins or pass the top
+    /// margin itself — so the guard exists to keep a future caller that
+    /// does neither from wrapping the subtraction into a count that
+    /// would walk the ring outside the region.
     fn clamped_rows(&self, first: ScreenLine, count: u16) -> Option<u16> {
         let bottom = self.scroll_region.bottom_margin();
-        debug_assert!(
-            first <= bottom,
-            "a row shift starts at or above the bottom margin"
-        );
-        let count = count.min(bottom.0 - first.0 + 1);
+        let count = count.min(bottom.0.checked_sub(first.0)? + 1);
         (count > 0).then_some(count)
     }
 
