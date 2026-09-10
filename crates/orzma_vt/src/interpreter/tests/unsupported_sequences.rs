@@ -10,11 +10,11 @@ use super::*;
 /// they do not implement. It is also the point of the dispatcher:
 /// before it existed every CSI sequence reached a `todo!()`.
 ///
-/// Case: a program inserts blanks with `ICH` on a terminal that has
-/// no character-editing functions yet.
+/// Case: a program turns on the printer controller with `MC` on a
+/// terminal that has no printer to control.
 #[test]
 fn an_unimplemented_sequence_is_ignored() {
-    let device = interpret(b"\x1b[2@a");
+    let device = interpret(b"\x1b[5ia");
     assert_eq!(
         device.active_screen().viewport_row(ViewportLine(0))[0].c,
         'a'

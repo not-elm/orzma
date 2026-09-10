@@ -161,15 +161,15 @@ impl Grid {
         count: u16,
         fill: Cell,
     ) {
-        let cols = self.size.cols;
-        debug_assert!(
-            usize::from(column.0) + usize::from(count) <= usize::from(cols),
-            "an in-row insert stays inside the row"
-        );
         let start = usize::from(column.0);
         let count = usize::from(count);
         let row: &mut [Cell] = &mut self[line];
-        row.copy_within(start..usize::from(cols) - count, start + count);
+        let cols = row.len();
+        debug_assert!(
+            start + count <= cols,
+            "an in-row insert stays inside the row"
+        );
+        row.copy_within(start..cols - count, start + count);
         row[start..start + count].fill(fill);
     }
 
@@ -177,9 +177,9 @@ impl Grid {
     /// `column`, filling the columns that open at the row's end with
     /// `fill`.
     ///
-    /// The cells at `column` through `column + count` are overwritten.
-    /// Row identity is untouched, for the same reason
-    /// [`Self::insert_visible_row_cells`] leaves it alone.
+    /// The `count` cells starting at `column` are overwritten by the
+    /// cells that shift into them. Row identity is untouched, for the
+    /// same reason [`Self::insert_visible_row_cells`] leaves it alone.
     ///
     /// # Invariants
     ///
@@ -192,14 +192,14 @@ impl Grid {
         count: u16,
         fill: Cell,
     ) {
-        let cols = usize::from(self.size.cols);
-        debug_assert!(
-            usize::from(column.0) + usize::from(count) <= cols,
-            "an in-row delete stays inside the row"
-        );
         let start = usize::from(column.0);
         let count = usize::from(count);
         let row: &mut [Cell] = &mut self[line];
+        let cols = row.len();
+        debug_assert!(
+            start + count <= cols,
+            "an in-row delete stays inside the row"
+        );
         row.copy_within(start + count..cols, start);
         row[cols - count..].fill(fill);
     }
@@ -774,6 +774,65 @@ mod tests {
         assert_eq!(grid[ScreenLine(0)][1].c, ' ');
         assert_eq!(grid[ScreenLine(0)][2].c, ' ');
         assert_eq!(grid[ScreenLine(0)][3].c, 'x');
+    }
+
+    /// Asserts that an insert at column zero for the full row width
+    /// blanks every cell of the addressed row, mints no id, and
+    /// leaves the neighboring rows and history untouched.
+    ///
+    /// Case: `ICH` opens the entire row at the left margin while a
+    /// scroll has already handed a row to history and the rows above
+    /// and below the cursor still carry their own content.
+    #[test]
+    fn an_insert_shifts_the_addressed_row_and_leaves_its_neighbors_alone() {
+        let mut grid = grid_with_history(1);
+        for column in 0..4 {
+            grid[ScreenLine(1)][column].c = char::from(b'a' + column as u8);
+        }
+        grid[ScreenLine(0)][0].c = 'x';
+        grid[ScreenLine(2)][0].c = 'y';
+        let history_len = grid.history_len();
+        let id = grid.line_id(ScreenLine(1));
+
+        grid.insert_visible_row_cells(ScreenLine(1), GridColumn(0), 4, Cell::default());
+
+        for column in 0..4 {
+            assert_eq!(grid[ScreenLine(1)][column].c, ' ');
+        }
+        assert_eq!(grid[ScreenLine(0)][0].c, 'x');
+        assert_eq!(grid[ScreenLine(2)][0].c, 'y');
+        assert_eq!(grid.history_len(), history_len);
+        assert_eq!(grid.line_id(ScreenLine(1)), id);
+    }
+
+    /// Asserts that a delete shifts the surviving cells down to
+    /// `column`, fills the columns that open at the row's end, mints
+    /// no id, and leaves the neighboring rows and history untouched.
+    ///
+    /// Case: `DCH` closes a gap mid-row while a scroll has already
+    /// handed a row to history and the rows above and below the
+    /// cursor still carry their own content.
+    #[test]
+    fn a_delete_shifts_the_addressed_row_and_leaves_its_neighbors_alone() {
+        let mut grid = grid_with_history(1);
+        for column in 0..4 {
+            grid[ScreenLine(1)][column].c = char::from(b'a' + column as u8);
+        }
+        grid[ScreenLine(0)][0].c = 'x';
+        grid[ScreenLine(2)][0].c = 'y';
+        let history_len = grid.history_len();
+        let id = grid.line_id(ScreenLine(1));
+
+        grid.delete_visible_row_cells(ScreenLine(1), GridColumn(1), 2, Cell::default());
+
+        assert_eq!(grid[ScreenLine(1)][0].c, 'a');
+        assert_eq!(grid[ScreenLine(1)][1].c, 'd');
+        assert_eq!(grid[ScreenLine(1)][2].c, ' ');
+        assert_eq!(grid[ScreenLine(1)][3].c, ' ');
+        assert_eq!(grid[ScreenLine(0)][0].c, 'x');
+        assert_eq!(grid[ScreenLine(2)][0].c, 'y');
+        assert_eq!(grid.history_len(), history_len);
+        assert_eq!(grid.line_id(ScreenLine(1)), id);
     }
 
     /// Asserts that an id looked up from a screen line resolves back to the

@@ -329,7 +329,7 @@ impl Screen {
     }
 }
 
-/// Line feeding and region scrolling.
+/// Line feeding, region scrolling, and in-row character editing.
 impl Screen {
     /// Moves the cursor down one row, scrolling at the bottom margin;
     /// the deferred-wrap flag is deliberately preserved.
@@ -433,8 +433,9 @@ impl Screen {
     }
 
     /// Inserts `count` blank characters at the cursor: the cells to its
-    /// right move right, the cells pushed past the last column are
-    /// lost, and the cursor stays where it is.
+    /// right move right keeping their own attributes, the cells pushed
+    /// past the last column are lost, and the cursor stays where it
+    /// is.
     ///
     /// The count is clamped to the columns from the cursor through the
     /// last one. The blanks carry the pen's erase cell, which clears
@@ -445,7 +446,8 @@ impl Screen {
     /// cursor sits: VT510 gives `ICH` "no effect outside the scrolling
     /// margins" and xterm, alacritty, kitty, ghostty, VTE and foot all
     /// ignore that, so orzma follows the field. The deferred wrap is
-    /// disarmed, as xterm does.
+    /// disarmed, as xterm does, unless the clamp leaves nothing to
+    /// insert.
     ///
     /// # Control Functions
     ///
@@ -465,16 +467,20 @@ impl Screen {
     ///
     /// The count is clamped to the columns from the cursor through the
     /// last one, never to the row width: a width-relative clamp blanks
-    /// a column left of the cursor. The moved cells keep their own
-    /// attributes and the blanks carry the pen's erase cell.
+    /// a column left of the cursor. The cells that shift keep their
+    /// own attributes; the columns that open at the last column take
+    /// the pen's erase cell instead, because DEC's attribute
+    /// vocabulary has no color axis for a blank to carry and the pen's
+    /// background is what every other erase path in this file already
+    /// fills with.
     ///
-    /// No manual states where the cursor ends up — VT510 and VT220 both
-    /// omit it, where they state it for `ICH` — so leaving it put
-    /// follows xterm. Unlike
-    /// [`Self::delete_lines`], the edit applies wherever the cursor
-    /// sits: VT510 gives `DCH` "no effect outside the scrolling
-    /// margins" and xterm, alacritty, kitty, ghostty, VTE and foot all
-    /// ignore that. The deferred wrap is disarmed.
+    /// No manual states where the cursor ends up — VT510 and VT220
+    /// both omit it, where they state it for `ICH` — so leaving it put
+    /// follows xterm. Unlike [`Self::delete_lines`], the edit applies
+    /// wherever the cursor sits: VT510 gives `DCH` "no effect outside
+    /// the scrolling margins" and xterm, alacritty, kitty, ghostty,
+    /// VTE and foot all ignore that. The deferred wrap is disarmed, as
+    /// xterm does, unless the clamp leaves nothing to delete.
     ///
     /// # Control Functions
     ///
