@@ -75,6 +75,11 @@ impl Session {
         self.0.frame()
     }
 
+    /// The device the session has been driving.
+    fn device(&self) -> &DeviceState {
+        &self.0.device
+    }
+
     /// Mounts a one-cell placement at the active screen's cursor.
     fn mount(&mut self, id: InstanceId) {
         assert!(
@@ -140,6 +145,7 @@ mod reset;
 mod reverse_index;
 mod sgr;
 mod tabulation;
+mod text_cursor_enable;
 mod title;
 mod unsupported_sequences;
 mod webview_apc;
