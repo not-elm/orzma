@@ -42,7 +42,7 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 
 | シーケンス | 機能 | terminfo | 現状 | 実測頻度 † | 影響 |
 |---|---|---|---|---:|---|
-| `CSI ?25 h/l` | DECTCEM | `civis`/`cnorm`/`cvvis` | `MODE∅`。`screen.rs:1026` の TODO でカーソルは `visible: true` 固定 | **590** | 再描画中もカーソルが本文上に残る |
+| ~~`CSI ?25 h/l`~~ | ~~DECTCEM~~ | `civis`/`cnorm`/`cvvis` | **✅ 実装済み（2026-09-11）** | **590** | ~~再描画中もカーソルが本文上に残る~~（解消済み） |
 | ~~`CSI Ps X`~~ | ~~**ECH**~~ | `ech` | **✅ 実装済み（2026-09-10）** | 73 | ~~消去されず旧テキストが残る~~（今回のバグ。解消済み） |
 | ~~`CSI Ps @`~~ | ~~ICH~~ | `ich`, `mir` | **✅ 実装済み（2026-09-10）** | 0 | ~~挿入描画が上書きになり行が壊れる~~（解消済み） |
 | ~~`CSI Ps P`~~ | ~~DCH~~ | `dch`, `dch1` | **✅ 実装済み（2026-09-10）** | 0 | ~~削除されず後続が詰まらない~~（解消済み） |
@@ -144,9 +144,13 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 2. ~~**CHA/VPA + HPA**~~ **完了（2026-09-11）** → 次は **HPR/VPR**、**SCOSC/SCORC**、**SD `^` 別名**。
    カーソル系ヘルパ（`seat_cursor` / `seat_line` / `seat_column`）を共有。`CSI s` は将来の DECLRMM 分岐を見越した形に。
    **VPR は `move_cursor_down` の別名にできない**（§2 の注記を参照）。
-3. **DECAWM / DECTCEM / カーソル点滅 / DECSCUSR**。
-   `Screen::cursor()` の固定値（`screen.rs:1026` の TODO）を実データに置き換える。
-   DECSC/DECRC の保存範囲もここで揃える。
+3. ~~**DECTCEM**~~ **完了（2026-09-11）** — 状態は `VtModes::text_cursor_enable`
+   に置き、`Screen::cursor()` が引数で受け取って `DeviceState::cursor()` が畳む。
+   残るのは **DECAWM / カーソル点滅（`?12`）/ DECSCUSR**。この 3 つは DECTCEM と
+   同じステップにあったが、DECSC の保存範囲の扱いが割れる: vt510 p.243 の保存項目
+   列挙は "Wrap flag" を含むので **DECAWM は `Checkpoint` に入れる**必要があり、
+   可視性を含まない DECTCEM とは逆になる。`Screen::cursor()` の固定値のうち
+   `shape` と `blinking` は DECSCUSR 待ちのまま。
 4. **DECSTR と初期化系**、**1049 の pen 修正**。
 5. **入力側の契約修正**（`kbs` の方針決定 → Shift-Tab → ファンクションキー → 修飾キー → Meta）。
 6. **OSC 4/10/11/12** とその問い合わせ・リセット。
