@@ -139,10 +139,9 @@ impl Screen {
     /// Prints one character at the cursor with the current pen,
     /// wrapping first when the deferred wrap is armed.
     ///
-    /// `mode` is `IRM`: under [`InsertReplaceMode::Insert`] the cells at
-    /// and right of the cursor move one column right before the
-    /// character lands, exactly as [`Self::insert_characters`] moves
-    /// them, and the cell pushed past the last column is lost.
+    /// `mode` is `IRM`: under [`InsertReplaceMode::Insert`] the character
+    /// lands on a column opened by [`Self::insert_characters`], which
+    /// records what the shift does to the rest of the row.
     ///
     /// The caller dispatches control bytes itself; this method assumes
     /// a printable character of display width one.

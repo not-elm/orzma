@@ -2,6 +2,16 @@
 
 use super::*;
 
+/// Every glyph of the device's first visible row, left to right.
+fn first_row_glyphs(device: &DeviceState) -> Vec<char> {
+    device
+        .active_screen()
+        .viewport_row(ViewportLine(0))
+        .iter()
+        .map(|cell| cell.c)
+        .collect()
+}
+
 /// Asserts that `CSI 4 h` selects insert mode on the device.
 ///
 /// Case: a curses application on a terminal without `ich` announces an
@@ -85,7 +95,7 @@ fn an_alternate_screen_flip_keeps_the_mode() {
 #[test]
 fn a_print_under_set_mode_four_shifts_the_row_right() {
     let device = interpret(b"abcd\x1b[2G\x1b[4hX");
-    assert_eq!(row_glyphs(&device), ['a', 'X', 'b', 'c']);
+    assert_eq!(first_row_glyphs(&device), vec!['a', 'X', 'b', 'c']);
 }
 
 /// Asserts that a character printed after `CSI 4 l` overwrites the cell
@@ -97,7 +107,7 @@ fn a_print_under_set_mode_four_shifts_the_row_right() {
 #[test]
 fn a_print_under_reset_mode_four_overwrites_the_cell() {
     let device = interpret(b"abcd\x1b[2G\x1b[4h\x1b[4lX");
-    assert_eq!(row_glyphs(&device), ['a', 'X', 'c', 'd']);
+    assert_eq!(first_row_glyphs(&device), vec!['a', 'X', 'c', 'd']);
 }
 
 /// Asserts that `DECRC` leaves IRM where the data stream last put it,

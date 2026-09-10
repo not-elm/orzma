@@ -112,11 +112,6 @@ impl Session {
 }
 
 /// The glyphs of the first four columns of the top viewport row.
-fn row_glyphs(device: &DeviceState) -> [char; 4] {
-    let row = device.active_screen().viewport_row(ViewportLine(0));
-    [row[0].c, row[1].c, row[2].c, row[3].c]
-}
-
 /// Runs `setup` and then `chunk` over one session, and reports the
 /// liveness `chunk` alone produced.
 fn liveness_after(setup: &[u8], chunk: &[u8]) -> bool {

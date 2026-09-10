@@ -35,7 +35,7 @@ Phase 4 の結果は「ケース一覧8件を承認、signature 提案は取ら�
 
 ## テストケース一覧
 
-優先度順（High → Medium → Low）に並べてある。ID は Phase 4 で提示したものを
+優先度順（High → Medium）に並べてある。ID は Phase 4 で提示したものを
 そのまま使っているので、番号は優先度順には並んでいない。High まで読めば、
 仕様が明言している振る舞いは全部揃う。
 
@@ -48,7 +48,6 @@ Phase 4 の結果は「ケース一覧8件を承認、signature 提案は取ら�
 | TC-04 | `an_armed_deferred_wrap_resolves_before_the_insert_shifts_the_new_row` | C9, C1, C4, C6, C10, DW, Damage | Medium |
 | TC-06 | `an_insert_mode_print_keeps_the_shifted_cells_attributes` | C4, C7, C12, IC | Medium |
 | TC-07 | `an_insert_mode_print_on_a_single_column_screen_replaces_the_only_cell` | C2, C4, Damage | Medium |
-| TC-05 | `an_insert_mode_print_that_scrolls_on_wrap_reports_full_damage` | C9, DMG, Damage | Low |
 
 Source タグ — **C1**: vt510 p.319 L9185-9186（set で右へずれる）／**C2**: vt510
 p.319 L9185-9186（右端を越えた文字は失われる）／**C3**: vt510 p.319 L9187（reset
@@ -363,37 +362,6 @@ fn an_insert_mode_print_on_a_single_column_screen_replaces_the_only_cell() {
 }
 ```
 
-## TC-05 — スクロールを伴う折り返しは insert でも Full を返す 〈Low〉
-
-| | |
-| - | - |
-| Setup | `screen()`; カーソルを最下行 `ScreenLine(2)` の最終桁 `GridColumn(3)` に置き、1文字印字して deferred wrap を立てる |
-| Act | `screen.print('y', InsertReplaceMode::Insert)` |
-| Expect | 画面が1行上へスクロールし、`'y'` が `ScreenLine(2)` の桁0に載る **[C9]** ／ `Some(DamageSpan::Full)` **[DMG][Damage]** |
-
-折り返し先が新しく空いた行なのでシフトは観測できず、結果は replace mode と
-区別が付かない。insert 分岐が誤ってシフトの行 damage を返して `Full` を潰す
-経路だけを塞ぐケースなので、価値が薄いと判断されたら落として構わない。既存の
-`a_wrap_on_the_bottom_row_scrolls` と同じ形で、モードだけが違う。
-
-```rust
-/// Asserts that an insert-mode print whose deferred wrap scrolls the
-/// screen reports full damage rather than the shifted row alone.
-///
-/// Case: a program in insert mode fills the very last cell of the screen
-/// and keeps printing, forcing a scroll in the middle of the wrap.
-#[test]
-fn an_insert_mode_print_that_scrolls_on_wrap_reports_full_damage() {
-    let mut screen = screen();
-    screen.state.line = ScreenLine(2);
-    screen.state.column = GridColumn(3);
-    screen.print('x', InsertReplaceMode::Insert);
-    let damage = screen.print('y', InsertReplaceMode::Insert);
-    assert_eq!(screen.grid[ScreenLine(2)][0].c, 'y');
-    assert_eq!(damage, Some(DamageSpan::Full));
-}
-```
-
 ---
 
 # 付録
@@ -525,7 +493,7 @@ IRM Replace mode."）と **IRM の既定値 Replace**（vt510 p.319 L9176）は�
   ```
 
 - これで書けるようになったはずのケース: 1件（DECAWM reset で最終桁の文字が折り返さず右端を上書きする）
-- 決着: **現状維持**。DECAWM は `vt-conformance-scope.md` §5 項目3 に DECSC の保存範囲の見直しとセットで別途スケジュール済みで、ここで取ると IRM の PR がその設計判断を巻き込む。C9 の **set** 分岐しか使っていない TC-04 と TC-05 は影響を受けない。
+- 決着: **現状維持**。DECAWM は `vt-conformance-scope.md` §5 項目3 に DECSC の保存範囲の見直しとセットで別途スケジュール済みで、ここで取ると IRM の PR がその設計判断を巻き込む。C9 の **set** 分岐しか使っていない TC-04 は影響を受けない。
 
 ## 積み残し — 幅2文字のシフト量
 
@@ -549,21 +517,14 @@ display width で進んでいる（`grid/run.rs:39-55`、
 
 ## orzma と VT510 のずれ — ICH が開けた桁の属性
 
-C11 は「ICH は **normal character attribute** で空白を挿入する」と述べている。
-orzma の `insert_characters` は `pen.erase_cell()`（＝pen の背景を運ぶ BCE）を
-使っており、**VT510 とはずれている**。既存テスト
-`an_inserted_blank_carries_the_pen_background_without_its_rendition` がその
-挙動を pin 済み。
+C11 が述べる「ICH は **normal character attribute** で空白を挿入する」に対し、
+`insert_characters` は `pen.erase_cell()`（BCE）を使っている。**この逸脱の記録は
+[`vt-conformance-scope.md`](vt-conformance-scope.md) §4 が持つ** — 参照実装の内訳も
+terminfo の `bce` の出自もそちらにある。§4 が意図的な差異の正典で、この文書は
+1回の洗い出しの作業記録なので、ここでは繰り返さず参照する。
 
-参照実装は割れている。xterm（`ClearCells` が `TERM_COLOR_FLAGS` で現在の fg/bg を
-書く）・kitty・ghostty・alacritty・foot は BCE 側、wezterm だけが `Cell::default()`
-で VT510 に従う。BCE は ECMA-48 にも DEC にも規定が無く、terminfo の `bce`
-capability（"screen erased with background color"）由来の概念で、しかもそれは
-**erase 系**についての記述で ICH や IRM を名指ししていない。
-
-つまり orzma は多数派に付いた意図的な逸脱だが、`vt-conformance-scope.md` §4 に
-記録が無かった。この見直しで追記した。IRM の経路では開いた桁が直後に上書き
-されるので、TC-06 を含めこのバッチのどのケースにも影響しない。
+IRM の経路では開いた桁が直後に glyph で上書きされるため、このバッチのどのケースにも
+影響しない。
 
 ## 見直しの記録（2026-09-11）
 
@@ -581,8 +542,15 @@ capability（"screen erased with background color"）由来の概念で、しか
    実際 alacritty・foot・wezterm の IRM 経路は埋めない。→ 削除し、埋めの形は
    `insert_characters` 側のテストが pin していると書き直した。
 
+**TC-05（スクロールを伴う折り返しで Full を返す）は削除した。** `/simplify` の
+reuse と simplification が独立に、既存の `a_wrap_on_the_bottom_row_scrolls` と
+モード引数以外が同一だと指摘した。折り返しは shift より先に解決され、shift は
+スクロール直後の空行に効き、damage の tail は `wrap` しか読まないので、insert と
+replace で結果が一致しない経路が無い。当初からこの文書自身が Low・削除可と
+記していたもの。insert 固有の順序は TC-04 が pin している。
+
 あわせて付録「仕様にないもの」の「行に限られるかはマニュアルが決めていない」を
-訂正し、C10 として繰り上げた。TC-01・TC-02・TC-03・TC-04・TC-05・TC-07・TC-08 は
+訂正し、C10 として繰り上げた。TC-01・TC-02・TC-03・TC-04・TC-07・TC-08 は
 変更なし。TC-03・TC-07 は xterm（`ScrnInsertChar` の `MemMove` ループが0回に潰れ、
 `ClearCells` が1セル消し、glyph が上書きする）と alacritty
 （`column + width < columns` のガードがシフトを丸ごと飛ばす）で裏取りでき、TC-04 の

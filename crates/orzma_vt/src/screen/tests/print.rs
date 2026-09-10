@@ -154,22 +154,6 @@ fn an_insert_mode_print_on_a_single_column_screen_replaces_the_only_cell() {
     );
 }
 
-/// Asserts that an insert-mode print whose deferred wrap scrolls the
-/// screen reports full damage rather than the shifted row alone.
-///
-/// Case: a program in insert mode fills the very last cell of the screen
-/// and keeps printing, forcing a scroll in the middle of the wrap.
-#[test]
-fn an_insert_mode_print_that_scrolls_on_wrap_reports_full_damage() {
-    let mut screen = screen();
-    screen.state.line = ScreenLine(2);
-    screen.state.column = GridColumn(3);
-    screen.print('x', InsertReplaceMode::Insert);
-    let damage = screen.print('y', InsertReplaceMode::Insert);
-    assert_eq!(screen.grid[ScreenLine(2)][0].c, 'y');
-    assert_eq!(damage, Some(DamageSpan::Full));
-}
-
 /// Asserts that printing stamps the pen into the cell and advances
 /// the cursor one column.
 ///

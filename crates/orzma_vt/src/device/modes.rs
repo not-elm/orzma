@@ -63,11 +63,9 @@ impl VtModes {
 /// Whether a printed character replaces the cell at the cursor or pushes
 /// the rest of the row right.
 ///
-/// The mode is device-wide: both screens share one value, so an
-/// alternate-screen flip shows the same mode it left, and neither
-/// `DECSC` nor `DECRC` touches it, because `DECSC` does not save it.
-/// `RIS` returns it to [`Self::Replace`], and `DECSTR` is specified to
-/// do the same once this terminal answers it.
+/// Both screens share one value, so an alternate-screen flip shows the
+/// mode it left, and `DECSC` does not carry it either — the saved-cursor
+/// state records why.
 ///
 /// # Control Functions
 ///
