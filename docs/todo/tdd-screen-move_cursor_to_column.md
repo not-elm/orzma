@@ -596,10 +596,10 @@ WR — Screen::seat_cursor
      justifies: TC-A2 and TC-A3
 
 SC — Screen::seat_cursor
-     "Every control function that addresses both axes ends here, and one
-      that addresses the column alone ends in [`Self::seat_column`],
-      which this delegates to. The origin, each clamp, and the wrap are
-      therefore still decided in one place apiece and cannot drift."
+     "This composes the two single-axis helpers, [`Self::seat_line`] and
+      [`Self::seat_column`], which absolute single-axis addressing
+      reaches directly, so the origin and each clamp are decided in one
+      place apiece and cannot drift."
      justifies: CHA reaches the column clamp and the wrap disarm through
      seat_column rather than writing state.column directly.
 

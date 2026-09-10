@@ -252,8 +252,7 @@ impl Screen {
     /// - `CUB` (`CSI Pn D`)
     /// - `BS` (`0x08`) — with a count of one
     pub fn move_cursor_left(&mut self, count: u16) {
-        self.state.column = GridColumn(self.state.column.0.saturating_sub(count));
-        self.state.pending_wrap = false;
+        self.seat_column(GridColumn(self.state.column.0.saturating_sub(count)));
     }
 
     /// Moves the cursor `count` columns right, stopping at the last
@@ -266,9 +265,7 @@ impl Screen {
     ///
     /// - `CUF` (`CSI Pn C`)
     pub fn move_cursor_right(&mut self, count: u16) {
-        let last = self.grid.size().cols - 1;
-        self.state.column = GridColumn(self.state.column.0.saturating_add(count).min(last));
-        self.state.pending_wrap = false;
+        self.seat_column(GridColumn(self.state.column.0.saturating_add(count)));
     }
 
     /// Rewinds the cursor to column zero and disarms the deferred wrap.
@@ -278,8 +275,7 @@ impl Screen {
     /// - `CR` (`0x0D`)
     /// - `NEL` (`0x85`, `ESC E`) — its first half
     pub fn carriage_return(&mut self) {
-        self.state.column = GridColumn(0);
-        self.state.pending_wrap = false;
+        self.seat_column(GridColumn(0));
     }
 
     /// Addresses the cursor at a one-based line and column, `None` for
@@ -295,15 +291,10 @@ impl Screen {
     /// - `CUP` (`CSI Pl ; Pc H`)
     /// - `HVP` (`CSI Pl ; Pc f`)
     pub fn move_cursor_to(&mut self, line: Option<u16>, column: Option<u16>) {
-        let line = match line {
-            None | Some(0) => 1,
-            Some(value) => value,
-        };
-        let column = match column {
-            None | Some(0) => 1,
-            Some(value) => value,
-        };
-        self.seat_cursor(ScreenLine(line - 1), GridColumn(column - 1));
+        self.seat_cursor(
+            ScreenLine(Self::addressed_index(line)),
+            GridColumn(Self::addressed_index(column)),
+        );
     }
 
     /// Addresses the cursor at a one-based column on the current line,
@@ -312,20 +303,16 @@ impl Screen {
     /// A zero addresses the first column, the same as a one, and a column
     /// past the last stops there. The row is never touched: this seats the
     /// column alone, so neither origin resolution nor a line clamp can move
-    /// the cursor off the row it is on. It also discards a pending deferred
-    /// wrap, the same disarm [`Self::seat_cursor`] performs when it
-    /// addresses both axes.
+    /// the cursor off the row it is on. [`Self::seat_column`] also discards
+    /// a pending deferred wrap, the same disarm the other addressing
+    /// methods perform.
     ///
     /// # Control Functions
     ///
     /// - `CHA` (`CSI Pn G`)
     /// - `HPA` (``CSI Pn ` ``)
     pub fn move_cursor_to_column(&mut self, column: Option<u16>) {
-        let column = match column {
-            None | Some(0) => 1,
-            Some(value) => value,
-        };
-        self.seat_column(GridColumn(column - 1));
+        self.seat_column(GridColumn(Self::addressed_index(column)));
     }
 
     /// Addresses the cursor at a one-based line in the current column,
@@ -334,20 +321,15 @@ impl Screen {
     /// A zero addresses the first line, the same as a one. The line is
     /// resolved against the current [`OriginMode`] and clamped, so a line
     /// past the addressable region stops at its edge rather than being
-    /// refused; the column value is untouched, but [`Self::seat_cursor`]
-    /// still discards a pending deferred wrap the same way it does when
-    /// addressing both axes.
+    /// refused. The column is never touched, but [`Self::seat_line`] still
+    /// discards a pending deferred wrap, the same disarm the other
+    /// addressing methods perform.
     ///
     /// # Control Functions
     ///
     /// - `VPA` (`CSI Pn d`)
     pub fn move_cursor_to_line(&mut self, line: Option<u16>) {
-        let line = match line {
-            None | Some(0) => 1,
-            Some(value) => value,
-        };
-        let column = self.state.column;
-        self.seat_cursor(ScreenLine(line - 1), column);
+        self.seat_line(ScreenLine(Self::addressed_index(line)));
     }
 
     /// Seats the cursor at `line` — measured from the origin the current
@@ -356,11 +338,21 @@ impl Screen {
     /// `CursorSet` ends in `ResetWrap`, unlike a linefeed, which
     /// preserves the wrap on purpose.
     ///
-    /// Every control function that addresses both axes ends here, and one
-    /// that addresses the column alone ends in [`Self::seat_column`],
-    /// which this delegates to. The origin, each clamp, and the wrap are
-    /// therefore still decided in one place apiece and cannot drift.
+    /// This composes the two single-axis helpers, [`Self::seat_line`] and
+    /// [`Self::seat_column`], which absolute single-axis addressing
+    /// reaches directly, so the origin and each clamp are decided in one
+    /// place apiece and cannot drift. Vertical relative motion, line
+    /// feeding, and tabulation keep their own barriers and stay outside
+    /// these helpers on purpose.
     fn seat_cursor(&mut self, line: ScreenLine, column: GridColumn) {
+        self.seat_line(line);
+        self.seat_column(column);
+    }
+
+    /// Seats the cursor at `line`, measured from the origin the current
+    /// [`OriginMode`] defines, clamping it to the addressable region and
+    /// disarming the deferred wrap, without touching the column.
+    fn seat_line(&mut self, line: ScreenLine) {
         let GridSize { rows, .. } = self.grid.size();
         let (origin, last) = match self.scroll_region.origin_mode() {
             OriginMode::WithinMargins => (
@@ -370,7 +362,7 @@ impl Screen {
             OriginMode::UpperLeftCorner => (ScreenLine(0), ScreenLine(rows - 1)),
         };
         self.state.line = ScreenLine(line.0.saturating_add(origin.0).min(last.0));
-        self.seat_column(column);
+        self.state.pending_wrap = false;
     }
 
     /// Seats the cursor at `column`, clamping it to the page and
@@ -379,6 +371,16 @@ impl Screen {
         let cols = self.grid.size().cols;
         self.state.column = GridColumn(column.0.min(cols - 1));
         self.state.pending_wrap = false;
+    }
+
+    /// The zero-based index a one-based addressing parameter names, where
+    /// an omitted parameter and an explicit zero both name the first
+    /// position.
+    fn addressed_index(parameter: Option<u16>) -> u16 {
+        match parameter {
+            None | Some(0) => 0,
+            Some(position) => position - 1,
+        }
     }
 }
 

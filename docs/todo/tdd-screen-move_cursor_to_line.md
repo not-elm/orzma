@@ -637,11 +637,11 @@ OR — Screen::seat_cursor
      because the seating helper resolves the line against it
 
 SC — Screen::seat_cursor
-     "Every control function that addresses both axes ends here, and one
-      that addresses the column alone ends in [`Self::seat_column`],
-      which this delegates to. The origin, each clamp, and the wrap are
-      therefore still decided in one place apiece and cannot drift."
-     justifies: VPA routes through seat_cursor rather than writing
+     "This composes the two single-axis helpers, [`Self::seat_line`] and
+      [`Self::seat_column`], which absolute single-axis addressing
+      reaches directly, so the origin and each clamp are decided in one
+      place apiece and cannot drift."
+     justifies: VPA routes through seat_line rather than writing
      state.line directly
 
 ND — Screen, "Cursor addressing" impl block
