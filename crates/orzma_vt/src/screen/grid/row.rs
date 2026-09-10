@@ -33,13 +33,19 @@ impl<T: Clone> Row<T> {
 }
 
 impl Row<Cell> {
+    /// How many runs [`Row::to_runs`] reserves up front. A single-attribute
+    /// row then carries capacity for a few runs instead of one per column,
+    /// and geometric growth reaches a highlighted row's twenty to forty runs
+    /// in one to three reallocations.
+    const RUNS_RESERVE: usize = 8;
+
     /// Coalesces the row's cells into the attribute runs a frame
     /// carries.
     ///
     /// Adjacent cells sharing foreground, background, and style become
     /// one [`Run`], and the runs together span every column of the row.
     pub fn to_runs(&self) -> Row<Run> {
-        let mut runs: Vec<Run> = Vec::with_capacity(self.0.len());
+        let mut runs: Vec<Run> = Vec::with_capacity(self.0.len().min(Self::RUNS_RESERVE));
         for cell in self.0.iter() {
             match runs.last_mut() {
                 Some(run) if run.fg == cell.fg && run.bg == cell.bg && run.style == cell.style => {
@@ -229,5 +235,23 @@ mod tests {
         let runs = row.to_runs();
         assert_eq!(runs.iter().map(|run| u32::from(run.cols)).sum::<u32>(), 8);
         assert_eq!(runs[0].text, "hi      ");
+    }
+
+    /// Asserts that a single-attribute row's run vector reserves at most
+    /// `RUNS_RESERVE` runs rather than one per column.
+    ///
+    /// Case: a frame carries one unstyled blank line of a wide terminal,
+    /// which coalesces into a single run.
+    #[test]
+    fn a_single_attribute_row_reserves_at_most_the_run_reserve() {
+        let row = Row::filled(200, Cell::default());
+        let runs = row.to_runs();
+        assert_eq!(runs.len(), 1);
+        assert!(
+            runs.0.capacity() <= Row::RUNS_RESERVE,
+            "capacity {} exceeds the reserve of {}",
+            runs.0.capacity(),
+            Row::RUNS_RESERVE
+        );
     }
 }

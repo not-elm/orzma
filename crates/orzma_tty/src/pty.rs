@@ -4,7 +4,7 @@ use crate::{
     CellPixels, SpawnOptions,
     error::{OrzmaTtyError, OrzmaTtyResult},
 };
-use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
+use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded, unbounded};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 #[cfg(any(test, feature = "test-support"))]
 use std::io::Result as IoResult;
@@ -13,12 +13,12 @@ use std::io::{Read, Write};
 use std::mem;
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
-#[cfg(windows)]
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
-#[cfg(windows)]
-use std::time::{Duration, Instant};
+#[cfg(any(windows, test))]
+use std::time::Duration;
+use std::time::Instant;
 
 /// PTY ownership for one spawned shell.
 ///
@@ -56,6 +56,10 @@ pub enum ExitPoll {
 }
 
 impl Pty {
+    /// How many reader chunks may wait unparsed before the reader thread
+    /// parks: 256 × 4 KiB = 1 MiB per pane, matching Alacritty's ceiling.
+    pub const CHUNK_QUEUE_CAPACITY: usize = 256;
+
     /// Opens a PTY at the given grid size, spawns `options.shell` under
     /// it as a login shell, and starts the blocking reader/wait OS
     /// thread.
@@ -98,7 +102,7 @@ impl Pty {
             }
         };
 
-        let (chunk_tx, chunk_rx) = unbounded::<Vec<u8>>();
+        let (chunk_tx, chunk_rx) = bounded::<Vec<u8>>(Self::CHUNK_QUEUE_CAPACITY);
         let (exit_tx, exit_rx) = unbounded::<Option<i32>>();
         spawn_reader_thread(reader, child, chunk_tx, exit_tx);
 
@@ -305,6 +309,83 @@ fn master_pipes(
     Ok((master.try_clone_reader()?, master.take_writer()?))
 }
 
+/// What the reader thread reports about its progress, shared with
+/// whoever needs to know whether output is still flowing.
+struct ReaderProgress {
+    /// When the reader last completed a read or a send.
+    last_activity: Mutex<Instant>,
+    /// `true` from the moment `try_send` finds the queue full until the
+    /// blocking `send` returns.
+    parked: AtomicBool,
+}
+
+impl ReaderProgress {
+    /// Progress for a reader that has just started: not parked, active
+    /// at `now`.
+    fn new(now: Instant) -> Self {
+        Self {
+            last_activity: Mutex::new(now),
+            parked: AtomicBool::new(false),
+        }
+    }
+
+    /// Whether a `send` is waiting on a full queue right now.
+    #[cfg(any(windows, test))]
+    fn is_parked(&self) -> bool {
+        self.parked.load(Ordering::Acquire)
+    }
+
+    /// How long before `now` the reader last completed a read or a send.
+    #[cfg(any(windows, test))]
+    fn idle_for(&self, now: Instant) -> Duration {
+        now.saturating_duration_since(*self.last_activity.lock().unwrap())
+    }
+
+    fn stamp(&self, now: Instant) {
+        *self.last_activity.lock().unwrap() = now;
+    }
+}
+
+/// Reads `reader` to EOF or error, sending each read as one chunk.
+/// Returns when the reader ends or the receiver is gone.
+///
+/// `progress` is stamped after every completed read and again after a
+/// blocking `send` returns, and its parked flag holds from the moment
+/// `try_send` finds the queue full until the blocking `send` returns, so
+/// a watcher can tell a reader parked on a full queue from one whose
+/// child went quiet.
+///
+/// # Invariants
+///
+/// The stamp after a blocking `send` is written before the parked flag
+/// clears. A watcher that observes the flag clear therefore also sees
+/// the fresh stamp, so it cannot pair "not parked" with the stale read
+/// stamp and report the exit early.
+fn forward_chunks(reader: &mut dyn Read, chunk_tx: &Sender<Vec<u8>>, progress: &ReaderProgress) {
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = match reader.read(&mut buf) {
+            Ok(0) | Err(_) => return,
+            Ok(n) => n,
+        };
+        progress.stamp(Instant::now());
+        let delivered = match chunk_tx.try_send(buf[..n].to_vec()) {
+            Ok(()) => true,
+            Err(TrySendError::Full(chunk)) => {
+                progress.parked.store(true, Ordering::Release);
+                let delivered = chunk_tx.send(chunk).is_ok();
+                progress.stamp(Instant::now());
+                progress.parked.store(false, Ordering::Release);
+                delivered
+            }
+            Err(TrySendError::Disconnected(_)) => false,
+        };
+        if !delivered {
+            return;
+        }
+    }
+}
+
 /// Spawns a dedicated OS thread that drains PTY output into `chunk_tx`
 /// and sends a single `exit_tx` message (`Some(code)` on graceful exit,
 /// `None` on wait failure) once the reader returns 0 or errors out.
@@ -318,19 +399,9 @@ fn spawn_reader_thread(
     chunk_tx: Sender<Vec<u8>>,
     exit_tx: Sender<Option<i32>>,
 ) {
+    let progress = Arc::new(ReaderProgress::new(Instant::now()));
     thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if chunk_tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
+        forward_chunks(reader.as_mut(), &chunk_tx, &progress);
         // NOTE: the exit status must be sent before this closure returns
         // and drops `chunk_tx` / `exit_tx`: `OrzmaTty::pump` treats a
         // disconnected chunk stream as fully drained, and the backend's
@@ -349,10 +420,12 @@ fn spawn_reader_thread(
 /// ConPTY keeps the output pipe open after the child exits until the
 /// pseudoconsole is closed, so the reader cannot learn about the exit from
 /// EOF the way the Unix reader does. The watcher waits [`OUTPUT_QUIESCENCE`]
-/// after the reader's last completed read so the child's final output is
-/// queued before the exit is reported; `OrzmaTty::pump` then reports
-/// `ChildExit` only once the queue is drained. The reader ends when the
-/// master is dropped by the pane teardown the exit triggers.
+/// after the reader's last completed read or send, as reported through its
+/// [`ReaderProgress`], and only while the reader is not parked on a full
+/// queue, so the child's final output is queued before the exit is
+/// reported; `OrzmaTty::pump` then reports `ChildExit` only once
+/// the queue is drained. The reader ends when the master is dropped by the
+/// pane teardown the exit triggers.
 #[cfg(windows)]
 fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
@@ -360,26 +433,12 @@ fn spawn_reader_thread(
     chunk_tx: Sender<Vec<u8>>,
     exit_tx: Sender<Option<i32>>,
 ) {
-    let last_read = Arc::new(Mutex::new(Instant::now()));
-    let reader_clock = Arc::clone(&last_read);
-    thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    *reader_clock.lock().unwrap() = Instant::now();
-                    if chunk_tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
+    let progress = Arc::new(ReaderProgress::new(Instant::now()));
+    let reader_progress = Arc::clone(&progress);
+    thread::spawn(move || forward_chunks(reader.as_mut(), &chunk_tx, &reader_progress));
     thread::spawn(move || {
         let code = child.wait().ok().map(|s| s.exit_code() as i32);
-        wait_for_output_quiescence(&last_read);
+        wait_for_output_quiescence(&progress, OUTPUT_QUIESCENCE, OUTPUT_QUIESCENCE_CAP);
         let _ = exit_tx.send(code);
     });
 }
@@ -389,22 +448,55 @@ fn spawn_reader_thread(
 #[cfg(windows)]
 const OUTPUT_QUIESCENCE: Duration = Duration::from_millis(50);
 
-/// The longest the watcher waits for the output to go quiet, so a
-/// pseudoconsole that keeps streaming cannot delay the exit forever.
+/// The longest the watcher lets an unparked reader stream after the
+/// child exits, so a pseudoconsole that keeps streaming cannot delay
+/// the exit forever.
 #[cfg(windows)]
 const OUTPUT_QUIESCENCE_CAP: Duration = Duration::from_secs(2);
 
-/// Blocks until no read has completed for [`OUTPUT_QUIESCENCE`], or
-/// [`OUTPUT_QUIESCENCE_CAP`] has passed.
-#[cfg(windows)]
-fn wait_for_output_quiescence(last_read: &Mutex<Instant>) {
-    let cap = Instant::now() + OUTPUT_QUIESCENCE_CAP;
+/// The shortest sleep between two polls of the reader's progress.
+#[cfg(any(windows, test))]
+const QUIESCENCE_POLL_FLOOR: Duration = Duration::from_millis(10);
+
+/// Blocks until the reader is not parked and no read or send has
+/// completed for `quiescence`, or until the reader has spent `cap` in
+/// total not parked.
+///
+/// A parked reader is not streaming, so time spent parked counts
+/// toward neither the idle window nor the cap: the exit is not reported
+/// while the child's output still waits in the pipe behind a full
+/// queue. The send stamp restarts the idle window on unpark, so a send
+/// that parked longer than the window cannot make the watcher fire
+/// before the next read completes.
+///
+/// An interval counts toward the cap only when both of its polls find
+/// the reader unparked; a park that spans a poll is never charged,
+/// while one that fits inside a single interval still is. With the
+/// production poll rate that over-count is bounded by one interval per
+/// park.
+#[cfg(any(windows, test))]
+fn wait_for_output_quiescence(progress: &ReaderProgress, quiescence: Duration, cap: Duration) {
+    let mut unparked = Duration::ZERO;
+    let mut last_poll = Instant::now();
+    let mut was_parked = progress.is_parked();
     loop {
-        let idle = last_read.lock().unwrap().elapsed();
-        if idle >= OUTPUT_QUIESCENCE || Instant::now() >= cap {
+        let now = Instant::now();
+        let parked = progress.is_parked();
+        if !parked && !was_parked {
+            unparked += now.saturating_duration_since(last_poll);
+        }
+        was_parked = parked;
+        last_poll = now;
+        let idle = progress.idle_for(now);
+        if (!parked && idle >= quiescence) || unparked >= cap {
             return;
         }
-        thread::sleep(OUTPUT_QUIESCENCE - idle);
+        let wait = if parked {
+            quiescence
+        } else {
+            quiescence.saturating_sub(idle)
+        };
+        thread::sleep(wait.max(QUIESCENCE_POLL_FLOOR));
     }
 }
 
@@ -429,9 +521,12 @@ impl ChildKiller for DetachedKiller {
 mod tests {
     use super::*;
     use crate::test_support::{FailingMaster, RecordingMaster};
+    use crossbeam_channel::bounded;
+    use std::io::Cursor;
     use std::io::sink;
-    use std::thread;
-    use std::time::{Duration, Instant};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread::JoinHandle;
 
     /// A program that prints one line and exits 0 on the host platform.
     fn echo_program() -> &'static str {
@@ -639,5 +734,191 @@ mod tests {
             assert!(Instant::now() < deadline, "no exit report arrived");
             thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    /// Spawns `forward_chunks` over `input` on its own thread and returns
+    /// the receiver, the shared progress, and the thread handle.
+    fn forwarding(
+        input: Vec<u8>,
+        capacity: usize,
+    ) -> (Receiver<Vec<u8>>, Arc<ReaderProgress>, JoinHandle<()>) {
+        let (chunk_tx, chunk_rx) = bounded::<Vec<u8>>(capacity);
+        let progress = Arc::new(ReaderProgress::new(Instant::now()));
+        let thread_progress = Arc::clone(&progress);
+        let reader = thread::spawn(move || {
+            let mut cursor = Cursor::new(input);
+            forward_chunks(&mut cursor, &chunk_tx, &thread_progress);
+        });
+        (chunk_rx, progress, reader)
+    }
+
+    /// Polls `condition` every millisecond and reports whether it held
+    /// before `within` elapsed.
+    fn holds_within(mut condition: impl FnMut() -> bool, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        while !condition() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        true
+    }
+
+    /// Whether `handle` finishes within `within`.
+    fn finishes_within(handle: &JoinHandle<()>, within: Duration) -> bool {
+        holds_within(|| handle.is_finished(), within)
+    }
+
+    /// Blocks until `progress` reports the reader parked, failing after
+    /// ten seconds.
+    fn wait_until_parked(progress: &ReaderProgress) {
+        assert!(
+            holds_within(|| progress.is_parked(), Duration::from_secs(10)),
+            "the reader never parked"
+        );
+    }
+
+    /// Asserts that the reader parks once the queue holds
+    /// `CHUNK_QUEUE_CAPACITY` chunks and forwards every byte once the
+    /// queue drains.
+    ///
+    /// Case: a child writes 2 MiB faster than the parser reads it, and
+    /// the parser catches up later.
+    #[test]
+    fn the_reader_parks_at_the_capacity_and_forwards_every_byte() {
+        let input = vec![0xABu8; 2 * 1024 * 1024];
+        let expected = input.len();
+        let (chunk_rx, progress, reader) = forwarding(input, Pty::CHUNK_QUEUE_CAPACITY);
+        wait_until_parked(&progress);
+        assert_eq!(chunk_rx.len(), Pty::CHUNK_QUEUE_CAPACITY);
+        let forwarded: usize = chunk_rx.iter().map(|chunk| chunk.len()).sum();
+        reader.join().expect("the reader thread ends at EOF");
+        assert_eq!(forwarded, expected);
+    }
+
+    /// Asserts that dropping the receiver while the reader is parked ends
+    /// the reader thread.
+    ///
+    /// Case: the user kills a pane whose parser fell behind a flooding
+    /// child, so the queue is full when the pane is torn down.
+    #[test]
+    fn dropping_the_receiver_while_parked_ends_the_reader() {
+        let (chunk_rx, progress, reader) =
+            forwarding(vec![0u8; 2 * 1024 * 1024], Pty::CHUNK_QUEUE_CAPACITY);
+        wait_until_parked(&progress);
+        drop(chunk_rx);
+        assert!(
+            finishes_within(&reader, Duration::from_secs(10)),
+            "the parked reader did not end"
+        );
+        reader
+            .join()
+            .expect("the reader thread ends on a gone receiver");
+    }
+
+    /// Runs the watcher on its own thread with the given windows.
+    fn watch(
+        progress: &Arc<ReaderProgress>,
+        quiescence: Duration,
+        cap: Duration,
+    ) -> JoinHandle<()> {
+        let progress = Arc::clone(progress);
+        thread::spawn(move || wait_for_output_quiescence(&progress, quiescence, cap))
+    }
+
+    /// Asserts that the watcher does not return while the reader is
+    /// parked, even after the idle window elapsed and even past the cap.
+    ///
+    /// Case: the child exits with its last output still in the pipe
+    /// behind a full queue, and the parser takes longer than the cap to
+    /// catch up.
+    #[test]
+    fn the_watcher_waits_while_the_reader_is_parked_even_past_the_cap() {
+        let progress = Arc::new(ReaderProgress::new(Instant::now()));
+        progress.parked.store(true, Ordering::Release);
+        let watcher = watch(
+            &progress,
+            Duration::from_millis(20),
+            Duration::from_millis(100),
+        );
+        assert!(
+            !finishes_within(&watcher, Duration::from_millis(300)),
+            "the watcher returned while the reader was parked"
+        );
+        progress.stamp(Instant::now());
+        progress.parked.store(false, Ordering::Release);
+        assert!(finishes_within(&watcher, Duration::from_secs(2)));
+    }
+
+    /// Asserts that after an unpark the watcher waits a fresh idle window
+    /// from the send stamp, even though the read stamp is already older
+    /// than the window.
+    ///
+    /// Case: a send parked longer than the idle window returns, and the
+    /// child's next read has not completed yet.
+    #[test]
+    fn an_unpark_restarts_the_idle_window_from_the_send_stamp() {
+        let quiescence = Duration::from_millis(50);
+        let stale = Instant::now()
+            .checked_sub(Duration::from_millis(200))
+            .expect("a monotonic instant 200 ms ago exists");
+        let progress = Arc::new(ReaderProgress::new(stale));
+        progress.parked.store(true, Ordering::Release);
+        let watcher = watch(&progress, quiescence, Duration::from_secs(2));
+        thread::sleep(Duration::from_millis(100));
+        let unparked_at = Instant::now();
+        progress.stamp(unparked_at);
+        progress.parked.store(false, Ordering::Release);
+        assert!(finishes_within(&watcher, Duration::from_secs(2)));
+        assert!(
+            unparked_at.elapsed() >= quiescence,
+            "the watcher returned before a fresh idle window elapsed"
+        );
+    }
+
+    /// Asserts that the cap still bounds an unparked reader that never
+    /// goes idle.
+    ///
+    /// Case: a pseudoconsole keeps streaming after the child exited and
+    /// the reader keeps completing reads.
+    #[test]
+    fn the_cap_bounds_an_unparked_reader_that_never_goes_idle() {
+        let progress = Arc::new(ReaderProgress::new(Instant::now()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stamper = {
+            let progress = Arc::clone(&progress);
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                while !stop.load(Ordering::Acquire) {
+                    progress.stamp(Instant::now());
+                    thread::sleep(Duration::from_millis(5));
+                }
+            })
+        };
+        let watcher = watch(
+            &progress,
+            Duration::from_millis(50),
+            Duration::from_millis(150),
+        );
+        let finished = finishes_within(&watcher, Duration::from_secs(2));
+        stop.store(true, Ordering::Release);
+        stamper.join().expect("the stamper ends");
+        assert!(finished);
+    }
+
+    /// Asserts that an idle, unparked reader lets the watcher return
+    /// after one idle window.
+    ///
+    /// Case: the child printed its farewell, the reader queued it, and
+    /// nothing else arrives.
+    #[test]
+    fn an_idle_unparked_reader_returns_after_one_window() {
+        let started = Instant::now();
+        let progress = Arc::new(ReaderProgress::new(started));
+        let watcher = watch(&progress, Duration::from_millis(30), Duration::from_secs(2));
+        assert!(finishes_within(&watcher, Duration::from_secs(2)));
+        watcher.join().expect("the watcher ends");
+        assert!(started.elapsed() >= Duration::from_millis(30));
     }
 }
