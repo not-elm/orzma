@@ -435,27 +435,16 @@ impl Screen {
 
     /// Inserts `count` blank characters at the cursor: the cells to its
     /// right move right keeping their own attributes, the cells pushed
-    /// past the last column are lost, and the cursor stays where it
-    /// is.
+    /// past the last column are lost, and the cursor stays where it is.
     ///
     /// The count is clamped to the columns from the cursor through the
-    /// last one, and the blanks carry the pen's erase cell. An insert
-    /// that moves cells disarms the deferred wrap; a zero count returns
-    /// before anything is touched, the flag included, as
-    /// [`Self::insert_lines`] likewise leaves the cursor alone when it
-    /// shifts nothing.
-    ///
-    /// Unlike [`Self::insert_lines`], the edit applies wherever the
-    /// cursor sits: VT510 gives `ICH` "no effect outside the scrolling
-    /// margins" and xterm, alacritty, kitty, ghostty, VTE and foot all
-    /// ignore the vertical half of that (xterm and ghostty do gate on
-    /// the horizontal half, which orzma does not model yet).
-    ///
-    /// The shift moves cells past two anchors that hold an absolute
-    /// column: an active selection's ends and a mounted placement's.
-    /// When the cursor's row is inside a selection, xterm shifts its
-    /// ends with the content under `keepSelection` and disowns it
-    /// otherwise; orzma leaves both anchors where they are.
+    /// last one, and the blanks carry the pen's erase cell. A shift
+    /// disarms the deferred wrap; a zero count returns before anything
+    /// is touched, that flag included. Unlike [`Self::insert_lines`],
+    /// the edit applies wherever the cursor sits, ignoring the
+    /// scrolling margins VT510 gates `ICH` on, as xterm, alacritty,
+    /// kitty, ghostty, VTE and foot do. Selection and placement
+    /// anchors hold absolute columns and do not move with the content.
     ///
     /// # Control Functions
     ///
@@ -470,20 +459,15 @@ impl Screen {
     }
 
     /// Deletes `count` characters at the cursor: the cells to their
-    /// right move left, blanks fill the columns that open at the last
-    /// column, and the cursor stays where it is.
+    /// right move left keeping their own attributes, the pen's erase
+    /// cell fills the columns that open at the last column, and the
+    /// cursor stays where it is.
     ///
     /// The count is clamped to the columns from the cursor through the
     /// last one, never to the row width, which would blank a column
-    /// left of the cursor. The cells that shift keep their own
-    /// attributes; the columns that open take the pen's erase cell.
-    ///
-    /// No manual states where the cursor ends up — VT510 and VT220
-    /// both omit it, where they state it for `ICH` — so leaving it put
-    /// follows xterm. Everything [`Self::insert_characters`] records
-    /// about the scrolling margins, the deferred wrap, and the column
-    /// anchors the shift leaves behind holds here too, against VT510's
-    /// matching `DCH` wording.
+    /// left of the cursor. Everything [`Self::insert_characters`]
+    /// records about the zero count, the scrolling margins, the
+    /// deferred wrap, and the column anchors holds here too.
     ///
     /// # Control Functions
     ///
