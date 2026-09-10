@@ -32,18 +32,18 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 
 | 略号 | 落ち先 |
 |---|---|
-| `CSI∅` | `csi_dispatch` 末尾の `_ => {}`（`interpreter.rs:385`） |
+| `CSI∅` | `csi_dispatch` 末尾の `_ => {}`（`interpreter.rs:393`） |
 | `ESC∅` | `esc_dispatch` 末尾の `_ => {}`（`interpreter.rs:222`） |
-| `MODE∅` | `set_private_modes`（`interpreter.rs:553`）に番号が無い |
+| `MODE∅` | `set_private_modes`（`interpreter.rs:561`）に番号が無い |
 | `INTER∅` | intermediate 付きが dispatch 前に落ちる（`interpreter.rs:228`） |
-| `OSC∅` | `osc_dispatch`（`interpreter.rs:389`）は title と cwd のみ |
+| `OSC∅` | `osc_dispatch`（`interpreter.rs:397`）は title と cwd のみ |
 
 ### 1-A. 描画が壊れるもの（最優先）
 
 | シーケンス | 機能 | terminfo | 現状 | 実測頻度 † | 影響 |
 |---|---|---|---|---:|---|
-| `CSI ?25 h/l` | DECTCEM | `civis`/`cnorm`/`cvvis` | `MODE∅`。`screen.rs:884` の TODO でカーソルは `visible: true` 固定 | **590** | 再描画中もカーソルが本文上に残る |
-| `CSI Ps X` | **ECH** | `ech` | `CSI∅` | **73** | 消去されず旧テキストが残る（**今回のバグ**） |
+| `CSI ?25 h/l` | DECTCEM | `civis`/`cnorm`/`cvvis` | `MODE∅`。`screen.rs:916` の TODO でカーソルは `visible: true` 固定 | **590** | 再描画中もカーソルが本文上に残る |
+| ~~`CSI Ps X`~~ | ~~**ECH**~~ | `ech` | **✅ 実装済み（2026-09-10）** | 73 | ~~消去されず旧テキストが残る~~（今回のバグ。解消済み） |
 | `CSI Ps @` | ICH | `ich`, `mir` | `CSI∅` | 0 | 挿入描画が上書きになり行が壊れる |
 | `CSI Ps P` | DCH | `dch`, `dch1` | `CSI∅` | 0 | 削除されず後続が詰まらない |
 | `CSI Ps G` | CHA | `hpa` | `CSI∅` | 0 | 桁移動が無視され以降の描画が全部ズレる |
@@ -126,24 +126,26 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 
 | 対象 | 内容 |
 |---|---|
-| **EL の pending-wrap 例外** | `screen.rs:574` は deferred wrap 中の `CSI 0 K` を**何もせず返す**。テスト `erase_to_end_is_a_no_op_under_pending_wrap` は Alacritty の方針を根拠にしているが、**PDF p.13 にこの例外は無く**、DEC の EL 定義はアクティブ位置を含み、xterm の `ClearRight` もそのセルを消す。`xenl` は理由にならない。**xterm 非互換の可能性が高いので、ECH 実装と同時に再判断する** |
-| **1049 の pen 引き継ぎ** | `interpreter.rs:609` に「代替画面の古い pen を使う」と明記。xterm は pen を共有するので、入場時のクリアが違う背景色になり得る。BCE の正しさにも波及 |
-| **DECSC/DECRC の保存範囲** | `screen.rs:982` は多くを復元するが、DECAWM が無いので保存できていない。DECAWM 実装時に合わせる |
-| **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:686` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意 |
+| **EL / ECH の pending-wrap 例外**（決着済み） | **決着: no-op を維持し、ECH も同じ方針に揃えた（2026-09-10）。参照実装が割れていることを承知した上で tmux 側を選択。** 経緯: DEC の EL 定義はアクティブ位置を含む（vt220 PDF p.36 L1754「including the cursor position」、vt510 PDF p.311 L9074「From the cursor through the end of the line」— いずれも検証済み）が、**どのマニュアルも deferred wrap をモデル化していない**ため、wrap 中にカーソルが論理的にどこに居るかを裁定しない。tmux 3.7c で実測したところ、幅10の行を埋めた状態で `CSI 0 K` も `CSI 1 X` も**何も消さず wrap も保持する**（行中では両方とも正常に動く）。tmux は `screen_write_clearcharacter` が `cx > sx - 1` で早期 return するモデル A。**訂正: 当初「alacritty も同様」と記録したが、これは誤り。** alacritty は EL と ECH を**意図的に区別している** — `alacritty_terminal-0.26.0/src/term/mod.rs:1643` の `clear_line` は `LineClearMode::Right if cursor.input_needs_wrap => return` を持つが、同 1519-1535 の `erase_chars` には `input_needs_wrap` の判定が**一切無く**、wrap 中でも最終列を消す。xterm の `CASE_ECH` も `do_wrap` を見ない。つまり **ECH の no-op を支持する参照実装は tmux 1つだけ**。`xterm-256color` を名乗ること、alacritty と xterm が逆であること、`docs/todo/nvim-tree-stale-cells-ech.md` §6.1 で実測検証した版にこのガードが無かったこと — これらを**承知した上で tmux 側を選択した**。実 nvim のキャプチャでは ECH は全て行中発行でこの境界を踏まないため、今回のバグ修正の妥当性には影響しない。xterm を実機で実測できた時点で再訪する価値はある |
+| **1049 の pen 引き継ぎ** | `interpreter.rs:617` に「代替画面の古い pen を使う」と明記。xterm は pen を共有するので、入場時のクリアが違う背景色になり得る。BCE の正しさにも波及 |
+| **DECSC/DECRC の保存範囲** | `screen.rs:1014` は多くを復元するが、DECAWM が無いので保存できていない。DECAWM 実装時に合わせる |
+| **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:694` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意 |
 | **`CSI 3 J`** | `screen.rs:106` で明示的に拒否。entry は `E3` を広告していないので Tier 1 ではないが、PDF p.13 には定義がある |
 | **SGR 下線拡張** | `sgr.rs:31` が下線種別を潰し、下線色は読み捨て。vim の `58;2` 発行はリポジトリ内に既知（`sgr.rs:675`） |
 | **タブストップの所有** | `tabs.rs:63` が「画面ごと」と明記。xterm は共有テーブル。PDF は所有権を規定していないので、意図的な差異として記録済み |
 
 ## 5. 実装順（推奨）
 
-1. **ECH → ICH/DCH → IRM**、同時に **EL の pending-wrap 例外を再判断**。
+1. ~~**ECH**~~ **完了（2026-09-10）** → 次は **ICH/DCH → IRM**。
+   EL / ECH の pending-wrap 例外は §4 のとおり**暫定で** no-op を維持している（ECH も追従）。
+   根拠の一部（alacritty）が誤りだったので、ICH/DCH に着手する前に再判断すること。
    行内スプライスのプリミティブを共有する。現状 `Grid` には `fill_visible_row_range` は
    あるが**行内シフトが無い**ので、ICH/DCH には新規プリミティブが要る。
-   ECH は既存の fill だけで済むので**まずこれ単体で今回のバグが直る**。
+   ECH は既存の fill だけで済んだ（今回のバグはこれ単体で解消）。
 2. **CHA/VPA + HPA/HPR/VPR**、**SCOSC/SCORC**、**SD `^` 別名**。
    カーソル系ヘルパを共有。`CSI s` は将来の DECLRMM 分岐を見越した形に。
 3. **DECAWM / DECTCEM / カーソル点滅 / DECSCUSR**。
-   `Screen::cursor()` の固定値（`screen.rs:884` の TODO）を実データに置き換える。
+   `Screen::cursor()` の固定値（`screen.rs:916` の TODO）を実データに置き換える。
    DECSC/DECRC の保存範囲もここで揃える。
 4. **DECSTR と初期化系**、**1049 の pen 修正**。
 5. **入力側の契約修正**（`kbs` の方針決定 → Shift-Tab → ファンクションキー → 修飾キー → Meta）。
