@@ -333,6 +333,33 @@ impl Screen {
         self.seat_column(GridColumn(column - 1));
     }
 
+    /// Addresses the cursor at a one-based line in the current column,
+    /// `None` for an omitted parameter.
+    ///
+    /// A zero addresses the first line, the same as a one. The line is
+    /// resolved against the current [`OriginMode`] and clamped, so a line
+    /// past the addressable region stops at its edge rather than being
+    /// refused; the column is untouched.
+    ///
+    /// # Control Functions
+    ///
+    /// - `VPA` (`CSI Pn d`)
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "csi_dispatch reaches this once VPA dispatch lands"
+        )
+    )]
+    pub fn move_cursor_to_line(&mut self, line: Option<u16>) {
+        let line = match line {
+            None | Some(0) => 1,
+            Some(value) => value,
+        };
+        let column = self.state.column;
+        self.seat_cursor(ScreenLine(line - 1), column);
+    }
+
     /// Seats the cursor at `line` — measured from the origin the current
     /// [`OriginMode`] defines — and `column`, clamping both axes and
     /// disarming the deferred wrap. The disarm follows xterm, whose
