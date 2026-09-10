@@ -1,0 +1,182 @@
+# `xterm-256color` 準拠のための実装スコープ（Tier 1 / Tier 2）
+
+調査日: 2026-09-10 / 対象リビジョン: `6b9f0bb`
+発端: [nvim-tree-stale-cells-ech.md](nvim-tree-stale-cells-ech.md)（ECH 未実装による表示崩れ）
+
+## 0. 判断基準
+
+orzma は継承 `TERM` が空のとき `xterm-256color` を名乗る（`src/main.rs:126-144`）。
+**名乗った以上、その terminfo エントリが広告する capability は実装契約**になる。
+xterm-ctlseqs.pdf 全体の網羅は目標にしない。
+
+- **Tier 1 = 必須** — `infocmp xterm-256color` が広告していて orzma が未実装のもの。
+- **Tier 2 = 推奨** — terminfo を経由せず TUI が直接叩くもの。
+
+### 参照章の地図（`docs/references/xterm-ctlseqs.pdf`）
+
+| 章 | 頁 | 内容 |
+|---|---|---|
+| C1 (8-Bit) Control Characters | 5 | `ESC D/E/H/M/N/O/P/V/W/X/Z/[/\/]/^/_` |
+| Single-character functions | 6 | BEL/BS/CR/LF/HT/SI/SO |
+| Controls beginning with ESC | 7–10 | 上記**以外**の ESC 系。`ESC [` は明示的に除外 |
+| **Functions using CSI** | **12–38** | ECH・ICH・DCH 等はすべてここ |
+| Operating System Commands | 38–42 | OSC |
+
+> `Controls beginning with ESC` 節の冒頭に *"This excludes controls where ESC is part of a
+> 7-bit equivalent to 8-bit C1 controls"* とあり、**CSI 系はこの節に載らない**。
+> スコープを ESC 章で切ると今回のバグ（ECH）を取りこぼす。
+
+## 1. Tier 1 — 必須
+
+未実装の落ち先は 3 箇所。表では次の略号で示す。
+
+| 略号 | 落ち先 |
+|---|---|
+| `CSI∅` | `csi_dispatch` 末尾の `_ => {}`（`interpreter.rs:385`） |
+| `ESC∅` | `esc_dispatch` 末尾の `_ => {}`（`interpreter.rs:222`） |
+| `MODE∅` | `set_private_modes`（`interpreter.rs:553`）に番号が無い |
+| `INTER∅` | intermediate 付きが dispatch 前に落ちる（`interpreter.rs:228`） |
+| `OSC∅` | `osc_dispatch`（`interpreter.rs:389`）は title と cwd のみ |
+
+### 1-A. 描画が壊れるもの（最優先）
+
+| シーケンス | 機能 | terminfo | 現状 | 実測頻度 † | 影響 |
+|---|---|---|---|---:|---|
+| `CSI ?25 h/l` | DECTCEM | `civis`/`cnorm`/`cvvis` | `MODE∅`。`screen.rs:884` の TODO でカーソルは `visible: true` 固定 | **590** | 再描画中もカーソルが本文上に残る |
+| `CSI Ps X` | **ECH** | `ech` | `CSI∅` | **73** | 消去されず旧テキストが残る（**今回のバグ**） |
+| `CSI Ps @` | ICH | `ich`, `mir` | `CSI∅` | 0 | 挿入描画が上書きになり行が壊れる |
+| `CSI Ps P` | DCH | `dch`, `dch1` | `CSI∅` | 0 | 削除されず後続が詰まらない |
+| `CSI Ps G` | CHA | `hpa` | `CSI∅` | 0 | 桁移動が無視され以降の描画が全部ズレる |
+| `CSI Ps d` | VPA | `vpa` | `CSI∅` | 0 | 同上（行方向） |
+| `CSI 4 h/l` | IRM | `smir`/`rmir`, `mir` | `CSI∅`（**非 private SM/RM 自体が未実装**） | 0 | 挿入モードが効かず上書きになる |
+| `CSI ?7 h/l` | DECAWM | `smam`/`rmam`, `am`, `xenl` | `MODE∅`。折り返しは無条件（`screen.rs:153`） | 0 | 折り返し禁止が効かず右端で溢れる／スクロールする |
+
+† 実測頻度は「`TERM=xterm-256color`・`$TMUX` なしで nvim を起動し neo-tree を開いて終了」
+までの 1 セッション（63,860 バイト）で数えた出現回数。0 は「この計測では出なかった」で
+あり、他のプログラムでは出る。
+
+### 1-B. 状態・初期化（次点）
+
+| シーケンス | 機能 | terminfo | 現状 | 影響 |
+|---|---|---|---|---|
+| `CSI ! p` | DECSTR ソフトリセット | `is2`, `rs2` | `INTER∅` | **terminfo 経由の初期化列の先頭**。毎回無視されモードが残留する。`CharacterSetMapping::reset()` は DECSTR 待ちで `#[expect(dead_code)]` のまま（`character_sets.rs:220`） |
+| `CSI ?12 h/l` | カーソル点滅 | `cnorm`, `cvvis` | `MODE∅`。`blinking: false` 固定 | 点滅指定が効かない |
+| `CSI ?3 l` | DECCOLM リセット | `is2`, `rs2` の一部 | `MODE∅` | 初期化列に含まれる |
+| `CSI ?1034 h/l` | 8bit Meta | `smm`/`rmm`, `km` | `MODE∅` | Meta キーのバイト表現が食い違う |
+| `CSI ?5 h/l` | DECSCNM 反転 | `flash` | `MODE∅` | ビジュアルベルが無反応 |
+| `CSI 5 m` | SGR blink | `blink`, `sgr` | **意図的に no-op**（`sgr.rs:112` の `5 \| 6 \| 25 \| ... => {}`） | 点滅が普通の文字になる。`Style` へのビット追加＋レンダラ対応が要る |
+| `OSC 4;n;rgb:…` | インデックス色変更 | `initc`, `ccc` | `OSC∅` | パレット変更が効かない |
+
+> `CSI ?4 l`（DECSCLM リセット）は広告されているが、orzma はもともとジャンプスクロール
+> なので**追加で壊れる挙動は無い**。実装は不要。
+
+### 1-C. レガシー（広告はされているが実務価値が低い）
+
+| シーケンス | 機能 | terminfo | 判断 |
+|---|---|---|---|
+| `CSI 0i` / `CSI 4i` / `CSI 5i` | MC プリンタ制御 | `mc0`/`mc4`/`mc5`/`mc5i` | **無視で可**。ただし「意図的に無視」とコメントを残す |
+| `ESC l` / `ESC m` | HP メモリロック | `meml`/`memu` | **無視で可**。同上 |
+
+## 2. Tier 2 — 推奨
+
+terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ローカルの
+`xterm-256color` エントリには無い」の意。
+
+| シーケンス | 機能 | 現状 | 直接叩く実例 |
+|---|---|---|---|
+| `CSI Ps SP q` | DECSCUSR カーソル形状 | `INTER∅`。`Cursor` 型と `CursorShape` は既にある | **nvim が実測 5 回**（`CSI 0 q` / `1 q` / `2 q`）。vim の `term.c` |
+| `CSI s` / `CSI u` | SCOSC / SCORC | `CSI∅` | blessed の `saveCursorA`/`restoreCursorA`、btop |
+| `CSI ?2026 h/l` | 同期出力 | `MODE∅`。`struct SyncBuffer {}` は**空のプレースホルダ**（`interpreter.rs:83`） | fzf がフレーム毎に発行。nvim/tmux/kitty |
+| `CSI ?1004` → `CSI I` / `CSI O` | フォーカス通知 | **モードは保存されるが送信側が存在しない**（`focus_in_out` の参照は定義と代入の 2 箇所のみ） | vim/nvim。フォーカス復帰時の再描画が来ない |
+| `OSC 10/11/12` | 前景/背景/カーソル色（問い合わせ含む） | `OSC∅` | vim/nvim の `background` 自動判定 |
+| `OSC 52` | クリップボード | `OSC∅` | nvim の osc52 provider、tmux |
+| `OSC 8` | ハイパーリンク | `OSC∅`。interner は未接続（`hyperlink.rs:15`） | nvim。レンダラ側に受け皿は既にある |
+| `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `INTER∅` | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する** |
+| `DCS $ q … ST` / `DCS + q … ST` | DECRQSS / XTGETTCAP | DCS コールバックが空（`interpreter.rs:148`） | vim のカーソル形状復元・capability 検出 |
+| ``CSI Ps ` `` / `CSI Ps a` / `CSI Ps e` | HPA / HPR / VPR | `CSI∅` | vttest。CHA/VPA と同じヘルパで済む |
+| `CSI Ps b` | REP | `CSI∅` | **ローカルエントリは `rep` を広告していない**ため Tier 2。vttest |
+| `CSI Ps ^` | SD（ECMA-48 綴り） | `CSI∅`。orzma は `CSI T` のみ | 実際に発行するプログラムは**未確認**。安いので別名として入れる程度 |
+| `CSI ?69 h/l` / `CSI Pl;Pr s` | DECLRMM / DECSLRM | `MODE∅` / `CSI∅` | nvim。矩形スクロールに必要 |
+| `CSI ?1015 h/l` | urxvt マウス | `MODE∅` | btop が 1015→1006 の順に発行。1006 があるので実害は小 |
+
+### `CSI s` の曖昧性
+
+PDF p.30 の原文どおり、**パラメータ数ではなく DECLRMM（モード 69）の状態**で決まる。
+
+- モード 69 **無効** → `CSI s` は SCOSC（*"Save cursor, available only when DECLRMM is disabled"*）
+- モード 69 **有効** → `CSI Pl ; Pr s` は DECSLRM（*"available only when DECLRMM is enabled"*）
+
+orzma は DECLRMM を持たない＝常に無効なので、**今は `CSI s` を素直に SCOSC にしてよい**。
+将来 DECSLRM を入れるときにこの分岐を追加する。
+
+## 3. 入力側（orzma が「送る」バイト）の契約ズレ
+
+Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/` の担当。
+
+| capability | 広告値 | orzma の送信 | 判断 |
+|---|---|---|---|
+| `kbs` | `^H` (0x08) | `0x7f` (DEL) — `keyboard.rs:91` | **要判断**。entry とは食い違うが、DEL は現代の端末の事実上の標準。「ncurses の entry に合わせる」か「DEL のまま明示的に据える」かを決めて記録する |
+| `kcbt` | `ESC [Z` | Shift-Tab が HT のまま | 修正対象 |
+| `kich1` | `ESC [2~` | Insert キーの割り当てが無い | 修正対象 |
+| `kf1`–`kf63` | `SS3 P/Q/R/S`, `CSI n ~` ほか | ファンクションキーが語彙に無い | 修正対象 |
+| `kDC`/`kEND`/`kHOM`/`kLFT`/`kRIT` 等 | `CSI 1;2D` 等 | 修飾キーが落ちる（`keyboard.rs:81`） | 修正対象 |
+| `kb2`/`kent` | `SS3 E` / `SS3 M` | キーパッド識別がホスト側で経路化されていない | 修正対象 |
+
+## 4. 既存実装の疑わしい点（新規実装より先に判断が要る）
+
+| 対象 | 内容 |
+|---|---|
+| **EL の pending-wrap 例外** | `screen.rs:574` は deferred wrap 中の `CSI 0 K` を**何もせず返す**。テスト `erase_to_end_is_a_no_op_under_pending_wrap` は Alacritty の方針を根拠にしているが、**PDF p.13 にこの例外は無く**、DEC の EL 定義はアクティブ位置を含み、xterm の `ClearRight` もそのセルを消す。`xenl` は理由にならない。**xterm 非互換の可能性が高いので、ECH 実装と同時に再判断する** |
+| **1049 の pen 引き継ぎ** | `interpreter.rs:609` に「代替画面の古い pen を使う」と明記。xterm は pen を共有するので、入場時のクリアが違う背景色になり得る。BCE の正しさにも波及 |
+| **DECSC/DECRC の保存範囲** | `screen.rs:982` は多くを復元するが、DECAWM が無いので保存できていない。DECAWM 実装時に合わせる |
+| **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:686` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意 |
+| **`CSI 3 J`** | `screen.rs:106` で明示的に拒否。entry は `E3` を広告していないので Tier 1 ではないが、PDF p.13 には定義がある |
+| **SGR 下線拡張** | `sgr.rs:31` が下線種別を潰し、下線色は読み捨て。vim の `58;2` 発行はリポジトリ内に既知（`sgr.rs:675`） |
+| **タブストップの所有** | `tabs.rs:63` が「画面ごと」と明記。xterm は共有テーブル。PDF は所有権を規定していないので、意図的な差異として記録済み |
+
+## 5. 実装順（推奨）
+
+1. **ECH → ICH/DCH → IRM**、同時に **EL の pending-wrap 例外を再判断**。
+   行内スプライスのプリミティブを共有する。現状 `Grid` には `fill_visible_row_range` は
+   あるが**行内シフトが無い**ので、ICH/DCH には新規プリミティブが要る。
+   ECH は既存の fill だけで済むので**まずこれ単体で今回のバグが直る**。
+2. **CHA/VPA + HPA/HPR/VPR**、**SCOSC/SCORC**、**SD `^` 別名**。
+   カーソル系ヘルパを共有。`CSI s` は将来の DECLRMM 分岐を見越した形に。
+3. **DECAWM / DECTCEM / カーソル点滅 / DECSCUSR**。
+   `Screen::cursor()` の固定値（`screen.rs:884` の TODO）を実データに置き換える。
+   DECSC/DECRC の保存範囲もここで揃える。
+4. **DECSTR と初期化系**、**1049 の pen 修正**。
+5. **入力側の契約修正**（`kbs` の方針決定 → Shift-Tab → ファンクションキー → 修飾キー → Meta）。
+6. **OSC 4/10/11/12** とその問い合わせ・リセット。
+7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
+8. **OSC 8 / OSC 52**、**DECLRMM/DECSLRM**、**1015**。
+9. **残りの厳密準拠**: SGR blink、DECSCNM、メモリロック、プリンタ制御。
+
+## 6. 検証方法
+
+各シーケンスのテストケースは `docs/references/` を根拠に洗い出す（`/enumerate-test-cases`）。
+加えて、実プログラムでの回帰は次の方法が安い:
+
+```bash
+# 1) TERM を変えて対象プログラムを PTY で走らせ、生バイト列を取る
+#    （$TMUX を必ず unset すること。nvim が tmux 互換モードに入って挙動が変わる）
+# 2) 当該シーケンスの出現回数を数える
+python3 -c "import re,sys;d=open(sys.argv[1],'rb').read();print(len(re.findall(rb'\x1b\[[0-9;]*X',d)))" capture.raw
+# 3) OrzmaVt に流して grid をダンプし、期待と突き合わせる
+```
+
+`vttest` を通すのも有効（Tier 2 の HPA/HPR/VPR/REP はいずれも vttest が直接発行する）。
+
+---
+
+## 付記: この一覧の作り方
+
+`infocmp xterm-256color` の boolean 8 個（`am` `bce` `ccc` `km` `mir` `msgr` `npc` `xenl`）と
+文字列 capability 82 個を 1 つずつ制御機能に対応付け、orzma の `csi_dispatch` /
+`esc_dispatch` / `set_private_modes` / `osc_dispatch` と突き合わせた。
+Codex CLI にも独立して同じ洗い出しをさせ、両者の差分を個別に検証して統合している。
+統合時に判明した訂正:
+
+- `rep` は**このエントリには無い** → REP は Tier 1 ではなく Tier 2。
+- `kbs=^H` は実在（DEL 送信は entry と不一致）。`mc5i` も広告されている。
+- `acsc`（罫線）は `DecSpecialGraphics` として**実装済み**（`character_sets.rs:52`）。ギャップではない。
