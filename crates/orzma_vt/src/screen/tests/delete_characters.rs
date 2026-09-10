@@ -149,9 +149,8 @@ fn a_delete_outside_the_scroll_region_still_closes_the_gap() {
     );
 }
 
-/// Asserts that a zero count deletes nothing and reports no damage, the
-/// CSI layer's `0 → 1` default having already been applied before
-/// `Screen` is called.
+/// Asserts that a zero count deletes nothing and reports no damage, while
+/// still disarming the deferred wrap.
 ///
 /// Case: a caller inside the crate passes a count it computed as zero.
 #[test]
@@ -159,9 +158,11 @@ fn a_zero_count_deletes_nothing() {
     let mut screen = screen();
     seed_row(&mut screen, ScreenLine(0), &['a', 'b', 'c', 'd']);
     screen.state.column = GridColumn(1);
+    screen.state.pending_wrap = true;
     let damage = screen.delete_characters(0);
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', 'd']);
     assert_eq!(damage, None);
+    assert!(!screen.state.pending_wrap);
 }
 
 /// Asserts that a delete disarms the deferred wrap, so the next printed

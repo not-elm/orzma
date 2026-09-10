@@ -94,3 +94,23 @@ fn a_zero_parameter_delete_character_sequence_deletes_one_cell() {
     assert_eq!(row[2].c, 'd');
     assert_eq!(row[3].c, ' ');
 }
+
+/// Asserts that an insert character raises the chunk liveness, so the
+/// shifted row reaches a frame.
+///
+/// Case: a shell's line editor inserts a character in a chunk that
+/// prints nothing of its own and moves the cursor nowhere.
+#[test]
+fn an_insert_character_reports_damage() {
+    assert!(liveness_after(b"abcd\x1b[1;2H", b"\x1b[@"));
+}
+
+/// Asserts that a delete character raises the chunk liveness, so the
+/// closed-up row reaches a frame.
+///
+/// Case: a shell's line editor deletes a character in a chunk that
+/// prints nothing of its own and moves the cursor nowhere.
+#[test]
+fn a_delete_character_reports_damage() {
+    assert!(liveness_after(b"abcd\x1b[1;2H", b"\x1b[P"));
+}

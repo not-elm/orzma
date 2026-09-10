@@ -138,8 +138,7 @@ impl Grid {
 
     /// Overwrites the given column range of one visible row with `fill`.
     pub fn fill_visible_row_range(&mut self, line: ScreenLine, columns: Range<u16>, fill: Cell) {
-        let index = self.visible_index(line.0);
-        let row: &mut [Cell] = &mut self.rows[index].cells;
+        let row: &mut [Cell] = &mut self[line];
         row[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
     }
 
@@ -776,13 +775,14 @@ mod tests {
         assert_eq!(grid[ScreenLine(0)][3].c, 'x');
     }
 
-    /// Asserts that an insert at column zero for the full row width
-    /// blanks every cell of the addressed row, mints no id, and
-    /// leaves the neighboring rows and history untouched.
+    /// Asserts that an insert moves the cells at and right of `column`
+    /// up the row, drops the ones pushed past its end, fills the
+    /// columns that open, mints no id, and leaves the neighboring rows
+    /// and history untouched.
     ///
-    /// Case: `ICH` opens the entire row at the left margin while a
-    /// scroll has already handed a row to history and the rows above
-    /// and below the cursor still carry their own content.
+    /// Case: a line editor opens one column mid-row on a screen that
+    /// has already scrolled once, with content on the rows either side
+    /// of the edited one.
     #[test]
     fn an_insert_shifts_the_addressed_row_and_leaves_its_neighbors_alone() {
         let mut grid = grid_with_history(1);
@@ -794,11 +794,12 @@ mod tests {
         let history_len = grid.history_len();
         let id = grid.line_id(ScreenLine(1));
 
-        grid.insert_visible_row_cells(ScreenLine(1), GridColumn(0), 4, Cell::default());
+        grid.insert_visible_row_cells(ScreenLine(1), GridColumn(1), 1, Cell::default());
 
-        for column in 0..4 {
-            assert_eq!(grid[ScreenLine(1)][column].c, ' ');
-        }
+        assert_eq!(grid[ScreenLine(1)][0].c, 'a');
+        assert_eq!(grid[ScreenLine(1)][1].c, ' ');
+        assert_eq!(grid[ScreenLine(1)][2].c, 'b');
+        assert_eq!(grid[ScreenLine(1)][3].c, 'c');
         assert_eq!(grid[ScreenLine(0)][0].c, 'x');
         assert_eq!(grid[ScreenLine(2)][0].c, 'y');
         assert_eq!(grid.history_len(), history_len);
@@ -809,9 +810,9 @@ mod tests {
     /// `column`, fills the columns that open at the row's end, mints
     /// no id, and leaves the neighboring rows and history untouched.
     ///
-    /// Case: `DCH` closes a gap mid-row while a scroll has already
-    /// handed a row to history and the rows above and below the
-    /// cursor still carry their own content.
+    /// Case: a line editor closes a two-column gap mid-row on a screen
+    /// that has already scrolled once, with content on the rows either
+    /// side of the edited one.
     #[test]
     fn a_delete_shifts_the_addressed_row_and_leaves_its_neighbors_alone() {
         let mut grid = grid_with_history(1);

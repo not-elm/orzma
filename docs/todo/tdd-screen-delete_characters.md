@@ -6,13 +6,14 @@ corroborating the shift. Citations verified: 12/12. Phase 4: the list was
 approved whole, including the `P-CURSOR` premise and the same deliberate
 divergence from the scrolling-margin rule that the ICH run settled.
 
-**The Rust below does not compile against the tree as it stands.**
-`Screen::delete_characters` is a stub returning `None`
-(`crates/orzma_vt/src/screen.rs:457`), and the tests call `seed_row` and
-`row_glyphs`, which do not exist yet — they are specified in
-[`tdd-screen-insert_characters.md`](tdd-screen-insert_characters.md) and shared
-with this module. Nothing here has been built or run: it is a proposal to
-transcribe, not something to paste.
+**Transcribed and landed on 2026-09-10.** All nine cases below now live in
+`crates/orzma_vt/src/screen/tests/delete_characters.rs`, against the
+implemented `Screen::delete_characters`; the two helpers they call, `seed_row`
+and `row_glyphs`, live in `crates/orzma_vt/src/screen/tests.rs`. The Rust
+blocks below are kept as the transcription record — the tests in the tree are
+the living copy, so read them there rather than trusting this snapshot. What
+this document still owns is the case list, the verified citations, and the
+`P-` premises in the appendix.
 
 This list is specification-derived and self-verified — nothing reviewed it but
 the run that produced it. Spot-check a citation or two against the appendix
@@ -343,7 +344,7 @@ No manual mentions the deferred wrap — it is xterm's `ResetWrap`, which
 `DeleteChar` calls. The second assertion carries the case: clearing the flag
 without that check would pass against an implementation that clears it and lets
 the next `print` wrap anyway, and `erase_in_line` in this same file takes the
-opposite position on an armed wrap (`crates/orzma_vt/src/screen.rs:575`).
+opposite position on an armed wrap (`crates/orzma_vt/src/screen.rs:648`).
 
 ```rust
 /// Asserts that a delete disarms the deferred wrap, so the next printed

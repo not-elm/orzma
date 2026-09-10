@@ -4,17 +4,21 @@
 use super::*;
 
 /// Asserts that a control function this terminal does not implement
-/// is ignored rather than fatal.
+/// is ignored rather than fatal: it raises no chunk liveness and the
+/// byte behind it prints where it would have anyway. The probe's final
+/// byte is one ECMA-48 leaves unallocated, so no later implementation
+/// can retire the case the way `ICH` retired its predecessor.
 ///
 /// The agreed policy follows what VT terminals do with sequences
 /// they do not implement. It is also the point of the dispatcher:
 /// before it existed every CSI sequence reached a `todo!()`.
 ///
-/// Case: a program turns on the printer controller with `MC` on a
-/// terminal that has no printer to control.
+/// Case: a program emits a `CSI` sequence the dispatcher has no arm
+/// for and goes on printing behind it.
 #[test]
 fn an_unimplemented_sequence_is_ignored() {
-    let device = interpret(b"\x1b[5ia");
+    assert!(!damage_of(b"\x1b[5_"));
+    let device = interpret(b"\x1b[5_a");
     assert_eq!(
         device.active_screen().viewport_row(ViewportLine(0))[0].c,
         'a'

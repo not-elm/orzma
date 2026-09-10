@@ -438,26 +438,32 @@ impl Screen {
     /// is.
     ///
     /// The count is clamped to the columns from the cursor through the
-    /// last one. The blanks carry the pen's erase cell, which clears
-    /// every attribute VT510 enumerates and keeps a background its
-    /// monochrome vocabulary has no word for.
+    /// last one, and the blanks carry the pen's erase cell. The
+    /// deferred wrap is disarmed ahead of the clamp, where xterm's
+    /// `ResetWrap` sits, so a count clamped to nothing still disarms
+    /// it.
     ///
     /// Unlike [`Self::insert_lines`], the edit applies wherever the
     /// cursor sits: VT510 gives `ICH` "no effect outside the scrolling
     /// margins" and xterm, alacritty, kitty, ghostty, VTE and foot all
-    /// ignore that, so orzma follows the field. The deferred wrap is
-    /// disarmed, as xterm does, unless the clamp leaves nothing to
-    /// insert.
+    /// ignore the vertical half of that. xterm and ghostty do gate on
+    /// the horizontal half, which is moot here because orzma models no
+    /// left or right margin.
+    ///
+    /// The shift moves cells past two anchors that hold an absolute
+    /// column: an active selection's ends and a mounted placement's.
+    /// xterm re-seats or disowns a selection the edit crosses; orzma
+    /// leaves both where they are.
     ///
     /// # Control Functions
     ///
     /// - `ICH` (`CSI Pn @`)
     pub fn insert_characters(&mut self, count: u16) -> Option<DamageSpan> {
+        self.state.pending_wrap = false;
         let count = self.clamped_columns(count)?;
         let fill = self.state.pen.erase_cell();
         self.grid
             .insert_visible_row_cells(self.state.line, self.state.column, count, fill);
-        self.state.pending_wrap = false;
         self.damage_span(self.state.line, self.state.line)
     }
 
@@ -466,31 +472,26 @@ impl Screen {
     /// column, and the cursor stays where it is.
     ///
     /// The count is clamped to the columns from the cursor through the
-    /// last one, never to the row width: a width-relative clamp blanks
-    /// a column left of the cursor. The cells that shift keep their
-    /// own attributes; the columns that open at the last column take
-    /// the pen's erase cell instead, because DEC's attribute
-    /// vocabulary has no color axis for a blank to carry and the pen's
-    /// background is what every other erase path in this file already
-    /// fills with.
+    /// last one, never to the row width, which would blank a column
+    /// left of the cursor. The cells that shift keep their own
+    /// attributes; the columns that open take the pen's erase cell.
     ///
     /// No manual states where the cursor ends up — VT510 and VT220
     /// both omit it, where they state it for `ICH` — so leaving it put
-    /// follows xterm. Unlike [`Self::delete_lines`], the edit applies
-    /// wherever the cursor sits: VT510 gives `DCH` "no effect outside
-    /// the scrolling margins" and xterm, alacritty, kitty, ghostty,
-    /// VTE and foot all ignore that. The deferred wrap is disarmed, as
-    /// xterm does, unless the clamp leaves nothing to delete.
+    /// follows xterm. Everything [`Self::insert_characters`] records
+    /// about the scrolling margins, the deferred wrap, and the column
+    /// anchors the shift leaves behind holds here too, against VT510's
+    /// matching `DCH` wording.
     ///
     /// # Control Functions
     ///
     /// - `DCH` (`CSI Pn P`)
     pub fn delete_characters(&mut self, count: u16) -> Option<DamageSpan> {
+        self.state.pending_wrap = false;
         let count = self.clamped_columns(count)?;
         let fill = self.state.pen.erase_cell();
         self.grid
             .delete_visible_row_cells(self.state.line, self.state.column, count, fill);
-        self.state.pending_wrap = false;
         self.damage_span(self.state.line, self.state.line)
     }
 
@@ -608,7 +609,10 @@ impl Screen {
     /// one, and `None` when that leaves nothing to do.
     ///
     /// A zero count therefore ends the call before anything is read or
-    /// written, the deferred wrap included.
+    /// written. The cursor column is always inside the row, so the
+    /// subtraction cannot fail; the guard exists to keep a future caller
+    /// that seats it outside from wrapping into a count the row cannot
+    /// hold.
     fn clamped_columns(&self, count: u16) -> Option<u16> {
         let count = count.min(self.grid.size().cols.checked_sub(self.state.column.0)?);
         (count > 0).then_some(count)

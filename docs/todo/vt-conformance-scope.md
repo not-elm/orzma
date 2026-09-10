@@ -126,10 +126,10 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 
 | 対象 | 内容 |
 |---|---|
-| **EL の pending-wrap 例外** | `screen.rs:642` は deferred wrap 中の `CSI 0 K` を**何もせず返す**。テスト `erase_to_end_is_a_no_op_under_pending_wrap` は Alacritty の方針を根拠にしているが、**PDF p.13 にこの例外は無く**、DEC の EL 定義はアクティブ位置を含み、xterm の `ClearRight` もそのセルを消す。`xenl` は理由にならない。**xterm 非互換の可能性が高いので、ECH 実装と同時に再判断する** |
-| **1049 の pen 引き継ぎ** | `interpreter.rs:609` に「代替画面の古い pen を使う」と明記。xterm は pen を共有するので、入場時のクリアが違う背景色になり得る。BCE の正しさにも波及 |
-| **DECSC/DECRC の保存範囲** | `screen.rs:982` は多くを復元するが、DECAWM が無いので保存できていない。DECAWM 実装時に合わせる |
-| **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:686` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意 |
+| **EL の pending-wrap 例外** | `screen.rs:647` は deferred wrap 中の `CSI 0 K` を**何もせず返す**。テスト `erase_to_end_is_a_no_op_under_pending_wrap` は Alacritty の方針を根拠にしているが、**PDF p.13 にこの例外は無く**、DEC の EL 定義はアクティブ位置を含み、xterm の `ClearRight` もそのセルを消す。`xenl` は理由にならない。**xterm 非互換の可能性が高いので、ECH 実装と同時に再判断する** |
+| **1049 の pen 引き継ぎ** | `interpreter.rs:625` に「代替画面の古い pen を使う」と明記。xterm は pen を共有するので、入場時のクリアが違う背景色になり得る。BCE の正しさにも波及 |
+| **DECSC/DECRC の保存範囲** | `screen.rs:1055` は多くを復元するが、DECAWM が無いので保存できていない。DECAWM 実装時に合わせる |
+| **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:702` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意 |
 | **`CSI 3 J`** | `screen.rs:106` で明示的に拒否。entry は `E3` を広告していないので Tier 1 ではないが、PDF p.13 には定義がある |
 | **SGR 下線拡張** | `sgr.rs:31` が下線種別を潰し、下線色は読み捨て。vim の `58;2` 発行はリポジトリ内に既知（`sgr.rs:675`） |
 | **タブストップの所有** | `tabs.rs:63` が「画面ごと」と明記。xterm は共有テーブル。PDF は所有権を規定していないので、意図的な差異として記録済み |
