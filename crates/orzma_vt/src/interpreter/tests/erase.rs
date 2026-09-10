@@ -67,3 +67,53 @@ fn the_erase_in_line_sequence_clears_the_whole_row() {
         ' '
     );
 }
+
+/// Asserts that `CSI Pn X` reaches the screen and erases `Pn` cells
+/// from the cursor without moving it.
+///
+/// Case: Neovim clears the padding of a file-tree pane, which does
+/// not reach the right edge of the screen.
+#[test]
+fn the_erase_character_sequence_clears_the_span_at_the_cursor() {
+    let device = interpret(b"abcd\x1b[1;2H\x1b[2X");
+    let screen = device.active_screen();
+    assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+    assert_eq!(screen.viewport_row(ViewportLine(0))[1].c, ' ');
+    assert_eq!(screen.viewport_row(ViewportLine(0))[2].c, ' ');
+    assert_eq!(screen.viewport_row(ViewportLine(0))[3].c, 'd');
+    assert_eq!(screen.cursor_column(), GridColumn(1));
+}
+
+/// Asserts that an erase character raises the chunk liveness, so the
+/// row it cleared is repainted.
+///
+/// Case: Neovim clears the padding of a file-tree pane in a chunk
+/// that prints nothing of its own, having selected the background it
+/// wants the cleared cells to carry.
+#[test]
+fn an_erase_character_reports_damage() {
+    assert!(damage_of(b"\x1b[41m\x1b[2X"));
+}
+
+/// Asserts that an omitted, zero, or explicit one erase count all
+/// erase a single cell.
+///
+/// Case: a program emits the terminfo `ech` capability, whose
+/// parameter it leaves at the default.
+#[test]
+fn an_omitted_or_zero_erase_character_count_erases_one_cell() {
+    let device = interpret(b"abc\x1b[1;1H\x1b[X");
+    let screen = device.active_screen();
+    assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, ' ');
+    assert_eq!(screen.viewport_row(ViewportLine(0))[1].c, 'b');
+
+    let device = interpret(b"abc\x1b[1;1H\x1b[0X");
+    let screen = device.active_screen();
+    assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, ' ');
+    assert_eq!(screen.viewport_row(ViewportLine(0))[1].c, 'b');
+
+    let device = interpret(b"abc\x1b[1;1H\x1b[1X");
+    let screen = device.active_screen();
+    assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, ' ');
+    assert_eq!(screen.viewport_row(ViewportLine(0))[1].c, 'b');
+}

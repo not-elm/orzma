@@ -41,6 +41,7 @@ use crate::screen::selection::{
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
 use crate::screen::viewport::{DisplayOffset, Scroll, Viewport, ViewportLine};
+use std::ops::Range;
 
 /// One terminal screen: cell storage plus the write cursor, updated
 /// atomically by each operation.
@@ -659,9 +660,25 @@ impl Screen {
             EraseLineMode::ToStart => 0..self.state.column.0 + 1,
             EraseLineMode::All => 0..cols,
         };
-        self.grid
-            .fill_visible_row_range(self.state.line, columns, self.state.pen.erase_cell());
-        self.damage_span(self.state.line, self.state.line)
+        self.erase_cursor_row_columns(columns)
+    }
+
+    /// Erases `count` characters from the cursor rightward with the
+    /// pen background (BCE), leaving the cursor where it is; a no-op
+    /// while the deferred wrap is armed, as [`Self::erase_in_line`]'s
+    /// [`EraseLineMode::ToEnd`] is.
+    ///
+    /// # Control Functions
+    ///
+    /// - `ECH` (`CSI Pn X`)
+    pub fn erase_chars(&mut self, count: u16) -> Option<DamageSpan> {
+        if self.state.pending_wrap {
+            return None;
+        }
+        let cols = self.grid.size().cols;
+        let start = self.state.column.0;
+        let end = start.saturating_add(count).min(cols);
+        self.erase_cursor_row_columns(start..end)
     }
 
     /// Erases part of the visible screen with the pen background
@@ -703,6 +720,15 @@ impl Screen {
                 Some(DamageSpan::Full)
             }
         }
+    }
+
+    /// Fills the given column range of the cursor row with the pen's
+    /// erase cell and reports that row, which is the whole contract
+    /// every single-row erasure shares.
+    fn erase_cursor_row_columns(&mut self, columns: Range<u16>) -> Option<DamageSpan> {
+        self.grid
+            .fill_visible_row_range(self.state.line, columns, self.state.pen.erase_cell());
+        self.damage_span(self.state.line, self.state.line)
     }
 }
 

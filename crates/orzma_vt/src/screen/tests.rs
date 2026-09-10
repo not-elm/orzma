@@ -71,6 +71,7 @@ mod cursor;
 mod delete_characters;
 mod delete_lines;
 mod display_offset;
+mod erase_chars;
 mod erase_in_display;
 mod erase_in_line;
 mod fill_alignment_pattern;

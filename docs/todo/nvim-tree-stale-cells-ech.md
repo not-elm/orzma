@@ -82,10 +82,6 @@ tmux-256color:   2|  󰉋 .claude                   │   1   //! The action lay
 ECH を実装したところ xterm 側の出力が正常な対照群と完全一致し、
 **`orzma_vt` の 671 テストは全て通過**した。
 
-> **この検証は別ブランチ (`wt/ech`) で行ったもので、ECH はまだ main に入っていない。**
-> 本ブランチ (`ich-dch`) が実装したのは ICH/DCH だけで、`interpreter.rs` の
-> `csi_dispatch` には今も `b'X'` の分岐が無い。§2 の根本原因は未解消のまま。
-
 ## 5. 排除した仮説（すべて実証済み）
 
 | 仮説 | 判定 | 根拠 |
@@ -159,8 +155,8 @@ ECH は「たまたま最初に踏んだ 1 つ」に過ぎない。
       → **[vt-conformance-scope.md](vt-conformance-scope.md) に Tier 1 / Tier 2 として全件洗い出し済み。**
       ECH は「たまたま最初に踏んだ 1 つ」に過ぎない。~~とくに **`ich`/`dch` は両方の
       terminfo が広告している**ので、`cargo run` 側でも別の TUI で同じ事故が起きる。~~
-      （ICH/DCH は 2026-09-10 に実装済み。バケツに残っているのは ECH・CHA・VPA・
-      DECTCEM・IRM など。）
+      （ECH は #283、ICH/DCH は 2026-09-10 に実装済み。バケツに残っているのは
+      CHA・VPA・DECTCEM・IRM など。）
       実測では **DECTCEM（`CSI ?25h/l`）が 590 回**と ECH の 73 回を大きく上回る最頻出の
       未実装シーケンスだった。
 
