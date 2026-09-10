@@ -446,9 +446,8 @@ impl Screen {
     /// Unlike [`Self::insert_lines`], the edit applies wherever the
     /// cursor sits: VT510 gives `ICH` "no effect outside the scrolling
     /// margins" and xterm, alacritty, kitty, ghostty, VTE and foot all
-    /// ignore the vertical half of that. xterm and ghostty do gate on
-    /// the horizontal half, which is moot here because orzma models no
-    /// left or right margin.
+    /// ignore the vertical half of that (xterm and ghostty do gate on
+    /// the horizontal half, which orzma does not model yet).
     ///
     /// The shift moves cells past two anchors that hold an absolute
     /// column: an active selection's ends and a mounted placement's.
