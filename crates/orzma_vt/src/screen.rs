@@ -312,11 +312,12 @@ impl Screen {
     /// `CursorSet` ends in `ResetWrap`, unlike a linefeed, which
     /// preserves the wrap on purpose.
     ///
-    /// Every control function that addresses the cursor ends here, so
-    /// the origin, the clamps, and the wrap are decided in one place and
-    /// cannot drift between them.
+    /// Every control function that addresses both axes ends here, and one
+    /// that addresses the column alone ends in [`Self::seat_column`],
+    /// which this delegates to. The origin, each clamp, and the wrap are
+    /// therefore still decided in one place apiece and cannot drift.
     fn seat_cursor(&mut self, line: ScreenLine, column: GridColumn) {
-        let GridSize { cols, rows } = self.grid.size();
+        let GridSize { rows, .. } = self.grid.size();
         let (origin, last) = match self.scroll_region.origin_mode() {
             OriginMode::WithinMargins => (
                 self.scroll_region.top_margin(),
@@ -325,6 +326,13 @@ impl Screen {
             OriginMode::UpperLeftCorner => (ScreenLine(0), ScreenLine(rows - 1)),
         };
         self.state.line = ScreenLine(line.0.saturating_add(origin.0).min(last.0));
+        self.seat_column(column);
+    }
+
+    /// Seats the cursor at `column`, clamping it to the page and
+    /// disarming the deferred wrap, without touching the line.
+    fn seat_column(&mut self, column: GridColumn) {
+        let cols = self.grid.size().cols;
         self.state.column = GridColumn(column.0.min(cols - 1));
         self.state.pending_wrap = false;
     }
