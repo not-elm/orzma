@@ -46,7 +46,8 @@ fn a_fresh_terminal_reports_a_visible_cursor() {
 }
 
 /// Asserts that `? 25` inside a multi-mode list is applied, and that an
-/// unimplemented number ahead of a later implemented one hides neither.
+/// unimplemented number in the list does not stop a later implemented
+/// one from being applied.
 ///
 /// Case: an application turns cursor visibility off together with focus
 /// reporting and a mode this terminal does not implement, then the
@@ -103,15 +104,25 @@ fn a_reset_to_initial_state_restores_the_visible_cursor() {
     assert!(cursor_visible(&device));
 }
 
-/// Asserts that switching to the alternate screen keeps the DECTCEM
-/// state the application set.
+/// Asserts that switching to the alternate screen and back keeps the
+/// DECTCEM state the application set, through either alternate-screen
+/// entry sequence.
 ///
-/// Case: nvim hides the caret and then enters the alternate screen as
-/// it starts up, and the caret stays hidden until nvim asks for it back.
+/// Case: nvim hides the caret before it enters the alternate screen at
+/// startup, and the caret stays hidden through the alternate screen and
+/// after nvim returns to the primary screen when it exits.
 #[test]
 fn the_alternate_screen_keeps_the_cursor_visibility() {
     let device = interpret(b"\x1b[?25l\x1b[?1049h");
     assert!(!cursor_visible(&device));
+
+    let via_1047 = interpret(b"\x1b[?25l\x1b[?1047h");
+    assert!(!cursor_visible(&via_1047));
+
+    let mut session = Session::new();
+    session.feed(b"\x1b[?25l\x1b[?1049h");
+    session.feed(b"\x1b[?1049l");
+    assert!(!cursor_visible(session.device()));
 }
 
 /// Asserts that a chunk hiding the cursor is reported as
@@ -134,10 +145,12 @@ fn a_dectcem_write_that_changes_nothing_does_not_make_the_chunk_live() {
 }
 
 /// Asserts that the frame a chunk emits carries the hidden cursor, not
-/// just the device state a test can read back.
+/// just the device state a test can read back, and that a later
+/// re-show reaches an emitted frame the same way.
 ///
-/// Case: nvim hides the caret and the host repaints from the frame it
-/// receives.
+/// Case: nvim hides the caret before a repaint and the host paints from
+/// the frame it receives, then nvim finishes the repaint and shows the
+/// caret again for the next frame.
 #[test]
 fn an_emitted_frame_carries_the_hidden_cursor() {
     let mut session = Session::new();
@@ -145,6 +158,10 @@ fn an_emitted_frame_carries_the_hidden_cursor() {
     let _bootstrap = session.frame();
 
     session.feed(b"\x1b[?25l");
-    let frame = session.frame().expect("hiding the cursor owes a frame");
-    assert!(!frame.cursor.visible);
+    let hidden = session.frame().expect("hiding the cursor owes a frame");
+    assert!(!hidden.cursor.visible);
+
+    session.feed(b"\x1b[?25h");
+    let shown = session.frame().expect("showing the cursor owes a frame");
+    assert!(shown.cursor.visible);
 }

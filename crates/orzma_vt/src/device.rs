@@ -223,7 +223,7 @@ impl DeviceState {
         self.active_screen().cursor(self.modes.text_cursor_enable)
     }
 
-    /// Snapshot of the device-wide DECSET / DECRST modes.
+    /// Snapshot of the device-wide terminal modes.
     pub fn modes(&self) -> VtModes {
         self.modes
     }

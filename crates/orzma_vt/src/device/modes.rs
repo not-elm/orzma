@@ -1,7 +1,7 @@
 //! The DECSET / DECRST modes the device carries and the enums they
 //! select among.
 
-/// Snapshot of the device-wide DECSET / DECRST modes.
+/// Snapshot of the device-wide terminal modes.
 ///
 /// # References
 ///

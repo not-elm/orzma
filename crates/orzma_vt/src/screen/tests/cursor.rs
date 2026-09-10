@@ -6,8 +6,9 @@ use super::*;
 /// that the caller's DECTCEM state decides visibility while shape and
 /// blink stay at the terminal's power-up values.
 ///
-/// Case: a shell prints its prompt and the next frame has to show the
-/// caret after it.
+/// Case: a shell prints its prompt and the caller asks for the caret
+/// shown after it. The same screen, mid-repaint, has a full-screen
+/// application asking the caller to report the caret hidden instead.
 #[test]
 fn the_cursor_reports_the_write_position_and_the_callers_visibility() {
     let mut screen = screen();

@@ -231,7 +231,7 @@ pub trait Vt {
         self.display_offset() == DisplayOffset(0)
     }
 
-    /// Snapshot of the device-wide DECSET / DECRST modes.
+    /// Snapshot of the device-wide terminal modes.
     fn modes(&self) -> VtModes;
 }
 
@@ -240,8 +240,9 @@ pub trait Vt {
 #[derive(Debug, Default)]
 pub struct InterpretOutput {
     /// Whether this chunk produced anything frame-relevant — staged row
-    /// damage, cursor motion, or a mutated frame-visible section — so
-    /// the owner knows to open its coalesce window.
+    /// damage, a change to the reported cursor (motion or visibility),
+    /// or a mutated frame-visible section — so the owner knows to open
+    /// its coalesce window.
     pub damaged: bool,
     /// Out-of-band signals: the parser-raised ones in byte-stream order,
     /// then the chunk-end [`VtSignal::WebviewEvicted`] when the chunk
