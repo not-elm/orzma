@@ -51,6 +51,20 @@ fn glyphs(screen: &Screen, rows: u16) -> Vec<char> {
         .collect()
 }
 
+/// Fills a row with glyphs from column zero, leaving the pen alone.
+fn seed_row(screen: &mut Screen, line: ScreenLine, glyphs: &[char]) {
+    for (column, glyph) in (0u16..).zip(glyphs) {
+        screen.grid[line][column].c = *glyph;
+    }
+}
+
+/// Every glyph of one row, left to right.
+fn row_glyphs(screen: &Screen, line: ScreenLine) -> Vec<char> {
+    (0..screen.grid.size().cols)
+        .map(|column| screen.grid[line][column].c)
+        .collect()
+}
+
 mod backspace;
 mod carriage_return;
 mod cursor;
@@ -59,6 +73,7 @@ mod display_offset;
 mod erase_in_display;
 mod erase_in_line;
 mod fill_alignment_pattern;
+mod insert_characters;
 mod insert_lines;
 mod line_feed;
 mod move_backward_tabs;

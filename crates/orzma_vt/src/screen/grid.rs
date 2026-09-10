@@ -7,7 +7,7 @@ pub(crate) mod coords;
 mod history_index;
 
 use crate::screen::cell::Cell;
-use crate::screen::grid::coords::{GridLine, GridPoint, ScreenLine};
+use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::grid::history_index::HistoryIndex;
 use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
@@ -141,6 +141,36 @@ impl Grid {
         let index = self.visible_index(line.0);
         let row: &mut [Cell] = &mut self.rows[index].cells;
         row[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
+    }
+
+    /// Shifts one visible row's cells from `column` right by `count`
+    /// columns, filling the columns that open with `fill`.
+    ///
+    /// The cells pushed past the last column are discarded. Row
+    /// identity is untouched: an in-row edit neither creates nor
+    /// retires a row, so no id is minted and nothing reaches history.
+    ///
+    /// # Invariants
+    ///
+    /// `count` is clamped by the caller to the columns from `column`
+    /// through the row's end.
+    pub fn insert_visible_row_cells(
+        &mut self,
+        line: ScreenLine,
+        column: GridColumn,
+        count: u16,
+        fill: Cell,
+    ) {
+        let cols = self.size.cols;
+        debug_assert!(
+            usize::from(column.0) + usize::from(count) <= usize::from(cols),
+            "an in-row insert stays inside the row"
+        );
+        let start = usize::from(column.0);
+        let count = usize::from(count);
+        let row: &mut [Cell] = &mut self[line];
+        row.copy_within(start..usize::from(cols) - count, start + count);
+        row[start..start + count].fill(fill);
     }
 
     /// Scrolls the region up by one row: the row at `top` leaves and a

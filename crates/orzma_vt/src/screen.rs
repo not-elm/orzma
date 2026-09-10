@@ -432,17 +432,31 @@ impl Screen {
         Some(damage)
     }
 
-    /// Inserts `count` blank characters at the cursor.
+    /// Inserts `count` blank characters at the cursor: the cells to its
+    /// right move right, the cells pushed past the last column are
+    /// lost, and the cursor stays where it is.
+    ///
+    /// The count is clamped to the columns from the cursor through the
+    /// last one. The blanks carry the pen's erase cell, which clears
+    /// every attribute VT510 enumerates and keeps a background its
+    /// monochrome vocabulary has no word for.
+    ///
+    /// Unlike [`Self::insert_lines`], the edit applies wherever the
+    /// cursor sits: VT510 gives `ICH` "no effect outside the scrolling
+    /// margins" and xterm, alacritty, kitty, ghostty, VTE and foot all
+    /// ignore that, so orzma follows the field. The deferred wrap is
+    /// disarmed, as xterm does.
     ///
     /// # Control Functions
     ///
     /// - `ICH` (`CSI Pn @`)
-    #[expect(
-        unused_variables,
-        reason = "a stub awaiting the test cases enumerated against it"
-    )]
     pub fn insert_characters(&mut self, count: u16) -> Option<DamageSpan> {
-        None
+        let count = self.clamped_columns(count)?;
+        let fill = self.state.pen.erase_cell();
+        self.grid
+            .insert_visible_row_cells(self.state.line, self.state.column, count, fill);
+        self.state.pending_wrap = false;
+        self.damage_span(self.state.line, self.state.line)
     }
 
     /// Deletes `count` characters at the cursor.
@@ -564,6 +578,17 @@ impl Screen {
     fn clamped_rows(&self, first: ScreenLine, count: u16) -> Option<u16> {
         let bottom = self.scroll_region.bottom_margin();
         let count = count.min(bottom.0.checked_sub(first.0)? + 1);
+        (count > 0).then_some(count)
+    }
+
+    /// The columns an in-row edit at the cursor may actually touch:
+    /// `count` clamped to the columns from the cursor through the last
+    /// one, and `None` when that leaves nothing to do.
+    ///
+    /// A zero count therefore ends the call before anything is read or
+    /// written, the deferred wrap included.
+    fn clamped_columns(&self, count: u16) -> Option<u16> {
+        let count = count.min(self.grid.size().cols.checked_sub(self.state.column.0)?);
         (count > 0).then_some(count)
     }
 
