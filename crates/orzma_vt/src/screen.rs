@@ -318,13 +318,6 @@ impl Screen {
     ///
     /// - `CHA` (`CSI Pn G`)
     /// - `HPA` (``CSI Pn ` ``)
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "csi_dispatch reaches this once CHA and HPA dispatch lands"
-        )
-    )]
     pub fn move_cursor_to_column(&mut self, column: Option<u16>) {
         let column = match column {
             None | Some(0) => 1,
@@ -344,13 +337,6 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `VPA` (`CSI Pn d`)
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "csi_dispatch reaches this once VPA dispatch lands"
-        )
-    )]
     pub fn move_cursor_to_line(&mut self, line: Option<u16>) {
         let line = match line {
             None | Some(0) => 1,

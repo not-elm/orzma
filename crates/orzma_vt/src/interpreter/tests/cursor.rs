@@ -135,3 +135,44 @@ fn resetting_origin_mode_seats_the_cursor_at_the_corner() {
         'x'
     );
 }
+
+/// Asserts that `CSI Pn G` reaches the column-addressing method.
+///
+/// Case: a full-screen application jumps to column 6 of the row it is
+/// already writing and prints there.
+#[test]
+fn the_cursor_character_absolute_sequence_addresses_a_column() {
+    let device = interpret_wide(b"\x1b[6Gx");
+    assert_eq!(
+        device.active_screen().viewport_row(ViewportLine(0))[5].c,
+        'x'
+    );
+}
+
+/// Asserts that the `HPA` spelling reaches the same column-addressing
+/// method as `CHA`.
+///
+/// Case: an application emits the character-position spelling of the
+/// same move and prints there.
+#[test]
+fn the_character_position_absolute_sequence_addresses_a_column() {
+    let device = interpret_wide(b"\x1b[6\x60x");
+    assert_eq!(
+        device.active_screen().viewport_row(ViewportLine(0))[5].c,
+        'x'
+    );
+}
+
+/// Asserts that `CSI Pn d` reaches the line-addressing method rather
+/// than moving the cursor down by the parameter.
+///
+/// Case: an application jumps to row 2 from the home position and
+/// prints there.
+#[test]
+fn the_line_position_absolute_sequence_addresses_a_line() {
+    let device = interpret(b"\x1b[2dx");
+    assert_eq!(
+        device.active_screen().viewport_row(ViewportLine(1))[0].c,
+        'x'
+    );
+}

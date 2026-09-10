@@ -234,6 +234,16 @@ impl VTActor for Executor<'_> {
                 .device
                 .active_screen_mut()
                 .move_cursor_to(params.value(0), params.value(1)),
+            // CHA, HPA
+            (None, b'G' | b'`') => self
+                .device
+                .active_screen_mut()
+                .move_cursor_to_column(params.value(0)),
+            // VPA
+            (None, b'd') => self
+                .device
+                .active_screen_mut()
+                .move_cursor_to_line(params.value(0)),
             // DECSTBM
             (None, b'r') => self
                 .device
