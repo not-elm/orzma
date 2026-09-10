@@ -11,7 +11,7 @@ use super::*;
 #[test]
 fn an_alignment_pattern_fills_every_visible_cell() {
     let mut screen = screen();
-    screen.print('x');
+    screen.print('x', InsertReplaceMode::Replace);
     assert_eq!(screen.fill_alignment_pattern(), DamageSpan::Full);
     for line in 0..3 {
         let row = screen.viewport_row(ViewportLine(line));
@@ -55,7 +55,7 @@ fn an_alignment_pattern_seats_the_cursor_at_home() {
 fn an_alignment_pattern_disarms_the_deferred_wrap() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c);
+        screen.print(c, InsertReplaceMode::Replace);
     }
     assert!(screen.state.pending_wrap);
     screen.fill_alignment_pattern();
@@ -89,7 +89,7 @@ fn an_alignment_pattern_returns_the_origin_to_the_corner() {
 #[test]
 fn an_alignment_pattern_leaves_the_history_untouched() {
     let mut screen = screen();
-    screen.print('a');
+    screen.print('a', InsertReplaceMode::Replace);
     screen.state.line = ScreenLine(2);
     screen.line_feed();
     assert_eq!(screen.grid.history_len(), 1);
@@ -107,7 +107,7 @@ fn an_alignment_pattern_leaves_the_history_untouched() {
 fn an_alignment_pattern_ignores_the_pen() {
     let mut screen = screen();
     screen.pen_mut().bg = Color::Indexed(1);
-    screen.print('x');
+    screen.print('x', InsertReplaceMode::Replace);
     screen.fill_alignment_pattern();
     let expected = Cell {
         c: 'E',

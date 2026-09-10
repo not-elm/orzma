@@ -1,12 +1,17 @@
-//! The DECSET / DECRST modes the device carries and the enums they
-//! select among.
+//! The modes the device carries — DEC private (DECSET / DECRST) and
+//! ANSI (SM / RM) alike — and the enums they select among.
 
-/// Snapshot of the input-relevant terminal modes.
+/// Snapshot of the modes the device owns, as opposed to those a screen
+/// owns.
+///
+/// A mode belongs here when both screens share it. The ones a screen
+/// owns — the cursor origin, the tab stops, the character set mapping —
+/// live on the screen itself instead.
 ///
 /// # References
 ///
 /// - [XTerm Control Sequences] — `CSI ? Pm h` (DEC Private Mode Set,
-///   DECSET); each field cites its DECSET number.
+///   DECSET) and `CSI Pm h` (Set Mode, SM); each field cites its number.
 /// - [Mouse Tracking] — the reporting and coordinate-encoding modes
 ///   carried by [`MouseTracking`] and [`MouseEncoding`].
 ///
@@ -20,6 +25,8 @@ pub struct VtModes {
     /// itself is pure storage and keeps no such flag, so the two
     /// cannot disagree.
     pub active_screen: ScreenKind,
+    /// IRM (`SM 4`): whether a printed character inserts or replaces.
+    pub insert_replace: InsertReplaceMode,
     /// DECCKM (DECSET 1): arrow keys send SS3 instead of CSI.
     pub app_cursor: bool,
     /// The mode selects whether the numeric keypad sends ASCII numerals or application function.
@@ -50,6 +57,35 @@ impl VtModes {
     /// order is the host's wheel routing, not this snapshot's.
     pub const fn alternate_scroll_active(&self) -> bool {
         matches!(self.active_screen, ScreenKind::Alternate) && self.alternate_scroll
+    }
+}
+
+/// Whether a printed character replaces the cell at the cursor or pushes
+/// the rest of the row right.
+///
+/// The mode is device-wide: both screens share one value, so an
+/// alternate-screen flip shows the same mode it left, and neither
+/// `DECSC` nor `DECRC` touches it, because `DECSC` does not save it.
+/// `RIS` returns it to [`Self::Replace`], and `DECSTR` is specified to
+/// do the same once this terminal answers it.
+///
+/// # Control Functions
+///
+/// - `IRM` (`CSI 4 h` / `CSI 4 l`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InsertReplaceMode {
+    /// A printed character overwrites the cell at the cursor.
+    #[default]
+    Replace,
+    /// A printed character pushes the cells at and right of the cursor
+    /// one column right, dropping the one past the last column.
+    Insert,
+}
+
+impl InsertReplaceMode {
+    /// The mode `SM 4` selects when set and `RM 4` when reset.
+    pub fn from_sm(enabled: bool) -> Self {
+        if enabled { Self::Insert } else { Self::Replace }
     }
 }
 

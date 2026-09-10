@@ -24,6 +24,7 @@ use self::cell::{Cell, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
+use crate::device::modes::InsertReplaceMode;
 use crate::frame::damage::DamageSpan;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::character_sets::{
@@ -138,6 +139,11 @@ impl Screen {
     /// Prints one character at the cursor with the current pen,
     /// wrapping first when the deferred wrap is armed.
     ///
+    /// `mode` is `IRM`: under [`InsertReplaceMode::Insert`] the cells at
+    /// and right of the cursor move one column right before the
+    /// character lands, exactly as [`Self::insert_characters`] moves
+    /// them, and the cell pushed past the last column is lost.
+    ///
     /// The caller dispatches control bytes itself; this method assumes
     /// a printable character of display width one.
     ///
@@ -151,7 +157,10 @@ impl Screen {
     // display widths as its doc promises; the renderer's `runs_to_cells`
     // already advances by display width, and until then every cell after
     // a wide character lands one column right of the VT's own cursor.
-    pub fn print(&mut self, c: char) -> Option<DamageSpan> {
+    // The insert-mode shift below inherits the same assumption: it
+    // moves one column where xterm, alacritty, kitty, ghostty, foot and
+    // wezterm all move the character's display width.
+    pub fn print(&mut self, c: char, mode: InsertReplaceMode) -> Option<DamageSpan> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
         let wrap = if self.state.pending_wrap {
             self.state.pending_wrap = false;
@@ -160,6 +169,14 @@ impl Screen {
         } else {
             None
         };
+        // NOTE: The shift runs after the deferred wrap is resolved and
+        // before the glyph lands. Moving it above the wrap would let
+        // `insert_characters` clear `pending_wrap`, and the character
+        // would overwrite the last column instead of wrapping to the
+        // next row.
+        if matches!(mode, InsertReplaceMode::Insert) {
+            self.insert_characters(1);
+        }
         self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph);
         if self.state.column.0 + 1 < self.grid.size().cols {
             self.state.column.0 += 1;
@@ -503,6 +520,8 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `ICH` (`CSI Pn @`)
+    /// - `IRM` (`CSI 4 h`) — the shift [`Self::print`] performs for
+    ///   each character printed in insert mode
     pub fn insert_characters(&mut self, count: u16) -> Option<DamageSpan> {
         let count = self.clamped_columns(count)?;
         let fill = self.state.pen.erase_cell();
