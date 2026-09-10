@@ -307,6 +307,42 @@ impl VTActor for Executor<'_> {
                     self.stage(damage);
                 }
             }
+            // IL
+            (None, b'L') => {
+                let damage = self
+                    .device
+                    .active_screen_mut()
+                    .insert_lines(repeat_count(params.value(0)));
+                self.stage(damage);
+            }
+            // DL
+            (None, b'M') => {
+                let damage = self
+                    .device
+                    .active_screen_mut()
+                    .delete_lines(repeat_count(params.value(0)));
+                self.stage(damage);
+            }
+            // SU
+            (None, b'S') => {
+                let damage = self
+                    .device
+                    .active_screen_mut()
+                    .scroll_region_up(repeat_count(params.value(0)));
+                self.stage(damage);
+            }
+            // SD
+            // NOTE: xterm's highlight mouse tracking (`CSI Ps;Ps;Ps;Ps;Ps T`,
+            // XTHIMOUSE) shares this final byte with no private marker, so
+            // only the one-parameter spelling is a scroll down; without the
+            // guard a mouse-tracking request would scroll the screen.
+            (None, b'T') if params.values().count() <= 1 => {
+                let damage = self
+                    .device
+                    .active_screen_mut()
+                    .scroll_region_down(repeat_count(params.value(0)));
+                self.stage(damage);
+            }
             // CHT
             (None, b'I') => self
                 .device
