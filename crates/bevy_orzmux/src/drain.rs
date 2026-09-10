@@ -11,7 +11,6 @@ use crate::{OrzmuxConnection, OrzmuxPane, OrzmuxSystems};
 use bevy::prelude::*;
 use orzma_vt::prelude::Frame;
 use orzmux::prelude::{CloseReason, OrzmuxEvent, PaneId};
-use std::time::Instant;
 
 /// The session is over: the last pane closed, or the backend is gone.
 #[derive(Event, Debug, Clone, Copy)]
@@ -41,18 +40,8 @@ impl Plugin for DrainPlugin {
 #[derive(Resource, Default)]
 struct DisconnectReported(bool);
 
-/// An `Update` that drains more frames than this (standalone frames plus
-/// the frames bundled in layouts) is logged under `orzmux::queues`.
-const DRAIN_REPORT_THRESHOLD: usize = 8;
-
 /// Drains every queued event in order. Not gated on change detection:
 /// channel arrivals are invisible to it.
-///
-/// A drain of more than [`DRAIN_REPORT_THRESHOLD`] frames is logged
-/// under `orzmux::queues` with the wall time of the drain itself. The
-/// frames are applied by the `TtyFrameSignal` observers at command
-/// flush, after this system returns, so that time is not part of the
-/// logged figure.
 fn drain_orzmux_events(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
@@ -60,23 +49,12 @@ fn drain_orzmux_events(
     mut reported: ResMut<DisconnectReported>,
     connection: Res<OrzmuxConnection>,
 ) {
-    let started = Instant::now();
-    let mut frames = 0;
     for event in connection.0.try_iter() {
-        frames += frame_count(&event);
         apply_event(&mut commands, &mut registry, &mut current, event);
     }
     if connection.0.is_disconnected() && !reported.0 {
         reported.0 = true;
         commands.trigger(OrzmuxSessionEnded);
-    }
-    if DRAIN_REPORT_THRESHOLD < frames {
-        tracing::debug!(
-            target: "orzmux::queues",
-            frames,
-            elapsed = ?started.elapsed(),
-            "drained more frames than the threshold in one update"
-        );
     }
 }
 
@@ -136,28 +114,13 @@ fn trigger_frame(commands: &mut Commands, registry: &PaneRegistry, pane: PaneId,
     }
 }
 
-/// How many frames one event carries: one for `Frame`, the bundled
-/// count for `Layout`, zero for the rest. The match is exhaustive so a
-/// new frame-carrying variant is counted here or fails to build.
-fn frame_count(event: &OrzmuxEvent) -> usize {
-    match event {
-        OrzmuxEvent::Frame { .. } => 1,
-        OrzmuxEvent::Layout { frames, .. } => frames.len(),
-        OrzmuxEvent::PaneOpened { .. }
-        | OrzmuxEvent::SpawnFailed { .. }
-        | OrzmuxEvent::Signal { .. }
-        | OrzmuxEvent::SelectionText { .. }
-        | OrzmuxEvent::PaneClosed { .. } => 0,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::requests::test_support::app_with_channels;
     use crate::signals::TtyFrameSignal;
     use crossbeam_channel::Sender;
-    use orzma_vt::prelude::{Cursor, DisplayOffset, GridSize, VtSignal};
+    use orzma_vt::prelude::{Cursor, DisplayOffset, GridSize};
     use orzmux::prelude::{CloseReason, CommandSeq, Layout, PaneRect, RequestId};
 
     #[derive(Resource, Default)]
@@ -418,31 +381,5 @@ mod tests {
             .unwrap();
         app.update();
         assert_eq!(app.world().resource::<Seen>().layout_changes, 1);
-    }
-
-    /// Asserts that the frame count sums standalone frames and the
-    /// frames bundled in layouts, and counts nothing for other events.
-    ///
-    /// Case: the GUI resumes after a live-resize stall with seven
-    /// frames, a layout carrying two repaints, and a bell queued behind
-    /// them.
-    #[test]
-    fn the_frame_count_sums_standalone_frames_and_those_bundled_in_layouts() {
-        let mut events: Vec<OrzmuxEvent> = (0..7)
-            .map(|_| OrzmuxEvent::Frame {
-                pane: PaneId(1),
-                frame: frame(80, 24),
-            })
-            .collect();
-        events.push(OrzmuxEvent::Layout {
-            layout: layout(1, &[(PaneId(1), 0), (PaneId(2), 10)]),
-            frames: vec![(PaneId(1), frame(80, 24)), (PaneId(2), frame(80, 24))],
-        });
-        events.push(OrzmuxEvent::Signal {
-            pane: PaneId(1),
-            signal: VtSignal::Bell,
-        });
-        let frames: usize = events.iter().map(frame_count).sum();
-        assert_eq!(frames, 9);
     }
 }
