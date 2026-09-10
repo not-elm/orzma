@@ -306,6 +306,33 @@ impl Screen {
         self.seat_cursor(ScreenLine(line - 1), GridColumn(column - 1));
     }
 
+    /// Addresses the cursor at a one-based column on the current line,
+    /// `None` for an omitted parameter.
+    ///
+    /// A zero addresses the first column, the same as a one, and a column
+    /// past the last stops there. The row is never touched: this seats the
+    /// column alone, so neither origin resolution nor a line clamp can move
+    /// the cursor off the row it is on.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CHA` (`CSI Pn G`)
+    /// - `HPA` (``CSI Pn ` ``)
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "csi_dispatch reaches this once CHA and HPA dispatch lands"
+        )
+    )]
+    pub fn move_cursor_to_column(&mut self, column: Option<u16>) {
+        let column = match column {
+            None | Some(0) => 1,
+            Some(value) => value,
+        };
+        self.seat_column(GridColumn(column - 1));
+    }
+
     /// Seats the cursor at `line` — measured from the origin the current
     /// [`OriginMode`] defines — and `column`, clamping both axes and
     /// disarming the deferred wrap. The disarm follows xterm, whose
