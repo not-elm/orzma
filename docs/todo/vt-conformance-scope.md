@@ -46,8 +46,8 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 | ~~`CSI Ps X`~~ | ~~**ECH**~~ | `ech` | **✅ 実装済み（2026-09-10）** | 73 | ~~消去されず旧テキストが残る~~（今回のバグ。解消済み） |
 | ~~`CSI Ps @`~~ | ~~ICH~~ | `ich`, `mir` | **✅ 実装済み（2026-09-10）** | 0 | ~~挿入描画が上書きになり行が壊れる~~（解消済み） |
 | ~~`CSI Ps P`~~ | ~~DCH~~ | `dch`, `dch1` | **✅ 実装済み（2026-09-10）** | 0 | ~~削除されず後続が詰まらない~~（解消済み） |
-| `CSI Ps G` | CHA | `hpa` | `CSI∅` | 0 | 桁移動が無視され以降の描画が全部ズレる |
-| `CSI Ps d` | VPA | `vpa` | `CSI∅` | 0 | 同上（行方向） |
+| ~~`CSI Ps G`~~ | ~~CHA~~ | `hpa` | **✅ 実装済み（2026-09-11）** | 0 | ~~桁移動が無視され以降の描画が全部ズレる~~（解消済み） |
+| ~~`CSI Ps d`~~ | ~~VPA~~ | `vpa` | **✅ 実装済み（2026-09-11）** | 0 | ~~同上（行方向）~~（解消済み） |
 | `CSI 4 h/l` | IRM | `smir`/`rmir`, `mir` | `CSI∅`（**非 private SM/RM 自体が未実装**） | 0 | 挿入モードが効かず上書きになる |
 | `CSI ?7 h/l` | DECAWM | `smam`/`rmam`, `am`, `xenl` | `MODE∅`。折り返しは無条件（`screen.rs:167`） | 0 | 折り返し禁止が効かず右端で溢れる／スクロールする |
 
@@ -93,7 +93,7 @@ terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ロ
 | `OSC 8` | ハイパーリンク | `OSC∅`。interner は未接続（`hyperlink.rs:15`） | nvim。レンダラ側に受け皿は既にある |
 | `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `INTER∅` | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する** |
 | `DCS $ q … ST` / `DCS + q … ST` | DECRQSS / XTGETTCAP | DCS コールバックが空（`interpreter.rs:148`） | vim のカーソル形状復元・capability 検出 |
-| ``CSI Ps ` `` / `CSI Ps a` / `CSI Ps e` | HPA / HPR / VPR | `CSI∅` | vttest。CHA/VPA と同じヘルパで済む |
+| ``CSI Ps ` `` / `CSI Ps a` / `CSI Ps e` | HPA / HPR / VPR | HPA は **✅ 実装済み（2026-09-11、CHA と同じメソッド）**。HPR/VPR は `CSI∅` | vttest。**VPR は `move_cursor_down` の別名にできない** — VT510 p.351 は VPR を最終行で止めるが CUD は下マージンで止まるため、DECOM リセット時にスクロール領域があると挙動が食い違う |
 | `CSI Ps b` | REP | `CSI∅` | **ローカルエントリは `rep` を広告していない**ため Tier 2。vttest |
 | `CSI Ps ^` | SD（ECMA-48 綴り） | `CSI∅`。orzma は `CSI T` のみ | 実際に発行するプログラムは**未確認**。安いので別名として入れる程度 |
 | `CSI ?69 h/l` / `CSI Pl;Pr s` | DECLRMM / DECSLRM | `MODE∅` / `CSI∅` | nvim。矩形スクロールに必要 |
@@ -141,8 +141,9 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
    （`Grid::insert_visible_row_cells` / `delete_visible_row_cells`）を追加した。
    EL / ECH の pending-wrap 例外は §4 のとおり**決着済み**（no-op を維持）。
    ICH/DCH はこの例外を引き継がず、行内編集は常に deferred wrap を解除する。
-2. **CHA/VPA + HPA/HPR/VPR**、**SCOSC/SCORC**、**SD `^` 別名**。
-   カーソル系ヘルパを共有。`CSI s` は将来の DECLRMM 分岐を見越した形に。
+2. ~~**CHA/VPA + HPA**~~ **完了（2026-09-11）** → 次は **HPR/VPR**、**SCOSC/SCORC**、**SD `^` 別名**。
+   カーソル系ヘルパ（`seat_cursor` / `seat_column`）を共有。`CSI s` は将来の DECLRMM 分岐を見越した形に。
+   **VPR は `move_cursor_down` の別名にできない**（§2 の注記を参照）。
 3. **DECAWM / DECTCEM / カーソル点滅 / DECSCUSR**。
    `Screen::cursor()` の固定値（`screen.rs:988` の TODO）を実データに置き換える。
    DECSC/DECRC の保存範囲もここで揃える。
