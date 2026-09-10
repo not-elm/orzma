@@ -331,6 +331,22 @@ impl VTActor for Executor<'_> {
                     .delete_lines(repeat_count(params.value(0)));
                 self.stage(damage);
             }
+            // ICH
+            (None, b'@') => {
+                let damage = self
+                    .device
+                    .active_screen_mut()
+                    .insert_characters(repeat_count(params.value(0)));
+                self.stage(damage);
+            }
+            // DCH
+            (None, b'P') => {
+                let damage = self
+                    .device
+                    .active_screen_mut()
+                    .delete_characters(repeat_count(params.value(0)));
+                self.stage(damage);
+            }
             // SU
             (None, b'S') => {
                 let damage = self

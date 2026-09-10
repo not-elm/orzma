@@ -330,7 +330,7 @@ impl Screen {
     }
 }
 
-/// Line feeding and region scrolling.
+/// Line feeding, region scrolling, and in-row character editing.
 impl Screen {
     /// Moves the cursor down one row, scrolling at the bottom margin;
     /// the deferred-wrap flag is deliberately preserved.
@@ -431,6 +431,54 @@ impl Screen {
         let damage = self.shift_rows_up(self.state.line, count)?;
         self.carriage_return();
         Some(damage)
+    }
+
+    /// Inserts `count` blank characters at the cursor: the cells to its
+    /// right move right keeping their own attributes, the cells pushed
+    /// past the last column are lost, and the cursor stays where it is.
+    ///
+    /// The count is clamped to the columns from the cursor through the
+    /// last one, and the blanks carry the pen's erase cell. A shift
+    /// disarms the deferred wrap; a zero count returns before anything
+    /// is touched, that flag included. Unlike [`Self::insert_lines`],
+    /// the edit applies wherever the cursor sits, ignoring the
+    /// scrolling margins VT510 gates `ICH` on, as xterm, alacritty,
+    /// kitty, ghostty, VTE and foot do. Selection and placement
+    /// anchors hold absolute columns and do not move with the content.
+    ///
+    /// # Control Functions
+    ///
+    /// - `ICH` (`CSI Pn @`)
+    pub fn insert_characters(&mut self, count: u16) -> Option<DamageSpan> {
+        let count = self.clamped_columns(count)?;
+        let fill = self.state.pen.erase_cell();
+        self.grid
+            .insert_visible_row_cells(self.state.line, self.state.column, count, fill);
+        self.state.pending_wrap = false;
+        self.damage_span(self.state.line, self.state.line)
+    }
+
+    /// Deletes `count` characters at the cursor: the cells to their
+    /// right move left keeping their own attributes, the pen's erase
+    /// cell fills the columns that open at the last column, and the
+    /// cursor stays where it is.
+    ///
+    /// The count is clamped to the columns from the cursor through the
+    /// last one, never to the row width, which would blank a column
+    /// left of the cursor. Everything [`Self::insert_characters`]
+    /// records about the zero count, the scrolling margins, the
+    /// deferred wrap, and the column anchors holds here too.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DCH` (`CSI Pn P`)
+    pub fn delete_characters(&mut self, count: u16) -> Option<DamageSpan> {
+        let count = self.clamped_columns(count)?;
+        let fill = self.state.pen.erase_cell();
+        self.grid
+            .delete_visible_row_cells(self.state.line, self.state.column, count, fill);
+        self.state.pending_wrap = false;
+        self.damage_span(self.state.line, self.state.line)
     }
 
     /// Scrolls the whole scroll region up by `count` rows: the rows at
@@ -539,6 +587,20 @@ impl Screen {
     fn clamped_rows(&self, first: ScreenLine, count: u16) -> Option<u16> {
         let bottom = self.scroll_region.bottom_margin();
         let count = count.min(bottom.0.checked_sub(first.0)? + 1);
+        (count > 0).then_some(count)
+    }
+
+    /// The columns an in-row edit at the cursor may actually touch:
+    /// `count` clamped to the columns from the cursor through the last
+    /// one, and `None` when that leaves nothing to do.
+    ///
+    /// A zero count therefore ends the call before anything is read or
+    /// written. The cursor column is always inside the row, so the
+    /// subtraction cannot fail; the guard exists to keep a future caller
+    /// that seats it outside from wrapping into a count the row cannot
+    /// hold.
+    fn clamped_columns(&self, count: u16) -> Option<u16> {
+        let count = count.min(self.grid.size().cols.checked_sub(self.state.column.0)?);
         (count > 0).then_some(count)
     }
 

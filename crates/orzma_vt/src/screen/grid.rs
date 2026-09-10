@@ -7,7 +7,7 @@ pub(crate) mod coords;
 mod history_index;
 
 use crate::screen::cell::Cell;
-use crate::screen::grid::coords::{GridLine, GridPoint, ScreenLine};
+use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::grid::history_index::HistoryIndex;
 use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
@@ -138,9 +138,69 @@ impl Grid {
 
     /// Overwrites the given column range of one visible row with `fill`.
     pub fn fill_visible_row_range(&mut self, line: ScreenLine, columns: Range<u16>, fill: Cell) {
-        let index = self.visible_index(line.0);
-        let row: &mut [Cell] = &mut self.rows[index].cells;
+        let row: &mut [Cell] = &mut self[line];
         row[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
+    }
+
+    /// Shifts one visible row's cells from `column` right by `count`
+    /// columns, filling the columns that open with `fill`.
+    ///
+    /// The cells pushed past the last column are discarded. Row
+    /// identity is untouched: an in-row edit neither creates nor
+    /// retires a row, so no id is minted and nothing reaches history.
+    ///
+    /// # Invariants
+    ///
+    /// `count` is clamped by the caller to the columns from `column`
+    /// through the row's end.
+    pub fn insert_visible_row_cells(
+        &mut self,
+        line: ScreenLine,
+        column: GridColumn,
+        count: u16,
+        fill: Cell,
+    ) {
+        let start = usize::from(column.0);
+        let count = usize::from(count);
+        let row: &mut [Cell] = &mut self[line];
+        let cols = row.len();
+        debug_assert!(
+            start + count <= cols,
+            "an in-row insert stays inside the row"
+        );
+        row.copy_within(start..cols - count, start + count);
+        row[start..start + count].fill(fill);
+    }
+
+    /// Shifts one visible row's cells from `column + count` left to
+    /// `column`, filling the columns that open at the row's end with
+    /// `fill`.
+    ///
+    /// The `count` cells starting at `column` are overwritten by the
+    /// cells that shift into them. Row identity is untouched, for the
+    /// same reason [`Self::insert_visible_row_cells`] leaves it alone.
+    ///
+    /// # Invariants
+    ///
+    /// `count` is clamped by the caller to the columns from `column`
+    /// through the row's end.
+    pub fn delete_visible_row_cells(
+        &mut self,
+        line: ScreenLine,
+        column: GridColumn,
+        count: u16,
+        fill: Cell,
+    ) {
+        let start = usize::from(column.0);
+        let count = usize::from(count);
+        let row: &mut [Cell] = &mut self[line];
+        let cols = row.len();
+        debug_assert!(
+            start + count <= cols,
+            "an in-row delete stays inside the row"
+        );
+        row.copy_within(start + count..cols, start);
+        row[cols - count..].fill(fill);
     }
 
     /// Scrolls the region up by one row: the row at `top` leaves and a
@@ -713,6 +773,67 @@ mod tests {
         assert_eq!(grid[ScreenLine(0)][1].c, ' ');
         assert_eq!(grid[ScreenLine(0)][2].c, ' ');
         assert_eq!(grid[ScreenLine(0)][3].c, 'x');
+    }
+
+    /// Asserts that an insert moves the cells at and right of `column`
+    /// up the row, drops the ones pushed past its end, fills the
+    /// columns that open, mints no id, and leaves the neighboring rows
+    /// and history untouched.
+    ///
+    /// Case: a line editor opens one column mid-row on a screen that
+    /// has already scrolled once, with content on the rows either side
+    /// of the edited one.
+    #[test]
+    fn an_insert_shifts_the_addressed_row_and_leaves_its_neighbors_alone() {
+        let mut grid = grid_with_history(1);
+        for column in 0..4 {
+            grid[ScreenLine(1)][column].c = char::from(b'a' + column as u8);
+        }
+        grid[ScreenLine(0)][0].c = 'x';
+        grid[ScreenLine(2)][0].c = 'y';
+        let history_len = grid.history_len();
+        let id = grid.line_id(ScreenLine(1));
+
+        grid.insert_visible_row_cells(ScreenLine(1), GridColumn(1), 1, Cell::default());
+
+        assert_eq!(grid[ScreenLine(1)][0].c, 'a');
+        assert_eq!(grid[ScreenLine(1)][1].c, ' ');
+        assert_eq!(grid[ScreenLine(1)][2].c, 'b');
+        assert_eq!(grid[ScreenLine(1)][3].c, 'c');
+        assert_eq!(grid[ScreenLine(0)][0].c, 'x');
+        assert_eq!(grid[ScreenLine(2)][0].c, 'y');
+        assert_eq!(grid.history_len(), history_len);
+        assert_eq!(grid.line_id(ScreenLine(1)), id);
+    }
+
+    /// Asserts that a delete shifts the surviving cells down to
+    /// `column`, fills the columns that open at the row's end, mints
+    /// no id, and leaves the neighboring rows and history untouched.
+    ///
+    /// Case: a line editor closes a two-column gap mid-row on a screen
+    /// that has already scrolled once, with content on the rows either
+    /// side of the edited one.
+    #[test]
+    fn a_delete_shifts_the_addressed_row_and_leaves_its_neighbors_alone() {
+        let mut grid = grid_with_history(1);
+        for column in 0..4 {
+            grid[ScreenLine(1)][column].c = char::from(b'a' + column as u8);
+        }
+        grid[ScreenLine(0)][0].c = 'x';
+        grid[ScreenLine(2)][0].c = 'y';
+        let history_len = grid.history_len();
+        let id = grid.line_id(ScreenLine(1));
+
+        grid.delete_visible_row_cells(ScreenLine(1), GridColumn(1), 2, Cell::default());
+
+        assert_eq!(grid[ScreenLine(1)][0].c, 'a');
+        assert_eq!(grid[ScreenLine(1)][1].c, 'd');
+        assert_eq!(grid[ScreenLine(1)][2].c, ' ');
+        assert_eq!(grid[ScreenLine(1)][3].c, ' ');
+        assert_eq!(grid[ScreenLine(0)][0].c, 'x');
+        assert_eq!(grid[ScreenLine(2)][0].c, 'y');
+        assert_eq!(grid.history_len(), history_len);
+        assert_eq!(grid.line_id(ScreenLine(1)), id);
     }
 
     /// Asserts that an id looked up from a screen line resolves back to the

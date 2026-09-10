@@ -121,6 +121,7 @@ fn liveness_after(setup: &[u8], chunk: &[u8]) -> bool {
 
 mod alignment;
 mod alternate_screen;
+mod character_editing;
 mod character_set;
 mod cursor;
 mod cursor_checkpoint;
