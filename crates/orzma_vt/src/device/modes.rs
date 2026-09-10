@@ -1,7 +1,7 @@
 //! The DECSET / DECRST modes the device carries and the enums they
 //! select among.
 
-/// Snapshot of the input-relevant terminal modes.
+/// Snapshot of the device-wide DECSET / DECRST modes.
 ///
 /// # References
 ///
@@ -35,6 +35,13 @@ pub struct VtModes {
     pub alternate_scroll: bool,
     /// DECSET 1004: the app wants `CSI I` / `CSI O` focus reports.
     pub focus_in_out: bool,
+    /// DECTCEM (DECSET 25): whether the text cursor is drawn.
+    ///
+    /// The device carries this rather than either screen, so a switch to
+    /// the alternate screen keeps the state the application set. DECSC
+    /// does not save it either — the VT510 saved-item list does not name
+    /// cursor visibility.
+    pub text_cursor_enable: TextCursorEnable,
     /// Coordinate encoding for mouse reports.
     pub mouse_encoding: MouseEncoding,
     /// Which mouse events the app asked to receive.
@@ -50,6 +57,23 @@ impl VtModes {
     /// order is the host's wheel routing, not this snapshot's.
     pub const fn alternate_scroll_active(&self) -> bool {
         matches!(self.active_screen, ScreenKind::Alternate) && self.alternate_scroll
+    }
+}
+
+/// Whether DECTCEM (DECSET 25) has the text cursor enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextCursorEnable {
+    /// `CSI ? 25 h`: the cursor is drawn. The power-up default.
+    #[default]
+    Shown,
+    /// `CSI ? 25 l`: the cursor is not drawn.
+    Hidden,
+}
+
+impl TextCursorEnable {
+    /// The state `DECSET 25` selects when set and `DECRST 25` when reset.
+    pub fn from_decset(enabled: bool) -> Self {
+        if enabled { Self::Shown } else { Self::Hidden }
     }
 }
 
@@ -190,5 +214,37 @@ impl MouseTracking {
             (false, true) => Self::Off,
             (false, false) => self,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Asserts that a device that has seen no DECTCEM starts with the
+    /// cursor shown, which is the mode's documented default.
+    ///
+    /// Case: a terminal is spawned and the shell prints its first
+    /// prompt before any application has touched cursor visibility.
+    #[test]
+    fn the_text_cursor_starts_shown() {
+        assert_eq!(
+            VtModes::default().text_cursor_enable,
+            TextCursorEnable::Shown
+        );
+    }
+
+    /// Asserts that `DECSET 25` selects `Shown` and `DECRST 25`
+    /// selects `Hidden`.
+    ///
+    /// Case: a full-screen editor hides the caret before a repaint and
+    /// asks for it back when the repaint is done.
+    #[test]
+    fn decset_twenty_five_selects_shown_and_decrst_selects_hidden() {
+        assert_eq!(TextCursorEnable::from_decset(true), TextCursorEnable::Shown);
+        assert_eq!(
+            TextCursorEnable::from_decset(false),
+            TextCursorEnable::Hidden
+        );
     }
 }

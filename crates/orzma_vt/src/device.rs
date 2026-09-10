@@ -211,7 +211,7 @@ impl DeviceState {
         self.active_screen().display_offset()
     }
 
-    /// Snapshot of the input-relevant device modes.
+    /// Snapshot of the device-wide DECSET / DECRST modes.
     pub fn modes(&self) -> VtModes {
         self.modes
     }

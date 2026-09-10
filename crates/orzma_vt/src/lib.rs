@@ -32,7 +32,9 @@ mod vi;
 /// move a type without breaking anyone.
 pub mod prelude {
     pub use crate::device::color::{Color, Palette, Rgb};
-    pub use crate::device::modes::{KeypadMode, MouseEncoding, MouseTracking, ScreenKind, VtModes};
+    pub use crate::device::modes::{
+        KeypadMode, MouseEncoding, MouseTracking, ScreenKind, TextCursorEnable, VtModes,
+    };
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::placement::{AnchoredPlacement, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};
@@ -229,7 +231,7 @@ pub trait Vt {
         self.display_offset() == DisplayOffset(0)
     }
 
-    /// Snapshot of the input-relevant terminal modes.
+    /// Snapshot of the device-wide DECSET / DECRST modes.
     fn modes(&self) -> VtModes;
 }
 
