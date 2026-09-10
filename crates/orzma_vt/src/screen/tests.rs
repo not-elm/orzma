@@ -81,6 +81,8 @@ mod line_feed;
 mod move_backward_tabs;
 mod move_cursor_relative;
 mod move_cursor_to;
+mod move_cursor_to_column;
+mod move_cursor_to_line;
 mod move_forward_tabs;
 mod new;
 mod placements;
