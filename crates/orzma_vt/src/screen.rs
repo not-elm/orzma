@@ -459,17 +459,33 @@ impl Screen {
         self.damage_span(self.state.line, self.state.line)
     }
 
-    /// Deletes `count` characters at the cursor.
+    /// Deletes `count` characters at the cursor: the cells to their
+    /// right move left, blanks fill the columns that open at the last
+    /// column, and the cursor stays where it is.
+    ///
+    /// The count is clamped to the columns from the cursor through the
+    /// last one, never to the row width: a width-relative clamp blanks
+    /// a column left of the cursor. The moved cells keep their own
+    /// attributes and the blanks carry the pen's erase cell.
+    ///
+    /// No manual states where the cursor ends up — VT510 and VT220 both
+    /// omit it, where they state it for `ICH` — so leaving it put
+    /// follows xterm. Unlike
+    /// [`Self::delete_lines`], the edit applies wherever the cursor
+    /// sits: VT510 gives `DCH` "no effect outside the scrolling
+    /// margins" and xterm, alacritty, kitty, ghostty, VTE and foot all
+    /// ignore that. The deferred wrap is disarmed.
     ///
     /// # Control Functions
     ///
     /// - `DCH` (`CSI Pn P`)
-    #[expect(
-        unused_variables,
-        reason = "a stub awaiting the test cases enumerated against it"
-    )]
     pub fn delete_characters(&mut self, count: u16) -> Option<DamageSpan> {
-        None
+        let count = self.clamped_columns(count)?;
+        let fill = self.state.pen.erase_cell();
+        self.grid
+            .delete_visible_row_cells(self.state.line, self.state.column, count, fill);
+        self.state.pending_wrap = false;
+        self.damage_span(self.state.line, self.state.line)
     }
 
     /// Scrolls the whole scroll region up by `count` rows: the rows at

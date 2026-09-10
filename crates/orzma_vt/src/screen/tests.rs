@@ -68,6 +68,7 @@ fn row_glyphs(screen: &Screen, line: ScreenLine) -> Vec<char> {
 mod backspace;
 mod carriage_return;
 mod cursor;
+mod delete_characters;
 mod delete_lines;
 mod display_offset;
 mod erase_in_display;

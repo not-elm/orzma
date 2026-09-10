@@ -173,6 +173,37 @@ impl Grid {
         row[start..start + count].fill(fill);
     }
 
+    /// Shifts one visible row's cells from `column + count` left to
+    /// `column`, filling the columns that open at the row's end with
+    /// `fill`.
+    ///
+    /// The cells at `column` through `column + count` are overwritten.
+    /// Row identity is untouched, for the same reason
+    /// [`Self::insert_visible_row_cells`] leaves it alone.
+    ///
+    /// # Invariants
+    ///
+    /// `count` is clamped by the caller to the columns from `column`
+    /// through the row's end.
+    pub fn delete_visible_row_cells(
+        &mut self,
+        line: ScreenLine,
+        column: GridColumn,
+        count: u16,
+        fill: Cell,
+    ) {
+        let cols = usize::from(self.size.cols);
+        debug_assert!(
+            usize::from(column.0) + usize::from(count) <= cols,
+            "an in-row delete stays inside the row"
+        );
+        let start = usize::from(column.0);
+        let count = usize::from(count);
+        let row: &mut [Cell] = &mut self[line];
+        row.copy_within(start + count..cols, start);
+        row[cols - count..].fill(fill);
+    }
+
     /// Scrolls the region up by one row: the row at `top` leaves and a
     /// `fill`-filled row enters at `bottom`.
     ///
