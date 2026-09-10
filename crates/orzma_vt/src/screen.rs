@@ -312,7 +312,9 @@ impl Screen {
     /// A zero addresses the first column, the same as a one, and a column
     /// past the last stops there. The row is never touched: this seats the
     /// column alone, so neither origin resolution nor a line clamp can move
-    /// the cursor off the row it is on.
+    /// the cursor off the row it is on. It also discards a pending deferred
+    /// wrap, the same disarm [`Self::seat_cursor`] performs when it
+    /// addresses both axes.
     ///
     /// # Control Functions
     ///
@@ -332,7 +334,9 @@ impl Screen {
     /// A zero addresses the first line, the same as a one. The line is
     /// resolved against the current [`OriginMode`] and clamped, so a line
     /// past the addressable region stops at its edge rather than being
-    /// refused; the column is untouched.
+    /// refused; the column value is untouched, but [`Self::seat_cursor`]
+    /// still discards a pending deferred wrap the same way it does when
+    /// addressing both axes.
     ///
     /// # Control Functions
     ///
