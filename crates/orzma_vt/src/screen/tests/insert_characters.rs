@@ -149,8 +149,7 @@ fn an_insert_outside_the_scroll_region_still_shifts_the_row() {
     );
 }
 
-/// Asserts that a zero count inserts nothing and reports no damage, while
-/// still disarming the deferred wrap.
+/// Asserts that a zero count inserts nothing and reports no damage.
 ///
 /// Case: a caller inside the crate passes a count it computed as zero.
 #[test]
@@ -158,11 +157,9 @@ fn a_zero_count_inserts_nothing() {
     let mut screen = screen();
     seed_row(&mut screen, ScreenLine(0), &['a', 'b', 'c', 'd']);
     screen.state.column = GridColumn(1);
-    screen.state.pending_wrap = true;
     let damage = screen.insert_characters(0);
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', 'd']);
     assert_eq!(damage, None);
-    assert!(!screen.state.pending_wrap);
 }
 
 /// Asserts that an insert disarms the deferred wrap, so the next printed

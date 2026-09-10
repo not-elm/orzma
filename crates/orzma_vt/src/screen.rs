@@ -438,10 +438,11 @@ impl Screen {
     /// is.
     ///
     /// The count is clamped to the columns from the cursor through the
-    /// last one, and the blanks carry the pen's erase cell. The
-    /// deferred wrap is disarmed ahead of the clamp, where xterm's
-    /// `ResetWrap` sits, so a count clamped to nothing still disarms
-    /// it.
+    /// last one, and the blanks carry the pen's erase cell. An insert
+    /// that moves cells disarms the deferred wrap; a zero count returns
+    /// before anything is touched, the flag included, as
+    /// [`Self::insert_lines`] likewise leaves the cursor alone when it
+    /// shifts nothing.
     ///
     /// Unlike [`Self::insert_lines`], the edit applies wherever the
     /// cursor sits: VT510 gives `ICH` "no effect outside the scrolling
@@ -451,18 +452,19 @@ impl Screen {
     ///
     /// The shift moves cells past two anchors that hold an absolute
     /// column: an active selection's ends and a mounted placement's.
-    /// xterm re-seats or disowns a selection the edit crosses; orzma
-    /// leaves both where they are.
+    /// When the cursor's row is inside a selection, xterm shifts its
+    /// ends with the content under `keepSelection` and disowns it
+    /// otherwise; orzma leaves both anchors where they are.
     ///
     /// # Control Functions
     ///
     /// - `ICH` (`CSI Pn @`)
     pub fn insert_characters(&mut self, count: u16) -> Option<DamageSpan> {
-        self.state.pending_wrap = false;
         let count = self.clamped_columns(count)?;
         let fill = self.state.pen.erase_cell();
         self.grid
             .insert_visible_row_cells(self.state.line, self.state.column, count, fill);
+        self.state.pending_wrap = false;
         self.damage_span(self.state.line, self.state.line)
     }
 
@@ -486,11 +488,11 @@ impl Screen {
     ///
     /// - `DCH` (`CSI Pn P`)
     pub fn delete_characters(&mut self, count: u16) -> Option<DamageSpan> {
-        self.state.pending_wrap = false;
         let count = self.clamped_columns(count)?;
         let fill = self.state.pen.erase_cell();
         self.grid
             .delete_visible_row_cells(self.state.line, self.state.column, count, fill);
+        self.state.pending_wrap = false;
         self.damage_span(self.state.line, self.state.line)
     }
 

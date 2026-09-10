@@ -316,9 +316,7 @@ refactor from moving the default down a layer and silently deleting a character
 on every zero.
 
 ```rust
-/// Asserts that a zero count deletes nothing and reports no damage, the
-/// CSI layer's `0 → 1` default having already been applied before
-/// `Screen` is called.
+/// Asserts that a zero count deletes nothing and reports no damage.
 ///
 /// Case: a caller inside the crate passes a count it computed as zero.
 #[test]
