@@ -432,6 +432,32 @@ impl Screen {
         Some(damage)
     }
 
+    /// Inserts `count` blank characters at the cursor.
+    ///
+    /// # Control Functions
+    ///
+    /// - `ICH` (`CSI Pn @`)
+    #[expect(
+        unused_variables,
+        reason = "a stub awaiting the test cases enumerated against it"
+    )]
+    pub fn insert_characters(&mut self, count: u16) -> Option<DamageSpan> {
+        None
+    }
+
+    /// Deletes `count` characters at the cursor.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DCH` (`CSI Pn P`)
+    #[expect(
+        unused_variables,
+        reason = "a stub awaiting the test cases enumerated against it"
+    )]
+    pub fn delete_characters(&mut self, count: u16) -> Option<DamageSpan> {
+        None
+    }
+
     /// Scrolls the whole scroll region up by `count` rows: the rows at
     /// the top margin leave and the pen's erase cell fills the rows that
     /// open at the bottom margin. The cursor does not move.
