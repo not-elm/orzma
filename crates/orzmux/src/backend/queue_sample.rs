@@ -40,13 +40,6 @@ impl QueueSampler {
     /// The shortest time between two handed-out samples.
     pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
-    /// The depth a wake implies on its own: the `Select` returns only
-    /// once the woken queue holds one item, and one emitted frame waits
-    /// in the event channel until the GUI's next update. A depth at or
-    /// below the floor is not a peak and records nothing, so an
-    /// interactive terminal neither logs nor adds a wake.
-    pub const BACKLOG_FLOOR: usize = 1;
-
     /// A sampler with no peaks whose first sample is due one interval
     /// after `now`.
     pub fn new(now: Instant) -> Self {
@@ -98,6 +91,13 @@ impl QueueSampler {
     pub fn report_deadline(&self) -> Option<Instant> {
         (!self.peaks.is_empty()).then(|| self.last_sample + Self::SAMPLE_INTERVAL)
     }
+
+    /// The depth a wake implies on its own: the `Select` returns only
+    /// once the woken queue holds one item, and one emitted frame waits
+    /// in the event channel until the GUI's next update. A depth at or
+    /// below the floor is not a peak and records nothing, so an
+    /// interactive terminal neither logs nor adds a wake.
+    const BACKLOG_FLOOR: usize = 1;
 
     fn above_floor(depth: usize) -> usize {
         if depth > Self::BACKLOG_FLOOR {
