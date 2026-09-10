@@ -590,12 +590,6 @@ impl Screen {
     /// while the deferred wrap is armed, as [`Self::erase_in_line`]'s
     /// [`EraseLineMode::ToEnd`] is.
     ///
-    /// The span stops at the last column, so a count past the right
-    /// edge erases the rest of the row rather than wrapping. Neither
-    /// that clip nor the deferred-wrap no-op is derived from a manual;
-    /// both are contracts this terminal chose, and
-    /// `docs/todo/vt-conformance-scope.md` records why.
-    ///
     /// # Control Functions
     ///
     /// - `ECH` (`CSI Pn X`)
