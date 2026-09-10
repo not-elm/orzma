@@ -56,7 +56,7 @@ impl Interpreter {
         tracker: &mut FrameTracker,
         chunk: &[u8],
     ) {
-        let cursor_before = device.active_screen().cursor();
+        let cursor_before = device.cursor();
         let mut executor = Executor {
             output,
             sync: &mut self.sync,
@@ -65,7 +65,7 @@ impl Interpreter {
         };
         self.parser.parse(chunk, &mut executor);
         executor.sweep_evictions();
-        executor.output.damaged |= cursor_before != executor.device.active_screen().cursor();
+        executor.output.damaged |= cursor_before != executor.device.cursor();
     }
 }
 

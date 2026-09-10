@@ -14,6 +14,7 @@ use crate::device::modes::{ScreenKind, VtModes};
 use crate::frame::damage::DamageSpan;
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::Screen;
+use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, ScreenLine};
 use crate::screen::viewport::{DisplayOffset, Scroll};
@@ -209,6 +210,17 @@ impl DeviceState {
     /// Scrollback rows the active viewport sits above the live tail.
     pub fn display_offset(&self) -> DisplayOffset {
         self.active_screen().display_offset()
+    }
+
+    /// The cursor an emitted frame carries: the active screen's write
+    /// position with this device's DECTCEM state folded in.
+    ///
+    /// Every caller that needs a frame-ready cursor goes through here.
+    /// Reading the screen and the mode separately is what lets a caller
+    /// pair a fresh screen with a stale mode, which silently drops a
+    /// `CSI ? 25 l` from the chunk-liveness diff.
+    pub fn cursor(&self) -> Cursor {
+        self.active_screen().cursor(self.modes.text_cursor_enable)
     }
 
     /// Snapshot of the device-wide DECSET / DECRST modes.

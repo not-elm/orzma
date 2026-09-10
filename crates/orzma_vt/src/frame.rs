@@ -138,7 +138,7 @@ impl FrameTracker {
     pub fn emit(&mut self, device: &DeviceState) -> Option<Frame> {
         let screen = device.active_screen();
         let carried = Carried {
-            cursor: screen.cursor(),
+            cursor: device.cursor(),
             display_offset: screen.display_offset(),
             selection: screen.selection_range(),
         };
@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         tracker.settle(
             Carried {
-                cursor: device.active_screen().cursor(),
+                cursor: device.cursor(),
                 display_offset: device.display_offset(),
                 selection: None,
             },

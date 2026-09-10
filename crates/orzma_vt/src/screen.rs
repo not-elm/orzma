@@ -24,6 +24,7 @@ use self::cell::{Cell, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
+use crate::device::modes::TextCursorEnable;
 use crate::frame::damage::DamageSpan;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::character_sets::{
@@ -1022,11 +1023,16 @@ impl Screen {
         self.grid.size()
     }
 
-    /// The write cursor as an emitted frame carries it.
-    // TODO: Report the real shape, blink, and visibility once DECSCUSR
-    // and DECTCEM land. Block / steady / visible is what the terminal
-    // starts at.
-    pub fn cursor(&self) -> Cursor {
+    /// The write cursor as an emitted frame carries it, with the
+    /// caller's DECTCEM state folded into `visible`.
+    ///
+    /// The mode is not the screen's to hold — the device carries it, so
+    /// a screen switch cannot lose it — which is why it arrives as a
+    /// parameter. Prefer [`crate::device::DeviceState::cursor`], which
+    /// pairs the two for you.
+    // TODO: Report the real shape and blink once DECSCUSR lands. Block /
+    // steady is what the terminal starts at.
+    pub fn cursor(&self, text_cursor_enable: TextCursorEnable) -> Cursor {
         Cursor {
             point: GridPoint {
                 line: GridLine::from(self.state.line),
@@ -1034,7 +1040,7 @@ impl Screen {
             },
             shape: CursorShape::Block,
             blinking: false,
-            visible: true,
+            visible: matches!(text_cursor_enable, TextCursorEnable::Shown),
         }
     }
 
