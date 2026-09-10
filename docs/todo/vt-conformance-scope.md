@@ -133,7 +133,7 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 | **`CSI 3 J`** | `screen.rs:105` で明示的に拒否。entry は `E3` を広告していないので Tier 1 ではないが、PDF p.13 には定義がある |
 | **SGR 下線拡張** | `sgr.rs:31` が下線種別を潰し、下線色は読み捨て。vim の `58;2` 発行はリポジトリ内に既知（`sgr.rs:675`） |
 | **タブストップの所有** | `tabs.rs:63` が「画面ごと」と明記。xterm は共有テーブル。PDF は所有権を規定していないので、意図的な差異として記録済み |
-| **ICH が開けた桁の属性（BCE）** | vt510 p.316 は「ICH は **normal character attribute** で空白を挿入する」と規定するが、`insert_characters`（`screen.rs:526`）は `pen.erase_cell()` を使い、pen の背景を運ぶ **BCE** になっている。既存テスト `an_inserted_blank_carries_the_pen_background_without_its_rendition` が pin 済み。参照実装は割れており、xterm（`ClearCells` が `TERM_COLOR_FLAGS` で現在の fg/bg を書く）・kitty・ghostty・alacritty・foot が BCE 側、wezterm だけが `Cell::default()` で VT510 に従う。BCE は ECMA-48 にも DEC にも規定が無く、terminfo の `bce`（"screen erased with background color"）由来の概念で、しかも **erase 系**についての記述で ICH を名指ししていない。**多数派に付いた意図的な差異として記録する**（2026-09-11、[tdd-screen-print.md](tdd-screen-print.md) の見直しで判明）。IRM の経路では開いた桁が直後に glyph で上書きされるため、IRM 側には影響しない |
+| **ICH が開けた桁の属性（BCE）** | vt510 p.316 は「ICH は **normal character attribute** で空白を挿入する」と規定するが、`insert_characters`（`screen.rs:526`）は `pen.erase_cell()` を使い、pen の背景を運ぶ **BCE** になっている。既存テスト `an_inserted_blank_carries_the_pen_background_without_its_rendition` が pin 済み。参照実装は割れており、xterm（`ClearCells` が `TERM_COLOR_FLAGS` で現在の fg/bg を書く）・kitty・ghostty・alacritty・foot が BCE 側、wezterm だけが `Cell::default()` で VT510 に従う。BCE は ECMA-48 にも DEC にも規定が無く、terminfo の `bce`（"screen erased with background color"）由来の概念で、しかも **erase 系**についての記述で ICH を名指ししていない。**多数派に付いた意図的な差異として記録する**（2026-09-11、IRM 実装時の調査で判明）。IRM の経路では開いた桁が直後に glyph で上書きされるため、IRM 側には影響しない |
 
 ## 5. 実装順（推奨）
 
@@ -147,8 +147,8 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
    `screen.rs` の `// NOTE:` で固定してある。モードは `VtModes::insert_replace` として
    デバイス全体で1つ持ち、代替画面切替も DECSC/DECRC も運ばない（xterm ほか8実装と一致）。
    幅2文字のシフト量は `print` の既存の幅1前提を継承しており、`screen.rs` の TODO に
-   紐づく積み残し。テストケースは [tdd-screen-print.md](tdd-screen-print.md) と
-   [tdd-interpreter-set_modes.md](tdd-interpreter-set_modes.md)。
+   紐づく積み残し。テストは `screen/tests/print.rs` と `interpreter/tests/modes.rs`
+   にあり、各 `#[test]` の doc が根拠にした仕様上の契約を持つ。
 2. ~~**CHA/VPA + HPA**~~ **完了（2026-09-11）** → 次は **HPR/VPR**、**SCOSC/SCORC**、**SD `^` 別名**。
    カーソル系ヘルパ（`seat_cursor` / `seat_line` / `seat_column`）を共有。`CSI s` は将来の DECLRMM 分岐を見越した形に。
    **VPR は `move_cursor_down` の別名にできない**（§2 の注記を参照）。
