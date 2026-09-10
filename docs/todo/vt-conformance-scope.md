@@ -32,20 +32,20 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 
 | 略号 | 落ち先 |
 |---|---|
-| `CSI∅` | `csi_dispatch` 末尾の `_ => {}`（`interpreter.rs:385`） |
+| `CSI∅` | `csi_dispatch` 末尾の `_ => {}`（`interpreter.rs:401`） |
 | `ESC∅` | `esc_dispatch` 末尾の `_ => {}`（`interpreter.rs:222`） |
-| `MODE∅` | `set_private_modes`（`interpreter.rs:553`）に番号が無い |
+| `MODE∅` | `set_private_modes`（`interpreter.rs:569`）に番号が無い |
 | `INTER∅` | intermediate 付きが dispatch 前に落ちる（`interpreter.rs:228`） |
-| `OSC∅` | `osc_dispatch`（`interpreter.rs:389`）は title と cwd のみ |
+| `OSC∅` | `osc_dispatch`（`interpreter.rs:407`）は title と cwd のみ |
 
 ### 1-A. 描画が壊れるもの（最優先）
 
 | シーケンス | 機能 | terminfo | 現状 | 実測頻度 † | 影響 |
 |---|---|---|---|---:|---|
-| `CSI ?25 h/l` | DECTCEM | `civis`/`cnorm`/`cvvis` | `MODE∅`。`screen.rs:884` の TODO でカーソルは `visible: true` 固定 | **590** | 再描画中もカーソルが本文上に残る |
+| `CSI ?25 h/l` | DECTCEM | `civis`/`cnorm`/`cvvis` | `MODE∅`。`screen.rs:957` の TODO でカーソルは `visible: true` 固定 | **590** | 再描画中もカーソルが本文上に残る |
 | `CSI Ps X` | **ECH** | `ech` | `CSI∅` | **73** | 消去されず旧テキストが残る（**今回のバグ**） |
-| `CSI Ps @` | ICH | `ich`, `mir` | `CSI∅` | 0 | 挿入描画が上書きになり行が壊れる |
-| `CSI Ps P` | DCH | `dch`, `dch1` | `CSI∅` | 0 | 削除されず後続が詰まらない |
+| ~~`CSI Ps @`~~ | ~~ICH~~ | `ich`, `mir` | **✅ 実装済み（2026-09-10）** | 0 | ~~挿入描画が上書きになり行が壊れる~~（解消済み） |
+| ~~`CSI Ps P`~~ | ~~DCH~~ | `dch`, `dch1` | **✅ 実装済み（2026-09-10）** | 0 | ~~削除されず後続が詰まらない~~（解消済み） |
 | `CSI Ps G` | CHA | `hpa` | `CSI∅` | 0 | 桁移動が無視され以降の描画が全部ズレる |
 | `CSI Ps d` | VPA | `vpa` | `CSI∅` | 0 | 同上（行方向） |
 | `CSI 4 h/l` | IRM | `smir`/`rmir`, `mir` | `CSI∅`（**非 private SM/RM 自体が未実装**） | 0 | 挿入モードが効かず上書きになる |
@@ -126,7 +126,7 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 
 | 対象 | 内容 |
 |---|---|
-| **EL の pending-wrap 例外** | `screen.rs:574` は deferred wrap 中の `CSI 0 K` を**何もせず返す**。テスト `erase_to_end_is_a_no_op_under_pending_wrap` は Alacritty の方針を根拠にしているが、**PDF p.13 にこの例外は無く**、DEC の EL 定義はアクティブ位置を含み、xterm の `ClearRight` もそのセルを消す。`xenl` は理由にならない。**xterm 非互換の可能性が高いので、ECH 実装と同時に再判断する** |
+| **EL の pending-wrap 例外** | `screen.rs:642` は deferred wrap 中の `CSI 0 K` を**何もせず返す**。テスト `erase_to_end_is_a_no_op_under_pending_wrap` は Alacritty の方針を根拠にしているが、**PDF p.13 にこの例外は無く**、DEC の EL 定義はアクティブ位置を含み、xterm の `ClearRight` もそのセルを消す。`xenl` は理由にならない。**xterm 非互換の可能性が高いので、ECH 実装と同時に再判断する** |
 | **1049 の pen 引き継ぎ** | `interpreter.rs:609` に「代替画面の古い pen を使う」と明記。xterm は pen を共有するので、入場時のクリアが違う背景色になり得る。BCE の正しさにも波及 |
 | **DECSC/DECRC の保存範囲** | `screen.rs:982` は多くを復元するが、DECAWM が無いので保存できていない。DECAWM 実装時に合わせる |
 | **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:686` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意 |
@@ -136,14 +136,15 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 
 ## 5. 実装順（推奨）
 
-1. **ECH → ICH/DCH → IRM**、同時に **EL の pending-wrap 例外を再判断**。
-   行内スプライスのプリミティブを共有する。現状 `Grid` には `fill_visible_row_range` は
-   あるが**行内シフトが無い**ので、ICH/DCH には新規プリミティブが要る。
-   ECH は既存の fill だけで済むので**まずこれ単体で今回のバグが直る**。
+1. ~~**ICH/DCH**~~ **完了（2026-09-10）** → 次は **IRM**。
+   行内スプライスの新規プリミティブ（`Grid::insert_visible_row_cells` /
+   `delete_visible_row_cells`）を追加した。ECH は別ブランチ（`wt/ech`）で
+   並行して対応中で、本ブランチのスコープには含まない。**EL の
+   pending-wrap 例外の再判断も本ブランチでは行っていない**（§4 参照）。
 2. **CHA/VPA + HPA/HPR/VPR**、**SCOSC/SCORC**、**SD `^` 別名**。
    カーソル系ヘルパを共有。`CSI s` は将来の DECLRMM 分岐を見越した形に。
 3. **DECAWM / DECTCEM / カーソル点滅 / DECSCUSR**。
-   `Screen::cursor()` の固定値（`screen.rs:884` の TODO）を実データに置き換える。
+   `Screen::cursor()` の固定値（`screen.rs:957` の TODO）を実データに置き換える。
    DECSC/DECRC の保存範囲もここで揃える。
 4. **DECSTR と初期化系**、**1049 の pen 修正**。
 5. **入力側の契約修正**（`kbs` の方針決定 → Shift-Tab → ファンクションキー → 修飾キー → Meta）。
