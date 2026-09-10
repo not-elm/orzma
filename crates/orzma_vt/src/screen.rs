@@ -6,23 +6,6 @@
 //! motion returns nothing, because the per-chunk cursor diff reports
 //! it.
 
-// TODO: This attribute is file-level, so it silences dead_code across
-// the whole `screen/` subtree (12 files, ~5,400 lines), though only
-// about 8 items actually need it. Narrow it to item-level `#[expect]`s
-// once the executor's CSI handlers land and most of those items go
-// live.
-// NOTE: the `#[cfg(test)]` module below uses every item this lint
-// would flag, so an unconditional `#[expect(dead_code)]` is fulfilled
-// in a plain build but unfulfilled — and denied under `-D warnings` —
-// in a test build. Gating it to non-test builds keeps both clean.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the executor reaches these screen operations once its CSI handlers land"
-    )
-)]
-
 pub mod cell;
 pub mod character_sets;
 pub mod checkpoint;
@@ -371,16 +354,7 @@ impl Screen {
     /// - `NEL` (`0x85`, `ESC E`) — after the carriage return
     pub fn line_feed(&mut self) -> Option<DamageSpan> {
         if self.state.line == self.scroll_region.bottom_margin() {
-            let top = self.scroll_region.top_margin();
-            self.grid.scroll_up_one(
-                top,
-                self.scroll_region.bottom_margin(),
-                self.state.pen.erase_cell(),
-            );
-            if top == ScreenLine(0) {
-                self.hold_scrolled_viewport();
-            }
-            return Some(DamageSpan::Full);
+            return self.scroll_region_up(1);
         }
         if self.state.line.0 + 1 < self.grid.size().rows {
             self.state.line.0 += 1;
@@ -400,17 +374,93 @@ impl Screen {
     pub fn reverse_index(&mut self) -> Option<DamageSpan> {
         self.state.pending_wrap = false;
         if self.state.line == self.scroll_region.top_margin() {
-            self.grid.scroll_down_one(
-                self.scroll_region.top_margin(),
-                self.scroll_region.bottom_margin(),
-                self.state.pen.erase_cell(),
-            );
-            return Some(DamageSpan::Full);
+            return self.scroll_region_down(1);
         }
         if ScreenLine(0) < self.state.line {
             self.state.line.0 -= 1;
         }
         None
+    }
+
+    /// Inserts `count` blank rows at the cursor inside the scroll
+    /// region: the cursor row and the rows below it move down, the
+    /// rows pushed past the bottom margin are lost, and the pen's erase
+    /// cell fills the rows that open. The cursor is homed to column
+    /// zero and the deferred wrap is disarmed.
+    ///
+    /// A cursor outside the margins inserts nothing (VT510 "IL — Insert
+    /// Line"). The count is clamped to the rows from the cursor through
+    /// the bottom margin. An insert never feeds history: the rows it
+    /// discards leave from the bottom margin, not the top of the page.
+    /// The cursor homing follows xterm, kitty, and ECMA-48 § 8.3.67
+    /// rather than alacritty and wezterm, which leave the column alone.
+    ///
+    /// # Control Functions
+    ///
+    /// - `IL` (`CSI Pn L`)
+    pub fn insert_lines(&mut self, count: u16) -> Option<DamageSpan> {
+        if !self.scroll_region.scroll_span().contains(&self.state.line) {
+            return None;
+        }
+        let damage = self.shift_rows_down(self.state.line, count)?;
+        self.carriage_return();
+        Some(damage)
+    }
+
+    /// Deletes `count` rows at the cursor inside the scroll region: the
+    /// rows below move up and the pen's erase cell fills the rows that
+    /// open at the bottom margin. The cursor is homed to column zero
+    /// and the deferred wrap is disarmed.
+    ///
+    /// A cursor outside the margins deletes nothing (VT510 "DL — Delete
+    /// Line"). The count is clamped to the rows from the cursor through
+    /// the bottom margin. A delete with the cursor on the first row of
+    /// the page feeds the deleted rows to history, as xterm, alacritty,
+    /// and wezterm do; the cursor homing follows xterm, kitty, and
+    /// ECMA-48 § 8.3.32 rather than alacritty and wezterm, which leave
+    /// the column alone.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DL` (`CSI Pn M`)
+    pub fn delete_lines(&mut self, count: u16) -> Option<DamageSpan> {
+        if !self.scroll_region.scroll_span().contains(&self.state.line) {
+            return None;
+        }
+        let damage = self.shift_rows_up(self.state.line, count)?;
+        self.carriage_return();
+        Some(damage)
+    }
+
+    /// Scrolls the whole scroll region up by `count` rows: the rows at
+    /// the top margin leave and the pen's erase cell fills the rows that
+    /// open at the bottom margin. The cursor does not move.
+    ///
+    /// The count is clamped to the region height. A region whose top
+    /// margin is the first row of the page feeds the departing rows to
+    /// history, as a line feed there would, and it does so even when a
+    /// bottom margin pins content below the region.
+    ///
+    /// # Control Functions
+    ///
+    /// - `SU` (`CSI Pn S`)
+    pub fn scroll_region_up(&mut self, count: u16) -> Option<DamageSpan> {
+        self.shift_rows_up(self.scroll_region.top_margin(), count)
+    }
+
+    /// Scrolls the whole scroll region down by `count` rows: the pen's
+    /// erase cell fills the rows that open at the top margin and the
+    /// rows pushed past the bottom margin are lost. The cursor does not
+    /// move.
+    ///
+    /// The count is clamped to the region height. Nothing is fed to
+    /// history.
+    ///
+    /// # Control Functions
+    ///
+    /// - `SD` (`CSI Pn T`)
+    pub fn scroll_region_down(&mut self, count: u16) -> Option<DamageSpan> {
+        self.shift_rows_down(self.scroll_region.top_margin(), count)
     }
 
     /// Follows a one-row scroll with the offset that keeps a scrolled
@@ -433,6 +483,62 @@ impl Screen {
         let history =
             u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
         self.viewport.offset = DisplayOffset(self.viewport.offset.0.saturating_add(1).min(history));
+    }
+
+    /// Shifts the rows from `first` through the bottom margin up by
+    /// `count` rows, filling the rows that open at the bottom margin
+    /// with the pen's erase cell; `None` when the clamped count is
+    /// zero.
+    ///
+    /// A shift that starts on the first row of the page feeds each
+    /// departing row to history and holds a scrolled-back viewport on
+    /// the row it was showing, one row at a time, the way
+    /// [`Self::line_feed`] does.
+    fn shift_rows_up(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
+        let bottom = self.scroll_region.bottom_margin();
+        let count = self.clamped_rows(first, count)?;
+        let fill = self.state.pen.erase_cell();
+        let feeds_history = first == ScreenLine(0);
+        for _ in 0..count {
+            self.grid.scroll_up_one(first, bottom, fill);
+            if feeds_history {
+                self.hold_scrolled_viewport();
+            }
+        }
+        Some(DamageSpan::Full)
+    }
+
+    /// Shifts the rows from `first` through the bottom margin down by
+    /// `count` rows, filling the rows that open at `first` with the
+    /// pen's erase cell; `None` when the clamped count is zero.
+    ///
+    /// The rows pushed past the bottom margin are discarded. Nothing
+    /// reaches history on this path, because the rows that leave do so
+    /// at the bottom margin rather than at the top of the page.
+    fn shift_rows_down(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
+        let bottom = self.scroll_region.bottom_margin();
+        let count = self.clamped_rows(first, count)?;
+        let fill = self.state.pen.erase_cell();
+        for _ in 0..count {
+            self.grid.scroll_down_one(first, bottom, fill);
+        }
+        Some(DamageSpan::Full)
+    }
+
+    /// The rows a shift starting at `first` may actually move: `count`
+    /// clamped to the rows through the bottom margin, and `None` when
+    /// that leaves nothing to do.
+    ///
+    /// A `first` below the bottom margin also yields `None`, because it
+    /// names no row the shift could move. The callers never produce one
+    /// — they check the cursor against the margins or pass the top
+    /// margin itself — so the guard exists to keep a future caller that
+    /// does neither from wrapping the subtraction into a count that
+    /// would walk the ring outside the region.
+    fn clamped_rows(&self, first: ScreenLine, count: u16) -> Option<u16> {
+        let bottom = self.scroll_region.bottom_margin();
+        let count = count.min(bottom.0.checked_sub(first.0)? + 1);
+        (count > 0).then_some(count)
     }
 
     /// Resolves a motion into the offset it aims at, before clamping.
