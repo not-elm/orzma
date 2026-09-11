@@ -300,8 +300,8 @@ impl VTActor for Executor<'_> {
                 .device
                 .active_screen_mut()
                 .move_cursor_down(repeat_count(params.value(0))),
-            // CUF
-            (None, b'C') => self
+            // CUF, HPR
+            (None, b'C' | b'a') => self
                 .device
                 .active_screen_mut()
                 .move_cursor_right(repeat_count(params.value(0))),

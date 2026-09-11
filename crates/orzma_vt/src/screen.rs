@@ -287,6 +287,7 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `CUF` (`CSI Pn C`)
+    /// - `HPR` (`CSI Pn a`)
     pub fn move_cursor_right(&mut self, count: u16) {
         self.seat_column(GridColumn(self.state.column.0.saturating_add(count)));
     }
