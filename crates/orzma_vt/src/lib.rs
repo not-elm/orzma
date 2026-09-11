@@ -33,7 +33,8 @@ mod vi;
 pub mod prelude {
     pub use crate::device::color::{Color, Palette, Rgb};
     pub use crate::device::modes::{
-        AutoWrap, InsertReplaceMode, KeypadMode, MouseEncoding, MouseTracking, ScreenKind, VtModes,
+        AutoWrap, InsertReplaceMode, KeypadMode, MouseEncoding, MouseTracking, ScreenKind,
+        TextCursorEnable, VtModes,
     };
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
@@ -240,8 +241,9 @@ pub trait Vt {
 #[derive(Debug, Default)]
 pub struct InterpretOutput {
     /// Whether this chunk produced anything frame-relevant — staged row
-    /// damage, cursor motion, or a mutated frame-visible section — so
-    /// the owner knows to open its coalesce window.
+    /// damage, a change to the reported cursor (motion or visibility),
+    /// or a mutated frame-visible section — so the owner knows to open
+    /// its coalesce window.
     pub damaged: bool,
     /// Out-of-band signals: the parser-raised ones in byte-stream order,
     /// then the chunk-end [`VtSignal::WebviewEvicted`] when the chunk

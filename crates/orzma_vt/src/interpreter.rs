@@ -12,7 +12,7 @@ mod csi;
 mod osc;
 mod sgr;
 
-use crate::device::modes::{AutoWrap, InsertReplaceMode, KeypadMode, ScreenKind};
+use crate::device::modes::{AutoWrap, InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable};
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
 use crate::interpreter::osc::{current_dir, window_title};
@@ -56,7 +56,7 @@ impl Interpreter {
         tracker: &mut FrameTracker,
         chunk: &[u8],
     ) {
-        let cursor_before = device.active_screen().cursor();
+        let cursor_before = device.cursor();
         let mut executor = Executor {
             output,
             sync: &mut self.sync,
@@ -65,7 +65,7 @@ impl Interpreter {
         };
         self.parser.parse(chunk, &mut executor);
         executor.sweep_evictions();
-        executor.output.damaged |= cursor_before != executor.device.active_screen().cursor();
+        executor.output.damaged |= cursor_before != executor.device.cursor();
     }
 }
 
@@ -201,6 +201,12 @@ impl VTActor for Executor<'_> {
             (b'\\', []) => {}
             // RIS
             (b'c', []) => self.reset_device(),
+            // HP memory lock / unlock
+            // NOTE: Memory lock is ignored rather than honored. It "locks
+            // memory above the cursor" (xterm-ctlseqs.pdf p.9), so honoring
+            // it would let a stray `ESC l` keep every row above the cursor
+            // from scrolling until an `ESC m` that may never come.
+            (b'l' | b'm', []) => {}
             // LS2
             (b'n', []) => self.invoke_character_set(GCode::G2),
             // LS3
@@ -276,6 +282,14 @@ impl VTActor for Executor<'_> {
             (None, b't') if params.value(0) == Some(22) => self.device.push_title(),
             // XTWINOPS 23
             (None, b't') if params.value(0) == Some(23) => self.pop_title(),
+            // MC
+            // NOTE: Every media copy is ignored rather than honored, printer
+            // controller mode included. That mode sends all later output to
+            // the printer "without displaying them on the screen" (vt510.pdf
+            // p.323), so honoring it with no printer attached would let a
+            // stray `CSI 5 i` hide everything up to a `CSI 4 i` that may
+            // never come.
+            (None | Some(b'?'), b'i') => {}
             // CUU
             (None, b'A') => self
                 .device
@@ -625,6 +639,11 @@ impl Executor<'_> {
                     .set_origin_mode(OriginMode::from_decset(enabled)),
                 // DECAWM
                 7 => self.device.set_auto_wrap(AutoWrap::from_decset(enabled)),
+                // DECTCEM
+                25 => {
+                    self.device.modes_mut().text_cursor_enable =
+                        TextCursorEnable::from_decset(enabled);
+                }
                 // Alternate screen
                 47 => self.switch_screen(ScreenKind::from_decset(enabled)),
                 // DECNKM

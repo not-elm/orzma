@@ -24,7 +24,7 @@ use self::cell::{Cell, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
-use crate::device::modes::{AutoWrap, InsertReplaceMode};
+use crate::device::modes::{AutoWrap, InsertReplaceMode, TextCursorEnable};
 use crate::frame::damage::DamageSpan;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::character_sets::{
@@ -150,6 +150,10 @@ impl Screen {
     /// column and the cursor stays there. Gating the resolve is
     /// defence in depth behind `DeviceState::set_auto_wrap`, which
     /// disarms the flag when the mode is reset.
+    ///
+    /// `mode` is `IRM`: under [`InsertReplaceMode::Insert`] the character
+    /// lands on a column opened by [`Self::insert_characters`], which
+    /// records what the shift does to the rest of the row.
     ///
     /// The caller dispatches control bytes itself; this method assumes
     /// a printable character of display width one.
@@ -1087,10 +1091,9 @@ impl Screen {
     }
 
     /// The write cursor as an emitted frame carries it.
-    // TODO: Report the real shape, blink, and visibility once DECSCUSR
-    // and DECTCEM land. Block / steady / visible is what the terminal
-    // starts at.
-    pub fn cursor(&self) -> Cursor {
+    // TODO: Report the real shape and blink once DECSCUSR lands. Block /
+    // steady is what the terminal starts at.
+    pub fn cursor(&self, text_cursor_enable: TextCursorEnable) -> Cursor {
         Cursor {
             point: GridPoint {
                 line: GridLine::from(self.state.line),
@@ -1098,7 +1101,7 @@ impl Screen {
             },
             shape: CursorShape::Block,
             blinking: false,
-            visible: true,
+            visible: matches!(text_cursor_enable, TextCursorEnable::Shown),
         }
     }
 

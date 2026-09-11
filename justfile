@@ -77,7 +77,7 @@ fix-lint:
 
 # build the orzmd web bundle (esbuild)
 orzmd-web:
-    pnpm --filter @orzma/orzmd-web build
+    pnpm --filter '@orzma/orzmd-web...' build
 
 # build the web bundle then the orzmd binary
 orzmd: orzmd-web
