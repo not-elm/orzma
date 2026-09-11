@@ -45,13 +45,15 @@ relies on, an invariant a later mutation must preserve. If overlooking
 the comment causes no real failure, do not write it — rename an
 identifier so the code carries the meaning, or delete it.
 
-Note: `///` and `//!` are **doc comments**, not "line comments" for this rule — see the next section.
+Note: `///` and `//!` are **doc comments**, not "line comments" for this rule — see "Doc comments" and "Doc comment content — only what the reader needs" below.
 
 ## Comment references — cite `docs/references/`, nothing else under `docs/`
 
 Comments and doc comments may cite a file under `docs/references/` — the
-VT, ECMA-48 and xterm manuals. **No other path under `docs/` may be cited
-from code**, doc comments included.
+VT, ECMA-48 and xterm manuals — including a section of one
+(`ECMA-48 § 8.3.67`). **No other document under `docs/` may be cited from
+code**, doc comments included — not by path, and not by section number or
+decision ID (`spec §7`, `D17a of the engine-swap design`).
 
 Everything else in `docs/` is short-lived by design. `docs/todo/` holds
 per-task working notes that are deleted once the task ships, and
@@ -62,7 +64,8 @@ broken code path, nothing fails to compile when it does.
 | Pattern                                          | Example                                    | Instead                                                          |
 | ------------------------------------------------ | ------------------------------------------ | ---------------------------------------------------------------- |
 | Citing a working note                            | `// TODO: … (docs/todo/migrate.md item 11)` | State the blocker in the comment itself and drop the path        |
-| Citing a tracking table                          | `// NOTE: see docs/todo/vt-conformance-scope.md` | Write the decision the table records, not a pointer to it   |
+| Citing a tracking table                          | `// NOTE: see docs/todo/vt-conformance-scope.md` | Write the decision the table records (in a doc comment, only as the contract it implies), not a pointer to it |
+| Citing a design doc by section or decision ID    | `/// … (spec §7)` / `// … (D16)`           | Drop the pointer; state the contract (doc) or the caveat (`// NOTE:`) itself |
 | Citing a manual                                  | `/// vt510.pdf p.319 — "Default: Replace."` | **Allowed** — `docs/references/` is permanent                    |
 
 The rule is one-directional: Markdown under `docs/`, PR descriptions and
@@ -70,7 +73,10 @@ commit messages may link wherever they like. It binds only what ships
 inside a `.rs` file.
 
 When a working note holds reasoning a future reader will want, copy the
-**conclusion** into the comment rather than linking the note. A citation
+**conclusion** into the comment rather than linking the note. In a doc
+comment the conclusion is copied only as the contract it implies; the
+rationale behind it is not copied (see "Doc comment content — only what
+the reader needs"). A citation
 that carries its own quote and page — `vt510.pdf p.316, "Text between the
 cursor and right margin moves to the right."` — stays checkable after
 every surrounding file is gone.
@@ -107,6 +113,84 @@ Forbidden:
 | Externally `pub` item with no doc           | Public API owes the reader an explanation |
 | Placeholder doc like `/// TODO: write this` | Don't ship empty docs                     |
 
+## Doc comment content — only what the reader needs
+
+A doc comment (`///`, `//!`, or the equivalent `#[doc = "…"]`) states the
+contract a reader relies on to use the item, and nothing else. Content
+outside the allowed list below is deleted — not moved to a `//` comment, a
+`# Notes` section, or another item's doc — except as the `NOTE:` boundary
+case below allows. This applies to every doc comment under `src/` and
+`crates/`, whatever the item's visibility.
+
+Allowed:
+
+| Content | Example |
+| ------- | ------- |
+| The one-line summary | `/// Returns the active pane.` |
+| Observable behavior, and what the return value means — including `None`, `false`, and sentinel values | `` Reports [`DamageSpan::Full`], or `None` when the grid was already blank. `` |
+| Meaning of an input that its type does not state: unit, coordinate space, base, valid range | `` A one-based line; `None` stands for an omitted parameter. `` |
+| Side effects and state changes the caller can observe | `The cursor does not move.` |
+| Preconditions and caller obligations, including an ordering constraint whose violation breaks behavior | `Must run before any thread is spawned.` |
+| Edge cases and boundary values | `A zero count moves one column.` |
+| `# Panics`, `# Errors`, `# Safety` | |
+| `# Invariants` — the guarantee itself | `Line ids are never reused within one grid.` |
+| Limitations and unsupported cases the caller can observe, stated in the present tense | `UTF-8 mouse encoding (1005) is sent with X10 framing.` |
+| Spec mapping: `# Control Functions`, `# References`, and citations of normative specifications and manuals (the `docs/references/` manuals, DEC STD-070) | `vt510.pdf p.319 — "Default: Replace."` |
+| For a `#[test]` fn: the asserted contract and the `Case:` scenario (see "Test doc comments") | |
+| `# Examples` | |
+| `TODO: <text>` | `TODO: support the UTF-8 mouse encoding (1005).` |
+
+Forbidden (representative — the allowed list above is authoritative):
+
+| Category | Example |
+| -------- | ------- |
+| Implementation steps — how the body does its work | `History is therefore resolved through an id-keyed index rather than by position.` |
+| Design rationale and rejected alternatives, including why an item is named or placed as it is | `we use the name Checkpoint instead because …` |
+| External history and comparisons with other implementations: other terminals' behavior, issues, commits, dependency source lines | `kitty commit 668f6fa and Alacritty issue #800` / `the trade alacritty makes too` |
+| Hypothetical breakage, and deferral to another item's doc | `A rewrite that renumbers from zero would silently …` / `` [`Screen::resize`] records why `` |
+| Time-bound wording, and pointers to design documents the reader cannot follow | `Vi mode arrives later.` / `for now` / `until Phase 3` / `(spec §7)` / `D17a of the engine-swap design` |
+| Echo of the code: the name, signature, or item kind restated; ECS registration, schedule, or `run_if` recited; another item's doc copied | `Bevy Resource wrapping …` / `Runs in PostUpdate before …` |
+| Callers and tests, in a non-test item's doc: who calls the item, how testable it is, what the tests cover | `Used by the UI-font path.` / `Kept pure so unit tests can cover every branch.` |
+| Absence inventory: what the item does not hold or know, when no caller would expect it to | `The grid knows nothing about cursors.` |
+| A `NOTE:` tag inside a doc comment | `/// NOTE: …` |
+
+Boundary cases:
+
+- An intra-doc link that names a type or item the contract uses is allowed;
+  a link that hands the explanation to another item is not.
+- "Preconditions and caller obligations" covers what a caller must do;
+  "Callers and tests" covers who the callers are. Only the first is allowed.
+- An `# Invariants` entry states the guarantee; what would break without it
+  is not written.
+- A contrast that states what the item does against a behavior a caller
+  could expect ("truncating rather than reflowing", "ignored rather than
+  clamped") is observable behavior and is allowed; an alternative the
+  designers considered and rejected is not.
+- Citing what a specification or manual says ("xterm's ctlseqs documents
+  …") is spec mapping; describing what another implementation does ("xterm
+  homes the cursor …") is a comparison.
+- Schedule and ordering information is allowed on an item an outside system
+  must order against (a `SystemSet`, for instance); reciting where the item
+  itself is registered or scheduled is not.
+- Each item states its own contract, even when it matches a delegate's;
+  "another item's doc copied" means text that describes a different item.
+- A sentence that mixes allowed and forbidden content is split: the allowed
+  part stays, and a consequence of misuse is restated as the precondition or
+  `# Panics` entry it implies.
+- Future work is written only as a `TODO:`, whose text the time-bound ban
+  does not cover. Untagged future-design prose becomes a `TODO:` when it
+  names pending work and is deleted otherwise.
+- A heading outside the allowed list (`# Notes`, `# Layout`, …) grants no
+  allowance: each sentence under it is judged by the rows above.
+- A module doc (`//!`) states the module's purpose in 1–3 lines; it does not
+  list the module's items, files, or callers.
+- A field or variant doc does not repeat its parent's doc or a sibling's.
+- A `NOTE:` found in a doc comment is rewritten as allowed doc content when
+  it states a contract, becomes a body `// NOTE:` when it meets the bar in
+  "Comments", and is deleted otherwise.
+- Test doc comments keep the two-part structure in "Test doc comments"; the
+  forbidden list applies to them as well.
+
 ## Comment prose — write complete English sentences
 
 English prose in comment and doc bodies — doc-comment paragraphs
@@ -136,7 +220,7 @@ Not fragments for this rule (still fine):
   deliberately makes it a noun phrase or third-person singular verb
   phrase (`/// Returns the active pane.`).
 - Standard parallel ellipsis sharing an auxiliary or subject
-  (`are pinned by its tests, not re-asserted here`).
+  (`are clamped to the grid, not wrapped`).
 - Em-dashes, semicolons, and colons joining clauses that are each
   complete on their own.
 - Table cells, section headings, and list labels inside doc bodies.
@@ -146,8 +230,8 @@ Complete does not mean long — keep comments concise:
 - Say it once: one to three short sentences per paragraph; a doc body
   that can be one sentence stays one sentence.
 - Cut filler and repetition: do not restate the first line in the
-  body, and do not add background the reader does not need in order
-  to use the item.
+  body. What a doc comment may contain at all is set by "Doc comment
+  content — only what the reader needs".
 - When trimming, drop whole sentences rather than degrading the
   survivors into fragments — the complete-sentences rule above still
   applies to what remains.
@@ -168,18 +252,17 @@ asserted contract AND the concrete case the test envisions:
   already say.
 - A test doc holds exactly those two parts — no policy paragraph in
   between. When a test pins a decided policy (e.g. "a zero-axis resize
-  is ignored"), fold the decision — including the rejected alternative
-  when it fits — into the first line ("Asserts that a request with a
-  zero axis is ignored rather than clamped."); the rationale behind
-  the decision lives in the production item's doc comment or the
-  design doc, not in the test.
+  is ignored"), fold the decision — including the behavior a reader
+  might expect instead, when it fits — into the first line ("Asserts
+  that a request with a zero axis is ignored rather than clamped.");
+  the rationale behind the decision is not written in any doc comment.
 - Keep the `Case:` paragraph to the scenario and stop — 1–3 sentences.
   The scenario is the paragraph's ONLY content; in particular:
   - Do not restate what the test itself pins — the first line already
     says it.
   - Do not state policies, design decisions, or their rationale in the
     `Case:` paragraph — fold the decision into the first line and
-    leave the rationale to the production doc.
+    leave the rationale out.
   - Do not speculate about how a hypothetical broken implementation
     would misbehave ("a forward that drops the operation would paint no
     highlight") — that is the test's justification, not the case.
@@ -200,8 +283,9 @@ fn a_degenerate_resize_is_ignored() { ... }
 Not required:
 
 - Test helpers, fixtures, and mocks inside `#[cfg(test)]` — keep their
-  names descriptive instead (a doc comment is still welcome when the
-  helper hides a non-obvious recipe, e.g. scrollback seeding math).
+  names descriptive instead (a doc comment is still welcome when it
+  states a non-obvious contract of the helper, e.g. how many history
+  rows the seeded scrollback holds).
 
 ## Imports
 
@@ -396,7 +480,7 @@ Required:
   the resource is absent.
 - After moving the guard into a `run_if`, delete the in-body early
   return — leaving both is redundant and misleads the reader about when
-  the system runs. Note the gating in the system's doc comment instead.
+  the system runs.
 - Keep any test that registers the same system in sync: add the matching
   `run_if` so the test exercises the real scheduling behavior.
 
@@ -622,7 +706,8 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 
 - `mod.rs` ban
 - Comment taxonomy — only `// TODO:` / `// NOTE:` / `// SAFETY:`
-- Comment references — code cites `docs/references/` only; no other path under `docs/` appears in a comment or doc comment (see "Comment references")
+- Comment references — code cites `docs/references/` only; no other document under `docs/` appears in a comment or doc comment, by path, section number, or decision ID (see "Comment references")
+- Doc comment content — doc comments carry only the allowed content; forbidden content is deleted, not relocated (see "Doc comment content — only what the reader needs")
 - Comment prose — English prose in comment/doc bodies is written as complete, natural sentences, not telegraphic fragments, and kept concise (see "Comment prose — write complete English sentences")
 - File-level module `//!` requirement
 - Test doc comments — every `#[test]` fn documents its asserted contract plus a scenario-only `Case:` paragraph, and nothing else; pinned policies fold into the first line, never a paragraph of their own (see "Test doc comments")
