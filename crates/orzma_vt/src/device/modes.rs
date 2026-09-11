@@ -27,6 +27,14 @@ pub struct VtModes {
     pub active_screen: ScreenKind,
     /// IRM (`SM 4`): whether a printed character inserts or replaces.
     pub insert_replace: InsertReplaceMode,
+    /// DECAWM (`DECSET 7`): whether a graphic character at the right
+    /// border wraps to the next line or replaces the last column.
+    // NOTE: Set this only through `DeviceState::set_auto_wrap`. A
+    // direct write through `modes_mut` skips the disarm of each
+    // screen's deferred wrap, and a later `DECSET 7` then cashes in a
+    // latch armed before the reset, wrapping a line that must not
+    // wrap.
+    pub auto_wrap: AutoWrap,
     /// DECCKM (DECSET 1): arrow keys send SS3 instead of CSI.
     pub app_cursor: bool,
     /// The mode selects whether the numeric keypad sends ASCII numerals or application function.
@@ -84,6 +92,49 @@ impl InsertReplaceMode {
     /// The mode `SM 4` selects when set and `RM 4` when reset.
     pub fn from_sm(enabled: bool) -> Self {
         if enabled { Self::Insert } else { Self::Replace }
+    }
+}
+
+/// Whether a graphic character received at the right border wraps to
+/// the next line or replaces the character already in the last column.
+///
+/// Both screens share one value. `DECSC` does not carry the mode, but
+/// it does carry the last-column flag — the saved-cursor state records
+/// the difference.
+///
+/// The default is [`Self::Enabled`], unlike the other modes in this
+/// file, because `xterm-256color` advertises `am` and DEC STD-070
+/// resolves its own `WRAP_OFF` power-up value from the Set-Up setting,
+/// which orzma has none of.
+///
+/// # Control Functions
+///
+/// - `DECAWM` (`CSI ? 7 h` / `CSI ? 7 l`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoWrap {
+    /// A character at the right border moves to the start of the next
+    /// line, scrolling when the cursor is at the end of the scrolling
+    /// region.
+    #[default]
+    Enabled,
+    /// A character at the right border replaces the one in the last
+    /// column, and the cursor stays there.
+    Disabled,
+}
+
+impl AutoWrap {
+    /// The mode `DECSET 7` selects when set and `DECRST 7` when reset.
+    pub fn from_decset(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+
+    /// Whether a character at the right border wraps.
+    pub const fn wraps(self) -> bool {
+        matches!(self, Self::Enabled)
     }
 }
 

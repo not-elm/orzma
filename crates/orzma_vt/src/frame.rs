@@ -225,7 +225,7 @@ mod tests {
     use super::*;
     use crate::device::DeviceState;
     use crate::device::color::Color;
-    use crate::device::modes::InsertReplaceMode;
+    use crate::device::modes::{AutoWrap, InsertReplaceMode};
     use crate::placement::{InstanceId, PlacementSize};
     use crate::screen::grid::GridSize;
     use crate::screen::grid::coords::{GridColumn, GridLine};
@@ -336,7 +336,7 @@ mod tests {
         let mut rig = drained_rig();
         rig.device
             .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace);
+            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
         rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert_eq!(frame.size, GridSize { cols: 4, rows: 3 });

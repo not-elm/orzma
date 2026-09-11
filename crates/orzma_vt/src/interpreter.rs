@@ -12,7 +12,7 @@ mod csi;
 mod osc;
 mod sgr;
 
-use crate::device::modes::{InsertReplaceMode, KeypadMode, ScreenKind};
+use crate::device::modes::{AutoWrap, InsertReplaceMode, KeypadMode, ScreenKind};
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
 use crate::interpreter::osc::{current_dir, window_title};
@@ -110,7 +110,10 @@ impl VTActor for Executor<'_> {
             return;
         }
         let mode = self.device.modes().insert_replace;
-        let damage = self.device.active_screen_mut().print(b, mode);
+        let damage = self
+            .device
+            .active_screen_mut()
+            .print(b, mode, AutoWrap::Enabled);
         self.stage(damage);
     }
 

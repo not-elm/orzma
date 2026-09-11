@@ -24,7 +24,7 @@ use self::cell::{Cell, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
-use crate::device::modes::InsertReplaceMode;
+use crate::device::modes::{AutoWrap, InsertReplaceMode};
 use crate::frame::damage::DamageSpan;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::character_sets::{
@@ -136,12 +136,20 @@ impl Screen {
 
 /// Graphic character output.
 impl Screen {
-    /// Prints one character at the cursor with the current pen,
-    /// wrapping first when the deferred wrap is armed.
+    /// Prints one character at the cursor with the current pen, wrapping
+    /// first when the deferred wrap is armed and autowrap is set.
     ///
-    /// `mode` is `IRM`: under [`InsertReplaceMode::Insert`] the character
-    /// lands on a column opened by [`Self::insert_characters`], which
-    /// records what the shift does to the rest of the row.
+    /// `insert_replace` is `IRM`: under [`InsertReplaceMode::Insert`]
+    /// the character lands on a column opened by
+    /// [`Self::insert_characters`], which records what the shift does
+    /// to the rest of the row.
+    ///
+    /// `auto_wrap` is `DECAWM`. It gates both halves of the deferred
+    /// wrap: a reset mode neither resolves an armed wrap nor arms a
+    /// new one, so a character at the right border replaces the last
+    /// column and the cursor stays there. Gating the resolve is
+    /// defence in depth behind `DeviceState::set_auto_wrap`, which
+    /// disarms the flag when the mode is reset.
     ///
     /// The caller dispatches control bytes itself; this method assumes
     /// a printable character of display width one.
@@ -159,9 +167,15 @@ impl Screen {
     // The insert-mode shift below inherits the same assumption: it
     // moves one column where xterm, alacritty, kitty, ghostty, foot and
     // wezterm all move the character's display width.
-    pub fn print(&mut self, c: char, mode: InsertReplaceMode) -> Option<DamageSpan> {
+    pub fn print(
+        &mut self,
+        c: char,
+        insert_replace: InsertReplaceMode,
+        auto_wrap: AutoWrap,
+    ) -> Option<DamageSpan> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
-        let wrap = if self.state.pending_wrap {
+        let wrapping = auto_wrap.wraps();
+        let wrap = if self.state.pending_wrap && wrapping {
             self.state.pending_wrap = false;
             self.state.column = GridColumn(0);
             self.line_feed()
@@ -173,15 +187,15 @@ impl Screen {
         // `insert_characters` clear `pending_wrap`, and the character
         // would overwrite the last column instead of wrapping to the
         // next row.
-        if matches!(mode, InsertReplaceMode::Insert) {
+        if matches!(insert_replace, InsertReplaceMode::Insert) {
             self.insert_characters(1);
         }
         self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph);
-        if self.state.column.0 + 1 < self.grid.size().cols {
+        let at_right_edge = self.state.column.0 + 1 >= self.grid.size().cols;
+        if !at_right_edge {
             self.state.column.0 += 1;
-        } else {
-            self.state.pending_wrap = true;
         }
+        self.state.pending_wrap = at_right_edge && wrapping;
         match wrap {
             Some(DamageSpan::Full) => Some(DamageSpan::Full),
             _ => self.damage_span(self.state.line, self.state.line),

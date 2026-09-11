@@ -39,7 +39,7 @@ fn an_inserted_blank_carries_the_pen_background_without_its_rendition() {
     screen.pen_mut().style = Style::BOLD;
     screen.pen_mut().bg = Color::Indexed(1);
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace);
+        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
     }
     screen.pen_mut().bg = Color::Indexed(4);
     screen.state.column = GridColumn(1);
@@ -171,12 +171,12 @@ fn a_zero_count_inserts_nothing() {
 fn an_insert_disarms_the_deferred_wrap() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace);
+        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
     }
     assert!(screen.state.pending_wrap);
     screen.insert_characters(1);
     assert!(!screen.state.pending_wrap);
-    screen.print('x', InsertReplaceMode::Replace);
+    screen.print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
     assert_eq!(screen.state.line, ScreenLine(0));
     assert_eq!(screen.grid[ScreenLine(0)][3].c, 'x');
 }

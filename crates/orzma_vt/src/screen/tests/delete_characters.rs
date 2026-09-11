@@ -39,7 +39,7 @@ fn the_shifted_cells_keep_their_attributes_and_the_new_blank_takes_the_pen_backg
     screen.pen_mut().style = Style::BOLD;
     screen.pen_mut().bg = Color::Indexed(1);
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace);
+        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
     }
     screen.pen_mut().bg = Color::Indexed(4);
     screen.state.column = GridColumn(1);
@@ -171,12 +171,12 @@ fn a_zero_count_deletes_nothing() {
 fn a_delete_disarms_the_deferred_wrap() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace);
+        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
     }
     assert!(screen.state.pending_wrap);
     screen.delete_characters(1);
     assert!(!screen.state.pending_wrap);
-    screen.print('x', InsertReplaceMode::Replace);
+    screen.print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
     assert_eq!(screen.state.line, ScreenLine(0));
     assert_eq!(screen.grid[ScreenLine(0)][3].c, 'x');
 }

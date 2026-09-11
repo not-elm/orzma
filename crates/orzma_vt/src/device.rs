@@ -394,7 +394,7 @@ const MAX_TITLE_DEPTH: usize = 16;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::modes::InsertReplaceMode;
+    use crate::device::modes::{AutoWrap, InsertReplaceMode};
     use crate::screen::cell::Cell;
     use crate::screen::grid::coords::GridColumn;
     use crate::screen::viewport::ViewportLine;
@@ -509,7 +509,7 @@ mod tests {
         for c in ['a', 'b', 'c'] {
             device
                 .active_screen_mut()
-                .print(c, InsertReplaceMode::Replace);
+                .print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
         }
         device.active_screen_mut().set_horizontal_tab_stop();
 
@@ -542,14 +542,14 @@ mod tests {
         for c in ['a', 'b', 'c'] {
             device
                 .active_screen_mut()
-                .print(c, InsertReplaceMode::Replace);
+                .print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
         }
         device.active_screen_mut().save_checkpoint();
 
         device.set_active_screen_for_test(ScreenKind::Alternate);
         device
             .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace);
+            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
         device.active_screen_mut().restore_checkpoint();
         assert_eq!(device.active_screen().cursor_column(), GridColumn(0));
 
@@ -570,11 +570,11 @@ mod tests {
         let mut device = device();
         device
             .active_screen_mut()
-            .print('p', InsertReplaceMode::Replace);
+            .print('p', InsertReplaceMode::Replace, AutoWrap::Enabled);
         device.set_active_screen_for_test(ScreenKind::Alternate);
         device
             .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace);
+            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
 
         let _ = device.reset();
 
@@ -619,7 +619,7 @@ mod tests {
         let mut device = device();
         device
             .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace);
+            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
 
         assert_eq!(device.reset(), Some(DamageSpan::Full));
     }
@@ -649,7 +649,7 @@ mod tests {
         device.set_active_screen_for_test(ScreenKind::Alternate);
         device
             .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace);
+            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
         device.set_active_screen_for_test(ScreenKind::Primary);
 
         assert_eq!(device.reset(), None);
