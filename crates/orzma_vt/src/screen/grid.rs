@@ -14,9 +14,6 @@ use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
 
 /// Grid dimensions in cells.
-///
-/// The row count is the source of truth for "one screenful" (scroll
-/// paging) and for verifying an applied resize.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridSize {
     /// Visible column count.
@@ -27,49 +24,32 @@ pub struct GridSize {
 
 /// Stable identity of one grid row, minted when the row enters the ring.
 ///
+/// An id must be resolved against the grid that minted it: uniqueness is
+/// per grid, not per terminal.
+///
 /// # Invariants
 ///
 /// An id is the row's identity, not its address: it follows the row
-/// wherever the row moves inside the ring. Ids are minted monotonically
-/// per grid and never reused, so a placement anchored to one can never be
-/// re-pointed at later content on the same grid.
-///
-/// Nothing orders the ring by id. A reverse scroll inserts a freshly
-/// minted row above rows minted earlier, and two consequences follow that
-/// each invalidate a short-circuit a reader would otherwise reach for.
-///
-/// History becomes unordered as well, because such a row later scrolls
-/// into it like any other, so binary-searching the history segment alone
-/// is equally unsound. The front row is not necessarily the lowest id
-/// either, because on a grid built without history a reverse scroll
-/// inserts at ring index zero. History is therefore resolved through an
-/// id-keyed index rather than by position, and only the visible rows are
-/// scanned.
-///
-/// The uniqueness is per grid, NOT per terminal: the primary and
-/// alternate screens own separate grids that both start at zero, so
-/// resolving an id against the wrong one silently names a different row.
+/// wherever the row moves inside the ring. Ids are never reused within
+/// one grid, so a placement anchored to one can never be re-pointed at
+/// later content on the same grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LineId(u64);
 
 /// Storage-only grid: scrollback history plus the visible screen in
 /// one ring.
-///
-/// The grid knows nothing about cursors, pens, or viewports.
 #[derive(Debug)]
 pub struct Grid {
     /// One logical ring holding history and the active screen:
     /// the last `size.rows` entries are the active screen, everything
-    /// before them is history, oldest first. Indices are logical
-    /// (`VecDeque` hides the physical rotation), so index `0` is
-    /// always the oldest surviving history row and the boundary sits
-    /// at `history_len`.
+    /// before them is history, oldest first. Index `0` is always the
+    /// oldest surviving history row, and the boundary sits at
+    /// `history_len`.
     rows: VecDeque<GridRow>,
     /// Active-screen dimensions; `rows` always keeps at least this
     /// many entries as its tail window.
     size: GridSize,
-    /// History row cap: `history_len` never exceeds it, and a scroll
-    /// at the cap recycles the evicted row as the incoming blank.
+    /// History row cap: `history_len` never exceeds it.
     max_history: usize,
     /// The id the next row to enter the ring will carry.
     next_line_id: u64,
@@ -78,10 +58,6 @@ pub struct Grid {
 }
 
 /// One stored row: its identity together with its cells.
-///
-/// The id lives here rather than on [`Row`] because `Row<Cell>` is the
-/// storage row while `Row<Run>` is the emitted one, so a field on `Row`
-/// would carry grid identity into the frame's wire type.
 #[derive(Debug)]
 struct GridRow {
     id: LineId,
@@ -125,9 +101,8 @@ impl Grid {
 
     /// Whether every visible cell is blank and no history survives.
     ///
-    /// Content only: row ids and the mint counter are deliberately out of
-    /// scope, so a grid that has scrolled and then been erased still
-    /// reports blank.
+    /// Row ids do not count, so a grid that has scrolled and then been
+    /// erased still reports blank.
     pub fn is_blank(&self) -> bool {
         self.history_len() == 0
             && self
@@ -145,13 +120,10 @@ impl Grid {
     /// Shifts one visible row's cells from `column` right by `count`
     /// columns, filling the columns that open with `fill`.
     ///
-    /// The cells pushed past the last column are discarded. Row
-    /// identity is untouched: an in-row edit neither creates nor
-    /// retires a row, so no id is minted and nothing reaches history.
+    /// The cells pushed past the last column are discarded. The row
+    /// keeps its id, and nothing reaches history.
     ///
-    /// # Invariants
-    ///
-    /// `count` is clamped by the caller to the columns from `column`
+    /// The caller must clamp `count` to the columns from `column`
     /// through the row's end.
     pub fn insert_visible_row_cells(
         &mut self,
@@ -177,12 +149,10 @@ impl Grid {
     /// `fill`.
     ///
     /// The `count` cells starting at `column` are overwritten by the
-    /// cells that shift into them. Row identity is untouched, for the
-    /// same reason [`Self::insert_visible_row_cells`] leaves it alone.
+    /// cells that shift into them. The row keeps its id, and nothing
+    /// reaches history.
     ///
-    /// # Invariants
-    ///
-    /// `count` is clamped by the caller to the columns from `column`
+    /// The caller must clamp `count` to the columns from `column`
     /// through the row's end.
     pub fn delete_visible_row_cells(
         &mut self,
@@ -208,8 +178,7 @@ impl Grid {
     ///
     /// The departing row becomes the newest history row only when `top`
     /// is the first screen line. A region with content pinned above it
-    /// discards the row instead, because it never reached the top of the
-    /// screen and so was never something the user could scroll back to.
+    /// discards the row instead.
     pub fn scroll_up_one(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
         let base = self.history_len();
         let id = self.mint();
@@ -293,9 +262,8 @@ impl Grid {
     /// The active-grid line the row `id` now sits at; `None` once it has
     /// left the ring.
     ///
-    /// A history row resolves in constant time through the history
-    /// index; a visible row is found by a scan bounded by the screen
-    /// height.
+    /// A history row resolves in constant time; a visible row costs a
+    /// scan bounded by the screen height.
     pub fn grid_line(&self, id: LineId) -> Option<GridLine> {
         let history = self.history_len();
         if let Some(index) = self.history_index.index_of(id) {
@@ -313,11 +281,10 @@ impl Grid {
     /// Borrows the row at an active-grid line; a negative line reaches
     /// into scrollback history.
     ///
-    /// # Invariants
+    /// # Panics
     ///
-    /// The line must resolve inside the ring — `-history_len <= line`
-    /// and `line < rows`. [`crate::screen::Screen`] guarantees that by
-    /// clamping the viewport to the history it actually has.
+    /// Panics unless the line resolves inside the ring, that is
+    /// `-history_len <= line` and `line < rows`.
     pub fn row(&self, line: GridLine) -> &Row<Cell> {
         let index = self
             .ring_index(line)
@@ -333,10 +300,8 @@ impl Grid {
     /// Resizes the grid, truncating rather than reflowing; returns
     /// whether the dimensions changed.
     ///
-    /// A shrink drops rows from the bottom. Pushing rows off the top
-    /// into history is the caller's job, done before this call: it owns
-    /// the cursor that decides how many rows must go, and the viewport
-    /// that has to follow them.
+    /// A shrink drops rows from the bottom. Rows that should reach
+    /// history must be scrolled off the top before this call.
     ///
     /// # Invariants
     ///
@@ -358,9 +323,8 @@ impl Grid {
     ///
     /// # Invariants
     ///
-    /// The row is minted from the running counter rather than renumbered
-    /// from zero: a [`LineId`] an anchor still holds must never come back
-    /// around and name one of the rows this appends.
+    /// The row carries a freshly minted [`LineId`] that no anchor can
+    /// already hold.
     fn push_blank_row(&mut self) {
         let id = self.mint();
         self.rows.push_back(GridRow {
@@ -402,8 +366,7 @@ impl Grid {
     ///
     /// # Invariants
     ///
-    /// Ids only ever move forward, which is what makes them unique for
-    /// the grid's lifetime; the overflow guard is what keeps that true.
+    /// An id is never handed out twice in the grid's lifetime.
     fn mint(&mut self) -> LineId {
         let id = LineId(self.next_line_id);
         self.next_line_id = self
@@ -438,8 +401,8 @@ impl Grid {
     }
 }
 
-/// Indexes the row at a screen line; history rows are structurally
-/// unreachable because [`ScreenLine`] cannot be negative.
+/// Indexes the row at a screen line; history rows are unreachable
+/// through it.
 impl Index<ScreenLine> for Grid {
     type Output = Row<Cell>;
 
@@ -539,8 +502,7 @@ mod tests {
     /// to history and drops only the blanks that scroll left behind.
     ///
     /// Case: the shell's prompt sits on the last row of a tall window
-    /// and the user drags the window shorter, so `Screen::resize`
-    /// scrolls before it resizes.
+    /// and the user drags the window shorter.
     #[test]
     fn a_shrink_after_a_scroll_keeps_what_the_scroll_saved() {
         let mut grid = grid(4, 10);
@@ -558,9 +520,8 @@ mod tests {
         assert_eq!(grid.row(GridLine(-2))[0].c, 'a');
     }
 
-    /// Asserts that the same shrink works when the preceding scrolls
-    /// ran against a full history and so recycled rows instead of
-    /// lengthening the ring.
+    /// Asserts that a shrink keeps the rows the preceding scrolls handed
+    /// to history when those scrolls ran against a full history.
     ///
     /// Case: a long-running session has filled its scrollback to the
     /// cap when the user drags the window shorter.
@@ -586,8 +547,7 @@ mod tests {
     /// appends blank ones.
     ///
     /// Case: the user drags a window taller after scrolling output
-    /// off the top, and expects the earlier lines back rather than
-    /// blank space.
+    /// off the top.
     #[test]
     fn a_growth_reclaims_history_before_it_appends_blanks() {
         let mut grid = grid(2, 10);
@@ -699,7 +659,7 @@ mod tests {
     /// and no history.
     ///
     /// Case: a terminal spawns and the shell has not written anything
-    /// yet, so the whole screen shows default blanks.
+    /// yet.
     #[test]
     fn a_fresh_grid_is_blank_with_no_history() {
         let grid = grid(3, 10);
@@ -714,8 +674,7 @@ mod tests {
     /// given cell.
     ///
     /// Case: a shell at the bottom of the screen emits a newline while
-    /// scrollback still has room, so the oldest visible line becomes
-    /// history instead of disappearing.
+    /// scrollback still has room.
     #[test]
     fn a_scroll_with_room_pushes_into_history() {
         let mut grid = grid(2, 10);
@@ -732,8 +691,7 @@ mod tests {
     /// and keeps the history length at the cap.
     ///
     /// Case: a long-running shell session has filled the scrollback
-    /// limit, and every further bottom-line newline drops the oldest
-    /// history line.
+    /// limit and keeps emitting newlines on the bottom line.
     #[test]
     fn a_scroll_at_capacity_evicts_the_oldest_row() {
         let mut grid = grid(2, 1);
@@ -745,8 +703,8 @@ mod tests {
     /// Asserts that a zero-capacity grid evicts on every scroll and
     /// keeps no history.
     ///
-    /// Case: the user configures scrollback off, so a bottom-line
-    /// newline discards the top visible row outright.
+    /// Case: the user configures scrollback off and the shell emits a
+    /// newline on the bottom line.
     #[test]
     fn zero_capacity_history_evicts_on_every_scroll() {
         let mut grid = grid(2, 0);
@@ -894,8 +852,8 @@ mod tests {
     /// Asserts that a freshly minted bottom row carries an id no earlier
     /// row shares.
     ///
-    /// Case: output scrolls the screen and the blank row entering at the
-    /// bottom must not inherit the identity of the row that left.
+    /// Case: output scrolls the screen and a blank row enters at the
+    /// bottom.
     #[test]
     fn a_scroll_mints_a_fresh_id_for_the_incoming_row() {
         let mut grid = grid(3, 10);
@@ -910,7 +868,7 @@ mod tests {
         use super::*;
 
         /// A grid whose visible rows are labelled `a`, `b`, `c`, … in
-        /// column zero, so a scroll is legible in the row contents.
+        /// column zero.
         fn labelled(rows: u16, max_history: usize) -> Grid {
             let mut grid = grid(rows, max_history);
             for line in 0..rows {
@@ -939,14 +897,9 @@ mod tests {
             assert_eq!(grid[ScreenLine(2)][0].c, 'b');
         }
 
-        /// Asserts that a reverse scroll leaves the history untouched.
-        ///
-        /// The agreed policy discards the row that falls off the bottom
-        /// rather than pushing it into history, and fills the incoming top
-        /// row blank rather than pulling the newest history row back. A
-        /// reverse scroll is deliberately not the inverse of a forward
-        /// one: scrollback records what the terminal has emitted, and a
-        /// reverse scroll emits nothing.
+        /// Asserts that a reverse scroll leaves the history untouched,
+        /// neither pushing the row that falls off the bottom into it nor
+        /// pulling its newest row back.
         ///
         /// Case: a full-screen editor scrolls its view backwards while the
         /// shell's earlier output still sits in scrollback behind it.
@@ -965,8 +918,7 @@ mod tests {
         /// Asserts that the row entering at the top carries the fill.
         ///
         /// Case: an application sets a background colour and scrolls
-        /// backwards, expecting the exposed row to carry that colour
-        /// rather than the terminal default.
+        /// backwards.
         #[test]
         fn the_row_entering_at_the_top_carries_the_fill() {
             let mut grid = labelled(3, 10);
@@ -1060,12 +1012,11 @@ mod tests {
         }
 
         /// Asserts that an anchor still resolves once the history holds
-        /// ids that are no longer ascending, which is why the lookup
-        /// indexes history by id rather than binary-searching it.
+        /// ids that are no longer ascending.
         ///
-        /// Case: a full-screen application scrolls backwards — minting a
-        /// row with a high id above older rows — and then output pushes
-        /// that row into history ahead of the ones it was inserted above.
+        /// Case: a full-screen application scrolls backwards, and output
+        /// then pushes the row that scroll inserted into history ahead of
+        /// the rows it was inserted above.
         #[test]
         fn an_anchor_still_resolves_once_the_history_ids_are_unordered() {
             let mut grid = grid(3, 10);

@@ -41,10 +41,10 @@ impl ScrollRegion {
 
     /// Replaces the cursor origin, and does nothing else.
     ///
-    /// This is the plain assignment `DECRC` needs to put a saved mode
-    /// back. `DECOM` itself additionally homes the cursor, which this
-    /// type cannot do because it does not own one; that half belongs to
-    /// the `Screen` method the control function reaches.
+    /// # Control Functions
+    ///
+    /// - `DECOM` (the origin part)
+    /// - `DECRC` (the origin-mode part)
     pub fn set_origin_mode(&mut self, origin_mode: OriginMode) {
         self.origin_mode = origin_mode;
     }
@@ -52,18 +52,16 @@ impl ScrollRegion {
     /// The rows a scroll moves: the top margin through the bottom
     /// margin, inclusive.
     ///
-    /// The span never consults [`OriginMode`], because DECSTBM confines
-    /// scrolling to the margins whichever way the origin is set.
+    /// The span does not depend on the [`OriginMode`].
     pub fn scroll_span(&self) -> RangeInclusive<ScreenLine> {
         self.margins.top..=self.margins.bottom
     }
 
     /// Replaces the margins, and does nothing else.
     ///
-    /// This is the plain assignment `DECSTBM` needs. Seating the cursor
-    /// at the new home is the other half of that control function and
-    /// belongs to the `Screen` method that reaches it, because this type
-    /// owns no cursor.
+    /// # Control Functions
+    ///
+    /// - `DECSTBM` (the margin part)
     pub(crate) fn set_margins(&mut self, margins: Margins) {
         self.margins = margins;
     }
@@ -206,11 +204,8 @@ mod tests {
             );
         }
 
-        /// Asserts that a zero resolves the same way an omission does.
-        ///
-        /// The agreed policy follows ECMA-48 §5.4.2's default rule and
-        /// xterm's `one_if_default`, which folds any value at or below
-        /// zero to the default. VT510 does not define a zero here.
+        /// Asserts that a zero resolves to the default margin, the same
+        /// way an omission does.
         ///
         /// Case: a program that builds its sequences from unset integer
         /// variables emits `CSI 0 ; 0 r`.
@@ -238,11 +233,8 @@ mod tests {
             );
         }
 
-        /// Asserts that a bottom margin past the last row clamps to it.
-        ///
-        /// The agreed policy clamps rather than refusing, because VT510
-        /// p.276 describes the page size as the region's maximum rather
-        /// than as a precondition. Windows Terminal refuses instead.
+        /// Asserts that a bottom margin past the last row clamps to it
+        /// rather than refusing the request.
         ///
         /// Case: an application sized for a taller window asks for a
         /// region reaching row 40 on a 24-row screen.
@@ -258,13 +250,7 @@ mod tests {
         }
 
         /// Asserts that a top margin at or below the bottom margin
-        /// refuses the request.
-        ///
-        /// The agreed policy refuses rather than repairing the request:
-        /// VT510 p.276 requires "The value of the top margin (Pt) must
-        /// be less than the bottom margin (Pb)", and clamping into the
-        /// nearest legal region would leave the application drawing
-        /// somewhere it never asked for.
+        /// refuses the request rather than repairing it.
         ///
         /// Case: an application inverts its two parameters and sends
         /// `CSI 5 ; 3 r`.
@@ -284,11 +270,6 @@ mod tests {
 
         /// Asserts that the clamp runs before the comparison, so a
         /// bottom that clamps below the top is refused.
-        ///
-        /// The agreed policy orders it the way xterm does — default,
-        /// clamp, then compare. alacritty compares first, which lets
-        /// this request through and collapses it into a degenerate
-        /// region.
         ///
         /// Case: an application sized for a taller window asks for rows
         /// 30 through 40 on a 24-row screen.
