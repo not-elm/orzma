@@ -10,7 +10,7 @@ pub(crate) mod color;
 pub(crate) mod modes;
 
 use crate::device::color::Palette;
-use crate::device::modes::{ScreenKind, VtModes};
+use crate::device::modes::{AutoWrap, ScreenKind, VtModes};
 use crate::frame::damage::DamageSpan;
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::Screen;
@@ -150,6 +150,12 @@ impl DeviceState {
         let was_showing_alternate = matches!(self.modes.active_screen, ScreenKind::Alternate);
         let primary = self.screens.primary.reset();
         let _ = self.screens.alternate.reset();
+        // NOTE: This wholesale write is the one place `auto_wrap` is set
+        // without `DeviceState::set_auto_wrap`, and it is sound only because
+        // the two screen resets above already cleared each screen's
+        // live and saved deferred wrap. A partial mode reset such as
+        // `DECSTR`, which leaves the screens alone, must go through
+        // `set_auto_wrap` instead.
         self.modes = VtModes::default();
         self.title = TitleState::default();
         (was_showing_alternate || primary.is_some()).then_some(DamageSpan::Full)
@@ -231,6 +237,31 @@ impl DeviceState {
     /// Returns the mutable reference of [VtModes].
     pub fn modes_mut(&mut self) -> &mut VtModes {
         &mut self.modes
+    }
+
+    /// Applies `DECAWM`, disarming each screen's deferred wrap when the
+    /// mode is reset.
+    ///
+    /// The mode is device-wide, so a reset disarms both screens rather
+    /// than only the one shown. A set leaves an armed flag alone: DEC
+    /// STD-070 lists only the reset direction among the operations that
+    /// clear the last-column flag.
+    ///
+    /// The disarm is load-bearing, not a convenience. Without it a
+    /// reset followed by a set with no print in between would leave a
+    /// stale flag for the next character to cash in as a wrap. It does
+    /// not reach a checkpoint, so a reset that restores one (`DECRC`,
+    /// 1048, 1049) puts the saved flag back.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECAWM` (`CSI ? 7 h` / `CSI ? 7 l`)
+    pub fn set_auto_wrap(&mut self, auto_wrap: AutoWrap) {
+        self.modes.auto_wrap = auto_wrap;
+        if !auto_wrap.wraps() {
+            self.screens.primary.disarm_pending_wrap();
+            self.screens.alternate.disarm_pending_wrap();
+        }
     }
 
     /// The live palette symbolic colors resolve against.
@@ -521,7 +552,7 @@ mod tests {
         for c in ['a', 'b', 'c'] {
             device
                 .active_screen_mut()
-                .print(c, InsertReplaceMode::Replace);
+                .print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
         }
         device.active_screen_mut().set_horizontal_tab_stop();
 
@@ -554,14 +585,14 @@ mod tests {
         for c in ['a', 'b', 'c'] {
             device
                 .active_screen_mut()
-                .print(c, InsertReplaceMode::Replace);
+                .print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
         }
         device.active_screen_mut().save_checkpoint();
 
         device.set_active_screen_for_test(ScreenKind::Alternate);
         device
             .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace);
+            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
         device.active_screen_mut().restore_checkpoint();
         assert_eq!(device.active_screen().cursor_column(), GridColumn(0));
 
@@ -582,11 +613,11 @@ mod tests {
         let mut device = device();
         device
             .active_screen_mut()
-            .print('p', InsertReplaceMode::Replace);
+            .print('p', InsertReplaceMode::Replace, AutoWrap::Enabled);
         device.set_active_screen_for_test(ScreenKind::Alternate);
         device
             .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace);
+            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
 
         let _ = device.reset();
 
@@ -631,7 +662,7 @@ mod tests {
         let mut device = device();
         device
             .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace);
+            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
 
         assert_eq!(device.reset(), Some(DamageSpan::Full));
     }
@@ -661,7 +692,7 @@ mod tests {
         device.set_active_screen_for_test(ScreenKind::Alternate);
         device
             .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace);
+            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
         device.set_active_screen_for_test(ScreenKind::Primary);
 
         assert_eq!(device.reset(), None);
@@ -884,5 +915,95 @@ mod tests {
         let _ = device.reset();
         assert_eq!(device.title(), None);
         assert_eq!(device.pop_title(), None);
+    }
+
+    /// Fills the active screen's first row to its last column, arming
+    /// the deferred wrap.
+    fn arm_deferred_wrap(device: &mut DeviceState) {
+        for c in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] {
+            device
+                .active_screen_mut()
+                .print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        }
+    }
+
+    /// The glyph at `column` of the active screen's `line`th visible row.
+    ///
+    /// `column` is `u16` because `Row<Cell>` implements only
+    /// `Index<u16>` and `Index<GridColumn>`; a `usize` does not fall
+    /// through to the slice impl.
+    fn glyph_at(device: &DeviceState, line: u16, column: u16) -> char {
+        device.active_screen().viewport_row(ViewportLine(line))[column].c
+    }
+
+    /// Asserts that resetting autowrap disarms the deferred wrap on the
+    /// hidden screen as well as the shown one, so a later set cannot
+    /// cash in a latch armed before the reset.
+    ///
+    /// Case: a full-screen application fills the last column of the
+    /// primary screen, enters the alternate screen, and turns autowrap
+    /// off and on again there.
+    #[test]
+    fn resetting_autowrap_disarms_the_deferred_wrap_on_both_screens() {
+        let mut device = device();
+        arm_deferred_wrap(&mut device);
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+        arm_deferred_wrap(&mut device);
+
+        device.set_auto_wrap(AutoWrap::Disabled);
+        device.set_auto_wrap(AutoWrap::Enabled);
+
+        device
+            .active_screen_mut()
+            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        assert_eq!(glyph_at(&device, 0, 7), 'z');
+        assert_eq!(glyph_at(&device, 1, 0), ' ');
+
+        device.set_active_screen_for_test(ScreenKind::Primary);
+        device
+            .active_screen_mut()
+            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        assert_eq!(glyph_at(&device, 0, 7), 'z');
+        assert_eq!(glyph_at(&device, 1, 0), ' ');
+    }
+
+    /// Asserts that resetting autowrap leaves the saved cursor's
+    /// deferred wrap alone rather than clearing it, so `DECRC` puts back
+    /// the state `DECSC` captured.
+    ///
+    /// Case: an application fills a row, saves the cursor, turns
+    /// autowrap off and on again, and restores the cursor.
+    #[test]
+    fn resetting_autowrap_leaves_the_saved_deferred_wrap_alone() {
+        let mut device = device();
+        arm_deferred_wrap(&mut device);
+        device.active_screen_mut().save_checkpoint();
+
+        device.set_auto_wrap(AutoWrap::Disabled);
+        device.set_auto_wrap(AutoWrap::Enabled);
+        device.active_screen_mut().restore_checkpoint();
+
+        device
+            .active_screen_mut()
+            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        assert_eq!(glyph_at(&device, 1, 0), 'z');
+    }
+
+    /// Asserts that setting autowrap leaves an armed deferred wrap alone
+    /// rather than disarming it, so the next character still wraps.
+    ///
+    /// Case: an application fills a row and re-sends `DECSET 7` while
+    /// autowrap is already on.
+    #[test]
+    fn setting_autowrap_leaves_an_armed_deferred_wrap_alone() {
+        let mut device = device();
+        arm_deferred_wrap(&mut device);
+
+        device.set_auto_wrap(AutoWrap::Enabled);
+
+        device
+            .active_screen_mut()
+            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        assert_eq!(glyph_at(&device, 1, 0), 'z');
     }
 }

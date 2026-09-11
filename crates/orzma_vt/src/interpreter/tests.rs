@@ -42,6 +42,24 @@ fn damage_of(chunk: &[u8]) -> bool {
     interpret_fully(chunk).1.damaged
 }
 
+/// Every glyph of the device's first visible row, left to right.
+fn first_row_glyphs(device: &DeviceState) -> Vec<char> {
+    device
+        .active_screen()
+        .viewport_row(ViewportLine(0))
+        .iter()
+        .map(|cell| cell.c)
+        .collect()
+}
+
+/// The glyph at `column` of the device's `line`th visible row.
+///
+/// `column` is `u16` because `Row<Cell>` implements only `Index<u16>`
+/// and `Index<GridColumn>`; a `usize` does not reach the slice impl.
+fn glyph_at(device: &DeviceState, line: u16, column: u16) -> char {
+    device.active_screen().viewport_row(ViewportLine(line))[column].c
+}
+
 /// Reports the reply bytes `chunk` produced, through the public
 /// entry point rather than the crate-internal interpreter.
 fn replies_of(chunk: &[u8]) -> Vec<u8> {
@@ -115,7 +133,6 @@ impl Session {
     }
 }
 
-/// The glyphs of the first four columns of the top viewport row.
 /// Runs `setup` and then `chunk` over one session, and reports the
 /// liveness `chunk` alone produced.
 fn liveness_after(setup: &[u8], chunk: &[u8]) -> bool {
@@ -126,6 +143,7 @@ fn liveness_after(setup: &[u8], chunk: &[u8]) -> bool {
 
 mod alignment;
 mod alternate_screen;
+mod auto_wrap;
 mod character_editing;
 mod character_set;
 mod cursor;

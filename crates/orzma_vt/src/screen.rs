@@ -24,7 +24,7 @@ use self::cell::{Cell, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
-use crate::device::modes::{InsertReplaceMode, TextCursorEnable};
+use crate::device::modes::{AutoWrap, InsertReplaceMode, TextCursorEnable};
 use crate::frame::damage::DamageSpan;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::character_sets::{
@@ -136,33 +136,30 @@ impl Screen {
 
 /// Graphic character output.
 impl Screen {
-    /// Prints one character at the cursor with the current pen,
-    /// wrapping first when the deferred wrap is armed.
+    /// Prints one character at the cursor with the current pen, wrapping
+    /// first when the deferred wrap is armed and autowrap is set.
     ///
-    /// `mode` is `IRM`: under [`InsertReplaceMode::Insert`] the character
-    /// lands on a column opened by [`Self::insert_characters`], which
-    /// records what the shift does to the rest of the row.
+    /// `c` must be a printable character of display width one.
     ///
-    /// The caller dispatches control bytes itself; this method assumes
-    /// a printable character of display width one.
+    /// `insert_replace` is `IRM`: under [`InsertReplaceMode::Insert`] the
+    /// rest of the row shifts right one column before the character lands.
     ///
-    /// A wrap that scrolled reports [`DamageSpan::Full`]; every other print
-    /// reports the row the character landed on, or nothing when that row has
-    /// scrolled out of the window. [`Self::line_feed`] reports nothing for
-    /// the wrap's cursor motion, so passing its value through would leave
-    /// the character just written unpainted.
-    // TODO: Store wide characters as a cell plus a spacer and compose
-    // zero-width marks into the previous cell, so that `Run::cols` sums
-    // display widths as its doc promises; the renderer's `runs_to_cells`
-    // already advances by display width, and until then every cell after
-    // a wide character lands one column right of the VT's own cursor.
-    // The insert-mode shift below inherits the same assumption: it
-    // moves one column where xterm, alacritty, kitty, ghostty, foot and
-    // wezterm all move the character's display width.
-    pub fn print(&mut self, c: char, mode: InsertReplaceMode) -> Option<DamageSpan> {
+    /// `auto_wrap` is `DECAWM`. While it is reset, a character at the right
+    /// border replaces the last column, and an armed wrap is not resolved
+    /// either, because a `DECRC` can restore one.
+    ///
+    /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
+    /// the row the character landed on, or `None` when that row has
+    /// scrolled out of the window.
+    pub fn print(
+        &mut self,
+        c: char,
+        insert_replace: InsertReplaceMode,
+        auto_wrap: AutoWrap,
+    ) -> Option<DamageSpan> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
-        let wrap = if self.state.pending_wrap {
-            self.state.pending_wrap = false;
+        let wrapping = auto_wrap.wraps();
+        let wrap = if self.state.pending_wrap && wrapping {
             self.state.column = GridColumn(0);
             self.line_feed()
         } else {
@@ -173,19 +170,29 @@ impl Screen {
         // `insert_characters` clear `pending_wrap`, and the character
         // would overwrite the last column instead of wrapping to the
         // next row.
-        if matches!(mode, InsertReplaceMode::Insert) {
+        if matches!(insert_replace, InsertReplaceMode::Insert) {
             self.insert_characters(1);
         }
         self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph);
-        if self.state.column.0 + 1 < self.grid.size().cols {
+        let at_right_edge = self.at_right_edge();
+        if !at_right_edge {
             self.state.column.0 += 1;
-        } else {
-            self.state.pending_wrap = true;
         }
+        self.state.pending_wrap = at_right_edge && wrapping;
         match wrap {
             Some(DamageSpan::Full) => Some(DamageSpan::Full),
             _ => self.damage_span(self.state.line, self.state.line),
         }
+    }
+
+    /// Disarms the deferred wrap, leaving the cursor and the cells
+    /// alone.
+    ///
+    /// This is the half of `DECRST 7` that `Screen` owns. The saved
+    /// cursor keeps its own flag: DEC STD-070 has `DECSC` carry the
+    /// last-column flag, so a reset of the mode must not reach it.
+    pub fn disarm_pending_wrap(&mut self) {
+        self.state.pending_wrap = false;
     }
 }
 
@@ -700,14 +707,19 @@ impl Screen {
 /// Erasure.
 impl Screen {
     /// Erases part of the cursor row with the pen background (BCE);
-    /// [`EraseLineMode::ToEnd`] is a no-op while the deferred wrap is
-    /// armed.
+    /// [`EraseLineMode::ToEnd`] is a no-op while the cursor logically
+    /// sits past the row, as [`Self::cursor_parked_past_the_row`]
+    /// decides.
     ///
     /// # Control Functions
     ///
     /// - `EL` (`CSI Ps K`)
-    pub fn erase_in_line(&mut self, mode: EraseLineMode) -> Option<DamageSpan> {
-        if matches!(mode, EraseLineMode::ToEnd) && self.state.pending_wrap {
+    pub fn erase_in_line(
+        &mut self,
+        mode: EraseLineMode,
+        auto_wrap: AutoWrap,
+    ) -> Option<DamageSpan> {
+        if matches!(mode, EraseLineMode::ToEnd) && self.cursor_parked_past_the_row(auto_wrap) {
             return None;
         }
         let cols = self.grid.size().cols;
@@ -721,14 +733,14 @@ impl Screen {
 
     /// Erases `count` characters from the cursor rightward with the
     /// pen background (BCE), leaving the cursor where it is; a no-op
-    /// while the deferred wrap is armed, as [`Self::erase_in_line`]'s
-    /// [`EraseLineMode::ToEnd`] is.
+    /// while the cursor logically sits past the row, as
+    /// [`Self::erase_in_line`]'s [`EraseLineMode::ToEnd`] is.
     ///
     /// # Control Functions
     ///
     /// - `ECH` (`CSI Pn X`)
-    pub fn erase_chars(&mut self, count: u16) -> Option<DamageSpan> {
-        if self.state.pending_wrap {
+    pub fn erase_chars(&mut self, count: u16, auto_wrap: AutoWrap) -> Option<DamageSpan> {
+        if self.cursor_parked_past_the_row(auto_wrap) {
             return None;
         }
         let cols = self.grid.size().cols;
@@ -785,6 +797,24 @@ impl Screen {
         self.grid
             .fill_visible_row_range(self.state.line, columns, self.state.pen.erase_cell());
         self.damage_span(self.state.line, self.state.line)
+    }
+
+    /// Whether the cursor logically sits past the row's last cell, so
+    /// that an erase from the cursor rightward finds nothing to erase.
+    ///
+    /// All three conditions are required: the deferred wrap armed,
+    /// `DECAWM` set so the next character really does move to the next
+    /// row, and the cursor on the last column. The column test is not
+    /// redundant — [`Self::tab_to`] carries an armed flag off the right
+    /// border, so without it a `CBT` out of a full row would leave
+    /// `EL 0` and `ECH` declining mid-row.
+    fn cursor_parked_past_the_row(&self, auto_wrap: AutoWrap) -> bool {
+        self.state.pending_wrap && auto_wrap.wraps() && self.at_right_edge()
+    }
+
+    /// Whether the cursor is on the row's last column.
+    fn at_right_edge(&self) -> bool {
+        self.state.column.0 + 1 >= self.grid.size().cols
     }
 }
 
@@ -1041,6 +1071,11 @@ impl Screen {
     }
 
     /// The write cursor as an emitted frame carries it.
+    ///
+    /// `text_cursor_enable` is `DECTCEM`, which the device owns rather
+    /// than either screen. Production callers reach this through
+    /// `DeviceState::cursor`, which records why pairing a screen read
+    /// with a separately-read mode silently drops a `CSI ? 25 l`.
     // TODO: Report the real shape and blink once DECSCUSR lands. Block /
     // steady is what the terminal starts at.
     pub fn cursor(&self, text_cursor_enable: TextCursorEnable) -> Cursor {

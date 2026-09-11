@@ -92,6 +92,13 @@ pub(crate) struct FrameTracker {
 impl FrameTracker {
     /// Builds a tracker whose damage is seeded with the bootstrap full
     /// repaint, so the first emitted frame carries every viewport row.
+    ///
+    /// The retained [`Carried::default`] disagrees with a fresh device
+    /// on one field: its cursor is not visible, while
+    /// [`DeviceState::cursor`] folds in the `DECTCEM` default, which is.
+    /// The seeded damage is what makes that sound, because it forces the
+    /// first frame out regardless of any diff and that emit settles the
+    /// real cursor before the diffs are ever load-bearing.
     pub fn new() -> Self {
         Self {
             damage: Damage::new(),
@@ -219,7 +226,7 @@ mod tests {
     use super::*;
     use crate::device::DeviceState;
     use crate::device::color::Color;
-    use crate::device::modes::InsertReplaceMode;
+    use crate::device::modes::{AutoWrap, InsertReplaceMode};
     use crate::placement::{InstanceId, PlacementSize};
     use crate::screen::grid::GridSize;
     use crate::screen::grid::coords::{GridColumn, GridLine};
@@ -330,7 +337,7 @@ mod tests {
         let mut rig = drained_rig();
         rig.device
             .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace);
+            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
         rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert_eq!(frame.size, GridSize { cols: 4, rows: 3 });

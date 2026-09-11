@@ -65,14 +65,14 @@ fn an_unsaved_restore_returns_the_power_up_state() {
 fn a_restored_deferred_wrap_still_wraps_the_next_character() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace);
+        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
     }
     screen.save_checkpoint();
     screen.state.line = ScreenLine(2);
     screen.state.column = GridColumn(0);
     screen.state.pending_wrap = false;
     screen.restore_checkpoint();
-    screen.print('e', InsertReplaceMode::Replace);
+    screen.print('e', InsertReplaceMode::Replace, AutoWrap::Enabled);
     assert_eq!(screen.grid[ScreenLine(1)][0].c, 'e');
     assert_eq!(screen.state.line, ScreenLine(1));
 }

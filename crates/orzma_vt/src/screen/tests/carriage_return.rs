@@ -26,7 +26,7 @@ fn carriage_return_rewinds_and_clears_pending_wrap() {
 #[test]
 fn a_carriage_return_at_column_zero_disarms_a_pending_wrap() {
     let mut screen = Screen::new(GridSize { cols: 1, rows: 3 }, 10);
-    screen.print('x', InsertReplaceMode::Replace);
+    screen.print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
     assert_eq!(screen.state.column, GridColumn(0));
     assert!(screen.state.pending_wrap);
     screen.carriage_return();

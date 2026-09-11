@@ -26,6 +26,19 @@ use crate::screen::state::ScreenState;
 /// so a later mutation that adds it here would make an alternate-screen
 /// flip carry a mode no reference terminal carries.
 ///
+/// The `Wrap flag (autowrap or no autowrap)` the VT420 and VT520
+/// manuals list among the items `DECSC` saves is the last-column flag,
+/// not `DECAWM`: DEC STD-070 p.D-14 has the flag "saved when a Save
+/// Cursor operation is performed, and restored when a Restore Cursor
+/// operation is performed", while xterm masks `WRAPAROUND` out of what
+/// `DECRC` restores. `Self::pending_wrap` is therefore the field that
+/// answers the manuals' line, and the mode is not saved at all.
+///
+/// `DECTCEM` is absent for the same reason as `IRM`: the VT510
+/// saved-item list does not name cursor visibility, so a mutation that
+/// added it here would make a `DECRC` restore a visibility no reference
+/// terminal restores.
+///
 /// `DECSTR` and `RIS` reset the saved state as well, and put back this
 /// same default rather than leaving the last `DECSC` reachable.
 ///

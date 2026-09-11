@@ -117,3 +117,17 @@ fn an_omitted_or_zero_erase_character_count_erases_one_cell() {
     assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, ' ');
     assert_eq!(screen.viewport_row(ViewportLine(0))[1].c, 'b');
 }
+
+/// Asserts that `CSI K` still erases to the end of the line after a
+/// `CSI Z` has stepped the cursor back out of a filled row.
+///
+/// Case: a form-filling program writes into the last column, steps back
+/// to the previous tab stop with Shift-Tab, and clears the rest of the
+/// line before rewriting the field.
+#[test]
+fn an_erase_to_end_runs_after_a_backward_tabulation_out_of_a_full_row() {
+    let device = interpret_wide(b"\x1b[1;20HX\x1b[Z\x1b[K");
+    let screen = device.active_screen();
+    assert_eq!(screen.viewport_row(ViewportLine(0))[16].c, ' ');
+    assert_eq!(screen.viewport_row(ViewportLine(0))[19].c, ' ');
+}

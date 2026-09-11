@@ -2,16 +2,6 @@
 
 use super::*;
 
-/// Every glyph of the device's first visible row, left to right.
-fn first_row_glyphs(device: &DeviceState) -> Vec<char> {
-    device
-        .active_screen()
-        .viewport_row(ViewportLine(0))
-        .iter()
-        .map(|cell| cell.c)
-        .collect()
-}
-
 /// Asserts that `CSI 4 h` selects insert mode on the device.
 ///
 /// Case: a curses application on a terminal without `ich` announces an

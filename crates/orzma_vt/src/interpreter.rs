@@ -12,7 +12,7 @@ mod csi;
 mod osc;
 mod sgr;
 
-use crate::device::modes::{InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable};
+use crate::device::modes::{AutoWrap, InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable};
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
 use crate::interpreter::osc::{current_dir, window_title};
@@ -109,8 +109,11 @@ impl VTActor for Executor<'_> {
         if b == '\u{7f}' {
             return;
         }
-        let mode = self.device.modes().insert_replace;
-        let damage = self.device.active_screen_mut().print(b, mode);
+        let modes = self.device.modes();
+        let damage =
+            self.device
+                .active_screen_mut()
+                .print(b, modes.insert_replace, modes.auto_wrap);
         self.stage(damage);
     }
 
@@ -328,16 +331,21 @@ impl VTActor for Executor<'_> {
             // EL
             (None, b'K') => {
                 if let Some(mode) = EraseLineMode::from_el(params.value(0).unwrap_or(0)) {
-                    let damage = self.device.active_screen_mut().erase_in_line(mode);
+                    let auto_wrap = self.device.modes().auto_wrap;
+                    let damage = self
+                        .device
+                        .active_screen_mut()
+                        .erase_in_line(mode, auto_wrap);
                     self.stage(damage);
                 }
             }
             // ECH
             (None, b'X') => {
+                let auto_wrap = self.device.modes().auto_wrap;
                 let damage = self
                     .device
                     .active_screen_mut()
-                    .erase_chars(repeat_count(params.value(0)));
+                    .erase_chars(repeat_count(params.value(0)), auto_wrap);
                 self.stage(damage);
             }
             // IL
@@ -629,6 +637,8 @@ impl Executor<'_> {
                     .device
                     .active_screen_mut()
                     .set_origin_mode(OriginMode::from_decset(enabled)),
+                // DECAWM
+                7 => self.device.set_auto_wrap(AutoWrap::from_decset(enabled)),
                 // DECTCEM
                 25 => {
                     self.device.modes_mut().text_cursor_enable =

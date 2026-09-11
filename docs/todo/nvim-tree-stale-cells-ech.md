@@ -94,7 +94,7 @@ ECH を実装したところ xterm 側の出力が正常な対照群と完全一
 | 古いバンドル（#282 の IL/DL/SU/SD 修正前） | ✗ | dist は 09:42 ビルド、HEAD `6b9f0bb` は 09:36 コミット |
 | フォント未同梱（`.app` に `assets/` が入らない） | ✗ | `include_bytes!` でバイナリに埋め込み済（`bundled.rs`） |
 | GPU / レンダラのセル残留 | ✗ | 変更のたび `cpu_cells` を `GpuCell::default()`（`glyph_index = u32::MAX`）で埋め直して全再構築するため、未描画列は**空白**になり残像にならない |
-| wide-character seam（`screen.rs:145-152` の TODO） | ✗ | 幅 2 グラフェムごとに +1 桁オーバーランするのは事実だが、症状は右シフト＋末尾切り捨てであり残像ではない。Nerd Font アイコンは PUA で `unicode-width` は幅 1 を返すのでそもそも該当しない |
+| wide-character seam（`docs/todo/wide-characters.md`） | ✗ | 幅 2 グラフェムごとに +1 桁オーバーランするのは事実だが、症状は右シフト＋末尾切り捨てであり残像ではない。Nerd Font アイコンは PUA で `unicode-width` は幅 1 を返すのでそもそも該当しない |
 | `NSHighResolutionCapable` によるスケール差 | ✗ | `build/macos/Info.plist` で `<true/>` |
 
 ## 6. 修正方針

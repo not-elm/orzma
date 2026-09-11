@@ -27,6 +27,9 @@ pub struct VtModes {
     pub active_screen: ScreenKind,
     /// IRM (`SM 4`): whether a printed character inserts or replaces.
     pub insert_replace: InsertReplaceMode,
+    /// DECAWM: whether a graphic character at the right
+    /// border wraps to the next line or replaces the last column.
+    pub auto_wrap: AutoWrap,
     /// DECCKM (DECSET 1): arrow keys send SS3 instead of CSI.
     pub app_cursor: bool,
     /// The mode selects whether the numeric keypad sends ASCII numerals or application function.
@@ -90,6 +93,46 @@ impl InsertReplaceMode {
     /// The mode `SM 4` selects when set and `RM 4` when reset.
     pub fn from_sm(enabled: bool) -> Self {
         if enabled { Self::Insert } else { Self::Replace }
+    }
+}
+
+/// Whether a graphic character received at the right border wraps to
+/// the next line or replaces the character already in the last column.
+///
+/// Both screens share one value, and `DECSC` does not carry it; the
+/// saved-cursor state records what it carries instead.
+///
+/// The default is [`Self::Enabled`], the set rather than the reset
+/// state, because `xterm-256color` advertises `am`.
+///
+/// # Control Functions
+///
+/// - `DECAWM` (`CSI ? 7 h` / `CSI ? 7 l`)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoWrap {
+    /// A character at the right border moves to the start of the next
+    /// line, scrolling when the cursor is at the end of the scrolling
+    /// region.
+    #[default]
+    Enabled,
+    /// A character at the right border replaces the one in the last
+    /// column, and the cursor stays there.
+    Disabled,
+}
+
+impl AutoWrap {
+    /// The mode `DECSET 7` selects when set and `DECRST 7` when reset.
+    pub fn from_decset(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+
+    /// Whether a character at the right border wraps.
+    pub const fn wraps(self) -> bool {
+        matches!(self, Self::Enabled)
     }
 }
 
@@ -261,6 +304,31 @@ impl MouseTracking {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Asserts that a device that has seen no DECAWM starts with
+    /// autowrap enabled, which is the set rather than the reset state.
+    ///
+    /// Case: a terminal is spawned and the shell echoes a command line
+    /// longer than the window is wide, which has to continue on the
+    /// next row.
+    #[test]
+    fn autowrap_starts_enabled() {
+        assert_eq!(VtModes::default().auto_wrap, AutoWrap::Enabled);
+    }
+
+    /// Asserts that `DECSET 7` selects `Enabled` and `DECRST 7` selects
+    /// `Disabled`, and that `wraps` reports the selection.
+    ///
+    /// Case: a status-bar program turns autowrap off to draw a
+    /// full-width label and turns it back on before handing the
+    /// terminal back to the shell.
+    #[test]
+    fn decset_seven_selects_enabled_and_decrst_selects_disabled() {
+        assert_eq!(AutoWrap::from_decset(true), AutoWrap::Enabled);
+        assert_eq!(AutoWrap::from_decset(false), AutoWrap::Disabled);
+        assert!(AutoWrap::Enabled.wraps());
+        assert!(!AutoWrap::Disabled.wraps());
+    }
 
     /// Asserts that a device that has seen no DECTCEM starts with the
     /// cursor shown, which is the mode's documented default.
