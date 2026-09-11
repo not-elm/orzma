@@ -259,6 +259,18 @@ impl VTActor for Executor<'_> {
                 .device
                 .active_screen_mut()
                 .set_scroll_region(params.value(0), params.value(1)),
+            // SCOSC
+            // NOTE: Only the parameterless spelling saves, as in xterm. A
+            // parameterized `CSI s` is DECSLRM on a terminal with DECLRMM,
+            // and saving on it would overwrite the slot `ESC 7` shares
+            // with `?1048`.
+            (None, b's') if params.values().count() == 0 => {
+                self.device.active_screen_mut().save_checkpoint()
+            }
+            // SCORC
+            (None, b'u') if params.values().count() == 0 => {
+                self.device.active_screen_mut().restore_checkpoint()
+            }
             // DA1
             (None, b'c') if params.value(0).unwrap_or(0) == 0 => self.reply(PRIMARY_ATTRIBUTES),
             // DSR

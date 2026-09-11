@@ -1159,7 +1159,8 @@ impl Screen {
     ///
     /// # Control Functions
     ///
-    /// - DECSC(Save Cursor)
+    /// - `DECSC` (`ESC 7`)
+    /// - `SCOSC` (`CSI s`)
     pub fn save_checkpoint(&mut self) {
         self.checkpoint = self.capture_checkpoint();
     }
@@ -1174,7 +1175,8 @@ impl Screen {
     ///
     /// # Control Functions
     ///
-    /// - DECRC(Restore Cursor)
+    /// - `DECRC` (`ESC 8`)
+    /// - `SCORC` (`CSI u`)
     pub fn restore_checkpoint(&mut self) {
         let saved = self.checkpoint;
         self.state.line = saved.line;

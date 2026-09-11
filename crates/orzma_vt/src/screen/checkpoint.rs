@@ -46,6 +46,8 @@ use crate::screen::state::ScreenState;
 ///
 /// - `DECSC` (`ESC 7`)
 /// - `DECRC` (`ESC 8`)
+/// - `SCOSC` (`CSI s`)
+/// - `SCORC` (`CSI u`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Checkpoint {
     /// Saved cursor row within the visible screen.
