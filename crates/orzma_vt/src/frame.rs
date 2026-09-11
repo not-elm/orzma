@@ -93,11 +93,13 @@ impl FrameTracker {
     /// Builds a tracker whose damage is seeded with the bootstrap full
     /// repaint, so the first emitted frame carries every viewport row.
     ///
-    /// The retained defaults are sound even though the default cursor
-    /// differs from a fresh screen's visible cursor: the seeded full
-    /// damage forces the first frame out regardless of any diff, and
-    /// that emit settles the real cursor before the diffs are ever
-    /// load-bearing.
+    /// The retained defaults are sound because the seeded full damage
+    /// forces the first frame out regardless of any diff, and that emit
+    /// settles the real cursor before the diffs are ever load-bearing.
+    /// The diff alone cannot be relied on here: a first chunk of
+    /// `CSI ? 25 l` makes the reported cursor equal [`Cursor::default`]
+    /// on every field, so a change that drops the seeded damage would
+    /// lose the very first frame.
     pub fn new() -> Self {
         Self {
             damage: Damage::new(),

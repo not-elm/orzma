@@ -59,7 +59,12 @@ pub struct FakeVt {
     pub grid_size: GridSize,
     /// Offset reported by `display_offset`; `Scroll::Bottom` zeroes it.
     pub display_offset: DisplayOffset,
-    /// Modes reported to the input encoders.
+    /// Device-wide terminal modes the host reads back.
+    ///
+    /// This fake pops its frames from a scripted queue, so a mode that a
+    /// real [`crate::OrzmaTty`] would fold into the frame — DECTCEM's
+    /// cursor visibility, for one — is not honored here. Script the
+    /// frame to match, rather than expecting this field to drive it.
     pub modes: VtModes,
     /// Scripted return for non-`Bottom` scrolls.
     pub scroll_moves: bool,
