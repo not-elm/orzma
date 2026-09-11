@@ -1,5 +1,5 @@
-//! Terminal-level signals: the VT-stream signals plus process
-//! lifecycle events the VT cannot observe.
+//! Terminal-level signals: the signals the VT stream raises plus the
+//! child process's lifecycle events.
 
 use orzma_vt::prelude::VtSignal;
 
@@ -7,7 +7,7 @@ use orzma_vt::prelude::VtSignal;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TtySignal {
     /// The child shell exited; `code` is `None` if the `wait` itself
-    /// failed. Fired exactly once per terminal.
+    /// failed. Fired at most once per terminal.
     ChildExit { code: Option<i32> },
     /// A signal the VT raised — one an interpreted chunk produced, or the
     /// eviction a resize reported.

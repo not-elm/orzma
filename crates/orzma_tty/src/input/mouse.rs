@@ -1,6 +1,5 @@
-//! Pure VT-encoder for mouse-protocol reports. Translates a logical
-//! mouse report into the byte sequence the PTY expects. No I/O, no
-//! Bevy types — kept pure so unit tests can cover every branch.
+//! Pure VT-encoder for mouse-protocol reports: translates a logical
+//! mouse report into the byte sequence the PTY expects.
 
 use orzma_vt::prelude::MouseEncoding;
 
@@ -23,8 +22,8 @@ pub enum WheelDir {
 /// Mouse-protocol modifier set, mapped onto the report's `cb` bits
 /// (shift=4, alt/meta=8, ctrl=16).
 ///
-/// OS-level Alt (Option on macOS) is xterm's "meta" bit: `alt` and
-/// `meta` merge into the single +8 bit and never double-count.
+/// OS-level Alt (Option on macOS) reaches the report as the meta bit:
+/// `alt` and `meta` merge into the single +8 bit and never double-count.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProtocolModifiers {
     pub shift: bool,
@@ -35,9 +34,9 @@ pub struct ProtocolModifiers {
 
 /// Button identity carried by a mouse report.
 ///
-/// Wheel variants are press-shaped: xterm reports them with button
-/// codes 64..=67 and never emits a release or sets the motion bit
-/// for them, so wheel reports use [`MouseReportKind::Press`].
+/// Wheel variants are press-shaped: they carry button codes 64..=67,
+/// and a wheel report uses [`MouseReportKind::Press`], never a release
+/// or a drag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseButton {
     Left,
@@ -84,8 +83,8 @@ pub struct MouseReport {
 
 impl MouseReport {
     /// Encodes this report in the given mouse encoding. UTF-8 (1005)
-    /// is not implemented and intentionally falls back to X10 framing
-    /// (byte-identical for coordinates <= 95).
+    /// is not implemented and falls back to X10 framing (byte-identical
+    /// for coordinates <= 95).
     pub fn encode(&self, encoding: MouseEncoding) -> Vec<u8> {
         match encoding {
             MouseEncoding::Sgr => self.encode_sgr(),

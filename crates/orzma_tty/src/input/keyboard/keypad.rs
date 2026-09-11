@@ -1,16 +1,14 @@
 //! The numeric keypad's key vocabulary and its VT encoder. Which bytes a
 //! keypad key sends depends on `DECKPAM` / `DECKPNM` rather than on the
-//! modifiers the rest of the keyboard reads, so the encoding lives here
-//! beside the vocabulary it indexes.
+//! modifiers the rest of the keyboard reads.
 
 use orzma_vt::prelude::KeypadMode;
 
 /// A key on the PC-layout numeric keypad.
 ///
 /// [`Self::Comma`] and [`Self::Decimal`] name the character a key types
-/// rather than the station it sits at, which is how xterm keys its keypad
-/// table. A layout whose decimal separator is a comma therefore reaches this
-/// vocabulary as [`Self::Comma`].
+/// rather than the station it sits at, so a layout whose decimal separator
+/// is a comma reaches this vocabulary as [`Self::Comma`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeypadKey {
     Divide,
@@ -40,18 +38,11 @@ pub enum KeypadKey {
 impl KeypadKey {
     /// Encodes the keypad key input to the PTY bytes.
     ///
-    /// The neighbouring [PC-Style Function Keys] table is not this function's
-    /// specification. Its application column lists the editing sequences a
-    /// station emits when NumLock is off, which reach a terminal as separate
-    /// keys rather than as a keypad mode, so deriving from it turns keypad
-    /// digits into cursor keys.
-    ///
     /// # References
     ///
     /// - [VT220-Style Function Keys] — the keypad table this follows.
     ///
     /// [VT220-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-VT220-Style-Function-Keys
-    /// [PC-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-PC-Style-Function-Keys
     pub(super) fn encode(&self, mode: KeypadMode) -> &'static [u8] {
         macro_rules! ss3 {
             ($numeric:literal) => {

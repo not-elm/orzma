@@ -1,4 +1,5 @@
-//! `Pty` — owns the PTY master, writer, child killer, and the
+//! `Pty` — owns the PTY master, writer, child killer, and the output and
+//! exit streams its OS threads feed.
 
 use crate::{
     CellPixels, SpawnOptions,
@@ -21,10 +22,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 /// PTY ownership for one spawned shell.
-///
-/// `Mutex` is required because `dyn MasterPty + Send` and `dyn Write +
-/// Send` are `!Sync`, while downstream wrappers (`bevy_orzmux`'s
-/// `Component`) need the owning `OrzmaTty` to be `Send + Sync`.
 pub struct Pty {
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
@@ -61,17 +58,16 @@ pub enum ExitPoll {
 
 impl Pty {
     /// How many reader chunks may wait unparsed before the reader thread
-    /// parks: 256 × 4 KiB = 1 MiB per pane, matching Alacritty's ceiling.
+    /// parks: 256 × 4 KiB = 1 MiB per pane.
     pub const CHUNK_QUEUE_CAPACITY: usize = 256;
 
     /// Opens a PTY at the given grid size, spawns `options.shell` under
-    /// it as a login shell, and starts the blocking reader/wait OS
-    /// thread.
+    /// it (as a login shell on macOS), and starts the blocking OS thread
+    /// (two on Windows) that reads its output and waits for the child.
     ///
     /// On Windows, ConPTY writes `CSI 6 n` before it starts the child and
     /// holds the child until a cursor-position report arrives; the owner
-    /// must write that reply through [`Self::write_all`]. `OrzmaTty` does
-    /// so with the VT's replies (see `Screen::cursor_position_report`).
+    /// must write that reply through [`Self::write_all`].
     pub fn spawn(options: &SpawnOptions) -> OrzmaTtyResult<Self> {
         let (pixel_width, pixel_height) = options.cell_px.window_pixels(options.cols, options.rows);
         let pty_pair = native_pty_system()
@@ -145,13 +141,13 @@ impl Pty {
         !self.chunk_rx.is_empty()
     }
 
-    /// The output stream, for a `Select` that waits on many terminals.
+    /// The PTY output stream.
     #[inline]
     pub fn chunk_receiver(&self) -> &Receiver<Vec<u8>> {
         &self.chunk_rx
     }
 
-    /// The exit stream, for a `Select` that waits on many terminals.
+    /// The child-exit stream.
     #[inline]
     pub fn exit_receiver(&self) -> &Receiver<Option<i32>> {
         &self.exit_rx
@@ -171,9 +167,8 @@ impl Pty {
     /// with the pixel fields set to the total window pixels
     /// `cell_px × cells` (see [`CellPixels::window_pixels`]).
     ///
-    /// A no-policy wrapper: forwards the cell counts verbatim (validation
-    /// is `OrzmaTty::resize`'s job) and maps the master's error to
-    /// [`OrzmaTtyError::PtyResize`].
+    /// Forwards the cell counts verbatim, without validating them, and
+    /// maps the master's error to [`OrzmaTtyError::PtyResize`].
     pub fn resize(&mut self, cols: u16, rows: u16, cell_px: CellPixels) -> OrzmaTtyResult {
         let (pixel_width, pixel_height) = cell_px.window_pixels(cols, rows);
         self.master
@@ -191,8 +186,8 @@ impl Pty {
     /// Reads the master's current size back from the kernel
     /// (`TIOCGWINSZ`).
     ///
-    /// Panics on ioctl failure — the master fd is no longer valid at
-    /// that point (see `OrzmaTty::pty_size`).
+    /// Panics on ioctl failure, which means the master fd is no longer
+    /// valid.
     pub fn size(&self) -> PtySize {
         self.master
             .lock()
@@ -204,11 +199,6 @@ impl Pty {
     /// Opens a real PTY at the given grid size but routes writes to
     /// `writer` instead of the master, spawning no child process and no
     /// reader thread.
-    ///
-    /// `orzma_tty`'s own `#[cfg(test)]` tests are the only remaining
-    /// caller — `OrzmaTty::detached` builds around
-    /// [`crate::test_support::RecordingMaster`] instead so that
-    /// downstream test fixtures never open a real PTY.
     #[cfg(test)]
     pub fn detached(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> OrzmaTtyResult<Self> {
         let pty_pair = native_pty_system()
@@ -223,8 +213,7 @@ impl Pty {
     }
 
     /// Builds a `Pty` around an arbitrary master and writer, with no
-    /// child process and no reader thread — lets tests inject a fake
-    /// master (e.g. one whose `resize` fails).
+    /// child process and no reader thread.
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_master(master: Box<dyn MasterPty + Send>, writer: Box<dyn Write + Send>) -> Self {
         let (chunk_tx, chunk_rx) = unbounded::<Vec<u8>>();
@@ -240,8 +229,8 @@ impl Pty {
     }
 
     /// Builds a `Pty` like [`Self::with_master`], but with the chunk
-    /// and exit streams fed by the given receivers — lets tests inject
-    /// PTY output and child-exit reports.
+    /// and exit streams fed by the given receivers, so the caller
+    /// supplies the PTY output and the child-exit reports.
     #[cfg(any(test, feature = "test-support"))]
     pub fn with_master_and_channels(
         master: Box<dyn MasterPty + Send>,
@@ -267,9 +256,8 @@ impl Drop for Pty {
 
 /// Builds the shell `CommandBuilder`: on macOS the shell is wrapped in
 /// `/usr/bin/login` so it runs as a login shell and sources
-/// `/etc/zprofile` (`path_helper`) and `~/.zprofile` — without that, an
-/// app launched from Finder runs under launchd's minimal `PATH`. Every
-/// other platform spawns the shell directly.
+/// `/etc/zprofile` (`path_helper`) and `~/.zprofile`. Every other
+/// platform spawns the shell directly.
 fn build_shell_command(shell: &str) -> CommandBuilder {
     #[cfg(target_os = "macos")]
     {
@@ -313,8 +301,7 @@ fn master_pipes(
     Ok((master.try_clone_reader()?, master.take_writer()?))
 }
 
-/// What the reader thread reports about its progress, shared with
-/// whoever needs to know whether output is still flowing.
+/// What the reader thread reports about its progress.
 struct ReaderProgress {
     /// When the reader last completed a read or a send.
     last_activity: Mutex<Instant>,
@@ -355,16 +342,13 @@ impl ReaderProgress {
 ///
 /// `progress` is stamped after every completed read and again after a
 /// blocking `send` returns, and its parked flag holds from the moment
-/// `try_send` finds the queue full until the blocking `send` returns, so
-/// a watcher can tell a reader parked on a full queue from one whose
-/// child went quiet.
+/// `try_send` finds the queue full until the blocking `send` returns.
 ///
 /// # Invariants
 ///
 /// The stamp after a blocking `send` is written before the parked flag
-/// clears. A watcher that observes the flag clear therefore also sees
-/// the fresh stamp, so it cannot pair "not parked" with the stale read
-/// stamp and report the exit early.
+/// clears, so a watcher that observes the flag clear also sees the fresh
+/// stamp.
 fn forward_chunks(reader: &mut dyn Read, chunk_tx: &Sender<Vec<u8>>, progress: &ReaderProgress) {
     let mut buf = [0u8; 4096];
     loop {
@@ -393,9 +377,6 @@ fn forward_chunks(reader: &mut dyn Read, chunk_tx: &Sender<Vec<u8>>, progress: &
 /// Spawns a dedicated OS thread that drains PTY output into `chunk_tx`
 /// and sends a single `exit_tx` message (`Some(code)` on graceful exit,
 /// `None` on wait failure) once the reader returns 0 or errors out.
-///
-/// The OS thread (vs. an async task) is required because the PTY read
-/// syscall is blocking.
 #[cfg(unix)]
 fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
@@ -421,15 +402,11 @@ fn spawn_reader_thread(
 /// second thread that waits for the child and sends the single `exit_tx`
 /// message once the output has gone quiet.
 ///
-/// ConPTY keeps the output pipe open after the child exits until the
-/// pseudoconsole is closed, so the reader cannot learn about the exit from
-/// EOF the way the Unix reader does. The watcher waits [`OUTPUT_QUIESCENCE`]
-/// after the reader's last completed read or send, as reported through its
-/// [`ReaderProgress`], and only while the reader is not parked on a full
-/// queue, so the child's final output is queued before the exit is
-/// reported; `OrzmaTty::pump` then reports `ChildExit` only once
-/// the queue is drained. The reader ends when the master is dropped by the
-/// pane teardown the exit triggers.
+/// The watcher waits [`OUTPUT_QUIESCENCE`] after the reader's last completed
+/// read or send, and only while the reader is not parked on a full queue,
+/// so the child's final output is queued before the exit is reported.
+/// The reader sees no EOF at the child's exit and ends when the master is
+/// dropped or a send finds the receiver gone.
 #[cfg(windows)]
 fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
@@ -453,8 +430,7 @@ fn spawn_reader_thread(
 const OUTPUT_QUIESCENCE: Duration = Duration::from_millis(50);
 
 /// The longest the watcher lets an unparked reader stream after the
-/// child exits, so a pseudoconsole that keeps streaming cannot delay
-/// the exit forever.
+/// child exits.
 #[cfg(windows)]
 const OUTPUT_QUIESCENCE_CAP: Duration = Duration::from_secs(2);
 
@@ -466,18 +442,14 @@ const QUIESCENCE_POLL_FLOOR: Duration = Duration::from_millis(10);
 /// completed for `quiescence`, or until the reader has spent `cap` in
 /// total not parked.
 ///
-/// A parked reader is not streaming, so time spent parked counts
-/// toward neither the idle window nor the cap: the exit is not reported
-/// while the child's output still waits in the pipe behind a full
-/// queue. The send stamp restarts the idle window on unpark, so a send
-/// that parked longer than the window cannot make the watcher fire
-/// before the next read completes.
+/// Time spent parked counts toward neither the idle window nor the cap,
+/// so the call does not return while the child's output still waits in
+/// the pipe behind a full queue. An unpark restarts the idle window from
+/// the send stamp.
 ///
-/// An interval counts toward the cap only when both of its polls find
-/// the reader unparked; a park that spans a poll is never charged,
-/// while one that fits inside a single interval still is. With the
-/// production poll rate that over-count is bounded by one interval per
-/// park.
+/// The unparked total is measured per poll interval: a park that spans
+/// a poll is never charged to the cap, while one that fits inside a
+/// single interval still is.
 #[cfg(any(windows, test))]
 fn wait_for_output_quiescence(progress: &ReaderProgress, quiescence: Duration, cap: Duration) {
     let mut unparked = Duration::ZERO;
@@ -550,10 +522,8 @@ mod tests {
     /// Asserts that a resize round-trips through the kernel: the size
     /// read back via `TIOCGWINSZ` is the size just applied.
     ///
-    /// Case: the wrapper's one real side effect. The non-square 120x40
-    /// pins the argument-to-field mapping — the method takes
-    /// `(cols, rows)` while `PtySize` declares `rows` first, so a
-    /// transposition compiles silently and swaps every grid dimension.
+    /// Case: the host applies a non-square 120x40 geometry to a pane's
+    /// PTY, and a program reads the size back with `TIOCGWINSZ`.
     #[test]
     fn resize_applies_the_size_to_the_kernel() {
         let mut pty = Pty::detached(80, 24, Box::new(sink())).expect("Pty::detached");
@@ -566,7 +536,7 @@ mod tests {
     /// pixel fields, not the per-cell pitch.
     ///
     /// Case: the host reports an 8×16 px cell and resizes the pane to
-    /// 100×40; a program reading `TIOCGWINSZ` must see 800×640.
+    /// 100×40 while a program reads `TIOCGWINSZ`.
     #[test]
     fn resize_writes_the_total_window_pixels() {
         let (master, calls) = RecordingMaster::at(80, 24);
@@ -585,14 +555,11 @@ mod tests {
         assert_eq!((last.pixel_width, last.pixel_height), (800, 640));
     }
 
-    /// Asserts that degenerate sizes are forwarded verbatim, one master
-    /// call per request.
+    /// Asserts that degenerate sizes are forwarded verbatim rather than
+    /// validated, one master call per request.
     ///
-    /// Case: the layering pin. The zero-axis / oversize policy lives
-    /// only in `OrzmaTty::resize`; this wrapper must not validate. A
-    /// guard sneaking in here would duplicate the policy and let the
-    /// two layers drift (one clamping while the other ignores) without
-    /// any layered test noticing.
+    /// Case: a caller hands the PTY a zero-axis geometry, such as the one
+    /// a minimized window computes.
     #[test]
     fn resize_forwards_degenerate_sizes_verbatim() {
         let (master, calls) = RecordingMaster::at(80, 24);
@@ -613,10 +580,8 @@ mod tests {
     /// Asserts that a master resize failure surfaces as
     /// `OrzmaTtyError::PtyResize`.
     ///
-    /// Case: the error-taxonomy pin, mirroring `write_all` →
-    /// `PtyWrite`. `OrzmaTty::resize`'s failure-atomicity branch and
-    /// the bevy layer's `error!` log both identify the failing
-    /// subsystem by this variant.
+    /// Case: the kernel refuses the winsize ioctl when the host resizes a
+    /// pane.
     #[test]
     fn a_failing_master_maps_to_pty_resize_error() {
         let mut pty = Pty::with_master(Box::new(FailingMaster), Box::new(sink()));
@@ -713,8 +678,7 @@ mod tests {
     /// Asserts that the child's last output is delivered before its
     /// exit is reported.
     ///
-    /// Case: a Windows shell prints a farewell line and exits; the pane
-    /// must show the line before it closes.
+    /// Case: a Windows shell prints a farewell line and exits.
     #[cfg(windows)]
     #[test]
     fn the_final_output_precedes_the_exit_report() {
