@@ -9,7 +9,7 @@
 pub(crate) mod color;
 pub(crate) mod modes;
 
-use crate::device::color::Palette;
+use crate::device::color::{Palette, Rgb, XTERM_INDEXED};
 use crate::device::modes::{AutoWrap, ScreenKind, VtModes};
 use crate::frame::damage::DamageSpan;
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
@@ -143,6 +143,11 @@ impl DeviceState {
     /// which clears its title silently and leaves the host showing a
     /// stale one.
     ///
+    /// The indexed palette returns to its xterm defaults too, as xterm's
+    /// own reset does, and a reset that changes a slot always repaints:
+    /// the palette reaches the renderer only through a frame, and a
+    /// device with nothing printed would otherwise report no repaint.
+    ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`)
@@ -158,7 +163,8 @@ impl DeviceState {
         // `set_auto_wrap` instead.
         self.modes = VtModes::default();
         self.title = TitleState::default();
-        (was_showing_alternate || primary.is_some()).then_some(DamageSpan::Full)
+        let palette_changed = self.reset_indexed_colors();
+        (was_showing_alternate || primary.is_some() || palette_changed).then_some(DamageSpan::Full)
     }
 
     /// The window title the application last set, if any.
@@ -267,6 +273,46 @@ impl DeviceState {
     /// The live palette symbolic colors resolve against.
     pub fn palette(&self) -> &Palette {
         &self.colors.palette
+    }
+
+    /// Sets palette slot `index` to `color`; returns whether the slot
+    /// changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 4 ; c ; spec`
+    pub fn set_indexed_color(&mut self, index: u8, color: Rgb) -> bool {
+        let slot = &mut self.colors.palette.indexed[usize::from(index)];
+        if *slot == color {
+            return false;
+        }
+        *slot = color;
+        true
+    }
+
+    /// Returns palette slot `index` to its xterm default; returns
+    /// whether the slot changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 104 ; c`
+    pub fn reset_indexed_color(&mut self, index: u8) -> bool {
+        self.set_indexed_color(index, XTERM_INDEXED[usize::from(index)])
+    }
+
+    /// Returns every palette slot to its xterm default; returns whether
+    /// any slot changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 104` with no colour number
+    pub fn reset_indexed_colors(&mut self) -> bool {
+        let indexed = &mut *self.colors.palette.indexed;
+        if *indexed == XTERM_INDEXED {
+            return false;
+        }
+        *indexed = XTERM_INDEXED;
+        true
     }
 
     /// Switches the active screen without a flip's side effects.
@@ -412,9 +458,11 @@ struct Screens {
     alternate: Screen,
 }
 
-/// The base palette and its dynamic overrides.
-// TODO: Apply the OSC 4 / 10 / 11 / 12 overrides to the carried
-// palette once their handlers land.
+/// The live palette: OSC 4 overrides written over the built-in xterm
+/// table, which OSC 104 and `RIS` restore from.
+// TODO: Apply the OSC 10 / 11 / 12 overrides to the carried palette
+// once their handlers land, and restore them in `DeviceState::reset`
+// beside the indexed slots.
 struct ColorTable {
     palette: Palette,
 }
@@ -1005,5 +1053,101 @@ mod tests {
             .active_screen_mut()
             .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
         assert_eq!(glyph_at(&device, 1, 0), 'z');
+    }
+
+    /// Asserts that setting a slot reports the change and reads back.
+    ///
+    /// Case: a theme script recolors ANSI red.
+    #[test]
+    fn setting_a_slot_reports_the_change_and_reads_back() {
+        let mut device = device();
+        let color = Rgb {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+        };
+        assert!(device.set_indexed_color(1, color));
+        assert_eq!(device.palette().indexed[1], color);
+    }
+
+    /// Asserts that setting a slot to the colour it already holds
+    /// reports no change, so no repaint is staged.
+    ///
+    /// Case: a theme script re-applies the stock xterm red on every
+    /// prompt.
+    #[test]
+    fn setting_a_slot_to_its_current_color_reports_no_change() {
+        let mut device = device();
+        let current = device.palette().indexed[1];
+        assert!(!device.set_indexed_color(1, current));
+    }
+
+    /// Asserts that resetting a slot restores its xterm default and
+    /// leaves the other slots alone.
+    ///
+    /// Case: a program restores the one slot it recolored, while the
+    /// slot a theme script recolored earlier must keep its colour.
+    #[test]
+    fn resetting_a_slot_restores_its_default_and_leaves_the_others() {
+        let mut device = device();
+        let color = Rgb {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+        };
+        device.set_indexed_color(1, color);
+        device.set_indexed_color(2, color);
+        assert!(device.reset_indexed_color(1));
+        assert_eq!(device.palette().indexed[1], XTERM_INDEXED[1]);
+        assert_eq!(device.palette().indexed[2], color);
+    }
+
+    /// Asserts that resetting a slot that holds its default reports no
+    /// change.
+    ///
+    /// Case: a program restores a slot it never recolored.
+    #[test]
+    fn resetting_an_untouched_slot_reports_no_change() {
+        assert!(!device().reset_indexed_color(1));
+    }
+
+    /// Asserts that resetting every slot restores the whole xterm table
+    /// and reports the change only once.
+    ///
+    /// Case: `tput init` sends a bare `OSC 104` twice in a row after a
+    /// theme script recolored the palette.
+    #[test]
+    fn resetting_every_slot_restores_the_whole_table() {
+        let mut device = device();
+        device.set_indexed_color(0, Rgb { r: 1, g: 2, b: 3 });
+        device.set_indexed_color(255, Rgb { r: 1, g: 2, b: 3 });
+        assert!(device.reset_indexed_colors());
+        assert_eq!(*device.palette().indexed, XTERM_INDEXED);
+        assert!(!device.reset_indexed_colors());
+    }
+
+    /// Asserts that a reset returns a recolored slot to its xterm
+    /// default.
+    ///
+    /// Case: the user runs `reset` after a theme script recolored ANSI
+    /// red.
+    #[test]
+    fn a_reset_restores_the_palette() {
+        let mut device = device();
+        device.set_indexed_color(1, Rgb { r: 1, g: 2, b: 3 });
+        let _ = device.reset();
+        assert_eq!(device.palette().indexed[1], XTERM_INDEXED[1]);
+    }
+
+    /// Asserts that a reset reports a full repaint when it restores a
+    /// recolored slot, even with nothing printed on either screen.
+    ///
+    /// Case: a theme script recolors the palette in a fresh terminal,
+    /// and the user runs `reset` before anything is printed.
+    #[test]
+    fn a_reset_that_restores_the_palette_reports_a_full_repaint() {
+        let mut device = device();
+        device.set_indexed_color(1, Rgb { r: 1, g: 2, b: 3 });
+        assert_eq!(device.reset(), Some(DamageSpan::Full));
     }
 }

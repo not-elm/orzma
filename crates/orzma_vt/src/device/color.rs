@@ -173,6 +173,11 @@ impl Palette {
     }
 }
 
+/// The full 256-slot xterm table [`Color::Indexed`] resolves to before
+/// any OSC 4 override: [`ANSI_16`], the 6x6x6 cube on [`CUBE_RAMP`],
+/// and the grayscale ramp from 8 to 238 in steps of 10.
+pub(crate) const XTERM_INDEXED: [Rgb; 256] = build_xterm_indexed();
+
 /// The default foreground [`Palette`] carries before any OSC 10
 /// override.
 const DEFAULT_FOREGROUND: Rgb = Rgb {
@@ -248,11 +253,6 @@ const ANSI_16: [Rgb; 16] = [
         b: 255,
     },
 ];
-
-/// The full 256-slot xterm table [`Color::Indexed`] resolves to before
-/// any OSC 4 override: [`ANSI_16`], the 6x6x6 cube on [`CUBE_RAMP`],
-/// and the grayscale ramp from 8 to 238 in steps of 10.
-const XTERM_INDEXED: [Rgb; 256] = build_xterm_indexed();
 
 const fn build_xterm_indexed() -> [Rgb; 256] {
     let mut table = [Rgb { r: 0, g: 0, b: 0 }; 256];
