@@ -17,7 +17,7 @@ fn erasing_characters_clears_the_span_without_shifting_the_rest() {
     }
     screen.grid[ScreenLine(0)][3].c = 'd';
     screen.state.column = GridColumn(1);
-    let damage = screen.erase_chars(2);
+    let damage = screen.erase_chars(2, AutoWrap::Enabled);
     assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
     assert_eq!(screen.grid[ScreenLine(0)][1].c, ' ');
     assert_eq!(screen.grid[ScreenLine(0)][2].c, ' ');
@@ -43,7 +43,7 @@ fn erasing_past_the_last_column_stops_at_the_row_end() {
         screen.grid[ScreenLine(0)][3].c = 'd';
         screen.grid[ScreenLine(1)][0].c = 'e';
         screen.state.column = GridColumn(2);
-        let damage = screen.erase_chars(count);
+        let damage = screen.erase_chars(count, AutoWrap::Enabled);
         assert_eq!(screen.grid[ScreenLine(0)][1].c, 'b');
         assert_eq!(screen.grid[ScreenLine(0)][2].c, ' ');
         assert_eq!(screen.grid[ScreenLine(0)][3].c, ' ');
@@ -69,7 +69,7 @@ fn erasing_characters_outside_the_scrolling_region_still_clears() {
     screen.grid[ScreenLine(3)][0].c = 'x';
     screen.grid[ScreenLine(3)][1].c = 'y';
     screen.grid[ScreenLine(3)][2].c = 'z';
-    let damage = screen.erase_chars(2);
+    let damage = screen.erase_chars(2, AutoWrap::Enabled);
     assert_eq!(screen.grid[ScreenLine(3)][0].c, ' ');
     assert_eq!(screen.grid[ScreenLine(3)][1].c, ' ');
     assert_eq!(screen.grid[ScreenLine(3)][2].c, 'z');
@@ -95,7 +95,7 @@ fn erasing_characters_below_a_scrolled_viewport_reports_no_damage() {
     screen.state.line = ScreenLine(0);
     screen.state.column = GridColumn(0);
     screen.grid[ScreenLine(0)][0].c = 'a';
-    let damage = screen.erase_chars(1);
+    let damage = screen.erase_chars(1, AutoWrap::Enabled);
     assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
     assert_eq!(damage, None);
 }
@@ -112,7 +112,7 @@ fn erasing_characters_leaves_the_cursor_on_its_column() {
         screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
     }
     screen.state.column = GridColumn(1);
-    screen.erase_chars(2);
+    screen.erase_chars(2, AutoWrap::Enabled);
     assert_eq!(screen.state.column, GridColumn(1));
     assert_eq!(screen.state.line, ScreenLine(0));
 }
@@ -129,7 +129,7 @@ fn erasing_characters_is_a_no_op_under_pending_wrap() {
     for c in ['a', 'b', 'c', 'd'] {
         screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
     }
-    let damage = screen.erase_chars(1);
+    let damage = screen.erase_chars(1, AutoWrap::Enabled);
     assert_eq!(screen.grid[ScreenLine(0)][3].c, 'd');
     assert_eq!(damage, None);
 }
@@ -148,7 +148,7 @@ fn erasing_the_last_column_without_a_pending_wrap_clears_it() {
     }
     screen.grid[ScreenLine(0)][3].c = 'd';
     screen.state.column = GridColumn(3);
-    let damage = screen.erase_chars(1);
+    let damage = screen.erase_chars(1, AutoWrap::Enabled);
     assert_eq!(screen.grid[ScreenLine(0)][3].c, ' ');
     assert_eq!(screen.grid[ScreenLine(0)][2].c, 'c');
     assert_eq!(
@@ -175,7 +175,7 @@ fn erasing_characters_clears_the_attributes_and_takes_the_pen_background() {
     screen.pen_mut().bg = Color::Indexed(4);
     screen.pen_mut().style = Style::empty();
     screen.state.column = GridColumn(1);
-    screen.erase_chars(1);
+    screen.erase_chars(1, AutoWrap::Enabled);
     assert_eq!(screen.grid[ScreenLine(0)][1].c, ' ');
     assert_eq!(screen.grid[ScreenLine(0)][1].fg, Color::DefaultForeground);
     assert_eq!(screen.grid[ScreenLine(0)][1].style, Style::empty());
@@ -183,4 +183,24 @@ fn erasing_characters_clears_the_attributes_and_takes_the_pen_background() {
     assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
     assert_eq!(screen.grid[ScreenLine(0)][0].fg, Color::Indexed(1));
     assert_eq!(screen.grid[ScreenLine(0)][0].style, Style::BOLD);
+}
+
+/// Asserts that erasing characters runs, rather than declining, while a
+/// deferred wrap is armed and autowrap is reset.
+///
+/// Case: a program fills a row, turns autowrap off, and clears the
+/// character under the cursor.
+#[test]
+fn erasing_characters_runs_under_pending_wrap_while_autowrap_is_reset() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c', 'd'] {
+        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+    }
+    assert!(screen.state.pending_wrap);
+    let damage = screen.erase_chars(1, AutoWrap::Disabled);
+    assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', ' ']);
+    assert_eq!(
+        damage,
+        Some(DamageSpan::rows(ViewportLine(0), ViewportLine(0)))
+    );
 }

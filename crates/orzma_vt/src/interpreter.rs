@@ -317,7 +317,10 @@ impl VTActor for Executor<'_> {
             // EL
             (None, b'K') => {
                 if let Some(mode) = EraseLineMode::from_el(params.value(0).unwrap_or(0)) {
-                    let damage = self.device.active_screen_mut().erase_in_line(mode);
+                    let damage = self
+                        .device
+                        .active_screen_mut()
+                        .erase_in_line(mode, AutoWrap::Enabled);
                     self.stage(damage);
                 }
             }
@@ -326,7 +329,7 @@ impl VTActor for Executor<'_> {
                 let damage = self
                     .device
                     .active_screen_mut()
-                    .erase_chars(repeat_count(params.value(0)));
+                    .erase_chars(repeat_count(params.value(0)), AutoWrap::Enabled);
                 self.stage(damage);
             }
             // IL

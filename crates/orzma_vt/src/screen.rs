@@ -715,13 +715,21 @@ impl Screen {
 impl Screen {
     /// Erases part of the cursor row with the pen background (BCE);
     /// [`EraseLineMode::ToEnd`] is a no-op while the deferred wrap is
-    /// armed.
+    /// armed and autowrap is set.
+    ///
+    /// The autowrap test is what confines the no-op to the state it was
+    /// decided for: with the mode reset the cursor sits at the last
+    /// column rather than past it, so there is a cell to erase.
     ///
     /// # Control Functions
     ///
     /// - `EL` (`CSI Ps K`)
-    pub fn erase_in_line(&mut self, mode: EraseLineMode) -> Option<DamageSpan> {
-        if matches!(mode, EraseLineMode::ToEnd) && self.state.pending_wrap {
+    pub fn erase_in_line(
+        &mut self,
+        mode: EraseLineMode,
+        auto_wrap: AutoWrap,
+    ) -> Option<DamageSpan> {
+        if matches!(mode, EraseLineMode::ToEnd) && self.state.pending_wrap && auto_wrap.wraps() {
             return None;
         }
         let cols = self.grid.size().cols;
@@ -735,14 +743,14 @@ impl Screen {
 
     /// Erases `count` characters from the cursor rightward with the
     /// pen background (BCE), leaving the cursor where it is; a no-op
-    /// while the deferred wrap is armed, as [`Self::erase_in_line`]'s
-    /// [`EraseLineMode::ToEnd`] is.
+    /// while the deferred wrap is armed and autowrap is set, as
+    /// [`Self::erase_in_line`]'s [`EraseLineMode::ToEnd`] is.
     ///
     /// # Control Functions
     ///
     /// - `ECH` (`CSI Pn X`)
-    pub fn erase_chars(&mut self, count: u16) -> Option<DamageSpan> {
-        if self.state.pending_wrap {
+    pub fn erase_chars(&mut self, count: u16, auto_wrap: AutoWrap) -> Option<DamageSpan> {
+        if self.state.pending_wrap && auto_wrap.wraps() {
             return None;
         }
         let cols = self.grid.size().cols;
