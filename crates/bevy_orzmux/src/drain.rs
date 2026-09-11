@@ -44,9 +44,9 @@ impl Plugin for DrainPlugin {
 /// `OrzmuxConnection` once the backend is gone.
 ///
 /// Runs only while `OrzmuxConnection` exists, so after it removes the
-/// connection it never runs again and the session ends exactly once. It is
-/// not gated on change detection because channel arrivals are invisible to
-/// it.
+/// connection it never runs again and a disconnect ends the session
+/// exactly once. It is not gated on change detection because channel
+/// arrivals are invisible to it.
 fn drain_orzmux_events(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,

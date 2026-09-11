@@ -65,6 +65,9 @@ impl Plugin for OrzmaEventRequestPlugin {
 /// Sends a pane-addressed command for a terminal entity: the one place
 /// that maps an entity to its `PaneId` and drops requests aimed at an
 /// entity that is not (or no longer) a pane.
+///
+/// It reads `OrzmuxConnection`, so every observer that takes it must be
+/// registered with `run_if(resource_exists::<OrzmuxConnection>)`.
 #[derive(SystemParam)]
 pub(crate) struct PaneSender<'w, 's> {
     connection: Res<'w, OrzmuxConnection>,
