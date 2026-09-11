@@ -360,18 +360,22 @@ fn a_print_away_from_the_last_column_disarms_a_leftover_wrap() {
 
 /// Asserts that an insert-mode print at the last column with autowrap
 /// reset replaces the cell in place, leaves the row unshifted, keeps
-/// the wrap disarmed, and carries the printing pen's own background.
+/// the wrap disarmed, and carries the printing pen's own foreground and
+/// background.
 ///
 /// Case: a program in insert mode with autowrap off types into the
-/// rightmost column while a background colour is selected.
+/// rightmost column while a non-default foreground and background
+/// colour are both selected.
 #[test]
 fn an_insert_mode_print_at_the_last_column_without_autowrap_replaces_in_place() {
     let mut screen = screen();
     seed_row(&mut screen, ScreenLine(0), &['a', 'b', 'c', 'd']);
     screen.state.column = GridColumn(3);
+    screen.pen_mut().fg = Color::Indexed(2);
     screen.pen_mut().bg = Color::Indexed(4);
     screen.print('X', InsertReplaceMode::Insert, AutoWrap::Disabled);
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', 'X']);
+    assert_eq!(screen.grid[ScreenLine(0)][3].fg, Color::Indexed(2));
     assert_eq!(screen.grid[ScreenLine(0)][3].bg, Color::Indexed(4));
     assert_eq!(screen.state.column, GridColumn(3));
     assert!(!screen.state.pending_wrap);

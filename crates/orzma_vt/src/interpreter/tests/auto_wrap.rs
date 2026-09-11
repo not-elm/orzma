@@ -8,8 +8,9 @@ fn second_row_glyph(device: &DeviceState, column: u16) -> char {
     device.active_screen().viewport_row(ViewportLine(1))[column].c
 }
 
-/// Asserts that a reset autowrap keeps a run longer than the row on the
-/// row it started on, replacing the last column.
+/// Asserts that, absent an earlier `DECSC`, a reset autowrap keeps a
+/// run longer than the row on the row it started on, replacing the
+/// last column.
 ///
 /// Case: a status-bar program sends `CSI ? 7 l` and then writes a label
 /// wider than the terminal.
@@ -18,6 +19,18 @@ fn a_reset_autowrap_keeps_a_long_run_on_one_row() {
     let device = interpret(b"\x1b[?7labcdef");
     assert_eq!(first_row_glyphs(&device), vec!['a', 'b', 'c', 'f']);
     assert_eq!(second_row_glyph(&device, 0), ' ');
+}
+
+/// Asserts that a deferred wrap `DECSC` saved before a reset autowrap
+/// survives the round trip verbatim and wraps once autowrap returns.
+///
+/// Case: an application fills a row, saves the cursor, turns autowrap
+/// off and back on, restores the cursor, and prints one more
+/// character.
+#[test]
+fn a_decsc_saved_deferred_wrap_survives_a_reset_autowrap_round_trip() {
+    let device = interpret(b"abcd\x1b7\x1b[?7l\x1b[?7h\x1b8e");
+    assert_eq!(second_row_glyph(&device, 0), 'e');
 }
 
 /// Asserts that a set autowrap after a reset one does not cash in a
@@ -91,15 +104,18 @@ fn an_erase_of_characters_runs_after_a_restore_while_autowrap_is_reset() {
 
 /// Asserts that an erase to the end of the line still erases on the
 /// primary screen after a bare alternate-screen round trip during which
-/// autowrap was reset.
+/// autowrap was reset, and that the round trip disarmed the primary
+/// screen's own deferred wrap: once autowrap returns, the next print
+/// replaces the last column rather than wrapping.
 ///
 /// Case: an application fills a row, enters the alternate screen with
-/// `CSI ? 47 h`, turns autowrap off there, returns, and clears to the
-/// end of the line.
+/// `CSI ? 47 h`, turns autowrap off there, returns, clears to the end
+/// of the line, turns autowrap back on, and prints one more character.
 #[test]
 fn an_erase_to_end_runs_after_a_bare_alternate_screen_round_trip() {
-    let device = interpret(b"abcd\x1b[?47h\x1b[?7l\x1b[?47l\x1b[K");
-    assert_eq!(first_row_glyphs(&device), vec!['a', 'b', 'c', ' ']);
+    let device = interpret(b"abcd\x1b[?47h\x1b[?7l\x1b[?47l\x1b[K\x1b[?7he");
+    assert_eq!(first_row_glyphs(&device), vec!['a', 'b', 'c', 'e']);
+    assert_eq!(second_row_glyph(&device, 0), ' ');
 }
 
 /// Asserts that an erase to the end of the line still erases on the
@@ -133,8 +149,8 @@ fn a_backward_tab_before_a_save_leaves_no_wrap_to_cash_in() {
 /// line on the bottom row.
 #[test]
 fn a_reset_autowrap_does_not_scroll_from_the_bottom_row() {
-    let device = interpret(b"\x1b[?7l\x1b[3;1Habcdef");
-    assert_eq!(first_row_glyphs(&device), vec![' ', ' ', ' ', ' ']);
+    let device = interpret(b"zz\x1b[?7l\x1b[3;1Habcdef");
+    assert_eq!(first_row_glyphs(&device), vec!['z', 'z', ' ', ' ']);
     assert_eq!(
         device.active_screen().viewport_row(ViewportLine(2))[3].c,
         'f'
