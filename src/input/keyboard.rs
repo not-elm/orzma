@@ -50,6 +50,7 @@ pub(crate) fn bevy_key_to_terminal_key(logical_key: &Key) -> Option<TerminalKey>
         Key::Backspace => Some(TerminalKey::Backspace),
         Key::Tab => Some(TerminalKey::Tab),
         Key::Escape => Some(TerminalKey::Escape),
+        Key::Insert => Some(TerminalKey::Insert),
         Key::Delete => Some(TerminalKey::Delete),
         Key::ArrowUp => Some(TerminalKey::ArrowUp),
         Key::ArrowDown => Some(TerminalKey::ArrowDown),
@@ -116,6 +117,11 @@ mod tests {
         );
     }
 
+    /// Asserts that the navigation and editing keys map to their
+    /// `TerminalKey` variants.
+    ///
+    /// Case: the user moves through a document with the arrow keys, Home,
+    /// End, PageUp, and PageDown, and toggles overwrite with Insert.
     #[test]
     fn navigation_keys_map_correctly() {
         assert_eq!(
@@ -147,9 +153,13 @@ mod tests {
             bevy_key_to_terminal_key(&Key::PageDown),
             Some(TerminalKey::PageDown)
         );
+        assert_eq!(
+            bevy_key_to_terminal_key(&Key::Insert),
+            Some(TerminalKey::Insert)
+        );
     }
 
-    /// Asserts bare modifier keys and unmapped keys (e.g. function keys, Insert)
+    /// Asserts bare modifier keys and unmapped keys (e.g. function keys)
     /// return `None`.
     ///
     /// Case: the user presses a lone Shift/Ctrl/Alt/Super, or a key this codec
@@ -161,7 +171,6 @@ mod tests {
         assert_eq!(bevy_key_to_terminal_key(&Key::Alt), None);
         assert_eq!(bevy_key_to_terminal_key(&Key::Super), None);
         assert_eq!(bevy_key_to_terminal_key(&Key::F1), None);
-        assert_eq!(bevy_key_to_terminal_key(&Key::Insert), None);
     }
 
     /// Asserts an empty character payload maps to `None` rather than a

@@ -40,6 +40,8 @@ pub enum TerminalKey {
     Backspace,
     Tab,
     Escape,
+    /// The editing keypad's Insert key.
+    Insert,
     Delete,
     ArrowUp,
     ArrowDown,
@@ -52,8 +54,8 @@ pub enum TerminalKey {
 }
 
 /// Modifier flags carried alongside `TerminalKey`.
-/// `ctrl` / `alt` / `meta` affect `Character` encoding; `shift` is reserved for future CSI u /
-/// modifyOtherKeys support.
+/// `ctrl` / `alt` / `meta` affect `Character` encoding, and `shift` alone turns `Tab` into a
+/// back tab; its other uses wait for CSI u / modifyOtherKeys support.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TerminalModifiers {
     pub ctrl: bool,
@@ -70,8 +72,11 @@ pub struct TerminalModifiers {
 /// The cursor keys — arrows plus Home and End, which xterm also classifies as
 /// cursor keys — honour `app_cursor_keys` (DECCKM): `ESC [ A/B/C/D/H/F` in
 /// normal mode, `ESC O A/B/C/D/H/F` in application mode. The VT220 editing
-/// keypad (Delete, PageUp, PageDown) is unaffected by DECCKM and maps to fixed
+/// keypad (Insert, Delete, PageUp, PageDown) is unaffected by DECCKM and maps to fixed
 /// sequences; `Character` is encoded by `encode_character`.
+///
+/// Tab sends HT, and CBT (`CSI Z`, the terminfo `kcbt` string) when Shift
+/// is the only modifier held; other modifiers leave Tab as HT.
 pub(super) fn encode_key(
     key: &TerminalKey,
     mods: &TerminalModifiers,
@@ -89,8 +94,12 @@ pub(super) fn encode_key(
         TerminalKey::End => cursor_key_bytes(b'F', app_cursor_keys),
         TerminalKey::Enter => vec![0x0d],
         TerminalKey::Backspace => vec![0x7f],
+        TerminalKey::Tab if mods.shift && !mods.ctrl && !mods.alt && !mods.meta => {
+            b"\x1b[Z".to_vec()
+        }
         TerminalKey::Tab => vec![0x09],
         TerminalKey::Escape => vec![0x1b],
+        TerminalKey::Insert => b"\x1b[2~".to_vec(),
         TerminalKey::Delete => b"\x1b[3~".to_vec(),
         TerminalKey::PageUp => b"\x1b[5~".to_vec(),
         TerminalKey::PageDown => b"\x1b[6~".to_vec(),
@@ -216,6 +225,51 @@ mod tests {
         );
     }
 
+    /// Asserts that Tab with Shift as the only modifier sends the back
+    /// tab sequence `CSI Z`, while Tab with any other modifier added still
+    /// sends HT.
+    ///
+    /// Case: the user presses Shift-Tab to move back through the fields
+    /// of a form in a full-screen application.
+    #[test]
+    fn shift_tab_is_the_back_tab_sequence() {
+        let shift = TerminalModifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_key(&TerminalKey::Tab, &shift, false, KeypadMode::Numeric),
+            b"\x1b[Z".to_vec()
+        );
+        let ctrl_shift = TerminalModifiers {
+            ctrl: true,
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_key(&TerminalKey::Tab, &ctrl_shift, false, KeypadMode::Numeric),
+            vec![0x09]
+        );
+        for other in [
+            TerminalModifiers {
+                alt: true,
+                shift: true,
+                ..Default::default()
+            },
+            TerminalModifiers {
+                meta: true,
+                shift: true,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                encode_key(&TerminalKey::Tab, &other, false, KeypadMode::Numeric),
+                vec![0x09],
+                "{other:?} leaves Tab as HT"
+            );
+        }
+    }
+
     #[test]
     fn escape_is_esc() {
         assert_eq!(
@@ -224,8 +278,18 @@ mod tests {
         );
     }
 
+    /// Asserts that the VT220 editing keypad keys send their fixed tilde
+    /// sequences.
+    ///
+    /// Case: the user presses Insert, Delete, PageUp, or PageDown in a
+    /// program that reads the terminfo `kich1`, `kdch1`, `kpp`, and `knp`
+    /// strings.
     #[test]
     fn vt220_style_keys_use_tilde_sequences() {
+        assert_eq!(
+            encode_key(&TerminalKey::Insert, &no_mods(), false, KeypadMode::Numeric),
+            b"\x1b[2~".to_vec()
+        );
         assert_eq!(
             encode_key(&TerminalKey::Delete, &no_mods(), false, KeypadMode::Numeric),
             b"\x1b[3~".to_vec()
@@ -269,9 +333,23 @@ mod tests {
         );
     }
 
+    /// Asserts that the editing keypad keys send the same sequences
+    /// whether or not DECCKM is set.
+    ///
+    /// Case: a full-screen editor turns on application cursor keys, and
+    /// the user presses Insert, Delete, PageUp, or PageDown in it.
     #[test]
     fn editing_keypad_ignores_cursor_mode() {
         for app_cursor in [false, true] {
+            assert_eq!(
+                encode_key(
+                    &TerminalKey::Insert,
+                    &no_mods(),
+                    app_cursor,
+                    KeypadMode::Numeric
+                ),
+                b"\x1b[2~".to_vec()
+            );
             assert_eq!(
                 encode_key(
                     &TerminalKey::Delete,
