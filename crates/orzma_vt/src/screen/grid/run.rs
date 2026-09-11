@@ -9,17 +9,6 @@ use bitflags::bitflags;
 
 bitflags! {
     /// The SGR attributes a cell or a run carries.
-    ///
-    /// # Invariants
-    ///
-    /// The renderer's shader reads the raw bits and mirrors every flag
-    /// except `BOLD` and `ITALIC` as a literal constant, so renumbering
-    /// one repaints cells with the wrong attribute. The renderer test
-    /// `wgsl_style_constants_track_the_style_bits` catches that drift
-    /// under `cargo test --workspace`; `cargo test -p orzma_vt` does not
-    /// run it. Bits 7-15 are reserved for the SGR attributes this
-    /// terminal parses but cannot yet paint — the underline variants
-    /// `4:2`-`4:5`, blink, and overline.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
     pub struct Style: u16 {
         /// Bold weight.
