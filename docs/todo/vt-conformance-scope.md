@@ -42,7 +42,7 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 
 | シーケンス | 機能 | terminfo | 現状 | 実測頻度 † | 影響 |
 |---|---|---|---|---:|---|
-| `CSI ?25 h/l` | DECTCEM | `civis`/`cnorm`/`cvvis` | `MODE∅`。`screen.rs:1026` の TODO でカーソルは `visible: true` 固定 | **590** | 再描画中もカーソルが本文上に残る |
+| ~~`CSI ?25 h/l`~~ | ~~DECTCEM~~ | `civis`/`cnorm`/`cvvis` | **✅ 実装済み（2026-09-11）**。ただし `cnorm`=`\E[?12l\E[?25h` と `cvvis`=`\E[?12;25h` は `?12` を含み、そちらは未実装なので **`cvvis` は `cnorm` と同じ定常カーソルになる**（下の `?12` 行） | **590** | ~~再描画中もカーソルが本文上に残る~~（解消済み） |
 | ~~`CSI Ps X`~~ | ~~**ECH**~~ | `ech` | **✅ 実装済み（2026-09-10）** | 73 | ~~消去されず旧テキストが残る~~（今回のバグ。解消済み） |
 | ~~`CSI Ps @`~~ | ~~ICH~~ | `ich`, `mir` | **✅ 実装済み（2026-09-10）** | 0 | ~~挿入描画が上書きになり行が壊れる~~（解消済み） |
 | ~~`CSI Ps P`~~ | ~~DCH~~ | `dch`, `dch1` | **✅ 実装済み（2026-09-10）** | 0 | ~~削除されず後続が詰まらない~~（解消済み） |
@@ -59,7 +59,7 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 
 | シーケンス | 機能 | terminfo | 現状 | 影響 |
 |---|---|---|---|---|
-| `CSI ! p` | DECSTR ソフトリセット | `is2`, `rs2` | `INTER∅` | **terminfo 経由の初期化列の先頭**。毎回無視されモードが残留する。`CharacterSetMapping::reset()` は DECSTR 待ちで `#[expect(dead_code)]` のまま（`character_sets.rs:220`） |
+| `CSI ! p` | DECSTR ソフトリセット | `is2`, `rs2` | `INTER∅` | **terminfo 経由の初期化列の先頭**。毎回無視されモードが残留する。`CharacterSetMapping::reset()` は DECSTR 待ちで `#[expect(dead_code)]` のまま（`character_sets.rs:220`）。**DECTCEM 実装後、優先度が上がった**: vt510 p.277 Table 5-9 は DECSTR 後の DECTCEM を "Cursor enabled." と定めており、`is2`/`rs2` の先頭が `\E[!p` なので **`tput init` が隠れたカーソルを回復できない**。RIS (`\Ec`) は `VtModes::default()` で回復するが、DECSTR は名指しした一部だけを戻すので `text_cursor_enable = Shown` を明示的に含める必要がある |
 | `CSI ?12 h/l` | カーソル点滅 | `cnorm`, `cvvis` | `MODE∅`。`blinking: false` 固定 | 点滅指定が効かない |
 | `CSI ?3 l` | DECCOLM リセット | `is2`, `rs2` の一部 | `MODE∅` | 初期化列に含まれる |
 | `CSI ?1034 h/l` | 8bit Meta | `smm`/`rmm`, `km` | `MODE∅` | Meta キーのバイト表現が食い違う |
@@ -91,13 +91,14 @@ terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ロ
 | `OSC 10/11/12` | 前景/背景/カーソル色（問い合わせ含む） | `OSC∅` | vim/nvim の `background` 自動判定 |
 | `OSC 52` | クリップボード | `OSC∅` | nvim の osc52 provider、tmux |
 | `OSC 8` | ハイパーリンク | `OSC∅`。interner は未接続（`hyperlink.rs:15`） | nvim。レンダラ側に受け皿は既にある |
-| `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `INTER∅` | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する** |
+| `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `INTER∅` | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する**。DECTCEM 実装により **25 も報告可能な状態を持つようになった**（`CSI ?25;1$y` / `;2$y`）が応答路が無い |
 | `DCS $ q … ST` / `DCS + q … ST` | DECRQSS / XTGETTCAP | DCS コールバックが空（`interpreter.rs:148`） | vim のカーソル形状復元・capability 検出 |
 | ``CSI Ps ` `` / `CSI Ps a` / `CSI Ps e` | HPA / HPR / VPR | HPA は **✅ 実装済み（2026-09-11、CHA と同じメソッド）**。HPR/VPR は `CSI∅` | vttest。**VPR は `move_cursor_down` の別名にできない** — VT510 p.351 は VPR を最終行で止めるが CUD は下マージンで止まるため、DECOM リセット時にスクロール領域があると挙動が食い違う |
 | `CSI Ps b` | REP | `CSI∅` | **ローカルエントリは `rep` を広告していない**ため Tier 2。vttest |
 | `CSI Ps ^` | SD（ECMA-48 綴り） | `CSI∅`。orzma は `CSI T` のみ | 実際に発行するプログラムは**未確認**。安いので別名として入れる程度 |
 | `CSI ?69 h/l` / `CSI Pl;Pr s` | DECLRMM / DECSLRM | `MODE∅` / `CSI∅` | nvim。矩形スクロールに必要 |
 | `CSI ?1015 h/l` | urxvt マウス | `MODE∅` | btop が 1015→1006 の順に発行。1006 があるので実害は小 |
+| `CSI ?Pm s` / `CSI ?Pm r` | XTSAVE / XTRESTORE | `CSI∅`（`?` 付きで intermediate 無しなので match に届いて落ちる） | xterm-ctlseqs は「DECSET と同じ Ps 値」を 1 段キャッシュで保存・復元すると規定するので、**25 も定義上この対象**。`civis`/`cnorm` の代わりに `?25 s` … `?25 r` で括るプログラムがあると hide が戻らない。具体的な呼び出し実例は未特定（低頻度と見られる） |
 
 ### `CSI s` の曖昧性
 
@@ -152,10 +153,17 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 2. ~~**CHA/VPA + HPA**~~ **完了（2026-09-11）** → 次は **HPR/VPR**、**SCOSC/SCORC**、**SD `^` 別名**。
    カーソル系ヘルパ（`seat_cursor` / `seat_line` / `seat_column`）を共有。`CSI s` は将来の DECLRMM 分岐を見越した形に。
    **VPR は `move_cursor_down` の別名にできない**（§2 の注記を参照）。
-3. **DECAWM / DECTCEM / カーソル点滅 / DECSCUSR**。
-   `Screen::cursor()` の固定値（`screen.rs:1026` の TODO）を実データに置き換える。
-   DECSC/DECRC の保存範囲もここで揃える。
+3. ~~**DECTCEM**~~ **完了（2026-09-11）** — 状態は `VtModes::text_cursor_enable`
+   に置き、`Screen::cursor()` が引数で受け取って `DeviceState::cursor()` が畳む。
+   残るのは **DECAWM / カーソル点滅（`?12`）/ DECSCUSR**。この 3 つは DECTCEM と
+   同じステップにあったが、DECSC の保存範囲の扱いが割れる: vt510 p.243 の保存項目
+   列挙は "Wrap flag" を含むので **DECAWM は `Checkpoint` に入れる**必要があり、
+   可視性を含まない DECTCEM とは逆になる。`Screen::cursor()` の固定値のうち
+   `shape` と `blinking` は DECSCUSR 待ちのまま。
 4. **DECSTR と初期化系**、**1049 の pen 修正**。
+   DECSTR には `text_cursor_enable = TextCursorEnable::Shown` を**必ず含める**（§1-B の
+   DECSTR 行を参照）。RIS と違い DECSTR は名指しした一部のモードだけを戻すので、
+   `VtModes::default()` 任せにはできない。
 5. **入力側の契約修正**（`kbs` の方針決定 → Shift-Tab → ファンクションキー → 修飾キー → Meta）。
 6. **OSC 4/10/11/12** とその問い合わせ・リセット。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。

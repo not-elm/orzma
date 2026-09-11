@@ -19,11 +19,7 @@ pub struct Cursor {
     /// True when DECSCUSR selects a blinking variant.
     /// Steady variants (`\033[2 q`, `\033[4 q`, `\033[6 q`) set this to false.
     pub blinking: bool,
-    /// True when the application wants the cursor drawn — DECTCEM
-    /// (`TermMode::SHOW_CURSOR`) and a non-Hidden DECSCUSR shape.
-    /// Scroll visibility is not folded in: project `point` with
-    /// [`crate::prelude::GridLine::to_viewport`] to decide whether
-    /// there is a cell to paint at all.
+    /// True when the application wants the cursor drawn, which DECTCEM alone decides.
     pub visible: bool,
 }
 

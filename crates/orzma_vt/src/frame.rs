@@ -92,12 +92,6 @@ pub(crate) struct FrameTracker {
 impl FrameTracker {
     /// Builds a tracker whose damage is seeded with the bootstrap full
     /// repaint, so the first emitted frame carries every viewport row.
-    ///
-    /// The retained defaults are sound even though the default cursor
-    /// differs from a fresh screen's visible cursor: the seeded full
-    /// damage forces the first frame out regardless of any diff, and
-    /// that emit settles the real cursor before the diffs are ever
-    /// load-bearing.
     pub fn new() -> Self {
         Self {
             damage: Damage::new(),
@@ -138,7 +132,7 @@ impl FrameTracker {
     pub fn emit(&mut self, device: &DeviceState) -> Option<Frame> {
         let screen = device.active_screen();
         let carried = Carried {
-            cursor: screen.cursor(),
+            cursor: device.cursor(),
             display_offset: screen.display_offset(),
             selection: screen.selection_range(),
         };
@@ -284,7 +278,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         tracker.settle(
             Carried {
-                cursor: device.active_screen().cursor(),
+                cursor: device.cursor(),
                 display_offset: device.display_offset(),
                 selection: None,
             },

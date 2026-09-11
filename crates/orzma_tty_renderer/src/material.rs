@@ -491,6 +491,9 @@ impl TerminalParams {
     ///   `cursor_visible` bit is forced to `1`. When the projection falls
     ///   outside the viewport, `cursor_visible` is cleared so the shader
     ///   skips cursor rendering entirely.
+    /// - A live (non-vi) cursor carries the application's DECTCEM state, so
+    ///   `cursor_visible` is `0` while the terminal has seen `CSI ? 25 l`,
+    ///   and `grid.suppress_cursor` clears the bit on top of either source.
     /// - When `grid.selection` is `None`, `sel_kind == 0` and the shader's
     ///   `is_in_selection_uniform` short-circuits to `false`.
     fn new(

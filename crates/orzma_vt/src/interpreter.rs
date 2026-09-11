@@ -12,7 +12,7 @@ mod csi;
 mod osc;
 mod sgr;
 
-use crate::device::modes::{InsertReplaceMode, KeypadMode, ScreenKind};
+use crate::device::modes::{InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable};
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
 use crate::interpreter::osc::{current_dir, window_title};
@@ -56,7 +56,7 @@ impl Interpreter {
         tracker: &mut FrameTracker,
         chunk: &[u8],
     ) {
-        let cursor_before = device.active_screen().cursor();
+        let cursor_before = device.cursor();
         let mut executor = Executor {
             output,
             sync: &mut self.sync,
@@ -65,7 +65,7 @@ impl Interpreter {
         };
         self.parser.parse(chunk, &mut executor);
         executor.sweep_evictions();
-        executor.output.damaged |= cursor_before != executor.device.active_screen().cursor();
+        executor.output.damaged |= cursor_before != executor.device.cursor();
     }
 }
 
@@ -615,6 +615,11 @@ impl Executor<'_> {
                     .device
                     .active_screen_mut()
                     .set_origin_mode(OriginMode::from_decset(enabled)),
+                // DECTCEM
+                25 => {
+                    self.device.modes_mut().text_cursor_enable =
+                        TextCursorEnable::from_decset(enabled);
+                }
                 // Alternate screen
                 47 => self.switch_screen(ScreenKind::from_decset(enabled)),
                 // DECNKM

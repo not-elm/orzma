@@ -98,6 +98,10 @@ impl Session {
         self.0.device.modes().active_screen
     }
 
+    fn cursor_visible(&self) -> bool {
+        self.0.device.cursor().visible
+    }
+
     fn cursor_column(&self) -> u16 {
         self.0.device.active_screen().cursor_column().0
     }
@@ -142,6 +146,7 @@ mod reset;
 mod reverse_index;
 mod sgr;
 mod tabulation;
+mod text_cursor_enable;
 mod title;
 mod unsupported_sequences;
 mod webview_apc;
