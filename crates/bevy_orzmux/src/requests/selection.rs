@@ -1,14 +1,8 @@
 //! Per-operation selection request events the host UI fires at a
 //! terminal entity.
 //!
-//! The payload vocabulary ([`SelectionKind`], [`CellSide`],
-//! [`GridPoint`]) is owned by the VT layer; this module re-exports
-//! it so the requests and their payload types travel together — each
-//! request carries exactly what the backend applies.
-//!
-//! The start, update, and clear observers send the matching
-//! `OrzmuxCommand`; the vi-cursor start and the kind change stay stubs
-//! until vi mode lands in the backend.
+//! TODO: apply the vi-cursor start and the kind change once vi mode
+//! lands in the backend.
 
 use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
@@ -33,7 +27,8 @@ pub struct RequestTtySelectionStart {
 }
 
 /// Fired by the host UI to anchor a new selection at the vi cursor
-/// (vi-mode `v` / `V`), whose position only the VT knows.
+/// (vi-mode `v` / `V`). The backend has no vi mode, so applying it does
+/// nothing.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtySelectionStartAtViCursor {
     #[event_target]
@@ -57,7 +52,8 @@ pub struct RequestTtySelectionUpdate {
 }
 
 /// Fired by the host UI to switch selection granularity while keeping
-/// the anchor (vi-mode `v` while `V` is active, and the reverse).
+/// the anchor (vi-mode `v` while `V` is active, and the reverse). The
+/// backend has no vi mode, so applying it does nothing.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtySelectionKindChange {
     #[event_target]

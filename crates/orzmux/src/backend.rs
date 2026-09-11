@@ -33,8 +33,7 @@ pub(crate) struct Backend {
     processed: CommandSeq,
     /// Set when the GUI's event receiver is gone; the loop exits.
     gui_gone: bool,
-    /// What each `Select` index of the last `wait_ready` referred to;
-    /// kept so the table is not reallocated on every wake.
+    /// What each `Select` index of the last `wait_ready` referred to.
     sources: Vec<Ready>,
     /// Per-queue peaks between samples; logged once a second.
     sampler: QueueSampler,
@@ -65,10 +64,6 @@ impl Backend {
     /// Runs until the command channel disconnects (the GUI dropped its
     /// client) or the GUI stops receiving events. Dropping the panes on
     /// return kills every child.
-    ///
-    /// Queue depths are recorded right after the wake, before any pump
-    /// or command drain shrinks a queue, and the sample is reported
-    /// after the deadlines are serviced.
     pub(crate) fn run(mut self) {
         loop {
             let ready = self.wait_ready();
@@ -90,8 +85,7 @@ impl Backend {
     /// Applies one command. Unknown panes and an unresolvable `Active`
     /// are dropped with a debug log; `CopySelection` always answers,
     /// `SelectPane` always publishes a layout, and `SelectPaneDirection`
-    /// publishes one only when the active pane moved. `pub(crate)` so
-    /// tests drive the backend without a thread.
+    /// publishes one only when the active pane moved.
     pub(crate) fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.processed = seq;
         match command {
@@ -234,9 +228,7 @@ impl Backend {
 
     /// Blocks until a command or a pane stream is ready, or the earliest
     /// of the coalescer deadlines and the sampler's report deadline
-    /// passes. Returns the ready source, `None` on timeout. The
-    /// `Select` is dropped before returning so the pane receivers it
-    /// borrowed can be pumped.
+    /// passes. Returns the ready source, `None` on timeout.
     fn wait_ready(&mut self) -> Option<Ready> {
         let mut select = Select::new();
         self.sources.clear();
@@ -484,8 +476,8 @@ impl Backend {
         resolved
     }
 
-    /// Resolves a target to its pane's mutable state, logging via
-    /// [`Self::resolve_or_log`] when it does not resolve.
+    /// Resolves a target to its pane's mutable state, logging a debug
+    /// line naming `command` when it does not resolve.
     fn pane_mut(&mut self, target: PaneTarget, command: &'static str) -> Option<&mut Pane> {
         let id = self.resolve_or_log(target, command)?;
         self.panes.get_mut(&id)
@@ -578,8 +570,7 @@ mod tests {
         sink: CaptureSink,
     }
 
-    /// What the factory recorded, shared with the harness through `Arc`
-    /// because the backend only holds the factory as `dyn PaneFactory`.
+    /// What the factory recorded, shared with the harness through `Arc`.
     #[derive(Default)]
     struct FactoryLog {
         fail_next: AtomicBool,
@@ -632,9 +623,7 @@ mod tests {
         panes: Receiver<FakePane>,
         log: Arc<FactoryLog>,
         seq: u64,
-        /// Held so the command channel stays connected; a disconnected
-        /// channel is permanently ready and would wake `wait_ready` at
-        /// once.
+        /// Held so the command channel stays connected.
         _commands: Sender<(CommandSeq, OrzmuxCommand)>,
     }
 

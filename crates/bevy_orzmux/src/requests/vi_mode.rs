@@ -1,11 +1,10 @@
-//! `RequestTtyViMode`: the vi-mode switch the host UI asks a terminal
-//! entity to perform.
+//! The vi-mode switch the host UI asks a terminal entity to perform.
 
 use bevy::prelude::*;
 pub use orzma_vt::prelude::ViModeSwitch;
 
 /// Fired by the host UI to enter or leave vi mode on a specific terminal
-/// entity.
+/// entity. The backend has no vi mode, so applying it does nothing.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyViMode {
     #[event_target]
@@ -40,10 +39,8 @@ mod tests {
     /// Asserts that both switch directions reach an observer with their target
     /// intact, in the order they were fired.
     ///
-    /// Case: the enter/exit round trip a user performs constantly (`Ctrl-Shift-Space`
-    /// in, `Esc` out). Order matters because the two are not idempotent
-    /// against each other — a swallowed or reordered `Exit` would leave the
-    /// terminal accepting motions while the user believes they are typing.
+    /// Case: the enter/exit round trip a user performs constantly
+    /// (`Ctrl-Shift-Space` in, `Esc` out).
     #[test]
     fn trigger_delivers_both_switch_directions_in_order() {
         let mut app = App::new();
@@ -67,9 +64,7 @@ mod tests {
     /// Asserts that a repeated switch is delivered every time rather than
     /// deduplicated.
     ///
-    /// Case: `Enter` fired while already in vi mode. Idempotence is the apply
-    /// observer's call — it holds the current state, the event does not — so
-    /// the second request must still arrive for the observer to decide.
+    /// Case: `Enter` fired while already in vi mode.
     #[test]
     fn a_repeated_switch_is_not_deduplicated() {
         let mut app = App::new();

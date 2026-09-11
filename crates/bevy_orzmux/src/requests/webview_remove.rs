@@ -1,6 +1,5 @@
-//! `RequestTtyWebviewRemove`: the placements the control plane asks a
-//! terminal entity to drop when a registration is released, sent as
-//! `OrzmuxCommand::RemovePlacements`.
+//! The placements the control plane asks a terminal entity to drop when
+//! a registration is released, sent as `OrzmuxCommand::RemovePlacements`.
 
 use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
@@ -11,9 +10,8 @@ use orzmux::prelude::OrzmuxCommand;
 /// Fired by the control plane to drop placements a terminal still holds
 /// for registrations that are gone.
 ///
-/// The backend cannot know that a registration was released — that
-/// fact lives on the control socket — so without this the placements
-/// keep a cap slot until their anchor scrolls out of history.
+/// The backend cannot know that a registration was released — that fact
+/// lives on the control socket.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyWebviewRemove {
     #[event_target]

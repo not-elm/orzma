@@ -1,8 +1,6 @@
-//! Bevy integration for the multiplexer backend: the `OrzmuxPane` component
-//! every pane entity carries, the title component, inbound request
-//! observers, and the outbound signal types the drain triggers.
-//! `OrzmuxConnection`, `OrzmuxPane`, and the `drain` module bridge the same
-//! world to the multiplexer backend thread.
+//! Bevy integration for the multiplexer backend: mirrors its panes and
+//! layout into the world, forwards the host's requests to it, and turns
+//! its events into ECS signals.
 
 use crate::{
     drain::DrainPlugin,
@@ -50,18 +48,18 @@ pub struct OrzmuxConnection(pub OrzmuxClient);
 #[require(TtyTitle)]
 pub struct OrzmuxPane(pub PaneId);
 
-/// Ordering slots for the bridge's `Update` systems. The host chains
-/// `Drain → ApplyLayout → its input phases`.
+/// Ordering slots for the bridge's `Update` systems: `Drain` runs before
+/// `ApplyLayout`, and a host orders its input phases after both.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum OrzmuxSystems {
-    /// `drain_orzmux_events`.
+    /// Draining the backend's events into the world.
     Drain,
-    /// `apply_layout`.
+    /// Applying the latest layout to the pane nodes.
     ApplyLayout,
 }
 
-/// Registers the drain, the layout applier, the request observers, and
-/// the title component's observers.
+/// Mirrors the backend's panes, layout, and titles into the app, and
+/// forwards the host's requests to the backend.
 pub struct OrzmuxPlugin;
 
 impl Plugin for OrzmuxPlugin {

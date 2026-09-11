@@ -10,7 +10,8 @@ use std::collections::HashMap;
 #[derive(Resource, Default, Debug)]
 pub struct PaneRegistry {
     /// Lookup cache, filled on `PaneOpened` and emptied on `PaneClosed`.
-    /// Never the source of session-end detection (see `drain_orzmux_events`).
+    /// An empty map does not mean the session ended; it is also empty
+    /// before the first pane opens.
     pub panes: HashMap<PaneId, Entity>,
     /// Entities pre-spawned for a `NewPane` whose answer is pending.
     pub pending_spawns: HashMap<RequestId, Entity>,

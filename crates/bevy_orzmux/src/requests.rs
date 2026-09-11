@@ -1,7 +1,5 @@
-//! Inbound request `EntityEvent`s and `Event`s: commands the host UI
-//! fires at a terminal entity or at the backend's active pane, as
-//! opposed to the outbound `Tty*Signal`s in `signals.rs` that are
-//! drained FROM the backend.
+//! Inbound requests: the commands the host UI fires at a terminal entity
+//! or at the backend's active pane.
 
 use crate::requests::{
     copy::CopyPlugin, key_input::KeyInputPlugin, mouse_input::MouseInputPlugin,
@@ -62,9 +60,9 @@ impl Plugin for OrzmaEventRequestPlugin {
     }
 }
 
-/// Sends a pane-addressed command for a terminal entity: the one place
-/// that maps an entity to its `PaneId` and drops requests aimed at an
-/// entity that is not (or no longer) a pane.
+/// Sends a pane-addressed command for a terminal entity, mapping the
+/// entity to its `PaneId` and dropping requests aimed at an entity that
+/// is not (or no longer) a pane.
 ///
 /// It reads `OrzmuxConnection`, so every observer that takes it must be
 /// registered with `run_if(resource_exists::<OrzmuxConnection>)`.
@@ -88,9 +86,7 @@ impl PaneSender<'_, '_> {
     }
 }
 
-/// Test-only fixtures shared by this crate's tests: a detached
-/// [`OrzmuxClient`]-backed app plus helpers to spawn a mirrored pane entity
-/// and drain what an observer sent.
+/// Test-only fixtures shared by this crate's tests.
 #[cfg(test)]
 pub(crate) mod test_support {
     use crate::{OrzmuxConnection, OrzmuxPane, layout::CurrentLayout, registry::PaneRegistry};

@@ -1,5 +1,5 @@
-//! `RequestPaneAction`: pane management the host asks for (directional
-//! selection, kill, click-to-focus), sent as the matching `OrzmuxCommand`.
+//! Pane management the host asks for (directional selection, kill,
+//! click-to-focus), sent as the matching `OrzmuxCommand`.
 
 use crate::layout::{CurrentLayout, OrzmuxActivePaneChanged};
 use crate::registry::PaneRegistry;

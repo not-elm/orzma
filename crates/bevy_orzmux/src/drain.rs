@@ -1,6 +1,5 @@
-//! `drain_orzmux_events`: empties the backend's event channel every frame
-//! and turns each event into entity state or an `EntityEvent` the host
-//! observes.
+//! Empties the backend's event channel every frame and turns each event
+//! into entity state or an `EntityEvent` the host observes.
 
 use crate::layout::CurrentLayout;
 use crate::registry::PaneRegistry;
@@ -24,7 +23,7 @@ pub struct OrzmuxPaneSpawnFailed {
     pub error: String,
 }
 
-/// Registers the drain.
+/// Turns the backend's queued events into entity state and signals.
 pub(crate) struct DrainPlugin;
 
 impl Plugin for DrainPlugin {
@@ -43,10 +42,8 @@ impl Plugin for DrainPlugin {
 /// Drains every queued event in order, then ends the session and removes
 /// `OrzmuxConnection` once the backend is gone.
 ///
-/// Runs only while `OrzmuxConnection` exists, so after it removes the
-/// connection it never runs again and a disconnect ends the session
-/// exactly once. It is not gated on change detection because channel
-/// arrivals are invisible to it.
+/// A disconnect ends the session exactly once: removing the connection
+/// leaves nothing for a later call to drain.
 fn drain_orzmux_events(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
@@ -62,9 +59,8 @@ fn drain_orzmux_events(
     }
 }
 
-/// `current` stays a `ResMut` so the write goes through `set_if_neq`:
-/// dereferencing it mutably on every drain would mark the resource
-/// changed on every frame and defeat `apply_layout`'s run condition.
+/// Applies one event. `current` is marked changed only when the layout
+/// differs.
 fn apply_event(
     commands: &mut Commands,
     registry: &mut PaneRegistry,
@@ -359,8 +355,7 @@ mod tests {
     /// changed.
     ///
     /// Case: a running pane repaints every frame without the layout
-    /// ever moving, so a system gated on `Changed<CurrentLayout>` must
-    /// not re-run on every repaint.
+    /// ever moving.
     #[test]
     fn a_frame_only_drain_does_not_change_the_layout() {
         let (mut app, events) = app();

@@ -6,8 +6,8 @@ use crate::protocol::PaneId;
 use std::mem;
 use std::time::{Duration, Instant};
 
-/// How many reader chunks wait unparsed in one pane's chunk channel
-/// (path A), in units of one `read(2)` result of up to 4 KiB.
+/// How many reader chunks wait unparsed in one pane's chunk channel, in
+/// units of one `read(2)` result of up to 4 KiB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ChunkDepth(pub usize);
 
@@ -29,10 +29,9 @@ pub(crate) struct QueueSample {
     /// Every pane whose chunk peak was recorded, in first-recorded
     /// order.
     pub chunks: Vec<(PaneId, ChunkDepth)>,
-    /// The event channel (path B) peak, or zero when none was recorded.
+    /// The event channel peak, or zero when none was recorded.
     pub events: usize,
-    /// The command channel (path C) peak, or zero when none was
-    /// recorded.
+    /// The command channel peak, or zero when none was recorded.
     pub commands: usize,
 }
 
@@ -92,11 +91,9 @@ impl QueueSampler {
         (!self.peaks.is_empty()).then(|| self.last_sample + Self::SAMPLE_INTERVAL)
     }
 
-    /// The depth a wake implies on its own: the `Select` returns only
-    /// once the woken queue holds one item, and one emitted frame waits
-    /// in the event channel until the GUI's next update. A depth at or
-    /// below the floor is not a peak and records nothing, so an
-    /// interactive terminal neither logs nor adds a wake.
+    /// The depth a wake implies on its own. A depth at or below the
+    /// floor is not a peak and records nothing, so an interactive
+    /// terminal neither logs nor adds a wake.
     const BACKLOG_FLOOR: usize = 1;
 
     fn above_floor(depth: usize) -> usize {
@@ -121,8 +118,8 @@ mod tests {
 
     const PANE: PaneId = PaneId(1);
 
-    /// A sampler built at `start`, plus `start` itself so tests advance
-    /// time arithmetically instead of sleeping.
+    /// A sampler built at `start`, plus `start` itself so the caller can
+    /// advance time arithmetically instead of sleeping.
     fn sampler() -> (QueueSampler, Instant) {
         let start = Instant::now();
         (QueueSampler::new(start), start)
@@ -148,7 +145,7 @@ mod tests {
     /// carries the peaks once it has.
     ///
     /// Case: the backend asks for a sample on every wake while output
-    /// streams, and must log only once a second.
+    /// streams.
     #[test]
     fn a_sample_is_none_before_the_interval_and_some_after_it() {
         let (mut sampler, start) = sampler();
@@ -206,7 +203,7 @@ mod tests {
     /// peak does, and names the end of the current interval.
     ///
     /// Case: the backend goes idle right after one wake recorded a
-    /// depth, and must wake once more to log it.
+    /// depth.
     #[test]
     fn the_report_deadline_exists_only_while_a_peak_is_unreported() {
         let (mut sampler, start) = sampler();

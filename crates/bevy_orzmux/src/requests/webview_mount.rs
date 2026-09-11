@@ -1,6 +1,6 @@
-//! `RequestTtyWebviewMount`: the host-driven mount the control plane asks
-//! a terminal entity to register when a program mounts over the socket
-//! rather than the PTY, sent as `OrzmuxCommand::MountPlacement`.
+//! The host-driven mount the control plane asks a terminal entity to
+//! register when a program mounts over the socket rather than the PTY,
+//! sent as `OrzmuxCommand::MountPlacement`.
 
 use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
