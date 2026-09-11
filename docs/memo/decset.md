@@ -32,6 +32,7 @@ DECRPMの`Pm`は 0=未認識 / 1=設定 / 2=解除 / 3=恒久設定 / 4=恒久�
 | - | - | - |
 | 1 | DECCKM — 矢印キーがCSIでなくSS3を送る | `app_cursor` |
 | 6 | DECOM — 原点モード（**実装済み**） | — |
+| 7 | DECAWM — 自動折り返し（**実装済み**） | `auto_wrap` |
 | 66 | DECNKM — 数値キーパッド（**実装済み**） | `keypad_mode` |
 | 1000 | ボタン押下/解放を報告 | `mouse_tracking = Clicks` |
 | 1002 | クリック＋ドラッグ移動 | `mouse_tracking = Drag` |
@@ -46,7 +47,6 @@ DECRPMの`Pm`は 0=未認識 / 1=設定 / 2=解除 / 3=恒久設定 / 4=恒久�
 
 | Ps | Description | 現状 |
 | - | - | - |
-| 7 | DECAWM — 自動折り返し | `Screen::print`が右端で無条件に`pending_wrap`を立てるため常時オン相当 |
 | 25 | DECTCEM — カーソル表示 | `Screen::cursor`にDECSCUSRと合わせて実装するTODOがある |
 
 代替画面（**実装済み**）。単なるフラグではなく合成的な意味を持つ。
@@ -100,3 +100,27 @@ Xtermの一覧には47として「Use Alternate Screen Buffer」と「Enable Gra
 ### 未実装モードは黙って無視する
 
 `set_private_modes`の`_ => {}`はそのままでよい。DECRQMを実装したときに0（未認識）で答えるのが正直な形になる。
+
+### DECAWM は端末グローバル、LCF は画面ごと
+
+モードは `VtModes::auto_wrap` に 1 つだけ持つ。12 実装すべてが端末グローバルで、
+tmux / Alacritty / iTerm2 では「DECAWM off のまま alt 画面へ入る」を実機で確認し
+3 実装とも off が共有された。一方 LCF（`pending_wrap`）は画面ごとで、これは xterm と
+同じ分け方（`xw->flags` の `WRAPAROUND` がグローバル、`sc[whichBuf].wrap_flag` が
+バッファごと）。
+
+`CSI ?7l` は**両画面の live LCF を解除する。checkpoint には触らない**。reset 方向の
+みなのは DEC STD-070 の LCF リセット一覧に `RESET_MODE (…AUTO_WRAP_MODE)` があり
+`SET_MODE` 行には無いため（p.5-217 改訂注 16 も reset 方向のみを名指しする）。
+両画面に広げるのはモードが device-global だからで、`CSI ?7;47l` のような複合指定が
+順序に依存しなくなる。checkpoint に触らないのは STD-070 p.D-14 が LCF を DECSC/DECRC
+で往復させると規定しているため。
+
+`modes_mut()` 経由で `auto_wrap` を直接代入してはならない。LCF の解除が漏れ、
+`?7l` → `?7h` の往復で古いラッチが折り返しに化ける。`DeviceState::set_auto_wrap`
+を使う。DECSTR を実装するときにこの誘惑に当たる。
+
+既定は ON。terminfo が `am` を広告しており、STD-070 の電源投入値
+`auto_wrap_mode = WRAP_OFF; /* NVM */` と DECSTR の "Auto Wrap Off (NVM if present)"
+は Set-Up 設定からの復元を意味するので、Set-Up を持たない orzma では恒久 ON に解決
+される。xterm の `initflags` がまさにこの読み。したがって仕様からの逸脱ではない。

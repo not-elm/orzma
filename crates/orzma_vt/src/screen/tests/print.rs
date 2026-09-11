@@ -192,15 +192,12 @@ fn print_at_the_last_column_arms_the_deferred_wrap() {
     assert!(screen.state.pending_wrap);
 }
 
-/// Asserts that the print following an armed deferred wrap lands
-/// at the start of the next row and damages that row alone.
+/// Asserts that the print following an armed deferred wrap lands at the
+/// start of the next row and damages that row alone, leaving out the row
+/// the wrap left.
 ///
-/// The agreed policy leaves the row the wrap left out of the
-/// damage: its contents do not change, and the cursor that moved
-/// off it reaches the renderer through the frame's cursor.
-///
-/// Case: an application prints past the right edge, and the
-/// overflowing character continues on the next line.
+/// Case: an application prints past the right edge, and the overflowing
+/// character continues on the next line.
 #[test]
 fn the_next_print_after_the_last_column_wraps() {
     let mut screen = screen();

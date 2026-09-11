@@ -49,7 +49,7 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 | ~~`CSI Ps G`~~ | ~~CHA~~ | `hpa` | **✅ 実装済み（2026-09-11）** | 0 | ~~桁移動が無視され以降の描画が全部ズレる~~（解消済み） |
 | ~~`CSI Ps d`~~ | ~~VPA~~ | `vpa` | **✅ 実装済み（2026-09-11）** | 0 | ~~同上（行方向）~~（解消済み） |
 | ~~`CSI 4 h/l`~~ | ~~IRM~~ | `smir`/`rmir`, `mir` | **✅ 実装済み（2026-09-11）**。非 private SM/RM の入口（`set_modes`）も同時に新設 | 0 | ~~挿入モードが効かず上書きになる~~（解消済み） |
-| `CSI ?7 h/l` | DECAWM | `smam`/`rmam`, `am`, `xenl` | `MODE∅`。折り返しは無条件（`screen.rs:167`） | 0 | 折り返し禁止が効かず右端で溢れる／スクロールする |
+| ~~`CSI ?7 h/l`~~ | ~~DECAWM~~ | `smam`/`rmam`, `am`, `xenl` | **✅ 実装済み（2026-09-11）**。`VtModes::auto_wrap` に持ち、`print` は武装・消費の両方を、EL/ECH は no-op を門番する | 0 | ~~折り返し禁止が効かず右端で溢れる／スクロールする~~（解消済み） |
 
 † 実測頻度は「`TERM=xterm-256color`・`$TMUX` なしで nvim を起動し neo-tree を開いて終了」
 までの 1 セッション（63,860 バイト）で数えた出現回数。0 は「この計測では出なかった」で
@@ -126,14 +126,15 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 
 | 対象 | 内容 |
 |---|---|
-| **EL / ECH の pending-wrap 例外**（決着済み） | **決着: no-op を維持し、ECH も同じ方針に揃えた（2026-09-10）。参照実装が割れていることを承知した上で tmux 側を選択。** 経緯: DEC の EL 定義はアクティブ位置を含む（vt220 PDF p.36 L1754「including the cursor position」、vt510 PDF p.311 L9074「From the cursor through the end of the line」— いずれも検証済み）が、**どのマニュアルも deferred wrap をモデル化していない**ため、wrap 中にカーソルが論理的にどこに居るかを裁定しない。tmux 3.7c で実測したところ、幅10の行を埋めた状態で `CSI 0 K` も `CSI 1 X` も**何も消さず wrap も保持する**（行中では両方とも正常に動く）。tmux は `screen_write_clearcharacter` が `cx > sx - 1` で早期 return するモデル A。**訂正: 当初「alacritty も同様」と記録したが、これは誤り。** alacritty は EL と ECH を**意図的に区別している** — `alacritty_terminal-0.26.0/src/term/mod.rs:1643` の `clear_line` は `LineClearMode::Right if cursor.input_needs_wrap => return` を持つが、同 1519-1535 の `erase_chars` には `input_needs_wrap` の判定が**一切無く**、wrap 中でも最終列を消す。xterm の `CASE_ECH` も `do_wrap` を見ない。つまり **ECH の no-op を支持する参照実装は tmux 1つだけ**。`xterm-256color` を名乗ること、alacritty と xterm が逆であること、`docs/todo/nvim-tree-stale-cells-ech.md` §6.1 で実測検証した版にこのガードが無かったこと — これらを**承知した上で tmux 側を選択した**。実 nvim のキャプチャでは ECH は全て行中発行でこの境界を踏まないため、今回のバグ修正の妥当性には影響しない。xterm を実機で実測できた時点で再訪する価値はある |
+| **EL / ECH の pending-wrap 例外**（決着済み） | **決着: no-op を維持し、ECH も同じ方針に揃えた（2026-09-10）。参照実装が割れていることを承知した上で tmux 側を選択。** 経緯: DEC の EL 定義はアクティブ位置を含む（vt220 PDF p.36 L1754「including the cursor position」、vt510 PDF p.311 L9074「From the cursor through the end of the line」— いずれも検証済み）が、**どのマニュアルも deferred wrap をモデル化していない**ため、wrap 中にカーソルが論理的にどこに居るかを裁定しない。tmux 3.7c で実測したところ、幅10の行を埋めた状態で `CSI 0 K` も `CSI 1 X` も**何も消さず wrap も保持する**（行中では両方とも正常に動く）。tmux は `screen_write_clearcharacter` が `cx > sx - 1` で早期 return するモデル A。**訂正: 当初「alacritty も同様」と記録したが、これは誤り。** alacritty は EL と ECH を**意図的に区別している** — `alacritty_terminal-0.26.0/src/term/mod.rs:1643` の `clear_line` は `LineClearMode::Right if cursor.input_needs_wrap => return` を持つが、同 1519-1535 の `erase_chars` には `input_needs_wrap` の判定が**一切無く**、wrap 中でも最終列を消す。xterm の `CASE_ECH` も `do_wrap` を見ない。**訂正（2026-09-11）: kitty と iTerm2 も完全 no-op である。** ただし機構が違う — 両者はカーソルを `x == width` に停める方式で**ブール型のラッチを持たず**、no-op は範囲演算の帰結にすぎない（kitty は `num = MIN(columns - x, count)` が 0、iTerm2 の EL 0 は `from.x > to.x` で早期 return）。明示的なガードは iTerm2 の ECH（`cursorX >= width` で return）のみなので、「3 実装が意図的に同意している」とは言えない。なお両者は DECAWM に関係なくカーソルを停め `CSI ?7l` でも解除しないため、autowrap off で EL/ECH が永久に no-op になる危険を実際に抱えている。orzma は DECAWM 実装時にこの読み手 2 つを `auto_wrap` で門番したので、この危険は無い。`xterm-256color` を名乗ること、alacritty と xterm が逆であること、`docs/todo/nvim-tree-stale-cells-ech.md` §6.1 で実測検証した版にこのガードが無かったこと — これらを**承知した上で tmux 側を選択した**。実 nvim のキャプチャでは ECH は全て行中発行でこの境界を踏まないため、今回のバグ修正の妥当性には影響しない。xterm を実機で実測できた時点で再訪する価値はある |
 | **1049 の pen 引き継ぎ** | `interpreter.rs:643` に「代替画面の古い pen を使う」と明記。xterm は pen を共有するので、入場時のクリアが違う背景色になり得る。BCE の正しさにも波及 |
-| **DECSC/DECRC の保存範囲** | `screen.rs:1124` は多くを復元するが、DECAWM が無いので保存できていない。DECAWM 実装時に合わせる |
+| **DECSC/DECRC の保存範囲**（決着済み） | **決着（2026-09-11）: DECAWM は保存しない。LCF（`pending_wrap`）は保存する。** VT420 2nd ed. p.270 / VT520 p.5-120 の「Wrap flag (autowrap or no autowrap)」は LCF を指す。DEC STD-070 p.D-14 が「LCF は Save Cursor で保存し Restore Cursor で復元すべき」と明記し、xterm `cursor.c` の `DECSC_FLAGS (ATTRIBUTES\|ORIGIN\|PROTECTED)` は `WRAPAROUND` を含まない（同ファイルのコメントが VT420/VT520 の表記を DECAWM と読む解釈を逐語で却下している）。12 実装中モードを保存するのは kitty と iTerm2 の 2 つだけで、実機 VT100/220/420/510 も復元しない |
 | **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:720` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意 |
 | **`CSI 3 J`** | `screen.rs:105` で明示的に拒否。entry は `E3` を広告していないので Tier 1 ではないが、PDF p.13 には定義がある |
 | **SGR 下線拡張** | `sgr.rs:31` が下線種別を潰し、下線色は読み捨て。vim の `58;2` 発行はリポジトリ内に既知（`sgr.rs:675`） |
 | **タブストップの所有** | `tabs.rs:63` が「画面ごと」と明記。xterm は共有テーブル。PDF は所有権を規定していないので、意図的な差異として記録済み |
 | **ICH が開けた桁の属性（BCE）** | vt510 p.316 は「ICH は **normal character attribute** で空白を挿入する」と規定するが、`insert_characters`（`screen.rs:526`）は `pen.erase_cell()` を使い、pen の背景を運ぶ **BCE** になっている。既存テスト `an_inserted_blank_carries_the_pen_background_without_its_rendition` が pin 済み。参照実装は割れており、xterm（`ClearCells` が `TERM_COLOR_FLAGS` で現在の fg/bg を書く）・kitty・ghostty・alacritty・foot が BCE 側、wezterm だけが `Cell::default()` で VT510 に従う。BCE は ECMA-48 にも DEC にも規定が無く、terminfo の `bce`（"screen erased with background color"）由来の概念で、しかも **erase 系**についての記述で ICH を名指ししていない。**多数派に付いた意図的な差異として記録する**（2026-09-11、IRM 実装時の調査で判明）。IRM の経路では開いた桁が直後に glyph で上書きされるため、IRM 側には影響しない |
+| **`Screen::line_feed` が LCF を残す**（未修正） | 4×3 の画面で `abcd` → IND → `e` が (1,3) ではなく **(2,0)** に着地する。DEC STD-070 の LCF リセット操作一覧は LINE FEED / VERTICAL TAB / FORM FEED / INDEX / REVERSE_INDEX / NEXT_LINE を含み、xterm（`cursor.c` の `CursorDown` 末尾 `ResetWrap`）・foot（`term_linefeed` 冒頭）・Windows Terminal（`SetPosition` が無条件に `ResetDelayEOLWrap`）はいずれも解除する。同じ挙動なのは Alacritty のみ。修正は `line_feed` に 1 行だが、`screen/tests/line_feed.rs` の `a_linefeed_preserves_pending_wrap` と `a_linefeed_that_scrolls_preserves_pending_wrap` が現挙動を pin し doc も「意図的に残す」と書いているので、両テストの反転と doc 書き換えが伴う。**別 PR**。なお `tab_to` が残すのは妥当で、HT については Alacritty・foot・kitty がいずれも意図的に残し `wraptest` の `TAB cancels wrap` も実機 VT420/VT510 を含め大半が `n` |
 
 ## 5. 実装順（推奨）
 
@@ -152,9 +153,9 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 2. ~~**CHA/VPA + HPA**~~ **完了（2026-09-11）** → 次は **HPR/VPR**、**SCOSC/SCORC**、**SD `^` 別名**。
    カーソル系ヘルパ（`seat_cursor` / `seat_line` / `seat_column`）を共有。`CSI s` は将来の DECLRMM 分岐を見越した形に。
    **VPR は `move_cursor_down` の別名にできない**（§2 の注記を参照）。
-3. **DECAWM / DECTCEM / カーソル点滅 / DECSCUSR**。
-   `Screen::cursor()` の固定値（`screen.rs:1026` の TODO）を実データに置き換える。
-   DECSC/DECRC の保存範囲もここで揃える。
+3. ~~**DECAWM**~~ **完了（2026-09-11）** → 残りは **DECTCEM / カーソル点滅 / DECSCUSR**。
+   `Screen::cursor()` の固定値（`screen.rs` の TODO）を実データに置き換える。
+   DECSC/DECRC の保存範囲は §4 のとおり決着済み（DECAWM は保存しない）。
 4. **DECSTR と初期化系**、**1049 の pen 修正**。
 5. **入力側の契約修正**（`kbs` の方針決定 → Shift-Tab → ファンクションキー → 修飾キー → Meta）。
 6. **OSC 4/10/11/12** とその問い合わせ・リセット。
@@ -176,6 +177,15 @@ python3 -c "import re,sys;d=open(sys.argv[1],'rb').read();print(len(re.findall(r
 ```
 
 `vttest` を通すのも有効（Tier 2 の HPA/HPR/VPR/REP はいずれも vttest が直接発行する）。
+
+`vttest` は DECAWM を検証できない。DECAWM テストはメニュー項目 2「Test of screen
+features」の `tst_screen`（`main.c:620-634`）で、80 桁に**同一文字** `*` を 160 個
+書いて目視確認するだけなので上書きと破棄を区別できない。`decawm(FALSE)` は他に
+`vt420.c:379` の 1 箇所のみで、そこは行幅ぶんしか書かず溢れない。機械判定は
+`vt320.c:715-731`（DECCIR の autowrap-pending ビット）だけで、`decawm(…)` を発行せず
+電源投入時の既定を仮定している。**真の理由は DECRQM 未実装**で、`CSI ? 7 $ p` を
+実装すれば `tst_DEC_DECRPM` が mode 7 を機械判定するようになる（`interpreter.rs` に
+`$` = `0x24` の処理は無い）。
 
 ---
 

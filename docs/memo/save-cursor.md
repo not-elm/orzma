@@ -13,7 +13,7 @@ VT510の仕様では`Save Cursor`のような名称が使用されているが�
 | SGR文字属性 | SGRで設定された前景色、背景色、太字、下線などの文字属性を保存する。 |
 | [G0–G3およびGL/GR](./character-set.md) | G0–G3に指示された文字集合と、GLおよびGRに呼び出されている文字集合を保存する。 |
 | [SS2／SS3](./character-set.md) | 次の1文字に対してG2またはG3を一時的に呼び出す、未適用のsingle shift状態を保存する。 |
-| Wrap flag | 自動折り返しを行うかどうかを示すDECAWMの状態を保存する。 |
+| Wrap flag | **DECAWM ではなく LCF（last column flag / deferred wrap）を保存する。** VT510 の「Wrap flag (autowrap or no autowrap)」という表記は自動折り返しモードそのものと読めるが、DEC STD-070 p.D-14 は「LCF を Save Cursor で保存し Restore Cursor で復元すべき」と明記し、xterm も `DECSC_FLAGS` から `WRAPAROUND` を除外した上でコメントでこの読みを逐語で却下している。実機 VT100/220/420/510 も DECRC で DECAWM を復元しない。 |
 | Origin mode | カーソル位置の基準を画面全体またはスクロール領域とするDECOMの状態を保存する。 |
 | Selective erase attribute | 以後に書き込む文字を選択消去の対象とするか、保護対象とするかを示す属性を保存する。 |
 

@@ -47,15 +47,12 @@ fn erase_to_start_includes_the_cursor_column() {
     assert_eq!(screen.grid[ScreenLine(0)][2].c, 'c');
 }
 
-/// Asserts that erase-to-end is a no-op while the deferred wrap is
-/// armed.
+/// Asserts that `EL 0` erases nothing while the deferred wrap is armed
+/// and autowrap is set, following alacritty rather than erasing the
+/// just-printed last cell.
 ///
-/// The agreed policy follows alacritty: with the wrap pending the
-/// cursor logically sits past the row's last cell, so `EL 0`
-/// erases nothing rather than the just-printed last cell.
-///
-/// Case: an application fills a row to its last column and then
-/// issues `EL 0` before printing anything further.
+/// Case: an application fills a row to its last column and then issues
+/// `EL 0` before printing anything further.
 #[test]
 fn erase_to_end_is_a_no_op_under_pending_wrap() {
     let mut screen = screen();
