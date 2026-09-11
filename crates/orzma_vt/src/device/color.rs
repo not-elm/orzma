@@ -508,7 +508,7 @@ mod tests {
     /// component, and `#` places it in the high bits.
     ///
     /// Case: one theme writes its red as `rgb:3/a/7` and another as the
-    /// older `#3a7`, and the two must not be read as the same colour.
+    /// older `#3a7`.
     #[test]
     fn the_two_forms_reach_the_16_bit_values_xlib_gives_them() {
         assert_eq!(
@@ -569,8 +569,9 @@ mod tests {
     /// Asserts that components of different widths mix in one `rgb:`
     /// string, each scaled by its own width.
     ///
-    /// Case: a hand-written theme spells its colours as `rgb:ff/a5/0`
-    /// and `rgb:ccc/32/0`.
+    /// Case: a hand-written theme spells its colours as `rgb:ff/a5/0` and
+    /// `rgb:ccc/32/0`, and a third mixes three widths in one spec with
+    /// `rgb:f/ed1/cb23`.
     #[test]
     fn components_of_different_widths_mix_in_one_string() {
         assert_eq!(
