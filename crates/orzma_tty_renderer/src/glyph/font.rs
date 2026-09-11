@@ -485,10 +485,8 @@ pub enum FontFace {
 
 impl FontFace {
     pub fn from_style(style: u16) -> Self {
-        const BOLD: u16 = Style::BOLD.bits();
-        const ITALIC: u16 = Style::ITALIC.bits();
-        let bold = (style & BOLD) != 0;
-        let italic = (style & ITALIC) != 0;
+        let bold = (style & Style::BOLD.bits()) != 0;
+        let italic = (style & Style::ITALIC.bits()) != 0;
         match (bold, italic) {
             (false, false) => Self::Regular,
             (true, false) => Self::Bold,

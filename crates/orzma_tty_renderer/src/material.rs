@@ -576,7 +576,7 @@ struct GpuCell {
 ///   UNDERLINE=4, STRIKE=8, REVERSE=16, DIM=32, HIDDEN=64; bits 7-15
 ///   reserved).
 /// - Bits 16+: renderer-only flags (this const), kept physically separate
-///   from the wire range so a future wire extension cannot collide.
+///   from the `Style` range so a future `Style` flag cannot collide.
 const STYLE_WIDE_RIGHT_HALF: u32 = 0x1_0000;
 
 impl Default for GpuCell {

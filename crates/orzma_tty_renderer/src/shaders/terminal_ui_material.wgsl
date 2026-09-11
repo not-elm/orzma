@@ -84,9 +84,10 @@ struct CellColors {
 // cell shares the hovered link's id. Hardcoded for v1.
 const ACCENT_LINK_COLOR: vec4<f32> = vec4<f32>(0.4, 0.7, 1.0, 1.0);
 
-// NOTE: Each style constant must carry the bit `Style` in `orzma_vt`
-//       assigns. The test `wgsl_style_constants_track_the_style_bits` in
-//       material.rs fails when a value or the set of names drifts.
+// NOTE: Each style constant must carry the bit that `orzma_vt`'s `Style`
+//       assigns to the same name. The test
+//       `wgsl_style_constants_track_the_style_bits` in material.rs fails
+//       when a value or the set of names drifts.
 const STYLE_UNDERLINE: u32 = 4u;
 const STYLE_STRIKE: u32 = 8u;
 const STYLE_REVERSE: u32 = 16u;
