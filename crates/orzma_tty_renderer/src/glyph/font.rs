@@ -484,6 +484,9 @@ pub enum FontFace {
 }
 
 impl FontFace {
+    /// Returns the face that a cell's raw `Style` bits select.
+    ///
+    /// Only `BOLD` and `ITALIC` take part; every other bit is ignored.
     pub fn from_style(style: u16) -> Self {
         let bold = (style & Style::BOLD.bits()) != 0;
         let italic = (style & Style::ITALIC.bits()) != 0;
@@ -828,5 +831,25 @@ mod tests {
             res.metrics.advance_phys,
             m12.advance_phys * 2.0,
         );
+    }
+
+    /// Asserts that `from_style` picks the face from the `BOLD` and
+    /// `ITALIC` bits alone, whatever other `Style` bits the cell carries.
+    ///
+    /// Case: a program prints bold, italic, and bold-italic text, some of
+    /// it also underlined or reversed.
+    #[test]
+    fn from_style_selects_the_face_from_the_bold_and_italic_bits() {
+        let other_bits = Style::all().difference(Style::BOLD | Style::ITALIC).bits();
+        let cases = [
+            (Style::empty(), FontFace::Regular),
+            (Style::BOLD, FontFace::Bold),
+            (Style::ITALIC, FontFace::Italic),
+            (Style::BOLD | Style::ITALIC, FontFace::BoldItalic),
+        ];
+        for (style, face) in cases {
+            assert_eq!(FontFace::from_style(style.bits()), face);
+            assert_eq!(FontFace::from_style(style.bits() | other_bits), face);
+        }
     }
 }

@@ -559,8 +559,8 @@ struct GpuCell {
     fg_packed: u32,
     /// `0xAABBGGRR` packed background.
     bg_packed: u32,
-    /// The cell's `Style` bits from `orzma_vt`, plus the renderer-only
-    /// flags from bit 16 up.
+    /// The cell's `Style` bits ORed with the underline and strike bits its
+    /// combining marks promote, plus the renderer-only flags from bit 16 up.
     style_flags: u32,
     /// OSC 8 wire id of this cell, or `0` for "no link". Safe because
     /// `HyperlinkInterner` reserves `HyperlinkId(0)`.
@@ -572,12 +572,16 @@ struct GpuCell {
 /// origin. See `rebuild_cells` and `terminal_ui_material.wgsl`.
 ///
 /// Bit allocation in `GpuCell.style_flags` (a `u32`):
-/// - Bits 0-15: the cell's `Style` bits from `orzma_vt` (BOLD=1, ITALIC=2,
-///   UNDERLINE=4, STRIKE=8, REVERSE=16, DIM=32, HIDDEN=64; bits 7-15
-///   reserved).
+/// - Bits 0-15: `orzma_vt`'s `Style` flags at the bits `Style` assigns,
+///   from the cell's own `Style` and from `style_from_combining_marks`.
 /// - Bits 16+: renderer-only flags (this const), kept physically separate
 ///   from the `Style` range so a future `Style` flag cannot collide.
 const STYLE_WIDE_RIGHT_HALF: u32 = 0x1_0000;
+
+const _: () = assert!(
+    (STYLE_WIDE_RIGHT_HALF & Style::all().bits() as u32) == 0,
+    "a renderer-only style flag overlaps a `Style` bit",
+);
 
 impl Default for GpuCell {
     // NOTE: glyph_index defaults to u32::MAX (GLYPH_NONE) — the shader's
@@ -913,7 +917,7 @@ fn rebuild_cells(
             let glyph_index = resolve_glyph_index(cell, state, fonts, atlas, phys_font_size);
             let fg = packed_palette.cell_fg(cell.fg);
             let bg = packed_palette.cell_bg(cell.bg);
-            let style_flags = u32::from(cell.style) | style_bits_from_combining_marks(&cell.text);
+            let style_flags = u32::from(cell.style | style_from_combining_marks(&cell.text).bits());
 
             let target = (row_idx as u32 * cols + col) as usize;
             if let Some(slot) = state.cpu_cells.get_mut(target) {
@@ -953,40 +957,30 @@ fn rebuild_cells(
     }
 }
 
-/// TODO: 以下のようなスタイにも対応できるようにする
-///
-///  - U+0301 (鋭アクセント á)
-///  - U+0303 (チルダ ã)
-///  - U+0308 (ウムラウト ä)
-///  - U+20D7 (上向きベクトル a⃗)
-///
-///
-/// Promotes specific combining marks in a grapheme cluster to terminal-style
-/// underline/strike bits so the shader paints them, since `ab_glyph` cannot
-/// composite combining glyphs onto the base char in Tier 1.
+/// Promotes specific combining marks in a grapheme cluster to the `Style`
+/// underline and strike flags so the shader paints them, since `ab_glyph`
+/// cannot composite combining glyphs onto the base char in Tier 1.
 ///
 /// Maps U+0332 (combining low line), U+0333 (double low line), U+0331
 /// (combining macron below) to `Style::UNDERLINE`, and U+0336 (combining
 /// long stroke overlay) to `Style::STRIKE`. Other combining marks are
 /// ignored — the base glyph still renders.
-fn style_bits_from_combining_marks(text: &str) -> u32 {
-    // ASCII bytes (< 0x80) can never be combining marks (those live above
-    // U+0300, i.e. multi-byte UTF-8). is_ascii is SIMD-vectorized and skips
-    // the per-char decode for the dominant case in a typical terminal frame.
+fn style_from_combining_marks(text: &str) -> Style {
     if text.is_ascii() {
-        return 0;
+        return Style::empty();
     }
-    const UNDERLINE: u32 = Style::UNDERLINE.bits() as u32;
-    const STRIKE: u32 = Style::STRIKE.bits() as u32;
-    let mut bits = 0u32;
+    // TODO: Render other combining marks as well, such as U+0301
+    // (combining acute accent), U+0303 (combining tilde), U+0308
+    // (combining diaeresis), and U+20D7 (combining right arrow above).
+    let mut style = Style::empty();
     for c in text.chars() {
         match c {
-            '\u{0332}' | '\u{0333}' | '\u{0331}' => bits |= UNDERLINE,
-            '\u{0336}' => bits |= STRIKE,
+            '\u{0332}' | '\u{0333}' | '\u{0331}' => style |= Style::UNDERLINE,
+            '\u{0336}' => style |= Style::STRIKE,
             _ => {}
         }
     }
-    bits
+    style
 }
 
 fn resolve_glyph_index(
@@ -1056,7 +1050,7 @@ fn selection_uniforms(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
     use std::mem::size_of;
 
     #[test]
@@ -1279,38 +1273,56 @@ mod tests {
         }
     }
 
-    /// Asserts that the style constants the shader declares are exactly
-    /// the `Style` flags it paints, each carrying the bit `Style` assigns.
+    /// Asserts that the shader's style constants are exactly the `Style`
+    /// flags other than the font-selecting `BOLD` and `ITALIC`, plus the
+    /// renderer-only `WIDE_RIGHT_HALF`, each declared with the bit the Rust
+    /// side assigns.
     ///
-    /// Case: a new SGR attribute takes one of the reserved style bits and
-    /// the shader is updated in the same change.
+    /// Case: a program prints underlined, struck-through, reverse-video,
+    /// faint, and concealed text, and the shader paints each attribute from
+    /// the cell's raw `Style` bits.
     #[test]
     fn wgsl_style_constants_track_the_style_bits() {
-        const FONT_SELECTED: [&str; 2] = ["BOLD", "ITALIC"];
+        const FONT_SELECTED: Style = Style::BOLD.union(Style::ITALIC);
         let src = include_str!("shaders/terminal_ui_material.wgsl");
-        let declared: BTreeMap<&str, u32> = src
+        let declared: BTreeSet<String> = src
             .lines()
-            .filter_map(|line| line.trim().strip_prefix("const STYLE_"))
-            .map(|decl| {
-                let (name, literal) = decl
-                    .split_once(": u32 = ")
-                    .expect("a style constant is declared as `const STYLE_X: u32 = Nu;`");
-                let literal = literal.trim_end_matches("u;");
-                let value = match literal.strip_prefix("0x") {
-                    Some(hex) => u32::from_str_radix(hex, 16),
-                    None => literal.parse(),
-                }
-                .expect("a style constant carries an integer literal");
-                (name, value)
-            })
+            .map(str::trim)
+            .filter(|line| line.starts_with("const STYLE_"))
+            .map(str::to_owned)
             .collect();
-        let mut expected: BTreeMap<&str, u32> = Style::all()
+        let expected: BTreeSet<String> = Style::all()
+            .difference(FONT_SELECTED)
             .iter_names()
-            .filter(|(name, _)| !FONT_SELECTED.contains(name))
-            .map(|(name, flag)| (name, u32::from(flag.bits())))
+            .map(|(name, flag)| format!("const STYLE_{name}: u32 = {}u;", flag.bits()))
+            .chain([format!(
+                "const STYLE_WIDE_RIGHT_HALF: u32 = {STYLE_WIDE_RIGHT_HALF:#x}u;"
+            )])
             .collect();
-        expected.insert("WIDE_RIGHT_HALF", STYLE_WIDE_RIGHT_HALF);
         assert_eq!(declared, expected);
+    }
+
+    /// Asserts that the underline-like combining marks promote to
+    /// `Style::UNDERLINE`, the long stroke overlay to `Style::STRIKE`, and
+    /// any other text to no flags.
+    ///
+    /// Case: a program decorates text with combining low lines and stroke
+    /// overlays next to plain ASCII and accented text.
+    #[test]
+    fn combining_marks_promote_to_underline_and_strike() {
+        assert_eq!(style_from_combining_marks("a"), Style::empty());
+        assert_eq!(style_from_combining_marks("e\u{0301}"), Style::empty());
+        for mark in ['\u{0331}', '\u{0332}', '\u{0333}'] {
+            assert_eq!(
+                style_from_combining_marks(&format!("a{mark}")),
+                Style::UNDERLINE
+            );
+        }
+        assert_eq!(style_from_combining_marks("a\u{0336}"), Style::STRIKE);
+        assert_eq!(
+            style_from_combining_marks("a\u{0332}\u{0336}"),
+            Style::UNDERLINE | Style::STRIKE
+        );
     }
 
     /// Asserts that in-viewport selection endpoints map to their

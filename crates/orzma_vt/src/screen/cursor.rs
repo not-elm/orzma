@@ -4,9 +4,9 @@ use crate::screen::grid::coords::GridPoint;
 
 /// Bit 0 of the packed `cursor_style` u32 — set when the cursor
 /// should be drawn. The WGSL shader short-circuits when this bit is
-/// clear (see `terminal_ui_material.wgsl:337`). Exposed so app-level
-/// overrides (e.g., `TerminalGrid.suppress_cursor`) can mask it out
-/// without re-deriving the literal `1`.
+/// clear (see `paint_cursor` in `terminal_ui_material.wgsl`). Exposed
+/// so app-level overrides (e.g., `TerminalGrid.suppress_cursor`) can
+/// mask it out without re-deriving the literal `1`.
 pub const CURSOR_VISIBLE_BIT: u32 = 1;
 
 /// Cursor state at snapshot time.
@@ -27,7 +27,7 @@ impl Cursor {
     /// Packs the style into the u32 the WGSL shader decodes: bit 0 is
     /// [`CURSOR_VISIBLE_BIT`], bits 1-2 carry the shape (Block `0`,
     /// Underline `1`, Bar `2`), and bit 3 carries the blinking flag
-    /// (see `terminal_ui_material.wgsl:99-103`).
+    /// (see the `CURSOR_*` constants in `terminal_ui_material.wgsl`).
     pub fn pack_cursor_style(&self) -> u32 {
         let visible = if self.visible { CURSOR_VISIBLE_BIT } else { 0 };
         let shape = match self.shape {
