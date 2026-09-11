@@ -226,7 +226,8 @@ mod tests {
     }
 
     /// Asserts that Tab with Shift as the only modifier sends the back
-    /// tab sequence `CSI Z`, while Tab with Ctrl added still sends HT.
+    /// tab sequence `CSI Z`, while Tab with any other modifier added still
+    /// sends HT.
     ///
     /// Case: the user presses Shift-Tab to move back through the fields
     /// of a form in a full-screen application.
@@ -249,6 +250,24 @@ mod tests {
             encode_key(&TerminalKey::Tab, &ctrl_shift, false, KeypadMode::Numeric),
             vec![0x09]
         );
+        for other in [
+            TerminalModifiers {
+                alt: true,
+                shift: true,
+                ..Default::default()
+            },
+            TerminalModifiers {
+                meta: true,
+                shift: true,
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                encode_key(&TerminalKey::Tab, &other, false, KeypadMode::Numeric),
+                vec![0x09],
+                "{other:?} leaves Tab as HT"
+            );
+        }
     }
 
     #[test]
