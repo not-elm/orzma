@@ -560,6 +560,10 @@ mod tests {
             Rgb::from_color_spec(b"rgb:ffff/8080/0000"),
             Some(rgb(0xff, 0x80, 0x00))
         );
+        assert_eq!(
+            Rgb::from_color_spec(b"rgb:cdcd/0000/0000"),
+            Some(rgb(0xcd, 0x00, 0x00))
+        );
     }
 
     /// Asserts that components of different widths mix in one `rgb:`
@@ -576,6 +580,10 @@ mod tests {
         assert_eq!(
             Rgb::from_color_spec(b"rgb:ccc/32/0"),
             Some(rgb(0xcc, 0x32, 0x00))
+        );
+        assert_eq!(
+            Rgb::from_color_spec(b"rgb:f/ed1/cb23"),
+            Some(rgb(0xff, 0xed, 0xcb))
         );
     }
 
