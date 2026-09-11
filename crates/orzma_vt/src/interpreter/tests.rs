@@ -42,6 +42,16 @@ fn damage_of(chunk: &[u8]) -> bool {
     interpret_fully(chunk).1.damaged
 }
 
+/// Every glyph of the device's first visible row, left to right.
+fn first_row_glyphs(device: &DeviceState) -> Vec<char> {
+    device
+        .active_screen()
+        .viewport_row(ViewportLine(0))
+        .iter()
+        .map(|cell| cell.c)
+        .collect()
+}
+
 /// Reports the reply bytes `chunk` produced, through the public
 /// entry point rather than the crate-internal interpreter.
 fn replies_of(chunk: &[u8]) -> Vec<u8> {
@@ -122,6 +132,7 @@ fn liveness_after(setup: &[u8], chunk: &[u8]) -> bool {
 
 mod alignment;
 mod alternate_screen;
+mod auto_wrap;
 mod character_editing;
 mod character_set;
 mod cursor;

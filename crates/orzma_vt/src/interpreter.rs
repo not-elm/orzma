@@ -109,11 +109,11 @@ impl VTActor for Executor<'_> {
         if b == '\u{7f}' {
             return;
         }
-        let mode = self.device.modes().insert_replace;
-        let damage = self
-            .device
-            .active_screen_mut()
-            .print(b, mode, AutoWrap::Enabled);
+        let modes = self.device.modes();
+        let damage =
+            self.device
+                .active_screen_mut()
+                .print(b, modes.insert_replace, modes.auto_wrap);
         self.stage(damage);
     }
 
@@ -317,19 +317,21 @@ impl VTActor for Executor<'_> {
             // EL
             (None, b'K') => {
                 if let Some(mode) = EraseLineMode::from_el(params.value(0).unwrap_or(0)) {
+                    let auto_wrap = self.device.modes().auto_wrap;
                     let damage = self
                         .device
                         .active_screen_mut()
-                        .erase_in_line(mode, AutoWrap::Enabled);
+                        .erase_in_line(mode, auto_wrap);
                     self.stage(damage);
                 }
             }
             // ECH
             (None, b'X') => {
+                let auto_wrap = self.device.modes().auto_wrap;
                 let damage = self
                     .device
                     .active_screen_mut()
-                    .erase_chars(repeat_count(params.value(0)), AutoWrap::Enabled);
+                    .erase_chars(repeat_count(params.value(0)), auto_wrap);
                 self.stage(damage);
             }
             // IL
