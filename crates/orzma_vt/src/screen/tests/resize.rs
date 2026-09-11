@@ -58,7 +58,7 @@ fn a_shrink_that_would_cut_the_cursor_off_scrolls_into_history() {
 /// reclaims from history.
 ///
 /// Case: the user drags a window taller after output has scrolled off
-/// the top, and the prompt must stay under the line it follows.
+/// the top.
 #[test]
 fn a_growth_moves_the_cursor_down_with_the_reclaimed_rows() {
     let mut screen = screen();

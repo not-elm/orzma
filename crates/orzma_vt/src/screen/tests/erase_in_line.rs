@@ -29,9 +29,6 @@ fn erase_to_end_clears_from_the_cursor_with_the_pen_background() {
 /// Asserts that erase-to-start clears through the cursor column
 /// inclusively.
 ///
-/// The agreed convention matches `EL 1`: the erased span is
-/// `0..=cursor.column`, the classic off-by-one of this operation.
-///
 /// Case: an application rewrites the head of a line and clears
 /// what it had written so far, cursor included.
 #[test]
@@ -48,8 +45,7 @@ fn erase_to_start_includes_the_cursor_column() {
 }
 
 /// Asserts that `EL 0` erases nothing while the deferred wrap is armed
-/// and autowrap is set, following alacritty rather than erasing the
-/// just-printed last cell.
+/// and autowrap is set, rather than erasing the just-printed last cell.
 ///
 /// Case: an application fills a row to its last column and then issues
 /// `EL 0` before printing anything further.

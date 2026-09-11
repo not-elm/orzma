@@ -106,7 +106,7 @@ fn a_zero_delta_reports_no_motion() {
 }
 
 /// Asserts that a motion toward the live tail from the live tail
-/// reports no motion, so it arms no repaint.
+/// reports no motion.
 ///
 /// Case: the scroll-on-input policy snaps to the tail on a keystroke
 /// typed while the viewport was already there.

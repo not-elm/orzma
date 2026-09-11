@@ -66,7 +66,7 @@ fn a_count_past_the_bottom_margin_deletes_only_the_remaining_rows() {
 }
 
 /// Asserts that the rows a delete opens carry the pen's background
-/// rather than a default cell, so background-colour erase holds.
+/// rather than a default cell.
 ///
 /// Case: a program paints a pane with a blue background and then
 /// deletes a line inside it.

@@ -16,10 +16,7 @@ fn cbt_moves_back_to_the_previous_stop() {
 }
 
 /// Asserts that a backward tab before the first stop lands on
-/// column zero.
-///
-/// The agreed policy makes the left edge a fallback rather than
-/// a stop, because the reset stride leaves column zero empty.
+/// column zero, which is a fallback rather than a stop.
 ///
 /// Case: the user presses Shift-Tab near the start of a line,
 /// before the first tab position.

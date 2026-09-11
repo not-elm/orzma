@@ -56,7 +56,7 @@ fn erasing_past_the_last_column_stops_at_the_row_end() {
 }
 
 /// Asserts that a cursor outside the scrolling region erases all
-/// the same, because ECH ignores the margins.
+/// the same.
 ///
 /// Case: an application reserves a status line below its scrolling
 /// region and clears a field on it.
@@ -100,8 +100,7 @@ fn erasing_characters_below_a_scrolled_viewport_reports_no_damage() {
     assert_eq!(damage, None);
 }
 
-/// Asserts that the cursor stays where it was after an erase,
-/// which is what separates ECH from a write.
+/// Asserts that the cursor stays where it was after an erase.
 ///
 /// Case: an application clears a field and then writes its new
 /// value starting from the same position.
@@ -118,8 +117,8 @@ fn erasing_characters_leaves_the_cursor_on_its_column() {
 }
 
 /// Asserts that erasing characters is a no-op while the deferred wrap
-/// is armed and autowrap is set, matching `EL 0` rather than erasing
-/// the row's last cell.
+/// is armed and autowrap is set, rather than erasing the row's last
+/// cell.
 ///
 /// Case: an application fills a row to its last column and then
 /// issues `CSI 1 X` before printing anything further.
@@ -135,8 +134,7 @@ fn erasing_characters_is_a_no_op_under_pending_wrap() {
 }
 
 /// Asserts that a cursor resting on the last column with no wrap
-/// armed erases that column, so an armed deferred wrap is necessary
-/// for the no-op and the column alone does not reach it.
+/// armed erases that column.
 ///
 /// Case: an application addresses the last column directly and
 /// clears the single character standing there.
@@ -209,9 +207,8 @@ fn erasing_characters_runs_under_pending_wrap_while_autowrap_is_reset() {
 /// the cursor off the last column, even though the deferred wrap is
 /// still armed.
 ///
-/// Case: the same program clears the character under the cursor with
-/// `ECH` after stepping back a tab stop, instead of clearing to the end
-/// of the line.
+/// Case: a program fills a row, steps back a tab stop, and clears the
+/// character under the cursor with `ECH`.
 #[test]
 fn erasing_characters_runs_once_a_backward_tab_leaves_the_last_column() {
     let mut screen = screen();

@@ -24,8 +24,7 @@ fn a_mount_anchors_at_the_write_cursor() {
 }
 
 /// Asserts that a placement whose anchor row left the ring is
-/// omitted by the projection and named by the sweep, so the two
-/// cannot disagree.
+/// omitted by the projection and named by the sweep.
 ///
 /// Case: a webview sits on the last row of the screen and a
 /// full-screen application scrolls backwards until that row is
