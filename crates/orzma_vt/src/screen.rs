@@ -139,14 +139,14 @@ impl Screen {
     /// Prints one character at the cursor with the current pen, wrapping
     /// first when the deferred wrap is armed and autowrap is set.
     ///
+    /// `c` must be a printable character of display width one.
+    ///
     /// `insert_replace` is `IRM`: under [`InsertReplaceMode::Insert`] the
     /// rest of the row shifts right one column before the character lands.
     ///
     /// `auto_wrap` is `DECAWM`. While it is reset, a character at the right
     /// border replaces the last column, and an armed wrap is not resolved
     /// either, because a `DECRC` can restore one.
-    ///
-    /// `c` must be a printable character of display width one.
     ///
     /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
     /// the row the character landed on, or `None` when that row has
