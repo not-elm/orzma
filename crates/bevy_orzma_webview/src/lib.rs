@@ -1,8 +1,6 @@
-//! Standalone terminal webview layer: CEF render wiring, the `window.orzma`
-//! Tier 1 back-channel, APC mount/unmount of webviews anchored to terminal
-//! cells, and the control socket that mints Tier 1 handles. Decoupled from any
-//! multiplexer; the host maps its surfaces onto `OrzmaTerminal` entities and
-//! drives `KeyboardFocused`.
+//! Terminal webview layer: CEF render wiring, the `window.orzma` Tier 1
+//! back-channel, APC mount and unmount of webviews anchored to terminal cells,
+//! and the control socket that mints Tier 1 handles.
 
 mod control_plane;
 #[cfg(test)]
@@ -23,8 +21,8 @@ use webview::paint::PaintPlugin;
 use webview::render::RenderPlugin;
 pub use webview::render::cef_plugin;
 
-/// Bevy plugin: the in-process webview subsystem — CEF render wiring + the
-/// `window.orzma` back-channel, APC mount/unmount, and the control socket.
+/// The in-process webview subsystem: CEF render wiring, the `window.orzma`
+/// back-channel, APC mount and unmount, and the control socket.
 ///
 /// The host supplies the `WebviewAssetRegistry` shared with the `orzma://`
 /// scheme handler (built via [`cef_plugin`]).
