@@ -3,7 +3,7 @@
 
 use super::*;
 
-/// The visibility an emitted frame's cursor snapshot carries.
+/// The visibility the device's frame-ready cursor carries.
 fn cursor_visible(device: &DeviceState) -> bool {
     device.cursor().visible
 }
@@ -18,8 +18,7 @@ fn a_dectcem_reset_hides_the_cursor() {
     assert!(!cursor_visible(&device));
 }
 
-/// Asserts that `CSI ? 25 h` makes a hidden cursor visible again,
-/// observing the hidden state in between.
+/// Asserts that `CSI ? 25 h` makes a hidden cursor visible again.
 ///
 /// Case: nvim finishes the repaint and brings the caret back so the
 /// user can see where the next keystroke will land.
@@ -144,9 +143,8 @@ fn a_dectcem_write_that_changes_nothing_does_not_make_the_chunk_live() {
     assert!(!liveness_after(b"\x1b[?25l", b"\x1b[?25l"));
 }
 
-/// Asserts that the frame a chunk emits carries the hidden cursor, not
-/// just the device state a test can read back, and that a later
-/// re-show reaches an emitted frame the same way.
+/// Asserts that the frame a chunk emits carries the hidden cursor, and
+/// that a later re-show reaches an emitted frame the same way.
 ///
 /// Case: nvim hides the caret before a repaint and the host paints from
 /// the frame it receives, then nvim finishes the repaint and shows the

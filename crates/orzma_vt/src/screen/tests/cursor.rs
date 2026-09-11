@@ -26,4 +26,5 @@ fn the_cursor_reports_the_write_position_and_the_callers_visibility() {
     assert!(!hidden.visible);
     assert_eq!(hidden.point, shown.point);
     assert_eq!(hidden.shape, shown.shape);
+    assert_eq!(hidden.blinking, shown.blinking);
 }
