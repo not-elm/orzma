@@ -80,13 +80,13 @@ struct CellColors {
 @group(1) @binding(16) var overlay10_tex: texture_2d<f32>;
 @group(1) @binding(17) var overlay11_tex: texture_2d<f32>;
 
-// NOTE: Must stay in sync with `orzma_terminal_protocol::style::*`. The
-//       Rust-side test `style_bits_match_protocol_constants` asserts the
-//       literal values here against the canonical Rust constants.
 // Hyperlink accent color when the activation modifier is held and the
 // cell shares the hovered link's id. Hardcoded for v1.
 const ACCENT_LINK_COLOR: vec4<f32> = vec4<f32>(0.4, 0.7, 1.0, 1.0);
 
+// NOTE: Each style constant must carry the bit `Style` in `orzma_vt`
+//       assigns. The test `wgsl_style_constants_track_the_style_bits` in
+//       material.rs fails when a value or the set of names drifts.
 const STYLE_UNDERLINE: u32 = 4u;
 const STYLE_STRIKE: u32 = 8u;
 const STYLE_REVERSE: u32 = 16u;

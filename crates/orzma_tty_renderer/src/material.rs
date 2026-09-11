@@ -559,7 +559,8 @@ struct GpuCell {
     fg_packed: u32,
     /// `0xAABBGGRR` packed background.
     bg_packed: u32,
-    /// Mirror of `orzma_terminal_protocol::style::*` bit flags.
+    /// The cell's `Style` bits from `orzma_vt`, plus the renderer-only
+    /// flags from bit 16 up.
     style_flags: u32,
     /// OSC 8 wire id of this cell, or `0` for "no link". Safe because
     /// `HyperlinkInterner` reserves `HyperlinkId(0)`.
@@ -571,9 +572,9 @@ struct GpuCell {
 /// origin. See `rebuild_cells` and `terminal_ui_material.wgsl`.
 ///
 /// Bit allocation in `GpuCell.style_flags` (a `u32`):
-/// - Bits 0-15: wire-protocol style mirrored from
-///   `orzma_terminal_protocol::style::*` (BOLD=1, ITALIC=2, UNDERLINE=4,
-///   STRIKE=8, REVERSE=16, DIM=32, HIDDEN=64; bits 7-15 reserved).
+/// - Bits 0-15: the cell's `Style` bits from `orzma_vt` (BOLD=1, ITALIC=2,
+///   UNDERLINE=4, STRIKE=8, REVERSE=16, DIM=32, HIDDEN=64; bits 7-15
+///   reserved).
 /// - Bits 16+: renderer-only flags (this const), kept physically separate
 ///   from the wire range so a future wire extension cannot collide.
 const STYLE_WIDE_RIGHT_HALF: u32 = 0x1_0000;
@@ -1055,6 +1056,7 @@ fn selection_uniforms(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::mem::size_of;
 
     #[test]
@@ -1275,6 +1277,40 @@ mod tests {
                 "slot {i} call must pair overlay_rects[{i}] with overlay{i}_tex"
             );
         }
+    }
+
+    /// Asserts that the style constants the shader declares are exactly
+    /// the `Style` flags it paints, each carrying the bit `Style` assigns.
+    ///
+    /// Case: a new SGR attribute takes one of the reserved style bits and
+    /// the shader is updated in the same change.
+    #[test]
+    fn wgsl_style_constants_track_the_style_bits() {
+        const FONT_SELECTED: [&str; 2] = ["BOLD", "ITALIC"];
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let declared: BTreeMap<&str, u32> = src
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("const STYLE_"))
+            .map(|decl| {
+                let (name, literal) = decl
+                    .split_once(": u32 = ")
+                    .expect("a style constant is declared as `const STYLE_X: u32 = Nu;`");
+                let literal = literal.trim_end_matches("u;");
+                let value = match literal.strip_prefix("0x") {
+                    Some(hex) => u32::from_str_radix(hex, 16),
+                    None => literal.parse(),
+                }
+                .expect("a style constant carries an integer literal");
+                (name, value)
+            })
+            .collect();
+        let mut expected: BTreeMap<&str, u32> = Style::all()
+            .iter_names()
+            .filter(|(name, _)| !FONT_SELECTED.contains(name))
+            .map(|(name, flag)| (name, u32::from(flag.bits())))
+            .collect();
+        expected.insert("WIDE_RIGHT_HALF", STYLE_WIDE_RIGHT_HALF);
+        assert_eq!(declared, expected);
     }
 
     /// Asserts that in-viewport selection endpoints map to their
