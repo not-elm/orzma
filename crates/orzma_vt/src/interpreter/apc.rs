@@ -1,10 +1,4 @@
 //! The orzma APC webview request and its wire parser.
-//!
-//! `Executor::apc_dispatch` hands raw APC payloads here. What comes
-//! back is what the byte stream asked for, before the VT has decided
-//! anything: resolving a mount into a placement — and so into a
-//! `VtSignal::WebviewMount` or `VtSignal::WebviewMountRejected` — is the
-//! dispatcher's job, which is why this module needs no device state.
 
 use crate::placement::{InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};
 use std::str;

@@ -1,8 +1,4 @@
 //! The `SGR` half of [`Pen`].
-//!
-//! `Pen` itself lives in `screen::cell`, which knows nothing about
-//! `vtparse`. Applying a control sequence to it is interpretation, so
-//! the `impl` sits here and the screen layer stays free of the parser.
 
 use crate::device::color::Color;
 use crate::interpreter::csi::CsiParams;
@@ -21,24 +17,17 @@ const MAX_SUBPARAMS: usize = 9;
 impl Pen {
     /// The pen this one becomes after `params`, applied left to right.
     ///
-    /// # Invariants
-    ///
-    /// The attributes this terminal cannot paint are dropped in pairs —
+    /// The attributes this terminal cannot paint are dropped in pairs:
     /// blink (`5`, `6`, `25`), overline (`53`, `55`), and the underline
-    /// colour's reset (`59`) — because implementing a set without its
-    /// cancellation leaves an attribute no sequence can clear.
+    /// colour's reset (`59`).
     ///
     /// The underline variants `4:1` through `4:5` all become the one
     /// underline this terminal draws; `4:0` cancels it.
     ///
-    /// # Notes
-    ///
-    /// `vtparse` truncates a parameter list at `MAX_PARAMS = 32`, and
-    /// separators occupy slots, so roughly sixteen values survive. The
-    /// truncation is not detectable here: `csi_dispatch` receives
-    /// `ignored_excess_intermediates` as its `parameters_truncated`
-    /// argument, never `params_full`. A long enough sequence loses its
-    /// tail silently, and a cut can land inside a direct colour.
+    /// `vtparse` keeps only the first 32 slots of a parameter list,
+    /// separators included, so roughly sixteen values survive. A long
+    /// enough sequence loses its tail silently, and a cut can land
+    /// inside a direct colour.
     pub(crate) fn applied(self, params: &CsiParams<'_>) -> Self {
         let mut pen = self;
         let mut groups = params.groups();
@@ -146,15 +135,6 @@ impl Pen {
 
     /// The next group's first value, an omitted or malformed one
     /// reading as zero; `None` only when the list has ended.
-    ///
-    /// # Invariants
-    ///
-    /// A group that is present but carries no value MUST still be
-    /// counted, because the caller consumes a fixed number of operands
-    /// and reads `None` as the end of the list. Reporting an omitted
-    /// operand as absent would leave the remaining operands of
-    /// `38;2;;0;0` to read as ordinary attributes, and the two zeroes
-    /// there reset the whole pen.
     fn next_value<'a>(groups: &mut impl Iterator<Item = &'a [CsiParam]>) -> Option<u16> {
         let tokens = groups.next()?;
         let value = Group::decode(tokens)
@@ -186,12 +166,8 @@ impl Group {
     /// that is neither an integer nor a subparameter separator, or more
     /// subparameters than any answered form.
     ///
-    /// # Invariants
-    ///
     /// A group longer than [`MAX_SUBPARAMS`] is discarded whole rather
-    /// than truncated. The longest form this terminal answers is nine
-    /// subparameters, so a longer one is malformed rather than a
-    /// tolerance tail to ignore.
+    /// than truncated.
     fn decode(tokens: &[CsiParam]) -> Option<Self> {
         let mut subs = [None; MAX_SUBPARAMS];
         let mut len = 0;
@@ -521,8 +497,7 @@ mod tests {
         );
     }
 
-    /// Asserts that subparameters after the blue channel are ignored,
-    /// which is what the tolerance tail the standard permits needs.
+    /// Asserts that subparameters after the blue channel are ignored.
     ///
     /// Case: an application spells its colour with the full T.416 form,
     /// whose three fields after blue are the unused slot, the tolerance,
@@ -596,7 +571,7 @@ mod tests {
     }
 
     /// Asserts that the walk continues past a malformed colour in the
-    /// colon spelling, whose group boundary is unambiguous.
+    /// colon spelling.
     ///
     /// Case: an application emits a truncated colon colour followed by
     /// an attribute it still expects to take effect.
@@ -608,9 +583,8 @@ mod tests {
         assert!(applied(&tokens).style.contains(Style::BOLD));
     }
 
-    /// Asserts that an unknown colour selector abandons the rest of the
-    /// sequence, because the semicolon spelling gives no point to
-    /// resynchronise on.
+    /// Asserts that an unknown colour selector in the semicolon spelling
+    /// abandons the rest of the sequence.
     ///
     /// Case: an application asks for a colour space this terminal does
     /// not answer, then spells an attribute after it.

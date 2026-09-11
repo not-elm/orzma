@@ -1,10 +1,4 @@
 //! The atomic grid + cursor operation unit for one terminal screen.
-//!
-//! [`Screen`] owns cell storage ([`grid::Grid`]) and the write cursor,
-//! and updates them together; a mutation that damages rows returns the
-//! [`DamageSpan`] it produced for the caller to stage, and pure cursor
-//! motion returns nothing, because the per-chunk cursor diff reports
-//! it.
 
 pub mod cell;
 pub mod character_sets;
@@ -47,10 +41,15 @@ use std::ops::Range;
 /// One terminal screen: cell storage plus the write cursor, updated
 /// atomically by each operation.
 ///
+/// A mutation that damages rows returns the [`DamageSpan`] it produced
+/// for the caller to stage; pure cursor motion returns nothing.
+///
+/// The caller must reject a size with a zero axis before it reaches
+/// [`Self::new`] or [`Self::resize`].
+///
 /// # Invariants
 ///
-/// Both grid axes are nonzero; degenerate sizes are rejected by the
-/// caller (the same contract as [`crate::Vt::resize`]).
+/// Both grid axes are nonzero.
 #[derive(Debug)]
 pub struct Screen {
     grid: Grid,
@@ -103,8 +102,8 @@ impl EraseScreenMode {
     /// The span an `ED` (`CSI Ps J`) parameter selects; `None` for a
     /// value this terminal does not answer.
     ///
-    /// `ED 3` erases the scrollback, which this terminal does not model:
-    /// every span here is confined to the visible screen.
+    /// `ED 3`, which erases the scrollback, is not answered: every span
+    /// here is confined to the visible screen.
     pub fn from_ed(ps: u16) -> Option<Self> {
         match ps {
             0 => Some(Self::Below),
@@ -145,8 +144,8 @@ impl Screen {
     /// rest of the row shifts right one column before the character lands.
     ///
     /// `auto_wrap` is `DECAWM`. While it is reset, a character at the right
-    /// border replaces the last column, and an armed wrap is not resolved
-    /// either, because a `DECRC` can restore one.
+    /// border replaces the last column, and an armed wrap, such as one a
+    /// `DECRC` restored, is not resolved either.
     ///
     /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
     /// the row the character landed on, or `None` when that row has
@@ -188,9 +187,12 @@ impl Screen {
     /// Disarms the deferred wrap, leaving the cursor and the cells
     /// alone.
     ///
-    /// This is the half of `DECRST 7` that `Screen` owns. The saved
-    /// cursor keeps its own flag: DEC STD-070 has `DECSC` carry the
-    /// last-column flag, so a reset of the mode must not reach it.
+    /// The saved cursor keeps its own flag: DEC STD-070 has `DECSC` carry
+    /// the last-column flag.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECRST 7` (`CSI ? 7 l`) — the pending-wrap part
     pub fn disarm_pending_wrap(&mut self) {
         self.state.pending_wrap = false;
     }
@@ -198,16 +200,11 @@ impl Screen {
 
 /// Cursor addressing.
 ///
-/// None of these report damage. A move that only repositions the write
-/// cursor is carried by the per-chunk cursor diff, so returning a
-/// `DamageSpan` would repaint rows that did not change.
+/// None of these report damage.
 impl Screen {
     /// Moves the cursor one column left and disarms the deferred wrap.
     ///
-    /// A backspace at column zero stays there: xterm reaches the
-    /// previous row only under reverse-wraparound, which is off by
-    /// default. Cursor motion reaches the renderer through the
-    /// per-chunk cursor diff, so nothing is reported here.
+    /// A backspace at column zero stays there.
     ///
     /// # Control Functions
     ///
@@ -221,10 +218,6 @@ impl Screen {
     ///
     /// The top margin is the barrier: a cursor at or below it stops
     /// there, and only a cursor already above it reaches the first row.
-    ///
-    /// `DECOM` needs no branch here. Setting it seats the cursor inside
-    /// the vertical region, and this clamp keeps it there, so a cursor
-    /// origin mode confined can never step out of the region.
     ///
     /// # Control Functions
     ///
@@ -244,9 +237,8 @@ impl Screen {
     /// Moves the cursor down `count` rows in the same column, never
     /// scrolling.
     ///
-    /// The bottom margin is the barrier, mirroring
-    /// [`Self::move_cursor_up`]: a cursor at or above it stops there,
-    /// and only a cursor already below it reaches the last row.
+    /// The bottom margin is the barrier: a cursor at or above it stops
+    /// there, and only a cursor already below it reaches the last row.
     ///
     /// # Control Functions
     ///
@@ -267,8 +259,7 @@ impl Screen {
     /// column.
     ///
     /// The page border is the barrier, not a margin: this terminal has
-    /// no left margin, because `DECSLRM` needs the vertical split screen
-    /// mode it does not implement.
+    /// no left margin.
     ///
     /// # Control Functions
     ///
@@ -281,8 +272,7 @@ impl Screen {
     /// Moves the cursor `count` columns right, stopping at the last
     /// column.
     ///
-    /// The page border is the barrier, mirroring
-    /// [`Self::move_cursor_left`].
+    /// The page border is the barrier.
     ///
     /// # Control Functions
     ///
@@ -306,9 +296,9 @@ impl Screen {
     /// an omitted parameter.
     ///
     /// A zero addresses the first line or column, the same as a one.
-    /// [`Self::seat_cursor`] resolves the line against the origin mode
-    /// and clamps both axes, so a line outside the addressable region
-    /// stops at its edge rather than being refused.
+    /// The line is resolved against the current [`OriginMode`] and both
+    /// axes are clamped, so a line outside the addressable region stops
+    /// at its edge rather than being refused.
     ///
     /// # Control Functions
     ///
@@ -325,11 +315,8 @@ impl Screen {
     /// `None` for an omitted parameter.
     ///
     /// A zero addresses the first column, the same as a one, and a column
-    /// past the last stops there. The row is never touched: this seats the
-    /// column alone, so neither origin resolution nor a line clamp can move
-    /// the cursor off the row it is on. [`Self::seat_column`] also discards
-    /// a pending deferred wrap, the same disarm the other addressing
-    /// methods perform.
+    /// past the last stops there. The row is never touched, whatever the
+    /// origin mode, and a pending deferred wrap is discarded.
     ///
     /// # Control Functions
     ///
@@ -345,9 +332,8 @@ impl Screen {
     /// A zero addresses the first line, the same as a one. The line is
     /// resolved against the current [`OriginMode`] and clamped, so a line
     /// past the addressable region stops at its edge rather than being
-    /// refused. The column is never touched, but [`Self::seat_line`] still
-    /// discards a pending deferred wrap, the same disarm the other
-    /// addressing methods perform.
+    /// refused. The column is never touched, but a pending deferred wrap
+    /// is still discarded.
     ///
     /// # Control Functions
     ///
@@ -358,16 +344,7 @@ impl Screen {
 
     /// Seats the cursor at `line` — measured from the origin the current
     /// [`OriginMode`] defines — and `column`, clamping both axes and
-    /// disarming the deferred wrap. The disarm follows xterm, whose
-    /// `CursorSet` ends in `ResetWrap`, unlike a linefeed, which
-    /// preserves the wrap on purpose.
-    ///
-    /// This composes the two single-axis helpers, [`Self::seat_line`] and
-    /// [`Self::seat_column`], which absolute single-axis addressing
-    /// reaches directly, so the origin and each clamp are decided in one
-    /// place apiece and cannot drift. Vertical relative motion, line
-    /// feeding, and tabulation keep their own barriers and stay outside
-    /// these helpers on purpose.
+    /// disarming the deferred wrap.
     fn seat_cursor(&mut self, line: ScreenLine, column: GridColumn) {
         self.seat_line(line);
         self.seat_column(column);
@@ -411,18 +388,13 @@ impl Screen {
 /// Line feeding, region scrolling, and in-row character editing.
 impl Screen {
     /// Moves the cursor down one row, scrolling at the bottom margin;
-    /// the deferred-wrap flag is deliberately preserved.
+    /// the deferred-wrap flag is preserved.
     ///
-    /// A move inside the screen reports nothing: neither the departed nor
-    /// the arrived row changes contents, and the cursor motion reaches the
-    /// renderer through the per-chunk cursor diff. Scrolling moves content
-    /// and reports [`DamageSpan::Full`].
+    /// A move inside the screen reports nothing, and a scroll reports
+    /// [`DamageSpan::Full`].
     ///
     /// A cursor below a non-zero bottom margin and already on the last
     /// row moves nothing and scrolls nothing.
-    ///
-    /// [`Self::print`] also calls this to complete a deferred wrap, so
-    /// the operation is not reached only from a control function.
     ///
     /// # Control Functions
     ///
@@ -469,10 +441,8 @@ impl Screen {
     ///
     /// A cursor outside the margins inserts nothing (VT510 "IL — Insert
     /// Line"). The count is clamped to the rows from the cursor through
-    /// the bottom margin. An insert never feeds history: the rows it
-    /// discards leave from the bottom margin, not the top of the page.
-    /// The cursor homing follows xterm, kitty, and ECMA-48 § 8.3.67
-    /// rather than alacritty and wezterm, which leave the column alone.
+    /// the bottom margin. An insert never feeds history, and the cursor
+    /// homing follows ECMA-48 § 8.3.67.
     ///
     /// # Control Functions
     ///
@@ -494,10 +464,8 @@ impl Screen {
     /// A cursor outside the margins deletes nothing (VT510 "DL — Delete
     /// Line"). The count is clamped to the rows from the cursor through
     /// the bottom margin. A delete with the cursor on the first row of
-    /// the page feeds the deleted rows to history, as xterm, alacritty,
-    /// and wezterm do; the cursor homing follows xterm, kitty, and
-    /// ECMA-48 § 8.3.32 rather than alacritty and wezterm, which leave
-    /// the column alone.
+    /// the page feeds the deleted rows to history, and the cursor homing
+    /// follows ECMA-48 § 8.3.32.
     ///
     /// # Control Functions
     ///
@@ -517,12 +485,12 @@ impl Screen {
     ///
     /// The count is clamped to the columns from the cursor through the
     /// last one, and the blanks carry the pen's erase cell. A shift
-    /// disarms the deferred wrap; a zero count returns before anything
-    /// is touched, that flag included. Unlike [`Self::insert_lines`],
-    /// the edit applies wherever the cursor sits, ignoring the
-    /// scrolling margins VT510 gates `ICH` on, as xterm, alacritty,
-    /// kitty, ghostty, VTE and foot do. Selection and placement
-    /// anchors hold absolute columns and do not move with the content.
+    /// disarms the deferred wrap; a zero count touches nothing, that
+    /// flag included.
+    ///
+    /// The edit applies wherever the cursor sits, ignoring the scrolling
+    /// margins VT510 gates `ICH` on. Selection and placement anchors hold
+    /// absolute columns and do not move with the content.
     ///
     /// # Control Functions
     ///
@@ -544,10 +512,12 @@ impl Screen {
     /// cursor stays where it is.
     ///
     /// The count is clamped to the columns from the cursor through the
-    /// last one, never to the row width, which would blank a column
-    /// left of the cursor. Everything [`Self::insert_characters`]
-    /// records about the zero count, the scrolling margins, the
-    /// deferred wrap, and the column anchors holds here too.
+    /// last one. A shift disarms the deferred wrap; a zero count touches
+    /// nothing, that flag included.
+    ///
+    /// The edit applies wherever the cursor sits, ignoring the scrolling
+    /// margins VT510 gates `DCH` on. Selection and placement anchors hold
+    /// absolute columns and do not move with the content.
     ///
     /// # Control Functions
     ///
@@ -596,16 +566,13 @@ impl Screen {
     /// Follows a one-row scroll with the offset that keeps a scrolled
     /// viewport on the content it was showing.
     ///
-    /// A viewport pinned to the live tail stays pinned — that is what
-    /// following the newest output means. A scrolled one counts one row
-    /// further back, because the row it shows just moved that far from
-    /// the tail.
+    /// A viewport pinned to the live tail stays pinned, and a scrolled one
+    /// counts one row further back. At capacity the row the user was
+    /// reading has been evicted, so the view drifts by one.
     ///
     /// # Invariants
     ///
     /// The offset is clamped to the history that survives the scroll.
-    /// At capacity the row the user was reading has been evicted, so
-    /// the view drifts by one; there is nothing left to hold on.
     fn hold_scrolled_viewport(&mut self) {
         if self.viewport.offset == DisplayOffset(0) {
             return;
@@ -622,8 +589,7 @@ impl Screen {
     ///
     /// A shift that starts on the first row of the page feeds each
     /// departing row to history and holds a scrolled-back viewport on
-    /// the row it was showing, one row at a time, the way
-    /// [`Self::line_feed`] does.
+    /// the row it was showing.
     fn shift_rows_up(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
@@ -642,9 +608,8 @@ impl Screen {
     /// `count` rows, filling the rows that open at `first` with the
     /// pen's erase cell; `None` when the clamped count is zero.
     ///
-    /// The rows pushed past the bottom margin are discarded. Nothing
-    /// reaches history on this path, because the rows that leave do so
-    /// at the bottom margin rather than at the top of the page.
+    /// The rows pushed past the bottom margin are discarded, and nothing
+    /// reaches history.
     fn shift_rows_down(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
@@ -659,12 +624,7 @@ impl Screen {
     /// clamped to the rows through the bottom margin, and `None` when
     /// that leaves nothing to do.
     ///
-    /// A `first` below the bottom margin also yields `None`, because it
-    /// names no row the shift could move. The callers never produce one
-    /// — they check the cursor against the margins or pass the top
-    /// margin itself — so the guard exists to keep a future caller that
-    /// does neither from wrapping the subtraction into a count that
-    /// would walk the ring outside the region.
+    /// A `first` below the bottom margin also yields `None`.
     fn clamped_rows(&self, first: ScreenLine, count: u16) -> Option<u16> {
         let bottom = self.scroll_region.bottom_margin();
         let count = count.min(bottom.0.checked_sub(first.0)? + 1);
@@ -674,12 +634,6 @@ impl Screen {
     /// The columns an in-row edit at the cursor may actually touch:
     /// `count` clamped to the columns from the cursor through the last
     /// one, and `None` when that leaves nothing to do.
-    ///
-    /// A zero count therefore ends the call before anything is read or
-    /// written. The cursor column is always inside the row, so the
-    /// subtraction cannot fail; the guard exists to keep a future caller
-    /// that seats it outside from wrapping into a count the row cannot
-    /// hold.
     fn clamped_columns(&self, count: u16) -> Option<u16> {
         let count = count.min(self.grid.size().cols.checked_sub(self.state.column.0)?);
         (count > 0).then_some(count)
@@ -708,10 +662,11 @@ impl Screen {
 
 /// Erasure.
 impl Screen {
-    /// Erases part of the cursor row with the pen background (BCE);
-    /// [`EraseLineMode::ToEnd`] is a no-op while the cursor logically
-    /// sits past the row, as [`Self::cursor_parked_past_the_row`]
-    /// decides.
+    /// Erases part of the cursor row with the pen background (BCE).
+    ///
+    /// [`EraseLineMode::ToEnd`] is a no-op while the cursor logically sits
+    /// past the row, with the deferred wrap armed on the last column and
+    /// `DECAWM` set.
     ///
     /// # Control Functions
     ///
@@ -734,9 +689,10 @@ impl Screen {
     }
 
     /// Erases `count` characters from the cursor rightward with the
-    /// pen background (BCE), leaving the cursor where it is; a no-op
-    /// while the cursor logically sits past the row, as
-    /// [`Self::erase_in_line`]'s [`EraseLineMode::ToEnd`] is.
+    /// pen background (BCE), leaving the cursor where it is.
+    ///
+    /// It is a no-op while the cursor logically sits past the row, with
+    /// the deferred wrap armed on the last column and `DECAWM` set.
     ///
     /// # Control Functions
     ///
@@ -793,23 +749,17 @@ impl Screen {
     }
 
     /// Fills the given column range of the cursor row with the pen's
-    /// erase cell and reports that row, which is the whole contract
-    /// every single-row erasure shares.
+    /// erase cell and reports that row.
     fn erase_cursor_row_columns(&mut self, columns: Range<u16>) -> Option<DamageSpan> {
         self.grid
             .fill_visible_row_range(self.state.line, columns, self.state.pen.erase_cell());
         self.damage_span(self.state.line, self.state.line)
     }
 
-    /// Whether the cursor logically sits past the row's last cell, so
-    /// that an erase from the cursor rightward finds nothing to erase.
+    /// Whether the cursor logically sits past the row's last cell.
     ///
     /// All three conditions are required: the deferred wrap armed,
-    /// `DECAWM` set so the next character really does move to the next
-    /// row, and the cursor on the last column. The column test is not
-    /// redundant — [`Self::tab_to`] carries an armed flag off the right
-    /// border, so without it a `CBT` out of a full row would leave
-    /// `EL 0` and `ECH` declining mid-row.
+    /// `DECAWM` set, and the cursor on the last column.
     fn cursor_parked_past_the_row(&self, auto_wrap: AutoWrap) -> bool {
         self.state.pending_wrap && auto_wrap.wraps() && self.at_right_edge()
     }
@@ -824,9 +774,7 @@ impl Screen {
 impl Screen {
     /// Moves the cursor forward `count` tabulation stops.
     ///
-    /// The right edge is this screen's last column, so the same stop
-    /// table lands the cursor differently on a narrow screen than on a
-    /// wide one.
+    /// The right edge is this screen's last column.
     ///
     /// # Control Functions
     ///
@@ -840,8 +788,10 @@ impl Screen {
 
     /// Moves the cursor back `count` tabulation stops.
     ///
-    /// The left edge is column zero until DECSLRM and DECOM land, at
-    /// which point the margin supplies it instead.
+    /// The left edge is column zero.
+    ///
+    /// TODO: take the left edge from the left margin once `DECSLRM` is
+    /// implemented.
     ///
     /// # Control Functions
     ///
@@ -853,9 +803,8 @@ impl Screen {
 
     /// Sets a tabulation stop at the cursor column.
     ///
-    /// Routed through the same edit vocabulary `CTC 0` uses, because the
-    /// two control functions request the identical edit. TABULATION STOP
-    /// MODE scoping, when it lands, has to reach HTS as well.
+    /// TODO: scope HTS by TABULATION STOP MODE once that mode is
+    /// implemented.
     ///
     /// # Control Functions
     ///
@@ -898,10 +847,7 @@ impl Screen {
     ///
     /// # Invariants
     ///
-    /// The deferred wrap is deliberately left as it is, unlike
-    /// [`Screen::carriage_return`]. Disarming it would make a tab after
-    /// a full row seat the cursor back onto the row the application had
-    /// already filled.
+    /// The deferred wrap is left as it is.
     fn tab_to(&mut self, column: GridColumn) {
         self.state.column = column;
     }
@@ -946,10 +892,6 @@ impl Screen {
 }
 
 /// Graphic rendition.
-///
-/// The pen is handed out mutably because applying an `SGR` sequence is
-/// the caller's job; this screen only supplies the attributes a print
-/// stamps into a cell.
 impl Screen {
     /// Mutably borrows the SGR pen.
     pub fn pen_mut(&mut self) -> &mut Pen {
@@ -963,14 +905,13 @@ impl Screen {
     /// home; a request the margins cannot satisfy is refused whole.
     ///
     /// Both parameters are one-based line numbers as sent, with `None`
-    /// for an omitted one; [`Margins::resolve`] owns the defaults, the
-    /// clamp, and the refusal.
+    /// for an omitted one. An omitted or zero top means the first line
+    /// and an omitted or zero bottom the last, and a bottom past the page
+    /// is clamped to the last line. A request whose top is not above its
+    /// bottom is refused.
     ///
     /// The cursor goes to the home the origin mode defines rather than
-    /// to the "column 1, line 1 of the page" VT510 p.276 states,
-    /// because homing to the page while the origin is within the
-    /// margins would seat the cursor outside them, which p.195 forbids;
-    /// xterm homes through the same origin-aware path.
+    /// to the "column 1, line 1 of the page" VT510 p.276 states.
     ///
     /// # Control Functions
     ///
@@ -986,10 +927,7 @@ impl Screen {
     /// Sets the cursor origin and seats the cursor at the home the new
     /// mode defines.
     ///
-    /// Both directions seat the cursor. VT510 says only what home *is*
-    /// under each setting and never that `DECOM` moves the cursor; xterm,
-    /// kitty, wezterm, Windows Terminal, and `vttest` settle it by homing
-    /// on set and on reset alike.
+    /// Both directions seat the cursor.
     ///
     /// # Control Functions
     ///
@@ -1011,14 +949,12 @@ impl Screen {
     ///
     /// The viewport is the window the user sees: at the live tail it is
     /// the active screen, and a scrolled viewport reaches back into
-    /// history. [`crate::screen::grid::Grid`]'s own index resolves
-    /// against the live tail alone, so a scrolled read has to come
-    /// through here.
+    /// history. A scrolled read must come through here.
     pub fn viewport_row(&self, line: ViewportLine) -> &Row<Cell> {
         self.grid.row(line.to_grid(self.viewport.offset))
     }
 
-    /// Number of scrollback rows the viewport sits above the live tail; always zero until scroll operations arrive.
+    /// Number of scrollback rows the viewport sits above the live tail.
     #[inline]
     pub const fn display_offset(&self) -> DisplayOffset {
         self.viewport.offset
@@ -1027,16 +963,12 @@ impl Screen {
     /// Moves the viewport by one [`Scroll`] motion; `None` when the
     /// motion was zero or entirely clamped away.
     ///
+    /// A screen that keeps no history never moves, so this is a no-op on
+    /// the alternate screen.
+    ///
     /// # Invariants
     ///
-    /// A motion that moves the viewport reports [`DamageSpan::Full`]:
-    /// the emit-time offset diff only guarantees that a frame is
-    /// emitted, not that it carries rows, so anything less would
-    /// repaint stale content at the new offset.
-    ///
-    /// A screen that keeps no history never moves, because every target
-    /// clamps to the live tail. That is what makes this a silent no-op
-    /// on the alternate screen without a caller having to check.
+    /// A motion that moves the viewport reports [`DamageSpan::Full`].
     pub fn scroll(&mut self, scroll: Scroll) -> Option<DamageSpan> {
         let before = self.viewport.offset;
         self.set_display_offset(self.scroll_target(scroll));
@@ -1046,15 +978,7 @@ impl Screen {
     /// Seats the viewport at `offset`, clamped to the history that
     /// currently exists.
     ///
-    /// [`Self::hold_scrolled_viewport`] also writes the offset, so this is
-    /// not the only seam that does; it is the seam a future
-    /// `DeviceState::scroll` will drive.
-    ///
-    /// # Invariants
-    ///
-    /// The caller must stage full damage: this moves the viewport
-    /// basis, so a frame that carried the new offset without every row
-    /// would repaint stale content.
+    /// The caller must stage full damage.
     pub fn set_display_offset(&mut self, offset: DisplayOffset) {
         let history =
             u32::try_from(self.grid.history_len()).expect("scrollback never exceeds u32::MAX rows");
@@ -1063,9 +987,6 @@ impl Screen {
 }
 
 /// What an emitted frame reads back.
-///
-/// The damage projection lives here because it converts screen rows into
-/// the viewport coordinates a frame repaints by.
 impl Screen {
     /// Returns the grid size.
     pub fn grid_size(&self) -> GridSize {
@@ -1074,10 +995,7 @@ impl Screen {
 
     /// The write cursor as an emitted frame carries it.
     ///
-    /// `text_cursor_enable` is `DECTCEM`, which the device owns rather
-    /// than either screen. Production callers reach this through
-    /// `DeviceState::cursor`, which records why pairing a screen read
-    /// with a separately-read mode silently drops a `CSI ? 25 l`.
+    /// `text_cursor_enable` is `DECTCEM`.
     // TODO: Report the real shape and blink once DECSCUSR lands. Block /
     // steady is what the terminal starts at.
     pub fn cursor(&self, text_cursor_enable: TextCursorEnable) -> Cursor {
@@ -1119,7 +1037,7 @@ impl Screen {
         }
     }
 
-    /// The id of the row the cursor sits on — the anchor a mount samples.
+    /// The id of the row the cursor sits on.
     pub fn cursor_line_id(&self) -> LineId {
         self.grid.line_id(self.state.line)
     }
@@ -1166,12 +1084,11 @@ impl Screen {
     }
 
     /// Applies the state saved in memory to each actual state.
-    /// If no saved state exists, perform a DECRC-compliant action.
+    /// If no saved state exists, it performs a DECRC-compliant action.
     ///
     /// The saved position is put back verbatim. Restoring an origin mode
     /// whose margins moved in between can therefore seat the cursor
-    /// outside them; DECSC saves no margins to clamp against, and the
-    /// manuals leave the collision undefined.
+    /// outside them.
     ///
     /// # Control Functions
     ///
@@ -1207,24 +1124,17 @@ impl Screen {
     ///
     /// Reports [`DamageSpan::Full`], or nothing when the grid was
     /// already blank and carried no history; the cursor homes either
-    /// way, because cursor motion reaches the renderer through the
-    /// per-chunk cursor diff rather than through damage. A selection the
-    /// reset drops also reports `Full`, so the frame that no longer
-    /// carries it is owed even on a blank grid.
+    /// way. A selection the reset drops also reports `Full`, even on a
+    /// blank grid.
     ///
     /// # Invariants
     ///
     /// The cursor lands at the screen's upper-left corner whatever
-    /// origin mode was in force, because the state is replaced wholesale
-    /// rather than homed through the origin.
+    /// origin mode was in force.
     ///
-    /// Every placement on this screen becomes evictable here without
-    /// this method touching the table: [`crate::screen::grid::Grid::reset`]
-    /// mints fresh row ids without rewinding its counter, so no anchor
-    /// taken before the reset can resolve afterwards and the next
-    /// [`Self::evict_lost_anchors`] names all of them. A rewrite of
-    /// `Grid::reset` that renumbers from zero would silently keep the
-    /// placements alive.
+    /// Every placement on this screen stays in the table but becomes
+    /// evictable: no anchor taken before the reset resolves after it, so
+    /// the next [`Self::evict_lost_anchors`] names every placement.
     ///
     /// # Control Functions
     ///
@@ -1246,39 +1156,25 @@ impl Screen {
     /// the dimensions already matched.
     ///
     /// A shrink pushes as many rows off the top as it takes to keep the
-    /// cursor on screen and drops the rest from the bottom, so a prompt
-    /// at the bottom survives and a mostly-blank screen keeps its
-    /// content. A growth reclaims rows from history before it appends
-    /// blank ones.
+    /// cursor on screen and drops the rest from the bottom. A growth
+    /// reclaims rows from history before it appends blank ones.
     ///
     /// # Invariants
     ///
-    /// A resize that changes the dimensions reports [`DamageSpan::Full`]:
-    /// every emitted frame carries the new size but nothing diffs it, so
-    /// partial row damage would hand the renderer new dimensions with
-    /// stale rows behind them.
+    /// A resize that changes the dimensions reports [`DamageSpan::Full`].
     ///
     /// The cursor and the saved cursor both land inside the new grid.
-    /// Leaving either out of bounds would panic the next write, which is
-    /// why the saved one is clamped here rather than on restore.
     ///
     /// The saved cursor follows the rows a resize moves exactly as the
     /// live one does, so a `DECRC` after the resize — the one
     /// `DECRST 1049` performs on the way back from the alternate screen
     /// included — lands on the row `DECSC` saved rather than the rows
     /// the resize reclaimed above it. A never-saved checkpoint drifts
-    /// off the home position by the same amount, the trade alacritty
-    /// makes too.
+    /// off the home position by the same amount.
     ///
-    /// A height change returns the margins to the whole page. Keeping a
-    /// region whose rows still fit would leave a cursor below its bottom
-    /// margin, and [`Self::line_feed`] scrolls only on an exact match
-    /// with that margin, so the screen would never scroll again.
+    /// A height change returns the margins to the whole page.
     ///
-    /// A scrolled-back viewport tracks the rows it was showing: each
-    /// scroll pairs with [`Self::hold_scrolled_viewport`] the way line
-    /// feeding does, and a growth walks the offset back by the rows it
-    /// reclaims.
+    /// A scrolled-back viewport tracks the rows it was showing.
     pub fn resize(&mut self, size: GridSize) -> Option<DamageSpan> {
         let old = self.grid.size();
         if old == size {
@@ -1311,8 +1207,7 @@ impl Screen {
     /// the page-wide scroll region and the absolute cursor origin.
     ///
     /// The pattern is drawn with default attributes rather than the
-    /// current pen, because a screen tinted by the application's colors
-    /// is useless as an adjustment reference.
+    /// current pen.
     ///
     /// # Control Functions
     ///
@@ -1367,11 +1262,6 @@ impl Screen {
 /// The anchor a mount records is a `LineId` from this screen's own grid,
 /// so a placement can only ever be resolved against the grid that minted
 /// its anchor.
-///
-/// Five of these forward to [`ScreenPlacements`] unchanged. They stay
-/// rather than exposing the table, so `DeviceState` never holds a
-/// `&mut ScreenPlacements` and every mutation of a screen's placements
-/// goes through the screen that owns them.
 impl Screen {
     /// Registers a mount at the write cursor under the id the host minted.
     pub fn mount_placement(&mut self, id: InstanceId, size: PlacementSize) {
@@ -1383,11 +1273,8 @@ impl Screen {
     /// Registers a mount anchored at the visible row `row` and column
     /// `column` under the id the host minted.
     ///
-    /// # Invariants
-    ///
-    /// `row` and `column` lie inside the grid: `Grid::line_id` indexes the
-    /// ring unchecked, so the device bounds-checks against `grid_size`
-    /// before calling this.
+    /// `row` and `column` must lie inside the grid; the caller must
+    /// bounds-check them against [`Self::grid_size`].
     pub fn mount_placement_at(
         &mut self,
         id: InstanceId,
@@ -1431,10 +1318,8 @@ impl Screen {
     ///
     /// # Invariants
     ///
-    /// The anchors resolve through the same expression
-    /// [`Self::evict_lost_anchors`] passes. A placement this omits is
-    /// exactly a placement the sweep evicts, so no placement can become
-    /// unresolvable without also becoming evictable.
+    /// A placement this omits is exactly one [`Self::evict_lost_anchors`]
+    /// evicts.
     pub fn project_placements(&self) -> Vec<AnchoredPlacement> {
         self.placements
             .project(|anchor| self.grid.grid_line(anchor))
@@ -1450,9 +1335,8 @@ impl Screen {
 
 /// The selection this screen owns.
 ///
-/// The endpoints are resolved through the same expression
-/// [`Self::project_placements`] passes for anchors, so a selection can
-/// only ever be resolved against the grid that minted its rows.
+/// A selection can only ever be resolved against the grid that minted
+/// its rows.
 impl Screen {
     /// Anchors a new selection at `cell`, replacing any active one;
     /// returns whether the state changed. A cell outside the grid is
@@ -1470,8 +1354,8 @@ impl Screen {
     }
 
     /// Moves the active selection's moving end to `cell`; returns
-    /// whether it moved. A no-op without an active selection or for a
-    /// cell outside the grid.
+    /// whether it moved. It is a no-op without an active selection or for
+    /// a cell outside the grid.
     pub fn extend_selection(&mut self, cell: GridPoint, side: CellSide) -> bool {
         let Some(end) = self.selection_end(cell, side) else {
             return false;
