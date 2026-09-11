@@ -49,9 +49,9 @@ Note: `///` and `//!` are **doc comments**, not "line comments" for this rule �
 
 ## Comment references — cite `docs/references/`, nothing else under `docs/`
 
-Comments and doc comments may cite a file under `docs/references/` — the
-VT, ECMA-48 and xterm manuals. **No other path under `docs/` may be cited
-from code**, doc comments included.
+Comments and doc comments may cite any file under `docs/references/*`;
+the manuals kept there are permanent. **No other path under `docs/` may be
+cited from code**, doc comments included.
 
 Everything else in `docs/` is short-lived by design. `docs/todo/` holds
 per-task working notes that are deleted once the task ships, and
