@@ -4,9 +4,9 @@
 /// Snapshot of the modes the device owns, as opposed to those a screen
 /// owns.
 ///
-/// A mode belongs here when both screens share it. The ones a screen
-/// owns — the cursor origin, the tab stops, the character set mapping —
-/// live on the screen itself instead.
+/// Both screens share every mode here. The ones a screen owns — the
+/// cursor origin, the tab stops, the character set mapping — live on the
+/// screen itself instead.
 ///
 /// # References
 ///
@@ -20,10 +20,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct VtModes {
     /// DECSET 1049/47: which of the two screens the device shows.
-    ///
-    /// This is the only record of the active screen — the screen pair
-    /// itself is pure storage and keeps no such flag, so the two
-    /// cannot disagree.
     pub active_screen: ScreenKind,
     /// IRM (`SM 4`): whether a printed character inserts or replaces.
     pub insert_replace: InsertReplaceMode,
@@ -38,18 +34,16 @@ pub struct VtModes {
     pub bracketed_paste: bool,
     /// DECSET 1007: enables alternate-scroll translation.
     ///
-    /// This stores the mode itself, which is not actionable on its own
-    /// — it takes effect only while [`Self::active_screen`] is
-    /// [`ScreenKind::Alternate`]. Read it through
-    /// [`Self::alternate_scroll_active`] rather than on its own.
+    /// It takes effect only while [`Self::active_screen`] is
+    /// [`ScreenKind::Alternate`], so a reader must go through
+    /// [`Self::alternate_scroll_active`] rather than read it on its own.
     pub alternate_scroll: bool,
     /// DECSET 1004: the app wants `CSI I` / `CSI O` focus reports.
     pub focus_in_out: bool,
     /// DECTCEM (DECSET 25): whether the text cursor is drawn.
     ///
-    /// The device carries this rather than either screen, so a switch to
-    /// the alternate screen keeps the state the application set.
-    /// DECSC does not save it either — the VT510 saved-item list does not name cursor visibility.
+    /// A switch to the alternate screen keeps the state the application
+    /// set, and DECSC does not save it either.
     pub text_cursor_enable: TextCursorEnable,
     /// Coordinate encoding for mouse reports.
     pub mouse_encoding: MouseEncoding,
@@ -61,9 +55,9 @@ impl VtModes {
     /// Whether alternate-scroll translation is in effect: DECSET 1007
     /// set *and* the alternate screen shown.
     ///
-    /// This is not "the wheel sends arrow keys" — an active mouse
-    /// tracking mode outranks alternate scroll, and resolving that
-    /// order is the host's wheel routing, not this snapshot's.
+    /// This is not "the wheel sends arrow keys": an active mouse
+    /// tracking mode outranks alternate scroll, and the caller must
+    /// resolve that order itself.
     pub const fn alternate_scroll_active(&self) -> bool {
         matches!(self.active_screen, ScreenKind::Alternate) && self.alternate_scroll
     }
@@ -73,8 +67,7 @@ impl VtModes {
 /// the rest of the row right.
 ///
 /// Both screens share one value, so an alternate-screen flip shows the
-/// mode it left, and `DECSC` does not carry it either — the saved-cursor
-/// state records why.
+/// mode it left, and `DECSC` does not carry it either.
 ///
 /// # Control Functions
 ///
@@ -99,11 +92,10 @@ impl InsertReplaceMode {
 /// Whether a graphic character received at the right border wraps to
 /// the next line or replaces the character already in the last column.
 ///
-/// Both screens share one value, and `DECSC` does not carry it; the
-/// saved-cursor state records what it carries instead.
+/// Both screens share one value, and `DECSC` does not carry it.
 ///
 /// The default is [`Self::Enabled`], the set rather than the reset
-/// state, because `xterm-256color` advertises `am`.
+/// state.
 ///
 /// # Control Functions
 ///
@@ -139,15 +131,14 @@ impl AutoWrap {
 /// Whether the text cursor is drawn.
 ///
 /// Both screens share one value, so an alternate-screen flip shows the
-/// mode it left, and `DECSC` does not carry it either — the saved-cursor
-/// state records why.
+/// mode it left, and `DECSC` does not carry it either.
 ///
 /// # Control Functions
 ///
 /// - `DECTCEM` (`CSI ? 25 h` / `CSI ? 25 l`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextCursorEnable {
-    /// The cursor is drawn. The power-up default.
+    /// The cursor is drawn; this is the power-up default.
     #[default]
     Shown,
     /// The cursor is not drawn.
@@ -203,8 +194,7 @@ impl ScreenKind {
 
 /// Mouse-report coordinate encoding.
 ///
-/// The encodings are mutually exclusive: xterm keeps DECSET 1005/1006
-/// as separate numbers, but setting one replaces the other.
+/// The encodings are mutually exclusive. DECSET 1005 is not answered.
 ///
 /// # References
 ///
@@ -229,9 +219,7 @@ impl MouseEncoding {
     /// when the number names no encoding this terminal answers.
     ///
     /// A `DECRST` returns to [`Self::X10`] only when the number names
-    /// the encoding currently in force. The variants and the numbers
-    /// correspond one to one, so an application that resets an encoding
-    /// it never set would otherwise disable the one it did.
+    /// the encoding currently in force.
     // TODO: Answer DECSET 1005 here once `MouseReport::encode` really
     // implements the UTF-8 coordinate extension. Selecting `Utf8` while
     // the encoder falls back to X10 would advertise a protocol whose
@@ -284,8 +272,7 @@ impl MouseTracking {
     /// when the number names no tracking level.
     ///
     /// A `DECSET` replaces the level outright. A `DECRST` clears it only
-    /// when the number names the level currently in force, for the same
-    /// reason [`MouseEncoding::with_decset`] records.
+    /// when the number names the level currently in force.
     pub fn with_decset(self, mode: u16, enabled: bool) -> Option<Self> {
         let level = match mode {
             1000 => Self::Clicks,
@@ -309,8 +296,7 @@ mod tests {
     /// autowrap enabled, which is the set rather than the reset state.
     ///
     /// Case: a terminal is spawned and the shell echoes a command line
-    /// longer than the window is wide, which has to continue on the
-    /// next row.
+    /// longer than the window is wide.
     #[test]
     fn autowrap_starts_enabled() {
         assert_eq!(VtModes::default().auto_wrap, AutoWrap::Enabled);

@@ -3,25 +3,18 @@
 
 /// A cell color, carrying its source rather than a resolved value.
 ///
-/// # Invariants
-///
 /// A resolver MUST consult the live [`Palette`] before falling back to a
-/// built-in table. OSC 4 and OSC 104 overwrite palette entries in place,
-/// so resolving [`Color::Indexed`] against a fixed table silently
-/// discards them.
+/// built-in table.
 ///
 /// [`Color::DefaultBackground`] MUST NOT be resolved to the same value as
-/// an equal [`Color::Rgb`]: the default background renders transparent so
-/// webview overlays composite through it, while an explicitly-set
-/// background occludes them.
+/// an equal [`Color::Rgb`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Color {
-    /// The terminal default foreground (`SGR 39`, recolored by OSC 10).
+    /// The terminal default foreground (`SGR 39`).
     DefaultForeground,
-    /// The terminal default background (`SGR 49`, recolored by OSC 11).
+    /// The terminal default background (`SGR 49`).
     DefaultBackground,
-    /// An xterm-256 palette slot (`SGR 38;5` / `SGR 48;5`, recolored by
-    /// OSC 4 and reset by OSC 104).
+    /// An xterm-256 palette slot (`SGR 38;5` / `SGR 48;5`).
     Indexed(u8),
     /// A direct color (`SGR 38;2` / `SGR 48;2`).
     Rgb(Rgb),
@@ -32,12 +25,7 @@ impl Color {
     /// spell; `None` when the selector is not one this terminal answers
     /// or a component does not fit a byte.
     ///
-    /// # Invariants
-    ///
-    /// A component is rejected rather than clamped. Saturating a
-    /// palette index would turn `SGR 38;5;99999` into slot 255 — a
-    /// colour the application never asked for, rather than one it does
-    /// not get.
+    /// A component is rejected rather than clamped.
     pub fn from_sgr(selector: u16, operands: &[u16]) -> Option<Self> {
         match (selector, operands) {
             (5, [index]) => Some(Self::Indexed(u8::try_from(*index).ok()?)),
@@ -53,13 +41,11 @@ impl Color {
     /// The colour one `SGR` selector group's own `:` subparameters
     /// spell, everything after the `38` / `48` / `58` itself.
     ///
-    /// # Invariants
-    ///
-    /// The colour-space slot is optional. `2:Pi:r:g:b` is the spelling
-    /// the standard gives, but many programs omit `Pi` entirely and
-    /// every emulator checked accepts `2:r:g:b`, so the components are
-    /// located by the group's length. Subparameters after blue are the
-    /// tolerance tail the standard permits and are ignored.
+    /// The colour-space slot is optional: a group of five or more
+    /// subparameters reads as `2:Pi:r:g:b`, the spelling the standard
+    /// gives, and a four-element group reads as `2:r:g:b`. Subparameters
+    /// after blue are the tolerance tail the standard permits and are
+    /// ignored.
     pub fn from_sgr_group(subs: &[Option<u16>]) -> Option<Self> {
         let selector = subs.first().copied().flatten()?;
         let mut operands = [0u16; 3];
@@ -103,19 +89,17 @@ pub struct Rgb {
 
 /// The live color table symbolic [`Color`]s resolve against.
 ///
-/// Each slot is pre-resolved: the backend folds OSC 4 / OSC 104
-/// overrides over its built-in xterm table before publishing, so a
-/// consumer indexes this table directly instead of layering override
-/// lookups over a fallback of its own.
+/// Each slot is pre-resolved, so a consumer indexes this table directly
+/// instead of layering override lookups over a fallback of its own.
+///
+/// The table holds the built-in defaults.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Palette {
     /// The 256 xterm palette slots [`Color::Indexed`] addresses.
     pub indexed: Box<[Rgb; 256]>,
-    /// The default foreground [`Color::DefaultForeground`] resolves
-    /// to (recolored by OSC 10).
+    /// The default foreground [`Color::DefaultForeground`] resolves to.
     pub foreground: Rgb,
-    /// The default background [`Color::DefaultBackground`] resolves
-    /// to (recolored by OSC 11).
+    /// The default background [`Color::DefaultBackground`] resolves to.
     pub background: Rgb,
 }
 
@@ -135,8 +119,7 @@ impl Palette {
     /// [`Color::DefaultBackground`] resolves to [`Palette::background`]
     /// like any other slot. A consumer that must keep the transparent
     /// default background distinguishable from an equal explicit RGB
-    /// (see the invariant on [`Color`]) branches on the variant before
-    /// calling this.
+    /// branches on the variant before calling this.
     pub fn resolve(&self, color: Color) -> Rgb {
         match color {
             Color::DefaultForeground => self.foreground,
@@ -147,16 +130,14 @@ impl Palette {
     }
 }
 
-/// The default foreground [`Palette`] carries before any OSC 10
-/// override.
+/// The default foreground [`Palette`] carries.
 const DEFAULT_FOREGROUND: Rgb = Rgb {
     r: 255,
     g: 255,
     b: 255,
 };
 
-/// The default background [`Palette`] carries before any OSC 11
-/// override.
+/// The default background [`Palette`] carries.
 const DEFAULT_BACKGROUND: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
 /// Channel ramp for the 6x6x6 cube portion of the xterm table.
@@ -223,9 +204,9 @@ const ANSI_16: [Rgb; 16] = [
     },
 ];
 
-/// The full 256-slot xterm table [`Color::Indexed`] resolves to before
-/// any OSC 4 override: [`ANSI_16`], the 6x6x6 cube on [`CUBE_RAMP`],
-/// and the grayscale ramp from 8 to 238 in steps of 10.
+/// The full 256-slot xterm table [`Color::Indexed`] resolves to:
+/// [`ANSI_16`], the 6x6x6 cube on [`CUBE_RAMP`], and the grayscale ramp
+/// from 8 to 238 in steps of 10.
 const XTERM_INDEXED: [Rgb; 256] = build_xterm_indexed();
 
 const fn build_xterm_indexed() -> [Rgb; 256] {
@@ -294,8 +275,7 @@ mod tests {
     /// with the xterm defaults.
     ///
     /// Case: a fresh terminal renders `ls --color` output before any
-    /// OSC 4 override arrives, so indexed cells must resolve against
-    /// the stock xterm colors.
+    /// OSC 4 override arrives.
     #[test]
     fn the_default_palette_seeds_the_ansi_base_slots() {
         let palette = Palette::default();
@@ -314,9 +294,7 @@ mod tests {
     /// Asserts that the default palette builds slots 16..=231 from the
     /// 6x6x6 cube with the xterm channel ramp.
     ///
-    /// Case: a TUI picks `SGR 38;5;196` for an error marker and the
-    /// renderer must show the canonical cube red, not an interpolated
-    /// approximation.
+    /// Case: a TUI picks `SGR 38;5;196` for an error marker.
     #[test]
     fn the_default_palette_builds_the_color_cube_from_the_channel_ramp() {
         let palette = Palette::default();
@@ -336,7 +314,7 @@ mod tests {
     /// grayscale ramp from 8 to 238.
     ///
     /// Case: a diff pager shades context lines with high grayscale
-    /// slots, which must land on the xterm gray steps.
+    /// slots.
     #[test]
     fn the_default_palette_ends_with_the_grayscale_ramp() {
         let palette = Palette::default();
@@ -355,9 +333,8 @@ mod tests {
     /// and that distinct colors hash differently.
     ///
     /// Case: a row of terminal output repeats the same indexed color
-    /// across adjacent cells for run coalescing to merge, while a
-    /// separate row switches between the default foreground and
-    /// background for the row-content hash to key on.
+    /// across adjacent cells, while a separate row switches between the
+    /// default foreground and background.
     #[test]
     fn equal_colors_hash_equally() {
         fn digest(c: Color) -> u64 {
