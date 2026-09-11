@@ -1,20 +1,15 @@
-//! `TerminalGridPlugin` — applies each `TtyFrameSignal`'s frame to the
-//! per-entity `TerminalGrid` component through one `EntityEvent`
-//! observer.
+//! Applies each `TtyFrameSignal`'s frame to the per-entity
+//! `TerminalGrid` component.
 
 use crate::schema::TerminalGrid;
 use bevy::prelude::*;
 use bevy_orzmux::prelude::{OrzmuxPane, TtyFrameSignal};
 
-/// Registers the `apply_frame` observer and makes every pane entity
-/// carry a `TerminalGrid`.
+/// Applies each signalled frame to its terminal's grid, and makes every
+/// pane entity carry a `TerminalGrid`.
 ///
-/// The grid is a required component of [`OrzmuxPane`] because the backend
-/// emits its bootstrap repaint exactly once: a frame delivered to a
-/// pane entity without a grid would be dropped, and the backend offers
-/// no repaint request to recover it. Bevy registers a requirement only
-/// before the first entity carrying `OrzmuxPane` exists, so the plugin
-/// must be added before any pane is promoted.
+/// The grid is a required component of [`OrzmuxPane`]. The plugin must be
+/// added before any pane is promoted.
 #[derive(Default)]
 pub struct TerminalGridPlugin;
 
@@ -28,19 +23,11 @@ impl Plugin for TerminalGridPlugin {
 /// Applies the signalled frame to its terminal's grid, touching the
 /// component mutably only when the frame changes something.
 ///
-/// `orzma_tty` emits at most one frame per coalesce window, and
-/// `FrameTracker::emit` already returns `None` when nothing changed, so
-/// a signalled frame is usually real damage. The gate here is what
-/// keeps the mirror honest on the frames that are not: a frame naming
-/// only rows outside the mirror's range, only hyperlink ids the mirror
-/// already knows, or sections that already equal the mirror's own.
-/// `update_terminal_material` reads a changed grid as a reason to
-/// rebuild the GPU buffers, so a spurious write here would rebuild
-/// them for nothing.
+/// A frame naming only rows outside the mirror's range, only hyperlink
+/// ids the mirror already knows, or sections that already equal the
+/// mirror's own leaves the component untouched.
 ///
-/// A frame addressed to an entity without a grid is ignored; with the
-/// plugin registered that is only an entity that never carried a
-/// handle.
+/// A frame addressed to an entity without a grid is ignored.
 fn apply_frame(signal: On<TtyFrameSignal>, mut terminals: Query<&mut TerminalGrid>) {
     let Ok(grid) = terminals.get_mut(signal.terminal) else {
         return;
@@ -86,8 +73,7 @@ mod tests {
     /// Asserts that a frame carrying nothing new leaves the grid
     /// component unchanged.
     ///
-    /// Case: a synthetic frame repeats what the mirror already holds, a
-    /// shape the VT's emit gate never produces on its own.
+    /// Case: a frame repeats what the mirror already holds.
     #[test]
     fn a_frame_with_nothing_new_leaves_the_grid_unchanged() {
         let (mut app, terminal) = app_with_grid();
@@ -102,9 +88,8 @@ mod tests {
     /// Asserts that a frame whose metadata moved does mark the grid
     /// changed.
     ///
-    /// Case: a synthetic offset-only frame reaches a settled mirror, a
-    /// shape the VT itself never emits because a scroll repaints every
-    /// row.
+    /// Case: a frame that only moves the display offset reaches a settled
+    /// mirror.
     #[test]
     fn a_frame_that_moves_the_viewport_marks_the_grid_changed() {
         let (mut app, terminal) = app_with_grid();

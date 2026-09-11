@@ -1,6 +1,5 @@
-//! Renderer-facing schema: the `TerminalGrid` component and hover
-//! state, plus the shared terminal vocabulary re-exported flat from
-//! [`orzma_vt::prelude`].
+//! Renderer-facing schema: the grid and hover state the renderer draws
+//! from, in the terminal vocabulary of [`orzma_vt::prelude`].
 
 mod grid;
 mod hover;

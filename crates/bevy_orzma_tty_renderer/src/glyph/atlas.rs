@@ -31,25 +31,22 @@ pub struct GlyphRect {
 
 /// CPU-side R8Unorm atlas for rasterized glyphs.
 ///
-/// Packs glyphs using shelf packing (rows of uniform height per shelf).
-/// When the atlas is full, clears and restarts from the top-left — Tier 1
-/// keeps this simple because realistic monospaced workloads (a few hundred
-/// ASCII + CJK characters) never fill a 1024×1024 atlas during normal use.
+/// When the atlas is full, it clears every packed glyph and restarts from
+/// the top-left.
 #[derive(Resource)]
 pub struct GlyphAtlas {
     /// One byte of alpha coverage per pixel, row-major.
     pub pixels: Vec<u8>,
     /// All glyphs currently packed into the atlas.
     pub glyphs: HashMap<GlyphKey, GlyphRect>,
-    /// Bumped on every rasterization and on `clear`. The render plugin
-    /// re-uploads the GPU texture when this value changes.
+    /// Bumped on every rasterization, including one that clears a full
+    /// atlas first. The GPU texture picks up `pixels` only when this
+    /// value changes.
     pub generation: u64,
     shelves: Shelves,
 }
 
-/// Which face in the fallback chain a glyph resolved through. Tells
-/// `get_or_insert` which em-matched `PxScale` to rasterize at, so every face
-/// renders its em-square at the same physical pixel size.
+/// Which face in the fallback chain a glyph resolved through.
 #[derive(Clone, Copy)]
 enum GlyphTier {
     Primary,
@@ -63,17 +60,11 @@ enum GlyphTier {
 /// (notdef).
 ///
 /// Returns `(font, glyph_id, tier)` for the resolved face, or `None` when no
-/// face in the chain contains the glyph. The symbol tier carries Miscellaneous
-/// Symbols / Dingbats marks (e.g. ☐ ☑ ☒ ✔) that neither the primary nor the
-/// CJK fallback ships.
+/// face in the chain contains the glyph.
 ///
-/// `glyph_id` lookup is scale-independent, so this resolves before any scale is
-/// chosen.
-///
-/// NOTE: retries on `glyph_id == 0` only — NOT on degenerate outline
-/// (`w == 0 || h == 0`), which `get_or_insert` still short-circuits after
-/// outlining. PUA Nerd Font icons (U+E000–U+F8FF) resolve non-zero on the
-/// primary, so they never reach the fallbacks.
+/// A face whose glyph outlines to zero extent still resolves there. PUA
+/// Nerd Font icons (U+E000–U+F8FF) resolve non-zero on the primary, so
+/// they never reach the fallbacks.
 fn resolve_glyph<'a>(
     fonts: &'a TerminalFonts,
     face: &FontFace,
@@ -100,12 +91,6 @@ fn resolve_glyph<'a>(
 /// Shrinks a symbol-tier glyph so its rasterized width fits the monospace cell
 /// advance, returning the original outline when it already fits or when
 /// re-outlining at the reduced scale fails.
-///
-/// Symbol-fallback glyphs come from a proportional font (Noto Sans Symbols 2)
-/// and routinely outline wider than the narrow primary cell pitch. Left
-/// unshrunk, a width-1 symbol (e.g. ☑) overflows its cell and the shader's
-/// `paint_left_overdraw` stage paints that overflow on top of the neighbouring
-/// cell — so a `[✔]` checkbox would bleed the mark over the `]`.
 fn fit_symbol_to_cell(
     font: &FontArc,
     glyph_id: ab_glyph::GlyphId,
@@ -146,9 +131,9 @@ impl GlyphAtlas {
     /// Returns the rect for the keyed glyph, rasterizing and packing it on
     /// first use.
     ///
-    /// Returns `None` when `face` is out of range, the codepoint is not a
-    /// valid Unicode scalar, or the glyph has zero extent (e.g. ASCII space,
-    /// combining marks, or glyphs the font does not carry).
+    /// Returns `None` when the codepoint is not a valid Unicode scalar, no
+    /// face in the fallback chain carries it, or the glyph has zero extent
+    /// (e.g. ASCII space or a combining mark).
     pub fn get_or_insert(&mut self, key: GlyphKey, fonts: &TerminalFonts) -> Option<GlyphRect> {
         if let Some(r) = self.glyphs.get(&key) {
             return Some(*r);

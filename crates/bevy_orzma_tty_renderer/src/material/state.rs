@@ -12,7 +12,7 @@ use bevy::{
     render::storage::ShaderBuffer,
 };
 
-/// Registers a `MaterialNode<TerminalUiMaterial>` on-add hook that seeds the SSBO buffers, attaches the glyph atlas image, and inserts the per-entity [`TerminalMaterialState`] cache.
+/// Seeds the SSBO buffers, attaches the glyph atlas image, and inserts the per-entity [`TerminalMaterialState`] cache whenever a `MaterialNode<TerminalUiMaterial>` is added.
 pub struct TerminalMaterialStatePlugin;
 
 impl Plugin for TerminalMaterialStatePlugin {
@@ -24,45 +24,33 @@ impl Plugin for TerminalMaterialStatePlugin {
 }
 
 /// CPU-side cache mirroring what the GPU sees this frame.
-///
-/// SSBO handles and the atlas texture live on [`TerminalUiMaterial`]; this
-/// component stores only the cached LUT and per-frame bookkeeping.
 #[derive(Component)]
 pub(crate) struct TerminalMaterialState {
     pub glyph_index_map: HashMap<GlyphKey, u32>,
     pub cpu_cells: Vec<GpuCell>,
     pub cpu_glyphs: Vec<GpuGlyph>,
     pub last_atlas_generation: u64,
-    /// Set from `TerminalGrid`'s change detection and cleared only
-    /// once the rebuild actually uploads. It has to latch: Bevy
-    /// clears the change signal as soon as the system runs, so a
-    /// grid written on a frame whose rebuild bails out would never
-    /// reach the GPU.
+    /// Set from `TerminalGrid`'s change detection and cleared only once
+    /// the rebuild actually uploads, so it stays set across a frame whose
+    /// rebuild bails out.
     pub grid_dirty: bool,
     pub last_grid_dims: (u16, u16),
-    /// Last physical font size used for glyph rasterization. Reset to 0 in
-    /// `on_add_material_node` so the first `update_terminal_material` for
-    /// the entity sees `phys_size_changed == true` and triggers
-    /// `invalidate_all()`.
+    /// Last physical font size used for glyph rasterization; `0` before
+    /// the entity's first rebuild.
     pub last_phys_font_size: u16,
-    /// Cached output of `TerminalFonts::cell_metrics_px(last_phys_font_size)`
-    /// to avoid re-parsing the `post` table on every frame.
+    /// Cached output of `TerminalFonts::cell_metrics_px(last_phys_font_size)`.
     pub cached_metrics: Option<CellMetrics>,
     pub initialized: bool,
 }
 
 impl TerminalMaterialState {
-    /// Resets all glyph-cache state so the next `update_terminal_material`
-    /// invocation fully reuploads the atlas LUT, glyph rects, and atlas
-    /// generation marker. Called on DPR change (`phys_font_size` changed).
+    /// Resets all glyph-cache state and marks the grid dirty, so the next
+    /// `update_terminal_material` invocation fully reuploads the atlas
+    /// LUT, glyph rects, and atlas generation marker.
     ///
-    /// Deliberately does NOT touch:
-    /// - `last_phys_font_size` — the caller writes it after invalidation
-    ///   so the next frame's diff detection still works.
-    /// - `cpu_cells` — re-populated wholesale by `rebuild_cells` on the
-    ///   next rebuild (forced here by `grid_dirty = true`).
-    /// - `initialized` — stays `true`; the rebuild path is re-entered via
-    ///   `grid_changed`, not via `!initialized`.
+    /// It leaves `last_phys_font_size`, `cpu_cells`, and `initialized`
+    /// untouched; the caller writes `last_phys_font_size` itself after
+    /// invalidating.
     pub(crate) fn invalidate_all(&mut self) {
         self.glyph_index_map.clear();
         self.cpu_glyphs.clear();

@@ -31,15 +31,10 @@ use bevy::{
 
 mod state;
 
-/// Render-side public SystemSet anchor for `update_terminal_material`.
+/// Ordering anchor for the system that writes each terminal's material.
 ///
-/// `sync_atlas_image` in `glyph.rs` is ordered with
-/// `.after(TerminalMaterialSystems::UpdateMaterial)` so that any glyphs
-/// rasterized this frame are mirrored into the `Image` asset before the
-/// next ExtractSchedule, keeping atlas pixels and material params in
-/// lock-step with the bind group rebuild. Exposed `pub` so consumers
-/// (e.g., orzma's `resize_terminals_to_node`) can sequence
-/// layout-driven grid resizes `.before(Self::UpdateMaterial)`.
+/// A system that resizes a terminal's grid from the layout must run
+/// `.before(Self::UpdateMaterial)`.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum TerminalMaterialSystems {
     UpdateMaterial,
@@ -263,9 +258,7 @@ impl TerminalUiMaterial {
 /// `tint` (rgb = target color in LINEAR space, `a` = blend amount) and a
 /// brightness `dim`. The shader blends each background source toward `tint.rgb`
 /// by `tint.a` before glyphs/overlays paint (background only), then multiplies
-/// the final color by `dim`. The consumer (e.g. orzma) sets this on a
-/// terminal host from its active-pane state; `update_terminal_material` bakes
-/// both into the uniform each frame. An absent component is treated as
+/// the final color by `dim`. An absent component is treated as
 /// `{ dim: 1.0, tint: ZERO }` (full-bright, untinted / active).
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct PaneInactiveStyle {
@@ -294,9 +287,8 @@ impl Default for PaneInactiveStyle {
 }
 
 /// Padding colour used for the area outside a terminal grid (and the whole
-/// quad while a grid is unpainted) when the terminal has no OSC 11 default
-/// background. Defaults to black (the prior behaviour); the binary sets it to
-/// the theme background so a momentarily-unpainted pane is not pure black.
+/// quad while a grid is unpainted) when the terminal's default background
+/// is black. Defaults to black.
 #[derive(Resource, Default)]
 pub struct TerminalPaddingFallback(pub [u8; 3]);
 
@@ -304,24 +296,20 @@ pub struct TerminalPaddingFallback(pub [u8; 3]);
 ///
 /// Slot index = array index into `overlays` / `overlay_rects`; the WGSL
 /// texture binding is `OVERLAY_TEX_BINDING_BASE + i`. Hard upper bound per
-/// terminal surface (spec §6.1).
+/// terminal surface.
 pub const OVERLAY_SLOTS: usize = 12;
 
-/// Per-terminal overlay placements + textures, derived every frame by the
-/// consumer (e.g. orzma's webview projection) and consumed by
-/// `update_terminal_material` — the only material mutation site. The renderer
-/// knows nothing about what the textures contain.
+/// Per-terminal overlay placements and textures.
 ///
-/// # Invariants
+/// `rects[i]` is `(row, col, rows, cols)` in CELL coordinates; `row` may be
+/// negative when the rect starts above the viewport. `rows == 0` is the
+/// inactive-slot sentinel: the shader skips the slot, while the renderer
+/// binds `textures[i]` regardless, so consumers should set freed slots to
+/// `None`.
 ///
-/// - `rects[i]` is `(row, col, rows, cols)` in CELL coordinates; `row` may be
-///   negative (rect partially above the viewport). `rows == 0` is the
-///   inactive-slot sentinel — the shader skips the slot; the renderer binds
-///   `textures[i]` regardless, so consumers should set freed slots to `None`
-///   (the rebuild-every-frame contract below does this naturally).
-/// - Consumers must rebuild this component from live state every frame
-///   (all-sentinel start), so stale texture handles cannot outlive their
-///   producers (spec §5).
+/// Consumers must rebuild this component from live state every frame
+/// (all-sentinel start), so stale texture handles cannot outlive their
+/// producers.
 #[derive(Component, Clone, Debug)]
 pub struct TerminalOverlays {
     /// Placement rects, slot-indexed: `(row, col, rows, cols)` in cells.
@@ -341,32 +329,8 @@ impl Default for TerminalOverlays {
 
 /// Uniform block uploaded once per frame alongside the storage buffers.
 ///
-/// # Invariants
-///
-/// - All `_phys` fields are PHYSICAL pixels (no DPR division). The shader
-///   computes everything in physical-px space; `dpr` is provided for
-///   diagnostic purposes only (currently unused in shader after Tier 1
-///   `dpr_inv` removal).
-/// - `bg_padding_color` is the color the shader paints OUTSIDE the
-///   `grid_size * cell_size_px` rectangle (where the gui-side
-///   `resize_terminals_to_node` left padding).
-/// - "No cursor" is encoded by clearing the `CURSOR_VISIBLE` bit in
-///   `cursor_style` (and leaving `cursor_pos` at any value). The shader
-///   short-circuits on `cursor_visible == 0u`, so we deliberately keep
-///   `cursor_pos` as `UVec2` rather than introducing a signed sentinel —
-///   the existing visibility bit already does that job. A cursor (vi or
-///   live) whose grid line projects outside the viewport takes the same
-///   path: `cursor_visible = 0`.
-///
-/// # Layout (std140, encase derive)
-///
-/// Field offsets in bytes. `max_overflow_phys` fills the 4-byte padding slot
-/// at offset 76 that encase would otherwise insert before `bg_padding_color`
-/// (Vec4 needs 16-byte alignment, lands at offset 80). `inactive_tint` is also
-/// a Vec4 (16-byte alignment), so encase pads the 4 bytes after `dim` and lands
-/// it at offset 112; `overlay_rects` (`array<vec4<i32>, 12>`) follows at offset
-/// 128. The trailing `overlay_dim` / `overlay_desaturate` scalars sit at 320/324
-/// and the struct rounds up to its 16-byte alignment (total 336 bytes):
+/// The WGSL `TerminalParams` declaration must match this std140 layout,
+/// whose field offsets are in bytes and whose total size is 336 bytes:
 ///
 /// | Offset | Field                       |
 /// |--------|-----------------------------|
@@ -394,6 +358,18 @@ impl Default for TerminalOverlays {
 /// | 128    | `overlay_rects`             |
 /// | 320    | `overlay_dim`               |
 /// | 324    | `overlay_desaturate`        |
+///
+/// # Invariants
+///
+/// - All `_phys` fields are PHYSICAL pixels (no DPR division). The shader
+///   computes everything in physical-px space and never reads `dpr`.
+/// - `bg_padding_color` is the color the shader paints OUTSIDE the
+///   `grid_size * cell_size_px` rectangle.
+/// - "No cursor" is encoded by clearing the `CURSOR_VISIBLE` bit in
+///   `cursor_style` (and leaving `cursor_pos` at any value); the shader
+///   short-circuits on `cursor_visible == 0u`. A cursor (vi or live)
+///   whose grid line projects outside the viewport takes the same path:
+///   `cursor_visible = 0`.
 #[derive(Clone, Copy, ShaderType, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
@@ -405,20 +381,20 @@ struct TerminalParams {
     /// Packed: bit0=visible, bits1-2=shape (0=block / 1=underline / 2=bar), bit3=blinking.
     cursor_style: u32,
     time_seconds: f32,
-    /// Selection start row in viewport coords; `i32` because endpoints in
-    /// scrollback clamp to `-1` (above) or `rows` (below).
+    /// Selection start row in viewport coords; an endpoint in scrollback
+    /// clamps to `-1` (above) or `rows` (below).
     sel_start_row: i32,
     sel_start_col: u32,
     sel_end_row: i32,
     sel_end_col: u32,
-    /// 0 = none, 1 = char, 2 = line. See `SelectionGeometry`.
+    /// 0 = none, 1 = char, 2 = line.
     sel_kind: u32,
     underline_position_phys: f32,
     underline_thickness_phys: f32,
     /// Worst-case ASCII rightward bbox overflow (physical px) across all four
     /// faces. The shader uses this to extend its "rightmost column glyph"
     /// evaluation past `grid_size.x * cell_size_px.x` into the bg_padding
-    /// strip; the host reserves the same amount from the node width.
+    /// strip; the host must reserve the same amount from the node width.
     max_overflow_phys: f32,
     bg_padding_color: Vec4,
     /// Wire id of the hovered link (across all panes); `0` = nothing
@@ -429,15 +405,12 @@ struct TerminalParams {
     /// path in the shader.
     hover_active: u32,
     /// Pane brightness multiplier applied to the final fragment RGB.
-    /// `1.0` = active / full-bright; `< 1.0` dims an inactive pane. The
-    /// hand-written `Default` below sets this to `1.0` so an un-updated
-    /// material never renders dark (a derived `Default` would give `0.0`).
+    /// `1.0` = active / full-bright; `< 1.0` dims an inactive pane.
     dim: f32,
     /// Per-pane background tint: `rgb` = target color (LINEAR), `a` = blend
     /// amount in `0.0..=1.0`. The shader blends each background source toward
     /// `rgb` by `a` BEFORE glyphs/overlays paint (background only). `a == 0`
-    /// (active / no-op) leaves the background untouched; `Default` (below) sets
-    /// this to `Vec4::ZERO`. A Vec4, so encase pads the 4 bytes after `dim`.
+    /// (active / no-op) leaves the background untouched.
     inactive_tint: Vec4,
     /// Slot-indexed inline-overlay rects `(row, col, rows, cols)` in cell
     /// coords; `row` may be negative; `rows == 0` = inactive slot sentinel.
@@ -494,8 +467,8 @@ impl TerminalParams {
     /// - A live (non-vi) cursor carries the application's DECTCEM state, so
     ///   `cursor_visible` is `0` while the terminal has seen `CSI ? 25 l`,
     ///   and `grid.suppress_cursor` clears the bit on top of either source.
-    /// - When `grid.selection` is `None`, `sel_kind == 0` and the shader's
-    ///   `is_in_selection_uniform` short-circuits to `false`.
+    /// - When `grid.selection` is `None`, `sel_kind == 0` and the shader
+    ///   paints no selection.
     fn new(
         grid: &TerminalGrid,
         cell_size_px: Vec2,
@@ -562,20 +535,16 @@ struct GpuCell {
     /// The cell's `Style` bits ORed with the underline and strike bits its
     /// combining marks promote, plus the renderer-only flags from bit 16 up.
     style_flags: u32,
-    /// OSC 8 wire id of this cell, or `0` for "no link". Safe because
-    /// `HyperlinkInterner` reserves `HyperlinkId(0)`.
+    /// OSC 8 wire id of this cell, or `0` for "no link".
     hyperlink_id: u32,
 }
 
 /// Set on the right-half cell of a width=2 (CJK / wide) grapheme so the
-/// shader knows to render its glyph anchored to the left-half cell's
-/// origin. See `rebuild_cells` and `terminal_ui_material.wgsl`.
+/// shader renders its glyph anchored to the left-half cell's origin.
 ///
 /// Bit allocation in `GpuCell.style_flags` (a `u32`):
-/// - Bits 0-15: `orzma_vt`'s `Style` flags at the bits `Style` assigns,
-///   from the cell's own `Style` and from `style_from_combining_marks`.
-/// - Bits 16+: renderer-only flags (this const), kept physically separate
-///   from the `Style` range so a future `Style` flag cannot collide.
+/// - Bits 0-15: `Style` flags at the bits `Style` assigns.
+/// - Bits 16+: renderer-only flags such as this one.
 const STYLE_WIDE_RIGHT_HALF: u32 = 0x1_0000;
 
 const _: () = assert!(
@@ -599,7 +568,7 @@ impl Default for GpuCell {
     }
 }
 
-/// Per-glyph atlas record used by the fragment shader.
+/// Per-glyph atlas record in the glyph storage buffer.
 #[derive(Clone, Copy, ShaderType, Default, Debug)]
 struct GpuGlyph {
     /// Top-left of the glyph rect in atlas physical px.
@@ -613,8 +582,8 @@ struct GpuGlyph {
 }
 
 impl GpuGlyph {
-    /// Builds a `GpuGlyph` from an atlas rect. All offsets and sizes are in
-    /// physical pixels — the shader handles all DPR-aware geometry.
+    /// Builds a `GpuGlyph` from an atlas rect, with all offsets and sizes
+    /// in physical pixels.
     fn new(rect: GlyphRect) -> Self {
         Self {
             uv_min: Vec2::new(rect.u as f32, rect.v as f32),
@@ -639,9 +608,7 @@ fn padding_color(default_bg: Rgb, fallback: [u8; 3]) -> Vec4 {
 /// treats as "terminal default background".
 const TRANSPARENT_BG: u32 = 0;
 
-/// The grid palette pre-packed to the shader's linear `u32` encoding,
-/// built once per cell rebuild so symbolic colors resolve by table
-/// lookup instead of a per-cell sRGB-to-linear conversion.
+/// The grid palette pre-packed to the shader's linear `u32` encoding.
 struct PackedPalette {
     indexed: [u32; 256],
     foreground: u32,
@@ -679,13 +646,8 @@ impl PackedPalette {
     /// # Invariants
     ///
     /// `DefaultBackground` packs [`TRANSPARENT_BG`], never the opaque
-    /// palette background: the shader keys on `bg.a == 0` to composite
-    /// webview overlays and the padding base through the cell and to
-    /// resolve reverse video (`resolve_cell_colors` / `tint_bg` in
-    /// `terminal_ui_material.wgsl`), and the sentinel is what keeps an
-    /// equal explicit RGB background distinguishable per the
-    /// `schema::Color` invariant. An opaque pack here occludes every
-    /// webview rect.
+    /// palette background, so an explicit RGB equal to that background
+    /// stays distinguishable from the default.
     fn cell_bg(&self, color: CellColor) -> u32 {
         match color {
             CellColor::DefaultBackground => TRANSPARENT_BG,
@@ -731,7 +693,7 @@ fn update_terminal_material(
     // cost is bounded by `needs_rebuild` below. The same every-frame Modified
     // is also the overlay-texture rebind lifeline: a bevy_cef headless target
     // re-creates its GPU texture on resize, and only this rebuild repoints
-    // the bind group at it (spec §4).
+    // the bind group at it.
     // NOTE: Skip the per-entity work when PrimaryWindow is transiently
     // absent (display hotplug, brief winit reconnect). Trade-off: the
     // `mat.params = ...` write below would fire AssetEvent::Modified
@@ -958,8 +920,7 @@ fn rebuild_cells(
 }
 
 /// Promotes specific combining marks in a grapheme cluster to the `Style`
-/// underline and strike flags so the shader paints them, since `ab_glyph`
-/// cannot composite combining glyphs onto the base char in Tier 1.
+/// underline and strike flags so the shader paints them.
 ///
 /// Maps U+0332 (combining low line), U+0333 (double low line), U+0331
 /// (combining macron below) to `Style::UNDERLINE`, and U+0336 (combining
@@ -1016,10 +977,9 @@ fn resolve_glyph_index(
 }
 
 /// Projects a grid-space selection into the clamped viewport-space
-/// uniform tuple the shader consumes. Rows widen to i64 before adding
-/// the display offset (a signed line plus an unsigned offset must not
-/// wrap) and clamp to the -1 (above) / `rows` (below) sentinels so a
-/// partially visible selection still paints its on-screen span.
+/// uniform tuple the shader consumes. Rows clamp to the -1 (above) /
+/// `rows` (below) sentinels, so a partially visible selection still
+/// paints its on-screen span.
 fn selection_uniforms(
     selection: Option<&SelectionRange>,
     display_offset: u32,
@@ -1083,9 +1043,7 @@ mod tests {
     /// Asserts that a linked cell's wire id reaches its GPU slot while
     /// an unlinked cell's slot keeps the 0 sentinel.
     ///
-    /// Case: a row mixes OSC 8 linked text with plain text, and the
-    /// shader needs the per-cell id to underline only the hovered
-    /// link.
+    /// Case: a row mixes OSC 8 linked text with plain text.
     #[test]
     fn rebuild_cells_writes_hyperlink_id_when_present() {
         use bevy::platform::collections::HashMap;
@@ -1374,13 +1332,6 @@ mod tests {
     /// Asserts that fg and bg packing resolve symbolic colors through
     /// the live palette, and that the default background packs the
     /// transparent sentinel instead of the palette value.
-    ///
-    /// The sentinel policy rejects packing the opaque palette
-    /// background for `DefaultBackground`: the shader keys on
-    /// `bg.a == 0` to composite webview overlays and the padding base
-    /// through default-background cells, so an opaque pack would
-    /// occlude both and erase the explicit-vs-default distinction the
-    /// `schema::Color` invariant requires.
     ///
     /// Case: OSC 4 recolors an indexed slot and OSC 10 the default
     /// foreground while a webview overlay is mounted behind
