@@ -31,7 +31,7 @@ pub(super) struct PaneActionPlugin;
 
 impl Plugin for PaneActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_pane_action);
+        app.add_observer(apply_pane_action.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

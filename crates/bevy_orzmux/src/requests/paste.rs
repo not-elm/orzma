@@ -33,8 +33,8 @@ pub(super) struct PastePlugin;
 
 impl Plugin for PastePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_paste)
-            .add_observer(apply_active_paste);
+        app.add_observer(apply_paste.run_if(resource_exists::<OrzmuxConnection>))
+            .add_observer(apply_active_paste.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

@@ -2,6 +2,7 @@
 //! terminal entity to drop when a registration is released, sent as
 //! `OrzmuxCommand::RemovePlacements`.
 
+use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzma_vt::prelude::InstanceId;
@@ -25,7 +26,7 @@ pub(super) struct WebviewRemovePlugin;
 
 impl Plugin for WebviewRemovePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_webview_remove);
+        app.add_observer(apply_webview_remove.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

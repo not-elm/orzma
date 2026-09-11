@@ -34,8 +34,8 @@ pub(super) struct KeyInputPlugin;
 
 impl Plugin for KeyInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_key_input)
-            .add_observer(apply_active_key_input);
+        app.add_observer(apply_key_input.run_if(resource_exists::<OrzmuxConnection>))
+            .add_observer(apply_active_key_input.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

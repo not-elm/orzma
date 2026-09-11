@@ -1,6 +1,7 @@
 //! `RequestTtyScroll`: the viewport movement the host UI asks a terminal
 //! entity to perform, sent as `OrzmuxCommand::Scroll`.
 
+use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzma_vt::prelude::Scroll;
@@ -25,7 +26,7 @@ pub(super) struct ScrollPlugin;
 
 impl Plugin for ScrollPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_scroll);
+        app.add_observer(apply_scroll.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

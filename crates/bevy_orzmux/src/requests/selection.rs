@@ -10,6 +10,7 @@
 //! `OrzmuxCommand`; the vi-cursor start and the kind change stay stubs
 //! until vi mode lands in the backend.
 
+use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
 use bevy::prelude::*;
 pub use orzma_vt::prelude::{CellSide, GridPoint, SelectionKind};
@@ -76,11 +77,11 @@ pub(super) struct SelectionPlugin;
 
 impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(start_selection)
+        app.add_observer(start_selection.run_if(resource_exists::<OrzmuxConnection>))
             .add_observer(start_selection_at_vi_cursor)
-            .add_observer(update_selection)
+            .add_observer(update_selection.run_if(resource_exists::<OrzmuxConnection>))
             .add_observer(change_selection_kind)
-            .add_observer(clear_selection);
+            .add_observer(clear_selection.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

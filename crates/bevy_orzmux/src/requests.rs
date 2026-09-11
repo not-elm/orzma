@@ -137,3 +137,95 @@ pub(crate) mod test_support {
         commands.try_iter().map(|(_, c)| c).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::requests::test_support::{app_with_connection, spawn_pane};
+    use orzma_tty::prelude::{
+        CellCoord, KeyText, MouseButton, MouseReport, MouseReportKind, ProtocolModifiers,
+        TerminalKey, TerminalModifiers,
+    };
+    use orzma_vt::prelude::{GridColumn, GridLine, InstanceId, PlacementSize, ScreenLine, Scroll};
+    use orzmux::prelude::PaneId;
+
+    /// Asserts that no request observer runs once the connection is
+    /// removed, so none of them panics.
+    ///
+    /// Case: the backend thread has died, and the user keeps typing,
+    /// clicking, and pasting before `AppExit` takes effect.
+    #[test]
+    fn no_request_observer_runs_without_a_connection() {
+        let (mut app, _commands) = app_with_connection(OrzmaEventRequestPlugin);
+        let pane = spawn_pane(&mut app, PaneId(1));
+        app.world_mut().remove_resource::<OrzmuxConnection>();
+        let key = TerminalKey::Character(KeyText::new("x").unwrap());
+        let cell = GridPoint {
+            line: GridLine(0),
+            column: GridColumn(0),
+        };
+        let instance: InstanceId = "3f5a9c02d1e84b7690ab3cde12f45678"
+            .parse()
+            .expect("valid id");
+
+        let world = app.world_mut();
+        world.trigger(RequestTtyKeyInput {
+            terminal: pane,
+            key: key.clone(),
+            modifiers: TerminalModifiers::default(),
+        });
+        world.trigger(RequestActiveKeyInput {
+            key,
+            modifiers: TerminalModifiers::default(),
+        });
+        world.trigger(RequestTtyPaste {
+            terminal: pane,
+            text: "x".into(),
+        });
+        world.trigger(RequestActivePaste { text: "x".into() });
+        world.trigger(RequestTtyCopySelection { terminal: pane });
+        world.trigger(RequestTtyMouseInput {
+            terminal: pane,
+            mouse: MouseReport {
+                button: MouseButton::Left,
+                kind: MouseReportKind::Press,
+                cell: CellCoord { col: 1, row: 1 },
+                mods: ProtocolModifiers::default(),
+            },
+        });
+        world.trigger(RequestTtyScroll {
+            terminal: pane,
+            scroll: Scroll::Delta(1),
+        });
+        world.trigger(RequestTtySelectionStart {
+            terminal: pane,
+            cell,
+            side: CellSide::Left,
+            kind: SelectionKind::Simple,
+        });
+        world.trigger(RequestTtySelectionUpdate {
+            terminal: pane,
+            cell,
+            side: CellSide::Right,
+        });
+        world.trigger(RequestTtySelectionClear { terminal: pane });
+        world.trigger(RequestTtyWebviewMount {
+            terminal: pane,
+            instance,
+            row: ScreenLine(0),
+            column: GridColumn(0),
+            size: PlacementSize { rows: 1, cols: 1 },
+        });
+        world.trigger(RequestTtyWebviewRemove {
+            terminal: pane,
+            instances: vec![instance],
+        });
+        world.trigger(RequestPaneAction {
+            action: PaneAction::Kill,
+        });
+        world.trigger(RequestPaneAction {
+            action: PaneAction::Select(pane),
+        });
+        app.update();
+    }
+}
