@@ -22,6 +22,7 @@ impl Plugin for LayoutPlugin {
                 Update,
                 send_window_geometry
                     .run_if(resource_exists::<TerminalCellMetricsResource>)
+                    .run_if(resource_exists::<OrzmuxConnection>)
                     .run_if(
                         not(resource_exists::<PaneGeometry>)
                             .or_else(resource_exists_and_changed::<TerminalCellMetricsResource>)
@@ -166,5 +167,28 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    /// Asserts that the geometry sender does not run without a
+    /// connection, leaving `PaneGeometry` unset rather than panicking.
+    ///
+    /// Case: the backend thread dies before the first geometry is sent,
+    /// while the font metrics and the primary window already exist.
+    #[test]
+    fn geometry_is_not_sent_without_a_connection() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(LayoutPlugin)
+            .insert_resource(metrics(8.0, 16.0));
+        app.world_mut().spawn((
+            Window {
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.update();
+
+        assert!(!app.world().contains_resource::<PaneGeometry>());
     }
 }
