@@ -88,7 +88,7 @@ terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ロ
 | シーケンス | 機能 | 現状 | 直接叩く実例 |
 |---|---|---|---|
 | `CSI Ps SP q` | DECSCUSR カーソル形状 | `INTER∅`。`Cursor` 型と `CursorShape` は既にある | **nvim が実測 5 回**（`CSI 0 q` / `1 q` / `2 q`）。vim の `term.c` |
-| `CSI s` / `CSI u` | SCOSC / SCORC | `CSI∅` | blessed の `saveCursorA`/`restoreCursorA`、btop |
+| ~~`CSI s` / `CSI u`~~ | ~~SCOSC / SCORC~~ | **✅ 実装済み（2026-09-11）**。パラメータ無しのときだけ DECSC / DECRC と同じ保存枠を使う（xterm の `only_default()` に揃えた。下の「`CSI s` の曖昧性」を参照） | blessed の `saveCursorA`/`restoreCursorA`、btop |
 | `CSI ?2026 h/l` | 同期出力 | `MODE∅`。`struct SyncBuffer {}` は**空のプレースホルダ**（`interpreter.rs:83`） | fzf がフレーム毎に発行。nvim/tmux/kitty |
 | `CSI ?1004` → `CSI I` / `CSI O` | フォーカス通知 | **モードは保存されるが送信側が存在しない**（`focus_in_out` の参照は定義と代入の 2 箇所のみ） | vim/nvim。フォーカス復帰時の再描画が来ない |
 | `OSC 10/11/12` | 前景/背景/カーソル色（問い合わせ含む） | `OSC∅` | vim/nvim の `background` 自動判定 |
@@ -96,22 +96,30 @@ terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ロ
 | `OSC 8` | ハイパーリンク | `OSC∅`。interner は未接続（`hyperlink.rs:15`） | nvim。レンダラ側に受け皿は既にある |
 | `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `INTER∅` | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する**。DECAWM / DECTCEM 実装により **7 と 25 も報告可能な状態を持つようになった**（`CSI ?7;1$y` / `CSI ?25;2$y` など）が応答路が無い。§6 のとおり、`CSI ?7 $ p` を実装すれば `vttest` の `tst_DEC_DECRPM` が mode 7 を機械判定できるようになる |
 | `DCS $ q … ST` / `DCS + q … ST` | DECRQSS / XTGETTCAP | DCS コールバックが空（`interpreter.rs:157`-`168`） | vim のカーソル形状復元・capability 検出 |
-| ``CSI Ps ` `` / `CSI Ps a` / `CSI Ps e` | HPA / HPR / VPR | HPA は **✅ 実装済み（2026-09-11、CHA と同じメソッド）**。HPR/VPR は `CSI∅` | vttest。**VPR は `move_cursor_down` の別名にできない** — VT510 p.351 は VPR を最終行で止めるが CUD は下マージンで止まるため、DECOM リセット時にスクロール領域があると挙動が食い違う |
+| ``CSI Ps ` `` / `CSI Ps a` / `CSI Ps e` | HPA / HPR / VPR | HPA は **✅ 実装済み（2026-09-11、CHA と同じメソッド）**。HPR も **✅ 実装済み（2026-09-11、CUF と同じメソッド。DECLRMM が無い間は停止点が一致する）**。VPR は `CSI∅` | vttest。**VPR は `move_cursor_down` の別名にできない** — VT510 p.351 は VPR を最終行で止めるが CUD は下マージンで止まるため、DECOM リセット時にスクロール領域があると挙動が食い違う |
 | `CSI Ps b` | REP | `CSI∅` | **ローカルエントリは `rep` を広告していない**ため Tier 2。vttest |
-| `CSI Ps ^` | SD（ECMA-48 綴り） | `CSI∅`。orzma は `CSI T` のみ | 実際に発行するプログラムは**未確認**。安いので別名として入れる程度 |
+| ~~`CSI Ps ^`~~ | ~~SD（xterm の別綴り）~~ | **✅ 実装済み（2026-09-11）**。ECMA-48（p.77）はこの final byte を SIMD に割り当てるが、orzma は SIMD を持たないので xterm の読み（SD）に揃えた。持つのは調べた範囲で xterm だけ（alacritty・kitty・foot・ghostty・wezterm には無い） | 実際に発行するプログラムは**未確認** |
 | `CSI ?69 h/l` / `CSI Pl;Pr s` | DECLRMM / DECSLRM | `MODE∅` / `CSI∅` | nvim。矩形スクロールに必要 |
 | `CSI ?1015 h/l` | urxvt マウス | `MODE∅` | btop が 1015→1006 の順に発行。1006 があるので実害は小 |
 | `CSI ?Pm s` / `CSI ?Pm r` | XTSAVE / XTRESTORE | `CSI∅`（`?` 付きで intermediate 無しなので match に届いて落ちる） | xterm-ctlseqs は「DECSET と同じ Ps 値」を 1 段キャッシュで保存・復元すると規定するので、**7 と 25 も定義上この対象**。`civis`/`cnorm` の代わりに `?25 s` … `?25 r` で括るプログラムがあると hide が戻らず、`smam`/`rmam` の代わりに `?7 s` … `?7 r` で括ると autowrap が戻らない。**7 の restore は `modes_mut` 直書きにできない** — reset 方向を復元するときに両画面の LCF を解除する必要があるので `DeviceState::set_auto_wrap` を通す。具体的な呼び出し実例は未特定（低頻度と見られる） |
 
+> 観察（2026-09-11、未修正）: xterm は `GetParam(0) == 0` の `CSI 0 T` を XTHIMOUSE と読むが、
+> orzma は SD として 1 行スクロールする（`interpreter/tests/line_editing.rs` の
+> `the_scroll_down_sequence_scrolls_the_region_down` が固定）。
+
 ### `CSI s` の曖昧性
 
-PDF p.30 の原文どおり、**パラメータ数ではなく DECLRMM（モード 69）の状態**で決まる。
+PDF p.30 の原文は、DECLRMM（モード 69）の状態で読みを分ける。
 
 - モード 69 **無効** → `CSI s` は SCOSC（*"Save cursor, available only when DECLRMM is disabled"*）
 - モード 69 **有効** → `CSI Pl ; Pr s` は DECSLRM（*"available only when DECLRMM is enabled"*）
 
-orzma は DECLRMM を持たない＝常に無効なので、**今は `CSI s` を素直に SCOSC にしてよい**。
-将来 DECSLRM を入れるときにこの分岐を追加する。
+原文は、モード 69 が無効なときにパラメータ付きの `CSI s` をどう読むかを定めていない。**xterm の実装
+（`charproc.c` の `CASE_ANSI_SC` / `CASE_ANSI_RC`）はパラメータが無いときだけ保存・復元する**
+（`only_default()`）ので、orzma もそれに揃えた（2026-09-11）。kitty と wezterm も同じで、alacritty と
+foot はパラメータを見ずに保存する。orzma は DECLRMM を持たないので、今はパラメータ付きの `CSI s` /
+`CSI u` を無視する。将来 DECLRMM を入れるとき、この判定がそのまま「パラメータ無し＝SCOSC、あり＝DECSLRM」
+の分岐になる。
 
 ## 3. 入力側（orzma が「送る」バイト）の契約ズレ
 
@@ -186,7 +194,7 @@ STD-070 が LCF をリセットすると規定する操作:
    幅2文字のシフト量は `print` の既存の幅1前提を継承しており、`screen.rs` の TODO に
    紐づく積み残し。テストは `screen/tests/print.rs` と `interpreter/tests/modes.rs`
    にあり、各 `#[test]` の doc が根拠にした仕様上の契約を持つ。
-2. ~~**CHA/VPA + HPA**~~ **完了（2026-09-11）** → 次は **HPR/VPR**、**SCOSC/SCORC**、**SD `^` 別名**。
+2. ~~**CHA/VPA + HPA**~~ ~~**HPR**~~ ~~**SCOSC/SCORC**~~ ~~**SD `^` 別名**~~ **完了（2026-09-11）** → 残るのは **VPR**。
    カーソル系ヘルパ（`seat_cursor` / `seat_line` / `seat_column`）を共有。`CSI s` は将来の DECLRMM 分岐を見越した形に。
    **VPR は `move_cursor_down` の別名にできない**（§2 の注記を参照）。
 3. ~~**DECAWM**~~ ~~**DECTCEM**~~ **両方完了（2026-09-11）**。DECTCEM は
