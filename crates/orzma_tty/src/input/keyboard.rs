@@ -40,6 +40,8 @@ pub enum TerminalKey {
     Backspace,
     Tab,
     Escape,
+    /// The editing keypad's Insert key.
+    Insert,
     Delete,
     ArrowUp,
     ArrowDown,
@@ -70,7 +72,7 @@ pub struct TerminalModifiers {
 /// The cursor keys — arrows plus Home and End, which xterm also classifies as
 /// cursor keys — honour `app_cursor_keys` (DECCKM): `ESC [ A/B/C/D/H/F` in
 /// normal mode, `ESC O A/B/C/D/H/F` in application mode. The VT220 editing
-/// keypad (Delete, PageUp, PageDown) is unaffected by DECCKM and maps to fixed
+/// keypad (Insert, Delete, PageUp, PageDown) is unaffected by DECCKM and maps to fixed
 /// sequences; `Character` is encoded by `encode_character`.
 ///
 /// Tab sends HT, and CBT (`CSI Z`, the terminfo `kcbt` string) when Shift
@@ -97,6 +99,7 @@ pub(super) fn encode_key(
         }
         TerminalKey::Tab => vec![0x09],
         TerminalKey::Escape => vec![0x1b],
+        TerminalKey::Insert => b"\x1b[2~".to_vec(),
         TerminalKey::Delete => b"\x1b[3~".to_vec(),
         TerminalKey::PageUp => b"\x1b[5~".to_vec(),
         TerminalKey::PageDown => b"\x1b[6~".to_vec(),
@@ -256,8 +259,18 @@ mod tests {
         );
     }
 
+    /// Asserts that the VT220 editing keypad keys send their fixed tilde
+    /// sequences.
+    ///
+    /// Case: the user presses Insert, Delete, PageUp, or PageDown in a
+    /// program that reads the terminfo `kich1`, `kdch1`, `kpp`, and `knp`
+    /// strings.
     #[test]
     fn vt220_style_keys_use_tilde_sequences() {
+        assert_eq!(
+            encode_key(&TerminalKey::Insert, &no_mods(), false, KeypadMode::Numeric),
+            b"\x1b[2~".to_vec()
+        );
         assert_eq!(
             encode_key(&TerminalKey::Delete, &no_mods(), false, KeypadMode::Numeric),
             b"\x1b[3~".to_vec()
@@ -301,9 +314,23 @@ mod tests {
         );
     }
 
+    /// Asserts that the editing keypad keys send the same sequences
+    /// whether or not DECCKM is set.
+    ///
+    /// Case: a full-screen editor turns on application cursor keys, and
+    /// the user presses Insert, Delete, PageUp, or PageDown in it.
     #[test]
     fn editing_keypad_ignores_cursor_mode() {
         for app_cursor in [false, true] {
+            assert_eq!(
+                encode_key(
+                    &TerminalKey::Insert,
+                    &no_mods(),
+                    app_cursor,
+                    KeypadMode::Numeric
+                ),
+                b"\x1b[2~".to_vec()
+            );
             assert_eq!(
                 encode_key(
                     &TerminalKey::Delete,

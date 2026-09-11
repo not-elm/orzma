@@ -26,7 +26,8 @@ impl PtyInput {
     ///   DECCKM: `CSI A/B/C/D/H/F` in normal mode, `SS3 A/B/C/D/H/F` in
     ///   application mode.
     /// - [VT220-Style Function Keys] — the 6-key editing keypad
-    ///   (`CSI 3 ~`, `CSI 5 ~`, `CSI 6 ~`), explicitly unaffected by DECCKM.
+    ///   (`CSI 2 ~`, `CSI 3 ~`, `CSI 5 ~`, `CSI 6 ~`), explicitly unaffected
+    ///   by DECCKM.
     /// - [Alt and Meta Keys] — `metaSendsEscape` / `altSendsEscape`: prefix the
     ///   key with `ESC`.
     ///
