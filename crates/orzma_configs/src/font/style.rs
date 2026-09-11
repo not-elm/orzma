@@ -1,4 +1,4 @@
-//! Parser for Alacritty-style `style` strings into a font weight + slant.
+//! Parser turning a `style` string into a font weight + slant.
 
 use std::str::FromStr;
 

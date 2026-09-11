@@ -1,36 +1,25 @@
-//! Mouse-input configuration (currently: wheel scroll behavior).
+//! Mouse-input configuration: the `[mouse]` section's wheel, click, drag,
+//! and autoscroll settings.
 
 use serde::{Deserialize, Serialize};
 
 /// Which modifier triggers "fine" scrolling (1 line per notch instead
-/// of `lines_per_notch`).
-///
-/// Default is `Alt`. Shift is deliberately not the default because
-/// macOS converts Shift+wheel into a horizontal-scroll event at the
-/// system level (vertical y becomes x), so Shift+wheel reaches the
-/// app as `ev.y == 0` and the fine path never fires. Alt+wheel passes
-/// through unchanged on macOS, Linux, and Windows.
+/// of `lines_per_notch`). The default is `Alt`.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum FineModifier {
-    /// Shift key activates fine scrolling. **Broken on macOS** —
-    /// system converts Shift+wheel to horizontal scroll.
+    /// Shift key activates fine scrolling. It never fires on macOS.
     Shift,
-    /// Ctrl key activates fine scrolling. May collide with future
-    /// font-zoom shortcuts (kitty / Windows Terminal convention).
+    /// Ctrl key activates fine scrolling.
     Ctrl,
-    /// Alt key activates fine scrolling. Default.
+    /// Alt key activates fine scrolling.
     #[default]
     Alt,
     /// No modifier required; fine scrolling is always active.
     None,
 }
 
-/// Fully-resolved `[mouse]` config block. Consumed by the Bevy
-/// mouse-wheel and mouse-button input systems; the wheel-relevant
-/// subset is mapped to the root binary's `WheelConfig`, and the
-/// button-relevant subset to its `ButtonConfig` (both defined in
-/// `src/input/bindings.rs`, per D18).
+/// Fully-resolved `[mouse]` config block.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct MouseConfig {
@@ -40,40 +29,30 @@ pub struct MouseConfig {
     pub fine_modifier: FineModifier,
     /// Lines scrolled per notch when the fine modifier is held.
     pub fine_lines: u32,
-    /// Upper bound on mouse-protocol events emitted per frame —
-    /// protects the PTY from input bursts when the user spins the
-    /// wheel rapidly while an app has SGR mouse tracking enabled.
+    /// Upper bound on mouse-protocol events emitted per frame.
     pub max_protocol_events_per_frame: u32,
     /// Wheel-input accumulation threshold expressed in cells of input
-    /// per emitted "notch". Lower = more responsive (each small wheel
-    /// movement fires a notch sooner).
-    ///
-    /// Default `0.5` works well for macOS smooth-scroll devices
-    /// (Magic Mouse, high-resolution wheels, trackpads) which emit
-    /// fractional line deltas; raise to `1.0` for a traditional
-    /// discrete-notch wheel that already emits `y = 1.0` per click.
+    /// per emitted "notch". A lower value is more responsive, firing a
+    /// notch after a smaller wheel movement. The default is `0.5`.
     pub cells_per_notch: f32,
     /// Dominant-axis lock strength for trackpad scrolling. The horizontal
     /// component of a swipe is emitted only when it dominates the gesture
-    /// (`|x| / hypot(x, y) >= axis_lock_ratio`); otherwise it is dropped so
-    /// jitter during a vertical scroll cannot leak a horizontal notch.
-    /// Clamped to `0.0..=1.0`; higher = stricter (more biased to vertical).
-    /// Default `0.9` matches Alacritty. `1.0` allows horizontal only for a
-    /// pure-horizontal gesture; `0.0` disables the lock.
+    /// (`|x| / hypot(x, y) >= axis_lock_ratio`), and is dropped otherwise.
+    /// Clamped to `0.0..=1.0`, where a higher value is stricter: `1.0`
+    /// allows horizontal motion only for a pure-horizontal gesture, and
+    /// `0.0` disables the lock. The default is `0.9`.
     pub axis_lock_ratio: f32,
     /// Max gap (ms) between consecutive clicks counted as a double /
-    /// triple click. Default mirrors macOS HIG.
+    /// triple click.
     pub double_click_timeout_ms: u32,
     /// Max cursor drift (logical px) between clicks counted as the
-    /// same chord. Default sized for Retina (4 logical = 8 physical
-    /// at DPR 2.0).
+    /// same chord.
     pub click_drift_px: f32,
     /// Drag-scroll tick rate (ms) at the pane edge. Decreased linearly
     /// by `autoscroll_step_ms` per cell past the edge, floored at
     /// `autoscroll_min_period_ms`.
     pub autoscroll_base_period_ms: u32,
-    /// Hard floor (ms) on the drag-scroll rate. Caps CPU during
-    /// sustained edge drag.
+    /// Hard floor (ms) on the drag-scroll rate.
     pub autoscroll_min_period_ms: u32,
     /// Linear decrement (ms per cell past the edge) applied to
     /// `autoscroll_base_period_ms`.
@@ -87,9 +66,8 @@ pub struct MouseConfig {
 }
 
 impl MouseConfig {
-    /// Clamps `axis_lock_ratio` to `0.0..=1.0` (NaN falls back to the default),
-    /// so an out-of-range or non-finite config value cannot silently disable
-    /// horizontal scrolling.
+    /// Clamps `axis_lock_ratio` to `0.0..=1.0`; a non-finite value falls back
+    /// to the default.
     pub(crate) fn normalize(&mut self) {
         let default = Self::default().axis_lock_ratio;
         self.axis_lock_ratio = if self.axis_lock_ratio.is_finite() {

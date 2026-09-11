@@ -1,13 +1,10 @@
-//! Inactive-pane treatment configuration: a per-pane background tint toward a
-//! configurable grey (`tint_color` at strength `tint`) plus an optional
-//! brightness `dim`, applied by the terminal renderer to every pane that is
-//! not its workspace's active pane.
+//! Inactive-pane treatment configuration: the `[inactive_pane]` section's
+//! background tint and brightness dim for every pane that is not its
+//! workspace's active pane.
 
 use serde::{Deserialize, Serialize};
 
-/// Fully-resolved `[inactive_pane]` config block. The terminal renderer blends
-/// each inactive pane's background toward `tint_color` by `tint`, and multiplies
-/// brightness by `dim`.
+/// Fully-resolved `[inactive_pane]` config block.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct InactivePaneConfig {
@@ -25,8 +22,7 @@ pub struct InactivePaneConfig {
     /// and overlays are untouched.
     pub tint: f32,
     /// Inactive-webview brightness multiplier in `0.0..=1.0` (lower = darker);
-    /// `1.0` leaves brightness untouched. Applied to webview overlays
-    /// only, so the background tint can stay background-only.
+    /// `1.0` leaves brightness untouched. It applies to webview overlays only.
     pub webview_dim: f32,
     /// Inactive-webview desaturation in `0.0..=1.0`: `0.0` keeps full color,
     /// `1.0` is fully grey. Applied to webview overlays alongside

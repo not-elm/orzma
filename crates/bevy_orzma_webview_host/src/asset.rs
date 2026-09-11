@@ -1,7 +1,6 @@
-//! Static-asset resolution for the in-process custom-scheme asset path
-//! (`orzma://`): percent-decode a webview-supplied request path, reject
-//! traversal, read the file under the registered asset root, and infer a bare
-//! MIME type. Pure (no `cef` dependency) so it is unit-testable on its own.
+//! Static-asset resolution for the `orzma://` custom scheme: percent-decode a
+//! webview-supplied request path, reject traversal, read the file under the
+//! registered asset root, and infer a bare MIME type.
 
 use std::path::Path;
 
@@ -26,11 +25,10 @@ pub enum AssetOutcome {
 /// Resolves `raw_path` (a percent-encoded, slash-separated relative URL path)
 /// under `root` and reads the file, returning a bare MIME type.
 ///
-/// `raw_path` is webview-controlled, so it is decoded exactly once and then
-/// rejected unless every component is a normal path segment — `..`, `.`, an
-/// absolute path, or a non-UTF-8 / malformed percent escape all yield
-/// [`AssetOutcome::Forbidden`]. This is the trust boundary that keeps a mounted
-/// page from reading files outside its webview directory.
+/// `raw_path` is decoded exactly once and then rejected unless every component
+/// is a normal path segment: `..`, `.`, an absolute path, or a non-UTF-8 or
+/// malformed percent escape all yield [`AssetOutcome::Forbidden`], so no
+/// request reads outside `root`.
 pub fn serve_static_asset(root: &Path, raw_path: &str) -> AssetOutcome {
     let Some(decoded) = percent_decode(raw_path) else {
         return AssetOutcome::Forbidden;
@@ -59,8 +57,7 @@ pub fn serve_static_asset(root: &Path, raw_path: &str) -> AssetOutcome {
     }
 }
 
-/// Upper bound on a single static asset (64 MiB): a larger file would buffer
-/// wholesale into the render process.
+/// Upper bound on a single static asset (64 MiB).
 const MAX_ASSET_LEN: u64 = 64 * 1024 * 1024;
 
 fn exceeds_limit(len: u64) -> bool {
@@ -68,8 +65,7 @@ fn exceeds_limit(len: u64) -> bool {
 }
 
 /// Decodes `%XX` escapes once. Returns `None` on a truncated/invalid escape or
-/// when the decoded bytes are not valid UTF-8. Does not treat `+` as space
-/// (that is a query-string rule, not a path rule).
+/// when the decoded bytes are not valid UTF-8. `+` is not treated as a space.
 fn percent_decode(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -100,8 +96,8 @@ pub fn is_safe_rel_path(p: &Path) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
-/// Maps a file extension to a bare MIME type for the asset set a Phase 1
-/// webview ships. Unknown extensions fall back to `application/octet-stream`.
+/// Maps a file extension to a bare MIME type. Unknown extensions fall back to
+/// `application/octet-stream`.
 fn mime_for_path(path: &Path) -> &'static str {
     let ext = path
         .extension()

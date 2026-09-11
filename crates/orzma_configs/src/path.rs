@@ -1,6 +1,5 @@
-//! Resolves which file `OrzmaConfigs::load` should read. Wraps env access
-//! behind a trait so tests can substitute a deterministic implementation
-//! without mutating process-wide environment variables.
+//! Config-path resolution: which file `OrzmaConfigs::load` should read, and
+//! `~` expansion for user-supplied paths.
 
 use crate::OrzmaConfigsError;
 use crate::OrzmaConfigsResult;
@@ -11,15 +10,10 @@ pub(crate) const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 const CONFIG_REL_PATH: &str = "orzma/config.toml";
 const HOME_CONFIG_DIR: &str = ".config";
 
-/// Abstraction over environment lookups used to resolve user-specified
-/// paths. Lets callers (notably `expand_user_path`) substitute the
-/// process environment in tests with deterministic fakes.
+/// Abstraction over the environment lookups used to resolve user-specified
+/// paths.
 ///
-/// External callers should construct or pass `SystemEnv` for production
-/// use; the trait's `var` / `home_dir` surface is intentionally narrow
-/// so test implementations stay simple. The crate-internal
-/// `resolve_config_path` is the other consumer but is `pub(crate)` and
-/// not part of the external API.
+/// Production callers pass [`SystemEnv`].
 pub trait Env {
     /// Returns the value of `key`, treating an empty string as unset.
     fn var(&self, key: &str) -> Option<String>;
@@ -27,7 +21,8 @@ pub trait Env {
     fn home_dir(&self) -> Option<PathBuf>;
 }
 
-/// Production `Env` implementation that delegates to `std::env` and `dirs`.
+/// [`Env`] implementation backed by the process environment and the user's
+/// real home directory.
 pub struct SystemEnv;
 
 impl Env for SystemEnv {

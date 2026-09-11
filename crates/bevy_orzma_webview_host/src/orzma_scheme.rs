@@ -1,7 +1,6 @@
 //! `orzma://<handle>/<path>` custom-scheme handler for Tier 1 dynamic
-//! webviews. Resolves `<handle>` to a registered asset (`Dir` root or inline
-//! HTML bytes) via a shared `WebviewAssetRegistry` and serves files through
-//! `serve_static_asset` or directly from memory. Behind the `cef` feature.
+//! webviews: `<handle>` resolves through a shared `WebviewAssetRegistry` to a
+//! directory root or to inline HTML bytes. Behind the `cef` feature.
 
 #[cfg(feature = "cef")]
 use crate::asset::{AssetOutcome, serve_static_asset};
@@ -24,8 +23,7 @@ pub enum WebviewAsset {
 }
 
 /// A shared, interior-mutable map of dynamic `handle → WebviewAsset` for
-/// Tier 1 dynamic webview registrations. The CEF scheme handler is constructed
-/// at `CefPlugin::build()` and reads handles registered after its construction.
+/// Tier 1 dynamic webview registrations. Every clone sees the same handles.
 #[derive(Clone, Default)]
 pub struct WebviewAssetRegistry(Arc<RwLock<HashMap<String, WebviewAsset>>>);
 
@@ -106,12 +104,8 @@ fn resolve_request<'a>(
 }
 
 /// Returns the bare media type (drops any `;`-delimited parameters) for CEF's
-/// `mime_type` field, flooring an empty/blank input to `application/octet-stream`.
-/// CEF expects a bare type (e.g. `text/html`); a full `Content-Type` value with
-/// parameters (`text/html; charset=utf-8`) is not recognized, so Chromium fails
-/// to classify the document and renders blank. An empty `mime_type` triggers the
-/// same blank render, so it is floored to `application/octet-stream` (matching
-/// the SDK file handler's default) rather than passed through empty.
+/// `mime_type` field, flooring an empty or blank input to
+/// `application/octet-stream`.
 #[cfg(feature = "cef")]
 fn bare_mime(content_type: &str) -> String {
     let bare = content_type.split(';').next().unwrap_or("").trim();
@@ -122,8 +116,7 @@ fn bare_mime(content_type: &str) -> String {
     }
 }
 
-/// A minimal text `CefSchemeResponse` for error statuses (bevy_cef provides only
-/// `not_found()` / `bytes()`).
+/// A minimal text `CefSchemeResponse` for error statuses.
 #[cfg(feature = "cef")]
 fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
     CefSchemeResponse {
