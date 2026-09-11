@@ -668,6 +668,13 @@ impl Executor<'_> {
                 1004 => self.device.modes_mut().focus_in_out = enabled,
                 // Alternate scroll
                 1007 => self.device.modes_mut().alternate_scroll = enabled,
+                // Interpret "meta" key
+                // NOTE: The eighth-bit meta encoding is ignored rather than
+                // honored. Alt always prefixes ESC, which is xterm's
+                // metaSendsEscape, and xterm gives that precedence over this
+                // mode; honoring it would let the `smm` readline sends at
+                // startup switch every Alt key away from the ESC prefix.
+                1034 => {}
                 // Alternate screen, erased on exit
                 1047 => self.set_alternate_screen_erased_on_exit(enabled),
                 // DECSC / DECRC

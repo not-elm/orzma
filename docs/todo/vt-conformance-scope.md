@@ -62,7 +62,7 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 | `CSI ! p` | DECSTR ソフトリセット | `is2`, `rs2` | `INTER∅` | **terminfo 経由の初期化列の先頭**。毎回無視されモードが残留する。`CharacterSetMapping::reset()` は DECSTR 待ちで `#[expect(dead_code)]` のまま（`character_sets.rs:220`）。**DECTCEM 実装後、優先度が上がった**: vt510 p.277 Table 5-9 は DECSTR 後の DECTCEM を "Cursor enabled." と定めており、`is2`/`rs2` の先頭が `\E[!p` なので **`tput init` が隠れたカーソルを回復できない**。RIS (`\Ec`) は `VtModes::default()` で回復するが、DECSTR は名指しした一部だけを戻すので `text_cursor_enable = Shown` を明示的に含める必要がある。**DECAWM も同じ Table 5-9 に載っている**（"Autowrap / DECAWM / No autowrap."、IRM の "Replace mode." も同様）。IRM は `InsertReplaceMode::default()` が既に `Replace` なので一致するが、`AutoWrap::default()` は `Enabled` なので **DECAWM だけ default が表の値と逆**であり、値そのものが要判断（`am` を広告する端末で本当に off に落とすか）。含める場合は `modes_mut` への直書きではなく `DeviceState::set_auto_wrap` を通すこと — reset 方向は両画面の LCF 解除を伴う（§4 の LCF 一覧を参照） |
 | `CSI ?12 h/l` | カーソル点滅 | `cnorm`, `cvvis` | `MODE∅`。`blinking: false` 固定 | 点滅指定が効かない |
 | `CSI ?3 l` | DECCOLM リセット | `is2`, `rs2` の一部 | `MODE∅` | 初期化列に含まれる |
-| `CSI ?1034 h/l` | 8bit Meta | `smm`/`rmm`, `km` | `MODE∅` | Meta キーのバイト表現が食い違う |
+| ~~`CSI ?1034 h/l`~~ | ~~8bit Meta~~ | `smm`/`rmm`, `km` | **✅ 意図的に無視と明示（2026-09-11）**。`set_private_modes` に `1034 => {}`。Alt は常に ESC 前置（xterm の metaSendsEscape 相当）で、xterm と foot は 1036 を 1034 より優先するので、この設定では 8 ビット符号化に到達しない。bash / readline が起動時に送る `smm` は変更前から無視されており、挙動は変わらない。テストは `interpreter/tests/meta_key.rs` | ~~Meta キーのバイト表現が食い違う~~ |
 | `CSI ?5 h/l` | DECSCNM 反転 | `flash` | `MODE∅` | ビジュアルベルが無反応 |
 | `CSI 5 m` | SGR blink | `blink`, `sgr` | **意図的に no-op**（`sgr.rs:112` の `5 \| 6 \| 25 \| ... => {}`） | 点滅が普通の文字になる。`Style` へのビット追加＋レンダラ対応が要る |
 | `OSC 4;n;rgb:…` | インデックス色変更 | `initc`, `ccc` | `OSC∅` | パレット変更が効かない |
