@@ -21,9 +21,9 @@ use crate::screen::margins::OriginMode;
 use crate::screen::tabs::CharacterTabEdit;
 use crate::screen::{EraseLineMode, EraseScreenMode};
 use crate::{
-    InterpretOutput, VtSignal,
     device::DeviceState,
-    frame::{FrameTracker, damage::DamageSpan},
+    frame::{damage::DamageSpan, FrameTracker},
+    InterpretOutput, VtSignal,
 };
 use vtparse::{CsiParam, VTActor, VTParser};
 
@@ -260,10 +260,6 @@ impl VTActor for Executor<'_> {
                 .active_screen_mut()
                 .set_scroll_region(params.value(0), params.value(1)),
             // SCOSC
-            // NOTE: Only the parameterless spelling saves, as in xterm. A
-            // parameterized `CSI s` is DECSLRM on a terminal with DECLRMM,
-            // and saving on it would overwrite the slot `ESC 7` shares
-            // with `?1048`.
             (None, b's') if params.values().count() == 0 => {
                 self.device.active_screen_mut().save_checkpoint()
             }
@@ -413,9 +409,6 @@ impl VTActor for Executor<'_> {
                 self.stage(damage);
             }
             // SD (xterm's alternate spelling)
-            // NOTE: ECMA-48 assigns this final byte to SIMD, not SD. It is
-            // read as SD here because xterm reads it that way, so an
-            // implementation of SIMD must not take this arm over.
             (None, b'^') => {
                 let damage = self
                     .device
