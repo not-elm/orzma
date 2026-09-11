@@ -204,3 +204,26 @@ fn erasing_characters_runs_under_pending_wrap_while_autowrap_is_reset() {
         Some(DamageSpan::rows(ViewportLine(0), ViewportLine(0)))
     );
 }
+
+/// Asserts that erasing characters runs once a tabulation has carried
+/// the cursor off the last column, even though the deferred wrap is
+/// still armed.
+///
+/// Case: the same program clears the character under the cursor with
+/// `ECH` after stepping back a tab stop, instead of clearing to the end
+/// of the line.
+#[test]
+fn erasing_characters_runs_once_a_backward_tab_leaves_the_last_column() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c', 'd'] {
+        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+    }
+    screen.move_backward_tabs(1);
+    assert!(screen.state.pending_wrap);
+    let damage = screen.erase_chars(1, AutoWrap::Enabled);
+    assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec![' ', 'b', 'c', 'd']);
+    assert_eq!(
+        damage,
+        Some(DamageSpan::rows(ViewportLine(0), ViewportLine(0)))
+    );
+}

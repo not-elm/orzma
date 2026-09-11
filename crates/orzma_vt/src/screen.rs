@@ -724,12 +724,9 @@ impl Screen {
 /// Erasure.
 impl Screen {
     /// Erases part of the cursor row with the pen background (BCE);
-    /// [`EraseLineMode::ToEnd`] is a no-op while the deferred wrap is
-    /// armed and autowrap is set.
-    ///
-    /// The autowrap test is what confines the no-op to the state it was
-    /// decided for: with the mode reset the cursor sits at the last
-    /// column rather than past it, so there is a cell to erase.
+    /// [`EraseLineMode::ToEnd`] is a no-op while the cursor logically
+    /// sits past the row, as [`Self::cursor_parked_past_the_row`]
+    /// decides.
     ///
     /// # Control Functions
     ///
@@ -739,7 +736,7 @@ impl Screen {
         mode: EraseLineMode,
         auto_wrap: AutoWrap,
     ) -> Option<DamageSpan> {
-        if matches!(mode, EraseLineMode::ToEnd) && self.state.pending_wrap && auto_wrap.wraps() {
+        if matches!(mode, EraseLineMode::ToEnd) && self.cursor_parked_past_the_row(auto_wrap) {
             return None;
         }
         let cols = self.grid.size().cols;
@@ -753,14 +750,14 @@ impl Screen {
 
     /// Erases `count` characters from the cursor rightward with the
     /// pen background (BCE), leaving the cursor where it is; a no-op
-    /// while the deferred wrap is armed and autowrap is set, as
+    /// while the cursor logically sits past the row, as
     /// [`Self::erase_in_line`]'s [`EraseLineMode::ToEnd`] is.
     ///
     /// # Control Functions
     ///
     /// - `ECH` (`CSI Pn X`)
     pub fn erase_chars(&mut self, count: u16, auto_wrap: AutoWrap) -> Option<DamageSpan> {
-        if self.state.pending_wrap && auto_wrap.wraps() {
+        if self.cursor_parked_past_the_row(auto_wrap) {
             return None;
         }
         let cols = self.grid.size().cols;
@@ -817,6 +814,26 @@ impl Screen {
         self.grid
             .fill_visible_row_range(self.state.line, columns, self.state.pen.erase_cell());
         self.damage_span(self.state.line, self.state.line)
+    }
+
+    /// Whether the cursor logically sits past the row's last cell, which
+    /// is what makes an erase from the cursor rightward find nothing to
+    /// erase.
+    ///
+    /// All three tests are the agreed policy's own premise. The deferred
+    /// wrap must be armed and `DECAWM` set, so the next character really
+    /// will move to the next row; and the cursor must be on the last
+    /// column, because tmux, kitty and iTerm2 — the implementations the
+    /// no-op follows — park the cursor past the last column instead of
+    /// latching a flag, so their no-op is a range computation that can
+    /// never reach a mid-row cursor. The column test gives orzma's latch
+    /// the same reach: [`Self::tab_to`] carries an armed flag off the
+    /// right border, and without it a `CBT` out of a full row would
+    /// leave `EL 0` and `ECH` declining in the middle of the row.
+    fn cursor_parked_past_the_row(&self, auto_wrap: AutoWrap) -> bool {
+        self.state.pending_wrap
+            && auto_wrap.wraps()
+            && self.state.column.0 + 1 >= self.grid.size().cols
     }
 }
 

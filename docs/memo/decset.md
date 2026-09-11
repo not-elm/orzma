@@ -32,7 +32,6 @@ DECRPMの`Pm`は 0=未認識 / 1=設定 / 2=解除 / 3=恒久設定 / 4=恒久�
 | - | - | - |
 | 1 | DECCKM — 矢印キーがCSIでなくSS3を送る | `app_cursor` |
 | 6 | DECOM — 原点モード（**実装済み**） | — |
-| 7 | DECAWM — 自動折り返し（**実装済み**） | `auto_wrap` |
 | 66 | DECNKM — 数値キーパッド（**実装済み**） | `keypad_mode` |
 | 1000 | ボタン押下/解放を報告 | `mouse_tracking = Clicks` |
 | 1002 | クリック＋ドラッグ移動 | `mouse_tracking = Drag` |
@@ -47,6 +46,7 @@ DECRPMの`Pm`は 0=未認識 / 1=設定 / 2=解除 / 3=恒久設定 / 4=恒久�
 
 | Ps | Description | 現状 |
 | - | - | - |
+| 7 | DECAWM — 自動折り返し（**実装済み**） | `VtModes::auto_wrap`。**代入だけでは足りない**。`DeviceState::set_auto_wrap`を通すこと（reset側で両画面のLCFを解除する必要がある。下の節を参照） |
 | 25 | DECTCEM — カーソル表示 | `Screen::cursor`にDECSCUSRと合わせて実装するTODOがある |
 
 代替画面（**実装済み**）。単なるフラグではなく合成的な意味を持つ。

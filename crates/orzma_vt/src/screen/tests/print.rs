@@ -305,8 +305,8 @@ fn prints_past_the_right_border_without_autowrap_replace_the_last_column() {
 }
 
 /// Asserts that a deferred wrap armed while autowrap was set does not
-/// fire once autowrap is reset, pinning the consume-side guard as
-/// defence in depth behind the device-level disarm.
+/// fire once autowrap is reset, so the character replaces the last
+/// column rather than reaching the next row.
 ///
 /// Case: an application fills a row and then turns autowrap off before
 /// the next character arrives.
@@ -344,10 +344,11 @@ fn the_first_print_after_autowrap_returns_replaces_and_then_arms() {
 }
 
 /// Asserts that a print away from the last column disarms a deferred
-/// wrap that arrived from a restored checkpoint.
+/// wrap the cursor carried in from the right border.
 ///
-/// Case: `DECRC` puts back a cursor that was parked at the right border
-/// while autowrap is reset, and the application then prints mid-row.
+/// Case: a backward tabulation moves the cursor off the right border of
+/// a filled row without disarming the flag, and the application then
+/// prints mid-row while autowrap is reset.
 #[test]
 fn a_print_away_from_the_last_column_disarms_a_leftover_wrap() {
     let mut screen = screen();

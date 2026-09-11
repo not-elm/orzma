@@ -100,3 +100,25 @@ fn erase_to_end_runs_under_pending_wrap_while_autowrap_is_reset() {
         Some(DamageSpan::rows(ViewportLine(0), ViewportLine(0)))
     );
 }
+
+/// Asserts that an erase to the end of the line runs once a tabulation
+/// has carried the cursor off the last column, even though the deferred
+/// wrap is still armed.
+///
+/// Case: a program fills a row, steps back to the previous tab stop
+/// with `CBT`, and clears from there to the end of the line.
+#[test]
+fn erase_to_end_runs_once_a_backward_tab_leaves_the_last_column() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c', 'd'] {
+        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+    }
+    screen.move_backward_tabs(1);
+    assert!(screen.state.pending_wrap);
+    let damage = screen.erase_in_line(EraseLineMode::ToEnd, AutoWrap::Enabled);
+    assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec![' ', ' ', ' ', ' ']);
+    assert_eq!(
+        damage,
+        Some(DamageSpan::rows(ViewportLine(0), ViewportLine(0)))
+    );
+}
