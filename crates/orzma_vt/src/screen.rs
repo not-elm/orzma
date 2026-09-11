@@ -287,6 +287,7 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `CUF` (`CSI Pn C`)
+    /// - `HPR` (`CSI Pn a`)
     pub fn move_cursor_right(&mut self, count: u16) {
         self.seat_column(GridColumn(self.state.column.0.saturating_add(count)));
     }
@@ -587,6 +588,7 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `SD` (`CSI Pn T`)
+    /// - `SD` (`CSI Pn ^`), xterm's alternate spelling
     pub fn scroll_region_down(&mut self, count: u16) -> Option<DamageSpan> {
         self.shift_rows_down(self.scroll_region.top_margin(), count)
     }
@@ -1157,7 +1159,8 @@ impl Screen {
     ///
     /// # Control Functions
     ///
-    /// - DECSC(Save Cursor)
+    /// - `DECSC` (`ESC 7`)
+    /// - `SCOSC` (`CSI s`)
     pub fn save_checkpoint(&mut self) {
         self.checkpoint = self.capture_checkpoint();
     }
@@ -1172,7 +1175,8 @@ impl Screen {
     ///
     /// # Control Functions
     ///
-    /// - DECRC(Restore Cursor)
+    /// - `DECRC` (`ESC 8`)
+    /// - `SCORC` (`CSI u`)
     pub fn restore_checkpoint(&mut self) {
         let saved = self.checkpoint;
         self.state.line = saved.line;

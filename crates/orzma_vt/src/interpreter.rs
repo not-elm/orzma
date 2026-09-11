@@ -259,6 +259,14 @@ impl VTActor for Executor<'_> {
                 .device
                 .active_screen_mut()
                 .set_scroll_region(params.value(0), params.value(1)),
+            // SCOSC
+            (None, b's') if params.values().count() == 0 => {
+                self.device.active_screen_mut().save_checkpoint()
+            }
+            // SCORC
+            (None, b'u') if params.values().count() == 0 => {
+                self.device.active_screen_mut().restore_checkpoint()
+            }
             // DA1
             (None, b'c') if params.value(0).unwrap_or(0) == 0 => self.reply(PRIMARY_ATTRIBUTES),
             // DSR
@@ -300,8 +308,8 @@ impl VTActor for Executor<'_> {
                 .device
                 .active_screen_mut()
                 .move_cursor_down(repeat_count(params.value(0))),
-            // CUF
-            (None, b'C') => self
+            // CUF, HPR
+            (None, b'C' | b'a') => self
                 .device
                 .active_screen_mut()
                 .move_cursor_right(repeat_count(params.value(0))),
@@ -394,6 +402,14 @@ impl VTActor for Executor<'_> {
             // only the one-parameter spelling is a scroll down; without the
             // guard a mouse-tracking request would scroll the screen.
             (None, b'T') if params.values().count() <= 1 => {
+                let damage = self
+                    .device
+                    .active_screen_mut()
+                    .scroll_region_down(repeat_count(params.value(0)));
+                self.stage(damage);
+            }
+            // SD (xterm's alternate spelling)
+            (None, b'^') => {
                 let damage = self
                     .device
                     .active_screen_mut()

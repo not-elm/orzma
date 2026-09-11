@@ -163,6 +163,34 @@ fn the_character_position_absolute_sequence_addresses_a_column() {
     );
 }
 
+/// Asserts that `CSI Pn a` reaches the column-relative motion CUF uses,
+/// moving the cursor right by the parameter.
+///
+/// Case: an application steps two columns right with the
+/// character-position-relative spelling and prints there.
+#[test]
+fn the_character_position_relative_sequence_moves_by_columns() {
+    let device = interpret_wide(b"\x1b[2ax");
+    assert_eq!(
+        device.active_screen().viewport_row(ViewportLine(0))[2].c,
+        'x'
+    );
+}
+
+/// Asserts that `CSI Pn a` stops at the last column rather than
+/// wrapping onto the next row.
+///
+/// Case: an application asks for a relative move longer than the row
+/// and prints where the cursor stopped.
+#[test]
+fn the_character_position_relative_sequence_stops_at_the_last_column() {
+    let device = interpret(b"\x1b[9ax");
+    assert_eq!(
+        device.active_screen().viewport_row(ViewportLine(0))[3].c,
+        'x'
+    );
+}
+
 /// Asserts that `CSI Pn d` reaches the line-addressing method rather
 /// than moving the cursor down by the parameter.
 ///
