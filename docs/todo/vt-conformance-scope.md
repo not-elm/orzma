@@ -74,8 +74,11 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 
 | シーケンス | 機能 | terminfo | 判断 |
 |---|---|---|---|
-| `CSI 0i` / `CSI 4i` / `CSI 5i` | MC プリンタ制御 | `mc0`/`mc4`/`mc5`/`mc5i` | **無視で可**。ただし「意図的に無視」とコメントを残す |
-| `ESC l` / `ESC m` | HP メモリロック | `meml`/`memu` | **無視で可**。同上 |
+| ~~`CSI 0i` / `CSI 4i` / `CSI 5i`~~ | ~~MC プリンタ制御~~ | `mc0`/`mc4`/`mc5`/`mc5i` | **✅ 意図的に無視と明示（2026-09-11）**。`csi_dispatch` に `(None \| Some(b'?'), b'i') => {}` を置き、xterm の 10/11（HTML/SVG ダンプ）と DEC private の `CSI ? Ps i`（autoprint 等）も同じ腕で塞いだ。理由は `// NOTE:` に記録: vt510 p.323 はプリンタコントローラモードを「画面に表示せずプリンタへ送る」と定めるので、忠実に実装するとプリンタ無しでは迷い込んだ `CSI 5 i` 1 つで `CSI 4 i` まで全出力が消える。**代償として `mc5i`（"printer won't echo on screen"）の広告とは食い違う**（`CSI 5 i` 以降も表示される）。alacritty も `CSI i` を持たず同じ挙動。テストは `interpreter/tests/media_copy.rs` |
+| ~~`ESC l` / `ESC m`~~ | ~~HP メモリロック~~ | `meml`/`memu` | **✅ 意図的に無視と明示（2026-09-11）**。`esc_dispatch` に `(b'l' \| b'm', []) => {}`。xterm-ctlseqs p.9 は "Locks memory above the cursor" と定めるので、実装すると迷い込んだ `ESC l` でカーソルより上の行がスクロールしなくなる。テストは `interpreter/tests/memory_lock.rs`（ロックを模した変異を入れると落ちることを確認済み） |
+
+> 1-C の 2 件はいずれも実装前から `_ => {}` に落ちて無視されていたので、**挙動は変わらない**。
+> 追加したテストは変更前から通る characterization テストで、将来仕様どおりに実装した変更を検出するためのもの。
 
 ## 2. Tier 2 — 推奨
 
@@ -168,7 +171,8 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 6. **OSC 4/10/11/12** とその問い合わせ・リセット。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
 8. **OSC 8 / OSC 52**、**DECLRMM/DECSLRM**、**1015**。
-9. **残りの厳密準拠**: SGR blink、DECSCNM、メモリロック、プリンタ制御。
+9. **残りの厳密準拠**: SGR blink、DECSCNM。~~メモリロック、プリンタ制御~~ は
+   **意図的に無視と明示して完了（2026-09-11、§1-C）**。
 
 ## 6. 検証方法
 
