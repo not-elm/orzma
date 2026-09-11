@@ -1,6 +1,7 @@
 //! `RequestTtyCopySelection`: asks the backend for a pane's selected
 //! text; the answer arrives as `TtySelectionTextSignal`.
 
+use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzmux::prelude::{OrzmuxCommand, PaneTarget};
@@ -16,7 +17,7 @@ pub(super) struct CopyPlugin;
 
 impl Plugin for CopyPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_copy_selection);
+        app.add_observer(apply_copy_selection.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

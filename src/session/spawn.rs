@@ -20,7 +20,7 @@ pub(super) struct SpawnPlugin;
 
 impl Plugin for SpawnPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_pane_spawn_request);
+        app.add_observer(on_pane_spawn_request.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 
@@ -121,5 +121,34 @@ mod tests {
         };
         assert_eq!(*sent_request, request);
         assert!(env.contains(&("ORZMA_TOKEN".to_string(), token)));
+    }
+
+    /// Asserts that a spawn request without a connection spawns no
+    /// entity and records no pending spawn, rather than panicking.
+    ///
+    /// Case: the backend thread has died, and a split shortcut fires
+    /// before `AppExit` takes effect.
+    #[test]
+    fn a_spawn_request_without_a_connection_does_nothing() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(SpawnPlugin)
+            .init_resource::<PaneRegistry>();
+        app.world_mut().spawn((Node::default(), ShellSurfaceUi));
+        app.world_mut().trigger(PaneSpawnRequest {
+            at: NewPaneAt::Root,
+        });
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<PaneRegistry>()
+                .pending_spawns
+                .is_empty()
+        );
+        let mut terminals = app
+            .world_mut()
+            .query_filtered::<Entity, With<OrzmaTerminal>>();
+        assert_eq!(terminals.iter(app.world()).count(), 0);
     }
 }
