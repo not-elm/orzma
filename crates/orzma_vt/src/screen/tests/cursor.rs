@@ -15,8 +15,8 @@ use super::*;
 #[test]
 fn the_cursor_reports_the_write_position_and_is_visible() {
     let mut screen = screen();
-    screen.print('a');
-    screen.print('b');
+    screen.print('a', InsertReplaceMode::Replace);
+    screen.print('b', InsertReplaceMode::Replace);
     let cursor = screen.cursor();
     assert_eq!(cursor.point.line, GridLine(0));
     assert_eq!(cursor.point.column, GridColumn(2));

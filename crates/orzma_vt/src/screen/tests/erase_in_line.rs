@@ -11,7 +11,7 @@ use super::*;
 fn erase_to_end_clears_from_the_cursor_with_the_pen_background() {
     let mut screen = screen();
     for c in ['a', 'b', 'c'] {
-        screen.print(c);
+        screen.print(c, InsertReplaceMode::Replace);
     }
     screen.state.column = GridColumn(1);
     screen.pen_mut().bg = Color::Indexed(2);
@@ -38,7 +38,7 @@ fn erase_to_end_clears_from_the_cursor_with_the_pen_background() {
 fn erase_to_start_includes_the_cursor_column() {
     let mut screen = screen();
     for c in ['a', 'b', 'c'] {
-        screen.print(c);
+        screen.print(c, InsertReplaceMode::Replace);
     }
     screen.state.column = GridColumn(1);
     screen.erase_in_line(EraseLineMode::ToStart);
@@ -60,7 +60,7 @@ fn erase_to_start_includes_the_cursor_column() {
 fn erase_to_end_is_a_no_op_under_pending_wrap() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c);
+        screen.print(c, InsertReplaceMode::Replace);
     }
     let damage = screen.erase_in_line(EraseLineMode::ToEnd);
     assert_eq!(screen.grid[ScreenLine(0)][3].c, 'd');
@@ -76,7 +76,7 @@ fn erase_to_end_is_a_no_op_under_pending_wrap() {
 fn erase_all_clears_the_whole_row() {
     let mut screen = screen();
     for c in ['a', 'b', 'c'] {
-        screen.print(c);
+        screen.print(c, InsertReplaceMode::Replace);
     }
     screen.state.column = GridColumn(1);
     screen.erase_in_line(EraseLineMode::All);

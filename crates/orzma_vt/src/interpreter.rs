@@ -12,7 +12,7 @@ mod csi;
 mod osc;
 mod sgr;
 
-use crate::device::modes::{KeypadMode, ScreenKind};
+use crate::device::modes::{InsertReplaceMode, KeypadMode, ScreenKind};
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
 use crate::interpreter::osc::{current_dir, window_title};
@@ -109,7 +109,8 @@ impl VTActor for Executor<'_> {
         if b == '\u{7f}' {
             return;
         }
-        let damage = self.device.active_screen_mut().print(b);
+        let mode = self.device.modes().insert_replace;
+        let damage = self.device.active_screen_mut().print(b, mode);
         self.stage(damage);
     }
 
@@ -408,6 +409,10 @@ impl VTActor for Executor<'_> {
                 let pen = self.device.active_screen_mut().pen_mut();
                 *pen = pen.applied(&params);
             }
+            // SM
+            (None, b'h') => self.set_modes(&params, true),
+            // RM
+            (None, b'l') => self.set_modes(&params, false),
             // DECSET
             (Some(b'?'), b'h') => self.set_private_modes(&params, true),
             // DECRST
@@ -579,6 +584,22 @@ impl Executor<'_> {
 /// The control functions a CSI sequence requests, where one final byte
 /// stands for a list of independent settings.
 impl Executor<'_> {
+    /// Applies every ANSI mode this terminal implements out of one `SM`
+    /// or `RM` sequence, ignoring the numbers it does not.
+    ///
+    /// The private-marker form is a different number space, so `CSI 4 h`
+    /// (IRM) and `CSI ? 4 h` (DECSCLM) never reach the same arm.
+    /// [`Self::set_private_modes`] records why an unimplemented number
+    /// must not hide an implemented one later in the list.
+    fn set_modes(&mut self, params: &CsiParams<'_>, enabled: bool) {
+        for mode in params.values().flatten() {
+            // IRM
+            if mode == 4 {
+                self.device.modes_mut().insert_replace = InsertReplaceMode::from_sm(enabled);
+            }
+        }
+    }
+
     /// Applies every private mode this terminal implements out of one
     /// `DECSET` or `DECRST` sequence, ignoring the numbers it does not.
     ///

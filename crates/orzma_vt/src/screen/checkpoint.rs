@@ -21,6 +21,11 @@ use crate::screen::state::ScreenState;
 /// never-saved position may sit below home; [`super::Screen::resize`]
 /// records why.
 ///
+/// `IRM` is deliberately absent: it is not among the items `DECSC`
+/// saves, and xterm masks the insert flag out of what `DECRC` restores,
+/// so a later mutation that adds it here would make an alternate-screen
+/// flip carry a mode no reference terminal carries.
+///
 /// `DECSTR` and `RIS` reset the saved state as well, and put back this
 /// same default rather than leaving the last `DECSC` reachable.
 ///
