@@ -101,6 +101,32 @@ pub struct Rgb {
     pub b: u8,
 }
 
+impl Rgb {
+    /// The colour an Xlib color string names in one of its two RGB
+    /// Device forms, `rgb:<red>/<green>/<blue>` and `#RGB`; `None` for
+    /// every other form and for a malformed one.
+    ///
+    /// Both forms are read as Xlib reads them (xlib.pdf p.89-90): an
+    /// `rgb:` component of one to four hex digits is scaled to 16 bits,
+    /// while a `#` component is placed in the most significant bits, so
+    /// `rgb:f` is full intensity and the red of `#f00` is not. The
+    /// 16-bit value is then narrowed to its high byte, the channel width
+    /// this palette keeps.
+    ///
+    /// # Invariants
+    ///
+    /// The grammar is enforced exactly, one step stricter than libX11:
+    /// an `rgb:` string with anything after its third component is
+    /// refused, where libX11 ignores the tail. Surrounding whitespace is
+    /// not trimmed. Color names and the device-independent color spaces
+    /// (`rgbi:`, `CIEXYZ:`, and the rest) are refused, because this
+    /// terminal ships no color name database.
+    pub(crate) fn from_color_spec(spec: &[u8]) -> Option<Self> {
+        let [r, g, b] = rgb_device_components(spec)?.map(|component| component.to_be_bytes()[0]);
+        Some(Self { r, g, b })
+    }
+}
+
 /// The live color table symbolic [`Color`]s resolve against.
 ///
 /// Each slot is pre-resolved: the backend folds OSC 4 / OSC 104
@@ -254,6 +280,67 @@ const fn build_xterm_indexed() -> [Rgb; 256] {
         i += 1;
     }
     table
+}
+
+/// The 16-bit components an Xlib RGB Device string names, before they
+/// are narrowed to a byte; `None` for any other string.
+fn rgb_device_components(spec: &[u8]) -> Option<[u16; 3]> {
+    if let Some(body) = strip_prefix_ignoring_case(spec, b"rgb:") {
+        let mut parts = body.split(|byte| *byte == b'/');
+        let components = [
+            scaled_component(parts.next()?)?,
+            scaled_component(parts.next()?)?,
+            scaled_component(parts.next()?)?,
+        ];
+        return parts.next().is_none().then_some(components);
+    }
+    let digits = spec.strip_prefix(b"#")?;
+    if digits.is_empty() || digits.len() % 3 != 0 {
+        return None;
+    }
+    let mut parts = digits.chunks_exact(digits.len() / 3);
+    Some([
+        shifted_component(parts.next()?)?,
+        shifted_component(parts.next()?)?,
+        shifted_component(parts.next()?)?,
+    ])
+}
+
+/// An `rgb:` component, whose one to four hex digits are scaled to the
+/// full 16-bit range.
+fn scaled_component(digits: &[u8]) -> Option<u16> {
+    let value = u32::from(hex_value(digits)?);
+    let max = (1u32 << (4 * digits.len())) - 1;
+    u16::try_from(value * 0xffff / max).ok()
+}
+
+/// A `#` component, whose one to four hex digits are placed in the most
+/// significant bits of 16.
+fn shifted_component(digits: &[u8]) -> Option<u16> {
+    Some(hex_value(digits)? << (16 - 4 * digits.len()))
+}
+
+/// The value of one to four hex digits; `None` for an empty run, a
+/// longer one, or a byte that is not a hex digit.
+///
+/// The digits are folded by hand rather than handed to
+/// `u16::from_str_radix`, which accepts a leading `+` or `-` and would
+/// read `rgb:+f/0/0` as a colour.
+fn hex_value(digits: &[u8]) -> Option<u16> {
+    if !(1..=4).contains(&digits.len()) {
+        return None;
+    }
+    digits.iter().try_fold(0u16, |value, byte| {
+        let digit = u16::try_from(char::from(*byte).to_digit(16)?).ok()?;
+        Some((value << 4) | digit)
+    })
+}
+
+/// `bytes` without `prefix`, compared without regard to ASCII case;
+/// `None` when `bytes` does not start with it.
+fn strip_prefix_ignoring_case<'a>(bytes: &'a [u8], prefix: &[u8]) -> Option<&'a [u8]> {
+    let (head, rest) = bytes.split_at_checked(prefix.len())?;
+    head.eq_ignore_ascii_case(prefix).then_some(rest)
 }
 
 #[cfg(test)]
@@ -410,5 +497,209 @@ mod tests {
                 b: 12
             }
         );
+    }
+
+    fn rgb(r: u8, g: u8, b: u8) -> Rgb {
+        Rgb { r, g, b }
+    }
+
+    /// Asserts that the two RGB Device forms reach the 16-bit values
+    /// Xlib gives them before narrowing: `rgb:` scales a short
+    /// component, and `#` places it in the high bits.
+    ///
+    /// Case: one theme writes its red as `rgb:3/a/7` and another as the
+    /// older `#3a7`, and the two must not be read as the same colour.
+    #[test]
+    fn the_two_forms_reach_the_16_bit_values_xlib_gives_them() {
+        assert_eq!(
+            rgb_device_components(b"rgb:3/a/7"),
+            Some([0x3333, 0xaaaa, 0x7777])
+        );
+        assert_eq!(
+            rgb_device_components(b"#3a7"),
+            Some([0x3000, 0xa000, 0x7000])
+        );
+    }
+
+    /// Asserts that an `rgb:` string with two-digit components narrows
+    /// to exactly those bytes.
+    ///
+    /// Case: terminfo's `initc` recolors a slot with `rgb:ff/80/0a`.
+    #[test]
+    fn a_two_digit_rgb_string_reads_its_components_directly() {
+        assert_eq!(
+            Rgb::from_color_spec(b"rgb:ff/80/0a"),
+            Some(rgb(0xff, 0x80, 0x0a))
+        );
+    }
+
+    /// Asserts that a one-digit `rgb:` component is scaled across the
+    /// channel rather than placed in its high bits.
+    ///
+    /// Case: a theme writes its colours in the shorthand `rgb:f/8/0`.
+    #[test]
+    fn a_one_digit_rgb_component_is_scaled_across_the_channel() {
+        assert_eq!(
+            Rgb::from_color_spec(b"rgb:f/8/0"),
+            Some(rgb(0xff, 0x88, 0x00))
+        );
+    }
+
+    /// Asserts that three- and four-digit `rgb:` components narrow to
+    /// the high byte of their 16-bit value.
+    ///
+    /// Case: a colour picker exports its colours at twelve and sixteen
+    /// bits per channel.
+    #[test]
+    fn wide_rgb_components_narrow_to_their_high_byte() {
+        assert_eq!(
+            Rgb::from_color_spec(b"rgb:fff/800/000"),
+            Some(rgb(0xff, 0x80, 0x00))
+        );
+        assert_eq!(
+            Rgb::from_color_spec(b"rgb:ffff/8080/0000"),
+            Some(rgb(0xff, 0x80, 0x00))
+        );
+    }
+
+    /// Asserts that components of different widths mix in one `rgb:`
+    /// string, each scaled by its own width.
+    ///
+    /// Case: a hand-written theme spells its colours as `rgb:ff/a5/0`
+    /// and `rgb:ccc/32/0`.
+    #[test]
+    fn components_of_different_widths_mix_in_one_string() {
+        assert_eq!(
+            Rgb::from_color_spec(b"rgb:ff/a5/0"),
+            Some(rgb(0xff, 0xa5, 0x00))
+        );
+        assert_eq!(
+            Rgb::from_color_spec(b"rgb:ccc/32/0"),
+            Some(rgb(0xcc, 0x32, 0x00))
+        );
+    }
+
+    /// Asserts that a `#` string places each component in the high
+    /// bits, at every width the grammar allows.
+    ///
+    /// Case: an older theme writes its orange at each width the `#` form
+    /// allows.
+    #[test]
+    fn a_sharp_string_places_each_component_in_the_high_bits() {
+        assert_eq!(Rgb::from_color_spec(b"#f80"), Some(rgb(0xf0, 0x80, 0x00)));
+        assert_eq!(
+            Rgb::from_color_spec(b"#ff8000"),
+            Some(rgb(0xff, 0x80, 0x00))
+        );
+        assert_eq!(
+            Rgb::from_color_spec(b"#fff800000"),
+            Some(rgb(0xff, 0x80, 0x00))
+        );
+        assert_eq!(
+            Rgb::from_color_spec(b"#ffff80000000"),
+            Some(rgb(0xff, 0x80, 0x00))
+        );
+    }
+
+    /// Asserts that the `#` example the Xlib manual gives reads as the
+    /// 16-bit value it names, narrowed to a byte.
+    ///
+    /// Case: a theme carried over from an X resource file writes its
+    /// colour as `#3a7`.
+    #[test]
+    fn the_manual_sharp_example_reads_as_its_16_bit_equivalent() {
+        assert_eq!(Rgb::from_color_spec(b"#3a7"), Some(rgb(0x30, 0xa0, 0x70)));
+    }
+
+    /// Asserts that the prefix and the hex digits are read without
+    /// regard to case.
+    ///
+    /// Case: one program writes `RGB:FF/A5/0` and another `#FFA500`.
+    #[test]
+    fn the_prefix_and_the_digits_ignore_case() {
+        assert_eq!(
+            Rgb::from_color_spec(b"RGB:FF/A5/0"),
+            Some(rgb(0xff, 0xa5, 0x00))
+        );
+        assert_eq!(
+            Rgb::from_color_spec(b"#FFA500"),
+            Some(rgb(0xff, 0xa5, 0x00))
+        );
+    }
+
+    /// Asserts that a `#` string whose digits do not split into three
+    /// equal components of one to four digits is refused.
+    ///
+    /// Case: a typo leaves a theme colour with four or thirteen hex
+    /// digits, or none at all.
+    #[test]
+    fn a_sharp_string_of_another_length_is_refused() {
+        for spec in [b"#".as_slice(), b"#12", b"#1234", b"#1234567890abc"] {
+            assert_eq!(Rgb::from_color_spec(spec), None, "{spec:?}");
+        }
+    }
+
+    /// Asserts that an `rgb:` string with more or fewer than three
+    /// components is refused, a trailing fourth included, rather than
+    /// having the tail ignored as libX11 does.
+    ///
+    /// Case: a script appends an alpha component, writing
+    /// `rgb:ff/ff/ff/ff`, or drops the blue one.
+    #[test]
+    fn an_rgb_string_without_exactly_three_components_is_refused() {
+        for spec in [b"rgb:".as_slice(), b"rgb:ff/ff", b"rgb:ff/ff/ff/ff"] {
+            assert_eq!(Rgb::from_color_spec(spec), None, "{spec:?}");
+        }
+    }
+
+    /// Asserts that an empty or five-digit `rgb:` component is refused.
+    ///
+    /// Case: a script loses a component to an empty variable, or pads
+    /// one to five digits.
+    #[test]
+    fn an_empty_or_over_long_rgb_component_is_refused() {
+        for spec in [b"rgb:/ff/ff".as_slice(), b"rgb:ff//ff", b"rgb:fffff/0/0"] {
+            assert_eq!(Rgb::from_color_spec(spec), None, "{spec:?}");
+        }
+    }
+
+    /// Asserts that a byte other than a hex digit is refused in either
+    /// form, a sign included.
+    ///
+    /// Case: a typo puts a `g` or a `+` into a theme colour.
+    #[test]
+    fn a_non_hex_digit_is_refused() {
+        for spec in [b"rgb:fg/00/00".as_slice(), b"rgb:+f/0/0", b"#ggg"] {
+            assert_eq!(Rgb::from_color_spec(spec), None, "{spec:?}");
+        }
+    }
+
+    /// Asserts that colour names, the other colour spaces, and an empty
+    /// spec are refused.
+    ///
+    /// Case: a script written for xterm names its colours, as in `red`,
+    /// or uses Xlib's device-independent spellings such as
+    /// `rgbi:1.0/0.0/0.0`.
+    #[test]
+    fn color_names_and_other_color_spaces_are_refused() {
+        for spec in [
+            b"red".as_slice(),
+            b"rgbi:1.0/0.0/0.0",
+            b"CIEXYZ:0.3227/0.28133/0.2493",
+            b"",
+        ] {
+            assert_eq!(Rgb::from_color_spec(spec), None, "{spec:?}");
+        }
+    }
+
+    /// Asserts that surrounding whitespace is refused rather than
+    /// trimmed.
+    ///
+    /// Case: a script builds the spec from a padded shell variable.
+    #[test]
+    fn surrounding_whitespace_is_refused_rather_than_trimmed() {
+        for spec in [b" rgb:ff/ff/ff".as_slice(), b"rgb:ff/ff/ff ", b" #fff"] {
+            assert_eq!(Rgb::from_color_spec(spec), None, "{spec:?}");
+        }
     }
 }
