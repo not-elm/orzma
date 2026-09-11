@@ -6,9 +6,6 @@ use super::*;
 /// Asserts that `ESC D` moves the cursor down a row and leaves the
 /// column where it stood.
 ///
-/// IND indexes and nothing more. The carriage return belongs to NEL
-/// alone, so IND must not be folded into the arm that pairs the two.
-///
 /// Case: a full-screen program walks down one column of a form,
 /// emitting the seven-bit index between fields.
 #[test]
@@ -27,8 +24,7 @@ fn the_seven_bit_index_keeps_the_column() {
 /// Asserts that `ESC E` moves the cursor down a row and returns the
 /// carriage.
 ///
-/// Case: a program ends a log line with the seven-bit next line
-/// instead of writing a CR and an LF of its own.
+/// Case: a program ends a log line with the seven-bit next line.
 #[test]
 fn the_seven_bit_next_line_returns_the_carriage() {
     let device = interpret(b"a\x1bEb");

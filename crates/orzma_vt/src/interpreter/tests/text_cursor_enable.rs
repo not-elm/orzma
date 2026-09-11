@@ -10,8 +10,7 @@ fn cursor_visible(device: &DeviceState) -> bool {
 
 /// Asserts that `CSI ? 25 l` makes the cursor invisible.
 ///
-/// Case: nvim hides the caret before it repaints a pane, so the block
-/// does not sit on top of the text while the rows are rewritten.
+/// Case: nvim hides the caret before it repaints a pane.
 #[test]
 fn a_dectcem_reset_hides_the_cursor() {
     let device = interpret(b"\x1b[?25l");
@@ -20,8 +19,7 @@ fn a_dectcem_reset_hides_the_cursor() {
 
 /// Asserts that `CSI ? 25 h` makes a hidden cursor visible again.
 ///
-/// Case: nvim finishes the repaint and brings the caret back so the
-/// user can see where the next keystroke will land.
+/// Case: nvim finishes the repaint and brings the caret back.
 #[test]
 fn a_dectcem_set_shows_a_hidden_cursor() {
     let mut session = Session::new();
@@ -36,8 +34,7 @@ fn a_dectcem_set_shows_a_hidden_cursor() {
 /// Asserts that a terminal that has seen no DECTCEM reports a visible
 /// cursor.
 ///
-/// Case: a shell prints its prompt on a freshly spawned terminal, and
-/// the user has to see the caret waiting after it.
+/// Case: a shell prints its prompt on a freshly spawned terminal.
 #[test]
 fn a_fresh_terminal_reports_a_visible_cursor() {
     let device = interpret(b"$ ");
@@ -146,9 +143,8 @@ fn a_dectcem_write_that_changes_nothing_does_not_make_the_chunk_live() {
 /// Asserts that the frame a chunk emits carries the hidden cursor, and
 /// that a later re-show reaches an emitted frame the same way.
 ///
-/// Case: nvim hides the caret before a repaint and the host paints from
-/// the frame it receives, then nvim finishes the repaint and shows the
-/// caret again for the next frame.
+/// Case: nvim hides the caret before a repaint, then finishes the
+/// repaint and shows the caret again.
 #[test]
 fn an_emitted_frame_carries_the_hidden_cursor() {
     let mut session = Session::new();

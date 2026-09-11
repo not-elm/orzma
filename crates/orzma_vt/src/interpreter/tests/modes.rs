@@ -15,7 +15,7 @@ fn a_set_mode_four_selects_insert_mode() {
 /// Asserts that `CSI 4 l` returns the device to replace mode.
 ///
 /// Case: the same application leaves insert mode as soon as the
-/// insertion is done, which curses always pairs with entering it.
+/// insertion is done.
 #[test]
 fn a_reset_mode_four_selects_replace_mode() {
     let device = interpret(b"\x1b[4h\x1b[4l");
@@ -32,8 +32,7 @@ fn a_device_that_saw_no_mode_sequence_replaces() {
     assert_eq!(device.modes().insert_replace, InsertReplaceMode::Replace);
 }
 
-/// Asserts that `CSI ? 4 h` leaves IRM alone, because the private marker
-/// selects DECSCLM rather than the ANSI mode of the same number.
+/// Asserts that `CSI ? 4 h` leaves IRM alone.
 ///
 /// Case: a program enables smooth scrolling on a terminal that also
 /// answers the ANSI mode numbered four.
@@ -65,8 +64,7 @@ fn a_reset_to_initial_state_returns_the_mode_to_replace() {
     assert_eq!(device.modes().insert_replace, InsertReplaceMode::Replace);
 }
 
-/// Asserts that switching to the alternate screen carries IRM across,
-/// because the flip saves only what DECSC saves.
+/// Asserts that switching to the alternate screen carries IRM across.
 ///
 /// Case: a shell in insert mode launches a full-screen editor, which
 /// enters the alternate screen.
@@ -77,8 +75,7 @@ fn an_alternate_screen_flip_keeps_the_mode() {
 }
 
 /// Asserts that a character printed while `CSI 4 h` is in force shifts
-/// the row right, so the mode the device carries reaches the screen's
-/// print path rather than stopping at the mode snapshot.
+/// the row right.
 ///
 /// Case: a curses application without `ich` enters insert mode and types
 /// one character into the middle of a line it has already drawn.
@@ -89,8 +86,7 @@ fn a_print_under_set_mode_four_shifts_the_row_right() {
 }
 
 /// Asserts that a character printed after `CSI 4 l` overwrites the cell
-/// at the cursor, so the print path reads the live mode instead of
-/// assuming insert once IRM has been set.
+/// at the cursor.
 ///
 /// Case: the same application leaves insert mode and keeps echoing over
 /// the line it drew.
@@ -100,8 +96,7 @@ fn a_print_under_reset_mode_four_overwrites_the_cell() {
     assert_eq!(first_row_glyphs(&device), vec!['a', 'X', 'c', 'd']);
 }
 
-/// Asserts that `DECRC` leaves IRM where the data stream last put it,
-/// because `DECSC` does not save the mode.
+/// Asserts that `DECRC` leaves IRM where the data stream last put it.
 ///
 /// Case: an application saves the cursor while in insert mode, leaves
 /// insert mode, and restores the cursor before drawing further.

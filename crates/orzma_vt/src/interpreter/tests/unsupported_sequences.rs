@@ -7,12 +7,8 @@ use super::*;
 /// is ignored rather than fatal: it raises no chunk liveness and the
 /// byte behind it prints where it would have anyway.
 ///
-/// The agreed policy follows what VT terminals do with sequences
-/// they do not implement. It is also the point of the dispatcher:
-/// before it existed every CSI sequence reached a `todo!()`.
-///
-/// Case: a program emits a `CSI` sequence the dispatcher has no arm
-/// for and goes on printing behind it.
+/// Case: a program emits a `CSI` sequence this terminal does not
+/// implement and goes on printing behind it.
 #[test]
 fn an_unimplemented_sequence_is_ignored() {
     // NOTE: `_` (05/15) is a final byte ECMA-48 leaves unallocated, so no

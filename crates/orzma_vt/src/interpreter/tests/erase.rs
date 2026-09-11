@@ -31,8 +31,8 @@ fn the_erase_in_display_sequence_clears_the_whole_screen() {
 /// Asserts that an `ED` parameter this terminal does not answer
 /// leaves the screen alone rather than erasing something.
 ///
-/// Case: an application asks for `ED 3` to drop the scrollback,
-/// which this terminal does not model.
+/// Case: an application asks for `ED 3` to drop the scrollback
+/// before it redraws the screen.
 #[test]
 fn an_unanswered_erase_in_display_parameter_erases_nothing() {
     let device = interpret(b"ab\x1b[3J");
@@ -68,8 +68,8 @@ fn the_erase_in_line_sequence_clears_the_whole_row() {
     );
 }
 
-/// Asserts that `CSI Pn X` reaches the screen and erases `Pn` cells
-/// from the cursor without moving it.
+/// Asserts that `CSI Pn X` erases `Pn` cells from the cursor without
+/// moving it.
 ///
 /// Case: Neovim clears the padding of a file-tree pane, which does
 /// not reach the right edge of the screen.
@@ -84,8 +84,7 @@ fn the_erase_character_sequence_clears_the_span_at_the_cursor() {
     assert_eq!(screen.cursor_column(), GridColumn(1));
 }
 
-/// Asserts that an erase character raises the chunk liveness, so the
-/// row it cleared is repainted.
+/// Asserts that an erase character raises the chunk liveness.
 ///
 /// Case: Neovim clears the padding of a file-tree pane in a chunk
 /// that prints nothing of its own, having selected the background it

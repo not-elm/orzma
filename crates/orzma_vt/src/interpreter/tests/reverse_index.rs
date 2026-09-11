@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Asserts that the raw C1 byte for RI reaches the screen.
+/// Asserts that the raw C1 byte for RI reverse indexes.
 ///
 /// Case: a program emits an eight-bit reverse index on a terminal not
 /// running in UTF-8 mode.
@@ -15,7 +15,7 @@ fn the_raw_c1_byte_reverse_indexes() {
     );
 }
 
-/// Asserts that the UTF-8 encoding of U+008D reaches the same arm.
+/// Asserts that the UTF-8 encoding of U+008D reverse indexes too.
 ///
 /// Case: a program running on a UTF-8 stream emits the reverse index.
 #[test]

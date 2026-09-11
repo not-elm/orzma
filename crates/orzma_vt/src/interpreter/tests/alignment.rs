@@ -17,11 +17,10 @@ fn the_alignment_pattern_fills_every_visible_row() {
 }
 
 /// Asserts that the repaint `ESC # 8` calls for reaches the chunk
-/// liveness rather than being dropped by the handler.
+/// liveness.
 ///
-/// Case: the technician sends the alignment pattern, and the owner
-/// must open its coalesce window for the frame that repaints the
-/// screen.
+/// Case: a service technician sends the alignment pattern to a
+/// screen an earlier command already printed on.
 #[test]
 fn the_alignment_pattern_marks_its_own_chunk_damaged() {
     assert!(liveness_after(b"a", b"\x1b#8"));

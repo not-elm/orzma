@@ -51,7 +51,8 @@ fn the_raw_c1_identify_reports_the_primary_class() {
     assert_eq!(replies_of(b"\x9a"), b"\x1b[?6c");
 }
 
-/// Asserts that the UTF-8 encoding of U+009A reaches the same arm.
+/// Asserts that the UTF-8 encoding of U+009A reports the primary
+/// class too.
 ///
 /// Case: a program running on a UTF-8 stream emits the identify.
 #[test]
@@ -108,8 +109,8 @@ fn a_tertiary_attributes_request_is_ignored() {
 
 /// Asserts that a version packs one hundred per component.
 ///
-/// Case: a release bumps the minor version and the firmware level
-/// DA2 reports has to move with it.
+/// Case: a release bumps the minor version that DA2's firmware level
+/// encodes.
 #[test]
 fn a_version_packs_one_hundred_per_component() {
     assert_eq!(pack_version(1, 2, 3), 10_203);

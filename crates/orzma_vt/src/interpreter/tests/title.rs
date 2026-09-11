@@ -14,8 +14,7 @@ fn a_title_sequence_reports_the_new_title() {
 
 /// Asserts that setting a title leaves the chunk undamaged.
 ///
-/// Case: a prompt sets the title without printing anything, and the
-/// owner must not open a coalesce window for an empty frame.
+/// Case: a prompt sets the title without printing anything.
 #[test]
 fn a_title_sequence_leaves_the_chunk_undamaged() {
     assert!(!damage_of(b"\x1b]0;hi\x07"));
@@ -64,7 +63,7 @@ fn popping_an_unset_title_reports_a_reset() {
 }
 
 /// Asserts that a reset returns the title to its default and says
-/// so, rather than leaving the host showing a stale one.
+/// so.
 ///
 /// Case: the user runs `reset` after a program left a title behind.
 #[test]
@@ -85,8 +84,8 @@ fn a_reset_without_a_title_reports_nothing() {
     assert!(output.signals.is_empty());
 }
 
-/// Asserts that a title terminated by ST reaches the same handler
-/// as one terminated by BEL.
+/// Asserts that a title terminated by ST sets the window title just
+/// as one terminated by BEL does.
 ///
 /// Case: a program that emits the seven-bit string terminator sets
 /// the window title.
@@ -107,11 +106,11 @@ fn a_private_window_operation_does_not_reach_the_title_stack() {
     assert_eq!(output.signals, vec![VtSignal::Title("hi".to_owned())]);
 }
 
-/// Asserts that an operating system command is ignored rather than
-/// fatal, and that the parser returns to ground behind it.
+/// Asserts that an operating system command is not fatal, and that
+/// the parser returns to ground behind it.
 ///
-/// Case: a shell prompt sets the window title before printing, on a
-/// terminal whose OSC handlers have not landed yet.
+/// Case: a shell prompt sets the window title and goes on printing
+/// behind it.
 #[test]
 fn a_title_sequence_is_ignored_rather_than_fatal() {
     let device = interpret(b"\x1b]0;hi\x07a");
