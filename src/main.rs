@@ -19,15 +19,15 @@ use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 #[cfg(not(target_os = "macos"))]
 use bevy_cef::prelude::early_exit_if_subprocess;
+use bevy_orzma_tty_renderer::TerminalRendererPlugin;
 use bevy_orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
+use bevy_orzma_webview_host::WebviewAssetRegistry;
 use bevy_orzmux::prelude::{
     OrzmuxClient, OrzmuxConfig, OrzmuxConnection, OrzmuxPlugin, OrzmuxSystems,
 };
 use configs::OrzmaConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
-use orzma_tty_renderer::TerminalRendererPlugin;
-use orzma_webview_host::WebviewAssetRegistry;
 use session::SessionPlugin;
 use ui::OrzmaUiPlugin;
 

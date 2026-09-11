@@ -3,7 +3,7 @@
 
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use orzma_tty_renderer::schema::is_allowed;
+use bevy_orzma_tty_renderer::schema::is_allowed;
 
 /// Opens `uri` in the host browser / handler, gated on the target terminal
 /// still existing.

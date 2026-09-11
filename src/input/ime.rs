@@ -24,11 +24,11 @@ use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
+use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
+use bevy_orzma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use bevy_orzma_webview::{Webview, focused_webview_of};
 use bevy_orzmux::prelude::RequestActiveKeyInput;
 use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
-use orzma_tty_renderer::TerminalCellMetricsResource;
-use orzma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
 ///
@@ -403,8 +403,8 @@ mod tests {
     use bevy::prelude::{MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
-    use orzma_tty_renderer::CellMetrics;
-    use orzma_tty_renderer::prelude::{Cursor, TerminalGrid};
+    use bevy_orzma_tty_renderer::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::{Cursor, TerminalGrid};
     use orzma_vt::prelude::InstanceId;
 
     #[test]
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn ime_position_anchors_at_inline_rect_origin_for_focused_inline() {
-        use orzma_tty_renderer::prelude::TerminalOverlays;
+        use bevy_orzma_tty_renderer::prelude::TerminalOverlays;
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));

@@ -3,11 +3,11 @@
 //! collection + source cache, so tests inject a collection preloaded from known
 //! font files instead of relying on the host's installed fonts.
 
+use bevy_orzma_tty_renderer::FontFace;
 use fontique::{
     Attributes, Collection, FontStyle, FontWeight, FontWidth, QueryFamily, QueryStatus, SourceCache,
 };
 use orzma_configs::font::{FontSlant, FontStyleSpec};
-use orzma_tty_renderer::FontFace;
 
 /// Returns the fontique query attributes (weight + style, normal width) for
 /// `face`.
@@ -94,8 +94,8 @@ fn resolve_face_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy_orzma_tty_renderer::bundled;
     use fontique::{Blob, CollectionOptions};
-    use orzma_tty_renderer::bundled;
     use std::sync::Arc;
 
     fn deterministic_collection() -> (Collection, SourceCache) {

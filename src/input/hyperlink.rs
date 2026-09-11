@@ -25,9 +25,9 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_cef::prelude::WebviewSource;
+use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
+use bevy_orzma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 use orzma_configs::shortcuts::Modifiers;
-use orzma_tty_renderer::TerminalCellMetricsResource;
-use orzma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 
 /// Plugin: registers `insert_initial_cursor_icon` at `Startup` and
 /// `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
@@ -303,7 +303,7 @@ mod tests {
         );
     }
 
-    use orzma_tty_renderer::CellMetrics;
+    use bevy_orzma_tty_renderer::CellMetrics;
 
     fn hover_test_metrics() -> TerminalCellMetricsResource {
         TerminalCellMetricsResource {
@@ -355,7 +355,7 @@ mod tests {
     /// A 10x5 grid whose top-left cell links to `https://example.com` as
     /// `HyperlinkId(7)`, shared by the hover tests.
     fn linked_grid() -> TerminalGrid {
-        use orzma_tty_renderer::schema::{
+        use bevy_orzma_tty_renderer::schema::{
             Color, GridCell, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri,
         };
         TerminalGrid {
@@ -385,7 +385,7 @@ mod tests {
     /// OSC 8 hyperlink in the terminal.
     #[test]
     fn hover_over_terminal_link_sets_state_and_pointer() {
-        use orzma_tty_renderer::schema::HyperlinkId;
+        use bevy_orzma_tty_renderer::schema::HyperlinkId;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);

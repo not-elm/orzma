@@ -173,7 +173,7 @@ ECH は「たまたま最初に踏んだ 1 つ」に過ぎない。
       - `crates/bevy_orzmux/src/drain.rs:110-115` — `tracing::debug!("frame for an unknown pane dropped")`。
         VT は emit 時にダメージをクリアするので、これは**恒久的なロス**（今はシングル
         ペインで発火しない）。`warn!` に上げる。
-      - `crates/orzma_tty_renderer/src/grid.rs:45` の silent return は、
+      - `crates/bevy_orzma_tty_renderer/src/grid.rs:45` の silent return は、
         `insert(OrzmuxPane)` が `trigger(TtyFrameSignal)` より先にキューされるという
         **キュー順序だけ**で守られている。debug assertion を入れる。
 
