@@ -52,8 +52,8 @@ pub enum TerminalKey {
 }
 
 /// Modifier flags carried alongside `TerminalKey`.
-/// `ctrl` / `alt` / `meta` affect `Character` encoding; `shift` is reserved for future CSI u /
-/// modifyOtherKeys support.
+/// `ctrl` / `alt` / `meta` affect `Character` encoding, and `shift` alone turns `Tab` into a
+/// back tab; its other uses wait for CSI u / modifyOtherKeys support.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TerminalModifiers {
     pub ctrl: bool,
@@ -72,6 +72,9 @@ pub struct TerminalModifiers {
 /// normal mode, `ESC O A/B/C/D/H/F` in application mode. The VT220 editing
 /// keypad (Delete, PageUp, PageDown) is unaffected by DECCKM and maps to fixed
 /// sequences; `Character` is encoded by `encode_character`.
+///
+/// Tab sends HT, and CBT (`CSI Z`, the terminfo `kcbt` string) when Shift
+/// is the only modifier held; other modifiers leave Tab as HT.
 pub(super) fn encode_key(
     key: &TerminalKey,
     mods: &TerminalModifiers,
@@ -89,6 +92,9 @@ pub(super) fn encode_key(
         TerminalKey::End => cursor_key_bytes(b'F', app_cursor_keys),
         TerminalKey::Enter => vec![0x0d],
         TerminalKey::Backspace => vec![0x7f],
+        TerminalKey::Tab if mods.shift && !mods.ctrl && !mods.alt && !mods.meta => {
+            b"\x1b[Z".to_vec()
+        }
         TerminalKey::Tab => vec![0x09],
         TerminalKey::Escape => vec![0x1b],
         TerminalKey::Delete => b"\x1b[3~".to_vec(),
@@ -212,6 +218,32 @@ mod tests {
     fn tab_is_horizontal_tab() {
         assert_eq!(
             encode_key(&TerminalKey::Tab, &no_mods(), false, KeypadMode::Numeric),
+            vec![0x09]
+        );
+    }
+
+    /// Asserts that Tab with Shift as the only modifier sends the back
+    /// tab sequence `CSI Z`, while Tab with Ctrl added still sends HT.
+    ///
+    /// Case: the user presses Shift-Tab to move back through the fields
+    /// of a form in a full-screen application.
+    #[test]
+    fn shift_tab_is_the_back_tab_sequence() {
+        let shift = TerminalModifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_key(&TerminalKey::Tab, &shift, false, KeypadMode::Numeric),
+            b"\x1b[Z".to_vec()
+        );
+        let ctrl_shift = TerminalModifiers {
+            ctrl: true,
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_key(&TerminalKey::Tab, &ctrl_shift, false, KeypadMode::Numeric),
             vec![0x09]
         );
     }
