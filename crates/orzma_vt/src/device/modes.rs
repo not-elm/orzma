@@ -27,13 +27,8 @@ pub struct VtModes {
     pub active_screen: ScreenKind,
     /// IRM (`SM 4`): whether a printed character inserts or replaces.
     pub insert_replace: InsertReplaceMode,
-    /// DECAWM (`DECSET 7`): whether a graphic character at the right
+    /// DECAWM: whether a graphic character at the right
     /// border wraps to the next line or replaces the last column.
-    // NOTE: Set this only through `DeviceState::set_auto_wrap`. A
-    // direct write through `modes_mut` skips the disarm of each
-    // screen's deferred wrap, and a later `DECSET 7` then cashes in a
-    // latch armed before the reset, wrapping a line that must not
-    // wrap.
     pub auto_wrap: AutoWrap,
     /// DECCKM (DECSET 1): arrow keys send SS3 instead of CSI.
     pub app_cursor: bool,
