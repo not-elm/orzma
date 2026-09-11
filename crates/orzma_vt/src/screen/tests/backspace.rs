@@ -40,7 +40,7 @@ fn a_backspace_at_column_zero_does_not_move() {
 fn a_backspace_after_a_full_row_steps_back_and_disarms_the_wrap() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c);
+        screen.print(c, InsertReplaceMode::Replace);
     }
     assert!(screen.state.pending_wrap);
     screen.backspace();
@@ -57,7 +57,7 @@ fn a_backspace_after_a_full_row_steps_back_and_disarms_the_wrap() {
 #[test]
 fn a_backspace_at_column_zero_disarms_a_pending_wrap() {
     let mut screen = Screen::new(GridSize { cols: 1, rows: 3 }, 10);
-    screen.print('x');
+    screen.print('x', InsertReplaceMode::Replace);
     assert!(screen.state.pending_wrap);
     screen.backspace();
     assert_eq!(screen.state.column, GridColumn(0));

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::device::color::{Color, Rgb};
-use crate::device::modes::{MouseEncoding, MouseTracking};
+use crate::device::modes::{InsertReplaceMode, MouseEncoding, MouseTracking};
 use crate::frame::Frame;
 use crate::placement::{AnchoredPlacement, InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::cell::Cell;
@@ -115,6 +115,7 @@ impl Session {
     }
 }
 
+/// The glyphs of the first four columns of the top viewport row.
 /// Runs `setup` and then `chunk` over one session, and reports the
 /// liveness `chunk` alone produced.
 fn liveness_after(setup: &[u8], chunk: &[u8]) -> bool {
@@ -136,6 +137,7 @@ mod interpret_output;
 mod keypad;
 mod line_editing;
 mod line_movement;
+mod modes;
 mod mouse;
 mod parser_limits;
 mod printing;

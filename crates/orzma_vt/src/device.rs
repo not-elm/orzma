@@ -223,7 +223,7 @@ impl DeviceState {
         self.active_screen().cursor(self.modes.text_cursor_enable)
     }
 
-    /// Snapshot of the device-wide terminal modes.
+    /// Snapshot of the modes the device owns.
     pub fn modes(&self) -> VtModes {
         self.modes
     }
@@ -406,6 +406,7 @@ const MAX_TITLE_DEPTH: usize = 16;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::modes::InsertReplaceMode;
     use crate::screen::cell::Cell;
     use crate::screen::grid::coords::GridColumn;
     use crate::screen::viewport::ViewportLine;
@@ -518,7 +519,9 @@ mod tests {
     fn the_two_screens_carry_independent_tab_stops() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device.active_screen_mut().print(c);
+            device
+                .active_screen_mut()
+                .print(c, InsertReplaceMode::Replace);
         }
         device.active_screen_mut().set_horizontal_tab_stop();
 
@@ -549,12 +552,16 @@ mod tests {
     fn the_two_screens_carry_independent_checkpoints() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device.active_screen_mut().print(c);
+            device
+                .active_screen_mut()
+                .print(c, InsertReplaceMode::Replace);
         }
         device.active_screen_mut().save_checkpoint();
 
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device.active_screen_mut().print('x');
+        device
+            .active_screen_mut()
+            .print('x', InsertReplaceMode::Replace);
         device.active_screen_mut().restore_checkpoint();
         assert_eq!(device.active_screen().cursor_column(), GridColumn(0));
 
@@ -573,9 +580,13 @@ mod tests {
     #[test]
     fn a_reset_clears_both_screens() {
         let mut device = device();
-        device.active_screen_mut().print('p');
+        device
+            .active_screen_mut()
+            .print('p', InsertReplaceMode::Replace);
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device.active_screen_mut().print('a');
+        device
+            .active_screen_mut()
+            .print('a', InsertReplaceMode::Replace);
 
         let _ = device.reset();
 
@@ -618,7 +629,9 @@ mod tests {
     #[test]
     fn a_reset_of_a_written_primary_screen_reports_a_full_repaint() {
         let mut device = device();
-        device.active_screen_mut().print('x');
+        device
+            .active_screen_mut()
+            .print('x', InsertReplaceMode::Replace);
 
         assert_eq!(device.reset(), Some(DamageSpan::Full));
     }
@@ -646,7 +659,9 @@ mod tests {
     fn a_reset_does_not_report_the_hidden_screens_damage() {
         let mut device = device();
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device.active_screen_mut().print('x');
+        device
+            .active_screen_mut()
+            .print('x', InsertReplaceMode::Replace);
         device.set_active_screen_for_test(ScreenKind::Primary);
 
         assert_eq!(device.reset(), None);

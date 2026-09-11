@@ -12,8 +12,8 @@ use super::*;
 #[test]
 fn the_cursor_reports_the_write_position_and_the_callers_visibility() {
     let mut screen = screen();
-    screen.print('a');
-    screen.print('b');
+    screen.print('a', InsertReplaceMode::Replace);
+    screen.print('b', InsertReplaceMode::Replace);
 
     let shown = screen.cursor(TextCursorEnable::Shown);
     assert_eq!(shown.point.line, GridLine(0));

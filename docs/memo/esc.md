@@ -46,3 +46,4 @@ CSIは、主にカーソル移動、画面の編集、文字の装飾、端末�
 | [DCH — Delete Character](../../docs/references/vt510.pdf#page=121)            | 121     |
 | [ECH — Erase Character](../../docs/references/vt510.pdf#page=309)             | 309     |
 | [DECTCEM — Text Cursor Enable Mode](../../docs/references/vt510.pdf#page=282) | 282     |
+| [IRM — Insert/Replace Mode](../../docs/references/vt510.pdf#page=319)         | 319     |

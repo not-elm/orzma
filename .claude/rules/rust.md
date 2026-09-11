@@ -47,6 +47,34 @@ identifier so the code carries the meaning, or delete it.
 
 Note: `///` and `//!` are **doc comments**, not "line comments" for this rule — see the next section.
 
+## Comment references — cite `docs/references/`, nothing else under `docs/`
+
+Comments and doc comments may cite a file under `docs/references/` — the
+VT, ECMA-48 and xterm manuals. **No other path under `docs/` may be cited
+from code**, doc comments included.
+
+Everything else in `docs/` is short-lived by design. `docs/todo/` holds
+per-task working notes that are deleted once the task ships, and
+`docs/superpowers/` is not even tracked, so a comment that points at one
+becomes a dead reference the next reader cannot follow — and unlike a
+broken code path, nothing fails to compile when it does.
+
+| Pattern                                          | Example                                    | Instead                                                          |
+| ------------------------------------------------ | ------------------------------------------ | ---------------------------------------------------------------- |
+| Citing a working note                            | `// TODO: … (docs/todo/migrate.md item 11)` | State the blocker in the comment itself and drop the path        |
+| Citing a tracking table                          | `// NOTE: see docs/todo/vt-conformance-scope.md` | Write the decision the table records, not a pointer to it   |
+| Citing a manual                                  | `/// vt510.pdf p.319 — "Default: Replace."` | **Allowed** — `docs/references/` is permanent                    |
+
+The rule is one-directional: Markdown under `docs/`, PR descriptions and
+commit messages may link wherever they like. It binds only what ships
+inside a `.rs` file.
+
+When a working note holds reasoning a future reader will want, copy the
+**conclusion** into the comment rather than linking the note. A citation
+that carries its own quote and page — `vt510.pdf p.316, "Text between the
+cursor and right margin moves to the right."` — stays checkable after
+every surrounding file is gone.
+
 ## Doc comments
 
 Required:
@@ -594,6 +622,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 
 - `mod.rs` ban
 - Comment taxonomy — only `// TODO:` / `// NOTE:` / `// SAFETY:`
+- Comment references — code cites `docs/references/` only; no other path under `docs/` appears in a comment or doc comment (see "Comment references")
 - Comment prose — English prose in comment/doc bodies is written as complete, natural sentences, not telegraphic fragments, and kept concise (see "Comment prose — write complete English sentences")
 - File-level module `//!` requirement
 - Test doc comments — every `#[test]` fn documents its asserted contract plus a scenario-only `Case:` paragraph, and nothing else; pinned policies fold into the first line, never a paragraph of their own (see "Test doc comments")

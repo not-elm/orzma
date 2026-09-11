@@ -227,9 +227,8 @@ fn selection_type(selection: ViModeSelection) -> SelectionKind {
     match selection {
         ViModeSelection::Simple => SelectionKind::Simple,
         ViModeSelection::Lines => SelectionKind::Lines,
-        // TODO: `SelectionKind::Block` doesn't exist yet
-        // (docs/todo/migrate-to-new-vt.md item 10); round a rectangular
-        // vi-mode selection down to Lines until it lands.
+        // TODO: `SelectionKind::Block` doesn't exist yet; round a
+        // rectangular vi-mode selection down to Lines until it lands.
         ViModeSelection::Rect => SelectionKind::Lines,
     }
 }
