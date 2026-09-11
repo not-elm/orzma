@@ -34,6 +34,13 @@ pub mod prelude {
 }
 
 /// The GUI's connection to the multiplexer backend.
+///
+/// # Invariants
+///
+/// The resource exists only until the drain detects that the backend is
+/// gone; the drain then removes it. Every system and observer that reads it
+/// is therefore gated with `run_if(resource_exists::<OrzmuxConnection>)`,
+/// because a missing `Res` panics under Bevy's default error handler.
 #[derive(Resource)]
 pub struct OrzmuxConnection(pub OrzmuxClient);
 

@@ -31,30 +31,34 @@ impl Plugin for DrainPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PaneRegistry>()
             .init_resource::<CurrentLayout>()
-            .init_resource::<DisconnectReported>()
-            .add_systems(Update, drain_orzmux_events.in_set(OrzmuxSystems::Drain));
+            .add_systems(
+                Update,
+                drain_orzmux_events
+                    .run_if(resource_exists::<OrzmuxConnection>)
+                    .in_set(OrzmuxSystems::Drain),
+            );
     }
 }
 
-/// Whether `OrzmuxSessionEnded` was already triggered for a disconnect.
-#[derive(Resource, Default)]
-struct DisconnectReported(bool);
-
-/// Drains every queued event in order. Not gated on change detection:
-/// channel arrivals are invisible to it.
+/// Drains every queued event in order, then ends the session and removes
+/// `OrzmuxConnection` once the backend is gone.
+///
+/// Runs only while `OrzmuxConnection` exists, so after it removes the
+/// connection it never runs again and the session ends exactly once. It is
+/// not gated on change detection because channel arrivals are invisible to
+/// it.
 fn drain_orzmux_events(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
     mut current: ResMut<CurrentLayout>,
-    mut reported: ResMut<DisconnectReported>,
     connection: Res<OrzmuxConnection>,
 ) {
     for event in connection.0.try_iter() {
         apply_event(&mut commands, &mut registry, &mut current, event);
     }
-    if connection.0.is_disconnected() && !reported.0 {
-        reported.0 = true;
+    if connection.0.is_disconnected() {
         commands.trigger(OrzmuxSessionEnded);
+        commands.remove_resource::<OrzmuxConnection>();
     }
 }
 
@@ -335,7 +339,8 @@ mod tests {
         assert_eq!(app.world().resource::<Seen>().texts, vec![None]);
     }
 
-    /// Asserts that a vanished backend ends the session once.
+    /// Asserts that a vanished backend ends the session once and that the
+    /// drain removes the connection in the frame that detects it.
     ///
     /// Case: the backend thread panicked.
     #[test]
@@ -343,6 +348,8 @@ mod tests {
         let (mut app, events) = app();
         drop(events);
         app.update();
+        assert!(!app.world().contains_resource::<OrzmuxConnection>());
+        assert_eq!(app.world().resource::<Seen>().ended, 1);
         app.update();
         assert_eq!(app.world().resource::<Seen>().ended, 1);
     }
