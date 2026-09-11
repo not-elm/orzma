@@ -18,8 +18,8 @@ use crate::surface::geometry::topmost_surface_at;
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty::prelude::TerminalModifiers;
-use orzma_tty_renderer::TerminalCellMetricsResource;
 
 /// Registers the mouse-wheel dispatcher and its accumulator resource. Runs in
 /// `InputPhase::Dispatch`, gated to frames carrying any mouse message — a
@@ -182,7 +182,7 @@ mod tests {
     use bevy::input::mouse::MouseScrollUnit;
     use bevy::input::touch::TouchPhase;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
-    use orzma_tty_renderer::schema::TerminalGrid;
+    use bevy_orzma_tty_renderer::schema::TerminalGrid;
 
     fn make_wheel_app() -> App {
         use bevy::window::WindowResolution;

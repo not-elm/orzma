@@ -1283,27 +1283,58 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 
 [[package]]
+name = "bevy_orzma_tty_renderer"
+version = "0.2.0-dev"
+dependencies = [
+ "ab_glyph",
+ "bevy",
+ "bevy_orzmux",
+ "orzma_vt",
+ "orzmux",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "thiserror 2.0.18",
+ "ttf-parser",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
 name = "bevy_orzma_webview"
 version = "0.2.0-dev"
 dependencies = [
  "bevy",
  "bevy_cef",
  "bevy_cef_core",
+ "bevy_orzma_tty_renderer",
+ "bevy_orzma_webview_host",
  "bevy_orzmux",
  "crossbeam-channel",
  "data-encoding",
  "getrandom 0.2.17",
  "libc",
  "log",
- "orzma_tty_renderer",
  "orzma_vt",
- "orzma_webview_host",
  "orzmux",
  "serde",
  "serde_json",
  "tempfile",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "bevy_orzma_webview_host"
+version = "0.2.0-dev"
+dependencies = [
+ "bevy",
+ "bevy_cef_core",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uds_windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5006,7 +5037,9 @@ dependencies = [
  "bevy",
  "bevy_cef",
  "bevy_cef_core",
+ "bevy_orzma_tty_renderer",
  "bevy_orzma_webview",
+ "bevy_orzma_webview_host",
  "bevy_orzmux",
  "crossbeam-channel",
  "data-encoding",
@@ -5016,9 +5049,7 @@ dependencies = [
  "open",
  "orzma_configs",
  "orzma_tty",
- "orzma_tty_renderer",
  "orzma_vt",
- "orzma_webview_host",
  "orzmux",
  "serde",
  "serde_json",
@@ -5057,43 +5088,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "orzma_tty_renderer"
-version = "0.2.0-dev"
-dependencies = [
- "ab_glyph",
- "bevy",
- "bevy_orzmux",
- "orzma_vt",
- "orzmux",
- "rmp-serde",
- "serde",
- "serde_bytes",
- "serde_json",
- "thiserror 2.0.18",
- "ttf-parser",
- "unicode-segmentation",
- "unicode-width 0.2.0",
-]
-
-[[package]]
 name = "orzma_vt"
 version = "0.2.0-dev"
 dependencies = [
  "bitflags 2.13.0",
  "percent-encoding",
  "vtparse",
-]
-
-[[package]]
-name = "orzma_webview_host"
-version = "0.2.0-dev"
-dependencies = [
- "bevy",
- "bevy_cef_core",
- "tempfile",
- "thiserror 2.0.18",
- "uds_windows",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

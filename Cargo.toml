@@ -29,10 +29,11 @@ bevy = { workspace = true }
 bevy_cef = { workspace = true }
 bevy_cef_core = { workspace = true }
 bevy_orzmux = { path = "crates/bevy_orzmux" }
+bevy_orzma_tty_renderer = { path = "crates/bevy_orzma_tty_renderer" }
 bevy_orzma_webview = { path = "crates/bevy_orzma_webview" }
+bevy_orzma_webview_host = { path = "crates/bevy_orzma_webview_host", features = ["cef"] }
 orzmux = { path = "crates/orzmux" }
 orzma_tty = { path = "crates/orzma_tty" }
-orzma_tty_renderer = { path = "crates/orzma_tty_renderer" }
 orzma_vt = { path = "crates/orzma_vt" }
 crossbeam-channel = "0.5"
 data-encoding = "2"
@@ -40,7 +41,6 @@ fontique = { version = "0.9", default-features = false, features = ["std"] }
 getrandom = "0.2"
 open = { workspace = true }
 orzma_configs = { path = "crates/orzma_configs" }
-orzma_webview_host = { path = "crates/orzma_webview_host", features = ["cef"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

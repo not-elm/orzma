@@ -13,8 +13,8 @@ use crate::control_plane::HandleId;
 use crate::control_plane::TokenRegistry;
 use crate::control_plane::protocol::{ClientMsg, NavAction, RegisterKind, ServerMsg};
 use bevy::prelude::Entity;
+use bevy_orzma_webview_host::uds::{UnixListener, UnixStream};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
-use orzma_webview_host::uds::{UnixListener, UnixStream};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::ops::ControlFlow;
@@ -165,7 +165,7 @@ pub(crate) fn spawn_listener(
 ///
 /// Unix: the peer's UID must equal orzma's own. Windows: always true —
 /// the socket directory's current-user DACL (see
-/// `orzma_webview_host::restrict_to_current_user`) already keeps other
+/// `bevy_orzma_webview_host::restrict_to_current_user`) already keeps other
 /// users from connecting, and AF_UNIX on Windows offers no peer
 /// credentials to double-check.
 #[cfg(unix)]
@@ -761,8 +761,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_bound_socket_file_is_private_to_the_current_user() {
-        use orzma_webview_host::host::RuntimeRoot;
-        use orzma_webview_host::private_dir::{
+        use bevy_orzma_webview_host::host::RuntimeRoot;
+        use bevy_orzma_webview_host::private_dir::{
             canonical_sddl, current_user_sid, security_descriptor_sddl,
         };
         let dir = tempfile::tempdir().unwrap();

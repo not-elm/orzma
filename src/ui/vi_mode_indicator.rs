@@ -12,8 +12,8 @@ use bevy::ecs::lifecycle::Remove;
 use bevy::ecs::observer::On;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
+use bevy_orzma_tty_renderer::schema::TerminalGrid;
 use bevy_orzmux::prelude::OrzmuxPane;
-use orzma_tty_renderer::schema::TerminalGrid;
 
 /// Background color of the vi-mode indicator chip. Bright
 /// yellow so the chip reads as a deliberate HUD element on top of the
