@@ -201,6 +201,16 @@ impl Screen {
             _ => self.damage_span(self.state.line, self.state.line),
         }
     }
+
+    /// Disarms the deferred wrap, leaving the cursor and the cells
+    /// alone.
+    ///
+    /// This is the half of `DECRST 7` that `Screen` owns. The saved
+    /// cursor keeps its own flag: DEC STD-070 has `DECSC` carry the
+    /// last-column flag, so a reset of the mode must not reach it.
+    pub fn disarm_pending_wrap(&mut self) {
+        self.state.pending_wrap = false;
+    }
 }
 
 /// Cursor addressing.

@@ -621,6 +621,8 @@ impl Executor<'_> {
                     .device
                     .active_screen_mut()
                     .set_origin_mode(OriginMode::from_decset(enabled)),
+                // DECAWM
+                7 => self.device.set_auto_wrap(AutoWrap::from_decset(enabled)),
                 // Alternate screen
                 47 => self.switch_screen(ScreenKind::from_decset(enabled)),
                 // DECNKM
