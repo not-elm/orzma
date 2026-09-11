@@ -32,11 +32,11 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 
 | 略号 | 落ち先 |
 |---|---|
-| `CSI∅` | `csi_dispatch` 末尾の `_ => {}`（`interpreter.rs:419`） |
-| `ESC∅` | `esc_dispatch` 末尾の `_ => {}`（`interpreter.rs:222`） |
-| `MODE∅` | `set_private_modes`（`interpreter.rs:587`）に番号が無い |
-| `INTER∅` | intermediate 付きが dispatch 前に落ちる（`interpreter.rs:228`） |
-| `OSC∅` | `osc_dispatch`（`interpreter.rs:425`）は title と cwd のみ |
+| `CSI∅` | `csi_dispatch` 末尾の `_ => {}`（`interpreter.rs:446`） |
+| `ESC∅` | `esc_dispatch` 末尾の `_ => {}`（`interpreter.rs:232`） |
+| `MODE∅` | `set_private_modes`（`interpreter.rs:630`）に番号が無い |
+| `INTER∅` | intermediate 付きが dispatch 前に落ちる（`interpreter.rs:238`） |
+| `OSC∅` | `osc_dispatch`（`interpreter.rs:452`）は title と cwd のみ |
 
 ### 1-A. 描画が壊れるもの（最優先）
 
@@ -59,7 +59,7 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 
 | シーケンス | 機能 | terminfo | 現状 | 影響 |
 |---|---|---|---|---|
-| `CSI ! p` | DECSTR ソフトリセット | `is2`, `rs2` | `INTER∅` | **terminfo 経由の初期化列の先頭**。毎回無視されモードが残留する。`CharacterSetMapping::reset()` は DECSTR 待ちで `#[expect(dead_code)]` のまま（`character_sets.rs:220`）。**DECTCEM 実装後、優先度が上がった**: vt510 p.277 Table 5-9 は DECSTR 後の DECTCEM を "Cursor enabled." と定めており、`is2`/`rs2` の先頭が `\E[!p` なので **`tput init` が隠れたカーソルを回復できない**。RIS (`\Ec`) は `VtModes::default()` で回復するが、DECSTR は名指しした一部だけを戻すので `text_cursor_enable = Shown` を明示的に含める必要がある |
+| `CSI ! p` | DECSTR ソフトリセット | `is2`, `rs2` | `INTER∅` | **terminfo 経由の初期化列の先頭**。毎回無視されモードが残留する。`CharacterSetMapping::reset()` は DECSTR 待ちで `#[expect(dead_code)]` のまま（`character_sets.rs:220`）。**DECTCEM 実装後、優先度が上がった**: vt510 p.277 Table 5-9 は DECSTR 後の DECTCEM を "Cursor enabled." と定めており、`is2`/`rs2` の先頭が `\E[!p` なので **`tput init` が隠れたカーソルを回復できない**。RIS (`\Ec`) は `VtModes::default()` で回復するが、DECSTR は名指しした一部だけを戻すので `text_cursor_enable = Shown` を明示的に含める必要がある。**DECAWM も同じ Table 5-9 に載っている**（"Autowrap / DECAWM / No autowrap."、IRM の "Replace mode." も同様）。IRM は `InsertReplaceMode::default()` が既に `Replace` なので一致するが、`AutoWrap::default()` は `Enabled` なので **DECAWM だけ default が表の値と逆**であり、値そのものが要判断（`am` を広告する端末で本当に off に落とすか）。含める場合は `modes_mut` への直書きではなく `DeviceState::set_auto_wrap` を通すこと — reset 方向は両画面の LCF 解除を伴う（§4 の LCF 一覧を参照） |
 | `CSI ?12 h/l` | カーソル点滅 | `cnorm`, `cvvis` | `MODE∅`。`blinking: false` 固定 | 点滅指定が効かない |
 | `CSI ?3 l` | DECCOLM リセット | `is2`, `rs2` の一部 | `MODE∅` | 初期化列に含まれる |
 | `CSI ?1034 h/l` | 8bit Meta | `smm`/`rmm`, `km` | `MODE∅` | Meta キーのバイト表現が食い違う |
@@ -94,14 +94,14 @@ terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ロ
 | `OSC 10/11/12` | 前景/背景/カーソル色（問い合わせ含む） | `OSC∅` | vim/nvim の `background` 自動判定 |
 | `OSC 52` | クリップボード | `OSC∅` | nvim の osc52 provider、tmux |
 | `OSC 8` | ハイパーリンク | `OSC∅`。interner は未接続（`hyperlink.rs:15`） | nvim。レンダラ側に受け皿は既にある |
-| `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `INTER∅` | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する**。DECTCEM 実装により **25 も報告可能な状態を持つようになった**（`CSI ?25;1$y` / `;2$y`）が応答路が無い |
-| `DCS $ q … ST` / `DCS + q … ST` | DECRQSS / XTGETTCAP | DCS コールバックが空（`interpreter.rs:148`） | vim のカーソル形状復元・capability 検出 |
+| `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `INTER∅` | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する**。DECAWM / DECTCEM 実装により **7 と 25 も報告可能な状態を持つようになった**（`CSI ?7;1$y` / `CSI ?25;2$y` など）が応答路が無い。§6 のとおり、`CSI ?7 $ p` を実装すれば `vttest` の `tst_DEC_DECRPM` が mode 7 を機械判定できるようになる |
+| `DCS $ q … ST` / `DCS + q … ST` | DECRQSS / XTGETTCAP | DCS コールバックが空（`interpreter.rs:157`-`168`） | vim のカーソル形状復元・capability 検出 |
 | ``CSI Ps ` `` / `CSI Ps a` / `CSI Ps e` | HPA / HPR / VPR | HPA は **✅ 実装済み（2026-09-11、CHA と同じメソッド）**。HPR/VPR は `CSI∅` | vttest。**VPR は `move_cursor_down` の別名にできない** — VT510 p.351 は VPR を最終行で止めるが CUD は下マージンで止まるため、DECOM リセット時にスクロール領域があると挙動が食い違う |
 | `CSI Ps b` | REP | `CSI∅` | **ローカルエントリは `rep` を広告していない**ため Tier 2。vttest |
 | `CSI Ps ^` | SD（ECMA-48 綴り） | `CSI∅`。orzma は `CSI T` のみ | 実際に発行するプログラムは**未確認**。安いので別名として入れる程度 |
 | `CSI ?69 h/l` / `CSI Pl;Pr s` | DECLRMM / DECSLRM | `MODE∅` / `CSI∅` | nvim。矩形スクロールに必要 |
 | `CSI ?1015 h/l` | urxvt マウス | `MODE∅` | btop が 1015→1006 の順に発行。1006 があるので実害は小 |
-| `CSI ?Pm s` / `CSI ?Pm r` | XTSAVE / XTRESTORE | `CSI∅`（`?` 付きで intermediate 無しなので match に届いて落ちる） | xterm-ctlseqs は「DECSET と同じ Ps 値」を 1 段キャッシュで保存・復元すると規定するので、**25 も定義上この対象**。`civis`/`cnorm` の代わりに `?25 s` … `?25 r` で括るプログラムがあると hide が戻らない。具体的な呼び出し実例は未特定（低頻度と見られる） |
+| `CSI ?Pm s` / `CSI ?Pm r` | XTSAVE / XTRESTORE | `CSI∅`（`?` 付きで intermediate 無しなので match に届いて落ちる） | xterm-ctlseqs は「DECSET と同じ Ps 値」を 1 段キャッシュで保存・復元すると規定するので、**7 と 25 も定義上この対象**。`civis`/`cnorm` の代わりに `?25 s` … `?25 r` で括るプログラムがあると hide が戻らず、`smam`/`rmam` の代わりに `?7 s` … `?7 r` で括ると autowrap が戻らない。**7 の restore は `modes_mut` 直書きにできない** — reset 方向を復元するときに両画面の LCF を解除する必要があるので `DeviceState::set_auto_wrap` を通す。具体的な呼び出し実例は未特定（低頻度と見られる） |
 
 ### `CSI s` の曖昧性
 
@@ -131,13 +131,13 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 | 対象 | 内容 |
 |---|---|
 | **EL / ECH の pending-wrap 例外**（決着済み） | **決着: no-op を維持し、ECH も同じ方針に揃えた（2026-09-10）。参照実装が割れていることを承知した上で tmux 側を選択。** 経緯: DEC の EL 定義はアクティブ位置を含む（vt220 PDF p.36 L1754「including the cursor position」、vt510 PDF p.311 L9074「From the cursor through the end of the line」— いずれも検証済み）が、**どのマニュアルも deferred wrap をモデル化していない**ため、wrap 中にカーソルが論理的にどこに居るかを裁定しない。tmux 3.7c で実測したところ、幅10の行を埋めた状態で `CSI 0 K` も `CSI 1 X` も**何も消さず wrap も保持する**（行中では両方とも正常に動く）。tmux は `screen_write_clearcharacter` が `cx > sx - 1` で早期 return するモデル A。**訂正: 当初「alacritty も同様」と記録したが、これは誤り。** alacritty は EL と ECH を**意図的に区別している** — `alacritty_terminal-0.26.0/src/term/mod.rs:1643` の `clear_line` は `LineClearMode::Right if cursor.input_needs_wrap => return` を持つが、同 1519-1535 の `erase_chars` には `input_needs_wrap` の判定が**一切無く**、wrap 中でも最終列を消す。xterm の `CASE_ECH` も `do_wrap` を見ない。**訂正（2026-09-11）: kitty と iTerm2 も完全 no-op である。** ただし機構が違う — 両者はカーソルを `x == width` に停める方式で**ブール型のラッチを持たず**、no-op は範囲演算の帰結にすぎない（kitty は `num = MIN(columns - x, count)` が 0、iTerm2 の EL 0 は `from.x > to.x` で早期 return）。明示的なガードは iTerm2 の ECH（`cursorX >= width` で return）のみなので、「3 実装が意図的に同意している」とは言えない。なお両者は DECAWM に関係なくカーソルを停め `CSI ?7l` でも解除しないため、autowrap off で EL/ECH が永久に no-op になる危険を実際に抱えている。orzma は DECAWM 実装時にこの読み手 2 つを `auto_wrap` で門番したので、この危険は無い。**カーソル停止方式との射程合わせ（2026-09-11）**: no-op の判定は `Screen::cursor_parked_past_the_row` に集約し、ラッチ武装・`auto_wrap` 設定・**カーソルが最終列に居ること**の 3 つを要求する。3 つ目が要るのは、tmux / kitty / iTerm2 はカーソル位置そのもので判定するため no-op が行中に届かないのに対し、ブール型ラッチは `tab_to`（CBT）が右端から持ち出せてしまうため。`xterm-256color` を名乗ること、alacritty と xterm が逆であること、`docs/todo/nvim-tree-stale-cells-ech.md` §6.1 で実測検証した版にこのガードが無かったこと — これらを**承知した上で tmux 側を選択した**。実 nvim のキャプチャでは ECH は全て行中発行でこの境界を踏まないため、今回のバグ修正の妥当性には影響しない。xterm を実機で実測できた時点で再訪する価値はある |
-| **1049 の pen 引き継ぎ** | `interpreter.rs:643` に「代替画面の古い pen を使う」と明記。xterm は pen を共有するので、入場時のクリアが違う背景色になり得る。BCE の正しさにも波及 |
+| **1049 の pen 引き継ぎ** | `interpreter.rs:693` に「代替画面の古い pen を使う」と明記。xterm は pen を共有するので、入場時のクリアが違う背景色になり得る。BCE の正しさにも波及 |
 | **DECSC/DECRC の保存範囲**（決着済み） | **決着（2026-09-11）: DECAWM は保存しない。LCF（`pending_wrap`）は保存する。** VT420 2nd ed. p.270 / VT520 p.5-120 の「Wrap flag (autowrap or no autowrap)」は LCF を指す。DEC STD-070 p.D-14 が「LCF は Save Cursor で保存し Restore Cursor で復元すべき」と明記し、xterm `cursor.c` の `DECSC_FLAGS (ATTRIBUTES\|ORIGIN\|PROTECTED)` は `WRAPAROUND` を含まない（同ファイルのコメントが VT420/VT520 の表記を DECAWM と読む解釈を逐語で却下している）。12 実装中モードを保存するのは kitty と iTerm2 の 2 つだけで、実機 VT100/220/420/510 も復元しない |
-| **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:720` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意 |
-| **`CSI 3 J`** | `screen.rs:105` で明示的に拒否。entry は `E3` を広告していないので Tier 1 ではないが、PDF p.13 には定義がある |
+| **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:770` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意 |
+| **`CSI 3 J`** | `EraseScreenMode::from_ed`（`screen.rs:108`）で明示的に拒否。entry は `E3` を広告していないので Tier 1 ではないが、PDF p.13 には定義がある |
 | **SGR 下線拡張** | `sgr.rs:31` が下線種別を潰し、下線色は読み捨て。vim の `58;2` 発行はリポジトリ内に既知（`sgr.rs:675`） |
 | **タブストップの所有** | `tabs.rs:63` が「画面ごと」と明記。xterm は共有テーブル。PDF は所有権を規定していないので、意図的な差異として記録済み |
-| **ICH が開けた桁の属性（BCE）** | vt510 p.316 は「ICH は **normal character attribute** で空白を挿入する」と規定するが、`insert_characters`（`screen.rs:526`）は `pen.erase_cell()` を使い、pen の背景を運ぶ **BCE** になっている。既存テスト `an_inserted_blank_carries_the_pen_background_without_its_rendition` が pin 済み。参照実装は割れており、xterm（`ClearCells` が `TERM_COLOR_FLAGS` で現在の fg/bg を書く）・kitty・ghostty・alacritty・foot が BCE 側、wezterm だけが `Cell::default()` で VT510 に従う。BCE は ECMA-48 にも DEC にも規定が無く、terminfo の `bce`（"screen erased with background color"）由来の概念で、しかも **erase 系**についての記述で ICH を名指ししていない。**多数派に付いた意図的な差異として記録する**（2026-09-11、IRM 実装時の調査で判明）。IRM の経路では開いた桁が直後に glyph で上書きされるため、IRM 側には影響しない |
+| **ICH が開けた桁の属性（BCE）** | vt510 p.316 は「ICH は **normal character attribute** で空白を挿入する」と規定するが、`insert_characters`（`screen.rs:549`）は `pen.erase_cell()` を使い、pen の背景を運ぶ **BCE** になっている。既存テスト `an_inserted_blank_carries_the_pen_background_without_its_rendition` が pin 済み。参照実装は割れており、xterm（`ClearCells` が `TERM_COLOR_FLAGS` で現在の fg/bg を書く）・kitty・ghostty・alacritty・foot が BCE 側、wezterm だけが `Cell::default()` で VT510 に従う。BCE は ECMA-48 にも DEC にも規定が無く、terminfo の `bce`（"screen erased with background color"）由来の概念で、しかも **erase 系**についての記述で ICH を名指ししていない。**多数派に付いた意図的な差異として記録する**（2026-09-11、IRM 実装時の調査で判明）。IRM の経路では開いた桁が直後に glyph で上書きされるため、IRM 側には影響しない |
 | **`Screen::line_feed` が LCF を残す**（未修正） | 4×3 の画面で `abcd` → IND → `e` が (1,3) ではなく **(2,0)** に着地する。DEC STD-070 の LCF リセット操作一覧は LINE FEED / VERTICAL TAB / FORM FEED / INDEX / REVERSE_INDEX / NEXT_LINE を含み、xterm（`cursor.c` の `CursorDown` 末尾 `ResetWrap`）・foot（`term_linefeed` 冒頭）・Windows Terminal（`SetPosition` が無条件に `ResetDelayEOLWrap`）はいずれも解除する。同じ挙動なのは Alacritty のみ。修正は `line_feed` に 1 行だが、`screen/tests/line_feed.rs` の `a_linefeed_preserves_pending_wrap` と `a_linefeed_that_scrolls_preserves_pending_wrap` が現挙動を pin し doc も「意図的に残す」と書いているので、両テストの反転と doc 書き換えが伴う。**別 PR**。なお `tab_to` が残すのは **HT については**妥当で、Alacritty・foot・kitty がいずれも意図的に残し `wraptest` の `TAB cancels wrap` も実機 VT420/VT510 を含め大半が `n`。HT がこれで済むのは、ラッチ武装中はカーソルが必ず右端に居て `cht` が右端へクランプし、結果としてカーソルが動かないため。**CBT は別（DECAWM 実装時に判明、2026-09-11）**: `move_backward_tabs` は `tab_to` 経由でカーソルを左へ動かしつつ LCF を武装のまま残すので、「カーソルは最終列より先に居る」というラッチの前提が行中で偽になる。20 桁で実測すると `CSI 1;20H` `X` `CSI Z`（16 桁へ退避）に続く `CSI K` も `CSI 4 X` も**何も消さず**、続く印字は (0,16) ではなく **(1,0)** に着地した。消去側は `Screen::cursor_parked_past_the_row` に最終列テストを加えて修正済み（決定6 が倣った tmux / kitty / iTerm2 はラッチを持たずカーソルを `x == width` に停める方式なので、no-op が行中に届く余地がそもそも無い。その射程をラッチ実装でも再現した形）。**残るのは印字側**で、CBT のあと最初の文字がやはり次行の先頭へ行く。Alacritty も `move_backward_tabs` で `input_needs_wrap` を落とさないため同じ挙動だが、xterm・foot・Windows Terminal はカーソル移動で解除するので参照実装は割れる。**関連する未決の不整合（DECAWM 実装時に判明、2026-09-11）**: 決定6 は EL-0/ECH の no-op を autowrap-on の文脈だけに閉じたが、`Screen::erase_in_display` は LCF を読みも消しもしない。そのため autowrap が on でラッチが武装している状態では、同じカーソル位置で `CSI J` は最終列を消すのに `CSI K` は消さない、という食い違いが生じる。DEC STD-070 の LCF リセット操作一覧は ED も含んでおり、xterm も消去前に LCF を解除する。実害も実測できる: 代替画面で最終列まで埋めたあと退出し `CSI ?1049h` で再入場すると、入場時の全消去が LCF を落とさないので最初の文字が 1 行下（実測で (1,0)）に着地する。CBT（印字側）・ED・`line_feed` の 3 件は LCF リセット方針を 1 つの決定としてまとめる別 PR で一緒に裁定する |
 
 ### LCF（last column flag）をリセットする操作 — 一覧
@@ -166,6 +166,8 @@ STD-070 が LCF をリセットすると規定する操作:
 | EL / ECH | 残す（意図的） | `cursor_parked_past_the_row` が armed かつ DECAWM on かつ最終列のときだけ no-op。GNU grep バグ回避のため tmux/kitty/iTerm2 側を選択 |
 | ED | **読まない** | 未修正。EL と同一カーソル位置で答えが食い違う |
 | DECRST DECAWM | リセットする（両画面の live のみ） | STD-070 と一致。checkpoint には触らない |
+| DECSTR | **未実装** | STD-070 の `RESET_MODE (AUTO_WRAP_MODE)` に該当する。§5 ステップ4 のとおり `set_auto_wrap` 経由で実装すれば解除も揃う |
+| RIS | リセットする | `DeviceState::reset` は `VtModes::default()` を直に書くが、その前に両画面を reset するので live も checkpoint も落ちる |
 | DECSC / DECRC | 保存・復元する | STD-070 p.D-14 と一致 |
 
 後続 PR は上の表の「未修正」行をまとめて1つの方針決定として扱う。
@@ -194,15 +196,16 @@ STD-070 が LCF をリセットすると規定する操作:
    残るのは **カーソル点滅（`?12`）/ DECSCUSR**。`Screen::cursor()` の固定値のうち
    `shape` と `blinking` は DECSCUSR 待ちのまま。
 
-   **訂正**: DECTCEM 実装時に「vt510 p.243 の保存項目列挙が "Wrap flag" を含むので
-   DECAWM は `Checkpoint` に入れる必要がある」と記録したが、これは誤り。同表記は
-   LCF（last column flag）を指しており DECAWM モードではない — DEC STD-070 p.D-14 と
-   xterm の `DECSC_FLAGS` で確認済み。§4 の「DECSC/DECRC の保存範囲」行が決着を持つ。
-   結果として DECAWM も DECTCEM と同じく `Checkpoint` に入らない。
+   **訂正**: DECTCEM 実装時に「DECAWM は `Checkpoint` に入れる必要がある」と記録したが
+   これは誤りで、どちらのモードも `Checkpoint` に入らない。根拠は §4 の
+   「DECSC/DECRC の保存範囲」行と `Checkpoint` の doc が持つ（重複させない）。
 4. **DECSTR と初期化系**、**1049 の pen 修正**。
    DECSTR には `text_cursor_enable = TextCursorEnable::Shown` を**必ず含める**（§1-B の
    DECSTR 行を参照）。RIS と違い DECSTR は名指しした一部のモードだけを戻すので、
-   `VtModes::default()` 任せにはできない。
+   `VtModes::default()` 任せにはできない。**同じ Table 5-9 は DECAWM と IRM も名指し
+   している**ので、この 2 つも同時に裁定する。DECAWM は `modes_mut` への直書きではなく
+   `DeviceState::set_auto_wrap` を通すこと（`DeviceState::reset` と違って画面リセットを
+   伴わないので、LCF が自動では解除されない）。
 5. **入力側の契約修正**（`kbs` の方針決定 → Shift-Tab → ファンクションキー → 修飾キー → Meta）。
 6. **OSC 4/10/11/12** とその問い合わせ・リセット。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。

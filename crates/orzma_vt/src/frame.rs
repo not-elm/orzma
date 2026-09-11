@@ -92,6 +92,13 @@ pub(crate) struct FrameTracker {
 impl FrameTracker {
     /// Builds a tracker whose damage is seeded with the bootstrap full
     /// repaint, so the first emitted frame carries every viewport row.
+    ///
+    /// The retained [`Carried::default`] disagrees with a fresh device
+    /// on one field: its cursor is not visible, while
+    /// [`DeviceState::cursor`] folds in the `DECTCEM` default, which is.
+    /// The seeded damage is what makes that sound, because it forces the
+    /// first frame out regardless of any diff and that emit settles the
+    /// real cursor before the diffs are ever load-bearing.
     pub fn new() -> Self {
         Self {
             damage: Damage::new(),

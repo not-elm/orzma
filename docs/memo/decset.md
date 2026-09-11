@@ -42,12 +42,12 @@ DECRPMの`Pm`は 0=未認識 / 1=設定 / 2=解除 / 3=恒久設定 / 4=恒久�
 | 1007 | Alternate Scroll | `alternate_scroll` |
 | 2004 | Bracketed Paste | `bracketed_paste` |
 
-フィールドと振る舞いの追加が要るもの。
+単なるフラグではなく、書き込み経路に条件が付くもの（どちらも**実装済み**）。
 
 | Ps | Description | 現状 |
 | - | - | - |
 | 7 | DECAWM — 自動折り返し（**実装済み**） | `VtModes::auto_wrap`。**代入だけでは足りない**。`DeviceState::set_auto_wrap`を通すこと（reset側で両画面のLCFを解除する必要がある。下の節を参照） |
-| 25 | DECTCEM — カーソル表示 | `Screen::cursor`にDECSCUSRと合わせて実装するTODOがある |
+| 25 | DECTCEM — カーソル表示（**実装済み**） | `VtModes::text_cursor_enable`。`Screen::cursor`が引数で受け取り`DeviceState::cursor`が畳む。代入だけで足りる（解除すべきラッチが無い）。`Screen::cursor`に残るTODOは shape / blink（DECSCUSR 待ち）だけ |
 
 代替画面（**実装済み**）。単なるフラグではなく合成的な意味を持つ。
 

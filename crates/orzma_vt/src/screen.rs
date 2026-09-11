@@ -147,13 +147,11 @@ impl Screen {
     /// `auto_wrap` is `DECAWM`. It gates both halves of the deferred
     /// wrap: a reset mode neither resolves an armed wrap nor arms a
     /// new one, so a character at the right border replaces the last
-    /// column and the cursor stays there. Gating the resolve is
-    /// defence in depth behind `DeviceState::set_auto_wrap`, which
-    /// disarms the flag when the mode is reset.
-    ///
-    /// `mode` is `IRM`: under [`InsertReplaceMode::Insert`] the character
-    /// lands on a column opened by [`Self::insert_characters`], which
-    /// records what the shift does to the rest of the row.
+    /// column and the cursor stays there. The gate on the resolve is
+    /// load-bearing rather than redundant with
+    /// `DeviceState::set_auto_wrap`: that disarm cannot reach a
+    /// checkpoint, so a `DECRC` puts an armed flag back while the mode
+    /// is still reset, and only this check stops it from wrapping.
     ///
     /// The caller dispatches control bytes itself; this method assumes
     /// a printable character of display width one.
@@ -1091,6 +1089,11 @@ impl Screen {
     }
 
     /// The write cursor as an emitted frame carries it.
+    ///
+    /// `text_cursor_enable` is `DECTCEM`, which the device owns rather
+    /// than either screen. Production callers reach this through
+    /// `DeviceState::cursor`, which records why pairing a screen read
+    /// with a separately-read mode silently drops a `CSI ? 25 l`.
     // TODO: Report the real shape and blink once DECSCUSR lands. Block /
     // steady is what the terminal starts at.
     pub fn cursor(&self, text_cursor_enable: TextCursorEnable) -> Cursor {

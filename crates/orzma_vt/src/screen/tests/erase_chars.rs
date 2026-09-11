@@ -117,9 +117,9 @@ fn erasing_characters_leaves_the_cursor_on_its_column() {
     assert_eq!(screen.state.line, ScreenLine(0));
 }
 
-/// Asserts that erasing characters is a no-op while the deferred
-/// wrap is armed, matching `EL 0` rather than erasing the row's
-/// last cell.
+/// Asserts that erasing characters is a no-op while the deferred wrap
+/// is armed and autowrap is set, matching `EL 0` rather than erasing
+/// the row's last cell.
 ///
 /// Case: an application fills a row to its last column and then
 /// issues `CSI 1 X` before printing anything further.
@@ -135,8 +135,8 @@ fn erasing_characters_is_a_no_op_under_pending_wrap() {
 }
 
 /// Asserts that a cursor resting on the last column with no wrap
-/// armed erases that column, so the no-op turns on the deferred
-/// wrap rather than on the column the cursor sits in.
+/// armed erases that column, so an armed deferred wrap is necessary
+/// for the no-op and the column alone does not reach it.
 ///
 /// Case: an application addresses the last column directly and
 /// clears the single character standing there.

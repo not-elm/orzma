@@ -107,8 +107,8 @@ impl InsertReplaceMode {
 /// Both screens share one value, and `DECSC` does not carry it; the
 /// saved-cursor state records what it carries instead.
 ///
-/// The default is [`Self::Enabled`], unlike the other modes in this
-/// file, because `xterm-256color` advertises `am`.
+/// The default is [`Self::Enabled`], the set rather than the reset
+/// state, because `xterm-256color` advertises `am`.
 ///
 /// # Control Functions
 ///
@@ -309,6 +309,31 @@ impl MouseTracking {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Asserts that a device that has seen no DECAWM starts with
+    /// autowrap enabled, which is the set rather than the reset state.
+    ///
+    /// Case: a terminal is spawned and the shell echoes a command line
+    /// longer than the window is wide, which has to continue on the
+    /// next row.
+    #[test]
+    fn autowrap_starts_enabled() {
+        assert_eq!(VtModes::default().auto_wrap, AutoWrap::Enabled);
+    }
+
+    /// Asserts that `DECSET 7` selects `Enabled` and `DECRST 7` selects
+    /// `Disabled`, and that `wraps` reports the selection.
+    ///
+    /// Case: a status-bar program turns autowrap off to draw a
+    /// full-width label and turns it back on before handing the
+    /// terminal back to the shell.
+    #[test]
+    fn decset_seven_selects_enabled_and_decrst_selects_disabled() {
+        assert_eq!(AutoWrap::from_decset(true), AutoWrap::Enabled);
+        assert_eq!(AutoWrap::from_decset(false), AutoWrap::Disabled);
+        assert!(AutoWrap::Enabled.wraps());
+        assert!(!AutoWrap::Disabled.wraps());
+    }
 
     /// Asserts that a device that has seen no DECTCEM starts with the
     /// cursor shown, which is the mode's documented default.

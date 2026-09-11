@@ -150,6 +150,12 @@ impl DeviceState {
         let was_showing_alternate = matches!(self.modes.active_screen, ScreenKind::Alternate);
         let primary = self.screens.primary.reset();
         let _ = self.screens.alternate.reset();
+        // NOTE: This wholesale write is the one place `auto_wrap` is set
+        // without `DeviceState::set_auto_wrap`, and it is sound only because
+        // the two screen resets above already cleared each screen's
+        // live and saved deferred wrap. A partial mode reset such as
+        // `DECSTR`, which leaves the screens alone, must go through
+        // `set_auto_wrap` instead.
         self.modes = VtModes::default();
         self.title = TitleState::default();
         (was_showing_alternate || primary.is_some()).then_some(DamageSpan::Full)

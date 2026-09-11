@@ -133,7 +133,6 @@ impl Session {
     }
 }
 
-/// The glyphs of the first four columns of the top viewport row.
 /// Runs `setup` and then `chunk` over one session, and reports the
 /// liveness `chunk` alone produced.
 fn liveness_after(setup: &[u8], chunk: &[u8]) -> bool {

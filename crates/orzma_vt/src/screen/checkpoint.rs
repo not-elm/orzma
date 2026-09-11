@@ -34,6 +34,11 @@ use crate::screen::state::ScreenState;
 /// `DECRC` restores. `Self::pending_wrap` is therefore the field that
 /// answers the manuals' line, and the mode is not saved at all.
 ///
+/// `DECTCEM` is absent for the same reason as `IRM`: the VT510
+/// saved-item list does not name cursor visibility, so a mutation that
+/// added it here would make a `DECRC` restore a visibility no reference
+/// terminal restores.
+///
 /// `DECSTR` and `RIS` reset the saved state as well, and put back this
 /// same default rather than leaving the last `DECSC` reachable.
 ///
