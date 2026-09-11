@@ -21,9 +21,9 @@ use crate::screen::margins::OriginMode;
 use crate::screen::tabs::CharacterTabEdit;
 use crate::screen::{EraseLineMode, EraseScreenMode};
 use crate::{
-    device::DeviceState,
-    frame::{damage::DamageSpan, FrameTracker},
     InterpretOutput, VtSignal,
+    device::DeviceState,
+    frame::{FrameTracker, damage::DamageSpan},
 };
 use vtparse::{CsiParam, VTActor, VTParser};
 
