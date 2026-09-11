@@ -98,14 +98,11 @@ impl InsertReplaceMode {
 /// Whether a graphic character received at the right border wraps to
 /// the next line or replaces the character already in the last column.
 ///
-/// Both screens share one value. `DECSC` does not carry the mode, but
-/// it does carry the last-column flag — the saved-cursor state records
-/// the difference.
+/// Both screens share one value, and `DECSC` does not carry it; the
+/// saved-cursor state records what it carries instead.
 ///
 /// The default is [`Self::Enabled`], unlike the other modes in this
-/// file, because `xterm-256color` advertises `am` and DEC STD-070
-/// resolves its own `WRAP_OFF` power-up value from the Set-Up setting,
-/// which orzma has none of.
+/// file, because `xterm-256color` advertises `am`.
 ///
 /// # Control Functions
 ///

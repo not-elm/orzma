@@ -176,7 +176,6 @@ impl Screen {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
         let wrapping = auto_wrap.wraps();
         let wrap = if self.state.pending_wrap && wrapping {
-            self.state.pending_wrap = false;
             self.state.column = GridColumn(0);
             self.line_feed()
         } else {
@@ -191,7 +190,7 @@ impl Screen {
             self.insert_characters(1);
         }
         self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph);
-        let at_right_edge = self.state.column.0 + 1 >= self.grid.size().cols;
+        let at_right_edge = self.at_right_edge();
         if !at_right_edge {
             self.state.column.0 += 1;
         }
@@ -816,24 +815,22 @@ impl Screen {
         self.damage_span(self.state.line, self.state.line)
     }
 
-    /// Whether the cursor logically sits past the row's last cell, which
-    /// is what makes an erase from the cursor rightward find nothing to
-    /// erase.
+    /// Whether the cursor logically sits past the row's last cell, so
+    /// that an erase from the cursor rightward finds nothing to erase.
     ///
-    /// All three tests are the agreed policy's own premise. The deferred
-    /// wrap must be armed and `DECAWM` set, so the next character really
-    /// will move to the next row; and the cursor must be on the last
-    /// column, because tmux, kitty and iTerm2 — the implementations the
-    /// no-op follows — park the cursor past the last column instead of
-    /// latching a flag, so their no-op is a range computation that can
-    /// never reach a mid-row cursor. The column test gives orzma's latch
-    /// the same reach: [`Self::tab_to`] carries an armed flag off the
-    /// right border, and without it a `CBT` out of a full row would
-    /// leave `EL 0` and `ECH` declining in the middle of the row.
+    /// All three conditions are required: the deferred wrap armed,
+    /// `DECAWM` set so the next character really does move to the next
+    /// row, and the cursor on the last column. The column test is not
+    /// redundant — [`Self::tab_to`] carries an armed flag off the right
+    /// border, so without it a `CBT` out of a full row would leave
+    /// `EL 0` and `ECH` declining mid-row.
     fn cursor_parked_past_the_row(&self, auto_wrap: AutoWrap) -> bool {
-        self.state.pending_wrap
-            && auto_wrap.wraps()
-            && self.state.column.0 + 1 >= self.grid.size().cols
+        self.state.pending_wrap && auto_wrap.wraps() && self.at_right_edge()
+    }
+
+    /// Whether the cursor is on the row's last column.
+    fn at_right_edge(&self) -> bool {
+        self.state.column.0 + 1 >= self.grid.size().cols
     }
 }
 

@@ -224,17 +224,16 @@ impl DeviceState {
     /// Applies `DECAWM`, disarming each screen's deferred wrap when the
     /// mode is reset.
     ///
-    /// The mode is device-wide, so both screens are disarmed rather
-    /// than only the one shown; a combined `CSI ? 7 ; 47 l` then means
-    /// the same thing whichever order the two modes are applied in.
-    /// That order-independence holds for mode 47; it does not hold for
-    /// mode 1049, whose reset restores the saved cursor's checkpoint —
-    /// `CSI ?7;1049l` and `CSI ?1049;7l` leave different live-flag
-    /// states, because a reset that restores a checkpoint (1048, 1049)
-    /// puts the saved flag back rather than leaving it cleared.
-    /// DEC STD-070 lists a reset of autowrap among the operations that
-    /// clear the last-column flag, and lists only that direction, so a
-    /// set leaves an armed flag alone.
+    /// The mode is device-wide, so a reset disarms both screens rather
+    /// than only the one shown. A set leaves an armed flag alone: DEC
+    /// STD-070 lists only the reset direction among the operations that
+    /// clear the last-column flag.
+    ///
+    /// The disarm is load-bearing, not a convenience. Without it a
+    /// reset followed by a set with no print in between would leave a
+    /// stale flag for the next character to cash in as a wrap. It does
+    /// not reach a checkpoint, so a reset that restores one (`DECRC`,
+    /// 1048, 1049) puts the saved flag back.
     ///
     /// # Control Functions
     ///

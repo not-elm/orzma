@@ -52,6 +52,14 @@ fn first_row_glyphs(device: &DeviceState) -> Vec<char> {
         .collect()
 }
 
+/// The glyph at `column` of the device's `line`th visible row.
+///
+/// `column` is `u16` because `Row<Cell>` implements only `Index<u16>`
+/// and `Index<GridColumn>`; a `usize` does not reach the slice impl.
+fn glyph_at(device: &DeviceState, line: u16, column: u16) -> char {
+    device.active_screen().viewport_row(ViewportLine(line))[column].c
+}
+
 /// Reports the reply bytes `chunk` produced, through the public
 /// entry point rather than the crate-internal interpreter.
 fn replies_of(chunk: &[u8]) -> Vec<u8> {

@@ -136,6 +136,36 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 | **ICH が開けた桁の属性（BCE）** | vt510 p.316 は「ICH は **normal character attribute** で空白を挿入する」と規定するが、`insert_characters`（`screen.rs:526`）は `pen.erase_cell()` を使い、pen の背景を運ぶ **BCE** になっている。既存テスト `an_inserted_blank_carries_the_pen_background_without_its_rendition` が pin 済み。参照実装は割れており、xterm（`ClearCells` が `TERM_COLOR_FLAGS` で現在の fg/bg を書く）・kitty・ghostty・alacritty・foot が BCE 側、wezterm だけが `Cell::default()` で VT510 に従う。BCE は ECMA-48 にも DEC にも規定が無く、terminfo の `bce`（"screen erased with background color"）由来の概念で、しかも **erase 系**についての記述で ICH を名指ししていない。**多数派に付いた意図的な差異として記録する**（2026-09-11、IRM 実装時の調査で判明）。IRM の経路では開いた桁が直後に glyph で上書きされるため、IRM 側には影響しない |
 | **`Screen::line_feed` が LCF を残す**（未修正） | 4×3 の画面で `abcd` → IND → `e` が (1,3) ではなく **(2,0)** に着地する。DEC STD-070 の LCF リセット操作一覧は LINE FEED / VERTICAL TAB / FORM FEED / INDEX / REVERSE_INDEX / NEXT_LINE を含み、xterm（`cursor.c` の `CursorDown` 末尾 `ResetWrap`）・foot（`term_linefeed` 冒頭）・Windows Terminal（`SetPosition` が無条件に `ResetDelayEOLWrap`）はいずれも解除する。同じ挙動なのは Alacritty のみ。修正は `line_feed` に 1 行だが、`screen/tests/line_feed.rs` の `a_linefeed_preserves_pending_wrap` と `a_linefeed_that_scrolls_preserves_pending_wrap` が現挙動を pin し doc も「意図的に残す」と書いているので、両テストの反転と doc 書き換えが伴う。**別 PR**。なお `tab_to` が残すのは **HT については**妥当で、Alacritty・foot・kitty がいずれも意図的に残し `wraptest` の `TAB cancels wrap` も実機 VT420/VT510 を含め大半が `n`。HT がこれで済むのは、ラッチ武装中はカーソルが必ず右端に居て `cht` が右端へクランプし、結果としてカーソルが動かないため。**CBT は別（DECAWM 実装時に判明、2026-09-11）**: `move_backward_tabs` は `tab_to` 経由でカーソルを左へ動かしつつ LCF を武装のまま残すので、「カーソルは最終列より先に居る」というラッチの前提が行中で偽になる。20 桁で実測すると `CSI 1;20H` `X` `CSI Z`（16 桁へ退避）に続く `CSI K` も `CSI 4 X` も**何も消さず**、続く印字は (0,16) ではなく **(1,0)** に着地した。消去側は `Screen::cursor_parked_past_the_row` に最終列テストを加えて修正済み（決定6 が倣った tmux / kitty / iTerm2 はラッチを持たずカーソルを `x == width` に停める方式なので、no-op が行中に届く余地がそもそも無い。その射程をラッチ実装でも再現した形）。**残るのは印字側**で、CBT のあと最初の文字がやはり次行の先頭へ行く。Alacritty も `move_backward_tabs` で `input_needs_wrap` を落とさないため同じ挙動だが、xterm・foot・Windows Terminal はカーソル移動で解除するので参照実装は割れる。**関連する未決の不整合（DECAWM 実装時に判明、2026-09-11）**: 決定6 は EL-0/ECH の no-op を autowrap-on の文脈だけに閉じたが、`Screen::erase_in_display` は LCF を読みも消しもしない。そのため autowrap が on でラッチが武装している状態では、同じカーソル位置で `CSI J` は最終列を消すのに `CSI K` は消さない、という食い違いが生じる。DEC STD-070 の LCF リセット操作一覧は ED も含んでおり、xterm も消去前に LCF を解除する。実害も実測できる: 代替画面で最終列まで埋めたあと退出し `CSI ?1049h` で再入場すると、入場時の全消去が LCF を落とさないので最初の文字が 1 行下（実測で (1,0)）に着地する。CBT（印字側）・ED・`line_feed` の 3 件は LCF リセット方針を 1 つの決定としてまとめる別 PR で一緒に裁定する |
 
+### LCF（last column flag）をリセットする操作 — 一覧
+
+DECAWM 実装時に §4 の4件を個別に再導出したが、これらは同じ形（カーソルを動かすか
+消す操作がフラグをリセットしない）であり、DEC STD-070 は宣言的な一覧として規定して
+いる。後続 PR が call site ごとに推論を繰り返さないよう、その一覧をここに置く。
+
+STD-070 が LCF をリセットすると規定する操作:
+
+- カーソル移動: CUU / CUD / CUF / CUB / CUP / HVP / CR / BS / **HT**、
+  および **LINE FEED / VERTICAL TAB / FORM FEED / INDEX / REVERSE_INDEX / NEXT_LINE**
+- 消去: **EL / ECH / ED** / DCH / ICH
+- モード: **RESET_MODE (COLUMN_MODE, ORIGIN_MODE, AUTO_WRAP_MODE)** — reset 方向のみ
+  （`SET_MODE` 行には `AUTO_WRAP_MODE` が無い。p.5-217 改訂注16 も reset 方向のみを名指し）
+- DECSC / DECRC は LCF を**保存・復元する**（リセットしない。p.D-14）
+
+太字は orzma の現状が STD-070 と食い違うか、参照実装が割れている箇所。orzma の現状:
+
+| 操作 | 現状 | 備考 |
+|---|---|---|
+| カーソル移動（CUU/CUD/CUF/CUB/CUP/CR/BS） | リセットする | STD-070 と一致 |
+| HT | **残す** | 妥当。Alacritty・foot・kitty がいずれも意図的に残し、`wraptest` の `TAB cancels wrap` も実機 VT420/VT510 を含め大半が `n` |
+| CBT（`tab_to` 経由） | **残す** | 消去側は DECAWM 実装で塞いだ（`cursor_parked_past_the_row` が列も検査する）。**print 側は未修正** |
+| LF / VT / FF / IND | **残す** | 未修正。xterm・foot・Windows Terminal はリセットする。Alacritty のみ orzma と同じ |
+| EL / ECH | 残す（意図的） | `cursor_parked_past_the_row` が armed かつ DECAWM on かつ最終列のときだけ no-op。GNU grep バグ回避のため tmux/kitty/iTerm2 側を選択 |
+| ED | **読まない** | 未修正。EL と同一カーソル位置で答えが食い違う |
+| DECRST DECAWM | リセットする（両画面の live のみ） | STD-070 と一致。checkpoint には触らない |
+| DECSC / DECRC | 保存・復元する | STD-070 p.D-14 と一致 |
+
+後続 PR は上の表の「未修正」行をまとめて1つの方針決定として扱う。
+
 ## 5. 実装順（推奨）
 
 1. ~~**ECH**~~ ~~**ICH/DCH**~~ **完了（2026-09-10）** → ~~**IRM**~~ **完了（2026-09-11）**。

@@ -3,11 +3,6 @@
 
 use super::*;
 
-/// The glyph at `column` of the device's second visible row.
-fn second_row_glyph(device: &DeviceState, column: u16) -> char {
-    device.active_screen().viewport_row(ViewportLine(1))[column].c
-}
-
 /// Asserts that, absent an earlier `DECSC`, a reset autowrap keeps a
 /// run longer than the row on the row it started on, replacing the
 /// last column.
@@ -18,7 +13,7 @@ fn second_row_glyph(device: &DeviceState, column: u16) -> char {
 fn a_reset_autowrap_keeps_a_long_run_on_one_row() {
     let device = interpret(b"\x1b[?7labcdef");
     assert_eq!(first_row_glyphs(&device), vec!['a', 'b', 'c', 'f']);
-    assert_eq!(second_row_glyph(&device, 0), ' ');
+    assert_eq!(glyph_at(&device, 1, 0), ' ');
 }
 
 /// Asserts that a deferred wrap `DECSC` saved before a reset autowrap
@@ -30,7 +25,7 @@ fn a_reset_autowrap_keeps_a_long_run_on_one_row() {
 #[test]
 fn a_decsc_saved_deferred_wrap_survives_a_reset_autowrap_round_trip() {
     let device = interpret(b"abcd\x1b7\x1b[?7l\x1b[?7h\x1b8e");
-    assert_eq!(second_row_glyph(&device, 0), 'e');
+    assert_eq!(glyph_at(&device, 1, 0), 'e');
 }
 
 /// Asserts that a set autowrap after a reset one does not cash in a
@@ -42,7 +37,7 @@ fn a_decsc_saved_deferred_wrap_survives_a_reset_autowrap_round_trip() {
 fn a_set_autowrap_does_not_cash_in_a_wrap_armed_before_the_reset() {
     let device = interpret(b"abcd\x1b[?7l\x1b[?7he");
     assert_eq!(first_row_glyphs(&device), vec!['a', 'b', 'c', 'e']);
-    assert_eq!(second_row_glyph(&device, 0), ' ');
+    assert_eq!(glyph_at(&device, 1, 0), ' ');
 }
 
 /// Asserts that a redundant set autowrap leaves an armed deferred wrap
@@ -53,7 +48,7 @@ fn a_set_autowrap_does_not_cash_in_a_wrap_armed_before_the_reset() {
 #[test]
 fn a_redundant_set_autowrap_leaves_an_armed_wrap_alone() {
     let device = interpret(b"abcd\x1b[?7he");
-    assert_eq!(second_row_glyph(&device, 0), 'e');
+    assert_eq!(glyph_at(&device, 1, 0), 'e');
 }
 
 /// Asserts that the mode is device-wide: a reset on the primary screen
@@ -65,7 +60,7 @@ fn a_redundant_set_autowrap_leaves_an_armed_wrap_alone() {
 fn the_mode_carries_across_the_alternate_screen() {
     let device = interpret(b"\x1b[?7l\x1b[?1049habcdef");
     assert_eq!(first_row_glyphs(&device), vec!['a', 'b', 'c', 'f']);
-    assert_eq!(second_row_glyph(&device, 0), ' ');
+    assert_eq!(glyph_at(&device, 1, 0), ' ');
 }
 
 /// Asserts that `RIS` returns autowrap to its power-up value rather
@@ -76,7 +71,7 @@ fn the_mode_carries_across_the_alternate_screen() {
 #[test]
 fn a_hard_reset_returns_autowrap_to_the_power_up_value() {
     let device = interpret(b"\x1b[?7l\x1bcabcde");
-    assert_eq!(second_row_glyph(&device, 0), 'e');
+    assert_eq!(glyph_at(&device, 1, 0), 'e');
 }
 
 /// Asserts that an erase to the end of the line still erases after a
@@ -115,7 +110,7 @@ fn an_erase_of_characters_runs_after_a_restore_while_autowrap_is_reset() {
 fn an_erase_to_end_runs_after_a_bare_alternate_screen_round_trip() {
     let device = interpret(b"abcd\x1b[?47h\x1b[?7l\x1b[?47l\x1b[K\x1b[?7he");
     assert_eq!(first_row_glyphs(&device), vec!['a', 'b', 'c', 'e']);
-    assert_eq!(second_row_glyph(&device, 0), ' ');
+    assert_eq!(glyph_at(&device, 1, 0), ' ');
 }
 
 /// Asserts that an erase to the end of the line still erases on the
@@ -139,7 +134,7 @@ fn an_erase_to_end_runs_after_a_mode_1049_round_trip() {
 fn a_backward_tab_before_a_save_leaves_no_wrap_to_cash_in() {
     let device = interpret(b"abcd\x1b[Z\x1b7\x1b[?7l\x1b8x");
     assert_eq!(first_row_glyphs(&device), vec!['x', 'b', 'c', 'd']);
-    assert_eq!(second_row_glyph(&device, 0), ' ');
+    assert_eq!(glyph_at(&device, 1, 0), ' ');
 }
 
 /// Asserts that a reset autowrap stops the bottom row of the scrolling
