@@ -45,9 +45,8 @@ pub struct VtModes {
     /// DECTCEM (DECSET 25): whether the text cursor is drawn.
     ///
     /// The device carries this rather than either screen, so a switch to
-    /// the alternate screen keeps the state the application set. DECSC
-    /// does not save it either — the VT510 saved-item list does not name
-    /// cursor visibility.
+    /// the alternate screen keeps the state the application set.
+    /// DECSC does not save it either — the VT510 saved-item list does not name cursor visibility.
     pub text_cursor_enable: TextCursorEnable,
     /// Coordinate encoding for mouse reports.
     pub mouse_encoding: MouseEncoding,
