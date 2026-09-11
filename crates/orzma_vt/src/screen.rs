@@ -139,36 +139,18 @@ impl Screen {
     /// Prints one character at the cursor with the current pen, wrapping
     /// first when the deferred wrap is armed and autowrap is set.
     ///
-    /// `insert_replace` is `IRM`: under [`InsertReplaceMode::Insert`]
-    /// the character lands on a column opened by
-    /// [`Self::insert_characters`], which records what the shift does
-    /// to the rest of the row.
+    /// `insert_replace` is `IRM`: under [`InsertReplaceMode::Insert`] the
+    /// rest of the row shifts right one column before the character lands.
     ///
-    /// `auto_wrap` is `DECAWM`. It gates both halves of the deferred
-    /// wrap: a reset mode neither resolves an armed wrap nor arms a
-    /// new one, so a character at the right border replaces the last
-    /// column and the cursor stays there. The gate on the resolve is
-    /// load-bearing rather than redundant with
-    /// `DeviceState::set_auto_wrap`: that disarm cannot reach a
-    /// checkpoint, so a `DECRC` puts an armed flag back while the mode
-    /// is still reset, and only this check stops it from wrapping.
+    /// `auto_wrap` is `DECAWM`. While it is reset, a character at the right
+    /// border replaces the last column, and an armed wrap is not resolved
+    /// either, because a `DECRC` can restore one.
     ///
-    /// The caller dispatches control bytes itself; this method assumes
-    /// a printable character of display width one.
+    /// `c` must be a printable character of display width one.
     ///
-    /// A wrap that scrolled reports [`DamageSpan::Full`]; every other print
-    /// reports the row the character landed on, or nothing when that row has
-    /// scrolled out of the window. [`Self::line_feed`] reports nothing for
-    /// the wrap's cursor motion, so passing its value through would leave
-    /// the character just written unpainted.
-    // TODO: Store wide characters as a cell plus a spacer and compose
-    // zero-width marks into the previous cell, so that `Run::cols` sums
-    // display widths as its doc promises; the renderer's `runs_to_cells`
-    // already advances by display width, and until then every cell after
-    // a wide character lands one column right of the VT's own cursor.
-    // The insert-mode shift below inherits the same assumption: it
-    // moves one column where xterm, alacritty, kitty, ghostty, foot and
-    // wezterm all move the character's display width.
+    /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
+    /// the row the character landed on, or `None` when that row has
+    /// scrolled out of the window.
     pub fn print(
         &mut self,
         c: char,
