@@ -97,6 +97,27 @@ fn the_scroll_down_sequence_scrolls_the_region_down() {
     );
 }
 
+/// Asserts that `CSI ^`, xterm's alternate spelling of SD, scrolls the
+/// region down by one row and that a lone zero reads as that same
+/// default.
+///
+/// Case: a program written against xterm's control sequence table
+/// scrolls a pane back one line with the caret spelling.
+#[test]
+fn the_xterm_scroll_down_spelling_scrolls_the_region_down() {
+    let device = interpret(b"a\x1b[^");
+    assert_eq!(
+        device.active_screen().viewport_row(ViewportLine(1))[0].c,
+        'a'
+    );
+
+    let device = interpret(b"a\x1b[0^");
+    assert_eq!(
+        device.active_screen().viewport_row(ViewportLine(1))[0].c,
+        'a'
+    );
+}
+
 /// Asserts that a `CSI T` carrying more than one parameter is ignored
 /// rather than read as a scroll down.
 ///

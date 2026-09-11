@@ -400,6 +400,17 @@ impl VTActor for Executor<'_> {
                     .scroll_region_down(repeat_count(params.value(0)));
                 self.stage(damage);
             }
+            // SD (xterm's alternate spelling)
+            // NOTE: ECMA-48 assigns this final byte to SIMD, not SD. It is
+            // read as SD here because xterm reads it that way, so an
+            // implementation of SIMD must not take this arm over.
+            (None, b'^') => {
+                let damage = self
+                    .device
+                    .active_screen_mut()
+                    .scroll_region_down(repeat_count(params.value(0)));
+                self.stage(damage);
+            }
             // CHT
             (None, b'I') => self
                 .device

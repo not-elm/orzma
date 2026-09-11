@@ -588,6 +588,7 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `SD` (`CSI Pn T`)
+    /// - `SD` (`CSI Pn ^`), xterm's alternate spelling
     pub fn scroll_region_down(&mut self, count: u16) -> Option<DamageSpan> {
         self.shift_rows_down(self.scroll_region.top_margin(), count)
     }
