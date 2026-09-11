@@ -157,6 +157,7 @@ mod line_editing;
 mod line_movement;
 mod media_copy;
 mod memory_lock;
+mod meta_key;
 mod modes;
 mod mouse;
 mod parser_limits;
