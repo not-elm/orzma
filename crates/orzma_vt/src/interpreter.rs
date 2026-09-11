@@ -661,6 +661,13 @@ impl Executor<'_> {
                 1049 => self.set_alternate_screen_with_cursor(enabled),
                 // Bracketed paste
                 2004 => self.device.modes_mut().bracketed_paste = enabled,
+                // Interpret "meta" key
+                // NOTE: The eighth-bit meta encoding is ignored rather than
+                // honored. Alt always prefixes ESC, which is xterm's
+                // metaSendsEscape, and xterm gives that precedence over this
+                // mode; honoring it would let the `smm` readline sends at
+                // startup switch every Alt key away from the ESC prefix.
+                1034 => {}
                 _ => self.set_mouse_mode(mode, enabled),
             }
         }
