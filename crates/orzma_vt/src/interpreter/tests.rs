@@ -75,11 +75,6 @@ impl Session {
         self.0.frame()
     }
 
-    /// The device the session has been driving.
-    fn device(&self) -> &DeviceState {
-        &self.0.device
-    }
-
     /// Mounts a one-cell placement at the active screen's cursor.
     fn mount(&mut self, id: InstanceId) {
         assert!(
@@ -101,6 +96,10 @@ impl Session {
 
     fn active_screen(&self) -> ScreenKind {
         self.0.device.modes().active_screen
+    }
+
+    fn cursor_visible(&self) -> bool {
+        self.0.device.cursor().visible
     }
 
     fn cursor_column(&self) -> u16 {

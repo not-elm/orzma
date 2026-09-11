@@ -27,10 +27,10 @@ fn a_dectcem_set_shows_a_hidden_cursor() {
     let mut session = Session::new();
 
     session.feed(b"\x1b[?25l");
-    assert!(!cursor_visible(session.device()));
+    assert!(!session.cursor_visible());
 
     session.feed(b"\x1b[?25h");
-    assert!(cursor_visible(session.device()));
+    assert!(session.cursor_visible());
 }
 
 /// Asserts that a terminal that has seen no DECTCEM reports a visible
@@ -121,7 +121,7 @@ fn the_alternate_screen_keeps_the_cursor_visibility() {
     let mut session = Session::new();
     session.feed(b"\x1b[?25l\x1b[?1049h");
     session.feed(b"\x1b[?1049l");
-    assert!(!cursor_visible(session.device()));
+    assert!(!session.cursor_visible());
 }
 
 /// Asserts that a chunk hiding the cursor is reported as
@@ -153,7 +153,9 @@ fn a_dectcem_write_that_changes_nothing_does_not_make_the_chunk_live() {
 fn an_emitted_frame_carries_the_hidden_cursor() {
     let mut session = Session::new();
     session.feed(b"$ ");
-    let _bootstrap = session.frame();
+    session
+        .frame()
+        .expect("the first chunk emits the bootstrap frame");
 
     session.feed(b"\x1b[?25l");
     let hidden = session.frame().expect("hiding the cursor owes a frame");

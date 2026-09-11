@@ -1026,10 +1026,8 @@ impl Screen {
     /// The write cursor as an emitted frame carries it, with the
     /// caller's DECTCEM state folded into `visible`.
     ///
-    /// The mode is not the screen's to hold — the device carries it, so
-    /// a screen switch cannot lose it — which is why it arrives as a
-    /// parameter. Prefer [`crate::device::DeviceState::cursor`], which
-    /// pairs the two for you.
+    /// Prefer [`crate::device::DeviceState::cursor`], which pairs the
+    /// screen with the device's [`TextCursorEnable`] for you.
     // TODO: Report the real shape and blink once DECSCUSR lands. Block /
     // steady is what the terminal starts at.
     pub fn cursor(&self, text_cursor_enable: TextCursorEnable) -> Cursor {
