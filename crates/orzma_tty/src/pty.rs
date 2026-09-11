@@ -49,9 +49,13 @@ pub enum ChunkPoll {
 pub enum ExitPoll {
     /// The child exited; `None` if the `wait` itself failed.
     Exited(Option<i32>),
-    /// The child is still running (or its status is not yet sent).
+    /// No status is queued while the thread that sends it is still alive.
+    ///
+    /// Besides a running child, this covers the moment after the status
+    /// has been received but before the sending thread has exited.
     Pending,
-    /// The reader thread is gone without ever sending a status.
+    /// The thread that sends the status is gone and no status remains
+    /// queued.
     Disconnected,
 }
 
@@ -624,9 +628,9 @@ mod tests {
     }
 
     /// Asserts that the child's exit is reported exactly once: the
-    /// first successful poll yields the exit code, and every later poll
-    /// finds the reader thread gone and reports `Disconnected` rather
-    /// than replaying the code.
+    /// first successful poll yields the exit code, and later polls report
+    /// `Pending` until the sending thread is gone and then `Disconnected`,
+    /// never replaying the code.
     ///
     /// Case: the shell process exits while the host keeps polling every
     /// frame for output and exit state.
@@ -651,12 +655,19 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         };
         assert_eq!(code, Some(0));
-        for _ in 0..3 {
-            assert_eq!(
-                pty.poll_exit(),
-                ExitPoll::Disconnected,
-                "the exit must not be re-reported"
-            );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match pty.poll_exit() {
+                ExitPoll::Disconnected => break,
+                ExitPoll::Pending => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the exit stream never disconnected"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                }
+                ExitPoll::Exited(code) => panic!("the exit was re-reported with {code:?}"),
+            }
         }
     }
 
