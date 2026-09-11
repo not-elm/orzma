@@ -6,7 +6,7 @@ use crate::{
     material::state::TerminalMaterialState,
     schema::{
         Color as CellColor, GridCell, GridLine, HyperlinkHoverState, Palette, Rgb,
-        SelectionGeometry, SelectionRange, TerminalGrid,
+        SelectionGeometry, SelectionRange, Style, TerminalGrid,
     },
 };
 use bevy::{
@@ -965,8 +965,8 @@ fn rebuild_cells(
 /// composite combining glyphs onto the base char in Tier 1.
 ///
 /// Maps U+0332 (combining low line), U+0333 (double low line), U+0331
-/// (combining macron below) to `style::UNDERLINE`, and U+0336 (combining
-/// long stroke overlay) to `style::STRIKE`. Other combining marks are
+/// (combining macron below) to `Style::UNDERLINE`, and U+0336 (combining
+/// long stroke overlay) to `Style::STRIKE`. Other combining marks are
 /// ignored — the base glyph still renders.
 fn style_bits_from_combining_marks(text: &str) -> u32 {
     // ASCII bytes (< 0x80) can never be combining marks (those live above
@@ -975,8 +975,8 @@ fn style_bits_from_combining_marks(text: &str) -> u32 {
     if text.is_ascii() {
         return 0;
     }
-    const UNDERLINE: u32 = 4;
-    const STRIKE: u32 = 8;
+    const UNDERLINE: u32 = Style::UNDERLINE.bits() as u32;
+    const STRIKE: u32 = Style::STRIKE.bits() as u32;
     let mut bits = 0u32;
     for c in text.chars() {
         match c {

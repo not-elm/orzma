@@ -2,6 +2,7 @@ use crate::bundled::{
     BOLD, BOLD_ITALIC, FALLBACK_BOLD, FALLBACK_BOLD_ITALIC, FALLBACK_ITALIC, FALLBACK_REGULAR,
     ITALIC, REGULAR, SYMBOL_REGULAR,
 };
+use crate::schema::Style;
 use ab_glyph::{Font, FontArc, FontVec, ScaleFont};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -484,8 +485,8 @@ pub enum FontFace {
 
 impl FontFace {
     pub fn from_style(style: u16) -> Self {
-        const BOLD: u16 = 1;
-        const ITALIC: u16 = 2;
+        const BOLD: u16 = Style::BOLD.bits();
+        const ITALIC: u16 = Style::ITALIC.bits();
         let bold = (style & BOLD) != 0;
         let italic = (style & ITALIC) != 0;
         match (bold, italic) {
