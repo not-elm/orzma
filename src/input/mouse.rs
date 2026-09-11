@@ -19,10 +19,10 @@ use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::CursorMoved;
+use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
+use bevy_orzma_tty_renderer::schema::TerminalGrid;
 use bevy_orzmux::prelude::{CellSide, GridPoint, SelectionKind};
 use orzma_tty::prelude::CellCoord;
-use orzma_tty_renderer::TerminalCellMetricsResource;
-use orzma_tty_renderer::schema::TerminalGrid;
 
 mod button;
 mod gesture;
@@ -238,7 +238,7 @@ fn cell_context_for<'a>(
 mod test_support {
     use super::*;
     use bevy::window::PrimaryWindow;
-    use orzma_tty_renderer::TerminalCellMetricsResource;
+    use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 
     #[derive(Resource, Default)]
     pub(super) struct CapturedEffects(pub(super) Vec<MouseEffect>);
@@ -293,7 +293,7 @@ mod test_support {
     }
 
     pub(super) fn test_metrics() -> TerminalCellMetricsResource {
-        use orzma_tty_renderer::CellMetrics;
+        use bevy_orzma_tty_renderer::CellMetrics;
         TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,

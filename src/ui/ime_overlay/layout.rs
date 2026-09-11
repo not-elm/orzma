@@ -3,7 +3,7 @@
 //! — unit-testable without an `App`.
 
 use bevy::math::Vec2;
-use orzma_tty_renderer::CellMetrics;
+use bevy_orzma_tty_renderer::CellMetrics;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 

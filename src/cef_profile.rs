@@ -2,7 +2,7 @@
 //! instance so concurrent instances never collide on Chromium's per-profile
 //! singleton lock.
 
-use orzma_webview_host::restrict_to_current_user;
+use bevy_orzma_webview_host::restrict_to_current_user;
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
@@ -136,7 +136,7 @@ fn pid_alive(pid: u32) -> bool {
 mod tests {
     use super::*;
     #[cfg(windows)]
-    use orzma_webview_host::private_dir::security_descriptor_sddl;
+    use bevy_orzma_webview_host::private_dir::security_descriptor_sddl;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 

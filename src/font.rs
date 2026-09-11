@@ -12,10 +12,12 @@
 use crate::configs::OrzmaConfigsResource;
 use bevy::prelude::*;
 use bevy::text::{Font, FontCx, FontSize, FontSource, FontStyle, FontWeight, TextFont};
+use bevy_orzma_tty_renderer::bundled::FALLBACK_REGULAR;
+use bevy_orzma_tty_renderer::{
+    FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled,
+};
 use fontique::{Blob, Collection, Script, SourceCache};
 use orzma_configs::font::{FontFaceConfig, FontSlant, FontStyleSpec};
-use orzma_tty_renderer::bundled::FALLBACK_REGULAR;
-use orzma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -320,9 +322,9 @@ mod tests {
     use bevy::asset::AssetPlugin;
     use bevy::text::TextPlugin;
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
+    use bevy_orzma_tty_renderer::TerminalFontPlugin;
+    use bevy_orzma_tty_renderer::bundled;
     use fontique::{FontInfoOverride, FontWeight};
-    use orzma_tty_renderer::TerminalFontPlugin;
-    use orzma_tty_renderer::bundled;
     use std::sync::Arc;
 
     /// RAII guard for a process-environment variable. Constructing it via
@@ -633,7 +635,7 @@ mod tests {
         // NOTE: compare by content (`==`), not `std::ptr::eq`. `bundled::REGULAR`
         // et al. are `pub const`, not `static` (see `bundled.rs`'s module doc);
         // without LTO, each `include_bytes!` reference across the
-        // orzma_tty_renderer -> orzma crate boundary gets its own embedded copy,
+        // bevy_orzma_tty_renderer -> orzma crate boundary gets its own embedded copy,
         // so two textually distinct usage sites hold equal bytes at different
         // addresses. `std::ptr::eq` would spuriously fail here in a plain `cargo
         // test` build (no LTO), even though the selection logic is correct.

@@ -4,11 +4,11 @@
 use crate::action::clipboard::CopyAction;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
+use bevy_orzma_tty_renderer::schema::TerminalGrid;
 use bevy_orzmux::prelude::{
     CellSide, GridPoint, RequestTtyCopySelection, RequestTtySelectionClear,
     RequestTtySelectionStart, RequestTtySelectionUpdate, SelectionKind, TtySelectionTextSignal,
 };
-use orzma_tty_renderer::schema::TerminalGrid;
 use orzma_vt::prelude::{DisplayOffset, ViewportLine};
 
 /// Starts a new local selection on `entity` at `point`.

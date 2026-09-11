@@ -18,7 +18,7 @@ VT とレンダラーでカラムの数え方が違う。
 |------|--------|
 | `Run::cols` の doc（`crates/orzma_vt/src/screen/grid/run.rs:45`） | 「`text` 内の書記素クラスタの表示幅の合計」と約束している |
 | `Row::to_runs`（`crates/orzma_vt/src/screen/grid/row.rs:52`） | 実際にはセル 1 つごとに `cols += 1` しており、中身はセル数になっている |
-| レンダラーの `runs_to_cells`（`crates/orzma_tty_renderer/src/schema/grid.rs:342`） | 書記素ごとに表示幅ぶんカラムを進める（こちらが正しい形） |
+| レンダラーの `runs_to_cells`（`crates/bevy_orzma_tty_renderer/src/schema/grid.rs:342`） | 書記素ごとに表示幅ぶんカラムを進める（こちらが正しい形） |
 
 ### 全角文字: 後ろのセルが右にずれる
 

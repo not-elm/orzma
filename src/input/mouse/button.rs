@@ -25,9 +25,9 @@ use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
 use bevy::time::{Real, Time};
 use bevy::window::{CursorMoved, PrimaryWindow};
+use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzmux::prelude::{CellSide, GridPoint, SelectionKind};
 use orzma_tty::prelude::{CellCoord, MouseReportKind, ProtocolModifiers};
-use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_vt::prelude::{GridColumn, GridLine};
 use std::time::Duration;
 
@@ -575,7 +575,7 @@ mod tests {
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::message::Messages;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
-    use orzma_tty_renderer::schema::TerminalGrid;
+    use bevy_orzma_tty_renderer::schema::TerminalGrid;
 
     fn make_selection_app() -> App {
         use bevy::window::WindowResolution;
