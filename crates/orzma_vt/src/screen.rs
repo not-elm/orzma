@@ -1040,9 +1040,7 @@ impl Screen {
         self.grid.size()
     }
 
-    /// The write cursor as an emitted frame carries it, with the
-    /// caller's DECTCEM state folded into `visible`.
-    ///
+    /// The write cursor as an emitted frame carries it.
     // TODO: Report the real shape and blink once DECSCUSR lands. Block /
     // steady is what the terminal starts at.
     pub fn cursor(&self, text_cursor_enable: TextCursorEnable) -> Cursor {
