@@ -137,6 +137,8 @@ mod interpret_output;
 mod keypad;
 mod line_editing;
 mod line_movement;
+mod media_copy;
+mod memory_lock;
 mod modes;
 mod mouse;
 mod parser_limits;
