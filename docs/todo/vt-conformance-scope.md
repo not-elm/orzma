@@ -120,8 +120,8 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 | capability | 広告値 | orzma の送信 | 判断 |
 |---|---|---|---|
 | `kbs` | `^H` (0x08) | `0x7f` (DEL) — `keyboard.rs:91` | **要判断**。entry とは食い違うが、DEL は現代の端末の事実上の標準。「ncurses の entry に合わせる」か「DEL のまま明示的に据える」かを決めて記録する |
-| `kcbt` | `ESC [Z` | Shift-Tab が HT のまま | 修正対象 |
-| `kich1` | `ESC [2~` | Insert キーの割り当てが無い | 修正対象 |
+| ~~`kcbt`~~ | `ESC [Z` | **✅ 修正済み（2026-09-11）**。修飾が Shift だけのときに送る。Ctrl / Alt との組み合わせは HT のまま（下の「修飾キーが落ちる」行と一緒に扱う） | 完了 |
+| ~~`kich1`~~ | `ESC [2~` | **✅ 修正済み（2026-09-11）**。`TerminalKey::Insert` として編集キーパッドに加えた | 完了 |
 | `kf1`–`kf63` | `SS3 P/Q/R/S`, `CSI n ~` ほか | ファンクションキーが語彙に無い | 修正対象 |
 | `kDC`/`kEND`/`kHOM`/`kLFT`/`kRIT` 等 | `CSI 1;2D` 等 | 修飾キーが落ちる（`keyboard.rs:81`） | 修正対象 |
 | `kb2`/`kent` | `SS3 E` / `SS3 M` | キーパッド識別がホスト側で経路化されていない | 修正対象 |
@@ -206,7 +206,7 @@ STD-070 が LCF をリセットすると規定する操作:
    している**ので、この 2 つも同時に裁定する。DECAWM は `modes_mut` への直書きではなく
    `DeviceState::set_auto_wrap` を通すこと（`DeviceState::reset` と違って画面リセットを
    伴わないので、LCF が自動では解除されない）。
-5. **入力側の契約修正**（`kbs` の方針決定 → Shift-Tab → ファンクションキー → 修飾キー → Meta）。
+5. **入力側の契約修正**（`kbs` の方針決定 → ファンクションキー → 修飾キー → Meta）。~~Shift-Tab~~ と Insert は **完了（2026-09-11）**。
 6. **OSC 4/10/11/12** とその問い合わせ・リセット。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
 8. **OSC 8 / OSC 52**、**DECLRMM/DECSLRM**、**1015**。
