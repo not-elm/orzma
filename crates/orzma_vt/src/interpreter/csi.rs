@@ -87,10 +87,8 @@ impl<'a> CsiParams<'a> {
     }
 }
 
-/// How many intermediate bytes one CSI sequence can carry.
-///
-/// A sequence that sends more is reported as truncated rather than
-/// silently shortened, so a longer run never reaches a match arm.
+/// How many intermediate bytes [`CsiParams`] holds, matching the cap
+/// the parser collects to.
 const MAX_INTERMEDIATES: usize = 2;
 
 #[cfg(test)]
@@ -167,9 +165,8 @@ mod tests {
     /// Asserts that two intermediate bytes arrive in the order they
     /// were sent.
     ///
-    /// Case: an application sends a control function this terminal does
-    /// not implement that carries the two intermediates the parser
-    /// collects.
+    /// Case: an application sends `CSI 1 SP ! p`, a two-intermediate
+    /// spelling this terminal answers no control function for.
     #[test]
     fn two_intermediates_arrive_in_order() {
         let params = [CsiParam::Integer(1), CsiParam::P(b' '), CsiParam::P(b'!')];

@@ -349,6 +349,17 @@ fn another_intermediate_does_not_reach_the_soft_reset() {
     assert!(!device.cursor().visible);
 }
 
+/// Asserts that a run of intermediates past the parser's cap is
+/// discarded rather than shortened to the two bytes that survive it.
+///
+/// Case: a line of noise on the wire reaches the terminal as
+/// `CSI ! ! ! p` while the caret is hidden.
+#[test]
+fn a_run_of_intermediates_past_the_cap_does_not_reach_the_soft_reset() {
+    let device = interpret(b"\x1b[?25l\x1b[!!!p");
+    assert!(!device.cursor().visible);
+}
+
 /// Asserts that a soft reset carrying a parameter is answered rather
 /// than ignored.
 ///

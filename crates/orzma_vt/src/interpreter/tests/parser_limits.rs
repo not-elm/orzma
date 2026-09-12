@@ -63,9 +63,9 @@ fn an_osc_4_past_the_parser_cap_loses_its_thirty_second_pair() {
     assert_eq!(device.palette().indexed[31], Palette::default().indexed[31]);
 }
 
-/// Compares every effect this terminal exposes for one interpreted
-/// chunk against a baseline: modes, cursor, every visible row's cells,
-/// and the reply bytes written back.
+/// Compares one interpreted chunk against a baseline across the modes,
+/// the cursor, the palette, the title, every visible row's cells, and
+/// the signals and reply bytes the chunk produced.
 fn assert_same_observable_effect(
     device: &DeviceState,
     output: &InterpretOutput,
@@ -75,6 +75,9 @@ fn assert_same_observable_effect(
 ) {
     assert_eq!(device.modes(), baseline.modes(), "{spelling}");
     assert_eq!(device.cursor(), baseline.cursor(), "{spelling}");
+    assert_eq!(device.palette(), baseline.palette(), "{spelling}");
+    assert_eq!(device.title(), baseline.title(), "{spelling}");
+    assert_eq!(output.signals, baseline_output.signals, "{spelling}");
     assert_eq!(output.replies, baseline_output.replies, "{spelling}");
     for line in 0..device.active_screen().grid_size().rows {
         assert_eq!(
@@ -85,25 +88,39 @@ fn assert_same_observable_effect(
     }
 }
 
-/// Asserts that a sequence carrying an intermediate reaches none of the
-/// control functions whose effect this terminal can observe in its
-/// cells, modes, cursor, or replies.
+/// Asserts that no CSI final byte, sent with a trailing intermediate
+/// and with or without a private marker, reaches a control function
+/// whose effect this terminal can observe.
 ///
-/// Case: an application sends every implemented CSI final byte with a
-/// trailing intermediate, once with parameters that would move the
-/// cursor away from where it already rests and once with parameters
-/// that would set the scroll region.
+/// Case: an application lays out a form with the DEC rectangle-editing
+/// sequences `CSI Pt ; Pl ; Pb ; Pr $ r`, `$ t`, `$ v`, `$ x` and
+/// `$ z`, each of which shares its final byte with a control function
+/// this terminal does answer.
 #[test]
 fn an_intermediate_reaches_no_implemented_control_function() {
-    const FINALS: &[u8] = b"@ABCDEFGHIJKLMPSTWXZ^`acdfghilmnrstu";
-    const PARAM_PAIRS: &[&str] = &["2;3", "1;1"];
-    let (baseline, baseline_output) = interpret_fully(b"ab\r\ncd");
-    for params in PARAM_PAIRS {
-        for final_byte in FINALS {
-            let chunk = format!("ab\r\ncd\x1b[{params}${}", *final_byte as char);
-            let (device, output) = interpret_fully(chunk.as_bytes());
-            let spelling = format!("CSI {params}${}", *final_byte as char);
-            assert_same_observable_effect(&device, &output, &baseline, &baseline_output, &spelling);
+    const MARKERS: &[&str] = &["", "?", ">"];
+    const PARAMETERS: &[&str] = &[
+        "", "2", "2;3", "1;1", "4", "5", "6", "7", "22", "23", "25", "1049",
+    ];
+    const PROBE_PREFIX: &str = "\x1b]0;f\x07\x1b[22tab\r\ncd\x1b[4G\x1bH\x1b[3G";
+    const PROBE_SUFFIX: &str = "\tx\x1b8y";
+    let baseline_chunk = format!("{PROBE_PREFIX}{PROBE_SUFFIX}");
+    let (baseline, baseline_output) = interpret_sized(20, baseline_chunk.as_bytes());
+    for marker in MARKERS {
+        for parameters in PARAMETERS {
+            for final_byte in 0x40..=0x7Eu8 {
+                let sequence = format!("\x1b[{marker}{parameters}${}", final_byte as char);
+                let chunk = format!("{PROBE_PREFIX}{sequence}{PROBE_SUFFIX}");
+                let (device, output) = interpret_sized(20, chunk.as_bytes());
+                let spelling = format!("CSI {marker}{parameters}${}", final_byte as char);
+                assert_same_observable_effect(
+                    &device,
+                    &output,
+                    &baseline,
+                    &baseline_output,
+                    &spelling,
+                );
+            }
         }
     }
 }

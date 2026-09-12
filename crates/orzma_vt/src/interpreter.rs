@@ -232,16 +232,16 @@ impl VTActor for Executor<'_> {
     }
 
     fn csi_dispatch(&mut self, params: &[CsiParam], parameters_truncated: bool, byte: u8) {
-        let params = CsiParams::parse(params);
         // NOTE: A truncated sequence must not reach the match. vtparse raises
         // this flag both when it discards an intermediate past its own cap and
         // when a full parameter buffer keeps a trailing intermediate from
-        // being promoted; in the second case the lost byte would make
-        // `CSI 1;2$r` arrive as the `CSI Pt;Pb r` of DECSTBM and move the
-        // scrolling margins.
+        // being promoted; in the second case the lost byte would make a
+        // rectangle edit such as `CSI Pt;Pl;Pb;Pr $ r` arrive as the
+        // `CSI Pt;Pb r` of DECSTBM and move the scrolling margins.
         if parameters_truncated {
             return;
         }
+        let params = CsiParams::parse(params);
         match (params.private(), params.intermediates(), byte) {
             // CUP, HVP
             (None, [], b'H' | b'f') => self

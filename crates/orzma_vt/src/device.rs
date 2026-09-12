@@ -139,10 +139,9 @@ impl DeviceState {
     /// Autowrap returns to enabled, which is the set rather than the
     /// reset state vt510.pdf p.277 Table 5-9 lists.
     ///
-    /// The modes this does not name — the mouse levels, bracketed
-    /// paste, focus reporting and which of the two screens is shown —
-    /// are left as they are, and so are the hidden screen, the title,
-    /// and the palette's foreground and background.
+    /// The modes it does not name are left as they are, and so are the
+    /// hidden screen, the title, and the palette's foreground and
+    /// background.
     ///
     /// # Control Functions
     ///
