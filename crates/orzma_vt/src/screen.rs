@@ -18,14 +18,14 @@ use self::cell::{Cell, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
-use crate::device::modes::{AutoWrap, InsertReplaceMode, TextCursorEnable};
+use crate::device::modes::{AutoWrap, CursorShape, InsertReplaceMode, TextCursorEnable};
 use crate::frame::damage::DamageSpan;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::character_sets::{
     CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
 };
 use crate::screen::checkpoint::Checkpoint;
-use crate::screen::cursor::{Cursor, CursorShape};
+use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};

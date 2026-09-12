@@ -1,5 +1,6 @@
-//! The cursor snapshot a screen reports and the shape DECSCUSR selects.
+//! The cursor snapshot a screen reports.
 
+use crate::device::modes::CursorShape;
 use crate::screen::grid::coords::GridPoint;
 
 /// Bit 0 of the packed `cursor_style` u32 — set when the cursor
@@ -34,18 +35,6 @@ impl Cursor {
         let blinking = if self.blinking { 1u32 } else { 0 };
         visible | (shape << 1) | (blinking << 3)
     }
-}
-
-/// Terminal cursor shape.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum CursorShape {
-    /// Block cursor.
-    #[default]
-    Block,
-    /// Underline cursor.
-    Underline,
-    /// Bar (vertical line) cursor.
-    Bar,
 }
 
 #[cfg(test)]

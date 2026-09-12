@@ -152,6 +152,18 @@ impl TextCursorEnable {
     }
 }
 
+/// The shape the text cursor is drawn with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorShape {
+    /// A block filling the cell; this is the power-up default.
+    #[default]
+    Block,
+    /// A line along the bottom of the cell.
+    Underline,
+    /// A vertical line at the left of the cell.
+    Bar,
+}
+
 /// The mode selects whether the numeric keypad sends ASCII numerals or application function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KeypadMode {
