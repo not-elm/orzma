@@ -4,7 +4,9 @@ pub(crate) mod color;
 pub(crate) mod modes;
 
 use crate::device::color::{Palette, Rgb};
-use crate::device::modes::{AutoWrap, ScreenKind, VtModes};
+use crate::device::modes::{
+    AutoWrap, InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable, VtModes,
+};
 use crate::frame::damage::DamageSpan;
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::Screen;
@@ -122,12 +124,38 @@ impl DeviceState {
         // without `DeviceState::set_auto_wrap`, and it is sound only because
         // the two screen resets above already cleared each screen's
         // live and saved deferred wrap. A partial mode reset such as
-        // `DECSTR`, which leaves the screens alone, must go through
-        // `set_auto_wrap` instead.
+        // `DECSTR`, which touches only the screen on show and leaves its
+        // live deferred wrap as it stands, must go through `set_auto_wrap`
+        // instead.
         self.modes = VtModes::default();
         self.title = TitleState::default();
         let palette_changed = self.palette.reset();
         (was_showing_alternate || primary.is_some() || palette_changed).then_some(DamageSpan::Full)
+    }
+
+    /// Returns the modes a soft reset names, the scrolling margins,
+    /// cursor origin, character set mapping, pen and saved cursor of the
+    /// screen on show, and every indexed palette slot to their power-up
+    /// values; reports [`DamageSpan::Full`] when a palette slot changed.
+    ///
+    /// Autowrap returns to enabled, which is the set rather than the
+    /// reset state vt510.pdf p.277 Table 5-9 lists.
+    ///
+    /// The modes it does not name are left as they are, and so are the
+    /// cells and the cursor position on show, the hidden screen, the
+    /// title, and the palette's foreground and background.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECSTR` (`CSI ! p`)
+    pub fn soft_reset(&mut self) -> Option<DamageSpan> {
+        self.modes.text_cursor_enable = TextCursorEnable::Shown;
+        self.modes.insert_replace = InsertReplaceMode::Replace;
+        self.modes.app_cursor = false;
+        self.modes.keypad_mode = KeypadMode::Numeric;
+        self.set_auto_wrap(AutoWrap::Enabled);
+        self.active_screen_mut().soft_reset();
+        self.reset_indexed_colors().then_some(DamageSpan::Full)
     }
 
     /// The window title the application last set, if any.
@@ -403,8 +431,12 @@ const MAX_TITLE_DEPTH: usize = 16;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::device::modes::InsertReplaceMode;
+    use crate::device::color::{Color, Rgb};
+    use crate::device::modes::{
+        InsertReplaceMode, KeypadMode, MouseEncoding, MouseTracking, TextCursorEnable,
+    };
     use crate::screen::cell::Cell;
+    use crate::screen::character_sets::{CharacterSet, GCode};
     use crate::screen::grid::coords::GridColumn;
     use crate::screen::viewport::ViewportLine;
     use std::iter::from_fn;
@@ -978,5 +1010,159 @@ mod tests {
         let mut device = device();
         device.set_indexed_color(1, Rgb { r: 1, g: 2, b: 3 });
         assert_eq!(device.reset(), Some(DamageSpan::Full));
+    }
+
+    /// Asserts that a soft reset returns each mode it names to its
+    /// power-up value, and that autowrap returns to enabled rather than
+    /// to the `No autowrap` of vt510.pdf p.277 Table 5-9.
+    ///
+    /// Case: a full-screen program leaves the caret hidden, insert mode
+    /// on, autowrap off and the keypad in application mode, and the
+    /// shell resets the terminal after it exits.
+    #[test]
+    fn a_soft_reset_returns_the_named_modes_to_their_defaults() {
+        let mut device = device();
+        let modes = device.modes_mut();
+        modes.text_cursor_enable = TextCursorEnable::Hidden;
+        modes.insert_replace = InsertReplaceMode::Insert;
+        modes.app_cursor = true;
+        modes.keypad_mode = KeypadMode::Application;
+        device.set_auto_wrap(AutoWrap::Disabled);
+
+        let _ = device.soft_reset();
+
+        assert_eq!(device.modes().text_cursor_enable, TextCursorEnable::Shown);
+        assert_eq!(device.modes().insert_replace, InsertReplaceMode::Replace);
+        assert!(!device.modes().app_cursor);
+        assert_eq!(device.modes().keypad_mode, KeypadMode::Numeric);
+        assert_eq!(device.modes().auto_wrap, AutoWrap::Enabled);
+    }
+
+    /// Asserts that a soft reset leaves the modes and the title it does
+    /// not name alone, unlike a hard reset.
+    ///
+    /// Case: a full-screen program with SGR mouse reporting, alternate
+    /// scroll, bracketed paste, focus reporting and a window title of
+    /// its own issues a soft reset as part of its own start-up.
+    #[test]
+    fn a_soft_reset_leaves_the_state_it_does_not_name_alone() {
+        let mut device = device();
+        let modes = device.modes_mut();
+        modes.mouse_tracking = MouseTracking::Clicks;
+        modes.mouse_encoding = MouseEncoding::Sgr;
+        modes.alternate_scroll = true;
+        modes.bracketed_paste = true;
+        modes.focus_in_out = true;
+        device.set_title(Some("build".to_string()));
+
+        let _ = device.soft_reset();
+
+        assert_eq!(device.modes().mouse_tracking, MouseTracking::Clicks);
+        assert_eq!(device.modes().mouse_encoding, MouseEncoding::Sgr);
+        assert!(device.modes().alternate_scroll);
+        assert!(device.modes().bracketed_paste);
+        assert!(device.modes().focus_in_out);
+        assert_eq!(device.title(), Some("build"));
+    }
+
+    /// Asserts that a soft reset leaves the palette's default
+    /// foreground and background alone while it returns the indexed
+    /// slots.
+    ///
+    /// Case: the user's configured foreground and background are in
+    /// force when a colour-scheme script recolours an indexed slot and
+    /// the shell runs `tput init` afterwards.
+    #[test]
+    fn a_soft_reset_leaves_the_default_foreground_and_background_alone() {
+        let mut device = device();
+        let foreground = Rgb { r: 9, g: 8, b: 7 };
+        let background = Rgb { r: 6, g: 5, b: 4 };
+        device.palette.foreground = foreground;
+        device.palette.background = background;
+        assert!(device.set_indexed_color(1, Rgb { r: 1, g: 2, b: 3 }));
+
+        let _ = device.soft_reset();
+
+        assert_eq!(device.palette().foreground, foreground);
+        assert_eq!(device.palette().background, background);
+    }
+
+    /// Asserts that a soft reset keeps the screen the device was
+    /// showing, unlike a hard reset.
+    ///
+    /// Case: a full-screen editor issues a soft reset after it has
+    /// already taken the alternate screen.
+    #[test]
+    fn a_soft_reset_keeps_the_screen_on_show() {
+        let mut device = device();
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+
+        let _ = device.soft_reset();
+
+        assert_eq!(device.modes().active_screen, ScreenKind::Alternate);
+    }
+
+    /// Asserts that a soft reset returns every indexed palette slot to
+    /// its built-in default and reports the repaint that owes.
+    ///
+    /// Case: a colour-scheme script recolours the palette with `OSC 4`
+    /// and the shell resets the terminal afterwards.
+    #[test]
+    fn a_soft_reset_returns_the_indexed_palette_to_its_default() {
+        let mut device = device();
+        let default_first = device.palette().indexed[1];
+        assert!(device.set_indexed_color(1, Rgb { r: 1, g: 2, b: 3 }));
+
+        let damage = device.soft_reset();
+
+        assert_eq!(device.palette().indexed[1], default_first);
+        assert_eq!(damage, Some(DamageSpan::Full));
+    }
+
+    /// Asserts that a soft reset over an untouched palette reports no
+    /// repaint.
+    ///
+    /// Case: the shell runs `tput init` on a terminal no program has
+    /// recoloured.
+    #[test]
+    fn a_soft_reset_over_an_untouched_palette_reports_no_repaint() {
+        let mut device = device();
+
+        assert_eq!(device.soft_reset(), None);
+    }
+
+    /// Asserts that a soft reset reaches the screen on show and leaves
+    /// the hidden screen's pen and character set mapping as they are.
+    ///
+    /// Case: a full-screen program takes the alternate screen and soft
+    /// resets it, and the shell goes on printing on the primary screen
+    /// after the program exits.
+    #[test]
+    fn a_soft_reset_reaches_only_the_screen_on_show() {
+        let mut device = device();
+        for kind in [ScreenKind::Primary, ScreenKind::Alternate] {
+            device.set_active_screen_for_test(kind);
+            device.active_screen_mut().pen_mut().fg = Color::Indexed(1);
+            device
+                .active_screen_mut()
+                .designate_character_set(GCode::G0, CharacterSet::DecSpecialGraphics);
+        }
+
+        let _ = device.soft_reset();
+
+        device
+            .active_screen_mut()
+            .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        let shown = device.active_screen().viewport_row(ViewportLine(0))[0];
+        assert_eq!(shown.c, 'q');
+        assert_eq!(shown.fg, Color::DefaultForeground);
+
+        device.set_active_screen_for_test(ScreenKind::Primary);
+        device
+            .active_screen_mut()
+            .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        let hidden = device.active_screen().viewport_row(ViewportLine(0))[0];
+        assert_eq!(hidden.c, '─');
+        assert_eq!(hidden.fg, Color::Indexed(1));
     }
 }

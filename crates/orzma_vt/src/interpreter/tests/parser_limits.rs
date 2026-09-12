@@ -62,3 +62,73 @@ fn an_osc_4_past_the_parser_cap_loses_its_thirty_second_pair() {
     assert_eq!(device.palette().indexed[30], Rgb { r: 1, g: 2, b: 3 });
     assert_eq!(device.palette().indexed[31], Palette::default().indexed[31]);
 }
+
+/// Compares one interpreted chunk against a baseline across the modes,
+/// the cursor, the palette, the title, every visible row's cells, and
+/// the signals and reply bytes the chunk produced.
+fn assert_same_observable_effect(
+    device: &DeviceState,
+    output: &InterpretOutput,
+    baseline: &DeviceState,
+    baseline_output: &InterpretOutput,
+    spelling: &str,
+) {
+    assert_eq!(device.modes(), baseline.modes(), "{spelling}");
+    assert_eq!(device.cursor(), baseline.cursor(), "{spelling}");
+    assert_eq!(device.palette(), baseline.palette(), "{spelling}");
+    assert_eq!(device.title(), baseline.title(), "{spelling}");
+    assert_eq!(output.signals, baseline_output.signals, "{spelling}");
+    assert_eq!(output.replies, baseline_output.replies, "{spelling}");
+    for line in 0..device.active_screen().grid_size().rows {
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(line)),
+            baseline.active_screen().viewport_row(ViewportLine(line)),
+            "{spelling} row {line}"
+        );
+    }
+}
+
+/// Asserts that no CSI final byte, sent with a trailing `$` intermediate
+/// and with or without a private marker, reaches a control function
+/// whose effect this terminal can observe.
+///
+/// Case: an application lays out a form with the DEC rectangle-editing
+/// sequences `CSI Pt ; Pl ; Pb ; Pr $ r`, `$ t`, `$ v`, `$ x` and
+/// `$ z`, each of which shares its final byte with a control function
+/// this terminal does answer.
+#[test]
+fn an_intermediate_reaches_no_implemented_control_function() {
+    const MARKERS: &[&str] = &["", "?", ">"];
+    const PARAMETERS: &[&str] = &[
+        "", "2", "2;3", "1;1", "4", "5", "6", "7", "22", "23", "25", "1049",
+    ];
+    const SEEDS: &[&str] = &["", "\x1b[4h"];
+    const PROBE_SUFFIX: &str = "z\tx\x1b8y\x1b[23t";
+    for seed in SEEDS {
+        let prefix = format!(
+            "\x1b]0;f\x07\x1b[22t\x1b]0;g\x07\x1b[22t\x1b]0;h\x07\x1b[3g{seed}ab\r\ncdef\x1b[6G\x1bH\x1b[2;3H"
+        );
+        let (baseline, baseline_output) =
+            interpret_sized(20, format!("{prefix}{PROBE_SUFFIX}").as_bytes());
+        for marker in MARKERS {
+            for parameters in PARAMETERS {
+                for final_byte in 0x40..=0x7Eu8 {
+                    let sequence = format!("\x1b[{marker}{parameters}${}", final_byte as char);
+                    let chunk = format!("{prefix}{sequence}{PROBE_SUFFIX}");
+                    let (device, output) = interpret_sized(20, chunk.as_bytes());
+                    let spelling = format!(
+                        "CSI {marker}{parameters}${} after {seed:?}",
+                        final_byte as char
+                    );
+                    assert_same_observable_effect(
+                        &device,
+                        &output,
+                        &baseline,
+                        &baseline_output,
+                        &spelling,
+                    );
+                }
+            }
+        }
+    }
+}

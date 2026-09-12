@@ -54,7 +54,12 @@ fn first_row_glyphs(device: &DeviceState) -> Vec<char> {
 
 /// The glyph at `column` of the device's `line`th visible row.
 fn glyph_at(device: &DeviceState, line: u16, column: u16) -> char {
-    device.active_screen().viewport_row(ViewportLine(line))[column].c
+    cell_at(device, line, column).c
+}
+
+/// The whole cell at `column` of the device's `line`th visible row.
+fn cell_at(device: &DeviceState, line: u16, column: u16) -> Cell {
+    device.active_screen().viewport_row(ViewportLine(line))[column]
 }
 
 /// Reports the reply bytes `chunk` produced.
@@ -163,6 +168,7 @@ mod private_modes;
 mod reset;
 mod reverse_index;
 mod sgr;
+mod soft_reset;
 mod tabulation;
 mod text_cursor_enable;
 mod title;

@@ -7,13 +7,14 @@ use vtparse::CsiParam;
 pub(crate) struct CsiParams<'a> {
     private: Option<u8>,
     values: &'a [CsiParam],
-    intermediates: &'a [CsiParam],
+    intermediates: [u8; MAX_INTERMEDIATES],
+    intermediate_len: usize,
 }
 
 impl<'a> CsiParams<'a> {
     /// Splits one `csi_dispatch` slice into its marker, values, and
     /// intermediates.
-    pub(crate) fn parse(params: &'a [CsiParam]) -> Self {
+    pub fn parse(params: &'a [CsiParam]) -> Self {
         let (private, rest) = match params.first() {
             Some(CsiParam::P(byte)) if (0x3C..=0x3F).contains(byte) => (Some(*byte), &params[1..]),
             _ => (None, params),
@@ -22,21 +23,33 @@ impl<'a> CsiParams<'a> {
             .iter()
             .position(|param| matches!(param, CsiParam::P(byte) if (0x20..=0x2F).contains(byte)))
             .unwrap_or(rest.len());
+        let tail = rest[split..].iter().filter_map(|param| match param {
+            CsiParam::P(byte) => Some(*byte),
+            CsiParam::Integer(_) => None,
+        });
+        let mut intermediates = [0; MAX_INTERMEDIATES];
+        let mut intermediate_len = 0;
+        for (slot, byte) in intermediates.iter_mut().zip(tail) {
+            *slot = byte;
+            intermediate_len += 1;
+        }
         Self {
             private,
             values: &rest[..split],
-            intermediates: &rest[split..],
+            intermediates,
+            intermediate_len,
         }
     }
 
     /// The private marker a sequence opened with, if it had one.
-    pub(crate) fn private(&self) -> Option<u8> {
+    pub fn private(&self) -> Option<u8> {
         self.private
     }
 
-    /// Whether any intermediate byte trails the values.
-    pub(crate) fn has_intermediates(&self) -> bool {
-        !self.intermediates.is_empty()
+    /// The intermediate bytes trailing the values, in the order they
+    /// were sent; empty when the sequence carried none.
+    pub fn intermediates(&self) -> &[u8] {
+        &self.intermediates[..self.intermediate_len]
     }
 
     /// The `;`-separated groups, each carrying its own `:`
@@ -44,7 +57,7 @@ impl<'a> CsiParams<'a> {
     ///
     /// An empty sequence yields ONE empty group, not none.
     /// [`Self::values`] reports no slots for the same input.
-    pub(crate) fn groups(&self) -> impl Iterator<Item = &'a [CsiParam]> {
+    pub fn groups(&self) -> impl Iterator<Item = &'a [CsiParam]> {
         self.values
             .split(|param| matches!(param, CsiParam::P(b';')))
     }
@@ -54,12 +67,12 @@ impl<'a> CsiParams<'a> {
     ///
     /// A zero reads as `Some(0)`; the caller decides whether it means
     /// the default.
-    pub(crate) fn value(&self, index: usize) -> Option<u16> {
+    pub fn value(&self, index: usize) -> Option<u16> {
         self.values().nth(index).flatten()
     }
 
     /// Every separated slot in order.
-    pub(crate) fn values(&self) -> impl Iterator<Item = Option<u16>> + '_ {
+    pub fn values(&self) -> impl Iterator<Item = Option<u16>> + '_ {
         let listed = (!self.values.is_empty()).then(|| self.groups());
         listed.into_iter().flatten().map(Self::first_value)
     }
@@ -73,6 +86,10 @@ impl<'a> CsiParams<'a> {
         })
     }
 }
+
+/// How many intermediate bytes [`CsiParams`] holds, matching the cap
+/// the parser collects to.
+const MAX_INTERMEDIATES: usize = 2;
 
 #[cfg(test)]
 mod tests {
@@ -130,8 +147,7 @@ mod tests {
     /// of being counted among the values.
     ///
     /// Case: an application sends the change-attributes-in-rectangle
-    /// sequence `CSI 1 ; 2 $ r`, whose final byte it shares with
-    /// DECSTBM.
+    /// sequence `CSI 1 ; 2 $ r`.
     #[test]
     fn a_trailing_intermediate_is_not_a_value() {
         let params = [
@@ -141,9 +157,40 @@ mod tests {
             CsiParam::P(b'$'),
         ];
         let params = CsiParams::parse(&params);
-        assert!(params.has_intermediates());
+        assert_eq!(params.intermediates(), b"$");
         assert_eq!(params.value(0), Some(1));
         assert_eq!(params.value(1), Some(2));
+    }
+
+    /// Asserts that the last byte of the intermediate range is read as
+    /// an intermediate rather than swallowed by the values.
+    ///
+    /// Case: an application sends `CSI 1 ; 2 / r`, a spelling whose
+    /// final byte it shares with DECSTBM.
+    #[test]
+    fn the_last_intermediate_byte_is_not_a_value() {
+        let params = [
+            CsiParam::Integer(1),
+            CsiParam::P(b';'),
+            CsiParam::Integer(2),
+            CsiParam::P(b'/'),
+        ];
+        let params = CsiParams::parse(&params);
+        assert_eq!(params.intermediates(), b"/");
+        assert_eq!(params.value(1), Some(2));
+    }
+
+    /// Asserts that two intermediate bytes arrive in the order they
+    /// were sent.
+    ///
+    /// Case: an application sends `CSI 1 SP ! p`, a two-intermediate
+    /// spelling this terminal answers no control function for.
+    #[test]
+    fn two_intermediates_arrive_in_order() {
+        let params = [CsiParam::Integer(1), CsiParam::P(b' '), CsiParam::P(b'!')];
+        let params = CsiParams::parse(&params);
+        assert_eq!(params.value(0), Some(1));
+        assert_eq!(params.intermediates(), b" !");
     }
 
     /// Asserts that a colon group stays inside its own slot and does not
