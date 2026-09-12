@@ -90,7 +90,7 @@ fn an_erase_to_end_runs_after_a_restore_while_autowrap_is_reset() {
 ///
 /// Case: the same application saves and restores the cursor around a
 /// reset of autowrap, then clears the character under the cursor with
-/// `ECH` instead of clearing to the end of the line.
+/// `ECH`.
 #[test]
 fn an_erase_of_characters_runs_after_a_restore_while_autowrap_is_reset() {
     let device = interpret(b"abcd\x1b7\x1b[?7l\x1b8\x1b[X");
@@ -118,7 +118,7 @@ fn an_erase_to_end_runs_after_a_bare_alternate_screen_round_trip() {
 /// saved cursor and with it the saved deferred wrap.
 ///
 /// Case: the same application makes the round trip through mode 1049
-/// rather than mode 47, so the return restores the saved cursor.
+/// rather than mode 47.
 #[test]
 fn an_erase_to_end_runs_after_a_mode_1049_round_trip() {
     let device = interpret(b"abcd\x1b[?1049h\x1b[?7l\x1b[?1049l\x1b[K");

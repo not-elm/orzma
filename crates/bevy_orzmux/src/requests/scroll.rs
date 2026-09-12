@@ -1,18 +1,14 @@
-//! `RequestTtyScroll`: the viewport movement the host UI asks a terminal
-//! entity to perform, sent as `OrzmuxCommand::Scroll`.
+//! The viewport movement the host UI asks a terminal entity to perform,
+//! sent as `OrzmuxCommand::Scroll`.
 
+use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzma_vt::prelude::Scroll;
 use orzmux::prelude::OrzmuxCommand;
 
 /// Fired by the host UI to move a specific terminal entity's viewport.
-///
-/// The motion vocabulary is [`Scroll`] itself — the request carries
-/// exactly what the backend applies, and the observer's only job is
-/// routing it to the targeted entity's pane. Clamping at both ends of
-/// history and page-size resolution live in `orzma_vt` and are pinned
-/// by its tests, not re-asserted here.
+/// The request carries exactly the motion the backend applies.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyScroll {
     #[event_target]
@@ -25,7 +21,7 @@ pub(super) struct ScrollPlugin;
 
 impl Plugin for ScrollPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_scroll);
+        app.add_observer(apply_scroll.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

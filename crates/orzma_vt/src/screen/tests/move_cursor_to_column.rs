@@ -33,8 +33,7 @@ fn an_omitted_parameter_addresses_the_first_column() {
 }
 
 /// Asserts that addressing a column leaves the cursor's row unchanged
-/// even while origin mode makes the seating helper's line argument
-/// relative to the top margin.
+/// even while origin mode is on.
 ///
 /// Case: an application reserves rows 2 through 4 as a pane, turns on
 /// origin mode, and moves along a row inside that pane.
@@ -123,7 +122,7 @@ fn a_zero_addresses_the_first_column() {
 }
 
 /// Asserts that addressing a column discards a pending deferred wrap
-/// rather than preserving it as a linefeed does.
+/// rather than preserving it.
 ///
 /// Case: an application fills a row to its last column and then jumps
 /// back along that row instead of printing again.

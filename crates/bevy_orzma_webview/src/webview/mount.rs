@@ -1,9 +1,6 @@
-//! Webview mount module: `ChildOf` children of a terminal surface that render a
-//! registered view into the terminal's text flow. This module owns the
-//! components, the mount/unmount policy executed by the `Mount` /
-//! `Unmount` observers in `apc`, and the
-//! `WebviewPlugin` runtime systems that keep `WebviewSize` in
-//! sync with cell metrics and project placements into `TerminalOverlays`.
+//! Webview mounting: `ChildOf` children of a terminal surface that render a
+//! registered view into the terminal's text flow, keep their size in step with
+//! the cell metrics, and project their placements into `TerminalOverlays`.
 
 use super::apc::NonInteractive;
 use super::render::preload::build_preload;
@@ -27,24 +24,19 @@ use bevy_orzmux::prelude::{RequestTtyWebviewRemove, TtyWebviewEvictedSignal};
 use orzma_vt::prelude::InstanceId;
 
 /// The normalized forward-key chords for a mounted webview, copied from
-/// its registration. Read by the focused-key filter-fill and PTY-forward
-/// systems (Phase 4) off the focused child entity.
+/// its registration.
 #[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
 pub struct ForwardKeys(pub Vec<NormalizedChord>);
 
 /// Marks a webview entity and records its identity: the instance it was
 /// mounted under, the registration handle it came from, the overlay
 /// texture slot it occupies on its parent terminal, and the rectangle it
-/// reserved. The owning terminal surface is NOT duplicated here — it is
-/// the `ChildOf` parent, per the "no typed back-references" convention.
-/// Each child's `slot` is the single source of truth for slot allocation
-/// (no separate allocation table).
+/// reserved. The owning terminal surface is the `ChildOf` parent.
 ///
 /// # Invariants
 ///
-/// `AnchoredPlacement.size` for this instance always equals `rows` /
-/// `cols` here — the VT treats a size change as a remount, so a drift
-/// between the CEF surface size and the painted rect cannot arise.
+/// `AnchoredPlacement.size` for this instance always equals `rows` and
+/// `cols` here.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct Webview {
     /// The registration this webview's content came from.
@@ -67,18 +59,11 @@ pub struct Webview {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompositeNotified;
 
-/// Registers the webview runtime systems: the `WebviewSize` size sync
-/// (`Update`), the per-frame projection that derives `TerminalOverlays` from
-/// the frame-carried placement list (spec §5), and the render-world ordering
-/// edge that keeps webview GPU texture injection ahead of the terminal
-/// material's bind-group rebuild.
-///
-/// The projection is scheduled in `PostUpdate` before
-/// `TerminalMaterialSystems::UpdateMaterial`: grid state settles during
-/// `Update` (`bevy_orzmux`'s pump emits `TtyFrameSignal` there and the
-/// renderer's `apply_frame` observer mirrors it into `TerminalGrid`), so
-/// projecting just before the material rebuild hands the same frame's
-/// overlays to the shader.
+/// Registers the webview runtime systems: the `WebviewSize` size sync, the
+/// per-frame projection that derives `TerminalOverlays` from the
+/// frame-carried placement list, and the render-world ordering edge that
+/// keeps webview GPU texture injection ahead of the terminal material's
+/// bind-group rebuild.
 pub(crate) struct WebviewPlugin;
 
 impl Plugin for WebviewPlugin {
@@ -112,16 +97,15 @@ pub(crate) struct WebviewMountContext {
     /// The requesting terminal surface — the `ChildOf` parent of the mount.
     pub terminal_surface: Entity,
     /// The instance the mount registered. A mount the VT refused never
-    /// reaches here — it arrives as `TtyWebviewMountRejectedSignal`.
+    /// reaches here.
     pub instance: InstanceId,
-    /// Rect height in terminal cells (validated 1..=200 by `orzma_vt`).
+    /// Rect height in terminal cells, validated to `1..=200`.
     pub rows: u16,
-    /// Rect width in terminal cells (validated 1..=400 by `orzma_vt`).
+    /// Rect width in terminal cells, validated to `1..=400`.
     pub cols: u16,
 }
 
-/// The system params `mount` / `unmount` need, bundled so the
-/// `on_webview_mount` observer gains a single extra parameter.
+/// The system params `mount` and `unmount` need.
 #[derive(SystemParam)]
 pub(crate) struct WebviewParams<'w, 's> {
     commands: Commands<'w, 's>,
@@ -146,12 +130,10 @@ pub(crate) struct ResolvedWebviewMount {
     pub interactive: bool,
     /// `(connection_id, handle)` of the registering program, used to stamp
     /// `WebviewOwner` for `window.orzma` back-channel routing. `Some` only when
-    /// the registration is bridged; a display-only `Url` view leaves it `None`,
-    /// which is the gate that also withholds the preload at mount.
+    /// the registration is bridged; a display-only `Url` view leaves it `None`.
     pub owner: Option<(u64, HandleId)>,
     /// The normalized forward-key chords copied from the registration, stamped
-    /// as a `ForwardKeys` component so the focused-key systems read them off
-    /// the webview entity without a registry lookup (design spec §C).
+    /// as a `ForwardKeys` component.
     pub forward_keys: Vec<NormalizedChord>,
     /// User-supplied preload scripts, injected after the host bridge (and as
     /// the only scripts for a display-only view).
@@ -159,13 +141,13 @@ pub(crate) struct ResolvedWebviewMount {
 }
 
 /// Resolves a handle (already looked up from an `Omount;n=<instance>`'s
-/// instance) against the `OrzmaRegistry` (Tier 1). `Dir`/`Inline` handles
-/// resolve to an `orzma://<handle>/…` URL (one origin per handle); a `Url`
-/// handle resolves to its verbatim remote URL. A handle resolves ONLY when
-/// `requesting_surface` is its `owner_surface` — the scoping gate that stops
-/// one surface from mounting another's handle. `owner` is populated only for
-/// a bridged registration (a display-only `Url` view leaves it `None`).
-/// Returns `None` for an unregistered or unowned handle.
+/// instance) against the `OrzmaRegistry` (Tier 1). Returns `None` for an
+/// unregistered or unowned handle.
+///
+/// `Dir` and `Inline` handles resolve to an `orzma://<handle>/…` URL (one
+/// origin per handle); a `Url` handle resolves to its verbatim remote URL. A
+/// handle resolves ONLY when `requesting_surface` is its `owner_surface`, and
+/// `owner` is populated only for a bridged registration.
 pub(crate) fn resolve_mount(
     id: &HandleId,
     requesting_surface: Entity,
@@ -200,18 +182,11 @@ pub(crate) fn resolve_mount(
 /// requesting surface does not own, and overlay-slot exhaustion are each a
 /// `tracing::debug!` plus a reclaim of the VT-side reservation.
 ///
-/// The parent (`ctx.terminal_surface`, the `TtyWebviewMountSignal` target) is
-/// the owning pane entity: both `OrzmuxPane` (whose drained signals include the
-/// APC mount) and the required `TerminalGrid` component live on that one
-/// entity, so the `ChildOf` parent is also the entity `project_webview_overlays`
-/// reads grid state from.
-///
-/// `WebviewSize` is seeded here because `bevy_cef` builds the CEF browser
-/// from it at creation. The seed is `(cols × cell_w, rows × cell_h) /
-/// scale_factor` in logical px from `TerminalCellMetricsResource` and the
-/// primary window; when neither exists yet (headless tests, pre-first-render)
-/// a placeholder cell of 8×16 physical px at scale 1.0 is used —
-/// `sync_webview_size` corrects it once real metrics arrive.
+/// `WebviewSize` is seeded to `(cols × cell_w, rows × cell_h) / scale_factor`
+/// in logical px from `TerminalCellMetricsResource` and the primary window.
+/// When neither exists yet (headless tests, pre-first-render) a placeholder
+/// cell of 8×16 physical px at scale 1.0 is used, and the size is corrected
+/// once real metrics arrive.
 pub(crate) fn mount(params: &mut WebviewParams, dynamic: &OrzmaRegistry, ctx: WebviewMountContext) {
     let live = live_webview_children(&params.children, &params.views, ctx.terminal_surface);
     if let Some(existing) = live.iter().find(|live| live.instance == ctx.instance) {
@@ -262,8 +237,7 @@ pub(crate) fn mount(params: &mut WebviewParams, dynamic: &OrzmaRegistry, ctx: We
     // MaterialNode (even for debug visualization). bevy_cef's mesh/sprite
     // input paths and display-size allocators key on `With<WebviewSource>`
     // plus exactly those components; adding one double-attaches input
-    // forwarding and display allocation on top of orzma's inline routing
-    // (design spec §4 invariant).
+    // forwarding and display allocation on top of orzma's inline routing.
     params.commands.entity(webview).insert((
         ChildOf(ctx.terminal_surface),
         source,
@@ -316,11 +290,8 @@ pub(crate) fn mount(params: &mut WebviewParams, dynamic: &OrzmaRegistry, ctx: We
 }
 
 /// Despawns the webview child(ren) of `terminal_surface` matching the
-/// scope: `Some(id)` removes that one instance; `None` removes every
-/// webview child, the shape a client-issued unmount-all takes. VT-side
-/// evictions (history trim, reset, alternate-screen teardown, resize)
-/// arrive separately as `TtyWebviewEvictedSignal` handled by
-/// `on_webview_evicted`.
+/// scope: `Some(id)` removes that one instance, and `None` removes every
+/// webview child.
 pub(crate) fn unmount(
     params: &mut WebviewParams,
     terminal_surface: Entity,
@@ -339,9 +310,7 @@ pub(crate) fn unmount(
 
 /// Returns the webview entity that currently holds keyboard focus on
 /// `active_surface`: `Some(e)` iff `FocusedWebview` points at `e`, `e` carries
-/// `Webview`, and its `ChildOf` parent is the active surface. The input
-/// dispatcher uses this to hoist the release-chord check, restrict the Escape
-/// scroll-to-bottom pre-handler, and suppress PTY key forwarding (spec §7).
+/// `Webview`, and its `ChildOf` parent is the active surface.
 pub fn focused_webview_of(
     focused: Option<&FocusedWebview>,
     webview_parents: &Query<&ChildOf, With<Webview>>,
@@ -364,17 +333,13 @@ pub struct WebviewHit {
 }
 
 /// Hit-tests a terminal-local physical-pixel point against the terminal's
-/// ACTIVE inline overlay rects (the same `TerminalOverlays` projection the
-/// shader composites, spec §7's single coordinate source) and returns the
-/// interactive child whose rect contains it.
+/// ACTIVE inline overlay rects and returns the interactive child whose rect
+/// contains it.
 ///
-/// Cell coordinates are 0-indexed (`row = floor(local_phys.y / cell_h)`,
-/// column analog) — NOT the 1-indexed `cell_at_local` convention the terminal
-/// click pipeline uses. `rows == 0` sentinel slots never match; a
+/// Cell coordinates are 0-indexed (`row = floor(local_phys.y / cell_h)`, and
+/// the column analog). `rows == 0` sentinel slots never match, and a
 /// partially-scrolled rect with a negative `row` origin still hits in its
-/// visible cells (its DIP origin lies above the viewport, so `local_dip.y`
-/// lands past the clipped rows). `NonInteractive` children are invisible to
-/// the hit-test, so their rects pass through as plain terminal input.
+/// visible cells. `NonInteractive` children are invisible to the hit-test.
 pub fn webview_hit_at(
     children: &Query<&Children>,
     webviews: &Query<(&Webview, Has<NonInteractive>)>,
@@ -417,9 +382,8 @@ pub fn webview_hit_at(
 }
 
 /// Converts a terminal-local physical-pixel point to webview-local DIP
-/// relative to a slot's active overlay rect, WITHOUT containment checking —
-/// the release leg of an in-flight inline press uses this so a pointer that
-/// drifted off the rect still produces a (possibly out-of-view) release
+/// relative to a slot's active overlay rect, WITHOUT containment checking, so
+/// a point that lies off the rect still produces a (possibly out-of-view)
 /// position. Returns `None` for an out-of-range slot or a `rows == 0`
 /// sentinel rect.
 pub fn webview_local_dip(
@@ -442,11 +406,6 @@ const FALLBACK_CELL_W_PHYS: f32 = 8.0;
 const FALLBACK_CELL_H_PHYS: f32 = 16.0;
 
 /// Drops the reservation a refused mount left in the VT.
-///
-/// The VT cannot tell a minted instance from a fabricated one, so it
-/// registers a placement for any syntactically valid `n=`. Without this a
-/// client can exhaust the per-terminal cap with mounts the host will never
-/// place.
 fn reclaim(params: &mut WebviewParams, terminal: Entity, instance: InstanceId) {
     params.commands.trigger(RequestTtyWebviewRemove {
         terminal,
@@ -510,9 +469,9 @@ fn smallest_free_slot(live: &[LiveWebview]) -> Option<u8> {
     (0..OVERLAY_SLOTS as u8).find(|slot| live.iter().all(|live| live.slot != *slot))
 }
 
-/// Physical cell pitch from the metrics resource (the same floor/max the
-/// terminal resize path applies), or the 8×16 placeholder when no terminal
-/// has rendered yet.
+/// Physical cell pitch from the metrics resource, floored to whole physical
+/// pixels and at least 1, or the 8×16 placeholder when no terminal has
+/// rendered yet.
 fn cell_size_phys(metrics: Option<&TerminalCellMetricsResource>) -> (f32, f32) {
     metrics
         .map(|m| {
@@ -538,12 +497,8 @@ fn seed_logical_size(
 }
 
 /// Recomputes every webview's `WebviewSize` from the current cell
-/// metrics and primary-window scale factor (spec §6.5), writing only when the
-/// value differs — `bevy_cef` commits sizes to CEF on `Changed<WebviewSize>`,
-/// so a spurious write each frame would re-commit (and re-create the
-/// IOSurface) every frame. Exact equality suffices: the inputs are identical
-/// frame-to-frame unless metrics/scale actually changed, and this math is
-/// deterministic.
+/// metrics and primary-window scale factor, writing only when the value
+/// differs.
 fn sync_webview_size(
     mut sizes: Query<(&mut WebviewSize, &Webview)>,
     metrics: Option<Res<TerminalCellMetricsResource>>,
@@ -564,13 +519,11 @@ fn sync_webview_size(
 /// Derives each terminal's `TerminalOverlays` from the frame-carried
 /// placement list, every frame, starting from the all-sentinel default.
 ///
-/// The list is authoritative and declarative: an id with no matching
-/// child is ignored (its mount signal has not landed yet), a mounted
-/// child whose id is absent paints nothing (hidden, not unmounted), and
-/// a rect whose top sits above the viewport passes through with a
-/// negative row for the shader to clip. Each point is projected with the
-/// grid's display offset; rects fully outside the viewport and columns
-/// at or past the right edge are culled here.
+/// An id with no matching child is ignored, a mounted child whose id is
+/// absent paints nothing (hidden, not unmounted), and a rect whose top
+/// sits above the viewport passes through with a negative row. Each point
+/// is projected with the grid's display offset; rects fully outside the
+/// viewport and columns at or past the right edge are culled here.
 ///
 /// The component is (re)inserted for every terminal that has inline
 /// children OR already carries `TerminalOverlays`, so a terminal whose
@@ -801,9 +754,7 @@ mod tests {
     }
 
     /// Queues every op from ONE system and applies the deferred commands
-    /// once, the batch shape a single VT pump produces. Triggering each op
-    /// through `World::trigger` instead would flush between them and would
-    /// not exercise the interleaving these signals really arrive in.
+    /// once, the batch shape a single VT pump produces.
     fn batch(app: &mut App, terminal: Entity, ops: Vec<Op>) {
         app.world_mut()
             .run_system_once(move |mut commands: Commands| {
@@ -1206,9 +1157,7 @@ mod tests {
     }
 
     /// Asserts that an eviction followed by a re-mount of the same
-    /// instance in one signal batch leaves exactly one live webview,
-    /// pinning the per-command flush `bevy_ecs` performs between queued
-    /// triggers.
+    /// instance in one signal batch leaves exactly one live webview.
     ///
     /// Case: a program leaves the alternate screen — tearing down the
     /// placements it held there — and immediately re-mounts the same view
@@ -1498,7 +1447,7 @@ mod tests {
     /// overlay slot verbatim, including a negative row.
     ///
     /// Case: a mounted webview's rect sticks partway above the viewport
-    /// after the user scrolls, and the shader clips the negative rows.
+    /// after the user scrolls.
     #[test]
     fn projection_passes_the_placement_rect_through() {
         let (mut app, terminal, instance) = app_with_registration();

@@ -1,6 +1,7 @@
-//! `RequestTtyMouseInput`: a mouse-protocol report the host UI asks a
-//! terminal entity to receive, sent as `OrzmuxCommand::MouseInput`.
+//! A mouse-protocol report the host UI asks a terminal entity to
+//! receive, sent as `OrzmuxCommand::MouseInput`.
 
+use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzma_tty::prelude::MouseReport;
@@ -17,12 +18,12 @@ pub struct RequestTtyMouseInput {
     pub mouse: MouseReport,
 }
 
-/// Registers the [`RequestTtyMouseInput`] apply observer.
+/// Forwards [`RequestTtyMouseInput`] to the addressed pane.
 pub(super) struct MouseInputPlugin;
 
 impl Plugin for MouseInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_mouse_input);
+        app.add_observer(apply_mouse_input.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

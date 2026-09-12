@@ -1,7 +1,5 @@
 //! Copies the CPU paint frames CEF produces on Windows and Linux into the
 //! headless `WebviewTextureTarget` image each mounted webview renders through.
-//! `bevy_cef` only writes that image on macOS (its GPU path), so without this
-//! bridge the terminal overlay samples the placeholder and the pane stays white.
 
 #[cfg(not(target_os = "macos"))]
 use bevy::asset::RenderAssetUsages;
@@ -15,8 +13,7 @@ use bevy_cef_core::prelude::{RenderPaintElementType, RenderTextureMessage};
 
 /// Registers the paint bridge on the platforms where CEF paints on the CPU.
 ///
-/// On macOS `bevy_cef` writes the target through its GPU path and never emits
-/// a paint message, so the plugin registers nothing there.
+/// On macOS it registers nothing.
 pub(crate) struct PaintPlugin;
 
 impl Plugin for PaintPlugin {

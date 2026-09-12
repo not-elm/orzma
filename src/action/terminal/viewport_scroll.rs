@@ -17,7 +17,7 @@ pub(crate) struct TerminalViewportScroll {
     pub lines: i32,
 }
 
-/// Registers the viewport-scroll apply observer.
+/// Adds the viewport-scroll action.
 pub(super) struct ViewportScrollPlugin;
 
 impl Plugin for ViewportScrollPlugin {

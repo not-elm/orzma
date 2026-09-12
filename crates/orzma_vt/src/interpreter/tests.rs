@@ -1,4 +1,4 @@
-//! Unit tests for the interpreter, one module per control function.
+//! Unit tests for the interpreter.
 
 use super::*;
 use crate::device::color::{Color, Rgb};
@@ -53,15 +53,11 @@ fn first_row_glyphs(device: &DeviceState) -> Vec<char> {
 }
 
 /// The glyph at `column` of the device's `line`th visible row.
-///
-/// `column` is `u16` because `Row<Cell>` implements only `Index<u16>`
-/// and `Index<GridColumn>`; a `usize` does not reach the slice impl.
 fn glyph_at(device: &DeviceState, line: u16, column: u16) -> char {
     device.active_screen().viewport_row(ViewportLine(line))[column].c
 }
 
-/// Reports the reply bytes `chunk` produced, through the public
-/// entry point rather than the crate-internal interpreter.
+/// Reports the reply bytes `chunk` produced.
 fn replies_of(chunk: &[u8]) -> Vec<u8> {
     let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10);
     vt.interpret(chunk).replies
@@ -69,7 +65,7 @@ fn replies_of(chunk: &[u8]) -> Vec<u8> {
 
 /// One terminal kept across chunks, so a test can build up state
 /// with one chunk and then observe what a later chunk alone
-/// produced, through the same entry points the owner uses.
+/// produced.
 struct Session(OrzmaVt);
 
 impl Session {
@@ -77,8 +73,7 @@ impl Session {
         Self::sized(GridSize { cols: 4, rows: 3 })
     }
 
-    /// One terminal of the given size, for a capture whose scroll
-    /// region needs more rows than the default three.
+    /// One terminal of the given size.
     fn sized(size: GridSize) -> Self {
         Self(OrzmaVt::new(size, 10))
     }

@@ -1,6 +1,5 @@
-//! `drain_orzmux_events`: empties the backend's event channel every frame
-//! and turns each event into entity state or an `EntityEvent` the host
-//! observes.
+//! Empties the backend's event channel every frame and turns each event
+//! into entity state or an `EntityEvent` the host observes.
 
 use crate::layout::CurrentLayout;
 use crate::registry::PaneRegistry;
@@ -24,43 +23,44 @@ pub struct OrzmuxPaneSpawnFailed {
     pub error: String,
 }
 
-/// Registers the drain.
+/// Turns the backend's queued events into entity state and signals.
 pub(crate) struct DrainPlugin;
 
 impl Plugin for DrainPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PaneRegistry>()
             .init_resource::<CurrentLayout>()
-            .init_resource::<DisconnectReported>()
-            .add_systems(Update, drain_orzmux_events.in_set(OrzmuxSystems::Drain));
+            .add_systems(
+                Update,
+                drain_orzmux_events
+                    .run_if(resource_exists::<OrzmuxConnection>)
+                    .in_set(OrzmuxSystems::Drain),
+            );
     }
 }
 
-/// Whether `OrzmuxSessionEnded` was already triggered for a disconnect.
-#[derive(Resource, Default)]
-struct DisconnectReported(bool);
-
-/// Drains every queued event in order. Not gated on change detection:
-/// channel arrivals are invisible to it.
+/// Drains every queued event in order, then ends the session and removes
+/// `OrzmuxConnection` once the backend is gone.
+///
+/// A disconnect ends the session exactly once: removing the connection
+/// leaves nothing for a later call to drain.
 fn drain_orzmux_events(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
     mut current: ResMut<CurrentLayout>,
-    mut reported: ResMut<DisconnectReported>,
     connection: Res<OrzmuxConnection>,
 ) {
     for event in connection.0.try_iter() {
         apply_event(&mut commands, &mut registry, &mut current, event);
     }
-    if connection.0.is_disconnected() && !reported.0 {
-        reported.0 = true;
+    if connection.0.is_disconnected() {
         commands.trigger(OrzmuxSessionEnded);
+        commands.remove_resource::<OrzmuxConnection>();
     }
 }
 
-/// `current` stays a `ResMut` so the write goes through `set_if_neq`:
-/// dereferencing it mutably on every drain would mark the resource
-/// changed on every frame and defeat `apply_layout`'s run condition.
+/// Applies one event. `current` is marked changed only when the layout
+/// differs.
 fn apply_event(
     commands: &mut Commands,
     registry: &mut PaneRegistry,
@@ -335,7 +335,8 @@ mod tests {
         assert_eq!(app.world().resource::<Seen>().texts, vec![None]);
     }
 
-    /// Asserts that a vanished backend ends the session once.
+    /// Asserts that a vanished backend ends the session once and that the
+    /// drain removes the connection in the frame that detects it.
     ///
     /// Case: the backend thread panicked.
     #[test]
@@ -343,6 +344,8 @@ mod tests {
         let (mut app, events) = app();
         drop(events);
         app.update();
+        assert!(!app.world().contains_resource::<OrzmuxConnection>());
+        assert_eq!(app.world().resource::<Seen>().ended, 1);
         app.update();
         assert_eq!(app.world().resource::<Seen>().ended, 1);
     }
@@ -352,8 +355,7 @@ mod tests {
     /// changed.
     ///
     /// Case: a running pane repaints every frame without the layout
-    /// ever moving, so a system gated on `Changed<CurrentLayout>` must
-    /// not re-run on every repaint.
+    /// ever moving.
     #[test]
     fn a_frame_only_drain_does_not_change_the_layout() {
         let (mut app, events) = app();

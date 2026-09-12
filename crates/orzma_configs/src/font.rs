@@ -9,23 +9,24 @@ const DEFAULT_SIZE: f32 = 11.25;
 
 /// One face's font configuration: a family name and a style string, both
 /// optional. Omitted `family` inherits `normal`'s; omitted `style` uses the
-/// face's canonical default (applied in `src/font`).
+/// face's canonical default.
 #[derive(Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct FontFaceConfig {
     /// Font-family name resolved against the system font database.
     pub family: Option<String>,
-    /// Alacritty-style style string (e.g. `"Bold"`, `"SemiBold Italic"`).
+    /// Style string naming a weight and a slant (e.g. `"Bold"`,
+    /// `"SemiBold Italic"`).
     pub style: Option<String>,
 }
 
-/// The `[font]` section: a size plus the four terminal faces.
+/// The `[font]` section: a size, the four terminal faces, and the UI face.
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct FontConfig {
     /// Terminal font size in logical (CSS) pixels, scaled by the display's
-    /// `scale_factor` to device pixels — Alacritty's model (not literal
-    /// typographic points; no 96/72 conversion is applied).
+    /// `scale_factor` to device pixels. The unit is not the typographic
+    /// point; no 96/72 conversion is applied.
     pub size: f32,
     /// The regular face; its `family` is the base every other face inherits.
     pub normal: FontFaceConfig,
@@ -36,8 +37,8 @@ pub struct FontConfig {
     /// The bold-italic face; `family`/`style` default from `normal` / Bold Italic.
     pub bold_italic: FontFaceConfig,
     /// The UI-chrome face (window bar, prompts, indicators). `family` and
-    /// `style` each inherit from `normal` when omitted (not from this face's
-    /// own defaults); resolution and rendering live in `src/font`.
+    /// `style` each inherit from `normal` when omitted, not from this face's
+    /// own defaults.
     pub ui: FontFaceConfig,
 }
 
@@ -55,9 +56,8 @@ impl Default for FontConfig {
 }
 
 impl FontConfig {
-    /// Face labels whose `style` is set but whose effective family (own or
-    /// inherited from `normal`) is absent — so the bundled default is used and
-    /// `style` is silently ignored (D5/D9). Used to emit a load-time warning.
+    /// Face labels whose `style` is set while their effective family (own or
+    /// inherited from `normal`) is absent, so the style has no effect.
     pub fn faces_with_ignored_style(&self) -> Vec<&'static str> {
         let base_present = self.normal.family.is_some();
         self.faces()
@@ -67,15 +67,14 @@ impl FontConfig {
             .collect()
     }
 
-    /// Whether no face configures a font family — every face's `family` is
-    /// absent, so the bundled default font is used.
+    /// Whether none of the four terminal faces sets `family`.
     #[inline]
     pub fn has_no_configured_family(&self) -> bool {
         self.faces().iter().all(|(_, c)| c.family.is_none())
     }
 
     /// The four terminal faces paired with their `[font]` key labels, in fixed
-    /// order — the single source of truth for the face set.
+    /// order.
     pub const fn faces(&self) -> [(&'static str, &FontFaceConfig); 4] {
         [
             ("normal", &self.normal),

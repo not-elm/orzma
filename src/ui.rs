@@ -17,7 +17,8 @@ pub(crate) use shell_surface::ShellSurfaceUi;
 #[derive(Component)]
 pub struct UiRoot;
 
-/// Bevy Plugin spawning the singleton UI root Node tree.
+/// Aggregates the UI plugins: the root Node tree, the shell-surface subtree,
+/// the IME overlay, and the vi-mode indicator.
 pub struct OrzmaUiPlugin;
 
 impl Plugin for OrzmaUiPlugin {

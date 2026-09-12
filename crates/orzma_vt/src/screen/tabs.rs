@@ -9,9 +9,8 @@ use crate::screen::grid::coords::GridColumn;
 /// One character tabulation stop edit, independent of which control
 /// function asked for it.
 ///
-/// TBC and CTC number their parameters differently — `TBC 3` and
-/// `CTC 5` both mean "clear every character stop" — so the two
-/// parameter spaces are normalised into one vocabulary here.
+/// TBC and CTC number their parameters differently: `TBC 3` and
+/// `CTC 5` both mean "clear every character stop".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CharacterTabEdit {
     /// Set a stop at the cursor column (HTS, CTC 0).
@@ -45,25 +44,19 @@ impl CharacterTabEdit {
     }
 }
 
-/// The device's character tabulation stops, one bit per column.
+/// One screen's character tabulation stops.
 ///
-/// ECMA-48 scopes a stop edit by TABULATION STOP MODE (§ 7.2.17), whose
-/// reset state MULTIPLE makes every line share one set of columns. This
-/// type implements that reset state alone, so one bit per column
-/// describes the whole device.
+/// Every line shares one set of stops: this type implements only the
+/// reset state, MULTIPLE, of ECMA-48's TABULATION STOP MODE (§ 7.2.17).
 ///
 /// # Invariants
 ///
-/// The table spans more columns than any grid, so a resize never has to
-/// decide what the columns it widens into should contain: a stop past
-/// the old right edge was already written at reset, and a `TBC 3`
-/// already cleared it. Sizing the table to the grid instead would make
-/// those two states indistinguishable.
+/// A resize never touches the table: within its `COLUMN_COUNT`
+/// columns, the columns a widening grid gains already hold the stops a
+/// reset installed, or none after a `TBC 3`.
 ///
-/// Each screen owns one, so a stop an application sets on the alternate
-/// screen never reaches the primary. xterm shares a single table across
-/// both instead, and ECMA-48 settles nothing here because it has no
-/// alternate screen at all.
+/// A stop an application sets on the alternate screen never reaches the
+/// primary.
 #[derive(Debug, PartialEq)]
 pub(super) struct TabStops([u64; TabStops::WORDS]);
 
@@ -71,9 +64,6 @@ impl TabStops {
     /// Columns between the stops a device reset installs.
     const DEFAULT_INTERVAL: u16 = 8;
     /// How many columns the table addresses, i.e. `0..COLUMN_COUNT`.
-    ///
-    /// Deliberately wider than any real grid; xterm's equivalent is
-    /// 1024.
     const COLUMN_COUNT: u16 = 4096;
     const BITS_PER_WORD: usize = u64::BITS as usize;
     const WORDS: usize = Self::COLUMN_COUNT as usize / Self::BITS_PER_WORD;
@@ -243,14 +233,8 @@ mod tests {
             }
         }
 
-        /// Asserts that the reset stride leaves column zero without a
-        /// stop.
-        ///
-        /// The agreed policy starts the stride at column eight, the way
-        /// xterm's `OkTAB` guard does. A stop there would be
-        /// unreachable in any case, because a forward search begins one
-        /// column past the cursor and a backward search falls back to
-        /// the left edge.
+        /// Asserts that the reset stride starts at column eight, leaving
+        /// column zero without a stop.
         ///
         /// Case: the user presses Shift-Tab with the cursor at the
         /// start of a line.
@@ -259,15 +243,9 @@ mod tests {
             assert!(!tabs().is_set(GridColumn(0)));
         }
 
-        /// Asserts that the reset stride reaches columns no ordinary
-        /// grid shows.
-        ///
-        /// The agreed policy seeds the whole table rather than stopping
-        /// at the grid's right edge, which is what xterm's own DECST8C
-        /// does. Seeding only to the edge would force the table to
-        /// remember whether the application had ever edited it, so that
-        /// a later widening could tell "not covered yet" apart from
-        /// "cleared on purpose".
+        /// Asserts that the reset stride covers the whole table, reaching
+        /// columns no ordinary grid shows, rather than stopping at the
+        /// grid's right edge.
         ///
         /// Case: the user starts an eighty-column terminal and later
         /// drags the window out to two hundred columns.
@@ -312,11 +290,7 @@ mod tests {
         }
 
         /// Asserts that a set past the table's last column is dropped
-        /// rather than panicking.
-        ///
-        /// The agreed policy drops the edit silently. Growing the table
-        /// instead would reintroduce the resize-time ambiguity that a
-        /// fixed width exists to remove.
+        /// silently rather than growing the table or panicking.
         ///
         /// Case: a grid wider than the table puts the cursor past its
         /// last column when HTS arrives.
@@ -341,11 +315,6 @@ mod tests {
 
         /// Asserts that a stop at column zero is never the answer to a
         /// forward search.
-        ///
-        /// The agreed policy accepts the edit rather than rejecting it
-        /// the way xterm does. A forward search starts one column past
-        /// the cursor and so can never return column zero, so a guard
-        /// would buy nothing observable.
         ///
         /// Case: an application clears the table and sends HTS with the
         /// cursor still at the start of the line.
@@ -405,11 +374,6 @@ mod tests {
         /// Asserts that clearing every stop empties the columns past
         /// the grid as well as the ones it shows.
         ///
-        /// The agreed policy clears the whole table so a later widening
-        /// finds nothing there. Clearing only the columns the grid
-        /// shows would let the stride reappear on the next resize,
-        /// undoing the edit the application just made.
-        ///
         /// Case: an application sends TBC 3 to take the tab table over,
         /// and the user then widens the window.
         #[test]
@@ -439,13 +403,7 @@ mod tests {
         use super::*;
 
         /// Asserts that a reset reinstalls the stride across the whole
-        /// table.
-        ///
-        /// The agreed policy seeds the same columns a fresh device
-        /// carries, including the ones past the grid's right edge.
-        /// xterm's DECST8C stops at the edge instead, which makes a
-        /// widening after DECST8C behave differently from one after
-        /// RIS; that inconsistency is not reproduced.
+        /// table, including the columns past the grid's right edge.
         ///
         /// Case: an application that cleared the table sends DECST8C to
         /// get the default tab positions back.
@@ -503,12 +461,8 @@ mod tests {
         }
 
         /// Asserts that a forward search past the last stop the grid
-        /// shows lands on the right edge.
-        ///
-        /// ECMA-48 § 6.1.7 leaves a movement to a non-existing position
-        /// undefined and lists seven options; the agreed policy clamps
-        /// to the right edge rather than wrapping to the next line or
-        /// refusing the move.
+        /// shows lands on the right edge rather than wrapping to the next
+        /// line or refusing the move.
         ///
         /// Case: the shell emits a tab with the cursor already past the
         /// last tab position an eighty-column screen shows.
@@ -551,12 +505,7 @@ mod tests {
         }
 
         /// Asserts that a forward search counting no stops leaves the
-        /// column alone.
-        ///
-        /// The agreed policy keeps this layer mechanical: turning a
-        /// missing or zero CSI parameter into the default of one
-        /// belongs to the parameter layer, so a count of zero here
-        /// means no movement rather than one stop.
+        /// column alone rather than moving one stop.
         ///
         /// Case: the parameter layer hands down a count it has not
         /// defaulted.
@@ -598,11 +547,8 @@ mod tests {
             assert_eq!(tabs().cbt(GridColumn(24), 2, GridColumn(0)), GridColumn(8));
         }
 
-        /// Asserts that a backward search past the first stop lands on
-        /// the left edge.
-        ///
-        /// The agreed policy makes the left edge a fallback rather than
-        /// a stop, because the reset stride leaves column zero empty.
+        /// Asserts that a backward search past the first stop falls back
+        /// to the left edge.
         ///
         /// Case: the user presses Shift-Tab near the start of a line,
         /// before the first tab position.
@@ -657,12 +603,7 @@ mod tests {
         }
 
         /// Asserts that a backward search counting no stops leaves the
-        /// column alone.
-        ///
-        /// The agreed policy keeps this layer mechanical: turning a
-        /// missing or zero CSI parameter into the default of one
-        /// belongs to the parameter layer, so a count of zero here
-        /// means no movement rather than one stop.
+        /// column alone rather than moving one stop.
         ///
         /// Case: the parameter layer hands down a count it has not
         /// defaulted.
@@ -703,12 +644,6 @@ mod tests {
         /// Asserts that adding one stop leaves the stride past the
         /// right edge intact.
         ///
-        /// The agreed policy keeps the two edits independent. A table
-        /// sized to the grid would instead have to record that the
-        /// application had edited it at all, and would then stop
-        /// extending the stride on every later widening — so a single
-        /// HTS would silently disable tabs past the old edge.
-        ///
         /// Case: an application adds one tab position of its own to the
         /// default stride, and the user later widens the window.
         #[test]
@@ -734,13 +669,8 @@ mod tests {
             );
         }
 
-        /// Asserts that `TBC 2` and `TBC 3` both select the full clear.
-        ///
-        /// ECMA-48 § 8.3.154 makes TBC 2 depend on the TABULATION STOP
-        /// MODE, whose reset state MULTIPLE — the only state
-        /// implemented here — widens "the active line" to every line,
-        /// so the two parameters coincide. kitty and Windows Terminal
-        /// instead treat TBC 2 as a no-op; that reading is rejected.
+        /// Asserts that `TBC 2` and `TBC 3` both select the full clear,
+        /// rather than `TBC 2` doing nothing.
         ///
         /// Case: an application clears the tab table before installing
         /// its own layout.
@@ -769,11 +699,8 @@ mod tests {
         }
 
         /// Asserts that the TBC parameters only line tabulation stops
-        /// answer select nothing.
-        ///
-        /// The agreed policy drops them rather than routing them to the
-        /// character stops, so a later line-tabulation layer can claim
-        /// them without changing what these parameters already did.
+        /// answer select nothing rather than falling back to the
+        /// character stops.
         ///
         /// Case: an application written for a printer sends TBC 1 to
         /// drop the line tab stop on the cursor's line.
@@ -801,10 +728,6 @@ mod tests {
         }
 
         /// Asserts that `CTC 4` and `CTC 5` both select the full clear.
-        ///
-        /// TBC and CTC number the same effects differently — `TBC 2`
-        /// pairs with `CTC 4` and `TBC 3` with `CTC 5` — so the two
-        /// parameter spaces are read by separate constructors.
         ///
         /// Case: an application uses CTC rather than TBC to clear the
         /// tab table.

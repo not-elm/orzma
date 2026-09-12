@@ -1,9 +1,6 @@
-//! Per-terminal frame-emit coalescer.
-//!
-//! Owns the deadline state machine plus the flush flag that decides
-//! when the owning terminal emits accumulated damage: the coalesce
-//! window (idle debounce and hard cap) and the bootstrap flag behind
-//! the initial snapshot.
+//! Per-terminal frame-emit coalescer: the coalesce window (idle debounce
+//! and hard cap) and the bootstrap flag that decide when the owning
+//! terminal emits accumulated damage.
 
 use std::cmp::min;
 use std::time::{Duration, Instant};
@@ -12,14 +9,12 @@ use std::time::{Duration, Instant};
 #[derive(Debug)]
 pub struct Coalescer {
     /// Arrival time of the first chunk that opened the current coalesce
-    /// window. Anchors the `MAX_CAP` hard-flush deadline. Set only by the
-    /// first `arm_or_extend` call; subsequent chunks in the same window do
-    /// not move it. Cleared back to `None` by `disarm`.
+    /// window, anchoring the `MAX_CAP` hard-flush deadline; `None` while
+    /// disarmed. Later chunks in the same window do not move it.
     armed_at: Option<Instant>,
-    /// Arrival time of the most recent chunk in the current window. Anchors
-    /// the `IDLE` debounce deadline. Updated on every `arm_or_extend` call so
-    /// the idle timer resets whenever new input arrives. Cleared back to
-    /// `None` by `disarm`.
+    /// Arrival time of the most recent chunk in the current window,
+    /// anchoring the `IDLE` debounce deadline; `None` while disarmed.
+    /// Every chunk moves it, so the idle timer resets on new input.
     last_chunk_at: Option<Instant>,
     /// True until the first emit settles. The owner emits the initial
     /// snapshot without waiting for a deadline while this holds.
@@ -76,19 +71,14 @@ impl Coalescer {
     /// Settles a completed emit: closes the window and marks the bootstrap
     /// paint done.
     ///
-    /// # Invariants
-    ///
-    /// Call only after a frame was actually produced — settling on a
-    /// decision alone would spend the bootstrap debt with nothing painted.
+    /// Call it only after a frame was actually produced.
     pub fn settle_emit(&mut self) {
         self.disarm();
         self.bootstrap = false;
     }
 
-    /// Resets the window. Serves non-consuming resets (an emit settles
-    /// through [`Self::settle_emit`] instead): the bootstrap debt
-    /// survives, so a resize/scroll/selection repaint that paints
-    /// outside the coalesce path does not skip the initial snapshot.
+    /// Resets the window without touching the bootstrap debt; a completed
+    /// emit settles through [`Self::settle_emit`] instead.
     #[inline]
     pub fn disarm(&mut self) {
         self.armed_at = None;
@@ -140,8 +130,7 @@ mod tests {
     /// Asserts that each chunk inside the window moves the idle
     /// deadline to `last_chunk + IDLE` while under the cap.
     ///
-    /// Case: output keeps trickling in faster than the debounce, so
-    /// the flush keeps waiting for the stream to go quiet.
+    /// Case: output keeps trickling in faster than the debounce.
     #[test]
     fn each_chunk_extends_the_idle_deadline() {
         let mut coalescer = Coalescer::default();
@@ -158,8 +147,7 @@ mod tests {
     /// though the most recent chunk keeps the idle deadline in the
     /// future.
     ///
-    /// Case: continuous spam (`yes`) extends the debounce forever; the
-    /// screen must still update by the cap.
+    /// Case: continuous output from `yes` keeps extending the debounce.
     #[test]
     fn the_hard_cap_bounds_a_busy_window() {
         let mut coalescer = Coalescer::default();
@@ -171,7 +159,7 @@ mod tests {
 
     /// Asserts that a disarmed coalescer is never due, at any time.
     ///
-    /// Case: an idle terminal pumped every frame.
+    /// Case: the host pumps an idle terminal every frame.
     #[test]
     fn a_disarmed_coalescer_is_never_due() {
         let mut coalescer = Coalescer::default();
@@ -185,8 +173,7 @@ mod tests {
     /// Asserts that the window becomes due exactly once the idle
     /// debounce elapses after the last chunk.
     ///
-    /// Case: output stops, and the repaint fires when the stream has
-    /// been quiet for the debounce.
+    /// Case: a program prints one chunk of output and then goes quiet.
     #[test]
     fn the_window_is_due_once_idle_elapses() {
         let mut coalescer = Coalescer::default();
@@ -199,11 +186,7 @@ mod tests {
     /// Asserts that a default-built coalescer still owes the bootstrap
     /// emit and starts disarmed.
     ///
-    /// `Default` is hand-written for this; rederiving
-    /// `#[derive(Default)]` would silently start `bootstrap` at
-    /// `false` and the initial snapshot would never emit.
-    ///
-    /// Case: a freshly spawned terminal before its first pump.
+    /// Case: a terminal has just spawned and has not been pumped yet.
     #[test]
     fn a_fresh_coalescer_needs_bootstrap() {
         let coalescer = Coalescer::default();
@@ -214,8 +197,7 @@ mod tests {
     /// Asserts that settling a completed emit closes the coalesce window
     /// and clears the bootstrap debt.
     ///
-    /// Case: the terminal paints its initial snapshot, after which later
-    /// frames wait for the debounce deadline like any other output.
+    /// Case: the terminal paints its initial snapshot.
     #[test]
     fn settle_emit_closes_the_window_and_clears_the_bootstrap_debt() {
         let t0 = base();
@@ -231,10 +213,6 @@ mod tests {
 
     /// Asserts that disarming closes the window without clearing the
     /// bootstrap debt.
-    ///
-    /// `disarm` serves resets that painted nothing, so it must not spend a
-    /// debt only a real emit can settle; `settle_emit` is the consuming
-    /// path.
     ///
     /// Case: a resize discards the staged damage before the initial
     /// snapshot has ever been painted.

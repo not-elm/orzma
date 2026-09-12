@@ -1,7 +1,6 @@
 //! Startup-resolved `[vi-mode]` key table: normalizes each configured key
 //! into a lookup form (`Plain` logical char / `Named` / `Ctrl` physical key)
-//! and maps a matched action to the shared VI events. Used by both modes'
-//! vi-mode key gathers.
+//! and maps a matched action to the shared VI events.
 
 use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
@@ -16,7 +15,7 @@ use orzma_configs::vi_mode::{
 };
 use std::collections::HashMap;
 
-/// Registers the `Startup` resolution of the `[vi-mode]` table.
+/// Adds the resolved `[vi-mode]` key table.
 pub(super) struct ViModeKeymapPlugin;
 
 impl Plugin for ViModeKeymapPlugin {
@@ -69,7 +68,7 @@ impl ResolvedViModeKeys {
 }
 
 /// Fires the VI event for a matched action on `entity`, converting the
-/// config-crate vocabulary to engine types. Shared by both modes' gathers.
+/// config-crate vocabulary to engine types.
 pub(crate) fn trigger_vi_mode_action(
     commands: &mut Commands,
     entity: Entity,
@@ -105,8 +104,8 @@ enum ResolvedKey {
     Ctrl(KeyCode),
 }
 
-/// `Startup` system: resolves `[vi-mode]` into the lookup map. Config
-/// validation already rejected duplicates, so plain inserts are safe.
+/// Resolves `[vi-mode]` into the lookup map. Config validation already
+/// rejected duplicates, so plain inserts are safe.
 fn build_vi_mode_keys(
     mut resolved: ResMut<ResolvedViModeKeys>,
     configs: Res<OrzmaConfigsResource>,

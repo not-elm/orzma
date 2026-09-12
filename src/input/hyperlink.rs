@@ -1,16 +1,6 @@
-//! OSC 8 hyperlink hover detection and cursor-icon control — the single
-//! authority for `HyperlinkHoverState` (the renderer underline) and the window
-//! `CursorIcon` over every terminal surface: the shell terminal and
-//! webview hosts (all are `OrzmaTerminal` entities). Over a linked cell the
-//! cursor becomes a pointer while the platform activation modifier
-//! (`link_modifier_held`) is held, and text otherwise; over a webview host the
-//! cursor is left to `bevy_cef`'s `SystemCursorIconPlugin`. Surfaces with input
-//! suppressed (`MouseDisabled`: vi mode, IME, focused webview, unfocused
-//! window) are skipped, so hover never advertises a link the mouse dispatcher
-//! would refuse to open. Hyperlink activation (Cmd/Ctrl-click → `OpenUri`) now lives in
-//! `crate::input::mouse` (deciders `decide_button`/`resolve_button_event`);
-//! `crate::action::terminal` keeps only the apply observer
-//! (`on_terminal_open_uri` → `try_open_uri`).
+//! OSC 8 hyperlink hover detection and cursor-icon control across every
+//! terminal surface (the shell terminal and webview hosts): the only
+//! writer of `HyperlinkHoverState` and the window's `CursorIcon`.
 
 use crate::input::focus::MouseDisabled;
 use crate::input::{InputPhase, current_modifiers};
@@ -29,8 +19,8 @@ use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 use orzma_configs::shortcuts::Modifiers;
 
-/// Plugin: registers `insert_initial_cursor_icon` at `Startup` and
-/// `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
+/// Adds hyperlink hover detection and cursor-icon control for every
+/// terminal surface.
 pub(super) struct HyperlinkInputPlugin;
 
 impl Plugin for HyperlinkInputPlugin {
@@ -59,6 +49,8 @@ pub(crate) fn link_modifier_held(mods: &Modifiers) -> bool {
     }
 }
 
+/// Skips any surface with input suppressed (`MouseDisabled`), so hover
+/// never advertises a link the mouse dispatcher would refuse to open.
 fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
@@ -135,8 +127,8 @@ fn hyperlink_hover_and_cursor(
 }
 
 /// Clears every per-cursor field of the hover state, including
-/// `modifier_held`. Used on the early-return paths where the keyboard
-/// was not read, so the modifier state cannot be trusted.
+/// `modifier_held`. Call this when the keyboard was not read this frame,
+/// since the modifier state cannot be trusted otherwise.
 fn reset_hover_state(hover: &mut HyperlinkHoverState) {
     hover.entity = None;
     hover.hyperlink_id = None;
@@ -198,10 +190,10 @@ fn cursor_decision(target: HoverTarget) -> Option<SystemCursorIcon> {
 }
 
 /// Inserts an initial `CursorIcon::System(SystemCursorIcon::Default)`
-/// (the arrow) on the primary window so the hover system in this module
-/// can mutate the component without first having to insert it. The arrow
-/// is the default for non-terminal regions; the hover system narrows it to
-/// the I-beam over terminal text.
+/// (the arrow) on the primary window so the hover system can mutate the
+/// component without first having to insert it. The arrow is the default
+/// for non-terminal regions; the hover system narrows it to the I-beam
+/// over terminal text.
 fn insert_initial_cursor_icon(
     mut commands: Commands,
     windows: Query<Entity, (With<PrimaryWindow>, Without<CursorIcon>)>,

@@ -40,8 +40,7 @@ fn an_apc_mount_reports_the_placement_it_registered() {
 /// Asserts that an APC-mounted placement is listed in the next
 /// emitted frame.
 ///
-/// Case: a companion app mounts its instance, and the host must be told
-/// where to draw the webview on the frame that follows.
+/// Case: a companion app mounts its instance beside the prompt.
 #[test]
 fn an_apc_mount_reaches_the_next_frame() {
     let id: InstanceId = ID.parse().expect("the fixture is a valid id");
@@ -75,7 +74,7 @@ fn an_apc_unmount_reports_the_address_it_named() {
 /// raises no signal.
 ///
 /// Case: a program on the same terminal writes a kitty graphics APC
-/// sequence, which orzma must leave alone.
+/// sequence.
 #[test]
 fn a_foreign_apc_payload_raises_no_signal() {
     let (_device, output) = interpret_fully(b"\x1b_Ga=T,f=100\x1b\\");
@@ -85,8 +84,8 @@ fn a_foreign_apc_payload_raises_no_signal() {
 /// Asserts that a mount past the per-terminal cap is reported as a
 /// rejection naming the instance it refused, rather than as a mount.
 ///
-/// Case: a program mounts more instances than the terminal has overlay
-/// slots for.
+/// Case: a program mounts more instances than the terminal accepts
+/// at once.
 #[test]
 fn an_apc_mount_past_the_cap_is_rejected() {
     let mut session = Session::new();
@@ -127,7 +126,7 @@ fn a_hit_unmount_raises_the_chunk_liveness() {
 /// Asserts that a mount the cap rejected does not raise the chunk
 /// liveness.
 ///
-/// Case: a program mounts past the per-terminal overlay-slot cap in a
+/// Case: a program mounts past the per-terminal placement cap in a
 /// chunk that carries no other terminal output.
 #[test]
 fn a_capped_mount_does_not_raise_the_chunk_liveness() {

@@ -20,12 +20,6 @@ fn a_parameter_list_past_the_parser_cap_loses_its_tail() {
 /// Asserts that a sequence carrying an intermediate does not reach
 /// the control function that shares its final byte.
 ///
-/// The agreed policy refuses every intermediate rather than
-/// whitelisting the ones this terminal implements. `vtparse` promotes
-/// intermediates into the parameter slice, so DECCARA and DECSTBM
-/// reach the dispatcher with the same final byte and differ only in
-/// that trailing byte.
-///
 /// Case: an application changes the attributes of a rectangle with
 /// `CSI 1 ; 2 $ r`.
 #[test]
@@ -38,26 +32,12 @@ fn an_intermediate_does_not_reach_the_scroll_region() {
 }
 
 /// Asserts that a sequence whose intermediate falls out of the
-/// parameter slice through `vtparse`'s own parameter limit still does
-/// not reach the control function that shares its final byte.
-///
-/// The agreed policy checks `parameters_truncated` as its own guard
-/// rather than trusting `has_intermediates()` alone to catch every
-/// intermediate the parser drops. `vtparse` promotes a trailing
-/// intermediate into the parameter slice only while `num_params` has
-/// room under its own 32-parameter limit; once a sequence's own
-/// parameters already fill every slot, the promotion is refused and
-/// the loss is reported through `parameters_truncated` instead, so
-/// the intermediate never lands in the slice for `has_intermediates()`
-/// to see. A dispatcher that trusted `has_intermediates()` alone would
-/// read such a sequence as a bare `CSI 1 ; 2 r` and apply it as
-/// DECSTBM instead of refusing it as the DECCARA-shaped sequence it
-/// is.
+/// parameter slice past the parser's parameter limit still does not
+/// reach the control function that shares its final byte.
 ///
 /// Case: an application changes the attributes of a rectangle with
 /// `CSI 1 ; 2 $ r`, sent with a parameter list long enough to exhaust
-/// `vtparse`'s own 32-parameter limit before the trailing `$`
-/// arrives.
+/// the parser's 32-parameter limit before the trailing `$` arrives.
 #[test]
 fn a_truncated_intermediate_does_not_reach_the_scroll_region() {
     let chunk = format!("\x1b[1;2{}$ra\n\nb", ";".repeat(29));

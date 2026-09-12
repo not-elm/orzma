@@ -15,7 +15,7 @@ pub enum OrzmaTtyError {
     /// Cloning the reader / taking the writer from the PTY master failed.
     #[error("PTY pipe setup failed")]
     PtyPipe(#[source] anyhow::Error),
-    /// Write a pty input buffer to the PTY master failed.
+    /// Writing an input buffer to the PTY master failed.
     #[error("PTY write failed")]
     PtyWrite(#[source] std::io::Error),
     /// Resizing the PTY master (`TIOCSWINSZ`) failed.

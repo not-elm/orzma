@@ -1,7 +1,6 @@
-//! `[vi-mode]` table: shared vi-mode key bindings. Keys are LOGICAL
+//! `[vi-mode]` table: vi-mode key bindings. Keys are logical
 //! (case-sensitive characters, symbols allowed) with an optional `Ctrl+`
-//! prefix — a different grammar from `[shortcuts]` chords, matching how
-//! vi-mode keys are actually decided at runtime.
+//! prefix, a different grammar from `[shortcuts]` chords.
 
 use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
@@ -77,8 +76,7 @@ pub enum ViModeBaseKey {
 /// # Invariants
 ///
 /// When `ctrl` is true the key MUST be `Char` of one ASCII-alphanumeric
-/// character (stored lowercase) or `Named` — `Ctrl+` entries are matched on
-/// the physical `KeyCode` at runtime, which only exists for that domain.
+/// character (stored lowercase) or `Named`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ViModeKey {
     /// `Ctrl` is part of the binding.
@@ -185,8 +183,7 @@ pub fn parse_vi_mode_key(s: &str) -> Result<ViModeKey, ViModeKeyParseError> {
     })
 }
 
-/// A cursor motion, in engine-neutral vocabulary. The binary maps this to
-/// the terminal engine's `ViMotion`.
+/// A cursor motion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViModeMotion {
     /// One cell left.
@@ -287,7 +284,7 @@ pub enum ViModeSearchStep {
     Previous,
 }
 
-/// One vi-mode action, in config-crate (engine-free) vocabulary.
+/// One vi-mode action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViModeAction {
     /// Move the copy cursor.
@@ -300,16 +297,15 @@ pub enum ViModeAction {
     Yank,
     /// Leave vi mode.
     Exit,
-    /// Open a search / jump prompt (currently has no effect — local vi-mode
-    /// search is a future feature).
+    /// Open a search / jump prompt (no effect: vi-mode search is not
+    /// implemented).
     Prompt(ViModePromptDir),
-    /// Repeat the previous search (currently has no effect — local vi-mode
-    /// search is a future feature).
+    /// Repeat the previous search (no effect: vi-mode search is not
+    /// implemented).
     SearchStep(ViModeSearchStep),
 }
 
-/// One key with multiple bindings. Carried inside
-/// `OrzmaConfigsError::DuplicateViModeKeys`.
+/// One key with multiple bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DuplicateViModeKey {
     /// The key bound more than once.
@@ -346,7 +342,6 @@ macro_rules! vi_mode_fields {
 
         impl ViModeConfig {
             /// `(label, &keys, action)` for every action, in stable order.
-            /// The single source of truth for the `[vi-mode]` schema.
             pub fn bindings_iter(
                 &self,
             ) -> impl Iterator<Item = (&'static str, &Vec<ViModeKey>, ViModeAction)> + '_ {
@@ -424,35 +419,35 @@ vi_mode_fields! {
     yank => "yank", ViModeAction::Yank, ["y", "Enter"];
     /// Leave vi mode.
     exit => "exit", ViModeAction::Exit, ["q", "Escape", "Ctrl+C"];
-    /// Open the search-down prompt (currently has no effect — local vi-mode
-    /// search is a future feature).
+    /// Open the search-down prompt (no effect: vi-mode search is not
+    /// implemented).
     search_forward => "search-forward", ViModeAction::Prompt(ViModePromptDir::SearchForward), ["/"];
-    /// Open the search-up prompt (currently has no effect — local vi-mode
-    /// search is a future feature).
+    /// Open the search-up prompt (no effect: vi-mode search is not
+    /// implemented).
     search_backward => "search-backward", ViModeAction::Prompt(ViModePromptDir::SearchBackward), ["?"];
-    /// Repeat the previous search (currently has no effect — local vi-mode
-    /// search is a future feature).
+    /// Repeat the previous search (no effect: vi-mode search is not
+    /// implemented).
     search_next => "search-next", ViModeAction::SearchStep(ViModeSearchStep::Next), ["n"];
-    /// Repeat the previous search, reversed (currently has no effect — local
-    /// vi-mode search is a future feature).
+    /// Repeat the previous search, reversed (no effect: vi-mode search is not
+    /// implemented).
     search_previous => "search-previous", ViModeAction::SearchStep(ViModeSearchStep::Previous), ["N"];
-    /// Open the jump-to-char-forward prompt (currently has no effect — local
-    /// vi-mode search is a future feature).
+    /// Open the jump-to-char-forward prompt (no effect: vi-mode search is not
+    /// implemented).
     jump_forward => "jump-forward", ViModeAction::Prompt(ViModePromptDir::JumpForward), ["f"];
-    /// Open the jump-to-char-backward prompt (currently has no effect —
-    /// local vi-mode search is a future feature).
+    /// Open the jump-to-char-backward prompt (no effect: vi-mode search is
+    /// not implemented).
     jump_backward => "jump-backward", ViModeAction::Prompt(ViModePromptDir::JumpBackward), ["F"];
-    /// Open the jump-till-char-forward prompt (currently has no effect —
-    /// local vi-mode search is a future feature).
+    /// Open the jump-till-char-forward prompt (no effect: vi-mode search is
+    /// not implemented).
     jump_to_forward => "jump-to-forward", ViModeAction::Prompt(ViModePromptDir::JumpToForward), ["t"];
-    /// Open the jump-till-char-backward prompt (currently has no effect —
-    /// local vi-mode search is a future feature).
+    /// Open the jump-till-char-backward prompt (no effect: vi-mode search is
+    /// not implemented).
     jump_to_backward => "jump-to-backward", ViModeAction::Prompt(ViModePromptDir::JumpToBackward), ["T"];
 }
 
 impl ViModeConfig {
-    /// Detects keys bound to more than one action. Deterministic order via
-    /// `BTreeMap`.
+    /// Detects keys bound to more than one action. The reported entries are in
+    /// a deterministic order.
     pub(crate) fn validate_no_duplicate_keys(&self) -> Result<(), Vec<DuplicateViModeKey>> {
         let mut by_key: BTreeMap<ViModeKey, Vec<&'static str>> = BTreeMap::new();
         for (label, keys, _action) in self.bindings_iter() {

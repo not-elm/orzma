@@ -1,8 +1,6 @@
-//! Vi-mode indicator chip. A `Display::None` chip Node is
-//! attached as a child of each Surface host the first frame
-//! `OrzmuxPane` is observed there; it becomes visible while the
-//! host carries `ViModeState` and shows `[offset/total]` over the
-//! pane's top-right corner.
+//! Vi-mode indicator chip: attached to each Surface host, it becomes
+//! visible while the host carries `ViModeState`, showing `[offset/total]`
+//! over the pane's top-right corner.
 
 use crate::action::vi::mode::ViModeState;
 use crate::font::TerminalUiFont;
@@ -15,23 +13,16 @@ use bevy::prelude::*;
 use bevy_orzma_tty_renderer::schema::TerminalGrid;
 use bevy_orzmux::prelude::OrzmuxPane;
 
-/// Background color of the vi-mode indicator chip. Bright
-/// yellow so the chip reads as a deliberate HUD element on top of the
-/// terminal grid.
+/// Background color of the vi-mode indicator chip: bright yellow.
 const VI_MODE_INDICATOR_BG: Color = Color::srgb(0.95, 0.85, 0.20);
-/// Foreground (text) color of the vi-mode indicator chip. Near-black
-/// for contrast against `VI_MODE_INDICATOR_BG`.
+/// Foreground (text) color of the vi-mode indicator chip: near-black.
 const VI_MODE_INDICATOR_FG: Color = Color::srgb(0.10, 0.10, 0.10);
-/// Font size of the vi-mode indicator chip's text. Smaller than Bevy's
-/// 20px default so the chip reads as a compact HUD label instead of
-/// competing with the terminal grid.
+/// Font size of the vi-mode indicator chip's text, in pixels.
 const VI_MODE_INDICATOR_FONT_SIZE_PX: f32 = 11.0;
-/// Horizontal padding inside the vi-mode indicator chip. Kept tight
-/// because the chip's text is also smaller than the surrounding UI.
+/// Horizontal padding inside the vi-mode indicator chip.
 const VI_MODE_INDICATOR_PADDING_X_PX: f32 = 4.0;
 
-/// Bevy Plugin: wires the vi-mode indicator's attach + refresh systems
-/// and the exit observer.
+/// Adds the vi-mode indicator.
 pub(super) struct ViModeIndicatorPlugin;
 
 impl Plugin for ViModeIndicatorPlugin {
@@ -103,8 +94,7 @@ fn attach_indicator_to_surface_host(
 }
 
 /// Updates each visible chip's `Text` and `IndicatorCache` from the
-/// host's live scroll offset. Gated by `any_with_component::<ViModeState>`
-/// so the schedule short-circuits when nothing is in vi mode.
+/// host's live scroll offset.
 // TODO: `total` is stubbed to 0 until `bevy_orzmux` exposes a
 // history-size read; only the live scroll offset is real.
 fn refresh_indicator(
@@ -135,10 +125,10 @@ fn refresh_indicator(
     }
 }
 
-/// Observer for `On<Remove, ViModeState>`. Hides the indicator chip
-/// belonging to the entity whose `ViModeState` was just removed.
-/// Runs at the sync point that applies the remove, so the chip flips
-/// to `Display::None` before the next render — no per-frame poll needed.
+/// Hides the indicator chip belonging to the entity whose `ViModeState` was
+/// just removed. Runs at the sync point that applies the remove, so the
+/// chip flips to `Display::None` before the next render — no per-frame poll
+/// needed.
 fn hide_indicator_on_vi_mode_exit(
     ev: On<Remove, ViModeState>,
     hosts: Query<&Children>,

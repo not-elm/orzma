@@ -4,7 +4,7 @@ use crate::shortcuts::{DuplicateChord, KeyChord};
 use crate::vi_mode::DuplicateViModeKey;
 use std::path::PathBuf;
 
-/// Result alias used throughout the `orzma_configs` crate.
+/// Result alias for the config loader.
 pub type OrzmaConfigsResult<T = ()> = Result<T, OrzmaConfigsError>;
 
 /// Errors that can occur while resolving, reading, or parsing the config file.
@@ -30,13 +30,13 @@ pub enum OrzmaConfigsError {
         source: toml::de::Error,
     },
 
-    /// One or more KeyChord collisions among direct `[shortcuts]` bindings.
-    /// Collected in a single pass; reported all-at-once to avoid whack-a-mole.
+    /// One or more `KeyChord` collisions among direct `[shortcuts]` bindings.
+    /// Every collision is reported, not just the first.
     #[error("duplicate chord(s) among direct [shortcuts] bindings: {}", format_dupes(.0))]
     DuplicateChords(Vec<DuplicateChord>),
 
-    /// One or more KeyChord collisions among leader-scoped (`<Leader>`)
-    /// bindings. Collected in a single pass; reported all-at-once.
+    /// One or more `KeyChord` collisions among leader-scoped (`<Leader>`)
+    /// bindings. Every collision is reported, not just the first.
     #[error("duplicate chord(s) among <Leader> bindings: {}", format_dupes(.0))]
     DuplicatePrefixChords(Vec<DuplicateChord>),
 
@@ -45,8 +45,7 @@ pub enum OrzmaConfigsError {
     DuplicateViModeKeys(Vec<DuplicateViModeKey>),
 
     /// The configured leader chord duplicates a direct `[shortcuts]` binding's
-    /// chord. The leader is matched first, so that direct binding would be
-    /// unreachable.
+    /// chord, which would leave that binding unreachable.
     #[error("leader chord {chord} shadows the direct binding for {action}")]
     LeaderShadowsDirectBinding {
         /// The colliding chord (the leader).
@@ -72,8 +71,7 @@ pub enum OrzmaConfigsError {
         size: f32,
     },
 
-    /// A `[font].<face>.style` string (face ∈ normal / bold / italic /
-    /// bold_italic / ui) did not parse to a known weight + slant.
+    /// A `[font].<face>.style` string did not parse to a known weight + slant.
     #[error("invalid font style {value:?} for the {face} face")]
     InvalidFontStyle {
         /// The face label (`normal` / `bold` / `italic` / `bold_italic` / `ui`).

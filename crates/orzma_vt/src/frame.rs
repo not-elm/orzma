@@ -1,12 +1,5 @@
 //! Frame assembly: turning device state into what one emit hands the
 //! renderer.
-//!
-//! A frame is one flat struct: a full repaint simply carries every
-//! viewport row, and the changed-only sections (`placements`,
-//! `palette`) are `Some` exactly when the emit-time diff against the
-//! [`FrameTracker`]'s retained values found them genuinely different.
-//! The pieces are read through one shared borrow of the device, so a
-//! frame describes a single instant.
 
 pub mod damage;
 
@@ -30,9 +23,7 @@ use crate::vi::ViCursor;
 /// emitted frame, and for placements `Some(vec![])` = none visible —
 /// a distinct state), while `vi_cursor` and `selection` are absent
 /// state (`None` = not in vi mode / no selection, carried on every
-/// frame). `rows` and `hyperlinks` need no `Option` — an absent row
-/// is unchanged, so a plain `Vec` with empty as its zero is the
-/// tighter type.
+/// frame).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Frame {
     /// Grid dimensions; always carried, doubling as the resize signal.
@@ -44,9 +35,10 @@ pub struct Frame {
     pub cursor: Cursor,
     /// Lines scrolled back from the live tail; always carried.
     pub display_offset: DisplayOffset,
-    /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
+    /// Vi-mode cursor. It is always `None`, because this terminal does
+    /// not implement vi mode.
     pub vi_cursor: Option<ViCursor>,
-    /// Active selection range. Independent of vi cursor — survives motion.
+    /// Active selection range.
     pub selection: Option<SelectionRange>,
     /// Webview placements in active-grid coordinates: `None` when
     /// unchanged since the last emitted frame, otherwise the complete
@@ -57,13 +49,18 @@ pub struct Frame {
     /// The live palette symbolic colors resolve against: `None` when
     /// unchanged. A palette override owes a staged full repaint — the
     /// emit-time diff guarantees only that a frame is emitted, not
-    /// that it carries rows. The OSC 4 / 104 handler and `RIS` stage
-    /// it; the future OSC 10 / 11 / 12 handler owes the same.
+    /// that it carries rows. The OSC 4 / 104 handler and `RIS` stage it.
+    ///
+    /// TODO: stage it from the OSC 10 / 11 / 12 handler too, once that
+    /// handler lands.
     pub palette: Option<Palette>,
     /// Definitions for hyperlink ids referenced by `rows`, merged into
-    /// the consumer's retained table. Reserved: empty until the
-    /// hyperlink interner is ported, which is safe while
-    /// [`crate::prelude::Run::hyperlink_id`] is always `None`.
+    /// the consumer's retained table.
+    ///
+    /// It is always empty, and [`crate::prelude::Run::hyperlink_id`] is
+    /// always `None`.
+    ///
+    /// TODO: fill it once OSC 8 handling reaches the hyperlink interner.
     pub hyperlinks: Vec<Hyperlink>,
 }
 
@@ -92,13 +89,6 @@ pub(crate) struct FrameTracker {
 impl FrameTracker {
     /// Builds a tracker whose damage is seeded with the bootstrap full
     /// repaint, so the first emitted frame carries every viewport row.
-    ///
-    /// The retained [`Carried::default`] disagrees with a fresh device
-    /// on one field: its cursor is not visible, while
-    /// [`DeviceState::cursor`] folds in the `DECTCEM` default, which is.
-    /// The seeded damage is what makes that sound, because it forces the
-    /// first frame out regardless of any diff and that emit settles the
-    /// real cursor before the diffs are ever load-bearing.
     pub fn new() -> Self {
         Self {
             damage: Damage::new(),
@@ -130,12 +120,10 @@ impl FrameTracker {
     ///
     /// # Invariants
     ///
-    /// - The rows, the cursor, the offset, and the projection all come
-    ///   from one borrow of `device`, so a frame describes one instant.
-    /// - The tracker never retains a value the consumer does not see:
-    ///   the section diffs only compare, and the emitted frame is
-    ///   settled after the gate, so an attempt that returns `None`
-    ///   retains nothing.
+    /// - The rows, the cursor, the offset, and the projection describe
+    ///   one instant of `device`.
+    /// - The tracker never retains a value the consumer does not see, so
+    ///   an attempt that returns `None` retains nothing.
     pub fn emit(&mut self, device: &DeviceState) -> Option<Frame> {
         let screen = device.active_screen();
         let carried = Carried {
@@ -191,11 +179,7 @@ impl FrameTracker {
     /// Records what an emitted frame carried, so later diffs compare
     /// against what the consumer last saw.
     ///
-    /// # Invariants
-    ///
-    /// Every emitted frame settles here exactly once: a diff result
-    /// that reaches a frame without being settled would report the
-    /// same change again on the next attempt.
+    /// Every emitted frame must settle here exactly once.
     fn settle(
         &mut self,
         carried: Carried,
@@ -252,8 +236,7 @@ mod tests {
     }
 
     /// Asserts that a new tracker's retained values match a fresh
-    /// device for the diffed sections, so a fresh consumer and a fresh
-    /// VT agree without a completeness flag.
+    /// device for the diffed sections.
     ///
     /// Case: a terminal spawns and its very first frame omits the
     /// palette and placement sections.
@@ -298,8 +281,9 @@ mod tests {
     /// Asserts that the palette diff reports the change until the
     /// emitted table is settled.
     ///
-    /// Case: an OSC palette override arrives, one frame carries the new
-    /// table, and the next frame omits it again.
+    /// Case: the palette's foreground is changed to match its
+    /// background, one frame carries the updated table, and the next
+    /// frame, once that table is settled, omits it again.
     #[test]
     fn diff_palette_reports_the_change_until_settled() {
         let mut tracker = FrameTracker::new();
@@ -316,8 +300,7 @@ mod tests {
     /// Asserts that `stage_if_changed` reports whether it staged
     /// anything.
     ///
-    /// Case: a scroll request is clamped to a no-op and its caller must
-    /// learn the viewport did not move.
+    /// Case: a scroll request is clamped to a no-op.
     #[test]
     fn stage_if_changed_reports_whether_anything_was_staged() {
         let mut rig = drained_rig();
@@ -395,8 +378,8 @@ mod tests {
     /// Asserts that a cursor-only change emits a frame with no rows,
     /// and that the next attempt emits nothing.
     ///
-    /// Case: the user presses an arrow key and the caret must move
-    /// without any row changing.
+    /// Case: the user presses an arrow key, moving the caret without
+    /// changing any row.
     #[test]
     fn a_cursor_only_change_emits_an_empty_rows_frame_once() {
         let mut rig = drained_rig();
@@ -411,7 +394,7 @@ mod tests {
     }
 
     /// Asserts that an emit attempt with nothing changed returns
-    /// `None` — the lean contract.
+    /// `None`.
     ///
     /// Case: a chunk changes only the pen, which no frame field
     /// carries.
@@ -423,8 +406,7 @@ mod tests {
     }
 
     /// Asserts that a display-offset change alone emits a frame
-    /// carrying the new offset once — the mechanical backstop for the
-    /// offset-stages-Full convention.
+    /// carrying the new offset once.
     ///
     /// Case: the viewport scrolls back while no cell content changes.
     #[test]

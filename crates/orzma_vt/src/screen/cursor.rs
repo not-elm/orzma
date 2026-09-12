@@ -3,10 +3,7 @@
 use crate::screen::grid::coords::GridPoint;
 
 /// Bit 0 of the packed `cursor_style` u32 — set when the cursor
-/// should be drawn. The WGSL shader short-circuits when this bit is
-/// clear (see `paint_cursor` in `terminal_ui_material.wgsl`). Exposed
-/// so app-level overrides (e.g., `TerminalGrid.suppress_cursor`) can
-/// mask it out without re-deriving the literal `1`.
+/// should be drawn.
 pub const CURSOR_VISIBLE_BIT: u32 = 1;
 
 /// Cursor state at snapshot time.
@@ -24,10 +21,9 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    /// Packs the style into the u32 the WGSL shader decodes: bit 0 is
-    /// [`CURSOR_VISIBLE_BIT`], bits 1-2 carry the shape (Block `0`,
-    /// Underline `1`, Bar `2`), and bit 3 carries the blinking flag
-    /// (see the `CURSOR_*` constants in `terminal_ui_material.wgsl`).
+    /// Packs the style into one u32: bit 0 is [`CURSOR_VISIBLE_BIT`],
+    /// bits 1-2 carry the shape (Block `0`, Underline `1`, Bar `2`), and
+    /// bit 3 carries the blinking flag.
     pub fn pack_cursor_style(&self) -> u32 {
         let visible = if self.visible { CURSOR_VISIBLE_BIT } else { 0 };
         let shape = match self.shape {
@@ -69,8 +65,7 @@ mod tests {
     /// Asserts that every cursor shape occupies its assigned wire bits.
     ///
     /// Case: a terminal application switches among the steady block,
-    /// underline, and bar DECSCUSR variants, and the selected caret
-    /// shape is forwarded to the GPU.
+    /// underline, and bar DECSCUSR variants.
     #[test]
     fn each_shape_lands_in_the_shape_bits() {
         assert_eq!(
@@ -90,8 +85,7 @@ mod tests {
     /// Asserts that blinking is encoded independently for every shape.
     ///
     /// Case: a terminal application selects a blinking caret variant
-    /// while the terminal stays focused, so the shader's time-based
-    /// blink phase controls whether the caret is painted.
+    /// while the terminal stays focused.
     #[test]
     fn blinking_sets_bit_three_independent_of_shape() {
         assert_eq!(
@@ -112,8 +106,7 @@ mod tests {
     /// leaving the packed shape and blink policy intact.
     ///
     /// Case: vim hides the cursor with DECTCEM (`CSI ?25l`) while it
-    /// redraws, and on `CSI ?25h` the caret returns with the same
-    /// shape and blink policy the application had selected.
+    /// redraws, and on `CSI ?25h` the caret returns.
     #[test]
     fn a_hidden_cursor_clears_only_the_visible_bit() {
         assert_eq!(
@@ -133,10 +126,9 @@ mod tests {
     /// Asserts that the cursor position does not participate in style
     /// packing.
     ///
-    /// Case: the user scrolls through history while the live cursor
-    /// keeps its application-selected shape and blink policy, even as
-    /// its grid position projects to a different viewport cell or to
-    /// no cell at all.
+    /// Case: the user scrolls through history, and the cursor's grid
+    /// position projects to a different viewport cell or to no cell at
+    /// all.
     #[test]
     fn the_cursor_position_does_not_participate_in_style_packing() {
         let at_origin = Cursor {

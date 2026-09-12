@@ -1,8 +1,4 @@
 //! Terminal emulation for orzma.
-//!
-//! [`prelude`] gathers the vocabulary; the crate root defines [`Vt`],
-//! the protocol between a self-contained terminal emulator and its
-//! owner, and [`OrzmaVt`], the implementation of that protocol.
 
 use crate::{
     device::DeviceState,
@@ -26,10 +22,6 @@ mod screen;
 mod vi;
 
 /// The crate's vocabulary, gathered for downstream consumers.
-///
-/// A consumer imports the terminal types from here rather than from the
-/// private modules that declare them, so the module tree stays free to
-/// move a type without breaking anyone.
 pub mod prelude {
     pub use crate::device::color::{Color, Palette, Rgb};
     pub use crate::device::modes::{
@@ -52,59 +44,48 @@ pub mod prelude {
     pub use crate::{InterpretOutput, OrzmaVt, ResizeChanged, Vt, VtSignal};
 }
 
-/// The terminal-emulation contract `OrzmaTty` drives and the host
-/// observes.
+/// The contract between a self-contained terminal emulator and its
+/// owner.
 ///
 /// An implementor is a complete VT: it interprets the PTY stream, owns
-/// the grid and scrollback, tracks damage, and builds frames. The
-/// trait has no constructor — a concrete VT is built with its own
-/// configuration and injected; spawn geometry arrives via
-/// [`Vt::resize`]. Vi mode arrives later.
+/// the grid and scrollback, tracks damage, and builds frames.
 ///
 /// The read surface exposes no per-cell seam: cell-level host features
 /// (e.g. hyperlink hover) resolve against the emitted
-/// [`crate::prelude::Row`] / [`crate::prelude::Run`] data, and the only
-/// text read, [`Vt::selection_text`], is a derived value, so the VT's
-/// storage cell never leaves the crate.
+/// [`crate::prelude::Row`] / [`crate::prelude::Run`] data.
+///
+/// The owner must forward [`InterpretOutput::signals`] and
+/// [`ResizeChanged::evicted`] before it requests the next frame.
+///
+/// TODO: implement vi mode: accept a [`crate::prelude::ViModeSwitch`]
+/// and vi motions, and report the vi cursor in [`Frame::vi_cursor`].
 ///
 /// # Invariants
 ///
-/// - Every operation that can strand a placement names it in its own
-///   result: [`Vt::interpret`] names it in [`InterpretOutput::signals`],
-///   and [`Vt::resize`] names it in [`ResizeChanged::evicted`]. The only
-///   other removal is the host-driven [`Vt::remove_placements`], which
-///   reports nothing because the caller already named the ids. There
-///   is no sweep for the owner to run.
-/// - An owner that forwards [`InterpretOutput::signals`] and
-///   [`ResizeChanged::evicted`] before it requests the next frame
-///   delivers every eviction no later than the first frame that
-///   reflects it; the VT does not promise that the two arrive in the
-///   same batch.
+/// Every operation that can strand a placement names it in its own
+/// result: [`Vt::interpret`] names it in [`InterpretOutput::signals`],
+/// and [`Vt::resize`] names it in [`ResizeChanged::evicted`]. The only
+/// other removal is the host-driven [`Vt::remove_placements`], which
+/// reports nothing.
+///
+/// Every eviction then reaches the owner no later than the first frame
+/// that reflects it, though not necessarily in the same batch.
 pub trait Vt {
     /// Interprets one PTY chunk, staging its damage internally and
     /// returning everything else it produced.
     ///
     /// An empty chunk returns [`InterpretOutput::default`].
-    ///
-    /// # Invariants
-    ///
-    /// - [`InterpretOutput::signals`] keeps the order its own doc
-    ///   states: parser-raised signals first, the chunk-end eviction last.
-    /// - [`InterpretOutput::replies`] must be written back to the PTY.
-    ///
-    /// # Webview placements
+    /// [`InterpretOutput::replies`] must be written back to the PTY.
     ///
     /// An APC webview `mount` the VT accepts becomes a
     /// [`VtSignal::WebviewMount`] carrying the [`InstanceId`] the mount
     /// named; one the placement cap refuses becomes a
     /// [`VtSignal::WebviewMountRejected`] instead, which registers
-    /// nothing. The VT owns the placement table and projects every
-    /// placement into [`Frame::placements`] on each emit; a mount, unmount,
-    /// eviction, or projected-geometry change always raises the chunk
-    /// liveness, so the frame carrying the new list is guaranteed to
-    /// follow. Evictions the VT performs on its own authority (history
-    /// trim, reset, alternate-screen teardown) surface as
-    /// [`VtSignal::WebviewEvicted`]. At any instant the live ids are unique.
+    /// nothing. A mount, unmount, eviction, or projected-geometry change
+    /// always sets [`InterpretOutput::damaged`], so the frame carrying the
+    /// new [`Frame::placements`] list is guaranteed to follow. Evictions
+    /// the VT performs on its own authority (history trim, reset,
+    /// alternate-screen teardown) surface as [`VtSignal::WebviewEvicted`].
     ///
     /// A placement projects only while the screen it was mounted on is
     /// active: while the alternate screen is shown, primary-screen
@@ -114,6 +95,12 @@ pub trait Vt {
     /// [`VtSignal::WebviewEvicted`]. A re-issued `mount` for a live
     /// instance updates that placement in place — the id does not
     /// change, and nothing is named by [`VtSignal::WebviewEvicted`].
+    ///
+    /// # Invariants
+    ///
+    /// - [`InterpretOutput::signals`] holds the parser-raised signals
+    ///   first and the chunk-end eviction last.
+    /// - At any instant the live placement ids are unique.
     fn interpret(&mut self, chunk: &[u8]) -> InterpretOutput;
 
     /// Builds the frame for the staged damage and section diffs,
@@ -125,10 +112,7 @@ pub trait Vt {
     ///
     /// - The first emitted frame carries every viewport row, as does
     ///   every frame after a viewport-basis change (resize, offset,
-    ///   alternate-screen flip), because every basis change stages full
-    ///   damage. The emit-time offset diff is only a liveness backstop:
-    ///   it guarantees such a frame is emitted, not that it carries
-    ///   rows.
+    ///   alternate-screen flip).
     /// - A frame's placements and display offset describe the same
     ///   instant as its rows.
     fn frame(&mut self) -> Option<Frame>;
@@ -138,12 +122,10 @@ pub trait Vt {
     /// registered, `false` when the cell lies outside the grid or the
     /// per-terminal cap is full.
     ///
-    /// This is the control-socket counterpart of the APC `mount`, for PTYs
-    /// that drop APC (ConPTY). The caller raises
-    /// [`VtSignal::WebviewMount`] or [`VtSignal::WebviewMountRejected`]
-    /// itself from the returned verdict. Like [`Vt::remove_placements`], it
-    /// stages no row damage: the changed placement list alone carries the
-    /// next frame.
+    /// The caller raises [`VtSignal::WebviewMount`] or
+    /// [`VtSignal::WebviewMountRejected`] itself from the returned verdict.
+    /// It stages no row damage: the changed placement list alone carries
+    /// the next frame.
     fn mount_placement_at(
         &mut self,
         row: ScreenLine,
@@ -155,32 +137,26 @@ pub trait Vt {
     /// Removes the placements the host names, on either screen; returns
     /// whether anything went.
     ///
-    /// This is the control plane's entry point, used when a registration
-    /// is released, its connection drops, or a mount the host refuses
-    /// left a reservation behind. The VT cannot know any of those facts —
-    /// they live on the control socket — so without this the placements
-    /// keep a cap slot until their anchor scrolls out of history.
+    /// A placement the host does not remove keeps a cap slot until its
+    /// anchor scrolls out of history.
     ///
     /// # Invariants
     ///
-    /// Unlike [`Vt::resize`], this stages no row damage. A placement list
-    /// is an emit-time diffed section, so a changed list is enough to
-    /// guarantee the frame that carries it; staging rows here would
-    /// repaint the whole viewport on every release.
+    /// This stages no row damage; the changed list alone guarantees the
+    /// frame that carries it.
     ///
-    /// No [`VtSignal::WebviewEvicted`] is raised: the caller already
-    /// knows the ids and drops its own entities in the same pass, so a
-    /// signal would hand it back its own removal.
+    /// No [`VtSignal::WebviewEvicted`] is raised.
     fn remove_placements(&mut self, instances: &[InstanceId]) -> bool;
 
     /// Resizes the grid, truncating rather than reflowing; `None` when
     /// the dimensions did not change. Only a real change stages (full)
     /// damage.
     ///
+    /// The caller must reject a `size` with a zero axis.
+    ///
     /// # Invariants
     ///
-    /// Both axes are nonzero; degenerate sizes are rejected by the
-    /// caller.
+    /// Both grid axes are nonzero.
     ///
     /// The placements the resize strands are named in the returned
     /// [`ResizeChanged::evicted`] and are already gone from the VT.
@@ -197,13 +173,13 @@ pub trait Vt {
     /// width) is rejected, leaving the current selection untouched.
     ///
     /// The return value reports the stored state, not the projection:
-    /// a start whose projection is empty still returns `true`, and the
-    /// emit-time diff decides on its own whether a frame is owed.
+    /// a start whose projection is empty still returns `true`, and it
+    /// says nothing about whether a frame is owed.
     fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool;
 
     /// Moves the active selection's moving end to `cell`; returns
-    /// whether the moving end changed. A no-op returning `false` when
-    /// there is no active selection or `cell` is outside the grid.
+    /// whether the moving end changed. It is a no-op returning `false`
+    /// when there is no active selection or `cell` is outside the grid.
     ///
     /// Two cells naming the same boundary — the right half of one and
     /// the left half of the next — are the same moving end.
@@ -242,8 +218,7 @@ pub trait Vt {
 pub struct InterpretOutput {
     /// Whether this chunk produced anything frame-relevant — staged row
     /// damage, a change to the reported cursor (motion or visibility),
-    /// or a mutated frame-visible section — so the owner knows to open
-    /// its coalesce window.
+    /// or a mutated frame-visible section.
     pub damaged: bool,
     /// Out-of-band signals: the parser-raised ones in byte-stream order,
     /// then the chunk-end [`VtSignal::WebviewEvicted`] when the chunk
@@ -275,8 +250,7 @@ pub enum VtSignal {
     Bell,
     /// The OS title string changed, either because the application set
     /// one (OSC 0 or OSC 2) or because `CSI 23 t` restored a saved one.
-    /// An icon name (OSC 1) is ignored, because this terminal carries
-    /// one title.
+    /// An icon name (OSC 1) is ignored.
     Title(String),
     /// The OS title string returned to the host's default, either
     /// because `CSI 23 t` restored a saved absence or because `RIS`
@@ -284,6 +258,8 @@ pub enum VtSignal {
     /// empty string, not this.
     ResetTitle,
     /// The application copied data to the system clipboard via OSC 52.
+    ///
+    /// [`OrzmaVt`] never raises it.
     Clipboard {
         /// The clipboard content that was copied.
         content: String,
@@ -300,8 +276,7 @@ pub enum VtSignal {
     },
     /// A mount the VT refused because the per-terminal placement cap was
     /// already full. Nothing was registered, so there is nothing for the
-    /// consumer to place; it exists so a webview that never appears is
-    /// diagnosable rather than silent.
+    /// consumer to place.
     WebviewMountRejected {
         /// The instance the refused mount named.
         instance: InstanceId,
@@ -309,7 +284,7 @@ pub enum VtSignal {
     /// The placement the PTY unmounted, or — when `instance` is `None` —
     /// every placement on this terminal.
     WebviewUnmount {
-        /// The instance to unmount; `None` unmounts every placement.
+        /// The instance to unmount.
         instance: Option<InstanceId>,
     },
     /// Placements the VT dropped without the host naming them (history
@@ -321,8 +296,10 @@ pub enum VtSignal {
         /// The instances that were evicted.
         placements: Vec<InstanceId>,
     },
-    /// Tracked `TermMode` flags that transitioned since the previous
-    /// signal drain, as mode names (e.g. "alt-screen").
+    /// Mode flags that transitioned since the previous signal drain, as
+    /// mode names (e.g. "alt-screen").
+    ///
+    /// [`OrzmaVt`] never raises it.
     ModeChange {
         /// Mode names that were enabled.
         added: Vec<&'static str>,
@@ -333,17 +310,13 @@ pub enum VtSignal {
 
 impl VtSignal {
     /// The eviction naming `placements`; `None` when there is nothing
-    /// to name, so neither a sweep that found nothing, a resize that
-    /// stranded nothing, nor a flip that tore nothing down wakes the
-    /// owner.
+    /// to name.
     pub fn evicted(placements: Vec<InstanceId>) -> Option<Self> {
         (!placements.is_empty()).then_some(Self::WebviewEvicted { placements })
     }
 }
 
-/// The self-contained implementation of [`Vt`]: a byte interpreter, the
-/// emulated device it writes to, and the frame tracker that turns the
-/// staged damage into frames.
+/// The self-contained implementation of [`Vt`].
 pub struct OrzmaVt {
     /// Byte decoding plus the CSI ?2026 synchronized-update buffer.
     interpreter: Interpreter,
@@ -356,15 +329,11 @@ pub struct OrzmaVt {
 impl OrzmaVt {
     /// Builds a terminal whose first frame carries every viewport row.
     ///
+    /// The caller must reject a `size` with a zero axis.
+    ///
     /// # Invariants
     ///
-    /// Both grid axes are nonzero; degenerate sizes are rejected by the
-    /// caller (the same contract as [`Vt::resize`]).
-    ///
-    /// The tracker must come from `FrameTracker::new`: its seeded
-    /// full damage is what makes the first frame carry every viewport
-    /// row, so a constructor that starts from an empty ledger paints
-    /// nothing until the first PTY output arrives.
+    /// Both grid axes are nonzero.
     pub fn new(size: GridSize, max_history: usize) -> Self {
         Self {
             interpreter: Interpreter::default(),
@@ -951,8 +920,7 @@ mod tests {
     /// viewport row.
     ///
     /// Case: a terminal spawns and the renderer has nothing on screen
-    /// yet, so the shell's first prompt must arrive with the whole
-    /// viewport behind it.
+    /// yet.
     #[test]
     fn the_first_frame_carries_every_viewport_row() {
         let mut vt = vt();
@@ -1013,8 +981,7 @@ mod tests {
     /// Asserts that emitting drains the staged damage and settles the
     /// diffs, so an immediate second poll emits nothing.
     ///
-    /// Case: the host polls for a frame twice in one tick, and the
-    /// second poll must not repaint what the first one already sent.
+    /// Case: the host polls for a frame twice in one tick.
     #[test]
     fn an_emitted_frame_leaves_nothing_to_emit() {
         let mut vt = vt();
@@ -1119,8 +1086,8 @@ mod tests {
     }
 
     /// Asserts that a host-driven removal drops the named placements,
-    /// reports whether anything went, and — unlike a resize — stages no
-    /// row damage of its own.
+    /// reports whether anything went, and stages no row damage of its
+    /// own.
     ///
     /// Case: a program's control-plane connection drops while two of its
     /// views are mounted, and the host clears what the registrations had

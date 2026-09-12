@@ -1,6 +1,6 @@
-//! In-process webview: CEF render wiring + window.orzma back-channel (render),
-//! APC mount/unmount (apc), webviews rendered into the terminal flow (mount),
-//! and the CPU paint bridge for platforms without a GPU paint path (paint).
+//! In-process webviews anchored to terminal cells: CEF render wiring, the
+//! `window.orzma` back-channel, APC mount and unmount, placement in the
+//! terminal flow, and the CPU paint bridge.
 
 pub(crate) mod apc;
 pub(crate) mod mount;

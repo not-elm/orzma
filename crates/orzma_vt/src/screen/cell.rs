@@ -6,17 +6,12 @@ use crate::screen::grid::run::Style;
 /// One stored character cell: a glyph plus the attributes it was
 /// printed with.
 ///
-/// This is the storage representation, never exposed outside the
-/// crate: it carries no coordinate (position is implied by the cell's
-/// slot in the grid) and holds a single `char` (grapheme composition
-/// is a later extension). The host reads cells only through the
-/// emitted [`crate::prelude::Row`] / [`crate::prelude::Run`]
-/// projection.
+/// TODO: hold a grapheme cluster rather than a single `char`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cell {
     /// The stored glyph.
     pub c: char,
-    /// Foreground color, symbolic (palette-resolved at emit time).
+    /// Foreground color, symbolic.
     pub fg: Color,
     /// Background color, symbolic.
     pub bg: Color,
@@ -46,10 +41,6 @@ impl Cell {
 }
 
 /// The current SGR attributes applied to subsequently printed cells.
-///
-/// Applying an `SGR` sequence to one lives in `interpreter::sgr`, which
-/// holds this type's other `impl` block so the screen layer stays free
-/// of the parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pen {
     /// Foreground selected by SGR 30-38/39/90-97.
@@ -95,8 +86,7 @@ mod tests {
     /// Asserts that the default cell is a blank space with default
     /// colors and no styling.
     ///
-    /// Case: a terminal spawns with an untouched screen, whose cells
-    /// must render as the terminal's default background.
+    /// Case: a terminal spawns with an untouched screen.
     #[test]
     fn the_default_cell_is_a_default_colored_blank() {
         let cell = Cell::default();
@@ -109,7 +99,7 @@ mod tests {
     /// Asserts that stamping burns all pen attributes into the cell.
     ///
     /// Case: an application selects bold red text with SGR before
-    /// printing, and every printed cell carries those attributes.
+    /// printing.
     #[test]
     fn stamping_copies_the_pen_attributes() {
         let pen = Pen {

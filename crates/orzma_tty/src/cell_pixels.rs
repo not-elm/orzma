@@ -3,8 +3,8 @@
 
 /// Physical pixels per terminal cell, as the host measures its font.
 ///
-/// `Default` is `0 × 0`, which projects to a zero-pixel winsize (the
-/// pre-multiplexer behaviour) for callers that have no metrics yet.
+/// `Default` is `0 × 0`, which projects to a zero-pixel winsize for a
+/// caller that has no metrics yet.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct CellPixels {
     /// Horizontal cell pitch in physical pixels.
@@ -17,9 +17,8 @@ impl CellPixels {
     /// Total window pixels for a `cols × rows` grid, saturating at
     /// `u16::MAX` per axis.
     ///
-    /// The result is what `ws_xpixel` / `ws_ypixel` expect: tmux writes
-    /// `xpixel * cols`, and portable-pty forwards `pixel_width` verbatim
-    /// into `ws_xpixel` despite documenting it as a per-cell width.
+    /// The result is what the winsize `ws_xpixel` / `ws_ypixel` fields
+    /// expect.
     pub fn window_pixels(self, cols: u16, rows: u16) -> (u16, u16) {
         if self.width.checked_mul(cols).is_none() || self.height.checked_mul(rows).is_none() {
             tracing::debug!(cols, rows, ?self, "pixel winsize saturated at u16::MAX");
@@ -52,8 +51,8 @@ mod tests {
     /// Asserts that a product beyond `u16::MAX` saturates instead of
     /// wrapping.
     ///
-    /// Case: a 4096-column grid at a 32 px cell pitch on a very wide
-    /// display.
+    /// Case: the layout gives a pane 4096 columns at a 32 px cell pitch
+    /// on a very wide display.
     #[test]
     fn window_pixels_saturate_instead_of_wrapping() {
         let px = CellPixels {

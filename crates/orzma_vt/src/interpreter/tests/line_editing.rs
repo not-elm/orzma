@@ -122,8 +122,8 @@ fn the_xterm_scroll_down_spelling_scrolls_the_region_down() {
 /// region down, rather than being ignored the way a multi-parameter
 /// `CSI T` is.
 ///
-/// Case: a program emits the caret spelling with a trailing parameter
-/// that xterm ignores, such as `CSI 1 ; 2 ^`.
+/// Case: a program emits the caret spelling with a trailing
+/// parameter, such as `CSI 1 ; 2 ^`.
 #[test]
 fn a_multi_parameter_xterm_scroll_down_spelling_still_scrolls() {
     let device = interpret(b"a\x1b[1;2^");

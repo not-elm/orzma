@@ -3,11 +3,9 @@
 
 use super::*;
 
-/// Asserts that staging row damage through the executor marks the
-/// chunk damaged.
+/// Asserts that staging row damage marks the chunk damaged.
 ///
-/// Case: a shell echoes one character, and the owner must open its
-/// coalesce window for the frame that repaints the row.
+/// Case: a shell echoes the character the user just typed.
 #[test]
 fn staged_row_damage_marks_the_chunk_damaged() {
     assert!(damage_of(b"a"));
@@ -25,8 +23,7 @@ fn a_bell_reaches_the_signals() {
     assert!(!output.damaged);
 }
 
-/// Asserts that a reply leaves the chunk undamaged, so the owner
-/// does not open a coalesce window for a frame with nothing in it.
+/// Asserts that a reply leaves the chunk undamaged.
 ///
 /// Case: an application probes the terminal while the screen sits
 /// untouched at a prompt.

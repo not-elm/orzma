@@ -29,8 +29,8 @@ fn the_cursor_forward_and_back_sequences_move_by_columns() {
     assert_eq!(screen.viewport_row(ViewportLine(0))[1].c, 'y');
 }
 
-/// Asserts that an omitted count moves one row, the default DEC
-/// gives every `Pn`.
+/// Asserts that an omitted count moves one row, which is the
+/// default DEC gives every `Pn`.
 ///
 /// Case: a program emits the bare `CSI B` spelling to step down a
 /// single row.
@@ -44,7 +44,7 @@ fn an_omitted_cursor_motion_count_moves_one_row() {
 }
 
 /// Asserts that `CSI E` moves down and returns to the first
-/// column, without scrolling the way `NEL` would.
+/// column.
 ///
 /// Case: a program starts the next record of a listing at the left
 /// edge two rows down.
@@ -71,8 +71,7 @@ fn the_preceding_line_sequence_moves_up_and_returns_to_column_one() {
 /// Asserts that `CSI E` at the bottom margin stays put rather than
 /// scrolling the region.
 ///
-/// Case: a program emits a next-line at the foot of its pane, where
-/// `NEL` would have scrolled but `CNL` must not.
+/// Case: a program emits a next-line at the foot of its pane.
 #[test]
 fn the_next_line_sequence_does_not_scroll_at_the_bottom() {
     let device = interpret(b"a\x1b[3;1Hb\x1b[Ex");
@@ -136,7 +135,7 @@ fn resetting_origin_mode_seats_the_cursor_at_the_corner() {
     );
 }
 
-/// Asserts that `CSI Pn G` reaches the column-addressing method.
+/// Asserts that `CSI Pn G` addresses the column its parameter names.
 ///
 /// Case: a full-screen application jumps to column 6 of the row it is
 /// already writing and prints there.
@@ -149,8 +148,8 @@ fn the_cursor_character_absolute_sequence_addresses_a_column() {
     );
 }
 
-/// Asserts that the `HPA` spelling reaches the same column-addressing
-/// method as `CHA`.
+/// Asserts that the `HPA` spelling addresses a column just as `CHA`
+/// does.
 ///
 /// Case: an application emits the character-position spelling of the
 /// same move and prints there.
@@ -163,8 +162,8 @@ fn the_character_position_absolute_sequence_addresses_a_column() {
     );
 }
 
-/// Asserts that `CSI Pn a` reaches the column-relative motion CUF uses,
-/// moving the cursor right by the parameter.
+/// Asserts that `CSI Pn a` moves the cursor right by the parameter,
+/// just as `CUF` does.
 ///
 /// Case: an application steps two columns right with the
 /// character-position-relative spelling and prints there.
@@ -191,8 +190,8 @@ fn the_character_position_relative_sequence_stops_at_the_last_column() {
     );
 }
 
-/// Asserts that `CSI Pn d` reaches the line-addressing method rather
-/// than moving the cursor down by the parameter.
+/// Asserts that `CSI Pn d` addresses the line its parameter names
+/// rather than moving the cursor down by the parameter.
 ///
 /// Case: an application jumps to row 2 from the home position and
 /// prints there.

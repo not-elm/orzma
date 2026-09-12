@@ -19,8 +19,8 @@ fn a_set_designated_into_g0_maps_what_follows() {
 
 /// Asserts that designating ASCII over a G code restores letters.
 ///
-/// Case: a program finishes a box and emits `ESC ( B` so the next
-/// `q` prints as a letter again.
+/// Case: a program finishes a box and emits `ESC ( B` before
+/// printing more text.
 #[test]
 fn redesignating_ascii_restores_letters() {
     let device = interpret(b"\x1b(0\x1b(Bq");
@@ -33,10 +33,6 @@ fn redesignating_ascii_restores_letters() {
 /// Asserts that a final with no set behind it designates ASCII
 /// rather than leaving the previous set in force.
 ///
-/// The agreed policy is to fall back rather than drop the sequence:
-/// leaving DEC Special Graphics designated would print the
-/// application's text as line segments.
-///
 /// Case: a program draws a box, then designates the Finnish
 /// national replacement set with `ESC ( C` before writing a label.
 #[test]
@@ -48,8 +44,8 @@ fn an_unsupported_designation_falls_back_to_ascii() {
     );
 }
 
-/// Asserts that a designation whose final takes two bytes reaches
-/// the same ASCII fallback a one-byte final does.
+/// Asserts that a designation whose final takes two bytes falls
+/// back to ASCII just as a one-byte final does.
 ///
 /// Case: a program draws a box with line drawing, then designates
 /// the Greek supplemental set with `ESC ( " >` before writing a
@@ -66,8 +62,7 @@ fn a_two_byte_final_designation_falls_back_to_ascii() {
 /// Asserts that `SO` invokes G1 into GL and `SI` returns G0 to it.
 ///
 /// Case: a program designates line drawing into G1 once, then
-/// brackets each run of box characters with `SO` and `SI` instead of
-/// redesignating G0 every time.
+/// brackets each run of box characters with `SO` and `SI`.
 #[test]
 fn the_shift_out_and_shift_in_pair_swaps_the_invoked_set() {
     let device = interpret(b"\x1b)0\x0eq\x0fq");
@@ -121,7 +116,7 @@ fn the_locking_shift_three_invokes_g3() {
 /// stops applying.
 ///
 /// Case: a program prints one box character mid-sentence with
-/// `ESC N` rather than shifting GL and shifting it back.
+/// `ESC N`.
 #[test]
 fn the_seven_bit_single_shift_two_lasts_one_character() {
     let device = interpret(b"\x1b*0\x1bNqq");
@@ -135,7 +130,7 @@ fn the_seven_bit_single_shift_two_lasts_one_character() {
     );
 }
 
-/// Asserts that the raw C1 byte for SS2 reaches the same arm.
+/// Asserts that the raw C1 byte for SS2 single-shifts too.
 ///
 /// Case: a program emits an eight-bit single shift on a terminal not
 /// running in UTF-8 mode.
@@ -152,7 +147,7 @@ fn the_raw_c1_byte_single_shifts() {
     );
 }
 
-/// Asserts that the UTF-8 encoding of U+008E reaches the same arm.
+/// Asserts that the UTF-8 encoding of U+008E single-shifts too.
 ///
 /// Case: a program running on a UTF-8 stream emits the single shift.
 #[test]

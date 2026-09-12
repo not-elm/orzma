@@ -1,9 +1,10 @@
 //! The operating system commands this terminal implements.
 //!
 //! The window title (OSC 0 and OSC 2), the working directory (OSC 7),
-//! and the indexed palette (OSC 4 and OSC 104) are implemented; the
-//! dynamic colors (OSC 10 / 11 / 12), hyperlinks, and the clipboard land
-//! later.
+//! and the indexed palette (OSC 4 and OSC 104) are implemented.
+//!
+//! TODO: implement the dynamic colors (OSC 10 / 11 / 12), hyperlinks,
+//! and the clipboard.
 
 use crate::device::color::Rgb;
 use percent_encoding::percent_decode;
@@ -14,12 +15,9 @@ use std::path::PathBuf;
 ///
 /// Only the `file` scheme is accepted, and only a URI that carries an
 /// absolute path after its authority. The host — `localhost`, a real
-/// hostname, or the empty host of `file:///…` — is ignored, because
-/// every one of them names the local machine as far as a
-/// working-directory report is concerned. Percent-encoded octets in the
-/// path (`%20` for a space, the UTF-8 octets of a non-ASCII name) are
-/// decoded, since every shell integration escapes them and the path is
-/// handed to the next spawned shell as its working directory.
+/// hostname, or the empty host of `file:///…` — is ignored.
+/// Percent-encoded octets in the path (`%20` for a space, the UTF-8
+/// octets of a non-ASCII name) are decoded.
 pub(crate) fn current_dir(params: &[&[u8]]) -> Option<PathBuf> {
     let [b"7", parts @ ..] = params else {
         return None;
@@ -36,13 +34,8 @@ pub(crate) fn current_dir(params: &[&[u8]]) -> Option<PathBuf> {
 /// carries no text at all also returns `None`, rather than emptying the
 /// title.
 ///
-/// The parser splits an operating system command on every `;`, so a
-/// title carrying one arrives in pieces and the tail is rejoined before
-/// anything else runs.
-///
-/// The title is sanitized before it leaves this function because
-/// `OSC 0` and `OSC 2` content is fully attacker-controlled, and
-/// [`crate::VtSignal::Title`] carries it across the crate boundary.
+/// The command arrives split on every `;`, and the pieces after the
+/// number are rejoined, so a title keeps its semicolons.
 pub(crate) fn window_title(params: &[&[u8]]) -> Option<String> {
     let [b"0" | b"2", text @ ..] = params else {
         return None;
@@ -163,17 +156,14 @@ const MAX_LEN: usize = 256;
 
 /// Returns a display-safe copy of an operating system command's title.
 ///
-/// Stripping runs before trimming: removing a zero-width character can
-/// expose fresh edge whitespace, and trimming first would leave a title
-/// that indents itself in the tab bar. A truncation trims once more
-/// before appending the ellipsis, because the cut can land inside the
-/// padding the first trim was too early to see.
+/// Edge whitespace is trimmed after stripping, including whitespace a
+/// stripped character exposed, and a truncation drops the whitespace it
+/// cuts against before appending the ellipsis.
 ///
-/// Filtering and truncation are deliberately not grapheme-aware. The
-/// stripped set includes U+200D ZERO WIDTH JOINER, so an emoji sequence
-/// loses its joins, and a truncation can fall between a base character
-/// and its combining marks. Both are accepted: the alternative is a
-/// segmentation dependency this crate does not carry.
+/// Filtering and truncation are not grapheme-aware. The stripped set
+/// includes U+200D ZERO WIDTH JOINER, so an emoji sequence loses its
+/// joins, and a truncation can fall between a base character and its
+/// combining marks.
 fn sanitize(raw: &str) -> String {
     let stripped: String = raw.chars().filter(|c| !is_disallowed(*c)).collect();
     let trimmed = stripped.trim();
@@ -192,17 +182,12 @@ fn sanitize(raw: &str) -> String {
 
 /// Whether a character must not reach a window title.
 ///
-/// Three groups are refused. The control characters are refused because
-/// a title is rendered as text and must not steer the surface drawing
-/// it, and U+2028 and U+2029 are refused beside them because they break
-/// a line without being control characters. The whole `Bidi_Control`
-/// property — U+061C, U+200E..U+200F, U+202A..U+202E, and
-/// U+2066..U+2069 — is refused because a title that reorders itself can
-/// impersonate another program. And the characters that occupy no space
-/// — U+00AD, U+180E, U+200B..U+200D, U+2060..U+2064, U+FEFF,
-/// U+FFF9..U+FFFB, and the U+E0000..U+E007F tag block — are refused
-/// because text the reader cannot see can hide inside a title that
-/// looks benign.
+/// Three groups are refused: the control characters, together with
+/// U+2028 and U+2029; the whole `Bidi_Control` property (U+061C,
+/// U+200E..U+200F, U+202A..U+202E, and U+2066..U+2069); and the
+/// characters that occupy no space (U+00AD, U+180E, U+200B..U+200D,
+/// U+2060..U+2064, U+FEFF, U+FFF9..U+FFFB, and the U+E0000..U+E007F tag
+/// block).
 fn is_disallowed(c: char) -> bool {
     // NOTE: the arms are grouped to match the three groups the doc
     // above names, so the two can be checked against each other line by
@@ -327,7 +312,7 @@ mod tests {
     /// Asserts that an icon name request sets no window title.
     ///
     /// Case: oh-my-zsh sends `OSC 1` for the tab and `OSC 2` for the
-    /// window, and this terminal carries only one title.
+    /// window.
     #[test]
     fn an_icon_name_sets_no_title() {
         assert!(window_title(&[b"1", b"hi"]).is_none());

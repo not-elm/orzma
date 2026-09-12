@@ -31,7 +31,7 @@ pub mod vi_mode;
 pub struct OrzmaConfigs {
     /// Shortcut configuration.
     pub shortcuts: Shortcuts,
-    /// `[vi-mode]` table: vi-mode key bindings shared by both modes.
+    /// `[vi-mode]` table: vi-mode key bindings.
     #[serde(rename = "vi-mode")]
     pub vi_mode: ViModeConfig,
     /// Font configuration.

@@ -1,6 +1,5 @@
-//! Pure VT-encoder for key input. Translates a logical key + modifiers
-//! into the byte sequence the PTY expects. No I/O, no Bevy types — kept
-//! pure so unit tests can cover every branch without an `App`.
+//! Pure VT-encoder for key input: translates a logical key and its
+//! modifiers into the byte sequence the PTY expects.
 
 mod keypad;
 
@@ -8,16 +7,11 @@ pub use keypad::KeypadKey;
 use orzma_vt::prelude::KeypadMode;
 
 /// Non-empty UTF-8 text carried by [`TerminalKey::Character`].
-///
-/// The non-empty invariant is what makes `encode_key` total: empty text has
-/// no PTY representation, so it is rejected once at construction instead of
-/// being reported on every encode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyText(String);
 
 impl KeyText {
-    /// Wraps `text`, returning `None` when it is empty — there is nothing to
-    /// send to the PTY in that case.
+    /// Wraps `text`, returning `None` when it is empty.
     pub fn new(text: impl Into<String>) -> Option<Self> {
         let text = text.into();
         (!text.is_empty()).then_some(Self(text))
@@ -29,8 +23,7 @@ impl KeyText {
     }
 }
 
-/// Subset of keys the terminal input codec understands. Keeps the public
-/// surface stable and tells callers exactly which keys are wired.
+/// Subset of keys the terminal input codec understands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalKey {
     /// UTF-8 text (single char or multi-codepoint composition).
@@ -54,8 +47,12 @@ pub enum TerminalKey {
 }
 
 /// Modifier flags carried alongside `TerminalKey`.
-/// `ctrl` / `alt` / `meta` affect `Character` encoding, and `shift` alone turns `Tab` into a
-/// back tab; its other uses wait for CSI u / modifyOtherKeys support.
+///
+/// `ctrl` / `alt` / `meta` affect `Character` encoding, and `shift`
+/// alone turns `Tab` into a back tab.
+///
+/// TODO: encode the other uses of `shift` once CSI u / modifyOtherKeys is
+/// supported.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TerminalModifiers {
     pub ctrl: bool,
@@ -66,14 +63,13 @@ pub struct TerminalModifiers {
 
 /// Translates a logical key + modifiers into the bytes the PTY expects.
 ///
-/// Total — every `TerminalKey` has a representation, because `Character`
-/// cannot carry an empty string.
+/// The encoding is total: every `TerminalKey` has a representation.
 ///
-/// The cursor keys — arrows plus Home and End, which xterm also classifies as
-/// cursor keys — honour `app_cursor_keys` (DECCKM): `ESC [ A/B/C/D/H/F` in
-/// normal mode, `ESC O A/B/C/D/H/F` in application mode. The VT220 editing
-/// keypad (Insert, Delete, PageUp, PageDown) is unaffected by DECCKM and maps to fixed
-/// sequences; `Character` is encoded by `encode_character`.
+/// The cursor keys — the arrows plus Home and End — honour
+/// `app_cursor_keys` (DECCKM): `ESC [ A/B/C/D/H/F` in normal mode,
+/// `ESC O A/B/C/D/H/F` in application mode. The VT220 editing keypad
+/// (Insert, Delete, PageUp, PageDown) is unaffected by DECCKM and maps to
+/// fixed sequences.
 ///
 /// Tab sends HT, and CBT (`CSI Z`, the terminfo `kcbt` string) when Shift
 /// is the only modifier held; other modifiers leave Tab as HT.

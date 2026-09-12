@@ -5,9 +5,8 @@ use crate::screen::grid::coords::GridPoint;
 /// Vi-mode cursor position in active-grid coordinates.
 ///
 /// The line goes negative while the vi cursor sits in scrollback
-/// history. The sign is not a visibility signal — scrolling clamps
-/// the vi cursor into the viewport, so a negative line can still be
-/// visible; project `point` with
+/// history. The sign is not a visibility signal: a negative line can
+/// still be visible, so project `point` with
 /// [`crate::prelude::GridLine::to_viewport`] to decide whether there
 /// is a cell to paint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,13 +17,12 @@ pub struct ViCursor {
 
 /// The direction of a vi-mode switch.
 ///
-/// Named variants rather than a `bool` so the intent is readable at the
-/// trigger site, where a bare `true` says nothing about which state it means.
+/// This terminal does not implement vi mode, so nothing in it acts on a
+/// switch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViModeSwitch {
-    /// Enter vi mode: the vi cursor starts tracking and keyboard input is
-    /// interpreted as motions rather than forwarded to the PTY.
+    /// Enter vi mode.
     Enter,
-    /// Leave vi mode and snap the viewport back to the live tail.
+    /// Leave vi mode.
     Exit,
 }

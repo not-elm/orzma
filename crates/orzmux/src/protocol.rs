@@ -1,8 +1,5 @@
-//! The wire vocabulary between the GUI and the multiplexer backend:
-//! identifiers, the commands the GUI sends, the events the backend
-//! emits, and the layout snapshot. Everything here is plain data (no
-//! Bevy types, no GPU handles) so the transport can later become a
-//! socket.
+//! The wire vocabulary between the GUI and the multiplexer backend.
+//! Everything here is plain data: no Bevy types and no GPU handles.
 
 use orzma_tty::prelude::{CellPixels, MouseReport, TerminalKey, TerminalModifiers};
 use orzma_vt::prelude::{
@@ -16,8 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneId(pub u32);
 
-/// A window (tab). PR-1 has exactly one, `WindowId(0)`; the type exists
-/// so later protocol additions do not renumber anything.
+/// A window (tab).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct WindowId(pub u32);
 
@@ -48,8 +44,7 @@ pub enum PaneTarget {
     Id(PaneId),
 }
 
-/// Which way a split divides a pane, named after the divider the user
-/// sees.
+/// Which way a split divides a pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplitOrientation {
     /// A vertical divider: the panes end up side by side.
@@ -105,8 +100,6 @@ pub enum OrzmuxCommand {
         /// Where the new pane goes in the layout tree.
         at: NewPaneAt,
         /// The working directory to spawn the shell in, when given.
-        /// Reserved for a client-chosen directory (tmux's `-c`); the
-        /// host sends `None` today.
         cwd: Option<PathBuf>,
         /// Extra environment variables forwarded to the shell.
         env: Vec<(String, String)>,
@@ -343,8 +336,8 @@ mod tests {
 
     /// Asserts that request ids mint strictly increasing values.
     ///
-    /// Case: the GUI fires two pane spawns in one frame and must
-    /// correlate each `PaneOpened` back to its own entity.
+    /// Case: the GUI fires two pane spawns in one frame and must tell
+    /// the two `PaneOpened` answers apart.
     #[test]
     fn request_ids_are_strictly_increasing() {
         let a = RequestId::next();
@@ -352,10 +345,11 @@ mod tests {
         assert!(a.0 < b.0);
     }
 
-    /// Asserts that the default layout is the empty snapshot the GUI
-    /// compares against to detect the session ending.
+    /// Asserts that the default layout has no panes, no separators, and
+    /// no active pane.
     ///
-    /// Case: the GUI initializes `CurrentLayout` before the first pane.
+    /// Case: the GUI holds a layout of its own before the backend opens
+    /// the first pane.
     #[test]
     fn the_default_layout_has_no_panes() {
         let layout = Layout::default();

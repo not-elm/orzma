@@ -1,25 +1,9 @@
-//! Damage vocabulary: the span one operation reports and the
-//! accumulator that merges spans toward the next emit.
-//!
-//! [`DamageSpan`] is the allocation-free value a single screen
-//! operation reports: a `Copy` span rather than a `Vec`, because this
-//! value crosses the per-printed-character path where a `Vec` per
-//! character would dominate the interpreter's cost.
-//!
-//! [`Damage`] accumulates what interpretation, scrolling, and resizing
-//! each report per call and hands the merged rows to the frame emitter.
-//! Staging merges rather than replaces: a source reports only what its
-//! own call produced, so an overwritten value would drop a repaint no
-//! later call re-reports.
+//! Damage tracking: which viewport rows the next frame must repaint.
 
 use crate::screen::viewport::ViewportLine;
 use std::iter;
 
 /// Viewport rows one operation damaged.
-///
-/// `Copy` and allocation-free: this value crosses the per-character path
-/// between a screen operation and the accumulator, where a `Vec` per
-/// printed character would dominate the interpreter's cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DamageSpan {
     /// Entire viewport is dirty (resize, clear, alt-screen swap, reset).
@@ -36,10 +20,7 @@ pub(crate) enum DamageSpan {
 impl DamageSpan {
     /// Builds an inclusive row span.
     ///
-    /// # Invariants
-    ///
-    /// `first <= last`; the accumulator's span writer sets wrong bits
-    /// without panicking on a reversed pair.
+    /// The caller must pass `first <= last`.
     pub fn rows(first: ViewportLine, last: ViewportLine) -> Self {
         debug_assert!(first <= last, "a damage span runs top to bottom");
         Self::Rows { first, last }
@@ -48,18 +29,19 @@ impl DamageSpan {
 
 /// Damage accumulated toward the next frame emit.
 ///
+/// Staging merges rather than replaces. A span staged under a pending
+/// `Full` is discarded.
+///
 /// # Invariants
 ///
-/// While `full` is set the row bits are empty: staging `Full` clears
-/// them and a span staged under a pending `Full` is discarded, which is
-/// what lets [`Self::dirty_rows`] chain both sources unconditionally.
+/// While `full` is set the row bits are empty.
 pub(crate) struct Damage {
-    /// Whether the entire viewport is dirty. Height-independent: the
-    /// flag expands against the emit-time viewport height, so a resize
-    /// between staging and emitting cannot under- or over-cover.
+    /// Whether the entire viewport is dirty. The flag is
+    /// height-independent: it expands against the emit-time viewport
+    /// height, so a resize between staging and emitting cannot under- or
+    /// over-cover.
     full: bool,
-    /// Dirty-row bits, reused across frames so staging never allocates
-    /// on the per-character path.
+    /// Dirty-row bits, reused across frames.
     rows: RowBits,
 }
 
@@ -68,9 +50,8 @@ impl Damage {
     ///
     /// # Invariants
     ///
-    /// Its seeded full damage is what makes the first emitted frame
-    /// carry every viewport row; an accumulator that starts clean
-    /// paints nothing until the first PTY output arrives.
+    /// Its seeded full damage makes the first emitted frame carry every
+    /// viewport row.
     pub fn new() -> Self {
         Self {
             full: true,
@@ -94,8 +75,7 @@ impl Damage {
         }
     }
 
-    /// Returns whether nothing is staged, so the emit gate can treat
-    /// the accumulator like the other unchanged sections.
+    /// Returns whether nothing is staged.
     pub fn is_clean(&self) -> bool {
         !self.full && self.rows.is_empty()
     }
@@ -104,9 +84,8 @@ impl Damage {
     /// and without duplicates: every row below `height` when full,
     /// otherwise the set bits.
     ///
-    /// The clip on the bit path is release-build defense; staged bits
-    /// at or above the emit-time height are unreachable while every
-    /// basis change stages `Full`.
+    /// Every staged row must lie below `height`; a release build drops
+    /// any that do not.
     pub fn dirty_rows(&self, height: u16) -> impl Iterator<Item = ViewportLine> + '_ {
         debug_assert!(
             self.rows.rows().all(|line| line.0 < height),
@@ -129,24 +108,15 @@ impl Damage {
 /// A reusable set of dirty viewport rows, one bit per row.
 ///
 /// Bit `b` of element `w` is viewport row `w * 64 + b`, with `b` counted
-/// from the least significant bit. Walking elements in order and bits by
-/// `trailing_zeros` therefore yields rows ascending, which is what lets
-/// the emitter build dirty rows without sorting.
-///
-/// The accumulator keeps one for the terminal's lifetime: staging a
-/// span sets bits and an emit turns them back into rows, so nothing is
-/// allocated once the buffer has grown to the viewport's height.
+/// from the least significant bit.
 #[derive(Debug, Default)]
 struct RowBits(Vec<u64>);
 
 impl RowBits {
     /// Sets every row in the inclusive span.
     ///
-    /// # Invariants
-    ///
-    /// `first <= last`. The `debug_assert!` catches a reversed span in a
-    /// debug build; in release the masks and the buffer sizing both
-    /// assume the ordering, so the result is meaningless.
+    /// The caller must pass `first <= last`; a debug build panics on a
+    /// reversed span.
     fn set_span(&mut self, first: ViewportLine, last: ViewportLine) {
         debug_assert!(first <= last, "a damage span runs top to bottom");
         let (first, last) = (usize::from(first.0), usize::from(last.0));
@@ -268,10 +238,6 @@ mod tests {
         /// Asserts that a full repaint clears the bits it supersedes, so a
         /// later shrink cannot surface a row past the new viewport.
         ///
-        /// The property is kept inside the accumulator rather than resting
-        /// on `Vt::resize` always staging `Full`, so a later change to the
-        /// resize path cannot silently break it.
-        ///
         /// Case: the window shrinks after output damaged a row that the
         /// smaller viewport no longer has.
         #[test]
@@ -301,11 +267,6 @@ mod tests {
 
         /// Asserts that every span endpoint around a 64-row word boundary
         /// sets exactly the rows it names.
-        ///
-        /// The boundary cases are the reason the last-word mask is written
-        /// as `u64::MAX >> (63 - last % 64)`: the arithmetically natural
-        /// `!(u64::MAX << (last % 64 + 1))` shifts by 64 exactly when
-        /// `last % 64 == 63`, which panics in a debug build.
         ///
         /// Case: a viewport whose height is a multiple of 64 erases from the
         /// cursor to the last row.
@@ -344,12 +305,9 @@ mod tests {
             assert_eq!(rows_of(&bits), [0, 20]);
         }
 
-        /// Asserts that clearing drops every set row, so a later span yields
-        /// exactly its own rows and none of the ones it replaced.
-        ///
-        /// The buffer itself is deliberately kept: `clear` is `fill(0)`, not
-        /// `Vec::clear`, so the element for every row ever staged stays
-        /// allocated and the length remains the high-water mark.
+        /// Asserts that clearing drops every set row without shortening the
+        /// buffer, so a later span yields exactly its own rows and none of
+        /// the ones it replaced.
         ///
         /// Case: a frame is emitted and the next chunk starts staging into
         /// the same terminal's accumulator.

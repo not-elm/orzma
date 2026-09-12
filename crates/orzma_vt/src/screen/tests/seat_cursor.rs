@@ -76,7 +76,7 @@ fn a_column_past_the_right_edge_clamps() {
 }
 
 /// Asserts that seating the cursor discards a pending deferred
-/// wrap rather than preserving it as a linefeed does.
+/// wrap rather than preserving it.
 ///
 /// Case: an application fills a row to its last column and then
 /// addresses a cell elsewhere instead of printing again.

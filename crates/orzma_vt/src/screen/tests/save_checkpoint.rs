@@ -21,8 +21,7 @@ fn a_save_copies_every_item_decsc_lists() {
 /// Asserts that work done after a save leaves the saved copy
 /// alone.
 ///
-/// Case: an application saves its cursor and then keeps printing,
-/// expecting the save to still describe where it was.
+/// Case: an application saves its cursor and then keeps printing.
 #[test]
 fn later_work_does_not_reach_the_saved_copy() {
     let mut screen = dirty_screen();

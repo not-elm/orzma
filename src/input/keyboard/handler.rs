@@ -1,10 +1,5 @@
-//! Resolves the frame's pressed keys through the pure
-//! `crate::input::resolve::classify_key_batch` decider, handles the two
-//! mode-independent effects inline (Quit → `AppExit`, release-webview-focus →
-//! clear `FocusedWebview`), and fans out the remaining effects as a single
-//! press-order `KeyEffectMessage` stream. `apply_key_effects`
-//! (`crate::input::shortcuts::apply`) consumes that stream and applies the
-//! events. This is the sole system that steps `LeaderPhase`.
+//! Resolves the frame's pressed keys into shortcut and key-forwarding
+//! effects, and fans them out as a `KeyEffectMessage` stream.
 
 use crate::action::vi::ResolvedViModeKeys;
 use crate::action::vi::mode::ViModeState;
@@ -27,7 +22,7 @@ use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, M
 use bevy_orzma_webview::ForwardKeys;
 use orzma_configs::shortcuts::Shortcut;
 
-/// Registers `resolve_key_effects` and the `ShortcutSet` ordering.
+/// Adds per-frame keyboard-effect resolution.
 pub(super) struct KeyboardHandlerPlugin;
 
 impl Plugin for KeyboardHandlerPlugin {
@@ -43,7 +38,7 @@ impl Plugin for KeyboardHandlerPlugin {
     }
 }
 
-/// The classifier inputs `resolve_key_effects` feeds to `classify_key_batch`: the
+/// The classifier inputs used to resolve the frame's key effects: the
 /// shortcut table, resolved vi-mode keys, held modifier keys, and the
 /// real-time clock the leader timeout is measured against.
 #[derive(SystemParam)]
@@ -55,14 +50,12 @@ struct ClassifyInputs<'w> {
 }
 
 /// Resolves the frame's pressed keys and fans out `KeyEffectMessage` in
-/// press order. Runs unconditionally (gated only on
-/// `on_message::<KeyboardInput>`), in `InputPhase::FocusedKey` /
-/// `ShortcutSet::Resolve` / `LeaderGate::Advance`. The sole `LeaderPhase`-stepping
-/// system: on a coarse guard (IME composition or an unfocused window) it
-/// clears the leader, drains the frame's keys, and writes no messages;
-/// otherwise it classifies the keys, applies `Quit` (`AppExit`) and
-/// `ReleaseWebviewFocus` (clear `FocusedWebview`) inline, and writes every
-/// other effect to `KeyEffectMessage`.
+/// press order. The sole `LeaderPhase`-stepping system: on a coarse guard
+/// (IME composition or an unfocused window) it clears the leader, drains
+/// the frame's keys, and writes no messages; otherwise it classifies the
+/// keys, applies `Quit` (`AppExit`) and `ReleaseWebviewFocus` (clear
+/// `FocusedWebview`) inline, and writes every other effect to
+/// `KeyEffectMessage`.
 fn resolve_key_effects(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
@@ -168,8 +161,8 @@ fn resolve_key_effects(
     }
 }
 
-/// Empties `CefKeyboardFilter`. Used on the coarse-guard early return and when no
-/// webview owns the keyboard, so a stale leader claim never withholds a later key.
+/// Empties `CefKeyboardFilter`, so a stale leader claim never withholds a
+/// later key.
 fn clear_cef_filter(cef_filter: &mut CefKeyboardFilter) {
     cef_filter.set(Vec::<(Entity, KeyCode, ModifiersState)>::new());
 }

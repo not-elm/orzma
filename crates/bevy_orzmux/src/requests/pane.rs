@@ -1,5 +1,5 @@
-//! `RequestPaneAction`: pane management the host asks for (directional
-//! selection, kill, click-to-focus), sent as the matching `OrzmuxCommand`.
+//! Pane management the host asks for (directional selection, kill,
+//! click-to-focus), sent as the matching `OrzmuxCommand`.
 
 use crate::layout::{CurrentLayout, OrzmuxActivePaneChanged};
 use crate::registry::PaneRegistry;
@@ -31,7 +31,7 @@ pub(super) struct PaneActionPlugin;
 
 impl Plugin for PaneActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_pane_action);
+        app.add_observer(apply_pane_action.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

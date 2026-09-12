@@ -1,12 +1,6 @@
 //! Tokio-free control-plane listener: an accept loop thread plus one reader
-//! thread and one writer thread per connection. Each connection must come
-//! from orzma's own user (checked by peer UID on Unix, and enforced by the
-//! socket directory's DACL on Windows), must `hello` with a valid token
-//! (resolved via `TokenRegistry` to its surface), then its
-//! `register`/`unregister` lines and its disconnect are emitted as
-//! `ControlEvent`s. A bounded reply channel per request carries the minted
-//! handle back from the ECS apply system; the reply is relayed through the
-//! per-connection writer thread so all writes go through a single owner.
+//! thread and one writer thread per connection, turning each client line into
+//! a `ControlEvent` for the ECS apply system.
 
 use crate::control_plane::ConnectionWriters;
 use crate::control_plane::HandleId;
@@ -23,10 +17,10 @@ use std::os::fd::AsRawFd;
 
 /// An event the listener emits to the ECS apply system.
 pub(crate) enum ControlEvent {
-    /// A `register` from a hello'd connection; the apply system mints a handle,
-    /// populates the registries, and sends the reply back on `reply`.
+    /// A `register` from a hello'd connection; the minted handle comes back
+    /// on `reply`.
     Register {
-        /// Connection id (for scoped teardown).
+        /// The connection the minted registration is owned by.
         connection_id: u64,
         /// The surface the connection's token resolved to.
         owner_surface: Entity,
@@ -37,15 +31,15 @@ pub(crate) enum ControlEvent {
     },
     /// An `unregister` from a connection.
     Unregister {
-        /// Connection id (ownership check).
+        /// The connection that sent it. Ownership is not checked here.
         connection_id: u64,
         /// The handle to release.
         handle: HandleId,
     },
-    /// A `new_instance` from a hello'd connection; the apply system mints an
-    /// instance on a handle this connection owns and replies on `reply`.
+    /// A `new_instance` naming a handle; the minted instance comes back on
+    /// `reply`.
     NewInstance {
-        /// Connection id (ownership check).
+        /// The connection that sent it. Ownership is not checked here.
         connection_id: u64,
         /// The handle to mint an additional instance for.
         handle: HandleId,
@@ -67,12 +61,12 @@ pub(crate) enum ControlEvent {
         value: Value,
         /// The error message when `ok` is false.
         error: Option<String>,
-        /// The connection that sent the reply (for in-flight ownership).
+        /// The connection that sent the reply. Ownership is not checked here.
         connection_id: u64,
     },
-    /// A program-initiated push to its handle's webviews.
+    /// A program-initiated push to a handle's webviews.
     Emit {
-        /// The connection that sent the emit (ownership is checked in apply).
+        /// The connection that sent it. Ownership is not checked here.
         connection_id: u64,
         /// The target handle.
         handle: HandleId,
@@ -83,7 +77,7 @@ pub(crate) enum ControlEvent {
     },
     /// An app-owned focus set/clear for the connection's surface.
     SetFocus {
-        /// Connection id (ownership check in apply).
+        /// The connection that sent it. Ownership is not checked here.
         connection_id: u64,
         /// The surface the connection's token resolved to.
         owner_surface: Entity,
@@ -92,7 +86,7 @@ pub(crate) enum ControlEvent {
     },
     /// An app-initiated in-place navigation of one mounted placement.
     Navigate {
-        /// Connection id (ownership check in apply).
+        /// The connection that sent it. Ownership is not checked here.
         connection_id: u64,
         /// The surface the connection's token resolved to.
         owner_surface: Entity,
@@ -101,9 +95,9 @@ pub(crate) enum ControlEvent {
         /// What to do.
         action: NavAction,
     },
-    /// A socket `mount` for one of the connection's instances.
+    /// A socket `mount` naming an instance.
     Mount {
-        /// Connection id (ownership check in apply).
+        /// The connection that sent it. Ownership is not checked here.
         connection_id: u64,
         /// The surface the connection's token resolved to.
         owner_surface: Entity,
@@ -118,9 +112,9 @@ pub(crate) enum ControlEvent {
         /// Rect width in cells.
         cols: u16,
     },
-    /// A socket `unmount` for one of the connection's instances.
+    /// A socket `unmount` naming an instance.
     Unmount {
-        /// Connection id (ownership check in apply).
+        /// The connection that sent it. Ownership is not checked here.
         connection_id: u64,
         /// The surface the connection's token resolved to.
         owner_surface: Entity,
@@ -163,11 +157,8 @@ pub(crate) fn spawn_listener(
 
 /// Whether a freshly accepted connection may proceed to the handshake.
 ///
-/// Unix: the peer's UID must equal orzma's own. Windows: always true —
-/// the socket directory's current-user DACL (see
-/// `bevy_orzma_webview_host::restrict_to_current_user`) already keeps other
-/// users from connecting, and AF_UNIX on Windows offers no peer
-/// credentials to double-check.
+/// On Unix the peer's UID must equal orzma's own. On Windows it is always
+/// true.
 #[cfg(unix)]
 fn accepts(stream: &UnixStream) -> bool {
     // SAFETY: `getuid` has no preconditions and cannot fail.
@@ -181,8 +172,7 @@ fn accepts(_stream: &UnixStream) -> bool {
 }
 
 /// Returns the connecting peer's UID via `getpeereid` (Apple/BSD), or `None` on
-/// error. The `libc` crate exposes `getpeereid` only on these targets; Linux
-/// uses the `SO_PEERCRED` variant below.
+/// error.
 #[cfg(any(
     target_os = "macos",
     target_os = "ios",
@@ -224,9 +214,9 @@ fn peer_uid(stream: &UnixStream) -> Option<u32> {
     (rc == 0).then_some(cred.uid)
 }
 
-/// Reads one connection: requires a valid `hello`, spawns a writer thread for
-/// all outbound lines (register replies + future server-push), registers the
-/// writer in `writers`, then forwards each `register`/`unregister`, then emits
+/// Reads one connection: it requires a valid `hello`, spawns a writer thread
+/// for all outbound lines (replies and server pushes) and registers it in
+/// `writers`, forwards each request line as a `ControlEvent`, then emits
 /// `Disconnect` and removes the writer on EOF.
 fn serve_connection(
     stream: UnixStream,
@@ -308,9 +298,8 @@ fn read_hello(lines: &mut BufReader<UnixStream>, tokens: &TokenRegistry) -> Opti
     tokens.resolve(&token)
 }
 
-/// Dispatches one parsed `ClientMsg`; relays the register reply through `out_tx`
-/// so all writes go through the single writer thread. Returns `Break` when the
-/// connection should be torn down.
+/// Dispatches one parsed `ClientMsg`, relaying the register reply through
+/// `out_tx`. Returns `Break` when the connection should be torn down.
 fn handle_client_msg(
     msg: ClientMsg,
     connection_id: u64,
@@ -756,8 +745,8 @@ mod tests {
     /// Asserts that the bound socket file inherits the runtime
     /// directory's current-user restriction.
     ///
-    /// Case: orzma binds its control socket under `%TEMP%` on Windows,
-    /// where the endpoint ACL is the only thing keeping other users out.
+    /// Case: orzma binds its control socket in its runtime directory under
+    /// `%TEMP%` on Windows.
     #[cfg(windows)]
     #[test]
     fn the_bound_socket_file_is_private_to_the_current_user() {

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-/// The label enum labeling the types of systems in Orzma
+/// Labels for orzma's Bevy system sets.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
 pub enum OrzmaSystems {
     /// Per-frame input handling — keyboard and mouse. Members run in

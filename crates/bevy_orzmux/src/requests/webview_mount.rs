@@ -1,7 +1,8 @@
-//! `RequestTtyWebviewMount`: the host-driven mount the control plane asks
-//! a terminal entity to register when a program mounts over the socket
-//! rather than the PTY, sent as `OrzmuxCommand::MountPlacement`.
+//! The host-driven mount the control plane asks a terminal entity to
+//! register when a program mounts over the socket rather than the PTY,
+//! sent as `OrzmuxCommand::MountPlacement`.
 
+use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
 use bevy::prelude::*;
 use orzma_vt::prelude::{GridColumn, InstanceId, PlacementSize, ScreenLine};
@@ -28,7 +29,7 @@ pub(super) struct WebviewMountPlugin;
 
 impl Plugin for WebviewMountPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_webview_mount);
+        app.add_observer(apply_webview_mount.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

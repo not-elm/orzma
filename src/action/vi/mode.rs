@@ -1,8 +1,6 @@
-//! Vi mode state. This component is a pure marker — its presence on a
-//! Surface entity means "vi mode is active". Entering and exiting request a
-//! selection clear and a `RequestTtyViMode` switch on the underlying tty;
-//! where the vi cursor and the active selection actually live is an
-//! implementation detail of whatever `Vt` capability eventually backs them.
+//! Vi mode state: a pure marker component whose presence on a surface
+//! entity means vi mode is active. Entering and exiting request a selection
+//! clear and a `RequestTtyViMode` switch on the underlying tty.
 
 use crate::input::focus::{KeyboardDisabled, MouseDisabled};
 use bevy::app::{App, Plugin};
@@ -14,11 +12,7 @@ use bevy::ecs::query::With;
 use bevy::ecs::system::{Commands, Query};
 use bevy_orzmux::prelude::{OrzmuxPane, RequestTtySelectionClear, RequestTtyViMode, ViModeSwitch};
 
-/// Bevy Plugin: registers the two observers. The `Clipboard` resource is
-/// provided by `DefaultPlugins` (`bevy_clipboard::ClipboardPlugin`); orzma's
-/// `crate::action::clipboard` copy plugin adds the write-seam observer.
-/// `ViModeState` is inserted/removed per-entity by the observers
-/// themselves; no global system needed.
+/// Adds vi-mode enter and exit handling.
 pub(super) struct ViModePlugin;
 
 impl Plugin for ViModePlugin {
@@ -39,17 +33,16 @@ pub struct EnterViModeActionEvent {
     pub entity: Entity,
 }
 
-/// Request to exit vi mode. The observer requests a selection clear and a
-/// `RequestTtyViMode { switch: Exit }`, and removes `ViModeState`.
+/// Requests exiting vi mode on `entity`: clears the selection, switches the
+/// tty out of vi mode, and removes `ViModeState`.
 #[derive(EntityEvent, Debug)]
 pub struct ExitViMode {
     /// The Surface entity to exit vi mode on.
     pub entity: Entity,
 }
 
-/// Observer for `EnterViModeActionEvent`. Inserts `ViModeState` on the
-/// target entity and requests a selection clear followed by the vi-mode
-/// enter switch.
+/// Inserts `ViModeState` on the target entity and requests a selection
+/// clear followed by the vi-mode enter switch.
 fn handle_enter_vi_mode_request(
     ev: On<EnterViModeActionEvent>,
     mut commands: Commands,
@@ -73,9 +66,8 @@ fn handle_enter_vi_mode_request(
         .insert((ViModeState, KeyboardDisabled, MouseDisabled));
 }
 
-/// Observer for `ExitViMode`. Removes `ViModeState`, and requests a
-/// selection clear followed by the vi-mode exit switch (which snaps the
-/// viewport to the live tail).
+/// Removes `ViModeState`, and requests a selection clear followed by the
+/// vi-mode exit switch, which snaps the viewport to the live tail.
 fn handle_exit_vi_mode(
     ev: On<ExitViMode>,
     mut commands: Commands,

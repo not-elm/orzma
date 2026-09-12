@@ -15,7 +15,7 @@ use bevy_orzmux::prelude::{
 use orzma_configs::vi_mode::ViModeScroll;
 use orzma_vt::prelude::Scroll;
 
-/// Registers the local VI apply observers.
+/// Adds the local VI apply path.
 pub(super) struct ViApplierPlugin;
 
 impl Plugin for ViApplierPlugin {
@@ -44,8 +44,8 @@ fn on_vi_scroll(ev: On<ViScrollRequest>, mut commands: Commands) {
     });
 }
 
-/// Resolves a selection toggle against the (currently stubbed) current
-/// selection and requests the matching operation.
+/// Resolves a selection toggle against the current selection and requests
+/// the matching operation.
 fn on_vi_selection_toggle(ev: On<ViSelectionToggleRequest>, mut commands: Commands) {
     match SelectionOp::resolve(selection_type(), ev.ty) {
         SelectionOp::Start(kind) => {
@@ -68,9 +68,9 @@ fn on_vi_selection_toggle(ev: On<ViSelectionToggleRequest>, mut commands: Comman
     }
 }
 
-/// Asks for the selection's text (answered later as a clipboard write)
-/// and always leaves vi mode. FIFO on the backend keeps the copy ahead
-/// of the exit's selection clear.
+/// Requests the selection's text, answered later as a clipboard write, and
+/// always leaves vi mode; the copy request is sent before the exit, so it
+/// stays ahead of the exit's selection clear.
 fn on_vi_yank(
     ev: On<ViYankRequest>,
     mut commands: Commands,

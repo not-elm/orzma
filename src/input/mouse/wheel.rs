@@ -1,10 +1,8 @@
-//! Mouse-wheel dispatch for every `OrzmaTerminal` surface: scrollback with
-//! sub-notch accumulation and dominant-axis lock. Vertical wheel motion
-//! always scrolls the terminal's viewport (`TerminalViewportScroll`);
-//! horizontal wheel motion is ignored — app-forward wheel reporting is
-//! out of scope until mouse routing is reintroduced against `orzma_tty`
-//! (D17 of the engine-swap design). Registered by `MouseWheelInputPlugin`;
-//! skips `MouseDisabled` surfaces.
+//! Mouse-wheel dispatch for every `OrzmaTerminal` surface: scrollback
+//! with sub-notch accumulation and dominant-axis lock. Vertical motion
+//! scrolls the viewport; horizontal motion is ignored.
+//!
+//! TODO: reintroduce app-forward wheel-reporting against `orzma_tty`.
 
 use super::{TerminalSurfaces, cell_dims, hit_candidates, on_any_mouse_message};
 use crate::action::terminal::TerminalViewportScroll;
@@ -21,11 +19,7 @@ use bevy::window::PrimaryWindow;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty::prelude::TerminalModifiers;
 
-/// Registers the mouse-wheel dispatcher and its accumulator resource. Runs in
-/// `InputPhase::Dispatch`, gated to frames carrying any mouse message — a
-/// cursor-only frame must still run `WheelAccumulator::retarget` so a
-/// terminal's sub-notch residual is cleared when the cursor moves to another
-/// terminal.
+/// Adds mouse-wheel dispatch and its notch-accumulator resource.
 pub(super) struct MouseWheelInputPlugin;
 
 impl Plugin for MouseWheelInputPlugin {
@@ -50,8 +44,7 @@ struct WheelTarget {
 ///
 /// The horizontal axis is still accumulated so the dominant-axis lock can
 /// stop a horizontal-dominant gesture from leaking a vertical scroll, but
-/// it is never routed anywhere: D17a of the engine-swap design drops
-/// horizontal wheel reporting entirely.
+/// it is never routed anywhere.
 fn dispatch_mouse_wheel(
     mut commands: Commands,
     mut gesture_acc: ResMut<WheelAccumulator>,
@@ -126,9 +119,9 @@ fn accumulate_wheel(
     (raw_v, raw_h)
 }
 
-/// Applies the vertical axis of one wheel dispatch: a non-zero notch count
-/// always scrolls the target's viewport by `scroll_lines`. Horizontal notches
-/// are never routed (D17a) — the caller already discards `raw_h`.
+/// Applies the vertical axis of one wheel dispatch: a non-zero notch
+/// count always scrolls the target's viewport by `scroll_lines`.
+/// Horizontal notches are never routed.
 fn apply_vertical_scroll(
     commands: &mut Commands,
     target: Entity,
@@ -147,12 +140,10 @@ fn apply_vertical_scroll(
     });
 }
 
-/// Converts a signed notch count into a viewport-scroll line count, honoring
-/// the fine-scroll modifier. Ports the scrollback branch of the removed
-/// engine's `WheelAction::route`, which received `-raw_v` and returned
-/// `-(-raw_v) * lines_per`. `raw_v` carries
-/// Bevy's wheel sign (positive = wheel up = toward older output), which is
-/// also the positive direction of `Scroll::Delta`, so no negation is applied:
+/// Converts a signed notch count into a viewport-scroll line count,
+/// honoring the fine-scroll modifier. `raw_v` carries the wheel's sign
+/// (positive = wheel up = toward older output), which is also the
+/// positive direction of `Scroll::Delta`, so no negation is applied:
 /// `TerminalViewportScroll.lines` positive = deeper into scrollback.
 fn scroll_lines(raw_v: i32, fine: bool, cfg: &WheelConfig) -> i32 {
     let lines_per = if fine {

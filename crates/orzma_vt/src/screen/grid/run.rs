@@ -1,7 +1,4 @@
 //! One attribute run of an emitted row.
-//!
-//! The row itself is [`Row`](crate::screen::grid::row::Row); a run
-//! is one of its elements.
 
 use crate::device::color::Color;
 use crate::hyperlink::HyperlinkId;
@@ -29,12 +26,9 @@ bitflags! {
 }
 
 /// A run of cells sharing identical fg/bg/style attributes.
-///
-/// Wide-char spacers (alacritty internal) are absorbed by this crate and
-/// do not appear in `text`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Run {
-    /// Total column span (sum of grapheme cluster widths in `text`).
+    /// Total column span: one column per `char` in `text`.
     pub cols: u16,
     /// Foreground color.
     pub fg: Color,
@@ -42,10 +36,11 @@ pub struct Run {
     pub bg: Color,
     /// The SGR attributes every cell in the run shares.
     pub style: Style,
-    /// UTF-8 text; the consumer uses Unicode East Asian Width to position
-    /// each grapheme cluster within the run.
+    /// UTF-8 text.
     pub text: String,
-    /// Hyperlink id (OSC 8); always `None` until Phase 3.
+    /// Hyperlink id (OSC 8); it is always `None`.
+    ///
+    /// TODO: set it once OSC 8 handling reaches the hyperlink interner.
     pub hyperlink_id: Option<HyperlinkId>,
 }
 

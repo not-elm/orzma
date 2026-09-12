@@ -1,5 +1,5 @@
-//! `RequestTtyPaste` (a specific pane) and `RequestActivePaste` (the
-//! backend's active pane): both become `OrzmuxCommand::Paste`.
+//! Paste for a specific pane or for the backend's active pane; both
+//! become `OrzmuxCommand::Paste`.
 
 use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
@@ -8,9 +8,9 @@ use orzmux::prelude::{OrzmuxCommand, PaneTarget};
 
 /// Fired by the host UI to paste text into a specific terminal entity.
 ///
-/// Carries the clipboard text verbatim.
-/// Bracketed-paste framing, marker stripping, and line-ending normalization all depend on terminal modes the
-/// host cannot see, so they belong to the apply observer — the host reads the clipboard and nothing more.
+/// The host sends the clipboard text and nothing more; bracketed-paste
+/// framing, marker stripping, and line-ending normalization happen when
+/// the paste is applied.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyPaste {
     #[event_target]
@@ -27,14 +27,14 @@ pub struct RequestActivePaste {
     pub text: String,
 }
 
-/// Registers the [`RequestTtyPaste`] and [`RequestActivePaste`] apply
-/// observers.
+/// Forwards [`RequestTtyPaste`] and [`RequestActivePaste`] to the
+/// backend.
 pub(super) struct PastePlugin;
 
 impl Plugin for PastePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_paste)
-            .add_observer(apply_active_paste);
+        app.add_observer(apply_paste.run_if(resource_exists::<OrzmuxConnection>))
+            .add_observer(apply_active_paste.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 

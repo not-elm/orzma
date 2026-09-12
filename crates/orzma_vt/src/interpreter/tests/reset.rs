@@ -16,11 +16,10 @@ fn the_seven_bit_reset_blanks_every_visible_row() {
 }
 
 /// Asserts that the repaint `ESC c` calls for reaches the chunk
-/// liveness rather than being dropped by the handler.
+/// liveness.
 ///
-/// Case: the user runs `reset` on a screen a previous command filled,
-/// and the owner must open its coalesce window for the frame that
-/// repaints it.
+/// Case: the user runs `reset` on a screen a previous command
+/// filled.
 #[test]
 fn the_seven_bit_reset_marks_its_own_chunk_damaged() {
     assert!(liveness_after(b"a", b"\x1bc"));
@@ -29,8 +28,8 @@ fn the_seven_bit_reset_marks_its_own_chunk_damaged() {
 /// Asserts that `ESC c` names the placements it strands in the
 /// chunk's own signals.
 ///
-/// Case: a companion app mounted a webview beside a prompt and the
-/// user runs `reset`, so the host must despawn it.
+/// Case: a companion app mounted a webview beside a prompt, and the
+/// user runs `reset`.
 #[test]
 fn the_seven_bit_reset_names_the_placements_it_strands() {
     let mut session = Session::new();

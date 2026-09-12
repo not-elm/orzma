@@ -1,5 +1,5 @@
-//! One pane as the backend owns it: the terminal plus the geometry the
-//! backend last applied to it, and the factory that spawns terminals.
+//! One pane as the backend owns it, together with the factory that
+//! spawns a pane's terminal.
 
 use orzma_tty::prelude::{OrzmaTty, OrzmaTtyResult};
 use orzma_tty::{CellPixels, EnvKey, EnvValue, SpawnOptions};
@@ -18,8 +18,7 @@ pub(crate) struct Pane {
     pub(crate) cwd: Option<PathBuf>,
 }
 
-/// Spawns terminals for the backend. Abstracted so tests can hand the
-/// backend PTY-less terminals.
+/// Spawns terminals for the backend.
 pub(crate) trait PaneFactory: Send {
     fn spawn(
         &mut self,
@@ -30,7 +29,7 @@ pub(crate) trait PaneFactory: Send {
     ) -> OrzmaTtyResult<OrzmaTty<OrzmaVt>>;
 }
 
-/// The production factory: spawns the login shell under a real PTY.
+/// Spawns the resolved shell under a real PTY.
 pub(crate) struct ShellFactory {
     shell: String,
     scrollback_rows: usize,
@@ -96,8 +95,7 @@ fn resolve_shell(
 
 /// The Windows default: `pwsh` (PowerShell 7) if `exists` finds it, then
 /// `powershell` (Windows PowerShell), then a non-empty `comspec`, then
-/// `cmd.exe`. Bare names are resolved through `PATH` by `portable-pty`
-/// at spawn.
+/// `cmd.exe`. Bare names are resolved through `PATH` at spawn.
 #[cfg_attr(
     all(unix, not(test)),
     expect(
@@ -120,8 +118,8 @@ fn default_shell() -> String {
     "/bin/sh".to_string()
 }
 
-/// On Unix `$SHELL` is spawned verbatim, as it always was; a bad value
-/// fails the spawn and is reported there.
+/// On Unix `$SHELL` is spawned verbatim; a bad value fails the spawn
+/// and is reported there.
 #[cfg(unix)]
 fn shell_exists(_shell: &str) -> bool {
     true
@@ -140,7 +138,7 @@ fn shell_exists(shell: &str) -> bool {
 
 /// Whether `name` is a file: as given when it carries a directory, else
 /// in some `PATH` entry, as given or with each `PATHEXT` extension
-/// appended — the lookup `portable-pty` performs at spawn.
+/// appended.
 #[cfg(windows)]
 fn on_path(name: &str) -> bool {
     if name.contains(['/', '\\']) {

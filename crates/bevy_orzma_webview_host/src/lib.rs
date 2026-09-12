@@ -1,7 +1,6 @@
-//! Tokio-free host integration for orzma: a per-handle runtime root for the
-//! webview control plane and (behind the `cef` feature) serving
-//! dynamically-registered Tier 1 webview assets through an `orzma://`
-//! custom scheme via `WebviewAssetRegistry`.
+//! Host integration for orzma: a per-handle runtime root for the webview
+//! control plane and, behind the `cef` feature, an `orzma://` custom scheme
+//! serving dynamically-registered Tier 1 webview assets.
 
 pub mod asset;
 pub mod host;

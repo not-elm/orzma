@@ -126,8 +126,7 @@ pub fn current_user_sid() -> io::Result<String> {
     Ok(unsafe { wide_to_string(owned.0.cast()) })
 }
 
-/// The DACL of `path` rendered as an SDDL string (`D:…`), for tests and
-/// diagnostics.
+/// The DACL of `path` rendered as an SDDL string (`D:…`).
 #[cfg(windows)]
 pub fn security_descriptor_sddl(path: &Path) -> io::Result<String> {
     let path = wide_path(path);
@@ -177,10 +176,9 @@ pub fn security_descriptor_sddl(path: &Path) -> io::Result<String> {
     Ok(unsafe { wide_to_string(owned.0.cast()) })
 }
 
-/// Normalizes an SDDL string the way Windows renders it: the descriptor is
-/// parsed and rendered back, so well-known SIDs come out as their two-letter
-/// aliases (for example `LA` for the built-in Administrator) exactly as
-/// [`security_descriptor_sddl`] would report them.
+/// Normalizes an SDDL string the way Windows renders it, so well-known SIDs
+/// come out as their two-letter aliases (for example `LA` for the built-in
+/// Administrator) exactly as [`security_descriptor_sddl`] reports them.
 #[cfg(windows)]
 pub fn canonical_sddl(sddl: &str) -> io::Result<String> {
     let wide_sddl = wide(sddl);

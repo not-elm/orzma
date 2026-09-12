@@ -13,27 +13,25 @@ use std::path::Path;
 pub(crate) mod preload;
 
 /// One frame emitted by the page bridge (`orzma_bridge.js`) via
-/// `cef.emit({ kind: '…', … })`, inspected by the per-kind observers.
+/// `cef.emit({ kind: '…', … })`.
 ///
-/// `#[serde(transparent)]` makes it deserialize from the bare emitted object
-/// (`{kind, reqId, …}`), not from a `{"0": …}` wrapper — `bevy_cef`'s
-/// `cef.emit(frame)` serializes only its first argument into one global
-/// `Receive<OrzmaFrame>`.
+/// It deserializes from the bare emitted object (`{kind, reqId, …}`), not
+/// from a `{"0": …}` wrapper.
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(transparent)]
 struct OrzmaFrame(serde_json::Value);
 
 /// The `kind` discriminator routing a `Receive<OrzmaFrame>` to the Tier 1
-/// back-channel (`on_orzma_call_frame`). The page side emits it in `orzma_bridge.js`.
+/// back-channel. The page bridge emits it in `orzma_bridge.js`.
 const ORZMA_CALL_KIND: &str = "orzma.call";
 
 /// The `kind` discriminator routing a `Receive<OrzmaFrame>` to the one-way
-/// inbound-event forwarder (`on_orzma_emit_frame`). Emitted by `orzma_bridge.js`.
+/// inbound-event forwarder. The page bridge emits it in `orzma_bridge.js`.
 const ORZMA_EMIT_KIND: &str = "orzma.emit";
 
 /// Builds the `CefPlugin` with the `orzma://` (dynamic, Tier 1) scheme bound
-/// to its shared `WebviewAssetRegistry`, using `root_cache_path` as this process's
-/// unique CEF profile directory (one Chromium singleton lock per instance).
+/// to its shared `WebviewAssetRegistry`, using `root_cache_path` as this
+/// process's unique CEF profile directory.
 pub fn cef_plugin(orzma_registry: WebviewAssetRegistry, root_cache_path: &Path) -> CefPlugin {
     CefPlugin {
         custom_schemes: vec![custom_orzma_scheme(orzma_registry)],
@@ -45,20 +43,13 @@ pub fn cef_plugin(orzma_registry: WebviewAssetRegistry, root_cache_path: &Path) 
 
 /// CEF command-line switches for the embedded webview.
 ///
-/// On macOS we always append `use-mock-keychain` so CEF's OSCrypt layer derives
-/// its cookie / Local State encryption key from a mock keychain rather than the
-/// real login keychain. Without it, release / bundled builds pop the "orzma
-/// wants to use … Chromium Safe Storage" keychain prompt on launch:
-/// `bevy_cef_core`'s `CommandLineConfig::default()` only carries this switch under
-/// `debug_assertions`, so it is absent from the `dist` profile. orzma's CEF
-/// profile is an ephemeral per-process temp dir (see `cef_profile`), so a mock
-/// key costs no real persistence. `effective_command_line_config` de-duplicates,
-/// so re-adding it on debug builds is harmless.
+/// On macOS the config always carries `use-mock-keychain`, so CEF's OSCrypt
+/// layer derives its cookie and Local State encryption key from a mock
+/// keychain rather than the real login keychain.
 ///
-/// The `debug` feature additionally exposes `remote-debugging-port` — a local
+/// The `debug` feature additionally exposes `remote-debugging-port`, a local
 /// Chromium DevTools (CDP) endpoint on `127.0.0.1:9222` for inspecting the
-/// embedded webview — and is off by default so that endpoint is never exposed in
-/// normal builds.
+/// embedded webview. It is off by default.
 fn cef_command_line_config() -> CommandLineConfig {
     let config = CommandLineConfig::default();
     #[cfg(target_os = "macos")]
@@ -68,9 +59,9 @@ fn cef_command_line_config() -> CommandLineConfig {
     config
 }
 
-/// Wires the `window.orzma` Tier 1 back-channel: the `orzma.call` frame
-/// observer, the webview-load loggers, and the focus sync that keeps
-/// `bevy_cef`'s `FocusedWebview` in step with the active pane.
+/// Wires the `window.orzma` Tier 1 back-channel: the `orzma.call` and
+/// `orzma.emit` frame observers, the `urlChanged` forwarder, the in-flight
+/// prune on webview despawn, and the webview-load loggers.
 pub(crate) struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
@@ -87,15 +78,13 @@ impl Plugin for RenderPlugin {
 }
 
 /// Inbound (Tier 1 back-channel): a `window.orzma.call` arrives as a
-/// `Receive<OrzmaFrame>` with `kind:"orzma.call"`. The trusted caller is
-/// `frame.webview` (bound per-webview by `bevy_cef`, never the JS payload); its
-/// `WebviewOwner` names the registering connection. The call is forwarded over
-/// that connection's writer under a Rust-minted global reqId; a missing
-/// owner/connection rejects the page Promise directly.
+/// `Receive<OrzmaFrame>` with `kind:"orzma.call"`; any other `kind` is
+/// ignored.
 ///
-/// Registered as an observer on the shared `Receive<OrzmaFrame>` event (NOT a
-/// second `JsEmitEventPlugin`): the event carries all frames; non-`orzma.call`
-/// frames are ignored via the early return on `ORZMA_CALL_KIND`.
+/// The trusted caller is `frame.webview`, never the JS payload; its
+/// `WebviewOwner` names the registering connection. The call is forwarded over
+/// that connection's writer under a Rust-minted global reqId, and a missing
+/// owner or connection rejects the page Promise directly.
 fn on_orzma_call_frame(
     frame: On<Receive<OrzmaFrame>>,
     mut commands: Commands,
@@ -147,14 +136,13 @@ fn reject_orzma_call(commands: &mut Commands, webview: Entity, req_id: &str, err
 }
 
 /// Inbound (one-way): a `window.orzma.emit` arrives as a `Receive<OrzmaFrame>`
-/// with `kind:"orzma.emit"`. The trusted caller is `frame.webview` (bound per
-/// webview by `bevy_cef`); its `WebviewOwner` names the registering connection.
-/// The event is forwarded as a fire-and-forget `{op:"event"}` line — no reqId,
-/// no reply, no `OrzmaRpc` tracking. A missing owner or unavailable connection
-/// drops the event (debug-logged); there is no page Promise to settle.
+/// with `kind:"orzma.emit"`; any other `kind` is ignored.
 ///
-/// Registered on the shared `Receive<OrzmaFrame>` event (not a second
-/// `JsEmitEventPlugin`); frames whose `kind` is not `orzma.emit` are ignored.
+/// The trusted caller is `frame.webview`; its `WebviewOwner` names the
+/// registering connection. The event is forwarded as a fire-and-forget
+/// `{op:"event"}` line with no reqId, no reply, and no `OrzmaRpc` tracking.
+/// A missing owner or unavailable connection drops the event, and there is no
+/// page Promise to settle.
 fn on_orzma_emit_frame(
     frame: On<Receive<OrzmaFrame>>,
     writers: Res<ConnectionWriters>,
@@ -191,13 +179,12 @@ fn on_orzma_emit_frame(
 }
 
 /// Outbound (Tier 1 back-channel): when a webview's top-level URL changes (CEF
-/// `OnAddressChange` — link clicks, hint activations, redirects, hash/pushState),
-/// forwards a `urlChanged` call to the registering program so it can track
-/// page-driven navigation (e.g. orzbrowser's history + URL bar). Scoped to remote
-/// `http(s)` webviews; `orzma://` dir/inline views (which register no
-/// `urlChanged` handler) are skipped. Fire-and-forget: the minted reqId is not
-/// recorded, so the program's reply finds no in-flight entry and is dropped by
-/// `OrzmaRpc::take_for_connection`.
+/// `OnAddressChange` — link clicks, redirects, hash and pushState navigation),
+/// forwards a `urlChanged` call to the registering program.
+///
+/// The call is sent only for remote `http(s)` webviews; `orzma://` dir and
+/// inline views are skipped. It is fire-and-forget: the minted reqId is not
+/// recorded, so the program's reply is dropped.
 fn on_webview_address_changed(
     addr: On<AddressChanged>,
     mut rpc: ResMut<OrzmaRpc>,
@@ -233,14 +220,14 @@ fn drop_orzma_inflight_on_webview_despawn(
     rpc.drain_webview(remove.entity);
 }
 
-/// Logs the start of a webview page load. Debug-level diagnostics: these
-/// observers fire for every `bevy_cef` webview, not only orzma webviews.
+/// Logs the start of a webview page load at debug level.
+///
+/// It fires for every `bevy_cef` webview, not only orzma webviews.
 fn log_webview_load_started(load: On<LoadStarted>) {
     tracing::debug!(webview = ?load.webview, "webview load started");
 }
 
-/// Logs a finished page load + its HTTP status. A `LoadFinished` with no
-/// visible content points at a render/size issue rather than a load failure.
+/// Logs a finished page load and its HTTP status.
 fn log_webview_load_finished(load: On<LoadFinished>) {
     tracing::debug!(
         webview = ?load.webview,
@@ -249,9 +236,7 @@ fn log_webview_load_finished(load: On<LoadFinished>) {
     );
 }
 
-/// Logs a page load failure (CEF `OnLoadError`) — the signal that the scheme
-/// fetch / navigation failed (e.g. a mis-classified MIME or 5xx). Kept at
-/// `warn` because, unlike start/finish, it always indicates a real fault.
+/// Logs a page load failure (CEF `OnLoadError`) at `warn` level.
 fn log_webview_load_error(load: On<LoadError>) {
     tracing::warn!(
         webview = ?load.webview,

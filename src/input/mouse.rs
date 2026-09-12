@@ -1,10 +1,6 @@
-//! Shared mouse-dispatch plumbing for every `OrzmaTerminal` surface. Hosts the
-//! `MouseInputPlugin` aggregator, the hit-test primitives (`CellContext`,
-//! `cell_at_*`, `hit_candidates`, the `TerminalSurfaces` query alias) shared by
-//! the per-path dispatchers in `button` and `wheel`, and the `MouseEffect` IR +
-//! `trigger_mouse_effects` used by the `button` path only (the `wheel` path
-//! triggers its `EntityEvent`s directly). Gated per entity by `MouseDisabled`,
-//! so dispatch runs for every surface that still owns the mouse.
+//! Shared mouse-dispatch plumbing for every `OrzmaTerminal` surface, gated
+//! per entity by `MouseDisabled` so dispatch runs only for a surface that
+//! still owns the mouse.
 
 use crate::action::terminal::{
     TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart,
@@ -29,10 +25,8 @@ mod gesture;
 mod webview;
 mod wheel;
 
-/// Aggregates the per-path mouse dispatch plugins and the shared config
-/// resource. The button and wheel dispatchers live in `button` / `wheel` and
-/// register themselves; the webview pointer routers are aggregated via
-/// `webview::MouseWebviewPlugin`.
+/// Adds mouse button, wheel, and webview-pointer dispatch for every
+/// terminal surface.
 pub(super) struct MouseInputPlugin;
 
 impl Plugin for MouseInputPlugin {
@@ -46,20 +40,17 @@ impl Plugin for MouseInputPlugin {
     }
 }
 
-/// Run condition shared by the button and wheel dispatchers: true on any frame
-/// carrying a mouse message (button, cursor move, or wheel). A cursor-only frame
-/// must still run so the dispatchers retarget / reset; defining it once keeps the
-/// two per-file plugins' gating in lockstep.
+/// True on any frame carrying a mouse button, cursor-move, or wheel
+/// message. A cursor-only frame must still run so the dispatchers
+/// retarget / reset.
 fn on_any_mouse_message() -> impl SystemCondition<()> {
     on_message::<MouseButtonInput>
         .or_else(on_message::<CursorMoved>)
         .or_else(on_message::<MouseWheel>)
 }
 
-/// Host-private decision IR for the button path: `decide_button` returns an
-/// ordered `Vec` of these, which `trigger_mouse_effects` fans out to
-/// per-operation `EntityEvent`s on the target terminal. The wheel path does
-/// not go through this IR; it triggers `TerminalViewportScroll` directly.
+/// An ordered operation to apply to the target terminal: a selection
+/// start/update/clear, a copy, or an opened URI.
 #[derive(Debug, Clone, PartialEq)]
 enum MouseEffect {
     SelStart {
@@ -77,8 +68,8 @@ enum MouseEffect {
 }
 
 /// Fans an ordered `Vec<MouseEffect>` out to per-operation `EntityEvent`s on
-/// `entity`, preserving order (Bevy's command queue is FIFO and each trigger
-/// resolves before the next).
+/// `entity`, preserving order: the command queue is FIFO, and each trigger
+/// resolves before the next.
 fn trigger_mouse_effects(commands: &mut Commands, entity: Entity, effects: Vec<MouseEffect>) {
     for effect in effects {
         match effect {
@@ -147,8 +138,8 @@ fn cell_at_local(
     (CellCoord { col, row }, side)
 }
 
-/// The terminal-surface query shared by the button and wheel dispatchers,
-/// aliased so the long type is not repeated across their helper signatures.
+/// A terminal-surface query matching every mouse-enabled `OrzmaTerminal`
+/// surface.
 type TerminalSurfaces<'w, 's> = Query<
     'w,
     's,
@@ -163,8 +154,7 @@ type TerminalSurfaces<'w, 's> = Query<
 >;
 
 /// The `(entity, node, stack, transform)` candidates `topmost_surface_at`
-/// hit-tests, projected from the surface query — one adapter shared by both
-/// dispatchers.
+/// hit-tests, projected from the surface query.
 fn hit_candidates<'a>(
     terminals: &'a TerminalSurfaces<'_, '_>,
 ) -> impl Iterator<
@@ -180,9 +170,8 @@ fn hit_candidates<'a>(
         .map(|(e, node, stack, transform, _)| (e, node, stack, transform))
 }
 
-/// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to `>= 1` so
-/// a degenerate metric cannot divide by zero. Shared by the mouse dispatchers
-/// and webview pointer routing's cursor → cell projection.
+/// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to
+/// `>= 1` so a degenerate metric cannot divide by zero.
 fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
     (
         metrics.metrics.advance_phys.floor().max(1.0),
@@ -190,9 +179,8 @@ fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
     )
 }
 
-/// Read-only hit-test context for one gather run: the terminal node geometry,
-/// cell pitch, and grid dimensions — so helpers resolve a cursor to a cell
-/// without re-threading seven arguments.
+/// Read-only hit-test context for one gather run: the terminal node
+/// geometry, cell pitch, and grid dimensions.
 struct CellContext<'a> {
     node: &'a ComputedNode,
     transform: &'a UiGlobalTransform,
@@ -215,9 +203,8 @@ impl CellContext<'_> {
     }
 }
 
-/// Resolves `target` to its `CellContext` at the given cell pitch, or `None`
-/// when it is no longer a live surface. The button dispatcher builds its
-/// hit-test context through this for both live events and synthesized drags.
+/// Resolves `target` to its `CellContext` at the given cell pitch, or
+/// `None` when it is no longer a live surface.
 fn cell_context_for<'a>(
     terminals: &'a TerminalSurfaces<'_, '_>,
     target: Entity,

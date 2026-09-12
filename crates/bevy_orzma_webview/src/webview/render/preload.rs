@@ -4,15 +4,14 @@
 
 use bevy_cef::prelude::PreloadScripts;
 
-/// JS defining the unified `window.orzma` back-channel bridge (`.call` / `.on`),
-/// injected per Tier 1 bridged webview as a `PreloadScripts` entry. Frozen onto
-/// `window` so a page cannot shadow it.
+/// JS defining the `window.orzma` back-channel bridge (`.call` / `.on`),
+/// injected per Tier 1 bridged webview as a `PreloadScripts` entry. It is
+/// frozen onto `window`, so a page cannot shadow it.
 pub(super) const ORZMA_BRIDGE_JS: &str = include_str!("orzma_bridge.js");
 
 /// Builds the preload for a bridged Tier 1 webview: the `window.orzma`
 /// back-channel bridge, followed by the registering program's user scripts.
-/// No capability grant — the bridge routes to the registering program, not the
-/// host.
+/// The bridge routes to the registering program, not the host.
 pub(crate) fn build_preload(user: &[String]) -> PreloadScripts {
     let mut scripts = vec![ORZMA_BRIDGE_JS.to_string()];
     scripts.extend(user.iter().cloned());

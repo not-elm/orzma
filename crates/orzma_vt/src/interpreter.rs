@@ -1,10 +1,5 @@
 //! Byte-stream decoding: the vtparse parser and the synchronized-update
 //! buffer.
-//!
-//! [`Interpreter`] turns PTY bytes into parser actions. It changes no
-//! device state itself — the executor it dispatches to does that —
-//! and it owns the CSI ?2026 buffer, so a synchronized update holds its
-//! bytes here until the application closes it.
 
 pub(crate) mod apc;
 
@@ -29,7 +24,7 @@ use crate::{
 };
 use vtparse::{CsiParam, VTActor, VTParser};
 
-/// The parser plus the bytes a synchronized update is holding back.
+/// The parser plus the synchronized-update buffer.
 pub(crate) struct Interpreter {
     parser: VTParser,
     sync: SyncBuffer,
@@ -37,20 +32,14 @@ pub(crate) struct Interpreter {
 
 impl Interpreter {
     /// Decodes one chunk, applying each action to the borrowed
-    /// components through an [`Executor`] and collecting everything the
-    /// chunk produced into `output`.
-    ///
-    /// The executor is built here rather than passed in because it
-    /// borrows [`SyncBuffer`], which `&mut self` already holds.
+    /// components and collecting everything the chunk produced into
+    /// `output`.
     ///
     /// # Invariants
     ///
-    /// Every run of the parser ends with [`Executor::sweep_evictions`],
-    /// after the chunk's last action: [`crate::Vt::interpret`] promises
-    /// that a chunk names the placements it strands in its own
-    /// [`InterpretOutput::signals`]. A run without the sweep would leave
-    /// them unnamed until a later chunk sweeps, while every frame in
-    /// between already omits them.
+    /// The placements the chunk strands are named in its own
+    /// [`InterpretOutput::signals`], after every signal the chunk's
+    /// actions raised.
     pub fn parse(
         &mut self,
         output: &mut InterpretOutput,
@@ -88,18 +77,13 @@ impl Default for Interpreter {
     }
 }
 
-/// Bytes held back while a synchronized update (CSI ?2026) is open.
+/// The buffer for a synchronized update (CSI ?2026).
+///
+/// TODO: hold back the bytes of an open synchronized update.
 #[derive(Default)]
 struct SyncBuffer {}
 
 /// The temporary view a parser callback applies its action through.
-///
-/// `output` borrows the caller's per-call local in
-/// [`crate::OrzmaVt`]'s [`crate::Vt::interpret`].
-/// The other fields borrow state that outlives the call — `device` and
-/// `tracker` are components `OrzmaVt` owns, and `sync` reborrows
-/// [`Interpreter::sync`], which persists across chunks. The view itself
-/// still carries nothing between chunks: it is rebuilt fresh each call.
 struct Executor<'a> {
     output: &'a mut InterpretOutput,
     #[expect(
@@ -516,8 +500,8 @@ impl VTActor for Executor<'_> {
     }
 }
 
-/// The control functions an eight-bit C1 byte and its seven-bit `ESC`
-/// form both request, so the two spellings cannot drift apart.
+/// The control-function steps the parser callbacks delegate to, and the
+/// helpers that record what a chunk produced.
 impl Executor<'_> {
     /// Moves the cursor down a row, scrolling at the bottom margin (IND,
     /// and the LF family that shares its effect).
@@ -575,8 +559,7 @@ impl Executor<'_> {
 
     /// Queues reply bytes for the owner to write back to the PTY.
     ///
-    /// A reply changes nothing the renderer draws, so it deliberately
-    /// leaves the chunk liveness alone.
+    /// A reply leaves the chunk liveness alone.
     fn reply(&mut self, bytes: &[u8]) {
         self.output.replies.extend_from_slice(bytes);
     }
@@ -631,8 +614,7 @@ impl Executor<'_> {
     /// Returns every screen and mode to its power-up state (RIS),
     /// reporting the title's return to the host's default.
     ///
-    /// A reset that finds no title reports nothing, so a terminal that
-    /// was never titled does not wake the host.
+    /// A reset that finds no title reports nothing.
     fn reset_device(&mut self) {
         let had_title = self.device.title().is_some();
         let damage = self.device.reset();
@@ -643,18 +625,17 @@ impl Executor<'_> {
     }
 
     /// Names the placements this chunk stranded and raises the chunk
-    /// liveness, because a shortened placement list is a frame-visible
-    /// section change even when no row was damaged.
+    /// liveness.
     ///
     /// A chunk strands a placement when its anchor row leaves the grid:
-    /// a reset mints every row afresh, and a scroll that recycles a row
-    /// rather than keeping it in history — past the cap, inside a scroll
-    /// region, downward at the top margin, or on a screen without
-    /// scrollback — re-mints it under an id no anchor holds.
+    /// a reset drops every row, and a scroll drops a row when it recycles
+    /// the row rather than keeping it in history — past the cap, inside a
+    /// scroll region, downward at the top margin, or on a screen without
+    /// scrollback.
     ///
-    /// The sweep runs once, after the whole chunk, so a placement the
-    /// chunk strands and then re-mounts is updated in place rather than
-    /// evicted and re-created.
+    /// It must run once per chunk, after the chunk's last action, so
+    /// that a placement the chunk strands and then re-mounts is updated
+    /// in place rather than evicted and re-created.
     fn sweep_evictions(&mut self) {
         let Some(evicted) = VtSignal::evicted(self.device.evict_lost_anchors()) else {
             return;
@@ -669,11 +650,6 @@ impl Executor<'_> {
 impl Executor<'_> {
     /// Applies every ANSI mode this terminal implements out of one `SM`
     /// or `RM` sequence, ignoring the numbers it does not.
-    ///
-    /// The private-marker form is a different number space, so `CSI 4 h`
-    /// (IRM) and `CSI ? 4 h` (DECSCLM) never reach the same arm.
-    /// [`Self::set_private_modes`] records why an unimplemented number
-    /// must not hide an implemented one later in the list.
     fn set_modes(&mut self, params: &CsiParams<'_>, enabled: bool) {
         for mode in params.values().flatten() {
             // IRM
@@ -685,9 +661,6 @@ impl Executor<'_> {
 
     /// Applies every private mode this terminal implements out of one
     /// `DECSET` or `DECRST` sequence, ignoring the numbers it does not.
-    ///
-    /// A sequence may carry several modes at once, and an unimplemented
-    /// one must not hide an implemented one later in the list.
     fn set_private_modes(&mut self, params: &CsiParams<'_>, enabled: bool) {
         for mode in params.values().flatten() {
             match mode {
@@ -736,10 +709,6 @@ impl Executor<'_> {
 
     /// Applies a mouse tracking level or report encoding; a number
     /// neither answers is ignored.
-    ///
-    /// The numbers live on the two enums rather than here, so the
-    /// tracking levels and the encodings each keep their mapping beside
-    /// the type that models them.
     fn set_mouse_mode(&mut self, mode: u16, enabled: bool) {
         let modes = self.device.modes_mut();
         if let Some(tracking) = modes.mouse_tracking.with_decset(mode, enabled) {
@@ -756,12 +725,8 @@ impl Executor<'_> {
     /// Each direction runs only from the other screen, so a set already
     /// on the alternate screen cannot overwrite that screen's own DECSC
     /// slot, and a stray reset on the primary screen leaves the cursor
-    /// alone. The save precedes the flip because `active_screen_mut` is
-    /// the only way to a screen; the erase follows it for the same
-    /// reason, and fills with the pen the alternate screen kept from
-    /// its previous use rather than the primary screen's — each screen
-    /// owns its pen — which is a known departure from xterm's shared
-    /// pen.
+    /// alone. The erase fills with the pen the alternate screen kept
+    /// from its previous use rather than the primary screen's.
     fn set_alternate_screen_with_cursor(&mut self, enabled: bool) {
         match (enabled, self.device.modes().active_screen) {
             (true, ScreenKind::Primary) => {
@@ -780,12 +745,6 @@ impl Executor<'_> {
     /// Applies `DECSET 1047` / `DECRST 1047`: a set is a bare flip; a
     /// reset erases the alternate screen, when it is the one shown, and
     /// then flips back.
-    ///
-    /// The erase precedes the flip because it must reach the alternate
-    /// screen, and it runs only while that screen is shown so a stray
-    /// reset on the primary screen erases nothing. The `Full` it stages
-    /// is redundant with the flip's own, and the damage ledger records
-    /// no screen.
     fn set_alternate_screen_erased_on_exit(&mut self, enabled: bool) {
         if !enabled && self.device.modes().active_screen == ScreenKind::Alternate {
             self.erase_in_display(EraseScreenMode::All);
@@ -794,18 +753,13 @@ impl Executor<'_> {
     }
 
     /// Shows `to`, naming the placements a return to the primary screen
-    /// tears down. Already showing `to` is a no-op: no repaint, no
-    /// signal.
-    ///
-    /// The eviction is raised here rather than left to the chunk-end
-    /// sweep because [`DeviceState::switch_screen`] takes the placements
-    /// out of the table, so the sweep could not find them.
+    /// tears down. Already showing `to` is a no-op that stages nothing
+    /// and signals nothing.
     ///
     /// # Invariants
     ///
-    /// The flip and the staged `Full` are never separated by an early
-    /// return: a frame after a screen flip must carry every viewport
-    /// row, and [`DeviceState::switch_screen`] stages nothing itself.
+    /// Every flip stages [`DamageSpan::Full`], so the frame after it
+    /// carries every viewport row.
     fn switch_screen(&mut self, to: ScreenKind) {
         if self.device.modes().active_screen == to {
             return;
@@ -820,11 +774,7 @@ impl Executor<'_> {
 
 /// A repeat count parameter, where an omitted or zero value means one.
 ///
-/// ECMA-48 gives the default to an *empty* parameter only (§ 5.4.2 e);
-/// an explicit zero selecting the default is ZERO DEFAULT MODE, which
-/// its annex F deprecates. DEC spells the rule out per function instead
-/// — VT220 states "a parameter of 0 or 1" for these counts — and that
-/// is what applications expect, so a zero resolves to one here.
+/// VT220 states "a parameter of 0 or 1" for these counts.
 fn repeat_count(value: Option<u16>) -> u16 {
     match value {
         None | Some(0) => 1,
@@ -832,9 +782,8 @@ fn repeat_count(value: Option<u16>) -> u16 {
     }
 }
 
-/// The DA1 response: a VT102 with no extensions, the class alacritty
-/// reports. A higher class would advertise features — Sixel, DRCS,
-/// selective erase — this terminal does not implement.
+/// The DA1 response: a VT102 with no extensions. This terminal does not
+/// implement Sixel, DRCS, or selective erase.
 const PRIMARY_ATTRIBUTES: &[u8] = b"\x1b[?6c";
 
 /// The DSR 5 response: the terminal is operating normally.
@@ -842,11 +791,8 @@ const DEVICE_OK: &[u8] = b"\x1b[0n";
 
 /// Builds the DA2 response.
 ///
-/// The terminal type is 0: xterm's table has no VT102 entry, and 0
-/// ("VT100") is the only code that claims no VT220-and-up feature set.
-/// The cartridge number is 1 rather than the zero xterm documents,
-/// because this response follows alacritty byte for byte; real
-/// terminals deviate here freely and readers ignore the field.
+/// The terminal type is 0 ("VT100"), and the cartridge number is 1
+/// rather than the zero xterm documents.
 fn secondary_attributes() -> Vec<u8> {
     format!("\x1b[>0;{};1c", firmware_version()).into_bytes()
 }
@@ -870,9 +816,7 @@ fn firmware_version() -> u32 {
 /// Packs a version into the single number DA2's firmware field carries,
 /// one hundred per component.
 ///
-/// The encoding assumes every component stays below one hundred, which
-/// this crate's versioning holds to; a minor or patch that reached it
-/// would collide with the next component up.
+/// Every component must stay below one hundred.
 fn pack_version(major: u32, minor: u32, patch: u32) -> u32 {
     major * 10_000 + minor * 100 + patch
 }

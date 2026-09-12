@@ -43,9 +43,7 @@ pub(crate) fn on_webview_mount(
     );
 }
 
-/// Reports a mount the VT refused. The placement cap rejected it, so
-/// there is nothing to spawn — without this line a webview that never
-/// appears would leave no trace at all.
+/// Reports a mount the VT refused, spawning nothing.
 pub(crate) fn on_webview_mount_rejected(ev: On<TtyWebviewMountRejectedSignal>) {
     let req = ev.event();
     tracing::debug!(
