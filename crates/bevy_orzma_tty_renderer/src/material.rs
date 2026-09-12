@@ -5,7 +5,7 @@ use crate::{
     },
     material::state::TerminalMaterialState,
     schema::{
-        Color as CellColor, GridCell, GridLine, HyperlinkHoverState, Palette, Rgb,
+        Color as CellColor, GridCell, GridLine, GridSlot, HyperlinkHoverState, Palette, Rgb,
         SelectionGeometry, SelectionRange, Style, TerminalGrid,
     },
 };
@@ -780,7 +780,7 @@ fn update_terminal_material(
             state.cpu_cells.resize(cell_count, GpuCell::default());
 
             if cols > 0 && rows > 0 {
-                rebuild_cells(&grid, &mut state, &fonts, &mut atlas, phys_font_size, cols);
+                rebuild_cells(&mut state, &mut atlas, &grid, &fonts, phys_font_size, cols);
             }
 
             if state.cpu_cells.is_empty() {
@@ -853,68 +853,64 @@ fn update_terminal_material(
 }
 
 fn rebuild_cells(
-    grid: &TerminalGrid,
     state: &mut TerminalMaterialState,
-    fonts: &TerminalFonts,
     atlas: &mut GlyphAtlas,
+    grid: &TerminalGrid,
+    fonts: &TerminalFonts,
     phys_font_size: u16,
     cols: u32,
 ) {
     let packed_palette = PackedPalette::build(&grid.palette);
     for (row_idx, row) in grid.cells.iter().enumerate() {
-        let mut col: u32 = 0;
-        for cell in row {
+        debug_assert_eq!(
+            row.len(),
+            cols as usize,
+            "every retained row is exactly as wide as the grid"
+        );
+        let mut left_half: Option<GpuCell> = None;
+        for (col, slot) in row.iter().enumerate() {
+            let col = col as u32;
             if col >= cols {
                 break;
             }
-            // NOTE: width=0 cells are combining-mark grapheme clusters that
-            //       wire emits as a separate Cell (Run boundary lands inside
-            //       a cluster). They must not consume a column or write a
-            //       GPU slot — otherwise we get phantom dark boxes between
-            //       characters carrying the base cell's style flags.
-            if cell.width == 0 {
-                continue;
-            }
-            let cell_width = u32::from(cell.width);
-            let glyph_index = resolve_glyph_index(cell, state, fonts, atlas, phys_font_size);
-            let fg = packed_palette.cell_fg(cell.fg);
-            let bg = packed_palette.cell_bg(cell.bg);
-            let style_flags = u32::from(cell.style | style_from_combining_marks(&cell.text).bits());
-
             let target = (row_idx as u32 * cols + col) as usize;
-            if let Some(slot) = state.cpu_cells.get_mut(target) {
-                *slot = GpuCell {
-                    glyph_index,
-                    fg_packed: fg,
-                    bg_packed: bg,
-                    style_flags,
-                    hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.0),
-                };
-            }
-
-            // NOTE: For width=2 (CJK / wide) cells we ALSO populate the
-            //       right-half slot with the same glyph_index + fg + bg
-            //       and set STYLE_WIDE_RIGHT_HALF. The shader uses the
-            //       bit to anchor the wide glyph to the left-half cell's
-            //       origin (`in_cell_px_eff = in_cell_px + vec2(cell_pitch_px.x, 0)`),
-            //       rendering a continuous wide glyph across both cells.
-            //       Without this, the right half stays at GpuCell::default
-            //       (bg=0 transparent, glyph_index=GLYPH_NONE) and CJK
-            //       characters render as half-glyphs with black gaps.
-            if cell_width == 2 && col + 1 < cols {
-                let right_target = (row_idx as u32 * cols + col + 1) as usize;
-                if let Some(right_slot) = state.cpu_cells.get_mut(right_target) {
-                    *right_slot = GpuCell {
-                        glyph_index,
-                        fg_packed: fg,
-                        bg_packed: bg,
-                        style_flags: style_flags | STYLE_WIDE_RIGHT_HALF,
+            match slot {
+                GridSlot::Empty => left_half = None,
+                GridSlot::Cell(cell) => {
+                    let gpu = GpuCell {
+                        glyph_index: resolve_glyph_index(cell, state, fonts, atlas, phys_font_size),
+                        fg_packed: packed_palette.cell_fg(cell.fg),
+                        bg_packed: packed_palette.cell_bg(cell.bg),
+                        style_flags: u32::from(
+                            cell.style | style_from_combining_marks(&cell.text).bits(),
+                        ),
                         hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.0),
                     };
+                    if let Some(target) = state.cpu_cells.get_mut(target) {
+                        *target = gpu;
+                    }
+                    left_half = (cell.width == 2).then_some(gpu);
+                }
+                // NOTE: For width=2 (CJK / wide) cells we ALSO populate the
+                //       right-half slot with the same glyph_index + fg + bg
+                //       and set STYLE_WIDE_RIGHT_HALF. The shader uses the
+                //       bit to anchor the wide glyph to the left-half cell's
+                //       origin (`in_cell_px_eff = in_cell_px + vec2(cell_pitch_px.x, 0)`),
+                //       rendering a continuous wide glyph across both cells.
+                //       Without this, the right half stays at GpuCell::default
+                //       (bg=0 transparent, glyph_index=GLYPH_NONE) and CJK
+                //       characters render as half-glyphs with black gaps.
+                GridSlot::WideTrailer => {
+                    if let Some(left) = left_half
+                        && let Some(target) = state.cpu_cells.get_mut(target)
+                    {
+                        *target = GpuCell {
+                            style_flags: left.style_flags | STYLE_WIDE_RIGHT_HALF,
+                            ..left
+                        };
+                    }
                 }
             }
-
-            col = col.saturating_add(cell_width);
         }
     }
 }
@@ -1025,11 +1021,10 @@ mod tests {
     }
 
     fn cell_with_link(text: &str, link: Option<u32>) -> GridCell {
-        use crate::schema::{Color as CellColor, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri};
+        use crate::schema::{Color as CellColor, Hyperlink, HyperlinkId, HyperlinkUri};
         GridCell {
             text: text.to_string(),
             width: 1,
-            point: GridPoint::default(),
             fg: CellColor::DefaultForeground,
             bg: CellColor::DefaultBackground,
             style: 0,
@@ -1089,23 +1084,23 @@ mod tests {
             cell.width = 1;
             cell
         };
-        let zero_width = {
-            let mut cell = cell_with_link("\u{0301}", Some(9));
-            cell.width = 0;
-            cell
-        };
         let plain = cell_with_link("z", None);
         let grid = TerminalGrid {
             cols: 4,
             rows: 1,
-            cells: vec![vec![wide, combining, zero_width, plain]],
+            cells: vec![vec![
+                GridSlot::Cell(wide),
+                GridSlot::WideTrailer,
+                GridSlot::Cell(combining),
+                GridSlot::Cell(plain),
+            ]],
             ..Default::default()
         };
         let mut state = state_for(4);
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
-        rebuild_cells(&grid, &mut state, &fonts, &mut atlas, 16, 4);
+        rebuild_cells(&mut state, &mut atlas, &grid, &fonts, 16, 4);
 
         let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
         assert_eq!(
@@ -1155,7 +1150,7 @@ mod tests {
         let grid = TerminalGrid {
             cols: 2,
             rows: 1,
-            cells: vec![vec![linked, unlinked]],
+            cells: vec![vec![GridSlot::Cell(linked), GridSlot::Cell(unlinked)]],
             ..Default::default()
         };
         let mut state = TerminalMaterialState {
@@ -1172,7 +1167,7 @@ mod tests {
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
-        rebuild_cells(&grid, &mut state, &fonts, &mut atlas, 16, 2);
+        rebuild_cells(&mut state, &mut atlas, &grid, &fonts, 16, 2);
 
         assert_eq!(state.cpu_cells[0].hyperlink_id, 7);
         assert_eq!(state.cpu_cells[1].hyperlink_id, 0);

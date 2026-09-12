@@ -2,9 +2,8 @@
 //! cells from the frames applied to it.
 
 use crate::schema::{
-    AnchoredPlacement, CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, GridColumn,
-    GridLine, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri, Palette, Run, SelectionRange,
-    ViCursor,
+    AnchoredPlacement, CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, Hyperlink,
+    HyperlinkId, HyperlinkUri, Palette, Run, SelectionRange, ViCursor,
 };
 use bevy::prelude::*;
 use orzma_vt::prelude::Frame;
@@ -19,10 +18,8 @@ use unicode_width::UnicodeWidthStr;
 pub struct GridCell {
     /// The grapheme cluster text for this cell.
     pub text: String,
-    /// Display width: 2 for wide CJK, 0 for combining marks, 1 otherwise.
+    /// Display width: 2 for wide CJK, 1 otherwise.
     pub width: u8,
-    /// Active-grid coordinates of the cell.
-    pub point: GridPoint,
     /// Foreground color, symbolic.
     pub fg: Color,
     /// Background color, symbolic.
@@ -34,11 +31,35 @@ pub struct GridCell {
 }
 
 impl GridCell {
-    /// Whether this cell paints no glyph: a zero-width cell (combining mark /
-    /// wide-char spacer) or one whose text is empty or all whitespace.
+    /// Whether this cell paints no glyph: its text is empty or all
+    /// whitespace.
     #[inline]
     pub fn is_blank(&self) -> bool {
-        self.width == 0 || self.text.trim().is_empty()
+        self.text.trim().is_empty()
+    }
+}
+
+/// One column of the renderer's CPU-side grid.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum GridSlot {
+    /// No run covered this column.
+    #[default]
+    Empty,
+    /// The grapheme cluster occupying this column.
+    Cell(GridCell),
+    /// The right half of the wide cell in the preceding column.
+    WideTrailer,
+}
+
+impl GridSlot {
+    /// The cell painting this column, or `None` for a column no run
+    /// covered and for a wide cell's right half.
+    #[inline]
+    pub fn cell(&self) -> Option<&GridCell> {
+        match self {
+            Self::Cell(cell) => Some(cell),
+            Self::Empty | Self::WideTrailer => None,
+        }
     }
 }
 
@@ -50,8 +71,8 @@ pub struct TerminalGrid {
     pub cols: u16,
     /// Visible row count.
     pub rows: u16,
-    /// Cell grid indexed `[row][col_grapheme_index]`.
-    pub cells: Vec<Vec<GridCell>>,
+    /// Cell grid indexed `[row][col]`.
+    pub cells: Vec<Vec<GridSlot>>,
     /// Current cursor state, absent until the first frame arrives.
     pub cursor: Option<Cursor>,
     /// Lines scrolled back from the live tail; 0 = at live tail.
@@ -83,33 +104,19 @@ pub struct TerminalGrid {
 
 impl TerminalGrid {
     /// Resolves `(row, col)` to the hyperlink at that visible cell, if
-    /// any. `col` is a column coordinate, not a grapheme index — wide
-    /// cells (width=2) match both of their columns, and width-0
-    /// trailers are skipped without consuming a column. Returns
-    /// `None` for out-of-bounds or unlinked cells.
-    //
-    // NOTE: `self.cells[row]` is grapheme-indexed (one entry per
-    //       cluster from `runs_to_cells`), so a column-to-cell walk
-    //       is required — direct `cells[row][col]` indexing would
-    //       desynchronize after any wide char or width-0 trailer.
-    //       Must mirror the column-advance logic in
-    //       `material::rebuild_cells`.
+    /// any. `col` is a column coordinate: both columns of a wide cell
+    /// resolve to the same hyperlink. Returns `None` for out-of-bounds
+    /// or unlinked cells.
     pub fn hyperlink_at(&self, row: u16, col: u16) -> Option<(HyperlinkId, &HyperlinkUri)> {
-        let row_cells = self.cells.get(row as usize)?;
-        let mut current_col: u32 = 0;
-        let target = u32::from(col);
-        for cell in row_cells {
-            if cell.width == 0 {
-                continue;
-            }
-            let cell_end = current_col.saturating_add(u32::from(cell.width));
-            if target >= current_col && target < cell_end {
-                let link = cell.hyperlink.as_ref()?;
-                return Some((link.id, &link.uri));
-            }
-            current_col = cell_end;
-        }
-        None
+        let row_slots = self.cells.get(usize::from(row))?;
+        let col = usize::from(col);
+        let cell = match row_slots.get(col)? {
+            GridSlot::Cell(cell) => cell,
+            GridSlot::WideTrailer => row_slots.get(col.checked_sub(1)?)?.cell()?,
+            GridSlot::Empty => return None,
+        };
+        let link = cell.hyperlink.as_ref()?;
+        Some((link.id, &link.uri))
     }
 
     /// Projects the cursor into viewport cells as `(column, row)`, or
@@ -240,7 +247,15 @@ impl TerminalGrid {
         } = frame;
         self.cols = size.cols;
         self.rows = size.rows;
-        self.cells.resize_with(usize::from(size.rows), Vec::new);
+        let cols = usize::from(size.cols);
+        self.cells
+            .resize_with(usize::from(size.rows), || vec![GridSlot::Empty; cols]);
+        for row in &mut self.cells {
+            if row.len() != cols {
+                row.clear();
+                row.resize(cols, GridSlot::Empty);
+            }
+        }
         for link in hyperlinks {
             if !self.knows_hyperlink(link.id) {
                 self.hyperlinks.push((link.id, link.uri.clone()));
@@ -250,8 +265,7 @@ impl TerminalGrid {
             let Some(slot) = self.cells.get_mut(usize::from(row.line.0)) else {
                 continue;
             };
-            let line = row.line.to_grid(*display_offset);
-            *slot = runs_to_cells(&row.contents, line, &self.hyperlinks);
+            *slot = runs_to_cells(&row.contents, size.cols, &self.hyperlinks);
         }
         self.cursor = Some(*cursor);
         self.display_offset = display_offset.0;
@@ -281,23 +295,21 @@ fn lookup_hyperlink(
         .map(|(_, uri)| uri)
 }
 
-/// Materializes one row's attribute runs into cells, resolving each
-/// run's hyperlink id against the retained table.
+/// Materializes one row's attribute runs into exactly `cols` column
+/// slots, resolving each run's hyperlink id against the retained table.
 ///
-/// Column advance follows display width — a wide grapheme takes two
-/// columns and a combining mark none.
+/// A wide grapheme takes a cell slot plus the [`GridSlot::WideTrailer`]
+/// that follows it; a zero-width grapheme takes no column and is
+/// dropped. Runs that do not fill the row leave [`GridSlot::Empty`]
+/// behind, and content past the last column is truncated.
 fn runs_to_cells(
     runs: &[Run],
-    line: GridLine,
+    cols: u16,
     hyperlinks: &[(HyperlinkId, HyperlinkUri)],
-) -> Vec<GridCell> {
-    // NOTE: The column walk here must advance exactly as
-    // `material::rebuild_cells` re-derives it from `GridCell::width`;
-    // a change to one without the other misaligns every glyph after
-    // the first wide character.
-    let mut out: Vec<GridCell> =
-        Vec::with_capacity(runs.iter().map(|run| usize::from(run.cols)).sum());
-    let mut column: u16 = 0;
+) -> Vec<GridSlot> {
+    let width = usize::from(cols);
+    let mut out = vec![GridSlot::Empty; width];
+    let mut column = 0usize;
     for run in runs {
         let hyperlink = run.hyperlink_id.and_then(|id| {
             lookup_hyperlink(hyperlinks, id).map(|uri| Hyperlink {
@@ -306,20 +318,26 @@ fn runs_to_cells(
             })
         });
         for grapheme in run.text.graphemes(true) {
-            let width = grapheme.width().min(2) as u8;
-            out.push(GridCell {
+            let cell_width = grapheme.width().min(2) as u8;
+            if cell_width == 0 {
+                continue;
+            }
+            if column >= width {
+                return out;
+            }
+            out[column] = GridSlot::Cell(GridCell {
                 text: grapheme.to_string(),
-                width,
-                point: GridPoint {
-                    line,
-                    column: GridColumn(column),
-                },
+                width: cell_width,
                 fg: run.fg,
                 bg: run.bg,
                 style: run.style.bits(),
                 hyperlink: hyperlink.clone(),
             });
-            column = column.saturating_add(u16::from(width));
+            column += 1;
+            if cell_width == 2 && column < width {
+                out[column] = GridSlot::WideTrailer;
+                column += 1;
+            }
         }
     }
     out
@@ -332,7 +350,7 @@ impl TerminalGrid {
         Self {
             cols: 1,
             rows: 1,
-            cells: vec![vec![]],
+            cells: vec![vec![GridSlot::Empty]],
             cursor: Some(Cursor::default()),
             ..Default::default()
         }
@@ -369,7 +387,6 @@ mod tests {
         GridCell {
             text: text.to_string(),
             width,
-            point: GridPoint::default(),
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
             style: 0,
@@ -555,19 +572,16 @@ mod tests {
         assert!(grid.hyperlink_at(0, 99).is_none());
     }
 
-    /// Asserts that a linked width-0 trailer cell never resolves at a
-    /// column of its own.
+    /// Asserts that a column no run covered resolves to no hyperlink.
     ///
-    /// Case: a combining mark arrives as its own wire cell inside an
-    /// OSC 8 link, so the trailer carries the link but occupies no
-    /// column.
+    /// Case: the pointer hovers a column of the row that no attribute
+    /// run painted this frame.
     #[test]
-    fn hyperlink_at_returns_none_for_width_zero_trailer() {
-        let cell = cell_with_link("\u{0301}", 0, Some((5, "https://example")));
+    fn hyperlink_at_returns_none_for_empty_slot() {
         let grid = TerminalGrid {
             cols: 4,
             rows: 1,
-            cells: vec![vec![cell]],
+            cells: vec![vec![GridSlot::Empty; 4]],
             ..Default::default()
         };
         assert!(grid.hyperlink_at(0, 0).is_none());
@@ -583,7 +597,7 @@ mod tests {
         let grid = TerminalGrid {
             cols: 4,
             rows: 1,
-            cells: vec![vec![cell]],
+            cells: vec![vec![GridSlot::Cell(cell)]],
             ..Default::default()
         };
         let (id, uri) = grid.hyperlink_at(0, 0).expect("hyperlink present");
@@ -601,7 +615,7 @@ mod tests {
         let grid = TerminalGrid {
             cols: 4,
             rows: 1,
-            cells: vec![vec![cell]],
+            cells: vec![vec![GridSlot::Cell(cell)]],
             ..Default::default()
         };
         assert!(grid.hyperlink_at(0, 0).is_none());
@@ -619,7 +633,11 @@ mod tests {
         let grid = TerminalGrid {
             cols: 3,
             rows: 1,
-            cells: vec![vec![wide_linked, trailing]],
+            cells: vec![vec![
+                GridSlot::Cell(wide_linked),
+                GridSlot::WideTrailer,
+                GridSlot::Cell(trailing),
+            ]],
             ..Default::default()
         };
         let (id, uri) = grid.hyperlink_at(0, 0).expect("left half should resolve");
@@ -629,28 +647,6 @@ mod tests {
         assert_eq!(id, HyperlinkId(7));
         assert_eq!(uri.as_str(), "https://example");
         assert!(grid.hyperlink_at(0, 2).is_none());
-    }
-
-    /// Asserts that a width-0 trailer does not shift the columns of
-    /// the cells that follow it.
-    ///
-    /// Case: a combining mark emitted as its own wire cell sits
-    /// between a plain cell and a linked cell, and the user hovers the
-    /// linked cell's column.
-    #[test]
-    fn hyperlink_at_skips_width_zero_trailer_in_column_walk() {
-        let base = cell_with_link("a", 1, None);
-        let trailer = cell_with_link("\u{0301}", 0, None);
-        let linked = cell_with_link("x", 1, Some((9, "https://x")));
-        let grid = TerminalGrid {
-            cols: 2,
-            rows: 1,
-            cells: vec![vec![base, trailer, linked]],
-            ..Default::default()
-        };
-        assert!(grid.hyperlink_at(0, 0).is_none());
-        let (id, _uri) = grid.hyperlink_at(0, 1).expect("linked cell at col 1");
-        assert_eq!(id, HyperlinkId(9));
     }
 
     /// Asserts that a run's hyperlink id resolves against the retained
@@ -666,40 +662,75 @@ mod tests {
             run_with_link("b", Some(HyperlinkId(9))),
         ];
         let table = vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))];
-        let cells = runs_to_cells(&runs, GridLine(0), &table);
+        let slots = runs_to_cells(&runs, 2, &table);
         assert_eq!(
-            cells[0].hyperlink.as_ref().map(|h| h.id),
+            slots[0]
+                .cell()
+                .and_then(|c| c.hyperlink.as_ref())
+                .map(|h| h.id),
             Some(HyperlinkId(7))
         );
         assert_eq!(
-            cells[0].hyperlink.as_ref().map(|h| h.uri.as_str()),
+            slots[0]
+                .cell()
+                .and_then(|c| c.hyperlink.as_ref())
+                .map(|h| h.uri.as_str()),
             Some("https://example")
         );
-        assert!(cells[1].hyperlink.is_none());
+        assert!(
+            slots[1]
+                .cell()
+                .expect("run fills every slot")
+                .hyperlink
+                .is_none()
+        );
     }
 
-    /// Asserts that cell points carry the given line and a column walk
-    /// that advances by display width.
+    /// Asserts that a row materializes one slot per column, with a wide
+    /// grapheme taking a cell slot and the trailer slot that follows it.
     ///
-    /// Case: a row mixes a wide CJK grapheme with ASCII text on a
-    /// scrolled-back history line.
+    /// Case: a CJK character is printed at the start of a four-column
+    /// row.
     #[test]
-    fn runs_to_cells_assigns_points_by_display_width() {
-        let cells = runs_to_cells(&[run_with_link("あb", None)], GridLine(-3), &[]);
-        assert_eq!(
-            cells[0].point,
-            GridPoint {
-                line: GridLine(-3),
-                column: GridColumn(0),
-            }
-        );
-        assert_eq!(
-            cells[1].point,
-            GridPoint {
-                line: GridLine(-3),
-                column: GridColumn(2),
-            }
-        );
+    fn runs_to_cells_indexes_slots_by_column() {
+        let slots = runs_to_cells(&[run_with_link("あz", None)], 4, &[]);
+        assert_eq!(slots.len(), 4);
+        assert_eq!(slots[0].cell().map(|c| c.text.as_str()), Some("あ"));
+        assert_eq!(slots[0].cell().map(|c| c.width), Some(2));
+        assert_eq!(slots[1], GridSlot::WideTrailer);
+        assert_eq!(slots[2].cell().map(|c| c.text.as_str()), Some("z"));
+        assert_eq!(slots[3], GridSlot::Empty);
+    }
+
+    /// Asserts that a combining mark inside a grapheme cluster shares
+    /// its base character's column instead of taking one of its own.
+    ///
+    /// Case: a program prints an accented latin word, so the accent
+    /// arrives inside the same cluster as the letter it modifies.
+    #[test]
+    fn runs_to_cells_keeps_a_combining_cluster_in_one_column() {
+        let slots = runs_to_cells(&[run_with_link("a\u{0301}b", None)], 3, &[]);
+        assert_eq!(slots[0].cell().map(|c| c.text.as_str()), Some("a\u{0301}"));
+        assert_eq!(slots[1].cell().map(|c| c.text.as_str()), Some("b"));
+        assert_eq!(slots[2], GridSlot::Empty);
+    }
+
+    /// Asserts that a grapheme whose display width is zero is dropped
+    /// rather than given a column of its own.
+    ///
+    /// Case: a run boundary splits a cluster, so the trailing combining
+    /// mark arrives as a run of its own.
+    #[test]
+    fn runs_to_cells_drops_a_standalone_combining_mark() {
+        let runs = vec![
+            run_with_link("a", None),
+            run_with_link("\u{0301}", None),
+            run_with_link("b", None),
+        ];
+        let slots = runs_to_cells(&runs, 3, &[]);
+        assert_eq!(slots[0].cell().map(|c| c.text.as_str()), Some("a"));
+        assert_eq!(slots[1].cell().map(|c| c.text.as_str()), Some("b"));
+        assert_eq!(slots[2], GridSlot::Empty);
     }
 
     fn dirty_row(line: u16, text: &str) -> DirtyRow {
@@ -777,8 +808,8 @@ mod tests {
         assert!(!grid.differs_from(&frame));
     }
 
-    /// Asserts that a row inside the grid is applied at the line the
-    /// display offset projects it to, and counts as a difference.
+    /// Asserts that a row inside the grid replaces that row's contents
+    /// when applied, and counts as a difference.
     ///
     /// Case: a build prints one line while the user is scrolled back
     /// three rows.
@@ -800,9 +831,8 @@ mod tests {
         };
         assert!(grid.differs_from(&frame));
         grid.apply(&frame);
-        assert_eq!(grid.cells[1][0].text, "x");
-        assert_eq!(grid.cells[1][0].point.line, GridLine(-2));
-        assert!(grid.cells[0].is_empty());
+        assert_eq!(grid.cells[1][0].cell().map(|c| c.text.as_str()), Some("x"));
+        assert!(grid.cells[0].iter().all(|slot| *slot == GridSlot::Empty));
     }
 
     /// Asserts that a grid built at the frame's size but without cell
@@ -827,7 +857,7 @@ mod tests {
         assert!(grid.differs_from(&frame));
         grid.apply(&frame);
         assert_eq!(grid.cells.len(), 2);
-        assert_eq!(grid.cells[1][0].text, "b");
+        assert_eq!(grid.cells[1][0].cell().map(|c| c.text.as_str()), Some("b"));
         assert!(!grid.differs_from(&Frame {
             size: GridSize { cols: 2, rows: 2 },
             ..quiet_frame()
@@ -856,7 +886,7 @@ mod tests {
         grid.apply(&frame);
         assert_eq!((grid.cols, grid.rows), (1, 1));
         assert_eq!(grid.cells.len(), 1);
-        assert_eq!(grid.cells[0][0].text, "a");
+        assert_eq!(grid.cells[0][0].cell().map(|c| c.text.as_str()), Some("a"));
     }
 
     /// Asserts that a frame changing only the column count is a
@@ -915,7 +945,7 @@ mod tests {
         grid.apply(&frame);
         assert_eq!((grid.cols, grid.rows), (3, 2));
         assert_eq!(grid.cells.len(), 2);
-        assert_eq!(grid.cells[1][0].text, "b");
+        assert_eq!(grid.cells[1][0].cell().map(|c| c.text.as_str()), Some("b"));
     }
 
     /// Asserts that a placements list replaces the mirror wholesale,
@@ -1041,7 +1071,10 @@ mod tests {
             ..quiet_frame()
         });
         assert_eq!(
-            grid.cells[0][0].hyperlink.as_ref().map(|h| h.uri.as_str()),
+            grid.cells[0][0]
+                .cell()
+                .and_then(|c| c.hyperlink.as_ref())
+                .map(|h| h.uri.as_str()),
             Some("https://earlier")
         );
     }

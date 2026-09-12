@@ -348,23 +348,24 @@ mod tests {
     /// `HyperlinkId(7)`, shared by the hover tests.
     fn linked_grid() -> TerminalGrid {
         use bevy_orzma_tty_renderer::schema::{
-            Color, GridCell, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri,
+            Color, GridCell, GridSlot, Hyperlink, HyperlinkId, HyperlinkUri,
         };
+        let mut row = vec![GridSlot::Empty; 10];
+        row[0] = GridSlot::Cell(GridCell {
+            text: "x".to_string(),
+            width: 1,
+            fg: Color::DefaultForeground,
+            bg: Color::DefaultBackground,
+            style: 0,
+            hyperlink: Some(Hyperlink {
+                id: HyperlinkId(7),
+                uri: HyperlinkUri::new("https://example.com"),
+            }),
+        });
         TerminalGrid {
             cols: 10,
             rows: 5,
-            cells: vec![vec![GridCell {
-                text: "x".to_string(),
-                width: 1,
-                point: GridPoint::default(),
-                fg: Color::DefaultForeground,
-                bg: Color::DefaultBackground,
-                style: 0,
-                hyperlink: Some(Hyperlink {
-                    id: HyperlinkId(7),
-                    uri: HyperlinkUri::new("https://example.com"),
-                }),
-            }]],
+            cells: vec![row],
             ..default()
         }
     }
