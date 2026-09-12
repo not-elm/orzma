@@ -103,7 +103,7 @@ fn a_soft_reset_that_returns_the_palette_stages_a_repaint() {
 }
 
 /// Asserts that a soft reset returns the cursor origin to the upper
-/// left corner, so a later `DECSTBM` homes at the first screen row.
+/// left corner.
 ///
 /// Case: a full-screen program sets a scrolling region with origin mode
 /// on, and the shell resets the terminal and sets its own region
@@ -146,8 +146,7 @@ fn a_soft_reset_restores_the_default_g0_designation() {
     assert_eq!(glyph_at(&device, 0, 0), 'q');
 }
 
-/// Asserts that a soft reset returns a locking shift into G1 to G0 and
-/// restores the default designation of G1.
+/// Asserts that a soft reset returns a locking shift into G1 to G0.
 ///
 /// Case: a program designates line drawing into G1, locks it into GL
 /// with `SO`, and exits without shifting back.
@@ -157,8 +156,18 @@ fn a_soft_reset_returns_the_g1_locking_shift() {
     assert_eq!(glyph_at(&device, 0, 0), 'q');
 }
 
-/// Asserts that a soft reset returns a locking shift into G2 to G0 and
-/// restores the default designation of G2.
+/// Asserts that a soft reset restores the default designation of G1.
+///
+/// Case: a program designates line drawing into G1 and locks it into
+/// GL with `SO`, and after the shell resets the terminal a later
+/// program invokes G1 again assuming the default character set.
+#[test]
+fn a_soft_reset_restores_the_default_g1_designation() {
+    let device = interpret(b"\x1b)0\x0e\x1b[!p\x0eq");
+    assert_eq!(glyph_at(&device, 0, 0), 'q');
+}
+
+/// Asserts that a soft reset returns a locking shift into G2 to G0.
 ///
 /// Case: a program designates line drawing into G2, locks it into GL
 /// with `LS2`, and exits without shifting back.
@@ -168,8 +177,7 @@ fn a_soft_reset_returns_the_g2_locking_shift() {
     assert_eq!(glyph_at(&device, 0, 0), 'q');
 }
 
-/// Asserts that a soft reset returns a locking shift into G3 to G0 and
-/// restores the default designation of G3.
+/// Asserts that a soft reset returns a locking shift into G3 to G0.
 ///
 /// Case: a program designates line drawing into G3, locks it into GL
 /// with `LS3`, and exits without shifting back.
@@ -182,10 +190,11 @@ fn a_soft_reset_returns_the_g3_locking_shift() {
 /// Asserts that a soft reset drops a single shift an application armed.
 ///
 /// Case: a program sends `SS2` and is killed before the graphic
-/// character that would have consumed it.
+/// character that would have consumed it, and a later program
+/// designates its own line-drawing set into G2 without invoking it.
 #[test]
 fn a_soft_reset_drops_a_pending_single_shift() {
-    let device = interpret(b"\x1b*0\x1bN\x1b[!pq");
+    let device = interpret(b"\x1b*0\x1bN\x1b[!p\x1b*0q");
     assert_eq!(glyph_at(&device, 0, 0), 'q');
 }
 
@@ -204,9 +213,8 @@ fn a_soft_reset_returns_the_pen_to_its_default() {
 /// Asserts that a soft reset returns the saved cursor to the home
 /// position with a default pen.
 ///
-/// Case: a program saves its cursor mid-screen with a coloured pen, the
-/// shell resets the terminal, and a later restore must not put the old
-/// position back.
+/// Case: a program saves its cursor mid-screen with a coloured pen, and
+/// the shell resets the terminal.
 #[test]
 fn a_soft_reset_returns_the_saved_cursor_to_home() {
     let device = interpret(b"\x1b[2;3H\x1b[31m\x1b7\x1b[!p\x1b8x");
