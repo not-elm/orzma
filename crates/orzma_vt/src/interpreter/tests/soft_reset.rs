@@ -1,7 +1,7 @@
 //! Tests for the soft terminal reset.
 
 use super::*;
-use crate::device::modes::{AutoWrap, KeypadMode};
+use crate::device::modes::{AutoWrap, CursorShape, KeypadMode};
 
 /// Asserts that a soft reset shows a cursor an application hid.
 ///
@@ -11,6 +11,18 @@ use crate::device::modes::{AutoWrap, KeypadMode};
 fn a_soft_reset_shows_a_hidden_cursor() {
     let device = interpret(b"\x1b[?25l\x1b[!p");
     assert!(device.cursor().visible);
+}
+
+/// Asserts that a soft reset returns the cursor shape and blink to
+/// their power-up values.
+///
+/// Case: nvim sets a blinking bar for insert mode and is killed before
+/// it restores the caret, and the shell runs `tput init` behind it.
+#[test]
+fn a_soft_reset_returns_the_cursor_shape_and_blink_to_their_defaults() {
+    let device = interpret(b"\x1b[5 q\x1b[!p");
+    assert_eq!(device.cursor().shape, CursorShape::Block);
+    assert!(!device.cursor().blinking);
 }
 
 /// Asserts that a soft reset returns the terminal to replace mode.
