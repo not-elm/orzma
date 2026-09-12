@@ -1040,6 +1040,99 @@ mod tests {
         }
     }
 
+    /// Returns the observable payload of each GPU slot as
+    /// `(glyph_index, fg, bg, style_flags, hyperlink_id)`.
+    fn gpu_cell_fingerprint(cells: &[GpuCell]) -> Vec<(u32, u32, u32, u32, u32)> {
+        cells
+            .iter()
+            .map(|cell| {
+                (
+                    cell.glyph_index,
+                    cell.fg_packed,
+                    cell.bg_packed,
+                    cell.style_flags,
+                    cell.hyperlink_id,
+                )
+            })
+            .collect()
+    }
+
+    /// Builds a state whose cell buffer is sized for `cell_count` slots.
+    fn state_for(cell_count: usize) -> TerminalMaterialState {
+        use bevy::platform::collections::HashMap;
+        TerminalMaterialState {
+            glyph_index_map: HashMap::new(),
+            cpu_cells: vec![GpuCell::default(); cell_count],
+            cpu_glyphs: Vec::new(),
+            last_atlas_generation: 0,
+            grid_dirty: true,
+            last_grid_dims: (0, 0),
+            last_phys_font_size: 0,
+            cached_metrics: None,
+            initialized: false,
+        }
+    }
+
+    /// Asserts the GPU slots a row of a wide char, a combining mark and a
+    /// linked cell produces, pinning the payload of every slot including
+    /// the wide char's right half.
+    ///
+    /// Case: a CJK filename with an accented latin suffix is printed
+    /// inside an OSC 8 hyperlink.
+    #[test]
+    fn rebuild_cells_pins_wide_combining_and_linked_slots() {
+        let mut wide = cell_with_link("あ", Some(3));
+        wide.width = 2;
+        let combining = {
+            let mut cell = cell_with_link("e\u{0332}", None);
+            cell.width = 1;
+            cell
+        };
+        let zero_width = {
+            let mut cell = cell_with_link("\u{0301}", Some(9));
+            cell.width = 0;
+            cell
+        };
+        let plain = cell_with_link("z", None);
+        let grid = TerminalGrid {
+            cols: 4,
+            rows: 1,
+            cells: vec![vec![wide, combining, zero_width, plain]],
+            ..Default::default()
+        };
+        let mut state = state_for(4);
+        let mut atlas = GlyphAtlas::default();
+        let fonts = TerminalFonts::default();
+
+        rebuild_cells(&grid, &mut state, &fonts, &mut atlas, 16, 4);
+
+        let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
+        assert_eq!(fingerprint.len(), 4);
+        assert_eq!(
+            fingerprint[0].4, 3,
+            "the wide cell carries its hyperlink id"
+        );
+        assert_eq!(
+            fingerprint[1].4, 3,
+            "the wide cell's right half repeats the hyperlink id"
+        );
+        assert_eq!(
+            fingerprint[1].0, fingerprint[0].0,
+            "the right half repeats the left half's glyph"
+        );
+        assert_ne!(
+            fingerprint[1].3 & STYLE_WIDE_RIGHT_HALF,
+            0,
+            "the right half is flagged"
+        );
+        assert_eq!(fingerprint[2].4, 0, "the combining cell is unlinked");
+        assert_eq!(fingerprint[3].4, 0, "the plain cell is unlinked");
+        assert!(
+            fingerprint.iter().all(|slot| slot.4 != 9),
+            "the zero-width cell occupies no GPU slot"
+        );
+    }
+
     /// Asserts that a linked cell's wire id reaches its GPU slot while
     /// an unlinked cell's slot keeps the 0 sentinel.
     ///
