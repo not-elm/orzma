@@ -603,8 +603,8 @@ impl Executor<'_> {
     /// point.
     ///
     /// A command that changes a slot stages one full repaint:
-    /// `Frame::palette` obliges a palette change to, because the
-    /// emit-time diff only guarantees a frame, not that it carries rows.
+    /// `Frame::palette` requires that repaint, because the emit-time
+    /// diff only guarantees a frame, not that it carries rows.
     fn apply_palette_requests(&mut self, params: &[&[u8]]) {
         let terminator = OscTerminator::from_byte(self.current_byte);
         let mut changed = false;
