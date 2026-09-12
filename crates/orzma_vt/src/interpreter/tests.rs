@@ -57,6 +57,11 @@ fn glyph_at(device: &DeviceState, line: u16, column: u16) -> char {
     device.active_screen().viewport_row(ViewportLine(line))[column].c
 }
 
+/// The whole cell at `column` of the device's `line`th visible row.
+fn cell_at(device: &DeviceState, line: u16, column: u16) -> Cell {
+    device.active_screen().viewport_row(ViewportLine(line))[column]
+}
+
 /// Reports the reply bytes `chunk` produced.
 fn replies_of(chunk: &[u8]) -> Vec<u8> {
     let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10);

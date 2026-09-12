@@ -222,3 +222,129 @@ fn a_soft_reset_returns_the_saved_cursor_to_home() {
     assert_eq!(cell.c, 'x');
     assert_eq!(cell.fg, Color::DefaultForeground);
 }
+
+/// Asserts that a soft reset leaves the cells on screen alone.
+///
+/// Case: the shell runs `tput init` with a screen full of command
+/// output the user still wants to read.
+#[test]
+fn a_soft_reset_leaves_the_screen_contents_alone() {
+    let device = interpret(b"ab\x1b[!p");
+    assert_eq!(glyph_at(&device, 0, 0), 'a');
+    assert_eq!(glyph_at(&device, 0, 1), 'b');
+}
+
+/// Asserts that a soft reset leaves an armed deferred wrap armed, so
+/// the next character wraps instead of replacing the last column.
+///
+/// Case: the shell fills a line to the right edge and `tput init`
+/// arrives before the character that completes the wrap.
+#[test]
+fn a_soft_reset_leaves_an_armed_deferred_wrap_alone() {
+    let device = interpret(b"abcd\x1b[!pe");
+    assert_eq!(glyph_at(&device, 0, 3), 'd');
+    assert_eq!(glyph_at(&device, 1, 0), 'e');
+}
+
+/// Asserts that a soft reset leaves the tabulation stops as they are.
+///
+/// Case: a program clears every tab stop to lay out a table and the
+/// shell resets the terminal before the next tab.
+#[test]
+fn a_soft_reset_leaves_the_tab_stops_alone() {
+    let device = interpret_wide(b"\x1b[3g\x1b[!p\tx");
+    assert_eq!(glyph_at(&device, 0, 19), 'x');
+}
+
+/// Asserts that a soft reset leaves the mouse tracking and bracketed
+/// paste modes as they are.
+///
+/// Case: a full-screen program with mouse reporting on issues a soft
+/// reset as part of its own start-up and goes on receiving reports.
+#[test]
+fn a_soft_reset_leaves_the_mouse_and_paste_modes_alone() {
+    let device = interpret(b"\x1b[?1000h\x1b[?2004h\x1b[!p");
+    assert_eq!(device.modes().mouse_tracking, MouseTracking::Clicks);
+    assert!(device.modes().bracketed_paste);
+}
+
+/// Asserts that a soft reset leaves the alternate screen shown.
+///
+/// Case: a full-screen editor issues a soft reset as part of its own
+/// start-up, after it has already taken the alternate screen.
+#[test]
+fn a_soft_reset_leaves_the_alternate_screen_shown() {
+    let mut session = Session::new();
+    session.feed(b"\x1b[?1049h\x1b[!p");
+    assert_eq!(session.active_screen(), ScreenKind::Alternate);
+}
+
+/// Asserts that a soft reset on the alternate screen leaves the primary
+/// screen's pen alone.
+///
+/// Case: the shell sets a coloured pen, a full-screen program takes the
+/// alternate screen and soft resets it, and the shell goes on printing
+/// after the program exits.
+#[test]
+fn a_soft_reset_on_the_alternate_screen_leaves_the_primary_pen_alone() {
+    let device = interpret(b"\x1b[31m\x1b[?47h\x1b[!p\x1b[?47lx");
+    assert_eq!(cell_at(&device, 0, 0).fg, Color::Indexed(1));
+}
+
+/// Asserts that a soft reset on the alternate screen leaves the primary
+/// screen's character set mapping alone.
+///
+/// Case: the shell designates the line-drawing set to draw a rule, a
+/// full-screen program takes the alternate screen and soft resets it,
+/// and the shell draws again after the program exits.
+#[test]
+fn a_soft_reset_on_the_alternate_screen_leaves_the_primary_character_set_alone() {
+    let device = interpret(b"\x1b(0\x1b[?47h\x1b[!p\x1b[?47lq");
+    assert_eq!(glyph_at(&device, 0, 0), '─');
+}
+
+/// Asserts that a soft reset on the alternate screen leaves the primary
+/// screen's scrolling margins alone.
+///
+/// Case: the shell sets a scrolling region for a progress display, a
+/// full-screen program takes the alternate screen and soft resets it,
+/// and the shell scrolls its region again after the program exits.
+#[test]
+fn a_soft_reset_on_the_alternate_screen_leaves_the_primary_margins_alone() {
+    let device = interpret(b"x\x1b[2;3r\x1b[?47h\x1b[!p\x1b[?47l\x1b[1S");
+    assert_eq!(glyph_at(&device, 0, 0), 'x');
+}
+
+/// Asserts that a soft reset on the alternate screen leaves the cursor
+/// the alternate-screen entry saved on the primary screen.
+///
+/// Case: a full-screen program enters the alternate screen, soft resets
+/// it as part of its start-up, and exits back to a shell whose prompt
+/// sat part-way down the screen.
+#[test]
+fn a_soft_reset_keeps_the_cursor_the_alternate_entry_saved() {
+    let device = interpret(b"\x1b[2;3H\x1b[?1049h\x1b[!p\x1b[?1049lx");
+    assert_eq!(glyph_at(&device, 1, 2), 'x');
+}
+
+/// Asserts that a private-marked spelling does not reach the soft
+/// reset.
+///
+/// Case: a program emits `CSI ? ! p`, a private-marked spelling, while
+/// the caret is hidden.
+#[test]
+fn a_private_marked_spelling_does_not_reach_the_soft_reset() {
+    let device = interpret(b"\x1b[?25l\x1b[?!p");
+    assert!(!device.cursor().visible);
+}
+
+/// Asserts that a soft reset carrying a parameter is answered rather
+/// than ignored.
+///
+/// Case: a program spells the soft reset `CSI 1 ! p` instead of the
+/// `CSI ! p` the manuals define.
+#[test]
+fn a_parameterized_soft_reset_is_answered() {
+    let device = interpret(b"\x1b[?25l\x1b[1!p");
+    assert!(device.cursor().visible);
+}
