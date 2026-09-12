@@ -168,6 +168,10 @@ pub enum CursorShape {
 /// Whether the text cursor blinks or is drawn continuously.
 ///
 /// Both screens share one value, and `DECSC` does not carry it.
+///
+/// # Control Functions
+///
+/// - `DECSET 12` / `DECRST 12` (AT&T 610)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CursorBlink {
     /// The cursor is drawn continuously; this is the power-up default.
@@ -175,6 +179,23 @@ pub enum CursorBlink {
     Steady,
     /// The cursor alternates between drawn and not drawn.
     Blinking,
+}
+
+impl CursorBlink {
+    /// The state `DECSET 12` selects when set and `DECRST 12` when
+    /// reset.
+    ///
+    /// # References
+    ///
+    /// - xterm-ctlseqs.pdf p.18 — "Start blinking cursor (AT&T 610)."
+    /// - xterm-ctlseqs.pdf p.21 — "Stop blinking cursor (AT&T 610)."
+    pub fn from_decset(enabled: bool) -> Self {
+        if enabled {
+            Self::Blinking
+        } else {
+            Self::Steady
+        }
+    }
 }
 
 /// How the text cursor is presented.

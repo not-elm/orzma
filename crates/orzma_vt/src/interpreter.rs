@@ -7,7 +7,9 @@ mod csi;
 mod osc;
 mod sgr;
 
-use crate::device::modes::{AutoWrap, InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable};
+use crate::device::modes::{
+    AutoWrap, CursorBlink, InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable,
+};
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
 use crate::interpreter::osc::{
@@ -695,6 +697,8 @@ impl Executor<'_> {
                     .set_origin_mode(OriginMode::from_decset(enabled)),
                 // DECAWM
                 7 => self.device.set_auto_wrap(AutoWrap::from_decset(enabled)),
+                // Blinking cursor (AT&T 610)
+                12 => self.device.modes_mut().text_cursor.blink = CursorBlink::from_decset(enabled),
                 // DECTCEM
                 25 => {
                     self.device.modes_mut().text_cursor.enable =

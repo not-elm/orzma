@@ -120,6 +120,10 @@ impl Session {
         self.0.device.cursor().visible
     }
 
+    fn cursor_blinking(&self) -> bool {
+        self.0.device.cursor().blinking
+    }
+
     fn cursor_column(&self) -> u16 {
         self.0.device.active_screen().cursor_column().0
     }
@@ -149,6 +153,7 @@ mod character_set;
 mod column_mode;
 mod cursor;
 mod cursor_checkpoint;
+mod cursor_style;
 mod device_attributes;
 mod device_status;
 mod erase;
