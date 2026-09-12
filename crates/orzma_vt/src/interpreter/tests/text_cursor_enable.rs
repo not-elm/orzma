@@ -47,8 +47,7 @@ fn a_fresh_terminal_reports_a_visible_cursor() {
 ///
 /// Case: an application turns cursor visibility off together with focus
 /// reporting and a mode this terminal does not implement, then the
-/// terminfo `cvvis` string turns the caret back on beside the blink
-/// mode this terminal also does not implement.
+/// terminfo `cvvis` string turns the caret back on beside the blink.
 #[test]
 fn a_dectcem_reset_inside_a_multi_mode_list_is_applied() {
     let device = interpret(b"\x1b[?1004h\x1b[?25;9999;1004l");

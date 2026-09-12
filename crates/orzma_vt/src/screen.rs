@@ -18,14 +18,16 @@ use self::cell::{Cell, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
-use crate::device::modes::{AutoWrap, InsertReplaceMode, TextCursorEnable};
+use crate::device::modes::{
+    AutoWrap, CursorBlink, InsertReplaceMode, TextCursorEnable, TextCursorModes,
+};
 use crate::frame::damage::DamageSpan;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::character_sets::{
     CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
 };
 use crate::screen::checkpoint::Checkpoint;
-use crate::screen::cursor::{Cursor, CursorShape};
+use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
@@ -995,18 +997,17 @@ impl Screen {
 
     /// The write cursor as an emitted frame carries it.
     ///
-    /// `text_cursor_enable` is `DECTCEM`.
-    // TODO: Report the real shape and blink once DECSCUSR lands. Block /
-    // steady is what the terminal starts at.
-    pub fn cursor(&self, text_cursor_enable: TextCursorEnable) -> Cursor {
+    /// The screen supplies the position; `text_cursor` supplies every
+    /// presentation field.
+    pub fn cursor(&self, text_cursor: TextCursorModes) -> Cursor {
         Cursor {
             point: GridPoint {
                 line: GridLine::from(self.state.line),
                 column: self.state.column,
             },
-            shape: CursorShape::Block,
-            blinking: false,
-            visible: matches!(text_cursor_enable, TextCursorEnable::Shown),
+            shape: text_cursor.shape,
+            blinking: matches!(text_cursor.blink, CursorBlink::Blinking),
+            visible: matches!(text_cursor.enable, TextCursorEnable::Shown),
         }
     }
 
