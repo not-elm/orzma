@@ -60,7 +60,7 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 | シーケンス | 機能 | terminfo | 現状 | 影響 |
 |---|---|---|---|---|
 | `CSI ! p` | DECSTR ソフトリセット | `is2`, `rs2` | **✅ 実装済み（2026-09-12）**。`DeviceState::soft_reset` が Table 5-9 の名指しする 5 つのモード（DECTCEM / IRM / DECCKM / DECNKM / DECAWM）と**インデックス色パレット**を戻し、`Screen::soft_reset` が margins・DECOM・文字集合・pen・checkpoint を戻す。`CharacterSetMapping::reset()` の `#[expect(dead_code)]` はここで外れた。**決定 4 つ**: (1) **DECAWM は有効に戻す** — 表の "No autowrap" に従わない。`is2` は折り返しを戻すシーケンスを含まないので、表どおりだと `tput init` のたびにシェルの長い行が折り返さなくなる。xterm の DECSTR 腕は `bitcpy(&xw->flags, xw->initflags, WRAPAROUND \| …)` でリソース既定（`autoWrap` = true）に戻し、DECSTR を実装した 8 実装すべてが有効側。xterm 自身の適合性テスト `esctest2` の `test_DECSTR_DECAWM` もこの逸脱を期待値として `@intentionalDeviationFromSpec` 付きで持つ。(2) **ライブカーソルは動かさない** — xterm の `CursorSet(screen, 0, 0, …)` は `if (full)` ＝ RIS 側にしかなく、DECSTR が (0,0) に戻すのは保存カーソルのスロットだけ（`CursorSave(xw); screen->sc[whichBuf].row = col = 0;`）。vt220 Table 4-10 の脚注 `*` も "Applies only to later restore cursor commands (DECRC)" と限定する。したがって `Screen::set_scroll_region(None, None)` は `seat_home()` を含むので使えず、`Screen::soft_reset` は `scroll_region` を直接差し替える。(3) **アクティブ画面のみ** — 画面ごとの状態は DECSTR を受けた画面だけを戻す。両画面に効かせると `1049h` の入場時にプライマリの checkpoint へ保存したカーソルが消え、`1049l` での復帰が壊れる（kitty が実際に抱えている事故。Windows Terminal は GH#19918 で両画面からアクティブのみへ変更した）。(4) **パラメータは読み捨てる** — `CSI Ps ! p` を占める制御機能は無く、xterm も数を見ない。**LCF は解除しない** — (1) により `set_auto_wrap` の set 方向を通るため（§4 の LCF 一覧）。テストは `interpreter/tests/soft_reset.rs` と `screen/tests/soft_reset.rs` | ~~**terminfo 経由の初期化列の先頭**。毎回無視されモードが残留する。`CharacterSetMapping::reset()` は DECSTR 待ちで `#[expect(dead_code)]` のまま（`character_sets.rs:220`）~~ |
-| `CSI ?12 h/l` | カーソル点滅 | `cnorm`, `cvvis` | `MODE∅`。`blinking: false` 固定 | 点滅指定が効かない |
+| ~~`CSI ?12 h/l`~~ | ~~カーソル点滅~~ | `cnorm`, `cvvis` | **✅ 実装済み（2026-09-12）**。`VtModes::text_cursor.blink`（`CursorBlink`）に置き、DECSCUSR と同じ状態を last-writer-wins で共有する。**この共有は普遍ではない**: xterm（両方 `cursor_blink_esc`）・kitty（両方 `non_blinking`）・alacritty・ghostty・Windows Terminal・iTerm2 の 6 実装は 1 状態を共有するが、**foot は `decset` と `deccsusr` の 2 ビットを独立に持って OR する**（CHANGELOG: "blink if **either** … has been used"）ので `CSI 5 SP q` の後の `?12l` でも点滅が続き、**VTE は `?12` をモード表に持つが誰も読まない**、**wezterm は空の match 腕**。`xterm-256color` を名乗るので xterm 側に揃えた。**`?13` / `?14` は実装しない** — xterm が DECSET / DECRST の両方で `/* intentionally ignored (this is user-preference) */` としている。設定は入れていない。既定は steady で、xterm の `cursorBlink` 既定 `false`・alacritty の `Off`・foot の `no`・wezterm の `SteadyBlock` と一致する（kitty と ghostty だけが既定で点滅する） | ~~点滅指定が効かない~~ |
 | ~~`CSI ?3 h/l`~~ | ~~DECCOLM~~ | `is2`, `rs2` の一部 | **✅ 意図的に無視と明示（2026-09-12）**。`set_private_modes` に `3 => {}`。理由は `// NOTE:` に記録: ペインの幅は VT の持ち物ではなく（サイズは ウィンドウ形状 → レイアウト木 → PTY の一方通行）、vt510 p.143 が DECCOLM に定める副作用（左右上下マージンの既定化とページ全消去）だけを実行すると、来ない幅変更の代償にページを壊すことになる。`is2` に `\E[?3l` が入るので、これは **`tput init` のたびに**起きる。**xterm 自身がこのシーケンス全体を `c132` リソース（既定 off）で塞いでおり、同じ no-op に落ちる**（manpage `-132`: *"Normally, the VT102 DECCOLM escape sequence … is ignored"*、`charproc.c` の `srm_DECCOLM` は本体すべてが `if (screen->c132)` の中）。参照実装は割れている: ghostty も `?40`（既定 off）で完全無視、foot は `decset_decrst` に `case 3:` 自体が無い。kitty は **set 方向だけ**全消去＋ホーム、alacritty と wezterm は双方向でマージン既定化＋ホーム＋全消去（いずれもリサイズはしない）。テストは `interpreter/tests/column_mode.rs`（副作用を入れる変異で 4 本とも落ちることを確認済み） | ~~初期化列に含まれる~~ |
 | ~~`CSI ?1034 h/l`~~ | ~~8bit Meta~~ | `smm`/`rmm`, `km` | **✅ 意図的に無視と明示（2026-09-11）**。`set_private_modes` に `1034 => {}`。Alt は常に ESC 前置（xterm の metaSendsEscape 相当）で、xterm と foot は 1036 を 1034 より優先するので、この設定では 8 ビット符号化に到達しない。bash / readline が起動時に送る `smm` は変更前から無視されており、挙動は変わらない。テストは `interpreter/tests/meta_key.rs` | ~~Meta キーのバイト表現が食い違う~~ |
 | `CSI ?5 h/l` | DECSCNM 反転 | `flash` | `MODE∅` | ビジュアルベルが無反応 |
@@ -91,7 +91,7 @@ terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ロ
 
 | シーケンス | 機能 | 現状 | 直接叩く実例 |
 |---|---|---|---|
-| `CSI Ps SP q` | DECSCUSR カーソル形状 | `CSI∅`（DECSTR で intermediate 経路が開いたので `(None, [b' '], b'q')` の腕 1 本で入る）。`Cursor` 型と `CursorShape` は既にある。**実装時に `DeviceState::soft_reset` も要更新**: xterm の `ReallyReset` は `InitCursorShape` と `SetCursorBlink` を RIS と DECSTR の共通経路で呼ぶので、DECSCUSR で `shape` / `blinking` が動かせるようになった時点で DECSTR もそれらを power-up 値へ戻す必要がある（今は `Screen::cursor()` の固定値なので対象が無い） | **nvim が実測 5 回**（`CSI 0 q` / `1 q` / `2 q`）。vim の `term.c` |
+| ~~`CSI Ps SP q`~~ | ~~DECSCUSR カーソル形状~~ | **✅ 実装済み（2026-09-12）**。DECSTR が開けた intermediate 経路に `(None, [b' '], b'q')` の腕 1 本で入った。値は vt510.pdf p.251 の 0〜4 と xterm-ctlseqs.pdf p.29–30 の 5/6（bar）。**`7` は no-op ではなく電源投入時の style に戻す** — xterm の `CASE_DECSCUSR` は `7` を `screen->initial_cursor` に書き換えてから同じ switch を通し、その既定リソース値が STEADY_BLOCK。ただし `Self::default()` はコンパイル時定数なので、**設定層が入ったら `7` 腕と `DeviceState::reset` を設定済みの初期 style から読むように直すこと**（そうしないと `CSI 7 SP q` はハードコードされた block に戻る）。**`なし / 0 / 1` はすべて blinking block に潰した** — 規範資料は一致しているが実装は割れており、`0` を「端末既定」と読むのは alacritty・ghostty・foot・tmux・termwiz、xterm/vt510 どおりに読むのは xterm だけ。**`DeviceState::soft_reset` も shape / blink を戻す**（この行が予告していたとおり。`ReallyReset` の `InitCursorShape` と `SetCursorBlink` は最初の `if (full)` より前にあり DECSTR 経路でも走る） | ~~nvim が実測 5 回~~（解消済み） |
 | ~~`CSI s` / `CSI u`~~ | ~~SCOSC / SCORC~~ | **✅ 実装済み（2026-09-11）**。パラメータ無しのときだけ DECSC / DECRC と同じ保存枠を使う（xterm の `only_default()` に揃えた。下の「`CSI s` の曖昧性」を参照） | blessed の `saveCursorA`/`restoreCursorA`、btop |
 | `CSI ?2026 h/l` | 同期出力 | `MODE∅`。`struct SyncBuffer {}` は**空のプレースホルダ**（`interpreter.rs:83`） | fzf がフレーム毎に発行。nvim/tmux/kitty |
 | `CSI ?1004` → `CSI I` / `CSI O` | フォーカス通知 | **モードは保存されるが送信側が存在しない**（`focus_in_out` の参照は定義と代入の 2 箇所のみ） | vim/nvim。フォーカス復帰時の再描画が来ない |
@@ -223,8 +223,9 @@ STD-070 が LCF をリセットすると規定する操作:
    `VtModes::text_cursor_enable` に置き、`Screen::cursor()` が引数で受け取って
    `DeviceState::cursor()` が畳む。DECAWM は `VtModes::auto_wrap` に置き、
    `DeviceState::set_auto_wrap` 経由でのみ書く（§4 の LCF 一覧を参照）。
-   残るのは **カーソル点滅（`?12`）/ DECSCUSR**。`Screen::cursor()` の固定値のうち
-   `shape` と `blinking` は DECSCUSR 待ちのまま。
+   ~~残るのは **カーソル点滅（`?12`）/ DECSCUSR**~~ **完了（2026-09-12）**。3 つのモードは
+   `VtModes::text_cursor`（`TextCursorModes`）にまとめ、`Screen::cursor()` が 1 引数で
+   受け取る形は保った。`CursorShape` は `device/modes.rs` に移してある。
 
    **訂正**: DECTCEM 実装時に「DECAWM は `Checkpoint` に入れる必要がある」と記録したが
    これは誤りで、どちらのモードも `Checkpoint` に入らない。根拠は §4 の
@@ -236,12 +237,34 @@ STD-070 が LCF をリセットすると規定する操作:
    画面ごとの状態はアクティブ画面のみ（決定 3）。`DeviceState::reset_indexed_colors` も呼び、
    パレットが実際に動いたときだけ `DamageSpan::Full` を stage する。intermediate 付き CSI が
    match に届くようになったので、DECSCUSR と DECRQM は腕 1 本で入る。
-   残るのは **`CSI ?12`（カーソル点滅）** と **1049 の pen 修正**。
+   ~~残るのは **`CSI ?12`（カーソル点滅）**~~ も完了（2026-09-12）。残るのは **1049 の pen 修正**。
 5. **入力側の契約修正**（`kbs` の方針決定 → ファンクションキー → 修飾キー）。~~Shift-Tab~~ と Insert は **完了（2026-09-11）**。~~Meta~~ は §1-B の `CSI ?1034 h/l` 行のとおり意図的に無視と決着（2026-09-11）。
 6. ~~**OSC 4**~~ **完了（2026-09-12、OSC 104 と `?` 問い合わせを含む）** → 残るのは **OSC 10/11/12** とその問い合わせ・リセット（OSC 110/111/112）。OSC 4 で入れた `PaletteRequest` を広げて扱う。RIS での復帰は `Palette::reset`（全色を既定値へ戻す）が既に賄うので、ハンドラ側は `Palette` の `foreground` / `background` を書くのと、full repaint の staging（`frame.rs` の `palette` フィールドの TODO）を足すだけでよい。なお `OSC 104` は xterm-ctlseqs.pdf のとおりインデックス表だけを戻す（`Palette::reset_all_indexed`）ので、そちらに前景/背景を巻き込まないこと。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
 8. **OSC 8 / OSC 52**、**DECLRMM/DECSLRM**、**1015**。
-9. **残りの厳密準拠**: SGR blink、DECSCNM。~~メモリロック、プリンタ制御~~ は
+9. **コロン付きサブパラメータの扱い（リポジトリ全体）**。xterm は SGR と modifyOtherKeys 以外の
+   すべての CSI でサブパラメータを拒否する（`charproc.c` の `parms.has_subparams` 分岐）が、orzma は
+   `CsiParams::first_value` がグループ内の最初の整数を拾うので `CSI 1:2 H` が CUP として通る。
+   DECSCUSR 実装時（2026-09-12）に判明。**DECSCUSR だけ拒否すると二重基準になるので受理側に
+   揃えた**。直すなら全 CSI をまとめて裁定すること。
+10. **カーソル描画側（設定 PR とセット）**。VT 側は完了したが、**この PR まで到達不能だった
+   シェーダ経路が初めて生きた**（`Screen::cursor()` が Block/steady を直書きしていたため
+   Underline / Bar / 点滅の分岐は一度も実行されていなかった）。そこに欠陥が 2 つある:
+   (a) `terminal_ui_material.wgsl` の bar/underline の太さが `thickness = 2.0` の**物理ピクセル
+   直書きで DPR にもフォントサイズにも追随しない** — 同じファイルの他のストローク幅は
+   `underline_thickness_phys`（DPR・フォント由来）を使う。Retina では nvim の `CSI 5 SP q` が
+   論理 1px のヘアラインになる。(b) 最終列のアンダーラインカーソルが `paint_right_strip` の
+   帯にはみ出す。加えて点滅位相が `fract(time_seconds)` の自由走行で、**打鍵でリセットされず
+   非フォーカスでも止まらない**（調べた 6 実装すべてがリセットし、6/6 が非フォーカスで中空に
+   倒す。周期は xterm 600/300ms・alacritty 750ms・foot 500ms・wezterm 800ms・kitty は system、
+   orzma は 500/500ms。点滅停止は kitty 15s・alacritty 5s）。
+11. **非アクティブペインのカーソル（マルチプレクサ側）**。orzma は非アクティブペインにも
+   カーソルを描き続け dim/tint がかかるだけ。**tmux は実カーソルを 1 本しか持たず
+   `server_client_reset_state()` が `w->active` しか見ないので、非アクティブペインには
+   カーソル系シーケンスを一切送らない**。orzma は自前描画なので裁定が要る。
+   `bevy_orzma_tty_renderer` の `current_cursor_pos_and_style` が vi カーソルの shape/blink を
+   直書きで捨てている件も、方針を明文化するならここ。
+12. **残りの厳密準拠**: SGR blink、DECSCNM。~~メモリロック、プリンタ制御~~ は
    **意図的に無視と明示して完了（2026-09-11、§1-C）**。
 
 ## 6. 検証方法
