@@ -124,8 +124,9 @@ impl DeviceState {
         // without `DeviceState::set_auto_wrap`, and it is sound only because
         // the two screen resets above already cleared each screen's
         // live and saved deferred wrap. A partial mode reset such as
-        // `DECSTR`, which leaves both screens' live deferred wrap armed,
-        // must go through `set_auto_wrap` instead.
+        // `DECSTR`, which touches only the screen on show and leaves its
+        // live deferred wrap as it stands, must go through `set_auto_wrap`
+        // instead.
         self.modes = VtModes::default();
         self.title = TitleState::default();
         let palette_changed = self.palette.reset();
@@ -133,9 +134,9 @@ impl DeviceState {
     }
 
     /// Returns the modes a soft reset names, the scrolling margins,
-    /// cursor origin, character sets, pen and saved cursor of the screen
-    /// on show, and every indexed palette slot to their power-up values;
-    /// reports [`DamageSpan::Full`] when a palette slot changed.
+    /// cursor origin, character set mapping, pen and saved cursor of the
+    /// screen on show, and every indexed palette slot to their power-up
+    /// values; reports [`DamageSpan::Full`] when a palette slot changed.
     ///
     /// Autowrap returns to enabled, which is the set rather than the
     /// reset state vt510.pdf p.277 Table 5-9 lists.
