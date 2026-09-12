@@ -54,7 +54,7 @@ fn first_row_glyphs(device: &DeviceState) -> Vec<char> {
 
 /// The glyph at `column` of the device's `line`th visible row.
 fn glyph_at(device: &DeviceState, line: u16, column: u16) -> char {
-    device.active_screen().viewport_row(ViewportLine(line))[column].c
+    cell_at(device, line, column).c
 }
 
 /// The whole cell at `column` of the device's `line`th visible row.
