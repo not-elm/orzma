@@ -16,7 +16,6 @@ pub struct TerminalGridPlugin;
 impl Plugin for TerminalGridPlugin {
     fn build(&self, app: &mut App) {
         app.register_required_components::<OrzmuxPane, TerminalView>()
-            .register_required_components::<OrzmuxPane, TerminalCells>()
             .add_observer(apply_frame);
     }
 }
@@ -250,16 +249,20 @@ mod tests {
         assert!(app.world().get::<TerminalCells>(bare).is_none());
     }
 
-    /// Asserts that a frame addressed to an entity carrying only one of
-    /// the two components is ignored, leaving that component unmutated.
+    /// Asserts that a frame addressed to an entity whose `TerminalCells`
+    /// was removed after spawn is ignored rather than reconstructed from
+    /// the requirement, leaving the view unmutated.
     ///
-    /// Case: an entity carries a view but has not (or no longer) been
-    /// given cells, so the query the observer reads cannot match it.
+    /// Case: a pane entity that already carries both components loses
+    /// its cells component to a later removal, while its view stays.
     #[test]
     fn a_frame_for_an_entity_with_only_one_component_is_ignored() {
         let mut app = App::new();
         app.add_plugins(TerminalGridPlugin);
         let terminal = app.world_mut().spawn(TerminalView::settled()).id();
+        app.world_mut()
+            .entity_mut(terminal)
+            .remove::<TerminalCells>();
         let mut frame = quiet_frame();
         frame.cursor = Cursor {
             point: GridPoint {
@@ -272,6 +275,19 @@ mod tests {
         let view = app.world().get::<TerminalView>(terminal).unwrap();
         assert_eq!(view.cursor, Some(Cursor::default()));
         assert!(app.world().get::<TerminalCells>(terminal).is_none());
+    }
+
+    /// Asserts that spawning `TerminalView` alone also inserts
+    /// `TerminalCells`, rather than leaving it absent until a frame
+    /// arrives.
+    ///
+    /// Case: code elsewhere spawns a `TerminalView` without listing
+    /// `TerminalCells` alongside it.
+    #[test]
+    fn a_bare_terminal_view_spawn_gets_terminal_cells() {
+        let mut app = App::new();
+        let terminal = app.world_mut().spawn(TerminalView::default()).id();
+        assert!(app.world().get::<TerminalCells>(terminal).is_some());
     }
 
     /// Asserts that a frame signalled at an `OrzmuxPane` entity lands in

@@ -68,6 +68,7 @@ impl GridSlot {
 /// The viewport geometry of one terminal, and where the user is looking
 /// and pointing within it.
 #[derive(Component, Default)]
+#[require(TerminalCells)]
 pub struct TerminalView {
     /// Visible column count.
     pub cols: u16,
