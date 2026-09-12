@@ -107,9 +107,8 @@ mod tests {
     /// Asserts that a line above the visible area projects to `None`,
     /// while the topmost visible row still projects.
     ///
-    /// Case: the vi cursor rests on a history row and the user scrolls
-    /// the viewport back toward the live tail, leaving that row above
-    /// the window, so the renderer has no caret cell to paint.
+    /// Case: the user scrolls back toward the live tail, and a webview
+    /// anchored to a history row falls above the window.
     #[test]
     fn a_line_above_the_viewport_projects_to_none() {
         let offset = DisplayOffset(3);

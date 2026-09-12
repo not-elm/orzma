@@ -744,8 +744,8 @@ mod tests {
     /// Asserts that the overlay's background takes the focused pane's
     /// palette background while a composition is active.
     ///
-    /// Case: the user composes IME text over a terminal whose
-    /// application recolored the background with OSC 11.
+    /// Case: the user composes IME text over a terminal whose palette
+    /// background already differs from the default.
     #[test]
     fn overlay_background_matches_pane_palette_background_while_composing() {
         use crate::surface::OrzmaTerminal;

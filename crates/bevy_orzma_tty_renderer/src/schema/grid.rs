@@ -500,8 +500,8 @@ mod tests {
     /// Asserts that suppression clears only the visible bit while the
     /// vi cursor's projected position is still reported.
     ///
-    /// Case: the user composes IME text while vi mode is active, so the
-    /// app hides the caret without discarding where it sits.
+    /// Case: an IME composition hides the caret while a projected
+    /// cursor position is already recorded on the mirror.
     #[test]
     fn suppress_cursor_does_not_affect_vi_cursor_position() {
         let grid = TerminalGrid {
@@ -959,8 +959,8 @@ mod tests {
 
     /// Asserts that a palette replaces the mirror and `None` keeps it.
     ///
-    /// Case: OSC 11 recolors the background once, and every later frame
-    /// carries no palette.
+    /// Case: one frame recolors the background once, and every later
+    /// frame carries no palette.
     #[test]
     fn a_palette_replaces_the_mirror_and_none_keeps_it() {
         let mut grid = TerminalGrid::settled();

@@ -279,8 +279,9 @@ mod tests {
     /// Asserts that the palette diff reports the change until the
     /// emitted table is settled.
     ///
-    /// Case: an OSC palette override arrives, one frame carries the new
-    /// table, and the next frame omits it again.
+    /// Case: the palette's foreground is changed to match its
+    /// background, one frame carries the updated table, and the next
+    /// frame, once that table is settled, omits it again.
     #[test]
     fn diff_palette_reports_the_change_until_settled() {
         let mut tracker = FrameTracker::new();

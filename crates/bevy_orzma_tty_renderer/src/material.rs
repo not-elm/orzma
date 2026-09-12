@@ -1333,9 +1333,9 @@ mod tests {
     /// the live palette, and that the default background packs the
     /// transparent sentinel instead of the palette value.
     ///
-    /// Case: OSC 4 recolors an indexed slot and OSC 10 the default
-    /// foreground while a webview overlay is mounted behind
-    /// default-background cells.
+    /// Case: a palette whose default foreground and indexed slot 1
+    /// already hold custom colors packs cells for a webview overlay
+    /// mounted behind default-background cells.
     #[test]
     fn cell_packing_resolves_through_the_live_palette() {
         use crate::schema::{Color as CellColor, Palette, Rgb};

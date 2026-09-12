@@ -247,9 +247,9 @@ mod tests {
     /// it currently resolves to, so equality tracks the palette slot
     /// rather than the resolved pixel.
     ///
-    /// Case: an application selects palette slot 1 with SGR 38;5;1,
-    /// which currently resolves to the default xterm red, and the user
-    /// later issues an OSC 4 override that recolors that slot.
+    /// Case: one escape sequence selects palette slot 1 with SGR
+    /// 38;5;1, and another explicitly requests the same red that slot
+    /// currently resolves to with SGR 38;2;205;0;0.
     #[test]
     fn indexed_stays_distinct_from_the_rgb_it_would_resolve_to() {
         assert_ne!(Color::Indexed(1), Color::Rgb(Rgb { r: 205, g: 0, b: 0 }));
@@ -274,8 +274,8 @@ mod tests {
     /// Asserts that the default palette seeds the 16 ANSI base slots
     /// with the xterm defaults.
     ///
-    /// Case: a fresh terminal renders `ls --color` output before any
-    /// OSC 4 override arrives.
+    /// Case: a fresh terminal renders `ls --color` output, which picks
+    /// its colors from the 16 ANSI base slots.
     #[test]
     fn the_default_palette_seeds_the_ansi_base_slots() {
         let palette = Palette::default();
@@ -353,8 +353,9 @@ mod tests {
     /// Asserts that each color variant resolves against its designated
     /// palette slot.
     ///
-    /// Case: a renderer packs cell colors for the GPU while OSC 4 / 10
-    /// / 11 overrides are active.
+    /// Case: a renderer packs cell colors for the GPU from a palette
+    /// whose foreground, background, and indexed slot 42 already hold
+    /// colors distinct from the defaults.
     #[test]
     fn resolve_follows_the_live_table() {
         let mut palette = Palette {
