@@ -205,7 +205,7 @@ fn a_soft_reset_drops_a_pending_single_shift() {
 #[test]
 fn a_soft_reset_returns_the_pen_to_its_default() {
     let device = interpret(b"\x1b[1;31m\x1b[!px");
-    let cell = device.active_screen().viewport_row(ViewportLine(0))[0];
+    let cell = cell_at(&device, 0, 0);
     assert_eq!(cell.fg, Color::DefaultForeground);
     assert_eq!(cell.style, Style::empty());
 }
@@ -218,7 +218,7 @@ fn a_soft_reset_returns_the_pen_to_its_default() {
 #[test]
 fn a_soft_reset_returns_the_saved_cursor_to_home() {
     let device = interpret(b"\x1b[2;3H\x1b[31m\x1b7\x1b[!p\x1b8x");
-    let cell = device.active_screen().viewport_row(ViewportLine(0))[0];
+    let cell = cell_at(&device, 0, 0);
     assert_eq!(cell.c, 'x');
     assert_eq!(cell.fg, Color::DefaultForeground);
 }
@@ -335,6 +335,17 @@ fn a_soft_reset_keeps_the_cursor_the_alternate_entry_saved() {
 #[test]
 fn a_private_marked_spelling_does_not_reach_the_soft_reset() {
     let device = interpret(b"\x1b[?25l\x1b[?!p");
+    assert!(!device.cursor().visible);
+}
+
+/// Asserts that another intermediate byte does not reach the soft
+/// reset.
+///
+/// Case: a program asks whether insert mode is set with `CSI 4 $ p`
+/// while the caret is hidden.
+#[test]
+fn another_intermediate_does_not_reach_the_soft_reset() {
+    let device = interpret(b"\x1b[?25l\x1b[4$p");
     assert!(!device.cursor().visible);
 }
 

@@ -45,7 +45,8 @@ fn a_soft_reset_returns_the_pen_to_its_default() {
 /// mapping, including the locking shift and any pending single shift.
 ///
 /// Case: a program designates the line-drawing set, locks it into GL to
-/// draw a box, and exits without shifting back.
+/// draw a box, and is killed after it sends `SS2` but before the
+/// character that would have consumed it.
 #[test]
 fn a_soft_reset_restores_the_default_character_set_mapping() {
     let mut screen = dirty_screen();

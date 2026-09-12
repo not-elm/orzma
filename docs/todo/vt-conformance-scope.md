@@ -35,7 +35,7 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 | `CSI∅` | `csi_dispatch` 末尾の `_ => {}`（`interpreter.rs:446`） |
 | `ESC∅` | `esc_dispatch` 末尾の `_ => {}`（`interpreter.rs:232`） |
 | `MODE∅` | `set_private_modes`（`interpreter.rs:630`）に番号が無い |
-| `INTER∅` | intermediate 付きは `csi_dispatch` の match に届くが、腕が無く `_ => {}` に落ちる（DECSTR 実装時に経路を開いた。2026-09-12） |
+| ~~`INTER∅`~~ | ~~intermediate 付きは `csi_dispatch` の match に届くが、腕が無く `_ => {}` に落ちる~~（DECSTR 実装時に経路を開いたことで `CSI∅` 行と同じ着地点に吸収された。2026-09-12） |
 | `OSC∅` | `Executor::osc_dispatch` は title・cwd・パレット（OSC 4 / 104）のみ |
 
 ### 1-A. 描画が壊れるもの（最優先）
