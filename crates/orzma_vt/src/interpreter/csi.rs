@@ -57,7 +57,7 @@ impl<'a> CsiParams<'a> {
     ///
     /// An empty sequence yields ONE empty group, not none.
     /// [`Self::values`] reports no slots for the same input.
-    pub(crate) fn groups(&self) -> impl Iterator<Item = &'a [CsiParam]> {
+    pub fn groups(&self) -> impl Iterator<Item = &'a [CsiParam]> {
         self.values
             .split(|param| matches!(param, CsiParam::P(b';')))
     }
@@ -67,12 +67,12 @@ impl<'a> CsiParams<'a> {
     ///
     /// A zero reads as `Some(0)`; the caller decides whether it means
     /// the default.
-    pub(crate) fn value(&self, index: usize) -> Option<u16> {
+    pub fn value(&self, index: usize) -> Option<u16> {
         self.values().nth(index).flatten()
     }
 
     /// Every separated slot in order.
-    pub(crate) fn values(&self) -> impl Iterator<Item = Option<u16>> + '_ {
+    pub fn values(&self) -> impl Iterator<Item = Option<u16>> + '_ {
         let listed = (!self.values.is_empty()).then(|| self.groups());
         listed.into_iter().flatten().map(Self::first_value)
     }
@@ -169,8 +169,7 @@ mod tests {
     ///
     /// Case: an application sends a control function this terminal does
     /// not implement that carries the two intermediates the parser
-    /// collects, and the dispatcher must not read it as the
-    /// one-intermediate spelling that shares its final byte.
+    /// collects.
     #[test]
     fn two_intermediates_arrive_in_order() {
         let params = [CsiParam::Integer(1), CsiParam::P(b' '), CsiParam::P(b'!')];

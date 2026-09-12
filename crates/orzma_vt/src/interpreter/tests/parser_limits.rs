@@ -63,26 +63,47 @@ fn an_osc_4_past_the_parser_cap_loses_its_thirty_second_pair() {
     assert_eq!(device.palette().indexed[31], Palette::default().indexed[31]);
 }
 
+/// Compares every effect this terminal exposes for one interpreted
+/// chunk against a baseline: modes, cursor, every visible row's cells,
+/// and the reply bytes written back.
+fn assert_same_observable_effect(
+    device: &DeviceState,
+    output: &InterpretOutput,
+    baseline: &DeviceState,
+    baseline_output: &InterpretOutput,
+    spelling: &str,
+) {
+    assert_eq!(device.modes(), baseline.modes(), "{spelling}");
+    assert_eq!(device.cursor(), baseline.cursor(), "{spelling}");
+    assert_eq!(output.replies, baseline_output.replies, "{spelling}");
+    for line in 0..device.active_screen().grid_size().rows {
+        assert_eq!(
+            device.active_screen().viewport_row(ViewportLine(line)),
+            baseline.active_screen().viewport_row(ViewportLine(line)),
+            "{spelling} row {line}"
+        );
+    }
+}
+
 /// Asserts that a sequence carrying an intermediate reaches none of the
-/// control functions that share its final byte.
+/// control functions whose effect this terminal can observe in its
+/// cells, modes, cursor, or replies.
 ///
-/// Case: an application sends the rectangle-area operations, whose
-/// final bytes this terminal already answers in their
-/// intermediate-free spellings.
+/// Case: an application sends every implemented CSI final byte with a
+/// trailing intermediate, once with parameters that would move the
+/// cursor away from where it already rests and once with parameters
+/// that would set the scroll region.
 #[test]
 fn an_intermediate_reaches_no_implemented_control_function() {
     const FINALS: &[u8] = b"@ABCDEFGHIJKLMPSTWXZ^`acdfghilmnrstu";
-    let baseline = interpret(b"ab\r\ncd");
-    for final_byte in FINALS {
-        let chunk = [b"ab\r\ncd\x1b[2;3$".as_slice(), &[*final_byte]].concat();
-        let device = interpret(&chunk);
-        let spelling = format!("CSI 2;3${}", *final_byte as char);
-        assert_eq!(device.modes(), baseline.modes(), "{spelling}");
-        assert_eq!(device.cursor(), baseline.cursor(), "{spelling}");
-        assert_eq!(
-            first_row_glyphs(&device),
-            first_row_glyphs(&baseline),
-            "{spelling}"
-        );
+    const PARAM_PAIRS: &[&str] = &["2;3", "1;1"];
+    let (baseline, baseline_output) = interpret_fully(b"ab\r\ncd");
+    for params in PARAM_PAIRS {
+        for final_byte in FINALS {
+            let chunk = format!("ab\r\ncd\x1b[{params}${}", *final_byte as char);
+            let (device, output) = interpret_fully(chunk.as_bytes());
+            let spelling = format!("CSI {params}${}", *final_byte as char);
+            assert_same_observable_effect(&device, &output, &baseline, &baseline_output, &spelling);
+        }
     }
 }
