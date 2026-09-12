@@ -64,7 +64,7 @@ fn hyperlink_hover_and_cursor(
         ),
         (With<OrzmaTerminal>, Without<MouseDisabled>),
     >,
-    grids: Query<(&TerminalView, &TerminalCells)>,
+    terminals: Query<(&TerminalView, &TerminalCells)>,
     webview_hosts: Query<&WebviewSource>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -94,7 +94,7 @@ fn hyperlink_hover_and_cursor(
         Some(entity) => {
             if webview_hosts.contains(entity) {
                 HoverTarget::Webview
-            } else if let Ok((view, cells)) = grids.get(entity) {
+            } else if let Ok((view, cells)) = terminals.get(entity) {
                 let id = surfaces
                     .get(entity)
                     .ok()

@@ -333,10 +333,7 @@ impl TerminalCells {
 
     fn size_differs(&self, cols: u16, rows: u16) -> bool {
         self.cells.len() != usize::from(rows)
-            || self
-                .cells
-                .first()
-                .is_some_and(|row| row.len() != usize::from(cols))
+            || self.cells.iter().any(|row| row.len() != usize::from(cols))
     }
 
     fn knows_hyperlink(&self, id: HyperlinkId) -> bool {
@@ -932,6 +929,19 @@ mod tests {
         assert_eq!(slots[1], GridSlot::WideTrailer);
         assert_eq!(slots[2].cell().map(|c| c.text.as_str()), Some("z"));
         assert_eq!(slots[3], GridSlot::Empty);
+    }
+
+    /// Asserts that a wide grapheme landing on the grid's last column
+    /// produces one cell slot and no trailing `WideTrailer`, since no
+    /// column remains for one.
+    ///
+    /// Case: a CJK character is the only character a single-column-wide
+    /// pane can hold.
+    #[test]
+    fn runs_to_cells_stops_a_wide_grapheme_at_the_last_column() {
+        let slots = runs_to_cells(&[run_with_link("あ", None)], 1, &[]);
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0].cell().map(|c| c.width), Some(2));
     }
 
     /// Asserts that a combining mark inside a grapheme cluster shares

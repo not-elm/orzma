@@ -289,36 +289,6 @@ impl Default for PaneInactiveStyle {
     }
 }
 
-/// The dimming and tinting one pane applies while it is not the active
-/// pane.
-struct PaneTreatment {
-    dim: f32,
-    inactive_tint: Vec4,
-    overlay_dim: f32,
-    overlay_desaturate: f32,
-}
-
-impl PaneTreatment {
-    /// Clamps `style`'s factors into range, or returns the neutral
-    /// treatment when the pane carries no inactive style.
-    fn from_style(style: Option<&PaneInactiveStyle>) -> Self {
-        style.map_or(
-            Self {
-                dim: 1.0,
-                inactive_tint: Vec4::ZERO,
-                overlay_dim: 1.0,
-                overlay_desaturate: 0.0,
-            },
-            |style| Self {
-                dim: style.dim.clamp(0.0, 1.0),
-                inactive_tint: style.tint.with_w(style.tint.w.clamp(0.0, 1.0)),
-                overlay_dim: style.overlay_dim.clamp(0.0, 1.0),
-                overlay_desaturate: style.overlay_desaturate.clamp(0.0, 1.0),
-            },
-        )
-    }
-}
-
 /// Padding colour used for the area outside a terminal grid (and the whole
 /// quad while a grid is unpainted) when the terminal's default background
 /// is black. Defaults to black.
@@ -357,6 +327,36 @@ impl Default for TerminalOverlays {
             rects: [IVec4::ZERO; OVERLAY_SLOTS],
             textures: [const { None }; OVERLAY_SLOTS],
         }
+    }
+}
+
+/// The dimming and tinting one pane applies while it is not the active
+/// pane.
+struct PaneTreatment {
+    dim: f32,
+    inactive_tint: Vec4,
+    overlay_dim: f32,
+    overlay_desaturate: f32,
+}
+
+impl PaneTreatment {
+    /// Clamps `style`'s factors into range, or returns the neutral
+    /// treatment when the pane carries no inactive style.
+    fn from_style(style: Option<&PaneInactiveStyle>) -> Self {
+        style.map_or(
+            Self {
+                dim: 1.0,
+                inactive_tint: Vec4::ZERO,
+                overlay_dim: 1.0,
+                overlay_desaturate: 0.0,
+            },
+            |style| Self {
+                dim: style.dim.clamp(0.0, 1.0),
+                inactive_tint: style.tint.with_w(style.tint.w.clamp(0.0, 1.0)),
+                overlay_dim: style.overlay_dim.clamp(0.0, 1.0),
+                overlay_desaturate: style.overlay_desaturate.clamp(0.0, 1.0),
+            },
+        )
     }
 }
 
@@ -703,6 +703,10 @@ fn update_terminal_material(
         &MaterialNode<TerminalUiMaterial>,
         &mut TerminalMaterialState,
         Ref<TerminalCells>,
+        // NOTE: `view` is taken as a plain `&`, never `Ref`. Latching
+        //       `view.is_changed()` into `grid_dirty` would make every cursor
+        //       move, selection drag and IME toggle rebuild and re-upload the
+        //       whole cell SSBO again — the defect the view/cells split removed.
         &TerminalView,
         Option<&PaneInactiveStyle>,
         Option<&TerminalOverlays>,
@@ -880,8 +884,9 @@ fn resolve_metrics(
 /// then records the atlas generation and grid dimensions the upload was
 /// built from.
 ///
-/// `dims` is `(cols, rows)` in cells. A zero in either axis uploads the
-/// one-element dummy buffers wgpu requires instead of an empty one.
+/// `handles` is `(cells, glyphs)`. `dims` is `(cols, rows)` in cells. A
+/// zero in either axis uploads the one-element dummy buffers wgpu
+/// requires instead of an empty one.
 fn upload_cells(
     state: &mut TerminalMaterialState,
     atlas: &mut GlyphAtlas,
@@ -894,6 +899,12 @@ fn upload_cells(
 ) {
     let (cols, rows) = (u32::from(dims.0), u32::from(dims.1));
     let (cells_handle, glyphs_handle) = handles;
+
+    debug_assert_eq!(
+        cells.cells.len(),
+        usize::from(dims.1),
+        "the retained cells have exactly as many rows as the grid"
+    );
 
     let cell_count = (cols * rows) as usize;
     state.cpu_cells.clear();
@@ -1208,25 +1219,13 @@ mod tests {
     /// Case: a row mixes OSC 8 linked text with plain text.
     #[test]
     fn rebuild_cells_writes_hyperlink_id_when_present() {
-        use bevy::platform::collections::HashMap;
-
         let linked = cell_with_link("x", Some(7));
         let unlinked = cell_with_link("y", None);
         let cells = TerminalCells {
             cells: vec![vec![GridSlot::Cell(linked), GridSlot::Cell(unlinked)]],
             ..Default::default()
         };
-        let mut state = TerminalMaterialState {
-            glyph_index_map: HashMap::new(),
-            cpu_cells: vec![GpuCell::default(); 2],
-            cpu_glyphs: Vec::new(),
-            last_atlas_generation: 0,
-            grid_dirty: true,
-            last_grid_dims: (0, 0),
-            last_phys_font_size: 0,
-            cached_metrics: None,
-            initialized: false,
-        };
+        let mut state = state_for(2);
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
