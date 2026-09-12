@@ -130,7 +130,7 @@ pub struct Palette {
 impl Default for Palette {
     fn default() -> Self {
         Self {
-            indexed: Box::new(XTERM_INDEXED),
+            indexed: Box::new(Self::XTERM_INDEXED),
             foreground: DEFAULT_FOREGROUND,
             background: DEFAULT_BACKGROUND,
         }
@@ -152,12 +152,42 @@ impl Palette {
             Color::Rgb(rgb) => rgb,
         }
     }
-}
 
-/// The full 256-slot xterm table [`Color::Indexed`] resolves to:
-/// [`ANSI_16`], the 6x6x6 cube on [`CUBE_RAMP`], and the grayscale ramp
-/// from 8 to 238 in steps of 10.
-pub(crate) static XTERM_INDEXED: [Rgb; 256] = build_xterm_indexed();
+    /// Sets slot `index` to `color`; returns whether the slot changed.
+    pub fn set_indexed(&mut self, index: u8, color: Rgb) -> bool {
+        let slot = &mut self.indexed[usize::from(index)];
+        if *slot == color {
+            return false;
+        }
+        *slot = color;
+        true
+    }
+
+    /// Returns slot `index` to its built-in default; returns whether the
+    /// slot changed.
+    pub fn reset_indexed(&mut self, index: u8) -> bool {
+        self.set_indexed(index, Self::XTERM_INDEXED[usize::from(index)])
+    }
+
+    /// Returns every slot to its built-in default; returns whether any
+    /// slot changed.
+    ///
+    /// TODO: return `foreground` and `background` to their defaults too,
+    /// once the OSC 10 / 11 / 12 handlers set them.
+    pub fn reset_all_indexed(&mut self) -> bool {
+        let indexed = &mut *self.indexed;
+        if *indexed == Self::XTERM_INDEXED {
+            return false;
+        }
+        *indexed = Self::XTERM_INDEXED;
+        true
+    }
+
+    /// The full 256-slot xterm table [`Color::Indexed`] resolves to:
+    /// [`ANSI_16`], the 6x6x6 cube on [`CUBE_RAMP`], and the grayscale
+    /// ramp from 8 to 238 in steps of 10.
+    const XTERM_INDEXED: [Rgb; 256] = build_xterm_indexed();
+}
 
 /// The default foreground [`Palette`] carries.
 const DEFAULT_FOREGROUND: Rgb = Rgb {
@@ -430,6 +460,69 @@ mod tests {
             digest(Color::DefaultForeground),
             digest(Color::DefaultBackground)
         );
+    }
+
+    /// Asserts that setting a slot reports the change and reads back.
+    ///
+    /// Case: a theme script recolors ANSI red.
+    #[test]
+    fn setting_a_slot_reports_the_change_and_reads_back() {
+        let mut palette = Palette::default();
+        let color = rgb(0x12, 0x34, 0x56);
+        assert!(palette.set_indexed(1, color));
+        assert_eq!(palette.indexed[1], color);
+    }
+
+    /// Asserts that setting a slot to the colour it already holds
+    /// reports no change, so no repaint is staged.
+    ///
+    /// Case: a theme script re-applies the stock xterm red on every
+    /// prompt.
+    #[test]
+    fn setting_a_slot_to_its_current_color_reports_no_change() {
+        let mut palette = Palette::default();
+        let current = palette.indexed[1];
+        assert!(!palette.set_indexed(1, current));
+    }
+
+    /// Asserts that resetting a slot restores its xterm default and
+    /// leaves the other slots alone.
+    ///
+    /// Case: a program restores the one slot it recolored, while a
+    /// second slot a theme script recolored earlier is left alone.
+    #[test]
+    fn resetting_a_slot_restores_its_default_and_leaves_the_others() {
+        let mut palette = Palette::default();
+        let color = rgb(0x12, 0x34, 0x56);
+        palette.set_indexed(1, color);
+        palette.set_indexed(2, color);
+        assert!(palette.reset_indexed(1));
+        assert_eq!(palette.indexed[1], Palette::XTERM_INDEXED[1]);
+        assert_eq!(palette.indexed[2], color);
+    }
+
+    /// Asserts that resetting a slot that holds its default reports no
+    /// change.
+    ///
+    /// Case: a program restores a slot it never recolored.
+    #[test]
+    fn resetting_an_untouched_slot_reports_no_change() {
+        assert!(!Palette::default().reset_indexed(1));
+    }
+
+    /// Asserts that resetting every slot restores the whole xterm table
+    /// and reports the change only once.
+    ///
+    /// Case: `tput init` sends a bare `OSC 104` twice in a row after a
+    /// theme script recolored the palette.
+    #[test]
+    fn resetting_every_slot_restores_the_whole_table() {
+        let mut palette = Palette::default();
+        palette.set_indexed(0, rgb(1, 2, 3));
+        palette.set_indexed(255, rgb(1, 2, 3));
+        assert!(palette.reset_all_indexed());
+        assert_eq!(*palette.indexed, Palette::XTERM_INDEXED);
+        assert!(!palette.reset_all_indexed());
     }
 
     /// Asserts that each color variant resolves against its designated
