@@ -91,21 +91,7 @@ impl Rgb {
     /// The colour an Xlib color string names in one of its two RGB
     /// Device forms, `rgb:<red>/<green>/<blue>` and `#RGB`; `None` for
     /// every other form and for a malformed one.
-    ///
-    /// Both forms are read as Xlib reads them (xlib.pdf p.89-90): an
-    /// `rgb:` component of one to four hex digits is scaled to 16 bits,
-    /// while a `#` component is placed in the most significant bits, so
-    /// `rgb:f` is full intensity and the red of `#f00` is not. The
-    /// 16-bit value is then narrowed to its high byte, the channel width
-    /// this palette keeps.
-    ///
-    /// # Invariants
-    ///
-    /// An `rgb:` string with anything after its third component is
-    /// refused. Surrounding whitespace is not trimmed. Color names and
-    /// the device-independent color spaces (`rgbi:`, `CIEXYZ:`, and the
-    /// rest) are refused.
-    pub(crate) fn from_color_spec(spec: &[u8]) -> Option<Self> {
+    pub fn from_color_spec(spec: &[u8]) -> Option<Self> {
         let [r, g, b] = rgb_device_components(spec)?.map(|component| component.to_be_bytes()[0]);
         Some(Self { r, g, b })
     }
