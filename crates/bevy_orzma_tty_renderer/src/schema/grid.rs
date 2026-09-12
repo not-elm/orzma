@@ -1,5 +1,5 @@
-//! The renderer's CPU-side mirror of one terminal, materialized into
-//! cells from the frames applied to it.
+//! The renderer's CPU-side mirror of one terminal's viewport and painted
+//! content, materialized from the frames applied to it.
 
 use crate::schema::{
     AnchoredPlacement, CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, Hyperlink,
@@ -63,38 +63,30 @@ impl GridSlot {
     }
 }
 
-/// The layout structure of the terminal grid.
-/// Each terminal entity owns this component.
+/// The viewport geometry of one terminal, and where the user is looking
+/// and pointing within it.
 #[derive(Component, Default)]
-pub struct TerminalGrid {
+pub struct TerminalView {
     /// Visible column count.
     pub cols: u16,
     /// Visible row count.
     pub rows: u16,
-    /// Cell grid indexed `[row][col]`.
-    pub cells: Vec<Vec<GridSlot>>,
     /// Current cursor state, absent until the first frame arrives.
     pub cursor: Option<Cursor>,
-    /// Lines scrolled back from the live tail; 0 = at live tail.
-    pub display_offset: u32,
     /// Vi-mode cursor from the last applied frame; `None` when that frame
     /// carries none.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range from the last applied frame, independent of
     /// `vi_cursor`.
     pub selection: Option<SelectionRange>,
+    /// Lines scrolled back from the live tail; 0 = at live tail.
+    pub display_offset: u32,
     /// App-level cursor visibility override. When `true`,
-    /// `current_cursor_pos_and_style()` clears [`CURSOR_VISIBLE_BIT`]
-    /// before returning. It is independent of `Cursor.visible`, so it
-    /// hides the cursor without clobbering terminal-controlled state.
+    /// [`Self::current_cursor_pos_and_style`] clears
+    /// [`CURSOR_VISIBLE_BIT`] before returning. It is independent of
+    /// `Cursor.visible`, so it hides the cursor without clobbering
+    /// terminal-controlled state.
     pub suppress_cursor: bool,
-    /// OSC 8 hyperlinks indexed by id. Every applied frame merges its
-    /// `hyperlinks` into this table, and a known id is never
-    /// overwritten.
-    pub hyperlinks: Vec<(HyperlinkId, HyperlinkUri)>,
-    /// The live palette set by the last frame that carried one;
-    /// symbolic cell colors resolve against it.
-    pub palette: Palette,
     /// Webview placements in active-grid coordinates, mirrored from the
     /// last applied frame. Every frame that carries a list replaces
     /// this one wholesale, and a placement absent from that list has no
@@ -102,23 +94,7 @@ pub struct TerminalGrid {
     pub placements: Vec<AnchoredPlacement>,
 }
 
-impl TerminalGrid {
-    /// Resolves `(row, col)` to the hyperlink at that visible cell, if
-    /// any. `col` is a column coordinate: both columns of a wide cell
-    /// resolve to the same hyperlink. Returns `None` for out-of-bounds
-    /// or unlinked cells.
-    pub fn hyperlink_at(&self, row: u16, col: u16) -> Option<(HyperlinkId, &HyperlinkUri)> {
-        let row_slots = self.cells.get(usize::from(row))?;
-        let col = usize::from(col);
-        let cell = match row_slots.get(col)? {
-            GridSlot::Cell(cell) => cell,
-            GridSlot::WideTrailer => row_slots.get(col.checked_sub(1)?)?.cell()?,
-            GridSlot::Empty => return None,
-        };
-        let link = cell.hyperlink.as_ref()?;
-        Some((link.id, &link.uri))
-    }
-
+impl TerminalView {
     /// Projects the cursor into viewport cells as `(column, row)`, or
     /// `None` when no frame has arrived yet or the cursor's line is
     /// scrolled out of the visible rows.
@@ -180,14 +156,108 @@ impl TerminalGrid {
         (cursor_pos, cursor_style)
     }
 
-    /// Whether applying `frame` would change this grid.
+    /// Whether applying `frame` would change this view.
     ///
-    /// An absent row and a `None` section mean "unchanged", so this counts
-    /// only a row inside the frame's own size, a size the grid does not
-    /// hold yet, a cursor, vi cursor, selection or viewport that differs,
-    /// a listed section that differs, or a hyperlink id the table lacks.
-    /// Rows beyond the frame's size and known hyperlink ids do not
-    /// count.
+    /// A `None` section means "unchanged", so a `None` placements list
+    /// does not count.
+    ///
+    /// # Invariants
+    ///
+    /// Returns `true` exactly when [`Self::apply`] mutates something.
+    pub fn differs_from(&self, frame: &Frame) -> bool {
+        let Frame {
+            size,
+            rows: _,
+            cursor,
+            display_offset,
+            vi_cursor,
+            selection,
+            placements,
+            palette: _,
+            hyperlinks: _,
+        } = frame;
+        self.cols != size.cols
+            || self.rows != size.rows
+            || self.cursor != Some(*cursor)
+            || self.display_offset != display_offset.0
+            || self.vi_cursor != *vi_cursor
+            || self.selection != *selection
+            || placements
+                .as_ref()
+                .is_some_and(|placements| *placements != self.placements)
+    }
+
+    /// Applies `frame`'s viewport sections to this view.
+    ///
+    /// The `None` sections are left alone, and `suppress_cursor` is
+    /// never written.
+    ///
+    /// # Invariants
+    ///
+    /// It mutates the view exactly when [`Self::differs_from`] reports
+    /// `true`.
+    pub fn apply(&mut self, frame: &Frame) {
+        let Frame {
+            size,
+            rows: _,
+            cursor,
+            display_offset,
+            vi_cursor,
+            selection,
+            placements,
+            palette: _,
+            hyperlinks: _,
+        } = frame;
+        self.cols = size.cols;
+        self.rows = size.rows;
+        self.cursor = Some(*cursor);
+        self.display_offset = display_offset.0;
+        self.vi_cursor = *vi_cursor;
+        self.selection = *selection;
+        if let Some(placements) = placements {
+            self.placements.clone_from(placements);
+        }
+    }
+}
+
+/// The painted contents of one terminal, materialized into column slots
+/// from the frames applied to it.
+#[derive(Component, Default)]
+pub struct TerminalCells {
+    /// Column slots indexed `[row][column]`.
+    pub cells: Vec<Vec<GridSlot>>,
+    /// OSC 8 hyperlinks indexed by id. Every applied frame merges its
+    /// `hyperlinks` into this table, and a known id is never
+    /// overwritten.
+    pub hyperlinks: Vec<(HyperlinkId, HyperlinkUri)>,
+    /// The live palette set by the last frame that carried one;
+    /// symbolic cell colors resolve against it.
+    pub palette: Palette,
+}
+
+impl TerminalCells {
+    /// Resolves `(row, col)` to the hyperlink at that visible cell, if
+    /// any. `col` is a column coordinate: both columns of a wide cell
+    /// resolve to the same hyperlink. Returns `None` for out-of-bounds
+    /// or unlinked cells.
+    pub fn hyperlink_at(&self, row: u16, col: u16) -> Option<(HyperlinkId, &HyperlinkUri)> {
+        let row_slots = self.cells.get(usize::from(row))?;
+        let col = usize::from(col);
+        let cell = match row_slots.get(col)? {
+            GridSlot::Cell(cell) => cell,
+            GridSlot::WideTrailer => row_slots.get(col.checked_sub(1)?)?.cell()?,
+            GridSlot::Empty => return None,
+        };
+        let link = cell.hyperlink.as_ref()?;
+        Some((link.id, &link.uri))
+    }
+
+    /// Whether applying `frame` would change these cells.
+    ///
+    /// An absent row and a `None` section mean "unchanged", so this
+    /// counts only a row inside the frame's own size, a size the rows do
+    /// not hold yet, a listed palette that differs, or a hyperlink id
+    /// the table lacks.
     ///
     /// # Invariants
     ///
@@ -196,57 +266,46 @@ impl TerminalGrid {
         let Frame {
             size,
             rows,
-            cursor,
-            display_offset,
-            vi_cursor,
-            selection,
-            placements,
+            cursor: _,
+            display_offset: _,
+            vi_cursor: _,
+            selection: _,
+            placements: _,
             palette,
             hyperlinks,
         } = frame;
-        size.cols != self.cols
-            || size.rows != self.rows
-            || self.cells.len() != usize::from(size.rows)
-            || self.cursor != Some(*cursor)
-            || self.display_offset != display_offset.0
-            || self.vi_cursor != *vi_cursor
-            || self.selection != *selection
+        self.size_differs(size.cols, size.rows)
             || rows.iter().any(|row| row.line.0 < size.rows)
-            || placements
-                .as_ref()
-                .is_some_and(|placements| *placements != self.placements)
             || palette
                 .as_ref()
                 .is_some_and(|palette| *palette != self.palette)
             || hyperlinks.iter().any(|link| !self.knows_hyperlink(link.id))
     }
 
-    /// Applies `frame` to this grid.
+    /// Applies `frame`'s content sections to these cells.
     ///
-    /// Every row the frame carries inside its size replaces the cells at
+    /// Every row the frame carries inside its size replaces the slots at
     /// that line, resolving its hyperlink ids against the table, into
     /// which this frame's own definitions are merged first; the `None`
     /// sections are left alone.
     ///
     /// # Invariants
     ///
-    /// After `apply` returns, `self.cells.len() == self.rows as usize`,
-    /// whatever length the grid was built with. It mutates the grid
-    /// exactly when [`Self::differs_from`] reports `true`.
+    /// After `apply` returns there are exactly `frame.size.rows` rows,
+    /// each holding exactly `frame.size.cols` slots. It mutates the
+    /// cells exactly when [`Self::differs_from`] reports `true`.
     pub fn apply(&mut self, frame: &Frame) {
         let Frame {
             size,
             rows,
-            cursor,
-            display_offset,
-            vi_cursor,
-            selection,
-            placements,
+            cursor: _,
+            display_offset: _,
+            vi_cursor: _,
+            selection: _,
+            placements: _,
             palette,
             hyperlinks,
         } = frame;
-        self.cols = size.cols;
-        self.rows = size.rows;
         let cols = usize::from(size.cols);
         self.cells
             .resize_with(usize::from(size.rows), || vec![GridSlot::Empty; cols]);
@@ -267,16 +326,17 @@ impl TerminalGrid {
             };
             *slot = runs_to_cells(&row.contents, size.cols, &self.hyperlinks);
         }
-        self.cursor = Some(*cursor);
-        self.display_offset = display_offset.0;
-        self.vi_cursor = *vi_cursor;
-        self.selection = *selection;
-        if let Some(placements) = placements {
-            self.placements.clone_from(placements);
-        }
         if let Some(palette) = palette {
             self.palette.clone_from(palette);
         }
+    }
+
+    fn size_differs(&self, cols: u16, rows: u16) -> bool {
+        self.cells.len() != usize::from(rows)
+            || self
+                .cells
+                .first()
+                .is_some_and(|row| row.len() != usize::from(cols))
     }
 
     fn knows_hyperlink(&self, id: HyperlinkId) -> bool {
@@ -344,14 +404,24 @@ fn runs_to_cells(
 }
 
 #[cfg(test)]
-impl TerminalGrid {
-    /// A one-by-one grid that already mirrors [`quiet_frame`].
+impl TerminalView {
+    /// A one-by-one view that already mirrors [`quiet_frame`].
     pub(crate) fn settled() -> Self {
         Self {
             cols: 1,
             rows: 1,
-            cells: vec![vec![GridSlot::Empty]],
             cursor: Some(Cursor::default()),
+            ..Default::default()
+        }
+    }
+}
+
+#[cfg(test)]
+impl TerminalCells {
+    /// A one-by-one cell grid that already mirrors [`quiet_frame`].
+    pub(crate) fn settled() -> Self {
+        Self {
+            cells: vec![vec![GridSlot::Empty]],
             ..Default::default()
         }
     }
@@ -420,6 +490,13 @@ mod tests {
         }
     }
 
+    fn dirty_row(line: u16, text: &str) -> DirtyRow {
+        DirtyRow {
+            line: ViewportLine(line),
+            contents: Row::from(vec![run_with_link(text, None)]),
+        }
+    }
+
     /// Asserts that a visible cursor reports its viewport cell and a
     /// packed style with the visible bit set.
     ///
@@ -427,13 +504,13 @@ mod tests {
     /// shown.
     #[test]
     fn current_cursor_pos_and_style_returns_packed_style_when_not_suppressed() {
-        let grid = TerminalGrid {
+        let view = TerminalView {
             rows: 24,
             cursor: Some(visible_block_cursor()),
             suppress_cursor: false,
             ..Default::default()
         };
-        let (pos, style) = grid.current_cursor_pos_and_style();
+        let (pos, style) = view.current_cursor_pos_and_style();
         assert_eq!(pos, UVec2::new(3, 5));
         assert_eq!(style & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
     }
@@ -445,31 +522,31 @@ mod tests {
     /// cursor sits on the bottom row of a 24-row screen.
     #[test]
     fn cursor_viewport_cell_follows_the_display_offset() {
-        let mut grid = TerminalGrid {
+        let mut view = TerminalView {
             cols: 80,
             rows: 24,
-            ..TerminalGrid::default()
+            ..TerminalView::default()
         };
-        grid.cursor = Some(Cursor {
+        view.cursor = Some(Cursor {
             point: GridPoint {
                 line: GridLine(23),
                 column: GridColumn(5),
             },
             ..Cursor::default()
         });
-        assert_eq!(grid.cursor_viewport_cell(), Some((5, 23)));
+        assert_eq!(view.cursor_viewport_cell(), Some((5, 23)));
 
-        grid.display_offset = 3;
-        assert_eq!(grid.cursor_viewport_cell(), None);
+        view.display_offset = 3;
+        assert_eq!(view.cursor_viewport_cell(), None);
 
-        grid.cursor = Some(Cursor {
+        view.cursor = Some(Cursor {
             point: GridPoint {
                 line: GridLine(10),
                 column: GridColumn(0),
             },
             ..Cursor::default()
         });
-        assert_eq!(grid.cursor_viewport_cell(), Some((0, 13)));
+        assert_eq!(view.cursor_viewport_cell(), Some((0, 13)));
     }
 
     /// Asserts that the `_or_top` fallback keeps the cursor's column on row
@@ -480,22 +557,22 @@ mod tests {
     /// composition, pushing the prompt's cursor row out of the viewport.
     #[test]
     fn cursor_viewport_cell_or_top_keeps_the_column_when_off_viewport() {
-        let mut grid = TerminalGrid {
+        let mut view = TerminalView {
             cols: 80,
             rows: 24,
-            ..TerminalGrid::default()
+            ..TerminalView::default()
         };
-        assert_eq!(grid.cursor_viewport_cell_or_top(), (0, 0));
+        assert_eq!(view.cursor_viewport_cell_or_top(), (0, 0));
 
-        grid.cursor = Some(Cursor {
+        view.cursor = Some(Cursor {
             point: GridPoint {
                 line: GridLine(23),
                 column: GridColumn(5),
             },
             ..Cursor::default()
         });
-        grid.display_offset = 3;
-        assert_eq!(grid.cursor_viewport_cell_or_top(), (5, 0));
+        view.display_offset = 3;
+        assert_eq!(view.cursor_viewport_cell_or_top(), (5, 0));
     }
 
     /// Asserts that suppression clears the visible bit of the packed
@@ -504,13 +581,13 @@ mod tests {
     /// Case: an IME composition temporarily hides the caret.
     #[test]
     fn current_cursor_pos_and_style_clears_visible_bit_when_suppressed() {
-        let grid = TerminalGrid {
+        let view = TerminalView {
             rows: 24,
             cursor: Some(visible_block_cursor()),
             suppress_cursor: true,
             ..Default::default()
         };
-        let (_pos, style) = grid.current_cursor_pos_and_style();
+        let (_pos, style) = view.current_cursor_pos_and_style();
         assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
     }
 
@@ -521,7 +598,7 @@ mod tests {
     /// cursor position is already recorded on the mirror.
     #[test]
     fn suppress_cursor_does_not_affect_vi_cursor_position() {
-        let grid = TerminalGrid {
+        let view = TerminalView {
             rows: 24,
             vi_cursor: Some(ViCursor {
                 point: GridPoint {
@@ -532,7 +609,7 @@ mod tests {
             suppress_cursor: true,
             ..Default::default()
         };
-        let (pos, style) = grid.current_cursor_pos_and_style();
+        let (pos, style) = view.current_cursor_pos_and_style();
         assert_eq!(pos, UVec2::new(7, 2));
         assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
     }
@@ -545,15 +622,129 @@ mod tests {
     /// keeps its caret on the live prompt line below the viewport.
     #[test]
     fn a_scrolled_away_cursor_paints_nothing() {
-        let grid = TerminalGrid {
+        let view = TerminalView {
             rows: 24,
             display_offset: 30,
             cursor: Some(visible_block_cursor()),
             ..Default::default()
         };
-        let (pos, style) = grid.current_cursor_pos_and_style();
+        let (pos, style) = view.current_cursor_pos_and_style();
         assert_eq!(pos, UVec2::ZERO);
         assert_eq!(style, 0);
+    }
+
+    /// Asserts that a moved cursor is a difference, and that applying
+    /// the frame settles the view so the cursor round-trips to a
+    /// matching state.
+    ///
+    /// Case: the user presses an arrow key and the application moves
+    /// the caret without repainting a cell.
+    #[test]
+    fn a_moved_cursor_differs() {
+        let mut view = TerminalView::settled();
+        let frame = Frame {
+            cursor: Cursor {
+                point: GridPoint {
+                    line: GridLine(1),
+                    column: GridColumn(2),
+                },
+                ..Cursor::default()
+            },
+            ..quiet_frame()
+        };
+        assert!(view.differs_from(&frame));
+        view.apply(&frame);
+        assert!(!view.differs_from(&frame));
+    }
+
+    /// Asserts that a moved viewport (display offset) is a difference,
+    /// and that applying the frame settles the view so the offset
+    /// round-trips to a matching state.
+    ///
+    /// Case: a frame that only moves the display offset reaches a settled
+    /// mirror.
+    #[test]
+    fn a_moved_viewport_differs() {
+        let mut view = TerminalView::settled();
+        let frame = Frame {
+            display_offset: DisplayOffset(7),
+            ..quiet_frame()
+        };
+        assert!(view.differs_from(&frame));
+        view.apply(&frame);
+        assert!(!view.differs_from(&frame));
+    }
+
+    /// Asserts that a placements list replaces the mirror wholesale,
+    /// including down to empty, and that `None` leaves it alone.
+    ///
+    /// Case: a program mounts a webview, a quiet frame follows, and the
+    /// program then unmounts it, so the next frame carries an empty
+    /// list.
+    #[test]
+    fn placements_replace_wholesale_and_none_keeps_them() {
+        let mut view = TerminalView::settled();
+        let placed = AnchoredPlacement {
+            id: InstanceId(1),
+            point: GridPoint {
+                line: GridLine(2),
+                column: GridColumn(3),
+            },
+            size: PlacementSize { rows: 4, cols: 5 },
+        };
+        let mounted = Frame {
+            placements: Some(vec![placed]),
+            ..quiet_frame()
+        };
+        assert!(view.differs_from(&mounted));
+        view.apply(&mounted);
+        assert_eq!(view.placements, vec![placed]);
+
+        let unchanged = quiet_frame();
+        assert!(!view.differs_from(&unchanged));
+        view.apply(&unchanged);
+        assert_eq!(view.placements, vec![placed]);
+
+        let hidden = Frame {
+            placements: Some(vec![]),
+            ..quiet_frame()
+        };
+        assert!(view.differs_from(&hidden));
+        view.apply(&hidden);
+        assert_eq!(view.placements, vec![]);
+    }
+
+    /// Asserts that a frame the view reports no difference for leaves
+    /// every view field untouched.
+    ///
+    /// Case: a frame repeats the viewport state the view already holds.
+    #[test]
+    fn a_view_that_reports_no_difference_is_not_mutated_by_apply() {
+        let mut view = TerminalView::settled();
+        let frame = quiet_frame();
+        assert!(!view.differs_from(&frame));
+        let before = (
+            view.cols,
+            view.rows,
+            view.cursor,
+            view.display_offset,
+            view.vi_cursor,
+            view.selection,
+            view.placements.clone(),
+        );
+        view.apply(&frame);
+        assert_eq!(
+            (
+                view.cols,
+                view.rows,
+                view.cursor,
+                view.display_offset,
+                view.vi_cursor,
+                view.selection,
+                view.placements.clone(),
+            ),
+            before
+        );
     }
 
     /// Asserts that a lookup outside the populated grid returns `None`.
@@ -562,14 +753,12 @@ mod tests {
     /// or column while the grid is smaller than the window.
     #[test]
     fn hyperlink_at_returns_none_when_out_of_bounds() {
-        let grid = TerminalGrid {
-            cols: 4,
-            rows: 2,
+        let cells = TerminalCells {
             cells: vec![vec![], vec![]],
             ..Default::default()
         };
-        assert!(grid.hyperlink_at(99, 0).is_none());
-        assert!(grid.hyperlink_at(0, 99).is_none());
+        assert!(cells.hyperlink_at(99, 0).is_none());
+        assert!(cells.hyperlink_at(0, 99).is_none());
     }
 
     /// Asserts that a column no run covered resolves to no hyperlink.
@@ -578,13 +767,11 @@ mod tests {
     /// run painted this frame.
     #[test]
     fn hyperlink_at_returns_none_for_empty_slot() {
-        let grid = TerminalGrid {
-            cols: 4,
-            rows: 1,
+        let cells = TerminalCells {
             cells: vec![vec![GridSlot::Empty; 4]],
             ..Default::default()
         };
-        assert!(grid.hyperlink_at(0, 0).is_none());
+        assert!(cells.hyperlink_at(0, 0).is_none());
     }
 
     /// Asserts that a linked cell resolves to its hyperlink id and URI.
@@ -594,13 +781,11 @@ mod tests {
     #[test]
     fn hyperlink_at_returns_id_and_uri_for_linked_cell() {
         let cell = cell_with_link("x", 1, Some((7, "https://example")));
-        let grid = TerminalGrid {
-            cols: 4,
-            rows: 1,
+        let cells = TerminalCells {
             cells: vec![vec![GridSlot::Cell(cell)]],
             ..Default::default()
         };
-        let (id, uri) = grid.hyperlink_at(0, 0).expect("hyperlink present");
+        let (id, uri) = cells.hyperlink_at(0, 0).expect("hyperlink present");
         assert_eq!(id, HyperlinkId(7));
         assert_eq!(uri.as_str(), "https://example");
     }
@@ -612,13 +797,11 @@ mod tests {
     #[test]
     fn hyperlink_at_returns_none_for_unlinked_cell() {
         let cell = cell_with_link("x", 1, None);
-        let grid = TerminalGrid {
-            cols: 4,
-            rows: 1,
+        let cells = TerminalCells {
             cells: vec![vec![GridSlot::Cell(cell)]],
             ..Default::default()
         };
-        assert!(grid.hyperlink_at(0, 0).is_none());
+        assert!(cells.hyperlink_at(0, 0).is_none());
     }
 
     /// Asserts that both columns of a wide grapheme resolve to the
@@ -630,9 +813,7 @@ mod tests {
     fn hyperlink_at_resolves_both_halves_of_wide_char() {
         let wide_linked = cell_with_link("あ", 2, Some((7, "https://example")));
         let trailing = cell_with_link("b", 1, None);
-        let grid = TerminalGrid {
-            cols: 3,
-            rows: 1,
+        let cells = TerminalCells {
             cells: vec![vec![
                 GridSlot::Cell(wide_linked),
                 GridSlot::WideTrailer,
@@ -640,13 +821,13 @@ mod tests {
             ]],
             ..Default::default()
         };
-        let (id, uri) = grid.hyperlink_at(0, 0).expect("left half should resolve");
+        let (id, uri) = cells.hyperlink_at(0, 0).expect("left half should resolve");
         assert_eq!(id, HyperlinkId(7));
         assert_eq!(uri.as_str(), "https://example");
-        let (id, uri) = grid.hyperlink_at(0, 1).expect("right half should resolve");
+        let (id, uri) = cells.hyperlink_at(0, 1).expect("right half should resolve");
         assert_eq!(id, HyperlinkId(7));
         assert_eq!(uri.as_str(), "https://example");
-        assert!(grid.hyperlink_at(0, 2).is_none());
+        assert!(cells.hyperlink_at(0, 2).is_none());
     }
 
     /// Asserts that a run's hyperlink id resolves against the retained
@@ -733,93 +914,15 @@ mod tests {
         assert_eq!(slots[2], GridSlot::Empty);
     }
 
-    fn dirty_row(line: u16, text: &str) -> DirtyRow {
-        DirtyRow {
-            line: ViewportLine(line),
-            contents: Row::from(vec![run_with_link(text, None)]),
-        }
-    }
-
-    /// Asserts that a frame carrying nothing new reports no difference.
-    ///
-    /// Case: a frame repeats what the mirror already holds.
-    #[test]
-    fn a_quiet_frame_does_not_differ() {
-        assert!(!TerminalGrid::settled().differs_from(&quiet_frame()));
-    }
-
-    /// Asserts that a moved cursor is a difference, and that applying
-    /// the frame settles the grid so the cursor round-trips to a
-    /// matching state.
-    ///
-    /// Case: the user presses an arrow key and the application moves
-    /// the caret without repainting a cell.
-    #[test]
-    fn a_moved_cursor_differs() {
-        let mut grid = TerminalGrid::settled();
-        let frame = Frame {
-            cursor: Cursor {
-                point: GridPoint {
-                    line: GridLine(1),
-                    column: GridColumn(2),
-                },
-                ..Cursor::default()
-            },
-            ..quiet_frame()
-        };
-        assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
-        assert!(!grid.differs_from(&frame));
-    }
-
-    /// Asserts that a moved viewport (display offset) is a difference,
-    /// and that applying the frame settles the grid so the offset
-    /// round-trips to a matching state.
-    ///
-    /// Case: a frame that only moves the display offset reaches a settled
-    /// mirror.
-    #[test]
-    fn a_moved_viewport_differs() {
-        let mut grid = TerminalGrid::settled();
-        let frame = Frame {
-            display_offset: DisplayOffset(7),
-            ..quiet_frame()
-        };
-        assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
-        assert!(!grid.differs_from(&frame));
-    }
-
-    /// Asserts that a size change alone is a difference, and that
-    /// applying the frame resizes the cell rows to match even though
-    /// the frame carries no rows of its own.
-    ///
-    /// Case: a frame that only changes the size reaches a settled mirror.
-    #[test]
-    fn a_new_size_alone_differs() {
-        let mut grid = TerminalGrid::settled();
-        let frame = Frame {
-            size: GridSize { cols: 3, rows: 2 },
-            ..quiet_frame()
-        };
-        assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
-        assert_eq!(grid.cells.len(), 2);
-        assert!(!grid.differs_from(&frame));
-    }
-
-    /// Asserts that a row inside the grid replaces that row's contents
-    /// when applied, while a row the frame does not touch keeps its
-    /// full length of empty slots, and counts as a difference.
+    /// Asserts that a carried row replaces that row's slots when
+    /// applied, while a row the frame does not touch is leveled to the
+    /// full row width instead of keeping its original length.
     ///
     /// Case: a build prints one line of a two-row pane.
     #[test]
-    fn a_row_in_range_is_applied_at_its_projected_line() {
-        let mut grid = TerminalGrid {
-            cols: 2,
-            rows: 2,
+    fn a_carried_row_replaces_its_slots_and_leaves_other_rows_full_width() {
+        let mut cells = TerminalCells {
             cells: vec![vec![], vec![]],
-            cursor: Some(Cursor::default()),
             ..Default::default()
         };
         let frame = Frame {
@@ -827,64 +930,55 @@ mod tests {
             rows: vec![dirty_row(1, "x")],
             ..quiet_frame()
         };
-        assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
-        assert_eq!(grid.cells[1][0].cell().map(|c| c.text.as_str()), Some("x"));
-        assert_eq!(grid.cells[0], vec![GridSlot::Empty; 2]);
+        assert!(cells.differs_from(&frame));
+        cells.apply(&frame);
+        assert_eq!(cells.cells[1][0].cell().map(|c| c.text.as_str()), Some("x"));
+        assert_eq!(cells.cells[0], vec![GridSlot::Empty; 2]);
     }
 
-    /// Asserts that a grid built at the frame's size but without cell
-    /// rows still differs, and that applying the frame gives every row
+    /// Asserts that cells built at the frame's size but without cell
+    /// rows still differ, and that applying the frame gives every row
     /// a slot and fills the carried ones.
     ///
     /// Case: the host pre-sizes the grid to the PTY geometry before the
     /// VT's bootstrap repaint arrives at that same size.
     #[test]
     fn a_pre_sized_grid_without_cells_takes_the_frame_rows() {
-        let mut grid = TerminalGrid {
-            cols: 2,
-            rows: 2,
-            cursor: Some(Cursor::default()),
-            ..Default::default()
-        };
+        let mut cells = TerminalCells::default();
         let frame = Frame {
             size: GridSize { cols: 2, rows: 2 },
             rows: vec![dirty_row(0, "a"), dirty_row(1, "b")],
             ..quiet_frame()
         };
-        assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
-        assert_eq!(grid.cells.len(), 2);
-        assert_eq!(grid.cells[1][0].cell().map(|c| c.text.as_str()), Some("b"));
-        assert!(!grid.differs_from(&Frame {
+        assert!(cells.differs_from(&frame));
+        cells.apply(&frame);
+        assert_eq!(cells.cells.len(), 2);
+        assert_eq!(cells.cells[1][0].cell().map(|c| c.text.as_str()), Some("b"));
+        assert!(!cells.differs_from(&Frame {
             size: GridSize { cols: 2, rows: 2 },
             ..quiet_frame()
         }));
     }
 
-    /// Asserts that a frame with fewer rows than the grid truncates the
+    /// Asserts that a frame with fewer rows than the cells truncates the
     /// cell rows to the new height.
     ///
     /// Case: the user drags the window shorter and the VT's repaint at
     /// the new height arrives.
     #[test]
     fn a_shrinking_size_truncates_the_cells() {
-        let mut grid = TerminalGrid {
-            cols: 1,
-            rows: 3,
+        let mut cells = TerminalCells {
             cells: vec![vec![], vec![], vec![]],
-            cursor: Some(Cursor::default()),
             ..Default::default()
         };
         let frame = Frame {
             rows: vec![dirty_row(0, "a")],
             ..quiet_frame()
         };
-        assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
-        assert_eq!((grid.cols, grid.rows), (1, 1));
-        assert_eq!(grid.cells.len(), 1);
-        assert_eq!(grid.cells[0][0].cell().map(|c| c.text.as_str()), Some("a"));
+        assert!(cells.differs_from(&frame));
+        cells.apply(&frame);
+        assert_eq!(cells.cells.len(), 1);
+        assert_eq!(cells.cells[0][0].cell().map(|c| c.text.as_str()), Some("a"));
     }
 
     /// Asserts that a frame changing only the column count is a
@@ -894,17 +988,16 @@ mod tests {
     /// height, and the VT's repaint at the new width arrives.
     #[test]
     fn a_cols_only_size_change_differs_and_repaints() {
-        let mut grid = TerminalGrid::settled();
+        let mut cells = TerminalCells::settled();
         let frame = Frame {
             size: GridSize { cols: 3, rows: 1 },
             rows: vec![dirty_row(0, "abc")],
             ..quiet_frame()
         };
-        assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
-        assert_eq!((grid.cols, grid.rows), (3, 1));
-        assert_eq!(grid.cells[0].len(), 3);
-        assert!(!grid.differs_from(&Frame {
+        assert!(cells.differs_from(&frame));
+        cells.apply(&frame);
+        assert_eq!(cells.cells[0].len(), 3);
+        assert!(!cells.differs_from(&Frame {
             size: GridSize { cols: 3, rows: 1 },
             ..quiet_frame()
         }));
@@ -916,14 +1009,14 @@ mod tests {
     /// Case: a malformed frame names a row past its own last row.
     #[test]
     fn a_row_out_of_range_is_ignored() {
-        let mut grid = TerminalGrid::settled();
+        let mut cells = TerminalCells::settled();
         let frame = Frame {
             rows: vec![dirty_row(5, "x")],
             ..quiet_frame()
         };
-        assert!(!grid.differs_from(&frame));
-        grid.apply(&frame);
-        assert_eq!(grid.cells.len(), 1);
+        assert!(!cells.differs_from(&frame));
+        cells.apply(&frame);
+        assert_eq!(cells.cells.len(), 1);
     }
 
     /// Asserts that a size change resizes the cell rows before the
@@ -933,56 +1026,41 @@ mod tests {
     /// carries every row of the new size.
     #[test]
     fn a_size_change_resizes_the_cells() {
-        let mut grid = TerminalGrid::settled();
+        let mut cells = TerminalCells::settled();
         let frame = Frame {
             size: GridSize { cols: 3, rows: 2 },
             rows: vec![dirty_row(0, "a"), dirty_row(1, "b")],
             ..quiet_frame()
         };
-        assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
-        assert_eq!((grid.cols, grid.rows), (3, 2));
-        assert_eq!(grid.cells.len(), 2);
-        assert_eq!(grid.cells[1][0].cell().map(|c| c.text.as_str()), Some("b"));
+        assert!(cells.differs_from(&frame));
+        cells.apply(&frame);
+        assert_eq!(cells.cells.len(), 2);
+        assert_eq!(cells.cells[1][0].cell().map(|c| c.text.as_str()), Some("b"));
     }
 
-    /// Asserts that a placements list replaces the mirror wholesale,
-    /// including down to empty, and that `None` leaves it alone.
+    /// Asserts that a column-count change levels every retained row to
+    /// the new width, including the rows the frame does not carry.
     ///
-    /// Case: a program mounts a webview, a quiet frame follows, and the
-    /// program then unmounts it, so the next frame carries an empty
-    /// list.
+    /// Case: the user drags the window wider and the repaint that
+    /// follows names only the row the cursor sits on.
     #[test]
-    fn placements_replace_wholesale_and_none_keeps_them() {
-        let mut grid = TerminalGrid::settled();
-        let placed = AnchoredPlacement {
-            id: InstanceId(1),
-            point: GridPoint {
-                line: GridLine(2),
-                column: GridColumn(3),
-            },
-            size: PlacementSize { rows: 4, cols: 5 },
-        };
-        let mounted = Frame {
-            placements: Some(vec![placed]),
+    fn a_cols_change_levels_every_row_not_only_the_carried_ones() {
+        let mut cells = TerminalCells::default();
+        cells.apply(&Frame {
+            size: GridSize { cols: 2, rows: 2 },
+            rows: vec![dirty_row(0, "ab"), dirty_row(1, "cd")],
             ..quiet_frame()
-        };
-        assert!(grid.differs_from(&mounted));
-        grid.apply(&mounted);
-        assert_eq!(grid.placements, vec![placed]);
-
-        let unchanged = quiet_frame();
-        assert!(!grid.differs_from(&unchanged));
-        grid.apply(&unchanged);
-        assert_eq!(grid.placements, vec![placed]);
-
-        let hidden = Frame {
-            placements: Some(vec![]),
+        });
+        cells.apply(&Frame {
+            size: GridSize { cols: 5, rows: 2 },
+            rows: vec![dirty_row(0, "abcde")],
             ..quiet_frame()
-        };
-        assert!(grid.differs_from(&hidden));
-        grid.apply(&hidden);
-        assert_eq!(grid.placements, vec![]);
+        });
+        assert_eq!(cells.cells.len(), 2);
+        assert!(
+            cells.cells.iter().all(|row| row.len() == 5),
+            "every row is as wide as the grid"
+        );
     }
 
     /// Asserts that a palette replaces the mirror and `None` keeps it.
@@ -991,7 +1069,7 @@ mod tests {
     /// frame carries no palette.
     #[test]
     fn a_palette_replaces_the_mirror_and_none_keeps_it() {
-        let mut grid = TerminalGrid::settled();
+        let mut cells = TerminalCells::settled();
         let palette = Palette {
             background: Rgb { r: 9, g: 8, b: 7 },
             ..Palette::default()
@@ -1000,10 +1078,10 @@ mod tests {
             palette: Some(palette),
             ..quiet_frame()
         };
-        assert!(grid.differs_from(&recolored));
-        grid.apply(&recolored);
-        assert_eq!(grid.palette.background, Rgb { r: 9, g: 8, b: 7 });
-        assert!(!grid.differs_from(&quiet_frame()));
+        assert!(cells.differs_from(&recolored));
+        cells.apply(&recolored);
+        assert_eq!(cells.palette.background, Rgb { r: 9, g: 8, b: 7 });
+        assert!(!cells.differs_from(&quiet_frame()));
     }
 
     /// Asserts that hyperlinks merge without overwriting a known id,
@@ -1013,9 +1091,9 @@ mod tests {
     /// holds alongside a genuinely new one.
     #[test]
     fn hyperlinks_merge_without_overwrite() {
-        let mut grid = TerminalGrid {
+        let mut cells = TerminalCells {
             hyperlinks: vec![(HyperlinkId(1), HyperlinkUri::new("https://old"))],
-            ..TerminalGrid::settled()
+            ..TerminalCells::settled()
         };
         let repeated = Frame {
             hyperlinks: vec![Hyperlink {
@@ -1024,7 +1102,7 @@ mod tests {
             }],
             ..quiet_frame()
         };
-        assert!(!grid.differs_from(&repeated));
+        assert!(!cells.differs_from(&repeated));
 
         let extended = Frame {
             hyperlinks: vec![
@@ -1039,11 +1117,11 @@ mod tests {
             ],
             ..quiet_frame()
         };
-        assert!(grid.differs_from(&extended));
-        grid.apply(&extended);
-        assert_eq!(grid.hyperlinks.len(), 2);
-        assert_eq!(grid.hyperlinks[0].1.as_str(), "https://old");
-        assert_eq!(grid.hyperlinks[1].1.as_str(), "https://new");
+        assert!(cells.differs_from(&extended));
+        cells.apply(&extended);
+        assert_eq!(cells.hyperlinks.len(), 2);
+        assert_eq!(cells.hyperlinks[0].1.as_str(), "https://old");
+        assert_eq!(cells.hyperlinks[1].1.as_str(), "https://new");
     }
 
     /// Asserts that a row resolves a hyperlink id defined by an earlier
@@ -1053,15 +1131,15 @@ mod tests {
     /// references it is repainted in a later one.
     #[test]
     fn a_row_resolves_a_hyperlink_from_an_earlier_frame() {
-        let mut grid = TerminalGrid::settled();
-        grid.apply(&Frame {
+        let mut cells = TerminalCells::settled();
+        cells.apply(&Frame {
             hyperlinks: vec![Hyperlink {
                 id: HyperlinkId(4),
                 uri: HyperlinkUri::new("https://earlier"),
             }],
             ..quiet_frame()
         });
-        grid.apply(&Frame {
+        cells.apply(&Frame {
             rows: vec![DirtyRow {
                 line: ViewportLine(0),
                 contents: Row::from(vec![run_with_link("a", Some(HyperlinkId(4)))]),
@@ -1069,11 +1147,127 @@ mod tests {
             ..quiet_frame()
         });
         assert_eq!(
-            grid.cells[0][0]
+            cells.cells[0][0]
                 .cell()
                 .and_then(|c| c.hyperlink.as_ref())
                 .map(|h| h.uri.as_str()),
             Some("https://earlier")
+        );
+    }
+
+    /// Asserts that a frame carrying nothing new reports no difference
+    /// for either component.
+    ///
+    /// Case: a frame repeats what the mirror already holds.
+    #[test]
+    fn a_quiet_frame_differs_from_neither_component() {
+        assert!(!TerminalView::settled().differs_from(&quiet_frame()));
+        assert!(!TerminalCells::settled().differs_from(&quiet_frame()));
+    }
+
+    /// Asserts that a size change alone is a difference for the view,
+    /// and that applying the frame updates its column and row counts
+    /// even though the frame carries no rows of its own.
+    ///
+    /// Case: a frame that only changes the size reaches a settled view.
+    #[test]
+    fn a_new_size_alone_differs() {
+        let mut view = TerminalView::settled();
+        let frame = Frame {
+            size: GridSize { cols: 3, rows: 2 },
+            ..quiet_frame()
+        };
+        assert!(view.differs_from(&frame));
+        view.apply(&frame);
+        assert_eq!((view.cols, view.rows), (3, 2));
+        assert!(!view.differs_from(&frame));
+    }
+
+    /// Asserts that a size change alone is a difference for the cells,
+    /// and that applying the frame resizes the cell rows to match even
+    /// though the frame carries no rows of its own.
+    ///
+    /// Case: a frame that only changes the size reaches settled cells.
+    #[test]
+    fn a_new_size_alone_resizes_the_cell_rows() {
+        let mut cells = TerminalCells::settled();
+        let frame = Frame {
+            size: GridSize { cols: 3, rows: 2 },
+            ..quiet_frame()
+        };
+        assert!(cells.differs_from(&frame));
+        cells.apply(&frame);
+        assert_eq!(cells.cells.len(), 2);
+        assert!(!cells.differs_from(&frame));
+    }
+
+    /// Asserts that a shrinking size change is a difference for the
+    /// view, and that applying the frame updates its column and row
+    /// counts to the smaller size.
+    ///
+    /// Case: the user drags the window shorter and the VT's repaint at
+    /// the new height arrives.
+    #[test]
+    fn a_shrinking_size_updates_the_view_dims() {
+        let mut view = TerminalView {
+            cols: 1,
+            rows: 3,
+            ..TerminalView::settled()
+        };
+        let frame = Frame {
+            rows: vec![dirty_row(0, "a")],
+            ..quiet_frame()
+        };
+        assert!(view.differs_from(&frame));
+        view.apply(&frame);
+        assert_eq!((view.cols, view.rows), (1, 1));
+    }
+
+    /// Asserts that a frame changing only the column count is a
+    /// difference for the view, and that applying it updates the
+    /// column count while leaving the row count alone.
+    ///
+    /// Case: the user drags the window wider without changing its
+    /// height, and the VT's repaint at the new width arrives.
+    #[test]
+    fn a_cols_only_size_change_differs_and_updates_the_view() {
+        let mut view = TerminalView::settled();
+        let frame = Frame {
+            size: GridSize { cols: 3, rows: 1 },
+            rows: vec![dirty_row(0, "abc")],
+            ..quiet_frame()
+        };
+        assert!(view.differs_from(&frame));
+        view.apply(&frame);
+        assert_eq!((view.cols, view.rows), (3, 1));
+        assert!(!view.differs_from(&Frame {
+            size: GridSize { cols: 3, rows: 1 },
+            ..quiet_frame()
+        }));
+    }
+
+    /// Asserts that a frame the cells report no difference for leaves
+    /// the cells, hyperlinks and palette untouched.
+    ///
+    /// Case: a frame repeats the content state the cells already hold.
+    #[test]
+    fn a_cells_that_reports_no_difference_is_not_mutated_by_apply() {
+        let mut cells = TerminalCells::settled();
+        let frame = quiet_frame();
+        assert!(!cells.differs_from(&frame));
+        let before = (
+            cells.cells.clone(),
+            cells.hyperlinks.clone(),
+            cells.palette.clone(),
+        );
+        cells.apply(&frame);
+        assert_eq!(
+            (
+                cells.cells.clone(),
+                cells.hyperlinks.clone(),
+                cells.palette.clone(),
+            ),
+            before
         );
     }
 }

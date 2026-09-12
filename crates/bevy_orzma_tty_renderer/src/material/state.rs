@@ -30,9 +30,9 @@ pub(crate) struct TerminalMaterialState {
     pub cpu_cells: Vec<GpuCell>,
     pub cpu_glyphs: Vec<GpuGlyph>,
     pub last_atlas_generation: u64,
-    /// Set from `TerminalGrid`'s change detection and cleared only once
-    /// the rebuild actually uploads, so it stays set across a frame whose
-    /// rebuild bails out.
+    /// Set from [`crate::schema::TerminalCells`]'s change detection and
+    /// cleared only once the rebuild actually uploads, so it stays set
+    /// across a frame whose rebuild bails out.
     pub grid_dirty: bool,
     pub last_grid_dims: (u16, u16),
     /// Last physical font size used for glyph rasterization; `0` before

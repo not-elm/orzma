@@ -173,7 +173,7 @@ mod tests {
     use bevy::input::mouse::MouseScrollUnit;
     use bevy::input::touch::TouchPhase;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
-    use bevy_orzma_tty_renderer::schema::TerminalGrid;
+    use bevy_orzma_tty_renderer::schema::{TerminalCells, TerminalView};
 
     fn make_wheel_app() -> App {
         use bevy::window::WindowResolution;
@@ -194,11 +194,12 @@ mod tests {
                 ..ComputedNode::DEFAULT
             },
             UiGlobalTransform::from_xy(400.0, 300.0),
-            TerminalGrid {
+            TerminalView {
                 cols: 100,
                 rows: 37,
                 ..default()
             },
+            TerminalCells::default(),
         ));
         app.world_mut().spawn((
             Window {

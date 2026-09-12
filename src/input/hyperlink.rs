@@ -16,7 +16,7 @@ use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_cef::prelude::WebviewSource;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
-use bevy_orzma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
+use bevy_orzma_tty_renderer::schema::{HyperlinkHoverState, TerminalCells, TerminalView};
 use orzma_configs::shortcuts::Modifiers;
 
 /// Adds hyperlink hover detection and cursor-icon control for every
@@ -64,7 +64,7 @@ fn hyperlink_hover_and_cursor(
         ),
         (With<OrzmaTerminal>, Without<MouseDisabled>),
     >,
-    grids: Query<&TerminalGrid>,
+    grids: Query<(&TerminalView, &TerminalCells)>,
     webview_hosts: Query<&WebviewSource>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -94,7 +94,7 @@ fn hyperlink_hover_and_cursor(
         Some(entity) => {
             if webview_hosts.contains(entity) {
                 HoverTarget::Webview
-            } else if let Ok(grid) = grids.get(entity) {
+            } else if let Ok((view, cells)) = grids.get(entity) {
                 let id = surfaces
                     .get(entity)
                     .ok()
@@ -102,10 +102,10 @@ fn hyperlink_hover_and_cursor(
                         phys_to_pane_local(node, transform, cursor_phys)
                     })
                     .map(|local| {
-                        cell_at_local(local, cell_w_phys, cell_h_phys, grid.cols, grid.rows)
+                        cell_at_local(local, cell_w_phys, cell_h_phys, view.cols, view.rows)
                     })
                     .and_then(|(col, row, _side)| {
-                        grid.hyperlink_at(
+                        cells.hyperlink_at(
                             row.saturating_sub(1) as u16,
                             col.saturating_sub(1) as u16,
                         )
@@ -346,7 +346,7 @@ mod tests {
 
     /// A 10x5 grid whose top-left cell links to `https://example.com` as
     /// `HyperlinkId(7)`, shared by the hover tests.
-    fn linked_grid() -> TerminalGrid {
+    fn linked_grid() -> (TerminalView, TerminalCells) {
         use bevy_orzma_tty_renderer::schema::{
             Color, GridCell, GridSlot, Hyperlink, HyperlinkId, HyperlinkUri,
         };
@@ -362,12 +362,17 @@ mod tests {
                 uri: HyperlinkUri::new("https://example.com"),
             }),
         });
-        TerminalGrid {
-            cols: 10,
-            rows: 5,
-            cells: vec![row],
-            ..default()
-        }
+        (
+            TerminalView {
+                cols: 10,
+                rows: 5,
+                ..default()
+            },
+            TerminalCells {
+                cells: vec![row],
+                ..default()
+            },
+        )
     }
 
     /// Asserts that hovering a linked cell with the activation modifier held
@@ -408,7 +413,7 @@ mod tests {
             ))
             .id();
 
-        let grid = linked_grid();
+        let (view, cells) = linked_grid();
         let term = app
             .world_mut()
             .spawn((
@@ -418,7 +423,8 @@ mod tests {
                     ..ComputedNode::DEFAULT
                 },
                 UiGlobalTransform::from_xy(40.0, 40.0),
-                grid,
+                view,
+                cells,
             ))
             .id();
 
@@ -480,7 +486,7 @@ mod tests {
             ))
             .id();
 
-        let grid = linked_grid();
+        let (view, cells) = linked_grid();
         app.world_mut().spawn((
             OrzmaTerminal,
             MouseDisabled,
@@ -489,7 +495,8 @@ mod tests {
                 ..ComputedNode::DEFAULT
             },
             UiGlobalTransform::from_xy(40.0, 40.0),
-            grid,
+            view,
+            cells,
         ));
 
         app.update();
@@ -538,7 +545,7 @@ mod tests {
 
         // A webview host: an OrzmaTerminal carrying WebviewSource. `on_add_inject_render`
         // would also give it a (rendered-over) grid, so the webview check must win.
-        let grid = linked_grid();
+        let (view, cells) = linked_grid();
         app.world_mut().spawn((
             OrzmaTerminal,
             WebviewSource::new("orzma://example/index.html"),
@@ -547,7 +554,8 @@ mod tests {
                 ..ComputedNode::DEFAULT
             },
             UiGlobalTransform::from_xy(40.0, 40.0),
-            grid,
+            view,
+            cells,
         ));
 
         app.update();

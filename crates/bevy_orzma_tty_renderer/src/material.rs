@@ -6,7 +6,7 @@ use crate::{
     material::state::TerminalMaterialState,
     schema::{
         Color as CellColor, GridCell, GridLine, GridSlot, HyperlinkHoverState, Palette, Rgb,
-        SelectionGeometry, SelectionRange, Style, TerminalGrid,
+        SelectionGeometry, SelectionRange, Style, TerminalCells, TerminalView,
     },
 };
 use bevy::{
@@ -459,18 +459,18 @@ impl TerminalParams {
     ///
     /// # Invariants
     ///
-    /// - When `grid.vi_cursor` is present and its grid point projects into
-    ///   the viewport, it overrides `grid.cursor` and the resulting
+    /// - When `view.vi_cursor` is present and its grid point projects into
+    ///   the viewport, it overrides `view.cursor` and the resulting
     ///   `cursor_visible` bit is forced to `1`. When the projection falls
     ///   outside the viewport, `cursor_visible` is cleared so the shader
     ///   skips cursor rendering entirely.
     /// - A live (non-vi) cursor carries the application's DECTCEM state, so
     ///   `cursor_visible` is `0` while the terminal has seen `CSI ? 25 l`,
-    ///   and `grid.suppress_cursor` clears the bit on top of either source.
-    /// - When `grid.selection` is `None`, `sel_kind == 0` and the shader
+    ///   and `view.suppress_cursor` clears the bit on top of either source.
+    /// - When `view.selection` is `None`, `sel_kind == 0` and the shader
     ///   paints no selection.
     fn new(
-        grid: &TerminalGrid,
+        view: &TerminalView,
         cell_size_px: Vec2,
         atlas_size_px: Vec2,
         ascent_px: f32,
@@ -487,12 +487,12 @@ impl TerminalParams {
         overlay_dim: f32,
         overlay_desaturate: f32,
     ) -> Self {
-        let cols = u32::from(grid.cols);
-        let rows = u32::from(grid.rows);
+        let cols = u32::from(view.cols);
+        let rows = u32::from(view.rows);
 
-        let (cursor_pos, cursor_style) = grid.current_cursor_pos_and_style();
+        let (cursor_pos, cursor_style) = view.current_cursor_pos_and_style();
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
-            selection_uniforms(grid.selection.as_ref(), grid.display_offset, grid.rows);
+            selection_uniforms(view.selection.as_ref(), view.display_offset, view.rows);
 
         Self {
             grid_size: UVec2::new(cols.max(1), rows.max(1)),
@@ -669,7 +669,8 @@ fn update_terminal_material(
         Entity,
         &MaterialNode<TerminalUiMaterial>,
         &mut TerminalMaterialState,
-        Ref<TerminalGrid>,
+        Ref<TerminalCells>,
+        &TerminalView,
         Option<&PaneInactiveStyle>,
         Option<&TerminalOverlays>,
     )>,
@@ -682,7 +683,7 @@ fn update_terminal_material(
     fallback: Res<TerminalPaddingFallback>,
 ) {
     // NOTE: This system runs unconditionally — *not* gated by
-    // `Changed<TerminalGrid>`. The `mat.params = ...` write at the end is
+    // `Changed<TerminalCells>`. The `mat.params = ...` write at the end is
     // load-bearing for rendering correctness: it forces `AssetEvent::Modified`
     // on the material every frame so `PreparedUiMaterial::prepare_asset` runs
     // and rebuilds the bind group against the latest `GpuImage` /
@@ -705,19 +706,19 @@ fn update_terminal_material(
     // that would re-rasterize the entire atlas at half scale.
     let dpr = windows.single().ok().map(|window| window.scale_factor());
 
-    for (entity, handle, mut state, grid, pane_style, overlays) in terminals.iter_mut() {
-        // NOTE: Latch the grid's change signal before the bail-out below.
-        // Bevy clears it once this system has run, so a grid written on a
+    for (entity, handle, mut state, cells, view, pane_style, overlays) in terminals.iter_mut() {
+        // NOTE: Latch the cells' change signal before the bail-out below.
+        // Bevy clears it once this system has run, so cells written on a
         // frame that skips the upload would otherwise never reach the GPU.
-        state.grid_dirty |= grid.is_changed();
+        state.grid_dirty |= cells.is_changed();
         let Some(dpr) = dpr else {
             continue;
         };
         let phys_font_size = (font_size.0 * dpr).round() as u16;
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
-        let cols = grid.cols as u32;
-        let rows = grid.rows as u32;
-        let dims_changed = (grid.cols, grid.rows) != state.last_grid_dims;
+        let cols = view.cols as u32;
+        let rows = view.rows as u32;
+        let dims_changed = (view.cols, view.rows) != state.last_grid_dims;
         let grid_changed = state.grid_dirty;
         let phys_size_changed = phys_font_size != state.last_phys_font_size;
 
@@ -780,7 +781,7 @@ fn update_terminal_material(
             state.cpu_cells.resize(cell_count, GpuCell::default());
 
             if cols > 0 && rows > 0 {
-                rebuild_cells(&mut state, &mut atlas, &grid, &fonts, phys_font_size, cols);
+                rebuild_cells(&mut state, &mut atlas, &cells, &fonts, phys_font_size, cols);
             }
 
             if state.cpu_cells.is_empty() {
@@ -799,11 +800,11 @@ fn update_terminal_material(
 
             state.last_atlas_generation = atlas.generation;
             state.grid_dirty = false;
-            state.last_grid_dims = (grid.cols, grid.rows);
+            state.last_grid_dims = (view.cols, view.rows);
             state.initialized = true;
         }
 
-        let bg_padding_color = padding_color(grid.palette.background, fallback.0);
+        let bg_padding_color = padding_color(cells.palette.background, fallback.0);
 
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
             (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),
@@ -821,7 +822,7 @@ fn update_terminal_material(
             });
         if let Some(mut mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
-                &grid,
+                view,
                 cell_size_phys,
                 Vec2::new(atlas.width() as f32, atlas.height() as f32),
                 ascent_phys,
@@ -855,13 +856,13 @@ fn update_terminal_material(
 fn rebuild_cells(
     state: &mut TerminalMaterialState,
     atlas: &mut GlyphAtlas,
-    grid: &TerminalGrid,
+    cells: &TerminalCells,
     fonts: &TerminalFonts,
     phys_font_size: u16,
     cols: u32,
 ) {
-    let packed_palette = PackedPalette::build(&grid.palette);
-    for (row_idx, row) in grid.cells.iter().enumerate() {
+    let packed_palette = PackedPalette::build(&cells.palette);
+    for (row_idx, row) in cells.cells.iter().enumerate() {
         debug_assert_eq!(
             row.len(),
             cols as usize,
@@ -1085,9 +1086,7 @@ mod tests {
             cell
         };
         let plain = cell_with_link("z", None);
-        let grid = TerminalGrid {
-            cols: 4,
-            rows: 1,
+        let cells = TerminalCells {
             cells: vec![vec![
                 GridSlot::Cell(wide),
                 GridSlot::WideTrailer,
@@ -1100,7 +1099,7 @@ mod tests {
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
-        rebuild_cells(&mut state, &mut atlas, &grid, &fonts, 16, 4);
+        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 16, 4);
 
         let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
         assert_eq!(
@@ -1143,9 +1142,7 @@ mod tests {
 
         let linked = cell_with_link("x", Some(7));
         let unlinked = cell_with_link("y", None);
-        let grid = TerminalGrid {
-            cols: 2,
-            rows: 1,
+        let cells = TerminalCells {
             cells: vec![vec![GridSlot::Cell(linked), GridSlot::Cell(unlinked)]],
             ..Default::default()
         };
@@ -1163,7 +1160,7 @@ mod tests {
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
-        rebuild_cells(&mut state, &mut atlas, &grid, &fonts, 16, 2);
+        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 16, 2);
 
         assert_eq!(state.cpu_cells[0].hyperlink_id, 7);
         assert_eq!(state.cpu_cells[1].hyperlink_id, 0);
