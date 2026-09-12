@@ -88,7 +88,7 @@ fn assert_same_observable_effect(
     }
 }
 
-/// Asserts that no CSI final byte, sent with a trailing intermediate
+/// Asserts that no CSI final byte, sent with a trailing `$` intermediate
 /// and with or without a private marker, reaches a control function
 /// whose effect this terminal can observe.
 ///

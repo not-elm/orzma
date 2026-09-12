@@ -102,6 +102,28 @@ fn a_soft_reset_leaves_the_cells_alone() {
     assert_eq!(glyphs(&screen, 3), vec!['a', 'b', 'c']);
 }
 
+/// Asserts that a soft reset leaves an active selection as it is.
+///
+/// Case: the user has a span highlighted for copying when a program in
+/// the background resets the terminal.
+#[test]
+fn a_soft_reset_leaves_the_selection_alone() {
+    let mut screen = screen();
+    seed_row(&mut screen, ScreenLine(1), &['a', 'b', 'c']);
+    let point = |line: i32, column: u16| GridPoint {
+        line: GridLine(line),
+        column: GridColumn(column),
+    };
+    assert!(screen.start_selection(point(1, 0), CellSide::Left, SelectionKind::Simple));
+    assert!(screen.extend_selection(point(1, 2), CellSide::Right));
+    let selected = screen.selection_range();
+
+    screen.soft_reset();
+
+    assert_eq!(screen.selection_range(), selected);
+    assert_eq!(screen.selection_text().as_deref(), Some("abc"));
+}
+
 /// Asserts that a soft reset leaves the tabulation stops as they are.
 ///
 /// Case: a program clears every tab stop to lay out a table and the

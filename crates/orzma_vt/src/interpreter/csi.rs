@@ -162,6 +162,24 @@ mod tests {
         assert_eq!(params.value(1), Some(2));
     }
 
+    /// Asserts that the last byte of the intermediate range is read as
+    /// an intermediate rather than swallowed by the values.
+    ///
+    /// Case: an application sends `CSI 1 ; 2 / r`, a spelling whose
+    /// final byte it shares with DECSTBM.
+    #[test]
+    fn the_last_intermediate_byte_is_not_a_value() {
+        let params = [
+            CsiParam::Integer(1),
+            CsiParam::P(b';'),
+            CsiParam::Integer(2),
+            CsiParam::P(b'/'),
+        ];
+        let params = CsiParams::parse(&params);
+        assert_eq!(params.intermediates(), b"/");
+        assert_eq!(params.value(1), Some(2));
+    }
+
     /// Asserts that two intermediate bytes arrive in the order they
     /// were sent.
     ///

@@ -124,24 +124,25 @@ impl DeviceState {
         // without `DeviceState::set_auto_wrap`, and it is sound only because
         // the two screen resets above already cleared each screen's
         // live and saved deferred wrap. A partial mode reset such as
-        // `DECSTR`, which leaves the screens alone, must go through
-        // `set_auto_wrap` instead.
+        // `DECSTR`, which leaves both screens' live deferred wrap armed,
+        // must go through `set_auto_wrap` instead.
         self.modes = VtModes::default();
         self.title = TitleState::default();
         let palette_changed = self.palette.reset();
         (was_showing_alternate || primary.is_some() || palette_changed).then_some(DamageSpan::Full)
     }
 
-    /// Returns the modes a soft reset names, the state of the screen on
-    /// show, and every indexed palette slot to their power-up values;
+    /// Returns the modes a soft reset names, the scrolling margins,
+    /// cursor origin, character sets, pen and saved cursor of the screen
+    /// on show, and every indexed palette slot to their power-up values;
     /// reports [`DamageSpan::Full`] when a palette slot changed.
     ///
     /// Autowrap returns to enabled, which is the set rather than the
     /// reset state vt510.pdf p.277 Table 5-9 lists.
     ///
     /// The modes it does not name are left as they are, and so are the
-    /// hidden screen, the title, and the palette's foreground and
-    /// background.
+    /// cells and the cursor position on show, the hidden screen, the
+    /// title, and the palette's foreground and background.
     ///
     /// # Control Functions
     ///
@@ -430,7 +431,9 @@ const MAX_TITLE_DEPTH: usize = 16;
 mod tests {
     use super::*;
     use crate::device::color::{Color, Rgb};
-    use crate::device::modes::{InsertReplaceMode, KeypadMode, MouseTracking, TextCursorEnable};
+    use crate::device::modes::{
+        InsertReplaceMode, KeypadMode, MouseEncoding, MouseTracking, TextCursorEnable,
+    };
     use crate::screen::cell::Cell;
     use crate::screen::character_sets::{CharacterSet, GCode};
     use crate::screen::grid::coords::GridColumn;
@@ -1037,14 +1040,16 @@ mod tests {
     /// Asserts that a soft reset leaves the modes and the title it does
     /// not name alone, unlike a hard reset.
     ///
-    /// Case: a full-screen program with mouse reporting, bracketed
-    /// paste, focus reporting and a window title of its own issues a
-    /// soft reset as part of its own start-up.
+    /// Case: a full-screen program with SGR mouse reporting, alternate
+    /// scroll, bracketed paste, focus reporting and a window title of
+    /// its own issues a soft reset as part of its own start-up.
     #[test]
     fn a_soft_reset_leaves_the_state_it_does_not_name_alone() {
         let mut device = device();
         let modes = device.modes_mut();
         modes.mouse_tracking = MouseTracking::Clicks;
+        modes.mouse_encoding = MouseEncoding::Sgr;
+        modes.alternate_scroll = true;
         modes.bracketed_paste = true;
         modes.focus_in_out = true;
         device.set_title(Some("build".to_string()));
@@ -1052,9 +1057,33 @@ mod tests {
         let _ = device.soft_reset();
 
         assert_eq!(device.modes().mouse_tracking, MouseTracking::Clicks);
+        assert_eq!(device.modes().mouse_encoding, MouseEncoding::Sgr);
+        assert!(device.modes().alternate_scroll);
         assert!(device.modes().bracketed_paste);
         assert!(device.modes().focus_in_out);
         assert_eq!(device.title(), Some("build"));
+    }
+
+    /// Asserts that a soft reset leaves the palette's default
+    /// foreground and background alone while it returns the indexed
+    /// slots.
+    ///
+    /// Case: the user's configured foreground and background are in
+    /// force when a colour-scheme script recolours an indexed slot and
+    /// the shell runs `tput init` afterwards.
+    #[test]
+    fn a_soft_reset_leaves_the_default_foreground_and_background_alone() {
+        let mut device = device();
+        let foreground = Rgb { r: 9, g: 8, b: 7 };
+        let background = Rgb { r: 6, g: 5, b: 4 };
+        device.palette.foreground = foreground;
+        device.palette.background = background;
+        assert!(device.set_indexed_color(1, Rgb { r: 1, g: 2, b: 3 }));
+
+        let _ = device.soft_reset();
+
+        assert_eq!(device.palette().foreground, foreground);
+        assert_eq!(device.palette().background, background);
     }
 
     /// Asserts that a soft reset keeps the screen the device was
