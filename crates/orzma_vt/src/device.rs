@@ -149,7 +149,7 @@ impl DeviceState {
     ///
     /// - `DECSTR` (`CSI ! p`)
     pub fn soft_reset(&mut self) -> Option<DamageSpan> {
-        self.modes.text_cursor_enable = TextCursorEnable::Shown;
+        self.modes.text_cursor.enable = TextCursorEnable::Shown;
         self.modes.insert_replace = InsertReplaceMode::Replace;
         self.modes.app_cursor = false;
         self.modes.keypad_mode = KeypadMode::Numeric;
@@ -215,12 +215,12 @@ impl DeviceState {
     }
 
     /// The cursor an emitted frame carries: the active screen's write
-    /// position with this device's DECTCEM state folded in.
+    /// position with this device's cursor presentation folded in.
     ///
     /// A frame-ready cursor must be read through here rather than by
     /// pairing a screen read with a separately-read mode.
     pub fn cursor(&self) -> Cursor {
-        self.active_screen().cursor(self.modes.text_cursor_enable)
+        self.active_screen().cursor(self.modes.text_cursor)
     }
 
     /// Snapshot of the modes the device owns.
@@ -1023,7 +1023,7 @@ mod tests {
     fn a_soft_reset_returns_the_named_modes_to_their_defaults() {
         let mut device = device();
         let modes = device.modes_mut();
-        modes.text_cursor_enable = TextCursorEnable::Hidden;
+        modes.text_cursor.enable = TextCursorEnable::Hidden;
         modes.insert_replace = InsertReplaceMode::Insert;
         modes.app_cursor = true;
         modes.keypad_mode = KeypadMode::Application;
@@ -1031,7 +1031,7 @@ mod tests {
 
         let _ = device.soft_reset();
 
-        assert_eq!(device.modes().text_cursor_enable, TextCursorEnable::Shown);
+        assert_eq!(device.modes().text_cursor.enable, TextCursorEnable::Shown);
         assert_eq!(device.modes().insert_replace, InsertReplaceMode::Replace);
         assert!(!device.modes().app_cursor);
         assert_eq!(device.modes().keypad_mode, KeypadMode::Numeric);

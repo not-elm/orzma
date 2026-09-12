@@ -697,7 +697,7 @@ impl Executor<'_> {
                 7 => self.device.set_auto_wrap(AutoWrap::from_decset(enabled)),
                 // DECTCEM
                 25 => {
-                    self.device.modes_mut().text_cursor_enable =
+                    self.device.modes_mut().text_cursor.enable =
                         TextCursorEnable::from_decset(enabled);
                 }
                 // Alternate screen

@@ -25,8 +25,8 @@ mod vi;
 pub mod prelude {
     pub use crate::device::color::{Color, Palette, Rgb};
     pub use crate::device::modes::{
-        AutoWrap, CursorShape, InsertReplaceMode, KeypadMode, MouseEncoding, MouseTracking,
-        ScreenKind, TextCursorEnable, VtModes,
+        AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode, MouseEncoding,
+        MouseTracking, ScreenKind, TextCursorEnable, TextCursorModes, VtModes,
     };
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};

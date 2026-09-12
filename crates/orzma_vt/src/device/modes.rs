@@ -40,11 +40,12 @@ pub struct VtModes {
     pub alternate_scroll: bool,
     /// DECSET 1004: the app wants `CSI I` / `CSI O` focus reports.
     pub focus_in_out: bool,
-    /// DECTCEM (DECSET 25): whether the text cursor is drawn.
+    /// How the text cursor is presented: its visibility, shape, and
+    /// blink.
     ///
     /// A switch to the alternate screen keeps the state the application
     /// set, and DECSC does not save it either.
-    pub text_cursor_enable: TextCursorEnable,
+    pub text_cursor: TextCursorModes,
     /// Coordinate encoding for mouse reports.
     pub mouse_encoding: MouseEncoding,
     /// Which mouse events the app asked to receive.
@@ -162,6 +163,31 @@ pub enum CursorShape {
     Underline,
     /// A vertical line at the left of the cell.
     Bar,
+}
+
+/// Whether the text cursor blinks or is drawn continuously.
+///
+/// Both screens share one value, and `DECSC` does not carry it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorBlink {
+    /// The cursor is drawn continuously; this is the power-up default.
+    #[default]
+    Steady,
+    /// The cursor alternates between drawn and not drawn.
+    Blinking,
+}
+
+/// How the text cursor is presented.
+///
+/// Both screens share one value, and `DECSC` does not carry it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TextCursorModes {
+    /// Whether the cursor is drawn at all.
+    pub enable: TextCursorEnable,
+    /// The shape it takes.
+    pub shape: CursorShape,
+    /// Whether it blinks.
+    pub blink: CursorBlink,
 }
 
 /// The mode selects whether the numeric keypad sends ASCII numerals or application function.
@@ -336,7 +362,7 @@ mod tests {
     #[test]
     fn the_text_cursor_starts_shown() {
         assert_eq!(
-            VtModes::default().text_cursor_enable,
+            VtModes::default().text_cursor.enable,
             TextCursorEnable::Shown
         );
     }
