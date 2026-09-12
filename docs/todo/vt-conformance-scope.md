@@ -59,9 +59,9 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 
 | シーケンス | 機能 | terminfo | 現状 | 影響 |
 |---|---|---|---|---|
-| `CSI ! p` | DECSTR ソフトリセット | `is2`, `rs2` | `INTER∅` | **terminfo 経由の初期化列の先頭**。毎回無視されモードが残留する。`CharacterSetMapping::reset()` は DECSTR 待ちで `#[expect(dead_code)]` のまま（`character_sets.rs:220`）。**DECTCEM 実装後、優先度が上がった**: vt510 p.277 Table 5-9 は DECSTR 後の DECTCEM を "Cursor enabled." と定めており、`is2`/`rs2` の先頭が `\E[!p` なので **`tput init` が隠れたカーソルを回復できない**。RIS (`\Ec`) は `VtModes::default()` で回復するが、DECSTR は名指しした一部だけを戻すので `text_cursor_enable = Shown` を明示的に含める必要がある。**DECAWM も同じ Table 5-9 に載っている**（"Autowrap / DECAWM / No autowrap."、IRM の "Replace mode." も同様）。IRM は `InsertReplaceMode::default()` が既に `Replace` なので一致するが、`AutoWrap::default()` は `Enabled` なので **DECAWM だけ default が表の値と逆**であり、値そのものが要判断（`am` を広告する端末で本当に off に落とすか）。含める場合は `modes_mut` への直書きではなく `DeviceState::set_auto_wrap` を通すこと — reset 方向は両画面の LCF 解除を伴う（§4 の LCF 一覧を参照）。**パレットも対象（OSC 4 実装時に判明、2026-09-12）**: xterm の `ReallyReset`（`charproc.c`）は DECSTR でも `ResetAnsiColorRequest` を呼んで 256 色を既定に戻すので、DECSTR を実装するときは `DeviceState::reset_indexed_colors` も呼ぶ |
+| `CSI ! p` | DECSTR ソフトリセット | `is2`, `rs2` | `INTER∅` | **terminfo 経由の初期化列の先頭**。毎回無視されモードが残留する。`CharacterSetMapping::reset()` は DECSTR 待ちで `#[expect(dead_code)]` のまま（`character_sets.rs:220`）。**DECTCEM 実装後、優先度が上がった**: vt510 p.277 Table 5-9 は DECSTR 後の DECTCEM を "Cursor enabled." と定めており、`is2`/`rs2` の先頭が `\E[!p` なので **`tput init` が隠れたカーソルを回復できない**。RIS (`\Ec`) は `VtModes::default()` で回復するが、DECSTR は名指しした一部だけを戻すので `text_cursor_enable = Shown` を明示的に含める必要がある。**DECAWM も同じ Table 5-9 に載っている**（"Autowrap / DECAWM / No autowrap."、IRM の "Replace mode." も同様）。IRM は `InsertReplaceMode::default()` が既に `Replace` なので一致するが、`AutoWrap::default()` は `Enabled` なので **DECAWM だけ default が表の値と逆**であり、値そのものが要判断（`am` を広告する端末で本当に off に落とすか）。含める場合は `modes_mut` への直書きではなく `DeviceState::set_auto_wrap` を通すこと — reset 方向は両画面の LCF 解除を伴う（§4 の LCF 一覧を参照）。**DECCOLM 調査で判明した 2 点（2026-09-12）**: (a) xterm の `ReallyReset` はマージン既定化（`resetMarginMode()`）を RIS と DECSTR の**両方**で呼ぶが、`CursorSet(screen, 0, 0, …)` は `if (full)` ＝ RIS 側にしか無い。DECSTR が (0,0) に戻すのは**保存カーソルのスロットだけ**である（`CursorSave(xw); screen->sc[whichBuf].row = col = 0;`）。したがって **`Screen::set_scroll_region(None, None)` は DECSTR にそのまま使えない** — `seat_home()` を含むのでライブカーソルまで動く。カーソルを動かさずマージンだけ戻す経路が要る。(b) 同じ DECSTR 腕は `bitcpy(&xw->flags, xw->initflags, WRAPAROUND | …)` で **DECAWM をリソース既定（`autoWrap` = true）に戻す**ので、Table 5-9 の "No autowrap" とは逆。`am` を広告する `xterm-256color` を名乗る以上 **orzma も on に戻す**のが整合する — これが上の「値そのものが要判断」への答え。**パレットも対象（OSC 4 実装時に判明、2026-09-12）**: xterm の `ReallyReset`（`charproc.c`）は DECSTR でも `ResetAnsiColorRequest` を呼んで 256 色を既定に戻すので、DECSTR を実装するときは `DeviceState::reset_indexed_colors` も呼ぶ |
 | `CSI ?12 h/l` | カーソル点滅 | `cnorm`, `cvvis` | `MODE∅`。`blinking: false` 固定 | 点滅指定が効かない |
-| `CSI ?3 l` | DECCOLM リセット | `is2`, `rs2` の一部 | `MODE∅` | 初期化列に含まれる |
+| ~~`CSI ?3 h/l`~~ | ~~DECCOLM~~ | `is2`, `rs2` の一部 | **✅ 意図的に無視と明示（2026-09-12）**。`set_private_modes` に `3 => {}`。理由は `// NOTE:` に記録: ペインの幅は VT の持ち物ではなく（サイズは ウィンドウ形状 → レイアウト木 → PTY の一方通行）、vt510 p.143 が DECCOLM に定める副作用（左右上下マージンの既定化とページ全消去）だけを実行すると、来ない幅変更の代償にページを壊すことになる。`is2` に `\E[?3l` が入るので、これは **`tput init` のたびに**起きる。**xterm 自身がこのシーケンス全体を `c132` リソース（既定 off）で塞いでおり、同じ no-op に落ちる**（manpage `-132`: *"Normally, the VT102 DECCOLM escape sequence … is ignored"*、`charproc.c` の `srm_DECCOLM` は本体すべてが `if (screen->c132)` の中）。参照実装は割れている: ghostty も `?40`（既定 off）で完全無視、foot は `decset_decrst` に `case 3:` 自体が無い。kitty は **set 方向だけ**全消去＋ホーム、alacritty と wezterm は双方向でマージン既定化＋ホーム＋全消去（いずれもリサイズはしない）。テストは `interpreter/tests/column_mode.rs`（副作用を入れる変異で 4 本とも落ちることを確認済み） | ~~初期化列に含まれる~~ |
 | ~~`CSI ?1034 h/l`~~ | ~~8bit Meta~~ | `smm`/`rmm`, `km` | **✅ 意図的に無視と明示（2026-09-11）**。`set_private_modes` に `1034 => {}`。Alt は常に ESC 前置（xterm の metaSendsEscape 相当）で、xterm と foot は 1036 を 1034 より優先するので、この設定では 8 ビット符号化に到達しない。bash / readline が起動時に送る `smm` は変更前から無視されており、挙動は変わらない。テストは `interpreter/tests/meta_key.rs` | ~~Meta キーのバイト表現が食い違う~~ |
 | `CSI ?5 h/l` | DECSCNM 反転 | `flash` | `MODE∅` | ビジュアルベルが無反応 |
 | `CSI 5 m` | SGR blink | `blink`, `sgr` | **意図的に no-op**（`sgr.rs:112` の `5 \| 6 \| 25 \| ... => {}`） | 点滅が普通の文字になる。`Style` へのビット追加＋レンダラ対応が要る |
@@ -98,7 +98,7 @@ terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ロ
 | `OSC 10/11/12` | 前景/背景/カーソル色（問い合わせ含む） | `OSC∅` | vim/nvim の `background` 自動判定 |
 | `OSC 52` | クリップボード | `OSC∅` | nvim の osc52 provider、tmux |
 | `OSC 8` | ハイパーリンク | `OSC∅`。interner は未接続（`hyperlink.rs:15`） | nvim。レンダラ側に受け皿は既にある |
-| `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `INTER∅` | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する**。DECAWM / DECTCEM 実装により **7 と 25 も報告可能な状態を持つようになった**（`CSI ?7;1$y` / `CSI ?25;2$y` など）が応答路が無い。§6 のとおり、`CSI ?7 $ p` を実装すれば `vttest` の `tst_DEC_DECRPM` が mode 7 を機械判定できるようになる |
+| `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `INTER∅` | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する**。DECAWM / DECTCEM 実装により **7 と 25 も報告可能な状態を持つようになった**（`CSI ?7;1$y` / `CSI ?25;2$y` など）が応答路が無い。§6 のとおり、`CSI ?7 $ p` を実装すれば `vttest` の `tst_DEC_DECRPM` が mode 7 を機械判定できるようになる。**mode 3 / 40 / 95 は `0`（not recognized）で答える**（2026-09-12 決定）。orzma は DECCOLM の状態も変更経路も持たないので、`4`（permanently reset）だと任意幅のペインが「80 桁モード」を名乗ることになる。foot と alacritty も 0 を返す（wezterm は set を返す） |
 | `DCS $ q … ST` / `DCS + q … ST` | DECRQSS / XTGETTCAP | DCS コールバックが空（`interpreter.rs:157`-`168`） | vim のカーソル形状復元・capability 検出 |
 | ``CSI Ps ` `` / `CSI Ps a` / `CSI Ps e` | HPA / HPR / VPR | HPA は **✅ 実装済み（2026-09-11、CHA と同じメソッド）**。HPR も **✅ 実装済み（2026-09-11、CUF と同じメソッド。DECLRMM が無い間は停止点が一致する）**。VPR は `CSI∅` | vttest。**VPR は `move_cursor_down` の別名にできない** — VT510 p.351 は VPR を最終行で止めるが CUD は下マージンで止まるため、DECOM リセット時にスクロール領域があると挙動が食い違う |
 | `CSI Ps b` | REP | `CSI∅` | **ローカルエントリは `rep` を広告していない**ため Tier 2。vttest |
@@ -110,6 +110,24 @@ terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ロ
 > 観察（2026-09-11、未修正）: xterm は `GetParam(0) == 0` の `CSI 0 T` を XTHIMOUSE と読むが、
 > orzma は SD として 1 行スクロールする（`interpreter/tests/line_editing.rs` の
 > `the_scroll_down_sequence_scrolls_the_region_down` が固定）。
+
+### アプリ主導のリサイズは受けない（決着済み）
+
+**決着（2026-09-12）: 端末サイズを変えるシーケンスは実装しない。** orzma のサイズは
+ウィンドウ形状 → `OrzmuxCommand::Resize` → レイアウト木 → `OrzmaTty::resize` →
+PTY ioctl + `Vt::resize` の一方通行で、VT から上流へ要求を返す経路が無い。分割ペインが
+ある以上「このペインが 132 桁を要求する」はレイアウトの裁定を伴うので、経路を足すこと
+自体が別規模の変更になる。
+
+| シーケンス | 機能 | 判断 |
+|---|---|---|
+| `CSI ?3 h/l` | DECCOLM | §1-B のとおり明示的に無視（実装済み） |
+| `CSI Ps $ \|` | DECSCPP | **実装しない。** vt510 p.143 / p.249 の Note *"It is recommended that new applications use DECSCPP rather than DECCOLM"* は主語が **applications** ＝ ホストプログラムで、**書く側への推奨であって端末実装への推奨ではない**。DECSCPP は「消さない DECCOLM」ではなく論理ページ幅そのものを 80/132 にする命令で、p.249 が定めるのは幅変更・フォント変更・新しい幅を越えたカーソルの右端クランプ・はみ出した桁のデータ破棄。幅を変えられない orzma では観測可能な効果がゼロになるので腕を置く意味が無く、`csi_dispatch` 冒頭の `has_intermediates()` ガードを外す理由にもならない（そちらは DECSTR / DECSCUSR / DECRQM が決める）。調べた範囲で実装しているのは **xterm だけ**（kitty・foot・wezterm・alacritty・ghostty にヒット無し）で、その `CASE_DECSCPP` の実体も `RequestResize` である。terminfo も広告していない |
+| `CSI Pn t` / `CSI Ps * \|` | DECSLPP / DECSNLS | 同上。`CSI t` は 22 / 23（タイトルの push / pop）だけ実装済み |
+| `CSI 4 t` / `CSI 8 t` | XTWINOPS リサイズ | 同上。DA1 も `CSI ?6c`（VT102）で、132 桁対応（DA1 パラメータ `1`）は名乗っていない |
+
+> 上の一方通行を双方向にした（Vt → OrzmaTty → orzmux → レイアウト木 → ウィンドウ）
+> ときに限り、DECSCPP を実装する意味が出る。そのときは DECCOLM も同時に裁定する。
 
 ### `CSI s` の曖昧性
 
@@ -217,7 +235,9 @@ STD-070 が LCF をリセットすると規定する操作:
    `VtModes::default()` 任せにはできない。**同じ Table 5-9 は DECAWM と IRM も名指し
    している**ので、この 2 つも同時に裁定する。DECAWM は `modes_mut` への直書きではなく
    `DeviceState::set_auto_wrap` を通すこと（`DeviceState::reset` と違って画面リセットを
-   伴わないので、LCF が自動では解除されない）。
+   伴わないので、LCF が自動では解除されない）。**DECSTR はマージンを既定化するが
+   ライブカーソルは動かさない**ので `Screen::set_scroll_region(None, None)` は使えず、
+   DECAWM は Table 5-9 の "No autowrap" ではなく on に戻す — 根拠は §1-B の DECSTR 行。
 5. **入力側の契約修正**（`kbs` の方針決定 → ファンクションキー → 修飾キー）。~~Shift-Tab~~ と Insert は **完了（2026-09-11）**。~~Meta~~ は §1-B の `CSI ?1034 h/l` 行のとおり意図的に無視と決着（2026-09-11）。
 6. ~~**OSC 4**~~ **完了（2026-09-12、OSC 104 と `?` 問い合わせを含む）** → 残るのは **OSC 10/11/12** とその問い合わせ・リセット（OSC 110/111/112）。OSC 4 で入れた `PaletteRequest` を広げて扱い、RIS での復帰も `DeviceState::reset` に足す。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
