@@ -711,11 +711,11 @@ fn update_terminal_material(
         Option<&PaneInactiveStyle>,
         Option<&TerminalOverlays>,
     )>,
+    mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
     fonts: Res<TerminalFonts>,
     font_size: Res<TerminalFontSize>,
     palette_time: Res<Time>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
     hover: Res<HyperlinkHoverState>,
     fallback: Res<TerminalPaddingFallback>,
 ) {
@@ -762,11 +762,6 @@ fn update_terminal_material(
             || atlas_invalidated
             || dims_changed
             || phys_size_changed;
-
-        if phys_size_changed {
-            state.invalidate_all();
-            state.last_phys_font_size = phys_font_size;
-        }
 
         let metrics = resolve_metrics(
             &mut state,
@@ -838,6 +833,9 @@ fn update_terminal_material(
 /// Resolves the cell metrics for `phys_font_size`, clearing the glyph
 /// caches first when `phys_size_changed` or `atlas_invalidated` is set,
 /// and refreshing the shared cell-metrics resource.
+///
+/// A `phys_size_changed` resolve also records `phys_font_size` as the
+/// state's last physical size, so the next frame reports no change.
 fn resolve_metrics(
     state: &mut TerminalMaterialState,
     cell_metrics: &mut TerminalCellMetricsResource,
@@ -846,6 +844,11 @@ fn resolve_metrics(
     phys_size_changed: bool,
     atlas_invalidated: bool,
 ) -> CellMetrics {
+    if phys_size_changed {
+        state.invalidate_all();
+        state.last_phys_font_size = phys_font_size;
+    }
+
     // NOTE: atlas.generation can advance during this very system (via
     //       get_or_insert in rebuild_cells), and a generation jump means
     //       the atlas pixel buffer was wiped — every cached glyph index
@@ -983,7 +986,7 @@ fn rebuild_cells(
                 //       (bg=0 transparent, glyph_index=GLYPH_NONE) and CJK
                 //       characters render as half-glyphs with black gaps.
                 GridSlot::WideTrailer => {
-                    if let Some(left) = left_half
+                    if let Some(left) = left_half.take()
                         && let Some(target) = state.cpu_cells.get_mut(target)
                     {
                         *target = GpuCell {
