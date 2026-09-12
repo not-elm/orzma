@@ -93,11 +93,11 @@ fn main() {
 
 /// The primary window descriptor.
 ///
-/// `ime_enabled` starts `false` deliberately: bevy_winit applies the IME state
-/// to the OS window only on a live `false -> true` change of `Window::ime_enabled`
-/// (`bevy_winit-0.19.0/src/system.rs:539-540`) and never at window creation, so
-/// starting `true` would leave the OS IME un-armed. `ime_policy_system` flips it
-/// to `true` on the first focused-surface tick, producing the arming transition.
+/// `ime_enabled` starts `false` deliberately: the window backend applies the
+/// IME state to the OS window only on a live `false -> true` change of
+/// `Window::ime_enabled`, never at window creation, so starting `true` would
+/// leave the OS IME un-armed. `ime_policy_system` flips it to `true` on the
+/// first focused-surface tick, producing the arming transition.
 fn primary_window() -> Window {
     Window {
         title: "orzma".to_string(),
@@ -106,16 +106,9 @@ fn primary_window() -> Window {
     }
 }
 
-/// Fills `TERM`/`COLORTERM` with a portable default when the inherited `TERM`
-/// is unset or empty, mirroring `alacritty_terminal::tty::setup_env`.
-///
-/// A child shell (the native orzma PTY) whose `TERM` is empty
-/// cannot load terminfo, so zsh's line editor (ZLE) — Backspace included —
-/// silently breaks; a bundled `.app` launched from Finder inherits launchd's
-/// empty `TERM`. `xterm-256color` is exactly Alacritty's fallback when the
-/// `alacritty` terminfo is absent (it is, on stock macOS); `COLORTERM`
-/// advertises the 24-bit color that entry omits. A usable inherited `TERM` is
-/// left untouched, so terminal launches are unchanged.
+/// Fills `TERM`/`COLORTERM` with a portable default when the inherited
+/// `TERM` is unset or empty. Sets `TERM` to `xterm-256color` and
+/// `COLORTERM` to `truecolor`; a usable inherited `TERM` is left untouched.
 ///
 /// # Invariants
 ///
@@ -151,11 +144,7 @@ fn term_fallback(current: Option<&str>) -> Option<&'static str> {
 const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
 
 /// Ensures `LC_CTYPE` advertises a UTF-8 locale when the inherited environment
-/// selects none, so PTY children see a sane character type.
-///
-/// A bundled `.app` launched from Finder inherits launchd's environment with
-/// no `LANG`/`LC_*`, so it falls into the C locale and spawned shells
-/// misclassify multibyte input; this restores a UTF-8 `LC_CTYPE`. A usable
+/// selects none, so PTY children see a sane character type. A usable
 /// inherited UTF-8 locale is left untouched.
 ///
 /// # Invariants
@@ -175,10 +164,7 @@ fn ensure_utf8_locale_env() {
     set_utf8_ctype_fallback();
 }
 
-/// Writes the `en_US.UTF-8` `LC_CTYPE` fallback. macOS is the only platform that
-/// ships the bundled `.app` hitting launchd's stripped env; elsewhere the locale
-/// may be absent and forcing it would fail `setlocale`, so this is a no-op there
-/// (see the `#[cfg(not(...))]` sibling).
+/// Writes the `en_US.UTF-8` `LC_CTYPE` fallback.
 #[cfg(target_os = "macos")]
 fn set_utf8_ctype_fallback() {
     // SAFETY: the caller (`ensure_utf8_locale_env`) runs before `App::new()`

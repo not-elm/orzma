@@ -23,8 +23,7 @@ fn a_reset_empties_every_visible_cell() {
 }
 
 /// Asserts that a reset fills the grid with default cells rather
-/// than carrying the pen background into them the way an erase
-/// does.
+/// than carrying the pen background into them.
 ///
 /// Case: an application paints a red-backgrounded banner and the
 /// shell resets the terminal without the application restoring

@@ -4,20 +4,14 @@
 use bevy::{clipboard::ClipboardError, prelude::*};
 
 /// Requests that `text` be written to the system clipboard.
-///
-/// A global (non-entity) event: the clipboard is process-global, so copy /
-/// yank observers `commands.trigger` this and `on_copy` performs the single
-/// `Clipboard::set_text`. Decoupling this way keeps the copy observers
-/// testable by capturing the request instead of round-tripping a real
-/// clipboard.
 #[derive(Event, Debug, Clone)]
 pub(crate) struct CopyAction {
     /// The text to place on the system clipboard.
     pub text: String,
 }
 
-/// Registers the clipboard write-seam observer. Bevy's `Clipboard` resource
-/// comes from `DefaultPlugins`; this plugin only adds orzma's write path.
+/// Adds orzma's clipboard write path onto Bevy's `Clipboard` resource,
+/// provided by `DefaultPlugins`.
 pub(super) struct ClipboardCopyActionPlugin;
 
 impl Plugin for ClipboardCopyActionPlugin {

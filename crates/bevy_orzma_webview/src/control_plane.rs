@@ -1,7 +1,6 @@
 //! Native orzma control plane: a local Unix-socket listener that accepts
-//! authenticated dynamic webview registrations (Tier 1) from local programs,
-//! mints opaque handles into the `OrzmaRegistry`, and tears them down on
-//! disconnect or surface despawn. Uses a Tokio-free reader/writer thread model.
+//! authenticated Tier 1 webview registrations from local programs, mints
+//! opaque handles, and tears them down on disconnect or surface despawn.
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, NavAction, RegisterKind, ServerMsg};
@@ -32,8 +31,7 @@ mod protocol;
 pub(crate) use protocol::PushMsg;
 
 /// A forward-key chord normalized to host input types: a bevy `KeyCode` plus
-/// modifier booleans. Used to suppress CEF double-delivery and to match keys
-/// for PTY forwarding (design spec §E type normalization).
+/// modifier booleans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NormalizedChord {
     /// The base key as a bevy `KeyCode`.
@@ -56,9 +54,7 @@ pub(crate) enum OrzmaSource {
     /// A single inline HTML document, registered into `WebviewAssetRegistry` and
     /// served under `orzma://<handle>/`.
     Inline(String),
-    /// A remote `http(s)` URL loaded directly by CEF (no `orzma://` origin,
-    /// no `WebviewAssetRegistry` entry). `bridge` records whether the registering
-    /// program opted into the `window.orzma` back-channel.
+    /// A remote `http(s)` URL loaded directly by CEF.
     Url {
         /// The validated `http(s)` URL.
         url: String,
@@ -85,8 +81,7 @@ impl OrzmaSource {
 }
 
 /// A Tier 1 dynamic registration: its content source, entry, input policy, and
-/// the terminal surface + control-plane connection that own it (for scoped
-/// mount-gating and teardown).
+/// the terminal surface + control-plane connection that own it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OrzmaView {
     /// The content source.
@@ -96,24 +91,20 @@ pub(crate) struct OrzmaView {
     /// Whether the mounted webview accepts pointer/keyboard input.
     pub interactive: bool,
     /// The terminal surface an `Omount;n=<instance>` for this registration
-    /// must originate from. The registering program's PTY env token resolved
-    /// to this surface, so only that surface may mount an instance that
-    /// resolves to this handle (tighter than the spec's pane wording).
+    /// must originate from.
     pub owner_surface: Entity,
     /// The control-plane connection that registered it.
     pub connection_id: u64,
     /// The normalized forward-key chords for this view, derived from the
-    /// `register` wire payload. Copied onto the mounted webview entity as
-    /// `ForwardKeys` so Phase-4 systems can read them off the focused child.
+    /// `register` wire payload and copied onto the mounted webview entity as
+    /// `ForwardKeys`.
     pub forward_keys: Vec<NormalizedChord>,
     /// User-supplied preload scripts, copied verbatim from the register wire
     /// and injected onto the mounted webview's `PreloadScripts` after the host
-    /// bridge/hints. No size cap or validation (the registering program is
-    /// local and trusted).
+    /// bridge. They carry no size cap and no validation.
     pub preload: Vec<String>,
-    /// Every instance minted for this registration, in mint order. The
-    /// registry keeps this list and its `by_instance` reverse index in
-    /// lockstep, so releasing the handle releases exactly these ids.
+    /// Every instance minted for this registration, in mint order. Releasing
+    /// the handle releases exactly these ids.
     pub instances: Vec<InstanceId>,
 }
 
@@ -122,9 +113,9 @@ pub(crate) struct OrzmaView {
 /// and the instance the mount was addressed by.
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WebviewOwner {
-    /// The owning connection (push `call` frames here).
+    /// The connection this webview's back-channel frames are routed to.
     pub connection_id: u64,
-    /// The registration handle (for `emit` fan-out + ownership checks).
+    /// The registration handle this webview's content came from.
     pub handle: HandleId,
     /// The placement this webview was mounted under, so a back-channel
     /// frame names which of a handle's placements it came from.
@@ -136,13 +127,6 @@ pub(crate) struct WebviewOwner {
 /// It is the host of that registration's `orzma://<handle>/` origin, the
 /// routing key for its back-channel, and the ownership unit `unregister`
 /// and connection teardown act on.
-///
-/// # Invariants
-///
-/// There is deliberately no `From<HandleId> for String`. That absence is
-/// what stops a handle from flowing into an `impl Into<String>` parameter
-/// that wants an instance id; adding the conversion for convenience
-/// silently reopens that path.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct HandleId(String);
@@ -179,14 +163,9 @@ impl fmt::Display for HandleId {
 /// Maps an opaque `handle` to its dynamic registration, and every minted
 /// instance back to the handle it belongs to.
 ///
-/// The single Bevy-side registry for Tier 1 (the CEF scheme handler reads
-/// the thin `WebviewAssetRegistry` separately). Carries scoped removal for
-/// teardown.
-///
 /// # Invariants
 ///
-/// The two maps are only ever touched through `&mut self` methods on this
-/// type, so an instance is in `by_instance` exactly while its handle's
+/// An instance resolves here exactly while its handle's
 /// `OrzmaView.instances` lists it.
 #[derive(Resource, Default)]
 pub(crate) struct OrzmaRegistry {
@@ -247,10 +226,8 @@ impl OrzmaRegistry {
     /// Inserts a registration with no instances yet.
     ///
     /// The caller mints its first instance with [`Self::mint_instance`]
-    /// immediately afterwards, so every id — the first one included —
-    /// comes from the one minting path. Inserting over an existing `handle`
-    /// first purges that handle's previous instances from `by_instance`, so
-    /// the two maps stay in lockstep even when a caller reuses a handle.
+    /// immediately afterwards. Inserting over an existing `handle` first
+    /// drops that handle's previous instances, so they no longer resolve.
     pub fn insert(&mut self, handle: HandleId, view: OrzmaView) {
         if let Some(previous) = self.by_handle.insert(handle, view) {
             for id in previous.instances {
@@ -262,11 +239,7 @@ impl OrzmaRegistry {
     /// Mints an instance for `handle`; `None` only when the handle is
     /// unknown.
     ///
-    /// This is the ONLY path that produces an [`InstanceId`], so every
-    /// allocated instance is a fresh 128-bit CSPRNG draw. Registry-wide
-    /// uniqueness rests on that draw rather than on a structural check: the
-    /// `debug_assert!` below is a tripwire for a broken CSPRNG, and it
-    /// compiles out in release.
+    /// Every minted instance is a fresh 128-bit CSPRNG draw.
     pub fn mint_instance(&mut self, handle: &HandleId) -> Option<InstanceId> {
         if !self.by_handle.contains_key(handle) {
             return None;
@@ -361,13 +334,6 @@ impl OrzmaRpc {
     /// Removes and returns the in-flight call for `global_id`, but ONLY when it
     /// was registered by `connection_id`. A mismatching connection leaves the
     /// entry intact and returns `None`.
-    ///
-    /// # Invariants
-    /// The match-before-remove order is load-bearing: global reqIds are a
-    /// monotonic counter shared across all connections, so they are guessable. A
-    /// foreign program replaying another connection's reqId must NOT be able to
-    /// consume (and thereby drop) that connection's pending call — checking
-    /// ownership only AFTER removing would orphan the page Promise.
     pub(crate) fn take_for_connection(
         &mut self,
         global_id: &str,
@@ -403,9 +369,8 @@ impl OrzmaRpc {
 }
 
 /// A shared `token → surface` map: the env-injected `$ORZMA_TOKEN` of each PTY
-/// resolves to the surface that owns it. Read by the listener thread on `hello`,
-/// written when a terminal surface is spawned. `Entity` is stored directly; it
-/// is only meaningful inside the same `World` generation.
+/// resolves to the surface that owns it. `Entity` is stored directly, so a
+/// binding is only meaningful inside the same `World` generation.
 #[derive(Resource, Clone, Default)]
 pub struct TokenRegistry(Arc<RwLock<HashMap<String, Entity>>>);
 
@@ -420,16 +385,17 @@ impl TokenRegistry {
         self.0.write().unwrap().insert(token.into(), surface);
     }
 
-    /// Drops every binding that resolves to `surface`. Called when a surface
-    /// despawns so a recycled `Entity` id cannot resolve a stale key.
+    /// Drops every binding that resolves to `surface`. Call it when a surface
+    /// despawns, so a recycled `Entity` id cannot resolve a stale key.
     pub fn remove_entity(&self, surface: Entity) {
         self.0.write().unwrap().retain(|_, bound| *bound != surface);
     }
 }
 
 /// A shared `connection_id → outbound-line sender` table. Each live control
-/// connection owns a writer thread draining a `Sender<String>`; ECS pushes
-/// server-initiated `{op:"call",…}` lines here to reach a specific program.
+/// connection owns a writer thread draining a `Sender<String>`;
+/// server-initiated `{op:"call",…}` lines are queued here to reach a specific
+/// program.
 #[derive(Resource, Clone, Default)]
 pub(crate) struct ConnectionWriters(Arc<RwLock<HashMap<u64, Sender<String>>>>);
 
@@ -456,14 +422,11 @@ impl ConnectionWriters {
 }
 
 /// Mints an opaque 128-bit [`HandleId`] (CSPRNG), base32-encoded (unpadded)
-/// and lowercased. The alphabet `a-z2-7` keeps a minted handle spellable in
-/// a URL host, which is where it is used.
+/// and lowercased. The alphabet is `a-z2-7`, so a minted handle is spellable
+/// verbatim as a URL host.
 ///
 /// # Invariants
-/// The output MUST be lowercase. A handle is used as the host of the
-/// `orzma://<handle>/` URL, and Chromium canonicalizes (lowercases) the host
-/// of a STANDARD-scheme URL before it reaches the scheme handler; an uppercase
-/// handle would then miss the case-sensitive `WebviewAssetRegistry` lookup → 404.
+/// The output is always lowercase.
 fn mint_handle_id() -> HandleId {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).expect("OS CSPRNG is available");
@@ -474,13 +437,13 @@ fn mint_handle_id() -> HandleId {
 #[derive(Resource)]
 pub(crate) struct ControlEvents(pub(crate) Receiver<ControlEvent>);
 
-/// The CEF-facing `WebviewAssetRegistry`, held as a resource so the apply system and
-/// teardown can populate/purge `Dir` handles the scheme handler reads.
+/// The CEF-facing `WebviewAssetRegistry`, shared with the `orzma://` scheme
+/// handler.
 #[derive(Resource, Clone)]
 pub(crate) struct WebviewAssetRegistryRes(pub(crate) WebviewAssetRegistry);
 
-/// The bound control-socket path + token registry, surfaced so terminal-surface
-/// setup can mint per-surface tokens and inject `$ORZMA_SOCK` / `$ORZMA_TOKEN`.
+/// The bound control-socket path and token registry, used to mint per-surface
+/// tokens and inject `$ORZMA_SOCK` / `$ORZMA_TOKEN`.
 #[derive(Resource, Clone)]
 pub struct ControlPlaneHandle {
     /// The bound listener socket path (`$ORZMA_SOCK`).
@@ -492,9 +455,8 @@ pub struct ControlPlaneHandle {
 impl ControlPlaneHandle {
     /// Returns the `ORZMA_SOCK` / `ORZMA_TOKEN` env pairs to inject into `surface`'s
     /// PTY so a program running in it can reach the control plane and resolve to
-    /// `surface`. Pure: derives the token but does NOT register it — call
-    /// [`bind_surface`](Self::bind_surface) after the PTY actually spawns, so a
-    /// failed spawn leaks no binding.
+    /// `surface`. Pure: it derives the token but does NOT register it — call
+    /// [`bind_surface`](Self::bind_surface) after the PTY actually spawns.
     pub fn surface_env(&self, surface: Entity) -> [(String, String); 2] {
         [
             (
@@ -513,14 +475,13 @@ impl ControlPlaneHandle {
 }
 
 /// Derives the per-surface token (`orzma:<entity-bits>`) from a surface entity.
-/// Single-sources the format so [`ControlPlaneHandle::surface_env`] and
-/// [`ControlPlaneHandle::bind_surface`] always agree.
 fn surface_token(surface: Entity) -> String {
     format!("orzma:{}", surface.to_bits())
 }
 
-/// Wires the control-plane listener, the event-apply system, and the teardown
-/// observer. Takes the `WebviewAssetRegistry` shared with the `orzma` scheme handler.
+/// Wires the control-plane listener, the event-apply system, and the
+/// despawned-surface GC. Takes the `WebviewAssetRegistry` shared with the
+/// `orzma` scheme handler.
 pub(crate) struct ControlPlanePlugin {
     orzma_assets: WebviewAssetRegistry,
 }
@@ -562,11 +523,8 @@ impl Plugin for ControlPlanePlugin {
 /// `RemovedComponents<OrzmuxPane>` so it fires for every pane entity the
 /// multiplexer backend closes.
 ///
-/// # Invariants
-/// Must stay ungated and run every frame: `RemovedComponents` buffers clear at
-/// end of frame, so a skipped frame leaks registrations + assets. The purge
-/// also runs when `ControlPlaneHandle` is absent (token unbinding is then a
-/// no-op) — gating it behind the handle would leak in that case.
+/// Must stay ungated and run every frame, including when
+/// `ControlPlaneHandle` is absent (token unbinding is then a no-op).
 fn gc_despawned_surfaces(
     mut registry: ResMut<OrzmaRegistry>,
     mut closed: RemovedComponents<OrzmuxPane>,
@@ -594,16 +552,13 @@ struct ControlRuntime(
     RuntimeRoot,
 );
 
-/// Drains queued `ControlEvent`s: mints handles for `register` and populates the
-/// `OrzmaRegistry` (+ `WebviewAssetRegistry` for `Dir`), releases on `unregister`,
-/// and purges a connection's handles on `Disconnect`.
+/// Drains queued `ControlEvent`s: mints handles for `register` and populates
+/// the `OrzmaRegistry` (+ `WebviewAssetRegistry` for `Dir` and `Inline`),
+/// releases on `unregister`, and purges a connection's handles on `Disconnect`.
 ///
 /// `Register` and `NewInstance` are refused with `owner_gone` when the owning
-/// entity is no longer alive, so a connection that outlives its pane's
-/// despawn (and the GC that follows) cannot recreate registrations for it.
-/// Liveness, not the `OrzmuxPane` marker, gates the refusal: a fast shell can
-/// register before the GUI has drained the backend's `PaneOpened` and
-/// inserted `OrzmuxPane`, and that pending owner must still be accepted.
+/// entity is no longer alive. An owner that is alive but does not yet carry
+/// `OrzmuxPane` is still accepted.
 fn apply_control_events(
     mut commands: Commands,
     mut registry: ResMut<OrzmaRegistry>,
@@ -1058,8 +1013,8 @@ fn on_navigate(
 /// Applies a socket `mount`: registers a placement for `instance` at the
 /// visible cell `(row, col)` of `owner_surface` when `connection_id` owns
 /// the instance and `(rows, cols)` lies within the VT's bounds. The VT's
-/// verdict arrives as the same `TtyWebviewMountSignal` /
-/// `TtyWebviewMountRejectedSignal` an APC mount produces.
+/// verdict arrives as a `TtyWebviewMountSignal` or a
+/// `TtyWebviewMountRejectedSignal`.
 fn on_mount(
     commands: &mut Commands,
     registry: &OrzmaRegistry,
@@ -1088,9 +1043,8 @@ fn on_mount(
 }
 
 /// Applies a socket `unmount`: despawns the webview mounted for `instance`
-/// under `owner_surface` and hands its reservation back to the VT, the two
-/// steps a registration release performs, when `connection_id` owns the
-/// instance.
+/// under `owner_surface` and hands its reservation back to the VT, when
+/// `connection_id` owns the instance.
 fn on_unmount(
     commands: &mut Commands,
     registry: &OrzmaRegistry,
@@ -1117,10 +1071,6 @@ fn on_unmount(
 /// Tears down the registrations `removed` released: despawns their mounted
 /// webviews and hands the reservations back to the VT on the surface that
 /// owned them.
-///
-/// The VT cannot learn that a registration is gone — that fact lives on the
-/// control socket — so without the second step each released placement keeps
-/// a per-terminal cap slot until its anchor scrolls out of history.
 fn release_registrations(
     commands: &mut Commands,
     webviews: &Query<(Entity, &Webview)>,
@@ -1218,7 +1168,7 @@ fn build_view(
 }
 
 /// True when `entry` is a non-empty relative path of normal components only
-/// (no `..`, `.`, or leading `/`). Same shape as `asset::is_safe_rel_path`.
+/// (no `..`, `.`, or leading `/`).
 fn is_safe_entry(entry: &str) -> bool {
     let p = std::path::Path::new(entry);
     !p.as_os_str().is_empty()
@@ -1227,12 +1177,9 @@ fn is_safe_entry(entry: &str) -> bool {
 }
 
 /// Validates a `url` register source: parses it, requires an `http`/`https`
-/// scheme, then a non-empty host. The scheme check precedes the host check on
-/// purpose — `url::Url::parse("javascript:…")` succeeds with no host, so a
-/// host-first order would mis-report `javascript:` as `invalid_url` instead of
-/// `unsupported_scheme`.
-/// Returns the parser-normalized URL (not the raw input) so the validated and
-/// loaded forms are identical.
+/// scheme, then a non-empty host. A non-`http(s)` scheme reports
+/// `unsupported_scheme` even when the URL also has no host.
+/// Returns the parser-normalized URL, not the raw input.
 fn validate_url_source(url: &str) -> Result<String, &'static str> {
     let parsed = Url::parse(url).map_err(|_| "invalid_url")?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -1566,9 +1513,8 @@ mod registry_tests {
     }
 
     /// Asserts that inserting over an existing handle purges that handle's
-    /// stale instances from the reverse `by_instance` index, so a released
-    /// registration's instances never keep resolving after a new one takes
-    /// its handle.
+    /// stale instances, so a released registration's instances never keep
+    /// resolving after a new one takes its handle.
     ///
     /// Case: a handle is reused for a fresh registration before its previous
     /// one was explicitly removed.
@@ -1626,7 +1572,7 @@ mod apply_tests {
     }
 
     /// Asserts that a `register` from a connection whose owner surface is
-    /// gone is refused, so GC cannot be undone by a late registration.
+    /// gone is refused.
     ///
     /// Case: a program keeps its control connection open after its pane
     /// was killed and sends another `register`.
@@ -1658,8 +1604,7 @@ mod apply_tests {
     }
 
     /// Asserts that a `register` from a live but still-pending owner (no
-    /// `OrzmuxPane` yet) is accepted, since the liveness gate must not
-    /// reintroduce the race the token pre-binding was designed to avoid.
+    /// `OrzmuxPane` yet) is accepted.
     ///
     /// Case: the new pane's shell connects and registers before the GUI has
     /// drained the backend's `PaneOpened`.
@@ -1698,8 +1643,7 @@ mod apply_tests {
     }
 
     /// Asserts that a `new_instance` for a handle whose owner surface has
-    /// despawned is refused with `owner_gone`, mirroring the `register`
-    /// refusal.
+    /// despawned is refused with `owner_gone`.
     ///
     /// Case: a program's pane was killed while its control connection
     /// stayed open, and it asks for another placement of a handle it
@@ -1744,9 +1688,8 @@ mod apply_tests {
         assert!(matches!(reply, ServerMsg::Err { ref error, .. } if error == "owner_gone"));
     }
 
-    /// Asserts that a `new_instance` naming an unknown handle still
-    /// replies `unknown_handle`, unaffected by the owner-liveness gate
-    /// added for the `owner_gone` refusal.
+    /// Asserts that a `new_instance` naming an unknown handle replies
+    /// `unknown_handle` rather than `owner_gone`.
     ///
     /// Case: a program sends `new_instance` for a handle nobody
     /// registered, such as a stale id left over from an earlier session.
@@ -2057,8 +2000,7 @@ mod apply_tests {
     /// back to the VT on the surface that owned them.
     ///
     /// Case: a program unregisters a view whose placements the terminal
-    /// still holds, so their cap slots must be freed without waiting for
-    /// the anchors to scroll out of history.
+    /// still holds.
     #[test]
     fn unregister_reclaims_the_released_placements_from_the_vt() {
         #[derive(Resource, Default)]

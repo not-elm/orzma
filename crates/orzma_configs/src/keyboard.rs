@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 /// Which Option/Alt key(s) macOS treats as Meta (Alt) instead of composing
-/// into special characters. Mirrors winit's `OptionAsAlt`; has no effect on
-/// non-macOS platforms, where Alt is always Meta.
+/// into special characters. It has no effect on non-macOS platforms, where
+/// Alt is always Meta.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum OptionAsAlt {

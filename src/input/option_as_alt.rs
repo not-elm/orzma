@@ -1,12 +1,11 @@
-//! macOS "Option as Meta" support: applies the `[keyboard] option_as_alt`
-//! config to the native winit window via `WindowExtMacOS::set_option_as_alt`,
-//! so the configured Option side is delivered as Alt (Meta) below the IME
-//! layer instead of composing into special characters. No-op on non-macOS.
+//! macOS "Option as Meta" support: makes the configured Option side
+//! deliver Alt (Meta) below the IME layer instead of composing into
+//! special characters. No-op on non-macOS.
 
 use bevy::prelude::*;
 
-/// Bevy plugin that applies the configured macOS Option-as-Alt mode to the
-/// primary window. Empty on non-macOS targets.
+/// Applies the configured macOS Option-as-Alt mode to the primary
+/// window. Empty on non-macOS targets.
 pub(super) struct OptionAsAltPlugin;
 
 impl Plugin for OptionAsAltPlugin {

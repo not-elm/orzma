@@ -28,7 +28,7 @@ fn each_mouse_tracking_number_selects_its_level() {
 /// level leaves that level alone.
 ///
 /// Case: an application tears down every tracking mode it knows,
-/// including ones it never set, and must not disable the one it did.
+/// including ones it never set.
 #[test]
 fn resetting_an_inactive_tracking_number_keeps_the_active_level() {
     assert_eq!(
@@ -61,9 +61,8 @@ fn the_sgr_mouse_number_selects_its_encoding() {
 /// Asserts that `DECSET 1005` is not answered, leaving the default
 /// framing in force.
 ///
-/// Case: an application asks for the UTF-8 coordinate extension,
-/// which `MouseReport::encode` does not implement — selecting it
-/// would report wrong coordinates past column 95.
+/// Case: an application asks for the UTF-8 coordinate extension as
+/// it starts tracking the mouse.
 #[test]
 fn the_utf8_mouse_number_is_not_answered() {
     assert_eq!(

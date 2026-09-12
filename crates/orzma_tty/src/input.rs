@@ -61,17 +61,15 @@ impl PtyInput {
     ///
     /// - `bracketed = true`: strips every embedded occurrence of the four
     ///   bracketed-paste marker forms (7-bit `ESC [ 200~` / `ESC [ 201~` and
-    ///   C1 `U+009B 200~` / `U+009B 201~`) in a fixed-point loop, then wraps
-    ///   the sanitized body in `ESC [ 200 ~` ... `ESC [ 201 ~`; the body is
-    ///   otherwise passed through byte-for-byte. Closes the paste-injection
-    ///   class documented in kitty commit 668f6fa and Alacritty issue #800.
+    ///   C1 `U+009B 200~` / `U+009B 201~`), including those an earlier
+    ///   removal re-exposes, so no marker survives; then wraps the sanitized
+    ///   body in `ESC [ 200 ~` ... `ESC [ 201 ~`. The body is otherwise
+    ///   passed through byte-for-byte.
     /// - `bracketed = false`: normalizes line endings (`\r\n` and lone `\n`
-    ///   become `\r`) and filters nothing else — an unbracketed paste has
-    ///   the same authority as typed input.
+    ///   become `\r`) and filters nothing else.
     ///
-    /// The input domain is UTF-8 `&str`: the C1 markers match the codepoint
-    /// `U+009B` (UTF-8 `C2 9B`); a raw `9B` byte is not representable and
-    /// out of scope.
+    /// The C1 markers match the codepoint `U+009B` (UTF-8 `C2 9B`); a raw
+    /// `9B` byte is not representable in the `&str` input.
     ///
     /// # References
     ///

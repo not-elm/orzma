@@ -1,12 +1,6 @@
-//! Static byte slices of the bundled JetBrains Mono Nerd Font Mono TTFs.
+//! Static byte slices of the font TTFs `TerminalFonts::default()` loads.
 //!
-//! Exposing these as `pub` constants lets downstream crates (the Bevy
-//! app's `FontBridgePlugin`) reference the same `include_bytes!`-embedded
-//! bytes the renderer's `TerminalFonts::default()` uses, instead of
-//! re-embedding identical copies. Without this single source of truth,
-//! each `include_bytes!` site in a separate crate produces a distinct
-//! static slot (the linker cannot dedup across crate boundaries without
-//! LTO), and the binary carries ~10 MB × N copies.
+//! A crate that needs the same fonts references these constants.
 
 /// Regular-weight JetBrains Mono Nerd Font Mono bytes.
 pub const REGULAR: &[u8] =
@@ -41,9 +35,8 @@ pub const FALLBACK_BOLD_ITALIC: &[u8] =
 
 /// Noto Sans Symbols 2 bytes (symbol/dingbat fallback).
 ///
-/// Covers Miscellaneous Symbols, Dingbats, and Geometric Shapes blocks
-/// (e.g. ☐ ☑ ☒ ✔) that neither the primary nor the CJK fallback carries —
-/// the marks interactive TUIs draw for checkbox/selection state. Symbols
-/// have no weight/style variants, so a single regular face serves all faces.
+/// Covers the Miscellaneous Symbols, Dingbats, and Geometric Shapes
+/// blocks (e.g. ☐ ☑ ☒ ✔) that neither the primary nor the CJK fallback
+/// carries. This single regular face serves all faces.
 pub const SYMBOL_REGULAR: &[u8] =
     include_bytes!("../assets/fonts/notosanssymbols2/NotoSansSymbols2-Regular.ttf");

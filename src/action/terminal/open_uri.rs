@@ -17,7 +17,7 @@ pub(crate) struct TerminalOpenUri {
     pub uri: String,
 }
 
-/// Registers the open-uri apply observer.
+/// Adds the apply path for `TerminalOpenUri`.
 pub(super) struct OpenUriPlugin;
 
 impl Plugin for OpenUriPlugin {
@@ -26,9 +26,8 @@ impl Plugin for OpenUriPlugin {
     }
 }
 
-/// Applies a `TerminalOpenUri`: opens the link in the host handler, but only
-/// while the target terminal still exists — parity with the legacy apply
-/// path, which gated every effect behind the target's presence.
+/// Applies a `TerminalOpenUri` by opening the link in the host handler while
+/// the target terminal still exists.
 fn on_terminal_open_uri(ev: On<TerminalOpenUri>, terminals: Query<(), With<OrzmaTerminal>>) {
     if terminals.get(ev.entity).is_ok() {
         try_open_uri(&ev.uri);

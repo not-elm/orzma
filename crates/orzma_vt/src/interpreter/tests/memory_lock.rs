@@ -7,7 +7,7 @@ use super::*;
 /// rather than locking them in place.
 ///
 /// Case: a stray `ESC l` reaches the terminal while a shell is filling
-/// the screen, and the output goes on scrolling up past the top row.
+/// the screen.
 #[test]
 fn memory_lock_holds_no_row_out_of_scrolling() {
     let device = interpret(b"a\r\nb\x1bl\n\n");

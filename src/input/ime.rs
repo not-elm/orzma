@@ -1,10 +1,5 @@
-//! IME composition state for the terminal overlay.
-//!
-//! Provides `Composition` (a validated preedit snapshot), `ImeState`
-//! (the active-composition resource), `read_ime_events` (the Bevy
-//! system that drains `Ime` events and triggers `ImeCommit` to the
-//! keyboard-focused surface), and `ime_policy_system` (toggles
-//! `Window::ime_enabled` and `.ime_position`).
+//! IME composition state for the terminal overlay: drains IME events into
+//! `ImeState` and derives window IME policy from keyboard focus.
 
 use crate::action::vi::mode::ViModeState;
 use crate::input::InputPhase;
@@ -32,8 +27,7 @@ use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
 ///
-/// The `apply_ime_commit_to_terminal` observer below applies it, writing the
-/// active pane via `RequestActiveKeyInput`.
+/// Applying it writes the committed text to the active pane.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ImeCommit {
     #[event_target]
@@ -41,11 +35,7 @@ pub(crate) struct ImeCommit {
     pub(crate) text: String,
 }
 
-/// Bevy plugin that registers `ImeState` and the IME-event handling
-/// systems. Ordering: `ime_policy_system` runs before `read_ime_events`
-/// (chained); both run in `InputPhase::Dispatch`, ahead of
-/// `InputPhase::FocusedKey`, whose dispatcher gates on `ImeState`, so IME
-/// must apply first.
+/// Adds `ImeState`, IME event handling, and the window IME policy.
 pub(super) struct ImePlugin;
 
 impl Plugin for ImePlugin {
@@ -71,19 +61,16 @@ pub(crate) struct Composition {
 
 impl Composition {
     /// Validates and constructs a `Composition`. Returns `None` when:
-    ///   - `text` is empty (treat any empty-value Preedit as
-    ///     "no composition").
+    ///   - `text` is empty (an empty-value `Preedit` means "no composition").
     ///
     /// Sets `caret = None` when:
     ///   - either endpoint is out of bounds (`> text.len()`);
-    ///   - either endpoint lands on a non-UTF-8 boundary byte
-    ///     (defensive: winit returns byte offsets that we later slice into);
-    ///   - `begin > end` (invariant violation; winit's spec is `(begin, end)`).
+    ///   - either endpoint lands on a non-UTF-8 boundary byte;
+    ///   - `begin > end`.
     ///
     /// `begin == end` is the normal caret-only case. `begin != end`
     /// represents a clause-selection range (macOS IME during clause
-    /// conversion, etc.) and is rendered as a hollow block over the
-    /// span by `position_ime_overlay`.
+    /// conversion, etc.).
     pub(crate) fn try_new(text: String, raw_caret: Option<(usize, usize)>) -> Option<Self> {
         if text.is_empty() {
             return None;
@@ -117,8 +104,7 @@ impl Composition {
 /// suppressed.
 ///
 /// The window's `ime_enabled` field is the single source of truth for
-/// whether IME is allowed; this resource intentionally does not mirror
-/// it.
+/// whether IME is allowed; this resource does not mirror it.
 #[derive(Resource, Default, Debug)]
 pub(crate) struct ImeState(Option<Composition>);
 
@@ -135,10 +121,6 @@ impl ImeState {
 /// Pure-function state machine: applies one `Ime` event to `state` and
 /// returns the text that should be committed to the active pane (only set on
 /// `Ime::Commit`).
-///
-/// Keeping this pure makes the state transitions unit-testable without
-/// a Bevy `App` harness; the Bevy system in `read_ime_events` is a thin
-/// wrapper around this.
 pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
     match event {
         Ime::Enabled { .. } => None,
@@ -170,18 +152,15 @@ pub(crate) fn resolve_focused_surface(
 /// Derives whether IME should be on this tick and writes
 /// `PrimaryWindow.ime_enabled` and `.ime_position`.
 ///
-/// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
-/// IME through bevy_cef's `Ime` → CEF bridge), OR a surface exists that does
-/// NOT have `ViModeState`. The surface is the `KeyboardFocused` `OrzmaTerminal`
-/// surface.
+/// `ime_enabled` is `true` iff a CEF webview owns focus, or a surface
+/// exists that does NOT have `ViModeState`. The surface is the
+/// `KeyboardFocused` `OrzmaTerminal` surface.
 ///
-/// `ime_position` is the logical-pixel anchor for the OS candidate
-/// window — computed from the surface's `UiGlobalTransform`
-/// translation + `TerminalGrid.cursor` × cell pitch, then divided by
-/// the window scale factor. When the focused webview is an INLINE child of
+/// `ime_position` anchors the OS candidate window at the focused
+/// surface's cursor cell. When the focused webview is an INLINE child of
 /// the active pane, the anchor instead comes from that child's overlay
-/// rect origin (`webview_ime_position`), since inline entities carry no UI
-/// node for `webview_anchors` to read (spec §7).
+/// rect origin (`webview_ime_position`), since inline entities carry no
+/// UI node for `webview_anchors` to read.
 fn ime_policy_system(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
     focused: Query<Entity, With<KeyboardFocused>>,
@@ -208,7 +187,7 @@ fn ime_policy_system(
         if !window.ime_enabled {
             window.ime_enabled = true;
         }
-        // NOTE: Inline arm (spec §7): an inline child has no UI node, so the
+        // NOTE: Inline arm: an inline child has no UI node, so the
         // tab-webview `webview_anchors` arm below cannot anchor it. Derive the
         // candidate-window position from the owning terminal's node transform
         // plus the inline placement rect's origin — the SAME px conversion the
@@ -302,9 +281,7 @@ fn ime_policy_system(
 /// Drains `Ime` events, updates `ImeState`, and on `Ime::Commit` triggers
 /// `ImeCommit` to the keyboard-focused surface. The commit is suppressed (the
 /// state machine still runs, so `ImeState` stays consistent) when EITHER any
-/// webview owns keyboard focus OR the focused surface is in vi mode. The
-/// commit transport is applied by the `apply_ime_commit_to_terminal` observer
-/// in this module.
+/// webview owns keyboard focus OR the focused surface is in vi mode.
 fn read_ime_events(
     mut commands: Commands,
     mut events: MessageReader<Ime>,

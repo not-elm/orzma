@@ -1,5 +1,5 @@
-//! Tokio-free host runtime: a per-handle runtime root used to mint the
-//! user-private socket directory tree for the webview control plane.
+//! Host runtime: a per-handle runtime root used to mint the user-private
+//! socket directory tree for the webview control plane.
 
 use crate::private_dir::restrict_to_current_user;
 use std::path::{Path, PathBuf};
@@ -156,8 +156,7 @@ mod tests {
     /// Asserts that the command-shim directory is private to the current
     /// user.
     ///
-    /// Case: a pane's `PATH` gains the shim directory; nobody else may
-    /// plant executables there.
+    /// Case: a pane's `PATH` gains the shim directory.
     #[test]
     fn runtime_root_creates_bin_dir_private() {
         let parent = tempfile::tempdir().unwrap();
@@ -223,11 +222,10 @@ mod tests {
     }
 
     /// Asserts that a socket path of exactly `SUN_PATH_MAX` bytes does not
-    /// fit while one byte shorter does, since the kernel needs one byte
-    /// for the NUL terminator.
+    /// fit while one byte shorter does.
     ///
-    /// Case: a temp directory whose length puts the longest socket path
-    /// right at the limit.
+    /// Case: a temp directory's length puts the longest socket path right at
+    /// the limit.
     #[test]
     fn a_socket_path_of_exactly_sun_path_max_bytes_does_not_fit() {
         let name = "n".repeat((SUN_PATH_MAX - 26) / 2);

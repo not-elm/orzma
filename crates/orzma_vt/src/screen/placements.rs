@@ -7,9 +7,6 @@ use crate::screen::grid::LineId;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint};
 
 /// The placements mounted on one screen.
-///
-/// Which screen owns the table answers which screen a placement belongs
-/// to, so no placement records its own screen.
 #[derive(Debug)]
 pub(crate) struct ScreenPlacements {
     placements: Vec<Placement>,
@@ -29,10 +26,6 @@ impl ScreenPlacements {
     }
 
     /// Whether this screen holds no placement.
-    ///
-    /// [`Self::evict_lost_anchors`] returns on this before it touches
-    /// the table, which states in one line that a screen holding no
-    /// webview resolves no anchor.
     pub fn is_empty(&self) -> bool {
         self.placements.is_empty()
     }
@@ -48,10 +41,6 @@ impl ScreenPlacements {
     }
 
     /// Drops the placement a re-mount of `id` replaces, without reporting it.
-    ///
-    /// A superseded id is deliberately unnamed: the re-mount registers a
-    /// successor under the same id, and reporting the predecessor as
-    /// evicted would tell the host to despawn the live view.
     pub fn supersede(&mut self, id: InstanceId) {
         self.placements.retain(|p| p.id != id);
     }
@@ -77,13 +66,6 @@ impl ScreenPlacements {
 
     /// Resolves every placement's anchor through `line_of` — the complete
     /// list, not a diff.
-    ///
-    /// # Invariants
-    ///
-    /// Resolution reads; it never evicts, repairs an anchor, or refreshes
-    /// a cache. Those belong to [`Self::evict_lost_anchors`], which runs
-    /// while damage can still be staged — a mutation here would land
-    /// after the ledger was drained and reach no frame.
     pub fn project(
         &self,
         mut line_of: impl FnMut(LineId) -> Option<GridLine>,
@@ -106,13 +88,14 @@ impl ScreenPlacements {
     /// Drops the placements `line_of` can no longer resolve and names
     /// them.
     ///
+    /// `line_of` must resolve anchors exactly as the expression handed to
+    /// [`Self::project`] does.
+    ///
     /// # Invariants
     ///
-    /// `line_of` must resolve anchors exactly as the expression handed to
-    /// [`Self::project`] does; the matching bound does not enforce it, so
-    /// the owning screen passes one expression to both. A placement this
-    /// rejects is exactly a placement projection would omit, so no
-    /// placement can become unresolvable without also becoming evictable.
+    /// A placement this rejects is exactly a placement projection would
+    /// omit, so no placement can become unresolvable without also
+    /// becoming evictable.
     pub fn evict_lost_anchors(
         &mut self,
         mut line_of: impl FnMut(LineId) -> Option<GridLine>,

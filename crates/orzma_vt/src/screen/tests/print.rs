@@ -44,7 +44,7 @@ fn a_replace_mode_print_overwrites_the_cell_without_shifting_the_row() {
 
 /// Asserts that a print in insert mode at the last column drops the cell
 /// it pushes past the border and stamps the character there, arming the
-/// deferred wrap as an ordinary print would.
+/// deferred wrap.
 ///
 /// Case: a program in insert mode types into the rightmost column of a
 /// full row.
@@ -137,7 +137,7 @@ fn an_insert_mode_print_keeps_the_shifted_cells_attributes() {
 }
 
 /// Asserts that an insert-mode print on a one-column screen replaces the
-/// only cell, because the character it shifts falls past the border.
+/// only cell.
 ///
 /// Case: the window is dragged down to a single column while a program
 /// in insert mode keeps printing.
@@ -180,8 +180,7 @@ fn print_stamps_the_pen_and_advances() {
 /// wrap and leaves the cursor in place.
 ///
 /// Case: an application emits a line exactly as wide as the
-/// screen, and the terminal must not move to the next row until
-/// more text actually arrives.
+/// screen, and no further text has arrived yet.
 #[test]
 fn print_at_the_last_column_arms_the_deferred_wrap() {
     let mut screen = screen();

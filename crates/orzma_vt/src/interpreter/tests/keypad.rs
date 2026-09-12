@@ -16,7 +16,7 @@ fn keypad_application_mode_selects_application_sequences() {
 /// Asserts that `ESC >` puts the keypad back in numeric mode.
 ///
 /// Case: a full-screen editor exits and hands the keypad back to the
-/// shell, where the digit keys must type digits again.
+/// shell.
 #[test]
 fn keypad_numeric_mode_selects_ascii_numerals() {
     let device = interpret(b"\x1b=\x1b>");

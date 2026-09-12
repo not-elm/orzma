@@ -18,8 +18,7 @@ fn a_linefeed_above_the_bottom_moves_the_cursor() {
 /// Asserts that a linefeed at the bottom margin scrolls the screen and
 /// pushes the departing row into history.
 ///
-/// Case: a shell prints past the last row and the earlier output has to
-/// remain reachable by scrolling back.
+/// Case: a shell prints past the last row.
 #[test]
 fn a_bottom_linefeed_scrolls_and_pushes_history() {
     let mut screen = screen();
@@ -45,13 +44,8 @@ fn a_scrolled_in_row_carries_the_pen_background() {
 }
 
 /// Asserts that a linefeed below the bottom margin moves the
-/// cursor down and scrolls nothing.
-///
-/// The agreed policy gates the scroll on the cursor sitting
-/// exactly at the bottom margin, the way VT510 writes IND and
-/// NEL, rather than on the cursor having reached it: a cursor
-/// outside the region moves like an ordinary cursor-down instead
-/// of scrolling rows it is not among.
+/// cursor down and scrolls nothing, the scroll being gated on the
+/// cursor sitting exactly at the margin (VT510 p.318 IND, p.325 NEL).
 ///
 /// Case: an application reserves a two-row footer below its
 /// scrolling pane and emits a linefeed while the cursor rests on
@@ -71,12 +65,8 @@ fn a_linefeed_below_a_bottom_margin_moves_the_cursor_down() {
 }
 
 /// Asserts that a linefeed below the bottom margin, already on
-/// the last row, moves and scrolls nothing.
-///
-/// The agreed policy mirrors the reverse index above a top
-/// margin: a cursor that hits the screen edge outside the
-/// scrolling region stays put, rather than scrolling the region
-/// it is not inside.
+/// the last row, moves and scrolls nothing, rather than scrolling
+/// the region it is not inside.
 ///
 /// Case: an application reserves a footer below its scrolling
 /// pane and emits a linefeed while the cursor rests on the last
@@ -99,13 +89,8 @@ fn a_linefeed_below_a_bottom_margin_at_the_last_row_does_nothing() {
 
 /// Asserts that a linefeed at the bottom of a region below a
 /// non-zero top margin rotates the region and leaves history and
-/// the rows above it alone.
-///
-/// The agreed policy feeds scrollback only when the top margin is
-/// row zero, following alacritty: rows leaving a region that has
-/// content pinned above it never reached the top of the screen,
-/// so treating them as scrollback would interleave them with
-/// output the user never scrolled past.
+/// the rows above it alone; only a region whose top margin is row
+/// zero feeds scrollback.
 ///
 /// Case: an application pins a header on the first row and
 /// scrolls the pane below it forward.
@@ -157,10 +142,6 @@ fn a_linefeed_at_a_bottom_margin_feeds_history_and_holds_the_rows_below() {
 }
 
 /// Asserts that a linefeed preserves the deferred-wrap flag.
-///
-/// The agreed policy follows alacritty: only a carriage return or
-/// an explicit cursor motion clears the pending wrap; a bare
-/// linefeed does not.
 ///
 /// Case: an application writes a full-width line, then emits a bare
 /// linefeed before continuing to print on the next row.

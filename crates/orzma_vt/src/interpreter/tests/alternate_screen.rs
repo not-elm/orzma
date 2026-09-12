@@ -26,8 +26,8 @@ fn decset_47_shows_the_alternate_screen() {
 /// contents intact, repaints the whole viewport, and raises no
 /// eviction when the alternate screen held no placements.
 ///
-/// Case: the program exits and the shell's prompt from before it
-/// must reappear.
+/// Case: the program exits back to the shell whose prompt was on
+/// the primary screen.
 #[test]
 fn decrst_47_returns_to_the_primary_screen() {
     let mut session = Session::new();
@@ -68,8 +68,8 @@ fn a_redundant_alternate_screen_switch_does_nothing() {
 /// in the chunk's own signals and leaves the primary screen's
 /// placement in the next frame.
 ///
-/// Case: a full-screen program that mounted a webview exits, and
-/// the shell's own webview from before it must survive.
+/// Case: a full-screen program that mounted a webview exits while
+/// the shell's own webview from before it is still mounted.
 #[test]
 fn leaving_the_alternate_screen_evicts_only_its_placements() {
     let mut session = Session::new();

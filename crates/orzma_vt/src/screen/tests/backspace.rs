@@ -27,12 +27,8 @@ fn a_backspace_at_column_zero_does_not_move() {
 }
 
 /// Asserts that a backspace after a full row both steps back and
-/// disarms the deferred wrap.
-///
-/// The agreed policy lands one column short of the cell just
-/// written rather than on it. xterm's `CursorBack` decrements
-/// unconditionally without reverse-wraparound and then calls
-/// `ResetWrap`, so the step and the disarm both happen.
+/// disarms the deferred wrap, landing one column short of the cell
+/// just written rather than on it.
 ///
 /// Case: an application fills a row to its last cell and then
 /// backs up to overwrite the character before the last one.

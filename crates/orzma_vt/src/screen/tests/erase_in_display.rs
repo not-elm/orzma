@@ -56,11 +56,6 @@ fn erase_display_above_clears_through_the_cursor() {
 /// Asserts that erase-all clears the visible screen in place while
 /// scrollback history survives.
 ///
-/// The agreed policy is the classic xterm behavior: `ED 2` erases
-/// in place and does not push the cleared rows into history (a
-/// deliberate divergence from alacritty, which scrolls them out
-/// first).
-///
 /// Case: the user runs `clear` in a session that already
 /// accumulated scrollback, then scrolls back to check older
 /// output.

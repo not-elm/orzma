@@ -96,8 +96,8 @@ impl OrzmuxClient {
         self.disconnected.load(Ordering::Acquire)
     }
 
-    /// A client with no thread: the test holds the backend's ends of
-    /// both channels.
+    /// A client with no backend thread: the caller holds the backend's
+    /// ends of both channels.
     #[cfg(any(test, feature = "test-support"))]
     pub fn detached() -> (
         Self,

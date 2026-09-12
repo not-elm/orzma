@@ -32,13 +32,13 @@ impl Plugin for TerminalGlyphPlugin {
     }
 }
 
-/// Handle to the GPU-side mirror of the `GlyphAtlas`, plus the last
-/// observed atlas generation so the sync system only re-uploads on change.
+/// Handle to the GPU-side mirror of the `GlyphAtlas`, plus the atlas
+/// generation that mirror was built from.
 #[derive(Resource)]
 pub struct AtlasImage {
     /// Bevy `Image` asset whose pixel buffer mirrors `GlyphAtlas.pixels`.
     pub handle: Handle<Image>,
-    /// Last `GlyphAtlas.generation` seen by `sync_atlas_image`.
+    /// Last `GlyphAtlas.generation` the image was synced to.
     pub last_generation: u64,
 }
 

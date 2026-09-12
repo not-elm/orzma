@@ -1,14 +1,6 @@
-//! Outbound signal types the drain triggers (`TtyBellSignal`,
-//! `TtyTitleChangedSignal`, `TtyTitleResetSignal`, `TtyClipboardStoreSignal`,
-//! `TtyCwdChangedSignal`, `TtyWebviewMountSignal`,
-//! `TtyWebviewMountRejectedSignal`, `TtyWebviewUnmountSignal`,
-//! `TtyWebviewEvictedSignal`, `TtyModeChangedSignal`, `TtyChildExitSignal`,
-//! `TtyFrameSignal`), plus `trigger_vt_signal`, the helper that turns one
-//! drained `VtSignal` into its matching `EntityEvent`.
-//! `TtySelectionTextSignal` answers a mux `CopySelection` request instead
-//! of draining from a VT, so it is a plain `Event` rather than an
-//! `EntityEvent`. Inbound requests fired by the host UI live in
-//! `requests.rs`.
+//! The outbound signals the drain turns the backend's events into: one
+//! `EntityEvent` per drained `VtSignal`, plus the backend's answer to a
+//! copy request.
 
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
@@ -16,8 +8,9 @@ use bevy::prelude::*;
 use orzma_vt::prelude::*;
 use std::path::PathBuf;
 
-/// Fired when alacritty raises `Event::Bell`.
-/// Best-effort — no back-pressure observability (control channel is unbounded).
+/// Fired when a terminal requests an audible bell. Delivery is
+/// best-effort: a consumer never back-pressures the terminal that rang
+/// it.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct TtyBellSignal {
     #[event_target]
@@ -39,8 +32,8 @@ pub struct TtyTitleResetSignal {
     pub terminal: Entity,
 }
 
-/// Fired when tracked `TermMode` flags transition between coalescer
-/// emit cycles.
+/// Fired for the mode flags that transitioned since the previous drain,
+/// as mode names (e.g. "alt-screen"). [`OrzmaVt`] never raises it.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct TtyModeChangedSignal {
     #[event_target]
@@ -49,7 +42,8 @@ pub struct TtyModeChangedSignal {
     pub removed: Vec<String>,
 }
 
-/// Fired when alacritty raises `Event::ClipboardStore`.
+/// Fired when the application copies data to the system clipboard via
+/// OSC 52. [`OrzmaVt`] never raises it.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct TtyClipboardStoreSignal {
     #[event_target]
@@ -57,8 +51,9 @@ pub struct TtyClipboardStoreSignal {
     pub content: String,
 }
 
-/// Fired exactly once when the child shell process exits.
-/// `code` is `None` if the `wait` itself failed.
+/// Fired exactly once when a pane closes. `code` is the shell's exit
+/// code, and `None` when the GUI killed the pane or the `wait` itself
+/// failed.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct TtyChildExitSignal {
     #[event_target]
@@ -66,8 +61,8 @@ pub struct TtyChildExitSignal {
     pub code: Option<i32>,
 }
 
-/// Fired when a terminal reports a new current working directory via OSC 7.
-/// Targets the terminal host entity; carries the validated absolute path.
+/// Fired when a terminal reports a new current working directory via
+/// OSC 7, carrying the absolute path parsed from the URI.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct TtyCwdChangedSignal {
     #[event_target]
@@ -112,8 +107,8 @@ pub struct TtyWebviewUnmountSignal {
 pub struct TtyWebviewEvictedSignal {
     #[event_target]
     pub terminal: Entity,
-    /// The instances the VT evicted. It has already dropped them, so a
-    /// consumer despawns its own side without asking for a second removal.
+    /// The instances the VT evicted. It has already dropped them, so no
+    /// removal needs to be sent back.
     pub placements: Vec<InstanceId>,
 }
 
@@ -129,8 +124,7 @@ pub struct TtyFrameSignal {
 }
 
 /// The backend's answer to a `RequestTtyCopySelection`: the selected
-/// text (`None` when the pane was gone or the selection empty). A plain
-/// `Event` because the requesting pane may already be gone.
+/// text (`None` when the pane was gone or the selection empty).
 #[derive(Event, Debug, Clone)]
 pub struct TtySelectionTextSignal {
     pub text: Option<String>,

@@ -8,13 +8,11 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ttf_parser::Face as TtfFace;
 
-/// Error returned by `TerminalFonts::from_faces` (the actual producer;
-/// `from_bytes` delegates to it) when a face's bytes fail to parse — primary
-/// faces via `ab_glyph::FontVec::try_from_vec_and_index`, fallback faces via
-/// `FontArc::try_from_vec`.
+/// Error returned by `TerminalFonts::from_faces` and
+/// `TerminalFonts::from_bytes` when a face's bytes fail to parse.
 #[derive(Debug, thiserror::Error)]
 pub enum FontLoadError {
-    /// `FontArc::try_from_vec` rejected the bytes for this face.
+    /// `ab_glyph` rejected the bytes for this face.
     #[error("ab_glyph rejected {face:?} face: {source}")]
     ParseFailed {
         /// Which face's bytes were invalid.
@@ -31,8 +29,7 @@ const FONT_SIZE_PX: f32 = 12.0;
 /// PrimaryWindow's `scale_factor` to obtain the physical pixel size fed to
 /// `cell_metrics_px` and the glyph atlas.
 ///
-/// Defaults to 12.0 (`FONT_SIZE_PX`); the app's `FontBridgePlugin` overwrites it
-/// from `config.font.size` at Startup, before cell metrics are computed.
+/// Defaults to 12.0.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct TerminalFontSize(pub f32);
 
@@ -42,15 +39,14 @@ impl Default for TerminalFontSize {
     }
 }
 
-/// Public `SystemSet` label used to order systems against the renderer's
-/// cell-metrics initialization. App-level plugins that need to mutate
-/// `TerminalFonts` before metrics are computed should run their Startup
-/// systems `.before(TerminalFontInitSet::InitCellMetrics)`.
+/// Label to order systems against the renderer's cell-metrics
+/// initialization. A plugin that mutates `TerminalFonts` before metrics
+/// are computed must run its Startup systems
+/// `.before(TerminalFontInitSet::InitCellMetrics)`.
 #[derive(SystemSet, Debug, Clone, Eq, PartialEq, Hash)]
 pub enum TerminalFontInitSet {
-    /// `init_cell_metrics_from_primary_window` lives in this set. With
-    /// `bridge_font_config` (or any other override) running `.before` it,
-    /// the metrics are computed from the final `TerminalFonts`.
+    /// Holds the Startup system that computes the initial cell metrics
+    /// from `TerminalFonts`.
     InitCellMetrics,
 }
 
@@ -69,18 +65,12 @@ impl Plugin for TerminalFontPlugin {
     }
 }
 
-/// Inserts `TerminalCellMetricsResource` at Startup based on the
-/// PrimaryWindow's current scale_factor. Bevy 0.19's winit runner writes
-/// the OS-reported scale_factor into the Window during `create_windows()`
-/// (in `resumed()`), which runs before the first `App::update()` — so this
-/// Startup system sees the correct DPR on its very first invocation,
-/// eliminating the 1-frame Retina jitter where the resource would
-/// otherwise hold DPR=1.0 values.
+/// Inserts `TerminalCellMetricsResource` from the PrimaryWindow's
+/// scale_factor and `TerminalFontSize`. The very first metrics already
+/// carry the OS-reported scale factor, not a DPR of 1.0.
 ///
-/// `Single<&Window, With<PrimaryWindow>>` refuses to run the system unless
-/// exactly one matching entity exists; under `MinimalPlugins` (no Window)
-/// the system is silently skipped, and consumers' test helpers continue
-/// to insert `TerminalCellMetricsResource` manually.
+/// The system runs only while exactly one primary window exists; without
+/// one (under `MinimalPlugins`, say) it is skipped.
 fn init_cell_metrics_from_primary_window(
     mut commands: Commands,
     fonts: Res<TerminalFonts>,
@@ -97,21 +87,9 @@ fn init_cell_metrics_from_primary_window(
 }
 
 /// Pixel metrics for the regular face at the given physical pixel size.
-///
-/// Data sources differ by field because no single library exposes all
-/// the OpenType metrics we need:
-/// - `advance_phys` / `ascent_phys` / `descent_phys` come from
-///   `ab_glyph::ScaleFont`.
-/// - `line_height_phys` comes from the `hhea` table via `ttf-parser`
-///   (`ab_glyph::PxScale` maps the em-square exactly to the requested
-///   pixel size, so its `line_gap()` is always 0 — using it would
-///   collapse rows to the em-height and lose the typographic gap).
-/// - `underline_position_phys` / `underline_thickness_phys` come from the
-///   OpenType `post` table via `ttf-parser` (`ab_glyph` exposes no
-///   underline API).
 #[derive(Clone, Copy, Debug)]
 pub struct CellMetrics {
-    /// Horizontal advance of glyph `'0'` in physical pixels (Alacritty parity).
+    /// Horizontal advance of glyph `'0'` in physical pixels.
     pub advance_phys: f32,
     /// Ascent + |descent| + line_gap in physical pixels.
     pub line_height_phys: f32,
@@ -128,20 +106,16 @@ pub struct CellMetrics {
     /// Worst-case rightward overflow in physical px across all four faces
     /// (Regular/Italic/Bold/BoldItalic) over ASCII printable codepoints,
     /// measured as `max(0, outline_glyph(...).px_bounds().max.x - cell_w_phys_floor)`.
-    /// Used by the shader to paint the rightmost column's overflow pixels
-    /// inside the bg_padding strip; used by `resize_terminals_to_node` to
-    /// reserve that strip from the available node width.
+    /// A host laying out a terminal node must reserve this much width past
+    /// the grid rectangle.
     pub max_overflow_phys: f32,
 }
 
-/// Cross-crate public Resource exposing the current `CellMetrics` for
-/// `orzma::resize_terminals_to_node` and any other consumer that needs
-/// the canonical cell pitch / advance values.
+/// The canonical cell pitch and advance values.
 ///
-/// Inserted at `Startup` by `init_cell_metrics_from_primary_window` based
-/// on the OS-reported scale_factor of the PrimaryWindow; subsequently
-/// rewritten by `update_terminal_material` whenever DPR or font size
-/// changes (e.g. window moved to a different-DPR display).
+/// It is inserted at startup from the PrimaryWindow's scale_factor and
+/// rewritten whenever the DPR or the font size changes (e.g. the window
+/// moves to a different-DPR display).
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct TerminalCellMetricsResource {
     /// Current cell pitch and typographic measurements in physical pixels.
@@ -169,20 +143,18 @@ pub struct TerminalFonts {
     /// Fallback bold weight, italic style.
     pub fallback_bold_italic: FontArc,
     /// Symbol/dingbat fallback (e.g. checkbox marks ☐ ☑ ☒ ✔), tried after
-    /// both the primary and CJK fallback miss. Face-independent: symbols have
-    /// no weight/style variants, so one face serves every `FontFace`. Always
-    /// the bundled Noto Sans Symbols 2 — never user-overridable.
+    /// both the primary and CJK fallback miss. One face serves every
+    /// `FontFace`, and it is always the bundled Noto Sans Symbols 2: no
+    /// constructor takes a symbol face.
     pub symbol: FontArc,
     /// `.ttc` face index of the regular face. Every ttf-parser reparse of the
-    /// regular face (cell metrics, em-scale) MUST use this index — parsing a
-    /// collection face at index 0 reads a different face and yields wrong metrics.
+    /// regular face (cell metrics, em-scale) MUST use this index.
     regular_index: u32,
 }
 
 /// Computes the worst-case rightward overflow (in physical px) over ASCII
-/// printable codepoints for a single scaled face. Uses the same
-/// `outline_glyph(...).px_bounds()` path as the atlas rasterizer, so the
-/// value matches what the shader actually samples.
+/// printable codepoints for a single scaled face. The value matches the
+/// bitmap extent the atlas rasterizes and the shader samples.
 ///
 /// `cell_w_phys_floor` is the floored advance the renderer uses as cell
 /// pitch. The overflow is how far past that floor the rasterized bitmap
@@ -220,9 +192,7 @@ fn em_scale_of(font: &FontArc, index: u32) -> f32 {
     (asc - desc) as f32 / upem
 }
 
-/// Loads the bundled symbol/dingbat fallback face (Noto Sans Symbols 2). It is
-/// never user-overridable, so both [`TerminalFonts::from_bytes`] and
-/// [`TerminalFonts::default`] build it from the same embedded bytes.
+/// Loads the bundled symbol/dingbat fallback face (Noto Sans Symbols 2).
 fn bundled_symbol_face() -> FontArc {
     FontArc::try_from_slice(SYMBOL_REGULAR).expect("bundled NotoSansSymbols2-Regular load")
 }
@@ -243,10 +213,11 @@ fn fallback_face(bytes: Vec<u8>, face: FontFace) -> Result<FontArc, FontLoadErro
 
 impl TerminalFonts {
     /// Constructs a `TerminalFonts` from four primary `(bytes, .ttc index)`
-    /// pairs plus four fallback byte buffers. Each primary face is loaded at its
-    /// own collection index; fallback + symbol faces are always index 0. Stores
-    /// the regular face's index for later metric reparses. On per-face parse
-    /// failure returns `FontLoadError::ParseFailed` naming the face.
+    /// pairs plus four fallback byte buffers. Each primary face is loaded at
+    /// its own collection index; fallback and symbol faces are always index 0.
+    ///
+    /// Returns `FontLoadError::ParseFailed` naming the face whose bytes
+    /// failed to parse.
     pub fn from_faces(
         regular: (Vec<u8>, u32),
         bold: (Vec<u8>, u32),
@@ -282,19 +253,14 @@ impl TerminalFonts {
     }
 
     /// Constructs a `TerminalFonts` from eight owned TTF byte buffers, one
-    /// per face (four primary + four fallback). `Vec<u8>` is required by
-    /// `ab_glyph::FontArc::try_from_vec`; callers responsible for runtime
-    /// font loading (e.g., the Bevy font-bridge plugin) read bytes from disk,
-    /// build `Vec<u8>`, and call this. On per-face parse failure, returns
-    /// `FontLoadError::ParseFailed` naming the offending face — callers may
-    /// then substitute bundled bytes for that face and retry.
+    /// per face (four primary + four fallback), loading every primary face
+    /// at collection index 0.
     ///
-    /// The symbol fallback face is loaded internally from the bundled
-    /// Noto Sans Symbols 2 — it is not user-overridable, so callers do not
-    /// supply it.
+    /// Returns `FontLoadError::ParseFailed` naming the face whose bytes
+    /// failed to parse.
     ///
-    /// Delegates to [`Self::from_faces`] with face index 0 for all four
-    /// primary faces.
+    /// The symbol fallback face is always the bundled Noto Sans Symbols 2,
+    /// so callers do not supply it.
     pub fn from_bytes(
         regular: Vec<u8>,
         bold: Vec<u8>,
@@ -327,13 +293,9 @@ impl TerminalFonts {
         }
     }
 
-    /// Returns the fallback face matching `face`. Used by
-    /// `atlas::get_or_insert` when the primary face does not contain a
-    /// glyph for the requested codepoint.
+    /// Returns the fallback face matching `face`.
     ///
-    /// NOTE: this is the GLYPH-lookup path. `cell_metrics_px` and
-    /// `max_overflow_phys` still read only the 4 primary faces — fallback
-    /// metrics never participate in cell layout.
+    /// The fallback faces serve glyph lookup alone.
     pub fn fallback_choice(&self, face: &FontFace) -> &FontArc {
         match face {
             FontFace::Regular => &self.fallback_regular,
@@ -344,7 +306,7 @@ impl TerminalFonts {
     }
 
     /// Returns full pixel metrics for the regular face at the requested
-    /// physical pixel size. See [`CellMetrics`] for individual field semantics.
+    /// physical pixel size.
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {
         let face = TtfFace::parse(self.regular.font_data(), self.regular_index)
             .expect(
@@ -408,31 +370,27 @@ impl TerminalFonts {
         }
     }
 
-    /// Returns the `ab_glyph::PxScale` value for the primary regular face at the
-    /// given physical pixel size. Used by `cell_metrics_px` and `glyph/atlas.rs`.
+    /// Returns the `ab_glyph::PxScale` value for the primary regular face at
+    /// the given physical pixel size.
     pub(crate) fn px_scale_value(&self, phys_size_px: u16) -> f32 {
         f32::from(phys_size_px) * em_scale_of(&self.regular, self.regular_index)
     }
 
     /// Returns the `PxScale` value for the CJK fallback face so its em-square
-    /// renders at the same physical pixel size as the primary's, preventing the
-    /// fallback from rasterizing larger than the grid expects. Mirrors
-    /// [`Self::px_scale_value`] but reads `self.fallback_regular`'s metrics.
+    /// renders at the same physical pixel size as the primary's.
     pub(crate) fn fallback_px_scale_value(&self, phys_size_px: u16) -> f32 {
         f32::from(phys_size_px) * em_scale_of(&self.fallback_regular, 0)
     }
 
     /// Returns the `PxScale` value for the symbol fallback face so its
     /// em-square renders at the same physical pixel size as the primary's.
-    /// Mirrors [`Self::px_scale_value`] but reads `self.symbol`'s metrics.
     pub(crate) fn symbol_px_scale_value(&self, phys_size_px: u16) -> f32 {
         f32::from(phys_size_px) * em_scale_of(&self.symbol, 0)
     }
 
     /// Returns the primary regular face's `'0'` advance in physical pixels —
     /// the monospace cell pitch the grid lays out at, matching the
-    /// `advance_phys` field of [`Self::cell_metrics_px`]. Used by the atlas to
-    /// shrink over-wide symbol-fallback glyphs to their cell.
+    /// `advance_phys` field of [`Self::cell_metrics_px`].
     pub(crate) fn cell_advance_px(&self, phys_size_px: u16) -> f32 {
         let scaled = self
             .regular
@@ -545,10 +503,12 @@ mod tests {
         assert_eq!(TerminalFonts::default().regular_index, 0);
     }
 
-    /// `cell_metrics_px(12)` returns sensible values for JetBrains Mono
-    /// Nerd Font Mono Regular at 12px. Empirical ranges were measured
-    /// against the bundled TTF; structural invariants (positive ascent,
-    /// negative underline position) are the load-bearing assertions.
+    /// Asserts that `cell_metrics_px(12)` lands in the ranges measured for
+    /// the bundled JetBrains Mono Nerd Font Mono Regular, with the
+    /// underline below the baseline and at least one pixel thick.
+    ///
+    /// Case: the terminal lays out its grid with the bundled font at the
+    /// default 12 px size.
     #[test]
     fn jetbrains_mono_12px_metrics_are_sensible() {
         let fonts = TerminalFonts::default();
@@ -588,8 +548,11 @@ mod tests {
         );
     }
 
-    /// JBM Mono at 12 px must report a non-zero `max_overflow_phys`
-    /// because glyphs like `W` rasterize past the floored advance.
+    /// Asserts that the bundled font at 12 px reports a non-zero
+    /// `max_overflow_phys`.
+    ///
+    /// Case: the terminal lays out the bundled font at 12 px, where a
+    /// glyph like `W` rasterizes past the floored advance.
     #[test]
     fn cell_metrics_px_reports_nonzero_max_overflow() {
         let fonts = TerminalFonts::default();
@@ -601,10 +564,11 @@ mod tests {
         );
     }
 
-    /// `max_overflow_phys` must cover the worst face — independently
-    /// measure each of the 4 faces and verify each is ≤ the reported
-    /// `max_overflow_phys`. Catches a regression where the fold drops
-    /// any face from the per-face max computation.
+    /// Asserts that `max_overflow_phys` is at least the overflow each of
+    /// the four primary faces reaches on its own.
+    ///
+    /// Case: a program prints bold and italic text, whose glyphs can
+    /// reach further past the cell than the regular face's.
     #[test]
     fn cell_metrics_px_max_overflow_covers_all_faces() {
         let fonts = TerminalFonts::default();
@@ -633,7 +597,9 @@ mod tests {
         }
     }
 
-    /// 24 px metrics are approximately double the 12 px ones.
+    /// Asserts that 24 px metrics are approximately double the 12 px ones.
+    ///
+    /// Case: the user doubles the font size from 12 px to 24 px.
     #[test]
     fn metrics_scale_linearly_with_size() {
         let fonts = TerminalFonts::default();
@@ -643,11 +609,11 @@ mod tests {
         assert!((m24.line_height_phys - m12.line_height_phys * 2.0).abs() < 0.5);
     }
 
-    /// `cell_metrics_px` and `glyph/atlas.rs` must rasterize at the SAME
-    /// PxScale, otherwise atlas glyphs are physically smaller (or larger)
-    /// than the cell pitch and either leave blank gutters on the right
-    /// (atlas < cell) or overflow without coverage (atlas > cell).
-    /// This test guards against accidental divergence.
+    /// Asserts that `cell_metrics_px` measures its advance at the same
+    /// `PxScale` that `px_scale_value` hands the atlas.
+    ///
+    /// Case: the renderer measures the cell pitch and rasterizes the
+    /// bundled font's glyphs at 12 px.
     #[test]
     fn px_scale_value_matches_cell_metrics_internal_use() {
         let fonts = TerminalFonts::default();
@@ -666,11 +632,11 @@ mod tests {
         );
     }
 
-    /// `TerminalFontPlugin::build` must not overwrite an already-present
-    /// `TerminalFonts` resource. Apps pre-insert a custom `TerminalFonts`
-    /// (e.g., from a runtime config-driven font override) BEFORE adding
-    /// `TerminalFontPlugin`; if the plugin overwrote it, the override
-    /// would be lost.
+    /// Asserts that `TerminalFontPlugin::build` keeps an already-present
+    /// `TerminalFonts` resource rather than overwriting it.
+    ///
+    /// Case: the app inserts a config-driven font override before adding
+    /// `TerminalFontPlugin`.
     #[test]
     fn terminal_font_plugin_preserves_pre_inserted_terminal_fonts() {
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
@@ -780,12 +746,12 @@ mod tests {
         assert_ne!(b_ptr, i_ptr, "Bold and Italic fallback share bytes");
     }
 
-    /// `init_cell_metrics_from_primary_window` reads the PrimaryWindow's
-    /// scale_factor and inserts a DPR-aware `TerminalCellMetricsResource`.
-    /// Verifies BOTH (a) `phys_font_size` reflects the scale_factor and
-    /// (b) the derived metrics (advance_phys) are also DPR-scaled —
-    /// catches a regression where phys_font_size is correct but a wrong
-    /// size (e.g. FONT_SIZE_PX as u16) is fed to cell_metrics_px.
+    /// Asserts that the inserted `TerminalCellMetricsResource` scales both
+    /// `phys_font_size` and the metrics derived from it by the
+    /// PrimaryWindow's scale_factor.
+    ///
+    /// Case: the app starts on a Retina display reporting a scale factor
+    /// of 2.
     #[test]
     fn init_cell_metrics_from_primary_window_uses_window_scale_factor() {
         use bevy::window::{PrimaryWindow, Window, WindowResolution};

@@ -1,6 +1,5 @@
-//! The renderer's CPU-side mirror of one terminal: the `TerminalGrid`
-//! component, the cells it materializes from a frame's runs, and the
-//! cursor and hover queries the host reads off it.
+//! The renderer's CPU-side mirror of one terminal, materialized into
+//! cells from the frames applied to it.
 
 use crate::schema::{
     AnchoredPlacement, CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, GridColumn,
@@ -16,10 +15,6 @@ use unicode_width::UnicodeWidthStr;
 
 /// One materialized cell of the renderer's CPU-side grid, expanded
 /// from the frame's [`crate::schema::Run`]s.
-///
-/// This is renderer vocabulary, not part of the VT contract: the VT
-/// emits attribute runs, and the renderer materializes them into cells
-/// for glyph resolution and hover hit-testing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridCell {
     /// The grapheme cluster text for this cell.
@@ -41,16 +36,13 @@ pub struct GridCell {
 impl GridCell {
     /// Whether this cell paints no glyph: a zero-width cell (combining mark /
     /// wide-char spacer) or one whose text is empty or all whitespace.
-    ///
-    /// Shared by the renderer's glyph resolution and the host paint-rescue's
-    /// blank-grid test so the two notions of "renders nothing" cannot drift.
     #[inline]
     pub fn is_blank(&self) -> bool {
         self.width == 0 || self.text.trim().is_empty()
     }
 }
 
-/// A structure represents the layout structure of the terminal grid.
+/// The layout structure of the terminal grid.
 /// Each terminal entity owns this component.
 #[derive(Component, Default)]
 pub struct TerminalGrid {
@@ -64,23 +56,20 @@ pub struct TerminalGrid {
     pub cursor: Option<Cursor>,
     /// Lines scrolled back from the live tail; 0 = at live tail.
     pub display_offset: u32,
-    /// Vi-mode cursor when the server is in vi mode; `None` otherwise.
-    /// `ViModePlugin` reads this every frame to drive `ViModeState::active`.
+    /// Vi-mode cursor from the last applied frame; `None` when that frame
+    /// carries none.
     pub vi_cursor: Option<ViCursor>,
-    /// Active selection range emitted alongside `vi_cursor`. Independent of
-    /// `vi_cursor` — survives motion without selection.
+    /// Active selection range from the last applied frame, independent of
+    /// `vi_cursor`.
     pub selection: Option<SelectionRange>,
     /// App-level cursor visibility override. When `true`,
     /// `current_cursor_pos_and_style()` clears [`CURSOR_VISIBLE_BIT`]
-    /// before returning. Independent of `Cursor.visible` (which mirrors
-    /// DECTCEM from the wire) — this field is for the UI layer (e.g.,
-    /// IME composition) to non-destructively hide the cursor without
-    /// clobbering terminal-controlled state.
+    /// before returning. It is independent of `Cursor.visible`, so it
+    /// hides the cursor without clobbering terminal-controlled state.
     pub suppress_cursor: bool,
     /// OSC 8 hyperlinks indexed by id. Every applied frame merges its
     /// `hyperlinks` into this table, and a known id is never
-    /// overwritten. The lookup is a linear scan, which suits the few
-    /// distinct hyperlinks a session carries.
+    /// overwritten.
     pub hyperlinks: Vec<(HyperlinkId, HyperlinkUri)>,
     /// The live palette set by the last frame that carried one;
     /// symbolic cell colors resolve against it.
@@ -135,11 +124,10 @@ impl TerminalGrid {
         Some((cursor.point.column.0, row.0))
     }
 
-    /// Projects the cursor like [`Self::cursor_viewport_cell`], but never
-    /// yields `None`: a cursor whose line is scrolled out of the visible
-    /// rows keeps its column on row `0`, and a missing cursor maps to the
-    /// origin, so IME anchoring stays at the cursor's column while the
-    /// user is scrolled back.
+    /// Projects the cursor into viewport cells as `(column, row)`, but
+    /// never yields `None`: a cursor whose line is scrolled out of the
+    /// visible rows keeps its column on row `0`, and a missing cursor maps
+    /// to the origin.
     pub fn cursor_viewport_cell_or_top(&self) -> (u16, u16) {
         let Some(cursor) = self.cursor.as_ref() else {
             return (0, 0);
@@ -187,22 +175,16 @@ impl TerminalGrid {
 
     /// Whether applying `frame` would change this grid.
     ///
-    /// A frame is self-describing about change — an absent row and a
-    /// `None` section mean "unchanged" — so this reads only what
-    /// [`Self::apply`] would write: a row inside the frame's own size,
-    /// a size the grid does not hold yet, a moved cursor or viewport, a
-    /// listed section that differs, or a hyperlink id the table lacks.
+    /// An absent row and a `None` section mean "unchanged", so this counts
+    /// only a row inside the frame's own size, a size the grid does not
+    /// hold yet, a cursor, vi cursor, selection or viewport that differs,
+    /// a listed section that differs, or a hyperlink id the table lacks.
     /// Rows beyond the frame's size and known hyperlink ids do not
     /// count.
     ///
     /// # Invariants
     ///
     /// Returns `true` exactly when [`Self::apply`] mutates something.
-    /// The observer derefs the component mutably only on `true`, so a
-    /// spurious `true` here rebuilds the GPU buffers for nothing and a
-    /// spurious `false` drops a repaint. Both methods destructure the
-    /// frame exhaustively, so a field added to [`Frame`] fails to
-    /// compile until each has decided what to do with it.
     pub fn differs_from(&self, frame: &Frame) -> bool {
         let Frame {
             size,
@@ -234,18 +216,16 @@ impl TerminalGrid {
 
     /// Applies `frame` to this grid.
     ///
-    /// The size is settled first so every row the frame carries has a
-    /// slot, the hyperlink table is merged before rows are materialized
-    /// so they resolve against it, and the `None` sections are left
-    /// alone. Row damage is not diffed against the cells already there:
-    /// a row's presence is the VT's statement that it changed.
+    /// Every row the frame carries inside its size replaces the cells at
+    /// that line, resolving its hyperlink ids against the table, into
+    /// which this frame's own definitions are merged first; the `None`
+    /// sections are left alone.
     ///
     /// # Invariants
     ///
     /// After `apply` returns, `self.cells.len() == self.rows as usize`,
-    /// whatever length the grid was built with. Every field written here
-    /// has a matching predicate in [`Self::differs_from`]; a change to
-    /// how one field is applied must change how it is compared.
+    /// whatever length the grid was built with. It mutates the grid
+    /// exactly when [`Self::differs_from`] reports `true`.
     pub fn apply(&mut self, frame: &Frame) {
         let Frame {
             size,
@@ -504,8 +484,7 @@ mod tests {
     /// Asserts that suppression clears the visible bit of the packed
     /// style.
     ///
-    /// Case: IME composition temporarily hides the caret without
-    /// touching terminal-controlled cursor state.
+    /// Case: an IME composition temporarily hides the caret.
     #[test]
     fn current_cursor_pos_and_style_clears_visible_bit_when_suppressed() {
         let grid = TerminalGrid {
@@ -521,8 +500,8 @@ mod tests {
     /// Asserts that suppression clears only the visible bit while the
     /// vi cursor's projected position is still reported.
     ///
-    /// Case: the user composes IME text while vi mode is active, so the
-    /// app hides the caret without discarding where it sits.
+    /// Case: an IME composition hides the caret while a projected
+    /// cursor position is already recorded on the mirror.
     #[test]
     fn suppress_cursor_does_not_affect_vi_cursor_position() {
         let grid = TerminalGrid {
@@ -542,10 +521,8 @@ mod tests {
     }
 
     /// Asserts that a cursor whose line projects outside the viewport
-    /// paints nothing.
-    ///
-    /// The decided policy is to omit the caret rather than clamp it to
-    /// an edge cell it does not occupy.
+    /// paints nothing rather than being clamped to an edge cell it does
+    /// not occupy.
     ///
     /// Case: the user scrolls back through history while the shell
     /// keeps its caret on the live prompt line below the viewport.
@@ -705,8 +682,7 @@ mod tests {
     /// that advances by display width.
     ///
     /// Case: a row mixes a wide CJK grapheme with ASCII text on a
-    /// scrolled-back history line, so the ASCII cell's point must land
-    /// after both columns of the wide character.
+    /// scrolled-back history line.
     #[test]
     fn runs_to_cells_assigns_points_by_display_width() {
         let cells = runs_to_cells(&[run_with_link("あb", None)], GridLine(-3), &[]);
@@ -735,8 +711,7 @@ mod tests {
 
     /// Asserts that a frame carrying nothing new reports no difference.
     ///
-    /// Case: a synthetic frame repeats what the mirror already holds, a
-    /// shape the VT's emit gate never produces on its own.
+    /// Case: a frame repeats what the mirror already holds.
     #[test]
     fn a_quiet_frame_does_not_differ() {
         assert!(!TerminalGrid::settled().differs_from(&quiet_frame()));
@@ -770,9 +745,8 @@ mod tests {
     /// and that applying the frame settles the grid so the offset
     /// round-trips to a matching state.
     ///
-    /// Case: a synthetic offset-only frame reaches a settled mirror, a
-    /// shape the VT itself never emits because a scroll repaints every
-    /// row.
+    /// Case: a frame that only moves the display offset reaches a settled
+    /// mirror.
     #[test]
     fn a_moved_viewport_differs() {
         let mut grid = TerminalGrid::settled();
@@ -789,9 +763,7 @@ mod tests {
     /// applying the frame resizes the cell rows to match even though
     /// the frame carries no rows of its own.
     ///
-    /// Case: a synthetic size-only frame reaches a settled mirror, a
-    /// shape the VT itself never emits because its resize repaints
-    /// every row.
+    /// Case: a frame that only changes the size reaches a settled mirror.
     #[test]
     fn a_new_size_alone_differs() {
         let mut grid = TerminalGrid::settled();
@@ -987,8 +959,8 @@ mod tests {
 
     /// Asserts that a palette replaces the mirror and `None` keeps it.
     ///
-    /// Case: OSC 11 recolors the background once, and every later frame
-    /// carries no palette.
+    /// Case: one frame recolors the background once, and every later
+    /// frame carries no palette.
     #[test]
     fn a_palette_replaces_the_mirror_and_none_keeps_it() {
         let mut grid = TerminalGrid::settled();

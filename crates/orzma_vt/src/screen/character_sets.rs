@@ -1,12 +1,6 @@
 //! Graphic character set designation (SCS) and invocation (locking and
-//! single shifts) for one screen.
-//!
-//! Only the GL half of the code table is modelled. Reaching a set
-//! invoked into GR takes raw `0xA0`–`0xFF` input bytes, and the UTF-8
-//! parser this crate feeds on consumes that range as multi-byte
-//! encoding instead, so such a set could never be selected. `LS1R`,
-//! `LS2R`, and `LS3R` stay out of scope until an 8-bit input mode
-//! exists.
+//! single shifts) for one screen. Only the GL half of the code table is
+//! modelled.
 
 use std::ops::{Index, IndexMut};
 
@@ -32,11 +26,7 @@ impl CharacterSet {
     /// The character set an `SCS` final character selects.
     ///
     /// A final this terminal has no set for resolves to ASCII instead
-    /// of leaving the previous designation standing. Leaving it would
-    /// keep an earlier `ESC ( 0` in force, so the text that followed
-    /// would print as line segments; the national replacement sets this
-    /// arm mostly catches differ from ASCII in a handful of positions,
-    /// which makes ASCII the closer answer.
+    /// of leaving the previous designation standing.
     pub fn from_dscs(dscs: u8) -> Self {
         match dscs {
             b'B' => Self::Ascii,
@@ -104,8 +94,7 @@ impl GCode {
     /// designates nothing this terminal implements.
     ///
     /// The 96-character designators `-`, `.`, and `/` are among the
-    /// bytes answered with `None`: every set in the repertoire holds 94
-    /// characters, so there is nothing to designate through them.
+    /// bytes answered with `None`.
     pub fn from_designator(designator: u8) -> Option<Self> {
         match designator {
             b'(' => Some(Self::G0),
@@ -119,8 +108,7 @@ impl GCode {
 
 /// The G code a single shift invokes into GL for one graphic character.
 ///
-/// SS2 and SS3 are the only single shifts the VT220 defines, so G0 and
-/// G1 are excluded by construction.
+/// SS2 and SS3 are the only single shifts the VT220 defines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SingleShift {
     /// `SS2` (`0x8E`, `ESC N`) invokes G2.
@@ -152,10 +140,8 @@ impl IndexMut<GCode> for GSets {
 /// # Invariants
 ///
 /// A `pending_single_shift` outranks `gl` for exactly one graphic
-/// character. [`Self::translate`] clears it as it maps that character,
-/// and a locking shift leaves it alone: the two invocations are
-/// independent state, not one field the newer control function
-/// overwrites.
+/// character: [`Self::translate`] clears it as it maps that character,
+/// and a locking shift leaves it armed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CharacterSetMapping {
     /// The G code the latest locking shift invoked into GL.
@@ -178,6 +164,9 @@ impl CharacterSetMapping {
     }
 
     /// Invokes `g_code` into GL.
+    ///
+    /// TODO: implement `LS1R`, `LS2R`, and `LS3R` once an 8-bit input
+    /// mode exists.
     ///
     /// # Control Functions
     ///
@@ -213,10 +202,7 @@ impl CharacterSetMapping {
     /// Restores the power-up designations and invocations, dropping any
     /// pending single shift.
     ///
-    /// # Control Functions
-    ///
-    /// - `DECSTR` (`CSI ! p`)
-    /// - `RIS` (`ESC c`)
+    /// TODO: reach this reset from DECSTR (CSI ! p).
     #[expect(
         dead_code,
         reason = "the executor reaches this reset once DECSTR lands; RIS goes through `Screen::reset`"
@@ -238,8 +224,7 @@ mod tests {
         ///
         /// Case: an application designates line drawing into a
         /// different bank with each of `ESC ( 0`, `ESC ) 0`, `ESC * 0`,
-        /// and `ESC + 0`, so the four spellings have to be told apart by
-        /// the designator alone.
+        /// and `ESC + 0`.
         #[test]
         fn each_designator_selects_its_own_g_code() {
             assert_eq!(GCode::from_designator(b'('), Some(GCode::G0));
@@ -248,13 +233,9 @@ mod tests {
             assert_eq!(GCode::from_designator(b'+'), Some(GCode::G3));
         }
 
-        /// Asserts that the 96-character designators select no G code.
-        ///
-        /// The agreed policy is to answer these with `None` rather than
-        /// fold them onto G1 through G3 alongside their 94-character
-        /// spellings: every set in the repertoire holds 94 characters,
-        /// so accepting the designator would designate a set that does
-        /// not exist.
+        /// Asserts that the 96-character designators select no G code
+        /// rather than folding onto G1 through G3 alongside their
+        /// 94-character spellings.
         ///
         /// Case: an application designates ISO Latin-1 supplemental
         /// into G1 with `ESC - A`.
@@ -283,15 +264,8 @@ mod tests {
             );
         }
 
-        /// Asserts that a final with no set behind it resolves to
-        /// ASCII.
-        ///
-        /// The agreed policy is to designate ASCII rather than drop the
-        /// sequence and leave the previous designation standing. Leaving
-        /// it would keep an earlier `ESC ( 0` in force and print the
-        /// following text as line segments, whereas the national
-        /// replacement sets this arm mostly catches differ from ASCII in
-        /// a handful of positions.
+        /// Asserts that a final with no set behind it resolves to ASCII
+        /// rather than leaving the previous designation standing.
         ///
         /// Case: an application running under a Finnish locale
         /// designates its national replacement set with `ESC ( C`.
@@ -369,8 +343,7 @@ mod tests {
         /// the character set the first one put there.
         ///
         /// Case: an application finishes drawing a box with DEC Special
-        /// Graphics on G0 and emits `ESC ( B`, so that the next `q`
-        /// prints as a letter again instead of a horizontal line.
+        /// Graphics on G0 and emits `ESC ( B`.
         #[test]
         fn redesignating_a_g_code_replaces_the_previous_set() {
             let mut state = CharacterSetMapping::default();
@@ -411,15 +384,6 @@ mod tests {
         /// Asserts that a locking shift replaces the G code in GL and
         /// leaves a pending single shift armed.
         ///
-        /// The agreed policy models GL and the pending single shift as
-        /// independent state, so a locking shift arriving between `SS2`
-        /// and the character it applies to changes neither. The VT220
-        /// describes a single shift as returning to "the previous
-        /// character set", which a save-and-restore model reads as
-        /// undoing the locking shift; foot implements that reading,
-        /// while xterm and Windows Terminal use the override model
-        /// pinned here.
-        ///
         /// Case: an application emits `SS2`, then `SO` before the
         /// character the single shift applies to.
         #[test]
@@ -445,14 +409,8 @@ mod tests {
         use super::*;
 
         /// Asserts that a later single shift replaces the pending one
-        /// and leaves the locking shift alone.
-        ///
-        /// The agreed policy is that successive single shifts replace
-        /// rather than queue, because only one graphic character
-        /// follows and the later control is the one that names it.
-        /// xterm and Windows Terminal each store a single scalar, which
-        /// forces the same choice; the VT220 manual does not settle the
-        /// collision.
+        /// rather than queueing behind it, and leaves the locking shift
+        /// alone.
         ///
         /// Case: an application has shifted GL to G1 with `SO`, emits
         /// `SS2`, then changes its mind and emits `SS3` before printing.

@@ -1,7 +1,6 @@
 //! NDJSON wire types for the control plane, internally tagged on `op`. The
 //! listener parses one `ClientMsg` per line and replies with one `ServerMsg`
-//! per request line. Unknown `op` values fail to parse (strict, matching the
-//! OSC parser ethos).
+//! per request line; an unknown `op` fails to parse.
 
 use crate::control_plane::HandleId;
 use orzma_vt::prelude::InstanceId;
@@ -196,10 +195,8 @@ pub(crate) enum ServerMsg {
 }
 
 impl ServerMsg {
-    /// A `register` reply carrying the minted handle and its first instance.
-    ///
-    /// Both id slots are typed, so neither can take the other's value: the
-    /// wire spelling is produced here rather than at the call site.
+    /// A `register` reply carrying the minted handle and its first instance
+    /// in its wire spelling.
     pub fn registered(handle: impl Into<HandleId>, instance: InstanceId) -> Self {
         Self::Registered {
             ok: true,
@@ -487,8 +484,8 @@ mod tests {
         );
     }
 
-    /// Asserts that each of the three reply shapes serializes to the exact
-    /// line the SDK's position-matched FIFO reads back.
+    /// Asserts that each of the three reply shapes serializes to its exact
+    /// wire line.
     ///
     /// Case: one connection registers a view, asks for a second placement,
     /// then sends a request the host rejects.

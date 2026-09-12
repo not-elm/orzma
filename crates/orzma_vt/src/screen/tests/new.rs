@@ -5,8 +5,7 @@ use super::*;
 /// Asserts that a fresh screen starts at the origin, pinned to the
 /// live tail, with an empty history.
 ///
-/// Case: a terminal spawns and the first shell output must land at
-/// the top-left of an unscrolled screen.
+/// Case: a terminal spawns and the shell prints its first prompt.
 #[test]
 fn a_fresh_screen_starts_at_the_origin() {
     let screen = screen();

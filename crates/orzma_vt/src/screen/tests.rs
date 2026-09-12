@@ -1,4 +1,4 @@
-//! Unit tests for [`Screen`], one module per method under test.
+//! Unit tests for [`Screen`].
 
 use super::*;
 use crate::device::color::Color;
@@ -20,8 +20,7 @@ fn tall_screen() -> Screen {
     Screen::new(GridSize { cols: 4, rows: 4 }, 10)
 }
 
-/// Moves every item `DECSC` saves off its default, so a later
-/// assertion that the state came back cannot pass by accident.
+/// Moves every item `DECSC` saves off its default.
 fn dirty_screen() -> Screen {
     let mut screen = screen();
     screen.state.line = ScreenLine(2);
@@ -36,8 +35,7 @@ fn dirty_screen() -> Screen {
     screen
 }
 
-/// Seeds one glyph into the first column of each leading row, so a
-/// shifted row can be told apart from an erased one.
+/// Seeds one glyph into the first column of each leading row.
 fn seed(screen: &mut Screen, glyphs: &[char]) {
     for (line, glyph) in (0u16..).zip(glyphs) {
         screen.grid[ScreenLine(line)][0].c = *glyph;

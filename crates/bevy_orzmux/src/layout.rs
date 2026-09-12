@@ -1,5 +1,5 @@
-//! The latest layout snapshot the drain received, and the system that
-//! applies it to pane nodes.
+//! The latest layout snapshot the drain received, applied to the pane
+//! and separator nodes.
 
 use crate::registry::PaneRegistry;
 use crate::{OrzmuxPane, OrzmuxSystems};
@@ -7,8 +7,7 @@ use bevy::prelude::*;
 use orzma_tty::CellPixels;
 use orzmux::prelude::{Layout, PaneRect, Separator, SplitOrientation};
 
-/// The latest layout snapshot. Written by the drain only when it
-/// differs; the non-empty → empty transition is detected there.
+/// The latest layout snapshot, marked changed only when it differs.
 #[derive(Resource, Default, Debug, PartialEq)]
 pub(crate) struct CurrentLayout(pub Layout);
 
@@ -31,10 +30,9 @@ pub struct OrzmuxPaneContainer;
 #[derive(Component, Debug)]
 pub(crate) struct OrzmuxSeparator;
 
-/// The GUI accepted a new active pane from a `Layout`. `previous` is
-/// the last accepted active's entity; it may already be despawned (a
-/// `PaneClosed` in the same drain), in which case it resolves to
-/// `None`.
+/// The GUI accepted a new active pane from a `Layout`. `previous`
+/// resolves to `None` when that entity was already despawned by a
+/// `PaneClosed` in the same drain.
 #[derive(Event, Debug, Clone, Copy)]
 pub struct OrzmuxActivePaneChanged {
     /// The entity that was the applied active before this change.
@@ -55,7 +53,8 @@ pub fn absolute_px_node(left: f32, top: f32, width: f32, height: f32) -> Node {
     }
 }
 
-/// Registers `apply_layout`, gated on a changed layout or geometry.
+/// Positions pane nodes and separators from the backend's latest
+/// layout.
 pub(crate) struct LayoutPlugin;
 
 impl Plugin for LayoutPlugin {
@@ -72,14 +71,15 @@ impl Plugin for LayoutPlugin {
     }
 }
 
-/// Separator colour until it is configurable.
+/// Separator colour.
+///
+/// TODO: make the colour configurable.
 const SEPARATOR_COLOR: Color = Color::srgb(0.35, 0.35, 0.40);
 
 /// Logical-px thickness of the line painted inside a reserved separator
 /// cell, before rounding to whole physical px (never below one).
 const SEPARATOR_THICKNESS_LOGICAL_PX: f32 = 1.0;
 
-/// Runs when `CurrentLayout` or `PaneGeometry` changed (see the plugin).
 fn apply_layout(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
@@ -140,10 +140,8 @@ fn reconcile_separators(
 /// (`cells × cell_px`), divided by the scale factor for `Val::Px`.
 ///
 /// A right or bottom edge that stops short of the layout size grows into
-/// the reserved separator cell by everything but the line, so the pane's
-/// own background, which the renderer paints over the whole node, runs
-/// up to the line and only the line's thickness separates two panes on
-/// either axis.
+/// the reserved separator cell by everything but the line, so only the
+/// line's thickness separates two panes on either axis.
 fn pane_node(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Node {
     let scale = geometry.scale_factor;
     let (cell_w, cell_h) = cell_pitch_phys(geometry);
@@ -165,9 +163,8 @@ fn pane_node(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Node 
 ///
 /// A separator that stops short of the layout size ends inside the cell
 /// reserved for a crossing line, so its far end is extended across that
-/// cell to meet the crossing line. All offsets are whole physical px so
-/// the UI layout, which rounds node edges to physical px, cannot collapse
-/// the line to nothing; the division by the scale factor happens last.
+/// cell to meet the crossing line. All offsets are whole physical px, so
+/// the line never rounds away to nothing.
 fn separator_node(separator: &Separator, layout: &Layout, geometry: &PaneGeometry) -> Node {
     let scale = geometry.scale_factor;
     let (cell_w, cell_h) = cell_pitch_phys(geometry);
@@ -210,8 +207,7 @@ fn separator_node(separator: &Separator, layout: &Layout, geometry: &PaneGeometr
 /// that follows it: the reserved cell minus the line when the extent
 /// stops short of `limit`, zero when it reaches the layout edge. The
 /// split tree tiles the layout size, so every edge short of it is
-/// followed by exactly one separator cell; panes grow into that gap and
-/// separators extend across it to meet a crossing line.
+/// followed by exactly one separator cell.
 fn gap_before_line(start: u16, extent: u16, limit: u16, cell: f32, thickness: f32) -> f32 {
     if start + extent < limit {
         (cell - thickness).max(0.0)
@@ -238,9 +234,7 @@ fn line_thickness_phys(geometry: &PaneGeometry) -> f32 {
 /// Accepts `layout.active` unless it predates the GUI's last
 /// `SelectPane` while the applied active pane is still open, and
 /// reports a change against the applied active. A stale layout is
-/// accepted once the applied pane is gone, since the select in flight
-/// can no longer confirm it and focus would otherwise sit on nothing
-/// until the backend answers.
+/// accepted once the applied pane is gone.
 fn apply_active(commands: &mut Commands, registry: &mut PaneRegistry, layout: &Layout) {
     let stale = registry.last_select.is_some_and(|sent| layout.seq < sent);
     let applied_open = registry
@@ -628,8 +622,7 @@ mod tests {
     }
 
     /// Asserts that reapplying a layout whose pane rectangles are
-    /// unchanged leaves every pane `Node` unflagged, so a system gated
-    /// on `Changed<Node>` does not re-run on a no-op layout update.
+    /// unchanged leaves every pane `Node` unflagged.
     ///
     /// Case: the backend resends the same layout as part of an
     /// unrelated event batch, such as a `Layout` carrying only a fresh

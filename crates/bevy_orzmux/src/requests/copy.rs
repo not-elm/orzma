@@ -1,5 +1,5 @@
-//! `RequestTtyCopySelection`: asks the backend for a pane's selected
-//! text; the answer arrives as `TtySelectionTextSignal`.
+//! Asks the backend for a pane's selected text; the answer arrives as
+//! `TtySelectionTextSignal`.
 
 use crate::OrzmuxConnection;
 use crate::requests::PaneSender;

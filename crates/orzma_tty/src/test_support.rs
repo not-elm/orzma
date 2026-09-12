@@ -1,6 +1,5 @@
-//! Test-support seam: an in-memory sink observing the PTY write path,
-//! a scriptable [`Vt`] fake, plus crate-internal `MasterPty` fakes for
-//! the resize seam.
+//! Test-support seam: fakes that drive [`crate::OrzmaTty`] without a real
+//! PTY, child process, or VT emulator.
 
 use orzma_vt::prelude::{
     CellSide, DisplayOffset, Frame, GridColumn, GridPoint, GridSize, InstanceId, InterpretOutput,
@@ -18,8 +17,8 @@ use std::sync::{Arc, Mutex};
 
 /// Cloneable in-memory `Write` sink capturing every byte written to it.
 ///
-/// Clones share one buffer: hand one clone to `crate::OrzmaTty::detached`
-/// as the PTY writer and keep another to assert on [`CaptureSink::contents`].
+/// Clones share one buffer, so a clone handed out as the PTY writer and a
+/// clone kept for [`CaptureSink::contents`] see the same bytes.
 #[derive(Clone, Default)]
 pub struct CaptureSink(Arc<Mutex<Vec<u8>>>);
 
@@ -45,15 +44,14 @@ impl Write for CaptureSink {
 /// emulator.
 ///
 /// `interpret` records each chunk and pops the next scripted update; an
-/// empty script yields an update with `damaged: true`, matching the
-/// window-arming behavior of a real interpreted chunk when no test
-/// script overrides it. `resize` applies honestly (`None` when the
-/// size did not change) and names the next scripted `evictions` entry
-/// when it did. `scroll` records the motion:
-/// `Scroll::Bottom` snaps `display_offset` to zero, every other motion
-/// returns the scripted `scroll_moves`. The selection operations return
-/// the scripted `selection_changes` and `selection_text` is always
-/// `None`.
+/// empty script yields an update with `damaged: true`. `resize` applies
+/// honestly (`None` when the size did not change) and names the next
+/// scripted `evictions` entry when it did.
+///
+/// `scroll` records the motion: `Scroll::Bottom` snaps `display_offset`
+/// to zero, and every other motion returns the scripted `scroll_moves`.
+/// The selection operations return the scripted `selection_changes`, and
+/// `selection_text` is always `None`.
 pub struct FakeVt {
     /// Grid size reported and updated by `resize`.
     pub grid_size: GridSize,
@@ -61,10 +59,9 @@ pub struct FakeVt {
     pub display_offset: DisplayOffset,
     /// Device-wide terminal modes the host reads back.
     ///
-    /// This fake pops its frames from a scripted queue, so a mode that a
-    /// real [`crate::OrzmaTty`] would fold into the frame — DECTCEM's
-    /// cursor visibility, for one — is not honored here. Script the
-    /// frame to match, rather than expecting this field to drive it.
+    /// A mode that would show up in a frame — DECTCEM's cursor
+    /// visibility, for one — does not reach the scripted frames; script
+    /// the frame to match instead.
     pub modes: VtModes,
     /// Scripted return for non-`Bottom` scrolls.
     pub scroll_moves: bool,
@@ -193,8 +190,7 @@ impl Vt for FakeVt {
     }
 }
 
-/// `MasterPty` whose `resize` always fails, for pinning failure paths
-/// (`Pty::resize` error mapping, `OrzmaTty::resize` atomicity).
+/// `MasterPty` whose `resize` always fails.
 #[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct FailingMaster;
@@ -233,9 +229,8 @@ impl MasterPty for FailingMaster {
     }
 }
 
-/// `MasterPty` recording every `PtySize` handed to `resize`, so tests
-/// can assert the exact struct the caller forwarded (field mapping and
-/// pixel-zero policy are unobservable through kernel readback alone).
+/// `MasterPty` recording every `PtySize` handed to `resize`, so a caller
+/// can assert the exact struct that was forwarded.
 ///
 /// It also answers `get_size` with whatever it was last resized to, so
 /// a caller that writes a size and reads it back sees what a real

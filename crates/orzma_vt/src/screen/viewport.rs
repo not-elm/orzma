@@ -1,6 +1,5 @@
 //! Viewport state: where the visible window sits relative to the live
-//! tail, the coordinates measured from its top, and the motions that
-//! move it.
+//! tail, and how it moves.
 
 use crate::screen::grid::coords::GridLine;
 
@@ -9,11 +8,9 @@ use crate::screen::grid::coords::GridLine;
 /// `0` means the viewport is pinned to the live tail; a positive value
 /// counts the scrollback rows showing above it. The unit is grid rows.
 ///
-/// # Invariants
-///
-/// The producing backend keeps the value within the scrollback
-/// capacity and at `0` while the alternate screen is active; this type
-/// does not enforce either bound itself.
+/// This type bounds nothing: its producer must keep the value within
+/// the scrollback capacity and at `0` while the alternate screen is
+/// active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DisplayOffset(pub u32);
 
@@ -32,11 +29,9 @@ impl ViewportLine {
     /// Projects the line into active-grid coordinates, the inverse of
     /// [`GridLine::to_viewport`]: `grid_line = viewport_line - offset`.
     ///
-    /// # Invariants
+    /// # Panics
     ///
-    /// The offset must fit `i32`, which the scrollback capacity
-    /// guarantees for every offset the VT produces; a larger one is a
-    /// producer bug and panics rather than wrapping.
+    /// Panics rather than wrapping when the offset does not fit `i32`.
     #[inline]
     pub fn to_grid(self, offset: DisplayOffset) -> GridLine {
         let offset = i32::try_from(offset.0).expect("scrollback never exceeds i32::MAX rows");
@@ -47,10 +42,7 @@ impl ViewportLine {
 /// A viewport motion over the scrollback, clamped by the VT at both
 /// the oldest retained line and the live tail.
 ///
-/// `Delta` is signed: positive moves toward older output (deeper into
-/// scrollback), negative toward the live tail. Page-sized variants are
-/// resolved against the live grid height by the VT backend, so callers
-/// never need to know the row count.
+/// Page-sized variants are resolved against the live grid height.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scroll {
     /// Moves by a signed line count: positive toward older output,

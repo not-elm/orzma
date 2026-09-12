@@ -1,13 +1,6 @@
-//! Bridge between `OrzmaConfigsResource.font` and the renderer's
-//! `TerminalFonts` Resource, plus the `TerminalUiFont` handle that UI
-//! text builders consume. Runs at Startup, ordered
-//! `.before(TerminalFontInitSet::InitCellMetrics)` so the renderer's
-//! cell-metrics computation sees any overridden font.
-//!
-//! Startup-only: font changes require a process restart. If a future
-//! feature adds config hot-reload, `bridge_font_config` must move to a
-//! change-detection system in Update (and additionally re-issue cell
-//! metrics + invalidate the glyph atlas — see the renderer crate).
+//! Bridges `OrzmaConfigsResource.font` into the renderer's `TerminalFonts`
+//! Resource and the `TerminalUiFont` handle that UI text builders consume.
+//! Font changes require a process restart.
 
 use crate::configs::OrzmaConfigsResource;
 use bevy::prelude::*;
@@ -24,8 +17,8 @@ use std::sync::Arc;
 mod resolve;
 
 /// UI-chrome font: the family `source` plus the `weight`/`slant` applied at
-/// every UI `TextFont` site (window bar, prompts, indicators). Built by
-/// `bridge_font_config` from `[font].ui`, inheriting `[font].normal` per field.
+/// every UI `TextFont` site (window bar, prompts, indicators). Resolved from
+/// `[font].ui`, inheriting `[font].normal` per field.
 #[derive(Resource, Clone, Default)]
 pub struct TerminalUiFont {
     /// Family or bundled-handle source handed to `TextFont.font`.
@@ -50,11 +43,10 @@ impl TerminalUiFont {
     }
 
     /// Resolves the UI face from `[font].ui`, inheriting `normal` per field:
-    /// `family` falls back to `normal`'s (using its already-resolved result via
-    /// `regular_from_family`), `style` falls back to `normal.style` then
-    /// Regular. A configured `ui.family` that is absent aborts startup. When no
-    /// family resolves, the bundled face matching the resolved weight/slant is
-    /// used (bundled has only four faces).
+    /// `family` falls back to `normal`'s already-resolved family, `style`
+    /// falls back to `normal.style` then Regular. A configured `ui.family`
+    /// that is absent aborts startup. When no family resolves, the bundled
+    /// face matching the resolved weight/slant is used.
     fn resolve(
         collection: &mut Collection,
         fonts_assets: &mut Assets<Font>,
@@ -99,7 +91,7 @@ impl TerminalUiFont {
     }
 }
 
-/// Bevy plugin that wires `bridge_font_config` into Startup.
+/// Adds orzma's font bridge.
 pub struct FontBridgePlugin;
 
 impl Plugin for FontBridgePlugin {
@@ -115,19 +107,13 @@ impl Plugin for FontBridgePlugin {
 }
 
 /// Registers the bundled CJK fallback font into parley's fontique
-/// collection and appends its family to the Han / Hiragana / Katakana
-/// script-fallback chains, making it discoverable for spans whose
-/// primary `TextFont` lacks CJK coverage.
-///
-/// NOTE: Bevy's `Assets<Font>::add(...)` is NOT sufficient here —
-/// `bevy_text::load_font_assets_into_font_collection` registers every
-/// `Font` asset in the collection, but fontique resolves missing glyphs
-/// only through per-script fallback chains, which stay empty without
-/// system font discovery. `append_fallbacks` is what makes the family
-/// reachable. Conversely, that same bevy_text system CLEARS the
-/// collection (dropping this registration and its fallback chains) if
-/// any `Font` asset is ever removed — orzma never removes font assets
-/// after Startup; re-run this registration if that changes.
+/// collection via `append_fallbacks`, appending its family to the Han /
+/// Hiragana / Katakana script-fallback chains so a span whose primary
+/// `TextFont` lacks CJK coverage can resolve it there.
+// NOTE: bevy_text's `load_font_assets_into_font_collection` clears the whole
+// fontique collection whenever a `Font` asset is removed, silently dropping
+// this registration and its fallback chains. orzma must never remove a
+// `Font` asset after Startup; re-run this registration if that changes.
 fn register_cjk_fallback(mut font_cx: ResMut<FontCx>) {
     let blob = Blob::new(Arc::new(FALLBACK_REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
     let registered = font_cx.collection.register_fonts(blob, None);
@@ -302,7 +288,7 @@ fn ui_text_attrs(spec: FontStyleSpec) -> (FontWeight, FontStyle) {
 
 /// Picks the bundled static face nearest to `spec`. The bundle ships only four
 /// faces, so intermediate weights (Light/Medium/SemiBold) round to Regular or
-/// Bold. Used only when no system family resolves for the UI face.
+/// Bold.
 fn bundled_face_bytes(spec: FontStyleSpec) -> &'static [u8] {
     let bold = spec.weight >= 600;
     let italic = spec.slant != FontSlant::Normal;
@@ -328,13 +314,10 @@ mod tests {
     use std::sync::Arc;
 
     /// RAII guard for a process-environment variable. Constructing it via
-    /// `EnvVarGuard::set(...)` sets the variable; dropping it removes
-    /// it. The Drop runs even on panic, so a test that panics inside
-    /// `app.update()` no longer leaks the stale env var into the next
-    /// test (which would then run against a misconfigured `ORZMA_CONFIG`
-    /// after recovering from the poisoned `env_guard` mutex).
+    /// `EnvVarGuard::set(...)` sets the variable; dropping it removes it,
+    /// even on panic.
     ///
-    /// The caller MUST hold `crate::configs::env_guard()` for the full
+    /// The caller must hold `crate::configs::env_guard()` for the full
     /// lifetime of every `EnvVarGuard` to keep env mutations serialized
     /// across tests.
     struct EnvVarGuard {
@@ -498,10 +481,12 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
     }
 
-    /// Registers the bundled JBM regular/bold faces into the test app's
-    /// `FontCx` collection under known family names BEFORE `app.update()`
-    /// runs `bridge_font_config`, so the resolution is deterministic and
-    /// does not depend on any host-installed font.
+    /// Asserts that configuring `[font.normal]` and `[font.bold]` resolves
+    /// the terminal faces, the UI font, and the bold override from the
+    /// matching registered families.
+    ///
+    /// Case: the user points `normal` and `bold` at two distinct families
+    /// registered in the font collection before the app starts.
     #[test]
     fn configured_family_resolves_terminal_fonts_ui_font_and_bold_override() {
         let tmp = std::env::temp_dir().join("orzma_font_family_success_path.toml");
@@ -567,12 +552,12 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
     }
 
-    /// Registers TWO faces (weight 400 and weight 700) under the SAME family
-    /// name, then configures `normal.style = "Bold"`. A single-face family
-    /// would resolve regardless of style, so this proves the style-derived
-    /// attributes actually drove weight selection: the `normal` slot must
-    /// pick the weight-700 face, not the family's first-registered weight-400
-    /// face.
+    /// Asserts that `normal.style` selects the matching weight within a
+    /// family that carries multiple weights, rather than the family's
+    /// first-registered face.
+    ///
+    /// Case: the user configures `[font.normal]` with `style = "Bold"`
+    /// against a family registered under both a regular and a bold weight.
     #[test]
     fn configured_style_selects_weight_within_same_family() {
         let tmp = std::env::temp_dir().join("orzma_font_style_selects_weight.toml");

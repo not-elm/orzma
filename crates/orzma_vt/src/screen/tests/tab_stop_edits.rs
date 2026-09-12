@@ -19,11 +19,6 @@ fn hts_adds_a_stop_the_next_ht_finds() {
 
 /// Asserts that setting a stop leaves the cursor where it was.
 ///
-/// HTS edits the stop table and nothing else; the neighbouring
-/// name HT is the one that moves. Nothing on screen changes
-/// either, which is why `set_horizontal_tab_stop` reports no
-/// damage to stage.
-///
 /// Case: an application installs a tab position at the column it
 /// is already writing at, then keeps printing on the same line.
 #[test]
@@ -35,10 +30,6 @@ fn hts_does_not_move_the_cursor() {
 }
 
 /// Asserts that HTS and `CTC 0` install the same stop.
-///
-/// The two are one edit in the vocabulary rather than two
-/// parallel implementations, so that a later TABULATION STOP
-/// MODE cannot scope one of them and miss the other.
 ///
 /// Case: an application uses CTC rather than HTS to install its
 /// tab positions, having found the CSI form easier to generate.

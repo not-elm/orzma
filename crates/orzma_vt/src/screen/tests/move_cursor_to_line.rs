@@ -32,8 +32,7 @@ fn an_omitted_parameter_addresses_the_first_line() {
     assert_eq!(screen.state.column, GridColumn(2));
 }
 
-/// Asserts that an explicit one addresses the first line, agreeing
-/// with the omitted-parameter default.
+/// Asserts that an explicit one addresses the first line.
 ///
 /// Case: an application that always writes its parameters out emits
 /// `CSI 1 d` instead of a bare `CSI d`.
@@ -137,12 +136,10 @@ fn an_upper_left_origin_reaches_a_line_below_the_margins() {
     assert_eq!(screen.state.column, GridColumn(2));
 }
 
-/// Asserts that an omitted parameter resolves to the default line
-/// before the origin is applied, reaching the top margin rather than
-/// the top of the screen.
+/// Asserts that an omitted parameter under a margin origin reaches the
+/// top margin rather than the top of the screen.
 ///
-/// Case: an application with origin mode on emits a bare `CSI d`
-/// expecting the first row of its own pane.
+/// Case: an application with origin mode on emits a bare `CSI d`.
 #[test]
 fn an_omitted_parameter_under_a_margin_origin_addresses_the_top_margin() {
     let mut screen = tall_screen();
@@ -187,7 +184,7 @@ fn a_zero_addresses_the_first_line() {
 }
 
 /// Asserts that addressing a line discards a pending deferred wrap
-/// rather than preserving it as a linefeed does.
+/// rather than preserving it.
 ///
 /// Case: an application fills a row to its last column and then jumps
 /// to another row instead of printing again.

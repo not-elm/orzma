@@ -1,6 +1,6 @@
 //! Pure pixel-math for the IME preedit overlay: grapheme cell layout, caret /
-//! clause cell offsets, and the window-anchored overlay position. No Bevy ECS
-//! — unit-testable without an `App`.
+//! clause cell offsets, and the window-anchored overlay position. No Bevy
+//! ECS dependency.
 
 use bevy::math::Vec2;
 use bevy_orzma_tty_renderer::CellMetrics;
@@ -56,8 +56,7 @@ pub(super) struct OverlayLayout {
 ///
 /// Pure: composes [`compute_overlay_pos`], [`layout_preedit_cells`], and
 /// [`caret_cell_offsets`] with the underline / caret / clause cell arithmetic,
-/// returning logical-px rects relative to the window origin. The occlusion
-/// color is intentionally not returned — the caller reads `grid.palette.background`.
+/// returning logical-px rects relative to the window origin.
 pub(super) fn compute_overlay_layout(
     text: &str,
     caret: Option<(usize, usize)>,
@@ -138,12 +137,12 @@ pub(super) fn compute_overlay_layout(
 }
 
 /// Computes the overlay's top-left logical-pixel position relative to the
-/// window origin. Caller writes this into `Node.left` / `Node.top`.
+/// window origin.
 ///
 /// All metric inputs are physical px; the function does the physical→logical
-/// conversion via `scale`. The overlay sits at the cursor row (Alacritty
-/// parity), clamped so its right edge stays inside the host rect, then so its
-/// left edge does not escape the host's left side.
+/// conversion via `scale`. The overlay sits at the cursor row, clamped so
+/// its right edge stays inside the host rect, then so its left edge does
+/// not escape the host's left side.
 fn compute_overlay_pos(
     ui_global_translation_phys: Vec2,
     host_size_phys: Vec2,

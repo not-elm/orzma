@@ -55,15 +55,14 @@ pub(crate) struct TerminalSelectionCopy {
     pub entity: Entity,
 }
 
-/// Triggers a `TerminalSelectionCopy` on the focused terminal, if any. Used by
-/// the shortcut applier's `Shortcut::Copy` arm.
+/// Triggers a `TerminalSelectionCopy` on the focused terminal, if any.
 pub(crate) fn trigger_selection_copy(commands: &mut Commands, focused: Option<Entity>) {
     if let Some(entity) = focused {
         commands.trigger(TerminalSelectionCopy { entity });
     }
 }
 
-/// Registers the selection apply observers.
+/// Adds the local-selection actions.
 pub(super) struct SelectionPlugin;
 
 impl Plugin for SelectionPlugin {
@@ -144,10 +143,9 @@ fn on_selection_text(ev: On<TtySelectionTextSignal>, mut commands: Commands) {
 }
 
 /// Converts a viewport-relative point (`mouse.rs`'s contract: line `0` is
-/// the top of the displayed viewport) into the active-grid coordinates
-/// `RequestTtySelectionStart`/`RequestTtySelectionUpdate` document their
-/// `cell` field as expecting, delegating the projection to
-/// `ViewportLine::to_grid`.
+/// the top of the displayed viewport) into active-grid coordinates: line
+/// `0` is the top of the active screen area and negative lines reach into
+/// scrollback history, while the column carries through unchanged.
 fn to_grid_point(viewport_point: GridPoint, offset: DisplayOffset) -> GridPoint {
     let viewport_line = u16::try_from(viewport_point.line.0)
         .expect("the selection events document a non-negative viewport line");

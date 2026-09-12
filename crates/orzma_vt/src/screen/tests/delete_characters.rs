@@ -122,8 +122,7 @@ fn a_delete_in_the_last_column_blanks_that_cell_alone() {
 }
 
 /// Asserts that a delete applies on the cursor's row even when that row
-/// lies outside the scroll region, following xterm rather than VT510's
-/// "no effect outside the scrolling margins".
+/// lies outside the scroll region.
 ///
 /// Case: a full-screen application parks its cursor on a status row
 /// below the region it scrolls and edits that row in place.

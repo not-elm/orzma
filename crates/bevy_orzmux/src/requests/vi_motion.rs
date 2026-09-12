@@ -1,16 +1,11 @@
-//! `RequestTtyViMotion`: the vi-cursor motion the host UI asks a terminal
-//! entity to perform.
+//! The vi-cursor motion the host UI asks a terminal entity to perform.
 //!
-//! [`ViMotion`] mirrors the motion vocabulary one-for-one. Its final home is
-//! the VT layer; it is defined here until that crate owns the type, at which
-//! point this becomes a re-export.
+//! TODO: move [`ViMotion`] to the VT layer and re-export it here.
 
 use bevy::prelude::*;
 
 /// Fired by the host UI to move a specific terminal entity's vi cursor.
-///
-/// Has no effect outside vi mode; the apply observer holds that state, so the
-/// host may fire without checking first.
+/// The backend has no vi mode, so applying it does nothing.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyViMotion {
     #[event_target]
@@ -138,11 +133,9 @@ mod tests {
 
     /// Asserts that every motion survives the trigger unchanged, in order.
     ///
-    /// Case: a held key repeating, and the near-miss pairs the vocabulary is
-    /// full of — `SemanticLeft` vs. `SemanticLeftEnd`, `WordRight` vs.
-    /// `WordRightEnd`. Those differ by one cell in the resulting cursor
-    /// position, so a mis-ordered or collapsed variant is invisible in a
-    /// single-motion test but wrong on screen.
+    /// Case: a held key repeating, and the near-miss pairs the
+    /// vocabulary is full of — `SemanticLeft` vs. `SemanticLeftEnd`,
+    /// `WordRight` vs. `WordRightEnd`.
     #[test]
     fn every_motion_round_trips_in_order() {
         let mut app = App::new();
@@ -166,10 +159,8 @@ mod tests {
 
     /// Asserts that no two motions compare equal.
     ///
-    /// Case: the guard for the `ALL` fixture above and for the enum itself. A
-    /// duplicated variant (easy to introduce when adding a motion by copying a
-    /// neighbouring line) would let `every_motion_round_trips_in_order` pass
-    /// while two distinct keybindings silently share one behaviour.
+    /// Case: a motion is added to the enum by copying a neighbouring
+    /// variant.
     #[test]
     fn all_motions_are_distinct() {
         for (i, a) in ALL.iter().enumerate() {

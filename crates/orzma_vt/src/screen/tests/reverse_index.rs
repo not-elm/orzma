@@ -19,11 +19,6 @@ fn a_reverse_index_below_the_top_moves_the_cursor_up() {
 /// Asserts that a reverse index at the top margin scrolls the
 /// screen down instead of moving the cursor.
 ///
-/// ECMA-48 § 6.1.7 leaves a movement past the first line undefined
-/// and lists seven permitted behaviours; the agreed policy takes
-/// (f), scrolling, rather than blocking the position or leaving
-/// the cursor where it is.
-///
 /// Case: a pager scrolls backwards with its cursor already parked
 /// on the first line of the screen.
 #[test]
@@ -38,14 +33,6 @@ fn a_reverse_index_at_the_top_margin_scrolls_the_screen_down() {
 
 /// Asserts that a reverse index disarms the deferred wrap on both
 /// the moving and the scrolling path.
-///
-/// The agreed policy follows xterm and VTE, whose reverse index
-/// reaches its cursor-up helper on both paths and resets the
-/// flag there. It is a deliberate divergence from kitty and
-/// wezterm, which clear it only when the cursor moves, and
-/// from alacritty, which clears it on neither — and
-/// `Screen::line_feed` preserves the flag, so the split is
-/// not accidental.
 ///
 /// Case: a program fills the last column of a row and then emits a
 /// reverse index instead of the newline the pending wrap was
@@ -68,8 +55,7 @@ fn a_reverse_index_disarms_the_deferred_wrap_on_both_paths() {
 /// background.
 ///
 /// Case: an application paints a coloured panel and scrolls it
-/// backwards, expecting the newly exposed row to match rather than
-/// show the terminal default.
+/// backwards.
 #[test]
 fn the_exposed_row_carries_the_pen_background() {
     let mut screen = screen();
@@ -80,12 +66,6 @@ fn the_exposed_row_carries_the_pen_background() {
 
 /// Asserts that a reverse index leaves a scrolled-back viewport
 /// showing what it was showing.
-///
-/// The agreed policy leaves the display offset alone rather than
-/// adjusting it the way `Screen::line_feed` does. A forward scroll grows
-/// history, so holding the view still requires moving the offset;
-/// a reverse scroll leaves history untouched, so moving the offset
-/// would push the viewport onto different history instead.
 ///
 /// Case: the user has scrolled back to read earlier output while a
 /// full-screen application keeps scrolling its own view backwards.
@@ -107,11 +87,8 @@ fn a_reverse_index_leaves_a_scrolled_viewport_where_it_is() {
 }
 
 /// Asserts that a reverse index with the cursor above a non-zero
-/// top margin, already on the first row, moves and scrolls nothing.
-///
-/// The agreed policy follows DEC STD 070 and xterm: a cursor that
-/// hits the screen edge outside the scrolling region stays put,
-/// rather than scrolling the region it is not inside.
+/// top margin, already on the first row, moves and scrolls nothing
+/// rather than scrolling the region it is not inside (DEC STD-070).
 ///
 /// Case: an application sets a scroll region below a status line
 /// and emits a reverse index while the cursor sits on that status
@@ -131,12 +108,8 @@ fn a_reverse_index_above_a_top_margin_at_row_zero_does_nothing() {
 }
 
 /// Asserts that a cursor above a non-zero top margin still walks
-/// up toward the first row.
-///
-/// The agreed policy bounds this movement by the screen edge
-/// rather than by the margin: the region gates the scroll alone,
-/// so a cursor outside it moves like an ordinary cursor-up
-/// instead of being pinned at the margin.
+/// up toward the first row, bounded by the screen edge rather than
+/// by the margin.
 ///
 /// Case: an application sets a scroll region below a two-line
 /// header and emits a reverse index while the cursor sits on the

@@ -6,21 +6,14 @@ use std::collections::HashMap;
 
 /// Where each history row sits, by id, in constant time.
 ///
-/// Only history is indexed: a row enters it at the newest end, leaves
-/// it from the oldest end (the cap) or the newest end (a growth
-/// reclaiming it), and is never recycled while inside. Each entry
-/// therefore gets a running sequence number, and its ring index is
-/// that number minus the count popped so far, so a pop moves nothing.
-///
-/// The visible rows stay unindexed: a region scroll recycles and
-/// reorders them freely, and a scan over them is bounded by the screen
-/// height rather than the history cap.
+/// Only history is indexed. A row must enter it at the newest end and
+/// leave it from the oldest end (the cap) or the newest end (a growth
+/// reclaiming it), and must not be recycled while inside.
 ///
 /// # Invariants
 ///
-/// The live sequence numbers form the contiguous interval
-/// `[popped, popped + seq_of.len())`, whose length equals the grid's
-/// `history_len`.
+/// The index names exactly the grid's history rows, so its length
+/// equals the grid's `history_len`.
 #[derive(Debug, Default)]
 pub(super) struct HistoryIndex {
     seq_of: HashMap<LineId, u64>,

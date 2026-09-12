@@ -1,4 +1,4 @@
-//! PTY-backed terminal core: spawns the login shell under a PTY and
+//! PTY-backed terminal core: spawns a shell under a PTY and
 //! drives an injected [`Vt`] implementor behind a frame coalescer.
 
 use crate::{
@@ -56,11 +56,11 @@ pub struct EnvValue(pub String);
 
 /// Everything one [`OrzmaTty::pump`] call produced.
 ///
-/// This is the pump's batch, not the VT's: [`orzma_vt::InterpretOutput`]
-/// is what a single chunk produced, and one pump folds several of those
-/// into at most one frame plus the signals they raised.
+/// One pump folds several interpreted chunks into at most one frame plus
+/// the signals they raised.
 pub struct PumpOutput {
-    /// The frame to draw, present only when the coalesce window came due.
+    /// The frame to draw, present only when the coalesce window came due or
+    /// the bootstrap snapshot was still owed.
     pub frame: Option<Frame>,
     /// Signals raised since the previous pump, in order, with
     /// `ChildExit` last.
@@ -70,15 +70,13 @@ pub struct PumpOutput {
     pub more_pending: bool,
 }
 
-/// The receivers a multiplexer registers in a `Select` to learn when a
-/// terminal has work: its output stream, and its exit stream until the
-/// exit has been observed.
+/// The receivers to wait on to learn when a terminal has work: its output
+/// stream, and its exit stream until the exit has been observed.
 pub struct Readiness<'a> {
     /// The PTY output stream.
     pub chunks: &'a Receiver<Vec<u8>>,
     /// The child-exit stream, or `None` once [`OrzmaTty::pump`] latched
-    /// the exit (a disconnected receiver is permanently ready, so it
-    /// must leave the `Select`).
+    /// the exit, at which point it must leave the wait set.
     pub exit: Option<&'a Receiver<Option<i32>>>,
 }
 
@@ -109,27 +107,22 @@ pub struct OrzmaTty<V: Vt> {
 }
 
 impl<V: Vt> OrzmaTty<V> {
-    /// Upper bound on chunks one [`Self::pump`] interprets (64 × the 4 KiB
-    /// reader buffer ≈ 256 KiB), so a flooding terminal cannot monopolize
-    /// its owner's loop.
+    /// Upper bound on chunks one [`Self::pump`] interprets: 64 reads of up
+    /// to 4 KiB each, so at most about 256 KiB.
     pub const MAX_CHUNKS_PER_PUMP: usize = 64;
 
     /// Upper bound for a resize's column count; requests beyond it are
     /// ignored by [`Self::resize`].
-    ///
-    /// 4096 columns is beyond any real display (8K at a tiny font is
-    /// ~2000), while capping the VT grid allocation a degenerate or
-    /// hostile request could otherwise trigger.
     const MAX_COLS: u16 = 4096;
     /// Upper bound for a resize's row count; requests beyond it are
-    /// ignored by [`Self::resize`]. Same rationale as [`Self::MAX_COLS`].
+    /// ignored by [`Self::resize`].
     const MAX_ROWS: u16 = 4096;
 
-    /// Spawns the login shell under a new PTY and sizes the injected VT
+    /// Spawns `options.shell` under a new PTY and sizes the injected VT
     /// to the spawn geometry.
     ///
-    /// The initial sizing reports the placements it strands exactly as
-    /// [`Self::resize`] does.
+    /// The placements the initial sizing strands reach the next pump as a
+    /// [`VtSignal::WebviewEvicted`] signal.
     pub fn spawn(vt: V, options: SpawnOptions) -> OrzmaTtyResult<Self> {
         let mut tty = Self::wired(vt, Pty::spawn(&options)?);
         tty.resize_vt(GridSize {
@@ -145,7 +138,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// # Panics
     ///
     /// Panics when the ioctl fails, which means the master fd is no
-    /// longer valid and the terminal is unusable anyway.
+    /// longer valid.
     #[inline]
     pub fn pty_size(&self) -> PtySize {
         self.pty.size()
@@ -161,18 +154,16 @@ impl<V: Vt> OrzmaTty<V> {
     /// Builds a terminal around a fake PTY master instead of a spawned
     /// shell, so writes land on `writer` and no real PTY is opened.
     ///
-    /// The master is a `test_support::RecordingMaster`, so resize
-    /// calls still round-trip through `pty_size()`; no child process or
-    /// reader thread is started, so everything the input methods emit
-    /// can be observed on `writer` — typically a
+    /// Resize calls still round-trip through [`Self::pty_size`], and no
+    /// child process or reader thread is started, so everything the input
+    /// methods emit can be observed on `writer` — typically a
     /// [`test_support::CaptureSink`].
     ///
-    /// The initial sizing reports the placements it strands exactly as
-    /// [`Self::resize`] does.
+    /// The placements the initial sizing strands reach the next pump as a
+    /// [`VtSignal::WebviewEvicted`] signal.
     ///
-    /// The constructor is compiled for tests only: in-crate under
-    /// `cfg(test)`, and for downstream crates through the `test-support`
-    /// feature.
+    /// Available only under `cfg(test)` in this crate and through the
+    /// `test-support` feature downstream.
     #[cfg(any(test, feature = "test-support"))]
     pub fn detached(
         vt: V,
@@ -187,8 +178,8 @@ impl<V: Vt> OrzmaTty<V> {
     }
 
     /// Like [`Self::detached`], but with the chunk and exit streams fed by
-    /// the given receivers, so a test can queue output, exhaust the pump
-    /// budget, and report or withhold the child's exit.
+    /// the given receivers, so the caller controls the queued output and
+    /// whether the child's exit is reported.
     #[cfg(any(test, feature = "test-support"))]
     pub fn detached_with_channels(
         vt: V,
@@ -212,17 +203,15 @@ impl<V: Vt> OrzmaTty<V> {
     /// Feeds bytes through the same seam [`Self::pump`] runs PTY chunks
     /// through, arming the coalescer exactly as live output would.
     ///
-    /// Available to tests only: in-crate under `cfg(test)`, downstream
-    /// via the `test-support` feature.
+    /// Available only under `cfg(test)` in this crate and through the
+    /// `test-support` feature downstream.
     #[cfg(any(test, feature = "test-support"))]
     pub fn feed_bytes(&mut self, bytes: &[u8]) {
         self.feed_chunk(bytes);
     }
 
     /// Scrolls the grid, arming the coalescer only when the viewport
-    /// actually moved — a clamped or zero motion reports no damage, and
-    /// arming for it would open an emit window for a repaint that never
-    /// comes.
+    /// actually moved; a clamped or zero motion reports no damage.
     pub fn scroll(&mut self, scroll: Scroll) {
         if self.vt.scroll(scroll) {
             self.coalescer.arm_or_extend(Instant::now());
@@ -230,7 +219,7 @@ impl<V: Vt> OrzmaTty<V> {
     }
 
     /// Anchors a selection, arming the coalescer only when the VT's
-    /// state changed so an unchanged frame is not woken.
+    /// state changed.
     pub fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) {
         if self.vt.start_selection(cell, side, kind) {
             self.coalescer.arm_or_extend(Instant::now());
@@ -262,11 +251,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// `Self::MAX_ROWS`, is ignored with `Ok` — neither clamped nor
     /// an error. When the PTY resize fails the call returns
     /// `OrzmaTtyError::PtyResize` and leaves the VT grid and
-    /// coalescer untouched (PTY first; nothing changes on failure).
+    /// coalescer untouched.
     ///
     /// A request for the grid size the VT already has changes nothing
-    /// and reports no damage, so it arms nothing either — the same gate
-    /// [`Self::scroll`] applies to a clamped motion.
+    /// and reports no damage, so it arms nothing either.
     ///
     /// The placements the new geometry strands reach the next pump as a
     /// [`VtSignal::WebviewEvicted`] signal; no PTY output is needed to
@@ -281,7 +269,7 @@ impl<V: Vt> OrzmaTty<V> {
     }
 
     /// Removes the placements the host names, arming the coalescer only
-    /// when one actually went so an unchanged frame is not woken.
+    /// when one actually went.
     pub fn remove_placements(&mut self, instances: &[InstanceId]) {
         if self.vt.remove_placements(instances) {
             self.coalescer.arm_or_extend(Instant::now());
@@ -289,9 +277,9 @@ impl<V: Vt> OrzmaTty<V> {
     }
 
     /// Registers a host-driven mount at the visible cell (`row`, `column`)
-    /// and queues the VT's verdict as the signal the mux forwards: an
-    /// accepted mount arms the coalescer and queues `WebviewMount`, a
-    /// rejected one queues `WebviewMountRejected` without arming.
+    /// and queues the VT's verdict as a signal: an accepted mount arms
+    /// the coalescer and queues `WebviewMount`, a rejected one queues
+    /// `WebviewMountRejected` without arming.
     pub fn mount_placement_at(
         &mut self,
         instance: InstanceId,
@@ -311,7 +299,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// Encodes a key press and writes it to the PTY.
     ///
     /// Snaps a scrolled-back viewport to the live tail first
-    /// (scroll-on-input policy) so the echo is visible.
+    /// (scroll-on-input policy).
     pub fn send_key(&mut self, key: &TerminalKey, mods: &TerminalModifiers) -> OrzmaTtyResult {
         let modes = self.vt.modes();
         self.snap_to_live_tail();
@@ -322,24 +310,21 @@ impl<V: Vt> OrzmaTty<V> {
     /// Encodes one mouse report in the terminal's active mouse encoding
     /// and writes it to the PTY.
     ///
-    /// Deliberately does NOT snap a scrolled-back viewport: the
-    /// report's cell coordinates were computed by the host against the
-    /// viewport the user is looking at, so yanking the view to the live
-    /// tail on every report would make the screen jump under the
-    /// pointer.
+    /// Does not snap a scrolled-back viewport: the report's cell
+    /// coordinates are the ones the host computed against the viewport on
+    /// screen.
     pub fn send_mouse(&mut self, report: MouseReport) -> OrzmaTtyResult {
         let sequence = report.encode(self.vt.modes().mouse_encoding);
         self.pty.write_all(&sequence)
     }
 
     /// Writes a paste of clipboard text to the PTY, honouring
-    /// bracketed-paste mode (DECSET 2004) via [`PtyInput::encode_paste`].
+    /// bracketed-paste mode (DECSET 2004).
     ///
     /// Empty text is a no-op: nothing reaches the PTY. Otherwise a
     /// scrolled-back viewport snaps to the live tail first
     /// (scroll-on-input policy), and the whole frame goes out in a
-    /// single write — a partially-written frame would leave the
-    /// receiving app inside an unterminated paste.
+    /// single write.
     pub fn send_paste(&mut self, text: &str) -> OrzmaTtyResult {
         if text.is_empty() {
             return Ok(());
@@ -382,8 +367,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// Emits the pending signals and an immediate frame without reading
     /// the PTY or waiting for the coalesce window.
     ///
-    /// Used after a resize so the repaint travels with the new layout.
-    /// Never reports `ChildExit`; that stays with [`Self::pump`].
+    /// Never reports `ChildExit`.
     pub fn flush_now(&mut self) -> PumpOutput {
         let signals = mem::take(&mut self.pending_signals);
         let frame = self.emit_frame();
@@ -452,10 +436,6 @@ impl<V: Vt> OrzmaTty<V> {
     /// Sizes the VT grid, arming the coalescer when the grid changed
     /// and queuing the placements the change stranded for the next
     /// pump.
-    ///
-    /// Both constructors and [`Self::resize`] size the VT through this
-    /// one path, so a VT handed in with placements mounted reports what
-    /// the initial sizing strands exactly as a later resize would.
     fn resize_vt(&mut self, size: GridSize) {
         let Some(changed) = self.vt.resize(size) else {
             return;
@@ -467,8 +447,7 @@ impl<V: Vt> OrzmaTty<V> {
     }
 
     /// Snaps a scrolled-back viewport to the live tail (scroll-on-input
-    /// policy), gated on [`Vt::is_at_live_tail`] so a no-op call stages
-    /// no damage.
+    /// policy); a viewport already at the live tail stages no damage.
     fn snap_to_live_tail(&mut self) {
         if !self.vt.is_at_live_tail() {
             self.scroll(Scroll::Bottom);
@@ -684,8 +663,8 @@ mod tests {
     /// Asserts that `flush_now` returns the pending signals and an
     /// immediate frame without reading the PTY.
     ///
-    /// Case: the backend resized a pane and wants the repaint in the same
-    /// batch as the new layout, before the coalescer window closes.
+    /// Case: the backend resizes a pane and sends its repaint in the same
+    /// batch as the new layout.
     #[test]
     fn flush_now_returns_pending_signals_and_an_immediate_frame() {
         let (mut tty, chunk_tx, _exit_tx) = channelled_term();
@@ -709,9 +688,8 @@ mod tests {
         );
     }
 
-    /// A minimal frame for scripting `FakeVt::frames`; the values are
-    /// arbitrary placeholders, since these tests only care whether a
-    /// frame came back, not its contents.
+    /// A minimal frame for scripting `FakeVt::frames`; its values are
+    /// arbitrary placeholders.
     fn a_frame() -> Frame {
         Frame {
             size: GridSize { cols: 80, rows: 24 },
@@ -766,8 +744,7 @@ mod tests {
     /// exactly one frame, not two.
     ///
     /// Case: the shell prints its prompt before the host's first pump
-    /// call after spawn, so the bootstrap debt and a real armed window
-    /// are both live at once.
+    /// call after spawn.
     #[test]
     fn a_pre_pump_chunk_does_not_double_emit_the_bootstrap_frame() {
         let (mut tty, _sink) = detached_term();
@@ -783,9 +760,8 @@ mod tests {
     /// Asserts that a detached terminal's resize round-trips through the
     /// fake master and that pumping it never reports a child exit.
     ///
-    /// Case: a `src/` fixture builds a terminal the same way dozens of
-    /// unit tests in this workspace do, resizes it to the test window,
-    /// and pumps it for a few frames.
+    /// Case: a fixture builds a detached terminal, resizes it to the test
+    /// window, and pumps it for a few frames.
     #[test]
     fn detached_resizes_through_the_fake_master_and_never_exits() {
         let sink = CaptureSink::default();
@@ -824,7 +800,7 @@ mod tests {
     /// arms nothing.
     ///
     /// Case: the host pumps a quiet terminal that has no webviews
-    /// mounted, which is every pump on a plain shell session.
+    /// mounted.
     #[test]
     fn a_pump_with_nothing_evicted_raises_nothing() {
         let (mut tty, _sink) = detached_term();
@@ -875,11 +851,8 @@ mod tests {
         );
     }
 
-    /// Asserts that a resize never writes through the PTY writer.
-    ///
-    /// The size change reaches the child as a kernel ioctl, so the
-    /// decided policy is that nothing at all enters the byte stream —
-    /// not even an XTWINOPS report.
+    /// Asserts that a resize never writes through the PTY writer, not
+    /// even an XTWINOPS report.
     ///
     /// Case: the user resizes the window while a program is reading
     /// stdin.
@@ -924,11 +897,8 @@ mod tests {
         assert!(term.coalescer.is_armed());
     }
 
-    /// Asserts that a zero-axis request touches neither the PTY size
-    /// nor the VT.
-    ///
-    /// The agreed policy is to ignore such a request outright rather
-    /// than clamp it.
+    /// Asserts that a zero-axis request is ignored rather than clamped,
+    /// touching neither the PTY size nor the VT.
     ///
     /// Case: a minimized window, or a frame before cell metrics load,
     /// computes 0 for an axis.
@@ -950,7 +920,7 @@ mod tests {
     }
 
     /// Asserts the per-axis cap: requests beyond `MAX_COLS` /
-    /// `MAX_ROWS` are ignored, the boundary value is applied.
+    /// `MAX_ROWS` are ignored, while the boundary value is applied.
     ///
     /// Case: a degenerate or hostile window geometry asks for a grid
     /// far larger than any real display.
@@ -1031,8 +1001,8 @@ mod tests {
     /// ioctl fails, the call returns `PtyResize` and the VT and
     /// coalescer are untouched.
     ///
-    /// Case: the kernel refuses the winsize ioctl, and the renderer
-    /// must keep drawing the size the child still has.
+    /// Case: the kernel refuses the winsize ioctl while the user resizes
+    /// the window.
     #[test]
     fn a_failing_pty_resize_leaves_the_vt_untouched() {
         let mut term = failing_term();
@@ -1086,11 +1056,8 @@ mod tests {
         assert_eq!(term.coalescer.next_deadline(), deadline);
     }
 
-    /// Asserts that scrolling writes nothing through the PTY writer.
-    ///
-    /// Viewport motion is host-side state, so the decided policy is
-    /// that no bytes reach the child — neither a CSI S/T pair nor
-    /// arrow keys.
+    /// Asserts that scrolling writes nothing through the PTY writer,
+    /// neither a CSI S/T pair nor arrow keys.
     ///
     /// Case: the user scrolls through history while a program is
     /// reading stdin.
@@ -1107,8 +1074,7 @@ mod tests {
     /// scrolled back snaps the viewport to the live tail AND schedules
     /// the repaint of that snap.
     ///
-    /// Case: the user scrolls into history and then pastes, expecting
-    /// the view to jump back to the prompt where the echo lands.
+    /// Case: the user scrolls into history and then pastes at the prompt.
     #[test]
     fn paste_while_scrolled_back_snaps_and_arms() {
         let (mut term, _sink) = detached_term();
@@ -1127,8 +1093,8 @@ mod tests {
 
     /// Asserts that key encoding consults the VT-reported DECCKM state.
     ///
-    /// Case: an arrow key pressed in a full-screen app that enabled
-    /// application cursor keys, then again at a plain prompt.
+    /// Case: the user presses an arrow key in a full-screen app that
+    /// enabled application cursor keys, then again at a plain prompt.
     #[test]
     fn send_key_honours_the_vt_reported_cursor_mode() {
         let (mut term, sink) = detached_term();
@@ -1146,8 +1112,8 @@ mod tests {
     /// Asserts that paste encoding consults the VT-reported bracketed
     /// paste mode.
     ///
-    /// Case: pasting into an app that enabled DECSET 2004 (vim, fzf,
-    /// modern shells).
+    /// Case: the user pastes into an app that enabled DECSET 2004, such
+    /// as vim, fzf, or a modern shell.
     #[test]
     fn send_paste_honours_the_vt_reported_bracketed_mode() {
         let (mut term, sink) = detached_term();
@@ -1169,11 +1135,8 @@ mod tests {
         assert_eq!(sink.contents(), b"hi");
     }
 
-    /// Asserts that `send_paste("")` writes nothing at all.
-    ///
-    /// The decided policy is to write nothing rather than an empty
-    /// bracketed-paste frame, which would still wake the receiving
-    /// program.
+    /// Asserts that `send_paste("")` writes nothing at all, rather than an
+    /// empty bracketed-paste frame.
     ///
     /// Case: the user pastes with an empty clipboard.
     #[test]
@@ -1237,9 +1200,9 @@ mod tests {
     /// Asserts that a `pump` which reports `ChildExit` has already
     /// interpreted every pending output chunk.
     ///
-    /// Case: `echo bye` — the reader thread delivers the final output
-    /// chunk and then the exit report, and the host pumps once after
-    /// both arrived.
+    /// Case: the child runs `echo bye`, so the reader thread delivers the
+    /// final output chunk and then the exit report, and the host pumps
+    /// once after both arrived.
     #[test]
     fn the_final_output_is_interpreted_when_the_exit_is_reported() {
         let (mut term, chunk_tx, exit_tx) = channelled_term();
@@ -1252,8 +1215,7 @@ mod tests {
     /// Asserts that VT signals from interpreted chunks surface as
     /// `TtySignal::Vt`, ahead of a `ChildExit` in the same batch.
     ///
-    /// Case: the shell rings the bell in its final output and exits;
-    /// the host must observe the bell before acting on the exit.
+    /// Case: the shell rings the bell in its final output and exits.
     #[test]
     fn vt_signals_are_forwarded_before_child_exit() {
         let (mut term, chunk_tx, exit_tx) = channelled_term();
@@ -1315,10 +1277,6 @@ mod tests {
     /// Asserts that a chunk which stages no damage leaves the coalesce
     /// window closed.
     ///
-    /// Arming on every non-empty chunk would wake the emit path for
-    /// output that changes nothing on screen, which is what the old
-    /// `verdict.is_some()` check did.
-    ///
     /// Case: a program queries the cursor position, so the VT answers
     /// with reply bytes and touches no cell.
     #[test]
@@ -1334,8 +1292,7 @@ mod tests {
     }
 
     /// Asserts that a host-driven removal arms the coalescer only when a
-    /// placement actually went, so a removal naming nothing does not wake
-    /// the owner for an unchanged frame.
+    /// placement actually went.
     ///
     /// Case: two connections drop in the same tick and the host issues a
     /// removal for each, but only the first names a live placement.
@@ -1374,7 +1331,7 @@ mod tests {
     }
 
     /// Asserts that an accepted host-driven mount queues `WebviewMount`
-    /// for the next pump and arms the coalescer so a frame follows.
+    /// for the next pump and arms the coalescer.
     ///
     /// Case: the control plane relays a socket `mount` from orzmd running
     /// in a Windows pane.

@@ -8,39 +8,24 @@ use crate::screen::state::ScreenState;
 
 /// What `DECSC` copies aside so that `DECRC` can put it back.
 ///
-/// Although a name such as `Save(d) Cursor` is used in the VT510 specification,
-/// we use the name `Checkpoint` instead because the saved data actually includes information other than the cursor state.
-///
 /// The default value is what `DECRC` restores when no `DECSC` ever ran,
 /// as far as this crate models that state: the home position, a reset
 /// origin mode, no character attributes, and the default character set
-/// mapping. The manual's fourth item also maps a set into GR, and its
-/// separate selective erase attribute has no field here; both stay out
-/// of scope for the reasons [`super::character_sets`] records. A
-/// resize moves the saved row with the grid, so after one the
-/// never-saved position may sit below home; [`super::Screen::resize`]
-/// records why.
+/// mapping. The VT510 manual's fourth item also maps a set into GR, and its
+/// separate selective erase attribute has no field here. A resize moves
+/// the saved row with the grid, so after one the never-saved position
+/// may sit below home.
 ///
-/// `IRM` is deliberately absent: it is not among the items `DECSC`
-/// saves, and xterm masks the insert flag out of what `DECRC` restores,
-/// so a later mutation that adds it here would make an alternate-screen
-/// flip carry a mode no reference terminal carries.
+/// `DECRC` restores neither `IRM` nor `DECTCEM`.
 ///
 /// The `Wrap flag (autowrap or no autowrap)` the VT420 and VT520
-/// manuals list among the items `DECSC` saves is the last-column flag,
-/// not `DECAWM`: DEC STD-070 p.D-14 has the flag "saved when a Save
-/// Cursor operation is performed, and restored when a Restore Cursor
-/// operation is performed", while xterm masks `WRAPAROUND` out of what
-/// `DECRC` restores. `Self::pending_wrap` is therefore the field that
-/// answers the manuals' line, and the mode is not saved at all.
+/// manuals list among the items `DECSC` saves is the last-column flag
+/// `Self::pending_wrap` holds, not `DECAWM`: DEC STD-070 p.D-14 has the
+/// flag "saved when a Save Cursor operation is performed, and restored
+/// when a Restore Cursor operation is performed". `DECAWM` is not saved.
 ///
-/// `DECTCEM` is absent for the same reason as `IRM`: the VT510
-/// saved-item list does not name cursor visibility, so a mutation that
-/// added it here would make a `DECRC` restore a visibility no reference
-/// terminal restores.
-///
-/// `DECSTR` and `RIS` reset the saved state as well, and put back this
-/// same default rather than leaving the last `DECSC` reachable.
+/// `RIS` resets the saved state as well, and puts back this same default
+/// rather than leaving the last `DECSC` reachable.
 ///
 /// # Control Functions
 ///
@@ -67,9 +52,8 @@ pub struct Checkpoint {
 impl Checkpoint {
     /// Reads off everything `DECSC` saves from the state that holds it.
     ///
-    /// The scroll margins are deliberately absent: `DECSC` saves the
-    /// origin mode but not the region it is relative to, so a `DECRC`
-    /// after a `DECSTBM` restores the mode against the newer margins.
+    /// The scroll margins are not saved, so a `DECRC` after a `DECSTBM`
+    /// restores the origin mode against the newer margins.
     pub(super) fn capture(
         state: &ScreenState,
         origin_mode: OriginMode,

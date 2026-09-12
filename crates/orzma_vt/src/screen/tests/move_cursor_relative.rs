@@ -26,7 +26,7 @@ fn a_cursor_up_inside_the_region_stops_at_the_top_margin() {
 }
 
 /// Asserts that a cursor below the region also stops at the top
-/// margin, because the margin lies on the way.
+/// margin.
 ///
 /// Case: an application parks the cursor on a status line under its
 /// pane and then moves it back up into the pane.
@@ -39,7 +39,7 @@ fn a_cursor_up_below_the_region_stops_at_the_top_margin() {
 }
 
 /// Asserts that a cursor already above the region reaches the first
-/// row, the margin being behind it.
+/// row.
 ///
 /// Case: an application writes into a header above its pane and moves
 /// the cursor to the very top of the screen.
@@ -66,7 +66,7 @@ fn a_cursor_down_inside_the_region_stops_at_the_bottom_margin() {
 }
 
 /// Asserts that a cursor above the region also stops at the bottom
-/// margin, mirroring the upward case.
+/// margin.
 ///
 /// Case: an application writes a header, then moves the cursor down
 /// into its pane.
@@ -151,7 +151,7 @@ fn a_motion_at_the_boundary_still_disarms_the_deferred_wrap() {
 }
 
 /// Asserts that a relative motion under origin mode keeps the cursor
-/// inside the region, which is where setting the mode seated it.
+/// inside the region.
 ///
 /// Case: a full-screen application sets origin mode and its pane, then
 /// walks the cursor to the extremes of that pane.
@@ -167,7 +167,7 @@ fn a_relative_motion_under_origin_mode_stays_inside_the_region() {
 }
 
 /// Asserts that a backspace lands where a one-column leftward motion
-/// does, the two sharing one primitive.
+/// does.
 ///
 /// Case: a shell erases the last character the user typed.
 #[test]

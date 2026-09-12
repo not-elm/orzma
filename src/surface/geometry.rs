@@ -1,7 +1,5 @@
 //! Shared terminal-surface geometry: cursor physical-pixel → pane-local px →
-//! cell (column/row/side). Used by the pointer router
-//! (`crate::input::mouse::webview`), the input pipeline, and
-//! hyperlink hover.
+//! cell (column/row/side).
 
 use bevy::ecs::entity::Entity;
 use bevy::math::Vec2;
@@ -85,8 +83,7 @@ pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16,
 /// Returns the topmost `OrzmaTerminal` surface whose node contains `cursor_phys`,
 /// or `None` when the cursor is over none. "Topmost" is the highest
 /// `ComputedStackIndex` (Bevy's resolved front-to-back UI order); ties
-/// break by `Entity` for determinism. The pointer/gate path uses
-/// this to pick the single shell (or the frontmost surface) under the cursor.
+/// break by `Entity` for determinism.
 pub(crate) fn topmost_surface_at<'a>(
     cursor_phys: Vec2,
     candidates: impl Iterator<

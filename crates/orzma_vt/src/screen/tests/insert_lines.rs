@@ -83,8 +83,8 @@ fn an_insert_homes_the_cursor_and_disarms_the_deferred_wrap() {
 }
 
 /// Asserts that an insert on the first row of the page feeds nothing
-/// to history, because the row it pushes off the bottom margin is
-/// discarded rather than scrolled past.
+/// to history, discarding the row it pushes off the bottom margin
+/// rather than scrolling it past.
 ///
 /// Case: a program inserts a line at the top of the primary screen
 /// while the user has scrollback to return to.

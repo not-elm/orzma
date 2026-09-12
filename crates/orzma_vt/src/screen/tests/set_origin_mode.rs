@@ -35,8 +35,8 @@ fn resetting_the_origin_seats_the_cursor_at_the_corner() {
 /// Asserts that the mode reaches the region the cursor motion
 /// reads.
 ///
-/// Case: an application turns on origin mode and the terminal
-/// has to answer later cursor addressing against the margins.
+/// Case: an application turns on origin mode before addressing
+/// the cursor.
 #[test]
 fn the_mode_reaches_the_scroll_region() {
     let mut screen = tall_screen();

@@ -1,8 +1,5 @@
 //! Test-only capture of `log` records, so a test can assert that a code path
-//! raised no warning. Bevy's built-in command error handlers (the one behind
-//! `EntityCommands::despawn`, for instance) report through `log::warn!`, not
-//! through the app's fallback error handler, so this is the only way to see
-//! them from a test.
+//! raised no warning.
 
 use log::{Level, Log, Metadata, Record};
 use std::sync::{Mutex, OnceLock};
@@ -32,8 +29,8 @@ impl Log for CapturingLogger {
 /// Installs the capturing logger once per test process and returns every
 /// warning-or-worse message captured so far whose text contains `needle`.
 ///
-/// Tests run concurrently in one process, so a caller compares the count
-/// before and after the code under test rather than asserting emptiness.
+/// The capture is process-wide, so a caller compares the count before and
+/// after the code under test rather than asserting emptiness.
 pub(crate) fn warnings_containing(needle: &str) -> Vec<String> {
     INSTALL.get_or_init(|| {
         if log::set_logger(&CapturingLogger).is_ok() {

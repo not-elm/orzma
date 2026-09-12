@@ -1,9 +1,4 @@
-//! Webview placement vocabulary: the id a mount is addressed by, the
-//! rectangle it reserves, the grid-space geometry an emitted frame
-//! carries, and the per-terminal cap.
-//!
-//! The table itself belongs to each `Screen`; see
-//! [`crate::screen::placements`].
+//! Webview placement vocabulary.
 
 use crate::screen::grid::coords::GridPoint;
 use std::fmt;
@@ -11,16 +6,11 @@ use std::str::FromStr;
 
 /// Host-minted identity of one webview placement.
 ///
-/// The control plane mints it and hands it to the registering program
-/// before that program writes its mount, so the program can address the
-/// placement it is about to create. The VT never mints one.
-///
 /// # Invariants
 ///
 /// The wire spelling is exactly 32 lowercase hex digits, so a value and
 /// its spelling are in bijection. At any instant the live ids on one
-/// terminal are unique: `supersede` drops the existing entry for an id
-/// across both screens before a re-mount registers its successor.
+/// terminal are unique.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceId(pub u128);
 
@@ -69,10 +59,6 @@ impl InstanceId {
     pub const WIRE_DIGITS: usize = 32;
 
     /// Builds an id from 16 bytes of caller-supplied entropy.
-    ///
-    /// The randomness stays with the caller: the control plane mints
-    /// ids, and putting a self-seeding constructor here would leave a
-    /// way for the VT to start minting again.
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
         Self(u128::from_be_bytes(bytes))
     }
@@ -81,15 +67,16 @@ impl InstanceId {
 /// One placement's grid-space geometry at emit time.
 ///
 /// The point is in active-grid coordinates and does not move when the
-/// user scrolls, the same way a cursor point or a selection endpoint
-/// does not; the consumer projects it with the frame's display offset.
+/// user scrolls; the consumer projects it with the frame's display
+/// offset.
+///
+/// A re-mount of a live id keeps the id and may change the size, so the
+/// consumer re-reads `size` from every frame rather than caching it
+/// against the id.
 ///
 /// # Invariants
 ///
-/// `size` is the reservation the most recent mount for `id` made. A
-/// re-mount of a live id keeps the id and may change the size, so the
-/// consumer re-reads `size` from every frame rather than caching it
-/// against the id.
+/// `size` is the reservation the most recent mount for `id` made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnchoredPlacement {
     /// The placement this geometry belongs to.
@@ -101,10 +88,6 @@ pub struct AnchoredPlacement {
 }
 
 /// The cell rectangle a mount reserves, without its position.
-///
-/// This is deliberately not [`GridSize`](crate::prelude::GridSize), whose row count is the source
-/// of truth for one screenful; a placement's reservation is a sub-rectangle
-/// and must not be substitutable for a grid dimension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlacementSize {
     /// Reserved height in cells.
@@ -115,19 +98,13 @@ pub struct PlacementSize {
 
 /// Upper bound on live placements per terminal, across both screens.
 ///
-/// It matches the renderer's overlay slot count, so a mount the VT
-/// accepts is always one the host can place. The two are not mirrors:
-/// the host allocates slots per terminal among live children, while this
-/// cap counts both screens, so it is strictly the stricter of the two.
+/// A mount the VT accepts is always one the host can place.
 pub const MAX_PLACEMENTS: usize = 12;
 
-/// Upper bound on a mount's reserved rows. With the ~2:1 terminal cell
-/// aspect and DPR 2, a 200-row x 400-col mount is a near-square pixel
-/// region staying under the common 8192 px GPU texture dimension limit.
+/// Upper bound on a mount's reserved rows.
 pub const MAX_ROWS: u16 = 200;
 
-/// Upper bound on a mount's reserved cols; see [`MAX_ROWS`] for the sizing
-/// envelope.
+/// Upper bound on a mount's reserved cols.
 pub const MAX_COLS: u16 = 400;
 
 #[cfg(test)]
@@ -136,7 +113,7 @@ mod tests {
 
     /// Asserts that a wire spelling parses only as exactly 32 lowercase
     /// hex digits, rejecting the shorter, longer, uppercase, and
-    /// sign-prefixed forms `u128::from_str_radix` would otherwise accept.
+    /// sign-prefixed forms.
     ///
     /// Case: a program writes an instance id into a mount APC, and the
     /// terminal must decide whether the field is well-formed before it
@@ -186,8 +163,7 @@ mod tests {
         );
     }
 
-    /// Asserts that the largest wire spelling is representable, so the
-    /// parser needs no overflow branch.
+    /// Asserts that the largest wire spelling is representable.
     ///
     /// Case: a mount names the maximal id the 32-digit grammar admits.
     #[test]

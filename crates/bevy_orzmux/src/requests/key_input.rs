@@ -1,5 +1,5 @@
-//! `RequestTtyKeyInput` (a specific pane) and `RequestActiveKeyInput`
-//! (the backend's active pane): both become `OrzmuxCommand::KeyInput`.
+//! Key input for a specific pane or for the backend's active pane; both
+//! become `OrzmuxCommand::KeyInput`.
 
 use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
@@ -7,17 +7,15 @@ use bevy::prelude::*;
 use orzma_tty::prelude::{TerminalKey, TerminalModifiers};
 use orzmux::prelude::{OrzmuxCommand, PaneTarget};
 
-/// A key for one specific pane entity (webview forwards and other
-/// entity-addressed paths). Keyboard and IME input use
-/// [`RequestActiveKeyInput`] instead so it resolves against the
-/// backend's active pane in command order.
+/// A key for one specific pane entity. Keyboard and IME input use
+/// [`RequestActiveKeyInput`] instead.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyKeyInput {
     #[event_target]
     pub terminal: Entity,
     /// The logical key pressed (character or named key, pre-encoding).
     pub key: TerminalKey,
-    /// Modifier state at press time; feeds the encoder, not a raw HID state.
+    /// Modifier state at press time, not a raw HID state.
     pub modifiers: TerminalModifiers,
 }
 
@@ -26,7 +24,7 @@ pub struct RequestTtyKeyInput {
 pub struct RequestActiveKeyInput {
     /// The logical key pressed (character or named key, pre-encoding).
     pub key: TerminalKey,
-    /// Modifier state at press time; feeds the encoder, not a raw HID state.
+    /// Modifier state at press time, not a raw HID state.
     pub modifiers: TerminalModifiers,
 }
 

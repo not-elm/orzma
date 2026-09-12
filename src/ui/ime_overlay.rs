@@ -1,9 +1,5 @@
-//! IME preedit overlay.
-//!
-//! Provides `ImeOverlayPlugin` (Bevy plugin that spawns the overlay
-//! entity tree at Startup and schedules `position_ime_overlay`) and the
-//! marker components identifying the root, caret bar, clause highlight,
-//! underline, and grapheme-cell pool.
+//! IME preedit overlay: renders the composition (grapheme cells, caret,
+//! clause highlight, underline) over the focused terminal's cursor cell.
 
 mod layout;
 
@@ -36,8 +32,7 @@ use bevy_orzma_tty_renderer::material::TerminalMaterialSystems;
 use bevy_orzma_tty_renderer::prelude::TerminalGrid;
 use layout::{CaretVisual, PlacedCell, compute_overlay_layout};
 
-/// Bevy plugin that spawns the IME overlay entity tree at Startup and
-/// schedules `position_ime_overlay` in PostUpdate.
+/// Adds the IME preedit overlay.
 pub(super) struct ImeOverlayPlugin;
 
 impl Plugin for ImeOverlayPlugin {
@@ -98,8 +93,7 @@ pub struct ImeCaretBar;
 
 /// Marker for the hollow-block `Node` that highlights the macOS-IME
 /// clause-selection range. Spawned as a top-level UI entity (NOT a
-/// child of [`ImeOverlayNode`] — same constraint as [`ImeCaretBar`]
-/// per the parent's leaf-only measure requirement).
+/// child of [`ImeOverlayNode`]).
 ///
 /// Visible only when the composition's caret range has `begin != end`;
 /// in that state, [`ImeCaretBar`] is hidden. The two markers are
@@ -130,26 +124,25 @@ struct ImeGraphemePool(Vec<Entity>);
 /// the pool on demand.
 const INITIAL_POOL_CAP: usize = 16;
 
-/// Run condition: true while an IME preedit composition is active. Takes
+/// True while an IME preedit composition is active. Takes
 /// `Option<Res<ImeState>>` so it returns `false` rather than panicking when
 /// `ImeState` is absent, keeping the `.or_else()` / `.and_then()` gates safe.
 fn ime_is_composing(state: Option<Res<ImeState>>) -> bool {
     state.is_some_and(|state| state.is_composing())
 }
 
-/// PostUpdate system that grid-aligns the IME preedit overlay at the attached
-/// terminal's cursor cell. Lays out the composition as one cell-anchored
-/// `Text` node per grapheme cluster (pooled in [`ImeGraphemePool`], grown on
-/// demand), draws an occluding background rect and a continuous underline bar,
-/// and positions the caret beam (`begin == end`) or clause highlight
+/// Grid-aligns the IME preedit overlay at the attached terminal's cursor
+/// cell. Lays out the composition as one cell-anchored `Text` node per
+/// grapheme cluster (pooled in [`ImeGraphemePool`], grown on demand), draws
+/// an occluding background rect and a continuous underline bar, and
+/// positions the caret beam (`begin == end`) or clause highlight
 /// (`begin != end`). Every visible element uses the same cell arithmetic, so
 /// the caret cannot drift from the text.
 ///
-/// Gated by `run_if(ime_is_composing)`, so it runs only while a composition is
-/// active; the end-of-composition hide (commit / cancel / `Ime::Disabled`) is
-/// owned by [`hide_ime_overlay`]. If the focused surface, its anchor, or the
-/// window is missing while composing, it hides every overlay part defensively
-/// and returns.
+/// The end-of-composition hide (commit / cancel / `Ime::Disabled`) is owned
+/// by [`hide_ime_overlay`]. If the focused surface, its anchor, or the
+/// window is missing while composing, it hides every overlay part
+/// defensively and returns.
 fn position_ime_overlay(
     mut commands: Commands,
     mut pool: ResMut<ImeGraphemePool>,
@@ -399,9 +392,8 @@ fn apply_caret_visual(
 
 /// Sets `TerminalGrid.suppress_cursor = true` on the keyboard-focused
 /// terminal surface while IME composition is active; clears it on all
-/// other grids. Runs in `PostUpdate.before(TerminalMaterialSystems::UpdateMaterial)`
-/// so the override takes effect in the same frame the IME caret
-/// appears (and clears the same frame composition ends).
+/// other grids. The suppression takes effect the same frame the IME caret
+/// appears, and clears the same frame composition ends.
 ///
 /// If there is no keyboard-focused surface while composition is active (e.g., a
 /// race window between focus loss and `Ime::Disabled`), every grid gets
@@ -425,10 +417,8 @@ fn suppress_terminal_cursor_during_ime(
     }
 }
 
-/// PostUpdate system that hides every IME overlay part. Gated to run only on
-/// the frame composition ends (commit / cancel / `Ime::Disabled`); see
-/// `ImeOverlayPlugin`. Shares `hide_all_overlay_parts` with
-/// `position_ime_overlay`'s internal precondition guards.
+/// Hides every IME overlay part. Runs when the composition ends
+/// (commit / cancel / `Ime::Disabled`).
 fn hide_ime_overlay(
     mut nodes: Query<&mut Node>,
     pool: Res<ImeGraphemePool>,
@@ -456,38 +446,29 @@ const IME_OVERLAY_Z: i32 = 200;
 
 /// Z-index for the opaque occluding background rect — one below
 /// [`IME_OVERLAY_Z`] so the preedit glyph cells, underline, caret, and clause
-/// box (all at [`IME_OVERLAY_Z`]) always render in front of it, rather than
-/// relying on Bevy's equal-z spawn-order tie-break (which entity reuse as the
-/// pool grows/shrinks could otherwise flip, hiding the composition).
+/// box (all at [`IME_OVERLAY_Z`]) always render in front of it.
 const IME_OVERLAY_BG_Z: i32 = IME_OVERLAY_Z - 1;
 
 /// Spawns the overlay entity tree.
 ///
-/// NOTE: `Text` root and caret bar are spawned as INDEPENDENT
-/// top-level UI entities (no `ChildOf` between them). Required by
-/// Bevy 0.19 + Taffy 0.10.1: `NodeMeasure::Text` is only consulted by
-/// `compute_leaf_layout`, dispatched at `(_, has_children == false)`
-/// in `taffy-0.10.1/src/tree/taffy_tree.rs:304-330`. Adding any UI
-/// child (even an absolute-positioned one that contributes 0 to flex
-/// container size) puts the Text node on the `compute_flexbox_layout`
-/// branch, which ignores the measure function — `ComputedNode.size`
-/// becomes (0, 0), `bevy_ui_render` then skips text + underline at
-/// `uinode.is_empty()` (`bevy_ui_render-0.19.0/src/lib.rs:997, 1308`),
-/// while the child caret bar still renders because its own
-/// `ComputedNode` is non-empty (explicit width/height). Both
-/// entities are positioned in window-absolute coords each frame in
-/// `position_ime_overlay`.
-///
-/// `LineBreak::NoWrap` is set as defense-in-depth: with it,
-/// `measure_text_system` uses `FixedMeasure { size: measure.max }`
-/// (`bevy_ui-0.19.0/src/widget/text.rs:301-302`) and `text_system`
-/// uses `TextBounds::UNBOUNDED` (`:363-365`) — bypassing any residual
-/// zero-bound shaping. Single-line preedit text never needs wrapping
+/// `LineBreak::NoWrap` is set as defense-in-depth against residual
+/// zero-bound text shaping; single-line preedit text never needs wrapping
 /// anyway.
 ///
 /// TODO: bind TextColor / UnderlineColor / BackgroundColor to theme
 /// tokens (`text-foreground` / `bg-background`) once the theme-token
-/// helper is integrated. Placeholder white for now.
+/// helper is integrated.
+// NOTE: the `Text` root and caret bar must stay INDEPENDENT top-level UI
+// entities (no `ChildOf` between them). The text-measure function that
+// drives a Text node's `ComputedNode.size` is only consulted for a leaf
+// node with no children; giving it any UI child — even an
+// absolute-positioned one that contributes 0 to flex container size —
+// switches it onto the flexbox layout path, which ignores the measure
+// function. `ComputedNode.size` then becomes (0, 0) and the renderer skips
+// the text and underline as empty nodes, while a child caret bar still
+// renders because its own `ComputedNode` is non-empty (explicit
+// width/height). Both entities are positioned in window-absolute
+// coordinates each frame in `position_ime_overlay`.
 fn spawn_ime_overlay_once(
     mut commands: Commands,
     mut pool: ResMut<ImeGraphemePool>,
@@ -582,10 +563,8 @@ fn set_node_display(nodes: &mut Query<&mut Node>, entity: Entity, display: Displ
 }
 
 /// Writes `left`/`top`/`width`/`height` (logical px) into `entity`'s `Node`,
-/// each guarded by an equality check so change detection fires only on a real
-/// change. Resolving the node inside the helper (rather than accepting an
-/// already-dereferenced `&mut Node`) keeps the `DerefMut` — and thus the change
-/// tick — from firing on an unchanged frame.
+/// each guarded by an equality check so change detection fires only on a
+/// real change.
 fn set_node_rect(
     nodes: &mut Query<&mut Node>,
     entity: Entity,
@@ -616,8 +595,8 @@ fn set_node_rect(
 }
 
 /// Hides every IME overlay part (background, underline, caret, clause, and all
-/// pooled grapheme cells). Called on every path where the overlay must not be
-/// shown, so no part leaks past a commit, cancel, or focus loss.
+/// pooled grapheme cells). Must be called on every path where the overlay
+/// must not be shown, so no part leaks past a commit, cancel, or focus loss.
 fn hide_all_overlay_parts(
     nodes: &mut Query<&mut Node>,
     bg: Entity,
@@ -636,8 +615,7 @@ fn hide_all_overlay_parts(
 }
 
 /// Spawns one `ImeGraphemeCell` leaf `Text` node, configured with `text`, an
-/// absolute `left`/`top`, and `display`. Used both to pre-spawn hidden pool
-/// nodes and to grow the pool with already-positioned nodes.
+/// absolute `left`/`top`, and `display`.
 fn spawn_grapheme_cell(
     commands: &mut Commands,
     ui_font: &TerminalUiFont,
@@ -766,8 +744,8 @@ mod tests {
     /// Asserts that the overlay's background takes the focused pane's
     /// palette background while a composition is active.
     ///
-    /// Case: the user composes IME text over a terminal whose
-    /// application recolored the background with OSC 11.
+    /// Case: the user composes IME text over a terminal whose palette
+    /// background already differs from the default.
     #[test]
     fn overlay_background_matches_pane_palette_background_while_composing() {
         use crate::surface::OrzmaTerminal;

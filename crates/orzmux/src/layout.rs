@@ -1,7 +1,5 @@
 //! The cell-unit pane layout: a binary split tree whose leaves are
 //! panes, solved into whole-window rectangles with one-cell separators.
-//! Pure data, with no PTY and no VT dependency, so every operation is
-//! unit-testable.
 
 use crate::protocol::{PaneDirection, PaneId, PaneRect, Separator, SplitOrientation};
 use orzma_vt::prelude::GridSize;
@@ -27,7 +25,7 @@ impl Solved {
 }
 
 /// A split was refused because the target leaf is narrower than three
-/// cells along the split axis (one cell per side plus the separator).
+/// cells along the split axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SplitRefused;
 
@@ -35,8 +33,7 @@ pub struct SplitRefused;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RootOccupied;
 
-/// The split tree plus the activation history, whose last entry is the
-/// active pane.
+/// The split tree plus the activation history.
 #[derive(Debug, Default)]
 pub struct LayoutTree {
     root: Option<Node>,
@@ -370,8 +367,7 @@ impl Node {
     /// The tree without `pane`: the split immediately containing the
     /// removed leaf collapses into its sibling, while an ancestor split
     /// whose child only shrank keeps its structure around that child.
-    /// Returns `(new subtree or None when emptied, removed)`. Both
-    /// children are walked; pane ids are unique, so at most one removes.
+    /// Returns `(new subtree or None when emptied, removed)`.
     fn without(self, pane: PaneId) -> (Option<Node>, bool) {
         match self {
             Node::Leaf(id) if id == pane => (None, true),
@@ -402,7 +398,7 @@ impl Node {
 
 /// `first`'s cells out of `avail`, rounded from `ratio` and clamped so
 /// both children keep their minimum. `avail >= min_first + min_second`
-/// holds because the caller solves against the tree's minimum.
+/// must hold.
 fn share(avail: u16, ratio: f32, min_first: u16, min_second: u16) -> u16 {
     let wanted = (f32::from(avail) * ratio).round() as u16;
     wanted.clamp(min_first, avail - min_second)
@@ -541,11 +537,10 @@ mod tests {
     }
 
     /// Asserts that removing a leaf can change a pane that was not its
-    /// sibling, because an ancestor's minimum-size clamp is released.
+    /// sibling.
     ///
     /// Case: a width-11 window holds `(A | B) | C` with the left subtree
-    /// at ratio 0.1; killing B collapses the subtree to a leaf whose
-    /// minimum drops from 3 to 1, so C also grows.
+    /// at ratio 0.1, and the user kills B.
     #[test]
     fn removing_a_leaf_can_resize_a_pane_outside_its_subtree() {
         let window = GridSize { cols: 11, rows: 5 };

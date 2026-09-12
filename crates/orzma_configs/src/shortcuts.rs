@@ -1,11 +1,11 @@
-//! Shortcut domain types: keys, modifiers, chords, bindings, actions.
+//! The `[shortcuts]` section: the chord grammar and the actions it binds.
 
 use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
-/// Logical key. v0 covers ASCII characters and a small set of named keys.
+/// Logical key: a single character or one of the named keys below.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
 pub enum Key {
     /// Single character key (`Key::Char('b')` for `"b"`).
@@ -28,9 +28,9 @@ pub enum Key {
     ArrowLeft,
     /// `ArrowRight`.
     ArrowRight,
-    /// `+` literal key (named to disambiguate from the `+` separator in `"Cmd+Plus"`).
+    /// The literal `+` key, written `Plus` in a chord string (`"Cmd+Plus"`).
     Plus,
-    /// Forward-compatibility variant for unknown logical key names.
+    /// An unrecognized logical key name, kept verbatim.
     Other(String),
 }
 
@@ -40,12 +40,10 @@ impl Key {
     ///
     /// # Invariants
     ///
-    /// The accepted domain MUST mirror `key_to_keycode` in
-    /// `src/input/shortcuts.rs` exactly: an ASCII-alphanumeric `Char` and the
-    /// named keys below map; `Plus`, `Other`, and any non-alphanumeric `Char`
-    /// do not. A divergence would let an unmappable leader pass config
-    /// validation yet resolve to no `KeyCode`, silently disabling the whole
-    /// prefix table.
+    /// The accepted domain is exactly the keys that map to a physical
+    /// `KeyCode`: an ASCII-alphanumeric `Char`, `Char('[')`, `Char(']')`, and
+    /// every named key below. `Plus`, `Other`, and any other character do not
+    /// map.
     pub fn maps_to_physical_key(&self) -> bool {
         // NOTE: keep this domain in lockstep with `key_to_keycode`
         // (src/input/shortcuts.rs); a divergence silently disables the prefix
@@ -174,8 +172,7 @@ impl fmt::Display for KeyChord {
     }
 }
 
-/// Reason a `parse_key_chord` invocation failed. Surfaced via
-/// `D::Error::custom` from serde's `deserialize_with`.
+/// Reason a `parse_key_chord` call failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum KeyChordParseError {
     /// Consecutive `+` or trailing `+` produced an empty token between separators.
@@ -203,8 +200,7 @@ pub enum KeyChordParseError {
 /// Modifier names are case-insensitive. Aliases: `Cmd` / `Command` / `Meta` /
 /// `Super` all set `meta`; `Alt` / `Opt` / `Option` all set `alt`. ASCII letter
 /// keys are normalized to lowercase (Shift is held in `Modifiers`, never in
-/// key case). Empty string is NOT accepted here; the field-level
-/// `deser_binding_or_unbind` handles the unbind case before calling this.
+/// key case). An empty string is not accepted.
 pub fn parse_key_chord(s: &str) -> Result<KeyChord, KeyChordParseError> {
     if s.is_empty() {
         return Err(KeyChordParseError::EmptyToken);
@@ -254,8 +250,7 @@ pub fn parse_key_chord(s: &str) -> Result<KeyChord, KeyChordParseError> {
     })
 }
 
-/// One chord-collision entry. Carried inside
-/// `OrzmaConfigsError::DuplicateChords` (defined in `error.rs`).
+/// One chord-collision entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DuplicateChord {
     /// The chord that has multiple bindings.
@@ -264,8 +259,7 @@ pub struct DuplicateChord {
     pub actions: Vec<&'static str>,
 }
 
-/// A bare modifier that can act as a tap leader. `Shift` is intentionally
-/// excluded (too noisy as a tap).
+/// A bare modifier that can act as a tap leader. `Shift` is not accepted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TapModifier {
     /// `Cmd` / `Command` / `Meta` / `Super`.
@@ -288,10 +282,6 @@ pub enum Leader {
 /// A resolved shortcut binding: a direct chord, or a leader-scoped chord
 /// reached after the configured `leader`. The `<Leader>` token in a config
 /// value selects the `Leader` variant.
-///
-/// serde derive is intentionally absent: the string grammar `"Cmd+V"` /
-/// `"<Leader>s"` is (de)serialized by the field functions above (a derived
-/// enum would emit externally-tagged output, not the string form).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Binding {
     /// Fires when the chord is pressed directly.
@@ -319,16 +309,13 @@ impl Binding {
 
 /// User-facing shortcut configuration: the leader chord plus one flat binding
 /// per action. Each value is a chord string (`"Cmd+V"`), a leader-scoped chord
-/// (`"<Leader>s"`), or `""` (unbind). The `kebab-case` rename maps each TOML
-/// key to its field; struct-level `#[serde(default)]` + `impl Default` seed
-/// omitted actions from their active defaults; `deny_unknown_fields` rejects
-/// typos (and the retired `[shortcuts.bindings]` / `[shortcuts.prefix_bindings]`
-/// tables and the old `prefix` key) at load time.
+/// (`"<Leader>s"`), or `""` (unbind). An omitted action keeps its default, and
+/// an unknown key is rejected at load time.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct Shortcuts {
     /// The leader for `<Leader>`-scoped bindings: a chord (`Ctrl+A`) or a bare
-    /// modifier tap (`Cmd`). Empty/absent = disabled.
+    /// modifier tap (`Cmd`). An empty or absent value disables it.
     #[serde(deserialize_with = "deser_leader", serialize_with = "ser_leader")]
     pub leader: Option<Leader>,
     /// Paste the system clipboard into the active terminal.
@@ -355,7 +342,7 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub quit: Option<Binding>,
-    /// Enter vi mode: Alacritty vi mode on the focused terminal.
+    /// Enter vi mode on the focused terminal.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
@@ -403,121 +390,121 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub kill_pane: Option<Binding>,
-    /// Toggle zoom on the active pane (no effect until the built-in multiplexer lands).
+    /// Toggle zoom on the active pane (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub zoom_pane: Option<Binding>,
-    /// Resize the active pane's border left by 5 cells, repeatable (no effect until the built-in multiplexer lands).
+    /// Resize the active pane's border left by 5 cells, repeatable (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_left_pane: Option<Binding>,
-    /// Resize the active pane's border down by 5 cells, repeatable (no effect until the built-in multiplexer lands).
+    /// Resize the active pane's border down by 5 cells, repeatable (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_down_pane: Option<Binding>,
-    /// Resize the active pane's border up by 5 cells, repeatable (no effect until the built-in multiplexer lands).
+    /// Resize the active pane's border up by 5 cells, repeatable (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_up_pane: Option<Binding>,
-    /// Resize the active pane's border right by 5 cells, repeatable (no effect until the built-in multiplexer lands).
+    /// Resize the active pane's border right by 5 cells, repeatable (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_right_pane: Option<Binding>,
-    /// Open a new window (no effect until the built-in multiplexer lands).
+    /// Open a new window (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub new_window: Option<Binding>,
-    /// Kill the active window, after a confirm prompt (no effect until the built-in multiplexer lands).
+    /// Kill the active window, after a confirm prompt (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub kill_window: Option<Binding>,
-    /// Switch to the next window (no effect until the built-in multiplexer lands).
+    /// Switch to the next window (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub next_window: Option<Binding>,
-    /// Switch to the previous window (no effect until the built-in multiplexer lands).
+    /// Switch to the previous window (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub previous_window: Option<Binding>,
-    /// Switch to the window at index0 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index0 (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_0: Option<Binding>,
-    /// Switch to the window at index1 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index1 (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_1: Option<Binding>,
-    /// Switch to the window at index2 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index2 (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_2: Option<Binding>,
-    /// Switch to the window at index3 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index3 (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_3: Option<Binding>,
-    /// Switch to the window at index4 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index4 (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_4: Option<Binding>,
-    /// Switch to the window at index5 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index5 (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_5: Option<Binding>,
-    /// Switch to the window at index6 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index6 (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_6: Option<Binding>,
-    /// Switch to the window at index7 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index7 (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_7: Option<Binding>,
-    /// Switch to the window at index8 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index8 (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_8: Option<Binding>,
-    /// Switch to the window at index9 (no effect until the built-in multiplexer lands).
+    /// Switch to the window at index9 (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_9: Option<Binding>,
-    /// Open the rename prompt for the active window (no effect until the built-in multiplexer lands).
+    /// Open the rename prompt for the active window (no effect).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
@@ -531,8 +518,7 @@ pub struct Shortcuts {
     /// fires, pressing a repeat-marked key again within this window re-fires
     /// it without the leader; each fire re-arms the window. Default 500.
     ///
-    /// 0 disables repeat entirely and is NOT normalized away, unlike
-    /// `leader_tap_timeout_ms`.
+    /// 0 disables repeat entirely and is not normalized away.
     pub repeat_time_ms: u64,
 }
 
@@ -580,7 +566,6 @@ impl Default for Shortcuts {
 
 impl Shortcuts {
     /// `(label, &Option<Binding>, action)` for every action, in stable order.
-    /// The single source of truth for the action schema.
     pub fn bindings_iter(
         &self,
     ) -> impl Iterator<Item = (&'static str, &Option<Binding>, Shortcut)> + '_ {
@@ -742,8 +727,8 @@ impl Shortcuts {
         )
     }
 
-    /// Normalizes numeric fields: a `leader_tap_timeout_ms` of 0 is meaningless
-    /// (a tap would never fit), so it reverts to the 300 default.
+    /// Normalizes numeric fields: a `leader_tap_timeout_ms` of 0 reverts to the
+    /// 300 default.
     pub(crate) fn normalize(&mut self) {
         if self.leader_tap_timeout_ms == 0 {
             self.leader_tap_timeout_ms = 300;
@@ -764,7 +749,7 @@ pub enum PaneDirection {
     Right,
 }
 
-/// Which way a split divides the pane, named after the DIVIDER the user sees.
+/// Which way a split divides the pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SplitOrientation {
     /// A vertical divider: panes end up side by side.
@@ -773,10 +758,7 @@ pub enum SplitOrientation {
     Horizontal,
 }
 
-/// Shortcut actions. GUI-local actions, the multiplexer's pane operations
-/// (`SelectPane`, `SplitPane`, `KillPane`), and the remaining pane/window
-/// operations that still have no effect until the built-in multiplexer
-/// grows zoom, resize, and window support.
+/// Shortcut actions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shortcut {
     /// Paste the system clipboard into the active terminal.
@@ -787,7 +769,7 @@ pub enum Shortcut {
     ReleaseWebviewFocus,
     /// Quits the orzma application.
     Quit,
-    /// Enters vi mode: Alacritty vi mode on the focused terminal.
+    /// Enters vi mode on the focused terminal.
     EnterViMode,
     /// Focuses the neighbor pane in the given direction.
     SelectPane(PaneDirection),
@@ -795,21 +777,21 @@ pub enum Shortcut {
     SplitPane(SplitOrientation),
     /// Kills the active pane.
     KillPane,
-    /// Toggles zoom on the active pane (no effect until the built-in multiplexer lands).
+    /// Toggles zoom on the active pane (no effect).
     ZoomPane,
-    /// Resizes the active pane's border in the given direction (no effect until the built-in multiplexer lands).
+    /// Resizes the active pane's border in the given direction (no effect).
     ResizePane(PaneDirection),
-    /// Opens a new window in the current session (no effect until the built-in multiplexer lands).
+    /// Opens a new window in the current session (no effect).
     NewWindow,
-    /// Kills the active window after a confirm prompt (no effect until the built-in multiplexer lands).
+    /// Kills the active window after a confirm prompt (no effect).
     KillWindow,
-    /// Switches to the next window (no effect until the built-in multiplexer lands).
+    /// Switches to the next window (no effect).
     NextWindow,
-    /// Switches to the previous window (no effect until the built-in multiplexer lands).
+    /// Switches to the previous window (no effect).
     PreviousWindow,
-    /// Switches to the window with this display index (no effect until the built-in multiplexer lands).
+    /// Switches to the window with this display index (no effect).
     SelectWindow(u8),
-    /// Opens the rename prompt for the active window (no effect until the built-in multiplexer lands).
+    /// Opens the rename prompt for the active window (no effect).
     RenameWindow,
 }
 
@@ -989,8 +971,8 @@ fn parse_default_binding(s: &str) -> Binding {
     parse_binding(s).unwrap_or_else(|e| panic!("invalid default binding {s:?}: {e}"))
 }
 
-/// Detects chord collisions across a table's bound entries. Returns a `Vec`
-/// sorted by chord (BTreeMap key order) for deterministic error output.
+/// Detects chord collisions across a table's bound entries. The returned `Vec`
+/// is sorted by chord.
 fn conflicts<'a>(
     entries: impl Iterator<Item = (&'static str, &'a KeyChord, Shortcut)>,
 ) -> Result<(), Vec<DuplicateChord>> {

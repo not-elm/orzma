@@ -7,13 +7,8 @@ use std::ops::{Deref, DerefMut, Index, IndexMut};
 
 /// A single row of `T`, left to right.
 ///
-/// Storage rows are `Row<Cell>` and emitted rows are [`Row<Run>`], so
-/// the two differ only in what one element spans: a cell is one
-/// column, a run is as many as its text.
-///
-/// The element type is deliberately not defaulted — a bare `Row` in a
-/// wire struct silently meaning `Row<Cell>` is exactly the mistake
-/// that would compile and then fail far from its cause.
+/// Storage rows are `Row<Cell>` and emitted rows are [`Row<Run>`]; a
+/// cell spans one column, and a run one column per `char` of its text.
 ///
 /// [`Row<Run>`]: crate::screen::grid::run::Run
 #[derive(Debug, Clone, PartialEq)]
@@ -33,10 +28,7 @@ impl<T: Clone> Row<T> {
 }
 
 impl Row<Cell> {
-    /// How many runs [`Row::to_runs`] reserves up front. A single-attribute
-    /// row then carries capacity for a few runs instead of one per column,
-    /// and geometric growth reaches a highlighted row's twenty to forty runs
-    /// in one to three reallocations.
+    /// How many runs [`Row::to_runs`] reserves up front.
     const RUNS_RESERVE: usize = 8;
 
     /// Coalesces the row's cells into the attribute runs a frame
@@ -89,8 +81,8 @@ impl<T> DerefMut for Row<T> {
 /// Indexes the element at a 0-based position.
 ///
 /// The position is a column only for `Row<Cell>`; one
-/// [`Run`](crate::screen::grid::run::Run) spans as many columns as its
-/// text is wide.
+/// [`Run`](crate::screen::grid::run::Run) spans one column per `char`
+/// of its text.
 impl<T> Index<u16> for Row<T> {
     type Output = T;
 
@@ -106,10 +98,6 @@ impl<T> IndexMut<u16> for Row<T> {
 }
 
 /// Indexes the cell at a grid column.
-///
-/// Meaningful only for `Row<Cell>`, where one element is one column; a
-/// [`Run`](crate::screen::grid::run::Run) spans as many columns as its
-/// text is wide.
 impl Index<GridColumn> for Row<Cell> {
     type Output = Cell;
 
@@ -144,8 +132,7 @@ mod tests {
     /// Asserts that a resize to a longer length appends copies of the
     /// fill and leaves the existing elements untouched.
     ///
-    /// Case: the user widens the terminal window, so every stored row
-    /// has to gain blank cells on its right.
+    /// Case: the user widens the terminal window.
     #[test]
     fn a_resize_to_a_longer_length_appends_the_fill() {
         let mut row = Row::from(vec![plain('a'), plain('b')]);
@@ -159,8 +146,7 @@ mod tests {
     /// Asserts that a resize to a shorter length drops the elements past
     /// the new end and keeps the ones before it.
     ///
-    /// Case: the user drags the window narrower, so every stored row
-    /// loses the columns that no longer fit.
+    /// Case: the user drags the window narrower.
     #[test]
     fn a_resize_to_a_shorter_length_drops_the_tail() {
         let mut row = Row::from(vec![plain('a'), plain('b'), plain('c'), plain('d')]);
@@ -174,7 +160,7 @@ mod tests {
     /// unchanged.
     ///
     /// Case: the window manager replays the same geometry after a focus
-    /// change, so every stored row is asked for the width it already has.
+    /// change.
     #[test]
     fn a_resize_to_the_same_length_changes_nothing() {
         let mut row = Row::from(vec![plain('a'), plain('b'), plain('c')]);

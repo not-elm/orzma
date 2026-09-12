@@ -54,10 +54,6 @@ fn an_unsaved_restore_returns_the_power_up_state() {
 /// Asserts that a restored deferred wrap really wraps the next
 /// character.
 ///
-/// The flag is pinned through behaviour rather than by reading it
-/// back, because only the wrap it produces is observable to the
-/// application that saved it.
-///
 /// Case: an application fills a row to its last column, saves,
 /// goes away to draw elsewhere, restores, and prints one more
 /// character.

@@ -1,7 +1,5 @@
 //! Resolves configured shortcut chords (logical keys) into physical
 //! `KeyCode`-based entries the runtime input dispatcher matches against.
-//! The translation lives here (not in `orzma_configs`) so the config crate
-//! stays free of any `bevy` dependency.
 
 use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
@@ -91,8 +89,6 @@ pub(in crate::input) enum ShortcutSet {
 }
 
 /// Shared leader phase: where the leader state machine is between keys.
-/// Owned by `ShortcutsPlugin`; advanced by `crate::input::keyboard::handler::resolve_key_effects`
-/// (the sole `LeaderGate::Advance` member) as it classifies each frame's keys.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LeaderPhase {
     /// No leader sequence in progress.
@@ -109,12 +105,11 @@ pub(crate) enum LeaderPhase {
 }
 
 /// The physical key currently held that fired a repeat-marked `<Leader:r>`
-/// binding. OS auto-repeats of this key re-fire the binding regardless of the
-/// `LeaderPhase::Repeat` time window: that window (`repeat_time_ms`) only
-/// bridges discrete re-presses and is far shorter than the OS initial
-/// key-repeat delay, so without this a held key would drop out of the repeat
-/// and leak into the terminal. Armed on a fresh press that opens or renews the
-/// repeat window; cleared on any fresh press that does not.
+/// binding. OS auto-repeats of this key re-fire the binding regardless of
+/// the `LeaderPhase::Repeat` time window: that window (`repeat_time_ms`)
+/// only bridges discrete re-presses and is far shorter than the OS
+/// initial key-repeat delay. Armed on a fresh press that opens or renews
+/// the repeat window; cleared on any fresh press that does not.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HeldRepeatKey(pub(crate) Option<KeyCode>);
 
@@ -155,7 +150,7 @@ struct OrzmaShortcut {
 }
 
 /// The startup-resolved orzma shortcut tables. Built once from
-/// `OrzmaConfigsResource`; consumed by the keyboard dispatcher.
+/// `OrzmaConfigsResource`.
 #[derive(Resource, Default, Debug, Clone)]
 pub(crate) struct Shortcuts {
     direct: Vec<OrzmaShortcut>,
@@ -173,8 +168,7 @@ impl Shortcuts {
     }
 
     /// Returns the leader-scoped action bound to `(keycode, mods)` when the
-    /// binding is repeat-marked (`<Leader:r>`). Drives the repeat-window
-    /// re-fire in `step_leader` and the held-key re-fire in `refire_held_repeat`.
+    /// binding is repeat-marked (`<Leader:r>`).
     fn match_repeat_prefix(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
         self.match_prefix_entry(keycode, mods)
             .filter(|s| s.repeat)
@@ -299,18 +293,17 @@ pub(crate) fn refire_held_repeat(
     Some(action)
 }
 
-/// Resets the shared leader phase to `Idle`, writing through the `ResMut` only
-/// on a real change so Bevy change detection fires exactly when the phase was
-/// engaged. The single reset idiom for every dispatcher drain/abort site.
+/// Resets the shared leader phase to `Idle`, writing through the `ResMut`
+/// only on a real change so change detection fires exactly when the
+/// phase was engaged.
 pub(crate) fn clear_leader_phase(leader_phase: &mut ResMut<LeaderPhase>) {
     if **leader_phase != LeaderPhase::Idle {
         **leader_phase = LeaderPhase::Idle;
     }
 }
 
-/// Test-only constructor: a `Shortcuts` with one repeat-marked, modifier-less
-/// prefix binding and a `Ctrl+A` chord leader. Used by the keyboard and
-/// dispatcher tests, which cannot name this module's private fields.
+/// Test-only constructor: a `Shortcuts` with one repeat-marked,
+/// modifier-less prefix binding and a `Ctrl+A` chord leader.
 #[cfg(test)]
 pub(crate) fn test_shortcuts_with_repeat_prefix(
     keycode: KeyCode,
@@ -339,9 +332,8 @@ pub(crate) fn test_shortcuts_with_repeat_prefix(
     }
 }
 
-/// Test-only constructor: a `Shortcuts` with one direct (non-leader) chord and
-/// no leader/prefix bindings. Used by `resolve.rs`'s decider tests, which
-/// cannot name this module's private fields.
+/// Test-only constructor: a `Shortcuts` with one direct (non-leader)
+/// chord and no leader/prefix bindings.
 #[cfg(test)]
 pub(crate) fn test_shortcuts_with_direct_chord(
     keycode: KeyCode,
@@ -382,19 +374,18 @@ fn reset_leader_phase(
     }
 }
 
-/// Run condition: only run `detect_modifier_tap` when the leader is a tap.
+/// True when the configured leader is a modifier tap.
 fn tap_leader_enabled(shortcuts: Res<Shortcuts>) -> bool {
     shortcuts.tap_modifier().is_some()
 }
 
 /// Detects a bare modifier tap (press+release within the timeout, no
 /// intervening key or mouse press) and engages `LeaderPhase::Pending`.
-/// Mode-agnostic; runs in `LeaderGate::Detect` before the dispatchers
-/// read/advance the leader.
+/// Mode-agnostic.
 ///
-/// Gated with `run_if(tap_leader_enabled)`. Reads press AND release
-/// `KeyboardInput` (the dispatchers only read `Pressed`), so it owns the tap
-/// gesture; the second key is handled by the existing `step_leader` pending arm.
+/// Reads press AND release `KeyboardInput` (the dispatchers only read
+/// `Pressed`), so it owns the tap gesture; the second key is handled by
+/// the existing `step_leader` pending arm.
 fn detect_modifier_tap(
     mut state: ResMut<ModifierTapState>,
     mut leader_phase: ResMut<LeaderPhase>,
@@ -446,13 +437,13 @@ fn detect_modifier_tap(
     }
 }
 
-/// `Startup` system: resolves the configured shortcut bindings into
-/// `Shortcuts`, replacing the empty default inserted at plugin build.
+/// Resolves the configured shortcut bindings into `Shortcuts`, replacing
+/// the empty default inserted at plugin build.
 ///
 /// Writes through `ResMut` (an immediate change, unlike a deferred
 /// `Commands::insert_resource`) so the table is populated the moment this
-/// system runs, with no window in which a same-schedule reader could observe
-/// the empty default.
+/// system runs, with no window in which a same-schedule reader could
+/// observe the empty default.
 fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OrzmaConfigsResource>) {
     let sc = &configs.shortcuts;
     resolved.direct = resolve_from_chords(
@@ -487,7 +478,7 @@ fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OrzmaConfigsRes
     }
 }
 
-/// `Startup` system: inserts `OrzmaMouseConfig` from the resolved `[mouse]` block.
+/// Inserts `OrzmaMouseConfig` from the resolved `[mouse]` block.
 fn populate_mouse_config(mut commands: Commands, configs: Res<OrzmaConfigsResource>) {
     commands.insert_resource(orzma_mouse_config(&configs.mouse));
 }

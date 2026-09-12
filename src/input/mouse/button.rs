@@ -1,12 +1,8 @@
 //! Mouse-button dispatch for every `OrzmaTerminal` surface: local text
-//! selection + copy, Cmd-click hyperlink open, and click-to-focus. Hit-tests
-//! the cursor to a cell, drives the local-only `LocalButtonAction::route`
-//! router, and fans effects out via the shared `trigger_mouse_effects`. A
-//! press that a URI open did not consume also triggers `PaneClicked` on the
-//! target surface. App-forward mouse reporting is out of scope until mouse
-//! routing is reintroduced against `orzma_tty` (D17 of the engine-swap
-//! design). Registered by `MouseButtonInputPlugin`; skips `MouseDisabled`
-//! surfaces.
+//! selection and copy, Cmd-click hyperlink open, and click-to-focus.
+//!
+//! TODO: reintroduce app-forward mouse-button PTY reporting against
+//! `orzma_tty`.
 
 use super::{
     CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_dims, hit_candidates,
@@ -31,10 +27,7 @@ use orzma_tty::prelude::{CellCoord, MouseReportKind, ProtocolModifiers};
 use orzma_vt::prelude::{GridColumn, GridLine};
 use std::time::Duration;
 
-/// Registers the mouse-button dispatcher and its gesture resource. Runs in
-/// `InputPhase::Dispatch`, gated to frames carrying any mouse message — the
-/// focus/empty-candidate guard must still run on wheel-only frames to drain
-/// readers and reset the gesture.
+/// Adds mouse-button dispatch and its gesture resource.
 pub(super) struct MouseButtonInputPlugin;
 
 impl Plugin for MouseButtonInputPlugin {
@@ -50,9 +43,9 @@ impl Plugin for MouseButtonInputPlugin {
 
 /// Logical mouse-button identity accepted by the local-selection router.
 ///
-/// Deliberately narrower than [`orzma_tty::prelude::MouseButton`]: only the
-/// three physical buttons a Bevy `MouseButtonInput` can carry, with no wheel
-/// variants to exhaustively (and uselessly) match against.
+/// Narrower than [`orzma_tty::prelude::MouseButton`]: only the three
+/// physical buttons a Bevy `MouseButtonInput` can carry, with no wheel
+/// variants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::input::mouse) enum MouseButtonKind {
     Left,
@@ -98,16 +91,15 @@ enum LocalButtonAction {
 }
 
 impl LocalButtonAction {
-    /// Ports the local-selection branches of the removed engine's
-    /// `ButtonAction::route`. The app-forward branch (mouse-mode PTY
-    /// reporting) is not ported — that is out of scope until mouse routing
-    /// returns against `orzma_tty` (D17b).
+    /// The local-selection branches of the button-decision router; the
+    /// app-forward branch (mouse-mode PTY reporting) is currently
+    /// unsupported.
     fn route(evt: ButtonEvent, mods: ProtocolModifiers) -> Self {
         match (evt.kind, evt.button) {
             (MouseReportKind::Press, MouseButtonKind::Left) => {
                 if mods.alt {
                     // TODO: switch to `SelectionKind::Block` once `orzma_vt`
-                    // gains it (D16); an Alt+click rounds down to `Lines`
+                    // gains it; an Alt+click rounds down to `Lines`
                     // until then.
                     return Self::StartLocalSelection {
                         kind: SelectionKind::Lines,
@@ -122,7 +114,7 @@ impl LocalButtonAction {
                         side: evt.side,
                     },
                     // TODO: switch to a word-snapped Semantic kind once
-                    // `orzma_vt` gains one (D16); a double-click rounds down
+                    // `orzma_vt` gains one; a double-click rounds down
                     // to plain `Simple` until then.
                     2 => Self::StartLocalSelection {
                         kind: SelectionKind::Simple,
@@ -246,7 +238,8 @@ fn resolve_frame(
 
 /// Processes one `MouseButtonInput`: hit-tests the target (press) or the locked
 /// held entity (release), drives `resolve_button_event` + `decide_button`,
-/// updates the held-pointer state, and triggers the decided effects.
+/// updates the held-pointer state, and triggers the decided effects. A press
+/// that a URI open did not consume also triggers `PaneClicked` on the target.
 fn process_button_event(
     commands: &mut Commands,
     gesture: &mut OrzmaMouseGesture,
@@ -331,11 +324,10 @@ fn synthesize_held_drag(
     }
 }
 
-/// Pure per-event decision for a mouse button. Mutates `gesture` (drag phase /
-/// click state) and returns the effects to apply. A Cmd/Ctrl-click on a linked
-/// cell opens the URL and consumes the event; otherwise
-/// `LocalButtonAction::route` decides the local-selection response —
-/// app-forward reporting is out of scope (D17b of the engine-swap design).
+/// Pure per-event decision for a mouse button. Mutates `gesture` (drag
+/// phase / click state) and returns the effects to apply. A Cmd/Ctrl-click
+/// on a linked cell opens the URL and consumes the event; otherwise
+/// `LocalButtonAction::route` decides the local-selection response.
 fn decide_button(
     gesture: &mut OrzmaMouseGesture,
     evt: ButtonEvent,
@@ -419,13 +411,9 @@ fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
 
 /// Converts a 1-indexed protocol `CellCoord` into a 0-indexed,
 /// viewport-relative `GridPoint` (row 0 = top of the currently displayed
-/// viewport). This dispatcher has no read access to the VT (a pane entity's
-/// `OrzmuxPane` names the backend pane, but the VT itself lives on the
-/// multiplexer backend thread, a backend that may later run out of
-/// process), so it cannot resolve scrollback itself —
-/// `action/terminal/selection.rs`'s apply observer offsets this by the
-/// terminal's live display offset before firing `RequestTtySelectionStart`
-/// / `RequestTtySelectionUpdate`.
+/// viewport). This dispatcher cannot resolve scrollback itself; the offset
+/// to the terminal's live display line is applied downstream, before the
+/// selection request is sent.
 fn to_grid_point(cell: CellCoord) -> GridPoint {
     GridPoint {
         line: GridLine(cell.row as i32 - 1),
@@ -970,10 +958,9 @@ mod tests {
 
     /// Asserts a double-click starts a selection immediately (no arm-then-drag
     /// defer) using `SelectionKind::Simple` — `orzma_vt` has no word-snapped
-    /// Semantic kind yet, so double-click rounds down to plain Simple (D16).
+    /// Semantic kind yet, so double-click rounds down to plain Simple.
     ///
-    /// Case: the user double-clicks a word, expecting an immediate selection
-    /// rather than the single-click arm-and-defer behavior.
+    /// Case: the user double-clicks a word.
     #[test]
     fn double_click_starts_selection_immediately_pending_semantic_kind() {
         let mut g = OrzmaMouseGesture::default();

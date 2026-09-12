@@ -1,10 +1,4 @@
 //! The character-terminal device this VT emulates.
-//!
-//! [`DeviceState`] is the device model, not a layer of its own: the
-//! screens with their write cursors, the DECSET modes, the tab stops,
-//! the color table, and the title stack. `OrzmaTty` one crate up is
-//! the live terminal — a VT wired to a PTY — so the device the VT
-//! emulates deliberately does not borrow that name.
 
 pub(crate) mod color;
 pub(crate) mod modes;
@@ -22,12 +16,6 @@ use std::collections::VecDeque;
 
 /// The emulated terminal device: screens, modes, tabs, colors, title,
 /// and the terminal-scoped placement invariants.
-///
-/// It owns no parser, damage, or emission state — those are the VT's own
-/// machinery and sit beside it in [`crate::OrzmaVt`]. The placement
-/// table itself belongs to each [`Screen`]; what lives here is only what
-/// one screen cannot decide alone: the cap across the pair, and a live
-/// id's uniqueness across it.
 pub(crate) struct DeviceState {
     screens: Screens,
     modes: VtModes,
@@ -38,9 +26,8 @@ pub(crate) struct DeviceState {
 impl DeviceState {
     /// Builds a blank device with the primary screen active.
     ///
-    /// The alternate screen is built without scrollback: a full-screen
-    /// application has nothing to scroll back to, and its viewport stays
-    /// pinned to the live tail.
+    /// The alternate screen is built without scrollback, so its viewport
+    /// stays pinned to the live tail.
     pub fn new(size: GridSize, max_history: usize) -> Self {
         Self::assert_nonzero_size(size);
         Self {
@@ -75,30 +62,18 @@ impl DeviceState {
     /// Resizes both screens, truncating rather than reflowing; `None`
     /// when the dimensions already matched.
     ///
+    /// The caller must reject a size with a zero axis before it reaches
+    /// this method.
+    ///
+    /// Placements this strands are not named here: their anchors stop
+    /// resolving, and the next [`Self::evict_lost_anchors`] names them.
+    ///
     /// # Invariants
     ///
-    /// A resize that changes the dimensions must report
-    /// [`DamageSpan::Full`]: every emitted frame carries the new size but
-    /// nothing diffs it, so partial row damage would hand the renderer
-    /// new dimensions with stale rows behind them.
+    /// A resize that changes the dimensions reports [`DamageSpan::Full`].
     ///
-    /// Both axes are nonzero. A zero row count underflows
-    /// `Margins::new`, which [`Self::new`] already reaches through
-    /// `Screen::new`, so construction asserts the same precondition
-    /// before this method is ever called.
-    ///
-    /// Both screens are always the same size, so they always agree on
-    /// whether the dimensions changed; the primary's answer stands for
-    /// the pair, whichever one is on show.
-    ///
-    /// Placements this strands are not named here. The anchors simply
-    /// stop resolving, and [`crate::Vt::resize`] names them through
-    /// [`Self::evict_lost_anchors`] — the same contract
-    /// [`Screen::reset`] relies on.
-    ///
-    /// Reflow would land in `Grid`, on a wrap flag `Screen::print` sets
-    /// where it defers a wrap; the placement table would then need each
-    /// anchor re-pointed at the row its content survived on.
+    /// Both grid axes are nonzero, and both screens are always the same
+    /// size.
     pub fn resize(&mut self, size: GridSize) -> Option<DamageSpan> {
         Self::assert_nonzero_size(size);
         let primary = self.screens.primary.resize(size);
@@ -118,10 +93,7 @@ impl DeviceState {
     ///
     /// # Invariants
     ///
-    /// A motion that moves the viewport must report [`DamageSpan::Full`]:
-    /// the emit-time offset diff only guarantees that a frame is
-    /// emitted, not that it carries rows, so anything less would
-    /// repaint stale content at the new offset.
+    /// A motion that moves the viewport reports [`DamageSpan::Full`].
     pub fn scroll(&mut self, scroll: Scroll) -> Option<DamageSpan> {
         self.active_screen_mut().scroll(scroll)
     }
@@ -129,19 +101,13 @@ impl DeviceState {
     /// Returns both screens and every mode to their power-up state;
     /// `None` when the frame that follows needs no repaint.
     ///
-    /// # Invariants
-    ///
     /// Only the screen left active by the mode reset reaches a frame, so
     /// the alternate screen's damage is dropped rather than folded in.
     /// A reset that arrives while the alternate screen is shown always
-    /// repaints, because the implicit return to the primary screen
-    /// replaces the whole viewport.
+    /// repaints.
     ///
-    /// The title is cleared too: `self.title` returns to
-    /// [`TitleState::default`], dropping both the current title and the
-    /// whole save stack. This is a deliberate departure from alacritty,
-    /// which clears its title silently and leaves the host showing a
-    /// stale one.
+    /// The title is cleared too, dropping both the current title and the
+    /// whole save stack.
     ///
     /// # Control Functions
     ///
@@ -182,9 +148,8 @@ impl DeviceState {
     /// # Control Functions
     ///
     /// - `XTWINOPS` (`CSI 22 t`); the icon/window selector and the
-    ///   direct slot number xterm accepts after it are both ignored,
-    ///   because this terminal carries one title and no addressable
-    ///   slots, so a slot store arrives here as an ordinary push.
+    ///   direct slot number xterm accepts after it are both ignored, so
+    ///   a slot store arrives here as an ordinary push.
     pub fn push_title(&mut self) {
         if self.title.stack.len() == MAX_TITLE_DEPTH {
             self.title.stack.pop_front();
@@ -201,9 +166,9 @@ impl DeviceState {
     ///
     /// # Control Functions
     ///
-    /// - `XTWINOPS` (`CSI 23 t`); its sub-parameters are ignored on the
-    ///   same terms as [`DeviceState::push_title`]'s, so a slot fetch
-    ///   arrives here as an ordinary pop.
+    /// - `XTWINOPS` (`CSI 23 t`); the icon/window selector and the
+    ///   direct slot number xterm accepts after it are both ignored, so
+    ///   a slot fetch arrives here as an ordinary pop.
     pub fn pop_title(&mut self) -> Option<Option<String>> {
         self.title.stack.pop_back()
     }
@@ -221,10 +186,8 @@ impl DeviceState {
     /// The cursor an emitted frame carries: the active screen's write
     /// position with this device's DECTCEM state folded in.
     ///
-    /// Every caller that needs a frame-ready cursor goes through here.
-    /// Reading the screen and the mode separately is what lets a caller
-    /// pair a fresh screen with a stale mode, which silently drops a
-    /// `CSI ? 25 l` from the chunk-liveness diff.
+    /// A frame-ready cursor must be read through here rather than by
+    /// pairing a screen read with a separately-read mode.
     pub fn cursor(&self) -> Cursor {
         self.active_screen().cursor(self.modes.text_cursor_enable)
     }
@@ -234,7 +197,7 @@ impl DeviceState {
         self.modes
     }
 
-    /// Returns the mutable reference of [VtModes].
+    /// Mutably borrows the modes the device owns.
     pub fn modes_mut(&mut self) -> &mut VtModes {
         &mut self.modes
     }
@@ -247,11 +210,8 @@ impl DeviceState {
     /// STD-070 lists only the reset direction among the operations that
     /// clear the last-column flag.
     ///
-    /// The disarm is load-bearing, not a convenience. Without it a
-    /// reset followed by a set with no print in between would leave a
-    /// stale flag for the next character to cash in as a wrap. It does
-    /// not reach a checkpoint, so a reset that restores one (`DECRC`,
-    /// 1048, 1049) puts the saved flag back.
+    /// The disarm does not reach a checkpoint, so a later restore
+    /// (`DECRC`, 1048, 1049) puts the saved flag back.
     ///
     /// # Control Functions
     ///
@@ -270,11 +230,6 @@ impl DeviceState {
     }
 
     /// Switches the active screen without a flip's side effects.
-    ///
-    /// The production path is [`Self::switch_screen`], driven by the
-    /// interpreter's alternate-screen modes, which tears down the
-    /// abandoned alternate screen's placements; the placement tests use
-    /// this to reach the other screen while leaving every table intact.
     #[cfg(test)]
     pub(crate) fn set_active_screen_for_test(&mut self, kind: ScreenKind) {
         self.modes.active_screen = kind;
@@ -283,17 +238,16 @@ impl DeviceState {
 
 /// Webview placements.
 ///
-/// These terminal-scoped invariants live here because neither screen can
-/// satisfy them alone: the cap counts both screens, and a live id is
-/// unique across the pair.
+/// The cap counts both screens, and a live id is unique across the
+/// pair.
 impl DeviceState {
     /// Registers a mount at the active screen's cursor under the id the
     /// host minted; `false` when the cap rejects it.
     ///
     /// # Invariants
     ///
-    /// Supersession runs before the cap check: a re-mount frees the slot
-    /// it takes, so it must succeed even at the limit.
+    /// A re-mount of a live id frees the slot it takes, so it succeeds
+    /// even at the cap.
     pub fn mount_placement(&mut self, size: PlacementSize, id: InstanceId) -> bool {
         self.supersede_placement(id);
         if MAX_PLACEMENTS <= self.placement_count() {
@@ -309,8 +263,8 @@ impl DeviceState {
     ///
     /// # Invariants
     ///
-    /// Supersession runs before the cap check, as for
-    /// [`Self::mount_placement`].
+    /// A re-mount of a live id frees the slot it takes, so it succeeds
+    /// even at the cap.
     pub fn mount_placement_at(
         &mut self,
         row: ScreenLine,
@@ -338,13 +292,7 @@ impl DeviceState {
     /// Removes the placement a client `unmount` addresses on either
     /// screen; returns whether anything went.
     ///
-    /// # Invariants
-    ///
-    /// Every screen is visited — the accumulation must not short-circuit.
-    /// An unmount-all matches on both screens, and the host despawns every
-    /// matching child across the terminal in one pass, so a VT that stopped
-    /// at the first match would keep a placement holding a cap slot whose
-    /// host child is already gone.
+    /// An unmount-all removes the matching placements on both screens.
     pub fn unmount_placement(&mut self, id: Option<InstanceId>) -> bool {
         let primary = self.screens.primary.unmount_placement(id);
         let alternate = self.screens.alternate.unmount_placement(id);
@@ -352,8 +300,7 @@ impl DeviceState {
     }
 
     /// Removes the placements the host names on either screen; returns
-    /// whether anything went. Visits both screens without short-circuiting,
-    /// for the same reason [`Self::unmount_placement`] does.
+    /// whether anything went.
     pub fn remove_placements(&mut self, ids: &[InstanceId]) -> bool {
         let primary = self.screens.primary.remove_placements(ids);
         let alternate = self.screens.alternate.remove_placements(ids);
@@ -365,9 +312,7 @@ impl DeviceState {
     ///
     /// # Invariants
     ///
-    /// The primary screen's ids come first. The order is observable —
-    /// the host acts on the returned list in sequence — and this is the
-    /// only operation that exposes it, so it is fixed here.
+    /// The primary screen's ids come first.
     pub fn evict_lost_anchors(&mut self) -> Vec<InstanceId> {
         let mut evicted = self.screens.primary.evict_lost_anchors();
         evicted.extend(self.screens.alternate.evict_lost_anchors());
@@ -379,8 +324,8 @@ impl DeviceState {
     ///
     /// Primary placements and the primary selection are hidden while the
     /// alternate screen is shown, not destroyed. This operation stages no
-    /// damage of its own: the flip itself must stage `DamageSpan::Full`,
-    /// which carries the changed list.
+    /// damage of its own: the caller must stage `DamageSpan::Full` for
+    /// the flip.
     pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
         self.modes.active_screen = to;
         match to {
@@ -404,15 +349,12 @@ impl DeviceState {
 }
 
 /// The primary / alternate pair.
-///
-/// Pure storage: which of the two is shown lives in
-/// [`VtModes::active_screen`], so this struct cannot contradict it.
 struct Screens {
     primary: Screen,
     alternate: Screen,
 }
 
-/// The base palette and its dynamic overrides.
+/// The base palette.
 // TODO: Apply the OSC 4 / 10 / 11 / 12 overrides to the carried
 // palette once their handlers land.
 struct ColorTable {
@@ -428,10 +370,8 @@ struct TitleState {
 
 /// Titles `CSI 22 t` may stack before the oldest is dropped.
 ///
-/// alacritty's 4096 is not spec-derived, and at the title length cap it
-/// would let one program retain about a megabyte of attacker-controlled
-/// text per terminal until the next reset. xterm documents direct stack
-/// access over slots 1 through 10, which this bound covers.
+/// xterm documents direct stack access over slots 1 through 10, which
+/// this bound covers.
 const MAX_TITLE_DEPTH: usize = 16;
 
 #[cfg(test)]
@@ -469,8 +409,7 @@ mod tests {
         assert_eq!(device.display_offset(), DisplayOffset(0));
     }
 
-    /// Asserts that a scroll on the alternate screen reports nothing,
-    /// because that screen keeps no history to move over.
+    /// Asserts that a scroll on the alternate screen reports nothing.
     ///
     /// Case: the user rolls the wheel while a full-screen editor is
     /// showing and alternate-scroll translation is off.
@@ -535,14 +474,8 @@ mod tests {
         assert_eq!(device.evict_lost_anchors(), vec![id]);
     }
 
-    /// Asserts that a stop set on one screen is absent from the other.
-    ///
-    /// The agreed policy gives each screen its own table, so a
-    /// full-screen application cannot disturb the tab positions the
-    /// shell left on the primary screen. xterm, VTE, alacritty,
-    /// wezterm, and Windows Terminal share one table across both
-    /// screens instead; ECMA-48 settles nothing here, because it
-    /// has no alternate screen at all.
+    /// Asserts that a stop set on one screen is absent from the other,
+    /// each screen keeping its own tab stop table rather than sharing one.
     ///
     /// Case: a shell installs its own tab positions, then a full-screen
     /// editor takes over the alternate screen and emits a tab.
@@ -567,14 +500,9 @@ mod tests {
     }
 
     /// Asserts that a checkpoint saved on one screen is unreachable from
-    /// the other.
-    ///
-    /// The agreed policy gives each screen its own checkpoint, so a
-    /// restore on the alternate screen returns its own power-up state
-    /// instead of consuming the save the shell left on the primary.
-    /// VT510 documents a separate `DECSC` buffer only for the main
-    /// display and the status line, so the alternate screen is this
-    /// terminal's own decision.
+    /// the other, so a restore on the alternate screen returns its own
+    /// power-up state instead of consuming the save the shell left on the
+    /// primary.
     ///
     /// Case: a shell saves its cursor, a full-screen editor takes over
     /// the alternate screen and emits a restore of its own, and the
@@ -803,8 +731,7 @@ mod tests {
         assert_eq!(device.placement_count(), 0);
     }
 
-    /// Asserts that a re-mount of a live id is accepted at the cap,
-    /// because supersession frees the slot it takes before the check.
+    /// Asserts that a re-mount of a live id is accepted at the cap.
     ///
     /// Case: a program holding the terminal's last placement slot
     /// re-renders that same view.
@@ -822,8 +749,8 @@ mod tests {
     /// placements the abandoned alternate screen owned and leaves the
     /// primary's alone.
     ///
-    /// Case: a full-screen application that mounted a webview exits, and
-    /// the shell's own webview from before it must survive.
+    /// Case: a full-screen application that mounted a webview exits while
+    /// the shell's own webview from before it is still mounted.
     #[test]
     fn a_flip_to_primary_tears_down_only_the_alternate_placements() {
         let mut device = device();
@@ -886,8 +813,7 @@ mod tests {
     /// Asserts that a full stack drops its oldest entry rather than
     /// refusing the newest, and holds exactly its cap.
     ///
-    /// Case: a runaway program pushes titles in a loop, and the device
-    /// must neither grow without bound nor lose the title just saved.
+    /// Case: a runaway program pushes titles in a loop.
     #[test]
     fn a_full_stack_drops_its_oldest_entry() {
         let mut device = device();
@@ -928,10 +854,6 @@ mod tests {
     }
 
     /// The glyph at `column` of the active screen's `line`th visible row.
-    ///
-    /// `column` is `u16` because `Row<Cell>` implements only
-    /// `Index<u16>` and `Index<GridColumn>`; a `usize` does not fall
-    /// through to the slice impl.
     fn glyph_at(device: &DeviceState, line: u16, column: u16) -> char {
         device.active_screen().viewport_row(ViewportLine(line))[column].c
     }

@@ -1,6 +1,5 @@
-//! Active-grid coordinates: the line and column types writes and grid
-//! indexing address cells with, plus their projection into the
-//! viewport.
+//! Active-grid coordinates, which writes and grid indexing address
+//! cells with, and their projection into the viewport.
 
 use crate::screen::viewport::{DisplayOffset, ViewportLine};
 
@@ -35,11 +34,9 @@ impl GridLine {
 /// A row of the active screen: `0` is the top row, and the value never
 /// reaches history.
 ///
-/// It is the non-negative half of [`GridLine`] — same origin, narrower
-/// domain — so writes and grid indexing that take one cannot address
-/// scrollback at all. [`ViewportLine`] measures the same row from the
-/// viewport's top instead, and the two coincide only at
-/// [`DisplayOffset`] zero.
+/// It is the non-negative half of [`GridLine`], with the same origin.
+/// [`ViewportLine`] measures the same row from the viewport's top
+/// instead, and the two coincide only at [`DisplayOffset`] zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct ScreenLine(pub u16);
 
@@ -57,15 +54,14 @@ impl From<ScreenLine> for GridLine {
 
 /// A 0-based grid column.
 ///
-/// Columns are shared between the grid and viewport spaces: with no
-/// horizontal scrolling, only the line axis differs between the two.
+/// Columns are shared between the grid and viewport spaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GridColumn(pub u16);
 
 /// A cell in active-grid coordinates.
 ///
-/// Pairs a [`GridLine`] with a [`GridColumn`]. The position does not
-/// depend on where the user has scrolled the viewport.
+/// The position does not depend on where the user has scrolled the
+/// viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GridPoint {
     /// Line in active-grid coordinates.
@@ -111,9 +107,8 @@ mod tests {
     /// Asserts that a line above the visible area projects to `None`,
     /// while the topmost visible row still projects.
     ///
-    /// Case: the vi cursor rests on a history row and the user scrolls
-    /// the viewport back toward the live tail, leaving that row above
-    /// the window, so the renderer has no caret cell to paint.
+    /// Case: the user scrolls back toward the live tail, and a webview
+    /// anchored to a history row falls above the window.
     #[test]
     fn a_line_above_the_viewport_projects_to_none() {
         let offset = DisplayOffset(3);
@@ -129,8 +124,7 @@ mod tests {
     /// while the bottommost visible row still projects.
     ///
     /// Case: the user scrolls back while the shell keeps its caret on
-    /// the last screen line, which falls below the window, so the
-    /// renderer has no caret cell to paint.
+    /// the last screen line, which falls below the window.
     #[test]
     fn a_line_below_the_viewport_projects_to_none() {
         let offset = DisplayOffset(5);

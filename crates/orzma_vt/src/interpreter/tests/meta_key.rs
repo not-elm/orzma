@@ -1,5 +1,4 @@
-//! Tests that the eighth-bit meta mode is ignored, so the key encoder's
-//! ESC prefix stays the only Alt encoding.
+//! Tests that the eighth-bit meta mode is ignored.
 
 use super::*;
 use crate::device::modes::VtModes;

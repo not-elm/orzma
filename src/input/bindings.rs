@@ -1,13 +1,11 @@
-//! Host-owned mouse input policy: `OrzmaMouseConfig` / `FineModifier`, populated
-//! from `orzma_configs` at startup
-//! (`crate::input::shortcuts::populate_mouse_config`).
+//! Host-owned mouse input policy, populated from `orzma_configs` at startup.
 
 use bevy::prelude::*;
 use std::time::Duration;
 
 /// Which modifier activates "fine" (1 line per notch) wheel scrolling.
-/// Default `Alt`: on macOS Shift+wheel becomes horizontal scroll at the OS
-/// level, so Shift never reaches the app as vertical `y`.
+/// On macOS, Shift+wheel becomes horizontal scroll at the OS level, so
+/// Shift never reaches the app as vertical `y`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum FineModifier {
     /// Shift key activates fine scrolling.
@@ -21,11 +19,9 @@ pub(crate) enum FineModifier {
     None,
 }
 
-/// Host-side burst cap for PTY-bound button reports, mirroring the old
-/// engine's `ButtonConfig`. Unused until mouse-button routing is
-/// reintroduced against `orzma_tty` (tracked as out-of-scope work in the
-/// engine-swap design); kept so `OrzmaMouseConfig` and its `orzma_configs`
-/// populate path (`orzma_mouse_config`) keep compiling unchanged.
+/// Host-side burst cap for PTY-bound button reports. Currently unused.
+///
+/// TODO: reintroduce mouse-button routing against `orzma_tty`.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ButtonConfig {
     /// Hard cap on the number of PTY-bound reports emitted per route call.
@@ -39,10 +35,11 @@ pub(crate) struct ButtonConfig {
     pub max_protocol_events_per_frame: u32,
 }
 
-/// Host-side wheel-routing policy, mirroring the old engine's `WheelConfig`.
-/// `lines_per_notch` / `fine_lines` still drive the local viewport-scroll
-/// computation in `mouse::wheel`; `max_protocol_events_per_frame` is unused
-/// until mouse-wheel PTY reporting is reintroduced against `orzma_tty`.
+/// Host-side wheel-routing policy. `lines_per_notch` and `fine_lines` drive
+/// the viewport-scroll computation; `max_protocol_events_per_frame` is
+/// currently unused.
+///
+/// TODO: reintroduce mouse-wheel PTY reporting against `orzma_tty`.
 #[derive(Clone, Debug)]
 pub(crate) struct WheelConfig {
     /// Lines scrolled per notch in the scrollback path.

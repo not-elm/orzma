@@ -1,5 +1,5 @@
-//! The `TtyTitle` component: the window title a terminal's application
-//! last set, kept in step with the VT's title signals.
+//! The window title a terminal's application last set, kept in step with
+//! the VT's title signals.
 
 use crate::signals::{TtyTitleChangedSignal, TtyTitleResetSignal};
 use bevy::prelude::*;
@@ -8,15 +8,14 @@ use bevy::prelude::*;
 /// OSC 2; `None` until it sets one, and again after the VT reports the
 /// title's return to the host's default.
 ///
-/// The string arrives already sanitized by the VT's OSC parser, so
-/// hosts can show it as is. A signal that repeats the state already
-/// held leaves the component untouched, so a host gated on
-/// `Changed<TtyTitle>` re-runs only when the title really moves.
+/// The string arrives already sanitized, so hosts can show it as is. A
+/// signal that repeats the state already held leaves the component
+/// untouched, so a host gated on `Changed<TtyTitle>` re-runs only when
+/// the title really moves.
 #[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
 pub struct TtyTitle(pub Option<String>);
 
-/// Registers the observers that write [`TtyTitle`] from the title
-/// signals.
+/// Keeps [`TtyTitle`] in step with a terminal's title signals.
 pub(crate) struct TtyTitlePlugin;
 
 impl Plugin for TtyTitlePlugin {

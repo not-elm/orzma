@@ -14,11 +14,7 @@ fn ht_moves_to_the_next_stop() {
 }
 
 /// Asserts that a tab past the last reachable stop lands on this
-/// screen's own right edge.
-///
-/// ECMA-48 § 6.1.7 leaves a movement to a non-existing position
-/// undefined and lists seven options; the agreed policy clamps
-/// to the right edge rather than wrapping to the next line or
+/// screen's own right edge rather than wrapping to the next line or
 /// refusing the move.
 ///
 /// Case: a twenty-column window shows text that has already run

@@ -1,6 +1,4 @@
-//! Selection vocabulary — the span a selection covers, how it is shaped,
-//! and which side of a cell an endpoint sits on — plus the selection one
-//! screen owns and its projection into that vocabulary.
+//! The selection one screen owns and the range a frame reports it as.
 
 use crate::screen::grid::LineId;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint};
@@ -25,9 +23,7 @@ pub struct SelectionRange {
 }
 
 impl SelectionRange {
-    /// The inclusive column span the selection covers on `line`: the
-    /// same expression the renderer's shader evaluates, so the copied
-    /// text and the painted highlight always agree.
+    /// The inclusive column span the selection covers on `line`.
     pub(crate) fn span_on(&self, line: i32, last_column: u16) -> (u16, u16) {
         match self.geometry {
             SelectionGeometry::Lines => (0, last_column),
@@ -49,10 +45,8 @@ impl SelectionRange {
 
 /// The shape a [`SelectionRange`] spans between its endpoints.
 ///
-/// Wider than [`SelectionKind`]: the two current selection kinds only
-/// ever convert to `Linear` or `Lines`. `Block` exists for the
-/// renderer to support once a future selection kind needs it, but the
-/// conversion does not produce it yet.
+/// Every [`SelectionKind`] converts to `Linear` or `Lines`; nothing
+/// produces `Block`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SelectionGeometry {
     /// A cell run wrapping at the end of each row.
@@ -99,9 +93,7 @@ pub enum CellSide {
 /// The selection one screen owns: two endpoints on that screen's rows
 /// plus the granularity between them.
 ///
-/// Endpoints are stored as a row identity and a cell boundary, so the
-/// selection follows its rows when output scrolls them into history and
-/// does not depend on the projection the frame carries.
+/// The selection follows its rows when output scrolls them into history.
 #[derive(Debug)]
 pub(crate) struct ScreenSelection {
     state: Option<SelectionState>,
@@ -153,7 +145,7 @@ impl SelectionEnd {
 }
 
 impl ScreenSelection {
-    /// Builds a screen with nothing selected.
+    /// Builds a screen selection with nothing selected.
     pub fn new() -> Self {
         Self { state: None }
     }
@@ -201,11 +193,6 @@ impl ScreenSelection {
     /// previous row's last cell; ends that coincide or cross after that
     /// enclose no cell. A Lines selection spans whole rows between the
     /// two endpoints' rows and never wraps.
-    ///
-    /// # Invariants
-    ///
-    /// Endpoints are ordered only after resolving to [`GridLine`];
-    /// nothing orders the ring by [`LineId`].
     pub fn resolve(
         &self,
         mut line_of: impl FnMut(LineId) -> Option<GridLine>,
@@ -317,7 +304,8 @@ mod tests {
         assert_eq!(end(&grid, 0, 1, CellSide::Right).boundary, 2);
     }
 
-    /// Asserts that an empty table resolves to `Resolved::None`.
+    /// Asserts that a selection with nothing selected resolves to
+    /// `Resolved::None`.
     ///
     /// Case: a frame is emitted on a terminal nothing has been selected
     /// on.
@@ -394,8 +382,8 @@ mod tests {
     /// on the left edge of a row ends it on the last cell of the row
     /// above.
     ///
-    /// Case: drags that begin on the right half of the last column or
-    /// land on the left half of the first column.
+    /// Case: the user starts a drag on the right half of the last
+    /// column, or ends one on the left half of the first column.
     #[test]
     fn edge_boundaries_wrap_to_the_adjacent_row() {
         let grid = grid();

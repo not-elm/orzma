@@ -1,9 +1,4 @@
 //! OSC 8 hyperlink vocabulary and the id interner that dedupes it.
-//!
-//! [`HyperlinkInterner`] maps each `(source id, uri)` pair to a single
-//! [`HyperlinkId`], minting a fresh id the first time a pair is seen
-//! and returning the id already on file on repeats; it is where this
-//! crate mints hyperlink ids.
 // NOTE: the `#[cfg(test)]` module below uses every item this lint
 // would flag, so an unconditional `#[expect(dead_code)]` is fulfilled
 // in a plain build but unfulfilled — and denied under `-D warnings` —
@@ -31,11 +26,8 @@ pub struct Hyperlink {
 
 /// Monotonic hyperlink id.
 ///
-/// # Invariants
-///
 /// Callers outside the interner MUST NOT construct `HyperlinkId(0)`;
-/// it is the universal "no hyperlink" sentinel the renderer's
-/// `hyperlink_id != 0u` branch depends on.
+/// it is the universal "no hyperlink" sentinel.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct HyperlinkId(pub u32);
 
@@ -55,7 +47,7 @@ impl HyperlinkUri {
     }
 }
 
-/// Returns `true` when `uri` carries a scheme on the v1 allowlist
+/// Returns `true` when `uri` carries a scheme on the allowlist
 /// (`http`, `https`, `mailto`, `ftp`), case-insensitive.
 pub fn is_allowed(uri: &str) -> bool {
     scheme_of(uri)
@@ -78,6 +70,9 @@ pub(crate) struct SourceHyperlink {
     pub uri: HyperlinkUri,
 }
 
+/// Maps each `(source id, uri)` pair to a single [`HyperlinkId`],
+/// minting a fresh id the first time a pair is seen and returning the id
+/// already on file on repeats.
 pub(crate) struct HyperlinkInterner {
     id: u32,
     id_to_uri: HashMap<HyperlinkId, HyperlinkUri>,
@@ -88,8 +83,7 @@ impl HyperlinkInterner {
     /// Constructs an empty interner.
     ///
     /// The first id handed out is `HyperlinkId(1)`. `HyperlinkId(0)` is
-    /// reserved as the "no hyperlink" sentinel across the wire, the CPU
-    /// grid, and GPU storage.
+    /// reserved as the "no hyperlink" sentinel.
     pub(crate) fn new() -> Self {
         Self {
             id: 1,
@@ -124,8 +118,9 @@ impl Default for HyperlinkInterner {
 
 const ALLOWED_SCHEMES: &[&str] = &["http", "https", "mailto", "ftp"];
 
-/// Parses an RFC 3986 scheme: first byte ALPHA, continuation
-/// ALPHA / DIGIT / `+` / `-` / `.`. Returns `None` for malformed input.
+/// Parses an RFC 3986 scheme. The first byte is ALPHA, and each later
+/// byte is ALPHA, DIGIT, `+`, `-`, or `.`. Returns `None` for malformed
+/// input.
 fn scheme_of(uri: &str) -> Option<&str> {
     let (scheme, _) = uri.split_once(':')?;
     let mut bytes = scheme.bytes();
@@ -154,9 +149,7 @@ mod tests {
     /// Asserts that interning an equal key twice returns the same id.
     ///
     /// Case: one OSC 8 link spans many cells of a row, and the frame
-    /// builder builds a fresh key for every cell it walks. Two keys
-    /// constructed separately from the same source id and uri must
-    /// therefore resolve to one wire id.
+    /// builder builds a fresh key for every cell it walks.
     #[test]
     fn repeated_key_returns_the_same_id() {
         let mut interner = HyperlinkInterner::new();
@@ -169,8 +162,7 @@ mod tests {
     ///
     /// Case: a program prints two OSC 8 links to the same URL without an
     /// explicit `id=`, so alacritty auto-numbers them `0_alacritty` and
-    /// `1_alacritty`. They are two separate links on screen, and
-    /// hovering one must not underline the other.
+    /// `1_alacritty`.
     #[test]
     fn auto_generated_source_ids_keep_identical_uris_distinct() {
         let mut interner = HyperlinkInterner::new();
@@ -182,9 +174,6 @@ mod tests {
     /// Asserts that one source id reused across two uris yields distinct ids.
     ///
     /// Case: an application reuses `id=1` for a second, unrelated URL.
-    /// OSC 8 requires that cells pointing at different URIs are never
-    /// underlined together, and collapsing the two would also make a
-    /// click open the wrong address.
     #[test]
     fn reused_source_id_with_different_uri_yields_distinct_ids() {
         let mut interner = HyperlinkInterner::new();
@@ -197,7 +186,7 @@ mod tests {
     ///
     /// Case: a long URL wraps at the terminal edge, so the frame builder
     /// coalesces each row independently and interns the same link once
-    /// per row. Every wrapped fragment must join one hover group.
+    /// per row.
     #[test]
     fn wrapped_link_reinterned_per_row_keeps_one_id() {
         let mut interner = HyperlinkInterner::new();
@@ -210,8 +199,6 @@ mod tests {
     /// Asserts that many distinct keys all receive unique non-zero ids.
     ///
     /// Case: `ls --hyperlink=auto` fills a screen with one link per file.
-    /// Hovering a file name must not underline its neighbours, so no two
-    /// keys may collapse onto one wire id.
     #[test]
     fn distinct_keys_never_share_an_id() {
         let mut interner = HyperlinkInterner::new();
@@ -227,12 +214,11 @@ mod tests {
         assert!(!ids.contains(&HyperlinkId(0)));
     }
 
-    /// Asserts that source ids are compared byte for byte.
+    /// Asserts that source ids are compared byte for byte rather than
+    /// trimmed or canonicalized.
     ///
     /// Case: a program emits `id=42`, `id=042`, and `id=42 ` for three
-    /// links. Interpreting OSC 8 parameters belongs to the VT layer, so
-    /// the interner treats what it is handed as opaque bytes instead of
-    /// trimming or canonicalizing it.
+    /// links.
     #[test]
     fn source_id_is_compared_exactly() {
         let mut interner = HyperlinkInterner::new();
@@ -245,9 +231,7 @@ mod tests {
 
     /// Asserts that no key is ever assigned the reserved zero id.
     ///
-    /// Case: the GPU cell attribute stores `0` to mean "this cell carries
-    /// no link". Handing out `0` for a real link would paint the hover
-    /// underline across unlinked cells.
+    /// Case: a program prints sixteen links in one session.
     #[test]
     fn intern_never_returns_the_zero_sentinel() {
         let mut interner = HyperlinkInterner::new();
@@ -259,9 +243,7 @@ mod tests {
 
     /// Asserts that fresh keys are numbered from one upwards.
     ///
-    /// Case: the first link a session prints must not land on the zero
-    /// sentinel, and a replayed sequence of links must reproduce the same
-    /// wire ids.
+    /// Case: a fresh session prints its first three links.
     #[test]
     fn new_keys_receive_monotonic_ids_starting_at_one() {
         let mut interner = HyperlinkInterner::new();
@@ -282,9 +264,7 @@ mod tests {
     /// Asserts that re-interning a known key leaves the next id untouched.
     ///
     /// Case: a single link covers dozens of cells in a row, so the frame
-    /// builder interns it once per cell. Advancing the counter per cell
-    /// would burn the id space within one screen and fill the wire table
-    /// with duplicates.
+    /// builder interns it once per cell.
     #[test]
     fn reinterning_an_existing_key_does_not_advance_the_counter() {
         let mut interner = HyperlinkInterner::new();
@@ -297,9 +277,7 @@ mod tests {
     /// Asserts that an assigned id never changes as more keys arrive.
     ///
     /// Case: links keep accumulating across frames while earlier cells
-    /// are already on screen holding their ids. Renumbering an existing
-    /// entry would silently desynchronize hover grouping from the wire
-    /// table the renderer already stored.
+    /// are already on screen holding their ids.
     #[test]
     fn existing_ids_are_stable_across_later_interning() {
         let mut interner = HyperlinkInterner::new();
@@ -331,11 +309,11 @@ mod tests {
         );
     }
 
-    /// Asserts that extracting an unassigned id yields None.
+    /// Asserts that extracting an unassigned id yields None rather than
+    /// an unrelated uri or a panic.
     ///
     /// Case: an id from evicted scrollback or another terminal reaches
-    /// the lookup. Resolving it to some unrelated uri, or panicking, are
-    /// both worse than reporting that the link is gone.
+    /// the lookup.
     #[test]
     fn extract_returns_none_for_an_unknown_id() {
         let mut interner = HyperlinkInterner::new();
@@ -346,8 +324,7 @@ mod tests {
     /// Asserts that the reserved zero id resolves to nothing.
     ///
     /// Case: a caller forwards an unlinked cell's `0` straight into the
-    /// lookup. If the sentinel resolved to a uri, cells carrying no link
-    /// at all would become clickable.
+    /// lookup.
     #[test]
     fn extract_returns_none_for_the_zero_sentinel() {
         let mut interner = HyperlinkInterner::new();
@@ -358,8 +335,7 @@ mod tests {
     /// Asserts that two ids sharing a uri both resolve back to it.
     ///
     /// Case: the same URL appears twice on screen as two independent
-    /// links. They highlight separately on hover, yet clicking either one
-    /// must open the same address.
+    /// links.
     #[test]
     fn distinct_ids_for_one_uri_both_resolve_to_it() {
         let mut interner = HyperlinkInterner::new();
@@ -371,13 +347,10 @@ mod tests {
         assert_eq!(interner.extract(&second), Some(&expected));
     }
 
-    /// Asserts that an empty uri is interned like any other value.
+    /// Asserts that an empty uri is interned like any other value rather
+    /// than rejected or folded onto the zero sentinel.
     ///
-    /// Case: the alacritty backend never produces one, because
-    /// `OSC 8 ; ; ST` terminates a link and yields no hyperlink at all.
-    /// Another backend may hand one over, and the agreed policy is that
-    /// judging a uri belongs to the VT layer, so the interner stores it
-    /// rather than rejecting it or folding it onto the zero sentinel.
+    /// Case: a VT backend hands the interner an empty uri.
     #[test]
     fn empty_uri_is_interned_without_special_casing() {
         let mut interner = HyperlinkInterner::new();
@@ -392,9 +365,7 @@ mod tests {
     /// Asserts that a long uri round-trips whole and stays distinct from its prefix.
     ///
     /// Case: an application prints a generated URL carrying a
-    /// multi-kilobyte query string. Truncating it, or matching two such
-    /// URLs on a shared prefix, would send a click to the wrong address.
-    /// Any length ceiling belongs to the VT layer, not to the interner.
+    /// multi-kilobyte query string.
     #[test]
     fn long_uri_is_stored_without_truncation() {
         let mut interner = HyperlinkInterner::new();
@@ -407,12 +378,12 @@ mod tests {
         assert_eq!(interner.extract(&second), Some(&HyperlinkUri::new(longer)));
     }
 
-    /// Asserts that uris differing only in encoding or case stay distinct.
+    /// Asserts that uris differing only in encoding or case stay distinct
+    /// rather than being percent-decoded or case-folded.
     ///
-    /// Case: a terminal carries the bytes an application printed. Percent
-    /// decoding or case folding here would merge `https://例.jp/%E3%81%82`
-    /// with `https://例.jp/あ`, which the interner has no authority to
-    /// treat as one resource.
+    /// Case: an application prints links that differ only in
+    /// percent-encoding or letter case, such as `https://例.jp/%E3%81%82`
+    /// and `https://例.jp/あ`.
     #[test]
     fn uri_bytes_are_preserved_without_normalization() {
         let mut interner = HyperlinkInterner::new();

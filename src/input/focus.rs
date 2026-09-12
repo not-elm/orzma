@@ -1,9 +1,6 @@
-//! Focus & input suppression: defines `KeyboardFocused`, `KeyboardDisabled`,
-//! and `MouseDisabled` — the three components the host uses to route keyboard
-//! and mouse input — maintains the two `*Disabled` markers from the coarse
-//! guards (IME, window focus, webview rect-claim, vi mode) in
-//! `maintain_input_gates`, and keeps bevy_cef's `FocusedWebview` in step with
-//! the active pane.
+//! Focus and input suppression: gates which pane receives keyboard and
+//! mouse input, and keeps `bevy_cef`'s webview focus in step with the
+//! active pane.
 
 use crate::action::vi::mode::ViModeState;
 use crate::configs::OrzmaConfigsResource;
@@ -51,8 +48,8 @@ pub(crate) struct PaneClicked {
     pub entity: Entity,
 }
 
-/// Registers `maintain_input_gates`, the webview focus-sync system, and the
-/// active-pane / click-to-focus observers.
+/// Keeps focus and input gating in sync with the active pane and
+/// click-to-focus requests.
 pub(super) struct FocusSyncPlugin;
 
 impl Plugin for FocusSyncPlugin {
@@ -145,22 +142,17 @@ fn inactive_style(config: &InactivePaneConfig) -> PaneInactiveStyle {
 
 /// Keeps `bevy_cef`'s `FocusedWebview` in step with orzma's active pane.
 ///
-/// bevy_cef only updates `FocusedWebview` when a *webview* node is clicked
-/// (`set_focus_on_press`), so moving focus to a terminal pane (a non-webview)
-/// leaves the webview focused: its DOM text area keeps the caret and
-/// `send_key_event` keeps routing keystrokes to it. Driving `FocusedWebview`
-/// from the active pane fixes both — keyboard follows the focused pane, and CEF
-/// blurs the webview on focus-leave (`bevy_cef`'s `apply_webview_focus` releases
-/// CEF focus when `FocusedWebview` becomes `None`).
+/// Driving `FocusedWebview` from the active pane keeps keyboard input
+/// following the focused pane, and lets CEF blur the webview once it loses
+/// focus.
 ///
-/// One case is PRESERVED instead of driven: when `FocusedWebview` holds a
+/// One case is preserved instead of driven: when `FocusedWebview` holds a
 /// webview child (`Webview`) whose `ChildOf` parent is a live
-/// `OrzmaTerminal` surface, that inline focus stands (spec §7, single
-/// focus source). This covers click-granted focus and the app-declared
-/// focus set via the control-plane `SetFocus` op. Releasing that focus
-/// when the active pane moves elsewhere is `on_active_pane_changed`'s
-/// job; this sync only clears it once the child despawns or focus moves
-/// off it, falling through to the clear path below.
+/// `OrzmaTerminal` surface, that inline focus stands as the single focus
+/// source. This covers click-granted focus and the app-declared focus set
+/// via the control-plane `SetFocus` op. This sync does not clear that focus
+/// when the active pane changes elsewhere; it clears it only once the
+/// child despawns or focus moves off it.
 fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     active_pane: Query<Entity, (With<OrzmaTerminal>, With<KeyboardFocused>)>,
@@ -195,9 +187,9 @@ fn should_disable_input(composing: bool, window_focused: bool, webview_focused: 
     composing || !window_focused || webview_focused
 }
 
-/// Inline-webview hit-test inputs for the mouse rect-claim, bundled to stay
-/// within Bevy's system-parameter limit. `metrics` is optional so the gate still
-/// runs before cell metrics exist (no claim possible yet).
+/// Inline-webview hit-test inputs for the mouse rect-claim. `metrics` is
+/// optional: the gate still runs before cell metrics exist, when no claim
+/// is possible yet.
 #[derive(SystemParam)]
 struct WebviewClaimParams<'w, 's> {
     metrics: Option<Res<'w, TerminalCellMetricsResource>>,
@@ -260,11 +252,9 @@ fn maintain_input_gates(
     }
 }
 
-/// The shell surface whose INTERACTIVE inline webview rect is under the cursor,
-/// or `None`. Resolves the topmost `OrzmaTerminal` under the cursor, then
-/// hit-tests its active overlay rects (`webview_hit_at` skips `NonInteractive`
-/// children). A claimed surface is marked `MouseDisabled` so
-/// `dispatch_mouse_buttons` yields the click to the webview router.
+/// The shell surface whose INTERACTIVE inline webview rect is under the
+/// cursor, or `None`. Considers only the topmost surface under the cursor;
+/// a `NonInteractive` child never claims it.
 fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<Entity> {
     let metrics = claim.metrics.as_deref()?;
     let scale = window.scale_factor();

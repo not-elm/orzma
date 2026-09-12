@@ -1,7 +1,5 @@
-//! Pure decision layer for keyboard-shortcut dispatch: the `KeyEffect`
-//! intermediate representation plus the single decider `classify_key_batch`
-//! that the keyboard dispatcher wires into. No ECS handles —
-//! fully unit-testable without a Bevy `App`.
+//! Pure decision layer for keyboard-shortcut dispatch: decides each
+//! pressed key's effect, with no ECS handles.
 
 use crate::action::vi::ResolvedViModeKeys;
 use crate::input::shortcuts::{
@@ -14,9 +12,8 @@ use orzma_configs::shortcuts::{Modifiers, Shortcut};
 use orzma_configs::vi_mode::ViModeAction;
 use std::time::Duration;
 
-/// One decided effect of a single pressed key, produced by `classify_key_batch`.
-/// The appliers interpret each variant; this type carries no ECS
-/// handles so the decider stays pure.
+/// One decided effect of a single pressed key. The appliers interpret
+/// each variant; this type carries no ECS handles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KeyEffect {
     /// Run a bound `Shortcut`. `via_leader` distinguishes a leader-scoped
@@ -48,8 +45,8 @@ pub(crate) enum KeyEffect {
     },
 }
 
-/// Per-batch context `classify_key_batch` needs beyond the leader/shortcut
-/// state threaded through `leader_phase`.
+/// Per-batch context needed to classify one frame's pressed keys, beyond
+/// the leader/shortcut state threaded through `leader_phase`.
 pub(crate) struct BatchContext<'a> {
     /// The frame's modifier snapshot, shared by every event in the batch.
     pub(crate) mods: Modifiers,
@@ -63,18 +60,19 @@ pub(crate) struct BatchContext<'a> {
     pub(crate) forward_chords: &'a [NormalizedChord],
 }
 
-/// The decided output of `classify_key_batch`: the per-key `KeyEffect`s, plus the
-/// physical keys the leader claimed while a webview owned the keyboard. The caller
-/// applies the frame's modifier snapshot when withholding `webview_suppressed`
-/// from CEF via `CefKeyboardFilter`; it is empty on the non-webview path.
+/// The result of classifying one frame's pressed keys: the per-key
+/// `KeyEffect`s, plus the physical keys the leader claimed while a
+/// webview owned the keyboard. The caller applies the frame's modifier
+/// snapshot when withholding `webview_suppressed` from CEF via
+/// `CefKeyboardFilter`; it is empty on the non-webview path.
 pub(crate) struct ClassifiedKeys {
     pub(crate) effects: Vec<KeyEffect>,
     pub(crate) webview_suppressed: Vec<KeyCode>,
 }
 
 /// Classifies one frame's pressed `KeyboardInput` events into `KeyEffect`s,
-/// threading the shared leader state machine across the batch. Pure: no ECS
-/// handles, so callers can drive it in a unit test with no `App`.
+/// threading the shared leader state machine across the batch. Pure: no
+/// ECS handles.
 ///
 /// A stale repeat window is closed before the batch is processed whenever
 /// `ctx.in_vi_mode` is set, so a repeat-marked key that doubles as a

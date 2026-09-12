@@ -18,8 +18,7 @@ fn a_resolved_region_reaches_the_scroll_span() {
 }
 
 /// Asserts that applying a region seats the cursor at the
-/// origin-aware home rather than VT510's "column 1, line 1 of
-/// the page".
+/// origin-aware home rather than at the first cell of the page.
 ///
 /// Case: an application sets a region while its cursor sits
 /// somewhere in the middle of the screen.

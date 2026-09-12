@@ -17,11 +17,7 @@ fn omitted_parameters_address_the_first_cell() {
 }
 
 /// Asserts that a zero addresses the first line and column, the
-/// same as a one.
-///
-/// The agreed policy follows VT510 p.116 — "If Pl or Pc is not
-/// selected or selected as 0, then the cursor moves to the first
-/// line or column".
+/// same as a one (VT510 p.115).
 ///
 /// Case: a program that builds its sequences from zero-based
 /// variables emits `CSI 0 ; 0 H`.
@@ -63,11 +59,7 @@ fn a_margin_origin_measures_the_line_from_the_top_margin() {
 }
 
 /// Asserts that the line is absolute and reaches outside the
-/// margins while the origin is the upper-left corner.
-///
-/// The agreed policy follows VT510 p.195: with `DECOM` reset the
-/// line numbering is independent of the margins and the cursor
-/// can move outside them.
+/// margins while the origin is the upper-left corner (VT510 p.195).
 ///
 /// Case: an application keeps a scrolling pane but addresses the
 /// header row above it to update a title.
