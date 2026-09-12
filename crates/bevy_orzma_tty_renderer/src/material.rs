@@ -1077,8 +1077,9 @@ mod tests {
     /// linked cell produces, pinning the payload of every slot including
     /// the wide char's right half.
     ///
-    /// Case: a CJK filename with an accented latin suffix is printed
-    /// inside an OSC 8 hyperlink.
+    /// Case: a file listing hyperlinks a CJK filename so it opens on
+    /// click, while an accented latin suffix typed right after it stays
+    /// plain, unlinked text.
     #[test]
     fn rebuild_cells_pins_wide_combining_and_linked_slots() {
         let mut wide = cell_with_link("あ", Some(3));
@@ -1107,7 +1108,6 @@ mod tests {
         rebuild_cells(&grid, &mut state, &fonts, &mut atlas, 16, 4);
 
         let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
-        assert_eq!(fingerprint.len(), 4);
         assert_eq!(
             fingerprint[0].4, 3,
             "the wide cell carries its hyperlink id"
@@ -1130,6 +1130,15 @@ mod tests {
         assert!(
             fingerprint.iter().all(|slot| slot.4 != 9),
             "the zero-width cell occupies no GPU slot"
+        );
+        assert_eq!(
+            fingerprint,
+            vec![
+                (0, u32::MAX, 0, 0, 3),
+                (0, u32::MAX, 0, STYLE_WIDE_RIGHT_HALF, 3),
+                (1, u32::MAX, 0, 4, 0),
+                (2, u32::MAX, 0, 0, 0),
+            ]
         );
     }
 
