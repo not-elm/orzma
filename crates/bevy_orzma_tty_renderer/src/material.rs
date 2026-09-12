@@ -1,7 +1,10 @@
 use crate::{
     glyph::{
         atlas::{GlyphAtlas, GlyphRect},
-        font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFontSize, TerminalFonts},
+        font::{
+            CellMetrics, FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFontSize,
+            TerminalFonts,
+        },
     },
     material::state::TerminalMaterialState,
     schema::{
@@ -286,6 +289,36 @@ impl Default for PaneInactiveStyle {
     }
 }
 
+/// The dimming and tinting one pane applies while it is not the active
+/// pane.
+struct PaneTreatment {
+    dim: f32,
+    inactive_tint: Vec4,
+    overlay_dim: f32,
+    overlay_desaturate: f32,
+}
+
+impl PaneTreatment {
+    /// Clamps `style`'s factors into range, or returns the neutral
+    /// treatment when the pane carries no inactive style.
+    fn from_style(style: Option<&PaneInactiveStyle>) -> Self {
+        style.map_or(
+            Self {
+                dim: 1.0,
+                inactive_tint: Vec4::ZERO,
+                overlay_dim: 1.0,
+                overlay_desaturate: 0.0,
+            },
+            |style| Self {
+                dim: style.dim.clamp(0.0, 1.0),
+                inactive_tint: style.tint.with_w(style.tint.w.clamp(0.0, 1.0)),
+                overlay_dim: style.overlay_dim.clamp(0.0, 1.0),
+                overlay_desaturate: style.overlay_desaturate.clamp(0.0, 1.0),
+            },
+        )
+    }
+}
+
 /// Padding colour used for the area outside a terminal grid (and the whole
 /// quad while a grid is unpainted) when the terminal's default background
 /// is black. Defaults to black.
@@ -455,7 +488,8 @@ impl Default for TerminalParams {
 }
 
 impl TerminalParams {
-    /// Builds the per-frame uniform block from the current grid + frame timing.
+    /// Builds the per-frame uniform block from the current view, cells
+    /// and frame timing.
     ///
     /// # Invariants
     ///
@@ -469,23 +503,21 @@ impl TerminalParams {
     ///   and `view.suppress_cursor` clears the bit on top of either source.
     /// - When `view.selection` is `None`, `sel_kind == 0` and the shader
     ///   paints no selection.
+    /// - `overlay_rects` is left at its default; the caller fills it from
+    ///   the entity's overlays.
     fn new(
         view: &TerminalView,
+        cells: &TerminalCells,
+        metrics: &CellMetrics,
+        treatment: &PaneTreatment,
         cell_size_px: Vec2,
         atlas_size_px: Vec2,
         ascent_px: f32,
         dpr: f32,
         time_seconds: f32,
-        underline_position_phys: f32,
-        underline_thickness_phys: f32,
-        max_overflow_phys: f32,
-        bg_padding_color: Vec4,
+        fallback: [u8; 3],
         hover_hyperlink_id: u32,
         hover_active: u32,
-        dim: f32,
-        inactive_tint: Vec4,
-        overlay_dim: f32,
-        overlay_desaturate: f32,
     ) -> Self {
         let cols = u32::from(view.cols);
         let rows = u32::from(view.rows);
@@ -493,6 +525,7 @@ impl TerminalParams {
         let (cursor_pos, cursor_style) = view.current_cursor_pos_and_style();
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
             selection_uniforms(view.selection.as_ref(), view.display_offset, view.rows);
+        let bg_padding_color = padding_color(cells.palette.background, fallback);
 
         Self {
             grid_size: UVec2::new(cols.max(1), rows.max(1)),
@@ -508,17 +541,17 @@ impl TerminalParams {
             sel_end_row,
             sel_end_col,
             sel_kind,
-            underline_position_phys,
-            underline_thickness_phys,
-            max_overflow_phys,
+            underline_position_phys: metrics.underline_position_phys,
+            underline_thickness_phys: metrics.underline_thickness_phys.max(1.0),
+            max_overflow_phys: metrics.max_overflow_phys,
             bg_padding_color,
             hover_hyperlink_id,
             hover_active,
-            dim,
-            inactive_tint,
+            dim: treatment.dim,
+            inactive_tint: treatment.inactive_tint,
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
-            overlay_dim,
-            overlay_desaturate,
+            overlay_dim: treatment.overlay_dim,
+            overlay_desaturate: treatment.overlay_desaturate,
         }
     }
 }
@@ -716,8 +749,6 @@ fn update_terminal_material(
         };
         let phys_font_size = (font_size.0 * dpr).round() as u16;
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
-        let cols = view.cols as u32;
-        let rows = view.rows as u32;
         let dims_changed = (view.cols, view.rows) != state.last_grid_dims;
         let grid_changed = state.grid_dirty;
         let phys_size_changed = phys_font_size != state.last_phys_font_size;
@@ -733,40 +764,18 @@ fn update_terminal_material(
             state.last_phys_font_size = phys_font_size;
         }
 
-        // NOTE: atlas.generation can advance during this very system (via
-        //       get_or_insert in rebuild_cells), and a generation jump means
-        //       the atlas pixel buffer was wiped — every cached glyph index
-        //       in cpu_cells is now stale and would resolve to garbage
-        //       texels. Clearing the LUT here forces a full rerasterization
-        //       on the rebuild path.
-        if atlas_invalidated {
-            state.glyph_index_map.clear();
-            state.cpu_glyphs.clear();
-        }
-
-        let metrics = if let Some(cached) = state.cached_metrics {
-            cached
-        } else {
-            let m = fonts.cell_metrics_px(phys_font_size);
-            state.cached_metrics = Some(m);
-            m
-        };
+        let metrics = resolve_metrics(
+            &mut state,
+            &mut cell_metrics_res,
+            &fonts,
+            phys_font_size,
+            phys_size_changed,
+            atlas_invalidated,
+        );
         let cell_w_phys = metrics.advance_phys.floor().max(1.0);
         let cell_h_phys = metrics.line_height_phys.floor().max(1.0);
         let cell_size_phys = Vec2::new(cell_w_phys, cell_h_phys);
         let ascent_phys = metrics.ascent_phys.round();
-
-        // NOTE: Write the metrics back to TerminalCellMetricsResource so
-        //       gui-side resize_terminals_to_node reads DPR-adjusted phys
-        //       values on the next frame. The OR condition also catches
-        //       the case where the Resource was reset externally (e.g.
-        //       hot-reload) even if our local state matches.
-        if phys_size_changed || cell_metrics_res.phys_font_size != phys_font_size {
-            *cell_metrics_res = TerminalCellMetricsResource {
-                metrics,
-                phys_font_size,
-            };
-        }
 
         let Some((cells_handle, glyphs_handle)) = materials
             .get(&handle.0)
@@ -776,68 +785,37 @@ fn update_terminal_material(
         };
 
         if needs_rebuild {
-            let cell_count = (cols * rows) as usize;
-            state.cpu_cells.clear();
-            state.cpu_cells.resize(cell_count, GpuCell::default());
-
-            if cols > 0 && rows > 0 {
-                rebuild_cells(&mut state, &mut atlas, &cells, &fonts, phys_font_size, cols);
-            }
-
-            if state.cpu_cells.is_empty() {
-                state.cpu_cells.push(GpuCell::default());
-            }
-            if state.cpu_glyphs.is_empty() {
-                state.cpu_glyphs.push(GpuGlyph::default());
-            }
-
-            if let Some(mut buf) = buffers.get_mut(&cells_handle) {
-                buf.set_data(std::mem::take(&mut state.cpu_cells));
-            }
-            if let Some(mut buf) = buffers.get_mut(&glyphs_handle) {
-                buf.set_data(state.cpu_glyphs.clone());
-            }
-
-            state.last_atlas_generation = atlas.generation;
-            state.grid_dirty = false;
-            state.last_grid_dims = (view.cols, view.rows);
-            state.initialized = true;
+            upload_cells(
+                &mut state,
+                &mut atlas,
+                &mut buffers,
+                &cells,
+                &fonts,
+                (&cells_handle, &glyphs_handle),
+                phys_font_size,
+                (view.cols, view.rows),
+            );
         }
-
-        let bg_padding_color = padding_color(cells.palette.background, fallback.0);
 
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
             (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),
             _ => (0, 0),
         };
-
-        let (dim, inactive_tint, overlay_dim, overlay_desaturate) =
-            pane_style.map_or((1.0, Vec4::ZERO, 1.0, 0.0), |s| {
-                (
-                    s.dim.clamp(0.0, 1.0),
-                    s.tint.with_w(s.tint.w.clamp(0.0, 1.0)),
-                    s.overlay_dim.clamp(0.0, 1.0),
-                    s.overlay_desaturate.clamp(0.0, 1.0),
-                )
-            });
+        let treatment = PaneTreatment::from_style(pane_style);
         if let Some(mut mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
                 view,
+                &cells,
+                &metrics,
+                &treatment,
                 cell_size_phys,
                 Vec2::new(atlas.width() as f32, atlas.height() as f32),
                 ascent_phys,
                 dpr,
                 palette_time.elapsed_secs(),
-                metrics.underline_position_phys,
-                metrics.underline_thickness_phys.max(1.0),
-                metrics.max_overflow_phys,
-                bg_padding_color,
+                fallback.0,
                 hover_hyperlink_id,
                 hover_active,
-                dim,
-                inactive_tint,
-                overlay_dim,
-                overlay_desaturate,
             );
             match overlays {
                 Some(o) => {
@@ -851,6 +829,98 @@ fn update_terminal_material(
             mat.params = params;
         }
     }
+}
+
+/// Resolves the cell metrics for `phys_font_size`, clearing the glyph
+/// caches first when `phys_size_changed` or `atlas_invalidated` is set,
+/// and refreshing the shared cell-metrics resource.
+fn resolve_metrics(
+    state: &mut TerminalMaterialState,
+    cell_metrics: &mut TerminalCellMetricsResource,
+    fonts: &TerminalFonts,
+    phys_font_size: u16,
+    phys_size_changed: bool,
+    atlas_invalidated: bool,
+) -> CellMetrics {
+    // NOTE: atlas.generation can advance during this very system (via
+    //       get_or_insert in rebuild_cells), and a generation jump means
+    //       the atlas pixel buffer was wiped — every cached glyph index
+    //       in cpu_cells is now stale and would resolve to garbage
+    //       texels. Clearing the LUT here forces a full rerasterization
+    //       on the rebuild path.
+    if atlas_invalidated {
+        state.glyph_index_map.clear();
+        state.cpu_glyphs.clear();
+    }
+
+    let metrics = if let Some(cached) = state.cached_metrics {
+        cached
+    } else {
+        let m = fonts.cell_metrics_px(phys_font_size);
+        state.cached_metrics = Some(m);
+        m
+    };
+
+    // NOTE: Write the metrics back to TerminalCellMetricsResource so
+    //       gui-side resize_terminals_to_node reads DPR-adjusted phys
+    //       values on the next frame. The OR condition also catches
+    //       the case where the Resource was reset externally (e.g.
+    //       hot-reload) even if our local state matches.
+    if phys_size_changed || cell_metrics.phys_font_size != phys_font_size {
+        *cell_metrics = TerminalCellMetricsResource {
+            metrics,
+            phys_font_size,
+        };
+    }
+
+    metrics
+}
+
+/// Rebuilds one terminal's cell and glyph buffers and uploads both,
+/// then records the atlas generation and grid dimensions the upload was
+/// built from.
+///
+/// `dims` is `(cols, rows)` in cells. A zero in either axis uploads the
+/// one-element dummy buffers wgpu requires instead of an empty one.
+fn upload_cells(
+    state: &mut TerminalMaterialState,
+    atlas: &mut GlyphAtlas,
+    buffers: &mut Assets<ShaderBuffer>,
+    cells: &TerminalCells,
+    fonts: &TerminalFonts,
+    handles: (&Handle<ShaderBuffer>, &Handle<ShaderBuffer>),
+    phys_font_size: u16,
+    dims: (u16, u16),
+) {
+    let (cols, rows) = (u32::from(dims.0), u32::from(dims.1));
+    let (cells_handle, glyphs_handle) = handles;
+
+    let cell_count = (cols * rows) as usize;
+    state.cpu_cells.clear();
+    state.cpu_cells.resize(cell_count, GpuCell::default());
+
+    if cols > 0 && rows > 0 {
+        rebuild_cells(state, atlas, cells, fonts, phys_font_size, cols);
+    }
+
+    if state.cpu_cells.is_empty() {
+        state.cpu_cells.push(GpuCell::default());
+    }
+    if state.cpu_glyphs.is_empty() {
+        state.cpu_glyphs.push(GpuGlyph::default());
+    }
+
+    if let Some(mut buf) = buffers.get_mut(cells_handle) {
+        buf.set_data(std::mem::take(&mut state.cpu_cells));
+    }
+    if let Some(mut buf) = buffers.get_mut(glyphs_handle) {
+        buf.set_data(state.cpu_glyphs.clone());
+    }
+
+    state.last_atlas_generation = atlas.generation;
+    state.grid_dirty = false;
+    state.last_grid_dims = dims;
+    state.initialized = true;
 }
 
 fn rebuild_cells(
