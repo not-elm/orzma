@@ -470,6 +470,17 @@ impl VTActor for Executor<'_> {
                 let damage = self.device.soft_reset();
                 self.stage(damage);
             }
+            // DECSCUSR
+            (None, [b' '], b'q') => {
+                if let Some(next) = self
+                    .device
+                    .modes()
+                    .text_cursor
+                    .with_decscusr(params.value(0))
+                {
+                    self.device.modes_mut().text_cursor = next;
+                }
+            }
             _ => {}
         }
     }

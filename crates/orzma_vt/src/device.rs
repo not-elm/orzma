@@ -5,7 +5,8 @@ pub(crate) mod modes;
 
 use crate::device::color::{Palette, Rgb};
 use crate::device::modes::{
-    AutoWrap, InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable, VtModes,
+    AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode, ScreenKind,
+    TextCursorEnable, VtModes,
 };
 use crate::frame::damage::DamageSpan;
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
@@ -150,6 +151,8 @@ impl DeviceState {
     /// - `DECSTR` (`CSI ! p`)
     pub fn soft_reset(&mut self) -> Option<DamageSpan> {
         self.modes.text_cursor.enable = TextCursorEnable::Shown;
+        self.modes.text_cursor.shape = CursorShape::default();
+        self.modes.text_cursor.blink = CursorBlink::default();
         self.modes.insert_replace = InsertReplaceMode::Replace;
         self.modes.app_cursor = false;
         self.modes.keypad_mode = KeypadMode::Numeric;

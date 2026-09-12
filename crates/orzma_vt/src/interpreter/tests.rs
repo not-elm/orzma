@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::device::color::{Color, Rgb};
-use crate::device::modes::{InsertReplaceMode, MouseEncoding, MouseTracking};
+use crate::device::modes::{CursorShape, InsertReplaceMode, MouseEncoding, MouseTracking};
 use crate::frame::Frame;
 use crate::placement::{AnchoredPlacement, InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::cell::Cell;
@@ -122,6 +122,10 @@ impl Session {
 
     fn cursor_blinking(&self) -> bool {
         self.0.device.cursor().blinking
+    }
+
+    fn cursor_shape(&self) -> CursorShape {
+        self.0.device.cursor().shape
     }
 
     fn cursor_column(&self) -> u16 {

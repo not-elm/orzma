@@ -154,6 +154,12 @@ impl TextCursorEnable {
 }
 
 /// The shape the text cursor is drawn with.
+///
+/// Both screens share one value, and `DECSC` does not carry it.
+///
+/// # Control Functions
+///
+/// - `DECSCUSR` (`CSI Ps SP q`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CursorShape {
     /// A block filling the cell; this is the power-up default.
@@ -172,6 +178,7 @@ pub enum CursorShape {
 /// # Control Functions
 ///
 /// - `DECSET 12` / `DECRST 12` (AT&T 610)
+/// - `DECSCUSR` (`CSI Ps SP q`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CursorBlink {
     /// The cursor is drawn continuously; this is the power-up default.
@@ -209,6 +216,41 @@ pub struct TextCursorModes {
     pub shape: CursorShape,
     /// Whether it blinks.
     pub blink: CursorBlink,
+}
+
+impl TextCursorModes {
+    /// The presentation `DECSCUSR` selects for the parameter in its
+    /// first slot; `None` for a parameter this terminal assigns no
+    /// style to.
+    ///
+    /// An omitted parameter, a zero, and a one all select the blinking
+    /// block. A seven restores the power-up shape and blink. The
+    /// cursor's visibility is carried through unchanged.
+    ///
+    /// # References
+    ///
+    /// - vt510.pdf p.251 — "0, 1 or none Blink Block (Default)", and
+    ///   the note that "The escape sequence DECTCEM can enable or
+    ///   disable the cursor display."
+    /// - xterm-ctlseqs.pdf p.29-30 — the bar variants (5 and 6) and
+    ///   "Ps = 7 ⇒ initial resources".
+    pub fn with_decscusr(self, ps: Option<u16>) -> Option<Self> {
+        let (shape, blink) = match ps.unwrap_or(0) {
+            0 | 1 => (CursorShape::Block, CursorBlink::Blinking),
+            2 => (CursorShape::Block, CursorBlink::Steady),
+            3 => (CursorShape::Underline, CursorBlink::Blinking),
+            4 => (CursorShape::Underline, CursorBlink::Steady),
+            5 => (CursorShape::Bar, CursorBlink::Blinking),
+            6 => (CursorShape::Bar, CursorBlink::Steady),
+            7 => (CursorShape::default(), CursorBlink::default()),
+            _ => return None,
+        };
+        Some(Self {
+            shape,
+            blink,
+            ..self
+        })
+    }
 }
 
 /// The mode selects whether the numeric keypad sends ASCII numerals or application function.
@@ -400,5 +442,90 @@ mod tests {
             TextCursorEnable::from_decset(false),
             TextCursorEnable::Hidden
         );
+    }
+
+    /// Asserts that an omitted parameter, a zero, and a one all select
+    /// the blinking block rather than a terminal-specific default.
+    ///
+    /// Case: vim restores the cursor it found by sending `CSI 0 SP q`,
+    /// and a shell prompt framework sends the bare `CSI SP q`.
+    #[test]
+    fn an_omitted_zero_and_one_all_select_the_blinking_block() {
+        let start = TextCursorModes::default();
+        for ps in [None, Some(0), Some(1)] {
+            let next = start.with_decscusr(ps).expect("the parameter is assigned");
+            assert_eq!(next.shape, CursorShape::Block, "ps {ps:?}");
+            assert_eq!(next.blink, CursorBlink::Blinking, "ps {ps:?}");
+        }
+    }
+
+    /// Asserts that each assigned parameter selects its documented
+    /// shape and blink pair.
+    ///
+    /// Case: nvim switches the caret per mode, taking a steady block in
+    /// normal mode and a blinking bar in insert mode.
+    #[test]
+    fn each_assigned_parameter_selects_its_shape_and_blink() {
+        let start = TextCursorModes::default();
+        let expected = [
+            (2, CursorShape::Block, CursorBlink::Steady),
+            (3, CursorShape::Underline, CursorBlink::Blinking),
+            (4, CursorShape::Underline, CursorBlink::Steady),
+            (5, CursorShape::Bar, CursorBlink::Blinking),
+            (6, CursorShape::Bar, CursorBlink::Steady),
+        ];
+        for (ps, shape, blink) in expected {
+            let next = start
+                .with_decscusr(Some(ps))
+                .expect("the parameter is assigned");
+            assert_eq!(next.shape, shape, "ps {ps}");
+            assert_eq!(next.blink, blink, "ps {ps}");
+        }
+    }
+
+    /// Asserts that a seven restores the power-up shape and blink
+    /// rather than being ignored, carrying the cursor's visibility
+    /// through unchanged.
+    ///
+    /// Case: an application that changed the caret hands the terminal
+    /// back by asking for the style it was configured with, while the
+    /// caret is hidden mid-repaint.
+    #[test]
+    fn a_seven_restores_the_power_up_style() {
+        let changed = TextCursorModes {
+            enable: TextCursorEnable::Hidden,
+            ..TextCursorModes::default()
+        }
+        .with_decscusr(Some(5))
+        .expect("the parameter is assigned");
+        let restored = changed
+            .with_decscusr(Some(7))
+            .expect("the parameter is assigned");
+        assert_eq!(restored.shape, TextCursorModes::default().shape);
+        assert_eq!(restored.blink, TextCursorModes::default().blink);
+        assert_eq!(restored.enable, TextCursorEnable::Hidden);
+    }
+
+    /// Asserts that a parameter this terminal assigns no style to
+    /// changes nothing, and that an assigned one leaves the cursor's
+    /// visibility alone.
+    ///
+    /// Case: a full-screen editor hides the caret, then picks a bar
+    /// while it is hidden; a later program sends a parameter from a
+    /// terminal whose style table is longer.
+    #[test]
+    fn an_unassigned_parameter_changes_nothing_and_visibility_is_untouched() {
+        let hidden = TextCursorModes {
+            enable: TextCursorEnable::Hidden,
+            ..TextCursorModes::default()
+        };
+        assert_eq!(hidden.with_decscusr(Some(8)), None);
+        assert_eq!(hidden.with_decscusr(Some(99)), None);
+
+        let barred = hidden
+            .with_decscusr(Some(5))
+            .expect("the parameter is assigned");
+        assert_eq!(barred.enable, TextCursorEnable::Hidden);
+        assert_eq!(barred.shape, CursorShape::Bar);
     }
 }
