@@ -102,24 +102,32 @@ fn an_intermediate_reaches_no_implemented_control_function() {
     const PARAMETERS: &[&str] = &[
         "", "2", "2;3", "1;1", "4", "5", "6", "7", "22", "23", "25", "1049",
     ];
-    const PROBE_PREFIX: &str = "\x1b]0;f\x07\x1b[22tab\r\ncd\x1b[4G\x1bH\x1b[3G";
-    const PROBE_SUFFIX: &str = "\tx\x1b8y";
-    let baseline_chunk = format!("{PROBE_PREFIX}{PROBE_SUFFIX}");
-    let (baseline, baseline_output) = interpret_sized(20, baseline_chunk.as_bytes());
-    for marker in MARKERS {
-        for parameters in PARAMETERS {
-            for final_byte in 0x40..=0x7Eu8 {
-                let sequence = format!("\x1b[{marker}{parameters}${}", final_byte as char);
-                let chunk = format!("{PROBE_PREFIX}{sequence}{PROBE_SUFFIX}");
-                let (device, output) = interpret_sized(20, chunk.as_bytes());
-                let spelling = format!("CSI {marker}{parameters}${}", final_byte as char);
-                assert_same_observable_effect(
-                    &device,
-                    &output,
-                    &baseline,
-                    &baseline_output,
-                    &spelling,
-                );
+    const SEEDS: &[&str] = &["", "\x1b[4h"];
+    const PROBE_SUFFIX: &str = "z\tx\x1b8y\x1b[23t";
+    for seed in SEEDS {
+        let prefix = format!(
+            "\x1b]0;f\x07\x1b[22t\x1b]0;g\x07\x1b[22t\x1b]0;h\x07\x1b[3g{seed}ab\r\ncdef\x1b[6G\x1bH\x1b[2;3H"
+        );
+        let (baseline, baseline_output) =
+            interpret_sized(20, format!("{prefix}{PROBE_SUFFIX}").as_bytes());
+        for marker in MARKERS {
+            for parameters in PARAMETERS {
+                for final_byte in 0x40..=0x7Eu8 {
+                    let sequence = format!("\x1b[{marker}{parameters}${}", final_byte as char);
+                    let chunk = format!("{prefix}{sequence}{PROBE_SUFFIX}");
+                    let (device, output) = interpret_sized(20, chunk.as_bytes());
+                    let spelling = format!(
+                        "CSI {marker}{parameters}${} after {seed:?}",
+                        final_byte as char
+                    );
+                    assert_same_observable_effect(
+                        &device,
+                        &output,
+                        &baseline,
+                        &baseline_output,
+                        &spelling,
+                    );
+                }
             }
         }
     }

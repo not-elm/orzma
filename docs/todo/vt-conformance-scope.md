@@ -196,7 +196,7 @@ STD-070 が LCF をリセットすると規定する操作:
 | EL / ECH | 残す（意図的） | `cursor_parked_past_the_row` が armed かつ DECAWM on かつ最終列のときだけ no-op。GNU grep バグ回避のため tmux/kitty/iTerm2 側を選択 |
 | ED | **読まない** | 未修正。EL と同一カーソル位置で答えが食い違う |
 | DECRST DECAWM | リセットする（両画面の live のみ） | STD-070 と一致。checkpoint には触らない |
-| DECSTR | 残す（意図的） | DECAWM を**有効**に戻す決定により `set_auto_wrap` の **set 方向**を通るので、STD-070 が reset 方向にだけ課す LCF 解除は起きない。調査した実装でソフトリセット時に LCF を解除するものは 1 つも無く（xterm の DECSTR 分岐は `ResetWrap` を呼ばず、foot は hard 分岐でしか `lcf` を落とさない）、上流と整合する。`interpreter/tests/soft_reset.rs` の `a_soft_reset_leaves_an_armed_deferred_wrap_alone` が固定 |
+| DECSTR | live は残す（意図的）／saved は落とす（意図的） | DECAWM を**有効**に戻す決定により `set_auto_wrap` の **set 方向**を通るので、STD-070 が reset 方向にだけ課す LCF 解除は live に対しては起きない。調査した実装でソフトリセット時に live LCF を解除するものは 1 つも無く（xterm の DECSTR 分岐は `ResetWrap` を呼ばず、foot は hard 分岐でしか `lcf` を落とさない）、上流と整合する。**保存側（checkpoint）は別（2026-09-12 決定）**: `Screen::soft_reset` の `checkpoint = Checkpoint::default()` は保存された LCF も落とすので、DECSC → DECSTR → DECRC の順では復元後に武装が残らない。**ここは xterm と食い違う** — xterm の DECSTR 分岐は `CursorSave(xw)` を呼んで `row`/`col` だけを 0 にするため、`CursorSave2` の `sc->wrap_flag = screen->do_wrap` により live の値が保存枠へ入る。vt510 p.277 Table 5-9 も vt220 Table 4-10 も保存カーソルの内訳に wrap flag を挙げておらず規範文が無いこと、この順序を踏むプログラムが実在しないことから、`Checkpoint::default()` のままとする。`a_soft_reset_leaves_an_armed_deferred_wrap_alone`（live）と `a_soft_reset_disarms_the_saved_deferred_wrap`（saved）の 2 本が固定 |
 | RIS | リセットする | `DeviceState::reset` は `VtModes::default()` を直に書くが、その前に両画面を reset するので live も checkpoint も落ちる |
 | DECSC / DECRC | 保存・復元する | STD-070 p.D-14 と一致 |
 

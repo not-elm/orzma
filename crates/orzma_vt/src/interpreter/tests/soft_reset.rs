@@ -246,6 +246,19 @@ fn a_soft_reset_leaves_an_armed_deferred_wrap_alone() {
     assert_eq!(glyph_at(&device, 1, 0), 'e');
 }
 
+/// Asserts that a soft reset disarms the deferred wrap the saved cursor
+/// carried, unlike the armed live one, so a restore prints at the home
+/// position rather than wrapping to the next row.
+///
+/// Case: a program fills a line to the right edge and saves its cursor
+/// with `DECSC`, and the shell resets the terminal before the program
+/// restores it.
+#[test]
+fn a_soft_reset_disarms_the_saved_deferred_wrap() {
+    let device = interpret(b"abcd\x1b7\x1b[!p\x1b8e");
+    assert_eq!(glyph_at(&device, 0, 0), 'e');
+}
+
 /// Asserts that a soft reset leaves the tabulation stops as they are.
 ///
 /// Case: a program clears every tab stop to lay out a table and the
@@ -349,8 +362,8 @@ fn another_intermediate_does_not_reach_the_soft_reset() {
     assert!(!device.cursor().visible);
 }
 
-/// Asserts that a run of intermediates past the parser's cap is
-/// discarded rather than shortened to the two bytes that survive it.
+/// Asserts that a run of intermediates longer than the parser collects
+/// does not reach the soft reset.
 ///
 /// Case: a line of noise on the wire reaches the terminal as
 /// `CSI ! ! ! p` while the caret is hidden.
