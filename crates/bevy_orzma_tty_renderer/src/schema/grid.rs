@@ -2,8 +2,8 @@
 //! content, materialized from the frames applied to it.
 
 use crate::schema::{
-    AnchoredPlacement, CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, Hyperlink,
-    HyperlinkId, HyperlinkUri, Palette, Run, SelectionRange, ViCursor,
+    AnchoredPlacement, CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, HyperlinkId,
+    HyperlinkUri, Palette, Run, SelectionRange, ViCursor,
 };
 use bevy::prelude::*;
 use orzma_vt::prelude::Frame;
@@ -24,8 +24,10 @@ pub struct GridCell {
     pub bg: Color,
     /// Style bitmask, carried over unchanged from [`crate::schema::Run::style`].
     pub style: u16,
-    /// Hyperlink resolved from the grid's retained table, if any.
-    pub hyperlink: Option<Hyperlink>,
+    /// Id of the hyperlink covering this cell, present only when the
+    /// retained table can resolve it. The URI lives in the table, not
+    /// here.
+    pub hyperlink: Option<HyperlinkId>,
 }
 
 impl GridCell {
@@ -251,8 +253,8 @@ impl TerminalCells {
             GridSlot::WideTrailer => row_slots.get(col.checked_sub(1)?)?.cell()?,
             GridSlot::Empty => return None,
         };
-        let link = cell.hyperlink.as_ref()?;
-        Some((link.id, &link.uri))
+        let id = cell.hyperlink?;
+        Some((id, lookup_hyperlink(&self.hyperlinks, id)?))
     }
 
     /// Whether applying `frame` would change these cells.
@@ -371,12 +373,9 @@ fn runs_to_cells(
     let mut out = vec![GridSlot::Empty; width];
     let mut column = 0usize;
     for run in runs {
-        let hyperlink = run.hyperlink_id.and_then(|id| {
-            lookup_hyperlink(hyperlinks, id).map(|uri| Hyperlink {
-                id,
-                uri: uri.clone(),
-            })
-        });
+        let hyperlink = run
+            .hyperlink_id
+            .filter(|id| lookup_hyperlink(hyperlinks, *id).is_some());
         for grapheme in run.text.graphemes(true) {
             let cell_width = grapheme.width().min(2) as u8;
             if cell_width == 0 {
@@ -390,7 +389,7 @@ fn runs_to_cells(
                 fg: run.fg,
                 bg: run.bg,
                 style: run.style.bits(),
-                hyperlink: hyperlink.clone(),
+                hyperlink,
             });
             column += 1;
             if cell_width == 2 && column < width {
@@ -452,17 +451,20 @@ mod tests {
     };
     use orzma_vt::prelude::{DirtyRow, ViewportLine};
 
-    fn cell_with_link(text: &str, link: Option<(u32, &str)>) -> GridCell {
+    fn cell_with_link(text: &str, link: Option<u32>) -> GridCell {
         GridCell {
             text: text.to_string(),
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
             style: 0,
-            hyperlink: link.map(|(id, uri)| Hyperlink {
-                id: HyperlinkId(id),
-                uri: HyperlinkUri::new(uri),
-            }),
+            hyperlink: link.map(HyperlinkId),
         }
+    }
+
+    /// A retained table holding the single entry a linked-cell fixture
+    /// needs, since a cell stores only the id.
+    fn link_table(id: u32, uri: &str) -> Vec<(HyperlinkId, HyperlinkUri)> {
+        vec![(HyperlinkId(id), HyperlinkUri::new(uri))]
     }
 
     fn run_with_link(text: &str, hyperlink_id: Option<HyperlinkId>) -> Run {
@@ -829,9 +831,10 @@ mod tests {
     /// input layer asks which link sits under the pointer.
     #[test]
     fn hyperlink_at_returns_id_and_uri_for_linked_cell() {
-        let cell = cell_with_link("x", Some((7, "https://example")));
+        let cell = cell_with_link("x", Some(7));
         let cells = TerminalCells {
             cells: vec![vec![GridSlot::Cell(cell)]],
+            hyperlinks: link_table(7, "https://example"),
             ..Default::default()
         };
         let (id, uri) = cells.hyperlink_at(0, 0).expect("hyperlink present");
@@ -860,7 +863,7 @@ mod tests {
     /// and the user may hover either half.
     #[test]
     fn hyperlink_at_resolves_both_halves_of_wide_char() {
-        let wide_linked = cell_with_link("あ", Some((7, "https://example")));
+        let wide_linked = cell_with_link("あ", Some(7));
         let trailing = cell_with_link("b", None);
         let cells = TerminalCells {
             cells: vec![vec![
@@ -868,6 +871,7 @@ mod tests {
                 GridSlot::WideTrailer,
                 GridSlot::Cell(trailing),
             ]],
+            hyperlinks: link_table(7, "https://example"),
             ..Default::default()
         };
         let (id, uri) = cells.hyperlink_at(0, 0).expect("left half should resolve");
@@ -891,21 +895,11 @@ mod tests {
             run_with_link("a", Some(HyperlinkId(7))),
             run_with_link("b", Some(HyperlinkId(9))),
         ];
-        let table = vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))];
+        let table = link_table(7, "https://example");
         let slots = runs_to_cells(&runs, 2, &table);
         assert_eq!(
-            slots[0]
-                .cell()
-                .and_then(|c| c.hyperlink.as_ref())
-                .map(|h| h.id),
+            slots[0].cell().and_then(|c| c.hyperlink),
             Some(HyperlinkId(7))
-        );
-        assert_eq!(
-            slots[0]
-                .cell()
-                .and_then(|c| c.hyperlink.as_ref())
-                .map(|h| h.uri.as_str()),
-            Some("https://example")
         );
         assert!(
             slots[1]
@@ -1211,10 +1205,7 @@ mod tests {
             ..quiet_frame()
         });
         assert_eq!(
-            cells.cells[0][0]
-                .cell()
-                .and_then(|c| c.hyperlink.as_ref())
-                .map(|h| h.uri.as_str()),
+            cells.hyperlink_at(0, 0).map(|(_, uri)| uri.as_str()),
             Some("https://earlier")
         );
     }
@@ -1318,7 +1309,7 @@ mod tests {
     /// non-default palette already in place.
     #[test]
     fn a_cells_that_reports_no_difference_is_not_mutated_by_apply() {
-        let linked = cell_with_link("x", Some((7, "https://example")));
+        let linked = cell_with_link("x", Some(7));
         let mut cells = TerminalCells {
             cells: vec![vec![GridSlot::Cell(linked)]],
             hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))],

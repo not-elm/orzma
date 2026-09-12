@@ -507,7 +507,7 @@ impl TerminalParams {
     ///   the entity's overlays.
     fn new(
         view: &TerminalView,
-        cells: &TerminalCells,
+        default_bg: Rgb,
         metrics: &CellMetrics,
         treatment: &PaneTreatment,
         cell_size_px: Vec2,
@@ -525,7 +525,7 @@ impl TerminalParams {
         let (cursor_pos, cursor_style) = view.current_cursor_pos_and_style();
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
             selection_uniforms(view.selection.as_ref(), view.display_offset, view.rows);
-        let bg_padding_color = padding_color(cells.palette.background, fallback);
+        let bg_padding_color = padding_color(default_bg, fallback);
 
         Self {
             grid_size: UVec2::new(cols.max(1), rows.max(1)),
@@ -804,7 +804,7 @@ fn update_terminal_material(
         if let Some(mut mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
                 view,
-                &cells,
+                cells.palette.background,
                 &metrics,
                 &treatment,
                 cell_size_phys,
@@ -969,7 +969,7 @@ fn rebuild_cells(
                         style_flags: u32::from(
                             cell.style | style_from_combining_marks(&cell.text).bits(),
                         ),
-                        hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.0),
+                        hyperlink_id: cell.hyperlink.map_or(0, |id| id.0),
                     };
                     if let Some(target) = state.cpu_cells.get_mut(target) {
                         *target = gpu;
@@ -1106,16 +1106,13 @@ mod tests {
     }
 
     fn cell_with_link(text: &str, link: Option<u32>) -> GridCell {
-        use crate::schema::{Color as CellColor, Hyperlink, HyperlinkId, HyperlinkUri};
+        use crate::schema::{Color as CellColor, HyperlinkId};
         GridCell {
             text: text.to_string(),
             fg: CellColor::DefaultForeground,
             bg: CellColor::DefaultBackground,
             style: 0,
-            hyperlink: link.map(|id| Hyperlink {
-                id: HyperlinkId(id),
-                uri: HyperlinkUri::new("https://example"),
-            }),
+            hyperlink: link.map(HyperlinkId),
         }
     }
 
