@@ -47,9 +47,7 @@ pub struct Frame {
     /// `display_offset` and culls what falls outside the viewport.
     pub placements: Option<Vec<AnchoredPlacement>>,
     /// The live palette symbolic colors resolve against: `None` when
-    /// unchanged. A palette override owes a staged full repaint — the
-    /// emit-time diff guarantees only that a frame is emitted, not
-    /// that it carries rows. The OSC 4 / 104 handler and `RIS` stage it.
+    /// unchanged. A palette override owes a staged full repaint.
     ///
     /// TODO: stage it from the OSC 10 / 11 / 12 handler too, once that
     /// handler lands.

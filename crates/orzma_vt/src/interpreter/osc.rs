@@ -75,12 +75,9 @@ impl PaletteRequest {
     /// # Invariants
     ///
     /// A pair or number that cannot be read is dropped on its own and
-    /// the rest still decode, where xterm stops at the first error. A
-    /// colour number of 256 or more is dropped rather than truncated to
-    /// a byte: xterm reaches its special colors at 256 through 260, and
-    /// a truncated 256 would overwrite slot 0. An unpaired trailing
-    /// number, which is how a command cut short by the parser's
-    /// parameter cap ends, is ignored.
+    /// the rest still decode. A colour number of 256 or more is dropped
+    /// rather than truncated to a byte. An unpaired trailing number is
+    /// ignored.
     pub fn parse(params: &[&[u8]]) -> Vec<Self> {
         match params {
             [b"4", pairs @ ..] => pairs
@@ -112,7 +109,7 @@ impl PaletteRequest {
 /// echoes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OscTerminator {
-    /// BEL (`0x07`), xterm's shorthand terminator.
+    /// BEL (`0x07`).
     Bel,
     /// The string terminator, whether it arrived as `ESC \`, as `0x9C`,
     /// or as any other byte that ends the command.
@@ -127,8 +124,7 @@ impl OscTerminator {
     }
 
     /// The bytes a reply closes with. The string terminator is always
-    /// the seven-bit `ESC \`, because this terminal sends no eight-bit
-    /// controls.
+    /// the seven-bit `ESC \`.
     const fn as_bytes(&self) -> &'static [u8] {
         match self {
             Self::Bel => b"\x07",
@@ -212,13 +208,8 @@ fn is_disallowed(c: char) -> bool {
 }
 
 /// The palette slot a decimal colour number names; `None` for an empty
-/// number, a byte other than a decimal digit, and a value past slot 255,
-/// which the checked arithmetic refuses rather than wraps.
-///
-/// The digits are folded by hand rather than handed to `str::parse`,
-/// which accepts a leading `+` and would read `OSC 4 ; +1 ; ?` as a
-/// query of slot 1. Folding into a `u8` with checked arithmetic is what
-/// refuses 256 and above, so no wider integer is needed.
+/// number, a byte other than a decimal digit, a sign included, and a
+/// value past slot 255.
 fn palette_index(number: &[u8]) -> Option<u8> {
     if number.is_empty() {
         return None;

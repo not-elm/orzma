@@ -101,12 +101,10 @@ impl Rgb {
     ///
     /// # Invariants
     ///
-    /// The grammar is enforced exactly, one step stricter than libX11:
-    /// an `rgb:` string with anything after its third component is
-    /// refused, where libX11 ignores the tail. Surrounding whitespace is
-    /// not trimmed. Color names and the device-independent color spaces
-    /// (`rgbi:`, `CIEXYZ:`, and the rest) are refused, because this
-    /// terminal ships no color name database.
+    /// An `rgb:` string with anything after its third component is
+    /// refused. Surrounding whitespace is not trimmed. Color names and
+    /// the device-independent color spaces (`rgbi:`, `CIEXYZ:`, and the
+    /// rest) are refused.
     pub(crate) fn from_color_spec(spec: &[u8]) -> Option<Self> {
         let [r, g, b] = rgb_device_components(spec)?.map(|component| component.to_be_bytes()[0]);
         Some(Self { r, g, b })
@@ -302,11 +300,7 @@ fn shifted_component(digits: &[u8]) -> Option<u16> {
 }
 
 /// The value of one to four hex digits; `None` for an empty run, a
-/// longer one, or a byte that is not a hex digit.
-///
-/// The digits are folded by hand rather than handed to
-/// `u16::from_str_radix`, which accepts a leading `+` or `-` and would
-/// read `rgb:+f/0/0` as a colour.
+/// longer one, or a byte that is not a hex digit, a sign included.
 fn hex_value(digits: &[u8]) -> Option<u16> {
     if !(1..=4).contains(&digits.len()) {
         return None;
@@ -627,8 +621,7 @@ mod tests {
     }
 
     /// Asserts that an `rgb:` string with more or fewer than three
-    /// components is refused, a trailing fourth included, rather than
-    /// having the tail ignored as libX11 does.
+    /// components is refused, a trailing fourth included.
     ///
     /// Case: a script appends an alpha component, writing
     /// `rgb:ff/ff/ff/ff`, or drops the blue one.

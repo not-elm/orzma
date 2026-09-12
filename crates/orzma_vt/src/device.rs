@@ -109,10 +109,9 @@ impl DeviceState {
     /// The title is cleared too, dropping both the current title and the
     /// whole save stack.
     ///
-    /// The indexed palette returns to its xterm defaults too, as xterm's
-    /// own reset does, and a reset that changes a slot always repaints:
-    /// the palette reaches the renderer only through a frame, and a
-    /// device with nothing printed would otherwise report no repaint.
+    /// The indexed palette returns to its xterm defaults too, and a
+    /// reset that changes a slot reports a full repaint even when
+    /// neither screen was written.
     ///
     /// # Control Functions
     ///
@@ -1006,8 +1005,8 @@ mod tests {
     /// Asserts that resetting a slot restores its xterm default and
     /// leaves the other slots alone.
     ///
-    /// Case: a program restores the one slot it recolored, while the
-    /// slot a theme script recolored earlier must keep its colour.
+    /// Case: a program restores the one slot it recolored, while a
+    /// second slot a theme script recolored earlier is left alone.
     #[test]
     fn resetting_a_slot_restores_its_default_and_leaves_the_others() {
         let mut device = device();
