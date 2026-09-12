@@ -18,8 +18,6 @@ use unicode_width::UnicodeWidthStr;
 pub struct GridCell {
     /// The grapheme cluster text for this cell.
     pub text: String,
-    /// Display width: 2 for wide CJK, 1 otherwise.
-    pub width: u8,
     /// Foreground color, symbolic.
     pub fg: Color,
     /// Background color, symbolic.
@@ -48,6 +46,10 @@ pub enum GridSlot {
     /// The grapheme cluster occupying this column.
     Cell(GridCell),
     /// The right half of the wide cell in the preceding column.
+    ///
+    /// Meaningful only immediately after a [`GridSlot::Cell`] holding a
+    /// double-width grapheme; a producer must not emit it after a
+    /// narrow cell.
     WideTrailer,
 }
 
@@ -384,7 +386,6 @@ fn runs_to_cells(
             }
             out[column] = GridSlot::Cell(GridCell {
                 text: grapheme.to_string(),
-                width: cell_width,
                 fg: run.fg,
                 bg: run.bg,
                 style: run.style.bits(),
@@ -450,10 +451,9 @@ mod tests {
     };
     use orzma_vt::prelude::{DirtyRow, ViewportLine};
 
-    fn cell_with_link(text: &str, width: u8, link: Option<(u32, &str)>) -> GridCell {
+    fn cell_with_link(text: &str, link: Option<(u32, &str)>) -> GridCell {
         GridCell {
             text: text.to_string(),
-            width,
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
             style: 0,
@@ -828,7 +828,7 @@ mod tests {
     /// input layer asks which link sits under the pointer.
     #[test]
     fn hyperlink_at_returns_id_and_uri_for_linked_cell() {
-        let cell = cell_with_link("x", 1, Some((7, "https://example")));
+        let cell = cell_with_link("x", Some((7, "https://example")));
         let cells = TerminalCells {
             cells: vec![vec![GridSlot::Cell(cell)]],
             ..Default::default()
@@ -844,7 +844,7 @@ mod tests {
     /// hyperlink.
     #[test]
     fn hyperlink_at_returns_none_for_unlinked_cell() {
-        let cell = cell_with_link("x", 1, None);
+        let cell = cell_with_link("x", None);
         let cells = TerminalCells {
             cells: vec![vec![GridSlot::Cell(cell)]],
             ..Default::default()
@@ -859,8 +859,8 @@ mod tests {
     /// and the user may hover either half.
     #[test]
     fn hyperlink_at_resolves_both_halves_of_wide_char() {
-        let wide_linked = cell_with_link("あ", 2, Some((7, "https://example")));
-        let trailing = cell_with_link("b", 1, None);
+        let wide_linked = cell_with_link("あ", Some((7, "https://example")));
+        let trailing = cell_with_link("b", None);
         let cells = TerminalCells {
             cells: vec![vec![
                 GridSlot::Cell(wide_linked),
@@ -925,7 +925,6 @@ mod tests {
         let slots = runs_to_cells(&[run_with_link("あz", None)], 4, &[]);
         assert_eq!(slots.len(), 4);
         assert_eq!(slots[0].cell().map(|c| c.text.as_str()), Some("あ"));
-        assert_eq!(slots[0].cell().map(|c| c.width), Some(2));
         assert_eq!(slots[1], GridSlot::WideTrailer);
         assert_eq!(slots[2].cell().map(|c| c.text.as_str()), Some("z"));
         assert_eq!(slots[3], GridSlot::Empty);
@@ -941,7 +940,7 @@ mod tests {
     fn runs_to_cells_stops_a_wide_grapheme_at_the_last_column() {
         let slots = runs_to_cells(&[run_with_link("あ", None)], 1, &[]);
         assert_eq!(slots.len(), 1);
-        assert_eq!(slots[0].cell().map(|c| c.width), Some(2));
+        assert_eq!(slots[0].cell().map(|c| c.text.as_str()), Some("あ"));
     }
 
     /// Asserts that a combining mark inside a grapheme cluster shares
@@ -1318,7 +1317,7 @@ mod tests {
     /// non-default palette already in place.
     #[test]
     fn a_cells_that_reports_no_difference_is_not_mutated_by_apply() {
-        let linked = cell_with_link("x", 1, Some((7, "https://example")));
+        let linked = cell_with_link("x", Some((7, "https://example")));
         let mut cells = TerminalCells {
             cells: vec![vec![GridSlot::Cell(linked)]],
             hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))],

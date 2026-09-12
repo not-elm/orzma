@@ -353,7 +353,6 @@ mod tests {
         let mut row = vec![GridSlot::Empty; 10];
         row[0] = GridSlot::Cell(GridCell {
             text: "x".to_string(),
-            width: 1,
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
             style: 0,

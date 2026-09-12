@@ -974,7 +974,7 @@ fn rebuild_cells(
                     if let Some(target) = state.cpu_cells.get_mut(target) {
                         *target = gpu;
                     }
-                    left_half = (cell.width == 2).then_some(gpu);
+                    left_half = Some(gpu);
                 }
                 // NOTE: For width=2 (CJK / wide) cells we ALSO populate the
                 //       right-half slot with the same glyph_index + fg + bg
@@ -1109,7 +1109,6 @@ mod tests {
         use crate::schema::{Color as CellColor, Hyperlink, HyperlinkId, HyperlinkUri};
         GridCell {
             text: text.to_string(),
-            width: 1,
             fg: CellColor::DefaultForeground,
             bg: CellColor::DefaultBackground,
             style: 0,
@@ -1162,13 +1161,8 @@ mod tests {
     /// plain, unlinked text.
     #[test]
     fn rebuild_cells_pins_wide_combining_and_linked_slots() {
-        let mut wide = cell_with_link("あ", Some(3));
-        wide.width = 2;
-        let combining = {
-            let mut cell = cell_with_link("e\u{0332}", None);
-            cell.width = 1;
-            cell
-        };
+        let wide = cell_with_link("あ", Some(3));
+        let combining = cell_with_link("e\u{0332}", None);
         let plain = cell_with_link("z", None);
         let cells = TerminalCells {
             cells: vec![vec![
