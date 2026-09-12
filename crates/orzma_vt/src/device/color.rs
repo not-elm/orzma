@@ -157,7 +157,7 @@ impl Palette {
 /// The full 256-slot xterm table [`Color::Indexed`] resolves to:
 /// [`ANSI_16`], the 6x6x6 cube on [`CUBE_RAMP`], and the grayscale ramp
 /// from 8 to 238 in steps of 10.
-pub(crate) const XTERM_INDEXED: [Rgb; 256] = build_xterm_indexed();
+pub(crate) static XTERM_INDEXED: [Rgb; 256] = build_xterm_indexed();
 
 /// The default foreground [`Palette`] carries.
 const DEFAULT_FOREGROUND: Rgb = Rgb {

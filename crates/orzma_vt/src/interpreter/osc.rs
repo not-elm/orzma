@@ -123,12 +123,12 @@ impl OscTerminator {
         if byte == 0x07 { Self::Bel } else { Self::St }
     }
 
-    /// The bytes a reply closes with. The string terminator is always
+    /// The text a reply closes with. The string terminator is always
     /// the seven-bit `ESC \`.
-    const fn as_bytes(&self) -> &'static [u8] {
+    const fn as_str(self) -> &'static str {
         match self {
-            Self::Bel => b"\x07",
-            Self::St => b"\x1b\\",
+            Self::Bel => "\x07",
+            Self::St => "\x1b\\",
         }
     }
 }
@@ -141,10 +141,8 @@ impl OscTerminator {
 /// the reply sets the slot back to the same colour.
 pub(crate) fn palette_reply(index: u8, color: Rgb, terminator: OscTerminator) -> Vec<u8> {
     let Rgb { r, g, b } = color;
-    let mut reply =
-        format!("\x1b]4;{index};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}").into_bytes();
-    reply.extend_from_slice(terminator.as_bytes());
-    reply
+    let end = terminator.as_str();
+    format!("\x1b]4;{index};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}{end}").into_bytes()
 }
 
 /// Maximum length, in `char`s, of a sanitized title.
