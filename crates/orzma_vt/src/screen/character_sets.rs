@@ -201,12 +201,6 @@ impl CharacterSetMapping {
 
     /// Restores the power-up designations and invocations, dropping any
     /// pending single shift.
-    ///
-    /// TODO: reach this reset from DECSTR (CSI ! p).
-    #[expect(
-        dead_code,
-        reason = "the executor reaches this reset once DECSTR lands; RIS goes through `Screen::reset`"
-    )]
     pub fn reset(&mut self) {
         *self = Self::default();
     }

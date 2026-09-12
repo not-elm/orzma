@@ -96,6 +96,7 @@ mod scroll_region_up;
 mod seat_cursor;
 mod set_origin_mode;
 mod set_scroll_region;
+mod soft_reset;
 mod tab_stop_edits;
 mod tab_to;
 mod viewport_row;

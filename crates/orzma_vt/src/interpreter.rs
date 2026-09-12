@@ -463,6 +463,11 @@ impl VTActor for Executor<'_> {
             (Some(b'>'), [], b'c') if params.value(0).unwrap_or(0) == 0 => {
                 self.reply(&secondary_attributes())
             }
+            // DECSTR
+            (None, [b'!'], b'p') => {
+                let damage = self.device.soft_reset();
+                self.stage(damage);
+            }
             _ => {}
         }
     }

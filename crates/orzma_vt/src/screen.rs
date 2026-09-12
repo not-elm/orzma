@@ -1147,9 +1147,31 @@ impl Screen {
         self.scroll_region = ScrollRegion::new(self.grid.size().rows);
         self.state = ScreenState::default();
         self.tabs = TabStops::default();
-        self.character_set_mapping = CharacterSetMapping::default();
+        self.character_set_mapping.reset();
         self.checkpoint = Checkpoint::default();
         dirty.then_some(DamageSpan::Full)
+    }
+
+    /// Returns the screen-scoped state a soft reset names to its
+    /// power-up value.
+    ///
+    /// Covers the scrolling margins, the cursor origin, the character
+    /// set mapping, the SGR pen and the saved cursor. The margins and
+    /// the origin return to their defaults without seating the cursor
+    /// at the resulting home.
+    ///
+    /// The cells, the cursor position, the deferred wrap, the
+    /// tabulation stops, the selection and the placements are left as
+    /// they are.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECSTR` (`CSI ! p`) — its screen-scoped actions
+    pub fn soft_reset(&mut self) {
+        self.scroll_region = ScrollRegion::new(self.grid.size().rows);
+        self.character_set_mapping.reset();
+        self.state.pen = Pen::default();
+        self.checkpoint = Checkpoint::default();
     }
 
     /// Resizes the grid, truncating rather than reflowing; `None` when

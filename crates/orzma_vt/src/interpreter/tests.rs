@@ -163,6 +163,7 @@ mod private_modes;
 mod reset;
 mod reverse_index;
 mod sgr;
+mod soft_reset;
 mod tabulation;
 mod text_cursor_enable;
 mod title;
