@@ -107,8 +107,8 @@ impl DeviceState {
     /// The title is cleared too, dropping both the current title and the
     /// whole save stack.
     ///
-    /// The indexed palette returns to its xterm defaults too, and a
-    /// reset that changes a slot reports a full repaint even when
+    /// The whole palette returns to its built-in defaults too, and a
+    /// reset that changes a color reports a full repaint even when
     /// neither screen was written.
     ///
     /// # Control Functions
@@ -126,7 +126,7 @@ impl DeviceState {
         // `set_auto_wrap` instead.
         self.modes = VtModes::default();
         self.title = TitleState::default();
-        let palette_changed = self.reset_indexed_colors();
+        let palette_changed = self.palette.reset();
         (was_showing_alternate || primary.is_some() || palette_changed).then_some(DamageSpan::Full)
     }
 

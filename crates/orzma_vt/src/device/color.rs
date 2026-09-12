@@ -160,17 +160,27 @@ impl Palette {
         self.set_indexed(index, Self::XTERM_INDEXED[usize::from(index)])
     }
 
-    /// Returns every slot to its built-in default; returns whether any
-    /// slot changed.
-    ///
-    /// TODO: return `foreground` and `background` to their defaults too,
-    /// once the OSC 10 / 11 / 12 handlers set them.
+    /// Returns every slot to its built-in default, leaving
+    /// [`Palette::foreground`] and [`Palette::background`] alone;
+    /// returns whether any slot changed.
     pub fn reset_all_indexed(&mut self) -> bool {
         let indexed = &mut *self.indexed;
         if *indexed == Self::XTERM_INDEXED {
             return false;
         }
         *indexed = Self::XTERM_INDEXED;
+        true
+    }
+
+    /// Returns every color the palette holds — the indexed slots, the
+    /// foreground, and the background — to its built-in default; returns
+    /// whether anything changed.
+    pub fn reset(&mut self) -> bool {
+        let default = Self::default();
+        if *self == default {
+            return false;
+        }
+        *self = default;
         true
     }
 }
@@ -509,6 +519,44 @@ mod tests {
         assert!(palette.reset_all_indexed());
         assert_eq!(*palette.indexed, Palette::XTERM_INDEXED);
         assert!(!palette.reset_all_indexed());
+    }
+
+    /// Asserts that resetting every slot leaves the foreground and the
+    /// background as they were.
+    ///
+    /// Case: the terminal is running with a customized default
+    /// background when a theme script sends a bare `OSC 104` to restore
+    /// the indexed table.
+    #[test]
+    fn resetting_every_slot_leaves_the_default_colors_alone() {
+        let mut palette = Palette {
+            foreground: rgb(1, 2, 3),
+            background: rgb(4, 5, 6),
+            ..Palette::default()
+        };
+        palette.set_indexed(0, rgb(7, 8, 9));
+        assert!(palette.reset_all_indexed());
+        assert_eq!(palette.foreground, rgb(1, 2, 3));
+        assert_eq!(palette.background, rgb(4, 5, 6));
+    }
+
+    /// Asserts that a full reset restores the foreground and the
+    /// background alongside the indexed slots, and reports no change on
+    /// a palette that already holds the defaults.
+    ///
+    /// Case: the user hits the shortcut that sends `RIS` after a theme
+    /// script recolored both a slot and the default background.
+    #[test]
+    fn a_full_reset_restores_every_color() {
+        let mut palette = Palette {
+            foreground: rgb(1, 2, 3),
+            background: rgb(4, 5, 6),
+            ..Palette::default()
+        };
+        palette.set_indexed(7, rgb(8, 9, 10));
+        assert!(palette.reset());
+        assert_eq!(palette, Palette::default());
+        assert!(!palette.reset());
     }
 
     /// Asserts that each color variant resolves against its designated
