@@ -181,7 +181,8 @@ fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
 }
 
 /// Read-only hit-test context for one gather run: the terminal node
-/// geometry, cell pitch, and grid dimensions.
+/// geometry, cell pitch, the view's dimensions, and the cells a
+/// hyperlink lookup resolves against.
 struct CellContext<'a> {
     node: &'a ComputedNode,
     transform: &'a UiGlobalTransform,

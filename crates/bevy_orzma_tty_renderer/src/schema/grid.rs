@@ -449,7 +449,7 @@ mod tests {
     use super::*;
     use crate::schema::{
         Color, Cursor, CursorShape, GridColumn, GridLine, GridPoint, Hyperlink, InstanceId,
-        PlacementSize, Rgb, Row, Style,
+        PlacementSize, Rgb, Row, SelectionGeometry, Style,
     };
     use orzma_vt::prelude::{DirtyRow, ViewportLine};
 
@@ -717,11 +717,62 @@ mod tests {
     /// Asserts that a frame the view reports no difference for leaves
     /// every view field untouched.
     ///
-    /// Case: a frame repeats the viewport state the view already holds.
+    /// Case: a frame repeats the viewport state the view already holds,
+    /// with the cursor away from the origin, a vi cursor active, a
+    /// selection in progress, and the viewport scrolled into history.
     #[test]
     fn a_view_that_reports_no_difference_is_not_mutated_by_apply() {
-        let mut view = TerminalView::settled();
-        let frame = quiet_frame();
+        let cursor = Cursor {
+            point: GridPoint {
+                line: GridLine(2),
+                column: GridColumn(3),
+            },
+            ..Cursor::default()
+        };
+        let vi_cursor = ViCursor {
+            point: GridPoint {
+                line: GridLine(4),
+                column: GridColumn(5),
+            },
+        };
+        let selection = SelectionRange {
+            start: GridPoint {
+                line: GridLine(0),
+                column: GridColumn(0),
+            },
+            end: GridPoint {
+                line: GridLine(1),
+                column: GridColumn(2),
+            },
+            geometry: SelectionGeometry::Linear,
+        };
+        let placed = AnchoredPlacement {
+            id: InstanceId(9),
+            point: GridPoint {
+                line: GridLine(1),
+                column: GridColumn(1),
+            },
+            size: PlacementSize { rows: 1, cols: 1 },
+        };
+        let mut view = TerminalView {
+            cols: 7,
+            rows: 6,
+            cursor: Some(cursor),
+            vi_cursor: Some(vi_cursor),
+            selection: Some(selection),
+            display_offset: 4,
+            placements: vec![placed],
+            ..Default::default()
+        };
+        let frame = Frame {
+            size: GridSize { cols: 7, rows: 6 },
+            cursor,
+            display_offset: DisplayOffset(4),
+            vi_cursor: Some(vi_cursor),
+            selection: Some(selection),
+            placements: Some(vec![placed]),
+            ..quiet_frame()
+        };
         assert!(!view.differs_from(&frame));
         let before = (
             view.cols,
@@ -944,7 +995,10 @@ mod tests {
     /// VT's bootstrap repaint arrives at that same size.
     #[test]
     fn a_pre_sized_grid_without_cells_takes_the_frame_rows() {
-        let mut cells = TerminalCells::default();
+        let mut cells = TerminalCells {
+            cells: vec![vec![], vec![]],
+            ..Default::default()
+        };
         let frame = Frame {
             size: GridSize { cols: 2, rows: 2 },
             rows: vec![dirty_row(0, "a"), dirty_row(1, "b")],
@@ -1249,10 +1303,20 @@ mod tests {
     /// Asserts that a frame the cells report no difference for leaves
     /// the cells, hyperlinks and palette untouched.
     ///
-    /// Case: a frame repeats the content state the cells already hold.
+    /// Case: a frame repeats the content state the cells already hold,
+    /// with a linked cell, its hyperlink table entry, and a
+    /// non-default palette already in place.
     #[test]
     fn a_cells_that_reports_no_difference_is_not_mutated_by_apply() {
-        let mut cells = TerminalCells::settled();
+        let linked = cell_with_link("x", 1, Some((7, "https://example")));
+        let mut cells = TerminalCells {
+            cells: vec![vec![GridSlot::Cell(linked)]],
+            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))],
+            palette: Palette {
+                background: Rgb { r: 9, g: 8, b: 7 },
+                ..Palette::default()
+            },
+        };
         let frame = quiet_frame();
         assert!(!cells.differs_from(&frame));
         let before = (

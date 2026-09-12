@@ -250,6 +250,30 @@ mod tests {
         assert!(app.world().get::<TerminalCells>(bare).is_none());
     }
 
+    /// Asserts that a frame addressed to an entity carrying only one of
+    /// the two components is ignored, leaving that component unmutated.
+    ///
+    /// Case: an entity carries a view but has not (or no longer) been
+    /// given cells, so the query the observer reads cannot match it.
+    #[test]
+    fn a_frame_for_an_entity_with_only_one_component_is_ignored() {
+        let mut app = App::new();
+        app.add_plugins(TerminalGridPlugin);
+        let terminal = app.world_mut().spawn(TerminalView::settled()).id();
+        let mut frame = quiet_frame();
+        frame.cursor = Cursor {
+            point: GridPoint {
+                line: GridLine(0),
+                column: GridColumn(4),
+            },
+            ..Cursor::default()
+        };
+        app.world_mut().trigger(TtyFrameSignal { terminal, frame });
+        let view = app.world().get::<TerminalView>(terminal).unwrap();
+        assert_eq!(view.cursor, Some(Cursor::default()));
+        assert!(app.world().get::<TerminalCells>(terminal).is_none());
+    }
+
     /// Asserts that a frame signalled at an `OrzmuxPane` entity lands in
     /// both the view and the cells the required components gave it.
     ///
