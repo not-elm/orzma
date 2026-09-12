@@ -1,12 +1,6 @@
-//! Shared CEF pointer routing helpers for the router: forwards left
-//! press/release and pointer motion to the inline CEF child under the cursor, on
-//! ANY `OrzmaTerminal` surface. The router system
-//! (`crate::input::mouse::webview::router`) resolves which surface is
-//! under the cursor — the single shell surface — and then delegates the
-//! CEF forwarding + focus to the helpers here. Inline webviews are Node/Mesh-free
-//! `ChildOf` children (`bevy_orzma_webview`), so `bevy_cef`'s native picking cannot
-//! reach them; this manual forwarding is the only path that delivers clicks to
-//! them.
+//! Shared CEF pointer routing for the inline webview children `bevy_cef`'s
+//! native picking cannot reach: forwards left press/release and pointer
+//! motion to the CEF child under the cursor.
 
 use crate::input::mouse::cell_dims;
 use crate::surface::OrzmaTerminal;
@@ -27,7 +21,7 @@ use bevy_orzma_webview::{
 
 mod router;
 
-/// Registers the shared webview pointer resource and the webview router.
+/// Adds webview pointer routing for inline CEF children.
 pub(super) struct MouseWebviewPlugin;
 
 impl Plugin for MouseWebviewPlugin {
@@ -44,10 +38,10 @@ impl Plugin for MouseWebviewPlugin {
 #[derive(Resource, Default)]
 pub(in crate::input::mouse) struct WebviewPress(pub Option<Entity>);
 
-/// Queries/resources the webview routing needs, bundled to stay within Bevy's
-/// system-parameter limit. The surface-geometry lookup is `With<OrzmaTerminal>`,
-/// matching every terminal surface. `focused_webview` / `browsers` are optional
-/// so CEF-less tests construct it (state effects still apply).
+/// Queries and resources the webview routing needs. The surface-geometry
+/// lookup is `With<OrzmaTerminal>`, matching every terminal surface.
+/// `focused_webview` and `browsers` are optional; other state effects
+/// still apply when either is absent.
 #[derive(SystemParam)]
 pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
     focused_webview: Option<ResMut<'w, FocusedWebview>>,
@@ -64,13 +58,13 @@ pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
 /// `(terminal, local_phys)`, returning `true` when the event was CONSUMED and
 /// must NOT reach the host's terminal mouse pipeline.
 ///
-/// A press inside an interactive rect sets `FocusedWebview`, issues the UNGATED
-/// `set_focus` BEFORE the gated `send_mouse_click` (CEF drops clicks to a
-/// browser with no `focused_frame()`, so the first click would otherwise be
-/// swallowed), forwards the press in DIP, and records the in-flight press. A
-/// press outside every rect clears an inline `FocusedWebview` and returns
-/// `false` (so the press falls through to the terminal). Release forwards the
-/// click-up to the recorded child (drift-tolerant) and clears.
+/// A press inside an interactive rect sets `FocusedWebview`, issues the
+/// UNGATED `set_focus` before the gated `send_mouse_click` so the first
+/// click is not swallowed by an unfocused browser, forwards the press in
+/// DIP, and records the in-flight press. A press outside every rect
+/// clears an inline `FocusedWebview` and returns `false` (so the press
+/// falls through to the terminal). Release forwards the click-up to the
+/// recorded child (drift-tolerant) and clears.
 #[expect(
     clippy::too_many_arguments,
     reason = "inline routing needs the webview press state, route params, and pointer geometry"
@@ -138,11 +132,12 @@ pub(in crate::input::mouse) fn route_webview_left_click(
     }
 }
 
-/// Releases an in-flight webview press to CEF (mouse-up at the last cursor) and
-/// clears the marker. Called on the suppressed path (modal open / window
-/// unfocused) so the focused web page is not left logically pressed with no
-/// matching mouse-up. `cursor_phys` is `None` when there is no placeable cursor
-/// (off-window): then the press is dropped WITHOUT a CEF mouse-up.
+/// Releases an in-flight webview press to CEF (mouse-up at the last
+/// cursor) and clears the marker. Call this when input is suppressed (a
+/// modal opens, or the window loses focus), so the focused web page is
+/// not left logically pressed with no matching mouse-up. `cursor_phys` is
+/// `None` when there is no placeable cursor (off-window): then the press
+/// is dropped WITHOUT a CEF mouse-up.
 pub(in crate::input::mouse) fn release_webview_press(
     webview_press: &mut WebviewPress,
     route: &WebviewRouteParams,
@@ -191,11 +186,8 @@ pub(in crate::input::mouse) fn webview_pointer_frame(
     }
 }
 
-/// The queries, browsers handle, and held buttons `forward_webview_move_at`
-/// forwards through to `forward_webview_move`, bundled as one borrowed struct so
-/// the wrapper takes a single reference instead of expanded positional args
-/// (which would re-trip `clippy::too_many_arguments`). Both mode move systems own
-/// these params and borrow them into this bundle each frame.
+/// The queries, browsers handle, and held buttons needed to forward pointer
+/// motion to an inline CEF child.
 pub(in crate::input::mouse) struct WebviewMoveDeps<'a> {
     pub children: &'a Query<'a, 'a, &'static Children>,
     pub webviews: &'a Query<'a, 'a, (&'static Webview, Has<NonInteractive>)>,
@@ -231,11 +223,11 @@ pub(in crate::input::mouse) fn forward_webview_move_at(
     );
 }
 
-/// The inline webview child that should receive a wheel event for a resolved
-/// `(terminal, local_phys)`, with the pointer in webview-local DIP — `Some` only
-/// when the FOCUSED webview of `terminal` is the interactive rect under the
-/// cursor (CEF's `send_mouse_wheel` is focus-gated, so an unfocused rect cannot
-/// usefully receive it). `None` cedes the wheel to terminal scrollback.
+/// The inline webview child that should receive a wheel event for a
+/// resolved `(terminal, local_phys)`, with the pointer in webview-local
+/// DIP — `Some` only when the FOCUSED webview of `terminal` is the
+/// interactive rect under the cursor, since an unfocused rect cannot
+/// usefully receive it. `None` cedes the wheel to terminal scrollback.
 #[expect(
     clippy::too_many_arguments,
     reason = "wheel targeting needs the focus state, inline queries, and pointer geometry"
@@ -302,13 +294,11 @@ fn webview_release_dip(
     )
 }
 
-/// Forwards pointer motion over an interactive inline rect of `terminal` to the
-/// child's CEF browser (`send_mouse_move`, webview-local DIP), forwarding
-/// whatever mouse buttons are held so one call serves both hover and an in-rect
-/// drag. Focus-gated inside `bevy_cef`, so motion over an unfocused browser is
-/// dropped browser-side. Takes granular query refs (not `WebviewRouteParams`)
-/// because the mode move systems read `ButtonInput<MouseButton>`, which the
-/// click `SystemParam` does not carry.
+/// Forwards pointer motion over an interactive inline rect of `terminal`
+/// to the child's CEF browser (`send_mouse_move`, webview-local DIP),
+/// forwarding whatever mouse buttons are held so one call serves both
+/// hover and an in-rect drag. Motion over an unfocused browser is dropped
+/// browser-side.
 #[expect(
     clippy::too_many_arguments,
     reason = "the move forward needs the inline queries, browsers, held buttons, and pointer geometry"

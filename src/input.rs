@@ -1,5 +1,5 @@
-//! Root of the host input pipeline: keyboard, mouse, focus, gesture and
-//! binding primitives, IME, hyperlink-hover, shortcuts, and option-as-alt.
+//! Root of the host input pipeline, turning window input events into
+//! terminal input and UI focus state.
 
 mod bindings;
 pub(crate) mod focus;
@@ -34,8 +34,8 @@ pub(crate) enum InputPhase {
     FocusedKey,
 }
 
-/// Bevy Plugin that registers the host input pipeline (keyboard, mouse, IME,
-/// focus gates, hyperlink hover, shortcuts).
+/// The host input pipeline: keyboard, mouse, IME, focus gates, hyperlink
+/// hover, and shortcuts.
 pub struct OrzmaInputPlugin;
 
 impl Plugin for OrzmaInputPlugin {
@@ -64,8 +64,7 @@ impl Plugin for OrzmaInputPlugin {
 
 /// Returns the current modifier state from the `ButtonInput<KeyCode>` resource.
 ///
-/// The result is stable within a single Update tick because `ButtonInput`
-/// is updated in `PreUpdate`.
+/// The result is stable within a single Update tick.
 pub(crate) fn current_modifiers(keys: &ButtonInput<KeyCode>) -> Modifiers {
     Modifiers {
         ctrl: keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),

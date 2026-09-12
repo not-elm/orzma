@@ -1,16 +1,6 @@
-//! Webview pointer routing for the shell surface: forwards left press/release
-//! and pointer motion to the inline CEF child under the cursor on the single
-//! shell surface, via the core in
-//! `crate::input::mouse::webview`.
-//!
-//! The pointer system runs EVERY frame (not message-gated) so an in-flight
-//! press is released when input is suppressed (window unfocused), never
-//! leaving CEF logically pressed. Double-handling with the
-//! terminal's `dispatch_mouse_buttons` is avoided by the `MouseDisabled`
-//! rect-claim gate in `crate::input::focus::maintain_input_gates`: over an
-//! interactive rect the shell is `MouseDisabled` (dispatch yields, the webview
-//! gets the click); off-rect the press clears webview focus here and falls
-//! through to the terminal.
+//! Webview pointer routing for the shell surface: forwards left
+//! press/release and pointer motion to the inline CEF child under the
+//! cursor.
 
 use crate::input::InputPhase;
 use crate::input::mouse::cell_dims;
@@ -32,8 +22,7 @@ use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzma_tty_renderer::prelude::TerminalOverlays;
 use bevy_orzma_webview::{NonInteractive, Webview};
 
-/// Registers the webview pointer systems. The shared
-/// `WebviewPress` resource is owned by the parent `MouseWebviewPlugin`.
+/// Adds the webview pointer-forwarding systems for the shell surface.
 pub(super) struct MouseWebviewRouterPlugin;
 
 impl Plugin for MouseWebviewRouterPlugin {
@@ -54,10 +43,10 @@ impl Plugin for MouseWebviewRouterPlugin {
     }
 }
 
-/// Forwards left press/release to the inline CEF child under the cursor on the
-/// shell surface. Runs EVERY frame: a suppressed frame (window unfocused)
-/// drains the reader and releases an in-flight press so the focused page is
-/// not left logically pressed.
+/// Forwards left press/release to the inline CEF child under the cursor
+/// on the shell surface. A suppressed frame (window unfocused) drains the
+/// reader and releases an in-flight press so the focused page is not left
+/// logically pressed.
 fn route_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
@@ -170,12 +159,13 @@ fn forward_webview_mouse_moves(
     );
 }
 
-/// Forwards the mouse wheel to the FOCUSED inline webview under the cursor on the
-/// shell surface (raw CEF wheel, focus-gated). When no focused webview is under
-/// the pointer the reader is drained and the wheel cedes to
-/// `crate::input::mouse::wheel::dispatch_mouse_wheel` (terminal scrollback) through its own
-/// reader; over the rect the shell is `MouseDisabled` (rect-claim gate), so that
-/// dispatcher yields and only the page scrolls. Gated to wheel frames.
+/// Forwards the mouse wheel to the FOCUSED inline webview under the
+/// cursor on the shell surface (raw CEF wheel, focus-gated). When no
+/// focused webview is under the pointer the reader is drained and the
+/// wheel cedes to `crate::input::mouse::wheel::dispatch_mouse_wheel`
+/// (terminal scrollback) through its own reader; over the rect the shell
+/// is `MouseDisabled` (rect-claim gate), so that dispatcher yields and
+/// only the page scrolls.
 fn forward_webview_wheel(
     mut wheel: MessageReader<MouseWheel>,
     focused_webview: Res<FocusedWebview>,

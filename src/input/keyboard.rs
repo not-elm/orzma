@@ -1,8 +1,5 @@
-//! Host keyboard input primitives: registers the `KeyboardInput` message stream
-//! and provides the key/modifier mapping helpers used elsewhere in the input
-//! pipeline — `bevy_key_to_terminal_key` (the Default applier's raw-key
-//! forwarding) and `current_terminal_modifiers` (the Default applier plus the
-//! mouse dispatch).
+//! Host keyboard input primitives: maps host key/modifier state to the
+//! terminal's encoding.
 
 use crate::input::current_modifiers;
 use crate::input::keyboard::handler::KeyboardHandlerPlugin;
@@ -14,7 +11,7 @@ use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
 mod handler;
 pub mod key_effect;
 
-/// Registers the `KeyboardInput` message stream.
+/// Adds the `KeyboardInput` message stream.
 pub(super) struct KeyboardInputPlugin;
 
 impl Plugin for KeyboardInputPlugin {
@@ -175,7 +172,7 @@ mod tests {
 
     /// Asserts an empty character payload maps to `None` rather than a
     /// zero-length `TerminalKey::Character`, since `KeyText` cannot represent
-    /// empty text (D12 of the engine-swap design).
+    /// empty text.
     ///
     /// Case: a platform IME or compose sequence delivers a `Key::Character`
     /// event carrying an empty string.

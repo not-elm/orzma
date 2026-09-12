@@ -1,6 +1,4 @@
-//! Click, wheel, and drag gesture primitives (multi-click tracking, drag-phase
-//! state, and wheel-notch accumulation) consumed by the shared mouse dispatch in
-//! `crate::input::mouse`.
+//! Click, wheel, and drag gesture primitives.
 
 use crate::input::mouse::button::MouseButtonKind;
 use bevy::input::mouse::MouseScrollUnit;
@@ -154,8 +152,8 @@ pub(in crate::input::mouse) fn accumulate_notches(
     notches
 }
 
-/// Dominant-axis lock for a single frame's `(vertical, horizontal)` cell delta,
-/// Alacritty-style: keeps the axis the gesture is travelling along and zeros the
+/// Dominant-axis lock for a single frame's `(vertical, horizontal)` cell
+/// delta: keeps the axis the gesture is travelling along and zeros the
 /// other, so trackpad jitter on the off-axis cannot leak a stray notch.
 ///
 /// `ratio` is the share of the gesture's magnitude the horizontal component must

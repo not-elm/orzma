@@ -1,8 +1,6 @@
 //! The single key-effect dispatcher: reads `KeyEffectMessage` in press
-//! order and, for each effect, `commands.trigger`s the matching event —
-//! vi-mode entry, paste, copy, pane split/select/kill, or typed input —
-//! so the mux backend receives every effect in the order the keys were
-//! pressed.
+//! order and triggers the matching event for each effect, so the mux
+//! backend receives every effect in the order the keys were pressed.
 
 use crate::input::keyboard::terminal_modifiers;
 use crate::{
@@ -43,8 +41,6 @@ impl Plugin for ShortcutsApplyPlugin {
 /// Applies the frame's key effects in press order: shortcuts, vi-mode
 /// keys, and typed keys all go through `commands.trigger`, never a
 /// direct backend send, so the mux receives them in this order.
-/// Registered in `ShortcutSet::Apply`, gated on
-/// `on_message::<KeyEffectMessage>`.
 fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffectMessage>) {
     for msg in effects.read() {
         match &msg.effect {
@@ -81,9 +77,11 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
 /// fires outside vi mode; a leader paste fires unconditionally), copy
 /// (fires unconditionally — vi mode included; no-selection is a no-op
 /// downstream), and the pane actions (select/split/kill, targeting the
-/// backend's active pane). Window actions and `Quit` /
-/// `ReleaseWebviewFocus` (handled upstream in `resolve_key_effects`) are
-/// no-ops until the built-in multiplexer grows window support.
+/// backend's active pane). Window actions are no-ops; `Quit` and
+/// `ReleaseWebviewFocus` are handled upstream in `resolve_key_effects`.
+///
+/// TODO: implement window actions once the built-in multiplexer supports
+/// windows.
 fn apply_shortcut(
     commands: &mut Commands,
     action: Shortcut,
@@ -131,8 +129,7 @@ fn apply_shortcut(
 }
 
 /// Converts `orzma_configs`' shortcut-facing pane direction to the mux
-/// backend's. The two crates must not depend on each other, so orphan
-/// rules forbid a `From` impl here; this match is the conversion.
+/// backend's.
 fn pane_direction(direction: ConfigPaneDirection) -> OrzmuxPaneDirection {
     match direction {
         ConfigPaneDirection::Left => OrzmuxPaneDirection::Left,
@@ -143,7 +140,7 @@ fn pane_direction(direction: ConfigPaneDirection) -> OrzmuxPaneDirection {
 }
 
 /// Converts `orzma_configs`' shortcut-facing split orientation to the mux
-/// backend's, for the same orphan-rule reason as `pane_direction`.
+/// backend's.
 fn split_orientation(orientation: ConfigSplitOrientation) -> OrzmuxSplitOrientation {
     match orientation {
         ConfigSplitOrientation::Vertical => OrzmuxSplitOrientation::Vertical,
