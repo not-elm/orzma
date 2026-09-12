@@ -57,8 +57,8 @@ pub struct Frame {
     /// The live palette symbolic colors resolve against: `None` when
     /// unchanged. A palette override owes a staged full repaint — the
     /// emit-time diff guarantees only that a frame is emitted, not
-    /// that it carries rows — an obligation on the future
-    /// OSC 4 / 10 / 11 / 12 handler.
+    /// that it carries rows. The OSC 4 / 104 handler and `RIS` stage
+    /// it; the future OSC 10 / 11 / 12 handler owes the same.
     pub palette: Option<Palette>,
     /// Definitions for hyperlink ids referenced by `rows`, merged into
     /// the consumer's retained table. Reserved: empty until the

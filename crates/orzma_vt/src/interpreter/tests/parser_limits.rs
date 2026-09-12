@@ -2,6 +2,7 @@
 //! parameters survive, and what an intermediate byte disqualifies.
 
 use super::*;
+use crate::device::color::Palette;
 
 /// Asserts that a parameter list long enough to hit the parser's
 /// own cap loses its tail, which this terminal cannot detect.
@@ -65,4 +66,19 @@ fn a_truncated_intermediate_does_not_reach_the_scroll_region() {
         device.active_screen().viewport_row(ViewportLine(2))[1].c,
         'b'
     );
+}
+
+/// Asserts that an `OSC 4` carrying more pairs than the parser's
+/// parameter cap applies its first thirty-one pairs and loses the rest,
+/// which this terminal cannot detect.
+///
+/// Case: a theme script recolors thirty-two slots in one command.
+#[test]
+fn an_osc_4_past_the_parser_cap_loses_its_thirty_second_pair() {
+    let pairs: String = (0..32)
+        .map(|index| format!(";{index};rgb:01/02/03"))
+        .collect();
+    let device = interpret(format!("\x1b]4{pairs}\x07").as_bytes());
+    assert_eq!(device.palette().indexed[30], Rgb { r: 1, g: 2, b: 3 });
+    assert_eq!(device.palette().indexed[31], Palette::default().indexed[31]);
 }

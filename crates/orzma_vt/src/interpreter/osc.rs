@@ -1,7 +1,8 @@
 //! The operating system commands this terminal implements.
 //!
-//! The window title (OSC 0 and OSC 2) and the working directory (OSC 7)
-//! are implemented; the palette, hyperlinks, and the clipboard land
+//! The window title (OSC 0 and OSC 2), the working directory (OSC 7),
+//! and the indexed palette (OSC 4 and OSC 104) are implemented; the
+//! dynamic colors (OSC 10 / 11 / 12), hyperlinks, and the clipboard land
 //! later.
 
 use crate::device::color::Rgb;

@@ -15,7 +15,9 @@ mod sgr;
 use crate::device::modes::{AutoWrap, InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable};
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
-use crate::interpreter::osc::{current_dir, window_title};
+use crate::interpreter::osc::{
+    OscTerminator, PaletteRequest, current_dir, palette_reply, window_title,
+};
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::screen::tabs::CharacterTabEdit;
@@ -62,8 +64,16 @@ impl Interpreter {
             sync: &mut self.sync,
             device,
             tracker,
+            current_byte: 0,
         };
-        self.parser.parse(chunk, &mut executor);
+        for &byte in chunk {
+            // NOTE: `current_byte` must be written before `parse_byte`
+            // runs, because vtparse calls `osc_dispatch` while it
+            // consumes the byte that ends the command. Writing it
+            // afterwards would close each reply with the byte before.
+            executor.current_byte = byte;
+            self.parser.parse_byte(byte, &mut executor);
+        }
         executor.sweep_evictions();
         executor.output.damaged |= cursor_before != executor.device.cursor();
     }
@@ -99,6 +109,10 @@ struct Executor<'a> {
     sync: &'a mut SyncBuffer,
     device: &'a mut DeviceState,
     tracker: &'a mut FrameTracker,
+    /// The byte the parser is consuming. vtparse runs a dispatch
+    /// callback while it consumes the byte that ends the sequence, so
+    /// `osc_dispatch` reads the command's terminator here.
+    current_byte: u8,
 }
 
 impl VTActor for Executor<'_> {
@@ -463,8 +477,8 @@ impl VTActor for Executor<'_> {
         }
     }
 
-    // TODO: Implement the remaining OSC handlers — the palette (OSC 4 /
-    // 10 / 11 / 12), hyperlinks (OSC 8), and the clipboard (OSC 52).
+    // TODO: Implement the remaining OSC handlers — the dynamic colors
+    // (OSC 10 / 11 / 12), hyperlinks (OSC 8), and the clipboard (OSC 52).
     fn osc_dispatch(&mut self, params: &[&[u8]]) {
         if let Some(title) = window_title(params) {
             self.device.set_title(Some(title.clone()));
@@ -473,6 +487,7 @@ impl VTActor for Executor<'_> {
         if let Some(path) = current_dir(params) {
             self.signal(VtSignal::CurrentDir(path));
         }
+        self.apply_palette_requests(params);
     }
 
     fn apc_dispatch(&mut self, data: Vec<u8>) {
@@ -580,6 +595,36 @@ impl Executor<'_> {
         match restored {
             Some(title) => self.signal(VtSignal::Title(title)),
             None => self.signal(VtSignal::ResetTitle),
+        }
+    }
+
+    /// Applies the palette requests an `OSC 4` or `OSC 104` carries, in
+    /// order, answering each query with the slot's colour at that
+    /// point.
+    ///
+    /// A command that changes a slot stages one full repaint:
+    /// `Frame::palette` obliges a palette change to, because the
+    /// emit-time diff only guarantees a frame, not that it carries rows.
+    fn apply_palette_requests(&mut self, params: &[&[u8]]) {
+        let terminator = OscTerminator::from_byte(self.current_byte);
+        let mut changed = false;
+        for request in PaletteRequest::parse(params) {
+            match request {
+                PaletteRequest::Set { index, color } => {
+                    changed |= self.device.set_indexed_color(index, color);
+                }
+                PaletteRequest::Reset { index } => {
+                    changed |= self.device.reset_indexed_color(index);
+                }
+                PaletteRequest::ResetAll => changed |= self.device.reset_indexed_colors(),
+                PaletteRequest::Query { index } => {
+                    let color = self.device.palette().indexed[usize::from(index)];
+                    self.reply(&palette_reply(index, color, terminator));
+                }
+            }
+        }
+        if changed {
+            self.stage(Some(DamageSpan::Full));
         }
     }
 

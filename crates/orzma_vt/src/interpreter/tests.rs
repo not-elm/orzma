@@ -160,6 +160,7 @@ mod memory_lock;
 mod meta_key;
 mod modes;
 mod mouse;
+mod palette;
 mod parser_limits;
 mod printing;
 mod private_modes;
