@@ -209,13 +209,13 @@ fn is_disallowed(c: char) -> bool {
 /// number, a byte other than a decimal digit, a sign included, and a
 /// value past slot 255.
 fn palette_index(number: &[u8]) -> Option<u8> {
-    if number.is_empty() {
+    // NOTE: the charset is checked here rather than left to `parse`,
+    // which also accepts a leading `+`, so `OSC 4 ; +1 ; ?` would read as
+    // a query of slot 1.
+    if number.is_empty() || !number.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    number.iter().try_fold(0u8, |value, byte| {
-        let digit = u8::try_from(char::from(*byte).to_digit(10)?).ok()?;
-        value.checked_mul(10)?.checked_add(digit)
-    })
+    str::from_utf8(number).ok()?.parse().ok()
 }
 
 #[cfg(test)]

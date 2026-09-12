@@ -302,13 +302,14 @@ fn shifted_component(digits: &[u8]) -> Option<u16> {
 /// The value of one to four hex digits; `None` for an empty run, a
 /// longer one, or a byte that is not a hex digit, a sign included.
 fn hex_value(digits: &[u8]) -> Option<u16> {
-    if !(1..=4).contains(&digits.len()) {
+    // NOTE: the charset is checked here rather than left to
+    // `from_str_radix`, which also accepts a leading `+`, so `rgb:+f/0/0`
+    // would read as a colour. Uppercase is accepted on purpose: xlib.pdf
+    // p.90 makes the digits case insignificant.
+    if !(1..=4).contains(&digits.len()) || !digits.iter().all(u8::is_ascii_hexdigit) {
         return None;
     }
-    digits.iter().try_fold(0u16, |value, byte| {
-        let digit = u16::try_from(char::from(*byte).to_digit(16)?).ok()?;
-        Some((value << 4) | digit)
-    })
+    u16::from_str_radix(str::from_utf8(digits).ok()?, 16).ok()
 }
 
 /// `bytes` without `prefix`, compared without regard to ASCII case;
@@ -524,18 +525,13 @@ mod tests {
     /// bits per channel.
     #[test]
     fn wide_rgb_components_narrow_to_their_high_byte() {
-        assert_eq!(
-            Rgb::from_color_spec(b"rgb:fff/800/000"),
-            Some(rgb(0xff, 0x80, 0x00))
-        );
-        assert_eq!(
-            Rgb::from_color_spec(b"rgb:ffff/8080/0000"),
-            Some(rgb(0xff, 0x80, 0x00))
-        );
-        assert_eq!(
-            Rgb::from_color_spec(b"rgb:cdcd/0000/0000"),
-            Some(rgb(0xcd, 0x00, 0x00))
-        );
+        for (spec, expected) in [
+            (b"rgb:fff/800/000".as_slice(), rgb(0xff, 0x80, 0x00)),
+            (b"rgb:ffff/8080/0000", rgb(0xff, 0x80, 0x00)),
+            (b"rgb:cdcd/0000/0000", rgb(0xcd, 0x00, 0x00)),
+        ] {
+            assert_eq!(Rgb::from_color_spec(spec), Some(expected), "{spec:?}");
+        }
     }
 
     /// Asserts that components of different widths mix in one `rgb:`
@@ -546,18 +542,13 @@ mod tests {
     /// `rgb:f/ed1/cb23`.
     #[test]
     fn components_of_different_widths_mix_in_one_string() {
-        assert_eq!(
-            Rgb::from_color_spec(b"rgb:ff/a5/0"),
-            Some(rgb(0xff, 0xa5, 0x00))
-        );
-        assert_eq!(
-            Rgb::from_color_spec(b"rgb:ccc/32/0"),
-            Some(rgb(0xcc, 0x32, 0x00))
-        );
-        assert_eq!(
-            Rgb::from_color_spec(b"rgb:f/ed1/cb23"),
-            Some(rgb(0xff, 0xed, 0xcb))
-        );
+        for (spec, expected) in [
+            (b"rgb:ff/a5/0".as_slice(), rgb(0xff, 0xa5, 0x00)),
+            (b"rgb:ccc/32/0", rgb(0xcc, 0x32, 0x00)),
+            (b"rgb:f/ed1/cb23", rgb(0xff, 0xed, 0xcb)),
+        ] {
+            assert_eq!(Rgb::from_color_spec(spec), Some(expected), "{spec:?}");
+        }
     }
 
     /// Asserts that a `#` string places each component in the high
@@ -567,19 +558,14 @@ mod tests {
     /// allows.
     #[test]
     fn a_sharp_string_places_each_component_in_the_high_bits() {
-        assert_eq!(Rgb::from_color_spec(b"#f80"), Some(rgb(0xf0, 0x80, 0x00)));
-        assert_eq!(
-            Rgb::from_color_spec(b"#ff8000"),
-            Some(rgb(0xff, 0x80, 0x00))
-        );
-        assert_eq!(
-            Rgb::from_color_spec(b"#fff800000"),
-            Some(rgb(0xff, 0x80, 0x00))
-        );
-        assert_eq!(
-            Rgb::from_color_spec(b"#ffff80000000"),
-            Some(rgb(0xff, 0x80, 0x00))
-        );
+        for (spec, expected) in [
+            (b"#f80".as_slice(), rgb(0xf0, 0x80, 0x00)),
+            (b"#ff8000", rgb(0xff, 0x80, 0x00)),
+            (b"#fff800000", rgb(0xff, 0x80, 0x00)),
+            (b"#ffff80000000", rgb(0xff, 0x80, 0x00)),
+        ] {
+            assert_eq!(Rgb::from_color_spec(spec), Some(expected), "{spec:?}");
+        }
     }
 
     /// Asserts that the `#` example the Xlib manual gives reads as the
