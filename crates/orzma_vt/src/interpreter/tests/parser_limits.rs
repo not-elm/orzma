@@ -62,3 +62,27 @@ fn an_osc_4_past_the_parser_cap_loses_its_thirty_second_pair() {
     assert_eq!(device.palette().indexed[30], Rgb { r: 1, g: 2, b: 3 });
     assert_eq!(device.palette().indexed[31], Palette::default().indexed[31]);
 }
+
+/// Asserts that a sequence carrying an intermediate reaches none of the
+/// control functions that share its final byte.
+///
+/// Case: an application sends the rectangle-area operations, whose
+/// final bytes this terminal already answers in their
+/// intermediate-free spellings.
+#[test]
+fn an_intermediate_reaches_no_implemented_control_function() {
+    const FINALS: &[u8] = b"@ABCDEFGHIJKLMPSTWXZ^`acdfghilmnrstu";
+    let baseline = interpret(b"ab\r\ncd");
+    for final_byte in FINALS {
+        let chunk = [b"ab\r\ncd\x1b[2;3$".as_slice(), &[*final_byte]].concat();
+        let device = interpret(&chunk);
+        let spelling = format!("CSI 2;3${}", *final_byte as char);
+        assert_eq!(device.modes(), baseline.modes(), "{spelling}");
+        assert_eq!(device.cursor(), baseline.cursor(), "{spelling}");
+        assert_eq!(
+            first_row_glyphs(&device),
+            first_row_glyphs(&baseline),
+            "{spelling}"
+        );
+    }
+}

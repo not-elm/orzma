@@ -233,42 +233,48 @@ impl VTActor for Executor<'_> {
 
     fn csi_dispatch(&mut self, params: &[CsiParam], parameters_truncated: bool, byte: u8) {
         let params = CsiParams::parse(params);
-        if parameters_truncated || params.has_intermediates() {
+        // NOTE: A truncated sequence must not reach the match. vtparse raises
+        // this flag both when it discards an intermediate past its own cap and
+        // when a full parameter buffer keeps a trailing intermediate from
+        // being promoted; in the second case the lost byte would make
+        // `CSI 1;2$r` arrive as the `CSI Pt;Pb r` of DECSTBM and move the
+        // scrolling margins.
+        if parameters_truncated {
             return;
         }
-        match (params.private(), byte) {
+        match (params.private(), params.intermediates(), byte) {
             // CUP, HVP
-            (None, b'H' | b'f') => self
+            (None, [], b'H' | b'f') => self
                 .device
                 .active_screen_mut()
                 .move_cursor_to(params.value(0), params.value(1)),
             // CHA, HPA
-            (None, b'G' | b'`') => self
+            (None, [], b'G' | b'`') => self
                 .device
                 .active_screen_mut()
                 .move_cursor_to_column(params.value(0)),
             // VPA
-            (None, b'd') => self
+            (None, [], b'd') => self
                 .device
                 .active_screen_mut()
                 .move_cursor_to_line(params.value(0)),
             // DECSTBM
-            (None, b'r') => self
+            (None, [], b'r') => self
                 .device
                 .active_screen_mut()
                 .set_scroll_region(params.value(0), params.value(1)),
             // SCOSC
-            (None, b's') if params.values().count() == 0 => {
+            (None, [], b's') if params.values().count() == 0 => {
                 self.device.active_screen_mut().save_checkpoint()
             }
             // SCORC
-            (None, b'u') if params.values().count() == 0 => {
+            (None, [], b'u') if params.values().count() == 0 => {
                 self.device.active_screen_mut().restore_checkpoint()
             }
             // DA1
-            (None, b'c') if params.value(0).unwrap_or(0) == 0 => self.reply(PRIMARY_ATTRIBUTES),
+            (None, [], b'c') if params.value(0).unwrap_or(0) == 0 => self.reply(PRIMARY_ATTRIBUTES),
             // DSR
-            (None, b'n') => match params.value(0) {
+            (None, [], b'n') => match params.value(0) {
                 Some(5) => self.reply(DEVICE_OK),
                 Some(6) => {
                     let (row, column) = self.device.active_screen().cursor_position_report();
@@ -285,9 +291,9 @@ impl VTActor for Executor<'_> {
             // shipped exploitable versions of this (ConEmu's variant was
             // CVE-2022-46387 and CVE-2023-39150).
             // XTWINOPS 22
-            (None, b't') if params.value(0) == Some(22) => self.device.push_title(),
+            (None, [], b't') if params.value(0) == Some(22) => self.device.push_title(),
             // XTWINOPS 23
-            (None, b't') if params.value(0) == Some(23) => self.pop_title(),
+            (None, [], b't') if params.value(0) == Some(23) => self.pop_title(),
             // MC
             // NOTE: Every media copy is ignored rather than honored, printer
             // controller mode included. That mode sends all later output to
@@ -295,47 +301,47 @@ impl VTActor for Executor<'_> {
             // p.323), so honoring it with no printer attached would let a
             // stray `CSI 5 i` hide everything up to a `CSI 4 i` that may
             // never come.
-            (None | Some(b'?'), b'i') => {}
+            (None | Some(b'?'), [], b'i') => {}
             // CUU
-            (None, b'A') => self
+            (None, [], b'A') => self
                 .device
                 .active_screen_mut()
                 .move_cursor_up(repeat_count(params.value(0))),
             // CUD
-            (None, b'B') => self
+            (None, [], b'B') => self
                 .device
                 .active_screen_mut()
                 .move_cursor_down(repeat_count(params.value(0))),
             // CUF, HPR
-            (None, b'C' | b'a') => self
+            (None, [], b'C' | b'a') => self
                 .device
                 .active_screen_mut()
                 .move_cursor_right(repeat_count(params.value(0))),
             // CUB
-            (None, b'D') => self
+            (None, [], b'D') => self
                 .device
                 .active_screen_mut()
                 .move_cursor_left(repeat_count(params.value(0))),
             // CNL
-            (None, b'E') => {
+            (None, [], b'E') => {
                 let screen = self.device.active_screen_mut();
                 screen.move_cursor_down(repeat_count(params.value(0)));
                 screen.carriage_return();
             }
             // CPL
-            (None, b'F') => {
+            (None, [], b'F') => {
                 let screen = self.device.active_screen_mut();
                 screen.move_cursor_up(repeat_count(params.value(0)));
                 screen.carriage_return();
             }
             // ED
-            (None, b'J') => {
+            (None, [], b'J') => {
                 if let Some(mode) = EraseScreenMode::from_ed(params.value(0).unwrap_or(0)) {
                     self.erase_in_display(mode);
                 }
             }
             // EL
-            (None, b'K') => {
+            (None, [], b'K') => {
                 if let Some(mode) = EraseLineMode::from_el(params.value(0).unwrap_or(0)) {
                     let auto_wrap = self.device.modes().auto_wrap;
                     let damage = self
@@ -346,7 +352,7 @@ impl VTActor for Executor<'_> {
                 }
             }
             // ECH
-            (None, b'X') => {
+            (None, [], b'X') => {
                 let auto_wrap = self.device.modes().auto_wrap;
                 let damage = self
                     .device
@@ -355,7 +361,7 @@ impl VTActor for Executor<'_> {
                 self.stage(damage);
             }
             // IL
-            (None, b'L') => {
+            (None, [], b'L') => {
                 let damage = self
                     .device
                     .active_screen_mut()
@@ -363,7 +369,7 @@ impl VTActor for Executor<'_> {
                 self.stage(damage);
             }
             // DL
-            (None, b'M') => {
+            (None, [], b'M') => {
                 let damage = self
                     .device
                     .active_screen_mut()
@@ -371,7 +377,7 @@ impl VTActor for Executor<'_> {
                 self.stage(damage);
             }
             // ICH
-            (None, b'@') => {
+            (None, [], b'@') => {
                 let damage = self
                     .device
                     .active_screen_mut()
@@ -379,7 +385,7 @@ impl VTActor for Executor<'_> {
                 self.stage(damage);
             }
             // DCH
-            (None, b'P') => {
+            (None, [], b'P') => {
                 let damage = self
                     .device
                     .active_screen_mut()
@@ -387,7 +393,7 @@ impl VTActor for Executor<'_> {
                 self.stage(damage);
             }
             // SU
-            (None, b'S') => {
+            (None, [], b'S') => {
                 let damage = self
                     .device
                     .active_screen_mut()
@@ -399,7 +405,7 @@ impl VTActor for Executor<'_> {
             // XTHIMOUSE) shares this final byte with no private marker, so
             // only the one-parameter spelling is a scroll down; without the
             // guard a mouse-tracking request would scroll the screen.
-            (None, b'T') if params.values().count() <= 1 => {
+            (None, [], b'T') if params.values().count() <= 1 => {
                 let damage = self
                     .device
                     .active_screen_mut()
@@ -407,7 +413,7 @@ impl VTActor for Executor<'_> {
                 self.stage(damage);
             }
             // SD (xterm's alternate spelling)
-            (None, b'^') => {
+            (None, [], b'^') => {
                 let damage = self
                     .device
                     .active_screen_mut()
@@ -415,46 +421,46 @@ impl VTActor for Executor<'_> {
                 self.stage(damage);
             }
             // CHT
-            (None, b'I') => self
+            (None, [], b'I') => self
                 .device
                 .active_screen_mut()
                 .move_forward_tabs(repeat_count(params.value(0))),
             // CBT
-            (None, b'Z') => self
+            (None, [], b'Z') => self
                 .device
                 .active_screen_mut()
                 .move_backward_tabs(repeat_count(params.value(0))),
             // TBC
-            (None, b'g') => {
+            (None, [], b'g') => {
                 if let Some(edit) = CharacterTabEdit::from_tbc(params.value(0).unwrap_or(0)) {
                     self.device.active_screen_mut().edit_tab_stop(edit);
                 }
             }
             // CTC
-            (None, b'W') => {
+            (None, [], b'W') => {
                 if let Some(edit) = CharacterTabEdit::from_ctc(params.value(0).unwrap_or(0)) {
                     self.device.active_screen_mut().edit_tab_stop(edit);
                 }
             }
             // DECST8C
-            (Some(b'?'), b'W') if params.value(0) == Some(5) => {
+            (Some(b'?'), [], b'W') if params.value(0) == Some(5) => {
                 self.device.active_screen_mut().reset_tab_stops()
             }
             // SGR
-            (None, b'm') => {
+            (None, [], b'm') => {
                 let pen = self.device.active_screen_mut().pen_mut();
                 *pen = pen.applied(&params);
             }
             // SM
-            (None, b'h') => self.set_modes(&params, true),
+            (None, [], b'h') => self.set_modes(&params, true),
             // RM
-            (None, b'l') => self.set_modes(&params, false),
+            (None, [], b'l') => self.set_modes(&params, false),
             // DECSET
-            (Some(b'?'), b'h') => self.set_private_modes(&params, true),
+            (Some(b'?'), [], b'h') => self.set_private_modes(&params, true),
             // DECRST
-            (Some(b'?'), b'l') => self.set_private_modes(&params, false),
+            (Some(b'?'), [], b'l') => self.set_private_modes(&params, false),
             // DA2
-            (Some(b'>'), b'c') if params.value(0).unwrap_or(0) == 0 => {
+            (Some(b'>'), [], b'c') if params.value(0).unwrap_or(0) == 0 => {
                 self.reply(&secondary_attributes())
             }
             _ => {}
