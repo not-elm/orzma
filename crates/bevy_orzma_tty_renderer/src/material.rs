@@ -1122,10 +1122,6 @@ mod tests {
         );
         assert_eq!(fingerprint[2].4, 0, "the combining cell is unlinked");
         assert_eq!(fingerprint[3].4, 0, "the plain cell is unlinked");
-        assert!(
-            fingerprint.iter().all(|slot| slot.4 != 9),
-            "the zero-width cell occupies no GPU slot"
-        );
         assert_eq!(
             fingerprint,
             vec![

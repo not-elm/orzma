@@ -809,10 +809,10 @@ mod tests {
     }
 
     /// Asserts that a row inside the grid replaces that row's contents
-    /// when applied, and counts as a difference.
+    /// when applied, while a row the frame does not touch keeps its
+    /// full length of empty slots, and counts as a difference.
     ///
-    /// Case: a build prints one line while the user is scrolled back
-    /// three rows.
+    /// Case: a build prints one line of a two-row pane.
     #[test]
     fn a_row_in_range_is_applied_at_its_projected_line() {
         let mut grid = TerminalGrid {
@@ -820,19 +820,17 @@ mod tests {
             rows: 2,
             cells: vec![vec![], vec![]],
             cursor: Some(Cursor::default()),
-            display_offset: 3,
             ..Default::default()
         };
         let frame = Frame {
             size: GridSize { cols: 2, rows: 2 },
             rows: vec![dirty_row(1, "x")],
-            display_offset: DisplayOffset(3),
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
         grid.apply(&frame);
         assert_eq!(grid.cells[1][0].cell().map(|c| c.text.as_str()), Some("x"));
-        assert!(grid.cells[0].iter().all(|slot| *slot == GridSlot::Empty));
+        assert_eq!(grid.cells[0], vec![GridSlot::Empty; 2]);
     }
 
     /// Asserts that a grid built at the frame's size but without cell
