@@ -621,6 +621,18 @@ impl Executor<'_> {
             match mode {
                 // DECCKM
                 1 => self.device.modes_mut().app_cursor = enabled,
+                // DECCOLM
+                // NOTE: The column mode is ignored rather than honored, the
+                // side effects included. A pane's width is not the VT's to
+                // set — the size flows one way, from the window geometry
+                // through the multiplexer layout to the PTY — so the erase
+                // and the margin reset vt510.pdf p.143 gives DECCOLM would
+                // destroy the page for a width change that never follows,
+                // and `xterm-256color` puts `CSI ? 3 l` in the `is2` string
+                // every `tput init` sends. xterm, whose entry that is, gates
+                // the whole sequence behind a resource that is off by
+                // default and so reaches the same no-op.
+                3 => {}
                 // DECOM
                 6 => self
                     .device
