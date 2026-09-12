@@ -124,6 +124,11 @@ impl Default for Palette {
 }
 
 impl Palette {
+    /// The full 256-slot xterm table [`Color::Indexed`] resolves to:
+    /// [`ANSI_16`], the 6x6x6 cube on [`CUBE_RAMP`], and the grayscale
+    /// ramp from 8 to 238 in steps of 10.
+    const XTERM_INDEXED: [Rgb; 256] = build_xterm_indexed();
+
     /// Resolves a symbolic cell color against this table.
     ///
     /// [`Color::DefaultBackground`] resolves to [`Palette::background`]
@@ -168,11 +173,6 @@ impl Palette {
         *indexed = Self::XTERM_INDEXED;
         true
     }
-
-    /// The full 256-slot xterm table [`Color::Indexed`] resolves to:
-    /// [`ANSI_16`], the 6x6x6 cube on [`CUBE_RAMP`], and the grayscale
-    /// ramp from 8 to 238 in steps of 10.
-    const XTERM_INDEXED: [Rgb; 256] = build_xterm_indexed();
 }
 
 /// The default foreground [`Palette`] carries.
