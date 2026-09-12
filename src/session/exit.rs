@@ -4,7 +4,7 @@
 use bevy::prelude::*;
 use bevy_orzmux::prelude::OrzmuxSessionEnded;
 
-/// Registers the session-end observer.
+/// Adds session-end handling.
 pub(super) struct ExitPlugin;
 
 impl Plugin for ExitPlugin {

@@ -9,7 +9,7 @@ mod layout;
 
 use bevy::prelude::*;
 
-/// Bevy plugin for the shell session lifecycle (spawn / layout / exit).
+/// Aggregates the shell session lifecycle plugins (spawn / layout / exit).
 pub(crate) struct SessionPlugin;
 
 impl Plugin for SessionPlugin {

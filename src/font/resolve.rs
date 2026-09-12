@@ -1,7 +1,6 @@
 //! Resolves a font-family name and face attributes to font-file bytes plus a
-//! collection face index, via a `fontique` collection. Pure over the borrowed
-//! collection + source cache, so tests inject a collection preloaded from known
-//! font files instead of relying on the host's installed fonts.
+//! collection face index, via a `fontique` collection. Pure over the
+//! borrowed collection and source cache.
 
 use bevy_orzma_tty_renderer::FontFace;
 use fontique::{
@@ -45,10 +44,8 @@ pub(super) fn attributes_of(spec: FontStyleSpec) -> Attributes {
 #[derive(Debug)]
 pub(super) struct FamilyNotFound;
 
-/// Whether `family` exists in the collection, without resolving or copying any
-/// font bytes. Used by the UI-font path, which hands parley a
-/// `FontSource::Family` and needs only a presence check (parley selects the
-/// face at render time).
+/// Whether `family` exists in the collection, without resolving or copying
+/// any font bytes.
 pub(super) fn family_present(collection: &mut Collection, family: &str) -> bool {
     collection.family_id(family).is_some()
 }

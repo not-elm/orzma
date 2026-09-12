@@ -15,7 +15,7 @@ use bevy_orzma_tty_renderer::material::TerminalUiMaterial;
 #[derive(Component)]
 pub(crate) struct OrzmaTerminal;
 
-/// Registers the material-injection observer.
+/// Adds GPU material injection for `OrzmaTerminal` entities.
 pub(crate) struct SurfacePlugin;
 
 impl Plugin for SurfacePlugin {
@@ -24,9 +24,8 @@ impl Plugin for SurfacePlugin {
     }
 }
 
-/// Bevy observer that injects a `MaterialNode<TerminalUiMaterial>` whenever
-/// `OrzmaTerminal` is added to an entity, allocating the GPU material on
-/// demand.
+/// Injects a `MaterialNode<TerminalUiMaterial>` whenever `OrzmaTerminal` is
+/// added to an entity, allocating the GPU material on demand.
 fn on_add_inject_render(
     ev: On<Add, OrzmaTerminal>,
     mut commands: Commands,

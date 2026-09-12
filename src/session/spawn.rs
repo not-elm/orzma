@@ -15,7 +15,7 @@ pub(crate) struct PaneSpawnRequest {
     pub at: NewPaneAt,
 }
 
-/// Registers the spawn observer.
+/// Adds pane-spawn handling.
 pub(super) struct SpawnPlugin;
 
 impl Plugin for SpawnPlugin {

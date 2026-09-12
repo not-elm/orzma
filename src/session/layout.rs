@@ -11,7 +11,7 @@ use bevy_orzmux::prelude::{OrzmuxConnection, PaneGeometry};
 use orzma_tty::CellPixels;
 use orzmux::prelude::OrzmuxCommand;
 
-/// Registers the window-geometry sender.
+/// Adds the window-geometry sender.
 pub(super) struct LayoutPlugin;
 
 impl Plugin for LayoutPlugin {

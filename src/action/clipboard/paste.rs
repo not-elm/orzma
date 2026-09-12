@@ -14,7 +14,7 @@ pub(crate) struct PasteAction {
     pub entity: Entity,
 }
 
-/// Registers the paste pipeline observers.
+/// Adds orzma's paste pipeline.
 pub(super) struct ClipboardPasteActionPlugin;
 
 impl Plugin for ClipboardPasteActionPlugin {
@@ -23,10 +23,7 @@ impl Plugin for ClipboardPasteActionPlugin {
     }
 }
 
-/// The decision `on_paste` derives from a clipboard read poll. Keeping the
-/// branch logic a pure function of the poll result lets every arm be
-/// unit-tested without a real clipboard backend (bevy's `Clipboard` exposes no
-/// in-memory seam).
+/// The outcome of polling a clipboard read for a paste.
 enum PasteRead {
     /// Non-empty clipboard text ready to paste.
     Ready(String),

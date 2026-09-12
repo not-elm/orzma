@@ -1,21 +1,16 @@
 //! Loads `OrzmaConfigs` synchronously at app build time and exposes it as
-//! a Bevy Resource. Config validation errors (duplicate direct or prefix
-//! chords, duplicate `[vi-mode]` keys, a leader that shadows a direct
-//! binding, prefix bindings with no leader, an unmappable leader key, an
-//! out-of-range font size, an unparseable `[font]` face `style`) are fatal
-//! (exit 2) so a mistake in one field never silently discards the whole
-//! config. Parse / IO errors warn and fall back to defaults so the GUI
-//! remains startable for users with stale or invalid config files.
+//! a Bevy Resource. Validation errors exit the process (code 2); parse and
+//! IO errors warn and fall back to defaults.
 
 use bevy::prelude::*;
 use orzma_configs::OrzmaConfigs;
 
-/// Bevy Resource wrapping the resolved `OrzmaConfigs`.
+/// The resolved `OrzmaConfigs`, loaded once at app build time.
 #[derive(Resource, Debug, Default, Deref)]
 pub(crate) struct OrzmaConfigsResource(pub(crate) OrzmaConfigs);
 
-/// Bevy Plugin that loads orzma config from disk at `Plugin::build` and
-/// inserts it as [`OrzmaConfigsResource`]. Synchronous; uses `std::fs`.
+/// Loads orzma config from disk and inserts it as [`OrzmaConfigsResource`];
+/// synchronous, using `std::fs`.
 pub(crate) struct OrzmaConfigsPlugin;
 
 impl Plugin for OrzmaConfigsPlugin {
