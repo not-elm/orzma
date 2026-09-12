@@ -4,7 +4,7 @@
 use crate::action::clipboard::CopyAction;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use bevy_orzma_tty_renderer::schema::TerminalGrid;
+use bevy_orzma_tty_renderer::schema::TerminalView;
 use bevy_orzmux::prelude::{
     CellSide, GridPoint, RequestTtyCopySelection, RequestTtySelectionClear,
     RequestTtySelectionStart, RequestTtySelectionUpdate, SelectionKind, TtySelectionTextSignal,
@@ -82,14 +82,14 @@ impl Plugin for SelectionPlugin {
 fn on_terminal_selection_start(
     ev: On<TerminalSelectionStart>,
     mut commands: Commands,
-    terminals: Query<&TerminalGrid>,
+    terminals: Query<&TerminalView>,
 ) {
-    let Ok(grid) = terminals.get(ev.entity) else {
+    let Ok(view) = terminals.get(ev.entity) else {
         return;
     };
     commands.trigger(RequestTtySelectionStart {
         terminal: ev.entity,
-        cell: to_grid_point(ev.point, DisplayOffset(grid.display_offset)),
+        cell: to_grid_point(ev.point, DisplayOffset(view.display_offset)),
         side: ev.side,
         kind: ev.ty,
     });
@@ -100,14 +100,14 @@ fn on_terminal_selection_start(
 fn on_terminal_selection_update(
     ev: On<TerminalSelectionUpdate>,
     mut commands: Commands,
-    terminals: Query<&TerminalGrid>,
+    terminals: Query<&TerminalView>,
 ) {
-    let Ok(grid) = terminals.get(ev.entity) else {
+    let Ok(view) = terminals.get(ev.entity) else {
         return;
     };
     commands.trigger(RequestTtySelectionUpdate {
         terminal: ev.entity,
-        cell: to_grid_point(ev.point, DisplayOffset(grid.display_offset)),
+        cell: to_grid_point(ev.point, DisplayOffset(view.display_offset)),
         side: ev.side,
     });
 }
@@ -169,9 +169,9 @@ mod tests {
 
     fn spawn_scrolled_grid(app: &mut App, display_offset: u32) -> Entity {
         app.world_mut()
-            .spawn(TerminalGrid {
+            .spawn(TerminalView {
                 display_offset,
-                ..TerminalGrid::default()
+                ..TerminalView::default()
             })
             .id()
     }

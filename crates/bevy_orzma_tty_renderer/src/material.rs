@@ -1,12 +1,15 @@
 use crate::{
     glyph::{
         atlas::{GlyphAtlas, GlyphRect},
-        font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFontSize, TerminalFonts},
+        font::{
+            CellMetrics, FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFontSize,
+            TerminalFonts,
+        },
     },
     material::state::TerminalMaterialState,
     schema::{
-        Color as CellColor, GridCell, GridLine, HyperlinkHoverState, Palette, Rgb,
-        SelectionGeometry, SelectionRange, Style, TerminalGrid,
+        Color as CellColor, GridCell, GridLine, GridSlot, HyperlinkHoverState, Palette, Rgb,
+        SelectionGeometry, SelectionRange, Style, TerminalCells, TerminalView,
     },
 };
 use bevy::{
@@ -327,6 +330,36 @@ impl Default for TerminalOverlays {
     }
 }
 
+/// The dimming and tinting one pane applies while it is not the active
+/// pane.
+struct PaneTreatment {
+    dim: f32,
+    inactive_tint: Vec4,
+    overlay_dim: f32,
+    overlay_desaturate: f32,
+}
+
+impl PaneTreatment {
+    /// Clamps `style`'s factors into range, or returns the neutral
+    /// treatment when the pane carries no inactive style.
+    fn from_style(style: Option<&PaneInactiveStyle>) -> Self {
+        style.map_or(
+            Self {
+                dim: 1.0,
+                inactive_tint: Vec4::ZERO,
+                overlay_dim: 1.0,
+                overlay_desaturate: 0.0,
+            },
+            |style| Self {
+                dim: style.dim.clamp(0.0, 1.0),
+                inactive_tint: style.tint.with_w(style.tint.w.clamp(0.0, 1.0)),
+                overlay_dim: style.overlay_dim.clamp(0.0, 1.0),
+                overlay_desaturate: style.overlay_desaturate.clamp(0.0, 1.0),
+            },
+        )
+    }
+}
+
 /// Uniform block uploaded once per frame alongside the storage buffers.
 ///
 /// The WGSL `TerminalParams` declaration must match this std140 layout,
@@ -455,44 +488,44 @@ impl Default for TerminalParams {
 }
 
 impl TerminalParams {
-    /// Builds the per-frame uniform block from the current grid + frame timing.
+    /// Builds the per-frame uniform block from the current view, cells
+    /// and frame timing.
     ///
     /// # Invariants
     ///
-    /// - When `grid.vi_cursor` is present and its grid point projects into
-    ///   the viewport, it overrides `grid.cursor` and the resulting
+    /// - When `view.vi_cursor` is present and its grid point projects into
+    ///   the viewport, it overrides `view.cursor` and the resulting
     ///   `cursor_visible` bit is forced to `1`. When the projection falls
     ///   outside the viewport, `cursor_visible` is cleared so the shader
     ///   skips cursor rendering entirely.
     /// - A live (non-vi) cursor carries the application's DECTCEM state, so
     ///   `cursor_visible` is `0` while the terminal has seen `CSI ? 25 l`,
-    ///   and `grid.suppress_cursor` clears the bit on top of either source.
-    /// - When `grid.selection` is `None`, `sel_kind == 0` and the shader
+    ///   and `view.suppress_cursor` clears the bit on top of either source.
+    /// - When `view.selection` is `None`, `sel_kind == 0` and the shader
     ///   paints no selection.
+    /// - `overlay_rects` is left at its default; the caller fills it from
+    ///   the entity's overlays.
     fn new(
-        grid: &TerminalGrid,
+        view: &TerminalView,
+        default_bg: Rgb,
+        metrics: &CellMetrics,
+        treatment: &PaneTreatment,
         cell_size_px: Vec2,
         atlas_size_px: Vec2,
         ascent_px: f32,
         dpr: f32,
         time_seconds: f32,
-        underline_position_phys: f32,
-        underline_thickness_phys: f32,
-        max_overflow_phys: f32,
-        bg_padding_color: Vec4,
+        fallback: [u8; 3],
         hover_hyperlink_id: u32,
         hover_active: u32,
-        dim: f32,
-        inactive_tint: Vec4,
-        overlay_dim: f32,
-        overlay_desaturate: f32,
     ) -> Self {
-        let cols = u32::from(grid.cols);
-        let rows = u32::from(grid.rows);
+        let cols = u32::from(view.cols);
+        let rows = u32::from(view.rows);
 
-        let (cursor_pos, cursor_style) = grid.current_cursor_pos_and_style();
+        let (cursor_pos, cursor_style) = view.current_cursor_pos_and_style();
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
-            selection_uniforms(grid.selection.as_ref(), grid.display_offset, grid.rows);
+            selection_uniforms(view.selection.as_ref(), view.display_offset, view.rows);
+        let bg_padding_color = padding_color(default_bg, fallback);
 
         Self {
             grid_size: UVec2::new(cols.max(1), rows.max(1)),
@@ -508,17 +541,17 @@ impl TerminalParams {
             sel_end_row,
             sel_end_col,
             sel_kind,
-            underline_position_phys,
-            underline_thickness_phys,
-            max_overflow_phys,
+            underline_position_phys: metrics.underline_position_phys,
+            underline_thickness_phys: metrics.underline_thickness_phys.max(1.0),
+            max_overflow_phys: metrics.max_overflow_phys,
             bg_padding_color,
             hover_hyperlink_id,
             hover_active,
-            dim,
-            inactive_tint,
+            dim: treatment.dim,
+            inactive_tint: treatment.inactive_tint,
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
-            overlay_dim,
-            overlay_desaturate,
+            overlay_dim: treatment.overlay_dim,
+            overlay_desaturate: treatment.overlay_desaturate,
         }
     }
 }
@@ -669,20 +702,25 @@ fn update_terminal_material(
         Entity,
         &MaterialNode<TerminalUiMaterial>,
         &mut TerminalMaterialState,
-        Ref<TerminalGrid>,
+        Ref<TerminalCells>,
+        // NOTE: `view` is taken as a plain `&`, never `Ref`. Latching
+        //       `view.is_changed()` into `grid_dirty` would make every cursor
+        //       move, selection drag and IME toggle rebuild and re-upload the
+        //       whole cell SSBO again — the defect the view/cells split removed.
+        &TerminalView,
         Option<&PaneInactiveStyle>,
         Option<&TerminalOverlays>,
     )>,
+    mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
     fonts: Res<TerminalFonts>,
     font_size: Res<TerminalFontSize>,
     palette_time: Res<Time>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
     hover: Res<HyperlinkHoverState>,
     fallback: Res<TerminalPaddingFallback>,
 ) {
     // NOTE: This system runs unconditionally — *not* gated by
-    // `Changed<TerminalGrid>`. The `mat.params = ...` write at the end is
+    // `Changed<TerminalCells>`. The `mat.params = ...` write at the end is
     // load-bearing for rendering correctness: it forces `AssetEvent::Modified`
     // on the material every frame so `PreparedUiMaterial::prepare_asset` runs
     // and rebuilds the bind group against the latest `GpuImage` /
@@ -705,19 +743,17 @@ fn update_terminal_material(
     // that would re-rasterize the entire atlas at half scale.
     let dpr = windows.single().ok().map(|window| window.scale_factor());
 
-    for (entity, handle, mut state, grid, pane_style, overlays) in terminals.iter_mut() {
-        // NOTE: Latch the grid's change signal before the bail-out below.
-        // Bevy clears it once this system has run, so a grid written on a
+    for (entity, handle, mut state, cells, view, pane_style, overlays) in terminals.iter_mut() {
+        // NOTE: Latch the cells' change signal before the bail-out below.
+        // Bevy clears it once this system has run, so cells written on a
         // frame that skips the upload would otherwise never reach the GPU.
-        state.grid_dirty |= grid.is_changed();
+        state.grid_dirty |= cells.is_changed();
         let Some(dpr) = dpr else {
             continue;
         };
         let phys_font_size = (font_size.0 * dpr).round() as u16;
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
-        let cols = grid.cols as u32;
-        let rows = grid.rows as u32;
-        let dims_changed = (grid.cols, grid.rows) != state.last_grid_dims;
+        let dims_changed = (view.cols, view.rows) != state.last_grid_dims;
         let grid_changed = state.grid_dirty;
         let phys_size_changed = phys_font_size != state.last_phys_font_size;
 
@@ -727,45 +763,18 @@ fn update_terminal_material(
             || dims_changed
             || phys_size_changed;
 
-        if phys_size_changed {
-            state.invalidate_all();
-            state.last_phys_font_size = phys_font_size;
-        }
-
-        // NOTE: atlas.generation can advance during this very system (via
-        //       get_or_insert in rebuild_cells), and a generation jump means
-        //       the atlas pixel buffer was wiped — every cached glyph index
-        //       in cpu_cells is now stale and would resolve to garbage
-        //       texels. Clearing the LUT here forces a full rerasterization
-        //       on the rebuild path.
-        if atlas_invalidated {
-            state.glyph_index_map.clear();
-            state.cpu_glyphs.clear();
-        }
-
-        let metrics = if let Some(cached) = state.cached_metrics {
-            cached
-        } else {
-            let m = fonts.cell_metrics_px(phys_font_size);
-            state.cached_metrics = Some(m);
-            m
-        };
+        let metrics = resolve_metrics(
+            &mut state,
+            &mut cell_metrics_res,
+            &fonts,
+            phys_font_size,
+            phys_size_changed,
+            atlas_invalidated,
+        );
         let cell_w_phys = metrics.advance_phys.floor().max(1.0);
         let cell_h_phys = metrics.line_height_phys.floor().max(1.0);
         let cell_size_phys = Vec2::new(cell_w_phys, cell_h_phys);
         let ascent_phys = metrics.ascent_phys.round();
-
-        // NOTE: Write the metrics back to TerminalCellMetricsResource so
-        //       gui-side resize_terminals_to_node reads DPR-adjusted phys
-        //       values on the next frame. The OR condition also catches
-        //       the case where the Resource was reset externally (e.g.
-        //       hot-reload) even if our local state matches.
-        if phys_size_changed || cell_metrics_res.phys_font_size != phys_font_size {
-            *cell_metrics_res = TerminalCellMetricsResource {
-                metrics,
-                phys_font_size,
-            };
-        }
 
         let Some((cells_handle, glyphs_handle)) = materials
             .get(&handle.0)
@@ -775,68 +784,37 @@ fn update_terminal_material(
         };
 
         if needs_rebuild {
-            let cell_count = (cols * rows) as usize;
-            state.cpu_cells.clear();
-            state.cpu_cells.resize(cell_count, GpuCell::default());
-
-            if cols > 0 && rows > 0 {
-                rebuild_cells(&grid, &mut state, &fonts, &mut atlas, phys_font_size, cols);
-            }
-
-            if state.cpu_cells.is_empty() {
-                state.cpu_cells.push(GpuCell::default());
-            }
-            if state.cpu_glyphs.is_empty() {
-                state.cpu_glyphs.push(GpuGlyph::default());
-            }
-
-            if let Some(mut buf) = buffers.get_mut(&cells_handle) {
-                buf.set_data(std::mem::take(&mut state.cpu_cells));
-            }
-            if let Some(mut buf) = buffers.get_mut(&glyphs_handle) {
-                buf.set_data(state.cpu_glyphs.clone());
-            }
-
-            state.last_atlas_generation = atlas.generation;
-            state.grid_dirty = false;
-            state.last_grid_dims = (grid.cols, grid.rows);
-            state.initialized = true;
+            upload_cells(
+                &mut state,
+                &mut atlas,
+                &mut buffers,
+                &cells,
+                &fonts,
+                (&cells_handle, &glyphs_handle),
+                phys_font_size,
+                (view.cols, view.rows),
+            );
         }
-
-        let bg_padding_color = padding_color(grid.palette.background, fallback.0);
 
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
             (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),
             _ => (0, 0),
         };
-
-        let (dim, inactive_tint, overlay_dim, overlay_desaturate) =
-            pane_style.map_or((1.0, Vec4::ZERO, 1.0, 0.0), |s| {
-                (
-                    s.dim.clamp(0.0, 1.0),
-                    s.tint.with_w(s.tint.w.clamp(0.0, 1.0)),
-                    s.overlay_dim.clamp(0.0, 1.0),
-                    s.overlay_desaturate.clamp(0.0, 1.0),
-                )
-            });
+        let treatment = PaneTreatment::from_style(pane_style);
         if let Some(mut mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
-                &grid,
+                view,
+                cells.palette.background,
+                &metrics,
+                &treatment,
                 cell_size_phys,
                 Vec2::new(atlas.width() as f32, atlas.height() as f32),
                 ascent_phys,
                 dpr,
                 palette_time.elapsed_secs(),
-                metrics.underline_position_phys,
-                metrics.underline_thickness_phys.max(1.0),
-                metrics.max_overflow_phys,
-                bg_padding_color,
+                fallback.0,
                 hover_hyperlink_id,
                 hover_active,
-                dim,
-                inactive_tint,
-                overlay_dim,
-                overlay_desaturate,
             );
             match overlays {
                 Some(o) => {
@@ -852,69 +830,172 @@ fn update_terminal_material(
     }
 }
 
-fn rebuild_cells(
-    grid: &TerminalGrid,
+/// Resolves the cell metrics for `phys_font_size`, clearing the glyph
+/// caches first when `phys_size_changed` or `atlas_invalidated` is set,
+/// and refreshing the shared cell-metrics resource.
+///
+/// A `phys_size_changed` resolve also records `phys_font_size` as the
+/// state's last physical size, so the next frame reports no change.
+fn resolve_metrics(
     state: &mut TerminalMaterialState,
+    cell_metrics: &mut TerminalCellMetricsResource,
     fonts: &TerminalFonts,
+    phys_font_size: u16,
+    phys_size_changed: bool,
+    atlas_invalidated: bool,
+) -> CellMetrics {
+    if phys_size_changed {
+        state.invalidate_all();
+        state.last_phys_font_size = phys_font_size;
+    }
+
+    // NOTE: atlas.generation can advance during this very system (via
+    //       get_or_insert in rebuild_cells), and a generation jump means
+    //       the atlas pixel buffer was wiped — every cached glyph index
+    //       in cpu_cells is now stale and would resolve to garbage
+    //       texels. Clearing the LUT here forces a full rerasterization
+    //       on the rebuild path.
+    if atlas_invalidated {
+        state.glyph_index_map.clear();
+        state.cpu_glyphs.clear();
+    }
+
+    let metrics = if let Some(cached) = state.cached_metrics {
+        cached
+    } else {
+        let m = fonts.cell_metrics_px(phys_font_size);
+        state.cached_metrics = Some(m);
+        m
+    };
+
+    // NOTE: Write the metrics back to TerminalCellMetricsResource so
+    //       gui-side resize_terminals_to_node reads DPR-adjusted phys
+    //       values on the next frame. The OR condition also catches
+    //       the case where the Resource was reset externally (e.g.
+    //       hot-reload) even if our local state matches.
+    if phys_size_changed || cell_metrics.phys_font_size != phys_font_size {
+        *cell_metrics = TerminalCellMetricsResource {
+            metrics,
+            phys_font_size,
+        };
+    }
+
+    metrics
+}
+
+/// Rebuilds one terminal's cell and glyph buffers and uploads both,
+/// then records the atlas generation and grid dimensions the upload was
+/// built from.
+///
+/// `handles` is `(cells, glyphs)`. `dims` is `(cols, rows)` in cells. A
+/// zero in either axis uploads the one-element dummy buffers wgpu
+/// requires instead of an empty one.
+fn upload_cells(
+    state: &mut TerminalMaterialState,
     atlas: &mut GlyphAtlas,
+    buffers: &mut Assets<ShaderBuffer>,
+    cells: &TerminalCells,
+    fonts: &TerminalFonts,
+    handles: (&Handle<ShaderBuffer>, &Handle<ShaderBuffer>),
+    phys_font_size: u16,
+    dims: (u16, u16),
+) {
+    let (cols, rows) = (u32::from(dims.0), u32::from(dims.1));
+    let (cells_handle, glyphs_handle) = handles;
+
+    debug_assert_eq!(
+        cells.cells.len(),
+        usize::from(dims.1),
+        "the retained cells have exactly as many rows as the grid"
+    );
+
+    let cell_count = (cols * rows) as usize;
+    state.cpu_cells.clear();
+    state.cpu_cells.resize(cell_count, GpuCell::default());
+
+    if cols > 0 && rows > 0 {
+        rebuild_cells(state, atlas, cells, fonts, phys_font_size, cols);
+    }
+
+    if state.cpu_cells.is_empty() {
+        state.cpu_cells.push(GpuCell::default());
+    }
+    if state.cpu_glyphs.is_empty() {
+        state.cpu_glyphs.push(GpuGlyph::default());
+    }
+
+    if let Some(mut buf) = buffers.get_mut(cells_handle) {
+        buf.set_data(std::mem::take(&mut state.cpu_cells));
+    }
+    if let Some(mut buf) = buffers.get_mut(glyphs_handle) {
+        buf.set_data(state.cpu_glyphs.clone());
+    }
+
+    state.last_atlas_generation = atlas.generation;
+    state.grid_dirty = false;
+    state.last_grid_dims = dims;
+    state.initialized = true;
+}
+
+fn rebuild_cells(
+    state: &mut TerminalMaterialState,
+    atlas: &mut GlyphAtlas,
+    cells: &TerminalCells,
+    fonts: &TerminalFonts,
     phys_font_size: u16,
     cols: u32,
 ) {
-    let packed_palette = PackedPalette::build(&grid.palette);
-    for (row_idx, row) in grid.cells.iter().enumerate() {
-        let mut col: u32 = 0;
-        for cell in row {
+    let packed_palette = PackedPalette::build(&cells.palette);
+    for (row_idx, row) in cells.cells.iter().enumerate() {
+        debug_assert_eq!(
+            row.len(),
+            cols as usize,
+            "every retained row is exactly as wide as the grid"
+        );
+        let mut left_half: Option<GpuCell> = None;
+        for (col, slot) in row.iter().enumerate() {
+            let col = col as u32;
             if col >= cols {
                 break;
             }
-            // NOTE: width=0 cells are combining-mark grapheme clusters that
-            //       wire emits as a separate Cell (Run boundary lands inside
-            //       a cluster). They must not consume a column or write a
-            //       GPU slot — otherwise we get phantom dark boxes between
-            //       characters carrying the base cell's style flags.
-            if cell.width == 0 {
-                continue;
-            }
-            let cell_width = u32::from(cell.width);
-            let glyph_index = resolve_glyph_index(cell, state, fonts, atlas, phys_font_size);
-            let fg = packed_palette.cell_fg(cell.fg);
-            let bg = packed_palette.cell_bg(cell.bg);
-            let style_flags = u32::from(cell.style | style_from_combining_marks(&cell.text).bits());
-
             let target = (row_idx as u32 * cols + col) as usize;
-            if let Some(slot) = state.cpu_cells.get_mut(target) {
-                *slot = GpuCell {
-                    glyph_index,
-                    fg_packed: fg,
-                    bg_packed: bg,
-                    style_flags,
-                    hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.0),
-                };
-            }
-
-            // NOTE: For width=2 (CJK / wide) cells we ALSO populate the
-            //       right-half slot with the same glyph_index + fg + bg
-            //       and set STYLE_WIDE_RIGHT_HALF. The shader uses the
-            //       bit to anchor the wide glyph to the left-half cell's
-            //       origin (`in_cell_px_eff = in_cell_px + vec2(cell_pitch_px.x, 0)`),
-            //       rendering a continuous wide glyph across both cells.
-            //       Without this, the right half stays at GpuCell::default
-            //       (bg=0 transparent, glyph_index=GLYPH_NONE) and CJK
-            //       characters render as half-glyphs with black gaps.
-            if cell_width == 2 && col + 1 < cols {
-                let right_target = (row_idx as u32 * cols + col + 1) as usize;
-                if let Some(right_slot) = state.cpu_cells.get_mut(right_target) {
-                    *right_slot = GpuCell {
-                        glyph_index,
-                        fg_packed: fg,
-                        bg_packed: bg,
-                        style_flags: style_flags | STYLE_WIDE_RIGHT_HALF,
-                        hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.0),
+            match slot {
+                GridSlot::Empty => left_half = None,
+                GridSlot::Cell(cell) => {
+                    let gpu = GpuCell {
+                        glyph_index: resolve_glyph_index(cell, state, fonts, atlas, phys_font_size),
+                        fg_packed: packed_palette.cell_fg(cell.fg),
+                        bg_packed: packed_palette.cell_bg(cell.bg),
+                        style_flags: u32::from(
+                            cell.style | style_from_combining_marks(&cell.text).bits(),
+                        ),
+                        hyperlink_id: cell.hyperlink.map_or(0, |id| id.0),
                     };
+                    if let Some(target) = state.cpu_cells.get_mut(target) {
+                        *target = gpu;
+                    }
+                    left_half = Some(gpu);
+                }
+                // NOTE: For width=2 (CJK / wide) cells we ALSO populate the
+                //       right-half slot with the same glyph_index + fg + bg
+                //       and set STYLE_WIDE_RIGHT_HALF. The shader uses the
+                //       bit to anchor the wide glyph to the left-half cell's
+                //       origin (`in_cell_px_eff = in_cell_px + vec2(cell_pitch_px.x, 0)`),
+                //       rendering a continuous wide glyph across both cells.
+                //       Without this, the right half stays at GpuCell::default
+                //       (bg=0 transparent, glyph_index=GLYPH_NONE) and CJK
+                //       characters render as half-glyphs with black gaps.
+                GridSlot::WideTrailer => {
+                    if let Some(left) = left_half.take()
+                        && let Some(target) = state.cpu_cells.get_mut(target)
+                    {
+                        *target = GpuCell {
+                            style_flags: left.style_flags | STYLE_WIDE_RIGHT_HALF,
+                            ..left
+                        };
+                    }
                 }
             }
-
-            col = col.saturating_add(cell_width);
         }
     }
 }
@@ -1025,19 +1106,105 @@ mod tests {
     }
 
     fn cell_with_link(text: &str, link: Option<u32>) -> GridCell {
-        use crate::schema::{Color as CellColor, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri};
+        use crate::schema::{Color as CellColor, HyperlinkId};
         GridCell {
             text: text.to_string(),
-            width: 1,
-            point: GridPoint::default(),
             fg: CellColor::DefaultForeground,
             bg: CellColor::DefaultBackground,
             style: 0,
-            hyperlink: link.map(|id| Hyperlink {
-                id: HyperlinkId(id),
-                uri: HyperlinkUri::new("https://example"),
-            }),
+            hyperlink: link.map(HyperlinkId),
         }
+    }
+
+    /// Returns the observable payload of each GPU slot as
+    /// `(glyph_index, fg, bg, style_flags, hyperlink_id)`.
+    fn gpu_cell_fingerprint(cells: &[GpuCell]) -> Vec<(u32, u32, u32, u32, u32)> {
+        cells
+            .iter()
+            .map(|cell| {
+                (
+                    cell.glyph_index,
+                    cell.fg_packed,
+                    cell.bg_packed,
+                    cell.style_flags,
+                    cell.hyperlink_id,
+                )
+            })
+            .collect()
+    }
+
+    /// Builds a state whose cell buffer is sized for `cell_count` slots.
+    fn state_for(cell_count: usize) -> TerminalMaterialState {
+        use bevy::platform::collections::HashMap;
+        TerminalMaterialState {
+            glyph_index_map: HashMap::new(),
+            cpu_cells: vec![GpuCell::default(); cell_count],
+            cpu_glyphs: Vec::new(),
+            last_atlas_generation: 0,
+            grid_dirty: true,
+            last_grid_dims: (0, 0),
+            last_phys_font_size: 0,
+            cached_metrics: None,
+            initialized: false,
+        }
+    }
+
+    /// Asserts the GPU slots a row of a wide char, a combining mark and a
+    /// linked cell produces, pinning the payload of every slot including
+    /// the wide char's right half.
+    ///
+    /// Case: a file listing hyperlinks a CJK filename so it opens on
+    /// click, while an accented latin suffix typed right after it stays
+    /// plain, unlinked text.
+    #[test]
+    fn rebuild_cells_pins_wide_combining_and_linked_slots() {
+        let wide = cell_with_link("あ", Some(3));
+        let combining = cell_with_link("e\u{0332}", None);
+        let plain = cell_with_link("z", None);
+        let cells = TerminalCells {
+            cells: vec![vec![
+                GridSlot::Cell(wide),
+                GridSlot::WideTrailer,
+                GridSlot::Cell(combining),
+                GridSlot::Cell(plain),
+            ]],
+            ..Default::default()
+        };
+        let mut state = state_for(4);
+        let mut atlas = GlyphAtlas::default();
+        let fonts = TerminalFonts::default();
+
+        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 16, 4);
+
+        let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
+        assert_eq!(
+            fingerprint[0].4, 3,
+            "the wide cell carries its hyperlink id"
+        );
+        assert_eq!(
+            fingerprint[1].4, 3,
+            "the wide cell's right half repeats the hyperlink id"
+        );
+        assert_eq!(
+            fingerprint[1].0, fingerprint[0].0,
+            "the right half repeats the left half's glyph"
+        );
+        assert_ne!(
+            fingerprint[1].3 & STYLE_WIDE_RIGHT_HALF,
+            0,
+            "the right half is flagged"
+        );
+        assert_eq!(fingerprint[2].4, 0, "the combining cell is unlinked");
+        assert_eq!(fingerprint[3].4, 0, "the plain cell is unlinked");
+        assert_eq!(
+            fingerprint,
+            vec![
+                (0, u32::MAX, 0, 0, 3),
+                (0, u32::MAX, 0, STYLE_WIDE_RIGHT_HALF, 3),
+                (1, u32::MAX, 0, 4, 0),
+                (2, u32::MAX, 0, 0, 0),
+            ]
+        );
     }
 
     /// Asserts that a linked cell's wire id reaches its GPU slot while
@@ -1046,31 +1213,17 @@ mod tests {
     /// Case: a row mixes OSC 8 linked text with plain text.
     #[test]
     fn rebuild_cells_writes_hyperlink_id_when_present() {
-        use bevy::platform::collections::HashMap;
-
         let linked = cell_with_link("x", Some(7));
         let unlinked = cell_with_link("y", None);
-        let grid = TerminalGrid {
-            cols: 2,
-            rows: 1,
-            cells: vec![vec![linked, unlinked]],
+        let cells = TerminalCells {
+            cells: vec![vec![GridSlot::Cell(linked), GridSlot::Cell(unlinked)]],
             ..Default::default()
         };
-        let mut state = TerminalMaterialState {
-            glyph_index_map: HashMap::new(),
-            cpu_cells: vec![GpuCell::default(); 2],
-            cpu_glyphs: Vec::new(),
-            last_atlas_generation: 0,
-            grid_dirty: true,
-            last_grid_dims: (0, 0),
-            last_phys_font_size: 0,
-            cached_metrics: None,
-            initialized: false,
-        };
+        let mut state = state_for(2);
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
-        rebuild_cells(&grid, &mut state, &fonts, &mut atlas, 16, 2);
+        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 16, 2);
 
         assert_eq!(state.cpu_cells[0].hyperlink_id, 7);
         assert_eq!(state.cpu_cells[1].hyperlink_id, 0);

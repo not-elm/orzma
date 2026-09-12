@@ -10,7 +10,7 @@ use bevy::ecs::lifecycle::Remove;
 use bevy::ecs::observer::On;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
-use bevy_orzma_tty_renderer::schema::TerminalGrid;
+use bevy_orzma_tty_renderer::schema::TerminalView;
 use bevy_orzmux::prelude::OrzmuxPane;
 
 /// Background color of the vi-mode indicator chip: bright yellow.
@@ -98,17 +98,17 @@ fn attach_indicator_to_surface_host(
 // TODO: `total` is stubbed to 0 until `bevy_orzmux` exposes a
 // history-size read; only the live scroll offset is real.
 fn refresh_indicator(
-    hosts: Query<(&TerminalGrid, &Children), With<ViModeState>>,
+    hosts: Query<(&TerminalView, &Children), With<ViModeState>>,
     mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<ViModeIndicator>>,
 ) {
-    for (grid, children) in hosts.iter() {
+    for (view, children) in hosts.iter() {
         let Some(chip) = children.iter().find(|c| chips.get(*c).is_ok()) else {
             continue;
         };
         let Ok((mut text, mut node, mut cache)) = chips.get_mut(chip) else {
             continue;
         };
-        let (offset, total) = (grid.display_offset, 0);
+        let (offset, total) = (view.display_offset, 0);
         let new_cache = IndicatorCache { offset, total };
         // NOTE: the first-show path (Display::None → Flex) must always
         // write the text even when the cache already matches the snapshot,
@@ -170,7 +170,7 @@ mod tests {
 
     fn spawn_terminal_entity(app: &mut App) -> Entity {
         app.world_mut()
-            .spawn((OrzmuxPane(PaneId(1)), TerminalGrid::default()))
+            .spawn((OrzmuxPane(PaneId(1)), TerminalView::default()))
             .id()
     }
 
@@ -263,8 +263,8 @@ mod tests {
 
         app.world_mut()
             .entity_mut(host)
-            .get_mut::<TerminalGrid>()
-            .expect("TerminalGrid on host")
+            .get_mut::<TerminalView>()
+            .expect("TerminalView on host")
             .display_offset = 5;
         app.world_mut()
             .entity_mut(host)

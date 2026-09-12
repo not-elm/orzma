@@ -20,7 +20,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
-use bevy_orzma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
+use bevy_orzma_tty_renderer::prelude::{TerminalOverlays, TerminalView};
 use bevy_orzma_webview::{Webview, focused_webview_of};
 use bevy_orzmux::prelude::RequestActiveKeyInput;
 use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
@@ -165,7 +165,7 @@ fn ime_policy_system(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
     focused: Query<Entity, With<KeyboardFocused>>,
     vi_modes: Query<(), With<ViModeState>>,
-    anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
+    anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalView)>,
     metrics: Res<TerminalCellMetricsResource>,
     focused_webview: Res<FocusedWebview>,
     webview_anchors: Query<(&ComputedNode, &UiGlobalTransform)>,
@@ -259,13 +259,13 @@ fn ime_policy_system(
     // is also physical px). To get the node's top-left in physical
     // px, subtract `0.5 * node.size()`. Do NOT multiply translation
     // by `scale` — it's already physical.
-    let Ok((node, ui_xform, grid)) = anchors.get(entity) else {
+    let Ok((node, ui_xform, view)) = anchors.get(entity) else {
         return;
     };
     let scale = window.resolution.scale_factor().max(f32::EPSILON);
     let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
-    let (cursor_col, cursor_row) = grid.cursor_viewport_cell_or_top();
+    let (cursor_col, cursor_row) = view.cursor_viewport_cell_or_top();
     let host_origin_phys = ui_xform.translation - 0.5 * node.size();
     let cell_origin_phys = host_origin_phys
         + Vec2::new(
@@ -334,7 +334,7 @@ fn webview_ime_position(
     scale_factor: f32,
     webview_parents: &Query<&ChildOf, With<Webview>>,
     webview_slots: &Query<&Webview>,
-    anchors: &Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
+    anchors: &Query<(&ComputedNode, &UiGlobalTransform, &TerminalView)>,
     overlays: &Query<&TerminalOverlays>,
     metrics: &TerminalCellMetricsResource,
     child: Entity,
@@ -381,7 +381,7 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
     use bevy_orzma_tty_renderer::CellMetrics;
-    use bevy_orzma_tty_renderer::prelude::{Cursor, TerminalGrid};
+    use bevy_orzma_tty_renderer::prelude::{Cursor, TerminalView};
     use orzma_vt::prelude::InstanceId;
 
     #[test]
@@ -694,7 +694,7 @@ mod tests {
                     ..ComputedNode::DEFAULT
                 },
                 UiGlobalTransform::from_xy(400.0, 300.0),
-                TerminalGrid::default(),
+                TerminalView::default(),
                 overlays,
             ))
             .id();
@@ -860,7 +860,7 @@ mod tests {
             KeyboardFocused,
             ComputedNode::default(),
             UiGlobalTransform::default(),
-            TerminalGrid {
+            TerminalView {
                 cursor: Some(Cursor::default()),
                 ..default()
             },
@@ -914,7 +914,7 @@ mod tests {
             KeyboardFocused,
             ComputedNode::default(),
             UiGlobalTransform::default(),
-            TerminalGrid {
+            TerminalView {
                 cursor: Some(Cursor::default()),
                 ..default()
             },

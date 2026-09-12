@@ -19,7 +19,7 @@ use bevy_cef::prelude::{
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_orzma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
-use bevy_orzma_tty_renderer::schema::TerminalGrid;
+use bevy_orzma_tty_renderer::schema::TerminalView;
 use bevy_orzmux::prelude::{RequestTtyWebviewRemove, TtyWebviewEvictedSignal};
 use orzma_vt::prelude::InstanceId;
 
@@ -533,7 +533,7 @@ fn project_webview_overlays(
     mut commands: Commands,
     terminals: Query<(
         Entity,
-        &TerminalGrid,
+        &TerminalView,
         Option<&Children>,
         Has<TerminalOverlays>,
     )>,
@@ -545,7 +545,7 @@ fn project_webview_overlays(
     )>,
     writers: Res<ConnectionWriters>,
 ) {
-    for (terminal, grid, children, has_overlays) in &terminals {
+    for (terminal, terminal_view, children, has_overlays) in &terminals {
         let mut overlays = TerminalOverlays::default();
         let mut has_webview_child = false;
         if let Some(kids) = children {
@@ -554,13 +554,18 @@ fn project_webview_overlays(
                     continue;
                 };
                 has_webview_child = true;
-                let Some(projected) = grid.placements.iter().find(|p| p.id == view.instance) else {
+                let Some(projected) = terminal_view
+                    .placements
+                    .iter()
+                    .find(|p| p.id == view.instance)
+                else {
                     continue;
                 };
-                let row = i64::from(projected.point.line.0) + i64::from(grid.display_offset);
+                let row =
+                    i64::from(projected.point.line.0) + i64::from(terminal_view.display_offset);
                 if row + i64::from(projected.size.rows) <= 0
-                    || row >= i64::from(grid.rows)
-                    || u32::from(projected.point.column.0) >= u32::from(grid.cols)
+                    || row >= i64::from(terminal_view.rows)
+                    || u32::from(projected.point.column.0) >= u32::from(terminal_view.cols)
                 {
                     continue;
                 }
@@ -776,21 +781,21 @@ mod tests {
         app.update();
     }
 
-    fn grid_with_placements(
+    fn view_with_placements(
         rows: u16,
         cols: u16,
         placements: Vec<AnchoredPlacement>,
-    ) -> TerminalGrid {
-        grid_with_placements_at(rows, cols, 0, placements)
+    ) -> TerminalView {
+        view_with_placements_at(rows, cols, 0, placements)
     }
 
-    fn grid_with_placements_at(
+    fn view_with_placements_at(
         rows: u16,
         cols: u16,
         display_offset: u32,
         placements: Vec<AnchoredPlacement>,
-    ) -> TerminalGrid {
-        TerminalGrid {
+    ) -> TerminalView {
+        TerminalView {
             rows,
             cols,
             display_offset,
@@ -1256,7 +1261,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = app
             .world_mut()
-            .spawn(grid_with_placements(24, 80, vec![placed(InstanceId(1))]))
+            .spawn(view_with_placements(24, 80, vec![placed(InstanceId(1))]))
             .id();
         let handle = spawn_projection_child(&mut app, terminal, 2, InstanceId(1));
 
@@ -1284,7 +1289,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = app
             .world_mut()
-            .spawn(grid_with_placements(
+            .spawn(view_with_placements(
                 24,
                 80,
                 vec![placed(InstanceId(1)), placed(InstanceId(2))],
@@ -1321,7 +1326,7 @@ mod tests {
         mount(&mut app, terminal, instance);
         app.world_mut()
             .entity_mut(terminal)
-            .insert(grid_with_placements(24, 80, vec![placed(instance)]));
+            .insert(view_with_placements(24, 80, vec![placed(instance)]));
         run_projection(&mut app);
         let overlays = overlays_of(&app, terminal);
         assert_ne!(overlays.rects[0], IVec4::ZERO);
@@ -1360,7 +1365,7 @@ mod tests {
         ] {
             app.world_mut()
                 .entity_mut(terminal)
-                .insert(grid_with_placements(
+                .insert(view_with_placements(
                     24,
                     80,
                     vec![AnchoredPlacement {
@@ -1393,7 +1398,7 @@ mod tests {
 
         app.world_mut()
             .entity_mut(terminal)
-            .insert(grid_with_placements_at(
+            .insert(view_with_placements_at(
                 24,
                 80,
                 3,
@@ -1421,7 +1426,7 @@ mod tests {
         mount(&mut app, terminal, instance);
         app.world_mut()
             .entity_mut(terminal)
-            .insert(grid_with_placements(
+            .insert(view_with_placements(
                 24,
                 80,
                 vec![AnchoredPlacement {
@@ -1454,7 +1459,7 @@ mod tests {
         mount(&mut app, terminal, instance);
         app.world_mut()
             .entity_mut(terminal)
-            .insert(grid_with_placements(
+            .insert(view_with_placements(
                 24,
                 80,
                 vec![AnchoredPlacement {
@@ -1483,7 +1488,7 @@ mod tests {
         mount(&mut app, terminal, instance);
         app.world_mut()
             .entity_mut(terminal)
-            .insert(grid_with_placements(24, 80, vec![]));
+            .insert(view_with_placements(24, 80, vec![]));
         run_projection(&mut app);
         let overlays = overlays_of(&app, terminal);
         assert_eq!(overlays.rects[0], IVec4::ZERO);
@@ -1500,7 +1505,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         app.world_mut()
             .entity_mut(terminal)
-            .insert(grid_with_placements(
+            .insert(view_with_placements(
                 24,
                 80,
                 vec![AnchoredPlacement {
@@ -1536,7 +1541,7 @@ mod tests {
         first
             .world_mut()
             .entity_mut(mounted_first)
-            .insert(grid_with_placements(24, 80, vec![rect(instance_a)]));
+            .insert(view_with_placements(24, 80, vec![rect(instance_a)]));
         run_projection(&mut first);
         let rect_a = first
             .world()
@@ -1548,7 +1553,7 @@ mod tests {
         second
             .world_mut()
             .entity_mut(framed_first)
-            .insert(grid_with_placements(24, 80, vec![rect(instance_b)]));
+            .insert(view_with_placements(24, 80, vec![rect(instance_b)]));
         run_projection(&mut second);
         assert!(
             second
@@ -1580,7 +1585,7 @@ mod tests {
         assert_eq!(webview_children_of(&app, terminal).len(), 1);
         app.world_mut()
             .entity_mut(terminal)
-            .insert(grid_with_placements(
+            .insert(view_with_placements(
                 24,
                 80,
                 vec![AnchoredPlacement {
@@ -2239,7 +2244,7 @@ mod tests {
         app.insert_resource(writers);
         let terminal = app
             .world_mut()
-            .spawn(grid_with_placements(24, 80, vec![placed(InstanceId(1))]))
+            .spawn(view_with_placements(24, 80, vec![placed(InstanceId(1))]))
             .id();
         let entity =
             spawn_owned_projection_child(&mut app, terminal, 0, InstanceId(1), 1, "myhandle");
@@ -2274,7 +2279,7 @@ mod tests {
         app.insert_resource(writers);
         let terminal = app
             .world_mut()
-            .spawn(grid_with_placements(24, 80, vec![placed(InstanceId(1))]))
+            .spawn(view_with_placements(24, 80, vec![placed(InstanceId(1))]))
             .id();
         spawn_owned_projection_child(&mut app, terminal, 0, InstanceId(1), 1, "myhandle");
 
@@ -2300,7 +2305,7 @@ mod tests {
         app.insert_resource(writers);
         let terminal = app
             .world_mut()
-            .spawn(grid_with_placements(24, 80, vec![placed(InstanceId(1))]))
+            .spawn(view_with_placements(24, 80, vec![placed(InstanceId(1))]))
             .id();
         let child =
             spawn_owned_projection_child(&mut app, terminal, 0, InstanceId(1), 1, "myhandle");
@@ -2335,7 +2340,7 @@ mod tests {
         app.insert_resource(writers);
         let terminal = app
             .world_mut()
-            .spawn(grid_with_placements(24, 80, vec![]))
+            .spawn(view_with_placements(24, 80, vec![]))
             .id();
         let child =
             spawn_owned_projection_child(&mut app, terminal, 0, InstanceId(1), 1, "myhandle");

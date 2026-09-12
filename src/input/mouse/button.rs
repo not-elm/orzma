@@ -455,7 +455,7 @@ fn resolve_button_event(
     };
     let link = (kind == MouseReportKind::Press && button == MouseButtonKind::Left && modifier_held)
         .then(|| {
-            ctx.grid
+            ctx.cells
                 .hyperlink_at((cell.row - 1) as u16, (cell.col - 1) as u16)
                 .map(|(_id, uri)| uri.as_str().to_string())
         })
@@ -563,7 +563,7 @@ mod tests {
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::message::Messages;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
-    use bevy_orzma_tty_renderer::schema::TerminalGrid;
+    use bevy_orzma_tty_renderer::schema::TerminalView;
 
     fn make_selection_app() -> App {
         use bevy::window::WindowResolution;
@@ -587,7 +587,7 @@ mod tests {
                 ..ComputedNode::DEFAULT
             },
             UiGlobalTransform::from_xy(400.0, 300.0),
-            TerminalGrid {
+            TerminalView {
                 cols: 100,
                 rows: 37,
                 ..default()
