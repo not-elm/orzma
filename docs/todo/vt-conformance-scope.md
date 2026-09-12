@@ -36,7 +36,7 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 | `ESC∅` | `esc_dispatch` 末尾の `_ => {}`（`interpreter.rs:232`） |
 | `MODE∅` | `set_private_modes`（`interpreter.rs:630`）に番号が無い |
 | `INTER∅` | intermediate 付きが dispatch 前に落ちる（`interpreter.rs:238`） |
-| `OSC∅` | `osc_dispatch`（`interpreter.rs:452`）は title と cwd のみ |
+| `OSC∅` | `Executor::osc_dispatch` は title・cwd・パレット（OSC 4 / 104）のみ |
 
 ### 1-A. 描画が壊れるもの（最優先）
 
@@ -59,16 +59,20 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 
 | シーケンス | 機能 | terminfo | 現状 | 影響 |
 |---|---|---|---|---|
-| `CSI ! p` | DECSTR ソフトリセット | `is2`, `rs2` | `INTER∅` | **terminfo 経由の初期化列の先頭**。毎回無視されモードが残留する。`CharacterSetMapping::reset()` は DECSTR 待ちで `#[expect(dead_code)]` のまま（`character_sets.rs:220`）。**DECTCEM 実装後、優先度が上がった**: vt510 p.277 Table 5-9 は DECSTR 後の DECTCEM を "Cursor enabled." と定めており、`is2`/`rs2` の先頭が `\E[!p` なので **`tput init` が隠れたカーソルを回復できない**。RIS (`\Ec`) は `VtModes::default()` で回復するが、DECSTR は名指しした一部だけを戻すので `text_cursor_enable = Shown` を明示的に含める必要がある。**DECAWM も同じ Table 5-9 に載っている**（"Autowrap / DECAWM / No autowrap."、IRM の "Replace mode." も同様）。IRM は `InsertReplaceMode::default()` が既に `Replace` なので一致するが、`AutoWrap::default()` は `Enabled` なので **DECAWM だけ default が表の値と逆**であり、値そのものが要判断（`am` を広告する端末で本当に off に落とすか）。含める場合は `modes_mut` への直書きではなく `DeviceState::set_auto_wrap` を通すこと — reset 方向は両画面の LCF 解除を伴う（§4 の LCF 一覧を参照）。**DECCOLM 調査で判明した 2 点（2026-09-12）**: (a) xterm の `ReallyReset` はマージン既定化（`resetMarginMode()`）を RIS と DECSTR の**両方**で呼ぶが、`CursorSet(screen, 0, 0, …)` は `if (full)` ＝ RIS 側にしか無い。DECSTR が (0,0) に戻すのは**保存カーソルのスロットだけ**である（`CursorSave(xw); screen->sc[whichBuf].row = col = 0;`）。したがって **`Screen::set_scroll_region(None, None)` は DECSTR にそのまま使えない** — `seat_home()` を含むのでライブカーソルまで動く。カーソルを動かさずマージンだけ戻す経路が要る。(b) 同じ DECSTR 腕は `bitcpy(&xw->flags, xw->initflags, WRAPAROUND | …)` で **DECAWM をリソース既定（`autoWrap` = true）に戻す**ので、Table 5-9 の "No autowrap" とは逆。`am` を広告する `xterm-256color` を名乗る以上 **orzma も on に戻す**のが整合する — これが上の「値そのものが要判断」への答え |
+| `CSI ! p` | DECSTR ソフトリセット | `is2`, `rs2` | `INTER∅` | **terminfo 経由の初期化列の先頭**。毎回無視されモードが残留する。`CharacterSetMapping::reset()` は DECSTR 待ちで `#[expect(dead_code)]` のまま（`character_sets.rs:220`）。**DECTCEM 実装後、優先度が上がった**: vt510 p.277 Table 5-9 は DECSTR 後の DECTCEM を "Cursor enabled." と定めており、`is2`/`rs2` の先頭が `\E[!p` なので **`tput init` が隠れたカーソルを回復できない**。RIS (`\Ec`) は `VtModes::default()` で回復するが、DECSTR は名指しした一部だけを戻すので `text_cursor_enable = Shown` を明示的に含める必要がある。**DECAWM も同じ Table 5-9 に載っている**（"Autowrap / DECAWM / No autowrap."、IRM の "Replace mode." も同様）。IRM は `InsertReplaceMode::default()` が既に `Replace` なので一致するが、`AutoWrap::default()` は `Enabled` なので **DECAWM だけ default が表の値と逆**であり、値そのものが要判断（`am` を広告する端末で本当に off に落とすか）。含める場合は `modes_mut` への直書きではなく `DeviceState::set_auto_wrap` を通すこと — reset 方向は両画面の LCF 解除を伴う（§4 の LCF 一覧を参照）。**DECCOLM 調査で判明した 2 点（2026-09-12）**: (a) xterm の `ReallyReset` はマージン既定化（`resetMarginMode()`）を RIS と DECSTR の**両方**で呼ぶが、`CursorSet(screen, 0, 0, …)` は `if (full)` ＝ RIS 側にしか無い。DECSTR が (0,0) に戻すのは**保存カーソルのスロットだけ**である（`CursorSave(xw); screen->sc[whichBuf].row = col = 0;`）。したがって **`Screen::set_scroll_region(None, None)` は DECSTR にそのまま使えない** — `seat_home()` を含むのでライブカーソルまで動く。カーソルを動かさずマージンだけ戻す経路が要る。(b) 同じ DECSTR 腕は `bitcpy(&xw->flags, xw->initflags, WRAPAROUND | …)` で **DECAWM をリソース既定（`autoWrap` = true）に戻す**ので、Table 5-9 の "No autowrap" とは逆。`am` を広告する `xterm-256color` を名乗る以上 **orzma も on に戻す**のが整合する — これが上の「値そのものが要判断」への答え。**パレットも対象（OSC 4 実装時に判明、2026-09-12）**: xterm の `ReallyReset`（`charproc.c`）は DECSTR でも `ResetAnsiColorRequest` を呼んで 256 色を既定に戻すので、DECSTR を実装するときは `DeviceState::reset_indexed_colors` も呼ぶ |
 | `CSI ?12 h/l` | カーソル点滅 | `cnorm`, `cvvis` | `MODE∅`。`blinking: false` 固定 | 点滅指定が効かない |
 | ~~`CSI ?3 h/l`~~ | ~~DECCOLM~~ | `is2`, `rs2` の一部 | **✅ 意図的に無視と明示（2026-09-12）**。`set_private_modes` に `3 => {}`。理由は `// NOTE:` に記録: ペインの幅は VT の持ち物ではなく（サイズは ウィンドウ形状 → レイアウト木 → PTY の一方通行）、vt510 p.143 が DECCOLM に定める副作用（左右上下マージンの既定化とページ全消去）だけを実行すると、来ない幅変更の代償にページを壊すことになる。`is2` に `\E[?3l` が入るので、これは **`tput init` のたびに**起きる。**xterm 自身がこのシーケンス全体を `c132` リソース（既定 off）で塞いでおり、同じ no-op に落ちる**（manpage `-132`: *"Normally, the VT102 DECCOLM escape sequence … is ignored"*、`charproc.c` の `srm_DECCOLM` は本体すべてが `if (screen->c132)` の中）。参照実装は割れている: ghostty も `?40`（既定 off）で完全無視、foot は `decset_decrst` に `case 3:` 自体が無い。kitty は **set 方向だけ**全消去＋ホーム、alacritty と wezterm は双方向でマージン既定化＋ホーム＋全消去（いずれもリサイズはしない）。テストは `interpreter/tests/column_mode.rs`（副作用を入れる変異で 4 本とも落ちることを確認済み） | ~~初期化列に含まれる~~ |
 | ~~`CSI ?1034 h/l`~~ | ~~8bit Meta~~ | `smm`/`rmm`, `km` | **✅ 意図的に無視と明示（2026-09-11）**。`set_private_modes` に `1034 => {}`。Alt は常に ESC 前置（xterm の metaSendsEscape 相当）で、xterm と foot は 1036 を 1034 より優先するので、この設定では 8 ビット符号化に到達しない。bash / readline が起動時に送る `smm` は変更前から無視されており、挙動は変わらない。テストは `interpreter/tests/meta_key.rs` | ~~Meta キーのバイト表現が食い違う~~ |
 | `CSI ?5 h/l` | DECSCNM 反転 | `flash` | `MODE∅` | ビジュアルベルが無反応 |
 | `CSI 5 m` | SGR blink | `blink`, `sgr` | **意図的に no-op**（`sgr.rs:112` の `5 \| 6 \| 25 \| ... => {}`） | 点滅が普通の文字になる。`Style` へのビット追加＋レンダラ対応が要る |
-| `OSC 4;n;rgb:…` | インデックス色変更 | `initc`, `ccc` | `OSC∅` | パレット変更が効かない |
+| ~~`OSC 4;n;rgb:…`~~ | ~~インデックス色変更~~ | `initc`, `ccc`, `oc` | **✅ 実装済み（2026-09-12）**。OSC 4 の設定と `?` 問い合わせ（応答は問い合わせと同じ終端で、8 ビット値を 2 回並べた `rgb:hhhh/…`）、OSC 104（番号指定と、引数なしの全リセット）を実装し、RIS でもパレットを戻す（xterm の `ReallyReset` と同じ）。`oc=\E]104\007` は ncurses 6.6 の entry が広告する（macOS 同梱の 6.0 には無い）。**意図的に無視**: Special Colors（OSC 4 の 256〜260、OSC 5 / 105 / 6 / 106）と、`rgb:` / `#` 以外の color_spec（色名・`rgbi:`・CIE 系）。**xterm と異なる点**: 不正な組はその組だけ落として続行する（xterm は最初の誤りで打ち切る）。**制約**: vtparse 0.7 の `MAX_OSC = 64` により、1 本の OSC 4 は 31 組、OSC 104 は 63 番号まで。テストは `interpreter/tests/palette.rs` | ~~パレット変更が効かない~~ |
 
 > `CSI ?4 l`（DECSCLM リセット）は広告されているが、orzma はもともとジャンプスクロール
 > なので**追加で壊れる挙動は無い**。実装は不要。
+
+> 観察（2026-09-12、未修正）: vtparse 0.7 は CAN / SUB で打ち切られた OSC も `osc_dispatch` する。
+> ECMA-48 では CAN はシーケンスを取り消すので、取り消されたはずの `OSC 4;1;?` に応答が返る。
+> 既存の title（OSC 0 / 2）も同じ挙動。
 
 ### 1-C. レガシー（広告はされているが実務価値が低い）
 
@@ -235,7 +239,7 @@ STD-070 が LCF をリセットすると規定する操作:
    ライブカーソルは動かさない**ので `Screen::set_scroll_region(None, None)` は使えず、
    DECAWM は Table 5-9 の "No autowrap" ではなく on に戻す — 根拠は §1-B の DECSTR 行。
 5. **入力側の契約修正**（`kbs` の方針決定 → ファンクションキー → 修飾キー）。~~Shift-Tab~~ と Insert は **完了（2026-09-11）**。~~Meta~~ は §1-B の `CSI ?1034 h/l` 行のとおり意図的に無視と決着（2026-09-11）。
-6. **OSC 4/10/11/12** とその問い合わせ・リセット。
+6. ~~**OSC 4**~~ **完了（2026-09-12、OSC 104 と `?` 問い合わせを含む）** → 残るのは **OSC 10/11/12** とその問い合わせ・リセット（OSC 110/111/112）。OSC 4 で入れた `PaletteRequest` を広げて扱う。RIS での復帰は `Palette::reset`（全色を既定値へ戻す）が既に賄うので、ハンドラ側は `Palette` の `foreground` / `background` を書くのと、full repaint の staging（`frame.rs` の `palette` フィールドの TODO）を足すだけでよい。なお `OSC 104` は xterm-ctlseqs.pdf のとおりインデックス表だけを戻す（`Palette::reset_all_indexed`）ので、そちらに前景/背景を巻き込まないこと。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
 8. **OSC 8 / OSC 52**、**DECLRMM/DECSLRM**、**1015**。
 9. **残りの厳密準拠**: SGR blink、DECSCNM。~~メモリロック、プリンタ制御~~ は

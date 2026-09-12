@@ -47,10 +47,10 @@ pub struct Frame {
     /// `display_offset` and culls what falls outside the viewport.
     pub placements: Option<Vec<AnchoredPlacement>>,
     /// The live palette symbolic colors resolve against: `None` when
-    /// unchanged.
+    /// unchanged. A palette override owes a staged full repaint.
     ///
-    /// TODO: stage a full repaint when an OSC 4 / 10 / 11 / 12 handler
-    /// overrides the palette.
+    /// TODO: stage it from the OSC 10 / 11 / 12 handler too, once that
+    /// handler lands.
     pub palette: Option<Palette>,
     /// Definitions for hyperlink ids referenced by `rows`, merged into
     /// the consumer's retained table.

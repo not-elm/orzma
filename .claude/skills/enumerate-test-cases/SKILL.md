@@ -193,18 +193,20 @@ produce for them.
 
 ### 1b. Extract the specifications
 
-`docs/references/` holds `ECMA-48.pdf`, `vt220.pdf`, and `vt510.pdf`. Extract
-each once per session into a scratchpad directory, skipping files already
-there:
+Extract every PDF under `docs/references/` once per session into a scratchpad
+directory, skipping files already there. The loop globs the directory rather
+than naming the manuals, so a manual added later is searched without an edit
+here:
 
 ```bash
 mkdir -p "$SCRATCH/vt-refs"
-for f in ECMA-48 vt220 vt510; do
-  [ -f "$SCRATCH/vt-refs/$f.txt" ] || pdftotext -layout "docs/references/$f.pdf" "$SCRATCH/vt-refs/$f.txt"
+for pdf in docs/references/*.pdf; do
+  f=$(basename "$pdf" .pdf)
+  [ -f "$SCRATCH/vt-refs/$f.txt" ] || pdftotext -layout "$pdf" "$SCRATCH/vt-refs/$f.txt"
 done
 ```
 
-All three extract in about 0.6 s together. Search them with `Grep`.
+Search the extractions with `Grep`.
 
 `-layout` is fixed, not incidental: the same PDF yields 13943 lines with
 `-layout`, 15183 with `-raw`, and 35996 with neither, so the flag set is part
@@ -266,9 +268,10 @@ If every hit for a control function is a contents, index, or cross-reference
 line, treat that function as absent from that manual and descend the
 precedence order.
 
-### 1e. Precedence among the three manuals
+### 1e. Precedence among the manuals
 
-Applied only when they disagree:
+The three manuals that define the DEC and ECMA-48 control functions are
+ranked, applied only when they disagree:
 
 1. `vt510.pdf` — the terminal orzma emulates, and the most recent DEC
    statement of any DEC-specific behaviour.
@@ -276,6 +279,14 @@ Applied only when they disagree:
    vocabulary this crate already follows.
 3. `ECMA-48.pdf` — the general definition of a control function, and the
    fallback where both DEC manuals are silent.
+
+The other manuals under `docs/references/` govern topics those three do not
+treat, so they sit outside the ranking rather than below it:
+`xterm-ctlseqs.pdf` defines the xterm extensions this terminal implements
+because it advertises `xterm-256color`, such as the operating system commands,
+and `xlib.pdf` defines the color string grammar `xterm-ctlseqs.pdf` defers to
+through `XParseColor`. When one of them disagrees with a ranked manual, report
+the disagreement as a specification conflict, as below, rather than ranking it.
 
 Descending a level requires evidence, not an impression. Before treating VT510
 as silent on a control function, try the mnemonic (`RI`), the expanded name

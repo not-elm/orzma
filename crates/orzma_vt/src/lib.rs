@@ -418,6 +418,7 @@ impl Vt for OrzmaVt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::color::{Palette, Rgb};
     use crate::device::modes::{AutoWrap, InsertReplaceMode};
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
     use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
@@ -925,6 +926,45 @@ mod tests {
         let mut vt = vt();
         let frame = vt.frame().expect("the seeded Full emits");
         assert_eq!(frame.rows.len(), 3);
+    }
+
+    /// Asserts that a palette change emits a frame carrying the new
+    /// palette and every viewport row.
+    ///
+    /// Case: a theme script recolors ANSI red while the prompt it colors
+    /// is on screen.
+    #[test]
+    fn a_palette_change_emits_the_palette_with_every_viewport_row() {
+        let mut vt = vt();
+        vt.frame();
+        vt.interpret(b"\x1b]4;1;rgb:12/34/56\x07");
+        let frame = vt.frame().expect("a palette change emits");
+        let palette = frame
+            .palette
+            .expect("the frame carries the changed palette");
+        assert_eq!(
+            palette.indexed[1],
+            Rgb {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56
+            }
+        );
+        assert_eq!(frame.rows.len(), 3);
+    }
+
+    /// Asserts that a reset after a recolor emits the default palette.
+    ///
+    /// Case: the user runs `reset` after a theme script recolored the
+    /// palette, with nothing printed in between.
+    #[test]
+    fn a_reset_after_a_recolor_emits_the_default_palette() {
+        let mut vt = vt();
+        vt.interpret(b"\x1b]4;1;rgb:12/34/56\x07");
+        vt.frame();
+        vt.interpret(b"\x1bc");
+        let frame = vt.frame().expect("the palette's return emits");
+        assert_eq!(frame.palette, Some(Palette::default()));
     }
 
     /// Asserts that interpreting a printable chunk reports the chunk as

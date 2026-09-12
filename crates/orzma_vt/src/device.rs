@@ -3,7 +3,7 @@
 pub(crate) mod color;
 pub(crate) mod modes;
 
-use crate::device::color::Palette;
+use crate::device::color::{Palette, Rgb};
 use crate::device::modes::{AutoWrap, ScreenKind, VtModes};
 use crate::frame::damage::DamageSpan;
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 pub(crate) struct DeviceState {
     screens: Screens,
     modes: VtModes,
-    colors: ColorTable,
+    palette: Palette,
     title: TitleState,
 }
 
@@ -36,9 +36,7 @@ impl DeviceState {
                 alternate: Screen::new(size, 0),
             },
             modes: VtModes::default(),
-            colors: ColorTable {
-                palette: Palette::default(),
-            },
+            palette: Palette::default(),
             title: TitleState::default(),
         }
     }
@@ -109,6 +107,10 @@ impl DeviceState {
     /// The title is cleared too, dropping both the current title and the
     /// whole save stack.
     ///
+    /// The whole palette returns to its built-in defaults too, and a
+    /// reset that changes a color reports a full repaint even when
+    /// neither screen was written.
+    ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`)
@@ -124,7 +126,8 @@ impl DeviceState {
         // `set_auto_wrap` instead.
         self.modes = VtModes::default();
         self.title = TitleState::default();
-        (was_showing_alternate || primary.is_some()).then_some(DamageSpan::Full)
+        let palette_changed = self.palette.reset();
+        (was_showing_alternate || primary.is_some() || palette_changed).then_some(DamageSpan::Full)
     }
 
     /// The window title the application last set, if any.
@@ -226,7 +229,37 @@ impl DeviceState {
 
     /// The live palette symbolic colors resolve against.
     pub fn palette(&self) -> &Palette {
-        &self.colors.palette
+        &self.palette
+    }
+
+    /// Sets palette slot `index` to `color`; returns whether the slot
+    /// changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 4 ; c ; spec`
+    pub fn set_indexed_color(&mut self, index: u8, color: Rgb) -> bool {
+        self.palette.set_indexed(index, color)
+    }
+
+    /// Returns palette slot `index` to its xterm default; returns
+    /// whether the slot changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 104 ; c`
+    pub fn reset_indexed_color(&mut self, index: u8) -> bool {
+        self.palette.reset_indexed(index)
+    }
+
+    /// Returns every palette slot to its xterm default; returns whether
+    /// any slot changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 104` with no colour number
+    pub fn reset_indexed_colors(&mut self) -> bool {
+        self.palette.reset_all_indexed()
     }
 
     /// Switches the active screen without a flip's side effects.
@@ -352,13 +385,6 @@ impl DeviceState {
 struct Screens {
     primary: Screen,
     alternate: Screen,
-}
-
-/// The base palette.
-// TODO: Apply the OSC 4 / 10 / 11 / 12 overrides to the carried
-// palette once their handlers land.
-struct ColorTable {
-    palette: Palette,
 }
 
 /// The current window title and the stack `CSI 22 t` saves it on.
@@ -927,5 +953,30 @@ mod tests {
             .active_screen_mut()
             .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
         assert_eq!(glyph_at(&device, 1, 0), 'z');
+    }
+
+    /// Asserts that a reset returns a recolored slot to its xterm
+    /// default.
+    ///
+    /// Case: the user runs `reset` after a theme script recolored ANSI
+    /// red.
+    #[test]
+    fn a_reset_restores_the_palette() {
+        let mut device = device();
+        device.set_indexed_color(1, Rgb { r: 1, g: 2, b: 3 });
+        let _ = device.reset();
+        assert_eq!(device.palette().indexed[1], Palette::default().indexed[1]);
+    }
+
+    /// Asserts that a reset reports a full repaint when it restores a
+    /// recolored slot, even with nothing printed on either screen.
+    ///
+    /// Case: a theme script recolors the palette in a fresh terminal,
+    /// and the user runs `reset` before anything is printed.
+    #[test]
+    fn a_reset_that_restores_the_palette_reports_a_full_repaint() {
+        let mut device = device();
+        device.set_indexed_color(1, Rgb { r: 1, g: 2, b: 3 });
+        assert_eq!(device.reset(), Some(DamageSpan::Full));
     }
 }

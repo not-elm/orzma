@@ -49,8 +49,8 @@ Note: `///` and `//!` are **doc comments**, not "line comments" for this rule �
 
 ## Comment references — cite `docs/references/`, nothing else under `docs/`
 
-Comments and doc comments may cite a file under `docs/references/` — the
-VT, ECMA-48 and xterm manuals — including a section of one
+Comments and doc comments may cite any file under `docs/references/*` —
+the manuals kept there are permanent — including a section of one
 (`ECMA-48 § 8.3.67`). **No other document under `docs/` may be cited from
 code**, doc comments included — not by path, and not by section number or
 decision ID (`spec §7`, `D17a of the engine-swap design`).
