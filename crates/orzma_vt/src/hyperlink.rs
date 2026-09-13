@@ -120,8 +120,6 @@ impl HyperlinkInterner {
     /// A nonempty `id` is a lookup key: a later open naming the same id
     /// and uri returns the id already on file. An absent or empty `id`
     /// returns a fresh id on every call, so two such links never join.
-    /// This is the one place that rule lives; callers pass the `id=`
-    /// value through as it was written.
     pub(crate) fn open(&mut self, id: Option<String>, uri: HyperlinkUri) -> HyperlinkId {
         match id.filter(|id| !id.is_empty()) {
             Some(id) => self.intern(SourceHyperlink {
