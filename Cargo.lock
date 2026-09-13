@@ -5091,6 +5091,7 @@ dependencies = [
 name = "orzma_vt"
 version = "0.2.0-dev"
 dependencies = [
+ "base64",
  "bitflags 2.13.0",
  "percent-encoding",
  "vtparse",

@@ -154,6 +154,7 @@ mod alternate_screen;
 mod auto_wrap;
 mod character_editing;
 mod character_set;
+mod clipboard;
 mod column_mode;
 mod cursor;
 mod cursor_checkpoint;
