@@ -1,6 +1,6 @@
 //! One row of elements, ordered left to right.
 
-use crate::screen::cell::{Cell, CellExtra, CellWidth, Pen};
+use crate::screen::cell::{Cell, CellWidth, Pen};
 use crate::screen::grid::coords::GridColumn;
 use crate::screen::grid::run::Run;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
@@ -66,7 +66,7 @@ impl Row<Cell> {
             run.cols += u16::from(width);
             Self::push_width(run, &mut chars_in_run, width);
             run.text.push(cell.c);
-            for mark in cell.extra.as_deref().map_or(&[][..], CellExtra::marks) {
+            for mark in cell.marks() {
                 Self::push_width(run, &mut chars_in_run, 0);
                 run.text.push(*mark);
             }
@@ -309,6 +309,7 @@ impl IndexMut<GridColumn> for Row<Cell> {
 mod tests {
     use super::*;
     use crate::device::color::Color;
+    use crate::screen::cell::CellExtra;
     use crate::screen::grid::run::Style;
 
     fn cell(c: char, fg: Color, bg: Color, style: Style) -> Cell {
