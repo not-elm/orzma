@@ -13,6 +13,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneId(pub u32);
 
+/// A split the layout tree minted. Never reused within one tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SplitId(pub u32);
+
 /// A window (tab).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct WindowId(pub u32);
@@ -234,6 +238,8 @@ pub struct PaneRect {
 /// A one-cell-wide divider between two panes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Separator {
+    /// The split this divider belongs to.
+    pub split: SplitId,
     /// Whether the divider runs vertically or horizontally.
     pub orientation: SplitOrientation,
     /// Left edge in cells from the window's left.

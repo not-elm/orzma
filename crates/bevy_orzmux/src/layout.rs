@@ -260,7 +260,9 @@ mod tests {
     use crate::requests::test_support::{app_with_connection, spawn_pane};
     use orzma_tty::CellPixels;
     use orzma_vt::prelude::GridSize;
-    use orzmux::prelude::{CommandSeq, Layout, PaneId, PaneRect, Separator, SplitOrientation};
+    use orzmux::prelude::{
+        CommandSeq, Layout, PaneId, PaneRect, Separator, SplitId, SplitOrientation,
+    };
 
     #[derive(Resource, Default)]
     struct Changes(Vec<(Option<Entity>, Option<Entity>)>);
@@ -318,6 +320,7 @@ mod tests {
                 },
             ],
             separators: vec![Separator {
+                split: SplitId(1),
                 orientation: SplitOrientation::Vertical,
                 x: 40,
                 y: 0,
@@ -393,6 +396,7 @@ mod tests {
         };
         let horizontal = separator_node(
             &Separator {
+                split: SplitId(1),
                 orientation: SplitOrientation::Horizontal,
                 x: 0,
                 y: 12,
@@ -420,6 +424,7 @@ mod tests {
         };
         let vertical = separator_node(
             &Separator {
+                split: SplitId(1),
                 orientation: SplitOrientation::Vertical,
                 x: 3,
                 y: 0,
@@ -464,12 +469,14 @@ mod tests {
             ],
             separators: vec![
                 Separator {
+                    split: SplitId(1),
                     orientation: SplitOrientation::Horizontal,
                     x: 0,
                     y: 12,
                     len: 40,
                 },
                 Separator {
+                    split: SplitId(2),
                     orientation: SplitOrientation::Vertical,
                     x: 40,
                     y: 0,

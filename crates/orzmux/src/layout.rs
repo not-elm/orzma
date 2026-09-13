@@ -1,7 +1,7 @@
 //! The cell-unit pane layout: a binary split tree whose leaves are
 //! panes, solved into whole-window rectangles with one-cell separators.
 
-use crate::protocol::{PaneDirection, PaneId, PaneRect, Separator, SplitOrientation};
+use crate::protocol::{PaneDirection, PaneId, PaneRect, Separator, SplitId, SplitOrientation};
 use orzma_vt::prelude::GridSize;
 use std::cmp::Reverse;
 
@@ -38,6 +38,7 @@ pub struct RootOccupied;
 pub struct LayoutTree {
     root: Option<Node>,
     history: Vec<PaneId>,
+    next_split_id: u32,
 }
 
 #[derive(Debug)]
@@ -48,6 +49,7 @@ enum Node {
 
 #[derive(Debug)]
 struct Split {
+    id: SplitId,
     orientation: SplitOrientation,
     ratio: f32,
     first: Box<Node>,
@@ -115,10 +117,12 @@ impl LayoutTree {
         if along < 3 {
             return Err(SplitRefused);
         }
+        let id = SplitId(self.next_split_id);
+        self.next_split_id += 1;
         let Some(root) = self.root.as_mut() else {
             return Err(SplitRefused);
         };
-        if !root.split_leaf(target, orientation, new) {
+        if !root.split_leaf(target, orientation, new, id) {
             return Err(SplitRefused);
         }
         self.activate(new);
@@ -299,6 +303,7 @@ impl Node {
                             },
                         );
                         out.separators.push(Separator {
+                            split: s.id,
                             orientation: SplitOrientation::Vertical,
                             x: rect.x + first,
                             y: rect.y,
@@ -324,6 +329,7 @@ impl Node {
                             },
                         );
                         out.separators.push(Separator {
+                            split: s.id,
                             orientation: SplitOrientation::Horizontal,
                             x: rect.x,
                             y: rect.y + first,
@@ -345,10 +351,17 @@ impl Node {
 
     /// Replaces the leaf `target` with a half-and-half split whose second
     /// child is `new`. Returns whether the leaf was found.
-    fn split_leaf(&mut self, target: PaneId, orientation: SplitOrientation, new: PaneId) -> bool {
+    fn split_leaf(
+        &mut self,
+        target: PaneId,
+        orientation: SplitOrientation,
+        new: PaneId,
+        id: SplitId,
+    ) -> bool {
         match self {
-            Node::Leaf(id) if *id == target => {
+            Node::Leaf(leaf) if *leaf == target => {
                 *self = Node::Split(Split {
+                    id,
                     orientation,
                     ratio: 0.5,
                     first: Box::new(Node::Leaf(target)),
@@ -358,8 +371,8 @@ impl Node {
             }
             Node::Leaf(_) => false,
             Node::Split(s) => {
-                s.first.split_leaf(target, orientation, new)
-                    || s.second.split_leaf(target, orientation, new)
+                s.first.split_leaf(target, orientation, new, id)
+                    || s.second.split_leaf(target, orientation, new, id)
             }
         }
     }
@@ -373,6 +386,7 @@ impl Node {
             Node::Leaf(id) if id == pane => (None, true),
             Node::Leaf(id) => (Some(Node::Leaf(id)), false),
             Node::Split(Split {
+                id,
                 orientation,
                 ratio,
                 first,
@@ -382,6 +396,7 @@ impl Node {
                 let (second, removed_second) = second.without(pane);
                 let node = match (first, second) {
                     (Some(first), Some(second)) => Some(Node::Split(Split {
+                        id,
                         orientation,
                         ratio,
                         first: Box::new(first),
@@ -467,6 +482,7 @@ mod tests {
         assert_eq!(
             solved.separators,
             vec![Separator {
+                split: SplitId(0),
                 orientation: SplitOrientation::Vertical,
                 x: 40,
                 y: 0,
@@ -670,5 +686,54 @@ mod tests {
         assert!(tree.remove(PaneId(1)));
         assert!(tree.is_empty());
         assert_eq!(tree.active(), None);
+    }
+
+    /// Asserts that a split that survives the collapse of an unrelated
+    /// subtree keeps the id it was minted with.
+    ///
+    /// Case: the user splits the window vertically, splits the right
+    /// half horizontally, splits that bottom pane again, then closes one
+    /// of the innermost panes.
+    #[test]
+    fn an_ancestor_split_keeps_its_id_when_a_descendant_collapses() {
+        let mut tree = LayoutTree::new();
+        tree.insert_root(PaneId(1)).unwrap();
+        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
+            .unwrap();
+        tree.split(PaneId(2), SplitOrientation::Horizontal, PaneId(3), W)
+            .unwrap();
+        tree.split(PaneId(3), SplitOrientation::Horizontal, PaneId(4), W)
+            .unwrap();
+        let before: Vec<SplitId> = tree.solve(W).separators.iter().map(|s| s.split).collect();
+        assert_eq!(before.len(), 3);
+
+        assert!(tree.remove(PaneId(4)));
+
+        let after: Vec<SplitId> = tree.solve(W).separators.iter().map(|s| s.split).collect();
+        assert_eq!(after.len(), 2);
+        for id in &after {
+            assert!(before.contains(id), "{id:?} was renumbered by the collapse");
+        }
+    }
+
+    /// Asserts that the id of a removed split is never handed to a later
+    /// split.
+    ///
+    /// Case: the user splits a pane, closes the new pane, then splits
+    /// again.
+    #[test]
+    fn a_split_id_is_never_reused() {
+        let mut tree = LayoutTree::new();
+        tree.insert_root(PaneId(1)).unwrap();
+        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
+            .unwrap();
+        let first = tree.solve(W).separators[0].split;
+
+        assert!(tree.remove(PaneId(2)));
+        assert!(tree.solve(W).separators.is_empty());
+
+        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(3), W)
+            .unwrap();
+        assert_ne!(tree.solve(W).separators[0].split, first);
     }
 }
