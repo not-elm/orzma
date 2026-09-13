@@ -119,7 +119,13 @@ mod tests {
     use crate::screen::grid::run::Style;
 
     fn cell(c: char, fg: Color, bg: Color, style: Style) -> Cell {
-        Cell { c, fg, bg, style }
+        Cell {
+            c,
+            fg,
+            bg,
+            style,
+            hyperlink_id: None,
+        }
     }
 
     fn plain(c: char) -> Cell {

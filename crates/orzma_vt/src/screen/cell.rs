@@ -1,6 +1,7 @@
 //! Internal storage cell and the SGR pen burned into it on print.
 
 use crate::device::color::Color;
+use crate::hyperlink::HyperlinkId;
 use crate::screen::grid::run::Style;
 
 /// One stored character cell: a glyph plus the attributes it was
@@ -17,7 +18,14 @@ pub struct Cell {
     pub bg: Color,
     /// The SGR attributes the glyph was printed with.
     pub style: Style,
+    /// The hyperlink the glyph was printed inside, if any.
+    pub hyperlink_id: Option<HyperlinkId>,
 }
+
+const _: () = assert!(
+    size_of::<Cell>() <= 20,
+    "a cell must not outgrow four bytes of hyperlink id"
+);
 
 impl Default for Cell {
     fn default() -> Self {
@@ -26,6 +34,7 @@ impl Default for Cell {
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
             style: Style::empty(),
+            hyperlink_id: None,
         }
     }
 }
@@ -49,6 +58,8 @@ pub struct Pen {
     pub bg: Color,
     /// The SGR attributes accumulated from SGR sequences.
     pub style: Style,
+    /// The hyperlink an `OSC 8` opened, if one is open.
+    pub hyperlink_id: Option<HyperlinkId>,
 }
 
 impl Default for Pen {
@@ -57,6 +68,7 @@ impl Default for Pen {
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
             style: Style::empty(),
+            hyperlink_id: None,
         }
     }
 }
@@ -69,6 +81,7 @@ impl Pen {
             fg: self.fg,
             bg: self.bg,
             style: self.style,
+            hyperlink_id: self.hyperlink_id,
         }
     }
 
@@ -106,6 +119,7 @@ mod tests {
             fg: Color::Indexed(1),
             bg: Color::Indexed(4),
             style: Style::BOLD,
+            hyperlink_id: None,
         };
         assert_eq!(
             pen.stamp('a'),
@@ -114,6 +128,7 @@ mod tests {
                 fg: Color::Indexed(1),
                 bg: Color::Indexed(4),
                 style: Style::BOLD,
+                hyperlink_id: None,
             }
         );
     }
@@ -128,6 +143,7 @@ mod tests {
             fg: Color::Indexed(1),
             bg: Color::Indexed(4),
             style: Style::BOLD,
+            hyperlink_id: None,
         };
         assert_eq!(pen.erase_cell(), Cell::blank_with_bg(Color::Indexed(4)));
         assert_eq!(pen.erase_cell().fg, Color::DefaultForeground);
