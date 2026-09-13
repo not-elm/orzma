@@ -437,11 +437,7 @@ impl Backend {
     /// loses focus is told before the pane that gains it, and a failed
     /// write is logged without stopping the others.
     fn refresh_focus(&mut self) {
-        let target = if self.window_focused {
-            self.tree.active()
-        } else {
-            None
-        };
+        let target = self.tree.active().filter(|_| self.window_focused);
         for (id, pane) in self.panes.iter_mut().filter(|(id, _)| Some(**id) != target) {
             if let Err(err) = pane.tty.set_focused(false) {
                 tracing::warn!(pane = ?id, %err, "focus write failed");
@@ -613,6 +609,9 @@ mod tests {
         fail_writes_next: AtomicBool,
         /// When set, every spawned pane writes into a clone of this sink.
         shared_sink: Mutex<Option<CaptureSink>>,
+        /// When set, every spawned pane's output stream starts with these
+        /// bytes, left unread until the test pumps the pane.
+        spawn_output: Mutex<Option<Vec<u8>>>,
         sizes: Mutex<Vec<GridSize>>,
         cwds: Mutex<Vec<Option<PathBuf>>>,
     }
@@ -638,6 +637,9 @@ mod tests {
             }
             let (chunk_tx, chunk_rx) = unbounded();
             let (exit_tx, exit_rx) = unbounded();
+            if let Some(output) = self.log.spawn_output.lock().unwrap().clone() {
+                chunk_tx.send(output).unwrap();
+            }
             let sink = self
                 .log
                 .shared_sink
@@ -1268,14 +1270,17 @@ mod tests {
     }
 
     /// Asserts that a split reports focus loss to the pane it splits and
-    /// nothing to the pane it creates.
+    /// nothing to the pane it creates, even when the new pane's unread
+    /// start-up output enables focus reporting.
     ///
-    /// Case: the user splits the pane running nvim.
+    /// Case: the user splits the pane running nvim on Windows, where a new
+    /// pane's start-up output enables focus reporting.
     #[test]
     fn a_split_reports_focus_loss_to_the_split_pane_only() {
         let mut h = Harness::new();
         let (root, root_pane) = h.open_root();
         enable_focus_reporting(&mut h, root, &root_pane);
+        *h.log.spawn_output.lock().unwrap() = Some(b"\x1b[?1004h".to_vec());
         let (_new, new_pane) = split_active(&mut h, 2);
         assert_eq!(root_pane.sink.contents(), b"\x1b[O");
         assert_eq!(new_pane.sink.contents(), b"");
@@ -1353,18 +1358,18 @@ mod tests {
         h.log.fail_writes_next.store(true, Ordering::Release);
         let (root, root_pane) = h.open_root();
         let (new, new_pane) = split_active(&mut h, 2);
+        h.send(OrzmuxCommand::SelectPane { pane: root });
         enable_focus_reporting(&mut h, root, &root_pane);
         enable_focus_reporting(&mut h, new, &new_pane);
-        h.send(OrzmuxCommand::SelectPane { pane: root });
         h.send(OrzmuxCommand::SelectPane { pane: new });
-        assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
+        assert_eq!(new_pane.sink.contents(), b"\x1b[I");
     }
 
     /// Asserts that one refresh writes the report for the pane being left
     /// before the report for the pane being entered.
     ///
-    /// Case: nvim in the pane being left saves on focus loss while nvim in
-    /// the pane being entered reloads changed files on focus gain.
+    /// Case: the user moves back and forth between two panes that each run a
+    /// client attached to the same tmux server with `focus-events` on.
     #[test]
     fn focus_loss_is_reported_before_focus_gain() {
         let mut h = Harness::new();

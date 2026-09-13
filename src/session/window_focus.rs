@@ -3,7 +3,6 @@
 
 use crate::system_set::OrzmaSystems;
 use bevy::app::{App, Plugin, Update};
-use bevy::ecs::entity::Entity;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
 use bevy::ecs::schedule::IntoScheduleConfigs;
@@ -21,6 +20,10 @@ impl Plugin for WindowFocusPlugin {
         app.add_message::<WindowFocused>().add_systems(
             Update,
             send_window_focus
+                // NOTE: this must stay after the input systems so that a click
+                // selecting a pane in the frame where the window regains focus
+                // reaches the backend first; otherwise the previously active
+                // pane receives a spurious `CSI I` followed by `CSI O`.
                 .after(OrzmaSystems::Input)
                 .run_if(resource_exists::<OrzmuxConnection>)
                 .run_if(on_message::<WindowFocused>),
@@ -31,11 +34,10 @@ impl Plugin for WindowFocusPlugin {
 fn send_window_focus(
     mut focus_changes: MessageReader<WindowFocused>,
     connection: Res<OrzmuxConnection>,
-    primary_window: Query<Entity, With<PrimaryWindow>>,
+    primary_windows: Query<(), With<PrimaryWindow>>,
 ) {
-    let primary = primary_window.single().ok();
     for change in focus_changes.read() {
-        if Some(change.window) == primary {
+        if primary_windows.contains(change.window) {
             connection.0.send(OrzmuxCommand::WindowFocus {
                 focused: change.focused,
             });

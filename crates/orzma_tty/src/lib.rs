@@ -342,9 +342,9 @@ impl<V: Vt> OrzmaTty<V> {
     /// (DECSET 1004): `CSI I` on gaining focus and `CSI O` on losing it.
     ///
     /// An unchanged state writes nothing, and enabling focus reporting
-    /// reports nothing until the next change. The viewport does not move.
-    /// The new state is recorded even when the write fails, and the write
-    /// error is returned.
+    /// reports nothing until the next change. The viewport does not move,
+    /// and no repaint is scheduled. The new state is recorded even when
+    /// the write fails, and the write error is returned.
     pub fn set_focused(&mut self, focused: bool) -> OrzmaTtyResult {
         if self.focused == focused {
             return Ok(());
@@ -1208,8 +1208,8 @@ mod tests {
     /// Asserts that a failed focus write still records the new state, so
     /// repeating that state attempts no second write.
     ///
-    /// Case: the pane's PTY rejects writes while the window regains focus
-    /// twice.
+    /// Case: the window regains focus while the pane's PTY rejects writes,
+    /// and the user then resizes the window before focus changes again.
     #[test]
     fn a_failed_focus_write_keeps_the_new_state() {
         let mut term = OrzmaTty::detached(FakeVt::new(80, 24), 80, 24, Box::new(FailingSink))
