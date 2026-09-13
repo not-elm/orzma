@@ -5,6 +5,16 @@ use crate::protocol::{PaneDirection, PaneId, PaneRect, Separator, SplitId, Split
 use orzma_vt::prelude::GridSize;
 use std::cmp::Reverse;
 
+// TODO: make the drag minimum configurable.
+// NOTE: rustc's dead_code lint never fires on a function that only
+// calls itself, so `Node::min_size_for_drag` (and these constants,
+// which only it reads) would leave `#[expect(dead_code)]` permanently
+// unfulfilled; `#[allow]` is used instead.
+#[allow(dead_code, reason = "consumed by the drag clamp in the next commit")]
+const MIN_DRAG_COLS: u16 = 4;
+#[allow(dead_code, reason = "consumed by the drag clamp in the next commit")]
+const MIN_DRAG_ROWS: u16 = 2;
+
 /// The solved geometry of every pane and separator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Solved {
@@ -216,6 +226,14 @@ impl LayoutTree {
         self.history.extend(active);
     }
 
+    #[cfg(test)]
+    fn min_size_for_drag(&self) -> GridSize {
+        self.root
+            .as_ref()
+            .map(Node::min_size_for_drag)
+            .unwrap_or(GridSize { cols: 0, rows: 0 })
+    }
+
     fn contains(&self, pane: PaneId) -> bool {
         self.root.as_ref().is_some_and(|root| root.has_leaf(pane))
     }
@@ -271,6 +289,35 @@ impl Node {
             Node::Split(s) => {
                 let a = s.first.min_size();
                 let b = s.second.min_size();
+                match s.orientation {
+                    SplitOrientation::Vertical => GridSize {
+                        cols: a.cols + 1 + b.cols,
+                        rows: a.rows.max(b.rows),
+                    },
+                    SplitOrientation::Horizontal => GridSize {
+                        cols: a.cols.max(b.cols),
+                        rows: a.rows + 1 + b.rows,
+                    },
+                }
+            }
+        }
+    }
+
+    /// Minimum size a drag may not shrink this subtree past: a leaf is
+    /// `MIN_DRAG_COLS` × `MIN_DRAG_ROWS`; a split needs both children
+    /// plus one separator along its axis and the larger child across it.
+    // NOTE: self-recursive, so rustc's dead_code lint never fires here;
+    // `#[expect]` would report a permanently unfulfilled expectation.
+    #[allow(dead_code, reason = "consumed by the drag clamp in the next commit")]
+    fn min_size_for_drag(&self) -> GridSize {
+        match self {
+            Node::Leaf(_) => GridSize {
+                cols: MIN_DRAG_COLS,
+                rows: MIN_DRAG_ROWS,
+            },
+            Node::Split(s) => {
+                let a = s.first.min_size_for_drag();
+                let b = s.second.min_size_for_drag();
                 match s.orientation {
                     SplitOrientation::Vertical => GridSize {
                         cols: a.cols + 1 + b.cols,
@@ -744,5 +791,32 @@ mod tests {
         tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(3), W)
             .unwrap();
         assert_ne!(tree.solve(W).separators[0].split, first);
+    }
+
+    /// Asserts that the drag minimum of a column of N panes is
+    /// `5N - 1` cells wide and that stacking N panes needs `3N - 1`
+    /// rows, so the per-leaf minimum composes through nested splits.
+    ///
+    /// Case: the user has built a three-pane column and then a
+    /// three-pane stack.
+    #[test]
+    fn the_drag_minimum_composes_through_nested_splits() {
+        let mut columns = LayoutTree::new();
+        columns.insert_root(PaneId(1)).unwrap();
+        columns
+            .split(PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
+            .unwrap();
+        columns
+            .split(PaneId(2), SplitOrientation::Vertical, PaneId(3), W)
+            .unwrap();
+        assert_eq!(columns.min_size_for_drag().cols, 14);
+
+        let mut rows = LayoutTree::new();
+        rows.insert_root(PaneId(1)).unwrap();
+        rows.split(PaneId(1), SplitOrientation::Horizontal, PaneId(2), W)
+            .unwrap();
+        rows.split(PaneId(2), SplitOrientation::Horizontal, PaneId(3), W)
+            .unwrap();
+        assert_eq!(rows.min_size_for_drag().rows, 8);
     }
 }
