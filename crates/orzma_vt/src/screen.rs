@@ -1474,7 +1474,7 @@ impl Screen {
     ///
     /// Each row's span comes from [`SelectionRange::span_on`], with
     /// trailing blanks trimmed. Rows are joined by `\n` with none after
-    /// the last.
+    /// the last. A continuation column and a wrap filler contribute nothing.
     // TODO: Join soft-wrapped rows without a newline once `Row` records
     // the wrap.
     pub fn selection_text(&self) -> Option<String> {
@@ -1485,7 +1485,9 @@ impl Screen {
             let (first, last) = range.span_on(line, last_column);
             let row = self.grid.row(GridLine(line));
             let row_text: String = (first..=last)
-                .map(|column| row[GridColumn(column)].c)
+                .map(|column| &row[GridColumn(column)])
+                .filter(|cell| !matches!(cell.width, CellWidth::Spacer | CellWidth::LeadingSpacer))
+                .map(|cell| cell.c)
                 .collect();
             if line != range.start.line.0 {
                 text.push('\n');
