@@ -38,9 +38,8 @@ pub struct Run {
     pub style: Style,
     /// UTF-8 text.
     pub text: String,
-    /// Hyperlink id (OSC 8); it is always `None`.
-    ///
-    /// TODO: set it once OSC 8 handling reaches the hyperlink interner.
+    /// The hyperlink every cell in the run carries, if any. It resolves
+    /// against the definitions the frame carries.
     pub hyperlink_id: Option<HyperlinkId>,
 }
 

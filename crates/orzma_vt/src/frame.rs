@@ -55,8 +55,7 @@ pub struct Frame {
     /// Definitions for hyperlink ids referenced by `rows`, merged into
     /// the consumer's retained table.
     ///
-    /// It is always empty, and [`crate::prelude::Run::hyperlink_id`] is
-    /// always `None`.
+    /// It is always empty.
     ///
     /// TODO: fill it once OSC 8 handling reaches the hyperlink interner.
     pub hyperlinks: Vec<Hyperlink>,
