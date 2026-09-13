@@ -97,7 +97,7 @@ terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ロ
 | `CSI ?1004` → `CSI I` / `CSI O` | フォーカス通知 | **モードは保存されるが送信側が存在しない**（`focus_in_out` の参照は定義と代入の 2 箇所のみ） | vim/nvim。フォーカス復帰時の再描画が来ない |
 | `OSC 10/11/12` | 前景/背景/カーソル色（問い合わせ含む） | `OSC∅` | vim/nvim の `background` 自動判定 |
 | `OSC 52` | クリップボード | `OSC∅` | nvim の osc52 provider、tmux |
-| `OSC 8` | ハイパーリンク | `OSC∅`。interner は未接続（`hyperlink.rs:15`） | nvim。レンダラ側に受け皿は既にある |
+| ~~`OSC 8`~~ | ~~ハイパーリンク~~ | **✅ 実装済み（2026-09-13）**。id-interner モデル（`HyperlinkInterner`）で `HyperlinkId` を発行し、GC はしない（id は再利用しない）。target の長さやバイト範囲の検証もしない。`SGR`（`SGR 0` を含む）はペンの `hyperlink_id` を消さず、`RIS` はペンをリセットしつつ interner 自体は残す | nvim。レンダラ側の受け皿と接続済み |
 | `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `CSI∅`（DECSTR で intermediate 経路が開いたので `(Some(b'?'), [b'$'], b'p')` の腕 1 本で入る） | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する**。DECAWM / DECTCEM 実装により **7 と 25 も報告可能な状態を持つようになった**（`CSI ?7;1$y` / `CSI ?25;2$y` など）が応答路が無い。§6 のとおり、`CSI ?7 $ p` を実装すれば `vttest` の `tst_DEC_DECRPM` が mode 7 を機械判定できるようになる。**mode 3 / 40 / 95 は `0`（not recognized）で答える**（2026-09-12 決定）。orzma は DECCOLM の状態も変更経路も持たないので、`4`（permanently reset）だと任意幅のペインが「80 桁モード」を名乗ることになる。foot と alacritty も 0 を返す（wezterm は set を返す） |
 | `DCS $ q … ST` / `DCS + q … ST` | DECRQSS / XTGETTCAP | DCS コールバックが空（`interpreter.rs:157`-`168`） | vim のカーソル形状復元・capability 検出 |
 | ``CSI Ps ` `` / `CSI Ps a` / `CSI Ps e` | HPA / HPR / VPR | HPA は **✅ 実装済み（2026-09-11、CHA と同じメソッド）**。HPR も **✅ 実装済み（2026-09-11、CUF と同じメソッド。DECLRMM が無い間は停止点が一致する）**。VPR は `CSI∅` | vttest。**VPR は `move_cursor_down` の別名にできない** — VT510 p.351 は VPR を最終行で止めるが CUD は下マージンで止まるため、DECOM リセット時にスクロール領域があると挙動が食い違う |
@@ -241,7 +241,7 @@ STD-070 が LCF をリセットすると規定する操作:
 5. **入力側の契約修正**（`kbs` の方針決定 → ファンクションキー → 修飾キー）。~~Shift-Tab~~ と Insert は **完了（2026-09-11）**。~~Meta~~ は §1-B の `CSI ?1034 h/l` 行のとおり意図的に無視と決着（2026-09-11）。
 6. ~~**OSC 4**~~ **完了（2026-09-12、OSC 104 と `?` 問い合わせを含む）** → 残るのは **OSC 10/11/12** とその問い合わせ・リセット（OSC 110/111/112）。OSC 4 で入れた `PaletteRequest` を広げて扱う。RIS での復帰は `Palette::reset`（全色を既定値へ戻す）が既に賄うので、ハンドラ側は `Palette` の `foreground` / `background` を書くのと、full repaint の staging（`frame.rs` の `palette` フィールドの TODO）を足すだけでよい。なお `OSC 104` は xterm-ctlseqs.pdf のとおりインデックス表だけを戻す（`Palette::reset_all_indexed`）ので、そちらに前景/背景を巻き込まないこと。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
-8. **OSC 8 / OSC 52**、**DECLRMM/DECSLRM**、**1015**。
+8. **OSC 52**、**DECLRMM/DECSLRM**、**1015**。
 9. **コロン付きサブパラメータの扱い（リポジトリ全体）**。xterm は SGR と modifyOtherKeys 以外の
    すべての CSI でサブパラメータを拒否する（`charproc.c` の `parms.has_subparams` 分岐）が、orzma は
    `CsiParams::first_value` がグループ内の最初の整数を拾うので `CSI 1:2 H` が CUP として通る。

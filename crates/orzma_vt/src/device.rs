@@ -9,7 +9,7 @@ use crate::device::modes::{
     TextCursorEnable, VtModes,
 };
 use crate::frame::damage::DamageSpan;
-use crate::hyperlink::{HyperlinkInterner, HyperlinkUri};
+use crate::hyperlink::{HyperlinkId, HyperlinkInterner, HyperlinkUri};
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::Screen;
 use crate::screen::cursor::Cursor;
@@ -323,6 +323,12 @@ impl DeviceState {
     /// - `OSC 8 ; ;`
     pub fn close_hyperlink(&mut self) {
         self.active_screen_mut().pen_mut().hyperlink_id = None;
+    }
+
+    /// The target `id` was opened for, or `None` for an id this device
+    /// never handed out.
+    pub fn hyperlink_uri(&self, id: HyperlinkId) -> Option<&HyperlinkUri> {
+        self.hyperlinks.extract(&id)
     }
 
     /// Switches the active screen without a flip's side effects.

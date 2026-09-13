@@ -77,6 +77,10 @@ pub(crate) struct SourceHyperlink {
 /// Maps each `(source id, uri)` pair to a single [`HyperlinkId`],
 /// minting a fresh id the first time a pair is seen and returning the id
 /// already on file on repeats.
+// TODO: release the entries of links no cell references any more.
+// Nothing drops an id when the cells carrying it leave history, so
+// a program that prints links in a loop grows this map without
+// bound.
 pub(crate) struct HyperlinkInterner {
     next: NonZeroU32,
     id_to_uri: HashMap<HyperlinkId, HyperlinkUri>,
@@ -119,13 +123,6 @@ impl HyperlinkInterner {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the frame builder reaches this once Frame::hyperlinks is wired"
-        )
-    )]
     #[inline]
     pub(crate) fn extract(&self, id: &HyperlinkId) -> Option<&HyperlinkUri> {
         self.id_to_uri.get(id)
