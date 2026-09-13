@@ -462,17 +462,6 @@ impl GlyphKey {
     }
 
     /// The marks composed onto the glyph, in arrival order.
-    // NOTE: the `#[cfg(test)]` module below calls this, so an
-    // unconditional `#[expect(dead_code)]` is fulfilled in a plain build
-    // but unfulfilled — and denied under `-D warnings` — in a test
-    // build. Gating it to non-test builds keeps both clean.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "atlas::get_or_insert reads this once compositing lands in a follow-up task"
-        )
-    )]
     pub fn marks(self) -> impl Iterator<Item = char> {
         self.marks.into_iter().take_while(|mark| *mark != '\0')
     }
