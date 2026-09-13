@@ -208,9 +208,14 @@ fn insert_initial_cursor_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy_orzma_tty_renderer::schema::HyperlinkId;
 
     fn empty() -> Modifiers {
         Modifiers::default()
+    }
+
+    fn id(value: u32) -> HyperlinkId {
+        HyperlinkId::new(value).expect("nonzero")
     }
 
     #[test]
@@ -345,10 +350,10 @@ mod tests {
     }
 
     /// A 10x5 grid whose top-left cell links to `https://example.com` as
-    /// `HyperlinkId(7)`, shared by the hover tests.
+    /// `HyperlinkId::new(7)`, shared by the hover tests.
     fn linked_grid() -> TerminalGrid {
         use bevy_orzma_tty_renderer::schema::{
-            Color, GridCell, GridPoint, Hyperlink, HyperlinkId, HyperlinkUri,
+            Color, GridCell, GridPoint, Hyperlink, HyperlinkUri,
         };
         TerminalGrid {
             cols: 10,
@@ -361,7 +366,7 @@ mod tests {
                 bg: Color::DefaultBackground,
                 style: 0,
                 hyperlink: Some(Hyperlink {
-                    id: HyperlinkId(7),
+                    id: id(7),
                     uri: HyperlinkUri::new("https://example.com"),
                 }),
             }]],
@@ -377,8 +382,6 @@ mod tests {
     /// OSC 8 hyperlink in the terminal.
     #[test]
     fn hover_over_terminal_link_sets_state_and_pointer() {
-        use bevy_orzma_tty_renderer::schema::HyperlinkId;
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseMotion>();
@@ -431,7 +434,7 @@ mod tests {
         );
         assert_eq!(
             hover.hyperlink_id,
-            Some(HyperlinkId(7)),
+            Some(id(7)),
             "the linked cell's hyperlink id must populate the hover state"
         );
         assert!(hover.modifier_held, "the link-activation modifier is held");

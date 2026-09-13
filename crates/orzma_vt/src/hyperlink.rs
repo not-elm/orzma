@@ -12,6 +12,7 @@
 )]
 
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 
 /// OSC 8 hyperlink: an interned id → URI mapping.
 ///
@@ -26,10 +27,24 @@ pub struct Hyperlink {
 
 /// Monotonic hyperlink id.
 ///
-/// Callers outside the interner MUST NOT construct `HyperlinkId(0)`;
-/// it is the universal "no hyperlink" sentinel.
+/// The zero value stands for "no hyperlink" and is not representable.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-pub struct HyperlinkId(pub u32);
+pub struct HyperlinkId(NonZeroU32);
+
+impl HyperlinkId {
+    /// The id `value` names; `None` when `value` is zero.
+    pub const fn new(value: u32) -> Option<Self> {
+        match NonZeroU32::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    /// The id as a plain integer, which is never zero.
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
 
 /// OSC 8 hyperlink target URI.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
@@ -74,7 +89,7 @@ pub(crate) struct SourceHyperlink {
 /// minting a fresh id the first time a pair is seen and returning the id
 /// already on file on repeats.
 pub(crate) struct HyperlinkInterner {
-    id: u32,
+    next: NonZeroU32,
     id_to_uri: HashMap<HyperlinkId, HyperlinkUri>,
     source_to_id: HashMap<SourceHyperlink, HyperlinkId>,
 }
@@ -82,11 +97,10 @@ pub(crate) struct HyperlinkInterner {
 impl HyperlinkInterner {
     /// Constructs an empty interner.
     ///
-    /// The first id handed out is `HyperlinkId(1)`. `HyperlinkId(0)` is
-    /// reserved as the "no hyperlink" sentinel.
+    /// The first id handed out is one.
     pub(crate) fn new() -> Self {
         Self {
-            id: 1,
+            next: NonZeroU32::MIN,
             id_to_uri: HashMap::new(),
             source_to_id: HashMap::new(),
         }
@@ -96,17 +110,25 @@ impl HyperlinkInterner {
         if let Some(id) = self.source_to_id.get(&source) {
             return *id;
         }
-        let next_id = self.id;
-        let next_id = HyperlinkId(next_id);
-        self.id += 1;
-        self.id_to_uri.insert(next_id, source.uri.clone());
-        self.source_to_id.insert(source, next_id);
-        next_id
+        let id = self.mint(source.uri.clone());
+        self.source_to_id.insert(source, id);
+        id
     }
 
     #[inline]
     pub(crate) fn extract(&self, id: &HyperlinkId) -> Option<&HyperlinkUri> {
         self.id_to_uri.get(id)
+    }
+
+    /// Hands out a fresh id for `uri` without recording a lookup key.
+    ///
+    /// Ids saturate rather than wrap, so once `u32::MAX` ids have been
+    /// handed out every later call returns that same id.
+    fn mint(&mut self, uri: HyperlinkUri) -> HyperlinkId {
+        let id = HyperlinkId(self.next);
+        self.next = self.next.saturating_add(1);
+        self.id_to_uri.insert(id, uri);
+        id
     }
 }
 
@@ -144,6 +166,10 @@ mod tests {
             id: HyperlinkSourceId::new(id.to_owned()),
             uri: HyperlinkUri::new(uri.to_owned()),
         }
+    }
+
+    fn id(value: u32) -> HyperlinkId {
+        HyperlinkId::new(value).expect("nonzero")
     }
 
     /// Asserts that interning an equal key twice returns the same id.
@@ -196,7 +222,7 @@ mod tests {
         assert_eq!(ids.len(), 1);
     }
 
-    /// Asserts that many distinct keys all receive unique non-zero ids.
+    /// Asserts that many distinct keys all receive unique ids.
     ///
     /// Case: `ls --hyperlink=auto` fills a screen with one link per file.
     #[test]
@@ -211,7 +237,6 @@ mod tests {
             })
             .collect();
         assert_eq!(ids.len(), 32);
-        assert!(!ids.contains(&HyperlinkId(0)));
     }
 
     /// Asserts that source ids are compared byte for byte rather than
@@ -229,36 +254,15 @@ mod tests {
         assert_eq!(ids.len(), 3);
     }
 
-    /// Asserts that no key is ever assigned the reserved zero id.
-    ///
-    /// Case: a program prints sixteen links in one session.
-    #[test]
-    fn intern_never_returns_the_zero_sentinel() {
-        let mut interner = HyperlinkInterner::new();
-        for i in 0..16 {
-            let id = interner.intern(source(&format!("{i}"), &format!("https://{i}.example")));
-            assert_ne!(id, HyperlinkId(0));
-        }
-    }
-
     /// Asserts that fresh keys are numbered from one upwards.
     ///
     /// Case: a fresh session prints its first three links.
     #[test]
     fn new_keys_receive_monotonic_ids_starting_at_one() {
         let mut interner = HyperlinkInterner::new();
-        assert_eq!(
-            interner.intern(source("1", "https://a.example")),
-            HyperlinkId(1)
-        );
-        assert_eq!(
-            interner.intern(source("2", "https://b.example")),
-            HyperlinkId(2)
-        );
-        assert_eq!(
-            interner.intern(source("3", "https://c.example")),
-            HyperlinkId(3)
-        );
+        assert_eq!(interner.intern(source("1", "https://a.example")), id(1));
+        assert_eq!(interner.intern(source("2", "https://b.example")), id(2));
+        assert_eq!(interner.intern(source("3", "https://c.example")), id(3));
     }
 
     /// Asserts that re-interning a known key leaves the next id untouched.
@@ -271,7 +275,7 @@ mod tests {
         interner.intern(source("1", "https://a.example"));
         interner.intern(source("1", "https://a.example"));
         let next = interner.intern(source("2", "https://b.example"));
-        assert_eq!(next, HyperlinkId(2));
+        assert_eq!(next, id(2));
     }
 
     /// Asserts that an assigned id never changes as more keys arrive.
@@ -318,18 +322,7 @@ mod tests {
     fn extract_returns_none_for_an_unknown_id() {
         let mut interner = HyperlinkInterner::new();
         interner.intern(source("1", "https://a.example"));
-        assert_eq!(interner.extract(&HyperlinkId(99)), None);
-    }
-
-    /// Asserts that the reserved zero id resolves to nothing.
-    ///
-    /// Case: a caller forwards an unlinked cell's `0` straight into the
-    /// lookup.
-    #[test]
-    fn extract_returns_none_for_the_zero_sentinel() {
-        let mut interner = HyperlinkInterner::new();
-        interner.intern(source("1", "https://a.example"));
-        assert_eq!(interner.extract(&HyperlinkId(0)), None);
+        assert_eq!(interner.extract(&id(99)), None);
     }
 
     /// Asserts that two ids sharing a uri both resolve back to it.
@@ -348,14 +341,13 @@ mod tests {
     }
 
     /// Asserts that an empty uri is interned like any other value rather
-    /// than rejected or folded onto the zero sentinel.
+    /// than rejected.
     ///
     /// Case: a VT backend hands the interner an empty uri.
     #[test]
     fn empty_uri_is_interned_without_special_casing() {
         let mut interner = HyperlinkInterner::new();
         let id = interner.intern(source("1", ""));
-        assert_ne!(id, HyperlinkId(0));
         assert_eq!(
             interner.extract(&id),
             Some(&HyperlinkUri::new(String::new()))

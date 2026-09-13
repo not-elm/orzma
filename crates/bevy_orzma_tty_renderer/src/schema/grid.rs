@@ -365,6 +365,10 @@ mod tests {
     };
     use orzma_vt::prelude::{DirtyRow, ViewportLine};
 
+    fn id(value: u32) -> HyperlinkId {
+        HyperlinkId::new(value).expect("nonzero")
+    }
+
     fn cell_with_link(text: &str, width: u8, link: Option<(u32, &str)>) -> GridCell {
         GridCell {
             text: text.to_string(),
@@ -373,8 +377,8 @@ mod tests {
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
             style: 0,
-            hyperlink: link.map(|(id, uri)| Hyperlink {
-                id: HyperlinkId(id),
+            hyperlink: link.map(|(number, uri)| Hyperlink {
+                id: id(number),
                 uri: HyperlinkUri::new(uri),
             }),
         }
@@ -586,8 +590,8 @@ mod tests {
             cells: vec![vec![cell]],
             ..Default::default()
         };
-        let (id, uri) = grid.hyperlink_at(0, 0).expect("hyperlink present");
-        assert_eq!(id, HyperlinkId(7));
+        let (resolved, uri) = grid.hyperlink_at(0, 0).expect("hyperlink present");
+        assert_eq!(resolved, id(7));
         assert_eq!(uri.as_str(), "https://example");
     }
 
@@ -622,11 +626,11 @@ mod tests {
             cells: vec![vec![wide_linked, trailing]],
             ..Default::default()
         };
-        let (id, uri) = grid.hyperlink_at(0, 0).expect("left half should resolve");
-        assert_eq!(id, HyperlinkId(7));
+        let (resolved, uri) = grid.hyperlink_at(0, 0).expect("left half should resolve");
+        assert_eq!(resolved, id(7));
         assert_eq!(uri.as_str(), "https://example");
-        let (id, uri) = grid.hyperlink_at(0, 1).expect("right half should resolve");
-        assert_eq!(id, HyperlinkId(7));
+        let (resolved, uri) = grid.hyperlink_at(0, 1).expect("right half should resolve");
+        assert_eq!(resolved, id(7));
         assert_eq!(uri.as_str(), "https://example");
         assert!(grid.hyperlink_at(0, 2).is_none());
     }
@@ -649,8 +653,8 @@ mod tests {
             ..Default::default()
         };
         assert!(grid.hyperlink_at(0, 0).is_none());
-        let (id, _uri) = grid.hyperlink_at(0, 1).expect("linked cell at col 1");
-        assert_eq!(id, HyperlinkId(9));
+        let (resolved, _uri) = grid.hyperlink_at(0, 1).expect("linked cell at col 1");
+        assert_eq!(resolved, id(9));
     }
 
     /// Asserts that a run's hyperlink id resolves against the retained
@@ -662,15 +666,12 @@ mod tests {
     #[test]
     fn runs_to_cells_resolves_hyperlink_ids_against_the_table() {
         let runs = vec![
-            run_with_link("a", Some(HyperlinkId(7))),
-            run_with_link("b", Some(HyperlinkId(9))),
+            run_with_link("a", Some(id(7))),
+            run_with_link("b", Some(id(9))),
         ];
-        let table = vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))];
+        let table = vec![(id(7), HyperlinkUri::new("https://example"))];
         let cells = runs_to_cells(&runs, GridLine(0), &table);
-        assert_eq!(
-            cells[0].hyperlink.as_ref().map(|h| h.id),
-            Some(HyperlinkId(7))
-        );
+        assert_eq!(cells[0].hyperlink.as_ref().map(|h| h.id), Some(id(7)));
         assert_eq!(
             cells[0].hyperlink.as_ref().map(|h| h.uri.as_str()),
             Some("https://example")
@@ -986,12 +987,12 @@ mod tests {
     #[test]
     fn hyperlinks_merge_without_overwrite() {
         let mut grid = TerminalGrid {
-            hyperlinks: vec![(HyperlinkId(1), HyperlinkUri::new("https://old"))],
+            hyperlinks: vec![(id(1), HyperlinkUri::new("https://old"))],
             ..TerminalGrid::settled()
         };
         let repeated = Frame {
             hyperlinks: vec![Hyperlink {
-                id: HyperlinkId(1),
+                id: id(1),
                 uri: HyperlinkUri::new("https://CHANGED"),
             }],
             ..quiet_frame()
@@ -1001,11 +1002,11 @@ mod tests {
         let extended = Frame {
             hyperlinks: vec![
                 Hyperlink {
-                    id: HyperlinkId(1),
+                    id: id(1),
                     uri: HyperlinkUri::new("https://CHANGED"),
                 },
                 Hyperlink {
-                    id: HyperlinkId(2),
+                    id: id(2),
                     uri: HyperlinkUri::new("https://new"),
                 },
             ],
@@ -1028,7 +1029,7 @@ mod tests {
         let mut grid = TerminalGrid::settled();
         grid.apply(&Frame {
             hyperlinks: vec![Hyperlink {
-                id: HyperlinkId(4),
+                id: id(4),
                 uri: HyperlinkUri::new("https://earlier"),
             }],
             ..quiet_frame()
@@ -1036,7 +1037,7 @@ mod tests {
         grid.apply(&Frame {
             rows: vec![DirtyRow {
                 line: ViewportLine(0),
-                contents: Row::from(vec![run_with_link("a", Some(HyperlinkId(4)))]),
+                contents: Row::from(vec![run_with_link("a", Some(id(4)))]),
             }],
             ..quiet_frame()
         });
