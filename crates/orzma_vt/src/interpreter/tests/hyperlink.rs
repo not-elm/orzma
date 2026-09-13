@@ -117,17 +117,21 @@ fn erasing_a_linked_cell_drops_its_hyperlink() {
     assert_eq!(row[1].hyperlink_id, None);
 }
 
-/// Asserts that each screen keeps its own open hyperlink.
+/// Asserts that a hyperlink open on one screen never reaches the other,
+/// and comes back after a round trip through the alternate screen.
 ///
 /// Case: a shell prints a link, a full-screen editor takes over the
 /// alternate screen and prints plain text there, and the editor then
 /// exits back to the shell.
 #[test]
 fn the_two_screens_keep_independent_hyperlinks() {
-    let device = interpret(b"\x1b]8;;https://a.example\x1b\\a\x1b[?1049hb\x1b[?1049lc");
-    let row = device.active_screen().viewport_row(ViewportLine(0));
-    assert!(row[0].hyperlink_id.is_some());
-    assert_eq!(row[1].hyperlink_id, row[0].hyperlink_id);
+    let mut device = interpret(b"\x1b]8;;https://a.example\x1b\\a\x1b[?1049hb\x1b[?1049lc");
+    let opened = device.active_screen().viewport_row(ViewportLine(0))[0].hyperlink_id;
+    let after_round_trip = device.active_screen().viewport_row(ViewportLine(0))[1].hyperlink_id;
+    assert!(opened.is_some());
+    assert_eq!(after_round_trip, opened);
+    device.set_active_screen_for_test(ScreenKind::Alternate);
+    assert_eq!(device.active_screen_mut().pen_mut().hyperlink_id, None);
 }
 
 /// Asserts that a hyperlink survives the wrap at the right edge.
