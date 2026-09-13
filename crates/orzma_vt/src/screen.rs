@@ -175,7 +175,7 @@ impl Screen {
             self.insert_characters(1);
         }
         self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph);
-        let at_right_edge = self.at_right_edge();
+        let at_right_edge = self.is_last_column();
         if !at_right_edge {
             self.state.column.0 += 1;
         }
@@ -766,12 +766,19 @@ impl Screen {
     /// All three conditions are required: the deferred wrap armed,
     /// `DECAWM` set, and the cursor on the last column.
     fn cursor_parked_past_the_row(&self, auto_wrap: AutoWrap) -> bool {
-        self.state.pending_wrap && auto_wrap.wraps() && self.at_right_edge()
+        self.state.pending_wrap && auto_wrap.wraps() && self.is_last_column()
     }
 
     /// Whether the cursor is on the row's last column.
-    fn at_right_edge(&self) -> bool {
+    fn is_last_column(&self) -> bool {
         self.state.column.0 + 1 >= self.grid.size().cols
+    }
+
+    /// Whether a glyph spanning `width` columns fits from the cursor's
+    /// column through the row's end.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the printer reaches the fit test when width dispatch lands"))]
+    fn fits(&self, width: u16) -> bool {
+        self.state.column.0 + width <= self.grid.size().cols
     }
 }
 

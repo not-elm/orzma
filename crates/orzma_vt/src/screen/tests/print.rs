@@ -380,3 +380,31 @@ fn an_insert_mode_print_at_the_last_column_without_autowrap_replaces_in_place() 
     assert_eq!(screen.state.column, GridColumn(3));
     assert!(!screen.state.pending_wrap);
 }
+
+/// Asserts that the last-column predicate answers for the cursor's
+/// position alone, independent of any glyph width.
+///
+/// Case: erase-to-end-of-line asks whether the cursor is parked past the
+/// row while the cursor sits at the right margin.
+#[test]
+fn the_last_column_predicate_ignores_width() {
+    let mut screen = Screen::new(GridSize { cols: 4, rows: 1 }, 10);
+    assert!(!screen.is_last_column());
+    screen.state.column = GridColumn(3);
+    assert!(screen.is_last_column());
+}
+
+/// Asserts that a width-2 glyph does not fit when only one column
+/// remains, while a width-1 glyph fits on the last column.
+///
+/// Case: a fullwidth character arrives with the cursor one column short
+/// of the right margin.
+#[test]
+fn a_wide_glyph_needs_two_remaining_columns() {
+    let mut screen = Screen::new(GridSize { cols: 4, rows: 1 }, 10);
+    screen.state.column = GridColumn(3);
+    assert!(screen.fits(1));
+    assert!(!screen.fits(2));
+    screen.state.column = GridColumn(2);
+    assert!(screen.fits(2));
+}
