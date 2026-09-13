@@ -186,11 +186,11 @@ impl Default for Pen {
 }
 
 impl Pen {
-    /// Burns the pen's attributes into a cell holding `c`.
-    pub fn stamp(&self, c: char) -> Cell {
+    /// Burns the pen's attributes into a cell holding `c` at `width`.
+    pub fn stamp(&self, c: char, width: CellWidth) -> Cell {
         Cell {
             c,
-            width: CellWidth::Narrow,
+            width,
             extra: None,
             fg: self.fg,
             bg: self.bg,
@@ -257,10 +257,11 @@ mod tests {
         assert_eq!(cell.style, Style::empty());
     }
 
-    /// Asserts that stamping burns all pen attributes into the cell.
+    /// Asserts that stamping burns all pen attributes and the given width
+    /// into the cell.
     ///
     /// Case: an application selects bold red text with SGR before
-    /// printing.
+    /// printing a fullwidth character.
     #[test]
     fn stamping_copies_the_pen_attributes() {
         let pen = Pen {
@@ -269,10 +270,10 @@ mod tests {
             style: Style::BOLD,
         };
         assert_eq!(
-            pen.stamp('a'),
+            pen.stamp('あ', CellWidth::Wide),
             Cell {
-                c: 'a',
-                width: CellWidth::Narrow,
+                c: 'あ',
+                width: CellWidth::Wide,
                 extra: None,
                 fg: Color::Indexed(1),
                 bg: Color::Indexed(4),
@@ -399,12 +400,12 @@ mod tests {
         );
     }
 
-    /// Asserts that a stamped cell is narrow and carries no marks.
+    /// Asserts that a stamped cell carries the given width and no marks.
     ///
     /// Case: an application prints ordinary text.
     #[test]
-    fn stamping_produces_a_narrow_cell() {
-        let cell = Pen::default().stamp('a');
+    fn stamping_produces_a_cell_of_the_given_width() {
+        let cell = Pen::default().stamp('a', CellWidth::Narrow);
         assert_eq!(cell.width, CellWidth::Narrow);
         assert_eq!(cell.extra, None);
     }

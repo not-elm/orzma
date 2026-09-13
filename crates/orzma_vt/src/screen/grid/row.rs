@@ -1,6 +1,6 @@
 //! One row of elements, ordered left to right.
 
-use crate::screen::cell::{Cell, CellWidth};
+use crate::screen::cell::{Cell, CellWidth, Pen};
 use crate::screen::grid::coords::GridColumn;
 use crate::screen::grid::run::Run;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
@@ -85,6 +85,21 @@ impl Row<Cell> {
         debug_assert!(
             (start == 0 || self.joint_intact(start - 1)) && self.joint_intact(end),
             "a stamp left a broken joint"
+        );
+    }
+
+    /// Stamps the last column as the blank a wide glyph leaves behind
+    /// when it does not fit there, carrying `pen`'s attributes, and
+    /// restores the wide-pair invariant to its left.
+    pub fn place_filler(&mut self, pen: &Pen) {
+        let last = self.0.len() - 1;
+        self.0[last] = pen.stamp(' ', CellWidth::LeadingSpacer);
+        if last > 0 {
+            self.heal_joint(last - 1);
+        }
+        debug_assert!(
+            last == 0 || self.joint_intact(last - 1),
+            "a filler left a broken joint"
         );
     }
 
@@ -564,6 +579,49 @@ mod tests {
         let mut row = Row::from(vec![Cell::default(), filler]);
         row.normalize_wide_pairs();
         assert_eq!(row[GridColumn(1)].c, ' ');
+        assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that placing a filler stamps the last column as a leading
+    /// spacer carrying the given pen and a blank glyph.
+    ///
+    /// Case: a fullwidth character arrives with one column left on a row
+    /// whose background color is set.
+    #[test]
+    fn placing_a_filler_stamps_the_last_column_with_the_pen() {
+        let pen = Pen {
+            fg: Color::Indexed(1),
+            bg: Color::Indexed(4),
+            style: Style::BOLD,
+        };
+        let mut row = Row::from(vec![plain('a'), plain('b'), plain('c')]);
+        row.place_filler(&pen);
+        let filler = &row[GridColumn(2)];
+        assert_eq!(filler.width, CellWidth::LeadingSpacer);
+        assert_eq!(filler.c, ' ');
+        assert_eq!(filler.extra, None);
+        assert_eq!(
+            (filler.fg, filler.bg, filler.style),
+            (pen.fg, pen.bg, pen.style)
+        );
+        assert_eq!(row[GridColumn(1)].c, 'b');
+        assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that placing a filler over a continuation column blanks
+    /// the wide body to its left.
+    ///
+    /// Case: a fullwidth character wraps on a row whose last two columns
+    /// hold another fullwidth character.
+    #[test]
+    fn placing_a_filler_over_a_continuation_blanks_its_body() {
+        let body = wide_body('あ');
+        let spacer = body.continuation();
+        let mut row = Row::from(vec![plain('a'), body, spacer]);
+        row.place_filler(&Pen::default());
+        assert_eq!(row[GridColumn(1)].width, CellWidth::Narrow);
+        assert_eq!(row[GridColumn(1)].c, ' ');
+        assert_eq!(row[GridColumn(2)].width, CellWidth::LeadingSpacer);
         assert!(row.wide_pairs_intact());
     }
 }

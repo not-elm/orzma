@@ -14,7 +14,7 @@ pub(crate) mod placements;
 
 mod state;
 
-use self::cell::{Cell, Pen};
+use self::cell::{Cell, CellWidth, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
@@ -174,7 +174,7 @@ impl Screen {
         if matches!(insert_replace, InsertReplaceMode::Insert) {
             self.insert_characters(1);
         }
-        let cell = self.state.pen.stamp(glyph);
+        let cell = self.state.pen.stamp(glyph, CellWidth::Narrow);
         self.grid[self.state.line].stamp_at(self.state.column.0, cell);
         let is_last_column = self.is_last_column();
         if !is_last_column {
