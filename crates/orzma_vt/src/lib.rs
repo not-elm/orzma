@@ -31,6 +31,7 @@ pub mod prelude {
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::placement::{AnchoredPlacement, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};
+    pub use crate::screen::cell::{GlyphClass, MAX_COMBINING};
     pub use crate::screen::cursor::{CURSOR_VISIBLE_BIT, Cursor};
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
     pub use crate::screen::grid::row::Row;

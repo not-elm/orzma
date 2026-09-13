@@ -14,56 +14,87 @@ pub enum CellWidth {
     /// The body of a width-2 glyph; the column to its right holds
     /// [`CellWidth::Spacer`].
     Wide,
-    /// A column the glyph to its left already covers, and the class of a
-    /// zero-width mark.
+    /// A column the glyph to its left already covers.
     Spacer,
     /// A blank left in the last column because a width-2 glyph did not
     /// fit there; the glyph itself was printed on the next row.
     LeadingSpacer,
 }
 
-impl CellWidth {
-    /// Classifies `c` by the columns it occupies; `None` for a character
-    /// with no reported width, such as a control character.
+/// How a printable character occupies the grid: as a one-column glyph,
+/// a two-column glyph, or a mark combined onto the glyph before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlyphClass {
+    /// A glyph one column wide.
+    Narrow,
+    /// A glyph two columns wide.
+    Wide,
+    /// A mark that occupies no column of its own.
+    ZeroWidth,
+}
+
+impl GlyphClass {
+    /// Classifies `c`; `None` for a character with no reported width,
+    /// such as a control character.
     ///
-    /// A width above two is reported as [`CellWidth::Wide`].
+    /// East Asian Ambiguous characters are [`GlyphClass::Narrow`], and a
+    /// reported width above two is [`GlyphClass::Wide`].
     pub fn of(c: char) -> Option<Self> {
         match UnicodeWidthChar::width(c)? {
-            0 => Some(Self::Spacer),
+            0 => Some(Self::ZeroWidth),
             1 => Some(Self::Narrow),
             _ => Some(Self::Wide),
         }
     }
+
+    /// The columns a character of this class advances the cursor by.
+    pub fn columns(self) -> u16 {
+        match self {
+            Self::Narrow => 1,
+            Self::Wide => 2,
+            Self::ZeroWidth => 0,
+        }
+    }
+
+    /// The width a body cell of this class stores; `None` for a class
+    /// that is never stored as a cell of its own.
+    pub fn body_width(self) -> Option<CellWidth> {
+        match self {
+            Self::Narrow => Some(CellWidth::Narrow),
+            Self::Wide => Some(CellWidth::Wide),
+            Self::ZeroWidth => None,
+        }
+    }
 }
+
+// NOTE: The cap is a memory-exhaustion defense, not a typographic limit:
+// a stream that repeats zero-width marks at one cell would otherwise grow
+// that cell without bound.
+/// How many zero-width marks one cell retains.
+pub const MAX_COMBINING: usize = 9;
 
 /// The zero-width marks combined onto a cell's base glyph.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CellExtra {
-    marks: [char; CellExtra::MAX_COMBINING],
+    marks: [char; MAX_COMBINING],
     len: u8,
 }
 
 impl Default for CellExtra {
     fn default() -> Self {
         Self {
-            marks: ['\0'; Self::MAX_COMBINING],
+            marks: ['\0'; MAX_COMBINING],
             len: 0,
         }
     }
 }
 
 impl CellExtra {
-    // NOTE: The cap is a memory-exhaustion defense, not a typographic
-    // limit: a stream that repeats zero-width marks at one cell would
-    // otherwise grow that cell without bound.
-    /// How many zero-width marks one cell retains.
-    pub const MAX_COMBINING: usize = 9;
-
     /// Appends `mark`, reporting whether it was kept; a push past
-    /// [`CellExtra::MAX_COMBINING`] is refused and changes nothing.
+    /// [`MAX_COMBINING`] is refused and changes nothing.
     pub fn push(&mut self, mark: char) -> bool {
         let len = usize::from(self.len);
-        if len >= Self::MAX_COMBINING {
+        if len >= MAX_COMBINING {
             return false;
         }
         self.marks[len] = mark;
@@ -197,11 +228,11 @@ mod tests {
     #[test]
     fn a_push_past_the_cap_is_refused() {
         let mut extra = CellExtra::default();
-        for _ in 0..CellExtra::MAX_COMBINING {
+        for _ in 0..MAX_COMBINING {
             assert!(extra.push('\u{0301}'));
         }
         assert!(!extra.push('\u{0302}'));
-        assert_eq!(extra.marks().len(), CellExtra::MAX_COMBINING);
+        assert_eq!(extra.marks().len(), MAX_COMBINING);
         assert!(extra.marks().iter().all(|mark| *mark == '\u{0301}'));
     }
 
@@ -267,46 +298,72 @@ mod tests {
     }
 
     /// Asserts that a narrow glyph, a fullwidth glyph and a zero-width
-    /// mark each classify to their own width.
+    /// mark each classify to their own class.
     ///
     /// Case: a program prints mixed Latin, Japanese and combining text.
     #[test]
-    fn cell_width_classifies_each_class_of_character() {
-        assert_eq!(CellWidth::of('a'), Some(CellWidth::Narrow));
-        assert_eq!(CellWidth::of('あ'), Some(CellWidth::Wide));
-        assert_eq!(CellWidth::of('\u{0301}'), Some(CellWidth::Spacer));
+    fn glyph_class_classifies_each_class_of_character() {
+        assert_eq!(GlyphClass::of('a'), Some(GlyphClass::Narrow));
+        assert_eq!(GlyphClass::of('あ'), Some(GlyphClass::Wide));
+        assert_eq!(GlyphClass::of('\u{0301}'), Some(GlyphClass::ZeroWidth));
     }
 
     /// Asserts that a character with no reported width classifies to
-    /// `None` rather than to a printable width.
+    /// `None` rather than to a printable class.
     ///
     /// Case: a program emits an escape byte and a NUL amid printable
     /// text.
     #[test]
-    fn a_control_character_has_no_width() {
-        assert_eq!(CellWidth::of('\u{1b}'), None);
-        assert_eq!(CellWidth::of('\0'), None);
+    fn a_control_character_has_no_class() {
+        assert_eq!(GlyphClass::of('\u{1b}'), None);
+        assert_eq!(GlyphClass::of('\0'), None);
     }
 
-    /// Asserts that the one scalar reported as three columns wide is
-    /// clamped to two.
+    /// Asserts that the one scalar reported as three columns wide
+    /// classifies as wide.
     ///
     /// Case: a program prints a character whose reported display width is
     /// three columns.
     #[test]
-    fn a_width_three_scalar_is_clamped_to_wide() {
-        assert_eq!(CellWidth::of('\u{17d8}'), Some(CellWidth::Wide));
+    fn a_width_three_scalar_classifies_as_wide() {
+        assert_eq!(GlyphClass::of('\u{17d8}'), Some(GlyphClass::Wide));
     }
 
-    /// Asserts that a variation selector and a zero-width joiner are
-    /// classified as zero-width rather than as narrow glyphs.
+    /// Asserts that a variation selector and a zero-width joiner classify
+    /// as zero-width rather than as narrow glyphs.
     ///
     /// Case: a program prints an emoji presentation sequence or a ZWJ
     /// family sequence.
     #[test]
     fn variation_selectors_and_joiners_are_zero_width() {
-        assert_eq!(CellWidth::of('\u{fe0f}'), Some(CellWidth::Spacer));
-        assert_eq!(CellWidth::of('\u{200d}'), Some(CellWidth::Spacer));
+        assert_eq!(GlyphClass::of('\u{fe0f}'), Some(GlyphClass::ZeroWidth));
+        assert_eq!(GlyphClass::of('\u{200d}'), Some(GlyphClass::ZeroWidth));
+    }
+
+    /// Asserts that an East Asian Ambiguous character classifies as
+    /// narrow.
+    ///
+    /// Case: a program prints a Greek letter or a box-drawing character
+    /// that some CJK locales render fullwidth.
+    #[test]
+    fn an_ambiguous_width_character_is_narrow() {
+        assert_eq!(GlyphClass::of('α'), Some(GlyphClass::Narrow));
+        assert_eq!(GlyphClass::of('─'), Some(GlyphClass::Narrow));
+    }
+
+    /// Asserts that each class reports its column count and the stored
+    /// width a body cell takes, with a zero-width class taking none.
+    ///
+    /// Case: the printer decides how far to advance and what to stamp for
+    /// each class of character.
+    #[test]
+    fn each_class_reports_its_columns_and_body_width() {
+        assert_eq!(GlyphClass::Narrow.columns(), 1);
+        assert_eq!(GlyphClass::Wide.columns(), 2);
+        assert_eq!(GlyphClass::ZeroWidth.columns(), 0);
+        assert_eq!(GlyphClass::Narrow.body_width(), Some(CellWidth::Narrow));
+        assert_eq!(GlyphClass::Wide.body_width(), Some(CellWidth::Wide));
+        assert_eq!(GlyphClass::ZeroWidth.body_width(), None);
     }
 
     /// Asserts that the cell stays within twenty-four bytes.
