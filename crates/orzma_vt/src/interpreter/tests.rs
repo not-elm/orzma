@@ -185,3 +185,4 @@ mod text_cursor_enable;
 mod title;
 mod unsupported_sequences;
 mod webview_apc;
+mod wide_invariants;

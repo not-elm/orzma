@@ -1125,6 +1125,12 @@ impl Screen {
         self.state.column
     }
 
+    /// The grid this screen draws on.
+    #[cfg(test)]
+    pub(crate) fn grid(&self) -> &Grid {
+        &self.grid
+    }
+
     /// Reports the given screen rows as damage, in the viewport
     /// coordinates a frame repaints by; `None` when the whole span has
     /// scrolled out of the window.
