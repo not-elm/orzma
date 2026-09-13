@@ -5,16 +5,6 @@ use crate::protocol::{PaneDirection, PaneId, PaneRect, Separator, SplitId, Split
 use orzma_vt::prelude::GridSize;
 use std::cmp::Reverse;
 
-// TODO: make the drag minimum configurable.
-// NOTE: rustc's dead_code lint never fires on a function that only
-// calls itself, so `Node::min_size_for_drag` (and these constants,
-// which only it reads) would leave `#[expect(dead_code)]` permanently
-// unfulfilled; `#[allow]` is used instead.
-#[allow(dead_code, reason = "consumed by the drag clamp in the next commit")]
-const MIN_DRAG_COLS: u16 = 4;
-#[allow(dead_code, reason = "consumed by the drag clamp in the next commit")]
-const MIN_DRAG_ROWS: u16 = 2;
-
 /// The solved geometry of every pane and separator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Solved {
@@ -50,6 +40,18 @@ pub struct LayoutTree {
     history: Vec<PaneId>,
     next_split_id: u32,
 }
+
+// TODO: make the drag minimum configurable.
+// NOTE: marking a recursive function `#[allow(dead_code)]` or
+// `#[expect(dead_code)]` makes rustc treat it as a live root, so its
+// calls into itself then count as reachable. That leaves
+// `#[expect(dead_code)]` unable to ever observe a dead_code diagnosis
+// to fulfill for `Node::min_size_for_drag`, so it and these two
+// constants — referenced only from it — carry `#[allow]` instead.
+#[allow(dead_code, reason = "consumed by the drag clamp in the next commit")]
+const MIN_DRAG_COLS: u16 = 4;
+#[allow(dead_code, reason = "consumed by the drag clamp in the next commit")]
+const MIN_DRAG_ROWS: u16 = 2;
 
 #[derive(Debug)]
 enum Node {
@@ -306,8 +308,6 @@ impl Node {
     /// Minimum size a drag may not shrink this subtree past: a leaf is
     /// `MIN_DRAG_COLS` × `MIN_DRAG_ROWS`; a split needs both children
     /// plus one separator along its axis and the larger child across it.
-    // NOTE: self-recursive, so rustc's dead_code lint never fires here;
-    // `#[expect]` would report a permanently unfulfilled expectation.
     #[allow(dead_code, reason = "consumed by the drag clamp in the next commit")]
     fn min_size_for_drag(&self) -> GridSize {
         match self {
