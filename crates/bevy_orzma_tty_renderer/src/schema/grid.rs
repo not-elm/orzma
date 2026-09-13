@@ -10,16 +10,16 @@ use bevy::prelude::*;
 use orzma_vt::prelude::Frame;
 #[cfg(test)]
 use orzma_vt::prelude::GridSize;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 /// One materialized cell of the renderer's CPU-side grid, expanded
 /// from the frame's [`crate::schema::Run`]s.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridCell {
-    /// The grapheme cluster text for this cell.
+    /// The cell's glyph followed by the marks combined onto it.
     pub text: String,
-    /// Display width: 2 for wide CJK, 0 for combining marks, 1 otherwise.
+    /// Display width in columns: 2 for a wide glyph, 1 otherwise. A cell
+    /// built outside [`TerminalGrid::apply`] may carry 0; such a cell
+    /// paints no glyph and takes no column.
     pub width: u8,
     /// Active-grid coordinates of the cell.
     pub point: GridPoint,
@@ -50,7 +50,7 @@ pub struct TerminalGrid {
     pub cols: u16,
     /// Visible row count.
     pub rows: u16,
-    /// Cell grid indexed `[row][col_grapheme_index]`.
+    /// Cell grid indexed `[row][cell_index]`.
     pub cells: Vec<Vec<GridCell>>,
     /// Current cursor state, absent until the first frame arrives.
     pub cursor: Option<Cursor>,
@@ -88,11 +88,10 @@ impl TerminalGrid {
     /// trailers are skipped without consuming a column. Returns
     /// `None` for out-of-bounds or unlinked cells.
     //
-    // NOTE: `self.cells[row]` is grapheme-indexed (one entry per
-    //       cluster from `runs_to_cells`), so a column-to-cell walk
-    //       is required — direct `cells[row][col]` indexing would
-    //       desynchronize after any wide char or width-0 trailer.
-    //       Must mirror the column-advance logic in
+    // NOTE: `self.cells[row]` is cell-indexed (one entry per glyph from
+    //       `runs_to_cells`), so a column-to-cell walk is required —
+    //       direct `cells[row][col]` indexing would desynchronize after
+    //       any wide char. Must mirror the column-advance logic in
     //       `material::rebuild_cells`.
     pub fn hyperlink_at(&self, row: u16, col: u16) -> Option<(HyperlinkId, &HyperlinkUri)> {
         let row_cells = self.cells.get(row as usize)?;
@@ -284,8 +283,8 @@ fn lookup_hyperlink(
 /// Materializes one row's attribute runs into cells, resolving each
 /// run's hyperlink id against the retained table.
 ///
-/// Column advance follows display width — a wide grapheme takes two
-/// columns and a combining mark none.
+/// Column advance follows each run's widths: a `char` at width two takes
+/// two columns, and a `char` at width zero joins the cell before it.
 fn runs_to_cells(
     runs: &[Run],
     line: GridLine,
@@ -299,16 +298,36 @@ fn runs_to_cells(
         Vec::with_capacity(runs.iter().map(|run| usize::from(run.cols)).sum());
     let mut column: u16 = 0;
     for run in runs {
+        debug_assert!(
+            run.widths.is_empty() || run.widths.len() == run.text.chars().count(),
+            "a run's widths cover each char of its text"
+        );
+        debug_assert!(
+            run.widths.is_empty()
+                || run.widths.iter().map(|w| u32::from(*w)).sum::<u32>() == u32::from(run.cols),
+            "a run's widths sum to its columns"
+        );
+        debug_assert!(
+            run.widths.iter().all(|w| *w <= 2) && run.widths.first() != Some(&0),
+            "a run's widths are 0, 1 or 2 and never start with a continuation"
+        );
         let hyperlink = run.hyperlink_id.and_then(|id| {
             lookup_hyperlink(hyperlinks, id).map(|uri| Hyperlink {
                 id,
                 uri: uri.clone(),
             })
         });
-        for grapheme in run.text.graphemes(true) {
-            let width = grapheme.width().min(2) as u8;
+        let mut widths = run.widths.iter().copied();
+        for c in run.text.chars() {
+            let width = widths.next().unwrap_or(1);
+            if width == 0
+                && let Some(base) = out.last_mut()
+            {
+                base.text.push(c);
+                continue;
+            }
             out.push(GridCell {
-                text: grapheme.to_string(),
+                text: c.to_string(),
                 width,
                 point: GridPoint {
                     line,
@@ -390,6 +409,17 @@ mod tests {
             widths: Vec::new(),
             hyperlink_id,
         }
+    }
+
+    fn run_with_widths(text: &str, widths: &[u8]) -> Run {
+        let mut run = run_with_link(text, None);
+        run.cols = if widths.is_empty() {
+            text.chars().count() as u16
+        } else {
+            widths.iter().map(|w| u16::from(*w)).sum()
+        };
+        run.widths = widths.to_vec();
+        run
     }
 
     fn visible_block_cursor() -> Cursor {
@@ -680,13 +710,14 @@ mod tests {
     }
 
     /// Asserts that cell points carry the given line and a column walk
-    /// that advances by display width.
+    /// driven by the run's widths.
     ///
-    /// Case: a row mixes a wide CJK grapheme with ASCII text on a
+    /// Case: a row mixes a wide CJK glyph with ASCII text on a
     /// scrolled-back history line.
     #[test]
-    fn runs_to_cells_assigns_points_by_display_width() {
-        let cells = runs_to_cells(&[run_with_link("あb", None)], GridLine(-3), &[]);
+    fn runs_to_cells_assigns_points_by_run_widths() {
+        let cells = runs_to_cells(&[run_with_widths("あb", &[2, 1])], GridLine(-3), &[]);
+        assert_eq!(cells[0].width, 2);
         assert_eq!(
             cells[0].point,
             GridPoint {
@@ -694,6 +725,7 @@ mod tests {
                 column: GridColumn(0),
             }
         );
+        assert_eq!(cells[1].width, 1);
         assert_eq!(
             cells[1].point,
             GridPoint {
@@ -701,6 +733,48 @@ mod tests {
                 column: GridColumn(2),
             }
         );
+    }
+
+    /// Asserts that a run without widths yields one one-column cell per
+    /// `char`, whatever the characters are.
+    ///
+    /// Case: a frame carries an ASCII row on the empty-width path.
+    #[test]
+    fn runs_to_cells_treats_an_empty_width_list_as_one_column_each() {
+        let cells = runs_to_cells(&[run_with_widths("ab", &[])], GridLine(0), &[]);
+        assert_eq!(cells.len(), 2);
+        assert!(cells.iter().all(|cell| cell.width == 1));
+        assert_eq!(cells[1].point.column, GridColumn(1));
+    }
+
+    /// Asserts that a zero-width `char` joins the text of the cell before
+    /// it instead of becoming a cell of its own.
+    ///
+    /// Case: a frame carries `e` followed by a combining acute accent.
+    #[test]
+    fn runs_to_cells_joins_a_zero_width_char_to_the_previous_cell() {
+        let cells = runs_to_cells(
+            &[run_with_widths("e\u{0301}x", &[1, 0, 1])],
+            GridLine(0),
+            &[],
+        );
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[0].text, "e\u{0301}");
+        assert_eq!(cells[0].width, 1);
+        assert_eq!(cells[1].text, "x");
+        assert_eq!(cells[1].point.column, GridColumn(1));
+    }
+
+    /// Asserts that a run's `char`s are never re-measured: a wide glyph
+    /// declared at width one takes one column.
+    ///
+    /// Case: a frame's widths, not the glyph's Unicode width, decide the
+    /// column walk.
+    #[test]
+    fn runs_to_cells_does_not_remeasure_the_text() {
+        let cells = runs_to_cells(&[run_with_widths("あb", &[1, 1])], GridLine(0), &[]);
+        assert_eq!(cells[0].width, 1);
+        assert_eq!(cells[1].point.column, GridColumn(1));
     }
 
     fn dirty_row(line: u16, text: &str) -> DirtyRow {
