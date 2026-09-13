@@ -174,7 +174,8 @@ impl Screen {
         if matches!(insert_replace, InsertReplaceMode::Insert) {
             self.insert_characters(1);
         }
-        self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph);
+        let cell = self.state.pen.stamp(glyph);
+        self.grid[self.state.line].stamp_at(self.state.column.0, cell);
         let at_right_edge = self.is_last_column();
         if !at_right_edge {
             self.state.column.0 += 1;

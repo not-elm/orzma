@@ -113,8 +113,10 @@ impl Grid {
 
     /// Overwrites the given column range of one visible row with `fill`.
     pub fn fill_visible_row_range(&mut self, line: ScreenLine, columns: Range<u16>, fill: Cell) {
-        let row: &mut [Cell] = &mut self[line];
-        row[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
+        let row: &mut Row<Cell> = &mut self[line];
+        let cells: &mut [Cell] = row;
+        cells[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
+        row.normalize_wide_pairs();
     }
 
     /// Shifts one visible row's cells from `column` right by `count`
@@ -134,14 +136,16 @@ impl Grid {
     ) {
         let start = usize::from(column.0);
         let count = usize::from(count);
-        let row: &mut [Cell] = &mut self[line];
-        let cols = row.len();
+        let row: &mut Row<Cell> = &mut self[line];
+        let cells: &mut [Cell] = row;
+        let cols = cells.len();
         debug_assert!(
             start + count <= cols,
             "an in-row insert stays inside the row"
         );
-        row[start..cols].rotate_right(count);
-        row[start..start + count].fill(fill);
+        cells[start..cols].rotate_right(count);
+        cells[start..start + count].fill(fill);
+        row.normalize_wide_pairs();
     }
 
     /// Shifts one visible row's cells from `column + count` left to
@@ -163,14 +167,16 @@ impl Grid {
     ) {
         let start = usize::from(column.0);
         let count = usize::from(count);
-        let row: &mut [Cell] = &mut self[line];
-        let cols = row.len();
+        let row: &mut Row<Cell> = &mut self[line];
+        let cells: &mut [Cell] = row;
+        let cols = cells.len();
         debug_assert!(
             start + count <= cols,
             "an in-row delete stays inside the row"
         );
-        row[start..cols].rotate_left(count);
-        row[cols - count..].fill(fill);
+        cells[start..cols].rotate_left(count);
+        cells[cols - count..].fill(fill);
+        row.normalize_wide_pairs();
     }
 
     /// Scrolls the region up by one row: the row at `top` leaves and a
@@ -356,8 +362,14 @@ impl Grid {
         if self.size.cols == cols {
             return;
         }
+        let old_cols = self.size.cols;
         for row in &mut self.rows {
             row.cells.resize(cols, Cell::default());
+            // NOTE: This walks history as well as the viewport, so a
+            // whole-row sweep here would visit millions of cells on every
+            // frame of a window drag. A resize can only break one joint
+            // per row, so repair that index instead.
+            row.cells.repair_after_resize(old_cols);
         }
         self.size.cols = cols;
     }
