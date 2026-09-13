@@ -785,7 +785,7 @@ impl Screen {
         )
     )]
     fn fits(&self, width: u16) -> bool {
-        self.state.column.0 + width <= self.grid.size().cols
+        width <= self.grid.size().cols.saturating_sub(self.state.column.0)
     }
 }
 

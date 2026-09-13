@@ -61,10 +61,17 @@ impl Row<Cell> {
     /// is `CellWidth::Wide`, and restores the wide-pair invariant on
     /// both sides of the write.
     ///
-    /// The caller must leave a `Wide` cell room for its continuation.
+    /// The caller must hand over a `CellWidth::Narrow` or
+    /// `CellWidth::Wide` cell — the row mints its own continuation and
+    /// filler columns — and must leave a `Wide` cell room for its
+    /// continuation.
     pub fn stamp_at(&mut self, column: u16, cell: Cell) {
         let start = usize::from(column);
         let wide = cell.width == CellWidth::Wide;
+        debug_assert!(
+            matches!(cell.width, CellWidth::Narrow | CellWidth::Wide),
+            "a stamp carries a body width, not a continuation or a filler"
+        );
         let end = if wide { start + 1 } else { start };
         debug_assert!(end < self.0.len(), "a stamp stays inside the row");
         if wide {
@@ -78,10 +85,6 @@ impl Row<Cell> {
         debug_assert!(
             (start == 0 || self.joint_intact(start - 1)) && self.joint_intact(end),
             "a stamp left a broken joint"
-        );
-        debug_assert!(
-            self.0[start].width != CellWidth::LeadingSpacer || start == self.0.len() - 1,
-            "a stamp wrote a leading spacer outside the last column"
         );
     }
 
@@ -99,16 +102,8 @@ impl Row<Cell> {
                     if at == 0 || self.0[at - 1].width != CellWidth::Wide {
                         self.blank_in_place(at);
                     } else {
-                        let (fg, bg, style) = {
-                            let body = &self.0[at - 1];
-                            (body.fg, body.bg, body.style)
-                        };
-                        let spacer = &mut self.0[at];
-                        spacer.c = ' ';
-                        spacer.extra = None;
-                        spacer.fg = fg;
-                        spacer.bg = bg;
-                        spacer.style = style;
+                        let continuation = self.0[at - 1].continuation();
+                        self.0[at] = continuation;
                     }
                 }
                 CellWidth::LeadingSpacer => {
@@ -561,9 +556,8 @@ mod tests {
     /// Asserts that a normalization blanks a filler in the last column
     /// that carries a non-blank glyph.
     ///
-    /// Case: a leading spacer left behind by a wide character that
-    /// wrapped at the old right edge is somehow stamped with a glyph
-    /// before normalization runs.
+    /// Case: an in-row insert shifts a glyph into the last column that a
+    /// wrapped fullwidth character had left as a filler.
     #[test]
     fn normalization_blanks_a_last_column_filler_carrying_a_glyph() {
         let filler = Cell {

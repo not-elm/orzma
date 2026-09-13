@@ -281,8 +281,8 @@ mod tests {
     /// Asserts that a character with no reported width classifies to
     /// `None` rather than to a printable width.
     ///
-    /// Case: an escape byte reaches the classifier through a path that
-    /// did not strip control characters.
+    /// Case: a program emits an escape byte and a NUL amid printable
+    /// text.
     #[test]
     fn a_control_character_has_no_width() {
         assert_eq!(CellWidth::of('\u{1b}'), None);
@@ -310,12 +310,12 @@ mod tests {
         assert_eq!(CellWidth::of('\u{200d}'), Some(CellWidth::Spacer));
     }
 
-    /// Asserts that the cell stays at twenty-four bytes.
+    /// Asserts that the cell stays within twenty-four bytes.
     ///
     /// Case: a scrollback of ten thousand rows holds millions of cells.
     #[test]
     fn the_cell_stays_within_its_size_budget() {
-        assert_eq!(size_of::<Cell>(), 24);
+        assert!(size_of::<Cell>() <= 24, "{}", size_of::<Cell>());
     }
 
     /// Asserts that a continuation cell is a blank sharing the body's

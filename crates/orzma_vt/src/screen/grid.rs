@@ -6,7 +6,7 @@ pub mod run;
 pub(crate) mod coords;
 mod history_index;
 
-use crate::screen::cell::Cell;
+use crate::screen::cell::{Cell, CellWidth};
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::grid::history_index::HistoryIndex;
 use crate::screen::grid::row::Row;
@@ -199,7 +199,14 @@ impl Grid {
     /// The departing row becomes the newest history row only when `top`
     /// is the first screen line. A region with content pinned above it
     /// discards the row instead.
+    ///
+    /// The caller must pass a [`CellWidth::Narrow`] `fill`.
     pub fn scroll_up_one(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
+        debug_assert_eq!(
+            fill.width,
+            CellWidth::Narrow,
+            "a scroll fills with narrow blanks"
+        );
         let base = self.history_len();
         let id = self.mint();
         if top > ScreenLine(0) {
@@ -248,7 +255,14 @@ impl Grid {
 
     /// Scrolls the region down by one row: a `fill`-filled row enters at
     /// `top` and the row at `bottom` is discarded.
+    ///
+    /// The caller must pass a [`CellWidth::Narrow`] `fill`.
     pub fn scroll_down_one(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
+        debug_assert_eq!(
+            fill.width,
+            CellWidth::Narrow,
+            "a scroll fills with narrow blanks"
+        );
         let base = self.history_len();
         let mut recycled = self
             .rows
