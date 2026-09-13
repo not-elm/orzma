@@ -1196,7 +1196,7 @@ mod tests {
         device
             .active_screen_mut()
             .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled);
-        let shown = device.active_screen().viewport_row(ViewportLine(0))[0];
+        let shown = &device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(shown.c, 'q');
         assert_eq!(shown.fg, Color::DefaultForeground);
 
@@ -1204,7 +1204,7 @@ mod tests {
         device
             .active_screen_mut()
             .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled);
-        let hidden = device.active_screen().viewport_row(ViewportLine(0))[0];
+        let hidden = &device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(hidden.c, '─');
         assert_eq!(hidden.fg, Color::Indexed(1));
     }

@@ -19,10 +19,6 @@ pub enum CellWidth {
     Spacer,
     /// A blank left in the last column because a width-2 glyph did not
     /// fit there; the glyph itself was printed on the next row.
-    #[expect(
-        dead_code,
-        reason = "the printer reaches the classifier when width dispatch lands"
-    )]
     LeadingSpacer,
 }
 
@@ -31,13 +27,6 @@ impl CellWidth {
     /// with no reported width, such as a control character.
     ///
     /// A width above two is reported as [`CellWidth::Wide`].
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the printer reaches the classifier when width dispatch lands"
-        )
-    )]
     pub fn of(c: char) -> Option<Self> {
         match UnicodeWidthChar::width(c)? {
             0 => Some(Self::Spacer),
@@ -72,13 +61,6 @@ impl CellExtra {
 
     /// Appends `mark`, reporting whether it was kept; a push past
     /// [`CellExtra::MAX_COMBINING`] is refused and changes nothing.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the printer reaches the marks when zero-width dispatch lands"
-        )
-    )]
     pub fn push(&mut self, mark: char) -> bool {
         let len = usize::from(self.len);
         if len >= Self::MAX_COMBINING {
@@ -90,13 +72,6 @@ impl CellExtra {
     }
 
     /// The marks this cell carries, in the order they arrived.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the printer reaches the marks when zero-width dispatch lands"
-        )
-    )]
     pub fn marks(&self) -> &[char] {
         &self.marks[..usize::from(self.len)]
     }
@@ -106,10 +81,15 @@ impl CellExtra {
 /// printed with.
 ///
 /// TODO: hold a grapheme cluster rather than a single `char`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     /// The stored glyph.
     pub c: char,
+    /// The columns this cell occupies, and whether it is a body or a
+    /// continuation column.
+    pub width: CellWidth,
+    /// The zero-width marks combined onto the glyph, when any arrived.
+    pub extra: Option<Box<CellExtra>>,
     /// Foreground color, symbolic.
     pub fg: Color,
     /// Background color, symbolic.
@@ -122,6 +102,8 @@ impl Default for Cell {
     fn default() -> Self {
         Self {
             c: ' ',
+            width: CellWidth::Narrow,
+            extra: None,
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
             style: Style::empty(),
@@ -135,6 +117,19 @@ impl Cell {
         Self {
             bg,
             ..Self::default()
+        }
+    }
+
+    /// The continuation cell that follows a [`CellWidth::Wide`] body,
+    /// sharing its pen.
+    pub fn continuation(&self) -> Self {
+        Self {
+            c: ' ',
+            width: CellWidth::Spacer,
+            extra: None,
+            fg: self.fg,
+            bg: self.bg,
+            style: self.style,
         }
     }
 }
@@ -165,6 +160,8 @@ impl Pen {
     pub fn stamp(&self, c: char) -> Cell {
         Cell {
             c,
+            width: CellWidth::Narrow,
+            extra: None,
             fg: self.fg,
             bg: self.bg,
             style: self.style,
@@ -245,6 +242,8 @@ mod tests {
             pen.stamp('a'),
             Cell {
                 c: 'a',
+                width: CellWidth::Narrow,
+                extra: None,
                 fg: Color::Indexed(1),
                 bg: Color::Indexed(4),
                 style: Style::BOLD,
@@ -309,5 +308,48 @@ mod tests {
     fn variation_selectors_and_joiners_are_zero_width() {
         assert_eq!(CellWidth::of('\u{fe0f}'), Some(CellWidth::Spacer));
         assert_eq!(CellWidth::of('\u{200d}'), Some(CellWidth::Spacer));
+    }
+
+    /// Asserts that the cell stays at twenty-four bytes.
+    ///
+    /// Case: a scrollback of ten thousand rows holds millions of cells.
+    #[test]
+    fn the_cell_stays_within_its_size_budget() {
+        assert_eq!(std::mem::size_of::<Cell>(), 24);
+    }
+
+    /// Asserts that a continuation cell is a blank sharing the body's
+    /// pen.
+    ///
+    /// Case: a fullwidth glyph is printed inside a region with a colored
+    /// background.
+    #[test]
+    fn a_continuation_shares_the_body_pen() {
+        let body = Cell {
+            c: 'あ',
+            width: CellWidth::Wide,
+            extra: None,
+            fg: Color::Indexed(1),
+            bg: Color::Indexed(4),
+            style: Style::BOLD,
+        };
+        let spacer = body.continuation();
+        assert_eq!(spacer.width, CellWidth::Spacer);
+        assert_eq!(spacer.c, ' ');
+        assert_eq!(spacer.extra, None);
+        assert_eq!(
+            (spacer.fg, spacer.bg, spacer.style),
+            (body.fg, body.bg, body.style)
+        );
+    }
+
+    /// Asserts that a stamped cell is narrow and carries no marks.
+    ///
+    /// Case: an application prints ordinary text.
+    #[test]
+    fn stamping_produces_a_narrow_cell() {
+        let cell = Pen::default().stamp('a');
+        assert_eq!(cell.width, CellWidth::Narrow);
+        assert_eq!(cell.extra, None);
     }
 }

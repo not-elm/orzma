@@ -140,7 +140,7 @@ impl Grid {
             start + count <= cols,
             "an in-row insert stays inside the row"
         );
-        row.copy_within(start..cols - count, start + count);
+        row[start..cols].rotate_right(count);
         row[start..start + count].fill(fill);
     }
 
@@ -169,7 +169,7 @@ impl Grid {
             start + count <= cols,
             "an in-row delete stays inside the row"
         );
-        row.copy_within(start + count..cols, start);
+        row[start..cols].rotate_left(count);
         row[cols - count..].fill(fill);
     }
 
@@ -681,7 +681,7 @@ mod tests {
         grid[ScreenLine(0)][0].c = 'a';
         grid[ScreenLine(1)][0].c = 'b';
         let fill = Cell::blank_with_bg(Color::Indexed(4));
-        scroll_up_whole_screen(&mut grid, fill);
+        scroll_up_whole_screen(&mut grid, fill.clone());
         assert_eq!(grid.history_len(), 1);
         assert_eq!(grid[ScreenLine(0)][0].c, 'b');
         assert_eq!(grid[ScreenLine(1)][0], fill);
@@ -924,7 +924,7 @@ mod tests {
             let mut grid = labelled(3, 10);
             let fill = Cell::blank_with_bg(Color::Indexed(4));
             let (top, bottom) = whole(3);
-            grid.scroll_down_one(top, bottom, fill);
+            grid.scroll_down_one(top, bottom, fill.clone());
             assert_eq!(grid[ScreenLine(0)][0], fill);
         }
 

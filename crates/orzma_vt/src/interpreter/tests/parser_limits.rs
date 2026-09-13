@@ -12,7 +12,7 @@ use crate::device::color::Palette;
 #[test]
 fn a_parameter_list_past_the_parser_cap_loses_its_tail() {
     let device = interpret(b"\x1b[0;1;2;3;4;5;7;8;9;38;2;255;0;0;48;2;0;0;255mx");
-    let cell = device.active_screen().viewport_row(ViewportLine(0))[0];
+    let cell = &device.active_screen().viewport_row(ViewportLine(0))[0];
     assert_eq!(cell.fg, Color::Rgb(Rgb { r: 255, g: 0, b: 0 }));
     assert_eq!(cell.bg, Color::DefaultBackground);
 }

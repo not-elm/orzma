@@ -119,7 +119,13 @@ mod tests {
     use crate::screen::grid::run::Style;
 
     fn cell(c: char, fg: Color, bg: Color, style: Style) -> Cell {
-        Cell { c, fg, bg, style }
+        Cell {
+            c,
+            fg,
+            bg,
+            style,
+            ..Cell::default()
+        }
     }
 
     fn plain(c: char) -> Cell {
@@ -201,7 +207,7 @@ mod tests {
             cell('b', base.fg, base.bg, Style::BOLD),
         ];
         for second in differing {
-            let runs = Row::from(vec![base, second]).to_runs();
+            let runs = Row::from(vec![base.clone(), second.clone()]).to_runs();
             assert_eq!(runs.len(), 2, "expected a split before {second:?}");
             assert_eq!(runs[0].text, "a");
             assert_eq!(runs[1].text, "b");

@@ -328,6 +328,11 @@ pub struct OrzmaVt {
     tracker: FrameTracker,
 }
 
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<OrzmaVt>();
+};
+
 impl OrzmaVt {
     /// Builds a terminal whose first frame carries every viewport row.
     ///

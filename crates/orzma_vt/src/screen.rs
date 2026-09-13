@@ -598,7 +598,7 @@ impl Screen {
         let fill = self.state.pen.erase_cell();
         let feeds_history = first == ScreenLine(0);
         for _ in 0..count {
-            self.grid.scroll_up_one(first, bottom, fill);
+            self.grid.scroll_up_one(first, bottom, fill.clone());
             if feeds_history {
                 self.hold_scrolled_viewport();
             }
@@ -617,7 +617,7 @@ impl Screen {
         let count = self.clamped_rows(first, count)?;
         let fill = self.state.pen.erase_cell();
         for _ in 0..count {
-            self.grid.scroll_down_one(first, bottom, fill);
+            self.grid.scroll_down_one(first, bottom, fill.clone());
         }
         Some(DamageSpan::Full)
     }
@@ -720,18 +720,21 @@ impl Screen {
         let blank = self.state.pen.erase_cell();
         match mode {
             EraseScreenMode::Below => {
-                self.grid
-                    .fill_visible_row_range(self.state.line, self.state.column.0..cols, blank);
+                self.grid.fill_visible_row_range(
+                    self.state.line,
+                    self.state.column.0..cols,
+                    blank.clone(),
+                );
                 for line in self.state.line.0 + 1..rows {
                     self.grid
-                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank.clone());
                 }
                 self.damage_span(self.state.line, ScreenLine(rows - 1))
             }
             EraseScreenMode::Above => {
                 for line in 0..self.state.line.0 {
                     self.grid
-                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank.clone());
                 }
                 self.grid.fill_visible_row_range(
                     self.state.line,
@@ -743,7 +746,7 @@ impl Screen {
             EraseScreenMode::All => {
                 for line in 0..rows {
                     self.grid
-                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank.clone());
                 }
                 Some(DamageSpan::Full)
             }
@@ -1243,7 +1246,7 @@ impl Screen {
         };
         for line in 0..size.rows {
             self.grid
-                .fill_visible_row_range(ScreenLine(line), 0..size.cols, cell);
+                .fill_visible_row_range(ScreenLine(line), 0..size.cols, cell.clone());
         }
         self.scroll_region = ScrollRegion::new(size.rows);
         self.seat_cursor(ScreenLine(0), GridColumn(0));

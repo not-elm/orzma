@@ -59,7 +59,7 @@ fn glyph_at(device: &DeviceState, line: u16, column: u16) -> char {
 
 /// The whole cell at `column` of the device's `line`th visible row.
 fn cell_at(device: &DeviceState, line: u16, column: u16) -> Cell {
-    device.active_screen().viewport_row(ViewportLine(line))[column]
+    device.active_screen().viewport_row(ViewportLine(line))[column].clone()
 }
 
 /// Reports the reply bytes `chunk` produced.
