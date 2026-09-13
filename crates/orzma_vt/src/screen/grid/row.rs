@@ -58,7 +58,7 @@ impl Row<Cell> {
     }
 
     /// Writes `cell` at `column`, adding the continuation column when it
-    /// is [`CellWidth::Wide`], and restores the wide-pair invariant on
+    /// is `CellWidth::Wide`, and restores the wide-pair invariant on
     /// both sides of the write.
     ///
     /// The caller must leave a `Wide` cell room for its continuation.
@@ -78,6 +78,10 @@ impl Row<Cell> {
         debug_assert!(
             (start == 0 || self.joint_intact(start - 1)) && self.joint_intact(end),
             "a stamp left a broken joint"
+        );
+        debug_assert!(
+            self.0[start].width != CellWidth::LeadingSpacer || start == self.0.len() - 1,
+            "a stamp wrote a leading spacer outside the last column"
         );
     }
 
@@ -133,6 +137,9 @@ impl Row<Cell> {
     /// invariant at that length.
     pub fn repair_after_resize(&mut self, old_cols: u16) {
         if self.0.is_empty() {
+            return;
+        }
+        if self.0.len() == usize::from(old_cols) {
             return;
         }
         let last = self.0.len() - 1;
@@ -268,7 +275,6 @@ impl IndexMut<GridColumn> for Row<Cell> {
 mod tests {
     use super::*;
     use crate::device::color::Color;
-    use crate::screen::cell::CellWidth;
     use crate::screen::grid::run::Style;
 
     fn cell(c: char, fg: Color, bg: Color, style: Style) -> Cell {
@@ -534,6 +540,22 @@ mod tests {
         row.repair_after_resize(2);
         assert_eq!(row[GridColumn(1)].width, CellWidth::Narrow);
         assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that a repair called with the row's unchanged length keeps
+    /// a legal last-column leading spacer intact.
+    ///
+    /// Case: the window manager replays the same geometry after a
+    /// fullwidth character wrapped at the right edge.
+    #[test]
+    fn a_repair_at_the_same_length_keeps_a_last_column_leading_spacer() {
+        let filler = Cell {
+            width: CellWidth::LeadingSpacer,
+            ..Cell::default()
+        };
+        let mut row = Row::from(vec![Cell::default(), filler]);
+        row.repair_after_resize(2);
+        assert_eq!(row[GridColumn(1)].width, CellWidth::LeadingSpacer);
     }
 
     /// Asserts that a normalization blanks a filler in the last column

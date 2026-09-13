@@ -292,8 +292,8 @@ mod tests {
     /// Asserts that the one scalar reported as three columns wide is
     /// clamped to two.
     ///
-    /// Case: a program prints U+17D8, the only scalar in Unicode whose
-    /// reported width exceeds two.
+    /// Case: a program prints a character whose reported display width is
+    /// three columns.
     #[test]
     fn a_width_three_scalar_is_clamped_to_wide() {
         assert_eq!(CellWidth::of('\u{17d8}'), Some(CellWidth::Wide));
@@ -315,7 +315,7 @@ mod tests {
     /// Case: a scrollback of ten thousand rows holds millions of cells.
     #[test]
     fn the_cell_stays_within_its_size_budget() {
-        assert_eq!(std::mem::size_of::<Cell>(), 24);
+        assert_eq!(size_of::<Cell>(), 24);
     }
 
     /// Asserts that a continuation cell is a blank sharing the body's

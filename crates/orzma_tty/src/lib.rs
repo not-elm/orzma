@@ -121,6 +121,8 @@ impl<V: Vt> OrzmaTty<V> {
     /// Spawns `options.shell` under a new PTY and sizes the injected VT
     /// to the spawn geometry.
     ///
+    /// A column count below the minimum grid width is raised to it.
+    ///
     /// The placements the initial sizing strands reach the next pump as a
     /// [`VtSignal::WebviewEvicted`] signal.
     pub fn spawn(vt: V, mut options: SpawnOptions) -> OrzmaTtyResult<Self> {
@@ -158,6 +160,8 @@ impl<V: Vt> OrzmaTty<V> {
     /// Builds a terminal around a fake PTY master instead of a spawned
     /// shell, so writes land on `writer` and no real PTY is opened.
     ///
+    /// A column count below the minimum grid width is raised to it.
+    ///
     /// Resize calls still round-trip through [`Self::pty_size`], and no
     /// child process or reader thread is started, so everything the input
     /// methods emit can be observed on `writer` — typically a
@@ -188,6 +192,8 @@ impl<V: Vt> OrzmaTty<V> {
     /// Like [`Self::detached`], but with the chunk and exit streams fed by
     /// the given receivers, so the caller controls the queued output and
     /// whether the child's exit is reported.
+    ///
+    /// A column count below the minimum grid width is raised to it.
     #[cfg(any(test, feature = "test-support"))]
     pub fn detached_with_channels(
         vt: V,
@@ -257,9 +263,9 @@ impl<V: Vt> OrzmaTty<V> {
     /// idle terminal.
     ///
     /// A request with a zero axis, or one exceeding `Self::MAX_COLS` /
-    /// `Self::MAX_ROWS`, is ignored with `Ok` — neither clamped nor
-    /// an error. When the PTY resize fails the call returns
-    /// `OrzmaTtyError::PtyResize` and leaves the VT grid and
+    /// `Self::MAX_ROWS`, is ignored with `Ok`. A column count below the
+    /// minimum grid width is raised to it. When the PTY resize fails the
+    /// call returns `OrzmaTtyError::PtyResize` and leaves the VT grid and
     /// coalescer untouched.
     ///
     /// A request for the grid size the VT already has changes nothing

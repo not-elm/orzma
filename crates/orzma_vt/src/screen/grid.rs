@@ -379,10 +379,8 @@ impl Grid {
         let old_cols = self.size.cols;
         for row in &mut self.rows {
             row.cells.resize(cols, Cell::default());
-            // NOTE: This walks history as well as the viewport, so a
-            // whole-row sweep here would visit millions of cells on every
-            // frame of a window drag. A resize can only break one joint
-            // per row, so repair that index instead.
+            // NOTE: A resize can only break one joint per row, so repair
+            // that index instead of sweeping the whole row.
             row.cells.repair_after_resize(old_cols);
         }
         self.size.cols = cols;

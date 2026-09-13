@@ -176,11 +176,11 @@ impl Screen {
         }
         let cell = self.state.pen.stamp(glyph);
         self.grid[self.state.line].stamp_at(self.state.column.0, cell);
-        let at_right_edge = self.is_last_column();
-        if !at_right_edge {
+        let is_last_column = self.is_last_column();
+        if !is_last_column {
             self.state.column.0 += 1;
         }
-        self.state.pending_wrap = at_right_edge && wrapping;
+        self.state.pending_wrap = is_last_column && wrapping;
         match wrap {
             Some(DamageSpan::Full) => Some(DamageSpan::Full),
             _ => self.damage_span(self.state.line, self.state.line),
