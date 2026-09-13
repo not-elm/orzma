@@ -823,7 +823,7 @@ impl Screen {
     /// column hands the mark to its wide body.
     ///
     /// Reports the cursor's row when the mark was kept, and `None` when
-    /// the cell already holds [`MAX_COMBINING`] marks or the target is a
+    /// the cell already holds [`cell::MAX_COMBINING`] marks or the target is a
     /// filler.
     fn attach_zero_width(&mut self, mark: char) -> Option<DamageSpan> {
         let column = self.state.column.0;

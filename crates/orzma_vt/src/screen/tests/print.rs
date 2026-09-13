@@ -449,7 +449,7 @@ fn a_wide_glyph_takes_two_columns_and_advances_by_two() {
 /// Asserts that a fullwidth glyph landing on the last two columns parks
 /// the cursor on the last column and arms the deferred wrap.
 ///
-/// Case: a row of four columns receives `aあ` followed by `い`.
+/// Case: a row of four columns receives `abあ` followed by `い`.
 #[test]
 fn a_wide_glyph_ending_the_row_arms_the_deferred_wrap() {
     let mut screen = screen();
