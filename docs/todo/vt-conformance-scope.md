@@ -96,7 +96,7 @@ terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ロ
 | `CSI ?2026 h/l` | 同期出力 | `MODE∅`。`struct SyncBuffer {}` は**空のプレースホルダ**（`interpreter.rs:83`） | fzf がフレーム毎に発行。nvim/tmux/kitty |
 | `CSI ?1004` → `CSI I` / `CSI O` | フォーカス通知 | **モードは保存されるが送信側が存在しない**（`focus_in_out` の参照は定義と代入の 2 箇所のみ） | vim/nvim。フォーカス復帰時の再描画が来ない |
 | `OSC 10/11/12` | 前景/背景/カーソル色（問い合わせ含む） | `OSC∅` | vim/nvim の `background` 自動判定 |
-| `OSC 52` | クリップボード | `OSC∅` | nvim の osc52 provider、tmux |
+| ~~`OSC 52`~~ | ~~クリップボード~~ | **✅ 書き込み方向のみ実装（2026-09-13）**。`Pc` は xterm-ctlseqs.pdf p.40 の `cpqs01234567` を集合として検証し、**集合外のバイトが 1 つでもあればシーケンスごと拒否**する。tmux の `input_osc_52_parse`（`input.c`）は集合外を黙って読み飛ばすが、それだと `OSC 52 ; xyz ; …` が濾過後に空 `Pc` となり「空 `Pc` は `s0`」の規定に落ちて**ゴミがクリップボード書き込みになる**ため採らない。通過した `Pc` は `c` または `s` を含むときだけ唯一のシステムクリップボードに写し、`p` / `q` / cut-buffer 0-7 は認識だけして何もしない（`bevy_clipboard` に PRIMARY は無く、alacritty も macOS/Windows では `selection: None` で同じ no-op になる）。**alacritty からの意図的な逸脱は 2 点**: (a) alacritty は `params[1].first()` で `Pc` の先頭 1 バイトしか見ないが orzma は包含判定なので `OSC 52 ; pc ; …` が通る、(b) alacritty は空 `Pc` を `c` に倒すが orzma は xterm どおり `s0` として扱う。`Pd` は `base64` crate の `STANDARD`（canonical padding 必須）でデコードする。**不正 base64・非 UTF-8・`Pd` 欠落はいずれも無視し、クリアしない** — xterm の「neither a base64 string nor `?` → the selection is cleared」は**意図的に不採用**で、バイナリを cat した事故でユーザーのクリップボードが消える経路を作らないため（alacritty も同じ判断）。空 `Pd` は空文字列の書き込み＝クリアとして通す。非アクティブなペインからの書き込みも通す。`?`（読み出し）は未実装 | nvim の osc52 provider、tmux |
 | `OSC 8` | ハイパーリンク | `OSC∅`。interner は未接続（`hyperlink.rs:15`） | nvim。レンダラ側に受け皿は既にある |
 | `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `CSI∅`（DECSTR で intermediate 経路が開いたので `(Some(b'?'), [b'$'], b'p')` の腕 1 本で入る） | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する**。DECAWM / DECTCEM 実装により **7 と 25 も報告可能な状態を持つようになった**（`CSI ?7;1$y` / `CSI ?25;2$y` など）が応答路が無い。§6 のとおり、`CSI ?7 $ p` を実装すれば `vttest` の `tst_DEC_DECRPM` が mode 7 を機械判定できるようになる。**mode 3 / 40 / 95 は `0`（not recognized）で答える**（2026-09-12 決定）。orzma は DECCOLM の状態も変更経路も持たないので、`4`（permanently reset）だと任意幅のペインが「80 桁モード」を名乗ることになる。foot と alacritty も 0 を返す（wezterm は set を返す） |
 | `DCS $ q … ST` / `DCS + q … ST` | DECRQSS / XTGETTCAP | DCS コールバックが空（`interpreter.rs:157`-`168`） | vim のカーソル形状復元・capability 検出 |
@@ -241,7 +241,20 @@ STD-070 が LCF をリセットすると規定する操作:
 5. **入力側の契約修正**（`kbs` の方針決定 → ファンクションキー → 修飾キー）。~~Shift-Tab~~ と Insert は **完了（2026-09-11）**。~~Meta~~ は §1-B の `CSI ?1034 h/l` 行のとおり意図的に無視と決着（2026-09-11）。
 6. ~~**OSC 4**~~ **完了（2026-09-12、OSC 104 と `?` 問い合わせを含む）** → 残るのは **OSC 10/11/12** とその問い合わせ・リセット（OSC 110/111/112）。OSC 4 で入れた `PaletteRequest` を広げて扱う。RIS での復帰は `Palette::reset`（全色を既定値へ戻す）が既に賄うので、ハンドラ側は `Palette` の `foreground` / `background` を書くのと、full repaint の staging（`frame.rs` の `palette` フィールドの TODO）を足すだけでよい。なお `OSC 104` は xterm-ctlseqs.pdf のとおりインデックス表だけを戻す（`Palette::reset_all_indexed`）ので、そちらに前景/背景を巻き込まないこと。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
-8. **OSC 8 / OSC 52**、**DECLRMM/DECSLRM**、**1015**。
+8. ~~**OSC 52**~~ **書き込み方向は完了（2026-09-13）**。残るのは **`?`（読み出し）**。
+   障害は非同期性ではない — `bevy_clipboard` 0.19 の `fetch_text` は Windows/Unix で
+   `ClipboardRead::Ready` を返して即完了し、`Pending` は wasm32 だけである
+   （`bevy_clipboard-0.19.0/src/lib.rs:22-24`, `232-241`）。障害は**層の位置**で、
+   クリップボードは Bevy-free なバックエンド境界の GUI 側にあるため、ホストの
+   クリップボードから答えるには VT → GUI → PTY の往復路（新しい `OrzmuxCommand`）が要る。**設定ノブ**（alacritty の `osc52`: Disabled / OnlyCopy /
+   OnlyPaste / CopyPaste、既定 OnlyCopy）も読み出しとセットで入れる。**配線は既に通っている** —
+   `OrzmaConfigs::load()` → `OrzmuxConfig { shell, scrollback_rows }`（`src/main.rs:48-52`）→
+   `ShellFactory::new`（`client.rs:49`）→ `OrzmaVt::new(size, self.scrollback_rows)`
+   （`backend/pane.rs:62`）で、`shell` は実際に設定ファイルから VT 層まで届いている。
+   `OrzmuxConfig` に平データのフィールドを 1 つ足すだけなので protocol 純度（D7）も保たれる。
+   見送ったのは配線が無いからではなく、書き込み専用ならゲートが要らないため。OSC のサイズ上限も同様に見送り（`std` 下の vtparse は
+   `Vec<u8>` で上限が無く、これは OSC 52 固有ではなく OSC 0/2/7 も含むパーサ全体の話。
+   alacritty の vte も `std` では同じく無制限）。ほかに **OSC 8**、**DECLRMM/DECSLRM**、**1015**。
 9. **コロン付きサブパラメータの扱い（リポジトリ全体）**。xterm は SGR と modifyOtherKeys 以外の
    すべての CSI でサブパラメータを拒否する（`charproc.c` の `parms.has_subparams` 分岐）が、orzma は
    `CsiParams::first_value` がグループ内の最初の整数を拾うので `CSI 1:2 H` が CUP として通る。

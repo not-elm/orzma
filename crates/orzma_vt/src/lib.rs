@@ -259,7 +259,7 @@ pub enum VtSignal {
     ResetTitle,
     /// The application copied data to the system clipboard via OSC 52.
     ///
-    /// [`OrzmaVt`] never raises it.
+    /// An empty string clears the clipboard.
     Clipboard {
         /// The clipboard content that was copied.
         content: String,

@@ -43,7 +43,7 @@ pub struct TtyModeChangedSignal {
 }
 
 /// Fired when the application copies data to the system clipboard via
-/// OSC 52. [`OrzmaVt`] never raises it.
+/// OSC 52. An empty `content` clears the clipboard.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct TtyClipboardStoreSignal {
     #[event_target]
