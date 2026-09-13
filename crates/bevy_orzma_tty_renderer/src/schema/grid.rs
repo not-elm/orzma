@@ -387,6 +387,7 @@ mod tests {
             bg: Color::DefaultBackground,
             style: Style::empty(),
             text: text.to_string(),
+            widths: Vec::new(),
             hyperlink_id,
         }
     }

@@ -1,6 +1,6 @@
 //! One row of elements, ordered left to right.
 
-use crate::screen::cell::{Cell, CellWidth, Pen};
+use crate::screen::cell::{Cell, CellExtra, CellWidth, Pen};
 use crate::screen::grid::coords::GridColumn;
 use crate::screen::grid::run::Run;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
@@ -8,7 +8,7 @@ use std::ops::{Deref, DerefMut, Index, IndexMut};
 /// A single row of `T`, left to right.
 ///
 /// Storage rows are `Row<Cell>` and emitted rows are [`Row<Run>`]; a
-/// cell spans one column, and a run one column per `char` of its text.
+/// cell spans one column, and a run the columns its widths sum to.
 ///
 /// [`Row<Run>`]: crate::screen::grid::run::Run
 #[derive(Debug, Clone, PartialEq)]
@@ -36,22 +36,39 @@ impl Row<Cell> {
     ///
     /// Adjacent cells sharing foreground, background, and style become
     /// one [`Run`], and the runs together span every column of the row.
+    /// A continuation column adds nothing to a run's text, a filler adds
+    /// one blank, and a cell's marks follow its glyph.
     pub fn to_runs(&self) -> Row<Run> {
         let mut runs: Vec<Run> = Vec::with_capacity(self.0.len().min(Self::RUNS_RESERVE));
+        let mut chars_in_run = 0usize;
         for cell in self.0.iter() {
-            match runs.last_mut() {
-                Some(run) if run.fg == cell.fg && run.bg == cell.bg && run.style == cell.style => {
-                    run.cols += 1;
-                    run.text.push(cell.c);
-                }
-                _ => runs.push(Run {
-                    cols: 1,
+            if cell.width == CellWidth::Spacer {
+                continue;
+            }
+            let width: u8 = if cell.width == CellWidth::Wide { 2 } else { 1 };
+            let starts_new = !matches!(
+                runs.last(),
+                Some(run) if run.fg == cell.fg && run.bg == cell.bg && run.style == cell.style
+            );
+            if starts_new {
+                runs.push(Run {
+                    cols: 0,
                     fg: cell.fg,
                     bg: cell.bg,
                     style: cell.style,
-                    text: cell.c.to_string(),
+                    text: String::new(),
+                    widths: Vec::new(),
                     hyperlink_id: None,
-                }),
+                });
+                chars_in_run = 0;
+            }
+            let run = runs.last_mut().expect("the row has a run to extend");
+            run.cols += u16::from(width);
+            Self::push_width(run, &mut chars_in_run, width);
+            run.text.push(cell.c);
+            for mark in cell.extra.as_deref().map_or(&[][..], CellExtra::marks) {
+                Self::push_width(run, &mut chars_in_run, 0);
+                run.text.push(*mark);
             }
         }
         Row(runs)
@@ -221,6 +238,16 @@ impl Row<Cell> {
         cell.width = CellWidth::Narrow;
         cell.extra = None;
     }
+
+    /// Records the width of the next `char` of `run`, creating the width
+    /// list on the first width other than one.
+    fn push_width(run: &mut Run, chars_in_run: &mut usize, width: u8) {
+        if width != 1 || !run.widths.is_empty() {
+            run.widths.resize(*chars_in_run, 1);
+            run.widths.push(width);
+        }
+        *chars_in_run += 1;
+    }
 }
 
 impl<T> From<Vec<T>> for Row<T> {
@@ -246,8 +273,8 @@ impl<T> DerefMut for Row<T> {
 /// Indexes the element at a 0-based position.
 ///
 /// The position is a column only for `Row<Cell>`; one
-/// [`Run`](crate::screen::grid::run::Run) spans one column per `char`
-/// of its text.
+/// [`Run`](crate::screen::grid::run::Run) spans the columns its widths
+/// sum to.
 impl<T> Index<u16> for Row<T> {
     type Output = T;
 
@@ -623,5 +650,118 @@ mod tests {
         assert_eq!(row[GridColumn(1)].c, ' ');
         assert_eq!(row[GridColumn(2)].width, CellWidth::LeadingSpacer);
         assert!(row.wide_pairs_intact());
+    }
+
+    fn marked(c: char, marks: &[char]) -> Cell {
+        let mut extra = CellExtra::default();
+        for mark in marks {
+            assert!(extra.push(*mark));
+        }
+        Cell {
+            c,
+            extra: Some(Box::new(extra)),
+            ..Cell::default()
+        }
+    }
+
+    /// Asserts that a row of one-column glyphs without marks emits runs
+    /// with an empty width list.
+    ///
+    /// Case: a shell prints an ASCII command line.
+    #[test]
+    fn a_row_of_narrow_glyphs_emits_no_widths() {
+        let row = Row::from(vec![plain('a'), plain('b'), plain('c')]);
+        let runs = row.to_runs();
+        assert_eq!(runs[0].text, "abc");
+        assert_eq!(runs[0].cols, 3);
+        assert!(runs[0].widths.is_empty());
+    }
+
+    /// Asserts that a wide body emits its glyph once at width two and its
+    /// continuation column contributes nothing to the text.
+    ///
+    /// Case: a shell echoes a Japanese character.
+    #[test]
+    fn a_wide_pair_emits_one_glyph_at_width_two() {
+        let body = wide_body('あ');
+        let spacer = body.continuation();
+        let row = Row::from(vec![body, spacer]);
+        let runs = row.to_runs();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, "あ");
+        assert_eq!(runs[0].cols, 2);
+        assert_eq!(runs[0].widths, vec![2]);
+    }
+
+    /// Asserts that combining marks follow their base in the text at
+    /// width zero.
+    ///
+    /// Case: a shell echoes `e` followed by a combining acute accent.
+    #[test]
+    fn combining_marks_follow_their_base_at_width_zero() {
+        let row = Row::from(vec![marked('e', &['\u{0301}']), plain('x')]);
+        let runs = row.to_runs();
+        assert_eq!(runs[0].text, "e\u{0301}x");
+        assert_eq!(runs[0].cols, 2);
+        assert_eq!(runs[0].widths, vec![1, 0, 1]);
+    }
+
+    /// Asserts that narrow glyphs before the first wide one are filled in
+    /// at width one when the width list is created.
+    ///
+    /// Case: a shell prints `ab界` with one pen.
+    #[test]
+    fn widths_created_mid_run_cover_the_earlier_glyphs() {
+        let body = wide_body('界');
+        let spacer = body.continuation();
+        let row = Row::from(vec![plain('a'), plain('b'), body, spacer]);
+        let runs = row.to_runs();
+        assert_eq!(runs[0].text, "ab界");
+        assert_eq!(runs[0].cols, 4);
+        assert_eq!(runs[0].widths, vec![1, 1, 2]);
+    }
+
+    /// Asserts that a leading spacer is emitted as one blank column and
+    /// keeps an otherwise plain row on the empty-width path.
+    ///
+    /// Case: an ASCII row whose last column a wrapped Japanese character
+    /// left blank.
+    #[test]
+    fn a_leading_spacer_emits_one_blank_column() {
+        let filler = Cell {
+            width: CellWidth::LeadingSpacer,
+            ..Cell::default()
+        };
+        let row = Row::from(vec![plain('a'), filler]);
+        let runs = row.to_runs();
+        assert_eq!(runs[0].text, "a ");
+        assert_eq!(runs[0].cols, 2);
+        assert!(runs[0].widths.is_empty());
+    }
+
+    /// Asserts that the column count of every run equals the sum of its
+    /// widths, across a pen change inside a row that mixes every class.
+    ///
+    /// Case: a colored prompt is followed by Japanese text and an
+    /// accented letter.
+    #[test]
+    fn every_run_spans_the_sum_of_its_widths() {
+        let mut colored = plain('$');
+        colored.fg = Color::Indexed(2);
+        let body = wide_body('あ');
+        let spacer = body.continuation();
+        let row = Row::from(vec![colored, body, spacer, marked('e', &['\u{0301}'])]);
+        let runs = row.to_runs();
+        assert_eq!(runs.len(), 2);
+        for run in runs.iter() {
+            let sum: u16 = run.widths.iter().map(|w| u16::from(*w)).sum();
+            let expected = if run.widths.is_empty() {
+                run.text.chars().count() as u16
+            } else {
+                sum
+            };
+            assert_eq!(run.cols, expected, "run {:?}", run.text);
+        }
+        assert_eq!(runs.iter().map(|run| run.cols).sum::<u16>(), 4);
     }
 }

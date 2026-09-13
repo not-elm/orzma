@@ -28,7 +28,7 @@ bitflags! {
 /// A run of cells sharing identical fg/bg/style attributes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Run {
-    /// Total column span: one column per `char` in `text`.
+    /// Total column span.
     pub cols: u16,
     /// Foreground color.
     pub fg: Color,
@@ -38,6 +38,13 @@ pub struct Run {
     pub style: Style,
     /// UTF-8 text.
     pub text: String,
+    /// The columns each `char` of `text` starts: `1` or `2` for a glyph,
+    /// `0` for a mark combined onto the glyph before it.
+    ///
+    /// Empty when every `char` is a one-column glyph, in which case
+    /// `cols` equals the `char` count; otherwise one entry per `char`
+    /// summing to `cols`.
+    pub widths: Vec<u8>,
     /// Hyperlink id (OSC 8); it is always `None`.
     ///
     /// TODO: set it once OSC 8 handling reaches the hyperlink interner.
@@ -52,6 +59,7 @@ impl Default for Run {
             bg: Color::DefaultBackground,
             style: Default::default(),
             text: Default::default(),
+            widths: Default::default(),
             hyperlink_id: Default::default(),
         }
     }
