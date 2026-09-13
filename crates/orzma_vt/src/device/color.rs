@@ -623,10 +623,11 @@ mod tests {
     #[test]
     fn setting_a_default_color_to_its_current_value_reports_no_change() {
         let mut palette = Palette::default();
-        let foreground = palette.foreground;
-        let background = palette.background;
-        assert!(!palette.set_foreground(foreground));
-        assert!(!palette.set_background(background));
+        let color = rgb(0x12, 0x34, 0x56);
+        palette.set_foreground(color);
+        palette.set_background(color);
+        assert!(!palette.set_foreground(color));
+        assert!(!palette.set_background(color));
     }
 
     /// Asserts that resetting the foreground restores its default and

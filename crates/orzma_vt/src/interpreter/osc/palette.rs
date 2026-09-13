@@ -2,7 +2,7 @@
 //! resets.
 
 use crate::device::color::Rgb;
-use crate::interpreter::osc::OscTerminator;
+use crate::interpreter::osc::{OscTerminator, rgb_spec};
 
 /// One request an `OSC 4` or `OSC 104` makes of the indexed palette,
 /// decoded before the device is touched.
@@ -66,13 +66,12 @@ impl PaletteRequest {
 /// The reply an `OSC 4 ; c ; ?` owes: the same command with slot
 /// `index`'s colour spelled as `rgb:`, closed the way the query was.
 ///
-/// Each channel is written twice, which is the 16-bit value an `hh`
-/// component scales to (xlib.pdf p.90), so an application that replays
-/// the reply sets the slot back to the same colour.
+/// An application that replays the reply sets the slot back to the
+/// same colour.
 pub(crate) fn palette_reply(index: u8, color: Rgb, terminator: OscTerminator) -> Vec<u8> {
-    let Rgb { r, g, b } = color;
+    let spec = rgb_spec(color);
     let end = terminator.as_str();
-    format!("\x1b]4;{index};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}{end}").into_bytes()
+    format!("\x1b]4;{index};{spec}{end}").into_bytes()
 }
 
 /// The palette slot a decimal colour number names; `None` for an empty

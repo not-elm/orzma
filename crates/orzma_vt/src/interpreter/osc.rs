@@ -11,6 +11,7 @@
 pub(crate) mod dynamic_color;
 pub(crate) mod palette;
 
+use crate::device::color::Rgb;
 use percent_encoding::percent_decode;
 use std::path::PathBuf;
 
@@ -76,6 +77,16 @@ impl OscTerminator {
             Self::St => "\x1b\\",
         }
     }
+}
+
+/// The `rgb:` spelling a colour reply carries.
+///
+/// Each channel is written twice, which is the 16-bit value an `hh`
+/// component scales to (xlib.pdf p.90), so an application that replays
+/// a reply sets the colour back to the one the reply reported.
+pub(crate) fn rgb_spec(color: Rgb) -> String {
+    let Rgb { r, g, b } = color;
+    format!("rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}")
 }
 
 /// Maximum length, in `char`s, of a sanitized title.

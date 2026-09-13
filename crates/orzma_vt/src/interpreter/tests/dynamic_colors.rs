@@ -74,6 +74,17 @@ fn a_recolor_to_the_current_color_leaves_the_chunk_undamaged() {
     assert!(!damage_of(b"\x1b]11;rgb:00/00/00\x07"));
 }
 
+/// Asserts that a query leaves the chunk undamaged, a reply owing no
+/// repaint of its own.
+///
+/// Case: nvim probes the background at startup without recoloring it,
+/// and the terminal must not open a coalesce window for a frame that
+/// carries nothing new.
+#[test]
+fn a_query_leaves_the_chunk_undamaged() {
+    assert!(!damage_of(b"\x1b]11;?\x07"));
+}
+
 /// Asserts that a query is answered with the colour the palette holds
 /// at that point.
 ///
@@ -146,11 +157,10 @@ fn an_osc_111_restores_the_default_background() {
 /// exit.
 #[test]
 fn a_set_and_a_query_in_one_command_apply_in_order() {
-    let mut session = Session::new();
-    let output = session.feed(b"\x1b]10;rgb:ff/00/00;?\x07");
+    let (device, output) = interpret_fully(b"\x1b]10;rgb:ff/00/00;?\x07");
     assert_eq!(output.replies, b"\x1b]11;rgb:0000/0000/0000\x07");
     assert_eq!(
-        session.0.device.palette().foreground,
+        device.palette().foreground,
         Rgb {
             r: 0xff,
             g: 0x00,

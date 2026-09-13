@@ -2,7 +2,7 @@
 //! and queries, and an `OSC 110` or `OSC 111` resets.
 
 use crate::device::color::Rgb;
-use crate::interpreter::osc::OscTerminator;
+use crate::interpreter::osc::{OscTerminator, rgb_spec};
 
 /// One of the dynamic colors this terminal carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,7 +28,7 @@ pub(crate) enum DynamicColorRequest {
 impl DynamicColor {
     /// The dynamic color a `Ps` of an `OSC 10` through `OSC 19` names;
     /// `None` for one this terminal does not carry.
-    fn from_code(code: u8) -> Option<Self> {
+    fn from_code(code: usize) -> Option<Self> {
         match code {
             10 => Some(Self::Foreground),
             11 => Some(Self::Background),
@@ -84,8 +84,7 @@ impl DynamicColorRequest {
             .iter()
             .enumerate()
             .map_while(|(offset, spec)| {
-                let code = usize::from(first.code()) + offset;
-                let target = u8::try_from(code).ok().and_then(DynamicColor::from_code)?;
+                let target = DynamicColor::from_code(usize::from(first.code()) + offset)?;
                 Some((target, *spec))
             })
             .filter_map(|(target, spec)| Self::from_spec(target, spec))
@@ -108,17 +107,16 @@ impl DynamicColorRequest {
 ///
 /// The reply names `target`'s own colour number, so each reply of a
 /// chained query sets back the colour it reports rather than the one
-/// the query started at. Each channel is written twice, which is the
-/// 16-bit value an `hh` component scales to (xlib.pdf p.90).
+/// the query started at.
 pub(crate) fn dynamic_color_reply(
     target: DynamicColor,
     color: Rgb,
     terminator: OscTerminator,
 ) -> Vec<u8> {
-    let Rgb { r, g, b } = color;
+    let spec = rgb_spec(color);
     let code = target.code();
     let end = terminator.as_str();
-    format!("\x1b]{code};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}{end}").into_bytes()
+    format!("\x1b]{code};{spec}{end}").into_bytes()
 }
 
 #[cfg(test)]

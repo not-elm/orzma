@@ -5,16 +5,17 @@
 ラン（`tdd-dynamic_color-parse.md` と `tdd-dynamic_color-dynamic_color_reply.md`）
 で検証した `docs/references/xterm-ctlseqs.pdf` のエントリを再利用しており、
 再検証はしていない。Phase 4 で著者が一覧を承認し、重複候補 2 件
-（終端のエコー、`OSC 12`）を落として 9 件に絞った。
+（終端のエコー、`OSC 12`）を落として 9 件に絞った。TC-I12 だけはコードレビューの
+指摘を受けて後から加わり、著者が事後に承認した。
 
 signature の変更は提案していない。
 `apply_dynamic_color_requests(&mut self, params: &[&[u8]])` は
 `apply_palette_requests` と同型。
 
-**このドキュメントの Rust はビルドしていない。** 現状の木に対しては
-**コンパイルできない** — `DeviceState` の `set_foreground_color` /
-`set_background_color` / `reset_foreground_color` / `reset_background_color` が
-まだ無く、このケース群がそれらを駆動して初めて生える。
+**このドキュメントの Rust はビルドしていない。** 書かれた時点では
+`DeviceState` の `set_foreground_color` / `set_background_color` /
+`reset_foreground_color` / `reset_background_color` が無くコンパイルできなかった
+が、このケース群がそれらを駆動したので、現在の木に対しては通る。
 
 ## テストケース一覧
 
@@ -29,13 +30,18 @@ signature の変更は提案していない。
 | TC-I8 | `an_osc_110_restores_the_default_foreground` | C8 | High |
 | TC-I9 | `an_osc_111_restores_the_default_background` | C9 | High |
 | TC-I10 | `a_set_and_a_query_in_one_command_apply_in_order` | C2, OQ | Medium |
+| TC-I12 | `a_query_leaves_the_chunk_undamaged` | PR, C7 | Medium |
 
 Source タグ — **C2**: xterm p.39 L2103（連鎖と開始点）／**C4**: p.40 L2133／
 **C5**: p.40 L2134／**C7**: p.40 L2126／**C8**: p.42 L2274／**C9**: p.42 L2275／
 **C12**: p.39 L2098（ANSI colors とは別だが、SGR 39 / 49 のセルはこれを引く）／
 **PR** と **OQ**: `interpreter.rs:612-616`（下の台帳）。
 
-9 件すべてが仕様由来か、既存メソッドの明文化された契約由来で、`TC-A` は無い。
+10 件すべてが仕様由来か、既存メソッドの明文化された契約由来で、`TC-A` は無い。
+
+**TC-I12 はゲートの後に加わった。** コードレビューが、`interpreter/tests/palette.rs` の
+`a_query_leaves_the_chunk_undamaged` が OSC 4 について持つ契約の対がこちらに無いことを
+指摘して追加し、著者が事後に承認した。
 
 テストコードは `crates/orzma_vt/src/interpreter/tests/dynamic_colors.rs` を新設
 して置き、`crates/orzma_vt/src/interpreter/tests.rs` に `mod dynamic_colors;` を
@@ -325,6 +331,33 @@ fn a_set_and_a_query_in_one_command_apply_in_order() {
             b: 0x00
         }
     );
+}
+```
+
+## TC-I12 — 問い合わせは chunk を damaged にしない
+
+| | |
+| - | - |
+| Setup | なし |
+| Act | `damage_of(b"\x1b]11;?\x07")` |
+| Expect | `false` **[PR][C7]** |
+
+C7 の問い合わせは色を報告するだけで変えないので、PR の「色が変わったときだけ
+stage する」に照らすと何も stage されない。`stage` を `if changed` の外に出す
+変更や、`Query` の腕で `changed` を立てる変更が入ると、nvim の起動ごと
+（毎回 `OSC 11;?` を投げる）に coalesce ウィンドウが開いて全画面が再描画される。
+`interpreter/tests/palette.rs` の同名テストが OSC 4 について同じ契約を持つ。
+
+```rust
+/// Asserts that a query leaves the chunk undamaged, a reply owing no
+/// repaint of its own.
+///
+/// Case: nvim probes the background at startup without recoloring it,
+/// and the terminal must not open a coalesce window for a frame that
+/// carries nothing new.
+#[test]
+fn a_query_leaves_the_chunk_undamaged() {
+    assert!(!damage_of(b"\x1b]11;?\x07"));
 }
 ```
 
