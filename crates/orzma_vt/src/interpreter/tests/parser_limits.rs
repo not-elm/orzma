@@ -79,6 +79,7 @@ fn a_hyperlink_target_past_the_parser_cap_is_truncated() {
     let uri = device.hyperlink_uri(id).expect("the id resolves");
     assert!(uri.as_str().starts_with("https://a.example;0;1"));
     assert!(!uri.as_str().ends_with(";69"));
+    assert!(uri.as_str().ends_with(";60"));
 }
 
 /// Compares one interpreted chunk against a baseline across the modes,

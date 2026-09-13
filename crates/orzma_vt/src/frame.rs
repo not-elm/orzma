@@ -515,13 +515,16 @@ mod tests {
     }
 
     /// Asserts that a frame whose rows reference no hyperlink carries no
-    /// definitions.
+    /// definitions, even while the interner still holds one.
     ///
-    /// Case: a shell prints an ordinary prompt with no clickable text in
-    /// it.
+    /// Case: a program opens a link and closes it again without printing
+    /// anything inside it, then prints an ordinary prompt.
     #[test]
     fn a_frame_without_links_carries_no_definitions() {
         let mut rig = drained_rig();
+        rig.device
+            .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        rig.device.close_hyperlink();
         rig.device
             .active_screen_mut()
             .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
