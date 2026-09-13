@@ -921,8 +921,8 @@ mod tests {
     /// Asserts that a command carrying fewer than three parameters is
     /// refused rather than read as a close.
     ///
-    /// Case: a program emits a truncated hyperlink sequence, and the link
-    /// already open must survive it.
+    /// Case: a program's output is cut off mid-sequence, so a hyperlink
+    /// command arrives without its target field.
     #[test]
     fn a_hyperlink_missing_its_uri_field_is_refused() {
         let bare: [&[u8]; 1] = [b"8"];
