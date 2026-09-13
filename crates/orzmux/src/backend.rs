@@ -11,7 +11,7 @@ use crate::protocol::{
 };
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::CellPixels;
-use orzma_tty::prelude::{PumpOutput, TtySignal};
+use orzma_tty::prelude::{OrzmaTtyResult, PumpOutput, TtySignal};
 use orzma_vt::prelude::{Frame, GridSize, Vt, VtSignal};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -438,16 +438,18 @@ impl Backend {
     /// write is logged without stopping the others.
     fn refresh_focus(&mut self) {
         let target = self.tree.active().filter(|_| self.window_focused);
-        for (id, pane) in self.panes.iter_mut().filter(|(id, _)| Some(**id) != target) {
-            if let Err(err) = pane.tty.set_focused(false) {
+        let report = |id: PaneId, result: OrzmaTtyResult| {
+            if let Err(err) = result {
                 tracing::warn!(pane = ?id, %err, "focus write failed");
             }
+        };
+        for (id, pane) in self.panes.iter_mut().filter(|(id, _)| Some(**id) != target) {
+            report(*id, pane.tty.set_focused(false));
         }
         if let Some(id) = target
             && let Some(pane) = self.panes.get_mut(&id)
-            && let Err(err) = pane.tty.set_focused(true)
         {
-            tracing::warn!(pane = ?id, %err, "focus write failed");
+            report(id, pane.tty.set_focused(true));
         }
     }
 

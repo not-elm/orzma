@@ -41,7 +41,6 @@ impl Write for CaptureSink {
 }
 
 /// A `Write` sink whose every write fails with `ErrorKind::BrokenPipe`.
-#[derive(Clone, Copy, Default)]
 pub struct FailingSink;
 
 impl Write for FailingSink {
