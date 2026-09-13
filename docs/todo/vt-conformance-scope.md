@@ -124,7 +124,8 @@ ncurses 6.0 を指す**ので、6.6 で広告が増えて実質 Tier 1 に上が
 | ~~`CSI Ps SP q`~~ | ~~DECSCUSR カーソル形状~~ | **✅ 実装済み（2026-09-12）**。DECSTR が開けた intermediate 経路に `(None, [b' '], b'q')` の腕 1 本で入った。値は vt510.pdf p.251 の 0〜4 と xterm-ctlseqs.pdf p.29–30 の 5/6（bar）。**`7` は no-op ではなく電源投入時の style に戻す** — xterm の `CASE_DECSCUSR` は `7` を `screen->initial_cursor` に書き換えてから同じ switch を通し、その既定リソース値が STEADY_BLOCK。ただし `Self::default()` はコンパイル時定数なので、**設定層が入ったら `7` 腕と `DeviceState::reset` を設定済みの初期 style から読むように直すこと**（そうしないと `CSI 7 SP q` はハードコードされた block に戻る）。**`なし / 0 / 1` はすべて blinking block に潰した** — 規範資料は一致しているが実装は割れており、`0` を「端末既定」と読むのは alacritty・ghostty・foot・tmux・termwiz、xterm/vt510 どおりに読むのは xterm だけ。**`DeviceState::soft_reset` も shape / blink を戻す**（この行が予告していたとおり。`ReallyReset` の `InitCursorShape` と `SetCursorBlink` は最初の `if (full)` より前にあり DECSTR 経路でも走る） | ~~nvim が実測 5 回~~（解消済み） |
 | ~~`CSI s` / `CSI u`~~ | ~~SCOSC / SCORC~~ | **✅ 実装済み（2026-09-11）**。パラメータ無しのときだけ DECSC / DECRC と同じ保存枠を使う（xterm の `only_default()` に揃えた。下の「`CSI s` の曖昧性」を参照） | blessed の `saveCursorA`/`restoreCursorA`、btop |
 | `CSI ?2026 h/l` | 同期出力 | `MODE∅`。`struct SyncBuffer {}` は**空のプレースホルダ**（`interpreter.rs:83`） | fzf がフレーム毎に発行。nvim/tmux/kitty |
-| `OSC 10/11/12` | 前景/背景/カーソル色（問い合わせ含む） | `OSC∅` | vim/nvim の `background` 自動判定 |
+| ~~`OSC 10/11`~~ | ~~前景/背景（問い合わせ含む）~~ | **✅ 実装済み（2026-09-13）**。設定・`?` 問い合わせ・`OSC 110/111` のリセットを実装。**別型にした** — 下の §6-6 が予告した「`PaletteRequest` を広げる」ではなく、`DynamicColorRequest` を `interpreter/osc/dynamic_color.rs` に新設し、`PaletteRequest` は `interpreter/osc/palette.rs` へ移して `osc.rs` は OSC 共通部（`OscTerminator`・title・cwd）だけを持つ形に分けた。番号の繰り返しが無く連鎖するOSC 10/11 は、番号と spec の組を並べる OSC 4 と解析の形が違うため。**連鎖を実装**: xterm-ctlseqs.pdf p.39 の *"Each successive parameter changes the next color in the list. The value of Ps tells the starting point in the list."* に従い `OSC 10;fg;bg` が両方を設定し、`OSC 10;?;?` は2本の応答を返す（各応答は**自分の**番号を名乗る。名乗らないと受け手が背景を前景として復元する）。**持たない色に達したら打ち切る** — 位置 12（カーソル色）で止まり、`OSC 12` は開始点が範囲外なので丸ごと無視。alacritty（vte 0.15.0 `ansi.rs`）も `if index > NamedColor::Cursor { break; }` で同形。**不正な spec はその位置だけ落として続行**（OSC 4 と同じ逸脱。xterm は打ち切る）。**110/111 は後続パラメータを読み捨てる** — p.42 が `Ps = 1 1 0` をパラメータ無しで綴るのに対し、OSC 104 は `Ps = 1 0 4 ; c` と綴られ "Any number of c parameters may be given" と明示されている。**RIS / DECSTR は変更不要** — `Palette::reset` が既に前景/背景を戻し、DECSTR は `reset_indexed_colors` だけを呼ぶ現状のままでよい（xterm も dynamic colors はDECSTR で戻さない）。**積み残し**: 110/111 が戻すのは仕様上 *"their default (resource) values"* = 設定で指定した色だが、設定層が無いのでハードコードの白/黒へ戻す（DECSCUSR の `7` と同じ場所）。テストは `interpreter/osc/dynamic_color.rs` と `interpreter/tests/dynamic_colors.rs`。ケースは xterm-ctlseqs.pdf と xlib.pdf の引用から導出し、著者が一覧を承認してから書いた | ~~vim/nvim の `background` 自動判定~~ |
+| `OSC 12` | カーソル色（問い合わせ含む） | `OSC∅`。**VT 側だけでは足りない** — `Palette` にフィールドが無く、`terminal_ui_material.wgsl` の `paint_cursor` はセル色の反転しか持たないので、カーソル色という概念自体がシェーダに無い。通すには `Palette` + `TerminalParams` のユニフォーム + WGSL の 3 箇所が要り、「ブロックカーソル下の文字色」「未設定時の既定は反転のままか」を決める必要がある。§10 のカーソル描画欠陥（太さの DPR 非追随・最終列のはみ出し・点滅位相）と同じ場所なので、設定 PR とまとめるのが自然 | nvim の `guicursor` |
 | `OSC 52` | クリップボード | `OSC∅` | nvim の osc52 provider、tmux |
 | `OSC 8` | ハイパーリンク | `OSC∅`。interner は未接続（`hyperlink.rs:15`） | nvim。レンダラ側に受け皿は既にある |
 | `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `CSI∅`（DECSTR で intermediate 経路が開いたので `(Some(b'?'), [b'$'], b'p')` の腕 1 本で入る） | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する**。DECAWM / DECTCEM 実装により **7 と 25 も報告可能な状態を持つようになった**（`CSI ?7;1$y` / `CSI ?25;2$y` など）が応答路が無い。§6 のとおり、`CSI ?7 $ p` を実装すれば `vttest` の `tst_DEC_DECRPM` が mode 7 を機械判定できるようになる。**mode 3 / 40 / 95 は `0`（not recognized）で答える**（2026-09-12 決定）。orzma は DECCOLM の状態も変更経路も持たないので、`4`（permanently reset）だと任意幅のペインが「80 桁モード」を名乗ることになる。foot と alacritty も 0 を返す（wezterm は set を返す） |
@@ -272,7 +273,7 @@ STD-070 が LCF をリセットすると規定する操作:
    「非フォーカスで点滅を止める」と項目 11 の非アクティブペインのカーソルは、焦点を同じ定義
    （ウィンドウが focused かつアクティブペイン）で判定すると揃う。ただし焦点状態は backend（`OrzmaTty` の `focused`）にしか無く、
    `Layout` にも `OrzmuxEvent` にも載らないので、GUI 側で判定するなら信号の経路を別に決める必要がある。
-6. ~~**OSC 4**~~ **完了（2026-09-12、OSC 104 と `?` 問い合わせを含む）** → 残るのは **OSC 10/11/12** とその問い合わせ・リセット（OSC 110/111/112）。OSC 4 で入れた `PaletteRequest` を広げて扱う。RIS での復帰は `Palette::reset`（全色を既定値へ戻す）が既に賄うので、ハンドラ側は `Palette` の `foreground` / `background` を書くのと、full repaint の staging（`frame.rs` の `palette` フィールドの TODO）を足すだけでよい。なお `OSC 104` は xterm-ctlseqs.pdf のとおりインデックス表だけを戻す（`Palette::reset_all_indexed`）ので、そちらに前景/背景を巻き込まないこと。
+6. ~~**OSC 4**~~ ~~**OSC 10/11**~~ **完了（OSC 4 は 2026-09-12、OSC 10/11 は 2026-09-13。いずれも `?` 問い合わせとリセットを含む）** → 残るのは **OSC 12 / 112**（カーソル色）で、§2 の `OSC 12` 行のとおりレンダラ側の作業を伴う。実装上の判断は §1-B の `OSC 10/11` 行にまとめてある。この項目がかつて予告した「`PaletteRequest` を広げる」形は採らなかった。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
 8. **OSC 8 / OSC 52**、**DECLRMM/DECSLRM**、**1015**。
 9. **コロン付きサブパラメータの扱い（リポジトリ全体）**。xterm は SGR と modifyOtherKeys 以外の
@@ -291,13 +292,14 @@ STD-070 が LCF をリセットすると規定する操作:
    非フォーカスでも止まらない**（調べた 6 実装すべてがリセットし、6/6 が非フォーカスで中空に
    倒す。周期は xterm 600/300ms・alacritty 750ms・foot 500ms・wezterm 800ms・kitty は system、
    orzma は 500/500ms。点滅停止は kitty 15s・alacritty 5s）。
-11. **非アクティブペインのカーソル（マルチプレクサ側）**。orzma は非アクティブペインにも
+11. **`padding_color` の黒センチネル（設定 PR とセット）**。`material.rs` の `padding_color` は既定背景が黒のとき `TerminalPaddingFallback` に倒す。OSC 11 以前は `Palette::background` が恒久的に黒だったので「未設定」の意味しか持ちえなかったが、**いまは `\e]11;rgb:00/00/00` が「黒にせよ」という明示の要求**で、`\e]111` のリセットも黒へ戻す。どちらも fallback 色で描かれる。**影響は padding 帯だけではない** — 既定背景セルは `TRANSPARENT_BG`（alpha 0）で詰められ、`paint_grid_cell` の `blend_premultiplied_over(fallback, …)` がそのまま `bg_padding_color` を通すので、この分岐は**グリッドの地・padding 帯・reverse video のグリフ色の3面すべて**の唯一の門になっている。**`TerminalPaddingFallback` は既定が黒で誰も設定していないので現状は実害が無い**が、設定層がこれを設定した瞬間に顕在化する。値で兼用せず「一度でも設定されたか」の信号を別に持つのが本筋。既存テスト `padding_color_falls_back_when_default_bg_is_black` が現在の設計を固定している。（2026-09-13、コードレビュー指摘）
+12. **非アクティブペインのカーソル（マルチプレクサ側）**。orzma は非アクティブペインにも
    カーソルを描き続け dim/tint がかかるだけ。**tmux は実カーソルを 1 本しか持たず
    `server_client_reset_state()` が `w->active` しか見ないので、非アクティブペインには
    カーソル系シーケンスを一切送らない**。orzma は自前描画なので裁定が要る。
    `bevy_orzma_tty_renderer` の `current_cursor_pos_and_style` が vi カーソルの shape/blink を
    直書きで捨てている件も、方針を明文化するならここ。
-12. **残りの厳密準拠**: SGR blink、DECSCNM。~~メモリロック、プリンタ制御~~ は
+13. **残りの厳密準拠**: SGR blink、DECSCNM。~~メモリロック、プリンタ制御~~ は
    **意図的に無視と明示して完了（2026-09-11、§1-C）**。
 
 ## 6. 検証方法
