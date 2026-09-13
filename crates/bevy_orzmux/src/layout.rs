@@ -3,9 +3,10 @@
 
 use crate::registry::PaneRegistry;
 use crate::{OrzmuxPane, OrzmuxSystems};
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use orzma_tty::CellPixels;
-use orzmux::prelude::{Layout, PaneRect, Separator, SplitOrientation};
+use orzmux::prelude::{Layout, PaneRect, Separator, SplitId, SplitOrientation};
 
 /// The latest layout snapshot, marked changed only when it differs.
 #[derive(Resource, Default, Debug, PartialEq)]
@@ -26,9 +27,14 @@ pub struct PaneGeometry {
 #[derive(Component, Debug)]
 pub struct OrzmuxPaneContainer;
 
-/// A separator node between two panes.
-#[derive(Component, Debug)]
-pub(crate) struct OrzmuxSeparator;
+/// A divider node between two panes.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrzmuxSeparator {
+    /// The split this divider belongs to.
+    pub split: SplitId,
+    /// Whether the divider runs vertically or horizontally.
+    pub orientation: SplitOrientation,
+}
 
 /// The GUI accepted a new active pane from a `Layout`. `previous`
 /// resolves to `None` when that entity was already despawned by a
@@ -84,7 +90,10 @@ fn apply_layout(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
     mut nodes: Query<&mut Node, With<OrzmuxPane>>,
-    mut separators: Query<(Entity, &mut Node), (With<OrzmuxSeparator>, Without<OrzmuxPane>)>,
+    mut separators: Query<
+        (Entity, &mut Node, &mut OrzmuxSeparator),
+        (With<OrzmuxSeparator>, Without<OrzmuxPane>),
+    >,
     current: Res<CurrentLayout>,
     geometry: Res<PaneGeometry>,
     container: Query<Entity, With<OrzmuxPaneContainer>>,
@@ -107,32 +116,50 @@ fn apply_layout(
 /// parenting new ones under `container` when the host has marked one.
 fn reconcile_separators(
     commands: &mut Commands,
-    separators: &mut Query<(Entity, &mut Node), (With<OrzmuxSeparator>, Without<OrzmuxPane>)>,
+    separators: &mut Query<
+        (Entity, &mut Node, &mut OrzmuxSeparator),
+        (With<OrzmuxSeparator>, Without<OrzmuxPane>),
+    >,
     layout: &Layout,
     geometry: &PaneGeometry,
     container: Option<Entity>,
 ) {
-    let mut existing: Vec<Entity> = separators.iter().map(|(entity, _)| entity).collect();
-    existing.sort();
-    for (index, separator) in layout.separators.iter().enumerate() {
-        let wanted = separator_node(separator, layout, geometry);
-        match existing.get(index) {
+    let existing: HashMap<SplitId, Entity> = separators
+        .iter()
+        .map(|(entity, _, separator)| (separator.split, entity))
+        .collect();
+    let wanted: HashSet<SplitId> = layout.separators.iter().map(|s| s.split).collect();
+    for separator in &layout.separators {
+        let node = separator_node(separator, layout, geometry);
+        match existing.get(&separator.split) {
             Some(entity) => {
-                if let Ok((_, mut node)) = separators.get_mut(*entity) {
-                    node.set_if_neq(wanted);
+                if let Ok((_, mut existing_node, mut marker)) = separators.get_mut(*entity) {
+                    existing_node.set_if_neq(node);
+                    marker.set_if_neq(OrzmuxSeparator {
+                        split: separator.split,
+                        orientation: separator.orientation,
+                    });
                 }
             }
             None => {
-                let mut spawned =
-                    commands.spawn((OrzmuxSeparator, wanted, BackgroundColor(SEPARATOR_COLOR)));
+                let mut spawned = commands.spawn((
+                    OrzmuxSeparator {
+                        split: separator.split,
+                        orientation: separator.orientation,
+                    },
+                    node,
+                    BackgroundColor(SEPARATOR_COLOR),
+                ));
                 if let Some(container) = container {
                     spawned.insert(ChildOf(container));
                 }
             }
         }
     }
-    for entity in existing.iter().skip(layout.separators.len()) {
-        commands.entity(*entity).despawn();
+    for (split, entity) in &existing {
+        if !wanted.contains(split) {
+            commands.entity(*entity).despawn();
+        }
     }
 }
 
@@ -606,6 +633,56 @@ mod tests {
             app.world().resource::<PaneRegistry>().applied_active,
             Some(PaneId(1))
         );
+    }
+
+    /// Asserts that each separator entity stays bound to its own split
+    /// when the layout reports the same dividers in a different order.
+    ///
+    /// Case: a pane closes and the backend's next layout lists the
+    /// surviving dividers in the opposite order from the previous one.
+    #[test]
+    fn separator_entities_follow_their_split_id_not_their_position() {
+        let mut app = app();
+        app.world_mut().resource_mut::<CurrentLayout>().0 = stacked_then_side_by_side();
+        app.update();
+
+        let before: Vec<(Entity, SplitId)> = app
+            .world_mut()
+            .query::<(Entity, &OrzmuxSeparator)>()
+            .iter(app.world())
+            .map(|(e, s)| (e, s.split))
+            .collect();
+        assert_eq!(before.len(), 2);
+
+        let mut reordered = stacked_then_side_by_side();
+        reordered.seq = CommandSeq(2);
+        reordered.separators.reverse();
+        app.world_mut().resource_mut::<CurrentLayout>().0 = reordered.clone();
+        app.update();
+
+        let after: Vec<(Entity, SplitId)> = app
+            .world_mut()
+            .query::<(Entity, &OrzmuxSeparator)>()
+            .iter(app.world())
+            .map(|(e, s)| (e, s.split))
+            .collect();
+        let geometry = *app.world().resource::<PaneGeometry>();
+        for (entity, split) in &before {
+            assert!(
+                after.contains(&(*entity, *split)),
+                "entity {entity:?} changed split"
+            );
+            let separator = reordered
+                .separators
+                .iter()
+                .find(|s| s.split == *split)
+                .expect("the split is still in the layout");
+            assert_eq!(
+                app.world().get::<Node>(*entity).cloned(),
+                Some(separator_node(separator, &reordered, &geometry)),
+                "entity {entity:?} kept its split but got another divider's node"
+            );
+        }
     }
 
     /// Asserts that a pixel-pitch change alone re-lays out the panes.
