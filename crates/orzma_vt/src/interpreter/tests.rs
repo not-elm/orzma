@@ -160,6 +160,7 @@ mod cursor_checkpoint;
 mod cursor_style;
 mod device_attributes;
 mod device_status;
+mod dynamic_colors;
 mod erase;
 mod hyperlink;
 mod interpret_output;

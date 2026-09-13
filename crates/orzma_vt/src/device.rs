@@ -331,6 +331,46 @@ impl DeviceState {
         self.hyperlinks.extract(&id)
     }
 
+    /// Sets the default foreground to `color`; returns whether it
+    /// changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 10 ; spec`
+    pub fn set_foreground_color(&mut self, color: Rgb) -> bool {
+        self.palette.set_foreground(color)
+    }
+
+    /// Sets the default background to `color`; returns whether it
+    /// changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 11 ; spec`
+    pub fn set_background_color(&mut self, color: Rgb) -> bool {
+        self.palette.set_background(color)
+    }
+
+    /// Returns the default foreground to its built-in default; returns
+    /// whether it changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 110`
+    pub fn reset_foreground_color(&mut self) -> bool {
+        self.palette.reset_foreground()
+    }
+
+    /// Returns the default background to its built-in default; returns
+    /// whether it changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 111`
+    pub fn reset_background_color(&mut self) -> bool {
+        self.palette.reset_background()
+    }
+
     /// Switches the active screen without a flip's side effects.
     #[cfg(test)]
     pub(crate) fn set_active_screen_for_test(&mut self, kind: ScreenKind) {
