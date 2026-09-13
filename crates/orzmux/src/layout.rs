@@ -950,7 +950,7 @@ mod tests {
         assert!(tree.resize_split(inner, 0, W));
 
         let solved = tree.solve(W);
-        assert!(solved.separators.iter().all(|s| s.x < W.cols));
+        assert_eq!(solved.separators[1].x, 45);
     }
 
     /// Asserts that resizing an inner split leaves the outer divider
@@ -971,7 +971,9 @@ mod tests {
 
         assert!(tree.resize_split(inner, 6, W));
 
-        assert_eq!(tree.solve(W).separators[0].x, outer_x);
+        let solved = tree.solve(W);
+        assert_eq!(solved.separators[0].x, outer_x);
+        assert_eq!(solved.separators[1].y, 6);
     }
 
     /// Asserts that a window too narrow to honour the drag minimum on
@@ -1009,7 +1011,7 @@ mod tests {
         assert!(tree.resize_split(split, 18, shrunk));
 
         let solved = tree.solve(shrunk);
-        assert!(solved.separators[0].x < solved.size.cols);
+        assert_eq!(solved.separators[0].x, 15);
     }
 
     /// Asserts that a column deeper than the window's drag minimum still
@@ -1036,6 +1038,6 @@ mod tests {
         assert!(tree.resize_split(split, 14, narrow));
 
         let solved = tree.solve(narrow);
-        assert!(solved.separators.iter().all(|s| s.x < solved.size.cols));
+        assert_eq!(solved.separators[0].x, 10);
     }
 }
