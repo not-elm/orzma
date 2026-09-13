@@ -81,6 +81,22 @@ impl PtyInput {
         Self(paste::encode_paste(text, bracketed))
     }
 
+    /// Encodes a focus report: `CSI I` when the terminal gains focus and
+    /// `CSI O` when it loses focus.
+    ///
+    /// # References
+    ///
+    /// - `docs/references/xterm-ctlseqs.pdf` p.58, "FocusIn/FocusOut": "When
+    ///   set, it causes xterm to send CSI I when the terminal gains focus,
+    ///   and CSI O when it loses focus."
+    pub fn encode_focus(focused: bool) -> Self {
+        Self(if focused {
+            b"\x1b[I".to_vec()
+        } else {
+            b"\x1b[O".to_vec()
+        })
+    }
+
     /// Returns the encoded bytes, ready to write to the PTY.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
