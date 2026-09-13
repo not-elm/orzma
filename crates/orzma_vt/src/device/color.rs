@@ -146,12 +146,7 @@ impl Palette {
 
     /// Sets slot `index` to `color`; returns whether the slot changed.
     pub fn set_indexed(&mut self, index: u8, color: Rgb) -> bool {
-        let slot = &mut self.indexed[usize::from(index)];
-        if *slot == color {
-            return false;
-        }
-        *slot = color;
-        true
+        Self::assign(&mut self.indexed[usize::from(index)], color)
     }
 
     /// Returns slot `index` to its built-in default; returns whether the
@@ -172,6 +167,48 @@ impl Palette {
         true
     }
 
+    /// Sets the default foreground to `color`; returns whether it
+    /// changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 10 ; spec`
+    pub fn set_foreground(&mut self, color: Rgb) -> bool {
+        Self::assign(&mut self.foreground, color)
+    }
+
+    /// Sets the default background to `color`; returns whether it
+    /// changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 11 ; spec`
+    pub fn set_background(&mut self, color: Rgb) -> bool {
+        Self::assign(&mut self.background, color)
+    }
+
+    /// Returns the default foreground to its built-in default, leaving
+    /// the background and the indexed slots alone; returns whether it
+    /// changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 110`
+    pub fn reset_foreground(&mut self) -> bool {
+        self.set_foreground(DEFAULT_FOREGROUND)
+    }
+
+    /// Returns the default background to its built-in default, leaving
+    /// the foreground and the indexed slots alone; returns whether it
+    /// changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 111`
+    pub fn reset_background(&mut self) -> bool {
+        self.set_background(DEFAULT_BACKGROUND)
+    }
+
     /// Returns every color the palette holds — the indexed slots, the
     /// foreground, and the background — to its built-in default; returns
     /// whether anything changed.
@@ -181,6 +218,15 @@ impl Palette {
             return false;
         }
         *self = default;
+        true
+    }
+
+    /// Writes `color` into `slot`; returns whether the slot changed.
+    fn assign(slot: &mut Rgb, color: Rgb) -> bool {
+        if *slot == color {
+            return false;
+        }
+        *slot = color;
         true
     }
 }
@@ -538,6 +584,95 @@ mod tests {
         assert!(palette.reset_all_indexed());
         assert_eq!(palette.foreground, rgb(1, 2, 3));
         assert_eq!(palette.background, rgb(4, 5, 6));
+    }
+
+    /// Asserts that setting the foreground reports the change and reads
+    /// back.
+    ///
+    /// Case: a colour-scheme script recolors the terminal's text with
+    /// `OSC 10`.
+    #[test]
+    fn setting_the_foreground_reports_the_change_and_reads_back() {
+        let mut palette = Palette::default();
+        let color = rgb(0x12, 0x34, 0x56);
+        assert!(palette.set_foreground(color));
+        assert_eq!(palette.foreground, color);
+    }
+
+    /// Asserts that setting the background reports the change and reads
+    /// back.
+    ///
+    /// Case: a colour-scheme script gives the terminal a dark grey
+    /// ground with `OSC 11`.
+    #[test]
+    fn setting_the_background_reports_the_change_and_reads_back() {
+        let mut palette = Palette::default();
+        let color = rgb(0x20, 0x20, 0x20);
+        assert!(palette.set_background(color));
+        assert_eq!(palette.background, color);
+    }
+
+    /// Asserts that setting a default colour to the value it already
+    /// holds reports no change, so no repaint is staged.
+    ///
+    /// Case: a shell prompt re-applies the same theme on every command.
+    #[test]
+    fn setting_a_default_color_to_its_current_value_reports_no_change() {
+        let mut palette = Palette::default();
+        let color = rgb(0x12, 0x34, 0x56);
+        palette.set_foreground(color);
+        palette.set_background(color);
+        assert!(!palette.set_foreground(color));
+        assert!(!palette.set_background(color));
+    }
+
+    /// Asserts that resetting the foreground restores its default and
+    /// leaves the background and the indexed slots alone.
+    ///
+    /// Case: a program restores the text colour it changed while a
+    /// theme script's ground colour and recolored slot stay as they
+    /// are.
+    #[test]
+    fn resetting_the_foreground_restores_its_default_and_leaves_the_rest() {
+        let mut palette = Palette::default();
+        let color = rgb(0x12, 0x34, 0x56);
+        palette.set_foreground(color);
+        palette.set_background(color);
+        palette.set_indexed(1, color);
+        assert!(palette.reset_foreground());
+        assert_eq!(palette.foreground, DEFAULT_FOREGROUND);
+        assert_eq!(palette.background, color);
+        assert_eq!(palette.indexed[1], color);
+    }
+
+    /// Asserts that resetting the background restores its default and
+    /// leaves the foreground and the indexed slots alone.
+    ///
+    /// Case: a program restores the ground colour it changed while a
+    /// theme script's text colour and recolored slot stay as they are.
+    #[test]
+    fn resetting_the_background_restores_its_default_and_leaves_the_rest() {
+        let mut palette = Palette::default();
+        let color = rgb(0x12, 0x34, 0x56);
+        palette.set_foreground(color);
+        palette.set_background(color);
+        palette.set_indexed(1, color);
+        assert!(palette.reset_background());
+        assert_eq!(palette.background, DEFAULT_BACKGROUND);
+        assert_eq!(palette.foreground, color);
+        assert_eq!(palette.indexed[1], color);
+    }
+
+    /// Asserts that resetting a default colour that already holds its
+    /// default reports no change.
+    ///
+    /// Case: a program restores colours it never changed on its way
+    /// out.
+    #[test]
+    fn resetting_an_untouched_default_color_reports_no_change() {
+        let mut palette = Palette::default();
+        assert!(!palette.reset_foreground());
+        assert!(!palette.reset_background());
     }
 
     /// Asserts that a full reset restores the foreground and the

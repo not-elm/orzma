@@ -11,7 +11,7 @@ VTは１つパレットを保持する。
 色にはいくつかの種類（ANSI Colors / Special Colors / Dynamic Colors）があり、種類によって**どの OSC でどのスロットを指すか**が異なる。
 色の値の書式（`color_spec`）はどの種類でも共通で、Xlib の Color String を使う。
 
-`orzma`では以下のような構造にする予定。
+`orzma`の構造は次のとおり。
 ```rust
 pub struct Palette {
     pub indexed: Box<[Rgb; 256]>,
@@ -44,7 +44,50 @@ ANSI パレット（OSC 4）とは別の色だが、SGR 39 / 49（既定色）�
 
 すべての種別(Resource)は`xterm-ctlseqs.pdf`の p.39〜40 に記載されている。
 `orzma`が持つのは`foreground`（OSC 10）と`background`（OSC 11）の２つだけで、残りの８色に対応するものは無い。
-`cursorColor`（OSC 12）は実装予定（`device.rs`の`ColorTable`に TODO がある）。
+`cursorColor`（OSC 12）は未実装 — `Palette`にフィールドが無く、シェーダの`paint_cursor`はセル色の反転しか持たない。
+
+### 形式
+
+```
+OSC 10 ; <color_spec> [ ; <color_spec> … ] BEL （または ST）
+OSC 10 ; ? BEL （または ST）
+OSC 110 BEL                          ← 前景を既定へ
+OSC 111 BEL                          ← 背景を既定へ
+```
+
+ANSI Colors（OSC 4）との違いは３つ。
+
+- **番号を繰り返さない。** OSC 4 が「番号; spec」の組を並べるのに対し、こちらは
+  「開始番号 + 値の並び」で、値が１つ進むごとに色も１つ進む（p.39
+  *"Each successive parameter changes the next color in the list. The value of Ps
+  tells the starting point in the list."*）。`OSC 10;fg;bg`は前景と背景の両方を設定する。
+- **問い合わせは複数の応答を返しうる。** `OSC 10;?;?`には`OSC 10;…`と`OSC 11;…`の
+  ２本が返る。各応答は**自分の**色番号を名乗る（名乗らないと、受け取ったプログラムが
+  背景を前景として復元する）。
+- **リセットは引数を取らない。** OSC 104 が`Ps = 1 0 4 ; c`と綴られ "Any number of c
+  parameters may be given" と明示されるのに対し、OSC 110/111 は`Ps = 1 1 0`と
+  パラメータ無しで綴られている（p.42）。`orzma`は番号の後ろを読み捨てる。
+
+### `orzma`の決定
+
+- **持たない色に達したら連鎖を打ち切る。** 位置が 12（カーソル色）に届いた時点で止まり、
+  `OSC 12`は開始点が範囲外なので丸ごと無視する。alacritty（vte 0.15.0 `ansi.rs`）も
+  `if index > NamedColor::Cursor { break; }`で同じ形。
+- **読めない spec はその位置だけ落として続行する。** OSC 4 で選んだ逸脱と同じで、
+  xterm は最初の誤りで打ち切る。
+- **RIS は前景/背景も戻す**（`Palette::reset`）。**DECSTR は戻さない** —
+  `reset_indexed_colors`だけを呼ぶ。xterm も dynamic colors は DECSTR で戻さない。
+- **積み残し**: 110/111 が戻すのは仕様上 *"their default (resource) values"* =
+  設定で指定した色。設定層が無いのでハードコードの白/黒へ戻しており、DECSCUSR の`7`と
+  同じ場所を直すことになる。
+
+### なぜ問い合わせが要るか
+
+nvim は起動時に`OSC 11;?`と`CSI 5n`を続けて送り、最大 100ms 待って背景色の輝度から
+`background=dark/light`を決める（`runtime/lua/vim/_core/defaults.lua`）。DSR を抱き合わせる
+のは「この端末は OSC 11 に答えない」を素早く見切るため。**設定だけ実装して問い合わせを
+実装しないと今より悪くなる** — 背景を白くできるのに nvim は`dark`を名乗り続け、
+ダーク用の配色が白地に描かれる。
 
 ## ANSI Colors
 

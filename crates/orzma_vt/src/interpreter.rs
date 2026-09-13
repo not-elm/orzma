@@ -12,9 +12,11 @@ use crate::device::modes::{
 };
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
-use crate::interpreter::osc::{
-    OscTerminator, PaletteRequest, clipboard_text, current_dir, palette_reply, window_title,
+use crate::interpreter::osc::dynamic_color::{
+    DynamicColor, DynamicColorRequest, dynamic_color_reply,
 };
+use crate::interpreter::osc::palette::{PaletteRequest, palette_reply};
+use crate::interpreter::osc::{OscTerminator, clipboard_text, current_dir, window_title};
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::screen::tabs::CharacterTabEdit;
@@ -497,6 +499,7 @@ impl VTActor for Executor<'_> {
             self.signal(VtSignal::Clipboard { content });
         }
         self.apply_palette_requests(params);
+        self.apply_dynamic_color_requests(params);
     }
 
     fn apc_dispatch(&mut self, data: Vec<u8>) {
@@ -603,6 +606,43 @@ impl Executor<'_> {
         match restored {
             Some(title) => self.signal(VtSignal::Title(title)),
             None => self.signal(VtSignal::ResetTitle),
+        }
+    }
+
+    /// Applies the dynamic-color requests an `OSC 10`, `OSC 11`,
+    /// `OSC 110`, or `OSC 111` carries, in order, answering each query
+    /// with the colour held at that point.
+    ///
+    /// A command that changes a colour stages one full repaint,
+    /// whatever the number of requests it carries.
+    fn apply_dynamic_color_requests(&mut self, params: &[&[u8]]) {
+        let terminator = OscTerminator::from_byte(self.current_byte);
+        let mut changed = false;
+        for request in DynamicColorRequest::parse(params) {
+            match request {
+                DynamicColorRequest::Set { target, color } => {
+                    changed |= match target {
+                        DynamicColor::Foreground => self.device.set_foreground_color(color),
+                        DynamicColor::Background => self.device.set_background_color(color),
+                    };
+                }
+                DynamicColorRequest::Reset { target } => {
+                    changed |= match target {
+                        DynamicColor::Foreground => self.device.reset_foreground_color(),
+                        DynamicColor::Background => self.device.reset_background_color(),
+                    };
+                }
+                DynamicColorRequest::Query { target } => {
+                    let color = match target {
+                        DynamicColor::Foreground => self.device.palette().foreground,
+                        DynamicColor::Background => self.device.palette().background,
+                    };
+                    self.reply(&dynamic_color_reply(target, color, terminator));
+                }
+            }
+        }
+        if changed {
+            self.stage(Some(DamageSpan::Full));
         }
     }
 
