@@ -1102,10 +1102,10 @@ impl Screen {
         (row, column)
     }
 
-    /// The cell range the active selection covers, widened so that a
-    /// partly covered wide glyph is covered whole; `None` without an
-    /// active selection, when its rows have left the ring, or when it
-    /// covers no cell.
+    /// The cell range the active selection covers, in active-grid
+    /// coordinates, widened so that a partly covered wide glyph is
+    /// covered whole; `None` without an active selection, when its rows
+    /// have left the ring, or when it covers no cell.
     ///
     /// A whole-line selection is not widened.
     pub fn selection_range(&self) -> Option<SelectionRange> {

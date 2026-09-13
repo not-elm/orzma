@@ -53,14 +53,16 @@ fn an_end_on_a_continuation_is_left_alone() {
     screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
     screen.extend_selection(point(0, 2), CellSide::Left);
     let range = screen.selection_range().expect("a selection is active");
+    assert_eq!(range.start, point(0, 0));
     assert_eq!(range.end, point(0, 1));
 }
 
-/// Asserts that a whole-line selection is not widened.
+/// Asserts that a whole-line selection resolves to the full row with
+/// its geometry intact.
 ///
 /// Case: the user triple-clicks a row of Japanese text.
 #[test]
-fn a_lines_selection_is_not_widened() {
+fn a_lines_selection_spans_the_whole_row() {
     let mut screen = screen_with_two_wide_glyphs();
     screen.start_selection(point(0, 1), CellSide::Left, SelectionKind::Lines);
     screen.extend_selection(point(0, 2), CellSide::Right);
@@ -106,4 +108,22 @@ fn each_end_widens_against_its_own_row() {
     let range = screen.selection_range().expect("a selection is active");
     assert_eq!(range.start, point(0, 2));
     assert_eq!(range.end, point(1, 1));
+}
+
+/// Asserts that widening an end onto a continuation in the last column
+/// stays inside the row.
+///
+/// Case: the user releases the mouse on the left half of a Japanese
+/// character that ends the row.
+#[test]
+fn a_widened_end_stays_inside_the_row() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'あ'] {
+        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+    }
+    screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
+    screen.extend_selection(point(0, 2), CellSide::Right);
+    let range = screen.selection_range().expect("a selection is active");
+    assert_eq!(range.end, point(0, 3));
+    assert!(range.end.column.0 < screen.grid_size().cols);
 }

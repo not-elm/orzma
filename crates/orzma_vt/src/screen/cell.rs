@@ -171,7 +171,8 @@ impl Cell {
     }
 
     /// The glyph followed by the marks combined onto it, in arrival
-    /// order.
+    /// order; a continuation or filler column yields its blank glyph
+    /// alone.
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
         iter::once(self.c).chain(self.marks().iter().copied())
     }
@@ -426,8 +427,8 @@ mod tests {
     /// Asserts that a cell yields its glyph followed by its marks in
     /// arrival order, and a cell without marks yields the glyph alone.
     ///
-    /// Case: a copy walks a row holding an accented letter next to a
-    /// plain one.
+    /// Case: a copy walks a row holding an accented letter next to a blank
+    /// cell.
     #[test]
     fn a_cell_yields_its_glyph_and_then_its_marks() {
         let mut extra = CellExtra::default();
