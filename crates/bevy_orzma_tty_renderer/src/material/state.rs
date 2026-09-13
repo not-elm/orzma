@@ -134,14 +134,9 @@ mod tests {
             }),
             initialized: true,
         };
-        state.glyph_index_map.insert(
-            GlyphKey {
-                face: FontFace::Regular,
-                codepoint: 'A' as u32,
-                size_px: 24,
-            },
-            7,
-        );
+        state
+            .glyph_index_map
+            .insert(GlyphKey::new(FontFace::Regular, 'A' as u32, 24), 7);
         state
     }
 

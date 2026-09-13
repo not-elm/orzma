@@ -919,20 +919,20 @@ fn rebuild_cells(
     }
 }
 
-/// Promotes specific combining marks in a grapheme cluster to the `Style`
-/// underline and strike flags so the shader paints them.
+/// The combining marks the shader draws as underline or strike lines
+/// instead of the atlas rasterizing them.
+const LINE_MARKS: [char; 4] = ['\u{0332}', '\u{0333}', '\u{0331}', '\u{0336}'];
+
+/// Promotes the combining marks in a cell's text that stand for lines to
+/// the `Style` underline and strike flags so the shader paints them.
 ///
 /// Maps U+0332 (combining low line), U+0333 (double low line), U+0331
 /// (combining macron below) to `Style::UNDERLINE`, and U+0336 (combining
-/// long stroke overlay) to `Style::STRIKE`. Other combining marks are
-/// ignored — the base glyph still renders.
+/// long stroke overlay) to `Style::STRIKE`.
 fn style_from_combining_marks(text: &str) -> Style {
     if text.is_ascii() {
         return Style::empty();
     }
-    // TODO: Render other combining marks as well, such as U+0301
-    // (combining acute accent), U+0303 (combining tilde), U+0308
-    // (combining diaeresis), and U+20D7 (combining right arrow above).
     let mut style = Style::empty();
     for c in text.chars() {
         match c {
@@ -942,6 +942,12 @@ fn style_from_combining_marks(text: &str) -> Style {
         }
     }
     style
+}
+
+/// The marks of a cell's text that are composed onto its glyph: every
+/// `char` after the first, except [`LINE_MARKS`].
+fn composable_marks(text: &str) -> impl Iterator<Item = char> + '_ {
+    text.chars().skip(1).filter(|c| !LINE_MARKS.contains(c))
 }
 
 fn resolve_glyph_index(
@@ -959,11 +965,8 @@ fn resolve_glyph_index(
         return u32::MAX;
     }
     let face = FontFace::from_style(cell.style);
-    let key = GlyphKey {
-        face,
-        codepoint,
-        size_px: phys_font_size,
-    };
+    let key =
+        GlyphKey::new(face, codepoint, phys_font_size).with_marks(composable_marks(&cell.text));
     let Some(rect) = atlas.get_or_insert(key, fonts) else {
         return u32::MAX;
     };
@@ -1398,5 +1401,37 @@ mod tests {
             TRANSPARENT_BG,
             "an explicit RGB equal to the palette background must stay opaque"
         );
+    }
+
+    /// Asserts that the marks the shader draws as lines are left out of
+    /// the composable set, and that the base glyph is never one of them.
+    ///
+    /// Case: a cell holds `e` with an acute accent, a combining low line,
+    /// a long stroke overlay and a tilde.
+    #[test]
+    fn composable_marks_skip_the_base_and_the_line_marks() {
+        assert_eq!(
+            composable_marks("e\u{0301}\u{0332}\u{0336}\u{0303}").collect::<Vec<_>>(),
+            ['\u{0301}', '\u{0303}']
+        );
+        assert_eq!(composable_marks("a").count(), 0);
+        assert_eq!(composable_marks("").count(), 0);
+    }
+
+    /// Asserts that every line mark maps to a line style, so the set the
+    /// atlas skips and the set the shader draws are the same.
+    ///
+    /// Case: a cell carries each of the four line marks in turn.
+    #[test]
+    fn every_line_mark_maps_to_a_line_style() {
+        for mark in LINE_MARKS {
+            let text = format!("a{mark}");
+            assert!(
+                !style_from_combining_marks(&text).is_empty(),
+                "U+{:04X} maps to no line style",
+                u32::from(mark)
+            );
+            assert_eq!(composable_marks(&text).count(), 0);
+        }
     }
 }

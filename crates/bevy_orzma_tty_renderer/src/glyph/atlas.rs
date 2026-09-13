@@ -271,23 +271,11 @@ mod tests {
     use super::*;
     use crate::glyph::font::{FontFace, GlyphKey, TerminalFonts};
 
-    fn make_key(face: FontFace, codepoint: u32, size_px: u16) -> GlyphKey {
-        GlyphKey {
-            face,
-            codepoint,
-            size_px,
-        }
-    }
-
     #[test]
     fn returned_rect_matches_written_pixels() {
         let mut atlas = GlyphAtlas::new(256, 256);
         let fonts = TerminalFonts::default();
-        let key = GlyphKey {
-            face: FontFace::Regular,
-            codepoint: 'A' as u32,
-            size_px: 24,
-        };
+        let key = GlyphKey::new(FontFace::Regular, 'A' as u32, 24);
 
         let rect = atlas
             .get_or_insert(key, &fonts)
@@ -313,7 +301,7 @@ mod tests {
     fn latin_renders_through_primary() {
         let fonts = TerminalFonts::default();
         let mut atlas = GlyphAtlas::default();
-        let key = make_key(FontFace::Regular, u32::from('a'), 24);
+        let key = GlyphKey::new(FontFace::Regular, u32::from('a'), 24);
         let rect = atlas
             .get_or_insert(key, &fonts)
             .expect("'a' must rasterize");
@@ -326,7 +314,7 @@ mod tests {
         let mut atlas = GlyphAtlas::default();
         // 'あ' (HIRAGANA LETTER A, U+3042) — present in UDEVGothic35,
         // absent from JetBrains Mono. Before this change, returned None.
-        let key = make_key(FontFace::Regular, 0x3042, 24);
+        let key = GlyphKey::new(FontFace::Regular, 0x3042, 24);
         let rect = atlas
             .get_or_insert(key, &fonts)
             .expect("'あ' must rasterize via UDEVGothic35 fallback");
@@ -341,7 +329,7 @@ mod tests {
         // Font Mono's PUA. The primary path must resolve it; UDEVGothic35
         // doesn't carry Nerd Font glyphs, so a fallback-only resolution
         // would either fail or return a different glyph.
-        let key = make_key(FontFace::Regular, 0xE0B0, 24);
+        let key = GlyphKey::new(FontFace::Regular, 0xE0B0, 24);
         let rect = atlas
             .get_or_insert(key, &fonts)
             .expect("Powerline glyph U+E0B0 must rasterize via primary");
@@ -354,7 +342,7 @@ mod tests {
         let fonts = TerminalFonts::default();
         let mut atlas = GlyphAtlas::default();
         let size = 24u16;
-        let key = make_key(FontFace::Regular, 0x3042, size); // 'あ'
+        let key = GlyphKey::new(FontFace::Regular, 0x3042, size); // 'あ'
         let rect = atlas
             .get_or_insert(key, &fonts)
             .expect("'あ' must rasterize via fallback");
@@ -380,7 +368,7 @@ mod tests {
         let fonts = TerminalFonts::default();
         let mut atlas = GlyphAtlas::default();
         // U+1FFFFE — Plane 1 unassigned, not in either font.
-        let key = make_key(FontFace::Regular, 0x1FFFFE, 24);
+        let key = GlyphKey::new(FontFace::Regular, 0x1FFFFE, 24);
         let result = atlas.get_or_insert(key, &fonts);
         assert!(
             result.is_none(),
@@ -399,7 +387,7 @@ mod tests {
         // Absent from BOTH JetBrains Mono Nerd Font and UDEVGothic35, so
         // before the symbol fallback they returned None and rendered blank.
         for codepoint in [0x2610u32, 0x2611, 0x2612, 0x2714] {
-            let key = make_key(FontFace::Regular, codepoint, size);
+            let key = GlyphKey::new(FontFace::Regular, codepoint, size);
             let rect = atlas
                 .get_or_insert(key, &fonts)
                 .unwrap_or_else(|| panic!("U+{codepoint:04X} must rasterize via symbol fallback"));
