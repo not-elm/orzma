@@ -14,7 +14,7 @@ pub(crate) mod placements;
 
 mod state;
 
-use self::cell::{Cell, CellWidth, Pen};
+use self::cell::{Cell, CellExtra, CellWidth, GlyphClass, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
@@ -140,18 +140,27 @@ impl Screen {
     /// Prints one character at the cursor with the current pen, wrapping
     /// first when the deferred wrap is armed and autowrap is set.
     ///
-    /// `c` must be a printable character of display width one.
+    /// A one-column glyph takes the cursor's cell and a two-column glyph
+    /// takes it and the next; a zero-width mark joins the glyph the
+    /// cursor last passed and leaves the cursor alone. A control
+    /// character is ignored.
+    ///
+    /// A two-column glyph with one column left wraps first, leaving a
+    /// filler in the last column; with autowrap reset it is dropped and
+    /// the deferred wrap is disarmed. A two-column glyph on a one-column
+    /// screen is dropped.
     ///
     /// `insert_replace` is `IRM`: under [`InsertReplaceMode::Insert`] the
-    /// rest of the row shifts right one column before the character lands.
+    /// rest of the row shifts right by the glyph's width before it lands,
+    /// unless the glyph ends the row, in which case it replaces in place.
     ///
-    /// `auto_wrap` is `DECAWM`. While it is reset, a character at the right
-    /// border replaces the last column, and an armed wrap, such as one a
-    /// `DECRC` restored, is not resolved either.
+    /// `auto_wrap` is `DECAWM`. While it is reset, a one-column glyph at
+    /// the right border replaces the last column, and an armed wrap, such
+    /// as one a `DECRC` restored, is not resolved either.
     ///
-    /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
-    /// the row the character landed on, or `None` when that row has
-    /// scrolled out of the window.
+    /// Reports [`DamageSpan::Full`] when a wrap scrolled, otherwise every
+    /// row the print touched, or `None` when nothing changed or the rows
+    /// have scrolled out of the window.
     pub fn print(
         &mut self,
         c: char,
@@ -159,32 +168,59 @@ impl Screen {
         auto_wrap: AutoWrap,
     ) -> Option<DamageSpan> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
+        let class = GlyphClass::of(glyph)?;
+        let Some(width) = class.body_width() else {
+            return self.attach_zero_width(glyph);
+        };
+        let columns = class.columns();
+        let cols = self.grid.size().cols;
+        if columns > cols {
+            return None;
+        }
         let wrapping = auto_wrap.wraps();
+        let mut first_line = self.state.line;
         let wrap = if self.state.pending_wrap && wrapping {
             self.state.column = GridColumn(0);
-            self.line_feed()
+            let damage = self.line_feed();
+            first_line = self.state.line;
+            damage
         } else {
             None
         };
+        let overflow = if self.fits(columns) {
+            None
+        } else if wrapping {
+            let pen = self.state.pen;
+            self.grid[self.state.line].place_filler(&pen);
+            self.state.column = GridColumn(0);
+            self.line_feed()
+        } else {
+            self.state.pending_wrap = false;
+            return None;
+        };
+        let landing = self.state.column.0;
+        let ends_row = landing.saturating_add(columns) >= cols;
         // NOTE: The shift runs after the deferred wrap is resolved and
         // before the glyph lands. Moving it above the wrap would let
         // `insert_characters` clear `pending_wrap`, and the character
         // would overwrite the last column instead of wrapping to the
         // next row.
-        if matches!(insert_replace, InsertReplaceMode::Insert) {
-            self.insert_characters(1);
+        if matches!(insert_replace, InsertReplaceMode::Insert) && !ends_row {
+            self.insert_characters(columns);
         }
-        let cell = self.state.pen.stamp(glyph, CellWidth::Narrow);
-        self.grid[self.state.line].stamp_at(self.state.column.0, cell);
-        let is_last_column = self.is_last_column();
-        if !is_last_column {
-            self.state.column.0 += 1;
+        let cell = self.state.pen.stamp(glyph, width);
+        self.grid[self.state.line].stamp_at(landing, cell);
+        if ends_row {
+            self.state.column = GridColumn(cols - 1);
+            self.state.pending_wrap = wrapping;
+        } else {
+            self.state.column = GridColumn(landing + columns);
+            self.state.pending_wrap = false;
         }
-        self.state.pending_wrap = is_last_column && wrapping;
-        match wrap {
-            Some(DamageSpan::Full) => Some(DamageSpan::Full),
-            _ => self.damage_span(self.state.line, self.state.line),
+        if matches!(wrap, Some(DamageSpan::Full)) || matches!(overflow, Some(DamageSpan::Full)) {
+            return Some(DamageSpan::Full);
         }
+        self.damage_span(first_line, self.state.line)
     }
 
     /// Disarms the deferred wrap, leaving the cursor and the cells
@@ -777,15 +813,39 @@ impl Screen {
 
     /// Whether a glyph spanning `width` columns fits from the cursor's
     /// column through the row's end.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the printer reaches the fit test when width dispatch lands"
-        )
-    )]
     fn fits(&self, width: u16) -> bool {
         width <= self.grid.size().cols.saturating_sub(self.state.column.0)
+    }
+
+    /// Combines `mark` onto the glyph the cursor last passed: the cell
+    /// under the cursor on the last column, otherwise the cell to its
+    /// left, and on column zero that column's own cell. A continuation
+    /// column hands the mark to its wide body.
+    ///
+    /// Reports the cursor's row when the mark was kept, and `None` when
+    /// the cell already holds [`MAX_COMBINING`] marks or the target is a
+    /// filler.
+    fn attach_zero_width(&mut self, mark: char) -> Option<DamageSpan> {
+        let column = self.state.column.0;
+        let candidate = if self.is_last_column() {
+            column
+        } else {
+            column.saturating_sub(1)
+        };
+        let line = self.state.line;
+        let row = &mut self.grid[line];
+        let target = match row[candidate].width {
+            CellWidth::Narrow | CellWidth::Wide => candidate,
+            CellWidth::Spacer => candidate.saturating_sub(1),
+            CellWidth::LeadingSpacer => return None,
+        };
+        let extra = row[target]
+            .extra
+            .get_or_insert_with(|| Box::new(CellExtra::default()));
+        if !extra.push(mark) {
+            return None;
+        }
+        self.damage_span(line, line)
     }
 }
 
