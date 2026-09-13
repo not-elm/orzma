@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 /// OSC 8 hyperlink: an interned id → URI mapping.
 ///
@@ -37,12 +38,12 @@ impl HyperlinkId {
 
 /// OSC 8 hyperlink target URI.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
-pub struct HyperlinkUri(String);
+pub struct HyperlinkUri(Arc<str>);
 
 impl HyperlinkUri {
     /// Wraps a string as a hyperlink URI.
     pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
+        Self(Arc::from(s.into()))
     }
 
     /// Returns the underlying string slice.
@@ -80,11 +81,10 @@ pub(crate) struct SourceHyperlink {
 // TODO: release the entries of links no cell references any more.
 // Growth tracks OSC 8 sequences received rather than links visible on
 // screen, since opening a link mints unconditionally and a link never
-// printed still grows these maps. An id-bearing open grows both maps
-// and stores the target twice, once cloned into `id_to_uri` and once
-// inside the `SourceHyperlink` key of `source_to_id`. Nothing reclaims
-// an entry, not even a full reset, so recovery requires killing the
-// pane.
+// printed still grows these maps. An id-bearing open grows both maps,
+// keying `source_to_id` by a second handle on the target `id_to_uri`
+// already holds. Nothing reclaims an entry, not even a full reset, so
+// recovery requires killing the pane.
 pub(crate) struct HyperlinkInterner {
     next: NonZeroU32,
     id_to_uri: HashMap<HyperlinkId, HyperlinkUri>,

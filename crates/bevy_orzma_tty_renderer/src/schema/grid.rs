@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use orzma_vt::prelude::Frame;
 #[cfg(test)]
 use orzma_vt::prelude::GridSize;
+use std::collections::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -70,7 +71,7 @@ pub struct TerminalGrid {
     /// OSC 8 hyperlinks indexed by id. Every applied frame merges its
     /// `hyperlinks` into this table, and a known id is never
     /// overwritten.
-    pub hyperlinks: Vec<(HyperlinkId, HyperlinkUri)>,
+    pub hyperlinks: HashMap<HyperlinkId, HyperlinkUri>,
     /// The live palette set by the last frame that carried one;
     /// symbolic cell colors resolve against it.
     pub palette: Palette,
@@ -211,7 +212,9 @@ impl TerminalGrid {
             || palette
                 .as_ref()
                 .is_some_and(|palette| *palette != self.palette)
-            || hyperlinks.iter().any(|link| !self.knows_hyperlink(link.id))
+            || hyperlinks
+                .iter()
+                .any(|link| !self.hyperlinks.contains_key(&link.id))
     }
 
     /// Applies `frame` to this grid.
@@ -242,9 +245,9 @@ impl TerminalGrid {
         self.rows = size.rows;
         self.cells.resize_with(usize::from(size.rows), Vec::new);
         for link in hyperlinks {
-            if !self.knows_hyperlink(link.id) {
-                self.hyperlinks.push((link.id, link.uri.clone()));
-            }
+            self.hyperlinks
+                .entry(link.id)
+                .or_insert_with(|| link.uri.clone());
         }
         for row in rows {
             let Some(slot) = self.cells.get_mut(usize::from(row.line.0)) else {
@@ -264,23 +267,6 @@ impl TerminalGrid {
             self.palette.clone_from(palette);
         }
     }
-
-    fn knows_hyperlink(&self, id: HyperlinkId) -> bool {
-        lookup_hyperlink(&self.hyperlinks, id).is_some()
-    }
-}
-
-/// Finds the URI the retained table holds for `id`.
-// TODO: index this table by id rather than scanning it. A repaint pays
-// one pass over every known link for each run that carries one.
-fn lookup_hyperlink(
-    table: &[(HyperlinkId, HyperlinkUri)],
-    id: HyperlinkId,
-) -> Option<&HyperlinkUri> {
-    table
-        .iter()
-        .find(|(known, _)| *known == id)
-        .map(|(_, uri)| uri)
 }
 
 /// Materializes one row's attribute runs into cells, resolving each
@@ -291,7 +277,7 @@ fn lookup_hyperlink(
 fn runs_to_cells(
     runs: &[Run],
     line: GridLine,
-    hyperlinks: &[(HyperlinkId, HyperlinkUri)],
+    hyperlinks: &HashMap<HyperlinkId, HyperlinkUri>,
 ) -> Vec<GridCell> {
     // NOTE: The column walk here must advance exactly as
     // `material::rebuild_cells` re-derives it from `GridCell::width`;
@@ -302,7 +288,7 @@ fn runs_to_cells(
     let mut column: u16 = 0;
     for run in runs {
         let hyperlink = run.hyperlink_id.and_then(|id| {
-            lookup_hyperlink(hyperlinks, id).map(|uri| Hyperlink {
+            hyperlinks.get(&id).map(|uri| Hyperlink {
                 id,
                 uri: uri.clone(),
             })
@@ -671,7 +657,7 @@ mod tests {
             run_with_link("a", Some(id(7))),
             run_with_link("b", Some(id(9))),
         ];
-        let table = vec![(id(7), HyperlinkUri::new("https://example"))];
+        let table = HashMap::from([(id(7), HyperlinkUri::new("https://example"))]);
         let cells = runs_to_cells(&runs, GridLine(0), &table);
         assert_eq!(cells[0].hyperlink.as_ref().map(|h| h.id), Some(id(7)));
         assert_eq!(
@@ -688,7 +674,7 @@ mod tests {
     /// scrolled-back history line.
     #[test]
     fn runs_to_cells_assigns_points_by_display_width() {
-        let cells = runs_to_cells(&[run_with_link("あb", None)], GridLine(-3), &[]);
+        let cells = runs_to_cells(&[run_with_link("あb", None)], GridLine(-3), &HashMap::new());
         assert_eq!(
             cells[0].point,
             GridPoint {
@@ -989,7 +975,7 @@ mod tests {
     #[test]
     fn hyperlinks_merge_without_overwrite() {
         let mut grid = TerminalGrid {
-            hyperlinks: vec![(id(1), HyperlinkUri::new("https://old"))],
+            hyperlinks: HashMap::from([(id(1), HyperlinkUri::new("https://old"))]),
             ..TerminalGrid::settled()
         };
         let repeated = Frame {
@@ -1017,8 +1003,8 @@ mod tests {
         assert!(grid.differs_from(&extended));
         grid.apply(&extended);
         assert_eq!(grid.hyperlinks.len(), 2);
-        assert_eq!(grid.hyperlinks[0].1.as_str(), "https://old");
-        assert_eq!(grid.hyperlinks[1].1.as_str(), "https://new");
+        assert_eq!(grid.hyperlinks[&id(1)].as_str(), "https://old");
+        assert_eq!(grid.hyperlinks[&id(2)].as_str(), "https://new");
     }
 
     /// Asserts that a row resolves a hyperlink id defined by an earlier
