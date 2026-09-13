@@ -270,10 +270,9 @@ impl TerminalGrid {
     }
 }
 
-// TODO: index this table by id rather than scanning it. A repaint pays
-// one pass over every known link for each run that carries one, and the
-// frame that fed it cloned one target string per referenced link.
 /// Finds the URI the retained table holds for `id`.
+// TODO: index this table by id rather than scanning it. A repaint pays
+// one pass over every known link for each run that carries one.
 fn lookup_hyperlink(
     table: &[(HyperlinkId, HyperlinkUri)],
     id: HyperlinkId,

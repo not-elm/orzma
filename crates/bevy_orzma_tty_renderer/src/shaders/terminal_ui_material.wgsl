@@ -294,15 +294,14 @@ fn paint_text_decorations(
 ) -> vec4<f32> {
     var color = base;
     var underline_painted = false;
-    if cell_hyperlink_id != 0u {
-        let is_hovered =
-            params.hover_active != 0u &&
-            cell_hyperlink_id == params.hover_hyperlink_id;
-        let underline_color = select(fg, ACCENT_LINK_COLOR, is_hovered);
+    if cell_hyperlink_id != 0u
+        && params.hover_active != 0u
+        && cell_hyperlink_id == params.hover_hyperlink_id
+    {
         let y_top = params.ascent_px - params.underline_position_phys;
         let y_bot = y_top + params.underline_thickness_phys;
         if in_cell_px.y >= y_top && in_cell_px.y < y_bot {
-            color = vec4<f32>(underline_color.rgb, max(color.a, underline_color.a));
+            color = vec4<f32>(ACCENT_LINK_COLOR.rgb, max(color.a, ACCENT_LINK_COLOR.a));
         }
         underline_painted = true;
     }

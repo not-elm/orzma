@@ -72,16 +72,20 @@ fn a_full_attribute_reset_keeps_the_hyperlink() {
     assert_eq!(row[1].hyperlink_id, row[0].hyperlink_id);
 }
 
-/// Asserts that a saved cursor restores the hyperlink that was open
-/// when it was saved.
+/// Asserts that a restored cursor paints with the same hyperlink that
+/// was open when the cursor was saved, at the column where it was
+/// saved.
 ///
 /// Case: a program saves the cursor inside a link, closes the link to
 /// print a plain status word, and restores to carry on printing it.
 #[test]
 fn a_restored_cursor_brings_back_the_hyperlink() {
-    let device = interpret(b"\x1b]8;;https://a.example\x1b\\\x1b7\x1b]8;;\x1b\\a\x1b8b");
-    let row = device.active_screen().viewport_row(ViewportLine(0));
-    assert!(row[0].hyperlink_id.is_some());
+    let device =
+        interpret(b"\x1b]8;;https://a.example\x1b\\\x1b[2;1Hw\x1b[1;1H\x1b7\x1b]8;;\x1b\\a\x1b8b");
+    let opened_id = cell_at(&device, 1, 0).hyperlink_id;
+    assert!(opened_id.is_some());
+    assert_eq!(glyph_at(&device, 0, 0), 'b');
+    assert_eq!(cell_at(&device, 0, 0).hyperlink_id, opened_id);
 }
 
 /// Asserts that a soft reset closes the open hyperlink.

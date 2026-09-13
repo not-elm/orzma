@@ -174,6 +174,8 @@ impl FrameTracker {
 
     /// The definitions of every hyperlink `rows` references, in first
     /// appearance order.
+    // TODO: this clones one target URI per referenced link on every
+    // frame that carries it.
     fn definitions(device: &DeviceState, rows: &[DirtyRow]) -> Vec<Hyperlink> {
         let mut seen: HashSet<HyperlinkId> = HashSet::new();
         rows.iter()
@@ -485,7 +487,7 @@ mod tests {
             frame.hyperlinks[0].uri,
             HyperlinkUri::new("https://a.example")
         );
-        assert!(frame.rows[0].contents.len() >= 2);
+        assert_eq!(frame.rows[0].contents.len(), 2);
         assert_eq!(
             frame.rows[0].contents[0].hyperlink_id,
             Some(frame.hyperlinks[0].id)

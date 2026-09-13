@@ -78,9 +78,13 @@ pub(crate) struct SourceHyperlink {
 /// minting a fresh id the first time a pair is seen and returning the id
 /// already on file on repeats.
 // TODO: release the entries of links no cell references any more.
-// Nothing drops an id when the cells carrying it leave history, so
-// a program that prints links in a loop grows this map without
-// bound.
+// Growth tracks OSC 8 sequences received rather than links visible on
+// screen, since opening a link mints unconditionally and a link never
+// printed still grows these maps. An id-bearing open grows both maps
+// and stores the target twice, once cloned into `id_to_uri` and once
+// inside the `SourceHyperlink` key of `source_to_id`. Nothing reclaims
+// an entry, not even a full reset, so recovery requires killing the
+// pane.
 pub(crate) struct HyperlinkInterner {
     next: NonZeroU32,
     id_to_uri: HashMap<HyperlinkId, HyperlinkUri>,

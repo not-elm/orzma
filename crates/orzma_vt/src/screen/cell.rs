@@ -24,7 +24,7 @@ pub struct Cell {
 
 const _: () = assert!(
     size_of::<Cell>() <= 20,
-    "a cell must not outgrow four bytes of hyperlink id"
+    "a cell must not grow past twenty bytes"
 );
 
 impl Default for Cell {
