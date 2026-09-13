@@ -124,12 +124,11 @@ impl Cell {
     /// sharing its pen.
     pub fn continuation(&self) -> Self {
         Self {
-            c: ' ',
             width: CellWidth::Spacer,
-            extra: None,
             fg: self.fg,
             bg: self.bg,
             style: self.style,
+            ..Self::default()
         }
     }
 }

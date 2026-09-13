@@ -160,16 +160,12 @@ impl Row<Cell> {
             .iter()
             .enumerate()
             .all(|(at, cell)| match cell.width {
-                CellWidth::Wide => at + 1 < cols && self.0[at + 1].width == CellWidth::Spacer,
-                CellWidth::Spacer => at > 0 && self.0[at - 1].width == CellWidth::Wide,
-                CellWidth::LeadingSpacer => at + 1 == cols,
-                CellWidth::Narrow => true,
-            })
-            && self.0.iter().all(|cell| match cell.width {
-                CellWidth::Spacer | CellWidth::LeadingSpacer => {
-                    cell.c == ' ' && cell.extra.is_none()
+                CellWidth::Wide => self.joint_intact(at),
+                CellWidth::Spacer => {
+                    at > 0 && self.joint_intact(at - 1) && cell.c == ' ' && cell.extra.is_none()
                 }
-                CellWidth::Narrow | CellWidth::Wide => true,
+                CellWidth::LeadingSpacer => at + 1 == cols && cell.c == ' ' && cell.extra.is_none(),
+                CellWidth::Narrow => true,
             })
     }
 
