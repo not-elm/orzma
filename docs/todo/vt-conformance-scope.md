@@ -259,7 +259,7 @@ STD-070 が LCF をリセットすると規定する操作:
    非フォーカスでも止まらない**（調べた 6 実装すべてがリセットし、6/6 が非フォーカスで中空に
    倒す。周期は xterm 600/300ms・alacritty 750ms・foot 500ms・wezterm 800ms・kitty は system、
    orzma は 500/500ms。点滅停止は kitty 15s・alacritty 5s）。
-11. **`padding_color` の黒センチネル（設定 PR とセット）**。`material.rs` の `padding_color` は既定背景が黒のとき `TerminalPaddingFallback` に倒す。OSC 11 以前は `Palette::background` が恒久的に黒だったので「未設定」の意味しか持ちえなかったが、**いまは `\e]11;rgb:00/00/00` が「黒にせよ」という明示の要求**で、`\e]111` のリセットも黒へ戻す。どちらも fallback 色で描かれる。**`TerminalPaddingFallback` は既定が黒で誰も設定していないので現状は実害が無い**が、設定層がこれを設定した瞬間に顕在化する。値で兼用せず「一度でも設定されたか」の信号を別に持つのが本筋。既存テスト `padding_color_falls_back_when_default_bg_is_black` が現在の設計を固定している。（2026-09-13、コードレビュー指摘）
+11. **`padding_color` の黒センチネル（設定 PR とセット）**。`material.rs` の `padding_color` は既定背景が黒のとき `TerminalPaddingFallback` に倒す。OSC 11 以前は `Palette::background` が恒久的に黒だったので「未設定」の意味しか持ちえなかったが、**いまは `\e]11;rgb:00/00/00` が「黒にせよ」という明示の要求**で、`\e]111` のリセットも黒へ戻す。どちらも fallback 色で描かれる。**影響は padding 帯だけではない** — 既定背景セルは `TRANSPARENT_BG`（alpha 0）で詰められ、`paint_grid_cell` の `blend_premultiplied_over(fallback, …)` がそのまま `bg_padding_color` を通すので、この分岐は**グリッドの地・padding 帯・reverse video のグリフ色の3面すべて**の唯一の門になっている。**`TerminalPaddingFallback` は既定が黒で誰も設定していないので現状は実害が無い**が、設定層がこれを設定した瞬間に顕在化する。値で兼用せず「一度でも設定されたか」の信号を別に持つのが本筋。既存テスト `padding_color_falls_back_when_default_bg_is_black` が現在の設計を固定している。（2026-09-13、コードレビュー指摘）
 12. **非アクティブペインのカーソル（マルチプレクサ側）**。orzma は非アクティブペインにも
    カーソルを描き続け dim/tint がかかるだけ。**tmux は実カーソルを 1 本しか持たず
    `server_client_reset_state()` が `w->active` しか見ないので、非アクティブペインには

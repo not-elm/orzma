@@ -146,12 +146,7 @@ impl Palette {
 
     /// Sets slot `index` to `color`; returns whether the slot changed.
     pub fn set_indexed(&mut self, index: u8, color: Rgb) -> bool {
-        let slot = &mut self.indexed[usize::from(index)];
-        if *slot == color {
-            return false;
-        }
-        *slot = color;
-        true
+        Self::assign(&mut self.indexed[usize::from(index)], color)
     }
 
     /// Returns slot `index` to its built-in default; returns whether the
@@ -179,11 +174,7 @@ impl Palette {
     ///
     /// - `OSC 10 ; spec`
     pub fn set_foreground(&mut self, color: Rgb) -> bool {
-        if self.foreground == color {
-            return false;
-        }
-        self.foreground = color;
-        true
+        Self::assign(&mut self.foreground, color)
     }
 
     /// Sets the default background to `color`; returns whether it
@@ -193,11 +184,7 @@ impl Palette {
     ///
     /// - `OSC 11 ; spec`
     pub fn set_background(&mut self, color: Rgb) -> bool {
-        if self.background == color {
-            return false;
-        }
-        self.background = color;
-        true
+        Self::assign(&mut self.background, color)
     }
 
     /// Returns the default foreground to its built-in default, leaving
@@ -231,6 +218,15 @@ impl Palette {
             return false;
         }
         *self = default;
+        true
+    }
+
+    /// Writes `color` into `slot`; returns whether the slot changed.
+    fn assign(slot: &mut Rgb, color: Rgb) -> bool {
+        if *slot == color {
+            return false;
+        }
+        *slot = color;
         true
     }
 }

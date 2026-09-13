@@ -26,16 +26,6 @@ pub(crate) enum DynamicColorRequest {
 }
 
 impl DynamicColor {
-    /// The dynamic color a `Ps` of an `OSC 10` through `OSC 19` names;
-    /// `None` for one this terminal does not carry.
-    fn from_code(code: usize) -> Option<Self> {
-        match code {
-            10 => Some(Self::Foreground),
-            11 => Some(Self::Background),
-            _ => None,
-        }
-    }
-
     /// The `Ps` that names this color when set or queried.
     const fn code(self) -> u8 {
         match self {
@@ -54,7 +44,8 @@ impl DynamicColorRequest {
     /// the list" (xterm-ctlseqs.pdf p.39), so a command starting at
     /// `OSC 10` reaches the background with its second value. A `?` in
     /// place of the value asks for that color instead of setting it.
-    /// `OSC 110` and `OSC 111` take no value.
+    /// A reset names its color with the set number plus 100 —
+    /// `OSC 110` and `OSC 111` — and carries no value.
     ///
     /// # Invariants
     ///
@@ -64,8 +55,10 @@ impl DynamicColorRequest {
     /// decodes to nothing. A reset ignores whatever follows its number.
     pub fn parse(params: &[&[u8]]) -> Vec<Self> {
         match params {
-            [b"10", specs @ ..] => Self::chain(DynamicColor::Foreground, specs),
-            [b"11", specs @ ..] => Self::chain(DynamicColor::Background, specs),
+            [b"10", specs @ ..] => {
+                Self::chain(&[DynamicColor::Foreground, DynamicColor::Background], specs)
+            }
+            [b"11", specs @ ..] => Self::chain(&[DynamicColor::Background], specs),
             [b"110", ..] => vec![Self::Reset {
                 target: DynamicColor::Foreground,
             }],
@@ -76,18 +69,14 @@ impl DynamicColorRequest {
         }
     }
 
-    /// The requests the values of one command make, `first` naming the
-    /// color the leading value addresses and each later value
-    /// addressing the next color.
-    fn chain(first: DynamicColor, specs: &[&[u8]]) -> Vec<Self> {
-        specs
+    /// The requests the values of one command make, `targets` naming in
+    /// order the colors the values address; a value past the last
+    /// target is dropped.
+    fn chain(targets: &[DynamicColor], specs: &[&[u8]]) -> Vec<Self> {
+        targets
             .iter()
-            .enumerate()
-            .map_while(|(offset, spec)| {
-                let target = DynamicColor::from_code(usize::from(first.code()) + offset)?;
-                Some((target, *spec))
-            })
-            .filter_map(|(target, spec)| Self::from_spec(target, spec))
+            .zip(specs)
+            .filter_map(|(target, spec)| Self::from_spec(*target, spec))
             .collect()
     }
 
