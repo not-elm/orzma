@@ -9,6 +9,7 @@ use crate::device::modes::{
     TextCursorEnable, VtModes,
 };
 use crate::frame::damage::DamageSpan;
+use crate::hyperlink::{HyperlinkInterner, HyperlinkUri};
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::Screen;
 use crate::screen::cursor::Cursor;
@@ -24,6 +25,7 @@ pub(crate) struct DeviceState {
     modes: VtModes,
     palette: Palette,
     title: TitleState,
+    hyperlinks: HyperlinkInterner,
 }
 
 impl DeviceState {
@@ -41,6 +43,7 @@ impl DeviceState {
             modes: VtModes::default(),
             palette: Palette::default(),
             title: TitleState::default(),
+            hyperlinks: HyperlinkInterner::new(),
         }
     }
 
@@ -114,6 +117,9 @@ impl DeviceState {
     /// reset that changes a color reports a full repaint even when
     /// neither screen was written.
     ///
+    /// The hyperlinks a program opened stay resolvable, though no link
+    /// is left open on either screen.
+    ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`)
@@ -130,6 +136,10 @@ impl DeviceState {
         // instead.
         self.modes = VtModes::default();
         self.title = TitleState::default();
+        // NOTE: `hyperlinks` is deliberately not reset. Ids must never be
+        // reused: the renderer keeps its own id-to-uri table and skips an
+        // id it already knows, so a reused id would resolve to the uri it
+        // carried before the reset.
         let palette_changed = self.palette.reset();
         (was_showing_alternate || primary.is_some() || palette_changed).then_some(DamageSpan::Full)
     }
@@ -293,6 +303,42 @@ impl DeviceState {
         self.palette.reset_all_indexed()
     }
 
+    /// Opens a hyperlink on the screen on show, so the cells printed
+    /// from now on carry it. A nonempty `id` joins this link to every
+    /// other open naming the same id and uri.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 8 ; params ; URI`
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the OSC dispatcher reaches these once OSC 8 is wired"
+        )
+    )]
+    pub fn open_hyperlink(&mut self, id: Option<String>, uri: HyperlinkUri) {
+        let opened = self.hyperlinks.open(id, uri);
+        self.active_screen_mut().pen_mut().hyperlink_id = Some(opened);
+    }
+
+    /// Closes the hyperlink on the screen on show, so the cells printed
+    /// from now on carry none. The cells already printed keep theirs.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 8 ; ;`
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the OSC dispatcher reaches these once OSC 8 is wired"
+        )
+    )]
+    pub fn close_hyperlink(&mut self) {
+        self.active_screen_mut().pen_mut().hyperlink_id = None;
+    }
+
     /// Switches the active screen without a flip's side effects.
     #[cfg(test)]
     pub(crate) fn set_active_screen_for_test(&mut self, kind: ScreenKind) {
@@ -438,6 +484,7 @@ mod tests {
     use crate::device::modes::{
         InsertReplaceMode, KeypadMode, MouseEncoding, MouseTracking, TextCursorEnable,
     };
+    use crate::hyperlink::HyperlinkUri;
     use crate::screen::cell::Cell;
     use crate::screen::character_sets::{CharacterSet, GCode};
     use crate::screen::grid::coords::GridColumn;
@@ -450,6 +497,47 @@ mod tests {
 
     fn mount(device: &mut DeviceState, id: InstanceId) -> bool {
         device.mount_placement(PlacementSize { rows: 2, cols: 4 }, id)
+    }
+
+    /// Asserts that opening a hyperlink puts its id on the active
+    /// screen's pen and leaves the other screen's pen alone.
+    ///
+    /// Case: a program prints a link on the primary screen, then a
+    /// full-screen editor takes over the alternate screen.
+    #[test]
+    fn a_hyperlink_opens_on_the_active_screen_only() {
+        let mut device = device();
+        device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        let opened = device.active_screen_mut().pen_mut().hyperlink_id;
+        assert!(opened.is_some());
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+        assert_eq!(device.active_screen_mut().pen_mut().hyperlink_id, None);
+    }
+
+    /// Asserts that closing a hyperlink clears the pen.
+    ///
+    /// Case: a program finishes printing a link and emits the closing
+    /// sequence before its next word.
+    #[test]
+    fn closing_a_hyperlink_clears_the_pen() {
+        let mut device = device();
+        device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        device.close_hyperlink();
+        assert_eq!(device.active_screen_mut().pen_mut().hyperlink_id, None);
+    }
+
+    /// Asserts that a full reset closes the open hyperlink on both
+    /// screens.
+    ///
+    /// Case: a program leaves a link open and the user runs `reset`.
+    #[test]
+    fn a_reset_closes_the_hyperlink_on_both_screens() {
+        let mut device = device();
+        device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        let _ = device.reset();
+        assert_eq!(device.active_screen_mut().pen_mut().hyperlink_id, None);
+        device.set_active_screen_for_test(ScreenKind::Alternate);
+        assert_eq!(device.active_screen_mut().pen_mut().hyperlink_id, None);
     }
 
     /// Asserts that a scroll moves the screen on show and leaves the
