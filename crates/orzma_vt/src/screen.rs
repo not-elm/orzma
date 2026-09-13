@@ -33,7 +33,8 @@ use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::placements::ScreenPlacements;
 use crate::screen::selection::{
-    CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionKind, SelectionRange,
+    CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionGeometry, SelectionKind,
+    SelectionRange,
 };
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
@@ -1101,18 +1102,24 @@ impl Screen {
         (row, column)
     }
 
-    /// The selection as an emitted frame carries it: normalized,
-    /// cell-side trimmed, in active-grid coordinates; `None` when there
-    /// is no selection, its span is empty, or an endpoint's row has
-    /// left the ring.
+    /// The cell range the active selection covers, widened so that a
+    /// partly covered wide glyph is covered whole; `None` without an
+    /// active selection, when its rows have left the ring, or when it
+    /// covers no cell.
+    ///
+    /// A whole-line selection is not widened.
     pub fn selection_range(&self) -> Option<SelectionRange> {
-        match self
+        let mut range = match self
             .selection
             .resolve(|id| self.grid.grid_line(id), self.grid.size().cols)
         {
-            Resolved::Range(range) => Some(range),
-            Resolved::None | Resolved::Empty => None,
+            Resolved::Range(range) => range,
+            Resolved::None | Resolved::Empty => return None,
+        };
+        if range.geometry != SelectionGeometry::Lines {
+            self.snap_to_glyphs(&mut range);
         }
+        Some(range)
     }
 
     /// The id of the row the cursor sits on.
@@ -1129,6 +1136,31 @@ impl Screen {
     #[cfg(test)]
     pub(crate) fn grid(&self) -> &Grid {
         &self.grid
+    }
+
+    /// Moves `range`'s start off a continuation column onto the wide
+    /// body to its left, and its end off a wide body onto the
+    /// continuation column to its right.
+    ///
+    /// # Panics
+    ///
+    /// Panics when either endpoint's line is outside the ring.
+    // TODO: Snap each row in `SelectionRange::span_on` when a `Block` or
+    // a multi-line `Semantic` selection is implemented; endpoint snapping
+    // is sufficient only for `Linear` selection.
+    fn snap_to_glyphs(&self, range: &mut SelectionRange) {
+        let start = &self.grid.row(range.start.line)[range.start.column];
+        if start.width == CellWidth::Spacer {
+            debug_assert!(
+                range.start.column.0 > 0,
+                "a continuation column has a body to its left"
+            );
+            range.start.column = GridColumn(range.start.column.0.saturating_sub(1));
+        }
+        let end = &self.grid.row(range.end.line)[range.end.column];
+        if end.width == CellWidth::Wide {
+            range.end.column = GridColumn(range.end.column.0 + 1);
+        }
     }
 
     /// Reports the given screen rows as damage, in the viewport

@@ -63,6 +63,14 @@ fn row_glyphs(screen: &Screen, line: ScreenLine) -> Vec<char> {
         .collect()
 }
 
+/// A grid point on `line` at `column`.
+fn point(line: i32, column: u16) -> GridPoint {
+    GridPoint {
+        line: GridLine(line),
+        column: GridColumn(column),
+    }
+}
+
 mod backspace;
 mod carriage_return;
 mod cursor;
@@ -94,6 +102,7 @@ mod scroll;
 mod scroll_region_down;
 mod scroll_region_up;
 mod seat_cursor;
+mod selection_range;
 mod selection_text;
 mod set_origin_mode;
 mod set_scroll_region;
