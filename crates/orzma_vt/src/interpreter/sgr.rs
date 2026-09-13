@@ -36,7 +36,6 @@ impl Pen {
         // that true for any arm that replaces the whole pen. A program
         // that ends a coloured link with `SGR 0` before closing the link
         // would otherwise lose the rest of it.
-        let hyperlink_id = self.hyperlink_id;
         let mut pen = self;
         let mut groups = params.groups();
         while let Some(tokens) = groups.next() {
@@ -48,7 +47,7 @@ impl Pen {
             }
         }
         Self {
-            hyperlink_id,
+            hyperlink_id: self.hyperlink_id,
             ..pen
         }
     }

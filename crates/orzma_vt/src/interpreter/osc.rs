@@ -110,9 +110,7 @@ impl PaletteRequest {
 /// What an `OSC 8` asks of the hyperlink the cursor paints with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HyperlinkRequest {
-    /// Paints the cells printed from now on as part of `uri`. A
-    /// nonempty `id` joins this link to every other open naming the
-    /// same id and uri.
+    /// Opens a link on `uri`.
     Open {
         /// The `id=` parameter as written, absent when the key was
         /// omitted. An empty value is kept rather than folded into an

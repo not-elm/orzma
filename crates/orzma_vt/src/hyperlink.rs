@@ -78,13 +78,11 @@ pub(crate) struct SourceHyperlink {
 /// Maps each `(source id, uri)` pair to a single [`HyperlinkId`],
 /// minting a fresh id the first time a pair is seen and returning the id
 /// already on file on repeats.
-// TODO: release the entries of links no cell references any more.
-// Growth tracks OSC 8 sequences received rather than links visible on
-// screen, since opening a link mints unconditionally and a link never
-// printed still grows these maps. An id-bearing open grows both maps,
-// keying `source_to_id` by a second handle on the target `id_to_uri`
-// already holds. Nothing reclaims an entry, not even a full reset, so
-// recovery requires killing the pane.
+// TODO: release the entries of links no cell references any more, and
+// cap what one stream may retain. Opening mints unconditionally, so
+// growth tracks the OSC 8 sequences a program sends rather than the
+// links it puts on screen, and nothing reclaims an entry — not even a
+// full reset.
 pub(crate) struct HyperlinkInterner {
     next: NonZeroU32,
     id_to_uri: HashMap<HyperlinkId, HyperlinkUri>,
@@ -101,15 +99,6 @@ impl HyperlinkInterner {
             id_to_uri: HashMap::new(),
             source_to_id: HashMap::new(),
         }
-    }
-
-    pub(crate) fn intern(&mut self, source: SourceHyperlink) -> HyperlinkId {
-        if let Some(id) = self.source_to_id.get(&source) {
-            return *id;
-        }
-        let id = self.mint(source.uri.clone());
-        self.source_to_id.insert(source, id);
-        id
     }
 
     /// The id an `OSC 8` opens for `uri` under `id`.
@@ -130,6 +119,17 @@ impl HyperlinkInterner {
     #[inline]
     pub(crate) fn extract(&self, id: &HyperlinkId) -> Option<&HyperlinkUri> {
         self.id_to_uri.get(id)
+    }
+
+    /// The id on file for `source`, minting one the first time it is
+    /// seen.
+    fn intern(&mut self, source: SourceHyperlink) -> HyperlinkId {
+        if let Some(id) = self.source_to_id.get(&source) {
+            return *id;
+        }
+        let id = self.mint(source.uri.clone());
+        self.source_to_id.insert(source, id);
+        id
     }
 
     /// Hands out a fresh id for `uri` without recording a lookup key.
