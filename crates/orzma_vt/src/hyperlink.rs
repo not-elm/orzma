@@ -115,6 +115,23 @@ impl HyperlinkInterner {
         id
     }
 
+    /// The id an `OSC 8` opens for `uri` under `id`.
+    ///
+    /// A nonempty `id` is a lookup key: a later open naming the same id
+    /// and uri returns the id already on file. An absent or empty `id`
+    /// returns a fresh id on every call, so two such links never join.
+    /// This is the one place that rule lives; callers pass the `id=`
+    /// value through as it was written.
+    pub(crate) fn open(&mut self, id: Option<String>, uri: HyperlinkUri) -> HyperlinkId {
+        match id.filter(|id| !id.is_empty()) {
+            Some(id) => self.intern(SourceHyperlink {
+                id: HyperlinkSourceId::new(id),
+                uri,
+            }),
+            None => self.mint(uri),
+        }
+    }
+
     #[inline]
     pub(crate) fn extract(&self, id: &HyperlinkId) -> Option<&HyperlinkUri> {
         self.id_to_uri.get(id)
@@ -426,5 +443,72 @@ mod tests {
         assert!(!is_allowed("vscode://example.com"));
         assert!(!is_allowed(""));
         assert!(!is_allowed("no-colon-here"));
+    }
+
+    /// Asserts that two opens sharing a nonempty id and a uri return one id.
+    ///
+    /// Case: a build tool prints the same error link at the top and the
+    /// bottom of its output, tagging both with `id=err1`.
+    #[test]
+    fn open_with_one_id_and_uri_returns_the_same_id_twice() {
+        let mut interner = HyperlinkInterner::new();
+        let first = interner.open(
+            Some("err1".to_owned()),
+            HyperlinkUri::new("https://a.example"),
+        );
+        let second = interner.open(
+            Some("err1".to_owned()),
+            HyperlinkUri::new("https://a.example"),
+        );
+        assert_eq!(first, second);
+    }
+
+    /// Asserts that two opens without an id return distinct ids even for
+    /// one uri.
+    ///
+    /// Case: `ls --hyperlink=auto` lists the same file twice, and neither
+    /// listing carries an id.
+    #[test]
+    fn open_without_an_id_returns_a_fresh_id_each_time() {
+        let mut interner = HyperlinkInterner::new();
+        let first = interner.open(None, HyperlinkUri::new("https://a.example"));
+        let second = interner.open(None, HyperlinkUri::new("https://a.example"));
+        assert_ne!(first, second);
+    }
+
+    /// Asserts that an empty id is treated as no id at all.
+    ///
+    /// Case: a script interpolates an unset shell variable into its
+    /// `id=` parameter and prints two links to one page.
+    #[test]
+    fn open_with_an_empty_id_returns_a_fresh_id_each_time() {
+        let mut interner = HyperlinkInterner::new();
+        let first = interner.open(Some(String::new()), HyperlinkUri::new("https://a.example"));
+        let second = interner.open(Some(String::new()), HyperlinkUri::new("https://a.example"));
+        assert_ne!(first, second);
+    }
+
+    /// Asserts that an id opened without a key still resolves to its uri.
+    ///
+    /// Case: the frame builder looks up the uri of a link the program
+    /// printed without an id.
+    #[test]
+    fn an_id_opened_without_a_key_resolves_to_its_uri() {
+        let mut interner = HyperlinkInterner::new();
+        let uri = HyperlinkUri::new("https://a.example");
+        let id = interner.open(None, uri.clone());
+        assert_eq!(interner.extract(&id), Some(&uri));
+    }
+
+    /// Asserts that one id reused across two uris yields distinct ids.
+    ///
+    /// Case: a long-running program reuses `id=1` for an unrelated second
+    /// URL later in its output.
+    #[test]
+    fn open_reusing_an_id_for_another_uri_returns_a_distinct_id() {
+        let mut interner = HyperlinkInterner::new();
+        let first = interner.open(Some("1".to_owned()), HyperlinkUri::new("https://a.example"));
+        let second = interner.open(Some("1".to_owned()), HyperlinkUri::new("https://b.example"));
+        assert_ne!(first, second);
     }
 }
