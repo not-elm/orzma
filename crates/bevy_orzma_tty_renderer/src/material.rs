@@ -1231,6 +1231,28 @@ mod tests {
         }
     }
 
+    /// Asserts that the shader's cursor helper consults the wide-right-half
+    /// flag for both halves of a wide pair and that the cursor painter
+    /// calls it.
+    ///
+    /// Case: a block cursor sits on a Japanese character, either on its
+    /// body or parked on its right half.
+    #[test]
+    fn wgsl_cursor_covers_both_halves_of_a_wide_glyph() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let helper = src
+            .split("fn cursor_covers(")
+            .nth(1)
+            .expect("the shader defines cursor_covers");
+        let body = helper.split("\n}\n").next().expect("the helper has a body");
+        assert_eq!(body.matches("STYLE_WIDE_RIGHT_HALF").count(), 2);
+        let painter = src
+            .split("fn paint_cursor(")
+            .nth(1)
+            .expect("the shader defines paint_cursor");
+        assert!(painter.contains("cursor_covers(row, col)"));
+    }
+
     /// Asserts that the shader's style constants are exactly the `Style`
     /// flags other than the font-selecting `BOLD` and `ITALIC`, plus the
     /// renderer-only `WIDE_RIGHT_HALF`, each declared with the bit the Rust
