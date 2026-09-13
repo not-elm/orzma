@@ -540,9 +540,12 @@ fn resolve_cell_colors(cell: Cell) -> CellColors {
         // NOTE: The terminal default bg maps to transparent (alpha=0) so that
         // cells without an explicit background let webview overlays show through.
         // When reverse-video promotes that transparent sentinel to the glyph
-        // foreground color, materialise it as opaque black so text stays visible.
+        // foreground color, materialise it as the colour that default
+        // background actually paints (bg_padding_color). A hardcoded black here
+        // would paint the glyph black once OSC 11 recolors the default
+        // background, which is unreadable on a dark reversed cell.
         if fg.a == 0.0 {
-            fg = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+            fg = vec4<f32>(params.bg_padding_color.rgb, 1.0);
         }
     }
     if dim {
