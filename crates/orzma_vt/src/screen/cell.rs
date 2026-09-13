@@ -47,6 +47,51 @@ impl CellWidth {
     }
 }
 
+/// The zero-width marks combined onto a cell's base glyph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub struct CellExtra {
+    marks: [char; CellExtra::MAX_COMBINING],
+    len: u8,
+}
+
+impl Default for CellExtra {
+    fn default() -> Self {
+        Self {
+            marks: ['\0'; Self::MAX_COMBINING],
+            len: 0,
+        }
+    }
+}
+
+impl CellExtra {
+    // NOTE: The cap is a memory-exhaustion defense, not a typographic
+    // limit: a stream that repeats zero-width marks at one cell would
+    // otherwise grow that cell without bound.
+    /// How many zero-width marks one cell retains.
+    #[allow(dead_code)]
+    pub const MAX_COMBINING: usize = 9;
+
+    /// Appends `mark`, reporting whether it was kept; a push past
+    /// [`CellExtra::MAX_COMBINING`] is refused and changes nothing.
+    #[allow(dead_code)]
+    pub fn push(&mut self, mark: char) -> bool {
+        let len = usize::from(self.len);
+        if len >= Self::MAX_COMBINING {
+            return false;
+        }
+        self.marks[len] = mark;
+        self.len += 1;
+        true
+    }
+
+    /// The marks this cell carries, in the order they arrived.
+    #[allow(dead_code)]
+    pub fn marks(&self) -> &[char] {
+        &self.marks[..usize::from(self.len)]
+    }
+}
+
 /// One stored character cell: a glyph plus the attributes it was
 /// printed with.
 ///
@@ -126,6 +171,41 @@ impl Pen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Asserts that pushed marks are returned in the order they arrived.
+    ///
+    /// Case: a program prints a base letter followed by two combining
+    /// accents.
+    #[test]
+    fn marks_come_back_in_push_order() {
+        let mut extra = CellExtra::default();
+        assert!(extra.push('\u{0302}'));
+        assert!(extra.push('\u{0301}'));
+        assert_eq!(extra.marks(), ['\u{0302}', '\u{0301}']);
+    }
+
+    /// Asserts that a push past the cap is refused and leaves the kept
+    /// marks untouched.
+    ///
+    /// Case: a stream sends a long run of combining marks at one cell.
+    #[test]
+    fn a_push_past_the_cap_is_refused() {
+        let mut extra = CellExtra::default();
+        for _ in 0..CellExtra::MAX_COMBINING {
+            assert!(extra.push('\u{0301}'));
+        }
+        assert!(!extra.push('\u{0302}'));
+        assert_eq!(extra.marks().len(), CellExtra::MAX_COMBINING);
+        assert!(extra.marks().iter().all(|mark| *mark == '\u{0301}'));
+    }
+
+    /// Asserts that a fresh extra holds no marks.
+    ///
+    /// Case: a cell is allocated an extra before any mark arrives.
+    #[test]
+    fn a_fresh_extra_is_empty() {
+        assert_eq!(CellExtra::default().marks(), [] as [char; 0]);
+    }
 
     /// Asserts that the default cell is a blank space with default
     /// colors and no styling.
