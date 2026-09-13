@@ -12,6 +12,33 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 - **Tier 1 = 必須** — `infocmp xterm-256color` が広告していて orzma が未実装のもの。
 - **Tier 2 = 推奨** — terminfo を経由せず TUI が直接叩くもの。
 
+### 基準にする terminfo の版（2026-09-13 訂正）
+
+**Tier 判定の基準は ncurses 6.6 の `xterm-256color` エントリとする。** 初回の
+洗い出し（2026-09-10）は macOS 同梱の ncurses 6.0.20150808 で `infocmp` を
+叩いており、6.0 の entry には無いが 6.6 では広告される capability を Tier 2 側へ
+落としていた。両版の `infocmp -x -1 xterm-256color` を `comm` で突き合わせて
+差分を取り直した結果が下の表。
+
+どの版が実際に使われるかはプログラムが読む terminfo データベース次第で、orzma が
+選べるものではない（Homebrew の nvim / tmux は 6.6 側を見る）。**広告が増える
+方向にしかズレないので、新しい版を基準に取る。**
+
+| 6.6 で増えた capability | 制御機能 | 判定への影響 |
+|---|---|---|
+| `XF`, `fe=\E[?1004h`, `fd=\E[?1004l`, `kxIN=\E[I`, `kxOUT=\E[O`（`xterm+focus`。6.0 にはこの entry 自体が無い） | フォーカス通知 | **基準版では Tier 1**。行は §2 に据え置き |
+| `rep=%p1%c\E[%p2%{1}%-%db` | REP | **基準版では Tier 1**。§2 の REP 行と §付記 の「`rep` はこのエントリには無い」は 6.0 基準の記述。行は §2 に据え置き |
+| `mgc=\E[?69l`, `smglp` / `smglr` / `smgrp`（いずれも `\E[?69h` を前置） | DECLRMM / DECSLRM | **基準版では Tier 1**。行は §2 に据え置き |
+| `kbs=^?` | BS キーの送信値 | §3 の `kbs` **要判断は解消**。6.0 の `^H` に対して 6.6 は DEL を広告するので、orzma の `0x7f` が entry と一致する |
+| `u8=\E[?%[;0123456789]c` | DA1 応答の照合パターン | §4 の「`u8` は `CSI ?1;2c` を期待する」は 6.0 基準。6.6 のパターンは `CSI ?` + 数字と `;` + `c` を受けるので `CSI ?6c` も一致する |
+| `XR=\E[>0q`, `xr=\EP>\|XTerm(…)\E\\` | XTVERSION | **新規ギャップ**。`CSI > Ps q` の腕が無い（`interpreter.rs:474` は DECSCUSR の `(None, [b' '], b'q')` だけ）。行は未作成 |
+| `BE`/`BD` と `PS`/`PE`、`smxx=\E[9m` / `rmxx=\E[29m`、`XM` / `xm` / `kmous=\E[<`、`oc=\E]104\007` | bracketed paste (2004)・取り消し線 (SGR 9/29)・SGR マウス (1006)・OSC 104 | いずれも実装済みでギャップ無し（`sgr.rs:65`・`sgr.rs:72`、`MouseEncoding::Sgr`。`oc` の版差は §1-B の OSC 4 行が既に記録済み） |
+| `ka1`–`kc3`, `kp*`, `kbeg` | アプリケーションキーパッド | §3 の `kb2`/`kent` 行と同じ話。広告される個数が 6.6 で増える |
+
+> 観察（2026-09-13、実害は未評価）: 6.6 の `rv=\E\\[>41;[1-6][0-9][0-9];0c` は
+> **xterm 形の DA2 応答**（`CSI >41;…;0c`）を照合パターンに持つが、orzma の DA2 は
+> `CSI >0;<ver>;1c` なので一致しない。§4 の DA1 行と同じ「名乗りと応答のズレ」。
+
 ### 参照章の地図（`docs/references/xterm-ctlseqs.pdf`）
 
 | 章 | 頁 | 内容 |
@@ -87,23 +114,25 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 ## 2. Tier 2 — 推奨
 
 terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ローカルの
-`xterm-256color` エントリには無い」の意。
+`xterm-256color` エントリには無い」の意。**「ローカル」は macOS 同梱の
+ncurses 6.0 を指す**ので、6.6 で広告が増えて実質 Tier 1 に上がる行がある。
+一覧は §0 の「基準にする terminfo の版」にあり、該当行にはその旨を書いてある。
 
 | シーケンス | 機能 | 現状 | 直接叩く実例 |
 |---|---|---|---|
 | ~~`CSI Ps SP q`~~ | ~~DECSCUSR カーソル形状~~ | **✅ 実装済み（2026-09-12）**。DECSTR が開けた intermediate 経路に `(None, [b' '], b'q')` の腕 1 本で入った。値は vt510.pdf p.251 の 0〜4 と xterm-ctlseqs.pdf p.29–30 の 5/6（bar）。**`7` は no-op ではなく電源投入時の style に戻す** — xterm の `CASE_DECSCUSR` は `7` を `screen->initial_cursor` に書き換えてから同じ switch を通し、その既定リソース値が STEADY_BLOCK。ただし `Self::default()` はコンパイル時定数なので、**設定層が入ったら `7` 腕と `DeviceState::reset` を設定済みの初期 style から読むように直すこと**（そうしないと `CSI 7 SP q` はハードコードされた block に戻る）。**`なし / 0 / 1` はすべて blinking block に潰した** — 規範資料は一致しているが実装は割れており、`0` を「端末既定」と読むのは alacritty・ghostty・foot・tmux・termwiz、xterm/vt510 どおりに読むのは xterm だけ。**`DeviceState::soft_reset` も shape / blink を戻す**（この行が予告していたとおり。`ReallyReset` の `InitCursorShape` と `SetCursorBlink` は最初の `if (full)` より前にあり DECSTR 経路でも走る） | ~~nvim が実測 5 回~~（解消済み） |
 | ~~`CSI s` / `CSI u`~~ | ~~SCOSC / SCORC~~ | **✅ 実装済み（2026-09-11）**。パラメータ無しのときだけ DECSC / DECRC と同じ保存枠を使う（xterm の `only_default()` に揃えた。下の「`CSI s` の曖昧性」を参照） | blessed の `saveCursorA`/`restoreCursorA`、btop |
 | `CSI ?2026 h/l` | 同期出力 | `MODE∅`。`struct SyncBuffer {}` は**空のプレースホルダ**（`interpreter.rs:83`） | fzf がフレーム毎に発行。nvim/tmux/kitty |
-| `CSI ?1004` → `CSI I` / `CSI O` | フォーカス通知 | **モードは保存されるが送信側が存在しない**（`focus_in_out` の参照は定義と代入の 2 箇所のみ） | vim/nvim。フォーカス復帰時の再描画が来ない |
+| `CSI ?1004` → `CSI I` / `CSI O` | フォーカス通知 | **モードは保存されるが送信側が存在しない**（`focus_in_out` の参照は定義と代入の 2 箇所のみ） | vim/nvim。フォーカス復帰時の再描画が来ない。**ncurses 6.6 は `xterm+focus`（`XF` / `fe` / `fd` / `kxIN` / `kxOUT`）で広告するので基準版では Tier 1**（§0 の版差ノート。行はここに据え置き） |
 | `OSC 10/11/12` | 前景/背景/カーソル色（問い合わせ含む） | `OSC∅` | vim/nvim の `background` 自動判定 |
 | `OSC 52` | クリップボード | `OSC∅` | nvim の osc52 provider、tmux |
 | `OSC 8` | ハイパーリンク | `OSC∅`。interner は未接続（`hyperlink.rs:15`） | nvim。レンダラ側に受け皿は既にある |
 | `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `CSI∅`（DECSTR で intermediate 経路が開いたので `(Some(b'?'), [b'$'], b'p')` の腕 1 本で入る） | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する**。DECAWM / DECTCEM 実装により **7 と 25 も報告可能な状態を持つようになった**（`CSI ?7;1$y` / `CSI ?25;2$y` など）が応答路が無い。§6 のとおり、`CSI ?7 $ p` を実装すれば `vttest` の `tst_DEC_DECRPM` が mode 7 を機械判定できるようになる。**mode 3 / 40 / 95 は `0`（not recognized）で答える**（2026-09-12 決定）。orzma は DECCOLM の状態も変更経路も持たないので、`4`（permanently reset）だと任意幅のペインが「80 桁モード」を名乗ることになる。foot と alacritty も 0 を返す（wezterm は set を返す） |
 | `DCS $ q … ST` / `DCS + q … ST` | DECRQSS / XTGETTCAP | DCS コールバックが空（`interpreter.rs:157`-`168`） | vim のカーソル形状復元・capability 検出 |
 | ``CSI Ps ` `` / `CSI Ps a` / `CSI Ps e` | HPA / HPR / VPR | HPA は **✅ 実装済み（2026-09-11、CHA と同じメソッド）**。HPR も **✅ 実装済み（2026-09-11、CUF と同じメソッド。DECLRMM が無い間は停止点が一致する）**。VPR は `CSI∅` | vttest。**VPR は `move_cursor_down` の別名にできない** — VT510 p.351 は VPR を最終行で止めるが CUD は下マージンで止まるため、DECOM リセット時にスクロール領域があると挙動が食い違う |
-| `CSI Ps b` | REP | `CSI∅` | **ローカルエントリは `rep` を広告していない**ため Tier 2。vttest |
+| `CSI Ps b` | REP | `CSI∅` | **ncurses 6.0 の entry は `rep` を広告していない**ため Tier 2 に置いたが、**6.6 は広告するので基準版では Tier 1**（§0 の版差ノート。行はここに据え置き）。vttest |
 | ~~`CSI Ps ^`~~ | ~~SD（xterm の別綴り）~~ | **✅ 実装済み（2026-09-11）**。ECMA-48（p.77）はこの final byte を SIMD に割り当てるが、orzma は SIMD を持たないので xterm の読み（SD）に揃えた。持つのは調べた範囲で xterm だけ（alacritty・kitty・foot・ghostty・wezterm には無い） | 実際に発行するプログラムは**未確認** |
-| `CSI ?69 h/l` / `CSI Pl;Pr s` | DECLRMM / DECSLRM | `MODE∅` / `CSI∅` | nvim。矩形スクロールに必要 |
+| `CSI ?69 h/l` / `CSI Pl;Pr s` | DECLRMM / DECSLRM | `MODE∅` / `CSI∅` | nvim。矩形スクロールに必要。**ncurses 6.6 は `mgc` / `smglp` / `smglr` / `smgrp` で広告するので基準版では Tier 1**（§0 の版差ノート。行はここに据え置き） |
 | `CSI ?1015 h/l` | urxvt マウス | `MODE∅` | btop が 1015→1006 の順に発行。1006 があるので実害は小 |
 | `CSI ?Pm s` / `CSI ?Pm r` | XTSAVE / XTRESTORE | `CSI∅`（`?` 付きで intermediate 無しなので match に届いて落ちる） | xterm-ctlseqs は「DECSET と同じ Ps 値」を 1 段キャッシュで保存・復元すると規定するので、**7 と 25 も定義上この対象**。`civis`/`cnorm` の代わりに `?25 s` … `?25 r` で括るプログラムがあると hide が戻らず、`smam`/`rmam` の代わりに `?7 s` … `?7 r` で括ると autowrap が戻らない。**7 の restore は `modes_mut` 直書きにできない** — reset 方向を復元するときに両画面の LCF を解除する必要があるので `DeviceState::set_auto_wrap` を通す。具体的な呼び出し実例は未特定（低頻度と見られる） |
 
@@ -149,7 +178,7 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 
 | capability | 広告値 | orzma の送信 | 判断 |
 |---|---|---|---|
-| `kbs` | `^H` (0x08) | `0x7f` (DEL) — `keyboard.rs:91` | **要判断**。entry とは食い違うが、DEL は現代の端末の事実上の標準。「ncurses の entry に合わせる」か「DEL のまま明示的に据える」かを決めて記録する |
+| `kbs` | `^H` (0x08)（ncurses 6.0）／`^?` (DEL)（6.6） | `0x7f` (DEL) — `keyboard.rs:91` | **要判断は解消（2026-09-13）**。ncurses 6.6 の entry は `kbs=^?` を広告するので、§0 で基準に取った版とは食い違いが無く、DEL のまま据える。6.0 を読むプログラムから見ると `^H` 期待のままだが、そちらでも DEL を選ぶ根拠（現代の端末の事実上の標準）がそのまま残る |
 | ~~`kcbt`~~ | `ESC [Z` | **✅ 修正済み（2026-09-11）**。修飾が Shift だけのときに送る。Ctrl / Alt との組み合わせは HT のまま（下の「修飾キーが落ちる」行と一緒に扱う） | 完了 |
 | ~~`kich1`~~ | `ESC [2~` | **✅ 修正済み（2026-09-11）**。`TerminalKey::Insert` として編集キーパッドに加えた | 完了 |
 | `kf1`–`kf63` | `SS3 P/Q/R/S`, `CSI n ~` ほか | ファンクションキーが語彙に無い | 修正対象 |
@@ -163,7 +192,7 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 | **EL / ECH の pending-wrap 例外**（決着済み） | **決着: no-op を維持し、ECH も同じ方針に揃えた（2026-09-10）。参照実装が割れていることを承知した上で tmux 側を選択。** 経緯: DEC の EL 定義はアクティブ位置を含む（vt220 PDF p.36 L1754「including the cursor position」、vt510 PDF p.311 L9074「From the cursor through the end of the line」— いずれも検証済み）が、**どのマニュアルも deferred wrap をモデル化していない**ため、wrap 中にカーソルが論理的にどこに居るかを裁定しない。tmux 3.7c で実測したところ、幅10の行を埋めた状態で `CSI 0 K` も `CSI 1 X` も**何も消さず wrap も保持する**（行中では両方とも正常に動く）。tmux は `screen_write_clearcharacter` が `cx > sx - 1` で早期 return するモデル A。**訂正: 当初「alacritty も同様」と記録したが、これは誤り。** alacritty は EL と ECH を**意図的に区別している** — `alacritty_terminal-0.26.0/src/term/mod.rs:1643` の `clear_line` は `LineClearMode::Right if cursor.input_needs_wrap => return` を持つが、同 1519-1535 の `erase_chars` には `input_needs_wrap` の判定が**一切無く**、wrap 中でも最終列を消す。xterm の `CASE_ECH` も `do_wrap` を見ない。**訂正（2026-09-11）: kitty と iTerm2 も完全 no-op である。** ただし機構が違う — 両者はカーソルを `x == width` に停める方式で**ブール型のラッチを持たず**、no-op は範囲演算の帰結にすぎない（kitty は `num = MIN(columns - x, count)` が 0、iTerm2 の EL 0 は `from.x > to.x` で早期 return）。明示的なガードは iTerm2 の ECH（`cursorX >= width` で return）のみなので、「3 実装が意図的に同意している」とは言えない。なお両者は DECAWM に関係なくカーソルを停め `CSI ?7l` でも解除しないため、autowrap off で EL/ECH が永久に no-op になる危険を実際に抱えている。orzma は DECAWM 実装時にこの読み手 2 つを `auto_wrap` で門番したので、この危険は無い。**カーソル停止方式との射程合わせ（2026-09-11）**: no-op の判定は `Screen::cursor_parked_past_the_row` に集約し、ラッチ武装・`auto_wrap` 設定・**カーソルが最終列に居ること**の 3 つを要求する。3 つ目が要るのは、tmux / kitty / iTerm2 はカーソル位置そのもので判定するため no-op が行中に届かないのに対し、ブール型ラッチは `tab_to`（CBT）が右端から持ち出せてしまうため。`xterm-256color` を名乗ること、alacritty と xterm が逆であること、`docs/todo/nvim-tree-stale-cells-ech.md` §6.1 で実測検証した版にこのガードが無かったこと — これらを**承知した上で tmux 側を選択した**。実 nvim のキャプチャでは ECH は全て行中発行でこの境界を踏まないため、今回のバグ修正の妥当性には影響しない。xterm を実機で実測できた時点で再訪する価値はある |
 | **1049 の pen 引き継ぎ** | `interpreter.rs:693` に「代替画面の古い pen を使う」と明記。xterm は pen を共有するので、入場時のクリアが違う背景色になり得る。BCE の正しさにも波及。**着手時の注意（2026-09-12）**: pen を画面間で共有させると `Screen::soft_reset` の pen リセットは自動的にデバイス全体へ効くようになるので、`interpreter/tests/soft_reset.rs` の `a_soft_reset_on_the_alternate_screen_leaves_the_primary_pen_alone` は**残すのではなく反転させる**こと（今の per-screen モデルでは正しいテストで、赤くなったらコードではなくテストを直す） |
 | **DECSC/DECRC の保存範囲**（決着済み） | **決着（2026-09-11）: DECAWM は保存しない。LCF（`pending_wrap`）は保存する。** VT420 2nd ed. p.270 / VT520 p.5-120 の「Wrap flag (autowrap or no autowrap)」は LCF を指す。DEC STD-070 p.D-14 が「LCF は Save Cursor で保存し Restore Cursor で復元すべき」と明記し、xterm `cursor.c` の `DECSC_FLAGS (ATTRIBUTES\|ORIGIN\|PROTECTED)` は `WRAPAROUND` を含まない（同ファイルのコメントが VT420/VT520 の表記を DECAWM と読む解釈を逐語で却下している）。12 実装中モードを保存するのは kitty と iTerm2 の 2 つだけで、実機 VT100/220/420/510 も復元しない |
-| **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:770` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意 |
+| **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:770` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意。**訂正（2026-09-13）**: `u8=\E[?1;2c` は ncurses 6.0 の entry。6.6 は `u8=\E[?%[;0123456789]c` で `CSI ?6c` も一致するので、§0 で基準に取った版では `u8` との食い違いは無い（VT102 を名乗る点の注意は残る）。**6.6 の `rv` とは食い違ったまま** — §0 の版差ノートの観察を参照 |
 | **`CSI 3 J`** | `EraseScreenMode::from_ed`（`screen.rs:108`）で明示的に拒否。entry は `E3` を広告していないので Tier 1 ではないが、PDF p.13 には定義がある |
 | **SGR 下線拡張** | `sgr.rs:31` が下線種別を潰し、下線色は読み捨て。vim の `58;2` 発行はリポジトリ内に既知（`sgr.rs:675`） |
 | **タブストップの所有** | `tabs.rs:63` が「画面ごと」と明記。xterm は共有テーブル。PDF は所有権を規定していないので、意図的な差異として記録済み |
@@ -238,7 +267,7 @@ STD-070 が LCF をリセットすると規定する操作:
    パレットが実際に動いたときだけ `DamageSpan::Full` を stage する。intermediate 付き CSI が
    match に届くようになったので、DECSCUSR と DECRQM は腕 1 本で入る。
    ~~残るのは **`CSI ?12`（カーソル点滅）**~~ も完了（2026-09-12）。残るのは **1049 の pen 修正**。
-5. **入力側の契約修正**（`kbs` の方針決定 → ファンクションキー → 修飾キー）。~~Shift-Tab~~ と Insert は **完了（2026-09-11）**。~~Meta~~ は §1-B の `CSI ?1034 h/l` 行のとおり意図的に無視と決着（2026-09-11）。
+5. **入力側の契約修正**（~~`kbs` の方針決定~~ → ファンクションキー → 修飾キー）。~~Shift-Tab~~ と Insert は **完了（2026-09-11）**。~~Meta~~ は §1-B の `CSI ?1034 h/l` 行のとおり意図的に無視と決着（2026-09-11）。~~`kbs`~~ は §0 の版差ノートにより **要判断が解消（2026-09-13、DEL のまま）**。
 6. ~~**OSC 4**~~ **完了（2026-09-12、OSC 104 と `?` 問い合わせを含む）** → 残るのは **OSC 10/11/12** とその問い合わせ・リセット（OSC 110/111/112）。OSC 4 で入れた `PaletteRequest` を広げて扱う。RIS での復帰は `Palette::reset`（全色を既定値へ戻す）が既に賄うので、ハンドラ側は `Palette` の `foreground` / `background` を書くのと、full repaint の staging（`frame.rs` の `palette` フィールドの TODO）を足すだけでよい。なお `OSC 104` は xterm-ctlseqs.pdf のとおりインデックス表だけを戻す（`Palette::reset_all_indexed`）ので、そちらに前景/背景を巻き込まないこと。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
 8. **OSC 8 / OSC 52**、**DECLRMM/DECSLRM**、**1015**。
@@ -298,9 +327,13 @@ features」の `tst_screen`（`main.c:620-634`）で、80 桁に**同一文字**
 `infocmp xterm-256color` の boolean 8 個（`am` `bce` `ccc` `km` `mir` `msgr` `npc` `xenl`）と
 文字列 capability 82 個を 1 つずつ制御機能に対応付け、orzma の `csi_dispatch` /
 `esc_dispatch` / `set_private_modes` / `osc_dispatch` と突き合わせた。
+**この洗い出しは macOS 同梱の ncurses 6.0 の entry で行っている**（基準版は §0 のとおり
+2026-09-13 に 6.6 へ改めた。取りこぼした capability の一覧はそのノートにある）。
 Codex CLI にも独立して同じ洗い出しをさせ、両者の差分を個別に検証して統合している。
 統合時に判明した訂正:
 
-- `rep` は**このエントリには無い** → REP は Tier 1 ではなく Tier 2。
+- `rep` は**このエントリには無い** → REP は Tier 1 ではなく Tier 2。**訂正（2026-09-13）**:
+  これは macOS 同梱の ncurses 6.0 基準。6.6 の entry は `rep` を広告するので、§0 で
+  基準に取った版では REP は Tier 1。
 - `kbs=^H` は実在（DEL 送信は entry と不一致）。`mc5i` も広告されている。
 - `acsc`（罫線）は `DecSpecialGraphics` として**実装済み**（`character_sets.rs:52`）。ギャップではない。
