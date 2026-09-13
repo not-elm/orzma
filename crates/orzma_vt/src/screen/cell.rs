@@ -49,7 +49,6 @@ impl CellWidth {
 
 /// The zero-width marks combined onto a cell's base glyph.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub struct CellExtra {
     marks: [char; CellExtra::MAX_COMBINING],
     len: u8,
@@ -69,12 +68,17 @@ impl CellExtra {
     // limit: a stream that repeats zero-width marks at one cell would
     // otherwise grow that cell without bound.
     /// How many zero-width marks one cell retains.
-    #[allow(dead_code)]
     pub const MAX_COMBINING: usize = 9;
 
     /// Appends `mark`, reporting whether it was kept; a push past
     /// [`CellExtra::MAX_COMBINING`] is refused and changes nothing.
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the printer reaches the marks when zero-width dispatch lands"
+        )
+    )]
     pub fn push(&mut self, mark: char) -> bool {
         let len = usize::from(self.len);
         if len >= Self::MAX_COMBINING {
@@ -86,7 +90,13 @@ impl CellExtra {
     }
 
     /// The marks this cell carries, in the order they arrived.
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the printer reaches the marks when zero-width dispatch lands"
+        )
+    )]
     pub fn marks(&self) -> &[char] {
         &self.marks[..usize::from(self.len)]
     }
