@@ -150,3 +150,29 @@ fn a_hyperlink_survives_an_automatic_wrap() {
     assert!(first[3].hyperlink_id.is_some());
     assert_eq!(second[0].hyperlink_id, first[3].hyperlink_id);
 }
+
+/// Asserts that a hyperlink left open on the alternate screen does not
+/// reach the next program to take that screen.
+///
+/// Case: a full-screen tool prints a clickable path and is killed before
+/// it closes the link, and the user then opens an editor.
+#[test]
+fn a_hyperlink_left_open_on_the_alternate_screen_does_not_outlive_its_program() {
+    let device = interpret(b"\x1b[?1049h\x1b]8;;https://a.example\x1b\\x\x1b[?1049l\x1b[?1049hZ");
+    let row = device.active_screen().viewport_row(ViewportLine(0));
+    assert_eq!(row[1].c, 'Z');
+    assert_eq!(row[1].hyperlink_id, None);
+}
+
+/// Asserts that the bare alternate-screen flip closes a link the same way
+/// the cursor-saving one does.
+///
+/// Case: a tool that uses the older alternate-screen sequence is killed
+/// mid-link, and the next one takes the screen.
+#[test]
+fn the_bare_alternate_screen_flip_also_closes_a_leaked_hyperlink() {
+    let device = interpret(b"\x1b[?1047h\x1b]8;;https://a.example\x1b\\x\x1b[?1047l\x1b[?1047hZ");
+    let row = device.active_screen().viewport_row(ViewportLine(0));
+    assert_eq!(row[1].c, 'Z');
+    assert_eq!(row[1].hyperlink_id, None);
+}

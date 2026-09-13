@@ -428,10 +428,22 @@ impl DeviceState {
     /// alternate screen is shown, not destroyed. This operation stages no
     /// damage of its own: the caller must stage `DamageSpan::Full` for
     /// the flip.
+    ///
+    /// A flip onto the alternate screen closes whatever hyperlink its pen
+    /// still held, so a link one program left open cannot reach the next
+    /// one. The rest of that pen, its colours included, carries over.
     pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
         self.modes.active_screen = to;
         match to {
-            ScreenKind::Alternate => Vec::new(),
+            ScreenKind::Alternate => {
+                // NOTE: The alternate screen keeps its pen between uses,
+                // which is deliberate for colour but not for a link: a
+                // program killed before it closed one would make every
+                // cell the next full-screen program prints open that
+                // program's target on a click.
+                self.screens.alternate.pen_mut().hyperlink_id = None;
+                Vec::new()
+            }
             ScreenKind::Primary => {
                 self.screens.alternate.clear_selection();
                 self.screens.alternate.take_placements()

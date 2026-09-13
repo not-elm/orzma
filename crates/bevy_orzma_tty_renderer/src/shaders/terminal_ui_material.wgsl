@@ -293,11 +293,12 @@ fn paint_text_decorations(
     cell_hyperlink_id: u32,
 ) -> vec4<f32> {
     var color = base;
+    let is_link = cell_hyperlink_id != 0u;
     let hovered_link =
-        cell_hyperlink_id != 0u &&
+        is_link &&
         params.hover_active != 0u &&
         cell_hyperlink_id == params.hover_hyperlink_id;
-    if hovered_link || (style & STYLE_UNDERLINE) != 0u {
+    if is_link || (style & STYLE_UNDERLINE) != 0u {
         let underline_color = select(fg, ACCENT_LINK_COLOR, hovered_link);
         // underline_position_phys is negative (below baseline). The actual
         // y in the cell is baseline + |underline_position|.

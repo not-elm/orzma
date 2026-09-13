@@ -242,6 +242,20 @@ STD-070 が LCF をリセットすると規定する操作:
 6. ~~**OSC 4**~~ **完了（2026-09-12、OSC 104 と `?` 問い合わせを含む）** → 残るのは **OSC 10/11/12** とその問い合わせ・リセット（OSC 110/111/112）。OSC 4 で入れた `PaletteRequest` を広げて扱う。RIS での復帰は `Palette::reset`（全色を既定値へ戻す）が既に賄うので、ハンドラ側は `Palette` の `foreground` / `background` を書くのと、full repaint の staging（`frame.rs` の `palette` フィールドの TODO）を足すだけでよい。なお `OSC 104` は xterm-ctlseqs.pdf のとおりインデックス表だけを戻す（`Palette::reset_all_indexed`）ので、そちらに前景/背景を巻き込まないこと。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
 8. **OSC 52**、**DECLRMM/DECSLRM**、**1015**。
+8-b. **ハイパーリンクの回収（OSC 8 実装の積み残し、2026-09-14 に将来対応と決定）**。
+   `HyperlinkInterner` は `id_to_uri` と `source_to_id` に積むだけで、**解放経路が一切無い**。
+   RIS でも DECSTR でも回収されず（`DeviceState::reset` の `// NOTE:` のとおり、id を再利用すると
+   レンダラ側の保持テーブルが古い URI を返すため意図的に残している）、レンダラの
+   `TerminalGrid::hyperlinks` も同様に伸びる一方。**回収はペインを殺す以外に無い**。
+   増加はセルではなく**受信した `OSC 8` の数**に比例する — `open_hyperlink` は無条件に
+   採番するので、1 文字も印字しないリンクでもエントリが増える。`\e]8;;http://a\e\\` を
+   並べたファイルを `cat` するだけでワイヤバイトの数倍の RSS が永続的に積み上がり、
+   レビューではこれを OOM 到達可能と評価した。`ls --hyperlink=auto` は `id=` を出さないので
+   実行のたびに全ファイル名が新しい id を取る。
+   設計時に必要なもの: いつ解放するか、スクロールバックに残るセルがまだ参照している id との
+   整合、レンダラ側テーブルへの削除通知（`Frame` にフィールドが要る）、そして id を
+   再利用しないまま回収する方法。入力側の上限（現状は仕様どおり長さ検証なし）を併せて
+   裁定するかも同時に決めること。
 9. **コロン付きサブパラメータの扱い（リポジトリ全体）**。xterm は SGR と modifyOtherKeys 以外の
    すべての CSI でサブパラメータを拒否する（`charproc.c` の `parms.has_subparams` 分岐）が、orzma は
    `CsiParams::first_value` がグループ内の最初の整数を拾うので `CSI 1:2 H` が CUP として通る。
