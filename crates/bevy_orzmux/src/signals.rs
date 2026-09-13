@@ -43,12 +43,20 @@ pub struct TtyModeChangedSignal {
 }
 
 /// Fired when the application copies data to the system clipboard via
-/// OSC 52. An empty `content` clears the clipboard.
+/// OSC 52. An empty `content` leaves the clipboard holding the empty
+/// string.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct TtyClipboardStoreSignal {
     #[event_target]
     pub terminal: Entity,
     pub content: String,
+}
+
+/// Fired when the application clears the system clipboard via OSC 52.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct TtyClipboardClearSignal {
+    #[event_target]
+    pub terminal: Entity,
 }
 
 /// Fired exactly once when a pane closes. `code` is the shell's exit
@@ -138,6 +146,7 @@ pub(crate) fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signa
         VtSignal::Clipboard { content } => {
             commands.trigger(TtyClipboardStoreSignal { terminal, content })
         }
+        VtSignal::ClearClipboard => commands.trigger(TtyClipboardClearSignal { terminal }),
         VtSignal::CurrentDir(path_buf) => commands.trigger(TtyCwdChangedSignal {
             terminal,
             path: path_buf,

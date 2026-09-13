@@ -1,17 +1,18 @@
-//! Forwards the clipboard write an application makes with OSC 52 to the
-//! clipboard copy seam.
+//! Forwards what an application does to the clipboard with OSC 52 to the
+//! clipboard write seam.
 
-use crate::action::clipboard::CopyAction;
+use crate::action::clipboard::copy::{ClearClipboardAction, CopyAction};
 use bevy::prelude::*;
-use bevy_orzmux::prelude::TtyClipboardStoreSignal;
+use bevy_orzmux::prelude::{TtyClipboardClearSignal, TtyClipboardStoreSignal};
 
-/// Adds the path from an application's OSC 52 write to the clipboard
-/// copy seam.
+/// Adds the path from an application's OSC 52 writes and clears to the
+/// clipboard write seam.
 pub(super) struct ClipboardStoreActionPlugin;
 
 impl Plugin for ClipboardStoreActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_clipboard_store);
+        app.add_observer(on_clipboard_store)
+            .add_observer(on_clipboard_clear);
     }
 }
 
@@ -19,6 +20,10 @@ fn on_clipboard_store(ev: On<TtyClipboardStoreSignal>, mut commands: Commands) {
     commands.trigger(CopyAction {
         text: ev.content.clone(),
     });
+}
+
+fn on_clipboard_clear(_ev: On<TtyClipboardClearSignal>, mut commands: Commands) {
+    commands.trigger(ClearClipboardAction);
 }
 
 #[cfg(test)]
@@ -49,5 +54,29 @@ mod tests {
         });
         app.update();
         assert_eq!(app.world().resource::<Copied>().0, vec!["hi".to_owned()]);
+    }
+
+    /// Asserts that an application's OSC 52 clear reaches the clipboard
+    /// write seam.
+    ///
+    /// Case: a program sends an OSC 52 whose payload is not base64.
+    #[test]
+    fn an_application_clipboard_clear_reaches_the_write_seam() {
+        #[derive(Resource, Default)]
+        struct Cleared(usize);
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, ClipboardStoreActionPlugin))
+            .init_resource::<Cleared>()
+            .add_observer(
+                |_ev: On<ClearClipboardAction>, mut cleared: ResMut<Cleared>| {
+                    cleared.0 += 1;
+                },
+            );
+        let terminal = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .trigger(TtyClipboardClearSignal { terminal });
+        app.update();
+        assert_eq!(app.world().resource::<Cleared>().0, 1);
     }
 }

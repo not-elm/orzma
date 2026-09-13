@@ -3,17 +3,16 @@
 //! The window title (OSC 0 and OSC 2), the working directory (OSC 7),
 //! the indexed palette (OSC 4 and OSC 104), the dynamic foreground and
 //! background (OSC 10, OSC 11, OSC 110, and OSC 111), and the clipboard
-//! write (OSC 52) are implemented.
+//! (OSC 52) are implemented.
 //!
 //! TODO: implement the dynamic cursor color (OSC 12 and OSC 112) and
 //! hyperlinks (OSC 8).
 
+pub(crate) mod clipboard;
 pub(crate) mod dynamic_color;
 pub(crate) mod palette;
 
 use crate::device::color::Rgb;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use percent_encoding::percent_decode;
 use std::path::PathBuf;
 
@@ -53,35 +52,6 @@ pub(crate) fn window_title(params: &[&[u8]]) -> Option<String> {
     Some(sanitize(&String::from_utf8_lossy(&text.join(&b';'))))
 }
 
-/// The text an `OSC 52` writes to the system clipboard, or `None` for
-/// every other operating system command and for one that writes
-/// nothing. An empty string clears the clipboard.
-///
-/// `Pc` names the selections to write, and this terminal has one system
-/// clipboard to write them to: it writes for `c`, for `s`, and for an
-/// empty `Pc`, which stands for `s0` (xterm-ctlseqs.pdf p.40-41, "If
-/// the parameter is empty, xterm uses s 0"). A `Pc` naming only `p`, `q`,
-/// or cut buffers writes nothing, and one carrying a byte outside
-/// `cpqs01234567` is refused whole rather than read for the bytes that
-/// do belong to the set.
-///
-/// `Pd` is base64 (RFC 4648) and must carry canonical padding. A `Pd`
-/// that is not base64, or that decodes to bytes which are not UTF-8,
-/// leaves the clipboard untouched rather than clearing it. A `Pd` of
-/// `?` queries the clipboard, which this terminal does not answer.
-///
-/// TODO: answer the `?` query, which needs a clipboard read to reach
-/// the reply path.
-pub(crate) fn clipboard_text(params: &[&[u8]]) -> Option<String> {
-    let [b"52", selections, data] = params else {
-        return None;
-    };
-    if !writes_clipboard(selections) || *data == b"?" {
-        return None;
-    }
-    String::from_utf8(BASE64.decode(data).ok()?).ok()
-}
-
 /// How an operating system command was closed, which a reply to it
 /// echoes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,15 +59,27 @@ pub(crate) enum OscTerminator {
     /// BEL (`0x07`).
     Bel,
     /// The string terminator, whether it arrived as `ESC \`, as `0x9C`,
-    /// or as any other byte that ends the command.
+    /// or as any other byte that ends the command without cancelling it.
     St,
 }
 
 impl OscTerminator {
     /// The terminator the byte that ended an operating system command
-    /// stands for.
-    pub const fn from_byte(byte: u8) -> Self {
-        if byte == 0x07 { Self::Bel } else { Self::St }
+    /// stands for, or `None` when that byte is CAN or SUB, which cancel
+    /// the command.
+    ///
+    /// For CAN, "the data preceding it in the data stream is in error. As
+    /// a result, this data shall be ignored" (ECMA-48 § 8.3.6), and CAN
+    /// and SUB each "Immediately cancels an escape sequence, control
+    /// sequence, or device control string in progress" (vt510.pdf p.63).
+    /// An ESC that interrupts a command reads as the string terminator,
+    /// the same as the ESC of `ESC \`.
+    pub const fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0x07 => Some(Self::Bel),
+            0x18 | 0x1a => None,
+            _ => Some(Self::St),
+        }
     }
 
     /// The text a reply closes with. The string terminator is always
@@ -178,23 +160,6 @@ fn is_disallowed(c: char) -> bool {
                 | '\u{FFF9}'..='\u{FFFB}'
                 | '\u{E0000}'..='\u{E007F}'
         )
-}
-
-/// The selection characters an `OSC 52` may name: the clipboard, the
-/// primary and secondary selections, the configurable select target,
-/// and cut buffers 0 through 7 (xterm-ctlseqs.pdf p.40).
-const SELECTIONS: &[u8] = b"cpqs01234567";
-
-/// Whether an `OSC 52` naming `selections` writes the one system
-/// clipboard this terminal has.
-fn writes_clipboard(selections: &[u8]) -> bool {
-    if selections.is_empty() {
-        return true;
-    }
-    selections.iter().all(|target| SELECTIONS.contains(target))
-        && selections
-            .iter()
-            .any(|target| matches!(target, b'c' | b's'))
 }
 
 #[cfg(test)]
@@ -422,155 +387,35 @@ mod tests {
         assert!(!title.ends_with('…'));
     }
 
-    /// Asserts that `s0`, xterm's empty-parameter default spelled out,
-    /// writes the system clipboard even though it also names a cut
-    /// buffer.
-    ///
-    /// Case: a program spells out xterm's default target instead of
-    /// leaving the selection list empty.
-    #[test]
-    fn the_select_target_writes_the_clipboard() {
-        assert_eq!(
-            clipboard_text(&[b"52", b"s0", b"aGk="]),
-            Some("hi".to_owned())
-        );
-    }
-
-    /// Asserts that an omitted selection list stands for `s0` and writes
-    /// the system clipboard.
-    ///
-    /// Case: a shell helper script leaves the selection field empty and
-    /// relies on the terminal's default target.
-    #[test]
-    fn an_omitted_selection_list_writes_the_clipboard() {
-        assert_eq!(
-            clipboard_text(&[b"52", b"", b"aGk="]),
-            Some("hi".to_owned())
-        );
-    }
-
-    /// Asserts that a selection list naming only the primary selection
-    /// writes nothing.
-    ///
-    /// Case: a user yanks into Neovim's `*` register on macOS, where the
-    /// host has no primary selection to write.
-    #[test]
-    fn the_primary_selection_target_writes_nothing() {
-        assert!(clipboard_text(&[b"52", b"p", b"aGk="]).is_none());
-    }
-
-    /// Asserts that selection lists naming only the secondary selection
-    /// or a cut buffer write nothing.
-    ///
-    /// Case: a program written for an X11 host stores its yank in a cut
-    /// buffer, which this terminal has no counterpart for.
-    #[test]
-    fn the_secondary_and_cut_buffer_targets_write_nothing() {
-        assert!(clipboard_text(&[b"52", b"q", b"aGk="]).is_none());
-        assert!(clipboard_text(&[b"52", b"0", b"aGk="]).is_none());
-    }
-
-    /// Asserts that a selection list writes the system clipboard when the
-    /// clipboard appears anywhere in it, not only at its head.
-    ///
-    /// Case: a copy helper asks for the primary selection and the
-    /// clipboard at once by sending both characters.
-    #[test]
-    fn a_selection_list_containing_the_clipboard_writes_it() {
-        assert_eq!(
-            clipboard_text(&[b"52", b"pc", b"aGk="]),
-            Some("hi".to_owned())
-        );
-    }
-
-    /// Asserts that a selection list carrying a character outside the
-    /// recognized set is refused whole, rather than read for the
-    /// characters that do belong to it.
-    ///
-    /// Case: a program with a formatting bug emits a stray character ahead
-    /// of the clipboard target.
-    #[test]
-    fn a_selection_list_outside_the_recognized_set_writes_nothing() {
-        assert!(clipboard_text(&[b"52", b"xc", b"aGk="]).is_none());
-    }
-
-    /// Asserts that a payload which is not base64 leaves the clipboard
-    /// untouched rather than clearing it.
-    ///
-    /// Case: a user cats a binary file whose bytes happen to open an
-    /// operating system command, while the clipboard holds something the
-    /// user still wants.
-    #[test]
-    fn a_payload_that_is_not_base64_leaves_the_clipboard_untouched() {
-        assert!(clipboard_text(&[b"52", b"c", b"not base64!"]).is_none());
-    }
-
-    /// Asserts that a payload missing its canonical padding writes
-    /// nothing.
-    ///
-    /// Case: a hand-written shell helper strips the trailing `=` from the
-    /// text it encodes.
-    #[test]
-    fn an_unpadded_payload_writes_nothing() {
-        assert!(clipboard_text(&[b"52", b"c", b"aGk"]).is_none());
-    }
-
-    /// Asserts that an empty payload writes the empty string, which
-    /// clears the clipboard.
-    ///
-    /// Case: a program drops the selection it published earlier once the
-    /// user closes the buffer it came from.
-    #[test]
-    fn an_empty_payload_clears_the_clipboard() {
-        assert_eq!(clipboard_text(&[b"52", b"c", b""]), Some(String::new()));
-    }
-
-    /// Asserts that a command carrying no payload field at all writes
-    /// nothing.
-    ///
-    /// Case: a script builds the sequence by concatenation and the
-    /// variable holding the payload separator is unset.
-    #[test]
-    fn a_command_without_a_payload_writes_nothing() {
-        assert!(clipboard_text(&[b"52", b"c"]).is_none());
-    }
-
-    /// Asserts that a clipboard query is not treated as text to store.
-    ///
-    /// Case: a program checks whether it can read the clipboard back
-    /// before deciding how to implement its paste command.
-    #[test]
-    fn a_clipboard_query_writes_nothing() {
-        assert!(clipboard_text(&[b"52", b"c", b"?"]).is_none());
-    }
-
-    /// Asserts that a payload decoding to bytes which are not UTF-8
-    /// writes nothing.
-    ///
-    /// Case: a program yanks a region of a file it opened as binary, and
-    /// encodes the raw bytes.
-    #[test]
-    fn a_payload_that_is_not_utf8_writes_nothing() {
-        assert!(clipboard_text(&[b"52", b"c", b"//4="]).is_none());
-    }
-
     /// Asserts that a command closed by BEL is answered with BEL.
     ///
     /// Case: a shell script closes its query with BEL, as most do.
     #[test]
     fn a_bel_closed_command_is_answered_with_bel() {
-        assert_eq!(OscTerminator::from_byte(0x07), OscTerminator::Bel);
+        assert_eq!(OscTerminator::from_byte(0x07), Some(OscTerminator::Bel));
     }
 
     /// Asserts that every other byte that closes a command is answered
     /// with the string terminator.
     ///
-    /// Case: terminfo closes its commands with `ESC \`, an eight-bit
-    /// program with a raw `0x9C`, and a cancelled command ends on CAN.
+    /// Case: terminfo closes its commands with `ESC \`, and an eight-bit
+    /// program closes them with a raw `0x9C`.
     #[test]
     fn every_other_closing_byte_is_answered_with_st() {
-        for byte in [0x1b, 0x9c, 0x18] {
-            assert_eq!(OscTerminator::from_byte(byte), OscTerminator::St);
+        for byte in [0x1b, 0x9c] {
+            assert_eq!(OscTerminator::from_byte(byte), Some(OscTerminator::St));
+        }
+    }
+
+    /// Asserts that CAN and SUB cancel a command rather than closing it
+    /// with a terminator.
+    ///
+    /// Case: a program is interrupted partway through a command, and a CAN
+    /// or SUB arrives before its string terminator.
+    #[test]
+    fn can_and_sub_cancel_the_command() {
+        for byte in [0x18, 0x1a] {
+            assert_eq!(OscTerminator::from_byte(byte), None);
         }
     }
 }

@@ -259,11 +259,13 @@ pub enum VtSignal {
     ResetTitle,
     /// The application copied data to the system clipboard via OSC 52.
     ///
-    /// An empty string clears the clipboard.
+    /// An empty `content` leaves the clipboard holding the empty string.
     Clipboard {
         /// The clipboard content that was copied.
         content: String,
     },
+    /// The application cleared the system clipboard via OSC 52.
+    ClearClipboard,
     /// A new current working directory reported via OSC 7.
     CurrentDir(PathBuf),
     /// A webview the PTY mounted inline, which the VT accepted and

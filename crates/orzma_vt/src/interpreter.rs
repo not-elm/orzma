@@ -12,11 +12,12 @@ use crate::device::modes::{
 };
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
+use crate::interpreter::osc::clipboard::ClipboardRequest;
 use crate::interpreter::osc::dynamic_color::{
     DynamicColor, DynamicColorRequest, dynamic_color_reply,
 };
 use crate::interpreter::osc::palette::{PaletteRequest, palette_reply};
-use crate::interpreter::osc::{OscTerminator, clipboard_text, current_dir, window_title};
+use crate::interpreter::osc::{OscTerminator, current_dir, window_title};
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::screen::tabs::CharacterTabEdit;
@@ -487,7 +488,13 @@ impl VTActor for Executor<'_> {
         }
     }
 
+    /// Acts on one operating system command, unless CAN or SUB cancelled
+    /// it; a cancelled command is ignored as a whole. A command that ESC
+    /// interrupts is still acted on.
     fn osc_dispatch(&mut self, params: &[&[u8]]) {
+        let Some(terminator) = OscTerminator::from_byte(self.current_byte) else {
+            return;
+        };
         if let Some(title) = window_title(params) {
             self.device.set_title(Some(title.clone()));
             self.signal(VtSignal::Title(title));
@@ -495,11 +502,14 @@ impl VTActor for Executor<'_> {
         if let Some(path) = current_dir(params) {
             self.signal(VtSignal::CurrentDir(path));
         }
-        if let Some(content) = clipboard_text(params) {
-            self.signal(VtSignal::Clipboard { content });
+        if let Some(request) = ClipboardRequest::parse(params) {
+            self.signal(match request {
+                ClipboardRequest::Set(content) => VtSignal::Clipboard { content },
+                ClipboardRequest::Clear => VtSignal::ClearClipboard,
+            });
         }
-        self.apply_palette_requests(params);
-        self.apply_dynamic_color_requests(params);
+        self.apply_palette_requests(params, terminator);
+        self.apply_dynamic_color_requests(params, terminator);
     }
 
     fn apc_dispatch(&mut self, data: Vec<u8>) {
@@ -615,8 +625,7 @@ impl Executor<'_> {
     ///
     /// A command that changes a colour stages one full repaint,
     /// whatever the number of requests it carries.
-    fn apply_dynamic_color_requests(&mut self, params: &[&[u8]]) {
-        let terminator = OscTerminator::from_byte(self.current_byte);
+    fn apply_dynamic_color_requests(&mut self, params: &[&[u8]], terminator: OscTerminator) {
         let mut changed = false;
         for request in DynamicColorRequest::parse(params) {
             match request {
@@ -652,8 +661,7 @@ impl Executor<'_> {
     ///
     /// A command that changes a slot stages one full repaint, whatever
     /// the number of requests it carries.
-    fn apply_palette_requests(&mut self, params: &[&[u8]]) {
-        let terminator = OscTerminator::from_byte(self.current_byte);
+    fn apply_palette_requests(&mut self, params: &[&[u8]], terminator: OscTerminator) {
         let mut changed = false;
         for request in PaletteRequest::parse(params) {
             match request {
