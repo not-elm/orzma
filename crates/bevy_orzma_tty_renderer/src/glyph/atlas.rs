@@ -1,6 +1,7 @@
 use crate::glyph::font::{FontFace, GlyphKey, TerminalFonts};
 use ab_glyph::{Font, FontArc, GlyphId, OutlinedGlyph, PxScale, Rect, ScaleFont, point};
 use bevy::{platform::collections::HashMap, prelude::*};
+use std::iter::once;
 
 pub struct TerminalGlyphAtlasPlugin;
 
@@ -114,6 +115,44 @@ fn union(a: Rect, b: Rect) -> Rect {
     }
 }
 
+/// Outlines the key's marks at `scale`, each laid over `base`: a mark
+/// whose outline reaches left of its origin sits at the pen position
+/// after `base_id`'s advance, and any other mark is right-aligned to
+/// `base`'s ink. A mark the font lacks, that outlines to nothing, or
+/// whose box does not overlap `base`'s box horizontally is left out.
+// TODO: Place marks from GPOS anchor data. The advance and right-align
+// rules put a Latin mark right of center on a fullwidth base and drop a
+// mark that lands beside narrow CJK punctuation.
+fn outline_marks(
+    font: &FontArc,
+    scale: PxScale,
+    base: &OutlinedGlyph,
+    base_id: GlyphId,
+    key: GlyphKey,
+) -> Vec<OutlinedGlyph> {
+    let base_bounds = base.px_bounds();
+    let advance = font.as_scaled(scale).h_advance(base_id);
+    key.marks()
+        .filter_map(|mark| {
+            let id = font.glyph_id(mark);
+            if id.0 == 0 {
+                return None;
+            }
+            let at_origin = font.outline_glyph(id.with_scale(scale))?.px_bounds();
+            let x = if at_origin.min.x < 0.0 {
+                advance
+            } else {
+                base_bounds.max.x - at_origin.max.x
+            };
+            let placed = font.outline_glyph(id.with_scale_and_position(scale, point(x, 0.0)))?;
+            let placed_bounds = placed.px_bounds();
+            let overlaps =
+                placed_bounds.min.x < base_bounds.max.x && placed_bounds.max.x > base_bounds.min.x;
+            overlaps.then_some(placed)
+        })
+        .collect()
+}
+
 impl GlyphAtlas {
     /// Creates an empty atlas with the given pixel dimensions.
     pub fn new(width: u32, height: u32) -> Self {
@@ -136,9 +175,11 @@ impl GlyphAtlas {
     }
 
     /// Returns the rect for the keyed glyph, rasterizing and packing it on
-    /// first use. The key's marks are composed onto the glyph at the same
-    /// face and scale; a mark the face lacks, that outlines to nothing, or
-    /// that would not overlap the glyph is left out, and a glyph resolved
+    /// first use.
+    ///
+    /// The key's marks are composed onto the glyph at the same face and
+    /// scale; a mark the face lacks, that outlines to nothing, or that
+    /// would not overlap the glyph is left out, and a glyph resolved
     /// through the symbol face takes no marks.
     ///
     /// Returns `None` when the codepoint is not a valid Unicode scalar, no
@@ -172,7 +213,7 @@ impl GlyphAtlas {
         let marks = if matches!(tier, GlyphTier::Symbol) {
             Vec::new()
         } else {
-            Self::outline_marks(font, scale, &outlined, glyph_id, key)
+            outline_marks(font, scale, &outlined, glyph_id, key)
         };
         let bounds = marks
             .iter()
@@ -192,7 +233,7 @@ impl GlyphAtlas {
         }
         let u = self.shelves.shelf.x as u16;
         let v = self.shelves.y as u16;
-        for glyph in std::iter::once(&outlined).chain(&marks) {
+        for glyph in once(&outlined).chain(&marks) {
             let local = glyph.px_bounds();
             let dx = (local.min.x - bounds.min.x) as u32;
             let dy = (local.min.y - bounds.min.y) as u32;
@@ -211,42 +252,6 @@ impl GlyphAtlas {
         };
         self.glyphs.insert(key, rect);
         Some(rect)
-    }
-
-    /// Outlines the key's marks at `scale`, each laid over `base`: a mark
-    /// whose outline reaches left of its origin sits at the pen position
-    /// after `base_id`'s advance, and any other mark is right-aligned to
-    /// `base`'s ink. A mark the font lacks, that outlines to nothing, or
-    /// whose box does not overlap `base`'s box horizontally is left out.
-    fn outline_marks(
-        font: &FontArc,
-        scale: PxScale,
-        base: &OutlinedGlyph,
-        base_id: GlyphId,
-        key: GlyphKey,
-    ) -> Vec<OutlinedGlyph> {
-        let base_bounds = base.px_bounds();
-        let advance = font.as_scaled(scale).h_advance(base_id);
-        key.marks()
-            .filter_map(|mark| {
-                let id = font.glyph_id(mark);
-                if id.0 == 0 {
-                    return None;
-                }
-                let at_origin = font.outline_glyph(id.with_scale(scale))?.px_bounds();
-                let x = if at_origin.min.x < 0.0 {
-                    advance
-                } else {
-                    base_bounds.max.x - at_origin.max.x
-                };
-                let placed =
-                    font.outline_glyph(id.with_scale_and_position(scale, point(x, 0.0)))?;
-                let placed_bounds = placed.px_bounds();
-                let overlaps = placed_bounds.min.x < base_bounds.max.x
-                    && placed_bounds.max.x > base_bounds.min.x;
-                overlaps.then_some(placed)
-            })
-            .collect()
     }
 
     /// Blends `outlined`'s coverage into the current shelf position,
@@ -301,8 +306,8 @@ impl Shelves {
         }
     }
 
-    /// Whether a glyph `height` pixels tall would not fit below the
-    /// current shelf.
+    /// Whether the current shelf, grown to at least `height` pixels,
+    /// would not fit below the current row.
     #[inline]
     pub fn would_overflow(&self, height: u16) -> bool {
         self.height < self.y + self.shelf.height.max(u32::from(height))
@@ -414,7 +419,7 @@ mod tests {
             .expect("'あ' must rasterize via fallback");
 
         let fb = fonts.fallback_choice(&FontFace::Regular);
-        let primary_scale = ab_glyph::PxScale::from(fonts.px_scale_value(size));
+        let primary_scale = PxScale::from(fonts.px_scale_value(size));
         let gid = fb.glyph_id('あ');
         let primary_scaled_h = fb
             .outline_glyph(gid.with_scale(primary_scale))
@@ -611,7 +616,7 @@ mod tests {
     /// Asserts that a glyph taller than the space left below the current
     /// shelf restarts the atlas instead of being clipped.
     ///
-    /// Case: a tall composed glyph arrives when the atlas is nearly full.
+    /// Case: a tall bare glyph arrives when the atlas is nearly full.
     #[test]
     fn a_glyph_taller_than_the_remaining_space_restarts_the_atlas() {
         let fonts = TerminalFonts::default();
@@ -628,5 +633,65 @@ mod tests {
         assert!(u32::from(tall.v) + u32::from(tall.h) <= atlas.height());
         assert_eq!(atlas.glyphs.len(), 1);
         assert!(atlas.generation > generation);
+    }
+
+    /// Asserts that a glyph resolved through the symbol face takes no
+    /// marks and rasterizes pixel for pixel as the bare glyph does.
+    ///
+    /// Case: a TUI draws a checked checkbox followed by a combining
+    /// enclosing keycap.
+    #[test]
+    fn a_symbol_tier_glyph_takes_no_marks() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let base = GlyphKey::new(FontFace::Regular, 0x2611, 24);
+        let base_rect = atlas.get_or_insert(base, &fonts).expect("☑ rasterizes");
+        let marked_rect = atlas
+            .get_or_insert(base.with_marks(['\u{20E3}']), &fonts)
+            .expect("☑ with a keycap mark rasterizes");
+        assert_eq!((marked_rect.w, marked_rect.h), (base_rect.w, base_rect.h));
+        assert_eq!(
+            (marked_rect.offset_x, marked_rect.offset_y),
+            (base_rect.offset_x, base_rect.offset_y)
+        );
+        assert_eq!(
+            sprite_pixels(&atlas, marked_rect),
+            sprite_pixels(&atlas, base_rect)
+        );
+    }
+
+    /// Asserts that a mark whose placed box does not overlap the base is
+    /// dropped, leaving the bare glyph's sprite.
+    ///
+    /// Case: a program prints an ideographic comma followed by a
+    /// combining grave accent.
+    #[test]
+    fn a_mark_beside_the_base_is_dropped() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let base = GlyphKey::new(FontFace::Regular, u32::from('、'), 24);
+        let base_rect = atlas.get_or_insert(base, &fonts).expect("、 rasterizes");
+        let marked_rect = atlas
+            .get_or_insert(base.with_marks(['\u{0300}']), &fonts)
+            .expect("、 with a grave accent rasterizes");
+        assert_eq!((marked_rect.w, marked_rect.h), (base_rect.w, base_rect.h));
+        assert_eq!(
+            sprite_pixels(&atlas, marked_rect),
+            sprite_pixels(&atlas, base_rect)
+        );
+    }
+
+    /// Asserts that a sprite larger than the atlas is refused rather than
+    /// written clipped.
+    ///
+    /// Case: a glyph is requested at a size the configured atlas cannot
+    /// hold.
+    #[test]
+    fn a_sprite_larger_than_the_atlas_is_refused() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::new(4, 4);
+        let key = GlyphKey::new(FontFace::Regular, u32::from('A'), 24);
+        assert!(atlas.get_or_insert(key, &fonts).is_none());
+        assert!(atlas.glyphs.is_empty());
     }
 }
