@@ -110,6 +110,10 @@ impl Row<Cell> {
                 CellWidth::LeadingSpacer => {
                     if at + 1 != cols {
                         self.blank_in_place(at);
+                    } else {
+                        let filler = &mut self.0[at];
+                        filler.c = ' ';
+                        filler.extra = None;
                     }
                 }
                 CellWidth::Narrow => {}
@@ -123,6 +127,10 @@ impl Row<Cell> {
 
     /// Restores the single joint a column resize from `old_cols` can
     /// break.
+    ///
+    /// `old_cols` is the row's length before the resize that already
+    /// happened, and the row must have held an intact wide-pair
+    /// invariant at that length.
     pub fn repair_after_resize(&mut self, old_cols: u16) {
         if self.0.is_empty() {
             return;
@@ -141,8 +149,9 @@ impl Row<Cell> {
     }
 
     /// Whether every wide body in the row is followed by its
-    /// continuation, every continuation is preceded by its body, and
-    /// every filler sits in the last column.
+    /// continuation, every continuation is preceded by its body, every
+    /// filler sits in the last column, and every continuation or filler
+    /// holds a blank glyph with no combining marks.
     pub fn wide_pairs_intact(&self) -> bool {
         let cols = self.0.len();
         self.0
@@ -524,6 +533,25 @@ mod tests {
         row.resize(4, Cell::default());
         row.repair_after_resize(2);
         assert_eq!(row[GridColumn(1)].width, CellWidth::Narrow);
+        assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that a normalization blanks a filler in the last column
+    /// that carries a non-blank glyph.
+    ///
+    /// Case: a leading spacer left behind by a wide character that
+    /// wrapped at the old right edge is somehow stamped with a glyph
+    /// before normalization runs.
+    #[test]
+    fn normalization_blanks_a_last_column_filler_carrying_a_glyph() {
+        let filler = Cell {
+            c: 'X',
+            width: CellWidth::LeadingSpacer,
+            ..Cell::default()
+        };
+        let mut row = Row::from(vec![Cell::default(), filler]);
+        row.normalize_wide_pairs();
+        assert_eq!(row[GridColumn(1)].c, ' ');
         assert!(row.wide_pairs_intact());
     }
 }

@@ -777,7 +777,13 @@ impl Screen {
 
     /// Whether a glyph spanning `width` columns fits from the cursor's
     /// column through the row's end.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the printer reaches the fit test when width dispatch lands"))]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the printer reaches the fit test when width dispatch lands"
+        )
+    )]
     fn fits(&self, width: u16) -> bool {
         self.state.column.0 + width <= self.grid.size().cols
     }
