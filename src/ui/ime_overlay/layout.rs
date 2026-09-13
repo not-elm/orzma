@@ -183,14 +183,14 @@ fn compute_overlay_pos(
 /// 2 cells per glyph, matching the renderer's width logic.
 fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
     (
-        clamped_prefix_cells(&text[..begin]) as f32,
-        clamped_prefix_cells(&text[..end]) as f32,
+        prefix_cells(&text[..begin]) as f32,
+        prefix_cells(&text[..end]) as f32,
     )
 }
 
 /// Total cell width of `text`: the sum of [`glyph_columns`] over its
 /// `char`s.
-fn clamped_prefix_cells(text: &str) -> u32 {
+fn prefix_cells(text: &str) -> u32 {
     text.chars().map(glyph_columns).sum()
 }
 

@@ -1245,7 +1245,8 @@ mod tests {
             .nth(1)
             .expect("the shader defines cursor_covers");
         let body = helper.split("\n}\n").next().expect("the helper has a body");
-        assert_eq!(body.matches("STYLE_WIDE_RIGHT_HALF").count(), 2);
+        assert!(body.contains("col == params.cursor_pos.x + 1u"));
+        assert!(body.contains("col + 1u == params.cursor_pos.x"));
         let painter = src
             .split("fn paint_cursor(")
             .nth(1)

@@ -38,7 +38,7 @@ pub struct Run {
     pub style: Style,
     /// UTF-8 text.
     pub text: String,
-    /// The columns each `char` of `text` starts: `1` or `2` for a glyph,
+    /// The column span each `char` of `text` opens: `1` or `2` for a glyph,
     /// `0` for a mark combined onto the glyph before it.
     ///
     /// Empty when every `char` is a one-column glyph, in which case

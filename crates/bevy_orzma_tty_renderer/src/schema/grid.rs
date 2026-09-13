@@ -83,10 +83,10 @@ pub struct TerminalGrid {
 
 impl TerminalGrid {
     /// Resolves `(row, col)` to the hyperlink at that visible cell, if
-    /// any. `col` is a column coordinate, not a grapheme index — wide
-    /// cells (width=2) match both of their columns, and width-0
-    /// trailers are skipped without consuming a column. Returns
-    /// `None` for out-of-bounds or unlinked cells.
+    /// any. `col` is a column coordinate, not a cell index — a wide
+    /// cell (width 2) matches both of its columns, and a width-0 cell
+    /// matches no column. Returns `None` for out-of-bounds or unlinked
+    /// cells.
     //
     // NOTE: `self.cells[row]` is cell-indexed (one entry per glyph from
     //       `runs_to_cells`), so a column-to-cell walk is required —

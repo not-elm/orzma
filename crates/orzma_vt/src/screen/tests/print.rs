@@ -640,7 +640,7 @@ fn a_wide_glyph_over_two_half_pairs_blanks_both_neighbours() {
 /// columns before landing.
 ///
 /// Case: a line editor in insert mode receives a Japanese character in
-/// the middle of `abc`.
+/// the middle of `abcd`.
 #[test]
 fn an_insert_mode_wide_glyph_shifts_the_row_by_two() {
     let mut screen = screen();
@@ -785,8 +785,8 @@ fn a_combining_mark_at_the_row_start_is_kept_on_the_first_cell() {
 /// Asserts that a mark past the per-cell cap is dropped and reports no
 /// damage.
 ///
-/// Case: a stream repeats the same combining mark at one cell far past
-/// any typographic need.
+/// Case: a stream piles combining marks onto one cell far past any
+/// typographic need.
 #[test]
 fn a_combining_mark_past_the_cap_is_dropped_without_damage() {
     let mut screen = screen();
@@ -831,4 +831,32 @@ fn a_wide_glyph_on_a_one_column_screen_is_dropped() {
     assert_eq!(damage, None);
     assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
     assert_eq!(screen.state.column, GridColumn(0));
+}
+
+/// Asserts that a combining mark whose candidate cell is a wrap filler
+/// is dropped without damage.
+///
+/// Case: a Japanese character wrapped at the right edge, and the
+/// application then moves the cursor back onto that row's last column
+/// before an accent arrives.
+#[test]
+fn a_combining_mark_on_a_wrap_filler_is_dropped() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c', 'あ'] {
+        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+    }
+    assert_eq!(
+        screen.grid[ScreenLine(0)][3].width,
+        CellWidth::LeadingSpacer
+    );
+    screen.state.line = ScreenLine(0);
+    screen.state.column = GridColumn(3);
+    screen.state.pending_wrap = false;
+    let damage = screen.print('\u{0301}', InsertReplaceMode::Replace, AutoWrap::Enabled);
+    assert_eq!(damage, None);
+    assert!(screen.grid[ScreenLine(0)][3].extra.is_none());
+    assert_eq!(
+        screen.grid[ScreenLine(0)][3].width,
+        CellWidth::LeadingSpacer
+    );
 }

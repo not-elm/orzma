@@ -109,6 +109,7 @@ impl Row<Cell> {
     /// when it does not fit there, carrying `pen`'s attributes, and
     /// restores the wide-pair invariant to its left.
     pub fn place_filler(&mut self, pen: &Pen) {
+        debug_assert!(!self.0.is_empty(), "a filler needs a column");
         let last = self.0.len() - 1;
         self.0[last] = pen.stamp(' ', CellWidth::LeadingSpacer);
         if last > 0 {

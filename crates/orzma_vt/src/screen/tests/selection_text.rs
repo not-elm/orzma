@@ -1,7 +1,6 @@
 //! Tests for the text the active selection copies out.
 
 use super::*;
-use crate::screen::selection::{CellSide, SelectionKind};
 
 /// Asserts that copying a fullwidth glyph yields the glyph alone, with no
 /// blank for its continuation column.
