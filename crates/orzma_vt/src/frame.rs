@@ -48,9 +48,6 @@ pub struct Frame {
     pub placements: Option<Vec<AnchoredPlacement>>,
     /// The live palette symbolic colors resolve against: `None` when
     /// unchanged. A palette override owes a staged full repaint.
-    ///
-    /// TODO: stage it from the OSC 10 / 11 / 12 handler too, once that
-    /// handler lands.
     pub palette: Option<Palette>,
     /// Definitions for hyperlink ids referenced by `rows`, merged into
     /// the consumer's retained table.
