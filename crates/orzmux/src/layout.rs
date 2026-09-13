@@ -190,19 +190,12 @@ impl LayoutTree {
             panes: Vec::new(),
             separators: Vec::new(),
         };
-        let Some(root) = &self.root else {
+        let (Some(root), Some(rect)) = (&self.root, self.root_rect(window)) else {
             return solved;
         };
-        let min = root.min_size();
         solved.size = GridSize {
-            cols: window.cols.max(min.cols),
-            rows: window.rows.max(min.rows),
-        };
-        let rect = Rect {
-            x: 0,
-            y: 0,
-            cols: solved.size.cols,
-            rows: solved.size.rows,
+            cols: rect.cols,
+            rows: rect.rows,
         };
         root.solve_into(&mut solved, rect);
         solved
@@ -236,6 +229,19 @@ impl LayoutTree {
     /// `None` for a pane never activated.
     fn recency(&self, pane: PaneId) -> Option<usize> {
         self.history.iter().position(|p| *p == pane)
+    }
+
+    /// The rectangle the tree tiles for `window`: the window widened per
+    /// axis to the tree's minimum. `None` when the tree is empty.
+    fn root_rect(&self, window: GridSize) -> Option<Rect> {
+        let root = self.root.as_ref()?;
+        let min = root.min_size();
+        Some(Rect {
+            x: 0,
+            y: 0,
+            cols: window.cols.max(min.cols),
+            rows: window.rows.max(min.rows),
+        })
     }
 }
 
@@ -289,62 +295,10 @@ impl Node {
                 rows: rect.rows,
             }),
             Node::Split(s) => {
-                let min_first = s.first.min_size();
-                let min_second = s.second.min_size();
-                match s.orientation {
-                    SplitOrientation::Vertical => {
-                        let avail = rect.cols - 1;
-                        let first = share(avail, s.ratio, min_first.cols, min_second.cols);
-                        s.first.solve_into(
-                            out,
-                            Rect {
-                                cols: first,
-                                ..rect
-                            },
-                        );
-                        out.separators.push(Separator {
-                            split: s.id,
-                            orientation: SplitOrientation::Vertical,
-                            x: rect.x + first,
-                            y: rect.y,
-                            len: rect.rows,
-                        });
-                        s.second.solve_into(
-                            out,
-                            Rect {
-                                x: rect.x + first + 1,
-                                cols: avail - first,
-                                ..rect
-                            },
-                        );
-                    }
-                    SplitOrientation::Horizontal => {
-                        let avail = rect.rows - 1;
-                        let first = share(avail, s.ratio, min_first.rows, min_second.rows);
-                        s.first.solve_into(
-                            out,
-                            Rect {
-                                rows: first,
-                                ..rect
-                            },
-                        );
-                        out.separators.push(Separator {
-                            split: s.id,
-                            orientation: SplitOrientation::Horizontal,
-                            x: rect.x,
-                            y: rect.y + first,
-                            len: rect.cols,
-                        });
-                        s.second.solve_into(
-                            out,
-                            Rect {
-                                y: rect.y + first + 1,
-                                rows: avail - first,
-                                ..rect
-                            },
-                        );
-                    }
-                }
+                let (first_rect, separator, second_rect) = s.subdivide(rect);
+                s.first.solve_into(out, first_rect);
+                out.separators.push(separator);
+                s.second.solve_into(out, second_rect);
             }
         }
     }
@@ -406,6 +360,61 @@ impl Node {
                     (None, None) => None,
                 };
                 (node, removed_first || removed_second)
+            }
+        }
+    }
+}
+
+impl Split {
+    /// The child rectangles `rect` divides into, and the divider between
+    /// them.
+    fn subdivide(&self, rect: Rect) -> (Rect, Separator, Rect) {
+        let min_first = self.first.min_size();
+        let min_second = self.second.min_size();
+        match self.orientation {
+            SplitOrientation::Vertical => {
+                let avail = rect.cols - 1;
+                let first = share(avail, self.ratio, min_first.cols, min_second.cols);
+                (
+                    Rect {
+                        cols: first,
+                        ..rect
+                    },
+                    Separator {
+                        split: self.id,
+                        orientation: SplitOrientation::Vertical,
+                        x: rect.x + first,
+                        y: rect.y,
+                        len: rect.rows,
+                    },
+                    Rect {
+                        x: rect.x + first + 1,
+                        cols: avail - first,
+                        ..rect
+                    },
+                )
+            }
+            SplitOrientation::Horizontal => {
+                let avail = rect.rows - 1;
+                let first = share(avail, self.ratio, min_first.rows, min_second.rows);
+                (
+                    Rect {
+                        rows: first,
+                        ..rect
+                    },
+                    Separator {
+                        split: self.id,
+                        orientation: SplitOrientation::Horizontal,
+                        x: rect.x,
+                        y: rect.y + first,
+                        len: rect.cols,
+                    },
+                    Rect {
+                        y: rect.y + first + 1,
+                        rows: avail - first,
+                        ..rect
+                    },
+                )
             }
         }
     }
