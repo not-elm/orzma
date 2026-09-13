@@ -190,6 +190,14 @@ pub enum OrzmuxCommand {
         /// The placement instances to release.
         instances: Vec<InstanceId>,
     },
+    /// Move a split's divider.
+    ResizeSplit {
+        /// The split whose divider moves.
+        split: SplitId,
+        /// The whole-window cell boundary to put the divider on: `x` for
+        /// a vertical split, `y` for a horizontal one.
+        position: u16,
+    },
     /// Register a host-driven webview placement at a visible cell of a
     /// pane — the socket-op counterpart of the APC `mount` for PTYs that
     /// drop APC (ConPTY).

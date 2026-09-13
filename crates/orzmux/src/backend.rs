@@ -119,6 +119,14 @@ impl Backend {
                     self.publish_layout();
                 }
             }
+            OrzmuxCommand::ResizeSplit { split, position } => {
+                if self
+                    .geometry
+                    .is_some_and(|g| self.tree.resize_split(split, position, g.size))
+                {
+                    self.publish_layout();
+                }
+            }
             OrzmuxCommand::KeyInput { pane, key, mods } => {
                 if let Some(p) = self.pane_mut(pane, "KeyInput")
                     && let Err(err) = p.tty.send_key(&key, &mods)
@@ -550,7 +558,7 @@ const PUMP_ROUNDS: usize = 4;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prelude::{PaneDirection, SplitOrientation};
+    use crate::prelude::{PaneDirection, SplitId, SplitOrientation};
     use crossbeam_channel::{Receiver, Sender, unbounded};
     use orzma_tty::prelude::{
         KeyText, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, TerminalKey, TerminalModifiers,
@@ -1185,5 +1193,61 @@ mod tests {
             h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
             Some(std::path::Path::new("/tmp/project"))
         );
+    }
+
+    /// Asserts that a resize publishes one layout whose divider moved
+    /// and repaints only the panes whose size changed.
+    ///
+    /// Case: the user drags the divider of a two-pane window to the
+    /// right, widening the left pane.
+    #[test]
+    fn a_resize_publishes_a_moved_layout_and_repaints_the_resized_panes() {
+        let mut h = Harness::new();
+        let (_root, _pane) = h.open_root();
+        h.send(OrzmuxCommand::NewPane {
+            request: RequestId(2),
+            at: NewPaneAt::Split {
+                pane: PaneTarget::Active,
+                orientation: SplitOrientation::Vertical,
+            },
+            cwd: None,
+            env: vec![],
+        });
+        let mut opened = h.drain();
+        let Some(OrzmuxEvent::Layout { layout, .. }) = opened.pop_back() else {
+            panic!("expected a Layout after the split");
+        };
+        let split = layout.separators[0].split;
+
+        h.send(OrzmuxCommand::ResizeSplit {
+            split,
+            position: 60,
+        });
+        let mut events = h.drain();
+
+        let Some(OrzmuxEvent::Layout { layout, frames }) = events.pop_back() else {
+            panic!("expected a Layout event");
+        };
+        assert_eq!(layout.separators[0].x, 60);
+        assert_eq!(frames.len(), 2);
+    }
+
+    /// Asserts that a resize naming a split the tree does not have
+    /// publishes nothing at all.
+    ///
+    /// Case: the pane the pointer was resizing closed a frame earlier,
+    /// so the drag's next command names a divider that is gone.
+    #[test]
+    fn a_resize_of_an_unknown_split_publishes_nothing() {
+        let mut h = Harness::new();
+        let (_root, _pane) = h.open_root();
+        h.drain();
+
+        h.send(OrzmuxCommand::ResizeSplit {
+            split: SplitId(999),
+            position: 60,
+        });
+
+        assert!(h.drain().is_empty());
     }
 }
