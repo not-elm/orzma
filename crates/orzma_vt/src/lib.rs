@@ -32,10 +32,10 @@ pub mod prelude {
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::placement::{AnchoredPlacement, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};
     pub use crate::screen::cursor::{CURSOR_VISIBLE_BIT, Cursor};
-    pub use crate::screen::grid::GridSize;
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
     pub use crate::screen::grid::row::Row;
     pub use crate::screen::grid::run::{Run, Style};
+    pub use crate::screen::grid::{GridSize, MIN_COLUMNS};
     pub use crate::screen::selection::{
         CellSide, SelectionGeometry, SelectionKind, SelectionRange,
     };
@@ -152,7 +152,8 @@ pub trait Vt {
     /// the dimensions did not change. Only a real change stages (full)
     /// damage.
     ///
-    /// The caller must reject a `size` with a zero axis.
+    /// The caller must reject a `size` with a zero axis. A column count
+    /// below [`crate::prelude::MIN_COLUMNS`] is raised to it.
     ///
     /// # Invariants
     ///
@@ -336,12 +337,14 @@ const _: () = {
 impl OrzmaVt {
     /// Builds a terminal whose first frame carries every viewport row.
     ///
-    /// The caller must reject a `size` with a zero axis.
+    /// The caller must reject a `size` with a zero axis. A column count
+    /// below [`crate::prelude::MIN_COLUMNS`] is raised to it.
     ///
     /// # Invariants
     ///
     /// Both grid axes are nonzero.
     pub fn new(size: GridSize, max_history: usize) -> Self {
+        let size = size.normalized();
         Self {
             interpreter: Interpreter::default(),
             device: DeviceState::new(size, max_history),
@@ -380,7 +383,7 @@ impl Vt for OrzmaVt {
     }
 
     fn resize(&mut self, size: GridSize) -> Option<ResizeChanged> {
-        let damage = self.device.resize(size)?;
+        let damage = self.device.resize(size.normalized())?;
         self.tracker.stage(damage);
         Some(ResizeChanged {
             evicted: self.device.evict_lost_anchors(),
@@ -428,6 +431,7 @@ mod tests {
     use crate::device::color::{Palette, Rgb};
     use crate::device::modes::{AutoWrap, InsertReplaceMode};
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
+    use crate::screen::grid::MIN_COLUMNS;
     use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
     use crate::screen::selection::{SelectionGeometry, SelectionRange};
     use crate::screen::viewport::ViewportLine;
@@ -1409,5 +1413,37 @@ mod tests {
         assert_eq!(vt.selection_text(), None);
         vt.interpret(b"\x1b[?1049l");
         assert_eq!(vt.selection_text().as_deref(), Some("abcd"));
+    }
+
+    /// Asserts that a terminal built with one column is widened to the
+    /// two a fullwidth glyph needs.
+    ///
+    /// Case: the multiplexer splits a pane vertically until a leaf is
+    /// handed a single column.
+    #[test]
+    fn a_single_column_terminal_is_widened_to_two() {
+        let vt = OrzmaVt::new(GridSize { cols: 1, rows: 3 }, 10);
+        assert_eq!(vt.grid_size().cols, MIN_COLUMNS);
+    }
+
+    /// Asserts that a resize down to one column is widened the same way
+    /// as construction.
+    ///
+    /// Case: the user drags the window until a pane would be one column
+    /// wide.
+    #[test]
+    fn a_resize_to_one_column_is_widened_to_two() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10);
+        let _ = vt.resize(GridSize { cols: 1, rows: 3 });
+        assert_eq!(vt.grid_size().cols, MIN_COLUMNS);
+    }
+
+    /// Asserts that a size already wide enough passes through unchanged.
+    ///
+    /// Case: the user resizes the window to an ordinary width.
+    #[test]
+    fn a_wide_enough_size_is_left_alone() {
+        let size = GridSize { cols: 80, rows: 24 };
+        assert_eq!(size.normalized(), size);
     }
 }

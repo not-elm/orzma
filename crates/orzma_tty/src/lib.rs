@@ -123,12 +123,16 @@ impl<V: Vt> OrzmaTty<V> {
     ///
     /// The placements the initial sizing strands reach the next pump as a
     /// [`VtSignal::WebviewEvicted`] signal.
-    pub fn spawn(vt: V, options: SpawnOptions) -> OrzmaTtyResult<Self> {
-        let mut tty = Self::wired(vt, Pty::spawn(&options)?);
-        tty.resize_vt(GridSize {
+    pub fn spawn(vt: V, mut options: SpawnOptions) -> OrzmaTtyResult<Self> {
+        let size = GridSize {
             cols: options.cols,
             rows: options.rows,
-        });
+        }
+        .normalized();
+        options.cols = size.cols;
+        options.rows = size.rows;
+        let mut tty = Self::wired(vt, Pty::spawn(&options)?);
+        tty.resize_vt(size);
         Ok(tty)
     }
 
@@ -171,9 +175,13 @@ impl<V: Vt> OrzmaTty<V> {
         rows: u16,
         writer: Box<dyn Write + Send>,
     ) -> OrzmaTtyResult<Self> {
-        let pty = Pty::with_master(Box::new(RecordingMaster::at(cols, rows).0), writer);
+        let size = GridSize { cols, rows }.normalized();
+        let pty = Pty::with_master(
+            Box::new(RecordingMaster::at(size.cols, size.rows).0),
+            writer,
+        );
         let mut tty = Self::wired(vt, pty);
-        tty.resize_vt(GridSize { cols, rows });
+        tty.resize_vt(size);
         Ok(tty)
     }
 
@@ -189,14 +197,15 @@ impl<V: Vt> OrzmaTty<V> {
         chunk_rx: Receiver<Vec<u8>>,
         exit_rx: Receiver<Option<i32>>,
     ) -> OrzmaTtyResult<Self> {
+        let size = GridSize { cols, rows }.normalized();
         let pty = Pty::with_master_and_channels(
-            Box::new(RecordingMaster::at(cols, rows).0),
+            Box::new(RecordingMaster::at(size.cols, size.rows).0),
             writer,
             chunk_rx,
             exit_rx,
         );
         let mut tty = Self::wired(vt, pty);
-        tty.resize_vt(GridSize { cols, rows });
+        tty.resize_vt(size);
         Ok(tty)
     }
 
@@ -263,8 +272,9 @@ impl<V: Vt> OrzmaTty<V> {
         if cols == 0 || rows == 0 || Self::MAX_COLS < cols || Self::MAX_ROWS < rows {
             return Ok(());
         }
-        self.pty.resize(cols, rows, cell_px)?;
-        self.resize_vt(GridSize { cols, rows });
+        let size = GridSize { cols, rows }.normalized();
+        self.pty.resize(size.cols, size.rows, cell_px)?;
+        self.resize_vt(size);
         Ok(())
     }
 

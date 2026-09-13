@@ -13,6 +13,10 @@ use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
 
+/// The narrowest grid the terminal will build: a width-2 glyph needs two
+/// columns.
+pub const MIN_COLUMNS: u16 = 2;
+
 /// Grid dimensions in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridSize {
@@ -20,6 +24,16 @@ pub struct GridSize {
     pub cols: u16,
     /// Visible row count.
     pub rows: u16,
+}
+
+impl GridSize {
+    /// This size with the column count raised to [`MIN_COLUMNS`].
+    pub fn normalized(self) -> Self {
+        Self {
+            cols: self.cols.max(MIN_COLUMNS),
+            ..self
+        }
+    }
 }
 
 /// Stable identity of one grid row, minted when the row enters the ring.
