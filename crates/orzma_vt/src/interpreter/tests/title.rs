@@ -119,3 +119,15 @@ fn a_title_sequence_is_ignored_rather_than_fatal() {
         'a'
     );
 }
+
+/// Asserts that a title command cancelled by CAN sets no title, since
+/// a cancelled operating system command is ignored as a whole.
+///
+/// Case: a prompt's title update is cut off by a CAN before its string
+/// terminator arrives.
+#[test]
+fn a_title_command_cancelled_by_can_sets_no_title() {
+    let (device, output) = interpret_fully(b"\x1b]0;hi\x18");
+    assert!(output.signals.is_empty());
+    assert_eq!(device.title(), None);
+}
