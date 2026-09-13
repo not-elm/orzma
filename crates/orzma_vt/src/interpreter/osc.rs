@@ -1,10 +1,11 @@
 //! The operating system commands this terminal implements.
 //!
 //! The window title (OSC 0 and OSC 2), the working directory (OSC 7),
-//! and the indexed palette (OSC 4 and OSC 104) are implemented.
+//! the indexed palette (OSC 4 and OSC 104), and hyperlinks (OSC 8) are
+//! implemented.
 //!
-//! TODO: implement the dynamic colors (OSC 10 / 11 / 12), hyperlinks,
-//! and the clipboard.
+//! TODO: implement the dynamic colors (OSC 10 / 11 / 12) and the
+//! clipboard.
 
 use crate::device::color::Rgb;
 use crate::hyperlink::HyperlinkUri;
@@ -124,13 +125,6 @@ pub(crate) enum HyperlinkRequest {
     Close,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the OSC dispatcher reaches this once OSC 8 is wired"
-    )
-)]
 impl HyperlinkRequest {
     /// The request an `OSC 8` makes; `None` for every other operating
     /// system command and for an `OSC 8` carrying fewer than three

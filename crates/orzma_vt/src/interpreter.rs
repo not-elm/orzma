@@ -13,7 +13,7 @@ use crate::device::modes::{
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
 use crate::interpreter::osc::{
-    OscTerminator, PaletteRequest, current_dir, palette_reply, window_title,
+    HyperlinkRequest, OscTerminator, PaletteRequest, current_dir, palette_reply, window_title,
 };
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
@@ -486,7 +486,7 @@ impl VTActor for Executor<'_> {
     }
 
     // TODO: Implement the remaining OSC handlers — the dynamic colors
-    // (OSC 10 / 11 / 12), hyperlinks (OSC 8), and the clipboard (OSC 52).
+    // (OSC 10 / 11 / 12) and the clipboard (OSC 52).
     fn osc_dispatch(&mut self, params: &[&[u8]]) {
         if let Some(title) = window_title(params) {
             self.device.set_title(Some(title.clone()));
@@ -494,6 +494,11 @@ impl VTActor for Executor<'_> {
         }
         if let Some(path) = current_dir(params) {
             self.signal(VtSignal::CurrentDir(path));
+        }
+        match HyperlinkRequest::parse(params) {
+            Some(HyperlinkRequest::Open { id, uri }) => self.device.open_hyperlink(id, uri),
+            Some(HyperlinkRequest::Close) => self.device.close_hyperlink(),
+            None => {}
         }
         self.apply_palette_requests(params);
     }

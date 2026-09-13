@@ -310,13 +310,6 @@ impl DeviceState {
     /// # Control Functions
     ///
     /// - `OSC 8 ; params ; URI`
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the OSC dispatcher reaches these once OSC 8 is wired"
-        )
-    )]
     pub fn open_hyperlink(&mut self, id: Option<String>, uri: HyperlinkUri) {
         let opened = self.hyperlinks.open(id, uri);
         self.active_screen_mut().pen_mut().hyperlink_id = Some(opened);
@@ -328,13 +321,6 @@ impl DeviceState {
     /// # Control Functions
     ///
     /// - `OSC 8 ; ;`
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the OSC dispatcher reaches these once OSC 8 is wired"
-        )
-    )]
     pub fn close_hyperlink(&mut self) {
         self.active_screen_mut().pen_mut().hyperlink_id = None;
     }

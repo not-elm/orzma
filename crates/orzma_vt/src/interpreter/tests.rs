@@ -161,6 +161,7 @@ mod cursor_style;
 mod device_attributes;
 mod device_status;
 mod erase;
+mod hyperlink;
 mod interpret_output;
 mod keypad;
 mod line_editing;

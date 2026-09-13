@@ -1,15 +1,4 @@
 //! OSC 8 hyperlink vocabulary and the id interner that dedupes it.
-// NOTE: the `#[cfg(test)]` module below uses every item this lint
-// would flag, so an unconditional `#[expect(dead_code)]` is fulfilled
-// in a plain build but unfulfilled — and denied under `-D warnings` —
-// in a test build. Gating it to non-test builds keeps both clean.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the frame builder reaches the interner once OSC 8 handling lands"
-    )
-)]
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
@@ -130,6 +119,13 @@ impl HyperlinkInterner {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the frame builder reaches this once Frame::hyperlinks is wired"
+        )
+    )]
     #[inline]
     pub(crate) fn extract(&self, id: &HyperlinkId) -> Option<&HyperlinkUri> {
         self.id_to_uri.get(id)
