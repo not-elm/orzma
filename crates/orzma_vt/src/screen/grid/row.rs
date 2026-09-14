@@ -42,26 +42,20 @@ impl Row<Cell> {
     /// text, a filler adds one blank, and a cell's marks follow its glyph.
     pub fn to_runs(&self) -> Row<Run> {
         let mut runs: Vec<Run> = Vec::with_capacity(self.0.len().min(Self::RUNS_RESERVE));
+        let mut current: Option<Run> = None;
         let mut chars_in_run = 0usize;
         for cell in self.0.iter() {
             if cell.width == CellWidth::Spacer {
                 continue;
             }
             let width: u8 = if cell.width == CellWidth::Wide { 2 } else { 1 };
-            let starts_new = !matches!(runs.last(), Some(run) if run.continues_with(cell));
-            if starts_new {
-                runs.push(Run {
-                    cols: 0,
-                    fg: cell.fg,
-                    bg: cell.bg,
-                    style: cell.style,
-                    text: String::new(),
-                    widths: Vec::new(),
-                    hyperlink_id: cell.hyperlink_id,
-                });
+            if !current.as_ref().is_some_and(|run| run.continues_with(cell)) {
+                if let Some(done) = current.take() {
+                    runs.push(done);
+                }
                 chars_in_run = 0;
             }
-            let run = runs.last_mut().expect("the row has a run to extend");
+            let run = current.get_or_insert_with(|| Run::opened_by(cell));
             run.cols += u16::from(width);
             Self::push_width(run, &mut chars_in_run, width);
             run.text.push(cell.c);
@@ -69,6 +63,9 @@ impl Row<Cell> {
                 Self::push_width(run, &mut chars_in_run, 0);
                 run.text.push(*mark);
             }
+        }
+        if let Some(done) = current {
+            runs.push(done);
         }
         Row(runs)
     }
