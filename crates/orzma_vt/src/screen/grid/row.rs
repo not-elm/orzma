@@ -64,10 +64,10 @@ impl Row<Cell> {
             }
             let run = runs.last_mut().expect("the row has a run to extend");
             run.cols += u16::from(width);
-            Self::push_width(run, &mut chars_in_run, width);
+            Self::push_width(run, &mut chars_in_run, width, self.0.len());
             run.text.push(cell.c);
             for mark in cell.marks() {
-                Self::push_width(run, &mut chars_in_run, 0);
+                Self::push_width(run, &mut chars_in_run, 0, self.0.len());
                 run.text.push(*mark);
             }
         }
@@ -241,9 +241,13 @@ impl Row<Cell> {
     }
 
     /// Records the width of the next `char` of `run`, creating the width
-    /// list on the first width other than one.
-    fn push_width(run: &mut Run, chars_in_run: &mut usize, width: u8) {
+    /// list on the first width other than one and reserving `capacity`
+    /// entries up front.
+    fn push_width(run: &mut Run, chars_in_run: &mut usize, width: u8, capacity: usize) {
         if width != 1 || !run.widths.is_empty() {
+            if run.widths.is_empty() {
+                run.widths.reserve(capacity);
+            }
             run.widths.resize(*chars_in_run, 1);
             run.widths.push(width);
         }
@@ -726,8 +730,8 @@ mod tests {
     /// Asserts that a leading spacer is emitted as one blank column and
     /// keeps an otherwise plain row on the empty-width path.
     ///
-    /// Case: an ASCII row whose last column a wrapped Japanese character
-    /// left blank.
+    /// Case: a wrapped Japanese character leaves the last column of an
+    /// ASCII row blank.
     #[test]
     fn a_leading_spacer_emits_one_blank_column() {
         let filler = Cell {

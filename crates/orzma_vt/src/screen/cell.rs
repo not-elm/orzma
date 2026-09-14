@@ -2,7 +2,6 @@
 
 use crate::device::color::Color;
 use crate::screen::grid::run::Style;
-use std::iter;
 use unicode_width::UnicodeWidthChar;
 
 /// How many columns a cell occupies, and whether it is a body or a
@@ -171,10 +170,11 @@ impl Cell {
     }
 
     /// The glyph followed by the marks combined onto it, in arrival
-    /// order; a continuation or filler column yields its blank glyph
-    /// alone.
+    /// order; a continuation or filler column yields nothing.
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
-        iter::once(self.c).chain(self.marks().iter().copied())
+        let base =
+            (!matches!(self.width, CellWidth::Spacer | CellWidth::LeadingSpacer)).then_some(self.c);
+        base.into_iter().chain(self.marks().iter().copied())
     }
 }
 
@@ -425,10 +425,11 @@ mod tests {
     }
 
     /// Asserts that a cell yields its glyph followed by its marks in
-    /// arrival order, and a cell without marks yields the glyph alone.
+    /// arrival order, a cell without marks yields the glyph alone, and a
+    /// continuation column yields nothing.
     ///
     /// Case: a copy walks a row holding an accented letter next to a blank
-    /// cell.
+    /// cell and a wide glyph's continuation column.
     #[test]
     fn a_cell_yields_its_glyph_and_then_its_marks() {
         let mut extra = CellExtra::default();
@@ -441,5 +442,14 @@ mod tests {
         };
         assert_eq!(accented.chars().collect::<String>(), "e\u{0302}\u{0301}");
         assert_eq!(Cell::default().chars().collect::<String>(), " ");
+        assert_eq!(
+            Cell {
+                width: CellWidth::Spacer,
+                ..Cell::default()
+            }
+            .chars()
+            .count(),
+            0
+        );
     }
 }

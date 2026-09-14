@@ -17,6 +17,11 @@ enum TestOp {
     El(u8),
     Ed(u8),
     Resize(u16, u16),
+    Irm(bool),
+    Decawm(bool),
+    Cr,
+    Lf,
+    Bs,
 }
 
 fn op_strategy() -> impl Strategy<Value = TestOp> {
@@ -31,6 +36,11 @@ fn op_strategy() -> impl Strategy<Value = TestOp> {
         (0u8..3).prop_map(TestOp::El),
         (0u8..3).prop_map(TestOp::Ed),
         (2u16..9, 1u16..4).prop_map(|(cols, rows)| TestOp::Resize(cols, rows)),
+        any::<bool>().prop_map(TestOp::Irm),
+        any::<bool>().prop_map(TestOp::Decawm),
+        Just(TestOp::Cr),
+        Just(TestOp::Lf),
+        Just(TestOp::Bs),
     ]
 }
 
@@ -69,6 +79,23 @@ fn apply(vt: &mut OrzmaVt, op: &TestOp) {
                 rows: *rows,
             });
         }
+        TestOp::Irm(on) => {
+            let mode = if *on { 'h' } else { 'l' };
+            vt.interpret(format!("\x1b[4{mode}").as_bytes());
+        }
+        TestOp::Decawm(on) => {
+            let mode = if *on { 'h' } else { 'l' };
+            vt.interpret(format!("\x1b[?7{mode}").as_bytes());
+        }
+        TestOp::Cr => {
+            vt.interpret(b"\r");
+        }
+        TestOp::Lf => {
+            vt.interpret(b"\n");
+        }
+        TestOp::Bs => {
+            vt.interpret(b"\x08");
+        }
     }
 }
 
@@ -91,7 +118,9 @@ proptest! {
     ///
     /// Case: a program prints Japanese text, accents, and ASCII in any
     /// order while editing the row with insert, delete, and erase
-    /// sequences, moving the cursor, and resizing the window.
+    /// sequences, toggling insert mode and autowrap, moving the cursor
+    /// by carriage return, line feed, backspace, and column addressing,
+    /// and resizing the window.
     #[test]
     fn every_row_keeps_the_wide_pair_invariant(
         ops in prop::collection::vec(op_strategy(), 1..64)

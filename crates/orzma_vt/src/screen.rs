@@ -152,8 +152,8 @@ impl Screen {
     /// screen is dropped.
     ///
     /// `insert_replace` is `IRM`: under [`InsertReplaceMode::Insert`] the
-    /// rest of the row shifts right by the glyph's width before it lands,
-    /// unless the glyph ends the row, in which case it replaces in place.
+    /// rest of the row shifts right by the glyph's width before it
+    /// lands.
     ///
     /// `auto_wrap` is `DECAWM`. While it is reset, a one-column glyph at
     /// the right border replaces the last column, and an armed wrap, such
@@ -206,11 +206,12 @@ impl Screen {
         // `insert_characters` clear `pending_wrap`, and the character
         // would overwrite the last column instead of wrapping to the
         // next row.
-        if matches!(insert_replace, InsertReplaceMode::Insert) && !ends_row {
+        if matches!(insert_replace, InsertReplaceMode::Insert) {
             self.insert_characters(columns);
         }
         let cell = self.state.pen.stamp(glyph, width);
         self.grid[self.state.line].stamp_at(landing, cell);
+        self.state.last_landing = Some((self.state.line, GridColumn(landing)));
         if ends_row {
             self.state.column = GridColumn(cols - 1);
             self.state.pending_wrap = wrapping;
@@ -819,16 +820,19 @@ impl Screen {
     }
 
     /// Combines `mark` onto the glyph the cursor last passed: the cell
-    /// under the cursor on the last column, otherwise the cell to its
-    /// left, and on column zero that column's own cell. A continuation
-    /// column hands the mark to its wide body.
+    /// under the cursor when the deferred wrap is armed or the last
+    /// printed glyph landed there, otherwise the cell to its left, and on
+    /// column zero that column's own cell. A continuation column hands
+    /// the mark to its wide body.
     ///
     /// Reports the cursor's row when the mark was kept, and `None` when
     /// the cell already holds [`cell::MAX_COMBINING`] marks or the target is a
     /// filler.
     fn attach_zero_width(&mut self, mark: char) -> Option<DamageSpan> {
         let column = self.state.column.0;
-        let candidate = if self.is_last_column() {
+        let cursor = (self.state.line, self.state.column);
+        let on_landing = self.state.last_landing == Some(cursor);
+        let candidate = if self.state.pending_wrap || (self.is_last_column() && on_landing) {
             column
         } else {
             column.saturating_sub(1)
@@ -1525,7 +1529,6 @@ impl Screen {
             let row = self.grid.row(GridLine(line));
             let row_text: String = (first..=last)
                 .map(|column| &row[GridColumn(column)])
-                .filter(|cell| !matches!(cell.width, CellWidth::Spacer | CellWidth::LeadingSpacer))
                 .flat_map(Cell::chars)
                 .collect();
             if line != range.start.line.0 {
