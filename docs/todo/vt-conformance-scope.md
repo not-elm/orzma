@@ -12,6 +12,33 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 - **Tier 1 = 必須** — `infocmp xterm-256color` が広告していて orzma が未実装のもの。
 - **Tier 2 = 推奨** — terminfo を経由せず TUI が直接叩くもの。
 
+### 基準にする terminfo の版（2026-09-13 訂正）
+
+**Tier 判定の基準は ncurses 6.6 の `xterm-256color` エントリとする。** 初回の
+洗い出し（2026-09-10）は macOS 同梱の ncurses 6.0.20150808 で `infocmp` を
+叩いており、6.0 の entry には無いが 6.6 では広告される capability を Tier 2 側へ
+落としていた。両版の `infocmp -x -1 xterm-256color` を `comm` で突き合わせて
+差分を取り直した結果が下の表。
+
+どの版が実際に使われるかはプログラムが読む terminfo データベース次第で、orzma が
+選べるものではない（Homebrew の nvim / tmux は 6.6 側を見る）。**広告が増える
+方向にしかズレないので、新しい版を基準に取る。**
+
+| 6.6 で増えた capability | 制御機能 | 判定への影響 |
+|---|---|---|
+| `XF`, `fe=\E[?1004h`, `fd=\E[?1004l`, `kxIN=\E[I`, `kxOUT=\E[O`（`xterm+focus`。6.0 にはこの entry 自体が無い） | フォーカス通知 | **Tier 2 → Tier 1**。§1-B へ移動し実装済み（2026-09-13） |
+| `rep=%p1%c\E[%p2%{1}%-%db` | REP | **基準版では Tier 1**。§2 の REP 行と §付記 の「`rep` はこのエントリには無い」は 6.0 基準の記述。行は §2 に据え置き |
+| `mgc=\E[?69l`, `smglp` / `smglr` / `smgrp`（いずれも `\E[?69h` を前置） | DECLRMM / DECSLRM | **基準版では Tier 1**。行は §2 に据え置き |
+| `kbs=^?` | BS キーの送信値 | §3 の `kbs` **要判断は解消**。6.0 の `^H` に対して 6.6 は DEL を広告するので、orzma の `0x7f` が entry と一致する |
+| `u8=\E[?%[;0123456789]c` | DA1 応答の照合パターン | §4 の「`u8` は `CSI ?1;2c` を期待する」は 6.0 基準。6.6 のパターンは `CSI ?` + 数字と `;` + `c` を受けるので `CSI ?6c` も一致する |
+| `XR=\E[>0q`, `xr=\EP>\|XTerm(…)\E\\` | XTVERSION | **新規ギャップ**。`CSI > Ps q` の腕が無い（`interpreter.rs:474` は DECSCUSR の `(None, [b' '], b'q')` だけ）。行は未作成 |
+| `BE`/`BD` と `PS`/`PE`、`smxx=\E[9m` / `rmxx=\E[29m`、`XM` / `xm` / `kmous=\E[<`、`oc=\E]104\007` | bracketed paste (2004)・取り消し線 (SGR 9/29)・SGR マウス (1006)・OSC 104 | いずれも実装済みでギャップ無し（`sgr.rs:65`・`sgr.rs:72`、`MouseEncoding::Sgr`。`oc` の版差は §1-B の OSC 4 行が既に記録済み） |
+| `ka1`–`kc3`, `kp*`, `kbeg` | アプリケーションキーパッド | §3 の `kb2`/`kent` 行と同じ話。広告される個数が 6.6 で増える |
+
+> 観察（2026-09-13、実害は未評価）: 6.6 の `rv=\E\\[>41;[1-6][0-9][0-9];0c` は
+> **xterm 形の DA2 応答**（`CSI >41;…;0c`）を照合パターンに持つが、orzma の DA2 は
+> `CSI >0;<ver>;1c` なので一致しない。§4 の DA1 行と同じ「名乗りと応答のズレ」。
+
 ### 参照章の地図（`docs/references/xterm-ctlseqs.pdf`）
 
 | 章 | 頁 | 内容 |
@@ -63,6 +90,7 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 | ~~`CSI ?12 h/l`~~ | ~~カーソル点滅~~ | `cnorm`, `cvvis` | **✅ 実装済み（2026-09-12）**。`VtModes::text_cursor.blink`（`CursorBlink`）に置き、DECSCUSR と同じ状態を last-writer-wins で共有する。**この共有は普遍ではない**: xterm（両方 `cursor_blink_esc`）・kitty（両方 `non_blinking`）・alacritty・ghostty・Windows Terminal・iTerm2 の 6 実装は 1 状態を共有するが、**foot は `decset` と `deccsusr` の 2 ビットを独立に持って OR する**（CHANGELOG: "blink if **either** … has been used"）ので `CSI 5 SP q` の後の `?12l` でも点滅が続き、**VTE は `?12` をモード表に持つが誰も読まない**、**wezterm は空の match 腕**。`xterm-256color` を名乗るので xterm 側に揃えた。**`?13` / `?14` は実装しない** — xterm が DECSET / DECRST の両方で `/* intentionally ignored (this is user-preference) */` としている。設定は入れていない。既定は steady で、xterm の `cursorBlink` 既定 `false`・alacritty の `Off`・foot の `no`・wezterm の `SteadyBlock` と一致する（kitty と ghostty だけが既定で点滅する） | ~~点滅指定が効かない~~ |
 | ~~`CSI ?3 h/l`~~ | ~~DECCOLM~~ | `is2`, `rs2` の一部 | **✅ 意図的に無視と明示（2026-09-12）**。`set_private_modes` に `3 => {}`。理由は `// NOTE:` に記録: ペインの幅は VT の持ち物ではなく（サイズは ウィンドウ形状 → レイアウト木 → PTY の一方通行）、vt510 p.143 が DECCOLM に定める副作用（左右上下マージンの既定化とページ全消去）だけを実行すると、来ない幅変更の代償にページを壊すことになる。`is2` に `\E[?3l` が入るので、これは **`tput init` のたびに**起きる。**xterm 自身がこのシーケンス全体を `c132` リソース（既定 off）で塞いでおり、同じ no-op に落ちる**（manpage `-132`: *"Normally, the VT102 DECCOLM escape sequence … is ignored"*、`charproc.c` の `srm_DECCOLM` は本体すべてが `if (screen->c132)` の中）。参照実装は割れている: ghostty も `?40`（既定 off）で完全無視、foot は `decset_decrst` に `case 3:` 自体が無い。kitty は **set 方向だけ**全消去＋ホーム、alacritty と wezterm は双方向でマージン既定化＋ホーム＋全消去（いずれもリサイズはしない）。テストは `interpreter/tests/column_mode.rs`（副作用を入れる変異で 4 本とも落ちることを確認済み） | ~~初期化列に含まれる~~ |
 | ~~`CSI ?1034 h/l`~~ | ~~8bit Meta~~ | `smm`/`rmm`, `km` | **✅ 意図的に無視と明示（2026-09-11）**。`set_private_modes` に `1034 => {}`。Alt は常に ESC 前置（xterm の metaSendsEscape 相当）で、xterm と foot は 1036 を 1034 より優先するので、この設定では 8 ビット符号化に到達しない。bash / readline が起動時に送る `smm` は変更前から無視されており、挙動は変わらない。テストは `interpreter/tests/meta_key.rs` | ~~Meta キーのバイト表現が食い違う~~ |
+| ~~`CSI ?1004 h/l` → `CSI I` / `CSI O`~~ | ~~フォーカス通知~~ | `XF`, `fe`/`fd`, `kxIN`/`kxOUT` | **✅ 実装済み（2026-09-13）**。Tier 2 から移動（§0 の版差ノートのとおり ncurses 6.6 の entry が `xterm+focus` を含む）。規範文は xterm-ctlseqs.pdf p.58「FocusIn/FocusOut」の *"it causes xterm to send CSI I when the terminal gains focus, and CSI O when it loses focus"*。焦点は「ウィンドウが focused」かつ「backend のアクティブペイン」で決まる。`OrzmaTty::set_focused` が状態を持ち、変化したときだけ `focus_in_out` を門番にして書く。backend の `refresh_focus` がその状態を全ペインに代入し、GUI の `src/session/window_focus.rs` はプライマリウィンドウの `WindowFocused` を `OrzmuxCommand::WindowFocus` として順に送るだけ。**決めたこと**: (1) **エッジトリガ** — tmux の `window_pane_update_focus`（`PANE_FOCUSED`）・kitty の `focus_changed`（`has_focus`）・wezterm の `focus_changed`（`self.focused`）・ghostty の `focusCallback`（`Surface.focused`）・alacritty の `on_focus_change`（ウィンドウのみ）はいずれも状態と比較して早期 return する。(2) **モードを立てた時点では送らない** — xterm（`charproc.c` の `srm_FOCUS_EVENT_MOUSE` は `send_focus_pos` を立てるだけ）・tmux（`input.c` の `screen_write_mode_set`）・kitty（`SIMPLE_MODE`）・wezterm（`focus_tracking = true`）・alacritty（`mode.insert`）に揃えた。**ここは参照実装が割れている**: ghostty は `src/termio/stream_handler.zig` の `.focus_event => if (enabled) self.messageWriter(.{ .focused = … })` で有効化の瞬間に現在の焦点を送る。代償として、非アクティブペインや非フォーカスのウィンドウで 1004 を立てたアプリは次の遷移まで焦点ありと思い込む（**訂正**: Tier 1 へ移したとき「参照実装 5 つが同型で割れている点が無い」と書いたのは誤りで、この点だけ 5 対 1）。(3) **inline webview への焦点移動・vi モード・IME 合成は焦点喪失にしない** — 本番の webview はそのペインのプログラム自身がマウントした inline child（`mount.rs` の `ChildOf(ctx.terminal_surface)`）で、`SetFocus` もそのプログラムが `owner_surface` 付きで送る。tmux がメニュー表示中をフォーカス外とするのはホスト側 UI だからで、アプリ自身の UI には当てはまらない。tmux はコピーモード中も焦点を保つ。ピッカーは実在しない（**訂正**: Tier 1 へ移したときの案 (3) は focused webview とピッカーを焦点喪失に含めていた）。**既知の穴（未対応）**: 非アクティブペインの inline webview をクリックする（またはそのペインのプログラムが `SetFocus` を送る）と、ペインは選択されないままキーボードがその webview へ移るので、アクティブペインのアプリには `CSI O` も、戻ったときの `CSI I` も届かない。上の理由（アプリ自身の UI）はこの場合に成り立たないので、webview がキーボードを取ったら親ペインを選択するのが筋。(4) **状態は `OrzmaTty`、判定は backend** — アクティブペインの真実は backend の `tree.active()` だけにし、GUI の楽観的クリック（`requests/pane.rs`）が先行しても報告は backend が `SelectPane` を処理した時点で出る。`refresh_focus` は**焦点を失うペインを全部書いてから得るペインを書く** 2 パスで（`panes` が `HashMap` なので 1 パスでは順序が決まらない。tmux も `lastwp` を先に更新する）、`publish_layout` の冒頭と `WindowFocus` の腕から呼ぶ。GUI の送信は `.after(OrzmaSystems::Input)` に置き、同じフレームのクリックの `SelectPane` を先に送る。書き込みに失敗しても状態は確定したまま再送せず `warn` を出し、viewport は動かさない（**訂正**: Tier 1 へ移したときの案 (4) はステートレスな `send_focus` だった）。**既知の制約（未対応）**: `Pty::write_all` はブロッキングなので、1004 を立てたまま stdin を読まなくなったアプリがいると、約 170 回の blur/refocus で PTY の入力キュー（XNU の `TTYHOG` は 1024 バイト）が埋まり backend スレッド全体が止まる（`send_key` / `send_paste` も同じ経路）。ペインの出入りでも同じだけ書くので、デバッガで止めたアプリのペインへ出入りするだけでも（そのペインに入力しなくても）埋まり得て、止まるとアプリの終了も固まる（`OrzmuxClient` の drop が backend スレッドを join する）。1004 を戻さずに終わったアプリ（ssh が切れた remote nvim、異常終了したアプリなど）の後は、焦点の遷移がそのペインで次に入力を読むプログラムへ `CSI O` / `CSI I` として混入し、canonical モードのパスワード入力（`sudo`・`getpass`）を壊す（zsh / bash の行編集はベルを鳴らすだけ）。モードだけを門番にするのは xterm の規定どおりで、tmux・kitty・wezterm・alacritty・ghostty も同じ。**Windows**: ConPTY は起動シーケンスで自ら `CSI ?1004h` を出す（microsoft/terminal の `src/host/VtIo.cpp`）ので、全ペインで遷移が ConPTY の入力に書かれる。ただし生成直後のペインへは（モード有効化では報告しない方針のまま）`CSI I` が届かないので、conhost の焦点フラグは次の遷移まで立たない。新しい conhost（microsoft/terminal #17829 以降）ではこのフラグがコンソールから起動したウィンドウを前面に出せるかを決める（現行の inbox conhost は `ConptyReparentPseudoConsole` が無いとフラグを立てないので、送っても変わらない）。**`[inactive_pane]` との衝突は未裁定**: 既定値（`dim = 1.0`、`tint = 0.85`、`tint_color = #3a3b45`）では、nvim が `FocusLost` で背景を変えても合成後の寄与は 1 チャンネルあたり 2/255 しかなく、向きも逆（orzma は明るい青灰、実例の nvim 設定は暗い暖色）。`PaneInactiveStyle` は `on_active_pane_changed` でしか付け外しされないので、ウィンドウの焦点喪失では orzma 側は何も変えない。テストは `crates/orzma_tty/src/lib.rs`（`set_focused`）・`crates/orzmux/src/backend.rs`（`SelectPane` 往復・分割・分割失敗・kill・`WindowFocus`・書き込み失敗・書き込み順）・`src/session/window_focus.rs` | ~~nvim / vim の `FocusGained` / `FocusLost` が一度も発火しない~~（解消済み）。実測（§6 の方法、`TERM=xterm-256color`・`$TMUX` なし）: nvim は `--clean` でも起動時に `CSI ?1004h`・終了時に `?1004l` を無条件で出す。vim は DA2 応答後に出す（orzma の `CSI >0;<ver>;1c` でも出る）。tmux は `focus-events on` のときペイン内が立てた 1004 を外側へミラーする |
 | `CSI ?5 h/l` | DECSCNM 反転 | `flash` | `MODE∅` | ビジュアルベルが無反応 |
 | `CSI 5 m` | SGR blink | `blink`, `sgr` | **意図的に no-op**（`sgr.rs:112` の `5 \| 6 \| 25 \| ... => {}`） | 点滅が普通の文字になる。`Style` へのビット追加＋レンダラ対応が要る |
 | ~~`OSC 4;n;rgb:…`~~ | ~~インデックス色変更~~ | `initc`, `ccc`, `oc` | **✅ 実装済み（2026-09-12）**。OSC 4 の設定と `?` 問い合わせ（応答は問い合わせと同じ終端で、8 ビット値を 2 回並べた `rgb:hhhh/…`）、OSC 104（番号指定と、引数なしの全リセット）を実装し、RIS でもパレットを戻す（xterm の `ReallyReset` と同じ）。`oc=\E]104\007` は ncurses 6.6 の entry が広告する（macOS 同梱の 6.0 には無い）。**意図的に無視**: Special Colors（OSC 4 の 256〜260、OSC 5 / 105 / 6 / 106）と、`rgb:` / `#` 以外の color_spec（色名・`rgbi:`・CIE 系）。**xterm と異なる点**: 不正な組はその組だけ落として続行する（xterm は最初の誤りで打ち切る）。**制約**: vtparse 0.7 の `MAX_OSC = 64` により、1 本の OSC 4 は 31 組、OSC 104 は 63 番号まで。テストは `interpreter/tests/palette.rs` | ~~パレット変更が効かない~~ |
@@ -87,14 +115,15 @@ xterm-ctlseqs.pdf 全体の網羅は目標にしない。
 ## 2. Tier 2 — 推奨
 
 terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ローカルの
-`xterm-256color` エントリには無い」の意。
+`xterm-256color` エントリには無い」の意。**「ローカル」は macOS 同梱の
+ncurses 6.0 を指す**ので、6.6 で広告が増えて実質 Tier 1 に上がる行がある。
+一覧は §0 の「基準にする terminfo の版」にあり、該当行にはその旨を書いてある。
 
 | シーケンス | 機能 | 現状 | 直接叩く実例 |
 |---|---|---|---|
 | ~~`CSI Ps SP q`~~ | ~~DECSCUSR カーソル形状~~ | **✅ 実装済み（2026-09-12）**。DECSTR が開けた intermediate 経路に `(None, [b' '], b'q')` の腕 1 本で入った。値は vt510.pdf p.251 の 0〜4 と xterm-ctlseqs.pdf p.29–30 の 5/6（bar）。**`7` は no-op ではなく電源投入時の style に戻す** — xterm の `CASE_DECSCUSR` は `7` を `screen->initial_cursor` に書き換えてから同じ switch を通し、その既定リソース値が STEADY_BLOCK。ただし `Self::default()` はコンパイル時定数なので、**設定層が入ったら `7` 腕と `DeviceState::reset` を設定済みの初期 style から読むように直すこと**（そうしないと `CSI 7 SP q` はハードコードされた block に戻る）。**`なし / 0 / 1` はすべて blinking block に潰した** — 規範資料は一致しているが実装は割れており、`0` を「端末既定」と読むのは alacritty・ghostty・foot・tmux・termwiz、xterm/vt510 どおりに読むのは xterm だけ。**`DeviceState::soft_reset` も shape / blink を戻す**（この行が予告していたとおり。`ReallyReset` の `InitCursorShape` と `SetCursorBlink` は最初の `if (full)` より前にあり DECSTR 経路でも走る） | ~~nvim が実測 5 回~~（解消済み） |
 | ~~`CSI s` / `CSI u`~~ | ~~SCOSC / SCORC~~ | **✅ 実装済み（2026-09-11）**。パラメータ無しのときだけ DECSC / DECRC と同じ保存枠を使う（xterm の `only_default()` に揃えた。下の「`CSI s` の曖昧性」を参照） | blessed の `saveCursorA`/`restoreCursorA`、btop |
 | `CSI ?2026 h/l` | 同期出力 | `MODE∅`。`struct SyncBuffer {}` は**空のプレースホルダ**（`interpreter.rs:83`） | fzf がフレーム毎に発行。nvim/tmux/kitty |
-| `CSI ?1004` → `CSI I` / `CSI O` | フォーカス通知 | **モードは保存されるが送信側が存在しない**（`focus_in_out` の参照は定義と代入の 2 箇所のみ） | vim/nvim。フォーカス復帰時の再描画が来ない |
 | ~~`OSC 10/11`~~ | ~~前景/背景（問い合わせ含む）~~ | **✅ 実装済み（2026-09-13）**。設定・`?` 問い合わせ・`OSC 110/111` のリセットを実装。**別型にした** — 下の §6-6 が予告した「`PaletteRequest` を広げる」ではなく、`DynamicColorRequest` を `interpreter/osc/dynamic_color.rs` に新設し、`PaletteRequest` は `interpreter/osc/palette.rs` へ移して `osc.rs` は OSC 共通部（`OscTerminator`・title・cwd）だけを持つ形に分けた。番号の繰り返しが無く連鎖するOSC 10/11 は、番号と spec の組を並べる OSC 4 と解析の形が違うため。**連鎖を実装**: xterm-ctlseqs.pdf p.39 の *"Each successive parameter changes the next color in the list. The value of Ps tells the starting point in the list."* に従い `OSC 10;fg;bg` が両方を設定し、`OSC 10;?;?` は2本の応答を返す（各応答は**自分の**番号を名乗る。名乗らないと受け手が背景を前景として復元する）。**持たない色に達したら打ち切る** — 位置 12（カーソル色）で止まり、`OSC 12` は開始点が範囲外なので丸ごと無視。alacritty（vte 0.15.0 `ansi.rs`）も `if index > NamedColor::Cursor { break; }` で同形。**不正な spec はその位置だけ落として続行**（OSC 4 と同じ逸脱。xterm は打ち切る）。**110/111 は後続パラメータを読み捨てる** — p.42 が `Ps = 1 1 0` をパラメータ無しで綴るのに対し、OSC 104 は `Ps = 1 0 4 ; c` と綴られ "Any number of c parameters may be given" と明示されている。**RIS / DECSTR は変更不要** — `Palette::reset` が既に前景/背景を戻し、DECSTR は `reset_indexed_colors` だけを呼ぶ現状のままでよい（xterm も dynamic colors はDECSTR で戻さない）。**積み残し**: 110/111 が戻すのは仕様上 *"their default (resource) values"* = 設定で指定した色だが、設定層が無いのでハードコードの白/黒へ戻す（DECSCUSR の `7` と同じ場所）。テストは `interpreter/osc/dynamic_color.rs` と `interpreter/tests/dynamic_colors.rs`。ケースは xterm-ctlseqs.pdf と xlib.pdf の引用から導出し、著者が一覧を承認してから書いた | ~~vim/nvim の `background` 自動判定~~ |
 | `OSC 12` | カーソル色（問い合わせ含む） | `OSC∅`。**VT 側だけでは足りない** — `Palette` にフィールドが無く、`terminal_ui_material.wgsl` の `paint_cursor` はセル色の反転しか持たないので、カーソル色という概念自体がシェーダに無い。通すには `Palette` + `TerminalParams` のユニフォーム + WGSL の 3 箇所が要り、「ブロックカーソル下の文字色」「未設定時の既定は反転のままか」を決める必要がある。§10 のカーソル描画欠陥（太さの DPR 非追随・最終列のはみ出し・点滅位相）と同じ場所なので、設定 PR とまとめるのが自然 | nvim の `guicursor` |
 | ~~`OSC 52`~~ | ~~クリップボード~~ | **✅ 書き込み方向のみ実装（2026-09-13）**。`Pc` は xterm-ctlseqs.pdf p.40 の `cpqs01234567` を集合として検証し、**集合外のバイトが 1 つでもあればシーケンスごと拒否**する。tmux の `input_osc_52_parse`（`input.c`）は集合外を黙って読み飛ばすが、それだと `OSC 52 ; xyz ; …` が濾過後に空 `Pc` となり「空 `Pc` は `s0`」の規定に落ちて**ゴミがクリップボード書き込みになる**ため採らない。通過した `Pc` は `c` または `s` を含むときだけ唯一のシステムクリップボードに写し、`p` / `q` / cut-buffer 0-7 は認識だけして何もしない（`bevy_clipboard` に PRIMARY は無く、alacritty も macOS/Windows では `selection: None` で同じ no-op になる）。**alacritty からの意図的な逸脱は 2 点**: (a) alacritty は `params[1].first()` で `Pc` の先頭 1 バイトしか見ないが orzma は包含判定なので `OSC 52 ; pc ; …` が通る、(b) alacritty は空 `Pc` を `c` に倒すが orzma は xterm どおり `s0` として扱う。`Pd` は `base64` crate の `STANDARD`（canonical padding 必須）でデコードする。**不正 base64（パディング欠落と `;` 入りを含む）・非 UTF-8・`Pd` 欠落はクリアする**（2026-09-14 に方針転換）。xterm-ctlseqs.pdf p.40 の「If the second parameter is neither a base64 string nor ?, then the selection is cleared」に揃えた。当初は「バイナリを cat した事故でクリップボードが消える経路を作らない」ために無視していたが、仕様どおりにした。**alacritty とは異なる**（alacritty は無視する）。非 UTF-8 は仕様上は正しい base64 だが、テキストしか書けないのでクリア扱いにした。`Pd` は `Pc` より後ろ全体（`;` 込み）。空 `Pd` は正しい base64 なので空文字列を書く（`VtSignal::Clipboard { content: "" }`）。クリアは `VtSignal::ClearClipboard` → `TtyClipboardClearSignal` → `ClearClipboardAction` で運ぶが、`bevy_clipboard` に clear が無いため GUI 側は `set_text("")` で代用している（arboard 3.6.1 には `Clipboard::clear` がある。`src/action/clipboard/copy.rs` に TODO）。判定は `interpreter/osc/clipboard.rs` の `ClipboardRequest`。パラメータが 1 つも無い `OSC 52` も「`Pc` が空で `Pd` が無い」とみなしてクリアする。**CAN / SUB で途中切断された OSC は OSC 全体で無視する**（2026-09-14、`osc_dispatch` の冒頭）。ECMA-48 § 8.3.6 の「the data preceding it in the data stream is in error. As a result, this data shall be ignored」と vt510.pdf p.63 に従った。vtparse は CAN / SUB で OSC を閉じて途中までの内容で `osc_dispatch` を呼ぶので、これが無いと切れた OSC 52 が途中までの文字列を書くか、クリップボードを消す。ESC で割り込まれた場合は `ESC \` の ESC と区別できないので、従来どおり効果を持つ。判定は `OscTerminator::from_byte`（CAN / SUB で `None`）に一本化した。**APC には同じ問題が残る**（2026-09-14 の simplify で判明、未修正）: vtparse は CAN / SUB で APC も閉じて `apc_dispatch` を途中までの内容で呼ぶので、`ESC _ Ounmount;n=<id>` が `Ounmount` の直後で切れると `WebviewApcRequest::parse` が `Unmount { instance: None }` になり全 webview がアンマウントされ、`Omount;n=…,r=12,c=48` が `c=4` で切れるとサイズ違いの mount として通る。DCS の `dcs_unhook` も CAN で走るが現状 no-op。非アクティブなペインからの書き込みも通す。`?`（読み出し）は未実装 | nvim の osc52 provider、tmux |
@@ -102,9 +131,9 @@ terminfo には出ないが実際の TUI が直接叩くもの。`—` は「ロ
 | `CSI ?Ps $ p` → `$ y` | DECRQM / DECRPM | `CSI∅`（DECSTR で intermediate 経路が開いたので `(Some(b'?'), [b'$'], b'p')` の腕 1 本で入る） | nvim が 69 や 2026 の対応可否を問い合わせる。**返answerが無いと機能検出が常に失敗する**。DECAWM / DECTCEM 実装により **7 と 25 も報告可能な状態を持つようになった**（`CSI ?7;1$y` / `CSI ?25;2$y` など）が応答路が無い。§6 のとおり、`CSI ?7 $ p` を実装すれば `vttest` の `tst_DEC_DECRPM` が mode 7 を機械判定できるようになる。**mode 3 / 40 / 95 は `0`（not recognized）で答える**（2026-09-12 決定）。orzma は DECCOLM の状態も変更経路も持たないので、`4`（permanently reset）だと任意幅のペインが「80 桁モード」を名乗ることになる。foot と alacritty も 0 を返す（wezterm は set を返す） |
 | `DCS $ q … ST` / `DCS + q … ST` | DECRQSS / XTGETTCAP | DCS コールバックが空（`interpreter.rs:157`-`168`） | vim のカーソル形状復元・capability 検出 |
 | ``CSI Ps ` `` / `CSI Ps a` / `CSI Ps e` | HPA / HPR / VPR | HPA は **✅ 実装済み（2026-09-11、CHA と同じメソッド）**。HPR も **✅ 実装済み（2026-09-11、CUF と同じメソッド。DECLRMM が無い間は停止点が一致する）**。VPR は `CSI∅` | vttest。**VPR は `move_cursor_down` の別名にできない** — VT510 p.351 は VPR を最終行で止めるが CUD は下マージンで止まるため、DECOM リセット時にスクロール領域があると挙動が食い違う |
-| `CSI Ps b` | REP | `CSI∅` | **ローカルエントリは `rep` を広告していない**ため Tier 2。vttest |
+| `CSI Ps b` | REP | `CSI∅` | **ncurses 6.0 の entry は `rep` を広告していない**ため Tier 2 に置いたが、**6.6 は広告するので基準版では Tier 1**（§0 の版差ノート。行はここに据え置き）。vttest |
 | ~~`CSI Ps ^`~~ | ~~SD（xterm の別綴り）~~ | **✅ 実装済み（2026-09-11）**。ECMA-48（p.77）はこの final byte を SIMD に割り当てるが、orzma は SIMD を持たないので xterm の読み（SD）に揃えた。持つのは調べた範囲で xterm だけ（alacritty・kitty・foot・ghostty・wezterm には無い） | 実際に発行するプログラムは**未確認** |
-| `CSI ?69 h/l` / `CSI Pl;Pr s` | DECLRMM / DECSLRM | `MODE∅` / `CSI∅` | nvim。矩形スクロールに必要 |
+| `CSI ?69 h/l` / `CSI Pl;Pr s` | DECLRMM / DECSLRM | `MODE∅` / `CSI∅` | nvim。矩形スクロールに必要。**ncurses 6.6 は `mgc` / `smglp` / `smglr` / `smgrp` で広告するので基準版では Tier 1**（§0 の版差ノート。行はここに据え置き） |
 | `CSI ?1015 h/l` | urxvt マウス | `MODE∅` | btop が 1015→1006 の順に発行。1006 があるので実害は小 |
 | `CSI ?Pm s` / `CSI ?Pm r` | XTSAVE / XTRESTORE | `CSI∅`（`?` 付きで intermediate 無しなので match に届いて落ちる） | xterm-ctlseqs は「DECSET と同じ Ps 値」を 1 段キャッシュで保存・復元すると規定するので、**7 と 25 も定義上この対象**。`civis`/`cnorm` の代わりに `?25 s` … `?25 r` で括るプログラムがあると hide が戻らず、`smam`/`rmam` の代わりに `?7 s` … `?7 r` で括ると autowrap が戻らない。**7 の restore は `modes_mut` 直書きにできない** — reset 方向を復元するときに両画面の LCF を解除する必要があるので `DeviceState::set_auto_wrap` を通す。具体的な呼び出し実例は未特定（低頻度と見られる） |
 
@@ -150,7 +179,7 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 
 | capability | 広告値 | orzma の送信 | 判断 |
 |---|---|---|---|
-| `kbs` | `^H` (0x08) | `0x7f` (DEL) — `keyboard.rs:91` | **要判断**。entry とは食い違うが、DEL は現代の端末の事実上の標準。「ncurses の entry に合わせる」か「DEL のまま明示的に据える」かを決めて記録する |
+| `kbs` | `^H` (0x08)（ncurses 6.0）／`^?` (DEL)（6.6） | `0x7f` (DEL) — `keyboard.rs:91` | **要判断は解消（2026-09-13）**。ncurses 6.6 の entry は `kbs=^?` を広告するので、§0 で基準に取った版とは食い違いが無く、DEL のまま据える。6.0 を読むプログラムから見ると `^H` 期待のままだが、そちらでも DEL を選ぶ根拠（現代の端末の事実上の標準）がそのまま残る |
 | ~~`kcbt`~~ | `ESC [Z` | **✅ 修正済み（2026-09-11）**。修飾が Shift だけのときに送る。Ctrl / Alt との組み合わせは HT のまま（下の「修飾キーが落ちる」行と一緒に扱う） | 完了 |
 | ~~`kich1`~~ | `ESC [2~` | **✅ 修正済み（2026-09-11）**。`TerminalKey::Insert` として編集キーパッドに加えた | 完了 |
 | `kf1`–`kf63` | `SS3 P/Q/R/S`, `CSI n ~` ほか | ファンクションキーが語彙に無い | 修正対象 |
@@ -164,7 +193,7 @@ Tier 1/2 とは別軸。`csi_dispatch` ではなく `crates/orzma_tty/src/input/
 | **EL / ECH の pending-wrap 例外**（決着済み） | **決着: no-op を維持し、ECH も同じ方針に揃えた（2026-09-10）。参照実装が割れていることを承知した上で tmux 側を選択。** 経緯: DEC の EL 定義はアクティブ位置を含む（vt220 PDF p.36 L1754「including the cursor position」、vt510 PDF p.311 L9074「From the cursor through the end of the line」— いずれも検証済み）が、**どのマニュアルも deferred wrap をモデル化していない**ため、wrap 中にカーソルが論理的にどこに居るかを裁定しない。tmux 3.7c で実測したところ、幅10の行を埋めた状態で `CSI 0 K` も `CSI 1 X` も**何も消さず wrap も保持する**（行中では両方とも正常に動く）。tmux は `screen_write_clearcharacter` が `cx > sx - 1` で早期 return するモデル A。**訂正: 当初「alacritty も同様」と記録したが、これは誤り。** alacritty は EL と ECH を**意図的に区別している** — `alacritty_terminal-0.26.0/src/term/mod.rs:1643` の `clear_line` は `LineClearMode::Right if cursor.input_needs_wrap => return` を持つが、同 1519-1535 の `erase_chars` には `input_needs_wrap` の判定が**一切無く**、wrap 中でも最終列を消す。xterm の `CASE_ECH` も `do_wrap` を見ない。**訂正（2026-09-11）: kitty と iTerm2 も完全 no-op である。** ただし機構が違う — 両者はカーソルを `x == width` に停める方式で**ブール型のラッチを持たず**、no-op は範囲演算の帰結にすぎない（kitty は `num = MIN(columns - x, count)` が 0、iTerm2 の EL 0 は `from.x > to.x` で早期 return）。明示的なガードは iTerm2 の ECH（`cursorX >= width` で return）のみなので、「3 実装が意図的に同意している」とは言えない。なお両者は DECAWM に関係なくカーソルを停め `CSI ?7l` でも解除しないため、autowrap off で EL/ECH が永久に no-op になる危険を実際に抱えている。orzma は DECAWM 実装時にこの読み手 2 つを `auto_wrap` で門番したので、この危険は無い。**カーソル停止方式との射程合わせ（2026-09-11）**: no-op の判定は `Screen::cursor_parked_past_the_row` に集約し、ラッチ武装・`auto_wrap` 設定・**カーソルが最終列に居ること**の 3 つを要求する。3 つ目が要るのは、tmux / kitty / iTerm2 はカーソル位置そのもので判定するため no-op が行中に届かないのに対し、ブール型ラッチは `tab_to`（CBT）が右端から持ち出せてしまうため。`xterm-256color` を名乗ること、alacritty と xterm が逆であること、`docs/todo/nvim-tree-stale-cells-ech.md` §6.1 で実測検証した版にこのガードが無かったこと — これらを**承知した上で tmux 側を選択した**。実 nvim のキャプチャでは ECH は全て行中発行でこの境界を踏まないため、今回のバグ修正の妥当性には影響しない。xterm を実機で実測できた時点で再訪する価値はある |
 | **1049 の pen 引き継ぎ** | `interpreter.rs:693` に「代替画面の古い pen を使う」と明記。xterm は pen を共有するので、入場時のクリアが違う背景色になり得る。BCE の正しさにも波及。**着手時の注意（2026-09-12）**: pen を画面間で共有させると `Screen::soft_reset` の pen リセットは自動的にデバイス全体へ効くようになるので、`interpreter/tests/soft_reset.rs` の `a_soft_reset_on_the_alternate_screen_leaves_the_primary_pen_alone` は**残すのではなく反転させる**こと（今の per-screen モデルでは正しいテストで、赤くなったらコードではなくテストを直す） |
 | **DECSC/DECRC の保存範囲**（決着済み） | **決着（2026-09-11）: DECAWM は保存しない。LCF（`pending_wrap`）は保存する。** VT420 2nd ed. p.270 / VT520 p.5-120 の「Wrap flag (autowrap or no autowrap)」は LCF を指す。DEC STD-070 p.D-14 が「LCF は Save Cursor で保存し Restore Cursor で復元すべき」と明記し、xterm `cursor.c` の `DECSC_FLAGS (ATTRIBUTES\|ORIGIN\|PROTECTED)` は `WRAPAROUND` を含まない（同ファイルのコメントが VT420/VT520 の表記を DECAWM と読む解釈を逐語で却下している）。12 実装中モードを保存するのは kitty と iTerm2 の 2 つだけで、実機 VT100/220/420/510 も復元しない |
-| **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:770` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意 |
+| **DA1 の応答** | entry の `u8` は `CSI ?1;2c` を期待するが `interpreter.rs:770` は `CSI ?6c`（VT102）を返す。PDF 上は許容だが、**VT102 を名乗ることで未実装の編集機能を隠してしまう**点に注意。**訂正（2026-09-13）**: `u8=\E[?1;2c` は ncurses 6.0 の entry。6.6 は `u8=\E[?%[;0123456789]c` で `CSI ?6c` も一致するので、§0 で基準に取った版では `u8` との食い違いは無い（VT102 を名乗る点の注意は残る）。**6.6 の `rv` とは食い違ったまま** — §0 の版差ノートの観察を参照 |
 | **`CSI 3 J`** | `EraseScreenMode::from_ed`（`screen.rs:108`）で明示的に拒否。entry は `E3` を広告していないので Tier 1 ではないが、PDF p.13 には定義がある |
 | **SGR 下線拡張** | `sgr.rs:31` が下線種別を潰し、下線色は読み捨て。vim の `58;2` 発行はリポジトリ内に既知（`sgr.rs:675`） |
 | **タブストップの所有** | `tabs.rs:63` が「画面ごと」と明記。xterm は共有テーブル。PDF は所有権を規定していないので、意図的な差異として記録済み |
@@ -239,7 +268,11 @@ STD-070 が LCF をリセットすると規定する操作:
    パレットが実際に動いたときだけ `DamageSpan::Full` を stage する。intermediate 付き CSI が
    match に届くようになったので、DECSCUSR と DECRQM は腕 1 本で入る。
    ~~残るのは **`CSI ?12`（カーソル点滅）**~~ も完了（2026-09-12）。残るのは **1049 の pen 修正**。
-5. **入力側の契約修正**（`kbs` の方針決定 → ファンクションキー → 修飾キー）。~~Shift-Tab~~ と Insert は **完了（2026-09-11）**。~~Meta~~ は §1-B の `CSI ?1034 h/l` 行のとおり意図的に無視と決着（2026-09-11）。
+5. **入力側の契約修正**（~~`kbs` の方針決定~~ → ファンクションキー → 修飾キー）。~~Shift-Tab~~ と Insert は **完了（2026-09-11）**。~~Meta~~ は §1-B の `CSI ?1034 h/l` 行のとおり意図的に無視と決着（2026-09-11）。~~`kbs`~~ は §0 の版差ノートにより **要判断が解消（2026-09-13、DEL のまま）**。
+   ~~**フォーカス通知（`CSI I` / `CSI O`）**~~ **完了（2026-09-13）**。§1-B の行のとおり。項目 10 の
+   「非フォーカスで点滅を止める」と項目 11 の非アクティブペインのカーソルは、焦点を同じ定義
+   （ウィンドウが focused かつアクティブペイン）で判定すると揃う。ただし焦点状態は backend（`OrzmaTty` の `focused`）にしか無く、
+   `Layout` にも `OrzmuxEvent` にも載らないので、GUI 側で判定するなら信号の経路を別に決める必要がある。
 6. ~~**OSC 4**~~ ~~**OSC 10/11**~~ **完了（OSC 4 は 2026-09-12、OSC 10/11 は 2026-09-13。いずれも `?` 問い合わせとリセットを含む）** → 残るのは **OSC 12 / 112**（カーソル色）で、§2 の `OSC 12` 行のとおりレンダラ側の作業を伴う。実装上の判断は §1-B の `OSC 10/11` 行にまとめてある。この項目がかつて予告した「`PaletteRequest` を広げる」形は採らなかった。
 7. **DECRQM/DECRPM と 2026 同期出力**、**DECRQSS/XTGETTCAP**。
 8. ~~**OSC 52**~~ **書き込み方向は完了（2026-09-13）**。残るのは **`?`（読み出し）**。
@@ -327,9 +360,13 @@ features」の `tst_screen`（`main.c:620-634`）で、80 桁に**同一文字**
 `infocmp xterm-256color` の boolean 8 個（`am` `bce` `ccc` `km` `mir` `msgr` `npc` `xenl`）と
 文字列 capability 82 個を 1 つずつ制御機能に対応付け、orzma の `csi_dispatch` /
 `esc_dispatch` / `set_private_modes` / `osc_dispatch` と突き合わせた。
+**この洗い出しは macOS 同梱の ncurses 6.0 の entry で行っている**（基準版は §0 のとおり
+2026-09-13 に 6.6 へ改めた。取りこぼした capability の一覧はそのノートにある）。
 Codex CLI にも独立して同じ洗い出しをさせ、両者の差分を個別に検証して統合している。
 統合時に判明した訂正:
 
-- `rep` は**このエントリには無い** → REP は Tier 1 ではなく Tier 2。
+- `rep` は**このエントリには無い** → REP は Tier 1 ではなく Tier 2。**訂正（2026-09-13）**:
+  これは macOS 同梱の ncurses 6.0 基準。6.6 の entry は `rep` を広告するので、§0 で
+  基準に取った版では REP は Tier 1。
 - `kbs=^H` は実在（DEL 送信は entry と不一致）。`mc5i` も広告されている。
 - `acsc`（罫線）は `DecSpecialGraphics` として**実装済み**（`character_sets.rs:52`）。ギャップではない。

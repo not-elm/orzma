@@ -123,6 +123,13 @@ pub enum OrzmuxCommand {
         /// The neighbour direction to select.
         direction: PaneDirection,
     },
+    /// Sets whether the primary window has keyboard focus. The active pane
+    /// holds focus only while the window does, and the window counts as
+    /// focused until the first `WindowFocus` arrives.
+    WindowFocus {
+        /// The focus state to apply.
+        focused: bool,
+    },
     /// Forward a key press to a pane's PTY.
     KeyInput {
         /// The pane receiving the key.

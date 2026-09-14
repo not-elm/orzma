@@ -104,6 +104,8 @@ pub struct OrzmaTty<V: Vt> {
     /// write in the next pump.
     pending_replies: Vec<u8>,
     exit: ExitLatch,
+    /// Whether the host last reported this terminal as focused.
+    focused: bool,
 }
 
 impl<V: Vt> OrzmaTty<V> {
@@ -335,6 +337,26 @@ impl<V: Vt> OrzmaTty<V> {
             .write_all(PtyInput::encode_paste(text, bracketed).as_bytes())
     }
 
+    /// Records whether the host gives this terminal focus, and reports a
+    /// change to the application while it has focus reporting enabled
+    /// (DECSET 1004): `CSI I` on gaining focus and `CSI O` on losing it.
+    ///
+    /// An unchanged state writes nothing, and enabling focus reporting
+    /// reports nothing until the next change. The viewport does not move,
+    /// and no repaint is scheduled. The new state is recorded even when
+    /// the write fails, and the write error is returned.
+    pub fn set_focused(&mut self, focused: bool) -> OrzmaTtyResult {
+        if self.focused == focused {
+            return Ok(());
+        }
+        self.focused = focused;
+        if !self.vt.modes().focus_in_out {
+            return Ok(());
+        }
+        self.pty
+            .write_all(PtyInput::encode_focus(focused).as_bytes())
+    }
+
     /// The receivers to wait on for this terminal (see [`Readiness`]).
     pub fn readiness(&self) -> Readiness<'_> {
         let exit = match self.exit {
@@ -430,6 +452,7 @@ impl<V: Vt> OrzmaTty<V> {
             pending_signals: Vec::new(),
             pending_replies: Vec::new(),
             exit: ExitLatch::Running,
+            focused: false,
         }
     }
 
@@ -512,7 +535,7 @@ impl<V: Vt> OrzmaTty<V> {
 mod tests {
     use super::*;
     use crate::error::OrzmaTtyError;
-    use crate::test_support::{CaptureSink, FailingMaster, FakeVt};
+    use crate::test_support::{CaptureSink, FailingMaster, FailingSink, FakeVt};
     use crossbeam_channel::{Sender, unbounded};
 
     /// An 80x24 [`OrzmaTty::detached`] terminal over a `FakeVt`, plus
@@ -1120,6 +1143,84 @@ mod tests {
         term.vt.modes.bracketed_paste = true;
         term.send_paste("hi").expect("send_paste");
         assert_eq!(sink.contents(), b"\x1b[200~hi\x1b[201~");
+    }
+
+    /// Asserts that each focus transition writes its report while the
+    /// application has focus reporting enabled.
+    ///
+    /// Case: the user returns to nvim and then switches away again.
+    #[test]
+    fn set_focused_reports_each_transition_while_focus_reporting_is_enabled() {
+        let (mut term, sink) = detached_term();
+        term.vt.modes.focus_in_out = true;
+        term.set_focused(true).expect("set_focused");
+        term.set_focused(false).expect("set_focused");
+        assert_eq!(sink.contents(), b"\x1b[I\x1b[O");
+    }
+
+    /// Asserts that repeating the current focus state writes nothing.
+    ///
+    /// Case: the window blurs right after the pane was deactivated, so
+    /// the host reports the loss twice.
+    #[test]
+    fn set_focused_writes_nothing_when_the_state_is_unchanged() {
+        let (mut term, sink) = detached_term();
+        term.vt.modes.focus_in_out = true;
+        term.set_focused(true).expect("set_focused");
+        term.set_focused(false).expect("set_focused");
+        term.set_focused(false).expect("set_focused");
+        assert_eq!(sink.contents(), b"\x1b[I\x1b[O");
+    }
+
+    /// Asserts that a change made while focus reporting is off is recorded
+    /// but not reported, so enabling focus reporting reports nothing until
+    /// the next change.
+    ///
+    /// Case: a program enables focus reporting at start-up in a pane that
+    /// already has focus.
+    #[test]
+    fn enabling_focus_reporting_reports_nothing_until_the_next_change() {
+        let (mut term, sink) = detached_term();
+        term.set_focused(true).expect("set_focused");
+        term.vt.modes.focus_in_out = true;
+        term.set_focused(true).expect("set_focused");
+        assert_eq!(sink.contents(), b"");
+        term.set_focused(false).expect("set_focused");
+        assert_eq!(sink.contents(), b"\x1b[O");
+    }
+
+    /// Asserts that a focus report leaves a scrolled-back viewport where it
+    /// is and schedules no repaint.
+    ///
+    /// Case: the user is reading scrollback and switches applications.
+    #[test]
+    fn set_focused_does_not_snap_a_scrolled_back_viewport() {
+        let (mut term, sink) = detached_term();
+        term.vt.modes.focus_in_out = true;
+        term.vt.display_offset = DisplayOffset(3);
+        term.set_focused(true).expect("set_focused");
+        assert_eq!(sink.contents(), b"\x1b[I");
+        assert_eq!(term.vt.display_offset, DisplayOffset(3));
+        assert!(!term.vt.scrolls.iter().any(|s| matches!(s, Scroll::Bottom)));
+        assert!(!term.coalescer.is_armed());
+    }
+
+    /// Asserts that a failed focus write still records the new state, so
+    /// repeating that state attempts no second write.
+    ///
+    /// Case: the window regains focus while the pane's PTY rejects writes,
+    /// and the user then resizes the window before focus changes again.
+    #[test]
+    fn a_failed_focus_write_keeps_the_new_state() {
+        let mut term = OrzmaTty::detached(FakeVt::new(80, 24), 80, 24, Box::new(FailingSink))
+            .expect("OrzmaTty::detached");
+        term.vt.modes.focus_in_out = true;
+        assert!(matches!(
+            term.set_focused(true),
+            Err(OrzmaTtyError::PtyWrite(_))
+        ));
+        term.set_focused(true)
+            .expect("an unchanged state attempts no write, so it cannot fail");
     }
 
     /// Asserts that a detached terminal's PTY writes land on the
