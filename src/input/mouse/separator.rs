@@ -115,6 +115,21 @@ pub(in crate::input) struct GrabbedSeparator {
     releasing: bool,
 }
 
+#[cfg(test)]
+impl GrabbedSeparator {
+    /// A grab on `split`, whose divider runs `orientation`, seeded as if
+    /// the pointer had not moved since the press.
+    pub(in crate::input) fn held(split: SplitId, orientation: SplitOrientation) -> Self {
+        Self {
+            split,
+            orientation,
+            last_sent: 0,
+            last_cursor_phys: Vec2::ZERO,
+            releasing: false,
+        }
+    }
+}
+
 /// Half the grab band's thickness in logical px, measured from the
 /// painted line's centre.
 ///
