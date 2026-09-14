@@ -27,11 +27,11 @@ pub struct GridSize {
 }
 
 impl GridSize {
-    /// This size with the column count raised to [`MIN_COLUMNS`].
-    pub fn normalized(self) -> Self {
+    /// Builds a size with the column count raised to [`MIN_COLUMNS`].
+    pub fn new(cols: u16, rows: u16) -> Self {
         Self {
-            cols: self.cols.max(MIN_COLUMNS),
-            ..self
+            cols: cols.max(MIN_COLUMNS),
+            rows,
         }
     }
 }
