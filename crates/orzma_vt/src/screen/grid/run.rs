@@ -53,6 +53,20 @@ pub struct Run {
 }
 
 impl Run {
+    /// A run carrying `cell`'s foreground, background, style, and
+    /// hyperlink, spanning no columns yet.
+    pub(crate) fn opened_by(cell: &Cell) -> Self {
+        Self {
+            cols: 0,
+            fg: cell.fg,
+            bg: cell.bg,
+            style: cell.style,
+            text: String::new(),
+            widths: Vec::new(),
+            hyperlink_id: cell.hyperlink_id,
+        }
+    }
+
     /// Checks that `widths` describes `text` and `cols`.
     ///
     /// An empty `widths` passes on its own: it stands for one column per
