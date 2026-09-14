@@ -153,8 +153,7 @@ pub trait Vt {
     /// the dimensions did not change. Only a real change stages (full)
     /// damage.
     ///
-    /// The caller must reject a `size` with a zero axis. A column count
-    /// below [`crate::prelude::MIN_COLUMNS`] is raised to it.
+    /// The caller must reject a `size` with a zero axis.
     ///
     /// # Invariants
     ///
@@ -338,14 +337,12 @@ const _: () = {
 impl OrzmaVt {
     /// Builds a terminal whose first frame carries every viewport row.
     ///
-    /// The caller must reject a `size` with a zero axis. A column count
-    /// below [`crate::prelude::MIN_COLUMNS`] is raised to it.
+    /// The caller must reject a `size` with a zero axis.
     ///
     /// # Invariants
     ///
     /// Both grid axes are nonzero.
     pub fn new(size: GridSize, max_history: usize) -> Self {
-        let size = size.normalized();
         Self {
             interpreter: Interpreter::default(),
             device: DeviceState::new(size, max_history),
@@ -384,7 +381,7 @@ impl Vt for OrzmaVt {
     }
 
     fn resize(&mut self, size: GridSize) -> Option<ResizeChanged> {
-        let damage = self.device.resize(size.normalized())?;
+        let damage = self.device.resize(size)?;
         self.tracker.stage(damage);
         Some(ResizeChanged {
             evicted: self.device.evict_lost_anchors(),
@@ -1412,35 +1409,34 @@ mod tests {
         assert_eq!(vt.selection_text().as_deref(), Some("abcd"));
     }
 
-    /// Asserts that a terminal built with one column is widened to the
-    /// two a fullwidth glyph needs.
+    /// Asserts that a terminal built from a one-column size holds the
+    /// two columns a fullwidth glyph needs.
     ///
     /// Case: the multiplexer splits a pane vertically until a leaf is
     /// handed a single column.
     #[test]
     fn a_single_column_terminal_is_widened_to_two() {
-        let vt = OrzmaVt::new(GridSize { cols: 1, rows: 3 }, 10);
+        let vt = OrzmaVt::new(GridSize::new(1, 3), 10);
         assert_eq!(vt.grid_size().cols, MIN_COLUMNS);
     }
 
-    /// Asserts that a resize down to one column is widened the same way
-    /// as construction.
+    /// Asserts that a resize to a one-column size widens the grid the
+    /// same way as construction.
     ///
     /// Case: the user drags the window until a pane would be one column
     /// wide.
     #[test]
     fn a_resize_to_one_column_is_widened_to_two() {
-        let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10);
-        let _ = vt.resize(GridSize { cols: 1, rows: 3 });
+        let mut vt = OrzmaVt::new(GridSize::new(4, 3), 10);
+        let _ = vt.resize(GridSize::new(1, 3));
         assert_eq!(vt.grid_size().cols, MIN_COLUMNS);
     }
 
-    /// Asserts that a size already wide enough passes through unchanged.
+    /// Asserts that a size already wide enough is built unchanged.
     ///
     /// Case: the user resizes the window to an ordinary width.
     #[test]
     fn a_wide_enough_size_is_left_alone() {
-        let size = GridSize { cols: 80, rows: 24 };
-        assert_eq!(size.normalized(), size);
+        assert_eq!(GridSize::new(80, 24), GridSize { cols: 80, rows: 24 });
     }
 }
