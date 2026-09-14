@@ -27,6 +27,10 @@ pub enum StampError {
     /// past the end of the row.
     #[error("a stamp reaches past the end of the row")]
     OutOfRow,
+    /// A wide-pair joint next to a stamp that is still broken after the
+    /// stamp healed it.
+    #[error("a stamp left a broken wide-pair joint")]
+    BrokenJoint,
 }
 
 /// The reason a column and row count is not a valid [`GridSize`].
