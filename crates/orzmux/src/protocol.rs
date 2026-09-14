@@ -89,10 +89,8 @@ pub enum NewPaneAt {
 pub enum OrzmuxCommand {
     /// The whole window's size in cells plus the cell pixel pitch.
     Resize {
-        /// The window's width in cells.
-        cols: u16,
-        /// The window's height in cells.
-        rows: u16,
+        /// The window's size in cells.
+        size: GridSize,
         /// The pixel size of one cell, used to derive the PTY winsize.
         cell_px: CellPixels,
     },

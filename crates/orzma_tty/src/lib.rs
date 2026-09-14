@@ -535,7 +535,7 @@ mod tests {
     fn detached_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
         let sink = CaptureSink::default();
         let term = OrzmaTty::detached(
-            FakeVt::new(80, 24),
+            FakeVt::new(GridSize::new(80, 24)),
             GridSize::new(80, 24),
             Box::new(sink.clone()),
         )
@@ -549,7 +549,7 @@ mod tests {
         let (chunk_tx, chunk_rx) = unbounded::<Vec<u8>>();
         let (exit_tx, exit_rx) = unbounded::<Option<i32>>();
         let term = OrzmaTty::detached_with_channels(
-            FakeVt::new(80, 24),
+            FakeVt::new(GridSize::new(80, 24)),
             GridSize::new(80, 24),
             Box::new(CaptureSink::default()),
             chunk_rx,
@@ -784,9 +784,12 @@ mod tests {
     #[test]
     fn detached_resizes_through_the_fake_master_and_never_exits() {
         let sink = CaptureSink::default();
-        let mut term =
-            OrzmaTty::detached(FakeVt::new(80, 24), GridSize::new(80, 24), Box::new(sink))
-                .expect("OrzmaTty::detached");
+        let mut term = OrzmaTty::detached(
+            FakeVt::new(GridSize::new(80, 24)),
+            GridSize::new(80, 24),
+            Box::new(sink),
+        )
+        .expect("OrzmaTty::detached");
 
         term.resize(GridSize::new(120, 40), CellPixels::default())
             .expect("resize");
@@ -835,7 +838,7 @@ mod tests {
     /// initial sizing pass so `vt.resizes` starts empty.
     fn failing_term() -> OrzmaTty<FakeVt> {
         let pty = Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default()));
-        OrzmaTty::wired(FakeVt::new(80, 24), pty)
+        OrzmaTty::wired(FakeVt::new(GridSize::new(80, 24)), pty)
     }
 
     /// Collects the `ChildExit` codes out of a pumped signal batch.
@@ -1222,7 +1225,7 @@ mod tests {
     #[test]
     fn a_failed_focus_write_keeps_the_new_state() {
         let mut term = OrzmaTty::detached(
-            FakeVt::new(80, 24),
+            FakeVt::new(GridSize::new(80, 24)),
             GridSize::new(80, 24),
             Box::new(FailingSink),
         )
@@ -1366,7 +1369,7 @@ mod tests {
             chunk_rx,
             exit_rx,
         );
-        let mut term = OrzmaTty::wired(FakeVt::new(80, 24), pty);
+        let mut term = OrzmaTty::wired(FakeVt::new(GridSize::new(80, 24)), pty);
         term.vt.updates.push_back(InterpretOutput {
             damaged: true,
             signals: Vec::new(),
