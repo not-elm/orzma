@@ -136,35 +136,38 @@ impl Screen {
     }
 }
 
+/// The device state a printed character is shaped by.
+///
+/// The default value prints in replace mode, with autowrap set, outside
+/// any hyperlink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PrintOptions {
+    /// `IRM`: under [`InsertReplaceMode::Insert`] the rest of the row shifts
+    /// right one column before the character lands.
+    pub insert_replace: InsertReplaceMode,
+    /// `DECAWM`: while it is reset, a character at the right border replaces
+    /// the last column, and an armed wrap, such as one a `DECRC` restored, is
+    /// not resolved either.
+    pub auto_wrap: AutoWrap,
+    /// The hyperlink the character is printed inside, or `None` when no link
+    /// is open.
+    pub hyperlink: Option<HyperlinkId>,
+}
+
 /// Graphic character output.
 impl Screen {
-    /// Prints one character at the cursor with the current pen, wrapping
-    /// first when the deferred wrap is armed and autowrap is set.
+    /// Prints one character at the cursor with the current pen, as
+    /// `options` shape it, wrapping first when the deferred wrap is armed
+    /// and autowrap is set.
     ///
     /// `c` must be a printable character of display width one.
-    ///
-    /// `insert_replace` is `IRM`: under [`InsertReplaceMode::Insert`] the
-    /// rest of the row shifts right one column before the character lands.
-    ///
-    /// `auto_wrap` is `DECAWM`. While it is reset, a character at the right
-    /// border replaces the last column, and an armed wrap, such as one a
-    /// `DECRC` restored, is not resolved either.
-    ///
-    /// `hyperlink` is the link the character is printed inside, or `None`
-    /// when no link is open.
     ///
     /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
     /// the row the character landed on, or `None` when that row has
     /// scrolled out of the window.
-    pub fn print(
-        &mut self,
-        c: char,
-        insert_replace: InsertReplaceMode,
-        auto_wrap: AutoWrap,
-        hyperlink: Option<HyperlinkId>,
-    ) -> Option<DamageSpan> {
+    pub fn print(&mut self, c: char, options: PrintOptions) -> Option<DamageSpan> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
-        let wrapping = auto_wrap.wraps();
+        let wrapping = options.auto_wrap.wraps();
         let wrap = if self.state.pending_wrap && wrapping {
             self.state.column = GridColumn(0);
             self.line_feed()
@@ -176,10 +179,11 @@ impl Screen {
         // `insert_characters` clear `pending_wrap`, and the character
         // would overwrite the last column instead of wrapping to the
         // next row.
-        if matches!(insert_replace, InsertReplaceMode::Insert) {
+        if matches!(options.insert_replace, InsertReplaceMode::Insert) {
             self.insert_characters(1);
         }
-        self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph, hyperlink);
+        self.grid[self.state.line][self.state.column] =
+            self.state.pen.stamp(glyph, options.hyperlink);
         let at_right_edge = self.at_right_edge();
         if !at_right_edge {
             self.state.column.0 += 1;

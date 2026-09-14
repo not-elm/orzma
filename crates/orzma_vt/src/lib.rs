@@ -421,7 +421,6 @@ impl Vt for OrzmaVt {
 mod tests {
     use super::*;
     use crate::device::color::{Palette, Rgb};
-    use crate::device::modes::{AutoWrap, InsertReplaceMode};
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
     use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
     use crate::screen::selection::{SelectionGeometry, SelectionRange};
@@ -1002,12 +1001,7 @@ mod tests {
     fn a_staged_print_survives_the_composed_pipeline() {
         let mut vt = vt();
         vt.frame();
-        let damage = vt.device.active_screen_mut().print(
-            'x',
-            InsertReplaceMode::Replace,
-            AutoWrap::Enabled,
-            None,
-        );
+        let damage = vt.device.print('x');
         vt.tracker.stage_if_changed(damage);
         for _ in 0..3 {
             vt.device.active_screen_mut().line_feed();

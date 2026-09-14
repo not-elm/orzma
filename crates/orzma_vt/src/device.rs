@@ -11,11 +11,11 @@ use crate::device::modes::{
 use crate::frame::damage::DamageSpan;
 use crate::hyperlink::{HyperlinkId, HyperlinkInterner, HyperlinkUri};
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
-use crate::screen::Screen;
 use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, ScreenLine};
 use crate::screen::viewport::{DisplayOffset, Scroll};
+use crate::screen::{PrintOptions, Screen};
 use std::collections::VecDeque;
 
 /// The emulated terminal device: screens, modes, tabs, colors, title,
@@ -102,6 +102,26 @@ impl DeviceState {
     /// A motion that moves the viewport reports [`DamageSpan::Full`].
     pub fn scroll(&mut self, scroll: Scroll) -> Option<DamageSpan> {
         self.active_screen_mut().scroll(scroll)
+    }
+
+    /// Prints one character at the cursor of the screen on show, shaped by
+    /// the device's `IRM` and `DECAWM` modes and its open hyperlink.
+    ///
+    /// `c` must be a printable character of display width one.
+    ///
+    /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
+    /// the row the character landed on, or `None` when that row has
+    /// scrolled out of the window.
+    pub fn print(&mut self, c: char) -> Option<DamageSpan> {
+        // NOTE: Every field is spelled out so that a field added to
+        // `PrintOptions` fails to compile here instead of silently printing
+        // with its default.
+        let options = PrintOptions {
+            insert_replace: self.modes.insert_replace,
+            auto_wrap: self.modes.auto_wrap,
+            hyperlink: self.active_hyperlink,
+        };
+        self.active_screen_mut().print(c, options)
     }
 
     /// Returns both screens and every mode to their power-up state;
@@ -330,12 +350,6 @@ impl DeviceState {
         self.active_hyperlink = None;
     }
 
-    /// The hyperlink the cells printed from now on carry, or `None` when
-    /// no link is open.
-    pub fn active_hyperlink(&self) -> Option<HyperlinkId> {
-        self.active_hyperlink
-    }
-
     /// The target `id` was opened for, or `None` for an id this device
     /// never handed out.
     pub fn hyperlink_uri(&self, id: HyperlinkId) -> Option<&HyperlinkUri> {
@@ -557,7 +571,7 @@ mod tests {
     fn opening_a_hyperlink_makes_it_active() {
         let mut device = device();
         device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
-        assert!(device.active_hyperlink().is_some());
+        assert!(device.active_hyperlink.is_some());
     }
 
     /// Asserts that closing a hyperlink leaves none active.
@@ -569,7 +583,7 @@ mod tests {
         let mut device = device();
         device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
         device.close_hyperlink();
-        assert_eq!(device.active_hyperlink(), None);
+        assert_eq!(device.active_hyperlink, None);
     }
 
     /// Asserts that a full reset leaves no hyperlink active.
@@ -580,7 +594,7 @@ mod tests {
         let mut device = device();
         device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
         let _ = device.reset();
-        assert_eq!(device.active_hyperlink(), None);
+        assert_eq!(device.active_hyperlink, None);
     }
 
     /// Asserts that a soft reset leaves no hyperlink active.
@@ -592,7 +606,7 @@ mod tests {
         let mut device = device();
         device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
         let _ = device.soft_reset();
-        assert_eq!(device.active_hyperlink(), None);
+        assert_eq!(device.active_hyperlink, None);
     }
 
     /// Asserts that a flip in either direction leaves no hyperlink active.
@@ -605,7 +619,7 @@ mod tests {
         for to in [ScreenKind::Alternate, ScreenKind::Primary] {
             device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
             let _ = device.switch_screen(to);
-            assert_eq!(device.active_hyperlink(), None, "flipped to {to:?}");
+            assert_eq!(device.active_hyperlink, None, "flipped to {to:?}");
         }
     }
 
@@ -701,12 +715,7 @@ mod tests {
     fn the_two_screens_carry_independent_tab_stops() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device.active_screen_mut().print(
-                c,
-                InsertReplaceMode::Replace,
-                AutoWrap::Enabled,
-                None,
-            );
+            device.print(c);
         }
         device.active_screen_mut().set_horizontal_tab_stop();
 
@@ -732,19 +741,12 @@ mod tests {
     fn the_two_screens_carry_independent_checkpoints() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device.active_screen_mut().print(
-                c,
-                InsertReplaceMode::Replace,
-                AutoWrap::Enabled,
-                None,
-            );
+            device.print(c);
         }
         device.active_screen_mut().save_checkpoint();
 
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device
-            .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+        device.print('x');
         device.active_screen_mut().restore_checkpoint();
         assert_eq!(device.active_screen().cursor_column(), GridColumn(0));
 
@@ -763,13 +765,9 @@ mod tests {
     #[test]
     fn a_reset_clears_both_screens() {
         let mut device = device();
-        device
-            .active_screen_mut()
-            .print('p', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+        device.print('p');
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device
-            .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+        device.print('a');
 
         let _ = device.reset();
 
@@ -812,9 +810,7 @@ mod tests {
     #[test]
     fn a_reset_of_a_written_primary_screen_reports_a_full_repaint() {
         let mut device = device();
-        device
-            .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+        device.print('x');
 
         assert_eq!(device.reset(), Some(DamageSpan::Full));
     }
@@ -842,9 +838,7 @@ mod tests {
     fn a_reset_does_not_report_the_hidden_screens_damage() {
         let mut device = device();
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device
-            .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+        device.print('x');
         device.set_active_screen_for_test(ScreenKind::Primary);
 
         assert_eq!(device.reset(), None);
@@ -1071,12 +1065,7 @@ mod tests {
     /// the deferred wrap.
     fn arm_deferred_wrap(device: &mut DeviceState) {
         for c in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] {
-            device.active_screen_mut().print(
-                c,
-                InsertReplaceMode::Replace,
-                AutoWrap::Enabled,
-                None,
-            );
+            device.print(c);
         }
     }
 
@@ -1102,16 +1091,12 @@ mod tests {
         device.set_auto_wrap(AutoWrap::Disabled);
         device.set_auto_wrap(AutoWrap::Enabled);
 
-        device
-            .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+        device.print('z');
         assert_eq!(glyph_at(&device, 0, 7), 'z');
         assert_eq!(glyph_at(&device, 1, 0), ' ');
 
         device.set_active_screen_for_test(ScreenKind::Primary);
-        device
-            .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+        device.print('z');
         assert_eq!(glyph_at(&device, 0, 7), 'z');
         assert_eq!(glyph_at(&device, 1, 0), ' ');
     }
@@ -1132,9 +1117,7 @@ mod tests {
         device.set_auto_wrap(AutoWrap::Enabled);
         device.active_screen_mut().restore_checkpoint();
 
-        device
-            .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+        device.print('z');
         assert_eq!(glyph_at(&device, 1, 0), 'z');
     }
 
@@ -1150,9 +1133,7 @@ mod tests {
 
         device.set_auto_wrap(AutoWrap::Enabled);
 
-        device
-            .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+        device.print('z');
         assert_eq!(glyph_at(&device, 1, 0), 'z');
     }
 
@@ -1319,17 +1300,13 @@ mod tests {
 
         let _ = device.soft_reset();
 
-        device
-            .active_screen_mut()
-            .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+        device.print('q');
         let shown = device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(shown.c, 'q');
         assert_eq!(shown.fg, Color::DefaultForeground);
 
         device.set_active_screen_for_test(ScreenKind::Primary);
-        device
-            .active_screen_mut()
-            .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+        device.print('q');
         let hidden = device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(hidden.c, '─');
         assert_eq!(hidden.fg, Color::Indexed(1));

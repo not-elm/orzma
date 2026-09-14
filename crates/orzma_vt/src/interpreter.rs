@@ -113,14 +113,7 @@ impl VTActor for Executor<'_> {
         if b == '\u{7f}' {
             return;
         }
-        let modes = self.device.modes();
-        let hyperlink = self.device.active_hyperlink();
-        let damage = self.device.active_screen_mut().print(
-            b,
-            modes.insert_replace,
-            modes.auto_wrap,
-            hyperlink,
-        );
+        let damage = self.device.print(b);
         self.stage(damage);
     }
 

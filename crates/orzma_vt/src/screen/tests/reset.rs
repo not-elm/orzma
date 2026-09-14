@@ -32,7 +32,7 @@ fn a_reset_empties_every_visible_cell() {
 fn a_reset_leaves_no_trace_of_the_pen_background_in_the_cells() {
     let mut screen = screen();
     screen.pen_mut().bg = Color::Indexed(1);
-    screen.print('x', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+    screen.print('x', PrintOptions::default());
     assert_eq!(screen.reset(), Some(DamageSpan::Full));
     assert_eq!(screen.viewport_row(ViewportLine(0))[0], Cell::default());
 }
@@ -78,7 +78,7 @@ fn a_reset_drops_the_scrollback_history() {
 fn a_reset_returns_the_pen_to_normal_rendition() {
     let mut screen = screen();
     screen.pen_mut().bg = Color::Indexed(1);
-    screen.print('x', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
+    screen.print('x', PrintOptions::default());
     assert_eq!(screen.reset(), Some(DamageSpan::Full));
     assert_eq!(*screen.pen_mut(), Pen::default());
 }
