@@ -2,8 +2,14 @@
 //! panes, solved into whole-window rectangles with one-cell separators.
 
 use crate::protocol::{PaneDirection, PaneId, PaneRect, Separator, SplitId, SplitOrientation};
-use orzma_vt::prelude::GridSize;
+use orzma_vt::prelude::{GridSize, MIN_COLUMNS};
 use std::cmp::Reverse;
+
+/// The smallest rectangle a leaf is laid out in.
+const LEAF_MIN: GridSize = GridSize {
+    cols: MIN_COLUMNS,
+    rows: 1,
+};
 
 /// The solved geometry of every pane and separator.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,8 +30,8 @@ impl Solved {
     }
 }
 
-/// A split was refused because the target leaf is narrower than three
-/// cells along the split axis.
+/// A split was refused because the target leaf cannot hold two minimum
+/// leaves and a separator along the split axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SplitRefused;
 
@@ -104,8 +110,8 @@ impl LayoutTree {
     }
 
     /// Splits `target` in two, placing `new` right of / below it, and
-    /// makes `new` active. Refused when `target` is missing or narrower
-    /// than three cells along the axis in `window`.
+    /// makes `new` active. Refused when `target` is missing or, along the
+    /// axis in `window`, cannot hold two minimum leaves and a separator.
     pub fn split(
         &mut self,
         target: PaneId,
@@ -114,11 +120,11 @@ impl LayoutTree {
         window: GridSize,
     ) -> Result<(), SplitRefused> {
         let rect = self.solve(window).rect_of(target).ok_or(SplitRefused)?;
-        let along = match orientation {
-            SplitOrientation::Vertical => rect.cols,
-            SplitOrientation::Horizontal => rect.rows,
+        let (along, needed) = match orientation {
+            SplitOrientation::Vertical => (rect.cols, 2 * LEAF_MIN.cols + 1),
+            SplitOrientation::Horizontal => (rect.rows, 2 * LEAF_MIN.rows + 1),
         };
-        if along < 3 {
+        if along < needed {
             return Err(SplitRefused);
         }
         let id = SplitId(self.next_split_id);
@@ -333,11 +339,11 @@ impl Node {
         }
     }
 
-    /// Minimum size: a leaf is 1×1; a split needs both children plus one
-    /// separator along its axis and the larger child across it.
+    /// Minimum size: a leaf is [`LEAF_MIN`]; a split needs both children
+    /// plus one separator along its axis and the larger child across it.
     fn min_size(&self) -> GridSize {
         match self {
-            Node::Leaf(_) => GridSize { cols: 1, rows: 1 },
+            Node::Leaf(_) => LEAF_MIN,
             Node::Split(s) => {
                 let a = s.first.min_size();
                 let b = s.second.min_size();
@@ -638,12 +644,12 @@ mod tests {
         );
     }
 
-    /// Asserts that a leaf narrower than three cells along the split axis
-    /// refuses to split.
+    /// Asserts that a leaf too narrow to hold two minimum leaves and a
+    /// separator along the split axis refuses to split.
     ///
     /// Case: the user keeps splitting a pane until it is two columns wide.
     #[test]
-    fn a_split_needs_three_cells_along_its_axis() {
+    fn a_split_needs_room_for_two_minimum_leaves_and_a_separator() {
         let mut tree = LayoutTree::new();
         tree.insert_root(PaneId(1)).unwrap();
         let narrow = GridSize { cols: 2, rows: 24 };
@@ -690,11 +696,11 @@ mod tests {
             .unwrap();
         tree.set_root_ratio_for_test(0.1);
         let before = tree.solve(window);
-        assert_eq!(rect_of(&before, PaneId(3)).cols, 7);
+        assert_eq!(rect_of(&before, PaneId(3)).cols, 5);
         tree.remove(PaneId(2));
         let after = tree.solve(window);
-        assert_eq!(rect_of(&after, PaneId(1)).cols, 1);
-        assert_eq!(rect_of(&after, PaneId(3)).cols, 9);
+        assert_eq!(rect_of(&after, PaneId(1)).cols, 2);
+        assert_eq!(rect_of(&after, PaneId(3)).cols, 8);
     }
 
     /// Asserts that directional selection picks the adjacent, overlapping
@@ -748,7 +754,7 @@ mod tests {
     }
 
     /// Asserts that a window smaller than the tree's minimum solves
-    /// against the minimum, keeping every pane at least 1×1 and
+    /// against the minimum, keeping every pane at its leaf minimum and
     /// overflowing the window instead of collapsing.
     ///
     /// Case: the user shrinks the window to one column while two panes
@@ -763,7 +769,7 @@ mod tests {
                 pane: PaneId(1),
                 x: 0,
                 y: 0,
-                cols: 1,
+                cols: 2,
                 rows: 1
             }
         );
@@ -771,9 +777,9 @@ mod tests {
             rect_of(&solved, PaneId(2)),
             PaneRect {
                 pane: PaneId(2),
-                x: 2,
+                x: 3,
                 y: 0,
-                cols: 1,
+                cols: 2,
                 rows: 1
             }
         );
@@ -1003,7 +1009,7 @@ mod tests {
 
     /// Asserts that a window too narrow to honour the drag minimum on
     /// both sides still lets the divider move, falling back to the
-    /// tree's own one-cell minimum.
+    /// tree's own two-column leaf minimum.
     ///
     /// Case: the user shrinks the window until a two-pane row no
     /// longer fits its drag minimum, then drags a divider anyway.
@@ -1018,7 +1024,7 @@ mod tests {
 
         assert!(tree.resize_split(split, 1, narrow));
 
-        assert_eq!(tree.solve(narrow).separators[0].x, 1);
+        assert_eq!(tree.solve(narrow).separators[0].x, 2);
     }
 
     /// Asserts that resizing against a window smaller than the one the
@@ -1046,6 +1052,7 @@ mod tests {
     /// the per-leaf drag minimum no longer fits, then drags a divider.
     #[test]
     fn a_deep_column_below_the_drag_minimum_still_resizes() {
+        let wide = GridSize { cols: 23, rows: 24 };
         let narrow = GridSize { cols: 16, rows: 24 };
         let mut tree = LayoutTree::new();
         tree.insert_root(PaneId(1)).unwrap();
@@ -1054,7 +1061,7 @@ mod tests {
                 PaneId(target),
                 SplitOrientation::Vertical,
                 PaneId(new),
-                narrow,
+                wide,
             )
             .unwrap();
         }
@@ -1063,6 +1070,6 @@ mod tests {
         assert!(tree.resize_split(split, 14, narrow));
 
         let solved = tree.solve(narrow);
-        assert_eq!(solved.separators[0].x, 10);
+        assert_eq!(solved.separators[0].x, 7);
     }
 }

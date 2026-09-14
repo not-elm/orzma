@@ -1,6 +1,8 @@
 //! One row of elements, ordered left to right.
 
-use crate::screen::cell::Cell;
+use crate::error::{StampError, VtResult};
+use crate::hyperlink::HyperlinkId;
+use crate::screen::cell::{BodyWidth, Cell, CellWidth, Pen};
 use crate::screen::grid::coords::GridColumn;
 use crate::screen::grid::run::Run;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
@@ -56,6 +58,163 @@ impl Row<Cell> {
             }
         }
         Row(runs)
+    }
+
+    /// Stamps `c` at `column` with `pen`'s attributes inside
+    /// `hyperlink_id`, adding the continuation column when `width` is
+    /// `BodyWidth::Wide`, and restores the wide-pair invariant on both
+    /// sides of the write.
+    ///
+    /// # Errors
+    ///
+    /// [`StampError::OutOfRow`] when `column`, or the continuation of a
+    /// `Wide` glyph, lies past the end of the row. The row is left
+    /// unchanged.
+    pub fn stamp_at(
+        &mut self,
+        column: u16,
+        c: char,
+        width: BodyWidth,
+        pen: &Pen,
+        hyperlink_id: Option<HyperlinkId>,
+    ) -> VtResult {
+        let start = usize::from(column);
+        let end = match width {
+            BodyWidth::Narrow => start,
+            BodyWidth::Wide => start + 1,
+        };
+        if end >= self.0.len() {
+            return Err(StampError::OutOfRow.into());
+        }
+        let cell = pen.stamp(c, width, hyperlink_id);
+        if width == BodyWidth::Wide {
+            self.0[end] = cell.continuation();
+        }
+        self.0[start] = cell;
+        if start > 0 {
+            self.heal_joint(start - 1);
+        }
+        self.heal_joint(end);
+        Ok(())
+    }
+
+    /// Restores the wide-pair invariant across the whole row.
+    pub fn normalize_wide_pairs(&mut self) {
+        let cols = self.0.len();
+        for at in 0..cols {
+            match self.0[at].width {
+                CellWidth::Wide => {
+                    if at + 1 >= cols || self.0[at + 1].width != CellWidth::Spacer {
+                        self.blank_in_place(at);
+                    }
+                }
+                CellWidth::Spacer => {
+                    if at == 0 || self.0[at - 1].width != CellWidth::Wide {
+                        self.blank_in_place(at);
+                    } else {
+                        let continuation = self.0[at - 1].continuation();
+                        self.0[at] = continuation;
+                    }
+                }
+                CellWidth::LeadingSpacer => {
+                    if at + 1 != cols {
+                        self.blank_in_place(at);
+                    } else {
+                        let filler = &mut self.0[at];
+                        filler.c = ' ';
+                        filler.extra = None;
+                    }
+                }
+                CellWidth::Narrow => {}
+            }
+        }
+        debug_assert!(
+            self.wide_pairs_intact(),
+            "a normalization left a broken wide pair"
+        );
+    }
+
+    /// Restores the single joint a column resize from `old_cols` can
+    /// break.
+    ///
+    /// `old_cols` is the row's length before the resize that already
+    /// happened, and the row must have held an intact wide-pair
+    /// invariant at that length.
+    pub fn repair_after_resize(&mut self, old_cols: u16) {
+        if self.0.is_empty() {
+            return;
+        }
+        if self.0.len() == usize::from(old_cols) {
+            return;
+        }
+        let last = self.0.len() - 1;
+        if self.0.len() < usize::from(old_cols) {
+            if self.0[last].width == CellWidth::Wide {
+                self.blank_in_place(last);
+            }
+        } else {
+            let old_last = usize::from(old_cols).saturating_sub(1);
+            if old_last < self.0.len() && self.0[old_last].width == CellWidth::LeadingSpacer {
+                self.blank_in_place(old_last);
+            }
+        }
+    }
+
+    /// Whether every wide body in the row is followed by its
+    /// continuation, every continuation is preceded by its body, every
+    /// filler sits in the last column, and every continuation or filler
+    /// holds a blank glyph with no combining marks.
+    pub fn wide_pairs_intact(&self) -> bool {
+        let cols = self.0.len();
+        self.0
+            .iter()
+            .enumerate()
+            .all(|(at, cell)| match cell.width {
+                CellWidth::Wide => self.joint_intact(at),
+                CellWidth::Spacer => {
+                    at > 0 && self.joint_intact(at - 1) && cell.c == ' ' && cell.extra.is_none()
+                }
+                CellWidth::LeadingSpacer => at + 1 == cols && cell.c == ' ' && cell.extra.is_none(),
+                CellWidth::Narrow => true,
+            })
+    }
+
+    /// Restores the wide-pair invariant at the joint between `left` and
+    /// `left + 1`, blanking whichever half lost its partner.
+    fn heal_joint(&mut self, left: usize) {
+        let right = left + 1;
+        if right >= self.0.len() {
+            if self.0[left].width == CellWidth::Wide {
+                self.blank_in_place(left);
+            }
+            return;
+        }
+        let body = self.0[left].width == CellWidth::Wide;
+        let continuation = self.0[right].width == CellWidth::Spacer;
+        if body && !continuation {
+            self.blank_in_place(left);
+        } else if continuation && !body {
+            self.blank_in_place(right);
+        }
+    }
+
+    /// Whether the joint between `left` and `left + 1` pairs up.
+    fn joint_intact(&self, left: usize) -> bool {
+        let right = left + 1;
+        let body = self.0[left].width == CellWidth::Wide;
+        if right >= self.0.len() {
+            return !body;
+        }
+        body == (self.0[right].width == CellWidth::Spacer)
+    }
+
+    /// Turns the cell into a blank narrow cell, keeping its colors and
+    /// styling.
+    fn blank_in_place(&mut self, at: usize) {
+        let cell = &mut self.0[at];
+        cell.c = ' ';
+        cell.width = CellWidth::Narrow;
+        cell.extra = None;
     }
 }
 
@@ -117,6 +276,7 @@ impl IndexMut<GridColumn> for Row<Cell> {
 mod tests {
     use super::*;
     use crate::device::color::Color;
+    use crate::error::VtError;
     use crate::hyperlink::HyperlinkId;
     use crate::screen::grid::run::Style;
 
@@ -126,7 +286,7 @@ mod tests {
             fg,
             bg,
             style,
-            hyperlink_id: None,
+            ..Cell::default()
         }
     }
 
@@ -209,7 +369,7 @@ mod tests {
             cell('b', base.fg, base.bg, Style::BOLD),
         ];
         for second in differing {
-            let runs = Row::from(vec![base, second]).to_runs();
+            let runs = Row::from(vec![base.clone(), second.clone()]).to_runs();
             assert_eq!(runs.len(), 2, "expected a split before {second:?}");
             assert_eq!(runs[0].text, "a");
             assert_eq!(runs[1].text, "b");
@@ -247,6 +407,194 @@ mod tests {
             runs.0.capacity(),
             Row::RUNS_RESERVE
         );
+    }
+
+    fn wide_body(c: char) -> Cell {
+        Cell {
+            c,
+            width: CellWidth::Wide,
+            ..Cell::default()
+        }
+    }
+
+    /// Asserts that stamping a narrow cell over a wide body blanks the
+    /// continuation column the body left behind.
+    ///
+    /// Case: a program overwrites the left half of a fullwidth character
+    /// with an ASCII letter.
+    #[test]
+    fn stamping_over_a_wide_body_blanks_its_continuation() {
+        let body = wide_body('あ');
+        let spacer = body.continuation();
+        let mut row = Row::from(vec![body, spacer, Cell::default()]);
+        row.stamp_at(0, 'a', BodyWidth::Narrow, &Pen::default(), None)
+            .expect("the stamp fits");
+        assert_eq!(row[GridColumn(1)].width, CellWidth::Narrow);
+        assert_eq!(row[GridColumn(1)].c, ' ');
+        assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that stamping a narrow cell over a continuation column
+    /// blanks the wide body to its left.
+    ///
+    /// Case: a program overwrites the right half of a fullwidth
+    /// character.
+    #[test]
+    fn stamping_over_a_continuation_blanks_its_body() {
+        let body = wide_body('あ');
+        let spacer = body.continuation();
+        let mut row = Row::from(vec![body, spacer, Cell::default()]);
+        row.stamp_at(1, 'a', BodyWidth::Narrow, &Pen::default(), None)
+            .expect("the stamp fits");
+        assert_eq!(row[GridColumn(0)].width, CellWidth::Narrow);
+        assert_eq!(row[GridColumn(0)].c, ' ');
+        assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that a repair keeps the colors and styling of the cell it
+    /// blanks.
+    ///
+    /// Case: a fullwidth character inside a colored region is half
+    /// overwritten.
+    #[test]
+    fn a_repair_keeps_the_colors_of_the_cell_it_blanks() {
+        let mut body = wide_body('あ');
+        body.bg = Color::Indexed(4);
+        body.style = Style::BOLD;
+        let spacer = body.continuation();
+        let mut row = Row::from(vec![body, spacer, Cell::default()]);
+        row.stamp_at(1, 'a', BodyWidth::Narrow, &Pen::default(), None)
+            .expect("the stamp fits");
+        assert_eq!(row[GridColumn(0)].bg, Color::Indexed(4));
+        assert_eq!(row[GridColumn(0)].style, Style::BOLD);
+    }
+
+    /// Asserts that stamping a wide cell writes its continuation column.
+    ///
+    /// Case: a fullwidth character is printed with both of its columns
+    /// available.
+    #[test]
+    fn stamping_a_wide_cell_writes_its_continuation() {
+        let mut row = Row::from(vec![Cell::default(), Cell::default()]);
+        row.stamp_at(0, '界', BodyWidth::Wide, &Pen::default(), None)
+            .expect("the stamp fits");
+        assert_eq!(row[GridColumn(0)].width, CellWidth::Wide);
+        assert_eq!(row[GridColumn(1)].width, CellWidth::Spacer);
+        assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that a wide body whose continuation would fall past the
+    /// end of the row is refused, leaving the row unchanged.
+    ///
+    /// Case: a caller stamps a fullwidth character into the last column
+    /// without wrapping first.
+    #[test]
+    fn a_wide_body_at_the_last_column_is_refused() {
+        let mut row = Row::from(vec![Cell::default(), Cell::default()]);
+        let before = row.clone();
+        let result = row.stamp_at(1, 'あ', BodyWidth::Wide, &Pen::default(), None);
+        assert!(matches!(result, Err(VtError::Stamp(StampError::OutOfRow))));
+        assert_eq!(row, before);
+    }
+
+    /// Asserts that a full-row normalization repairs a pair broken in
+    /// the middle of the row.
+    ///
+    /// Case: an insert shifts the right half of a fullwidth character
+    /// away from its body.
+    #[test]
+    fn normalization_repairs_a_pair_broken_mid_row() {
+        let body = wide_body('あ');
+        let spacer = body.continuation();
+        let mut row = Row::from(vec![body, Cell::default(), spacer, Cell::default()]);
+        row.normalize_wide_pairs();
+        assert_eq!(row[GridColumn(0)].width, CellWidth::Narrow);
+        assert_eq!(row[GridColumn(2)].width, CellWidth::Narrow);
+        assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that a normalization gives a kept continuation the pen of
+    /// its body.
+    ///
+    /// Case: an edit leaves a continuation column carrying colors that no
+    /// longer match the glyph it covers.
+    #[test]
+    fn normalization_repens_a_kept_continuation() {
+        let mut body = wide_body('あ');
+        body.bg = Color::Indexed(4);
+        let mut spacer = body.continuation();
+        spacer.bg = Color::Indexed(1);
+        let mut row = Row::from(vec![body, spacer]);
+        row.normalize_wide_pairs();
+        assert_eq!(row[GridColumn(1)].bg, Color::Indexed(4));
+    }
+
+    /// Asserts that a shrink blanks a wide body whose continuation the
+    /// truncation removed.
+    ///
+    /// Case: the user drags the window narrow enough to cut a fullwidth
+    /// character in half.
+    #[test]
+    fn a_shrink_blanks_a_body_whose_continuation_was_cut() {
+        let body = wide_body('あ');
+        let spacer = body.continuation();
+        let mut row = Row::from(vec![Cell::default(), body, spacer]);
+        row.resize(2, Cell::default());
+        row.repair_after_resize(3);
+        assert_eq!(row[GridColumn(1)].width, CellWidth::Narrow);
+        assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that a growth blanks a leading spacer that is no longer in
+    /// the last column.
+    ///
+    /// Case: the user widens the window after a fullwidth character
+    /// wrapped at the old right edge.
+    #[test]
+    fn a_growth_blanks_a_leading_spacer_that_is_no_longer_last() {
+        let filler = Cell {
+            width: CellWidth::LeadingSpacer,
+            ..Cell::default()
+        };
+        let mut row = Row::from(vec![Cell::default(), filler]);
+        row.resize(4, Cell::default());
+        row.repair_after_resize(2);
+        assert_eq!(row[GridColumn(1)].width, CellWidth::Narrow);
+        assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that a repair called with the row's unchanged length keeps
+    /// a legal last-column leading spacer intact.
+    ///
+    /// Case: the window manager replays the same geometry after a
+    /// fullwidth character wrapped at the right edge.
+    #[test]
+    fn a_repair_at_the_same_length_keeps_a_last_column_leading_spacer() {
+        let filler = Cell {
+            width: CellWidth::LeadingSpacer,
+            ..Cell::default()
+        };
+        let mut row = Row::from(vec![Cell::default(), filler]);
+        row.repair_after_resize(2);
+        assert_eq!(row[GridColumn(1)].width, CellWidth::LeadingSpacer);
+    }
+
+    /// Asserts that a normalization blanks a filler in the last column
+    /// that carries a non-blank glyph.
+    ///
+    /// Case: an in-row insert shifts a glyph into the last column that a
+    /// wrapped fullwidth character had left as a filler.
+    #[test]
+    fn normalization_blanks_a_last_column_filler_carrying_a_glyph() {
+        let filler = Cell {
+            c: 'X',
+            width: CellWidth::LeadingSpacer,
+            ..Cell::default()
+        };
+        let mut row = Row::from(vec![Cell::default(), filler]);
+        row.normalize_wide_pairs();
+        assert_eq!(row[GridColumn(1)].c, ' ');
+        assert!(row.wide_pairs_intact());
     }
 
     /// Asserts that a row splits into separate runs where the hyperlink

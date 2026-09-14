@@ -14,13 +14,14 @@ pub(crate) mod placements;
 
 mod state;
 
-use self::cell::{Cell, Pen};
+use self::cell::{BodyWidth, Cell, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
 use crate::device::modes::{
     AutoWrap, CursorBlink, InsertReplaceMode, TextCursorEnable, TextCursorModes,
 };
+use crate::error::VtResult;
 use crate::frame::damage::DamageSpan;
 use crate::hyperlink::HyperlinkId;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
@@ -165,7 +166,13 @@ impl Screen {
     /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
     /// the row the character landed on, or `None` when that row has
     /// scrolled out of the window.
-    pub fn print(&mut self, c: char, options: PrintOptions) -> Option<DamageSpan> {
+    ///
+    /// # Errors
+    ///
+    /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
+    /// refuses the character; the cursor and the deferred wrap are then
+    /// left as the wrap left them.
+    pub fn print(&mut self, c: char, options: PrintOptions) -> VtResult<Option<DamageSpan>> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
         let wrapping = options.auto_wrap.wraps();
         let wrap = if self.state.pending_wrap && wrapping {
@@ -182,17 +189,22 @@ impl Screen {
         if matches!(options.insert_replace, InsertReplaceMode::Insert) {
             self.insert_characters(1);
         }
-        self.grid[self.state.line][self.state.column] =
-            self.state.pen.stamp(glyph, options.hyperlink_id);
-        let at_right_edge = self.at_right_edge();
-        if !at_right_edge {
+        self.grid[self.state.line].stamp_at(
+            self.state.column.0,
+            glyph,
+            BodyWidth::Narrow,
+            &self.state.pen,
+            options.hyperlink_id,
+        )?;
+        let is_last_column = self.is_last_column();
+        if !is_last_column {
             self.state.column.0 += 1;
         }
-        self.state.pending_wrap = at_right_edge && wrapping;
-        match wrap {
+        self.state.pending_wrap = is_last_column && wrapping;
+        Ok(match wrap {
             Some(DamageSpan::Full) => Some(DamageSpan::Full),
             _ => self.damage_span(self.state.line, self.state.line),
-        }
+        })
     }
 
     /// Disarms the deferred wrap, leaving the cursor and the cells
@@ -607,7 +619,7 @@ impl Screen {
         let fill = self.state.pen.erase_cell();
         let feeds_history = first == ScreenLine(0);
         for _ in 0..count {
-            self.grid.scroll_up_one(first, bottom, fill);
+            self.grid.scroll_up_one(first, bottom, fill.clone());
             if feeds_history {
                 self.hold_scrolled_viewport();
             }
@@ -626,7 +638,7 @@ impl Screen {
         let count = self.clamped_rows(first, count)?;
         let fill = self.state.pen.erase_cell();
         for _ in 0..count {
-            self.grid.scroll_down_one(first, bottom, fill);
+            self.grid.scroll_down_one(first, bottom, fill.clone());
         }
         Some(DamageSpan::Full)
     }
@@ -729,18 +741,21 @@ impl Screen {
         let blank = self.state.pen.erase_cell();
         match mode {
             EraseScreenMode::Below => {
-                self.grid
-                    .fill_visible_row_range(self.state.line, self.state.column.0..cols, blank);
+                self.grid.fill_visible_row_range(
+                    self.state.line,
+                    self.state.column.0..cols,
+                    blank.clone(),
+                );
                 for line in self.state.line.0 + 1..rows {
                     self.grid
-                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank.clone());
                 }
                 self.damage_span(self.state.line, ScreenLine(rows - 1))
             }
             EraseScreenMode::Above => {
                 for line in 0..self.state.line.0 {
                     self.grid
-                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank.clone());
                 }
                 self.grid.fill_visible_row_range(
                     self.state.line,
@@ -752,7 +767,7 @@ impl Screen {
             EraseScreenMode::All => {
                 for line in 0..rows {
                     self.grid
-                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank.clone());
                 }
                 Some(DamageSpan::Full)
             }
@@ -772,12 +787,19 @@ impl Screen {
     /// All three conditions are required: the deferred wrap armed,
     /// `DECAWM` set, and the cursor on the last column.
     fn cursor_parked_past_the_row(&self, auto_wrap: AutoWrap) -> bool {
-        self.state.pending_wrap && auto_wrap.wraps() && self.at_right_edge()
+        self.state.pending_wrap && auto_wrap.wraps() && self.is_last_column()
     }
 
     /// Whether the cursor is on the row's last column.
-    fn at_right_edge(&self) -> bool {
+    fn is_last_column(&self) -> bool {
         self.state.column.0 + 1 >= self.grid.size().cols
+    }
+
+    /// Whether a glyph spanning `width` columns fits from the cursor's
+    /// column through the row's end.
+    #[cfg(test)]
+    fn fits(&self, width: u16) -> bool {
+        width <= self.grid.size().cols.saturating_sub(self.state.column.0)
     }
 }
 
@@ -1252,7 +1274,7 @@ impl Screen {
         };
         for line in 0..size.rows {
             self.grid
-                .fill_visible_row_range(ScreenLine(line), 0..size.cols, cell);
+                .fill_visible_row_range(ScreenLine(line), 0..size.cols, cell.clone());
         }
         self.scroll_region = ScrollRegion::new(size.rows);
         self.seat_cursor(ScreenLine(0), GridColumn(0));
