@@ -29,7 +29,7 @@ pub mod prelude {
         AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode, MouseEncoding,
         MouseTracking, ScreenKind, TextCursorEnable, TextCursorModes, VtModes,
     };
-    pub use crate::error::{GridSizeError, StampError, VtError, VtResult};
+    pub use crate::error::{GridSizeError, RunError, StampError, VtError, VtResult};
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::placement::{AnchoredPlacement, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};

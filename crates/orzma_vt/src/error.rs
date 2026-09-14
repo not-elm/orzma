@@ -15,6 +15,9 @@ pub enum VtError {
     /// A glyph a row refused to stamp.
     #[error(transparent)]
     Stamp(#[from] StampError),
+    /// A run whose widths do not describe its text.
+    #[error(transparent)]
+    Run(#[from] RunError),
 }
 
 /// The reason a row refuses to stamp a glyph.
@@ -36,4 +39,22 @@ pub enum GridSizeError {
     /// [`GridSize::MAX_ROWS`].
     #[error("a grid axis exceeds {}x{}", GridSize::MAX_COLS, GridSize::MAX_ROWS)]
     TooLarge,
+}
+
+/// The reason a run's widths do not describe its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum RunError {
+    /// A widths list whose length differs from the `char` count of the
+    /// text.
+    #[error("a run's widths do not cover each char of its text")]
+    WidthCount,
+    /// A widths list whose sum differs from the run's column span.
+    #[error("a run's widths do not sum to its columns")]
+    WidthSum,
+    /// A width other than 0, 1 or 2.
+    #[error("a run width is not 0, 1 or 2")]
+    InvalidWidth,
+    /// A first `char` at width zero, with no glyph before it to join.
+    #[error("a run starts with a continuation")]
+    LeadingContinuation,
 }
