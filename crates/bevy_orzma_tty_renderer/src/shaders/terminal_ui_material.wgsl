@@ -293,26 +293,19 @@ fn paint_text_decorations(
     cell_hyperlink_id: u32,
 ) -> vec4<f32> {
     var color = base;
-    var underline_painted = false;
-    if cell_hyperlink_id != 0u {
-        let is_hovered =
-            params.hover_active != 0u &&
-            cell_hyperlink_id == params.hover_hyperlink_id;
-        let underline_color = select(fg, ACCENT_LINK_COLOR, is_hovered);
-        let y_top = params.ascent_px - params.underline_position_phys;
-        let y_bot = y_top + params.underline_thickness_phys;
-        if in_cell_px.y >= y_top && in_cell_px.y < y_bot {
-            color = vec4<f32>(underline_color.rgb, max(color.a, underline_color.a));
-        }
-        underline_painted = true;
-    }
-    if (style & STYLE_UNDERLINE) != 0u && !underline_painted {
+    let is_link = cell_hyperlink_id != 0u;
+    let hovered_link =
+        is_link &&
+        params.hover_active != 0u &&
+        cell_hyperlink_id == params.hover_hyperlink_id;
+    if is_link || (style & STYLE_UNDERLINE) != 0u {
+        let underline_color = select(fg, ACCENT_LINK_COLOR, hovered_link);
         // underline_position_phys is negative (below baseline). The actual
         // y in the cell is baseline + |underline_position|.
         let y_top = params.ascent_px - params.underline_position_phys;
         let y_bot = y_top + params.underline_thickness_phys;
         if in_cell_px.y >= y_top && in_cell_px.y < y_bot {
-            color = vec4<f32>(fg.rgb, max(color.a, fg.a));
+            color = vec4<f32>(underline_color.rgb, max(color.a, underline_color.a));
         }
     }
     if (style & STYLE_STRIKE) != 0u {

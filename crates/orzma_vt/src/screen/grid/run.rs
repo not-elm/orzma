@@ -2,6 +2,7 @@
 
 use crate::device::color::Color;
 use crate::hyperlink::HyperlinkId;
+use crate::screen::cell::Cell;
 use bitflags::bitflags;
 
 bitflags! {
@@ -38,10 +39,20 @@ pub struct Run {
     pub style: Style,
     /// UTF-8 text.
     pub text: String,
-    /// Hyperlink id (OSC 8); it is always `None`.
-    ///
-    /// TODO: set it once OSC 8 handling reaches the hyperlink interner.
+    /// The hyperlink every cell in the run carries, if any. It resolves
+    /// against the definitions the frame carries.
     pub hyperlink_id: Option<HyperlinkId>,
+}
+
+impl Run {
+    /// Whether `cell` carries this run's foreground, background, style, and
+    /// hyperlink, so it extends the run rather than starting a new one.
+    pub fn continues_with(&self, cell: &Cell) -> bool {
+        self.fg == cell.fg
+            && self.bg == cell.bg
+            && self.style == cell.style
+            && self.hyperlink_id == cell.hyperlink_id
+    }
 }
 
 impl Default for Run {
