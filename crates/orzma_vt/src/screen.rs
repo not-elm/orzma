@@ -228,8 +228,13 @@ impl Screen {
         if matches!(options.insert_replace, InsertReplaceMode::Insert) {
             self.insert_characters(columns);
         }
-        let cell = self.state.pen.stamp(glyph, width, options.hyperlink_id);
-        self.grid[self.state.line].stamp_at(landing, cell)?;
+        self.grid[self.state.line].stamp_at(
+            landing,
+            glyph,
+            width,
+            &self.state.pen,
+            options.hyperlink_id,
+        )?;
         self.state.last_landing = Some((self.state.line, GridColumn(landing)));
         if ends_row {
             self.state.column = GridColumn(cols - 1);
