@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn full_damage_emits_every_viewport_row() {
         let mut rig = drained_rig();
-        rig.device.print('a');
+        rig.device.print('a').expect("a printable glyph");
         rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert_eq!(frame.size, GridSize { cols: 4, rows: 3 });
@@ -465,9 +465,9 @@ mod tests {
         let mut rig = drained_rig();
         rig.device
             .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
-        rig.device.print('a');
+        rig.device.print('a').expect("a printable glyph");
         rig.device.close_hyperlink();
-        rig.device.print('b');
+        rig.device.print('b').expect("a printable glyph");
         rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert_eq!(frame.hyperlinks.len(), 1);
@@ -493,7 +493,7 @@ mod tests {
         rig.device
             .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
         for _ in 0..5 {
-            rig.device.print('a');
+            rig.device.print('a').expect("a printable glyph");
         }
         rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
@@ -511,7 +511,7 @@ mod tests {
         rig.device
             .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
         rig.device.close_hyperlink();
-        rig.device.print('a');
+        rig.device.print('a').expect("a printable glyph");
         rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert!(frame.hyperlinks.is_empty());
@@ -527,7 +527,7 @@ mod tests {
         let mut rig = drained_rig();
         rig.device
             .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
-        rig.device.print('a');
+        rig.device.print('a').expect("a printable glyph");
         rig.tracker.stage(DamageSpan::Full);
         let first = emit(&mut rig).expect("the first frame carries the linked row");
         assert_eq!(first.hyperlinks.len(), 1);

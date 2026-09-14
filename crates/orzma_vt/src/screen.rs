@@ -21,6 +21,7 @@ use self::grid::row::Row;
 use crate::device::modes::{
     AutoWrap, CursorBlink, InsertReplaceMode, TextCursorEnable, TextCursorModes,
 };
+use crate::error::VtResult;
 use crate::frame::damage::DamageSpan;
 use crate::hyperlink::HyperlinkId;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
@@ -177,16 +178,24 @@ impl Screen {
     /// Reports [`DamageSpan::Full`] when a wrap scrolled, otherwise every
     /// row the print touched, or `None` when nothing changed or the rows
     /// have scrolled out of the window.
-    pub fn print(&mut self, c: char, options: PrintOptions) -> Option<DamageSpan> {
+    ///
+    /// # Errors
+    ///
+    /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
+    /// refuses the glyph; the cursor and the deferred wrap are then left
+    /// as the wrap left them.
+    pub fn print(&mut self, c: char, options: PrintOptions) -> VtResult<Option<DamageSpan>> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
-        let class = GlyphClass::of(glyph)?;
+        let Some(class) = GlyphClass::of(glyph) else {
+            return Ok(None);
+        };
         let Some(width) = class.body_width() else {
-            return self.attach_zero_width(glyph);
+            return Ok(self.attach_zero_width(glyph));
         };
         let columns = class.columns();
         let cols = self.grid.size().cols;
         if columns > cols {
-            return None;
+            return Ok(None);
         }
         let wrapping = options.auto_wrap.wraps();
         let mut first_line = self.state.line;
@@ -207,7 +216,7 @@ impl Screen {
             self.line_feed()
         } else {
             self.state.pending_wrap = false;
-            return None;
+            return Ok(None);
         };
         let landing = self.state.column.0;
         let ends_row = landing.saturating_add(columns) >= cols;
@@ -220,7 +229,7 @@ impl Screen {
             self.insert_characters(columns);
         }
         let cell = self.state.pen.stamp(glyph, width, options.hyperlink_id);
-        self.grid[self.state.line].stamp_at(landing, cell);
+        self.grid[self.state.line].stamp_at(landing, cell)?;
         if ends_row {
             self.state.column = GridColumn(cols - 1);
             self.state.pending_wrap = wrapping;
@@ -229,9 +238,9 @@ impl Screen {
             self.state.pending_wrap = false;
         }
         if matches!(wrap, Some(DamageSpan::Full)) || matches!(overflow, Some(DamageSpan::Full)) {
-            return Some(DamageSpan::Full);
+            return Ok(Some(DamageSpan::Full));
         }
-        self.damage_span(first_line, self.state.line)
+        Ok(self.damage_span(first_line, self.state.line))
     }
 
     /// Disarms the deferred wrap, leaving the cursor and the cells
