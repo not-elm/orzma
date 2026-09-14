@@ -110,9 +110,13 @@ fn hyperlink_hover_and_cursor(
     hover.entity = None;
     hover.hyperlink_id = None;
 
-    let hovered = geometry
-        .and_then(|geometry| SeparatorHit::at(cursor_phys, &geometry, separators.iter()))
-        .map(|hit| hit.orientation);
+    let hovered = if held.is_none() {
+        geometry
+            .and_then(|geometry| SeparatorHit::at(cursor_phys, &geometry, separators.iter()))
+            .map(|hit| hit.orientation)
+    } else {
+        None
+    };
 
     let target = HoverTarget::resolve(held, hovered, || {
         HoverTarget::over_surface(
@@ -196,7 +200,7 @@ impl HoverTarget {
     /// The region for a pointer whose position is unknown: the divider a
     /// drag holds, else `Default`.
     fn unlocated(held: Option<SplitOrientation>) -> Self {
-        held.map_or(Self::Default, Self::Separator)
+        Self::resolve(held, None, || Self::Default)
     }
 
     /// The region for the topmost mouse-enabled surface under
@@ -795,18 +799,7 @@ mod tests {
     /// so the pointer leaves the client area while the button is held.
     #[test]
     fn a_held_drag_keeps_the_resize_cursor_off_the_window() {
-        use bevy::math::DVec2;
-
-        let mut app = divider_hover_app(2.0, Vec2::new(20.0, 40.0));
-        let window = app
-            .world_mut()
-            .query_filtered::<Entity, With<PrimaryWindow>>()
-            .single(app.world())
-            .unwrap();
-        app.world_mut()
-            .get_mut::<Window>(window)
-            .unwrap()
-            .set_physical_cursor_position(Some(DVec2::new(20.0, 4000.0)));
+        let mut app = divider_hover_app(2.0, Vec2::new(20.0, 4000.0));
         app.world_mut().spawn((
             OrzmuxSeparator {
                 split: SplitId(1),

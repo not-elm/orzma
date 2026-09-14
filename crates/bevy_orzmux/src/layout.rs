@@ -22,8 +22,10 @@ pub struct PaneGeometry {
 }
 
 impl PaneGeometry {
-    /// The cell pitch as `(width, height)` in physical px.
-    pub fn cell_pitch_phys(&self) -> (f32, f32) {
+    /// The cell pitch as `(width, height)` in physical px, as the host
+    /// recorded it from `surface::geometry::cell_pitch_phys` in
+    /// `src/session/layout.rs`.
+    pub fn cell_pitch(&self) -> (f32, f32) {
         (
             f32::from(self.cell_px.width),
             f32::from(self.cell_px.height),
@@ -174,7 +176,7 @@ fn reconcile_separators(
 /// line's thickness separates two panes on either axis.
 fn pane_node(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Node {
     let scale = geometry.scale_factor;
-    let (cell_w, cell_h) = geometry.cell_pitch_phys();
+    let (cell_w, cell_h) = geometry.cell_pitch();
     let thickness = line_thickness_phys(geometry);
     let bleed_x = gap_before_line(rect.x, rect.cols, layout.size.cols, cell_w, thickness);
     let bleed_y = gap_before_line(rect.y, rect.rows, layout.size.rows, cell_h, thickness);
@@ -197,7 +199,7 @@ fn pane_node(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Node 
 /// the line never rounds away to nothing.
 fn separator_node(separator: &Separator, layout: &Layout, geometry: &PaneGeometry) -> Node {
     let scale = geometry.scale_factor;
-    let (cell_w, cell_h) = geometry.cell_pitch_phys();
+    let (cell_w, cell_h) = geometry.cell_pitch();
     let thickness = line_thickness_phys(geometry);
     let x = f32::from(separator.x);
     let y = f32::from(separator.y);

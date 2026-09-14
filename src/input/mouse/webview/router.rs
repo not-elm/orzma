@@ -48,8 +48,7 @@ impl Plugin for MouseWebviewRouterPlugin {
 /// Forwards left press/release to the inline CEF child under the cursor
 /// on the shell surface. A window-unfocused frame drains the reader and
 /// releases an in-flight press so the focused page is not left logically
-/// pressed; a frame whose press a pane-divider grab consumed drains the
-/// reader and leaves an in-flight press recorded rather than releasing it.
+/// pressed; a [`GrabbedSeparator`] stands this router down instead.
 fn route_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
@@ -120,10 +119,10 @@ fn route_webview_pointer(
 }
 
 /// Forwards pointer motion over an interactive inline rect of the shell surface
-/// to the child's CEF browser via the shared `forward_webview_move_at`. A frame
-/// a pane-divider grab holds drains the reader and forwards nothing, so the page
-/// under a divider drag is neither told the pointer is dragging across it nor
-/// allowed to take the resize cursor.
+/// to the child's CEF browser via the shared `forward_webview_move_at`. A
+/// [`GrabbedSeparator`] stands this forwarder down, so the page under a divider
+/// drag is neither told the pointer is dragging across it nor allowed to take
+/// the resize cursor.
 fn forward_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     surfaces: Query<

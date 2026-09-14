@@ -220,7 +220,7 @@ impl LayoutTree {
         let Some((node, rect)) = root.find_split_mut(split, root_rect) else {
             return false;
         };
-        let (avail, origin, drag_lo, drag_hi, lo, hi) = match node.orientation {
+        let (avail, origin, drag_lo, drag_hi) = match node.orientation {
             SplitOrientation::Vertical => {
                 let avail = rect.cols - 1;
                 (
@@ -228,8 +228,6 @@ impl LayoutTree {
                     rect.x,
                     node.first.min_size_for_drag().cols,
                     avail.saturating_sub(node.second.min_size_for_drag().cols),
-                    node.first.min_size().cols,
-                    avail - node.second.min_size().cols,
                 )
             }
             SplitOrientation::Horizontal => {
@@ -239,13 +237,20 @@ impl LayoutTree {
                     rect.y,
                     node.first.min_size_for_drag().rows,
                     avail.saturating_sub(node.second.min_size_for_drag().rows),
-                    node.first.min_size().rows,
-                    avail - node.second.min_size().rows,
                 )
             }
         };
         let (lo, hi) = if drag_lo > drag_hi {
-            (lo, hi)
+            match node.orientation {
+                SplitOrientation::Vertical => (
+                    node.first.min_size().cols,
+                    avail - node.second.min_size().cols,
+                ),
+                SplitOrientation::Horizontal => (
+                    node.first.min_size().rows,
+                    avail - node.second.min_size().rows,
+                ),
+            }
         } else {
             (drag_lo, drag_hi)
         };

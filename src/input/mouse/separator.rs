@@ -1,7 +1,8 @@
 //! Grabbing and dragging the divider between two panes.
 
-use super::TerminalSurfaces;
+use super::{TerminalSurfaces, on_any_mouse_message};
 use crate::input::mouse::MousePhase;
+use crate::surface::geometry::phys_to_pane_local;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
@@ -19,8 +20,12 @@ impl Plugin for SeparatorDragPlugin {
         app.add_systems(
             Update,
             (
-                drive_separator_drag.in_set(MousePhase::Grab),
-                retire_separator_drag.in_set(MousePhase::Retire),
+                drive_separator_drag
+                    .in_set(MousePhase::Grab)
+                    .run_if(on_any_mouse_message().or_else(any_with_component::<GrabbedSeparator>)),
+                retire_separator_drag
+                    .in_set(MousePhase::Retire)
+                    .run_if(any_with_component::<GrabbedSeparator>),
             ),
         );
     }
@@ -128,13 +133,15 @@ impl SeparatorHit {
         Self::resolve(
             cursor_phys,
             geometry.scale_factor,
-            geometry.cell_pitch_phys(),
+            geometry.cell_pitch(),
             separators,
         )
     }
 }
 
-/// The divider the pointer is holding.
+/// The divider the pointer is holding. While it exists, every other
+/// mouse consumer drains its own readers and forwards nothing, each
+/// keeping whatever in-flight state it already holds.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub(in crate::input) struct GrabbedSeparator {
     /// The split the held divider moves.
@@ -195,7 +202,7 @@ fn drive_separator_drag(
         cursor_moved.clear();
         return;
     };
-    let cell_px = geometry.cell_pitch_phys();
+    let cell_px = geometry.cell_pitch();
     let window = windows.single().ok();
     let focused = window.is_some_and(|window| window.focused);
     let cursor = reported_cursor_phys(window, cursor_moved.read().last());
@@ -300,8 +307,7 @@ fn container_local(
     cursor_phys: Vec2,
 ) -> Option<Vec2> {
     let (node, transform) = container.single().ok()?;
-    node.normalize_point(*transform, cursor_phys)
-        .map(|n| (n + Vec2::splat(0.5)) * node.size)
+    phys_to_pane_local(node, transform, cursor_phys)
 }
 
 #[cfg(test)]
@@ -694,7 +700,21 @@ mod tests {
     /// like any other position, so `Window::physical_cursor_position`
     /// bounds-checks it away and only the `CursorMoved` carries the
     /// pointer.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `phys` is inside the window, where
+    /// `Window::physical_cursor_position` would report it after all.
     fn move_off_window(app: &mut App, phys: Vec2) {
+        let window = primary_window(app);
+        let resolution = &app.world().get::<Window>(window).unwrap().resolution;
+        debug_assert!(
+            phys.x < 0.0
+                || phys.y < 0.0
+                || phys.x >= resolution.physical_width() as f32
+                || phys.y >= resolution.physical_height() as f32,
+            "move_off_window needs a point the window's bounds check rejects"
+        );
         move_to(app, phys);
     }
 
