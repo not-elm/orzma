@@ -7,9 +7,9 @@ use crate::schema::{
     ViCursor,
 };
 use bevy::prelude::*;
-use orzma_vt::prelude::Frame;
 #[cfg(test)]
 use orzma_vt::prelude::GridSize;
+use orzma_vt::prelude::{Frame, VtResult};
 use std::collections::HashMap;
 
 /// One materialized cell of the renderer's CPU-side grid, expanded
@@ -184,7 +184,8 @@ impl TerminalGrid {
     ///
     /// # Invariants
     ///
-    /// Returns `true` exactly when [`Self::apply`] mutates something.
+    /// Returns `true` exactly when [`Self::apply`] mutates something or
+    /// returns `Err`.
     pub fn differs_from(&self, frame: &Frame) -> bool {
         let Frame {
             size,
@@ -223,12 +224,18 @@ impl TerminalGrid {
     /// which this frame's own definitions are merged first; the `None`
     /// sections are left alone.
     ///
+    /// # Errors
+    ///
+    /// A frame carrying a run that fails [`Run::check`] is rejected with
+    /// that error, and the grid is left untouched.
+    ///
     /// # Invariants
     ///
-    /// After `apply` returns, `self.cells.len() == self.rows as usize`,
+    /// After `apply` returns `Ok`, `self.cells.len() == self.rows as usize`,
     /// whatever length the grid was built with. It mutates the grid
-    /// exactly when [`Self::differs_from`] reports `true`.
-    pub fn apply(&mut self, frame: &Frame) {
+    /// exactly when [`Self::differs_from`] reports `true` and it returns
+    /// `Ok`.
+    pub fn apply(&mut self, frame: &Frame) -> VtResult {
         let Frame {
             size,
             rows,
@@ -240,6 +247,9 @@ impl TerminalGrid {
             palette,
             hyperlinks,
         } = frame;
+        rows.iter()
+            .flat_map(|row| row.contents.iter())
+            .try_for_each(Run::check)?;
         self.cols = size.cols;
         self.rows = size.rows;
         self.cells.resize_with(usize::from(size.rows), Vec::new);
@@ -265,6 +275,7 @@ impl TerminalGrid {
         if let Some(palette) = palette {
             self.palette.clone_from(palette);
         }
+        Ok(())
     }
 }
 
@@ -273,6 +284,7 @@ impl TerminalGrid {
 ///
 /// Column advance follows each run's widths: a `char` at width two takes
 /// two columns, and a `char` at width zero joins the cell before it.
+/// Every run must pass [`Run::check`].
 fn runs_to_cells(
     runs: &[Run],
     line: GridLine,
@@ -286,19 +298,6 @@ fn runs_to_cells(
         Vec::with_capacity(runs.iter().map(|run| usize::from(run.cols)).sum());
     let mut column: u16 = 0;
     for run in runs {
-        debug_assert!(
-            run.widths.is_empty() || run.widths.len() == run.text.chars().count(),
-            "a run's widths cover each char of its text"
-        );
-        debug_assert!(
-            run.widths.is_empty()
-                || run.widths.iter().map(|w| u32::from(*w)).sum::<u32>() == u32::from(run.cols),
-            "a run's widths sum to its columns"
-        );
-        debug_assert!(
-            run.widths.iter().all(|w| *w <= 2) && run.widths.first() != Some(&0),
-            "a run's widths are 0, 1 or 2 and never start with a continuation"
-        );
         let hyperlink = run.hyperlink_id.and_then(|id| {
             hyperlinks.get(&id).map(|uri| Hyperlink {
                 id,
@@ -370,7 +369,7 @@ mod tests {
         Color, Cursor, CursorShape, GridColumn, GridLine, GridPoint, Hyperlink, InstanceId,
         PlacementSize, Rgb, Row, Style,
     };
-    use orzma_vt::prelude::{DirtyRow, ViewportLine};
+    use orzma_vt::prelude::{DirtyRow, RunError, ViewportLine, VtError};
 
     fn id(value: u32) -> HyperlinkId {
         HyperlinkId::new(value).expect("nonzero")
@@ -809,7 +808,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert!(!grid.differs_from(&frame));
     }
 
@@ -827,7 +826,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert!(!grid.differs_from(&frame));
     }
 
@@ -844,7 +843,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!(grid.cells.len(), 2);
         assert!(!grid.differs_from(&frame));
     }
@@ -871,7 +870,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!(grid.cells[1][0].text, "x");
         assert_eq!(grid.cells[1][0].point.line, GridLine(-2));
         assert!(grid.cells[0].is_empty());
@@ -897,7 +896,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!(grid.cells.len(), 2);
         assert_eq!(grid.cells[1][0].text, "b");
         assert!(!grid.differs_from(&Frame {
@@ -925,7 +924,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!((grid.cols, grid.rows), (1, 1));
         assert_eq!(grid.cells.len(), 1);
         assert_eq!(grid.cells[0][0].text, "a");
@@ -945,7 +944,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!((grid.cols, grid.rows), (3, 1));
         assert_eq!(grid.cells[0].len(), 3);
         assert!(!grid.differs_from(&Frame {
@@ -966,7 +965,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(!grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!(grid.cells.len(), 1);
     }
 
@@ -984,7 +983,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!((grid.cols, grid.rows), (3, 2));
         assert_eq!(grid.cells.len(), 2);
         assert_eq!(grid.cells[1][0].text, "b");
@@ -1012,12 +1011,12 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&mounted));
-        grid.apply(&mounted);
+        grid.apply(&mounted).expect("a valid frame");
         assert_eq!(grid.placements, vec![placed]);
 
         let unchanged = quiet_frame();
         assert!(!grid.differs_from(&unchanged));
-        grid.apply(&unchanged);
+        grid.apply(&unchanged).expect("a valid frame");
         assert_eq!(grid.placements, vec![placed]);
 
         let hidden = Frame {
@@ -1025,7 +1024,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&hidden));
-        grid.apply(&hidden);
+        grid.apply(&hidden).expect("a valid frame");
         assert_eq!(grid.placements, vec![]);
     }
 
@@ -1045,7 +1044,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&recolored));
-        grid.apply(&recolored);
+        grid.apply(&recolored).expect("a valid frame");
         assert_eq!(grid.palette.background, Rgb { r: 9, g: 8, b: 7 });
         assert!(!grid.differs_from(&quiet_frame()));
     }
@@ -1084,7 +1083,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&extended));
-        grid.apply(&extended);
+        grid.apply(&extended).expect("a valid frame");
         assert_eq!(grid.hyperlinks.len(), 2);
         assert_eq!(grid.hyperlinks[&id(1)].as_str(), "https://old");
         assert_eq!(grid.hyperlinks[&id(2)].as_str(), "https://new");
@@ -1104,17 +1103,56 @@ mod tests {
                 uri: HyperlinkUri::new("https://earlier"),
             }],
             ..quiet_frame()
-        });
+        })
+        .expect("a valid frame");
         grid.apply(&Frame {
             rows: vec![DirtyRow {
                 line: ViewportLine(0),
                 contents: Row::from(vec![run_with_link("a", Some(id(4)))]),
             }],
             ..quiet_frame()
-        });
+        })
+        .expect("a valid frame");
         assert_eq!(
             grid.cells[0][0].hyperlink.as_ref().map(|h| h.uri.as_str()),
             Some("https://earlier")
         );
+    }
+
+    /// Asserts that a frame carrying a run whose widths fail
+    /// [`Run::check`] is rejected with that error and leaves the grid
+    /// untouched, cursor and hyperlink table included.
+    ///
+    /// Case: a producer emits a run with a width of three alongside a
+    /// moved cursor and a new hyperlink definition.
+    #[test]
+    fn a_frame_with_a_malformed_run_is_rejected_and_leaves_the_grid_untouched() {
+        let mut grid = TerminalGrid::settled();
+        let frame = Frame {
+            rows: vec![DirtyRow {
+                line: ViewportLine(0),
+                contents: Row::from(vec![run_with_widths("\u{3042}", &[3])]),
+            }],
+            cursor: Cursor {
+                point: GridPoint {
+                    line: GridLine(0),
+                    column: GridColumn(1),
+                },
+                ..Cursor::default()
+            },
+            hyperlinks: vec![Hyperlink {
+                id: id(4),
+                uri: HyperlinkUri::new("https://rejected"),
+            }],
+            ..quiet_frame()
+        };
+        assert!(grid.differs_from(&frame));
+        assert!(matches!(
+            grid.apply(&frame),
+            Err(VtError::Run(RunError::InvalidWidth))
+        ));
+        assert_eq!(grid.cells, vec![vec![]]);
+        assert_eq!(grid.cursor, Some(Cursor::default()));
+        assert!(grid.hyperlinks.is_empty());
     }
 }
