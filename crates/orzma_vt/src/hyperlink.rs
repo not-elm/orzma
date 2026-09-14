@@ -42,8 +42,8 @@ pub struct HyperlinkUri(Arc<str>);
 
 impl HyperlinkUri {
     /// Wraps a string as a hyperlink URI.
-    pub fn new(s: impl Into<String>) -> Self {
-        Self(Arc::from(s.into()))
+    pub fn new(s: impl Into<Arc<str>>) -> Self {
+        Self(s.into())
     }
 
     /// Returns the underlying string slice.
@@ -60,24 +60,9 @@ pub fn is_allowed(uri: &str) -> bool {
         .is_some_and(|s| ALLOWED_SCHEMES.contains(&s.as_str()))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct HyperlinkSourceId(String);
-
-impl HyperlinkSourceId {
-    pub(crate) fn new(id: String) -> Self {
-        Self(id)
-    }
-}
-
-#[derive(Debug, Eq, PartialEq, Hash)]
-pub(crate) struct SourceHyperlink {
-    pub id: HyperlinkSourceId,
-    pub uri: HyperlinkUri,
-}
-
-/// Maps each `(source id, uri)` pair to a single [`HyperlinkId`],
-/// minting a fresh id the first time a pair is seen and returning the id
-/// already on file on repeats.
+/// Hands out the [`HyperlinkId`]s `OSC 8` opens and resolves each back to
+/// its uri. Opens naming one nonempty id and one uri share a single
+/// [`HyperlinkId`]; an open without an id always receives a fresh one.
 // TODO: release the entries of links no cell references any more, and
 // cap what one stream may retain. Opening mints unconditionally, so
 // growth tracks the OSC 8 sequences a program sends rather than the
@@ -148,6 +133,21 @@ impl Default for HyperlinkInterner {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct HyperlinkSourceId(String);
+
+impl HyperlinkSourceId {
+    fn new(id: String) -> Self {
+        Self(id)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Hash)]
+struct SourceHyperlink {
+    id: HyperlinkSourceId,
+    uri: HyperlinkUri,
 }
 
 const ALLOWED_SCHEMES: &[&str] = &["http", "https", "mailto", "ftp"];

@@ -35,7 +35,8 @@ impl HyperlinkRequest {
         if target.is_empty() {
             return None;
         }
-        let uri = String::from_utf8_lossy(&target.join(&b';')).into_owned();
+        let joined = target.join(&b';');
+        let uri = String::from_utf8_lossy(&joined);
         if uri.is_empty() {
             return Some(Self::Close);
         }

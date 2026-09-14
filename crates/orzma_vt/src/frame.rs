@@ -557,14 +557,16 @@ mod tests {
         let mut rig = drained_rig();
         rig.device
             .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        let linked = rig.device.active_hyperlink();
         rig.device.active_screen_mut().print(
             'a',
             InsertReplaceMode::Replace,
             AutoWrap::Enabled,
-            None,
+            linked,
         );
         rig.tracker.stage(DamageSpan::Full);
-        emit(&mut rig).expect("the first frame carries the linked row");
+        let first = emit(&mut rig).expect("the first frame carries the linked row");
+        assert_eq!(first.hyperlinks.len(), 1);
         rig.device.close_hyperlink();
         rig.tracker
             .stage(DamageSpan::rows(ViewportLine(2), ViewportLine(2)));

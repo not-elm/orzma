@@ -18,8 +18,8 @@ fn cells_printed_inside_a_hyperlink_carry_its_id() {
 
 /// Asserts that two runs naming one id and one target share an id.
 ///
-/// Case: a long link wraps, so the program closes and reopens it with
-/// the same `id=` on the next line.
+/// Case: a program prints one link in two pieces, closing it after the
+/// first piece and reopening it with the same `id=` for the second.
 #[test]
 fn two_runs_naming_one_id_share_it() {
     let device = interpret(
