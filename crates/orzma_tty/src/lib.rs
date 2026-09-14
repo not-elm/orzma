@@ -156,10 +156,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// `test-support` feature downstream.
     #[cfg(any(test, feature = "test-support"))]
     pub fn detached(vt: V, size: GridSize, writer: Box<dyn Write + Send>) -> OrzmaTtyResult<Self> {
-        let pty = Pty::with_master(
-            Box::new(RecordingMaster::at(size.cols, size.rows).0),
-            writer,
-        );
+        let pty = Pty::with_master(Box::new(RecordingMaster::at(size).0), writer);
         let mut tty = Self::wired(vt, pty);
         tty.resize_vt(size);
         Ok(tty)
@@ -177,7 +174,7 @@ impl<V: Vt> OrzmaTty<V> {
         exit_rx: Receiver<Option<i32>>,
     ) -> OrzmaTtyResult<Self> {
         let pty = Pty::with_master_and_channels(
-            Box::new(RecordingMaster::at(size.cols, size.rows).0),
+            Box::new(RecordingMaster::at(size).0),
             writer,
             chunk_rx,
             exit_rx,
@@ -245,7 +242,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// [`VtSignal::WebviewEvicted`] signal; no PTY output is needed to
     /// carry them.
     pub fn resize(&mut self, size: GridSize, cell_px: CellPixels) -> OrzmaTtyResult {
-        self.pty.resize(size.cols, size.rows, cell_px)?;
+        self.pty.resize(size, cell_px)?;
         self.resize_vt(size);
         Ok(())
     }
