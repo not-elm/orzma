@@ -60,7 +60,6 @@ fn send_window_geometry(
         cell_w,
         cell_h,
     );
-    let size = GridSize::new(cols, rows);
     let cell_px = CellPixels {
         width: cell_w as u16,
         height: cell_h as u16,
@@ -75,6 +74,13 @@ fn send_window_geometry(
         }
         None => commands.insert_resource(wanted),
     }
+    let size = match GridSize::new(cols, rows) {
+        Ok(size) => size,
+        Err(err) => {
+            warn!(cols, rows, %err, "window geometry is not a valid grid size; not sent");
+            return;
+        }
+    };
     if last.0 == Some((size, cell_px)) {
         return;
     }
@@ -169,6 +175,32 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    /// Asserts that a window whose cell count is not a valid grid size
+    /// sends no `Resize`.
+    ///
+    /// Case: a degenerate or hostile window geometry asks for a grid
+    /// far wider than any real display.
+    #[test]
+    fn geometry_beyond_the_grid_bounds_is_not_sent() {
+        let (client, _events, commands) = OrzmuxClient::detached();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(LayoutPlugin)
+            .insert_resource(OrzmuxConnection(client))
+            .insert_resource(metrics(8.0, 16.0));
+        app.world_mut().spawn((
+            Window {
+                resolution: WindowResolution::new(u32::from(GridSize::MAX_COLS + 1) * 8, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.update();
+        app.update();
+        assert!(app.world().contains_resource::<PaneGeometry>());
+        assert!(commands.try_iter().next().is_none());
     }
 
     /// Asserts that the geometry sender does not run without a

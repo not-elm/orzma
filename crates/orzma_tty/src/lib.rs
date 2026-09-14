@@ -111,13 +111,6 @@ impl<V: Vt> OrzmaTty<V> {
     /// to 4 KiB each, so at most about 256 KiB.
     pub const MAX_CHUNKS_PER_PUMP: usize = 64;
 
-    /// Upper bound for a resize's column count; requests beyond it are
-    /// ignored by [`Self::resize`].
-    const MAX_COLS: u16 = 4096;
-    /// Upper bound for a resize's row count; requests beyond it are
-    /// ignored by [`Self::resize`].
-    const MAX_ROWS: u16 = 4096;
-
     /// Spawns `options.shell` under a new PTY and sizes the injected VT
     /// to the spawn geometry.
     ///
@@ -241,10 +234,9 @@ impl<V: Vt> OrzmaTty<V> {
     /// new geometry repaints at the next deadline even on an otherwise
     /// idle terminal.
     ///
-    /// A request with a zero axis, or one exceeding `Self::MAX_COLS` /
-    /// `Self::MAX_ROWS`, is ignored with `Ok`. When the PTY resize fails
-    /// the call returns `OrzmaTtyError::PtyResize` and leaves the VT grid
-    /// and coalescer untouched.
+    /// When the PTY resize fails the call returns
+    /// `OrzmaTtyError::PtyResize` and leaves the VT grid and coalescer
+    /// untouched.
     ///
     /// A request for the grid size the VT already has changes nothing
     /// and reports no damage, so it arms nothing either.
@@ -253,11 +245,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// [`VtSignal::WebviewEvicted`] signal; no PTY output is needed to
     /// carry them.
     pub fn resize(&mut self, size: GridSize, cell_px: CellPixels) -> OrzmaTtyResult {
-        let GridSize { cols, rows } = size;
-        if cols == 0 || rows == 0 || Self::MAX_COLS < cols || Self::MAX_ROWS < rows {
-            return Ok(());
-        }
-        self.pty.resize(cols, rows, cell_px)?;
+        self.pty.resize(size.cols, size.rows, cell_px)?;
         self.resize_vt(size);
         Ok(())
     }
@@ -530,13 +518,17 @@ mod tests {
     use crate::test_support::{CaptureSink, FailingMaster, FailingSink, FakeVt};
     use crossbeam_channel::{Sender, unbounded};
 
+    fn grid(cols: u16, rows: u16) -> GridSize {
+        GridSize::new(cols, rows).expect("a valid size")
+    }
+
     /// An 80x24 [`OrzmaTty::detached`] terminal over a `FakeVt`, plus
     /// the sink its PTY writes land on.
     fn detached_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
         let sink = CaptureSink::default();
         let term = OrzmaTty::detached(
-            FakeVt::new(GridSize::new(80, 24)),
-            GridSize::new(80, 24),
+            FakeVt::new(grid(80, 24)),
+            grid(80, 24),
             Box::new(sink.clone()),
         )
         .expect("OrzmaTty::detached");
@@ -549,8 +541,8 @@ mod tests {
         let (chunk_tx, chunk_rx) = unbounded::<Vec<u8>>();
         let (exit_tx, exit_rx) = unbounded::<Option<i32>>();
         let term = OrzmaTty::detached_with_channels(
-            FakeVt::new(GridSize::new(80, 24)),
-            GridSize::new(80, 24),
+            FakeVt::new(grid(80, 24)),
+            grid(80, 24),
             Box::new(CaptureSink::default()),
             chunk_rx,
             exit_rx,
@@ -687,8 +679,7 @@ mod tests {
     fn flush_now_returns_pending_signals_and_an_immediate_frame() {
         let (mut tty, chunk_tx, _exit_tx) = channelled_term();
         tty.vt.evictions.push_back(vec![InstanceId(7)]);
-        tty.resize(GridSize::new(40, 12), CellPixels::default())
-            .unwrap();
+        tty.resize(grid(40, 12), CellPixels::default()).unwrap();
         tty.vt.frames.push_back(a_frame());
         chunk_tx.send(b"unread".to_vec()).unwrap();
 
@@ -784,14 +775,10 @@ mod tests {
     #[test]
     fn detached_resizes_through_the_fake_master_and_never_exits() {
         let sink = CaptureSink::default();
-        let mut term = OrzmaTty::detached(
-            FakeVt::new(GridSize::new(80, 24)),
-            GridSize::new(80, 24),
-            Box::new(sink),
-        )
-        .expect("OrzmaTty::detached");
+        let mut term = OrzmaTty::detached(FakeVt::new(grid(80, 24)), grid(80, 24), Box::new(sink))
+            .expect("OrzmaTty::detached");
 
-        term.resize(GridSize::new(120, 40), CellPixels::default())
+        term.resize(grid(120, 40), CellPixels::default())
             .expect("resize");
         let size = term.pty_size();
         assert_eq!((size.cols, size.rows), (120, 40));
@@ -811,7 +798,7 @@ mod tests {
     fn a_resize_eviction_reaches_the_next_pump() {
         let (mut tty, _sink) = detached_term();
         tty.vt.evictions.push_back(vec![InstanceId(7)]);
-        tty.resize(GridSize::new(100, 30), CellPixels::default())
+        tty.resize(grid(100, 30), CellPixels::default())
             .expect("resize");
         assert_eq!(
             tty.pump().signals,
@@ -838,7 +825,7 @@ mod tests {
     /// initial sizing pass so `vt.resizes` starts empty.
     fn failing_term() -> OrzmaTty<FakeVt> {
         let pty = Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default()));
-        OrzmaTty::wired(FakeVt::new(GridSize::new(80, 24)), pty)
+        OrzmaTty::wired(FakeVt::new(grid(80, 24)), pty)
     }
 
     /// Collects the `ChildExit` codes out of a pumped signal batch.
@@ -865,7 +852,7 @@ mod tests {
     #[test]
     fn resize_applies_the_size_to_both_seams() {
         let (mut term, _sink) = detached_term();
-        term.resize(GridSize::new(120, 40), CellPixels::default())
+        term.resize(grid(120, 40), CellPixels::default())
             .expect("resize");
         assert_eq!(sizes(&term), ((120, 40), (120, 40)));
         assert_eq!(
@@ -885,7 +872,7 @@ mod tests {
     #[test]
     fn resize_does_not_write_through_the_pty_writer() {
         let (mut term, sink) = detached_term();
-        term.resize(GridSize::new(120, 40), CellPixels::default())
+        term.resize(grid(120, 40), CellPixels::default())
             .expect("resize");
         assert_eq!(sink.contents(), b"");
     }
@@ -897,7 +884,7 @@ mod tests {
     #[test]
     fn resize_arms_the_coalescer() {
         let (mut term, _sink) = detached_term();
-        term.resize(GridSize::new(120, 40), CellPixels::default())
+        term.resize(grid(120, 40), CellPixels::default())
             .expect("resize");
         assert!(term.coalescer.is_armed());
     }
@@ -925,69 +912,6 @@ mod tests {
         assert!(term.coalescer.is_armed());
     }
 
-    /// Asserts that a zero-axis request is ignored rather than clamped,
-    /// touching neither the PTY size nor the VT.
-    ///
-    /// Case: a minimized window, or a frame before cell metrics load,
-    /// computes 0 for an axis.
-    #[test]
-    fn a_zero_axis_resize_is_ignored() {
-        let (mut term, _sink) = detached_term();
-        term.resize(GridSize::new(120, 40), CellPixels::default())
-            .expect("resize");
-        let baseline = term.vt.resizes.len();
-        for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
-            term.resize(GridSize { cols, rows }, CellPixels::default())
-                .expect("ignored resize must be Ok");
-            assert_eq!(
-                sizes(&term),
-                ((120, 40), (120, 40)),
-                "resize {cols}x{rows} must be ignored"
-            );
-        }
-        assert_eq!(term.vt.resizes.len(), baseline);
-    }
-
-    /// Asserts the per-axis cap: requests beyond `MAX_COLS` /
-    /// `MAX_ROWS` are ignored, while the boundary value is applied.
-    ///
-    /// Case: a degenerate or hostile window geometry asks for a grid
-    /// far larger than any real display.
-    #[test]
-    fn an_oversized_axis_resize_is_ignored() {
-        const MAX_COLS: u16 = OrzmaTty::<FakeVt>::MAX_COLS;
-        const MAX_ROWS: u16 = OrzmaTty::<FakeVt>::MAX_ROWS;
-        let (mut term, _sink) = detached_term();
-        for (cols, rows) in [(MAX_COLS + 1, 24), (80, MAX_ROWS + 1)] {
-            term.resize(GridSize { cols, rows }, CellPixels::default())
-                .expect("ignored resize must be Ok");
-            assert_eq!(
-                sizes(&term),
-                ((80, 24), (80, 24)),
-                "resize {cols}x{rows} must be ignored"
-            );
-        }
-        term.resize(GridSize::new(MAX_COLS, 24), CellPixels::default())
-            .expect("resize");
-        assert_eq!(sizes(&term), ((MAX_COLS, 24), (MAX_COLS, 24)));
-    }
-
-    /// Asserts that an ignored request does not arm the coalescer.
-    ///
-    /// Case: a minimized window emits a stream of zero-axis requests.
-    #[test]
-    fn an_ignored_resize_does_not_arm_the_coalescer() {
-        let (mut term, _sink) = detached_term();
-        term.resize(GridSize { cols: 0, rows: 40 }, CellPixels::default())
-            .expect("ignored resize must be Ok");
-        term.resize(
-            GridSize::new(OrzmaTty::<FakeVt>::MAX_COLS + 1, 24),
-            CellPixels::default(),
-        )
-        .expect("ignored resize must be Ok");
-        assert!(!term.coalescer.is_armed());
-    }
-
     /// Asserts that a resize to the size the terminal already has arms
     /// nothing.
     ///
@@ -996,7 +920,7 @@ mod tests {
     #[test]
     fn a_same_size_resize_does_not_arm_the_coalescer() {
         let (mut term, _sink) = detached_term();
-        term.resize(GridSize::new(80, 24), CellPixels::default())
+        term.resize(grid(80, 24), CellPixels::default())
             .expect("same-size resize must be Ok");
         assert!(!term.coalescer.is_armed());
     }
@@ -1009,11 +933,11 @@ mod tests {
     #[test]
     fn a_same_size_resize_does_not_extend_the_deadline() {
         let (mut term, _sink) = detached_term();
-        term.resize(GridSize::new(120, 40), CellPixels::default())
+        term.resize(grid(120, 40), CellPixels::default())
             .expect("resize");
         let deadline = term.coalescer.next_deadline();
         assert!(deadline.is_some(), "precondition: a real resize arms");
-        term.resize(GridSize::new(120, 40), CellPixels::default())
+        term.resize(grid(120, 40), CellPixels::default())
             .expect("same-size resize must be Ok");
         assert_eq!(term.coalescer.next_deadline(), deadline);
     }
@@ -1025,9 +949,9 @@ mod tests {
     #[test]
     fn sequential_resizes_settle_on_the_last_size() {
         let (mut term, _sink) = detached_term();
-        term.resize(GridSize::new(120, 40), CellPixels::default())
+        term.resize(grid(120, 40), CellPixels::default())
             .expect("resize");
-        term.resize(GridSize::new(90, 30), CellPixels::default())
+        term.resize(grid(90, 30), CellPixels::default())
             .expect("resize");
         assert_eq!(sizes(&term), ((90, 30), (90, 30)));
     }
@@ -1041,7 +965,7 @@ mod tests {
     #[test]
     fn a_failing_pty_resize_leaves_the_vt_untouched() {
         let mut term = failing_term();
-        let result = term.resize(GridSize::new(120, 40), CellPixels::default());
+        let result = term.resize(grid(120, 40), CellPixels::default());
         assert!(
             matches!(result, Err(OrzmaTtyError::PtyResize(_))),
             "expected PtyResize, got {result:?}"
@@ -1225,8 +1149,8 @@ mod tests {
     #[test]
     fn a_failed_focus_write_keeps_the_new_state() {
         let mut term = OrzmaTty::detached(
-            FakeVt::new(GridSize::new(80, 24)),
-            GridSize::new(80, 24),
+            FakeVt::new(grid(80, 24)),
+            grid(80, 24),
             Box::new(FailingSink),
         )
         .expect("OrzmaTty::detached");
@@ -1369,7 +1293,7 @@ mod tests {
             chunk_rx,
             exit_rx,
         );
-        let mut term = OrzmaTty::wired(FakeVt::new(GridSize::new(80, 24)), pty);
+        let mut term = OrzmaTty::wired(FakeVt::new(grid(80, 24)), pty);
         term.vt.updates.push_back(InterpretOutput {
             damaged: true,
             signals: Vec::new(),
@@ -1419,8 +1343,8 @@ mod tests {
             .parse()
             .expect("valid id");
         let mut tty = OrzmaTty::detached(
-            OrzmaVt::new(GridSize::new(80, 24), 100),
-            GridSize::new(80, 24),
+            OrzmaVt::new(grid(80, 24), 100),
+            grid(80, 24),
             Box::new(CaptureSink::default()),
         )
         .expect("the detached constructor succeeds");
