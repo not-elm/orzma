@@ -9,6 +9,7 @@ use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::topmost_surface_at;
 use crate::surface::geometry::{cell_at_local, cell_pitch_phys, phys_to_pane_local};
 use bevy::ecs::entity::Entity;
+use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input::mouse::MouseMotion;
@@ -74,35 +75,18 @@ fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    surfaces: HoverSurfaces,
-    separators: SeparatorNodes,
-    grabbed: Query<&OrzmuxSeparator, With<GrabbedSeparator>>,
-    grids: Query<&TerminalGrid>,
-    webview_hosts: Query<&WebviewSource>,
-    metrics: Res<TerminalCellMetricsResource>,
-    geometry: Option<Res<PaneGeometry>>,
+    targets: HoverTargetParams,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
-    let held = grabbed.iter().next().map(|grab| grab.orientation);
-    let Ok(window) = windows.single() else {
+    let Some(cursor_phys) = windows
+        .single()
+        .ok()
+        .and_then(|window| Some(window.cursor_position()? * window.scale_factor()))
+    else {
         reset_hover_state(&mut hover);
-        apply_cursor(
-            &mut cursor_icons,
-            cursor_decision(HoverTarget::unlocated(held)),
-        );
+        apply_cursor(&mut cursor_icons, cursor_decision(targets.unlocated()));
         return;
     };
-    let scale = window.scale_factor();
-    let Some(cursor_logical) = window.cursor_position() else {
-        reset_hover_state(&mut hover);
-        apply_cursor(
-            &mut cursor_icons,
-            cursor_decision(HoverTarget::unlocated(held)),
-        );
-        return;
-    };
-    let cursor_phys = cursor_logical * scale;
-    let cell_phys = cell_pitch_phys(&metrics.metrics);
 
     let mods = current_modifiers(&keys);
     hover.modifier_held = link_modifier_held(&mods);
@@ -110,25 +94,7 @@ fn hyperlink_hover_and_cursor(
     hover.entity = None;
     hover.hyperlink_id = None;
 
-    let hovered = if held.is_none() {
-        geometry
-            .and_then(|geometry| SeparatorHit::at(cursor_phys, &geometry, separators.iter()))
-            .map(|hit| hit.orientation)
-    } else {
-        None
-    };
-
-    let target = HoverTarget::resolve(held, hovered, || {
-        HoverTarget::over_surface(
-            &mut hover,
-            cursor_phys,
-            cell_phys,
-            &surfaces,
-            &grids,
-            &webview_hosts,
-        )
-    });
-
+    let target = targets.target(&mut hover, cursor_phys);
     apply_cursor(&mut cursor_icons, cursor_decision(target));
 }
 
@@ -174,7 +140,6 @@ fn write_cursor_icon(
 /// Which region the mouse is over, distilled to what the cursor needs.
 /// `Default` covers everything that is neither terminal grid nor a CEF
 /// render area (chrome, gaps, an unobservable window).
-#[derive(Debug, PartialEq)]
 enum HoverTarget {
     Separator(SplitOrientation),
     Terminal { has_link: bool, modifier_held: bool },
@@ -182,61 +147,82 @@ enum HoverTarget {
     Default,
 }
 
-impl HoverTarget {
-    /// The region the pointer is in: the divider a drag holds, else the
-    /// divider whose grab band contains the pointer, else `surface`,
-    /// which is evaluated only when no divider claims the pointer.
-    fn resolve(
-        held: Option<SplitOrientation>,
-        hovered: Option<SplitOrientation>,
-        surface: impl FnOnce() -> Self,
-    ) -> Self {
-        match held.or(hovered) {
-            Some(orientation) => Self::Separator(orientation),
-            None => surface(),
+/// What the hover decision reads to tell which region the pointer is
+/// over.
+#[derive(SystemParam)]
+struct HoverTargetParams<'w, 's> {
+    surfaces: HoverSurfaces<'w, 's>,
+    grids: Query<'w, 's, &'static TerminalGrid>,
+    webview_hosts: Query<'w, 's, &'static WebviewSource>,
+    separators: SeparatorNodes<'w, 's>,
+    grabbed: Query<'w, 's, &'static OrzmuxSeparator, With<GrabbedSeparator>>,
+    metrics: Res<'w, TerminalCellMetricsResource>,
+    geometry: Option<Res<'w, PaneGeometry>>,
+}
+
+impl HoverTargetParams<'_, '_> {
+    /// The region under `cursor_phys`, in window physical px: the divider
+    /// a drag holds, else the divider whose grab band contains the
+    /// pointer, else the surface beneath it. When a divider claims the
+    /// pointer, no surface is read and `hover` is left untouched.
+    fn target(&self, hover: &mut HyperlinkHoverState, cursor_phys: Vec2) -> HoverTarget {
+        match self.held().or_else(|| self.hovered(cursor_phys)) {
+            Some(orientation) => HoverTarget::Separator(orientation),
+            None => self.over_surface(hover, cursor_phys),
         }
     }
 
     /// The region for a pointer whose position is unknown: the divider a
     /// drag holds, else `Default`.
-    fn unlocated(held: Option<SplitOrientation>) -> Self {
-        Self::resolve(held, None, || Self::Default)
+    fn unlocated(&self) -> HoverTarget {
+        self.held()
+            .map_or(HoverTarget::Default, HoverTarget::Separator)
+    }
+
+    /// The orientation of the divider a drag holds.
+    fn held(&self) -> Option<SplitOrientation> {
+        self.grabbed
+            .iter()
+            .next()
+            .map(|separator| separator.orientation)
+    }
+
+    /// The orientation of the divider whose grab band contains
+    /// `cursor_phys`, in window physical px, or `None` while the pane
+    /// geometry is unknown.
+    fn hovered(&self, cursor_phys: Vec2) -> Option<SplitOrientation> {
+        let geometry = self.geometry.as_deref()?;
+        SeparatorHit::at(cursor_phys, geometry, self.separators.iter()).map(|hit| hit.orientation)
     }
 
     /// The region for the topmost mouse-enabled surface under
     /// `cursor_phys`, in window physical px. Records that surface and
     /// the hyperlink id of the cell under the pointer in `hover`,
     /// leaving both untouched over anything but a terminal grid.
-    /// `cell_phys` is the `(width, height)` cell pitch in physical px.
-    fn over_surface(
-        hover: &mut HyperlinkHoverState,
-        cursor_phys: Vec2,
-        cell_phys: (f32, f32),
-        surfaces: &HoverSurfaces<'_, '_>,
-        grids: &Query<'_, '_, &TerminalGrid>,
-        webview_hosts: &Query<'_, '_, &WebviewSource>,
-    ) -> Self {
-        let Some(entity) = topmost_surface_at(cursor_phys, surfaces.iter()) else {
-            return Self::Default;
+    fn over_surface(&self, hover: &mut HyperlinkHoverState, cursor_phys: Vec2) -> HoverTarget {
+        let Some(entity) = topmost_surface_at(cursor_phys, self.surfaces.iter()) else {
+            return HoverTarget::Default;
         };
-        if webview_hosts.contains(entity) {
-            return Self::Webview;
+        if self.webview_hosts.contains(entity) {
+            return HoverTarget::Webview;
         }
-        let Ok(grid) = grids.get(entity) else {
-            return Self::Default;
+        let Ok(grid) = self.grids.get(entity) else {
+            return HoverTarget::Default;
         };
-        let id = surfaces
+        let (cell_w, cell_h) = cell_pitch_phys(&self.metrics.metrics);
+        let id = self
+            .surfaces
             .get(entity)
             .ok()
             .and_then(|(_, node, _, transform)| phys_to_pane_local(node, transform, cursor_phys))
-            .map(|local| cell_at_local(local, cell_phys.0, cell_phys.1, grid.cols, grid.rows))
+            .map(|local| cell_at_local(local, cell_w, cell_h, grid.cols, grid.rows))
             .and_then(|(col, row, _side)| {
                 grid.hyperlink_at(row.saturating_sub(1) as u16, col.saturating_sub(1) as u16)
             })
             .map(|(id, _uri)| id);
         hover.entity = Some(entity);
         hover.hyperlink_id = id;
-        Self::Terminal {
+        HoverTarget::Terminal {
             has_link: id.is_some(),
             modifier_held: hover.modifier_held,
         }
@@ -381,49 +367,6 @@ mod tests {
         assert_eq!(
             cursor_decision(HoverTarget::Separator(SplitOrientation::Horizontal)),
             Some(SystemCursorIcon::RowResize)
-        );
-    }
-
-    /// Asserts that a held drag pins the target to its own divider and
-    /// that the surface under the pointer is never read while it is
-    /// held.
-    ///
-    /// Case: the user presses on a column divider and drags the pointer
-    /// across the pane beside it, passing over a row divider on the way.
-    #[test]
-    fn a_held_drag_pins_the_target_to_its_own_divider() {
-        assert_eq!(
-            HoverTarget::resolve(
-                Some(SplitOrientation::Vertical),
-                Some(SplitOrientation::Horizontal),
-                || unreachable!("a held drag decides on its own"),
-            ),
-            HoverTarget::Separator(SplitOrientation::Vertical)
-        );
-    }
-
-    /// Asserts that a divider under the pointer takes the target from
-    /// the surface beneath it, and that the surface decides once no
-    /// divider claims the pointer.
-    ///
-    /// Case: the pointer crosses the groove between two panes and then
-    /// moves on into the linked terminal text beside it.
-    #[test]
-    fn a_divider_takes_the_target_from_the_surface_beneath_it() {
-        let surface = || HoverTarget::Terminal {
-            has_link: true,
-            modifier_held: true,
-        };
-        assert_eq!(
-            HoverTarget::resolve(None, Some(SplitOrientation::Horizontal), surface),
-            HoverTarget::Separator(SplitOrientation::Horizontal)
-        );
-        assert_eq!(
-            HoverTarget::resolve(None, None, surface),
-            HoverTarget::Terminal {
-                has_link: true,
-                modifier_held: true,
-            }
         );
     }
 
@@ -850,6 +793,53 @@ mod tests {
             window_cursor(&mut app),
             Some(CursorIcon::System(SystemCursorIcon::RowResize)),
             "the held divider decides the cursor wherever the pointer travels"
+        );
+        assert_eq!(
+            app.world().resource::<HyperlinkHoverState>().entity,
+            None,
+            "a drag in flight hovers no terminal"
+        );
+    }
+
+    /// Asserts that a drag in flight keeps the resize cursor of its own
+    /// divider while the pointer crosses the grab band of another divider
+    /// running the other way.
+    ///
+    /// Case: the user drags a column divider, and the pointer passes over
+    /// a row divider inside the neighbouring pane.
+    #[test]
+    fn a_held_drag_keeps_its_own_resize_cursor_over_another_divider() {
+        let mut app = divider_hover_app(2.0, Vec2::new(20.0, 40.0));
+        app.world_mut().spawn((
+            OrzmuxSeparator {
+                split: SplitId(1),
+                orientation: SplitOrientation::Vertical,
+            },
+            GrabbedSeparator::held(SplitId(1), SplitOrientation::Vertical),
+            ComputedNode {
+                size: Vec2::new(2.0, 160.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 80.0),
+        ));
+        app.world_mut().spawn((
+            OrzmuxSeparator {
+                split: SplitId(2),
+                orientation: SplitOrientation::Horizontal,
+            },
+            ComputedNode {
+                size: Vec2::new(160.0, 2.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(80.0, 40.0),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            window_cursor(&mut app),
+            Some(CursorIcon::System(SystemCursorIcon::ColResize)),
+            "the held column divider decides the cursor even over a row divider's band"
         );
         assert_eq!(
             app.world().resource::<HyperlinkHoverState>().entity,

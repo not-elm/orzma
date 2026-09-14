@@ -140,8 +140,8 @@ impl SeparatorHit {
 }
 
 /// The divider the pointer is holding. While it exists, every other
-/// mouse consumer drains its own readers and forwards nothing, each
-/// keeping whatever in-flight state it already holds.
+/// mouse consumer forwards nothing and keeps whatever in-flight state it
+/// already holds.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub(in crate::input) struct GrabbedSeparator {
     /// The split the held divider moves.
