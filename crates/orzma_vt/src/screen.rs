@@ -212,7 +212,7 @@ impl Screen {
             None
         } else if wrapping {
             let pen = self.state.pen;
-            self.grid[self.state.line].place_filler(&pen);
+            self.grid[self.state.line].place_filler(&pen)?;
             self.state.column = GridColumn(0);
             self.line_feed()
         } else {

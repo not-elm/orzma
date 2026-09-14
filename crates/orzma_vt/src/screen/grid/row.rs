@@ -111,17 +111,24 @@ impl Row<Cell> {
     /// Stamps the last column as the blank a wide glyph leaves behind
     /// when it does not fit there, carrying `pen`'s attributes, and
     /// restores the wide-pair invariant to its left.
-    pub fn place_filler(&mut self, pen: &Pen) {
-        debug_assert!(!self.0.is_empty(), "a filler needs a column");
-        let last = self.0.len() - 1;
+    ///
+    /// # Errors
+    ///
+    /// [`StampError::OutOfRow`] when the row has no column to stamp, and
+    /// [`StampError::BrokenJoint`] when the joint to the filler's left
+    /// is still broken after healing.
+    pub fn place_filler(&mut self, pen: &Pen) -> VtResult {
+        let Some(last) = self.0.len().checked_sub(1) else {
+            return Err(StampError::OutOfRow.into());
+        };
         self.0[last] = pen.filler();
-        if last > 0 {
-            self.heal_joint(last - 1);
+        if let Some(left) = last.checked_sub(1) {
+            self.heal_joint(left);
+            if !self.joint_intact(left) {
+                return Err(StampError::BrokenJoint.into());
+            }
         }
-        debug_assert!(
-            last == 0 || self.joint_intact(last - 1),
-            "a filler left a broken joint"
-        );
+        Ok(())
     }
 
     /// Restores the wide-pair invariant across the whole row.
@@ -647,7 +654,7 @@ mod tests {
             style: Style::BOLD,
         };
         let mut row = Row::from(vec![plain('a'), plain('b'), plain('c')]);
-        row.place_filler(&pen);
+        row.place_filler(&pen).expect("a row with a column");
         let filler = &row[GridColumn(2)];
         assert_eq!(filler.width, CellWidth::LeadingSpacer);
         assert_eq!(filler.c, ' ');
@@ -670,11 +677,25 @@ mod tests {
         let body = wide_body('あ');
         let spacer = body.continuation();
         let mut row = Row::from(vec![plain('a'), body, spacer]);
-        row.place_filler(&Pen::default());
+        row.place_filler(&Pen::default())
+            .expect("a row with a column");
         assert_eq!(row[GridColumn(1)].width, CellWidth::Narrow);
         assert_eq!(row[GridColumn(1)].c, ' ');
         assert_eq!(row[GridColumn(2)].width, CellWidth::LeadingSpacer);
         assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that a filler on a row without columns is refused as
+    /// `OutOfRow` rather than indexing past the end.
+    ///
+    /// Case: a wide glyph wraps on a grid whose row storage is empty.
+    #[test]
+    fn a_filler_on_an_empty_row_is_refused() {
+        let mut row: Row<Cell> = Row::from(Vec::new());
+        assert!(matches!(
+            row.place_filler(&Pen::default()),
+            Err(VtError::Stamp(StampError::OutOfRow))
+        ));
     }
 
     fn marked(c: char, marks: &[char]) -> Cell {
