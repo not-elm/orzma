@@ -93,11 +93,7 @@ impl Backend {
     pub(crate) fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.processed = seq;
         match command {
-            OrzmuxCommand::Resize {
-                cols,
-                rows,
-                cell_px,
-            } => self.on_resize(cols, rows, cell_px),
+            OrzmuxCommand::Resize { size, cell_px } => self.on_resize(size, cell_px),
             OrzmuxCommand::NewPane {
                 request,
                 at,
@@ -290,11 +286,8 @@ impl Backend {
         true
     }
 
-    fn on_resize(&mut self, cols: u16, rows: u16, cell_px: CellPixels) {
-        self.geometry = Some(Geometry {
-            size: GridSize { cols, rows },
-            cell_px,
-        });
+    fn on_resize(&mut self, size: GridSize, cell_px: CellPixels) {
+        self.geometry = Some(Geometry { size, cell_px });
         self.publish_layout();
     }
 
@@ -720,10 +713,9 @@ mod tests {
             self.events.try_iter().collect()
         }
 
-        fn resize(&mut self, cols: u16, rows: u16) {
+        fn resize(&mut self, size: GridSize) {
             self.send(OrzmuxCommand::Resize {
-                cols,
-                rows,
+                size,
                 cell_px: CellPixels {
                     width: 8,
                     height: 16,
@@ -732,7 +724,7 @@ mod tests {
         }
 
         fn open_root(&mut self) -> (PaneId, FakePane) {
-            self.resize(80, 24);
+            self.resize(GridSize::new(80, 24));
             self.drain();
             self.send(OrzmuxCommand::NewPane {
                 request: RequestId(1),
@@ -779,7 +771,7 @@ mod tests {
     #[test]
     fn the_root_pane_opens_at_the_window_size_and_reports_a_layout() {
         let mut h = Harness::new();
-        h.resize(80, 24);
+        h.resize(GridSize::new(80, 24));
         h.drain();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(1),
@@ -892,7 +884,7 @@ mod tests {
             env: vec![],
         });
         h.drain();
-        h.resize(120, 24);
+        h.resize(GridSize::new(120, 24));
         let mut events = h.drain();
         let Some(OrzmuxEvent::Layout { layout, frames }) = events.pop_front() else {
             panic!("expected Layout");

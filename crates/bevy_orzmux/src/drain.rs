@@ -157,9 +157,9 @@ mod tests {
         (app, events)
     }
 
-    fn frame(cols: u16, rows: u16) -> Frame {
+    fn frame(size: GridSize) -> Frame {
         Frame {
-            size: GridSize { cols, rows },
+            size,
             rows: vec![],
             cursor: Cursor::default(),
             display_offset: DisplayOffset(0),
@@ -212,7 +212,7 @@ mod tests {
         events
             .send(OrzmuxEvent::Frame {
                 pane: PaneId(7),
-                frame: frame(80, 24),
+                frame: frame(GridSize::new(80, 24)),
             })
             .unwrap();
         app.update();
@@ -369,7 +369,7 @@ mod tests {
         events
             .send(OrzmuxEvent::Frame {
                 pane: PaneId(1),
-                frame: frame(80, 24),
+                frame: frame(GridSize::new(80, 24)),
             })
             .unwrap();
         app.update();
