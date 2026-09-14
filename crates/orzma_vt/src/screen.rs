@@ -229,8 +229,13 @@ impl Screen {
         if matches!(options.insert_replace, InsertReplaceMode::Insert) && !ends_row {
             self.insert_characters(columns);
         }
-        let cell = self.state.pen.stamp(glyph, width, options.hyperlink_id);
-        self.grid[self.state.line].stamp_at(landing, cell)?;
+        self.grid[self.state.line].stamp_at(
+            landing,
+            glyph,
+            width,
+            &self.state.pen,
+            options.hyperlink_id,
+        )?;
         if ends_row {
             self.state.column = GridColumn(cols - 1);
             self.state.pending_wrap = wrapping;
