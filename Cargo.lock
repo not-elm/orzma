@@ -5094,6 +5094,7 @@ dependencies = [
  "base64",
  "bitflags 2.13.0",
  "percent-encoding",
+ "thiserror 2.0.18",
  "unicode-width 0.2.0",
  "vtparse",
 ]

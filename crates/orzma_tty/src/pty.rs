@@ -605,7 +605,7 @@ mod tests {
     #[test]
     fn exit_is_reported_once_after_the_child_terminates() {
         let mut pty = Pty::spawn(&SpawnOptions {
-            size: GridSize::new(80, 24),
+            size: GridSize::new(80, 24).expect("a valid size"),
             cell_px: CellPixels::default(),
             shell: echo_program().into(),
             cwd: None,
@@ -656,7 +656,7 @@ mod tests {
     #[test]
     fn spawn_emits_chunk_and_exit_zero() {
         let mut pty = Pty::spawn(&SpawnOptions {
-            size: GridSize::new(80, 24),
+            size: GridSize::new(80, 24).expect("a valid size"),
             cell_px: CellPixels::default(),
             shell: echo_program().into(),
             cwd: None,
@@ -684,7 +684,7 @@ mod tests {
     #[test]
     fn the_final_output_precedes_the_exit_report() {
         let mut pty = Pty::spawn(&SpawnOptions {
-            size: GridSize::new(80, 24),
+            size: GridSize::new(80, 24).expect("a valid size"),
             cell_px: CellPixels::default(),
             shell: echo_program().into(),
             cwd: None,

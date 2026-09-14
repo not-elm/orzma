@@ -35,7 +35,7 @@ pub mod prelude {
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
     pub use crate::screen::grid::row::Row;
     pub use crate::screen::grid::run::{Run, Style};
-    pub use crate::screen::grid::{GridSize, MIN_COLUMNS};
+    pub use crate::screen::grid::{GridSize, GridSizeError, MIN_COLUMNS};
     pub use crate::screen::selection::{
         CellSide, SelectionGeometry, SelectionKind, SelectionRange,
     };
@@ -152,7 +152,8 @@ pub trait Vt {
     /// the dimensions did not change. Only a real change stages (full)
     /// damage.
     ///
-    /// The caller must reject a `size` with a zero axis.
+    /// Both axes of `size` must be nonzero, as [`GridSize::new`]
+    /// guarantees.
     ///
     /// # Invariants
     ///
@@ -336,7 +337,8 @@ const _: () = {
 impl OrzmaVt {
     /// Builds a terminal whose first frame carries every viewport row.
     ///
-    /// The caller must reject a `size` with a zero axis.
+    /// Both axes of `size` must be nonzero, as [`GridSize::new`]
+    /// guarantees.
     ///
     /// # Invariants
     ///
@@ -427,8 +429,8 @@ mod tests {
     use super::*;
     use crate::device::color::{Palette, Rgb};
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
-    use crate::screen::grid::MIN_COLUMNS;
     use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
+    use crate::screen::grid::{GridSizeError, MIN_COLUMNS};
     use crate::screen::selection::{SelectionGeometry, SelectionRange};
     use crate::screen::viewport::ViewportLine;
 
@@ -1415,7 +1417,8 @@ mod tests {
     /// handed a single column.
     #[test]
     fn a_single_column_terminal_is_widened_to_two() {
-        let vt = OrzmaVt::new(GridSize::new(1, 3), 10);
+        let size = GridSize::new(1, 3).expect("a valid size");
+        let vt = OrzmaVt::new(size, 10);
         assert_eq!(vt.grid_size().cols, MIN_COLUMNS);
     }
 
@@ -1426,8 +1429,8 @@ mod tests {
     /// wide.
     #[test]
     fn a_resize_to_one_column_is_widened_to_two() {
-        let mut vt = OrzmaVt::new(GridSize::new(4, 3), 10);
-        let _ = vt.resize(GridSize::new(1, 3));
+        let mut vt = OrzmaVt::new(GridSize::new(4, 3).expect("a valid size"), 10);
+        let _ = vt.resize(GridSize::new(1, 3).expect("a valid size"));
         assert_eq!(vt.grid_size().cols, MIN_COLUMNS);
     }
 
@@ -1436,6 +1439,44 @@ mod tests {
     /// Case: the user resizes the window to an ordinary width.
     #[test]
     fn a_wide_enough_size_is_left_alone() {
-        assert_eq!(GridSize::new(80, 24), GridSize { cols: 80, rows: 24 });
+        assert_eq!(GridSize::new(80, 24), Ok(GridSize { cols: 80, rows: 24 }));
+    }
+
+    /// Asserts that a zero axis is rejected rather than clamped.
+    ///
+    /// Case: a minimized window, or a frame before cell metrics load,
+    /// computes 0 for an axis.
+    #[test]
+    fn a_zero_axis_is_rejected() {
+        for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
+            assert_eq!(
+                GridSize::new(cols, rows),
+                Err(GridSizeError::ZeroAxis),
+                "{cols}x{rows} must be rejected"
+            );
+        }
+    }
+
+    /// Asserts the per-axis cap: a count beyond `MAX_COLS` / `MAX_ROWS`
+    /// is rejected, while the boundary value is accepted.
+    ///
+    /// Case: a degenerate or hostile window geometry asks for a grid
+    /// far larger than any real display.
+    #[test]
+    fn an_oversized_axis_is_rejected() {
+        for (cols, rows) in [(GridSize::MAX_COLS + 1, 24), (80, GridSize::MAX_ROWS + 1)] {
+            assert_eq!(
+                GridSize::new(cols, rows),
+                Err(GridSizeError::TooLarge),
+                "{cols}x{rows} must be rejected"
+            );
+        }
+        assert_eq!(
+            GridSize::new(GridSize::MAX_COLS, GridSize::MAX_ROWS),
+            Ok(GridSize {
+                cols: GridSize::MAX_COLS,
+                rows: GridSize::MAX_ROWS
+            })
+        );
     }
 }
