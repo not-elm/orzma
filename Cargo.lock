@@ -1241,7 +1241,7 @@ dependencies = [
  "glam",
  "itertools 0.14.0",
  "libm",
- "rand",
+ "rand 0.10.2",
  "rand_distr",
  "serde",
  "thiserror 2.0.18",
@@ -1297,8 +1297,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "ttf-parser",
- "unicode-segmentation",
- "unicode-width 0.2.0",
 ]
 
 [[package]]
@@ -3366,7 +3364,7 @@ dependencies = [
  "bytemuck",
  "encase",
  "libm",
- "rand",
+ "rand 0.10.2",
  "serde_core",
 ]
 
@@ -5055,8 +5053,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
- "unicode-segmentation",
- "unicode-width 0.2.0",
  "url",
  "windows-sys 0.61.2",
  "winit",
@@ -5094,6 +5090,7 @@ dependencies = [
  "base64",
  "bitflags 2.13.0",
  "percent-encoding",
+ "proptest",
  "thiserror 2.0.18",
  "unicode-width 0.2.0",
  "vtparse",
@@ -5390,6 +5387,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ppv-lite86"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
+dependencies = [
+ "zerocopy",
+]
+
+[[package]]
 name = "presser"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5418,6 +5424,21 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+
+[[package]]
+name = "proptest"
+version = "1.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
+dependencies = [
+ "bitflags 2.13.0",
+ "num-traits",
+ "rand 0.9.5",
+ "rand_chacha",
+ "rand_xorshift",
+ "regex-syntax",
+ "unarray",
+]
 
 [[package]]
 name = "pulldown-cmark"
@@ -5482,12 +5503,41 @@ checksum = "019b4b213425016d7d84a153c4c73afb0946fbb4840e4eece7ba8848b9d6da22"
 
 [[package]]
 name = "rand"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
+dependencies = [
+ "rand_chacha",
+ "rand_core 0.9.5",
+]
+
+[[package]]
+name = "rand"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
  "getrandom 0.4.3",
- "rand_core",
+ "rand_core 0.10.1",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.9.5",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
+dependencies = [
+ "getrandom 0.3.4",
 ]
 
 [[package]]
@@ -5503,7 +5553,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
 dependencies = [
  "num-traits",
- "rand",
+ "rand 0.10.2",
+]
+
+[[package]]
+name = "rand_xorshift"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
+dependencies = [
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -6699,6 +6758,12 @@ dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "unarray"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
 name = "unicase"

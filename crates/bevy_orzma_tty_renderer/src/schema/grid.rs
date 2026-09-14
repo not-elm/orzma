@@ -7,20 +7,20 @@ use crate::schema::{
     ViCursor,
 };
 use bevy::prelude::*;
-use orzma_vt::prelude::Frame;
 #[cfg(test)]
 use orzma_vt::prelude::GridSize;
+use orzma_vt::prelude::{Frame, VtResult};
 use std::collections::HashMap;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 /// One materialized cell of the renderer's CPU-side grid, expanded
 /// from the frame's [`crate::schema::Run`]s.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GridCell {
-    /// The grapheme cluster text for this cell.
+    /// The cell's glyph followed by the marks combined onto it.
     pub text: String,
-    /// Display width: 2 for wide CJK, 0 for combining marks, 1 otherwise.
+    /// Display width in columns: 2 for a wide glyph, 1 otherwise. A cell
+    /// built outside [`TerminalGrid::apply`] may carry 0; such a cell
+    /// paints no glyph and takes no column.
     pub width: u8,
     /// Active-grid coordinates of the cell.
     pub point: GridPoint,
@@ -51,7 +51,7 @@ pub struct TerminalGrid {
     pub cols: u16,
     /// Visible row count.
     pub rows: u16,
-    /// Cell grid indexed `[row][col_grapheme_index]`.
+    /// Cell grid indexed `[row][cell_index]`.
     pub cells: Vec<Vec<GridCell>>,
     /// Current cursor state, absent until the first frame arrives.
     pub cursor: Option<Cursor>,
@@ -84,16 +84,15 @@ pub struct TerminalGrid {
 
 impl TerminalGrid {
     /// Resolves `(row, col)` to the hyperlink at that visible cell, if
-    /// any. `col` is a column coordinate, not a grapheme index — wide
-    /// cells (width=2) match both of their columns, and width-0
-    /// trailers are skipped without consuming a column. Returns
-    /// `None` for out-of-bounds or unlinked cells.
+    /// any. `col` is a column coordinate, not a cell index — a wide
+    /// cell (width 2) matches both of its columns, and a width-0 cell
+    /// matches no column. Returns `None` for out-of-bounds or unlinked
+    /// cells.
     //
-    // NOTE: `self.cells[row]` is grapheme-indexed (one entry per
-    //       cluster from `runs_to_cells`), so a column-to-cell walk
-    //       is required — direct `cells[row][col]` indexing would
-    //       desynchronize after any wide char or width-0 trailer.
-    //       Must mirror the column-advance logic in
+    // NOTE: `self.cells[row]` is cell-indexed (one entry per glyph from
+    //       `runs_to_cells`), so a column-to-cell walk is required —
+    //       direct `cells[row][col]` indexing would desynchronize after
+    //       any wide char. Must mirror the column-advance logic in
     //       `material::rebuild_cells`.
     pub fn hyperlink_at(&self, row: u16, col: u16) -> Option<(HyperlinkId, &HyperlinkUri)> {
         let row_cells = self.cells.get(row as usize)?;
@@ -185,7 +184,8 @@ impl TerminalGrid {
     ///
     /// # Invariants
     ///
-    /// Returns `true` exactly when [`Self::apply`] mutates something.
+    /// Returns `true` exactly when [`Self::apply`] mutates something or
+    /// returns `Err`.
     pub fn differs_from(&self, frame: &Frame) -> bool {
         let Frame {
             size,
@@ -224,12 +224,18 @@ impl TerminalGrid {
     /// which this frame's own definitions are merged first; the `None`
     /// sections are left alone.
     ///
+    /// # Errors
+    ///
+    /// A frame carrying a run that fails [`Run::check`] is rejected with
+    /// that error, and the grid is left untouched.
+    ///
     /// # Invariants
     ///
-    /// After `apply` returns, `self.cells.len() == self.rows as usize`,
+    /// After `apply` returns `Ok`, `self.cells.len() == self.rows as usize`,
     /// whatever length the grid was built with. It mutates the grid
-    /// exactly when [`Self::differs_from`] reports `true`.
-    pub fn apply(&mut self, frame: &Frame) {
+    /// exactly when [`Self::differs_from`] reports `true` and it returns
+    /// `Ok`.
+    pub fn apply(&mut self, frame: &Frame) -> VtResult {
         let Frame {
             size,
             rows,
@@ -241,6 +247,9 @@ impl TerminalGrid {
             palette,
             hyperlinks,
         } = frame;
+        rows.iter()
+            .flat_map(|row| row.contents.iter())
+            .try_for_each(Run::check)?;
         self.cols = size.cols;
         self.rows = size.rows;
         self.cells.resize_with(usize::from(size.rows), Vec::new);
@@ -266,14 +275,16 @@ impl TerminalGrid {
         if let Some(palette) = palette {
             self.palette.clone_from(palette);
         }
+        Ok(())
     }
 }
 
 /// Materializes one row's attribute runs into cells, resolving each
 /// run's hyperlink id against the retained table.
 ///
-/// Column advance follows display width — a wide grapheme takes two
-/// columns and a combining mark none.
+/// Column advance follows each run's widths: a `char` at width two takes
+/// two columns, and a `char` at width zero joins the cell before it.
+/// Every run must pass [`Run::check`].
 fn runs_to_cells(
     runs: &[Run],
     line: GridLine,
@@ -293,10 +304,17 @@ fn runs_to_cells(
                 uri: uri.clone(),
             })
         });
-        for grapheme in run.text.graphemes(true) {
-            let width = grapheme.width().min(2) as u8;
+        let mut widths = run.widths.iter().copied();
+        for c in run.text.chars() {
+            let width = widths.next().unwrap_or(1);
+            if width == 0
+                && let Some(base) = out.last_mut()
+            {
+                base.text.push(c);
+                continue;
+            }
             out.push(GridCell {
-                text: grapheme.to_string(),
+                text: c.to_string(),
                 width,
                 point: GridPoint {
                     line,
@@ -351,7 +369,7 @@ mod tests {
         Color, Cursor, CursorShape, GridColumn, GridLine, GridPoint, Hyperlink, InstanceId,
         PlacementSize, Rgb, Row, Style,
     };
-    use orzma_vt::prelude::{DirtyRow, ViewportLine};
+    use orzma_vt::prelude::{DirtyRow, RunError, ViewportLine, VtError};
 
     fn id(value: u32) -> HyperlinkId {
         HyperlinkId::new(value).expect("nonzero")
@@ -379,8 +397,20 @@ mod tests {
             bg: Color::DefaultBackground,
             style: Style::empty(),
             text: text.to_string(),
+            widths: Vec::new(),
             hyperlink_id,
         }
+    }
+
+    fn run_with_widths(text: &str, widths: &[u8]) -> Run {
+        let mut run = run_with_link(text, None);
+        run.cols = if widths.is_empty() {
+            text.chars().count() as u16
+        } else {
+            widths.iter().map(|w| u16::from(*w)).sum()
+        };
+        run.widths = widths.to_vec();
+        run
     }
 
     fn visible_block_cursor() -> Cursor {
@@ -668,13 +698,18 @@ mod tests {
     }
 
     /// Asserts that cell points carry the given line and a column walk
-    /// that advances by display width.
+    /// driven by the run's widths.
     ///
-    /// Case: a row mixes a wide CJK grapheme with ASCII text on a
+    /// Case: a row mixes a wide CJK glyph with ASCII text on a
     /// scrolled-back history line.
     #[test]
-    fn runs_to_cells_assigns_points_by_display_width() {
-        let cells = runs_to_cells(&[run_with_link("あb", None)], GridLine(-3), &HashMap::new());
+    fn runs_to_cells_assigns_points_by_run_widths() {
+        let cells = runs_to_cells(
+            &[run_with_widths("あb", &[2, 1])],
+            GridLine(-3),
+            &HashMap::new(),
+        );
+        assert_eq!(cells[0].width, 2);
         assert_eq!(
             cells[0].point,
             GridPoint {
@@ -682,6 +717,7 @@ mod tests {
                 column: GridColumn(0),
             }
         );
+        assert_eq!(cells[1].width, 1);
         assert_eq!(
             cells[1].point,
             GridPoint {
@@ -689,6 +725,52 @@ mod tests {
                 column: GridColumn(2),
             }
         );
+    }
+
+    /// Asserts that a run without widths yields one one-column cell per
+    /// `char`, whatever the characters are.
+    ///
+    /// Case: a frame carries an ASCII row on the empty-width path.
+    #[test]
+    fn runs_to_cells_treats_an_empty_width_list_as_one_column_each() {
+        let cells = runs_to_cells(&[run_with_widths("ab", &[])], GridLine(0), &HashMap::new());
+        assert_eq!(cells.len(), 2);
+        assert!(cells.iter().all(|cell| cell.width == 1));
+        assert_eq!(cells[1].point.column, GridColumn(1));
+    }
+
+    /// Asserts that a zero-width `char` joins the text of the cell before
+    /// it instead of becoming a cell of its own.
+    ///
+    /// Case: a frame carries `e` followed by a combining acute accent.
+    #[test]
+    fn runs_to_cells_joins_a_zero_width_char_to_the_previous_cell() {
+        let cells = runs_to_cells(
+            &[run_with_widths("e\u{0301}x", &[1, 0, 1])],
+            GridLine(0),
+            &HashMap::new(),
+        );
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[0].text, "e\u{0301}");
+        assert_eq!(cells[0].width, 1);
+        assert_eq!(cells[1].text, "x");
+        assert_eq!(cells[1].point.column, GridColumn(1));
+    }
+
+    /// Asserts that a run's `char`s are never re-measured: a wide glyph
+    /// declared at width one takes one column.
+    ///
+    /// Case: a frame's widths, not the glyph's Unicode width, decide the
+    /// column walk.
+    #[test]
+    fn runs_to_cells_does_not_remeasure_the_text() {
+        let cells = runs_to_cells(
+            &[run_with_widths("あb", &[1, 1])],
+            GridLine(0),
+            &HashMap::new(),
+        );
+        assert_eq!(cells[0].width, 1);
+        assert_eq!(cells[1].point.column, GridColumn(1));
     }
 
     fn dirty_row(line: u16, text: &str) -> DirtyRow {
@@ -726,7 +808,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert!(!grid.differs_from(&frame));
     }
 
@@ -744,7 +826,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert!(!grid.differs_from(&frame));
     }
 
@@ -761,7 +843,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!(grid.cells.len(), 2);
         assert!(!grid.differs_from(&frame));
     }
@@ -788,7 +870,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!(grid.cells[1][0].text, "x");
         assert_eq!(grid.cells[1][0].point.line, GridLine(-2));
         assert!(grid.cells[0].is_empty());
@@ -814,7 +896,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!(grid.cells.len(), 2);
         assert_eq!(grid.cells[1][0].text, "b");
         assert!(!grid.differs_from(&Frame {
@@ -842,7 +924,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!((grid.cols, grid.rows), (1, 1));
         assert_eq!(grid.cells.len(), 1);
         assert_eq!(grid.cells[0][0].text, "a");
@@ -862,7 +944,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!((grid.cols, grid.rows), (3, 1));
         assert_eq!(grid.cells[0].len(), 3);
         assert!(!grid.differs_from(&Frame {
@@ -883,7 +965,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(!grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!(grid.cells.len(), 1);
     }
 
@@ -901,7 +983,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&frame));
-        grid.apply(&frame);
+        grid.apply(&frame).expect("a valid frame");
         assert_eq!((grid.cols, grid.rows), (3, 2));
         assert_eq!(grid.cells.len(), 2);
         assert_eq!(grid.cells[1][0].text, "b");
@@ -929,12 +1011,12 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&mounted));
-        grid.apply(&mounted);
+        grid.apply(&mounted).expect("a valid frame");
         assert_eq!(grid.placements, vec![placed]);
 
         let unchanged = quiet_frame();
         assert!(!grid.differs_from(&unchanged));
-        grid.apply(&unchanged);
+        grid.apply(&unchanged).expect("a valid frame");
         assert_eq!(grid.placements, vec![placed]);
 
         let hidden = Frame {
@@ -942,7 +1024,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&hidden));
-        grid.apply(&hidden);
+        grid.apply(&hidden).expect("a valid frame");
         assert_eq!(grid.placements, vec![]);
     }
 
@@ -962,7 +1044,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&recolored));
-        grid.apply(&recolored);
+        grid.apply(&recolored).expect("a valid frame");
         assert_eq!(grid.palette.background, Rgb { r: 9, g: 8, b: 7 });
         assert!(!grid.differs_from(&quiet_frame()));
     }
@@ -1001,7 +1083,7 @@ mod tests {
             ..quiet_frame()
         };
         assert!(grid.differs_from(&extended));
-        grid.apply(&extended);
+        grid.apply(&extended).expect("a valid frame");
         assert_eq!(grid.hyperlinks.len(), 2);
         assert_eq!(grid.hyperlinks[&id(1)].as_str(), "https://old");
         assert_eq!(grid.hyperlinks[&id(2)].as_str(), "https://new");
@@ -1021,17 +1103,56 @@ mod tests {
                 uri: HyperlinkUri::new("https://earlier"),
             }],
             ..quiet_frame()
-        });
+        })
+        .expect("a valid frame");
         grid.apply(&Frame {
             rows: vec![DirtyRow {
                 line: ViewportLine(0),
                 contents: Row::from(vec![run_with_link("a", Some(id(4)))]),
             }],
             ..quiet_frame()
-        });
+        })
+        .expect("a valid frame");
         assert_eq!(
             grid.cells[0][0].hyperlink.as_ref().map(|h| h.uri.as_str()),
             Some("https://earlier")
         );
+    }
+
+    /// Asserts that a frame carrying a run whose widths fail
+    /// [`Run::check`] is rejected with that error and leaves the grid
+    /// untouched, cursor and hyperlink table included.
+    ///
+    /// Case: a producer emits a run with a width of three alongside a
+    /// moved cursor and a new hyperlink definition.
+    #[test]
+    fn a_frame_with_a_malformed_run_is_rejected_and_leaves_the_grid_untouched() {
+        let mut grid = TerminalGrid::settled();
+        let frame = Frame {
+            rows: vec![DirtyRow {
+                line: ViewportLine(0),
+                contents: Row::from(vec![run_with_widths("\u{3042}", &[3])]),
+            }],
+            cursor: Cursor {
+                point: GridPoint {
+                    line: GridLine(0),
+                    column: GridColumn(1),
+                },
+                ..Cursor::default()
+            },
+            hyperlinks: vec![Hyperlink {
+                id: id(4),
+                uri: HyperlinkUri::new("https://rejected"),
+            }],
+            ..quiet_frame()
+        };
+        assert!(grid.differs_from(&frame));
+        assert!(matches!(
+            grid.apply(&frame),
+            Err(VtError::Run(RunError::InvalidWidth))
+        ));
+        assert_eq!(grid.cells, vec![vec![]]);
+        assert_eq!(grid.cursor, Some(Cursor::default()));
+        assert!(grid.hyperlinks.is_empty());
     }
 }

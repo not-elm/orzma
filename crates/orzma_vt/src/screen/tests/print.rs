@@ -1,6 +1,7 @@
 //! Tests for graphic character output and the deferred wrap it arms.
 
 use super::*;
+use crate::screen::cell::{CellExtra, CellWidth, MAX_COMBINING};
 use crate::screen::grid::run::Style;
 
 /// Asserts that a print in insert mode shifts the cells at and right of
@@ -532,4 +533,568 @@ fn a_wide_glyph_needs_two_remaining_columns() {
     assert!(!screen.fits(2));
     screen.state.column = GridColumn(2);
     assert!(screen.fits(2));
+}
+
+/// Every cell width of one row, left to right.
+fn row_widths(screen: &Screen, line: ScreenLine) -> Vec<CellWidth> {
+    (0..screen.grid.size().cols)
+        .map(|column| screen.grid[line][column].width)
+        .collect()
+}
+
+/// Asserts that a fullwidth glyph occupies its column and the next as a
+/// body and a continuation, and advances the cursor by two.
+///
+/// Case: a shell echoes a Japanese character at the start of a row.
+#[test]
+fn a_wide_glyph_takes_two_columns_and_advances_by_two() {
+    let mut screen = screen();
+    let damage = screen
+        .print('あ', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(
+        row_glyphs(&screen, ScreenLine(0)),
+        vec!['あ', ' ', ' ', ' ']
+    );
+    assert_eq!(
+        row_widths(&screen, ScreenLine(0)),
+        vec![
+            CellWidth::Wide,
+            CellWidth::Spacer,
+            CellWidth::Narrow,
+            CellWidth::Narrow
+        ]
+    );
+    assert_eq!(screen.state.column, GridColumn(2));
+    assert!(!screen.state.pending_wrap);
+    assert_eq!(
+        damage,
+        Some(DamageSpan::rows(ViewportLine(0), ViewportLine(0)))
+    );
+}
+
+/// Asserts that a fullwidth glyph landing on the last two columns parks
+/// the cursor on the last column and arms the deferred wrap.
+///
+/// Case: a row of four columns receives `abあ` followed by `い`.
+#[test]
+fn a_wide_glyph_ending_the_row_arms_the_deferred_wrap() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'あ'] {
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
+    }
+    assert_eq!(
+        row_glyphs(&screen, ScreenLine(0)),
+        vec!['a', 'b', 'あ', ' ']
+    );
+    assert_eq!(screen.state.column, GridColumn(3));
+    assert!(screen.state.pending_wrap);
+    screen
+        .print('い', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(
+        row_glyphs(&screen, ScreenLine(1)),
+        vec!['い', ' ', ' ', ' ']
+    );
+    assert_eq!(screen.state.column, GridColumn(2));
+}
+
+/// Asserts that a fullwidth glyph with one column left wraps to the next
+/// row and leaves a leading spacer carrying the live pen in the last
+/// column, reporting both rows as damaged.
+///
+/// Case: a program with a colored background prints `abcあ` on a
+/// four-column row.
+#[test]
+fn a_wide_glyph_with_one_column_left_wraps_and_leaves_a_filler() {
+    let mut screen = screen();
+    screen.pen_mut().bg = Color::Indexed(4);
+    for c in ['a', 'b', 'c'] {
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
+    }
+    let damage = screen
+        .print('あ', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', ' ']);
+    assert_eq!(
+        screen.grid[ScreenLine(0)][3].width,
+        CellWidth::LeadingSpacer
+    );
+    assert_eq!(screen.grid[ScreenLine(0)][3].bg, Color::Indexed(4));
+    assert_eq!(
+        row_glyphs(&screen, ScreenLine(1)),
+        vec!['あ', ' ', ' ', ' ']
+    );
+    assert_eq!(screen.state.line, ScreenLine(1));
+    assert_eq!(screen.state.column, GridColumn(2));
+    assert!(!screen.state.pending_wrap);
+    assert_eq!(
+        damage,
+        Some(DamageSpan::rows(ViewportLine(0), ViewportLine(1)))
+    );
+}
+
+/// Asserts that a fullwidth glyph wrapping off the bottom row scrolls
+/// and reports the whole viewport as damaged.
+///
+/// Case: a Japanese log line reaches the right edge of the last row.
+#[test]
+fn a_wide_glyph_wrapping_on_the_bottom_row_scrolls() {
+    let mut screen = screen();
+    screen.state.line = ScreenLine(2);
+    screen.state.column = GridColumn(3);
+    let damage = screen
+        .print('あ', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(damage, Some(DamageSpan::Full));
+    assert_eq!(
+        row_glyphs(&screen, ScreenLine(2)),
+        vec!['あ', ' ', ' ', ' ']
+    );
+    assert_eq!(
+        screen.grid[ScreenLine(1)][3].width,
+        CellWidth::LeadingSpacer
+    );
+}
+
+/// Asserts that on a two-column screen a fullwidth glyph fills the row,
+/// parks the cursor on the last column, and the next one wraps.
+///
+/// Case: a pane at the minimum width receives two Japanese characters.
+#[test]
+fn a_wide_glyph_on_a_two_column_screen_fills_the_row() {
+    let mut screen = Screen::new(GridSize { cols: 2, rows: 3 }, 10);
+    screen
+        .print('あ', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(screen.state.column, GridColumn(1));
+    assert!(screen.state.pending_wrap);
+    screen
+        .print('い', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['あ', ' ']);
+    assert_eq!(row_glyphs(&screen, ScreenLine(1)), vec!['い', ' ']);
+    assert_eq!(screen.state.column, GridColumn(1));
+}
+
+/// Asserts that a fullwidth glyph that does not fit with autowrap reset
+/// is dropped, leaves the row untouched, and disarms the deferred wrap
+/// rather than arming it.
+///
+/// Case: a status-bar program with autowrap off draws a Japanese label
+/// that runs past the right edge.
+#[test]
+fn a_wide_glyph_that_does_not_fit_without_autowrap_is_dropped() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c'] {
+        screen
+            .print(
+                c,
+                PrintOptions {
+                    auto_wrap: AutoWrap::Disabled,
+                    ..PrintOptions::default()
+                },
+            )
+            .expect("a printable glyph");
+    }
+    let damage = screen
+        .print(
+            'あ',
+            PrintOptions {
+                auto_wrap: AutoWrap::Disabled,
+                ..PrintOptions::default()
+            },
+        )
+        .expect("a printable glyph");
+    assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', ' ']);
+    assert_eq!(screen.grid[ScreenLine(0)][3].width, CellWidth::Narrow);
+    assert_eq!(screen.state.column, GridColumn(3));
+    assert!(!screen.state.pending_wrap);
+    assert_eq!(damage, None);
+}
+
+/// Asserts that a deferred wrap a restore brought back does not survive
+/// a dropped fullwidth glyph, so the next print after autowrap returns
+/// does not wrap.
+///
+/// Case: a program restores a cursor saved at the right edge, turns
+/// autowrap off, prints a Japanese character, and turns autowrap on.
+#[test]
+fn a_dropped_wide_glyph_clears_a_restored_deferred_wrap() {
+    let mut screen = screen();
+    screen.state.column = GridColumn(3);
+    screen.state.pending_wrap = true;
+    screen
+        .print(
+            'あ',
+            PrintOptions {
+                auto_wrap: AutoWrap::Disabled,
+                ..PrintOptions::default()
+            },
+        )
+        .expect("a printable glyph");
+    assert!(!screen.state.pending_wrap);
+    screen
+        .print('x', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(screen.grid[ScreenLine(0)][3].c, 'x');
+    assert_eq!(screen.state.line, ScreenLine(0));
+}
+
+/// Asserts that a narrow glyph printed over a wide body blanks the
+/// continuation column it leaves behind.
+///
+/// Case: a program overwrites the left half of a Japanese character with
+/// an ASCII letter.
+#[test]
+fn a_narrow_glyph_over_a_wide_body_blanks_its_continuation() {
+    let mut screen = screen();
+    screen
+        .print('あ', PrintOptions::default())
+        .expect("a printable glyph");
+    screen.state.column = GridColumn(0);
+    screen
+        .print('x', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['x', ' ', ' ', ' ']);
+    assert_eq!(screen.grid[ScreenLine(0)][1].width, CellWidth::Narrow);
+}
+
+/// Asserts that a narrow glyph printed over a continuation column blanks
+/// the wide body to its left.
+///
+/// Case: a program overwrites the right half of a Japanese character.
+#[test]
+fn a_narrow_glyph_over_a_continuation_blanks_its_body() {
+    let mut screen = screen();
+    screen
+        .print('あ', PrintOptions::default())
+        .expect("a printable glyph");
+    screen.state.column = GridColumn(1);
+    screen
+        .print('x', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec![' ', 'x', ' ', ' ']);
+    assert_eq!(screen.grid[ScreenLine(0)][0].width, CellWidth::Narrow);
+}
+
+/// Asserts that a wide glyph landing on the second half of one pair and
+/// the first half of another blanks both damaged neighbours.
+///
+/// Case: a program overwrites the middle of `あい` with `う` shifted one
+/// column right.
+#[test]
+fn a_wide_glyph_over_two_half_pairs_blanks_both_neighbours() {
+    let mut screen = screen();
+    for c in ['あ', 'い'] {
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
+    }
+    screen.state.column = GridColumn(1);
+    screen.state.pending_wrap = false;
+    screen
+        .print('う', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(
+        row_glyphs(&screen, ScreenLine(0)),
+        vec![' ', 'う', ' ', ' ']
+    );
+    assert_eq!(
+        row_widths(&screen, ScreenLine(0)),
+        vec![
+            CellWidth::Narrow,
+            CellWidth::Wide,
+            CellWidth::Spacer,
+            CellWidth::Narrow
+        ]
+    );
+}
+
+/// Asserts that a wide glyph in insert mode shifts the row right by two
+/// columns before landing.
+///
+/// Case: a line editor in insert mode receives a Japanese character in
+/// the middle of `abcd`.
+#[test]
+fn an_insert_mode_wide_glyph_shifts_the_row_by_two() {
+    let mut screen = screen();
+    seed_row(&mut screen, ScreenLine(0), &['a', 'b', 'c', 'd']);
+    screen.state.column = GridColumn(1);
+    screen
+        .print(
+            'あ',
+            PrintOptions {
+                insert_replace: InsertReplaceMode::Insert,
+                ..PrintOptions::default()
+            },
+        )
+        .expect("a printable glyph");
+    assert_eq!(
+        row_glyphs(&screen, ScreenLine(0)),
+        vec!['a', 'あ', ' ', 'b']
+    );
+    assert_eq!(screen.state.column, GridColumn(3));
+}
+
+/// Asserts that a wide glyph in insert mode landing on the last two
+/// columns overwrites them in place without shifting.
+///
+/// Case: a line editor in insert mode receives a Japanese character two
+/// columns from the right edge.
+#[test]
+fn an_insert_mode_wide_glyph_ending_the_row_overwrites_in_place() {
+    let mut screen = screen();
+    seed_row(&mut screen, ScreenLine(0), &['a', 'b', 'c', 'd']);
+    screen.state.column = GridColumn(2);
+    screen
+        .print(
+            'あ',
+            PrintOptions {
+                insert_replace: InsertReplaceMode::Insert,
+                ..PrintOptions::default()
+            },
+        )
+        .expect("a printable glyph");
+    assert_eq!(
+        row_glyphs(&screen, ScreenLine(0)),
+        vec!['a', 'b', 'あ', ' ']
+    );
+    assert_eq!(screen.state.column, GridColumn(3));
+    assert!(screen.state.pending_wrap);
+}
+
+/// Asserts that a combining mark joins the cell the cursor just passed,
+/// leaves the cursor where it is, and reports that row as damaged.
+///
+/// Case: a shell echoes `e` followed by U+0301 COMBINING ACUTE ACCENT.
+#[test]
+fn a_combining_mark_joins_the_previous_cell_and_reports_damage() {
+    let mut screen = screen();
+    screen
+        .print('e', PrintOptions::default())
+        .expect("a printable glyph");
+    let damage = screen
+        .print('\u{0301}', PrintOptions::default())
+        .expect("a printable glyph");
+    let cell = &screen.grid[ScreenLine(0)][0];
+    assert_eq!(cell.c, 'e');
+    assert_eq!(
+        cell.extra.as_deref().map(CellExtra::marks),
+        Some(&['\u{0301}'][..])
+    );
+    assert_eq!(screen.state.column, GridColumn(1));
+    assert_eq!(
+        damage,
+        Some(DamageSpan::rows(ViewportLine(0), ViewportLine(0)))
+    );
+}
+
+/// Asserts that a combining mark arriving while the deferred wrap is
+/// armed joins the last column's cell and does not resolve the wrap.
+///
+/// Case: a row ends in `e` and the accent arrives after the cursor
+/// parked on the right edge.
+#[test]
+fn a_combining_mark_under_an_armed_wrap_joins_the_last_cell() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c', 'e'] {
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
+    }
+    assert!(screen.state.pending_wrap);
+    screen
+        .print('\u{0301}', PrintOptions::default())
+        .expect("a printable glyph");
+    let cell = &screen.grid[ScreenLine(0)][3];
+    assert_eq!(
+        cell.extra.as_deref().map(CellExtra::marks),
+        Some(&['\u{0301}'][..])
+    );
+    assert_eq!(screen.state.line, ScreenLine(0));
+    assert!(screen.state.pending_wrap);
+}
+
+/// Asserts that with autowrap reset a combining mark at the last column
+/// joins the cell under the cursor rather than the one to its left.
+///
+/// Case: a program with autowrap off prints `e` in the last column and
+/// then its accent.
+#[test]
+fn a_combining_mark_without_autowrap_joins_the_cell_under_the_cursor() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c', 'e'] {
+        screen
+            .print(
+                c,
+                PrintOptions {
+                    auto_wrap: AutoWrap::Disabled,
+                    ..PrintOptions::default()
+                },
+            )
+            .expect("a printable glyph");
+    }
+    screen
+        .print(
+            '\u{0301}',
+            PrintOptions {
+                auto_wrap: AutoWrap::Disabled,
+                ..PrintOptions::default()
+            },
+        )
+        .expect("a printable glyph");
+    assert!(screen.grid[ScreenLine(0)][2].extra.is_none());
+    assert_eq!(
+        screen.grid[ScreenLine(0)][3]
+            .extra
+            .as_deref()
+            .map(CellExtra::marks),
+        Some(&['\u{0301}'][..])
+    );
+}
+
+/// Asserts that a combining mark after a fullwidth glyph joins the wide
+/// body rather than its continuation column.
+///
+/// Case: a program prints a Japanese character followed by U+3099
+/// COMBINING KATAKANA-HIRAGANA VOICED SOUND MARK.
+#[test]
+fn a_combining_mark_after_a_wide_glyph_joins_its_body() {
+    let mut screen = screen();
+    screen
+        .print('か', PrintOptions::default())
+        .expect("a printable glyph");
+    screen
+        .print('\u{3099}', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(
+        screen.grid[ScreenLine(0)][0]
+            .extra
+            .as_deref()
+            .map(CellExtra::marks),
+        Some(&['\u{3099}'][..])
+    );
+    assert!(screen.grid[ScreenLine(0)][1].extra.is_none());
+}
+
+/// Asserts that a combining mark at the start of a row is kept on the
+/// first cell rather than dropped.
+///
+/// Case: a stream is cut between a base character and its accent, and
+/// the accent arrives on a fresh row.
+#[test]
+fn a_combining_mark_at_the_row_start_is_kept_on_the_first_cell() {
+    let mut screen = screen();
+    let damage = screen
+        .print('\u{0301}', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(
+        screen.grid[ScreenLine(0)][0]
+            .extra
+            .as_deref()
+            .map(CellExtra::marks),
+        Some(&['\u{0301}'][..])
+    );
+    assert_eq!(screen.state.column, GridColumn(0));
+    assert_eq!(
+        damage,
+        Some(DamageSpan::rows(ViewportLine(0), ViewportLine(0)))
+    );
+}
+
+/// Asserts that a mark past the per-cell cap is dropped and reports no
+/// damage.
+///
+/// Case: a stream piles combining marks onto one cell far past any
+/// typographic need.
+#[test]
+fn a_combining_mark_past_the_cap_is_dropped_without_damage() {
+    let mut screen = screen();
+    screen
+        .print('e', PrintOptions::default())
+        .expect("a printable glyph");
+    for _ in 0..MAX_COMBINING {
+        assert!(
+            screen
+                .print('\u{0301}', PrintOptions::default())
+                .expect("a printable glyph")
+                .is_some()
+        );
+    }
+    let damage = screen
+        .print('\u{0302}', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(damage, None);
+    let marks = screen.grid[ScreenLine(0)][0]
+        .extra
+        .as_deref()
+        .map(CellExtra::marks);
+    assert_eq!(marks.map(<[char]>::len), Some(MAX_COMBINING));
+}
+
+/// Asserts that a control character reaching the printer is ignored
+/// without moving the cursor or reporting damage.
+///
+/// Case: a raw NUL slips through to the printer.
+#[test]
+fn a_control_character_is_ignored_by_the_printer() {
+    let mut screen = screen();
+    let damage = screen
+        .print('\0', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(damage, None);
+    assert_eq!(screen.state.column, GridColumn(0));
+    assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec![' ', ' ', ' ', ' ']);
+}
+
+/// Asserts that a fullwidth glyph on a one-column screen is dropped
+/// rather than stamped past the row.
+///
+/// Case: a test-built one-column screen receives a Japanese character.
+#[test]
+fn a_wide_glyph_on_a_one_column_screen_is_dropped() {
+    let mut screen = Screen::new(GridSize { cols: 1, rows: 1 }, 10);
+    let damage = screen
+        .print('あ', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(damage, None);
+    assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
+    assert_eq!(screen.state.column, GridColumn(0));
+}
+
+/// Asserts that a combining mark whose candidate cell is a wrap filler
+/// is dropped without damage.
+///
+/// Case: a Japanese character wrapped at the right edge, and the
+/// application then moves the cursor back onto that row's last column
+/// before an accent arrives.
+#[test]
+fn a_combining_mark_on_a_wrap_filler_is_dropped() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c', 'あ'] {
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
+    }
+    assert_eq!(
+        screen.grid[ScreenLine(0)][3].width,
+        CellWidth::LeadingSpacer
+    );
+    screen.state.line = ScreenLine(0);
+    screen.state.column = GridColumn(3);
+    screen.state.pending_wrap = false;
+    let damage = screen
+        .print('\u{0301}', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(damage, None);
+    assert!(screen.grid[ScreenLine(0)][3].extra.is_none());
+    assert_eq!(
+        screen.grid[ScreenLine(0)][3].width,
+        CellWidth::LeadingSpacer
+    );
 }

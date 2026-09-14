@@ -1,11 +1,10 @@
-//! Pure pixel-math for the IME preedit overlay: grapheme cell layout, caret /
-//! clause cell offsets, and the window-anchored overlay position. No Bevy
-//! ECS dependency.
+//! Pure pixel-math for the IME preedit overlay: per-char cell layout,
+//! caret / clause cell offsets, and the window-anchored overlay position.
+//! No Bevy ECS dependency.
 
 use bevy::math::Vec2;
 use bevy_orzma_tty_renderer::CellMetrics;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+use orzma_vt::prelude::GlyphClass;
 
 /// A rectangle in logical pixels relative to the window origin.
 #[derive(Debug, PartialEq)]
@@ -16,8 +15,8 @@ pub(super) struct RectPx {
     pub(super) height: f32,
 }
 
-/// One placed preedit grapheme cluster: its text and absolute top-left in
-/// logical px.
+/// One placed preedit glyph with its marks: its text and absolute
+/// top-left in logical px.
 #[derive(Debug, PartialEq)]
 pub(super) struct PlacedCell {
     pub(super) text: String,
@@ -184,29 +183,29 @@ fn compute_overlay_pos(
 /// 2 cells per glyph, matching the renderer's width logic.
 fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
     (
-        clamped_prefix_cells(&text[..begin]) as f32,
-        clamped_prefix_cells(&text[..end]) as f32,
+        prefix_cells(&text[..begin]) as f32,
+        prefix_cells(&text[..end]) as f32,
     )
 }
 
-/// Total clamped cell width of `text` — the sum of [`clamp_cluster_cells`] over
-/// its grapheme clusters, mirroring [`layout_preedit_cells`] so caret/clause
-/// offsets cannot diverge from the rendered cells for a wide cluster.
-fn clamped_prefix_cells(text: &str) -> u32 {
-    text.graphemes(true).map(clamp_cluster_cells).sum()
+/// Total cell width of `text`: the sum of [`glyph_columns`] over its
+/// `char`s.
+fn prefix_cells(text: &str) -> u32 {
+    text.chars().map(glyph_columns).sum()
 }
 
-/// A single placed preedit cell-unit: the grapheme cluster's text and its left
-/// edge in logical px (the cell origin it is anchored to).
+/// A single placed preedit cell-unit: the glyph's text with any marks
+/// joined to it, and its left edge in logical px (the cell origin it is
+/// anchored to).
 struct CellPlacement {
     text: String,
     left: f32,
 }
 
-/// Splits `text` into grapheme clusters and assigns each a cell-aligned `left`
-/// edge, returning `(placements, total_cells)`. A `width >= 2` cluster consumes
-/// 2 cells; a `width == 0` cluster (lone combining mark) consumes 0 and merges
-/// into the previous placement's text.
+/// Walks `text` by `char` and assigns each glyph a cell-aligned `left`
+/// edge, returning `(placements, total_cells)`. A two-column glyph
+/// consumes 2 cells; a zero-width `char` consumes 0 and joins the
+/// previous placement's text.
 fn layout_preedit_cells(
     text: &str,
     cell_w_logical: f32,
@@ -214,24 +213,24 @@ fn layout_preedit_cells(
 ) -> (Vec<CellPlacement>, u32) {
     let mut placements: Vec<CellPlacement> = Vec::new();
     let mut cum_cells: u32 = 0;
-    for cluster in text.graphemes(true) {
-        let cells = clamp_cluster_cells(cluster);
+    for c in text.chars() {
+        let cells = glyph_columns(c);
         if cells == 0 {
             match placements.last_mut() {
-                Some(last) => last.text.push_str(cluster),
-                // NOTE: a leading zero-width cluster (a combining mark with no
+                Some(last) => last.text.push(c),
+                // NOTE: a leading zero-width char (a combining mark with no
                 // base) has nothing to merge into; render it at the origin so
                 // the overlay still shows every typed character. It consumes no
                 // cell.
                 None => placements.push(CellPlacement {
-                    text: cluster.to_string(),
+                    text: c.to_string(),
                     left: origin_x,
                 }),
             }
             continue;
         }
         placements.push(CellPlacement {
-            text: cluster.to_string(),
+            text: c.to_string(),
             left: origin_x + cum_cells as f32 * cell_w_logical,
         });
         cum_cells += cells;
@@ -239,14 +238,11 @@ fn layout_preedit_cells(
     (placements, cum_cells)
 }
 
-/// Cell width of one grapheme cluster, clamped to the renderer's `runs_to_cells`
-/// rule: `width >= 2` is 2 cells, `width == 0` is 0, otherwise 1.
-fn clamp_cluster_cells(cluster: &str) -> u32 {
-    match UnicodeWidthStr::width(cluster) {
-        0 => 0,
-        1 => 1,
-        _ => 2,
-    }
+/// Cell width of one `char`, matching the VT's [`GlyphClass`]: 2 for a
+/// wide glyph, 0 for a zero-width mark or an unclassified character, 1
+/// otherwise.
+fn glyph_columns(c: char) -> u32 {
+    GlyphClass::of(c).map_or(0, |class| u32::from(class.columns()))
 }
 
 #[cfg(test)]
@@ -441,16 +437,45 @@ mod tests {
         assert_eq!(cells[2].left, 10.0);
     }
 
+    /// Asserts that a ZWJ sequence lays out one placement per scalar,
+    /// with each emoji taking two cells and each joiner none, and that
+    /// the caret offset agrees with that layout.
+    ///
+    /// Case: the user composes a family emoji in the preedit.
     #[test]
-    fn caret_offset_matches_clamped_cell_layout_for_wide_cluster() {
+    fn caret_offset_matches_cell_layout_for_a_zwj_sequence() {
         let family = "👨\u{200d}👩\u{200d}👧";
-        let (_, total_cells) = layout_preedit_cells(family, 1.0, 0.0);
+        let (cells, total_cells) = layout_preedit_cells(family, 1.0, 0.0);
         let (_, end_cells) = caret_cell_offsets(family, (0, family.len()));
-        assert_eq!(end_cells, total_cells as f32);
-        assert!(
-            end_cells <= 2.0,
-            "a single grapheme cluster must clamp to at most 2 cells, got {end_cells}"
-        );
+        assert_eq!(total_cells, 6);
+        assert_eq!(end_cells, 6.0);
+        let texts: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, vec!["👨\u{200d}", "👩\u{200d}", "👧"]);
+    }
+
+    /// Asserts that a glyph's column count matches the VT's
+    /// classification for each class of character.
+    ///
+    /// Case: the preedit mixes Latin, Japanese, a combining mark and a
+    /// control character.
+    #[test]
+    fn glyph_columns_follow_the_vt_classification() {
+        assert_eq!(glyph_columns('a'), 1);
+        assert_eq!(glyph_columns('あ'), 2);
+        assert_eq!(glyph_columns('\u{0301}'), 0);
+        assert_eq!(glyph_columns('\u{1b}'), 0);
+    }
+
+    /// Asserts that an emoji presentation sequence takes one cell, its
+    /// variation selector joining the emoji's placement.
+    ///
+    /// Case: the user composes `❤️` in the preedit.
+    #[test]
+    fn a_variation_selector_joins_the_previous_placement() {
+        let (cells, total) = layout_preedit_cells("\u{2764}\u{fe0f}", 10.0, 0.0);
+        assert_eq!(total, 1);
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].text, "\u{2764}\u{fe0f}");
     }
 
     #[test]

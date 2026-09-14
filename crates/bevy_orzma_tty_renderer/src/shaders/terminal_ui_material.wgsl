@@ -318,6 +318,34 @@ fn paint_text_decorations(
     return color;
 }
 
+// Whether the cursor covers (row, col): the cursor's own cell, the right
+// half of a wide glyph whose body holds the cursor, or the body of a wide
+// glyph whose right half holds the cursor.
+fn cursor_covers(row: u32, col: u32) -> bool {
+    if row != params.cursor_pos.y {
+        return false;
+    }
+    if col == params.cursor_pos.x {
+        return true;
+    }
+    let base = row * params.grid_size.x;
+    if col == params.cursor_pos.x + 1u {
+        let idx = base + col;
+        if idx < arrayLength(&cells)
+            && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u {
+            return true;
+        }
+    }
+    if col + 1u == params.cursor_pos.x {
+        let idx = base + params.cursor_pos.x;
+        if idx < arrayLength(&cells)
+            && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u {
+            return true;
+        }
+    }
+    return false;
+}
+
 fn paint_cursor(
     row: u32,
     col: u32,
@@ -328,7 +356,8 @@ fn paint_cursor(
     let cursor_blinking = (params.cursor_style & CURSOR_BLINKING) != 0u;
     let cursor_shape = (params.cursor_style >> 1u) & 3u;
     let blink_on = !cursor_blinking || (fract(params.time_seconds) < 0.5);
-    let on_cursor_cell = col == params.cursor_pos.x && row == params.cursor_pos.y;
+    let exact_cell = col == params.cursor_pos.x && row == params.cursor_pos.y;
+    let on_cursor_cell = select(exact_cell, cursor_covers(row, col), cursor_shape != CURSOR_SHAPE_BAR);
     if !(cursor_visible && blink_on && on_cursor_cell) {
         return base;
     }

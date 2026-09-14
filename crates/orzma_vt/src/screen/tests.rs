@@ -94,6 +94,7 @@ mod scroll;
 mod scroll_region_down;
 mod scroll_region_up;
 mod seat_cursor;
+mod selection_text;
 mod set_origin_mode;
 mod set_scroll_region;
 mod soft_reset;
