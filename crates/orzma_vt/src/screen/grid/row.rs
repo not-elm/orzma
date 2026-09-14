@@ -2,7 +2,7 @@
 
 use crate::error::{StampError, VtResult};
 use crate::hyperlink::HyperlinkId;
-use crate::screen::cell::{BodyWidth, Cell, CellExtra, CellWidth, Pen};
+use crate::screen::cell::{BodyWidth, Cell, CellWidth, Pen};
 use crate::screen::grid::coords::GridColumn;
 use crate::screen::grid::run::Run;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
