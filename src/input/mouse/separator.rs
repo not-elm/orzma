@@ -1,4 +1,15 @@
 //! Grabbing and dragging the divider between two panes.
+// NOTE: the `#[cfg(test)]` module below uses every item this lint would
+// flag, so an unconditional `#[expect(dead_code)]` is fulfilled in a
+// plain build but unfulfilled — and denied under `-D warnings` — in a
+// test build. Gating it to non-test builds keeps both clean.
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "only tests use the grab-band resolver until a runtime caller exists"
+    )
+)]
 
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -11,13 +22,6 @@ impl Plugin for SeparatorDragPlugin {
 }
 
 /// The divider whose grab band contains a cursor position.
-// NOTE: `#[expect(dead_code)]` reports an unfulfilled expectation here because
-// only the test module constructs `SeparatorHit`; Task 10 adds the real
-// caller and this attribute is removed then.
-#[allow(
-    dead_code,
-    reason = "only tests construct this until Task 10 wires a caller"
-)]
 pub(crate) struct SeparatorHit {
     /// The separator entity the band belongs to.
     pub(crate) entity: Entity,
@@ -29,13 +33,11 @@ pub(crate) struct SeparatorHit {
 
 impl SeparatorHit {
     /// The divider whose grab band contains `cursor_phys`, in window
-    /// physical px. Overlapping bands resolve to the nearer painted
+    /// physical px. `scale` is the window's scale factor, physical px
+    /// per logical px. Overlapping bands resolve to the nearer painted
     /// line, and an exact tie to the lower [`SplitId`]. `cell_px` is the
-    /// `(width, height)` cell pitch in physical px.
-    #[allow(
-        dead_code,
-        reason = "only tests call this until Task 10 wires a caller"
-    )]
+    /// `(width, height)` cell pitch in physical px. A cursor on the
+    /// line's own axis but past its painted end returns `None`.
     pub(crate) fn resolve<'a>(
         cursor_phys: Vec2,
         scale: f32,
@@ -95,19 +97,11 @@ impl SeparatorHit {
 /// painted line's centre.
 ///
 /// TODO: make the grab band configurable.
-#[allow(
-    dead_code,
-    reason = "only `resolve` reads this until Task 10 wires a caller"
-)]
 const SEPARATOR_GRAB_HALF_BAND_LOGICAL_PX: f32 = 4.0;
 
 /// Half the grab band in physical px: never below
 /// [`SEPARATOR_GRAB_HALF_BAND_LOGICAL_PX`] logical px, and never below
-/// half a cell so the band covers the visible groove.
-#[allow(
-    dead_code,
-    reason = "only `resolve` calls this until Task 10 wires a caller"
-)]
+/// half a cell.
 fn grab_half_band_phys(scale: f32, cell_pitch_phys: f32) -> f32 {
     (SEPARATOR_GRAB_HALF_BAND_LOGICAL_PX * scale).max(cell_pitch_phys / 2.0)
 }
@@ -131,9 +125,21 @@ mod tests {
         )
     }
 
+    /// A horizontal divider one physical px tall, centred at `y`,
+    /// running from x=0 to x=`len_px`.
+    fn horizontal(y: f32, len_px: f32) -> (ComputedNode, UiGlobalTransform) {
+        (
+            ComputedNode {
+                size: Vec2::new(len_px, 1.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(len_px / 2.0, y),
+        )
+    }
+
     /// Asserts that a press within the band around the painted line
-    /// resolves to that divider, and one beyond the band resolves to
-    /// nothing.
+    /// resolves to that divider, that one beyond the band does not, and
+    /// that a press anywhere along the line's length still resolves.
     ///
     /// Case: the user aims at the visible groove between two panes, and
     /// then clicks well inside the pane next to it.
@@ -151,6 +157,7 @@ mod tests {
             CELL,
             [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
         );
+        assert_eq!(hit.as_ref().map(|h| h.entity), Some(Entity::PLACEHOLDER));
         assert_eq!(hit.map(|h| h.split), Some(SplitId(1)));
 
         let miss = SeparatorHit::resolve(
@@ -160,6 +167,22 @@ mod tests {
             [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
         );
         assert!(miss.is_none());
+
+        let just_past_the_band = SeparatorHit::resolve(
+            Vec2::new(106.0, 200.0),
+            SCALE,
+            CELL,
+            [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
+        );
+        assert!(just_past_the_band.is_none());
+
+        let along_the_line = SeparatorHit::resolve(
+            Vec2::new(100.0, 250.0),
+            SCALE,
+            CELL,
+            [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
+        );
+        assert_eq!(along_the_line.map(|h| h.split), Some(SplitId(1)));
     }
 
     /// Asserts that a press beyond the divider's own length misses it,
@@ -228,5 +251,74 @@ mod tests {
             .into_iter(),
         );
         assert_eq!(tie.map(|h| h.split), Some(SplitId(1)));
+    }
+
+    /// Asserts that the grab band is the logical-px constant converted
+    /// to physical px, so a high-DPI window gets the same band in
+    /// logical terms rather than a halved one.
+    ///
+    /// Case: the user works on a Retina display, where every physical
+    /// px the cursor reports is half a logical px wide.
+    #[test]
+    fn the_band_scales_with_the_window_scale_factor() {
+        const RETINA_SCALE: f32 = 2.0;
+        const SMALL_CELL: (f32, f32) = (4.0, 8.0);
+
+        let marker = OrzmuxSeparator {
+            split: SplitId(1),
+            orientation: SplitOrientation::Vertical,
+        };
+        let (node, transform) = vertical(100.0, 400.0);
+
+        let hit = SeparatorHit::resolve(
+            Vec2::new(106.0, 200.0),
+            RETINA_SCALE,
+            SMALL_CELL,
+            [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
+        );
+        assert_eq!(hit.map(|h| h.split), Some(SplitId(1)));
+
+        let miss = SeparatorHit::resolve(
+            Vec2::new(109.0, 200.0),
+            RETINA_SCALE,
+            SMALL_CELL,
+            [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
+        );
+        assert!(miss.is_none());
+    }
+
+    /// Asserts that a horizontal divider's band is measured across the
+    /// cell height and bounded by the divider's own width, and that the
+    /// hit reports its orientation.
+    ///
+    /// Case: two panes are stacked one above the other, and the user
+    /// aims at the row divider between them before clicking past its
+    /// right end in the full-width pane beside it.
+    #[test]
+    fn a_horizontal_divider_bands_across_its_own_axis() {
+        let marker = OrzmuxSeparator {
+            split: SplitId(1),
+            orientation: SplitOrientation::Horizontal,
+        };
+        let (node, transform) = horizontal(100.0, 400.0);
+        let at = |cursor| {
+            SeparatorHit::resolve(
+                cursor,
+                SCALE,
+                CELL,
+                [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
+            )
+        };
+
+        assert_eq!(
+            at(Vec2::new(200.0, 107.0)).map(|h| h.orientation),
+            Some(SplitOrientation::Horizontal)
+        );
+        assert!(at(Vec2::new(200.0, 110.0)).is_none());
+        assert_eq!(
+            at(Vec2::new(350.0, 100.0)).map(|h| h.split),
+            Some(SplitId(1))
+        );
+        assert!(at(Vec2::new(450.0, 100.0)).is_none());
     }
 }
