@@ -261,13 +261,12 @@ fn container_local(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::bindings::OrzmaMouseConfig;
-    use crate::input::mouse::button::MouseButtonInputPlugin;
+    use crate::input::mouse::MouseInputPlugin;
     use crate::input::mouse::gesture::OrzmaMouseGesture;
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
     };
-    use crate::input::mouse::webview::{MouseWebviewPlugin, WebviewPress};
+    use crate::input::mouse::webview::WebviewPress;
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::message::Messages;
     use bevy::input::mouse::MouseWheel;
@@ -490,19 +489,19 @@ mod tests {
     #[derive(Resource, Default)]
     struct Requested(Vec<u16>);
 
-    /// An app with the real `SeparatorDragPlugin`, a focused window
-    /// whose scale factor is `scale`, and a pane container filling the
-    /// window at an 8x16 logical px cell. Every position the helpers
-    /// below take is in window physical px.
-    fn drag_app(scale: f32) -> App {
+    /// A focused window whose scale factor is `scale`, a pane container
+    /// and a terminal surface filling it at an 8x16 logical px cell, the
+    /// matching `PaneGeometry`, and a recorder for every
+    /// `RequestSplitResize`. Registers no plugin, so each caller picks
+    /// the one it wants to exercise. Every position the helpers below
+    /// take is in window physical px.
+    fn drag_world(scale: f32) -> App {
         let phys = Vec2::new(800.0, 400.0) * scale;
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins(SeparatorDragPlugin)
             .add_message::<MouseButtonInput>()
             .add_message::<CursorMoved>()
             .init_resource::<Requested>()
-            .configure_sets(Update, (MousePhase::Grab, MousePhase::Retire).chain())
             .insert_resource(PaneGeometry {
                 cell_px: CellPixels {
                     width: (CELL.0 * scale) as u16,
@@ -546,21 +545,27 @@ mod tests {
         app
     }
 
-    /// `drag_app` plus the real button dispatcher and the full
-    /// `MousePhase` ordering, so the sync point Bevy inserts on the
-    /// `Grab` to `Dispatch` edge is exercised.
+    /// `drag_world` plus the real `SeparatorDragPlugin` alone, so a test
+    /// sees the grab without any dispatcher competing for the same
+    /// messages.
+    fn drag_app(scale: f32) -> App {
+        let mut app = drag_world(scale);
+        app.add_plugins(SeparatorDragPlugin)
+            .configure_sets(Update, (MousePhase::Grab, MousePhase::Retire).chain());
+        app
+    }
+
+    /// `drag_world` plus the whole real `MouseInputPlugin`, so the
+    /// `MousePhase` chain under test is the shipped one rather than a
+    /// copy of it, sync points included.
     fn suppression_app() -> App {
-        let mut app = drag_app(SCALE);
-        app.add_plugins(MouseButtonInputPlugin)
+        let mut app = drag_world(SCALE);
+        app.add_plugins(MouseInputPlugin)
             .add_message::<MouseWheel>()
-            .init_resource::<OrzmaMouseConfig>()
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<CapturedEffects>()
-            .insert_resource(test_metrics())
-            .configure_sets(
-                Update,
-                (MousePhase::Grab, MousePhase::Dispatch, MousePhase::Retire).chain(),
-            );
+            .insert_resource(test_metrics());
         add_effect_capture_observers(&mut app);
         app
     }
@@ -818,9 +823,9 @@ mod tests {
         assert!(app.world().get::<GrabbedSeparator>(separator).is_none());
     }
 
-    /// Asserts that a press a separator grab consumed starts no selection
-    /// in the pane beside the divider and leaves the shared gesture
-    /// untouched, on the press frame itself.
+    /// Asserts that a press a separator grab consumed produces no
+    /// selection effect in the pane beside the divider and leaves the
+    /// shared gesture empty, on the press frame itself.
     ///
     /// Case: the user presses on the divider between two panes.
     #[test]
@@ -838,15 +843,16 @@ mod tests {
     }
 
     /// Asserts that a press and its release arriving in one message batch
-    /// still suppress the button dispatcher, so the click leaves no
-    /// selection effect and no gesture behind.
+    /// suppress the button dispatcher for that frame and retire the grab
+    /// by the end of it, so the click leaves no selection effect, no
+    /// gesture, and nothing latched.
     ///
     /// Case: the user clicks a divider once, quickly enough that the
     /// press and the release arrive in one frame's message batch.
     #[test]
     fn a_same_frame_click_on_a_divider_leaves_the_neighbour_alone() {
         let mut app = suppression_app();
-        spawn_vertical_separator(&mut app, SplitId(1), 320.0, 400.0);
+        let separator = spawn_vertical_separator(&mut app, SplitId(1), 320.0, 400.0);
 
         set_cursor(&mut app, Vec2::new(320.0, 200.0));
         write_left(&mut app, ButtonState::Pressed);
@@ -854,6 +860,7 @@ mod tests {
         app.update();
 
         assert!(app.world().resource::<CapturedEffects>().0.is_empty());
+        assert!(app.world().get::<GrabbedSeparator>(separator).is_none());
         let gesture = app.world().resource::<OrzmaMouseGesture>();
         assert!(gesture.held.is_none());
         assert!(gesture.drag.is_none());
@@ -888,9 +895,7 @@ mod tests {
     #[test]
     fn a_grabbed_press_does_not_reach_the_webview_router() {
         let mut app = suppression_app();
-        app.add_plugins(MouseWebviewPlugin)
-            .init_resource::<ButtonInput<MouseButton>>()
-            .insert_resource(WebviewPress(Some(Entity::PLACEHOLDER)));
+        app.insert_resource(WebviewPress(Some(Entity::PLACEHOLDER)));
         spawn_vertical_separator(&mut app, SplitId(1), 320.0, 400.0);
 
         press_at(&mut app, Vec2::new(320.0, 200.0));
@@ -899,5 +904,21 @@ mod tests {
             app.world().resource::<WebviewPress>().0,
             Some(Entity::PLACEHOLDER)
         );
+    }
+
+    /// Asserts that the same app captures a selection effect from a press
+    /// that lands off every divider, so the suppressed cases above are
+    /// suppression rather than an inert harness.
+    ///
+    /// Case: the user clicks in the middle of a pane, well away from the
+    /// divider beside it.
+    #[test]
+    fn an_ungrabbed_press_still_reaches_the_dispatcher() {
+        let mut app = suppression_app();
+        spawn_vertical_separator(&mut app, SplitId(1), 320.0, 400.0);
+
+        press_at(&mut app, Vec2::new(600.0, 200.0));
+
+        assert!(!app.world().resource::<CapturedEffects>().0.is_empty());
     }
 }
