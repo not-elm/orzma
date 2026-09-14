@@ -37,7 +37,8 @@ impl Plugin for MouseButtonInputPlugin {
             Update,
             dispatch_mouse_buttons
                 .in_set(MousePhase::Dispatch)
-                .run_if(on_any_mouse_message()),
+                .run_if(on_any_mouse_message())
+                .run_if(not(any_with_component::<GrabbedSeparator>)),
         );
     }
 }
@@ -155,15 +156,13 @@ struct FrameContext {
 /// state, drives `decide_button`, and fans the decided effects out to
 /// per-operation `EntityEvent`s via `trigger_mouse_effects`. Skips any
 /// `OrzmaTerminal` carrying `MouseDisabled`. An empty candidate set (modal
-/// suppression) drains the readers and resets the gesture, and so does the
-/// stand-down a [`GrabbedSeparator`] imposes.
+/// suppression) drains the readers and resets the gesture.
 fn dispatch_mouse_buttons(
     mut commands: Commands,
     mut gesture: ResMut<OrzmaMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
     mut cursor_moved: MessageReader<CursorMoved>,
     terminals: TerminalSurfaces,
-    grabbed: Query<(), With<GrabbedSeparator>>,
     cfg: Res<OrzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -175,7 +174,6 @@ fn dispatch_mouse_buttons(
         &mut cursor_moved,
         &terminals,
         &windows,
-        &grabbed,
         &metrics,
         &keys,
     ) else {
@@ -202,22 +200,17 @@ fn dispatch_mouse_buttons(
 
 /// Resolves the window guard and the per-frame cursor/constants for one run, or
 /// `None` when the frame should be skipped (window missing/unfocused, empty
-/// candidate set, a pane divider held by the pointer, or a cursor
-/// `effective_drag_cursor` rejects). On `None` the caller drains the input
-/// readers and resets the gesture — this fn does not (it reads `cursor_moved`
-/// only to refresh `last_cursor_phys`).
+/// candidate set, or a cursor `effective_drag_cursor` rejects). On `None` the
+/// caller drains the input readers and resets the gesture — this fn does not
+/// (it reads `cursor_moved` only to refresh `last_cursor_phys`).
 fn resolve_frame(
     gesture: &mut OrzmaMouseGesture,
     cursor_moved: &mut MessageReader<CursorMoved>,
     terminals: &TerminalSurfaces<'_, '_>,
     windows: &Query<&Window, With<PrimaryWindow>>,
-    grabbed: &Query<(), With<GrabbedSeparator>>,
     metrics: &TerminalCellMetricsResource,
     keys: &ButtonInput<KeyCode>,
 ) -> Option<FrameContext> {
-    if !grabbed.is_empty() {
-        return None;
-    }
     let window = match windows.single() {
         Ok(window) if window.focused && !terminals.is_empty() => window,
         _ => {

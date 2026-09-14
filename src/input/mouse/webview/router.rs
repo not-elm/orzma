@@ -29,26 +29,32 @@ pub(super) struct MouseWebviewRouterPlugin;
 
 impl Plugin for MouseWebviewRouterPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, route_webview_pointer.in_set(MousePhase::Dispatch))
-            .add_systems(
-                Update,
-                forward_webview_mouse_moves
-                    .in_set(InputPhase::Hover)
-                    .run_if(on_message::<CursorMoved>),
-            )
-            .add_systems(
-                Update,
-                forward_webview_wheel
-                    .in_set(InputPhase::Dispatch)
-                    .run_if(on_message::<MouseWheel>),
-            );
+        app.add_systems(
+            Update,
+            route_webview_pointer
+                .in_set(MousePhase::Dispatch)
+                .run_if(not(any_with_component::<GrabbedSeparator>)),
+        )
+        .add_systems(
+            Update,
+            forward_webview_mouse_moves
+                .in_set(InputPhase::Hover)
+                .run_if(on_message::<CursorMoved>)
+                .run_if(not(any_with_component::<GrabbedSeparator>)),
+        )
+        .add_systems(
+            Update,
+            forward_webview_wheel
+                .in_set(InputPhase::Dispatch)
+                .run_if(on_message::<MouseWheel>),
+        );
     }
 }
 
 /// Forwards left press/release to the inline CEF child under the cursor
 /// on the shell surface. A window-unfocused frame drains the reader and
 /// releases an in-flight press so the focused page is not left logically
-/// pressed; a [`GrabbedSeparator`] stands this router down instead.
+/// pressed.
 fn route_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
@@ -62,14 +68,9 @@ fn route_webview_pointer(
         ),
         With<OrzmaTerminal>,
     >,
-    grabbed: Query<(), With<GrabbedSeparator>>,
     metrics: Res<TerminalCellMetricsResource>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    if !grabbed.is_empty() {
-        buttons.clear();
-        return;
-    }
     let Ok(window) = windows.single() else {
         buttons.clear();
         webview_press.0 = None;
@@ -119,10 +120,7 @@ fn route_webview_pointer(
 }
 
 /// Forwards pointer motion over an interactive inline rect of the shell surface
-/// to the child's CEF browser via the shared `forward_webview_move_at`. A
-/// [`GrabbedSeparator`] stands this forwarder down, so the page under a divider
-/// drag is neither told the pointer is dragging across it nor allowed to take
-/// the resize cursor.
+/// to the child's CEF browser via the shared `forward_webview_move_at`.
 fn forward_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     surfaces: Query<
@@ -134,7 +132,6 @@ fn forward_webview_mouse_moves(
         ),
         With<OrzmaTerminal>,
     >,
-    grabbed: Query<(), With<GrabbedSeparator>>,
     children: Query<'_, '_, &'static Children>,
     webviews: Query<'_, '_, (&'static Webview, Has<NonInteractive>)>,
     overlay_rects: Query<'_, '_, &'static TerminalOverlays>,
@@ -143,10 +140,6 @@ fn forward_webview_mouse_moves(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     browsers: Option<NonSend<Browsers>>,
 ) {
-    if !grabbed.is_empty() {
-        cursor_msg.clear();
-        return;
-    }
     let Some(moved) = cursor_msg.read().last() else {
         return;
     };
