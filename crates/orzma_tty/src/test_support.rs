@@ -1,6 +1,8 @@
 //! Test-support seam: fakes that drive [`crate::OrzmaTty`] without a real
 //! PTY, child process, or VT emulator.
 
+#[cfg(any(test, feature = "test-support"))]
+use crate::CellPixels;
 use orzma_vt::prelude::{
     CellSide, DisplayOffset, Frame, GridColumn, GridPoint, GridSize, InstanceId, InterpretOutput,
     PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind, Vt, VtModes,
@@ -270,14 +272,9 @@ impl RecordingMaster {
         )
     }
 
-    /// Builds the fake at `cols` x `rows` with zero pixel dimensions.
-    pub(crate) fn at(cols: u16, rows: u16) -> (Self, Arc<Mutex<Vec<PtySize>>>) {
-        Self::new(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
+    /// Builds the fake at `size` with zero pixel dimensions.
+    pub(crate) fn at(size: GridSize) -> (Self, Arc<Mutex<Vec<PtySize>>>) {
+        Self::new(CellPixels::default().pty_size(size))
     }
 }
 
