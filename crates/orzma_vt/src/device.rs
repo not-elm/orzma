@@ -484,9 +484,10 @@ impl DeviceState {
     /// keeps its own pen, colours included, across flips.
     pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
         self.modes.active_screen = to;
-        // NOTE: A program killed before it closed a link would otherwise
-        // make every cell the next program prints open that target on a
-        // click.
+        // NOTE: Dropping this clear lets a link a killed program left open
+        // cover every cell the next program prints after the flip. It runs
+        // only on a real flip, so a repeated set on the screen already
+        // shown leaves such a link open.
         self.active_hyperlink = None;
         match to {
             ScreenKind::Alternate => Vec::new(),
