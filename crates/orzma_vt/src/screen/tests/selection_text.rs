@@ -10,7 +10,9 @@ use super::*;
 fn copying_wide_glyphs_emits_no_blank_for_continuations() {
     let mut screen = screen();
     for c in ['あ', 'い'] {
-        screen.print(c, PrintOptions::default());
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     screen.start_selection(
         GridPoint {
@@ -39,7 +41,9 @@ fn copying_wide_glyphs_emits_no_blank_for_continuations() {
 fn copying_partly_selected_wide_glyphs_copies_them_whole() {
     let mut screen = screen();
     for c in ['あ', 'い'] {
-        screen.print(c, PrintOptions::default());
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     screen.start_selection(point(0, 1), CellSide::Left, SelectionKind::Simple);
     screen.extend_selection(point(0, 2), CellSide::Right);
@@ -54,7 +58,9 @@ fn copying_partly_selected_wide_glyphs_copies_them_whole() {
 fn copying_an_accented_letter_keeps_its_mark() {
     let mut screen = screen();
     for c in ['e', '\u{0301}', 'x'] {
-        screen.print(c, PrintOptions::default());
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
     screen.extend_selection(point(0, 1), CellSide::Right);
@@ -70,7 +76,9 @@ fn copying_an_accented_letter_keeps_its_mark() {
 fn copying_a_wide_glyph_with_a_mark_keeps_the_mark() {
     let mut screen = screen();
     for c in ['か', '\u{3099}'] {
-        screen.print(c, PrintOptions::default());
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
     screen.extend_selection(point(0, 1), CellSide::Right);
@@ -86,7 +94,9 @@ fn copying_a_wide_glyph_with_a_mark_keeps_the_mark() {
 fn trailing_blanks_are_trimmed_after_marks() {
     let mut screen = screen();
     for c in ['e', '\u{0301}'] {
-        screen.print(c, PrintOptions::default());
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
     screen.extend_selection(point(0, 3), CellSide::Right);

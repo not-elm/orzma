@@ -12,8 +12,12 @@ use crate::device::modes::{CursorBlink, CursorShape, TextCursorModes};
 #[test]
 fn the_cursor_reports_the_write_position_and_the_callers_presentation() {
     let mut screen = screen();
-    screen.print('a', PrintOptions::default());
-    screen.print('b', PrintOptions::default());
+    screen
+        .print('a', PrintOptions::default())
+        .expect("a printable glyph");
+    screen
+        .print('b', PrintOptions::default())
+        .expect("a printable glyph");
 
     let shown = screen.cursor(TextCursorModes::default());
     assert_eq!(shown.point.line, GridLine(0));

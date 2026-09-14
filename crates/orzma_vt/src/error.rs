@@ -12,6 +12,22 @@ pub enum VtError {
     /// A column and row count that is not a valid [`GridSize`].
     #[error(transparent)]
     GridSize(#[from] GridSizeError),
+    /// A cell a row refused to stamp.
+    #[error(transparent)]
+    Stamp(#[from] StampError),
+}
+
+/// The reason a row refuses to stamp a cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum StampError {
+    /// A cell whose width is a continuation or a filler rather than a
+    /// glyph body.
+    #[error("a stamp carries a continuation or a filler, not a glyph body")]
+    NotABody,
+    /// A body, or the continuation of a wide body, that would land past
+    /// the end of the row.
+    #[error("a stamp reaches past the end of the row")]
+    OutOfRow,
 }
 
 /// The reason a column and row count is not a valid [`GridSize`].
