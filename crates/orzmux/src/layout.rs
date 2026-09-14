@@ -205,29 +205,6 @@ impl LayoutTree {
         solved
     }
 
-    #[cfg(test)]
-    fn set_root_ratio_for_test(&mut self, ratio: f32) {
-        if let Some(Node::Split(split)) = self.root.as_mut() {
-            split.ratio = ratio;
-        }
-    }
-
-    /// Forgets every activation but the active pane's own.
-    #[cfg(test)]
-    fn clear_history_for_test(&mut self) {
-        let active = self.history.pop();
-        self.history.clear();
-        self.history.extend(active);
-    }
-
-    #[cfg(test)]
-    fn min_size_for_drag(&self) -> GridSize {
-        self.root
-            .as_ref()
-            .map(Node::min_size_for_drag)
-            .unwrap_or(GridSize { cols: 0, rows: 0 })
-    }
-
     /// Moves `split`'s divider to `position`, a whole-window cell
     /// boundary, clamped so neither side falls below the drag minimum.
     /// A window too small to honour that minimum falls back to the
@@ -279,6 +256,29 @@ impl LayoutTree {
         }
         node.ratio = ratio;
         true
+    }
+
+    #[cfg(test)]
+    fn set_root_ratio_for_test(&mut self, ratio: f32) {
+        if let Some(Node::Split(split)) = self.root.as_mut() {
+            split.ratio = ratio;
+        }
+    }
+
+    /// Forgets every activation but the active pane's own.
+    #[cfg(test)]
+    fn clear_history_for_test(&mut self) {
+        let active = self.history.pop();
+        self.history.clear();
+        self.history.extend(active);
+    }
+
+    #[cfg(test)]
+    fn min_size_for_drag(&self) -> GridSize {
+        self.root
+            .as_ref()
+            .map(Node::min_size_for_drag)
+            .unwrap_or(GridSize { cols: 0, rows: 0 })
     }
 
     fn contains(&self, pane: PaneId) -> bool {
@@ -915,6 +915,26 @@ mod tests {
 
         assert!(tree.resize_split(split, 79, W));
         assert_eq!(tree.solve(W).separators[0].x, 75);
+    }
+
+    /// Asserts that a divider dragged past either end of a stacked pair
+    /// stops at the drag minimum in rows rather than in columns.
+    ///
+    /// Case: the user throws the divider of a two-pane 80×24 window up
+    /// to the top edge, then all the way down to the bottom.
+    #[test]
+    fn a_horizontal_resize_clamps_to_the_drag_minimum_on_both_sides() {
+        let mut tree = LayoutTree::new();
+        tree.insert_root(PaneId(1)).unwrap();
+        tree.split(PaneId(1), SplitOrientation::Horizontal, PaneId(2), W)
+            .unwrap();
+        let split = tree.solve(W).separators[0].split;
+
+        assert!(tree.resize_split(split, 0, W));
+        assert_eq!(tree.solve(W).separators[0].y, 2);
+
+        assert!(tree.resize_split(split, 23, W));
+        assert_eq!(tree.solve(W).separators[0].y, 21);
     }
 
     /// Asserts that a resize addressed to an id no longer in the tree is

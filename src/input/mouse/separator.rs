@@ -26,6 +26,19 @@ impl Plugin for SeparatorDragPlugin {
     }
 }
 
+/// Every pane divider, with the geometry a grab band is measured
+/// against.
+pub(in crate::input) type SeparatorNodes<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static OrzmuxSeparator,
+        &'static ComputedNode,
+        &'static UiGlobalTransform,
+    ),
+>;
+
 /// The divider whose grab band contains a cursor position.
 pub(crate) struct SeparatorHit {
     /// The separator entity the band belongs to.
@@ -96,6 +109,29 @@ impl SeparatorHit {
         }
         best.map(|(_, _, hit)| hit)
     }
+
+    /// The divider whose grab band contains `cursor_phys`, in window
+    /// physical px, measured against the cell pitch and scale factor
+    /// `geometry` records.
+    pub(in crate::input) fn at<'a>(
+        cursor_phys: Vec2,
+        geometry: &PaneGeometry,
+        separators: impl Iterator<
+            Item = (
+                Entity,
+                &'a OrzmuxSeparator,
+                &'a ComputedNode,
+                &'a UiGlobalTransform,
+            ),
+        >,
+    ) -> Option<Self> {
+        Self::resolve(
+            cursor_phys,
+            geometry.scale_factor,
+            cell_pitch(geometry),
+            separators,
+        )
+    }
 }
 
 /// The divider the pointer is holding.
@@ -143,12 +179,20 @@ fn grab_half_band_phys(scale: f32, cell_pitch_phys: f32) -> f32 {
     (SEPARATOR_GRAB_HALF_BAND_LOGICAL_PX * scale).max(cell_pitch_phys / 2.0)
 }
 
+/// The `(width, height)` cell pitch `geometry` records, in physical px.
+fn cell_pitch(geometry: &PaneGeometry) -> (f32, f32) {
+    (
+        f32::from(geometry.cell_px.width),
+        f32::from(geometry.cell_px.height),
+    )
+}
+
 fn drive_separator_drag(
     mut commands: Commands,
     mut buttons: MessageReader<MouseButtonInput>,
     mut cursor_moved: MessageReader<CursorMoved>,
     mut grabbed: Query<&mut GrabbedSeparator>,
-    separators: Query<(Entity, &OrzmuxSeparator, &ComputedNode, &UiGlobalTransform)>,
+    separators: SeparatorNodes,
     container: Query<(&ComputedNode, &UiGlobalTransform), With<OrzmuxPaneContainer>>,
     terminals: TerminalSurfaces,
     geometry: Option<Res<PaneGeometry>>,
@@ -159,10 +203,7 @@ fn drive_separator_drag(
         cursor_moved.clear();
         return;
     };
-    let cell_px = (
-        f32::from(geometry.cell_px.width),
-        f32::from(geometry.cell_px.height),
-    );
+    let cell_px = cell_pitch(&geometry);
     let window = windows.single().ok();
     let focused = window.is_some_and(|window| window.focused);
     let cursor = reported_cursor_phys(window, cursor_moved.read().last());
@@ -193,9 +234,7 @@ fn drive_separator_drag(
     let Some(cursor) = cursor else {
         return;
     };
-    let Some(hit) =
-        SeparatorHit::resolve(cursor, geometry.scale_factor, cell_px, separators.iter())
-    else {
+    let Some(hit) = SeparatorHit::at(cursor, &geometry, separators.iter()) else {
         return;
     };
     let Some(local) = container_local(&container, cursor) else {

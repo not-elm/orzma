@@ -10,7 +10,8 @@ use orzmux::prelude::{OrzmuxCommand, SplitId};
 pub struct RequestSplitResize {
     /// The split whose divider moves.
     pub split: SplitId,
-    /// The whole-window cell boundary to put the divider on.
+    /// The whole-window cell boundary to put the divider on: `x` for
+    /// a vertical split, `y` for a horizontal one.
     pub position: u16,
 }
 

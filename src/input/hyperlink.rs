@@ -3,7 +3,7 @@
 //! writer of `HyperlinkHoverState` and the window's `CursorIcon`.
 
 use crate::input::focus::MouseDisabled;
-use crate::input::mouse::separator::{GrabbedSeparator, SeparatorHit};
+use crate::input::mouse::separator::{GrabbedSeparator, SeparatorHit, SeparatorNodes};
 use crate::input::{InputPhase, current_modifiers};
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::topmost_surface_at;
@@ -11,7 +11,7 @@ use crate::surface::geometry::{cell_at_local, cell_pitch_phys, phys_to_pane_loca
 use bevy::ecs::entity::Entity;
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
-use bevy::input::mouse::{MouseButtonInput, MouseMotion};
+use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
@@ -34,7 +34,6 @@ impl Plugin for HyperlinkInputPlugin {
                     .run_if(
                         on_message::<MouseMotion>
                             .or_else(on_message::<CursorMoved>)
-                            .or_else(on_message::<MouseButtonInput>)
                             .or_else(on_message::<KeyboardInput>),
                     )
                     .in_set(InputPhase::Hover),
@@ -74,7 +73,7 @@ fn hyperlink_hover_and_cursor(
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     surfaces: HoverSurfaces,
-    separators: Query<(Entity, &OrzmuxSeparator, &ComputedNode, &UiGlobalTransform)>,
+    separators: SeparatorNodes,
     grabbed: Query<&OrzmuxSeparator, With<GrabbedSeparator>>,
     grids: Query<&TerminalGrid>,
     webview_hosts: Query<&WebviewSource>,
@@ -104,17 +103,7 @@ fn hyperlink_hover_and_cursor(
 
     let held = grabbed.iter().next().map(|grab| grab.orientation);
     let hovered = geometry
-        .and_then(|geometry| {
-            SeparatorHit::resolve(
-                cursor_phys,
-                geometry.scale_factor,
-                (
-                    f32::from(geometry.cell_px.width),
-                    f32::from(geometry.cell_px.height),
-                ),
-                separators.iter(),
-            )
-        })
+        .and_then(|geometry| SeparatorHit::at(cursor_phys, &geometry, separators.iter()))
         .map(|hit| hit.orientation);
 
     let target = HoverTarget::resolve(held, hovered, || {
