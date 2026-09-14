@@ -21,6 +21,7 @@ use self::grid::row::Row;
 use crate::device::modes::{
     AutoWrap, CursorBlink, InsertReplaceMode, TextCursorEnable, TextCursorModes,
 };
+use crate::error::VtResult;
 use crate::frame::damage::DamageSpan;
 use crate::hyperlink::HyperlinkId;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
@@ -165,7 +166,13 @@ impl Screen {
     /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
     /// the row the character landed on, or `None` when that row has
     /// scrolled out of the window.
-    pub fn print(&mut self, c: char, options: PrintOptions) -> Option<DamageSpan> {
+    ///
+    /// # Errors
+    ///
+    /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
+    /// refuses the character; the cursor and the deferred wrap are then
+    /// left as the wrap left them.
+    pub fn print(&mut self, c: char, options: PrintOptions) -> VtResult<Option<DamageSpan>> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
         let wrapping = options.auto_wrap.wraps();
         let wrap = if self.state.pending_wrap && wrapping {
@@ -183,16 +190,16 @@ impl Screen {
             self.insert_characters(1);
         }
         let cell = self.state.pen.stamp(glyph, options.hyperlink_id);
-        self.grid[self.state.line].stamp_at(self.state.column.0, cell);
+        self.grid[self.state.line].stamp_at(self.state.column.0, cell)?;
         let is_last_column = self.is_last_column();
         if !is_last_column {
             self.state.column.0 += 1;
         }
         self.state.pending_wrap = is_last_column && wrapping;
-        match wrap {
+        Ok(match wrap {
             Some(DamageSpan::Full) => Some(DamageSpan::Full),
             _ => self.damage_span(self.state.line, self.state.line),
-        }
+        })
     }
 
     /// Disarms the deferred wrap, leaving the cursor and the cells

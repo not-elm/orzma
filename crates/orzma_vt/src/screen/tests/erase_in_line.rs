@@ -11,7 +11,9 @@ use super::*;
 fn erase_to_end_clears_from_the_cursor_with_the_pen_background() {
     let mut screen = screen();
     for c in ['a', 'b', 'c'] {
-        screen.print(c, PrintOptions::default());
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     screen.state.column = GridColumn(1);
     screen.pen_mut().bg = Color::Indexed(2);
@@ -35,7 +37,9 @@ fn erase_to_end_clears_from_the_cursor_with_the_pen_background() {
 fn erase_to_start_includes_the_cursor_column() {
     let mut screen = screen();
     for c in ['a', 'b', 'c'] {
-        screen.print(c, PrintOptions::default());
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     screen.state.column = GridColumn(1);
     screen.erase_in_line(EraseLineMode::ToStart, AutoWrap::Enabled);
@@ -53,7 +57,9 @@ fn erase_to_start_includes_the_cursor_column() {
 fn erase_to_end_is_a_no_op_under_pending_wrap() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, PrintOptions::default());
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     let damage = screen.erase_in_line(EraseLineMode::ToEnd, AutoWrap::Enabled);
     assert_eq!(screen.grid[ScreenLine(0)][3].c, 'd');
@@ -69,7 +75,9 @@ fn erase_to_end_is_a_no_op_under_pending_wrap() {
 fn erase_all_clears_the_whole_row() {
     let mut screen = screen();
     for c in ['a', 'b', 'c'] {
-        screen.print(c, PrintOptions::default());
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     screen.state.column = GridColumn(1);
     screen.erase_in_line(EraseLineMode::All, AutoWrap::Enabled);
@@ -86,7 +94,9 @@ fn erase_all_clears_the_whole_row() {
 fn erase_to_end_runs_under_pending_wrap_while_autowrap_is_reset() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, PrintOptions::default());
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     assert!(screen.state.pending_wrap);
     let damage = screen.erase_in_line(EraseLineMode::ToEnd, AutoWrap::Disabled);
@@ -107,7 +117,9 @@ fn erase_to_end_runs_under_pending_wrap_while_autowrap_is_reset() {
 fn erase_to_end_runs_once_a_backward_tab_leaves_the_last_column() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, PrintOptions::default());
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     screen.move_backward_tabs(1);
     assert!(screen.state.pending_wrap);

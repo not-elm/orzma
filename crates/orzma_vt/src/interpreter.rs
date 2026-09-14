@@ -113,7 +113,9 @@ impl VTActor for Executor<'_> {
         if b == '\u{7f}' {
             return;
         }
-        let damage = self.device.print(b);
+        let Ok(damage) = self.device.print(b) else {
+            return;
+        };
         self.stage(damage);
     }
 

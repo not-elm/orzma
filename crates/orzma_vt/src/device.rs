@@ -8,6 +8,7 @@ use crate::device::modes::{
     AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode, ScreenKind,
     TextCursorEnable, VtModes,
 };
+use crate::error::VtResult;
 use crate::frame::damage::DamageSpan;
 use crate::hyperlink::{HyperlinkId, HyperlinkInterner, HyperlinkUri};
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
@@ -112,7 +113,12 @@ impl DeviceState {
     /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
     /// the row the character landed on, or `None` when that row has
     /// scrolled out of the window.
-    pub fn print(&mut self, c: char) -> Option<DamageSpan> {
+    ///
+    /// # Errors
+    ///
+    /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
+    /// refuses the character.
+    pub fn print(&mut self, c: char) -> VtResult<Option<DamageSpan>> {
         // NOTE: Every field is spelled out so that a field added to
         // `PrintOptions` fails to compile here instead of silently printing
         // with its default.
@@ -715,7 +721,7 @@ mod tests {
     fn the_two_screens_carry_independent_tab_stops() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device.print(c);
+            device.print(c).expect("a printable glyph");
         }
         device.active_screen_mut().set_horizontal_tab_stop();
 
@@ -741,12 +747,12 @@ mod tests {
     fn the_two_screens_carry_independent_checkpoints() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device.print(c);
+            device.print(c).expect("a printable glyph");
         }
         device.active_screen_mut().save_checkpoint();
 
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device.print('x');
+        device.print('x').expect("a printable glyph");
         device.active_screen_mut().restore_checkpoint();
         assert_eq!(device.active_screen().cursor_column(), GridColumn(0));
 
@@ -765,9 +771,9 @@ mod tests {
     #[test]
     fn a_reset_clears_both_screens() {
         let mut device = device();
-        device.print('p');
+        device.print('p').expect("a printable glyph");
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device.print('a');
+        device.print('a').expect("a printable glyph");
 
         let _ = device.reset();
 
@@ -810,7 +816,7 @@ mod tests {
     #[test]
     fn a_reset_of_a_written_primary_screen_reports_a_full_repaint() {
         let mut device = device();
-        device.print('x');
+        device.print('x').expect("a printable glyph");
 
         assert_eq!(device.reset(), Some(DamageSpan::Full));
     }
@@ -838,7 +844,7 @@ mod tests {
     fn a_reset_does_not_report_the_hidden_screens_damage() {
         let mut device = device();
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device.print('x');
+        device.print('x').expect("a printable glyph");
         device.set_active_screen_for_test(ScreenKind::Primary);
 
         assert_eq!(device.reset(), None);
@@ -1065,7 +1071,7 @@ mod tests {
     /// the deferred wrap.
     fn arm_deferred_wrap(device: &mut DeviceState) {
         for c in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] {
-            device.print(c);
+            device.print(c).expect("a printable glyph");
         }
     }
 
@@ -1091,12 +1097,12 @@ mod tests {
         device.set_auto_wrap(AutoWrap::Disabled);
         device.set_auto_wrap(AutoWrap::Enabled);
 
-        device.print('z');
+        device.print('z').expect("a printable glyph");
         assert_eq!(glyph_at(&device, 0, 7), 'z');
         assert_eq!(glyph_at(&device, 1, 0), ' ');
 
         device.set_active_screen_for_test(ScreenKind::Primary);
-        device.print('z');
+        device.print('z').expect("a printable glyph");
         assert_eq!(glyph_at(&device, 0, 7), 'z');
         assert_eq!(glyph_at(&device, 1, 0), ' ');
     }
@@ -1117,7 +1123,7 @@ mod tests {
         device.set_auto_wrap(AutoWrap::Enabled);
         device.active_screen_mut().restore_checkpoint();
 
-        device.print('z');
+        device.print('z').expect("a printable glyph");
         assert_eq!(glyph_at(&device, 1, 0), 'z');
     }
 
@@ -1133,7 +1139,7 @@ mod tests {
 
         device.set_auto_wrap(AutoWrap::Enabled);
 
-        device.print('z');
+        device.print('z').expect("a printable glyph");
         assert_eq!(glyph_at(&device, 1, 0), 'z');
     }
 
@@ -1300,13 +1306,13 @@ mod tests {
 
         let _ = device.soft_reset();
 
-        device.print('q');
+        device.print('q').expect("a printable glyph");
         let shown = &device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(shown.c, 'q');
         assert_eq!(shown.fg, Color::DefaultForeground);
 
         device.set_active_screen_for_test(ScreenKind::Primary);
-        device.print('q');
+        device.print('q').expect("a printable glyph");
         let hidden = &device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(hidden.c, '─');
         assert_eq!(hidden.fg, Color::Indexed(1));

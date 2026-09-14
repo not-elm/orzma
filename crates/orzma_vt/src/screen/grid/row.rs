@@ -1,5 +1,6 @@
 //! One row of elements, ordered left to right.
 
+use crate::error::{StampError, VtResult};
 use crate::screen::cell::{Cell, CellWidth};
 use crate::screen::grid::coords::GridColumn;
 use crate::screen::grid::run::Run;
@@ -60,21 +61,29 @@ impl Row<Cell> {
 
     /// Writes `cell` at `column`, adding the continuation column when it
     /// is `CellWidth::Wide`, and restores the wide-pair invariant on
-    /// both sides of the write.
+    /// both sides of the write. The row mints its own continuation and
+    /// filler columns.
     ///
-    /// The caller must hand over a `CellWidth::Narrow` or
-    /// `CellWidth::Wide` cell — the row mints its own continuation and
-    /// filler columns — and must leave a `Wide` cell room for its
-    /// continuation.
-    pub fn stamp_at(&mut self, column: u16, cell: Cell) {
+    /// # Errors
+    ///
+    /// [`StampError::NotABody`] when `cell` is a continuation or a
+    /// filler rather than a `CellWidth::Narrow` or `CellWidth::Wide`
+    /// glyph, and [`StampError::OutOfRow`] when `cell` or the
+    /// continuation of a `Wide` cell would land past the end of the
+    /// row. The row is left unchanged either way.
+    pub fn stamp_at(&mut self, column: u16, cell: Cell) -> VtResult {
         let start = usize::from(column);
-        let wide = cell.width == CellWidth::Wide;
-        debug_assert!(
-            matches!(cell.width, CellWidth::Narrow | CellWidth::Wide),
-            "a stamp carries a body width, not a continuation or a filler"
-        );
+        let wide = match cell.width {
+            CellWidth::Narrow => false,
+            CellWidth::Wide => true,
+            CellWidth::Spacer | CellWidth::LeadingSpacer => {
+                return Err(StampError::NotABody.into());
+            }
+        };
         let end = if wide { start + 1 } else { start };
-        debug_assert!(end < self.0.len(), "a stamp stays inside the row");
+        if end >= self.0.len() {
+            return Err(StampError::OutOfRow.into());
+        }
         if wide {
             self.0[end] = cell.continuation();
         }
@@ -83,10 +92,7 @@ impl Row<Cell> {
             self.heal_joint(start - 1);
         }
         self.heal_joint(end);
-        debug_assert!(
-            (start == 0 || self.joint_intact(start - 1)) && self.joint_intact(end),
-            "a stamp left a broken joint"
-        );
+        Ok(())
     }
 
     /// Restores the wide-pair invariant across the whole row.
@@ -267,6 +273,7 @@ impl IndexMut<GridColumn> for Row<Cell> {
 mod tests {
     use super::*;
     use crate::device::color::Color;
+    use crate::error::VtError;
     use crate::hyperlink::HyperlinkId;
     use crate::screen::grid::run::Style;
 
@@ -417,7 +424,7 @@ mod tests {
         let body = wide_body('あ');
         let spacer = body.continuation();
         let mut row = Row::from(vec![body, spacer, Cell::default()]);
-        row.stamp_at(0, Cell::default());
+        row.stamp_at(0, Cell::default()).expect("the stamp fits");
         assert_eq!(row[GridColumn(1)].width, CellWidth::Narrow);
         assert_eq!(row[GridColumn(1)].c, ' ');
         assert!(row.wide_pairs_intact());
@@ -433,7 +440,7 @@ mod tests {
         let body = wide_body('あ');
         let spacer = body.continuation();
         let mut row = Row::from(vec![body, spacer, Cell::default()]);
-        row.stamp_at(1, Cell::default());
+        row.stamp_at(1, Cell::default()).expect("the stamp fits");
         assert_eq!(row[GridColumn(0)].width, CellWidth::Narrow);
         assert_eq!(row[GridColumn(0)].c, ' ');
         assert!(row.wide_pairs_intact());
@@ -451,7 +458,7 @@ mod tests {
         body.style = Style::BOLD;
         let spacer = body.continuation();
         let mut row = Row::from(vec![body, spacer, Cell::default()]);
-        row.stamp_at(1, Cell::default());
+        row.stamp_at(1, Cell::default()).expect("the stamp fits");
         assert_eq!(row[GridColumn(0)].bg, Color::Indexed(4));
         assert_eq!(row[GridColumn(0)].style, Style::BOLD);
     }
@@ -463,10 +470,38 @@ mod tests {
     #[test]
     fn stamping_a_wide_cell_writes_its_continuation() {
         let mut row = Row::from(vec![Cell::default(), Cell::default()]);
-        row.stamp_at(0, wide_body('界'));
+        row.stamp_at(0, wide_body('界')).expect("the stamp fits");
         assert_eq!(row[GridColumn(0)].width, CellWidth::Wide);
         assert_eq!(row[GridColumn(1)].width, CellWidth::Spacer);
         assert!(row.wide_pairs_intact());
+    }
+
+    /// Asserts that a continuation cell is refused rather than written,
+    /// leaving the row unchanged.
+    ///
+    /// Case: a caller hands the row a spacer it minted itself instead of
+    /// the glyph body the spacer belongs to.
+    #[test]
+    fn a_continuation_cell_is_refused() {
+        let mut row = Row::from(vec![Cell::default(), Cell::default()]);
+        let before = row.clone();
+        let result = row.stamp_at(0, wide_body('あ').continuation());
+        assert!(matches!(result, Err(VtError::Stamp(StampError::NotABody))));
+        assert_eq!(row, before);
+    }
+
+    /// Asserts that a wide body whose continuation would fall past the
+    /// end of the row is refused, leaving the row unchanged.
+    ///
+    /// Case: a caller stamps a fullwidth character into the last column
+    /// without wrapping first.
+    #[test]
+    fn a_wide_body_at_the_last_column_is_refused() {
+        let mut row = Row::from(vec![Cell::default(), Cell::default()]);
+        let before = row.clone();
+        let result = row.stamp_at(1, wide_body('あ'));
+        assert!(matches!(result, Err(VtError::Stamp(StampError::OutOfRow))));
+        assert_eq!(row, before);
     }
 
     /// Asserts that a full-row normalization repairs a pair broken in
