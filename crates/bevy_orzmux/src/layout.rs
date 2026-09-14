@@ -3,7 +3,7 @@
 
 use crate::registry::PaneRegistry;
 use crate::{OrzmuxPane, OrzmuxSystems};
-use bevy::platform::collections::{HashMap, HashSet};
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use orzma_tty::CellPixels;
 use orzmux::prelude::{Layout, PaneRect, Separator, SplitId, SplitOrientation};
@@ -19,6 +19,16 @@ pub struct PaneGeometry {
     pub cell_px: CellPixels,
     /// The window's scale factor (physical / logical).
     pub scale_factor: f32,
+}
+
+impl PaneGeometry {
+    /// The cell pitch as `(width, height)` in physical px.
+    pub fn cell_pitch_phys(&self) -> (f32, f32) {
+        (
+            f32::from(self.cell_px.width),
+            f32::from(self.cell_px.height),
+        )
+    }
 }
 
 /// The node every pane entity is parented under; separators are spawned
@@ -91,7 +101,7 @@ fn apply_layout(
     mut registry: ResMut<PaneRegistry>,
     mut nodes: Query<&mut Node, With<OrzmuxPane>>,
     mut separators: Query<
-        (Entity, &mut Node, &mut OrzmuxSeparator),
+        (Entity, &mut Node, &OrzmuxSeparator),
         (With<OrzmuxSeparator>, Without<OrzmuxPane>),
     >,
     current: Res<CurrentLayout>,
@@ -117,28 +127,23 @@ fn apply_layout(
 fn reconcile_separators(
     commands: &mut Commands,
     separators: &mut Query<
-        (Entity, &mut Node, &mut OrzmuxSeparator),
+        (Entity, &mut Node, &OrzmuxSeparator),
         (With<OrzmuxSeparator>, Without<OrzmuxPane>),
     >,
     layout: &Layout,
     geometry: &PaneGeometry,
     container: Option<Entity>,
 ) {
-    let existing: HashMap<SplitId, Entity> = separators
+    let mut stale: HashMap<SplitId, Entity> = separators
         .iter()
         .map(|(entity, _, separator)| (separator.split, entity))
         .collect();
-    let wanted: HashSet<SplitId> = layout.separators.iter().map(|s| s.split).collect();
     for separator in &layout.separators {
         let node = separator_node(separator, layout, geometry);
-        match existing.get(&separator.split) {
+        match stale.remove(&separator.split) {
             Some(entity) => {
-                if let Ok((_, mut existing_node, mut marker)) = separators.get_mut(*entity) {
+                if let Ok((_, mut existing_node, _)) = separators.get_mut(entity) {
                     existing_node.set_if_neq(node);
-                    marker.set_if_neq(OrzmuxSeparator {
-                        split: separator.split,
-                        orientation: separator.orientation,
-                    });
                 }
             }
             None => {
@@ -156,10 +161,8 @@ fn reconcile_separators(
             }
         }
     }
-    for (split, entity) in &existing {
-        if !wanted.contains(split) {
-            commands.entity(*entity).despawn();
-        }
+    for entity in stale.into_values() {
+        commands.entity(entity).despawn();
     }
 }
 
@@ -171,7 +174,7 @@ fn reconcile_separators(
 /// line's thickness separates two panes on either axis.
 fn pane_node(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Node {
     let scale = geometry.scale_factor;
-    let (cell_w, cell_h) = cell_pitch_phys(geometry);
+    let (cell_w, cell_h) = geometry.cell_pitch_phys();
     let thickness = line_thickness_phys(geometry);
     let bleed_x = gap_before_line(rect.x, rect.cols, layout.size.cols, cell_w, thickness);
     let bleed_y = gap_before_line(rect.y, rect.rows, layout.size.rows, cell_h, thickness);
@@ -194,7 +197,7 @@ fn pane_node(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Node 
 /// the line never rounds away to nothing.
 fn separator_node(separator: &Separator, layout: &Layout, geometry: &PaneGeometry) -> Node {
     let scale = geometry.scale_factor;
-    let (cell_w, cell_h) = cell_pitch_phys(geometry);
+    let (cell_w, cell_h) = geometry.cell_pitch_phys();
     let thickness = line_thickness_phys(geometry);
     let x = f32::from(separator.x);
     let y = f32::from(separator.y);
@@ -241,14 +244,6 @@ fn gap_before_line(start: u16, extent: u16, limit: u16, cell: f32, thickness: f3
     } else {
         0.0
     }
-}
-
-/// The cell pitch as `(width, height)` in physical px.
-fn cell_pitch_phys(geometry: &PaneGeometry) -> (f32, f32) {
-    (
-        f32::from(geometry.cell_px.width),
-        f32::from(geometry.cell_px.height),
-    )
 }
 
 /// The separator line's thickness in whole physical px, never below one.

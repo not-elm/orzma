@@ -461,10 +461,10 @@ impl Node {
         match self {
             Node::Leaf(_) => None,
             Node::Split(s) => {
-                let (first_rect, _, second_rect) = s.subdivide(rect);
                 if s.id == id {
                     return Some((s, rect));
                 }
+                let (first_rect, _, second_rect) = s.subdivide(rect);
                 s.first
                     .find_split_mut(id, first_rect)
                     .or_else(|| s.second.find_split_mut(id, second_rect))

@@ -120,7 +120,10 @@ fn route_webview_pointer(
 }
 
 /// Forwards pointer motion over an interactive inline rect of the shell surface
-/// to the child's CEF browser via the shared `forward_webview_move_at`.
+/// to the child's CEF browser via the shared `forward_webview_move_at`. A frame
+/// a pane-divider grab holds drains the reader and forwards nothing, so the page
+/// under a divider drag is neither told the pointer is dragging across it nor
+/// allowed to take the resize cursor.
 fn forward_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     surfaces: Query<
@@ -132,6 +135,7 @@ fn forward_webview_mouse_moves(
         ),
         With<OrzmaTerminal>,
     >,
+    grabbed: Query<(), With<GrabbedSeparator>>,
     children: Query<'_, '_, &'static Children>,
     webviews: Query<'_, '_, (&'static Webview, Has<NonInteractive>)>,
     overlay_rects: Query<'_, '_, &'static TerminalOverlays>,
@@ -140,6 +144,10 @@ fn forward_webview_mouse_moves(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     browsers: Option<NonSend<Browsers>>,
 ) {
+    if !grabbed.is_empty() {
+        cursor_msg.clear();
+        return;
+    }
     let Some(moved) = cursor_msg.read().last() else {
         return;
     };

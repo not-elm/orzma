@@ -67,7 +67,9 @@ type HoverSurfaces<'w, 's> = Query<
 /// Skips any surface with input suppressed (`MouseDisabled`), so hover
 /// never advertises a link the mouse dispatcher would refuse to open. A
 /// divider the pointer holds or hovers claims the cursor before any
-/// surface is read, leaving the hover state empty.
+/// surface is read, leaving the hover state empty; a held divider keeps
+/// the cursor even while the pointer reports no position, which is what
+/// a drag past the window's edge does.
 fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
@@ -81,15 +83,22 @@ fn hyperlink_hover_and_cursor(
     geometry: Option<Res<PaneGeometry>>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
+    let held = grabbed.iter().next().map(|grab| grab.orientation);
     let Ok(window) = windows.single() else {
         reset_hover_state(&mut hover);
-        apply_cursor(&mut cursor_icons, cursor_decision(HoverTarget::Default));
+        apply_cursor(
+            &mut cursor_icons,
+            cursor_decision(HoverTarget::unlocated(held)),
+        );
         return;
     };
     let scale = window.scale_factor();
     let Some(cursor_logical) = window.cursor_position() else {
         reset_hover_state(&mut hover);
-        apply_cursor(&mut cursor_icons, cursor_decision(HoverTarget::Default));
+        apply_cursor(
+            &mut cursor_icons,
+            cursor_decision(HoverTarget::unlocated(held)),
+        );
         return;
     };
     let cursor_phys = cursor_logical * scale;
@@ -101,7 +110,6 @@ fn hyperlink_hover_and_cursor(
     hover.entity = None;
     hover.hyperlink_id = None;
 
-    let held = grabbed.iter().next().map(|grab| grab.orientation);
     let hovered = geometry
         .and_then(|geometry| SeparatorHit::at(cursor_phys, &geometry, separators.iter()))
         .map(|hit| hit.orientation);
@@ -183,6 +191,12 @@ impl HoverTarget {
             Some(orientation) => Self::Separator(orientation),
             None => surface(),
         }
+    }
+
+    /// The region for a pointer whose position is unknown: the divider a
+    /// drag holds, else `Default`.
+    fn unlocated(held: Option<SplitOrientation>) -> Self {
+        held.map_or(Self::Default, Self::Separator)
     }
 
     /// The region for the topmost mouse-enabled surface under
@@ -771,6 +785,47 @@ mod tests {
             app.world().resource::<HyperlinkHoverState>().entity,
             None,
             "a pointer the divider owns hovers no terminal, so no link affordance is offered"
+        );
+    }
+
+    /// Asserts that a drag in flight keeps its resize cursor on a frame
+    /// the window reports no pointer position at all.
+    ///
+    /// Case: the user drags a row divider past the window's bottom edge,
+    /// so the pointer leaves the client area while the button is held.
+    #[test]
+    fn a_held_drag_keeps_the_resize_cursor_off_the_window() {
+        use bevy::math::DVec2;
+
+        let mut app = divider_hover_app(2.0, Vec2::new(20.0, 40.0));
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(Some(DVec2::new(20.0, 4000.0)));
+        app.world_mut().spawn((
+            OrzmuxSeparator {
+                split: SplitId(1),
+                orientation: SplitOrientation::Horizontal,
+            },
+            GrabbedSeparator::held(SplitId(1), SplitOrientation::Horizontal),
+            ComputedNode {
+                size: Vec2::new(160.0, 2.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(80.0, 160.0),
+        ));
+
+        app.update();
+
+        assert_eq!(
+            window_cursor(&mut app),
+            Some(CursorIcon::System(SystemCursorIcon::RowResize)),
+            "an unreported pointer does not end the drag, so the arrow must not come back"
         );
     }
 

@@ -128,7 +128,7 @@ impl SeparatorHit {
         Self::resolve(
             cursor_phys,
             geometry.scale_factor,
-            cell_pitch(geometry),
+            geometry.cell_pitch_phys(),
             separators,
         )
     }
@@ -179,14 +179,6 @@ fn grab_half_band_phys(scale: f32, cell_pitch_phys: f32) -> f32 {
     (SEPARATOR_GRAB_HALF_BAND_LOGICAL_PX * scale).max(cell_pitch_phys / 2.0)
 }
 
-/// The `(width, height)` cell pitch `geometry` records, in physical px.
-fn cell_pitch(geometry: &PaneGeometry) -> (f32, f32) {
-    (
-        f32::from(geometry.cell_px.width),
-        f32::from(geometry.cell_px.height),
-    )
-}
-
 fn drive_separator_drag(
     mut commands: Commands,
     mut buttons: MessageReader<MouseButtonInput>,
@@ -203,7 +195,7 @@ fn drive_separator_drag(
         cursor_moved.clear();
         return;
     };
-    let cell_px = cell_pitch(&geometry);
+    let cell_px = geometry.cell_pitch_phys();
     let window = windows.single().ok();
     let focused = window.is_some_and(|window| window.focused);
     let cursor = reported_cursor_phys(window, cursor_moved.read().last());
@@ -288,10 +280,10 @@ fn left_button_edges<'a>(buttons: impl Iterator<Item = &'a MouseButtonInput>) ->
     (pressed, released)
 }
 
-/// The whole-window cell boundary nearest `container_local`, a position
-/// in the pane container's local physical px. `cell_px` is the
-/// `(width, height)` cell pitch in physical px. A position at or before
-/// the container's origin yields zero.
+/// The whole-window cell whose far edge is the boundary nearest
+/// `container_local`, a position in the pane container's local physical
+/// px. `cell_px` is the `(width, height)` cell pitch in physical px. A
+/// position at or before the container's origin yields zero.
 fn boundary_at(container_local: Vec2, cell_px: (f32, f32), orientation: SplitOrientation) -> u16 {
     let (offset, pitch) = match orientation {
         SplitOrientation::Vertical => (container_local.x, cell_px.0),
@@ -703,8 +695,7 @@ mod tests {
     /// bounds-checks it away and only the `CursorMoved` carries the
     /// pointer.
     fn move_off_window(app: &mut App, phys: Vec2) {
-        set_cursor(app, phys);
-        app.update();
+        move_to(app, phys);
     }
 
     fn release(app: &mut App) {
@@ -960,9 +951,8 @@ mod tests {
         );
     }
 
-    /// Asserts that the same app captures a selection effect from a press
-    /// that lands off every divider, so the suppressed cases above are
-    /// suppression rather than an inert harness.
+    /// Asserts that a press landing outside every grab band still
+    /// reaches the button dispatcher and starts a selection.
     ///
     /// Case: the user clicks in the middle of a pane, well away from the
     /// divider beside it.
