@@ -806,7 +806,9 @@ fn update_terminal_material(
         let bg_padding_color = padding_color(grid.palette.background, fallback.0);
 
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
-            (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),
+            (Some(e), Some(id)) if e == entity => {
+                (id.get(), if hover.modifier_held { 1 } else { 0 })
+            }
             _ => (0, 0),
         };
 
@@ -888,7 +890,7 @@ fn rebuild_cells(
                     fg_packed: fg,
                     bg_packed: bg,
                     style_flags,
-                    hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.0),
+                    hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.get()),
                 };
             }
 
@@ -909,7 +911,7 @@ fn rebuild_cells(
                         fg_packed: fg,
                         bg_packed: bg,
                         style_flags: style_flags | STYLE_WIDE_RIGHT_HALF,
-                        hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.0),
+                        hyperlink_id: cell.hyperlink.as_ref().map_or(0, |h| h.id.get()),
                     };
                 }
             }
@@ -1034,7 +1036,7 @@ mod tests {
             bg: CellColor::DefaultBackground,
             style: 0,
             hyperlink: link.map(|id| Hyperlink {
-                id: HyperlinkId(id),
+                id: HyperlinkId::new(id).expect("nonzero"),
                 uri: HyperlinkUri::new("https://example"),
             }),
         }
