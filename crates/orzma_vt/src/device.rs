@@ -119,7 +119,7 @@ impl DeviceState {
         let options = PrintOptions {
             insert_replace: self.modes.insert_replace,
             auto_wrap: self.modes.auto_wrap,
-            hyperlink: self.active_hyperlink,
+            hyperlink_id: self.active_hyperlink,
         };
         self.active_screen_mut().print(c, options)
     }

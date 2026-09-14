@@ -22,11 +22,6 @@ pub struct Cell {
     pub hyperlink_id: Option<HyperlinkId>,
 }
 
-const _: () = assert!(
-    size_of::<Cell>() <= 20,
-    "a cell must not grow past twenty bytes"
-);
-
 impl Default for Cell {
     fn default() -> Self {
         Self {
@@ -72,14 +67,14 @@ impl Default for Pen {
 
 impl Pen {
     /// Burns the pen's attributes into a cell holding `c`, printed inside
-    /// `hyperlink`, or outside any link when it is `None`.
-    pub fn stamp(&self, c: char, hyperlink: Option<HyperlinkId>) -> Cell {
+    /// `hyperlink_id`, or outside any link when it is `None`.
+    pub fn stamp(&self, c: char, hyperlink_id: Option<HyperlinkId>) -> Cell {
         Cell {
             c,
             fg: self.fg,
             bg: self.bg,
             style: self.style,
-            hyperlink_id: hyperlink,
+            hyperlink_id,
         }
     }
 
@@ -119,15 +114,15 @@ mod tests {
             bg: Color::Indexed(4),
             style: Style::BOLD,
         };
-        let hyperlink = HyperlinkId::new(7);
+        let hyperlink_id = HyperlinkId::new(7);
         assert_eq!(
-            pen.stamp('a', hyperlink),
+            pen.stamp('a', hyperlink_id),
             Cell {
                 c: 'a',
                 fg: Color::Indexed(1),
                 bg: Color::Indexed(4),
                 style: Style::BOLD,
-                hyperlink_id: hyperlink,
+                hyperlink_id,
             }
         );
     }

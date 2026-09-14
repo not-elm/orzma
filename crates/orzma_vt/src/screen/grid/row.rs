@@ -41,12 +41,7 @@ impl Row<Cell> {
         let mut runs: Vec<Run> = Vec::with_capacity(self.0.len().min(Self::RUNS_RESERVE));
         for cell in self.0.iter() {
             match runs.last_mut() {
-                Some(run)
-                    if run.fg == cell.fg
-                        && run.bg == cell.bg
-                        && run.style == cell.style
-                        && run.hyperlink_id == cell.hyperlink_id =>
-                {
+                Some(run) if run.continues_with(cell) => {
                     run.cols += 1;
                     run.text.push(cell.c);
                 }

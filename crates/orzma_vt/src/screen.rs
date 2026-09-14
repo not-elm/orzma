@@ -151,7 +151,7 @@ pub struct PrintOptions {
     pub auto_wrap: AutoWrap,
     /// The hyperlink the character is printed inside, or `None` when no link
     /// is open.
-    pub hyperlink: Option<HyperlinkId>,
+    pub hyperlink_id: Option<HyperlinkId>,
 }
 
 /// Graphic character output.
@@ -183,7 +183,7 @@ impl Screen {
             self.insert_characters(1);
         }
         self.grid[self.state.line][self.state.column] =
-            self.state.pen.stamp(glyph, options.hyperlink);
+            self.state.pen.stamp(glyph, options.hyperlink_id);
         let at_right_edge = self.at_right_edge();
         if !at_right_edge {
             self.state.column.0 += 1;
