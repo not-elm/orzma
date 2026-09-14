@@ -27,13 +27,16 @@ impl Plugin for TerminalGridPlugin {
 /// ids the mirror already knows, or sections that already equal the
 /// mirror's own leaves the component untouched.
 ///
-/// A frame addressed to an entity without a grid is ignored.
+/// A frame addressed to an entity without a grid is ignored, and a
+/// frame the grid rejects is logged and leaves the grid as it was.
 fn apply_frame(signal: On<TtyFrameSignal>, mut terminals: Query<&mut TerminalGrid>) {
     let Ok(grid) = terminals.get_mut(signal.terminal) else {
         return;
     };
-    if grid.differs_from(&signal.frame) {
-        grid.into_inner().apply(&signal.frame);
+    if grid.differs_from(&signal.frame)
+        && let Err(err) = grid.into_inner().apply(&signal.frame)
+    {
+        warn!(terminal = ?signal.terminal, %err, "frame rejected; grid left as it was");
     }
 }
 
@@ -44,7 +47,7 @@ mod tests {
         AnchoredPlacement, DisplayOffset, GridColumn, GridLine, GridPoint, InstanceId,
         PlacementSize, quiet_frame,
     };
-    use orzma_vt::prelude::{Frame, GridSize};
+    use orzma_vt::prelude::{DirtyRow, Frame, GridSize, Row, Run, ViewportLine};
     use orzmux::prelude::PaneId;
 
     #[derive(Resource, Default)]
@@ -174,5 +177,35 @@ mod tests {
         app.world_mut().trigger(TtyFrameSignal { terminal, frame });
         let grid = app.world().get::<TerminalGrid>(terminal).unwrap();
         assert_eq!((grid.cols, grid.rows), (4, 3));
+    }
+
+    /// Asserts that a frame the grid rejects leaves its cells as they
+    /// were rather than panicking.
+    ///
+    /// Case: the backend sends a frame whose run declares a width of
+    /// three.
+    #[test]
+    fn a_rejected_frame_leaves_the_grid_as_it_was() {
+        let (mut app, terminal) = app_with_grid();
+        app.world_mut().trigger(TtyFrameSignal {
+            terminal,
+            frame: Frame {
+                rows: vec![DirtyRow {
+                    line: ViewportLine(0),
+                    contents: Row::from(vec![Run {
+                        cols: 3,
+                        text: "\u{3042}".to_string(),
+                        widths: vec![3],
+                        ..Run::default()
+                    }]),
+                }],
+                ..quiet_frame()
+            },
+        });
+        app.update();
+        assert_eq!(
+            app.world().get::<TerminalGrid>(terminal).unwrap().cells,
+            vec![vec![]]
+        );
     }
 }
