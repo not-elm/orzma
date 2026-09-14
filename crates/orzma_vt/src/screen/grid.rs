@@ -6,13 +6,13 @@ pub mod run;
 pub(crate) mod coords;
 mod history_index;
 
+use crate::error::{GridSizeError, VtResult};
 use crate::screen::cell::{Cell, CellWidth};
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::grid::history_index::HistoryIndex;
 use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
-use thiserror::Error;
 
 /// The narrowest grid the terminal will build: a width-2 glyph needs two
 /// columns.
@@ -40,30 +40,18 @@ impl GridSize {
     /// [`GridSizeError::ZeroAxis`] when either count is zero, and
     /// [`GridSizeError::TooLarge`] when either exceeds
     /// [`Self::MAX_COLS`] / [`Self::MAX_ROWS`].
-    pub fn new(cols: u16, rows: u16) -> Result<Self, GridSizeError> {
+    pub fn new(cols: u16, rows: u16) -> VtResult<Self> {
         if cols == 0 || rows == 0 {
-            return Err(GridSizeError::ZeroAxis);
+            return Err(GridSizeError::ZeroAxis.into());
         }
         if Self::MAX_COLS < cols || Self::MAX_ROWS < rows {
-            return Err(GridSizeError::TooLarge);
+            return Err(GridSizeError::TooLarge.into());
         }
         Ok(Self {
             cols: cols.max(MIN_COLUMNS),
             rows,
         })
     }
-}
-
-/// The reason a column and row count is not a valid [`GridSize`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum GridSizeError {
-    /// A column or row count of zero.
-    #[error("a grid axis is zero")]
-    ZeroAxis,
-    /// A column or row count above [`GridSize::MAX_COLS`] /
-    /// [`GridSize::MAX_ROWS`].
-    #[error("a grid axis exceeds {}x{}", GridSize::MAX_COLS, GridSize::MAX_ROWS)]
-    TooLarge,
 }
 
 /// Stable identity of one grid row, minted when the row enters the ring.

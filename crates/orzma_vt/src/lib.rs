@@ -14,6 +14,7 @@ use crate::{
 use std::path::PathBuf;
 
 mod device;
+mod error;
 mod frame;
 mod hyperlink;
 mod interpreter;
@@ -28,6 +29,7 @@ pub mod prelude {
         AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode, MouseEncoding,
         MouseTracking, ScreenKind, TextCursorEnable, TextCursorModes, VtModes,
     };
+    pub use crate::error::{GridSizeError, VtError, VtResult};
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::placement::{AnchoredPlacement, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};
@@ -36,7 +38,7 @@ pub mod prelude {
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
     pub use crate::screen::grid::row::Row;
     pub use crate::screen::grid::run::{Run, Style};
-    pub use crate::screen::grid::{GridSize, GridSizeError, MIN_COLUMNS};
+    pub use crate::screen::grid::{GridSize, MIN_COLUMNS};
     pub use crate::screen::selection::{
         CellSide, SelectionGeometry, SelectionKind, SelectionRange,
     };
@@ -429,9 +431,10 @@ impl Vt for OrzmaVt {
 mod tests {
     use super::*;
     use crate::device::color::{Palette, Rgb};
+    use crate::error::{GridSizeError, VtError};
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
+    use crate::screen::grid::MIN_COLUMNS;
     use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
-    use crate::screen::grid::{GridSizeError, MIN_COLUMNS};
     use crate::screen::selection::{SelectionGeometry, SelectionRange};
     use crate::screen::viewport::ViewportLine;
 
@@ -1440,7 +1443,10 @@ mod tests {
     /// Case: the user resizes the window to an ordinary width.
     #[test]
     fn a_wide_enough_size_is_left_alone() {
-        assert_eq!(GridSize::new(80, 24), Ok(GridSize { cols: 80, rows: 24 }));
+        assert_eq!(
+            GridSize::new(80, 24).expect("a valid size"),
+            GridSize { cols: 80, rows: 24 }
+        );
     }
 
     /// Asserts that a zero axis is rejected rather than clamped.
@@ -1450,9 +1456,11 @@ mod tests {
     #[test]
     fn a_zero_axis_is_rejected() {
         for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
-            assert_eq!(
-                GridSize::new(cols, rows),
-                Err(GridSizeError::ZeroAxis),
+            assert!(
+                matches!(
+                    GridSize::new(cols, rows),
+                    Err(VtError::GridSize(GridSizeError::ZeroAxis))
+                ),
                 "{cols}x{rows} must be rejected"
             );
         }
@@ -1466,18 +1474,20 @@ mod tests {
     #[test]
     fn an_oversized_axis_is_rejected() {
         for (cols, rows) in [(GridSize::MAX_COLS + 1, 24), (80, GridSize::MAX_ROWS + 1)] {
-            assert_eq!(
-                GridSize::new(cols, rows),
-                Err(GridSizeError::TooLarge),
+            assert!(
+                matches!(
+                    GridSize::new(cols, rows),
+                    Err(VtError::GridSize(GridSizeError::TooLarge))
+                ),
                 "{cols}x{rows} must be rejected"
             );
         }
         assert_eq!(
-            GridSize::new(GridSize::MAX_COLS, GridSize::MAX_ROWS),
-            Ok(GridSize {
+            GridSize::new(GridSize::MAX_COLS, GridSize::MAX_ROWS).expect("a valid size"),
+            GridSize {
                 cols: GridSize::MAX_COLS,
                 rows: GridSize::MAX_ROWS
-            })
+            }
         );
     }
 }
