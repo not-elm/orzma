@@ -92,7 +92,7 @@ impl TerminalGrid {
     //       `runs_to_cells`), so a column-to-cell walk is required —
     //       direct `cells[row][col]` indexing would desynchronize after
     //       any wide char. Must mirror the column-advance logic in
-    //       `material::rebuild_cells`.
+    //       `material::fill_cells`.
     pub fn hyperlink_at(&self, row: u16, col: u16) -> Option<(HyperlinkId, &HyperlinkUri)> {
         let row_cells = self.cells.get(row as usize)?;
         let mut current_col: u32 = 0;
@@ -291,7 +291,7 @@ fn runs_to_cells(
     hyperlinks: &[(HyperlinkId, HyperlinkUri)],
 ) -> Vec<GridCell> {
     // NOTE: The column walk here must advance exactly as
-    // `material::rebuild_cells` re-derives it from `GridCell::width`;
+    // `material::fill_cells` re-derives it from `GridCell::width`;
     // a change to one without the other misaligns every glyph after
     // the first wide character.
     let mut out: Vec<GridCell> =

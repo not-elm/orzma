@@ -893,10 +893,9 @@ fn fill_cells(
             if col >= cols {
                 break;
             }
-            // NOTE: runs_to_cells joins every zero-width char onto the cell
-            // before it, so a width-0 cell reaches here only from a row
-            // whose first char is a mark or from a hand-built grid; it must
-            // not consume a column or write a GPU slot.
+            // NOTE: A width-0 cell must not consume a column or write a GPU
+            //       slot; doing either paints a phantom box carrying the base
+            //       cell's style.
             if cell.width == 0 {
                 continue;
             }
@@ -1067,23 +1066,11 @@ mod tests {
         }
     }
 
-    /// Asserts that a linked cell's wire id reaches its GPU slot while
-    /// an unlinked cell's slot keeps the 0 sentinel.
-    ///
-    /// Case: a row mixes OSC 8 linked text with plain text.
-    #[test]
-    fn rebuild_cells_writes_hyperlink_id_when_present() {
+    /// A fresh two-cell [`TerminalMaterialState`], as `rebuild_cells`
+    /// expects to find it before its first rebuild.
+    fn rebuild_state() -> TerminalMaterialState {
         use bevy::platform::collections::HashMap;
-
-        let linked = cell_with_link("x", Some(7));
-        let unlinked = cell_with_link("y", None);
-        let grid = TerminalGrid {
-            cols: 2,
-            rows: 1,
-            cells: vec![vec![linked, unlinked]],
-            ..Default::default()
-        };
-        let mut state = TerminalMaterialState {
+        TerminalMaterialState {
             glyph_index_map: HashMap::new(),
             cpu_cells: vec![GpuCell::default(); 2],
             cpu_glyphs: Vec::new(),
@@ -1093,7 +1080,24 @@ mod tests {
             last_phys_font_size: 0,
             cached_metrics: None,
             initialized: false,
+        }
+    }
+
+    /// Asserts that a linked cell's wire id reaches its GPU slot while
+    /// an unlinked cell's slot keeps the 0 sentinel.
+    ///
+    /// Case: a row mixes OSC 8 linked text with plain text.
+    #[test]
+    fn rebuild_cells_writes_hyperlink_id_when_present() {
+        let linked = cell_with_link("x", Some(7));
+        let unlinked = cell_with_link("y", None);
+        let grid = TerminalGrid {
+            cols: 2,
+            rows: 1,
+            cells: vec![vec![linked, unlinked]],
+            ..Default::default()
         };
+        let mut state = rebuild_state();
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
@@ -1103,41 +1107,30 @@ mod tests {
         assert_eq!(state.cpu_cells[1].hyperlink_id, 0);
     }
 
-    /// Asserts that when the atlas restarts partway through a rebuild,
-    /// every cell's glyph index still points at a rect the restarted
-    /// atlas holds for that cell's key.
+    /// Asserts that a cell resolved before a mid-rebuild atlas restart is
+    /// re-resolved against the restarted atlas rather than keeping a
+    /// glyph index into the rect the restart evicted.
     ///
-    /// Case: a row of distinct glyphs overflows a nearly full atlas while
-    /// the material rebuilds its cell table.
+    /// Case: a row's first glyph is already cached in the atlas, and its
+    /// second glyph overflows a nearly full atlas mid-rebuild.
     #[test]
     fn rebuild_cells_survives_an_atlas_restart_mid_pass() {
-        use bevy::platform::collections::HashMap;
-
+        let m = cell_with_link("M", None);
         let a = cell_with_link("A", None);
-        let j = cell_with_link("j", None);
         let grid = TerminalGrid {
             cols: 2,
             rows: 1,
-            cells: vec![vec![a, j]],
+            cells: vec![vec![m, a]],
             ..Default::default()
         };
-        let mut state = TerminalMaterialState {
-            glyph_index_map: HashMap::new(),
-            cpu_cells: vec![GpuCell::default(); 2],
-            cpu_glyphs: Vec::new(),
-            last_atlas_generation: 0,
-            grid_dirty: true,
-            last_grid_dims: (0, 0),
-            last_phys_font_size: 0,
-            cached_metrics: None,
-            initialized: false,
-        };
+        let mut state = rebuild_state();
         let mut atlas = GlyphAtlas::new(32, 24);
         let fonts = TerminalFonts::default();
         // Pack 'M' (12x18) then 'W' (14x18) onto the first shelf so it
         // sits at x=26, leaving no room for 'A' (13x18) beside them and
-        // no room below for its height either — the row below forces the
-        // single restart this test exercises.
+        // no room below for its height either — resolving 'A' forces the
+        // single restart this test exercises, evicting the 'M' rect cell
+        // 0 already resolved against.
         atlas
             .get_or_insert(GlyphKey::new(FontFace::Regular, u32::from('M'), 24), &fonts)
             .expect("'M' rasterizes");
@@ -1151,7 +1144,7 @@ mod tests {
 
         rebuild_cells(&grid, &mut state, &fonts, &mut atlas, 24, 2);
 
-        for (col, ch) in [(0usize, 'A'), (1usize, 'j')] {
+        for (col, ch) in [(0usize, 'M'), (1usize, 'A')] {
             let glyph_index = state.cpu_cells[col].glyph_index;
             let glyph = state.cpu_glyphs[glyph_index as usize];
             let key = GlyphKey::new(FontFace::Regular, u32::from(ch), 24);
@@ -1344,6 +1337,9 @@ mod tests {
         assert!(painter.contains("cursor_covers(row, col)"));
         assert!(painter.contains("bar_covers(row, col)"));
         assert!(src.contains("fn bar_covers("));
+        assert!(painter.contains(
+            "select(cursor_covers(row, col), bar_covers(row, col), cursor_shape == CURSOR_SHAPE_BAR)"
+        ));
     }
 
     /// Asserts that the shader's style constants are exactly the `Style`
