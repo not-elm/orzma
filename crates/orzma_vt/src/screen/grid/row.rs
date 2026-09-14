@@ -34,13 +34,14 @@ impl Row<Cell> {
     /// Coalesces the row's cells into the attribute runs a frame
     /// carries.
     ///
-    /// Adjacent cells sharing foreground, background, and style become
-    /// one [`Run`], and the runs together span every column of the row.
+    /// Adjacent cells sharing foreground, background, style, and
+    /// hyperlink become one [`Run`], and the runs together span every
+    /// column of the row.
     pub fn to_runs(&self) -> Row<Run> {
         let mut runs: Vec<Run> = Vec::with_capacity(self.0.len().min(Self::RUNS_RESERVE));
         for cell in self.0.iter() {
             match runs.last_mut() {
-                Some(run) if run.fg == cell.fg && run.bg == cell.bg && run.style == cell.style => {
+                Some(run) if run.continues_with(cell) => {
                     run.cols += 1;
                     run.text.push(cell.c);
                 }
@@ -50,7 +51,7 @@ impl Row<Cell> {
                     bg: cell.bg,
                     style: cell.style,
                     text: cell.c.to_string(),
-                    hyperlink_id: None,
+                    hyperlink_id: cell.hyperlink_id,
                 }),
             }
         }
@@ -116,10 +117,17 @@ impl IndexMut<GridColumn> for Row<Cell> {
 mod tests {
     use super::*;
     use crate::device::color::Color;
+    use crate::hyperlink::HyperlinkId;
     use crate::screen::grid::run::Style;
 
     fn cell(c: char, fg: Color, bg: Color, style: Style) -> Cell {
-        Cell { c, fg, bg, style }
+        Cell {
+            c,
+            fg,
+            bg,
+            style,
+            hyperlink_id: None,
+        }
     }
 
     fn plain(c: char) -> Cell {
@@ -239,5 +247,42 @@ mod tests {
             runs.0.capacity(),
             Row::RUNS_RESERVE
         );
+    }
+
+    /// Asserts that a row splits into separate runs where the hyperlink
+    /// changes, even when every other attribute matches.
+    ///
+    /// Case: a directory listing prints one clickable file name straight
+    /// after another with no styling between them.
+    #[test]
+    fn runs_split_where_the_hyperlink_changes() {
+        let link = HyperlinkId::new(7).expect("nonzero");
+        let other = HyperlinkId::new(9).expect("nonzero");
+        let mut row = Row::filled(3, Cell::default());
+        row[0].hyperlink_id = Some(link);
+        row[1].hyperlink_id = Some(other);
+        let runs = row.to_runs();
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].hyperlink_id, Some(link));
+        assert_eq!(runs[1].hyperlink_id, Some(other));
+        assert_eq!(runs[2].hyperlink_id, None);
+    }
+
+    /// Asserts that neighbouring cells sharing one hyperlink coalesce
+    /// into a single run.
+    ///
+    /// Case: a program prints a multi-word link, and the renderer draws
+    /// it as one underlined span.
+    #[test]
+    fn cells_sharing_a_hyperlink_coalesce_into_one_run() {
+        let link = HyperlinkId::new(7).expect("nonzero");
+        let mut row = Row::filled(3, Cell::default());
+        for column in 0..3 {
+            row[column].hyperlink_id = Some(link);
+        }
+        let runs = row.to_runs();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].cols, 3);
+        assert_eq!(runs[0].hyperlink_id, Some(link));
     }
 }

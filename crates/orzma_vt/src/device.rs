@@ -9,12 +9,13 @@ use crate::device::modes::{
     TextCursorEnable, VtModes,
 };
 use crate::frame::damage::DamageSpan;
+use crate::hyperlink::{HyperlinkId, HyperlinkInterner, HyperlinkUri};
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
-use crate::screen::Screen;
 use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, ScreenLine};
 use crate::screen::viewport::{DisplayOffset, Scroll};
+use crate::screen::{PrintOptions, Screen};
 use std::collections::VecDeque;
 
 /// The emulated terminal device: screens, modes, tabs, colors, title,
@@ -24,6 +25,8 @@ pub(crate) struct DeviceState {
     modes: VtModes,
     palette: Palette,
     title: TitleState,
+    hyperlinks: HyperlinkInterner,
+    active_hyperlink: Option<HyperlinkId>,
 }
 
 impl DeviceState {
@@ -41,6 +44,8 @@ impl DeviceState {
             modes: VtModes::default(),
             palette: Palette::default(),
             title: TitleState::default(),
+            hyperlinks: HyperlinkInterner::new(),
+            active_hyperlink: None,
         }
     }
 
@@ -99,6 +104,26 @@ impl DeviceState {
         self.active_screen_mut().scroll(scroll)
     }
 
+    /// Prints one character at the cursor of the screen on show, shaped by
+    /// the device's `IRM` and `DECAWM` modes and its open hyperlink.
+    ///
+    /// `c` must be a printable character of display width one.
+    ///
+    /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
+    /// the row the character landed on, or `None` when that row has
+    /// scrolled out of the window.
+    pub fn print(&mut self, c: char) -> Option<DamageSpan> {
+        // NOTE: Every field is spelled out so that a field added to
+        // `PrintOptions` fails to compile here instead of silently printing
+        // with its default.
+        let options = PrintOptions {
+            insert_replace: self.modes.insert_replace,
+            auto_wrap: self.modes.auto_wrap,
+            hyperlink_id: self.active_hyperlink,
+        };
+        self.active_screen_mut().print(c, options)
+    }
+
     /// Returns both screens and every mode to their power-up state;
     /// `None` when the frame that follows needs no repaint.
     ///
@@ -113,6 +138,9 @@ impl DeviceState {
     /// The whole palette returns to its built-in defaults too, and a
     /// reset that changes a color reports a full repaint even when
     /// neither screen was written.
+    ///
+    /// The hyperlinks a program opened stay resolvable, though the open
+    /// one is closed.
     ///
     /// # Control Functions
     ///
@@ -130,6 +158,11 @@ impl DeviceState {
         // instead.
         self.modes = VtModes::default();
         self.title = TitleState::default();
+        self.active_hyperlink = None;
+        // NOTE: `hyperlinks` is deliberately not reset. Ids must never be
+        // reused: the renderer keeps its own id-to-uri table and skips an
+        // id it already knows, so a reused id would resolve to the uri it
+        // carried before the reset.
         let palette_changed = self.palette.reset();
         (was_showing_alternate || primary.is_some() || palette_changed).then_some(DamageSpan::Full)
     }
@@ -141,6 +174,8 @@ impl DeviceState {
     ///
     /// Autowrap returns to enabled, which is the set rather than the
     /// reset state vt510.pdf p.277 Table 5-9 lists.
+    ///
+    /// The open hyperlink is closed.
     ///
     /// The modes it does not name are left as they are, and so are the
     /// cells and the cursor position on show, the hidden screen, the
@@ -158,6 +193,7 @@ impl DeviceState {
         self.modes.keypad_mode = KeypadMode::Numeric;
         self.set_auto_wrap(AutoWrap::Enabled);
         self.active_screen_mut().soft_reset();
+        self.active_hyperlink = None;
         self.reset_indexed_colors().then_some(DamageSpan::Full)
     }
 
@@ -291,6 +327,33 @@ impl DeviceState {
     /// - `OSC 104` with no colour number
     pub fn reset_indexed_colors(&mut self) -> bool {
         self.palette.reset_all_indexed()
+    }
+
+    /// Opens a hyperlink, so the cells printed from now on carry it. A
+    /// nonempty `id` joins this link to every other open naming the same
+    /// id and uri.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 8 ; params ; URI`
+    pub fn open_hyperlink(&mut self, id: Option<String>, uri: HyperlinkUri) {
+        self.active_hyperlink = Some(self.hyperlinks.open(id, uri));
+    }
+
+    /// Closes the open hyperlink, so the cells printed from now on carry
+    /// none. The cells already printed keep theirs.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 8 ; ;`
+    pub fn close_hyperlink(&mut self) {
+        self.active_hyperlink = None;
+    }
+
+    /// The target `id` was opened for, or `None` for an id this device
+    /// never handed out.
+    pub fn hyperlink_uri(&self, id: HyperlinkId) -> Option<&HyperlinkUri> {
+        self.hyperlinks.extract(&id)
     }
 
     /// Sets the default foreground to `color`; returns whether it
@@ -430,8 +493,16 @@ impl DeviceState {
     /// alternate screen is shown, not destroyed. This operation stages no
     /// damage of its own: the caller must stage `DamageSpan::Full` for
     /// the flip.
+    ///
+    /// A flip in either direction closes the open hyperlink. Each screen
+    /// keeps its own pen, colours included, across flips.
     pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
         self.modes.active_screen = to;
+        // NOTE: Dropping this clear lets a link a killed program left open
+        // cover every cell the next program prints after the flip. It runs
+        // only on a real flip, so a repeated set on the screen already
+        // shown leaves such a link open.
+        self.active_hyperlink = None;
         match to {
             ScreenKind::Alternate => Vec::new(),
             ScreenKind::Primary => {
@@ -478,6 +549,7 @@ mod tests {
     use crate::device::modes::{
         InsertReplaceMode, KeypadMode, MouseEncoding, MouseTracking, TextCursorEnable,
     };
+    use crate::hyperlink::HyperlinkUri;
     use crate::screen::cell::Cell;
     use crate::screen::character_sets::{CharacterSet, GCode};
     use crate::screen::grid::coords::GridColumn;
@@ -490,6 +562,65 @@ mod tests {
 
     fn mount(device: &mut DeviceState, id: InstanceId) -> bool {
         device.mount_placement(PlacementSize { rows: 2, cols: 4 }, id)
+    }
+
+    /// Asserts that opening a hyperlink makes its id the active one.
+    ///
+    /// Case: a build tool starts printing a clickable path.
+    #[test]
+    fn opening_a_hyperlink_makes_it_active() {
+        let mut device = device();
+        device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        assert!(device.active_hyperlink.is_some());
+    }
+
+    /// Asserts that closing a hyperlink leaves none active.
+    ///
+    /// Case: a program finishes printing a link and emits the closing
+    /// sequence before its next word.
+    #[test]
+    fn closing_a_hyperlink_leaves_none_active() {
+        let mut device = device();
+        device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        device.close_hyperlink();
+        assert_eq!(device.active_hyperlink, None);
+    }
+
+    /// Asserts that a full reset leaves no hyperlink active.
+    ///
+    /// Case: a program leaves a link open and the user runs `reset`.
+    #[test]
+    fn a_reset_leaves_no_hyperlink_active() {
+        let mut device = device();
+        device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        let _ = device.reset();
+        assert_eq!(device.active_hyperlink, None);
+    }
+
+    /// Asserts that a soft reset leaves no hyperlink active.
+    ///
+    /// Case: a program leaves a link open and a later `tput init` issues a
+    /// soft reset.
+    #[test]
+    fn a_soft_reset_leaves_no_hyperlink_active() {
+        let mut device = device();
+        device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        let _ = device.soft_reset();
+        assert_eq!(device.active_hyperlink, None);
+    }
+
+    /// Asserts that a flip in either direction leaves no hyperlink active.
+    ///
+    /// Case: a shell leaves a link open when a full-screen editor starts,
+    /// and the editor leaves one open when it exits.
+    #[test]
+    fn a_screen_flip_in_either_direction_leaves_no_hyperlink_active() {
+        let mut device = device();
+        for to in [ScreenKind::Alternate, ScreenKind::Primary] {
+            device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+            let _ = device.switch_screen(to);
+            assert_eq!(device.active_hyperlink, None, "flipped to {to:?}");
+        }
     }
 
     /// Asserts that a scroll moves the screen on show and leaves the
@@ -584,9 +715,7 @@ mod tests {
     fn the_two_screens_carry_independent_tab_stops() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device
-                .active_screen_mut()
-                .print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+            device.print(c);
         }
         device.active_screen_mut().set_horizontal_tab_stop();
 
@@ -612,16 +741,12 @@ mod tests {
     fn the_two_screens_carry_independent_checkpoints() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device
-                .active_screen_mut()
-                .print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+            device.print(c);
         }
         device.active_screen_mut().save_checkpoint();
 
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device
-            .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        device.print('x');
         device.active_screen_mut().restore_checkpoint();
         assert_eq!(device.active_screen().cursor_column(), GridColumn(0));
 
@@ -640,13 +765,9 @@ mod tests {
     #[test]
     fn a_reset_clears_both_screens() {
         let mut device = device();
-        device
-            .active_screen_mut()
-            .print('p', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        device.print('p');
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device
-            .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        device.print('a');
 
         let _ = device.reset();
 
@@ -689,9 +810,7 @@ mod tests {
     #[test]
     fn a_reset_of_a_written_primary_screen_reports_a_full_repaint() {
         let mut device = device();
-        device
-            .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        device.print('x');
 
         assert_eq!(device.reset(), Some(DamageSpan::Full));
     }
@@ -719,9 +838,7 @@ mod tests {
     fn a_reset_does_not_report_the_hidden_screens_damage() {
         let mut device = device();
         device.set_active_screen_for_test(ScreenKind::Alternate);
-        device
-            .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        device.print('x');
         device.set_active_screen_for_test(ScreenKind::Primary);
 
         assert_eq!(device.reset(), None);
@@ -948,9 +1065,7 @@ mod tests {
     /// the deferred wrap.
     fn arm_deferred_wrap(device: &mut DeviceState) {
         for c in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] {
-            device
-                .active_screen_mut()
-                .print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+            device.print(c);
         }
     }
 
@@ -976,16 +1091,12 @@ mod tests {
         device.set_auto_wrap(AutoWrap::Disabled);
         device.set_auto_wrap(AutoWrap::Enabled);
 
-        device
-            .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        device.print('z');
         assert_eq!(glyph_at(&device, 0, 7), 'z');
         assert_eq!(glyph_at(&device, 1, 0), ' ');
 
         device.set_active_screen_for_test(ScreenKind::Primary);
-        device
-            .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        device.print('z');
         assert_eq!(glyph_at(&device, 0, 7), 'z');
         assert_eq!(glyph_at(&device, 1, 0), ' ');
     }
@@ -1006,9 +1117,7 @@ mod tests {
         device.set_auto_wrap(AutoWrap::Enabled);
         device.active_screen_mut().restore_checkpoint();
 
-        device
-            .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        device.print('z');
         assert_eq!(glyph_at(&device, 1, 0), 'z');
     }
 
@@ -1024,9 +1133,7 @@ mod tests {
 
         device.set_auto_wrap(AutoWrap::Enabled);
 
-        device
-            .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        device.print('z');
         assert_eq!(glyph_at(&device, 1, 0), 'z');
     }
 
@@ -1193,17 +1300,13 @@ mod tests {
 
         let _ = device.soft_reset();
 
-        device
-            .active_screen_mut()
-            .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        device.print('q');
         let shown = device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(shown.c, 'q');
         assert_eq!(shown.fg, Color::DefaultForeground);
 
         device.set_active_screen_for_test(ScreenKind::Primary);
-        device
-            .active_screen_mut()
-            .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        device.print('q');
         let hidden = device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(hidden.c, '─');
         assert_eq!(hidden.fg, Color::Indexed(1));

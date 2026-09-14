@@ -14,7 +14,13 @@ fn an_insert_mode_print_shifts_the_row_right_and_drops_the_last_cell() {
     let mut screen = screen();
     seed_row(&mut screen, ScreenLine(0), &['a', 'b', 'c', 'd']);
     screen.state.column = GridColumn(1);
-    let damage = screen.print('X', InsertReplaceMode::Insert, AutoWrap::Enabled);
+    let damage = screen.print(
+        'X',
+        PrintOptions {
+            insert_replace: InsertReplaceMode::Insert,
+            ..PrintOptions::default()
+        },
+    );
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'X', 'b', 'c']);
     assert_eq!(screen.state.column, GridColumn(2));
     assert_eq!(
@@ -33,7 +39,7 @@ fn a_replace_mode_print_overwrites_the_cell_without_shifting_the_row() {
     let mut screen = screen();
     seed_row(&mut screen, ScreenLine(0), &['a', 'b', 'c', 'd']);
     screen.state.column = GridColumn(1);
-    let damage = screen.print('X', InsertReplaceMode::Replace, AutoWrap::Enabled);
+    let damage = screen.print('X', PrintOptions::default());
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'X', 'c', 'd']);
     assert_eq!(screen.state.column, GridColumn(2));
     assert_eq!(
@@ -53,7 +59,13 @@ fn an_insert_mode_print_at_the_last_column_replaces_the_cell_it_pushes_out() {
     let mut screen = screen();
     seed_row(&mut screen, ScreenLine(0), &['a', 'b', 'c', 'd']);
     screen.state.column = GridColumn(3);
-    let damage = screen.print('X', InsertReplaceMode::Insert, AutoWrap::Enabled);
+    let damage = screen.print(
+        'X',
+        PrintOptions {
+            insert_replace: InsertReplaceMode::Insert,
+            ..PrintOptions::default()
+        },
+    );
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', 'X']);
     assert_eq!(screen.state.column, GridColumn(3));
     assert!(screen.state.pending_wrap);
@@ -72,7 +84,13 @@ fn an_insert_mode_print_into_a_padded_row_loses_no_visible_cell() {
     let mut screen = screen();
     seed_row(&mut screen, ScreenLine(0), &['a', 'b']);
     screen.state.column = GridColumn(1);
-    let damage = screen.print('X', InsertReplaceMode::Insert, AutoWrap::Enabled);
+    let damage = screen.print(
+        'X',
+        PrintOptions {
+            insert_replace: InsertReplaceMode::Insert,
+            ..PrintOptions::default()
+        },
+    );
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'X', 'b', ' ']);
     assert_eq!(screen.state.column, GridColumn(2));
     assert_eq!(
@@ -91,10 +109,16 @@ fn an_insert_mode_print_into_a_padded_row_loses_no_visible_cell() {
 fn an_armed_deferred_wrap_resolves_before_the_insert_shifts_the_new_row() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
     seed_row(&mut screen, ScreenLine(1), &['p', 'q', 'r', 's']);
-    let damage = screen.print('X', InsertReplaceMode::Insert, AutoWrap::Enabled);
+    let damage = screen.print(
+        'X',
+        PrintOptions {
+            insert_replace: InsertReplaceMode::Insert,
+            ..PrintOptions::default()
+        },
+    );
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', 'd']);
     assert_eq!(row_glyphs(&screen, ScreenLine(1)), vec!['X', 'p', 'q', 'r']);
     assert_eq!(
@@ -118,14 +142,20 @@ fn an_insert_mode_print_keeps_the_shifted_cells_attributes() {
     let mut screen = screen();
     for (c, bg) in [('a', 1), ('b', 2), ('c', 3), ('d', 5)] {
         screen.pen_mut().bg = Color::Indexed(bg);
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
     screen.pen_mut().style = Style::ITALIC;
     screen.pen_mut().fg = Color::Indexed(6);
     screen.pen_mut().bg = Color::Indexed(4);
     screen.state.column = GridColumn(1);
     screen.state.pending_wrap = false;
-    screen.print('X', InsertReplaceMode::Insert, AutoWrap::Enabled);
+    screen.print(
+        'X',
+        PrintOptions {
+            insert_replace: InsertReplaceMode::Insert,
+            ..PrintOptions::default()
+        },
+    );
     assert_eq!(screen.grid[ScreenLine(0)][1].c, 'X');
     assert_eq!(screen.grid[ScreenLine(0)][1].style, Style::ITALIC);
     assert_eq!(screen.grid[ScreenLine(0)][1].fg, Color::Indexed(6));
@@ -145,7 +175,13 @@ fn an_insert_mode_print_keeps_the_shifted_cells_attributes() {
 fn an_insert_mode_print_on_a_single_column_screen_replaces_the_only_cell() {
     let mut screen = Screen::new(GridSize { cols: 1, rows: 1 }, 10);
     seed_row(&mut screen, ScreenLine(0), &['a']);
-    let damage = screen.print('X', InsertReplaceMode::Insert, AutoWrap::Enabled);
+    let damage = screen.print(
+        'X',
+        PrintOptions {
+            insert_replace: InsertReplaceMode::Insert,
+            ..PrintOptions::default()
+        },
+    );
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['X']);
     assert!(screen.state.pending_wrap);
     assert_eq!(
@@ -163,7 +199,7 @@ fn an_insert_mode_print_on_a_single_column_screen_replaces_the_only_cell() {
 fn print_stamps_the_pen_and_advances() {
     let mut screen = screen();
     screen.pen_mut().fg = Color::Indexed(1);
-    let damage = screen.print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
+    let damage = screen.print('a', PrintOptions::default());
     assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
     assert_eq!(screen.grid[ScreenLine(0)][0].fg, Color::Indexed(1));
     assert_eq!(
@@ -185,7 +221,7 @@ fn print_stamps_the_pen_and_advances() {
 fn print_at_the_last_column_arms_the_deferred_wrap() {
     let mut screen = screen();
     screen.state.column = GridColumn(3);
-    screen.print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
+    screen.print('x', PrintOptions::default());
     assert_eq!(screen.grid[ScreenLine(0)][3].c, 'x');
     assert_eq!(screen.state.column, GridColumn(3));
     assert!(screen.state.pending_wrap);
@@ -201,9 +237,9 @@ fn print_at_the_last_column_arms_the_deferred_wrap() {
 fn the_next_print_after_the_last_column_wraps() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
-    let damage = screen.print('e', InsertReplaceMode::Replace, AutoWrap::Enabled);
+    let damage = screen.print('e', PrintOptions::default());
     assert_eq!(screen.grid[ScreenLine(1)][0].c, 'e');
     assert_eq!(
         (screen.state.line, screen.state.column),
@@ -230,7 +266,7 @@ fn a_scrolled_screen_reports_damage_in_viewport_rows() {
     screen.set_display_offset(DisplayOffset(1));
     screen.state.line = ScreenLine(0);
     assert_eq!(
-        screen.print('x', InsertReplaceMode::Replace, AutoWrap::Enabled),
+        screen.print('x', PrintOptions::default()),
         Some(DamageSpan::rows(ViewportLine(1), ViewportLine(1)))
     );
 }
@@ -245,8 +281,8 @@ fn a_wrap_on_the_bottom_row_scrolls() {
     let mut screen = screen();
     screen.state.line = ScreenLine(2);
     screen.state.column = GridColumn(3);
-    screen.print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
-    let damage = screen.print('y', InsertReplaceMode::Replace, AutoWrap::Enabled);
+    screen.print('x', PrintOptions::default());
+    let damage = screen.print('y', PrintOptions::default());
     assert_eq!(screen.grid[ScreenLine(2)][0].c, 'y');
     assert_eq!(damage, Some(DamageSpan::Full));
 }
@@ -265,10 +301,7 @@ fn a_write_scrolled_out_of_the_window_reports_no_damage() {
     }
     screen.viewport.offset = DisplayOffset(3);
     screen.state.line = ScreenLine(0);
-    assert_eq!(
-        screen.print('x', InsertReplaceMode::Replace, AutoWrap::Enabled),
-        None
-    );
+    assert_eq!(screen.print('x', PrintOptions::default()), None);
 }
 
 /// Asserts that a print into the last column with autowrap reset
@@ -280,7 +313,13 @@ fn a_write_scrolled_out_of_the_window_reports_no_damage() {
 fn a_print_at_the_last_column_without_autowrap_leaves_the_wrap_disarmed() {
     let mut screen = screen();
     screen.state.column = GridColumn(3);
-    screen.print('x', InsertReplaceMode::Replace, AutoWrap::Disabled);
+    screen.print(
+        'x',
+        PrintOptions {
+            auto_wrap: AutoWrap::Disabled,
+            ..PrintOptions::default()
+        },
+    );
     assert_eq!(screen.grid[ScreenLine(0)][3].c, 'x');
     assert_eq!(screen.state.column, GridColumn(3));
     assert!(!screen.state.pending_wrap);
@@ -296,7 +335,13 @@ fn a_print_at_the_last_column_without_autowrap_leaves_the_wrap_disarmed() {
 fn prints_past_the_right_border_without_autowrap_replace_the_last_column() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd', 'e', 'f'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Disabled);
+        screen.print(
+            c,
+            PrintOptions {
+                auto_wrap: AutoWrap::Disabled,
+                ..PrintOptions::default()
+            },
+        );
     }
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', 'f']);
     assert_eq!(row_glyphs(&screen, ScreenLine(1)), vec![' ', ' ', ' ', ' ']);
@@ -313,10 +358,16 @@ fn prints_past_the_right_border_without_autowrap_replace_the_last_column() {
 fn an_armed_wrap_does_not_fire_once_autowrap_is_reset() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
     assert!(screen.state.pending_wrap);
-    screen.print('e', InsertReplaceMode::Replace, AutoWrap::Disabled);
+    screen.print(
+        'e',
+        PrintOptions {
+            auto_wrap: AutoWrap::Disabled,
+            ..PrintOptions::default()
+        },
+    );
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', 'e']);
     assert_eq!(row_glyphs(&screen, ScreenLine(1)), vec![' ', ' ', ' ', ' ']);
     assert!(!screen.state.pending_wrap);
@@ -332,13 +383,19 @@ fn an_armed_wrap_does_not_fire_once_autowrap_is_reset() {
 fn the_first_print_after_autowrap_returns_replaces_and_then_arms() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Disabled);
+        screen.print(
+            c,
+            PrintOptions {
+                auto_wrap: AutoWrap::Disabled,
+                ..PrintOptions::default()
+            },
+        );
     }
     assert!(!screen.state.pending_wrap);
-    screen.print('e', InsertReplaceMode::Replace, AutoWrap::Enabled);
+    screen.print('e', PrintOptions::default());
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', 'e']);
     assert!(screen.state.pending_wrap);
-    screen.print('f', InsertReplaceMode::Replace, AutoWrap::Enabled);
+    screen.print('f', PrintOptions::default());
     assert_eq!(screen.grid[ScreenLine(1)][0].c, 'f');
 }
 
@@ -353,7 +410,13 @@ fn a_print_away_from_the_last_column_disarms_a_leftover_wrap() {
     let mut screen = screen();
     screen.state.pending_wrap = true;
     screen.state.column = GridColumn(1);
-    screen.print('x', InsertReplaceMode::Replace, AutoWrap::Disabled);
+    screen.print(
+        'x',
+        PrintOptions {
+            auto_wrap: AutoWrap::Disabled,
+            ..PrintOptions::default()
+        },
+    );
     assert_eq!(screen.state.column, GridColumn(2));
     assert!(!screen.state.pending_wrap);
 }
@@ -373,7 +436,14 @@ fn an_insert_mode_print_at_the_last_column_without_autowrap_replaces_in_place() 
     screen.state.column = GridColumn(3);
     screen.pen_mut().fg = Color::Indexed(2);
     screen.pen_mut().bg = Color::Indexed(4);
-    screen.print('X', InsertReplaceMode::Insert, AutoWrap::Disabled);
+    screen.print(
+        'X',
+        PrintOptions {
+            insert_replace: InsertReplaceMode::Insert,
+            auto_wrap: AutoWrap::Disabled,
+            ..PrintOptions::default()
+        },
+    );
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', 'X']);
     assert_eq!(screen.grid[ScreenLine(0)][3].fg, Color::Indexed(2));
     assert_eq!(screen.grid[ScreenLine(0)][3].bg, Color::Indexed(4));

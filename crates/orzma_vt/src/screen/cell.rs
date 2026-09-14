@@ -1,6 +1,7 @@
 //! Internal storage cell and the SGR pen burned into it on print.
 
 use crate::device::color::Color;
+use crate::hyperlink::HyperlinkId;
 use crate::screen::grid::run::Style;
 
 /// One stored character cell: a glyph plus the attributes it was
@@ -17,6 +18,8 @@ pub struct Cell {
     pub bg: Color,
     /// The SGR attributes the glyph was printed with.
     pub style: Style,
+    /// The hyperlink the glyph was printed inside, if any.
+    pub hyperlink_id: Option<HyperlinkId>,
 }
 
 impl Default for Cell {
@@ -26,6 +29,7 @@ impl Default for Cell {
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
             style: Style::empty(),
+            hyperlink_id: None,
         }
     }
 }
@@ -62,13 +66,15 @@ impl Default for Pen {
 }
 
 impl Pen {
-    /// Burns the pen's attributes into a cell holding `c`.
-    pub fn stamp(&self, c: char) -> Cell {
+    /// Burns the pen's attributes into a cell holding `c`, printed inside
+    /// `hyperlink_id`, or outside any link when it is `None`.
+    pub fn stamp(&self, c: char, hyperlink_id: Option<HyperlinkId>) -> Cell {
         Cell {
             c,
             fg: self.fg,
             bg: self.bg,
             style: self.style,
+            hyperlink_id,
         }
     }
 
@@ -96,24 +102,27 @@ mod tests {
         assert_eq!(cell.style, Style::empty());
     }
 
-    /// Asserts that stamping burns all pen attributes into the cell.
+    /// Asserts that stamping burns all pen attributes and the given
+    /// hyperlink into the cell.
     ///
-    /// Case: an application selects bold red text with SGR before
-    /// printing.
+    /// Case: an application selects bold red text with SGR and prints it
+    /// inside a hyperlink.
     #[test]
-    fn stamping_copies_the_pen_attributes() {
+    fn stamping_copies_the_pen_attributes_and_the_hyperlink() {
         let pen = Pen {
             fg: Color::Indexed(1),
             bg: Color::Indexed(4),
             style: Style::BOLD,
         };
+        let hyperlink_id = HyperlinkId::new(7);
         assert_eq!(
-            pen.stamp('a'),
+            pen.stamp('a', hyperlink_id),
             Cell {
                 c: 'a',
                 fg: Color::Indexed(1),
                 bg: Color::Indexed(4),
                 style: Style::BOLD,
+                hyperlink_id,
             }
         );
     }
