@@ -34,8 +34,8 @@ pub struct GridCell {
 }
 
 impl GridCell {
-    /// Whether this cell paints no glyph: a zero-width cell (combining mark /
-    /// wide-char spacer) or one whose text is empty or all whitespace.
+    /// Whether this cell paints no glyph: a zero-width cell, or one whose
+    /// text is empty or all whitespace.
     #[inline]
     pub fn is_blank(&self) -> bool {
         self.width == 0 || self.text.trim().is_empty()
@@ -768,8 +768,8 @@ mod tests {
     /// Asserts that a run's `char`s are never re-measured: a wide glyph
     /// declared at width one takes one column.
     ///
-    /// Case: a frame's widths, not the glyph's Unicode width, decide the
-    /// column walk.
+    /// Case: a frame declares a CJK glyph at width one on a row the VT already
+    /// laid out.
     #[test]
     fn runs_to_cells_does_not_remeasure_the_text() {
         let cells = runs_to_cells(&[run_with_widths("あb", &[1, 1])], GridLine(0), &[]);

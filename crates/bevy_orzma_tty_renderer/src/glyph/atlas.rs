@@ -43,6 +43,8 @@ pub struct GlyphAtlas {
     /// atlas first. The GPU texture picks up `pixels` only when this
     /// value changes.
     pub generation: u64,
+    /// Bumped each time a full atlas is cleared to make room for a glyph.
+    pub restarts: u64,
     shelves: Shelves,
 }
 
@@ -160,6 +162,7 @@ impl GlyphAtlas {
             pixels: vec![0; (width * height) as usize],
             glyphs: HashMap::new(),
             generation: 0,
+            restarts: 0,
             shelves: Shelves::new(width, height),
         }
     }
@@ -230,6 +233,7 @@ impl GlyphAtlas {
             self.shelves.clear();
             self.pixels.fill(0);
             self.glyphs.clear();
+            self.restarts = self.restarts.wrapping_add(1);
         }
         let u = self.shelves.shelf.x as u16;
         let v = self.shelves.y as u16;
@@ -354,12 +358,7 @@ mod tests {
         assert_eq!(rect.u, 0, "first glyph must start at the left edge");
         assert_eq!(rect.v, 0, "first glyph must start at the top edge");
 
-        let has_ink = (rect.v as u32..(rect.v as u32 + rect.h as u32)).any(|y| {
-            (rect.u as u32..(rect.u as u32 + rect.w as u32)).any(|x| {
-                let idx = (y * atlas.width() + x) as usize;
-                atlas.pixels[idx] > 0
-            })
-        });
+        let has_ink = sprite_pixels(&atlas, rect).iter().any(|alpha| *alpha > 0);
         assert!(has_ink, "returned rect must cover rasterized pixels");
 
         let rect2 = atlas
@@ -413,7 +412,7 @@ mod tests {
         let fonts = TerminalFonts::default();
         let mut atlas = GlyphAtlas::default();
         let size = 24u16;
-        let key = GlyphKey::new(FontFace::Regular, 0x3042, size); // 'あ'
+        let key = GlyphKey::new(FontFace::Regular, u32::from('あ'), size);
         let rect = atlas
             .get_or_insert(key, &fonts)
             .expect("'あ' must rasterize via fallback");
