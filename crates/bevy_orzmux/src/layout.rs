@@ -35,7 +35,8 @@ impl PaneGeometry {
 
 /// The node every pane entity is parented under; separators are spawned
 /// as its children too. The host marks its clipping container with it
-/// before requesting the first pane.
+/// before requesting the first pane. Exactly one entity must carry it;
+/// otherwise layouts are not applied.
 #[derive(Component, Debug)]
 pub struct OrzmuxPaneContainer;
 
@@ -101,15 +102,15 @@ const SEPARATOR_THICKNESS_LOGICAL_PX: f32 = 1.0;
 fn apply_layout(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
-    mut nodes: Query<&mut Node, With<OrzmuxPane>>,
-    mut separators: Query<
-        (Entity, &mut Node, &OrzmuxSeparator),
-        (With<OrzmuxSeparator>, Without<OrzmuxPane>),
-    >,
+    mut nodes: Query<&mut Node, (With<OrzmuxPane>, Without<OrzmuxSeparator>)>,
+    mut separators: Query<(Entity, &mut Node, &OrzmuxSeparator)>,
     current: Res<CurrentLayout>,
     geometry: Res<PaneGeometry>,
     container: Query<Entity, With<OrzmuxPaneContainer>>,
 ) {
+    let Ok(container) = container.single() else {
+        return;
+    };
     let layout = &current.0;
     for rect in &layout.panes {
         let Some(entity) = registry.entity_of(rect.pane) else {
@@ -119,22 +120,18 @@ fn apply_layout(
             node.set_if_neq(pane_node(rect, layout, &geometry));
         }
     }
-    let container = container.single().ok();
     reconcile_separators(&mut commands, &mut separators, layout, &geometry, container);
     apply_active(&mut commands, &mut registry, layout);
 }
 
 /// Spawns, updates, or despawns separator nodes to match the layout,
-/// parenting new ones under `container` when the host has marked one.
+/// parenting new ones under `container`.
 fn reconcile_separators(
     commands: &mut Commands,
-    separators: &mut Query<
-        (Entity, &mut Node, &OrzmuxSeparator),
-        (With<OrzmuxSeparator>, Without<OrzmuxPane>),
-    >,
+    separators: &mut Query<(Entity, &mut Node, &OrzmuxSeparator)>,
     layout: &Layout,
     geometry: &PaneGeometry,
-    container: Option<Entity>,
+    container: Entity,
 ) {
     let mut stale: HashMap<SplitId, Entity> = separators
         .iter()
@@ -149,17 +146,15 @@ fn reconcile_separators(
                 }
             }
             None => {
-                let mut spawned = commands.spawn((
+                commands.spawn((
                     OrzmuxSeparator {
                         split: separator.split,
                         orientation: separator.orientation,
                     },
                     node,
                     BackgroundColor(SEPARATOR_COLOR),
+                    ChildOf(container),
                 ));
-                if let Some(container) = container {
-                    spawned.insert(ChildOf(container));
-                }
             }
         }
     }
