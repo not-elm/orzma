@@ -330,10 +330,7 @@ impl Backend {
             .solve(geometry.size)
             .rect_of(new)
             .expect("the new pane is in the tree");
-        let size = GridSize {
-            cols: rect.cols,
-            rows: rect.rows,
-        };
+        let size = GridSize::new(rect.cols, rect.rows);
         let spawn_cwd = cwd.or(inherited_cwd);
         match self
             .factory
@@ -410,7 +407,10 @@ impl Backend {
             if pane.applied == wanted {
                 continue;
             }
-            match pane.tty.resize(rect.cols, rect.rows, geometry.cell_px) {
+            match pane
+                .tty
+                .resize(GridSize::new(rect.cols, rect.rows), geometry.cell_px)
+            {
                 Ok(()) => pane.applied = wanted,
                 Err(err) => {
                     tracing::warn!(pane = ?rect.pane, %err, "pane resize failed; keeping the old size");
@@ -665,8 +665,7 @@ mod tests {
                 };
             let tty = OrzmaTty::detached_with_channels(
                 OrzmaVt::new(size, 100),
-                size.cols,
-                size.rows,
+                size,
                 writer,
                 chunk_rx,
                 exit_rx,
