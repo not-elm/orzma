@@ -5,6 +5,7 @@
 use crate::input::InputPhase;
 use crate::input::mouse::MousePhase;
 use crate::input::mouse::cell_dims;
+use crate::input::mouse::separator::GrabbedSeparator;
 use crate::input::mouse::webview::{
     WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
     release_webview_press, route_webview_left_click, webview_pointer_frame, webview_wheel_delta,
@@ -45,9 +46,10 @@ impl Plugin for MouseWebviewRouterPlugin {
 }
 
 /// Forwards left press/release to the inline CEF child under the cursor
-/// on the shell surface. A suppressed frame (window unfocused) drains the
-/// reader and releases an in-flight press so the focused page is not left
-/// logically pressed.
+/// on the shell surface. A window-unfocused frame drains the reader and
+/// releases an in-flight press so the focused page is not left logically
+/// pressed; a frame whose press a pane-divider grab consumed drains the
+/// reader and leaves an in-flight press recorded rather than releasing it.
 fn route_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
@@ -61,9 +63,14 @@ fn route_webview_pointer(
         ),
         With<OrzmaTerminal>,
     >,
+    grabbed: Query<(), With<GrabbedSeparator>>,
     metrics: Res<TerminalCellMetricsResource>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    if !grabbed.is_empty() {
+        buttons.clear();
+        return;
+    }
     let Ok(window) = windows.single() else {
         buttons.clear();
         webview_press.0 = None;
