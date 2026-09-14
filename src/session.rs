@@ -1,19 +1,26 @@
 //! Session lifecycle of the mux-backed shell surface: pane spawn
-//! requests, window geometry, and exit-on-session-end. Active-pane focus
-//! is mirrored by `crate::input::focus`, not here.
+//! requests, window geometry and focus, and exit-on-session-end.
+//! Active-pane focus is mirrored by `crate::input::focus`, not here.
 
 pub(crate) mod spawn;
 
 mod exit;
 mod layout;
+mod window_focus;
 
 use bevy::prelude::*;
 
-/// Aggregates the shell session lifecycle plugins (spawn / layout / exit).
+/// Aggregates the shell session lifecycle plugins (spawn / layout /
+/// window focus / exit).
 pub(crate) struct SessionPlugin;
 
 impl Plugin for SessionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((spawn::SpawnPlugin, exit::ExitPlugin, layout::LayoutPlugin));
+        app.add_plugins((
+            spawn::SpawnPlugin,
+            exit::ExitPlugin,
+            layout::LayoutPlugin,
+            window_focus::WindowFocusPlugin,
+        ));
     }
 }

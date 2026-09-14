@@ -1,6 +1,7 @@
 //! Internal storage cell and the SGR pen burned into it on print.
 
 use crate::device::color::Color;
+use crate::hyperlink::HyperlinkId;
 use crate::screen::grid::run::Style;
 use unicode_width::UnicodeWidthChar;
 
@@ -127,6 +128,8 @@ pub struct Cell {
     pub bg: Color,
     /// The SGR attributes the glyph was printed with.
     pub style: Style,
+    /// The hyperlink the glyph was printed inside, if any.
+    pub hyperlink_id: Option<HyperlinkId>,
 }
 
 impl Default for Cell {
@@ -138,6 +141,7 @@ impl Default for Cell {
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
             style: Style::empty(),
+            hyperlink_id: None,
         }
     }
 }
@@ -159,6 +163,7 @@ impl Cell {
             fg: self.fg,
             bg: self.bg,
             style: self.style,
+            hyperlink_id: self.hyperlink_id,
             ..Self::default()
         }
     }
@@ -186,8 +191,10 @@ impl Default for Pen {
 }
 
 impl Pen {
-    /// Burns the pen's attributes into a cell holding `c` at `width`.
-    pub fn stamp(&self, c: char, width: CellWidth) -> Cell {
+    /// Burns the pen's attributes into a cell holding `c` at `width`,
+    /// printed inside `hyperlink_id`, or outside any link when it is
+    /// `None`.
+    pub fn stamp(&self, c: char, width: CellWidth, hyperlink_id: Option<HyperlinkId>) -> Cell {
         Cell {
             c,
             width,
@@ -195,6 +202,7 @@ impl Pen {
             fg: self.fg,
             bg: self.bg,
             style: self.style,
+            hyperlink_id,
         }
     }
 
@@ -257,20 +265,21 @@ mod tests {
         assert_eq!(cell.style, Style::empty());
     }
 
-    /// Asserts that stamping burns all pen attributes and the given width
-    /// into the cell.
+    /// Asserts that stamping burns all pen attributes, the given width and
+    /// the given hyperlink into the cell.
     ///
-    /// Case: an application selects bold red text with SGR before
-    /// printing a fullwidth character.
+    /// Case: an application selects bold red text with SGR and prints a
+    /// fullwidth character inside a hyperlink.
     #[test]
-    fn stamping_copies_the_pen_attributes() {
+    fn stamping_copies_the_pen_attributes_and_the_hyperlink() {
         let pen = Pen {
             fg: Color::Indexed(1),
             bg: Color::Indexed(4),
             style: Style::BOLD,
         };
+        let hyperlink_id = HyperlinkId::new(7);
         assert_eq!(
-            pen.stamp('あ', CellWidth::Wide),
+            pen.stamp('あ', CellWidth::Wide, hyperlink_id),
             Cell {
                 c: 'あ',
                 width: CellWidth::Wide,
@@ -278,6 +287,7 @@ mod tests {
                 fg: Color::Indexed(1),
                 bg: Color::Indexed(4),
                 style: Style::BOLD,
+                hyperlink_id,
             }
         );
     }
@@ -367,12 +377,12 @@ mod tests {
         assert_eq!(GlyphClass::ZeroWidth.body_width(), None);
     }
 
-    /// Asserts that the cell stays within twenty-four bytes.
+    /// Asserts that the cell stays within thirty-two bytes.
     ///
     /// Case: a scrollback of ten thousand rows holds millions of cells.
     #[test]
     fn the_cell_stays_within_its_size_budget() {
-        assert!(size_of::<Cell>() <= 24, "{}", size_of::<Cell>());
+        assert!(size_of::<Cell>() <= 32, "{}", size_of::<Cell>());
     }
 
     /// Asserts that a continuation cell is a blank sharing the body's
@@ -389,6 +399,7 @@ mod tests {
             fg: Color::Indexed(1),
             bg: Color::Indexed(4),
             style: Style::BOLD,
+            hyperlink_id: None,
         };
         let spacer = body.continuation();
         assert_eq!(spacer.width, CellWidth::Spacer);
@@ -405,7 +416,7 @@ mod tests {
     /// Case: an application prints ordinary text.
     #[test]
     fn stamping_produces_a_cell_of_the_given_width() {
-        let cell = Pen::default().stamp('a', CellWidth::Narrow);
+        let cell = Pen::default().stamp('a', CellWidth::Narrow, None);
         assert_eq!(cell.width, CellWidth::Narrow);
         assert_eq!(cell.extra, None);
     }

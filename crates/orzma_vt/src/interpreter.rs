@@ -16,6 +16,7 @@ use crate::interpreter::osc::clipboard::ClipboardRequest;
 use crate::interpreter::osc::dynamic_color::{
     DynamicColor, DynamicColorRequest, dynamic_color_reply,
 };
+use crate::interpreter::osc::hyperlink::HyperlinkRequest;
 use crate::interpreter::osc::palette::{PaletteRequest, palette_reply};
 use crate::interpreter::osc::{OscTerminator, current_dir, window_title};
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
@@ -112,11 +113,7 @@ impl VTActor for Executor<'_> {
         if b == '\u{7f}' {
             return;
         }
-        let modes = self.device.modes();
-        let damage =
-            self.device
-                .active_screen_mut()
-                .print(b, modes.insert_replace, modes.auto_wrap);
+        let damage = self.device.print(b);
         self.stage(damage);
     }
 
@@ -501,6 +498,11 @@ impl VTActor for Executor<'_> {
         }
         if let Some(path) = current_dir(params) {
             self.signal(VtSignal::CurrentDir(path));
+        }
+        match HyperlinkRequest::parse(params) {
+            Some(HyperlinkRequest::Open { id, uri }) => self.device.open_hyperlink(id, uri),
+            Some(HyperlinkRequest::Close) => self.device.close_hyperlink(),
+            None => {}
         }
         if let Some(request) = ClipboardRequest::parse(params) {
             self.signal(match request {

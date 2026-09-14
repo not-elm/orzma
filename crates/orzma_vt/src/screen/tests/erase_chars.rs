@@ -13,7 +13,7 @@ use crate::screen::grid::run::Style;
 fn erasing_characters_clears_the_span_without_shifting_the_rest() {
     let mut screen = screen();
     for c in ['a', 'b', 'c'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
     screen.grid[ScreenLine(0)][3].c = 'd';
     screen.state.column = GridColumn(1);
@@ -38,7 +38,7 @@ fn erasing_past_the_last_column_stops_at_the_row_end() {
     for count in [10, u16::MAX] {
         let mut screen = screen();
         for c in ['a', 'b', 'c'] {
-            screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+            screen.print(c, PrintOptions::default());
         }
         screen.grid[ScreenLine(0)][3].c = 'd';
         screen.grid[ScreenLine(1)][0].c = 'e';
@@ -108,7 +108,7 @@ fn erasing_characters_below_a_scrolled_viewport_reports_no_damage() {
 fn erasing_characters_leaves_the_cursor_on_its_column() {
     let mut screen = screen();
     for c in ['a', 'b', 'c'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
     screen.state.column = GridColumn(1);
     screen.erase_chars(2, AutoWrap::Enabled);
@@ -126,7 +126,7 @@ fn erasing_characters_leaves_the_cursor_on_its_column() {
 fn erasing_characters_is_a_no_op_under_pending_wrap() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
     let damage = screen.erase_chars(1, AutoWrap::Enabled);
     assert_eq!(screen.grid[ScreenLine(0)][3].c, 'd');
@@ -142,7 +142,7 @@ fn erasing_characters_is_a_no_op_under_pending_wrap() {
 fn erasing_the_last_column_without_a_pending_wrap_clears_it() {
     let mut screen = screen();
     for c in ['a', 'b', 'c'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
     screen.grid[ScreenLine(0)][3].c = 'd';
     screen.state.column = GridColumn(3);
@@ -167,7 +167,7 @@ fn erasing_characters_clears_the_attributes_and_takes_the_pen_background() {
     screen.pen_mut().bg = Color::Indexed(2);
     screen.pen_mut().style = Style::BOLD;
     for c in ['a', 'b', 'c'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
     screen.pen_mut().fg = Color::DefaultForeground;
     screen.pen_mut().bg = Color::Indexed(4);
@@ -192,7 +192,7 @@ fn erasing_characters_clears_the_attributes_and_takes_the_pen_background() {
 fn erasing_characters_runs_under_pending_wrap_while_autowrap_is_reset() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
     assert!(screen.state.pending_wrap);
     let damage = screen.erase_chars(1, AutoWrap::Disabled);
@@ -213,7 +213,7 @@ fn erasing_characters_runs_under_pending_wrap_while_autowrap_is_reset() {
 fn erasing_characters_runs_once_a_backward_tab_leaves_the_last_column() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
     screen.move_backward_tabs(1);
     assert!(screen.state.pending_wrap);

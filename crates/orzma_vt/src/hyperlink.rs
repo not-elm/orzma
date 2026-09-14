@@ -1,17 +1,8 @@
 //! OSC 8 hyperlink vocabulary and the id interner that dedupes it.
-// NOTE: the `#[cfg(test)]` module below uses every item this lint
-// would flag, so an unconditional `#[expect(dead_code)]` is fulfilled
-// in a plain build but unfulfilled — and denied under `-D warnings` —
-// in a test build. Gating it to non-test builds keeps both clean.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the frame builder reaches the interner once OSC 8 handling lands"
-    )
-)]
 
 use std::collections::HashMap;
+use std::num::NonZeroU32;
+use std::sync::Arc;
 
 /// OSC 8 hyperlink: an interned id → URI mapping.
 ///
@@ -26,18 +17,32 @@ pub struct Hyperlink {
 
 /// Monotonic hyperlink id.
 ///
-/// Callers outside the interner MUST NOT construct `HyperlinkId(0)`;
-/// it is the universal "no hyperlink" sentinel.
+/// The zero value stands for "no hyperlink" and is not representable.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-pub struct HyperlinkId(pub u32);
+pub struct HyperlinkId(NonZeroU32);
+
+impl HyperlinkId {
+    /// The id `value` names; `None` when `value` is zero.
+    pub const fn new(value: u32) -> Option<Self> {
+        match NonZeroU32::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    /// The id as a plain integer, which is never zero.
+    pub const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
 
 /// OSC 8 hyperlink target URI.
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
-pub struct HyperlinkUri(String);
+pub struct HyperlinkUri(Arc<str>);
 
 impl HyperlinkUri {
     /// Wraps a string as a hyperlink URI.
-    pub fn new(s: impl Into<String>) -> Self {
+    pub fn new(s: impl Into<Arc<str>>) -> Self {
         Self(s.into())
     }
 
@@ -55,26 +60,16 @@ pub fn is_allowed(uri: &str) -> bool {
         .is_some_and(|s| ALLOWED_SCHEMES.contains(&s.as_str()))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct HyperlinkSourceId(String);
-
-impl HyperlinkSourceId {
-    pub(crate) fn new(id: String) -> Self {
-        Self(id)
-    }
-}
-
-#[derive(Debug, Eq, PartialEq, Hash)]
-pub(crate) struct SourceHyperlink {
-    pub id: HyperlinkSourceId,
-    pub uri: HyperlinkUri,
-}
-
-/// Maps each `(source id, uri)` pair to a single [`HyperlinkId`],
-/// minting a fresh id the first time a pair is seen and returning the id
-/// already on file on repeats.
+/// Hands out the [`HyperlinkId`]s `OSC 8` opens and resolves each back to
+/// its uri. Opens naming one nonempty id and one uri share a single
+/// [`HyperlinkId`]; an open without an id always receives a fresh one.
+// TODO: release the entries of links no cell references any more, and
+// cap what one stream may retain. Opening mints unconditionally, so
+// growth tracks the OSC 8 sequences a program sends rather than the
+// links it puts on screen, and nothing reclaims an entry — not even a
+// full reset.
 pub(crate) struct HyperlinkInterner {
-    id: u32,
+    next: NonZeroU32,
     id_to_uri: HashMap<HyperlinkId, HyperlinkUri>,
     source_to_id: HashMap<SourceHyperlink, HyperlinkId>,
 }
@@ -82,31 +77,55 @@ pub(crate) struct HyperlinkInterner {
 impl HyperlinkInterner {
     /// Constructs an empty interner.
     ///
-    /// The first id handed out is `HyperlinkId(1)`. `HyperlinkId(0)` is
-    /// reserved as the "no hyperlink" sentinel.
+    /// The first id handed out is one.
     pub(crate) fn new() -> Self {
         Self {
-            id: 1,
+            next: NonZeroU32::MIN,
             id_to_uri: HashMap::new(),
             source_to_id: HashMap::new(),
         }
     }
 
-    pub(crate) fn intern(&mut self, source: SourceHyperlink) -> HyperlinkId {
-        if let Some(id) = self.source_to_id.get(&source) {
-            return *id;
+    /// The id an `OSC 8` opens for `uri` under `id`.
+    ///
+    /// A nonempty `id` is a lookup key: a later open naming the same id
+    /// and uri returns the id already on file. An absent or empty `id`
+    /// returns a fresh id on every call, so two such links never join.
+    pub(crate) fn open(&mut self, id: Option<String>, uri: HyperlinkUri) -> HyperlinkId {
+        match id.filter(|id| !id.is_empty()) {
+            Some(id) => self.intern(SourceHyperlink {
+                id: HyperlinkSourceId::new(id),
+                uri,
+            }),
+            None => self.mint(uri),
         }
-        let next_id = self.id;
-        let next_id = HyperlinkId(next_id);
-        self.id += 1;
-        self.id_to_uri.insert(next_id, source.uri.clone());
-        self.source_to_id.insert(source, next_id);
-        next_id
     }
 
     #[inline]
     pub(crate) fn extract(&self, id: &HyperlinkId) -> Option<&HyperlinkUri> {
         self.id_to_uri.get(id)
+    }
+
+    /// The id on file for `source`, minting one the first time it is
+    /// seen.
+    fn intern(&mut self, source: SourceHyperlink) -> HyperlinkId {
+        if let Some(id) = self.source_to_id.get(&source) {
+            return *id;
+        }
+        let id = self.mint(source.uri.clone());
+        self.source_to_id.insert(source, id);
+        id
+    }
+
+    /// Hands out a fresh id for `uri` without recording a lookup key.
+    ///
+    /// Ids saturate rather than wrap, so once `u32::MAX` ids have been
+    /// handed out every later call returns that same id.
+    fn mint(&mut self, uri: HyperlinkUri) -> HyperlinkId {
+        let id = HyperlinkId(self.next);
+        self.next = self.next.saturating_add(1);
+        self.id_to_uri.insert(id, uri);
+        id
     }
 }
 
@@ -114,6 +133,21 @@ impl Default for HyperlinkInterner {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct HyperlinkSourceId(String);
+
+impl HyperlinkSourceId {
+    fn new(id: String) -> Self {
+        Self(id)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Hash)]
+struct SourceHyperlink {
+    id: HyperlinkSourceId,
+    uri: HyperlinkUri,
 }
 
 const ALLOWED_SCHEMES: &[&str] = &["http", "https", "mailto", "ftp"];
@@ -144,6 +178,10 @@ mod tests {
             id: HyperlinkSourceId::new(id.to_owned()),
             uri: HyperlinkUri::new(uri.to_owned()),
         }
+    }
+
+    fn id(value: u32) -> HyperlinkId {
+        HyperlinkId::new(value).expect("nonzero")
     }
 
     /// Asserts that interning an equal key twice returns the same id.
@@ -196,7 +234,7 @@ mod tests {
         assert_eq!(ids.len(), 1);
     }
 
-    /// Asserts that many distinct keys all receive unique non-zero ids.
+    /// Asserts that many distinct keys all receive unique ids.
     ///
     /// Case: `ls --hyperlink=auto` fills a screen with one link per file.
     #[test]
@@ -211,7 +249,6 @@ mod tests {
             })
             .collect();
         assert_eq!(ids.len(), 32);
-        assert!(!ids.contains(&HyperlinkId(0)));
     }
 
     /// Asserts that source ids are compared byte for byte rather than
@@ -229,36 +266,15 @@ mod tests {
         assert_eq!(ids.len(), 3);
     }
 
-    /// Asserts that no key is ever assigned the reserved zero id.
-    ///
-    /// Case: a program prints sixteen links in one session.
-    #[test]
-    fn intern_never_returns_the_zero_sentinel() {
-        let mut interner = HyperlinkInterner::new();
-        for i in 0..16 {
-            let id = interner.intern(source(&format!("{i}"), &format!("https://{i}.example")));
-            assert_ne!(id, HyperlinkId(0));
-        }
-    }
-
     /// Asserts that fresh keys are numbered from one upwards.
     ///
     /// Case: a fresh session prints its first three links.
     #[test]
     fn new_keys_receive_monotonic_ids_starting_at_one() {
         let mut interner = HyperlinkInterner::new();
-        assert_eq!(
-            interner.intern(source("1", "https://a.example")),
-            HyperlinkId(1)
-        );
-        assert_eq!(
-            interner.intern(source("2", "https://b.example")),
-            HyperlinkId(2)
-        );
-        assert_eq!(
-            interner.intern(source("3", "https://c.example")),
-            HyperlinkId(3)
-        );
+        assert_eq!(interner.intern(source("1", "https://a.example")), id(1));
+        assert_eq!(interner.intern(source("2", "https://b.example")), id(2));
+        assert_eq!(interner.intern(source("3", "https://c.example")), id(3));
     }
 
     /// Asserts that re-interning a known key leaves the next id untouched.
@@ -271,7 +287,7 @@ mod tests {
         interner.intern(source("1", "https://a.example"));
         interner.intern(source("1", "https://a.example"));
         let next = interner.intern(source("2", "https://b.example"));
-        assert_eq!(next, HyperlinkId(2));
+        assert_eq!(next, id(2));
     }
 
     /// Asserts that an assigned id never changes as more keys arrive.
@@ -318,18 +334,7 @@ mod tests {
     fn extract_returns_none_for_an_unknown_id() {
         let mut interner = HyperlinkInterner::new();
         interner.intern(source("1", "https://a.example"));
-        assert_eq!(interner.extract(&HyperlinkId(99)), None);
-    }
-
-    /// Asserts that the reserved zero id resolves to nothing.
-    ///
-    /// Case: a caller forwards an unlinked cell's `0` straight into the
-    /// lookup.
-    #[test]
-    fn extract_returns_none_for_the_zero_sentinel() {
-        let mut interner = HyperlinkInterner::new();
-        interner.intern(source("1", "https://a.example"));
-        assert_eq!(interner.extract(&HyperlinkId(0)), None);
+        assert_eq!(interner.extract(&id(99)), None);
     }
 
     /// Asserts that two ids sharing a uri both resolve back to it.
@@ -348,14 +353,13 @@ mod tests {
     }
 
     /// Asserts that an empty uri is interned like any other value rather
-    /// than rejected or folded onto the zero sentinel.
+    /// than rejected.
     ///
     /// Case: a VT backend hands the interner an empty uri.
     #[test]
     fn empty_uri_is_interned_without_special_casing() {
         let mut interner = HyperlinkInterner::new();
         let id = interner.intern(source("1", ""));
-        assert_ne!(id, HyperlinkId(0));
         assert_eq!(
             interner.extract(&id),
             Some(&HyperlinkUri::new(String::new()))
@@ -434,5 +438,72 @@ mod tests {
         assert!(!is_allowed("vscode://example.com"));
         assert!(!is_allowed(""));
         assert!(!is_allowed("no-colon-here"));
+    }
+
+    /// Asserts that two opens sharing a nonempty id and a uri return one id.
+    ///
+    /// Case: a build tool prints the same error link at the top and the
+    /// bottom of its output, tagging both with `id=err1`.
+    #[test]
+    fn open_with_one_id_and_uri_returns_the_same_id_twice() {
+        let mut interner = HyperlinkInterner::new();
+        let first = interner.open(
+            Some("err1".to_owned()),
+            HyperlinkUri::new("https://a.example"),
+        );
+        let second = interner.open(
+            Some("err1".to_owned()),
+            HyperlinkUri::new("https://a.example"),
+        );
+        assert_eq!(first, second);
+    }
+
+    /// Asserts that two opens without an id return distinct ids even for
+    /// one uri.
+    ///
+    /// Case: `ls --hyperlink=auto` lists the same file twice, and neither
+    /// listing carries an id.
+    #[test]
+    fn open_without_an_id_returns_a_fresh_id_each_time() {
+        let mut interner = HyperlinkInterner::new();
+        let first = interner.open(None, HyperlinkUri::new("https://a.example"));
+        let second = interner.open(None, HyperlinkUri::new("https://a.example"));
+        assert_ne!(first, second);
+    }
+
+    /// Asserts that an empty id is treated as no id at all.
+    ///
+    /// Case: a script interpolates an unset shell variable into its
+    /// `id=` parameter and prints two links to one page.
+    #[test]
+    fn open_with_an_empty_id_returns_a_fresh_id_each_time() {
+        let mut interner = HyperlinkInterner::new();
+        let first = interner.open(Some(String::new()), HyperlinkUri::new("https://a.example"));
+        let second = interner.open(Some(String::new()), HyperlinkUri::new("https://a.example"));
+        assert_ne!(first, second);
+    }
+
+    /// Asserts that an id opened without a key still resolves to its uri.
+    ///
+    /// Case: the frame builder looks up the uri of a link the program
+    /// printed without an id.
+    #[test]
+    fn an_id_opened_without_a_key_resolves_to_its_uri() {
+        let mut interner = HyperlinkInterner::new();
+        let uri = HyperlinkUri::new("https://a.example");
+        let id = interner.open(None, uri.clone());
+        assert_eq!(interner.extract(&id), Some(&uri));
+    }
+
+    /// Asserts that one id reused across two uris yields distinct ids.
+    ///
+    /// Case: a long-running program reuses `id=1` for an unrelated second
+    /// URL later in its output.
+    #[test]
+    fn open_reusing_an_id_for_another_uri_returns_a_distinct_id() {
+        let mut interner = HyperlinkInterner::new();
+        let first = interner.open(Some("1".to_owned()), HyperlinkUri::new("https://a.example"));
+        let second = interner.open(Some("1".to_owned()), HyperlinkUri::new("https://b.example"));
+        assert_ne!(first, second);
     }
 }

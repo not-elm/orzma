@@ -22,6 +22,7 @@ use crate::device::modes::{
     AutoWrap, CursorBlink, InsertReplaceMode, TextCursorEnable, TextCursorModes,
 };
 use crate::frame::damage::DamageSpan;
+use crate::hyperlink::HyperlinkId;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::character_sets::{
     CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
@@ -135,10 +136,29 @@ impl Screen {
     }
 }
 
+/// The device state a printed character is shaped by.
+///
+/// The default value prints in replace mode, with autowrap set, outside
+/// any hyperlink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PrintOptions {
+    /// `IRM`: under [`InsertReplaceMode::Insert`] the rest of the row shifts
+    /// right one column before the character lands.
+    pub insert_replace: InsertReplaceMode,
+    /// `DECAWM`: while it is reset, a character at the right border replaces
+    /// the last column, and an armed wrap, such as one a `DECRC` restored, is
+    /// not resolved either.
+    pub auto_wrap: AutoWrap,
+    /// The hyperlink the character is printed inside, or `None` when no link
+    /// is open.
+    pub hyperlink_id: Option<HyperlinkId>,
+}
+
 /// Graphic character output.
 impl Screen {
-    /// Prints one character at the cursor with the current pen, wrapping
-    /// first when the deferred wrap is armed and autowrap is set.
+    /// Prints one character at the cursor with the current pen, as
+    /// `options` shape it, wrapping first when the deferred wrap is armed
+    /// and autowrap is set.
     ///
     /// A one-column glyph takes the cursor's cell and a two-column glyph
     /// takes it and the next; a zero-width mark joins the glyph the
@@ -150,23 +170,14 @@ impl Screen {
     /// the deferred wrap is disarmed. A two-column glyph on a one-column
     /// screen is dropped.
     ///
-    /// `insert_replace` is `IRM`: under [`InsertReplaceMode::Insert`] the
-    /// rest of the row shifts right by the glyph's width before it lands,
-    /// unless the glyph ends the row, in which case it replaces in place.
-    ///
-    /// `auto_wrap` is `DECAWM`. While it is reset, a one-column glyph at
-    /// the right border replaces the last column, and an armed wrap, such
-    /// as one a `DECRC` restored, is not resolved either.
+    /// Under [`InsertReplaceMode::Insert`] the rest of the row shifts
+    /// right by the glyph's width before it lands, unless the glyph ends
+    /// the row, in which case it replaces in place.
     ///
     /// Reports [`DamageSpan::Full`] when a wrap scrolled, otherwise every
     /// row the print touched, or `None` when nothing changed or the rows
     /// have scrolled out of the window.
-    pub fn print(
-        &mut self,
-        c: char,
-        insert_replace: InsertReplaceMode,
-        auto_wrap: AutoWrap,
-    ) -> Option<DamageSpan> {
+    pub fn print(&mut self, c: char, options: PrintOptions) -> Option<DamageSpan> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
         let class = GlyphClass::of(glyph)?;
         let Some(width) = class.body_width() else {
@@ -177,7 +188,7 @@ impl Screen {
         if columns > cols {
             return None;
         }
-        let wrapping = auto_wrap.wraps();
+        let wrapping = options.auto_wrap.wraps();
         let mut first_line = self.state.line;
         let wrap = if self.state.pending_wrap && wrapping {
             self.state.column = GridColumn(0);
@@ -205,10 +216,10 @@ impl Screen {
         // `insert_characters` clear `pending_wrap`, and the character
         // would overwrite the last column instead of wrapping to the
         // next row.
-        if matches!(insert_replace, InsertReplaceMode::Insert) && !ends_row {
+        if matches!(options.insert_replace, InsertReplaceMode::Insert) && !ends_row {
             self.insert_characters(columns);
         }
-        let cell = self.state.pen.stamp(glyph, width);
+        let cell = self.state.pen.stamp(glyph, width, options.hyperlink_id);
         self.grid[self.state.line].stamp_at(landing, cell);
         if ends_row {
             self.state.column = GridColumn(cols - 1);

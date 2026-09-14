@@ -10,7 +10,7 @@ use portable_pty::{MasterPty, PtySize};
 use std::collections::VecDeque;
 #[cfg(any(test, feature = "test-support"))]
 use std::io::Read;
-use std::io::{Result as IoResult, Write};
+use std::io::{Error as IoError, ErrorKind, Result as IoResult, Write};
 #[cfg(all(unix, any(test, feature = "test-support")))]
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -33,6 +33,19 @@ impl Write for CaptureSink {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         self.0.lock().unwrap().extend_from_slice(buf);
         Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> IoResult<()> {
+        Ok(())
+    }
+}
+
+/// A `Write` sink whose every write fails with `ErrorKind::BrokenPipe`.
+pub struct FailingSink;
+
+impl Write for FailingSink {
+    fn write(&mut self, _buf: &[u8]) -> IoResult<usize> {
+        Err(IoError::from(ErrorKind::BrokenPipe))
     }
 
     fn flush(&mut self) -> IoResult<()> {

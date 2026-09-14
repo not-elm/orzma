@@ -10,7 +10,7 @@ use super::*;
 fn copying_wide_glyphs_emits_no_blank_for_continuations() {
     let mut screen = screen();
     for c in ['あ', 'い'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen.print(c, PrintOptions::default());
     }
     screen.start_selection(
         GridPoint {
