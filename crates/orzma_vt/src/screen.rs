@@ -194,7 +194,7 @@ impl Screen {
         };
         let columns = class.columns();
         let cols = self.grid.size().cols;
-        if columns > cols {
+        if cols < columns {
             return Ok(None);
         }
         let wrapping = options.auto_wrap.wraps();
