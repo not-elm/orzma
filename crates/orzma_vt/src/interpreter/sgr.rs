@@ -28,18 +28,17 @@ impl Pen {
     /// separators included, so roughly sixteen values survive. A long
     /// enough sequence loses its tail silently, and a cut can land
     /// inside a direct colour.
-    pub(crate) fn applied(self, params: &CsiParams<'_>) -> Self {
-        let mut pen = self;
+    pub(crate) fn applied(mut self, params: &CsiParams<'_>) -> Self {
         let mut groups = params.groups();
         while let Some(tokens) = groups.next() {
             let Some(group) = Group::decode(tokens) else {
                 continue;
             };
-            if pen.apply_group(&mut groups, &group).is_break() {
+            if self.apply_group(&mut groups, &group).is_break() {
                 break;
             }
         }
-        pen
+        self
     }
 
     /// Applies one group; `Break` when the rest of the sequence can no

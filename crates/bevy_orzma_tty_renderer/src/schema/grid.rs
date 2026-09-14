@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use orzma_vt::prelude::Frame;
 #[cfg(test)]
 use orzma_vt::prelude::GridSize;
+use std::collections::HashMap;
 
 /// One materialized cell of the renderer's CPU-side grid, expanded
 /// from the frame's [`crate::schema::Run`]s.
@@ -70,7 +71,7 @@ pub struct TerminalGrid {
     /// OSC 8 hyperlinks indexed by id. Every applied frame merges its
     /// `hyperlinks` into this table, and a known id is never
     /// overwritten.
-    pub hyperlinks: Vec<(HyperlinkId, HyperlinkUri)>,
+    pub hyperlinks: HashMap<HyperlinkId, HyperlinkUri>,
     /// The live palette set by the last frame that carried one;
     /// symbolic cell colors resolve against it.
     pub palette: Palette,
@@ -210,7 +211,9 @@ impl TerminalGrid {
             || palette
                 .as_ref()
                 .is_some_and(|palette| *palette != self.palette)
-            || hyperlinks.iter().any(|link| !self.knows_hyperlink(link.id))
+            || hyperlinks
+                .iter()
+                .any(|link| !self.hyperlinks.contains_key(&link.id))
     }
 
     /// Applies `frame` to this grid.
@@ -241,9 +244,9 @@ impl TerminalGrid {
         self.rows = size.rows;
         self.cells.resize_with(usize::from(size.rows), Vec::new);
         for link in hyperlinks {
-            if !self.knows_hyperlink(link.id) {
-                self.hyperlinks.push((link.id, link.uri.clone()));
-            }
+            self.hyperlinks
+                .entry(link.id)
+                .or_insert_with(|| link.uri.clone());
         }
         for row in rows {
             let Some(slot) = self.cells.get_mut(usize::from(row.line.0)) else {
@@ -263,21 +266,6 @@ impl TerminalGrid {
             self.palette.clone_from(palette);
         }
     }
-
-    fn knows_hyperlink(&self, id: HyperlinkId) -> bool {
-        lookup_hyperlink(&self.hyperlinks, id).is_some()
-    }
-}
-
-/// Finds the URI the retained table holds for `id`.
-fn lookup_hyperlink(
-    table: &[(HyperlinkId, HyperlinkUri)],
-    id: HyperlinkId,
-) -> Option<&HyperlinkUri> {
-    table
-        .iter()
-        .find(|(known, _)| *known == id)
-        .map(|(_, uri)| uri)
 }
 
 /// Materializes one row's attribute runs into cells, resolving each
@@ -288,7 +276,7 @@ fn lookup_hyperlink(
 fn runs_to_cells(
     runs: &[Run],
     line: GridLine,
-    hyperlinks: &[(HyperlinkId, HyperlinkUri)],
+    hyperlinks: &HashMap<HyperlinkId, HyperlinkUri>,
 ) -> Vec<GridCell> {
     // NOTE: The column walk here must advance exactly as
     // `material::fill_cells` re-derives it from `GridCell::width`;
@@ -312,7 +300,7 @@ fn runs_to_cells(
             "a run's widths are 0, 1 or 2 and never start with a continuation"
         );
         let hyperlink = run.hyperlink_id.and_then(|id| {
-            lookup_hyperlink(hyperlinks, id).map(|uri| Hyperlink {
+            hyperlinks.get(&id).map(|uri| Hyperlink {
                 id,
                 uri: uri.clone(),
             })
@@ -384,6 +372,10 @@ mod tests {
     };
     use orzma_vt::prelude::{DirtyRow, ViewportLine};
 
+    fn id(value: u32) -> HyperlinkId {
+        HyperlinkId::new(value).expect("nonzero")
+    }
+
     fn cell_with_link(text: &str, width: u8, link: Option<(u32, &str)>) -> GridCell {
         GridCell {
             text: text.to_string(),
@@ -392,8 +384,8 @@ mod tests {
             fg: Color::DefaultForeground,
             bg: Color::DefaultBackground,
             style: 0,
-            hyperlink: link.map(|(id, uri)| Hyperlink {
-                id: HyperlinkId(id),
+            hyperlink: link.map(|(number, uri)| Hyperlink {
+                id: id(number),
                 uri: HyperlinkUri::new(uri),
             }),
         }
@@ -617,8 +609,8 @@ mod tests {
             cells: vec![vec![cell]],
             ..Default::default()
         };
-        let (id, uri) = grid.hyperlink_at(0, 0).expect("hyperlink present");
-        assert_eq!(id, HyperlinkId(7));
+        let (resolved, uri) = grid.hyperlink_at(0, 0).expect("hyperlink present");
+        assert_eq!(resolved, id(7));
         assert_eq!(uri.as_str(), "https://example");
     }
 
@@ -653,11 +645,11 @@ mod tests {
             cells: vec![vec![wide_linked, trailing]],
             ..Default::default()
         };
-        let (id, uri) = grid.hyperlink_at(0, 0).expect("left half should resolve");
-        assert_eq!(id, HyperlinkId(7));
+        let (resolved, uri) = grid.hyperlink_at(0, 0).expect("left half should resolve");
+        assert_eq!(resolved, id(7));
         assert_eq!(uri.as_str(), "https://example");
-        let (id, uri) = grid.hyperlink_at(0, 1).expect("right half should resolve");
-        assert_eq!(id, HyperlinkId(7));
+        let (resolved, uri) = grid.hyperlink_at(0, 1).expect("right half should resolve");
+        assert_eq!(resolved, id(7));
         assert_eq!(uri.as_str(), "https://example");
         assert!(grid.hyperlink_at(0, 2).is_none());
     }
@@ -680,8 +672,8 @@ mod tests {
             ..Default::default()
         };
         assert!(grid.hyperlink_at(0, 0).is_none());
-        let (id, _uri) = grid.hyperlink_at(0, 1).expect("linked cell at col 1");
-        assert_eq!(id, HyperlinkId(9));
+        let (resolved, _uri) = grid.hyperlink_at(0, 1).expect("linked cell at col 1");
+        assert_eq!(resolved, id(9));
     }
 
     /// Asserts that a run's hyperlink id resolves against the retained
@@ -693,15 +685,12 @@ mod tests {
     #[test]
     fn runs_to_cells_resolves_hyperlink_ids_against_the_table() {
         let runs = vec![
-            run_with_link("a", Some(HyperlinkId(7))),
-            run_with_link("b", Some(HyperlinkId(9))),
+            run_with_link("a", Some(id(7))),
+            run_with_link("b", Some(id(9))),
         ];
-        let table = vec![(HyperlinkId(7), HyperlinkUri::new("https://example"))];
+        let table = HashMap::from([(id(7), HyperlinkUri::new("https://example"))]);
         let cells = runs_to_cells(&runs, GridLine(0), &table);
-        assert_eq!(
-            cells[0].hyperlink.as_ref().map(|h| h.id),
-            Some(HyperlinkId(7))
-        );
+        assert_eq!(cells[0].hyperlink.as_ref().map(|h| h.id), Some(id(7)));
         assert_eq!(
             cells[0].hyperlink.as_ref().map(|h| h.uri.as_str()),
             Some("https://example")
@@ -716,7 +705,11 @@ mod tests {
     /// scrolled-back history line.
     #[test]
     fn runs_to_cells_assigns_points_by_run_widths() {
-        let cells = runs_to_cells(&[run_with_widths("あb", &[2, 1])], GridLine(-3), &[]);
+        let cells = runs_to_cells(
+            &[run_with_widths("あb", &[2, 1])],
+            GridLine(-3),
+            &HashMap::new(),
+        );
         assert_eq!(cells[0].width, 2);
         assert_eq!(
             cells[0].point,
@@ -741,7 +734,7 @@ mod tests {
     /// Case: a frame carries an ASCII row on the empty-width path.
     #[test]
     fn runs_to_cells_treats_an_empty_width_list_as_one_column_each() {
-        let cells = runs_to_cells(&[run_with_widths("ab", &[])], GridLine(0), &[]);
+        let cells = runs_to_cells(&[run_with_widths("ab", &[])], GridLine(0), &HashMap::new());
         assert_eq!(cells.len(), 2);
         assert!(cells.iter().all(|cell| cell.width == 1));
         assert_eq!(cells[1].point.column, GridColumn(1));
@@ -756,7 +749,7 @@ mod tests {
         let cells = runs_to_cells(
             &[run_with_widths("e\u{0301}x", &[1, 0, 1])],
             GridLine(0),
-            &[],
+            &HashMap::new(),
         );
         assert_eq!(cells.len(), 2);
         assert_eq!(cells[0].text, "e\u{0301}");
@@ -772,7 +765,11 @@ mod tests {
     /// laid out.
     #[test]
     fn runs_to_cells_does_not_remeasure_the_text() {
-        let cells = runs_to_cells(&[run_with_widths("あb", &[1, 1])], GridLine(0), &[]);
+        let cells = runs_to_cells(
+            &[run_with_widths("あb", &[1, 1])],
+            GridLine(0),
+            &HashMap::new(),
+        );
         assert_eq!(cells[0].width, 1);
         assert_eq!(cells[1].point.column, GridColumn(1));
     }
@@ -1061,12 +1058,12 @@ mod tests {
     #[test]
     fn hyperlinks_merge_without_overwrite() {
         let mut grid = TerminalGrid {
-            hyperlinks: vec![(HyperlinkId(1), HyperlinkUri::new("https://old"))],
+            hyperlinks: HashMap::from([(id(1), HyperlinkUri::new("https://old"))]),
             ..TerminalGrid::settled()
         };
         let repeated = Frame {
             hyperlinks: vec![Hyperlink {
-                id: HyperlinkId(1),
+                id: id(1),
                 uri: HyperlinkUri::new("https://CHANGED"),
             }],
             ..quiet_frame()
@@ -1076,11 +1073,11 @@ mod tests {
         let extended = Frame {
             hyperlinks: vec![
                 Hyperlink {
-                    id: HyperlinkId(1),
+                    id: id(1),
                     uri: HyperlinkUri::new("https://CHANGED"),
                 },
                 Hyperlink {
-                    id: HyperlinkId(2),
+                    id: id(2),
                     uri: HyperlinkUri::new("https://new"),
                 },
             ],
@@ -1089,8 +1086,8 @@ mod tests {
         assert!(grid.differs_from(&extended));
         grid.apply(&extended);
         assert_eq!(grid.hyperlinks.len(), 2);
-        assert_eq!(grid.hyperlinks[0].1.as_str(), "https://old");
-        assert_eq!(grid.hyperlinks[1].1.as_str(), "https://new");
+        assert_eq!(grid.hyperlinks[&id(1)].as_str(), "https://old");
+        assert_eq!(grid.hyperlinks[&id(2)].as_str(), "https://new");
     }
 
     /// Asserts that a row resolves a hyperlink id defined by an earlier
@@ -1103,7 +1100,7 @@ mod tests {
         let mut grid = TerminalGrid::settled();
         grid.apply(&Frame {
             hyperlinks: vec![Hyperlink {
-                id: HyperlinkId(4),
+                id: id(4),
                 uri: HyperlinkUri::new("https://earlier"),
             }],
             ..quiet_frame()
@@ -1111,7 +1108,7 @@ mod tests {
         grid.apply(&Frame {
             rows: vec![DirtyRow {
                 line: ViewportLine(0),
-                contents: Row::from(vec![run_with_link("a", Some(HyperlinkId(4)))]),
+                contents: Row::from(vec![run_with_link("a", Some(id(4)))]),
             }],
             ..quiet_frame()
         });

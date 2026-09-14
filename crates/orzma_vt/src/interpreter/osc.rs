@@ -2,14 +2,14 @@
 //!
 //! The window title (OSC 0 and OSC 2), the working directory (OSC 7),
 //! the indexed palette (OSC 4 and OSC 104), the dynamic foreground and
-//! background (OSC 10, OSC 11, OSC 110, and OSC 111), and the clipboard
-//! (OSC 52) are implemented.
+//! background (OSC 10, OSC 11, OSC 110, and OSC 111), hyperlinks
+//! (OSC 8), and the clipboard (OSC 52) are implemented.
 //!
-//! TODO: implement the dynamic cursor color (OSC 12 and OSC 112) and
-//! hyperlinks (OSC 8).
+//! TODO: implement the dynamic cursor color (OSC 12 and OSC 112).
 
 pub(crate) mod clipboard;
 pub(crate) mod dynamic_color;
+pub(crate) mod hyperlink;
 pub(crate) mod palette;
 
 use crate::device::color::Rgb;

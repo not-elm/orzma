@@ -34,10 +34,10 @@ impl Row<Cell> {
     /// Coalesces the row's cells into the attribute runs a frame
     /// carries.
     ///
-    /// Adjacent cells sharing foreground, background, and style become
-    /// one [`Run`], and the runs together span every column of the row.
-    /// A continuation column adds nothing to a run's text, a filler adds
-    /// one blank, and a cell's marks follow its glyph.
+    /// Adjacent cells sharing foreground, background, style, and
+    /// hyperlink become one [`Run`], and the runs together span every
+    /// column of the row. A continuation column adds nothing to a run's
+    /// text, a filler adds one blank, and a cell's marks follow its glyph.
     pub fn to_runs(&self) -> Row<Run> {
         let mut runs: Vec<Run> = Vec::with_capacity(self.0.len().min(Self::RUNS_RESERVE));
         let mut chars_in_run = 0usize;
@@ -46,10 +46,7 @@ impl Row<Cell> {
                 continue;
             }
             let width: u8 = if cell.width == CellWidth::Wide { 2 } else { 1 };
-            let starts_new = !matches!(
-                runs.last(),
-                Some(run) if run.fg == cell.fg && run.bg == cell.bg && run.style == cell.style
-            );
+            let starts_new = !matches!(runs.last(), Some(run) if run.continues_with(cell));
             if starts_new {
                 runs.push(Run {
                     cols: 0,
@@ -58,7 +55,7 @@ impl Row<Cell> {
                     style: cell.style,
                     text: String::new(),
                     widths: Vec::new(),
-                    hyperlink_id: None,
+                    hyperlink_id: cell.hyperlink_id,
                 });
                 chars_in_run = 0;
             }
@@ -111,7 +108,7 @@ impl Row<Cell> {
     pub fn place_filler(&mut self, pen: &Pen) {
         debug_assert!(!self.0.is_empty(), "a filler needs a column");
         let last = self.0.len() - 1;
-        self.0[last] = pen.stamp(' ', CellWidth::LeadingSpacer);
+        self.0[last] = pen.stamp(' ', CellWidth::LeadingSpacer, None);
         if last > 0 {
             self.heal_joint(last - 1);
         }
@@ -313,6 +310,7 @@ impl IndexMut<GridColumn> for Row<Cell> {
 mod tests {
     use super::*;
     use crate::device::color::Color;
+    use crate::hyperlink::HyperlinkId;
     use crate::screen::cell::CellExtra;
     use crate::screen::grid::run::Style;
 
@@ -769,5 +767,42 @@ mod tests {
             assert_eq!(run.cols, expected, "run {:?}", run.text);
         }
         assert_eq!(runs.iter().map(|run| run.cols).sum::<u16>(), 4);
+    }
+
+    /// Asserts that a row splits into separate runs where the hyperlink
+    /// changes, even when every other attribute matches.
+    ///
+    /// Case: a directory listing prints one clickable file name straight
+    /// after another with no styling between them.
+    #[test]
+    fn runs_split_where_the_hyperlink_changes() {
+        let link = HyperlinkId::new(7).expect("nonzero");
+        let other = HyperlinkId::new(9).expect("nonzero");
+        let mut row = Row::filled(3, Cell::default());
+        row[0].hyperlink_id = Some(link);
+        row[1].hyperlink_id = Some(other);
+        let runs = row.to_runs();
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].hyperlink_id, Some(link));
+        assert_eq!(runs[1].hyperlink_id, Some(other));
+        assert_eq!(runs[2].hyperlink_id, None);
+    }
+
+    /// Asserts that neighbouring cells sharing one hyperlink coalesce
+    /// into a single run.
+    ///
+    /// Case: a program prints a multi-word link, and the renderer draws
+    /// it as one underlined span.
+    #[test]
+    fn cells_sharing_a_hyperlink_coalesce_into_one_run() {
+        let link = HyperlinkId::new(7).expect("nonzero");
+        let mut row = Row::filled(3, Cell::default());
+        for column in 0..3 {
+            row[column].hyperlink_id = Some(link);
+        }
+        let runs = row.to_runs();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].cols, 3);
+        assert_eq!(runs[0].hyperlink_id, Some(link));
     }
 }

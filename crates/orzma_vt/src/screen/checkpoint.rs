@@ -16,7 +16,8 @@ use crate::screen::state::ScreenState;
 /// the saved row with the grid, so after one the never-saved position
 /// may sit below home.
 ///
-/// `DECRC` restores neither `IRM` nor any of the text cursor modes.
+/// `DECRC` restores neither `IRM` nor any of the text cursor modes, and
+/// it does not bring back a hyperlink that was open at `DECSC`.
 ///
 /// The `Wrap flag (autowrap or no autowrap)` the VT420 and VT520
 /// manuals list among the items `DECSC` saves is the last-column flag
