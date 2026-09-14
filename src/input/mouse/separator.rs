@@ -206,14 +206,15 @@ fn retire_separator_drag(mut commands: Commands, grabbed: Query<(Entity, &Grabbe
     }
 }
 
-/// The pointer in window physical px, preferring the frame's own
-/// `CursorMoved` (reported in logical px) over the window's retained
-/// position, which is `None` once the pointer leaves the client area.
+/// The pointer in window physical px, preferring the window's retained
+/// position over the frame's own `CursorMoved`, which is reported in
+/// logical px. The retained position is `None` while the pointer is
+/// outside the client area.
 fn reported_cursor_phys(window: Option<&Window>, moved: Option<&CursorMoved>) -> Option<Vec2> {
     let scale = window.map_or(1.0, Window::scale_factor);
-    moved
-        .map(|moved| moved.position * scale)
-        .or_else(|| window.and_then(Window::physical_cursor_position))
+    window
+        .and_then(Window::physical_cursor_position)
+        .or_else(|| moved.map(|moved| moved.position * scale))
 }
 
 /// Whether the left button was pressed and whether it was released
@@ -611,11 +612,13 @@ mod tests {
         app.update();
     }
 
-    /// Reports the pointer at `phys` through `CursorMoved` alone,
-    /// leaving the window's own cursor position where it was, as happens
-    /// once the pointer is dragged outside the client area.
+    /// Places the pointer at `phys` window physical px when `phys` falls
+    /// outside the window's resolution, which winit records on the window
+    /// like any other position, so `Window::physical_cursor_position`
+    /// bounds-checks it away and only the `CursorMoved` carries the
+    /// pointer.
     fn move_off_window(app: &mut App, phys: Vec2) {
-        write_cursor_moved(app, phys);
+        set_cursor(app, phys);
         app.update();
     }
 
@@ -692,17 +695,17 @@ mod tests {
     /// right, jiggles the mouse without leaving that cell, and lets go.
     #[test]
     fn a_drag_requests_one_move_per_boundary_and_retires_on_release() {
-        let mut app = drag_app(SCALE);
-        let separator = spawn_vertical_separator(&mut app, SplitId(1), 320.0, 400.0);
+        let mut app = drag_app(2.0);
+        let separator = spawn_vertical_separator(&mut app, SplitId(1), 640.0, 800.0);
 
-        press_at(&mut app, Vec2::new(320.0, 200.0));
+        press_at(&mut app, Vec2::new(640.0, 400.0));
         assert!(app.world().get::<GrabbedSeparator>(separator).is_some());
         assert!(requested(&mut app).is_empty());
 
-        move_to(&mut app, Vec2::new(336.0, 200.0));
+        move_to(&mut app, Vec2::new(672.0, 400.0));
         assert_eq!(requested(&mut app), vec![41]);
 
-        move_to(&mut app, Vec2::new(338.0, 200.0));
+        move_to(&mut app, Vec2::new(676.0, 400.0));
         assert!(requested(&mut app).is_empty());
 
         release(&mut app);
