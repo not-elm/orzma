@@ -22,6 +22,24 @@ pub enum CellWidth {
     LeadingSpacer,
 }
 
+/// The width a glyph body occupies: the only widths a stamp may carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyWidth {
+    /// A width-1 glyph.
+    Narrow,
+    /// A width-2 glyph, followed by its continuation column.
+    Wide,
+}
+
+impl From<BodyWidth> for CellWidth {
+    fn from(width: BodyWidth) -> Self {
+        match width {
+            BodyWidth::Narrow => Self::Narrow,
+            BodyWidth::Wide => Self::Wide,
+        }
+    }
+}
+
 /// How a printable character occupies the grid: as a one-column glyph,
 /// a two-column glyph, or a mark combined onto the glyph before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,10 +77,10 @@ impl GlyphClass {
 
     /// The width a body cell of this class stores; `None` for a class
     /// that is never stored as a cell of its own.
-    pub fn body_width(self) -> Option<CellWidth> {
+    pub fn body_width(self) -> Option<BodyWidth> {
         match self {
-            Self::Narrow => Some(CellWidth::Narrow),
-            Self::Wide => Some(CellWidth::Wide),
+            Self::Narrow => Some(BodyWidth::Narrow),
+            Self::Wide => Some(BodyWidth::Wide),
             Self::ZeroWidth => None,
         }
     }
@@ -191,18 +209,32 @@ impl Default for Pen {
 }
 
 impl Pen {
-    /// Burns the pen's attributes into a cell holding `c` at `width`,
-    /// printed inside `hyperlink_id`, or outside any link when it is
-    /// `None`.
-    pub fn stamp(&self, c: char, width: CellWidth, hyperlink_id: Option<HyperlinkId>) -> Cell {
+    /// Burns the pen's attributes into a glyph body holding `c` at
+    /// `width`, printed inside `hyperlink_id`, or outside any link when
+    /// it is `None`.
+    pub fn stamp(&self, c: char, width: BodyWidth, hyperlink_id: Option<HyperlinkId>) -> Cell {
         Cell {
             c,
-            width,
+            width: width.into(),
             extra: None,
             fg: self.fg,
             bg: self.bg,
             style: self.style,
             hyperlink_id,
+        }
+    }
+
+    /// The blank a width-2 glyph leaves in the last column when it wraps
+    /// instead of fitting there, carrying the pen's attributes.
+    pub fn filler(&self) -> Cell {
+        Cell {
+            c: ' ',
+            width: CellWidth::LeadingSpacer,
+            extra: None,
+            fg: self.fg,
+            bg: self.bg,
+            style: self.style,
+            hyperlink_id: None,
         }
     }
 
@@ -279,7 +311,7 @@ mod tests {
         };
         let hyperlink_id = HyperlinkId::new(7);
         assert_eq!(
-            pen.stamp('あ', CellWidth::Wide, hyperlink_id),
+            pen.stamp('あ', BodyWidth::Wide, hyperlink_id),
             Cell {
                 c: 'あ',
                 width: CellWidth::Wide,
@@ -372,8 +404,8 @@ mod tests {
         assert_eq!(GlyphClass::Narrow.columns(), 1);
         assert_eq!(GlyphClass::Wide.columns(), 2);
         assert_eq!(GlyphClass::ZeroWidth.columns(), 0);
-        assert_eq!(GlyphClass::Narrow.body_width(), Some(CellWidth::Narrow));
-        assert_eq!(GlyphClass::Wide.body_width(), Some(CellWidth::Wide));
+        assert_eq!(GlyphClass::Narrow.body_width(), Some(BodyWidth::Narrow));
+        assert_eq!(GlyphClass::Wide.body_width(), Some(BodyWidth::Wide));
         assert_eq!(GlyphClass::ZeroWidth.body_width(), None);
     }
 
@@ -411,13 +443,17 @@ mod tests {
         );
     }
 
-    /// Asserts that a stamped cell carries the given width and no marks.
+    /// Asserts that a stamped cell stores the given body width and
+    /// carries no marks.
     ///
-    /// Case: an application prints ordinary text.
+    /// Case: an application prints an ASCII letter and then a kanji.
     #[test]
     fn stamping_produces_a_cell_of_the_given_width() {
-        let cell = Pen::default().stamp('a', CellWidth::Narrow, None);
-        assert_eq!(cell.width, CellWidth::Narrow);
-        assert_eq!(cell.extra, None);
+        let narrow = Pen::default().stamp('a', BodyWidth::Narrow, None);
+        assert_eq!(narrow.width, CellWidth::Narrow);
+        assert_eq!(narrow.extra, None);
+        let wide = Pen::default().stamp('界', BodyWidth::Wide, None);
+        assert_eq!(wide.width, CellWidth::Wide);
+        assert_eq!(wide.extra, None);
     }
 }
