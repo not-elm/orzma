@@ -4,8 +4,8 @@
 use crate::requests::{
     copy::CopyPlugin, key_input::KeyInputPlugin, mouse_input::MouseInputPlugin,
     pane::PaneActionPlugin, paste::PastePlugin, scroll::ScrollPlugin, selection::SelectionPlugin,
-    vi_mode::ViModePlugin, vi_motion::ViMotionPlugin, webview_mount::WebviewMountPlugin,
-    webview_remove::WebviewRemovePlugin,
+    split_resize::SplitResizePlugin, vi_mode::ViModePlugin, vi_motion::ViMotionPlugin,
+    webview_mount::WebviewMountPlugin, webview_remove::WebviewRemovePlugin,
 };
 use crate::{OrzmuxConnection, OrzmuxPane};
 use bevy::ecs::system::SystemParam;
@@ -19,6 +19,7 @@ mod pane;
 mod paste;
 mod scroll;
 mod selection;
+mod split_resize;
 mod vi_mode;
 mod vi_motion;
 mod webview_mount;
@@ -35,6 +36,7 @@ pub use selection::{
     RequestTtySelectionStart, RequestTtySelectionStartAtViCursor, RequestTtySelectionUpdate,
     SelectionKind,
 };
+pub use split_resize::RequestSplitResize;
 pub use vi_mode::{RequestTtyViMode, ViModeSwitch};
 pub use vi_motion::{RequestTtyViMotion, ViMotion};
 pub use webview_mount::RequestTtyWebviewMount;
@@ -52,6 +54,7 @@ impl Plugin for OrzmaEventRequestPlugin {
             PastePlugin,
             ScrollPlugin,
             SelectionPlugin,
+            SplitResizePlugin,
             ViModePlugin,
             ViMotionPlugin,
             WebviewMountPlugin,
@@ -146,7 +149,7 @@ mod tests {
         TerminalKey, TerminalModifiers,
     };
     use orzma_vt::prelude::{GridColumn, GridLine, InstanceId, PlacementSize, ScreenLine, Scroll};
-    use orzmux::prelude::PaneId;
+    use orzmux::prelude::{PaneId, SplitId};
 
     /// Asserts that no request observer runs once the connection is
     /// removed, so none of them panics.
@@ -224,6 +227,10 @@ mod tests {
         });
         world.trigger(RequestPaneAction {
             action: PaneAction::Select(pane),
+        });
+        world.trigger(RequestSplitResize {
+            split: SplitId(1),
+            position: 10,
         });
         app.update();
     }
