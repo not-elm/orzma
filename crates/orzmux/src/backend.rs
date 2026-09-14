@@ -323,13 +323,17 @@ impl Backend {
             .solve(geometry.size)
             .rect_of(new)
             .expect("the new pane is in the tree");
-        let size = GridSize::new(rect.cols, rect.rows);
         let spawn_cwd = cwd.or(inherited_cwd);
-        match self
-            .factory
-            .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
-        {
-            Ok(tty) => {
+        let spawned = match GridSize::new(rect.cols, rect.rows) {
+            Ok(size) => self
+                .factory
+                .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
+                .map(|tty| (tty, size))
+                .map_err(|err| err.to_string()),
+            Err(err) => Err(err.to_string()),
+        };
+        match spawned {
+            Ok((tty, size)) => {
                 self.panes.insert(
                     new,
                     Pane {
@@ -341,15 +345,12 @@ impl Backend {
                 self.emit(OrzmuxEvent::PaneOpened { pane: new, request });
                 self.publish_layout();
             }
-            Err(err) => {
+            Err(error) => {
                 self.tree.remove(new);
                 if let Some(previous) = previous_active {
                     self.tree.select(previous);
                 }
-                self.emit(OrzmuxEvent::SpawnFailed {
-                    request,
-                    error: err.to_string(),
-                });
+                self.emit(OrzmuxEvent::SpawnFailed { request, error });
             }
         }
     }
@@ -400,10 +401,14 @@ impl Backend {
             if pane.applied == wanted {
                 continue;
             }
-            match pane
-                .tty
-                .resize(GridSize::new(rect.cols, rect.rows), geometry.cell_px)
-            {
+            let size = match GridSize::new(rect.cols, rect.rows) {
+                Ok(size) => size,
+                Err(err) => {
+                    tracing::warn!(pane = ?rect.pane, %err, "pane rect is not a valid grid size; keeping the old size");
+                    continue;
+                }
+            };
+            match pane.tty.resize(size, geometry.cell_px) {
                 Ok(()) => pane.applied = wanted,
                 Err(err) => {
                     tracing::warn!(pane = ?rect.pane, %err, "pane resize failed; keeping the old size");
@@ -724,7 +729,7 @@ mod tests {
         }
 
         fn open_root(&mut self) -> (PaneId, FakePane) {
-            self.resize(GridSize::new(80, 24));
+            self.resize(GridSize::new(80, 24).expect("a valid size"));
             self.drain();
             self.send(OrzmuxCommand::NewPane {
                 request: RequestId(1),
@@ -771,7 +776,7 @@ mod tests {
     #[test]
     fn the_root_pane_opens_at_the_window_size_and_reports_a_layout() {
         let mut h = Harness::new();
-        h.resize(GridSize::new(80, 24));
+        h.resize(GridSize::new(80, 24).expect("a valid size"));
         h.drain();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(1),
@@ -884,7 +889,7 @@ mod tests {
             env: vec![],
         });
         h.drain();
-        h.resize(GridSize::new(120, 24));
+        h.resize(GridSize::new(120, 24).expect("a valid size"));
         let mut events = h.drain();
         let Some(OrzmuxEvent::Layout { layout, frames }) = events.pop_front() else {
             panic!("expected Layout");
