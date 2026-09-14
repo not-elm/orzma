@@ -5091,6 +5091,7 @@ dependencies = [
  "bitflags 2.13.0",
  "percent-encoding",
  "proptest",
+ "thiserror 2.0.18",
  "unicode-width 0.2.0",
  "vtparse",
 ]

@@ -12,6 +12,7 @@ use crate::screen::grid::history_index::HistoryIndex;
 use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
+use thiserror::Error;
 
 /// The narrowest grid the terminal will build: a width-2 glyph needs two
 /// columns.
@@ -27,13 +28,42 @@ pub struct GridSize {
 }
 
 impl GridSize {
+    /// Upper bound on the column count [`Self::new`] accepts.
+    pub const MAX_COLS: u16 = 4096;
+    /// Upper bound on the row count [`Self::new`] accepts.
+    pub const MAX_ROWS: u16 = 4096;
+
     /// Builds a size with the column count raised to [`MIN_COLUMNS`].
-    pub fn new(cols: u16, rows: u16) -> Self {
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// [`GridSizeError::ZeroAxis`] when either count is zero, and
+    /// [`GridSizeError::TooLarge`] when either exceeds
+    /// [`Self::MAX_COLS`] / [`Self::MAX_ROWS`].
+    pub fn new(cols: u16, rows: u16) -> Result<Self, GridSizeError> {
+        if cols == 0 || rows == 0 {
+            return Err(GridSizeError::ZeroAxis);
+        }
+        if Self::MAX_COLS < cols || Self::MAX_ROWS < rows {
+            return Err(GridSizeError::TooLarge);
+        }
+        Ok(Self {
             cols: cols.max(MIN_COLUMNS),
             rows,
-        }
+        })
     }
+}
+
+/// The reason a column and row count is not a valid [`GridSize`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum GridSizeError {
+    /// A column or row count of zero.
+    #[error("a grid axis is zero")]
+    ZeroAxis,
+    /// A column or row count above [`GridSize::MAX_COLS`] /
+    /// [`GridSize::MAX_ROWS`].
+    #[error("a grid axis exceeds {}x{}", GridSize::MAX_COLS, GridSize::MAX_ROWS)]
+    TooLarge,
 }
 
 /// Stable identity of one grid row, minted when the row enters the ring.

@@ -212,7 +212,7 @@ mod tests {
         events
             .send(OrzmuxEvent::Frame {
                 pane: PaneId(7),
-                frame: frame(GridSize::new(80, 24)),
+                frame: frame(GridSize::new(80, 24).expect("a valid size")),
             })
             .unwrap();
         app.update();
@@ -369,7 +369,7 @@ mod tests {
         events
             .send(OrzmuxEvent::Frame {
                 pane: PaneId(1),
-                frame: frame(GridSize::new(80, 24)),
+                frame: frame(GridSize::new(80, 24).expect("a valid size")),
             })
             .unwrap();
         app.update();
