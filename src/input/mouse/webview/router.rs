@@ -3,7 +3,9 @@
 //! cursor.
 
 use crate::input::InputPhase;
+use crate::input::mouse::MousePhase;
 use crate::input::mouse::cell_dims;
+use crate::input::mouse::separator::GrabbedSeparator;
 use crate::input::mouse::webview::{
     WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
     release_webview_press, route_webview_left_click, webview_pointer_frame, webview_wheel_delta,
@@ -27,26 +29,32 @@ pub(super) struct MouseWebviewRouterPlugin;
 
 impl Plugin for MouseWebviewRouterPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, route_webview_pointer.in_set(InputPhase::Dispatch))
-            .add_systems(
-                Update,
-                forward_webview_mouse_moves
-                    .in_set(InputPhase::Hover)
-                    .run_if(on_message::<CursorMoved>),
-            )
-            .add_systems(
-                Update,
-                forward_webview_wheel
-                    .in_set(InputPhase::Dispatch)
-                    .run_if(on_message::<MouseWheel>),
-            );
+        app.add_systems(
+            Update,
+            route_webview_pointer
+                .in_set(MousePhase::Dispatch)
+                .run_if(not(any_with_component::<GrabbedSeparator>)),
+        )
+        .add_systems(
+            Update,
+            forward_webview_mouse_moves
+                .in_set(InputPhase::Hover)
+                .run_if(on_message::<CursorMoved>)
+                .run_if(not(any_with_component::<GrabbedSeparator>)),
+        )
+        .add_systems(
+            Update,
+            forward_webview_wheel
+                .in_set(InputPhase::Dispatch)
+                .run_if(on_message::<MouseWheel>),
+        );
     }
 }
 
 /// Forwards left press/release to the inline CEF child under the cursor
-/// on the shell surface. A suppressed frame (window unfocused) drains the
-/// reader and releases an in-flight press so the focused page is not left
-/// logically pressed.
+/// on the shell surface. A window-unfocused frame drains the reader and
+/// releases an in-flight press so the focused page is not left logically
+/// pressed.
 fn route_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
