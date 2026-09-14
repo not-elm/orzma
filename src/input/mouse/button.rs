@@ -8,13 +8,14 @@ use super::{
     CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_dims, hit_candidates,
     on_any_mouse_message, trigger_mouse_effects,
 };
-use crate::input::InputPhase;
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::current_modifiers;
 use crate::input::focus::PaneClicked;
 use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
+use crate::input::mouse::MousePhase;
 use crate::input::mouse::gesture::{DragGesture, DragPhase, HeldPointer, OrzmaMouseGesture};
+use crate::input::mouse::separator::GrabbedSeparator;
 use crate::surface::geometry::topmost_surface_at;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
@@ -35,8 +36,9 @@ impl Plugin for MouseButtonInputPlugin {
         app.init_resource::<OrzmaMouseGesture>().add_systems(
             Update,
             dispatch_mouse_buttons
-                .in_set(InputPhase::Dispatch)
-                .run_if(on_any_mouse_message()),
+                .in_set(MousePhase::Dispatch)
+                .run_if(on_any_mouse_message())
+                .run_if(not(any_with_component::<GrabbedSeparator>)),
         );
     }
 }
@@ -153,8 +155,8 @@ struct FrameContext {
 /// cursor on press, locks drag/release to that terminal, tracks clicks and drag
 /// state, drives `decide_button`, and fans the decided effects out to
 /// per-operation `EntityEvent`s via `trigger_mouse_effects`. Skips any
-/// `OrzmaTerminal` carrying `MouseDisabled`; an empty candidate set (modal
-/// suppression) drains events and resets the gesture.
+/// `OrzmaTerminal` carrying `MouseDisabled`. An empty candidate set (modal
+/// suppression) drains the readers and resets the gesture.
 fn dispatch_mouse_buttons(
     mut commands: Commands,
     mut gesture: ResMut<OrzmaMouseGesture>,

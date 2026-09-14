@@ -13,6 +13,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneId(pub u32);
 
+/// A split the layout tree minted. Never reused within one tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SplitId(pub u32);
+
 /// A window (tab).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct WindowId(pub u32);
@@ -193,6 +197,14 @@ pub enum OrzmuxCommand {
         /// The placement instances to release.
         instances: Vec<InstanceId>,
     },
+    /// Move a split's divider.
+    ResizeSplit {
+        /// The split whose divider moves.
+        split: SplitId,
+        /// The whole-window cell boundary to put the divider on: `x` for
+        /// a vertical split, `y` for a horizontal one.
+        position: u16,
+    },
     /// Register a host-driven webview placement at a visible cell of a
     /// pane — the socket-op counterpart of the APC `mount` for PTYs that
     /// drop APC (ConPTY).
@@ -241,6 +253,8 @@ pub struct PaneRect {
 /// A one-cell-wide divider between two panes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Separator {
+    /// The split this divider belongs to.
+    pub split: SplitId,
     /// Whether the divider runs vertically or horizontally.
     pub orientation: SplitOrientation,
     /// Left edge in cells from the window's left.

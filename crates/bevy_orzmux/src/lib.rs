@@ -22,13 +22,18 @@ pub mod prelude {
     pub use crate::{
         OrzmuxConnection, OrzmuxPane, OrzmuxPlugin, OrzmuxSystems,
         drain::{OrzmuxPaneSpawnFailed, OrzmuxSessionEnded},
-        layout::{OrzmuxActivePaneChanged, OrzmuxPaneContainer, PaneGeometry, absolute_px_node},
+        layout::{
+            OrzmuxActivePaneChanged, OrzmuxPaneContainer, OrzmuxSeparator, PaneGeometry,
+            absolute_px_node,
+        },
         registry::PaneRegistry,
         requests::*,
         signals::*,
         title::TtyTitle,
     };
-    pub use orzmux::prelude::{OrzmuxClient, OrzmuxConfig, OrzmuxSpawnError};
+    pub use orzmux::prelude::{
+        OrzmuxClient, OrzmuxConfig, OrzmuxSpawnError, SplitId, SplitOrientation,
+    };
 }
 
 /// The GUI's connection to the multiplexer backend.

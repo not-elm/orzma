@@ -1,12 +1,14 @@
-//! Clipboard action modules: the copy write seam and the paste pipeline.
+//! Clipboard actions that write to and read from the system clipboard.
 
 use crate::action::clipboard::{
     copy::ClipboardCopyActionPlugin, paste::ClipboardPasteActionPlugin,
+    store::ClipboardStoreActionPlugin,
 };
 use bevy::prelude::*;
 
 mod copy;
 mod paste;
+mod store;
 
 pub(crate) use copy::CopyAction;
 pub(crate) use paste::PasteAction;
@@ -16,6 +18,10 @@ pub(super) struct ClipboardActionsPlugin;
 
 impl Plugin for ClipboardActionsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((ClipboardCopyActionPlugin, ClipboardPasteActionPlugin));
+        app.add_plugins((
+            ClipboardCopyActionPlugin,
+            ClipboardPasteActionPlugin,
+            ClipboardStoreActionPlugin,
+        ));
     }
 }
