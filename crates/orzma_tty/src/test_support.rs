@@ -103,9 +103,9 @@ pub struct FakeVt {
 impl FakeVt {
     /// Builds a fake at the given grid size, at the live tail, with
     /// default modes and an empty script.
-    pub fn new(cols: u16, rows: u16) -> Self {
+    pub fn new(grid_size: GridSize) -> Self {
         Self {
-            grid_size: GridSize { cols, rows },
+            grid_size,
             display_offset: DisplayOffset(0),
             modes: VtModes::default(),
             scroll_moves: false,

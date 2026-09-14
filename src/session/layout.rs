@@ -9,6 +9,7 @@ use bevy::window::{PrimaryWindow, WindowResized};
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzmux::prelude::{OrzmuxConnection, PaneGeometry};
 use orzma_tty::CellPixels;
+use orzma_vt::prelude::GridSize;
 use orzmux::prelude::OrzmuxCommand;
 
 /// Adds the window-geometry sender.
@@ -32,10 +33,10 @@ impl Plugin for LayoutPlugin {
     }
 }
 
-/// The `(cols, rows, cell_px)` last sent, so a resize that changes
-/// nothing sends nothing.
+/// The `(size, cell_px)` last sent, so a resize that changes nothing
+/// sends nothing.
 #[derive(Resource, Default)]
-struct LastGeometry(Option<(u16, u16, CellPixels)>);
+struct LastGeometry(Option<(GridSize, CellPixels)>);
 
 #[expect(
     clippy::cast_possible_truncation,
@@ -59,6 +60,7 @@ fn send_window_geometry(
         cell_w,
         cell_h,
     );
+    let size = GridSize::new(cols, rows);
     let cell_px = CellPixels {
         width: cell_w as u16,
         height: cell_h as u16,
@@ -73,15 +75,11 @@ fn send_window_geometry(
         }
         None => commands.insert_resource(wanted),
     }
-    if last.0 == Some((cols, rows, cell_px)) {
+    if last.0 == Some((size, cell_px)) {
         return;
     }
-    last.0 = Some((cols, rows, cell_px));
-    connection.0.send(OrzmuxCommand::Resize {
-        cols,
-        rows,
-        cell_px,
-    });
+    last.0 = Some((size, cell_px));
+    connection.0.send(OrzmuxCommand::Resize { size, cell_px });
 }
 
 #[cfg(test)]
@@ -135,8 +133,10 @@ mod tests {
         assert!(matches!(
             sent.as_slice(),
             [OrzmuxCommand::Resize {
-                cols: 100,
-                rows: 37,
+                size: GridSize {
+                    cols: 100,
+                    rows: 37
+                },
                 ..
             }]
         ));
@@ -162,8 +162,10 @@ mod tests {
         assert!(matches!(
             sent.as_slice(),
             [OrzmuxCommand::Resize {
-                cols: 200,
-                rows: 37,
+                size: GridSize {
+                    cols: 200,
+                    rows: 37
+                },
                 ..
             }]
         ));
