@@ -3,6 +3,7 @@
 //! cursor.
 
 use crate::input::InputPhase;
+use crate::input::mouse::MousePhase;
 use crate::input::mouse::cell_dims;
 use crate::input::mouse::webview::{
     WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
@@ -27,7 +28,7 @@ pub(super) struct MouseWebviewRouterPlugin;
 
 impl Plugin for MouseWebviewRouterPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, route_webview_pointer.in_set(InputPhase::Dispatch))
+        app.add_systems(Update, route_webview_pointer.in_set(MousePhase::Dispatch))
             .add_systems(
                 Update,
                 forward_webview_mouse_moves

@@ -8,12 +8,12 @@ use super::{
     CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_dims, hit_candidates,
     on_any_mouse_message, trigger_mouse_effects,
 };
-use crate::input::InputPhase;
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::current_modifiers;
 use crate::input::focus::PaneClicked;
 use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
+use crate::input::mouse::MousePhase;
 use crate::input::mouse::gesture::{DragGesture, DragPhase, HeldPointer, OrzmaMouseGesture};
 use crate::surface::geometry::topmost_surface_at;
 use bevy::input::ButtonState;
@@ -35,7 +35,7 @@ impl Plugin for MouseButtonInputPlugin {
         app.init_resource::<OrzmaMouseGesture>().add_systems(
             Update,
             dispatch_mouse_buttons
-                .in_set(InputPhase::Dispatch)
+                .in_set(MousePhase::Dispatch)
                 .run_if(on_any_mouse_message()),
         );
     }
