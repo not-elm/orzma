@@ -833,6 +833,33 @@ fn a_combining_mark_on_a_wrap_filler_is_dropped() {
     );
 }
 
+/// Asserts that a combining mark whose candidate cell is a disarmed
+/// wrap filler joins the glyph to its left instead.
+///
+/// Case: a program moves the cursor back onto a row's last column,
+/// where a Japanese character had wrapped, and an accent arrives.
+#[test]
+fn a_combining_mark_on_a_disarmed_wrap_filler_joins_the_glyph_before_it() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c', 'あ'] {
+        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+    }
+    assert_eq!(
+        screen.grid[ScreenLine(0)][3].width,
+        CellWidth::LeadingSpacer
+    );
+    screen.state.line = ScreenLine(0);
+    screen.state.column = GridColumn(3);
+    screen.state.pending_wrap = false;
+    screen.print('\u{0301}', InsertReplaceMode::Replace, AutoWrap::Enabled);
+    assert_eq!(screen.grid[ScreenLine(0)][2].marks(), ['\u{0301}']);
+    assert!(screen.grid[ScreenLine(0)][3].extra.is_none());
+    assert_eq!(
+        screen.grid[ScreenLine(0)][3].width,
+        CellWidth::LeadingSpacer
+    );
+}
+
 /// Asserts that a combining mark arriving after a glyph printed in the
 /// penultimate column joins that glyph rather than the blank last cell
 /// the cursor advanced onto.

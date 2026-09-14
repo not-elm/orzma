@@ -172,9 +172,10 @@ impl Cell {
     /// The glyph followed by the marks combined onto it, in arrival
     /// order; a continuation or filler column yields nothing.
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
-        let base =
-            (!matches!(self.width, CellWidth::Spacer | CellWidth::LeadingSpacer)).then_some(self.c);
-        base.into_iter().chain(self.marks().iter().copied())
+        let body = !matches!(self.width, CellWidth::Spacer | CellWidth::LeadingSpacer);
+        body.then_some(self.c)
+            .into_iter()
+            .chain(self.marks().iter().copied().filter(move |_| body))
     }
 }
 
@@ -445,6 +446,18 @@ mod tests {
         assert_eq!(
             Cell {
                 width: CellWidth::Spacer,
+                ..Cell::default()
+            }
+            .chars()
+            .count(),
+            0
+        );
+        let mut spacer_extra = CellExtra::default();
+        assert!(spacer_extra.push('\u{0301}'));
+        assert_eq!(
+            Cell {
+                width: CellWidth::Spacer,
+                extra: Some(Box::new(spacer_extra)),
                 ..Cell::default()
             }
             .chars()
