@@ -23,6 +23,24 @@ pub enum CellWidth {
     LeadingSpacer,
 }
 
+/// The width a glyph body occupies: the only widths a stamp may carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyWidth {
+    /// A width-1 glyph.
+    Narrow,
+    /// A width-2 glyph, followed by its continuation column.
+    Wide,
+}
+
+impl From<BodyWidth> for CellWidth {
+    fn from(width: BodyWidth) -> Self {
+        match width {
+            BodyWidth::Narrow => Self::Narrow,
+            BodyWidth::Wide => Self::Wide,
+        }
+    }
+}
+
 impl CellWidth {
     /// Classifies `c` by the columns it occupies; `None` for a character
     /// with no reported width, such as a control character.
@@ -160,12 +178,13 @@ impl Default for Pen {
 }
 
 impl Pen {
-    /// Burns the pen's attributes into a cell holding `c`, printed inside
-    /// `hyperlink_id`, or outside any link when it is `None`.
-    pub fn stamp(&self, c: char, hyperlink_id: Option<HyperlinkId>) -> Cell {
+    /// Burns the pen's attributes into a glyph body holding `c` at
+    /// `width`, printed inside `hyperlink_id`, or outside any link when
+    /// it is `None`.
+    pub fn stamp(&self, c: char, width: BodyWidth, hyperlink_id: Option<HyperlinkId>) -> Cell {
         Cell {
             c,
-            width: CellWidth::Narrow,
+            width: width.into(),
             extra: None,
             fg: self.fg,
             bg: self.bg,
@@ -247,7 +266,7 @@ mod tests {
         };
         let hyperlink_id = HyperlinkId::new(7);
         assert_eq!(
-            pen.stamp('a', hyperlink_id),
+            pen.stamp('a', BodyWidth::Narrow, hyperlink_id),
             Cell {
                 c: 'a',
                 width: CellWidth::Narrow,
@@ -353,13 +372,17 @@ mod tests {
         );
     }
 
-    /// Asserts that a stamped cell is narrow and carries no marks.
+    /// Asserts that a stamped cell stores the given body width and
+    /// carries no marks.
     ///
-    /// Case: an application prints ordinary text.
+    /// Case: an application prints an ASCII letter and then a kanji.
     #[test]
-    fn stamping_produces_a_narrow_cell() {
-        let cell = Pen::default().stamp('a', None);
-        assert_eq!(cell.width, CellWidth::Narrow);
-        assert_eq!(cell.extra, None);
+    fn stamping_produces_a_cell_of_the_given_width() {
+        let narrow = Pen::default().stamp('a', BodyWidth::Narrow, None);
+        assert_eq!(narrow.width, CellWidth::Narrow);
+        assert_eq!(narrow.extra, None);
+        let wide = Pen::default().stamp('界', BodyWidth::Wide, None);
+        assert_eq!(wide.width, CellWidth::Wide);
+        assert_eq!(wide.extra, None);
     }
 }
