@@ -329,9 +329,12 @@ mod tests {
     #[test]
     fn full_damage_emits_every_viewport_row() {
         let mut rig = drained_rig();
-        rig.device
-            .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        rig.device.active_screen_mut().print(
+            'a',
+            InsertReplaceMode::Replace,
+            AutoWrap::Enabled,
+            None,
+        );
         rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert_eq!(frame.size, GridSize { cols: 4, rows: 3 });
@@ -468,13 +471,21 @@ mod tests {
         let mut rig = drained_rig();
         rig.device
             .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
-        rig.device
-            .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        let linked = rig.device.active_hyperlink();
+        rig.device.active_screen_mut().print(
+            'a',
+            InsertReplaceMode::Replace,
+            AutoWrap::Enabled,
+            linked,
+        );
         rig.device.close_hyperlink();
-        rig.device
-            .active_screen_mut()
-            .print('b', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        let plain = rig.device.active_hyperlink();
+        rig.device.active_screen_mut().print(
+            'b',
+            InsertReplaceMode::Replace,
+            AutoWrap::Enabled,
+            plain,
+        );
         rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert_eq!(frame.hyperlinks.len(), 1);
@@ -499,11 +510,13 @@ mod tests {
         let mut rig = drained_rig();
         rig.device
             .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        let linked = rig.device.active_hyperlink();
         for _ in 0..5 {
             rig.device.active_screen_mut().print(
                 'a',
                 InsertReplaceMode::Replace,
                 AutoWrap::Enabled,
+                linked,
             );
         }
         rig.tracker.stage(DamageSpan::Full);
@@ -522,9 +535,13 @@ mod tests {
         rig.device
             .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
         rig.device.close_hyperlink();
-        rig.device
-            .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        let plain = rig.device.active_hyperlink();
+        rig.device.active_screen_mut().print(
+            'a',
+            InsertReplaceMode::Replace,
+            AutoWrap::Enabled,
+            plain,
+        );
         rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert!(frame.hyperlinks.is_empty());
@@ -540,9 +557,12 @@ mod tests {
         let mut rig = drained_rig();
         rig.device
             .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
-        rig.device
-            .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        rig.device.active_screen_mut().print(
+            'a',
+            InsertReplaceMode::Replace,
+            AutoWrap::Enabled,
+            None,
+        );
         rig.tracker.stage(DamageSpan::Full);
         emit(&mut rig).expect("the first frame carries the linked row");
         rig.device.close_hyperlink();

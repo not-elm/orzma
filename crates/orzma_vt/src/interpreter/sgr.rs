@@ -17,8 +17,6 @@ const MAX_SUBPARAMS: usize = 9;
 impl Pen {
     /// The pen this one becomes after `params`, applied left to right.
     ///
-    /// The hyperlink is carried through unchanged; no `SGR` clears it.
-    ///
     /// The attributes this terminal cannot paint are dropped in pairs:
     /// blink (`5`, `6`, `25`), overline (`53`, `55`), and the underline
     /// colour's reset (`59`).
@@ -30,26 +28,17 @@ impl Pen {
     /// separators included, so roughly sixteen values survive. A long
     /// enough sequence loses its tail silently, and a cut can land
     /// inside a direct colour.
-    pub(crate) fn applied(self, params: &CsiParams<'_>) -> Self {
-        // NOTE: A hyperlink is not an SGR attribute, so no SGR may drop
-        // it. Restoring it here rather than inside the `0` arm keeps
-        // that true for any arm that replaces the whole pen. A program
-        // that ends a coloured link with `SGR 0` before closing the link
-        // would otherwise lose the rest of it.
-        let mut pen = self;
+    pub(crate) fn applied(mut self, params: &CsiParams<'_>) -> Self {
         let mut groups = params.groups();
         while let Some(tokens) = groups.next() {
             let Some(group) = Group::decode(tokens) else {
                 continue;
             };
-            if pen.apply_group(&mut groups, &group).is_break() {
+            if self.apply_group(&mut groups, &group).is_break() {
                 break;
             }
         }
-        Self {
-            hyperlink_id: self.hyperlink_id,
-            ..pen
-        }
+        self
     }
 
     /// Applies one group; `Break` when the rest of the sequence can no

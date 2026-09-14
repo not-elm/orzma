@@ -1002,10 +1002,12 @@ mod tests {
     fn a_staged_print_survives_the_composed_pipeline() {
         let mut vt = vt();
         vt.frame();
-        let damage =
-            vt.device
-                .active_screen_mut()
-                .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        let damage = vt.device.active_screen_mut().print(
+            'x',
+            InsertReplaceMode::Replace,
+            AutoWrap::Enabled,
+            None,
+        );
         vt.tracker.stage_if_changed(damage);
         for _ in 0..3 {
             vt.device.active_screen_mut().line_feed();

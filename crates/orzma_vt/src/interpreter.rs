@@ -114,10 +114,13 @@ impl VTActor for Executor<'_> {
             return;
         }
         let modes = self.device.modes();
-        let damage =
-            self.device
-                .active_screen_mut()
-                .print(b, modes.insert_replace, modes.auto_wrap);
+        let hyperlink = self.device.active_hyperlink();
+        let damage = self.device.active_screen_mut().print(
+            b,
+            modes.insert_replace,
+            modes.auto_wrap,
+            hyperlink,
+        );
         self.stage(damage);
     }
 

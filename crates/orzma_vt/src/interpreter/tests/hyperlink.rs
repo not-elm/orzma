@@ -72,20 +72,18 @@ fn a_full_attribute_reset_keeps_the_hyperlink() {
     assert_eq!(row[1].hyperlink_id, row[0].hyperlink_id);
 }
 
-/// Asserts that a restored cursor paints with the same hyperlink that
-/// was open when the cursor was saved, at the column where it was
-/// saved.
+/// Asserts that a restored cursor paints without the hyperlink that was
+/// open when the cursor was saved, rather than bringing it back.
 ///
 /// Case: a program saves the cursor inside a link, closes the link to
-/// print a plain status word, and restores to carry on printing it.
+/// print a plain status word, and restores to carry on printing.
 #[test]
-fn a_restored_cursor_brings_back_the_hyperlink() {
+fn a_restored_cursor_does_not_bring_back_the_hyperlink() {
     let device =
         interpret(b"\x1b]8;;https://a.example\x1b\\\x1b[2;1Hw\x1b[1;1H\x1b7\x1b]8;;\x1b\\a\x1b8b");
-    let opened_id = cell_at(&device, 1, 0).hyperlink_id;
-    assert!(opened_id.is_some());
+    assert!(cell_at(&device, 1, 0).hyperlink_id.is_some());
     assert_eq!(glyph_at(&device, 0, 0), 'b');
-    assert_eq!(cell_at(&device, 0, 0).hyperlink_id, opened_id);
+    assert_eq!(cell_at(&device, 0, 0).hyperlink_id, None);
 }
 
 /// Asserts that a soft reset closes the open hyperlink.
@@ -121,21 +119,46 @@ fn erasing_a_linked_cell_drops_its_hyperlink() {
     assert_eq!(row[1].hyperlink_id, None);
 }
 
-/// Asserts that a hyperlink open on one screen never reaches the other,
-/// and comes back after a round trip through the alternate screen.
+/// Asserts that a hyperlink open on the primary screen does not reach the
+/// cells printed on the alternate screen.
 ///
-/// Case: a shell prints a link, a full-screen editor takes over the
-/// alternate screen and prints plain text there, and the editor then
-/// exits back to the shell.
+/// Case: a shell leaves a link open, and a full-screen editor then draws
+/// its interface on the alternate screen.
 #[test]
-fn the_two_screens_keep_independent_hyperlinks() {
-    let mut device = interpret(b"\x1b]8;;https://a.example\x1b\\a\x1b[?1049hb\x1b[?1049lc");
-    let opened = device.active_screen().viewport_row(ViewportLine(0))[0].hyperlink_id;
-    let after_round_trip = device.active_screen().viewport_row(ViewportLine(0))[1].hyperlink_id;
-    assert!(opened.is_some());
-    assert_eq!(after_round_trip, opened);
-    device.set_active_screen_for_test(ScreenKind::Alternate);
-    assert_eq!(device.active_screen_mut().pen_mut().hyperlink_id, None);
+fn a_hyperlink_open_on_the_primary_screen_does_not_reach_the_alternate_screen() {
+    let device = interpret(b"\x1b]8;;https://a.example\x1b\\a\x1b[?1049hb");
+    let row = device.active_screen().viewport_row(ViewportLine(0));
+    assert_eq!(row[0].c, 'b');
+    assert_eq!(row[0].hyperlink_id, None);
+}
+
+/// Asserts that returning from the alternate screen closes the hyperlink
+/// the primary screen had open rather than bringing it back, whichever
+/// alternate screen mode made the trip.
+///
+/// Case: a shell prints part of a link, a full-screen editor takes over
+/// the alternate screen, and the editor then exits back to the shell.
+#[test]
+fn returning_from_the_alternate_screen_closes_the_hyperlink() {
+    let round_trips: [(&[u8], &[u8]); 3] = [
+        (b"\x1b[?1049h", b"\x1b[?1049l"),
+        (b"\x1b[?1047h", b"\x1b[?1047l"),
+        (b"\x1b[?47h", b"\x1b[?47l"),
+    ];
+    for (enter, leave) in round_trips {
+        let chunk = [
+            b"\x1b]8;;https://a.example\x1b\\a".as_slice(),
+            enter,
+            leave,
+            b"c".as_slice(),
+        ]
+        .concat();
+        let device = interpret(&chunk);
+        let row = device.active_screen().viewport_row(ViewportLine(0));
+        assert!(row[0].hyperlink_id.is_some(), "entered with {enter:?}");
+        assert_eq!(row[1].c, 'c', "entered with {enter:?}");
+        assert_eq!(row[1].hyperlink_id, None, "entered with {enter:?}");
+    }
 }
 
 /// Asserts that a hyperlink survives the wrap at the right edge.

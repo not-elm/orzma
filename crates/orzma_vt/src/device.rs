@@ -26,6 +26,7 @@ pub(crate) struct DeviceState {
     palette: Palette,
     title: TitleState,
     hyperlinks: HyperlinkInterner,
+    active_hyperlink: Option<HyperlinkId>,
 }
 
 impl DeviceState {
@@ -44,6 +45,7 @@ impl DeviceState {
             palette: Palette::default(),
             title: TitleState::default(),
             hyperlinks: HyperlinkInterner::new(),
+            active_hyperlink: None,
         }
     }
 
@@ -117,8 +119,8 @@ impl DeviceState {
     /// reset that changes a color reports a full repaint even when
     /// neither screen was written.
     ///
-    /// The hyperlinks a program opened stay resolvable, though no link
-    /// is left open on either screen.
+    /// The hyperlinks a program opened stay resolvable, though the open
+    /// one is closed.
     ///
     /// # Control Functions
     ///
@@ -136,6 +138,7 @@ impl DeviceState {
         // instead.
         self.modes = VtModes::default();
         self.title = TitleState::default();
+        self.active_hyperlink = None;
         // NOTE: `hyperlinks` is deliberately not reset. Ids must never be
         // reused: the renderer keeps its own id-to-uri table and skips an
         // id it already knows, so a reused id would resolve to the uri it
@@ -151,6 +154,8 @@ impl DeviceState {
     ///
     /// Autowrap returns to enabled, which is the set rather than the
     /// reset state vt510.pdf p.277 Table 5-9 lists.
+    ///
+    /// The open hyperlink is closed.
     ///
     /// The modes it does not name are left as they are, and so are the
     /// cells and the cursor position on show, the hidden screen, the
@@ -168,6 +173,7 @@ impl DeviceState {
         self.modes.keypad_mode = KeypadMode::Numeric;
         self.set_auto_wrap(AutoWrap::Enabled);
         self.active_screen_mut().soft_reset();
+        self.active_hyperlink = None;
         self.reset_indexed_colors().then_some(DamageSpan::Full)
     }
 
@@ -303,26 +309,31 @@ impl DeviceState {
         self.palette.reset_all_indexed()
     }
 
-    /// Opens a hyperlink on the screen on show, so the cells printed
-    /// from now on carry it. A nonempty `id` joins this link to every
-    /// other open naming the same id and uri.
+    /// Opens a hyperlink, so the cells printed from now on carry it. A
+    /// nonempty `id` joins this link to every other open naming the same
+    /// id and uri.
     ///
     /// # Control Functions
     ///
     /// - `OSC 8 ; params ; URI`
     pub fn open_hyperlink(&mut self, id: Option<String>, uri: HyperlinkUri) {
-        let opened = self.hyperlinks.open(id, uri);
-        self.active_screen_mut().pen_mut().hyperlink_id = Some(opened);
+        self.active_hyperlink = Some(self.hyperlinks.open(id, uri));
     }
 
-    /// Closes the hyperlink on the screen on show, so the cells printed
-    /// from now on carry none. The cells already printed keep theirs.
+    /// Closes the open hyperlink, so the cells printed from now on carry
+    /// none. The cells already printed keep theirs.
     ///
     /// # Control Functions
     ///
     /// - `OSC 8 ; ;`
     pub fn close_hyperlink(&mut self) {
-        self.active_screen_mut().pen_mut().hyperlink_id = None;
+        self.active_hyperlink = None;
+    }
+
+    /// The hyperlink the cells printed from now on carry, or `None` when
+    /// no link is open.
+    pub fn active_hyperlink(&self) -> Option<HyperlinkId> {
+        self.active_hyperlink
     }
 
     /// The target `id` was opened for, or `None` for an id this device
@@ -469,21 +480,16 @@ impl DeviceState {
     /// damage of its own: the caller must stage `DamageSpan::Full` for
     /// the flip.
     ///
-    /// A flip onto the alternate screen closes whatever hyperlink its pen
-    /// still held, so a link one program left open cannot reach the next
-    /// one. The rest of that pen, its colours included, carries over.
+    /// A flip in either direction closes the open hyperlink. Each screen
+    /// keeps its own pen, colours included, across flips.
     pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
         self.modes.active_screen = to;
+        // NOTE: A program killed before it closed a link would otherwise
+        // make every cell the next program prints open that target on a
+        // click.
+        self.active_hyperlink = None;
         match to {
-            ScreenKind::Alternate => {
-                // NOTE: The alternate screen keeps its pen between uses,
-                // which is deliberate for colour but not for a link: a
-                // program killed before it closed one would make every
-                // cell the next full-screen program prints open that
-                // program's target on a click.
-                self.screens.alternate.pen_mut().hyperlink_id = None;
-                Vec::new()
-            }
+            ScreenKind::Alternate => Vec::new(),
             ScreenKind::Primary => {
                 self.screens.alternate.clear_selection();
                 self.screens.alternate.take_placements()
@@ -543,45 +549,63 @@ mod tests {
         device.mount_placement(PlacementSize { rows: 2, cols: 4 }, id)
     }
 
-    /// Asserts that opening a hyperlink puts its id on the active
-    /// screen's pen and leaves the other screen's pen alone.
+    /// Asserts that opening a hyperlink makes its id the active one.
     ///
-    /// Case: a program prints a link on the primary screen, then a
-    /// full-screen editor takes over the alternate screen.
+    /// Case: a build tool starts printing a clickable path.
     #[test]
-    fn a_hyperlink_opens_on_the_active_screen_only() {
+    fn opening_a_hyperlink_makes_it_active() {
         let mut device = device();
         device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
-        let opened = device.active_screen_mut().pen_mut().hyperlink_id;
-        assert!(opened.is_some());
-        device.set_active_screen_for_test(ScreenKind::Alternate);
-        assert_eq!(device.active_screen_mut().pen_mut().hyperlink_id, None);
+        assert!(device.active_hyperlink().is_some());
     }
 
-    /// Asserts that closing a hyperlink clears the pen.
+    /// Asserts that closing a hyperlink leaves none active.
     ///
     /// Case: a program finishes printing a link and emits the closing
     /// sequence before its next word.
     #[test]
-    fn closing_a_hyperlink_clears_the_pen() {
+    fn closing_a_hyperlink_leaves_none_active() {
         let mut device = device();
         device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
         device.close_hyperlink();
-        assert_eq!(device.active_screen_mut().pen_mut().hyperlink_id, None);
+        assert_eq!(device.active_hyperlink(), None);
     }
 
-    /// Asserts that a full reset closes the open hyperlink on both
-    /// screens.
+    /// Asserts that a full reset leaves no hyperlink active.
     ///
     /// Case: a program leaves a link open and the user runs `reset`.
     #[test]
-    fn a_reset_closes_the_hyperlink_on_both_screens() {
+    fn a_reset_leaves_no_hyperlink_active() {
         let mut device = device();
         device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
         let _ = device.reset();
-        assert_eq!(device.active_screen_mut().pen_mut().hyperlink_id, None);
-        device.set_active_screen_for_test(ScreenKind::Alternate);
-        assert_eq!(device.active_screen_mut().pen_mut().hyperlink_id, None);
+        assert_eq!(device.active_hyperlink(), None);
+    }
+
+    /// Asserts that a soft reset leaves no hyperlink active.
+    ///
+    /// Case: a program leaves a link open and a later `tput init` issues a
+    /// soft reset.
+    #[test]
+    fn a_soft_reset_leaves_no_hyperlink_active() {
+        let mut device = device();
+        device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        let _ = device.soft_reset();
+        assert_eq!(device.active_hyperlink(), None);
+    }
+
+    /// Asserts that a flip in either direction leaves no hyperlink active.
+    ///
+    /// Case: a shell leaves a link open when a full-screen editor starts,
+    /// and the editor leaves one open when it exits.
+    #[test]
+    fn a_screen_flip_in_either_direction_leaves_no_hyperlink_active() {
+        let mut device = device();
+        for to in [ScreenKind::Alternate, ScreenKind::Primary] {
+            device.open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+            let _ = device.switch_screen(to);
+            assert_eq!(device.active_hyperlink(), None, "flipped to {to:?}");
+        }
     }
 
     /// Asserts that a scroll moves the screen on show and leaves the
@@ -676,9 +700,12 @@ mod tests {
     fn the_two_screens_carry_independent_tab_stops() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device
-                .active_screen_mut()
-                .print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+            device.active_screen_mut().print(
+                c,
+                InsertReplaceMode::Replace,
+                AutoWrap::Enabled,
+                None,
+            );
         }
         device.active_screen_mut().set_horizontal_tab_stop();
 
@@ -704,16 +731,19 @@ mod tests {
     fn the_two_screens_carry_independent_checkpoints() {
         let mut device = DeviceState::new(GridSize { cols: 20, rows: 3 }, 10);
         for c in ['a', 'b', 'c'] {
-            device
-                .active_screen_mut()
-                .print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+            device.active_screen_mut().print(
+                c,
+                InsertReplaceMode::Replace,
+                AutoWrap::Enabled,
+                None,
+            );
         }
         device.active_screen_mut().save_checkpoint();
 
         device.set_active_screen_for_test(ScreenKind::Alternate);
         device
             .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
+            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
         device.active_screen_mut().restore_checkpoint();
         assert_eq!(device.active_screen().cursor_column(), GridColumn(0));
 
@@ -734,11 +764,11 @@ mod tests {
         let mut device = device();
         device
             .active_screen_mut()
-            .print('p', InsertReplaceMode::Replace, AutoWrap::Enabled);
+            .print('p', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
         device.set_active_screen_for_test(ScreenKind::Alternate);
         device
             .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
+            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
 
         let _ = device.reset();
 
@@ -783,7 +813,7 @@ mod tests {
         let mut device = device();
         device
             .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
+            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
 
         assert_eq!(device.reset(), Some(DamageSpan::Full));
     }
@@ -813,7 +843,7 @@ mod tests {
         device.set_active_screen_for_test(ScreenKind::Alternate);
         device
             .active_screen_mut()
-            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
+            .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
         device.set_active_screen_for_test(ScreenKind::Primary);
 
         assert_eq!(device.reset(), None);
@@ -1040,9 +1070,12 @@ mod tests {
     /// the deferred wrap.
     fn arm_deferred_wrap(device: &mut DeviceState) {
         for c in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'] {
-            device
-                .active_screen_mut()
-                .print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+            device.active_screen_mut().print(
+                c,
+                InsertReplaceMode::Replace,
+                AutoWrap::Enabled,
+                None,
+            );
         }
     }
 
@@ -1070,14 +1103,14 @@ mod tests {
 
         device
             .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
         assert_eq!(glyph_at(&device, 0, 7), 'z');
         assert_eq!(glyph_at(&device, 1, 0), ' ');
 
         device.set_active_screen_for_test(ScreenKind::Primary);
         device
             .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
         assert_eq!(glyph_at(&device, 0, 7), 'z');
         assert_eq!(glyph_at(&device, 1, 0), ' ');
     }
@@ -1100,7 +1133,7 @@ mod tests {
 
         device
             .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
         assert_eq!(glyph_at(&device, 1, 0), 'z');
     }
 
@@ -1118,7 +1151,7 @@ mod tests {
 
         device
             .active_screen_mut()
-            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled);
+            .print('z', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
         assert_eq!(glyph_at(&device, 1, 0), 'z');
     }
 
@@ -1287,7 +1320,7 @@ mod tests {
 
         device
             .active_screen_mut()
-            .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled);
+            .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
         let shown = device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(shown.c, 'q');
         assert_eq!(shown.fg, Color::DefaultForeground);
@@ -1295,7 +1328,7 @@ mod tests {
         device.set_active_screen_for_test(ScreenKind::Primary);
         device
             .active_screen_mut()
-            .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled);
+            .print('q', InsertReplaceMode::Replace, AutoWrap::Enabled, None);
         let hidden = device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(hidden.c, '─');
         assert_eq!(hidden.fg, Color::Indexed(1));

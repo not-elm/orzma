@@ -22,6 +22,7 @@ use crate::device::modes::{
     AutoWrap, CursorBlink, InsertReplaceMode, TextCursorEnable, TextCursorModes,
 };
 use crate::frame::damage::DamageSpan;
+use crate::hyperlink::HyperlinkId;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::character_sets::{
     CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
@@ -149,6 +150,9 @@ impl Screen {
     /// border replaces the last column, and an armed wrap, such as one a
     /// `DECRC` restored, is not resolved either.
     ///
+    /// `hyperlink` is the link the character is printed inside, or `None`
+    /// when no link is open.
+    ///
     /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
     /// the row the character landed on, or `None` when that row has
     /// scrolled out of the window.
@@ -157,6 +161,7 @@ impl Screen {
         c: char,
         insert_replace: InsertReplaceMode,
         auto_wrap: AutoWrap,
+        hyperlink: Option<HyperlinkId>,
     ) -> Option<DamageSpan> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
         let wrapping = auto_wrap.wraps();
@@ -174,7 +179,7 @@ impl Screen {
         if matches!(insert_replace, InsertReplaceMode::Insert) {
             self.insert_characters(1);
         }
-        self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph);
+        self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph, hyperlink);
         let at_right_edge = self.at_right_edge();
         if !at_right_edge {
             self.state.column.0 += 1;
