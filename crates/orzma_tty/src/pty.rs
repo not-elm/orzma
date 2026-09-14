@@ -69,11 +69,13 @@ impl Pty {
     /// holds the child until a cursor-position report arrives; the owner
     /// must write that reply through [`Self::write_all`].
     pub fn spawn(options: &SpawnOptions) -> OrzmaTtyResult<Self> {
-        let (pixel_width, pixel_height) = options.cell_px.window_pixels(options.cols, options.rows);
+        let (pixel_width, pixel_height) = options
+            .cell_px
+            .window_pixels(options.size.cols, options.size.rows);
         let pty_pair = native_pty_system()
             .openpty(PtySize {
-                rows: options.rows,
-                cols: options.cols,
+                rows: options.size.rows,
+                cols: options.size.cols,
                 pixel_width,
                 pixel_height,
             })
@@ -498,6 +500,7 @@ mod tests {
     use super::*;
     use crate::test_support::{FailingMaster, RecordingMaster};
     use crossbeam_channel::bounded;
+    use orzma_vt::prelude::GridSize;
     use std::io::Cursor;
     use std::io::sink;
     use std::sync::Arc;
@@ -602,8 +605,7 @@ mod tests {
     #[test]
     fn exit_is_reported_once_after_the_child_terminates() {
         let mut pty = Pty::spawn(&SpawnOptions {
-            cols: 80,
-            rows: 24,
+            size: GridSize::new(80, 24),
             cell_px: CellPixels::default(),
             shell: echo_program().into(),
             cwd: None,
@@ -654,8 +656,7 @@ mod tests {
     #[test]
     fn spawn_emits_chunk_and_exit_zero() {
         let mut pty = Pty::spawn(&SpawnOptions {
-            cols: 80,
-            rows: 24,
+            size: GridSize::new(80, 24),
             cell_px: CellPixels::default(),
             shell: echo_program().into(),
             cwd: None,
@@ -683,8 +684,7 @@ mod tests {
     #[test]
     fn the_final_output_precedes_the_exit_report() {
         let mut pty = Pty::spawn(&SpawnOptions {
-            cols: 80,
-            rows: 24,
+            size: GridSize::new(80, 24),
             cell_px: CellPixels::default(),
             shell: echo_program().into(),
             cwd: None,

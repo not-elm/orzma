@@ -63,8 +63,7 @@ impl PaneFactory for ShellFactory {
         OrzmaTty::spawn(
             vt,
             SpawnOptions {
-                cols: size.cols,
-                rows: size.rows,
+                size,
                 cell_px,
                 shell: self.shell.clone(),
                 cwd,
