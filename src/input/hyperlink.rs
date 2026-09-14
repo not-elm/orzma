@@ -11,7 +11,7 @@ use crate::surface::geometry::{cell_at_local, cell_pitch_phys, phys_to_pane_loca
 use bevy::ecs::entity::Entity;
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
-use bevy::input::mouse::MouseMotion;
+use bevy::input::mouse::{MouseButtonInput, MouseMotion};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
@@ -34,6 +34,7 @@ impl Plugin for HyperlinkInputPlugin {
                     .run_if(
                         on_message::<MouseMotion>
                             .or_else(on_message::<CursorMoved>)
+                            .or_else(on_message::<MouseButtonInput>)
                             .or_else(on_message::<KeyboardInput>),
                     )
                     .in_set(InputPhase::Hover),
@@ -51,8 +52,7 @@ pub(crate) fn link_modifier_held(mods: &Modifiers) -> bool {
     }
 }
 
-/// Every mouse-enabled `OrzmaTerminal` surface the hover path
-/// hit-tests.
+/// Every mouse-enabled `OrzmaTerminal` surface.
 type HoverSurfaces<'w, 's> = Query<
     'w,
     's,
