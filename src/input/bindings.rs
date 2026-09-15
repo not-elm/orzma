@@ -1,11 +1,12 @@
 //! Host-owned mouse input policy, populated from `orzma_configs` at startup.
 
 use bevy::prelude::*;
+use orzma_tty::prelude::WheelConfig;
 use std::time::Duration;
 
 /// Which modifier activates "fine" (1 line per notch) wheel scrolling.
-/// On macOS, Shift+wheel becomes horizontal scroll at the OS level, so
-/// Shift never reaches the app as vertical `y`.
+///
+/// On macOS, `Shift` never activates fine scrolling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum FineModifier {
     /// Shift key activates fine scrolling.
@@ -33,38 +34,6 @@ pub(crate) struct ButtonConfig {
         )
     )]
     pub max_protocol_events_per_frame: u32,
-}
-
-/// Host-side wheel-routing policy. `lines_per_notch` and `fine_lines` drive
-/// the viewport-scroll computation; `max_protocol_events_per_frame` is
-/// currently unused.
-///
-/// TODO: reintroduce mouse-wheel PTY reporting against `orzma_tty`.
-#[derive(Clone, Debug)]
-pub(crate) struct WheelConfig {
-    /// Lines scrolled per notch in the scrollback path.
-    pub lines_per_notch: u32,
-    /// Lines scrolled per notch when the fine-scroll modifier is held.
-    pub fine_lines: u32,
-    /// Upper bound on PTY-bound wheel reports emitted per dispatch call.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read again when sub-project C ports wheel reporting"
-        )
-    )]
-    pub max_protocol_events_per_frame: u32,
-}
-
-impl Default for WheelConfig {
-    fn default() -> Self {
-        Self {
-            lines_per_notch: 3,
-            fine_lines: 1,
-            max_protocol_events_per_frame: 8,
-        }
-    }
 }
 
 /// Host-supplied mouse policy. `Default` is a working spawn-and-go config; the

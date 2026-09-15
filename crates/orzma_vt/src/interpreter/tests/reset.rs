@@ -71,3 +71,13 @@ fn the_chunk_after_a_reset_eviction_raises_nothing() {
     let output = session.feed(b"a");
     assert!(output.signals.is_empty());
 }
+
+/// Asserts that `ESC c` returns alternate scroll to its enabled default.
+///
+/// Case: a pager turned alternate scroll off and then crashed, so the
+/// user runs `reset` and opens the pager again.
+#[test]
+fn the_seven_bit_reset_enables_alternate_scroll_again() {
+    let device = interpret(b"\x1b[?1007l\x1bc");
+    assert_eq!(device.modes().alternate_scroll, AlternateScroll::Enabled);
+}

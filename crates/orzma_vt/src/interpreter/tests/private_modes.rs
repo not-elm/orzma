@@ -10,18 +10,18 @@ use super::*;
 /// startup and turns them off again on the way out.
 #[test]
 fn the_flag_private_modes_reach_their_fields() {
-    let device = interpret(b"\x1b[?1;1004;1007;2004h");
+    let device = interpret(b"\x1b[?1007l\x1b[?1;1004;1007;2004h");
     let modes = device.modes();
     assert!(modes.app_cursor);
     assert!(modes.focus_in_out);
-    assert!(modes.alternate_scroll);
+    assert_eq!(modes.alternate_scroll, AlternateScroll::Enabled);
     assert!(modes.bracketed_paste);
 
     let device = interpret(b"\x1b[?1;1004;1007;2004h\x1b[?1;1004;1007;2004l");
     let modes = device.modes();
     assert!(!modes.app_cursor);
     assert!(!modes.focus_in_out);
-    assert!(!modes.alternate_scroll);
+    assert_eq!(modes.alternate_scroll, AlternateScroll::Disabled);
     assert!(!modes.bracketed_paste);
 }
 
