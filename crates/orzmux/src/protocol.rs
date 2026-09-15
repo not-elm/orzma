@@ -4,7 +4,7 @@
 use orzma_tty::prelude::{CellPixels, MouseReport, TerminalKey, TerminalModifiers};
 use orzma_vt::prelude::{
     CellSide, Frame, GridColumn, GridPoint, GridSize, InstanceId, PlacementSize, ScreenLine,
-    Scroll, SelectionKind, VtSignal,
+    Scroll, SelectionKind, VtModes, VtSignal,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -329,6 +329,14 @@ pub enum OrzmuxEvent {
         pane: PaneId,
         /// The signal itself.
         signal: VtSignal,
+    },
+    /// A pane's VT modes changed since the last report for that pane, or
+    /// since the pane spawned when there has been none.
+    Modes {
+        /// The pane whose modes changed.
+        pane: PaneId,
+        /// The pane's modes after the change.
+        modes: VtModes,
     },
     /// Exactly one per `CopySelection`; `text` is `None` when the target
     /// could not be resolved or had no selection.

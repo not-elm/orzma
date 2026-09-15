@@ -4,7 +4,7 @@
 use crate::layout::CurrentLayout;
 use crate::registry::PaneRegistry;
 use crate::signals::{
-    TtyChildExitSignal, TtyFrameSignal, TtySelectionTextSignal, trigger_vt_signal,
+    TtyChildExitSignal, TtyFrameSignal, TtyModesSignal, TtySelectionTextSignal, trigger_vt_signal,
 };
 use crate::{OrzmuxConnection, OrzmuxPane, OrzmuxSystems};
 use bevy::prelude::*;
@@ -93,6 +93,10 @@ fn apply_event(
             Some(terminal) => trigger_vt_signal(commands, terminal, signal),
             None => tracing::debug!(?pane, "signal for an unknown pane dropped"),
         },
+        OrzmuxEvent::Modes { pane, modes } => match registry.entity_of(pane) {
+            Some(terminal) => commands.trigger(TtyModesSignal { terminal, modes }),
+            None => tracing::debug!(?pane, "modes for an unknown pane dropped"),
+        },
         OrzmuxEvent::SelectionText { text } => commands.trigger(TtySelectionTextSignal { text }),
         OrzmuxEvent::PaneClosed { pane, reason } => {
             if let Some(entity) = registry.panes.remove(&pane) {
@@ -120,7 +124,7 @@ mod tests {
     use crate::requests::test_support::app_with_channels;
     use crate::signals::TtyFrameSignal;
     use crossbeam_channel::Sender;
-    use orzma_vt::prelude::{Cursor, DisplayOffset, GridSize};
+    use orzma_vt::prelude::{Cursor, DisplayOffset, GridSize, MouseTracking, VtModes};
     use orzmux::prelude::{CloseReason, CommandSeq, Layout, PaneRect, RequestId};
 
     #[derive(Resource, Default)]
@@ -128,6 +132,7 @@ mod tests {
         ended: usize,
         spawn_failed: Vec<(Entity, String)>,
         frames: Vec<Entity>,
+        modes: Vec<(Entity, VtModes)>,
         texts: Vec<Option<String>>,
         layout_changes: usize,
     }
@@ -141,6 +146,9 @@ mod tests {
             })
             .add_observer(|ev: On<TtyFrameSignal>, mut seen: ResMut<Seen>| {
                 seen.frames.push(ev.terminal)
+            })
+            .add_observer(|ev: On<TtyModesSignal>, mut seen: ResMut<Seen>| {
+                seen.modes.push((ev.terminal, ev.modes))
             })
             .add_observer(|ev: On<TtySelectionTextSignal>, mut seen: ResMut<Seen>| {
                 seen.texts.push(ev.text.clone());
@@ -318,6 +326,33 @@ mod tests {
         assert!(app.world().get_entity(entity).is_err());
         assert!(app.world().get_entity(child).is_err());
         assert!(app.world().resource::<PaneRegistry>().panes.is_empty());
+    }
+
+    /// Asserts that a `Modes` event reaches its pane's entity as a
+    /// `TtyModesSignal` carrying the reported modes.
+    ///
+    /// Case: nvim starts in a pane and turns on button-event tracking, and
+    /// the backend reports the pane's new modes.
+    #[test]
+    fn a_modes_event_reaches_its_pane_as_a_signal() {
+        let (mut app, events) = app();
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<PaneRegistry>()
+            .panes
+            .insert(PaneId(1), entity);
+        let modes = VtModes {
+            mouse_tracking: MouseTracking::Drag,
+            ..VtModes::default()
+        };
+        events
+            .send(OrzmuxEvent::Modes {
+                pane: PaneId(1),
+                modes,
+            })
+            .unwrap();
+        app.update();
+        assert_eq!(app.world().resource::<Seen>().modes, vec![(entity, modes)]);
     }
 
     /// Asserts that `SelectionText` is forwarded as
