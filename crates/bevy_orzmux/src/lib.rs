@@ -5,6 +5,7 @@
 use crate::{
     drain::DrainPlugin,
     layout::LayoutPlugin,
+    modes::{TtyModes, TtyModesPlugin},
     requests::OrzmaEventRequestPlugin,
     title::{TtyTitle, TtyTitlePlugin},
 };
@@ -13,6 +14,7 @@ use orzmux::prelude::{OrzmuxClient, PaneId};
 
 mod drain;
 mod layout;
+mod modes;
 mod registry;
 mod requests;
 mod signals;
@@ -26,6 +28,7 @@ pub mod prelude {
             OrzmuxActivePaneChanged, OrzmuxPaneContainer, OrzmuxSeparator, PaneGeometry,
             absolute_px_node,
         },
+        modes::TtyModes,
         registry::PaneRegistry,
         requests::*,
         signals::*,
@@ -50,7 +53,7 @@ pub struct OrzmuxConnection(pub OrzmuxClient);
 /// The backend pane an entity mirrors. Present from `PaneOpened` until
 /// the entity despawns on `PaneClosed`.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-#[require(TtyTitle)]
+#[require(TtyTitle, TtyModes)]
 pub struct OrzmuxPane(pub PaneId);
 
 /// Ordering slots for the bridge's `Update` systems: `Drain` runs before
@@ -63,8 +66,8 @@ pub enum OrzmuxSystems {
     ApplyLayout,
 }
 
-/// Mirrors the backend's panes, layout, and titles into the app, and
-/// forwards the host's requests to the backend.
+/// Mirrors the backend's panes, layout, titles, and modes into the app,
+/// and forwards the host's requests to the backend.
 pub struct OrzmuxPlugin;
 
 impl Plugin for OrzmuxPlugin {
@@ -77,6 +80,7 @@ impl Plugin for OrzmuxPlugin {
             DrainPlugin,
             LayoutPlugin,
             OrzmaEventRequestPlugin,
+            TtyModesPlugin,
             TtyTitlePlugin,
         ));
     }

@@ -3,7 +3,7 @@
 
 use orzma_tty::prelude::{OrzmaTty, OrzmaTtyResult};
 use orzma_tty::{CellPixels, EnvKey, EnvValue, SpawnOptions};
-use orzma_vt::prelude::{GridSize, OrzmaVt};
+use orzma_vt::prelude::{GridSize, OrzmaVt, VtModes};
 #[cfg(windows)]
 use std::path::Path;
 use std::path::PathBuf;
@@ -16,6 +16,9 @@ pub(crate) struct Pane {
     /// The last directory the shell reported through OSC 7, or the
     /// directory the pane was spawned in until it reports one.
     pub(crate) cwd: Option<PathBuf>,
+    /// The modes last reported to the GUI, or [`VtModes::default`] until
+    /// the first report.
+    pub(crate) last_modes: VtModes,
 }
 
 /// Spawns terminals for the backend.
