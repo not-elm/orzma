@@ -289,11 +289,17 @@ impl<V: Vt> OrzmaTty<V> {
     /// Encodes one mouse report in the terminal's active mouse encoding
     /// and writes it to the PTY.
     ///
+    /// Writes nothing while the VT has no mouse tracking level in force.
+    ///
     /// Does not snap a scrolled-back viewport: the report's cell
     /// coordinates are the ones the host computed against the viewport on
     /// screen.
     pub fn send_mouse(&mut self, report: MouseReport) -> OrzmaTtyResult {
-        let sequence = report.encode(self.vt.modes().mouse_encoding);
+        let modes = self.vt.modes();
+        if !modes.mouse_reporting_active() {
+            return Ok(());
+        }
+        let sequence = report.encode(modes.mouse_encoding);
         self.pty.write_all(&sequence)
     }
 
@@ -512,6 +518,7 @@ impl<V: Vt> OrzmaTty<V> {
 mod tests {
     use super::*;
     use crate::error::OrzmaTtyError;
+    use crate::input::{CellCoord, MouseButton, MouseReportKind, ProtocolModifiers};
     use crate::test_support::{CaptureSink, FailingMaster, FailingSink, FakeVt};
     use crossbeam_channel::{Sender, unbounded};
 
@@ -1063,6 +1070,35 @@ mod tests {
         term.send_key(&TerminalKey::ArrowUp, &TerminalModifiers::default())
             .expect("send_key");
         assert_eq!(sink.contents(), b"\x1b[A");
+    }
+
+    /// Asserts that `send_mouse` writes the encoded report while a mouse
+    /// tracking level is in force, and writes nothing while none is.
+    ///
+    /// Case: nvim exits, dropping DECRST 1002 and 1006, while the user is
+    /// still spinning the wheel, so a wheel report the GUI already routed
+    /// against the pane's stale tracking modes reaches `send_mouse` right
+    /// after.
+    #[test]
+    fn send_mouse_only_writes_while_a_tracking_level_is_in_force() {
+        let report = MouseReport {
+            button: MouseButton::WheelUp,
+            kind: MouseReportKind::Press,
+            cell: CellCoord { col: 1, row: 1 },
+            mods: ProtocolModifiers::default(),
+        };
+
+        let (mut term, sink) = detached_term();
+        term.vt.modes.mouse_tracking = MouseTracking::Drag;
+        term.vt.modes.mouse_encoding = MouseEncoding::Sgr;
+        assert_eq!(sink.contents(), b"", "construction must write nothing");
+        term.send_mouse(report).expect("send_mouse");
+        assert_eq!(sink.contents(), b"\x1b[<64;1;1M");
+
+        let (mut term, sink) = detached_term();
+        assert_eq!(sink.contents(), b"", "construction must write nothing");
+        term.send_mouse(report).expect("send_mouse");
+        assert_eq!(sink.contents(), b"");
     }
 
     /// Asserts that paste encoding consults the VT-reported bracketed
