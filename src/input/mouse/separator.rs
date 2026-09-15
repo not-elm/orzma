@@ -323,7 +323,7 @@ mod tests {
     use bevy::ecs::message::Messages;
     use bevy::input::mouse::MouseWheel;
     use bevy::window::WindowResolution;
-    use bevy_orzma_tty_renderer::schema::TerminalGrid;
+    use bevy_orzma_tty_renderer::schema::TerminalView;
     use orzma_tty::CellPixels;
 
     const SCALE: f32 = 1.0;
@@ -571,7 +571,7 @@ mod tests {
                 ..ComputedNode::DEFAULT
             },
             UiGlobalTransform::from_xy(phys.x / 2.0, phys.y / 2.0),
-            TerminalGrid {
+            TerminalView {
                 cols: 100,
                 rows: 25,
                 ..default()

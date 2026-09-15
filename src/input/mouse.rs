@@ -18,7 +18,7 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::CursorMoved;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
-use bevy_orzma_tty_renderer::schema::TerminalGrid;
+use bevy_orzma_tty_renderer::schema::{TerminalCells, TerminalView};
 use bevy_orzmux::prelude::{CellSide, GridPoint, SelectionKind};
 use orzma_tty::prelude::CellCoord;
 
@@ -174,7 +174,8 @@ type TerminalSurfaces<'w, 's> = Query<
         &'static ComputedNode,
         &'static ComputedStackIndex,
         &'static UiGlobalTransform,
-        &'static TerminalGrid,
+        &'static TerminalView,
+        &'static TerminalCells,
     ),
     (With<OrzmaTerminal>, Without<MouseDisabled>),
 >;
@@ -193,7 +194,7 @@ fn hit_candidates<'a>(
 > {
     terminals
         .iter()
-        .map(|(e, node, stack, transform, _)| (e, node, stack, transform))
+        .map(|(e, node, stack, transform, _, _)| (e, node, stack, transform))
 }
 
 /// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to
@@ -206,11 +207,13 @@ fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
 }
 
 /// Read-only hit-test context for one gather run: the terminal node
-/// geometry, cell pitch, and grid dimensions.
+/// geometry, cell pitch, the view's dimensions, and the cells a
+/// hyperlink lookup resolves against.
 struct CellContext<'a> {
     node: &'a ComputedNode,
     transform: &'a UiGlobalTransform,
-    grid: &'a TerminalGrid,
+    view: &'a TerminalView,
+    cells: &'a TerminalCells,
     cell_w: f32,
     cell_h: f32,
 }
@@ -223,8 +226,8 @@ impl CellContext<'_> {
             cursor_phys,
             self.cell_w,
             self.cell_h,
-            self.grid.cols,
-            self.grid.rows,
+            self.view.cols,
+            self.view.rows,
         )
     }
 }
@@ -237,11 +240,12 @@ fn cell_context_for<'a>(
     cell_w: f32,
     cell_h: f32,
 ) -> Option<CellContext<'a>> {
-    let (_, node, _, transform, grid) = terminals.get(target).ok()?;
+    let (_, node, _, transform, view, cells) = terminals.get(target).ok()?;
     Some(CellContext {
         node,
         transform,
-        grid,
+        view,
+        cells,
         cell_w,
         cell_h,
     })

@@ -29,7 +29,7 @@ use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzma_tty_renderer::TerminalFontInitSet;
 use bevy_orzma_tty_renderer::TerminalFontSize;
 use bevy_orzma_tty_renderer::material::TerminalMaterialSystems;
-use bevy_orzma_tty_renderer::prelude::TerminalGrid;
+use bevy_orzma_tty_renderer::prelude::{TerminalCells, TerminalView};
 use layout::{CaretVisual, PlacedCell, compute_overlay_layout};
 
 /// Adds the IME preedit overlay.
@@ -154,7 +154,12 @@ fn position_ime_overlay(
     ui_font: Res<TerminalUiFont>,
     font_size: Res<TerminalFontSize>,
     focused: Query<Entity, With<KeyboardFocused>>,
-    anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
+    anchors: Query<(
+        &ComputedNode,
+        &UiGlobalTransform,
+        &TerminalView,
+        &TerminalCells,
+    )>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
     background: Query<Entity, With<ImeOverlayNode>>,
     underline: Query<Entity, With<ImeUnderline>>,
@@ -196,7 +201,7 @@ fn position_ime_overlay(
         );
         return;
     };
-    let Ok((node, ui_xform, grid)) = anchors.get(entity) else {
+    let Ok((node, ui_xform, view, cells)) = anchors.get(entity) else {
         hide_all_overlay_parts(
             &mut nodes,
             bg_entity,
@@ -223,7 +228,7 @@ fn position_ime_overlay(
     // scale factor would make every cell metric inf/NaN and fling the overlay
     // off-screen during composition.
     let scale = window.resolution.scale_factor().max(f32::EPSILON);
-    let cursor_cell = grid.cursor_viewport_cell_or_top();
+    let cursor_cell = view.cursor_viewport_cell_or_top();
 
     let layout = compute_overlay_layout(
         comp.text(),
@@ -245,7 +250,7 @@ fn position_ime_overlay(
     );
     set_node_display(&mut nodes, bg_entity, Display::Flex);
     if let Ok(mut bg) = overlay_bg.single_mut() {
-        let palette_bg = grid.palette.background;
+        let palette_bg = cells.palette.background;
         let occluding = Color::srgb_u8(palette_bg.r, palette_bg.g, palette_bg.b);
         if bg.0 != occluding {
             bg.0 = occluding;
@@ -390,29 +395,29 @@ fn apply_caret_visual(
     }
 }
 
-/// Sets `TerminalGrid.suppress_cursor = true` on the keyboard-focused
+/// Sets `TerminalView.suppress_cursor = true` on the keyboard-focused
 /// terminal surface while IME composition is active; clears it on all
-/// other grids. The suppression takes effect the same frame the IME caret
+/// other views. The suppression takes effect the same frame the IME caret
 /// appears, and clears the same frame composition ends.
 ///
 /// If there is no keyboard-focused surface while composition is active (e.g., a
-/// race window between focus loss and `Ime::Disabled`), every grid gets
+/// race window between focus loss and `Ime::Disabled`), every view gets
 /// `suppress_cursor = false`. The safe default is "show cursors" rather
 /// than blanket-hide.
 fn suppress_terminal_cursor_during_ime(
     state: Res<ImeState>,
     focused: Query<Entity, With<KeyboardFocused>>,
-    mut grids: Query<(Entity, &mut TerminalGrid)>,
+    mut views: Query<(Entity, &mut TerminalView)>,
 ) {
     let focused_surface = if state.is_composing() {
         resolve_focused_surface(&focused)
     } else {
         None
     };
-    for (entity, mut grid) in &mut grids {
+    for (entity, mut view) in &mut views {
         let want = Some(entity) == focused_surface;
-        if grid.suppress_cursor != want {
-            grid.suppress_cursor = want;
+        if view.suppress_cursor != want {
+            view.suppress_cursor = want;
         }
     }
 }
@@ -678,9 +683,9 @@ mod tests {
 
         let focused = app
             .world_mut()
-            .spawn((OrzmaTerminal, KeyboardFocused, TerminalGrid::default()))
+            .spawn((OrzmaTerminal, KeyboardFocused, TerminalView::default()))
             .id();
-        let other = app.world_mut().spawn(TerminalGrid::default()).id();
+        let other = app.world_mut().spawn(TerminalView::default()).id();
 
         app.world_mut()
             .run_system_once(suppress_terminal_cursor_during_ime)
@@ -688,14 +693,14 @@ mod tests {
 
         assert!(
             app.world()
-                .get::<TerminalGrid>(focused)
+                .get::<TerminalView>(focused)
                 .unwrap()
                 .suppress_cursor,
             "the focused terminal must suppress its cursor while composing"
         );
         assert!(
             !app.world()
-                .get::<TerminalGrid>(other)
+                .get::<TerminalView>(other)
                 .unwrap()
                 .suppress_cursor,
             "an unfocused terminal must not suppress its cursor"
@@ -789,8 +794,11 @@ mod tests {
                 ..ComputedNode::DEFAULT
             },
             UiGlobalTransform::from_xy(400.0, 300.0),
-            TerminalGrid {
+            TerminalView {
                 cursor: Some(Cursor::default()),
+                ..default()
+            },
+            TerminalCells {
                 palette: Palette {
                     background: Rgb {
                         r: 10,
@@ -799,7 +807,7 @@ mod tests {
                     },
                     ..Palette::default()
                 },
-                ..TerminalGrid::default()
+                ..default()
             },
         ));
 
@@ -872,13 +880,16 @@ mod tests {
                 ..ComputedNode::DEFAULT
             },
             UiGlobalTransform::from_xy(400.0, 300.0),
-            TerminalGrid {
+            TerminalView {
                 cursor: Some(Cursor::default()),
+                ..default()
+            },
+            TerminalCells {
                 palette: Palette {
                     background: Rgb { r: 0, g: 0, b: 0 },
                     ..Palette::default()
                 },
-                ..TerminalGrid::default()
+                ..default()
             },
         ));
 
@@ -1019,13 +1030,16 @@ mod tests {
                 ..ComputedNode::DEFAULT
             },
             UiGlobalTransform::from_xy(400.0, 300.0),
-            TerminalGrid {
+            TerminalView {
                 cursor: Some(Cursor::default()),
+                ..default()
+            },
+            TerminalCells {
                 palette: Palette {
                     background: Rgb { r: 0, g: 0, b: 0 },
                     ..Palette::default()
                 },
-                ..TerminalGrid::default()
+                ..default()
             },
         ));
 
@@ -1140,13 +1154,16 @@ mod tests {
                 ..ComputedNode::DEFAULT
             },
             UiGlobalTransform::from_xy(400.0, 300.0),
-            TerminalGrid {
+            TerminalView {
                 cursor: Some(Cursor::default()),
+                ..default()
+            },
+            TerminalCells {
                 palette: Palette {
                     background: Rgb { r: 0, g: 0, b: 0 },
                     ..Palette::default()
                 },
-                ..TerminalGrid::default()
+                ..default()
             },
         ));
 
