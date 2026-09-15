@@ -74,6 +74,9 @@ fn dispatch_mouse_wheel(
         return;
     };
     gesture_acc.retarget(wt.target);
+    if wheel.is_empty() {
+        return;
+    }
     let held = current_terminal_modifiers(&keys);
     let fold_shift = SHIFT_WHEEL_ARRIVES_HORIZONTAL && held.shift;
     let (up, right) = accumulate_wheel(&mut gesture_acc, wheel.read(), wt.cell_h, fold_shift, &cfg);
