@@ -107,16 +107,13 @@ impl Pty {
         let child_killer = child.clone_killer();
         drop(pty_pair.slave);
 
-        let (reader, writer) = match master_pipes(pty_pair.master.as_ref()) {
+        let pipes = master_pipes(pty_pair.master.as_ref())
+            .map_err(OrzmaTtyError::PtyPipe)
+            .and_then(|(reader, writer)| {
+                WriteQueue::spawn(writer, Self::WRITE_QUEUE_CAPACITY).map(|writes| (reader, writes))
+            });
+        let (reader, writes) = match pipes {
             Ok(pipes) => pipes,
-            Err(e) => {
-                kill_and_reap(child);
-                return Err(OrzmaTtyError::PtyPipe(e));
-            }
-        };
-
-        let writes = match WriteQueue::spawn(writer, Self::WRITE_QUEUE_CAPACITY) {
-            Ok(writes) => writes,
             Err(e) => {
                 kill_and_reap(child);
                 return Err(e);
