@@ -1,13 +1,14 @@
-//! Mouse-wheel dispatch for every `OrzmaTerminal` surface: scrollback
-//! with sub-notch accumulation and dominant-axis lock. Vertical motion
-//! scrolls the viewport; horizontal motion is ignored.
-//!
-//! TODO: reintroduce app-forward wheel-reporting against `orzma_tty`.
+//! Mouse-wheel dispatch for every `OrzmaTerminal` surface: sub-notch
+//! accumulation and a dominant-axis lock, then routing by the terminal's
+//! modes to mouse reports, cursor keys, or the scrollback.
 
-use super::{TerminalSurfaces, cell_dims, hit_candidates, on_any_mouse_message};
+use super::{
+    TerminalSurfaces, cell_context_for, cell_dims, hit_candidates, on_any_mouse_message,
+    protocol_mods,
+};
 use crate::action::terminal::TerminalViewportScroll;
 use crate::input::InputPhase;
-use crate::input::bindings::{FineModifier, OrzmaMouseConfig, WheelConfig};
+use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
 use crate::input::keyboard::current_terminal_modifiers;
 use crate::input::mouse::gesture::{
     WheelAccumulator, accumulate_notches, lock_dominant_axis, wheel_delta_cells,
@@ -17,7 +18,11 @@ use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
-use orzma_tty::prelude::TerminalModifiers;
+use bevy_orzmux::prelude::{RequestTtyKeyInput, RequestTtyMouseInput, TtyModes};
+use orzma_tty::prelude::{
+    CellCoord, MouseReport, MouseReportKind, ProtocolModifiers, TerminalModifiers, WheelDecision,
+    WheelModifiers,
+};
 
 /// Adds mouse-wheel dispatch and its notch-accumulator resource.
 pub(super) struct MouseWheelInputPlugin;
@@ -33,23 +38,32 @@ impl Plugin for MouseWheelInputPlugin {
     }
 }
 
-/// A resolved wheel target for one frame: the surface entity and the cell
-/// height (for delta scaling).
+/// Whether the OS delivers a discrete Shift+wheel as horizontal travel,
+/// so a Shift-held frame's horizontal travel is folded onto the vertical
+/// axis.
+const SHIFT_WHEEL_ARRIVES_HORIZONTAL: bool = cfg!(target_os = "macos");
+
+/// A resolved wheel target for one frame: the surface entity, the cursor
+/// that hit it, and the cell pitch.
 struct WheelTarget {
     target: Entity,
+    cursor_phys: Vec2,
+    cell_w: f32,
     cell_h: f32,
 }
 
-/// Routes this frame's wheel messages to the terminal under the cursor.
+/// Routes this frame's wheel notches to the terminal under the cursor.
 ///
-/// The horizontal axis is still accumulated so the dominant-axis lock can
-/// stop a horizontal-dominant gesture from leaking a vertical scroll, but
-/// it is never routed anywhere.
+/// Vertical notches become mouse reports while the application tracks the
+/// mouse and Shift is not held, cursor keys while alternate scroll is in
+/// effect, and a viewport scroll otherwise. Horizontal notches become
+/// mouse reports only.
 fn dispatch_mouse_wheel(
     mut commands: Commands,
     mut gesture_acc: ResMut<WheelAccumulator>,
     mut wheel: MessageReader<MouseWheel>,
     terminals: TerminalSurfaces,
+    pane_modes: Query<&TtyModes>,
     cfg: Res<OrzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -60,8 +74,24 @@ fn dispatch_mouse_wheel(
         return;
     };
     gesture_acc.retarget(wt.target);
-    let (raw_v, _raw_h) = accumulate_wheel(&mut gesture_acc, &mut wheel, wt.cell_h, &cfg);
-    apply_vertical_scroll(&mut commands, wt.target, raw_v, &keys, &cfg);
+    let held = current_terminal_modifiers(&keys);
+    let fold_shift = SHIFT_WHEEL_ARRIVES_HORIZONTAL && held.shift;
+    let (up, right) = accumulate_wheel(&mut gesture_acc, &mut wheel, wt.cell_h, fold_shift, &cfg);
+    if up == 0 && right == 0 {
+        return;
+    }
+    let modes = pane_modes.get(wt.target).copied().unwrap_or_default().0;
+    let mods = wheel_modifiers(&held, cfg.fine_modifier, SHIFT_WHEEL_ARRIVES_HORIZONTAL);
+    let cell = cell_context_for(&terminals, wt.target, wt.cell_w, wt.cell_h)
+        .and_then(|ctx| ctx.hit(wt.cursor_phys))
+        .map(|(cell, _)| cell);
+    let report_mods = protocol_mods(&keys);
+    for decision in [
+        WheelDecision::route(modes, up, mods, &cfg.wheel),
+        WheelDecision::route_horizontal(modes, right, mods, &cfg.wheel),
+    ] {
+        trigger_wheel_decision(&mut commands, wt.target, decision, cell, report_mods);
+    }
 }
 
 /// Resolves the focused window's cursor to the topmost terminal surface
@@ -75,23 +105,31 @@ fn resolve_wheel_target(
     if !window.focused || terminals.is_empty() {
         return None;
     }
-    let (_, cell_h) = cell_dims(metrics);
+    let (cell_w, cell_h) = cell_dims(metrics);
     let cursor_phys = window
         .cursor_position()
         .map(|c| c * window.scale_factor())?;
     let target = topmost_surface_at(cursor_phys, hit_candidates(terminals))?;
-    Some(WheelTarget { target, cell_h })
+    Some(WheelTarget {
+        target,
+        cursor_phys,
+        cell_w,
+        cell_h,
+    })
 }
 
-/// Folds this frame's wheel deltas, applies the dominant-axis lock, and
-/// accumulates whole notches per axis. Returns `(raw_v, raw_h)`.
+/// Folds this frame's wheel deltas, moves a Shift-held frame's horizontal
+/// travel onto the vertical axis when `fold_shift` is set (clearing the
+/// horizontal residual), applies the dominant-axis lock, and accumulates
+/// whole notches per axis. Returns `(up, right)` notches.
 fn accumulate_wheel(
     gesture_acc: &mut WheelAccumulator,
     wheel: &mut MessageReader<MouseWheel>,
     cell_h: f32,
+    fold_shift: bool,
     cfg: &OrzmaMouseConfig,
 ) -> (i32, i32) {
-    let (delta_v, delta_h) = wheel.read().fold((0.0f32, 0.0f32), |(v, h), ev| {
+    let (delta_up, delta_x) = wheel.read().fold((0.0f32, 0.0f32), |(v, h), ev| {
         // NOTE: BOTH axes divide by cell_h (line height), not cell_w, so a given
         // finger distance yields the same notch rate horizontally and vertically.
         // Using the narrower cell_w (advance_phys, ~half of line_height_phys) made
@@ -101,57 +139,62 @@ fn accumulate_wheel(
             h + wheel_delta_cells(ev.unit, ev.x, cell_h),
         )
     });
+    let (delta_up, delta_x) = fold_shift_wheel(delta_up, delta_x, fold_shift);
+    if fold_shift {
+        gesture_acc.residual_cells_h = 0.0;
+    }
     // NOTE: do NOT also clear the suppressed axis's residual here. The lock
     // zeros the off-axis delta before accumulation, so it adds 0 and cannot leak
     // a notch; clearing would instead wipe genuine sub-notch progress on a
     // deliberate horizontal swipe whose slow frames dip below the lock ratio.
-    let (delta_v, delta_h) = lock_dominant_axis(delta_v, delta_h, cfg.axis_lock_ratio);
-    let raw_v = accumulate_notches(
+    let (delta_up, delta_right) =
+        lock_dominant_axis(delta_up, rightward(delta_x), cfg.axis_lock_ratio);
+    let up = accumulate_notches(
         &mut gesture_acc.residual_cells,
-        delta_v,
+        delta_up,
         cfg.cells_per_notch,
     );
-    let raw_h = accumulate_notches(
+    let right = accumulate_notches(
         &mut gesture_acc.residual_cells_h,
-        delta_h,
+        delta_right,
         cfg.cells_per_notch,
     );
-    (raw_v, raw_h)
+    (up, right)
 }
 
-/// Applies the vertical axis of one wheel dispatch: a non-zero notch
-/// count always scrolls the target's viewport by `scroll_lines`.
-/// Horizontal notches are never routed.
-fn apply_vertical_scroll(
-    commands: &mut Commands,
-    target: Entity,
-    raw_v: i32,
-    keys: &ButtonInput<KeyCode>,
-    cfg: &OrzmaMouseConfig,
-) {
-    if raw_v == 0 {
-        return;
-    }
-    let fine = fine_held(cfg.fine_modifier, &current_terminal_modifiers(keys));
-    let lines = scroll_lines(raw_v, fine, &cfg.wheel);
-    commands.trigger(TerminalViewportScroll {
-        entity: target,
-        lines,
-    });
+/// Orients a frame's horizontal wheel travel so that positive points
+/// right. winit reports a positive `MouseWheel.x` as the content moving
+/// right, which scrolls toward the left, on every platform.
+fn rightward(delta_x: f32) -> f32 {
+    -delta_x
 }
 
-/// Converts a signed notch count into a viewport-scroll line count,
-/// honoring the fine-scroll modifier. `raw_v` carries the wheel's sign
-/// (positive = wheel up = toward older output), which is also the
-/// positive direction of `Scroll::Delta`, so no negation is applied:
-/// `TerminalViewportScroll.lines` positive = deeper into scrollback.
-fn scroll_lines(raw_v: i32, fine: bool, cfg: &WheelConfig) -> i32 {
-    let lines_per = if fine {
-        cfg.fine_lines
+/// Adds a frame's horizontal delta onto its vertical delta when `fold` is
+/// set, leaving no horizontal travel; returns the pair unchanged
+/// otherwise. Both deltas keep winit's orientation, where positive moves
+/// the content down or right.
+fn fold_shift_wheel(delta_up: f32, delta_x: f32, fold: bool) -> (f32, f32) {
+    if fold {
+        (delta_up + delta_x, 0.0)
     } else {
-        cfg.lines_per_notch
-    } as i32;
-    raw_v * lines_per
+        (delta_up, delta_x)
+    }
+}
+
+/// The wheel-routing modifiers for the held keys. Where Shift+wheel
+/// arrives horizontal, Shift only falls through and never selects fine
+/// scrolling.
+fn wheel_modifiers(
+    held: &TerminalModifiers,
+    fine_modifier: FineModifier,
+    shift_wheel_arrives_horizontal: bool,
+) -> WheelModifiers {
+    let shift_only_falls_through =
+        shift_wheel_arrives_horizontal && fine_modifier == FineModifier::Shift;
+    WheelModifiers {
+        shift: held.shift,
+        fine: !shift_only_falls_through && fine_held(fine_modifier, held),
+    }
 }
 
 fn fine_held(modifier: FineModifier, m: &TerminalModifiers) -> bool {
@@ -160,6 +203,50 @@ fn fine_held(modifier: FineModifier, m: &TerminalModifiers) -> bool {
         FineModifier::Ctrl => m.ctrl,
         FineModifier::Alt => m.alt,
         FineModifier::None => true,
+    }
+}
+
+/// Fans one routing decision out to the request it names on `target`. A
+/// report needs the cell under the cursor and is dropped without one.
+fn trigger_wheel_decision(
+    commands: &mut Commands,
+    target: Entity,
+    decision: WheelDecision,
+    cell: Option<CellCoord>,
+    mods: ProtocolModifiers,
+) {
+    match decision {
+        WheelDecision::Report { button, count } => {
+            let Some(cell) = cell else {
+                return;
+            };
+            let mouse = MouseReport {
+                button,
+                kind: MouseReportKind::Press,
+                cell,
+                mods,
+            };
+            for _ in 0..count {
+                commands.trigger(RequestTtyMouseInput {
+                    terminal: target,
+                    mouse,
+                });
+            }
+        }
+        WheelDecision::CursorKeys { key, count } => {
+            for _ in 0..count {
+                commands.trigger(RequestTtyKeyInput {
+                    terminal: target,
+                    key: key.clone(),
+                    modifiers: TerminalModifiers::default(),
+                });
+            }
+        }
+        WheelDecision::ScrollViewport(lines) => commands.trigger(TerminalViewportScroll {
+            entity: target,
+            lines,
+        }),
+        WheelDecision::Noop => {}
     }
 }
 
@@ -174,6 +261,8 @@ mod tests {
     use bevy::input::touch::TouchPhase;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
     use bevy_orzma_tty_renderer::schema::TerminalView;
+    use orzma_tty::prelude::{MouseButton, TerminalKey};
+    use orzma_vt::prelude::{MouseTracking, ScreenKind, VtModes};
 
     fn make_wheel_app() -> App {
         use bevy::window::WindowResolution;
@@ -240,6 +329,64 @@ mod tests {
                 cap.0.push(ev.lines);
             },
         );
+    }
+
+    #[derive(Resource, Default)]
+    struct CapturedReports(Vec<MouseReport>);
+
+    #[derive(Resource, Default)]
+    struct CapturedKeys(Vec<TerminalKey>);
+
+    fn capture_forwarded_input(app: &mut App) {
+        app.init_resource::<CapturedReports>()
+            .init_resource::<CapturedKeys>()
+            .add_observer(
+                |ev: On<RequestTtyMouseInput>, mut cap: ResMut<CapturedReports>| {
+                    cap.0.push(ev.mouse);
+                },
+            )
+            .add_observer(
+                |ev: On<RequestTtyKeyInput>, mut cap: ResMut<CapturedKeys>| {
+                    cap.0.push(ev.key.clone());
+                },
+            );
+    }
+
+    fn set_modes(app: &mut App, modes: VtModes) {
+        let terminal = app
+            .world_mut()
+            .query_filtered::<Entity, With<OrzmaTerminal>>()
+            .single(app.world())
+            .expect("the fixture spawns one terminal");
+        app.world_mut().entity_mut(terminal).insert(TtyModes(modes));
+    }
+
+    fn press_shift(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ShiftLeft);
+    }
+
+    fn tracking_modes() -> VtModes {
+        VtModes {
+            mouse_tracking: MouseTracking::Drag,
+            ..VtModes::default()
+        }
+    }
+
+    fn alternate_screen_modes() -> VtModes {
+        VtModes {
+            active_screen: ScreenKind::Alternate,
+            ..VtModes::default()
+        }
+    }
+
+    fn tracking_alternate_screen_modes() -> VtModes {
+        VtModes {
+            mouse_tracking: MouseTracking::Drag,
+            active_screen: ScreenKind::Alternate,
+            ..VtModes::default()
+        }
     }
 
     /// Asserts a vertical wheel-up notch scrolls the target's viewport
@@ -356,24 +503,6 @@ mod tests {
         );
     }
 
-    /// Asserts `scroll_lines` uses `lines_per_notch` by default.
-    ///
-    /// Case: the user scrolls with no fine-scroll modifier held.
-    #[test]
-    fn scroll_lines_uses_lines_per_notch_by_default() {
-        assert_eq!(scroll_lines(1, false, &WheelConfig::default()), 3);
-    }
-
-    /// Asserts `scroll_lines` uses `fine_lines` when the fine modifier is
-    /// held and keeps the wheel's sign.
-    ///
-    /// Case: the user holds the configured fine-scroll modifier (Alt by
-    /// default) while spinning the wheel to slow-scroll.
-    #[test]
-    fn scroll_lines_fine_modifier_uses_fine_lines() {
-        assert_eq!(scroll_lines(-2, true, &WheelConfig::default()), -2);
-    }
-
     /// Asserts a diagonal gesture with the axis lock disabled still routes
     /// only its vertical component to the viewport (horizontal stays
     /// unrouted regardless of the lock).
@@ -390,5 +519,220 @@ mod tests {
         app.update();
         let total: i32 = app.world().resource::<CapturedScrolls>().0.iter().sum();
         assert!(total != 0, "the vertical component must still scroll");
+    }
+
+    /// Asserts that a wheel-up gesture over a mouse-tracking terminal sends
+    /// one wheel-up press report per notch at the cell under the cursor,
+    /// and scrolls nothing.
+    ///
+    /// Case: nvim runs with `mouse=nvi`, so button-event tracking is on,
+    /// and the user spins the wheel up over its buffer.
+    #[test]
+    fn a_tracking_terminal_receives_a_wheel_report_per_notch() {
+        let mut app = make_wheel_app();
+        set_modes(&mut app, tracking_modes());
+        capture_viewport_scrolls(&mut app);
+        capture_forwarded_input(&mut app);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.0, 1.0);
+        app.update();
+        let expected = MouseReport {
+            button: MouseButton::WheelUp,
+            kind: MouseReportKind::Press,
+            cell: CellCoord { col: 6, row: 4 },
+            mods: ProtocolModifiers::default(),
+        };
+        assert_eq!(
+            app.world().resource::<CapturedReports>().0,
+            vec![expected; 2]
+        );
+        assert!(app.world().resource::<CapturedScrolls>().0.is_empty());
+    }
+
+    /// Asserts that a wheel report over a mouse-tracking terminal carries
+    /// a held Alt as its meta bit.
+    ///
+    /// Case: the user holds Option, the default fine-scroll modifier,
+    /// while spinning the wheel over nvim.
+    #[test]
+    fn a_wheel_report_carries_a_held_alt() {
+        let mut app = make_wheel_app();
+        set_modes(&mut app, tracking_modes());
+        capture_forwarded_input(&mut app);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::AltLeft);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.0, 1.0);
+        app.update();
+        let reports = &app.world().resource::<CapturedReports>().0;
+        assert_eq!(reports.len(), 2);
+        assert!(reports.iter().all(|report| report.mods.alt));
+    }
+
+    /// Asserts that a wheel-up gesture over the alternate screen without
+    /// mouse tracking sends the notches' lines as cursor-up keys and
+    /// scrolls nothing.
+    ///
+    /// Case: `less` shows a long file on the alternate screen without
+    /// tracking the mouse, and the user spins the wheel up.
+    #[test]
+    fn the_alternate_screen_without_tracking_receives_cursor_keys() {
+        let mut app = make_wheel_app();
+        set_modes(&mut app, alternate_screen_modes());
+        capture_viewport_scrolls(&mut app);
+        capture_forwarded_input(&mut app);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.0, 1.0);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CapturedKeys>().0,
+            vec![TerminalKey::ArrowUp; 6]
+        );
+        assert!(app.world().resource::<CapturedReports>().0.is_empty());
+        assert!(app.world().resource::<CapturedScrolls>().0.is_empty());
+    }
+
+    /// Asserts that Shift over a mouse-tracking alternate screen skips the
+    /// reports and sends cursor keys instead.
+    ///
+    /// Case: the user holds Shift and scrolls a trackpad over nvim, whose
+    /// mouse tracking would otherwise take the wheel.
+    #[test]
+    fn shift_over_a_tracking_alternate_screen_sends_cursor_keys() {
+        let mut app = make_wheel_app();
+        set_modes(&mut app, tracking_alternate_screen_modes());
+        capture_forwarded_input(&mut app);
+        press_shift(&mut app);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.0, 1.0);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CapturedKeys>().0,
+            vec![TerminalKey::ArrowUp; 6]
+        );
+        assert!(app.world().resource::<CapturedReports>().0.is_empty());
+    }
+
+    /// Asserts that a positive horizontal wheel delta, which winit defines
+    /// as the content moving right, reports the wheel-left button over a
+    /// mouse-tracking terminal on every platform.
+    ///
+    /// Case: the user scrolls sideways toward the start of a long line
+    /// over a tracking application.
+    #[test]
+    fn a_positive_horizontal_delta_over_a_tracking_terminal_reports_wheel_left() {
+        let mut app = make_wheel_app();
+        set_modes(&mut app, tracking_modes());
+        capture_forwarded_input(&mut app);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.5, 0.0);
+        app.update();
+        let buttons: Vec<MouseButton> = app
+            .world()
+            .resource::<CapturedReports>()
+            .0
+            .iter()
+            .map(|report| report.button)
+            .collect();
+        assert_eq!(buttons, vec![MouseButton::WheelLeft]);
+    }
+
+    /// Asserts that a Shift-held frame's horizontal travel folds onto the
+    /// vertical axis on macOS, reaching the cursor-key route there, and
+    /// stays horizontal elsewhere, where Shift then leaves it unrouted.
+    ///
+    /// Case: on macOS the user holds Shift and spins a discrete mouse
+    /// wheel up over nvim, and the OS delivers that as horizontal travel.
+    #[test]
+    fn shift_held_horizontal_travel_folds_onto_the_vertical_axis_on_macos() {
+        let mut app = make_wheel_app();
+        set_modes(&mut app, tracking_alternate_screen_modes());
+        capture_forwarded_input(&mut app);
+        press_shift(&mut app);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 1.0, 0.0);
+        app.update();
+        let keys = &app.world().resource::<CapturedKeys>().0;
+        if cfg!(target_os = "macos") {
+            assert_eq!(*keys, vec![TerminalKey::ArrowUp; 6]);
+        } else {
+            assert!(keys.is_empty());
+        }
+        assert!(app.world().resource::<CapturedReports>().0.is_empty());
+    }
+
+    /// Asserts that a folded frame clears the horizontal sub-notch residual
+    /// on macOS and leaves it alone elsewhere.
+    ///
+    /// Case: on macOS the user drifts a trackpad sideways short of a notch,
+    /// then holds Shift and spins the wheel.
+    #[test]
+    fn a_folded_frame_clears_the_horizontal_residual_on_macos() {
+        let mut app = make_wheel_app();
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.25, 0.0);
+        app.update();
+        press_shift(&mut app);
+        write_wheel(&mut app, 0.0, 1.0);
+        app.update();
+        let residual = app.world().resource::<WheelAccumulator>().residual_cells_h;
+        if cfg!(target_os = "macos") {
+            assert_eq!(residual, 0.0);
+        } else {
+            assert_eq!(residual, -0.25);
+        }
+    }
+
+    /// Asserts that folding adds the horizontal delta onto the vertical
+    /// delta and leaves no horizontal travel, while an unfolded frame
+    /// passes through unchanged.
+    ///
+    /// Case: a Shift-held frame carries vertical trackpad travel together
+    /// with horizontal travel the OS converted from a wheel.
+    #[test]
+    fn folding_adds_the_horizontal_delta_onto_the_vertical_delta() {
+        assert_eq!(fold_shift_wheel(0.5, 1.0, true), (1.5, 0.0));
+        assert_eq!(fold_shift_wheel(0.5, 1.0, false), (0.5, 1.0));
+    }
+
+    /// Asserts that Shift configured as the fine modifier never selects
+    /// fine scrolling where Shift+wheel arrives horizontal, still does
+    /// elsewhere, and that another fine modifier is unaffected.
+    ///
+    /// Case: a user whose config sets `fine_modifier = "shift"` holds
+    /// Shift while scrolling, once on macOS and once on Windows, and
+    /// another user holds the default Alt.
+    #[test]
+    fn shift_as_the_fine_modifier_only_falls_through_where_shift_wheel_arrives_horizontal() {
+        let shift = TerminalModifiers {
+            shift: true,
+            ..TerminalModifiers::default()
+        };
+        assert_eq!(
+            wheel_modifiers(&shift, FineModifier::Shift, true),
+            WheelModifiers {
+                shift: true,
+                fine: false
+            }
+        );
+        assert_eq!(
+            wheel_modifiers(&shift, FineModifier::Shift, false),
+            WheelModifiers {
+                shift: true,
+                fine: true
+            }
+        );
+        let alt = TerminalModifiers {
+            alt: true,
+            ..TerminalModifiers::default()
+        };
+        assert_eq!(
+            wheel_modifiers(&alt, FineModifier::Alt, true),
+            WheelModifiers {
+                shift: false,
+                fine: true
+            }
+        );
     }
 }

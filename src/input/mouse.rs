@@ -9,6 +9,7 @@ use crate::action::terminal::{
 use crate::input::InputPhase;
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::focus::MouseDisabled;
+use crate::input::keyboard::current_terminal_modifiers;
 use crate::input::mouse::button::MouseButtonInputPlugin;
 use crate::input::mouse::separator::SeparatorDragPlugin;
 use crate::input::mouse::wheel::MouseWheelInputPlugin;
@@ -20,7 +21,7 @@ use bevy::window::CursorMoved;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzma_tty_renderer::schema::{TerminalCells, TerminalView};
 use bevy_orzmux::prelude::{CellSide, GridPoint, SelectionKind};
-use orzma_tty::prelude::CellCoord;
+use orzma_tty::prelude::{CellCoord, ProtocolModifiers};
 
 mod button;
 mod gesture;
@@ -206,6 +207,17 @@ fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
     )
 }
 
+/// The mouse-report modifier bits for the held keys.
+fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
+    let m = current_terminal_modifiers(keys);
+    ProtocolModifiers {
+        shift: m.shift,
+        ctrl: m.ctrl,
+        alt: m.alt,
+        meta: m.meta,
+    }
+}
+
 /// Read-only hit-test context for one gather run: the terminal node
 /// geometry, cell pitch, the view's dimensions, and the cells a
 /// hyperlink lookup resolves against.
@@ -362,5 +374,21 @@ mod tests {
         let (cell, _) = result.expect("point inside node must resolve");
         assert_eq!(cell.col, 2);
         assert_eq!(cell.row, 2);
+    }
+
+    /// Asserts that `protocol_mods` reports Ctrl and Shift from the key
+    /// state and leaves Alt and Meta clear.
+    ///
+    /// Case: the user holds Ctrl+Shift while clicking.
+    #[test]
+    fn protocol_mods_sets_ctrl_and_shift() {
+        let mut keys = ButtonInput::<KeyCode>::default();
+        keys.press(KeyCode::ControlLeft);
+        keys.press(KeyCode::ShiftLeft);
+        let mods = protocol_mods(&keys);
+        assert!(mods.ctrl);
+        assert!(mods.shift);
+        assert!(!mods.alt);
+        assert!(!mods.meta);
     }
 }
