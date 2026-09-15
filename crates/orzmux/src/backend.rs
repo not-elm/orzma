@@ -319,16 +319,18 @@ impl Backend {
             }
         };
         let spawn_cwd = cwd.or(inherited_cwd);
-        let size = match self.tree.solve(geometry.size).rect_of(new) {
-            Some(rect) => GridSize::new(rect.cols, rect.rows).map_err(|err| err.to_string()),
-            None => Err("the new pane is not in the solved layout".to_string()),
-        };
-        let spawned = size.and_then(|size| {
-            self.factory
-                .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
-                .map(|tty| (tty, size))
-                .map_err(|err| err.to_string())
-        });
+        let spawned = self
+            .tree
+            .solve(geometry.size)
+            .rect_of(new)
+            .ok_or_else(|| "the new pane is not in the solved layout".to_string())
+            .and_then(|rect| GridSize::new(rect.cols, rect.rows).map_err(|err| err.to_string()))
+            .and_then(|size| {
+                self.factory
+                    .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
+                    .map(|tty| (tty, size))
+                    .map_err(|err| err.to_string())
+            });
         match spawned {
             Ok((tty, size)) => {
                 self.panes.insert(
