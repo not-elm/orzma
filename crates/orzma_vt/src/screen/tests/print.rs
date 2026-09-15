@@ -1,7 +1,7 @@
 //! Tests for graphic character output and the deferred wrap it arms.
 
 use super::*;
-use crate::screen::cell::{CellExtra, CellWidth, MAX_COMBINING};
+use crate::screen::cell::{CellWidth, MAX_COMBINING};
 use crate::screen::grid::run::Style;
 
 /// Asserts that a print in insert mode shifts the cells at and right of
@@ -883,10 +883,7 @@ fn a_combining_mark_joins_the_previous_cell_and_reports_damage() {
         .expect("a printable glyph");
     let cell = &screen.grid[ScreenLine(0)][0];
     assert_eq!(cell.c, 'e');
-    assert_eq!(
-        cell.extra.as_deref().map(CellExtra::marks),
-        Some(&['\u{0301}'][..])
-    );
+    assert_eq!(cell.marks(), ['\u{0301}']);
     assert_eq!(screen.state.column, GridColumn(1));
     assert_eq!(
         damage,
@@ -912,10 +909,7 @@ fn a_combining_mark_under_an_armed_wrap_joins_the_last_cell() {
         .print('\u{0301}', PrintOptions::default())
         .expect("a printable glyph");
     let cell = &screen.grid[ScreenLine(0)][3];
-    assert_eq!(
-        cell.extra.as_deref().map(CellExtra::marks),
-        Some(&['\u{0301}'][..])
-    );
+    assert_eq!(cell.marks(), ['\u{0301}']);
     assert_eq!(screen.state.line, ScreenLine(0));
     assert!(screen.state.pending_wrap);
 }
@@ -949,13 +943,7 @@ fn a_combining_mark_without_autowrap_joins_the_cell_under_the_cursor() {
         )
         .expect("a printable glyph");
     assert!(screen.grid[ScreenLine(0)][2].extra.is_none());
-    assert_eq!(
-        screen.grid[ScreenLine(0)][3]
-            .extra
-            .as_deref()
-            .map(CellExtra::marks),
-        Some(&['\u{0301}'][..])
-    );
+    assert_eq!(screen.grid[ScreenLine(0)][3].marks(), ['\u{0301}']);
 }
 
 /// Asserts that a combining mark after a fullwidth glyph joins the wide
@@ -972,13 +960,7 @@ fn a_combining_mark_after_a_wide_glyph_joins_its_body() {
     screen
         .print('\u{3099}', PrintOptions::default())
         .expect("a printable glyph");
-    assert_eq!(
-        screen.grid[ScreenLine(0)][0]
-            .extra
-            .as_deref()
-            .map(CellExtra::marks),
-        Some(&['\u{3099}'][..])
-    );
+    assert_eq!(screen.grid[ScreenLine(0)][0].marks(), ['\u{3099}']);
     assert!(screen.grid[ScreenLine(0)][1].extra.is_none());
 }
 
@@ -993,13 +975,7 @@ fn a_combining_mark_at_the_row_start_is_kept_on_the_first_cell() {
     let damage = screen
         .print('\u{0301}', PrintOptions::default())
         .expect("a printable glyph");
-    assert_eq!(
-        screen.grid[ScreenLine(0)][0]
-            .extra
-            .as_deref()
-            .map(CellExtra::marks),
-        Some(&['\u{0301}'][..])
-    );
+    assert_eq!(screen.grid[ScreenLine(0)][0].marks(), ['\u{0301}']);
     assert_eq!(screen.state.column, GridColumn(0));
     assert_eq!(
         damage,
@@ -1030,11 +1006,7 @@ fn a_combining_mark_past_the_cap_is_dropped_without_damage() {
         .print('\u{0302}', PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(damage, None);
-    let marks = screen.grid[ScreenLine(0)][0]
-        .extra
-        .as_deref()
-        .map(CellExtra::marks);
-    assert_eq!(marks.map(<[char]>::len), Some(MAX_COMBINING));
+    assert_eq!(screen.grid[ScreenLine(0)][0].marks().len(), MAX_COMBINING);
 }
 
 /// Asserts that a control character reaching the printer is ignored
@@ -1070,9 +1042,8 @@ fn a_wide_glyph_on_a_one_column_screen_is_dropped() {
 /// Asserts that a combining mark whose candidate cell is a wrap filler
 /// is dropped without damage.
 ///
-/// Case: a Japanese character wrapped at the right edge, and the
-/// application then moves the cursor back onto that row's last column
-/// before an accent arrives.
+/// Case: a program restores a cursor it had saved on the right edge, after
+/// a Japanese character wrapped there, and an accent then arrives.
 #[test]
 fn a_combining_mark_on_a_wrap_filler_is_dropped() {
     let mut screen = screen();
@@ -1087,14 +1058,89 @@ fn a_combining_mark_on_a_wrap_filler_is_dropped() {
     );
     screen.state.line = ScreenLine(0);
     screen.state.column = GridColumn(3);
-    screen.state.pending_wrap = false;
+    screen.state.pending_wrap = true;
     let damage = screen
         .print('\u{0301}', PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(damage, None);
+    assert!(screen.grid[ScreenLine(0)][2].extra.is_none());
     assert!(screen.grid[ScreenLine(0)][3].extra.is_none());
     assert_eq!(
         screen.grid[ScreenLine(0)][3].width,
         CellWidth::LeadingSpacer
     );
+}
+
+/// Asserts that a combining mark whose candidate cell is a disarmed
+/// wrap filler joins the glyph to its left instead.
+///
+/// Case: a program moves the cursor back onto a row's last column,
+/// where a Japanese character had wrapped, and an accent arrives.
+#[test]
+fn a_combining_mark_on_a_disarmed_wrap_filler_joins_the_glyph_before_it() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c', 'あ'] {
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
+    }
+    assert_eq!(
+        screen.grid[ScreenLine(0)][3].width,
+        CellWidth::LeadingSpacer
+    );
+    screen.state.line = ScreenLine(0);
+    screen.state.column = GridColumn(3);
+    screen.state.pending_wrap = false;
+    screen
+        .print('\u{0301}', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(screen.grid[ScreenLine(0)][2].marks(), ['\u{0301}']);
+    assert!(screen.grid[ScreenLine(0)][3].extra.is_none());
+    assert_eq!(
+        screen.grid[ScreenLine(0)][3].width,
+        CellWidth::LeadingSpacer
+    );
+}
+
+/// Asserts that a combining mark arriving after a glyph printed in the
+/// penultimate column joins that glyph rather than the blank last cell
+/// the cursor advanced onto.
+///
+/// Case: a shell echoes `abc` followed by a combining acute accent on a
+/// four-column row.
+#[test]
+fn a_combining_mark_after_a_penultimate_glyph_joins_that_glyph() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c'] {
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
+    }
+    assert!(!screen.state.pending_wrap);
+    screen
+        .print('\u{0301}', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(screen.grid[ScreenLine(0)][2].marks(), ['\u{0301}']);
+    assert!(screen.grid[ScreenLine(0)][3].extra.is_none());
+}
+
+/// Asserts that a combining mark arriving after a fullwidth glyph whose
+/// continuation is the last column joins the glyph's body.
+///
+/// Case: a shell echoes `aか` followed by a combining voiced sound mark
+/// on a four-column row.
+#[test]
+fn a_combining_mark_after_a_wide_glyph_ending_the_row_joins_its_body() {
+    let mut screen = screen();
+    for c in ['a', 'か'] {
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
+    }
+    screen
+        .print('\u{3099}', PrintOptions::default())
+        .expect("a printable glyph");
+    assert_eq!(screen.grid[ScreenLine(0)][1].marks(), ['\u{3099}']);
+    assert!(screen.grid[ScreenLine(0)][2].extra.is_none());
+    assert!(screen.grid[ScreenLine(0)][3].extra.is_none());
 }

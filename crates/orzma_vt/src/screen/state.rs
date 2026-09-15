@@ -9,4 +9,7 @@ pub(super) struct ScreenState {
     pub column: GridColumn,
     pub pending_wrap: bool,
     pub pen: Pen,
+    /// The cell the last printed glyph's body landed on; `None` before
+    /// the first print.
+    pub last_landing: Option<(ScreenLine, GridColumn)>,
 }

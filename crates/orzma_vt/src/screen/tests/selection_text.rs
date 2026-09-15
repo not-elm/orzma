@@ -14,21 +14,8 @@ fn copying_wide_glyphs_emits_no_blank_for_continuations() {
             .print(c, PrintOptions::default())
             .expect("a printable glyph");
     }
-    screen.start_selection(
-        GridPoint {
-            line: GridLine(0),
-            column: GridColumn(0),
-        },
-        CellSide::Left,
-        SelectionKind::Simple,
-    );
-    screen.extend_selection(
-        GridPoint {
-            line: GridLine(0),
-            column: GridColumn(3),
-        },
-        CellSide::Right,
-    );
+    screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
+    screen.extend_selection(point(0, 3), CellSide::Right);
     assert_eq!(screen.selection_text().as_deref(), Some("あい"));
 }
 

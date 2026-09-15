@@ -539,7 +539,7 @@ struct GpuCell {
     hyperlink_id: u32,
 }
 
-/// Set on the right-half cell of a width=2 (CJK / wide) grapheme so the
+/// Set on the right-half cell of a width=2 (CJK / wide) glyph so the
 /// shader renders its glyph anchored to the left-half cell's origin.
 ///
 /// Bit allocation in `GpuCell.style_flags` (a `u32`):
@@ -854,7 +854,33 @@ fn update_terminal_material(
     }
 }
 
+/// Fills the CPU cell and glyph tables for `grid`, re-running the pass once
+/// when the atlas restarted underneath it.
 fn rebuild_cells(
+    grid: &TerminalGrid,
+    state: &mut TerminalMaterialState,
+    fonts: &TerminalFonts,
+    atlas: &mut GlyphAtlas,
+    phys_font_size: u16,
+    cols: u32,
+) {
+    let restarts = atlas.restarts;
+    fill_cells(grid, state, fonts, atlas, phys_font_size, cols);
+    if atlas.restarts == restarts {
+        return;
+    }
+    // NOTE: A restart during the pass wiped the texels every index
+    // resolved before it points at; one more pass re-resolves them
+    // against the restarted atlas. A second restart means the grid's
+    // glyph set does not fit the atlas at all, so that pass is final.
+    state.glyph_index_map.clear();
+    state.cpu_glyphs.clear();
+    fill_cells(grid, state, fonts, atlas, phys_font_size, cols);
+}
+
+/// Writes every visible cell's glyph index, color and style into the CPU
+/// cell table, resolving each glyph through the atlas as it goes.
+fn fill_cells(
     grid: &TerminalGrid,
     state: &mut TerminalMaterialState,
     fonts: &TerminalFonts,
@@ -869,11 +895,9 @@ fn rebuild_cells(
             if col >= cols {
                 break;
             }
-            // NOTE: width=0 cells are combining-mark grapheme clusters that
-            //       wire emits as a separate Cell (Run boundary lands inside
-            //       a cluster). They must not consume a column or write a
-            //       GPU slot — otherwise we get phantom dark boxes between
-            //       characters carrying the base cell's style flags.
+            // NOTE: A width-0 cell must not consume a column or write a GPU
+            //       slot; doing either paints a phantom box carrying the base
+            //       cell's style.
             if cell.width == 0 {
                 continue;
             }
@@ -921,29 +945,34 @@ fn rebuild_cells(
     }
 }
 
-/// Promotes specific combining marks in a grapheme cluster to the `Style`
-/// underline and strike flags so the shader paints them.
+/// The line the shader draws for a combining mark, if any.
 ///
 /// Maps U+0332 (combining low line), U+0333 (double low line), U+0331
 /// (combining macron below) to `Style::UNDERLINE`, and U+0336 (combining
-/// long stroke overlay) to `Style::STRIKE`. Other combining marks are
-/// ignored — the base glyph still renders.
+/// long stroke overlay) to `Style::STRIKE`.
+fn line_style(mark: char) -> Option<Style> {
+    match mark {
+        '\u{0332}' | '\u{0333}' | '\u{0331}' => Some(Style::UNDERLINE),
+        '\u{0336}' => Some(Style::STRIKE),
+        _ => None,
+    }
+}
+
+/// Promotes the combining marks in a cell's text that stand for lines to
+/// the `Style` underline and strike flags so the shader paints them.
 fn style_from_combining_marks(text: &str) -> Style {
     if text.is_ascii() {
         return Style::empty();
     }
-    // TODO: Render other combining marks as well, such as U+0301
-    // (combining acute accent), U+0303 (combining tilde), U+0308
-    // (combining diaeresis), and U+20D7 (combining right arrow above).
-    let mut style = Style::empty();
-    for c in text.chars() {
-        match c {
-            '\u{0332}' | '\u{0333}' | '\u{0331}' => style |= Style::UNDERLINE,
-            '\u{0336}' => style |= Style::STRIKE,
-            _ => {}
-        }
-    }
-    style
+    text.chars()
+        .filter_map(line_style)
+        .fold(Style::empty(), |acc, s| acc | s)
+}
+
+/// The marks of a cell's text that are composed onto its glyph: every
+/// `char` after the first, except the marks [`line_style`] maps to a line.
+fn composable_marks(text: &str) -> impl Iterator<Item = char> + '_ {
+    text.chars().skip(1).filter(|c| line_style(*c).is_none())
 }
 
 fn resolve_glyph_index(
@@ -961,17 +990,14 @@ fn resolve_glyph_index(
         return u32::MAX;
     }
     let face = FontFace::from_style(cell.style);
-    let key = GlyphKey {
-        face,
-        codepoint,
-        size_px: phys_font_size,
-    };
-    let Some(rect) = atlas.get_or_insert(key, fonts) else {
-        return u32::MAX;
-    };
+    let key =
+        GlyphKey::new(face, codepoint, phys_font_size).with_marks(composable_marks(&cell.text));
     if let Some(&idx) = state.glyph_index_map.get(&key) {
         return idx;
     }
+    let Some(rect) = atlas.get_or_insert(key, fonts) else {
+        return u32::MAX;
+    };
     let idx = state.cpu_glyphs.len() as u32;
     state.cpu_glyphs.push(GpuGlyph::new(rect));
     state.glyph_index_map.insert(key, idx);
@@ -1042,23 +1068,11 @@ mod tests {
         }
     }
 
-    /// Asserts that a linked cell's wire id reaches its GPU slot while
-    /// an unlinked cell's slot keeps the 0 sentinel.
-    ///
-    /// Case: a row mixes OSC 8 linked text with plain text.
-    #[test]
-    fn rebuild_cells_writes_hyperlink_id_when_present() {
+    /// A fresh two-cell [`TerminalMaterialState`], as `rebuild_cells`
+    /// expects to find it before its first rebuild.
+    fn rebuild_state() -> TerminalMaterialState {
         use bevy::platform::collections::HashMap;
-
-        let linked = cell_with_link("x", Some(7));
-        let unlinked = cell_with_link("y", None);
-        let grid = TerminalGrid {
-            cols: 2,
-            rows: 1,
-            cells: vec![vec![linked, unlinked]],
-            ..Default::default()
-        };
-        let mut state = TerminalMaterialState {
+        TerminalMaterialState {
             glyph_index_map: HashMap::new(),
             cpu_cells: vec![GpuCell::default(); 2],
             cpu_glyphs: Vec::new(),
@@ -1068,7 +1082,24 @@ mod tests {
             last_phys_font_size: 0,
             cached_metrics: None,
             initialized: false,
+        }
+    }
+
+    /// Asserts that a linked cell's wire id reaches its GPU slot while
+    /// an unlinked cell's slot keeps the 0 sentinel.
+    ///
+    /// Case: a row mixes OSC 8 linked text with plain text.
+    #[test]
+    fn rebuild_cells_writes_hyperlink_id_when_present() {
+        let linked = cell_with_link("x", Some(7));
+        let unlinked = cell_with_link("y", None);
+        let grid = TerminalGrid {
+            cols: 2,
+            rows: 1,
+            cells: vec![vec![linked, unlinked]],
+            ..Default::default()
         };
+        let mut state = rebuild_state();
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
@@ -1076,6 +1107,57 @@ mod tests {
 
         assert_eq!(state.cpu_cells[0].hyperlink_id, 7);
         assert_eq!(state.cpu_cells[1].hyperlink_id, 0);
+    }
+
+    /// Asserts that a cell resolved before a mid-rebuild atlas restart is
+    /// re-resolved against the restarted atlas rather than keeping a
+    /// glyph index into the rect the restart evicted.
+    ///
+    /// Case: a row's first glyph is already cached in the atlas, and its
+    /// second glyph overflows a nearly full atlas mid-rebuild.
+    #[test]
+    fn rebuild_cells_survives_an_atlas_restart_mid_pass() {
+        let m = cell_with_link("M", None);
+        let a = cell_with_link("A", None);
+        let grid = TerminalGrid {
+            cols: 2,
+            rows: 1,
+            cells: vec![vec![m, a]],
+            ..Default::default()
+        };
+        let mut state = rebuild_state();
+        let mut atlas = GlyphAtlas::new(32, 24);
+        let fonts = TerminalFonts::default();
+        // Pack 'M' (12x18) then 'W' (14x18) onto the first shelf so it
+        // sits at x=26, leaving no room for 'A' (13x18) beside them and
+        // no room below for its height either — resolving 'A' forces the
+        // single restart this test exercises, evicting the 'M' rect cell
+        // 0 already resolved against.
+        atlas
+            .get_or_insert(GlyphKey::new(FontFace::Regular, u32::from('M'), 24), &fonts)
+            .expect("'M' rasterizes");
+        atlas
+            .get_or_insert(GlyphKey::new(FontFace::Regular, u32::from('W'), 24), &fonts)
+            .expect("'W' rasterizes");
+        assert_eq!(
+            atlas.restarts, 0,
+            "the filler glyphs must not restart the atlas"
+        );
+
+        rebuild_cells(&grid, &mut state, &fonts, &mut atlas, 24, 2);
+
+        for (col, ch) in [(0usize, 'M'), (1usize, 'A')] {
+            let glyph_index = state.cpu_cells[col].glyph_index;
+            let glyph = state.cpu_glyphs[glyph_index as usize];
+            let key = GlyphKey::new(FontFace::Regular, u32::from(ch), 24);
+            let rect = atlas.glyphs[&key];
+            assert_eq!(
+                glyph.uv_min,
+                Vec2::new(rect.u as f32, rect.v as f32),
+                "cell {col} ({ch:?}) glyph index must point at the restarted atlas's rect"
+            );
+        }
+        assert_eq!(atlas.restarts, 1);
     }
 
     #[test]
@@ -1234,11 +1316,12 @@ mod tests {
     }
 
     /// Asserts that the shader's cursor helper consults the wide-right-half
-    /// flag for both halves of a wide pair and that the cursor painter
-    /// calls it.
+    /// flag for both halves of a wide pair, and that a bar cursor moves to
+    /// the body cell when parked on a wide glyph's right half.
     ///
     /// Case: a block cursor sits on a Japanese character, either on its
-    /// body or parked on its right half.
+    /// body or parked on its right half, and a bar cursor is parked on the
+    /// right half.
     #[test]
     fn wgsl_cursor_covers_both_halves_of_a_wide_glyph() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
@@ -1254,6 +1337,11 @@ mod tests {
             .nth(1)
             .expect("the shader defines paint_cursor");
         assert!(painter.contains("cursor_covers(row, col)"));
+        assert!(painter.contains("bar_covers(row, col)"));
+        assert!(src.contains("fn bar_covers("));
+        assert!(painter.contains(
+            "select(cursor_covers(row, col), bar_covers(row, col), cursor_shape == CURSOR_SHAPE_BAR)"
+        ));
     }
 
     /// Asserts that the shader's style constants are exactly the `Style`
@@ -1400,5 +1488,20 @@ mod tests {
             TRANSPARENT_BG,
             "an explicit RGB equal to the palette background must stay opaque"
         );
+    }
+
+    /// Asserts that the marks the shader draws as lines are left out of
+    /// the composable set, and that the base glyph is never one of them.
+    ///
+    /// Case: a cell holds `e` with an acute accent, a combining low line,
+    /// a long stroke overlay and a tilde.
+    #[test]
+    fn composable_marks_skip_the_base_and_the_line_marks() {
+        assert_eq!(
+            composable_marks("e\u{0301}\u{0332}\u{0336}\u{0303}").collect::<Vec<_>>(),
+            ['\u{0301}', '\u{0303}']
+        );
+        assert_eq!(composable_marks("a").count(), 0);
+        assert_eq!(composable_marks("").count(), 0);
     }
 }

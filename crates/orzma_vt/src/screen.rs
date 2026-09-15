@@ -173,8 +173,7 @@ impl Screen {
     /// screen is dropped.
     ///
     /// Under [`InsertReplaceMode::Insert`] the rest of the row shifts
-    /// right by the glyph's width before it lands, unless the glyph ends
-    /// the row, in which case it replaces in place.
+    /// right by the glyph's width before it lands.
     ///
     /// Reports [`DamageSpan::Full`] when a wrap scrolled, otherwise every
     /// row the print touched, or `None` when nothing changed or the rows
@@ -195,7 +194,7 @@ impl Screen {
         };
         let columns = class.columns();
         let cols = self.grid.size().cols;
-        if columns > cols {
+        if cols < columns {
             return Ok(None);
         }
         let wrapping = options.auto_wrap.wraps();
@@ -226,7 +225,7 @@ impl Screen {
         // `insert_characters` clear `pending_wrap`, and the character
         // would overwrite the last column instead of wrapping to the
         // next row.
-        if matches!(options.insert_replace, InsertReplaceMode::Insert) && !ends_row {
+        if matches!(options.insert_replace, InsertReplaceMode::Insert) {
             self.insert_characters(columns);
         }
         self.grid[self.state.line].stamp_at(
@@ -236,6 +235,7 @@ impl Screen {
             &self.state.pen,
             options.hyperlink_id,
         )?;
+        self.state.last_landing = Some((self.state.line, GridColumn(landing)));
         if ends_row {
             self.state.column = GridColumn(cols - 1);
             self.state.pending_wrap = wrapping;
@@ -654,10 +654,12 @@ impl Screen {
     ///
     /// A shift that starts on the first row of the page feeds each
     /// departing row to history and holds a scrolled-back viewport on
-    /// the row it was showing.
+    /// the row it was showing. It also clears the cursor's landing
+    /// cell, since the rows moved under it.
     fn shift_rows_up(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
+        self.state.last_landing = None;
         let fill = self.state.pen.erase_cell();
         let feeds_history = first == ScreenLine(0);
         for _ in 0..count {
@@ -674,10 +676,12 @@ impl Screen {
     /// pen's erase cell; `None` when the clamped count is zero.
     ///
     /// The rows pushed past the bottom margin are discarded, and nothing
-    /// reaches history.
+    /// reaches history. It also clears the cursor's landing cell, since
+    /// the rows moved under it.
     fn shift_rows_down(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
+        self.state.last_landing = None;
         let fill = self.state.pen.erase_cell();
         for _ in 0..count {
             self.grid.scroll_down_one(first, bottom, fill.clone());
@@ -844,16 +848,20 @@ impl Screen {
     }
 
     /// Combines `mark` onto the glyph the cursor last passed: the cell
-    /// under the cursor on the last column, otherwise the cell to its
-    /// left, and on column zero that column's own cell. A continuation
-    /// column hands the mark to its wide body.
+    /// under the cursor when the deferred wrap is armed, or when the
+    /// cursor is on the last column and the last printed glyph landed
+    /// there, otherwise the cell to its left, and on column zero that
+    /// column's own cell. A continuation column hands the mark to its
+    /// wide body.
     ///
     /// Reports the cursor's row when the mark was kept, and `None` when
     /// the cell already holds [`cell::MAX_COMBINING`] marks or the target is a
     /// filler.
     fn attach_zero_width(&mut self, mark: char) -> Option<DamageSpan> {
         let column = self.state.column.0;
-        let candidate = if self.is_last_column() {
+        let cursor = (self.state.line, self.state.column);
+        let on_landing = self.state.last_landing == Some(cursor);
+        let candidate = if self.state.pending_wrap || (self.is_last_column() && on_landing) {
             column
         } else {
             column.saturating_sub(1)
@@ -1320,7 +1328,9 @@ impl Screen {
     ///
     /// A shrink pushes as many rows off the top as it takes to keep the
     /// cursor on screen and drops the rest from the bottom. A growth
-    /// reclaims rows from history before it appends blank ones.
+    /// reclaims rows from history before it appends blank ones. A resize
+    /// that changes the dimensions also clears the cursor's landing
+    /// cell, since the grid moved under it.
     ///
     /// # Invariants
     ///
@@ -1343,6 +1353,7 @@ impl Screen {
         if old == size {
             return None;
         }
+        self.state.last_landing = None;
         let required_scrolling = (self.state.line.0 + 1).saturating_sub(size.rows);
         for _ in 0..required_scrolling {
             self.grid
@@ -1550,7 +1561,6 @@ impl Screen {
             let row = self.grid.row(GridLine(line));
             let row_text: String = (first..=last)
                 .map(|column| &row[GridColumn(column)])
-                .filter(|cell| !matches!(cell.width, CellWidth::Spacer | CellWidth::LeadingSpacer))
                 .flat_map(Cell::chars)
                 .collect();
             if line != range.start.line.0 {

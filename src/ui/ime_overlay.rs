@@ -133,7 +133,7 @@ fn ime_is_composing(state: Option<Res<ImeState>>) -> bool {
 
 /// Grid-aligns the IME preedit overlay at the attached terminal's cursor
 /// cell. Lays out the composition as one cell-anchored `Text` node per
-/// char (pooled in [`ImeGlyphPool`], grown on demand), draws
+/// glyph (pooled in [`ImeGlyphPool`], grown on demand), draws
 /// an occluding background rect and a continuous underline bar, and
 /// positions the caret beam (`begin == end`) or clause highlight
 /// (`begin != end`). Every visible element uses the same cell arithmetic, so

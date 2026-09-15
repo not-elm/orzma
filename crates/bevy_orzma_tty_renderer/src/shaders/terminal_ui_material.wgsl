@@ -346,6 +346,25 @@ fn cursor_covers(row: u32, col: u32) -> bool {
     return false;
 }
 
+// Whether the cursor sits on the right half of a wide glyph.
+fn cursor_on_wide_right_half() -> bool {
+    let idx = params.cursor_pos.y * params.grid_size.x + params.cursor_pos.x;
+    return idx < arrayLength(&cells)
+        && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u;
+}
+
+// Whether a bar cursor is drawn in (row, col): the cursor's own cell, or
+// the body cell when the cursor sits on a wide glyph's right half.
+fn bar_covers(row: u32, col: u32) -> bool {
+    if row != params.cursor_pos.y {
+        return false;
+    }
+    if cursor_on_wide_right_half() {
+        return col + 1u == params.cursor_pos.x;
+    }
+    return col == params.cursor_pos.x;
+}
+
 fn paint_cursor(
     row: u32,
     col: u32,
@@ -356,8 +375,7 @@ fn paint_cursor(
     let cursor_blinking = (params.cursor_style & CURSOR_BLINKING) != 0u;
     let cursor_shape = (params.cursor_style >> 1u) & 3u;
     let blink_on = !cursor_blinking || (fract(params.time_seconds) < 0.5);
-    let exact_cell = col == params.cursor_pos.x && row == params.cursor_pos.y;
-    let on_cursor_cell = select(exact_cell, cursor_covers(row, col), cursor_shape != CURSOR_SHAPE_BAR);
+    let on_cursor_cell = select(cursor_covers(row, col), bar_covers(row, col), cursor_shape == CURSOR_SHAPE_BAR);
     if !(cursor_visible && blink_on && on_cursor_cell) {
         return base;
     }
