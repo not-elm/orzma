@@ -8,7 +8,8 @@ mod osc;
 mod sgr;
 
 use crate::device::modes::{
-    AutoWrap, CursorBlink, InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable,
+    AlternateScroll, AutoWrap, CursorBlink, InsertReplaceMode, KeypadMode, ScreenKind,
+    TextCursorEnable,
 };
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
@@ -772,10 +773,15 @@ impl Executor<'_> {
                 47 => self.switch_screen(ScreenKind::from_decset(enabled)),
                 // DECNKM
                 66 => self.device.modes_mut().keypad_mode = KeypadMode::from_decset(enabled),
+                // TODO: Route 1005 to an encoding once `MouseEncoding::with_decset` answers it.
+                1000 | 1002 | 1003 | 1005 | 1006 => self.set_mouse_mode(mode, enabled),
                 // XTFOCUS
                 1004 => self.device.modes_mut().focus_in_out = enabled,
                 // Alternate scroll
-                1007 => self.device.modes_mut().alternate_scroll = enabled,
+                1007 => {
+                    self.device.modes_mut().alternate_scroll =
+                        AlternateScroll::from_decset(enabled);
+                }
                 // Interpret "meta" key
                 // NOTE: The eighth-bit meta encoding is ignored rather than
                 // honored. Alt always prefixes ESC, which is xterm's
@@ -792,7 +798,7 @@ impl Executor<'_> {
                 1049 => self.set_alternate_screen_with_cursor(enabled),
                 // Bracketed paste
                 2004 => self.device.modes_mut().bracketed_paste = enabled,
-                _ => self.set_mouse_mode(mode, enabled),
+                _ => {}
             }
         }
     }

@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::device::color::{Color, Rgb};
-use crate::device::modes::{CursorShape, InsertReplaceMode, MouseEncoding, MouseTracking};
+use crate::device::modes::{
+    AlternateScroll, CursorShape, InsertReplaceMode, MouseEncoding, MouseTracking,
+};
 use crate::frame::Frame;
 use crate::placement::{AnchoredPlacement, InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::cell::Cell;
