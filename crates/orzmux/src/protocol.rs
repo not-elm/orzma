@@ -13,6 +13,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneId(pub u32);
 
+/// A split the layout tree minted. Never reused within one tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SplitId(pub u32);
+
 /// A window (tab).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct WindowId(pub u32);
@@ -85,10 +89,8 @@ pub enum NewPaneAt {
 pub enum OrzmuxCommand {
     /// The whole window's size in cells plus the cell pixel pitch.
     Resize {
-        /// The window's width in cells.
-        cols: u16,
-        /// The window's height in cells.
-        rows: u16,
+        /// The window's size in cells.
+        size: GridSize,
         /// The pixel size of one cell, used to derive the PTY winsize.
         cell_px: CellPixels,
     },
@@ -118,6 +120,13 @@ pub enum OrzmuxCommand {
     SelectPaneDirection {
         /// The neighbour direction to select.
         direction: PaneDirection,
+    },
+    /// Sets whether the primary window has keyboard focus. The active pane
+    /// holds focus only while the window does, and the window counts as
+    /// focused until the first `WindowFocus` arrives.
+    WindowFocus {
+        /// The focus state to apply.
+        focused: bool,
     },
     /// Forward a key press to a pane's PTY.
     KeyInput {
@@ -186,6 +195,14 @@ pub enum OrzmuxCommand {
         /// The placement instances to release.
         instances: Vec<InstanceId>,
     },
+    /// Move a split's divider.
+    ResizeSplit {
+        /// The split whose divider moves.
+        split: SplitId,
+        /// The whole-window cell boundary to put the divider on: `x` for
+        /// a vertical split, `y` for a horizontal one.
+        position: u16,
+    },
     /// Register a host-driven webview placement at a visible cell of a
     /// pane — the socket-op counterpart of the APC `mount` for PTYs that
     /// drop APC (ConPTY).
@@ -234,6 +251,8 @@ pub struct PaneRect {
 /// A one-cell-wide divider between two panes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Separator {
+    /// The split this divider belongs to.
+    pub split: SplitId,
     /// Whether the divider runs vertically or horizontally.
     pub orientation: SplitOrientation,
     /// Left edge in cells from the window's left.

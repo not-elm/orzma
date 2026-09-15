@@ -12,7 +12,7 @@ use crate::device::color::Palette;
 #[test]
 fn a_parameter_list_past_the_parser_cap_loses_its_tail() {
     let device = interpret(b"\x1b[0;1;2;3;4;5;7;8;9;38;2;255;0;0;48;2;0;0;255mx");
-    let cell = device.active_screen().viewport_row(ViewportLine(0))[0];
+    let cell = &device.active_screen().viewport_row(ViewportLine(0))[0];
     assert_eq!(cell.fg, Color::Rgb(Rgb { r: 255, g: 0, b: 0 }));
     assert_eq!(cell.bg, Color::DefaultBackground);
 }
@@ -61,6 +61,25 @@ fn an_osc_4_past_the_parser_cap_loses_its_thirty_second_pair() {
     let device = interpret(format!("\x1b]4{pairs}\x07").as_bytes());
     assert_eq!(device.palette().indexed[30], Rgb { r: 1, g: 2, b: 3 });
     assert_eq!(device.palette().indexed[31], Palette::default().indexed[31]);
+}
+
+/// Asserts that a hyperlink target carrying more semicolons than the
+/// parser's parameter cap allows is stored truncated, which this
+/// terminal cannot detect.
+///
+/// Case: a program links to a generated URL whose query string carries
+/// more than sixty semicolons.
+#[test]
+fn a_hyperlink_target_past_the_parser_cap_is_truncated() {
+    let tail: String = (0..70).map(|index| format!(";{index}")).collect();
+    let device = interpret(format!("\x1b]8;;https://a.example{tail}\x1b\\a").as_bytes());
+    let id = device.active_screen().viewport_row(ViewportLine(0))[0]
+        .hyperlink_id
+        .expect("a link is open");
+    let uri = device.hyperlink_uri(id).expect("the id resolves");
+    assert!(uri.as_str().starts_with("https://a.example;0;1"));
+    assert!(!uri.as_str().ends_with(";69"));
+    assert!(uri.as_str().ends_with(";60"));
 }
 
 /// Compares one interpreted chunk against a baseline across the modes,

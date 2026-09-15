@@ -59,7 +59,7 @@ fn glyph_at(device: &DeviceState, line: u16, column: u16) -> char {
 
 /// The whole cell at `column` of the device's `line`th visible row.
 fn cell_at(device: &DeviceState, line: u16, column: u16) -> Cell {
-    device.active_screen().viewport_row(ViewportLine(line))[column]
+    device.active_screen().viewport_row(ViewportLine(line))[column].clone()
 }
 
 /// Reports the reply bytes `chunk` produced.
@@ -154,13 +154,16 @@ mod alternate_screen;
 mod auto_wrap;
 mod character_editing;
 mod character_set;
+mod clipboard;
 mod column_mode;
 mod cursor;
 mod cursor_checkpoint;
 mod cursor_style;
 mod device_attributes;
 mod device_status;
+mod dynamic_colors;
 mod erase;
+mod hyperlink;
 mod interpret_output;
 mod keypad;
 mod line_editing;
@@ -183,3 +186,4 @@ mod text_cursor_enable;
 mod title;
 mod unsupported_sequences;
 mod webview_apc;
+mod wide_invariants;

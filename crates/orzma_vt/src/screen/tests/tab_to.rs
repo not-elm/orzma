@@ -22,7 +22,9 @@ fn a_tab_seats_the_cursor_at_the_target_column() {
 fn a_tab_keeps_the_deferred_wrap_armed() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
-        screen.print(c, InsertReplaceMode::Replace, AutoWrap::Enabled);
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
     }
     assert!(screen.state.pending_wrap);
     screen.tab_to(GridColumn(0));

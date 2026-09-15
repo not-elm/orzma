@@ -14,6 +14,7 @@ use crate::{
 use std::path::PathBuf;
 
 mod device;
+mod error;
 mod frame;
 mod hyperlink;
 mod interpreter;
@@ -28,14 +29,16 @@ pub mod prelude {
         AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode, MouseEncoding,
         MouseTracking, ScreenKind, TextCursorEnable, TextCursorModes, VtModes,
     };
+    pub use crate::error::{GridSizeError, RunError, StampError, VtError, VtResult};
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::placement::{AnchoredPlacement, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};
+    pub use crate::screen::cell::{GlyphClass, MAX_COMBINING};
     pub use crate::screen::cursor::{CURSOR_VISIBLE_BIT, Cursor};
-    pub use crate::screen::grid::GridSize;
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
     pub use crate::screen::grid::row::Row;
     pub use crate::screen::grid::run::{Run, Style};
+    pub use crate::screen::grid::{GridSize, MIN_COLUMNS};
     pub use crate::screen::selection::{
         CellSide, SelectionGeometry, SelectionKind, SelectionRange,
     };
@@ -152,7 +155,8 @@ pub trait Vt {
     /// the dimensions did not change. Only a real change stages (full)
     /// damage.
     ///
-    /// The caller must reject a `size` with a zero axis.
+    /// Both axes of `size` must be nonzero, as [`GridSize::new`]
+    /// guarantees.
     ///
     /// # Invariants
     ///
@@ -259,11 +263,13 @@ pub enum VtSignal {
     ResetTitle,
     /// The application copied data to the system clipboard via OSC 52.
     ///
-    /// [`OrzmaVt`] never raises it.
+    /// An empty `content` leaves the clipboard holding the empty string.
     Clipboard {
         /// The clipboard content that was copied.
         content: String,
     },
+    /// The application cleared the system clipboard via OSC 52.
+    ClearClipboard,
     /// A new current working directory reported via OSC 7.
     CurrentDir(PathBuf),
     /// A webview the PTY mounted inline, which the VT accepted and
@@ -329,7 +335,8 @@ pub struct OrzmaVt {
 impl OrzmaVt {
     /// Builds a terminal whose first frame carries every viewport row.
     ///
-    /// The caller must reject a `size` with a zero axis.
+    /// Both axes of `size` must be nonzero, as [`GridSize::new`]
+    /// guarantees.
     ///
     /// # Invariants
     ///
@@ -419,8 +426,9 @@ impl Vt for OrzmaVt {
 mod tests {
     use super::*;
     use crate::device::color::{Palette, Rgb};
-    use crate::device::modes::{AutoWrap, InsertReplaceMode};
+    use crate::error::{GridSizeError, VtError};
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
+    use crate::screen::grid::MIN_COLUMNS;
     use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
     use crate::screen::selection::{SelectionGeometry, SelectionRange};
     use crate::screen::viewport::ViewportLine;
@@ -1000,10 +1008,7 @@ mod tests {
     fn a_staged_print_survives_the_composed_pipeline() {
         let mut vt = vt();
         vt.frame();
-        let damage =
-            vt.device
-                .active_screen_mut()
-                .print('x', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        let damage = vt.device.print('x').expect("a printable glyph");
         vt.tracker.stage_if_changed(damage);
         for _ in 0..3 {
             vt.device.active_screen_mut().line_feed();
@@ -1402,5 +1407,82 @@ mod tests {
         assert_eq!(vt.selection_text(), None);
         vt.interpret(b"\x1b[?1049l");
         assert_eq!(vt.selection_text().as_deref(), Some("abcd"));
+    }
+
+    /// Asserts that a terminal built from a one-column size holds the
+    /// two columns a fullwidth glyph needs.
+    ///
+    /// Case: the multiplexer splits a pane vertically until a leaf is
+    /// handed a single column.
+    #[test]
+    fn a_single_column_terminal_is_widened_to_two() {
+        let size = GridSize::new(1, 3).expect("a valid size");
+        let vt = OrzmaVt::new(size, 10);
+        assert_eq!(vt.grid_size().cols, MIN_COLUMNS);
+    }
+
+    /// Asserts that a resize to a one-column size widens the grid the
+    /// same way as construction.
+    ///
+    /// Case: the user drags the window until a pane would be one column
+    /// wide.
+    #[test]
+    fn a_resize_to_one_column_is_widened_to_two() {
+        let mut vt = OrzmaVt::new(GridSize::new(4, 3).expect("a valid size"), 10);
+        let _ = vt.resize(GridSize::new(1, 3).expect("a valid size"));
+        assert_eq!(vt.grid_size().cols, MIN_COLUMNS);
+    }
+
+    /// Asserts that a size already wide enough is built unchanged.
+    ///
+    /// Case: the user resizes the window to an ordinary width.
+    #[test]
+    fn a_wide_enough_size_is_left_alone() {
+        assert_eq!(
+            GridSize::new(80, 24).expect("a valid size"),
+            GridSize { cols: 80, rows: 24 }
+        );
+    }
+
+    /// Asserts that a zero axis is rejected rather than clamped.
+    ///
+    /// Case: a minimized window, or a frame before cell metrics load,
+    /// computes 0 for an axis.
+    #[test]
+    fn a_zero_axis_is_rejected() {
+        for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
+            assert!(
+                matches!(
+                    GridSize::new(cols, rows),
+                    Err(VtError::GridSize(GridSizeError::ZeroAxis))
+                ),
+                "{cols}x{rows} must be rejected"
+            );
+        }
+    }
+
+    /// Asserts the per-axis cap: a count beyond `MAX_COLS` / `MAX_ROWS`
+    /// is rejected, while the boundary value is accepted.
+    ///
+    /// Case: a degenerate or hostile window geometry asks for a grid
+    /// far larger than any real display.
+    #[test]
+    fn an_oversized_axis_is_rejected() {
+        for (cols, rows) in [(GridSize::MAX_COLS + 1, 24), (80, GridSize::MAX_ROWS + 1)] {
+            assert!(
+                matches!(
+                    GridSize::new(cols, rows),
+                    Err(VtError::GridSize(GridSizeError::TooLarge))
+                ),
+                "{cols}x{rows} must be rejected"
+            );
+        }
+        assert_eq!(
+            GridSize::new(GridSize::MAX_COLS, GridSize::MAX_ROWS).expect("a valid size"),
+            GridSize {
+                cols: GridSize::MAX_COLS,
+                rows: GridSize::MAX_ROWS
+            }
+        );
     }
 }

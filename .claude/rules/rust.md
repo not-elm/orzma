@@ -680,6 +680,56 @@ Exceptions:
   state). Move what you can to the observer; keep the irreducible reads in the
   gather system and record why in a `// NOTE:`.
 
+## Error handling — return `Result`, don't assert or unwrap
+
+A precondition, an invariant, or a value that may be missing is reported
+to the caller as an error value, not enforced with a panic. A
+`debug_assert!` checks nothing in a release build, so the violated state
+simply continues; an `unwrap` / `expect` turns one bad input into a crash
+of the whole terminal. A `Result` leaves the decision to the caller — drop
+the glyph, keep the old state and log, close the pane.
+
+Required:
+
+| Instead of                                                  | Use                                                                                    |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `debug_assert!(end < row.len())` guarding a function body   | `if end >= row.len() { return Err(StampError::OutOfRow.into()); }` and `-> VtResult`   |
+| A constructor that clamps or panics on a bad argument       | `fn new(..) -> VtResult<Self>` returning a `thiserror` variant                          |
+| `map.get(&id).unwrap()` / `.expect("known id")`             | `let Some(uri) = map.get(&id) else { return Err(..) };` or `?`                         |
+| `.expect(..)` on an I/O, parse, or channel result           | `?` with a `#[from]` conversion into the crate's error enum                             |
+
+- Error enums derive `thiserror::Error`, and a crate gathers its failures
+  into one enum with a `#[from]` variant per source (`orzma_vt::VtError`
+  with its `VtResult` alias is the model). A fallible `pub` fn documents
+  its failures under `# Errors`.
+- A precondition the type system can state is stated there instead
+  (`BodyWidth` for a stamp, `GridSize` for a validated size): the check
+  then disappears rather than becoming an error.
+- The place that cannot recover — a Bevy system or observer, a thread's
+  main loop — handles the `Err` at that boundary: log it with `warn!` /
+  `error!` and leave the state as it was.
+
+Forbidden:
+
+| Pattern                                                   | Why                                                       |
+| --------------------------------------------------------- | --------------------------------------------------------- |
+| `debug_assert!` / `debug_assert_eq!` on an input or state | Silent in release; the violated invariant keeps running   |
+| `.unwrap()` / `.expect(..)` in non-test code              | A panic tears down the whole app for one bad value        |
+| `panic!` / `unreachable!` / `assert!` to reject an input  | Same                                                      |
+
+Exceptions:
+
+- `#[cfg(test)] mod tests { ... }` contents, `tests/` files, and
+  test-support code: `expect("what a valid value looks like")` is the
+  idiom there, and `assert!` is the point.
+- A condition that is impossible at that point — a literal, or a value
+  the same function has already checked — may use `expect` with a message
+  naming the invariant, justified with a `// NOTE:` and
+  `#[expect(clippy::expect_used, reason = "...")]` (or
+  `clippy::unwrap_used`), as "Escape hatches" prescribes.
+- Code that predates this rule keeps its asserts and unwraps until it is
+  touched; a change to such a function converts the ones in its path.
+
 ## Escape hatches
 
 When a rule is physically impossible to follow (e.g., trybuild fixtures, generated code, FFI conventions), justify the exception with a one-line `// NOTE:` and apply a local lint allowance:
@@ -722,6 +772,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Constructors — a function that builds a value of a local struct/enum must be an associated function on that type (`T::build`), not a free `fn build_t(…) -> T` (see "Constructors — type-building functions are associated functions")
 - System composition — long systems that interleave gather/decide/apply must be split: pure decision helpers returning effect values, hand off across the seam via an `EntityEvent`+observer or a `Message` (`MessageWriter`/`MessageReader`) — never inline sequencing — bulky inline blocks extracted to helpers, and each system body kept within ~150 lines (see "System composition — keep systems focused; split by responsibility")
 - Protocol purity — `orzmux::protocol` types carry no `Entity` / bevy types / GPU handles (spec D7), so the multiplexer backend stays a Bevy-free thread and the channel types can later cross a socket boundary unchanged
+- Error handling — no `debug_assert!`, `unwrap`, `expect`, `panic!` or `assert!` in non-test code to enforce a precondition or reject an input; failures are returned as `Result` with `thiserror` enums and handled at the boundary that cannot recover (see "Error handling — return `Result`, don't assert or unwrap"). Enabling `clippy::unwrap_used` / `clippy::expect_used` workspace-wide would move the unwrap / expect half to the tool-enforced list
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
 

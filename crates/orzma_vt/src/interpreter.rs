@@ -12,9 +12,13 @@ use crate::device::modes::{
 };
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
-use crate::interpreter::osc::{
-    OscTerminator, PaletteRequest, current_dir, palette_reply, window_title,
+use crate::interpreter::osc::clipboard::ClipboardRequest;
+use crate::interpreter::osc::dynamic_color::{
+    DynamicColor, DynamicColorRequest, dynamic_color_reply,
 };
+use crate::interpreter::osc::hyperlink::HyperlinkRequest;
+use crate::interpreter::osc::palette::{PaletteRequest, palette_reply};
+use crate::interpreter::osc::{OscTerminator, current_dir, window_title};
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::screen::tabs::CharacterTabEdit;
@@ -109,11 +113,9 @@ impl VTActor for Executor<'_> {
         if b == '\u{7f}' {
             return;
         }
-        let modes = self.device.modes();
-        let damage =
-            self.device
-                .active_screen_mut()
-                .print(b, modes.insert_replace, modes.auto_wrap);
+        let Ok(damage) = self.device.print(b) else {
+            return;
+        };
         self.stage(damage);
     }
 
@@ -485,9 +487,13 @@ impl VTActor for Executor<'_> {
         }
     }
 
-    // TODO: Implement the remaining OSC handlers — the dynamic colors
-    // (OSC 10 / 11 / 12), hyperlinks (OSC 8), and the clipboard (OSC 52).
+    /// Acts on one operating system command, unless CAN or SUB cancelled
+    /// it; a cancelled command is ignored as a whole. A command that ESC
+    /// interrupts is still acted on.
     fn osc_dispatch(&mut self, params: &[&[u8]]) {
+        let Some(terminator) = OscTerminator::from_byte(self.current_byte) else {
+            return;
+        };
         if let Some(title) = window_title(params) {
             self.device.set_title(Some(title.clone()));
             self.signal(VtSignal::Title(title));
@@ -495,7 +501,19 @@ impl VTActor for Executor<'_> {
         if let Some(path) = current_dir(params) {
             self.signal(VtSignal::CurrentDir(path));
         }
-        self.apply_palette_requests(params);
+        match HyperlinkRequest::parse(params) {
+            Some(HyperlinkRequest::Open { id, uri }) => self.device.open_hyperlink(id, uri),
+            Some(HyperlinkRequest::Close) => self.device.close_hyperlink(),
+            None => {}
+        }
+        if let Some(request) = ClipboardRequest::parse(params) {
+            self.signal(match request {
+                ClipboardRequest::Set(content) => VtSignal::Clipboard { content },
+                ClipboardRequest::Clear => VtSignal::ClearClipboard,
+            });
+        }
+        self.apply_palette_requests(params, terminator);
+        self.apply_dynamic_color_requests(params, terminator);
     }
 
     fn apc_dispatch(&mut self, data: Vec<u8>) {
@@ -605,14 +623,49 @@ impl Executor<'_> {
         }
     }
 
+    /// Applies the dynamic-color requests an `OSC 10`, `OSC 11`,
+    /// `OSC 110`, or `OSC 111` carries, in order, answering each query
+    /// with the colour held at that point.
+    ///
+    /// A command that changes a colour stages one full repaint,
+    /// whatever the number of requests it carries.
+    fn apply_dynamic_color_requests(&mut self, params: &[&[u8]], terminator: OscTerminator) {
+        let mut changed = false;
+        for request in DynamicColorRequest::parse(params) {
+            match request {
+                DynamicColorRequest::Set { target, color } => {
+                    changed |= match target {
+                        DynamicColor::Foreground => self.device.set_foreground_color(color),
+                        DynamicColor::Background => self.device.set_background_color(color),
+                    };
+                }
+                DynamicColorRequest::Reset { target } => {
+                    changed |= match target {
+                        DynamicColor::Foreground => self.device.reset_foreground_color(),
+                        DynamicColor::Background => self.device.reset_background_color(),
+                    };
+                }
+                DynamicColorRequest::Query { target } => {
+                    let color = match target {
+                        DynamicColor::Foreground => self.device.palette().foreground,
+                        DynamicColor::Background => self.device.palette().background,
+                    };
+                    self.reply(&dynamic_color_reply(target, color, terminator));
+                }
+            }
+        }
+        if changed {
+            self.stage(Some(DamageSpan::Full));
+        }
+    }
+
     /// Applies the palette requests an `OSC 4` or `OSC 104` carries, in
     /// order, answering each query with the slot's colour at that
     /// point.
     ///
     /// A command that changes a slot stages one full repaint, whatever
     /// the number of requests it carries.
-    fn apply_palette_requests(&mut self, params: &[&[u8]]) {
-        let terminator = OscTerminator::from_byte(self.current_byte);
+    fn apply_palette_requests(&mut self, params: &[&[u8]], terminator: OscTerminator) {
         let mut changed = false;
         for request in PaletteRequest::parse(params) {
             match request {

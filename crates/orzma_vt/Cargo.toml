@@ -9,9 +9,15 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64 = "0.22"
 bitflags = { workspace = true }
 percent-encoding = "2"
+thiserror = { workspace = true }
+unicode-width = { workspace = true }
 vtparse = { version = "0.7.0" }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

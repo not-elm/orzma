@@ -1,4 +1,4 @@
-//! IME preedit overlay: renders the composition (grapheme cells, caret,
+//! IME preedit overlay: renders the composition (glyph cells, caret,
 //! clause highlight, underline) over the focused terminal's cursor cell.
 
 mod layout;
@@ -37,7 +37,7 @@ pub(super) struct ImeOverlayPlugin;
 
 impl Plugin for ImeOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ImeGraphemePool>()
+        app.init_resource::<ImeGlyphPool>()
             .add_systems(
                 Startup,
                 spawn_ime_overlay_once.after(TerminalFontInitSet::InitCellMetrics),
@@ -101,11 +101,11 @@ pub struct ImeCaretBar;
 #[derive(Component)]
 pub struct ImeClauseHighlight;
 
-/// Marker for a pooled per-grapheme preedit `Text` node. Each is an
+/// Marker for a pooled per-glyph preedit `Text` node. Each is an
 /// independent top-level UI entity (never a child of another node) so it stays
 /// a Taffy leaf and the text measure func drives its `ComputedNode.size`.
 #[derive(Component)]
-struct ImeGraphemeCell;
+struct ImeGlyphCell;
 
 /// Marker for the single continuous underline bar drawn under the whole
 /// preedit. A solid `Node` bar (not Bevy's per-glyph `Underline`) so it has no
@@ -113,13 +113,13 @@ struct ImeGraphemeCell;
 #[derive(Component)]
 struct ImeUnderline;
 
-/// Pool of `ImeGraphemeCell` entities, reused across compositions and grown on
-/// demand. Index `i` holds the i-th visible grapheme; entries past the active
+/// Pool of `ImeGlyphCell` entities, reused across compositions and grown on
+/// demand. Index `i` holds the i-th visible glyph; entries past the active
 /// composition length are hidden (`Display::None`).
 #[derive(Resource, Default)]
-struct ImeGraphemePool(Vec<Entity>);
+struct ImeGlyphPool(Vec<Entity>);
 
-/// Initial number of pooled grapheme nodes pre-spawned at Startup. Covers
+/// Initial number of pooled glyph nodes pre-spawned at Startup. Covers
 /// typical short compositions without runtime growth; longer compositions grow
 /// the pool on demand.
 const INITIAL_POOL_CAP: usize = 16;
@@ -133,7 +133,7 @@ fn ime_is_composing(state: Option<Res<ImeState>>) -> bool {
 
 /// Grid-aligns the IME preedit overlay at the attached terminal's cursor
 /// cell. Lays out the composition as one cell-anchored `Text` node per
-/// grapheme cluster (pooled in [`ImeGraphemePool`], grown on demand), draws
+/// glyph (pooled in [`ImeGlyphPool`], grown on demand), draws
 /// an occluding background rect and a continuous underline bar, and
 /// positions the caret beam (`begin == end`) or clause highlight
 /// (`begin != end`). Every visible element uses the same cell arithmetic, so
@@ -145,9 +145,9 @@ fn ime_is_composing(state: Option<Res<ImeState>>) -> bool {
 /// defensively and returns.
 fn position_ime_overlay(
     mut commands: Commands,
-    mut pool: ResMut<ImeGraphemePool>,
+    mut pool: ResMut<ImeGlyphPool>,
     mut nodes: Query<&mut Node>,
-    mut cell_texts: Query<&mut Text, With<ImeGraphemeCell>>,
+    mut cell_texts: Query<&mut Text, With<ImeGlyphCell>>,
     mut overlay_bg: Query<&mut BackgroundColor, With<ImeOverlayNode>>,
     state: Res<ImeState>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -257,7 +257,7 @@ fn position_ime_overlay(
         }
     }
 
-    apply_grapheme_cells(
+    apply_glyph_cells(
         &mut commands,
         &mut nodes,
         &mut cell_texts,
@@ -282,14 +282,14 @@ fn position_ime_overlay(
     apply_caret_visual(&mut nodes, caret_entity, clause_entity, &layout.caret);
 }
 
-/// Applies the placed grapheme cells to the pooled `Text` nodes: reuses pool
+/// Applies the placed glyph cells to the pooled `Text` nodes: reuses pool
 /// entries by index (equality-guarded writes), grows the pool for any overflow,
 /// and hides the unused tail.
-fn apply_grapheme_cells(
+fn apply_glyph_cells(
     commands: &mut Commands,
     nodes: &mut Query<&mut Node>,
-    cell_texts: &mut Query<&mut Text, With<ImeGraphemeCell>>,
-    pool: &mut ImeGraphemePool,
+    cell_texts: &mut Query<&mut Text, With<ImeGlyphCell>>,
+    pool: &mut ImeGlyphPool,
     ui_font: &TerminalUiFont,
     font_size: &TerminalFontSize,
     cells: &[PlacedCell],
@@ -318,7 +318,7 @@ fn apply_grapheme_cells(
             // NOTE: grown entities are not in `nodes` / `cell_texts` this frame,
             // so they are spawned already configured; their tail appears one
             // frame late only on the growth frame.
-            let entity = spawn_grapheme_cell(
+            let entity = spawn_glyph_cell(
                 commands,
                 ui_font,
                 font_size,
@@ -426,7 +426,7 @@ fn suppress_terminal_cursor_during_ime(
 /// (commit / cancel / `Ime::Disabled`).
 fn hide_ime_overlay(
     mut nodes: Query<&mut Node>,
-    pool: Res<ImeGraphemePool>,
+    pool: Res<ImeGlyphPool>,
     background: Query<Entity, With<ImeOverlayNode>>,
     underline: Query<Entity, With<ImeUnderline>>,
     caret: Query<Entity, With<ImeCaretBar>>,
@@ -476,7 +476,7 @@ const IME_OVERLAY_BG_Z: i32 = IME_OVERLAY_Z - 1;
 // coordinates each frame in `position_ime_overlay`.
 fn spawn_ime_overlay_once(
     mut commands: Commands,
-    mut pool: ResMut<ImeGraphemePool>,
+    mut pool: ResMut<ImeGlyphPool>,
     ui_font: Res<TerminalUiFont>,
     font_size: Res<TerminalFontSize>,
 ) {
@@ -544,7 +544,7 @@ fn spawn_ime_overlay_once(
 
     pool.0 = (0..INITIAL_POOL_CAP)
         .map(|_| {
-            spawn_grapheme_cell(
+            spawn_glyph_cell(
                 &mut commands,
                 &ui_font,
                 &font_size,
@@ -600,7 +600,7 @@ fn set_node_rect(
 }
 
 /// Hides every IME overlay part (background, underline, caret, clause, and all
-/// pooled grapheme cells). Must be called on every path where the overlay
+/// pooled glyph cells). Must be called on every path where the overlay
 /// must not be shown, so no part leaks past a commit, cancel, or focus loss.
 fn hide_all_overlay_parts(
     nodes: &mut Query<&mut Node>,
@@ -608,7 +608,7 @@ fn hide_all_overlay_parts(
     underline: Option<Entity>,
     caret: Option<Entity>,
     clause: Option<Entity>,
-    pool: &ImeGraphemePool,
+    pool: &ImeGlyphPool,
 ) {
     set_node_display(nodes, bg, Display::None);
     for entity in [underline, caret, clause].into_iter().flatten() {
@@ -619,9 +619,9 @@ fn hide_all_overlay_parts(
     }
 }
 
-/// Spawns one `ImeGraphemeCell` leaf `Text` node, configured with `text`, an
+/// Spawns one `ImeGlyphCell` leaf `Text` node, configured with `text`, an
 /// absolute `left`/`top`, and `display`.
-fn spawn_grapheme_cell(
+fn spawn_glyph_cell(
     commands: &mut Commands,
     ui_font: &TerminalUiFont,
     font_size: &TerminalFontSize,
@@ -647,7 +647,7 @@ fn spawn_grapheme_cell(
                 ..default()
             },
             GlobalZIndex(IME_OVERLAY_Z),
-            ImeGraphemeCell,
+            ImeGlyphCell,
         ))
         .id()
 }
@@ -732,7 +732,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.insert_resource(crate::font::TerminalUiFont::default());
         app.insert_resource(TerminalFontSize(9.0));
-        app.init_resource::<ImeGraphemePool>();
+        app.init_resource::<ImeGlyphPool>();
         app.add_systems(Startup, spawn_ime_overlay_once);
         app.update();
 
@@ -777,7 +777,7 @@ mod tests {
         );
         app.insert_resource(state);
 
-        app.init_resource::<ImeGraphemePool>();
+        app.init_resource::<ImeGlyphPool>();
         app.add_systems(Startup, spawn_ime_overlay_once);
         app.world_mut().spawn((
             Window {
@@ -851,7 +851,7 @@ mod tests {
             metrics: metrics(10.0, 16.0),
             phys_font_size: 12,
         });
-        app.init_resource::<ImeGraphemePool>();
+        app.init_resource::<ImeGlyphPool>();
 
         let mut state = ImeState::default();
         apply_event(
@@ -901,10 +901,10 @@ mod tests {
     }
 
     #[test]
-    fn ascii_grapheme_cells_land_on_cell_boundaries() {
+    fn ascii_glyph_cells_land_on_cell_boundaries() {
         // Cursor at (0,0), cell pitch 10 → cells at x = 0, 10, 20.
         let mut app = run_overlay_with_composition("abc", Some((3, 3)));
-        let pool = app.world().resource::<ImeGraphemePool>().0.clone();
+        let pool = app.world().resource::<ImeGlyphPool>().0.clone();
         let lefts: Vec<Val> = pool
             .iter()
             .take(3)
@@ -924,7 +924,7 @@ mod tests {
         let mut caret = app.world_mut().query_filtered::<&Node, With<ImeCaretBar>>();
         assert_eq!(caret.single(app.world()).unwrap().left, Val::Px(40.0));
 
-        let pool = app.world().resource::<ImeGraphemePool>().0.clone();
+        let pool = app.world().resource::<ImeGlyphPool>().0.clone();
         let lefts: Vec<Val> = pool
             .iter()
             .take(2)
@@ -934,19 +934,19 @@ mod tests {
     }
 
     #[test]
-    fn spawn_creates_grapheme_pool_and_underline() {
+    fn spawn_creates_glyph_pool_and_underline() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.insert_resource(crate::font::TerminalUiFont::default());
         app.insert_resource(TerminalFontSize(12.0));
-        app.init_resource::<ImeGraphemePool>();
+        app.init_resource::<ImeGlyphPool>();
         app.add_systems(Startup, spawn_ime_overlay_once);
         app.update();
 
         assert_eq!(
-            app.world().resource::<ImeGraphemePool>().0.len(),
+            app.world().resource::<ImeGlyphPool>().0.len(),
             INITIAL_POOL_CAP,
-            "the grapheme pool must be pre-spawned at the initial capacity"
+            "the glyph pool must be pre-spawned at the initial capacity"
         );
         let mut underlines = app
             .world_mut()
@@ -980,7 +980,7 @@ mod tests {
                         With<ImeUnderline>,
                         With<ImeCaretBar>,
                         With<ImeClauseHighlight>,
-                        With<ImeGraphemeCell>,
+                        With<ImeGlyphCell>,
                     )>,
                 ),
             >,
@@ -996,7 +996,7 @@ mod tests {
             metrics: metrics(10.0, 16.0),
             phys_font_size: 12,
         });
-        app.init_resource::<ImeGraphemePool>();
+        app.init_resource::<ImeGlyphPool>();
         app.init_resource::<ChangedOverlayNodes>();
 
         let mut state = ImeState::default();
@@ -1101,12 +1101,12 @@ mod tests {
             Display::None,
             "the underline must be hidden after composition clears",
         );
-        let pool = app.world().resource::<ImeGraphemePool>().0.clone();
+        let pool = app.world().resource::<ImeGlyphPool>().0.clone();
         for &cell in &pool {
             assert_eq!(
                 app.world().get::<Node>(cell).unwrap().display,
                 Display::None,
-                "every pooled grapheme cell must be hidden",
+                "every pooled glyph cell must be hidden",
             );
         }
     }
@@ -1126,7 +1126,7 @@ mod tests {
             metrics: metrics(10.0, 16.0),
             phys_font_size: 12,
         });
-        app.init_resource::<ImeGraphemePool>();
+        app.init_resource::<ImeGlyphPool>();
         app.init_resource::<ImeState>();
 
         app.add_systems(Startup, spawn_ime_overlay_once);

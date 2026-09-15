@@ -293,26 +293,19 @@ fn paint_text_decorations(
     cell_hyperlink_id: u32,
 ) -> vec4<f32> {
     var color = base;
-    var underline_painted = false;
-    if cell_hyperlink_id != 0u {
-        let is_hovered =
-            params.hover_active != 0u &&
-            cell_hyperlink_id == params.hover_hyperlink_id;
-        let underline_color = select(fg, ACCENT_LINK_COLOR, is_hovered);
-        let y_top = params.ascent_px - params.underline_position_phys;
-        let y_bot = y_top + params.underline_thickness_phys;
-        if in_cell_px.y >= y_top && in_cell_px.y < y_bot {
-            color = vec4<f32>(underline_color.rgb, max(color.a, underline_color.a));
-        }
-        underline_painted = true;
-    }
-    if (style & STYLE_UNDERLINE) != 0u && !underline_painted {
+    let is_link = cell_hyperlink_id != 0u;
+    let hovered_link =
+        is_link &&
+        params.hover_active != 0u &&
+        cell_hyperlink_id == params.hover_hyperlink_id;
+    if is_link || (style & STYLE_UNDERLINE) != 0u {
+        let underline_color = select(fg, ACCENT_LINK_COLOR, hovered_link);
         // underline_position_phys is negative (below baseline). The actual
         // y in the cell is baseline + |underline_position|.
         let y_top = params.ascent_px - params.underline_position_phys;
         let y_bot = y_top + params.underline_thickness_phys;
         if in_cell_px.y >= y_top && in_cell_px.y < y_bot {
-            color = vec4<f32>(fg.rgb, max(color.a, fg.a));
+            color = vec4<f32>(underline_color.rgb, max(color.a, underline_color.a));
         }
     }
     if (style & STYLE_STRIKE) != 0u {
@@ -325,6 +318,53 @@ fn paint_text_decorations(
     return color;
 }
 
+// Whether the cursor covers (row, col): the cursor's own cell, the right
+// half of a wide glyph whose body holds the cursor, or the body of a wide
+// glyph whose right half holds the cursor.
+fn cursor_covers(row: u32, col: u32) -> bool {
+    if row != params.cursor_pos.y {
+        return false;
+    }
+    if col == params.cursor_pos.x {
+        return true;
+    }
+    let base = row * params.grid_size.x;
+    if col == params.cursor_pos.x + 1u {
+        let idx = base + col;
+        if idx < arrayLength(&cells)
+            && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u {
+            return true;
+        }
+    }
+    if col + 1u == params.cursor_pos.x {
+        let idx = base + params.cursor_pos.x;
+        if idx < arrayLength(&cells)
+            && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether the cursor sits on the right half of a wide glyph.
+fn cursor_on_wide_right_half() -> bool {
+    let idx = params.cursor_pos.y * params.grid_size.x + params.cursor_pos.x;
+    return idx < arrayLength(&cells)
+        && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u;
+}
+
+// Whether a bar cursor is drawn in (row, col): the cursor's own cell, or
+// the body cell when the cursor sits on a wide glyph's right half.
+fn bar_covers(row: u32, col: u32) -> bool {
+    if row != params.cursor_pos.y {
+        return false;
+    }
+    if cursor_on_wide_right_half() {
+        return col + 1u == params.cursor_pos.x;
+    }
+    return col == params.cursor_pos.x;
+}
+
 fn paint_cursor(
     row: u32,
     col: u32,
@@ -335,7 +375,7 @@ fn paint_cursor(
     let cursor_blinking = (params.cursor_style & CURSOR_BLINKING) != 0u;
     let cursor_shape = (params.cursor_style >> 1u) & 3u;
     let blink_on = !cursor_blinking || (fract(params.time_seconds) < 0.5);
-    let on_cursor_cell = col == params.cursor_pos.x && row == params.cursor_pos.y;
+    let on_cursor_cell = select(cursor_covers(row, col), bar_covers(row, col), cursor_shape == CURSOR_SHAPE_BAR);
     if !(cursor_visible && blink_on && on_cursor_cell) {
         return base;
     }
@@ -540,9 +580,12 @@ fn resolve_cell_colors(cell: Cell) -> CellColors {
         // NOTE: The terminal default bg maps to transparent (alpha=0) so that
         // cells without an explicit background let webview overlays show through.
         // When reverse-video promotes that transparent sentinel to the glyph
-        // foreground color, materialise it as opaque black so text stays visible.
+        // foreground color, materialise it as the colour that default
+        // background actually paints (bg_padding_color). A hardcoded black here
+        // would paint the glyph black once OSC 11 recolors the default
+        // background, which is unreadable on a dark reversed cell.
         if fg.a == 0.0 {
-            fg = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+            fg = vec4<f32>(params.bg_padding_color.rgb, 1.0);
         }
     }
     if dim {

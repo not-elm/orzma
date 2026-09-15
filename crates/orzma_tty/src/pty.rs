@@ -6,6 +6,7 @@ use crate::{
     error::{OrzmaTtyError, OrzmaTtyResult},
 };
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded, unbounded};
+use orzma_vt::prelude::GridSize;
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 #[cfg(any(test, feature = "test-support"))]
 use std::io::Result as IoResult;
@@ -69,14 +70,8 @@ impl Pty {
     /// holds the child until a cursor-position report arrives; the owner
     /// must write that reply through [`Self::write_all`].
     pub fn spawn(options: &SpawnOptions) -> OrzmaTtyResult<Self> {
-        let (pixel_width, pixel_height) = options.cell_px.window_pixels(options.cols, options.rows);
         let pty_pair = native_pty_system()
-            .openpty(PtySize {
-                rows: options.rows,
-                cols: options.cols,
-                pixel_width,
-                pixel_height,
-            })
+            .openpty(options.cell_px.pty_size(options.size))
             .map_err(OrzmaTtyError::PtyOpen)?;
 
         let mut cmd = build_shell_command(&options.shell);
@@ -163,23 +158,17 @@ impl Pty {
         Ok(())
     }
 
-    /// Applies the given grid size to the PTY master (`TIOCSWINSZ`),
-    /// with the pixel fields set to the total window pixels
-    /// `cell_px × cells` (see [`CellPixels::window_pixels`]).
+    /// Applies `size` to the PTY master (`TIOCSWINSZ`), with the pixel
+    /// fields set to the total window pixels `cell_px × cells` (see
+    /// [`CellPixels::pty_size`]).
     ///
     /// Forwards the cell counts verbatim, without validating them, and
     /// maps the master's error to [`OrzmaTtyError::PtyResize`].
-    pub fn resize(&mut self, cols: u16, rows: u16, cell_px: CellPixels) -> OrzmaTtyResult {
-        let (pixel_width, pixel_height) = cell_px.window_pixels(cols, rows);
+    pub fn resize(&mut self, size: GridSize, cell_px: CellPixels) -> OrzmaTtyResult {
         self.master
             .lock()
             .unwrap()
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width,
-                pixel_height,
-            })
+            .resize(cell_px.pty_size(size))
             .map_err(OrzmaTtyError::PtyResize)
     }
 
@@ -200,14 +189,9 @@ impl Pty {
     /// `writer` instead of the master, spawning no child process and no
     /// reader thread.
     #[cfg(test)]
-    pub fn detached(cols: u16, rows: u16, writer: Box<dyn Write + Send>) -> OrzmaTtyResult<Self> {
+    pub fn detached(size: GridSize, writer: Box<dyn Write + Send>) -> OrzmaTtyResult<Self> {
         let pty_pair = native_pty_system()
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
+            .openpty(CellPixels::default().pty_size(size))
             .map_err(OrzmaTtyError::PtyOpen)?;
         Ok(Self::with_master(pty_pair.master, writer))
     }
@@ -519,6 +503,10 @@ mod tests {
     #[cfg(unix)]
     fn answer_cursor_query(_pty: &mut Pty) {}
 
+    fn grid(cols: u16, rows: u16) -> GridSize {
+        GridSize::new(cols, rows).expect("a valid size")
+    }
+
     /// Asserts that a resize round-trips through the kernel: the size
     /// read back via `TIOCGWINSZ` is the size just applied.
     ///
@@ -526,8 +514,9 @@ mod tests {
     /// PTY, and a program reads the size back with `TIOCGWINSZ`.
     #[test]
     fn resize_applies_the_size_to_the_kernel() {
-        let mut pty = Pty::detached(80, 24, Box::new(sink())).expect("Pty::detached");
-        pty.resize(120, 40, CellPixels::default()).expect("resize");
+        let mut pty = Pty::detached(grid(80, 24), Box::new(sink())).expect("Pty::detached");
+        pty.resize(grid(120, 40), CellPixels::default())
+            .expect("resize");
         let size = pty.size();
         assert_eq!((size.cols, size.rows), (120, 40));
     }
@@ -539,11 +528,10 @@ mod tests {
     /// 100×40 while a program reads `TIOCGWINSZ`.
     #[test]
     fn resize_writes_the_total_window_pixels() {
-        let (master, calls) = RecordingMaster::at(80, 24);
+        let (master, calls) = RecordingMaster::at(grid(80, 24));
         let mut pty = Pty::with_master(Box::new(master), Box::new(sink()));
         pty.resize(
-            100,
-            40,
+            grid(100, 40),
             CellPixels {
                 width: 8,
                 height: 16,
@@ -562,10 +550,10 @@ mod tests {
     /// a minimized window computes.
     #[test]
     fn resize_forwards_degenerate_sizes_verbatim() {
-        let (master, calls) = RecordingMaster::at(80, 24);
+        let (master, calls) = RecordingMaster::at(grid(80, 24));
         let mut pty = Pty::with_master(Box::new(master), Box::new(sink()));
         for (cols, rows) in [(0, 0), (0, 40), (120, 0)] {
-            pty.resize(cols, rows, CellPixels::default())
+            pty.resize(GridSize { cols, rows }, CellPixels::default())
                 .expect("resize");
         }
         let recorded: Vec<(u16, u16)> = calls
@@ -585,7 +573,7 @@ mod tests {
     #[test]
     fn a_failing_master_maps_to_pty_resize_error() {
         let mut pty = Pty::with_master(Box::new(FailingMaster), Box::new(sink()));
-        let result = pty.resize(120, 40, CellPixels::default());
+        let result = pty.resize(grid(120, 40), CellPixels::default());
         assert!(
             matches!(result, Err(OrzmaTtyError::PtyResize(_))),
             "expected PtyResize, got {result:?}"
@@ -602,8 +590,7 @@ mod tests {
     #[test]
     fn exit_is_reported_once_after_the_child_terminates() {
         let mut pty = Pty::spawn(&SpawnOptions {
-            cols: 80,
-            rows: 24,
+            size: grid(80, 24),
             cell_px: CellPixels::default(),
             shell: echo_program().into(),
             cwd: None,
@@ -643,7 +630,7 @@ mod tests {
     /// master) is polled for an exit the same way a live terminal is.
     #[test]
     fn a_detached_pty_never_reports_an_exit() {
-        let detached = Pty::detached(80, 24, Box::new(sink())).expect("Pty::detached");
+        let detached = Pty::detached(grid(80, 24), Box::new(sink())).expect("Pty::detached");
         let injected = Pty::with_master(Box::new(FailingMaster), Box::new(sink()));
         for _ in 0..3 {
             assert_eq!(detached.poll_exit(), ExitPoll::Pending);
@@ -654,8 +641,7 @@ mod tests {
     #[test]
     fn spawn_emits_chunk_and_exit_zero() {
         let mut pty = Pty::spawn(&SpawnOptions {
-            cols: 80,
-            rows: 24,
+            size: grid(80, 24),
             cell_px: CellPixels::default(),
             shell: echo_program().into(),
             cwd: None,
@@ -683,8 +669,7 @@ mod tests {
     #[test]
     fn the_final_output_precedes_the_exit_report() {
         let mut pty = Pty::spawn(&SpawnOptions {
-            cols: 80,
-            rows: 24,
+            size: grid(80, 24),
             cell_px: CellPixels::default(),
             shell: echo_program().into(),
             cwd: None,

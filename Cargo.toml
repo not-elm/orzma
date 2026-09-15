@@ -44,8 +44,6 @@ orzma_configs = { path = "crates/orzma_configs" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-unicode-width = { workspace = true }
-unicode-segmentation = { workspace = true }
 url = "2"
 
 [dev-dependencies]
@@ -93,8 +91,7 @@ tracing = "0.1"
 tempfile = "3"
 toml = "0.8"
 dirs = "5"
-unicode-width = "0.2"
-unicode-segmentation = "1"
+unicode-width = "=0.2.0"
 open = "5"
 bevy_cef = "0.12"
 bevy_cef_core = "0.12"

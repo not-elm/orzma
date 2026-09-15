@@ -103,6 +103,14 @@ kitty の `GPUCell` も 20 B。過大なのは CPU 側ミラーだけ（72 B 対
 
 つまり最小限は**先頭 `char` + 2 ビット**。
 
+**2026-09-15 追記（main の wide/combining 4 連 PR 取り込み後）:** 上の「先頭
+`char` + 2 ビット」は成立しなくなった。`resolve_glyph_index` は `composable_marks`
+（先頭以外の char のうち、線として描かれない結合マーク）を `GlyphKey::with_marks`
+に渡してグリフを合成するため、マークは描画のために `text` に残る必要がある。
+また幅の決定権は VT 側に移った。`Run.widths` が char ごとの幅（0/1/2）を運び、
+`runs_to_cells` は再測定せずに幅 0 の char を直前セルの `text` に結合する。
+renderer は `unicode-width` / `unicode-segmentation` に依存しない。
+
 副次的な改善余地: マーク → スタイルの畳み込みは現在 `rebuild_cells` にあり、
 GPU 再構築ごとに全 10,000 セルに対して走る。`runs_to_cells`（dirty 行のみ）へ
 移せる。
@@ -314,6 +322,10 @@ GPU 再構築が列単位のランダムアクセスを要するため必要。�
 - #3 の超過時の扱い（拒否 / 切り捨て / 複数セルへ分割）。Unicode の正しさとの
   兼ね合いがあり、単純な性能判断ではない。
 - 第 9 節（`mem::take` を参照渡しに）をどの PR に入れるか。
+- **（2026-09-15 追記）** #3 のクラスタ長上限は renderer 側では決められなくなった。
+  何を 1 セルに結合するかは VT 側（`Run.widths` の 0 エントリ）が決め、renderer は
+  それに従うだけなので、上限を置くなら VT の print 経路に置く。`GlyphKey::with_marks`
+  は `MAX_COMBINING` 個までしか合成せず、超過分は描画から落ちる。
 
 ## 12. やる価値はあるか
 

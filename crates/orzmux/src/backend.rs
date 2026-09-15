@@ -11,7 +11,7 @@ use crate::protocol::{
 };
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::CellPixels;
-use orzma_tty::prelude::{PumpOutput, TtySignal};
+use orzma_tty::prelude::{OrzmaTtyResult, PumpOutput, TtySignal};
 use orzma_vt::prelude::{Frame, GridSize, Vt, VtSignal};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,6 +27,9 @@ pub(crate) struct Backend {
     panes: HashMap<PaneId, Pane>,
     tree: LayoutTree,
     geometry: Option<Geometry>,
+    /// Whether the primary window has keyboard focus, as the GUI last
+    /// reported it.
+    window_focused: bool,
     commands: Receiver<(CommandSeq, OrzmuxCommand)>,
     events: Sender<OrzmuxEvent>,
     next_pane_id: u32,
@@ -51,6 +54,7 @@ impl Backend {
             panes: HashMap::new(),
             tree: LayoutTree::new(),
             geometry: None,
+            window_focused: true,
             commands,
             events,
             next_pane_id: 1,
@@ -89,11 +93,7 @@ impl Backend {
     pub(crate) fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.processed = seq;
         match command {
-            OrzmuxCommand::Resize {
-                cols,
-                rows,
-                cell_px,
-            } => self.on_resize(cols, rows, cell_px),
+            OrzmuxCommand::Resize { size, cell_px } => self.on_resize(size, cell_px),
             OrzmuxCommand::NewPane {
                 request,
                 at,
@@ -116,6 +116,18 @@ impl Backend {
                     .geometry
                     .is_some_and(|geometry| self.tree.select_direction(direction, geometry.size));
                 if moved {
+                    self.publish_layout();
+                }
+            }
+            OrzmuxCommand::WindowFocus { focused } => {
+                self.window_focused = focused;
+                self.refresh_focus();
+            }
+            OrzmuxCommand::ResizeSplit { split, position } => {
+                if self
+                    .geometry
+                    .is_some_and(|g| self.tree.resize_split(split, position, g.size))
+                {
                     self.publish_layout();
                 }
             }
@@ -274,11 +286,8 @@ impl Backend {
         true
     }
 
-    fn on_resize(&mut self, cols: u16, rows: u16, cell_px: CellPixels) {
-        self.geometry = Some(Geometry {
-            size: GridSize { cols, rows },
-            cell_px,
-        });
+    fn on_resize(&mut self, size: GridSize, cell_px: CellPixels) {
+        self.geometry = Some(Geometry { size, cell_px });
         self.publish_layout();
     }
 
@@ -314,16 +323,17 @@ impl Backend {
             .solve(geometry.size)
             .rect_of(new)
             .expect("the new pane is in the tree");
-        let size = GridSize {
-            cols: rect.cols,
-            rows: rect.rows,
-        };
         let spawn_cwd = cwd.or(inherited_cwd);
-        match self
-            .factory
-            .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
-        {
-            Ok(tty) => {
+        let spawned = match GridSize::new(rect.cols, rect.rows) {
+            Ok(size) => self
+                .factory
+                .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
+                .map(|tty| (tty, size))
+                .map_err(|err| err.to_string()),
+            Err(err) => Err(err.to_string()),
+        };
+        match spawned {
+            Ok((tty, size)) => {
                 self.panes.insert(
                     new,
                     Pane {
@@ -335,15 +345,12 @@ impl Backend {
                 self.emit(OrzmuxEvent::PaneOpened { pane: new, request });
                 self.publish_layout();
             }
-            Err(err) => {
+            Err(error) => {
                 self.tree.remove(new);
                 if let Some(previous) = previous_active {
                     self.tree.select(previous);
                 }
-                self.emit(OrzmuxEvent::SpawnFailed {
-                    request,
-                    error: err.to_string(),
-                });
+                self.emit(OrzmuxEvent::SpawnFailed { request, error });
             }
         }
     }
@@ -373,10 +380,13 @@ impl Backend {
         }
     }
 
-    /// Re-solves the tree, resizes every pane whose applied geometry
-    /// differs, flushes those panes, and emits their signals followed by
-    /// one `Layout` carrying their frames. A no-op without geometry.
+    /// Tells every pane whether it holds focus, then re-solves the tree,
+    /// resizes every pane whose applied geometry differs, flushes those
+    /// panes, and emits their signals followed by one `Layout` carrying
+    /// their frames. Everything after the focus update is a no-op without
+    /// geometry.
     fn publish_layout(&mut self) {
+        self.refresh_focus();
         let Some(geometry) = self.geometry else {
             return;
         };
@@ -391,7 +401,14 @@ impl Backend {
             if pane.applied == wanted {
                 continue;
             }
-            match pane.tty.resize(rect.cols, rect.rows, geometry.cell_px) {
+            let size = match GridSize::new(rect.cols, rect.rows) {
+                Ok(size) => size,
+                Err(err) => {
+                    tracing::warn!(pane = ?rect.pane, %err, "pane rect is not a valid grid size; keeping the old size");
+                    continue;
+                }
+            };
+            match pane.tty.resize(size, geometry.cell_px) {
                 Ok(()) => pane.applied = wanted,
                 Err(err) => {
                     tracing::warn!(pane = ?rect.pane, %err, "pane resize failed; keeping the old size");
@@ -419,6 +436,27 @@ impl Backend {
             separators: solved.separators,
         };
         self.emit(OrzmuxEvent::Layout { layout, frames });
+    }
+
+    /// Tells every pane whether it holds focus: the active pane does while
+    /// the window is focused, and no pane does otherwise. Every pane that
+    /// loses focus is told before the pane that gains it, and a failed
+    /// write is logged without stopping the others.
+    fn refresh_focus(&mut self) {
+        let target = self.tree.active().filter(|_| self.window_focused);
+        let report = |id: PaneId, result: OrzmaTtyResult| {
+            if let Err(err) = result {
+                tracing::warn!(pane = ?id, %err, "focus write failed");
+            }
+        };
+        for (id, pane) in self.panes.iter_mut().filter(|(id, _)| Some(**id) != target) {
+            report(*id, pane.tty.set_focused(false));
+        }
+        if let Some(id) = target
+            && let Some(pane) = self.panes.get_mut(&id)
+        {
+            report(id, pane.tty.set_focused(true));
+        }
     }
 
     /// Forwards a pump's frame and signals. Returns `Some(code)` when the
@@ -550,14 +588,15 @@ const PUMP_ROUNDS: usize = 4;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prelude::{PaneDirection, SplitOrientation};
+    use crate::prelude::{PaneDirection, SplitId, SplitOrientation};
     use crossbeam_channel::{Receiver, Sender, unbounded};
     use orzma_tty::prelude::{
         KeyText, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, TerminalKey, TerminalModifiers,
     };
-    use orzma_tty::test_support::CaptureSink;
+    use orzma_tty::test_support::{CaptureSink, FailingSink};
     use orzma_vt::prelude::OrzmaVt;
     use std::collections::VecDeque;
+    use std::io::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -574,6 +613,13 @@ mod tests {
     #[derive(Default)]
     struct FactoryLog {
         fail_next: AtomicBool,
+        /// Makes the next spawned pane's PTY writer fail every write.
+        fail_writes_next: AtomicBool,
+        /// When set, every spawned pane writes into a clone of this sink.
+        shared_sink: Mutex<Option<CaptureSink>>,
+        /// When set, every spawned pane's output stream starts with these
+        /// bytes, left unread until the test pumps the pane.
+        spawn_output: Mutex<Option<Vec<u8>>>,
         sizes: Mutex<Vec<GridSize>>,
         cwds: Mutex<Vec<Option<PathBuf>>>,
     }
@@ -599,12 +645,26 @@ mod tests {
             }
             let (chunk_tx, chunk_rx) = unbounded();
             let (exit_tx, exit_rx) = unbounded();
-            let sink = CaptureSink::default();
+            if let Some(output) = self.log.spawn_output.lock().unwrap().clone() {
+                chunk_tx.send(output).unwrap();
+            }
+            let sink = self
+                .log
+                .shared_sink
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_default();
+            let writer: Box<dyn Write + Send> =
+                if self.log.fail_writes_next.swap(false, Ordering::AcqRel) {
+                    Box::new(FailingSink)
+                } else {
+                    Box::new(sink.clone())
+                };
             let tty = OrzmaTty::detached_with_channels(
                 OrzmaVt::new(size, 100),
-                size.cols,
-                size.rows,
-                Box::new(sink.clone()),
+                size,
+                writer,
                 chunk_rx,
                 exit_rx,
             )?;
@@ -658,10 +718,9 @@ mod tests {
             self.events.try_iter().collect()
         }
 
-        fn resize(&mut self, cols: u16, rows: u16) {
+        fn resize(&mut self, size: GridSize) {
             self.send(OrzmuxCommand::Resize {
-                cols,
-                rows,
+                size,
                 cell_px: CellPixels {
                     width: 8,
                     height: 16,
@@ -670,7 +729,7 @@ mod tests {
         }
 
         fn open_root(&mut self) -> (PaneId, FakePane) {
-            self.resize(80, 24);
+            self.resize(GridSize::new(80, 24).expect("a valid size"));
             self.drain();
             self.send(OrzmuxCommand::NewPane {
                 request: RequestId(1),
@@ -717,7 +776,7 @@ mod tests {
     #[test]
     fn the_root_pane_opens_at_the_window_size_and_reports_a_layout() {
         let mut h = Harness::new();
-        h.resize(80, 24);
+        h.resize(GridSize::new(80, 24).expect("a valid size"));
         h.drain();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(1),
@@ -830,7 +889,7 @@ mod tests {
             env: vec![],
         });
         h.drain();
-        h.resize(120, 24);
+        h.resize(GridSize::new(120, 24).expect("a valid size"));
         let mut events = h.drain();
         let Some(OrzmuxEvent::Layout { layout, frames }) = events.pop_front() else {
             panic!("expected Layout");
@@ -940,6 +999,18 @@ mod tests {
             panic!("expected PaneOpened, got {events:?}");
         };
         (*pane, h.panes.try_recv().expect("one spawned pane"))
+    }
+
+    /// Feeds `CSI ? 1004 h` through `pane`'s output stream and pumps it, so
+    /// the pane's application has focus reporting enabled.
+    fn enable_focus_reporting(h: &mut Harness, id: PaneId, pane: &FakePane) {
+        pane.chunk_tx.send(b"\x1b[?1004h".to_vec()).unwrap();
+        h.backend.pump_pane(id);
+        h.drain();
+        assert!(
+            h.backend.panes[&id].tty.vt().modes().focus_in_out,
+            "precondition: focus reporting is enabled"
+        );
     }
 
     /// Asserts that `Active` targets resolve in command order, so a kill
@@ -1185,5 +1256,193 @@ mod tests {
             h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
             Some(std::path::Path::new("/tmp/project"))
         );
+    }
+
+    /// Asserts that selecting a pane reports focus loss to the pane it
+    /// leaves and focus gain to the pane it enters.
+    ///
+    /// Case: the user moves from one nvim pane to another and back.
+    #[test]
+    fn select_pane_moves_the_focus_report_from_the_old_pane_to_the_new() {
+        let mut h = Harness::new();
+        let (root, root_pane) = h.open_root();
+        let (new, new_pane) = split_active(&mut h, 2);
+        enable_focus_reporting(&mut h, root, &root_pane);
+        enable_focus_reporting(&mut h, new, &new_pane);
+        h.send(OrzmuxCommand::SelectPane { pane: root });
+        h.send(OrzmuxCommand::SelectPane { pane: new });
+        assert_eq!(root_pane.sink.contents(), b"\x1b[I\x1b[O");
+        assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
+    }
+
+    /// Asserts that a split reports focus loss to the pane it splits and
+    /// nothing to the pane it creates, even when the new pane's unread
+    /// start-up output enables focus reporting.
+    ///
+    /// Case: the user splits the pane running nvim on Windows, where a new
+    /// pane's start-up output enables focus reporting.
+    #[test]
+    fn a_split_reports_focus_loss_to_the_split_pane_only() {
+        let mut h = Harness::new();
+        let (root, root_pane) = h.open_root();
+        enable_focus_reporting(&mut h, root, &root_pane);
+        *h.log.spawn_output.lock().unwrap() = Some(b"\x1b[?1004h".to_vec());
+        let (_new, new_pane) = split_active(&mut h, 2);
+        assert_eq!(root_pane.sink.contents(), b"\x1b[O");
+        assert_eq!(new_pane.sink.contents(), b"");
+    }
+
+    /// Asserts that a split whose spawn fails reports no focus change.
+    ///
+    /// Case: the shell binary is missing when the user splits the pane
+    /// running nvim.
+    #[test]
+    fn a_failed_split_reports_no_focus_change() {
+        let mut h = Harness::new();
+        let (root, root_pane) = h.open_root();
+        enable_focus_reporting(&mut h, root, &root_pane);
+        h.log.fail_next.store(true, Ordering::Release);
+        h.send(OrzmuxCommand::NewPane {
+            request: RequestId(2),
+            at: NewPaneAt::Split {
+                pane: PaneTarget::Id(root),
+                orientation: SplitOrientation::Vertical,
+            },
+            cwd: None,
+            env: vec![],
+        });
+        assert!(matches!(
+            h.drain().front(),
+            Some(OrzmuxEvent::SpawnFailed { .. })
+        ));
+        assert_eq!(root_pane.sink.contents(), b"");
+    }
+
+    /// Asserts that killing the active pane reports focus gain to the pane
+    /// that becomes active.
+    ///
+    /// Case: the user closes a scratch pane and lands back in nvim.
+    #[test]
+    fn killing_the_active_pane_reports_focus_to_the_survivor() {
+        let mut h = Harness::new();
+        let (root, root_pane) = h.open_root();
+        let (_new, _new_pane) = split_active(&mut h, 2);
+        enable_focus_reporting(&mut h, root, &root_pane);
+        h.send(OrzmuxCommand::KillPane {
+            pane: PaneTarget::Active,
+        });
+        assert_eq!(root_pane.sink.contents(), b"\x1b[I");
+    }
+
+    /// Asserts that window focus changes reach only the active pane, and
+    /// only when the focus state changes.
+    ///
+    /// Case: the user switches from orzma to a browser, the loss is
+    /// reported twice, and the user switches back.
+    #[test]
+    fn window_focus_reports_to_the_active_pane_only_on_change() {
+        let mut h = Harness::new();
+        let (root, root_pane) = h.open_root();
+        let (new, new_pane) = split_active(&mut h, 2);
+        enable_focus_reporting(&mut h, root, &root_pane);
+        enable_focus_reporting(&mut h, new, &new_pane);
+        h.send(OrzmuxCommand::WindowFocus { focused: false });
+        h.send(OrzmuxCommand::WindowFocus { focused: false });
+        h.send(OrzmuxCommand::WindowFocus { focused: true });
+        assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
+        assert_eq!(root_pane.sink.contents(), b"");
+    }
+
+    /// Asserts that a failed focus write to the pane being left does not
+    /// stop the report to the pane being entered.
+    ///
+    /// Case: the user moves from a pane whose PTY rejects writes into a
+    /// pane running nvim.
+    #[test]
+    fn a_failed_focus_write_does_not_stop_the_incoming_report() {
+        let mut h = Harness::new();
+        h.log.fail_writes_next.store(true, Ordering::Release);
+        let (root, root_pane) = h.open_root();
+        let (new, new_pane) = split_active(&mut h, 2);
+        h.send(OrzmuxCommand::SelectPane { pane: root });
+        enable_focus_reporting(&mut h, root, &root_pane);
+        enable_focus_reporting(&mut h, new, &new_pane);
+        h.send(OrzmuxCommand::SelectPane { pane: new });
+        assert_eq!(new_pane.sink.contents(), b"\x1b[I");
+    }
+
+    /// Asserts that one refresh writes the report for the pane being left
+    /// before the report for the pane being entered.
+    ///
+    /// Case: the user moves back and forth between two panes that each run a
+    /// client attached to the same tmux server with `focus-events` on.
+    #[test]
+    fn focus_loss_is_reported_before_focus_gain() {
+        let mut h = Harness::new();
+        let shared = CaptureSink::default();
+        *h.log.shared_sink.lock().unwrap() = Some(shared.clone());
+        let (root, root_pane) = h.open_root();
+        let (new, new_pane) = split_active(&mut h, 2);
+        enable_focus_reporting(&mut h, root, &root_pane);
+        enable_focus_reporting(&mut h, new, &new_pane);
+        h.send(OrzmuxCommand::SelectPane { pane: root });
+        h.send(OrzmuxCommand::SelectPane { pane: new });
+        assert_eq!(shared.contents(), b"\x1b[O\x1b[I\x1b[O\x1b[I");
+    }
+
+    /// Asserts that a resize publishes one layout whose divider moved
+    /// and repaints only the panes whose size changed.
+    ///
+    /// Case: the user drags the divider of a two-pane window to the
+    /// right, widening the left pane.
+    #[test]
+    fn a_resize_publishes_a_moved_layout_and_repaints_the_resized_panes() {
+        let mut h = Harness::new();
+        let (_root, _pane) = h.open_root();
+        h.send(OrzmuxCommand::NewPane {
+            request: RequestId(2),
+            at: NewPaneAt::Split {
+                pane: PaneTarget::Active,
+                orientation: SplitOrientation::Vertical,
+            },
+            cwd: None,
+            env: vec![],
+        });
+        let mut opened = h.drain();
+        let Some(OrzmuxEvent::Layout { layout, .. }) = opened.pop_back() else {
+            panic!("expected a Layout after the split");
+        };
+        let split = layout.separators[0].split;
+
+        h.send(OrzmuxCommand::ResizeSplit {
+            split,
+            position: 60,
+        });
+        let mut events = h.drain();
+
+        let Some(OrzmuxEvent::Layout { layout, frames }) = events.pop_back() else {
+            panic!("expected a Layout event");
+        };
+        assert_eq!(layout.separators[0].x, 60);
+        assert_eq!(frames.len(), 2);
+    }
+
+    /// Asserts that a resize naming a split the tree does not have
+    /// publishes nothing at all.
+    ///
+    /// Case: the pane the pointer was resizing closed a frame earlier,
+    /// so the drag's next command names a divider that is gone.
+    #[test]
+    fn a_resize_of_an_unknown_split_publishes_nothing() {
+        let mut h = Harness::new();
+        let (_root, _pane) = h.open_root();
+        h.drain();
+
+        h.send(OrzmuxCommand::ResizeSplit {
+            split: SplitId(999),
+            position: 60,
+        });
+
+        assert!(h.drain().is_empty());
     }
 }

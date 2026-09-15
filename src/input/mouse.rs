@@ -6,9 +6,11 @@ use crate::action::terminal::{
     TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart,
     TerminalSelectionUpdate,
 };
+use crate::input::InputPhase;
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::focus::MouseDisabled;
 use crate::input::mouse::button::MouseButtonInputPlugin;
+use crate::input::mouse::separator::SeparatorDragPlugin;
 use crate::input::mouse::wheel::MouseWheelInputPlugin;
 use crate::surface::OrzmaTerminal;
 use bevy::input::mouse::{MouseButtonInput, MouseWheel};
@@ -22,8 +24,22 @@ use orzma_tty::prelude::CellCoord;
 
 mod button;
 mod gesture;
+pub(in crate::input) mod separator;
 mod webview;
 mod wheel;
+
+/// The order the frame's mouse messages are consumed in: a separator
+/// grab decides first, so the dispatchers see the drag it started
+/// before they route the same press.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(in crate::input::mouse) enum MousePhase {
+    /// Separator grab, drag, and release.
+    Grab,
+    /// Terminal-selection and webview-pointer routing.
+    Dispatch,
+    /// Tearing down a finished separator drag.
+    Retire,
+}
 
 /// Adds mouse button, wheel, and webview-pointer dispatch for every
 /// terminal surface.
@@ -31,12 +47,22 @@ pub(super) struct MouseInputPlugin;
 
 impl Plugin for MouseInputPlugin {
     fn build(&self, app: &mut App) {
+        // NOTE: never add `.ignore_deferred()` to this chain — it registers the
+        // edge in `no_sync_edges`, dropping the `ApplyDeferred` that makes a
+        // separator grab visible to the dispatchers on the press frame.
         app.add_plugins((
+            SeparatorDragPlugin,
             MouseButtonInputPlugin,
             MouseWheelInputPlugin,
             webview::MouseWebviewPlugin,
         ))
-        .init_resource::<OrzmaMouseConfig>();
+        .init_resource::<OrzmaMouseConfig>()
+        .configure_sets(
+            Update,
+            (MousePhase::Grab, MousePhase::Dispatch, MousePhase::Retire)
+                .chain()
+                .in_set(InputPhase::Dispatch),
+        );
     }
 }
 

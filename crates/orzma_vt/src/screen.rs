@@ -14,14 +14,16 @@ pub(crate) mod placements;
 
 mod state;
 
-use self::cell::{Cell, Pen};
+use self::cell::{Cell, CellExtra, CellWidth, GlyphClass, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
 use crate::device::modes::{
     AutoWrap, CursorBlink, InsertReplaceMode, TextCursorEnable, TextCursorModes,
 };
+use crate::error::VtResult;
 use crate::frame::damage::DamageSpan;
+use crate::hyperlink::HyperlinkId;
 use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::character_sets::{
     CharacterSet, CharacterSetMapping, GCode, GraphicChar, SingleShift,
@@ -33,7 +35,8 @@ use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::placements::ScreenPlacements;
 use crate::screen::selection::{
-    CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionKind, SelectionRange,
+    CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionGeometry, SelectionKind,
+    SelectionRange,
 };
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
@@ -135,55 +138,115 @@ impl Screen {
     }
 }
 
+/// The device state a printed character is shaped by.
+///
+/// The default value prints in replace mode, with autowrap set, outside
+/// any hyperlink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PrintOptions {
+    /// `IRM`: under [`InsertReplaceMode::Insert`] the rest of the row shifts
+    /// right one column before the character lands.
+    pub insert_replace: InsertReplaceMode,
+    /// `DECAWM`: while it is reset, a character at the right border replaces
+    /// the last column, and an armed wrap, such as one a `DECRC` restored, is
+    /// not resolved either.
+    pub auto_wrap: AutoWrap,
+    /// The hyperlink the character is printed inside, or `None` when no link
+    /// is open.
+    pub hyperlink_id: Option<HyperlinkId>,
+}
+
 /// Graphic character output.
 impl Screen {
-    /// Prints one character at the cursor with the current pen, wrapping
-    /// first when the deferred wrap is armed and autowrap is set.
+    /// Prints one character at the cursor with the current pen, as
+    /// `options` shape it, wrapping first when the deferred wrap is armed
+    /// and autowrap is set.
     ///
-    /// `c` must be a printable character of display width one.
+    /// A one-column glyph takes the cursor's cell and a two-column glyph
+    /// takes it and the next; a zero-width mark joins the glyph the
+    /// cursor last passed and leaves the cursor alone. A control
+    /// character is ignored.
     ///
-    /// `insert_replace` is `IRM`: under [`InsertReplaceMode::Insert`] the
-    /// rest of the row shifts right one column before the character lands.
+    /// A two-column glyph with one column left wraps first, leaving a
+    /// filler in the last column; with autowrap reset it is dropped and
+    /// the deferred wrap is disarmed. A two-column glyph on a one-column
+    /// screen is dropped.
     ///
-    /// `auto_wrap` is `DECAWM`. While it is reset, a character at the right
-    /// border replaces the last column, and an armed wrap, such as one a
-    /// `DECRC` restored, is not resolved either.
+    /// Under [`InsertReplaceMode::Insert`] the rest of the row shifts
+    /// right by the glyph's width before it lands.
     ///
-    /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
-    /// the row the character landed on, or `None` when that row has
-    /// scrolled out of the window.
-    pub fn print(
-        &mut self,
-        c: char,
-        insert_replace: InsertReplaceMode,
-        auto_wrap: AutoWrap,
-    ) -> Option<DamageSpan> {
+    /// Reports [`DamageSpan::Full`] when a wrap scrolled, otherwise every
+    /// row the print touched, or `None` when nothing changed or the rows
+    /// have scrolled out of the window.
+    ///
+    /// # Errors
+    ///
+    /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
+    /// refuses the glyph; the cursor and the deferred wrap are then left
+    /// as the wrap left them.
+    pub fn print(&mut self, c: char, options: PrintOptions) -> VtResult<Option<DamageSpan>> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
-        let wrapping = auto_wrap.wraps();
+        let Some(class) = GlyphClass::of(glyph) else {
+            return Ok(None);
+        };
+        let Some(width) = class.body_width() else {
+            return Ok(self.attach_zero_width(glyph));
+        };
+        let columns = class.columns();
+        let cols = self.grid.size().cols;
+        if cols < columns {
+            return Ok(None);
+        }
+        let wrapping = options.auto_wrap.wraps();
+        let mut first_line = self.state.line;
         let wrap = if self.state.pending_wrap && wrapping {
             self.state.column = GridColumn(0);
-            self.line_feed()
+            let damage = self.line_feed();
+            first_line = self.state.line;
+            damage
         } else {
             None
         };
+        let overflow = if self.fits(columns) {
+            None
+        } else if wrapping {
+            let pen = self.state.pen;
+            self.grid[self.state.line].place_filler(&pen)?;
+            self.state.column = GridColumn(0);
+            self.line_feed()
+        } else {
+            self.state.pending_wrap = false;
+            return Ok(None);
+        };
+        let landing = self.state.column.0;
+        let ends_row = landing.saturating_add(columns) >= cols;
         // NOTE: The shift runs after the deferred wrap is resolved and
         // before the glyph lands. Moving it above the wrap would let
         // `insert_characters` clear `pending_wrap`, and the character
         // would overwrite the last column instead of wrapping to the
         // next row.
-        if matches!(insert_replace, InsertReplaceMode::Insert) {
-            self.insert_characters(1);
+        if matches!(options.insert_replace, InsertReplaceMode::Insert) {
+            self.insert_characters(columns);
         }
-        self.grid[self.state.line][self.state.column] = self.state.pen.stamp(glyph);
-        let at_right_edge = self.at_right_edge();
-        if !at_right_edge {
-            self.state.column.0 += 1;
+        self.grid[self.state.line].stamp_at(
+            landing,
+            glyph,
+            width,
+            &self.state.pen,
+            options.hyperlink_id,
+        )?;
+        self.state.last_landing = Some((self.state.line, GridColumn(landing)));
+        if ends_row {
+            self.state.column = GridColumn(cols - 1);
+            self.state.pending_wrap = wrapping;
+        } else {
+            self.state.column = GridColumn(landing + columns);
+            self.state.pending_wrap = false;
         }
-        self.state.pending_wrap = at_right_edge && wrapping;
-        match wrap {
-            Some(DamageSpan::Full) => Some(DamageSpan::Full),
-            _ => self.damage_span(self.state.line, self.state.line),
+        if matches!(wrap, Some(DamageSpan::Full)) || matches!(overflow, Some(DamageSpan::Full)) {
+            return Ok(Some(DamageSpan::Full));
         }
+        Ok(self.damage_span(first_line, self.state.line))
     }
 
     /// Disarms the deferred wrap, leaving the cursor and the cells
@@ -591,14 +654,16 @@ impl Screen {
     ///
     /// A shift that starts on the first row of the page feeds each
     /// departing row to history and holds a scrolled-back viewport on
-    /// the row it was showing.
+    /// the row it was showing. It also clears the cursor's landing
+    /// cell, since the rows moved under it.
     fn shift_rows_up(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
+        self.state.last_landing = None;
         let fill = self.state.pen.erase_cell();
         let feeds_history = first == ScreenLine(0);
         for _ in 0..count {
-            self.grid.scroll_up_one(first, bottom, fill);
+            self.grid.scroll_up_one(first, bottom, fill.clone());
             if feeds_history {
                 self.hold_scrolled_viewport();
             }
@@ -611,13 +676,15 @@ impl Screen {
     /// pen's erase cell; `None` when the clamped count is zero.
     ///
     /// The rows pushed past the bottom margin are discarded, and nothing
-    /// reaches history.
+    /// reaches history. It also clears the cursor's landing cell, since
+    /// the rows moved under it.
     fn shift_rows_down(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
+        self.state.last_landing = None;
         let fill = self.state.pen.erase_cell();
         for _ in 0..count {
-            self.grid.scroll_down_one(first, bottom, fill);
+            self.grid.scroll_down_one(first, bottom, fill.clone());
         }
         Some(DamageSpan::Full)
     }
@@ -720,18 +787,21 @@ impl Screen {
         let blank = self.state.pen.erase_cell();
         match mode {
             EraseScreenMode::Below => {
-                self.grid
-                    .fill_visible_row_range(self.state.line, self.state.column.0..cols, blank);
+                self.grid.fill_visible_row_range(
+                    self.state.line,
+                    self.state.column.0..cols,
+                    blank.clone(),
+                );
                 for line in self.state.line.0 + 1..rows {
                     self.grid
-                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank.clone());
                 }
                 self.damage_span(self.state.line, ScreenLine(rows - 1))
             }
             EraseScreenMode::Above => {
                 for line in 0..self.state.line.0 {
                     self.grid
-                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank.clone());
                 }
                 self.grid.fill_visible_row_range(
                     self.state.line,
@@ -743,7 +813,7 @@ impl Screen {
             EraseScreenMode::All => {
                 for line in 0..rows {
                     self.grid
-                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank);
+                        .fill_visible_row_range(ScreenLine(line), 0..cols, blank.clone());
                 }
                 Some(DamageSpan::Full)
             }
@@ -763,12 +833,53 @@ impl Screen {
     /// All three conditions are required: the deferred wrap armed,
     /// `DECAWM` set, and the cursor on the last column.
     fn cursor_parked_past_the_row(&self, auto_wrap: AutoWrap) -> bool {
-        self.state.pending_wrap && auto_wrap.wraps() && self.at_right_edge()
+        self.state.pending_wrap && auto_wrap.wraps() && self.is_last_column()
     }
 
     /// Whether the cursor is on the row's last column.
-    fn at_right_edge(&self) -> bool {
+    fn is_last_column(&self) -> bool {
         self.state.column.0 + 1 >= self.grid.size().cols
+    }
+
+    /// Whether a glyph spanning `width` columns fits from the cursor's
+    /// column through the row's end.
+    fn fits(&self, width: u16) -> bool {
+        width <= self.grid.size().cols.saturating_sub(self.state.column.0)
+    }
+
+    /// Combines `mark` onto the glyph the cursor last passed: the cell
+    /// under the cursor when the deferred wrap is armed, or when the
+    /// cursor is on the last column and the last printed glyph landed
+    /// there, otherwise the cell to its left, and on column zero that
+    /// column's own cell. A continuation column hands the mark to its
+    /// wide body.
+    ///
+    /// Reports the cursor's row when the mark was kept, and `None` when
+    /// the cell already holds [`cell::MAX_COMBINING`] marks or the target is a
+    /// filler.
+    fn attach_zero_width(&mut self, mark: char) -> Option<DamageSpan> {
+        let column = self.state.column.0;
+        let cursor = (self.state.line, self.state.column);
+        let on_landing = self.state.last_landing == Some(cursor);
+        let candidate = if self.state.pending_wrap || (self.is_last_column() && on_landing) {
+            column
+        } else {
+            column.saturating_sub(1)
+        };
+        let line = self.state.line;
+        let row = &mut self.grid[line];
+        let target = match row[candidate].width {
+            CellWidth::Narrow | CellWidth::Wide => candidate,
+            CellWidth::Spacer => candidate.saturating_sub(1),
+            CellWidth::LeadingSpacer => return None,
+        };
+        let extra = row[target]
+            .extra
+            .get_or_insert_with(|| Box::new(CellExtra::default()));
+        if !extra.push(mark) {
+            return None;
+        }
+        self.damage_span(line, line)
     }
 }
 
@@ -1024,18 +1135,24 @@ impl Screen {
         (row, column)
     }
 
-    /// The selection as an emitted frame carries it: normalized,
-    /// cell-side trimmed, in active-grid coordinates; `None` when there
-    /// is no selection, its span is empty, or an endpoint's row has
-    /// left the ring.
+    /// The cell range the active selection covers, in active-grid
+    /// coordinates, widened so that a partly covered wide glyph is
+    /// covered whole; `None` without an active selection, when its rows
+    /// have left the ring, or when it covers no cell.
+    ///
+    /// A whole-line selection is not widened.
     pub fn selection_range(&self) -> Option<SelectionRange> {
-        match self
+        let mut range = match self
             .selection
             .resolve(|id| self.grid.grid_line(id), self.grid.size().cols)
         {
-            Resolved::Range(range) => Some(range),
-            Resolved::None | Resolved::Empty => None,
+            Resolved::Range(range) => range,
+            Resolved::None | Resolved::Empty => return None,
+        };
+        if range.geometry != SelectionGeometry::Lines {
+            self.snap_to_glyphs(&mut range);
         }
+        Some(range)
     }
 
     /// The id of the row the cursor sits on.
@@ -1046,6 +1163,37 @@ impl Screen {
     /// The cursor's column.
     pub fn cursor_column(&self) -> GridColumn {
         self.state.column
+    }
+
+    /// The grid this screen draws on.
+    #[cfg(test)]
+    pub(crate) fn grid(&self) -> &Grid {
+        &self.grid
+    }
+
+    /// Moves `range`'s start off a continuation column onto the wide
+    /// body to its left, and its end off a wide body onto the
+    /// continuation column to its right.
+    ///
+    /// # Panics
+    ///
+    /// Panics when either endpoint's line is outside the ring.
+    // TODO: Snap each row in `SelectionRange::span_on` when a `Block` or
+    // a multi-line `Semantic` selection is implemented; endpoint snapping
+    // is sufficient only for `Linear` selection.
+    fn snap_to_glyphs(&self, range: &mut SelectionRange) {
+        let start = &self.grid.row(range.start.line)[range.start.column];
+        if start.width == CellWidth::Spacer {
+            debug_assert!(
+                range.start.column.0 > 0,
+                "a continuation column has a body to its left"
+            );
+            range.start.column = GridColumn(range.start.column.0.saturating_sub(1));
+        }
+        let end = &self.grid.row(range.end.line)[range.end.column];
+        if end.width == CellWidth::Wide {
+            range.end.column = GridColumn(range.end.column.0 + 1);
+        }
     }
 
     /// Reports the given screen rows as damage, in the viewport
@@ -1180,7 +1328,9 @@ impl Screen {
     ///
     /// A shrink pushes as many rows off the top as it takes to keep the
     /// cursor on screen and drops the rest from the bottom. A growth
-    /// reclaims rows from history before it appends blank ones.
+    /// reclaims rows from history before it appends blank ones. A resize
+    /// that changes the dimensions also clears the cursor's landing
+    /// cell, since the grid moved under it.
     ///
     /// # Invariants
     ///
@@ -1203,6 +1353,7 @@ impl Screen {
         if old == size {
             return None;
         }
+        self.state.last_landing = None;
         let required_scrolling = (self.state.line.0 + 1).saturating_sub(size.rows);
         for _ in 0..required_scrolling {
             self.grid
@@ -1243,7 +1394,7 @@ impl Screen {
         };
         for line in 0..size.rows {
             self.grid
-                .fill_visible_row_range(ScreenLine(line), 0..size.cols, cell);
+                .fill_visible_row_range(ScreenLine(line), 0..size.cols, cell.clone());
         }
         self.scroll_region = ScrollRegion::new(size.rows);
         self.seat_cursor(ScreenLine(0), GridColumn(0));
@@ -1397,7 +1548,8 @@ impl Screen {
     ///
     /// Each row's span comes from [`SelectionRange::span_on`], with
     /// trailing blanks trimmed. Rows are joined by `\n` with none after
-    /// the last.
+    /// the last. A continuation column and a wrap filler contribute nothing.
+    /// A cell's combining marks follow its glyph.
     // TODO: Join soft-wrapped rows without a newline once `Row` records
     // the wrap.
     pub fn selection_text(&self) -> Option<String> {
@@ -1408,7 +1560,8 @@ impl Screen {
             let (first, last) = range.span_on(line, last_column);
             let row = self.grid.row(GridLine(line));
             let row_text: String = (first..=last)
-                .map(|column| row[GridColumn(column)].c)
+                .map(|column| &row[GridColumn(column)])
+                .flat_map(Cell::chars)
                 .collect();
             if line != range.start.line.0 {
                 text.push('\n');

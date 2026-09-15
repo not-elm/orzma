@@ -9,6 +9,7 @@ use bevy::window::{PrimaryWindow, WindowResized};
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzmux::prelude::{OrzmuxConnection, PaneGeometry};
 use orzma_tty::CellPixels;
+use orzma_vt::prelude::GridSize;
 use orzmux::prelude::OrzmuxCommand;
 
 /// Adds the window-geometry sender.
@@ -32,10 +33,10 @@ impl Plugin for LayoutPlugin {
     }
 }
 
-/// The `(cols, rows, cell_px)` last sent, so a resize that changes
-/// nothing sends nothing.
+/// The `(size, cell_px)` last sent, so a resize that changes nothing
+/// sends nothing.
 #[derive(Resource, Default)]
-struct LastGeometry(Option<(u16, u16, CellPixels)>);
+struct LastGeometry(Option<(GridSize, CellPixels)>);
 
 #[expect(
     clippy::cast_possible_truncation,
@@ -73,15 +74,18 @@ fn send_window_geometry(
         }
         None => commands.insert_resource(wanted),
     }
-    if last.0 == Some((cols, rows, cell_px)) {
+    let size = match GridSize::new(cols, rows) {
+        Ok(size) => size,
+        Err(err) => {
+            warn!(cols, rows, %err, "window geometry is not a valid grid size; not sent");
+            return;
+        }
+    };
+    if last.0 == Some((size, cell_px)) {
         return;
     }
-    last.0 = Some((cols, rows, cell_px));
-    connection.0.send(OrzmuxCommand::Resize {
-        cols,
-        rows,
-        cell_px,
-    });
+    last.0 = Some((size, cell_px));
+    connection.0.send(OrzmuxCommand::Resize { size, cell_px });
 }
 
 #[cfg(test)]
@@ -135,8 +139,10 @@ mod tests {
         assert!(matches!(
             sent.as_slice(),
             [OrzmuxCommand::Resize {
-                cols: 100,
-                rows: 37,
+                size: GridSize {
+                    cols: 100,
+                    rows: 37
+                },
                 ..
             }]
         ));
@@ -162,11 +168,39 @@ mod tests {
         assert!(matches!(
             sent.as_slice(),
             [OrzmuxCommand::Resize {
-                cols: 200,
-                rows: 37,
+                size: GridSize {
+                    cols: 200,
+                    rows: 37
+                },
                 ..
             }]
         ));
+    }
+
+    /// Asserts that a window whose cell count is not a valid grid size
+    /// sends no `Resize`.
+    ///
+    /// Case: a degenerate or hostile window geometry asks for a grid
+    /// far wider than any real display.
+    #[test]
+    fn geometry_beyond_the_grid_bounds_is_not_sent() {
+        let (client, _events, commands) = OrzmuxClient::detached();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(LayoutPlugin)
+            .insert_resource(OrzmuxConnection(client))
+            .insert_resource(metrics(8.0, 16.0));
+        app.world_mut().spawn((
+            Window {
+                resolution: WindowResolution::new(u32::from(GridSize::MAX_COLS + 1) * 8, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.update();
+        app.update();
+        assert!(app.world().contains_resource::<PaneGeometry>());
+        assert!(commands.try_iter().next().is_none());
     }
 
     /// Asserts that the geometry sender does not run without a

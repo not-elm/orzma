@@ -9,7 +9,7 @@ use super::*;
 #[test]
 fn the_select_graphic_rendition_sequence_reaches_the_pen() {
     let device = interpret(b"\x1b[31;1mx");
-    let cell = device.active_screen().viewport_row(ViewportLine(0))[0];
+    let cell = &device.active_screen().viewport_row(ViewportLine(0))[0];
     assert_eq!(cell.fg, Color::Indexed(1));
     assert!(cell.style.contains(Style::BOLD));
 }

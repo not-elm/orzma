@@ -93,7 +93,8 @@ comments are.
 ## Rust Coding Rules
 
 Rust style and conventions (no `mod.rs`, restricted comment taxonomy,
-doc-comment policy, import discipline) are governed by
+doc-comment policy, import discipline, `Result`-based error handling
+instead of asserts and unwraps) are governed by
 [`.claude/rules/rust.md`](.claude/rules/rust.md). Applies to the root
 binary (`src/`) and all crates under `crates/`.
 

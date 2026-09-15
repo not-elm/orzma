@@ -6,7 +6,7 @@ pub mod damage;
 use self::damage::{Damage, DamageSpan};
 use crate::device::DeviceState;
 use crate::device::color::Palette;
-use crate::hyperlink::Hyperlink;
+use crate::hyperlink::{Hyperlink, HyperlinkId};
 use crate::placement::AnchoredPlacement;
 use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
@@ -15,6 +15,7 @@ use crate::screen::grid::run::Run;
 use crate::screen::selection::SelectionRange;
 use crate::screen::viewport::{DisplayOffset, ViewportLine};
 use crate::vi::ViCursor;
+use std::collections::HashSet;
 
 /// One emitted frame.
 ///
@@ -48,17 +49,10 @@ pub struct Frame {
     pub placements: Option<Vec<AnchoredPlacement>>,
     /// The live palette symbolic colors resolve against: `None` when
     /// unchanged. A palette override owes a staged full repaint.
-    ///
-    /// TODO: stage it from the OSC 10 / 11 / 12 handler too, once that
-    /// handler lands.
     pub palette: Option<Palette>,
     /// Definitions for hyperlink ids referenced by `rows`, merged into
-    /// the consumer's retained table.
-    ///
-    /// It is always empty, and [`crate::prelude::Run::hyperlink_id`] is
-    /// always `None`.
-    ///
-    /// TODO: fill it once OSC 8 handling reaches the hyperlink interner.
+    /// the consumer's retained table. An id the consumer already knows
+    /// may appear again; a row absent from `rows` contributes nothing.
     pub hyperlinks: Vec<Hyperlink>,
 }
 
@@ -143,7 +137,8 @@ impl FrameTracker {
             line,
             contents: screen.viewport_row(line).to_runs(),
         };
-        let rows = self.damage.dirty_rows(size.rows).map(dirty_row).collect();
+        let rows: Vec<DirtyRow> = self.damage.dirty_rows(size.rows).map(dirty_row).collect();
+        let hyperlinks = Self::definitions(device, &rows);
         self.damage.clear();
         let frame = Frame {
             size,
@@ -154,7 +149,7 @@ impl FrameTracker {
             selection: carried.selection,
             placements,
             palette,
-            hyperlinks: Vec::new(),
+            hyperlinks,
         };
         self.settle(carried, frame.placements.as_ref(), frame.palette.as_ref());
         Some(frame)
@@ -172,6 +167,23 @@ impl FrameTracker {
     /// `None` when unchanged.
     fn diff_palette(&self, palette: &Palette) -> Option<Palette> {
         (*palette != self.palette).then(|| palette.clone())
+    }
+
+    /// The definitions of every hyperlink `rows` references, in first
+    /// appearance order.
+    fn definitions(device: &DeviceState, rows: &[DirtyRow]) -> Vec<Hyperlink> {
+        let mut seen: HashSet<HyperlinkId> = HashSet::new();
+        rows.iter()
+            .flat_map(|row| row.contents.iter())
+            .filter_map(|run| run.hyperlink_id)
+            .filter(|id| seen.insert(*id))
+            .filter_map(|id| {
+                device.hyperlink_uri(id).map(|uri| Hyperlink {
+                    id,
+                    uri: uri.clone(),
+                })
+            })
+            .collect()
     }
 
     /// Records what an emitted frame carried, so later diffs compare
@@ -208,7 +220,7 @@ mod tests {
     use super::*;
     use crate::device::DeviceState;
     use crate::device::color::Color;
-    use crate::device::modes::{AutoWrap, InsertReplaceMode};
+    use crate::hyperlink::HyperlinkUri;
     use crate::placement::{InstanceId, PlacementSize};
     use crate::screen::grid::GridSize;
     use crate::screen::grid::coords::{GridColumn, GridLine};
@@ -316,9 +328,7 @@ mod tests {
     #[test]
     fn full_damage_emits_every_viewport_row() {
         let mut rig = drained_rig();
-        rig.device
-            .active_screen_mut()
-            .print('a', InsertReplaceMode::Replace, AutoWrap::Enabled);
+        rig.device.print('a').expect("a printable glyph");
         rig.tracker.stage(DamageSpan::Full);
         let frame = emit(&mut rig).expect("staged damage emits");
         assert_eq!(frame.size, GridSize { cols: 4, rows: 3 });
@@ -442,5 +452,89 @@ mod tests {
         assert!(rig.device.unmount_placement(Some(InstanceId(1))));
         let unmounted = emit(&mut rig).expect("an unmount emits");
         assert_eq!(unmounted.placements, Some(Vec::new()));
+    }
+
+    /// Asserts that a frame carries the definition of every hyperlink
+    /// its repainted rows reference, and splits the row at the link's
+    /// edge.
+    ///
+    /// Case: a program prints a clickable path followed by plain text on
+    /// the same row, and the whole row repaints.
+    #[test]
+    fn a_frame_carries_the_definitions_its_rows_reference() {
+        let mut rig = drained_rig();
+        rig.device
+            .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        rig.device.print('a').expect("a printable glyph");
+        rig.device.close_hyperlink();
+        rig.device.print('b').expect("a printable glyph");
+        rig.tracker.stage(DamageSpan::Full);
+        let frame = emit(&mut rig).expect("staged damage emits");
+        assert_eq!(frame.hyperlinks.len(), 1);
+        assert_eq!(
+            frame.hyperlinks[0].uri,
+            HyperlinkUri::new("https://a.example")
+        );
+        assert_eq!(frame.rows[0].contents.len(), 2);
+        assert_eq!(
+            frame.rows[0].contents[0].hyperlink_id,
+            Some(frame.hyperlinks[0].id)
+        );
+        assert_eq!(frame.rows[0].contents[1].hyperlink_id, None);
+    }
+
+    /// Asserts that one hyperlink spanning two rows is defined once.
+    ///
+    /// Case: a URL longer than the window is wide wraps onto the next
+    /// row, and both rows repaint together.
+    #[test]
+    fn a_hyperlink_spanning_two_rows_is_defined_once() {
+        let mut rig = drained_rig();
+        rig.device
+            .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        for _ in 0..5 {
+            rig.device.print('a').expect("a printable glyph");
+        }
+        rig.tracker.stage(DamageSpan::Full);
+        let frame = emit(&mut rig).expect("staged damage emits");
+        assert_eq!(frame.hyperlinks.len(), 1);
+    }
+
+    /// Asserts that a frame whose rows reference no hyperlink carries no
+    /// definitions, even while the interner still holds one.
+    ///
+    /// Case: a program opens a link and closes it again without printing
+    /// anything inside it, then prints an ordinary prompt.
+    #[test]
+    fn a_frame_without_links_carries_no_definitions() {
+        let mut rig = drained_rig();
+        rig.device
+            .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        rig.device.close_hyperlink();
+        rig.device.print('a').expect("a printable glyph");
+        rig.tracker.stage(DamageSpan::Full);
+        let frame = emit(&mut rig).expect("staged damage emits");
+        assert!(frame.hyperlinks.is_empty());
+    }
+
+    /// Asserts that a frame repainting only an unlinked row carries no
+    /// definitions, even while a linked row is still on screen.
+    ///
+    /// Case: a clickable path printed earlier stays put, and the shell
+    /// repaints only the row below it.
+    #[test]
+    fn a_frame_omits_definitions_for_rows_it_does_not_repaint() {
+        let mut rig = drained_rig();
+        rig.device
+            .open_hyperlink(None, HyperlinkUri::new("https://a.example"));
+        rig.device.print('a').expect("a printable glyph");
+        rig.tracker.stage(DamageSpan::Full);
+        let first = emit(&mut rig).expect("the first frame carries the linked row");
+        assert_eq!(first.hyperlinks.len(), 1);
+        rig.device.close_hyperlink();
+        rig.tracker
+            .stage(DamageSpan::rows(ViewportLine(2), ViewportLine(2)));
+        let frame = emit(&mut rig).expect("staged damage emits");
+        assert!(frame.hyperlinks.is_empty());
     }
 }

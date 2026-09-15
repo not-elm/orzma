@@ -26,7 +26,8 @@ impl Plugin for TerminalGridPlugin {
 /// A frame that only moves the cursor, the viewport or the selection
 /// leaves [`TerminalCells`] untouched.
 ///
-/// A frame addressed to an entity without both components is ignored.
+/// A frame addressed to an entity without both components is ignored,
+/// and a frame the cells reject is logged and leaves them as they were.
 fn apply_frame(
     signal: On<TtyFrameSignal>,
     mut terminals: Query<(&mut TerminalView, &mut TerminalCells)>,
@@ -34,8 +35,10 @@ fn apply_frame(
     let Ok((view, cells)) = terminals.get_mut(signal.terminal) else {
         return;
     };
-    if cells.differs_from(&signal.frame) {
-        cells.into_inner().apply(&signal.frame);
+    if cells.differs_from(&signal.frame)
+        && let Err(err) = cells.into_inner().apply(&signal.frame)
+    {
+        warn!(terminal = ?signal.terminal, %err, "frame rejected; cells left as they were");
     }
     if view.differs_from(&signal.frame) {
         view.into_inner().apply(&signal.frame);
@@ -46,10 +49,10 @@ fn apply_frame(
 mod tests {
     use super::*;
     use crate::schema::{
-        AnchoredPlacement, Cursor, DisplayOffset, GridColumn, GridLine, GridPoint, InstanceId,
-        PlacementSize, SelectionGeometry, SelectionRange, quiet_frame,
+        AnchoredPlacement, Cursor, DisplayOffset, GridColumn, GridLine, GridPoint, GridSlot,
+        InstanceId, PlacementSize, SelectionGeometry, SelectionRange, quiet_frame,
     };
-    use orzma_vt::prelude::{Frame, GridSize};
+    use orzma_vt::prelude::{DirtyRow, Frame, GridSize, Row, Run, ViewportLine};
     use orzmux::prelude::PaneId;
 
     #[derive(Resource, Default)]
@@ -308,5 +311,35 @@ mod tests {
         let cells = app.world().get::<TerminalCells>(terminal).unwrap();
         assert_eq!(cells.cells.len(), 3);
         assert!(cells.cells.iter().all(|row| row.len() == 4));
+    }
+
+    /// Asserts that a frame the cells reject leaves them as they were
+    /// rather than panicking.
+    ///
+    /// Case: the backend sends a frame whose run declares a width of
+    /// three.
+    #[test]
+    fn a_rejected_frame_leaves_the_cells_as_they_were() {
+        let (mut app, terminal) = app_with_terminal();
+        app.world_mut().trigger(TtyFrameSignal {
+            terminal,
+            frame: Frame {
+                rows: vec![DirtyRow {
+                    line: ViewportLine(0),
+                    contents: Row::from(vec![Run {
+                        cols: 3,
+                        text: "\u{3042}".to_string(),
+                        widths: vec![3],
+                        ..Run::default()
+                    }]),
+                }],
+                ..quiet_frame()
+            },
+        });
+        app.update();
+        assert_eq!(
+            app.world().get::<TerminalCells>(terminal).unwrap().cells,
+            vec![vec![GridSlot::Empty]]
+        );
     }
 }

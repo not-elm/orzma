@@ -6,12 +6,17 @@ pub mod run;
 pub(crate) mod coords;
 mod history_index;
 
-use crate::screen::cell::Cell;
+use crate::error::{GridSizeError, VtResult};
+use crate::screen::cell::{Cell, CellWidth};
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::grid::history_index::HistoryIndex;
 use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
+
+/// The narrowest grid the terminal will build: a width-2 glyph needs two
+/// columns.
+pub const MIN_COLUMNS: u16 = 2;
 
 /// Grid dimensions in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +25,33 @@ pub struct GridSize {
     pub cols: u16,
     /// Visible row count.
     pub rows: u16,
+}
+
+impl GridSize {
+    /// Upper bound on the column count [`Self::new`] accepts.
+    pub const MAX_COLS: u16 = 4096;
+    /// Upper bound on the row count [`Self::new`] accepts.
+    pub const MAX_ROWS: u16 = 4096;
+
+    /// Builds a size with the column count raised to [`MIN_COLUMNS`].
+    ///
+    /// # Errors
+    ///
+    /// [`GridSizeError::ZeroAxis`] when either count is zero, and
+    /// [`GridSizeError::TooLarge`] when either exceeds
+    /// [`Self::MAX_COLS`] / [`Self::MAX_ROWS`].
+    pub fn new(cols: u16, rows: u16) -> VtResult<Self> {
+        if cols == 0 || rows == 0 {
+            return Err(GridSizeError::ZeroAxis.into());
+        }
+        if Self::MAX_COLS < cols || Self::MAX_ROWS < rows {
+            return Err(GridSizeError::TooLarge.into());
+        }
+        Ok(Self {
+            cols: cols.max(MIN_COLUMNS),
+            rows,
+        })
+    }
 }
 
 /// Stable identity of one grid row, minted when the row enters the ring.
@@ -113,8 +145,10 @@ impl Grid {
 
     /// Overwrites the given column range of one visible row with `fill`.
     pub fn fill_visible_row_range(&mut self, line: ScreenLine, columns: Range<u16>, fill: Cell) {
-        let row: &mut [Cell] = &mut self[line];
-        row[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
+        let row: &mut Row<Cell> = &mut self[line];
+        let cells: &mut [Cell] = row;
+        cells[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
+        row.normalize_wide_pairs();
     }
 
     /// Shifts one visible row's cells from `column` right by `count`
@@ -134,14 +168,16 @@ impl Grid {
     ) {
         let start = usize::from(column.0);
         let count = usize::from(count);
-        let row: &mut [Cell] = &mut self[line];
-        let cols = row.len();
+        let row: &mut Row<Cell> = &mut self[line];
+        let cells: &mut [Cell] = row;
+        let cols = cells.len();
         debug_assert!(
             start + count <= cols,
             "an in-row insert stays inside the row"
         );
-        row.copy_within(start..cols - count, start + count);
-        row[start..start + count].fill(fill);
+        cells[start..cols].rotate_right(count);
+        cells[start..start + count].fill(fill);
+        row.normalize_wide_pairs();
     }
 
     /// Shifts one visible row's cells from `column + count` left to
@@ -163,14 +199,16 @@ impl Grid {
     ) {
         let start = usize::from(column.0);
         let count = usize::from(count);
-        let row: &mut [Cell] = &mut self[line];
-        let cols = row.len();
+        let row: &mut Row<Cell> = &mut self[line];
+        let cells: &mut [Cell] = row;
+        let cols = cells.len();
         debug_assert!(
             start + count <= cols,
             "an in-row delete stays inside the row"
         );
-        row.copy_within(start + count..cols, start);
-        row[cols - count..].fill(fill);
+        cells[start..cols].rotate_left(count);
+        cells[cols - count..].fill(fill);
+        row.normalize_wide_pairs();
     }
 
     /// Scrolls the region up by one row: the row at `top` leaves and a
@@ -179,7 +217,14 @@ impl Grid {
     /// The departing row becomes the newest history row only when `top`
     /// is the first screen line. A region with content pinned above it
     /// discards the row instead.
+    ///
+    /// The caller must pass a [`CellWidth::Narrow`] `fill`.
     pub fn scroll_up_one(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
+        debug_assert_eq!(
+            fill.width,
+            CellWidth::Narrow,
+            "a scroll fills with narrow blanks"
+        );
         let base = self.history_len();
         let id = self.mint();
         if top > ScreenLine(0) {
@@ -228,7 +273,14 @@ impl Grid {
 
     /// Scrolls the region down by one row: a `fill`-filled row enters at
     /// `top` and the row at `bottom` is discarded.
+    ///
+    /// The caller must pass a [`CellWidth::Narrow`] `fill`.
     pub fn scroll_down_one(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
+        debug_assert_eq!(
+            fill.width,
+            CellWidth::Narrow,
+            "a scroll fills with narrow blanks"
+        );
         let base = self.history_len();
         let mut recycled = self
             .rows
@@ -356,8 +408,12 @@ impl Grid {
         if self.size.cols == cols {
             return;
         }
+        let old_cols = self.size.cols;
         for row in &mut self.rows {
             row.cells.resize(cols, Cell::default());
+            // NOTE: A resize can only break one joint per row, so repair
+            // that index instead of sweeping the whole row.
+            row.cells.repair_after_resize(old_cols);
         }
         self.size.cols = cols;
     }
@@ -681,7 +737,7 @@ mod tests {
         grid[ScreenLine(0)][0].c = 'a';
         grid[ScreenLine(1)][0].c = 'b';
         let fill = Cell::blank_with_bg(Color::Indexed(4));
-        scroll_up_whole_screen(&mut grid, fill);
+        scroll_up_whole_screen(&mut grid, fill.clone());
         assert_eq!(grid.history_len(), 1);
         assert_eq!(grid[ScreenLine(0)][0].c, 'b');
         assert_eq!(grid[ScreenLine(1)][0], fill);
@@ -924,7 +980,7 @@ mod tests {
             let mut grid = labelled(3, 10);
             let fill = Cell::blank_with_bg(Color::Indexed(4));
             let (top, bottom) = whole(3);
-            grid.scroll_down_one(top, bottom, fill);
+            grid.scroll_down_one(top, bottom, fill.clone());
             assert_eq!(grid[ScreenLine(0)][0], fill);
         }
 
