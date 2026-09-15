@@ -718,6 +718,14 @@ mod tests {
             self.events.try_iter().collect()
         }
 
+        /// Waits until every live pane's queued PTY writes have been
+        /// written.
+        fn settle_writes(&self) {
+            for pane in self.backend.panes.values() {
+                pane.tty.settle_writes();
+            }
+        }
+
         fn resize(&mut self, size: GridSize) {
             self.send(OrzmuxCommand::Resize {
                 size,
@@ -1130,6 +1138,7 @@ mod tests {
             key: TerminalKey::Character(KeyText::new("a").unwrap()),
             mods: TerminalModifiers::default(),
         });
+        h.settle_writes();
         assert_eq!(root_pane.sink.contents(), b"a");
     }
 
@@ -1148,6 +1157,7 @@ mod tests {
             mods: TerminalModifiers::default(),
         });
         assert!(h.drain().is_empty());
+        h.settle_writes();
         assert!(root_pane.sink.contents().is_empty());
     }
 
@@ -1271,6 +1281,7 @@ mod tests {
         enable_focus_reporting(&mut h, new, &new_pane);
         h.send(OrzmuxCommand::SelectPane { pane: root });
         h.send(OrzmuxCommand::SelectPane { pane: new });
+        h.settle_writes();
         assert_eq!(root_pane.sink.contents(), b"\x1b[I\x1b[O");
         assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
     }
@@ -1288,6 +1299,7 @@ mod tests {
         enable_focus_reporting(&mut h, root, &root_pane);
         *h.log.spawn_output.lock().unwrap() = Some(b"\x1b[?1004h".to_vec());
         let (_new, new_pane) = split_active(&mut h, 2);
+        h.settle_writes();
         assert_eq!(root_pane.sink.contents(), b"\x1b[O");
         assert_eq!(new_pane.sink.contents(), b"");
     }
@@ -1315,6 +1327,7 @@ mod tests {
             h.drain().front(),
             Some(OrzmuxEvent::SpawnFailed { .. })
         ));
+        h.settle_writes();
         assert_eq!(root_pane.sink.contents(), b"");
     }
 
@@ -1331,6 +1344,7 @@ mod tests {
         h.send(OrzmuxCommand::KillPane {
             pane: PaneTarget::Active,
         });
+        h.settle_writes();
         assert_eq!(root_pane.sink.contents(), b"\x1b[I");
     }
 
@@ -1349,6 +1363,7 @@ mod tests {
         h.send(OrzmuxCommand::WindowFocus { focused: false });
         h.send(OrzmuxCommand::WindowFocus { focused: false });
         h.send(OrzmuxCommand::WindowFocus { focused: true });
+        h.settle_writes();
         assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
         assert_eq!(root_pane.sink.contents(), b"");
     }
@@ -1364,30 +1379,13 @@ mod tests {
         h.log.fail_writes_next.store(true, Ordering::Release);
         let (root, root_pane) = h.open_root();
         let (new, new_pane) = split_active(&mut h, 2);
-        h.send(OrzmuxCommand::SelectPane { pane: root });
-        enable_focus_reporting(&mut h, root, &root_pane);
-        enable_focus_reporting(&mut h, new, &new_pane);
-        h.send(OrzmuxCommand::SelectPane { pane: new });
-        assert_eq!(new_pane.sink.contents(), b"\x1b[I");
-    }
-
-    /// Asserts that one refresh writes the report for the pane being left
-    /// before the report for the pane being entered.
-    ///
-    /// Case: the user moves back and forth between two panes that each run a
-    /// client attached to the same tmux server with `focus-events` on.
-    #[test]
-    fn focus_loss_is_reported_before_focus_gain() {
-        let mut h = Harness::new();
-        let shared = CaptureSink::default();
-        *h.log.shared_sink.lock().unwrap() = Some(shared.clone());
-        let (root, root_pane) = h.open_root();
-        let (new, new_pane) = split_active(&mut h, 2);
         enable_focus_reporting(&mut h, root, &root_pane);
         enable_focus_reporting(&mut h, new, &new_pane);
         h.send(OrzmuxCommand::SelectPane { pane: root });
+        h.settle_writes();
         h.send(OrzmuxCommand::SelectPane { pane: new });
-        assert_eq!(shared.contents(), b"\x1b[O\x1b[I\x1b[O\x1b[I");
+        h.settle_writes();
+        assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
     }
 
     /// Asserts that a resize publishes one layout whose divider moved

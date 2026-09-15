@@ -101,6 +101,11 @@ impl PtyInput {
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
+
+    /// Returns the encoded bytes by value, ready to queue for the PTY.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
 }
 
 #[cfg(test)]

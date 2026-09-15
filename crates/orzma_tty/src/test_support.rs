@@ -15,7 +15,7 @@ use std::io::Read;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult, Write};
 #[cfg(all(unix, any(test, feature = "test-support")))]
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 /// Cloneable in-memory `Write` sink capturing every byte written to it.
 ///
@@ -48,6 +48,38 @@ pub struct FailingSink;
 impl Write for FailingSink {
     fn write(&mut self, _buf: &[u8]) -> IoResult<usize> {
         Err(IoError::from(ErrorKind::BrokenPipe))
+    }
+
+    fn flush(&mut self) -> IoResult<()> {
+        Ok(())
+    }
+}
+
+/// A `Write` sink whose writes block until the sink is released, standing
+/// in for a PTY whose application stopped reading stdin.
+///
+/// Clones share one gate, so releasing any clone unblocks the writes
+/// pending in every clone. A released sink discards what it is given.
+#[derive(Clone, Default)]
+pub struct BlockingSink(Arc<(Mutex<bool>, Condvar)>);
+
+impl BlockingSink {
+    /// Unblocks every pending and future write.
+    pub fn release(&self) {
+        let (released, gate) = &*self.0;
+        *released.lock().unwrap() = true;
+        gate.notify_all();
+    }
+}
+
+impl Write for BlockingSink {
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+        let (released, gate) = &*self.0;
+        let mut released = released.lock().unwrap();
+        while !*released {
+            released = gate.wait(released).unwrap();
+        }
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> IoResult<()> {

@@ -147,7 +147,8 @@ impl<V: Vt> OrzmaTty<V> {
     /// Resize calls still round-trip through [`Self::pty_size`], and no
     /// child process or reader thread is started, so everything the input
     /// methods emit can be observed on `writer` — typically a
-    /// [`test_support::CaptureSink`].
+    /// [`test_support::CaptureSink`] — once [`Self::settle_writes`]
+    /// returns.
     ///
     /// The placements the initial sizing strands reach the next pump as a
     /// [`VtSignal::WebviewEvicted`] signal.
@@ -192,6 +193,19 @@ impl<V: Vt> OrzmaTty<V> {
     #[cfg(any(test, feature = "test-support"))]
     pub fn feed_bytes(&mut self, bytes: &[u8]) {
         self.feed_chunk(bytes);
+    }
+
+    /// Blocks until every input this terminal queued has been written to
+    /// its PTY writer, or until the writer stops after a failure.
+    ///
+    /// Never returns while the writer is blocked in a write that does not
+    /// complete.
+    ///
+    /// Available only under `cfg(test)` in this crate and through the
+    /// `test-support` feature downstream.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn settle_writes(&self) {
+        self.pty.settle_writes();
     }
 
     /// Scrolls the grid, arming the coalescer only when the viewport
@@ -275,35 +289,55 @@ impl<V: Vt> OrzmaTty<V> {
         self.pending_signals.push(TtySignal::Vt(signal));
     }
 
-    /// Encodes a key press and writes it to the PTY.
+    /// Encodes a key press and queues it for the PTY.
     ///
     /// Snaps a scrolled-back viewport to the live tail first
-    /// (scroll-on-input policy).
+    /// (scroll-on-input policy). `Ok` means the key was queued, not that it
+    /// reached the PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the key (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_key(&mut self, key: &TerminalKey, mods: &TerminalModifiers) -> OrzmaTtyResult {
         let modes = self.vt.modes();
         self.snap_to_live_tail();
         self.pty
-            .write_all(PtyInput::encode_key(key, mods, modes).as_bytes())
+            .enqueue_write(PtyInput::encode_key(key, mods, modes).into_bytes())
     }
 
     /// Encodes one mouse report in the terminal's active mouse encoding
-    /// and writes it to the PTY.
+    /// and queues it for the PTY.
     ///
     /// Does not snap a scrolled-back viewport: the report's cell
     /// coordinates are the ones the host computed against the viewport on
-    /// screen.
+    /// screen. `Ok` means the report was queued, not that it reached the
+    /// PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the report (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_mouse(&mut self, report: MouseReport) -> OrzmaTtyResult {
         let sequence = report.encode(self.vt.modes().mouse_encoding);
-        self.pty.write_all(&sequence)
+        self.pty.enqueue_write(sequence)
     }
 
-    /// Writes a paste of clipboard text to the PTY, honouring
+    /// Queues a paste of clipboard text for the PTY, honouring
     /// bracketed-paste mode (DECSET 2004).
     ///
-    /// Empty text is a no-op: nothing reaches the PTY. Otherwise a
-    /// scrolled-back viewport snaps to the live tail first
-    /// (scroll-on-input policy), and the whole frame goes out in a
-    /// single write.
+    /// Empty text is a no-op: nothing is queued. Otherwise a scrolled-back
+    /// viewport snaps to the live tail first (scroll-on-input policy), and
+    /// the whole frame is queued as one write or rejected whole. `Ok` means
+    /// the paste was queued, not that it reached the PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the frame does not fit in the PTY
+    /// input queue (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_paste(&mut self, text: &str) -> OrzmaTtyResult {
         if text.is_empty() {
             return Ok(());
@@ -311,7 +345,7 @@ impl<V: Vt> OrzmaTty<V> {
         let bracketed = self.vt.modes().bracketed_paste;
         self.snap_to_live_tail();
         self.pty
-            .write_all(PtyInput::encode_paste(text, bracketed).as_bytes())
+            .enqueue_write(PtyInput::encode_paste(text, bracketed).into_bytes())
     }
 
     /// Records whether the host gives this terminal focus, and reports a
@@ -320,8 +354,15 @@ impl<V: Vt> OrzmaTty<V> {
     ///
     /// An unchanged state writes nothing, and enabling focus reporting
     /// reports nothing until the next change. The viewport does not move,
-    /// and no repaint is scheduled. The new state is recorded even when
-    /// the write fails, and the write error is returned.
+    /// and no repaint is scheduled. The new state is recorded even when the
+    /// report is refused. `Ok` means the report was queued, not that it
+    /// reached the PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the report (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn set_focused(&mut self, focused: bool) -> OrzmaTtyResult {
         if self.focused == focused {
             return Ok(());
@@ -331,7 +372,7 @@ impl<V: Vt> OrzmaTty<V> {
             return Ok(());
         }
         self.pty
-            .write_all(PtyInput::encode_focus(focused).as_bytes())
+            .enqueue_write(PtyInput::encode_focus(focused).into_bytes())
     }
 
     /// The receivers to wait on for this terminal (see [`Readiness`]).
@@ -378,9 +419,9 @@ impl<V: Vt> OrzmaTty<V> {
     }
 
     /// Drains the PTY and the VT into one output batch: interprets up to
-    /// [`Self::MAX_CHUNKS_PER_PUMP`] queued chunks, writes pending replies
-    /// back to the PTY, surfaces buffered signals, and emits a frame when
-    /// the coalesce window is due or the bootstrap snapshot is still owed.
+    /// [`Self::MAX_CHUNKS_PER_PUMP`] queued chunks, queues pending replies
+    /// for the PTY, surfaces buffered signals, and emits a frame when the
+    /// coalesce window is due or the bootstrap snapshot is still owed.
     ///
     /// The child's exit is latched when observed and reported as a
     /// trailing `ChildExit` only on the pump that finds no chunk left, so
@@ -394,10 +435,11 @@ impl<V: Vt> OrzmaTty<V> {
 
         if !self.pending_replies.is_empty() {
             let replies = mem::take(&mut self.pending_replies);
-            // NOTE: a failed reply write is dropped deliberately — a PTY
-            // that rejects writes is tearing down and surfaces as
-            // ChildExit; there is no receiver left to answer.
-            let _ = self.pty.write_all(&replies);
+            // NOTE: a refused reply is dropped deliberately. A full queue
+            // means the application stopped reading stdin, and a failed or
+            // closed writer means the PTY is tearing down and surfaces as
+            // ChildExit; there is no reader left to answer.
+            let _ = self.pty.enqueue_write(replies);
         }
 
         let mut signals = mem::take(&mut self.pending_signals);
@@ -871,6 +913,7 @@ mod tests {
         let (mut term, sink) = detached_term();
         term.resize(grid(120, 40), CellPixels::default())
             .expect("resize");
+        term.settle_writes();
         assert_eq!(sink.contents(), b"");
     }
 
@@ -1023,6 +1066,7 @@ mod tests {
         term.vt.scroll_moves = true;
         term.scroll(Scroll::Delta(3));
         term.scroll(Scroll::Bottom);
+        term.settle_writes();
         assert_eq!(sink.contents(), b"");
     }
 
@@ -1057,11 +1101,13 @@ mod tests {
         term.vt.modes.app_cursor = true;
         term.send_key(&TerminalKey::ArrowUp, &TerminalModifiers::default())
             .expect("send_key");
+        term.settle_writes();
         assert_eq!(sink.contents(), b"\x1bOA");
 
         let (mut term, sink) = detached_term();
         term.send_key(&TerminalKey::ArrowUp, &TerminalModifiers::default())
             .expect("send_key");
+        term.settle_writes();
         assert_eq!(sink.contents(), b"\x1b[A");
     }
 
@@ -1075,6 +1121,7 @@ mod tests {
         let (mut term, sink) = detached_term();
         term.vt.modes.bracketed_paste = true;
         term.send_paste("hi").expect("send_paste");
+        term.settle_writes();
         assert_eq!(sink.contents(), b"\x1b[200~hi\x1b[201~");
     }
 
@@ -1088,6 +1135,7 @@ mod tests {
         term.vt.modes.focus_in_out = true;
         term.set_focused(true).expect("set_focused");
         term.set_focused(false).expect("set_focused");
+        term.settle_writes();
         assert_eq!(sink.contents(), b"\x1b[I\x1b[O");
     }
 
@@ -1102,6 +1150,7 @@ mod tests {
         term.set_focused(true).expect("set_focused");
         term.set_focused(false).expect("set_focused");
         term.set_focused(false).expect("set_focused");
+        term.settle_writes();
         assert_eq!(sink.contents(), b"\x1b[I\x1b[O");
     }
 
@@ -1117,8 +1166,10 @@ mod tests {
         term.set_focused(true).expect("set_focused");
         term.vt.modes.focus_in_out = true;
         term.set_focused(true).expect("set_focused");
+        term.settle_writes();
         assert_eq!(sink.contents(), b"");
         term.set_focused(false).expect("set_focused");
+        term.settle_writes();
         assert_eq!(sink.contents(), b"\x1b[O");
     }
 
@@ -1132,17 +1183,20 @@ mod tests {
         term.vt.modes.focus_in_out = true;
         term.vt.display_offset = DisplayOffset(3);
         term.set_focused(true).expect("set_focused");
+        term.settle_writes();
         assert_eq!(sink.contents(), b"\x1b[I");
         assert_eq!(term.vt.display_offset, DisplayOffset(3));
         assert!(!term.vt.scrolls.iter().any(|s| matches!(s, Scroll::Bottom)));
         assert!(!term.coalescer.is_armed());
     }
 
-    /// Asserts that a failed focus write still records the new state, so
-    /// repeating that state attempts no second write.
+    /// Asserts that a focus change is recorded even when its report cannot
+    /// reach the PTY, that the writer's failure surfaces once on the next
+    /// report, and that repeating the recorded state attempts no write.
     ///
     /// Case: the window regains focus while the pane's PTY rejects writes,
-    /// and the user then resizes the window before focus changes again.
+    /// the user switches away, and then resizes the window before focus
+    /// changes again.
     #[test]
     fn a_failed_focus_write_keeps_the_new_state() {
         let mut term = OrzmaTty::detached(
@@ -1152,12 +1206,19 @@ mod tests {
         )
         .expect("OrzmaTty::detached");
         term.vt.modes.focus_in_out = true;
+        term.set_focused(true)
+            .expect("the report is queued before the writer fails");
+        term.settle_writes();
         assert!(matches!(
-            term.set_focused(true),
+            term.set_focused(false),
             Err(OrzmaTtyError::PtyWrite(_))
         ));
-        term.set_focused(true)
+        term.set_focused(false)
             .expect("an unchanged state attempts no write, so it cannot fail");
+        assert!(matches!(
+            term.set_focused(true),
+            Err(OrzmaTtyError::PtyWriterClosed)
+        ));
     }
 
     /// Asserts that a detached terminal's PTY writes land on the
@@ -1170,6 +1231,7 @@ mod tests {
     fn detached_routes_writes_to_the_injected_sink() {
         let (mut term, sink) = detached_term();
         term.send_paste("hi").expect("send_paste");
+        term.settle_writes();
         assert_eq!(sink.contents(), b"hi");
     }
 
@@ -1181,6 +1243,7 @@ mod tests {
     fn empty_paste_writes_nothing_to_the_pty() {
         let (mut term, sink) = detached_term();
         term.send_paste("").expect("send_paste");
+        term.settle_writes();
         assert_eq!(sink.contents(), b"");
     }
 
@@ -1298,6 +1361,7 @@ mod tests {
         });
         chunk_tx.send(b"\x1b[6n".to_vec()).expect("send chunk");
         term.pump();
+        term.settle_writes();
         assert_eq!(sink.contents(), b"\x1b[1;1R");
     }
 
