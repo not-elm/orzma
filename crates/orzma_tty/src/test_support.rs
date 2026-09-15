@@ -15,7 +15,7 @@ use std::io::Read;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult, Write};
 #[cfg(all(unix, any(test, feature = "test-support")))]
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Cloneable in-memory `Write` sink capturing every byte written to it.
 ///
@@ -61,24 +61,29 @@ impl Write for FailingSink {
 /// Clones share one gate, so releasing any clone unblocks the writes
 /// pending in every clone. A released sink discards what it is given.
 #[derive(Clone, Default)]
-pub struct BlockingSink(Arc<(Mutex<bool>, Condvar)>);
+pub struct BlockingSink {
+    /// Set once a write has entered any clone.
+    entered: Arc<OnceLock<()>>,
+    /// Set once any clone is released.
+    released: Arc<OnceLock<()>>,
+}
 
 impl BlockingSink {
     /// Unblocks every pending and future write.
     pub fn release(&self) {
-        let (released, gate) = &*self.0;
-        *released.lock().unwrap() = true;
-        gate.notify_all();
+        let _ = self.released.set(());
+    }
+
+    /// Blocks until a write has entered this sink or one of its clones.
+    pub fn wait_until_writing(&self) {
+        self.entered.wait();
     }
 }
 
 impl Write for BlockingSink {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-        let (released, gate) = &*self.0;
-        let mut released = released.lock().unwrap();
-        while !*released {
-            released = gate.wait(released).unwrap();
-        }
+        let _ = self.entered.set(());
+        self.released.wait();
         Ok(buf.len())
     }
 

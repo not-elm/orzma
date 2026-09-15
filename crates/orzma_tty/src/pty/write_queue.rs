@@ -1,9 +1,10 @@
-//! A pane's PTY input mailbox: a byte-capped FIFO the backend thread fills
-//! without blocking, drained into the PTY by a dedicated writer thread.
+//! A pane's PTY input mailbox: a byte-capped FIFO that takes writes without
+//! blocking, drained into the PTY by a dedicated writer thread.
 
 use crate::error::{OrzmaTtyError, OrzmaTtyResult};
 use std::collections::VecDeque;
 use std::io::{Error as IoError, Write};
+use std::mem;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
@@ -23,7 +24,7 @@ impl WriteQueue {
     ///
     /// Returns [`OrzmaTtyError::PtyWriterThread`] when the OS refuses to
     /// start the thread.
-    pub(crate) fn spawn(writer: Box<dyn Write + Send>, capacity: usize) -> OrzmaTtyResult<Self> {
+    pub fn spawn(writer: Box<dyn Write + Send>, capacity: usize) -> OrzmaTtyResult<Self> {
         let shared = Arc::new(Shared {
             state: Mutex::new(QueueState {
                 pending: VecDeque::new(),
@@ -43,20 +44,20 @@ impl WriteQueue {
         Ok(Self { shared })
     }
 
-    /// Queues `bytes` without blocking; `Ok` means queued, not written.
-    /// An empty buffer queues nothing.
+    /// Queues `bytes` without blocking; `Ok` means the bytes were queued,
+    /// not that they were written. An empty buffer queues nothing.
     ///
     /// # Errors
     ///
     /// - [`OrzmaTtyError::PtyWriteQueueFull`] when `bytes` would push the
     ///   unwritten bytes past the capacity; nothing is queued. The count
-    ///   restarts at 1 when the queue was empty or has drained since the
-    ///   last rejection.
+    ///   restarts at 1 when the queue has been empty since the last
+    ///   rejection.
     /// - [`OrzmaTtyError::PtyWrite`] once, after the writer's OS write
     ///   failed.
     /// - [`OrzmaTtyError::PtyWriterClosed`] after that, and once the queue
     ///   is closed.
-    pub(crate) fn enqueue(&self, bytes: Vec<u8>) -> OrzmaTtyResult {
+    pub fn enqueue(&self, bytes: Vec<u8>) -> OrzmaTtyResult {
         let mut state = lock(&self.shared.state);
         match &mut state.status {
             QueueStatus::Closed => return Err(OrzmaTtyError::PtyWriterClosed),
@@ -70,10 +71,10 @@ impl WriteQueue {
         if bytes.is_empty() {
             return Ok(());
         }
+        if state.pending_bytes == 0 {
+            state.dropped_in_episode = 0;
+        }
         if state.pending_bytes.saturating_add(bytes.len()) > state.capacity {
-            if state.pending_bytes == 0 {
-                state.dropped_in_episode = 0;
-            }
             state.dropped_in_episode = state.dropped_in_episode.saturating_add(1);
             return Err(OrzmaTtyError::PtyWriteQueueFull {
                 dropped_in_episode: state.dropped_in_episode,
@@ -92,7 +93,7 @@ impl WriteQueue {
     /// Never returns while the writer is blocked in a write that does not
     /// complete.
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn settle(&self) {
+    pub fn settle(&self) {
         let mut state = lock(&self.shared.state);
         while matches!(state.status, QueueStatus::Open) && state.pending_bytes > 0 {
             state = self
@@ -104,8 +105,8 @@ impl WriteQueue {
     }
 
     /// Stops accepting writes, replacing any writer failure not yet
-    /// reported; the writer thread discards what is still queued and exits
-    /// once any write in flight returns.
+    /// reported. The writer thread discards what is still queued once any
+    /// write in flight returns, then drops the writer and exits.
     fn close(&self) {
         let mut state = lock(&self.shared.state);
         state.status = QueueStatus::Closed;
@@ -117,10 +118,14 @@ impl WriteQueue {
 
 impl Drop for WriteQueue {
     fn drop(&mut self) {
-        // NOTE: the writer thread is never joined. It may be blocked in a
-        // PTY write that returns only once the child is gone, and
-        // portable-pty does not guarantee that killing the child interrupts
-        // it; joining here would freeze the backend thread dropping the pane.
+        // NOTE: the writer thread is never joined, because joining would
+        // freeze the backend thread dropping the pane. The thread can stay
+        // blocked in a PTY write, including the end-of-file write that
+        // dropping portable-pty's Unix writer makes, until the application
+        // reads its input again or the PTY's slave side closes; killing the
+        // child guarantees neither. While it is blocked, it keeps the
+        // unwritten bytes, up to the queue's capacity, alive after the pane
+        // is gone.
         self.close();
     }
 }
@@ -142,7 +147,7 @@ struct QueueState {
     pending_bytes: usize,
     capacity: usize,
     status: QueueStatus,
-    /// Writes rejected since the queue last drained.
+    /// Writes rejected since the queue was last empty.
     dropped_in_episode: u64,
 }
 
@@ -175,11 +180,6 @@ fn drain(mut writer: Box<dyn Write + Send>, shared: &Shared) {
                 if matches!(state.status, QueueStatus::Open) {
                     state.status = QueueStatus::Failed(Some(error));
                 }
-                state.pending.clear();
-                state.pending_bytes = 0;
-                drop(state);
-                shared.settled.notify_all();
-                return;
             }
         }
     }
@@ -192,10 +192,11 @@ fn next_write(shared: &Shared) -> Option<Vec<u8>> {
     let mut state = lock(&shared.state);
     loop {
         if !matches!(state.status, QueueStatus::Open) {
-            state.pending.clear();
+            let discarded = mem::take(&mut state.pending);
             state.pending_bytes = 0;
             drop(state);
             shared.settled.notify_all();
+            drop(discarded);
             return None;
         }
         if let Some(bytes) = state.pending.pop_front() {
@@ -289,6 +290,24 @@ mod tests {
         assert_eq!(queue_full(queue.enqueue(b"abcde".to_vec())), Some(1));
         queue.settle();
         assert_eq!(sink.contents(), b"");
+    }
+
+    /// Asserts that a write accepted into an empty queue starts a new
+    /// episode, so the next rejection reports a count of 1 again.
+    ///
+    /// Case: the user pastes a file larger than the PTY input cap, then pastes
+    /// a smaller file that is still being written when a third paste arrives.
+    #[test]
+    fn a_write_accepted_into_an_empty_queue_restarts_the_count() {
+        let sink = BlockingSink::default();
+        let queue = WriteQueue::spawn(Box::new(sink.clone()), 4).expect("writer thread");
+        assert_eq!(queue_full(queue.enqueue(b"abcde".to_vec())), Some(1));
+        queue
+            .enqueue(b"abc".to_vec())
+            .expect("fits into the empty queue");
+        assert_eq!(queue_full(queue.enqueue(b"de".to_vec())), Some(1));
+        sink.release();
+        queue.settle();
     }
 
     /// Asserts that a write the writer thread is still performing counts

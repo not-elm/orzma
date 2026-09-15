@@ -1,5 +1,5 @@
-//! `Pty` — owns the PTY master, writer, child killer, and the output and
-//! exit streams its OS threads feed.
+//! `Pty` — owns the PTY master, the input queue its writer thread drains,
+//! the child killer, and the output and exit streams its OS threads feed.
 
 use crate::{
     CellPixels, SpawnOptions,
@@ -65,8 +65,8 @@ impl Pty {
     /// parks: 256 × 4 KiB = 1 MiB per pane.
     pub const CHUNK_QUEUE_CAPACITY: usize = 256;
 
-    /// How many input bytes may wait for the writer thread before a queued
-    /// write is rejected: 100 MiB per pane.
+    /// How many input bytes may wait for the writer thread before further
+    /// writes are rejected: 100 MiB per pane.
     pub const WRITE_QUEUE_CAPACITY: usize = 100 * 1024 * 1024;
 
     /// Opens a PTY at the given grid size, spawns `options.shell` under
@@ -77,6 +77,16 @@ impl Pty {
     /// On Windows, ConPTY writes `CSI 6 n` before it starts the child and
     /// holds the child until a cursor-position report arrives; the owner
     /// must queue that reply through [`Self::enqueue_write`].
+    ///
+    /// # Errors
+    ///
+    /// - [`OrzmaTtyError::PtyOpen`] when the PTY pair cannot be opened.
+    /// - [`OrzmaTtyError::SpawnShell`] when the shell cannot be spawned
+    ///   under the PTY.
+    /// - [`OrzmaTtyError::PtyPipe`] when the master's reader or writer
+    ///   cannot be taken; the spawned shell is killed and reaped first.
+    /// - [`OrzmaTtyError::PtyWriterThread`] when the OS refuses to start the
+    ///   writer thread; the spawned shell is killed and reaped first.
     pub fn spawn(options: &SpawnOptions) -> OrzmaTtyResult<Self> {
         let pty_pair = native_pty_system()
             .openpty(options.cell_px.pty_size(options.size))
@@ -94,13 +104,13 @@ impl Pty {
             .slave
             .spawn_command(cmd)
             .map_err(OrzmaTtyError::SpawnShell)?;
-        let mut child_killer = child.clone_killer();
+        let child_killer = child.clone_killer();
         drop(pty_pair.slave);
 
         let (reader, writer) = match master_pipes(pty_pair.master.as_ref()) {
             Ok(pipes) => pipes,
             Err(e) => {
-                let _ = child_killer.kill();
+                kill_and_reap(child);
                 return Err(OrzmaTtyError::PtyPipe(e));
             }
         };
@@ -108,7 +118,7 @@ impl Pty {
         let writes = match WriteQueue::spawn(writer, Self::WRITE_QUEUE_CAPACITY) {
             Ok(writes) => writes,
             Err(e) => {
-                let _ = child_killer.kill();
+                kill_and_reap(child);
                 return Err(e);
             }
         };
@@ -320,6 +330,12 @@ fn master_pipes(
     master: &dyn MasterPty,
 ) -> anyhow::Result<(Box<dyn Read + Send>, Box<dyn Write + Send>)> {
     Ok((master.try_clone_reader()?, master.take_writer()?))
+}
+
+/// Kills `child` and blocks until it exits, reaping its process.
+fn kill_and_reap(mut child: Box<dyn Child + Send + Sync>) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// What the reader thread reports about its progress.

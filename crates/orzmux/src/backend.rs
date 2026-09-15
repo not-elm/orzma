@@ -133,25 +133,26 @@ impl Backend {
                 }
             }
             OrzmuxCommand::KeyInput { pane, key, mods } => {
-                if let Some(p) = self.pane_mut(pane, "KeyInput")
+                if let Some(id) = self.resolve_or_log(pane, "KeyInput")
+                    && let Some(p) = self.panes.get_mut(&id)
                     && let Err(err) = p.tty.send_key(&key, &mods)
                 {
-                    log_refused_write(pane, "key", &err, Level::ERROR);
+                    log_refused_write(id, "key", &err, Level::ERROR);
                 }
             }
             OrzmuxCommand::Paste { pane, text } => {
-                if let Some(p) = self.pane_mut(pane, "Paste")
+                if let Some(id) = self.resolve_or_log(pane, "Paste")
+                    && let Some(p) = self.panes.get_mut(&id)
                     && let Err(err) = p.tty.send_paste(&text)
                 {
-                    log_refused_write(pane, "paste", &err, Level::ERROR);
+                    log_refused_write(id, "paste", &err, Level::ERROR);
                 }
             }
             OrzmuxCommand::MouseInput { pane, report } => {
-                let target = PaneTarget::Id(pane);
-                if let Some(p) = self.pane_mut(target, "MouseInput")
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "MouseInput")
                     && let Err(err) = p.tty.send_mouse(report)
                 {
-                    log_refused_write(target, "mouse report", &err, Level::ERROR);
+                    log_refused_write(pane, "mouse report", &err, Level::ERROR);
                 }
             }
             OrzmuxCommand::Scroll { pane, scroll } => {
@@ -441,16 +442,14 @@ impl Backend {
     }
 
     /// Tells every pane whether it holds focus: the active pane does while
-    /// the window is focused, and no pane does otherwise. Every pane that
-    /// loses focus queues its report before the pane that gains it, and a
-    /// refused write is logged without stopping the others; each pane's
-    /// writer thread delivers its own reports, so their arrival order
-    /// across panes is not fixed.
+    /// the window is focused, and no pane does otherwise. A report a pane
+    /// refuses is logged without stopping the others, and reports to
+    /// different panes reach their PTYs in no fixed order.
     fn refresh_focus(&mut self) {
         let target = self.tree.active().filter(|_| self.window_focused);
         let report = |id: PaneId, result: OrzmaTtyResult| {
             if let Err(err) = result {
-                log_refused_write(PaneTarget::Id(id), "focus report", &err, Level::WARN);
+                log_refused_write(id, "focus report", &err, Level::WARN);
             }
         };
         for (id, pane) in self.panes.iter_mut().filter(|(id, _)| Some(**id) != target) {
@@ -587,16 +586,18 @@ enum Ready {
 /// The first rejection of a stuck episode warns and later rejections stay
 /// at debug, a closed writer logs at debug, and any other failure logs at
 /// `failure`, which is `ERROR` or `WARN`.
-fn log_refused_write(pane: PaneTarget, what: &'static str, err: &OrzmaTtyError, failure: Level) {
+fn log_refused_write(pane: PaneId, what: &'static str, err: &OrzmaTtyError, failure: Level) {
     match err {
         OrzmaTtyError::PtyWriteQueueFull {
             dropped_in_episode: 1,
-        } => tracing::warn!(?pane, %err, "{what} dropped: the PTY input queue is full"),
+        } => tracing::warn!(?pane, %err, "{what} dropped: it does not fit in the PTY input queue"),
         OrzmaTtyError::PtyWriteQueueFull { .. } | OrzmaTtyError::PtyWriterClosed => {
             tracing::debug!(?pane, %err, "{what} dropped");
         }
-        _ if failure == Level::ERROR => tracing::error!(?pane, %err, "{what} write failed"),
-        _ => tracing::warn!(?pane, %err, "{what} write failed"),
+        _ if failure == Level::ERROR => {
+            tracing::error!(?pane, ?err, "{what} dropped: an earlier PTY write failed");
+        }
+        _ => tracing::warn!(?pane, ?err, "{what} dropped: an earlier PTY write failed"),
     }
 }
 
@@ -611,7 +612,7 @@ const PUMP_ROUNDS: usize = 4;
 mod tests {
     use super::*;
     use crate::prelude::{PaneDirection, SplitId, SplitOrientation};
-    use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+    use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
     use orzma_tty::prelude::{
         KeyText, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, TerminalKey, TerminalModifiers,
     };
@@ -641,8 +642,6 @@ mod tests {
         /// writes block until it is released, as if the pane's application
         /// stopped reading stdin.
         block_writes_next: Mutex<Option<BlockingSink>>,
-        /// When set, every spawned pane writes into a clone of this sink.
-        shared_sink: Mutex<Option<CaptureSink>>,
         /// When set, every spawned pane's output stream starts with these
         /// bytes, left unread until the test pumps the pane.
         spawn_output: Mutex<Option<Vec<u8>>>,
@@ -674,13 +673,7 @@ mod tests {
             if let Some(output) = self.log.spawn_output.lock().unwrap().clone() {
                 chunk_tx.send(output).unwrap();
             }
-            let sink = self
-                .log
-                .shared_sink
-                .lock()
-                .unwrap()
-                .clone()
-                .unwrap_or_default();
+            let sink = CaptureSink::default();
             let writer: Box<dyn Write + Send> =
                 if self.log.fail_writes_next.swap(false, Ordering::AcqRel) {
                     Box::new(FailingSink)
@@ -1429,6 +1422,7 @@ mod tests {
         let (done_tx, done_rx) = bounded::<(Vec<u8>, bool)>(1);
         thread::spawn(move || {
             let mut h = Harness::new();
+            let stuck_writer = thread_gate.clone();
             *h.log.block_writes_next.lock().unwrap() = Some(thread_gate);
             let (stuck, _stuck_pane) = h.open_root();
             let (other, other_pane) = split_active(&mut h, 2);
@@ -1443,6 +1437,7 @@ mod tests {
                 pane: PaneTarget::Id(stuck),
                 text: "a pasted line".to_string(),
             });
+            stuck_writer.wait_until_writing();
             h.send(OrzmuxCommand::KeyInput {
                 pane: PaneTarget::Id(other),
                 key: TerminalKey::Character(KeyText::new("z").unwrap()),
@@ -1457,8 +1452,15 @@ mod tests {
         });
         let outcome = done_rx.recv_timeout(Duration::from_secs(10));
         gate.release();
-        let (other_received, stuck_closed) =
-            outcome.expect("the backend froze on a pane that stopped reading stdin");
+        let (other_received, stuck_closed) = match outcome {
+            Ok(outcome) => outcome,
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("the backend froze on a pane that stopped reading stdin")
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                panic!("the harness thread panicked before reporting")
+            }
+        };
         assert_eq!(other_received, b"z");
         assert!(stuck_closed);
     }

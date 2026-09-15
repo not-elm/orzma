@@ -17,15 +17,17 @@ pub enum OrzmaTtyError {
     /// Cloning the reader / taking the writer from the PTY master failed.
     #[error("PTY pipe setup failed")]
     PtyPipe(#[source] anyhow::Error),
-    /// The writer thread's write to the PTY master failed; the next queued
-    /// write reports it once.
+    /// The writer thread's write to the PTY master failed; the next attempt
+    /// to queue a write reports it once, and that write is not queued.
     #[error("PTY write failed")]
     PtyWrite(#[source] IoError),
     /// A write did not fit in the PTY input queue's byte cap and was
     /// dropped whole.
-    #[error("PTY input queue full; {dropped_in_episode} write(s) dropped since it last drained")]
+    #[error(
+        "write does not fit in the PTY input queue; {dropped_in_episode} dropped since it was last empty"
+    )]
     PtyWriteQueueFull {
-        /// Writes dropped since the queue last drained, this one included.
+        /// Writes dropped since the queue was last empty, this one included.
         dropped_in_episode: u64,
     },
     /// The PTY writer no longer accepts writes: its failure was already

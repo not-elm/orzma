@@ -98,8 +98,8 @@ pub struct OrzmaTty<V: Vt> {
     /// Signals produced by interpreted chunks or reported by a resize,
     /// awaiting the next pump.
     pending_signals: Vec<TtySignal>,
-    /// Reply bytes produced by interpreted chunks, awaiting one PTY
-    /// write in the next pump.
+    /// Reply bytes produced by interpreted chunks, which the next pump
+    /// queues for the PTY as one write.
     pending_replies: Vec<u8>,
     exit: ExitLatch,
     /// Whether the host last reported this terminal as focused.
@@ -354,9 +354,10 @@ impl<V: Vt> OrzmaTty<V> {
     ///
     /// An unchanged state writes nothing, and enabling focus reporting
     /// reports nothing until the next change. The viewport does not move,
-    /// and no repaint is scheduled. The new state is recorded even when the
-    /// report is refused. `Ok` means the report was queued, not that it
-    /// reached the PTY.
+    /// and no repaint is scheduled.
+    ///
+    /// The new state is recorded even when the report is refused. `Ok`
+    /// means the report was queued, not that it reached the PTY.
     ///
     /// # Errors
     ///
@@ -435,10 +436,11 @@ impl<V: Vt> OrzmaTty<V> {
 
         if !self.pending_replies.is_empty() {
             let replies = mem::take(&mut self.pending_replies);
-            // NOTE: a refused reply is dropped deliberately. A full queue
-            // means the application stopped reading stdin, and a failed or
-            // closed writer means the PTY is tearing down and surfaces as
-            // ChildExit; there is no reader left to answer.
+            // NOTE: a refused reply is dropped, never waited on. A full queue
+            // means the application stopped reading stdin, so waiting for
+            // room would block `pump` until it reads again; a failed or
+            // closed writer means the PTY is tearing down, which surfaces as
+            // ChildExit.
             let _ = self.pty.enqueue_write(replies);
         }
 
@@ -1337,8 +1339,8 @@ mod tests {
         );
     }
 
-    /// Asserts that reply bytes from interpreted chunks are written
-    /// back to the PTY by the next pump.
+    /// Asserts that reply bytes from interpreted chunks, queued by the
+    /// next pump, reach the PTY writer.
     ///
     /// Case: an application sends a DSR cursor-position query and
     /// blocks until the report arrives.
