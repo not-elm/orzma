@@ -3,6 +3,7 @@
 use crate::device::color::Color;
 use crate::hyperlink::HyperlinkId;
 use crate::screen::grid::run::Style;
+use std::iter;
 use unicode_width::UnicodeWidthChar;
 
 /// How many columns a cell occupies, and whether it is a body or a
@@ -184,6 +185,19 @@ impl Cell {
             hyperlink_id: self.hyperlink_id,
             ..Self::default()
         }
+    }
+
+    /// The marks combined onto the glyph, in arrival order; empty when
+    /// none arrived.
+    pub fn marks(&self) -> &[char] {
+        self.extra.as_deref().map_or(&[][..], CellExtra::marks)
+    }
+
+    /// The glyph followed by the marks combined onto it, in arrival
+    /// order; a continuation or filler column yields its blank glyph
+    /// alone.
+    pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
+        iter::once(self.c).chain(self.marks().iter().copied())
     }
 }
 
@@ -455,5 +469,24 @@ mod tests {
         let wide = Pen::default().stamp('界', BodyWidth::Wide, None);
         assert_eq!(wide.width, CellWidth::Wide);
         assert_eq!(wide.extra, None);
+    }
+
+    /// Asserts that a cell yields its glyph followed by its marks in
+    /// arrival order, and a cell without marks yields the glyph alone.
+    ///
+    /// Case: a copy walks a row holding an accented letter next to a blank
+    /// cell.
+    #[test]
+    fn a_cell_yields_its_glyph_and_then_its_marks() {
+        let mut extra = CellExtra::default();
+        assert!(extra.push('\u{0302}'));
+        assert!(extra.push('\u{0301}'));
+        let accented = Cell {
+            c: 'e',
+            extra: Some(Box::new(extra)),
+            ..Cell::default()
+        };
+        assert_eq!(accented.chars().collect::<String>(), "e\u{0302}\u{0301}");
+        assert_eq!(Cell::default().chars().collect::<String>(), " ");
     }
 }

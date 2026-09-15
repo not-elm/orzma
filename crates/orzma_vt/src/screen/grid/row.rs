@@ -2,7 +2,7 @@
 
 use crate::error::{StampError, VtResult};
 use crate::hyperlink::HyperlinkId;
-use crate::screen::cell::{BodyWidth, Cell, CellExtra, CellWidth, Pen};
+use crate::screen::cell::{BodyWidth, Cell, CellWidth, Pen};
 use crate::screen::grid::coords::GridColumn;
 use crate::screen::grid::run::Run;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
@@ -59,7 +59,7 @@ impl Row<Cell> {
             run.cols += u16::from(width);
             Self::push_width(run, &mut chars_in_run, width);
             run.text.push(cell.c);
-            for mark in cell.extra.as_deref().map_or(&[][..], CellExtra::marks) {
+            for mark in cell.marks() {
                 Self::push_width(run, &mut chars_in_run, 0);
                 run.text.push(*mark);
             }
@@ -321,6 +321,7 @@ mod tests {
     use crate::device::color::Color;
     use crate::error::VtError;
     use crate::hyperlink::HyperlinkId;
+    use crate::screen::cell::CellExtra;
     use crate::screen::grid::run::Style;
 
     fn cell(c: char, fg: Color, bg: Color, style: Style) -> Cell {
