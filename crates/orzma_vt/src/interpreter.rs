@@ -773,7 +773,6 @@ impl Executor<'_> {
                 47 => self.switch_screen(ScreenKind::from_decset(enabled)),
                 // DECNKM
                 66 => self.device.modes_mut().keypad_mode = KeypadMode::from_decset(enabled),
-                // TODO: Route 1005 to an encoding once `MouseEncoding::with_decset` answers it.
                 1000 | 1002 | 1003 | 1005 | 1006 => self.set_mouse_mode(mode, enabled),
                 // XTFOCUS
                 1004 => self.device.modes_mut().focus_in_out = enabled,

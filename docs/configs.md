@@ -78,7 +78,7 @@ click_drift_px = 8.0             # f32. Max pointer drift (logical px) between c
 drag_threshold_px = 4.0          # f32. Pointer travel (logical px) before a press becomes a drag.
 divider_grab_tolerance_px = 4.0  # f32. Half-width (logical px) of the pane-divider grab zone.
 # --- advanced drag-autoscroll tuning (rarely changed) ---
-max_protocol_events_per_frame = 8  # u32. SGR mouse-protocol event cap per frame.
+max_protocol_events_per_frame = 8  # u32. Most wheel notches one routing call turns into mouse reports or alternate-scroll cursor keys, per axis; excess notches are dropped.
 autoscroll_base_period_ms = 50     # u32. Tick interval when drag-scrolling at the pane edge.
 autoscroll_min_period_ms = 16      # u32. Floor on the autoscroll interval.
 autoscroll_step_ms = 4             # u32. Interval decrement per cell past the edge.

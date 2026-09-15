@@ -9,7 +9,6 @@ use crate::action::terminal::{
 use crate::input::InputPhase;
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::focus::MouseDisabled;
-use crate::input::keyboard::current_terminal_modifiers;
 use crate::input::mouse::button::MouseButtonInputPlugin;
 use crate::input::mouse::separator::SeparatorDragPlugin;
 use crate::input::mouse::wheel::MouseWheelInputPlugin;
@@ -21,7 +20,7 @@ use bevy::window::CursorMoved;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzma_tty_renderer::schema::{TerminalCells, TerminalView};
 use bevy_orzmux::prelude::{CellSide, GridPoint, SelectionKind};
-use orzma_tty::prelude::{CellCoord, ProtocolModifiers};
+use orzma_tty::prelude::{CellCoord, ProtocolModifiers, TerminalModifiers};
 
 mod button;
 mod gesture;
@@ -207,14 +206,14 @@ fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
     )
 }
 
-/// The mouse-report modifier bits for the held keys.
-fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
-    let m = current_terminal_modifiers(keys);
+/// The mouse-report modifier bits for the held keys; a held Super (Cmd on
+/// macOS) sets no bit.
+fn protocol_mods(held: &TerminalModifiers) -> ProtocolModifiers {
     ProtocolModifiers {
-        shift: m.shift,
-        ctrl: m.ctrl,
-        alt: m.alt,
-        meta: m.meta,
+        shift: held.shift,
+        ctrl: held.ctrl,
+        alt: held.alt,
+        meta: false,
     }
 }
 
@@ -341,6 +340,7 @@ mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::keyboard::current_terminal_modifiers;
 
     /// Asserts that `cell_at_local` yields 1-indexed cell coordinates,
     /// clamps them to the grid bounds, and reports which half of the cell
@@ -385,10 +385,24 @@ mod tests {
         let mut keys = ButtonInput::<KeyCode>::default();
         keys.press(KeyCode::ControlLeft);
         keys.press(KeyCode::ShiftLeft);
-        let mods = protocol_mods(&keys);
+        let mods = protocol_mods(&current_terminal_modifiers(&keys));
         assert!(mods.ctrl);
         assert!(mods.shift);
         assert!(!mods.alt);
         assert!(!mods.meta);
+    }
+
+    /// Asserts that `protocol_mods` sets no modifier bit for a held Super.
+    ///
+    /// Case: on macOS the user holds Cmd, the hyperlink modifier, while
+    /// spinning the wheel over nvim.
+    #[test]
+    fn protocol_mods_sets_no_bit_for_a_held_super() {
+        let mut keys = ButtonInput::<KeyCode>::default();
+        keys.press(KeyCode::SuperLeft);
+        assert_eq!(
+            protocol_mods(&current_terminal_modifiers(&keys)),
+            ProtocolModifiers::default()
+        );
     }
 }

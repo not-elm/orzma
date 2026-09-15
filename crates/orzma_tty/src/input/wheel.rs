@@ -5,7 +5,7 @@ use crate::input::keyboard::TerminalKey;
 use crate::input::mouse::MouseButton;
 use orzma_vt::prelude::VtModes;
 
-/// Wheel-routing policy, populated from the `[mouse]` config block.
+/// Wheel-routing policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WheelConfig {
     /// Lines one notch moves, as a viewport scroll or as cursor keys,
@@ -71,7 +71,8 @@ impl WheelDecision {
     /// Otherwise, while alternate scroll is in effect, the notches' lines
     /// become cursor keys, and anything else scrolls the viewport. Reports
     /// and cursor keys cover at most `max_protocol_events_per_frame`
-    /// notches, and a viewport scroll saturates rather than overflowing.
+    /// notches, cursor keys number at most 240 whatever the lines per
+    /// notch, and a viewport scroll saturates rather than overflowing.
     /// Zero notches, or a count that comes out zero, route to
     /// [`Self::Noop`].
     pub fn route(modes: VtModes, notches: i32, mods: WheelModifiers, cfg: &WheelConfig) -> Self {
@@ -94,7 +95,10 @@ impl WheelDecision {
             } else {
                 TerminalKey::ArrowDown
             };
-            return Self::cursor_keys(key, capped_notches(notches, cfg).saturating_mul(lines_per));
+            let count = capped_notches(notches, cfg)
+                .saturating_mul(lines_per)
+                .min(MAX_CURSOR_KEYS);
+            return Self::cursor_keys(key, count);
         }
         match notches.saturating_mul(i32::try_from(lines_per).unwrap_or(i32::MAX)) {
             0 => Self::Noop,
@@ -105,8 +109,9 @@ impl WheelDecision {
     /// Routes horizontal notches, where positive means rightward.
     ///
     /// Only a mouse tracking level in force without Shift held has a
-    /// route: every notch becomes one report, capped as in
-    /// [`Self::route`]. Everything else routes to [`Self::Noop`].
+    /// route: every notch becomes one report, and the reports cover at
+    /// most `max_protocol_events_per_frame` notches. Zero notches, a count
+    /// that comes out zero, and everything else route to [`Self::Noop`].
     pub fn route_horizontal(
         modes: VtModes,
         notches: i32,
@@ -138,6 +143,9 @@ impl WheelDecision {
         }
     }
 }
+
+/// The most cursor keys one routing call sends.
+const MAX_CURSOR_KEYS: u32 = 240;
 
 fn lines_per_notch(mods: WheelModifiers, cfg: &WheelConfig) -> u32 {
     if mods.fine {
@@ -298,6 +306,26 @@ mod tests {
             WheelDecision::CursorKeys {
                 key: TerminalKey::ArrowUp,
                 count: 24
+            }
+        );
+    }
+
+    /// Asserts that cursor keys stop at the key limit however many lines
+    /// each capped notch moves.
+    ///
+    /// Case: a user who set `lines_per_notch = 100000` spins the wheel one
+    /// notch over `less`.
+    #[test]
+    fn cursor_keys_stop_at_the_key_limit() {
+        let cfg = WheelConfig {
+            lines_per_notch: 100_000,
+            ..WheelConfig::default()
+        };
+        assert_eq!(
+            WheelDecision::route(alternate_screen(), 1, PLAIN, &cfg),
+            WheelDecision::CursorKeys {
+                key: TerminalKey::ArrowUp,
+                count: MAX_CURSOR_KEYS
             }
         );
     }

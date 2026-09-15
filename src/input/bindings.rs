@@ -6,10 +6,7 @@ use std::time::Duration;
 
 /// Which modifier activates "fine" (1 line per notch) wheel scrolling.
 ///
-/// On macOS, where the OS turns Shift+wheel into horizontal travel, the
-/// wheel dispatcher folds that travel back onto the vertical axis and
-/// Shift only falls through past mouse reporting, so `Shift` never
-/// activates fine scrolling there.
+/// On macOS, `Shift` never activates fine scrolling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum FineModifier {
     /// Shift key activates fine scrolling.

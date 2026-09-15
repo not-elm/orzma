@@ -299,8 +299,8 @@ impl<V: Vt> OrzmaTty<V> {
         if !modes.mouse_reporting_active() {
             return Ok(());
         }
-        let sequence = report.encode(modes.mouse_encoding);
-        self.pty.write_all(&sequence)
+        self.pty
+            .write_all(PtyInput::encode_mouse(&report, modes.mouse_encoding).as_bytes())
     }
 
     /// Writes a paste of clipboard text to the PTY, honouring

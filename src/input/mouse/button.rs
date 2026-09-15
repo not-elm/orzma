@@ -12,6 +12,7 @@ use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::current_modifiers;
 use crate::input::focus::PaneClicked;
 use crate::input::hyperlink::link_modifier_held;
+use crate::input::keyboard::current_terminal_modifiers;
 use crate::input::mouse::MousePhase;
 use crate::input::mouse::gesture::{DragGesture, DragPhase, HeldPointer, OrzmaMouseGesture};
 use crate::input::mouse::separator::GrabbedSeparator;
@@ -232,7 +233,7 @@ fn resolve_frame(
         scale,
         cell_w,
         cell_h,
-        mods: protocol_mods(keys),
+        mods: protocol_mods(&current_terminal_modifiers(keys)),
         modifier_held: link_modifier_held(&current_modifiers(keys)),
     })
 }

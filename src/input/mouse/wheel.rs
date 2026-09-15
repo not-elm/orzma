@@ -14,7 +14,7 @@ use crate::input::mouse::gesture::{
     WheelAccumulator, accumulate_notches, lock_dominant_axis, wheel_delta_cells,
 };
 use crate::surface::geometry::topmost_surface_at;
-use bevy::input::mouse::MouseWheel;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
@@ -39,8 +39,8 @@ impl Plugin for MouseWheelInputPlugin {
 }
 
 /// Whether the OS delivers a discrete Shift+wheel as horizontal travel,
-/// so a Shift-held frame's horizontal travel is folded onto the vertical
-/// axis.
+/// so a Shift-held frame's line-unit horizontal travel is folded onto the
+/// vertical axis.
 const SHIFT_WHEEL_ARRIVES_HORIZONTAL: bool = cfg!(target_os = "macos");
 
 /// A resolved wheel target for one frame: the surface entity, the cursor
@@ -76,7 +76,7 @@ fn dispatch_mouse_wheel(
     gesture_acc.retarget(wt.target);
     let held = current_terminal_modifiers(&keys);
     let fold_shift = SHIFT_WHEEL_ARRIVES_HORIZONTAL && held.shift;
-    let (up, right) = accumulate_wheel(&mut gesture_acc, &mut wheel, wt.cell_h, fold_shift, &cfg);
+    let (up, right) = accumulate_wheel(&mut gesture_acc, wheel.read(), wt.cell_h, fold_shift, &cfg);
     if up == 0 && right == 0 {
         return;
     }
@@ -85,7 +85,7 @@ fn dispatch_mouse_wheel(
     let cell = cell_context_for(&terminals, wt.target, wt.cell_w, wt.cell_h)
         .and_then(|ctx| ctx.hit(wt.cursor_phys))
         .map(|(cell, _)| cell);
-    let report_mods = protocol_mods(&keys);
+    let report_mods = protocol_mods(&held);
     for decision in [
         WheelDecision::route(modes, up, mods, &cfg.wheel),
         WheelDecision::route_horizontal(modes, right, mods, &cfg.wheel),
@@ -118,31 +118,37 @@ fn resolve_wheel_target(
     })
 }
 
-/// Folds this frame's wheel deltas, moves a Shift-held frame's horizontal
-/// travel onto the vertical axis when `fold_shift` is set (clearing the
-/// horizontal residual), applies the dominant-axis lock, and accumulates
-/// whole notches per axis. Returns `(up, right)` notches.
-fn accumulate_wheel(
+/// Sums this frame's wheel travel in cells, applies the dominant-axis
+/// lock, and accumulates whole notches per axis. Returns `(up, right)`
+/// notches.
+///
+/// When `fold_shift` is set, the horizontal residual is cleared and each
+/// line-unit event's horizontal travel is added onto the vertical axis as
+/// winit orients it, so a wheel-up the OS delivered as horizontal travel
+/// counts as up; pixel-unit travel keeps its axes.
+fn accumulate_wheel<'a>(
     gesture_acc: &mut WheelAccumulator,
-    wheel: &mut MessageReader<MouseWheel>,
+    wheel: impl IntoIterator<Item = &'a MouseWheel>,
     cell_h: f32,
     fold_shift: bool,
     cfg: &OrzmaMouseConfig,
 ) -> (i32, i32) {
-    let (delta_up, delta_x) = wheel.read().fold((0.0f32, 0.0f32), |(v, h), ev| {
+    if fold_shift {
+        gesture_acc.residual_cells_h = 0.0;
+    }
+    let (delta_up, delta_x) = wheel.into_iter().fold((0.0f32, 0.0f32), |(v, h), ev| {
         // NOTE: BOTH axes divide by cell_h (line height), not cell_w, so a given
         // finger distance yields the same notch rate horizontally and vertically.
         // Using the narrower cell_w (advance_phys, ~half of line_height_phys) made
         // horizontal ~2x too sensitive — do not "correct" ev.x to cell_w.
-        (
-            v + wheel_delta_cells(ev.unit, ev.y, cell_h),
-            h + wheel_delta_cells(ev.unit, ev.x, cell_h),
-        )
+        let cells_up = wheel_delta_cells(ev.unit, ev.y, cell_h);
+        let cells_x = wheel_delta_cells(ev.unit, ev.x, cell_h);
+        if fold_shift && matches!(ev.unit, MouseScrollUnit::Line) {
+            (v + cells_up + cells_x, h)
+        } else {
+            (v + cells_up, h + cells_x)
+        }
     });
-    let (delta_up, delta_x) = fold_shift_wheel(delta_up, delta_x, fold_shift);
-    if fold_shift {
-        gesture_acc.residual_cells_h = 0.0;
-    }
     // NOTE: do NOT also clear the suppressed axis's residual here. The lock
     // zeros the off-axis delta before accumulation, so it adds 0 and cannot leak
     // a notch; clearing would instead wipe genuine sub-notch progress on a
@@ -169,18 +175,6 @@ fn rightward(delta_x: f32) -> f32 {
     -delta_x
 }
 
-/// Adds a frame's horizontal delta onto its vertical delta when `fold` is
-/// set, leaving no horizontal travel; returns the pair unchanged
-/// otherwise. Both deltas keep winit's orientation, where positive moves
-/// the content down or right.
-fn fold_shift_wheel(delta_up: f32, delta_x: f32, fold: bool) -> (f32, f32) {
-    if fold {
-        (delta_up + delta_x, 0.0)
-    } else {
-        (delta_up, delta_x)
-    }
-}
-
 /// The wheel-routing modifiers for the held keys. Where Shift+wheel
 /// arrives horizontal, Shift only falls through and never selects fine
 /// scrolling.
@@ -189,20 +183,15 @@ fn wheel_modifiers(
     fine_modifier: FineModifier,
     shift_wheel_arrives_horizontal: bool,
 ) -> WheelModifiers {
-    let shift_only_falls_through =
-        shift_wheel_arrives_horizontal && fine_modifier == FineModifier::Shift;
+    let fine = match fine_modifier {
+        FineModifier::Shift => held.shift && !shift_wheel_arrives_horizontal,
+        FineModifier::Ctrl => held.ctrl,
+        FineModifier::Alt => held.alt,
+        FineModifier::None => true,
+    };
     WheelModifiers {
         shift: held.shift,
-        fine: !shift_only_falls_through && fine_held(fine_modifier, held),
-    }
-}
-
-fn fine_held(modifier: FineModifier, m: &TerminalModifiers) -> bool {
-    match modifier {
-        FineModifier::Shift => m.shift,
-        FineModifier::Ctrl => m.ctrl,
-        FineModifier::Alt => m.alt,
-        FineModifier::None => true,
+        fine,
     }
 }
 
@@ -300,16 +289,20 @@ mod tests {
         app
     }
 
+    fn wheel_event(unit: MouseScrollUnit, x: f32, y: f32) -> MouseWheel {
+        MouseWheel {
+            unit,
+            x,
+            y,
+            window: Entity::PLACEHOLDER,
+            phase: TouchPhase::Moved,
+        }
+    }
+
     fn write_wheel(app: &mut App, x: f32, y: f32) {
         app.world_mut()
             .resource_mut::<Messages<MouseWheel>>()
-            .write(MouseWheel {
-                unit: MouseScrollUnit::Line,
-                x,
-                y,
-                window: Entity::PLACEHOLDER,
-                phase: TouchPhase::Moved,
-            });
+            .write(wheel_event(MouseScrollUnit::Line, x, y));
     }
 
     fn disable_axis_lock(app: &mut App) {
@@ -352,12 +345,15 @@ mod tests {
             );
     }
 
-    fn set_modes(app: &mut App, modes: VtModes) {
-        let terminal = app
-            .world_mut()
+    fn fixture_terminal(app: &mut App) -> Entity {
+        app.world_mut()
             .query_filtered::<Entity, With<OrzmaTerminal>>()
             .single(app.world())
-            .expect("the fixture spawns one terminal");
+            .expect("the fixture spawns one terminal")
+    }
+
+    fn set_modes(app: &mut App, modes: VtModes) {
+        let terminal = fixture_terminal(app);
         app.world_mut().entity_mut(terminal).insert(TtyModes(modes));
     }
 
@@ -448,10 +444,10 @@ mod tests {
         );
     }
 
-    /// Asserts that a purely horizontal wheel gesture is ignored rather than
-    /// routed anywhere, so the viewport never scrolls.
+    /// Asserts that a purely horizontal wheel gesture over a terminal that
+    /// is not tracking the mouse never scrolls the viewport.
     ///
-    /// Case: the user swipes a trackpad left or right over a terminal.
+    /// Case: the user swipes a trackpad left or right over a shell prompt.
     #[test]
     fn dispatch_horizontal_wheel_never_scrolls_the_viewport() {
         let mut app = make_wheel_app();
@@ -503,12 +499,12 @@ mod tests {
         );
     }
 
-    /// Asserts a diagonal gesture with the axis lock disabled still routes
-    /// only its vertical component to the viewport (horizontal stays
-    /// unrouted regardless of the lock).
+    /// Asserts that a diagonal gesture with the axis lock disabled still
+    /// scrolls the viewport by its vertical component over a terminal that
+    /// is not tracking the mouse.
     ///
     /// Case: a config with `axis_lock_ratio: 0.0` (lock disabled) receives a
-    /// diagonal wheel gesture.
+    /// diagonal wheel gesture at a shell prompt.
     #[test]
     fn dispatch_diagonal_with_lock_disabled_still_only_scrolls_vertically() {
         let mut app = make_wheel_app();
@@ -662,38 +658,58 @@ mod tests {
         assert!(app.world().resource::<CapturedReports>().0.is_empty());
     }
 
-    /// Asserts that a folded frame clears the horizontal sub-notch residual
-    /// on macOS and leaves it alone elsewhere.
+    /// Asserts that folding adds a line-unit event's horizontal travel onto
+    /// the vertical axis as winit orients it, while an unfolded frame keeps
+    /// the travel horizontal.
     ///
-    /// Case: on macOS the user drifts a trackpad sideways short of a notch,
-    /// then holds Shift and spins the wheel.
+    /// Case: the user holds Shift and spins a discrete wheel up, which macOS
+    /// delivers as horizontal travel.
     #[test]
-    fn a_folded_frame_clears_the_horizontal_residual_on_macos() {
-        let mut app = make_wheel_app();
-        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
-        write_wheel(&mut app, 0.25, 0.0);
-        app.update();
-        press_shift(&mut app);
-        write_wheel(&mut app, 0.0, 1.0);
-        app.update();
-        let residual = app.world().resource::<WheelAccumulator>().residual_cells_h;
-        if cfg!(target_os = "macos") {
-            assert_eq!(residual, 0.0);
-        } else {
-            assert_eq!(residual, -0.25);
-        }
+    fn folding_turns_line_unit_horizontal_travel_into_vertical_notches() {
+        let cfg = OrzmaMouseConfig::default();
+        let frame = [wheel_event(MouseScrollUnit::Line, 1.0, 0.0)];
+        let mut folded = WheelAccumulator::default();
+        assert_eq!(
+            accumulate_wheel(&mut folded, &frame, 16.0, true, &cfg),
+            (2, 0)
+        );
+        let mut unfolded = WheelAccumulator::default();
+        assert_eq!(
+            accumulate_wheel(&mut unfolded, &frame, 16.0, false, &cfg),
+            (0, -2)
+        );
     }
 
-    /// Asserts that folding adds the horizontal delta onto the vertical
-    /// delta and leaves no horizontal travel, while an unfolded frame
-    /// passes through unchanged.
+    /// Asserts that folding leaves pixel-unit travel on its own axes.
     ///
-    /// Case: a Shift-held frame carries vertical trackpad travel together
-    /// with horizontal travel the OS converted from a wheel.
+    /// Case: on macOS the user holds Shift while swiping a trackpad
+    /// sideways, which the OS does not turn into vertical travel.
     #[test]
-    fn folding_adds_the_horizontal_delta_onto_the_vertical_delta() {
-        assert_eq!(fold_shift_wheel(0.5, 1.0, true), (1.5, 0.0));
-        assert_eq!(fold_shift_wheel(0.5, 1.0, false), (0.5, 1.0));
+    fn folding_leaves_pixel_unit_travel_on_its_axes() {
+        let cfg = OrzmaMouseConfig::default();
+        let frame = [wheel_event(MouseScrollUnit::Pixel, -40.0, 0.0)];
+        let mut acc = WheelAccumulator::default();
+        assert_eq!(accumulate_wheel(&mut acc, &frame, 16.0, true, &cfg), (0, 5));
+    }
+
+    /// Asserts that a folded frame clears the horizontal sub-notch residual
+    /// and an unfolded frame leaves it in place.
+    ///
+    /// Case: the user drifts a trackpad sideways short of a notch, then
+    /// holds Shift and spins the wheel.
+    #[test]
+    fn a_folded_frame_clears_the_horizontal_residual() {
+        let cfg = OrzmaMouseConfig::default();
+        let drift = [wheel_event(MouseScrollUnit::Line, 0.25, 0.0)];
+        let spin = [wheel_event(MouseScrollUnit::Line, 0.0, 1.0)];
+        let mut folded = WheelAccumulator::default();
+        let mut unfolded = WheelAccumulator::default();
+        accumulate_wheel(&mut folded, &drift, 16.0, false, &cfg);
+        accumulate_wheel(&mut unfolded, &drift, 16.0, false, &cfg);
+        accumulate_wheel(&mut folded, &spin, 16.0, true, &cfg);
+        accumulate_wheel(&mut unfolded, &spin, 16.0, false, &cfg);
+        assert_eq!(folded.residual_cells_h, 0.0);
+        assert_eq!(unfolded.residual_cells_h, -0.25);
     }
 
     /// Asserts that Shift configured as the fine modifier never selects
