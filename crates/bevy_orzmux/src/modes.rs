@@ -2,7 +2,7 @@
 //! reports.
 
 use crate::signals::TtyModesSignal;
-use bevy::prelude::*;
+use bevy::prelude::{App, Component, DetectChangesMut, On, Plugin, Query};
 use orzma_vt::prelude::VtModes;
 
 /// The modes a terminal's VT is in, as the backend last reported them;
@@ -32,6 +32,7 @@ fn on_modes_changed(event: On<TtyModesSignal>, mut modes: Query<&mut TtyModes>) 
 mod tests {
     use super::*;
     use crate::OrzmuxPane;
+    use bevy::prelude::{Changed, Entity, ResMut, Resource, Update};
     use orzma_vt::prelude::MouseTracking;
     use orzmux::prelude::PaneId;
 
@@ -83,8 +84,8 @@ mod tests {
     /// Asserts that a signal carrying the modes the component already
     /// holds leaves it unchanged rather than rewriting it.
     ///
-    /// Case: a mode report arrives for a pane whose component already
-    /// holds exactly those modes.
+    /// Case: a host triggers a modes signal of its own for a pane whose
+    /// component already holds the modes the backend last reported.
     #[test]
     fn a_repeated_modes_signal_does_not_mark_the_component_changed() {
         let (mut app, terminal) = app_with_modes();
@@ -101,6 +102,25 @@ mod tests {
         });
         app.update();
         assert_eq!(app.world().resource::<ChangedModes>().0, 1);
+    }
+
+    /// Asserts that a modes signal addressed to one terminal leaves
+    /// another terminal's modes alone.
+    ///
+    /// Case: a shell pane and an nvim pane are open, and only nvim turns
+    /// on button-event tracking.
+    #[test]
+    fn a_modes_signal_reaches_only_its_terminal() {
+        let (mut app, terminal) = app_with_modes();
+        let other = app.world_mut().spawn(TtyModes::default()).id();
+        app.world_mut().trigger(TtyModesSignal {
+            terminal,
+            modes: tracking(),
+        });
+        assert_eq!(
+            app.world().get::<TtyModes>(other),
+            Some(&TtyModes::default())
+        );
     }
 
     /// Asserts that spawning a pane brings default modes with it.

@@ -330,8 +330,8 @@ pub enum OrzmuxEvent {
         /// The signal itself.
         signal: VtSignal,
     },
-    /// A pane's VT modes changed since the last report for that pane, or
-    /// since the pane spawned when there has been none.
+    /// A pane's VT modes differ from the last report for that pane, or
+    /// from [`VtModes::default`] when there has been none.
     Modes {
         /// The pane whose modes changed.
         pane: PaneId,

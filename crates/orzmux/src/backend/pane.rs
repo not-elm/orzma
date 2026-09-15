@@ -16,8 +16,8 @@ pub(crate) struct Pane {
     /// The last directory the shell reported through OSC 7, or the
     /// directory the pane was spawned in until it reports one.
     pub(crate) cwd: Option<PathBuf>,
-    /// The modes last reported to the GUI, or the terminal's modes at
-    /// spawn until a change is reported.
+    /// The modes last reported to the GUI, or [`VtModes::default`] until
+    /// the first report.
     pub(crate) last_modes: VtModes,
 }
 

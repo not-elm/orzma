@@ -121,6 +121,7 @@ fn trigger_frame(commands: &mut Commands, registry: &PaneRegistry, pane: PaneId,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::{TtyModes, TtyModesPlugin};
     use crate::requests::test_support::app_with_channels;
     use crate::signals::TtyFrameSignal;
     use crossbeam_channel::Sender;
@@ -353,6 +354,40 @@ mod tests {
             .unwrap();
         app.update();
         assert_eq!(app.world().resource::<Seen>().modes, vec![(entity, modes)]);
+    }
+
+    /// Asserts that a `Modes` event drained in the same batch as its
+    /// pane's `PaneOpened` lands in the new pane's `TtyModes`.
+    ///
+    /// Case: the shell turns on bracketed paste for its first prompt
+    /// before the GUI has drained the answer to its spawn request.
+    #[test]
+    fn modes_drained_with_pane_opened_reach_the_new_pane() {
+        let (mut app, events) = app();
+        app.add_plugins(TtyModesPlugin);
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<PaneRegistry>()
+            .pending_spawns
+            .insert(RequestId(1), entity);
+        let modes = VtModes {
+            bracketed_paste: true,
+            ..VtModes::default()
+        };
+        events
+            .send(OrzmuxEvent::PaneOpened {
+                pane: PaneId(7),
+                request: RequestId(1),
+            })
+            .unwrap();
+        events
+            .send(OrzmuxEvent::Modes {
+                pane: PaneId(7),
+                modes,
+            })
+            .unwrap();
+        app.update();
+        assert_eq!(app.world().get::<TtyModes>(entity), Some(&TtyModes(modes)));
     }
 
     /// Asserts that `SelectionText` is forwarded as

@@ -1,6 +1,6 @@
 //! The multiplexer backend loop: owns every pane, waits on the command
 //! channel and each pane's PTY streams with one `Select`, and emits
-//! layout / frame / signal events to the GUI.
+//! layout / frame / signal / mode events to the GUI.
 
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::{ChunkDepth, QueueSampler};
@@ -318,30 +318,26 @@ impl Backend {
                 return;
             }
         };
-        let rect = self
-            .tree
-            .solve(geometry.size)
-            .rect_of(new)
-            .expect("the new pane is in the tree");
         let spawn_cwd = cwd.or(inherited_cwd);
-        let spawned = match GridSize::new(rect.cols, rect.rows) {
-            Ok(size) => self
-                .factory
+        let size = match self.tree.solve(geometry.size).rect_of(new) {
+            Some(rect) => GridSize::new(rect.cols, rect.rows).map_err(|err| err.to_string()),
+            None => Err("the new pane is not in the solved layout".to_string()),
+        };
+        let spawned = size.and_then(|size| {
+            self.factory
                 .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
                 .map(|tty| (tty, size))
-                .map_err(|err| err.to_string()),
-            Err(err) => Err(err.to_string()),
-        };
+                .map_err(|err| err.to_string())
+        });
         match spawned {
             Ok((tty, size)) => {
-                let last_modes = tty.vt().modes();
                 self.panes.insert(
                     new,
                     Pane {
                         tty,
                         applied: (size.cols, size.rows, geometry.cell_px),
                         cwd: spawn_cwd,
-                        last_modes,
+                        last_modes: VtModes::default(),
                     },
                 );
                 self.emit(OrzmuxEvent::PaneOpened { pane: new, request });
@@ -1043,11 +1039,12 @@ mod tests {
     }
 
     /// Asserts that output which turns on a mouse tracking mode reports
-    /// the pane's modes exactly once, and that output leaving every mode
-    /// alone reports nothing.
+    /// the pane's modes exactly once, and that output which leaves the
+    /// modes where they were reports nothing.
     ///
-    /// Case: nvim starts in a pane, turns on button-event tracking, and
-    /// then redraws its status line.
+    /// Case: nvim starts in a pane and turns on button-event tracking,
+    /// then redraws its status line in one write that hides the cursor
+    /// for the length of the redraw.
     #[test]
     fn a_mode_change_is_reported_once_and_unchanged_output_reports_nothing() {
         let mut h = Harness::new();
@@ -1058,7 +1055,9 @@ mod tests {
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].mouse_tracking, MouseTracking::Drag);
 
-        pane.chunk_tx.send(b"-- INSERT --".to_vec()).unwrap();
+        pane.chunk_tx
+            .send(b"\x1b[?25l\x1b[24;1H\"init.lua\" 42L, 1337B\x1b[?25h".to_vec())
+            .unwrap();
         h.backend.pump_pane(root);
         assert!(modes_reports(&h.drain(), root).is_empty());
     }
@@ -1066,15 +1065,15 @@ mod tests {
     /// Asserts that several mode transitions inside one chunk reach the
     /// GUI as one report carrying the final modes.
     ///
-    /// Case: nvim switches to the alternate screen and turns on click
-    /// tracking, button-event tracking, and SGR reports in the single
-    /// write it sends at startup.
+    /// Case: nvim switches to the alternate screen and turns on
+    /// button-event tracking and SGR reports in the single write it
+    /// sends at startup.
     #[test]
     fn transitions_within_one_chunk_merge_into_one_report_of_the_final_modes() {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
         pane.chunk_tx
-            .send(b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h".to_vec())
+            .send(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h".to_vec())
             .unwrap();
         h.backend.pump_pane(root);
         let reports = modes_reports(&h.drain(), root);
@@ -1082,6 +1081,28 @@ mod tests {
         assert_eq!(reports[0].active_screen, ScreenKind::Alternate);
         assert_eq!(reports[0].mouse_tracking, MouseTracking::Drag);
         assert_eq!(reports[0].mouse_encoding, MouseEncoding::Sgr);
+    }
+
+    /// Asserts that output which turns modes back off reports the pane's
+    /// modes with those modes off.
+    ///
+    /// Case: the user quits nvim, which turns button-event tracking off
+    /// and leaves the alternate screen on its way out.
+    #[test]
+    fn modes_turned_back_off_are_reported() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx
+            .send(b"\x1b[?1049h\x1b[?1002h".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        h.drain();
+
+        pane.chunk_tx
+            .send(b"\x1b[?1002l\x1b[?1049l".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        assert_eq!(modes_reports(&h.drain(), root), vec![VtModes::default()]);
     }
 
     /// Asserts that `Active` targets resolve in command order, so a kill

@@ -1,6 +1,4 @@
-//! The outbound signals the drain turns the backend's events into: one
-//! `EntityEvent` per drained `VtSignal`, plus the backend's mode reports
-//! and its answer to a copy request.
+//! The outbound signals the drain turns the backend's events into.
 
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
@@ -32,13 +30,12 @@ pub struct TtyTitleResetSignal {
     pub terminal: Entity,
 }
 
-/// Fired when the modes a terminal's VT is in change, carrying the whole
-/// new set.
+/// Fired when the modes a terminal's VT is in change.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct TtyModesSignal {
     #[event_target]
     pub terminal: Entity,
-    /// The terminal's modes after the change.
+    /// The whole set of modes the VT is in after the change.
     pub modes: VtModes,
 }
 
