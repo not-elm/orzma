@@ -292,10 +292,6 @@ mod tests {
         app.world().resource::<CapturedWheel>().0.clone()
     }
 
-    /// Asserts a vertical wheel-up notch scrolls the target's viewport
-    /// toward older output by a positive, non-zero multiple of the
-    /// configured `lines_per_notch` (3 by default), unscaled.
-    ///
     /// Asserts that one line of wheel-up travel sends a request of two
     /// positive vertical notches and no horizontal notch.
     ///
