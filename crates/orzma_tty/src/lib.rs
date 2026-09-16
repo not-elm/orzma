@@ -1173,9 +1173,9 @@ mod tests {
     /// Asserts that `send_mouse` writes the encoded report while a mouse
     /// tracking level is in force, and writes nothing while none is.
     ///
-    /// Case: nvim exits, dropping DECRST 1002 and 1006, while the user is
-    /// still clicking in the pane, so a button report the host already
-    /// forwarded reaches `send_mouse` right after.
+    /// Case: a client of the multiplexer's command channel forwards a
+    /// button report for a pane in which nvim has just exited, dropping
+    /// DECRST 1002 and 1006 before the report arrives.
     #[test]
     fn send_mouse_only_writes_while_a_tracking_level_is_in_force() {
         let report = MouseReport {
