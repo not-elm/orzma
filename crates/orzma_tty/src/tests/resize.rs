@@ -66,6 +66,7 @@ fn resize_does_not_write_through_the_pty_writer() {
     let (mut term, sink) = detached_term();
     term.resize(grid(120, 40), CellPixels::default())
         .expect("resize");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"");
 }
 

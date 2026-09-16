@@ -15,7 +15,7 @@ use std::io::Read;
 use std::io::{Error as IoError, ErrorKind, Result as IoResult, Write};
 #[cfg(all(unix, any(test, feature = "test-support")))]
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Cloneable in-memory `Write` sink capturing every byte written to it
 /// and counting the `write` calls that delivered them.
@@ -56,6 +56,43 @@ pub struct FailingSink;
 impl Write for FailingSink {
     fn write(&mut self, _buf: &[u8]) -> IoResult<usize> {
         Err(IoError::from(ErrorKind::BrokenPipe))
+    }
+
+    fn flush(&mut self) -> IoResult<()> {
+        Ok(())
+    }
+}
+
+/// A `Write` sink whose writes block until the sink is released, standing
+/// in for a PTY whose application stopped reading stdin.
+///
+/// Clones share one gate, so releasing any clone unblocks the writes
+/// pending in every clone. A released sink discards what it is given.
+#[derive(Clone, Default)]
+pub struct BlockingSink {
+    /// Set once a write has entered any clone.
+    entered: Arc<OnceLock<()>>,
+    /// Set once any clone is released.
+    released: Arc<OnceLock<()>>,
+}
+
+impl BlockingSink {
+    /// Unblocks every pending and future write.
+    pub fn release(&self) {
+        let _ = self.released.set(());
+    }
+
+    /// Blocks until a write has entered this sink or one of its clones.
+    pub fn wait_until_writing(&self) {
+        self.entered.wait();
+    }
+}
+
+impl Write for BlockingSink {
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+        let _ = self.entered.set(());
+        self.released.wait();
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> IoResult<()> {

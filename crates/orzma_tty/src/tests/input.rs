@@ -34,11 +34,13 @@ fn send_key_honours_the_vt_reported_cursor_mode() {
     term.vt.modes.app_cursor = true;
     term.send_key(&TerminalKey::ArrowUp, &TerminalModifiers::default())
         .expect("send_key");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1bOA");
 
     let (mut term, sink) = detached_term();
     term.send_key(&TerminalKey::ArrowUp, &TerminalModifiers::default())
         .expect("send_key");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[A");
 }
 
@@ -60,11 +62,13 @@ fn send_mouse_only_writes_while_a_tracking_level_is_in_force() {
     let (mut term, sink) = tracking_term();
     assert_eq!(sink.contents(), b"", "construction must write nothing");
     term.send_mouse(report).expect("send_mouse");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<64;1;1M");
 
     let (mut term, sink) = detached_term();
     assert_eq!(sink.contents(), b"", "construction must write nothing");
     term.send_mouse(report).expect("send_mouse");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"");
 }
 
@@ -78,6 +82,7 @@ fn send_paste_honours_the_vt_reported_bracketed_mode() {
     let (mut term, sink) = detached_term();
     term.vt.modes.bracketed_paste = true;
     term.send_paste("hi").expect("send_paste");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[200~hi\x1b[201~");
 }
 
@@ -91,6 +96,7 @@ fn send_paste_honours_the_vt_reported_bracketed_mode() {
 fn detached_routes_writes_to_the_injected_sink() {
     let (mut term, sink) = detached_term();
     term.send_paste("hi").expect("send_paste");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"hi");
 }
 
@@ -102,5 +108,6 @@ fn detached_routes_writes_to_the_injected_sink() {
 fn empty_paste_writes_nothing_to_the_pty() {
     let (mut term, sink) = detached_term();
     term.send_paste("").expect("send_paste");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"");
 }

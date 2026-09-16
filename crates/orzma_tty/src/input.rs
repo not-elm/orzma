@@ -99,9 +99,9 @@ impl PtyInput {
         })
     }
 
-    /// Returns the encoded bytes, ready to write to the PTY.
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
+    /// Returns the encoded bytes by value, ready to queue for the PTY.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.0
     }
 }
 
@@ -121,6 +121,6 @@ mod tests {
             mods: ProtocolModifiers::default(),
         };
         let input = PtyInput::encode_mouse(&report, MouseEncoding::Sgr);
-        assert_eq!(input.as_bytes(), b"\x1b[<0;5;7M");
+        assert_eq!(input.into_bytes(), b"\x1b[<0;5;7M");
     }
 }

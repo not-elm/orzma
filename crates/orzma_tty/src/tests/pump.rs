@@ -221,5 +221,6 @@ fn replies_are_written_back_to_the_pty() {
     });
     chunk_tx.send(b"\x1b[6n".to_vec()).expect("send chunk");
     term.pump();
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[1;1R");
 }

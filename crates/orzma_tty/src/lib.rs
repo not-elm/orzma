@@ -101,8 +101,8 @@ pub struct OrzmaTty<V: Vt> {
     /// Signals produced by interpreted chunks or reported by a resize,
     /// awaiting the next pump.
     pending_signals: Vec<TtySignal>,
-    /// Reply bytes produced by interpreted chunks, awaiting one PTY
-    /// write in the next pump.
+    /// Reply bytes produced by interpreted chunks, which the next pump
+    /// queues for the PTY as one write.
     pending_replies: Vec<u8>,
     exit: ExitLatch,
     /// Whether the host last reported this terminal as focused.
@@ -150,7 +150,8 @@ impl<V: Vt> OrzmaTty<V> {
     /// Resize calls still round-trip through [`Self::pty_size`], and no
     /// child process or reader thread is started, so everything the input
     /// methods emit can be observed on `writer` — typically a
-    /// [`test_support::CaptureSink`].
+    /// [`test_support::CaptureSink`] — once [`Self::settle_writes`]
+    /// returns.
     ///
     /// The placements the initial sizing strands reach the next pump as a
     /// [`VtSignal::WebviewEvicted`] signal.
@@ -195,6 +196,19 @@ impl<V: Vt> OrzmaTty<V> {
     #[cfg(any(test, feature = "test-support"))]
     pub fn feed_bytes(&mut self, bytes: &[u8]) {
         self.feed_chunk(bytes);
+    }
+
+    /// Blocks until every input this terminal queued has been written to
+    /// its PTY writer, or until the writer stops after a failure.
+    ///
+    /// Never returns while the writer is blocked in a write that does not
+    /// complete.
+    ///
+    /// Available only under `cfg(test)` in this crate and through the
+    /// `test-support` feature downstream.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn settle_writes(&self) {
+        self.pty.settle_writes();
     }
 
     /// Scrolls the grid, arming the coalescer only when the viewport
@@ -278,36 +292,46 @@ impl<V: Vt> OrzmaTty<V> {
         self.pending_signals.push(TtySignal::Vt(signal));
     }
 
-    /// Encodes a key press and writes it to the PTY.
+    /// Encodes a key press and queues it for the PTY.
     ///
     /// Snaps a scrolled-back viewport to the live tail first
-    /// (scroll-on-input policy).
+    /// (scroll-on-input policy). `Ok` means the key was queued, not that it
+    /// reached the PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the key (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_key(&mut self, key: &TerminalKey, mods: &TerminalModifiers) -> OrzmaTtyResult {
         let modes = self.vt.modes();
         self.snap_to_live_tail();
         self.pty
-            .write_all(PtyInput::encode_key(key, mods, modes).as_bytes())
+            .enqueue_write(PtyInput::encode_key(key, mods, modes).into_bytes())
     }
 
     /// Encodes one mouse report in the terminal's active mouse encoding
-    /// and writes it to the PTY.
+    /// and queues it for the PTY.
     ///
     /// Writes nothing while the VT has no mouse tracking level in force.
     ///
     /// Does not snap a scrolled-back viewport: the report's cell
     /// coordinates are the ones the host computed against the viewport on
-    /// screen.
+    /// screen. `Ok` means the report was queued, not that it reached the
+    /// PTY.
     ///
     /// # Errors
     ///
-    /// A PTY write failure.
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the report (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_mouse(&mut self, report: MouseReport) -> OrzmaTtyResult {
         let modes = self.vt.modes();
         if !modes.mouse_reporting_active() {
             return Ok(());
         }
         self.pty
-            .write_all(PtyInput::encode_mouse(&report, modes.mouse_encoding).as_bytes())
+            .enqueue_write(PtyInput::encode_mouse(&report, modes.mouse_encoding).into_bytes())
     }
 
     /// Routes one frame's wheel notches by the VT's current modes and
@@ -318,12 +342,15 @@ impl<V: Vt> OrzmaTty<V> {
     /// scroll is in effect, and a viewport scroll otherwise; horizontal
     /// notches become reports only. Cursor keys snap a scrolled-back
     /// viewport to the live tail first; reports and viewport scrolls leave
-    /// it where it is. Whatever both axes encode goes out in one PTY
-    /// write.
+    /// it where it is. Whatever both axes encode is queued for the PTY as
+    /// one write. `Ok` means the bytes were queued, not that they reached
+    /// the PTY.
     ///
     /// # Errors
     ///
-    /// A PTY write failure.
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the frame's bytes (nothing is queued), `PtyWrite` once after the
+    /// writer thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_wheel(&mut self, input: WheelInput, cfg: &WheelConfig) -> OrzmaTtyResult {
         let modes = self.vt.modes();
         let mut bytes = Vec::new();
@@ -336,16 +363,22 @@ impl<V: Vt> OrzmaTty<V> {
         if bytes.is_empty() {
             return Ok(());
         }
-        self.pty.write_all(&bytes)
+        self.pty.enqueue_write(bytes)
     }
 
-    /// Writes a paste of clipboard text to the PTY, honouring
+    /// Queues a paste of clipboard text for the PTY, honouring
     /// bracketed-paste mode (DECSET 2004).
     ///
-    /// Empty text is a no-op: nothing reaches the PTY. Otherwise a
-    /// scrolled-back viewport snaps to the live tail first
-    /// (scroll-on-input policy), and the whole frame goes out in a
-    /// single write.
+    /// Empty text is a no-op: nothing is queued. Otherwise a scrolled-back
+    /// viewport snaps to the live tail first (scroll-on-input policy), and
+    /// the whole frame is queued as one write or rejected whole. `Ok` means
+    /// the paste was queued, not that it reached the PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the frame does not fit in the PTY
+    /// input queue (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_paste(&mut self, text: &str) -> OrzmaTtyResult {
         if text.is_empty() {
             return Ok(());
@@ -353,7 +386,7 @@ impl<V: Vt> OrzmaTty<V> {
         let bracketed = self.vt.modes().bracketed_paste;
         self.snap_to_live_tail();
         self.pty
-            .write_all(PtyInput::encode_paste(text, bracketed).as_bytes())
+            .enqueue_write(PtyInput::encode_paste(text, bracketed).into_bytes())
     }
 
     /// Records whether the host gives this terminal focus, and reports a
@@ -362,8 +395,16 @@ impl<V: Vt> OrzmaTty<V> {
     ///
     /// An unchanged state writes nothing, and enabling focus reporting
     /// reports nothing until the next change. The viewport does not move,
-    /// and no repaint is scheduled. The new state is recorded even when
-    /// the write fails, and the write error is returned.
+    /// and no repaint is scheduled.
+    ///
+    /// The new state is recorded even when the report is refused. `Ok`
+    /// means the report was queued, not that it reached the PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the report (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn set_focused(&mut self, focused: bool) -> OrzmaTtyResult {
         if self.focused == focused {
             return Ok(());
@@ -373,7 +414,7 @@ impl<V: Vt> OrzmaTty<V> {
             return Ok(());
         }
         self.pty
-            .write_all(PtyInput::encode_focus(focused).as_bytes())
+            .enqueue_write(PtyInput::encode_focus(focused).into_bytes())
     }
 
     /// The receivers to wait on for this terminal (see [`Readiness`]).
@@ -420,9 +461,9 @@ impl<V: Vt> OrzmaTty<V> {
     }
 
     /// Drains the PTY and the VT into one output batch: interprets up to
-    /// [`Self::MAX_CHUNKS_PER_PUMP`] queued chunks, writes pending replies
-    /// back to the PTY, surfaces buffered signals, and emits a frame when
-    /// the coalesce window is due or the bootstrap snapshot is still owed.
+    /// [`Self::MAX_CHUNKS_PER_PUMP`] queued chunks, queues pending replies
+    /// for the PTY, surfaces buffered signals, and emits a frame when the
+    /// coalesce window is due or the bootstrap snapshot is still owed.
     ///
     /// The child's exit is latched when observed and reported as a
     /// trailing `ChildExit` only on the pump that finds no chunk left, so
@@ -436,10 +477,12 @@ impl<V: Vt> OrzmaTty<V> {
 
         if !self.pending_replies.is_empty() {
             let replies = mem::take(&mut self.pending_replies);
-            // NOTE: a failed reply write is dropped deliberately — a PTY
-            // that rejects writes is tearing down and surfaces as
-            // ChildExit; there is no receiver left to answer.
-            let _ = self.pty.write_all(&replies);
+            // NOTE: a refused reply is dropped, never waited on. A full queue
+            // means the application stopped reading stdin, so waiting for
+            // room would block `pump` until it reads again; a failed or
+            // closed writer means the PTY is tearing down, which surfaces as
+            // ChildExit.
+            let _ = self.pty.enqueue_write(replies);
         }
 
         let mut signals = mem::take(&mut self.pending_signals);
@@ -517,16 +560,17 @@ impl<V: Vt> OrzmaTty<V> {
                     cell,
                     mods: input.report_mods,
                 };
-                let encoded = PtyInput::encode_mouse(&report, modes.mouse_encoding);
+                let encoded = PtyInput::encode_mouse(&report, modes.mouse_encoding).into_bytes();
                 for _ in 0..count {
-                    bytes.extend_from_slice(encoded.as_bytes());
+                    bytes.extend_from_slice(&encoded);
                 }
             }
             WheelDecision::CursorKeys { key, count } => {
                 self.snap_to_live_tail();
-                let encoded = PtyInput::encode_key(&key, &TerminalModifiers::default(), modes);
+                let encoded =
+                    PtyInput::encode_key(&key, &TerminalModifiers::default(), modes).into_bytes();
                 for _ in 0..count {
-                    bytes.extend_from_slice(encoded.as_bytes());
+                    bytes.extend_from_slice(&encoded);
                 }
             }
             WheelDecision::ScrollViewport(lines) => self.scroll(Scroll::Delta(lines)),

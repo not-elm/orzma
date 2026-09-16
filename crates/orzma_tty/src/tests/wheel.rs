@@ -25,6 +25,7 @@ fn send_wheel_over_a_tracking_terminal_writes_a_report_per_notch() {
     let (mut term, sink) = tracking_term();
     term.send_wheel(wheel(2, 0), &WheelConfig::default())
         .expect("send_wheel");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<64;6;4M");
     assert_eq!(sink.writes(), 1);
     assert!(term.vt.scrolls.is_empty());
@@ -46,6 +47,7 @@ fn send_wheel_reports_carry_the_gathered_modifier_bits() {
     };
     term.send_wheel(input, &WheelConfig::default())
         .expect("send_wheel");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<72;6;4M");
 }
 
@@ -64,6 +66,7 @@ fn send_wheel_drops_reports_without_a_cell() {
     };
     term.send_wheel(input, &WheelConfig::default())
         .expect("send_wheel");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"");
 }
 
@@ -80,6 +83,7 @@ fn send_wheel_over_the_alternate_screen_writes_cursor_keys() {
     term.vt.modes.active_screen = ScreenKind::Alternate;
     term.send_wheel(wheel(2, 0), &WheelConfig::default())
         .expect("send_wheel");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[A".repeat(6));
 
     let (mut term, sink) = detached_term();
@@ -87,6 +91,7 @@ fn send_wheel_over_the_alternate_screen_writes_cursor_keys() {
     term.vt.modes.app_cursor = true;
     term.send_wheel(wheel(1, 0), &WheelConfig::default())
         .expect("send_wheel");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1bOA".repeat(3));
 }
 
@@ -108,6 +113,7 @@ fn send_wheel_with_shift_over_a_tracking_alternate_screen_writes_cursor_keys() {
     };
     term.send_wheel(input, &WheelConfig::default())
         .expect("send_wheel");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[A".repeat(6));
 }
 
@@ -121,16 +127,19 @@ fn send_wheel_routes_horizontal_notches_to_reports_only() {
     let (mut term, sink) = tracking_term();
     term.send_wheel(wheel(0, 1), &WheelConfig::default())
         .expect("send_wheel");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<67;6;4M");
 
     let (mut term, sink) = tracking_term();
     term.send_wheel(wheel(0, -1), &WheelConfig::default())
         .expect("send_wheel");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<66;6;4M");
 
     let (mut term, sink) = detached_term();
     term.send_wheel(wheel(0, 1), &WheelConfig::default())
         .expect("send_wheel");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"");
     assert!(term.vt.scrolls.is_empty());
 }
@@ -148,6 +157,7 @@ fn send_wheel_on_the_primary_screen_scrolls_the_viewport() {
     term.send_wheel(wheel(2, 0), &WheelConfig::default())
         .expect("send_wheel");
     assert_eq!(term.vt.scrolls, vec![Scroll::Delta(6)]);
+    term.settle_writes();
     assert_eq!(sink.contents(), b"");
     assert!(term.coalescer.is_armed());
 }
@@ -162,6 +172,7 @@ fn send_wheel_writes_both_axes_in_one_write_vertical_first() {
     let (mut term, sink) = tracking_term();
     term.send_wheel(wheel(1, 1), &WheelConfig::default())
         .expect("send_wheel");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<67;6;4M");
     assert_eq!(sink.writes(), 1);
 }
@@ -181,6 +192,7 @@ fn send_wheel_snaps_the_viewport_only_on_the_cursor_key_route() {
     term.send_wheel(wheel(1, 0), &WheelConfig::default())
         .expect("send_wheel");
     assert_eq!(term.vt.display_offset, DisplayOffset(0));
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[A".repeat(3));
 
     let (mut term, sink) = tracking_term();
@@ -188,12 +200,16 @@ fn send_wheel_snaps_the_viewport_only_on_the_cursor_key_route() {
     term.send_wheel(wheel(1, 0), &WheelConfig::default())
         .expect("send_wheel");
     assert_eq!(term.vt.display_offset, DisplayOffset(5));
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<64;6;4M");
 }
 
-/// Asserts that a PTY write failure surfaces as `PtyWrite`.
+/// Asserts that the frame whose write fails is queued, that the failure
+/// surfaces as `PtyWrite` on the next frame, and that later frames are
+/// refused with `PtyWriterClosed`.
 ///
-/// Case: the shell's PTY closed under the wheel gesture.
+/// Case: the shell's PTY closed under the wheel gesture, and the user
+/// keeps spinning the wheel.
 #[test]
 fn send_wheel_reports_a_pty_write_failure() {
     let mut term = OrzmaTty::detached(
@@ -203,8 +219,15 @@ fn send_wheel_reports_a_pty_write_failure() {
     )
     .expect("OrzmaTty::detached");
     term.vt.modes.mouse_tracking = MouseTracking::Drag;
+    term.send_wheel(wheel(1, 0), &WheelConfig::default())
+        .expect("the frame is queued before the writer fails");
+    term.settle_writes();
     assert!(matches!(
         term.send_wheel(wheel(1, 0), &WheelConfig::default()),
         Err(OrzmaTtyError::PtyWrite(_))
+    ));
+    assert!(matches!(
+        term.send_wheel(wheel(1, 0), &WheelConfig::default()),
+        Err(OrzmaTtyError::PtyWriterClosed)
     ));
 }

@@ -1,9 +1,10 @@
-//! `Pty` — owns the PTY master, writer, child killer, and the output and
-//! exit streams its OS threads feed.
+//! `Pty` — owns the PTY master, the input queue its writer thread drains,
+//! the child killer, and the output and exit streams its OS threads feed.
 
 use crate::{
     CellPixels, SpawnOptions,
     error::{OrzmaTtyError, OrzmaTtyResult},
+    pty::write_queue::WriteQueue,
 };
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded, unbounded};
 use orzma_vt::prelude::GridSize;
@@ -22,10 +23,12 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+mod write_queue;
+
 /// PTY ownership for one spawned shell.
 pub struct Pty {
     master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    writes: WriteQueue,
     chunk_rx: Receiver<Vec<u8>>,
     exit_rx: Receiver<Option<i32>>,
     child_killer: Box<dyn ChildKiller + Send + Sync>,
@@ -62,13 +65,28 @@ impl Pty {
     /// parks: 256 × 4 KiB = 1 MiB per pane.
     pub const CHUNK_QUEUE_CAPACITY: usize = 256;
 
+    /// How many input bytes may wait for the writer thread before further
+    /// writes are rejected: 100 MiB per pane.
+    pub const WRITE_QUEUE_CAPACITY: usize = 100 * 1024 * 1024;
+
     /// Opens a PTY at the given grid size, spawns `options.shell` under
-    /// it (as a login shell on macOS), and starts the blocking OS thread
-    /// (two on Windows) that reads its output and waits for the child.
+    /// it (as a login shell on macOS), and starts the writer thread that
+    /// drains queued input plus the blocking OS thread (two on Windows)
+    /// that reads its output and waits for the child.
     ///
     /// On Windows, ConPTY writes `CSI 6 n` before it starts the child and
     /// holds the child until a cursor-position report arrives; the owner
-    /// must write that reply through [`Self::write_all`].
+    /// must queue that reply through [`Self::enqueue_write`].
+    ///
+    /// # Errors
+    ///
+    /// - [`OrzmaTtyError::PtyOpen`] when the PTY pair cannot be opened.
+    /// - [`OrzmaTtyError::SpawnShell`] when the shell cannot be spawned
+    ///   under the PTY.
+    /// - [`OrzmaTtyError::PtyPipe`] when the master's reader or writer
+    ///   cannot be taken; the spawned shell is killed and reaped first.
+    /// - [`OrzmaTtyError::PtyWriterThread`] when the OS refuses to start the
+    ///   writer thread; the spawned shell is killed and reaped first.
     pub fn spawn(options: &SpawnOptions) -> OrzmaTtyResult<Self> {
         let pty_pair = native_pty_system()
             .openpty(options.cell_px.pty_size(options.size))
@@ -86,14 +104,19 @@ impl Pty {
             .slave
             .spawn_command(cmd)
             .map_err(OrzmaTtyError::SpawnShell)?;
-        let mut child_killer = child.clone_killer();
+        let child_killer = child.clone_killer();
         drop(pty_pair.slave);
 
-        let (reader, writer) = match master_pipes(pty_pair.master.as_ref()) {
+        let pipes = master_pipes(pty_pair.master.as_ref())
+            .map_err(OrzmaTtyError::PtyPipe)
+            .and_then(|(reader, writer)| {
+                WriteQueue::spawn(writer, Self::WRITE_QUEUE_CAPACITY).map(|writes| (reader, writes))
+            });
+        let (reader, writes) = match pipes {
             Ok(pipes) => pipes,
             Err(e) => {
-                let _ = child_killer.kill();
-                return Err(OrzmaTtyError::PtyPipe(e));
+                kill_and_reap(child);
+                return Err(e);
             }
         };
 
@@ -103,7 +126,7 @@ impl Pty {
 
         Ok(Self {
             master: Mutex::new(pty_pair.master),
-            writer: Mutex::new(writer),
+            writes,
             chunk_rx,
             exit_rx,
             child_killer,
@@ -148,14 +171,34 @@ impl Pty {
         &self.exit_rx
     }
 
+    /// Queues `bytes` for this PTY's writer thread without blocking; `Ok`
+    /// means the bytes were queued, not that they reached the PTY.
+    ///
+    /// Each queued write is handed to the PTY writer as one buffer, in the
+    /// order the writes were queued. An empty buffer queues nothing.
+    ///
+    /// # Errors
+    ///
+    /// - [`OrzmaTtyError::PtyWriteQueueFull`] when `bytes` would push the
+    ///   unwritten bytes past [`Self::WRITE_QUEUE_CAPACITY`]; nothing is
+    ///   queued.
+    /// - [`OrzmaTtyError::PtyWrite`] once, carrying the OS error, after the
+    ///   writer thread's write failed.
+    /// - [`OrzmaTtyError::PtyWriterClosed`] after that failure has been
+    ///   reported.
     #[inline]
-    pub fn write_all(&mut self, buf: &[u8]) -> OrzmaTtyResult {
-        self.writer
-            .lock()
-            .unwrap()
-            .write_all(buf)
-            .map_err(OrzmaTtyError::PtyWrite)?;
-        Ok(())
+    pub fn enqueue_write(&self, bytes: Vec<u8>) -> OrzmaTtyResult {
+        self.writes.enqueue(bytes)
+    }
+
+    /// Blocks until every queued write has been written, or until the
+    /// writer stops after a failure.
+    ///
+    /// Never returns while the writer is blocked in a write that does not
+    /// complete.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn settle_writes(&self) {
+        self.writes.settle();
     }
 
     /// Applies `size` to the PTY master (`TIOCSWINSZ`), with the pixel
@@ -224,7 +267,8 @@ impl Pty {
     ) -> Self {
         Self {
             master: Mutex::new(master),
-            writer: Mutex::new(writer),
+            writes: WriteQueue::spawn(writer, Self::WRITE_QUEUE_CAPACITY)
+                .expect("the OS starts the PTY writer thread"),
             chunk_rx,
             exit_rx,
             child_killer: Box::new(DetachedKiller),
@@ -283,6 +327,12 @@ fn master_pipes(
     master: &dyn MasterPty,
 ) -> anyhow::Result<(Box<dyn Read + Send>, Box<dyn Write + Send>)> {
     Ok((master.try_clone_reader()?, master.take_writer()?))
+}
+
+/// Kills `child` and blocks until it exits, reaping its process.
+fn kill_and_reap(mut child: Box<dyn Child + Send + Sync>) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// What the reader thread reports about its progress.
@@ -497,7 +547,8 @@ mod tests {
     /// the child. A `Pty` driven without a VT must reply itself.
     #[cfg(windows)]
     fn answer_cursor_query(pty: &mut Pty) {
-        pty.write_all(b"\x1b[1;1R").expect("reply to CSI 6 n");
+        pty.enqueue_write(b"\x1b[1;1R".to_vec())
+            .expect("reply to CSI 6 n");
     }
 
     #[cfg(unix)]

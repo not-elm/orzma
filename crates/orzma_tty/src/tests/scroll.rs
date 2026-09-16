@@ -55,6 +55,7 @@ fn scroll_writes_nothing_through_the_pty_writer() {
     term.vt.scroll_moves = true;
     term.scroll(Scroll::Delta(3));
     term.scroll(Scroll::Bottom);
+    term.settle_writes();
     assert_eq!(sink.contents(), b"");
 }
 

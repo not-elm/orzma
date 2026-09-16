@@ -12,6 +12,7 @@ fn set_focused_reports_each_transition_while_focus_reporting_is_enabled() {
     term.vt.modes.focus_in_out = true;
     term.set_focused(true).expect("set_focused");
     term.set_focused(false).expect("set_focused");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[I\x1b[O");
 }
 
@@ -26,6 +27,7 @@ fn set_focused_writes_nothing_when_the_state_is_unchanged() {
     term.set_focused(true).expect("set_focused");
     term.set_focused(false).expect("set_focused");
     term.set_focused(false).expect("set_focused");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[I\x1b[O");
 }
 
@@ -41,8 +43,10 @@ fn enabling_focus_reporting_reports_nothing_until_the_next_change() {
     term.set_focused(true).expect("set_focused");
     term.vt.modes.focus_in_out = true;
     term.set_focused(true).expect("set_focused");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"");
     term.set_focused(false).expect("set_focused");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[O");
 }
 
@@ -56,17 +60,20 @@ fn set_focused_does_not_snap_a_scrolled_back_viewport() {
     term.vt.modes.focus_in_out = true;
     term.vt.display_offset = DisplayOffset(3);
     term.set_focused(true).expect("set_focused");
+    term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[I");
     assert_eq!(term.vt.display_offset, DisplayOffset(3));
     assert!(!term.vt.scrolls.iter().any(|s| matches!(s, Scroll::Bottom)));
     assert!(!term.coalescer.is_armed());
 }
 
-/// Asserts that a failed focus write still records the new state, so
-/// repeating that state attempts no second write.
+/// Asserts that a focus change is recorded even when its report cannot
+/// reach the PTY, that the writer's failure surfaces once on the next
+/// report, and that repeating the recorded state attempts no write.
 ///
 /// Case: the window regains focus while the pane's PTY rejects writes,
-/// and the user then resizes the window before focus changes again.
+/// the user switches away, and then resizes the window before focus
+/// changes again.
 #[test]
 fn a_failed_focus_write_keeps_the_new_state() {
     let mut term = OrzmaTty::detached(
@@ -76,10 +83,17 @@ fn a_failed_focus_write_keeps_the_new_state() {
     )
     .expect("OrzmaTty::detached");
     term.vt.modes.focus_in_out = true;
+    term.set_focused(true)
+        .expect("the report is queued before the writer fails");
+    term.settle_writes();
     assert!(matches!(
-        term.set_focused(true),
+        term.set_focused(false),
         Err(OrzmaTtyError::PtyWrite(_))
     ));
-    term.set_focused(true)
+    term.set_focused(false)
         .expect("an unchanged state attempts no write, so it cannot fail");
+    assert!(matches!(
+        term.set_focused(true),
+        Err(OrzmaTtyError::PtyWriterClosed)
+    ));
 }
