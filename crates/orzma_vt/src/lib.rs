@@ -302,16 +302,6 @@ pub enum VtSignal {
         /// The instances that were evicted.
         placements: Vec<InstanceId>,
     },
-    /// Mode flags that transitioned since the previous signal drain, as
-    /// mode names (e.g. "alt-screen").
-    ///
-    /// [`OrzmaVt`] never raises it.
-    ModeChange {
-        /// Mode names that were enabled.
-        added: Vec<&'static str>,
-        /// Mode names that were disabled.
-        removed: Vec<&'static str>,
-    },
 }
 
 impl VtSignal {

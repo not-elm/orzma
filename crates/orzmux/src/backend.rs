@@ -1,6 +1,6 @@
 //! The multiplexer backend loop: owns every pane, waits on the command
 //! channel and each pane's PTY streams with one `Select`, and emits
-//! layout / frame / signal events to the GUI.
+//! layout / frame / signal / mode events to the GUI.
 
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::{ChunkDepth, QueueSampler};
@@ -12,7 +12,7 @@ use crate::protocol::{
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::CellPixels;
 use orzma_tty::prelude::{OrzmaTtyResult, PumpOutput, TtySignal};
-use orzma_vt::prelude::{Frame, GridSize, Vt, VtSignal};
+use orzma_vt::prelude::{Frame, GridSize, Vt, VtModes, VtSignal};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -318,20 +318,19 @@ impl Backend {
                 return;
             }
         };
-        let rect = self
+        let spawn_cwd = cwd.or(inherited_cwd);
+        let spawned = self
             .tree
             .solve(geometry.size)
             .rect_of(new)
-            .expect("the new pane is in the tree");
-        let spawn_cwd = cwd.or(inherited_cwd);
-        let spawned = match GridSize::new(rect.cols, rect.rows) {
-            Ok(size) => self
-                .factory
-                .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
-                .map(|tty| (tty, size))
-                .map_err(|err| err.to_string()),
-            Err(err) => Err(err.to_string()),
-        };
+            .ok_or_else(|| "the new pane is not in the solved layout".to_string())
+            .and_then(|rect| GridSize::new(rect.cols, rect.rows).map_err(|err| err.to_string()))
+            .and_then(|size| {
+                self.factory
+                    .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
+                    .map(|tty| (tty, size))
+                    .map_err(|err| err.to_string())
+            });
         match spawned {
             Ok((tty, size)) => {
                 self.panes.insert(
@@ -340,6 +339,7 @@ impl Backend {
                         tty,
                         applied: (size.cols, size.rows, geometry.cell_px),
                         cwd: spawn_cwd,
+                        last_modes: VtModes::default(),
                     },
                 );
                 self.emit(OrzmuxEvent::PaneOpened { pane: new, request });
@@ -459,9 +459,12 @@ impl Backend {
         }
     }
 
-    /// Forwards a pump's frame and signals. Returns `Some(code)` when the
-    /// signals carried `ChildExit`.
+    /// Forwards a pump's mode change, signals, and frame, in that order.
+    /// Returns `Some(code)` when the signals carried `ChildExit`.
     fn emit_pump_output(&mut self, id: PaneId, output: PumpOutput) -> Option<Option<i32>> {
+        if let Some(modes) = self.take_mode_change(id) {
+            self.emit(OrzmuxEvent::Modes { pane: id, modes });
+        }
         let mut exited = None;
         for signal in output.signals {
             match signal {
@@ -480,6 +483,19 @@ impl Backend {
             self.emit(OrzmuxEvent::Frame { pane: id, frame });
         }
         exited
+    }
+
+    /// Records a pane's current VT modes as reported and returns them
+    /// when they differ from the previous report; `None` for an unknown
+    /// pane or unchanged modes.
+    fn take_mode_change(&mut self, id: PaneId) -> Option<VtModes> {
+        let pane = self.panes.get_mut(&id)?;
+        let modes = pane.tty.vt().modes();
+        if modes == pane.last_modes {
+            return None;
+        }
+        pane.last_modes = modes;
+        Some(modes)
     }
 
     /// Removes a pane from the tree and the pool after flushing its last
@@ -594,7 +610,7 @@ mod tests {
         KeyText, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, TerminalKey, TerminalModifiers,
     };
     use orzma_tty::test_support::{CaptureSink, FailingSink};
-    use orzma_vt::prelude::OrzmaVt;
+    use orzma_vt::prelude::{MouseEncoding, MouseTracking, OrzmaVt, ScreenKind, VtModes};
     use std::collections::VecDeque;
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1011,6 +1027,84 @@ mod tests {
             h.backend.panes[&id].tty.vt().modes().focus_in_out,
             "precondition: focus reporting is enabled"
         );
+    }
+
+    /// The `Modes` reports for `id` among `events`, in order.
+    fn modes_reports(events: &VecDeque<OrzmuxEvent>, id: PaneId) -> Vec<VtModes> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                OrzmuxEvent::Modes { pane, modes } if *pane == id => Some(*modes),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Asserts that output which turns on a mouse tracking mode reports
+    /// the pane's modes exactly once, and that output which leaves the
+    /// modes where they were reports nothing.
+    ///
+    /// Case: nvim starts in a pane and turns on button-event tracking,
+    /// then redraws its status line in one write that hides the cursor
+    /// for the length of the redraw.
+    #[test]
+    fn a_mode_change_is_reported_once_and_unchanged_output_reports_nothing() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx.send(b"\x1b[?1002h".to_vec()).unwrap();
+        h.backend.pump_pane(root);
+        let reports = modes_reports(&h.drain(), root);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].mouse_tracking, MouseTracking::Drag);
+
+        pane.chunk_tx
+            .send(b"\x1b[?25l\x1b[24;1H\"init.lua\" 42L, 1337B\x1b[?25h".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        assert!(modes_reports(&h.drain(), root).is_empty());
+    }
+
+    /// Asserts that several mode transitions inside one chunk reach the
+    /// GUI as one report carrying the final modes.
+    ///
+    /// Case: nvim switches to the alternate screen and turns on
+    /// button-event tracking and SGR reports in the single write it
+    /// sends at startup.
+    #[test]
+    fn transitions_within_one_chunk_merge_into_one_report_of_the_final_modes() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx
+            .send(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        let reports = modes_reports(&h.drain(), root);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].active_screen, ScreenKind::Alternate);
+        assert_eq!(reports[0].mouse_tracking, MouseTracking::Drag);
+        assert_eq!(reports[0].mouse_encoding, MouseEncoding::Sgr);
+    }
+
+    /// Asserts that output which turns modes back off reports the pane's
+    /// modes with those modes off.
+    ///
+    /// Case: the user quits nvim, which turns button-event tracking off
+    /// and leaves the alternate screen on its way out.
+    #[test]
+    fn modes_turned_back_off_are_reported() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx
+            .send(b"\x1b[?1049h\x1b[?1002h".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        h.drain();
+
+        pane.chunk_tx
+            .send(b"\x1b[?1002l\x1b[?1049l".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        assert_eq!(modes_reports(&h.drain(), root), vec![VtModes::default()]);
     }
 
     /// Asserts that `Active` targets resolve in command order, so a kill
