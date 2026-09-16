@@ -6,7 +6,7 @@
 
 use super::{
     CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_dims, hit_candidates,
-    on_any_mouse_message, trigger_mouse_effects,
+    on_any_mouse_message, protocol_mods, trigger_mouse_effects,
 };
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::current_modifiers;
@@ -233,7 +233,7 @@ fn resolve_frame(
         scale,
         cell_w,
         cell_h,
-        mods: protocol_mods(keys),
+        mods: protocol_mods(&current_terminal_modifiers(keys)),
         modifier_held: link_modifier_held(&current_modifiers(keys)),
     })
 }
@@ -397,17 +397,6 @@ fn effective_drag_cursor(live: Option<Vec2>, active: bool, last: Option<Vec2>) -
         (Some(c), _) => Some(c),
         (None, true) => last,
         (None, false) => None,
-    }
-}
-
-/// Builds `ProtocolModifiers` from the held keys.
-fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
-    let m = current_terminal_modifiers(keys);
-    ProtocolModifiers {
-        shift: m.shift,
-        ctrl: m.ctrl,
-        alt: m.alt,
-        meta: m.meta,
     }
 }
 
@@ -1013,21 +1002,5 @@ mod tests {
         let p = to_grid_point(CellCoord { col: 5, row: 3 });
         assert_eq!(p.line.0, 2);
         assert_eq!(p.column.0, 4);
-    }
-
-    /// Asserts that `protocol_mods` reports Ctrl and Shift from the key
-    /// state and leaves Alt and Meta clear.
-    ///
-    /// Case: the user holds Ctrl+Shift while clicking.
-    #[test]
-    fn protocol_mods_sets_ctrl_and_shift() {
-        let mut keys = ButtonInput::<KeyCode>::default();
-        keys.press(KeyCode::ControlLeft);
-        keys.press(KeyCode::ShiftLeft);
-        let mods = protocol_mods(&keys);
-        assert!(mods.ctrl);
-        assert!(mods.shift);
-        assert!(!mods.alt);
-        assert!(!mods.meta);
     }
 }

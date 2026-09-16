@@ -171,9 +171,10 @@ fn forward_webview_mouse_moves(
 /// cursor on the shell surface (raw CEF wheel, focus-gated). When no
 /// focused webview is under the pointer the reader is drained and the
 /// wheel cedes to `crate::input::mouse::wheel::dispatch_mouse_wheel`
-/// (terminal scrollback) through its own reader; over the rect the shell
-/// is `MouseDisabled` (rect-claim gate), so that dispatcher yields and
-/// only the page scrolls.
+/// (the terminal's wheel routing: mouse reports, alternate-scroll cursor
+/// keys, or the scrollback) through its own reader; over the rect the
+/// shell is `MouseDisabled` (rect-claim gate), so that dispatcher yields
+/// and only the page scrolls.
 fn forward_webview_wheel(
     mut wheel: MessageReader<MouseWheel>,
     focused_webview: Res<FocusedWebview>,

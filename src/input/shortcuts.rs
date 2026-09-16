@@ -3,7 +3,7 @@
 
 use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
-use crate::input::bindings::{ButtonConfig, FineModifier, OrzmaMouseConfig, WheelConfig};
+use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::keyboard::key_effect::KeyEffect;
 use crate::input::shortcuts::apply::ShortcutsApplyPlugin;
 use bevy::input::ButtonState;
@@ -13,7 +13,6 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
-use orzma_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
 use orzma_configs::shortcuts::{
     Key as ConfigKey, KeyChord, Leader, Modifiers, Shortcut, TapModifier,
 };
@@ -480,32 +479,7 @@ fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OrzmaConfigsRes
 
 /// Inserts `OrzmaMouseConfig` from the resolved `[mouse]` block.
 fn populate_mouse_config(mut commands: Commands, configs: Res<OrzmaConfigsResource>) {
-    commands.insert_resource(orzma_mouse_config(&configs.mouse));
-}
-
-/// Maps the resolved `[mouse]` config block to the terminal crate's
-/// `OrzmaMouseConfig`.
-fn orzma_mouse_config(mc: &MouseConfig) -> OrzmaMouseConfig {
-    OrzmaMouseConfig {
-        buttons: ButtonConfig {
-            max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
-        },
-        wheel: WheelConfig {
-            lines_per_notch: mc.lines_per_notch,
-            fine_lines: mc.fine_lines,
-            max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
-        },
-        cells_per_notch: mc.cells_per_notch,
-        axis_lock_ratio: mc.axis_lock_ratio,
-        double_click_timeout: Duration::from_millis(mc.double_click_timeout_ms as u64),
-        click_drift_px: mc.click_drift_px,
-        fine_modifier: match mc.fine_modifier {
-            CfgFineModifier::Shift => FineModifier::Shift,
-            CfgFineModifier::Ctrl => FineModifier::Ctrl,
-            CfgFineModifier::Alt => FineModifier::Alt,
-            CfgFineModifier::None => FineModifier::None,
-        },
-    }
+    commands.insert_resource(OrzmaMouseConfig::from_config(&configs.mouse));
 }
 
 /// Resolves each bound chord to an `OrzmaShortcut`, skipping (with a warning)
@@ -1250,33 +1224,6 @@ mod tests {
             "the default release-webview-focus binding is <Leader>u",
         );
         assert_eq!(entry.modifiers, mods(false, false, false, false));
-    }
-
-    #[test]
-    fn mouse_config_maps_from_orzma_config() {
-        use orzma_configs::mouse::{FineModifier as CfgFine, MouseConfig};
-        let mc = MouseConfig {
-            fine_modifier: CfgFine::Ctrl,
-            max_protocol_events_per_frame: 5,
-            cells_per_notch: 1.0,
-            axis_lock_ratio: 0.5,
-            ..MouseConfig::default()
-        };
-        let out = orzma_mouse_config(&mc);
-        assert_eq!(out.buttons.max_protocol_events_per_frame, 5);
-        assert_eq!(out.wheel.max_protocol_events_per_frame, 5);
-        assert_eq!(out.wheel.lines_per_notch, mc.lines_per_notch);
-        assert_eq!(out.cells_per_notch, 1.0);
-        assert_eq!(
-            out.axis_lock_ratio, 0.5,
-            "non-default value must flow through"
-        );
-        assert_eq!(out.fine_modifier, FineModifier::Ctrl);
-        assert_eq!(
-            out.double_click_timeout,
-            std::time::Duration::from_millis(mc.double_click_timeout_ms as u64)
-        );
-        assert_eq!(out.click_drift_px, mc.click_drift_px);
     }
 
     fn leader_fixture() -> Shortcuts {
