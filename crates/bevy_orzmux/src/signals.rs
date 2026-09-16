@@ -30,15 +30,6 @@ pub struct TtyTitleResetSignal {
     pub terminal: Entity,
 }
 
-/// Fired when the modes a terminal's VT is in change.
-#[derive(EntityEvent, Debug, Clone)]
-pub struct TtyModesSignal {
-    #[event_target]
-    pub terminal: Entity,
-    /// The whole set of modes the VT is in after the change.
-    pub modes: VtModes,
-}
-
 /// Fired when the application copies data to the system clipboard via
 /// OSC 52. An empty `content` leaves the clipboard holding the empty
 /// string.
