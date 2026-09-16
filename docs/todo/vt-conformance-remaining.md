@@ -1,7 +1,7 @@
 # `xterm-256color` 準拠の未対応一覧（Tier 1 / Tier 2）
 
-抽出日: 2026-09-17 / 抽出元: [vt-conformance-scope.md](vt-conformance-scope.md)
-（2026-09-15 更新版）。各項目が `ee6a2d03` でまだ実装されていないことはコードで確認した。
+抽出日: 2026-09-17 / 抽出元: [vt-conformance-scope.md](https://github.com/not-elm/orzma/blob/ee6a2d03b49b0d65bd6c5c648e1d09a5f49d9a90/docs/todo/vt-conformance-scope.md)
+（2026-09-15 更新版。この一覧を置いたときに削除した）。各項目が `ee6a2d03` でまだ実装されていないことはコードで確認した。
 
 Tier は元文書 §0 の基準（ncurses 6.6 の `xterm-256color` エントリ）で振り直している。
 元文書で §2 に置いたままの REP と DECLRMM / DECSLRM は、この基準では Tier 1 に入る。
