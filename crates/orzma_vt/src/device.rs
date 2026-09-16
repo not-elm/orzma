@@ -553,7 +553,8 @@ mod tests {
     use super::*;
     use crate::device::color::{Color, Rgb};
     use crate::device::modes::{
-        InsertReplaceMode, KeypadMode, MouseEncoding, MouseTracking, TextCursorEnable,
+        AlternateScroll, InsertReplaceMode, KeypadMode, MouseEncoding, MouseTracking,
+        TextCursorEnable,
     };
     use crate::hyperlink::HyperlinkUri;
     use crate::screen::cell::Cell;
@@ -1198,15 +1199,15 @@ mod tests {
     /// not name alone, unlike a hard reset.
     ///
     /// Case: a full-screen program with SGR mouse reporting, alternate
-    /// scroll, bracketed paste, focus reporting and a window title of
-    /// its own issues a soft reset as part of its own start-up.
+    /// scroll turned off, bracketed paste, focus reporting and a window
+    /// title of its own issues a soft reset as part of its own start-up.
     #[test]
     fn a_soft_reset_leaves_the_state_it_does_not_name_alone() {
         let mut device = device();
         let modes = device.modes_mut();
         modes.mouse_tracking = MouseTracking::Clicks;
         modes.mouse_encoding = MouseEncoding::Sgr;
-        modes.alternate_scroll = true;
+        modes.alternate_scroll = AlternateScroll::Disabled;
         modes.bracketed_paste = true;
         modes.focus_in_out = true;
         device.set_title(Some("build".to_string()));
@@ -1215,7 +1216,7 @@ mod tests {
 
         assert_eq!(device.modes().mouse_tracking, MouseTracking::Clicks);
         assert_eq!(device.modes().mouse_encoding, MouseEncoding::Sgr);
-        assert!(device.modes().alternate_scroll);
+        assert_eq!(device.modes().alternate_scroll, AlternateScroll::Disabled);
         assert!(device.modes().bracketed_paste);
         assert!(device.modes().focus_in_out);
         assert_eq!(device.title(), Some("build"));

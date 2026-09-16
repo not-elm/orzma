@@ -4,11 +4,8 @@
 
 mod open_uri;
 mod selection;
-mod viewport_scroll;
 
-use crate::action::terminal::{
-    open_uri::OpenUriPlugin, selection::SelectionPlugin, viewport_scroll::ViewportScrollPlugin,
-};
+use crate::action::terminal::{open_uri::OpenUriPlugin, selection::SelectionPlugin};
 use bevy::prelude::*;
 
 pub(crate) use open_uri::TerminalOpenUri;
@@ -16,13 +13,12 @@ pub(crate) use selection::{
     TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
     trigger_selection_copy,
 };
-pub(crate) use viewport_scroll::TerminalViewportScroll;
 
 /// Aggregates the per-command terminal action plugins.
 pub(super) struct TerminalActionPlugin;
 
 impl Plugin for TerminalActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((OpenUriPlugin, SelectionPlugin, ViewportScrollPlugin));
+        app.add_plugins((OpenUriPlugin, SelectionPlugin));
     }
 }

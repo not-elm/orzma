@@ -11,7 +11,7 @@ use crate::protocol::{
 };
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::CellPixels;
-use orzma_tty::prelude::{OrzmaTtyResult, PumpOutput, TtySignal};
+use orzma_tty::prelude::{OrzmaTtyResult, PumpOutput, TtySignal, WheelConfig};
 use orzma_vt::prelude::{Frame, GridSize, Vt, VtSignal};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -40,6 +40,8 @@ pub(crate) struct Backend {
     sources: Vec<Ready>,
     /// Per-queue peaks between samples; logged once a second.
     sampler: QueueSampler,
+    /// The wheel-routing policy handed to every pane's terminal.
+    wheel: WheelConfig,
 }
 
 impl Backend {
@@ -48,6 +50,7 @@ impl Backend {
         factory: Box<dyn PaneFactory>,
         commands: Receiver<(CommandSeq, OrzmuxCommand)>,
         events: Sender<OrzmuxEvent>,
+        wheel: WheelConfig,
     ) -> Self {
         Self {
             factory,
@@ -62,6 +65,7 @@ impl Backend {
             gui_gone: false,
             sources: Vec::new(),
             sampler: QueueSampler::new(Instant::now()),
+            wheel,
         }
     }
 
@@ -150,6 +154,14 @@ impl Backend {
                     && let Err(err) = p.tty.send_mouse(report)
                 {
                     tracing::error!(%err, "mouse write failed");
+                }
+            }
+            OrzmuxCommand::Wheel { pane, input } => {
+                let wheel = self.wheel;
+                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "Wheel")
+                    && let Err(err) = p.tty.send_wheel(input, &wheel)
+                {
+                    tracing::error!(%err, "wheel write failed");
                 }
             }
             OrzmuxCommand::Scroll { pane, scroll } => {
@@ -590,7 +602,8 @@ mod tests {
     use crate::prelude::{PaneDirection, SplitId, SplitOrientation};
     use crossbeam_channel::{Receiver, Sender, unbounded};
     use orzma_tty::prelude::{
-        KeyText, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, TerminalKey, TerminalModifiers,
+        CellCoord, KeyText, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, ProtocolModifiers,
+        TerminalKey, TerminalModifiers, WheelInput, WheelModifiers,
     };
     use orzma_tty::test_support::{CaptureSink, FailingSink};
     use orzma_vt::prelude::OrzmaVt;
@@ -688,6 +701,11 @@ mod tests {
 
     impl Harness {
         fn new() -> Self {
+            Self::with_wheel(WheelConfig::default())
+        }
+
+        /// A harness whose backend routes the wheel by `wheel`.
+        fn with_wheel(wheel: WheelConfig) -> Self {
             let (spawned_tx, spawned_rx) = unbounded();
             let (command_tx, command_rx) = unbounded();
             let (event_tx, event_rx) = unbounded();
@@ -697,7 +715,7 @@ mod tests {
                 log: Arc::clone(&log),
             };
             Self {
-                backend: Backend::new(Box::new(factory), command_rx, event_tx),
+                backend: Backend::new(Box::new(factory), command_rx, event_tx, wheel),
                 events: event_rx,
                 panes: spawned_rx,
                 log,
@@ -1010,6 +1028,78 @@ mod tests {
             h.backend.panes[&id].tty.vt().modes().focus_in_out,
             "precondition: focus reporting is enabled"
         );
+    }
+
+    /// One wheel-up notch over cell (1, 1) with nothing held.
+    fn wheel_up() -> WheelInput {
+        WheelInput {
+            up: 1,
+            right: 0,
+            mods: WheelModifiers::default(),
+            cell: Some(CellCoord { col: 1, row: 1 }),
+            report_mods: ProtocolModifiers::default(),
+        }
+    }
+
+    /// Asserts that a `Wheel` command reaches its pane's terminal, which
+    /// routes it by that pane's own modes.
+    ///
+    /// Case: nvim has turned on button-event tracking and SGR reports in
+    /// a pane, and the user spins the wheel up over it.
+    #[test]
+    fn a_wheel_command_reaches_its_panes_terminal() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx
+            .send(b"\x1b[?1002h\x1b[?1006h".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        h.drain();
+        h.send(OrzmuxCommand::Wheel {
+            pane: root,
+            input: wheel_up(),
+        });
+        assert_eq!(pane.sink.contents(), b"\x1b[<64;1;1M");
+    }
+
+    /// Asserts that the wheel policy the backend was built with reaches
+    /// each pane's terminal, so a configured `lines_per_notch` decides how
+    /// many cursor keys one notch sends.
+    ///
+    /// Case: a user who set `lines_per_notch = 5` opens `less` in a pane
+    /// and spins the wheel up one notch.
+    #[test]
+    fn the_backends_wheel_config_reaches_its_panes_terminal() {
+        let mut h = Harness::with_wheel(WheelConfig {
+            lines_per_notch: 5,
+            ..WheelConfig::default()
+        });
+        let (root, pane) = h.open_root();
+        pane.chunk_tx.send(b"\x1b[?1049h".to_vec()).unwrap();
+        h.backend.pump_pane(root);
+        h.drain();
+        h.send(OrzmuxCommand::Wheel {
+            pane: root,
+            input: wheel_up(),
+        });
+        assert_eq!(pane.sink.contents(), b"\x1b[A".repeat(5));
+    }
+
+    /// Asserts that a `Wheel` for an unknown pane writes nothing and
+    /// produces no event.
+    ///
+    /// Case: a wheel frame arrives for a pane the user closed a moment
+    /// ago.
+    #[test]
+    fn a_wheel_command_for_an_unknown_pane_is_dropped_silently() {
+        let mut h = Harness::new();
+        let (_root, root_pane) = h.open_root();
+        h.send(OrzmuxCommand::Wheel {
+            pane: PaneId(99),
+            input: wheel_up(),
+        });
+        assert!(h.drain().is_empty());
+        assert!(root_pane.sink.contents().is_empty());
     }
 
     /// Asserts that `Active` targets resolve in command order, so a kill

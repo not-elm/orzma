@@ -5,7 +5,7 @@ use crate::requests::{
     copy::CopyPlugin, key_input::KeyInputPlugin, mouse_input::MouseInputPlugin,
     pane::PaneActionPlugin, paste::PastePlugin, scroll::ScrollPlugin, selection::SelectionPlugin,
     split_resize::SplitResizePlugin, vi_mode::ViModePlugin, vi_motion::ViMotionPlugin,
-    webview_mount::WebviewMountPlugin, webview_remove::WebviewRemovePlugin,
+    webview_mount::WebviewMountPlugin, webview_remove::WebviewRemovePlugin, wheel::WheelPlugin,
 };
 use crate::{OrzmuxConnection, OrzmuxPane};
 use bevy::ecs::system::SystemParam;
@@ -24,6 +24,7 @@ mod vi_mode;
 mod vi_motion;
 mod webview_mount;
 mod webview_remove;
+mod wheel;
 
 pub use copy::RequestTtyCopySelection;
 pub use key_input::{RequestActiveKeyInput, RequestTtyKeyInput};
@@ -41,6 +42,7 @@ pub use vi_mode::{RequestTtyViMode, ViModeSwitch};
 pub use vi_motion::{RequestTtyViMotion, ViMotion};
 pub use webview_mount::RequestTtyWebviewMount;
 pub use webview_remove::RequestTtyWebviewRemove;
+pub use wheel::RequestTtyWheel;
 
 pub(crate) struct OrzmaEventRequestPlugin;
 
@@ -59,6 +61,7 @@ impl Plugin for OrzmaEventRequestPlugin {
             ViMotionPlugin,
             WebviewMountPlugin,
             WebviewRemovePlugin,
+            WheelPlugin,
         ));
     }
 }
@@ -146,7 +149,7 @@ mod tests {
     use crate::requests::test_support::{app_with_connection, spawn_pane};
     use orzma_tty::prelude::{
         CellCoord, KeyText, MouseButton, MouseReport, MouseReportKind, ProtocolModifiers,
-        TerminalKey, TerminalModifiers,
+        TerminalKey, TerminalModifiers, WheelInput, WheelModifiers,
     };
     use orzma_vt::prelude::{GridColumn, GridLine, InstanceId, PlacementSize, ScreenLine, Scroll};
     use orzmux::prelude::{PaneId, SplitId};
@@ -193,6 +196,16 @@ mod tests {
                 kind: MouseReportKind::Press,
                 cell: CellCoord { col: 1, row: 1 },
                 mods: ProtocolModifiers::default(),
+            },
+        });
+        world.trigger(RequestTtyWheel {
+            terminal: pane,
+            input: WheelInput {
+                up: 1,
+                right: 0,
+                mods: WheelModifiers::default(),
+                cell: Some(CellCoord { col: 1, row: 1 }),
+                report_mods: ProtocolModifiers::default(),
             },
         });
         world.trigger(RequestTtyScroll {

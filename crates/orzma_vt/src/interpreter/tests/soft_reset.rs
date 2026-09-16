@@ -284,15 +284,15 @@ fn a_soft_reset_leaves_the_tab_stops_alone() {
 /// Asserts that a soft reset leaves the mouse tracking, mouse encoding,
 /// alternate-scroll and bracketed paste modes as they are.
 ///
-/// Case: a full-screen program with mouse reporting and alternate
-/// scroll on issues a soft reset as part of its own start-up and goes
+/// Case: a full-screen program with mouse reporting on and alternate
+/// scroll off issues a soft reset as part of its own start-up and goes
 /// on receiving reports.
 #[test]
 fn a_soft_reset_leaves_the_mouse_and_paste_modes_alone() {
-    let device = interpret(b"\x1b[?1000h\x1b[?1006h\x1b[?1007h\x1b[?2004h\x1b[!p");
+    let device = interpret(b"\x1b[?1000h\x1b[?1006h\x1b[?1007l\x1b[?2004h\x1b[!p");
     assert_eq!(device.modes().mouse_tracking, MouseTracking::Clicks);
     assert_eq!(device.modes().mouse_encoding, MouseEncoding::Sgr);
-    assert!(device.modes().alternate_scroll);
+    assert_eq!(device.modes().alternate_scroll, AlternateScroll::Disabled);
     assert!(device.modes().bracketed_paste);
 }
 
