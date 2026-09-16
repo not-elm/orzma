@@ -297,6 +297,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// Does not snap a scrolled-back viewport: the report's cell
     /// coordinates are the ones the host computed against the viewport on
     /// screen.
+    ///
+    /// # Errors
+    ///
+    /// A PTY write failure.
     pub fn send_mouse(&mut self, report: MouseReport) -> OrzmaTtyResult {
         let modes = self.vt.modes();
         if !modes.mouse_reporting_active() {
@@ -307,13 +311,15 @@ impl<V: Vt> OrzmaTty<V> {
     }
 
     /// Routes one frame's wheel notches by the VT's current modes and
-    /// applies the result: vertical notches become wheel reports while a
-    /// mouse tracking level is in force and Shift is not held, cursor keys
-    /// while alternate scroll is in effect, and a viewport scroll otherwise;
-    /// horizontal notches become reports only. Cursor keys snap a
-    /// scrolled-back viewport to the live tail first; reports and viewport
-    /// scrolls leave it where it is. Whatever both axes encode goes out in
-    /// one PTY write.
+    /// applies the result.
+    ///
+    /// Vertical notches become wheel reports while a mouse tracking level
+    /// is in force and Shift is not held, cursor keys while alternate
+    /// scroll is in effect, and a viewport scroll otherwise; horizontal
+    /// notches become reports only. Cursor keys snap a scrolled-back
+    /// viewport to the live tail first; reports and viewport scrolls leave
+    /// it where it is. Whatever both axes encode goes out in one PTY
+    /// write.
     ///
     /// # Errors
     ///
@@ -590,7 +596,7 @@ mod tests {
         CellCoord, MouseButton, MouseReportKind, ProtocolModifiers, WheelConfig, WheelInput,
         WheelModifiers,
     };
-    use crate::test_support::{CaptureSink, CountingSink, FailingMaster, FailingSink, FakeVt};
+    use crate::test_support::{CaptureSink, FailingMaster, FailingSink, FakeVt};
     use crossbeam_channel::{Sender, unbounded};
 
     fn grid(cols: u16, rows: u16) -> GridSize {
@@ -626,20 +632,6 @@ mod tests {
     /// leaves it.
     fn tracking_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
         let (mut term, sink) = detached_term();
-        term.vt.modes.mouse_tracking = MouseTracking::Drag;
-        term.vt.modes.mouse_encoding = MouseEncoding::Sgr;
-        (term, sink)
-    }
-
-    /// A tracking terminal whose sink also counts the PTY writes.
-    fn counting_tracking_term() -> (OrzmaTty<FakeVt>, CountingSink) {
-        let sink = CountingSink::default();
-        let mut term = OrzmaTty::detached(
-            FakeVt::new(grid(80, 24)),
-            grid(80, 24),
-            Box::new(sink.clone()),
-        )
-        .expect("OrzmaTty::detached");
         term.vt.modes.mouse_tracking = MouseTracking::Drag;
         term.vt.modes.mouse_encoding = MouseEncoding::Sgr;
         (term, sink)
@@ -1193,9 +1185,7 @@ mod tests {
             mods: ProtocolModifiers::default(),
         };
 
-        let (mut term, sink) = detached_term();
-        term.vt.modes.mouse_tracking = MouseTracking::Drag;
-        term.vt.modes.mouse_encoding = MouseEncoding::Sgr;
+        let (mut term, sink) = tracking_term();
         assert_eq!(sink.contents(), b"", "construction must write nothing");
         term.send_mouse(report).expect("send_mouse");
         assert_eq!(sink.contents(), b"\x1b[<64;1;1M");
@@ -1213,7 +1203,7 @@ mod tests {
     /// two notches over its buffer.
     #[test]
     fn send_wheel_over_a_tracking_terminal_writes_a_report_per_notch() {
-        let (mut term, sink) = counting_tracking_term();
+        let (mut term, sink) = tracking_term();
         term.send_wheel(wheel(2, 0), &WheelConfig::default())
             .expect("send_wheel");
         assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<64;6;4M");
@@ -1243,8 +1233,9 @@ mod tests {
     /// Asserts that a tracking terminal writes nothing for notches
     /// gathered with no cell under the cursor.
     ///
-    /// Case: the wheel spins while the cursor sits on the pane's border
-    /// padding, outside the grid.
+    /// Case: a client of the multiplexer's command channel that does not
+    /// hit-test the cursor sends wheel notches to a pane nvim is tracking
+    /// the mouse in, naming no cell.
     #[test]
     fn send_wheel_drops_reports_without_a_cell() {
         let (mut term, sink) = tracking_term();
@@ -1349,7 +1340,7 @@ mod tests {
     /// disabled leaves one notch on each axis.
     #[test]
     fn send_wheel_writes_both_axes_in_one_write_vertical_first() {
-        let (mut term, sink) = counting_tracking_term();
+        let (mut term, sink) = tracking_term();
         term.send_wheel(wheel(1, 1), &WheelConfig::default())
             .expect("send_wheel");
         assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<67;6;4M");

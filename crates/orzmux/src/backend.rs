@@ -701,6 +701,11 @@ mod tests {
 
     impl Harness {
         fn new() -> Self {
+            Self::with_wheel(WheelConfig::default())
+        }
+
+        /// A harness whose backend routes the wheel by `wheel`.
+        fn with_wheel(wheel: WheelConfig) -> Self {
             let (spawned_tx, spawned_rx) = unbounded();
             let (command_tx, command_rx) = unbounded();
             let (event_tx, event_rx) = unbounded();
@@ -710,12 +715,7 @@ mod tests {
                 log: Arc::clone(&log),
             };
             Self {
-                backend: Backend::new(
-                    Box::new(factory),
-                    command_rx,
-                    event_tx,
-                    WheelConfig::default(),
-                ),
+                backend: Backend::new(Box::new(factory), command_rx, event_tx, wheel),
                 events: event_rx,
                 panes: spawned_rx,
                 log,
@@ -1060,6 +1060,29 @@ mod tests {
             input: wheel_up(),
         });
         assert_eq!(pane.sink.contents(), b"\x1b[<64;1;1M");
+    }
+
+    /// Asserts that the wheel policy the backend was built with reaches
+    /// each pane's terminal, so a configured `lines_per_notch` decides how
+    /// many cursor keys one notch sends.
+    ///
+    /// Case: a user who set `lines_per_notch = 5` opens `less` in a pane
+    /// and spins the wheel up one notch.
+    #[test]
+    fn the_backends_wheel_config_reaches_its_panes_terminal() {
+        let mut h = Harness::with_wheel(WheelConfig {
+            lines_per_notch: 5,
+            ..WheelConfig::default()
+        });
+        let (root, pane) = h.open_root();
+        pane.chunk_tx.send(b"\x1b[?1049h".to_vec()).unwrap();
+        h.backend.pump_pane(root);
+        h.drain();
+        h.send(OrzmuxCommand::Wheel {
+            pane: root,
+            input: wheel_up(),
+        });
+        assert_eq!(pane.sink.contents(), b"\x1b[A".repeat(5));
     }
 
     /// Asserts that a `Wheel` for an unknown pane writes nothing and

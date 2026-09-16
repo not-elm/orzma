@@ -14,7 +14,7 @@ pub struct RequestTtyMouseInput {
     #[event_target]
     pub terminal: Entity,
     /// The report, encoded at apply time against the terminal's active
-    /// mouse encoding.
+    /// mouse encoding while a mouse tracking level is in force.
     pub mouse: MouseReport,
 }
 

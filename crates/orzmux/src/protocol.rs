@@ -144,7 +144,8 @@ pub enum OrzmuxCommand {
         /// The pasted text.
         text: String,
     },
-    /// Forward a mouse report to a pane's PTY.
+    /// Forward a mouse report to a pane's PTY. The pane writes nothing
+    /// while its VT has no mouse tracking level in force.
     MouseInput {
         /// The pane receiving the mouse event.
         pane: PaneId,

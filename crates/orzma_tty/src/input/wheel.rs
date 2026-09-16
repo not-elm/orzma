@@ -14,7 +14,8 @@ pub struct WheelConfig {
     /// Lines one notch moves while the fine-scroll modifier is held.
     pub fine_lines: u32,
     /// The most notches one routing call turns into mouse reports or
-    /// cursor keys; the notches past it are dropped.
+    /// cursor keys; the notches past it are dropped. Cursor keys
+    /// additionally stop at 240 per call, whatever the lines per notch.
     pub max_protocol_events_per_frame: u32,
 }
 
@@ -48,8 +49,8 @@ pub struct WheelInput {
     pub right: i32,
     /// The held modifiers routing reads.
     pub mods: WheelModifiers,
-    /// The cell under the cursor, or `None` off the grid. A report needs
-    /// it and is dropped without one.
+    /// The cell under the cursor, or `None` when no cell was resolved for
+    /// it. A report needs a cell and is dropped without one.
     pub cell: Option<CellCoord>,
     /// The modifier bits every report carries.
     pub report_mods: ProtocolModifiers,
