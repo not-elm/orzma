@@ -11,11 +11,12 @@ use crate::protocol::{
 };
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::CellPixels;
-use orzma_tty::prelude::{OrzmaTtyResult, PumpOutput, TtySignal};
+use orzma_tty::prelude::{OrzmaTtyError, OrzmaTtyResult, PumpOutput, TtySignal};
 use orzma_vt::prelude::{Frame, GridSize, Vt, VtSignal};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
+use tracing::Level;
 
 pub(crate) mod pane;
 pub(crate) mod queue_sample;
@@ -132,24 +133,26 @@ impl Backend {
                 }
             }
             OrzmuxCommand::KeyInput { pane, key, mods } => {
-                if let Some(p) = self.pane_mut(pane, "KeyInput")
+                if let Some(id) = self.resolve_or_log(pane, "KeyInput")
+                    && let Some(p) = self.panes.get_mut(&id)
                     && let Err(err) = p.tty.send_key(&key, &mods)
                 {
-                    tracing::error!(%err, "key write failed");
+                    log_refused_write(id, "key", &err, Level::ERROR);
                 }
             }
             OrzmuxCommand::Paste { pane, text } => {
-                if let Some(p) = self.pane_mut(pane, "Paste")
+                if let Some(id) = self.resolve_or_log(pane, "Paste")
+                    && let Some(p) = self.panes.get_mut(&id)
                     && let Err(err) = p.tty.send_paste(&text)
                 {
-                    tracing::error!(%err, "paste write failed");
+                    log_refused_write(id, "paste", &err, Level::ERROR);
                 }
             }
             OrzmuxCommand::MouseInput { pane, report } => {
                 if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "MouseInput")
                     && let Err(err) = p.tty.send_mouse(report)
                 {
-                    tracing::error!(%err, "mouse write failed");
+                    log_refused_write(pane, "mouse report", &err, Level::ERROR);
                 }
             }
             OrzmuxCommand::Scroll { pane, scroll } => {
@@ -439,14 +442,14 @@ impl Backend {
     }
 
     /// Tells every pane whether it holds focus: the active pane does while
-    /// the window is focused, and no pane does otherwise. Every pane that
-    /// loses focus is told before the pane that gains it, and a failed
-    /// write is logged without stopping the others.
+    /// the window is focused, and no pane does otherwise. A report a pane
+    /// refuses is logged without stopping the others, and reports to
+    /// different panes reach their PTYs in no fixed order.
     fn refresh_focus(&mut self) {
         let target = self.tree.active().filter(|_| self.window_focused);
         let report = |id: PaneId, result: OrzmaTtyResult| {
             if let Err(err) = result {
-                tracing::warn!(pane = ?id, %err, "focus write failed");
+                log_refused_write(id, "focus report", &err, Level::WARN);
             }
         };
         for (id, pane) in self.panes.iter_mut().filter(|(id, _)| Some(**id) != target) {
@@ -578,6 +581,26 @@ enum Ready {
     Pane(PaneId),
 }
 
+/// Logs a PTY write the pane's terminal refused.
+///
+/// The first rejection of a stuck episode warns and later rejections stay
+/// at debug, a closed writer logs at debug, and any other failure logs at
+/// `failure`, which is `ERROR` or `WARN`.
+fn log_refused_write(pane: PaneId, what: &'static str, err: &OrzmaTtyError, failure: Level) {
+    match err {
+        OrzmaTtyError::PtyWriteQueueFull {
+            dropped_in_episode: 1,
+        } => tracing::warn!(?pane, %err, "{what} dropped: it does not fit in the PTY input queue"),
+        OrzmaTtyError::PtyWriteQueueFull { .. } | OrzmaTtyError::PtyWriterClosed => {
+            tracing::debug!(?pane, %err, "{what} dropped");
+        }
+        _ if failure == Level::ERROR => {
+            tracing::error!(?pane, ?err, "{what} dropped: an earlier PTY write failed");
+        }
+        _ => tracing::warn!(?pane, ?err, "{what} dropped: an earlier PTY write failed"),
+    }
+}
+
 /// How many queued commands one iteration applies before pumping panes.
 const COMMAND_BATCH: usize = 64;
 
@@ -589,11 +612,11 @@ const PUMP_ROUNDS: usize = 4;
 mod tests {
     use super::*;
     use crate::prelude::{PaneDirection, SplitId, SplitOrientation};
-    use crossbeam_channel::{Receiver, Sender, unbounded};
+    use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
     use orzma_tty::prelude::{
         KeyText, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, TerminalKey, TerminalModifiers,
     };
-    use orzma_tty::test_support::{CaptureSink, FailingSink};
+    use orzma_tty::test_support::{BlockingSink, CaptureSink, FailingSink};
     use orzma_vt::prelude::OrzmaVt;
     use std::collections::VecDeque;
     use std::io::Write;
@@ -615,8 +638,10 @@ mod tests {
         fail_next: AtomicBool,
         /// Makes the next spawned pane's PTY writer fail every write.
         fail_writes_next: AtomicBool,
-        /// When set, every spawned pane writes into a clone of this sink.
-        shared_sink: Mutex<Option<CaptureSink>>,
+        /// When set, the next spawned pane's PTY writer is this sink, whose
+        /// writes block until it is released, as if the pane's application
+        /// stopped reading stdin.
+        block_writes_next: Mutex<Option<BlockingSink>>,
         /// When set, every spawned pane's output stream starts with these
         /// bytes, left unread until the test pumps the pane.
         spawn_output: Mutex<Option<Vec<u8>>>,
@@ -648,16 +673,12 @@ mod tests {
             if let Some(output) = self.log.spawn_output.lock().unwrap().clone() {
                 chunk_tx.send(output).unwrap();
             }
-            let sink = self
-                .log
-                .shared_sink
-                .lock()
-                .unwrap()
-                .clone()
-                .unwrap_or_default();
+            let sink = CaptureSink::default();
             let writer: Box<dyn Write + Send> =
                 if self.log.fail_writes_next.swap(false, Ordering::AcqRel) {
                     Box::new(FailingSink)
+                } else if let Some(gate) = self.log.block_writes_next.lock().unwrap().take() {
+                    Box::new(gate)
                 } else {
                     Box::new(sink.clone())
                 };
@@ -716,6 +737,14 @@ mod tests {
 
         fn drain(&self) -> VecDeque<OrzmuxEvent> {
             self.events.try_iter().collect()
+        }
+
+        /// Waits until every live pane's queued PTY writes have been
+        /// written.
+        fn settle_writes(&self) {
+            for pane in self.backend.panes.values() {
+                pane.tty.settle_writes();
+            }
         }
 
         fn resize(&mut self, size: GridSize) {
@@ -1130,6 +1159,7 @@ mod tests {
             key: TerminalKey::Character(KeyText::new("a").unwrap()),
             mods: TerminalModifiers::default(),
         });
+        h.settle_writes();
         assert_eq!(root_pane.sink.contents(), b"a");
     }
 
@@ -1148,6 +1178,7 @@ mod tests {
             mods: TerminalModifiers::default(),
         });
         assert!(h.drain().is_empty());
+        h.settle_writes();
         assert!(root_pane.sink.contents().is_empty());
     }
 
@@ -1271,6 +1302,7 @@ mod tests {
         enable_focus_reporting(&mut h, new, &new_pane);
         h.send(OrzmuxCommand::SelectPane { pane: root });
         h.send(OrzmuxCommand::SelectPane { pane: new });
+        h.settle_writes();
         assert_eq!(root_pane.sink.contents(), b"\x1b[I\x1b[O");
         assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
     }
@@ -1288,6 +1320,7 @@ mod tests {
         enable_focus_reporting(&mut h, root, &root_pane);
         *h.log.spawn_output.lock().unwrap() = Some(b"\x1b[?1004h".to_vec());
         let (_new, new_pane) = split_active(&mut h, 2);
+        h.settle_writes();
         assert_eq!(root_pane.sink.contents(), b"\x1b[O");
         assert_eq!(new_pane.sink.contents(), b"");
     }
@@ -1315,6 +1348,7 @@ mod tests {
             h.drain().front(),
             Some(OrzmuxEvent::SpawnFailed { .. })
         ));
+        h.settle_writes();
         assert_eq!(root_pane.sink.contents(), b"");
     }
 
@@ -1331,6 +1365,7 @@ mod tests {
         h.send(OrzmuxCommand::KillPane {
             pane: PaneTarget::Active,
         });
+        h.settle_writes();
         assert_eq!(root_pane.sink.contents(), b"\x1b[I");
     }
 
@@ -1349,6 +1384,7 @@ mod tests {
         h.send(OrzmuxCommand::WindowFocus { focused: false });
         h.send(OrzmuxCommand::WindowFocus { focused: false });
         h.send(OrzmuxCommand::WindowFocus { focused: true });
+        h.settle_writes();
         assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
         assert_eq!(root_pane.sink.contents(), b"");
     }
@@ -1364,30 +1400,69 @@ mod tests {
         h.log.fail_writes_next.store(true, Ordering::Release);
         let (root, root_pane) = h.open_root();
         let (new, new_pane) = split_active(&mut h, 2);
-        h.send(OrzmuxCommand::SelectPane { pane: root });
         enable_focus_reporting(&mut h, root, &root_pane);
         enable_focus_reporting(&mut h, new, &new_pane);
+        h.send(OrzmuxCommand::SelectPane { pane: root });
+        h.settle_writes();
         h.send(OrzmuxCommand::SelectPane { pane: new });
-        assert_eq!(new_pane.sink.contents(), b"\x1b[I");
+        h.settle_writes();
+        assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
     }
 
-    /// Asserts that one refresh writes the report for the pane being left
-    /// before the report for the pane being entered.
+    /// Asserts that a pane whose PTY stops accepting input neither stalls
+    /// commands for other panes nor survives `KillPane`.
     ///
-    /// Case: the user moves back and forth between two panes that each run a
-    /// client attached to the same tmux server with `focus-events` on.
+    /// Case: the user stops nvim under a debugger in one pane, keeps typing
+    /// and pastes into it, then types in the other pane and kills the stuck
+    /// one.
     #[test]
-    fn focus_loss_is_reported_before_focus_gain() {
-        let mut h = Harness::new();
-        let shared = CaptureSink::default();
-        *h.log.shared_sink.lock().unwrap() = Some(shared.clone());
-        let (root, root_pane) = h.open_root();
-        let (new, new_pane) = split_active(&mut h, 2);
-        enable_focus_reporting(&mut h, root, &root_pane);
-        enable_focus_reporting(&mut h, new, &new_pane);
-        h.send(OrzmuxCommand::SelectPane { pane: root });
-        h.send(OrzmuxCommand::SelectPane { pane: new });
-        assert_eq!(shared.contents(), b"\x1b[O\x1b[I\x1b[O\x1b[I");
+    fn a_pane_that_stops_reading_does_not_freeze_the_backend() {
+        let gate = BlockingSink::default();
+        let thread_gate = gate.clone();
+        let (done_tx, done_rx) = bounded::<(Vec<u8>, bool)>(1);
+        thread::spawn(move || {
+            let mut h = Harness::new();
+            let stuck_writer = thread_gate.clone();
+            *h.log.block_writes_next.lock().unwrap() = Some(thread_gate);
+            let (stuck, _stuck_pane) = h.open_root();
+            let (other, other_pane) = split_active(&mut h, 2);
+            for text in ["x", "y"] {
+                h.send(OrzmuxCommand::KeyInput {
+                    pane: PaneTarget::Id(stuck),
+                    key: TerminalKey::Character(KeyText::new(text).unwrap()),
+                    mods: TerminalModifiers::default(),
+                });
+            }
+            h.send(OrzmuxCommand::Paste {
+                pane: PaneTarget::Id(stuck),
+                text: "a pasted line".to_string(),
+            });
+            stuck_writer.wait_until_writing();
+            h.send(OrzmuxCommand::KeyInput {
+                pane: PaneTarget::Id(other),
+                key: TerminalKey::Character(KeyText::new("z").unwrap()),
+                mods: TerminalModifiers::default(),
+            });
+            h.backend.panes[&other].tty.settle_writes();
+            let other_received = other_pane.sink.contents();
+            h.send(OrzmuxCommand::KillPane {
+                pane: PaneTarget::Id(stuck),
+            });
+            let _ = done_tx.send((other_received, !h.backend.panes.contains_key(&stuck)));
+        });
+        let outcome = done_rx.recv_timeout(Duration::from_secs(10));
+        gate.release();
+        let (other_received, stuck_closed) = match outcome {
+            Ok(outcome) => outcome,
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("the backend froze on a pane that stopped reading stdin")
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                panic!("the harness thread panicked before reporting")
+            }
+        };
+        assert_eq!(other_received, b"z");
+        assert!(stuck_closed);
     }
 
     /// Asserts that a resize publishes one layout whose divider moved
