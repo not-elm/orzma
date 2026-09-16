@@ -71,6 +71,7 @@ option_as_alt = "none"   # "none" | "left" | "right" | "both"
 lines_per_notch = 3              # u32. Lines scrolled per wheel notch.
 fine_modifier = "alt"            # "alt" | "ctrl" | "shift" | "none". Modifier for fine (slow) scroll.
 fine_lines = 1                   # u32. Lines per notch while fine_modifier is held.
+max_protocol_events_per_frame = 8  # u32. Most wheel notches one routing call turns into mouse reports or alternate-scroll cursor keys, per axis; excess notches are dropped.
 cells_per_notch = 0.5            # f32. Vertical wheel accumulation threshold per notch.
 axis_lock_ratio = 0.9            # f32 in 0.0..=1.0. Trackpad dominant-axis lock: horizontal scroll kept only when |x|/hypot(x,y) >= this. 0.0 disables; 1.0 = pure-horizontal only.
 double_click_timeout_ms = 400    # u32. Max ms between clicks to count as double/triple.
@@ -78,7 +79,6 @@ click_drift_px = 8.0             # f32. Max pointer drift (logical px) between c
 drag_threshold_px = 4.0          # f32. Pointer travel (logical px) before a press becomes a drag.
 divider_grab_tolerance_px = 4.0  # f32. Half-width (logical px) of the pane-divider grab zone.
 # --- advanced drag-autoscroll tuning (rarely changed) ---
-max_protocol_events_per_frame = 8  # u32. Most wheel notches one routing call turns into mouse reports or alternate-scroll cursor keys, per axis; excess notches are dropped.
 autoscroll_base_period_ms = 50     # u32. Tick interval when drag-scrolling at the pane edge.
 autoscroll_min_period_ms = 16      # u32. Floor on the autoscroll interval.
 autoscroll_step_ms = 4             # u32. Interval decrement per cell past the edge.

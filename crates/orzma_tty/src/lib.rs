@@ -310,8 +310,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// applies the result: vertical notches become wheel reports while a
     /// mouse tracking level is in force and Shift is not held, cursor keys
     /// while alternate scroll is in effect, and a viewport scroll otherwise;
-    /// horizontal notches become reports only. Whatever both axes encode
-    /// goes out in one PTY write.
+    /// horizontal notches become reports only. Cursor keys snap a
+    /// scrolled-back viewport to the live tail first; reports and viewport
+    /// scrolls leave it where it is. Whatever both axes encode goes out in
+    /// one PTY write.
     ///
     /// # Errors
     ///
@@ -1352,6 +1354,31 @@ mod tests {
             .expect("send_wheel");
         assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<67;6;4M");
         assert_eq!(sink.writes(), 1);
+    }
+
+    /// Asserts that the cursor-key route snaps a scrolled-back viewport to
+    /// the live tail before writing, while the report route leaves the
+    /// viewport where it is.
+    ///
+    /// Case: the user scrolls back through a pane's history, then spins the
+    /// wheel over `less` on the alternate screen; later they do the same over
+    /// nvim, whose mouse tracking takes the wheel.
+    #[test]
+    fn send_wheel_snaps_the_viewport_only_on_the_cursor_key_route() {
+        let (mut term, sink) = detached_term();
+        term.vt.modes.active_screen = ScreenKind::Alternate;
+        term.vt.display_offset = DisplayOffset(5);
+        term.send_wheel(wheel(1, 0), &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(term.vt.display_offset, DisplayOffset(0));
+        assert_eq!(sink.contents(), b"\x1b[A".repeat(3));
+
+        let (mut term, sink) = tracking_term();
+        term.vt.display_offset = DisplayOffset(5);
+        term.send_wheel(wheel(1, 0), &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(term.vt.display_offset, DisplayOffset(5));
+        assert_eq!(sink.contents(), b"\x1b[<64;6;4M");
     }
 
     /// Asserts that a PTY write failure surfaces as `PtyWrite`.

@@ -390,7 +390,7 @@ mod tests {
     }
 
     /// Asserts that a held Alt reaches the request both as the report's
-    /// meta bit and as the fine-scroll modifier.
+    /// Alt bit and as the fine-scroll modifier.
     ///
     /// Case: the user holds Option, the default fine-scroll modifier,
     /// while spinning the wheel.

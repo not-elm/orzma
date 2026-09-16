@@ -270,7 +270,8 @@ mod tests {
     /// notches, and that a zero limit sends nothing.
     ///
     /// Case: a trackpad flick produces twenty notches in one frame over a
-    /// tracking application.
+    /// tracking application, and a user who set the burst limit to zero
+    /// produces the same flick.
     #[test]
     fn reports_are_capped_at_the_burst_limit_and_the_excess_is_dropped() {
         assert_eq!(
