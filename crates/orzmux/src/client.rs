@@ -4,16 +4,19 @@
 use crate::backend::{Backend, ShellFactory};
 use crate::protocol::{CommandSeq, OrzmuxCommand, OrzmuxEvent};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
+use orzma_tty::prelude::WheelConfig;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
-/// What the backend needs to spawn shells.
+/// What the backend needs to spawn shells and route the wheel.
 #[derive(Debug, Clone)]
 pub struct OrzmuxConfig {
     /// Shell override; `None` falls back to `$SHELL`, then `/bin/sh`.
     pub shell: Option<String>,
     /// Scrollback rows every pane retains on its primary screen.
     pub scrollback_rows: usize,
+    /// The wheel-routing policy every pane's terminal applies.
+    pub wheel: WheelConfig,
 }
 
 /// The backend thread could not be started.
@@ -46,10 +49,15 @@ impl OrzmuxClient {
     pub fn spawn(config: OrzmuxConfig) -> Result<Self, OrzmuxSpawnError> {
         let (command_tx, command_rx) = unbounded::<(CommandSeq, OrzmuxCommand)>();
         let (event_tx, event_rx) = unbounded::<OrzmuxEvent>();
-        let factory = ShellFactory::new(config.shell, config.scrollback_rows);
+        let OrzmuxConfig {
+            shell,
+            scrollback_rows,
+            wheel,
+        } = config;
+        let factory = ShellFactory::new(shell, scrollback_rows);
         let thread = thread::Builder::new()
             .name("orzma-mux".to_string())
-            .spawn(move || Backend::new(Box::new(factory), command_rx, event_tx).run())
+            .spawn(move || Backend::new(Box::new(factory), command_rx, event_tx, wheel).run())
             .map_err(OrzmuxSpawnError)?;
         Ok(Self {
             commands: Some(command_tx),

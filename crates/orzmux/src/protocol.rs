@@ -1,7 +1,7 @@
 //! The wire vocabulary between the GUI and the multiplexer backend.
 //! Everything here is plain data: no Bevy types and no GPU handles.
 
-use orzma_tty::prelude::{CellPixels, MouseReport, TerminalKey, TerminalModifiers};
+use orzma_tty::prelude::{CellPixels, MouseReport, TerminalKey, TerminalModifiers, WheelInput};
 use orzma_vt::prelude::{
     CellSide, Frame, GridColumn, GridPoint, GridSize, InstanceId, PlacementSize, ScreenLine,
     Scroll, SelectionKind, VtSignal,
@@ -150,6 +150,14 @@ pub enum OrzmuxCommand {
         pane: PaneId,
         /// The mouse report to encode.
         report: MouseReport,
+    },
+    /// Route one frame's wheel notches over a pane by the pane's live VT
+    /// modes.
+    Wheel {
+        /// The pane under the cursor.
+        pane: PaneId,
+        /// The notches and the modifiers and cell they were gathered with.
+        input: WheelInput,
     },
     /// Scroll a pane's viewport.
     Scroll {

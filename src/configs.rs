@@ -4,6 +4,8 @@
 
 use bevy::prelude::*;
 use orzma_configs::OrzmaConfigs;
+use orzma_configs::mouse::MouseConfig;
+use orzma_tty::prelude::WheelConfig;
 
 /// The resolved `OrzmaConfigs`, loaded once at app build time.
 #[derive(Resource, Debug, Default, Deref)]
@@ -56,6 +58,16 @@ impl Plugin for OrzmaConfigsPlugin {
             }
         });
         app.insert_resource(OrzmaConfigsResource(configs));
+    }
+}
+
+/// The wheel-routing policy the backend applies, from the `[mouse]`
+/// block.
+pub(crate) fn wheel_config(mc: &MouseConfig) -> WheelConfig {
+    WheelConfig {
+        lines_per_notch: mc.lines_per_notch,
+        fine_lines: mc.fine_lines,
+        max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
     }
 }
 
@@ -186,5 +198,24 @@ mod tests {
             std::env::remove_var("ORZMA_CONFIG");
         }
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Asserts that each `[mouse]` wheel field lands on its `WheelConfig`
+    /// counterpart.
+    ///
+    /// Case: a user sets `lines_per_notch = 5`, `fine_lines = 2`, and
+    /// `max_protocol_events_per_frame = 16` in config.toml.
+    #[test]
+    fn wheel_config_maps_the_mouse_block() {
+        let mc = MouseConfig {
+            lines_per_notch: 5,
+            fine_lines: 2,
+            max_protocol_events_per_frame: 16,
+            ..MouseConfig::default()
+        };
+        let out = wheel_config(&mc);
+        assert_eq!(out.lines_per_notch, 5);
+        assert_eq!(out.fine_lines, 2);
+        assert_eq!(out.max_protocol_events_per_frame, 16);
     }
 }
