@@ -15,7 +15,8 @@ pub struct WheelConfig {
     pub fine_lines: u32,
     /// The most notches one routing call turns into mouse reports or
     /// cursor keys; the notches past it are dropped. Cursor keys
-    /// additionally stop at 240 per call, whatever the lines per notch.
+    /// additionally stop at [`MAX_CURSOR_KEYS`] per call, whatever the
+    /// lines per notch.
     pub max_protocol_events_per_frame: u32,
 }
 
@@ -28,6 +29,10 @@ impl Default for WheelConfig {
         }
     }
 }
+
+/// The most cursor keys one routing call sends, whatever the lines per
+/// notch.
+pub const MAX_CURSOR_KEYS: u32 = 240;
 
 /// The held modifiers wheel routing reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -88,8 +93,9 @@ impl WheelDecision {
     /// Otherwise, while alternate scroll is in effect, the notches' lines
     /// become cursor keys, and anything else scrolls the viewport. Reports
     /// and cursor keys cover at most `max_protocol_events_per_frame`
-    /// notches, cursor keys number at most 240 whatever the lines per
-    /// notch, and a viewport scroll saturates rather than overflowing.
+    /// notches, cursor keys number at most [`MAX_CURSOR_KEYS`] whatever
+    /// the lines per notch, and a viewport scroll saturates rather than
+    /// overflowing.
     /// Zero notches, or a count that comes out zero, route to
     /// [`Self::Noop`].
     pub(crate) fn route(
@@ -165,9 +171,6 @@ impl WheelDecision {
         }
     }
 }
-
-/// The most cursor keys one routing call sends.
-const MAX_CURSOR_KEYS: u32 = 240;
 
 fn lines_per_notch(mods: WheelModifiers, cfg: &WheelConfig) -> u32 {
     if mods.fine {
