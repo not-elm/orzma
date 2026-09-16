@@ -55,6 +55,37 @@ impl Write for FailingSink {
     }
 }
 
+/// A `Write` sink that captures every byte and counts the `write` calls
+/// that delivered them.
+#[derive(Clone, Default)]
+pub struct CountingSink {
+    bytes: CaptureSink,
+    writes: Arc<Mutex<usize>>,
+}
+
+impl CountingSink {
+    /// Returns a copy of every byte written so far, in write order.
+    pub fn contents(&self) -> Vec<u8> {
+        self.bytes.contents()
+    }
+
+    /// Returns how many `write` calls have landed so far.
+    pub fn writes(&self) -> usize {
+        *self.writes.lock().unwrap()
+    }
+}
+
+impl Write for CountingSink {
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+        *self.writes.lock().unwrap() += 1;
+        self.bytes.write(buf)
+    }
+
+    fn flush(&mut self) -> IoResult<()> {
+        Ok(())
+    }
+}
+
 /// Scriptable [`Vt`] fake for exercising `OrzmaTty` without a real
 /// emulator.
 ///

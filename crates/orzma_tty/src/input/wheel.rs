@@ -2,11 +2,11 @@
 //! cursor keys, or a viewport scroll, from the modes the application set.
 
 use crate::input::keyboard::TerminalKey;
-use crate::input::mouse::MouseButton;
+use crate::input::mouse::{CellCoord, MouseButton, ProtocolModifiers};
 use orzma_vt::prelude::VtModes;
 
 /// Wheel-routing policy.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WheelConfig {
     /// Lines one notch moves, as a viewport scroll or as cursor keys,
     /// while the fine-scroll modifier is not held.
@@ -39,9 +39,25 @@ pub struct WheelModifiers {
     pub fine: bool,
 }
 
+/// One frame's wheel notches over a terminal, with what routing them needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WheelInput {
+    /// Vertical notches; positive is wheel-up.
+    pub up: i32,
+    /// Horizontal notches; positive is rightward.
+    pub right: i32,
+    /// The held modifiers routing reads.
+    pub mods: WheelModifiers,
+    /// The cell under the cursor, or `None` off the grid. A report needs
+    /// it and is dropped without one.
+    pub cell: Option<CellCoord>,
+    /// The modifier bits every report carries.
+    pub report_mods: ProtocolModifiers,
+}
+
 /// Where one axis of a wheel gesture goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WheelDecision {
+pub(crate) enum WheelDecision {
     /// Wheel reports bound for the application, each a press of `button`.
     Report {
         /// The wheel button every report carries.
@@ -75,7 +91,12 @@ impl WheelDecision {
     /// notch, and a viewport scroll saturates rather than overflowing.
     /// Zero notches, or a count that comes out zero, route to
     /// [`Self::Noop`].
-    pub fn route(modes: VtModes, notches: i32, mods: WheelModifiers, cfg: &WheelConfig) -> Self {
+    pub(crate) fn route(
+        modes: VtModes,
+        notches: i32,
+        mods: WheelModifiers,
+        cfg: &WheelConfig,
+    ) -> Self {
         if notches == 0 {
             return Self::Noop;
         }
@@ -112,7 +133,7 @@ impl WheelDecision {
     /// route: every notch becomes one report, and the reports cover at
     /// most `max_protocol_events_per_frame` notches. Zero notches, a count
     /// that comes out zero, and everything else route to [`Self::Noop`].
-    pub fn route_horizontal(
+    pub(crate) fn route_horizontal(
         modes: VtModes,
         notches: i32,
         mods: WheelModifiers,

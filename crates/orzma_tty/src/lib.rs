@@ -4,7 +4,10 @@
 use crate::{
     coalescer::Coalescer,
     error::OrzmaTtyResult,
-    input::{MouseReport, PtyInput, TerminalKey, TerminalModifiers},
+    input::{
+        MouseReport, MouseReportKind, PtyInput, TerminalKey, TerminalModifiers, WheelConfig,
+        WheelDecision, WheelInput,
+    },
     pty::{ChunkPoll, ExitPoll, Pty},
     signal::TtySignal,
 };
@@ -303,6 +306,31 @@ impl<V: Vt> OrzmaTty<V> {
             .write_all(PtyInput::encode_mouse(&report, modes.mouse_encoding).as_bytes())
     }
 
+    /// Routes one frame's wheel notches by the VT's current modes and
+    /// applies the result: vertical notches become wheel reports while a
+    /// mouse tracking level is in force and Shift is not held, cursor keys
+    /// while alternate scroll is in effect, and a viewport scroll otherwise;
+    /// horizontal notches become reports only. Whatever both axes encode
+    /// goes out in one PTY write.
+    ///
+    /// # Errors
+    ///
+    /// A PTY write failure.
+    pub fn send_wheel(&mut self, input: WheelInput, cfg: &WheelConfig) -> OrzmaTtyResult {
+        let modes = self.vt.modes();
+        let mut bytes = Vec::new();
+        for decision in [
+            WheelDecision::route(modes, input.up, input.mods, cfg),
+            WheelDecision::route_horizontal(modes, input.right, input.mods, cfg),
+        ] {
+            self.stage_wheel_decision(&mut bytes, decision, input, modes);
+        }
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.pty.write_all(&bytes)
+    }
+
     /// Writes a paste of clipboard text to the PTY, honouring
     /// bracketed-paste mode (DECSET 2004).
     ///
@@ -460,6 +488,44 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
+    /// Appends the PTY bytes `decision` encodes to `bytes`, or applies its
+    /// viewport scroll. A report needs `input.cell` and is dropped without
+    /// one.
+    fn stage_wheel_decision(
+        &mut self,
+        bytes: &mut Vec<u8>,
+        decision: WheelDecision,
+        input: WheelInput,
+        modes: VtModes,
+    ) {
+        match decision {
+            WheelDecision::Report { button, count } => {
+                let Some(cell) = input.cell else {
+                    return;
+                };
+                let report = MouseReport {
+                    button,
+                    kind: MouseReportKind::Press,
+                    cell,
+                    mods: input.report_mods,
+                };
+                let encoded = PtyInput::encode_mouse(&report, modes.mouse_encoding);
+                for _ in 0..count {
+                    bytes.extend_from_slice(encoded.as_bytes());
+                }
+            }
+            WheelDecision::CursorKeys { key, count } => {
+                self.snap_to_live_tail();
+                let encoded = PtyInput::encode_key(&key, &TerminalModifiers::default(), modes);
+                for _ in 0..count {
+                    bytes.extend_from_slice(encoded.as_bytes());
+                }
+            }
+            WheelDecision::ScrollViewport(lines) => self.scroll(Scroll::Delta(lines)),
+            WheelDecision::Noop => {}
+        }
+    }
+
     /// Interprets queued chunks up to the budget. Returns whether the
     /// output stream is disconnected (the reader thread is gone).
     fn drain_chunks(&mut self) -> bool {
@@ -518,8 +584,11 @@ impl<V: Vt> OrzmaTty<V> {
 mod tests {
     use super::*;
     use crate::error::OrzmaTtyError;
-    use crate::input::{CellCoord, MouseButton, MouseReportKind, ProtocolModifiers};
-    use crate::test_support::{CaptureSink, FailingMaster, FailingSink, FakeVt};
+    use crate::input::{
+        CellCoord, MouseButton, MouseReportKind, ProtocolModifiers, WheelConfig, WheelInput,
+        WheelModifiers,
+    };
+    use crate::test_support::{CaptureSink, CountingSink, FailingMaster, FailingSink, FakeVt};
     use crossbeam_channel::{Sender, unbounded};
 
     fn grid(cols: u16, rows: u16) -> GridSize {
@@ -536,6 +605,41 @@ mod tests {
             Box::new(sink.clone()),
         )
         .expect("OrzmaTty::detached");
+        (term, sink)
+    }
+
+    /// A wheel frame of `up` vertical and `right` horizontal notches over
+    /// cell (6, 4), with no modifiers held.
+    fn wheel(up: i32, right: i32) -> WheelInput {
+        WheelInput {
+            up,
+            right,
+            mods: WheelModifiers::default(),
+            cell: Some(CellCoord { col: 6, row: 4 }),
+            report_mods: ProtocolModifiers::default(),
+        }
+    }
+
+    /// A terminal whose VT tracks button events with SGR reports, as nvim
+    /// leaves it.
+    fn tracking_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
+        let (mut term, sink) = detached_term();
+        term.vt.modes.mouse_tracking = MouseTracking::Drag;
+        term.vt.modes.mouse_encoding = MouseEncoding::Sgr;
+        (term, sink)
+    }
+
+    /// A tracking terminal whose sink also counts the PTY writes.
+    fn counting_tracking_term() -> (OrzmaTty<FakeVt>, CountingSink) {
+        let sink = CountingSink::default();
+        let mut term = OrzmaTty::detached(
+            FakeVt::new(grid(80, 24)),
+            grid(80, 24),
+            Box::new(sink.clone()),
+        )
+        .expect("OrzmaTty::detached");
+        term.vt.modes.mouse_tracking = MouseTracking::Drag;
+        term.vt.modes.mouse_encoding = MouseEncoding::Sgr;
         (term, sink)
     }
 
@@ -1076,9 +1180,8 @@ mod tests {
     /// tracking level is in force, and writes nothing while none is.
     ///
     /// Case: nvim exits, dropping DECRST 1002 and 1006, while the user is
-    /// still spinning the wheel, so a wheel report the GUI already routed
-    /// against the pane's stale tracking modes reaches `send_mouse` right
-    /// after.
+    /// still clicking in the pane, so a button report the host already
+    /// forwarded reaches `send_mouse` right after.
     #[test]
     fn send_mouse_only_writes_while_a_tracking_level_is_in_force() {
         let report = MouseReport {
@@ -1099,6 +1202,174 @@ mod tests {
         assert_eq!(sink.contents(), b"", "construction must write nothing");
         term.send_mouse(report).expect("send_mouse");
         assert_eq!(sink.contents(), b"");
+    }
+
+    /// Asserts that `send_wheel` over a tracking terminal writes one
+    /// wheel-up report per notch, all in one write, and scrolls nothing.
+    ///
+    /// Case: nvim runs with `mouse=nvi`, and the user spins the wheel up
+    /// two notches over its buffer.
+    #[test]
+    fn send_wheel_over_a_tracking_terminal_writes_a_report_per_notch() {
+        let (mut term, sink) = counting_tracking_term();
+        term.send_wheel(wheel(2, 0), &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<64;6;4M");
+        assert_eq!(sink.writes(), 1);
+        assert!(term.vt.scrolls.is_empty());
+    }
+
+    /// Asserts that a wheel report carries the modifier bits the host
+    /// gathered.
+    ///
+    /// Case: the user holds Option while spinning the wheel over nvim.
+    #[test]
+    fn send_wheel_reports_carry_the_gathered_modifier_bits() {
+        let (mut term, sink) = tracking_term();
+        let input = WheelInput {
+            report_mods: ProtocolModifiers {
+                alt: true,
+                ..ProtocolModifiers::default()
+            },
+            ..wheel(1, 0)
+        };
+        term.send_wheel(input, &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(sink.contents(), b"\x1b[<72;6;4M");
+    }
+
+    /// Asserts that a tracking terminal writes nothing for notches
+    /// gathered with no cell under the cursor.
+    ///
+    /// Case: the wheel spins while the cursor sits on the pane's border
+    /// padding, outside the grid.
+    #[test]
+    fn send_wheel_drops_reports_without_a_cell() {
+        let (mut term, sink) = tracking_term();
+        let input = WheelInput {
+            cell: None,
+            ..wheel(2, 0)
+        };
+        term.send_wheel(input, &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(sink.contents(), b"");
+    }
+
+    /// Asserts that `send_wheel` over the alternate screen without
+    /// tracking writes the notches' lines as cursor keys in one write,
+    /// honouring DECCKM.
+    ///
+    /// Case: `less` shows a long file on the alternate screen, and the
+    /// user spins the wheel up two notches; then the same inside an
+    /// application that also set application cursor keys.
+    #[test]
+    fn send_wheel_over_the_alternate_screen_writes_cursor_keys() {
+        let (mut term, sink) = detached_term();
+        term.vt.modes.active_screen = ScreenKind::Alternate;
+        term.send_wheel(wheel(2, 0), &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(sink.contents(), b"\x1b[A".repeat(6));
+
+        let (mut term, sink) = detached_term();
+        term.vt.modes.active_screen = ScreenKind::Alternate;
+        term.vt.modes.app_cursor = true;
+        term.send_wheel(wheel(1, 0), &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(sink.contents(), b"\x1bOA".repeat(3));
+    }
+
+    /// Asserts that Shift over a tracking alternate screen skips the
+    /// reports and writes cursor keys instead.
+    ///
+    /// Case: the user holds Shift and scrolls over nvim, whose mouse
+    /// tracking would otherwise take the wheel.
+    #[test]
+    fn send_wheel_with_shift_over_a_tracking_alternate_screen_writes_cursor_keys() {
+        let (mut term, sink) = tracking_term();
+        term.vt.modes.active_screen = ScreenKind::Alternate;
+        let input = WheelInput {
+            mods: WheelModifiers {
+                shift: true,
+                fine: false,
+            },
+            ..wheel(2, 0)
+        };
+        term.send_wheel(input, &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(sink.contents(), b"\x1b[A".repeat(6));
+    }
+
+    /// Asserts that horizontal notches become wheel-left / wheel-right
+    /// reports over a tracking terminal and nothing otherwise.
+    ///
+    /// Case: the user swipes a trackpad sideways over nvim, then over a
+    /// shell prompt.
+    #[test]
+    fn send_wheel_routes_horizontal_notches_to_reports_only() {
+        let (mut term, sink) = tracking_term();
+        term.send_wheel(wheel(0, 1), &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(sink.contents(), b"\x1b[<67;6;4M");
+
+        let (mut term, sink) = tracking_term();
+        term.send_wheel(wheel(0, -1), &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(sink.contents(), b"\x1b[<66;6;4M");
+
+        let (mut term, sink) = detached_term();
+        term.send_wheel(wheel(0, 1), &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(sink.contents(), b"");
+        assert!(term.vt.scrolls.is_empty());
+    }
+
+    /// Asserts that `send_wheel` on the primary screen without tracking
+    /// scrolls the viewport by the notches' lines, writes nothing, and
+    /// arms a repaint.
+    ///
+    /// Case: the user spins the wheel up two notches at a shell prompt
+    /// with output in scrollback.
+    #[test]
+    fn send_wheel_on_the_primary_screen_scrolls_the_viewport() {
+        let (mut term, sink) = detached_term();
+        term.vt.scroll_moves = true;
+        term.send_wheel(wheel(2, 0), &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(term.vt.scrolls, vec![Scroll::Delta(6)]);
+        assert_eq!(sink.contents(), b"");
+        assert!(term.coalescer.is_armed());
+    }
+
+    /// Asserts that a frame carrying both axes over a tracking terminal
+    /// goes out as one write with the vertical reports first.
+    ///
+    /// Case: a diagonal trackpad swipe over nvim with the axis lock
+    /// disabled leaves one notch on each axis.
+    #[test]
+    fn send_wheel_writes_both_axes_in_one_write_vertical_first() {
+        let (mut term, sink) = counting_tracking_term();
+        term.send_wheel(wheel(1, 1), &WheelConfig::default())
+            .expect("send_wheel");
+        assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<67;6;4M");
+        assert_eq!(sink.writes(), 1);
+    }
+
+    /// Asserts that a PTY write failure surfaces as `PtyWrite`.
+    ///
+    /// Case: the shell's PTY closed under the wheel gesture.
+    #[test]
+    fn send_wheel_reports_a_pty_write_failure() {
+        let mut term = OrzmaTty::detached(
+            FakeVt::new(grid(80, 24)),
+            grid(80, 24),
+            Box::new(FailingSink),
+        )
+        .expect("OrzmaTty::detached");
+        term.vt.modes.mouse_tracking = MouseTracking::Drag;
+        assert!(matches!(
+            term.send_wheel(wheel(1, 0), &WheelConfig::default()),
+            Err(OrzmaTtyError::PtyWrite(_))
+        ));
     }
 
     /// Asserts that paste encoding consults the VT-reported bracketed
