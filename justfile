@@ -114,14 +114,14 @@ icon *args:
 
 # build and package the orzma .app (extra args pass through, e.g. --version 1.2.3)
 [macos]
-bundle-macos *args: orzmd-web
+bundle *args: orzmd-web
     pnpm i
     pnpm build
     python3 scripts/bundle_macos.py {{ args }}
 
 # setup-cef-release then bundle with notarization
 [macos]
-release-macos *args: setup-cef-release orzmd-web
+release *args: setup-cef-release orzmd-web
     python3 scripts/bundle_macos.py --notarize {{ args }}
 
 # refresh the vendored Chromium credits from the provisioned CEF dir (run on cef_version bump)
