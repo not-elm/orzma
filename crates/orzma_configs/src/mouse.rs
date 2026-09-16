@@ -29,7 +29,10 @@ pub struct MouseConfig {
     pub fine_modifier: FineModifier,
     /// Lines scrolled per notch when the fine modifier is held.
     pub fine_lines: u32,
-    /// Upper bound on mouse-protocol events emitted per frame.
+    /// The most wheel notches one routing call turns into mouse reports
+    /// or alternate-scroll cursor keys, per axis. The excess notches are
+    /// dropped, and cursor keys additionally stop at a fixed per-call
+    /// ceiling whatever `lines_per_notch` says.
     pub max_protocol_events_per_frame: u32,
     /// Wheel-input accumulation threshold expressed in cells of input
     /// per emitted "notch". A lower value is more responsive, firing a

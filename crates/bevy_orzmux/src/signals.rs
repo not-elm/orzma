@@ -1,6 +1,4 @@
-//! The outbound signals the drain turns the backend's events into: one
-//! `EntityEvent` per drained `VtSignal`, plus the backend's answer to a
-//! copy request.
+//! The outbound signals the drain turns the backend's events into.
 
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
@@ -30,16 +28,6 @@ pub struct TtyTitleChangedSignal {
 pub struct TtyTitleResetSignal {
     #[event_target]
     pub terminal: Entity,
-}
-
-/// Fired for the mode flags that transitioned since the previous drain,
-/// as mode names (e.g. "alt-screen"). [`OrzmaVt`] never raises it.
-#[derive(EntityEvent, Debug, Clone)]
-pub struct TtyModeChangedSignal {
-    #[event_target]
-    pub entity: Entity,
-    pub added: Vec<String>,
-    pub removed: Vec<String>,
 }
 
 /// Fired when the application copies data to the system clipboard via
@@ -165,11 +153,6 @@ pub(crate) fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signa
         VtSignal::WebviewEvicted { placements } => commands.trigger(TtyWebviewEvictedSignal {
             terminal,
             placements,
-        }),
-        VtSignal::ModeChange { added, removed } => commands.trigger(TtyModeChangedSignal {
-            entity: terminal,
-            added: added.into_iter().map(String::from).collect(),
-            removed: removed.into_iter().map(String::from).collect(),
         }),
     }
 }

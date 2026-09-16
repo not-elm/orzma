@@ -25,7 +25,7 @@ use bevy_orzma_webview_host::WebviewAssetRegistry;
 use bevy_orzmux::prelude::{
     OrzmuxClient, OrzmuxConfig, OrzmuxConnection, OrzmuxPlugin, OrzmuxSystems,
 };
-use configs::OrzmaConfigsPlugin;
+use configs::{OrzmaConfigsPlugin, wheel_config};
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
 use session::SessionPlugin;
@@ -49,6 +49,7 @@ fn main() {
     let orzmux = match OrzmuxClient::spawn(OrzmuxConfig {
         shell: pre_configs.orzma.shell.clone(),
         scrollback_rows: SCROLLBACK_ROWS,
+        wheel: wheel_config(&pre_configs.mouse),
     }) {
         Ok(client) => client,
         Err(err) => {

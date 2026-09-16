@@ -26,8 +26,8 @@ mod vi;
 pub mod prelude {
     pub use crate::device::color::{Color, Palette, Rgb};
     pub use crate::device::modes::{
-        AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode, MouseEncoding,
-        MouseTracking, ScreenKind, TextCursorEnable, TextCursorModes, VtModes,
+        AlternateScroll, AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode,
+        MouseEncoding, MouseTracking, ScreenKind, TextCursorEnable, TextCursorModes, VtModes,
     };
     pub use crate::error::{GridSizeError, RunError, StampError, VtError, VtResult};
     pub use crate::frame::{DirtyRow, Frame};
@@ -301,16 +301,6 @@ pub enum VtSignal {
     WebviewEvicted {
         /// The instances that were evicted.
         placements: Vec<InstanceId>,
-    },
-    /// Mode flags that transitioned since the previous signal drain, as
-    /// mode names (e.g. "alt-screen").
-    ///
-    /// [`OrzmaVt`] never raises it.
-    ModeChange {
-        /// Mode names that were enabled.
-        added: Vec<&'static str>,
-        /// Mode names that were disabled.
-        removed: Vec<&'static str>,
     },
 }
 

@@ -37,7 +37,7 @@ pub struct VtModes {
     /// It takes effect only while [`Self::active_screen`] is
     /// [`ScreenKind::Alternate`], so a reader must go through
     /// [`Self::alternate_scroll_active`] rather than read it on its own.
-    pub alternate_scroll: bool,
+    pub alternate_scroll: AlternateScroll,
     /// DECSET 1004: the app wants `CSI I` / `CSI O` focus reports.
     pub focus_in_out: bool,
     /// How the text cursor is presented: its visibility, shape, and
@@ -53,6 +53,12 @@ pub struct VtModes {
 }
 
 impl VtModes {
+    /// Whether a mouse tracking level is in force, so the application
+    /// takes mouse reports.
+    pub const fn mouse_reporting_active(&self) -> bool {
+        !matches!(self.mouse_tracking, MouseTracking::Off)
+    }
+
     /// Whether alternate-scroll translation is in effect: DECSET 1007
     /// set *and* the alternate screen shown.
     ///
@@ -60,7 +66,8 @@ impl VtModes {
     /// tracking mode outranks alternate scroll, and the caller must
     /// resolve that order itself.
     pub const fn alternate_scroll_active(&self) -> bool {
-        matches!(self.active_screen, ScreenKind::Alternate) && self.alternate_scroll
+        matches!(self.active_screen, ScreenKind::Alternate)
+            && matches!(self.alternate_scroll, AlternateScroll::Enabled)
     }
 }
 
@@ -126,6 +133,44 @@ impl AutoWrap {
     /// Whether a character at the right border wraps.
     pub const fn wraps(self) -> bool {
         matches!(self, Self::Enabled)
+    }
+}
+
+/// Whether the wheel sends cursor up and down while the alternate screen
+/// is shown.
+///
+/// The default is [`Self::Enabled`], the set rather than the reset
+/// state.
+///
+/// # Control Functions
+///
+/// - `DECSET 1007` / `DECRST 1007` (xterm)
+///
+/// # References
+///
+/// - xterm-ctlseqs.pdf p.19 — "Enable Alternate Scroll Mode, xterm."
+/// - xterm-ctlseqs.pdf p.56 — "However if Alternate Scroll mode is set,
+///   then cursor up/down controls are sent when the terminal is
+///   displaying the Alternate Screen Buffer."
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AlternateScroll {
+    /// While the alternate screen is shown, the wheel sends cursor up
+    /// and down.
+    #[default]
+    Enabled,
+    /// The wheel never becomes cursor keys.
+    Disabled,
+}
+
+impl AlternateScroll {
+    /// The mode `DECSET 1007` selects when set and `DECRST 1007` when
+    /// reset.
+    pub fn from_decset(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
     }
 }
 
@@ -527,5 +572,75 @@ mod tests {
             .expect("the parameter is assigned");
         assert_eq!(barred.enable, TextCursorEnable::Hidden);
         assert_eq!(barred.shape, CursorShape::Bar);
+    }
+
+    /// Asserts that a device that has seen no DECSET 1007 starts with
+    /// alternate scroll enabled, which is the set rather than the reset
+    /// state.
+    ///
+    /// Case: `less` opens a long file on the alternate screen without
+    /// tracking the mouse, and the user spins the wheel at once.
+    #[test]
+    fn alternate_scroll_starts_enabled() {
+        assert_eq!(
+            VtModes::default().alternate_scroll,
+            AlternateScroll::Enabled
+        );
+    }
+
+    /// Asserts that `DECSET 1007` selects `Enabled` and `DECRST 1007`
+    /// selects `Disabled`.
+    ///
+    /// Case: a pager that wants the wheel for itself turns alternate
+    /// scroll off at startup and turns it back on when it exits.
+    #[test]
+    fn decset_1007_selects_enabled_and_decrst_selects_disabled() {
+        assert_eq!(AlternateScroll::from_decset(true), AlternateScroll::Enabled);
+        assert_eq!(
+            AlternateScroll::from_decset(false),
+            AlternateScroll::Disabled
+        );
+    }
+
+    /// Asserts that alternate scroll is in effect only while the
+    /// alternate screen is shown and the mode is enabled.
+    ///
+    /// Case: the user spins the wheel at a shell prompt, then inside
+    /// `man`, which switched to the alternate screen.
+    #[test]
+    fn alternate_scroll_is_active_only_on_the_alternate_screen() {
+        let primary = VtModes::default();
+        let alternate = VtModes {
+            active_screen: ScreenKind::Alternate,
+            ..VtModes::default()
+        };
+        let disabled = VtModes {
+            alternate_scroll: AlternateScroll::Disabled,
+            ..alternate
+        };
+        assert!(!primary.alternate_scroll_active());
+        assert!(alternate.alternate_scroll_active());
+        assert!(!disabled.alternate_scroll_active());
+    }
+
+    /// Asserts that mouse reporting is active at every tracking level and
+    /// inactive only with tracking off.
+    ///
+    /// Case: nvim turns on button-event tracking at startup and turns it
+    /// off again when it exits back to the shell.
+    #[test]
+    fn mouse_reporting_is_inactive_only_with_tracking_off() {
+        assert!(!VtModes::default().mouse_reporting_active());
+        for level in [
+            MouseTracking::Clicks,
+            MouseTracking::Drag,
+            MouseTracking::Motion,
+        ] {
+            let modes = VtModes {
+                mouse_tracking: level,
+                ..VtModes::default()
+            };
+            assert!(modes.mouse_reporting_active(), "{level:?}");
+        }
     }
 }
