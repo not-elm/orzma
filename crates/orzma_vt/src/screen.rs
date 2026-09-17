@@ -14,7 +14,7 @@ pub(crate) mod placements;
 
 mod state;
 
-use self::cell::{Cell, CellExtra, CellWidth, GlyphClass, Pen};
+use self::cell::{Cell, CellExtra, CellWidth, ClassifiedGlyph, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
@@ -189,11 +189,10 @@ impl Screen {
     /// as the wrap left them.
     #[cfg(test)]
     pub fn print(&mut self, c: char, options: PrintOptions) -> VtResult<Option<DamageSpan>> {
-        let glyph = self.translate(c);
-        let Some(class) = GlyphClass::of(glyph.0) else {
+        let Some(glyph) = ClassifiedGlyph::classify(self.translate(c)) else {
             return Ok(None);
         };
-        self.print_graphic(glyph, class, options)
+        self.print_graphic(glyph, options)
     }
 
     /// Maps `c` through the character set a pending single shift invokes,
@@ -206,8 +205,6 @@ impl Screen {
     /// Prints a glyph already mapped through a character set at the cursor
     /// with the current pen, as `options` shape it, wrapping first when the
     /// deferred wrap is armed and autowrap is set.
-    ///
-    /// `class` must be the class [`GlyphClass::of`] reports for the glyph.
     ///
     /// A pending single shift stays pending.
     ///
@@ -234,10 +231,11 @@ impl Screen {
     /// as the wrap left them.
     pub fn print_graphic(
         &mut self,
-        GraphicChar(glyph): GraphicChar,
-        class: GlyphClass,
+        classified: ClassifiedGlyph,
         options: PrintOptions,
     ) -> VtResult<Option<DamageSpan>> {
+        let glyph = classified.glyph();
+        let class = classified.class();
         let Some(width) = class.body_width() else {
             return Ok(self.attach_zero_width(glyph));
         };

@@ -2,6 +2,7 @@
 
 use crate::device::color::Color;
 use crate::hyperlink::HyperlinkId;
+use crate::screen::character_sets::GraphicChar;
 use crate::screen::grid::run::Style;
 use unicode_width::UnicodeWidthChar;
 
@@ -83,6 +84,36 @@ impl GlyphClass {
             Self::Wide => Some(BodyWidth::Wide),
             Self::ZeroWidth => None,
         }
+    }
+}
+
+/// A character already mapped through a character set, paired with the
+/// [`GlyphClass`] it prints as.
+///
+/// # Invariants
+///
+/// The class is the one [`GlyphClass::of`] reports for the character.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClassifiedGlyph {
+    glyph: char,
+    class: GlyphClass,
+}
+
+impl ClassifiedGlyph {
+    /// Classifies a mapped character; `None` for a character with no
+    /// reported width, such as a control character.
+    pub fn classify(GraphicChar(glyph): GraphicChar) -> Option<Self> {
+        GlyphClass::of(glyph).map(|class| Self { glyph, class })
+    }
+
+    /// The mapped character.
+    pub fn glyph(self) -> char {
+        self.glyph
+    }
+
+    /// The class the character prints as.
+    pub fn class(self) -> GlyphClass {
+        self.class
     }
 }
 

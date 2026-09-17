@@ -20,7 +20,6 @@ use crate::interpreter::osc::dynamic_color::{
 use crate::interpreter::osc::hyperlink::HyperlinkRequest;
 use crate::interpreter::osc::palette::{PaletteRequest, palette_reply};
 use crate::interpreter::osc::{OscTerminator, current_dir, window_title};
-use crate::screen::cell::GlyphClass;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::screen::tabs::CharacterTabEdit;
@@ -578,11 +577,8 @@ impl Executor<'_> {
         let Some(glyph) = self.device.preceding_graphic() else {
             return;
         };
-        let Some(class) = GlyphClass::of(glyph.0) else {
-            return;
-        };
         for _ in 0..count {
-            let Ok(damage) = self.device.print_graphic(glyph, class) else {
+            let Ok(damage) = self.device.print_graphic(glyph) else {
                 return;
             };
             self.stage(damage);
