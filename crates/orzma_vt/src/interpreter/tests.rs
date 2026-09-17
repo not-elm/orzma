@@ -179,6 +179,7 @@ mod palette;
 mod parser_limits;
 mod printing;
 mod private_modes;
+mod repeat;
 mod reset;
 mod reverse_index;
 mod sgr;

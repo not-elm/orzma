@@ -12,6 +12,7 @@ use crate::error::VtResult;
 use crate::frame::damage::DamageSpan;
 use crate::hyperlink::{HyperlinkId, HyperlinkInterner, HyperlinkUri};
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
+use crate::screen::cell::GlyphClass;
 use crate::screen::character_sets::GraphicChar;
 use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
@@ -126,9 +127,10 @@ impl DeviceState {
     /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
     /// refuses the character.
     pub fn print(&mut self, c: char) -> VtResult<Option<DamageSpan>> {
-        // TODO: record a mapped character one or two columns wide as the
-        // preceding graphic character.
         let glyph = self.active_screen_mut().translate(c);
+        if GlyphClass::of(glyph.0).is_some_and(|class| class.body_width().is_some()) {
+            self.preceding_graphic = Some(glyph);
+        }
         self.print_graphic(glyph)
     }
 
@@ -194,7 +196,7 @@ impl DeviceState {
     ///
     /// - `RIS` (`ESC c`)
     pub fn reset(&mut self) -> Option<DamageSpan> {
-        // TODO: clear the preceding graphic character.
+        self.preceding_graphic = None;
         let was_showing_alternate = matches!(self.modes.active_screen, ScreenKind::Alternate);
         let primary = self.screens.primary.reset();
         let _ = self.screens.alternate.reset();
