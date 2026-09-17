@@ -118,9 +118,9 @@ impl DeviceState {
     /// placing it. A zero-width mark and a character with no width leave the
     /// preceding graphic character as it was.
     ///
-    /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
-    /// the row the character landed on, or `None` when that row has
-    /// scrolled out of the window.
+    /// Reports [`DamageSpan::Full`] when a wrap scrolled, otherwise every
+    /// row the character touched, or `None` when nothing changed or those
+    /// rows have scrolled out of the window.
     ///
     /// # Errors
     ///

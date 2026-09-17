@@ -9,10 +9,8 @@ ECMA-48 が定めていない部分（制御機能を挟んだ場合、結合文
 - 承認後、著者の判断で TC-A11（`CSI 0 b`）を追加した（2026-09-17）。manual とは食い違う契約なので、仕様から導いたケースではない（付録「仕様の矛盾」）。
 - この一覧は仕様から導いたものを自分で検証しただけで、他の誰かがレビューしたものではない。使う前に引用を 1〜2 件確かめてほしい。
 
-**前提となる木の状態。** 対象メソッドと、それが呼ぶ `DeviceState::preceding_graphic` / `DeviceState::print_graphic` / `Screen::translate` / `Screen::print_graphic` は、この一覧を作る前に骨組みとして作業ツリーに追加した（未コミット）。
-`DeviceState::print` が記憶を更新する処理と `DeviceState::reset` が記憶を消す処理は、まだ `// TODO:` のまま。
-下の Rust はその作業ツリーに対して書いたが、**ビルドしていない**。写経用の提案として扱ってほしい。
-記憶の更新が未実装の今の骨組みでは、TC-A1 と TC-A2 以外は失敗する見込み。
+**前提となる木の状態。** 対象メソッドと、それが呼ぶ `DeviceState::preceding_graphic` / `DeviceState::print_graphic` / `Screen::translate` / `Screen::print_graphic` は、この一覧を作る前に骨組みとして追加した（コミット `f31b3134`）。
+記憶の更新と RIS での消去はコミット `13e3cc47` で実装し、下の 22 件は `crates/orzma_vt/src/interpreter/tests/repeat.rs` に書き写して、すべて通っている。
 
 ## テストケース一覧
 
@@ -118,7 +116,7 @@ fn a_repeat_without_a_parameter_prints_the_preceding_character_once() {
 | Act | `A` `CSI 1 b` |
 | Expect | 列 0〜1 が `A` **[C1]** ／ 列 2 が空白 **[C1]** |
 
-数値パラメータの展開（省略・1・2 以上・0）のうちの明示の 1。0 は仕様の矛盾に回したので、この一覧にはない（付録）。
+数値パラメータの展開（省略・1・2 以上・0）のうちの明示の 1。0 は仕様と食い違うため、著者の判断で足した TC-A11 が扱う（付録「仕様の矛盾」）。
 
 ```rust
 /// Asserts that `REP` with an explicit count of one prints the preceding
@@ -715,7 +713,7 @@ SPG2 — crates/orzma_vt/src/screen.rs:210-211, Screen::print_graphic
 
 ### API 改定
 
-この一覧を作る前に、骨組みとして次を作業ツリーに追加した（未コミット）。一覧はこの形を前提にしている。
+この一覧を作る前に、骨組みとして次を追加した（コミット `f31b3134`）。一覧はこの形を前提にしている。
 
 - `Screen::print` を `Screen::translate(&mut self, c: char) -> GraphicChar` と `Screen::print_graphic(&mut self, GraphicChar, PrintOptions) -> VtResult<Option<DamageSpan>>` に分けた。`Screen::print` は `#[cfg(test)]` になった。
 - `DeviceState` に `preceding_graphic: Option<GraphicChar>` を追加した。あわせて `pub fn preceding_graphic(&self) -> Option<GraphicChar>` と `pub fn print_graphic(&mut self, glyph: GraphicChar) -> VtResult<Option<DamageSpan>>` を追加した。
@@ -725,4 +723,4 @@ SPG2 — crates/orzma_vt/src/screen.rs:210-211, Screen::print_graphic
 
 ### docs/todo との衝突
 
-- `docs/todo/vt-conformance-remaining.md` の REP の項目にある「`csi_dispatch` に腕が無い」は、骨組みで腕を足したので古くなった。API の食い違いではないので、報告にとどめる。
+- なし。`docs/todo/vt-conformance-remaining.md` にあった REP の項目（「`csi_dispatch` に腕が無い」）は、実装後にコミット `727ff77e` で一覧から外した。
