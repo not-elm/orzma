@@ -1,6 +1,7 @@
 //! Tests for graphic character output and the deferred wrap it arms.
 
 use super::*;
+use crate::error::{StampError, VtError};
 use crate::screen::cell::{CellWidth, MAX_COMBINING};
 use crate::screen::grid::run::Style;
 
@@ -276,6 +277,35 @@ fn the_next_print_after_the_last_column_wraps() {
     assert_eq!(
         damage,
         Some(DamageSpan::rows(ViewportLine(1), ViewportLine(1)))
+    );
+}
+
+/// Asserts that when the row refuses a glyph after the deferred wrap
+/// resolves, the print fails with the cursor at the start of the next
+/// row, the deferred wrap still armed, and the previous landing cell
+/// kept.
+///
+/// Case: a defect elsewhere has left the row below the cursor with no
+/// cells, and a shell prints past the right edge of the row above it.
+#[test]
+fn a_glyph_refused_after_a_deferred_wrap_leaves_the_cursor_where_the_wrap_put_it() {
+    let mut screen = screen();
+    for c in ['a', 'b', 'c', 'd'] {
+        screen
+            .print(c, PrintOptions::default())
+            .expect("a printable glyph");
+    }
+    screen.grid[ScreenLine(1)] = Row::from(Vec::new());
+    let result = screen.print('e', PrintOptions::default());
+    assert!(matches!(result, Err(VtError::Stamp(StampError::OutOfRow))));
+    assert_eq!(
+        (screen.state.line, screen.state.column),
+        (ScreenLine(1), GridColumn(0))
+    );
+    assert!(screen.state.pending_wrap);
+    assert_eq!(
+        screen.state.last_landing,
+        Some((ScreenLine(0), GridColumn(3)))
     );
 }
 
@@ -636,6 +666,27 @@ fn a_wide_glyph_with_one_column_left_wraps_and_leaves_a_filler() {
         damage,
         Some(DamageSpan::rows(ViewportLine(0), ViewportLine(1)))
     );
+}
+
+/// Asserts that when the row refuses the filler of a fullwidth glyph, the
+/// print fails before any wrap, leaving the cursor on the last column of
+/// that row with the deferred wrap still unarmed.
+///
+/// Case: a defect elsewhere has left the cursor's row with no cells, and
+/// a program prints a Japanese character with one column left.
+#[test]
+fn a_filler_refused_by_the_row_leaves_the_cursor_on_that_row() {
+    let mut screen = screen();
+    screen.state.column = GridColumn(3);
+    screen.grid[ScreenLine(0)] = Row::from(Vec::new());
+    let result = screen.print('あ', PrintOptions::default());
+    assert!(matches!(result, Err(VtError::Stamp(StampError::OutOfRow))));
+    assert_eq!(
+        (screen.state.line, screen.state.column),
+        (ScreenLine(0), GridColumn(3))
+    );
+    assert!(!screen.state.pending_wrap);
+    assert_eq!(screen.state.last_landing, None);
 }
 
 /// Asserts that a fullwidth glyph wrapping off the bottom row scrolls
