@@ -595,6 +595,8 @@ mod tests {
     use crossbeam_channel::bounded;
     use std::io::Cursor;
     use std::io::sink;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread::JoinHandle;
@@ -1016,15 +1018,7 @@ mod tests {
         .expect("Pty::spawn failed");
         let login_handoff = Duration::from_millis(200);
         thread::sleep(login_handoff);
-        let mut reported = None;
-        holds_within(
-            || {
-                reported = pty.process_cwd();
-                reported.as_deref() == Some(expected.as_path())
-            },
-            Duration::from_secs(10),
-        );
-        assert_eq!(reported, Some(expected));
+        assert_eq!(poll_process_cwd(&pty, &expected), Some(expected));
     }
 
     /// Asserts that the reported directory follows a `cd` typed into an
@@ -1050,15 +1044,22 @@ mod tests {
         // PTY hangs up unless HISTFILE is unset first.
         pty.enqueue_write(format!("unset HISTFILE; cd '{}'\n", expected.display()).into_bytes())
             .expect("the cd is queued");
+        assert_eq!(poll_process_cwd(&pty, &expected), Some(expected));
+    }
+
+    /// Polls `pty` for up to ten seconds until it reports `expected`,
+    /// returning the last directory it reported.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn poll_process_cwd(pty: &Pty, expected: &Path) -> Option<PathBuf> {
         let mut reported = None;
         holds_within(
             || {
                 reported = pty.process_cwd();
-                reported.as_deref() == Some(expected.as_path())
+                reported.as_deref() == Some(expected)
             },
             Duration::from_secs(10),
         );
-        assert_eq!(reported, Some(expected));
+        reported
     }
 
     /// Asserts that a PTY with no spawned process reports no directory.
