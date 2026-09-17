@@ -18,8 +18,8 @@ pub struct PaneRegistry {
     /// The sequence of the last `SelectPane` the GUI sent.
     pub last_select: Option<CommandSeq>,
     /// The active pane the GUI applied: accepted from a `Layout`, or
-    /// taken optimistically from a click while its `SelectPane` is in
-    /// flight.
+    /// taken optimistically from a `PaneAction::Select` while its
+    /// `SelectPane` is in flight.
     pub applied_active: Option<PaneId>,
 }
 
