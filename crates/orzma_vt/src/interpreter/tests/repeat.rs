@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::screen::cell::CellWidth;
+use crate::screen::viewport::Scroll;
 
 /// Asserts that `REP` prints the preceding character as many more times
 /// as its parameter asks.
@@ -105,6 +106,34 @@ fn a_repeat_with_a_parameter_of_zero_prints_the_preceding_character_once() {
     assert_eq!(glyph_at(&device, 0, 2), ' ');
 }
 
+/// Asserts that a `REP` spelled with a private marker repeats nothing.
+///
+/// Case: a program prefixes `REP` with `?`, `>`, or `<`, the way the private
+/// modes and the device attribute requests beside it are spelled.
+#[test]
+fn a_private_marked_repeat_prints_nothing() {
+    let device = interpret_wide(b"A\x1b[?3b\x1b[>3b\x1b[<3b");
+    assert_eq!(glyph_at(&device, 0, 0), 'A');
+    assert_eq!(glyph_at(&device, 0, 1), ' ');
+}
+
+/// Asserts that a `REP` whose count exceeds the row width keeps wrapping
+/// onto the next line rather than stopping at the width.
+///
+/// Case: a program fills more than a whole line with one character in a
+/// single `REP` while autowrap is on.
+#[test]
+fn a_repeat_longer_than_the_row_continues_on_the_next_line() {
+    let device = interpret_wide(b"A\x1b[25b");
+    for column in 0..20 {
+        assert_eq!(glyph_at(&device, 0, column), 'A');
+    }
+    for column in 0..6 {
+        assert_eq!(glyph_at(&device, 1, column), 'A');
+    }
+    assert_eq!(glyph_at(&device, 1, 6), ' ');
+}
+
 /// Asserts that a `REP` crossing the right border continues at the start
 /// of the next line while autowrap is set.
 ///
@@ -122,8 +151,8 @@ fn a_repeat_at_the_right_border_wraps_onto_the_next_line() {
 /// Asserts that a `REP` wrapping on the bottom row scrolls the page up
 /// while autowrap is set.
 ///
-/// Case: the repetition crosses the right border while the cursor is on
-/// the bottom row of the screen.
+/// Case: a program draws a divider along the bottom row of a full screen
+/// with `REP`, and the divider runs past the right border.
 #[test]
 fn a_repeat_that_wraps_on_the_last_row_scrolls_the_page_up() {
     let (device, _) = interpret_sized(10, b"\x1b[999;9HA\x1b[3b");
@@ -242,6 +271,19 @@ fn a_repeat_after_a_character_set_change_repeats_the_glyph_first_printed() {
     assert_eq!(glyph_at(&device, 0, 2), first);
 }
 
+/// Asserts that a `REP` after line drawing is designated repeats the letter
+/// first printed, not the line-drawing glyph at the letter's code position.
+///
+/// Case: a program prints one letter, designates line drawing into G0, and
+/// then repeats.
+#[test]
+fn a_repeat_after_designating_line_drawing_repeats_the_letter_first_printed() {
+    let device = interpret_wide(b"q\x1b(0\x1b[2b");
+    for column in 0..3 {
+        assert_eq!(glyph_at(&device, 0, column), 'q');
+    }
+}
+
 /// Asserts that a wide character the screen drops still becomes the
 /// character a later `REP` repeats.
 ///
@@ -284,6 +326,21 @@ fn a_repeat_after_switching_screens_repeats_the_character_printed_on_the_other_s
     assert_eq!(glyph_at(&device, 0, 1), 'x');
 }
 
+/// Asserts that the preceding graphic character survives the return to the
+/// primary screen, so a `REP` there repeats what the alternate screen
+/// printed last.
+///
+/// Case: a full-screen program prints on the alternate screen and exits,
+/// and a `REP` reaches the shell's screen before anything else is printed
+/// there.
+#[test]
+fn a_repeat_after_leaving_the_alternate_screen_repeats_the_character_printed_there() {
+    let device = interpret_wide(b"x\x1b[?1049hy\x1b[?1049l\x1b[b");
+    assert_eq!(device.modes().active_screen, ScreenKind::Primary);
+    assert_eq!(glyph_at(&device, 0, 0), 'x');
+    assert_eq!(glyph_at(&device, 0, 1), 'y');
+}
+
 /// Asserts that the characters a `REP` prints join the hyperlink open at
 /// the time of the `REP`.
 ///
@@ -296,4 +353,32 @@ fn a_repeat_prints_inside_the_open_hyperlink() {
     assert_eq!(row[0].hyperlink_id, None);
     assert!(row[1].hyperlink_id.is_some());
     assert!(row[2].hyperlink_id.is_some());
+}
+
+/// Asserts that a `REP` raises the chunk liveness even when the cursor ends
+/// where it started.
+///
+/// Case: with autowrap off, a status-line program switches to bold and
+/// repeats the character that sits in the last column.
+#[test]
+fn a_repeat_that_leaves_the_cursor_in_place_reports_damage() {
+    assert!(liveness_after(b"\x1b[?7l\x1b[4GA", b"\x1b[1m\x1b[b"));
+}
+
+/// Asserts that a `REP` prints every repetition while the viewport is
+/// scrolled back and the row it writes is out of view.
+///
+/// Case: the user scrolls back through the history while a program on the
+/// live screen repeats a character.
+#[test]
+fn a_repeat_while_scrolled_back_prints_every_repetition() {
+    let mut session = Session::sized(GridSize { cols: 20, rows: 3 });
+    session.feed(b"a\r\nb\r\nc\r\nd\r\ne");
+    assert!(session.0.scroll(Scroll::Delta(1)));
+    session.feed(b"\x1b[3b");
+    assert!(session.0.scroll(Scroll::Bottom));
+    for column in 0..4 {
+        assert_eq!(session.char_at(2, column), 'e');
+    }
+    assert_eq!(session.char_at(2, 4), ' ');
 }

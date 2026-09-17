@@ -113,6 +113,10 @@ impl DeviceState {
     /// the device's `IRM` and `DECAWM` modes and its open hyperlink, after
     /// mapping it through that screen's character set mapping.
     ///
+    /// A control character is ignored and leaves a pending single shift
+    /// pending; any other character spends it, even a zero-width mark or a
+    /// character the screen drops.
+    ///
     /// A mapped character one or two columns wide becomes the
     /// [`Self::preceding_graphic`], even when the screen drops it instead of
     /// placing it. A zero-width mark and a character with no width leave the
@@ -127,16 +131,25 @@ impl DeviceState {
     /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
     /// refuses the character.
     pub fn print(&mut self, c: char) -> VtResult<Option<DamageSpan>> {
+        // NOTE: A control character is dropped before the mapping so that it
+        // cannot spend a pending single shift — only a graphic character may
+        // do that.
+        if c.is_control() {
+            return Ok(None);
+        }
         let glyph = self.active_screen_mut().translate(c);
-        if GlyphClass::of(glyph.0).is_some_and(|class| class.body_width().is_some()) {
+        let Some(class) = GlyphClass::of(glyph.0) else {
+            return Ok(None);
+        };
+        if class.body_width().is_some() {
             self.preceding_graphic = Some(glyph);
         }
-        self.print_graphic(glyph)
+        self.print_graphic(glyph, class)
     }
 
     /// The graphic character `REP` repeats: the last character one or two
-    /// columns wide that [`Self::print`] mapped, or `None` when none has been
-    /// printed since power-up or the last `RIS`.
+    /// columns wide that [`Self::print`] mapped, or `None` when it has mapped
+    /// none since power-up or the last `RIS`.
     ///
     /// Control functions, a soft reset, and a flip between the screens leave
     /// it as it is; only [`Self::reset`] clears it.
@@ -147,6 +160,8 @@ impl DeviceState {
     /// Prints `glyph`, already mapped through a character set, at the cursor
     /// of the screen on show, shaped by the device's `IRM` and `DECAWM`
     /// modes, its open hyperlink, and the screen's current pen.
+    ///
+    /// `class` must be the class [`GlyphClass::of`] reports for `glyph`.
     ///
     /// A pending single shift stays pending, and the preceding graphic
     /// character is left as it was.
@@ -159,7 +174,11 @@ impl DeviceState {
     ///
     /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
     /// refuses the glyph.
-    pub fn print_graphic(&mut self, glyph: GraphicChar) -> VtResult<Option<DamageSpan>> {
+    pub fn print_graphic(
+        &mut self,
+        glyph: GraphicChar,
+        class: GlyphClass,
+    ) -> VtResult<Option<DamageSpan>> {
         // NOTE: Every field is spelled out so that a field added to
         // `PrintOptions` fails to compile here instead of silently printing
         // with its default.
@@ -168,7 +187,8 @@ impl DeviceState {
             auto_wrap: self.modes.auto_wrap,
             hyperlink_id: self.active_hyperlink,
         };
-        self.active_screen_mut().print_graphic(glyph, options)
+        self.active_screen_mut()
+            .print_graphic(glyph, class, options)
     }
 
     /// Returns both screens and every mode to their power-up state;

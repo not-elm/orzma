@@ -1,6 +1,6 @@
 # Test cases: Executor::repeat_preceding_graphic
 
-`REP`（`CSI Pn b`）を受け持つ `Executor::repeat_preceding_graphic`（`crates/orzma_vt/src/interpreter.rs:582`）のテストケース一覧。
+`REP`（`CSI Pn b`）を受け持つ `Executor::repeat_preceding_graphic`（`crates/orzma_vt/src/interpreter.rs:577`）のテストケース一覧。
 ECMA-48 § 8.3.103 を主な出典とし、繰り返した文字が通常の文字と同じ扱いを受ける部分は VT510 の SS2 / DECAWM / IRM / SGR の記述から導いた。
 ECMA-48 が定めていない部分（制御機能を挟んだ場合、結合文字、捨てられた文字、RIS）は、骨組みで追加した doc コメントを出典にしている。
 
@@ -11,6 +11,7 @@ ECMA-48 が定めていない部分（制御機能を挟んだ場合、結合文
 
 **前提となる木の状態。** 対象メソッドと、それが呼ぶ `DeviceState::preceding_graphic` / `DeviceState::print_graphic` / `Screen::translate` / `Screen::print_graphic` は、この一覧を作る前に骨組みとして追加した（コミット `f31b3134`）。
 記憶の更新と RIS での消去はコミット `13e3cc47` で実装し、下の 22 件は `crates/orzma_vt/src/interpreter/tests/repeat.rs` に書き写して、すべて通っている。
+コードレビューで、一覧の外のテストを `repeat.rs` に 6 件足した（private marker 付きの REP、行幅を超える回数の REP、ASCII の文字を出してから線画を指定した後の REP、主画面へ戻った後の REP、カーソルが動かない REP の damage、スクロールバック中の REP）。
 
 ## テストケース一覧
 
@@ -296,8 +297,8 @@ fn a_repeat_at_the_right_border_wraps_onto_the_next_line() {
 /// Asserts that a `REP` wrapping on the bottom row scrolls the page up
 /// while autowrap is set.
 ///
-/// Case: the repetition crosses the right border while the cursor is on
-/// the bottom row of the screen.
+/// Case: a program draws a divider along the bottom row of a full screen
+/// with `REP`, and the divider runs past the right border.
 #[test]
 fn a_repeat_that_wraps_on_the_last_row_scrolls_the_page_up() {
     let (device, _) = interpret_sized(10, b"\x1b[999;9HA\x1b[3b");
@@ -642,34 +643,34 @@ fn a_repeat_prints_inside_the_open_hyperlink() {
 リポジトリの doc コメント（kind 2）。すべて `grep -F` 相当の完全一致で確認した。
 
 ```
-PG1 — crates/orzma_vt/src/device.rs:137-139, DeviceState::preceding_graphic
-      "The graphic character `REP` repeats: the last character one or two columns wide that [`Self::print`] mapped, or `None` when none has been printed since power-up or the last `RIS`."
+PG1 — crates/orzma_vt/src/device.rs:150-152, DeviceState::preceding_graphic
+      "The graphic character `REP` repeats: the last character one or two columns wide that [`Self::print`] mapped, or `None` when it has mapped none since power-up or the last `RIS`."
       justifies: 繰り返すのは変換後のグリフで、何も表示していなければ記憶はない
-PG2 — crates/orzma_vt/src/device.rs:141-142, DeviceState::preceding_graphic
+PG2 — crates/orzma_vt/src/device.rs:154-155, DeviceState::preceding_graphic
       "Control functions, a soft reset, and a flip between the screens leave it as it is; only [`Self::reset`] clears it."
       justifies: 改行・REP・DECSTR・画面切り替えを挟んでも記憶が残る
-DP  — crates/orzma_vt/src/device.rs:116-119, DeviceState::print
+DP  — crates/orzma_vt/src/device.rs:120-123, DeviceState::print
       "A mapped character one or two columns wide becomes the [`Self::preceding_graphic`], even when the screen drops it instead of placing it. A zero-width mark and a character with no width leave the preceding graphic character as it was."
       justifies: 捨てられた全角文字も記憶し、結合文字では記憶を更新しない
-RS  — crates/orzma_vt/src/device.rs:192-193, DeviceState::reset
+RS  — crates/orzma_vt/src/device.rs:212-213, DeviceState::reset
       "The preceding graphic character is cleared, so a `REP` that follows prints nothing."
       justifies: RIS の後の REP は何も出さない
-RP1 — crates/orzma_vt/src/interpreter.rs:571-573, Executor::repeat_preceding_graphic
+RP1 — crates/orzma_vt/src/interpreter.rs:566-568, Executor::repeat_preceding_graphic
       "Prints the device's preceding graphic character `count` more times, each time at the cursor as an ordinary print shaped by the current pen, hyperlink, `IRM`, and `DECAWM`."
       justifies: 繰り返しは REP の時点の pen とハイパーリンクを使う
-RP2 — crates/orzma_vt/src/interpreter.rs:575, Executor::repeat_preceding_graphic
+RP2 — crates/orzma_vt/src/interpreter.rs:570, Executor::repeat_preceding_graphic
       "A pending single shift stays pending."
       justifies: 保留中の SS2 は繰り返しで使われない
-RP3 — crates/orzma_vt/src/interpreter.rs:575-577, Executor::repeat_preceding_graphic
-      "Nothing is printed when no graphic character has been printed since power-up or the last `RIS`, and the repetitions stop at the first glyph a row refuses."
+RP3 — crates/orzma_vt/src/interpreter.rs:570-572, Executor::repeat_preceding_graphic
+      "Nothing is printed when the device has no preceding graphic character, and the repetitions stop at the first glyph a row refuses."
       justifies: 記憶がなければ何も出さず、カーソルも動かない
-RC  — crates/orzma_vt/src/interpreter.rs:896, repeat_count
+RC  — crates/orzma_vt/src/interpreter.rs:894, repeat_count
       "A repeat count parameter, where an omitted or zero value means one."
       justifies: （C5 と矛盾するため、ケースには使っていない）
-SPG1 — crates/orzma_vt/src/screen.rs:214-216, Screen::print_graphic
+SPG1 — crates/orzma_vt/src/screen.rs:218-220, Screen::print_graphic
       "A two-column glyph with one column left wraps first, leaving a filler in the last column; with autowrap reset it is dropped and the deferred wrap is disarmed."
       justifies: autowrap が無効な最終列の全角文字は捨てられ、最終列は空白のまま
-SPG2 — crates/orzma_vt/src/screen.rs:210-211, Screen::print_graphic
+SPG2 — crates/orzma_vt/src/screen.rs:215-216, Screen::print_graphic
       "a zero-width mark joins the glyph the cursor last passed and leaves the cursor alone."
       justifies: 結合文字は列 0 の `e` に付く
 ```
@@ -720,6 +721,8 @@ SPG2 — crates/orzma_vt/src/screen.rs:210-211, Screen::print_graphic
 - `Executor::repeat_preceding_graphic(&mut self, count: u16)` と、`csi_dispatch` の `(None, [], b'b')` の腕を追加した。
 
 この実行での API 改定の提案はない。
+
+コードレビューで、`Screen::print_graphic` と `DeviceState::print_graphic` は、呼び出し側が `GlyphClass::of` で求めた `GlyphClass` も受け取るようにした。表示のたびに文字の幅を 2 回引かないためで、振る舞いは変わらない。
 
 ### docs/todo との衝突
 

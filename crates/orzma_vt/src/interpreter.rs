@@ -20,6 +20,7 @@ use crate::interpreter::osc::dynamic_color::{
 use crate::interpreter::osc::hyperlink::HyperlinkRequest;
 use crate::interpreter::osc::palette::{PaletteRequest, palette_reply};
 use crate::interpreter::osc::{OscTerminator, current_dir, window_title};
+use crate::screen::cell::GlyphClass;
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
 use crate::screen::margins::OriginMode;
 use crate::screen::tabs::CharacterTabEdit;
@@ -108,12 +109,6 @@ struct Executor<'a> {
 
 impl VTActor for Executor<'_> {
     fn print(&mut self, b: char) {
-        // NOTE: DEL is dropped before `DeviceState::print` rather than
-        // inside it, so that it cannot spend a pending single shift — only
-        // a graphic character may do that.
-        if b == '\u{7f}' {
-            return;
-        }
         let Ok(damage) = self.device.print(b) else {
             return;
         };
@@ -572,9 +567,9 @@ impl Executor<'_> {
     /// each time at the cursor as an ordinary print shaped by the current
     /// pen, hyperlink, `IRM`, and `DECAWM`.
     ///
-    /// A pending single shift stays pending. Nothing is printed when no
-    /// graphic character has been printed since power-up or the last `RIS`,
-    /// and the repetitions stop at the first glyph a row refuses.
+    /// A pending single shift stays pending. Nothing is printed when the
+    /// device has no preceding graphic character, and the repetitions stop
+    /// at the first glyph a row refuses.
     ///
     /// # Control Functions
     ///
@@ -583,8 +578,11 @@ impl Executor<'_> {
         let Some(glyph) = self.device.preceding_graphic() else {
             return;
         };
+        let Some(class) = GlyphClass::of(glyph.0) else {
+            return;
+        };
         for _ in 0..count {
-            let Ok(damage) = self.device.print_graphic(glyph) else {
+            let Ok(damage) = self.device.print_graphic(glyph, class) else {
                 return;
             };
             self.stage(damage);

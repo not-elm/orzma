@@ -190,7 +190,10 @@ impl Screen {
     #[cfg(test)]
     pub fn print(&mut self, c: char, options: PrintOptions) -> VtResult<Option<DamageSpan>> {
         let glyph = self.translate(c);
-        self.print_graphic(glyph, options)
+        let Some(class) = GlyphClass::of(glyph.0) else {
+            return Ok(None);
+        };
+        self.print_graphic(glyph, class, options)
     }
 
     /// Maps `c` through the character set a pending single shift invokes,
@@ -204,12 +207,13 @@ impl Screen {
     /// with the current pen, as `options` shape it, wrapping first when the
     /// deferred wrap is armed and autowrap is set.
     ///
+    /// `class` must be the class [`GlyphClass::of`] reports for the glyph.
+    ///
     /// A pending single shift stays pending.
     ///
     /// A one-column glyph takes the cursor's cell and a two-column glyph
     /// takes it and the next; a zero-width mark joins the glyph the
-    /// cursor last passed and leaves the cursor alone. A control
-    /// character is ignored.
+    /// cursor last passed and leaves the cursor alone.
     ///
     /// A two-column glyph with one column left wraps first, leaving a
     /// filler in the last column; with autowrap reset it is dropped and
@@ -231,11 +235,9 @@ impl Screen {
     pub fn print_graphic(
         &mut self,
         GraphicChar(glyph): GraphicChar,
+        class: GlyphClass,
         options: PrintOptions,
     ) -> VtResult<Option<DamageSpan>> {
-        let Some(class) = GlyphClass::of(glyph) else {
-            return Ok(None);
-        };
         let Some(width) = class.body_width() else {
             return Ok(self.attach_zero_width(glyph));
         };
@@ -607,8 +609,8 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `ICH` (`CSI Pn @`)
-    /// - `IRM` (`CSI 4 h`) — the shift [`Self::print`] performs for
-    ///   each character printed in insert mode
+    /// - `IRM` (`CSI 4 h`) — the shift [`Self::print_graphic`] performs
+    ///   for each character printed in insert mode
     pub fn insert_characters(&mut self, count: u16) -> Option<DamageSpan> {
         let count = self.clamped_columns(count)?;
         let fill = self.state.pen.erase_cell();
