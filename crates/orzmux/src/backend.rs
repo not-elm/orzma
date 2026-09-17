@@ -323,8 +323,8 @@ impl Backend {
         let new = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
         let previous_active = self.tree.active();
-        let inherited_cwd = match self.insert_pane(new, at, geometry.size) {
-            Ok(inherited_cwd) => inherited_cwd,
+        let split_target = match self.insert_pane(new, at, geometry.size) {
+            Ok(split_target) => split_target,
             Err(error) => {
                 self.emit(OrzmuxEvent::SpawnFailed {
                     request,
@@ -333,7 +333,11 @@ impl Backend {
                 return;
             }
         };
-        let spawn_cwd = cwd.or(inherited_cwd);
+        let spawn_cwd = cwd.or_else(|| {
+            split_target
+                .and_then(|id| self.panes.get(&id))
+                .and_then(Pane::cwd)
+        });
         let spawned = self
             .tree
             .solve(geometry.size)
@@ -350,11 +354,7 @@ impl Backend {
             Ok((tty, size)) => {
                 self.panes.insert(
                     new,
-                    Pane {
-                        tty,
-                        applied: (size.cols, size.rows, geometry.cell_px),
-                        cwd: spawn_cwd,
-                    },
+                    Pane::new(tty, (size.cols, size.rows, geometry.cell_px), spawn_cwd),
                 );
                 self.emit(OrzmuxEvent::PaneOpened { pane: new, request });
                 self.publish_layout();
@@ -369,14 +369,14 @@ impl Backend {
         }
     }
 
-    /// Inserts `new` into the tree at `at`. Returns the directory a split
-    /// inherits from its target, or why the insertion was refused.
+    /// Inserts `new` into the tree at `at`. Returns the pane a split
+    /// divides, `None` for a root pane, or why the insertion was refused.
     fn insert_pane(
         &mut self,
         new: PaneId,
         at: NewPaneAt,
         window: GridSize,
-    ) -> Result<Option<PathBuf>, &'static str> {
+    ) -> Result<Option<PaneId>, &'static str> {
         match at {
             NewPaneAt::Root => {
                 self.tree
@@ -389,7 +389,7 @@ impl Backend {
                 self.tree
                     .split(target, orientation, new, window)
                     .map_err(|_| "no space")?;
-                Ok(self.panes.get(&target).and_then(|p| p.cwd.clone()))
+                Ok(Some(target))
             }
         }
     }
@@ -484,7 +484,7 @@ impl Backend {
                     if let VtSignal::CurrentDir(path) = &signal
                         && let Some(pane) = self.panes.get_mut(&id)
                     {
-                        pane.cwd = Some(path.clone());
+                        pane.set_osc7_cwd(path.clone());
                     }
                     self.emit(OrzmuxEvent::Signal { pane: id, signal });
                 }
@@ -1345,7 +1345,7 @@ mod tests {
         h.backend.pump_pane(root);
         h.drain();
         assert_eq!(
-            h.backend.panes[&root].cwd.as_deref(),
+            h.backend.panes[&root].cwd().as_deref(),
             Some(std::path::Path::new("/tmp/project"))
         );
         h.log.cwds.lock().unwrap().clear();
@@ -1353,6 +1353,37 @@ mod tests {
         assert_eq!(
             h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
             Some(std::path::Path::new("/tmp/project"))
+        );
+    }
+
+    /// Asserts that a split given an explicit directory spawns there rather
+    /// than in the target pane's directory.
+    ///
+    /// Case: a caller opens a split in a directory it names itself while
+    /// the target pane's shell has reported another.
+    #[test]
+    fn an_explicit_cwd_wins_over_the_target_panes_cwd() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx
+            .send(b"\x1b]7;file://localhost/tmp/project\x1b\\".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        h.drain();
+        h.log.cwds.lock().unwrap().clear();
+        h.send(OrzmuxCommand::NewPane {
+            request: RequestId(2),
+            at: NewPaneAt::Split {
+                pane: PaneTarget::Active,
+                orientation: SplitOrientation::Vertical,
+            },
+            cwd: Some(PathBuf::from("/explicit")),
+            env: vec![],
+        });
+        h.drain();
+        assert_eq!(
+            h.log.cwds.lock().unwrap().last().cloned().flatten(),
+            Some(PathBuf::from("/explicit"))
         );
     }
 

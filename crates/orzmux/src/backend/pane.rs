@@ -13,9 +13,46 @@ pub(crate) struct Pane {
     pub(crate) tty: OrzmaTty<OrzmaVt>,
     /// The `(cols, rows, cell_px)` the PTY was last successfully sized to.
     pub(crate) applied: (u16, u16, CellPixels),
-    /// The last directory the shell reported through OSC 7, or the
-    /// directory the pane was spawned in until it reports one.
-    pub(crate) cwd: Option<PathBuf>,
+    /// The last directory the shell reported through OSC 7.
+    osc7_cwd: Option<PathBuf>,
+    /// The directory the pane's shell was spawned in, when one was given.
+    spawn_cwd: Option<PathBuf>,
+}
+
+impl Pane {
+    /// A pane around `tty`, whose PTY is sized to `applied` and whose shell
+    /// was spawned in `spawn_cwd`. No OSC 7 report is recorded yet.
+    pub fn new(
+        tty: OrzmaTty<OrzmaVt>,
+        applied: (u16, u16, CellPixels),
+        spawn_cwd: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            tty,
+            applied,
+            osc7_cwd: None,
+            spawn_cwd,
+        }
+    }
+
+    /// The pane's working directory: the directory the OS reports for its
+    /// foreground process or shell, else the directory the shell last
+    /// reported through OSC 7, else the directory the pane was spawned in.
+    ///
+    /// Each fallback is looked up only when every earlier one is `None`,
+    /// and `None` means none of them is known.
+    pub fn cwd(&self) -> Option<PathBuf> {
+        self.tty
+            .process_cwd()
+            .or_else(|| self.osc7_cwd.clone())
+            .or_else(|| self.spawn_cwd.clone())
+    }
+
+    /// Records `path` as the directory the shell last reported through
+    /// OSC 7, replacing any earlier report.
+    pub fn set_osc7_cwd(&mut self, path: PathBuf) {
+        self.osc7_cwd = Some(path);
+    }
 }
 
 /// Spawns terminals for the backend.
@@ -166,6 +203,25 @@ fn on_path(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orzma_tty::test_support::CaptureSink;
+    #[cfg(unix)]
+    use std::thread;
+    #[cfg(unix)]
+    use std::time::{Duration, Instant};
+    #[cfg(unix)]
+    use tempfile::TempDir;
+
+    /// A terminal with no process behind it, so the OS reports no
+    /// directory for it.
+    fn detached_tty() -> OrzmaTty<OrzmaVt> {
+        let size = GridSize::new(80, 24).expect("a valid size");
+        OrzmaTty::detached(
+            OrzmaVt::new(size, 100),
+            size,
+            Box::new(CaptureSink::default()),
+        )
+        .expect("a detached terminal")
+    }
 
     /// Asserts the config → `$SHELL` → platform default precedence.
     ///
@@ -232,5 +288,71 @@ mod tests {
         );
         assert_eq!(windows_default_shell(|_| false, Some("")), "cmd.exe");
         assert_eq!(windows_default_shell(|_| false, None), "cmd.exe");
+    }
+
+    /// Asserts that a pane whose shell has reported nothing reports the
+    /// directory it was spawned in.
+    ///
+    /// Case: the user splits a pane again before the new shell has printed
+    /// its first prompt.
+    #[test]
+    fn a_pane_without_an_osc7_report_falls_back_to_its_spawn_directory() {
+        let pane = Pane::new(
+            detached_tty(),
+            (80, 24, CellPixels::default()),
+            Some(PathBuf::from("/spawned")),
+        );
+        assert_eq!(pane.cwd(), Some(PathBuf::from("/spawned")));
+    }
+
+    /// Asserts that a directory reported through OSC 7 is reported ahead
+    /// of the spawn directory.
+    ///
+    /// Case: a shell that reports its directory through OSC 7 changes into
+    /// a project while the OS cannot be asked for the pane's directory.
+    #[test]
+    fn an_osc7_report_wins_over_the_spawn_directory() {
+        let mut pane = Pane::new(
+            detached_tty(),
+            (80, 24, CellPixels::default()),
+            Some(PathBuf::from("/spawned")),
+        );
+        pane.set_osc7_cwd(PathBuf::from("/reported"));
+        assert_eq!(pane.cwd(), Some(PathBuf::from("/reported")));
+    }
+
+    /// Asserts that the directory the OS reports for the pane's process is
+    /// reported ahead of an OSC 7 report.
+    ///
+    /// Case: the shell last reported one directory, and the program now
+    /// running in the pane works in another.
+    #[cfg(unix)]
+    #[test]
+    fn the_process_directory_wins_over_an_osc7_report() {
+        let dir = TempDir::new().expect("a temp dir");
+        let expected = dir.path().canonicalize().expect("the dir canonicalizes");
+        let size = GridSize::new(80, 24).expect("a valid size");
+        let tty = OrzmaTty::spawn(
+            OrzmaVt::new(size, 100),
+            SpawnOptions {
+                size,
+                cell_px: CellPixels::default(),
+                shell: "/bin/cat".into(),
+                cwd: Some(dir.path().to_path_buf()),
+                env: Vec::new(),
+            },
+        )
+        .expect("cat spawns under a PTY");
+        let mut pane = Pane::new(tty, (80, 24, CellPixels::default()), None);
+        pane.set_osc7_cwd(PathBuf::from("/reported"));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let reported = loop {
+            let reported = pane.cwd();
+            if reported.as_ref() == Some(&expected) || Instant::now() >= deadline {
+                break reported;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(reported, Some(expected));
     }
 }
