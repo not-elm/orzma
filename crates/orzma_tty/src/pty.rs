@@ -14,7 +14,6 @@ use std::io::Result as IoResult;
 use std::io::{Read, Write};
 #[cfg(any(test, feature = "test-support"))]
 use std::mem;
-#[cfg(target_os = "macos")]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,6 +22,8 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+#[cfg(unix)]
+mod process_cwd;
 mod write_queue;
 
 /// PTY ownership for one spawned shell.
@@ -32,6 +33,10 @@ pub struct Pty {
     chunk_rx: Receiver<Vec<u8>>,
     exit_rx: Receiver<Option<i32>>,
     child_killer: Box<dyn ChildKiller + Send + Sync>,
+    /// The pid of the process spawned under the PTY, or `None` for a PTY
+    /// built without one.
+    #[cfg(unix)]
+    child_pid: Option<u32>,
 }
 
 /// One non-blocking read of the PTY output stream.
@@ -105,6 +110,8 @@ impl Pty {
             .spawn_command(cmd)
             .map_err(OrzmaTtyError::SpawnShell)?;
         let child_killer = child.clone_killer();
+        #[cfg(unix)]
+        let child_pid = child.process_id();
         drop(pty_pair.slave);
 
         let pipes = master_pipes(pty_pair.master.as_ref())
@@ -130,6 +137,8 @@ impl Pty {
             chunk_rx,
             exit_rx,
             child_killer,
+            #[cfg(unix)]
+            child_pid,
         })
     }
 
@@ -228,6 +237,34 @@ impl Pty {
             .expect("MasterPty::get_size")
     }
 
+    /// The working directory of the process this PTY is showing: its
+    /// foreground process group's leader, else the spawned process, else
+    /// on macOS a child of the spawned process. Only a directory that
+    /// still exists is reported.
+    ///
+    /// Returns `None` when no candidate can be read: no process was
+    /// spawned, the process belongs to another user, it has exited, its
+    /// directory was removed, or the platform is not Unix.
+    pub fn process_cwd(&self) -> Option<PathBuf> {
+        #[cfg(unix)]
+        {
+            let leader = self
+                .master
+                .lock()
+                .ok()
+                .and_then(|master| master.process_group_leader());
+            process_cwd::resolve(leader, self.child_pid)
+        }
+        #[cfg(not(unix))]
+        {
+            // TODO: read the directory on Windows by preferring the one the
+            // shell reports through OSC 7 or OSC 9;9 and falling back to the
+            // shell process's PEB, because PowerShell's Set-Location does not
+            // change the process working directory.
+            None
+        }
+    }
+
     /// Opens a real PTY at the given grid size but routes writes to
     /// `writer` instead of the master, spawning no child process and no
     /// reader thread.
@@ -272,6 +309,8 @@ impl Pty {
             chunk_rx,
             exit_rx,
             child_killer: Box::new(DetachedKiller),
+            #[cfg(unix)]
+            child_pid: None,
         }
     }
 }
@@ -537,6 +576,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread::JoinHandle;
+    #[cfg(unix)]
+    use tempfile::TempDir;
 
     /// A program that prints one line and exits 0 on the host platform.
     fn echo_program() -> &'static str {
@@ -931,5 +972,75 @@ mod tests {
         assert!(finishes_within(&watcher, Duration::from_secs(2)));
         watcher.join().expect("the watcher ends");
         assert!(started.elapsed() >= Duration::from_millis(30));
+    }
+
+    /// Asserts that the directory a program was spawned in is reported
+    /// while the program runs.
+    ///
+    /// Case: the pane runs a program that never takes the terminal's
+    /// foreground.
+    #[cfg(unix)]
+    #[test]
+    fn process_cwd_reports_the_directory_a_program_was_spawned_in() {
+        let dir = TempDir::new().expect("a temp dir");
+        let expected = dir.path().canonicalize().expect("the dir canonicalizes");
+        let pty = Pty::spawn(&SpawnOptions {
+            size: grid(80, 24),
+            cell_px: CellPixels::default(),
+            shell: "/bin/cat".into(),
+            cwd: Some(dir.path().to_path_buf()),
+            env: Vec::new(),
+        })
+        .expect("Pty::spawn failed");
+        let mut reported = None;
+        holds_within(
+            || {
+                reported = pty.process_cwd();
+                reported.as_deref() == Some(expected.as_path())
+            },
+            Duration::from_secs(10),
+        );
+        assert_eq!(reported, Some(expected));
+    }
+
+    /// Asserts that the reported directory follows a `cd` typed into an
+    /// interactive shell.
+    ///
+    /// Case: the user changes into a project directory at the prompt
+    /// before splitting the pane.
+    #[cfg(unix)]
+    #[test]
+    fn process_cwd_follows_a_shell_cd() {
+        let dir = TempDir::new().expect("a temp dir");
+        let expected = dir.path().canonicalize().expect("the dir canonicalizes");
+        let pty = Pty::spawn(&SpawnOptions {
+            size: grid(80, 24),
+            cell_px: CellPixels::default(),
+            shell: "/bin/sh".into(),
+            cwd: None,
+            env: Vec::new(),
+        })
+        .expect("Pty::spawn failed");
+        pty.enqueue_write(format!("cd '{}'\n", expected.display()).into_bytes())
+            .expect("the cd is queued");
+        let mut reported = None;
+        holds_within(
+            || {
+                reported = pty.process_cwd();
+                reported.as_deref() == Some(expected.as_path())
+            },
+            Duration::from_secs(10),
+        );
+        assert_eq!(reported, Some(expected));
+    }
+
+    /// Asserts that a PTY with no spawned process reports no directory.
+    ///
+    /// Case: a test terminal built around a detached PTY is asked for the
+    /// directory a split would inherit.
+    #[test]
+    fn a_detached_pty_reports_no_process_cwd() {
+        let pty = Pty::detached(grid(80, 24), Box::new(sink())).expect("Pty::detached");
+        assert_eq!(pty.process_cwd(), None);
     }
 }
