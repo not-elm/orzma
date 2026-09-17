@@ -14,7 +14,7 @@ pub(crate) mod placements;
 
 mod state;
 
-use self::cell::{Cell, CellExtra, CellWidth, GlyphClass, Pen};
+use self::cell::{BodyWidth, Cell, CellExtra, CellWidth, GlyphClass, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
@@ -182,8 +182,9 @@ impl Screen {
     /// # Errors
     ///
     /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
-    /// refuses the glyph; the cursor and the deferred wrap are then left
-    /// as the wrap left them.
+    /// refuses the glyph or the filler a wrapping two-column glyph leaves;
+    /// the cursor and the deferred wrap are then left as they stood when
+    /// the row refused.
     pub fn print(&mut self, c: char, options: PrintOptions) -> VtResult<Option<DamageSpan>> {
         let GraphicChar(glyph) = self.character_set_mapping.translate(c);
         let Some(class) = GlyphClass::of(glyph) else {
@@ -192,61 +193,11 @@ impl Screen {
         let Some(width) = class.body_width() else {
             return Ok(self.attach_zero_width(glyph));
         };
-        let columns = class.columns();
-        let cols = self.grid.size().cols;
-        if cols < columns {
-            return Ok(None);
-        }
-        let wrapping = options.auto_wrap.wraps();
-        let mut first_line = self.state.line;
-        let wrap = if self.state.pending_wrap && wrapping {
-            self.state.column = GridColumn(0);
-            let damage = self.line_feed();
-            first_line = self.state.line;
-            damage
-        } else {
-            None
-        };
-        let overflow = if self.fits(columns) {
-            None
-        } else if wrapping {
-            let pen = self.state.pen;
-            self.grid[self.state.line].place_filler(&pen)?;
-            self.state.column = GridColumn(0);
-            self.line_feed()
-        } else {
-            self.state.pending_wrap = false;
+        let Some(damage) = self.make_room_for_glyph(width, options.auto_wrap)? else {
             return Ok(None);
         };
-        let landing = self.state.column.0;
-        let ends_row = landing.saturating_add(columns) >= cols;
-        // NOTE: The shift runs after the deferred wrap is resolved and
-        // before the glyph lands. Moving it above the wrap would let
-        // `insert_characters` clear `pending_wrap`, and the character
-        // would overwrite the last column instead of wrapping to the
-        // next row.
-        if matches!(options.insert_replace, InsertReplaceMode::Insert) {
-            self.insert_characters(columns);
-        }
-        self.grid[self.state.line].stamp_at(
-            landing,
-            glyph,
-            width,
-            &self.state.pen,
-            options.hyperlink_id,
-        )?;
-        self.state.last_landing = Some((self.state.line, GridColumn(landing)));
-        if ends_row {
-            self.state.column = GridColumn(cols - 1);
-            self.state.pending_wrap = wrapping;
-        } else {
-            self.state.column = GridColumn(landing + columns);
-            self.state.pending_wrap = false;
-        }
-        if matches!(wrap, Some(DamageSpan::Full)) || matches!(overflow, Some(DamageSpan::Full)) {
-            return Ok(Some(DamageSpan::Full));
-        }
-        Ok(self.damage_span(first_line, self.state.line))
+        self.land_glyph(glyph, width, options)?;
+        Ok(damage.span(self))
     }
 
     /// Disarms the deferred wrap, leaving the cursor and the cells
@@ -260,6 +211,151 @@ impl Screen {
     /// - `DECRST 7` (`CSI ? 7 l`) — the pending-wrap part
     pub fn disarm_pending_wrap(&mut self) {
         self.state.pending_wrap = false;
+    }
+
+    /// Combines `mark` onto the glyph the cursor last passed: the cell
+    /// under the cursor when the deferred wrap is armed, or when the
+    /// cursor is on the last column and the last printed glyph landed
+    /// there, otherwise the cell to its left, and on column zero that
+    /// column's own cell. A continuation column hands the mark to its
+    /// wide body.
+    ///
+    /// Reports the cursor's row when the mark was kept, and `None` when
+    /// the cell already holds [`cell::MAX_COMBINING`] marks or the target is a
+    /// filler.
+    fn attach_zero_width(&mut self, mark: char) -> Option<DamageSpan> {
+        let column = self.state.column.0;
+        let cursor = (self.state.line, self.state.column);
+        let on_landing = self.state.last_landing == Some(cursor);
+        let candidate = if self.state.pending_wrap || (self.is_last_column() && on_landing) {
+            column
+        } else {
+            column.saturating_sub(1)
+        };
+        let line = self.state.line;
+        let row = &mut self.grid[line];
+        let target = match row[candidate].width {
+            CellWidth::Narrow | CellWidth::Wide => candidate,
+            CellWidth::Spacer => candidate.saturating_sub(1),
+            CellWidth::LeadingSpacer => return None,
+        };
+        let extra = row[target]
+            .extra
+            .get_or_insert_with(|| Box::new(CellExtra::default()));
+        if !extra.push(mark) {
+            return None;
+        }
+        self.damage_span(line, line)
+    }
+
+    /// Moves the cursor to where a glyph `width` wide lands: under autowrap
+    /// an armed deferred wrap resolves first, and a glyph that overflows
+    /// the row wraps, leaving a filler in the last column.
+    ///
+    /// Returns the damage the print reports once the glyph lands, or
+    /// `None` when the glyph is dropped: it is wider than the screen, or it
+    /// overflows the row with autowrap reset, which also disarms the
+    /// deferred wrap.
+    ///
+    /// # Errors
+    ///
+    /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
+    /// refuses the filler; the cursor and the deferred wrap are then left
+    /// untouched.
+    fn make_room_for_glyph(
+        &mut self,
+        width: BodyWidth,
+        auto_wrap: AutoWrap,
+    ) -> VtResult<Option<PrintDamage>> {
+        let columns = width.columns();
+        if self.grid.size().cols < columns {
+            return Ok(None);
+        }
+        let wrapping = auto_wrap.wraps();
+        let mut scrolled = false;
+        if self.state.pending_wrap && wrapping {
+            scrolled = self.wrap_to_next_line();
+        }
+        let first_line = self.state.line;
+        if !self.fits(columns) {
+            if !wrapping {
+                self.state.pending_wrap = false;
+                return Ok(None);
+            }
+            let pen = self.state.pen;
+            self.grid[self.state.line].place_filler(&pen)?;
+            scrolled |= self.wrap_to_next_line();
+        }
+        Ok(Some(PrintDamage {
+            first_line,
+            last_line: self.state.line,
+            scrolled,
+        }))
+    }
+
+    /// Rewinds the cursor to column zero and moves it down one row,
+    /// scrolling at the bottom margin; the deferred wrap is left as it is.
+    ///
+    /// Returns whether the move scrolled.
+    fn wrap_to_next_line(&mut self) -> bool {
+        self.state.column = GridColumn(0);
+        self.line_feed().is_some()
+    }
+
+    /// Whether a glyph spanning `width` columns fits from the cursor's
+    /// column through the row's end.
+    fn fits(&self, width: u16) -> bool {
+        width <= self.grid.size().cols.saturating_sub(self.state.column.0)
+    }
+
+    /// Stamps `glyph` at the cursor with the current pen and advances the
+    /// cursor past it; under [`InsertReplaceMode::Insert`] the rest of the
+    /// row first shifts right by the glyph's width.
+    ///
+    /// The glyph must fit between the cursor and the row's end, and under
+    /// autowrap an armed deferred wrap must already have been resolved.
+    ///
+    /// # Errors
+    ///
+    /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
+    /// refuses the glyph; the cursor then does not advance.
+    fn land_glyph(&mut self, glyph: char, width: BodyWidth, options: PrintOptions) -> VtResult {
+        // NOTE: The shift runs after `make_room_for_glyph` has resolved the
+        // deferred wrap. Shifting first would let `insert_characters` clear
+        // `pending_wrap`, and the character would overwrite the last column
+        // instead of wrapping to the next row.
+        if matches!(options.insert_replace, InsertReplaceMode::Insert) {
+            self.insert_characters(width.columns());
+        }
+        let (line, column) = (self.state.line, self.state.column);
+        self.grid[line].stamp_at(
+            column.0,
+            glyph,
+            width,
+            &self.state.pen,
+            options.hyperlink_id,
+        )?;
+        self.state.last_landing = Some((line, column));
+        self.advance_past_glyph(width, options.auto_wrap);
+        Ok(())
+    }
+
+    /// Advances the cursor past a glyph `width` wide that landed at the
+    /// cursor.
+    ///
+    /// A glyph that ends the row parks the cursor on the last column and
+    /// arms the deferred wrap only under autowrap; any other glyph moves
+    /// the cursor right and disarms it.
+    fn advance_past_glyph(&mut self, width: BodyWidth, auto_wrap: AutoWrap) {
+        let cols = self.grid.size().cols;
+        let next = self.state.column.0.saturating_add(width.columns());
+        if next >= cols {
+            self.state.column = GridColumn(cols - 1);
+            self.state.pending_wrap = auto_wrap.wraps();
+        } else {
+            self.state.column = GridColumn(next);
+            self.state.pending_wrap = false;
+        }
     }
 }
 
@@ -839,47 +935,6 @@ impl Screen {
     /// Whether the cursor is on the row's last column.
     fn is_last_column(&self) -> bool {
         self.state.column.0 + 1 >= self.grid.size().cols
-    }
-
-    /// Whether a glyph spanning `width` columns fits from the cursor's
-    /// column through the row's end.
-    fn fits(&self, width: u16) -> bool {
-        width <= self.grid.size().cols.saturating_sub(self.state.column.0)
-    }
-
-    /// Combines `mark` onto the glyph the cursor last passed: the cell
-    /// under the cursor when the deferred wrap is armed, or when the
-    /// cursor is on the last column and the last printed glyph landed
-    /// there, otherwise the cell to its left, and on column zero that
-    /// column's own cell. A continuation column hands the mark to its
-    /// wide body.
-    ///
-    /// Reports the cursor's row when the mark was kept, and `None` when
-    /// the cell already holds [`cell::MAX_COMBINING`] marks or the target is a
-    /// filler.
-    fn attach_zero_width(&mut self, mark: char) -> Option<DamageSpan> {
-        let column = self.state.column.0;
-        let cursor = (self.state.line, self.state.column);
-        let on_landing = self.state.last_landing == Some(cursor);
-        let candidate = if self.state.pending_wrap || (self.is_last_column() && on_landing) {
-            column
-        } else {
-            column.saturating_sub(1)
-        };
-        let line = self.state.line;
-        let row = &mut self.grid[line];
-        let target = match row[candidate].width {
-            CellWidth::Narrow | CellWidth::Wide => candidate,
-            CellWidth::Spacer => candidate.saturating_sub(1),
-            CellWidth::LeadingSpacer => return None,
-        };
-        let extra = row[target]
-            .extra
-            .get_or_insert_with(|| Box::new(CellExtra::default()));
-        if !extra.push(mark) {
-            return None;
-        }
-        self.damage_span(line, line)
     }
 }
 
@@ -1576,6 +1631,28 @@ impl Screen {
     fn selection_end(&self, cell: GridPoint, side: CellSide) -> Option<SelectionEnd> {
         let line = self.grid.line_id_at_point(cell)?;
         Some(SelectionEnd::at(line, cell.column, side))
+    }
+}
+
+/// The damage one print reports.
+struct PrintDamage {
+    /// The first row the print touches.
+    first_line: ScreenLine,
+    /// The row the glyph lands on.
+    last_line: ScreenLine,
+    /// Whether a wrap scrolled the screen.
+    scrolled: bool,
+}
+
+impl PrintDamage {
+    /// Reports [`DamageSpan::Full`] when a wrap scrolled, otherwise the
+    /// rows from the first one the print touched through the landing row,
+    /// or `None` when those rows have scrolled out of the window.
+    fn span(self, screen: &Screen) -> Option<DamageSpan> {
+        if self.scrolled {
+            return Some(DamageSpan::Full);
+        }
+        screen.damage_span(self.first_line, self.last_line)
     }
 }
 
