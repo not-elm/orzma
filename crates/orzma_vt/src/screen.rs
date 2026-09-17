@@ -162,6 +162,9 @@ impl Screen {
     /// `options` shape it, wrapping first when the deferred wrap is armed
     /// and autowrap is set.
     ///
+    /// The character is first mapped through the character set mapping,
+    /// which consumes a pending single shift.
+    ///
     /// A one-column glyph takes the cursor's cell and a two-column glyph
     /// takes it and the next; a zero-width mark joins the glyph the
     /// cursor last passed and leaves the cursor alone. A control
@@ -184,8 +187,52 @@ impl Screen {
     /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
     /// refuses the glyph; the cursor and the deferred wrap are then left
     /// as the wrap left them.
+    #[cfg(test)]
     pub fn print(&mut self, c: char, options: PrintOptions) -> VtResult<Option<DamageSpan>> {
-        let GraphicChar(glyph) = self.character_set_mapping.translate(c);
+        let glyph = self.translate(c);
+        self.print_graphic(glyph, options)
+    }
+
+    /// Maps `c` through the character set a pending single shift invokes,
+    /// consuming that single shift, or otherwise through the set invoked
+    /// into GL.
+    pub fn translate(&mut self, c: char) -> GraphicChar {
+        self.character_set_mapping.translate(c)
+    }
+
+    /// Prints a glyph already mapped through a character set at the cursor
+    /// with the current pen, as `options` shape it, wrapping first when the
+    /// deferred wrap is armed and autowrap is set.
+    ///
+    /// A pending single shift stays pending.
+    ///
+    /// A one-column glyph takes the cursor's cell and a two-column glyph
+    /// takes it and the next; a zero-width mark joins the glyph the
+    /// cursor last passed and leaves the cursor alone. A control
+    /// character is ignored.
+    ///
+    /// A two-column glyph with one column left wraps first, leaving a
+    /// filler in the last column; with autowrap reset it is dropped and
+    /// the deferred wrap is disarmed. A two-column glyph on a one-column
+    /// screen is dropped.
+    ///
+    /// Under [`InsertReplaceMode::Insert`] the rest of the row shifts
+    /// right by the glyph's width before it lands.
+    ///
+    /// Reports [`DamageSpan::Full`] when a wrap scrolled, otherwise every
+    /// row the print touched, or `None` when nothing changed or the rows
+    /// have scrolled out of the window.
+    ///
+    /// # Errors
+    ///
+    /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
+    /// refuses the glyph; the cursor and the deferred wrap are then left
+    /// as the wrap left them.
+    pub fn print_graphic(
+        &mut self,
+        GraphicChar(glyph): GraphicChar,
+        options: PrintOptions,
+    ) -> VtResult<Option<DamageSpan>> {
         let Some(class) = GlyphClass::of(glyph) else {
             return Ok(None);
         };

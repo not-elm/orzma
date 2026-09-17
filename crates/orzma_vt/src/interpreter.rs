@@ -108,9 +108,9 @@ struct Executor<'a> {
 
 impl VTActor for Executor<'_> {
     fn print(&mut self, b: char) {
-        // NOTE: DEL is dropped before `Screen::print` rather than inside
-        // it, so that it cannot spend a pending single shift — only a
-        // graphic character may do that.
+        // NOTE: DEL is dropped before `DeviceState::print` rather than
+        // inside it, so that it cannot spend a pending single shift — only
+        // a graphic character may do that.
         if b == '\u{7f}' {
             return;
         }
@@ -425,6 +425,8 @@ impl VTActor for Executor<'_> {
                     .scroll_region_down(repeat_count(params.value(0)));
                 self.stage(damage);
             }
+            // REP
+            (None, [], b'b') => self.repeat_preceding_graphic(repeat_count(params.value(0))),
             // CHT
             (None, [], b'I') => self
                 .device
@@ -564,6 +566,29 @@ impl Executor<'_> {
     fn reverse_index(&mut self) {
         let damage = self.device.active_screen_mut().reverse_index();
         self.stage(damage);
+    }
+
+    /// Prints the device's preceding graphic character `count` more times,
+    /// each time at the cursor as an ordinary print shaped by the current
+    /// pen, hyperlink, `IRM`, and `DECAWM`.
+    ///
+    /// A pending single shift stays pending. Nothing is printed when no
+    /// graphic character has been printed since power-up or the last `RIS`,
+    /// and the repetitions stop at the first glyph a row refuses.
+    ///
+    /// # Control Functions
+    ///
+    /// - `REP` (`CSI Pn b`)
+    fn repeat_preceding_graphic(&mut self, count: u16) {
+        let Some(glyph) = self.device.preceding_graphic() else {
+            return;
+        };
+        for _ in 0..count {
+            let Ok(damage) = self.device.print_graphic(glyph) else {
+                return;
+            };
+            self.stage(damage);
+        }
     }
 
     /// Erases part of the active screen with its pen background (ED,
