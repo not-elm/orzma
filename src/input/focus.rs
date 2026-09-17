@@ -49,7 +49,8 @@ pub(crate) struct PaneClicked {
 }
 
 /// Keeps focus and input gating in sync with the active pane and
-/// click-to-focus requests.
+/// click-to-focus requests, and makes the pane of a newly focused inline
+/// webview the active pane.
 pub(super) struct FocusSyncPlugin;
 
 impl Plugin for FocusSyncPlugin {
@@ -540,16 +541,11 @@ mod tests {
     /// child that is not itself a pane.
     #[test]
     fn a_click_requests_the_selection_of_a_pane_only() {
-        #[derive(Resource, Default)]
-        struct Seen(Vec<PaneAction>);
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .init_resource::<Seen>()
+            .init_resource::<SelectRequests>()
             .add_observer(on_pane_clicked)
-            .add_observer(|ev: On<RequestPaneAction>, mut seen: ResMut<Seen>| {
-                seen.0.push(ev.action)
-            });
+            .add_observer(record_select_request);
         let pane = app
             .world_mut()
             .spawn((OrzmaTerminal, OrzmuxPane(PaneId(2))))
@@ -559,7 +555,7 @@ mod tests {
         app.world_mut().trigger(PaneClicked { entity: other });
         app.update();
         assert_eq!(
-            app.world().resource::<Seen>().0,
+            app.world().resource::<SelectRequests>().0,
             vec![PaneAction::Select(pane)]
         );
     }
@@ -735,6 +731,10 @@ mod tests {
     #[derive(Resource, Default)]
     struct SelectRequests(Vec<PaneAction>);
 
+    fn record_select_request(ev: On<RequestPaneAction>, mut seen: ResMut<SelectRequests>) {
+        seen.0.push(ev.action);
+    }
+
     /// An app running `select_pane_of_focused_webview` that records every
     /// `RequestPaneAction` it triggers. It has already updated once, so the
     /// initial addition of `FocusedWebview` is consumed.
@@ -748,11 +748,7 @@ mod tests {
                 select_pane_of_focused_webview
                     .run_if(resource_exists_and_changed::<FocusedWebview>),
             )
-            .add_observer(
-                |ev: On<RequestPaneAction>, mut seen: ResMut<SelectRequests>| {
-                    seen.0.push(ev.action);
-                },
-            );
+            .add_observer(record_select_request);
         app.update();
         app
     }
@@ -813,8 +809,8 @@ mod tests {
     /// selection is asked for only once.
     ///
     /// Case: the user clicks a webview in the inactive pane and starts
-    /// typing into it right away, with `FocusedWebview` written by a
-    /// dispatch-phase system, standing in for the webview router.
+    /// typing into it right away, and the page's program then declares
+    /// focus on that same webview again.
     #[test]
     fn a_focused_webview_keeps_focus_once_its_pane_becomes_active() {
         let mut app = App::new();
@@ -852,12 +848,11 @@ mod tests {
                 })
                 .in_set(InputPhase::FocusedKey),
             )
+            .add_observer(record_select_request)
             .add_observer(
                 |ev: On<RequestPaneAction>,
                  mut commands: Commands,
-                 mut seen: ResMut<SelectRequests>,
                  active: Query<Entity, With<KeyboardFocused>>| {
-                    seen.0.push(ev.action);
                     let PaneAction::Select(target) = ev.action else {
                         return;
                     };
@@ -884,6 +879,7 @@ mod tests {
         assert!(app.world().get::<KeyboardFocused>(a).is_none());
         assert!(app.world().get::<PaneInactiveStyle>(a).is_some());
 
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
         app.update();
         assert_eq!(
             app.world().resource::<SelectRequests>().0,
