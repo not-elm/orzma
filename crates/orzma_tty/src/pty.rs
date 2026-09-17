@@ -244,7 +244,7 @@ impl Pty {
     ///
     /// Returns `None` when no candidate can be read: no process was
     /// spawned, the process belongs to another user, it has exited, its
-    /// directory was removed, or the platform is not Unix.
+    /// directory was removed, or the platform is neither macOS nor Linux.
     pub fn process_cwd(&self) -> Option<PathBuf> {
         #[cfg(unix)]
         {
@@ -257,10 +257,8 @@ impl Pty {
         }
         #[cfg(not(unix))]
         {
-            // TODO: read the directory on Windows by preferring the one the
-            // shell reports through OSC 7 or OSC 9;9 and falling back to the
-            // shell process's PEB, because PowerShell's Set-Location does not
-            // change the process working directory.
+            // TODO: read the shell process's working directory from its PEB
+            // on Windows.
             None
         }
     }
@@ -992,6 +990,8 @@ mod tests {
             env: Vec::new(),
         })
         .expect("Pty::spawn failed");
+        let login_handoff = Duration::from_millis(200);
+        thread::sleep(login_handoff);
         let mut reported = None;
         holds_within(
             || {

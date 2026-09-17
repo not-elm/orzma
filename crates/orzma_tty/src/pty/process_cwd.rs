@@ -141,11 +141,12 @@ fn read_cwd(_pid: i32) -> IoResult<PathBuf> {
 }
 
 /// The pids of up to [`MAX_CHILDREN`] children of `pid`, in the order
-/// the kernel lists them.
+/// the kernel lists them. A `pid` that does not exist yields no
+/// children rather than an error.
 ///
 /// # Errors
 ///
-/// Returns the OS error when the children cannot be listed.
+/// Returns the OS error when the call reports a negative count.
 #[cfg(target_os = "macos")]
 fn child_pids(pid: i32) -> IoResult<Vec<i32>> {
     const PIDS_SIZE: c_int = (MAX_CHILDREN * size_of::<pid_t>()) as c_int;

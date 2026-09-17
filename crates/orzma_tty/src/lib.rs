@@ -143,7 +143,7 @@ impl<V: Vt> OrzmaTty<V> {
     ///
     /// Returns `None` when neither can be read: no process was spawned,
     /// the process belongs to another user, it has exited, its directory
-    /// was removed, or the platform is not Unix.
+    /// was removed, or the platform is neither macOS nor Linux.
     #[inline]
     pub fn process_cwd(&self) -> Option<PathBuf> {
         self.pty.process_cwd()

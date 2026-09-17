@@ -42,6 +42,10 @@ impl Pane {
     /// Each fallback is looked up only when every earlier one is `None`,
     /// and `None` means none of them is known.
     pub fn cwd(&self) -> Option<PathBuf> {
+        // TODO: on Windows, prefer the directory the shell reports through
+        // OSC 7 or OSC 9;9 over the process directory, because
+        // PowerShell's Set-Location does not change the process working
+        // directory.
         self.tty
             .process_cwd()
             .or_else(|| self.osc7_cwd.clone())
