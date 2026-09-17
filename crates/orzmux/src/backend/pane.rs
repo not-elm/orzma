@@ -39,8 +39,7 @@ impl Pane {
     /// foreground process or shell, else the directory the shell last
     /// reported through OSC 7, else the directory the pane was spawned in.
     ///
-    /// Each fallback is looked up only when every earlier one is `None`,
-    /// and `None` means none of them is known.
+    /// Returns `None` when none of them is known.
     pub fn cwd(&self) -> Option<PathBuf> {
         // TODO: on Windows, prefer the directory the shell reports through
         // OSC 7 or OSC 9;9 over the process directory, because
@@ -208,11 +207,11 @@ fn on_path(name: &str) -> bool {
 mod tests {
     use super::*;
     use orzma_tty::test_support::CaptureSink;
-    #[cfg(unix)]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     use std::thread;
-    #[cfg(unix)]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     use std::time::{Duration, Instant};
-    #[cfg(unix)]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     use tempfile::TempDir;
 
     /// A terminal with no process behind it, so the OS reports no
@@ -294,11 +293,13 @@ mod tests {
         assert_eq!(windows_default_shell(|_| false, None), "cmd.exe");
     }
 
-    /// Asserts that a pane whose shell has reported nothing reports the
-    /// directory it was spawned in.
+    /// Asserts that a pane reports the directory it was spawned in when the
+    /// OS reports no directory for its process and its shell has sent no
+    /// OSC 7 report.
     ///
-    /// Case: the user splits a pane again before the new shell has printed
-    /// its first prompt.
+    /// Case: the user splits a pane again before its new shell has printed
+    /// its first prompt, while the OS cannot be asked for the pane's
+    /// directory.
     #[test]
     fn a_pane_without_an_osc7_report_falls_back_to_its_spawn_directory() {
         let pane = Pane::new(
@@ -330,23 +331,20 @@ mod tests {
     ///
     /// Case: the shell last reported one directory, and the program now
     /// running in the pane works in another.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn the_process_directory_wins_over_an_osc7_report() {
         let dir = TempDir::new().expect("a temp dir");
         let expected = dir.path().canonicalize().expect("the dir canonicalizes");
         let size = GridSize::new(80, 24).expect("a valid size");
-        let tty = OrzmaTty::spawn(
-            OrzmaVt::new(size, 100),
-            SpawnOptions {
+        let tty = ShellFactory::new(Some("/bin/cat".into()), 100)
+            .spawn(
                 size,
-                cell_px: CellPixels::default(),
-                shell: "/bin/cat".into(),
-                cwd: Some(dir.path().to_path_buf()),
-                env: Vec::new(),
-            },
-        )
-        .expect("cat spawns under a PTY");
+                CellPixels::default(),
+                Some(dir.path().to_path_buf()),
+                Vec::new(),
+            )
+            .expect("cat spawns under a PTY");
         let mut pane = Pane::new(tty, (80, 24, CellPixels::default()), None);
         pane.set_osc7_cwd(PathBuf::from("/reported"));
         let deadline = Instant::now() + Duration::from_secs(10);

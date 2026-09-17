@@ -1332,9 +1332,12 @@ mod tests {
     }
 
     /// Asserts that a split inherits the target pane's last OSC 7
-    /// directory when the GUI passes `cwd: None`.
+    /// directory when the GUI passes `cwd: None` and the OS reports no
+    /// directory for the target's process.
     ///
-    /// Case: the shell `cd`s into a project and the user splits the pane.
+    /// Case: a shell that reports its directory through OSC 7 `cd`s into a
+    /// project while the OS cannot be asked for the pane's directory, and
+    /// the user splits the pane.
     #[test]
     fn a_split_inherits_the_target_panes_reported_cwd() {
         let mut h = Harness::new();
@@ -1389,10 +1392,11 @@ mod tests {
 
     /// Asserts that a pane spawned in an inherited directory passes that
     /// directory on when it is split before its own shell has reported
-    /// one.
+    /// one and while the OS reports no directory for its process.
     ///
-    /// Case: the user splits twice in quick succession while the new
-    /// shell is still starting up and has not printed its first prompt.
+    /// Case: the user splits twice in quick succession while the new shell
+    /// has not printed its first prompt and the OS cannot be asked for the
+    /// new pane's directory.
     #[test]
     fn a_split_from_a_pane_that_has_not_reported_a_cwd_passes_on_its_spawn_cwd() {
         let mut h = Harness::new();

@@ -7,7 +7,7 @@ use libc::{
     proc_vnodepathinfo,
 };
 #[cfg(target_os = "macos")]
-use std::ffi::OsStr;
+use std::ffi::OsString;
 #[cfg(target_os = "linux")]
 use std::fs::read_link;
 use std::io::Result as IoResult;
@@ -16,40 +16,42 @@ use std::io::{Error as IoError, ErrorKind};
 #[cfg(target_os = "macos")]
 use std::mem::MaybeUninit;
 #[cfg(target_os = "macos")]
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use tracing::debug;
 
 /// The working directory of the first candidate process the OS reports
-/// as an existing directory, or `None` when no candidate yields one.
+/// as a directory that exists and can be entered, or `None` when no
+/// candidate yields one.
 ///
 /// The candidates are `leader`, then `child`, then on macOS the children
-/// of `child`; each pid is queried at most once, and a `child` pid that
-/// does not fit a `pid_t` is skipped.
-pub(crate) fn resolve(leader: Option<i32>, child: Option<u32>) -> Option<PathBuf> {
-    let child = child.and_then(|pid| i32::try_from(pid).ok());
-    let mut tried = Vec::new();
-    leader
+/// of `child` when `child_is_wrapper` is set; each pid is queried at most
+/// once.
+pub(crate) fn resolve(
+    leader: Option<i32>,
+    child: Option<i32>,
+    child_is_wrapper: bool,
+) -> Option<PathBuf> {
+    let wrapper = child.filter(|_| child_is_wrapper);
+    let spawned = child
         .into_iter()
-        .chain(child)
-        .chain(child.into_iter().flat_map(wrapper_children))
-        .find_map(|pid| {
-            if tried.contains(&pid) {
-                return None;
-            }
-            tried.push(pid);
-            existing_cwd(pid)
-        })
+        .chain(wrapper.into_iter().flat_map(wrapper_children))
+        .filter(|&pid| Some(pid) != leader);
+    leader.into_iter().chain(spawned).find_map(enterable_cwd)
 }
 
-/// The children of `pid`, or none when they cannot be listed; the
-/// failure is logged at debug level.
+/// The pids of up to [`MAX_CHILDREN`] children of `pid`, in the order the
+/// kernel lists them; a listing the kernel refuses yields no children.
 #[cfg(target_os = "macos")]
 fn wrapper_children(pid: i32) -> Vec<i32> {
-    child_pids(pid).unwrap_or_else(|err| {
-        debug!(pid, %err, "listing child processes failed");
-        Vec::new()
-    })
+    const PIDS_SIZE: c_int = (MAX_CHILDREN * size_of::<pid_t>()) as c_int;
+    let mut pids: [pid_t; MAX_CHILDREN] = [0; MAX_CHILDREN];
+    // SAFETY: `pids` is a writable allocation of exactly `PIDS_SIZE` bytes,
+    // and `proc_listchildpids` writes at most `PIDS_SIZE` bytes into it.
+    let count = unsafe { proc_listchildpids(pid, pids.as_mut_ptr().cast::<c_void>(), PIDS_SIZE) };
+    pids.into_iter()
+        .take(usize::try_from(count).unwrap_or(0))
+        .collect()
 }
 
 /// Returns no children.
@@ -58,13 +60,17 @@ fn wrapper_children(_pid: i32) -> Vec<i32> {
     Vec::new()
 }
 
-/// The working directory of `pid` when it can be read and still exists;
-/// the reason is logged at debug level otherwise.
-fn existing_cwd(pid: i32) -> Option<PathBuf> {
+/// The working directory of `pid` when it can be read, still exists, and
+/// can be entered; the reason is logged at debug level otherwise.
+fn enterable_cwd(pid: i32) -> Option<PathBuf> {
+    // NOTE: `<dir>/.` resolves only with search permission on the directory
+    // itself, which the spawn's chdir also needs. `is_dir()` on the bare
+    // path would accept a directory the new shell cannot enter, and the
+    // split would then fail to spawn.
     match read_cwd(pid) {
-        Ok(path) if path.is_dir() => Some(path),
+        Ok(path) if path.join(".").is_dir() => Some(path),
         Ok(path) => {
-            debug!(pid, ?path, "working directory no longer exists");
+            debug!(pid, ?path, "working directory is gone or cannot be entered");
             None
         }
         Err(err) => {
@@ -116,7 +122,7 @@ fn read_cwd(pid: i32) -> IoResult<PathBuf> {
         ));
     };
     let bytes: Vec<u8> = path[..len].iter().map(|c| c.cast_unsigned()).collect();
-    Ok(PathBuf::from(OsStr::from_bytes(&bytes)))
+    Ok(PathBuf::from(OsString::from_vec(bytes)))
 }
 
 /// The working directory of `pid` as the kernel records it.
@@ -140,42 +146,24 @@ fn read_cwd(_pid: i32) -> IoResult<PathBuf> {
     Err(IoError::from(ErrorKind::Unsupported))
 }
 
-/// The pids of up to [`MAX_CHILDREN`] children of `pid`, in the order
-/// the kernel lists them. A `pid` that does not exist yields no
-/// children rather than an error.
-///
-/// # Errors
-///
-/// Returns the OS error when the call reports a negative count.
-#[cfg(target_os = "macos")]
-fn child_pids(pid: i32) -> IoResult<Vec<i32>> {
-    const PIDS_SIZE: c_int = (MAX_CHILDREN * size_of::<pid_t>()) as c_int;
-    let mut pids: [pid_t; MAX_CHILDREN] = [0; MAX_CHILDREN];
-    // SAFETY: `pids` is a writable allocation of exactly `PIDS_SIZE` bytes,
-    // and `proc_listchildpids` writes at most `PIDS_SIZE` bytes into it.
-    let count = unsafe { proc_listchildpids(pid, pids.as_mut_ptr().cast::<c_void>(), PIDS_SIZE) };
-    let Ok(count) = usize::try_from(count) else {
-        return Err(IoError::last_os_error());
-    };
-    Ok(pids.into_iter().take(count).collect())
-}
-
-/// How many children of the spawned process are tried.
+/// How many children of a wrapper process are tried.
 #[cfg(target_os = "macos")]
 const MAX_CHILDREN: usize = 64;
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    use crate::pty::tests::holds_within;
+    use std::fs::{Permissions, set_permissions};
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::process::CommandExt;
     use std::path::Path;
     #[cfg(target_os = "macos")]
     use std::process::Stdio;
     use std::process::{Child, Command};
     #[cfg(target_os = "macos")]
-    use std::thread;
-    #[cfg(target_os = "macos")]
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use tempfile::TempDir;
 
     /// A process started as the leader of its own process group, whose
@@ -194,6 +182,20 @@ mod tests {
 
         fn sleep_in(dir: &Path) -> Self {
             Self::start(Command::new("sleep").arg("30").current_dir(dir))
+        }
+
+        /// A `/bin/sh` started in `dir` that runs `sleep` in `job_dir` as a
+        /// background job and waits for it.
+        #[cfg(target_os = "macos")]
+        fn shell_with_job_in(dir: &Path, job_dir: &Path) -> Self {
+            let script = format!("(cd '{}' && exec sleep 30) & wait", job_dir.display());
+            Self::start(
+                Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(script)
+                    .current_dir(dir)
+                    .stderr(Stdio::null()),
+            )
         }
 
         fn pid(&self) -> i32 {
@@ -229,7 +231,7 @@ mod tests {
             .canonicalize()
             .expect("the dir canonicalizes");
         assert_eq!(
-            resolve(Some(leader.pid()), Some(child.0.id())),
+            resolve(Some(leader.pid()), Some(child.pid()), false),
             Some(expected)
         );
     }
@@ -247,7 +249,10 @@ mod tests {
             .path()
             .canonicalize()
             .expect("the dir canonicalizes");
-        assert_eq!(resolve(Some(i32::MAX), Some(child.0.id())), Some(expected));
+        assert_eq!(
+            resolve(Some(i32::MAX), Some(child.pid()), false),
+            Some(expected)
+        );
     }
 
     /// Asserts that a leader whose working directory was removed is
@@ -269,40 +274,87 @@ mod tests {
             .close()
             .expect("the leader's directory is removed");
         assert_eq!(
-            resolve(Some(leader.pid()), Some(child.0.id())),
+            resolve(Some(leader.pid()), Some(child.pid()), false),
             Some(expected)
         );
     }
 
-    /// Asserts that a child of the spawned process is tried when the
-    /// spawned process itself yields no directory.
+    /// Asserts that a leader whose working directory can no longer be
+    /// entered is skipped rather than reported.
+    ///
+    /// Case: a program keeps running in the foreground after the user
+    /// removes the search permission from the directory it was started in.
+    #[test]
+    fn a_leader_whose_directory_cannot_be_entered_falls_back_to_the_spawned_process() {
+        let leader_dir = TempDir::new().expect("a temp dir");
+        let child_dir = TempDir::new().expect("a temp dir");
+        let leader = Running::sleep_in(leader_dir.path());
+        let child = Running::sleep_in(child_dir.path());
+        let expected = child_dir
+            .path()
+            .canonicalize()
+            .expect("the dir canonicalizes");
+        set_permissions(leader_dir.path(), Permissions::from_mode(0o000))
+            .expect("the leader's directory is locked");
+        let still_enterable = leader_dir.path().join(".").is_dir();
+        let resolved = resolve(Some(leader.pid()), Some(child.pid()), false);
+        set_permissions(leader_dir.path(), Permissions::from_mode(0o700))
+            .expect("the leader's directory is unlocked");
+        // NOTE: root enters a directory whatever its mode, so the locked
+        // directory cannot be set up when the tests run as root.
+        if still_enterable {
+            return;
+        }
+        assert_eq!(resolved, Some(expected));
+    }
+
+    /// Asserts that a child of a spawned wrapper process is tried when the
+    /// wrapper itself yields no directory.
     ///
     /// Case: on macOS the pane's process is the `login` wrapper, whose
     /// directory the user cannot read, and the shell is its child.
     #[cfg(target_os = "macos")]
     #[test]
-    fn a_child_of_the_spawned_process_is_tried_last() {
+    fn a_child_of_a_wrapper_is_tried_last() {
         let outer = TempDir::new().expect("a temp dir");
         let inner = TempDir::new().expect("a temp dir");
         let expected = inner.path().canonicalize().expect("the dir canonicalizes");
-        let script = format!("(cd '{}' && exec sleep 30) & wait", expected.display());
-        let wrapper = Running::start(
-            Command::new("/bin/sh")
-                .arg("-c")
-                .arg(script)
-                .current_dir(outer.path())
-                .stderr(Stdio::null()),
-        );
+        let wrapper = Running::shell_with_job_in(outer.path(), &expected);
         outer.close().expect("the wrapper's directory is removed");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let found = loop {
-            let found = resolve(None, Some(wrapper.0.id()));
-            if found.as_ref() == Some(&expected) || Instant::now() >= deadline {
-                break found;
-            }
-            thread::sleep(Duration::from_millis(10));
-        };
+        let mut found = None;
+        holds_within(
+            || {
+                found = resolve(None, Some(wrapper.pid()), true);
+                found.as_ref() == Some(&expected)
+            },
+            Duration::from_secs(10),
+        );
         assert_eq!(found, Some(expected));
+    }
+
+    /// Asserts that the children of a spawned process that is not a
+    /// wrapper are not tried when the process itself yields no directory.
+    ///
+    /// Case: on macOS the shell was spawned directly because `$USER` or
+    /// `$HOME` was unset, its directory was deleted, and a background job
+    /// it started still runs in another directory.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_children_of_a_process_that_is_not_a_wrapper_are_not_tried() {
+        let outer = TempDir::new().expect("a temp dir");
+        let inner = TempDir::new().expect("a temp dir");
+        let job_dir = inner.path().canonicalize().expect("the dir canonicalizes");
+        let shell = Running::shell_with_job_in(outer.path(), &job_dir);
+        outer.close().expect("the shell's directory is removed");
+        let job_entered_its_directory = holds_within(
+            || resolve(None, Some(shell.pid()), true).as_ref() == Some(&job_dir),
+            Duration::from_secs(10),
+        );
+        assert!(
+            job_entered_its_directory,
+            "the background job never entered its directory"
+        );
+        assert_eq!(resolve(None, Some(shell.pid()), false), None);
     }
 
     /// Asserts that no leader and no spawned process yield no directory.
@@ -311,6 +363,6 @@ mod tests {
     /// process behind it.
     #[test]
     fn no_candidates_yield_no_directory() {
-        assert_eq!(resolve(None, None), None);
+        assert_eq!(resolve(None, None, false), None);
     }
 }

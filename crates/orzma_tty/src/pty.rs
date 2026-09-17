@@ -36,7 +36,11 @@ pub struct Pty {
     /// The pid of the process spawned under the PTY, or `None` for a PTY
     /// built without one.
     #[cfg(unix)]
-    child_pid: Option<u32>,
+    child_pid: Option<i32>,
+    /// Whether the spawned process is the `/usr/bin/login` wrapper, which
+    /// runs the shell as its child.
+    #[cfg(unix)]
+    child_is_wrapper: bool,
 }
 
 /// One non-blocking read of the PTY output stream.
@@ -104,6 +108,8 @@ impl Pty {
         for (key, value) in &options.env {
             cmd.env(&key.0, &value.0);
         }
+        #[cfg(unix)]
+        let child_is_wrapper = launches_login_wrapper(&cmd);
 
         let child = pty_pair
             .slave
@@ -111,7 +117,7 @@ impl Pty {
             .map_err(OrzmaTtyError::SpawnShell)?;
         let child_killer = child.clone_killer();
         #[cfg(unix)]
-        let child_pid = child.process_id();
+        let child_pid = child.process_id().and_then(|pid| i32::try_from(pid).ok());
         drop(pty_pair.slave);
 
         let pipes = master_pipes(pty_pair.master.as_ref())
@@ -139,6 +145,8 @@ impl Pty {
             child_killer,
             #[cfg(unix)]
             child_pid,
+            #[cfg(unix)]
+            child_is_wrapper,
         })
     }
 
@@ -239,12 +247,13 @@ impl Pty {
 
     /// The working directory of the process this PTY is showing: its
     /// foreground process group's leader, else the spawned process, else
-    /// on macOS a child of the spawned process. Only a directory that
-    /// still exists is reported.
+    /// on macOS the child of a spawned `/usr/bin/login` wrapper. Only a
+    /// directory that still exists and can be entered is reported.
     ///
     /// Returns `None` when no candidate can be read: no process was
     /// spawned, the process belongs to another user, it has exited, its
-    /// directory was removed, or the platform is neither macOS nor Linux.
+    /// directory was removed or can no longer be entered, or the platform
+    /// is neither macOS nor Linux.
     pub fn process_cwd(&self) -> Option<PathBuf> {
         #[cfg(unix)]
         {
@@ -253,7 +262,7 @@ impl Pty {
                 .lock()
                 .ok()
                 .and_then(|master| master.process_group_leader());
-            process_cwd::resolve(leader, self.child_pid)
+            process_cwd::resolve(leader, self.child_pid, self.child_is_wrapper)
         }
         #[cfg(not(unix))]
         {
@@ -309,6 +318,8 @@ impl Pty {
             child_killer: Box::new(DetachedKiller),
             #[cfg(unix)]
             child_pid: None,
+            #[cfg(unix)]
+            child_is_wrapper: false,
         }
     }
 }
@@ -355,9 +366,22 @@ fn macos_login_command(shell: &str) -> CommandBuilder {
     } else {
         "-flp"
     };
-    let mut cmd = CommandBuilder::new("/usr/bin/login");
+    let mut cmd = CommandBuilder::new(LOGIN_WRAPPER);
     cmd.args([flags, user.as_str(), "/bin/zsh", "-fc", exec.as_str()]);
     cmd
+}
+
+/// The program `macos_login_command` wraps the shell in.
+#[cfg(unix)]
+const LOGIN_WRAPPER: &str = "/usr/bin/login";
+
+/// Whether `cmd` starts the `/usr/bin/login` wrapper, which runs the shell
+/// as its child.
+#[cfg(unix)]
+fn launches_login_wrapper(cmd: &CommandBuilder) -> bool {
+    cmd.get_argv()
+        .first()
+        .is_some_and(|program| program == LOGIN_WRAPPER)
 }
 
 fn master_pipes(
@@ -574,7 +598,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread::JoinHandle;
-    #[cfg(unix)]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     use tempfile::TempDir;
 
     /// A program that prints one line and exits 0 on the host platform.
@@ -804,7 +828,7 @@ mod tests {
 
     /// Polls `condition` every millisecond and reports whether it held
     /// before `within` elapsed.
-    fn holds_within(mut condition: impl FnMut() -> bool, within: Duration) -> bool {
+    pub(super) fn holds_within(mut condition: impl FnMut() -> bool, within: Duration) -> bool {
         let deadline = Instant::now() + within;
         while !condition() {
             if Instant::now() >= deadline {
@@ -977,7 +1001,7 @@ mod tests {
     ///
     /// Case: the pane runs a program that never takes the terminal's
     /// foreground.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn process_cwd_reports_the_directory_a_program_was_spawned_in() {
         let dir = TempDir::new().expect("a temp dir");
@@ -1008,7 +1032,7 @@ mod tests {
     ///
     /// Case: the user changes into a project directory at the prompt
     /// before splitting the pane.
-    #[cfg(unix)]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn process_cwd_follows_a_shell_cd() {
         let dir = TempDir::new().expect("a temp dir");
@@ -1021,7 +1045,10 @@ mod tests {
             env: Vec::new(),
         })
         .expect("Pty::spawn failed");
-        pty.enqueue_write(format!("cd '{}'\n", expected.display()).into_bytes())
+        // NOTE: on macOS the shell runs as the developer's own login shell,
+        // which saves the typed line into their real history file when the
+        // PTY hangs up unless HISTFILE is unset first.
+        pty.enqueue_write(format!("unset HISTFILE; cd '{}'\n", expected.display()).into_bytes())
             .expect("the cd is queued");
         let mut reported = None;
         holds_within(
