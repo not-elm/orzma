@@ -801,13 +801,20 @@ mod tests {
     #[derive(Resource, Default)]
     struct KeyboardFocusAtKeys(Vec<Entity>);
 
+    /// The stand-in for the webview router in this test: the test sets
+    /// this instead of `FocusedWebview` directly, and a system in
+    /// `InputPhase::Dispatch` moves it into `FocusedWebview`.
+    #[derive(Resource, Default)]
+    struct PendingWebviewFocus(Option<Entity>);
+
     /// Asserts that a webview focused in an inactive pane keeps its focus
     /// once that pane becomes active, that keyboard dispatch in the same
     /// frame already sees that pane as keyboard-focused, and that the
     /// selection is asked for only once.
     ///
     /// Case: the user clicks a webview in the inactive pane and starts
-    /// typing into it right away.
+    /// typing into it right away, with `FocusedWebview` written by a
+    /// dispatch-phase system, standing in for the webview router.
     #[test]
     fn a_focused_webview_keeps_focus_once_its_pane_becomes_active() {
         let mut app = App::new();
@@ -816,6 +823,7 @@ mod tests {
             .init_resource::<ImeState>()
             .init_resource::<SelectRequests>()
             .init_resource::<KeyboardFocusAtKeys>()
+            .init_resource::<PendingWebviewFocus>()
             .insert_resource(OrzmaConfigsResource::default())
             .configure_sets(
                 Update,
@@ -825,6 +833,16 @@ mod tests {
                     InputPhase::FocusedKey,
                 )
                     .chain(),
+            )
+            .add_systems(
+                Update,
+                (|mut pending: ResMut<PendingWebviewFocus>,
+                  mut focused: ResMut<FocusedWebview>| {
+                    if let Some(child) = pending.0.take() {
+                        focused.0 = Some(child);
+                    }
+                })
+                .in_set(InputPhase::Dispatch),
             )
             .add_systems(
                 Update,
@@ -858,7 +876,7 @@ mod tests {
             .0
             .clear();
 
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+        app.world_mut().resource_mut::<PendingWebviewFocus>().0 = Some(child);
         app.update();
 
         assert_eq!(app.world().resource::<KeyboardFocusAtKeys>().0, vec![b]);
