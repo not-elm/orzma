@@ -417,13 +417,32 @@ impl Screen {
     /// - `CNL` (`CSI Pn E`) — before its carriage return
     pub fn move_cursor_down(&mut self, count: u16) {
         let bottom = self.scroll_region.bottom_margin();
-        let limit = if self.state.line <= bottom {
-            bottom
-        } else {
-            ScreenLine(self.grid.size().rows - 1)
-        };
-        self.state.line = ScreenLine(self.state.line.0.saturating_add(count).min(limit.0));
-        self.state.pending_wrap = false;
+        self.move_cursor_down_to(bottom, count);
+    }
+
+    /// Moves the cursor down `count` rows in the same column, never
+    /// scrolling.
+    ///
+    /// The last row of the addressable page is the barrier: the bottom
+    /// margin is passed rather than stopping the cursor, and only origin
+    /// mode, which makes the scrolling region the addressable page,
+    /// stops it at the bottom margin. A cursor that already sits below
+    /// that barrier still moves down, as far as the last row of the
+    /// page. The column is never touched, and a pending deferred wrap is
+    /// discarded.
+    ///
+    /// # Control Functions
+    ///
+    /// - `VPR` (`CSI Pn e`)
+    ///
+    /// # References
+    ///
+    /// - vt510.pdf p.351 — "If an attempt is made to move the active
+    ///   position below the last line, the active position stops at the
+    ///   last line."
+    pub fn move_cursor_down_within_page(&mut self, count: u16) {
+        let (_, last) = self.addressable_line_bounds();
+        self.move_cursor_down_to(last, count);
     }
 
     /// Moves the cursor `count` columns left, stopping at the first
@@ -525,14 +544,7 @@ impl Screen {
     /// [`OriginMode`] defines, clamping it to the addressable region and
     /// disarming the deferred wrap, without touching the column.
     fn seat_line(&mut self, line: ScreenLine) {
-        let GridSize { rows, .. } = self.grid.size();
-        let (origin, last) = match self.scroll_region.origin_mode() {
-            OriginMode::WithinMargins => (
-                self.scroll_region.top_margin(),
-                self.scroll_region.bottom_margin(),
-            ),
-            OriginMode::UpperLeftCorner => (ScreenLine(0), ScreenLine(rows - 1)),
-        };
+        let (origin, last) = self.addressable_line_bounds();
         self.state.line = ScreenLine(line.0.saturating_add(origin.0).min(last.0));
         self.state.pending_wrap = false;
     }
@@ -543,6 +555,31 @@ impl Screen {
         let cols = self.grid.size().cols;
         self.state.column = GridColumn(column.0.min(cols - 1));
         self.state.pending_wrap = false;
+    }
+
+    /// Moves the cursor down `count` rows, stopping at `barrier`, or at
+    /// the last row of the page when the cursor already sits below
+    /// `barrier`.
+    fn move_cursor_down_to(&mut self, barrier: ScreenLine, count: u16) {
+        let limit = if self.state.line <= barrier {
+            barrier
+        } else {
+            ScreenLine(self.grid.size().rows - 1)
+        };
+        self.state.line = ScreenLine(self.state.line.0.saturating_add(count).min(limit.0));
+        self.state.pending_wrap = false;
+    }
+
+    /// The origin and the last line the current [`OriginMode`]
+    /// addresses.
+    fn addressable_line_bounds(&self) -> (ScreenLine, ScreenLine) {
+        match self.scroll_region.origin_mode() {
+            OriginMode::WithinMargins => (
+                self.scroll_region.top_margin(),
+                self.scroll_region.bottom_margin(),
+            ),
+            OriginMode::UpperLeftCorner => (ScreenLine(0), ScreenLine(self.grid.size().rows - 1)),
+        }
     }
 
     /// The zero-based index a one-based addressing parameter names, where

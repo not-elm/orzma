@@ -92,6 +92,86 @@ fn a_cursor_down_below_the_region_reaches_the_last_row() {
     assert_eq!(screen.state.line, ScreenLine(3));
 }
 
+/// Asserts that a downward page-bound motion passes the bottom margin
+/// and stops at the last row, leaving the column where it was.
+///
+/// Case: a full-screen editor with a reserved status line asks for a
+/// downward motion longer than its text pane.
+#[test]
+fn a_page_bound_cursor_down_inside_the_region_passes_the_bottom_margin() {
+    let mut screen = regioned_screen();
+    screen.state.line = ScreenLine(1);
+    screen.state.column = GridColumn(2);
+    screen.move_cursor_down_within_page(5);
+    assert_eq!(screen.state.line, ScreenLine(3));
+    assert_eq!(screen.state.column, GridColumn(2));
+}
+
+/// Asserts that origin mode makes the bottom margin the barrier of a
+/// page-bound motion again.
+///
+/// Case: a full-screen application sets origin mode and its pane, then
+/// asks for a downward motion longer than the pane.
+#[test]
+fn a_page_bound_cursor_down_under_origin_mode_stops_at_the_bottom_margin() {
+    let mut screen = regioned_screen();
+    screen.set_origin_mode(OriginMode::WithinMargins);
+    assert_eq!(screen.state.line, ScreenLine(1));
+    screen.move_cursor_down_within_page(9);
+    assert_eq!(screen.state.line, ScreenLine(2));
+}
+
+/// Asserts that the largest representable count saturates at the last
+/// row rather than wrapping.
+///
+/// Case: a program emits `CSI 65535 e` after computing a motion from a
+/// value it never bounded.
+#[test]
+fn the_largest_page_bound_cursor_down_count_saturates() {
+    let mut screen = regioned_screen();
+    screen.state.line = ScreenLine(1);
+    screen.move_cursor_down_within_page(u16::MAX);
+    assert_eq!(screen.state.line, ScreenLine(3));
+}
+
+/// Asserts that a page-bound motion at the last row still disarms the
+/// deferred wrap.
+///
+/// Case: an application fills the last cell of the bottom row and then
+/// asks for one more downward motion.
+#[test]
+fn a_page_bound_cursor_down_at_the_last_row_still_disarms_the_deferred_wrap() {
+    let mut screen = tall_screen();
+    screen.state.line = ScreenLine(3);
+    screen.state.pending_wrap = true;
+    screen.move_cursor_down_within_page(1);
+    assert_eq!(screen.state.line, ScreenLine(3));
+    assert!(!screen.state.pending_wrap);
+}
+
+/// Asserts that a page-bound motion keeps carrying a cursor a
+/// checkpoint restored below the bottom margin downward, toward the
+/// last row, rather than pulling it back up to the margin.
+///
+/// Case: a full-screen application saves the cursor at the foot of its
+/// pane, shrinks the pane, and restores the cursor before stepping
+/// down.
+#[test]
+fn a_page_bound_cursor_down_never_moves_a_restored_cursor_up() {
+    let mut screen = tall_screen();
+    screen.set_scroll_region(Some(1), Some(3));
+    screen.set_origin_mode(OriginMode::WithinMargins);
+    screen.move_cursor_down(9);
+    screen.save_checkpoint();
+    screen.set_scroll_region(Some(1), Some(2));
+    screen.restore_checkpoint();
+    assert_eq!(screen.state.line, ScreenLine(2));
+    assert_eq!(screen.scroll_region.bottom_margin(), ScreenLine(1));
+
+    screen.move_cursor_down_within_page(1);
+    assert_eq!(screen.state.line, ScreenLine(3));
+}
+
 /// Asserts that a leftward motion stops at the first column, the page
 /// border rather than a margin.
 ///
