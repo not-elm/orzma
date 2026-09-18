@@ -401,9 +401,8 @@ impl PaneTreatment {
 ///   `grid_size * cell_size_px` rectangle.
 /// - "No cursor" is encoded by clearing the `CURSOR_VISIBLE` bit in
 ///   `cursor_style` (and leaving `cursor_pos` at any value); the shader
-///   short-circuits on `cursor_visible == 0u`. A cursor (vi or live)
-///   whose grid line projects outside the viewport takes the same path:
-///   `cursor_visible = 0`.
+///   then paints no cursor. A cursor (vi or live) whose grid line
+///   projects outside the viewport takes the same path.
 /// - `cursor_packed == 0` means no cursor color is set, and the shader
 ///   paints the cursor in the foreground of the cell under it. A set
 ///   color packs like a cell color, whose alpha byte is never zero.
@@ -658,7 +657,7 @@ struct PackedPalette {
 }
 
 impl PackedPalette {
-    /// Packs every slot of `palette` once.
+    /// Packs each color slot of `palette` once.
     fn build(palette: &Palette) -> Self {
         Self {
             indexed: palette.indexed.map(pack_linear),
@@ -1369,9 +1368,9 @@ mod tests {
     /// `Vec4` and the rect array force alignment padding, down to the
     /// packed cursor color in the tail.
     ///
-    /// Case: the shader reads `overlay_dim`, `overlay_desaturate`, and
-    /// the cursor color at the byte offsets its own struct declaration
-    /// implies, while the host uploads them at these.
+    /// Case: the host uploads `overlay_dim`, `overlay_desaturate`, and the
+    /// cursor color, and the shader reads them at the byte offsets its own
+    /// struct declaration implies.
     #[test]
     fn terminal_params_field_offsets_are_pinned() {
         assert_eq!(
@@ -1695,8 +1694,8 @@ mod tests {
     /// Asserts that reverse video materializes the transparent default
     /// background through the shared helper rather than inline.
     ///
-    /// Case: a reverse-video cell on the default background, whose glyph
-    /// takes the colour the default background paints.
+    /// Case: a program prints a reverse-video cell on the default
+    /// background, and its glyph takes the colour that background paints.
     #[test]
     fn wgsl_reverse_video_materializes_the_default_background_through_the_helper() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
@@ -1802,8 +1801,7 @@ mod tests {
     /// from the cell's colors before concealment, and that no pixel
     /// inversion is left in the shader.
     ///
-    /// Case: an underline cursor sits on a concealed cell, where the
-    /// concealed foreground equals the background.
+    /// Case: an underline cursor sits on a concealed cell.
     #[test]
     fn wgsl_cursor_strips_take_the_fill_color() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
