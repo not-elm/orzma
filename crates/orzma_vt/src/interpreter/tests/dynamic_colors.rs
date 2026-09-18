@@ -265,9 +265,10 @@ fn a_cursor_recolor_owes_a_frame_that_repaints_no_row() {
 /// a program sends `OSC 112` on exit without having set a colour.
 #[test]
 fn a_cursor_recolor_that_changes_nothing_leaves_the_chunk_undamaged() {
-    let mut session = Session::new();
-    assert!(session.feed(b"\x1b]12;rgb:ff/88/00\x07").damaged);
-    assert!(!session.feed(b"\x1b]12;rgb:ff/88/00\x07").damaged);
+    assert!(!liveness_after(
+        b"\x1b]12;rgb:ff/88/00\x07",
+        b"\x1b]12;rgb:ff/88/00\x07"
+    ));
     assert!(!damage_of(b"\x1b]112\x07"));
 }
 

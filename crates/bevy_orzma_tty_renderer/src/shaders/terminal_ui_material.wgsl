@@ -639,11 +639,16 @@ fn resolve_visible_colors(cell: Cell) -> CellColors {
     return CellColors(fg, bg);
 }
 
-// `colors` with the glyph taking the background color when the cell is
-// concealed.
+// `colors` with the glyph taking the color the background is painted in
+// when the cell is concealed.
 fn conceal(cell: Cell, colors: CellColors) -> CellColors {
     if (cell.style_flags & STYLE_HIDDEN) != 0u {
-        return CellColors(colors.bg, colors.bg);
+        // NOTE: The ground is painted through tint_bg, so the glyph must take
+        // the tinted color as well. The untinted background would leave the
+        // concealed text readable in an inactive pane, where the tint moves
+        // the ground away from it. tint_bg keeps the transparent sentinel, so
+        // a concealed glyph on the default background still paints no ink.
+        return CellColors(tint_bg(colors.bg), colors.bg);
     }
     return colors;
 }

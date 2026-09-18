@@ -166,12 +166,7 @@ impl Palette {
     /// [`Palette::foreground`], [`Palette::background`], and
     /// [`Palette::cursor`] alone; returns whether any slot changed.
     pub fn reset_all_indexed(&mut self) -> bool {
-        let indexed = &mut *self.indexed;
-        if *indexed == Self::XTERM_INDEXED {
-            return false;
-        }
-        *indexed = Self::XTERM_INDEXED;
-        true
+        Self::assign(&mut *self.indexed, Self::XTERM_INDEXED)
     }
 
     /// Sets the default foreground to `color`; returns whether it
@@ -195,8 +190,7 @@ impl Palette {
     }
 
     /// Returns the default foreground to its built-in default, leaving
-    /// the background and the indexed slots alone; returns whether it
-    /// changed.
+    /// every other color alone; returns whether it changed.
     ///
     /// # Control Functions
     ///
@@ -206,8 +200,7 @@ impl Palette {
     }
 
     /// Returns the default background to its built-in default, leaving
-    /// the foreground and the indexed slots alone; returns whether it
-    /// changed.
+    /// every other color alone; returns whether it changed.
     ///
     /// # Control Functions
     ///
@@ -240,12 +233,7 @@ impl Palette {
     /// foreground, the background, and the cursor color — to its
     /// built-in default; returns whether anything changed.
     pub fn reset(&mut self) -> bool {
-        let default = Self::default();
-        if *self == default {
-            return false;
-        }
-        *self = default;
-        true
+        Self::assign(self, Self::default())
     }
 
     /// Writes `value` into `slot`; returns whether the slot changed.

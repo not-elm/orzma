@@ -457,8 +457,7 @@ struct TerminalParams {
     /// Inline-overlay (webview) desaturation toward Rec.709 luminance applied to
     /// overlay samples. `0.0` = active / no-op.
     overlay_desaturate: f32,
-    /// The `OSC 12` cursor color in the cell-color packing; `0` when
-    /// none is set.
+    /// The `OSC 12` cursor color.
     cursor_packed: u32,
 }
 
@@ -1368,9 +1367,8 @@ mod tests {
     /// `Vec4` and the rect array force alignment padding, down to the
     /// packed cursor color in the tail.
     ///
-    /// Case: the host uploads `overlay_dim`, `overlay_desaturate`, and the
-    /// cursor color, and the shader reads them at the byte offsets its own
-    /// struct declaration implies.
+    /// Case: an inactive pane shows a dimmed, desaturated webview while
+    /// nvim in it holds an `OSC 12` cursor color.
     #[test]
     fn terminal_params_field_offsets_are_pinned() {
         assert_eq!(
@@ -1632,17 +1630,10 @@ mod tests {
     #[test]
     fn wgsl_cursor_covers_both_halves_of_a_wide_glyph() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
-        let helper = src
-            .split("fn cursor_covers(")
-            .nth(1)
-            .expect("the shader defines cursor_covers");
-        let body = helper.split("\n}\n").next().expect("the helper has a body");
+        let body = wgsl_fn_body(src, "cursor_covers");
         assert!(body.contains("col == params.cursor_pos.x + 1u"));
         assert!(body.contains("col + 1u == params.cursor_pos.x"));
-        let painter = src
-            .split("fn paint_cursor(")
-            .nth(1)
-            .expect("the shader defines paint_cursor");
+        let painter = wgsl_fn_body(src, "paint_cursor");
         assert!(painter.contains("cursor_covers(row, col)"));
         assert!(painter.contains("bar_covers(row, col)"));
         assert!(src.contains("fn bar_covers("));
@@ -1667,12 +1658,25 @@ mod tests {
     }
 
     /// The text of WGSL function `name`, from the end of its name to its
-    /// closing brace.
+    /// closing brace in column zero, under LF and CRLF line endings alike.
     fn wgsl_fn_body<'a>(src: &'a str, name: &str) -> &'a str {
         src.split(&format!("fn {name}("))
             .nth(1)
-            .and_then(|rest| rest.split("\n}\n").next())
+            .and_then(|rest| rest.split("\n}").next())
             .expect("the shader defines the function")
+    }
+
+    /// Asserts that a function body ends at its own closing brace under
+    /// CRLF line endings rather than running on into the next function.
+    ///
+    /// Case: a Windows checkout converts the shader to CRLF before the
+    /// tests embed it.
+    #[test]
+    fn wgsl_fn_body_ends_at_the_closing_brace_under_crlf() {
+        let src =
+            "fn first(\r\n) {\r\n    if x {\r\n    }\r\n}\r\nfn second() {\r\n    MARKER\r\n}\r\n";
+        assert!(!wgsl_fn_body(src, "first").contains("MARKER"));
+        assert!(wgsl_fn_body(src, "second").contains("MARKER"));
     }
 
     /// Asserts that the shader applies concealment as the last stage of
@@ -1689,6 +1693,17 @@ mod tests {
             wgsl_fn_body(src, "resolve_cell_colors")
                 .contains("conceal(cell, resolve_visible_colors(cell))")
         );
+    }
+
+    /// Asserts that a concealed glyph takes the tinted color its ground
+    /// is painted in rather than the untinted cell background.
+    ///
+    /// Case: a program prints concealed text on a colored background in
+    /// a pane that then loses focus and takes the inactive-pane tint.
+    #[test]
+    fn wgsl_concealment_follows_the_inactive_pane_tint() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(wgsl_fn_body(src, "conceal").contains("CellColors(tint_bg(colors.bg), colors.bg)"));
     }
 
     /// Asserts that reverse video materializes the transparent default
@@ -1732,10 +1747,11 @@ mod tests {
     }
 
     /// Asserts that the uniform carries zero for an unset cursor color
-    /// and the cell packing of the color once one is set.
+    /// and the cell packing of the color once one is set, which stays
+    /// nonzero even for black.
     ///
-    /// Case: nvim recolors the cursor with `OSC 12` and later restores it
-    /// with `OSC 112`.
+    /// Case: nvim recolors the cursor with `OSC 12`, a light theme sets a
+    /// black cursor, and `OSC 112` later restores the default.
     #[test]
     fn terminal_params_carry_the_cursor_color() {
         assert_eq!(params_for(&Palette::default()).cursor_packed, 0);
@@ -1744,21 +1760,23 @@ mod tests {
             g: 0x88,
             b: 0x00,
         };
-        let palette = Palette {
-            cursor: Some(orange),
-            ..Palette::default()
-        };
-        let packed = params_for(&palette).cursor_packed;
-        assert_eq!(packed, pack_linear(orange));
-        assert_ne!(packed, 0);
+        let black = Rgb { r: 0, g: 0, b: 0 };
+        for color in [orange, black] {
+            let palette = Palette {
+                cursor: Some(color),
+                ..Palette::default()
+            };
+            let packed = params_for(&palette).cursor_packed;
+            assert_eq!(packed, pack_linear(color));
+            assert_ne!(packed, 0, "{color:?} collides with the unset sentinel");
+        }
     }
 
     /// Asserts that the shader declares the packed cursor color as the
     /// last field of its uniform block, matching the host layout.
     ///
-    /// Case: the host appends the cursor color after
-    /// `overlay_desaturate`, and the shader reads the block through its
-    /// own declaration.
+    /// Case: a shell theme sets the cursor color with `OSC 12`, and the
+    /// pane paints its cursor in that color.
     #[test]
     fn wgsl_terminal_params_end_with_the_cursor_color() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
