@@ -179,7 +179,7 @@ impl DeviceState {
             auto_wrap: self.modes.auto_wrap,
             hyperlink_id: self.active_hyperlink,
         };
-        self.active_screen_mut().print_graphic(glyph, options)
+        self.active_screen_mut().print(glyph, options)
     }
 
     /// Returns both screens and every mode to their power-up state;

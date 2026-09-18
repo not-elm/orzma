@@ -23,7 +23,7 @@ fn a_tab_keeps_the_deferred_wrap_armed() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     assert!(screen.state.pending_wrap);

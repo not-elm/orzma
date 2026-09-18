@@ -11,13 +11,13 @@ use super::*;
 fn erase_display_below_clears_from_the_cursor_down() {
     let mut screen = screen();
     screen
-        .print('a', PrintOptions::default())
+        .print(classified('a'), PrintOptions::default())
         .expect("a printable glyph");
     screen.line_feed();
     screen.carriage_return();
     for c in ['b', 'c'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     screen.state.column = GridColumn(1);
@@ -40,13 +40,13 @@ fn erase_display_below_clears_from_the_cursor_down() {
 fn erase_display_above_clears_through_the_cursor() {
     let mut screen = screen();
     screen
-        .print('a', PrintOptions::default())
+        .print(classified('a'), PrintOptions::default())
         .expect("a printable glyph");
     screen.line_feed();
     screen.carriage_return();
     for c in ['b', 'c', 'd'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     screen.state.column = GridColumn(1);
@@ -75,7 +75,7 @@ fn erase_display_all_clears_the_screen_but_not_history() {
     screen.carriage_return();
     for c in ['a', 'b'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     let damage = screen.erase_in_display(EraseScreenMode::All);

@@ -724,6 +724,8 @@ SPG2 — crates/orzma_vt/src/screen.rs:212-213, Screen::print_graphic
 
 コードレビューと simplify で、変換済みの文字とその `GlyphClass` を組にした `ClassifiedGlyph`（`crates/orzma_vt/src/screen/cell.rs`）を足し、`Screen::print_graphic` と `DeviceState::print_graphic` はこれを受け取るようにした。`DeviceState` の記憶もこの型にしたので、文字の幅は変換の直後に 1 回だけ引く。振る舞いは変わらない。
 
+その後、テスト専用だった `Screen::print(char, PrintOptions)` を削除し、`Screen::print_graphic` を `Screen::print(ClassifiedGlyph, PrintOptions)` に改名した。この文書の他の箇所にある `Screen::print_graphic` は、今の `Screen::print` を指す。`Screen` のテストは補助関数 `classified(c)` で引数を作る。制御文字は `ClassifiedGlyph` にならないので、`Screen` 層の「制御文字を無視する」テストは削除した（`DeviceState::print` を通る `interpreter/tests/printing.rs` の DEL・UTF-8 ST のテストと、`cell.rs` の `a_control_character_has_no_class` が同じ契約を持つ）。`DeviceState::print_graphic` の名前はそのままである。
+
 ### docs/todo との衝突
 
 - なし。`docs/todo/vt-conformance-remaining.md` にあった REP の項目（「`csi_dispatch` に腕が無い」）は、実装後にコミット `727ff77e` で一覧から外した。
