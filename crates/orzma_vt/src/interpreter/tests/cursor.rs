@@ -203,3 +203,44 @@ fn the_line_position_absolute_sequence_addresses_a_line() {
         'x'
     );
 }
+
+/// Asserts that `CSI Pn e` moves the cursor down by the parameter
+/// rather than addressing the line the parameter names.
+///
+/// Case: an application steps three rows down from the home position
+/// with the line-position-relative spelling and prints there.
+#[test]
+fn the_line_position_relative_sequence_moves_by_rows() {
+    let mut session = Session::sized(GridSize { cols: 4, rows: 5 });
+    session.feed(b"\x1b[3ex");
+    assert_eq!(session.char_at(3, 0), 'x');
+}
+
+/// Asserts that an omitted count and an explicit zero each move one
+/// row, the default DEC gives every `Pn`.
+///
+/// Case: a program emits the bare `CSI e` spelling and then the zero
+/// spelling, printing a character after each.
+#[test]
+fn an_omitted_line_position_relative_count_moves_one_row() {
+    let mut session = Session::new();
+    session.feed(b"\x1b[ex\x1b[0ey");
+    assert_eq!(session.char_at(1, 0), 'x');
+    assert_eq!(session.char_at(2, 1), 'y');
+}
+
+/// Asserts that `CSI Pn e` passes the bottom margin and reaches the
+/// last row where `CSI Pn B` stops at the margin, and that it leaves
+/// the column alone.
+///
+/// Case: an application reserves a status line with a scrolling region
+/// and steps down with each spelling in turn.
+#[test]
+fn the_line_position_relative_sequence_passes_the_bottom_margin() {
+    let mut session = Session::new();
+    session.feed(b"\x1b[1;2r\x1b[9Bx");
+    assert_eq!(session.char_at(1, 0), 'x');
+
+    session.feed(b"\x1b[9ey");
+    assert_eq!(session.char_at(2, 1), 'y');
+}
