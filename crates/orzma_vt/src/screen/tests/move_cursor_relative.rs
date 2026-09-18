@@ -128,7 +128,7 @@ fn a_page_bound_cursor_down_under_origin_mode_stops_at_the_bottom_margin() {
 /// value it never bounded.
 #[test]
 fn the_largest_page_bound_cursor_down_count_saturates() {
-    let mut screen = regioned_screen();
+    let mut screen = tall_screen();
     screen.state.line = ScreenLine(1);
     screen.move_cursor_down_within_page(u16::MAX);
     assert_eq!(screen.state.line, ScreenLine(3));
@@ -149,9 +149,9 @@ fn a_page_bound_cursor_down_at_the_last_row_still_disarms_the_deferred_wrap() {
     assert!(!screen.state.pending_wrap);
 }
 
-/// Asserts that a page-bound motion keeps carrying a cursor a
-/// checkpoint restored below the bottom margin downward, toward the
-/// last row, rather than pulling it back up to the margin.
+/// Asserts that a cursor restored below the bottom margin by a
+/// checkpoint keeps moving down toward the last row rather than being
+/// pulled back up to the margin.
 ///
 /// Case: a full-screen application saves the cursor at the foot of its
 /// pane, shrinks the pane, and restores the cursor before stepping

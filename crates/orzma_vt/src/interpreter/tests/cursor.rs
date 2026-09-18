@@ -217,16 +217,16 @@ fn the_line_position_relative_sequence_moves_by_rows() {
 }
 
 /// Asserts that an omitted count and an explicit zero each move one
-/// row, the default DEC gives every `Pn`.
+/// row, which is the default DEC gives every `Pn`.
 ///
 /// Case: a program emits the bare `CSI e` spelling and then the zero
 /// spelling, printing a character after each.
 #[test]
 fn an_omitted_line_position_relative_count_moves_one_row() {
-    let mut session = Session::new();
-    session.feed(b"\x1b[ex\x1b[0ey");
-    assert_eq!(session.char_at(1, 0), 'x');
-    assert_eq!(session.char_at(2, 1), 'y');
+    let device = interpret(b"\x1b[ex\x1b[0ey");
+    let screen = device.active_screen();
+    assert_eq!(screen.viewport_row(ViewportLine(1))[0].c, 'x');
+    assert_eq!(screen.viewport_row(ViewportLine(2))[1].c, 'y');
 }
 
 /// Asserts that `CSI Pn e` passes the bottom margin and reaches the
@@ -237,10 +237,8 @@ fn an_omitted_line_position_relative_count_moves_one_row() {
 /// and steps down with each spelling in turn.
 #[test]
 fn the_line_position_relative_sequence_passes_the_bottom_margin() {
-    let mut session = Session::new();
-    session.feed(b"\x1b[1;2r\x1b[9Bx");
-    assert_eq!(session.char_at(1, 0), 'x');
-
-    session.feed(b"\x1b[9ey");
-    assert_eq!(session.char_at(2, 1), 'y');
+    let device = interpret(b"\x1b[1;2r\x1b[9Bx\x1b[9ey");
+    let screen = device.active_screen();
+    assert_eq!(screen.viewport_row(ViewportLine(1))[0].c, 'x');
+    assert_eq!(screen.viewport_row(ViewportLine(2))[1].c, 'y');
 }
