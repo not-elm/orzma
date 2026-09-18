@@ -8,7 +8,7 @@ fn screen_with_two_wide_glyphs() -> Screen {
     let mut screen = screen();
     for c in ['あ', 'い'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     screen
@@ -88,7 +88,7 @@ fn widening_follows_the_current_row_contents() {
     let before = screen.selection_range().expect("a selection is active");
     assert_eq!((before.start, before.end), (point(0, 1), point(0, 1)));
     screen
-        .print('あ', PrintOptions::default())
+        .print(classified('あ'), PrintOptions::default())
         .expect("a printable glyph");
     let after = screen
         .selection_range()
@@ -106,7 +106,7 @@ fn each_end_widens_against_its_own_row() {
     let mut screen = screen();
     for c in ['あ', 'い', 'う', 'え'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     screen.start_selection(point(0, 3), CellSide::Left, SelectionKind::Simple);
@@ -126,7 +126,7 @@ fn a_widened_end_stays_inside_the_row() {
     let mut screen = screen();
     for c in ['a', 'b', 'あ'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);

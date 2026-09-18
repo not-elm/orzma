@@ -62,7 +62,7 @@ fn a_restored_deferred_wrap_still_wraps_the_next_character() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     screen.save_checkpoint();
@@ -71,7 +71,7 @@ fn a_restored_deferred_wrap_still_wraps_the_next_character() {
     screen.state.pending_wrap = false;
     screen.restore_checkpoint();
     screen
-        .print('e', PrintOptions::default())
+        .print(classified('e'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(1)][0].c, 'e');
     assert_eq!(screen.state.line, ScreenLine(1));

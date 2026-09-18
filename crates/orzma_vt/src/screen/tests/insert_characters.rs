@@ -40,7 +40,7 @@ fn an_inserted_blank_carries_the_pen_background_without_its_rendition() {
     screen.pen_mut().bg = Color::Indexed(1);
     for c in ['a', 'b', 'c', 'd'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     screen.pen_mut().bg = Color::Indexed(4);
@@ -173,14 +173,14 @@ fn an_insert_disarms_the_deferred_wrap() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     assert!(screen.state.pending_wrap);
     screen.insert_characters(1);
     assert!(!screen.state.pending_wrap);
     screen
-        .print('x', PrintOptions::default())
+        .print(classified('x'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.state.line, ScreenLine(0));
     assert_eq!(screen.grid[ScreenLine(0)][3].c, 'x');

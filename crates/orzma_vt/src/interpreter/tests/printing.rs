@@ -32,3 +32,16 @@ fn delete_leaves_a_pending_single_shift_armed() {
         '─'
     );
 }
+
+/// Asserts that an ST sent in its UTF-8 form neither prints nor spends a
+/// pending single shift.
+///
+/// Case: a program that writes its C1 controls as UTF-8 sends a stray ST
+/// between `SS2` and the box character the shift was meant for.
+#[test]
+fn a_utf8_string_terminator_leaves_a_pending_single_shift_armed() {
+    let device = interpret("\x1b*0\x1bN\u{9c}q".as_bytes());
+    let row = device.active_screen().viewport_row(ViewportLine(0));
+    assert_eq!(row[0].c, '─');
+    assert_eq!(row[1].c, ' ');
+}

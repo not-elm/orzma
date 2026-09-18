@@ -12,7 +12,7 @@ use super::*;
 fn an_alignment_pattern_fills_every_visible_cell() {
     let mut screen = screen();
     screen
-        .print('x', PrintOptions::default())
+        .print(classified('x'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.fill_alignment_pattern(), DamageSpan::Full);
     for line in 0..3 {
@@ -58,7 +58,7 @@ fn an_alignment_pattern_disarms_the_deferred_wrap() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     assert!(screen.state.pending_wrap);
@@ -94,7 +94,7 @@ fn an_alignment_pattern_returns_the_origin_to_the_corner() {
 fn an_alignment_pattern_leaves_the_history_untouched() {
     let mut screen = screen();
     screen
-        .print('a', PrintOptions::default())
+        .print(classified('a'), PrintOptions::default())
         .expect("a printable glyph");
     screen.state.line = ScreenLine(2);
     screen.line_feed();
@@ -114,7 +114,7 @@ fn an_alignment_pattern_ignores_the_pen() {
     let mut screen = screen();
     screen.pen_mut().bg = Color::Indexed(1);
     screen
-        .print('x', PrintOptions::default())
+        .print(classified('x'), PrintOptions::default())
         .expect("a printable glyph");
     screen.fill_alignment_pattern();
     let expected = Cell {

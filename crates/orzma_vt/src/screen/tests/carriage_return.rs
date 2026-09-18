@@ -27,7 +27,7 @@ fn carriage_return_rewinds_and_clears_pending_wrap() {
 fn a_carriage_return_at_column_zero_disarms_a_pending_wrap() {
     let mut screen = Screen::new(GridSize { cols: 1, rows: 3 }, 10);
     screen
-        .print('x', PrintOptions::default())
+        .print(classified('x'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.state.column, GridColumn(0));
     assert!(screen.state.pending_wrap);

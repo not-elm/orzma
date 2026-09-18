@@ -63,6 +63,11 @@ fn row_glyphs(screen: &Screen, line: ScreenLine) -> Vec<char> {
         .collect()
 }
 
+/// The glyph `c` prints as once the default character set has mapped it.
+fn classified(c: char) -> ClassifiedGlyph {
+    ClassifiedGlyph::classify(GraphicChar(c)).expect("a character with a width")
+}
+
 /// A grid point on `line` at `column`.
 fn point(line: i32, column: u16) -> GridPoint {
     GridPoint {

@@ -14,7 +14,7 @@ pub(crate) mod placements;
 
 mod state;
 
-use self::cell::{BodyWidth, Cell, CellExtra, CellWidth, GlyphClass, Pen};
+use self::cell::{BodyWidth, Cell, CellExtra, CellWidth, ClassifiedGlyph, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
@@ -158,14 +158,35 @@ pub struct PrintOptions {
 
 /// Graphic character output.
 impl Screen {
-    /// Prints one character at the cursor with the current pen, as
-    /// `options` shape it, wrapping first when the deferred wrap is armed
-    /// and autowrap is set.
+    /// Maps `c` through the character set a pending single shift invokes,
+    /// consuming that single shift, or otherwise through the set invoked
+    /// into GL.
+    pub fn translate(&mut self, c: char) -> GraphicChar {
+        self.character_set_mapping.translate(c)
+    }
+
+    /// Disarms the deferred wrap, leaving the cursor and the cells
+    /// alone.
+    ///
+    /// The saved cursor keeps its own flag: DEC STD-070 has `DECSC` carry
+    /// the last-column flag.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECRST 7` (`CSI ? 7 l`) — the pending-wrap part
+    pub fn disarm_pending_wrap(&mut self) {
+        self.state.pending_wrap = false;
+    }
+
+    /// Prints a glyph already mapped through a character set at the cursor
+    /// with the current pen, as `options` shape it, wrapping first when the
+    /// deferred wrap is armed and autowrap is set.
+    ///
+    /// A pending single shift stays pending.
     ///
     /// A one-column glyph takes the cursor's cell and a two-column glyph
     /// takes it and the next; a zero-width mark joins the glyph the
-    /// cursor last passed and leaves the cursor alone. A control
-    /// character is ignored.
+    /// cursor last passed and leaves the cursor alone.
     ///
     /// A two-column glyph with one column left wraps first, leaving a
     /// filler in the last column; with autowrap reset it is dropped and
@@ -185,11 +206,13 @@ impl Screen {
     /// refuses the glyph or the filler a wrapping two-column glyph leaves;
     /// the cursor and the deferred wrap are then left as they stood when
     /// the row refused.
-    pub fn print(&mut self, c: char, options: PrintOptions) -> VtResult<Option<DamageSpan>> {
-        let GraphicChar(glyph) = self.character_set_mapping.translate(c);
-        let Some(class) = GlyphClass::of(glyph) else {
-            return Ok(None);
-        };
+    pub(crate) fn print(
+        &mut self,
+        classified: ClassifiedGlyph,
+        options: PrintOptions,
+    ) -> VtResult<Option<DamageSpan>> {
+        let glyph = classified.glyph();
+        let class = classified.class();
         let Some(width) = class.body_width() else {
             return Ok(self.attach_zero_width(glyph));
         };
@@ -198,19 +221,6 @@ impl Screen {
         };
         self.land_glyph(glyph, width, options)?;
         Ok(damage.span(self))
-    }
-
-    /// Disarms the deferred wrap, leaving the cursor and the cells
-    /// alone.
-    ///
-    /// The saved cursor keeps its own flag: DEC STD-070 has `DECSC` carry
-    /// the last-column flag.
-    ///
-    /// # Control Functions
-    ///
-    /// - `DECRST 7` (`CSI ? 7 l`) — the pending-wrap part
-    pub fn disarm_pending_wrap(&mut self) {
-        self.state.pending_wrap = false;
     }
 
     /// Combines `mark` onto the glyph the cursor last passed: the cell
@@ -656,8 +666,8 @@ impl Screen {
     /// # Control Functions
     ///
     /// - `ICH` (`CSI Pn @`)
-    /// - `IRM` (`CSI 4 h`) — the shift [`Self::print`] performs for
-    ///   each character printed in insert mode
+    /// - `IRM` (`CSI 4 h`) — the shift [`Self::print`] performs
+    ///   for each character printed in insert mode
     pub fn insert_characters(&mut self, count: u16) -> Option<DamageSpan> {
         let count = self.clamped_columns(count)?;
         let fill = self.state.pen.erase_cell();

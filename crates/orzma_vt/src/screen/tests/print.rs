@@ -18,7 +18,7 @@ fn an_insert_mode_print_shifts_the_row_right_and_drops_the_last_cell() {
     screen.state.column = GridColumn(1);
     let damage = screen
         .print(
-            'X',
+            classified('X'),
             PrintOptions {
                 insert_replace: InsertReplaceMode::Insert,
                 ..PrintOptions::default()
@@ -44,7 +44,7 @@ fn a_replace_mode_print_overwrites_the_cell_without_shifting_the_row() {
     seed_row(&mut screen, ScreenLine(0), &['a', 'b', 'c', 'd']);
     screen.state.column = GridColumn(1);
     let damage = screen
-        .print('X', PrintOptions::default())
+        .print(classified('X'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'X', 'c', 'd']);
     assert_eq!(screen.state.column, GridColumn(2));
@@ -67,7 +67,7 @@ fn an_insert_mode_print_at_the_last_column_replaces_the_cell_it_pushes_out() {
     screen.state.column = GridColumn(3);
     let damage = screen
         .print(
-            'X',
+            classified('X'),
             PrintOptions {
                 insert_replace: InsertReplaceMode::Insert,
                 ..PrintOptions::default()
@@ -94,7 +94,7 @@ fn an_insert_mode_print_into_a_padded_row_loses_no_visible_cell() {
     screen.state.column = GridColumn(1);
     let damage = screen
         .print(
-            'X',
+            classified('X'),
             PrintOptions {
                 insert_replace: InsertReplaceMode::Insert,
                 ..PrintOptions::default()
@@ -120,13 +120,13 @@ fn an_armed_deferred_wrap_resolves_before_the_insert_shifts_the_new_row() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     seed_row(&mut screen, ScreenLine(1), &['p', 'q', 'r', 's']);
     let damage = screen
         .print(
-            'X',
+            classified('X'),
             PrintOptions {
                 insert_replace: InsertReplaceMode::Insert,
                 ..PrintOptions::default()
@@ -157,7 +157,7 @@ fn an_insert_mode_print_keeps_the_shifted_cells_attributes() {
     for (c, bg) in [('a', 1), ('b', 2), ('c', 3), ('d', 5)] {
         screen.pen_mut().bg = Color::Indexed(bg);
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     screen.pen_mut().style = Style::ITALIC;
@@ -167,7 +167,7 @@ fn an_insert_mode_print_keeps_the_shifted_cells_attributes() {
     screen.state.pending_wrap = false;
     screen
         .print(
-            'X',
+            classified('X'),
             PrintOptions {
                 insert_replace: InsertReplaceMode::Insert,
                 ..PrintOptions::default()
@@ -195,7 +195,7 @@ fn an_insert_mode_print_on_a_single_column_screen_replaces_the_only_cell() {
     seed_row(&mut screen, ScreenLine(0), &['a']);
     let damage = screen
         .print(
-            'X',
+            classified('X'),
             PrintOptions {
                 insert_replace: InsertReplaceMode::Insert,
                 ..PrintOptions::default()
@@ -220,7 +220,7 @@ fn print_stamps_the_pen_and_advances() {
     let mut screen = screen();
     screen.pen_mut().fg = Color::Indexed(1);
     let damage = screen
-        .print('a', PrintOptions::default())
+        .print(classified('a'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
     assert_eq!(screen.grid[ScreenLine(0)][0].fg, Color::Indexed(1));
@@ -244,7 +244,7 @@ fn print_at_the_last_column_arms_the_deferred_wrap() {
     let mut screen = screen();
     screen.state.column = GridColumn(3);
     screen
-        .print('x', PrintOptions::default())
+        .print(classified('x'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(0)][3].c, 'x');
     assert_eq!(screen.state.column, GridColumn(3));
@@ -262,11 +262,11 @@ fn the_next_print_after_the_last_column_wraps() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     let damage = screen
-        .print('e', PrintOptions::default())
+        .print(classified('e'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(1)][0].c, 'e');
     assert_eq!(
@@ -292,11 +292,11 @@ fn a_glyph_refused_after_a_deferred_wrap_leaves_the_cursor_where_the_wrap_put_it
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     screen.grid[ScreenLine(1)] = Row::from(Vec::new());
-    let result = screen.print('e', PrintOptions::default());
+    let result = screen.print(classified('e'), PrintOptions::default());
     assert!(matches!(result, Err(VtError::Stamp(StampError::OutOfRow))));
     assert_eq!(
         (screen.state.line, screen.state.column),
@@ -324,7 +324,7 @@ fn a_scrolled_screen_reports_damage_in_viewport_rows() {
     screen.state.line = ScreenLine(0);
     assert_eq!(
         screen
-            .print('x', PrintOptions::default())
+            .print(classified('x'), PrintOptions::default())
             .expect("a printable glyph"),
         Some(DamageSpan::rows(ViewportLine(1), ViewportLine(1)))
     );
@@ -341,10 +341,10 @@ fn a_wrap_on_the_bottom_row_scrolls() {
     screen.state.line = ScreenLine(2);
     screen.state.column = GridColumn(3);
     screen
-        .print('x', PrintOptions::default())
+        .print(classified('x'), PrintOptions::default())
         .expect("a printable glyph");
     let damage = screen
-        .print('y', PrintOptions::default())
+        .print(classified('y'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(2)][0].c, 'y');
     assert_eq!(damage, Some(DamageSpan::Full));
@@ -366,7 +366,7 @@ fn a_write_scrolled_out_of_the_window_reports_no_damage() {
     screen.state.line = ScreenLine(0);
     assert_eq!(
         screen
-            .print('x', PrintOptions::default())
+            .print(classified('x'), PrintOptions::default())
             .expect("a printable glyph"),
         None
     );
@@ -383,7 +383,7 @@ fn a_print_at_the_last_column_without_autowrap_leaves_the_wrap_disarmed() {
     screen.state.column = GridColumn(3);
     screen
         .print(
-            'x',
+            classified('x'),
             PrintOptions {
                 auto_wrap: AutoWrap::Disabled,
                 ..PrintOptions::default()
@@ -407,7 +407,7 @@ fn prints_past_the_right_border_without_autowrap_replace_the_last_column() {
     for c in ['a', 'b', 'c', 'd', 'e', 'f'] {
         screen
             .print(
-                c,
+                classified(c),
                 PrintOptions {
                     auto_wrap: AutoWrap::Disabled,
                     ..PrintOptions::default()
@@ -431,13 +431,13 @@ fn an_armed_wrap_does_not_fire_once_autowrap_is_reset() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'd'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     assert!(screen.state.pending_wrap);
     screen
         .print(
-            'e',
+            classified('e'),
             PrintOptions {
                 auto_wrap: AutoWrap::Disabled,
                 ..PrintOptions::default()
@@ -461,7 +461,7 @@ fn the_first_print_after_autowrap_returns_replaces_and_then_arms() {
     for c in ['a', 'b', 'c', 'd'] {
         screen
             .print(
-                c,
+                classified(c),
                 PrintOptions {
                     auto_wrap: AutoWrap::Disabled,
                     ..PrintOptions::default()
@@ -471,12 +471,12 @@ fn the_first_print_after_autowrap_returns_replaces_and_then_arms() {
     }
     assert!(!screen.state.pending_wrap);
     screen
-        .print('e', PrintOptions::default())
+        .print(classified('e'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', 'e']);
     assert!(screen.state.pending_wrap);
     screen
-        .print('f', PrintOptions::default())
+        .print(classified('f'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(1)][0].c, 'f');
 }
@@ -494,7 +494,7 @@ fn a_print_away_from_the_last_column_disarms_a_leftover_wrap() {
     screen.state.column = GridColumn(1);
     screen
         .print(
-            'x',
+            classified('x'),
             PrintOptions {
                 auto_wrap: AutoWrap::Disabled,
                 ..PrintOptions::default()
@@ -522,7 +522,7 @@ fn an_insert_mode_print_at_the_last_column_without_autowrap_replaces_in_place() 
     screen.pen_mut().bg = Color::Indexed(4);
     screen
         .print(
-            'X',
+            classified('X'),
             PrintOptions {
                 insert_replace: InsertReplaceMode::Insert,
                 auto_wrap: AutoWrap::Disabled,
@@ -580,7 +580,7 @@ fn row_widths(screen: &Screen, line: ScreenLine) -> Vec<CellWidth> {
 fn a_wide_glyph_takes_two_columns_and_advances_by_two() {
     let mut screen = screen();
     let damage = screen
-        .print('あ', PrintOptions::default())
+        .print(classified('あ'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(
         row_glyphs(&screen, ScreenLine(0)),
@@ -612,7 +612,7 @@ fn a_wide_glyph_ending_the_row_arms_the_deferred_wrap() {
     let mut screen = screen();
     for c in ['a', 'b', 'あ'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     assert_eq!(
@@ -622,7 +622,7 @@ fn a_wide_glyph_ending_the_row_arms_the_deferred_wrap() {
     assert_eq!(screen.state.column, GridColumn(3));
     assert!(screen.state.pending_wrap);
     screen
-        .print('い', PrintOptions::default())
+        .print(classified('い'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(
         row_glyphs(&screen, ScreenLine(1)),
@@ -643,11 +643,11 @@ fn a_wide_glyph_with_one_column_left_wraps_and_leaves_a_filler() {
     screen.pen_mut().bg = Color::Indexed(4);
     for c in ['a', 'b', 'c'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     let damage = screen
-        .print('あ', PrintOptions::default())
+        .print(classified('あ'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['a', 'b', 'c', ' ']);
     assert_eq!(
@@ -679,7 +679,7 @@ fn a_filler_refused_by_the_row_leaves_the_cursor_on_that_row() {
     let mut screen = screen();
     screen.state.column = GridColumn(3);
     screen.grid[ScreenLine(0)] = Row::from(Vec::new());
-    let result = screen.print('あ', PrintOptions::default());
+    let result = screen.print(classified('あ'), PrintOptions::default());
     assert!(matches!(result, Err(VtError::Stamp(StampError::OutOfRow))));
     assert_eq!(
         (screen.state.line, screen.state.column),
@@ -699,7 +699,7 @@ fn a_wide_glyph_wrapping_on_the_bottom_row_scrolls() {
     screen.state.line = ScreenLine(2);
     screen.state.column = GridColumn(3);
     let damage = screen
-        .print('あ', PrintOptions::default())
+        .print(classified('あ'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(damage, Some(DamageSpan::Full));
     assert_eq!(
@@ -720,12 +720,12 @@ fn a_wide_glyph_wrapping_on_the_bottom_row_scrolls() {
 fn a_wide_glyph_on_a_two_column_screen_fills_the_row() {
     let mut screen = Screen::new(GridSize { cols: 2, rows: 3 }, 10);
     screen
-        .print('あ', PrintOptions::default())
+        .print(classified('あ'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.state.column, GridColumn(1));
     assert!(screen.state.pending_wrap);
     screen
-        .print('い', PrintOptions::default())
+        .print(classified('い'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['あ', ' ']);
     assert_eq!(row_glyphs(&screen, ScreenLine(1)), vec!['い', ' ']);
@@ -744,7 +744,7 @@ fn a_wide_glyph_that_does_not_fit_without_autowrap_is_dropped() {
     for c in ['a', 'b', 'c'] {
         screen
             .print(
-                c,
+                classified(c),
                 PrintOptions {
                     auto_wrap: AutoWrap::Disabled,
                     ..PrintOptions::default()
@@ -754,7 +754,7 @@ fn a_wide_glyph_that_does_not_fit_without_autowrap_is_dropped() {
     }
     let damage = screen
         .print(
-            'あ',
+            classified('あ'),
             PrintOptions {
                 auto_wrap: AutoWrap::Disabled,
                 ..PrintOptions::default()
@@ -781,7 +781,7 @@ fn a_dropped_wide_glyph_clears_a_restored_deferred_wrap() {
     screen.state.pending_wrap = true;
     screen
         .print(
-            'あ',
+            classified('あ'),
             PrintOptions {
                 auto_wrap: AutoWrap::Disabled,
                 ..PrintOptions::default()
@@ -790,7 +790,7 @@ fn a_dropped_wide_glyph_clears_a_restored_deferred_wrap() {
         .expect("a printable glyph");
     assert!(!screen.state.pending_wrap);
     screen
-        .print('x', PrintOptions::default())
+        .print(classified('x'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(0)][3].c, 'x');
     assert_eq!(screen.state.line, ScreenLine(0));
@@ -805,11 +805,11 @@ fn a_dropped_wide_glyph_clears_a_restored_deferred_wrap() {
 fn a_narrow_glyph_over_a_wide_body_blanks_its_continuation() {
     let mut screen = screen();
     screen
-        .print('あ', PrintOptions::default())
+        .print(classified('あ'), PrintOptions::default())
         .expect("a printable glyph");
     screen.state.column = GridColumn(0);
     screen
-        .print('x', PrintOptions::default())
+        .print(classified('x'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec!['x', ' ', ' ', ' ']);
     assert_eq!(screen.grid[ScreenLine(0)][1].width, CellWidth::Narrow);
@@ -823,11 +823,11 @@ fn a_narrow_glyph_over_a_wide_body_blanks_its_continuation() {
 fn a_narrow_glyph_over_a_continuation_blanks_its_body() {
     let mut screen = screen();
     screen
-        .print('あ', PrintOptions::default())
+        .print(classified('あ'), PrintOptions::default())
         .expect("a printable glyph");
     screen.state.column = GridColumn(1);
     screen
-        .print('x', PrintOptions::default())
+        .print(classified('x'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec![' ', 'x', ' ', ' ']);
     assert_eq!(screen.grid[ScreenLine(0)][0].width, CellWidth::Narrow);
@@ -843,13 +843,13 @@ fn a_wide_glyph_over_two_half_pairs_blanks_both_neighbours() {
     let mut screen = screen();
     for c in ['あ', 'い'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     screen.state.column = GridColumn(1);
     screen.state.pending_wrap = false;
     screen
-        .print('う', PrintOptions::default())
+        .print(classified('う'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(
         row_glyphs(&screen, ScreenLine(0)),
@@ -878,7 +878,7 @@ fn an_insert_mode_wide_glyph_shifts_the_row_by_two() {
     screen.state.column = GridColumn(1);
     screen
         .print(
-            'あ',
+            classified('あ'),
             PrintOptions {
                 insert_replace: InsertReplaceMode::Insert,
                 ..PrintOptions::default()
@@ -904,7 +904,7 @@ fn an_insert_mode_wide_glyph_ending_the_row_overwrites_in_place() {
     screen.state.column = GridColumn(2);
     screen
         .print(
-            'あ',
+            classified('あ'),
             PrintOptions {
                 insert_replace: InsertReplaceMode::Insert,
                 ..PrintOptions::default()
@@ -927,10 +927,10 @@ fn an_insert_mode_wide_glyph_ending_the_row_overwrites_in_place() {
 fn a_combining_mark_joins_the_previous_cell_and_reports_damage() {
     let mut screen = screen();
     screen
-        .print('e', PrintOptions::default())
+        .print(classified('e'), PrintOptions::default())
         .expect("a printable glyph");
     let damage = screen
-        .print('\u{0301}', PrintOptions::default())
+        .print(classified('\u{0301}'), PrintOptions::default())
         .expect("a printable glyph");
     let cell = &screen.grid[ScreenLine(0)][0];
     assert_eq!(cell.c, 'e');
@@ -952,12 +952,12 @@ fn a_combining_mark_under_an_armed_wrap_joins_the_last_cell() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'e'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     assert!(screen.state.pending_wrap);
     screen
-        .print('\u{0301}', PrintOptions::default())
+        .print(classified('\u{0301}'), PrintOptions::default())
         .expect("a printable glyph");
     let cell = &screen.grid[ScreenLine(0)][3];
     assert_eq!(cell.marks(), ['\u{0301}']);
@@ -976,7 +976,7 @@ fn a_combining_mark_without_autowrap_joins_the_cell_under_the_cursor() {
     for c in ['a', 'b', 'c', 'e'] {
         screen
             .print(
-                c,
+                classified(c),
                 PrintOptions {
                     auto_wrap: AutoWrap::Disabled,
                     ..PrintOptions::default()
@@ -986,7 +986,7 @@ fn a_combining_mark_without_autowrap_joins_the_cell_under_the_cursor() {
     }
     screen
         .print(
-            '\u{0301}',
+            classified('\u{0301}'),
             PrintOptions {
                 auto_wrap: AutoWrap::Disabled,
                 ..PrintOptions::default()
@@ -1006,10 +1006,10 @@ fn a_combining_mark_without_autowrap_joins_the_cell_under_the_cursor() {
 fn a_combining_mark_after_a_wide_glyph_joins_its_body() {
     let mut screen = screen();
     screen
-        .print('か', PrintOptions::default())
+        .print(classified('か'), PrintOptions::default())
         .expect("a printable glyph");
     screen
-        .print('\u{3099}', PrintOptions::default())
+        .print(classified('\u{3099}'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(0)][0].marks(), ['\u{3099}']);
     assert!(screen.grid[ScreenLine(0)][1].extra.is_none());
@@ -1024,7 +1024,7 @@ fn a_combining_mark_after_a_wide_glyph_joins_its_body() {
 fn a_combining_mark_at_the_row_start_is_kept_on_the_first_cell() {
     let mut screen = screen();
     let damage = screen
-        .print('\u{0301}', PrintOptions::default())
+        .print(classified('\u{0301}'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(0)][0].marks(), ['\u{0301}']);
     assert_eq!(screen.state.column, GridColumn(0));
@@ -1043,36 +1043,21 @@ fn a_combining_mark_at_the_row_start_is_kept_on_the_first_cell() {
 fn a_combining_mark_past_the_cap_is_dropped_without_damage() {
     let mut screen = screen();
     screen
-        .print('e', PrintOptions::default())
+        .print(classified('e'), PrintOptions::default())
         .expect("a printable glyph");
     for _ in 0..MAX_COMBINING {
         assert!(
             screen
-                .print('\u{0301}', PrintOptions::default())
+                .print(classified('\u{0301}'), PrintOptions::default())
                 .expect("a printable glyph")
                 .is_some()
         );
     }
     let damage = screen
-        .print('\u{0302}', PrintOptions::default())
+        .print(classified('\u{0302}'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(damage, None);
     assert_eq!(screen.grid[ScreenLine(0)][0].marks().len(), MAX_COMBINING);
-}
-
-/// Asserts that a control character reaching the printer is ignored
-/// without moving the cursor or reporting damage.
-///
-/// Case: a raw NUL slips through to the printer.
-#[test]
-fn a_control_character_is_ignored_by_the_printer() {
-    let mut screen = screen();
-    let damage = screen
-        .print('\0', PrintOptions::default())
-        .expect("a printable glyph");
-    assert_eq!(damage, None);
-    assert_eq!(screen.state.column, GridColumn(0));
-    assert_eq!(row_glyphs(&screen, ScreenLine(0)), vec![' ', ' ', ' ', ' ']);
 }
 
 /// Asserts that a fullwidth glyph on a one-column screen is dropped
@@ -1083,7 +1068,7 @@ fn a_control_character_is_ignored_by_the_printer() {
 fn a_wide_glyph_on_a_one_column_screen_is_dropped() {
     let mut screen = Screen::new(GridSize { cols: 1, rows: 1 }, 10);
     let damage = screen
-        .print('あ', PrintOptions::default())
+        .print(classified('あ'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(damage, None);
     assert_eq!(screen.grid[ScreenLine(0)][0].c, ' ');
@@ -1100,7 +1085,7 @@ fn a_combining_mark_on_a_wrap_filler_is_dropped() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'あ'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     assert_eq!(
@@ -1111,7 +1096,7 @@ fn a_combining_mark_on_a_wrap_filler_is_dropped() {
     screen.state.column = GridColumn(3);
     screen.state.pending_wrap = true;
     let damage = screen
-        .print('\u{0301}', PrintOptions::default())
+        .print(classified('\u{0301}'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(damage, None);
     assert!(screen.grid[ScreenLine(0)][2].extra.is_none());
@@ -1132,7 +1117,7 @@ fn a_combining_mark_on_a_disarmed_wrap_filler_joins_the_glyph_before_it() {
     let mut screen = screen();
     for c in ['a', 'b', 'c', 'あ'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     assert_eq!(
@@ -1143,7 +1128,7 @@ fn a_combining_mark_on_a_disarmed_wrap_filler_joins_the_glyph_before_it() {
     screen.state.column = GridColumn(3);
     screen.state.pending_wrap = false;
     screen
-        .print('\u{0301}', PrintOptions::default())
+        .print(classified('\u{0301}'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(0)][2].marks(), ['\u{0301}']);
     assert!(screen.grid[ScreenLine(0)][3].extra.is_none());
@@ -1164,12 +1149,12 @@ fn a_combining_mark_after_a_penultimate_glyph_joins_that_glyph() {
     let mut screen = screen();
     for c in ['a', 'b', 'c'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     assert!(!screen.state.pending_wrap);
     screen
-        .print('\u{0301}', PrintOptions::default())
+        .print(classified('\u{0301}'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(0)][2].marks(), ['\u{0301}']);
     assert!(screen.grid[ScreenLine(0)][3].extra.is_none());
@@ -1185,11 +1170,11 @@ fn a_combining_mark_after_a_wide_glyph_ending_the_row_joins_its_body() {
     let mut screen = screen();
     for c in ['a', 'か'] {
         screen
-            .print(c, PrintOptions::default())
+            .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
     screen
-        .print('\u{3099}', PrintOptions::default())
+        .print(classified('\u{3099}'), PrintOptions::default())
         .expect("a printable glyph");
     assert_eq!(screen.grid[ScreenLine(0)][1].marks(), ['\u{3099}']);
     assert!(screen.grid[ScreenLine(0)][2].extra.is_none());

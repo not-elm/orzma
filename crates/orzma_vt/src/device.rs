@@ -12,6 +12,7 @@ use crate::error::VtResult;
 use crate::frame::damage::DamageSpan;
 use crate::hyperlink::{HyperlinkId, HyperlinkInterner, HyperlinkUri};
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
+use crate::screen::cell::ClassifiedGlyph;
 use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, ScreenLine};
@@ -28,6 +29,7 @@ pub(crate) struct DeviceState {
     title: TitleState,
     hyperlinks: HyperlinkInterner,
     active_hyperlink: Option<HyperlinkId>,
+    preceding_graphic: Option<ClassifiedGlyph>,
 }
 
 impl DeviceState {
@@ -47,6 +49,7 @@ impl DeviceState {
             title: TitleState::default(),
             hyperlinks: HyperlinkInterner::new(),
             active_hyperlink: None,
+            preceding_graphic: None,
         }
     }
 
@@ -106,19 +109,68 @@ impl DeviceState {
     }
 
     /// Prints one character at the cursor of the screen on show, shaped by
-    /// the device's `IRM` and `DECAWM` modes and its open hyperlink.
+    /// the device's `IRM` and `DECAWM` modes and its open hyperlink, after
+    /// mapping it through that screen's character set mapping.
     ///
-    /// `c` must be a printable character of display width one.
+    /// A control character is ignored and leaves a pending single shift
+    /// pending; any other character spends it, even a zero-width mark or a
+    /// character the screen drops.
     ///
-    /// Reports [`DamageSpan::Full`] when the wrap scrolled, and otherwise
-    /// the row the character landed on, or `None` when that row has
-    /// scrolled out of the window.
+    /// A mapped character one or two columns wide becomes the
+    /// [`Self::preceding_graphic`], even when the screen drops it instead of
+    /// placing it. A zero-width mark and a character with no width leave the
+    /// preceding graphic character as it was.
+    ///
+    /// Reports [`DamageSpan::Full`] when a wrap scrolled, otherwise every
+    /// row the character touched, or `None` when nothing changed or those
+    /// rows have scrolled out of the window.
     ///
     /// # Errors
     ///
     /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
     /// refuses the character.
     pub fn print(&mut self, c: char) -> VtResult<Option<DamageSpan>> {
+        // NOTE: A control character is dropped before the mapping so that it
+        // cannot spend a pending single shift — only a graphic character may
+        // do that.
+        if c.is_control() {
+            return Ok(None);
+        }
+        let Some(glyph) = ClassifiedGlyph::classify(self.active_screen_mut().translate(c)) else {
+            return Ok(None);
+        };
+        if glyph.class().body_width().is_some() {
+            self.preceding_graphic = Some(glyph);
+        }
+        self.print_graphic(glyph)
+    }
+
+    /// The graphic character `REP` repeats: the last character one or two
+    /// columns wide that [`Self::print`] mapped, or `None` when it has mapped
+    /// none since power-up or the last `RIS`.
+    ///
+    /// Control functions, a soft reset, and a flip between the screens leave
+    /// it as it is; only [`Self::reset`] clears it.
+    pub fn preceding_graphic(&self) -> Option<ClassifiedGlyph> {
+        self.preceding_graphic
+    }
+
+    /// Prints `glyph`, already mapped through a character set, at the cursor
+    /// of the screen on show, shaped by the device's `IRM` and `DECAWM`
+    /// modes, its open hyperlink, and the screen's current pen.
+    ///
+    /// A pending single shift stays pending, and the preceding graphic
+    /// character is left as it was.
+    ///
+    /// Reports [`DamageSpan::Full`] when a wrap scrolled, otherwise every
+    /// row the glyph touched, or `None` when nothing changed or those rows
+    /// have scrolled out of the window.
+    ///
+    /// # Errors
+    ///
+    /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
+    /// refuses the glyph.
+    pub fn print_graphic(&mut self, glyph: ClassifiedGlyph) -> VtResult<Option<DamageSpan>> {
         // NOTE: Every field is spelled out so that a field added to
         // `PrintOptions` fails to compile here instead of silently printing
         // with its default.
@@ -127,7 +179,7 @@ impl DeviceState {
             auto_wrap: self.modes.auto_wrap,
             hyperlink_id: self.active_hyperlink,
         };
-        self.active_screen_mut().print(c, options)
+        self.active_screen_mut().print(glyph, options)
     }
 
     /// Returns both screens and every mode to their power-up state;
@@ -148,10 +200,14 @@ impl DeviceState {
     /// The hyperlinks a program opened stay resolvable, though the open
     /// one is closed.
     ///
+    /// The preceding graphic character is cleared, so a `REP` that follows
+    /// prints nothing.
+    ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`)
     pub fn reset(&mut self) -> Option<DamageSpan> {
+        self.preceding_graphic = None;
         let was_showing_alternate = matches!(self.modes.active_screen, ScreenKind::Alternate);
         let primary = self.screens.primary.reset();
         let _ = self.screens.alternate.reset();
