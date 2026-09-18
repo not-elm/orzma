@@ -14,7 +14,6 @@ use std::io::Result as IoResult;
 use std::io::{Read, Write};
 #[cfg(any(test, feature = "test-support"))]
 use std::mem;
-#[cfg(target_os = "macos")]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,6 +22,8 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+#[cfg(unix)]
+mod process_cwd;
 mod write_queue;
 
 /// PTY ownership for one spawned shell.
@@ -32,6 +33,14 @@ pub struct Pty {
     chunk_rx: Receiver<Vec<u8>>,
     exit_rx: Receiver<Option<i32>>,
     child_killer: Box<dyn ChildKiller + Send + Sync>,
+    /// The pid of the process spawned under the PTY, or `None` for a PTY
+    /// built without one.
+    #[cfg(unix)]
+    child_pid: Option<i32>,
+    /// Whether the spawned process is the `/usr/bin/login` wrapper, which
+    /// runs the shell as its child.
+    #[cfg(unix)]
+    child_is_wrapper: bool,
 }
 
 /// One non-blocking read of the PTY output stream.
@@ -99,12 +108,16 @@ impl Pty {
         for (key, value) in &options.env {
             cmd.env(&key.0, &value.0);
         }
+        #[cfg(unix)]
+        let child_is_wrapper = launches_login_wrapper(&cmd);
 
         let child = pty_pair
             .slave
             .spawn_command(cmd)
             .map_err(OrzmaTtyError::SpawnShell)?;
         let child_killer = child.clone_killer();
+        #[cfg(unix)]
+        let child_pid = child.process_id().and_then(|pid| i32::try_from(pid).ok());
         drop(pty_pair.slave);
 
         let pipes = master_pipes(pty_pair.master.as_ref())
@@ -130,6 +143,10 @@ impl Pty {
             chunk_rx,
             exit_rx,
             child_killer,
+            #[cfg(unix)]
+            child_pid,
+            #[cfg(unix)]
+            child_is_wrapper,
         })
     }
 
@@ -228,6 +245,33 @@ impl Pty {
             .expect("MasterPty::get_size")
     }
 
+    /// The working directory of the process this PTY is showing: its
+    /// foreground process group's leader, else the spawned process, else
+    /// on macOS the child of a spawned `/usr/bin/login` wrapper. Only a
+    /// directory that still exists and can be entered is reported.
+    ///
+    /// Returns `None` when no candidate can be read: no process was
+    /// spawned, the process belongs to another user, it has exited, its
+    /// directory was removed or can no longer be entered, or the platform
+    /// is neither macOS nor Linux.
+    pub fn process_cwd(&self) -> Option<PathBuf> {
+        #[cfg(unix)]
+        {
+            let leader = self
+                .master
+                .lock()
+                .ok()
+                .and_then(|master| master.process_group_leader());
+            process_cwd::resolve(leader, self.child_pid, self.child_is_wrapper)
+        }
+        #[cfg(not(unix))]
+        {
+            // TODO: read the shell process's working directory from its PEB
+            // on Windows.
+            None
+        }
+    }
+
     /// Opens a real PTY at the given grid size but routes writes to
     /// `writer` instead of the master, spawning no child process and no
     /// reader thread.
@@ -272,6 +316,10 @@ impl Pty {
             chunk_rx,
             exit_rx,
             child_killer: Box::new(DetachedKiller),
+            #[cfg(unix)]
+            child_pid: None,
+            #[cfg(unix)]
+            child_is_wrapper: false,
         }
     }
 }
@@ -318,9 +366,22 @@ fn macos_login_command(shell: &str) -> CommandBuilder {
     } else {
         "-flp"
     };
-    let mut cmd = CommandBuilder::new("/usr/bin/login");
+    let mut cmd = CommandBuilder::new(LOGIN_WRAPPER);
     cmd.args([flags, user.as_str(), "/bin/zsh", "-fc", exec.as_str()]);
     cmd
+}
+
+/// The program `macos_login_command` wraps the shell in.
+#[cfg(unix)]
+const LOGIN_WRAPPER: &str = "/usr/bin/login";
+
+/// Whether `cmd` starts the `/usr/bin/login` wrapper, which runs the shell
+/// as its child.
+#[cfg(unix)]
+fn launches_login_wrapper(cmd: &CommandBuilder) -> bool {
+    cmd.get_argv()
+        .first()
+        .is_some_and(|program| program == LOGIN_WRAPPER)
 }
 
 fn master_pipes(
@@ -534,9 +595,13 @@ mod tests {
     use crossbeam_channel::bounded;
     use std::io::Cursor;
     use std::io::sink;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread::JoinHandle;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    use tempfile::TempDir;
 
     /// A program that prints one line and exits 0 on the host platform.
     fn echo_program() -> &'static str {
@@ -765,7 +830,7 @@ mod tests {
 
     /// Polls `condition` every millisecond and reports whether it held
     /// before `within` elapsed.
-    fn holds_within(mut condition: impl FnMut() -> bool, within: Duration) -> bool {
+    pub(super) fn holds_within(mut condition: impl FnMut() -> bool, within: Duration) -> bool {
         let deadline = Instant::now() + within;
         while !condition() {
             if Instant::now() >= deadline {
@@ -931,5 +996,79 @@ mod tests {
         assert!(finishes_within(&watcher, Duration::from_secs(2)));
         watcher.join().expect("the watcher ends");
         assert!(started.elapsed() >= Duration::from_millis(30));
+    }
+
+    /// Asserts that the directory a program was spawned in is reported
+    /// while the program runs.
+    ///
+    /// Case: the pane runs a program that never takes the terminal's
+    /// foreground.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn process_cwd_reports_the_directory_a_program_was_spawned_in() {
+        let dir = TempDir::new().expect("a temp dir");
+        let expected = dir.path().canonicalize().expect("the dir canonicalizes");
+        let pty = Pty::spawn(&SpawnOptions {
+            size: grid(80, 24),
+            cell_px: CellPixels::default(),
+            shell: "/bin/cat".into(),
+            cwd: Some(dir.path().to_path_buf()),
+            env: Vec::new(),
+        })
+        .expect("Pty::spawn failed");
+        let login_handoff = Duration::from_millis(200);
+        thread::sleep(login_handoff);
+        assert_eq!(poll_process_cwd(&pty, &expected), Some(expected));
+    }
+
+    /// Asserts that the reported directory follows a `cd` typed into an
+    /// interactive shell.
+    ///
+    /// Case: the user changes into a project directory at the prompt
+    /// before splitting the pane.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn process_cwd_follows_a_shell_cd() {
+        let dir = TempDir::new().expect("a temp dir");
+        let expected = dir.path().canonicalize().expect("the dir canonicalizes");
+        let pty = Pty::spawn(&SpawnOptions {
+            size: grid(80, 24),
+            cell_px: CellPixels::default(),
+            shell: "/bin/sh".into(),
+            cwd: None,
+            env: Vec::new(),
+        })
+        .expect("Pty::spawn failed");
+        // NOTE: on macOS the shell runs as the developer's own login shell,
+        // which saves the typed line into their real history file when the
+        // PTY hangs up unless HISTFILE is unset first.
+        pty.enqueue_write(format!("unset HISTFILE; cd '{}'\n", expected.display()).into_bytes())
+            .expect("the cd is queued");
+        assert_eq!(poll_process_cwd(&pty, &expected), Some(expected));
+    }
+
+    /// Polls `pty` for up to ten seconds until it reports `expected`,
+    /// returning the last directory it reported.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn poll_process_cwd(pty: &Pty, expected: &Path) -> Option<PathBuf> {
+        let mut reported = None;
+        holds_within(
+            || {
+                reported = pty.process_cwd();
+                reported.as_deref() == Some(expected)
+            },
+            Duration::from_secs(10),
+        );
+        reported
+    }
+
+    /// Asserts that a PTY with no spawned process reports no directory.
+    ///
+    /// Case: a test terminal built around a detached PTY is asked for the
+    /// directory a split would inherit.
+    #[test]
+    fn a_detached_pty_reports_no_process_cwd() {
+        let pty = Pty::detached(grid(80, 24), Box::new(sink())).expect("Pty::detached");
+        assert_eq!(pty.process_cwd(), None);
     }
 }

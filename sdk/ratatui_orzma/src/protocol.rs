@@ -78,7 +78,9 @@ pub(crate) enum ClientMsg {
         payload: Value,
     },
     /// Sets (or clears) the app-owned focus target. `instance: None` blurs any
-    /// focused webview back to the app (native widget).
+    /// focused webview back to the app (native widget). Focusing a placement
+    /// also makes its pane the active pane; a blur leaves the active pane
+    /// unchanged.
     Focus {
         /// The placement to focus, or `None` to blur.
         instance: Option<String>,

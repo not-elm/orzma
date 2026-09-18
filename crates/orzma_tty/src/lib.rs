@@ -137,6 +137,19 @@ impl<V: Vt> OrzmaTty<V> {
         self.pty.size()
     }
 
+    /// The working directory of the process this terminal is showing: its
+    /// foreground process, else its shell. Only a directory that still
+    /// exists and can be entered is reported.
+    ///
+    /// Returns `None` when neither can be read: no process was spawned,
+    /// the process belongs to another user, it has exited, its directory
+    /// was removed or can no longer be entered, or the platform is neither
+    /// macOS nor Linux.
+    #[inline]
+    pub fn process_cwd(&self) -> Option<PathBuf> {
+        self.pty.process_cwd()
+    }
+
     /// Read-only access to the VT, for host-side observation such as
     /// the display offset, modes, or cell contents.
     #[inline]

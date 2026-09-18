@@ -129,7 +129,7 @@ Every program line carries an `op`:
 | `unregister` | `handle` | Release a handle owned by this connection; removes its mounted views. |
 | `reply` | `reqId`, `ok`, `value?`, `error?` | Answer a host `call` (use the `call`'s `reqId`). |
 | `emit` | `handle`, `event`, `payload` | Push an event to every page mounted from the handle (delivered to `window.orzma.on`). |
-| `focus` | `instance` (string or `null`) | Set app-owned focus to a mounted placement, or `null` to blur. |
+| `focus` | `instance` (string or `null`) | Set app-owned focus to a mounted placement, or `null` to blur. Focusing a placement also makes its pane the active pane; a blur leaves the active pane unchanged. |
 | `navigate` | `instance`, `action` | Navigate one mounted placement in place. |
 | `mount` | `instance`, `row`, `col`, `rows`, `cols` | Mount one placement at a 0-based cell of the pane's active screen, the socket form of the APC `mount` (see below). |
 | `unmount` | `instance` | Remove one placement mounted with the socket `mount`. |

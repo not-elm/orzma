@@ -56,7 +56,9 @@ impl<W> WebviewWidget<W> {
     }
 
     /// Marks the widget focused, a hint for drawing a focus frame/title around
-    /// the webview (the page content itself is composited by the host).
+    /// the webview (the page content itself is composited by the host). When
+    /// the host accepts a `true` focus request, it gives the webview keyboard
+    /// focus and makes its pane the active pane.
     ///
     /// Focusing a webview on the same frame it is first mounted may race the
     /// mount on the host (the focus op travels the control socket while the
