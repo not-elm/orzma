@@ -558,40 +558,57 @@ fn locate_cell(p_px: vec2<f32>) -> CellHit {
 }
 
 // ============================================================================
-// Style resolution (reverse / hidden / dim)
+// Style resolution (reverse / dim, then concealment)
 // ============================================================================
 
-fn resolve_cell_colors(cell: Cell) -> CellColors {
+// The color the terminal default background paints: `c` itself, or the
+// padding color when `c` is the transparent sentinel.
+fn materialize_default_bg(c: vec4<f32>) -> vec4<f32> {
+    // NOTE: The terminal default bg maps to transparent (alpha=0) so that
+    // cells without an explicit background let webview overlays show through.
+    // When that transparent sentinel is promoted to a glyph color, it must
+    // be materialised as the colour the default background actually paints
+    // (bg_padding_color). A hardcoded black here would paint the glyph black
+    // once OSC 11 recolors the default background, which is unreadable on a
+    // dark cell.
+    if c.a == 0.0 {
+        return vec4<f32>(params.bg_padding_color.rgb, 1.0);
+    }
+    return c;
+}
+
+// Reverse video and dim applied; concealment is not.
+fn resolve_visible_colors(cell: Cell) -> CellColors {
     let style = cell.style_flags;
     let reverse = (style & STYLE_REVERSE) != 0u;
-    let hidden = (style & STYLE_HIDDEN) != 0u;
     let dim = (style & STYLE_DIM) != 0u;
 
     var fg = unpack_rgba(cell.fg_packed);
     var bg = unpack_rgba(cell.bg_packed);
 
-    if hidden {
-        fg = bg;
-    }
     if reverse {
         let tmp = fg;
-        fg = bg;
+        fg = materialize_default_bg(bg);
         bg = tmp;
-        // NOTE: The terminal default bg maps to transparent (alpha=0) so that
-        // cells without an explicit background let webview overlays show through.
-        // When reverse-video promotes that transparent sentinel to the glyph
-        // foreground color, materialise it as the colour that default
-        // background actually paints (bg_padding_color). A hardcoded black here
-        // would paint the glyph black once OSC 11 recolors the default
-        // background, which is unreadable on a dark reversed cell.
-        if fg.a == 0.0 {
-            fg = vec4<f32>(params.bg_padding_color.rgb, 1.0);
-        }
     }
     if dim {
         fg = vec4<f32>(fg.rgb * 0.66, fg.a);
     }
     return CellColors(fg, bg);
+}
+
+// `colors` with the glyph taking the background color when the cell is
+// concealed.
+fn conceal(cell: Cell, colors: CellColors) -> CellColors {
+    if (cell.style_flags & STYLE_HIDDEN) != 0u {
+        return CellColors(colors.bg, colors.bg);
+    }
+    return colors;
+}
+
+// The colors the cell is painted in when no cursor covers it.
+fn resolve_cell_colors(cell: Cell) -> CellColors {
+    return conceal(cell, resolve_visible_colors(cell));
 }
 
 // ============================================================================

@@ -1650,4 +1650,43 @@ mod tests {
         assert_eq!(composable_marks("a").count(), 0);
         assert_eq!(composable_marks("").count(), 0);
     }
+
+    /// The text of WGSL function `name`, from the end of its name to its
+    /// closing brace.
+    fn wgsl_fn_body<'a>(src: &'a str, name: &str) -> &'a str {
+        src.split(&format!("fn {name}("))
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .expect("the shader defines the function")
+    }
+
+    /// Asserts that the shader applies concealment as the last stage of
+    /// color resolution, after reverse video and dim.
+    ///
+    /// Case: a program prints concealed text that is also reverse-video
+    /// or faint.
+    #[test]
+    fn wgsl_concealment_is_the_last_color_resolution_stage() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(wgsl_fn_body(src, "conceal").contains("STYLE_HIDDEN"));
+        assert!(!wgsl_fn_body(src, "resolve_visible_colors").contains("STYLE_HIDDEN"));
+        assert!(
+            wgsl_fn_body(src, "resolve_cell_colors")
+                .contains("conceal(cell, resolve_visible_colors(cell))")
+        );
+    }
+
+    /// Asserts that reverse video materializes the transparent default
+    /// background through the shared helper rather than inline.
+    ///
+    /// Case: a reverse-video cell on the default background, whose glyph
+    /// takes the colour the default background paints.
+    #[test]
+    fn wgsl_reverse_video_materializes_the_default_background_through_the_helper() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let visible = wgsl_fn_body(src, "resolve_visible_colors");
+        assert!(visible.contains("materialize_default_bg("));
+        assert!(!visible.contains("bg_padding_color"));
+        assert!(wgsl_fn_body(src, "materialize_default_bg").contains("params.bg_padding_color"));
+    }
 }
