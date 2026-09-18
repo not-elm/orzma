@@ -94,8 +94,14 @@ pub enum OrzmuxCommand {
         /// The pixel size of one cell, used to derive the PTY winsize.
         cell_px: CellPixels,
     },
-    /// Spawn a pane. `cwd: None` inherits the split target's last
-    /// reported directory. `env` is forwarded to the shell verbatim.
+    /// Spawn a pane. `env` is forwarded to the shell verbatim.
+    ///
+    /// A split with `cwd: None` starts in the target pane's working
+    /// directory: the directory of its foreground process or shell when
+    /// the OS reports one, else the directory it last reported through
+    /// OSC 7, else the directory it was spawned in. A root pane with
+    /// `cwd: None`, or a split whose target has none of these, starts in
+    /// the user's home directory.
     NewPane {
         /// The id the resulting `PaneOpened` / `SpawnFailed` correlates to.
         request: RequestId,
