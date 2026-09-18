@@ -99,8 +99,10 @@ impl Rgb {
 
 /// The live color table symbolic [`Color`]s resolve against.
 ///
-/// Each slot is pre-resolved, so a consumer indexes this table directly
-/// instead of layering override lookups over a fallback of its own.
+/// Each color slot — the indexed slots, the foreground, and the
+/// background — is pre-resolved, so a consumer indexes this table
+/// directly instead of layering override lookups over a fallback of its
+/// own.
 ///
 /// The table holds the built-in defaults.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +113,10 @@ pub struct Palette {
     pub foreground: Rgb,
     /// The default background [`Color::DefaultBackground`] resolves to.
     pub background: Rgb,
+    /// The color `OSC 12` gives the text cursor; `None` when none is
+    /// set, in which case the cursor takes the foreground of the cell
+    /// under it.
+    pub cursor: Option<Rgb>,
 }
 
 impl Default for Palette {
@@ -119,6 +125,7 @@ impl Default for Palette {
             indexed: Box::new(Self::XTERM_INDEXED),
             foreground: DEFAULT_FOREGROUND,
             background: DEFAULT_BACKGROUND,
+            cursor: None,
         }
     }
 }
@@ -156,8 +163,8 @@ impl Palette {
     }
 
     /// Returns every slot to its built-in default, leaving
-    /// [`Palette::foreground`] and [`Palette::background`] alone;
-    /// returns whether any slot changed.
+    /// [`Palette::foreground`], [`Palette::background`], and
+    /// [`Palette::cursor`] alone; returns whether any slot changed.
     pub fn reset_all_indexed(&mut self) -> bool {
         let indexed = &mut *self.indexed;
         if *indexed == Self::XTERM_INDEXED {
@@ -209,9 +216,29 @@ impl Palette {
         self.set_background(DEFAULT_BACKGROUND)
     }
 
+    /// Sets the text cursor color to `color`; returns whether it
+    /// changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 12 ; spec`
+    pub fn set_cursor(&mut self, color: Rgb) -> bool {
+        Self::assign(&mut self.cursor, Some(color))
+    }
+
+    /// Returns the text cursor color to unset, leaving every other
+    /// color alone; returns whether it changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 112`
+    pub fn reset_cursor(&mut self) -> bool {
+        Self::assign(&mut self.cursor, None)
+    }
+
     /// Returns every color the palette holds — the indexed slots, the
-    /// foreground, and the background — to its built-in default; returns
-    /// whether anything changed.
+    /// foreground, the background, and the cursor color — to its
+    /// built-in default; returns whether anything changed.
     pub fn reset(&mut self) -> bool {
         let default = Self::default();
         if *self == default {
@@ -221,12 +248,12 @@ impl Palette {
         true
     }
 
-    /// Writes `color` into `slot`; returns whether the slot changed.
-    fn assign(slot: &mut Rgb, color: Rgb) -> bool {
-        if *slot == color {
+    /// Writes `value` into `slot`; returns whether the slot changed.
+    fn assign<T: PartialEq>(slot: &mut T, value: T) -> bool {
+        if *slot == value {
             return false;
         }
-        *slot = color;
+        *slot = value;
         true
     }
 }
@@ -929,5 +956,59 @@ mod tests {
         for spec in [b" rgb:ff/ff/ff".as_slice(), b"rgb:ff/ff/ff ", b" #fff"] {
             assert_eq!(Rgb::from_color_spec(spec), None, "{spec:?}");
         }
+    }
+
+    /// Asserts that setting the cursor color reports a change only when
+    /// the color differs from the one held.
+    ///
+    /// Case: nvim recolors the cursor for insert mode, then sends the
+    /// same colour again on the next mode change.
+    #[test]
+    fn setting_the_cursor_color_reports_whether_it_changed() {
+        let mut palette = Palette::default();
+        assert_eq!(palette.cursor, None);
+        assert!(palette.set_cursor(rgb(1, 2, 3)));
+        assert_eq!(palette.cursor, Some(rgb(1, 2, 3)));
+        assert!(!palette.set_cursor(rgb(1, 2, 3)));
+    }
+
+    /// Asserts that resetting the cursor color returns it to unset and
+    /// reports a change only when a color was held.
+    ///
+    /// Case: a program restores the cursor colour on exit, and a second
+    /// program does the same without ever having set one.
+    #[test]
+    fn resetting_the_cursor_color_reports_whether_it_changed() {
+        let mut palette = Palette::default();
+        assert!(!palette.reset_cursor());
+        palette.set_cursor(rgb(1, 2, 3));
+        assert!(palette.reset_cursor());
+        assert_eq!(palette.cursor, None);
+    }
+
+    /// Asserts that a full reset returns the cursor color to unset.
+    ///
+    /// Case: the user runs `reset` after an editor crashed with its
+    /// cursor colour still in force.
+    #[test]
+    fn a_full_reset_clears_the_cursor_color() {
+        let mut palette = Palette::default();
+        palette.set_cursor(rgb(1, 2, 3));
+        assert!(palette.reset());
+        assert_eq!(palette.cursor, None);
+    }
+
+    /// Asserts that resetting every indexed slot leaves the cursor
+    /// color alone.
+    ///
+    /// Case: a theme script sends a bare `OSC 104` while an editor's
+    /// cursor colour is in force.
+    #[test]
+    fn resetting_every_slot_leaves_the_cursor_color_alone() {
+        let mut palette = Palette::default();
+        palette.set_cursor(rgb(1, 2, 3));
+        palette.set_indexed(0, rgb(7, 8, 9));
+        assert!(palette.reset_all_indexed());
+        assert_eq!(palette.cursor, Some(rgb(1, 2, 3)));
     }
 }
