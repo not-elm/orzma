@@ -157,7 +157,8 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 
 // Pipeline for a fragment that lies inside the grid: pane background →
 // inline overlays → cell background → primary glyph → left-neighbor
-// overdraw → text decorations → cursor → selection.
+// overdraw → text decorations → bar / underline cursor → selection. A block
+// cursor is not a stage: it is resolved into the cell's colors up front.
 //
 // The pane background (fallback) is the base layer. Webview overlays
 // composite over it next. The cell's own background then composites OVER the
@@ -166,7 +167,7 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 // widget) occludes the webview and appears in front of it. Glyphs render
 // last, on top of everything.
 fn paint_grid_cell(hit: CellHit, fallback: vec4<f32>) -> vec4<f32> {
-    let colors = resolve_cell_colors(hit.cell);
+    let colors = resolve_painted_colors(hit.cell, hit.row, hit.col);
     var color = paint_inline_overlays(hit, fallback);
     color = blend_premultiplied_over(color, tint_bg(colors.bg));
     color = paint_primary_glyph(hit, colors.fg, color);
@@ -207,7 +208,7 @@ fn paint_right_strip(p_px: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
         p_px.x - f32(col) * params.cell_size_px.x,
         p_px.y - f32(row) * params.cell_size_px.y,
     );
-    let colors = resolve_cell_colors(strip_cell);
+    let colors = resolve_painted_colors(strip_cell, row, col);
     var color = blend_premultiplied_over(fallback, tint_bg(colors.bg));
     // NOTE: paint_cell_glyph (NOT paint_primary_glyph). strip_local.x is
     // in [cell_pitch.x, cell_pitch.x + max_overflow_phys) — already in
@@ -268,9 +269,9 @@ fn paint_left_overdraw(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
 // ============================================================================
 
 // Runs the three overlay stages in canonical order:
-// text decorations → cursor → selection. Used by both paint_grid_cell
-// and paint_right_strip so the strip cannot drift from the grid path
-// on overlay sequence or argument order.
+// text decorations → bar / underline cursor → selection. Used by both
+// paint_grid_cell and paint_right_strip so the strip cannot drift from the
+// grid path on overlay sequence or argument order.
 fn paint_cell_overlays(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
     var color = paint_text_decorations(
         hit.cell.style_flags,
@@ -279,7 +280,7 @@ fn paint_cell_overlays(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32
         base,
         hit.cell.hyperlink_id,
     );
-    color = paint_cursor(hit.row, hit.col, hit.in_cell_px, color);
+    color = paint_cursor(hit.row, hit.col, hit.in_cell_px, hit.cell, color);
     color = paint_selection(hit.row, hit.col, color);
     return color;
 }
@@ -366,34 +367,74 @@ fn bar_covers(row: u32, col: u32) -> bool {
     return col == params.cursor_pos.x;
 }
 
+// Whether the cursor is drawn this frame: visible, and in the lit phase
+// when blinking.
+fn cursor_is_lit() -> bool {
+    let visible = (params.cursor_style & CURSOR_VISIBLE) != 0u;
+    let blinking = (params.cursor_style & CURSOR_BLINKING) != 0u;
+    return visible && (!blinking || fract(params.time_seconds) < 0.5);
+}
+
+// Whether a lit block cursor covers (row, col). Runs for every fragment,
+// so the checks that read no cell come first.
+fn block_cursor_covers(row: u32, col: u32) -> bool {
+    if row != params.cursor_pos.y {
+        return false;
+    }
+    if ((params.cursor_style >> 1u) & 3u) != CURSOR_SHAPE_BLOCK {
+        return false;
+    }
+    if !cursor_is_lit() {
+        return false;
+    }
+    return cursor_covers(row, col);
+}
+
+// The color the cursor is painted in: the OSC 12 color when one is set,
+// else `cell_fg`.
+fn cursor_fill(cell_fg: vec4<f32>) -> vec4<f32> {
+    if params.cursor_packed != 0u {
+        return unpack_rgba(params.cursor_packed);
+    }
+    return cell_fg;
+}
+
+// The colors (row, col) is painted in: the cell's own, or, under a lit
+// block cursor, the fill as background and the cell's background as the
+// glyph color. Concealment applies last, so a concealed glyph stays
+// hidden inside the block.
+fn resolve_painted_colors(cell: Cell, row: u32, col: u32) -> CellColors {
+    var colors = resolve_visible_colors(cell);
+    if block_cursor_covers(row, col) {
+        colors = CellColors(materialize_default_bg(colors.bg), cursor_fill(colors.fg));
+    }
+    return conceal(cell, colors);
+}
+
+// Paints the bar and underline cursors, whose strip lies clear of the
+// glyph. The block cursor is resolved into the cell's colors instead.
 fn paint_cursor(
     row: u32,
     col: u32,
     in_cell_px: vec2<f32>,
+    cell: Cell,
     base: vec4<f32>,
 ) -> vec4<f32> {
-    let cursor_visible = (params.cursor_style & CURSOR_VISIBLE) != 0u;
-    let cursor_blinking = (params.cursor_style & CURSOR_BLINKING) != 0u;
     let cursor_shape = (params.cursor_style >> 1u) & 3u;
-    let blink_on = !cursor_blinking || (fract(params.time_seconds) < 0.5);
     let on_cursor_cell = select(cursor_covers(row, col), bar_covers(row, col), cursor_shape == CURSOR_SHAPE_BAR);
-    if !(cursor_visible && blink_on && on_cursor_cell) {
+    if !(cursor_is_lit() && on_cursor_cell) {
         return base;
     }
 
     let thickness = 2.0;
-    let invert = vec4<f32>(1.0 - base.rgb, base.a);
-    if cursor_shape == CURSOR_SHAPE_BLOCK {
-        return invert;
+    let on_underline = cursor_shape == CURSOR_SHAPE_UNDERLINE
+        && in_cell_px.y >= params.cell_size_px.y - thickness;
+    let on_bar = cursor_shape == CURSOR_SHAPE_BAR && in_cell_px.x < thickness;
+    if !(on_underline || on_bar) {
+        return base;
     }
-    if cursor_shape == CURSOR_SHAPE_UNDERLINE
-        && in_cell_px.y >= params.cell_size_px.y - thickness {
-        return invert;
-    }
-    if cursor_shape == CURSOR_SHAPE_BAR && in_cell_px.x < thickness {
-        return invert;
-    }
-    return base;
+    let fill = cursor_fill(resolve_visible_colors(cell).fg);
+    return vec4<f32>(fill.rgb, 1.0);
 }
 
 fn paint_selection(row: u32, col: u32, base: vec4<f32>) -> vec4<f32> {

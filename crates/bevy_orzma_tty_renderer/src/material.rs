@@ -1774,4 +1774,42 @@ mod tests {
             .rfind(|line| !line.is_empty());
         assert_eq!(last_field, Some("cursor_packed: u32,"));
     }
+
+    /// Asserts that both paint paths resolve cell colors through the
+    /// block-cursor override, leaving the plain resolution to the left
+    /// neighbour's overdraw alone, and that the override conceals last.
+    ///
+    /// Case: a block cursor sits on a cell in the last column, so the
+    /// grid path and the right-strip path both paint it.
+    #[test]
+    fn wgsl_block_cursor_is_resolved_into_the_cell_colors() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(wgsl_fn_body(src, "paint_grid_cell").contains("resolve_painted_colors("));
+        assert!(wgsl_fn_body(src, "paint_right_strip").contains("resolve_painted_colors("));
+        assert_eq!(
+            src.matches("resolve_cell_colors(").count(),
+            2,
+            "only the definition and paint_left_overdraw name the plain resolution"
+        );
+        let painted = wgsl_fn_body(src, "resolve_painted_colors");
+        assert!(painted.contains("block_cursor_covers(row, col)"));
+        assert!(painted.contains("conceal("));
+        assert!(!painted.contains("STYLE_HIDDEN"));
+        assert!(wgsl_fn_body(src, "block_cursor_covers").contains("cursor_covers(row, col)"));
+    }
+
+    /// Asserts that the bar and underline cursors take the fill color
+    /// from the cell's colors before concealment, and that no pixel
+    /// inversion is left in the shader.
+    ///
+    /// Case: an underline cursor sits on a concealed cell, where the
+    /// concealed foreground equals the background.
+    #[test]
+    fn wgsl_cursor_strips_take_the_fill_color() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let painter = wgsl_fn_body(src, "paint_cursor");
+        assert!(painter.contains("cursor_fill(resolve_visible_colors(cell).fg)"));
+        assert!(wgsl_fn_body(src, "cursor_fill").contains("params.cursor_packed"));
+        assert!(!src.contains("1.0 - base.rgb"));
+    }
 }
