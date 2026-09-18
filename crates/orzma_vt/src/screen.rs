@@ -165,6 +165,19 @@ impl Screen {
         self.character_set_mapping.translate(c)
     }
 
+    /// Disarms the deferred wrap, leaving the cursor and the cells
+    /// alone.
+    ///
+    /// The saved cursor keeps its own flag: DEC STD-070 has `DECSC` carry
+    /// the last-column flag.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECRST 7` (`CSI ? 7 l`) — the pending-wrap part
+    pub fn disarm_pending_wrap(&mut self) {
+        self.state.pending_wrap = false;
+    }
+
     /// Prints a glyph already mapped through a character set at the cursor
     /// with the current pen, as `options` shape it, wrapping first when the
     /// deferred wrap is armed and autowrap is set.
@@ -193,7 +206,7 @@ impl Screen {
     /// refuses the glyph or the filler a wrapping two-column glyph leaves;
     /// the cursor and the deferred wrap are then left as they stood when
     /// the row refused.
-    pub fn print(
+    pub(crate) fn print(
         &mut self,
         classified: ClassifiedGlyph,
         options: PrintOptions,
@@ -208,19 +221,6 @@ impl Screen {
         };
         self.land_glyph(glyph, width, options)?;
         Ok(damage.span(self))
-    }
-
-    /// Disarms the deferred wrap, leaving the cursor and the cells
-    /// alone.
-    ///
-    /// The saved cursor keeps its own flag: DEC STD-070 has `DECSC` carry
-    /// the last-column flag.
-    ///
-    /// # Control Functions
-    ///
-    /// - `DECRST 7` (`CSI ? 7 l`) — the pending-wrap part
-    pub fn disarm_pending_wrap(&mut self) {
-        self.state.pending_wrap = false;
     }
 
     /// Combines `mark` onto the glyph the cursor last passed: the cell
