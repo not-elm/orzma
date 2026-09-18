@@ -391,6 +391,7 @@ impl PaneTreatment {
 /// | 128    | `overlay_rects`             |
 /// | 320    | `overlay_dim`               |
 /// | 324    | `overlay_desaturate`        |
+/// | 328    | `cursor_packed`             |
 ///
 /// # Invariants
 ///
@@ -403,6 +404,9 @@ impl PaneTreatment {
 ///   short-circuits on `cursor_visible == 0u`. A cursor (vi or live)
 ///   whose grid line projects outside the viewport takes the same path:
 ///   `cursor_visible = 0`.
+/// - `cursor_packed == 0` means no cursor color is set, and the shader
+///   paints the cursor in the foreground of the cell under it. A set
+///   color packs like a cell color, whose alpha byte is never zero.
 #[derive(Clone, Copy, ShaderType, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
@@ -454,6 +458,9 @@ struct TerminalParams {
     /// Inline-overlay (webview) desaturation toward Rec.709 luminance applied to
     /// overlay samples. `0.0` = active / no-op.
     overlay_desaturate: f32,
+    /// The `OSC 12` cursor color in the cell-color packing; `0` when
+    /// none is set.
+    cursor_packed: u32,
 }
 
 impl Default for TerminalParams {
@@ -483,6 +490,7 @@ impl Default for TerminalParams {
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
             overlay_dim: 1.0,
             overlay_desaturate: 0.0,
+            cursor_packed: 0,
         }
     }
 }
@@ -507,7 +515,7 @@ impl TerminalParams {
     ///   the entity's overlays.
     fn new(
         view: &TerminalView,
-        default_bg: Rgb,
+        palette: &Palette,
         metrics: &CellMetrics,
         treatment: &PaneTreatment,
         cell_size_px: Vec2,
@@ -525,7 +533,7 @@ impl TerminalParams {
         let (cursor_pos, cursor_style) = view.current_cursor_pos_and_style();
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
             selection_uniforms(view.selection.as_ref(), view.display_offset, view.rows);
-        let bg_padding_color = padding_color(default_bg, fallback);
+        let bg_padding_color = padding_color(palette.background, fallback);
 
         Self {
             grid_size: UVec2::new(cols.max(1), rows.max(1)),
@@ -552,6 +560,7 @@ impl TerminalParams {
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
             overlay_dim: treatment.overlay_dim,
             overlay_desaturate: treatment.overlay_desaturate,
+            cursor_packed: palette.cursor.map_or(0, pack_linear),
         }
     }
 }
@@ -806,7 +815,7 @@ fn update_terminal_material(
         if let Some(mut mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
                 view,
-                cells.palette.background,
+                &cells.palette,
                 &metrics,
                 &treatment,
                 cell_size_phys,
@@ -1356,13 +1365,15 @@ mod tests {
         assert_eq!(p.overlay_desaturate, 0.0);
     }
 
+    /// Asserts the std140 offsets of the fields after `dim`, where a
+    /// `Vec4` and the rect array force alignment padding, down to the
+    /// packed cursor color in the tail.
+    ///
+    /// Case: the shader reads `overlay_dim`, `overlay_desaturate`, and
+    /// the cursor color at the byte offsets its own struct declaration
+    /// implies, while the host uploads them at these.
     #[test]
     fn terminal_params_field_offsets_are_pinned() {
-        // `dim` is at offset 104; `inactive_tint` (a Vec4, 16-byte aligned)
-        // lands at 112 after encase pads the 4 bytes following `dim`;
-        // `overlay_rects` follows at 128; the trailing scalars `overlay_dim` /
-        // `overlay_desaturate` sit at 320/324 (total 336 bytes). Field indices
-        // are 0-based in declaration order.
         assert_eq!(
             <TerminalParams as ShaderType>::METADATA.offset(19),
             104,
@@ -1371,7 +1382,7 @@ mod tests {
         assert_eq!(
             <TerminalParams as ShaderType>::METADATA.offset(20),
             112,
-            "inactive_tint (Vec4) after the pad following dim"
+            "inactive_tint (Vec4, 16-byte aligned) after the pad following dim"
         );
         assert_eq!(
             <TerminalParams as ShaderType>::METADATA.offset(21),
@@ -1387,6 +1398,11 @@ mod tests {
             <TerminalParams as ShaderType>::METADATA.offset(23),
             324,
             "overlay_desaturate after overlay_dim"
+        );
+        assert_eq!(
+            <TerminalParams as ShaderType>::METADATA.offset(24),
+            328,
+            "cursor_packed after overlay_desaturate"
         );
     }
 
@@ -1688,5 +1704,74 @@ mod tests {
         assert!(visible.contains("materialize_default_bg("));
         assert!(!visible.contains("bg_padding_color"));
         assert!(wgsl_fn_body(src, "materialize_default_bg").contains("params.bg_padding_color"));
+    }
+
+    fn params_for(palette: &Palette) -> TerminalParams {
+        let metrics = CellMetrics {
+            advance_phys: 8.0,
+            line_height_phys: 16.0,
+            ascent_phys: 12.0,
+            descent_phys: 4.0,
+            underline_position_phys: -2.0,
+            underline_thickness_phys: 1.0,
+            max_overflow_phys: 0.0,
+        };
+        TerminalParams::new(
+            &TerminalView::default(),
+            palette,
+            &metrics,
+            &PaneTreatment::from_style(None),
+            Vec2::new(8.0, 16.0),
+            Vec2::new(64.0, 64.0),
+            12.0,
+            1.0,
+            0.0,
+            [0, 0, 0],
+            0,
+            0,
+        )
+    }
+
+    /// Asserts that the uniform carries zero for an unset cursor color
+    /// and the cell packing of the color once one is set.
+    ///
+    /// Case: nvim recolors the cursor with `OSC 12` and later restores it
+    /// with `OSC 112`.
+    #[test]
+    fn terminal_params_carry_the_cursor_color() {
+        assert_eq!(params_for(&Palette::default()).cursor_packed, 0);
+        let orange = Rgb {
+            r: 0xff,
+            g: 0x88,
+            b: 0x00,
+        };
+        let palette = Palette {
+            cursor: Some(orange),
+            ..Palette::default()
+        };
+        let packed = params_for(&palette).cursor_packed;
+        assert_eq!(packed, pack_linear(orange));
+        assert_ne!(packed, 0);
+    }
+
+    /// Asserts that the shader declares the packed cursor color as the
+    /// last field of its uniform block, matching the host layout.
+    ///
+    /// Case: the host appends the cursor color after
+    /// `overlay_desaturate`, and the shader reads the block through its
+    /// own declaration.
+    #[test]
+    fn wgsl_terminal_params_end_with_the_cursor_color() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let declaration = src
+            .split("struct TerminalParams {")
+            .nth(1)
+            .and_then(|rest| rest.split("};").next())
+            .expect("the shader declares TerminalParams");
+        let last_field = declaration
+            .lines()
+            .map(str::trim)
+            .rfind(|line| !line.is_empty());
+        assert_eq!(last_field, Some("cursor_packed: u32,"));
     }
 }

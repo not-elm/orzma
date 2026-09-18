@@ -30,6 +30,7 @@ struct TerminalParams {
     overlay_rects: array<vec4<i32>, 12>,
     overlay_dim: f32,
     overlay_desaturate: f32,
+    cursor_packed: u32,
 };
 
 struct Cell {
