@@ -49,9 +49,9 @@ pub struct OrzmuxSeparator {
     pub orientation: SplitOrientation,
 }
 
-/// The GUI accepted a new active pane from a `Layout`. `previous`
-/// resolves to `None` when that entity was already despawned by a
-/// `PaneClosed` in the same drain.
+/// The GUI applied a new active pane, accepted from a `Layout` or taken
+/// optimistically from a `PaneAction::Select`. `previous` is `None` when
+/// no pane was applied before or its entity is already despawned.
 #[derive(Event, Debug, Clone, Copy)]
 pub struct OrzmuxActivePaneChanged {
     /// The entity that was the applied active before this change.

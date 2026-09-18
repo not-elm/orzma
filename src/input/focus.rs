@@ -49,7 +49,8 @@ pub(crate) struct PaneClicked {
 }
 
 /// Keeps focus and input gating in sync with the active pane and
-/// click-to-focus requests.
+/// click-to-focus requests, and makes the pane of a newly focused inline
+/// webview the active pane.
 pub(super) struct FocusSyncPlugin;
 
 impl Plugin for FocusSyncPlugin {
@@ -58,6 +59,10 @@ impl Plugin for FocusSyncPlugin {
             Update,
             (
                 maintain_input_gates.before(InputPhase::Hover),
+                select_pane_of_focused_webview
+                    .run_if(resource_exists_and_changed::<FocusedWebview>)
+                    .after(InputPhase::Dispatch)
+                    .before(InputPhase::FocusedKey),
                 sync_focused_webview.after(InputPhase::FocusedKey),
             ),
         )
@@ -67,11 +72,11 @@ impl Plugin for FocusSyncPlugin {
 }
 
 /// Applies an applied active-pane change, whether accepted from a
-/// `Layout` or taken optimistically from a click: moves
+/// `Layout` or taken optimistically from a pane selection: moves
 /// `KeyboardFocused`, releases a focused webview that is not an inline
 /// child of the new active pane, and swaps `PaneInactiveStyle` between
 /// the previous and current panes. `previous` may already be despawned
-/// (a `PaneClosed` in the same drain), hence the fallible commands.
+/// by a `PaneClosed` in the same drain.
 fn on_active_pane_changed(
     ev: On<OrzmuxActivePaneChanged>,
     mut commands: Commands,
@@ -122,6 +127,31 @@ fn on_pane_clicked(
     }
     commands.trigger(RequestPaneAction {
         action: PaneAction::Select(ev.entity),
+    });
+}
+
+/// Asks for the pane that owns the focused inline webview to become the
+/// active pane when it is not already `KeyboardFocused`. A cleared focus,
+/// or a focus on an entity that is not a live inline `Webview` child, asks
+/// for nothing.
+fn select_pane_of_focused_webview(
+    mut commands: Commands,
+    focused: Res<FocusedWebview>,
+    webview_parents: Query<&ChildOf, With<Webview>>,
+    active_panes: Query<(), With<KeyboardFocused>>,
+) {
+    let Some(child) = focused.0 else {
+        return;
+    };
+    let Ok(parent) = webview_parents.get(child) else {
+        return;
+    };
+    let pane = parent.parent();
+    if active_panes.contains(pane) {
+        return;
+    }
+    commands.trigger(RequestPaneAction {
+        action: PaneAction::Select(pane),
     });
 }
 
@@ -511,16 +541,11 @@ mod tests {
     /// child that is not itself a pane.
     #[test]
     fn a_click_requests_the_selection_of_a_pane_only() {
-        #[derive(Resource, Default)]
-        struct Seen(Vec<PaneAction>);
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .init_resource::<Seen>()
+            .init_resource::<SelectRequests>()
             .add_observer(on_pane_clicked)
-            .add_observer(|ev: On<RequestPaneAction>, mut seen: ResMut<Seen>| {
-                seen.0.push(ev.action)
-            });
+            .add_observer(record_select_request);
         let pane = app
             .world_mut()
             .spawn((OrzmaTerminal, OrzmuxPane(PaneId(2))))
@@ -530,7 +555,7 @@ mod tests {
         app.world_mut().trigger(PaneClicked { entity: other });
         app.update();
         assert_eq!(
-            app.world().resource::<Seen>().0,
+            app.world().resource::<SelectRequests>().0,
             vec![PaneAction::Select(pane)]
         );
     }
@@ -645,6 +670,220 @@ mod tests {
             !app.world().entity(shell).contains::<MouseDisabled>(),
             "webview focus alone must NOT MouseDisable the shell — an off-rect click must fall \
              through to the terminal (and clear webview focus in the router)"
+        );
+    }
+
+    /// Spawns an `OrzmaTerminal` pane carrying `OrzmuxPane(PaneId(id))` with
+    /// one inline `Webview` child, and returns `(pane, child)`.
+    fn spawn_pane_with_webview(app: &mut App, id: u32) -> (Entity, Entity) {
+        let pane = app
+            .world_mut()
+            .spawn((OrzmaTerminal, OrzmuxPane(PaneId(id))))
+            .id();
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(pane),
+                Webview {
+                    handle: format!("h{id}").into(),
+                    instance: InstanceId(u128::from(id)),
+                    slot: 0,
+                    rows: 10,
+                    cols: 40,
+                },
+            ))
+            .id();
+        (pane, child)
+    }
+
+    /// Asserts that an active-pane change keeps a focused webview that
+    /// belongs to the new active pane and clears one that does not.
+    ///
+    /// Case: a selection lands on the pane whose webview holds focus, and
+    /// the user later moves back to the other pane with a directional
+    /// shortcut.
+    #[test]
+    fn an_active_change_keeps_focus_on_a_webview_of_the_new_pane() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
+            .insert_resource(OrzmaConfigsResource::default())
+            .add_observer(on_active_pane_changed);
+        let (a, _) = spawn_pane_with_webview(&mut app, 1);
+        let (b, child) = spawn_pane_with_webview(&mut app, 2);
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+
+        app.world_mut().trigger(OrzmuxActivePaneChanged {
+            previous: Some(a),
+            current: Some(b),
+        });
+        app.update();
+        assert_eq!(app.world().resource::<FocusedWebview>().0, Some(child));
+
+        app.world_mut().trigger(OrzmuxActivePaneChanged {
+            previous: Some(b),
+            current: Some(a),
+        });
+        app.update();
+        assert_eq!(app.world().resource::<FocusedWebview>().0, None);
+    }
+
+    #[derive(Resource, Default)]
+    struct SelectRequests(Vec<PaneAction>);
+
+    fn record_select_request(ev: On<RequestPaneAction>, mut seen: ResMut<SelectRequests>) {
+        seen.0.push(ev.action);
+    }
+
+    /// An app running `select_pane_of_focused_webview` that records every
+    /// `RequestPaneAction` it triggers. It has already updated once, so the
+    /// initial addition of `FocusedWebview` is consumed.
+    fn select_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
+            .init_resource::<SelectRequests>()
+            .add_systems(
+                Update,
+                select_pane_of_focused_webview
+                    .run_if(resource_exists_and_changed::<FocusedWebview>),
+            )
+            .add_observer(record_select_request);
+        app.update();
+        app
+    }
+
+    /// Asserts that focusing an inline webview whose pane is not the
+    /// keyboard-focused pane asks for that pane to be selected.
+    ///
+    /// Case: the user clicks a webview mounted in the inactive right-hand
+    /// pane while the left-hand pane holds keyboard focus.
+    #[test]
+    fn a_webview_focused_in_an_inactive_pane_selects_that_pane() {
+        let mut app = select_app();
+        let (active, _) = spawn_pane_with_webview(&mut app, 1);
+        app.world_mut().entity_mut(active).insert(KeyboardFocused);
+        let (inactive, child) = spawn_pane_with_webview(&mut app, 2);
+
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SelectRequests>().0,
+            vec![PaneAction::Select(inactive)]
+        );
+    }
+
+    /// Asserts that a focus on a webview of the keyboard-focused pane, or a
+    /// cleared focus, asks for no pane selection.
+    ///
+    /// Case: the user clicks a webview in the pane they are already typing
+    /// in, then hands the keyboard back to the shell with the release
+    /// shortcut.
+    #[test]
+    fn a_focus_in_the_active_pane_or_a_cleared_focus_selects_nothing() {
+        let mut app = select_app();
+        let (active, child) = spawn_pane_with_webview(&mut app, 1);
+        app.world_mut().entity_mut(active).insert(KeyboardFocused);
+
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+        app.update();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = None;
+        app.update();
+
+        assert!(app.world().resource::<SelectRequests>().0.is_empty());
+    }
+
+    #[derive(Resource, Default)]
+    struct KeyboardFocusAtKeys(Vec<Entity>);
+
+    /// The stand-in for the webview router in this test: the test sets
+    /// this instead of `FocusedWebview` directly, and a system in
+    /// `InputPhase::Dispatch` moves it into `FocusedWebview`.
+    #[derive(Resource, Default)]
+    struct PendingWebviewFocus(Option<Entity>);
+
+    /// Asserts that a webview focused in an inactive pane keeps its focus
+    /// once that pane becomes active, that keyboard dispatch in the same
+    /// frame already sees that pane as keyboard-focused, and that the
+    /// selection is asked for only once.
+    ///
+    /// Case: the user clicks a webview in the inactive pane and starts
+    /// typing into it right away, and the page's program then declares
+    /// focus on that same webview again.
+    #[test]
+    fn a_focused_webview_keeps_focus_once_its_pane_becomes_active() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, FocusSyncPlugin))
+            .init_resource::<FocusedWebview>()
+            .init_resource::<ImeState>()
+            .init_resource::<SelectRequests>()
+            .init_resource::<KeyboardFocusAtKeys>()
+            .init_resource::<PendingWebviewFocus>()
+            .insert_resource(OrzmaConfigsResource::default())
+            .configure_sets(
+                Update,
+                (
+                    InputPhase::Hover,
+                    InputPhase::Dispatch,
+                    InputPhase::FocusedKey,
+                )
+                    .chain(),
+            )
+            .add_systems(
+                Update,
+                (|mut pending: ResMut<PendingWebviewFocus>,
+                  mut focused: ResMut<FocusedWebview>| {
+                    if let Some(child) = pending.0.take() {
+                        focused.0 = Some(child);
+                    }
+                })
+                .in_set(InputPhase::Dispatch),
+            )
+            .add_systems(
+                Update,
+                (|mut seen: ResMut<KeyboardFocusAtKeys>,
+                  focused: Query<Entity, With<KeyboardFocused>>| {
+                    seen.0.extend(focused.iter());
+                })
+                .in_set(InputPhase::FocusedKey),
+            )
+            .add_observer(record_select_request)
+            .add_observer(
+                |ev: On<RequestPaneAction>,
+                 mut commands: Commands,
+                 active: Query<Entity, With<KeyboardFocused>>| {
+                    let PaneAction::Select(target) = ev.action else {
+                        return;
+                    };
+                    commands.trigger(OrzmuxActivePaneChanged {
+                        previous: active.iter().next(),
+                        current: Some(target),
+                    });
+                },
+            );
+        let (a, _) = spawn_pane_with_webview(&mut app, 1);
+        app.world_mut().entity_mut(a).insert(KeyboardFocused);
+        let (b, child) = spawn_pane_with_webview(&mut app, 2);
+        app.update();
+        app.world_mut()
+            .resource_mut::<KeyboardFocusAtKeys>()
+            .0
+            .clear();
+
+        app.world_mut().resource_mut::<PendingWebviewFocus>().0 = Some(child);
+        app.update();
+
+        assert_eq!(app.world().resource::<KeyboardFocusAtKeys>().0, vec![b]);
+        assert_eq!(app.world().resource::<FocusedWebview>().0, Some(child));
+        assert!(app.world().get::<KeyboardFocused>(a).is_none());
+        assert!(app.world().get::<PaneInactiveStyle>(a).is_some());
+
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+        app.update();
+        assert_eq!(
+            app.world().resource::<SelectRequests>().0,
+            vec![PaneAction::Select(b)]
         );
     }
 }

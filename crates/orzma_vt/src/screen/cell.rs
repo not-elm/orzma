@@ -32,6 +32,16 @@ pub enum BodyWidth {
     Wide,
 }
 
+impl BodyWidth {
+    /// The columns a glyph body of this width spans.
+    pub fn columns(self) -> u16 {
+        match self {
+            Self::Narrow => 1,
+            Self::Wide => 2,
+        }
+    }
+}
+
 impl From<BodyWidth> for CellWidth {
     fn from(width: BodyWidth) -> Self {
         match width {
@@ -453,6 +463,16 @@ mod tests {
         assert_eq!(GlyphClass::Narrow.body_width(), Some(BodyWidth::Narrow));
         assert_eq!(GlyphClass::Wide.body_width(), Some(BodyWidth::Wide));
         assert_eq!(GlyphClass::ZeroWidth.body_width(), None);
+    }
+
+    /// Asserts that each body width reports the columns its glyph spans.
+    ///
+    /// Case: the printer makes room for a glyph it is about to stamp and
+    /// then advances the cursor past it.
+    #[test]
+    fn each_body_width_reports_its_columns() {
+        assert_eq!(BodyWidth::Narrow.columns(), 1);
+        assert_eq!(BodyWidth::Wide.columns(), 2);
     }
 
     /// Asserts that the cell stays within thirty-two bytes.
