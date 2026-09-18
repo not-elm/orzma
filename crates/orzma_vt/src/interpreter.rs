@@ -644,39 +644,61 @@ impl Executor<'_> {
     }
 
     /// Applies the dynamic-color requests an `OSC 10`, `OSC 11`,
-    /// `OSC 110`, or `OSC 111` carries, in order, answering each query
-    /// with the colour held at that point.
+    /// `OSC 12`, `OSC 110`, `OSC 111`, or `OSC 112` carries, in order,
+    /// answering each query with the colour held at that point.
     ///
-    /// A command that changes a colour stages one full repaint,
-    /// whatever the number of requests it carries.
+    /// A query of an unset cursor color is answered with the default
+    /// foreground.
+    ///
+    /// A command that changes the foreground or the background stages
+    /// one full repaint, whatever the number of requests it carries. A
+    /// command that changes only the cursor color repaints no row.
     fn apply_dynamic_color_requests(&mut self, params: &[&[u8]], terminator: OscTerminator) {
-        let mut changed = false;
+        let mut repaint = false;
+        let mut cursor_recolored = false;
         for request in DynamicColorRequest::parse(params) {
             match request {
-                DynamicColorRequest::Set { target, color } => {
-                    changed |= match target {
-                        DynamicColor::Foreground => self.device.set_foreground_color(color),
-                        DynamicColor::Background => self.device.set_background_color(color),
-                    };
-                }
-                DynamicColorRequest::Reset { target } => {
-                    changed |= match target {
-                        DynamicColor::Foreground => self.device.reset_foreground_color(),
-                        DynamicColor::Background => self.device.reset_background_color(),
-                    };
-                }
+                DynamicColorRequest::Set { target, color } => match target {
+                    DynamicColor::Foreground => {
+                        repaint |= self.device.set_foreground_color(color);
+                    }
+                    DynamicColor::Background => {
+                        repaint |= self.device.set_background_color(color);
+                    }
+                    DynamicColor::Cursor => {
+                        cursor_recolored |= self.device.set_cursor_color(color);
+                    }
+                },
+                DynamicColorRequest::Reset { target } => match target {
+                    DynamicColor::Foreground => {
+                        repaint |= self.device.reset_foreground_color();
+                    }
+                    DynamicColor::Background => {
+                        repaint |= self.device.reset_background_color();
+                    }
+                    DynamicColor::Cursor => {
+                        cursor_recolored |= self.device.reset_cursor_color();
+                    }
+                },
                 DynamicColorRequest::Query { target } => {
+                    let palette = self.device.palette();
                     let color = match target {
-                        DynamicColor::Foreground => self.device.palette().foreground,
-                        DynamicColor::Background => self.device.palette().background,
+                        DynamicColor::Foreground => palette.foreground,
+                        DynamicColor::Background => palette.background,
+                        DynamicColor::Cursor => palette.cursor.unwrap_or(palette.foreground),
                     };
                     self.reply(&dynamic_color_reply(target, color, terminator));
                 }
             }
         }
-        if changed {
+        if repaint {
             self.stage(Some(DamageSpan::Full));
         }
+        // NOTE: A cursor recolor repaints no row, so it must raise the chunk
+        // liveness itself. Dropping this assignment would leave the changed
+        // palette without a frame to carry it, and the new color would not
+        // reach the screen until a later chunk raises the liveness.
+        self.output.damaged |= cursor_recolored;
     }
 
     /// Applies the palette requests an `OSC 4` or `OSC 104` carries, in

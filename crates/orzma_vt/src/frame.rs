@@ -48,7 +48,9 @@ pub struct Frame {
     /// `display_offset` and culls what falls outside the viewport.
     pub placements: Option<Vec<AnchoredPlacement>>,
     /// The live palette symbolic colors resolve against: `None` when
-    /// unchanged. A palette override owes a staged full repaint.
+    /// unchanged. A change to a color the cells resolve against owes a
+    /// staged full repaint; a change to the cursor color alone owes
+    /// none.
     pub palette: Option<Palette>,
     /// Definitions for hyperlink ids referenced by `rows`, merged into
     /// the consumer's retained table. An id the consumer already knows
