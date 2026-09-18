@@ -121,6 +121,21 @@ fn a_page_bound_cursor_down_under_origin_mode_stops_at_the_bottom_margin() {
     assert_eq!(screen.state.line, ScreenLine(2));
 }
 
+/// Asserts that origin mode moves the cursor by the count alone,
+/// without also shifting it by the top margin.
+///
+/// Case: a full-screen application with a header reserved above its
+/// pane sets origin mode and steps one row down inside the pane.
+#[test]
+fn a_page_bound_cursor_down_under_origin_mode_moves_by_the_count_alone() {
+    let mut screen = tall_screen();
+    screen.set_scroll_region(Some(2), Some(4));
+    screen.set_origin_mode(OriginMode::WithinMargins);
+    assert_eq!(screen.state.line, ScreenLine(1));
+    screen.move_cursor_down_within_page(1);
+    assert_eq!(screen.state.line, ScreenLine(2));
+}
+
 /// Asserts that the largest representable count saturates at the last
 /// row rather than wrapping.
 ///

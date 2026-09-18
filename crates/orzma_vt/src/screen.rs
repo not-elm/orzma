@@ -563,7 +563,7 @@ impl Screen {
         let limit = if self.state.line <= barrier {
             barrier
         } else {
-            ScreenLine(self.grid.size().rows - 1)
+            self.last_page_line()
         };
         self.state.line = ScreenLine(self.state.line.0.saturating_add(count).min(limit.0));
         self.state.pending_wrap = false;
@@ -583,8 +583,14 @@ impl Screen {
     fn last_addressable_line(&self) -> ScreenLine {
         match self.scroll_region.origin_mode() {
             OriginMode::WithinMargins => self.scroll_region.bottom_margin(),
-            OriginMode::UpperLeftCorner => ScreenLine(self.grid.size().rows - 1),
+            OriginMode::UpperLeftCorner => self.last_page_line(),
         }
+    }
+
+    /// The last line of the page, whatever the current [`OriginMode`]
+    /// addresses.
+    fn last_page_line(&self) -> ScreenLine {
+        ScreenLine(self.grid.size().rows - 1)
     }
 
     /// The zero-based index a one-based addressing parameter names, where
