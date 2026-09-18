@@ -11,7 +11,7 @@ orzma is a terminal that runs as a single native GUI application; a built-in mul
 The workspace root package is the one and only binary; library crates live under `crates/`. Edition 2024, toolchain pinned to `1.95` (`rust-toolchain.toml`).
 
 - `orzma` (workspace root, `src/main.rs`) — the single binary: a Bevy 0.19 app. `main()` builds one `App` and adds `DefaultPlugins` (configured with a `WindowPlugin` titled "orzma") plus `cef_plugin(orzma_registry.clone(), cef_profile.path())` (from `bevy_cef`), then the orzma plugins:
-  - `SurfacePlugin`, `SessionPlugin`, `OrzmuxPlugin` (from `bevy_orzmux`), `TerminalRendererPlugin` (from `bevy_orzma_tty_renderer`), `ActionPlugin`, `OrzmaConfigsPlugin`, `FontBridgePlugin`, `OrzmaInputPlugin` (`input`'s root plugin, aggregating `ShortcutsPlugin`, `OptionAsAltPlugin`, `KeyboardInputPlugin`, `MouseInputPlugin`, `FocusSyncPlugin`, `ImePlugin`, and `HyperlinkInputPlugin`), `OrzmaUiPlugin` (`ui`'s root plugin, aggregating the UI root, the shell-surface subtree, the IME overlay, and the vi-mode indicator);
+  - `SurfacePlugin`, `SessionPlugin`, `OrzmuxPlugin` (from `bevy_orzmux`), `TerminalRendererPlugin` (from `bevy_orzma_tty_renderer`), `ActionPlugin`, `OrzmaConfigsPlugin`, `FontBridgePlugin`, `OrzmaInputPlugin` (`input`'s root plugin, aggregating `ShortcutsPlugin`, `OptionAsAltPlugin`, `KeyboardInputPlugin`, `MouseInputPlugin`, `FocusSyncPlugin`, `ImePlugin`, and `HyperlinkInputPlugin`), `OrzmaUiPlugin` (`ui`'s root plugin, aggregating the UI root, the shell-surface subtree, the IME overlay, and the vi-mode indicator), `RenderErrorPlugin` (`render_error`, which replaces Bevy's default `RenderErrorHandler` so a GPU error stops drawing or rebuilds the render device instead of ending the session);
   - `OrzmaWebviewPlugin` (from `bevy_orzma_webview`), `WindowTitlePlugin`.
   - The in-process webview feature — CEF render wiring, the control-socket listener, the `window.orzma` back-channel, the APC and control-socket `mount` / `unmount` verbs, and webviews — is aggregated under `OrzmaWebviewPlugin` (from `crates/bevy_orzma_webview`).
 
@@ -46,7 +46,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (crate
 
 ### `src/` module map
 
-`src/main.rs` plus: `action`, `cef_profile`, `configs`, `font`, `input`, `session`, `surface`, `system_set`, `ui`, `window_title`.
+`src/main.rs` plus: `action`, `cef_profile`, `configs`, `font`, `input`, `render_error`, `session`, `surface`, `system_set`, `ui`, `window_title`.
 
 ## Commands
 
