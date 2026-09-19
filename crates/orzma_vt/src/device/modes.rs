@@ -1,6 +1,8 @@
 //! The modes the device carries — DEC private (DECSET / DECRST) and
 //! ANSI (SM / RM) alike — and the enums they select among.
 
+use crate::device::cursor_policy::TextCursorStyle;
+
 /// Snapshot of the modes the device owns, as opposed to those a screen
 /// owns.
 ///
@@ -268,26 +270,23 @@ impl TextCursorModes {
     /// first slot; `None` for a parameter this terminal assigns no
     /// style to.
     ///
-    /// An omitted parameter, a zero, and a one all select the blinking
-    /// block. A seven restores the power-up shape and blink. The
-    /// cursor's visibility is carried through unchanged.
+    /// An omitted parameter, a zero, and a seven all restore `initial`.
+    /// A one selects the blinking block. The cursor's visibility is
+    /// carried through unchanged.
     ///
     /// # References
     ///
-    /// - vt510.pdf p.251 — "0, 1 or none Blink Block (Default)", and
-    ///   the note that "The escape sequence DECTCEM can enable or
-    ///   disable the cursor display."
     /// - xterm-ctlseqs.pdf p.29-30 — the bar variants (5 and 6) and
     ///   "Ps = 7 ⇒ initial resources".
-    pub fn with_decscusr(self, ps: Option<u16>) -> Option<Self> {
+    pub fn with_decscusr(self, initial: TextCursorStyle, ps: Option<u16>) -> Option<Self> {
         let (shape, blink) = match ps.unwrap_or(0) {
-            0 | 1 => (CursorShape::Block, CursorBlink::Blinking),
+            0 | 7 => (initial.shape, initial.blink),
+            1 => (CursorShape::Block, CursorBlink::Blinking),
             2 => (CursorShape::Block, CursorBlink::Steady),
             3 => (CursorShape::Underline, CursorBlink::Blinking),
             4 => (CursorShape::Underline, CursorBlink::Steady),
             5 => (CursorShape::Bar, CursorBlink::Blinking),
             6 => (CursorShape::Bar, CursorBlink::Steady),
-            7 => (CursorShape::default(), CursorBlink::default()),
             _ => return None,
         };
         Some(Self {
@@ -489,19 +488,31 @@ mod tests {
         );
     }
 
-    /// Asserts that an omitted parameter, a zero, and a one all select
-    /// the blinking block rather than a terminal-specific default.
+    /// Asserts that an omitted parameter and a zero restore the
+    /// configured initial style, while a one still selects the blinking
+    /// block.
     ///
-    /// Case: vim restores the cursor it found by sending `CSI 0 SP q`,
-    /// and a shell prompt framework sends the bare `CSI SP q`.
+    /// Case: vim restores the caret it found by sending `CSI 0 SP q` on
+    /// exit, and a shell prompt framework sends the bare `CSI SP q`.
     #[test]
-    fn an_omitted_zero_and_one_all_select_the_blinking_block() {
+    fn an_omitted_parameter_and_a_zero_restore_the_initial_style() {
+        let initial = TextCursorStyle {
+            shape: CursorShape::Bar,
+            blink: CursorBlink::Steady,
+        };
         let start = TextCursorModes::default();
-        for ps in [None, Some(0), Some(1)] {
-            let next = start.with_decscusr(ps).expect("the parameter is assigned");
-            assert_eq!(next.shape, CursorShape::Block, "ps {ps:?}");
-            assert_eq!(next.blink, CursorBlink::Blinking, "ps {ps:?}");
+        for ps in [None, Some(0)] {
+            let next = start
+                .with_decscusr(initial, ps)
+                .expect("the parameter is assigned");
+            assert_eq!(next.shape, CursorShape::Bar, "ps {ps:?}");
+            assert_eq!(next.blink, CursorBlink::Steady, "ps {ps:?}");
         }
+        let one = start
+            .with_decscusr(initial, Some(1))
+            .expect("the parameter is assigned");
+        assert_eq!(one.shape, CursorShape::Block);
+        assert_eq!(one.blink, CursorBlink::Blinking);
     }
 
     /// Asserts that each assigned parameter selects its documented
@@ -521,33 +532,37 @@ mod tests {
         ];
         for (ps, shape, blink) in expected {
             let next = start
-                .with_decscusr(Some(ps))
+                .with_decscusr(TextCursorStyle::default(), Some(ps))
                 .expect("the parameter is assigned");
             assert_eq!(next.shape, shape, "ps {ps}");
             assert_eq!(next.blink, blink, "ps {ps}");
         }
     }
 
-    /// Asserts that a seven restores the power-up shape and blink
-    /// rather than being ignored, carrying the cursor's visibility
+    /// Asserts that a seven restores the configured initial style rather
+    /// than a compile-time default, carrying the cursor's visibility
     /// through unchanged.
     ///
     /// Case: an application that changed the caret hands the terminal
     /// back by asking for the style it was configured with, while the
     /// caret is hidden mid-repaint.
     #[test]
-    fn a_seven_restores_the_power_up_style() {
+    fn a_seven_restores_the_configured_initial_style() {
+        let initial = TextCursorStyle {
+            shape: CursorShape::Underline,
+            blink: CursorBlink::Blinking,
+        };
         let changed = TextCursorModes {
             enable: TextCursorEnable::Hidden,
             ..TextCursorModes::default()
         }
-        .with_decscusr(Some(5))
+        .with_decscusr(initial, Some(5))
         .expect("the parameter is assigned");
         let restored = changed
-            .with_decscusr(Some(7))
+            .with_decscusr(initial, Some(7))
             .expect("the parameter is assigned");
-        assert_eq!(restored.shape, TextCursorModes::default().shape);
-        assert_eq!(restored.blink, TextCursorModes::default().blink);
+        assert_eq!(restored.shape, CursorShape::Underline);
+        assert_eq!(restored.blink, CursorBlink::Blinking);
         assert_eq!(restored.enable, TextCursorEnable::Hidden);
     }
 
@@ -564,11 +579,17 @@ mod tests {
             enable: TextCursorEnable::Hidden,
             ..TextCursorModes::default()
         };
-        assert_eq!(hidden.with_decscusr(Some(8)), None);
-        assert_eq!(hidden.with_decscusr(Some(99)), None);
+        assert_eq!(
+            hidden.with_decscusr(TextCursorStyle::default(), Some(8)),
+            None
+        );
+        assert_eq!(
+            hidden.with_decscusr(TextCursorStyle::default(), Some(99)),
+            None
+        );
 
         let barred = hidden
-            .with_decscusr(Some(5))
+            .with_decscusr(TextCursorStyle::default(), Some(5))
             .expect("the parameter is assigned");
         assert_eq!(barred.enable, TextCursorEnable::Hidden);
         assert_eq!(barred.shape, CursorShape::Bar);

@@ -3,9 +3,12 @@
 //! IO errors warn and fall back to defaults.
 
 use bevy::prelude::*;
+use bevy_orzma_tty_renderer::prelude::CaretStyle;
 use orzma_configs::OrzmaConfigs;
+use orzma_configs::cursor::{CursorConfig, CursorStyleSetting};
 use orzma_configs::mouse::MouseConfig;
 use orzma_tty::prelude::WheelConfig;
+use orzma_vt::prelude::{CursorBlink, CursorPolicy, CursorShape, TextCursorStyle};
 
 /// The resolved `OrzmaConfigs`, loaded once at app build time.
 #[derive(Resource, Debug, Default, Deref)]
@@ -57,7 +60,14 @@ impl Plugin for OrzmaConfigsPlugin {
                 OrzmaConfigs::default()
             }
         });
-        app.insert_resource(OrzmaConfigsResource(configs));
+        let caret_style = CaretStyle {
+            blink_interval: configs.cursor.blink_interval(),
+            blink_timeout: configs.cursor.blink_timeout(),
+            thickness: configs.cursor.thickness(),
+            unfocused_hollow: configs.cursor.unfocused_hollow,
+        };
+        app.insert_resource(OrzmaConfigsResource(configs))
+            .insert_resource(caret_style);
     }
 }
 
@@ -68,6 +78,20 @@ pub(crate) fn wheel_config(mc: &MouseConfig) -> WheelConfig {
         lines_per_notch: mc.lines_per_notch,
         fine_lines: mc.fine_lines,
         max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
+    }
+}
+
+/// The VT-layer cursor policy the `[cursor]` section selects.
+pub(crate) fn cursor_policy(config: &CursorConfig) -> CursorPolicy {
+    CursorPolicy {
+        initial: TextCursorStyle {
+            shape: match config.style {
+                CursorStyleSetting::Block => CursorShape::Block,
+                CursorStyleSetting::Underline => CursorShape::Underline,
+                CursorStyleSetting::Bar => CursorShape::Bar,
+            },
+            blink: CursorBlink::Blinking,
+        },
     }
 }
 
@@ -217,5 +241,27 @@ mod tests {
         assert_eq!(out.lines_per_notch, 5);
         assert_eq!(out.fine_lines, 2);
         assert_eq!(out.max_protocol_events_per_frame, 16);
+    }
+
+    /// Asserts that `cursor_policy` maps each `[cursor]` style setting
+    /// to its `CursorShape` counterpart, and that the initial caret
+    /// blinks.
+    ///
+    /// Case: a user selects each `style` in the `[cursor]` section of
+    /// their config.toml in turn.
+    #[test]
+    fn cursor_policy_maps_every_style_setting() {
+        let cases = [
+            (CursorStyleSetting::Block, CursorShape::Block),
+            (CursorStyleSetting::Underline, CursorShape::Underline),
+            (CursorStyleSetting::Bar, CursorShape::Bar),
+        ];
+        for (style, expected_shape) in cases {
+            let mut config = CursorConfig::default();
+            config.style = style;
+            let policy = cursor_policy(&config);
+            assert_eq!(policy.initial.shape, expected_shape);
+            assert_eq!(policy.initial.blink, CursorBlink::Blinking);
+        }
     }
 }

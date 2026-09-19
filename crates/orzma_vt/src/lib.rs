@@ -2,6 +2,7 @@
 
 use crate::{
     device::DeviceState,
+    device::cursor_policy::CursorPolicy,
     device::modes::VtModes,
     frame::{Frame, FrameTracker},
     interpreter::Interpreter,
@@ -25,6 +26,7 @@ mod vi;
 /// The crate's vocabulary, gathered for downstream consumers.
 pub mod prelude {
     pub use crate::device::color::{Color, Palette, Rgb};
+    pub use crate::device::cursor_policy::{CursorPolicy, TextCursorStyle};
     pub use crate::device::modes::{
         AlternateScroll, AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode,
         MouseEncoding, MouseTracking, ScreenKind, TextCursorEnable, TextCursorModes, VtModes,
@@ -34,7 +36,7 @@ pub mod prelude {
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::placement::{AnchoredPlacement, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};
     pub use crate::screen::cell::{GlyphClass, MAX_COMBINING};
-    pub use crate::screen::cursor::{CURSOR_VISIBLE_BIT, Cursor};
+    pub use crate::screen::cursor::Cursor;
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
     pub use crate::screen::grid::row::Row;
     pub use crate::screen::grid::run::{Run, Style};
@@ -338,6 +340,13 @@ impl OrzmaVt {
             tracker: FrameTracker::new(),
         }
     }
+
+    /// Returns this terminal with the host-supplied cursor policy applied,
+    /// so its initial style is in force before the first byte.
+    pub fn with_cursor_policy(mut self, policy: CursorPolicy) -> Self {
+        self.device.set_cursor_policy(policy);
+        self
+    }
 }
 
 impl Vt for OrzmaVt {
@@ -416,6 +425,8 @@ impl Vt for OrzmaVt {
 mod tests {
     use super::*;
     use crate::device::color::{Palette, Rgb};
+    use crate::device::cursor_policy::{CursorPolicy, TextCursorStyle};
+    use crate::device::modes::{CursorBlink, CursorShape};
     use crate::error::{GridSizeError, VtError};
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
     use crate::screen::grid::MIN_COLUMNS;
@@ -1474,5 +1485,24 @@ mod tests {
                 rows: GridSize::MAX_ROWS
             }
         );
+    }
+
+    /// Asserts that a terminal built with a policy reports its initial
+    /// style before any byte is fed, so a configured caret is visible on
+    /// a freshly spawned pane.
+    ///
+    /// Case: the user configures a blinking bar and opens a new pane whose
+    /// shell has not yet written anything.
+    #[test]
+    fn a_configured_policy_applies_before_the_first_byte() {
+        let policy = CursorPolicy {
+            initial: TextCursorStyle {
+                shape: CursorShape::Bar,
+                blink: CursorBlink::Blinking,
+            },
+        };
+        let vt = vt().with_cursor_policy(policy);
+        assert_eq!(vt.device.modes().text_cursor.shape, CursorShape::Bar);
+        assert_eq!(vt.device.modes().text_cursor.blink, CursorBlink::Blinking);
     }
 }

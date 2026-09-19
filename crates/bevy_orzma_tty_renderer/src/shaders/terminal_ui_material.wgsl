@@ -13,7 +13,7 @@ struct TerminalParams {
     dpr: f32,
     cursor_pos: vec2<u32>,
     cursor_style: u32,
-    time_seconds: f32,
+    cursor_thickness_phys: f32,
     sel_start_row: i32,
     sel_start_col: u32,
     sel_end_row: i32,
@@ -94,7 +94,7 @@ const STYLE_HIDDEN: u32 = 64u;
 const STYLE_WIDE_RIGHT_HALF: u32 = 0x10000u;
 
 const CURSOR_VISIBLE: u32 = 1u;
-const CURSOR_BLINKING: u32 = 8u;
+const CURSOR_HOLLOW: u32 = 16u;
 const CURSOR_SHAPE_BLOCK: u32 = 0u;
 const CURSOR_SHAPE_UNDERLINE: u32 = 1u;
 const CURSOR_SHAPE_BAR: u32 = 2u;
@@ -353,16 +353,32 @@ fn cursor_on_wide_right_half() -> bool {
         && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u;
 }
 
+// The column holding the caret's left edge: the body cell when the cursor
+// sits on a wide glyph's right half.
+fn cursor_span_left() -> u32 {
+    if cursor_on_wide_right_half() && params.cursor_pos.x > 0u {
+        return params.cursor_pos.x - 1u;
+    }
+    return params.cursor_pos.x;
+}
+
+// The column holding the caret's right edge: the right half when the
+// cursor sits on a wide glyph's body.
+fn cursor_span_right() -> u32 {
+    let next = params.cursor_pos.x + 1u;
+    let idx = params.cursor_pos.y * params.grid_size.x + next;
+    if next < params.grid_size.x
+        && idx < arrayLength(&cells)
+        && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u {
+        return next;
+    }
+    return params.cursor_pos.x;
+}
+
 // Whether a bar cursor is drawn in (row, col): the cursor's own cell, or
 // the body cell when the cursor sits on a wide glyph's right half.
 fn bar_covers(row: u32, col: u32) -> bool {
-    if row != params.cursor_pos.y {
-        return false;
-    }
-    if cursor_on_wide_right_half() {
-        return col + 1u == params.cursor_pos.x;
-    }
-    return col == params.cursor_pos.x;
+    return row == params.cursor_pos.y && col == cursor_span_left();
 }
 
 fn paint_cursor(
@@ -372,20 +388,40 @@ fn paint_cursor(
     base: vec4<f32>,
 ) -> vec4<f32> {
     let cursor_visible = (params.cursor_style & CURSOR_VISIBLE) != 0u;
-    let cursor_blinking = (params.cursor_style & CURSOR_BLINKING) != 0u;
+    let cursor_hollow = (params.cursor_style & CURSOR_HOLLOW) != 0u;
     let cursor_shape = (params.cursor_style >> 1u) & 3u;
-    let blink_on = !cursor_blinking || (fract(params.time_seconds) < 0.5);
     let on_cursor_cell = select(cursor_covers(row, col), bar_covers(row, col), cursor_shape == CURSOR_SHAPE_BAR);
-    if !(cursor_visible && blink_on && on_cursor_cell) {
+    if !(cursor_visible && on_cursor_cell) {
         return base;
     }
 
-    let thickness = 2.0;
+    let thickness = params.cursor_thickness_phys;
+    // NOTE: paint_right_strip calls this with in_cell_px.x past the cell
+    // width. The block branch deliberately inverts that band so a wide
+    // glyph's overflow stays legible under a filled caret; every other
+    // branch that is not already bounded on x must test this or its stroke
+    // strays outside the cell.
+    let inside_cell = in_cell_px.x < params.cell_size_px.x;
     let invert = vec4<f32>(1.0 - base.rgb, base.a);
+    if cursor_hollow {
+        if !inside_cell {
+            return base;
+        }
+        let on_edge = in_cell_px.y < thickness
+            || in_cell_px.y >= params.cell_size_px.y - thickness
+            || (col == cursor_span_left() && in_cell_px.x < thickness)
+            || (col == cursor_span_right()
+                && in_cell_px.x >= params.cell_size_px.x - thickness);
+        if on_edge {
+            return invert;
+        }
+        return base;
+    }
     if cursor_shape == CURSOR_SHAPE_BLOCK {
         return invert;
     }
     if cursor_shape == CURSOR_SHAPE_UNDERLINE
+        && inside_cell
         && in_cell_px.y >= params.cell_size_px.y - thickness {
         return invert;
     }

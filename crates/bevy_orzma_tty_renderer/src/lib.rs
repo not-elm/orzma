@@ -1,10 +1,11 @@
 use crate::{
-    glyph::TerminalGlyphPlugin, grid::TerminalGridPlugin, material::TerminalMaterialPlugin,
-    schema::HyperlinkHoverState,
+    cursor::CursorPlugin, glyph::TerminalGlyphPlugin, grid::TerminalGridPlugin,
+    material::TerminalMaterialPlugin, schema::HyperlinkHoverState,
 };
 use bevy::prelude::*;
 
 pub mod bundled;
+pub mod cursor;
 pub mod glyph;
 mod grid;
 pub mod material;
@@ -18,6 +19,10 @@ pub use material::TerminalPaddingFallback;
 
 pub mod prelude {
     pub use crate::TerminalRendererPlugin;
+    pub use crate::cursor::{
+        CaretPaint, CaretPaintInput, CaretStroke, CaretStyle, CursorPlugin, LastKeyInstant,
+        PackedCursorStyle, blink_phase_on,
+    };
     pub use crate::grid::TerminalGridPlugin;
     pub use crate::material::{OVERLAY_SLOTS, PaneInactiveStyle, TerminalOverlays};
     pub use crate::schema::*;
@@ -31,6 +36,7 @@ impl Plugin for TerminalRendererPlugin {
             TerminalGridPlugin,
             TerminalMaterialPlugin,
             TerminalGlyphPlugin,
+            CursorPlugin,
         ));
     }
 }

@@ -476,11 +476,12 @@ impl VTActor for Executor<'_> {
             }
             // DECSCUSR
             (None, [b' '], b'q') => {
+                let initial = self.device.cursor_policy().initial;
                 if let Some(next) = self
                     .device
                     .modes()
                     .text_cursor
-                    .with_decscusr(params.value(0))
+                    .with_decscusr(initial, params.value(0))
                 {
                     self.device.modes_mut().text_cursor = next;
                 }
@@ -787,7 +788,9 @@ impl Executor<'_> {
                 // DECAWM
                 7 => self.device.set_auto_wrap(AutoWrap::from_decset(enabled)),
                 // Blinking cursor (AT&T 610)
-                12 => self.device.modes_mut().text_cursor.blink = CursorBlink::from_decset(enabled),
+                12 => {
+                    self.device.modes_mut().text_cursor.blink = CursorBlink::from_decset(enabled);
+                }
                 // DECTCEM
                 25 => {
                     self.device.modes_mut().text_cursor.enable =
