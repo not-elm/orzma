@@ -7,9 +7,6 @@ use bevy::render::settings::RenderCreation;
 use bevy::window::WindowOccluded;
 use std::time::Duration;
 
-/// The shortest interval between two render-device rebuilds.
-const REBUILD_RETRY_INTERVAL: Duration = Duration::from_secs(1);
-
 /// Installs the renderer error policy: a renderer error stops drawing or
 /// rebuilds the render device, and never ends the session.
 pub(crate) struct RenderErrorPlugin;
@@ -22,6 +19,9 @@ impl Plugin for RenderErrorPlugin {
     }
 }
 
+/// The shortest interval between two render-device rebuilds.
+const REBUILD_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
 /// What the renderer does about an error that just fired.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RenderRecoveryAction {
@@ -33,9 +33,8 @@ enum RenderRecoveryAction {
     Stop,
 }
 
-/// Rebuild history: when the render device was last rebuilt, whether the
-/// current stop has been reported, and whether the window is hidden.
-#[derive(Resource, Default)]
+/// The history [`step_recovery`] carries between two renderer errors.
+#[derive(Resource, Default, Clone, PartialEq)]
 struct RenderRecovery {
     last_rebuild: Option<Duration>,
     reported: bool,
@@ -47,10 +46,9 @@ fn track_occlusion(
     mut recovery: ResMut<RenderRecovery>,
     mut occlusions: MessageReader<WindowOccluded>,
 ) {
-    let Some(latest) = occlusions.read().last() else {
-        return;
-    };
-    if recovery.occluded != latest.occluded {
+    if let Some(latest) = occlusions.read().last()
+        && recovery.occluded != latest.occluded
+    {
         recovery.occluded = latest.occluded;
     }
 }
@@ -68,6 +66,10 @@ fn step_recovery(
     now: Duration,
 ) -> RenderRecoveryAction {
     if ty == ErrorType::DeviceLost {
+        // NOTE: rebuilding reaches `initialize_renderer`, which panics rather
+        // than returning an error when it cannot acquire a window handle,
+        // surface, adapter or device. Dropping this guard turns a stopped
+        // renderer into a process abort while the display is off.
         if recovery.occluded {
             return RenderRecoveryAction::Stop;
         }
@@ -101,7 +103,10 @@ fn on_render_error(
     let Some(mut recovery) = main_world.get_resource_mut::<RenderRecovery>() else {
         return RenderErrorPolicy::StopRendering;
     };
-    match step_recovery(&mut recovery, error.ty, now) {
+    let mut next = recovery.clone();
+    let action = step_recovery(&mut next, error.ty, now);
+    recovery.set_if_neq(next);
+    match action {
         RenderRecoveryAction::Rebuild => {
             warn!(
                 "rebuilding the renderer after a {:?} error: {}",
@@ -124,10 +129,10 @@ fn on_render_error(
 mod tests {
     use super::*;
 
-    fn device_lost() -> RenderError {
+    fn render_error(ty: ErrorType) -> RenderError {
         RenderError {
-            ty: ErrorType::DeviceLost,
-            description: "device lost".to_string(),
+            ty,
+            description: format!("{ty:?}"),
             source: None,
         }
     }
@@ -184,7 +189,7 @@ mod tests {
     /// than rebuilding the device.
     ///
     /// Case: a shader or draw call the terminal renderer issues trips wgpu's
-    /// validation layer, which a new device would not fix.
+    /// validation layer while the display is on.
     #[test]
     fn a_validation_error_stops_without_rebuilding() {
         let mut recovery = RenderRecovery::default();
@@ -226,7 +231,7 @@ mod tests {
     }
 
     /// Asserts that a lost device is not rebuilt while the window is
-    /// occluded, since the rebuild would run against a display that is off.
+    /// occluded, and that the retry interval does not start either.
     ///
     /// Case: the laptop lid closes, macOS takes the device away, and the
     /// renderer keeps reporting the loss while the screen stays dark.
@@ -275,8 +280,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<WindowOccluded>()
-            .init_resource::<RenderRecovery>()
-            .add_systems(Update, track_occlusion.run_if(on_message::<WindowOccluded>));
+            .add_plugins(RenderErrorPlugin);
         let window = app.world_mut().spawn_empty().id();
         app.world_mut().write_message(WindowOccluded {
             window,
@@ -290,8 +294,8 @@ mod tests {
         );
     }
 
-    /// Asserts that the installed handler keeps the session alive instead of
-    /// writing `AppExit`.
+    /// Asserts that the installed handler rebuilds after a lost device and
+    /// stops after a validation error, writing `AppExit` for neither.
     ///
     /// Case: the display turns off and Bevy hands the lost device to
     /// whichever error handler the app registered.
@@ -299,7 +303,6 @@ mod tests {
     fn the_installed_handler_never_ends_the_session() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_message::<AppExit>()
             .add_message::<WindowOccluded>()
             .add_plugins(RenderErrorPlugin);
         app.update();
@@ -310,8 +313,25 @@ mod tests {
             .map(|handler| handler.0)
             .expect("RenderErrorPlugin must install a RenderErrorHandler");
         let mut render_world = World::new();
-        handler(&device_lost(), app.world_mut(), &mut render_world);
+        let lost = handler(
+            &render_error(ErrorType::DeviceLost),
+            app.world_mut(),
+            &mut render_world,
+        );
+        let invalid = handler(
+            &render_error(ErrorType::Validation),
+            app.world_mut(),
+            &mut render_world,
+        );
 
+        assert!(
+            matches!(lost, RenderErrorPolicy::Recover(_)),
+            "a lost device must rebuild the renderer",
+        );
+        assert!(
+            matches!(invalid, RenderErrorPolicy::StopRendering),
+            "a validation error must stop drawing rather than keep rendering",
+        );
         assert!(
             app.world()
                 .resource::<Messages<AppExit>>()
