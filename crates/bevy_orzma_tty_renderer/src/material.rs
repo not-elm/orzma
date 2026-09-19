@@ -405,7 +405,8 @@ impl PaneTreatment {
 ///   projects outside the viewport takes the same path.
 /// - `cursor_packed == 0` means no cursor color is set, and the shader
 ///   paints the cursor in the foreground of the cell under it. A set
-///   color packs like a cell color, whose alpha byte is never zero.
+///   color packs like a cell color, whose alpha byte is never zero. A
+///   set color equal to the default foreground uploads as unset.
 #[derive(Clone, Copy, ShaderType, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
@@ -558,7 +559,10 @@ impl TerminalParams {
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
             overlay_dim: treatment.overlay_dim,
             overlay_desaturate: treatment.overlay_desaturate,
-            cursor_packed: palette.cursor.map_or(0, pack_linear),
+            cursor_packed: palette
+                .cursor
+                .filter(|color| *color != palette.foreground)
+                .map_or(0, pack_linear),
         }
     }
 }
@@ -1770,6 +1774,32 @@ mod tests {
             assert_eq!(packed, pack_linear(color));
             assert_ne!(packed, 0, "{color:?} collides with the unset sentinel");
         }
+    }
+
+    /// Asserts that a cursor color equal to the default foreground is
+    /// uploaded as unset, so the shader falls back to the cell's own
+    /// colors instead of painting a cursor that matches the text.
+    ///
+    /// Case: a theme script sends the same value for `OSC 10` and
+    /// `OSC 12`, or a program writes the terminal's own `OSC 12 ; ?`
+    /// reply back to it.
+    #[test]
+    fn a_cursor_color_equal_to_the_foreground_is_uploaded_as_unset() {
+        let palette = Palette {
+            cursor: Some(Palette::default().foreground),
+            ..Palette::default()
+        };
+        assert_eq!(params_for(&palette).cursor_packed, 0);
+        let recolored = Palette {
+            foreground: Rgb {
+                r: 0x20,
+                g: 0x20,
+                b: 0x20,
+            },
+            cursor: Some(Palette::default().foreground),
+            ..Palette::default()
+        };
+        assert_ne!(params_for(&recolored).cursor_packed, 0);
     }
 
     /// Asserts that the shader declares the packed cursor color as the
