@@ -1,5 +1,5 @@
-//! Byte-stream decoding: the vtparse parser and the synchronized-update
-//! buffer.
+//! Byte-stream decoding: the vtparse parser and the actions it applies
+//! to the device.
 
 pub(crate) mod apc;
 
@@ -9,7 +9,7 @@ mod sgr;
 
 use crate::device::modes::{
     AlternateScroll, AutoWrap, CursorBlink, InsertReplaceMode, KeypadMode, ScreenKind,
-    TextCursorEnable,
+    SynchronizedOutput, TextCursorEnable,
 };
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
@@ -31,10 +31,9 @@ use crate::{
 };
 use vtparse::{CsiParam, VTActor, VTParser};
 
-/// The parser plus the synchronized-update buffer.
+/// The parser that turns the byte stream into device actions.
 pub(crate) struct Interpreter {
     parser: VTParser,
-    sync: SyncBuffer,
 }
 
 impl Interpreter {
@@ -57,7 +56,6 @@ impl Interpreter {
         let cursor_before = device.cursor();
         let mut executor = Executor {
             output,
-            sync: &mut self.sync,
             device,
             tracker,
             current_byte: 0,
@@ -79,25 +77,13 @@ impl Default for Interpreter {
     fn default() -> Self {
         Self {
             parser: VTParser::new(),
-            sync: Default::default(),
         }
     }
 }
 
-/// The buffer for a synchronized update (CSI ?2026).
-///
-/// TODO: hold back the bytes of an open synchronized update.
-#[derive(Default)]
-struct SyncBuffer {}
-
 /// The temporary view a parser callback applies its action through.
 struct Executor<'a> {
     output: &'a mut InterpretOutput,
-    #[expect(
-        dead_code,
-        reason = "the CSI ?2026 synchronized-update buffering will read this seam"
-    )]
-    sync: &'a mut SyncBuffer,
     device: &'a mut DeviceState,
     tracker: &'a mut FrameTracker,
     /// The byte the parser is consuming. A dispatch callback runs while
@@ -817,6 +803,11 @@ impl Executor<'_> {
                 1049 => self.set_alternate_screen_with_cursor(enabled),
                 // Bracketed paste
                 2004 => self.device.modes_mut().bracketed_paste = enabled,
+                // Synchronized output
+                2026 => {
+                    self.device.modes_mut().synchronized_output =
+                        SynchronizedOutput::from_decset(enabled);
+                }
                 _ => {}
             }
         }

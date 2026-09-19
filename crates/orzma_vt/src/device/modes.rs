@@ -40,6 +40,8 @@ pub struct VtModes {
     pub alternate_scroll: AlternateScroll,
     /// DECSET 1004: the app wants `CSI I` / `CSI O` focus reports.
     pub focus_in_out: bool,
+    /// DECSET 2026: whether a synchronized update is open.
+    pub synchronized_output: SynchronizedOutput,
     /// How the text cursor is presented: its visibility, shape, and
     /// blink.
     ///
@@ -171,6 +173,49 @@ impl AlternateScroll {
         } else {
             Self::Disabled
         }
+    }
+}
+
+/// Whether the application holds the display still while it redraws.
+///
+/// Both screens share one value, and `DECSC` does not carry it. A hard
+/// reset returns it to [`Self::Inactive`]; a soft reset leaves it alone.
+///
+/// # Control Functions
+///
+/// - `DECSET 2026` / `DECRST 2026` (synchronized output)
+///
+/// # References
+///
+/// - [Synchronized Output] — "When the synchronization mode is enabled
+///   following render calls will keep rendering the last rendered
+///   state."
+///
+/// [Synchronized Output]: https://github.com/contour-terminal/vt-extensions/blob/master/synchronized-output.md
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SynchronizedOutput {
+    /// No synchronized update is open; this is the power-up default.
+    #[default]
+    Inactive,
+    /// A synchronized update is open: the application asks that no
+    /// state be presented until it resets the mode.
+    Active,
+}
+
+impl SynchronizedOutput {
+    /// The state `DECSET 2026` selects when set and `DECRST 2026` when
+    /// reset.
+    pub fn from_decset(enabled: bool) -> Self {
+        if enabled {
+            Self::Active
+        } else {
+            Self::Inactive
+        }
+    }
+
+    /// Whether a synchronized update is open.
+    pub const fn is_active(self) -> bool {
+        matches!(self, Self::Active)
     }
 }
 

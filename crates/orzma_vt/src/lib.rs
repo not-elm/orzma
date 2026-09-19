@@ -27,7 +27,8 @@ pub mod prelude {
     pub use crate::device::color::{Color, Palette, Rgb};
     pub use crate::device::modes::{
         AlternateScroll, AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode,
-        MouseEncoding, MouseTracking, ScreenKind, TextCursorEnable, TextCursorModes, VtModes,
+        MouseEncoding, MouseTracking, ScreenKind, SynchronizedOutput, TextCursorEnable,
+        TextCursorModes, VtModes,
     };
     pub use crate::error::{GridSizeError, RunError, StampError, VtError, VtResult};
     pub use crate::frame::{DirtyRow, Frame};
@@ -314,7 +315,7 @@ impl VtSignal {
 
 /// The self-contained implementation of [`Vt`].
 pub struct OrzmaVt {
-    /// Byte decoding plus the CSI ?2026 synchronized-update buffer.
+    /// Byte decoding.
     interpreter: Interpreter,
     /// The emulated device: screens, modes, tabs, colors, title.
     device: DeviceState,

@@ -4,6 +4,7 @@ use super::*;
 use crate::device::color::{Color, Rgb};
 use crate::device::modes::{
     AlternateScroll, CursorShape, InsertReplaceMode, MouseEncoding, MouseTracking,
+    SynchronizedOutput,
 };
 use crate::frame::Frame;
 use crate::placement::{AnchoredPlacement, InstanceId, MAX_PLACEMENTS, PlacementSize};
@@ -184,6 +185,7 @@ mod reset;
 mod reverse_index;
 mod sgr;
 mod soft_reset;
+mod synchronized_output;
 mod tabulation;
 mod text_cursor_enable;
 mod title;
