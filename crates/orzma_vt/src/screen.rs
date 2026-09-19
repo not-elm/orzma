@@ -837,7 +837,7 @@ impl Screen {
 
 /// Erasure.
 impl Screen {
-    /// Erases part of the cursor row with the pen background (BCE).
+    /// Erases part of the cursor row with the pen colors (BCE).
     ///
     /// [`EraseLineMode::ToEnd`] is a no-op while the cursor logically sits
     /// past the row, with the deferred wrap armed on the last column and
@@ -864,7 +864,7 @@ impl Screen {
     }
 
     /// Erases `count` characters from the cursor rightward with the
-    /// pen background (BCE), leaving the cursor where it is.
+    /// pen colors (BCE), leaving the cursor where it is.
     ///
     /// It is a no-op while the cursor logically sits past the row, with
     /// the deferred wrap armed on the last column and `DECAWM` set.
@@ -882,8 +882,8 @@ impl Screen {
         self.erase_cursor_row_columns(start..end)
     }
 
-    /// Erases part of the visible screen with the pen background
-    /// (BCE), in place; scrollback history is never touched.
+    /// Erases part of the visible screen with the pen colors (BCE), in
+    /// place; scrollback history is never touched.
     ///
     /// # Control Functions
     ///

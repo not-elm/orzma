@@ -295,9 +295,14 @@ impl Pen {
     }
 
     /// Builds the blank cell erase operations write: the pen's
-    /// background with default foreground and no styling (BCE).
+    /// foreground and background with no styling and no hyperlink
+    /// (BCE).
     pub fn erase_cell(&self) -> Cell {
-        Cell::blank_with_bg(self.bg)
+        Cell {
+            fg: self.fg,
+            bg: self.bg,
+            ..Cell::default()
+        }
     }
 }
 
@@ -380,20 +385,24 @@ mod tests {
         );
     }
 
-    /// Asserts that the erase cell keeps only the pen's background.
+    /// Asserts that the erase cell keeps the pen's foreground and
+    /// background and drops its styling.
     ///
-    /// Case: an application sets a colored background and clears a
-    /// region of the screen.
+    /// Case: a light-theme editor sets its text and ground colors with
+    /// a bold pen and clears the rest of the line.
     #[test]
-    fn the_erase_cell_keeps_only_the_background() {
+    fn the_erase_cell_keeps_the_pen_colors_and_drops_the_styling() {
         let pen = Pen {
             fg: Color::Indexed(1),
             bg: Color::Indexed(4),
             style: Style::BOLD,
         };
-        assert_eq!(pen.erase_cell(), Cell::blank_with_bg(Color::Indexed(4)));
-        assert_eq!(pen.erase_cell().fg, Color::DefaultForeground);
-        assert_eq!(pen.erase_cell().style, Style::empty());
+        let erased = pen.erase_cell();
+        assert_eq!(erased.c, ' ');
+        assert_eq!(erased.fg, Color::Indexed(1));
+        assert_eq!(erased.bg, Color::Indexed(4));
+        assert_eq!(erased.style, Style::empty());
+        assert_eq!(erased.hyperlink_id, None);
     }
 
     /// Asserts that a narrow glyph, a fullwidth glyph and a zero-width

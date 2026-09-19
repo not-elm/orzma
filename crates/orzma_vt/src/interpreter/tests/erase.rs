@@ -130,3 +130,30 @@ fn an_erase_to_end_runs_after_a_backward_tabulation_out_of_a_full_row() {
     assert_eq!(screen.viewport_row(ViewportLine(0))[16].c, ' ');
     assert_eq!(screen.viewport_row(ViewportLine(0))[19].c, ' ');
 }
+
+/// Asserts that an erased cell carries the pen's foreground as well as
+/// its background, so a later cursor over it can take that color.
+///
+/// Case: a light-theme editor clears to the end of the line with its
+/// dark text color and white ground both set.
+#[test]
+fn an_erased_cell_carries_the_pen_foreground() {
+    let device = interpret(b"\x1b[38;2;32;32;32;48;2;255;255;255m\x1b[K");
+    let cell = cell_at(&device, 0, 3);
+    assert_eq!(
+        cell.fg,
+        Color::Rgb(Rgb {
+            r: 0x20,
+            g: 0x20,
+            b: 0x20
+        })
+    );
+    assert_eq!(
+        cell.bg,
+        Color::Rgb(Rgb {
+            r: 0xff,
+            g: 0xff,
+            b: 0xff
+        })
+    );
+}
