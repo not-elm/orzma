@@ -11,8 +11,8 @@ orzma resolves the config path in this order:
 2. `$XDG_CONFIG_HOME/orzma/config.toml` — if `$XDG_CONFIG_HOME` is set.
 3. `~/.config/orzma/config.toml` — the default.
 
-Unknown sections are rejected at startup, as are unknown keys in `[orzma]`,
-`[keyboard]`, `[shortcuts]`, `[vi-mode]`, and `[font]`. Unknown keys in
+Unknown sections are rejected at startup, as are unknown keys in `[cursor]`,
+`[orzma]`, `[keyboard]`, `[shortcuts]`, `[vi-mode]`, and `[font]`. Unknown keys in
 `[mouse]` and `[inactive_pane]` are silently ignored. Most invalid values are
 startup errors too; the few that are silently clamped or reverted are noted
 inline below.
@@ -29,6 +29,16 @@ change — omitted keys fall back to these defaults.
 # Shell launched in new terminals. Default: the $SHELL environment variable.
 # Absolute path; no ~ expansion.
 # shell = "/bin/zsh"
+
+[cursor]
+style = "block"           # block | underline | bar
+blink = "auto"            # auto | on | off
+blink_interval = 750      # milliseconds
+blink_timeout = 5         # seconds; 0 blinks indefinitely
+thickness = 0.15          # fraction of the cell width
+unfocused_hollow = true
+# `auto` respects DECSET 12 / DECRST 12; `on` and `off` ignore them.
+# All values pass DECSCUSR through.
 
 [font]
 size = 11.25              # f32, logical px. Must be 0 < size <= 200, else startup error.

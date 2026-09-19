@@ -4,6 +4,7 @@
 
 #![warn(missing_docs)]
 
+use crate::cursor::CursorConfig;
 use crate::font::FontStyleSpec;
 use crate::inactive_pane::InactivePaneConfig;
 use crate::keyboard::KeyboardConfig;
@@ -15,6 +16,7 @@ pub use error::{OrzmaConfigsError, OrzmaConfigsResult};
 use serde::Deserialize;
 use std::str::FromStr;
 
+pub mod cursor;
 pub mod error;
 pub mod font;
 pub mod inactive_pane;
@@ -44,6 +46,8 @@ pub struct OrzmaConfigs {
     pub inactive_pane: InactivePaneConfig,
     /// Orzma single-terminal mode configuration.
     pub orzma: OrzmaConfig,
+    /// Cursor appearance and blink policy.
+    pub cursor: CursorConfig,
 }
 
 impl OrzmaConfigs {
@@ -92,6 +96,7 @@ impl OrzmaConfigs {
         self.shortcuts.normalize();
         self.inactive_pane.normalize();
         self.mouse.normalize();
+        self.cursor.normalize();
     }
 
     fn validate(&self) -> OrzmaConfigsResult<()> {
