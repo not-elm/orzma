@@ -392,6 +392,7 @@ impl PaneTreatment {
 /// | 320    | `overlay_dim`               |
 /// | 324    | `overlay_desaturate`        |
 /// | 328    | `cursor_packed`             |
+/// | 332    | `default_fg_packed`         |
 ///
 /// # Invariants
 ///
@@ -407,6 +408,9 @@ impl PaneTreatment {
 ///   paints the cursor in the foreground of the cell under it. A set
 ///   color packs like a cell color, whose alpha byte is never zero. A
 ///   set color equal to the default foreground uploads as unset.
+/// - A cursor fill whose contrast against the cell's ground falls below
+///   1.5 is swapped in the shader for `default_fg_packed` or
+///   `bg_padding_color`, whichever stands out more.
 #[derive(Clone, Copy, ShaderType, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
@@ -460,6 +464,8 @@ struct TerminalParams {
     overlay_desaturate: f32,
     /// The `OSC 12` cursor color.
     cursor_packed: u32,
+    /// The default foreground in the cell-color packing.
+    default_fg_packed: u32,
 }
 
 impl Default for TerminalParams {
@@ -490,6 +496,7 @@ impl Default for TerminalParams {
             overlay_dim: 1.0,
             overlay_desaturate: 0.0,
             cursor_packed: 0,
+            default_fg_packed: 0,
         }
     }
 }
@@ -563,6 +570,7 @@ impl TerminalParams {
                 .cursor
                 .filter(|color| *color != palette.foreground)
                 .map_or(0, pack_linear),
+            default_fg_packed: pack_linear(palette.foreground),
         }
     }
 }
@@ -1405,6 +1413,11 @@ mod tests {
             328,
             "cursor_packed after overlay_desaturate"
         );
+        assert_eq!(
+            <TerminalParams as ShaderType>::METADATA.offset(25),
+            332,
+            "default_fg_packed after cursor_packed"
+        );
     }
 
     #[test]
@@ -1776,6 +1789,27 @@ mod tests {
         }
     }
 
+    /// Asserts that the uniform carries the default foreground in the
+    /// cell-color packing.
+    ///
+    /// Case: a theme script recolors the text with `OSC 10`, and the
+    /// cursor's contrast fallback has to follow it.
+    #[test]
+    fn terminal_params_carry_the_default_foreground() {
+        let palette = Palette {
+            foreground: Rgb {
+                r: 0x20,
+                g: 0x20,
+                b: 0x20,
+            },
+            ..Palette::default()
+        };
+        assert_eq!(
+            params_for(&palette).default_fg_packed,
+            pack_linear(palette.foreground)
+        );
+    }
+
     /// Asserts that a cursor color equal to the default foreground is
     /// uploaded as unset, so the shader falls back to the cell's own
     /// colors instead of painting a cursor that matches the text.
@@ -1802,8 +1836,8 @@ mod tests {
         assert_ne!(params_for(&recolored).cursor_packed, 0);
     }
 
-    /// Asserts that the shader declares the packed cursor color as the
-    /// last field of its uniform block, matching the host layout.
+    /// Asserts that the shader declares the packed default foreground as
+    /// the last field of its uniform block, matching the host layout.
     ///
     /// Case: a shell theme sets the cursor color with `OSC 12`, and the
     /// pane paints its cursor in that color.
@@ -1819,7 +1853,7 @@ mod tests {
             .lines()
             .map(str::trim)
             .rfind(|line| !line.is_empty());
-        assert_eq!(last_field, Some("cursor_packed: u32,"));
+        assert_eq!(last_field, Some("default_fg_packed: u32,"));
     }
 
     /// Asserts that both paint paths resolve cell colors through the
@@ -1845,17 +1879,40 @@ mod tests {
         assert!(wgsl_fn_body(src, "block_cursor_covers").contains("cursor_covers(row, col)"));
     }
 
-    /// Asserts that the bar and underline cursors take the fill color
-    /// from the cell's colors before concealment, and that no pixel
-    /// inversion is left in the shader.
+    /// Asserts that the bar and underline cursors take the guarded fill
+    /// color from the cell's colors before concealment, compared against
+    /// the tinted ground, and that no pixel inversion is left in the
+    /// shader.
     ///
-    /// Case: an underline cursor sits on a concealed cell.
+    /// Case: an underline cursor sits on a concealed cell in an inactive
+    /// pane.
     #[test]
-    fn wgsl_cursor_strips_take_the_fill_color() {
+    fn wgsl_cursor_strips_take_the_guarded_fill_color() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
         let painter = wgsl_fn_body(src, "paint_cursor");
-        assert!(painter.contains("cursor_fill(resolve_visible_colors(cell).fg)"));
+        assert!(painter.contains("resolve_visible_colors(cell)"));
+        assert!(painter.contains("guarded_fill(cursor_fill("));
+        assert!(painter.contains("tint_bg(materialize_default_bg("));
         assert!(wgsl_fn_body(src, "cursor_fill").contains("params.cursor_packed"));
         assert!(!src.contains("1.0 - base.rgb"));
+    }
+
+    /// Asserts that both cursor paths pass the fill through the contrast
+    /// guard, which falls back to the default foreground or background
+    /// against the cell's ground.
+    ///
+    /// Case: a light-theme editor leaves the cursor on a white cell whose
+    /// foreground is also white, and a theme sets a cursor color close to
+    /// a reverse-video cell's ground.
+    #[test]
+    fn wgsl_cursor_fill_is_guarded_against_the_ground() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(wgsl_fn_body(src, "resolve_painted_colors").contains("guarded_fill(cursor_fill("));
+        let guard = wgsl_fn_body(src, "guarded_fill");
+        assert!(guard.contains("contrast_ratio("));
+        assert!(guard.contains("MIN_CURSOR_CONTRAST"));
+        assert!(guard.contains("params.default_fg_packed"));
+        assert!(guard.contains("params.bg_padding_color"));
+        assert!(src.contains("const MIN_CURSOR_CONTRAST: f32 = 1.5;"));
     }
 }

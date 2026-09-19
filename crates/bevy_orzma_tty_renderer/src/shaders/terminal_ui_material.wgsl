@@ -31,6 +31,7 @@ struct TerminalParams {
     overlay_dim: f32,
     overlay_desaturate: f32,
     cursor_packed: u32,
+    default_fg_packed: u32,
 };
 
 struct Cell {
@@ -400,14 +401,40 @@ fn cursor_fill(cell_fg: vec4<f32>) -> vec4<f32> {
     return cell_fg;
 }
 
+// The WCAG contrast ratio of two linear colors, from 1.0 for equal
+// luminance upward.
+fn contrast_ratio(a: vec3<f32>, b: vec3<f32>) -> f32 {
+    let weights = vec3<f32>(0.2126, 0.7152, 0.0722);
+    let la = dot(a, weights);
+    let lb = dot(b, weights);
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05);
+}
+
+// The contrast a cursor fill must have against the ground it is painted
+// on; below it the fill is swapped for a default color.
+const MIN_CURSOR_CONTRAST: f32 = 1.5;
+
+// `fill` made opaque, or, when it would not stand out against `ground`,
+// whichever of the default foreground and background stands out more.
+fn guarded_fill(fill: vec4<f32>, ground: vec4<f32>) -> vec4<f32> {
+    if contrast_ratio(fill.rgb, ground.rgb) >= MIN_CURSOR_CONTRAST {
+        return vec4<f32>(fill.rgb, 1.0);
+    }
+    let default_fg = unpack_rgba(params.default_fg_packed).rgb;
+    let default_bg = params.bg_padding_color.rgb;
+    let fg_stands_out = contrast_ratio(default_fg, ground.rgb) >= contrast_ratio(default_bg, ground.rgb);
+    return vec4<f32>(select(default_bg, default_fg, fg_stands_out), 1.0);
+}
+
 // The colors (row, col) is painted in: the cell's own, or, under a lit
-// block cursor, the fill as background and the cell's background as the
-// glyph color. Concealment applies last, so a concealed glyph stays
-// hidden inside the block.
+// block cursor, the guarded fill as background and the cell's background
+// as the glyph color. Concealment applies last, so a concealed glyph
+// stays hidden inside the block.
 fn resolve_painted_colors(cell: Cell, row: u32, col: u32) -> CellColors {
     var colors = resolve_visible_colors(cell);
     if block_cursor_covers(row, col) {
-        colors = CellColors(materialize_default_bg(colors.bg), cursor_fill(colors.fg));
+        let ground = materialize_default_bg(colors.bg);
+        colors = CellColors(ground, guarded_fill(cursor_fill(colors.fg), ground));
     }
     return conceal(cell, colors);
 }
@@ -434,8 +461,9 @@ fn paint_cursor(
     if !(on_underline || on_bar) {
         return base;
     }
-    let fill = cursor_fill(resolve_visible_colors(cell).fg);
-    return vec4<f32>(fill.rgb, 1.0);
+    let visible = resolve_visible_colors(cell);
+    let ground = tint_bg(materialize_default_bg(visible.bg));
+    return guarded_fill(cursor_fill(visible.fg), ground);
 }
 
 fn paint_selection(row: u32, col: u32, base: vec4<f32>) -> vec4<f32> {
