@@ -33,7 +33,8 @@ enum RenderRecoveryAction {
     Stop,
 }
 
-/// The history [`step_recovery`] carries between two renderer errors.
+/// The state [`step_recovery`] reads, and carries between two renderer
+/// errors.
 #[derive(Resource, Default, Clone, PartialEq)]
 struct RenderRecovery {
     last_rebuild: Option<Duration>,
