@@ -410,3 +410,43 @@ fn a_soft_reset_returns_the_cursor_to_the_configured_style() {
     assert_eq!(cursor_shape(&device), CursorShape::Bar);
     assert!(!cursor_blinking(&device));
 }
+
+fn vetoing_policy(blink: CursorBlink) -> CursorPolicy {
+    CursorPolicy {
+        initial: TextCursorStyle {
+            shape: CursorShape::Block,
+            blink,
+        },
+        ignore_dec_mode_12: true,
+    }
+}
+
+/// Asserts that a vetoing policy leaves both `DECSET 12` and
+/// `DECRST 12` without effect, while a policy that honors them applies
+/// both.
+///
+/// Case: the user pins the caret with `[cursor] blink = "off"` and a
+/// program tries to start it blinking anyway; another user pins it with
+/// `blink = "on"` and a program tries to stop it.
+#[test]
+fn a_vetoing_policy_ignores_dec_mode_twelve_in_both_directions() {
+    let set = interpret_with_policy(vetoing_policy(CursorBlink::Steady), b"\x1b[?12h");
+    assert!(!cursor_blinking(&set));
+
+    let reset = interpret_with_policy(vetoing_policy(CursorBlink::Blinking), b"\x1b[?12l");
+    assert!(cursor_blinking(&reset));
+
+    let honored = interpret_with_policy(CursorPolicy::default(), b"\x1b[?12h");
+    assert!(cursor_blinking(&honored));
+}
+
+/// Asserts that a vetoing policy still lets `DECSCUSR` change the blink.
+///
+/// Case: the user pins the caret with `[cursor] blink = "off"`, and vim
+/// asks for a blinking bar in insert mode.
+#[test]
+fn a_vetoing_policy_still_honors_decscusr() {
+    let device = interpret_with_policy(vetoing_policy(CursorBlink::Steady), b"\x1b[5 q");
+    assert_eq!(cursor_shape(&device), CursorShape::Bar);
+    assert!(cursor_blinking(&device));
+}
