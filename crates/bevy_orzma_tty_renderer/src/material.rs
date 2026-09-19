@@ -1,4 +1,5 @@
 use crate::{
+    cursor::{CursorPaint, CursorPaintInput, CursorRenderConfig, LastKeyInstant, blink_phase_on},
     glyph::{
         atlas::{GlyphAtlas, GlyphRect},
         font::{
@@ -374,7 +375,7 @@ impl PaneTreatment {
 /// | 28     | `dpr` (informational)       |
 /// | 32     | `cursor_pos`                |
 /// | 40     | `cursor_style`              |
-/// | 44     | `time_seconds`              |
+/// | 44     | `cursor_thickness_phys`     |
 /// | 48     | `sel_start_row`             |
 /// | 52     | `sel_start_col`             |
 /// | 56     | `sel_end_row`               |
@@ -413,7 +414,9 @@ struct TerminalParams {
     cursor_pos: UVec2,
     /// Packed: bit0=visible, bits1-2=shape (0=block / 1=underline / 2=bar), bit3=blinking.
     cursor_style: u32,
-    time_seconds: f32,
+    /// Caret thickness in physical pixels for the underline, bar and
+    /// hollow outlines, at least 1.
+    cursor_thickness_phys: f32,
     /// Selection start row in viewport coords; an endpoint in scrollback
     /// clamps to `-1` (above) or `rows` (below).
     sel_start_row: i32,
@@ -466,7 +469,7 @@ impl Default for TerminalParams {
             dpr: 0.0,
             cursor_pos: UVec2::ZERO,
             cursor_style: 0,
-            time_seconds: 0.0,
+            cursor_thickness_phys: 1.0,
             sel_start_row: 0,
             sel_start_col: 0,
             sel_end_row: 0,
@@ -493,14 +496,9 @@ impl TerminalParams {
     ///
     /// # Invariants
     ///
-    /// - When `view.vi_cursor` is present and its grid point projects into
-    ///   the viewport, it overrides `view.cursor` and the resulting
-    ///   `cursor_visible` bit is forced to `1`. When the projection falls
-    ///   outside the viewport, `cursor_visible` is cleared so the shader
-    ///   skips cursor rendering entirely.
-    /// - A live (non-vi) cursor carries the application's DECTCEM state, so
-    ///   `cursor_visible` is `0` while the terminal has seen `CSI ? 25 l`,
-    ///   and `view.suppress_cursor` clears the bit on top of either source.
+    /// - `cursor_style` is the style [`CursorPaint::resolve`] settled
+    ///   on; the view's own packed style reaches the shader only
+    ///   through it.
     /// - When `view.selection` is `None`, `sel_kind == 0` and the shader
     ///   paints no selection.
     /// - `overlay_rects` is left at its default; the caller fills it from
@@ -514,15 +512,17 @@ impl TerminalParams {
         atlas_size_px: Vec2,
         ascent_px: f32,
         dpr: f32,
-        time_seconds: f32,
         fallback: [u8; 3],
         hover_hyperlink_id: u32,
         hover_active: u32,
+        cursor_paint: CursorPaint,
+        cursor_thickness_phys: f32,
     ) -> Self {
         let cols = u32::from(view.cols);
         let rows = u32::from(view.rows);
 
-        let (cursor_pos, cursor_style) = view.current_cursor_pos_and_style();
+        let (cursor_pos, _) = view.current_cursor_pos_and_style();
+        let cursor_style = cursor_paint.packed();
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
             selection_uniforms(view.selection.as_ref(), view.display_offset, view.rows);
         let bg_padding_color = padding_color(default_bg, fallback);
@@ -535,7 +535,7 @@ impl TerminalParams {
             dpr,
             cursor_pos,
             cursor_style,
-            time_seconds,
+            cursor_thickness_phys,
             sel_start_row,
             sel_start_col,
             sel_end_row,
@@ -714,7 +714,9 @@ fn update_terminal_material(
     mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
     fonts: Res<TerminalFonts>,
     font_size: Res<TerminalFontSize>,
-    palette_time: Res<Time>,
+    cursor_config: Res<CursorRenderConfig>,
+    last_key: Res<LastKeyInstant>,
+    time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     hover: Res<HyperlinkHoverState>,
     fallback: Res<TerminalPaddingFallback>,
@@ -742,6 +744,12 @@ fn update_terminal_material(
     // and far less disruptive than the previous .unwrap_or(1.0) flash
     // that would re-rasterize the entire atlas at half scale.
     let dpr = windows.single().ok().map(|window| window.scale_factor());
+    let phase_on = blink_phase_on(
+        time.elapsed().saturating_sub(last_key.0),
+        cursor_config.blink_interval,
+        cursor_config.blink_timeout,
+    );
+    let window_focused = windows.single().ok().is_some_and(|window| window.focused);
 
     for (entity, handle, mut state, cells, view, pane_style, overlays) in terminals.iter_mut() {
         // NOTE: Latch the cells' change signal before the bail-out below.
@@ -803,6 +811,18 @@ fn update_terminal_material(
             _ => (0, 0),
         };
         let treatment = PaneTreatment::from_style(pane_style);
+        let (_, packed_cursor) = view.current_cursor_pos_and_style();
+        let cursor_paint = CursorPaint::resolve(
+            packed_cursor,
+            CursorPaintInput {
+                focused: window_focused && pane_style.is_none(),
+                unfocused_hollow: cursor_config.unfocused_hollow,
+                phase_on,
+            },
+        );
+        let cursor_thickness_phys = (cursor_config.thickness * cell_size_phys.x)
+            .round()
+            .max(1.0);
         if let Some(mut mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
                 view,
@@ -813,10 +833,11 @@ fn update_terminal_material(
                 Vec2::new(atlas.width() as f32, atlas.height() as f32),
                 ascent_phys,
                 dpr,
-                palette_time.elapsed_secs(),
                 fallback.0,
                 hover_hyperlink_id,
                 hover_active,
+                cursor_paint,
+                cursor_thickness_phys,
             );
             match overlays {
                 Some(o) => {
@@ -1119,6 +1140,8 @@ fn selection_uniforms(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cursor::CURSOR_HOLLOW_BIT;
+    use orzma_vt::prelude::CURSOR_VISIBLE_BIT;
     use std::collections::BTreeSet;
     use std::mem::size_of;
 
@@ -1649,5 +1672,48 @@ mod tests {
         );
         assert_eq!(composable_marks("a").count(), 0);
         assert_eq!(composable_marks("").count(), 0);
+    }
+
+    /// Asserts that the shader declares no clock, so the caret's blink
+    /// phase cannot drift back into the GPU.
+    ///
+    /// Case: a later change reintroduces a time-driven effect in the
+    /// shader without routing it through the CPU policy.
+    #[test]
+    fn the_shader_declares_no_time_uniform() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(!src.contains("time_seconds"));
+    }
+
+    /// Asserts that the shader's cursor bit constants match the Rust
+    /// ones they decode.
+    ///
+    /// Case: a later change renumbers a cursor bit on one side only.
+    #[test]
+    fn the_shader_cursor_bits_match_the_rust_constants() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(src.contains(&format!(
+            "const CURSOR_VISIBLE: u32 = {CURSOR_VISIBLE_BIT}u;"
+        )));
+        assert!(src.contains(&format!("const CURSOR_HOLLOW: u32 = {CURSOR_HOLLOW_BIT}u;")));
+    }
+
+    /// Asserts that the hollow caret suppresses the inner edges of a
+    /// wide pair, so an unfocused caret over a CJK character is one
+    /// outline rather than two boxes.
+    ///
+    /// Case: the user switches panes while the caret sits on a CJK
+    /// character.
+    #[test]
+    fn the_hollow_caret_spans_a_wide_pair_without_an_inner_seam() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(src.contains("fn cursor_span_left("));
+        assert!(src.contains("fn cursor_span_right("));
+        let painter = src
+            .split("fn paint_cursor(")
+            .nth(1)
+            .expect("the shader defines paint_cursor");
+        assert!(painter.contains("col == cursor_span_left()"));
+        assert!(painter.contains("col == cursor_span_right()"));
     }
 }
