@@ -1,5 +1,7 @@
 use crate::{
-    cursor::{CaretPaint, CaretPaintInput, CaretStyle, LastKeyInstant, blink_phase_on},
+    cursor::{
+        CaretPaint, CaretPaintInput, CaretStyle, LastKeyInstant, PackedCursorStyle, blink_phase_on,
+    },
     glyph::{
         atlas::{GlyphAtlas, GlyphRect},
         font::{
@@ -412,9 +414,8 @@ struct TerminalParams {
     ascent_px: f32,
     dpr: f32,
     cursor_pos: UVec2,
-    /// Packed: bit0=visible, bits1-2=shape (0=block / 1=underline / 2=bar),
-    /// bit3=blinking, bit4=hollow. The shader reads bit0, bit4 and the
-    /// shape bits; the blink bit is resolved on the CPU.
+    /// The [`PackedCursorStyle`] bits: bit0=visible, bits1-2=shape
+    /// (0=block / 1=underline / 2=bar), bit4=hollow. Bit 3 is unused.
     cursor_style: u32,
     /// Caret thickness in physical pixels for the underline, bar and
     /// hollow outlines, at least 1.
@@ -523,7 +524,7 @@ impl TerminalParams {
         let rows = u32::from(view.rows);
 
         let (cursor_pos, cursor_style) = match caret {
-            Some(caret) => (caret.pos, caret.stroke.to_packed()),
+            Some(caret) => (caret.pos, PackedCursorStyle::from(caret.stroke).bits()),
             None => (UVec2::ZERO, 0),
         };
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
@@ -1144,8 +1145,6 @@ fn selection_uniforms(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cursor::CURSOR_HOLLOW_BIT;
-    use crate::cursor::CURSOR_VISIBLE_BIT;
     use std::collections::BTreeSet;
     use std::mem::size_of;
 
@@ -1701,9 +1700,22 @@ mod tests {
     fn the_shader_cursor_bits_match_the_rust_constants() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
         assert!(src.contains(&format!(
-            "const CURSOR_VISIBLE: u32 = {CURSOR_VISIBLE_BIT}u;"
+            "const CURSOR_VISIBLE: u32 = {}u;",
+            PackedCursorStyle::VISIBLE.bits()
         )));
-        assert!(src.contains(&format!("const CURSOR_HOLLOW: u32 = {CURSOR_HOLLOW_BIT}u;")));
+        assert!(src.contains(&format!(
+            "const CURSOR_HOLLOW: u32 = {}u;",
+            PackedCursorStyle::HOLLOW.bits()
+        )));
+        assert!(src.contains("const CURSOR_SHAPE_BLOCK: u32 = 0u;"));
+        assert!(src.contains(&format!(
+            "const CURSOR_SHAPE_UNDERLINE: u32 = {}u;",
+            PackedCursorStyle::SHAPE_UNDERLINE.bits() >> 1
+        )));
+        assert!(src.contains(&format!(
+            "const CURSOR_SHAPE_BAR: u32 = {}u;",
+            PackedCursorStyle::SHAPE_BAR.bits() >> 1
+        )));
     }
 
     /// Asserts that the hollow caret suppresses the inner edges of a

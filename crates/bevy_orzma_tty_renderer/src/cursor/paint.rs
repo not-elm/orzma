@@ -2,14 +2,28 @@
 //! word the shader decodes it from.
 
 use bevy::prelude::*;
+use bitflags::bitflags;
 use orzma_vt::prelude::{Cursor, CursorShape};
 
-/// Bit 0 of the packed `cursor_style` u32 — set when the caret is drawn.
-pub const CURSOR_VISIBLE_BIT: u32 = 1;
-
-/// Bit 4 of the packed `cursor_style` u32 — set when the caret is drawn
-/// as an outline rather than filled.
-pub const CURSOR_HOLLOW_BIT: u32 = 16;
+bitflags! {
+    /// The packed `cursor_style` word the shader decodes, with the shape
+    /// carried in bits 1-2.
+    ///
+    /// # Invariants
+    ///
+    /// - At most one of the shape bits is set.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct PackedCursorStyle: u32 {
+        /// The caret is drawn.
+        const VISIBLE = 1;
+        /// The caret is drawn as an underline.
+        const SHAPE_UNDERLINE = 1 << 1;
+        /// The caret is drawn as a bar.
+        const SHAPE_BAR = 2 << 1;
+        /// The caret is drawn as an outline rather than filled.
+        const HOLLOW = 1 << 4;
+    }
+}
 
 /// The inputs the paint policy reads beyond the projected caret.
 #[derive(Debug, Clone, Copy)]
@@ -61,18 +75,16 @@ impl CaretStroke {
         }
         Some(Self::from(cursor.shape))
     }
+}
 
-    /// The `cursor_style` u32 the shader decodes: [`CURSOR_VISIBLE_BIT`],
-    /// bits 1-2 carrying the shape (Block `0`, Underline `1`, Bar `2`),
-    /// and [`CURSOR_HOLLOW_BIT`].
-    pub fn to_packed(self) -> u32 {
-        let (shape, hollow) = match self {
-            Self::Block => (0u32, 0),
-            Self::Underline => (1, 0),
-            Self::Bar => (2, 0),
-            Self::HollowBlock => (0, CURSOR_HOLLOW_BIT),
-        };
-        CURSOR_VISIBLE_BIT | (shape << 1) | hollow
+impl From<CaretStroke> for PackedCursorStyle {
+    fn from(stroke: CaretStroke) -> Self {
+        match stroke {
+            CaretStroke::Block => Self::VISIBLE,
+            CaretStroke::Underline => Self::VISIBLE | Self::SHAPE_UNDERLINE,
+            CaretStroke::Bar => Self::VISIBLE | Self::SHAPE_BAR,
+            CaretStroke::HollowBlock => Self::VISIBLE | Self::HOLLOW,
+        }
     }
 }
 
@@ -222,9 +234,12 @@ mod tests {
     /// underline, and bar DECSCUSR variants.
     #[test]
     fn each_shape_lands_in_the_shape_bits() {
-        assert_eq!(CaretStroke::Block.to_packed(), 0b0001);
-        assert_eq!(CaretStroke::Underline.to_packed(), 0b0011);
-        assert_eq!(CaretStroke::Bar.to_packed(), 0b0101);
+        assert_eq!(PackedCursorStyle::from(CaretStroke::Block).bits(), 0b0001);
+        assert_eq!(
+            PackedCursorStyle::from(CaretStroke::Underline).bits(),
+            0b0011
+        );
+        assert_eq!(PackedCursorStyle::from(CaretStroke::Bar).bits(), 0b0101);
     }
 
     /// Asserts that a hollow caret sets its own bit alongside the shape.
@@ -233,8 +248,8 @@ mod tests {
     #[test]
     fn a_hollow_caret_sets_its_bit() {
         assert_eq!(
-            CaretStroke::HollowBlock.to_packed(),
-            CURSOR_VISIBLE_BIT | CURSOR_HOLLOW_BIT
+            PackedCursorStyle::from(CaretStroke::HollowBlock).bits(),
+            0b1_0001
         );
     }
 
@@ -250,7 +265,7 @@ mod tests {
             CaretStroke::Bar,
             CaretStroke::HollowBlock,
         ] {
-            assert_eq!(stroke.to_packed() & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
+            assert!(PackedCursorStyle::from(stroke).contains(PackedCursorStyle::VISIBLE));
         }
     }
 }

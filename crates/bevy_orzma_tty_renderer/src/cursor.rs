@@ -8,7 +8,7 @@ mod paint;
 mod style;
 
 pub use blink::blink_phase_on;
-pub use paint::{CURSOR_HOLLOW_BIT, CURSOR_VISIBLE_BIT, CaretPaint, CaretPaintInput, CaretStroke};
+pub use paint::{CaretPaint, CaretPaintInput, CaretStroke, PackedCursorStyle};
 pub use style::CaretStyle;
 
 /// The real-time elapsed reading at the last keystroke, which the blink
