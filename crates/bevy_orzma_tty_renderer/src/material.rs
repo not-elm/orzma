@@ -412,7 +412,9 @@ struct TerminalParams {
     ascent_px: f32,
     dpr: f32,
     cursor_pos: UVec2,
-    /// Packed: bit0=visible, bits1-2=shape (0=block / 1=underline / 2=bar), bit3=blinking.
+    /// Packed: bit0=visible, bits1-2=shape (0=block / 1=underline / 2=bar),
+    /// bit3=blinking, bit4=hollow. The shader reads bit0, bit4 and the
+    /// shape bits; the blink bit is resolved on the CPU.
     cursor_style: u32,
     /// Caret thickness in physical pixels for the underline, bar and
     /// hollow outlines, at least 1.
@@ -491,8 +493,8 @@ impl Default for TerminalParams {
 }
 
 impl TerminalParams {
-    /// Builds the per-frame uniform block from the current view, cells
-    /// and frame timing.
+    /// Builds the per-frame uniform block from the current view and the
+    /// caret paint the policy settled on.
     ///
     /// # Invariants
     ///
@@ -743,13 +745,14 @@ fn update_terminal_material(
     // ordered after this system, so atlas uploads defer in lock-step)
     // and far less disruptive than the previous .unwrap_or(1.0) flash
     // that would re-rasterize the entire atlas at half scale.
-    let dpr = windows.single().ok().map(|window| window.scale_factor());
+    let window = windows.single().ok();
+    let dpr = window.map(|window| window.scale_factor());
     let phase_on = blink_phase_on(
         time.elapsed().saturating_sub(last_key.0),
         cursor_config.blink_interval,
         cursor_config.blink_timeout,
     );
-    let window_focused = windows.single().ok().is_some_and(|window| window.focused);
+    let window_focused = window.is_some_and(|window| window.focused);
 
     for (entity, handle, mut state, cells, view, pane_style, overlays) in terminals.iter_mut() {
         // NOTE: Latch the cells' change signal before the bail-out below.
@@ -1631,6 +1634,17 @@ mod tests {
         );
     }
 
+    /// The body of the WGSL function `header` declares, bounded at that
+    /// function's column-zero closing brace so a later function's text
+    /// cannot satisfy an assertion about this one.
+    fn wgsl_fn_body<'a>(src: &'a str, header: &str) -> &'a str {
+        src.split(header)
+            .nth(1)
+            .and_then(|tail| tail.split_once("\n}"))
+            .map(|(body, _)| body)
+            .unwrap_or_else(|| panic!("the shader defines {header}"))
+    }
+
     /// Asserts that the shader's cursor helper consults the wide-right-half
     /// flag for both halves of a wide pair, and that a bar cursor moves to
     /// the body cell when parked on a wide glyph's right half.
@@ -1641,17 +1655,10 @@ mod tests {
     #[test]
     fn wgsl_cursor_covers_both_halves_of_a_wide_glyph() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
-        let helper = src
-            .split("fn cursor_covers(")
-            .nth(1)
-            .expect("the shader defines cursor_covers");
-        let body = helper.split("\n}\n").next().expect("the helper has a body");
+        let body = wgsl_fn_body(src, "fn cursor_covers(");
         assert!(body.contains("col == params.cursor_pos.x + 1u"));
         assert!(body.contains("col + 1u == params.cursor_pos.x"));
-        let painter = src
-            .split("fn paint_cursor(")
-            .nth(1)
-            .expect("the shader defines paint_cursor");
+        let painter = wgsl_fn_body(src, "fn paint_cursor(");
         assert!(painter.contains("cursor_covers(row, col)"));
         assert!(painter.contains("bar_covers(row, col)"));
         assert!(src.contains("fn bar_covers("));
@@ -1710,10 +1717,7 @@ mod tests {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
         assert!(src.contains("fn cursor_span_left("));
         assert!(src.contains("fn cursor_span_right("));
-        let painter = src
-            .split("fn paint_cursor(")
-            .nth(1)
-            .expect("the shader defines paint_cursor");
+        let painter = wgsl_fn_body(src, "fn paint_cursor(");
         assert!(painter.contains("col == cursor_span_left()"));
         assert!(painter.contains("col == cursor_span_right()"));
     }

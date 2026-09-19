@@ -1,15 +1,15 @@
 //! Cursor paint policy: focus, hollow rendering, and the blink phase.
 
 use bevy::prelude::*;
-use orzma_vt::prelude::CURSOR_VISIBLE_BIT;
+use orzma_vt::prelude::{CURSOR_BLINKING_BIT, CURSOR_SHAPE_MASK, CURSOR_VISIBLE_BIT};
 use std::time::Duration;
 
 /// Bit 4 of the packed `cursor_style` u32 — set when the caret is drawn
 /// as an outline rather than filled.
+///
+/// The bit is the renderer's own: the VT packs bits 0-3 and leaves this
+/// one clear.
 pub const CURSOR_HOLLOW_BIT: u32 = 16;
-
-/// Bits 1-2 of the packed `cursor_style` u32, carrying the shape.
-pub const CURSOR_SHAPE_MASK: u32 = 0b110;
 
 /// The inputs the paint policy reads beyond the packed style.
 #[derive(Debug, Clone, Copy)]
@@ -119,10 +119,6 @@ impl Plugin for CursorPlugin {
             .init_resource::<LastKeyInstant>();
     }
 }
-
-/// Bit 3 of the packed `cursor_style` u32, carrying the VT's blink
-/// request.
-const CURSOR_BLINKING_BIT: u32 = 8;
 
 #[cfg(test)]
 mod tests {

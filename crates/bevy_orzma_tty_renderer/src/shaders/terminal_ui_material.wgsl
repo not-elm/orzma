@@ -403,8 +403,10 @@ fn paint_cursor(
 
     let thickness = params.cursor_thickness_phys;
     // NOTE: paint_right_strip calls this with in_cell_px.x past the cell
-    // width, so every branch that is not bounded on x must test this or it
-    // paints into the overflow band.
+    // width. The block branch deliberately inverts that band so a wide
+    // glyph's overflow stays legible under a filled caret; every other
+    // branch that is not already bounded on x must test this or its stroke
+    // strays outside the cell.
     let inside_cell = in_cell_px.x < params.cell_size_px.x;
     let invert = vec4<f32>(1.0 - base.rgb, base.a);
     if cursor_hollow {

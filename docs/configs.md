@@ -31,11 +31,13 @@ change — omitted keys fall back to these defaults.
 # shell = "/bin/zsh"
 
 [cursor]
+# Unlike the other enum-valued keys, an unrecognized `style` or `blink` word
+# silently reverts to the default instead of being a startup error.
 style = "block"           # block | underline | bar
 blink = "auto"            # auto | on | off
-blink_interval = 750      # milliseconds
-blink_timeout = 5         # seconds; 0 blinks indefinitely
-thickness = 0.15          # fraction of the cell width
+blink_interval = 750      # milliseconds. Values below 10 are silently raised to 10.
+blink_timeout = 5         # seconds; 0 blinks indefinitely. Silently raised to two blink_interval cycles when shorter.
+thickness = 0.15          # f32 0..=1, fraction of the cell width. Out-of-range silently clamps; NaN reverts to 0.15; 0 still draws 1 physical px.
 unfocused_hollow = true
 # `auto` respects DECSET 12 / DECRST 12; `on` and `off` ignore them.
 # All values pass DECSCUSR through.

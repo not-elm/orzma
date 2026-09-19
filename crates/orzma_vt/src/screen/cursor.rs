@@ -7,6 +7,13 @@ use crate::screen::grid::coords::GridPoint;
 /// should be drawn.
 pub const CURSOR_VISIBLE_BIT: u32 = 1;
 
+/// Bits 1-2 of the packed `cursor_style` u32, carrying the shape
+/// (Block `0`, Underline `1`, Bar `2`).
+pub const CURSOR_SHAPE_MASK: u32 = 0b110;
+
+/// Bit 3 of the packed `cursor_style` u32 — set when the cursor blinks.
+pub const CURSOR_BLINKING_BIT: u32 = 8;
+
 /// Cursor state at snapshot time.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Cursor {
@@ -23,8 +30,9 @@ pub struct Cursor {
 
 impl Cursor {
     /// Packs the style into one u32: bit 0 is [`CURSOR_VISIBLE_BIT`],
-    /// bits 1-2 carry the shape (Block `0`, Underline `1`, Bar `2`), and
-    /// bit 3 carries the blinking flag.
+    /// [`CURSOR_SHAPE_MASK`] carries the shape (Block `0`, Underline
+    /// `1`, Bar `2`), and [`CURSOR_BLINKING_BIT`] carries the blinking
+    /// flag.
     pub fn pack_cursor_style(&self) -> u32 {
         let visible = if self.visible { CURSOR_VISIBLE_BIT } else { 0 };
         let shape = match self.shape {
@@ -32,8 +40,12 @@ impl Cursor {
             CursorShape::Underline => 1,
             CursorShape::Bar => 2,
         };
-        let blinking = if self.blinking { 1u32 } else { 0 };
-        visible | (shape << 1) | (blinking << 3)
+        let blinking = if self.blinking {
+            CURSOR_BLINKING_BIT
+        } else {
+            0
+        };
+        visible | (shape << 1) | blinking
     }
 }
 

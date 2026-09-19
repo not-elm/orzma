@@ -225,8 +225,7 @@ impl DeviceState {
         // live deferred wrap as it stands, must go through `set_auto_wrap`
         // instead.
         self.modes = VtModes::default();
-        self.modes.text_cursor.shape = self.cursor_policy.initial.shape;
-        self.modes.text_cursor.blink = self.cursor_policy.initial.blink;
+        self.apply_initial_cursor_style();
         self.title = TitleState::default();
         self.active_hyperlink = None;
         // NOTE: `hyperlinks` is deliberately not reset. Ids must never be
@@ -259,8 +258,7 @@ impl DeviceState {
     /// - `DECSTR` (`CSI ! p`)
     pub fn soft_reset(&mut self) -> Option<DamageSpan> {
         self.modes.text_cursor.enable = TextCursorEnable::Shown;
-        self.modes.text_cursor.shape = self.cursor_policy.initial.shape;
-        self.modes.text_cursor.blink = self.cursor_policy.initial.blink;
+        self.apply_initial_cursor_style();
         self.modes.insert_replace = InsertReplaceMode::Replace;
         self.modes.app_cursor = false;
         self.modes.keypad_mode = KeypadMode::Numeric;
@@ -478,14 +476,18 @@ impl DeviceState {
     /// style at once, leaving the cursor's visibility untouched.
     pub fn set_cursor_policy(&mut self, policy: CursorPolicy) {
         self.cursor_policy = policy;
-        self.modes.text_cursor.shape = policy.initial.shape;
-        self.modes.text_cursor.blink = policy.initial.blink;
+        self.apply_initial_cursor_style();
     }
 
     /// Switches the active screen without a flip's side effects.
     #[cfg(test)]
     pub(crate) fn set_active_screen_for_test(&mut self, kind: ScreenKind) {
         self.modes.active_screen = kind;
+    }
+
+    fn apply_initial_cursor_style(&mut self) {
+        self.modes.text_cursor.shape = self.cursor_policy.initial.shape;
+        self.modes.text_cursor.blink = self.cursor_policy.initial.blink;
     }
 }
 

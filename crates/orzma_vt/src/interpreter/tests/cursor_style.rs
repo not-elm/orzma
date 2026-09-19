@@ -133,13 +133,18 @@ fn a_cursor_checkpoint_leaves_the_blink_alone() {
 /// Asserts that `RIS` restores the configured initial style rather than
 /// a compile-time default.
 ///
-/// Case: a program leaves the caret as a blinking underline and the
-/// user runs `reset` to recover the shell.
+/// Case: a program leaves the caret as a blinking underline, or starts
+/// it blinking with `CSI ?12h`, and the user runs `reset` to recover the
+/// shell.
 #[test]
 fn a_reset_to_initial_state_returns_the_cursor_to_the_configured_style() {
-    let device = interpret_with_policy(bar_steady_policy(), b"\x1b[3 q\x1bc");
-    assert_eq!(cursor_shape(&device), CursorShape::Bar);
-    assert!(!cursor_blinking(&device));
+    let from_decscusr = interpret_with_policy(bar_steady_policy(), b"\x1b[3 q\x1bc");
+    assert_eq!(cursor_shape(&from_decscusr), CursorShape::Bar);
+    assert!(!cursor_blinking(&from_decscusr));
+
+    let from_mode_twelve = interpret_with_policy(bar_steady_policy(), b"\x1b[?12h\x1bc");
+    assert_eq!(cursor_shape(&from_mode_twelve), CursorShape::Bar);
+    assert!(!cursor_blinking(&from_mode_twelve));
 }
 
 /// Asserts that the blink survives a round trip through the alternate
