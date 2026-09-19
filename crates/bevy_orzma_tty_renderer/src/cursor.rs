@@ -1,4 +1,4 @@
-//! Cursor paint policy: focus, hollow rendering, and the blink phase.
+//! Caret paint policy: focus, hollow rendering, and the blink phase.
 
 use bevy::prelude::*;
 use orzma_vt::prelude::{Cursor, CursorShape};
@@ -7,44 +7,15 @@ use std::time::Duration;
 /// Bit 0 of the packed `cursor_style` u32 — set when the caret is drawn.
 pub const CURSOR_VISIBLE_BIT: u32 = 1;
 
-/// Bits 1-2 of the packed `cursor_style` u32, carrying the shape
-/// (Block `0`, Underline `1`, Bar `2`).
-pub const CURSOR_SHAPE_MASK: u32 = 0b110;
-
-/// Bit 3 of the packed `cursor_style` u32 — set when the caret blinks.
-pub const CURSOR_BLINKING_BIT: u32 = 8;
-
 /// Bit 4 of the packed `cursor_style` u32 — set when the caret is drawn
 /// as an outline rather than filled.
 pub const CURSOR_HOLLOW_BIT: u32 = 16;
 
-/// Packs `cursor` into the `cursor_style` u32 the shader decodes:
-/// [`CURSOR_VISIBLE_BIT`], [`CURSOR_SHAPE_MASK`] carrying the shape
-/// (Block `0`, Underline `1`, Bar `2`), and [`CURSOR_BLINKING_BIT`].
-///
-/// [`CURSOR_HOLLOW_BIT`] is left clear; [`CursorPaint::resolve`] sets it.
-pub fn pack_cursor_style(cursor: &Cursor) -> u32 {
-    let visible = if cursor.visible {
-        CURSOR_VISIBLE_BIT
-    } else {
-        0
-    };
-    let shape = match cursor.shape {
-        CursorShape::Block => 0u32,
-        CursorShape::Underline => 1,
-        CursorShape::Bar => 2,
-    };
-    let blinking = if cursor.blinking {
-        CURSOR_BLINKING_BIT
-    } else {
-        0
-    };
-    visible | (shape << 1) | blinking
-}
-
-/// The inputs the paint policy reads beyond the packed style.
+/// The inputs the paint policy reads beyond the projected caret.
 #[derive(Debug, Clone, Copy)]
-pub struct CursorPaintInput {
+pub struct CaretPaintInput {
+    /// Whether the host hides the caret for an IME composition.
+    pub suppressed: bool,
     /// True when this pane is active and its window has focus.
     pub focused: bool,
     /// Whether an unfocused caret is drawn as a hollow block.
@@ -53,43 +24,69 @@ pub struct CursorPaintInput {
     pub phase_on: bool,
 }
 
-/// The packed cursor style one frame uploads to the shader.
+/// What one frame paints for the caret.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CursorPaint(u32);
+pub struct CaretPaint {
+    /// The viewport cell the caret occupies.
+    pub pos: UVec2,
+    /// The shape it is drawn with.
+    pub shape: CursorShape,
+    /// Whether it is drawn as an outline rather than filled.
+    pub hollow: bool,
+}
 
-impl CursorPaint {
-    /// Resolves the style the shader receives from the style the view
-    /// already packed.
+impl CaretPaint {
+    /// Resolves what to paint from the caret the view projected, or
+    /// `None` when nothing is painted this frame.
     ///
-    /// `packed` carries the visibility the earlier stages decided:
-    /// `DECTCEM`, IME preedit, a cursor scrolled out of the viewport,
-    /// and the vi cursor's own forced visibility all reach this through
-    /// [`CURSOR_VISIBLE_BIT`].
+    /// A caret is not painted when nothing projects into the viewport,
+    /// when `DECTCEM` hides it, or while an IME composition suppresses
+    /// it.
     ///
     /// # Invariants
     ///
-    /// - A cleared [`CURSOR_VISIBLE_BIT`] is never set again.
-    /// - Every path that does not follow the blink phase leaves
-    ///   [`CURSOR_VISIBLE_BIT`] as it found it.
-    pub fn resolve(packed: u32, input: CursorPaintInput) -> Self {
-        if packed & CURSOR_VISIBLE_BIT == 0 {
-            return Self(packed);
+    /// - An unfocused caret is painted regardless of the blink phase.
+    /// - Only a caret the terminal asked to blink follows the phase.
+    pub fn resolve(caret: Option<(UVec2, Cursor)>, input: CaretPaintInput) -> Option<Self> {
+        let (pos, cursor) = caret?;
+        if !cursor.visible || input.suppressed {
+            return None;
         }
         if !input.focused {
             if input.unfocused_hollow {
-                return Self((packed & !CURSOR_SHAPE_MASK) | CURSOR_HOLLOW_BIT);
+                return Some(Self {
+                    pos,
+                    shape: CursorShape::Block,
+                    hollow: true,
+                });
             }
-            return Self(packed);
+            return Some(Self {
+                pos,
+                shape: cursor.shape,
+                hollow: false,
+            });
         }
-        if packed & CURSOR_BLINKING_BIT != 0 && !input.phase_on {
-            return Self(packed & !CURSOR_VISIBLE_BIT);
+        if cursor.blinking && !input.phase_on {
+            return None;
         }
-        Self(packed)
+        Some(Self {
+            pos,
+            shape: cursor.shape,
+            hollow: false,
+        })
     }
 
-    /// The packed style, ready for the uniform.
-    pub fn packed(self) -> u32 {
-        self.0
+    /// The `cursor_style` u32 the shader decodes: [`CURSOR_VISIBLE_BIT`],
+    /// bits 1-2 carrying the shape (Block `0`, Underline `1`, Bar `2`),
+    /// and [`CURSOR_HOLLOW_BIT`].
+    pub fn to_packed(self) -> u32 {
+        let shape = match self.shape {
+            CursorShape::Block => 0u32,
+            CursorShape::Underline => 1,
+            CursorShape::Bar => 2,
+        };
+        let hollow = if self.hollow { CURSOR_HOLLOW_BIT } else { 0 };
+        CURSOR_VISIBLE_BIT | (shape << 1) | hollow
     }
 }
 
@@ -154,192 +151,167 @@ impl Plugin for CursorPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orzma_vt::prelude::{GridColumn, GridLine, GridPoint};
 
     fn cursor(shape: CursorShape, blinking: bool, visible: bool) -> Cursor {
         Cursor {
-            point: GridPoint::default(),
             shape,
             blinking,
             visible,
+            ..Default::default()
         }
     }
 
-    fn packed(shape: CursorShape, blinking: bool) -> u32 {
-        pack_cursor_style(&cursor(shape, blinking, true))
+    fn at(shape: CursorShape, blinking: bool, visible: bool) -> Option<(UVec2, Cursor)> {
+        Some((UVec2::new(3, 5), cursor(shape, blinking, visible)))
     }
 
-    /// Asserts that every cursor shape occupies its assigned wire bits.
-    ///
-    /// Case: a terminal application switches among the steady block,
-    /// underline, and bar DECSCUSR variants.
-    #[test]
-    fn each_shape_lands_in_the_shape_bits() {
-        assert_eq!(packed(CursorShape::Block, false), 0b0001);
-        assert_eq!(packed(CursorShape::Underline, false), 0b0011);
-        assert_eq!(packed(CursorShape::Bar, false), 0b0101);
-    }
-
-    /// Asserts that blinking is encoded independently for every shape.
-    ///
-    /// Case: a terminal application selects a blinking caret variant
-    /// while the terminal stays focused.
-    #[test]
-    fn blinking_sets_its_bit_independent_of_shape() {
-        assert_eq!(packed(CursorShape::Block, true), 0b1001);
-        assert_eq!(packed(CursorShape::Underline, true), 0b1011);
-        assert_eq!(packed(CursorShape::Bar, true), 0b1101);
-    }
-
-    /// Asserts that a hidden cursor clears only the visible bit,
-    /// leaving the packed shape and blink policy intact.
-    ///
-    /// Case: vim hides the cursor with DECTCEM (`CSI ?25l`) while it
-    /// redraws, and on `CSI ?25h` the caret returns.
-    #[test]
-    fn a_hidden_cursor_clears_only_the_visible_bit() {
-        assert_eq!(
-            pack_cursor_style(&cursor(CursorShape::Bar, true, false)),
-            0b1100
-        );
-        assert_eq!(
-            pack_cursor_style(&cursor(CursorShape::Block, false, false)),
-            0b0000
-        );
-        assert_eq!(
-            pack_cursor_style(&cursor(CursorShape::Bar, true, false)),
-            pack_cursor_style(&cursor(CursorShape::Bar, true, true)) & !CURSOR_VISIBLE_BIT
-        );
-    }
-
-    /// Asserts that the cursor position does not participate in style
-    /// packing.
-    ///
-    /// Case: the user scrolls through history, and the cursor's grid
-    /// position projects to a different viewport cell or to no cell at
-    /// all.
-    #[test]
-    fn the_cursor_position_does_not_participate_in_style_packing() {
-        let at_origin = Cursor {
-            point: GridPoint {
-                line: GridLine(0),
-                column: GridColumn(0),
-            },
-            shape: CursorShape::Underline,
-            blinking: true,
-            visible: true,
-        };
-        let deep_in_history = Cursor {
-            point: GridPoint {
-                line: GridLine(-9999),
-                column: GridColumn(511),
-            },
-            ..at_origin
-        };
-        assert_eq!(
-            pack_cursor_style(&at_origin),
-            pack_cursor_style(&deep_in_history)
-        );
-    }
-
-    fn block_blinking() -> u32 {
-        packed(CursorShape::Block, true)
-    }
-
-    fn bar_blinking() -> u32 {
-        packed(CursorShape::Bar, true)
-    }
-
-    fn bar_steady() -> u32 {
-        packed(CursorShape::Bar, false)
-    }
-
-    fn focused(phase_on: bool) -> CursorPaintInput {
-        CursorPaintInput {
-            focused: true,
-            unfocused_hollow: true,
+    fn input(focused: bool, unfocused_hollow: bool, phase_on: bool) -> CaretPaintInput {
+        CaretPaintInput {
+            suppressed: false,
+            focused,
+            unfocused_hollow,
             phase_on,
         }
     }
 
-    fn unfocused(unfocused_hollow: bool) -> CursorPaintInput {
-        CursorPaintInput {
-            focused: false,
-            unfocused_hollow,
-            phase_on: false,
-        }
-    }
-
-    /// Asserts that a cursor the earlier stages already hid stays
-    /// hidden, and is not turned into a hollow block by being
-    /// unfocused.
+    /// Asserts that a view with nothing projected paints nothing.
     ///
-    /// Case: vim hides the caret with `CSI ?25l` while it repaints, and
-    /// the user clicks another pane during the repaint.
+    /// Case: the user scrolls back through history until the shell's
+    /// caret leaves the viewport.
     #[test]
-    fn an_already_hidden_cursor_stays_hidden_when_unfocused() {
-        let hidden = block_blinking() & !CURSOR_VISIBLE_BIT;
-        let paint = CursorPaint::resolve(hidden, unfocused(true));
-        assert_eq!(paint.packed() & CURSOR_VISIBLE_BIT, 0);
-        assert_eq!(paint.packed() & CURSOR_HOLLOW_BIT, 0);
+    fn nothing_projected_paints_nothing() {
+        assert_eq!(CaretPaint::resolve(None, input(true, true, true)), None);
     }
 
-    /// Asserts that an unfocused blinking cursor is drawn as a hollow
-    /// block with its shape cleared, and stays visible through the dark
-    /// phase.
+    /// Asserts that a caret the terminal hid, and one the host
+    /// suppresses, are both left unpainted.
+    ///
+    /// Case: vim hides the caret with `CSI ?25l` while it redraws, and
+    /// separately an IME composition opens over the prompt.
+    #[test]
+    fn a_hidden_or_suppressed_caret_paints_nothing() {
+        assert_eq!(
+            CaretPaint::resolve(
+                at(CursorShape::Block, false, false),
+                input(true, true, true)
+            ),
+            None
+        );
+        let suppressed = CaretPaintInput {
+            suppressed: true,
+            ..input(true, true, true)
+        };
+        assert_eq!(
+            CaretPaint::resolve(at(CursorShape::Block, false, true), suppressed),
+            None
+        );
+    }
+
+    /// Asserts that an unfocused caret is painted as a hollow block and
+    /// stays painted through the dark phase.
     ///
     /// Case: the user switches to another pane while a bar caret is
     /// blinking in this one.
     #[test]
-    fn an_unfocused_cursor_becomes_a_hollow_block_and_stops_blinking() {
-        let paint = CursorPaint::resolve(bar_blinking(), unfocused(true));
-        assert_eq!(paint.packed() & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
-        assert_eq!(paint.packed() & CURSOR_HOLLOW_BIT, CURSOR_HOLLOW_BIT);
-        assert_eq!(paint.packed() & CURSOR_SHAPE_MASK, 0);
+    fn an_unfocused_caret_becomes_a_hollow_block_and_ignores_the_phase() {
+        let paint =
+            CaretPaint::resolve(at(CursorShape::Bar, true, true), input(false, true, false))
+                .expect("the caret is painted");
+        assert_eq!(paint.shape, CursorShape::Block);
+        assert!(paint.hollow);
+        assert_eq!(paint.pos, UVec2::new(3, 5));
     }
 
-    /// Asserts that an unfocused cursor keeps its shape and stays
-    /// visible through the dark phase when hollow rendering is off.
+    /// Asserts that an unfocused caret keeps its shape and stays
+    /// painted through the dark phase when hollow rendering is off.
     ///
     /// Case: the user sets `unfocused_hollow = false` and switches
     /// panes while the caret is blinking.
     #[test]
     fn hollow_rendering_can_be_turned_off_without_resuming_the_blink() {
-        let paint = CursorPaint::resolve(bar_blinking(), unfocused(false));
-        assert_eq!(paint.packed() & CURSOR_HOLLOW_BIT, 0);
-        assert_eq!(
-            paint.packed() & CURSOR_SHAPE_MASK,
-            bar_blinking() & CURSOR_SHAPE_MASK
-        );
-        assert_eq!(paint.packed() & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
+        let paint =
+            CaretPaint::resolve(at(CursorShape::Bar, true, true), input(false, false, false))
+                .expect("the caret is painted");
+        assert_eq!(paint.shape, CursorShape::Bar);
+        assert!(!paint.hollow);
     }
 
-    /// Asserts that a blinking cursor is hidden in the dark phase and
-    /// shown in the lit one, while a steady cursor ignores the phase.
+    /// Asserts that a blinking caret is dropped in the dark phase and
+    /// painted in the lit one, while a steady caret ignores the phase.
     ///
     /// Case: the user has just typed and watches the caret blink.
     #[test]
-    fn only_a_blinking_cursor_follows_the_phase() {
+    fn only_a_blinking_caret_follows_the_phase() {
         assert_eq!(
-            CursorPaint::resolve(block_blinking(), focused(false)).packed() & CURSOR_VISIBLE_BIT,
-            0
+            CaretPaint::resolve(at(CursorShape::Block, true, true), input(true, true, false)),
+            None
         );
-        assert_eq!(
-            CursorPaint::resolve(block_blinking(), focused(true)).packed() & CURSOR_VISIBLE_BIT,
-            CURSOR_VISIBLE_BIT
+        assert!(
+            CaretPaint::resolve(at(CursorShape::Block, true, true), input(true, true, true))
+                .is_some()
         );
-        assert_eq!(
-            CursorPaint::resolve(bar_steady(), focused(false)).packed() & CURSOR_VISIBLE_BIT,
-            CURSOR_VISIBLE_BIT
+        assert!(
+            CaretPaint::resolve(at(CursorShape::Bar, false, true), input(true, true, false))
+                .is_some()
         );
     }
 
-    /// Asserts that the phase alternates on the interval and settles lit
-    /// once the timeout passes, and that only a keystroke restarts it.
+    /// Asserts that every caret shape occupies its assigned wire bits.
+    ///
+    /// Case: a terminal application switches among the block,
+    /// underline, and bar DECSCUSR variants.
+    #[test]
+    fn each_shape_lands_in_the_shape_bits() {
+        let packed = |shape| {
+            CaretPaint {
+                pos: UVec2::ZERO,
+                shape,
+                hollow: false,
+            }
+            .to_packed()
+        };
+        assert_eq!(packed(CursorShape::Block), 0b0001);
+        assert_eq!(packed(CursorShape::Underline), 0b0011);
+        assert_eq!(packed(CursorShape::Bar), 0b0101);
+    }
+
+    /// Asserts that a hollow caret sets its own bit alongside the shape.
+    ///
+    /// Case: the caret sits in a pane the user is not typing into.
+    #[test]
+    fn a_hollow_caret_sets_its_bit() {
+        let paint = CaretPaint {
+            pos: UVec2::ZERO,
+            shape: CursorShape::Block,
+            hollow: true,
+        };
+        assert_eq!(paint.to_packed(), CURSOR_VISIBLE_BIT | CURSOR_HOLLOW_BIT);
+    }
+
+    /// Asserts that a packed caret always marks itself visible, since a
+    /// caret that is not painted has no packed form.
+    ///
+    /// Case: the shader decides whether to draw from this bit alone.
+    #[test]
+    fn the_packed_style_always_marks_the_caret_visible() {
+        for shape in [CursorShape::Block, CursorShape::Underline, CursorShape::Bar] {
+            for hollow in [false, true] {
+                let packed = CaretPaint {
+                    pos: UVec2::ZERO,
+                    shape,
+                    hollow,
+                }
+                .to_packed();
+                assert_eq!(packed & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
+            }
+        }
+    }
+
+    /// Asserts that the phase alternates on the interval and settles
+    /// lit once the timeout passes.
     ///
     /// Case: the user types, watches the caret blink, then leaves the
-    /// keyboard alone while a program changes the cursor style and the
-    /// window regains focus.
+    /// keyboard alone.
     #[test]
     fn the_phase_alternates_then_settles_lit_until_the_next_keystroke() {
         let interval = Duration::from_millis(750);
