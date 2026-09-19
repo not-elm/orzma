@@ -1,9 +1,11 @@
 //! The character-terminal device this VT emulates.
 
 pub(crate) mod color;
+pub(crate) mod cursor_policy;
 pub(crate) mod modes;
 
 use crate::device::color::{Palette, Rgb};
+use crate::device::cursor_policy::CursorPolicy;
 use crate::device::modes::{
     AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode, ScreenKind,
     TextCursorEnable, VtModes,
@@ -30,6 +32,7 @@ pub(crate) struct DeviceState {
     hyperlinks: HyperlinkInterner,
     active_hyperlink: Option<HyperlinkId>,
     preceding_graphic: Option<ClassifiedGlyph>,
+    cursor_policy: CursorPolicy,
 }
 
 impl DeviceState {
@@ -50,6 +53,7 @@ impl DeviceState {
             hyperlinks: HyperlinkInterner::new(),
             active_hyperlink: None,
             preceding_graphic: None,
+            cursor_policy: CursorPolicy::default(),
         }
     }
 
@@ -456,6 +460,19 @@ impl DeviceState {
     /// - `OSC 111`
     pub fn reset_background_color(&mut self) -> bool {
         self.palette.reset_background()
+    }
+
+    /// The host-supplied cursor policy this device applies.
+    pub fn cursor_policy(&self) -> CursorPolicy {
+        self.cursor_policy
+    }
+
+    /// Replaces the host-supplied cursor policy and applies its initial
+    /// style at once, leaving the cursor's visibility untouched.
+    pub fn set_cursor_policy(&mut self, policy: CursorPolicy) {
+        self.cursor_policy = policy;
+        self.modes.text_cursor.shape = policy.initial.shape;
+        self.modes.text_cursor.blink = policy.initial.blink;
     }
 
     /// Switches the active screen without a flip's side effects.
