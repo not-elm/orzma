@@ -3,7 +3,7 @@
 
 use orzma_tty::prelude::{OrzmaTty, OrzmaTtyResult};
 use orzma_tty::{CellPixels, EnvKey, EnvValue, SpawnOptions};
-use orzma_vt::prelude::{GridSize, OrzmaVt};
+use orzma_vt::prelude::{CursorPolicy, GridSize, OrzmaVt};
 #[cfg(windows)]
 use std::path::Path;
 use std::path::PathBuf;
@@ -73,12 +73,17 @@ pub(crate) trait PaneFactory: Send {
 pub(crate) struct ShellFactory {
     shell: String,
     scrollback_rows: usize,
+    cursor_policy: CursorPolicy,
 }
 
 impl ShellFactory {
     /// Resolves the shell now (config → `$SHELL` → the platform default)
     /// so every pane uses the same one.
-    pub(crate) fn new(shell: Option<String>, scrollback_rows: usize) -> Self {
+    pub(crate) fn new(
+        shell: Option<String>,
+        scrollback_rows: usize,
+        cursor_policy: CursorPolicy,
+    ) -> Self {
         Self {
             shell: resolve_shell(
                 shell.as_deref(),
@@ -87,6 +92,7 @@ impl ShellFactory {
                 &default_shell(),
             ),
             scrollback_rows,
+            cursor_policy,
         }
     }
 }
@@ -99,7 +105,7 @@ impl PaneFactory for ShellFactory {
         cwd: Option<PathBuf>,
         env: Vec<(String, String)>,
     ) -> OrzmaTtyResult<OrzmaTty<OrzmaVt>> {
-        let vt = OrzmaVt::new(size, self.scrollback_rows);
+        let vt = OrzmaVt::new(size, self.scrollback_rows).with_cursor_policy(self.cursor_policy);
         OrzmaTty::spawn(
             vt,
             SpawnOptions {
@@ -207,6 +213,7 @@ fn on_path(name: &str) -> bool {
 mod tests {
     use super::*;
     use orzma_tty::test_support::CaptureSink;
+    use orzma_vt::prelude::{CursorBlink, CursorShape, TextCursorStyle, Vt};
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use std::thread;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -337,7 +344,7 @@ mod tests {
         let dir = TempDir::new().expect("a temp dir");
         let expected = dir.path().canonicalize().expect("the dir canonicalizes");
         let size = GridSize::new(80, 24).expect("a valid size");
-        let tty = ShellFactory::new(Some("/bin/cat".into()), 100)
+        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, CursorPolicy::default())
             .spawn(
                 size,
                 CellPixels::default(),
@@ -356,5 +363,33 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         };
         assert_eq!(reported, Some(expected));
+    }
+
+    /// Asserts that a spawned pane's terminal starts with the factory's
+    /// configured cursor style, so a configured caret is in force before
+    /// the shell writes anything.
+    ///
+    /// Case: the user configures a blinking bar and opens a new pane.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_spawned_pane_starts_with_the_configured_style() {
+        let policy = CursorPolicy {
+            initial: TextCursorStyle {
+                shape: CursorShape::Bar,
+                blink: CursorBlink::Blinking,
+            },
+            ignore_dec_mode_12: true,
+        };
+        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, policy)
+            .spawn(
+                GridSize::new(80, 24).expect("a valid size"),
+                CellPixels::default(),
+                None,
+                Vec::new(),
+            )
+            .expect("cat spawns under a PTY");
+        let cursor = tty.vt().modes().text_cursor;
+        assert_eq!(cursor.shape, CursorShape::Bar);
+        assert_eq!(cursor.blink, CursorBlink::Blinking);
     }
 }

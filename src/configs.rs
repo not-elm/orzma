@@ -4,8 +4,10 @@
 
 use bevy::prelude::*;
 use orzma_configs::OrzmaConfigs;
+use orzma_configs::cursor::{CursorConfig, CursorStyleSetting};
 use orzma_configs::mouse::MouseConfig;
 use orzma_tty::prelude::WheelConfig;
+use orzma_vt::prelude::{CursorBlink, CursorPolicy, CursorShape, TextCursorStyle};
 
 /// The resolved `OrzmaConfigs`, loaded once at app build time.
 #[derive(Resource, Debug, Default, Deref)]
@@ -68,6 +70,25 @@ pub(crate) fn wheel_config(mc: &MouseConfig) -> WheelConfig {
         lines_per_notch: mc.lines_per_notch,
         fine_lines: mc.fine_lines,
         max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
+    }
+}
+
+/// The VT-layer cursor policy the `[cursor]` section selects.
+pub(crate) fn cursor_policy(config: &CursorConfig) -> CursorPolicy {
+    CursorPolicy {
+        initial: TextCursorStyle {
+            shape: match config.style {
+                CursorStyleSetting::Block => CursorShape::Block,
+                CursorStyleSetting::Underline => CursorShape::Underline,
+                CursorStyleSetting::Bar => CursorShape::Bar,
+            },
+            blink: if config.blink.blinks() {
+                CursorBlink::Blinking
+            } else {
+                CursorBlink::Steady
+            },
+        },
+        ignore_dec_mode_12: config.blink.vetoes_dec_mode_12(),
     }
 }
 
