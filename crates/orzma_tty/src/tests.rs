@@ -60,13 +60,29 @@ fn channelled_term() -> (OrzmaTty<FakeVt>, Sender<Vec<u8>>, Sender<Option<i32>>)
     (term, chunk_tx, exit_tx)
 }
 
-/// Collects the `ChildExit` codes out of a pumped signal batch.
-fn child_exits(signals: &[TtySignal]) -> Vec<Option<i32>> {
-    signals
-        .iter()
+/// Collects the `ChildExit` codes out of a pumped output.
+fn child_exits(output: &PumpOutput) -> Vec<Option<i32>> {
+    output
+        .signals()
         .filter_map(|signal| match signal {
             TtySignal::ChildExit { code } => Some(*code),
             _ => None,
         })
         .collect()
+}
+
+/// A minimal frame for scripting `FakeVt::frames`; its values are
+/// arbitrary placeholders.
+fn a_frame() -> Frame {
+    Frame {
+        size: GridSize { cols: 80, rows: 24 },
+        rows: Vec::new(),
+        cursor: Cursor::default(),
+        display_offset: DisplayOffset(0),
+        vi_cursor: None,
+        selection: None,
+        placements: None,
+        palette: None,
+        hyperlinks: Vec::new(),
+    }
 }

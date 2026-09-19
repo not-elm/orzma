@@ -3,22 +3,6 @@
 
 use super::*;
 
-/// A minimal frame for scripting `FakeVt::frames`; its values are
-/// arbitrary placeholders.
-fn a_frame() -> Frame {
-    Frame {
-        size: GridSize { cols: 80, rows: 24 },
-        rows: Vec::new(),
-        cursor: Cursor::default(),
-        display_offset: DisplayOffset(0),
-        vi_cursor: None,
-        selection: None,
-        placements: None,
-        palette: None,
-        hyperlinks: Vec::new(),
-    }
-}
-
 /// Asserts that `next_deadline` is due immediately while the
 /// bootstrap frame is owed and `None` once it settled with nothing
 /// armed.
@@ -48,9 +32,9 @@ fn flush_now_returns_pending_signals_and_an_immediate_frame() {
     chunk_tx.send(b"unread".to_vec()).unwrap();
 
     let out = tty.flush_now();
-    assert!(out.frame.is_some());
+    assert!(out.frames().count() == 1);
     assert_eq!(
-        out.signals,
+        out.signals().cloned().collect::<Vec<_>>(),
         vec![TtySignal::Vt(VtSignal::WebviewEvicted {
             placements: vec![InstanceId(7)]
         })]
@@ -74,9 +58,9 @@ fn the_first_pump_returns_the_bootstrap_frame_even_with_no_output() {
     let (mut tty, _sink) = detached_term();
     tty.vt.frames.push_back(a_frame());
     let first = tty.pump();
-    assert!(first.frame.is_some());
+    assert!(first.frames().count() == 1);
     let second = tty.pump();
-    assert!(second.frame.is_none());
+    assert!(second.frames().next().is_none());
 }
 
 /// Asserts that a bootstrap pump whose VT has no frame ready yet
@@ -89,12 +73,12 @@ fn the_first_pump_returns_the_bootstrap_frame_even_with_no_output() {
 fn a_bootstrap_pump_with_no_frame_ready_keeps_the_debt_for_the_next_pump() {
     let (mut tty, _sink) = detached_term();
     let first = tty.pump();
-    assert!(first.frame.is_none());
+    assert!(first.frames().next().is_none());
     assert!(tty.coalescer.needs_bootstrap());
 
     tty.vt.frames.push_back(a_frame());
     let second = tty.pump();
-    assert!(second.frame.is_some());
+    assert!(second.frames().count() == 1);
 }
 
 /// Asserts that a chunk arriving before the first pump — which both
@@ -110,9 +94,9 @@ fn a_pre_pump_chunk_does_not_double_emit_the_bootstrap_frame() {
     tty.vt.frames.push_back(a_frame());
     tty.feed_bytes(b"$ ");
     let first = tty.pump();
-    assert!(first.frame.is_some());
+    assert!(first.frames().count() == 1);
     let second = tty.pump();
-    assert!(second.frame.is_none());
+    assert!(second.frames().next().is_none());
 }
 
 /// Asserts that the placements a resize strands reach the next
@@ -128,7 +112,7 @@ fn a_resize_eviction_reaches_the_next_pump() {
     tty.resize(grid(100, 30), CellPixels::default())
         .expect("resize");
     assert_eq!(
-        tty.pump().signals,
+        tty.pump().signals().cloned().collect::<Vec<_>>(),
         vec![TtySignal::Vt(VtSignal::WebviewEvicted {
             placements: vec![InstanceId(7)]
         })]
@@ -144,7 +128,7 @@ fn a_resize_eviction_reaches_the_next_pump() {
 fn a_pump_with_nothing_evicted_raises_nothing() {
     let (mut tty, _sink) = detached_term();
     let output = tty.pump();
-    assert!(output.signals.is_empty());
+    assert!(output.signals().next().is_none());
     assert!(!tty.coalescer.is_armed());
 }
 

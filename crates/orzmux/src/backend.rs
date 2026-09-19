@@ -11,7 +11,7 @@ use crate::protocol::{
 };
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::CellPixels;
-use orzma_tty::prelude::{OrzmaTtyError, OrzmaTtyResult, PumpOutput, TtySignal, WheelConfig};
+use orzma_tty::prelude::{OrzmaTtyError, OrzmaTtyResult, PumpItem, TtySignal, WheelConfig};
 use orzma_vt::prelude::{Frame, GridSize, Vt, VtSignal};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -229,7 +229,7 @@ impl Backend {
             };
             let output = pane.tty.pump();
             let more_pending = output.more_pending;
-            if let Some(code) = self.emit_pump_output(id, output) {
+            if let Some(code) = self.forward_items(None, id, output.items) {
                 self.close_pane(id, CloseReason::ChildExit { code });
                 return;
             }
@@ -406,7 +406,6 @@ impl Backend {
         };
         let solved = self.tree.solve(geometry.size);
         let mut frames: Vec<(PaneId, Frame)> = Vec::new();
-        let mut signals: Vec<(PaneId, VtSignal)> = Vec::new();
         for rect in &solved.panes {
             let Some(pane) = self.panes.get_mut(&rect.pane) else {
                 continue;
@@ -430,17 +429,7 @@ impl Backend {
                 }
             }
             let flushed = pane.tty.flush_now();
-            for signal in flushed.signals {
-                if let TtySignal::Vt(signal) = signal {
-                    signals.push((rect.pane, signal));
-                }
-            }
-            if let Some(frame) = flushed.frame {
-                frames.push((rect.pane, frame));
-            }
-        }
-        for (pane, signal) in signals {
-            self.emit(OrzmuxEvent::Signal { pane, signal });
+            self.forward_items(Some(&mut frames), rect.pane, flushed.items);
         }
         let layout = Layout {
             seq: self.processed,
@@ -473,14 +462,21 @@ impl Backend {
         }
     }
 
-    /// Forwards a pump's signals and frame, in that order.
-    /// Returns `Some(code)` when the signals carried `ChildExit`.
-    fn emit_pump_output(&mut self, id: PaneId, output: PumpOutput) -> Option<Option<i32>> {
+    /// Forwards a pump's items in order: each signal as a `Signal` event,
+    /// each frame as a `Frame` event, or into `layout_frames` when the
+    /// caller publishes the frames itself. Returns `Some(code)` when the
+    /// items carried `ChildExit`.
+    fn forward_items(
+        &mut self,
+        mut layout_frames: Option<&mut Vec<(PaneId, Frame)>>,
+        id: PaneId,
+        items: Vec<PumpItem>,
+    ) -> Option<Option<i32>> {
         let mut exited = None;
-        for signal in output.signals {
-            match signal {
-                TtySignal::ChildExit { code } => exited = Some(code),
-                TtySignal::Vt(signal) => {
+        for item in items {
+            match item {
+                PumpItem::Signal(TtySignal::ChildExit { code }) => exited = Some(code),
+                PumpItem::Signal(TtySignal::Vt(signal)) => {
                     if let VtSignal::CurrentDir(path) = &signal
                         && let Some(pane) = self.panes.get_mut(&id)
                     {
@@ -488,10 +484,11 @@ impl Backend {
                     }
                     self.emit(OrzmuxEvent::Signal { pane: id, signal });
                 }
+                PumpItem::Frame(frame) => match layout_frames.as_deref_mut() {
+                    Some(frames) => frames.push((id, frame)),
+                    None => self.emit(OrzmuxEvent::Frame { pane: id, frame }),
+                },
             }
-        }
-        if let Some(frame) = output.frame {
-            self.emit(OrzmuxEvent::Frame { pane: id, frame });
         }
         exited
     }
@@ -501,7 +498,7 @@ impl Backend {
     fn close_pane(&mut self, id: PaneId, reason: CloseReason) {
         if let Some(pane) = self.panes.get_mut(&id) {
             let flushed = pane.tty.flush_now();
-            self.emit_pump_output(id, flushed);
+            self.forward_items(None, id, flushed.items);
         }
         self.tree.remove(id);
         self.panes.remove(&id);

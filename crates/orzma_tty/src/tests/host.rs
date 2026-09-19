@@ -63,7 +63,7 @@ fn a_host_mount_queues_the_mount_signal_and_arms_the_coalescer() {
     );
     let out = tty.flush_now();
     assert_eq!(
-        out.signals,
+        out.signals().cloned().collect::<Vec<_>>(),
         vec![TtySignal::Vt(VtSignal::WebviewMount {
             instance: InstanceId(7),
             size
@@ -92,7 +92,7 @@ fn a_rejected_host_mount_queues_the_rejection_without_arming() {
     assert!(!tty.coalescer.is_armed(), "a rejected mount arms nothing");
     let out = tty.flush_now();
     assert_eq!(
-        out.signals,
+        out.signals().cloned().collect::<Vec<_>>(),
         vec![TtySignal::Vt(VtSignal::WebviewMountRejected {
             instance: InstanceId(7)
         })]

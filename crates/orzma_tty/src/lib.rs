@@ -32,7 +32,9 @@ pub mod test_support;
 pub use cell_pixels::CellPixels;
 
 pub mod prelude {
-    pub use crate::{CellPixels, OrzmaTty, PumpOutput, Readiness, error::*, input::*, signal::*};
+    pub use crate::{
+        CellPixels, OrzmaTty, PumpItem, PumpOutput, Readiness, error::*, input::*, signal::*,
+    };
 }
 
 /// Spawn parameters consumed exactly once by `OrzmaTty::spawn`.
@@ -55,20 +57,42 @@ pub struct EnvKey(pub String);
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct EnvValue(pub String);
 
+/// One entry of a pump's output.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PumpItem {
+    /// A signal raised since the previous entry.
+    Signal(TtySignal),
+    /// A frame to draw. It reflects every signal listed ahead of it.
+    Frame(Frame),
+}
+
 /// Everything one [`OrzmaTty::pump`] call produced.
-///
-/// One pump folds several interpreted chunks into at most one frame plus
-/// the signals they raised.
 pub struct PumpOutput {
-    /// The frame to draw, present only when the coalesce window came due or
-    /// the bootstrap snapshot was still owed.
-    pub frame: Option<Frame>,
-    /// Signals raised since the previous pump, in order, with
-    /// `ChildExit` last.
-    pub signals: Vec<TtySignal>,
+    /// The signals and frames in the order they were produced; the
+    /// consumer must forward them in this order. `ChildExit` is always
+    /// last.
+    pub items: Vec<PumpItem>,
     /// Whether output chunks remain queued after this pump's budget was
     /// spent, so the owner should pump again before waiting.
     pub more_pending: bool,
+}
+
+impl PumpOutput {
+    /// The signals of [`Self::items`], in order.
+    pub fn signals(&self) -> impl Iterator<Item = &TtySignal> {
+        self.items.iter().filter_map(|item| match item {
+            PumpItem::Signal(signal) => Some(signal),
+            PumpItem::Frame(_) => None,
+        })
+    }
+
+    /// The frames of [`Self::items`], in order.
+    pub fn frames(&self) -> impl Iterator<Item = &Frame> {
+        self.items.iter().filter_map(|item| match item {
+            PumpItem::Frame(frame) => Some(frame),
+            PumpItem::Signal(_) => None,
+        })
+    }
 }
 
 /// The receivers to wait on to learn when a terminal has work: its output
@@ -98,9 +122,8 @@ pub struct OrzmaTty<V: Vt> {
     vt: V,
     coalescer: Coalescer,
     pty: Pty,
-    /// Signals produced by interpreted chunks or reported by a resize,
-    /// awaiting the next pump.
-    pending_signals: Vec<TtySignal>,
+    /// Signals and frames produced since the previous pump, in order.
+    pending: Vec<PumpItem>,
     /// Reply bytes produced by interpreted chunks, which the next pump
     /// queues for the PTY as one write.
     pending_replies: Vec<u8>,
@@ -302,7 +325,7 @@ impl<V: Vt> OrzmaTty<V> {
         } else {
             VtSignal::WebviewMountRejected { instance }
         };
-        self.pending_signals.push(TtySignal::Vt(signal));
+        self.pending.push(PumpItem::Signal(TtySignal::Vt(signal)));
     }
 
     /// Encodes a key press and queues it for the PTY.
@@ -459,30 +482,28 @@ impl<V: Vt> OrzmaTty<V> {
         self.coalescer.next_deadline()
     }
 
-    /// Emits the pending signals and an immediate frame without reading
-    /// the PTY or waiting for the coalesce window.
+    /// Returns the pending signals followed by an immediate frame, without
+    /// reading the PTY or waiting for the coalesce window.
     ///
     /// Never reports `ChildExit`.
     pub fn flush_now(&mut self) -> PumpOutput {
-        let signals = mem::take(&mut self.pending_signals);
-        let frame = self.emit_frame();
+        self.emit_frame();
         PumpOutput {
-            frame,
-            signals,
+            items: mem::take(&mut self.pending),
             more_pending: false,
         }
     }
 
     /// Drains the PTY and the VT into one output batch: interprets up to
     /// [`Self::MAX_CHUNKS_PER_PUMP`] queued chunks, queues pending replies
-    /// for the PTY, surfaces buffered signals, and emits a frame when the
-    /// coalesce window is due or the bootstrap snapshot is still owed.
+    /// for the PTY, surfaces the buffered signals, and lists a frame behind
+    /// them when the coalesce window is due or the bootstrap snapshot is
+    /// still owed.
     ///
-    /// The child's exit is latched when observed and reported as a
-    /// trailing `ChildExit` only on the pump that finds no chunk left, so
-    /// the last output always precedes it. A reader thread that vanished
-    /// without a status (both streams disconnected) reports
-    /// `ChildExit { code: None }` once.
+    /// The child's exit is latched when observed and reported as the last
+    /// item only on the pump that finds no chunk left, so the last output
+    /// always precedes it. A reader thread that vanished without a status
+    /// (both streams disconnected) reports `ChildExit { code: None }` once.
     pub fn pump(&mut self) -> PumpOutput {
         let chunks_disconnected = self.drain_chunks();
         let more_pending = !chunks_disconnected && self.pty.chunks_pending();
@@ -498,21 +519,17 @@ impl<V: Vt> OrzmaTty<V> {
             let _ = self.pty.enqueue_write(replies);
         }
 
-        let mut signals = mem::take(&mut self.pending_signals);
+        let now = Instant::now();
+        if self.coalescer.needs_bootstrap() || self.coalescer.is_due(now) {
+            self.emit_frame();
+        }
+        let mut items = mem::take(&mut self.pending);
         if !more_pending && let ExitLatch::Observed(code) = self.exit {
-            signals.push(TtySignal::ChildExit { code });
+            items.push(PumpItem::Signal(TtySignal::ChildExit { code }));
             self.exit = ExitLatch::Reported;
         }
-
-        let now = Instant::now();
-        let frame = if self.coalescer.needs_bootstrap() || self.coalescer.is_due(now) {
-            self.emit_frame()
-        } else {
-            None
-        };
         PumpOutput {
-            frame,
-            signals,
+            items,
             more_pending,
         }
     }
@@ -524,7 +541,7 @@ impl<V: Vt> OrzmaTty<V> {
             vt,
             coalescer: Coalescer::default(),
             pty,
-            pending_signals: Vec::new(),
+            pending: Vec::new(),
             pending_replies: Vec::new(),
             exit: ExitLatch::Running,
             focused: false,
@@ -540,7 +557,7 @@ impl<V: Vt> OrzmaTty<V> {
         };
         self.coalescer.arm_or_extend(Instant::now());
         if let Some(evicted) = VtSignal::evicted(changed.evicted) {
-            self.pending_signals.push(TtySignal::Vt(evicted));
+            self.pending.push(PumpItem::Signal(TtySignal::Vt(evicted)));
         }
     }
 
@@ -619,16 +636,17 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
-    /// Asks the VT for a frame and settles the coalescer on success or
-    /// disarms it when there was nothing to paint.
-    fn emit_frame(&mut self) -> Option<Frame> {
-        let frame = self.vt.frame();
-        if frame.is_some() {
-            self.coalescer.settle_emit();
-        } else {
-            self.coalescer.disarm();
+    /// Asks the VT for a frame and queues it behind the pending signals,
+    /// settling the coalescer on success or disarming it when there was
+    /// nothing to paint.
+    fn emit_frame(&mut self) {
+        match self.vt.frame() {
+            Some(frame) => {
+                self.coalescer.settle_emit();
+                self.pending.push(PumpItem::Frame(frame));
+            }
+            None => self.coalescer.disarm(),
         }
-        frame
     }
 
     /// Interprets one PTY chunk, arms the coalescer when it staged
@@ -639,8 +657,12 @@ impl<V: Vt> OrzmaTty<V> {
         if update.damaged {
             self.coalescer.arm_or_extend(Instant::now());
         }
-        self.pending_signals
-            .extend(update.signals.into_iter().map(TtySignal::Vt));
+        self.pending.extend(
+            update
+                .signals
+                .into_iter()
+                .map(|signal| PumpItem::Signal(TtySignal::Vt(signal))),
+        );
         self.pending_replies.extend(update.replies);
     }
 }
