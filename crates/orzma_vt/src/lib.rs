@@ -1500,7 +1500,6 @@ mod tests {
                 shape: CursorShape::Bar,
                 blink: CursorBlink::Blinking,
             },
-            ignore_dec_mode_12: false,
         };
         let vt = vt().with_cursor_policy(policy);
         assert_eq!(vt.device.modes().text_cursor.shape, CursorShape::Bar);

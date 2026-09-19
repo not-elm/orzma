@@ -379,7 +379,6 @@ mod tests {
                 shape: CursorShape::Bar,
                 blink: CursorBlink::Blinking,
             },
-            ignore_dec_mode_12: true,
         };
         let tty = ShellFactory::new(Some("/bin/cat".into()), 100, policy)
             .spawn(

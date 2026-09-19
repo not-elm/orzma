@@ -26,51 +26,12 @@ impl From<String> for CursorStyleSetting {
     }
 }
 
-/// Whether the caret blinks by default, and whether `DECSET 12` /
-/// `DECRST 12` is honored.
-#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[serde(from = "String")]
-pub enum CursorBlinkSetting {
-    /// The caret starts steady and `DECSET 12` / `DECRST 12` is honored.
-    #[default]
-    Auto,
-    /// The caret starts blinking and `DECSET 12` / `DECRST 12` is ignored.
-    On,
-    /// The caret starts steady and `DECSET 12` / `DECRST 12` is ignored.
-    Off,
-}
-
-impl From<String> for CursorBlinkSetting {
-    fn from(value: String) -> Self {
-        match value.to_ascii_lowercase().as_str() {
-            "on" => Self::On,
-            "off" => Self::Off,
-            _ => Self::Auto,
-        }
-    }
-}
-
-impl CursorBlinkSetting {
-    /// Whether `DECSET 12` and `DECRST 12` leave the blink untouched.
-    pub fn vetoes_dec_mode_12(self) -> bool {
-        !matches!(self, Self::Auto)
-    }
-
-    /// Whether the initial style blinks.
-    pub fn blinks(self) -> bool {
-        matches!(self, Self::On)
-    }
-}
-
 /// Fully-resolved `[cursor]` config block.
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct CursorConfig {
     /// The caret's shape until a program sets one with `DECSCUSR`.
     pub style: CursorStyleSetting,
-    /// Whether the caret blinks by default, and whether DEC mode 12 is
-    /// honored.
-    pub blink: CursorBlinkSetting,
     /// Whether a caret in an inactive pane or an unfocused window is
     /// drawn as a hollow block.
     pub unfocused_hollow: bool,
@@ -83,7 +44,6 @@ impl Default for CursorConfig {
     fn default() -> Self {
         Self {
             style: CursorStyleSetting::default(),
-            blink: CursorBlinkSetting::default(),
             unfocused_hollow: true,
             blink_interval: DEFAULT_BLINK_INTERVAL_MS,
             blink_timeout: DEFAULT_BLINK_TIMEOUT_SECS,
@@ -144,34 +104,18 @@ mod tests {
         c
     }
 
-    /// Asserts that an empty section resolves to a steady block that
-    /// respects DEC mode 12.
+    /// Asserts that an empty section resolves to a block caret with the
+    /// shipped blink timings.
     ///
     /// Case: the user has never written a `[cursor]` section.
     #[test]
-    fn defaults_are_a_steady_block_that_respects_mode_twelve() {
+    fn defaults_are_a_block_with_the_shipped_timings() {
         let cfg = CursorConfig::default();
         assert_eq!(cfg.style, CursorStyleSetting::Block);
-        assert_eq!(cfg.blink, CursorBlinkSetting::Auto);
         assert!(cfg.unfocused_hollow);
         assert_eq!(cfg.blink_interval(), Duration::from_millis(750));
         assert_eq!(cfg.blink_timeout(), Some(Duration::from_secs(5)));
         assert_eq!(cfg.thickness(), 0.15);
-    }
-
-    /// Asserts that each `blink` value reports whether it vetoes DEC
-    /// mode 12 and which blink the initial style carries.
-    ///
-    /// Case: one user wants the caret never to blink, another wants it
-    /// always to, and a third leaves the choice to the program.
-    #[test]
-    fn each_blink_value_reports_its_veto_and_initial_blink() {
-        assert!(!CursorBlinkSetting::Auto.vetoes_dec_mode_12());
-        assert!(CursorBlinkSetting::On.vetoes_dec_mode_12());
-        assert!(CursorBlinkSetting::Off.vetoes_dec_mode_12());
-        assert!(!CursorBlinkSetting::Auto.blinks());
-        assert!(CursorBlinkSetting::On.blinks());
-        assert!(!CursorBlinkSetting::Off.blinks());
     }
 
     /// Asserts that a zero timeout means the caret blinks indefinitely
@@ -219,23 +163,22 @@ mod tests {
         assert_eq!(from_toml_normalized("thickness = nan").thickness(), 0.15);
     }
 
-    /// Asserts that an unrecognized `style` or `blink` word falls back
-    /// to the default rather than failing the load.
+    /// Asserts that an unrecognized `style` word falls back to the
+    /// default rather than failing the load.
     ///
     /// Case: the user misspells `underline` as `underlien`.
     #[test]
     fn an_unknown_word_falls_back_to_the_default() {
-        let cfg = from_toml_normalized("style = \"underlien\"\nblink = \"sometimes\"");
+        let cfg = from_toml_normalized("style = \"underlien\"");
         assert_eq!(cfg.style, CursorStyleSetting::Block);
-        assert_eq!(cfg.blink, CursorBlinkSetting::Auto);
     }
 
     /// Asserts that a misspelled key inside the section is rejected
     /// rather than ignored.
     ///
-    /// Case: the user types `blnik` instead of `blink`.
+    /// Case: the user types `stlye` instead of `style`.
     #[test]
     fn a_misspelled_key_is_rejected() {
-        assert!(toml::from_str::<CursorConfig>("blnik = \"on\"").is_err());
+        assert!(toml::from_str::<CursorConfig>("stlye = \"bar\"").is_err());
     }
 }
