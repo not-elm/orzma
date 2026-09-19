@@ -3,6 +3,7 @@
 //! IO errors warn and fall back to defaults.
 
 use bevy::prelude::*;
+use bevy_orzma_tty_renderer::prelude::CursorRenderConfig;
 use orzma_configs::OrzmaConfigs;
 use orzma_configs::cursor::{CursorConfig, CursorStyleSetting};
 use orzma_configs::mouse::MouseConfig;
@@ -59,7 +60,14 @@ impl Plugin for OrzmaConfigsPlugin {
                 OrzmaConfigs::default()
             }
         });
-        app.insert_resource(OrzmaConfigsResource(configs));
+        let cursor_render = CursorRenderConfig {
+            blink_interval: configs.cursor.blink_interval(),
+            blink_timeout: configs.cursor.blink_timeout(),
+            thickness: configs.cursor.thickness(),
+            unfocused_hollow: configs.cursor.unfocused_hollow,
+        };
+        app.insert_resource(OrzmaConfigsResource(configs))
+            .insert_resource(cursor_render);
     }
 }
 
