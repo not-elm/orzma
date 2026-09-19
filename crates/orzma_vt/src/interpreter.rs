@@ -466,6 +466,10 @@ impl VTActor for Executor<'_> {
                 let damage = self.device.soft_reset();
                 self.stage(damage);
             }
+            // DECRQM (DEC private)
+            (Some(b'?'), [b'$'], b'p') => self.report_mode(&params, true),
+            // DECRQM (ANSI)
+            (None, [b'$'], b'p') => self.report_mode(&params, false),
             // DECSCUSR
             (None, [b' '], b'q') => {
                 if let Some(next) = self
@@ -833,6 +837,26 @@ impl Executor<'_> {
         } else if let Some(encoding) = modes.mouse_encoding.with_decset(mode, enabled) {
             modes.mouse_encoding = encoding;
         }
+    }
+
+    /// Answers `DECRQM` with `DECRPM` for the mode in the first slot,
+    /// echoing the number exactly as it was sent; an omitted number is
+    /// answered as mode zero.
+    ///
+    /// # References
+    ///
+    /// - xterm-ctlseqs.pdf p.29 — "Request DEC private mode (DECRQM).
+    ///   For VT300 and up, reply DECRPM is CSI ? Ps ; Pm $ y".
+    fn report_mode(&mut self, params: &CsiParams<'_>, private: bool) {
+        let mode = params.value(0).unwrap_or(0);
+        let report = if private {
+            self.device.private_mode_report(mode)
+        } else {
+            self.device.ansi_mode_report(mode)
+        };
+        let echoed = params.raw_value(0).unwrap_or(0);
+        let marker = if private { "?" } else { "" };
+        self.reply(format!("\x1b[{marker}{echoed};{}$y", report.code()).as_bytes());
     }
 
     /// Applies `DECSET 1049` / `DECRST 1049`: a set saves the primary

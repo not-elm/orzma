@@ -109,7 +109,8 @@ fn assert_same_observable_effect(
 
 /// Asserts that no CSI final byte, sent with a trailing `$` intermediate
 /// and with or without a private marker, reaches a control function
-/// whose effect this terminal can observe.
+/// whose effect this terminal can observe, apart from the DECRQM
+/// spellings `CSI Ps $ p` and `CSI ? Ps $ p`.
 ///
 /// Case: an application lays out a form with the DEC rectangle-editing
 /// sequences `CSI Pt ; Pl ; Pb ; Pr $ r`, `$ t`, `$ v`, `$ x` and
@@ -132,6 +133,9 @@ fn an_intermediate_reaches_no_implemented_control_function() {
         for marker in MARKERS {
             for parameters in PARAMETERS {
                 for final_byte in 0x40..=0x7Eu8 {
+                    if final_byte == b'p' && *marker != ">" {
+                        continue;
+                    }
                     let sequence = format!("\x1b[{marker}{parameters}${}", final_byte as char);
                     let chunk = format!("{prefix}{sequence}{PROBE_SUFFIX}");
                     let (device, output) = interpret_sized(20, chunk.as_bytes());

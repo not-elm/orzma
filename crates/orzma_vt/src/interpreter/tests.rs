@@ -199,6 +199,7 @@ mod line_movement;
 mod media_copy;
 mod memory_lock;
 mod meta_key;
+mod mode_report;
 mod modes;
 mod mouse;
 mod palette;

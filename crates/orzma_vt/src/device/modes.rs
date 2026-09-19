@@ -479,6 +479,35 @@ impl MouseTracking {
     }
 }
 
+/// The value a DECRPM reply carries for one mode.
+///
+/// # References
+///
+/// - xterm-ctlseqs.pdf p.29 — "0 - not recognized", "1 - set",
+///   "2 - reset".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ModeReport {
+    /// This terminal keeps no state for the mode.
+    NotRecognized = 0,
+    /// The mode is set.
+    Set = 1,
+    /// The mode is reset.
+    Reset = 2,
+}
+
+impl ModeReport {
+    /// The report for a mode that is set when `set` holds and reset
+    /// otherwise.
+    pub fn from_flag(set: bool) -> Self {
+        if set { Self::Set } else { Self::Reset }
+    }
+
+    /// The `Pm` value the reply carries.
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

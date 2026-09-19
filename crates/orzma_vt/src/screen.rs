@@ -1102,6 +1102,11 @@ impl Screen {
         self.seat_home();
     }
 
+    /// Whether the cursor origin follows the margins (`DECOM`).
+    pub fn origin_mode(&self) -> OriginMode {
+        self.scroll_region.origin_mode()
+    }
+
     /// Sets the cursor origin and seats the cursor at the home the new
     /// mode defines.
     ///

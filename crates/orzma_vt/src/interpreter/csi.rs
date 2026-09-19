@@ -71,6 +71,18 @@ impl<'a> CsiParams<'a> {
         self.values().nth(index).flatten()
     }
 
+    /// The first integer of the `index`-th separated slot exactly as it
+    /// was sent; `None` when the slot was omitted or does not exist.
+    pub fn raw_value(&self, index: usize) -> Option<i64> {
+        self.groups()
+            .nth(index)?
+            .iter()
+            .find_map(|param| match param {
+                CsiParam::Integer(value) => Some(*value),
+                CsiParam::P(_) => None,
+            })
+    }
+
     /// Every separated slot in order.
     pub fn values(&self) -> impl Iterator<Item = Option<u16>> + '_ {
         let listed = (!self.values.is_empty()).then(|| self.groups());
