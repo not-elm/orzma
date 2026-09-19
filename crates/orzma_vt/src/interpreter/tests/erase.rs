@@ -131,8 +131,8 @@ fn an_erase_to_end_runs_after_a_backward_tabulation_out_of_a_full_row() {
     assert_eq!(screen.viewport_row(ViewportLine(0))[19].c, ' ');
 }
 
-/// Asserts that an erased cell carries the pen's foreground as well as
-/// its background, so a later cursor over it can take that color.
+/// Asserts that an erased cell carries the pen's foreground rather than
+/// the default foreground, alongside the pen's background.
 ///
 /// Case: a light-theme editor clears to the end of the line with its
 /// dark text color and white ground both set.

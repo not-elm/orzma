@@ -401,12 +401,16 @@ fn cursor_fill(cell_fg: vec4<f32>) -> vec4<f32> {
     return cell_fg;
 }
 
+// The Rec.709 luminance of a linear color.
+fn luminance(rgb: vec3<f32>) -> f32 {
+    return dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
 // The WCAG contrast ratio of two linear colors, from 1.0 for equal
 // luminance upward.
 fn contrast_ratio(a: vec3<f32>, b: vec3<f32>) -> f32 {
-    let weights = vec3<f32>(0.2126, 0.7152, 0.0722);
-    let la = dot(a, weights);
-    let lb = dot(b, weights);
+    let la = luminance(a);
+    let lb = luminance(b);
     return (max(la, lb) + 0.05) / (min(la, lb) + 0.05);
 }
 
@@ -421,20 +425,24 @@ fn guarded_fill(fill: vec4<f32>, ground: vec4<f32>) -> vec4<f32> {
         return vec4<f32>(fill.rgb, 1.0);
     }
     let default_fg = unpack_rgba(params.default_fg_packed).rgb;
-    let default_bg = params.bg_padding_color.rgb;
+    let default_bg = materialize_default_bg(vec4<f32>(0.0)).rgb;
     let fg_stands_out = contrast_ratio(default_fg, ground.rgb) >= contrast_ratio(default_bg, ground.rgb);
     return vec4<f32>(select(default_bg, default_fg, fg_stands_out), 1.0);
 }
 
 // The colors (row, col) is painted in: the cell's own, or, under a lit
 // block cursor, the guarded fill as background and the cell's background
-// as the glyph color. Concealment applies last, so a concealed glyph
+// as the glyph color. A glyph that does not stand out from that
+// background takes the fill instead, so a full block of one color still
+// shows the cursor. Concealment applies last, so a concealed glyph
 // stays hidden inside the block.
 fn resolve_painted_colors(cell: Cell, row: u32, col: u32) -> CellColors {
     var colors = resolve_visible_colors(cell);
     if block_cursor_covers(row, col) {
         let ground = materialize_default_bg(colors.bg);
-        colors = CellColors(ground, guarded_fill(cursor_fill(colors.fg), ground));
+        let fill = guarded_fill(cursor_fill(colors.fg), ground);
+        let glyph_melts = contrast_ratio(colors.fg.rgb, ground.rgb) < MIN_CURSOR_CONTRAST;
+        colors = CellColors(select(ground, fill, glyph_melts), fill);
     }
     return conceal(cell, colors);
 }
@@ -514,7 +522,7 @@ fn is_in_selection_uniform(
 // (luma(a*c) = a*luma(c); a scalar multiply distributes through premultiply).
 // Active pane => overlay_dim == 1.0 && overlay_desaturate == 0.0 (no-op).
 fn treat_overlay(s: vec4<f32>) -> vec4<f32> {
-    let luma = dot(s.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let luma = luminance(s.rgb);
     let desat = mix(s.rgb, vec3<f32>(luma), params.overlay_desaturate);
     return vec4<f32>(desat * params.overlay_dim, s.a);
 }

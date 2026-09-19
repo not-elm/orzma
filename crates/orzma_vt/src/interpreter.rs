@@ -587,7 +587,7 @@ impl Executor<'_> {
         }
     }
 
-    /// Erases part of the active screen with its pen background (ED,
+    /// Erases part of the active screen with its pen colors (ED,
     /// and the alternate-screen modes that blank the screen they show
     /// or leave).
     fn erase_in_display(&mut self, mode: EraseScreenMode) {

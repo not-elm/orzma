@@ -114,8 +114,7 @@ pub struct Palette {
     /// The default background [`Color::DefaultBackground`] resolves to.
     pub background: Rgb,
     /// The color `OSC 12` gives the text cursor; `None` when none is
-    /// set, in which case the cursor takes the foreground of the cell
-    /// under it.
+    /// set.
     pub cursor: Option<Rgb>,
 }
 

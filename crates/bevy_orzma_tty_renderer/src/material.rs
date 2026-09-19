@@ -1377,7 +1377,7 @@ mod tests {
 
     /// Asserts the std140 offsets of the fields after `dim`, where a
     /// `Vec4` and the rect array force alignment padding, down to the
-    /// packed cursor color in the tail.
+    /// packed default foreground in the tail.
     ///
     /// Case: an inactive pane shows a dimmed, desaturated webview while
     /// nvim in it holds an `OSC 12` cursor color.
@@ -1811,8 +1811,9 @@ mod tests {
     }
 
     /// Asserts that a cursor color equal to the default foreground is
-    /// uploaded as unset, so the shader falls back to the cell's own
-    /// colors instead of painting a cursor that matches the text.
+    /// uploaded as unset rather than as a set color, and that the
+    /// comparison follows the live foreground rather than the built-in
+    /// one.
     ///
     /// Case: a theme script sends the same value for `OSC 10` and
     /// `OSC 12`, or a program writes the terminal's own `OSC 12 ; ?`
@@ -1839,10 +1840,11 @@ mod tests {
     /// Asserts that the shader declares the packed default foreground as
     /// the last field of its uniform block, matching the host layout.
     ///
-    /// Case: a shell theme sets the cursor color with `OSC 12`, and the
-    /// pane paints its cursor in that color.
+    /// Case: a shell theme recolors the default foreground with `OSC 10`,
+    /// and a cursor whose fill lacks contrast against the cell under it
+    /// is repainted in that foreground.
     #[test]
-    fn wgsl_terminal_params_end_with_the_cursor_color() {
+    fn wgsl_terminal_params_end_with_the_default_foreground() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
         let declaration = src
             .split("struct TerminalParams {")
@@ -1890,9 +1892,9 @@ mod tests {
     fn wgsl_cursor_strips_take_the_guarded_fill_color() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
         let painter = wgsl_fn_body(src, "paint_cursor");
-        assert!(painter.contains("resolve_visible_colors(cell)"));
-        assert!(painter.contains("guarded_fill(cursor_fill("));
-        assert!(painter.contains("tint_bg(materialize_default_bg("));
+        assert!(painter.contains("let visible = resolve_visible_colors(cell);"));
+        assert!(painter.contains("let ground = tint_bg(materialize_default_bg(visible.bg));"));
+        assert!(painter.contains("return guarded_fill(cursor_fill(visible.fg), ground);"));
         assert!(wgsl_fn_body(src, "cursor_fill").contains("params.cursor_packed"));
         assert!(!src.contains("1.0 - base.rgb"));
     }
@@ -1907,12 +1909,35 @@ mod tests {
     #[test]
     fn wgsl_cursor_fill_is_guarded_against_the_ground() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
-        assert!(wgsl_fn_body(src, "resolve_painted_colors").contains("guarded_fill(cursor_fill("));
+        let block = wgsl_fn_body(src, "resolve_painted_colors");
+        assert!(block.contains("let ground = materialize_default_bg(colors.bg);"));
+        assert!(block.contains("let fill = guarded_fill(cursor_fill(colors.fg), ground);"));
+        assert!(
+            wgsl_fn_body(src, "paint_cursor")
+                .contains("guarded_fill(cursor_fill(visible.fg), ground)")
+        );
         let guard = wgsl_fn_body(src, "guarded_fill");
         assert!(guard.contains("contrast_ratio("));
         assert!(guard.contains("MIN_CURSOR_CONTRAST"));
         assert!(guard.contains("params.default_fg_packed"));
-        assert!(guard.contains("params.bg_padding_color"));
+        assert!(guard.contains("materialize_default_bg("));
         assert!(src.contains("const MIN_CURSOR_CONTRAST: f32 = 1.5;"));
+    }
+
+    /// Asserts that under the block cursor a glyph that does not stand
+    /// out from its own ground is painted in the guarded fill rather
+    /// than in the ground.
+    ///
+    /// Case: a color picker draws a swatch as a full block whose
+    /// foreground and background are the same color, and the block
+    /// cursor lands on it.
+    #[test]
+    fn wgsl_block_cursor_paints_a_glyph_that_melts_into_its_ground_in_the_fill() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let block = wgsl_fn_body(src, "resolve_painted_colors");
+        assert!(block.contains(
+            "let glyph_melts = contrast_ratio(colors.fg.rgb, ground.rgb) < MIN_CURSOR_CONTRAST;"
+        ));
+        assert!(block.contains("CellColors(select(ground, fill, glyph_melts), fill)"));
     }
 }

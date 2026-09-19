@@ -206,14 +206,6 @@ impl Default for Cell {
 }
 
 impl Cell {
-    /// Builds a blank cell carrying only the given background (BCE).
-    pub fn blank_with_bg(bg: Color) -> Self {
-        Self {
-            bg,
-            ..Self::default()
-        }
-    }
-
     /// The continuation cell that follows a [`CellWidth::Wide`] body,
     /// sharing its pen.
     pub fn continuation(&self) -> Self {
@@ -397,12 +389,18 @@ mod tests {
             bg: Color::Indexed(4),
             style: Style::BOLD,
         };
-        let erased = pen.erase_cell();
-        assert_eq!(erased.c, ' ');
-        assert_eq!(erased.fg, Color::Indexed(1));
-        assert_eq!(erased.bg, Color::Indexed(4));
-        assert_eq!(erased.style, Style::empty());
-        assert_eq!(erased.hyperlink_id, None);
+        assert_eq!(
+            pen.erase_cell(),
+            Cell {
+                c: ' ',
+                width: CellWidth::Narrow,
+                extra: None,
+                fg: Color::Indexed(1),
+                bg: Color::Indexed(4),
+                style: Style::empty(),
+                hyperlink_id: None,
+            }
+        );
     }
 
     /// Asserts that a narrow glyph, a fullwidth glyph and a zero-width
