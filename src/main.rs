@@ -5,6 +5,7 @@ mod cef_profile;
 mod configs;
 mod font;
 mod input;
+mod render_error;
 mod session;
 mod surface;
 mod system_set;
@@ -28,6 +29,7 @@ use bevy_orzmux::prelude::{
 use configs::{OrzmaConfigsPlugin, wheel_config};
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
+use render_error::RenderErrorPlugin;
 use session::SessionPlugin;
 use ui::OrzmaUiPlugin;
 
@@ -77,6 +79,7 @@ fn main() {
             FontBridgePlugin,
             OrzmaInputPlugin,
             OrzmaUiPlugin,
+            RenderErrorPlugin,
         ))
         .add_plugins((
             OrzmaWebviewPlugin {
