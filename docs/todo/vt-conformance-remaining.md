@@ -21,9 +21,6 @@ Alacritty も実装していない項目は、末尾の「対象外 — Alacritt
   - 7（DECAWM）と 25（DECTCEM）は報告できる状態をもう持っている。
   - 3 / 40 / 95 には `0`（not recognized）を返すと決めてある。
   - 7 に答えられるようになると、vttest の `tst_DEC_DECRPM` で DECAWM を機械判定できる。
-- [ ] **`CSI Ps e` — VPR**
-  - 腕が無い。`move_cursor_down` の別名にはできない。VT510 p.351 の VPR は最終行で止まるが、CUD は下マージンで止まる。
-  - HPA と HPR は実装済み。
 
 ## 実装済み行の積み残し
 

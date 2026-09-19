@@ -313,6 +313,11 @@ impl VTActor for Executor<'_> {
                 .device
                 .active_screen_mut()
                 .move_cursor_down(repeat_count(params.value(0))),
+            // VPR
+            (None, [], b'e') => self
+                .device
+                .active_screen_mut()
+                .move_cursor_down_within_page(repeat_count(params.value(0))),
             // CUF, HPR
             (None, [], b'C' | b'a') => self
                 .device
