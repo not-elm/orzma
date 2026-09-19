@@ -479,6 +479,13 @@ mod tests {
     use super::*;
     use crate::device::color::Color;
 
+    fn cell_with_bg(bg: Color) -> Cell {
+        Cell {
+            bg,
+            ..Cell::default()
+        }
+    }
+
     fn grid(rows: u16, max_history: usize) -> Grid {
         Grid::new(GridSize { cols: 4, rows }, max_history)
     }
@@ -736,10 +743,7 @@ mod tests {
         let mut grid = grid(2, 10);
         grid[ScreenLine(0)][0].c = 'a';
         grid[ScreenLine(1)][0].c = 'b';
-        let fill = Cell {
-            bg: Color::Indexed(4),
-            ..Cell::default()
-        };
+        let fill = cell_with_bg(Color::Indexed(4));
         scroll_up_whole_screen(&mut grid, fill.clone());
         assert_eq!(grid.history_len(), 1);
         assert_eq!(grid[ScreenLine(0)][0].c, 'b');
@@ -981,10 +985,7 @@ mod tests {
         #[test]
         fn the_row_entering_at_the_top_carries_the_fill() {
             let mut grid = labelled(3, 10);
-            let fill = Cell {
-                bg: Color::Indexed(4),
-                ..Cell::default()
-            };
+            let fill = cell_with_bg(Color::Indexed(4));
             let (top, bottom) = whole(3);
             grid.scroll_down_one(top, bottom, fill.clone());
             assert_eq!(grid[ScreenLine(0)][0], fill);

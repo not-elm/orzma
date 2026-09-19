@@ -392,13 +392,9 @@ mod tests {
         assert_eq!(
             pen.erase_cell(),
             Cell {
-                c: ' ',
-                width: CellWidth::Narrow,
-                extra: None,
                 fg: Color::Indexed(1),
                 bg: Color::Indexed(4),
-                style: Style::empty(),
-                hyperlink_id: None,
+                ..Cell::default()
             }
         );
     }

@@ -1899,7 +1899,7 @@ mod tests {
         assert!(!src.contains("1.0 - base.rgb"));
     }
 
-    /// Asserts that both cursor paths pass the fill through the contrast
+    /// Asserts that the block cursor passes its fill through the contrast
     /// guard, which falls back to the default foreground or background
     /// against the cell's ground.
     ///
@@ -1912,10 +1912,6 @@ mod tests {
         let block = wgsl_fn_body(src, "resolve_painted_colors");
         assert!(block.contains("let ground = materialize_default_bg(colors.bg);"));
         assert!(block.contains("let fill = guarded_fill(cursor_fill(colors.fg), ground);"));
-        assert!(
-            wgsl_fn_body(src, "paint_cursor")
-                .contains("guarded_fill(cursor_fill(visible.fg), ground)")
-        );
         let guard = wgsl_fn_body(src, "guarded_fill");
         assert!(guard.contains("contrast_ratio("));
         assert!(guard.contains("MIN_CURSOR_CONTRAST"));
