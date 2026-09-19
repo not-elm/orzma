@@ -68,10 +68,7 @@ fn cell_at(device: &DeviceState, line: u16, column: u16) -> Cell {
 
 /// Reports the reply bytes `chunk` produced.
 fn replies_of(chunk: &[u8]) -> Vec<u8> {
-    let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10);
-    let output = vt.interpret(chunk);
-    assert_eq!(output.consumed, chunk.len(), "the helper feeds one call");
-    output.replies
+    interpret_fully(chunk).1.replies
 }
 
 /// One terminal kept across chunks, so a test can build up state

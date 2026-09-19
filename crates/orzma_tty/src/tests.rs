@@ -63,6 +63,11 @@ fn channelled_term() -> (OrzmaTty<FakeVt>, Sender<Vec<u8>>, Sender<Option<i32>>)
     (term, chunk_tx, exit_tx)
 }
 
+/// Collects the signals out of a pumped output, in order.
+fn signals_of(output: &PumpOutput) -> Vec<TtySignal> {
+    output.signals().cloned().collect()
+}
+
 /// Collects the `ChildExit` codes out of a pumped output.
 fn child_exits(output: &PumpOutput) -> Vec<Option<i32>> {
     output
@@ -72,6 +77,17 @@ fn child_exits(output: &PumpOutput) -> Vec<Option<i32>> {
             _ => None,
         })
         .collect()
+}
+
+/// A scripted interpret result that consumed `consumed` bytes.
+fn update(consumed: usize, closed: bool) -> InterpretOutput {
+    InterpretOutput {
+        damaged: true,
+        signals: Vec::new(),
+        replies: Vec::new(),
+        consumed,
+        synchronized_update_closed: closed,
+    }
 }
 
 /// A minimal frame for scripting `FakeVt::frames`; its values are

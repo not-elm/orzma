@@ -99,7 +99,7 @@ fn both_streams_disconnected_without_a_status_synthesize_one_child_exit() {
     drop(exit_tx);
     let first = tty.pump();
     assert_eq!(
-        first.signals().cloned().collect::<Vec<_>>(),
+        signals_of(&first),
         vec![TtySignal::ChildExit { code: None }]
     );
     assert!(!first.more_pending);
@@ -182,15 +182,12 @@ fn the_final_output_is_interpreted_when_the_exit_is_reported() {
 fn vt_signals_are_forwarded_before_child_exit() {
     let (mut term, chunk_tx, exit_tx) = channelled_term();
     term.vt.updates.push_back(InterpretOutput {
-        damaged: true,
         signals: vec![VtSignal::Bell],
-        replies: Vec::new(),
-        consumed: 1,
-        synchronized_update_closed: false,
+        ..update(1, false)
     });
     chunk_tx.send(b"\x07".to_vec()).expect("send chunk");
     exit_tx.send(Some(0)).expect("send exit");
-    let signals = term.pump().signals().cloned().collect::<Vec<_>>();
+    let signals = signals_of(&term.pump());
     assert_eq!(
         signals,
         vec![
@@ -218,11 +215,8 @@ fn replies_are_written_back_to_the_pty() {
     );
     let mut term = OrzmaTty::wired(FakeVt::new(grid(80, 24)), pty);
     term.vt.updates.push_back(InterpretOutput {
-        damaged: true,
-        signals: Vec::new(),
         replies: b"\x1b[1;1R".to_vec(),
-        consumed: 4,
-        synchronized_update_closed: false,
+        ..update(4, false)
     });
     chunk_tx.send(b"\x1b[6n".to_vec()).expect("send chunk");
     term.pump();
@@ -239,11 +233,8 @@ fn replies_are_written_back_to_the_pty() {
 fn a_pump_orders_signals_then_the_frame_then_the_exit() {
     let (mut tty, chunk_tx, exit_tx) = channelled_term();
     tty.vt.updates.push_back(InterpretOutput {
-        damaged: true,
         signals: vec![VtSignal::Bell],
-        replies: Vec::new(),
-        consumed: 3,
-        synchronized_update_closed: false,
+        ..update(3, false)
     });
     tty.vt.frames.push_back(a_frame());
     chunk_tx.send(b"bye".to_vec()).unwrap();

@@ -703,15 +703,15 @@ impl<V: Vt> OrzmaTty<V> {
             {
                 self.emit_frame(now);
             }
-            let Some(next) = rest.get(update.consumed..).filter(|_| update.consumed > 0) else {
+            if update.consumed == 0 || update.consumed > rest.len() {
                 warn!(
                     consumed = update.consumed,
                     len = rest.len(),
                     "the VT broke the interpret contract; dropping the rest of the chunk"
                 );
                 return;
-            };
-            rest = next;
+            }
+            rest = &rest[update.consumed..];
         }
     }
 

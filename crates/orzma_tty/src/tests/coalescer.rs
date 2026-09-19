@@ -47,7 +47,7 @@ fn flush_now_returns_pending_signals_and_an_immediate_frame() {
     let out = tty.flush_now();
     assert!(out.frames().count() == 1);
     assert_eq!(
-        out.signals().cloned().collect::<Vec<_>>(),
+        signals_of(&out),
         vec![TtySignal::Vt(VtSignal::WebviewEvicted {
             placements: vec![InstanceId(7)]
         })]
@@ -125,7 +125,7 @@ fn a_resize_eviction_reaches_the_next_pump() {
     tty.resize(grid(100, 30), CellPixels::default())
         .expect("resize");
     assert_eq!(
-        tty.pump().signals().cloned().collect::<Vec<_>>(),
+        signals_of(&tty.pump()),
         vec![TtySignal::Vt(VtSignal::WebviewEvicted {
             placements: vec![InstanceId(7)]
         })]
@@ -166,10 +166,8 @@ fn a_chunk_that_stages_no_damage_does_not_arm_the_window() {
     let (mut term, _sink) = detached_term();
     term.vt.updates.push_back(InterpretOutput {
         damaged: false,
-        signals: Vec::new(),
         replies: b"\x1b[1;1R".to_vec(),
-        consumed: 4,
-        synchronized_update_closed: false,
+        ..update(4, false)
     });
     term.feed_bytes(b"\x1b[6n");
     assert!(!term.coalescer.is_armed());

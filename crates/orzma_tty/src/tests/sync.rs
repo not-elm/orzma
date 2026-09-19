@@ -3,17 +3,6 @@
 
 use super::*;
 
-/// A scripted interpret result that consumed `consumed` bytes.
-fn update(consumed: usize, closed: bool) -> InterpretOutput {
-    InterpretOutput {
-        damaged: true,
-        signals: Vec::new(),
-        replies: Vec::new(),
-        consumed,
-        synchronized_update_closed: closed,
-    }
-}
-
 /// A terminal whose bootstrap frame is already painted.
 fn painted_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
     let (mut tty, sink) = detached_term();
@@ -26,6 +15,15 @@ fn painted_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
 fn open_update(tty: &mut OrzmaTty<FakeVt>) {
     tty.vt.sync_script.push_back(SynchronizedOutput::Active);
     tty.feed_bytes(b"x");
+}
+
+/// Closes the open synchronized update with one chunk that has a frame
+/// ready.
+fn close_update(tty: &mut OrzmaTty<FakeVt>) {
+    tty.vt.sync_script.push_back(SynchronizedOutput::Inactive);
+    tty.vt.updates.push_back(update(1, true));
+    tty.vt.frames.push_back(a_frame());
+    tty.feed_bytes(b"z");
 }
 
 /// Asserts that a pump emits no frame while a synchronized update is
@@ -118,10 +116,7 @@ fn a_late_close_clears_the_deadline_and_yields_a_frame() {
     open_update(&mut tty);
     tty.sync_deadline = Some(Instant::now());
     thread::sleep(OrzmaTty::<FakeVt>::SYNC_EMIT_INTERVAL);
-    tty.vt.sync_script.push_back(SynchronizedOutput::Inactive);
-    tty.vt.updates.push_back(update(1, true));
-    tty.vt.frames.push_back(a_frame());
-    tty.feed_bytes(b"z");
+    close_update(&mut tty);
     assert!(tty.sync_deadline.is_none());
     assert!(matches!(tty.pending.as_slice(), [PumpItem::Frame(_)]));
 }
@@ -135,10 +130,7 @@ fn a_closed_update_yields_a_frame_at_once() {
     let (mut tty, _sink) = painted_term();
     open_update(&mut tty);
     thread::sleep(OrzmaTty::<FakeVt>::SYNC_EMIT_INTERVAL);
-    tty.vt.sync_script.push_back(SynchronizedOutput::Inactive);
-    tty.vt.updates.push_back(update(1, true));
-    tty.vt.frames.push_back(a_frame());
-    tty.feed_bytes(b"z");
+    close_update(&mut tty);
     assert!(tty.sync_deadline.is_none());
     assert!(matches!(tty.pending.as_slice(), [PumpItem::Frame(_)]));
 }
@@ -218,28 +210,17 @@ fn a_close_frame_keeps_its_place_among_the_signals() {
     ));
 }
 
-/// Asserts that a VT reporting no progress on a non-empty chunk is
-/// cut off instead of being called forever.
+/// Asserts that a VT whose reported byte count breaks the interpret
+/// contract is cut off after one call instead of looping or panicking.
 ///
-/// Case: a VT implementation whose byte accounting reports no progress
-/// is plugged into the terminal, and a program prints a line.
+/// Case: a VT implementation with a bug in its byte accounting is
+/// plugged into the terminal, and a program prints a line.
 #[test]
-fn a_vt_that_consumes_nothing_is_cut_off() {
-    let (mut tty, _sink) = painted_term();
-    tty.vt.updates.push_back(update(0, false));
-    tty.feed_bytes(b"abc");
-    assert_eq!(tty.vt.interpreted.len(), 1);
-}
-
-/// Asserts that a VT reporting more bytes than it was given is cut
-/// off instead of panicking.
-///
-/// Case: a VT implementation whose byte accounting runs past the end of
-/// the chunk is plugged into the terminal, and a program prints a line.
-#[test]
-fn a_vt_that_overreports_is_cut_off() {
-    let (mut tty, _sink) = painted_term();
-    tty.vt.updates.push_back(update(9, false));
-    tty.feed_bytes(b"abc");
-    assert_eq!(tty.vt.interpreted.len(), 1);
+fn a_vt_that_breaks_the_consumed_contract_is_cut_off() {
+    for consumed in [0, 9] {
+        let (mut tty, _sink) = painted_term();
+        tty.vt.updates.push_back(update(consumed, false));
+        tty.feed_bytes(b"abc");
+        assert_eq!(tty.vt.interpreted.len(), 1, "consumed = {consumed}");
+    }
 }
