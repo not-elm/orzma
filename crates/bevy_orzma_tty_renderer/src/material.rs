@@ -1,5 +1,5 @@
 use crate::{
-    cursor::{CursorPaint, CursorPaintInput, CursorRenderConfig, LastKeyInstant, blink_phase_on},
+    cursor::{CaretStyle, CursorPaint, CursorPaintInput, LastKeyInstant, blink_phase_on},
     glyph::{
         atlas::{GlyphAtlas, GlyphRect},
         font::{
@@ -716,7 +716,7 @@ fn update_terminal_material(
     mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
     fonts: Res<TerminalFonts>,
     font_size: Res<TerminalFontSize>,
-    cursor_config: Res<CursorRenderConfig>,
+    cursor_config: Res<CaretStyle>,
     last_key: Res<LastKeyInstant>,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,

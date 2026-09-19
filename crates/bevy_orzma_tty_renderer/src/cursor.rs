@@ -110,9 +110,9 @@ pub fn blink_phase_on(elapsed: Duration, interval: Duration, timeout: Option<Dur
     (elapsed.as_millis() / interval_ms).is_multiple_of(2)
 }
 
-/// The cursor drawing settings the renderer reads each frame.
+/// The caret drawing knobs the renderer reads each frame.
 #[derive(Resource, Debug, Clone, Copy)]
-pub struct CursorRenderConfig {
+pub struct CaretStyle {
     /// The interval between blink phases.
     pub blink_interval: Duration,
     /// How long the caret keeps blinking with no keystroke; `None`
@@ -124,7 +124,7 @@ pub struct CursorRenderConfig {
     pub unfocused_hollow: bool,
 }
 
-impl Default for CursorRenderConfig {
+impl Default for CaretStyle {
     fn default() -> Self {
         Self {
             blink_interval: Duration::from_millis(750),
@@ -146,7 +146,7 @@ pub struct CursorPlugin;
 
 impl Plugin for CursorPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CursorRenderConfig>()
+        app.init_resource::<CaretStyle>()
             .init_resource::<LastKeyInstant>();
     }
 }
