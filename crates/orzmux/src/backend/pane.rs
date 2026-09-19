@@ -213,6 +213,7 @@ fn on_path(name: &str) -> bool {
 mod tests {
     use super::*;
     use orzma_tty::test_support::CaptureSink;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     use orzma_vt::prelude::{CursorBlink, CursorShape, TextCursorStyle, Vt};
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use std::thread;
