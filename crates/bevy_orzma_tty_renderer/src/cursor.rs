@@ -24,69 +24,84 @@ pub struct CaretPaintInput {
     pub phase_on: bool,
 }
 
-/// What one frame paints for the caret.
+/// The stroke one frame draws the caret with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CaretPaint {
-    /// The viewport cell the caret occupies.
-    pub pos: UVec2,
-    /// The shape it is drawn with.
-    pub shape: CursorShape,
-    /// Whether it is drawn as an outline rather than filled.
-    pub hollow: bool,
+pub enum CaretStroke {
+    /// A filled block covering the cell.
+    Block,
+    /// A line along the bottom of the cell.
+    Underline,
+    /// A vertical line at the left of the cell.
+    Bar,
+    /// A block outline, which an unfocused caret takes in place of its
+    /// own shape.
+    HollowBlock,
 }
 
-impl CaretPaint {
-    /// Resolves what to paint from the caret the view projected, or
-    /// `None` when nothing is painted this frame.
+impl CaretStroke {
+    /// Returns the stroke a caret is drawn with, or `None` when it is
+    /// not painted this frame.
     ///
-    /// A caret is not painted when nothing projects into the viewport,
-    /// when `DECTCEM` hides it, or while an IME composition suppresses
-    /// it.
-    ///
-    /// # Invariants
-    ///
-    /// - An unfocused caret is painted regardless of the blink phase.
-    /// - Only a caret the terminal asked to blink follows the phase.
-    pub fn resolve(caret: Option<(UVec2, Cursor)>, input: CaretPaintInput) -> Option<Self> {
-        let (pos, cursor) = caret?;
+    /// `DECTCEM` and an IME composition each withhold the caret. An
+    /// unfocused caret is painted regardless of the blink phase, as a
+    /// hollow block unless `unfocused_hollow` is off. Only a caret the
+    /// terminal asked to blink follows the phase.
+    pub fn new(cursor: Cursor, input: CaretPaintInput) -> Option<Self> {
         if !cursor.visible || input.suppressed {
             return None;
         }
+        if !input.focused && input.unfocused_hollow {
+            return Some(Self::HollowBlock);
+        }
         if !input.focused {
-            if input.unfocused_hollow {
-                return Some(Self {
-                    pos,
-                    shape: CursorShape::Block,
-                    hollow: true,
-                });
-            }
-            return Some(Self {
-                pos,
-                shape: cursor.shape,
-                hollow: false,
-            });
+            return Some(Self::from(cursor.shape));
         }
         if cursor.blinking && !input.phase_on {
             return None;
         }
-        Some(Self {
-            pos,
-            shape: cursor.shape,
-            hollow: false,
-        })
+        Some(Self::from(cursor.shape))
     }
 
     /// The `cursor_style` u32 the shader decodes: [`CURSOR_VISIBLE_BIT`],
     /// bits 1-2 carrying the shape (Block `0`, Underline `1`, Bar `2`),
     /// and [`CURSOR_HOLLOW_BIT`].
     pub fn to_packed(self) -> u32 {
-        let shape = match self.shape {
-            CursorShape::Block => 0u32,
-            CursorShape::Underline => 1,
-            CursorShape::Bar => 2,
+        let (shape, hollow) = match self {
+            Self::Block => (0u32, 0),
+            Self::Underline => (1, 0),
+            Self::Bar => (2, 0),
+            Self::HollowBlock => (0, CURSOR_HOLLOW_BIT),
         };
-        let hollow = if self.hollow { CURSOR_HOLLOW_BIT } else { 0 };
         CURSOR_VISIBLE_BIT | (shape << 1) | hollow
+    }
+}
+
+impl From<CursorShape> for CaretStroke {
+    fn from(shape: CursorShape) -> Self {
+        match shape {
+            CursorShape::Block => Self::Block,
+            CursorShape::Underline => Self::Underline,
+            CursorShape::Bar => Self::Bar,
+        }
+    }
+}
+
+/// What one frame paints for the caret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaretPaint {
+    /// The viewport cell the caret occupies.
+    pub pos: UVec2,
+    /// The stroke it is drawn with.
+    pub stroke: CaretStroke,
+}
+
+impl CaretPaint {
+    /// Returns what to paint from the caret the view projected, or
+    /// `None` when nothing projects into the viewport or the policy
+    /// withholds the caret.
+    pub fn new(caret: Option<(UVec2, Cursor)>, input: CaretPaintInput) -> Option<Self> {
+        let (pos, cursor) = caret?;
+        CaretStroke::new(cursor, input).map(|stroke| Self { pos, stroke })
     }
 }
 
@@ -165,12 +180,13 @@ mod tests {
         Some((UVec2::new(3, 5), cursor(shape, blinking, visible)))
     }
 
-    fn input(focused: bool, unfocused_hollow: bool, phase_on: bool) -> CaretPaintInput {
+    /// A focused caret in a lit blink phase, with hollow rendering on.
+    fn lit() -> CaretPaintInput {
         CaretPaintInput {
             suppressed: false,
-            focused,
-            unfocused_hollow,
-            phase_on,
+            focused: true,
+            unfocused_hollow: true,
+            phase_on: true,
         }
     }
 
@@ -180,7 +196,7 @@ mod tests {
     /// caret leaves the viewport.
     #[test]
     fn nothing_projected_paints_nothing() {
-        assert_eq!(CaretPaint::resolve(None, input(true, true, true)), None);
+        assert_eq!(CaretPaint::new(None, lit()), None);
     }
 
     /// Asserts that a caret the terminal hid, and one the host
@@ -191,18 +207,15 @@ mod tests {
     #[test]
     fn a_hidden_or_suppressed_caret_paints_nothing() {
         assert_eq!(
-            CaretPaint::resolve(
-                at(CursorShape::Block, false, false),
-                input(true, true, true)
-            ),
+            CaretPaint::new(at(CursorShape::Block, false, false), lit()),
             None
         );
         let suppressed = CaretPaintInput {
             suppressed: true,
-            ..input(true, true, true)
+            ..lit()
         };
         assert_eq!(
-            CaretPaint::resolve(at(CursorShape::Block, false, true), suppressed),
+            CaretPaint::new(at(CursorShape::Block, false, true), suppressed),
             None
         );
     }
@@ -214,11 +227,14 @@ mod tests {
     /// blinking in this one.
     #[test]
     fn an_unfocused_caret_becomes_a_hollow_block_and_ignores_the_phase() {
-        let paint =
-            CaretPaint::resolve(at(CursorShape::Bar, true, true), input(false, true, false))
-                .expect("the caret is painted");
-        assert_eq!(paint.shape, CursorShape::Block);
-        assert!(paint.hollow);
+        let unfocused = CaretPaintInput {
+            focused: false,
+            phase_on: false,
+            ..lit()
+        };
+        let paint = CaretPaint::new(at(CursorShape::Bar, true, true), unfocused)
+            .expect("the caret is painted");
+        assert_eq!(paint.stroke, CaretStroke::HollowBlock);
         assert_eq!(paint.pos, UVec2::new(3, 5));
     }
 
@@ -229,11 +245,15 @@ mod tests {
     /// panes while the caret is blinking.
     #[test]
     fn hollow_rendering_can_be_turned_off_without_resuming_the_blink() {
+        let plain = CaretPaintInput {
+            focused: false,
+            unfocused_hollow: false,
+            phase_on: false,
+            ..lit()
+        };
         let paint =
-            CaretPaint::resolve(at(CursorShape::Bar, true, true), input(false, false, false))
-                .expect("the caret is painted");
-        assert_eq!(paint.shape, CursorShape::Bar);
-        assert!(!paint.hollow);
+            CaretPaint::new(at(CursorShape::Bar, true, true), plain).expect("the caret is painted");
+        assert_eq!(paint.stroke, CaretStroke::Bar);
     }
 
     /// Asserts that a blinking caret is dropped in the dark phase and
@@ -242,18 +262,16 @@ mod tests {
     /// Case: the user has just typed and watches the caret blink.
     #[test]
     fn only_a_blinking_caret_follows_the_phase() {
+        let dark = CaretPaintInput {
+            phase_on: false,
+            ..lit()
+        };
         assert_eq!(
-            CaretPaint::resolve(at(CursorShape::Block, true, true), input(true, true, false)),
+            CaretPaint::new(at(CursorShape::Block, true, true), dark),
             None
         );
-        assert!(
-            CaretPaint::resolve(at(CursorShape::Block, true, true), input(true, true, true))
-                .is_some()
-        );
-        assert!(
-            CaretPaint::resolve(at(CursorShape::Bar, false, true), input(true, true, false))
-                .is_some()
-        );
+        assert!(CaretPaint::new(at(CursorShape::Block, true, true), lit()).is_some());
+        assert!(CaretPaint::new(at(CursorShape::Bar, false, true), dark).is_some());
     }
 
     /// Asserts that every caret shape occupies its assigned wire bits.
@@ -262,17 +280,9 @@ mod tests {
     /// underline, and bar DECSCUSR variants.
     #[test]
     fn each_shape_lands_in_the_shape_bits() {
-        let packed = |shape| {
-            CaretPaint {
-                pos: UVec2::ZERO,
-                shape,
-                hollow: false,
-            }
-            .to_packed()
-        };
-        assert_eq!(packed(CursorShape::Block), 0b0001);
-        assert_eq!(packed(CursorShape::Underline), 0b0011);
-        assert_eq!(packed(CursorShape::Bar), 0b0101);
+        assert_eq!(CaretStroke::Block.to_packed(), 0b0001);
+        assert_eq!(CaretStroke::Underline.to_packed(), 0b0011);
+        assert_eq!(CaretStroke::Bar.to_packed(), 0b0101);
     }
 
     /// Asserts that a hollow caret sets its own bit alongside the shape.
@@ -280,12 +290,10 @@ mod tests {
     /// Case: the caret sits in a pane the user is not typing into.
     #[test]
     fn a_hollow_caret_sets_its_bit() {
-        let paint = CaretPaint {
-            pos: UVec2::ZERO,
-            shape: CursorShape::Block,
-            hollow: true,
-        };
-        assert_eq!(paint.to_packed(), CURSOR_VISIBLE_BIT | CURSOR_HOLLOW_BIT);
+        assert_eq!(
+            CaretStroke::HollowBlock.to_packed(),
+            CURSOR_VISIBLE_BIT | CURSOR_HOLLOW_BIT
+        );
     }
 
     /// Asserts that a packed caret always marks itself visible, since a
@@ -294,16 +302,13 @@ mod tests {
     /// Case: the shader decides whether to draw from this bit alone.
     #[test]
     fn the_packed_style_always_marks_the_caret_visible() {
-        for shape in [CursorShape::Block, CursorShape::Underline, CursorShape::Bar] {
-            for hollow in [false, true] {
-                let packed = CaretPaint {
-                    pos: UVec2::ZERO,
-                    shape,
-                    hollow,
-                }
-                .to_packed();
-                assert_eq!(packed & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
-            }
+        for stroke in [
+            CaretStroke::Block,
+            CaretStroke::Underline,
+            CaretStroke::Bar,
+            CaretStroke::HollowBlock,
+        ] {
+            assert_eq!(stroke.to_packed() & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
         }
     }
 

@@ -523,7 +523,7 @@ impl TerminalParams {
         let rows = u32::from(view.rows);
 
         let (cursor_pos, cursor_style) = match caret {
-            Some(caret) => (caret.pos, caret.to_packed()),
+            Some(caret) => (caret.pos, caret.stroke.to_packed()),
             None => (UVec2::ZERO, 0),
         };
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
@@ -815,7 +815,7 @@ fn update_terminal_material(
             _ => (0, 0),
         };
         let treatment = PaneTreatment::from_style(pane_style);
-        let caret = CaretPaint::resolve(
+        let caret = CaretPaint::new(
             view.caret(),
             CaretPaintInput {
                 suppressed: view.suppress_cursor,
