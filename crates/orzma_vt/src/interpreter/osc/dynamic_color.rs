@@ -1,5 +1,6 @@
-//! The dynamic foreground and background an `OSC 10` or `OSC 11` sets
-//! and queries, and an `OSC 110` or `OSC 111` resets.
+//! The dynamic foreground, background, and cursor color an `OSC 10`,
+//! `OSC 11`, or `OSC 12` sets and queries, and an `OSC 110`, `OSC 111`,
+//! or `OSC 112` resets.
 
 use crate::device::color::Rgb;
 use crate::interpreter::osc::{OscTerminator, rgb_spec};
@@ -11,10 +12,13 @@ pub(crate) enum DynamicColor {
     Foreground,
     /// The default background `SGR 49` resolves to (`OSC 11`).
     Background,
+    /// The color the text cursor is painted in (`OSC 12`).
+    Cursor,
 }
 
-/// One request an `OSC 10`, `OSC 11`, `OSC 110`, or `OSC 111` makes of
-/// a dynamic color, decoded before the device is touched.
+/// One request an `OSC 10`, `OSC 11`, `OSC 12`, `OSC 110`, `OSC 111`,
+/// or `OSC 112` makes of a dynamic color, decoded before the device is
+/// touched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DynamicColorRequest {
     /// Sets `target` to `color`.
@@ -31,21 +35,33 @@ impl DynamicColor {
         match self {
             Self::Foreground => 10,
             Self::Background => 11,
+            Self::Cursor => 12,
         }
     }
 }
 
 impl DynamicColorRequest {
+    /// The colors a chain reaches, in the order successive values
+    /// address them.
+    const CHAIN: [DynamicColor; 3] = [
+        DynamicColor::Foreground,
+        DynamicColor::Background,
+        DynamicColor::Cursor,
+    ];
+
     /// The dynamic-color requests one operating system command carries,
     /// in the order they appear; empty for every other command.
     ///
     /// The value after the number sets or queries the color that number
     /// names, and "Each successive parameter changes the next color in
     /// the list" (xterm-ctlseqs.pdf p.39), so a command starting at
-    /// `OSC 10` reaches the background with its second value. A `?` in
+    /// `OSC 10` reaches the background with its second value and the
+    /// cursor color, which `OSC 12` names (xterm-ctlseqs.pdf p.40,
+    /// "Change text cursor color to Pt."), with its third. A `?` in
     /// place of the value asks for that color instead of setting it.
     /// A reset names its color with the set number plus 100 —
-    /// `OSC 110` and `OSC 111` — and carries no value.
+    /// `OSC 110`, `OSC 111`, and `OSC 112` (xterm-ctlseqs.pdf p.42,
+    /// "Reset text cursor color.") — and carries no value.
     ///
     /// # Invariants
     ///
@@ -55,15 +71,17 @@ impl DynamicColorRequest {
     /// decodes to nothing. A reset ignores whatever follows its number.
     pub fn parse(params: &[&[u8]]) -> Vec<Self> {
         match params {
-            [b"10", specs @ ..] => {
-                Self::chain(&[DynamicColor::Foreground, DynamicColor::Background], specs)
-            }
-            [b"11", specs @ ..] => Self::chain(&[DynamicColor::Background], specs),
+            [b"10", specs @ ..] => Self::chain(&Self::CHAIN, specs),
+            [b"11", specs @ ..] => Self::chain(&Self::CHAIN[1..], specs),
+            [b"12", specs @ ..] => Self::chain(&Self::CHAIN[2..], specs),
             [b"110", ..] => vec![Self::Reset {
                 target: DynamicColor::Foreground,
             }],
             [b"111", ..] => vec![Self::Reset {
                 target: DynamicColor::Background,
+            }],
+            [b"112", ..] => vec![Self::Reset {
+                target: DynamicColor::Cursor,
             }],
             _ => Vec::new(),
         }
@@ -90,9 +108,9 @@ impl DynamicColorRequest {
     }
 }
 
-/// The reply an `OSC 10 ; ?` or `OSC 11 ; ?` owes: the same command
-/// with `target`'s colour spelled as `rgb:`, closed the way the query
-/// was.
+/// The reply an `OSC 10 ; ?`, `OSC 11 ; ?`, or `OSC 12 ; ?` owes: the
+/// same command with `target`'s colour spelled as `rgb:`, closed the way
+/// the query was.
 ///
 /// The reply names `target`'s own colour number, so each reply of a
 /// chained query sets back the colour it reports rather than the one
@@ -206,14 +224,20 @@ mod tests {
     }
 
     /// Asserts that a chain stops at the first color this terminal does
-    /// not carry, so a third value reaches no cursor color.
+    /// not carry, so a fourth value reaches no pointer color.
     ///
     /// Case: a script written for xterm recolors the text, the ground,
-    /// and the cursor in one command.
+    /// the cursor, and the mouse pointer in one command.
     #[test]
     fn a_chain_stops_at_the_first_color_this_terminal_does_not_carry() {
         assert_eq!(
-            DynamicColorRequest::parse(&[b"10", b"rgb:ff/00/00", b"rgb:00/ff/00", b"rgb:00/00/ff"]),
+            DynamicColorRequest::parse(&[
+                b"10",
+                b"rgb:ff/00/00",
+                b"rgb:00/ff/00",
+                b"rgb:00/00/ff",
+                b"rgb:ff/ff/ff"
+            ]),
             vec![
                 DynamicColorRequest::Set {
                     target: DynamicColor::Foreground,
@@ -223,18 +247,119 @@ mod tests {
                     target: DynamicColor::Background,
                     color: rgb(0x00, 0xff, 0x00)
                 },
+                DynamicColorRequest::Set {
+                    target: DynamicColor::Cursor,
+                    color: rgb(0x00, 0x00, 0xff)
+                },
             ]
         );
     }
 
-    /// Asserts that an `OSC 12` decodes to nothing, its starting point
-    /// being a color this terminal does not carry.
+    /// Asserts that an `OSC 12` carrying a colour spec decodes to a set
+    /// of the cursor color.
     ///
     /// Case: nvim recolors the cursor for insert mode through its
     /// `guicursor` option.
     #[test]
-    fn an_osc_12_decodes_to_nothing() {
-        assert!(DynamicColorRequest::parse(&[b"12", b"rgb:ff/00/00"]).is_empty());
+    fn an_osc_12_spec_decodes_to_a_cursor_set() {
+        assert_eq!(
+            DynamicColorRequest::parse(&[b"12", b"rgb:ff/88/00"]),
+            vec![DynamicColorRequest::Set {
+                target: DynamicColor::Cursor,
+                color: rgb(0xff, 0x88, 0x00)
+            }]
+        );
+    }
+
+    /// Asserts that a command starting at `OSC 11` reaches the cursor
+    /// color with its second value.
+    ///
+    /// Case: a theme script recolors the ground and the cursor in a
+    /// single command.
+    #[test]
+    fn an_osc_11_chain_reaches_the_cursor_color() {
+        assert_eq!(
+            DynamicColorRequest::parse(&[b"11", b"rgb:00/00/00", b"rgb:ff/88/00"]),
+            vec![
+                DynamicColorRequest::Set {
+                    target: DynamicColor::Background,
+                    color: rgb(0x00, 0x00, 0x00)
+                },
+                DynamicColorRequest::Set {
+                    target: DynamicColor::Cursor,
+                    color: rgb(0xff, 0x88, 0x00)
+                },
+            ]
+        );
+    }
+
+    /// Asserts that an `OSC 12 ; ?` decodes to a query of the cursor
+    /// color, and that a chained query starting at `OSC 10` asks for
+    /// all three colors.
+    ///
+    /// Case: a program saves the colours it is about to change so that
+    /// it can restore each on exit.
+    #[test]
+    fn a_cursor_query_decodes_alone_and_at_the_end_of_a_chain() {
+        assert_eq!(
+            DynamicColorRequest::parse(&[b"12", b"?"]),
+            vec![DynamicColorRequest::Query {
+                target: DynamicColor::Cursor
+            }]
+        );
+        assert_eq!(
+            DynamicColorRequest::parse(&[b"10", b"?", b"?", b"?"]),
+            vec![
+                DynamicColorRequest::Query {
+                    target: DynamicColor::Foreground
+                },
+                DynamicColorRequest::Query {
+                    target: DynamicColor::Background
+                },
+                DynamicColorRequest::Query {
+                    target: DynamicColor::Cursor
+                },
+            ]
+        );
+    }
+
+    /// Asserts that an `OSC 112` decodes to a reset of the cursor color
+    /// and discards the parameters after its number.
+    ///
+    /// Case: nvim restores the cursor colour on exit, and a script
+    /// appends a colour number the way `OSC 104` allows.
+    #[test]
+    fn an_osc_112_decodes_to_a_cursor_reset() {
+        let reset = vec![DynamicColorRequest::Reset {
+            target: DynamicColor::Cursor,
+        }];
+        assert_eq!(DynamicColorRequest::parse(&[b"112"]), reset);
+        assert_eq!(DynamicColorRequest::parse(&[b"112", b"12"]), reset);
+    }
+
+    /// Asserts that an `OSC 13` decodes to nothing, its starting point
+    /// being a color this terminal does not carry.
+    ///
+    /// Case: a script written for xterm recolors the mouse pointer.
+    #[test]
+    fn an_osc_13_decodes_to_nothing() {
+        assert!(DynamicColorRequest::parse(&[b"13", b"rgb:ff/00/00"]).is_empty());
+    }
+
+    /// Asserts that a cursor reply names its own colour number.
+    ///
+    /// Case: a program asks for the cursor colour with a BEL-closed
+    /// `OSC 12 ; ?`.
+    #[test]
+    fn a_cursor_reply_names_its_own_number() {
+        assert_eq!(
+            dynamic_color_reply(
+                DynamicColor::Cursor,
+                rgb(0xff, 0x88, 0x00),
+                OscTerminator::Bel
+            ),
+            b"\x1b]12;rgb:ffff/8888/0000\x07"
+        );
     }
 
     /// Asserts that a command carrying no value at all decodes to
@@ -382,7 +507,11 @@ mod tests {
     /// restores it by sending the reply back to the terminal.
     #[test]
     fn a_reply_reads_back_to_the_color_it_reports() {
-        for target in [DynamicColor::Foreground, DynamicColor::Background] {
+        for target in [
+            DynamicColor::Foreground,
+            DynamicColor::Background,
+            DynamicColor::Cursor,
+        ] {
             for channel in [0x00, 0x01, 0x7f, 0x80, 0xcd, 0xfe, 0xff] {
                 let color = rgb(channel, channel, channel);
                 let reply = dynamic_color_reply(target, color, OscTerminator::Bel);

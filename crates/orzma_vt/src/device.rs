@@ -241,7 +241,8 @@ impl DeviceState {
     ///
     /// The modes it does not name are left as they are, and so are the
     /// cells and the cursor position on show, the hidden screen, the
-    /// title, and the palette's foreground and background.
+    /// title, and the palette's foreground, background, and cursor
+    /// color.
     ///
     /// # Control Functions
     ///
@@ -456,6 +457,26 @@ impl DeviceState {
     /// - `OSC 111`
     pub fn reset_background_color(&mut self) -> bool {
         self.palette.reset_background()
+    }
+
+    /// Sets the text cursor color to `color`; returns whether it
+    /// changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 12 ; spec`
+    pub fn set_cursor_color(&mut self, color: Rgb) -> bool {
+        self.palette.set_cursor(color)
+    }
+
+    /// Returns the text cursor color to unset; returns whether it
+    /// changed.
+    ///
+    /// # Control Functions
+    ///
+    /// - `OSC 112`
+    pub fn reset_cursor_color(&mut self) -> bool {
+        self.palette.reset_cursor()
     }
 
     /// Switches the active screen without a flip's side effects.
@@ -1298,6 +1319,48 @@ mod tests {
 
         assert_eq!(device.palette().foreground, foreground);
         assert_eq!(device.palette().background, background);
+    }
+
+    /// Asserts that a soft reset leaves the cursor color alone.
+    ///
+    /// Case: an editor's cursor colour is in force when the shell runs
+    /// `tput init`.
+    #[test]
+    fn a_soft_reset_leaves_the_cursor_color_alone() {
+        let mut device = device();
+        let cursor = Rgb { r: 9, g: 8, b: 7 };
+        assert!(device.set_cursor_color(cursor));
+
+        let _ = device.soft_reset();
+
+        assert_eq!(device.palette().cursor, Some(cursor));
+    }
+
+    /// Asserts that a reset returns the cursor color to unset.
+    ///
+    /// Case: the user runs `reset` after an editor crashed with its
+    /// cursor colour still in force.
+    #[test]
+    fn a_reset_clears_the_cursor_color() {
+        let mut device = device();
+        assert!(device.set_cursor_color(Rgb { r: 9, g: 8, b: 7 }));
+
+        let _ = device.reset();
+
+        assert_eq!(device.palette().cursor, None);
+    }
+
+    /// Asserts that resetting the cursor color reports a change only
+    /// when a color was held.
+    ///
+    /// Case: a program sends `OSC 112` on exit without ever having set
+    /// a cursor colour.
+    #[test]
+    fn resetting_an_unset_cursor_color_reports_no_change() {
+        let mut device = device();
+        assert!(!device.reset_cursor_color());
+        assert!(device.set_cursor_color(Rgb { r: 9, g: 8, b: 7 }));
+        assert!(device.reset_cursor_color());
     }
 
     /// Asserts that a soft reset keeps the screen the device was
