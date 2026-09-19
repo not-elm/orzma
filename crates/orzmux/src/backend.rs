@@ -245,7 +245,7 @@ impl Backend {
         let due: Vec<PaneId> = self
             .panes
             .iter()
-            .filter(|(_, p)| p.tty.next_deadline().is_some_and(|d| d <= now))
+            .filter(|(_, p)| p.tty.next_deadline(now).is_some_and(|d| d <= now))
             .map(|(id, _)| *id)
             .collect();
         for id in due {
@@ -281,9 +281,10 @@ impl Backend {
     /// deadline, or `None` when every pane is idle and no peak waits to
     /// be reported.
     fn next_wake_deadline(&self) -> Option<Instant> {
+        let now = Instant::now();
         self.panes
             .values()
-            .filter_map(|p| p.tty.next_deadline())
+            .filter_map(|p| p.tty.next_deadline(now))
             .chain(self.sampler.report_deadline())
             .min()
     }
@@ -998,7 +999,7 @@ mod tests {
         let (root, pane) = h.open_root();
         h.backend.pump_pane(root);
         h.drain();
-        thread::sleep(Duration::from_millis(15));
+        thread::sleep(OrzmaTty::<OrzmaVt>::SYNC_EMIT_INTERVAL);
         pane.chunk_tx
             .send(b"\x1b[?2026h\x07a\x1b[?2026l\x1b]2;t\x07".to_vec())
             .unwrap();
@@ -1099,7 +1100,7 @@ mod tests {
         h.backend.pump_pane(root);
         let pane_deadline = h.backend.panes[&root]
             .tty
-            .next_deadline()
+            .next_deadline(Instant::now())
             .expect("pending output arms the coalescer");
         assert!(Some(pane_deadline) < report_deadline);
         assert_eq!(h.backend.next_wake_deadline(), Some(pane_deadline));

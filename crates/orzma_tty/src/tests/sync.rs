@@ -37,6 +37,7 @@ fn open_update(tty: &mut OrzmaTty<FakeVt>) {
 fn an_open_update_holds_back_the_due_frame() {
     let (mut tty, _sink) = painted_term();
     open_update(&mut tty);
+    tty.sync_deadline = Some(Instant::now() + Duration::from_secs(60));
     tty.vt.frames.push_back(a_frame());
     thread::sleep(Duration::from_millis(5));
     assert!(tty.pump().frames().next().is_none());
@@ -52,6 +53,7 @@ fn an_open_update_holds_back_the_due_frame() {
 fn an_open_update_holds_back_the_bootstrap_frame() {
     let (mut tty, _sink) = detached_term();
     open_update(&mut tty);
+    tty.sync_deadline = Some(Instant::now() + Duration::from_secs(60));
     tty.vt.frames.push_back(a_frame());
     assert!(tty.pump().frames().next().is_none());
     assert!(tty.coalescer.needs_bootstrap());
@@ -67,7 +69,7 @@ fn an_open_update_reports_only_its_own_deadline() {
     let (mut tty, _sink) = detached_term();
     open_update(&mut tty);
     assert!(tty.sync_deadline.is_some());
-    assert_eq!(tty.next_deadline(), tty.sync_deadline);
+    assert_eq!(tty.next_deadline(Instant::now()), tty.sync_deadline);
 }
 
 /// Asserts that the deadline is anchored at the first open and that a
@@ -219,8 +221,8 @@ fn a_close_frame_keeps_its_place_among_the_signals() {
 /// Asserts that a VT reporting no progress on a non-empty chunk is
 /// cut off instead of being called forever.
 ///
-/// Case: a VT implementation with a bug in its byte accounting is
-/// plugged into the terminal and a program prints a line.
+/// Case: a VT implementation whose byte accounting reports no progress
+/// is plugged into the terminal, and a program prints a line.
 #[test]
 fn a_vt_that_consumes_nothing_is_cut_off() {
     let (mut tty, _sink) = painted_term();
@@ -232,8 +234,8 @@ fn a_vt_that_consumes_nothing_is_cut_off() {
 /// Asserts that a VT reporting more bytes than it was given is cut
 /// off instead of panicking.
 ///
-/// Case: a VT implementation with a bug in its byte accounting is
-/// plugged into the terminal and a program prints a line.
+/// Case: a VT implementation whose byte accounting runs past the end of
+/// the chunk is plugged into the terminal, and a program prints a line.
 #[test]
 fn a_vt_that_overreports_is_cut_off() {
     let (mut tty, _sink) = painted_term();

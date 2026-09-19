@@ -337,12 +337,13 @@ impl DeviceState {
 
     /// The DECRPM value for the DEC private mode `mode`.
     ///
-    /// Mode 6 reports the screen on show. Modes 47, 1047 and 1049 all
-    /// report whether the alternate screen is shown. Modes 1000, 1002
-    /// and 1003 report set only for the tracking level in force. Mode
-    /// 12 reports the blink `DECSCUSR` selected as well. A mode this
-    /// terminal keeps no state for reports
+    /// A mode this terminal keeps no state for reports
     /// [`ModeReport::NotRecognized`].
+    ///
+    /// Mode 6 reports the screen on show, and modes 47, 1047 and 1049
+    /// all report whether the alternate screen is shown. Modes 1000,
+    /// 1002 and 1003 report set only for the tracking level in force.
+    /// Mode 12 reports the blink `DECSCUSR` selected as well.
     ///
     /// # Control Functions
     ///

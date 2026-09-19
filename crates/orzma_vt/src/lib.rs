@@ -83,8 +83,7 @@ pub trait Vt {
     /// call stops early only when it closed a synchronized update, so
     /// `consumed < chunk.len()` implies
     /// [`InterpretOutput::synchronized_update_closed`]. The caller must
-    /// pass `chunk[consumed..]` to the next call. A chunk that closes no
-    /// synchronized update is always consumed whole.
+    /// pass `chunk[consumed..]` to the next call.
     ///
     /// An empty chunk returns [`InterpretOutput::default`].
     /// [`InterpretOutput::replies`] must be written back to the PTY.

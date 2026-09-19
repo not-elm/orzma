@@ -12,10 +12,23 @@ use super::*;
 #[test]
 fn next_deadline_is_now_until_the_bootstrap_frame_settles() {
     let (mut tty, _chunk_tx, _exit_tx) = channelled_term();
-    assert!(tty.next_deadline().is_some());
+    let now = Instant::now();
+    assert!(tty.next_deadline(now).is_some());
     tty.vt.frames.push_back(a_frame());
     tty.pump();
-    assert!(tty.next_deadline().is_none());
+    assert!(tty.next_deadline(now).is_none());
+}
+
+/// Asserts that the deadline reported for an owed bootstrap frame is the
+/// caller's own `now`, so a caller comparing the two finds it due.
+///
+/// Case: the backend samples one clock read for a whole loop turn, then
+/// asks a freshly spawned pane whether it wants a pump.
+#[test]
+fn an_owed_bootstrap_frame_is_due_at_the_callers_now() {
+    let (tty, _sink) = detached_term();
+    let now = Instant::now();
+    assert_eq!(tty.next_deadline(now), Some(now));
 }
 
 /// Asserts that `flush_now` returns the pending signals and an

@@ -486,14 +486,16 @@ impl<V: Vt> OrzmaTty<V> {
         self.pty.chunk_receiver().len()
     }
 
-    /// When this terminal next wants a pump: the open synchronized
-    /// update's deadline while it holds frames back; otherwise
-    /// `Some(now)` while the bootstrap frame is owed, the armed
+    /// When this terminal next wants a pump, as of `now`: the open
+    /// synchronized update's deadline while it holds frames back;
+    /// otherwise `now` while the bootstrap frame is owed, the armed
     /// window's deadline while output is pending, and `None` when idle.
-    pub fn next_deadline(&self) -> Option<Instant> {
-        let now = Instant::now();
-        if let Some(deadline) = self.sync_deadline.filter(|deadline| now < *deadline) {
-            return Some(deadline);
+    ///
+    /// The caller passes the same `now` it compares the result against,
+    /// so a deadline this reports as due is due by that clock read.
+    pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        if self.holds_frames_back(now) {
+            return self.sync_deadline;
         }
         if self.coalescer.needs_bootstrap() {
             return Some(now);

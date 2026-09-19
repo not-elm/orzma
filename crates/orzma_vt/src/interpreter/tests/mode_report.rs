@@ -174,3 +174,31 @@ fn the_ansi_form_does_not_report_private_modes() {
 fn a_mode_request_stages_no_damage() {
     assert!(!damage_of(b"\x1b[?2026$p"));
 }
+
+/// Asserts that every private mode this terminal keeps observable state
+/// for is recognized by DECRQM, so a mode the write side starts honoring
+/// cannot keep answering that it is not recognized.
+///
+/// Case: a later change teaches `DECSET` a mode number this terminal
+/// used to ignore, and an application probes that number with DECRQM
+/// before it relies on the mode.
+#[test]
+fn every_stateful_private_mode_is_reported() {
+    for mode in 0..=2100u32 {
+        for direction in ['h', 'l'] {
+            let mut session = Session::new();
+            let modes_before = session.0.device.modes();
+            let origin_before = session.0.device.active_screen().origin_mode();
+            session.feed_all(format!("\x1b[?{mode}{direction}").as_bytes());
+            let changed = session.0.device.modes() != modes_before
+                || session.0.device.active_screen().origin_mode() != origin_before;
+            if changed {
+                assert_ne!(
+                    fresh_report(mode),
+                    format!("\x1b[?{mode};0$y").into_bytes(),
+                    "CSI ? {mode} {direction} changes state, so DECRQM must recognize it"
+                );
+            }
+        }
+    }
+}
