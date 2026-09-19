@@ -20,7 +20,7 @@ pub use material::TerminalPaddingFallback;
 pub mod prelude {
     pub use crate::TerminalRendererPlugin;
     pub use crate::cursor::{
-        CURSOR_HOLLOW_BIT, CURSOR_VISIBLE_BIT, CaretStyle, CursorPaint, CursorPaintInput,
+        CURSOR_HOLLOW_BIT, CURSOR_VISIBLE_BIT, CaretPaint, CaretPaintInput, CaretStyle,
         CursorPlugin, LastKeyInstant, blink_phase_on,
     };
     pub use crate::grid::TerminalGridPlugin;

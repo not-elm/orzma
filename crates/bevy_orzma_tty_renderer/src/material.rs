@@ -1,5 +1,5 @@
 use crate::{
-    cursor::{CaretStyle, CursorPaint, CursorPaintInput, LastKeyInstant, blink_phase_on},
+    cursor::{CaretPaint, CaretPaintInput, CaretStyle, LastKeyInstant, blink_phase_on},
     glyph::{
         atlas::{GlyphAtlas, GlyphRect},
         font::{
@@ -498,9 +498,8 @@ impl TerminalParams {
     ///
     /// # Invariants
     ///
-    /// - `cursor_style` is the style [`CursorPaint::resolve`] settled
-    ///   on; the view's own packed style reaches the shader only
-    ///   through it.
+    /// - `cursor_style` is packed from `caret`; a `None` caret paints
+    ///   nothing and leaves `cursor_pos` at the origin.
     /// - When `view.selection` is `None`, `sel_kind == 0` and the shader
     ///   paints no selection.
     /// - `overlay_rects` is left at its default; the caller fills it from
@@ -517,14 +516,16 @@ impl TerminalParams {
         fallback: [u8; 3],
         hover_hyperlink_id: u32,
         hover_active: u32,
-        cursor_pos: UVec2,
-        cursor_paint: CursorPaint,
+        caret: Option<CaretPaint>,
         cursor_thickness_phys: f32,
     ) -> Self {
         let cols = u32::from(view.cols);
         let rows = u32::from(view.rows);
 
-        let cursor_style = cursor_paint.packed();
+        let (cursor_pos, cursor_style) = match caret {
+            Some(caret) => (caret.pos, caret.to_packed()),
+            None => (UVec2::ZERO, 0),
+        };
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
             selection_uniforms(view.selection.as_ref(), view.display_offset, view.rows);
         let bg_padding_color = padding_color(default_bg, fallback);
@@ -814,10 +815,10 @@ fn update_terminal_material(
             _ => (0, 0),
         };
         let treatment = PaneTreatment::from_style(pane_style);
-        let (cursor_pos, packed_cursor) = view.current_cursor_pos_and_style();
-        let cursor_paint = CursorPaint::resolve(
-            packed_cursor,
-            CursorPaintInput {
+        let caret = CaretPaint::resolve(
+            view.caret(),
+            CaretPaintInput {
+                suppressed: view.suppress_cursor,
                 focused: window_focused && pane_style.is_none(),
                 unfocused_hollow: cursor_config.unfocused_hollow,
                 phase_on,
@@ -839,8 +840,7 @@ fn update_terminal_material(
                 fallback.0,
                 hover_hyperlink_id,
                 hover_active,
-                cursor_pos,
-                cursor_paint,
+                caret,
                 cursor_thickness_phys,
             );
             match overlays {
