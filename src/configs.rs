@@ -107,6 +107,7 @@ pub(crate) fn env_guard() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orzma_configs::cursor::CursorBlinkSetting;
 
     #[test]
     fn plugin_inserts_configs_resource_matching_defaults_when_no_config_file() {
@@ -238,5 +239,66 @@ mod tests {
         assert_eq!(out.lines_per_notch, 5);
         assert_eq!(out.fine_lines, 2);
         assert_eq!(out.max_protocol_events_per_frame, 16);
+    }
+
+    /// Asserts that `cursor_policy` maps each `[cursor]` style setting to
+    /// its `CursorShape` counterpart and each blink setting to its blink
+    /// state and DEC mode 12 veto.
+    ///
+    /// Case: a user sets `style` and `blink` in the `[cursor]` section of
+    /// their config.toml, selecting each style and each blink option in
+    /// turn.
+    #[test]
+    fn cursor_policy_maps_every_style_and_blink_setting() {
+        let cases = [
+            (
+                CursorStyleSetting::Block,
+                CursorBlinkSetting::Auto,
+                CursorShape::Block,
+                CursorBlink::Steady,
+                false,
+            ),
+            (
+                CursorStyleSetting::Underline,
+                CursorBlinkSetting::Auto,
+                CursorShape::Underline,
+                CursorBlink::Steady,
+                false,
+            ),
+            (
+                CursorStyleSetting::Bar,
+                CursorBlinkSetting::Auto,
+                CursorShape::Bar,
+                CursorBlink::Steady,
+                false,
+            ),
+            (
+                CursorStyleSetting::Block,
+                CursorBlinkSetting::On,
+                CursorShape::Block,
+                CursorBlink::Blinking,
+                true,
+            ),
+            (
+                CursorStyleSetting::Block,
+                CursorBlinkSetting::Off,
+                CursorShape::Block,
+                CursorBlink::Steady,
+                true,
+            ),
+        ];
+        for (style, blink, expected_shape, expected_blink, expected_veto) in cases {
+            let mut config = CursorConfig::default();
+            config.style = style;
+            config.blink = blink;
+            let policy = cursor_policy(&config);
+            assert_eq!(policy.initial.shape, expected_shape);
+            assert_eq!(policy.initial.blink, expected_blink);
+            if expected_veto {
+                assert!(policy.ignore_dec_mode_12);
+            } else {
+                assert!(!policy.ignore_dec_mode_12);
+            }
+        }
     }
 }
