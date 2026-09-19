@@ -239,7 +239,7 @@ impl Backend {
         }
     }
 
-    /// Pumps every pane whose coalescer deadline has passed.
+    /// Pumps every pane whose next deadline has passed.
     pub(crate) fn service_deadlines(&mut self) {
         let now = Instant::now();
         let due: Vec<PaneId> = self
@@ -254,7 +254,7 @@ impl Backend {
     }
 
     /// Blocks until a command or a pane stream is ready, or the earliest
-    /// of the coalescer deadlines and the sampler's report deadline
+    /// of the panes' next deadlines and the sampler's report deadline
     /// passes. Returns the ready source, `None` on timeout.
     fn wait_ready(&mut self) -> Option<Ready> {
         let mut select = Select::new();
@@ -277,7 +277,7 @@ impl Backend {
         Some(self.sources[index])
     }
 
-    /// The earliest of the coalescer deadlines and the sampler's report
+    /// The earliest of the panes' next deadlines and the sampler's report
     /// deadline, or `None` when every pane is idle and no peak waits to
     /// be reported.
     fn next_wake_deadline(&self) -> Option<Instant> {

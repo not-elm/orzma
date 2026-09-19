@@ -142,7 +142,8 @@ fn a_closed_update_yields_a_frame_at_once() {
 }
 
 /// Asserts that a second close inside the emit interval takes no
-/// frame of its own.
+/// frame of its own and leaves the coalesce window armed for its
+/// damage.
 ///
 /// Case: a program toggles synchronized output around every line it
 /// prints, many times within one PTY chunk.
@@ -157,6 +158,7 @@ fn closes_inside_the_emit_interval_share_one_frame() {
     tty.feed_bytes(b"ab");
     assert_eq!(tty.vt.interpreted.len(), 2);
     assert_eq!(tty.vt.frames.len(), 1);
+    assert!(tty.coalescer.is_armed());
 }
 
 /// Asserts that a close with nothing to paint leaves the bootstrap
@@ -217,7 +219,8 @@ fn a_close_frame_keeps_its_place_among_the_signals() {
 /// Asserts that a VT reporting no progress on a non-empty chunk is
 /// cut off instead of being called forever.
 ///
-/// Case: a faulty VT implementation returns a zero `consumed`.
+/// Case: a VT implementation with a bug in its byte accounting is
+/// plugged into the terminal and a program prints a line.
 #[test]
 fn a_vt_that_consumes_nothing_is_cut_off() {
     let (mut tty, _sink) = painted_term();
@@ -229,8 +232,8 @@ fn a_vt_that_consumes_nothing_is_cut_off() {
 /// Asserts that a VT reporting more bytes than it was given is cut
 /// off instead of panicking.
 ///
-/// Case: a faulty VT implementation returns a `consumed` past the end
-/// of the chunk.
+/// Case: a VT implementation with a bug in its byte accounting is
+/// plugged into the terminal and a program prints a line.
 #[test]
 fn a_vt_that_overreports_is_cut_off() {
     let (mut tty, _sink) = painted_term();

@@ -225,8 +225,8 @@ mod tests {
     /// Asserts that `emitted_within` is false before the first emit and
     /// true only inside the interval behind one.
     ///
-    /// Case: a terminal paints a frame and is asked 5 ms and 20 ms later
-    /// whether it painted recently.
+    /// Case: a program closes two synchronized updates a few milliseconds
+    /// apart, and a third one a while later.
     #[test]
     fn emitted_within_tracks_the_last_emit() {
         let t0 = base();
