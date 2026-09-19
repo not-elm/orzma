@@ -64,8 +64,7 @@ fn child_exit_waits_for_the_remaining_chunks_and_is_reported_once() {
     assert!(first.more_pending);
     assert!(
         !first
-            .signals
-            .iter()
+            .signals()
             .any(|s| matches!(s, TtySignal::ChildExit { .. }))
     );
     assert!(
@@ -76,15 +75,14 @@ fn child_exit_waits_for_the_remaining_chunks_and_is_reported_once() {
     let second = tty.pump();
     assert!(!second.more_pending);
     assert_eq!(
-        second.signals.last(),
+        second.signals().last(),
         Some(&TtySignal::ChildExit { code: Some(0) })
     );
 
     let third = tty.pump();
     assert!(
         !third
-            .signals
-            .iter()
+            .signals()
             .any(|s| matches!(s, TtySignal::ChildExit { .. }))
     );
 }
@@ -100,11 +98,14 @@ fn both_streams_disconnected_without_a_status_synthesize_one_child_exit() {
     drop(chunk_tx);
     drop(exit_tx);
     let first = tty.pump();
-    assert_eq!(first.signals, vec![TtySignal::ChildExit { code: None }]);
+    assert_eq!(
+        signals_of(&first),
+        vec![TtySignal::ChildExit { code: None }]
+    );
     assert!(!first.more_pending);
     assert!(tty.readiness().exit.is_none());
     let second = tty.pump();
-    assert!(second.signals.is_empty());
+    assert!(second.signals().next().is_none());
 }
 
 /// Asserts that a pending child-exit report surfaces in `pump`'s
@@ -116,7 +117,7 @@ fn both_streams_disconnected_without_a_status_synthesize_one_child_exit() {
 fn pump_surfaces_child_exit_with_the_reported_code() {
     let (mut term, _chunk_tx, exit_tx) = channelled_term();
     exit_tx.send(Some(3)).expect("send exit");
-    assert_eq!(child_exits(&term.pump().signals), vec![Some(3)]);
+    assert_eq!(child_exits(&term.pump()), vec![Some(3)]);
 }
 
 /// Asserts that a failed `wait` surfaces as `ChildExit` with
@@ -128,7 +129,7 @@ fn pump_surfaces_child_exit_with_the_reported_code() {
 fn pump_surfaces_a_wait_failure_as_code_none() {
     let (mut term, _chunk_tx, exit_tx) = channelled_term();
     exit_tx.send(None).expect("send exit");
-    assert_eq!(child_exits(&term.pump().signals), vec![None]);
+    assert_eq!(child_exits(&term.pump()), vec![None]);
 }
 
 /// Asserts that `ChildExit` appears in exactly one `pump` result
@@ -139,9 +140,9 @@ fn pump_surfaces_a_wait_failure_as_code_none() {
 fn child_exit_is_emitted_exactly_once_across_pumps() {
     let (mut term, _chunk_tx, exit_tx) = channelled_term();
     exit_tx.send(Some(0)).expect("send exit");
-    assert_eq!(child_exits(&term.pump().signals), vec![Some(0)]);
+    assert_eq!(child_exits(&term.pump()), vec![Some(0)]);
     for _ in 0..3 {
-        assert_eq!(child_exits(&term.pump().signals), vec![]);
+        assert_eq!(child_exits(&term.pump()), vec![]);
     }
 }
 
@@ -154,7 +155,7 @@ fn child_exit_is_emitted_exactly_once_across_pumps() {
 fn pump_on_a_detached_terminal_never_emits_child_exit() {
     let (mut term, _sink) = detached_term();
     for _ in 0..3 {
-        assert_eq!(child_exits(&term.pump().signals), vec![]);
+        assert_eq!(child_exits(&term.pump()), vec![]);
     }
 }
 
@@ -169,7 +170,7 @@ fn the_final_output_is_interpreted_when_the_exit_is_reported() {
     let (mut term, chunk_tx, exit_tx) = channelled_term();
     chunk_tx.send(b"bye".to_vec()).expect("send chunk");
     exit_tx.send(Some(0)).expect("send exit");
-    assert_eq!(child_exits(&term.pump().signals), vec![Some(0)]);
+    assert_eq!(child_exits(&term.pump()), vec![Some(0)]);
     assert!(term.vt.interpreted.contains(&b"bye".to_vec()));
 }
 
@@ -181,13 +182,12 @@ fn the_final_output_is_interpreted_when_the_exit_is_reported() {
 fn vt_signals_are_forwarded_before_child_exit() {
     let (mut term, chunk_tx, exit_tx) = channelled_term();
     term.vt.updates.push_back(InterpretOutput {
-        damaged: true,
         signals: vec![VtSignal::Bell],
-        replies: Vec::new(),
+        ..update(1, false)
     });
     chunk_tx.send(b"\x07".to_vec()).expect("send chunk");
     exit_tx.send(Some(0)).expect("send exit");
-    let signals = term.pump().signals;
+    let signals = signals_of(&term.pump());
     assert_eq!(
         signals,
         vec![
@@ -215,12 +215,40 @@ fn replies_are_written_back_to_the_pty() {
     );
     let mut term = OrzmaTty::wired(FakeVt::new(grid(80, 24)), pty);
     term.vt.updates.push_back(InterpretOutput {
-        damaged: true,
-        signals: Vec::new(),
         replies: b"\x1b[1;1R".to_vec(),
+        ..update(4, false)
     });
     chunk_tx.send(b"\x1b[6n".to_vec()).expect("send chunk");
     term.pump();
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[1;1R");
+}
+
+/// Asserts that a pump lists its signals ahead of the frame it emits
+/// and the child's exit behind that frame.
+///
+/// Case: the shell rings the bell, prints its last line, and exits,
+/// all before the host pumps again.
+#[test]
+fn a_pump_orders_signals_then_the_frame_then_the_exit() {
+    let (mut tty, chunk_tx, exit_tx) = channelled_term();
+    tty.vt.updates.push_back(InterpretOutput {
+        signals: vec![VtSignal::Bell],
+        ..update(3, false)
+    });
+    tty.vt.frames.push_back(a_frame());
+    chunk_tx.send(b"bye".to_vec()).unwrap();
+    exit_tx.send(Some(0)).unwrap();
+    drop(chunk_tx);
+    drop(exit_tx);
+
+    let output = tty.pump();
+    assert!(matches!(
+        output.items.as_slice(),
+        [
+            PumpItem::Signal(TtySignal::Vt(VtSignal::Bell)),
+            PumpItem::Frame(_),
+            PumpItem::Signal(TtySignal::ChildExit { code: Some(0) }),
+        ]
+    ));
 }

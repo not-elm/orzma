@@ -33,7 +33,7 @@ fn detached_resizes_through_the_fake_master_and_never_exits() {
     assert_eq!((size.cols, size.rows), (120, 40));
 
     for _ in 0..3 {
-        assert_eq!(child_exits(&term.pump().signals), vec![]);
+        assert_eq!(child_exits(&term.pump()), vec![]);
     }
 }
 

@@ -27,7 +27,8 @@ pub mod prelude {
     pub use crate::device::color::{Color, Palette, Rgb};
     pub use crate::device::modes::{
         AlternateScroll, AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode,
-        MouseEncoding, MouseTracking, ScreenKind, TextCursorEnable, TextCursorModes, VtModes,
+        MouseEncoding, MouseTracking, ScreenKind, SynchronizedOutput, TextCursorEnable,
+        TextCursorModes, VtModes,
     };
     pub use crate::error::{GridSizeError, RunError, StampError, VtError, VtResult};
     pub use crate::frame::{DirtyRow, Frame};
@@ -74,8 +75,15 @@ pub mod prelude {
 /// Every eviction then reaches the owner no later than the first frame
 /// that reflects it, though not necessarily in the same batch.
 pub trait Vt {
-    /// Interprets one PTY chunk, staging its damage internally and
+    /// Interprets a PTY chunk up to the byte that closes a synchronized
+    /// update, or to its end, staging the damage internally and
     /// returning everything else it produced.
+    ///
+    /// [`InterpretOutput::consumed`] reports how far the call got. A
+    /// call stops early only when it closed a synchronized update, so
+    /// `consumed < chunk.len()` implies
+    /// [`InterpretOutput::synchronized_update_closed`]. The caller must
+    /// pass `chunk[consumed..]` to the next call.
     ///
     /// An empty chunk returns [`InterpretOutput::default`].
     /// [`InterpretOutput::replies`] must be written back to the PTY.
@@ -102,7 +110,7 @@ pub trait Vt {
     /// # Invariants
     ///
     /// - [`InterpretOutput::signals`] holds the parser-raised signals
-    ///   first and the chunk-end eviction last.
+    ///   first and the eviction of the consumed bytes last.
     /// - At any instant the live placement ids are unique.
     fn interpret(&mut self, chunk: &[u8]) -> InterpretOutput;
 
@@ -225,11 +233,18 @@ pub struct InterpretOutput {
     /// or a mutated frame-visible section.
     pub damaged: bool,
     /// Out-of-band signals: the parser-raised ones in byte-stream order,
-    /// then the chunk-end [`VtSignal::WebviewEvicted`] when the chunk
-    /// stranded a placement.
+    /// then the [`VtSignal::WebviewEvicted`] naming the placements the
+    /// consumed bytes stranded.
     pub signals: Vec<VtSignal>,
     /// Reply bytes (DSR, DA, …) the owner must write back to the PTY.
     pub replies: Vec<u8>,
+    /// How many bytes of the chunk this call interpreted. It is zero
+    /// only for an empty chunk, and never exceeds the chunk's length.
+    pub consumed: usize,
+    /// Whether this call closed a synchronized update, by `DECRST 2026`
+    /// or by a hard reset. The device is then in the state the
+    /// application declared complete.
+    pub synchronized_update_closed: bool,
 }
 
 /// What a [`Vt::resize`] that changed the dimensions caused besides the
@@ -314,7 +329,7 @@ impl VtSignal {
 
 /// The self-contained implementation of [`Vt`].
 pub struct OrzmaVt {
-    /// Byte decoding plus the CSI ?2026 synchronized-update buffer.
+    /// Byte decoding.
     interpreter: Interpreter,
     /// The emulated device: screens, modes, tabs, colors, title.
     device: DeviceState,
