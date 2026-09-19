@@ -108,9 +108,10 @@ const GLYPH_NONE: u32 = 0xFFFFFFFFu;
 
 // Blends a BACKGROUND color toward the inactive-pane tint target. `rgb`
 // blends toward `params.inactive_tint.rgb` by `params.inactive_tint.a`; alpha
-// is preserved. Active pane => `inactive_tint.a == 0.0` (no-op). Applied only
-// at background-establishment points (before glyphs/overlays paint), so text
-// and webview overlays keep their full color. Runs in LINEAR space —
+// is preserved. Active pane => `inactive_tint.a == 0.0` (no-op). Applied at
+// the background-establishment points (before glyphs/overlays paint), so text
+// and webview overlays keep their full color, and to the glyph of a concealed
+// cell, which must match the tinted ground it hides in. Runs in LINEAR space —
 // `inactive_tint.rgb` is uploaded pre-linearized by the host.
 fn tint_bg(c: vec4<f32>) -> vec4<f32> {
     // NOTE: alpha=0 means transparent (terminal default bg sentinel); preserve

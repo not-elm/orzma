@@ -55,6 +55,7 @@ impl Interpreter {
         chunk: &[u8],
     ) {
         let cursor_before = device.cursor();
+        let cursor_color_before = device.palette().cursor;
         let mut executor = Executor {
             output,
             sync: &mut self.sync,
@@ -71,7 +72,8 @@ impl Interpreter {
             self.parser.parse_byte(byte, &mut executor);
         }
         executor.sweep_evictions();
-        executor.output.damaged |= cursor_before != executor.device.cursor();
+        executor.output.damaged |= cursor_before != executor.device.cursor()
+            || cursor_color_before != executor.device.palette().cursor;
     }
 }
 
@@ -655,7 +657,6 @@ impl Executor<'_> {
     /// command that changes only the cursor color repaints no row.
     fn apply_dynamic_color_requests(&mut self, params: &[&[u8]], terminator: OscTerminator) {
         let mut repaint = false;
-        let mut cursor_recolored = false;
         for request in DynamicColorRequest::parse(params) {
             match request {
                 DynamicColorRequest::Set { target, color } => match target {
@@ -666,7 +667,7 @@ impl Executor<'_> {
                         repaint |= self.device.set_background_color(color);
                     }
                     DynamicColor::Cursor => {
-                        cursor_recolored |= self.device.set_cursor_color(color);
+                        self.device.set_cursor_color(color);
                     }
                 },
                 DynamicColorRequest::Reset { target } => match target {
@@ -677,7 +678,7 @@ impl Executor<'_> {
                         repaint |= self.device.reset_background_color();
                     }
                     DynamicColor::Cursor => {
-                        cursor_recolored |= self.device.reset_cursor_color();
+                        self.device.reset_cursor_color();
                     }
                 },
                 DynamicColorRequest::Query { target } => {
@@ -694,11 +695,6 @@ impl Executor<'_> {
         if repaint {
             self.stage(Some(DamageSpan::Full));
         }
-        // NOTE: A cursor recolor repaints no row, so it must raise the chunk
-        // liveness itself. Dropping this assignment would leave the changed
-        // palette without a frame to carry it, and the new color would not
-        // reach the screen until a later chunk raises the liveness.
-        self.output.damaged |= cursor_recolored;
     }
 
     /// Applies the palette requests an `OSC 4` or `OSC 104` carries, in

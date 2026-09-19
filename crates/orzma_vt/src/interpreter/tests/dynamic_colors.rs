@@ -316,3 +316,13 @@ fn a_three_color_chain_owes_one_full_frame() {
     );
     assert!(session.frame().is_none());
 }
+
+/// Asserts that a chunk which recolors the cursor and returns it to the
+/// colour it started with leaves the chunk undamaged.
+///
+/// Case: a program sets a cursor colour and restores it with `OSC 112`
+/// before the terminal has read either command.
+#[test]
+fn a_cursor_recolor_undone_within_the_chunk_leaves_it_undamaged() {
+    assert!(!damage_of(b"\x1b]12;rgb:ff/88/00\x07\x1b]112\x07"));
+}
