@@ -127,10 +127,29 @@ const CURSOR_BLINKING_BIT: u32 = 8;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orzma_vt::prelude::{Cursor, CursorShape};
 
-    const BLOCK_BLINKING: u32 = 0b1001;
-    const BAR_BLINKING: u32 = 0b1101;
-    const BAR_STEADY: u32 = 0b0101;
+    fn packed(shape: CursorShape, blinking: bool) -> u32 {
+        Cursor {
+            shape,
+            blinking,
+            visible: true,
+            ..Default::default()
+        }
+        .pack_cursor_style()
+    }
+
+    fn block_blinking() -> u32 {
+        packed(CursorShape::Block, true)
+    }
+
+    fn bar_blinking() -> u32 {
+        packed(CursorShape::Bar, true)
+    }
+
+    fn bar_steady() -> u32 {
+        packed(CursorShape::Bar, false)
+    }
 
     fn focused(phase_on: bool) -> CursorPaintInput {
         CursorPaintInput {
@@ -156,7 +175,7 @@ mod tests {
     /// the user clicks another pane during the repaint.
     #[test]
     fn an_already_hidden_cursor_stays_hidden_when_unfocused() {
-        let hidden = BLOCK_BLINKING & !CURSOR_VISIBLE_BIT;
+        let hidden = block_blinking() & !CURSOR_VISIBLE_BIT;
         let paint = CursorPaint::resolve(hidden, unfocused(true));
         assert_eq!(paint.packed() & CURSOR_VISIBLE_BIT, 0);
         assert_eq!(paint.packed() & CURSOR_HOLLOW_BIT, 0);
@@ -170,7 +189,7 @@ mod tests {
     /// blinking in this one.
     #[test]
     fn an_unfocused_cursor_becomes_a_hollow_block_and_stops_blinking() {
-        let paint = CursorPaint::resolve(BAR_BLINKING, unfocused(true));
+        let paint = CursorPaint::resolve(bar_blinking(), unfocused(true));
         assert_eq!(paint.packed() & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
         assert_eq!(paint.packed() & CURSOR_HOLLOW_BIT, CURSOR_HOLLOW_BIT);
         assert_eq!(paint.packed() & CURSOR_SHAPE_MASK, 0);
@@ -183,11 +202,11 @@ mod tests {
     /// panes while the caret is blinking.
     #[test]
     fn hollow_rendering_can_be_turned_off_without_resuming_the_blink() {
-        let paint = CursorPaint::resolve(BAR_BLINKING, unfocused(false));
+        let paint = CursorPaint::resolve(bar_blinking(), unfocused(false));
         assert_eq!(paint.packed() & CURSOR_HOLLOW_BIT, 0);
         assert_eq!(
             paint.packed() & CURSOR_SHAPE_MASK,
-            BAR_BLINKING & CURSOR_SHAPE_MASK
+            bar_blinking() & CURSOR_SHAPE_MASK
         );
         assert_eq!(paint.packed() & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
     }
@@ -199,15 +218,15 @@ mod tests {
     #[test]
     fn only_a_blinking_cursor_follows_the_phase() {
         assert_eq!(
-            CursorPaint::resolve(BLOCK_BLINKING, focused(false)).packed() & CURSOR_VISIBLE_BIT,
+            CursorPaint::resolve(block_blinking(), focused(false)).packed() & CURSOR_VISIBLE_BIT,
             0
         );
         assert_eq!(
-            CursorPaint::resolve(BLOCK_BLINKING, focused(true)).packed() & CURSOR_VISIBLE_BIT,
+            CursorPaint::resolve(block_blinking(), focused(true)).packed() & CURSOR_VISIBLE_BIT,
             CURSOR_VISIBLE_BIT
         );
         assert_eq!(
-            CursorPaint::resolve(BAR_STEADY, focused(false)).packed() & CURSOR_VISIBLE_BIT,
+            CursorPaint::resolve(bar_steady(), focused(false)).packed() & CURSOR_VISIBLE_BIT,
             CURSOR_VISIBLE_BIT
         );
     }

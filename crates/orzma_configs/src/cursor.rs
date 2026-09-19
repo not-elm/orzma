@@ -66,7 +66,7 @@ impl CursorBlinkSetting {
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct CursorConfig {
-    /// The shape the caret takes when no program has asked for another.
+    /// The caret's shape until a program sets one with `DECSCUSR`.
     pub style: CursorStyleSetting,
     /// Whether the caret blinks by default, and whether DEC mode 12 is
     /// honored.
@@ -129,9 +129,12 @@ impl CursorConfig {
     }
 }
 
-// NOTE: private constants come after the test module per the item-ordering rule.
+const DEFAULT_BLINK_INTERVAL_MS: u64 = 750;
+const DEFAULT_BLINK_TIMEOUT_SECS: u64 = 5;
+const DEFAULT_THICKNESS: f32 = 0.15;
+const MIN_BLINK_INTERVAL_MS: u64 = 10;
+
 #[cfg(test)]
-#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 
@@ -188,8 +191,7 @@ mod tests {
     /// cycle rather than being taken literally.
     ///
     /// Case: the user asks for a one-second pause while the interval is
-    /// the default 750 ms, so a literal reading would stop the caret
-    /// mid-cycle.
+    /// the default 750 ms.
     #[test]
     fn a_timeout_shorter_than_one_cycle_is_raised() {
         let cfg = from_toml_normalized("blink_timeout = 1");
@@ -197,7 +199,7 @@ mod tests {
     }
 
     /// Asserts that a blink interval below the floor is raised by
-    /// normalization, so the phase division never divides by zero.
+    /// normalization.
     ///
     /// Case: the user writes `blink_interval = 0` while experimenting.
     #[test]
@@ -237,8 +239,3 @@ mod tests {
         assert!(toml::from_str::<CursorConfig>("blnik = \"on\"").is_err());
     }
 }
-
-const DEFAULT_BLINK_INTERVAL_MS: u64 = 750;
-const DEFAULT_BLINK_TIMEOUT_SECS: u64 = 5;
-const DEFAULT_THICKNESS: f32 = 0.15;
-const MIN_BLINK_INTERVAL_MS: u64 = 10;

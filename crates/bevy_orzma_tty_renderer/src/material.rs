@@ -515,13 +515,13 @@ impl TerminalParams {
         fallback: [u8; 3],
         hover_hyperlink_id: u32,
         hover_active: u32,
+        cursor_pos: UVec2,
         cursor_paint: CursorPaint,
         cursor_thickness_phys: f32,
     ) -> Self {
         let cols = u32::from(view.cols);
         let rows = u32::from(view.rows);
 
-        let (cursor_pos, _) = view.current_cursor_pos_and_style();
         let cursor_style = cursor_paint.packed();
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
             selection_uniforms(view.selection.as_ref(), view.display_offset, view.rows);
@@ -811,7 +811,7 @@ fn update_terminal_material(
             _ => (0, 0),
         };
         let treatment = PaneTreatment::from_style(pane_style);
-        let (_, packed_cursor) = view.current_cursor_pos_and_style();
+        let (cursor_pos, packed_cursor) = view.current_cursor_pos_and_style();
         let cursor_paint = CursorPaint::resolve(
             packed_cursor,
             CursorPaintInput {
@@ -836,6 +836,7 @@ fn update_terminal_material(
                 fallback.0,
                 hover_hyperlink_id,
                 hover_active,
+                cursor_pos,
                 cursor_paint,
                 cursor_thickness_phys,
             );

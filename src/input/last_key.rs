@@ -28,7 +28,9 @@ fn record_last_key(
 ) {
     if presses
         .read()
-        .any(|input| input.state == ButtonState::Pressed)
+        .filter(|input| input.state == ButtonState::Pressed)
+        .count()
+        > 0
     {
         last_key.0 = time.elapsed();
     }

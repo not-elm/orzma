@@ -206,6 +206,9 @@ impl DeviceState {
     /// The preceding graphic character is cleared, so a `REP` that follows
     /// prints nothing.
     ///
+    /// The cursor's shape and blink return to the host-supplied cursor
+    /// policy's initial style rather than the power-up one.
+    ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`)
@@ -247,6 +250,9 @@ impl DeviceState {
     /// The modes it does not name are left as they are, and so are the
     /// cells and the cursor position on show, the hidden screen, the
     /// title, and the palette's foreground and background.
+    ///
+    /// The cursor's shape and blink return to the host-supplied cursor
+    /// policy's initial style rather than the power-up one.
     ///
     /// # Control Functions
     ///

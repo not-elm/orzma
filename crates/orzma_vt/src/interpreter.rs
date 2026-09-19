@@ -786,6 +786,7 @@ impl Executor<'_> {
                 12 if !self.device.cursor_policy().ignore_dec_mode_12 => {
                     self.device.modes_mut().text_cursor.blink = CursorBlink::from_decset(enabled);
                 }
+                12 => {}
                 // DECTCEM
                 25 => {
                     self.device.modes_mut().text_cursor.enable =
