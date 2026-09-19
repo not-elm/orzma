@@ -171,6 +171,8 @@ fn a_chunk_that_stages_no_damage_does_not_arm_the_window() {
         damaged: false,
         signals: Vec::new(),
         replies: b"\x1b[1;1R".to_vec(),
+        consumed: 4,
+        synchronized_update_closed: false,
     });
     term.feed_bytes(b"\x1b[6n");
     assert!(!term.coalescer.is_armed());

@@ -31,6 +31,7 @@ fn interpret_wide(chunk: &[u8]) -> DeviceState {
 fn interpret_sized(cols: u16, chunk: &[u8]) -> (DeviceState, InterpretOutput) {
     let mut vt = OrzmaVt::new(GridSize { cols, rows: 3 }, 10);
     let output = vt.interpret(chunk);
+    assert_eq!(output.consumed, chunk.len(), "the helper feeds one call");
     (vt.device, output)
 }
 
@@ -68,7 +69,9 @@ fn cell_at(device: &DeviceState, line: u16, column: u16) -> Cell {
 /// Reports the reply bytes `chunk` produced.
 fn replies_of(chunk: &[u8]) -> Vec<u8> {
     let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10);
-    vt.interpret(chunk).replies
+    let output = vt.interpret(chunk);
+    assert_eq!(output.consumed, chunk.len(), "the helper feeds one call");
+    output.replies
 }
 
 /// One terminal kept across chunks, so a test can build up state
@@ -86,9 +89,31 @@ impl Session {
         Self(OrzmaVt::new(size, 10))
     }
 
-    /// Interprets `chunk` and hands back what it alone produced.
+    /// Interprets `chunk` in one call and hands back what it alone
+    /// produced. A chunk that closes a synchronized update before its
+    /// end belongs to [`Self::feed_all`].
     fn feed(&mut self, chunk: &[u8]) -> InterpretOutput {
-        self.0.interpret(chunk)
+        let output = self.0.interpret(chunk);
+        assert_eq!(output.consumed, chunk.len(), "use feed_all for this chunk");
+        output
+    }
+
+    /// Interprets `chunk` to its end, resubmitting the rest after each
+    /// closed synchronized update, and hands back the merged output.
+    fn feed_all(&mut self, chunk: &[u8]) -> InterpretOutput {
+        let mut merged = InterpretOutput::default();
+        let mut rest = chunk;
+        while !rest.is_empty() {
+            let output = self.0.interpret(rest);
+            assert!(output.consumed > 0, "a non-empty chunk makes progress");
+            rest = &rest[output.consumed..];
+            merged.damaged |= output.damaged;
+            merged.signals.extend(output.signals);
+            merged.replies.extend(output.replies);
+            merged.consumed += output.consumed;
+            merged.synchronized_update_closed |= output.synchronized_update_closed;
+        }
+        merged
     }
 
     /// Emits the pending frame, if anything observable changed.

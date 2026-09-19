@@ -184,6 +184,8 @@ fn vt_signals_are_forwarded_before_child_exit() {
         damaged: true,
         signals: vec![VtSignal::Bell],
         replies: Vec::new(),
+        consumed: 1,
+        synchronized_update_closed: false,
     });
     chunk_tx.send(b"\x07".to_vec()).expect("send chunk");
     exit_tx.send(Some(0)).expect("send exit");
@@ -218,6 +220,8 @@ fn replies_are_written_back_to_the_pty() {
         damaged: true,
         signals: Vec::new(),
         replies: b"\x1b[1;1R".to_vec(),
+        consumed: 4,
+        synchronized_update_closed: false,
     });
     chunk_tx.send(b"\x1b[6n".to_vec()).expect("send chunk");
     term.pump();

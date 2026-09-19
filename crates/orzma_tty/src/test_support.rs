@@ -104,7 +104,8 @@ impl Write for BlockingSink {
 /// emulator.
 ///
 /// `interpret` records each chunk and pops the next scripted update; an
-/// empty script yields an update with `damaged: true`. `resize` applies
+/// empty script yields an update with `damaged: true` that consumed the
+/// whole chunk. `resize` applies
 /// honestly (`None` when the size did not change) and names the next
 /// scripted `evictions` entry when it did.
 ///
@@ -176,6 +177,8 @@ impl Vt for FakeVt {
             damaged: true,
             signals: Vec::new(),
             replies: Vec::new(),
+            consumed: chunk.len(),
+            synchronized_update_closed: false,
         })
     }
 

@@ -37,13 +37,14 @@ pub(crate) struct Interpreter {
 }
 
 impl Interpreter {
-    /// Decodes one chunk, applying each action to the borrowed
-    /// components and collecting everything the chunk produced into
+    /// Decodes a chunk up to the byte that closes a synchronized
+    /// update, or to its end, applying each action to the borrowed
+    /// components and collecting everything those bytes produced into
     /// `output`.
     ///
     /// # Invariants
     ///
-    /// The placements the chunk strands are named in its own
+    /// The placements the consumed bytes strand are named in its own
     /// [`InterpretOutput::signals`], after every signal the chunk's
     /// actions raised.
     pub fn parse(
@@ -60,6 +61,8 @@ impl Interpreter {
             tracker,
             current_byte: 0,
         };
+        let mut open = executor.device.modes().synchronized_output.is_active();
+        let mut consumed = 0;
         for &byte in chunk {
             // NOTE: `current_byte` must be written before `parse_byte`
             // runs, because vtparse calls `osc_dispatch` while it
@@ -67,7 +70,15 @@ impl Interpreter {
             // afterwards would close each reply with the byte before.
             executor.current_byte = byte;
             self.parser.parse_byte(byte, &mut executor);
+            consumed += 1;
+            let still_open = executor.device.modes().synchronized_output.is_active();
+            if open && !still_open {
+                executor.output.synchronized_update_closed = true;
+                break;
+            }
+            open = still_open;
         }
+        executor.output.consumed = consumed;
         executor.sweep_evictions();
         executor.output.damaged |= cursor_before != executor.device.cursor();
     }
@@ -706,8 +717,8 @@ impl Executor<'_> {
         }
     }
 
-    /// Names the placements this chunk stranded and raises the chunk
-    /// liveness.
+    /// Names the placements the consumed bytes stranded and raises the
+    /// chunk liveness.
     ///
     /// A chunk strands a placement when its anchor row leaves the grid:
     /// a reset drops every row, and a scroll drops a row when it recycles
@@ -715,9 +726,9 @@ impl Executor<'_> {
     /// scroll region, downward at the top margin, or on a screen without
     /// scrollback.
     ///
-    /// It must run once per chunk, after the chunk's last action, so
-    /// that a placement the chunk strands and then re-mounts is updated
-    /// in place rather than evicted and re-created.
+    /// It must run once per `parse` call, after the call's last action,
+    /// so that a placement the consumed bytes strand and then re-mount
+    /// is updated in place rather than evicted and re-created.
     fn sweep_evictions(&mut self) {
         let Some(evicted) = VtSignal::evicted(self.device.evict_lost_anchors()) else {
             return;
