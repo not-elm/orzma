@@ -16,10 +16,12 @@ use orzma_vt::prelude::*;
 use portable_pty::PtySize;
 #[cfg(any(test, feature = "test-support"))]
 use std::io::Write;
+use std::mem;
 use std::path::PathBuf;
-use std::{mem, time::Instant};
+use std::time::{Duration, Instant};
 #[cfg(any(test, feature = "test-support"))]
 use test_support::RecordingMaster;
+use tracing::warn;
 
 mod cell_pixels;
 mod coalescer;
@@ -130,12 +132,24 @@ pub struct OrzmaTty<V: Vt> {
     exit: ExitLatch,
     /// Whether the host last reported this terminal as focused.
     focused: bool,
+    /// When the open synchronized update stops holding frames back;
+    /// `None` while the VT reports none open. A deadline in the past
+    /// marks an update that timed out and is not reopened until the VT
+    /// reports it closed.
+    sync_deadline: Option<Instant>,
 }
 
 impl<V: Vt> OrzmaTty<V> {
     /// Upper bound on chunks one [`Self::pump`] interprets: 64 reads of up
     /// to 4 KiB each, so at most about 256 KiB.
     pub const MAX_CHUNKS_PER_PUMP: usize = 64;
+
+    /// How long an open synchronized update holds frames back.
+    pub const SYNC_TIMEOUT: Duration = Duration::from_millis(150);
+
+    /// The shortest time between a frame and the frame taken when a
+    /// synchronized update closes.
+    pub const SYNC_EMIT_INTERVAL: Duration = Duration::from_millis(12);
 
     /// Spawns `options.shell` under a new PTY and sizes the injected VT
     /// to the spawn geometry.
@@ -472,12 +486,17 @@ impl<V: Vt> OrzmaTty<V> {
         self.pty.chunk_receiver().len()
     }
 
-    /// When the coalescer next wants a pump: `Some(now)` while the
-    /// bootstrap frame is owed, the armed window's deadline while output
-    /// is pending, `None` when idle.
+    /// When this terminal next wants a pump: the open synchronized
+    /// update's deadline while it holds frames back; otherwise
+    /// `Some(now)` while the bootstrap frame is owed, the armed
+    /// window's deadline while output is pending, and `None` when idle.
     pub fn next_deadline(&self) -> Option<Instant> {
+        let now = Instant::now();
+        if let Some(deadline) = self.sync_deadline.filter(|deadline| now < *deadline) {
+            return Some(deadline);
+        }
         if self.coalescer.needs_bootstrap() {
-            return Some(Instant::now());
+            return Some(now);
         }
         self.coalescer.next_deadline()
     }
@@ -485,9 +504,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// Returns the pending signals followed by an immediate frame, without
     /// reading the PTY or waiting for the coalesce window.
     ///
-    /// Never reports `ChildExit`.
+    /// Never reports `ChildExit`. An open synchronized update does not
+    /// hold this frame back, and stays open.
     pub fn flush_now(&mut self) -> PumpOutput {
-        self.emit_frame();
+        self.emit_frame(Instant::now());
         PumpOutput {
             items: mem::take(&mut self.pending),
             more_pending: false,
@@ -504,6 +524,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// item only on the pump that finds no chunk left, so the last output
     /// always precedes it. A reader thread that vanished without a status
     /// (both streams disconnected) reports `ChildExit { code: None }` once.
+    ///
+    /// No frame is emitted while a synchronized update is open and
+    /// younger than [`Self::SYNC_TIMEOUT`]; a frame taken when an
+    /// update closed is listed where it was taken.
     pub fn pump(&mut self) -> PumpOutput {
         let chunks_disconnected = self.drain_chunks();
         let more_pending = !chunks_disconnected && self.pty.chunks_pending();
@@ -520,8 +544,10 @@ impl<V: Vt> OrzmaTty<V> {
         }
 
         let now = Instant::now();
-        if self.coalescer.needs_bootstrap() || self.coalescer.is_due(now) {
-            self.emit_frame();
+        if !self.holds_frames_back(now)
+            && (self.coalescer.needs_bootstrap() || self.coalescer.is_due(now))
+        {
+            self.emit_frame(now);
         }
         let mut items = mem::take(&mut self.pending);
         if !more_pending && let ExitLatch::Observed(code) = self.exit {
@@ -545,6 +571,7 @@ impl<V: Vt> OrzmaTty<V> {
             pending_replies: Vec::new(),
             exit: ExitLatch::Running,
             focused: false,
+            sync_deadline: None,
         }
     }
 
@@ -639,31 +666,67 @@ impl<V: Vt> OrzmaTty<V> {
     /// Asks the VT for a frame and queues it behind the pending signals,
     /// settling the coalescer on success or disarming it when there was
     /// nothing to paint.
-    fn emit_frame(&mut self) {
+    fn emit_frame(&mut self, now: Instant) {
         match self.vt.frame() {
             Some(frame) => {
-                self.coalescer.settle_emit();
+                self.coalescer.settle_emit(now);
                 self.pending.push(PumpItem::Frame(frame));
             }
             None => self.coalescer.disarm(),
         }
     }
 
-    /// Interprets one PTY chunk, arms the coalescer when it staged
-    /// damage, and buffers the update's signals and replies for the
-    /// next pump.
+    /// Interprets one PTY chunk to its end, resubmitting the rest after
+    /// each closed synchronized update, and buffers what it produced for
+    /// the next pump. A close takes a frame at once unless one was
+    /// emitted within [`Self::SYNC_EMIT_INTERVAL`].
     fn feed_chunk(&mut self, chunk: &[u8]) {
-        let update = self.vt.interpret(chunk);
-        if update.damaged {
-            self.coalescer.arm_or_extend(Instant::now());
+        let mut rest = chunk;
+        while !rest.is_empty() {
+            let update = self.vt.interpret(rest);
+            let now = Instant::now();
+            if update.damaged {
+                self.coalescer.arm_or_extend(now);
+            }
+            self.pending.extend(
+                update
+                    .signals
+                    .into_iter()
+                    .map(|signal| PumpItem::Signal(TtySignal::Vt(signal))),
+            );
+            self.pending_replies.extend(update.replies);
+            self.track_synchronized_update(now);
+            if update.synchronized_update_closed
+                && !self.coalescer.emitted_within(Self::SYNC_EMIT_INTERVAL, now)
+            {
+                self.emit_frame(now);
+            }
+            let Some(next) = rest.get(update.consumed..).filter(|_| update.consumed > 0) else {
+                warn!(
+                    consumed = update.consumed,
+                    len = rest.len(),
+                    "the VT broke the interpret contract; dropping the rest of the chunk"
+                );
+                return;
+            };
+            rest = next;
         }
-        self.pending.extend(
-            update
-                .signals
-                .into_iter()
-                .map(|signal| PumpItem::Signal(TtySignal::Vt(signal))),
-        );
-        self.pending_replies.extend(update.replies);
+    }
+
+    /// Opens the deadline when the VT reports a synchronized update and
+    /// none is tracked, and clears it when the VT reports none.
+    fn track_synchronized_update(&mut self, now: Instant) {
+        if !self.vt.modes().synchronized_output.is_active() {
+            self.sync_deadline = None;
+        } else if self.sync_deadline.is_none() {
+            self.sync_deadline = Some(now + Self::SYNC_TIMEOUT);
+        }
+    }
+
+    /// Whether an open synchronized update still holds frames back at
+    /// `now`.
+    fn holds_frames_back(&self, now: Instant) -> bool {
+        self.sync_deadline.is_some_and(|deadline| now < deadline)
     }
 }
 

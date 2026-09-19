@@ -19,6 +19,8 @@ pub struct Coalescer {
     /// True until the first emit settles. The owner emits the initial
     /// snapshot without waiting for a deadline while this holds.
     bootstrap: bool,
+    /// When the last frame was emitted; `None` until the first one.
+    last_emit_at: Option<Instant>,
 }
 
 impl Default for Coalescer {
@@ -29,6 +31,7 @@ impl Default for Coalescer {
             armed_at: None,
             last_chunk_at: None,
             bootstrap: true,
+            last_emit_at: None,
         }
     }
 }
@@ -68,13 +71,21 @@ impl Coalescer {
         self.bootstrap
     }
 
-    /// Settles a completed emit: closes the window and marks the bootstrap
-    /// paint done.
+    /// Settles an emit completed at `now`: closes the window, marks the
+    /// bootstrap paint done, and records the time.
     ///
     /// Call it only after a frame was actually produced.
-    pub fn settle_emit(&mut self) {
+    pub fn settle_emit(&mut self, now: Instant) {
         self.disarm();
         self.bootstrap = false;
+        self.last_emit_at = Some(now);
+    }
+
+    /// Returns true when a frame was emitted less than `interval` before
+    /// `now`; false when none was emitted yet.
+    pub fn emitted_within(&self, interval: Duration, now: Instant) -> bool {
+        self.last_emit_at
+            .is_some_and(|at| now.saturating_duration_since(at) < interval)
     }
 
     /// Resets the window without touching the bootstrap debt; a completed
@@ -206,9 +217,24 @@ mod tests {
         assert!(coalescer.is_armed());
         assert!(coalescer.needs_bootstrap());
 
-        coalescer.settle_emit();
+        coalescer.settle_emit(t0);
         assert!(!coalescer.is_armed());
         assert!(!coalescer.needs_bootstrap());
+    }
+
+    /// Asserts that `emitted_within` is false before the first emit and
+    /// true only inside the interval behind one.
+    ///
+    /// Case: a terminal paints a frame and is asked 5 ms and 20 ms later
+    /// whether it painted recently.
+    #[test]
+    fn emitted_within_tracks_the_last_emit() {
+        let t0 = base();
+        let mut coalescer = Coalescer::default();
+        assert!(!coalescer.emitted_within(ms(12), t0));
+        coalescer.settle_emit(t0);
+        assert!(coalescer.emitted_within(ms(12), t0 + ms(5)));
+        assert!(!coalescer.emitted_within(ms(12), t0 + ms(20)));
     }
 
     /// Asserts that disarming closes the window without clearing the

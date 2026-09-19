@@ -5,7 +5,8 @@
 use crate::CellPixels;
 use orzma_vt::prelude::{
     CellSide, DisplayOffset, Frame, GridColumn, GridPoint, GridSize, InstanceId, InterpretOutput,
-    PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind, Vt, VtModes,
+    PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind, SynchronizedOutput, Vt,
+    VtModes,
 };
 #[cfg(any(test, feature = "test-support"))]
 use portable_pty::{MasterPty, PtySize};
@@ -142,6 +143,10 @@ pub struct FakeVt {
     /// stranded, popped one list per such resize; an empty script
     /// reports none.
     pub evictions: VecDeque<Vec<InstanceId>>,
+    /// The synchronized-output state `modes` reports after each
+    /// `interpret`, popped one per call; an empty script leaves the
+    /// state as it is.
+    pub sync_script: VecDeque<SynchronizedOutput>,
     /// Every host-driven mount received, in order.
     pub mounts: Vec<(ScreenLine, GridColumn, PlacementSize, InstanceId)>,
     /// Scripted verdict for host-driven mounts.
@@ -166,6 +171,7 @@ impl FakeVt {
             evictions: VecDeque::new(),
             mounts: Vec::new(),
             mount_accepts: true,
+            sync_script: VecDeque::new(),
         }
     }
 }
@@ -173,6 +179,9 @@ impl FakeVt {
 impl Vt for FakeVt {
     fn interpret(&mut self, chunk: &[u8]) -> InterpretOutput {
         self.interpreted.push(chunk.to_vec());
+        if let Some(state) = self.sync_script.pop_front() {
+            self.modes.synchronized_output = state;
+        }
         self.updates.pop_front().unwrap_or(InterpretOutput {
             damaged: true,
             signals: Vec::new(),

@@ -8,6 +8,8 @@ use crate::input::{
 };
 use crate::test_support::{CaptureSink, FailingMaster, FailingSink, FakeVt};
 use crossbeam_channel::{Sender, unbounded};
+use std::thread;
+use std::time::Duration;
 
 mod coalescer;
 mod focus;
@@ -16,6 +18,7 @@ mod input;
 mod pump;
 mod resize;
 mod scroll;
+mod sync;
 mod wheel;
 
 fn grid(cols: u16, rows: u16) -> GridSize {
