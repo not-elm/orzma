@@ -1,9 +1,10 @@
 //! The renderer's CPU-side mirror of one terminal's viewport and painted
 //! content, materialized from the frames applied to it.
 
+use crate::cursor::{CURSOR_VISIBLE_BIT, pack_cursor_style};
 use crate::schema::{
-    AnchoredPlacement, CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, HyperlinkId,
-    HyperlinkUri, Palette, Run, SelectionRange, ViCursor,
+    AnchoredPlacement, Color, Cursor, CursorShape, DisplayOffset, HyperlinkId, HyperlinkUri,
+    Palette, Run, SelectionRange, ViCursor,
 };
 use bevy::prelude::*;
 #[cfg(test)]
@@ -140,19 +141,18 @@ impl TerminalView {
         if let Some(vc) = self.vi_cursor {
             if let Some(line) = vc.point.line.to_viewport(offset, self.rows) {
                 cursor_pos = UVec2::new(u32::from(vc.point.column.0), u32::from(line.0));
-                cursor_style = Cursor {
+                cursor_style = pack_cursor_style(&Cursor {
                     point: vc.point,
                     shape: CursorShape::Block,
                     blinking: false,
                     visible: true,
-                }
-                .pack_cursor_style();
+                });
             }
         } else if let Some(c) = self.cursor.as_ref()
             && let Some(line) = c.point.line.to_viewport(offset, self.rows)
         {
             cursor_pos = UVec2::new(u32::from(c.point.column.0), u32::from(line.0));
-            cursor_style = c.pack_cursor_style();
+            cursor_style = pack_cursor_style(c);
         }
         if self.suppress_cursor {
             cursor_style &= !CURSOR_VISIBLE_BIT;

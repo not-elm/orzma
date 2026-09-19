@@ -1145,7 +1145,7 @@ fn selection_uniforms(
 mod tests {
     use super::*;
     use crate::cursor::CURSOR_HOLLOW_BIT;
-    use orzma_vt::prelude::CURSOR_VISIBLE_BIT;
+    use crate::cursor::CURSOR_VISIBLE_BIT;
     use std::collections::BTreeSet;
     use std::mem::size_of;
 

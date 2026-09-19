@@ -1,20 +1,46 @@
 //! Cursor paint policy: focus, hollow rendering, and the blink phase.
 
 use bevy::prelude::*;
-use orzma_vt::prelude::{CURSOR_BLINKING_BIT, CURSOR_SHAPE_MASK, CURSOR_VISIBLE_BIT};
+use orzma_vt::prelude::{Cursor, CursorShape};
 use std::time::Duration;
+
+/// Bit 0 of the packed `cursor_style` u32 — set when the caret is drawn.
+pub const CURSOR_VISIBLE_BIT: u32 = 1;
+
+/// Bits 1-2 of the packed `cursor_style` u32, carrying the shape
+/// (Block `0`, Underline `1`, Bar `2`).
+pub const CURSOR_SHAPE_MASK: u32 = 0b110;
+
+/// Bit 3 of the packed `cursor_style` u32 — set when the caret blinks.
+pub const CURSOR_BLINKING_BIT: u32 = 8;
 
 /// Bit 4 of the packed `cursor_style` u32 — set when the caret is drawn
 /// as an outline rather than filled.
-///
-/// The bit is the renderer's own: the VT packs bits 0-3 and leaves this
-/// one clear.
 pub const CURSOR_HOLLOW_BIT: u32 = 16;
 
-const _: () = assert!(
-    (CURSOR_HOLLOW_BIT & (CURSOR_VISIBLE_BIT | CURSOR_SHAPE_MASK | CURSOR_BLINKING_BIT)) == 0,
-    "a renderer-only cursor bit overlaps a VT-owned bit",
-);
+/// Packs `cursor` into the `cursor_style` u32 the shader decodes:
+/// [`CURSOR_VISIBLE_BIT`], [`CURSOR_SHAPE_MASK`] carrying the shape
+/// (Block `0`, Underline `1`, Bar `2`), and [`CURSOR_BLINKING_BIT`].
+///
+/// [`CURSOR_HOLLOW_BIT`] is left clear; [`CursorPaint::resolve`] sets it.
+pub fn pack_cursor_style(cursor: &Cursor) -> u32 {
+    let visible = if cursor.visible {
+        CURSOR_VISIBLE_BIT
+    } else {
+        0
+    };
+    let shape = match cursor.shape {
+        CursorShape::Block => 0u32,
+        CursorShape::Underline => 1,
+        CursorShape::Bar => 2,
+    };
+    let blinking = if cursor.blinking {
+        CURSOR_BLINKING_BIT
+    } else {
+        0
+    };
+    visible | (shape << 1) | blinking
+}
 
 /// The inputs the paint policy reads beyond the packed style.
 #[derive(Debug, Clone, Copy)]
@@ -128,16 +154,92 @@ impl Plugin for CursorPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orzma_vt::prelude::{Cursor, CursorShape};
+    use orzma_vt::prelude::{GridColumn, GridLine, GridPoint};
 
-    fn packed(shape: CursorShape, blinking: bool) -> u32 {
+    fn cursor(shape: CursorShape, blinking: bool, visible: bool) -> Cursor {
         Cursor {
+            point: GridPoint::default(),
             shape,
             blinking,
-            visible: true,
-            ..Default::default()
+            visible,
         }
-        .pack_cursor_style()
+    }
+
+    fn packed(shape: CursorShape, blinking: bool) -> u32 {
+        pack_cursor_style(&cursor(shape, blinking, true))
+    }
+
+    /// Asserts that every cursor shape occupies its assigned wire bits.
+    ///
+    /// Case: a terminal application switches among the steady block,
+    /// underline, and bar DECSCUSR variants.
+    #[test]
+    fn each_shape_lands_in_the_shape_bits() {
+        assert_eq!(packed(CursorShape::Block, false), 0b0001);
+        assert_eq!(packed(CursorShape::Underline, false), 0b0011);
+        assert_eq!(packed(CursorShape::Bar, false), 0b0101);
+    }
+
+    /// Asserts that blinking is encoded independently for every shape.
+    ///
+    /// Case: a terminal application selects a blinking caret variant
+    /// while the terminal stays focused.
+    #[test]
+    fn blinking_sets_its_bit_independent_of_shape() {
+        assert_eq!(packed(CursorShape::Block, true), 0b1001);
+        assert_eq!(packed(CursorShape::Underline, true), 0b1011);
+        assert_eq!(packed(CursorShape::Bar, true), 0b1101);
+    }
+
+    /// Asserts that a hidden cursor clears only the visible bit,
+    /// leaving the packed shape and blink policy intact.
+    ///
+    /// Case: vim hides the cursor with DECTCEM (`CSI ?25l`) while it
+    /// redraws, and on `CSI ?25h` the caret returns.
+    #[test]
+    fn a_hidden_cursor_clears_only_the_visible_bit() {
+        assert_eq!(
+            pack_cursor_style(&cursor(CursorShape::Bar, true, false)),
+            0b1100
+        );
+        assert_eq!(
+            pack_cursor_style(&cursor(CursorShape::Block, false, false)),
+            0b0000
+        );
+        assert_eq!(
+            pack_cursor_style(&cursor(CursorShape::Bar, true, false)),
+            pack_cursor_style(&cursor(CursorShape::Bar, true, true)) & !CURSOR_VISIBLE_BIT
+        );
+    }
+
+    /// Asserts that the cursor position does not participate in style
+    /// packing.
+    ///
+    /// Case: the user scrolls through history, and the cursor's grid
+    /// position projects to a different viewport cell or to no cell at
+    /// all.
+    #[test]
+    fn the_cursor_position_does_not_participate_in_style_packing() {
+        let at_origin = Cursor {
+            point: GridPoint {
+                line: GridLine(0),
+                column: GridColumn(0),
+            },
+            shape: CursorShape::Underline,
+            blinking: true,
+            visible: true,
+        };
+        let deep_in_history = Cursor {
+            point: GridPoint {
+                line: GridLine(-9999),
+                column: GridColumn(511),
+            },
+            ..at_origin
+        };
+        assert_eq!(
+            pack_cursor_style(&at_origin),
+            pack_cursor_style(&deep_in_history)
+        );
     }
 
     fn block_blinking() -> u32 {
