@@ -64,11 +64,12 @@ impl CaretStroke {
         if !cursor.visible || input.suppressed {
             return None;
         }
-        if !input.focused && input.unfocused_hollow {
-            return Some(Self::HollowBlock);
-        }
         if !input.focused {
-            return Some(Self::from(cursor.shape));
+            return Some(if input.unfocused_hollow {
+                Self::HollowBlock
+            } else {
+                Self::from(cursor.shape)
+            });
         }
         if cursor.blinking && !input.phase_on {
             return None;
@@ -253,10 +254,10 @@ mod tests {
         );
     }
 
-    /// Asserts that a packed caret always marks itself visible, since a
-    /// caret that is not painted has no packed form.
+    /// Asserts that every packed caret marks itself visible.
     ///
-    /// Case: the shader decides whether to draw from this bit alone.
+    /// Case: a program cycles the caret through each `DECSCUSR` shape
+    /// while the pane it sits in goes inactive and active again.
     #[test]
     fn the_packed_style_always_marks_the_caret_visible() {
         for stroke in [

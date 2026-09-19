@@ -1681,11 +1681,11 @@ mod tests {
         assert_eq!(composable_marks("").count(), 0);
     }
 
-    /// Asserts that the shader declares no clock, so the caret's blink
-    /// phase cannot drift back into the GPU.
+    /// Asserts that the shader declares no time uniform, so every
+    /// blink phase reaching the GPU was decided on the CPU.
     ///
-    /// Case: a later change reintroduces a time-driven effect in the
-    /// shader without routing it through the CPU policy.
+    /// Case: the user watches a caret blink while the terminal is
+    /// otherwise idle.
     #[test]
     fn the_shader_declares_no_time_uniform() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
@@ -1695,7 +1695,8 @@ mod tests {
     /// Asserts that the shader's cursor bit constants match the Rust
     /// ones they decode.
     ///
-    /// Case: a later change renumbers a cursor bit on one side only.
+    /// Case: a program selects a bar caret, and the pane it sits in
+    /// goes inactive so the caret is drawn hollow as well.
     #[test]
     fn the_shader_cursor_bits_match_the_rust_constants() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");

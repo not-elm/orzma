@@ -270,30 +270,38 @@ impl TextCursorModes {
     /// first slot; `None` for a parameter this terminal assigns no
     /// style to.
     ///
-    /// An omitted parameter, a zero, and a seven all restore `initial`.
+    /// An omitted parameter, a zero, and a seven all restore `initial`,
+    /// where the manuals below assign the first two the blinking block.
     /// A one selects the blinking block. The cursor's visibility is
     /// carried through unchanged.
     ///
     /// # References
     ///
-    /// - xterm-ctlseqs.pdf p.29-30 — the bar variants (5 and 6) and
-    ///   "Ps = 7 ⇒ initial resources".
+    /// - xterm-ctlseqs.pdf p.29-30 — the bar variants (5 and 6),
+    ///   "Ps = 0 ⇒ blinking block" and "Ps = 7 ⇒ initial resources".
+    /// - vt510.pdf p.251 — "0, 1 or none  Blink Block (Default)".
     pub fn with_decscusr(self, initial: TextCursorStyle, ps: Option<u16>) -> Option<Self> {
-        let (shape, blink) = match ps.unwrap_or(0) {
-            0 | 7 => (initial.shape, initial.blink),
-            1 => (CursorShape::Block, CursorBlink::Blinking),
-            2 => (CursorShape::Block, CursorBlink::Steady),
-            3 => (CursorShape::Underline, CursorBlink::Blinking),
-            4 => (CursorShape::Underline, CursorBlink::Steady),
-            5 => (CursorShape::Bar, CursorBlink::Blinking),
-            6 => (CursorShape::Bar, CursorBlink::Steady),
+        let style = match ps.unwrap_or(0) {
+            0 | 7 => initial,
+            1 => TextCursorStyle::new(CursorShape::Block, CursorBlink::Blinking),
+            2 => TextCursorStyle::new(CursorShape::Block, CursorBlink::Steady),
+            3 => TextCursorStyle::new(CursorShape::Underline, CursorBlink::Blinking),
+            4 => TextCursorStyle::new(CursorShape::Underline, CursorBlink::Steady),
+            5 => TextCursorStyle::new(CursorShape::Bar, CursorBlink::Blinking),
+            6 => TextCursorStyle::new(CursorShape::Bar, CursorBlink::Steady),
             _ => return None,
         };
-        Some(Self {
-            shape,
-            blink,
+        Some(self.with_style(style))
+    }
+
+    /// Returns these modes with `style`'s shape and blink in force,
+    /// carrying the cursor's visibility through unchanged.
+    pub fn with_style(self, style: TextCursorStyle) -> Self {
+        Self {
+            shape: style.shape,
+            blink: style.blink,
             ..self
-        })
+        }
     }
 }
 

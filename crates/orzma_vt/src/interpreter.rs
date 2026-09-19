@@ -788,9 +788,7 @@ impl Executor<'_> {
                 // DECAWM
                 7 => self.device.set_auto_wrap(AutoWrap::from_decset(enabled)),
                 // Blinking cursor (AT&T 610)
-                12 => {
-                    self.device.modes_mut().text_cursor.blink = CursorBlink::from_decset(enabled);
-                }
+                12 => self.device.modes_mut().text_cursor.blink = CursorBlink::from_decset(enabled),
                 // DECTCEM
                 25 => {
                     self.device.modes_mut().text_cursor.enable =

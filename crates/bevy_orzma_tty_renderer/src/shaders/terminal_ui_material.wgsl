@@ -387,11 +387,17 @@ fn paint_cursor(
     in_cell_px: vec2<f32>,
     base: vec4<f32>,
 ) -> vec4<f32> {
-    let cursor_visible = (params.cursor_style & CURSOR_VISIBLE) != 0u;
+    // NOTE: cursor_covers and bar_covers both read the cell buffer, and
+    // select evaluates both arms, so this uniform test must stay ahead of
+    // them: a blinking caret packs an invisible style on every dark phase,
+    // and without the early return every fragment pays those loads.
+    if (params.cursor_style & CURSOR_VISIBLE) == 0u {
+        return base;
+    }
     let cursor_hollow = (params.cursor_style & CURSOR_HOLLOW) != 0u;
     let cursor_shape = (params.cursor_style >> 1u) & 3u;
     let on_cursor_cell = select(cursor_covers(row, col), bar_covers(row, col), cursor_shape == CURSOR_SHAPE_BAR);
-    if !(cursor_visible && on_cursor_cell) {
+    if !on_cursor_cell {
         return base;
     }
 
@@ -407,11 +413,17 @@ fn paint_cursor(
         if !inside_cell {
             return base;
         }
-        let on_edge = in_cell_px.y < thickness
-            || in_cell_px.y >= params.cell_size_px.y - thickness
-            || (col == cursor_span_left() && in_cell_px.x < thickness)
+        // NOTE: thickness is a fraction of the cell WIDTH, so an outline
+        // that took it unbounded would have its two opposite edges meet
+        // and fill the cell — a hollow caret that reads as a filled one.
+        // Each axis keeps its stroke under half of its own extent.
+        let edge_x = min(thickness, (params.cell_size_px.x - 1.0) * 0.5);
+        let edge_y = min(thickness, (params.cell_size_px.y - 1.0) * 0.5);
+        let on_edge = in_cell_px.y < edge_y
+            || in_cell_px.y >= params.cell_size_px.y - edge_y
+            || (col == cursor_span_left() && in_cell_px.x < edge_x)
             || (col == cursor_span_right()
-                && in_cell_px.x >= params.cell_size_px.x - thickness);
+                && in_cell_px.x >= params.cell_size_px.x - edge_x);
         if on_edge {
             return invert;
         }

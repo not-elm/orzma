@@ -5,7 +5,7 @@ use crate::{
 use bevy::prelude::*;
 
 pub mod bundled;
-pub mod cursor;
+mod cursor;
 pub mod glyph;
 mod grid;
 pub mod material;
@@ -19,10 +19,7 @@ pub use material::TerminalPaddingFallback;
 
 pub mod prelude {
     pub use crate::TerminalRendererPlugin;
-    pub use crate::cursor::{
-        CaretPaint, CaretPaintInput, CaretStroke, CaretStyle, CursorPlugin, LastKeyInstant,
-        PackedCursorStyle, blink_phase_on,
-    };
+    pub use crate::cursor::{CaretStyle, CursorPlugin, LastKeyInstant};
     pub use crate::grid::TerminalGridPlugin;
     pub use crate::material::{OVERLAY_SLOTS, PaneInactiveStyle, TerminalOverlays};
     pub use crate::schema::*;

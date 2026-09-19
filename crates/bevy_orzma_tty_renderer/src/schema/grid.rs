@@ -145,11 +145,8 @@ impl TerminalView {
             ));
         }
         let cursor = self.cursor.as_ref()?;
-        let line = cursor.point.line.to_viewport(offset, self.rows)?;
-        Some((
-            UVec2::new(u32::from(cursor.point.column.0), u32::from(line.0)),
-            *cursor,
-        ))
+        let (column, row) = self.cursor_viewport_cell()?;
+        Some((UVec2::new(u32::from(column), u32::from(row)), *cursor))
     }
 
     /// Whether applying `frame` would change this view.

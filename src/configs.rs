@@ -60,14 +60,9 @@ impl Plugin for OrzmaConfigsPlugin {
                 OrzmaConfigs::default()
             }
         });
-        let caret_style = CaretStyle {
-            blink_interval: configs.cursor.blink_interval(),
-            blink_timeout: configs.cursor.blink_timeout(),
-            thickness: configs.cursor.thickness(),
-            unfocused_hollow: configs.cursor.unfocused_hollow,
-        };
+        let caret = caret_style(&configs.cursor);
         app.insert_resource(OrzmaConfigsResource(configs))
-            .insert_resource(caret_style);
+            .insert_resource(caret);
     }
 }
 
@@ -78,6 +73,16 @@ pub(crate) fn wheel_config(mc: &MouseConfig) -> WheelConfig {
         lines_per_notch: mc.lines_per_notch,
         fine_lines: mc.fine_lines,
         max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
+    }
+}
+
+/// The renderer's caret drawing knobs, from the `[cursor]` section.
+pub(crate) fn caret_style(config: &CursorConfig) -> CaretStyle {
+    CaretStyle {
+        blink_interval: config.blink_interval(),
+        blink_timeout: config.blink_timeout(),
+        thickness: config.thickness(),
+        unfocused_hollow: config.unfocused_hollow,
     }
 }
 
@@ -263,5 +268,22 @@ mod tests {
             assert_eq!(policy.initial.shape, expected_shape);
             assert_eq!(policy.initial.blink, CursorBlink::Blinking);
         }
+    }
+
+    /// Asserts that `caret_style` carries each `[cursor]` drawing knob
+    /// into its own `CaretStyle` field, resolving the timings through
+    /// the config's accessors.
+    ///
+    /// Case: a user turns the hollow unfocused caret off and leaves the
+    /// shipped blink timings alone.
+    #[test]
+    fn caret_style_maps_every_drawing_knob() {
+        let mut config = CursorConfig::default();
+        config.unfocused_hollow = false;
+        let style = caret_style(&config);
+        assert_eq!(style.blink_interval, config.blink_interval());
+        assert_eq!(style.blink_timeout, config.blink_timeout());
+        assert_eq!(style.thickness, config.thickness());
+        assert!(!style.unfocused_hollow);
     }
 }

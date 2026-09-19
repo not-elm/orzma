@@ -1,5 +1,6 @@
 //! Cursor configuration: the `[cursor]` section.
 
+use crate::inactive_pane::norm_unit;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -72,20 +73,17 @@ impl CursorConfig {
         )
     }
 
-    /// Caret thickness as a fraction of the cell width, in `0.0..=1.0`.
+    /// Caret thickness as a fraction of the cell width, in `0.0..=1.0`;
+    /// the default stands in for a NaN.
     pub fn thickness(&self) -> f32 {
-        self.thickness
+        norm_unit(self.thickness, DEFAULT_THICKNESS)
     }
 
     /// Raises `blink_interval` to its floor and clamps `thickness` to
     /// `0.0..=1.0`, falling back to the default for NaN.
     pub(crate) fn normalize(&mut self) {
         self.blink_interval = self.blink_interval.max(MIN_BLINK_INTERVAL_MS);
-        if self.thickness.is_nan() {
-            self.thickness = DEFAULT_THICKNESS;
-        } else {
-            self.thickness = self.thickness.clamp(0.0, 1.0);
-        }
+        self.thickness = norm_unit(self.thickness, DEFAULT_THICKNESS);
     }
 }
 

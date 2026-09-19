@@ -11,6 +11,13 @@ pub struct TextCursorStyle {
     pub blink: CursorBlink,
 }
 
+impl TextCursorStyle {
+    /// Returns the style pairing `shape` with `blink`.
+    pub fn new(shape: CursorShape, blink: CursorBlink) -> Self {
+        Self { shape, blink }
+    }
+}
+
 /// The host-supplied policy the device applies to cursor sequences.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CursorPolicy {
@@ -26,7 +33,8 @@ mod tests {
     /// Asserts that the default policy is a steady block, matching the
     /// power-up state.
     ///
-    /// Case: a host that injects no policy at all, such as a test fixture.
+    /// Case: a host builds a terminal without injecting a policy, as a
+    /// test fixture does.
     #[test]
     fn the_default_policy_is_a_steady_block() {
         let policy = CursorPolicy::default();

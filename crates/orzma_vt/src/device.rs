@@ -486,8 +486,10 @@ impl DeviceState {
     }
 
     fn apply_initial_cursor_style(&mut self) {
-        self.modes.text_cursor.shape = self.cursor_policy.initial.shape;
-        self.modes.text_cursor.blink = self.cursor_policy.initial.blink;
+        self.modes.text_cursor = self
+            .modes
+            .text_cursor
+            .with_style(self.cursor_policy.initial);
     }
 }
 
