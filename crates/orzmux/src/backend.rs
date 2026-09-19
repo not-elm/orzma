@@ -973,6 +973,86 @@ mod tests {
         );
     }
 
+    /// The kind of each event, for asserting an order.
+    fn event_kinds(events: &VecDeque<OrzmuxEvent>) -> Vec<&'static str> {
+        events
+            .iter()
+            .map(|event| match event {
+                OrzmuxEvent::Signal { .. } => "signal",
+                OrzmuxEvent::Frame { .. } => "frame",
+                _ => "other",
+            })
+            .collect()
+    }
+
+    /// Asserts that the frame a closed synchronized update yields
+    /// reaches the GUI between the signals raised before and after the
+    /// close.
+    ///
+    /// Case: a program rings the bell inside a synchronized update,
+    /// closes it, and sets the window title right behind it in the same
+    /// write.
+    #[test]
+    fn a_closed_update_frame_arrives_between_its_signals() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        h.backend.pump_pane(root);
+        h.drain();
+        thread::sleep(Duration::from_millis(15));
+        pane.chunk_tx
+            .send(b"\x1b[?2026h\x07a\x1b[?2026l\x1b]2;t\x07".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        assert_eq!(event_kinds(&h.drain()), ["signal", "frame", "signal"]);
+    }
+
+    /// Asserts that a pane with an open synchronized update is not
+    /// painted when its coalescer deadline passes.
+    ///
+    /// Case: nvim is halfway through a redraw inside a synchronized
+    /// update when the 12 ms cap elapses.
+    #[test]
+    fn an_open_update_holds_the_pane_frame_back() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        h.backend.pump_pane(root);
+        h.drain();
+        pane.chunk_tx.send(b"\x1b[?2026hhello".to_vec()).unwrap();
+        h.backend.pump_pane(root);
+        thread::sleep(Duration::from_millis(15));
+        h.backend.service_deadlines();
+        h.backend.pump_pane(root);
+        assert!(
+            !h.drain()
+                .iter()
+                .any(|e| matches!(e, OrzmuxEvent::Frame { .. }))
+        );
+    }
+
+    /// Asserts that a pane's last frame reaches the GUI ahead of its
+    /// `PaneClosed`.
+    ///
+    /// Case: the shell prints a farewell line and exits before the
+    /// coalesce window for that line elapsed.
+    #[test]
+    fn the_last_frame_precedes_the_pane_close() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        h.backend.pump_pane(root);
+        h.drain();
+        pane.chunk_tx.send(b"bye".to_vec()).unwrap();
+        pane.exit_tx.send(Some(0)).unwrap();
+        h.backend.pump_pane(root);
+        let events = h.drain();
+        let frame = events
+            .iter()
+            .position(|e| matches!(e, OrzmuxEvent::Frame { .. }));
+        let closed = events
+            .iter()
+            .position(|e| matches!(e, OrzmuxEvent::PaneClosed { .. }));
+        assert!(frame.is_some() && frame < closed, "{events:?}");
+    }
+
     /// Asserts that the depths recorded after a wake are the chunks
     /// still queued before the pump drains them.
     ///
