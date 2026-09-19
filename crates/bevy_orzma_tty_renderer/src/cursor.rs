@@ -11,6 +11,11 @@ use std::time::Duration;
 /// one clear.
 pub const CURSOR_HOLLOW_BIT: u32 = 16;
 
+const _: () = assert!(
+    (CURSOR_HOLLOW_BIT & (CURSOR_VISIBLE_BIT | CURSOR_SHAPE_MASK | CURSOR_BLINKING_BIT)) == 0,
+    "a renderer-only cursor bit overlaps a VT-owned bit",
+);
+
 /// The inputs the paint policy reads beyond the packed style.
 #[derive(Debug, Clone, Copy)]
 pub struct CursorPaintInput {

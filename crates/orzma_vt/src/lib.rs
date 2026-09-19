@@ -1504,7 +1504,7 @@ mod tests {
             },
             ignore_dec_mode_12: false,
         };
-        let vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10).with_cursor_policy(policy);
+        let vt = vt().with_cursor_policy(policy);
         assert_eq!(vt.device.modes().text_cursor.shape, CursorShape::Bar);
         assert_eq!(vt.device.modes().text_cursor.blink, CursorBlink::Blinking);
     }

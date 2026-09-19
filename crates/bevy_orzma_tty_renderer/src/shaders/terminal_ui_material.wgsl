@@ -378,13 +378,7 @@ fn cursor_span_right() -> u32 {
 // Whether a bar cursor is drawn in (row, col): the cursor's own cell, or
 // the body cell when the cursor sits on a wide glyph's right half.
 fn bar_covers(row: u32, col: u32) -> bool {
-    if row != params.cursor_pos.y {
-        return false;
-    }
-    if cursor_on_wide_right_half() {
-        return col + 1u == params.cursor_pos.x;
-    }
-    return col == params.cursor_pos.x;
+    return row == params.cursor_pos.y && col == cursor_span_left();
 }
 
 fn paint_cursor(
