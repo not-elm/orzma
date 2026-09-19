@@ -4,6 +4,7 @@
 use crate::surface::OrzmaTerminal;
 use crate::ui::ShellSurfaceUi;
 use bevy::prelude::*;
+use bevy_orzma_tty_renderer::prelude::PaneInactiveStyle;
 use bevy_orzma_webview::ControlPlaneHandle;
 use bevy_orzmux::prelude::{OrzmuxConnection, PaneRegistry, absolute_px_node};
 use orzmux::prelude::{NewPaneAt, OrzmuxCommand, RequestId};
@@ -39,7 +40,12 @@ fn on_pane_spawn_request(
         return;
     };
     let entity = commands
-        .spawn((OrzmaTerminal, pending_pane_node(), ChildOf(container)))
+        .spawn((
+            OrzmaTerminal,
+            pending_pane_node(),
+            ChildOf(container),
+            PaneInactiveStyle::default(),
+        ))
         .id();
     let env = control
         .as_deref()
@@ -121,6 +127,41 @@ mod tests {
         };
         assert_eq!(*sent_request, request);
         assert!(env.contains(&("ORZMA_TOKEN".to_string(), token)));
+    }
+
+    /// Asserts that a freshly spawned pane carries `PaneInactiveStyle`,
+    /// so its caret is drawn hollow and steady until the focus sync
+    /// names it active.
+    ///
+    /// Case: the user splits a pane and the first frame renders before
+    /// the active-pane notification arrives.
+    #[test]
+    fn a_new_pane_starts_inactive() {
+        let (client, _events, _commands) = OrzmuxClient::detached();
+        let tokens = TokenRegistry::default();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(SpawnPlugin)
+            .init_resource::<PaneRegistry>()
+            .insert_resource(OrzmuxConnection(client))
+            .insert_resource(ControlPlaneHandle {
+                sock_path: PathBuf::from("/tmp/ctl.sock"),
+                tokens,
+            });
+        app.world_mut().spawn((Node::default(), ShellSurfaceUi));
+        app.world_mut().trigger(PaneSpawnRequest {
+            at: NewPaneAt::Root,
+        });
+        app.update();
+
+        let registry = app.world().resource::<PaneRegistry>();
+        assert_eq!(registry.pending_spawns.len(), 1);
+        let entity = *registry
+            .pending_spawns
+            .values()
+            .next()
+            .expect("one pending spawn");
+        assert!(app.world().get::<PaneInactiveStyle>(entity).is_some());
     }
 
     /// Asserts that a spawn request without a connection spawns no
