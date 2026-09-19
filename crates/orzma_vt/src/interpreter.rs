@@ -471,11 +471,12 @@ impl VTActor for Executor<'_> {
             }
             // DECSCUSR
             (None, [b' '], b'q') => {
+                let initial = self.device.cursor_policy().initial;
                 if let Some(next) = self
                     .device
                     .modes()
                     .text_cursor
-                    .with_decscusr(params.value(0))
+                    .with_decscusr(initial, params.value(0))
                 {
                     self.device.modes_mut().text_cursor = next;
                 }

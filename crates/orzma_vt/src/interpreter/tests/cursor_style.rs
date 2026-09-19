@@ -3,7 +3,8 @@
 //! together.
 
 use super::*;
-use crate::device::modes::CursorShape;
+use crate::device::cursor_policy::{CursorPolicy, TextCursorStyle};
+use crate::device::modes::{CursorBlink, CursorShape};
 
 /// Whether the device's frame-ready cursor blinks.
 fn cursor_blinking(device: &DeviceState) -> bool {
@@ -13,6 +14,24 @@ fn cursor_blinking(device: &DeviceState) -> bool {
 /// The shape the device's frame-ready cursor carries.
 fn cursor_shape(device: &DeviceState) -> CursorShape {
     device.cursor().shape
+}
+
+/// Interprets `chunk` against a fresh device constructed with `policy`.
+fn interpret_with_policy(policy: CursorPolicy, chunk: &[u8]) -> DeviceState {
+    let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10).with_cursor_policy(policy);
+    vt.interpret(chunk);
+    vt.device
+}
+
+/// A cursor policy whose initial style is a steady bar.
+fn bar_steady_policy() -> CursorPolicy {
+    CursorPolicy {
+        initial: TextCursorStyle {
+            shape: CursorShape::Bar,
+            blink: CursorBlink::Steady,
+        },
+        ignore_dec_mode_12: false,
+    }
 }
 
 /// Asserts that a terminal that has seen no blink control reports a
@@ -111,13 +130,15 @@ fn a_cursor_checkpoint_leaves_the_blink_alone() {
     assert!(cursor_blinking(&device));
 }
 
-/// Asserts that a reset to initial state returns the cursor to steady.
+/// Asserts that `RIS` restores the configured initial style rather than
+/// a compile-time default.
 ///
-/// Case: a script that left the blink on ends, and the shell runs
-/// `tput reset`, whose `rs1` string is `\Ec`.
+/// Case: a program leaves the caret as a blinking underline and the
+/// user runs `reset` to recover the shell.
 #[test]
-fn a_reset_to_initial_state_returns_the_cursor_to_steady() {
-    let device = interpret(b"\x1b[?12h\x1bc");
+fn a_reset_to_initial_state_returns_the_cursor_to_the_configured_style() {
+    let device = interpret_with_policy(bar_steady_policy(), b"\x1b[3 q\x1bc");
+    assert_eq!(cursor_shape(&device), CursorShape::Bar);
     assert!(!cursor_blinking(&device));
 }
 
@@ -195,33 +216,33 @@ fn each_decscusr_parameter_reaches_the_device() {
     }
 }
 
-/// Asserts that an omitted parameter, a zero, and a one all reach the
-/// device as the blinking block.
+/// Asserts that an omitted parameter and a zero reach the device as the
+/// configured initial style, while a one reaches it as the blinking
+/// block.
 ///
 /// Case: a prompt framework sends the bare `CSI SP q`, and vim sends
 /// `CSI 0 SP q` when it restores the caret on exit.
 #[test]
-fn an_omitted_zero_and_one_reach_the_device_as_the_blinking_block() {
-    for chunk in [
-        b"\x1b[ q".as_slice(),
-        b"\x1b[0 q".as_slice(),
-        b"\x1b[1 q".as_slice(),
-    ] {
-        let device = interpret(chunk);
-        assert_eq!(cursor_shape(&device), CursorShape::Block, "chunk {chunk:?}");
-        assert!(cursor_blinking(&device), "chunk {chunk:?}");
+fn an_omitted_parameter_and_a_zero_reach_the_device_as_the_initial_style() {
+    for chunk in [b"\x1b[ q".as_slice(), b"\x1b[0 q".as_slice()] {
+        let device = interpret_with_policy(bar_steady_policy(), chunk);
+        assert_eq!(cursor_shape(&device), CursorShape::Bar, "chunk {chunk:?}");
+        assert!(!cursor_blinking(&device), "chunk {chunk:?}");
     }
+    let device = interpret_with_policy(bar_steady_policy(), b"\x1b[1 q");
+    assert_eq!(cursor_shape(&device), CursorShape::Block);
+    assert!(cursor_blinking(&device));
 }
 
-/// Asserts that `CSI 7 SP q` restores the power-up style through the
-/// parser.
+/// Asserts that `CSI 7 SP q` restores the configured initial style
+/// through the parser.
 ///
 /// Case: an application that took a blinking bar hands the terminal
 /// back to the shell as it exits.
 #[test]
-fn a_decscusr_seven_restores_the_power_up_style() {
-    let device = interpret(b"\x1b[5 q\x1b[7 q");
-    assert_eq!(cursor_shape(&device), CursorShape::Block);
+fn a_decscusr_seven_restores_the_configured_initial_style() {
+    let device = interpret_with_policy(bar_steady_policy(), b"\x1b[5 q\x1b[7 q");
+    assert_eq!(cursor_shape(&device), CursorShape::Bar);
     assert!(!cursor_blinking(&device));
 }
 
@@ -376,4 +397,16 @@ fn decscusr_leaves_the_cursor_visibility_alone() {
     let device = interpret(b"\x1b[?25l\x1b[5 q");
     assert!(!device.cursor().visible);
     assert_eq!(cursor_shape(&device), CursorShape::Bar);
+}
+
+/// Asserts that `DECSTR` restores the configured initial style rather
+/// than a compile-time default.
+///
+/// Case: a TUI issues a soft reset on startup to normalize the terminal
+/// it inherited.
+#[test]
+fn a_soft_reset_returns_the_cursor_to_the_configured_style() {
+    let device = interpret_with_policy(bar_steady_policy(), b"\x1b[3 q\x1b[!p");
+    assert_eq!(cursor_shape(&device), CursorShape::Bar);
+    assert!(!cursor_blinking(&device));
 }

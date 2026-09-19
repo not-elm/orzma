@@ -7,8 +7,7 @@ pub(crate) mod modes;
 use crate::device::color::{Palette, Rgb};
 use crate::device::cursor_policy::CursorPolicy;
 use crate::device::modes::{
-    AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode, ScreenKind,
-    TextCursorEnable, VtModes,
+    AutoWrap, InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable, VtModes,
 };
 use crate::error::VtResult;
 use crate::frame::damage::DamageSpan;
@@ -223,6 +222,8 @@ impl DeviceState {
         // live deferred wrap as it stands, must go through `set_auto_wrap`
         // instead.
         self.modes = VtModes::default();
+        self.modes.text_cursor.shape = self.cursor_policy.initial.shape;
+        self.modes.text_cursor.blink = self.cursor_policy.initial.blink;
         self.title = TitleState::default();
         self.active_hyperlink = None;
         // NOTE: `hyperlinks` is deliberately not reset. Ids must never be
@@ -252,8 +253,8 @@ impl DeviceState {
     /// - `DECSTR` (`CSI ! p`)
     pub fn soft_reset(&mut self) -> Option<DamageSpan> {
         self.modes.text_cursor.enable = TextCursorEnable::Shown;
-        self.modes.text_cursor.shape = CursorShape::default();
-        self.modes.text_cursor.blink = CursorBlink::default();
+        self.modes.text_cursor.shape = self.cursor_policy.initial.shape;
+        self.modes.text_cursor.blink = self.cursor_policy.initial.blink;
         self.modes.insert_replace = InsertReplaceMode::Replace;
         self.modes.app_cursor = false;
         self.modes.keypad_mode = KeypadMode::Numeric;
