@@ -3,7 +3,7 @@
 
 use crate::{
     coalescer::Coalescer,
-    error::OrzmaTtyResult,
+    error::{OrzmaTtyError, OrzmaTtyResult},
     input::{
         MouseReport, MouseReportKind, PtyInput, TerminalKey, TerminalModifiers, WheelConfig,
         WheelDecision, WheelInput,
@@ -243,9 +243,14 @@ impl<V: Vt> OrzmaTty<V> {
     ///
     /// Available only under `cfg(test)` in this crate and through the
     /// `test-support` feature downstream.
+    ///
+    /// # Errors
+    ///
+    /// Reports a VT that interpreted none of a non-empty chunk, or more
+    /// bytes than the chunk held.
     #[cfg(any(test, feature = "test-support"))]
-    pub fn feed_bytes(&mut self, bytes: &[u8]) {
-        self.feed_chunk(bytes);
+    pub fn feed_bytes(&mut self, bytes: &[u8]) -> OrzmaTtyResult {
+        self.feed_chunk(bytes)
     }
 
     /// Blocks until every input this terminal queued has been written to
@@ -642,7 +647,11 @@ impl<V: Vt> OrzmaTty<V> {
     fn drain_chunks(&mut self) -> bool {
         for _ in 0..Self::MAX_CHUNKS_PER_PUMP {
             match self.pty.poll_chunk() {
-                ChunkPoll::Chunk(chunk) => self.feed_chunk(&chunk),
+                ChunkPoll::Chunk(chunk) => {
+                    if let Err(error) = self.feed_chunk(&chunk) {
+                        warn!(%error, "dropping the rest of the chunk");
+                    }
+                }
                 ChunkPoll::Empty => return false,
                 ChunkPoll::Disconnected => return true,
             }
@@ -682,7 +691,13 @@ impl<V: Vt> OrzmaTty<V> {
     /// each closed synchronized update, and buffers what it produced for
     /// the next pump. A close takes a frame at once unless one was
     /// emitted within [`Self::SYNC_EMIT_INTERVAL`].
-    fn feed_chunk(&mut self, chunk: &[u8]) {
+    ///
+    /// # Errors
+    ///
+    /// Reports a VT that interpreted none of a non-empty chunk, or more
+    /// bytes than the chunk held. What the call already buffered stays
+    /// buffered, and the rest of the chunk is left uninterpreted.
+    fn feed_chunk(&mut self, chunk: &[u8]) -> OrzmaTtyResult {
         let mut rest = chunk;
         while !rest.is_empty() {
             let update = self.vt.interpret(rest);
@@ -703,16 +718,18 @@ impl<V: Vt> OrzmaTty<V> {
             {
                 self.emit_frame(now);
             }
-            if update.consumed == 0 || update.consumed > rest.len() {
-                warn!(
-                    consumed = update.consumed,
-                    len = rest.len(),
-                    "the VT broke the interpret contract; dropping the rest of the chunk"
-                );
-                return;
+            if update.consumed == 0 {
+                return Err(OrzmaTtyError::VtConsumedNothing { len: rest.len() });
+            }
+            if update.consumed > rest.len() {
+                return Err(OrzmaTtyError::VtConsumedBeyondChunk {
+                    consumed: update.consumed,
+                    len: rest.len(),
+                });
             }
             rest = &rest[update.consumed..];
         }
+        Ok(())
     }
 
     /// Opens the deadline when the VT reports a synchronized update and

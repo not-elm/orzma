@@ -18,7 +18,8 @@ fn a_host_removal_arms_the_coalescer_only_when_something_went() {
         Box::new(CaptureSink::default()),
     )
     .expect("the detached constructor succeeds");
-    tty.feed_bytes(format!("\x1b_Omount;n={id},r=4,c=8\x1b\\").as_bytes());
+    tty.feed_bytes(format!("\x1b_Omount;n={id},r=4,c=8\x1b\\").as_bytes())
+        .expect("the fake VT honors the interpret contract");
     let _ = tty.pump();
 
     // NOTE: disarm explicitly between the two probes. A second pump()

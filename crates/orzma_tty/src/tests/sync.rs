@@ -14,7 +14,8 @@ fn painted_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
 /// Opens a synchronized update with one damaging chunk.
 fn open_update(tty: &mut OrzmaTty<FakeVt>) {
     tty.vt.sync_script.push_back(SynchronizedOutput::Active);
-    tty.feed_bytes(b"x");
+    tty.feed_bytes(b"x")
+        .expect("the fake VT honors the interpret contract");
 }
 
 /// Closes the open synchronized update with one chunk that has a frame
@@ -23,7 +24,8 @@ fn close_update(tty: &mut OrzmaTty<FakeVt>) {
     tty.vt.sync_script.push_back(SynchronizedOutput::Inactive);
     tty.vt.updates.push_back(update(1, true));
     tty.vt.frames.push_back(a_frame());
-    tty.feed_bytes(b"z");
+    tty.feed_bytes(b"z")
+        .expect("the fake VT honors the interpret contract");
 }
 
 /// Asserts that a pump emits no frame while a synchronized update is
@@ -101,7 +103,8 @@ fn a_timed_out_update_stops_holding_frames_back() {
     assert_eq!(tty.pump().frames().count(), 1);
 
     tty.vt.sync_script.push_back(SynchronizedOutput::Active);
-    tty.feed_bytes(b"y");
+    tty.feed_bytes(b"y")
+        .expect("the fake VT honors the interpret contract");
     assert_eq!(tty.sync_deadline, Some(expired));
 }
 
@@ -149,7 +152,8 @@ fn closes_inside_the_emit_interval_share_one_frame() {
     tty.vt.updates.push_back(update(1, true));
     tty.vt.frames.push_back(a_frame());
     tty.vt.frames.push_back(a_frame());
-    tty.feed_bytes(b"ab");
+    tty.feed_bytes(b"ab")
+        .expect("the fake VT honors the interpret contract");
     assert_eq!(tty.vt.interpreted.len(), 2);
     assert_eq!(tty.vt.frames.len(), 1);
     assert!(tty.coalescer.is_armed());
@@ -164,7 +168,8 @@ fn closes_inside_the_emit_interval_share_one_frame() {
 fn an_empty_update_keeps_the_bootstrap_debt() {
     let (mut tty, _sink) = detached_term();
     tty.vt.updates.push_back(update(1, true));
-    tty.feed_bytes(b"x");
+    tty.feed_bytes(b"x")
+        .expect("the fake VT honors the interpret contract");
     assert!(tty.coalescer.needs_bootstrap());
     assert!(tty.pending.is_empty());
 }
@@ -199,7 +204,8 @@ fn a_close_frame_keeps_its_place_among_the_signals() {
     tty.vt.updates.push_back(first);
     tty.vt.updates.push_back(second);
     tty.vt.frames.push_back(a_frame());
-    tty.feed_bytes(b"ab");
+    tty.feed_bytes(b"ab")
+        .expect("the fake VT honors the interpret contract");
     assert!(matches!(
         tty.pending.as_slice(),
         [
@@ -210,17 +216,47 @@ fn a_close_frame_keeps_its_place_among_the_signals() {
     ));
 }
 
-/// Asserts that a VT whose reported byte count breaks the interpret
-/// contract is cut off after one call instead of looping or panicking.
+/// Asserts that a VT which interprets none of a non-empty chunk is cut
+/// off after one call, reporting [`OrzmaTtyError::VtConsumedNothing`]
+/// instead of looping on the unreduced chunk.
 ///
 /// Case: a VT implementation with a bug in its byte accounting is
 /// plugged into the terminal, and a program prints a line.
 #[test]
-fn a_vt_that_breaks_the_consumed_contract_is_cut_off() {
-    for consumed in [0, 9] {
-        let (mut tty, _sink) = painted_term();
-        tty.vt.updates.push_back(update(consumed, false));
-        tty.feed_bytes(b"abc");
-        assert_eq!(tty.vt.interpreted.len(), 1, "consumed = {consumed}");
-    }
+fn a_vt_that_interprets_nothing_is_cut_off() {
+    let (mut tty, _sink) = painted_term();
+    tty.vt.updates.push_back(update(0, false));
+
+    let error = tty
+        .feed_bytes(b"abc")
+        .expect_err("a VT that interprets nothing breaks the contract");
+
+    assert!(matches!(error, OrzmaTtyError::VtConsumedNothing { len: 3 }));
+    assert_eq!(tty.vt.interpreted.len(), 1);
+}
+
+/// Asserts that a VT which claims more bytes than the chunk held is cut
+/// off after one call, reporting
+/// [`OrzmaTtyError::VtConsumedBeyondChunk`] instead of panicking on the
+/// slice.
+///
+/// Case: a VT implementation with a bug in its byte accounting is
+/// plugged into the terminal, and a program prints a line.
+#[test]
+fn a_vt_that_interprets_beyond_the_chunk_is_cut_off() {
+    let (mut tty, _sink) = painted_term();
+    tty.vt.updates.push_back(update(9, false));
+
+    let error = tty
+        .feed_bytes(b"abc")
+        .expect_err("a VT that overruns the chunk breaks the contract");
+
+    assert!(matches!(
+        error,
+        OrzmaTtyError::VtConsumedBeyondChunk {
+            consumed: 9,
+            len: 3
+        }
+    ));
+    assert_eq!(tty.vt.interpreted.len(), 1);
 }

@@ -105,7 +105,8 @@ fn a_pre_pump_chunk_does_not_double_emit_the_bootstrap_frame() {
     let (mut tty, _sink) = detached_term();
     tty.vt.frames.push_back(a_frame());
     tty.vt.frames.push_back(a_frame());
-    tty.feed_bytes(b"$ ");
+    tty.feed_bytes(b"$ ")
+        .expect("the fake VT honors the interpret contract");
     let first = tty.pump();
     assert!(first.frames().count() == 1);
     let second = tty.pump();
@@ -152,7 +153,8 @@ fn a_pump_with_nothing_evicted_raises_nothing() {
 #[test]
 fn a_chunk_that_stages_damage_arms_the_window() {
     let (mut term, _sink) = detached_term();
-    term.feed_bytes(b"a");
+    term.feed_bytes(b"a")
+        .expect("the fake VT honors the interpret contract");
     assert!(term.coalescer.is_armed());
 }
 
@@ -169,6 +171,7 @@ fn a_chunk_that_stages_no_damage_does_not_arm_the_window() {
         replies: b"\x1b[1;1R".to_vec(),
         ..update(4, false)
     });
-    term.feed_bytes(b"\x1b[6n");
+    term.feed_bytes(b"\x1b[6n")
+        .expect("the fake VT honors the interpret contract");
     assert!(!term.coalescer.is_armed());
 }

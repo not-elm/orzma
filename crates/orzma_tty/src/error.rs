@@ -40,4 +40,18 @@ pub enum OrzmaTtyError {
     /// Resizing the PTY master (`TIOCSWINSZ`) failed.
     #[error("PTY resize failed")]
     PtyResize(#[source] anyhow::Error),
+    /// The VT interpreted none of a non-empty chunk.
+    #[error("the VT interpreted none of a {len}-byte chunk")]
+    VtConsumedNothing {
+        /// Bytes the chunk still held.
+        len: usize,
+    },
+    /// The VT reported interpreting more bytes than the chunk held.
+    #[error("the VT interpreted {consumed} bytes of a {len}-byte chunk")]
+    VtConsumedBeyondChunk {
+        /// Bytes the VT claimed.
+        consumed: usize,
+        /// Bytes the chunk held.
+        len: usize,
+    },
 }
