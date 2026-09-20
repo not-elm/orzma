@@ -416,9 +416,9 @@ impl Backend {
     /// # Errors
     ///
     /// Returns [`OrzmuxError::Unsolved`] when the tree does not place
-    /// the pane, [`OrzmuxError::GridSize`] when its rectangle is not a
-    /// valid size, and [`OrzmuxError::SpawnShell`] when the shell
-    /// refuses to start.
+    /// the pane, [`OrzmuxError::Vt`] when its rectangle is not a valid
+    /// size, and [`OrzmuxError::SpawnShell`] when the shell refuses to
+    /// start.
     fn spawn_pane(
         &mut self,
         new: PaneId,
@@ -967,6 +967,19 @@ mod tests {
         assert_eq!(
             OrzmuxError::from(SplitRefused).to_string(),
             "the target pane has too little room to divide"
+        );
+    }
+
+    /// Asserts that a backend thread start-up failure's message includes
+    /// the OS error text.
+    ///
+    /// Case: the OS refuses to start the `orzma-mux` thread.
+    #[test]
+    fn a_backend_thread_failure_keeps_the_os_error_text() {
+        let io_err = std::io::Error::other("out of threads");
+        assert_eq!(
+            OrzmuxError::BackendThread(io_err).to_string(),
+            "the orzma-mux thread could not be started: out of threads"
         );
     }
 

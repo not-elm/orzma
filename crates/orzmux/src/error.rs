@@ -28,13 +28,13 @@ pub enum OrzmuxError {
     /// The new pane is absent from the layout the tree solved for it.
     #[error("the new pane is not in the solved layout")]
     Unsolved,
-    /// The new pane's rectangle is not a valid grid size.
+    /// A VT operation for the new pane failed.
     #[error(transparent)]
-    GridSize(#[from] VtError),
+    Vt(#[from] VtError),
     /// The shell for a new pane could not be spawned.
     #[error(transparent)]
     SpawnShell(#[from] OrzmaTtyError),
     /// The backend thread could not be started.
-    #[error("the orzma-mux thread could not be started")]
+    #[error("the orzma-mux thread could not be started: {0}")]
     BackendThread(#[source] IoError),
 }
