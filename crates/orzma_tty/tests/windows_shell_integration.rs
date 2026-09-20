@@ -194,52 +194,30 @@ fn resolve_powershell() -> (PathBuf, &'static str) {
     panic!("neither pwsh nor powershell is on PATH; this test requires one of them installed");
 }
 
-/// Writes the fixture profile into the file `shell` itself reports as
-/// its per-user profile under a temporary `USERPROFILE`, and reports
-/// whether that file landed inside `home`.
-///
-/// Windows PowerShell 5.1 and PowerShell 7 read different directories
-/// under Documents, and Documents is a known folder rather than a plain
-/// `USERPROFILE` subdirectory, so the shell is asked rather than
-/// guessed. A machine whose Documents folder is redirected — by
-/// OneDrive's Known Folder Move, for instance — resolves the profile
-/// outside `home`, and nothing is written there.
+/// Writes the fixture profile that announces itself through an `OSC 0`
+/// marker and installs a custom prompt, or reports `false` when `shell`
+/// resolves its profile outside `home`.
 fn write_profile(home: &Path, shell: &Path) -> bool {
-    let Some(profile) = resolve_profile_path(home, shell) else {
-        return false;
-    };
-    let Some(profile_dir) = profile.parent() else {
-        return false;
-    };
-    create_dir_all(profile_dir).expect("the profile directory");
-    write(
-        &profile,
+    write_profile_contents(
+        home,
+        shell,
         format!(
             "[Console]::Write(([char]27, ']0;{PROFILE_MARKER}', [char]7) -join '')\n\
              function global:prompt {{ '{USER_PROMPT}' }}\n"
         ),
     )
-    .expect("the profile file");
-    true
 }
 
 /// Writes a fixture profile whose prompt reads `$?` as its own first
-/// statement and reports what it saw through an `OSC 0` title, into the
-/// file `shell` reports as its per-user profile under a temporary
-/// `USERPROFILE`, and reports whether that file landed inside `home`.
+/// statement and reports what it saw through an `OSC 0` title, or
+/// reports `false` when `shell` resolves its profile outside `home`.
 ///
 /// The shape mirrors Starship, posh-git, and oh-my-posh, which all read
 /// `$?` before anything else in their own prompt function.
 fn write_dollar_question_profile(home: &Path, shell: &Path) -> bool {
-    let Some(profile) = resolve_profile_path(home, shell) else {
-        return false;
-    };
-    let Some(profile_dir) = profile.parent() else {
-        return false;
-    };
-    create_dir_all(profile_dir).expect("the profile directory");
-    write(
-        &profile,
+    write_profile_contents(
+        home,
+        shell,
         format!(
             "function global:prompt {{ \
              $orzmaSawSuccess = $?; \
@@ -249,7 +227,24 @@ fn write_dollar_question_profile(home: &Path, shell: &Path) -> bool {
              }}\n"
         ),
     )
-    .expect("the profile file");
+}
+
+/// Writes `contents` into the file `shell` itself reports as its
+/// per-user profile under a temporary `USERPROFILE`, and reports whether
+/// that file landed inside `home`.
+///
+/// A machine whose Documents folder is redirected — by OneDrive's Known
+/// Folder Move, for instance — resolves the profile outside `home`, and
+/// nothing is written there.
+fn write_profile_contents(home: &Path, shell: &Path, contents: String) -> bool {
+    let Some(profile) = resolve_profile_path(home, shell) else {
+        return false;
+    };
+    let Some(profile_dir) = profile.parent() else {
+        return false;
+    };
+    create_dir_all(profile_dir).expect("the profile directory");
+    write(&profile, contents).expect("the profile file");
     true
 }
 

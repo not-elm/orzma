@@ -137,15 +137,12 @@ fn host_path(decoded: &str) -> Option<PathBuf> {
     path.is_absolute().then_some(path)
 }
 
-/// `decoded` without the leading `/` that precedes a drive letter, or
-/// `None` when it opens with anything else.
+/// `decoded` without the leading `/` that precedes a Windows drive root,
+/// or `None` when it opens with anything else.
 #[cfg(windows)]
 fn drive_rooted(decoded: &str) -> Option<&str> {
     let rest = decoded.strip_prefix('/')?;
-    let mut bytes = rest.bytes();
-    let letter = bytes.next()?;
-    let colon = bytes.next()?;
-    (letter.is_ascii_alphabetic() && colon == b':').then_some(rest)
+    has_drive_root(rest).then_some(rest)
 }
 
 /// Maximum length, in `char`s, of a sanitized title.
@@ -226,14 +223,15 @@ fn conemu_path(parts: &[&[u8]]) -> Option<PathBuf> {
     is_windows_path(unquoted).then(|| PathBuf::from(unquoted))
 }
 
-/// Whether `text` opens with a Windows drive (`C:\` or `C:/`) or a UNC
-/// prefix (`\\` or `//`).
+/// Whether `text` opens with a Windows drive root (`C:\` or `C:/`).
+fn has_drive_root(text: &str) -> bool {
+    matches!(text.as_bytes(), [letter, b':', b'\\' | b'/', ..] if letter.is_ascii_alphabetic())
+}
+
+/// Whether `text` opens with a Windows drive root or a UNC prefix
+/// (`\\` or `//`).
 fn is_windows_path(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    let has_drive =
-        matches!(bytes, [letter, b':', b'\\' | b'/', ..] if letter.is_ascii_alphabetic());
-    let is_unc = text.starts_with(r"\\") || text.starts_with("//");
-    has_drive || is_unc
+    has_drive_root(text) || text.starts_with(r"\\") || text.starts_with("//")
 }
 
 #[cfg(test)]
