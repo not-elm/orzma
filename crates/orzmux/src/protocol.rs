@@ -2,6 +2,7 @@
 //! Everything here is plain data: no Bevy types and no GPU handles.
 
 use orzma_tty::prelude::{CellPixels, MouseReport, TerminalKey, TerminalModifiers, WheelInput};
+use orzma_tty::{EnvKey, EnvValue};
 use orzma_vt::prelude::{
     CellSide, Frame, GridColumn, GridPoint, GridSize, InstanceId, PlacementSize, ScreenLine,
     Scroll, SelectionKind, VtSignal,
@@ -112,7 +113,7 @@ pub enum OrzmuxCommand {
         /// The working directory to spawn the shell in, when given.
         cwd: Option<PathBuf>,
         /// Extra environment variables forwarded to the shell.
-        env: Vec<(String, String)>,
+        env: Vec<(EnvKey, EnvValue)>,
     },
     /// Terminate a pane and remove it from the layout tree.
     KillPane {

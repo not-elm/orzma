@@ -10,8 +10,8 @@ use crate::protocol::{
     RequestId, SplitOrientation,
 };
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
-use orzma_tty::CellPixels;
 use orzma_tty::prelude::{OrzmaTtyError, OrzmaTtyResult, PumpOutput, TtySignal, WheelConfig};
+use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{Frame, GridSize, Vt, VtSignal};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -311,7 +311,7 @@ impl Backend {
         request: RequestId,
         at: NewPaneAt,
         cwd: Option<PathBuf>,
-        env: Vec<(String, String)>,
+        env: Vec<(EnvKey, EnvValue)>,
     ) {
         let Some(geometry) = self.geometry else {
             self.emit(OrzmuxEvent::SpawnFailed {
@@ -719,7 +719,7 @@ mod tests {
             size: GridSize,
             _cell_px: CellPixels,
             cwd: Option<PathBuf>,
-            _env: Vec<(String, String)>,
+            _env: Vec<(EnvKey, EnvValue)>,
         ) -> OrzmaTtyResult<OrzmaTty<OrzmaVt>> {
             self.log.sizes.lock().unwrap().push(size);
             self.log.cwds.lock().unwrap().push(cwd);

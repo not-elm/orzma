@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use bevy_orzma_tty_renderer::prelude::PaneInactiveStyle;
 use bevy_orzma_webview::ControlPlaneHandle;
 use bevy_orzmux::prelude::{OrzmuxConnection, PaneRegistry, absolute_px_node};
+use orzma_tty::{EnvKey, EnvValue};
 use orzmux::prelude::{NewPaneAt, OrzmuxCommand, RequestId};
 
 /// Asks for a new pane at `at`.
@@ -51,7 +52,9 @@ fn on_pane_spawn_request(
         .as_deref()
         .map(|c| {
             c.bind_surface(entity);
-            c.surface_env(entity).to_vec()
+            c.surface_env(entity)
+                .map(|(key, value)| (EnvKey(key), EnvValue(value)))
+                .to_vec()
         })
         .unwrap_or_default();
     let request = RequestId::next();
@@ -126,7 +129,7 @@ mod tests {
             panic!("expected one NewPane, got {sent:?}");
         };
         assert_eq!(*sent_request, request);
-        assert!(env.contains(&("ORZMA_TOKEN".to_string(), token)));
+        assert!(env.contains(&(EnvKey("ORZMA_TOKEN".to_string()), EnvValue(token))));
     }
 
     /// Asserts that a freshly spawned pane carries `PaneInactiveStyle`,

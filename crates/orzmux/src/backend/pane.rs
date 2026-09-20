@@ -82,7 +82,7 @@ pub(crate) trait PaneFactory: Send {
         size: GridSize,
         cell_px: CellPixels,
         cwd: Option<PathBuf>,
-        env: Vec<(String, String)>,
+        env: Vec<(EnvKey, EnvValue)>,
     ) -> OrzmaTtyResult<OrzmaTty<OrzmaVt>>;
 }
 
@@ -123,7 +123,7 @@ impl PaneFactory for ShellFactory {
         size: GridSize,
         cell_px: CellPixels,
         cwd: Option<PathBuf>,
-        env: Vec<(String, String)>,
+        env: Vec<(EnvKey, EnvValue)>,
     ) -> OrzmaTtyResult<OrzmaTty<OrzmaVt>> {
         let vt = OrzmaVt::new(size, self.scrollback_rows).with_cursor_policy(self.cursor_policy);
         OrzmaTty::spawn(
@@ -133,10 +133,7 @@ impl PaneFactory for ShellFactory {
                 cell_px,
                 shell: self.shell.clone(),
                 cwd,
-                env: env
-                    .into_iter()
-                    .map(|(k, v)| (EnvKey(k), EnvValue(v)))
-                    .collect(),
+                env,
                 shell_integration: self.shell_integration,
             },
         )
