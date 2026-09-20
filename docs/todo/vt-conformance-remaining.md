@@ -14,13 +14,7 @@ Alacritty も実装していない項目は、末尾の「対象外 — Alacritt
 
 ## Tier 2 — 推奨（TUI が直接叩くもの）
 
-- [ ] **`CSI ?2026 h/l` — 同期出力**
-  - 2026 番の腕が無く、`SyncBuffer` は空のまま。fzf がフレームごとに発行し、nvim・tmux・kitty も使う。
-- [ ] **`CSI ?Ps $ p` → `CSI ?Ps;Pm $ y` — DECRQM / DECRPM**
-  - `(Some(b'?'), [b'$'], b'p')` の腕 1 本で入る。応答が無いと nvim の機能検出（69・2026 など）が必ず失敗する。
-  - 7（DECAWM）と 25（DECTCEM）は報告できる状態をもう持っている。
-  - 3 / 40 / 95 には `0`（not recognized）を返すと決めてある。
-  - 7 に答えられるようになると、vttest の `tst_DEC_DECRPM` で DECAWM を機械判定できる。
+未実装の項目はない。
 
 ## 実装済み行の積み残し
 

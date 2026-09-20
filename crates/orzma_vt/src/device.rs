@@ -7,7 +7,8 @@ pub(crate) mod modes;
 use crate::device::color::{Palette, Rgb};
 use crate::device::cursor_policy::CursorPolicy;
 use crate::device::modes::{
-    AutoWrap, InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable, VtModes,
+    AlternateScroll, AutoWrap, CursorBlink, InsertReplaceMode, KeypadMode, ModeReport,
+    MouseEncoding, MouseTracking, ScreenKind, TextCursorEnable, VtModes,
 };
 use crate::error::VtResult;
 use crate::frame::damage::DamageSpan;
@@ -17,6 +18,7 @@ use crate::screen::cell::ClassifiedGlyph;
 use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, ScreenLine};
+use crate::screen::margins::OriginMode;
 use crate::screen::viewport::{DisplayOffset, Scroll};
 use crate::screen::{PrintOptions, Screen};
 use std::collections::VecDeque;
@@ -341,6 +343,55 @@ impl DeviceState {
     /// Mutably borrows the modes the device owns.
     pub fn modes_mut(&mut self) -> &mut VtModes {
         &mut self.modes
+    }
+
+    /// The DECRPM value for the DEC private mode `mode`.
+    ///
+    /// A mode this terminal keeps no state for reports
+    /// [`ModeReport::NotRecognized`].
+    ///
+    /// Mode 6 reports the screen on show, and modes 47, 1047 and 1049
+    /// all report whether the alternate screen is shown. Modes 1000,
+    /// 1002 and 1003 report set only for the tracking level in force.
+    /// Mode 12 reports the blink `DECSCUSR` selected as well.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECRQM` (`CSI ? Ps $ p`)
+    pub fn private_mode_report(&self, mode: u16) -> ModeReport {
+        let modes = self.modes;
+        let set = match mode {
+            1 => modes.app_cursor,
+            6 => self.active_screen().origin_mode() == OriginMode::WithinMargins,
+            7 => modes.auto_wrap.wraps(),
+            12 => modes.text_cursor.blink == CursorBlink::Blinking,
+            25 => modes.text_cursor.enable == TextCursorEnable::Shown,
+            47 | 1047 | 1049 => modes.active_screen == ScreenKind::Alternate,
+            66 => modes.keypad_mode == KeypadMode::Application,
+            1000 => modes.mouse_tracking == MouseTracking::Clicks,
+            1002 => modes.mouse_tracking == MouseTracking::Drag,
+            1003 => modes.mouse_tracking == MouseTracking::Motion,
+            1004 => modes.focus_in_out,
+            1006 => modes.mouse_encoding == MouseEncoding::Sgr,
+            1007 => modes.alternate_scroll == AlternateScroll::Enabled,
+            2004 => modes.bracketed_paste,
+            2026 => modes.synchronized_output.is_active(),
+            _ => return ModeReport::NotRecognized,
+        };
+        ModeReport::from_flag(set)
+    }
+
+    /// The DECRPM value for the ANSI mode `mode`; only insert mode (4)
+    /// is recognized.
+    ///
+    /// # Control Functions
+    ///
+    /// - `DECRQM` (`CSI Ps $ p`)
+    pub fn ansi_mode_report(&self, mode: u16) -> ModeReport {
+        match mode {
+            4 => ModeReport::from_flag(self.modes.insert_replace == InsertReplaceMode::Insert),
+            _ => ModeReport::NotRecognized,
+        }
     }
 
     /// Applies `DECAWM`, disarming each screen's deferred wrap when the

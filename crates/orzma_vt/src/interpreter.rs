@@ -1,5 +1,5 @@
-//! Byte-stream decoding: the vtparse parser and the synchronized-update
-//! buffer.
+//! Byte-stream decoding: the vtparse parser and the actions it applies
+//! to the device.
 
 pub(crate) mod apc;
 
@@ -9,7 +9,7 @@ mod sgr;
 
 use crate::device::modes::{
     AlternateScroll, AutoWrap, CursorBlink, InsertReplaceMode, KeypadMode, ScreenKind,
-    TextCursorEnable,
+    SynchronizedOutput, TextCursorEnable,
 };
 use crate::interpreter::apc::WebviewApcRequest;
 use crate::interpreter::csi::CsiParams;
@@ -31,20 +31,20 @@ use crate::{
 };
 use vtparse::{CsiParam, VTActor, VTParser};
 
-/// The parser plus the synchronized-update buffer.
+/// The parser that turns the byte stream into device actions.
 pub(crate) struct Interpreter {
     parser: VTParser,
-    sync: SyncBuffer,
 }
 
 impl Interpreter {
-    /// Decodes one chunk, applying each action to the borrowed
-    /// components and collecting everything the chunk produced into
+    /// Decodes a chunk up to the byte that closes a synchronized
+    /// update, or to its end, applying each action to the borrowed
+    /// components and collecting everything those bytes produced into
     /// `output`.
     ///
     /// # Invariants
     ///
-    /// The placements the chunk strands are named in its own
+    /// The placements the consumed bytes strand are named in its own
     /// [`InterpretOutput::signals`], after every signal the chunk's
     /// actions raised.
     pub fn parse(
@@ -58,11 +58,12 @@ impl Interpreter {
         let cursor_color_before = device.palette().cursor;
         let mut executor = Executor {
             output,
-            sync: &mut self.sync,
             device,
             tracker,
             current_byte: 0,
         };
+        let mut open = executor.device.modes().synchronized_output.is_active();
+        let mut consumed = 0;
         for &byte in chunk {
             // NOTE: `current_byte` must be written before `parse_byte`
             // runs, because vtparse calls `osc_dispatch` while it
@@ -70,7 +71,15 @@ impl Interpreter {
             // afterwards would close each reply with the byte before.
             executor.current_byte = byte;
             self.parser.parse_byte(byte, &mut executor);
+            consumed += 1;
+            let still_open = executor.device.modes().synchronized_output.is_active();
+            if open && !still_open {
+                executor.output.synchronized_update_closed = true;
+                break;
+            }
+            open = still_open;
         }
+        executor.output.consumed = consumed;
         executor.sweep_evictions();
         executor.output.damaged |= cursor_before != executor.device.cursor()
             || cursor_color_before != executor.device.palette().cursor;
@@ -81,25 +90,13 @@ impl Default for Interpreter {
     fn default() -> Self {
         Self {
             parser: VTParser::new(),
-            sync: Default::default(),
         }
     }
 }
 
-/// The buffer for a synchronized update (CSI ?2026).
-///
-/// TODO: hold back the bytes of an open synchronized update.
-#[derive(Default)]
-struct SyncBuffer {}
-
 /// The temporary view a parser callback applies its action through.
 struct Executor<'a> {
     output: &'a mut InterpretOutput,
-    #[expect(
-        dead_code,
-        reason = "the CSI ?2026 synchronized-update buffering will read this seam"
-    )]
-    sync: &'a mut SyncBuffer,
     device: &'a mut DeviceState,
     tracker: &'a mut FrameTracker,
     /// The byte the parser is consuming. A dispatch callback runs while
@@ -476,6 +473,10 @@ impl VTActor for Executor<'_> {
                 let damage = self.device.soft_reset();
                 self.stage(damage);
             }
+            // DECRQM (DEC private)
+            (Some(b'?'), [b'$'], b'p') => self.report_mode(&params, true),
+            // DECRQM (ANSI)
+            (None, [b'$'], b'p') => self.report_mode(&params, false),
             // DECSCUSR
             (None, [b' '], b'q') => {
                 let initial = self.device.cursor_policy().initial;
@@ -744,8 +745,8 @@ impl Executor<'_> {
         }
     }
 
-    /// Names the placements this chunk stranded and raises the chunk
-    /// liveness.
+    /// Names the placements the consumed bytes stranded and raises the
+    /// chunk liveness.
     ///
     /// A chunk strands a placement when its anchor row leaves the grid:
     /// a reset drops every row, and a scroll drops a row when it recycles
@@ -753,9 +754,9 @@ impl Executor<'_> {
     /// scroll region, downward at the top margin, or on a screen without
     /// scrollback.
     ///
-    /// It must run once per chunk, after the chunk's last action, so
-    /// that a placement the chunk strands and then re-mounts is updated
-    /// in place rather than evicted and re-created.
+    /// It must run once per `parse` call, after the call's last action,
+    /// so that a placement the consumed bytes strand and then re-mount
+    /// is updated in place rather than evicted and re-created.
     fn sweep_evictions(&mut self) {
         let Some(evicted) = VtSignal::evicted(self.device.evict_lost_anchors()) else {
             return;
@@ -841,6 +842,11 @@ impl Executor<'_> {
                 1049 => self.set_alternate_screen_with_cursor(enabled),
                 // Bracketed paste
                 2004 => self.device.modes_mut().bracketed_paste = enabled,
+                // Synchronized output
+                2026 => {
+                    self.device.modes_mut().synchronized_output =
+                        SynchronizedOutput::from_decset(enabled);
+                }
                 _ => {}
             }
         }
@@ -855,6 +861,26 @@ impl Executor<'_> {
         } else if let Some(encoding) = modes.mouse_encoding.with_decset(mode, enabled) {
             modes.mouse_encoding = encoding;
         }
+    }
+
+    /// Answers `DECRQM` with `DECRPM` for the mode in the first slot,
+    /// echoing the number exactly as it was sent; an omitted number is
+    /// answered as mode zero.
+    ///
+    /// # References
+    ///
+    /// - xterm-ctlseqs.pdf p.29 — "Request DEC private mode (DECRQM).
+    ///   For VT300 and up, reply DECRPM is CSI ? Ps ; Pm $ y".
+    fn report_mode(&mut self, params: &CsiParams<'_>, private: bool) {
+        let mode = params.value(0).unwrap_or(0);
+        let report = if private {
+            self.device.private_mode_report(mode)
+        } else {
+            self.device.ansi_mode_report(mode)
+        };
+        let echoed = params.raw_value(0).unwrap_or(0);
+        let marker = if private { "?" } else { "" };
+        self.reply(format!("\x1b[{marker}{echoed};{}$y", report.code()).as_bytes());
     }
 
     /// Applies `DECSET 1049` / `DECRST 1049`: a set saves the primary

@@ -71,6 +71,12 @@ impl<'a> CsiParams<'a> {
         self.values().nth(index).flatten()
     }
 
+    /// The first integer of the `index`-th separated slot exactly as it
+    /// was sent; `None` when the slot was omitted or does not exist.
+    pub fn raw_value(&self, index: usize) -> Option<i64> {
+        Self::first_integer(self.groups().nth(index)?)
+    }
+
     /// Every separated slot in order.
     pub fn values(&self) -> impl Iterator<Item = Option<u16>> + '_ {
         let listed = (!self.values.is_empty()).then(|| self.groups());
@@ -80,9 +86,15 @@ impl<'a> CsiParams<'a> {
     /// The saturating `u16` a slot's first integer reads as; `None` for
     /// a slot that carries none.
     fn first_value(group: &[CsiParam]) -> Option<u16> {
+        Self::first_integer(group).map(|value| u16::try_from(value).unwrap_or(u16::MAX))
+    }
+
+    /// The first integer a slot carries, exactly as it was sent; `None`
+    /// for a slot that carries none.
+    fn first_integer(group: &[CsiParam]) -> Option<i64> {
         group.iter().find_map(|param| match param {
-            CsiParam::Integer(value) => Some(u16::try_from(*value).unwrap_or(u16::MAX)),
-            _ => None,
+            CsiParam::Integer(value) => Some(*value),
+            CsiParam::P(_) => None,
         })
     }
 }
