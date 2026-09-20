@@ -24,15 +24,55 @@ use std::path::PathBuf;
 /// hostname, or the empty host of `file:///…` — is ignored.
 /// Percent-encoded octets in the path (`%20` for a space, the UTF-8
 /// octets of a non-ASCII name) are decoded.
+///
+/// On Windows, a decoded path of the form `/C:/…` is reported rooted at
+/// its drive, and a path that names no drive is rejected.
 pub(crate) fn current_dir(params: &[&[u8]]) -> Option<PathBuf> {
-    let [b"7", parts @ ..] = params else {
-        return None;
-    };
+    match params {
+        [b"7", parts @ ..] => file_uri(parts),
+        _ => None,
+    }
+}
+
+/// The directory a `file://` URI names, or `None` when the URI carries
+/// no such path.
+fn file_uri(parts: &[&[u8]]) -> Option<PathBuf> {
     let joined = parts.join(&b';');
     let rest = joined.strip_prefix(b"file://")?;
     let index = rest.iter().position(|byte| *byte == b'/')?;
     let decoded = percent_decode(&rest[index..]).decode_utf8_lossy();
-    Some(PathBuf::from(decoded.into_owned()))
+    host_path(&decoded)
+}
+
+/// The decoded URI path as a host path, or `None` when this platform
+/// cannot use it.
+#[cfg(not(windows))]
+fn host_path(decoded: &str) -> Option<PathBuf> {
+    Some(PathBuf::from(decoded))
+}
+
+/// The decoded URI path as a host path, or `None` when it names no
+/// drive.
+///
+/// A URI path opens with the `/` that separates it from the authority,
+/// so `C:\Users\x` arrives as `/C:/Users/x`; that separator is dropped.
+/// Anything still not absolute afterwards would be resolved against
+/// this process's own working directory, so it is rejected instead.
+#[cfg(windows)]
+fn host_path(decoded: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(drive_rooted(decoded).unwrap_or(decoded));
+    path.is_absolute().then_some(path)
+}
+
+/// `decoded` without the leading `/` that precedes a drive letter, or
+/// `None` when it opens with anything else.
+#[cfg(windows)]
+fn drive_rooted(decoded: &str) -> Option<&str> {
+    let rest = decoded.strip_prefix('/')?;
+    let mut bytes = rest.bytes();
+    let letter = bytes.next()?;
+    let colon = bytes.next()?;
+    (letter.is_ascii_alphabetic() && colon == b':').then_some(rest)
 }
 
 /// The sanitized window title an `OSC 0` or `OSC 2` sets, or `None` for
@@ -171,6 +211,7 @@ mod tests {
     ///
     /// Case: a shell reports its directory with `OSC 7
     /// file://localhost/tmp/project` after a `cd`.
+    #[cfg(not(windows))]
     #[test]
     fn a_localhost_uri_reports_its_path() {
         assert_eq!(
@@ -184,6 +225,7 @@ mod tests {
     ///
     /// Case: a shell reports its directory with the terser
     /// `file:///tmp/project` form some prompts emit instead.
+    #[cfg(not(windows))]
     #[test]
     fn an_empty_host_uri_reports_its_path() {
         assert_eq!(
@@ -217,6 +259,7 @@ mod tests {
     ///
     /// Case: a fish or zsh integration reports `cd ~/My Project/ドキュメント`
     /// with every reserved and non-ASCII byte escaped.
+    #[cfg(not(windows))]
     #[test]
     fn percent_encoded_octets_in_the_path_are_decoded() {
         assert_eq!(
@@ -230,6 +273,44 @@ mod tests {
             current_dir(&[b"7", b"file:///tmp/100%25/x%2"]),
             Some(PathBuf::from("/tmp/100%/x%2"))
         );
+    }
+
+    /// Asserts that a `file://` URI carrying a drive letter reports a
+    /// path rooted at that drive rather than one rooted at `/`.
+    ///
+    /// Case: a shell integration on Windows reports its directory with
+    /// `OSC 7 file:///C:/Users/x/proj` after a `cd`.
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_letter_uri_reports_a_drive_rooted_path() {
+        assert_eq!(
+            current_dir(&[b"7", b"file:///C:/Users/x/proj"]),
+            Some(PathBuf::from(r"C:\Users\x\proj"))
+        );
+    }
+
+    /// Asserts that a `file://` URI naming a remote host reports no
+    /// directory on Windows, rather than a path relative to whatever
+    /// directory this process happens to be in.
+    ///
+    /// Case: a program reports `OSC 7 file://server/share/dir`, whose
+    /// host this parser ignores, while a directory named `share` happens
+    /// to sit beside the running terminal.
+    #[cfg(windows)]
+    #[test]
+    fn a_remote_host_uri_is_rejected_on_windows() {
+        assert!(current_dir(&[b"7", b"file://server/share/dir"]).is_none());
+    }
+
+    /// Asserts that a `file://` URI whose path is rooted but names no
+    /// drive reports no directory on Windows.
+    ///
+    /// Case: a WSL or Cygwin shell reports its Unix path verbatim with
+    /// `OSC 7 file:///tmp/project` while orzma runs as a Windows process.
+    #[cfg(windows)]
+    #[test]
+    fn a_rootless_unix_path_is_rejected_on_windows() {
+        assert!(current_dir(&[b"7", b"file:///tmp/project"]).is_none());
     }
 
     /// Asserts that OSC 0 and OSC 2 set the same window title.
