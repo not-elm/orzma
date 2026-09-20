@@ -3,7 +3,7 @@
 //! cursor.
 
 use crate::input::InputPhase;
-use crate::input::focus::TerminalMouseDisabled;
+use crate::input::focus::WebviewMouseDisabled;
 use crate::input::mouse::MousePhase;
 use crate::input::mouse::cell_dims;
 use crate::input::mouse::separator::GrabbedSeparator;
@@ -53,7 +53,7 @@ impl Plugin for MouseWebviewRouterPlugin {
 }
 
 /// Every `OrzmaTerminal` surface the router hit-tests, carrying whether the
-/// host has suppressed that terminal's mouse input.
+/// host has suppressed that terminal's webview mouse input.
 type RouterSurfaces<'w, 's> = Query<
     'w,
     's,
@@ -62,7 +62,7 @@ type RouterSurfaces<'w, 's> = Query<
         &'static ComputedNode,
         &'static ComputedStackIndex,
         &'static UiGlobalTransform,
-        Has<TerminalMouseDisabled>,
+        Has<WebviewMouseDisabled>,
     ),
     With<OrzmaTerminal>,
 >;
@@ -72,7 +72,7 @@ type RouterSurfaces<'w, 's> = Query<
 enum SurfaceUnderCursor {
     /// No terminal surface lies under the pointer.
     None,
-    /// The topmost surface has its mouse input suppressed.
+    /// The topmost surface has `WebviewMouseDisabled`.
     Suppressed,
     /// The topmost surface accepts pointer input, at this pane-local
     /// physical point.
@@ -490,7 +490,7 @@ mod tests {
         let (mut app, shell, _child) = make_webview_app();
         app.world_mut()
             .entity_mut(shell)
-            .insert(TerminalMouseDisabled);
+            .insert(WebviewMouseDisabled);
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_left(&mut app, ButtonState::Pressed);
         app.update();
@@ -517,7 +517,7 @@ mod tests {
         app.world_mut().resource_mut::<WebviewPress>().0 = Some(child);
         app.world_mut()
             .entity_mut(shell)
-            .insert(TerminalMouseDisabled);
+            .insert(WebviewMouseDisabled);
         let win = app
             .world_mut()
             .query_filtered::<Entity, With<PrimaryWindow>>()
@@ -547,7 +547,7 @@ mod tests {
         app.world_mut().resource_mut::<WebviewPress>().0 = Some(child);
         app.world_mut().spawn((
             OrzmaTerminal,
-            TerminalMouseDisabled,
+            WebviewMouseDisabled,
             ComputedNode {
                 size: Vec2::new(200.0, 200.0),
                 ..ComputedNode::DEFAULT
@@ -609,6 +609,54 @@ mod tests {
         );
     }
 
+    /// Asserts that pointer motion over an interactive rect reaches CEF while
+    /// the IME composes into the inline webview that owns the composition.
+    ///
+    /// Case: the user is typing Japanese into a text field on a page mounted
+    /// in a pane and moves the pointer across that page to click a conversion
+    /// candidate the page itself renders.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_webview_owned_composition_still_forwards_motion() {
+        use crate::input::focus::maintain_input_gates;
+        use crate::input::ime::{ImeState, apply_event};
+        use bevy::window::Ime;
+
+        let (mut app, _shell, child, rx) = make_move_app();
+
+        let mut state = ImeState::default();
+        apply_event(
+            &mut state,
+            &Ime::Preedit {
+                window: Entity::PLACEHOLDER,
+                value: "あ".into(),
+                cursor: Some((3, 3)),
+            },
+        );
+        assert!(
+            state.is_composing(),
+            "the fixture must actually compose, or this test passes for the wrong reason"
+        );
+        app.insert_resource(state);
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+
+        app.add_systems(
+            Update,
+            maintain_input_gates.before(forward_webview_mouse_moves),
+        );
+
+        write_cursor_moved(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+
+        let sent = rx.try_recv().expect(
+            "a composition the focused inline webview owns must not suppress pointer motion to it",
+        );
+        assert!(
+            matches!(sent, CefCommand::SendMouseMove { .. }),
+            "the forwarded command must be a pointer move"
+        );
+    }
+
     /// Asserts that motion over an interactive rect in a focused window
     /// reaches CEF as a `SendMouseMove` for the child under the pointer.
     ///
@@ -642,7 +690,7 @@ mod tests {
         let (mut app, shell, _child, rx) = make_move_app();
         app.world_mut()
             .entity_mut(shell)
-            .insert(TerminalMouseDisabled);
+            .insert(WebviewMouseDisabled);
         write_cursor_moved(&mut app, Vec2::new(40.0, 48.0));
         app.update();
         assert!(
