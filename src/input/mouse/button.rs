@@ -155,8 +155,9 @@ struct FrameContext {
 /// cursor on press, locks drag/release to that terminal, tracks clicks and drag
 /// state, drives `decide_button`, and fans the decided effects out to
 /// per-operation `EntityEvent`s via `trigger_mouse_effects`. Skips any
-/// `OrzmaTerminal` carrying `MouseDisabled`. An empty candidate set (modal
-/// suppression) drains the readers and resets the gesture.
+/// `OrzmaTerminal` carrying `TerminalMouseDisabled` or `MouseClaimedByWebview`. An
+/// empty candidate set (modal suppression) drains the readers and resets the
+/// gesture.
 fn dispatch_mouse_buttons(
     mut commands: Commands,
     mut gesture: ResMut<OrzmaMouseGesture>,
@@ -547,7 +548,7 @@ fn button_kind(state: ButtonState) -> MouseReportKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::focus::MouseDisabled;
+    use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled};
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
     };
@@ -768,39 +769,53 @@ mod tests {
         );
     }
 
-    /// Asserts that a press over a `MouseDisabled` terminal is drained
+    /// Asserts that a press over a `TerminalMouseDisabled` terminal is drained
     /// without arming a drag.
     ///
     /// Case: the user clicks a terminal whose mouse input is disabled
     /// because it is in vi mode.
     #[test]
-    fn mouse_disabled_terminal_drains_without_arming_a_gesture() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_message::<MouseButtonInput>()
-            .add_message::<CursorMoved>()
-            .init_resource::<OrzmaMouseConfig>()
-            .init_resource::<OrzmaMouseGesture>()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .insert_resource(test_metrics())
-            .add_systems(Update, dispatch_mouse_buttons);
-        app.world_mut().spawn((OrzmaTerminal, MouseDisabled));
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                ..default()
-            },
-            PrimaryWindow,
-        ));
+    fn terminal_mouse_disabled_terminal_drains_without_arming_a_gesture() {
+        let mut app = make_selection_app();
+        let terminal = app
+            .world_mut()
+            .query_filtered::<Entity, With<OrzmaTerminal>>()
+            .single(app.world())
+            .expect("make_selection_app spawns exactly one terminal surface");
         app.world_mut()
-            .resource_mut::<Messages<MouseButtonInput>>()
-            .write(MouseButtonInput {
-                button: MouseButton::Left,
-                state: ButtonState::Pressed,
-                window: Entity::PLACEHOLDER,
-            });
+            .entity_mut(terminal)
+            .insert(TerminalMouseDisabled);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_left(&mut app, ButtonState::Pressed);
         app.update();
-        assert!(app.world().resource::<OrzmaMouseGesture>().drag.is_none());
+        assert!(
+            app.world().resource::<OrzmaMouseGesture>().drag.is_none(),
+            "a suppressed terminal must not arm a drag — the press is swallowed"
+        );
+    }
+
+    /// Asserts that a press over a `MouseClaimedByWebview` terminal is
+    /// drained without arming a drag.
+    ///
+    /// Case: the user clicks a link inside a page mounted in the pane.
+    #[test]
+    fn webview_claimed_terminal_drains_without_arming_a_gesture() {
+        let mut app = make_selection_app();
+        let terminal = app
+            .world_mut()
+            .query_filtered::<Entity, With<OrzmaTerminal>>()
+            .single(app.world())
+            .expect("make_selection_app spawns exactly one terminal surface");
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(MouseClaimedByWebview);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_left(&mut app, ButtonState::Pressed);
+        app.update();
+        assert!(
+            app.world().resource::<OrzmaMouseGesture>().drag.is_none(),
+            "a claimed terminal must not arm a drag — the press belongs to the page"
+        );
     }
 
     /// Asserts that a single left press arms a drag, clears any existing

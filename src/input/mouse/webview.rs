@@ -6,19 +6,19 @@ use crate::input::mouse::cell_dims;
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use bevy::ecs::system::SystemParam;
-use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseScrollUnit};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy_cef::prelude::FocusedWebview;
-use bevy_cef_core::prelude::Browsers;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzma_tty_renderer::prelude::TerminalOverlays;
 use bevy_orzma_webview::{
     NonInteractive, Webview, focused_webview_of, webview_hit_at, webview_local_dip,
 };
+pub(in crate::input::mouse) use cef_sink::CefMouse;
 
+mod cef_sink;
 mod router;
 
 /// Adds webview pointer routing for inline CEF children.
@@ -40,8 +40,8 @@ pub(in crate::input::mouse) struct WebviewPress(pub Option<Entity>);
 
 /// Queries and resources the webview routing needs. The surface-geometry
 /// lookup is `With<OrzmaTerminal>`, matching every terminal surface.
-/// `focused_webview` and `browsers` are optional; other state effects
-/// still apply when either is absent.
+/// `focused_webview` is optional and `cef` drops its calls while no CEF
+/// sink is present; the other state effects still apply in both cases.
 #[derive(SystemParam)]
 pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
     focused_webview: Option<ResMut<'w, FocusedWebview>>,
@@ -51,111 +51,105 @@ pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
     overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
     surface_geo:
         Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<OrzmaTerminal>>,
-    browsers: Option<NonSend<'w, Browsers>>,
+    cef: CefMouse<'w>,
 }
 
-/// Routes a left press/release through the webview layer for a resolved
-/// `(terminal, local_phys)`, returning `true` when the event was CONSUMED and
-/// must NOT reach the host's terminal mouse pipeline.
+/// Routes a left press through the webview layer for a resolved
+/// `(terminal, local_phys)`.
 ///
-/// A press inside an interactive rect sets `FocusedWebview`, issues the
-/// UNGATED `set_focus` before the gated `send_mouse_click` so the first
-/// click is not swallowed by an unfocused browser, forwards the press in
-/// DIP, and records the in-flight press. A press outside every rect
-/// clears an inline `FocusedWebview` and returns `false` (so the press
-/// falls through to the terminal). Release forwards the click-up to the
-/// recorded child (drift-tolerant) and clears.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "inline routing needs the webview press state, route params, and pointer geometry"
-)]
+/// A press inside an interactive rect sets `FocusedWebview`, issues
+/// `set_focus` before `send_mouse_click`, forwards the press in DIP, and
+/// records the in-flight press. A press outside every rect clears an inline
+/// `FocusedWebview`, leaving the press to the terminal. `FocusedWebview` is
+/// written only when the focus actually moves.
 pub(in crate::input::mouse) fn route_webview_left_click(
     webview_press: &mut WebviewPress,
     route: &mut WebviewRouteParams,
     terminal: Entity,
     local_phys: Vec2,
-    cursor_phys: Vec2,
-    button_state: ButtonState,
     cell_w_phys: f32,
     cell_h_phys: f32,
     scale: f32,
-) -> bool {
-    match button_state {
-        ButtonState::Pressed => {
-            webview_press.0 = None;
-            let hit = route.overlay_rects.get(terminal).ok().and_then(|overlays| {
-                webview_hit_at(
-                    &route.children,
-                    &route.webviews,
-                    overlays,
-                    terminal,
-                    local_phys,
-                    cell_w_phys,
-                    cell_h_phys,
-                    scale,
-                )
-            });
-            let Some(hit) = hit else {
-                if let Some(focused) = route.focused_webview.as_deref_mut()
-                    && focused
-                        .0
-                        .is_some_and(|current| route.webview_parents.contains(current))
-                {
-                    focused.0 = None;
-                }
-                return false;
-            };
-            if let Some(focused) = route.focused_webview.as_deref_mut()
-                && focused.0 != Some(hit.child)
-            {
-                focused.0 = Some(hit.child);
-            }
-            if let Some(browsers) = route.browsers.as_deref() {
-                browsers.set_focus(&hit.child, true);
-                browsers.send_mouse_click(&hit.child, hit.local_dip, PointerButton::Primary, false);
-            }
-            webview_press.0 = Some(hit.child);
-            true
+) {
+    webview_press.0 = None;
+    let hit = route.overlay_rects.get(terminal).ok().and_then(|overlays| {
+        webview_hit_at(
+            &route.children,
+            &route.webviews,
+            overlays,
+            terminal,
+            local_phys,
+            cell_w_phys,
+            cell_h_phys,
+            scale,
+        )
+    });
+    let Some(hit) = hit else {
+        let clears_inline = route
+            .focused_webview
+            .as_deref()
+            .and_then(|focused| focused.0)
+            .is_some_and(|current| route.webview_parents.contains(current));
+        if clears_inline && let Some(focused) = route.focused_webview.as_deref_mut() {
+            focused.0 = None;
         }
-        ButtonState::Released => {
-            let Some(child) = webview_press.0.take() else {
-                return false;
-            };
-            if let Some(browsers) = route.browsers.as_deref()
-                && let Some(dip) =
-                    webview_release_dip(route, child, cursor_phys, cell_w_phys, cell_h_phys, scale)
-            {
-                browsers.send_mouse_click(&child, dip, PointerButton::Primary, true);
-            }
-            true
-        }
+        return;
+    };
+    let moves_focus = route
+        .focused_webview
+        .as_deref()
+        .is_some_and(|focused| focused.0 != Some(hit.child));
+    if moves_focus && let Some(focused) = route.focused_webview.as_deref_mut() {
+        focused.0 = Some(hit.child);
     }
+    // NOTE: `set_focus` must precede `send_mouse_click`: it reaches any live
+    // browser, while a click reaches only a browser that already has a focused
+    // frame, so a click sent first is dropped by an unfocused page.
+    route.cef.set_focus(&hit.child, true);
+    route
+        .cef
+        .send_mouse_click(&hit.child, hit.local_dip, PointerButton::Primary, false);
+    webview_press.0 = Some(hit.child);
 }
 
 /// Releases an in-flight webview press to CEF (mouse-up at the last
 /// cursor) and clears the marker. Call this when input is suppressed (a
 /// modal opens, or the window loses focus), so the focused web page is
-/// not left logically pressed with no matching mouse-up. `cursor_phys` is
-/// `None` when there is no placeable cursor (off-window): then the press
-/// is dropped WITHOUT a CEF mouse-up.
+/// not left logically pressed with no matching mouse-up. A frame whose
+/// `cursor_phys` is `None` has no placeable cursor (off-window): the
+/// press is then dropped WITHOUT a CEF mouse-up.
 pub(in crate::input::mouse) fn release_webview_press(
     webview_press: &mut WebviewPress,
     route: &WebviewRouteParams,
-    cursor_phys: Option<Vec2>,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    scale: f32,
+    frame: &WebviewPointerFrame,
 ) {
     let Some(child) = webview_press.0.take() else {
         return;
     };
-    if let Some(cursor_phys) = cursor_phys
-        && let Some(browsers) = route.browsers.as_deref()
-        && let Some(dip) =
-            webview_release_dip(route, child, cursor_phys, cell_w_phys, cell_h_phys, scale)
+    if let Some(cursor_phys) = frame.cursor_phys
+        && let Some(dip) = webview_release_dip(
+            route,
+            child,
+            cursor_phys,
+            frame.cell_w,
+            frame.cell_h,
+            frame.scale,
+        )
     {
-        browsers.send_mouse_click(&child, dip, PointerButton::Primary, true);
+        route
+            .cef
+            .send_mouse_click(&child, dip, PointerButton::Primary, true);
     }
+}
+
+/// The terminal owning the in-flight webview press, or `None` when no press
+/// is in flight or its child is gone.
+pub(in crate::input::mouse) fn pressed_terminal(
+    webview_press: &WebviewPress,
+    route: &WebviewRouteParams,
+) -> Option<Entity> {
+    let child = webview_press.0?;
+    Some(route.webview_parents.get(child).ok()?.parent())
 }
 
 /// The per-frame pointer geometry both webview pointer pipelines derive from the
@@ -186,13 +180,13 @@ pub(in crate::input::mouse) fn webview_pointer_frame(
     }
 }
 
-/// The queries, browsers handle, and held buttons needed to forward pointer
-/// motion to an inline CEF child.
+/// The queries, CEF sink, and held buttons needed to forward pointer motion
+/// to an inline CEF child.
 pub(in crate::input::mouse) struct WebviewMoveDeps<'a> {
     pub children: &'a Query<'a, 'a, &'static Children>,
     pub webviews: &'a Query<'a, 'a, (&'static Webview, Has<NonInteractive>)>,
     pub overlay_rects: &'a Query<'a, 'a, &'static TerminalOverlays>,
-    pub browsers: Option<&'a Browsers>,
+    pub cef: &'a CefMouse<'a>,
     pub pressed_buttons: &'a ButtonInput<MouseButton>,
 }
 
@@ -213,7 +207,7 @@ pub(in crate::input::mouse) fn forward_webview_move_at(
         deps.children,
         deps.webviews,
         deps.overlay_rects,
-        deps.browsers,
+        deps.cef,
         deps.pressed_buttons,
         terminal,
         local_phys,
@@ -301,13 +295,13 @@ fn webview_release_dip(
 /// browser-side.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the move forward needs the inline queries, browsers, held buttons, and pointer geometry"
+    reason = "the move forward needs the inline queries, the CEF sink, held buttons, and pointer geometry"
 )]
 fn forward_webview_move(
     children: &Query<&Children>,
     webviews: &Query<(&Webview, Has<NonInteractive>)>,
     overlay_rects: &Query<&TerminalOverlays>,
-    browsers: Option<&Browsers>,
+    cef: &CefMouse,
     pressed_buttons: &ButtonInput<MouseButton>,
     terminal: Entity,
     local_phys: Vec2,
@@ -330,12 +324,10 @@ fn forward_webview_move(
     ) else {
         return;
     };
-    if let Some(browsers) = browsers {
-        browsers.send_mouse_move(
-            &hit.child,
-            pressed_buttons.get_pressed(),
-            hit.local_dip,
-            false,
-        );
-    }
+    cef.send_mouse_move(
+        &hit.child,
+        pressed_buttons.get_pressed(),
+        hit.local_dip,
+        false,
+    );
 }

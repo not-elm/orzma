@@ -1,6 +1,6 @@
 //! Shared mouse-dispatch plumbing for every `OrzmaTerminal` surface, gated
-//! per entity by `MouseDisabled` so dispatch runs only for a surface that
-//! still owns the mouse.
+//! per entity by `TerminalMouseDisabled` and `MouseClaimedByWebview` so dispatch runs
+//! only for a surface that still owns the mouse.
 
 use crate::action::terminal::{
     TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart,
@@ -8,7 +8,7 @@ use crate::action::terminal::{
 };
 use crate::input::InputPhase;
 use crate::input::bindings::OrzmaMouseConfig;
-use crate::input::focus::MouseDisabled;
+use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled};
 use crate::input::mouse::button::MouseButtonInputPlugin;
 use crate::input::mouse::separator::SeparatorDragPlugin;
 use crate::input::mouse::wheel::MouseWheelInputPlugin;
@@ -177,7 +177,11 @@ type TerminalSurfaces<'w, 's> = Query<
         &'static TerminalView,
         &'static TerminalCells,
     ),
-    (With<OrzmaTerminal>, Without<MouseDisabled>),
+    (
+        With<OrzmaTerminal>,
+        Without<TerminalMouseDisabled>,
+        Without<MouseClaimedByWebview>,
+    ),
 >;
 
 /// The `(entity, node, stack, transform)` candidates `topmost_surface_at`

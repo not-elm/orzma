@@ -3,23 +3,24 @@
 //! cursor.
 
 use crate::input::InputPhase;
+use crate::input::focus::WebviewMouseDisabled;
 use crate::input::mouse::MousePhase;
 use crate::input::mouse::cell_dims;
 use crate::input::mouse::separator::GrabbedSeparator;
 use crate::input::mouse::webview::{
-    WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
-    release_webview_press, route_webview_left_click, webview_pointer_frame, webview_wheel_delta,
-    webview_wheel_target,
+    CefMouse, WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
+    pressed_terminal, release_webview_press, route_webview_left_click, webview_pointer_frame,
+    webview_wheel_delta, webview_wheel_target,
 };
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::surface::geometry::topmost_surface_at;
+use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
-use bevy_cef_core::prelude::Browsers;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzma_tty_renderer::prelude::TerminalOverlays;
 use bevy_orzma_webview::{NonInteractive, Webview};
@@ -51,23 +52,70 @@ impl Plugin for MouseWebviewRouterPlugin {
     }
 }
 
+/// Every `OrzmaTerminal` surface the router hit-tests, carrying whether the
+/// host has suppressed that terminal's webview mouse input.
+type RouterSurfaces<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static ComputedNode,
+        &'static ComputedStackIndex,
+        &'static UiGlobalTransform,
+        Has<WebviewMouseDisabled>,
+    ),
+    With<OrzmaTerminal>,
+>;
+
+/// What the router found under the pointer.
+#[derive(Clone, Copy)]
+enum SurfaceUnderCursor {
+    /// No terminal surface lies under the pointer.
+    None,
+    /// The topmost surface has `WebviewMouseDisabled`.
+    Suppressed,
+    /// The topmost surface accepts pointer input, at this pane-local
+    /// physical point.
+    Open(Entity, Vec2),
+}
+
+impl SurfaceUnderCursor {
+    /// Resolves the topmost `OrzmaTerminal` under `cursor_phys`.
+    ///
+    /// A suppressed surface reports `Suppressed` rather than dropping out of
+    /// the hit test, so the pointer does not reach a surface below it.
+    fn resolve(surfaces: &RouterSurfaces, cursor_phys: Vec2) -> Self {
+        let candidates = surfaces
+            .iter()
+            .map(|(entity, node, stack, transform, _)| (entity, node, stack, transform));
+        let Some(terminal) = topmost_surface_at(cursor_phys, candidates) else {
+            return Self::None;
+        };
+        let Ok((_, node, _, transform, suppressed)) = surfaces.get(terminal) else {
+            return Self::None;
+        };
+        if suppressed {
+            return Self::Suppressed;
+        }
+        match phys_to_pane_local(node, transform, cursor_phys) {
+            Some(local_phys) => Self::Open(terminal, local_phys),
+            None => Self::None,
+        }
+    }
+}
+
 /// Forwards left press/release to the inline CEF child under the cursor
-/// on the shell surface. A window-unfocused frame drains the reader and
-/// releases an in-flight press so the focused page is not left logically
-/// pressed.
+/// on the shell surface. A window-unfocused frame, and a frame on which
+/// the terminal owning an in-flight press has its mouse input suppressed,
+/// release that press so the focused page is not left logically pressed. A
+/// press over a suppressed terminal is dropped rather than forwarded, while
+/// a release is always delivered to the terminal that owns the in-flight
+/// press, regardless of what lies under the cursor.
 fn route_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
     mut buttons: MessageReader<MouseButtonInput>,
-    surfaces: Query<
-        (
-            Entity,
-            &ComputedNode,
-            &ComputedStackIndex,
-            &UiGlobalTransform,
-        ),
-        With<OrzmaTerminal>,
-    >,
+    surfaces: RouterSurfaces,
     metrics: Res<TerminalCellMetricsResource>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -79,30 +127,33 @@ fn route_webview_pointer(
     let frame = webview_pointer_frame(window, &metrics);
     if !window.focused {
         buttons.clear();
-        release_webview_press(
-            &mut webview_press,
-            &webview_route,
-            frame.cursor_phys,
-            frame.cell_w,
-            frame.cell_h,
-            frame.scale,
-        );
+        release_webview_press(&mut webview_press, &webview_route, &frame);
         return;
     }
+    if let Some(terminal) = pressed_terminal(&webview_press, &webview_route)
+        && surfaces
+            .get(terminal)
+            .is_ok_and(|(_, _, _, _, suppressed)| suppressed)
+    {
+        release_webview_press(&mut webview_press, &webview_route, &frame);
+    }
+    if buttons.is_empty() {
+        return;
+    }
+    let surface = frame
+        .cursor_phys
+        .map_or(SurfaceUnderCursor::None, |cursor| {
+            SurfaceUnderCursor::resolve(&surfaces, cursor)
+        });
     for ev in buttons.read() {
         if ev.button != MouseButton::Left {
             continue;
         }
-        let Some(cursor_phys) = frame.cursor_phys else {
+        if ev.state == ButtonState::Released {
+            release_webview_press(&mut webview_press, &webview_route, &frame);
             continue;
-        };
-        let Some(terminal) = topmost_surface_at(cursor_phys, surfaces.iter()) else {
-            continue;
-        };
-        let Ok((_, node, _, transform)) = surfaces.get(terminal) else {
-            continue;
-        };
-        let Some(local_phys) = phys_to_pane_local(node, transform, cursor_phys) else {
+        }
+        let SurfaceUnderCursor::Open(terminal, local_phys) = surface else {
             continue;
         };
         route_webview_left_click(
@@ -110,8 +161,6 @@ fn route_webview_pointer(
             &mut webview_route,
             terminal,
             local_phys,
-            cursor_phys,
-            ev.state,
             frame.cell_w,
             frame.cell_h,
             frame.scale,
@@ -120,25 +169,19 @@ fn route_webview_pointer(
 }
 
 /// Forwards pointer motion over an interactive inline rect of the shell surface
-/// to the child's CEF browser via the shared `forward_webview_move_at`.
+/// to the child's CEF browser via the shared `forward_webview_move_at`. An
+/// unfocused window forwards no motion, and a suppressed terminal's rect is
+/// skipped like a closed one.
 fn forward_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
-    surfaces: Query<
-        (
-            Entity,
-            &ComputedNode,
-            &ComputedStackIndex,
-            &UiGlobalTransform,
-        ),
-        With<OrzmaTerminal>,
-    >,
+    surfaces: RouterSurfaces,
     children: Query<'_, '_, &'static Children>,
     webviews: Query<'_, '_, (&'static Webview, Has<NonInteractive>)>,
     overlay_rects: Query<'_, '_, &'static TerminalOverlays>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    browsers: Option<NonSend<Browsers>>,
+    cef: CefMouse,
 ) {
     let Some(moved) = cursor_msg.read().last() else {
         return;
@@ -146,21 +189,23 @@ fn forward_webview_mouse_moves(
     let Ok(window) = windows.single() else {
         return;
     };
+    if !window.focused {
+        return;
+    }
     let frame = webview_pointer_frame(window, &metrics);
     let cursor_phys = moved.position * frame.scale;
     let deps = WebviewMoveDeps {
         children: &children,
         webviews: &webviews,
         overlay_rects: &overlay_rects,
-        browsers: browsers.as_deref(),
+        cef: &cef,
         pressed_buttons: &mouse_buttons,
     };
     forward_webview_move_at(
         &deps,
-        |c| {
-            let t = topmost_surface_at(c, surfaces.iter())?;
-            let (_, node, _, transform) = surfaces.get(t).ok()?;
-            Some((t, phys_to_pane_local(node, transform, c)?))
+        |c| match SurfaceUnderCursor::resolve(&surfaces, c) {
+            SurfaceUnderCursor::Open(terminal, local_phys) => Some((terminal, local_phys)),
+            SurfaceUnderCursor::None | SurfaceUnderCursor::Suppressed => None,
         },
         cursor_phys,
         &frame,
@@ -173,28 +218,30 @@ fn forward_webview_mouse_moves(
 /// wheel cedes to `crate::input::mouse::wheel::dispatch_mouse_wheel`
 /// (the terminal's wheel routing: mouse reports, alternate-scroll cursor
 /// keys, or the scrollback) through its own reader; over the rect the
-/// shell is `MouseDisabled` (rect-claim gate), so that dispatcher yields
-/// and only the page scrolls.
+/// shell is `MouseClaimedByWebview`, so that dispatcher yields and only
+/// the page scrolls. A held divider drains the reader and forwards
+/// nothing.
 fn forward_webview_wheel(
     mut wheel: MessageReader<MouseWheel>,
     focused_webview: Res<FocusedWebview>,
     webview_parents: Query<&ChildOf, With<Webview>>,
-    surfaces: Query<
-        (
-            Entity,
-            &ComputedNode,
-            &ComputedStackIndex,
-            &UiGlobalTransform,
-        ),
-        With<OrzmaTerminal>,
-    >,
+    surfaces: RouterSurfaces,
     children: Query<&Children>,
     webviews: Query<(&Webview, Has<NonInteractive>)>,
     overlay_rects: Query<&TerminalOverlays>,
+    grabbed: Query<(), With<GrabbedSeparator>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
-    browsers: Option<NonSend<Browsers>>,
+    cef: CefMouse,
 ) {
+    // NOTE: the held-divider guard is a body check rather than a `run_if`
+    // because it must still advance the reader. A `run_if` skips the system
+    // without draining it, so every notch spun during the drag replays into
+    // the page once the divider is let go.
+    if !grabbed.is_empty() {
+        wheel.clear();
+        return;
+    }
     let Ok(window) = windows.single() else {
         wheel.clear();
         return;
@@ -207,9 +254,11 @@ fn forward_webview_wheel(
     let (cell_w, cell_h) = cell_dims(&metrics);
     let target = window.cursor_position().and_then(|c| {
         let cursor_phys = c * scale;
-        let terminal = topmost_surface_at(cursor_phys, surfaces.iter())?;
-        let (_, node, _, transform) = surfaces.get(terminal).ok()?;
-        let local_phys = phys_to_pane_local(node, transform, cursor_phys)?;
+        let SurfaceUnderCursor::Open(terminal, local_phys) =
+            SurfaceUnderCursor::resolve(&surfaces, cursor_phys)
+        else {
+            return None;
+        };
         webview_wheel_target(
             &focused_webview,
             &webview_parents,
@@ -227,23 +276,27 @@ fn forward_webview_wheel(
         wheel.clear();
         return;
     };
-    let Some(browsers) = browsers.as_deref() else {
-        wheel.clear();
-        return;
-    };
     for ev in wheel.read() {
-        browsers.send_mouse_wheel(&child, dip, webview_wheel_delta(ev.unit, ev.x, ev.y));
+        cef.send_mouse_wheel(&child, dip, webview_wheel_delta(ev.unit, ev.x, ev.y));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::input::ButtonState;
+    #[cfg(target_os = "windows")]
+    use async_channel::Receiver;
+    #[cfg(target_os = "windows")]
+    use bevy::input::mouse::MouseScrollUnit;
+    #[cfg(target_os = "windows")]
+    use bevy::input::touch::TouchPhase;
     use bevy::math::{DVec2, IVec4};
     use bevy::window::WindowResolution;
-    use bevy_cef::prelude::FocusedWebview;
+    #[cfg(target_os = "windows")]
+    use bevy_cef_core::prelude::{BrowsersProxy, CefCommand};
     use bevy_orzma_tty_renderer::CellMetrics;
+    #[cfg(target_os = "windows")]
+    use bevy_orzmux::prelude::{SplitId, SplitOrientation};
     use orzma_vt::prelude::InstanceId;
 
     fn test_metrics() -> TerminalCellMetricsResource {
@@ -386,6 +439,339 @@ mod tests {
             app.world().resource::<WebviewPress>().0,
             None,
             "a window-exists-but-suppressed frame releases the in-flight inline press so CEF is not left pressed"
+        );
+    }
+
+    /// Asserts that a press inside an interactive inline rect hands CEF a
+    /// focus request followed by a press-phase click, in that order.
+    ///
+    /// Case: the user clicks a link on a page mounted into a pane, on a
+    /// platform where CEF is driven through its own UI thread.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_press_over_an_inline_rect_reaches_cef_focus_then_click() {
+        let (mut app, _shell, child) = make_webview_app();
+        let (tx, rx) = async_channel::unbounded::<CefCommand>();
+        app.insert_resource(BrowsersProxy::new(tx));
+        set_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_left(&mut app, ButtonState::Pressed);
+        app.update();
+
+        let focus = rx.try_recv().expect("the press issued a focus request");
+        assert!(
+            matches!(
+                focus,
+                CefCommand::SetFocus { webview, focused: true } if webview == child
+            ),
+            "the focus request precedes the click so the first click is not swallowed"
+        );
+        let click = rx.try_recv().expect("the press issued a click");
+        assert!(
+            matches!(
+                click,
+                CefCommand::SendMouseClick {
+                    webview,
+                    button: PointerButton::Primary,
+                    mouse_up: false,
+                    ..
+                } if webview == child
+            ),
+            "the press phase of the click reaches the focused child"
+        );
+    }
+
+    /// Asserts that a press over an interactive rect on a suppressed
+    /// terminal reaches neither the webview focus nor the press marker.
+    ///
+    /// Case: the user enters vi mode and then clicks a link on a page
+    /// mounted in that pane.
+    #[test]
+    fn a_press_on_a_suppressed_terminal_does_not_reach_the_webview() {
+        let (mut app, shell, _child) = make_webview_app();
+        app.world_mut()
+            .entity_mut(shell)
+            .insert(WebviewMouseDisabled);
+        set_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_left(&mut app, ButtonState::Pressed);
+        app.update();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "a suppressed terminal must not hand its press to the inline webview"
+        );
+        assert_eq!(
+            app.world().resource::<WebviewPress>().0,
+            None,
+            "no in-flight press is recorded for a suppressed terminal"
+        );
+    }
+
+    /// Asserts that suppression of the terminal owning an in-flight press
+    /// releases that press, with no cursor anywhere on screen.
+    ///
+    /// Case: the user presses inside a page, drags the pointer off the
+    /// window, and vi mode starts before the button comes back up.
+    #[test]
+    fn suppression_of_the_pressed_terminal_releases_the_press() {
+        let (mut app, shell, child) = make_webview_app();
+        app.world_mut().resource_mut::<WebviewPress>().0 = Some(child);
+        app.world_mut()
+            .entity_mut(shell)
+            .insert(WebviewMouseDisabled);
+        let win = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Window>(win)
+            .unwrap()
+            .set_physical_cursor_position(None);
+        app.update();
+        assert_eq!(
+            app.world().resource::<WebviewPress>().0,
+            None,
+            "the press is released by its own terminal's suppression, not by what lies under the pointer"
+        );
+    }
+
+    /// Asserts that a release is delivered to the terminal that owns the
+    /// in-flight press, even when a different, suppressed terminal is
+    /// topmost under the cursor.
+    ///
+    /// Case: the user presses inside one pane's mounted page, drags the
+    /// pointer over a second pane that is in vi mode, and releases there.
+    #[test]
+    fn a_release_over_a_different_suppressed_terminal_still_clears_its_own_press() {
+        let (mut app, _shell, child) = make_webview_app();
+        app.world_mut().resource_mut::<WebviewPress>().0 = Some(child);
+        app.world_mut().spawn((
+            OrzmaTerminal,
+            WebviewMouseDisabled,
+            ComputedNode {
+                size: Vec2::new(200.0, 200.0),
+                ..ComputedNode::DEFAULT
+            },
+            ComputedStackIndex(1),
+            UiGlobalTransform::from_xy(700.0, 500.0),
+        ));
+        set_cursor(&mut app, Vec2::new(700.0, 500.0));
+        write_left(&mut app, ButtonState::Released);
+        app.update();
+        assert_eq!(
+            app.world().resource::<WebviewPress>().0,
+            None,
+            "a release must reach the terminal that owns the in-flight press, regardless of the suppressed terminal under the cursor"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    fn make_move_app() -> (App, Entity, Entity, Receiver<CefCommand>) {
+        let (mut app, shell, child) = make_webview_app();
+        let (tx, rx) = async_channel::unbounded::<CefCommand>();
+        app.insert_resource(BrowsersProxy::new(tx));
+        app.add_message::<CursorMoved>();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        app.add_systems(Update, forward_webview_mouse_moves);
+        (app, shell, child, rx)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn write_cursor_moved(app: &mut App, logical: Vec2) {
+        app.world_mut()
+            .resource_mut::<Messages<CursorMoved>>()
+            .write(CursorMoved {
+                window: Entity::PLACEHOLDER,
+                position: logical,
+                delta: None,
+            });
+    }
+
+    /// Asserts that an unfocused window forwards no pointer motion to CEF.
+    ///
+    /// Case: the user switches to another application and moves the mouse
+    /// across the still-visible orzma window.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn an_unfocused_window_forwards_no_motion() {
+        let (mut app, _shell, _child, rx) = make_move_app();
+        let win = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().get_mut::<Window>(win).unwrap().focused = false;
+        write_cursor_moved(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+        assert!(
+            rx.is_empty(),
+            "an unfocused window must not paint hover state into the page"
+        );
+    }
+
+    /// Asserts that pointer motion over an interactive rect reaches CEF while
+    /// the IME composes into the inline webview that owns the composition.
+    ///
+    /// Case: the user is typing Japanese into a text field on a page mounted
+    /// in a pane and moves the pointer across that page to click a conversion
+    /// candidate the page itself renders.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_webview_owned_composition_still_forwards_motion() {
+        use crate::input::focus::maintain_input_gates;
+        use crate::input::ime::{ImeState, apply_event};
+        use bevy::window::Ime;
+
+        let (mut app, _shell, child, rx) = make_move_app();
+
+        let mut state = ImeState::default();
+        apply_event(
+            &mut state,
+            &Ime::Preedit {
+                window: Entity::PLACEHOLDER,
+                value: "あ".into(),
+                cursor: Some((3, 3)),
+            },
+        );
+        assert!(
+            state.is_composing(),
+            "the fixture must actually compose, or this test passes for the wrong reason"
+        );
+        app.insert_resource(state);
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+
+        app.add_systems(
+            Update,
+            maintain_input_gates.before(forward_webview_mouse_moves),
+        );
+
+        write_cursor_moved(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+
+        let sent = rx.try_recv().expect(
+            "a composition the focused inline webview owns must not suppress pointer motion to it",
+        );
+        assert!(
+            matches!(sent, CefCommand::SendMouseMove { .. }),
+            "the forwarded command must be a pointer move"
+        );
+    }
+
+    /// Asserts that motion over an interactive rect in a focused window
+    /// reaches CEF as a `SendMouseMove` for the child under the pointer.
+    ///
+    /// Case: the user moves the pointer across a link inside a page mounted
+    /// in a pane.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_focused_window_forwards_motion_over_the_rect() {
+        let (mut app, _shell, child, rx) = make_move_app();
+        write_cursor_moved(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+        let command = rx.try_recv().expect("the proxy received one command");
+        assert!(
+            matches!(
+                command,
+                CefCommand::SendMouseMove { webview, mouse_leave: false, .. } if webview == child
+            ),
+            "motion over the rect is forwarded to the child under the pointer"
+        );
+        assert!(rx.is_empty(), "exactly one command is sent for one move");
+    }
+
+    /// Asserts that motion over a suppressed terminal's rect forwards
+    /// nothing to CEF.
+    ///
+    /// Case: the user is in vi mode on a pane and moves the pointer across
+    /// a link inside its mounted page.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn motion_over_a_suppressed_terminal_forwards_nothing() {
+        let (mut app, shell, _child, rx) = make_move_app();
+        app.world_mut()
+            .entity_mut(shell)
+            .insert(WebviewMouseDisabled);
+        write_cursor_moved(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+        assert!(
+            rx.is_empty(),
+            "a suppressed terminal's rect must not forward motion to CEF"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    fn make_wheel_app() -> (App, Entity, Receiver<CefCommand>) {
+        let (mut app, _shell, child) = make_webview_app();
+        let (tx, rx) = async_channel::unbounded::<CefCommand>();
+        app.insert_resource(BrowsersProxy::new(tx));
+        app.add_message::<MouseWheel>();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+        app.add_systems(Update, forward_webview_wheel);
+        set_cursor(&mut app, Vec2::new(40.0, 48.0));
+        (app, child, rx)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn write_wheel(app: &mut App, y: f32) {
+        app.world_mut()
+            .resource_mut::<Messages<MouseWheel>>()
+            .write(MouseWheel {
+                unit: MouseScrollUnit::Line,
+                x: 0.0,
+                y,
+                window: Entity::PLACEHOLDER,
+                phase: TouchPhase::Moved,
+            });
+    }
+
+    /// Asserts that a wheel notch over the focused inline rect reaches CEF
+    /// as a `SendMouseWheel` for the child under the pointer.
+    ///
+    /// Case: the user scrolls a long document shown on a page mounted in a
+    /// pane.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_notch_over_the_focused_rect_reaches_the_page() {
+        let (mut app, child, rx) = make_wheel_app();
+        write_wheel(&mut app, -1.0);
+        app.update();
+        let command = rx.try_recv().expect("the proxy received one command");
+        assert!(
+            matches!(
+                command,
+                CefCommand::SendMouseWheel { webview, .. } if webview == child
+            ),
+            "the notch is forwarded to the focused child under the pointer"
+        );
+    }
+
+    /// Asserts that a notch spun while a divider is held is dropped rather
+    /// than replayed into the page once the divider is let go.
+    ///
+    /// Case: the user drags a pane divider, spins the wheel over a focused
+    /// page before letting go, and then releases the divider.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_held_divider_drops_the_wheel_rather_than_replaying_it() {
+        let (mut app, _child, rx) = make_wheel_app();
+        let divider = app
+            .world_mut()
+            .spawn(GrabbedSeparator::held(
+                SplitId(1),
+                SplitOrientation::Vertical,
+            ))
+            .id();
+        write_wheel(&mut app, -1.0);
+        app.update();
+        assert!(
+            rx.is_empty(),
+            "a held divider forwards no wheel to the page"
+        );
+        app.world_mut().entity_mut(divider).despawn();
+        app.update();
+        assert!(
+            rx.is_empty(),
+            "the notch spun under the held divider is dropped, not replayed once it is let go"
         );
     }
 }
