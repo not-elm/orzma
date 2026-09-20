@@ -26,7 +26,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod process_cwd;
 mod write_queue;
 
@@ -39,7 +39,7 @@ pub struct Pty {
     child_killer: Box<dyn ChildKiller + Send + Sync>,
     /// The pid of the process spawned under the PTY, or `None` for a PTY
     /// built without one.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     child_pid: Option<i32>,
     /// Whether the spawned process is the `/usr/bin/login` wrapper, which
     /// runs the shell as its child.
@@ -120,7 +120,7 @@ impl Pty {
             .spawn_command(cmd)
             .map_err(OrzmaTtyError::SpawnShell)?;
         let child_killer = child.clone_killer();
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let child_pid = child.process_id().and_then(|pid| i32::try_from(pid).ok());
         drop(pty_pair.slave);
 
@@ -147,7 +147,7 @@ impl Pty {
             chunk_rx,
             exit_rx,
             child_killer,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             child_pid,
             #[cfg(unix)]
             child_is_wrapper,
@@ -249,15 +249,20 @@ impl Pty {
             .expect("MasterPty::get_size")
     }
 
-    /// The working directory of the process this PTY is showing: its
-    /// foreground process group's leader, else the spawned process, else
-    /// on macOS the child of a spawned `/usr/bin/login` wrapper. Only a
-    /// directory that still exists and can be entered is reported.
+    /// The working directory of the process this PTY is showing: on Unix
+    /// its foreground process group's leader, else the spawned process,
+    /// else on macOS the child of a spawned `/usr/bin/login` wrapper; on
+    /// Windows the spawned process. Only a directory that still exists
+    /// and can be entered is reported.
     ///
     /// Returns `None` when no candidate can be read: no process was
-    /// spawned, the process belongs to another user, it has exited, its
-    /// directory was removed or can no longer be entered, or the platform
-    /// is neither macOS nor Linux.
+    /// spawned, the process belongs to another user or is elevated, it
+    /// has exited, its directory was removed or can no longer be
+    /// entered, or the platform is none of macOS, Linux, and Windows.
+    ///
+    /// On Windows a PowerShell `Set-Location` does not change the
+    /// process working directory, so the directory reported here is the
+    /// one the shell was launched in.
     pub fn process_cwd(&self) -> Option<PathBuf> {
         #[cfg(unix)]
         {
@@ -268,10 +273,12 @@ impl Pty {
                 .and_then(|master| master.process_group_leader());
             process_cwd::resolve(leader, self.child_pid, self.child_is_wrapper)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            // TODO: read the shell process's working directory from its PEB
-            // on Windows.
+            process_cwd::resolve(None, self.child_pid, false)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
             None
         }
     }
@@ -320,7 +327,7 @@ impl Pty {
             chunk_rx,
             exit_rx,
             child_killer: Box::new(DetachedKiller),
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             child_pid: None,
             #[cfg(unix)]
             child_is_wrapper: false,

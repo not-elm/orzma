@@ -17,7 +17,11 @@ use std::io::{Error as IoError, ErrorKind};
 use std::mem::MaybeUninit;
 #[cfg(target_os = "macos")]
 use std::os::unix::ffi::OsStringExt;
+#[cfg(windows)]
+use std::path::Path;
 use std::path::PathBuf;
+#[cfg(windows)]
+use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tracing::debug;
 
 /// The working directory of the first candidate process the OS reports
@@ -141,14 +145,115 @@ fn read_cwd(pid: i32) -> IoResult<PathBuf> {
 /// # Errors
 ///
 /// Always returns `Unsupported`.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn read_cwd(_pid: i32) -> IoResult<PathBuf> {
     Err(IoError::from(ErrorKind::Unsupported))
+}
+
+/// The working directory of `pid` as the operating system records it,
+/// without the trailing separator the loader stores.
+///
+/// # Errors
+///
+/// Returns `InvalidInput` when `pid` does not fit a Windows process id,
+/// and `NotFound` when the process is not listed or its directory cannot
+/// be read — which is the case for a process this one may not read the
+/// memory of, such as an elevated shell or one owned by another user.
+#[cfg(windows)]
+fn read_cwd(pid: i32) -> IoResult<PathBuf> {
+    let pid = u32::try_from(pid)
+        .map(Pid::from_u32)
+        .map_err(|_| IoError::from(ErrorKind::InvalidInput))?;
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
+    );
+    system
+        .process(pid)
+        .and_then(Process::cwd)
+        .map(trimmed)
+        .ok_or_else(|| IoError::from(ErrorKind::NotFound))
+}
+
+/// `path` without the trailing separator, unless the path is a drive
+/// root, where that separator is what makes it absolute.
+///
+/// The NT loader stores `CurrentDirectory.DosPath` with a trailing
+/// separator, and `sysinfo` passes it through unchanged.
+// NOTE: trimming a drive root would turn `C:\` into `C:`, which names
+// the current directory on that drive rather than its root, so a split
+// would land somewhere else entirely.
+#[cfg(windows)]
+fn trimmed(path: &Path) -> PathBuf {
+    let text = path.as_os_str().to_string_lossy();
+    let trimmed = text.trim_end_matches(['\\', '/']);
+    if trimmed.len() <= 2 {
+        return PathBuf::from(text.as_ref());
+    }
+    PathBuf::from(trimmed)
 }
 
 /// How many children of a wrapper process are tried.
 #[cfg(target_os = "macos")]
 const MAX_CHILDREN: usize = 64;
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+    use tempfile::TempDir;
+
+    /// Asserts that the working directory read for a live process is the
+    /// one it was started in, with no trailing separator.
+    ///
+    /// Case: a pane's shell is sitting at a prompt in a project
+    /// directory and the user splits that pane.
+    #[test]
+    fn read_cwd_reports_the_directory_a_process_was_started_in() {
+        let dir = TempDir::new().expect("a temporary directory");
+        // NOTE: `canonicalize` returns a verbatim `\\?\C:\…` path, whose
+        // `VerbatimDisk` prefix `Path` compares unequal to the plain
+        // `Disk` prefix the PEB stores. Compare the raw path instead.
+        let expected = dir.path().to_path_buf();
+        // NOTE: `cmd /c pause` exits immediately when stdin is not a
+        // console, which is how `cargo test` usually runs it, so the
+        // child must stay alive without reading stdin.
+        let mut child = Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .current_dir(&expected)
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("a spawned process");
+        let pid = i32::try_from(child.id()).expect("a pid that fits");
+        let read = read_cwd(pid);
+        let _ = child.kill();
+        let _ = child.wait();
+        let read = read.expect("a readable working directory");
+        assert_eq!(read, expected);
+        assert!(
+            !read.as_os_str().to_string_lossy().ends_with('\\'),
+            "the trailing separator must be trimmed"
+        );
+    }
+
+    /// Asserts that a pid no process holds reports an error rather than
+    /// a directory.
+    ///
+    /// Case: the pane's shell exits between the moment its pid was
+    /// recorded and the moment the split asks for its directory.
+    #[test]
+    fn read_cwd_of_a_dead_process_is_an_error() {
+        let mut child = Command::new("cmd")
+            .args(["/c", "exit"])
+            .spawn()
+            .expect("a spawned process");
+        let pid = i32::try_from(child.id()).expect("a pid that fits");
+        let _ = child.wait();
+        assert!(read_cwd(pid).is_err());
+    }
+}
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
