@@ -7,7 +7,7 @@ use crate::backend::queue_sample::{ChunkDepth, QueueSampler};
 use crate::layout::LayoutTree;
 use crate::protocol::{
     CloseReason, CommandSeq, Layout, NewPaneAt, OrzmuxCommand, OrzmuxEvent, PaneId, PaneTarget,
-    RequestId,
+    RequestId, SplitOrientation,
 };
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::CellPixels;
@@ -320,6 +320,16 @@ impl Backend {
             });
             return;
         };
+        let at = match self.resolve_at(at) {
+            Ok(at) => at,
+            Err(error) => {
+                self.emit(OrzmuxEvent::SpawnFailed {
+                    request,
+                    error: error.to_string(),
+                });
+                return;
+            }
+        };
         let new = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
         let previous_active = self.tree.active();
@@ -369,27 +379,47 @@ impl Backend {
         }
     }
 
+    /// `at` with its split target resolved to a concrete, live pane.
+    ///
+    /// # Errors
+    ///
+    /// Returns `"no target pane"` when the split target does not resolve.
+    fn resolve_at(&self, at: NewPaneAt) -> Result<ResolvedPaneAt, &'static str> {
+        let NewPaneAt::Split { pane, orientation } = at else {
+            return Ok(ResolvedPaneAt::Root);
+        };
+        let target = self.resolve(pane).ok_or("no target pane")?;
+        // NOTE: `pane` is pinned to this concrete id now rather than
+        // re-resolved later. `NewPaneAt::Split` can carry
+        // `PaneTarget::Active`, and re-resolving it after something else
+        // moved the active pane would divide whichever pane is active
+        // then, not the one the command named.
+        Ok(ResolvedPaneAt::Split {
+            pane: target,
+            orientation,
+        })
+    }
+
     /// Inserts `new` into the tree at `at`. Returns the pane a split
     /// divides, `None` for a root pane, or why the insertion was refused.
     fn insert_pane(
         &mut self,
         new: PaneId,
-        at: NewPaneAt,
+        at: ResolvedPaneAt,
         window: GridSize,
     ) -> Result<Option<PaneId>, &'static str> {
         match at {
-            NewPaneAt::Root => {
+            ResolvedPaneAt::Root => {
                 self.tree
                     .insert_root(new)
                     .map_err(|_| "root already open")?;
                 Ok(None)
             }
-            NewPaneAt::Split { pane, orientation } => {
-                let target = self.resolve(pane).ok_or("no target pane")?;
+            ResolvedPaneAt::Split { pane, orientation } => {
                 self.tree
-                    .split(target, orientation, new, window)
+                    .split(pane, orientation, new, window)
                     .map_err(|_| "no space")?;
-                Ok(Some(target))
+                Ok(Some(pane))
             }
         }
     }
@@ -585,6 +615,21 @@ struct Geometry {
     cell_px: CellPixels,
 }
 
+/// Where a new pane goes, with its split target already resolved to a
+/// live pane.
+#[derive(Clone, Copy)]
+enum ResolvedPaneAt {
+    /// The first pane; valid only while the tree is empty.
+    Root,
+    /// Split `pane`, putting the new pane right of / below it.
+    Split {
+        /// The pane being split.
+        pane: PaneId,
+        /// The direction of the divider the split introduces.
+        orientation: SplitOrientation,
+    },
+}
+
 /// What one ready `Select` index refers to.
 #[derive(Debug, Clone, Copy)]
 enum Ready {
@@ -636,6 +681,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
+    use tempfile::TempDir;
 
     /// The test's ends of one spawned pane's streams.
     struct FakePane {
@@ -1028,6 +1074,22 @@ mod tests {
         assert_eq!(h.backend.next_wake_deadline(), Some(pane_deadline));
     }
 
+    /// An `OSC 7` sequence reporting `path`, spelled the way a shell on
+    /// this platform would.
+    // NOTE: the separator between the authority and the path is what
+    // makes the URI well-formed. A Windows path starts with a drive
+    // letter rather than `/`, so joining it to `file://localhost`
+    // directly yields `file://localhostC:/…`, whose path the parser
+    // reads as `/Users/…` — not drive-rooted, and rejected.
+    fn osc7(path: &std::path::Path) -> Vec<u8> {
+        let forward = path.display().to_string().replace('\\', "/");
+        format!(
+            "\x1b]7;file://localhost/{}\x1b\\",
+            forward.trim_start_matches('/')
+        )
+        .into_bytes()
+    }
+
     /// Splits the active pane and returns the new pane's id and its
     /// spawned fake terminal.
     fn split_active(h: &mut Harness, request: u64) -> (PaneId, FakePane) {
@@ -1331,46 +1393,47 @@ mod tests {
         assert_eq!(answers, 2);
     }
 
-    /// Asserts that a split inherits the target pane's last OSC 7
-    /// directory when the GUI passes `cwd: None` and the OS reports no
-    /// directory for the target's process.
+    /// Asserts that a split with no explicit directory starts in the
+    /// directory the target pane's shell reported, when the OS reports
+    /// no directory for the target's process.
     ///
-    /// Case: a shell that reports its directory through OSC 7 `cd`s into a
-    /// project while the OS cannot be asked for the pane's directory, and
-    /// the user splits the pane.
+    /// Case: a shell that reports its directory `cd`s into a project
+    /// while the OS cannot be asked for the pane's directory, and the
+    /// user splits the pane.
     #[test]
     fn a_split_inherits_the_target_panes_reported_cwd() {
+        let project = TempDir::new().expect("a temporary directory");
+        let uri = osc7(project.path());
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx
-            .send(b"\x1b]7;file://localhost/tmp/project\x1b\\".to_vec())
-            .unwrap();
+        pane.chunk_tx.send(uri).unwrap();
         h.backend.pump_pane(root);
         h.drain();
         assert_eq!(
             h.backend.panes[&root].cwd().as_deref(),
-            Some(std::path::Path::new("/tmp/project"))
+            Some(project.path())
         );
         h.log.cwds.lock().unwrap().clear();
         split_active(&mut h, 2);
         assert_eq!(
             h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
-            Some(std::path::Path::new("/tmp/project"))
+            Some(project.path())
         );
     }
 
-    /// Asserts that a split given an explicit directory spawns there rather
-    /// than in the target pane's directory.
+    /// Asserts that a split given an explicit directory spawns there
+    /// rather than in the target pane's directory.
     ///
     /// Case: a caller opens a split in a directory it names itself while
     /// the target pane's shell has reported another.
     #[test]
     fn an_explicit_cwd_wins_over_the_target_panes_cwd() {
+        let project = TempDir::new().expect("a temporary directory");
+        let explicit = TempDir::new().expect("a temporary directory");
+        let uri = osc7(project.path());
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx
-            .send(b"\x1b]7;file://localhost/tmp/project\x1b\\".to_vec())
-            .unwrap();
+        pane.chunk_tx.send(uri).unwrap();
         h.backend.pump_pane(root);
         h.drain();
         h.log.cwds.lock().unwrap().clear();
@@ -1380,13 +1443,13 @@ mod tests {
                 pane: PaneTarget::Active,
                 orientation: SplitOrientation::Vertical,
             },
-            cwd: Some(PathBuf::from("/explicit")),
+            cwd: Some(explicit.path().to_path_buf()),
             env: vec![],
         });
         h.drain();
         assert_eq!(
             h.log.cwds.lock().unwrap().last().cloned().flatten(),
-            Some(PathBuf::from("/explicit"))
+            Some(explicit.path().to_path_buf())
         );
     }
 
@@ -1394,16 +1457,16 @@ mod tests {
     /// directory on when it is split before its own shell has reported
     /// one and while the OS reports no directory for its process.
     ///
-    /// Case: the user splits twice in quick succession while the new shell
-    /// has not printed its first prompt and the OS cannot be asked for the
-    /// new pane's directory.
+    /// Case: the user splits twice in quick succession while the new
+    /// shell has not printed its first prompt and the OS cannot be asked
+    /// for the new pane's directory.
     #[test]
     fn a_split_from_a_pane_that_has_not_reported_a_cwd_passes_on_its_spawn_cwd() {
+        let project = TempDir::new().expect("a temporary directory");
+        let uri = osc7(project.path());
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx
-            .send(b"\x1b]7;file://localhost/tmp/project\x1b\\".to_vec())
-            .unwrap();
+        pane.chunk_tx.send(uri).unwrap();
         h.backend.pump_pane(root);
         h.drain();
         split_active(&mut h, 2);
@@ -1411,7 +1474,7 @@ mod tests {
         split_active(&mut h, 3);
         assert_eq!(
             h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
-            Some(std::path::Path::new("/tmp/project"))
+            Some(project.path())
         );
     }
 
