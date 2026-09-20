@@ -254,9 +254,9 @@ mod tests {
     use orzma_tty::test_support::CaptureSink;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use orzma_vt::prelude::{CursorBlink, CursorShape, TextCursorStyle, Vt};
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     use std::thread;
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     use std::time::{Duration, Instant};
     use tempfile::TempDir;
 
@@ -431,7 +431,8 @@ mod tests {
             )
             .expect("cat spawns under a PTY");
         let mut pane = Pane::new(tty, (80, 24, CellPixels::default()), None);
-        pane.set_reported_cwd(PathBuf::from("/reported"));
+        let reported_dir = TempDir::new().expect("a temp dir");
+        pane.set_reported_cwd(reported_dir.path().to_path_buf());
         let deadline = Instant::now() + Duration::from_secs(10);
         let reported = loop {
             let reported = pane.cwd();
@@ -441,6 +442,40 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         };
         assert_eq!(reported, Some(expected));
+    }
+
+    /// Asserts that on Windows a directory the shell reported wins over
+    /// the directory the OS reports for the pane's process.
+    ///
+    /// Case: a PowerShell `Set-Location` leaves the OS-visible process
+    /// directory at the shell's launch directory while the shell has
+    /// since reported navigating to another one.
+    #[cfg(windows)]
+    #[test]
+    fn the_reported_directory_wins_over_the_process_directory() {
+        let spawn_dir = TempDir::new().expect("a temp dir");
+        let size = GridSize::new(80, 24).expect("a valid size");
+        let tty = ShellFactory::new(Some("cmd.exe".into()), 100, CursorPolicy::default(), false)
+            .spawn(
+                size,
+                CellPixels::default(),
+                Some(spawn_dir.path().to_path_buf()),
+                Vec::new(),
+            )
+            .expect("cmd spawns under a PTY");
+        let mut pane = Pane::new(tty, (80, 24, CellPixels::default()), None);
+        let reported_dir = TempDir::new().expect("a temp dir");
+        let expected = reported_dir.path().to_path_buf();
+        pane.set_reported_cwd(expected.clone());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let cwd = loop {
+            let cwd = pane.cwd();
+            if cwd.as_ref() == Some(&expected) || Instant::now() >= deadline {
+                break cwd;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(cwd, Some(expected));
     }
 
     /// Asserts that a spawned pane's terminal starts with the factory's
