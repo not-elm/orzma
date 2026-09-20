@@ -87,8 +87,34 @@ impl CefMouse<'_> {
     }
 }
 
-#[cfg(all(test, target_os = "windows"))]
+#[cfg(test)]
 mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// Asserts that every call is dropped, and none panics, while no sink
+    /// resource is present.
+    ///
+    /// Case: the sink resource is absent, as in a headless test app or a
+    /// frame before the CEF plugin has inserted its proxy.
+    #[test]
+    fn calls_without_a_sink_are_dropped() {
+        let mut app = App::new();
+        let webview = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .run_system_once(move |cef: CefMouse| {
+                assert!(!cef.is_connected(), "no sink resource was inserted");
+                cef.set_focus(&webview, true);
+                cef.send_mouse_click(&webview, Vec2::ZERO, PointerButton::Primary, false);
+                cef.send_mouse_wheel(&webview, Vec2::ZERO, Vec2::ZERO);
+                cef.send_mouse_move(&webview, [].iter(), Vec2::ZERO, false);
+            })
+            .expect("a one-shot system with only a CefMouse param runs");
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
     use super::*;
     use async_channel::Receiver;
     use bevy::ecs::system::RunSystemOnce;
@@ -211,25 +237,5 @@ mod tests {
             ),
             "the raw wheel delta is forwarded unscaled"
         );
-    }
-
-    /// Asserts that every call is dropped, and none panics, while no sink
-    /// resource is present.
-    ///
-    /// Case: the sink resource is absent, as in a headless test app or a
-    /// frame before the CEF plugin has inserted its proxy.
-    #[test]
-    fn calls_without_a_sink_are_dropped() {
-        let mut app = App::new();
-        let webview = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .run_system_once(move |cef: CefMouse| {
-                assert!(!cef.is_connected(), "no sink resource was inserted");
-                cef.set_focus(&webview, true);
-                cef.send_mouse_click(&webview, Vec2::ZERO, PointerButton::Primary, false);
-                cef.send_mouse_wheel(&webview, Vec2::ZERO, Vec2::ZERO);
-                cef.send_mouse_move(&webview, [].iter(), Vec2::ZERO, false);
-            })
-            .expect("a one-shot system with only a CefMouse param runs");
     }
 }
