@@ -73,22 +73,34 @@ impl ShellKind {
 /// The prompt hook injected into PowerShell.
 ///
 /// The hook calls back whatever `prompt` was defined before it, and
-/// writes `OSC 9;9` with the location's filesystem path only while the
-/// current location is on the `FileSystem` provider.
+/// prefixes its output with `OSC 9;9` carrying the location's filesystem
+/// path, only while the current location is on the `FileSystem`
+/// provider. `$?` and `$LASTEXITCODE` reach the inner prompt exactly as
+/// they were before the hook ran.
 // NOTE: the snippet contains no double quote, so it crosses
 // `CommandBuilder`'s Windows command-line quoting and PowerShell's own
 // re-parse as one plainly-quoted argument with no `\"` escapes. The
 // emitted sequence still carries the quotes Microsoft's published form
 // uses, built from `[char]34`.
+// NOTE: every statement resets `$?`, so it is captured as the hook's
+// very first statement, before anything else runs, and restored with a
+// deliberately failing, output-suppressed statement immediately before
+// the inner prompt is invoked — a direct assignment to `$?` is not
+// possible, since assignment itself is a successful statement.
 const POWERSHELL_PROMPT_HOOK: &str = concat!(
     "$global:__orzmaInnerPrompt = $function:prompt; ",
     "function global:prompt { ",
+    "$orzmaQ = $?; ",
+    "$orzmaCode = $global:LASTEXITCODE; ",
+    "$orzmaOut = ''; ",
     "if ($PWD.Provider.Name -eq 'FileSystem') { ",
-    "[Console]::Write((",
+    "$orzmaOut = (",
     "[char]27, ']9;9;', [char]34, $PWD.ProviderPath, [char]34, [char]7",
-    ") -join '') ",
+    ") -join '' ",
     "}; ",
-    "& $global:__orzmaInnerPrompt ",
+    "$global:LASTEXITCODE = $orzmaCode; ",
+    "if (-not $orzmaQ) { Get-Item -Path (New-Guid) -ErrorAction Ignore | Out-Null }; ",
+    "$orzmaOut + (& $global:__orzmaInnerPrompt) ",
     "}",
 );
 

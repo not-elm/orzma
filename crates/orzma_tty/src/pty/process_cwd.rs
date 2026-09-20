@@ -67,10 +67,12 @@ fn wrapper_children(_pid: i32) -> Vec<i32> {
 /// The working directory of `pid` when it can be read, still exists, and
 /// can be entered; the reason is logged at debug level otherwise.
 fn enterable_cwd(pid: i32) -> Option<PathBuf> {
-    // NOTE: `<dir>/.` resolves only with search permission on the directory
-    // itself, which the spawn's chdir also needs. `is_dir()` on the bare
-    // path would accept a directory the new shell cannot enter, and the
-    // split would then fail to spawn.
+    // NOTE: on Unix, `<dir>/.` resolves only with search permission on the
+    // directory itself, which the spawn's chdir also needs; `is_dir()` on
+    // the bare path would accept a directory the new shell cannot enter,
+    // and the split would then fail to spawn. On Windows the `.` component
+    // is collapsed before the syscall, so this check is equivalent there to
+    // `path.is_dir()`.
     match read_cwd(pid) {
         Ok(path) if path.join(".").is_dir() => Some(path),
         Ok(path) => {

@@ -23,6 +23,14 @@ const PROFILE_MARKER: &str = "ORZMA-PROFILE-RAN";
 /// call back rather than replace.
 const USER_PROMPT: &str = "ORZMA-USER-PROMPT> ";
 
+/// The title marker the `$?`-reading fixture profile emits when it reads
+/// `$?` as `$true`.
+const DOLLAR_QUESTION_OK: &str = "ORZMA-DOLLARQ-OK";
+
+/// The title marker the `$?`-reading fixture profile emits when it reads
+/// `$?` as `$false`.
+const DOLLAR_QUESTION_FAIL: &str = "ORZMA-DOLLARQ-FAIL";
+
 /// Asserts that an injected PowerShell reports the directory it changed
 /// into, and does so while calling back the prompt the user's own
 /// profile installed.
@@ -102,6 +110,73 @@ fn an_injected_powershell_reports_its_directory_and_calls_back_the_user_prompt()
     );
 }
 
+/// Asserts that a command that fails still reaches the user's prompt as
+/// failed, through the injected hook.
+///
+/// Case: a Windows user whose profile reads `$?` to color its prompt —
+/// the shape Starship, posh-git, and oh-my-posh all take — runs a
+/// command that fails.
+#[test]
+fn a_failing_command_still_shows_as_failed_through_the_injected_hook() {
+    let (shell_path, shell_name) = resolve_powershell();
+
+    let home = TempDir::new().expect("a temporary home");
+    if !write_dollar_question_profile(home.path(), &shell_path) {
+        eprintln!(
+            "skipped: {shell_name} resolves its profile outside the temporary home, so this \
+             machine's Documents folder is redirected and no fixture profile can be isolated"
+        );
+        return;
+    }
+
+    let size = GridSize::new(80, 24).expect("a valid grid size");
+    let mut tty = OrzmaTty::spawn(
+        OrzmaVt::new(size, 128),
+        SpawnOptions {
+            size,
+            cell_px: CellPixels::default(),
+            shell: shell_path.display().to_string(),
+            cwd: None,
+            env: vec![(
+                EnvKey("USERPROFILE".to_string()),
+                EnvValue(home.path().display().to_string()),
+            )],
+            shell_integration: true,
+        },
+    )
+    .expect("a spawned shell");
+
+    let command = r"Get-Item Z:\orzma-fixture-path-that-does-not-exist";
+    let mut sent = false;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline {
+        for signal in tty.pump().signals {
+            match signal {
+                // NOTE: the first marker the shell renders reflects its own
+                // startup state, not the fixture command below, so it only
+                // marks the profile as loaded and the hook as active.
+                TtySignal::Vt(VtSignal::Title(title))
+                    if !sent && (title == DOLLAR_QUESTION_OK || title == DOLLAR_QUESTION_FAIL) =>
+                {
+                    tty.send_paste(command).expect("the command text");
+                    tty.send_key(&TerminalKey::Enter, &TerminalModifiers::default())
+                        .expect("the newline");
+                    sent = true;
+                }
+                TtySignal::Vt(VtSignal::Title(title)) if sent && title == DOLLAR_QUESTION_FAIL => {
+                    return;
+                }
+                _ => {}
+            }
+        }
+        sleep(Duration::from_millis(20));
+    }
+    panic!(
+        "no ORZMA-DOLLARQ-FAIL title arrived within 60s (shell: {})",
+        shell_name
+    );
+}
+
 /// The PowerShell executable this test runs against, preferring `pwsh`
 /// (PowerShell 7, the default `windows_default_shell` picks) and falling
 /// back to Windows PowerShell 5.1 when `pwsh` is not installed.
@@ -130,6 +205,64 @@ fn resolve_powershell() -> (PathBuf, &'static str) {
 /// OneDrive's Known Folder Move, for instance — resolves the profile
 /// outside `home`, and nothing is written there.
 fn write_profile(home: &Path, shell: &Path) -> bool {
+    let Some(profile) = resolve_profile_path(home, shell) else {
+        return false;
+    };
+    let Some(profile_dir) = profile.parent() else {
+        return false;
+    };
+    create_dir_all(profile_dir).expect("the profile directory");
+    write(
+        &profile,
+        format!(
+            "[Console]::Write(([char]27, ']0;{PROFILE_MARKER}', [char]7) -join '')\n\
+             function global:prompt {{ '{USER_PROMPT}' }}\n"
+        ),
+    )
+    .expect("the profile file");
+    true
+}
+
+/// Writes a fixture profile whose prompt reads `$?` as its own first
+/// statement and reports what it saw through an `OSC 0` title, into the
+/// file `shell` reports as its per-user profile under a temporary
+/// `USERPROFILE`, and reports whether that file landed inside `home`.
+///
+/// The shape mirrors Starship, posh-git, and oh-my-posh, which all read
+/// `$?` before anything else in their own prompt function.
+fn write_dollar_question_profile(home: &Path, shell: &Path) -> bool {
+    let Some(profile) = resolve_profile_path(home, shell) else {
+        return false;
+    };
+    let Some(profile_dir) = profile.parent() else {
+        return false;
+    };
+    create_dir_all(profile_dir).expect("the profile directory");
+    write(
+        &profile,
+        format!(
+            "function global:prompt {{ \
+             $orzmaSawSuccess = $?; \
+             if ($orzmaSawSuccess) {{ [Console]::Write(([char]27, ']0;{DOLLAR_QUESTION_OK}', [char]7) -join '') }} \
+             else {{ [Console]::Write(([char]27, ']0;{DOLLAR_QUESTION_FAIL}', [char]7) -join '') }}; \
+             return '{USER_PROMPT}' \
+             }}\n"
+        ),
+    )
+    .expect("the profile file");
+    true
+}
+
+/// The absolute path `shell` reports as its per-user profile under a
+/// temporary `USERPROFILE`, or `None` when it resolves outside `home`.
+///
+/// Windows PowerShell 5.1 and PowerShell 7 read different directories
+/// under Documents, and Documents is a known folder rather than a plain
+/// `USERPROFILE` subdirectory, so the shell is asked rather than
+/// guessed. A machine whose Documents folder is redirected — by
+/// OneDrive's Known Folder Move, for instance — resolves the profile
+/// outside `home`, which this reports as `None`.
+fn resolve_profile_path(home: &Path, shell: &Path) -> Option<PathBuf> {
     // NOTE: the Documents known folder resolves to the empty string when
     // its directory does not exist, which would leave the reported
     // profile path relative. It has to exist before the shell is asked.
@@ -152,22 +285,7 @@ fn write_profile(home: &Path, shell: &Path) -> bool {
         .expect("the shell reports its profile path");
     let answered = read_to_string(&answer).expect("the shell's reported profile path");
     let profile = PathBuf::from(answered.trim());
-    if !profile.starts_with(home) {
-        return false;
-    }
-    let Some(profile_dir) = profile.parent() else {
-        return false;
-    };
-    create_dir_all(profile_dir).expect("the profile directory");
-    write(
-        &profile,
-        format!(
-            "[Console]::Write(([char]27, ']0;{PROFILE_MARKER}', [char]7) -join '')\n\
-             function global:prompt {{ '{USER_PROMPT}' }}\n"
-        ),
-    )
-    .expect("the profile file");
-    true
+    profile.starts_with(home).then_some(profile)
 }
 
 /// The full path `name` resolves to through `PATH` and `PATHEXT`, or

@@ -30,7 +30,8 @@ use std::path::PathBuf;
 /// no drive is rejected.
 ///
 /// For `OSC 9;9`, the payload is a host path, either bare or wrapped in one
-/// pair of double quotes, and must be absolute on this platform.
+/// pair of double quotes, and must name a Windows drive or UNC path,
+/// whatever platform this parser runs on.
 pub(crate) fn current_dir(params: &[&[u8]]) -> Option<PathBuf> {
     match params {
         [b"7", parts @ ..] => file_uri(parts),
@@ -207,13 +208,14 @@ fn is_disallowed(c: char) -> bool {
         )
 }
 
-/// The directory an `OSC 9;9` reports, or `None` when its payload is
-/// not an absolute path on this platform.
+/// The directory an `OSC 9;9` reports, or `None` when its payload does
+/// not name a Windows drive or UNC path.
 ///
 /// The payload is a host path rather than a URI, and arrives either bare
-/// or wrapped in one pair of double quotes. Requiring it to be absolute
-/// separates this ConEmu subcommand from iTerm2's `OSC 9 ; <message>`
-/// notification, which carries arbitrary text.
+/// or wrapped in one pair of double quotes. Requiring a Windows drive or
+/// UNC prefix separates this ConEmu subcommand from iTerm2's
+/// `OSC 9 ; <message>` notification, which carries arbitrary text, on
+/// every platform this parser runs on.
 fn conemu_path(parts: &[&[u8]]) -> Option<PathBuf> {
     let joined = parts.join(&b';');
     let text = String::from_utf8_lossy(&joined);
@@ -221,8 +223,17 @@ fn conemu_path(parts: &[&[u8]]) -> Option<PathBuf> {
         .strip_prefix('"')
         .and_then(|rest| rest.strip_suffix('"'))
         .unwrap_or(&text);
-    let path = PathBuf::from(unquoted);
-    path.is_absolute().then_some(path)
+    is_windows_path(unquoted).then(|| PathBuf::from(unquoted))
+}
+
+/// Whether `text` opens with a Windows drive (`C:\` or `C:/`) or a UNC
+/// prefix (`\\` or `//`).
+fn is_windows_path(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let has_drive =
+        matches!(bytes, [letter, b':', b'\\' | b'/', ..] if letter.is_ascii_alphabetic());
+    let is_unc = text.starts_with(r"\\") || text.starts_with("//");
+    has_drive || is_unc
 }
 
 #[cfg(test)]
@@ -596,6 +607,18 @@ mod tests {
     #[test]
     fn a_relative_osc_nine_payload_is_rejected() {
         assert!(current_dir(&[b"9", b"9", b"90% done"]).is_none());
+    }
+
+    /// Asserts that an `OSC 9` payload that is a Unix-absolute path,
+    /// rather than a Windows drive or UNC path, reports no directory on
+    /// every platform.
+    ///
+    /// Case: a program sends iTerm2's `OSC 9 ; <message>` notification
+    /// whose text happens to open with `9;/`, splitting to a payload
+    /// that starts with a leading `/`.
+    #[test]
+    fn a_unix_absolute_osc_nine_payload_is_rejected_on_every_platform() {
+        assert!(current_dir(&[b"9", b"9", b"/tmp/build done"]).is_none());
     }
 
     /// Asserts that an `OSC 9` subcommand other than `9` reports no

@@ -153,10 +153,12 @@ enum Candidate {
 }
 
 /// `path` when it still exists and can be entered, else `None`.
-// NOTE: `<dir>/.` resolves only with search permission on the directory
-// itself, which the spawn's chdir also needs. `is_dir()` on the bare
-// path would accept a directory the new shell cannot enter, and the
-// split would then fail to spawn.
+// NOTE: on Unix, `<dir>/.` resolves only with search permission on the
+// directory itself, which the spawn's chdir also needs; `is_dir()` on
+// the bare path would accept a directory the new shell cannot enter,
+// and the split would then fail to spawn. On Windows the `.` component
+// is collapsed before the syscall, so this check is equivalent there to
+// `path.is_dir()`.
 fn enterable(path: PathBuf) -> Option<PathBuf> {
     path.join(".").is_dir().then_some(path)
 }
