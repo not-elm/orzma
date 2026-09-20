@@ -2,6 +2,7 @@
 //! commands, drains events, and joins the thread on drop.
 
 use crate::backend::{Backend, ShellFactory};
+use crate::error::{OrzmuxError, OrzmuxResult};
 use crate::protocol::{CommandSeq, OrzmuxCommand, OrzmuxEvent};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use orzma_tty::prelude::WheelConfig;
@@ -25,18 +26,6 @@ pub struct OrzmuxConfig {
     pub shell_integration: bool,
 }
 
-/// The backend thread could not be started.
-#[derive(Debug)]
-pub struct OrzmuxSpawnError(pub std::io::Error);
-
-impl std::fmt::Display for OrzmuxSpawnError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "failed to start the orzma-mux thread: {}", self.0)
-    }
-}
-
-impl std::error::Error for OrzmuxSpawnError {}
-
 /// The GUI's connection to the backend.
 ///
 /// Dropping it closes the command channel, which ends the backend loop
@@ -52,7 +41,12 @@ pub struct OrzmuxClient {
 impl OrzmuxClient {
     /// Starts the backend thread (named `orzma-mux`) and returns the
     /// client connected to it.
-    pub fn spawn(config: OrzmuxConfig) -> Result<Self, OrzmuxSpawnError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::BackendThread`] when the OS refuses to
+    /// start the multiplexer thread.
+    pub fn spawn(config: OrzmuxConfig) -> OrzmuxResult<Self> {
         let (command_tx, command_rx) = unbounded::<(CommandSeq, OrzmuxCommand)>();
         let (event_tx, event_rx) = unbounded::<OrzmuxEvent>();
         let OrzmuxConfig {
@@ -66,7 +60,7 @@ impl OrzmuxClient {
         let thread = thread::Builder::new()
             .name("orzma-mux".to_string())
             .spawn(move || Backend::new(Box::new(factory), command_rx, event_tx, wheel).run())
-            .map_err(OrzmuxSpawnError)?;
+            .map_err(OrzmuxError::BackendThread)?;
         Ok(Self {
             commands: Some(command_tx),
             events: event_rx,

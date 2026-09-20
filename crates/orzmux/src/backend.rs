@@ -4,15 +4,18 @@
 
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::{ChunkDepth, QueueSampler};
+use crate::error::{OrzmuxError, OrzmuxResult};
 use crate::layout::LayoutTree;
 use crate::protocol::{
     CloseReason, CommandSeq, Layout, NewPaneAt, OrzmuxCommand, OrzmuxEvent, PaneId, PaneTarget,
     RequestId, SplitOrientation,
 };
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
-use orzma_tty::prelude::{OrzmaTtyError, OrzmaTtyResult, PumpOutput, TtySignal, WheelConfig};
+use orzma_tty::prelude::{
+    OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PumpOutput, TtySignal, WheelConfig,
+};
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
-use orzma_vt::prelude::{Frame, GridSize, Vt, VtSignal};
+use orzma_vt::prelude::{Frame, GridSize, OrzmaVt, Vt, VtSignal};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -314,19 +317,13 @@ impl Backend {
         env: Vec<(EnvKey, EnvValue)>,
     ) {
         let Some(geometry) = self.geometry else {
-            self.emit(OrzmuxEvent::SpawnFailed {
-                request,
-                error: "no geometry".to_string(),
-            });
+            self.fail_spawn(request, OrzmuxError::NoGeometry);
             return;
         };
         let at = match self.resolve_at(at) {
             Ok(at) => at,
             Err(error) => {
-                self.emit(OrzmuxEvent::SpawnFailed {
-                    request,
-                    error: error.to_string(),
-                });
+                self.fail_spawn(request, error);
                 return;
             }
         };
@@ -336,10 +333,7 @@ impl Backend {
         let split_target = match self.insert_pane(new, at, geometry.size) {
             Ok(split_target) => split_target,
             Err(error) => {
-                self.emit(OrzmuxEvent::SpawnFailed {
-                    request,
-                    error: error.to_string(),
-                });
+                self.fail_spawn(request, error);
                 return;
             }
         };
@@ -348,19 +342,7 @@ impl Backend {
                 .and_then(|id| self.panes.get(&id))
                 .and_then(Pane::cwd)
         });
-        let spawned = self
-            .tree
-            .solve(geometry.size)
-            .rect_of(new)
-            .ok_or_else(|| "the new pane is not in the solved layout".to_string())
-            .and_then(|rect| GridSize::new(rect.cols, rect.rows).map_err(|err| err.to_string()))
-            .and_then(|size| {
-                self.factory
-                    .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
-                    .map(|tty| (tty, size))
-                    .map_err(|err| err.to_string())
-            });
-        match spawned {
+        match self.spawn_pane(new, geometry, spawn_cwd.clone(), env) {
             Ok((tty, size)) => {
                 self.panes.insert(
                     new,
@@ -374,7 +356,7 @@ impl Backend {
                 if let Some(previous) = previous_active {
                     self.tree.select(previous);
                 }
-                self.emit(OrzmuxEvent::SpawnFailed { request, error });
+                self.fail_spawn(request, error);
             }
         }
     }
@@ -383,12 +365,13 @@ impl Backend {
     ///
     /// # Errors
     ///
-    /// Returns `"no target pane"` when the split target does not resolve.
-    fn resolve_at(&self, at: NewPaneAt) -> Result<ResolvedPaneAt, &'static str> {
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when the split target
+    /// does not resolve.
+    fn resolve_at(&self, at: NewPaneAt) -> OrzmuxResult<ResolvedPaneAt> {
         let NewPaneAt::Split { pane, orientation } = at else {
             return Ok(ResolvedPaneAt::Root);
         };
-        let target = self.resolve(pane).ok_or("no target pane")?;
+        let target = self.resolve(pane).ok_or(OrzmuxError::UnresolvedTarget)?;
         // NOTE: `pane` is pinned to this concrete id now rather than
         // re-resolved later. `NewPaneAt::Split` can carry
         // `PaneTarget::Active`, and re-resolving it after something else
@@ -401,27 +384,68 @@ impl Backend {
     }
 
     /// Inserts `new` into the tree at `at`. Returns the pane a split
-    /// divides, `None` for a root pane, or why the insertion was refused.
+    /// divides, or `None` for a root pane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::RootOccupied`] when a root pane is
+    /// requested while the tree holds one, and
+    /// [`OrzmuxError::SplitRefused`] when the target has too little
+    /// room to divide.
     fn insert_pane(
         &mut self,
         new: PaneId,
         at: ResolvedPaneAt,
         window: GridSize,
-    ) -> Result<Option<PaneId>, &'static str> {
+    ) -> OrzmuxResult<Option<PaneId>> {
         match at {
             ResolvedPaneAt::Root => {
-                self.tree
-                    .insert_root(new)
-                    .map_err(|_| "root already open")?;
+                self.tree.insert_root(new)?;
                 Ok(None)
             }
             ResolvedPaneAt::Split { pane, orientation } => {
-                self.tree
-                    .split(pane, orientation, new, window)
-                    .map_err(|_| "no space")?;
+                self.tree.split(pane, orientation, new, window)?;
                 Ok(Some(pane))
             }
         }
+    }
+
+    /// Spawns the terminal for `new` at the size the solved layout gives
+    /// it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::Unsolved`] when the tree does not place
+    /// the pane, [`OrzmuxError::GridSize`] when its rectangle is not a
+    /// valid size, and [`OrzmuxError::SpawnShell`] when the shell
+    /// refuses to start.
+    fn spawn_pane(
+        &mut self,
+        new: PaneId,
+        geometry: Geometry,
+        cwd: Option<PathBuf>,
+        env: Vec<(EnvKey, EnvValue)>,
+    ) -> OrzmuxResult<(OrzmaTty<OrzmaVt>, GridSize)> {
+        let rect = self
+            .tree
+            .solve(geometry.size)
+            .rect_of(new)
+            .ok_or(OrzmuxError::Unsolved)?;
+        let size = GridSize::new(rect.cols, rect.rows)?;
+        let tty = self.factory.spawn(size, geometry.cell_px, cwd, env)?;
+        Ok((tty, size))
+    }
+
+    /// Answers a `NewPane` request with the failure that refused it.
+    // NOTE: `OrzmuxEvent` derives `Clone` and `PartialEq`, which
+    // `OrzmaTtyError` does not, so the wire carries the rendered text
+    // rather than the error itself. This is the one place that renders
+    // it.
+    fn fail_spawn(&mut self, request: RequestId, error: OrzmuxError) {
+        self.emit(OrzmuxEvent::SpawnFailed {
+            request,
+            error: error.to_string(),
+        });
     }
 
     /// Tells every pane whether it holds focus, then re-solves the tree,
@@ -667,6 +691,7 @@ const PUMP_ROUNDS: usize = 4;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::SplitRefused;
     use crate::prelude::{PaneDirection, SplitId, SplitOrientation};
     use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
     use orzma_tty::prelude::{
@@ -922,6 +947,27 @@ mod tests {
         ));
         assert_eq!(h.backend.tree.panes(), vec![root]);
         assert_eq!(h.backend.tree.active(), Some(root));
+    }
+
+    /// Asserts that each way a split can be refused reports its own
+    /// reason, rather than all of them collapsing to one message.
+    ///
+    /// Case: a user splits before the window has reported its size, and
+    /// later splits a pane that has no room left to divide.
+    #[test]
+    fn a_refused_split_names_the_reason_it_was_refused() {
+        assert_eq!(
+            OrzmuxError::NoGeometry.to_string(),
+            "a pane was requested before the window reported its size"
+        );
+        assert_eq!(
+            OrzmuxError::UnresolvedTarget.to_string(),
+            "no pane matches the target"
+        );
+        assert_eq!(
+            OrzmuxError::from(SplitRefused).to_string(),
+            "the target pane has too little room to divide"
+        );
     }
 
     /// Asserts that a split resizes the target pane and ships its
