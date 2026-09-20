@@ -807,8 +807,7 @@ mod tests {
     /// Asserts that a press over a `MouseClaimedByWebview` terminal is
     /// drained without arming a drag.
     ///
-    /// Case: the user clicks a link inside a page mounted in the pane, so
-    /// the terminal underneath must not start a selection.
+    /// Case: the user clicks a link inside a page mounted in the pane.
     #[test]
     fn webview_claimed_terminal_drains_without_arming_a_gesture() {
         let mut app = make_selection_app();

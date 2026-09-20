@@ -620,11 +620,14 @@ mod tests {
 
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(4.0, 8.0)));
-        app.world_mut().spawn((
-            window,
-            PrimaryWindow,
-            CursorIcon::System(SystemCursorIcon::Default),
-        ));
+        let window_entity = app
+            .world_mut()
+            .spawn((
+                window,
+                PrimaryWindow,
+                CursorIcon::System(SystemCursorIcon::Default),
+            ))
+            .id();
 
         let (view, cells) = linked_grid();
         app.world_mut().spawn((
@@ -647,6 +650,12 @@ mod tests {
             "a claimed surface must not be hovered — the click belongs to the page, so no link affordance"
         );
         assert_eq!(hover.hyperlink_id, None);
+        let icon = app.world().entity(window_entity).get::<CursorIcon>();
+        assert_eq!(
+            icon,
+            Some(&CursorIcon::System(SystemCursorIcon::Default)),
+            "with the surface claimed by the webview the cursor stays the arrow, not a link pointer"
+        );
     }
 
     /// Asserts that a surface hosting a webview is not treated as a

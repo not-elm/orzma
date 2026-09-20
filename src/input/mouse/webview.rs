@@ -6,7 +6,6 @@ use crate::input::mouse::cell_dims;
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use bevy::ecs::system::SystemParam;
-use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseScrollUnit};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
@@ -55,7 +54,7 @@ pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
     cef: CefMouse<'w>,
 }
 
-/// Routes a left press/release through the webview layer for a resolved
+/// Routes a left press through the webview layer for a resolved
 /// `(terminal, local_phys)`.
 ///
 /// A press inside an interactive rect sets `FocusedWebview`, issues
@@ -63,72 +62,49 @@ pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
 /// records the in-flight press. That order is required: `set_focus` reaches
 /// any live browser, while a click reaches only a browser that already has
 /// a focused frame. A press outside every rect clears an inline
-/// `FocusedWebview`, leaving the press to the terminal. Release forwards the
-/// click-up to the recorded child (drift-tolerant) and clears.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "inline routing needs the webview press state, route params, and pointer geometry"
-)]
+/// `FocusedWebview`, leaving the press to the terminal.
 pub(in crate::input::mouse) fn route_webview_left_click(
     webview_press: &mut WebviewPress,
     route: &mut WebviewRouteParams,
     terminal: Entity,
     local_phys: Vec2,
-    cursor_phys: Vec2,
-    button_state: ButtonState,
     cell_w_phys: f32,
     cell_h_phys: f32,
     scale: f32,
 ) {
-    match button_state {
-        ButtonState::Pressed => {
-            webview_press.0 = None;
-            let hit = route.overlay_rects.get(terminal).ok().and_then(|overlays| {
-                webview_hit_at(
-                    &route.children,
-                    &route.webviews,
-                    overlays,
-                    terminal,
-                    local_phys,
-                    cell_w_phys,
-                    cell_h_phys,
-                    scale,
-                )
-            });
-            let Some(hit) = hit else {
-                if let Some(focused) = route.focused_webview.as_deref_mut()
-                    && focused
-                        .0
-                        .is_some_and(|current| route.webview_parents.contains(current))
-                {
-                    focused.0 = None;
-                }
-                return;
-            };
-            if let Some(focused) = route.focused_webview.as_deref_mut()
-                && focused.0 != Some(hit.child)
-            {
-                focused.0 = Some(hit.child);
-            }
-            route.cef.set_focus(&hit.child, true);
-            route
-                .cef
-                .send_mouse_click(&hit.child, hit.local_dip, PointerButton::Primary, false);
-            webview_press.0 = Some(hit.child);
+    webview_press.0 = None;
+    let hit = route.overlay_rects.get(terminal).ok().and_then(|overlays| {
+        webview_hit_at(
+            &route.children,
+            &route.webviews,
+            overlays,
+            terminal,
+            local_phys,
+            cell_w_phys,
+            cell_h_phys,
+            scale,
+        )
+    });
+    let Some(hit) = hit else {
+        if let Some(focused) = route.focused_webview.as_deref_mut()
+            && focused
+                .0
+                .is_some_and(|current| route.webview_parents.contains(current))
+        {
+            focused.0 = None;
         }
-        ButtonState::Released => {
-            let Some(child) = webview_press.0.take() else {
-                return;
-            };
-            if let Some(dip) =
-                webview_release_dip(route, child, cursor_phys, cell_w_phys, cell_h_phys, scale)
-            {
-                route
-                    .cef
-                    .send_mouse_click(&child, dip, PointerButton::Primary, true);
-            }
-        }
+        return;
+    };
+    if let Some(focused) = route.focused_webview.as_deref_mut()
+        && focused.0 != Some(hit.child)
+    {
+        focused.0 = Some(hit.child);
     }
+    route.cef.set_focus(&hit.child, true);
+    route
+        .cef
+        .send_mouse_click(&hit.child, hit.local_dip, PointerButton::Primary, false);
+    webview_press.0 = Some(hit.child);
 }
 
 /// Releases an in-flight webview press to CEF (mouse-up at the last

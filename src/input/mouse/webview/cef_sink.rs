@@ -90,7 +90,7 @@ mod tests {
     /// Case: the sink resource is absent, as in a headless test app or a
     /// frame before the CEF plugin has inserted its proxy.
     #[test]
-    fn calls_without_a_sink_are_dropped() {
+    fn calls_without_a_sink_do_not_panic() {
         let mut app = App::new();
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut()

@@ -34,10 +34,11 @@ pub(crate) struct KeyboardDisabled;
 pub(crate) struct KeyboardFocused;
 
 /// When present on an `OrzmaTerminal` entity, the host's mouse dispatchers and
-/// hover-cursor system skip it — it is removed from the hit-test candidate set,
-/// so the pointer falls through to the next terminal below it. The host marks a
-/// terminal `MouseDisabled` for modal suppression: vi mode, IME composition, or
-/// an unfocused window.
+/// hover-cursor system drop it from their hit-test candidate set, so the
+/// pointer falls through to the next terminal below it. The webview router
+/// keeps it as a candidate and declines to act on it, so the pointer does not
+/// fall through there. The host marks a terminal `MouseDisabled` for modal
+/// suppression: vi mode, IME composition, or an unfocused window.
 #[derive(Component)]
 pub(crate) struct MouseDisabled;
 
@@ -659,9 +660,7 @@ mod tests {
     /// Asserts that the cursor over an interactive webview rect claims the
     /// shell for the webview without suppressing its mouse input.
     ///
-    /// Case: the user moves the pointer onto a page mounted in a pane, and
-    /// the terminal underneath has to stand down so the click reaches the
-    /// page.
+    /// Case: the user moves the pointer onto a page mounted in a pane.
     #[test]
     fn cursor_over_webview_rect_claims_the_shell() {
         let (mut app, shell) = make_gate_app();

@@ -15,6 +15,7 @@ use crate::input::mouse::webview::{
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::surface::geometry::topmost_surface_at;
+use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
@@ -68,6 +69,7 @@ type RouterSurfaces<'w, 's> = Query<
 >;
 
 /// What the router found under the pointer.
+#[derive(Clone, Copy)]
 enum SurfaceUnderCursor {
     /// No terminal surface lies under the pointer.
     None,
@@ -106,7 +108,10 @@ impl SurfaceUnderCursor {
 /// Forwards left press/release to the inline CEF child under the cursor
 /// on the shell surface. A window-unfocused frame, and a frame on which
 /// the terminal owning an in-flight press has its mouse input suppressed,
-/// release that press so the focused page is not left logically pressed.
+/// release that press so the focused page is not left logically pressed. A
+/// press over a suppressed terminal is dropped rather than forwarded, while
+/// a release is always delivered to the terminal that owns the in-flight
+/// press, regardless of what lies under the cursor.
 fn route_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
@@ -147,25 +152,25 @@ fn route_webview_pointer(
             frame.scale,
         );
     }
-    if let Some(cursor_phys) = frame.cursor_phys
-        && matches!(
-            SurfaceUnderCursor::resolve(&surfaces, cursor_phys),
-            SurfaceUnderCursor::Suppressed
-        )
-    {
-        buttons.clear();
-        return;
-    }
+    let surface = frame
+        .cursor_phys
+        .map(|cursor_phys| SurfaceUnderCursor::resolve(&surfaces, cursor_phys));
     for ev in buttons.read() {
         if ev.button != MouseButton::Left {
             continue;
         }
-        let Some(cursor_phys) = frame.cursor_phys else {
+        if ev.state == ButtonState::Released {
+            release_webview_press(
+                &mut webview_press,
+                &webview_route,
+                frame.cursor_phys,
+                frame.cell_w,
+                frame.cell_h,
+                frame.scale,
+            );
             continue;
-        };
-        let SurfaceUnderCursor::Open(terminal, local_phys) =
-            SurfaceUnderCursor::resolve(&surfaces, cursor_phys)
-        else {
+        }
+        let Some(SurfaceUnderCursor::Open(terminal, local_phys)) = surface else {
             continue;
         };
         route_webview_left_click(
@@ -173,8 +178,6 @@ fn route_webview_pointer(
             &mut webview_route,
             terminal,
             local_phys,
-            cursor_phys,
-            ev.state,
             frame.cell_w,
             frame.cell_h,
             frame.scale,
@@ -183,7 +186,9 @@ fn route_webview_pointer(
 }
 
 /// Forwards pointer motion over an interactive inline rect of the shell surface
-/// to the child's CEF browser via the shared `forward_webview_move_at`.
+/// to the child's CEF browser via the shared `forward_webview_move_at`. An
+/// unfocused window forwards no motion, and a suppressed terminal's rect is
+/// skipped like a closed one.
 fn forward_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     surfaces: RouterSurfaces,
@@ -529,6 +534,36 @@ mod tests {
         );
     }
 
+    /// Asserts that a release is delivered to the terminal that owns the
+    /// in-flight press, even when a different, suppressed terminal is
+    /// topmost under the cursor.
+    ///
+    /// Case: the user presses inside one pane's mounted page, drags the
+    /// pointer over a second pane that is in vi mode, and releases there.
+    #[test]
+    fn a_release_over_a_different_suppressed_terminal_still_clears_its_own_press() {
+        let (mut app, _shell, child) = make_webview_app();
+        app.world_mut().resource_mut::<WebviewPress>().0 = Some(child);
+        app.world_mut().spawn((
+            OrzmaTerminal,
+            MouseDisabled,
+            ComputedNode {
+                size: Vec2::new(200.0, 200.0),
+                ..ComputedNode::DEFAULT
+            },
+            ComputedStackIndex(1),
+            UiGlobalTransform::from_xy(700.0, 500.0),
+        ));
+        set_cursor(&mut app, Vec2::new(700.0, 500.0));
+        write_left(&mut app, ButtonState::Released);
+        app.update();
+        assert_eq!(
+            app.world().resource::<WebviewPress>().0,
+            None,
+            "a release must reach the terminal that owns the in-flight press, regardless of the suppressed terminal under the cursor"
+        );
+    }
+
     #[cfg(target_os = "windows")]
     fn make_move_app() -> (App, Entity, Entity, Receiver<CefCommand>) {
         let (mut app, shell, child) = make_webview_app();
@@ -593,5 +628,23 @@ mod tests {
             "motion over the rect is forwarded to the child under the pointer"
         );
         assert!(rx.is_empty(), "exactly one command is sent for one move");
+    }
+
+    /// Asserts that motion over a suppressed terminal's rect forwards
+    /// nothing to CEF.
+    ///
+    /// Case: the user is in vi mode on a pane and moves the pointer across
+    /// a link inside its mounted page.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn motion_over_a_suppressed_terminal_forwards_nothing() {
+        let (mut app, shell, _child, rx) = make_move_app();
+        app.world_mut().entity_mut(shell).insert(MouseDisabled);
+        write_cursor_moved(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+        assert!(
+            rx.is_empty(),
+            "a suppressed terminal's rect must not forward motion to CEF"
+        );
     }
 }
