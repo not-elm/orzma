@@ -13,11 +13,13 @@ use bevy_cef_core::prelude::BrowsersProxy;
 /// is dropped while no sink is present.
 #[derive(SystemParam)]
 pub(in crate::input::mouse) struct CefMouse<'w> {
-    // NOTE: `bevy_cef` initialises `Browsers` on the Bevy main thread only off
-    // Windows; there CEF owns its own UI thread and its host is reachable only
-    // through `BrowsersProxy`. A pointer call written directly against
-    // `Browsers` still compiles on Windows and silently does nothing, so every
-    // CEF pointer call belongs on this type.
+    // NOTE: `bevy_cef` calls `init_non_send::<Browsers>()` only off Windows; on
+    // Windows CEF owns its own UI thread and its host is reachable only through
+    // `BrowsersProxy`. A pointer call written directly against `Browsers` still
+    // compiles on Windows and fails there at run time — a plain
+    // `NonSend<Browsers>` param panics when its system first runs, and an
+    // `Option<NonSend<Browsers>>` is always `None` and silently does nothing —
+    // so every CEF pointer call belongs on this type.
     #[cfg(not(target_os = "windows"))]
     sink: Option<NonSend<'w, Browsers>>,
     #[cfg(target_os = "windows")]

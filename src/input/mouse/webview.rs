@@ -59,10 +59,9 @@ pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
 ///
 /// A press inside an interactive rect sets `FocusedWebview`, issues
 /// `set_focus` before `send_mouse_click`, forwards the press in DIP, and
-/// records the in-flight press. That order is required: `set_focus` reaches
-/// any live browser, while a click reaches only a browser that already has
-/// a focused frame. A press outside every rect clears an inline
-/// `FocusedWebview`, leaving the press to the terminal.
+/// records the in-flight press. A press outside every rect clears an inline
+/// `FocusedWebview`, leaving the press to the terminal. `FocusedWebview` is
+/// written only when the focus actually moves.
 pub(in crate::input::mouse) fn route_webview_left_click(
     webview_press: &mut WebviewPress,
     route: &mut WebviewRouteParams,
@@ -86,20 +85,26 @@ pub(in crate::input::mouse) fn route_webview_left_click(
         )
     });
     let Some(hit) = hit else {
-        if let Some(focused) = route.focused_webview.as_deref_mut()
-            && focused
-                .0
-                .is_some_and(|current| route.webview_parents.contains(current))
-        {
+        let clears_inline = route
+            .focused_webview
+            .as_deref()
+            .and_then(|focused| focused.0)
+            .is_some_and(|current| route.webview_parents.contains(current));
+        if clears_inline && let Some(focused) = route.focused_webview.as_deref_mut() {
             focused.0 = None;
         }
         return;
     };
-    if let Some(focused) = route.focused_webview.as_deref_mut()
-        && focused.0 != Some(hit.child)
-    {
+    let moves_focus = route
+        .focused_webview
+        .as_deref()
+        .is_some_and(|focused| focused.0 != Some(hit.child));
+    if moves_focus && let Some(focused) = route.focused_webview.as_deref_mut() {
         focused.0 = Some(hit.child);
     }
+    // NOTE: `set_focus` must precede `send_mouse_click`: it reaches any live
+    // browser, while a click reaches only a browser that already has a focused
+    // frame, so a click sent first is dropped by an unfocused page.
     route.cef.set_focus(&hit.child, true);
     route
         .cef

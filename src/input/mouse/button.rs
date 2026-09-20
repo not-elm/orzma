@@ -775,7 +775,7 @@ mod tests {
     /// Case: the user clicks a terminal whose mouse input is disabled
     /// because it is in vi mode.
     #[test]
-    fn mouse_disabled_terminal_drains_without_arming_a_gesture() {
+    fn terminal_mouse_disabled_terminal_drains_without_arming_a_gesture() {
         let mut app = make_selection_app();
         let terminal = app
             .world_mut()

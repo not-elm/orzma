@@ -535,7 +535,7 @@ mod tests {
     /// Case: the pointer crosses a hyperlink on a terminal whose mouse input
     /// is suppressed, such as one in vi mode.
     #[test]
-    fn hover_skips_mouse_disabled_surface() {
+    fn hover_skips_terminal_mouse_disabled_surface() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseMotion>();
