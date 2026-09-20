@@ -7,7 +7,7 @@ use crate::input::mouse::MousePhase;
 use crate::input::mouse::cell_dims;
 use crate::input::mouse::separator::GrabbedSeparator;
 use crate::input::mouse::webview::{
-    WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
+    CefMouse, WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
     release_webview_press, route_webview_left_click, webview_pointer_frame, webview_wheel_delta,
     webview_wheel_target,
 };
@@ -19,7 +19,6 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
-use bevy_cef_core::prelude::Browsers;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzma_tty_renderer::prelude::TerminalOverlays;
 use bevy_orzma_webview::{NonInteractive, Webview};
@@ -138,7 +137,7 @@ fn forward_webview_mouse_moves(
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    browsers: Option<NonSend<Browsers>>,
+    cef: CefMouse,
 ) {
     let Some(moved) = cursor_msg.read().last() else {
         return;
@@ -152,7 +151,7 @@ fn forward_webview_mouse_moves(
         children: &children,
         webviews: &webviews,
         overlay_rects: &overlay_rects,
-        browsers: browsers.as_deref(),
+        cef: &cef,
         pressed_buttons: &mouse_buttons,
     };
     forward_webview_move_at(
@@ -193,7 +192,7 @@ fn forward_webview_wheel(
     overlay_rects: Query<&TerminalOverlays>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
-    browsers: Option<NonSend<Browsers>>,
+    cef: CefMouse,
 ) {
     let Ok(window) = windows.single() else {
         wheel.clear();
@@ -227,12 +226,12 @@ fn forward_webview_wheel(
         wheel.clear();
         return;
     };
-    let Some(browsers) = browsers.as_deref() else {
+    if !cef.is_connected() {
         wheel.clear();
         return;
-    };
+    }
     for ev in wheel.read() {
-        browsers.send_mouse_wheel(&child, dip, webview_wheel_delta(ev.unit, ev.x, ev.y));
+        cef.send_mouse_wheel(&child, dip, webview_wheel_delta(ev.unit, ev.x, ev.y));
     }
 }
 
