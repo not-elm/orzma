@@ -7,7 +7,7 @@ use orzma_tty::prelude::{OrzmaTty, TerminalKey, TerminalModifiers, TtySignal};
 use orzma_tty::{CellPixels, EnvKey, EnvValue, SpawnOptions};
 use orzma_vt::prelude::{GridSize, OrzmaVt, VtSignal};
 use std::ffi::OsString;
-use std::fs::{create_dir_all, read_to_string, write};
+use std::fs::{canonicalize, create_dir_all, read_to_string, write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread::sleep;
@@ -52,7 +52,11 @@ fn an_injected_powershell_reports_its_directory_and_calls_back_the_user_prompt()
     }
 
     let target = TempDir::new().expect("a temporary directory");
-    let expected = target.path().to_path_buf();
+    let target_dir = target.path().to_path_buf();
+    // NOTE: a machine's `%TEMP%` can carry an 8.3 short component
+    // (`RUNNER~1`) where the shell reports the long one, so both sides
+    // are resolved before they are compared.
+    let expected = canonicalize(&target_dir).expect("the target directory resolves");
 
     let size = GridSize::new(80, 24).expect("a valid grid size");
     let mut tty = OrzmaTty::spawn(
@@ -71,7 +75,7 @@ fn an_injected_powershell_reports_its_directory_and_calls_back_the_user_prompt()
     )
     .expect("a spawned shell");
 
-    let command = format!("Set-Location '{}'", expected.display());
+    let command = format!("Set-Location '{}'", target_dir.display());
     let mut profile_ran = false;
     let mut sent = false;
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -97,7 +101,8 @@ fn an_injected_powershell_reports_its_directory_and_calls_back_the_user_prompt()
                         profile_ran,
                         "the fixture profile must run before the injected command"
                     );
-                    assert_eq!(path, expected);
+                    let reported = canonicalize(&path).expect("the reported directory resolves");
+                    assert_eq!(reported, expected);
                     return;
                 }
                 _ => {}
