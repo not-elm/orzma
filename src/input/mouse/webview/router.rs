@@ -274,10 +274,6 @@ fn forward_webview_wheel(
         wheel.clear();
         return;
     };
-    if !cef.is_connected() {
-        wheel.clear();
-        return;
-    }
     for ev in wheel.read() {
         cef.send_mouse_wheel(&child, dip, webview_wheel_delta(ev.unit, ev.x, ev.y));
     }

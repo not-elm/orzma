@@ -56,17 +56,15 @@ pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
 }
 
 /// Routes a left press/release through the webview layer for a resolved
-/// `(terminal, local_phys)`, returning `true` when the event was CONSUMED and
-/// must NOT reach the host's terminal mouse pipeline.
+/// `(terminal, local_phys)`.
 ///
 /// A press inside an interactive rect sets `FocusedWebview`, issues
 /// `set_focus` before `send_mouse_click`, forwards the press in DIP, and
 /// records the in-flight press. That order is required: `set_focus` reaches
 /// any live browser, while a click reaches only a browser that already has
-/// a focused frame. A press outside every rect
-/// clears an inline `FocusedWebview` and returns `false` (so the press
-/// falls through to the terminal). Release forwards the click-up to the
-/// recorded child (drift-tolerant) and clears.
+/// a focused frame. A press outside every rect clears an inline
+/// `FocusedWebview`, leaving the press to the terminal. Release forwards the
+/// click-up to the recorded child (drift-tolerant) and clears.
 #[expect(
     clippy::too_many_arguments,
     reason = "inline routing needs the webview press state, route params, and pointer geometry"
@@ -81,7 +79,7 @@ pub(in crate::input::mouse) fn route_webview_left_click(
     cell_w_phys: f32,
     cell_h_phys: f32,
     scale: f32,
-) -> bool {
+) {
     match button_state {
         ButtonState::Pressed => {
             webview_press.0 = None;
@@ -105,28 +103,22 @@ pub(in crate::input::mouse) fn route_webview_left_click(
                 {
                     focused.0 = None;
                 }
-                return false;
+                return;
             };
             if let Some(focused) = route.focused_webview.as_deref_mut()
                 && focused.0 != Some(hit.child)
             {
                 focused.0 = Some(hit.child);
             }
-            if !route.cef.is_connected() {
-                warn_once!(
-                    "no CEF pointer sink is present, so inline webview clicks do not reach the page"
-                );
-            }
             route.cef.set_focus(&hit.child, true);
             route
                 .cef
                 .send_mouse_click(&hit.child, hit.local_dip, PointerButton::Primary, false);
             webview_press.0 = Some(hit.child);
-            true
         }
         ButtonState::Released => {
             let Some(child) = webview_press.0.take() else {
-                return false;
+                return;
             };
             if let Some(dip) =
                 webview_release_dip(route, child, cursor_phys, cell_w_phys, cell_h_phys, scale)
@@ -135,7 +127,6 @@ pub(in crate::input::mouse) fn route_webview_left_click(
                     .cef
                     .send_mouse_click(&child, dip, PointerButton::Primary, true);
             }
-            true
         }
     }
 }

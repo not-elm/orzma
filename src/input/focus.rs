@@ -920,4 +920,51 @@ mod tests {
             vec![PaneAction::Select(b)]
         );
     }
+
+    /// Asserts that a component inserted by a system ordered before
+    /// `InputPhase::Hover` is visible to a system in `InputPhase::Dispatch`
+    /// within the same update.
+    ///
+    /// Case: the host gates a terminal on the frame the pointer reaches an
+    /// interactive rect, and the dispatchers have to see that gate on the
+    /// same press.
+    #[test]
+    fn a_gate_inserted_before_hover_is_visible_in_dispatch() {
+        #[derive(Resource, Default)]
+        struct SawMarker(bool);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SawMarker>()
+            .configure_sets(
+                Update,
+                (
+                    InputPhase::Hover,
+                    InputPhase::Dispatch,
+                    InputPhase::FocusedKey,
+                )
+                    .chain(),
+            );
+        let entity = app.world_mut().spawn(OrzmaTerminal).id();
+        app.add_systems(
+            Update,
+            (
+                (move |mut commands: Commands| {
+                    commands.entity(entity).insert(MouseDisabled);
+                })
+                .before(InputPhase::Hover),
+                (move |mut saw: ResMut<SawMarker>, gated: Query<Has<MouseDisabled>>| {
+                    if let Ok(has) = gated.get(entity) {
+                        saw.0 = has;
+                    }
+                })
+                .in_set(InputPhase::Dispatch),
+            ),
+        );
+        app.update();
+        assert!(
+            app.world().resource::<SawMarker>().0,
+            "the sync point at the ordering edge applies the insert before Dispatch runs"
+        );
+    }
 }

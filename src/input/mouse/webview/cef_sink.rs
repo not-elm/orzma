@@ -25,13 +25,6 @@ pub(in crate::input::mouse) struct CefMouse<'w> {
 }
 
 impl CefMouse<'_> {
-    /// Reports whether a sink is present. A present sink does not promise a
-    /// reachable browser host: on Windows the proxy is inserted before CEF's
-    /// own browser state exists.
-    pub(in crate::input::mouse) fn is_connected(&self) -> bool {
-        self.sink.is_some()
-    }
-
     /// Sets the CEF focus flag on `webview`.
     pub(in crate::input::mouse) fn set_focus(&self, webview: &Entity, focused: bool) {
         if let Some(sink) = &self.sink {
@@ -92,8 +85,7 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
-    /// Asserts that every call is dropped, and none panics, while no sink
-    /// resource is present.
+    /// Asserts that no call panics while no sink resource is present.
     ///
     /// Case: the sink resource is absent, as in a headless test app or a
     /// frame before the CEF plugin has inserted its proxy.
@@ -103,7 +95,6 @@ mod tests {
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut()
             .run_system_once(move |cef: CefMouse| {
-                assert!(!cef.is_connected(), "no sink resource was inserted");
                 cef.set_focus(&webview, true);
                 cef.send_mouse_click(&webview, Vec2::ZERO, PointerButton::Primary, false);
                 cef.send_mouse_wheel(&webview, Vec2::ZERO, Vec2::ZERO);
