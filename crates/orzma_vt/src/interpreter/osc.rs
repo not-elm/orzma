@@ -2,11 +2,9 @@
 //!
 //! The window title (OSC 0 and OSC 2), the working directory (OSC 7 and
 //! the ConEmu `OSC 9;9` subcommand), the indexed palette (OSC 4 and
-//! OSC 104), the dynamic foreground and background (OSC 10, OSC 11,
-//! OSC 110, and OSC 111), hyperlinks (OSC 8), and the clipboard (OSC 52)
-//! are implemented.
-//!
-//! TODO: implement the dynamic cursor color (OSC 12 and OSC 112).
+//! OSC 104), the dynamic foreground, background, and cursor color
+//! (OSC 10, OSC 11, OSC 12, OSC 110, OSC 111, and OSC 112), hyperlinks
+//! (OSC 8), and the clipboard (OSC 52) are implemented.
 
 pub(crate) mod clipboard;
 pub(crate) mod dynamic_color;

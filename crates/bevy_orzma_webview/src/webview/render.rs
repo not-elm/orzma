@@ -47,6 +47,9 @@ pub fn cef_plugin(orzma_registry: WebviewAssetRegistry, root_cache_path: &Path) 
 /// layer derives its cookie and Local State encryption key from a mock
 /// keychain rather than the real login keychain.
 ///
+/// On Windows the config always carries `disable-gpu-compositing`, so the
+/// embedded pages composite on the CPU rather than on the GPU.
+///
 /// The `debug` feature additionally exposes `remote-debugging-port`, a local
 /// Chromium DevTools (CDP) endpoint on `127.0.0.1:9222` for inspecting the
 /// embedded webview. It is off by default.
@@ -54,6 +57,15 @@ fn cef_command_line_config() -> CommandLineConfig {
     let config = CommandLineConfig::default();
     #[cfg(target_os = "macos")]
     let config = config.with_switch("use-mock-keychain");
+    // NOTE: CEF 149 wedges an off-screen browser permanently when the frame for a
+    // resize never arrives (chromiumembedded/cef#3826). The Viz capture oracle stops
+    // completing captures, so `hold_resize_` is never released and every later
+    // `WasResized` becomes a no-op. Software compositing never creates the video
+    // consumer, so `InvalidateInternal` paints synchronously and that oracle is out
+    // of the picture. The upstream fix landed on CEF branch 8037 only, so this switch
+    // must stay until the pinned CEF carries it.
+    #[cfg(target_os = "windows")]
+    let config = config.with_switch("disable-gpu-compositing");
     #[cfg(feature = "debug")]
     let config = config.with_switch_value("remote-debugging-port", "9222");
     config

@@ -76,7 +76,8 @@ fn an_injected_powershell_reports_its_directory_and_calls_back_the_user_prompt()
     let mut sent = false;
     let deadline = Instant::now() + Duration::from_secs(60);
     while Instant::now() < deadline {
-        for signal in tty.pump().signals {
+        let signals: Vec<TtySignal> = tty.pump().signals().cloned().collect();
+        for signal in signals {
             match signal {
                 TtySignal::Vt(VtSignal::Title(title)) if title == PROFILE_MARKER => {
                     profile_ran = true;
@@ -150,7 +151,8 @@ fn a_failing_command_still_shows_as_failed_through_the_injected_hook() {
     let mut sent = false;
     let deadline = Instant::now() + Duration::from_secs(60);
     while Instant::now() < deadline {
-        for signal in tty.pump().signals {
+        let signals: Vec<TtySignal> = tty.pump().signals().cloned().collect();
+        for signal in signals {
             match signal {
                 // NOTE: the first marker the shell renders reflects its own
                 // startup state, not the fixture command below, so it only

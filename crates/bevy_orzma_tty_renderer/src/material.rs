@@ -394,6 +394,8 @@ impl PaneTreatment {
 /// | 128    | `overlay_rects`             |
 /// | 320    | `overlay_dim`               |
 /// | 324    | `overlay_desaturate`        |
+/// | 328    | `cursor_packed`             |
+/// | 332    | `default_fg_packed`         |
 ///
 /// # Invariants
 ///
@@ -403,9 +405,15 @@ impl PaneTreatment {
 ///   `grid_size * cell_size_px` rectangle.
 /// - "No cursor" is encoded by clearing the `CURSOR_VISIBLE` bit in
 ///   `cursor_style` (and leaving `cursor_pos` at any value); the shader
-///   short-circuits on `cursor_visible == 0u`. A cursor (vi or live)
-///   whose grid line projects outside the viewport takes the same path:
-///   `cursor_visible = 0`.
+///   then paints no cursor. A cursor (vi or live) whose grid line
+///   projects outside the viewport takes the same path.
+/// - `cursor_packed == 0` means no cursor color is set, and the shader
+///   paints the cursor in the foreground of the cell under it. A set
+///   color packs like a cell color, whose alpha byte is never zero. A
+///   set color equal to the default foreground uploads as unset.
+/// - A cursor fill whose contrast against the cell's ground falls below
+///   1.5 is swapped in the shader for `default_fg_packed` or
+///   `bg_padding_color`, whichever stands out more.
 #[derive(Clone, Copy, ShaderType, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
@@ -460,6 +468,10 @@ struct TerminalParams {
     /// Inline-overlay (webview) desaturation toward Rec.709 luminance applied to
     /// overlay samples. `0.0` = active / no-op.
     overlay_desaturate: f32,
+    /// The `OSC 12` cursor color.
+    cursor_packed: u32,
+    /// The default foreground in the cell-color packing.
+    default_fg_packed: u32,
 }
 
 impl Default for TerminalParams {
@@ -489,6 +501,8 @@ impl Default for TerminalParams {
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
             overlay_dim: 1.0,
             overlay_desaturate: 0.0,
+            cursor_packed: 0,
+            default_fg_packed: 0,
         }
     }
 }
@@ -507,7 +521,7 @@ impl TerminalParams {
     ///   the entity's overlays.
     fn new(
         view: &TerminalView,
-        default_bg: Rgb,
+        palette: &Palette,
         metrics: &CellMetrics,
         treatment: &PaneTreatment,
         cell_size_px: Vec2,
@@ -529,7 +543,7 @@ impl TerminalParams {
         };
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col, sel_kind) =
             selection_uniforms(view.selection.as_ref(), view.display_offset, view.rows);
-        let bg_padding_color = padding_color(default_bg, fallback);
+        let bg_padding_color = padding_color(palette.background, fallback);
 
         Self {
             grid_size: UVec2::new(cols.max(1), rows.max(1)),
@@ -556,6 +570,11 @@ impl TerminalParams {
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
             overlay_dim: treatment.overlay_dim,
             overlay_desaturate: treatment.overlay_desaturate,
+            cursor_packed: palette
+                .cursor
+                .filter(|color| *color != palette.foreground)
+                .map_or(0, pack_linear),
+            default_fg_packed: pack_linear(palette.foreground),
         }
     }
 }
@@ -653,7 +672,7 @@ struct PackedPalette {
 }
 
 impl PackedPalette {
-    /// Packs every slot of `palette` once.
+    /// Packs each color slot of `palette` once.
     fn build(palette: &Palette) -> Self {
         Self {
             indexed: palette.indexed.map(pack_linear),
@@ -831,7 +850,7 @@ fn update_terminal_material(
         if let Some(mut mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
                 view,
-                cells.palette.background,
+                &cells.palette,
                 &metrics,
                 &treatment,
                 cell_size_phys,
@@ -1382,13 +1401,14 @@ mod tests {
         assert_eq!(p.overlay_desaturate, 0.0);
     }
 
+    /// Asserts the std140 offsets of the fields after `dim`, where a
+    /// `Vec4` and the rect array force alignment padding, down to the
+    /// packed default foreground in the tail.
+    ///
+    /// Case: an inactive pane shows a dimmed, desaturated webview while
+    /// nvim in it holds an `OSC 12` cursor color.
     #[test]
     fn terminal_params_field_offsets_are_pinned() {
-        // `dim` is at offset 104; `inactive_tint` (a Vec4, 16-byte aligned)
-        // lands at 112 after encase pads the 4 bytes following `dim`;
-        // `overlay_rects` follows at 128; the trailing scalars `overlay_dim` /
-        // `overlay_desaturate` sit at 320/324 (total 336 bytes). Field indices
-        // are 0-based in declaration order.
         assert_eq!(
             <TerminalParams as ShaderType>::METADATA.offset(19),
             104,
@@ -1397,7 +1417,7 @@ mod tests {
         assert_eq!(
             <TerminalParams as ShaderType>::METADATA.offset(20),
             112,
-            "inactive_tint (Vec4) after the pad following dim"
+            "inactive_tint (Vec4, 16-byte aligned) after the pad following dim"
         );
         assert_eq!(
             <TerminalParams as ShaderType>::METADATA.offset(21),
@@ -1413,6 +1433,16 @@ mod tests {
             <TerminalParams as ShaderType>::METADATA.offset(23),
             324,
             "overlay_desaturate after overlay_dim"
+        );
+        assert_eq!(
+            <TerminalParams as ShaderType>::METADATA.offset(24),
+            328,
+            "cursor_packed after overlay_desaturate"
+        );
+        assert_eq!(
+            <TerminalParams as ShaderType>::METADATA.offset(25),
+            332,
+            "default_fg_packed after cursor_packed"
         );
     }
 
@@ -1633,17 +1663,6 @@ mod tests {
         );
     }
 
-    /// The body of the WGSL function `header` declares, bounded at that
-    /// function's column-zero closing brace so a later function's text
-    /// cannot satisfy an assertion about this one.
-    fn wgsl_fn_body<'a>(src: &'a str, header: &str) -> &'a str {
-        src.split(header)
-            .nth(1)
-            .and_then(|tail| tail.split_once("\n}"))
-            .map(|(body, _)| body)
-            .unwrap_or_else(|| panic!("the shader defines {header}"))
-    }
-
     /// Asserts that the shader's cursor helper consults the wide-right-half
     /// flag for both halves of a wide pair, and that a bar cursor moves to
     /// the body cell when parked on a wide glyph's right half.
@@ -1654,10 +1673,10 @@ mod tests {
     #[test]
     fn wgsl_cursor_covers_both_halves_of_a_wide_glyph() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
-        let body = wgsl_fn_body(src, "fn cursor_covers(");
+        let body = wgsl_fn_body(src, "cursor_covers");
         assert!(body.contains("col == params.cursor_pos.x + 1u"));
         assert!(body.contains("col + 1u == params.cursor_pos.x"));
-        let painter = wgsl_fn_body(src, "fn paint_cursor(");
+        let painter = wgsl_fn_body(src, "paint_cursor");
         assert!(painter.contains("cursor_covers(row, col)"));
         assert!(painter.contains("bar_covers(row, col)"));
         assert!(src.contains("fn bar_covers("));
@@ -1679,6 +1698,282 @@ mod tests {
         );
         assert_eq!(composable_marks("a").count(), 0);
         assert_eq!(composable_marks("").count(), 0);
+    }
+
+    /// The text of WGSL function `name`, from the end of its name to its
+    /// closing brace in column zero, under LF and CRLF line endings alike.
+    fn wgsl_fn_body<'a>(src: &'a str, name: &str) -> &'a str {
+        src.split(&format!("fn {name}("))
+            .nth(1)
+            .and_then(|rest| rest.split("\n}").next())
+            .expect("the shader defines the function")
+    }
+
+    /// Asserts that a function body ends at its own closing brace under
+    /// CRLF line endings rather than running on into the next function.
+    ///
+    /// Case: a Windows checkout converts the shader to CRLF before the
+    /// tests embed it.
+    #[test]
+    fn wgsl_fn_body_ends_at_the_closing_brace_under_crlf() {
+        let src =
+            "fn first(\r\n) {\r\n    if x {\r\n    }\r\n}\r\nfn second() {\r\n    MARKER\r\n}\r\n";
+        assert!(!wgsl_fn_body(src, "first").contains("MARKER"));
+        assert!(wgsl_fn_body(src, "second").contains("MARKER"));
+    }
+
+    /// Asserts that the shader applies concealment as the last stage of
+    /// color resolution, after reverse video and dim.
+    ///
+    /// Case: a program prints concealed text that is also reverse-video
+    /// or faint.
+    #[test]
+    fn wgsl_concealment_is_the_last_color_resolution_stage() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(wgsl_fn_body(src, "conceal").contains("STYLE_HIDDEN"));
+        assert!(!wgsl_fn_body(src, "resolve_visible_colors").contains("STYLE_HIDDEN"));
+        assert!(
+            wgsl_fn_body(src, "resolve_cell_colors")
+                .contains("conceal(cell, resolve_visible_colors(cell))")
+        );
+    }
+
+    /// Asserts that a concealed glyph takes the tinted color its ground
+    /// is painted in rather than the untinted cell background.
+    ///
+    /// Case: a program prints concealed text on a colored background in
+    /// a pane that then loses focus and takes the inactive-pane tint.
+    #[test]
+    fn wgsl_concealment_follows_the_inactive_pane_tint() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(wgsl_fn_body(src, "conceal").contains("CellColors(tint_bg(colors.bg), colors.bg)"));
+    }
+
+    /// Asserts that reverse video materializes the transparent default
+    /// background through the shared helper rather than inline.
+    ///
+    /// Case: a program prints a reverse-video cell on the default
+    /// background, and its glyph takes the colour that background paints.
+    #[test]
+    fn wgsl_reverse_video_materializes_the_default_background_through_the_helper() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let visible = wgsl_fn_body(src, "resolve_visible_colors");
+        assert!(visible.contains("materialize_default_bg("));
+        assert!(!visible.contains("bg_padding_color"));
+        assert!(wgsl_fn_body(src, "materialize_default_bg").contains("params.bg_padding_color"));
+    }
+
+    fn params_for(palette: &Palette) -> TerminalParams {
+        let metrics = CellMetrics {
+            advance_phys: 8.0,
+            line_height_phys: 16.0,
+            ascent_phys: 12.0,
+            descent_phys: 4.0,
+            underline_position_phys: -2.0,
+            underline_thickness_phys: 1.0,
+            max_overflow_phys: 0.0,
+        };
+        TerminalParams::new(
+            &TerminalView::default(),
+            palette,
+            &metrics,
+            &PaneTreatment::from_style(None),
+            Vec2::new(8.0, 16.0),
+            Vec2::new(64.0, 64.0),
+            12.0,
+            1.0,
+            [0, 0, 0],
+            0,
+            0,
+            None,
+            2.0,
+        )
+    }
+
+    /// Asserts that the uniform carries zero for an unset cursor color
+    /// and the cell packing of the color once one is set, which stays
+    /// nonzero even for black.
+    ///
+    /// Case: nvim recolors the cursor with `OSC 12`, a light theme sets a
+    /// black cursor, and `OSC 112` later restores the default.
+    #[test]
+    fn terminal_params_carry_the_cursor_color() {
+        assert_eq!(params_for(&Palette::default()).cursor_packed, 0);
+        let orange = Rgb {
+            r: 0xff,
+            g: 0x88,
+            b: 0x00,
+        };
+        let black = Rgb { r: 0, g: 0, b: 0 };
+        for color in [orange, black] {
+            let palette = Palette {
+                cursor: Some(color),
+                ..Palette::default()
+            };
+            let packed = params_for(&palette).cursor_packed;
+            assert_eq!(packed, pack_linear(color));
+            assert_ne!(packed, 0, "{color:?} collides with the unset sentinel");
+        }
+    }
+
+    /// Asserts that the uniform carries the default foreground in the
+    /// cell-color packing.
+    ///
+    /// Case: a theme script recolors the text with `OSC 10`, and the
+    /// cursor's contrast fallback has to follow it.
+    #[test]
+    fn terminal_params_carry_the_default_foreground() {
+        let palette = Palette {
+            foreground: Rgb {
+                r: 0x20,
+                g: 0x20,
+                b: 0x20,
+            },
+            ..Palette::default()
+        };
+        assert_eq!(
+            params_for(&palette).default_fg_packed,
+            pack_linear(palette.foreground)
+        );
+    }
+
+    /// Asserts that a cursor color equal to the default foreground is
+    /// uploaded as unset rather than as a set color, and that the
+    /// comparison follows the live foreground rather than the built-in
+    /// one.
+    ///
+    /// Case: a theme script sends the same value for `OSC 10` and
+    /// `OSC 12`, or a program writes the terminal's own `OSC 12 ; ?`
+    /// reply back to it.
+    #[test]
+    fn a_cursor_color_equal_to_the_foreground_is_uploaded_as_unset() {
+        let palette = Palette {
+            cursor: Some(Palette::default().foreground),
+            ..Palette::default()
+        };
+        assert_eq!(params_for(&palette).cursor_packed, 0);
+        let recolored = Palette {
+            foreground: Rgb {
+                r: 0x20,
+                g: 0x20,
+                b: 0x20,
+            },
+            cursor: Some(Palette::default().foreground),
+            ..Palette::default()
+        };
+        assert_ne!(params_for(&recolored).cursor_packed, 0);
+    }
+
+    /// Asserts that the shader declares the packed default foreground as
+    /// the last field of its uniform block, matching the host layout.
+    ///
+    /// Case: a shell theme recolors the default foreground with `OSC 10`,
+    /// and a cursor whose fill lacks contrast against the cell under it
+    /// is repainted in that foreground.
+    #[test]
+    fn wgsl_terminal_params_end_with_the_default_foreground() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let declaration = src
+            .split("struct TerminalParams {")
+            .nth(1)
+            .and_then(|rest| rest.split("};").next())
+            .expect("the shader declares TerminalParams");
+        let last_field = declaration
+            .lines()
+            .map(str::trim)
+            .rfind(|line| !line.is_empty());
+        assert_eq!(last_field, Some("default_fg_packed: u32,"));
+    }
+
+    /// Asserts that both paint paths resolve cell colors through the
+    /// block-cursor override, leaving the plain resolution to the left
+    /// neighbour's overdraw alone, and that the override conceals last.
+    ///
+    /// Case: a block cursor sits on a cell in the last column, so the
+    /// grid path and the right-strip path both paint it.
+    #[test]
+    fn wgsl_block_cursor_is_resolved_into_the_cell_colors() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(wgsl_fn_body(src, "paint_grid_cell").contains("resolve_painted_colors("));
+        assert!(wgsl_fn_body(src, "paint_right_strip").contains("resolve_painted_colors("));
+        assert_eq!(
+            src.matches("resolve_cell_colors(").count(),
+            2,
+            "only the definition and paint_left_overdraw name the plain resolution"
+        );
+        let painted = wgsl_fn_body(src, "resolve_painted_colors");
+        assert!(painted.contains("block_cursor_covers(row, col)"));
+        assert!(painted.contains("conceal("));
+        assert!(!painted.contains("STYLE_HIDDEN"));
+        assert!(wgsl_fn_body(src, "block_cursor_covers").contains("cursor_covers(row, col)"));
+    }
+
+    /// Asserts that a hollow caret is left to the stroke painter rather
+    /// than filling the cell it sits on.
+    ///
+    /// Case: a block caret sits on a cell in a pane that loses focus, so
+    /// the caret is drawn as an outline.
+    #[test]
+    fn wgsl_a_hollow_block_caret_does_not_fill_the_cell() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(wgsl_fn_body(src, "block_cursor_covers").contains("CURSOR_HOLLOW"));
+    }
+
+    /// Asserts that every stroked cursor — the bar, the underline and the
+    /// hollow outline — takes the guarded fill color from the cell's
+    /// colors before concealment, compared against the tinted ground, and
+    /// that no pixel inversion is left in the shader.
+    ///
+    /// Case: an underline cursor sits on a concealed cell in an inactive
+    /// pane, which also draws its caret hollow.
+    #[test]
+    fn wgsl_cursor_strips_take_the_guarded_fill_color() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let painter = wgsl_fn_body(src, "paint_cursor");
+        assert!(painter.contains("let visible = resolve_visible_colors(cell);"));
+        assert!(painter.contains("let ground = tint_bg(materialize_default_bg(visible.bg));"));
+        assert!(painter.contains("let fill = guarded_fill(cursor_fill(visible.fg), ground);"));
+        assert_eq!(painter.matches("return fill;").count(), 3);
+        assert!(wgsl_fn_body(src, "cursor_fill").contains("params.cursor_packed"));
+        assert!(!src.contains("1.0 - base.rgb"));
+    }
+
+    /// Asserts that the block cursor passes its fill through the contrast
+    /// guard, which falls back to the default foreground or background
+    /// against the cell's ground.
+    ///
+    /// Case: a light-theme editor leaves the cursor on a white cell whose
+    /// foreground is also white, and a theme sets a cursor color close to
+    /// a reverse-video cell's ground.
+    #[test]
+    fn wgsl_cursor_fill_is_guarded_against_the_ground() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let block = wgsl_fn_body(src, "resolve_painted_colors");
+        assert!(block.contains("let ground = materialize_default_bg(colors.bg);"));
+        assert!(block.contains("let fill = guarded_fill(cursor_fill(colors.fg), ground);"));
+        let guard = wgsl_fn_body(src, "guarded_fill");
+        assert!(guard.contains("contrast_ratio("));
+        assert!(guard.contains("MIN_CURSOR_CONTRAST"));
+        assert!(guard.contains("params.default_fg_packed"));
+        assert!(guard.contains("materialize_default_bg("));
+        assert!(src.contains("const MIN_CURSOR_CONTRAST: f32 = 1.5;"));
+    }
+
+    /// Asserts that under the block cursor a glyph that does not stand
+    /// out from its own ground is painted in the guarded fill rather
+    /// than in the ground.
+    ///
+    /// Case: a color picker draws a swatch as a full block whose
+    /// foreground and background are the same color, and the block
+    /// cursor lands on it.
+    #[test]
+    fn wgsl_block_cursor_paints_a_glyph_that_melts_into_its_ground_in_the_fill() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let block = wgsl_fn_body(src, "resolve_painted_colors");
+        assert!(block.contains(
+            "let glyph_melts = contrast_ratio(colors.fg.rgb, ground.rgb) < MIN_CURSOR_CONTRAST;"
+        ));
+        assert!(block.contains("CellColors(select(ground, fill, glyph_melts), fill)"));
     }
 
     /// Asserts that the shader declares no time uniform, so every
@@ -1730,7 +2025,7 @@ mod tests {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
         assert!(src.contains("fn cursor_span_left("));
         assert!(src.contains("fn cursor_span_right("));
-        let painter = wgsl_fn_body(src, "fn paint_cursor(");
+        let painter = wgsl_fn_body(src, "paint_cursor");
         assert!(painter.contains("col == cursor_span_left()"));
         assert!(painter.contains("col == cursor_span_right()"));
     }

@@ -18,7 +18,8 @@ fn a_host_removal_arms_the_coalescer_only_when_something_went() {
         Box::new(CaptureSink::default()),
     )
     .expect("the detached constructor succeeds");
-    tty.feed_bytes(format!("\x1b_Omount;n={id},r=4,c=8\x1b\\").as_bytes());
+    tty.feed_bytes(format!("\x1b_Omount;n={id},r=4,c=8\x1b\\").as_bytes())
+        .expect("the fake VT honors the interpret contract");
     let _ = tty.pump();
 
     // NOTE: disarm explicitly between the two probes. A second pump()
@@ -63,7 +64,7 @@ fn a_host_mount_queues_the_mount_signal_and_arms_the_coalescer() {
     );
     let out = tty.flush_now();
     assert_eq!(
-        out.signals,
+        signals_of(&out),
         vec![TtySignal::Vt(VtSignal::WebviewMount {
             instance: InstanceId(7),
             size
@@ -92,7 +93,7 @@ fn a_rejected_host_mount_queues_the_rejection_without_arming() {
     assert!(!tty.coalescer.is_armed(), "a rejected mount arms nothing");
     let out = tty.flush_now();
     assert_eq!(
-        out.signals,
+        signals_of(&out),
         vec![TtySignal::Vt(VtSignal::WebviewMountRejected {
             instance: InstanceId(7)
         })]

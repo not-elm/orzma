@@ -12,7 +12,7 @@ use crate::protocol::{
 };
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::prelude::{
-    OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PumpOutput, TtySignal, WheelConfig,
+    OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PumpItem, TtySignal, WheelConfig,
 };
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{Frame, GridSize, OrzmaVt, Vt, VtSignal};
@@ -232,7 +232,7 @@ impl Backend {
             };
             let output = pane.tty.pump();
             let more_pending = output.more_pending;
-            if let Some(code) = self.emit_pump_output(id, output) {
+            if let Some(code) = self.forward_items(None, id, output.items) {
                 self.close_pane(id, CloseReason::ChildExit { code });
                 return;
             }
@@ -242,13 +242,13 @@ impl Backend {
         }
     }
 
-    /// Pumps every pane whose coalescer deadline has passed.
+    /// Pumps every pane whose next deadline has passed.
     pub(crate) fn service_deadlines(&mut self) {
         let now = Instant::now();
         let due: Vec<PaneId> = self
             .panes
             .iter()
-            .filter(|(_, p)| p.tty.next_deadline().is_some_and(|d| d <= now))
+            .filter(|(_, p)| p.tty.next_deadline(now).is_some_and(|d| d <= now))
             .map(|(id, _)| *id)
             .collect();
         for id in due {
@@ -257,7 +257,7 @@ impl Backend {
     }
 
     /// Blocks until a command or a pane stream is ready, or the earliest
-    /// of the coalescer deadlines and the sampler's report deadline
+    /// of the panes' next deadlines and the sampler's report deadline
     /// passes. Returns the ready source, `None` on timeout.
     fn wait_ready(&mut self) -> Option<Ready> {
         let mut select = Select::new();
@@ -280,13 +280,14 @@ impl Backend {
         Some(self.sources[index])
     }
 
-    /// The earliest of the coalescer deadlines and the sampler's report
+    /// The earliest of the panes' next deadlines and the sampler's report
     /// deadline, or `None` when every pane is idle and no peak waits to
     /// be reported.
     fn next_wake_deadline(&self) -> Option<Instant> {
+        let now = Instant::now();
         self.panes
             .values()
-            .filter_map(|p| p.tty.next_deadline())
+            .filter_map(|p| p.tty.next_deadline(now))
             .chain(self.sampler.report_deadline())
             .min()
     }
@@ -460,7 +461,6 @@ impl Backend {
         };
         let solved = self.tree.solve(geometry.size);
         let mut frames: Vec<(PaneId, Frame)> = Vec::new();
-        let mut signals: Vec<(PaneId, VtSignal)> = Vec::new();
         for rect in &solved.panes {
             let Some(pane) = self.panes.get_mut(&rect.pane) else {
                 continue;
@@ -484,17 +484,7 @@ impl Backend {
                 }
             }
             let flushed = pane.tty.flush_now();
-            for signal in flushed.signals {
-                if let TtySignal::Vt(signal) = signal {
-                    signals.push((rect.pane, signal));
-                }
-            }
-            if let Some(frame) = flushed.frame {
-                frames.push((rect.pane, frame));
-            }
-        }
-        for (pane, signal) in signals {
-            self.emit(OrzmuxEvent::Signal { pane, signal });
+            self.forward_items(Some(&mut frames), rect.pane, flushed.items);
         }
         let layout = Layout {
             seq: self.processed,
@@ -527,14 +517,21 @@ impl Backend {
         }
     }
 
-    /// Forwards a pump's signals and frame, in that order.
-    /// Returns `Some(code)` when the signals carried `ChildExit`.
-    fn emit_pump_output(&mut self, id: PaneId, output: PumpOutput) -> Option<Option<i32>> {
+    /// Forwards a pump's items in order: each signal as a `Signal` event,
+    /// each frame as a `Frame` event, or into `layout_frames` when the
+    /// caller publishes the frames itself. Returns `Some(code)` when the
+    /// items carried `ChildExit`.
+    fn forward_items(
+        &mut self,
+        mut layout_frames: Option<&mut Vec<(PaneId, Frame)>>,
+        id: PaneId,
+        items: Vec<PumpItem>,
+    ) -> Option<Option<i32>> {
         let mut exited = None;
-        for signal in output.signals {
-            match signal {
-                TtySignal::ChildExit { code } => exited = Some(code),
-                TtySignal::Vt(signal) => {
+        for item in items {
+            match item {
+                PumpItem::Signal(TtySignal::ChildExit { code }) => exited = Some(code),
+                PumpItem::Signal(TtySignal::Vt(signal)) => {
                     if let VtSignal::CurrentDir(path) = &signal
                         && let Some(pane) = self.panes.get_mut(&id)
                     {
@@ -542,10 +539,11 @@ impl Backend {
                     }
                     self.emit(OrzmuxEvent::Signal { pane: id, signal });
                 }
+                PumpItem::Frame(frame) => match layout_frames.as_deref_mut() {
+                    Some(frames) => frames.push((id, frame)),
+                    None => self.emit(OrzmuxEvent::Frame { pane: id, frame }),
+                },
             }
-        }
-        if let Some(frame) = output.frame {
-            self.emit(OrzmuxEvent::Frame { pane: id, frame });
         }
         exited
     }
@@ -555,7 +553,7 @@ impl Backend {
     fn close_pane(&mut self, id: PaneId, reason: CloseReason) {
         if let Some(pane) = self.panes.get_mut(&id) {
             let flushed = pane.tty.flush_now();
-            self.emit_pump_output(id, flushed);
+            self.forward_items(None, id, flushed.items);
         }
         self.tree.remove(id);
         self.panes.remove(&id);
@@ -1116,6 +1114,86 @@ mod tests {
         );
     }
 
+    /// The kind of each event, for asserting an order.
+    fn event_kinds(events: &VecDeque<OrzmuxEvent>) -> Vec<&'static str> {
+        events
+            .iter()
+            .map(|event| match event {
+                OrzmuxEvent::Signal { .. } => "signal",
+                OrzmuxEvent::Frame { .. } => "frame",
+                _ => "other",
+            })
+            .collect()
+    }
+
+    /// Asserts that the frame a closed synchronized update yields
+    /// reaches the GUI between the signals raised before and after the
+    /// close.
+    ///
+    /// Case: a program rings the bell inside a synchronized update,
+    /// closes it, and sets the window title right behind it in the same
+    /// write.
+    #[test]
+    fn a_closed_update_frame_arrives_between_its_signals() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        h.backend.pump_pane(root);
+        h.drain();
+        thread::sleep(OrzmaTty::<OrzmaVt>::SYNC_EMIT_INTERVAL);
+        pane.chunk_tx
+            .send(b"\x1b[?2026h\x07a\x1b[?2026l\x1b]2;t\x07".to_vec())
+            .unwrap();
+        h.backend.pump_pane(root);
+        assert_eq!(event_kinds(&h.drain()), ["signal", "frame", "signal"]);
+    }
+
+    /// Asserts that a pane with an open synchronized update is not
+    /// painted when its coalescer deadline passes.
+    ///
+    /// Case: nvim is halfway through a redraw inside a synchronized
+    /// update when the 12 ms cap elapses.
+    #[test]
+    fn an_open_update_holds_the_pane_frame_back() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        h.backend.pump_pane(root);
+        h.drain();
+        pane.chunk_tx.send(b"\x1b[?2026hhello".to_vec()).unwrap();
+        h.backend.pump_pane(root);
+        thread::sleep(Duration::from_millis(15));
+        h.backend.service_deadlines();
+        h.backend.pump_pane(root);
+        assert!(
+            !h.drain()
+                .iter()
+                .any(|e| matches!(e, OrzmuxEvent::Frame { .. }))
+        );
+    }
+
+    /// Asserts that a pane's last frame reaches the GUI ahead of its
+    /// `PaneClosed`.
+    ///
+    /// Case: the shell prints a farewell line and exits before the
+    /// coalesce window for that line elapsed.
+    #[test]
+    fn the_last_frame_precedes_the_pane_close() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        h.backend.pump_pane(root);
+        h.drain();
+        pane.chunk_tx.send(b"bye".to_vec()).unwrap();
+        pane.exit_tx.send(Some(0)).unwrap();
+        h.backend.pump_pane(root);
+        let events = h.drain();
+        let frame = events
+            .iter()
+            .position(|e| matches!(e, OrzmuxEvent::Frame { .. }));
+        let closed = events
+            .iter()
+            .position(|e| matches!(e, OrzmuxEvent::PaneClosed { .. }));
+        assert!(frame.is_some() && frame < closed, "{events:?}");
+    }
+
     /// Asserts that the depths recorded after a wake are the chunks
     /// still queued before the pump drains them.
     ///
@@ -1162,7 +1240,7 @@ mod tests {
         h.backend.pump_pane(root);
         let pane_deadline = h.backend.panes[&root]
             .tty
-            .next_deadline()
+            .next_deadline(Instant::now())
             .expect("pending output arms the coalescer");
         assert!(Some(pane_deadline) < report_deadline);
         assert_eq!(h.backend.next_wake_deadline(), Some(pane_deadline));

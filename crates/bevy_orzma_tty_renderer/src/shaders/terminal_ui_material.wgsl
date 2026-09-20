@@ -30,6 +30,8 @@ struct TerminalParams {
     overlay_rects: array<vec4<i32>, 12>,
     overlay_dim: f32,
     overlay_desaturate: f32,
+    cursor_packed: u32,
+    default_fg_packed: u32,
 };
 
 struct Cell {
@@ -107,9 +109,10 @@ const GLYPH_NONE: u32 = 0xFFFFFFFFu;
 
 // Blends a BACKGROUND color toward the inactive-pane tint target. `rgb`
 // blends toward `params.inactive_tint.rgb` by `params.inactive_tint.a`; alpha
-// is preserved. Active pane => `inactive_tint.a == 0.0` (no-op). Applied only
-// at background-establishment points (before glyphs/overlays paint), so text
-// and webview overlays keep their full color. Runs in LINEAR space —
+// is preserved. Active pane => `inactive_tint.a == 0.0` (no-op). Applied at
+// the background-establishment points (before glyphs/overlays paint), so text
+// and webview overlays keep their full color, and to the glyph of a concealed
+// cell, which must match the tinted ground it hides in. Runs in LINEAR space —
 // `inactive_tint.rgb` is uploaded pre-linearized by the host.
 fn tint_bg(c: vec4<f32>) -> vec4<f32> {
     // NOTE: alpha=0 means transparent (terminal default bg sentinel); preserve
@@ -156,7 +159,8 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 
 // Pipeline for a fragment that lies inside the grid: pane background →
 // inline overlays → cell background → primary glyph → left-neighbor
-// overdraw → text decorations → cursor → selection.
+// overdraw → text decorations → bar / underline cursor → selection. A block
+// cursor is not a stage: it is resolved into the cell's colors up front.
 //
 // The pane background (fallback) is the base layer. Webview overlays
 // composite over it next. The cell's own background then composites OVER the
@@ -165,7 +169,7 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 // widget) occludes the webview and appears in front of it. Glyphs render
 // last, on top of everything.
 fn paint_grid_cell(hit: CellHit, fallback: vec4<f32>) -> vec4<f32> {
-    let colors = resolve_cell_colors(hit.cell);
+    let colors = resolve_painted_colors(hit.cell, hit.row, hit.col);
     var color = paint_inline_overlays(hit, fallback);
     color = blend_premultiplied_over(color, tint_bg(colors.bg));
     color = paint_primary_glyph(hit, colors.fg, color);
@@ -206,7 +210,7 @@ fn paint_right_strip(p_px: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
         p_px.x - f32(col) * params.cell_size_px.x,
         p_px.y - f32(row) * params.cell_size_px.y,
     );
-    let colors = resolve_cell_colors(strip_cell);
+    let colors = resolve_painted_colors(strip_cell, row, col);
     var color = blend_premultiplied_over(fallback, tint_bg(colors.bg));
     // NOTE: paint_cell_glyph (NOT paint_primary_glyph). strip_local.x is
     // in [cell_pitch.x, cell_pitch.x + max_overflow_phys) — already in
@@ -267,9 +271,9 @@ fn paint_left_overdraw(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
 // ============================================================================
 
 // Runs the three overlay stages in canonical order:
-// text decorations → cursor → selection. Used by both paint_grid_cell
-// and paint_right_strip so the strip cannot drift from the grid path
-// on overlay sequence or argument order.
+// text decorations → bar / underline cursor → selection. Used by both
+// paint_grid_cell and paint_right_strip so the strip cannot drift from the
+// grid path on overlay sequence or argument order.
 fn paint_cell_overlays(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
     var color = paint_text_decorations(
         hit.cell.style_flags,
@@ -278,7 +282,7 @@ fn paint_cell_overlays(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32
         base,
         hit.cell.hyperlink_id,
     );
-    color = paint_cursor(hit.row, hit.col, hit.in_cell_px, color);
+    color = paint_cursor(hit.row, hit.col, hit.in_cell_px, hit.cell, color);
     color = paint_selection(hit.row, hit.col, color);
     return color;
 }
@@ -381,17 +385,101 @@ fn bar_covers(row: u32, col: u32) -> bool {
     return row == params.cursor_pos.y && col == cursor_span_left();
 }
 
+// Whether the cursor is drawn this frame. The blink phase is decided on
+// the CPU, which packs an invisible style on every dark phase.
+fn cursor_is_lit() -> bool {
+    return (params.cursor_style & CURSOR_VISIBLE) != 0u;
+}
+
+// Whether a lit, filled block cursor covers (row, col). Runs for every
+// fragment, so the checks that read no cell come first. A hollow caret is
+// drawn as an outline instead, so it never takes over the cell's colors.
+fn block_cursor_covers(row: u32, col: u32) -> bool {
+    if row != params.cursor_pos.y {
+        return false;
+    }
+    if ((params.cursor_style >> 1u) & 3u) != CURSOR_SHAPE_BLOCK {
+        return false;
+    }
+    if (params.cursor_style & CURSOR_HOLLOW) != 0u {
+        return false;
+    }
+    if !cursor_is_lit() {
+        return false;
+    }
+    return cursor_covers(row, col);
+}
+
+// The color the cursor is painted in: the OSC 12 color when one is set,
+// else `cell_fg`.
+fn cursor_fill(cell_fg: vec4<f32>) -> vec4<f32> {
+    if params.cursor_packed != 0u {
+        return unpack_rgba(params.cursor_packed);
+    }
+    return cell_fg;
+}
+
+// The Rec.709 luminance of a linear color.
+fn luminance(rgb: vec3<f32>) -> f32 {
+    return dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// The WCAG contrast ratio of two linear colors, from 1.0 for equal
+// luminance upward.
+fn contrast_ratio(a: vec3<f32>, b: vec3<f32>) -> f32 {
+    let la = luminance(a);
+    let lb = luminance(b);
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05);
+}
+
+// The contrast a cursor fill must have against the ground it is painted
+// on; below it the fill is swapped for a default color.
+const MIN_CURSOR_CONTRAST: f32 = 1.5;
+
+// `fill` made opaque, or, when it would not stand out against `ground`,
+// whichever of the default foreground and background stands out more.
+fn guarded_fill(fill: vec4<f32>, ground: vec4<f32>) -> vec4<f32> {
+    if contrast_ratio(fill.rgb, ground.rgb) >= MIN_CURSOR_CONTRAST {
+        return vec4<f32>(fill.rgb, 1.0);
+    }
+    let default_fg = unpack_rgba(params.default_fg_packed).rgb;
+    let default_bg = materialize_default_bg(vec4<f32>(0.0)).rgb;
+    let fg_stands_out = contrast_ratio(default_fg, ground.rgb) >= contrast_ratio(default_bg, ground.rgb);
+    return vec4<f32>(select(default_bg, default_fg, fg_stands_out), 1.0);
+}
+
+// The colors (row, col) is painted in: the cell's own, or, under a lit
+// block cursor, the guarded fill as background and the cell's background
+// as the glyph color. A glyph that does not stand out from that
+// background takes the fill instead, so a full block of one color still
+// shows the cursor. Concealment applies last, so a concealed glyph
+// stays hidden inside the block.
+fn resolve_painted_colors(cell: Cell, row: u32, col: u32) -> CellColors {
+    var colors = resolve_visible_colors(cell);
+    if block_cursor_covers(row, col) {
+        let ground = materialize_default_bg(colors.bg);
+        let fill = guarded_fill(cursor_fill(colors.fg), ground);
+        let glyph_melts = contrast_ratio(colors.fg.rgb, ground.rgb) < MIN_CURSOR_CONTRAST;
+        colors = CellColors(select(ground, fill, glyph_melts), fill);
+    }
+    return conceal(cell, colors);
+}
+
+// Paints the cursors drawn as strokes clear of the glyph: the bar, the
+// underline, and the hollow outline an unfocused pane takes. The filled
+// block cursor is resolved into the cell's colors instead.
 fn paint_cursor(
     row: u32,
     col: u32,
     in_cell_px: vec2<f32>,
+    cell: Cell,
     base: vec4<f32>,
 ) -> vec4<f32> {
     // NOTE: cursor_covers and bar_covers both read the cell buffer, and
     // select evaluates both arms, so this uniform test must stay ahead of
     // them: a blinking caret packs an invisible style on every dark phase,
     // and without the early return every fragment pays those loads.
-    if (params.cursor_style & CURSOR_VISIBLE) == 0u {
+    if !cursor_is_lit() {
         return base;
     }
     let cursor_hollow = (params.cursor_style & CURSOR_HOLLOW) != 0u;
@@ -411,12 +499,12 @@ fn paint_cursor(
 
     let thickness = params.cursor_thickness_phys;
     // NOTE: paint_right_strip calls this with in_cell_px.x past the cell
-    // width. The block branch deliberately inverts that band so a wide
-    // glyph's overflow stays legible under a filled caret; every other
-    // branch that is not already bounded on x must test this or its stroke
-    // strays outside the cell.
+    // width, so every branch that is not already bounded on x must test
+    // this or its stroke strays outside the cell.
     let inside_cell = in_cell_px.x < params.cell_size_px.x;
-    let invert = vec4<f32>(1.0 - base.rgb, base.a);
+    let visible = resolve_visible_colors(cell);
+    let ground = tint_bg(materialize_default_bg(visible.bg));
+    let fill = guarded_fill(cursor_fill(visible.fg), ground);
     if cursor_hollow {
         if !inside_cell {
             return base;
@@ -437,20 +525,17 @@ fn paint_cursor(
             || (in_cell_px.x >= params.cell_size_px.x - edge_x
                 && col == cursor_span_right());
         if on_edge {
-            return invert;
+            return fill;
         }
         return base;
-    }
-    if cursor_shape == CURSOR_SHAPE_BLOCK {
-        return invert;
     }
     if cursor_shape == CURSOR_SHAPE_UNDERLINE
         && inside_cell
         && in_cell_px.y >= params.cell_size_px.y - thickness {
-        return invert;
+        return fill;
     }
     if cursor_shape == CURSOR_SHAPE_BAR && in_cell_px.x < thickness {
-        return invert;
+        return fill;
     }
     return base;
 }
@@ -503,7 +588,7 @@ fn is_in_selection_uniform(
 // (luma(a*c) = a*luma(c); a scalar multiply distributes through premultiply).
 // Active pane => overlay_dim == 1.0 && overlay_desaturate == 0.0 (no-op).
 fn treat_overlay(s: vec4<f32>) -> vec4<f32> {
-    let luma = dot(s.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let luma = luminance(s.rgb);
     let desat = mix(s.rgb, vec3<f32>(luma), params.overlay_desaturate);
     return vec4<f32>(desat * params.overlay_dim, s.a);
 }
@@ -618,40 +703,62 @@ fn locate_cell(p_px: vec2<f32>) -> CellHit {
 }
 
 // ============================================================================
-// Style resolution (reverse / hidden / dim)
+// Style resolution (reverse / dim, then concealment)
 // ============================================================================
 
-fn resolve_cell_colors(cell: Cell) -> CellColors {
+// The color the terminal default background paints: `c` itself, or the
+// padding color when `c` is the transparent sentinel.
+fn materialize_default_bg(c: vec4<f32>) -> vec4<f32> {
+    // NOTE: The terminal default bg maps to transparent (alpha=0) so that
+    // cells without an explicit background let webview overlays show through.
+    // When that transparent sentinel is promoted to a glyph color, it must
+    // be materialised as the colour the default background actually paints
+    // (bg_padding_color). A hardcoded black here would paint the glyph black
+    // once OSC 11 recolors the default background, which is unreadable on a
+    // dark cell.
+    if c.a == 0.0 {
+        return vec4<f32>(params.bg_padding_color.rgb, 1.0);
+    }
+    return c;
+}
+
+// Reverse video and dim applied; concealment is not.
+fn resolve_visible_colors(cell: Cell) -> CellColors {
     let style = cell.style_flags;
     let reverse = (style & STYLE_REVERSE) != 0u;
-    let hidden = (style & STYLE_HIDDEN) != 0u;
     let dim = (style & STYLE_DIM) != 0u;
 
     var fg = unpack_rgba(cell.fg_packed);
     var bg = unpack_rgba(cell.bg_packed);
 
-    if hidden {
-        fg = bg;
-    }
     if reverse {
         let tmp = fg;
-        fg = bg;
+        fg = materialize_default_bg(bg);
         bg = tmp;
-        // NOTE: The terminal default bg maps to transparent (alpha=0) so that
-        // cells without an explicit background let webview overlays show through.
-        // When reverse-video promotes that transparent sentinel to the glyph
-        // foreground color, materialise it as the colour that default
-        // background actually paints (bg_padding_color). A hardcoded black here
-        // would paint the glyph black once OSC 11 recolors the default
-        // background, which is unreadable on a dark reversed cell.
-        if fg.a == 0.0 {
-            fg = vec4<f32>(params.bg_padding_color.rgb, 1.0);
-        }
     }
     if dim {
         fg = vec4<f32>(fg.rgb * 0.66, fg.a);
     }
     return CellColors(fg, bg);
+}
+
+// `colors` with the glyph taking the color the background is painted in
+// when the cell is concealed.
+fn conceal(cell: Cell, colors: CellColors) -> CellColors {
+    if (cell.style_flags & STYLE_HIDDEN) != 0u {
+        // NOTE: The ground is painted through tint_bg, so the glyph must take
+        // the tinted color as well. The untinted background would leave the
+        // concealed text readable in an inactive pane, where the tint moves
+        // the ground away from it. tint_bg keeps the transparent sentinel, so
+        // a concealed glyph on the default background still paints no ink.
+        return CellColors(tint_bg(colors.bg), colors.bg);
+    }
+    return colors;
+}
+
+// The colors the cell is painted in when no cursor covers it.
+fn resolve_cell_colors(cell: Cell) -> CellColors {
+    return conceal(cell, resolve_visible_colors(cell));
 }
 
 // ============================================================================
