@@ -387,4 +387,44 @@ mod tests {
             "a window-exists-but-suppressed frame releases the in-flight inline press so CEF is not left pressed"
         );
     }
+
+    /// Asserts that a press inside an interactive inline rect hands CEF a
+    /// focus request followed by a press-phase click, in that order.
+    ///
+    /// Case: the user clicks a link on a page mounted into a pane, on a
+    /// platform where CEF is driven through its own UI thread.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_press_over_an_inline_rect_reaches_cef_focus_then_click() {
+        use bevy_cef_core::prelude::{BrowsersProxy, CefCommand};
+
+        let (mut app, _shell, child) = make_webview_app();
+        let (tx, rx) = async_channel::unbounded::<CefCommand>();
+        app.insert_resource(BrowsersProxy::new(tx));
+        set_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_left(&mut app, ButtonState::Pressed);
+        app.update();
+
+        let focus = rx.try_recv().expect("the press issued a focus request");
+        assert!(
+            matches!(
+                focus,
+                CefCommand::SetFocus { webview, focused: true } if webview == child
+            ),
+            "the ungated focus request precedes the click so the first click is not swallowed"
+        );
+        let click = rx.try_recv().expect("the press issued a click");
+        assert!(
+            matches!(
+                click,
+                CefCommand::SendMouseClick {
+                    webview,
+                    button: PointerButton::Primary,
+                    mouse_up: false,
+                    ..
+                } if webview == child
+            ),
+            "the press phase of the click reaches the focused child"
+        );
+    }
 }
