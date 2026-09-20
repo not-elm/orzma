@@ -59,10 +59,9 @@ pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
 /// `(terminal, local_phys)`, returning `true` when the event was CONSUMED and
 /// must NOT reach the host's terminal mouse pipeline.
 ///
-/// A press inside an interactive rect sets `FocusedWebview`, issues the
-/// UNGATED `set_focus` before the gated `send_mouse_click` so the first
-/// click is not swallowed by an unfocused browser, forwards the press in
-/// DIP, and records the in-flight press. A press outside every rect
+/// A press inside an interactive rect sets `FocusedWebview`, issues
+/// `set_focus` before `send_mouse_click`, forwards the press in DIP, and
+/// records the in-flight press. A press outside every rect
 /// clears an inline `FocusedWebview` and returns `false` (so the press
 /// falls through to the terminal). Release forwards the click-up to the
 /// recorded child (drift-tolerant) and clears.

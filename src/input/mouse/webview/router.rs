@@ -411,7 +411,7 @@ mod tests {
                 focus,
                 CefCommand::SetFocus { webview, focused: true } if webview == child
             ),
-            "the ungated focus request precedes the click so the first click is not swallowed"
+            "the focus request precedes the click so the first click is not swallowed"
         );
         let click = rx.try_recv().expect("the press issued a click");
         assert!(
