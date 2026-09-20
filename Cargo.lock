@@ -1289,6 +1289,7 @@ dependencies = [
  "ab_glyph",
  "bevy",
  "bevy_orzmux",
+ "bitflags 2.13.0",
  "orzma_vt",
  "orzmux",
  "rmp-serde",

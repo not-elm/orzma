@@ -2,7 +2,7 @@
 //! content, materialized from the frames applied to it.
 
 use crate::schema::{
-    AnchoredPlacement, CURSOR_VISIBLE_BIT, Color, Cursor, CursorShape, DisplayOffset, HyperlinkId,
+    AnchoredPlacement, Color, Cursor, CursorShape, DisplayOffset, GridPoint, HyperlinkId,
     HyperlinkUri, Palette, Run, SelectionRange, ViCursor,
 };
 use bevy::prelude::*;
@@ -85,11 +85,9 @@ pub struct TerminalView {
     pub selection: Option<SelectionRange>,
     /// Lines scrolled back from the live tail; 0 = at live tail.
     pub display_offset: u32,
-    /// App-level cursor visibility override. When `true`,
-    /// [`Self::current_cursor_pos_and_style`] clears
-    /// [`CURSOR_VISIBLE_BIT`] before returning. It is independent of
-    /// `Cursor.visible`, so it hides the cursor without clobbering
-    /// terminal-controlled state.
+    /// App-level cursor visibility override. When `true`, the caret
+    /// is not painted. It is independent of `Cursor.visible`, so it
+    /// hides the cursor without clobbering terminal-controlled state.
     pub suppress_cursor: bool,
     /// Webview placements in active-grid coordinates, mirrored from the
     /// last applied frame. Every frame that carries a list replaces
@@ -103,12 +101,7 @@ impl TerminalView {
     /// `None` when no frame has arrived yet or the cursor's line is
     /// scrolled out of the visible rows.
     pub fn cursor_viewport_cell(&self) -> Option<(u16, u16)> {
-        let cursor = self.cursor.as_ref()?;
-        let row = cursor
-            .point
-            .line
-            .to_viewport(DisplayOffset(self.display_offset), self.rows)?;
-        Some((cursor.point.column.0, row.0))
+        self.project(self.cursor.as_ref()?.point)
     }
 
     /// Projects the cursor into viewport cells as `(column, row)`, but
@@ -119,45 +112,36 @@ impl TerminalView {
         let Some(cursor) = self.cursor.as_ref() else {
             return (0, 0);
         };
-        let row = cursor
-            .point
-            .line
-            .to_viewport(DisplayOffset(self.display_offset), self.rows)
-            .map_or(0, |row| row.0);
-        (cursor.point.column.0, row)
+        self.project(cursor.point)
+            .unwrap_or((cursor.point.column.0, 0))
     }
 
-    /// Returns the viewport cursor cell and the packed style the
-    /// shader decodes, preferring the vi cursor over the live cursor.
+    /// The cursor this view paints and the viewport cell it occupies,
+    /// or `None` when no cursor projects into the viewport.
     ///
-    /// A cursor whose grid point projects outside the viewport (the
-    /// user has scrolled it away) paints nothing: both the position
-    /// and the packed style stay zero.
-    pub fn current_cursor_pos_and_style(&self) -> (UVec2, u32) {
-        let offset = DisplayOffset(self.display_offset);
-        let mut cursor_pos = UVec2::ZERO;
-        let mut cursor_style = 0;
-        if let Some(vc) = self.vi_cursor {
-            if let Some(line) = vc.point.line.to_viewport(offset, self.rows) {
-                cursor_pos = UVec2::new(u32::from(vc.point.column.0), u32::from(line.0));
-                cursor_style = Cursor {
-                    point: vc.point,
-                    shape: CursorShape::Block,
-                    blinking: false,
-                    visible: true,
-                }
-                .pack_cursor_style();
-            }
-        } else if let Some(c) = self.cursor.as_ref()
-            && let Some(line) = c.point.line.to_viewport(offset, self.rows)
-        {
-            cursor_pos = UVec2::new(u32::from(c.point.column.0), u32::from(line.0));
-            cursor_style = c.pack_cursor_style();
-        }
-        if self.suppress_cursor {
-            cursor_style &= !CURSOR_VISIBLE_BIT;
-        }
-        (cursor_pos, cursor_style)
+    /// The vi cursor takes precedence over the live cursor and is
+    /// reported as a visible steady block.
+    pub fn caret(&self) -> Option<(UVec2, Cursor)> {
+        let cursor = match self.vi_cursor {
+            Some(vc) => Cursor {
+                point: vc.point,
+                shape: CursorShape::Block,
+                blinking: false,
+                visible: true,
+            },
+            None => *self.cursor.as_ref()?,
+        };
+        let (column, row) = self.project(cursor.point)?;
+        Some((UVec2::new(u32::from(column), u32::from(row)), cursor))
+    }
+
+    /// Projects a grid point into viewport cells as `(column, row)`, or
+    /// `None` when its line is scrolled out of the visible rows.
+    fn project(&self, point: GridPoint) -> Option<(u16, u16)> {
+        let row = point
+            .line
+            .to_viewport(DisplayOffset(self.display_offset), self.rows)?;
+        Some((point.column.0, row.0))
     }
 
     /// Whether applying `frame` would change this view.
@@ -516,22 +500,21 @@ mod tests {
         }
     }
 
-    /// Asserts that a visible cursor reports its viewport cell and a
-    /// packed style with the visible bit set.
+    /// Asserts that a live cursor is reported with the viewport cell
+    /// it projects to.
     ///
     /// Case: the shell sits at an ordinary prompt with the caret
     /// shown.
     #[test]
-    fn current_cursor_pos_and_style_returns_packed_style_when_not_suppressed() {
+    fn caret_reports_the_live_cursor_and_its_viewport_cell() {
         let view = TerminalView {
             rows: 24,
             cursor: Some(visible_block_cursor()),
-            suppress_cursor: false,
             ..Default::default()
         };
-        let (pos, style) = view.current_cursor_pos_and_style();
+        let (pos, cursor) = view.caret().expect("the cursor projects");
         assert_eq!(pos, UVec2::new(3, 5));
-        assert_eq!(style & CURSOR_VISIBLE_BIT, CURSOR_VISIBLE_BIT);
+        assert!(cursor.visible);
     }
 
     /// Asserts that `cursor_viewport_cell` follows the display offset and
@@ -594,62 +577,46 @@ mod tests {
         assert_eq!(view.cursor_viewport_cell_or_top(), (5, 0));
     }
 
-    /// Asserts that suppression clears the visible bit of the packed
-    /// style.
+    /// Asserts that the vi cursor is reported ahead of the live one,
+    /// as a visible steady block at its own projected cell.
     ///
-    /// Case: an IME composition temporarily hides the caret.
+    /// Case: the user enters vi mode and moves the vi caret away from
+    /// the shell's own cursor.
     #[test]
-    fn current_cursor_pos_and_style_clears_visible_bit_when_suppressed() {
+    fn caret_prefers_the_vi_cursor() {
         let view = TerminalView {
             rows: 24,
             cursor: Some(visible_block_cursor()),
-            suppress_cursor: true,
-            ..Default::default()
-        };
-        let (_pos, style) = view.current_cursor_pos_and_style();
-        assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
-    }
-
-    /// Asserts that suppression clears only the visible bit while the
-    /// vi cursor's projected position is still reported.
-    ///
-    /// Case: an IME composition hides the caret while a projected
-    /// cursor position is already recorded on the mirror.
-    #[test]
-    fn suppress_cursor_does_not_affect_vi_cursor_position() {
-        let view = TerminalView {
-            rows: 24,
             vi_cursor: Some(ViCursor {
                 point: GridPoint {
                     line: GridLine(2),
                     column: GridColumn(7),
                 },
             }),
-            suppress_cursor: true,
             ..Default::default()
         };
-        let (pos, style) = view.current_cursor_pos_and_style();
+        let (pos, cursor) = view.caret().expect("the vi cursor projects");
         assert_eq!(pos, UVec2::new(7, 2));
-        assert_eq!(style & CURSOR_VISIBLE_BIT, 0);
+        assert_eq!(cursor.shape, CursorShape::Block);
+        assert!(cursor.visible);
+        assert!(!cursor.blinking);
     }
 
     /// Asserts that a cursor whose line projects outside the viewport
-    /// paints nothing rather than being clamped to an edge cell it does
-    /// not occupy.
+    /// is reported as absent rather than clamped to an edge cell it
+    /// does not occupy.
     ///
     /// Case: the user scrolls back through history while the shell
     /// keeps its caret on the live prompt line below the viewport.
     #[test]
-    fn a_scrolled_away_cursor_paints_nothing() {
+    fn a_scrolled_away_cursor_projects_to_nothing() {
         let view = TerminalView {
             rows: 24,
             display_offset: 30,
             cursor: Some(visible_block_cursor()),
             ..Default::default()
         };
-        let (pos, style) = view.current_cursor_pos_and_style();
-        assert_eq!(pos, UVec2::ZERO);
-        assert_eq!(style, 0);
+        assert_eq!(view.caret(), None);
     }
 
     /// Asserts that a moved cursor is a difference, and that applying
