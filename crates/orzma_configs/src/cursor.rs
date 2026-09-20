@@ -1,6 +1,6 @@
 //! Cursor configuration: the `[cursor]` section.
 
-use crate::inactive_pane::norm_unit;
+use crate::norm_unit;
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -54,10 +54,15 @@ impl Default for CursorConfig {
 }
 
 impl CursorConfig {
-    /// The interval between blink phases. A zero interval leaves the
-    /// caret steady; any other value below 10 ms is raised to 10 ms.
-    pub fn blink_interval(&self) -> Duration {
-        Duration::from_millis(raised_interval(self.blink_interval))
+    /// The interval between blink phases; `None` when the caret does
+    /// not blink. A value below 10 ms is raised to 10 ms.
+    pub fn blink_interval(&self) -> Option<Duration> {
+        if self.blink_interval == 0 {
+            return None;
+        }
+        Some(Duration::from_millis(
+            self.blink_interval.max(MIN_BLINK_INTERVAL_MS),
+        ))
     }
 
     /// How long the caret keeps blinking with no keystroke; `None` when
@@ -69,6 +74,7 @@ impl CursorConfig {
         }
         Some(
             self.blink_interval()
+                .unwrap_or(Duration::ZERO)
                 .saturating_mul(2)
                 .max(Duration::from_secs(self.blink_timeout)),
         )
@@ -79,13 +85,6 @@ impl CursorConfig {
     pub fn thickness(&self) -> f32 {
         norm_unit(self.thickness, DEFAULT_THICKNESS)
     }
-
-    /// Raises a non-zero `blink_interval` to its floor and clamps
-    /// `thickness` to `0.0..=1.0`, falling back to the default for NaN.
-    pub(crate) fn normalize(&mut self) {
-        self.blink_interval = raised_interval(self.blink_interval);
-        self.thickness = norm_unit(self.thickness, DEFAULT_THICKNESS);
-    }
 }
 
 const DEFAULT_BLINK_INTERVAL_MS: u64 = 750;
@@ -93,21 +92,12 @@ const DEFAULT_BLINK_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_THICKNESS: f32 = 0.15;
 const MIN_BLINK_INTERVAL_MS: u64 = 10;
 
-fn raised_interval(ms: u64) -> u64 {
-    if ms == 0 {
-        return 0;
-    }
-    ms.max(MIN_BLINK_INTERVAL_MS)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn from_toml_normalized(s: &str) -> CursorConfig {
-        let mut c: CursorConfig = toml::from_str(s).expect("the fixture parses");
-        c.normalize();
-        c
+    fn from_toml(s: &str) -> CursorConfig {
+        toml::from_str(s).expect("the fixture parses")
     }
 
     /// Asserts that an empty section resolves to a block caret with the
@@ -119,7 +109,7 @@ mod tests {
         let cfg = CursorConfig::default();
         assert_eq!(cfg.style, CursorStyleSetting::Block);
         assert!(cfg.unfocused_hollow);
-        assert_eq!(cfg.blink_interval(), Duration::from_millis(750));
+        assert_eq!(cfg.blink_interval(), Some(Duration::from_millis(750)));
         assert_eq!(cfg.blink_timeout(), Some(Duration::from_secs(5)));
         assert_eq!(cfg.thickness(), 0.15);
     }
@@ -131,10 +121,7 @@ mod tests {
     /// `blink_timeout = 0`.
     #[test]
     fn a_zero_timeout_blinks_indefinitely() {
-        assert_eq!(
-            from_toml_normalized("blink_timeout = 0").blink_timeout(),
-            None
-        );
+        assert_eq!(from_toml("blink_timeout = 0").blink_timeout(), None);
     }
 
     /// Asserts that the effective timeout is raised to one full blink
@@ -144,24 +131,21 @@ mod tests {
     /// the default 750 ms.
     #[test]
     fn a_timeout_shorter_than_one_cycle_is_raised() {
-        let cfg = from_toml_normalized("blink_timeout = 1");
+        let cfg = from_toml("blink_timeout = 1");
         assert_eq!(cfg.blink_timeout(), Some(Duration::from_millis(1500)));
     }
 
-    /// Asserts that a zero interval is kept, leaving the caret steady,
-    /// while any other value below the floor is raised to it.
+    /// Asserts that a zero interval reports no blink at all, while any
+    /// other value below the floor is raised to it.
     ///
     /// Case: one user turns blinking off with `blink_interval = 0`, and
     /// another writes a 5 ms interval while experimenting.
     #[test]
-    fn a_zero_interval_is_kept_and_a_low_one_is_raised() {
+    fn a_zero_interval_reports_no_blink_and_a_low_one_is_raised() {
+        assert_eq!(from_toml("blink_interval = 0").blink_interval(), None);
         assert_eq!(
-            from_toml_normalized("blink_interval = 0").blink_interval(),
-            Duration::ZERO
-        );
-        assert_eq!(
-            from_toml_normalized("blink_interval = 5").blink_interval(),
-            Duration::from_millis(10)
+            from_toml("blink_interval = 5").blink_interval(),
+            Some(Duration::from_millis(10))
         );
     }
 
@@ -171,9 +155,9 @@ mod tests {
     /// Case: the user writes an out-of-range thickness.
     #[test]
     fn thickness_clamps_and_nan_falls_back() {
-        assert_eq!(from_toml_normalized("thickness = 4.0").thickness(), 1.0);
-        assert_eq!(from_toml_normalized("thickness = -1.0").thickness(), 0.0);
-        assert_eq!(from_toml_normalized("thickness = nan").thickness(), 0.15);
+        assert_eq!(from_toml("thickness = 4.0").thickness(), 1.0);
+        assert_eq!(from_toml("thickness = -1.0").thickness(), 0.0);
+        assert_eq!(from_toml("thickness = nan").thickness(), 0.15);
     }
 
     /// Asserts that an unrecognized `style` word falls back to the
@@ -182,7 +166,7 @@ mod tests {
     /// Case: the user misspells `underline` as `underlien`.
     #[test]
     fn an_unknown_word_falls_back_to_the_default() {
-        let cfg = from_toml_normalized("style = \"underlien\"");
+        let cfg = from_toml("style = \"underlien\"");
         assert_eq!(cfg.style, CursorStyleSetting::Block);
     }
 

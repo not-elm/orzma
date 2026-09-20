@@ -2,8 +2,8 @@
 //! content, materialized from the frames applied to it.
 
 use crate::schema::{
-    AnchoredPlacement, Color, Cursor, CursorShape, DisplayOffset, HyperlinkId, HyperlinkUri,
-    Palette, Run, SelectionRange, ViCursor,
+    AnchoredPlacement, Color, Cursor, CursorShape, DisplayOffset, GridPoint, HyperlinkId,
+    HyperlinkUri, Palette, Run, SelectionRange, ViCursor,
 };
 use bevy::prelude::*;
 #[cfg(test)]
@@ -101,12 +101,7 @@ impl TerminalView {
     /// `None` when no frame has arrived yet or the cursor's line is
     /// scrolled out of the visible rows.
     pub fn cursor_viewport_cell(&self) -> Option<(u16, u16)> {
-        let cursor = self.cursor.as_ref()?;
-        let row = cursor
-            .point
-            .line
-            .to_viewport(DisplayOffset(self.display_offset), self.rows)?;
-        Some((cursor.point.column.0, row.0))
+        self.project(self.cursor.as_ref()?.point)
     }
 
     /// Projects the cursor into viewport cells as `(column, row)`, but
@@ -117,12 +112,8 @@ impl TerminalView {
         let Some(cursor) = self.cursor.as_ref() else {
             return (0, 0);
         };
-        let row = cursor
-            .point
-            .line
-            .to_viewport(DisplayOffset(self.display_offset), self.rows)
-            .map_or(0, |row| row.0);
-        (cursor.point.column.0, row)
+        self.project(cursor.point)
+            .unwrap_or((cursor.point.column.0, 0))
     }
 
     /// The cursor this view paints and the viewport cell it occupies,
@@ -131,22 +122,26 @@ impl TerminalView {
     /// The vi cursor takes precedence over the live cursor and is
     /// reported as a visible steady block.
     pub fn caret(&self) -> Option<(UVec2, Cursor)> {
-        let offset = DisplayOffset(self.display_offset);
-        if let Some(vc) = self.vi_cursor {
-            let line = vc.point.line.to_viewport(offset, self.rows)?;
-            return Some((
-                UVec2::new(u32::from(vc.point.column.0), u32::from(line.0)),
-                Cursor {
-                    point: vc.point,
-                    shape: CursorShape::Block,
-                    blinking: false,
-                    visible: true,
-                },
-            ));
-        }
-        let cursor = self.cursor.as_ref()?;
-        let (column, row) = self.cursor_viewport_cell()?;
-        Some((UVec2::new(u32::from(column), u32::from(row)), *cursor))
+        let cursor = match self.vi_cursor {
+            Some(vc) => Cursor {
+                point: vc.point,
+                shape: CursorShape::Block,
+                blinking: false,
+                visible: true,
+            },
+            None => *self.cursor.as_ref()?,
+        };
+        let (column, row) = self.project(cursor.point)?;
+        Some((UVec2::new(u32::from(column), u32::from(row)), cursor))
+    }
+
+    /// Projects a grid point into viewport cells as `(column, row)`, or
+    /// `None` when its line is scrolled out of the visible rows.
+    fn project(&self, point: GridPoint) -> Option<(u16, u16)> {
+        let row = point
+            .line
+            .to_viewport(DisplayOffset(self.display_offset), self.rows)?;
+        Some((point.column.0, row.0))
     }
 
     /// Whether applying `frame` would change this view.

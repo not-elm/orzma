@@ -115,6 +115,7 @@ pub(crate) fn env_guard() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn plugin_inserts_configs_resource_matching_defaults_when_no_config_file() {
@@ -281,9 +282,9 @@ mod tests {
         let mut config = CursorConfig::default();
         config.unfocused_hollow = false;
         let style = caret_style(&config);
-        assert_eq!(style.blink_interval, config.blink_interval());
-        assert_eq!(style.blink_timeout, config.blink_timeout());
-        assert_eq!(style.thickness, config.thickness());
+        assert_eq!(style.blink_interval, Some(Duration::from_millis(750)));
+        assert_eq!(style.blink_timeout, Some(Duration::from_secs(5)));
+        assert_eq!(style.thickness, 0.15);
         assert!(!style.unfocused_hollow);
     }
 }

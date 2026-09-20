@@ -4,9 +4,17 @@ use std::time::Duration;
 
 /// Whether the blink phase is lit `elapsed` after the last keystroke.
 ///
-/// Reports `true` once `timeout` has passed, and for a zero `interval`.
-/// A `None` timeout blinks indefinitely.
-pub fn blink_phase_on(elapsed: Duration, interval: Duration, timeout: Option<Duration>) -> bool {
+/// Reports `true` for a caret that does not blink, once `timeout` has
+/// passed, and for a zero `interval`. A `None` timeout blinks
+/// indefinitely.
+pub fn blink_phase_on(
+    elapsed: Duration,
+    interval: Option<Duration>,
+    timeout: Option<Duration>,
+) -> bool {
+    let Some(interval) = interval else {
+        return true;
+    };
     if let Some(timeout) = timeout
         && elapsed >= timeout
     {
@@ -32,19 +40,27 @@ mod tests {
     fn the_phase_alternates_then_settles_lit_until_the_next_keystroke() {
         let interval = Duration::from_millis(750);
         let timeout = Some(Duration::from_secs(5));
-        assert!(blink_phase_on(Duration::ZERO, interval, timeout));
+        assert!(blink_phase_on(Duration::ZERO, Some(interval), timeout));
         assert!(!blink_phase_on(
             Duration::from_millis(750),
-            interval,
+            Some(interval),
             timeout
         ));
         assert!(blink_phase_on(
             Duration::from_millis(1500),
-            interval,
+            Some(interval),
             timeout
         ));
-        assert!(blink_phase_on(Duration::from_secs(5), interval, timeout));
-        assert!(blink_phase_on(Duration::from_secs(600), interval, timeout));
+        assert!(blink_phase_on(
+            Duration::from_secs(5),
+            Some(interval),
+            timeout
+        ));
+        assert!(blink_phase_on(
+            Duration::from_secs(600),
+            Some(interval),
+            timeout
+        ));
     }
 
     /// Asserts that a `None` timeout blinks indefinitely rather than
@@ -54,21 +70,31 @@ mod tests {
     #[test]
     fn a_none_timeout_keeps_blinking() {
         let interval = Duration::from_millis(750);
-        assert!(!blink_phase_on(Duration::from_millis(750), interval, None));
+        assert!(!blink_phase_on(
+            Duration::from_millis(750),
+            Some(interval),
+            None
+        ));
         assert!(!blink_phase_on(
             Duration::from_secs(6000) + Duration::from_millis(750),
-            interval,
+            Some(interval),
             None
         ));
     }
 
-    /// Asserts that a zero interval does not divide by zero, reporting a
-    /// lit phase instead.
+    /// Asserts that a caret with no interval reports a lit phase, and
+    /// that a zero interval does the same rather than dividing by zero.
     ///
-    /// Case: a caller passes an unclamped interval straight from a
-    /// malformed config.
+    /// Case: the user turns blinking off with `blink_interval = 0`, and
+    /// separately a caller builds a `CaretStyle` with a zero interval by
+    /// hand.
     #[test]
-    fn a_zero_interval_reports_a_lit_phase() {
-        assert!(blink_phase_on(Duration::from_secs(1), Duration::ZERO, None));
+    fn a_caret_that_does_not_blink_reports_a_lit_phase() {
+        assert!(blink_phase_on(Duration::from_secs(1), None, None));
+        assert!(blink_phase_on(
+            Duration::from_secs(1),
+            Some(Duration::ZERO),
+            None
+        ));
     }
 }

@@ -396,7 +396,15 @@ fn paint_cursor(
     }
     let cursor_hollow = (params.cursor_style & CURSOR_HOLLOW) != 0u;
     let cursor_shape = (params.cursor_style >> 1u) & 3u;
-    let on_cursor_cell = select(cursor_covers(row, col), bar_covers(row, col), cursor_shape == CURSOR_SHAPE_BAR);
+    // NOTE: cursor_shape comes from the uniform, so this branch is
+    // wave-uniform and runs one arm; `select` would evaluate both, and
+    // each arm reads the cell buffer.
+    var on_cursor_cell: bool;
+    if cursor_shape == CURSOR_SHAPE_BAR {
+        on_cursor_cell = bar_covers(row, col);
+    } else {
+        on_cursor_cell = cursor_covers(row, col);
+    }
     if !on_cursor_cell {
         return base;
     }
@@ -419,11 +427,15 @@ fn paint_cursor(
         // Each axis keeps its stroke under half of its own extent.
         let edge_x = min(thickness, (params.cell_size_px.x - 1.0) * 0.5);
         let edge_y = min(thickness, (params.cell_size_px.y - 1.0) * 0.5);
+        // NOTE: the in-cell tests come first on purpose. `&&` short
+        // circuits left to right, and the span helpers read the cell
+        // buffer, so testing them first would pay that read for every
+        // interior fragment the comparison then rejects.
         let on_edge = in_cell_px.y < edge_y
             || in_cell_px.y >= params.cell_size_px.y - edge_y
-            || (col == cursor_span_left() && in_cell_px.x < edge_x)
-            || (col == cursor_span_right()
-                && in_cell_px.x >= params.cell_size_px.x - edge_x);
+            || (in_cell_px.x < edge_x && col == cursor_span_left())
+            || (in_cell_px.x >= params.cell_size_px.x - edge_x
+                && col == cursor_span_right());
         if on_edge {
             return invert;
         }

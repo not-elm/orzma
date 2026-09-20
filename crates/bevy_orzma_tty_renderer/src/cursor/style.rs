@@ -6,8 +6,9 @@ use std::time::Duration;
 /// The caret drawing knobs the renderer reads each frame.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct CaretStyle {
-    /// The interval between blink phases.
-    pub blink_interval: Duration,
+    /// The interval between blink phases; `None` leaves the caret
+    /// steady.
+    pub blink_interval: Option<Duration>,
     /// How long the caret keeps blinking with no keystroke; `None`
     /// blinks indefinitely.
     pub blink_timeout: Option<Duration>,
@@ -20,7 +21,7 @@ pub struct CaretStyle {
 impl Default for CaretStyle {
     fn default() -> Self {
         Self {
-            blink_interval: Duration::from_millis(750),
+            blink_interval: Some(Duration::from_millis(750)),
             blink_timeout: Some(Duration::from_secs(5)),
             thickness: 0.15,
             unfocused_hollow: true,

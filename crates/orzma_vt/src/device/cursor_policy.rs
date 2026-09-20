@@ -21,8 +21,8 @@ impl TextCursorStyle {
 /// The host-supplied policy the device applies to cursor sequences.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CursorPolicy {
-    /// The style `DECSCUSR` with a zero or a seven, `RIS` and `DECSTR`
-    /// restore, and the style a terminal starts with.
+    /// The style `DECSCUSR` with a zero or a seven and `RIS` restore,
+    /// and the style a terminal starts with. `DECSTR` does not.
     pub initial: TextCursorStyle,
 }
 
@@ -30,8 +30,8 @@ pub struct CursorPolicy {
 mod tests {
     use super::*;
 
-    /// Asserts that the default policy is a steady block, matching the
-    /// power-up state.
+    /// Asserts that the default policy is a steady block, which a host
+    /// that injects a policy overrides.
     ///
     /// Case: a host builds a terminal without injecting a policy, as a
     /// test fixture does.

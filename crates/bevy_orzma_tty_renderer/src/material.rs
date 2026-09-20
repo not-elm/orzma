@@ -1661,9 +1661,9 @@ mod tests {
         assert!(painter.contains("cursor_covers(row, col)"));
         assert!(painter.contains("bar_covers(row, col)"));
         assert!(src.contains("fn bar_covers("));
-        assert!(painter.contains(
-            "select(cursor_covers(row, col), bar_covers(row, col), cursor_shape == CURSOR_SHAPE_BAR)"
-        ));
+        assert!(painter.contains("if cursor_shape == CURSOR_SHAPE_BAR"));
+        assert!(painter.contains("on_cursor_cell = bar_covers(row, col);"));
+        assert!(painter.contains("on_cursor_cell = cursor_covers(row, col);"));
     }
 
     /// Asserts that the marks the shader draws as lines are left out of

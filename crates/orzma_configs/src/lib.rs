@@ -27,6 +27,15 @@ pub mod path;
 pub mod shortcuts;
 pub mod vi_mode;
 
+/// Returns `v` clamped to `0.0..=1.0`, or `default` when `v` is NaN.
+pub(crate) fn norm_unit(v: f32, default: f32) -> f32 {
+    if v.is_nan() {
+        default
+    } else {
+        v.clamp(0.0, 1.0)
+    }
+}
+
 /// Fully-resolved orzma configuration.
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -96,7 +105,6 @@ impl OrzmaConfigs {
         self.shortcuts.normalize();
         self.inactive_pane.normalize();
         self.mouse.normalize();
-        self.cursor.normalize();
     }
 
     fn validate(&self) -> OrzmaConfigsResult<()> {
