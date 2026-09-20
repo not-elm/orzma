@@ -46,7 +46,8 @@ impl Plugin for MouseWebviewRouterPlugin {
             Update,
             forward_webview_wheel
                 .in_set(InputPhase::Dispatch)
-                .run_if(on_message::<MouseWheel>),
+                .run_if(on_message::<MouseWheel>)
+                .run_if(not(any_with_component::<GrabbedSeparator>)),
         );
     }
 }
@@ -200,6 +201,9 @@ fn forward_webview_mouse_moves(
     let Ok(window) = windows.single() else {
         return;
     };
+    if !window.focused {
+        return;
+    }
     let frame = webview_pointer_frame(window, &metrics);
     let cursor_phys = moved.position * frame.scale;
     let deps = WebviewMoveDeps {
@@ -282,10 +286,14 @@ fn forward_webview_wheel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "windows")]
+    use async_channel::Receiver;
     use bevy::input::ButtonState;
     use bevy::math::{DVec2, IVec4};
     use bevy::window::WindowResolution;
     use bevy_cef::prelude::FocusedWebview;
+    #[cfg(target_os = "windows")]
+    use bevy_cef_core::prelude::{BrowsersProxy, CefCommand};
     use bevy_orzma_tty_renderer::CellMetrics;
     use orzma_vt::prelude::InstanceId;
 
@@ -440,8 +448,6 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn a_press_over_an_inline_rect_reaches_cef_focus_then_click() {
-        use bevy_cef_core::prelude::{BrowsersProxy, CefCommand};
-
         let (mut app, _shell, child) = make_webview_app();
         let (tx, rx) = async_channel::unbounded::<CefCommand>();
         app.insert_resource(BrowsersProxy::new(tx));
@@ -521,5 +527,71 @@ mod tests {
             None,
             "the press is released by its own terminal's suppression, not by what lies under the pointer"
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    fn make_move_app() -> (App, Entity, Entity, Receiver<CefCommand>) {
+        let (mut app, shell, child) = make_webview_app();
+        let (tx, rx) = async_channel::unbounded::<CefCommand>();
+        app.insert_resource(BrowsersProxy::new(tx));
+        app.add_message::<CursorMoved>();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        app.add_systems(Update, forward_webview_mouse_moves);
+        (app, shell, child, rx)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn write_cursor_moved(app: &mut App, logical: Vec2) {
+        app.world_mut()
+            .resource_mut::<Messages<CursorMoved>>()
+            .write(CursorMoved {
+                window: Entity::PLACEHOLDER,
+                position: logical,
+                delta: None,
+            });
+    }
+
+    /// Asserts that an unfocused window forwards no pointer motion to CEF.
+    ///
+    /// Case: the user switches to another application and moves the mouse
+    /// across the still-visible orzma window.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn an_unfocused_window_forwards_no_motion() {
+        let (mut app, _shell, _child, rx) = make_move_app();
+        let win = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().get_mut::<Window>(win).unwrap().focused = false;
+        write_cursor_moved(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+        assert!(
+            rx.is_empty(),
+            "an unfocused window must not paint hover state into the page"
+        );
+    }
+
+    /// Asserts that motion over an interactive rect in a focused window
+    /// reaches CEF as a `SendMouseMove` for the child under the pointer.
+    ///
+    /// Case: the user moves the pointer across a link inside a page mounted
+    /// in a pane.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_focused_window_forwards_motion_over_the_rect() {
+        let (mut app, _shell, child, rx) = make_move_app();
+        write_cursor_moved(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+        let command = rx.try_recv().expect("the proxy received one command");
+        assert!(
+            matches!(
+                command,
+                CefCommand::SendMouseMove { webview, mouse_leave: false, .. } if webview == child
+            ),
+            "motion over the rect is forwarded to the child under the pointer"
+        );
+        assert!(rx.is_empty(), "exactly one command is sent for one move");
     }
 }
