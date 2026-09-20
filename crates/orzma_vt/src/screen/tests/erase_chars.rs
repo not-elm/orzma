@@ -165,13 +165,14 @@ fn erasing_the_last_column_without_a_pending_wrap_clears_it() {
     );
 }
 
-/// Asserts that erased cells lose the foreground and styling they
-/// carried and take the pen's background.
+/// Asserts that erased cells take the pen's foreground and background
+/// but none of its styling.
 ///
-/// Case: an application clears a field that was drawn in bold on a
-/// colored background, while its pen now carries a different one.
+/// Case: an editor clears a field it had drawn in bold on a colored
+/// background while its pen still carries bold and a different
+/// foreground and background.
 #[test]
-fn erasing_characters_clears_the_attributes_and_takes_the_pen_background() {
+fn erasing_characters_takes_the_pen_colors_but_not_its_styling() {
     let mut screen = screen();
     screen.pen_mut().fg = Color::Indexed(1);
     screen.pen_mut().bg = Color::Indexed(2);
@@ -181,13 +182,12 @@ fn erasing_characters_clears_the_attributes_and_takes_the_pen_background() {
             .print(classified(c), PrintOptions::default())
             .expect("a printable glyph");
     }
-    screen.pen_mut().fg = Color::DefaultForeground;
+    screen.pen_mut().fg = Color::Indexed(3);
     screen.pen_mut().bg = Color::Indexed(4);
-    screen.pen_mut().style = Style::empty();
     screen.state.column = GridColumn(1);
     screen.erase_chars(1, AutoWrap::Enabled);
     assert_eq!(screen.grid[ScreenLine(0)][1].c, ' ');
-    assert_eq!(screen.grid[ScreenLine(0)][1].fg, Color::DefaultForeground);
+    assert_eq!(screen.grid[ScreenLine(0)][1].fg, Color::Indexed(3));
     assert_eq!(screen.grid[ScreenLine(0)][1].style, Style::empty());
     assert_eq!(screen.grid[ScreenLine(0)][1].bg, Color::Indexed(4));
     assert_eq!(screen.grid[ScreenLine(0)][0].c, 'a');
