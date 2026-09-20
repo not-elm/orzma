@@ -57,13 +57,6 @@ Tier 1 / 2 の行としては実装済みだが、未対応のまま残ってい
 - [ ] **OSC 11: `padding_color` の黒センチネル**（設定 PR とセット）
   - 既定背景が黒だと fallback 色に倒れるので、明示の `OSC 11;rgb:00/00/00` も同じ扱いになる。
   - この分岐は、グリッドの地・padding 帯・`materialize_default_bg` を通る 2 つのグリフ色（reverse video と、ブロックカーソル下の文字色）・カーソルのコントラストガード（`guarded_fill`）が倒す先の既定背景色を決めている。値で兼用せず、「一度でも設定されたか」を別の信号で持つ。
-- [ ] **RIS: 設定済みの初期カーソル style へのリセット**（設定層待ち）
-  - `DeviceState::reset` が、コンパイル時定数ではなく設定の初期 style を読むようにする。
-  - DECSCUSR `7` の腕も同じ初期 style を読むが、`7` 自体は対象外にした（末尾を参照）。
-- [ ] **DECSCUSR / `?12`: カーソル描画の欠陥**（設定 PR とセット）
-  - bar / underline の太さが物理ピクセルの `thickness = 2.0` 決め打ちで、DPR にもフォントサイズにも追随しない。
-  - 最終列の underline カーソルが `paint_right_strip` の帯にはみ出す。
-  - 点滅の位相が打鍵でリセットされず、非フォーカスでも止まらない。
 
 ## 対象外 — Alacritty も実装していないもの
 
@@ -108,9 +101,6 @@ Alacritty 同梱の `extra/alacritty.info` も、下の terminfo capability を 
 
 ### 実装済み行の積み残し
 
-- **DECSCUSR `7`: 設定済みの初期 style へのリセット**（Tier 2 の行）
-  - `7` の腕が、コンパイル時定数ではなく設定の初期 style を読むようにする。
-  - Alacritty: DECSCUSR は 0〜6 しか受け付けず、7 は無視する。設定の style に戻すのは 0 番。
 - **`CSI 0 T` の読み**（Tier 2 の行、観察、未修正）
   - xterm は XTHIMOUSE と読むが、orzma は SD として 1 行スクロールする（`the_scroll_down_sequence_scrolls_the_region_down` がこの挙動を固定している）。
   - Alacritty: パラメータ 0 を既定値 1 に読み替えるので、orzma と同じく SD として 1 行スクロールする。

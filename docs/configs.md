@@ -11,8 +11,8 @@ orzma resolves the config path in this order:
 2. `$XDG_CONFIG_HOME/orzma/config.toml` — if `$XDG_CONFIG_HOME` is set.
 3. `~/.config/orzma/config.toml` — the default.
 
-Unknown sections are rejected at startup, as are unknown keys in `[orzma]`,
-`[keyboard]`, `[shortcuts]`, `[vi-mode]`, and `[font]`. Unknown keys in
+Unknown sections are rejected at startup, as are unknown keys in `[cursor]`,
+`[orzma]`, `[keyboard]`, `[shortcuts]`, `[vi-mode]`, and `[font]`. Unknown keys in
 `[mouse]` and `[inactive_pane]` are silently ignored. Most invalid values are
 startup errors too; the few that are silently clamped or reverted are noted
 inline below.
@@ -29,6 +29,17 @@ change — omitted keys fall back to these defaults.
 # Shell launched in new terminals. Default: the $SHELL environment variable.
 # Absolute path; no ~ expansion.
 # shell = "/bin/zsh"
+
+[cursor]
+# Unlike the other enum-valued keys, an unrecognized `style` word silently
+# reverts to the default instead of being a startup error.
+style = "block"           # block | underline | bar
+blink_interval = 750      # milliseconds; 0 keeps the caret steady whatever a program asks for. Any other value below 10 is silently raised to 10.
+blink_timeout = 5         # seconds; 0 blinks indefinitely. Silently raised to twice blink_interval (one full on/off cycle) when shorter.
+thickness = 0.15          # f32 0..=1, fraction of the cell width. Out-of-range silently clamps; NaN reverts to 0.15; 0 still draws 1 physical px.
+unfocused_hollow = true
+# The caret starts blinking. DECSCUSR and DECSET 12 / DECRST 12 both
+# change it from there, and a DECSCUSR 0 or 7 restores the blink.
 
 [font]
 size = 11.25              # f32, logical px. Must be 0 < size <= 200, else startup error.

@@ -1,12 +1,13 @@
 //! The character-terminal device this VT emulates.
 
 pub(crate) mod color;
+pub(crate) mod cursor_policy;
 pub(crate) mod modes;
 
 use crate::device::color::{Palette, Rgb};
+use crate::device::cursor_policy::CursorPolicy;
 use crate::device::modes::{
-    AutoWrap, CursorBlink, CursorShape, InsertReplaceMode, KeypadMode, ScreenKind,
-    TextCursorEnable, VtModes,
+    AutoWrap, InsertReplaceMode, KeypadMode, ScreenKind, TextCursorEnable, VtModes,
 };
 use crate::error::VtResult;
 use crate::frame::damage::DamageSpan;
@@ -30,6 +31,7 @@ pub(crate) struct DeviceState {
     hyperlinks: HyperlinkInterner,
     active_hyperlink: Option<HyperlinkId>,
     preceding_graphic: Option<ClassifiedGlyph>,
+    cursor_policy: CursorPolicy,
 }
 
 impl DeviceState {
@@ -50,6 +52,7 @@ impl DeviceState {
             hyperlinks: HyperlinkInterner::new(),
             active_hyperlink: None,
             preceding_graphic: None,
+            cursor_policy: CursorPolicy::default(),
         }
     }
 
@@ -203,6 +206,9 @@ impl DeviceState {
     /// The preceding graphic character is cleared, so a `REP` that follows
     /// prints nothing.
     ///
+    /// The cursor's shape and blink return to the host-supplied cursor
+    /// policy's initial style rather than the power-up one.
+    ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`)
@@ -219,6 +225,7 @@ impl DeviceState {
         // live deferred wrap as it stands, must go through `set_auto_wrap`
         // instead.
         self.modes = VtModes::default();
+        self.apply_initial_cursor_style();
         self.title = TitleState::default();
         self.active_hyperlink = None;
         // NOTE: `hyperlinks` is deliberately not reset. Ids must never be
@@ -244,13 +251,14 @@ impl DeviceState {
     /// title, and the palette's foreground, background, and cursor
     /// color.
     ///
+    /// The cursor's shape and blink are left as they are; vt510.pdf
+    /// p.277 Table 5-9 lists only `Text cursor enable`.
+    ///
     /// # Control Functions
     ///
     /// - `DECSTR` (`CSI ! p`)
     pub fn soft_reset(&mut self) -> Option<DamageSpan> {
         self.modes.text_cursor.enable = TextCursorEnable::Shown;
-        self.modes.text_cursor.shape = CursorShape::default();
-        self.modes.text_cursor.blink = CursorBlink::default();
         self.modes.insert_replace = InsertReplaceMode::Replace;
         self.modes.app_cursor = false;
         self.modes.keypad_mode = KeypadMode::Numeric;
@@ -479,10 +487,29 @@ impl DeviceState {
         self.palette.reset_cursor()
     }
 
+    /// The host-supplied cursor policy this device applies.
+    pub fn cursor_policy(&self) -> CursorPolicy {
+        self.cursor_policy
+    }
+
+    /// Replaces the host-supplied cursor policy and applies its initial
+    /// style at once, leaving the cursor's visibility untouched.
+    pub fn set_cursor_policy(&mut self, policy: CursorPolicy) {
+        self.cursor_policy = policy;
+        self.apply_initial_cursor_style();
+    }
+
     /// Switches the active screen without a flip's side effects.
     #[cfg(test)]
     pub(crate) fn set_active_screen_for_test(&mut self, kind: ScreenKind) {
         self.modes.active_screen = kind;
+    }
+
+    fn apply_initial_cursor_style(&mut self) {
+        self.modes.text_cursor = self
+            .modes
+            .text_cursor
+            .with_style(self.cursor_policy.initial);
     }
 }
 

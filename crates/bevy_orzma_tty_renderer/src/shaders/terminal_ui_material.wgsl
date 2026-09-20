@@ -13,7 +13,7 @@ struct TerminalParams {
     dpr: f32,
     cursor_pos: vec2<u32>,
     cursor_style: u32,
-    time_seconds: f32,
+    cursor_thickness_phys: f32,
     sel_start_row: i32,
     sel_start_col: u32,
     sel_end_row: i32,
@@ -96,7 +96,7 @@ const STYLE_HIDDEN: u32 = 64u;
 const STYLE_WIDE_RIGHT_HALF: u32 = 0x10000u;
 
 const CURSOR_VISIBLE: u32 = 1u;
-const CURSOR_BLINKING: u32 = 8u;
+const CURSOR_HOLLOW: u32 = 16u;
 const CURSOR_SHAPE_BLOCK: u32 = 0u;
 const CURSOR_SHAPE_UNDERLINE: u32 = 1u;
 const CURSOR_SHAPE_BAR: u32 = 2u;
@@ -357,33 +357,51 @@ fn cursor_on_wide_right_half() -> bool {
         && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u;
 }
 
+// The column holding the caret's left edge: the body cell when the cursor
+// sits on a wide glyph's right half.
+fn cursor_span_left() -> u32 {
+    if cursor_on_wide_right_half() && params.cursor_pos.x > 0u {
+        return params.cursor_pos.x - 1u;
+    }
+    return params.cursor_pos.x;
+}
+
+// The column holding the caret's right edge: the right half when the
+// cursor sits on a wide glyph's body.
+fn cursor_span_right() -> u32 {
+    let next = params.cursor_pos.x + 1u;
+    let idx = params.cursor_pos.y * params.grid_size.x + next;
+    if next < params.grid_size.x
+        && idx < arrayLength(&cells)
+        && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u {
+        return next;
+    }
+    return params.cursor_pos.x;
+}
+
 // Whether a bar cursor is drawn in (row, col): the cursor's own cell, or
 // the body cell when the cursor sits on a wide glyph's right half.
 fn bar_covers(row: u32, col: u32) -> bool {
-    if row != params.cursor_pos.y {
-        return false;
-    }
-    if cursor_on_wide_right_half() {
-        return col + 1u == params.cursor_pos.x;
-    }
-    return col == params.cursor_pos.x;
+    return row == params.cursor_pos.y && col == cursor_span_left();
 }
 
-// Whether the cursor is drawn this frame: visible, and in the lit phase
-// when blinking.
+// Whether the cursor is drawn this frame. The blink phase is decided on
+// the CPU, which packs an invisible style on every dark phase.
 fn cursor_is_lit() -> bool {
-    let visible = (params.cursor_style & CURSOR_VISIBLE) != 0u;
-    let blinking = (params.cursor_style & CURSOR_BLINKING) != 0u;
-    return visible && (!blinking || fract(params.time_seconds) < 0.5);
+    return (params.cursor_style & CURSOR_VISIBLE) != 0u;
 }
 
-// Whether a lit block cursor covers (row, col). Runs for every fragment,
-// so the checks that read no cell come first.
+// Whether a lit, filled block cursor covers (row, col). Runs for every
+// fragment, so the checks that read no cell come first. A hollow caret is
+// drawn as an outline instead, so it never takes over the cell's colors.
 fn block_cursor_covers(row: u32, col: u32) -> bool {
     if row != params.cursor_pos.y {
         return false;
     }
     if ((params.cursor_style >> 1u) & 3u) != CURSOR_SHAPE_BLOCK {
+        return false;
+    }
+    if (params.cursor_style & CURSOR_HOLLOW) != 0u {
         return false;
     }
     if !cursor_is_lit() {
@@ -447,8 +465,9 @@ fn resolve_painted_colors(cell: Cell, row: u32, col: u32) -> CellColors {
     return conceal(cell, colors);
 }
 
-// Paints the bar and underline cursors, whose strip lies clear of the
-// glyph. The block cursor is resolved into the cell's colors instead.
+// Paints the cursors drawn as strokes clear of the glyph: the bar, the
+// underline, and the hollow outline an unfocused pane takes. The filled
+// block cursor is resolved into the cell's colors instead.
 fn paint_cursor(
     row: u32,
     col: u32,
@@ -456,22 +475,69 @@ fn paint_cursor(
     cell: Cell,
     base: vec4<f32>,
 ) -> vec4<f32> {
+    // NOTE: cursor_covers and bar_covers both read the cell buffer, and
+    // select evaluates both arms, so this uniform test must stay ahead of
+    // them: a blinking caret packs an invisible style on every dark phase,
+    // and without the early return every fragment pays those loads.
+    if !cursor_is_lit() {
+        return base;
+    }
+    let cursor_hollow = (params.cursor_style & CURSOR_HOLLOW) != 0u;
     let cursor_shape = (params.cursor_style >> 1u) & 3u;
-    let on_cursor_cell = select(cursor_covers(row, col), bar_covers(row, col), cursor_shape == CURSOR_SHAPE_BAR);
-    if !(cursor_is_lit() && on_cursor_cell) {
+    // NOTE: cursor_shape comes from the uniform, so this branch is
+    // wave-uniform and runs one arm; `select` would evaluate both, and
+    // each arm reads the cell buffer.
+    var on_cursor_cell: bool;
+    if cursor_shape == CURSOR_SHAPE_BAR {
+        on_cursor_cell = bar_covers(row, col);
+    } else {
+        on_cursor_cell = cursor_covers(row, col);
+    }
+    if !on_cursor_cell {
         return base;
     }
 
-    let thickness = 2.0;
-    let on_underline = cursor_shape == CURSOR_SHAPE_UNDERLINE
-        && in_cell_px.y >= params.cell_size_px.y - thickness;
-    let on_bar = cursor_shape == CURSOR_SHAPE_BAR && in_cell_px.x < thickness;
-    if !(on_underline || on_bar) {
-        return base;
-    }
+    let thickness = params.cursor_thickness_phys;
+    // NOTE: paint_right_strip calls this with in_cell_px.x past the cell
+    // width, so every branch that is not already bounded on x must test
+    // this or its stroke strays outside the cell.
+    let inside_cell = in_cell_px.x < params.cell_size_px.x;
     let visible = resolve_visible_colors(cell);
     let ground = tint_bg(materialize_default_bg(visible.bg));
-    return guarded_fill(cursor_fill(visible.fg), ground);
+    let fill = guarded_fill(cursor_fill(visible.fg), ground);
+    if cursor_hollow {
+        if !inside_cell {
+            return base;
+        }
+        // NOTE: thickness is a fraction of the cell WIDTH, so an outline
+        // that took it unbounded would have its two opposite edges meet
+        // and fill the cell — a hollow caret that reads as a filled one.
+        // Each axis keeps its stroke under half of its own extent.
+        let edge_x = min(thickness, (params.cell_size_px.x - 1.0) * 0.5);
+        let edge_y = min(thickness, (params.cell_size_px.y - 1.0) * 0.5);
+        // NOTE: the in-cell tests come first on purpose. `&&` short
+        // circuits left to right, and the span helpers read the cell
+        // buffer, so testing them first would pay that read for every
+        // interior fragment the comparison then rejects.
+        let on_edge = in_cell_px.y < edge_y
+            || in_cell_px.y >= params.cell_size_px.y - edge_y
+            || (in_cell_px.x < edge_x && col == cursor_span_left())
+            || (in_cell_px.x >= params.cell_size_px.x - edge_x
+                && col == cursor_span_right());
+        if on_edge {
+            return fill;
+        }
+        return base;
+    }
+    if cursor_shape == CURSOR_SHAPE_UNDERLINE
+        && inside_cell
+        && in_cell_px.y >= params.cell_size_px.y - thickness {
+        return fill;
+    }
+    if cursor_shape == CURSOR_SHAPE_BAR && in_cell_px.x < thickness {
+        return fill;
+    }
+    return base;
 }
 
 fn paint_selection(row: u32, col: u32, base: vec4<f32>) -> vec4<f32> {

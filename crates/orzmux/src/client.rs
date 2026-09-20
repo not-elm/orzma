@@ -5,6 +5,7 @@ use crate::backend::{Backend, ShellFactory};
 use crate::protocol::{CommandSeq, OrzmuxCommand, OrzmuxEvent};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use orzma_tty::prelude::WheelConfig;
+use orzma_vt::prelude::CursorPolicy;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
@@ -17,6 +18,8 @@ pub struct OrzmuxConfig {
     pub scrollback_rows: usize,
     /// The wheel-routing policy every pane's terminal applies.
     pub wheel: WheelConfig,
+    /// The cursor policy every pane's terminal starts with.
+    pub cursor: CursorPolicy,
 }
 
 /// The backend thread could not be started.
@@ -53,8 +56,9 @@ impl OrzmuxClient {
             shell,
             scrollback_rows,
             wheel,
+            cursor,
         } = config;
-        let factory = ShellFactory::new(shell, scrollback_rows);
+        let factory = ShellFactory::new(shell, scrollback_rows, cursor);
         let thread = thread::Builder::new()
             .name("orzma-mux".to_string())
             .spawn(move || Backend::new(Box::new(factory), command_rx, event_tx, wheel).run())

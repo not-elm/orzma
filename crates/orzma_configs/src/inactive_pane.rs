@@ -2,6 +2,7 @@
 //! background tint and brightness dim for every pane that is not its
 //! workspace's active pane.
 
+use crate::norm_unit;
 use serde::{Deserialize, Serialize};
 
 /// Fully-resolved `[inactive_pane]` config block.
@@ -65,15 +66,6 @@ impl InactivePaneConfig {
         } else {
             self.tint_color = d.tint_color;
         }
-    }
-}
-
-/// Returns `v` clamped to `0.0..=1.0`, or `default` when `v` is NaN.
-fn norm_unit(v: f32, default: f32) -> f32 {
-    if v.is_nan() {
-        default
-    } else {
-        v.clamp(0.0, 1.0)
     }
 }
 

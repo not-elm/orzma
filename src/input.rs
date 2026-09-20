@@ -6,6 +6,7 @@ pub(crate) mod focus;
 mod hyperlink;
 pub(crate) mod ime;
 pub(crate) mod keyboard;
+mod last_key;
 pub(crate) mod mouse;
 pub(crate) mod option_as_alt;
 pub(crate) mod shortcuts;
@@ -13,8 +14,8 @@ pub(crate) mod shortcuts;
 use crate::{
     input::{
         focus::FocusSyncPlugin, hyperlink::HyperlinkInputPlugin, ime::ImePlugin,
-        keyboard::KeyboardInputPlugin, mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin,
-        shortcuts::ShortcutsPlugin,
+        keyboard::KeyboardInputPlugin, last_key::LastKeyPlugin, mouse::MouseInputPlugin,
+        option_as_alt::OptionAsAltPlugin, shortcuts::ShortcutsPlugin,
     },
     system_set::OrzmaSystems,
 };
@@ -44,6 +45,7 @@ impl Plugin for OrzmaInputPlugin {
             ShortcutsPlugin,
             OptionAsAltPlugin,
             KeyboardInputPlugin,
+            LastKeyPlugin,
             MouseInputPlugin,
             FocusSyncPlugin,
             ImePlugin,
