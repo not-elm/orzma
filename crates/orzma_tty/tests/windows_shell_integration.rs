@@ -101,9 +101,7 @@ fn an_injected_powershell_reports_its_directory_and_calls_back_the_user_prompt()
 ///
 /// # Panics
 ///
-/// Panics when neither `pwsh` nor `powershell` resolves on `PATH`,
-/// rather than silently skipping — a test that passes by doing nothing
-/// proves nothing about the injection this task exists to verify.
+/// Panics when neither `pwsh` nor `powershell` resolves on `PATH`.
 fn resolve_powershell() -> (PathBuf, &'static str) {
     if let Some(path) = on_path("pwsh") {
         return (path, "pwsh");
