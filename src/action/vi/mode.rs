@@ -9,7 +9,8 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::query::With;
-use bevy::ecs::system::{Commands, Query};
+use bevy::ecs::system::{Commands, Query, ResMut};
+use bevy_cef::prelude::FocusedWebview;
 use bevy_orzmux::prelude::{OrzmuxPane, RequestTtySelectionClear, RequestTtyViMode, ViModeSwitch};
 
 /// Adds vi-mode enter and exit handling.
@@ -41,15 +42,23 @@ pub struct ExitViMode {
     pub entity: Entity,
 }
 
-/// Inserts `ViModeState` on the target entity and requests a selection
-/// clear followed by the vi-mode enter switch.
+/// Inserts `ViModeState` on the target entity, releases any focused inline
+/// webview, and requests a selection clear followed by the vi-mode enter
+/// switch. An entity that carries no `OrzmuxPane` is left untouched.
 fn handle_enter_vi_mode_request(
     ev: On<EnterViModeActionEvent>,
     mut commands: Commands,
+    mut focused_webview: ResMut<FocusedWebview>,
     terminals: Query<(), With<OrzmuxPane>>,
 ) {
     if terminals.get(ev.entity).is_err() {
         return;
+    }
+    // NOTE: vi mode gates both the terminal and the webview mouse paths, so a
+    // webview left focused here can no longer be dismissed by an off-rect
+    // click and would keep swallowing the keyboard for the whole session.
+    if focused_webview.0.is_some() {
+        focused_webview.0 = None;
     }
     // NOTE: clear before entering vi mode — once a selection-reading
     // capability lands, the v/V toggle predicate must not misread a
@@ -96,7 +105,9 @@ mod tests {
     use bevy::app::App;
     use bevy::ecs::resource::Resource;
     use bevy::ecs::system::ResMut;
-    use bevy::prelude::MinimalPlugins;
+    use bevy::prelude::{ChildOf, MinimalPlugins};
+    use bevy_orzma_webview::Webview;
+    use orzma_vt::prelude::InstanceId;
     use orzmux::prelude::PaneId;
 
     fn spawn_terminal_entity(app: &mut App) -> Entity {
@@ -133,6 +144,7 @@ mod tests {
     fn enter_observer_inserts_vi_mode_state_and_clears_selection_first() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
             .add_observer(handle_enter_vi_mode_request);
         capture_requests(&mut app);
         let entity = spawn_terminal_entity(&mut app);
@@ -159,6 +171,7 @@ mod tests {
     fn enter_request_on_a_bare_entity_is_a_no_op() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
             .add_observer(handle_enter_vi_mode_request);
         capture_requests(&mut app);
         let entity = app.world_mut().spawn_empty().id();
@@ -178,12 +191,49 @@ mod tests {
     fn enter_observer_disables_keyboard_and_mouse() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
             .add_observer(handle_enter_vi_mode_request);
         let entity = spawn_terminal_entity(&mut app);
         app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
         assert!(app.world().get::<KeyboardDisabled>(entity).is_some());
         assert!(app.world().get::<TerminalMouseDisabled>(entity).is_some());
+    }
+
+    /// Asserts that entering vi mode clears `FocusedWebview`.
+    ///
+    /// Case: the user has clicked into a page mounted in a pane and then
+    /// enters vi mode to scroll back through that pane's output.
+    #[test]
+    fn enter_observer_releases_a_focused_webview() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
+            .add_observer(handle_enter_vi_mode_request);
+        let entity = spawn_terminal_entity(&mut app);
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(entity),
+                Webview {
+                    handle: "h1".into(),
+                    instance: InstanceId(1),
+                    slot: 0,
+                    rows: 10,
+                    cols: 40,
+                },
+            ))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+
+        app.world_mut().trigger(EnterViModeActionEvent { entity });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "a page left focused in vi mode takes the keyboard with no mouse route back"
+        );
     }
 
     /// Asserts that exiting vi mode removes `KeyboardDisabled` and
@@ -194,6 +244,7 @@ mod tests {
     fn exit_observer_reenables_keyboard_and_mouse() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
             .add_observer(handle_enter_vi_mode_request)
             .add_observer(handle_exit_vi_mode);
         let entity = spawn_terminal_entity(&mut app);
@@ -214,6 +265,7 @@ mod tests {
     fn exit_observer_removes_vi_mode_state_and_clears_selection_first() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
             .add_observer(handle_enter_vi_mode_request)
             .add_observer(handle_exit_vi_mode);
         capture_requests(&mut app);

@@ -107,6 +107,12 @@ pub(in crate::input) struct WebviewClaimParams<'w, 's> {
     overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
 }
 
+/// Brings every `OrzmaTerminal`'s input gates up to date with the window
+/// focus, the IME composition, vi mode, and the inline webview rect under
+/// the cursor: inserts or removes `KeyboardDisabled`,
+/// `TerminalMouseDisabled`, `WebviewMouseDisabled`, and
+/// `MouseClaimedByWebview` so each marker is present exactly while its
+/// condition holds. The markers apply at the next command flush.
 pub(in crate::input) fn maintain_input_gates(
     mut commands: Commands,
     ime: Res<ImeState>,
@@ -133,9 +139,11 @@ pub(in crate::input) fn maintain_input_gates(
     // interactive inline rect does — so an off-rect click still reaches
     // `dispatch_mouse_buttons` and clears webview focus in the router. Folding
     // `focused_webview.0.is_some()` into either gate unconditionally would swallow
-    // that fallthrough click, stranding the user on a focused webview. The
-    // conditional fold in `webview_modal` is safe because it is live only while a
-    // composition has no owner, a state in which there is no inline focus to clear.
+    // that fallthrough click, stranding the user on a focused webview. Both
+    // conditional folds below are safe only because neither can be live while an
+    // inline webview still holds focus: `webview_modal` adds the composing case
+    // only while the composition has no owner, and `handle_enter_vi_mode_request`
+    // releases the focused webview before `in_vi_mode` suppresses either gate.
     let mouse_modal = ime.is_composing() || !focused;
     let webview_modal = !focused || (ime.is_composing() && focused_webview.0.is_none());
     let claimed = window.and_then(|w| cursor_claims_webview(w, &claim));
