@@ -91,6 +91,7 @@ pub(crate) struct ShellFactory {
     shell: String,
     scrollback_rows: usize,
     cursor_policy: CursorPolicy,
+    shell_integration: bool,
 }
 
 impl ShellFactory {
@@ -100,6 +101,7 @@ impl ShellFactory {
         shell: Option<String>,
         scrollback_rows: usize,
         cursor_policy: CursorPolicy,
+        shell_integration: bool,
     ) -> Self {
         Self {
             shell: resolve_shell(
@@ -110,6 +112,7 @@ impl ShellFactory {
             ),
             scrollback_rows,
             cursor_policy,
+            shell_integration,
         }
     }
 }
@@ -134,7 +137,7 @@ impl PaneFactory for ShellFactory {
                     .into_iter()
                     .map(|(k, v)| (EnvKey(k), EnvValue(v)))
                     .collect(),
-                shell_integration: false,
+                shell_integration: self.shell_integration,
             },
         )
     }
@@ -422,7 +425,7 @@ mod tests {
         let dir = TempDir::new().expect("a temp dir");
         let expected = dir.path().canonicalize().expect("the dir canonicalizes");
         let size = GridSize::new(80, 24).expect("a valid size");
-        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, CursorPolicy::default())
+        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, CursorPolicy::default(), false)
             .spawn(
                 size,
                 CellPixels::default(),
@@ -457,7 +460,7 @@ mod tests {
                 blink: CursorBlink::Blinking,
             },
         };
-        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, policy)
+        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, policy, false)
             .spawn(
                 GridSize::new(80, 24).expect("a valid size"),
                 CellPixels::default(),

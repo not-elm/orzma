@@ -29,6 +29,10 @@ change — omitted keys fall back to these defaults.
 # Shell launched in new terminals. Default: the $SHELL environment variable.
 # Absolute path; no ~ expansion.
 # shell = "/bin/zsh"
+# Whether orzma injects a prompt hook into a recognized shell (pwsh,
+# powershell, cmd) so a split pane inherits its working directory. Has
+# no effect outside Windows.
+shell_integration = true
 
 [cursor]
 # Unlike the other enum-valued keys, an unrecognized `style` word silently

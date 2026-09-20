@@ -20,6 +20,9 @@ pub struct OrzmuxConfig {
     pub wheel: WheelConfig,
     /// The cursor policy every pane's terminal starts with.
     pub cursor: CursorPolicy,
+    /// Whether orzma may make a shell it recognizes report its working
+    /// directory. Has no effect outside Windows.
+    pub shell_integration: bool,
 }
 
 /// The backend thread could not be started.
@@ -57,8 +60,9 @@ impl OrzmuxClient {
             scrollback_rows,
             wheel,
             cursor,
+            shell_integration,
         } = config;
-        let factory = ShellFactory::new(shell, scrollback_rows, cursor);
+        let factory = ShellFactory::new(shell, scrollback_rows, cursor, shell_integration);
         let thread = thread::Builder::new()
             .name("orzma-mux".to_string())
             .spawn(move || Backend::new(Box::new(factory), command_rx, event_tx, wheel).run())
