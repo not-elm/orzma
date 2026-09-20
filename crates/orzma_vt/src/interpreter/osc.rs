@@ -1,10 +1,10 @@
 //! The operating system commands this terminal implements.
 //!
-//! The window title (OSC 0 and OSC 2), the working directory (OSC 7),
-//! the indexed palette (OSC 4 and OSC 104), the dynamic foreground,
-//! background, and cursor color (OSC 10, OSC 11, OSC 12, OSC 110,
-//! OSC 111, and OSC 112), hyperlinks (OSC 8), and the clipboard
-//! (OSC 52) are implemented.
+//! The window title (OSC 0 and OSC 2), the working directory (OSC 7 and
+//! the ConEmu `OSC 9;9` subcommand), the indexed palette (OSC 4 and
+//! OSC 104), the dynamic foreground, background, and cursor color
+//! (OSC 10, OSC 11, OSC 12, OSC 110, OSC 111, and OSC 112), hyperlinks
+//! (OSC 8), and the clipboard (OSC 52) are implemented.
 
 pub(crate) mod clipboard;
 pub(crate) mod dynamic_color;
@@ -15,23 +15,27 @@ use crate::device::color::Rgb;
 use percent_encoding::percent_decode;
 use std::path::PathBuf;
 
-/// The directory an `OSC 7` reports, or `None` for every other
-/// operating system command and for a URI this parser does not accept.
+/// The directory an `OSC 7` or the ConEmu `OSC 9;9` reports, or `None`
+/// for every other operating system command and for a path this parser
+/// does not accept.
 ///
-/// Only the `file` scheme is accepted, and only a URI that carries an
-/// absolute path after its authority. The host — `localhost`, a real
-/// hostname, or the empty host of `file:///…` — is ignored.
+/// For `OSC 7`, only the `file` scheme is accepted, and only a URI that
+/// carries an absolute path after its authority. The host — `localhost`,
+/// a real hostname, or the empty host of `file:///…` — is ignored.
 /// Percent-encoded octets in the path (`%20` for a space, the UTF-8
-/// octets of a non-ASCII name) are decoded.
+/// octets of a non-ASCII name) are decoded. On Windows, a decoded path of
+/// the form `/C:/…` is reported rooted at its drive, and a path that names
+/// no drive is rejected.
+///
+/// For `OSC 9;9`, the payload is a host path, either bare or wrapped in one
+/// pair of double quotes, and must name a Windows drive or UNC path,
+/// whatever platform this parser runs on.
 pub(crate) fn current_dir(params: &[&[u8]]) -> Option<PathBuf> {
-    let [b"7", parts @ ..] = params else {
-        return None;
-    };
-    let joined = parts.join(&b';');
-    let rest = joined.strip_prefix(b"file://")?;
-    let index = rest.iter().position(|byte| *byte == b'/')?;
-    let decoded = percent_decode(&rest[index..]).decode_utf8_lossy();
-    Some(PathBuf::from(decoded.into_owned()))
+    match params {
+        [b"7", parts @ ..] => file_uri(parts),
+        [b"9", b"9", parts @ ..] => conemu_path(parts),
+        _ => None,
+    }
 }
 
 /// The sanitized window title an `OSC 0` or `OSC 2` sets, or `None` for
@@ -101,6 +105,44 @@ pub(crate) fn rgb_spec(color: Rgb) -> String {
     format!("rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}")
 }
 
+/// The directory a `file://` URI names, or `None` when the URI carries
+/// no such path.
+fn file_uri(parts: &[&[u8]]) -> Option<PathBuf> {
+    let joined = parts.join(&b';');
+    let rest = joined.strip_prefix(b"file://")?;
+    let index = rest.iter().position(|byte| *byte == b'/')?;
+    let decoded = percent_decode(&rest[index..]).decode_utf8_lossy();
+    host_path(&decoded)
+}
+
+/// The decoded URI path as a host path, or `None` when this platform
+/// cannot use it.
+#[cfg(not(windows))]
+fn host_path(decoded: &str) -> Option<PathBuf> {
+    Some(PathBuf::from(decoded))
+}
+
+/// The decoded URI path as a host path, or `None` when it names no
+/// drive.
+///
+/// A URI path opens with the `/` that separates it from the authority,
+/// so `C:\Users\x` arrives as `/C:/Users/x`; that separator is dropped.
+/// Anything still not absolute afterwards would be resolved against
+/// this process's own working directory, so it is rejected instead.
+#[cfg(windows)]
+fn host_path(decoded: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(drive_rooted(decoded).unwrap_or(decoded));
+    path.is_absolute().then_some(path)
+}
+
+/// `decoded` without the leading `/` that precedes a Windows drive root,
+/// or `None` when it opens with anything else.
+#[cfg(windows)]
+fn drive_rooted(decoded: &str) -> Option<&str> {
+    let rest = decoded.strip_prefix('/')?;
+    has_drive_root(rest).then_some(rest)
+}
+
 /// Maximum length, in `char`s, of a sanitized title.
 const MAX_LEN: usize = 256;
 
@@ -161,6 +203,35 @@ fn is_disallowed(c: char) -> bool {
         )
 }
 
+/// The directory an `OSC 9;9` reports, or `None` when its payload does
+/// not name a Windows drive or UNC path.
+///
+/// The payload is a host path rather than a URI, and arrives either bare
+/// or wrapped in one pair of double quotes. Requiring a Windows drive or
+/// UNC prefix separates this ConEmu subcommand from iTerm2's
+/// `OSC 9 ; <message>` notification, which carries arbitrary text, on
+/// every platform this parser runs on.
+fn conemu_path(parts: &[&[u8]]) -> Option<PathBuf> {
+    let joined = parts.join(&b';');
+    let text = String::from_utf8_lossy(&joined);
+    let unquoted = text
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(&text);
+    is_windows_path(unquoted).then(|| PathBuf::from(unquoted))
+}
+
+/// Whether `text` opens with a Windows drive root (`C:\` or `C:/`).
+fn has_drive_root(text: &str) -> bool {
+    matches!(text.as_bytes(), [letter, b':', b'\\' | b'/', ..] if letter.is_ascii_alphabetic())
+}
+
+/// Whether `text` opens with a Windows drive root or a UNC prefix
+/// (`\\` or `//`).
+fn is_windows_path(text: &str) -> bool {
+    has_drive_root(text) || text.starts_with(r"\\") || text.starts_with("//")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +241,7 @@ mod tests {
     ///
     /// Case: a shell reports its directory with `OSC 7
     /// file://localhost/tmp/project` after a `cd`.
+    #[cfg(not(windows))]
     #[test]
     fn a_localhost_uri_reports_its_path() {
         assert_eq!(
@@ -183,6 +255,7 @@ mod tests {
     ///
     /// Case: a shell reports its directory with the terser
     /// `file:///tmp/project` form some prompts emit instead.
+    #[cfg(not(windows))]
     #[test]
     fn an_empty_host_uri_reports_its_path() {
         assert_eq!(
@@ -216,6 +289,7 @@ mod tests {
     ///
     /// Case: a fish or zsh integration reports `cd ~/My Project/ドキュメント`
     /// with every reserved and non-ASCII byte escaped.
+    #[cfg(not(windows))]
     #[test]
     fn percent_encoded_octets_in_the_path_are_decoded() {
         assert_eq!(
@@ -229,6 +303,67 @@ mod tests {
             current_dir(&[b"7", b"file:///tmp/100%25/x%2"]),
             Some(PathBuf::from("/tmp/100%/x%2"))
         );
+    }
+
+    /// Asserts that percent-encoded octets in a drive-rooted path are
+    /// decoded, so a directory with a space or a non-ASCII name comes
+    /// back as the directory itself, while a stray `%` is kept verbatim.
+    ///
+    /// Case: a shell integration on Windows reports
+    /// `cd C:\Users\x\My Project\ドキュ` with every reserved and
+    /// non-ASCII byte escaped.
+    #[cfg(windows)]
+    #[test]
+    fn percent_encoded_octets_in_a_drive_rooted_path_are_decoded() {
+        assert_eq!(
+            current_dir(&[
+                b"7",
+                b"file:///C:/Users/x/My%20Project/%E3%83%89%E3%82%AD%E3%83%A5"
+            ]),
+            Some(PathBuf::from(r"C:\Users\x\My Project\ドキュ"))
+        );
+        assert_eq!(
+            current_dir(&[b"7", b"file:///C:/tmp/100%25/x%2"]),
+            Some(PathBuf::from(r"C:\tmp\100%\x%2"))
+        );
+    }
+
+    /// Asserts that a `file://` URI carrying a drive letter reports a
+    /// path rooted at that drive rather than one rooted at `/`.
+    ///
+    /// Case: a shell integration on Windows reports its directory with
+    /// `OSC 7 file:///C:/Users/x/proj` after a `cd`.
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_letter_uri_reports_a_drive_rooted_path() {
+        assert_eq!(
+            current_dir(&[b"7", b"file:///C:/Users/x/proj"]),
+            Some(PathBuf::from(r"C:\Users\x\proj"))
+        );
+    }
+
+    /// Asserts that a `file://` URI naming a remote host reports no
+    /// directory on Windows, rather than a path relative to whatever
+    /// directory this process happens to be in.
+    ///
+    /// Case: a program reports `OSC 7 file://server/share/dir`, whose
+    /// host this parser ignores, while a directory named `share` happens
+    /// to sit beside the running terminal.
+    #[cfg(windows)]
+    #[test]
+    fn a_remote_host_uri_is_rejected_on_windows() {
+        assert!(current_dir(&[b"7", b"file://server/share/dir"]).is_none());
+    }
+
+    /// Asserts that a `file://` URI whose path is rooted but names no
+    /// drive reports no directory on Windows.
+    ///
+    /// Case: a WSL or Cygwin shell reports its Unix path verbatim with
+    /// `OSC 7 file:///tmp/project` while orzma runs as a Windows process.
+    #[cfg(windows)]
+    #[test]
+    fn a_rootless_unix_path_is_rejected_on_windows() {
+        assert!(current_dir(&[b"7", b"file:///tmp/project"]).is_none());
     }
 
     /// Asserts that OSC 0 and OSC 2 set the same window title.
@@ -416,5 +551,79 @@ mod tests {
         for byte in [0x18, 0x1a] {
             assert_eq!(OscTerminator::from_byte(byte), None);
         }
+    }
+
+    /// Asserts that an unquoted `OSC 9;9` payload reports its directory.
+    ///
+    /// Case: a `cmd.exe` prompt built from `PROMPT=$e]9;9;$P$e\` reports
+    /// the directory the user just changed into.
+    #[cfg(windows)]
+    #[test]
+    fn an_unquoted_conemu_report_reports_its_directory() {
+        assert_eq!(
+            current_dir(&[b"9", b"9", br"C:\Users\x\proj"]),
+            Some(PathBuf::from(r"C:\Users\x\proj"))
+        );
+    }
+
+    /// Asserts that a quoted `OSC 9;9` payload reports the directory
+    /// inside the quotes.
+    ///
+    /// Case: a PowerShell prompt built from Microsoft's shell-integration
+    /// snippet, which wraps the path in double quotes, reports a
+    /// directory after a `Set-Location`.
+    #[cfg(windows)]
+    #[test]
+    fn a_quoted_conemu_report_reports_the_directory_inside_the_quotes() {
+        assert_eq!(
+            current_dir(&[b"9", b"9", br#""C:\Users\x\proj""#]),
+            Some(PathBuf::from(r"C:\Users\x\proj"))
+        );
+    }
+
+    /// Asserts that an `OSC 9;9` payload carrying semicolons reports the
+    /// whole path rather than the part before the first one.
+    ///
+    /// Case: a user works in a directory named `a;b`, which NTFS allows,
+    /// and the command arrives split on every `;`.
+    #[cfg(windows)]
+    #[test]
+    fn a_conemu_report_keeps_the_semicolons_in_its_path() {
+        assert_eq!(
+            current_dir(&[b"9", b"9", br"C:\Users\x\a", b"b"]),
+            Some(PathBuf::from(r"C:\Users\x\a;b"))
+        );
+    }
+
+    /// Asserts that an `OSC 9` payload that is not an absolute path
+    /// reports no directory.
+    ///
+    /// Case: a program sends iTerm2's `OSC 9 ; <message>` notification
+    /// whose text happens to open with `9;`.
+    #[test]
+    fn a_relative_osc_nine_payload_is_rejected() {
+        assert!(current_dir(&[b"9", b"9", b"90% done"]).is_none());
+    }
+
+    /// Asserts that an `OSC 9` payload that is a Unix-absolute path,
+    /// rather than a Windows drive or UNC path, reports no directory on
+    /// every platform.
+    ///
+    /// Case: a program sends iTerm2's `OSC 9 ; <message>` notification
+    /// whose text happens to open with `9;/`, splitting to a payload
+    /// that starts with a leading `/`.
+    #[test]
+    fn a_unix_absolute_osc_nine_payload_is_rejected_on_every_platform() {
+        assert!(current_dir(&[b"9", b"9", b"/tmp/build done"]).is_none());
+    }
+
+    /// Asserts that an `OSC 9` subcommand other than `9` reports no
+    /// directory.
+    ///
+    /// Case: a build tool sends ConEmu's `OSC 9;4` taskbar-progress
+    /// sequence, which this terminal does not implement.
+    #[test]
+    fn a_conemu_subcommand_other_than_nine_is_rejected() {
+        assert!(current_dir(&[b"9", b"4", b"1", b"50"]).is_none());
     }
 }

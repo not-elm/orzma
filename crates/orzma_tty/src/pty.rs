@@ -1,6 +1,8 @@
 //! `Pty` — owns the PTY master, the input queue its writer thread drains,
 //! the child killer, and the output and exit streams its OS threads feed.
 
+#[cfg(windows)]
+use crate::shell_integration::ShellIntegration;
 use crate::{
     CellPixels, SpawnOptions,
     error::{OrzmaTtyError, OrzmaTtyResult},
@@ -9,6 +11,8 @@ use crate::{
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded, unbounded};
 use orzma_vt::prelude::GridSize;
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+#[cfg(windows)]
+use std::env::var;
 #[cfg(any(test, feature = "test-support"))]
 use std::io::Result as IoResult;
 use std::io::{Read, Write};
@@ -22,7 +26,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod process_cwd;
 mod write_queue;
 
@@ -35,7 +39,7 @@ pub struct Pty {
     child_killer: Box<dyn ChildKiller + Send + Sync>,
     /// The pid of the process spawned under the PTY, or `None` for a PTY
     /// built without one.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     child_pid: Option<i32>,
     /// Whether the spawned process is the `/usr/bin/login` wrapper, which
     /// runs the shell as its child.
@@ -101,7 +105,7 @@ impl Pty {
             .openpty(options.cell_px.pty_size(options.size))
             .map_err(OrzmaTtyError::PtyOpen)?;
 
-        let mut cmd = build_shell_command(&options.shell);
+        let mut cmd = build_shell_command(options);
         if let Some(cwd) = options.cwd.as_ref() {
             cmd.cwd(cwd);
         }
@@ -116,7 +120,7 @@ impl Pty {
             .spawn_command(cmd)
             .map_err(OrzmaTtyError::SpawnShell)?;
         let child_killer = child.clone_killer();
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let child_pid = child.process_id().and_then(|pid| i32::try_from(pid).ok());
         drop(pty_pair.slave);
 
@@ -143,7 +147,7 @@ impl Pty {
             chunk_rx,
             exit_rx,
             child_killer,
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             child_pid,
             #[cfg(unix)]
             child_is_wrapper,
@@ -245,15 +249,20 @@ impl Pty {
             .expect("MasterPty::get_size")
     }
 
-    /// The working directory of the process this PTY is showing: its
-    /// foreground process group's leader, else the spawned process, else
-    /// on macOS the child of a spawned `/usr/bin/login` wrapper. Only a
-    /// directory that still exists and can be entered is reported.
+    /// The working directory of the process this PTY is showing: on Unix
+    /// its foreground process group's leader, else the spawned process,
+    /// else on macOS the child of a spawned `/usr/bin/login` wrapper; on
+    /// Windows the spawned process. Only a directory that still exists
+    /// and can be entered is reported.
     ///
     /// Returns `None` when no candidate can be read: no process was
-    /// spawned, the process belongs to another user, it has exited, its
-    /// directory was removed or can no longer be entered, or the platform
-    /// is neither macOS nor Linux.
+    /// spawned, the process belongs to another user or is elevated, it
+    /// has exited, its directory was removed or can no longer be
+    /// entered, or the platform is none of macOS, Linux, and Windows.
+    ///
+    /// On Windows a PowerShell `Set-Location` does not change the
+    /// process working directory, so the directory reported here is the
+    /// one the shell was launched in.
     pub fn process_cwd(&self) -> Option<PathBuf> {
         #[cfg(unix)]
         {
@@ -264,10 +273,12 @@ impl Pty {
                 .and_then(|master| master.process_group_leader());
             process_cwd::resolve(leader, self.child_pid, self.child_is_wrapper)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            // TODO: read the shell process's working directory from its PEB
-            // on Windows.
+            process_cwd::resolve(None, self.child_pid, false)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
             None
         }
     }
@@ -316,7 +327,7 @@ impl Pty {
             chunk_rx,
             exit_rx,
             child_killer: Box::new(DetachedKiller),
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             child_pid: None,
             #[cfg(unix)]
             child_is_wrapper: false,
@@ -330,18 +341,34 @@ impl Drop for Pty {
     }
 }
 
-/// Builds the shell `CommandBuilder`: on macOS the shell is wrapped in
-/// `/usr/bin/login` so it runs as a login shell and sources
-/// `/etc/zprofile` (`path_helper`) and `~/.zprofile`. Every other
-/// platform spawns the shell directly.
-fn build_shell_command(shell: &str) -> CommandBuilder {
+/// The command that launches `options.shell`: a macOS login wrapper, a
+/// Windows shell carrying orzma's prompt hook, or the shell itself.
+fn build_shell_command(options: &SpawnOptions) -> CommandBuilder {
     #[cfg(target_os = "macos")]
     {
-        macos_login_command(shell)
+        macos_login_command(&options.shell)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
-        CommandBuilder::new(shell)
+        let mut cmd = CommandBuilder::new(&options.shell);
+        if options.shell_integration {
+            match ShellIntegration::for_shell(&options.shell, var("PROMPT").ok().as_deref()) {
+                ShellIntegration::Args(args) => {
+                    for arg in args {
+                        cmd.arg(arg);
+                    }
+                }
+                ShellIntegration::Env { key, value } => {
+                    cmd.env(key, value);
+                }
+                ShellIntegration::None => {}
+            }
+        }
+        cmd
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        CommandBuilder::new(&options.shell)
     }
 }
 
@@ -711,6 +738,7 @@ mod tests {
             shell: echo_program().into(),
             cwd: None,
             env: Vec::new(),
+            shell_integration: false,
         })
         .expect("Pty::spawn failed");
         answer_cursor_query(&mut pty);
@@ -762,6 +790,7 @@ mod tests {
             shell: echo_program().into(),
             cwd: None,
             env: Vec::new(),
+            shell_integration: false,
         })
         .expect("Pty::spawn failed");
         answer_cursor_query(&mut pty);
@@ -790,6 +819,7 @@ mod tests {
             shell: echo_program().into(),
             cwd: None,
             env: Vec::new(),
+            shell_integration: false,
         })
         .expect("Pty::spawn failed");
         answer_cursor_query(&mut pty);
@@ -1014,6 +1044,7 @@ mod tests {
             shell: "/bin/cat".into(),
             cwd: Some(dir.path().to_path_buf()),
             env: Vec::new(),
+            shell_integration: false,
         })
         .expect("Pty::spawn failed");
         let login_handoff = Duration::from_millis(200);
@@ -1037,6 +1068,7 @@ mod tests {
             shell: "/bin/sh".into(),
             cwd: None,
             env: Vec::new(),
+            shell_integration: false,
         })
         .expect("Pty::spawn failed");
         // NOTE: on macOS the shell runs as the developer's own login shell,
@@ -1070,5 +1102,36 @@ mod tests {
     fn a_detached_pty_reports_no_process_cwd() {
         let pty = Pty::detached(grid(80, 24), Box::new(sink())).expect("Pty::detached");
         assert_eq!(pty.process_cwd(), None);
+    }
+
+    /// Asserts that a recognized PowerShell is spawned with the prompt
+    /// hook appended, and that the same shell is spawned untouched when
+    /// the integration is off.
+    ///
+    /// Case: a Windows user opens a pane with the default shell, and
+    /// another user who has turned the setting off opens one too.
+    #[cfg(windows)]
+    #[test]
+    fn a_recognized_shell_is_spawned_with_the_prompt_hook() {
+        let on = SpawnOptions {
+            size: grid(80, 24),
+            cell_px: CellPixels::default(),
+            shell: "powershell".to_string(),
+            cwd: None,
+            env: vec![],
+            shell_integration: true,
+        };
+        let off = SpawnOptions {
+            shell_integration: false,
+            ..on.clone()
+        };
+        assert!(
+            format!("{:?}", build_shell_command(&on)).contains("-NoExit"),
+            "the hook must be appended when the integration is on"
+        );
+        assert!(
+            !format!("{:?}", build_shell_command(&off)).contains("-NoExit"),
+            "nothing may be appended when the integration is off"
+        );
     }
 }

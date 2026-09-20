@@ -13,15 +13,15 @@ pub(crate) struct Pane {
     pub(crate) tty: OrzmaTty<OrzmaVt>,
     /// The `(cols, rows, cell_px)` the PTY was last successfully sized to.
     pub(crate) applied: (u16, u16, CellPixels),
-    /// The last directory the shell reported through OSC 7.
-    osc7_cwd: Option<PathBuf>,
+    /// The last directory the shell reported through OSC 7 or OSC 9;9.
+    reported_cwd: Option<PathBuf>,
     /// The directory the pane's shell was spawned in, when one was given.
     spawn_cwd: Option<PathBuf>,
 }
 
 impl Pane {
     /// A pane around `tty`, whose PTY is sized to `applied` and whose shell
-    /// was spawned in `spawn_cwd`. No OSC 7 report is recorded yet.
+    /// was spawned in `spawn_cwd`. No directory report is recorded yet.
     pub fn new(
         tty: OrzmaTty<OrzmaVt>,
         applied: (u16, u16, CellPixels),
@@ -30,31 +30,48 @@ impl Pane {
         Self {
             tty,
             applied,
-            osc7_cwd: None,
+            reported_cwd: None,
             spawn_cwd,
         }
     }
 
-    /// The pane's working directory: the directory the OS reports for its
-    /// foreground process or shell, else the directory the shell last
-    /// reported through OSC 7, else the directory the pane was spawned in.
+    /// The pane's working directory: the first candidate that still
+    /// exists and can be entered.
     ///
-    /// Returns `None` when none of them is known.
+    /// On Unix the candidates are the directory the OS reports for the
+    /// pane's foreground process or shell, then the directory the shell
+    /// last reported, then the directory the pane was spawned in. On
+    /// Windows the shell's report comes first, because a PowerShell
+    /// `Set-Location` leaves the process working directory at the
+    /// shell's launch directory.
+    ///
+    /// Returns `None` when no candidate can be entered. A candidate is
+    /// only produced when every earlier one failed, so the OS is not
+    /// asked when a usable report is already held.
     pub fn cwd(&self) -> Option<PathBuf> {
-        // TODO: on Windows, prefer the directory the shell reports through
-        // OSC 7 or OSC 9;9 over the process directory, because
-        // PowerShell's Set-Location does not change the process working
-        // directory.
-        self.tty
-            .process_cwd()
-            .or_else(|| self.osc7_cwd.clone())
-            .or_else(|| self.spawn_cwd.clone())
+        #[cfg(windows)]
+        let order = [Candidate::Reported, Candidate::Os, Candidate::Spawned];
+        #[cfg(not(windows))]
+        let order = [Candidate::Os, Candidate::Reported, Candidate::Spawned];
+        order
+            .into_iter()
+            .filter_map(|candidate| self.candidate(candidate))
+            .find_map(enterable)
     }
 
-    /// Records `path` as the directory the shell last reported through
-    /// OSC 7, replacing any earlier report.
-    pub fn set_osc7_cwd(&mut self, path: PathBuf) {
-        self.osc7_cwd = Some(path);
+    /// Records `path` as the directory the shell last reported,
+    /// replacing any earlier report.
+    pub fn set_reported_cwd(&mut self, path: PathBuf) {
+        self.reported_cwd = Some(path);
+    }
+
+    /// The directory one candidate names, or `None` when it holds none.
+    fn candidate(&self, which: Candidate) -> Option<PathBuf> {
+        match which {
+            Candidate::Os => self.tty.process_cwd(),
+            Candidate::Reported => self.reported_cwd.clone(),
+            Candidate::Spawned => self.spawn_cwd.clone(),
+        }
     }
 }
 
@@ -65,7 +82,7 @@ pub(crate) trait PaneFactory: Send {
         size: GridSize,
         cell_px: CellPixels,
         cwd: Option<PathBuf>,
-        env: Vec<(String, String)>,
+        env: Vec<(EnvKey, EnvValue)>,
     ) -> OrzmaTtyResult<OrzmaTty<OrzmaVt>>;
 }
 
@@ -74,6 +91,7 @@ pub(crate) struct ShellFactory {
     shell: String,
     scrollback_rows: usize,
     cursor_policy: CursorPolicy,
+    shell_integration: bool,
 }
 
 impl ShellFactory {
@@ -83,6 +101,7 @@ impl ShellFactory {
         shell: Option<String>,
         scrollback_rows: usize,
         cursor_policy: CursorPolicy,
+        shell_integration: bool,
     ) -> Self {
         Self {
             shell: resolve_shell(
@@ -93,6 +112,7 @@ impl ShellFactory {
             ),
             scrollback_rows,
             cursor_policy,
+            shell_integration,
         }
     }
 }
@@ -103,7 +123,7 @@ impl PaneFactory for ShellFactory {
         size: GridSize,
         cell_px: CellPixels,
         cwd: Option<PathBuf>,
-        env: Vec<(String, String)>,
+        env: Vec<(EnvKey, EnvValue)>,
     ) -> OrzmaTtyResult<OrzmaTty<OrzmaVt>> {
         let vt = OrzmaVt::new(size, self.scrollback_rows).with_cursor_policy(self.cursor_policy);
         OrzmaTty::spawn(
@@ -113,13 +133,34 @@ impl PaneFactory for ShellFactory {
                 cell_px,
                 shell: self.shell.clone(),
                 cwd,
-                env: env
-                    .into_iter()
-                    .map(|(k, v)| (EnvKey(k), EnvValue(v)))
-                    .collect(),
+                env,
+                shell_integration: self.shell_integration,
             },
         )
     }
+}
+
+/// Which source a working-directory candidate comes from.
+#[derive(Clone, Copy)]
+enum Candidate {
+    /// The directory the operating system reports for the pane's
+    /// foreground process or shell.
+    Os,
+    /// The directory the shell last reported through OSC 7 or OSC 9;9.
+    Reported,
+    /// The directory the pane's shell was spawned in.
+    Spawned,
+}
+
+/// `path` when it still exists and can be entered, else `None`.
+// NOTE: on Unix, `<dir>/.` resolves only with search permission on the
+// directory itself, which the spawn's chdir also needs; `is_dir()` on
+// the bare path would accept a directory the new shell cannot enter,
+// and the split would then fail to spawn. On Windows the `.` component
+// is collapsed before the syscall, so this check is equivalent there to
+// `path.is_dir()`.
+fn enterable(path: PathBuf) -> Option<PathBuf> {
+    path.join(".").is_dir().then_some(path)
 }
 
 /// Resolves the shell: a non-empty config value wins; otherwise a
@@ -215,11 +256,10 @@ mod tests {
     use orzma_tty::test_support::CaptureSink;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use orzma_vt::prelude::{CursorBlink, CursorShape, TextCursorStyle, Vt};
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     use std::thread;
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     use std::time::{Duration, Instant};
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     use tempfile::TempDir;
 
     /// A terminal with no process behind it, so the OS reports no
@@ -301,37 +341,76 @@ mod tests {
         assert_eq!(windows_default_shell(|_| false, None), "cmd.exe");
     }
 
-    /// Asserts that a pane reports the directory it was spawned in when the
-    /// OS reports no directory for its process and its shell has sent no
-    /// OSC 7 report.
+    /// Asserts that a pane reports the directory it was spawned in when
+    /// the OS reports no directory for its process and its shell has
+    /// sent no report.
     ///
-    /// Case: the user splits a pane again before its new shell has printed
-    /// its first prompt, while the OS cannot be asked for the pane's
-    /// directory.
+    /// Case: the user splits a pane again before its new shell has
+    /// printed its first prompt, while the OS cannot be asked for the
+    /// pane's directory.
     #[test]
-    fn a_pane_without_an_osc7_report_falls_back_to_its_spawn_directory() {
+    fn a_pane_without_a_report_falls_back_to_its_spawn_directory() {
+        let spawned = TempDir::new().expect("a temporary directory");
         let pane = Pane::new(
             detached_tty(),
             (80, 24, CellPixels::default()),
-            Some(PathBuf::from("/spawned")),
+            Some(spawned.path().to_path_buf()),
         );
-        assert_eq!(pane.cwd(), Some(PathBuf::from("/spawned")));
+        assert_eq!(pane.cwd().as_deref(), Some(spawned.path()));
     }
 
-    /// Asserts that a directory reported through OSC 7 is reported ahead
-    /// of the spawn directory.
+    /// Asserts that a directory the shell reported is reported ahead of
+    /// the spawn directory.
     ///
-    /// Case: a shell that reports its directory through OSC 7 changes into
-    /// a project while the OS cannot be asked for the pane's directory.
+    /// Case: a shell that reports its directory changes into a project
+    /// while the OS cannot be asked for the pane's directory.
     #[test]
-    fn an_osc7_report_wins_over_the_spawn_directory() {
+    fn a_report_wins_over_the_spawn_directory() {
+        let spawned = TempDir::new().expect("a temporary directory");
+        let reported = TempDir::new().expect("a temporary directory");
         let mut pane = Pane::new(
             detached_tty(),
             (80, 24, CellPixels::default()),
-            Some(PathBuf::from("/spawned")),
+            Some(spawned.path().to_path_buf()),
         );
-        pane.set_osc7_cwd(PathBuf::from("/reported"));
-        assert_eq!(pane.cwd(), Some(PathBuf::from("/reported")));
+        pane.set_reported_cwd(reported.path().to_path_buf());
+        assert_eq!(pane.cwd().as_deref(), Some(reported.path()));
+    }
+
+    /// Asserts that a reported directory that no longer exists is passed
+    /// over for the spawn directory rather than handed to the next
+    /// spawn.
+    ///
+    /// Case: the shell reported a scratch directory and the user then
+    /// deleted it from another pane, and now splits this one.
+    #[test]
+    fn a_reported_directory_that_is_gone_falls_back_to_the_spawn_directory() {
+        let spawned = TempDir::new().expect("a temporary directory");
+        let reported = TempDir::new().expect("a temporary directory");
+        let gone = reported.path().to_path_buf();
+        let mut pane = Pane::new(
+            detached_tty(),
+            (80, 24, CellPixels::default()),
+            Some(spawned.path().to_path_buf()),
+        );
+        pane.set_reported_cwd(gone);
+        drop(reported);
+        assert_eq!(pane.cwd().as_deref(), Some(spawned.path()));
+    }
+
+    /// Asserts that a pane whose every candidate directory is gone
+    /// reports none, rather than reporting one the next spawn would
+    /// reject.
+    ///
+    /// Case: the user deletes the directory a pane was spawned in and
+    /// then splits that pane.
+    #[test]
+    fn a_pane_whose_directories_are_all_gone_reports_none() {
+        let spawned = TempDir::new().expect("a temporary directory");
+        let gone = spawned.path().to_path_buf();
+        let pane = Pane::new(detached_tty(), (80, 24, CellPixels::default()), Some(gone));
+        drop(spawned);
+        assert_eq!(pane.cwd(), None);
     }
 
     /// Asserts that the directory the OS reports for the pane's process is
@@ -345,7 +424,7 @@ mod tests {
         let dir = TempDir::new().expect("a temp dir");
         let expected = dir.path().canonicalize().expect("the dir canonicalizes");
         let size = GridSize::new(80, 24).expect("a valid size");
-        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, CursorPolicy::default())
+        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, CursorPolicy::default(), false)
             .spawn(
                 size,
                 CellPixels::default(),
@@ -354,7 +433,8 @@ mod tests {
             )
             .expect("cat spawns under a PTY");
         let mut pane = Pane::new(tty, (80, 24, CellPixels::default()), None);
-        pane.set_osc7_cwd(PathBuf::from("/reported"));
+        let reported_dir = TempDir::new().expect("a temp dir");
+        pane.set_reported_cwd(reported_dir.path().to_path_buf());
         let deadline = Instant::now() + Duration::from_secs(10);
         let reported = loop {
             let reported = pane.cwd();
@@ -364,6 +444,50 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         };
         assert_eq!(reported, Some(expected));
+    }
+
+    /// Asserts that on Windows a directory the shell reported wins over
+    /// the directory the OS reports for the pane's process.
+    ///
+    /// Case: a PowerShell `Set-Location` leaves the OS-visible process
+    /// directory at the shell's launch directory while the shell has
+    /// since reported navigating to another one.
+    #[cfg(windows)]
+    #[test]
+    fn the_reported_directory_wins_over_the_process_directory() {
+        let spawn_dir = TempDir::new().expect("a temp dir");
+        let size = GridSize::new(80, 24).expect("a valid size");
+        let tty = ShellFactory::new(Some("cmd.exe".into()), 100, CursorPolicy::default(), false)
+            .spawn(
+                size,
+                CellPixels::default(),
+                Some(spawn_dir.path().to_path_buf()),
+                Vec::new(),
+            )
+            .expect("cmd spawns under a PTY");
+        let mut pane = Pane::new(tty, (80, 24, CellPixels::default()), None);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let from_os = loop {
+            let from_os = pane.tty.process_cwd();
+            if from_os.is_some() || Instant::now() >= deadline {
+                break from_os;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        let reported_dir = TempDir::new().expect("a temp dir");
+        let expected = reported_dir.path().to_path_buf();
+        pane.set_reported_cwd(expected.clone());
+        let cwd = pane.cwd();
+        // NOTE: closing the pseudoconsole blocks while the shell's output
+        // sits unread, so the terminal must be drained before the pane is
+        // dropped or this test hangs instead of finishing.
+        pane.tty.pump();
+        assert!(
+            from_os.is_some(),
+            "the OS must report a directory for the spawned shell, or this test proves nothing"
+        );
+        assert_ne!(from_os, Some(expected.clone()));
+        assert_eq!(cwd, Some(expected));
     }
 
     /// Asserts that a spawned pane's terminal starts with the factory's
@@ -380,7 +504,7 @@ mod tests {
                 blink: CursorBlink::Blinking,
             },
         };
-        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, policy)
+        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, policy, false)
             .spawn(
                 GridSize::new(80, 24).expect("a valid size"),
                 CellPixels::default(),

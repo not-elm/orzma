@@ -28,6 +28,8 @@ mod coalescer;
 mod error;
 mod input;
 mod pty;
+#[cfg(any(windows, test))]
+mod shell_integration;
 mod signal;
 pub mod test_support;
 
@@ -40,6 +42,7 @@ pub mod prelude {
 }
 
 /// Spawn parameters consumed exactly once by `OrzmaTty::spawn`.
+#[derive(Clone)]
 pub struct SpawnOptions {
     /// Terminal grid size.
     pub size: GridSize,
@@ -51,6 +54,9 @@ pub struct SpawnOptions {
     pub cwd: Option<PathBuf>,
     /// Arbitrary environment variables forwarded to the shell.
     pub env: Vec<(EnvKey, EnvValue)>,
+    /// Whether orzma may make a shell it recognizes report its working
+    /// directory. Has no effect outside Windows.
+    pub shell_integration: bool,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -174,14 +180,15 @@ impl<V: Vt> OrzmaTty<V> {
         self.pty.size()
     }
 
-    /// The working directory of the process this terminal is showing: its
-    /// foreground process, else its shell. Only a directory that still
-    /// exists and can be entered is reported.
+    /// The working directory of the process this terminal is showing: on
+    /// Unix its foreground process, else its shell; on Windows its
+    /// shell. Only a directory that still exists and can be entered is
+    /// reported.
     ///
-    /// Returns `None` when neither can be read: no process was spawned,
-    /// the process belongs to another user, it has exited, its directory
-    /// was removed or can no longer be entered, or the platform is neither
-    /// macOS nor Linux.
+    /// Returns `None` when none can be read: no process was spawned, the
+    /// process belongs to another user or is elevated, it has exited,
+    /// its directory was removed or can no longer be entered, or the
+    /// platform is none of macOS, Linux, and Windows.
     #[inline]
     pub fn process_cwd(&self) -> Option<PathBuf> {
         self.pty.process_cwd()

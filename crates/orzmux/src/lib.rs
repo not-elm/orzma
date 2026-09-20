@@ -4,10 +4,12 @@
 
 pub mod backend;
 pub mod client;
+pub mod error;
 pub mod layout;
 pub mod protocol;
 
 pub mod prelude {
-    pub use crate::client::{OrzmuxClient, OrzmuxConfig, OrzmuxSpawnError};
+    pub use crate::client::{OrzmuxClient, OrzmuxConfig};
+    pub use crate::error::*;
     pub use crate::protocol::*;
 }

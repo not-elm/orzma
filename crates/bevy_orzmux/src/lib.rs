@@ -31,9 +31,7 @@ pub mod prelude {
         signals::*,
         title::TtyTitle,
     };
-    pub use orzmux::prelude::{
-        OrzmuxClient, OrzmuxConfig, OrzmuxSpawnError, SplitId, SplitOrientation,
-    };
+    pub use orzmux::prelude::{OrzmuxClient, OrzmuxConfig, SplitId, SplitOrientation};
 }
 
 /// The GUI's connection to the multiplexer backend.

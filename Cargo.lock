@@ -5082,6 +5082,7 @@ dependencies = [
  "libc",
  "orzma_vt",
  "portable-pty",
+ "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
@@ -5125,6 +5126,7 @@ dependencies = [
  "orzma_tty",
  "orzma_vt",
  "tempfile",
+ "thiserror 2.0.18",
  "tracing",
 ]
 

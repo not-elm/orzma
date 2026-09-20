@@ -4,6 +4,7 @@
 use crate::protocol::{PaneDirection, PaneId, PaneRect, Separator, SplitId, SplitOrientation};
 use orzma_vt::prelude::{GridSize, MIN_COLUMNS};
 use std::cmp::Reverse;
+use thiserror::Error;
 
 /// The smallest rectangle a leaf is laid out in.
 const LEAF_MIN: GridSize = GridSize {
@@ -32,11 +33,13 @@ impl Solved {
 
 /// A split was refused because the target leaf cannot hold two minimum
 /// leaves and a separator along the split axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("the target pane has too little room to divide")]
 pub struct SplitRefused;
 
 /// A root insertion was refused because the tree already has a pane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("the tree already holds a root pane")]
 pub struct RootOccupied;
 
 /// The split tree plus the activation history.

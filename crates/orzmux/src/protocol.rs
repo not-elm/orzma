@@ -2,6 +2,7 @@
 //! Everything here is plain data: no Bevy types and no GPU handles.
 
 use orzma_tty::prelude::{CellPixels, MouseReport, TerminalKey, TerminalModifiers, WheelInput};
+use orzma_tty::{EnvKey, EnvValue};
 use orzma_vt::prelude::{
     CellSide, Frame, GridColumn, GridPoint, GridSize, InstanceId, PlacementSize, ScreenLine,
     Scroll, SelectionKind, VtSignal,
@@ -97,11 +98,13 @@ pub enum OrzmuxCommand {
     /// Spawn a pane. `env` is forwarded to the shell verbatim.
     ///
     /// A split with `cwd: None` starts in the target pane's working
-    /// directory: the directory of its foreground process or shell when
-    /// the OS reports one, else the directory it last reported through
-    /// OSC 7, else the directory it was spawned in. A root pane with
-    /// `cwd: None`, or a split whose target has none of these, starts in
-    /// the user's home directory.
+    /// directory: on Unix the directory of its foreground process or
+    /// shell when the OS reports one, else the directory it last
+    /// reported through OSC 7 or OSC 9;9, else the directory it was
+    /// spawned in; on Windows the report is preferred over the OS. Only
+    /// a directory that still exists and can be entered is used. A root
+    /// pane with `cwd: None`, or a split whose target has none of these,
+    /// starts in the user's home directory.
     NewPane {
         /// The id the resulting `PaneOpened` / `SpawnFailed` correlates to.
         request: RequestId,
@@ -110,7 +113,7 @@ pub enum OrzmuxCommand {
         /// The working directory to spawn the shell in, when given.
         cwd: Option<PathBuf>,
         /// Extra environment variables forwarded to the shell.
-        env: Vec<(String, String)>,
+        env: Vec<(EnvKey, EnvValue)>,
     },
     /// Terminate a pane and remove it from the layout tree.
     KillPane {

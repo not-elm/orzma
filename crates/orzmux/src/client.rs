@@ -2,6 +2,7 @@
 //! commands, drains events, and joins the thread on drop.
 
 use crate::backend::{Backend, ShellFactory};
+use crate::error::{OrzmuxError, OrzmuxResult};
 use crate::protocol::{CommandSeq, OrzmuxCommand, OrzmuxEvent};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use orzma_tty::prelude::WheelConfig;
@@ -12,7 +13,8 @@ use std::thread::{self, JoinHandle};
 /// What the backend needs to spawn shells and route the wheel.
 #[derive(Debug, Clone)]
 pub struct OrzmuxConfig {
-    /// Shell override; `None` falls back to `$SHELL`, then `/bin/sh`.
+    /// Shell override; `None` falls back to `$SHELL`, then the
+    /// platform default.
     pub shell: Option<String>,
     /// Scrollback rows every pane retains on its primary screen.
     pub scrollback_rows: usize,
@@ -20,19 +22,10 @@ pub struct OrzmuxConfig {
     pub wheel: WheelConfig,
     /// The cursor policy every pane's terminal starts with.
     pub cursor: CursorPolicy,
+    /// Whether orzma may make a shell it recognizes report its working
+    /// directory. Has no effect outside Windows.
+    pub shell_integration: bool,
 }
-
-/// The backend thread could not be started.
-#[derive(Debug)]
-pub struct OrzmuxSpawnError(pub std::io::Error);
-
-impl std::fmt::Display for OrzmuxSpawnError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "failed to start the orzma-mux thread: {}", self.0)
-    }
-}
-
-impl std::error::Error for OrzmuxSpawnError {}
 
 /// The GUI's connection to the backend.
 ///
@@ -49,7 +42,12 @@ pub struct OrzmuxClient {
 impl OrzmuxClient {
     /// Starts the backend thread (named `orzma-mux`) and returns the
     /// client connected to it.
-    pub fn spawn(config: OrzmuxConfig) -> Result<Self, OrzmuxSpawnError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::BackendThread`] when the OS refuses to
+    /// start the multiplexer thread.
+    pub fn spawn(config: OrzmuxConfig) -> OrzmuxResult<Self> {
         let (command_tx, command_rx) = unbounded::<(CommandSeq, OrzmuxCommand)>();
         let (event_tx, event_rx) = unbounded::<OrzmuxEvent>();
         let OrzmuxConfig {
@@ -57,12 +55,13 @@ impl OrzmuxClient {
             scrollback_rows,
             wheel,
             cursor,
+            shell_integration,
         } = config;
-        let factory = ShellFactory::new(shell, scrollback_rows, cursor);
+        let factory = ShellFactory::new(shell, scrollback_rows, cursor, shell_integration);
         let thread = thread::Builder::new()
             .name("orzma-mux".to_string())
             .spawn(move || Backend::new(Box::new(factory), command_rx, event_tx, wheel).run())
-            .map_err(OrzmuxSpawnError)?;
+            .map_err(OrzmuxError::BackendThread)?;
         Ok(Self {
             commands: Some(command_tx),
             events: event_rx,

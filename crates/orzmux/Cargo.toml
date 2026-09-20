@@ -12,6 +12,7 @@ publish.workspace = true
 orzma_vt = { path = "../orzma_vt" }
 orzma_tty = { path = "../orzma_tty" }
 crossbeam-channel = "0.5"
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [features]

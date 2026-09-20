@@ -51,6 +51,7 @@ fn main() {
         scrollback_rows: SCROLLBACK_ROWS,
         wheel: wheel_config(&pre_configs.mouse),
         cursor: cursor_policy(&pre_configs.cursor),
+        shell_integration: pre_configs.orzma.shell_integration,
     }) {
         Ok(client) => client,
         Err(err) => {

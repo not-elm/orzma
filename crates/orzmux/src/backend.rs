@@ -4,15 +4,18 @@
 
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::{ChunkDepth, QueueSampler};
+use crate::error::{OrzmuxError, OrzmuxResult};
 use crate::layout::LayoutTree;
 use crate::protocol::{
     CloseReason, CommandSeq, Layout, NewPaneAt, OrzmuxCommand, OrzmuxEvent, PaneId, PaneTarget,
-    RequestId,
+    RequestId, SplitOrientation,
 };
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
-use orzma_tty::CellPixels;
-use orzma_tty::prelude::{OrzmaTtyError, OrzmaTtyResult, PumpItem, TtySignal, WheelConfig};
-use orzma_vt::prelude::{Frame, GridSize, Vt, VtSignal};
+use orzma_tty::prelude::{
+    OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PumpItem, TtySignal, WheelConfig,
+};
+use orzma_tty::{CellPixels, EnvKey, EnvValue};
+use orzma_vt::prelude::{Frame, GridSize, OrzmaVt, Vt, VtSignal};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -312,14 +315,18 @@ impl Backend {
         request: RequestId,
         at: NewPaneAt,
         cwd: Option<PathBuf>,
-        env: Vec<(String, String)>,
+        env: Vec<(EnvKey, EnvValue)>,
     ) {
         let Some(geometry) = self.geometry else {
-            self.emit(OrzmuxEvent::SpawnFailed {
-                request,
-                error: "no geometry".to_string(),
-            });
+            self.fail_spawn(request, OrzmuxError::NoGeometry);
             return;
+        };
+        let at = match self.resolve_at(at) {
+            Ok(at) => at,
+            Err(error) => {
+                self.fail_spawn(request, error);
+                return;
+            }
         };
         let new = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
@@ -327,10 +334,7 @@ impl Backend {
         let split_target = match self.insert_pane(new, at, geometry.size) {
             Ok(split_target) => split_target,
             Err(error) => {
-                self.emit(OrzmuxEvent::SpawnFailed {
-                    request,
-                    error: error.to_string(),
-                });
+                self.fail_spawn(request, error);
                 return;
             }
         };
@@ -339,19 +343,7 @@ impl Backend {
                 .and_then(|id| self.panes.get(&id))
                 .and_then(Pane::cwd)
         });
-        let spawned = self
-            .tree
-            .solve(geometry.size)
-            .rect_of(new)
-            .ok_or_else(|| "the new pane is not in the solved layout".to_string())
-            .and_then(|rect| GridSize::new(rect.cols, rect.rows).map_err(|err| err.to_string()))
-            .and_then(|size| {
-                self.factory
-                    .spawn(size, geometry.cell_px, spawn_cwd.clone(), env)
-                    .map(|tty| (tty, size))
-                    .map_err(|err| err.to_string())
-            });
-        match spawned {
+        match self.spawn_pane(new, geometry, spawn_cwd.clone(), env) {
             Ok((tty, size)) => {
                 self.panes.insert(
                     new,
@@ -365,34 +357,96 @@ impl Backend {
                 if let Some(previous) = previous_active {
                     self.tree.select(previous);
                 }
-                self.emit(OrzmuxEvent::SpawnFailed { request, error });
+                self.fail_spawn(request, error);
             }
         }
     }
 
+    /// `at` with its split target resolved to a concrete, live pane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when the split target
+    /// does not resolve.
+    fn resolve_at(&self, at: NewPaneAt) -> OrzmuxResult<ResolvedPaneAt> {
+        let NewPaneAt::Split { pane, orientation } = at else {
+            return Ok(ResolvedPaneAt::Root);
+        };
+        let target = self.resolve(pane).ok_or(OrzmuxError::UnresolvedTarget)?;
+        // NOTE: `pane` is pinned to this concrete id now rather than
+        // re-resolved later. `NewPaneAt::Split` can carry
+        // `PaneTarget::Active`, and re-resolving it after something else
+        // moved the active pane would divide whichever pane is active
+        // then, not the one the command named.
+        Ok(ResolvedPaneAt::Split {
+            pane: target,
+            orientation,
+        })
+    }
+
     /// Inserts `new` into the tree at `at`. Returns the pane a split
-    /// divides, `None` for a root pane, or why the insertion was refused.
+    /// divides, or `None` for a root pane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::RootOccupied`] when a root pane is
+    /// requested while the tree holds one, and
+    /// [`OrzmuxError::SplitRefused`] when the target has too little
+    /// room to divide.
     fn insert_pane(
         &mut self,
         new: PaneId,
-        at: NewPaneAt,
+        at: ResolvedPaneAt,
         window: GridSize,
-    ) -> Result<Option<PaneId>, &'static str> {
+    ) -> OrzmuxResult<Option<PaneId>> {
         match at {
-            NewPaneAt::Root => {
-                self.tree
-                    .insert_root(new)
-                    .map_err(|_| "root already open")?;
+            ResolvedPaneAt::Root => {
+                self.tree.insert_root(new)?;
                 Ok(None)
             }
-            NewPaneAt::Split { pane, orientation } => {
-                let target = self.resolve(pane).ok_or("no target pane")?;
-                self.tree
-                    .split(target, orientation, new, window)
-                    .map_err(|_| "no space")?;
-                Ok(Some(target))
+            ResolvedPaneAt::Split { pane, orientation } => {
+                self.tree.split(pane, orientation, new, window)?;
+                Ok(Some(pane))
             }
         }
+    }
+
+    /// Spawns the terminal for `new` at the size the solved layout gives
+    /// it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::Unsolved`] when the tree does not place
+    /// the pane, [`OrzmuxError::Vt`] when its rectangle is not a valid
+    /// size, and [`OrzmuxError::SpawnShell`] when the shell refuses to
+    /// start.
+    fn spawn_pane(
+        &mut self,
+        new: PaneId,
+        geometry: Geometry,
+        cwd: Option<PathBuf>,
+        env: Vec<(EnvKey, EnvValue)>,
+    ) -> OrzmuxResult<(OrzmaTty<OrzmaVt>, GridSize)> {
+        let rect = self
+            .tree
+            .solve(geometry.size)
+            .rect_of(new)
+            .ok_or(OrzmuxError::Unsolved)?;
+        let size = GridSize::new(rect.cols, rect.rows)?;
+        let tty = self.factory.spawn(size, geometry.cell_px, cwd, env)?;
+        Ok((tty, size))
+    }
+
+    /// Answers a `NewPane` request with the failure that refused it.
+    // NOTE: `OrzmuxEvent` derives `Clone` and `PartialEq`, which
+    // `OrzmaTtyError` does not, so the wire carries the rendered text
+    // rather than the error itself. This is the one place that renders
+    // it.
+    fn fail_spawn(&mut self, request: RequestId, error: OrzmuxError) {
+        self.emit(OrzmuxEvent::SpawnFailed {
+            request,
+            error: error.to_string(),
+        });
     }
 
     /// Tells every pane whether it holds focus, then re-solves the tree,
@@ -481,7 +535,7 @@ impl Backend {
                     if let VtSignal::CurrentDir(path) = &signal
                         && let Some(pane) = self.panes.get_mut(&id)
                     {
-                        pane.set_osc7_cwd(path.clone());
+                        pane.set_reported_cwd(path.clone());
                     }
                     self.emit(OrzmuxEvent::Signal { pane: id, signal });
                 }
@@ -583,6 +637,21 @@ struct Geometry {
     cell_px: CellPixels,
 }
 
+/// Where a new pane goes, with its split target already resolved to a
+/// live pane.
+#[derive(Clone, Copy)]
+enum ResolvedPaneAt {
+    /// The first pane; valid only while the tree is empty.
+    Root,
+    /// Split `pane`, putting the new pane right of / below it.
+    Split {
+        /// The pane being split.
+        pane: PaneId,
+        /// The direction of the divider the split introduces.
+        orientation: SplitOrientation,
+    },
+}
+
 /// What one ready `Select` index refers to.
 #[derive(Debug, Clone, Copy)]
 enum Ready {
@@ -620,6 +689,7 @@ const PUMP_ROUNDS: usize = 4;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::SplitRefused;
     use crate::prelude::{PaneDirection, SplitId, SplitOrientation};
     use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
     use orzma_tty::prelude::{
@@ -629,11 +699,13 @@ mod tests {
     use orzma_tty::test_support::{BlockingSink, CaptureSink, FailingSink};
     use orzma_vt::prelude::OrzmaVt;
     use std::collections::VecDeque;
-    use std::io::Write;
+    use std::io::{Error as IoError, Write};
+    use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
+    use tempfile::TempDir;
 
     /// The test's ends of one spawned pane's streams.
     struct FakePane {
@@ -671,7 +743,7 @@ mod tests {
             size: GridSize,
             _cell_px: CellPixels,
             cwd: Option<PathBuf>,
-            _env: Vec<(String, String)>,
+            _env: Vec<(EnvKey, EnvValue)>,
         ) -> OrzmaTtyResult<OrzmaTty<OrzmaVt>> {
             self.log.sizes.lock().unwrap().push(size);
             self.log.cwds.lock().unwrap().push(cwd);
@@ -874,6 +946,74 @@ mod tests {
         ));
         assert_eq!(h.backend.tree.panes(), vec![root]);
         assert_eq!(h.backend.tree.active(), Some(root));
+    }
+
+    /// Asserts that each way a split can be refused reports its own
+    /// reason, rather than all of them collapsing to one message.
+    ///
+    /// Case: a user splits before the window has reported its size, and
+    /// later splits a pane that has no room left to divide.
+    #[test]
+    fn a_refused_split_names_the_reason_it_was_refused() {
+        assert_eq!(
+            OrzmuxError::NoGeometry.to_string(),
+            "a pane was requested before the window reported its size"
+        );
+        assert_eq!(
+            OrzmuxError::UnresolvedTarget.to_string(),
+            "no pane matches the target"
+        );
+        assert_eq!(
+            OrzmuxError::from(SplitRefused).to_string(),
+            "the target pane has too little room to divide"
+        );
+    }
+
+    /// Asserts that a split whose target no longer exists is answered
+    /// with `SpawnFailed` alone, leaving the tree and the next pane id
+    /// untouched.
+    ///
+    /// Case: the target pane's shell exits between the moment the user
+    /// presses the split shortcut and the moment the backend reaches the
+    /// command.
+    #[test]
+    fn a_split_whose_target_is_gone_is_refused_without_disturbing_the_tree() {
+        let mut h = Harness::new();
+        let (root, _pane) = h.open_root();
+        let next_id = h.backend.next_pane_id;
+        h.send(OrzmuxCommand::NewPane {
+            request: RequestId(2),
+            at: NewPaneAt::Split {
+                pane: PaneTarget::Id(PaneId(9999)),
+                orientation: SplitOrientation::Vertical,
+            },
+            cwd: None,
+            env: vec![],
+        });
+        let events = h.drain();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events.front(),
+            Some(OrzmuxEvent::SpawnFailed {
+                request: RequestId(2),
+                ..
+            })
+        ));
+        assert_eq!(h.backend.tree.panes(), vec![root]);
+        assert_eq!(h.backend.next_pane_id, next_id);
+    }
+
+    /// Asserts that a backend thread start-up failure's message includes
+    /// the OS error text.
+    ///
+    /// Case: the OS refuses to start the `orzma-mux` thread.
+    #[test]
+    fn a_backend_thread_failure_keeps_the_os_error_text() {
+        let io_err = IoError::other("out of threads");
+        assert_eq!(
+            OrzmuxError::BackendThread(io_err).to_string(),
+            "the orzma-mux thread could not be started: out of threads"
+        );
     }
 
     /// Asserts that a split resizes the target pane and ships its
@@ -1104,6 +1244,22 @@ mod tests {
             .expect("pending output arms the coalescer");
         assert!(Some(pane_deadline) < report_deadline);
         assert_eq!(h.backend.next_wake_deadline(), Some(pane_deadline));
+    }
+
+    /// An `OSC 7` sequence reporting `path`, spelled the way a shell on
+    /// this platform would.
+    // NOTE: the separator between the authority and the path is what
+    // makes the URI well-formed. A Windows path starts with a drive
+    // letter rather than `/`, so joining it to `file://localhost`
+    // directly yields `file://localhostC:/…`, whose path the parser
+    // reads as `/Users/…` — not drive-rooted, and rejected.
+    fn osc7(path: &Path) -> Vec<u8> {
+        let forward = path.display().to_string().replace('\\', "/");
+        format!(
+            "\x1b]7;file://localhost/{}\x1b\\",
+            forward.trim_start_matches('/')
+        )
+        .into_bytes()
     }
 
     /// Splits the active pane and returns the new pane's id and its
@@ -1409,46 +1565,47 @@ mod tests {
         assert_eq!(answers, 2);
     }
 
-    /// Asserts that a split inherits the target pane's last OSC 7
-    /// directory when the GUI passes `cwd: None` and the OS reports no
-    /// directory for the target's process.
+    /// Asserts that a split with no explicit directory starts in the
+    /// directory the target pane's shell reported, when the OS reports
+    /// no directory for the target's process.
     ///
-    /// Case: a shell that reports its directory through OSC 7 `cd`s into a
-    /// project while the OS cannot be asked for the pane's directory, and
-    /// the user splits the pane.
+    /// Case: a shell that reports its directory `cd`s into a project
+    /// while the OS cannot be asked for the pane's directory, and the
+    /// user splits the pane.
     #[test]
     fn a_split_inherits_the_target_panes_reported_cwd() {
+        let project = TempDir::new().expect("a temporary directory");
+        let uri = osc7(project.path());
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx
-            .send(b"\x1b]7;file://localhost/tmp/project\x1b\\".to_vec())
-            .unwrap();
+        pane.chunk_tx.send(uri).unwrap();
         h.backend.pump_pane(root);
         h.drain();
         assert_eq!(
             h.backend.panes[&root].cwd().as_deref(),
-            Some(std::path::Path::new("/tmp/project"))
+            Some(project.path())
         );
         h.log.cwds.lock().unwrap().clear();
         split_active(&mut h, 2);
         assert_eq!(
             h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
-            Some(std::path::Path::new("/tmp/project"))
+            Some(project.path())
         );
     }
 
-    /// Asserts that a split given an explicit directory spawns there rather
-    /// than in the target pane's directory.
+    /// Asserts that a split given an explicit directory spawns there
+    /// rather than in the target pane's directory.
     ///
     /// Case: a caller opens a split in a directory it names itself while
     /// the target pane's shell has reported another.
     #[test]
     fn an_explicit_cwd_wins_over_the_target_panes_cwd() {
+        let project = TempDir::new().expect("a temporary directory");
+        let explicit = TempDir::new().expect("a temporary directory");
+        let uri = osc7(project.path());
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx
-            .send(b"\x1b]7;file://localhost/tmp/project\x1b\\".to_vec())
-            .unwrap();
+        pane.chunk_tx.send(uri).unwrap();
         h.backend.pump_pane(root);
         h.drain();
         h.log.cwds.lock().unwrap().clear();
@@ -1458,13 +1615,13 @@ mod tests {
                 pane: PaneTarget::Active,
                 orientation: SplitOrientation::Vertical,
             },
-            cwd: Some(PathBuf::from("/explicit")),
+            cwd: Some(explicit.path().to_path_buf()),
             env: vec![],
         });
         h.drain();
         assert_eq!(
             h.log.cwds.lock().unwrap().last().cloned().flatten(),
-            Some(PathBuf::from("/explicit"))
+            Some(explicit.path().to_path_buf())
         );
     }
 
@@ -1472,16 +1629,16 @@ mod tests {
     /// directory on when it is split before its own shell has reported
     /// one and while the OS reports no directory for its process.
     ///
-    /// Case: the user splits twice in quick succession while the new shell
-    /// has not printed its first prompt and the OS cannot be asked for the
-    /// new pane's directory.
+    /// Case: the user splits twice in quick succession while the new
+    /// shell has not printed its first prompt and the OS cannot be asked
+    /// for the new pane's directory.
     #[test]
     fn a_split_from_a_pane_that_has_not_reported_a_cwd_passes_on_its_spawn_cwd() {
+        let project = TempDir::new().expect("a temporary directory");
+        let uri = osc7(project.path());
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx
-            .send(b"\x1b]7;file://localhost/tmp/project\x1b\\".to_vec())
-            .unwrap();
+        pane.chunk_tx.send(uri).unwrap();
         h.backend.pump_pane(root);
         h.drain();
         split_active(&mut h, 2);
@@ -1489,7 +1646,7 @@ mod tests {
         split_active(&mut h, 3);
         assert_eq!(
             h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
-            Some(std::path::Path::new("/tmp/project"))
+            Some(project.path())
         );
     }
 
