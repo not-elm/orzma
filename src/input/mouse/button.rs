@@ -776,32 +776,20 @@ mod tests {
     /// because it is in vi mode.
     #[test]
     fn mouse_disabled_terminal_drains_without_arming_a_gesture() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_message::<MouseButtonInput>()
-            .add_message::<CursorMoved>()
-            .init_resource::<OrzmaMouseConfig>()
-            .init_resource::<OrzmaMouseGesture>()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .insert_resource(test_metrics())
-            .add_systems(Update, dispatch_mouse_buttons);
-        app.world_mut().spawn((OrzmaTerminal, MouseDisabled));
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                ..default()
-            },
-            PrimaryWindow,
-        ));
-        app.world_mut()
-            .resource_mut::<Messages<MouseButtonInput>>()
-            .write(MouseButtonInput {
-                button: MouseButton::Left,
-                state: ButtonState::Pressed,
-                window: Entity::PLACEHOLDER,
-            });
+        let mut app = make_selection_app();
+        let terminal = app
+            .world_mut()
+            .query_filtered::<Entity, With<OrzmaTerminal>>()
+            .single(app.world())
+            .expect("make_selection_app spawns exactly one terminal surface");
+        app.world_mut().entity_mut(terminal).insert(MouseDisabled);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_left(&mut app, ButtonState::Pressed);
         app.update();
-        assert!(app.world().resource::<OrzmaMouseGesture>().drag.is_none());
+        assert!(
+            app.world().resource::<OrzmaMouseGesture>().drag.is_none(),
+            "a suppressed terminal must not arm a drag — the press is swallowed"
+        );
     }
 
     /// Asserts that a press over a `MouseClaimedByWebview` terminal is

@@ -110,23 +110,26 @@ pub(in crate::input::mouse) fn route_webview_left_click(
 /// Releases an in-flight webview press to CEF (mouse-up at the last
 /// cursor) and clears the marker. Call this when input is suppressed (a
 /// modal opens, or the window loses focus), so the focused web page is
-/// not left logically pressed with no matching mouse-up. `cursor_phys` is
-/// `None` when there is no placeable cursor (off-window): then the press
-/// is dropped WITHOUT a CEF mouse-up.
+/// not left logically pressed with no matching mouse-up. A frame whose
+/// `cursor_phys` is `None` has no placeable cursor (off-window): the
+/// press is then dropped WITHOUT a CEF mouse-up.
 pub(in crate::input::mouse) fn release_webview_press(
     webview_press: &mut WebviewPress,
     route: &WebviewRouteParams,
-    cursor_phys: Option<Vec2>,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    scale: f32,
+    frame: &WebviewPointerFrame,
 ) {
     let Some(child) = webview_press.0.take() else {
         return;
     };
-    if let Some(cursor_phys) = cursor_phys
-        && let Some(dip) =
-            webview_release_dip(route, child, cursor_phys, cell_w_phys, cell_h_phys, scale)
+    if let Some(cursor_phys) = frame.cursor_phys
+        && let Some(dip) = webview_release_dip(
+            route,
+            child,
+            cursor_phys,
+            frame.cell_w,
+            frame.cell_h,
+            frame.scale,
+        )
     {
         route
             .cef

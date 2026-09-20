@@ -585,7 +585,8 @@ mod tests {
     /// Shell terminal (`OrzmaTerminal`) at window center (400,300),
     /// size 800x600, with one interactive inline rect rows 2..12, cols 3..43
     /// (phys y 32..192, x 24..344 at the 8x16 px cell pitch). Runs
-    /// `maintain_input_gates`. Returns `(app, shell)`.
+    /// `maintain_input_gates` under the production `InputPhase` ordering.
+    /// Returns `(app, shell)`.
     fn make_gate_app() -> (App, Entity) {
         use bevy::math::IVec4;
         use bevy::window::WindowResolution;
@@ -607,7 +608,16 @@ mod tests {
             },
             phys_font_size: 16,
         });
-        app.add_systems(Update, maintain_input_gates);
+        app.configure_sets(
+            Update,
+            (
+                InputPhase::Hover,
+                InputPhase::Dispatch,
+                InputPhase::FocusedKey,
+            )
+                .chain(),
+        );
+        app.add_systems(Update, maintain_input_gates.before(InputPhase::Hover));
 
         let mut overlays = TerminalOverlays::default();
         overlays.rects[0] = IVec4::new(2, 3, 10, 40);
@@ -920,9 +930,8 @@ mod tests {
         );
     }
 
-    /// Asserts that a component inserted by a system ordered before
-    /// `InputPhase::Hover` is visible to a system in `InputPhase::Dispatch`
-    /// within the same update.
+    /// Asserts that the rect-claim `maintain_input_gates` writes is visible
+    /// to a system in `InputPhase::Dispatch` within the same update.
     ///
     /// Case: the host gates a terminal on the frame the pointer reaches an
     /// interactive rect, and the dispatchers have to see that gate on the
@@ -932,38 +941,21 @@ mod tests {
         #[derive(Resource, Default)]
         struct SawMarker(bool);
 
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<SawMarker>()
-            .configure_sets(
-                Update,
-                (
-                    InputPhase::Hover,
-                    InputPhase::Dispatch,
-                    InputPhase::FocusedKey,
-                )
-                    .chain(),
-            );
-        let entity = app.world_mut().spawn(OrzmaTerminal).id();
-        app.add_systems(
+        let (mut app, shell) = make_gate_app();
+        app.init_resource::<SawMarker>().add_systems(
             Update,
-            (
-                (move |mut commands: Commands| {
-                    commands.entity(entity).insert(MouseDisabled);
-                })
-                .before(InputPhase::Hover),
-                (move |mut saw: ResMut<SawMarker>, gated: Query<Has<MouseDisabled>>| {
-                    if let Ok(has) = gated.get(entity) {
-                        saw.0 = has;
-                    }
-                })
-                .in_set(InputPhase::Dispatch),
-            ),
+            (move |mut saw: ResMut<SawMarker>, gated: Query<Has<MouseClaimedByWebview>>| {
+                if let Ok(has) = gated.get(shell) {
+                    saw.0 = has;
+                }
+            })
+            .in_set(InputPhase::Dispatch),
         );
+        set_gate_cursor(&mut app, Vec2::new(40.0, 48.0));
         app.update();
         assert!(
             app.world().resource::<SawMarker>().0,
-            "the sync point at the ordering edge applies the insert before Dispatch runs"
+            "the sync point at the ordering edge applies the claim before Dispatch runs"
         );
     }
 }

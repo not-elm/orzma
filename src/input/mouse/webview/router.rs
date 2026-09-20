@@ -47,8 +47,7 @@ impl Plugin for MouseWebviewRouterPlugin {
             Update,
             forward_webview_wheel
                 .in_set(InputPhase::Dispatch)
-                .run_if(on_message::<MouseWheel>)
-                .run_if(not(any_with_component::<GrabbedSeparator>)),
+                .run_if(on_message::<MouseWheel>),
         );
     }
 }
@@ -128,14 +127,7 @@ fn route_webview_pointer(
     let frame = webview_pointer_frame(window, &metrics);
     if !window.focused {
         buttons.clear();
-        release_webview_press(
-            &mut webview_press,
-            &webview_route,
-            frame.cursor_phys,
-            frame.cell_w,
-            frame.cell_h,
-            frame.scale,
-        );
+        release_webview_press(&mut webview_press, &webview_route, &frame);
         return;
     }
     if let Some(terminal) = pressed_terminal(&webview_press, &webview_route)
@@ -143,34 +135,25 @@ fn route_webview_pointer(
             .get(terminal)
             .is_ok_and(|(_, _, _, _, suppressed)| suppressed)
     {
-        release_webview_press(
-            &mut webview_press,
-            &webview_route,
-            frame.cursor_phys,
-            frame.cell_w,
-            frame.cell_h,
-            frame.scale,
-        );
+        release_webview_press(&mut webview_press, &webview_route, &frame);
+    }
+    if buttons.is_empty() {
+        return;
     }
     let surface = frame
         .cursor_phys
-        .map(|cursor_phys| SurfaceUnderCursor::resolve(&surfaces, cursor_phys));
+        .map_or(SurfaceUnderCursor::None, |cursor| {
+            SurfaceUnderCursor::resolve(&surfaces, cursor)
+        });
     for ev in buttons.read() {
         if ev.button != MouseButton::Left {
             continue;
         }
         if ev.state == ButtonState::Released {
-            release_webview_press(
-                &mut webview_press,
-                &webview_route,
-                frame.cursor_phys,
-                frame.cell_w,
-                frame.cell_h,
-                frame.scale,
-            );
+            release_webview_press(&mut webview_press, &webview_route, &frame);
             continue;
         }
-        let Some(SurfaceUnderCursor::Open(terminal, local_phys)) = surface else {
+        let SurfaceUnderCursor::Open(terminal, local_phys) = surface else {
             continue;
         };
         route_webview_left_click(
@@ -236,7 +219,8 @@ fn forward_webview_mouse_moves(
 /// (the terminal's wheel routing: mouse reports, alternate-scroll cursor
 /// keys, or the scrollback) through its own reader; over the rect the
 /// shell is `MouseClaimedByWebview`, so that dispatcher yields and only
-/// the page scrolls.
+/// the page scrolls. A held divider drains the reader and forwards
+/// nothing.
 fn forward_webview_wheel(
     mut wheel: MessageReader<MouseWheel>,
     focused_webview: Res<FocusedWebview>,
@@ -245,10 +229,19 @@ fn forward_webview_wheel(
     children: Query<&Children>,
     webviews: Query<(&Webview, Has<NonInteractive>)>,
     overlay_rects: Query<&TerminalOverlays>,
+    grabbed: Query<(), With<GrabbedSeparator>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     cef: CefMouse,
 ) {
+    // NOTE: the held-divider guard is a body check rather than a `run_if`
+    // because it must still advance the reader. A `run_if` skips the system
+    // without draining it, so every notch spun during the drag replays into
+    // the page once the divider is let go.
+    if !grabbed.is_empty() {
+        wheel.clear();
+        return;
+    }
     let Ok(window) = windows.single() else {
         wheel.clear();
         return;
@@ -293,13 +286,17 @@ mod tests {
     use super::*;
     #[cfg(target_os = "windows")]
     use async_channel::Receiver;
-    use bevy::input::ButtonState;
+    #[cfg(target_os = "windows")]
+    use bevy::input::mouse::MouseScrollUnit;
+    #[cfg(target_os = "windows")]
+    use bevy::input::touch::TouchPhase;
     use bevy::math::{DVec2, IVec4};
     use bevy::window::WindowResolution;
-    use bevy_cef::prelude::FocusedWebview;
     #[cfg(target_os = "windows")]
     use bevy_cef_core::prelude::{BrowsersProxy, CefCommand};
     use bevy_orzma_tty_renderer::CellMetrics;
+    #[cfg(target_os = "windows")]
+    use bevy_orzmux::prelude::{SplitId, SplitOrientation};
     use orzma_vt::prelude::InstanceId;
 
     fn test_metrics() -> TerminalCellMetricsResource {
@@ -645,6 +642,82 @@ mod tests {
         assert!(
             rx.is_empty(),
             "a suppressed terminal's rect must not forward motion to CEF"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    fn make_wheel_app() -> (App, Entity, Receiver<CefCommand>) {
+        let (mut app, _shell, child) = make_webview_app();
+        let (tx, rx) = async_channel::unbounded::<CefCommand>();
+        app.insert_resource(BrowsersProxy::new(tx));
+        app.add_message::<MouseWheel>();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+        app.add_systems(Update, forward_webview_wheel);
+        set_cursor(&mut app, Vec2::new(40.0, 48.0));
+        (app, child, rx)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn write_wheel(app: &mut App, y: f32) {
+        app.world_mut()
+            .resource_mut::<Messages<MouseWheel>>()
+            .write(MouseWheel {
+                unit: MouseScrollUnit::Line,
+                x: 0.0,
+                y,
+                window: Entity::PLACEHOLDER,
+                phase: TouchPhase::Moved,
+            });
+    }
+
+    /// Asserts that a wheel notch over the focused inline rect reaches CEF
+    /// as a `SendMouseWheel` for the child under the pointer.
+    ///
+    /// Case: the user scrolls a long document shown on a page mounted in a
+    /// pane.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_notch_over_the_focused_rect_reaches_the_page() {
+        let (mut app, child, rx) = make_wheel_app();
+        write_wheel(&mut app, -1.0);
+        app.update();
+        let command = rx.try_recv().expect("the proxy received one command");
+        assert!(
+            matches!(
+                command,
+                CefCommand::SendMouseWheel { webview, .. } if webview == child
+            ),
+            "the notch is forwarded to the focused child under the pointer"
+        );
+    }
+
+    /// Asserts that a notch spun while a divider is held is dropped rather
+    /// than replayed into the page once the divider is let go.
+    ///
+    /// Case: the user drags a pane divider, spins the wheel over a focused
+    /// page before letting go, and then releases the divider.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_held_divider_drops_the_wheel_rather_than_replaying_it() {
+        let (mut app, _child, rx) = make_wheel_app();
+        let divider = app
+            .world_mut()
+            .spawn(GrabbedSeparator::held(
+                SplitId(1),
+                SplitOrientation::Vertical,
+            ))
+            .id();
+        write_wheel(&mut app, -1.0);
+        app.update();
+        assert!(
+            rx.is_empty(),
+            "a held divider forwards no wheel to the page"
+        );
+        app.world_mut().entity_mut(divider).despawn();
+        app.update();
+        assert!(
+            rx.is_empty(),
+            "the notch spun under the held divider is dropped, not replayed once it is let go"
         );
     }
 }
