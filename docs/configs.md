@@ -34,7 +34,7 @@ change — omitted keys fall back to these defaults.
 # Unlike the other enum-valued keys, an unrecognized `style` word silently
 # reverts to the default instead of being a startup error.
 style = "block"           # block | underline | bar
-blink_interval = 750      # milliseconds. Values below 10 are silently raised to 10.
+blink_interval = 750      # milliseconds; 0 keeps the caret steady whatever a program asks for. Any other value below 10 is silently raised to 10.
 blink_timeout = 5         # seconds; 0 blinks indefinitely. Silently raised to twice blink_interval (one full on/off cycle) when shorter.
 thickness = 0.15          # f32 0..=1, fraction of the cell width. Out-of-range silently clamps; NaN reverts to 0.15; 0 still draws 1 physical px.
 unfocused_hollow = true

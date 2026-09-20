@@ -403,16 +403,16 @@ fn decscusr_leaves_the_cursor_visibility_alone() {
     assert_eq!(cursor_shape(&device), CursorShape::Bar);
 }
 
-/// Asserts that `DECSTR` restores the configured initial style rather
-/// than a compile-time default.
+/// Asserts that `DECSTR` leaves the cursor's shape and blink where a
+/// program put them rather than restoring the configured style.
 ///
-/// Case: a TUI issues a soft reset on startup to normalize the terminal
-/// it inherited.
+/// Case: a TUI asks for a blinking underline, then issues a soft reset
+/// on startup to normalize the terminal it inherited.
 #[test]
-fn a_soft_reset_returns_the_cursor_to_the_configured_style() {
+fn a_soft_reset_leaves_the_cursor_style_alone() {
     let device = interpret_with_policy(bar_steady_policy(), b"\x1b[3 q\x1b[!p");
-    assert_eq!(cursor_shape(&device), CursorShape::Bar);
-    assert!(!cursor_blinking(&device));
+    assert_eq!(cursor_shape(&device), CursorShape::Underline);
+    assert!(cursor_blinking(&device));
 }
 
 /// Asserts that `DECSET 12` and `DECRST 12` both reach the blink,

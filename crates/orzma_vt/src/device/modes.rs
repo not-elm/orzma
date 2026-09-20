@@ -228,10 +228,11 @@ pub enum CursorShape {
 /// - `DECSCUSR` (`CSI Ps SP q`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CursorBlink {
-    /// The cursor is drawn continuously; this is the power-up default.
+    /// The cursor is drawn continuously.
     #[default]
     Steady,
-    /// The cursor alternates between drawn and not drawn.
+    /// The cursor alternates between drawn and not drawn. vt510.pdf
+    /// p.54 Table 2-9 gives this as the power-up state.
     Blinking,
 }
 

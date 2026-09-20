@@ -54,9 +54,10 @@ impl Default for CursorConfig {
 }
 
 impl CursorConfig {
-    /// The interval between blink phases, never below 10 ms.
+    /// The interval between blink phases. A zero interval leaves the
+    /// caret steady; any other value below 10 ms is raised to 10 ms.
     pub fn blink_interval(&self) -> Duration {
-        Duration::from_millis(self.blink_interval.max(MIN_BLINK_INTERVAL_MS))
+        Duration::from_millis(raised_interval(self.blink_interval))
     }
 
     /// How long the caret keeps blinking with no keystroke; `None` when
@@ -79,10 +80,10 @@ impl CursorConfig {
         norm_unit(self.thickness, DEFAULT_THICKNESS)
     }
 
-    /// Raises `blink_interval` to its floor and clamps `thickness` to
-    /// `0.0..=1.0`, falling back to the default for NaN.
+    /// Raises a non-zero `blink_interval` to its floor and clamps
+    /// `thickness` to `0.0..=1.0`, falling back to the default for NaN.
     pub(crate) fn normalize(&mut self) {
-        self.blink_interval = self.blink_interval.max(MIN_BLINK_INTERVAL_MS);
+        self.blink_interval = raised_interval(self.blink_interval);
         self.thickness = norm_unit(self.thickness, DEFAULT_THICKNESS);
     }
 }
@@ -91,6 +92,13 @@ const DEFAULT_BLINK_INTERVAL_MS: u64 = 750;
 const DEFAULT_BLINK_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_THICKNESS: f32 = 0.15;
 const MIN_BLINK_INTERVAL_MS: u64 = 10;
+
+fn raised_interval(ms: u64) -> u64 {
+    if ms == 0 {
+        return 0;
+    }
+    ms.max(MIN_BLINK_INTERVAL_MS)
+}
 
 #[cfg(test)]
 mod tests {
@@ -140,14 +148,21 @@ mod tests {
         assert_eq!(cfg.blink_timeout(), Some(Duration::from_millis(1500)));
     }
 
-    /// Asserts that a blink interval below the floor is raised by
-    /// normalization.
+    /// Asserts that a zero interval is kept, leaving the caret steady,
+    /// while any other value below the floor is raised to it.
     ///
-    /// Case: the user writes `blink_interval = 0` while experimenting.
+    /// Case: one user turns blinking off with `blink_interval = 0`, and
+    /// another writes a 5 ms interval while experimenting.
     #[test]
-    fn a_degenerate_interval_is_raised_to_the_floor() {
-        let cfg = from_toml_normalized("blink_interval = 0");
-        assert_eq!(cfg.blink_interval(), Duration::from_millis(10));
+    fn a_zero_interval_is_kept_and_a_low_one_is_raised() {
+        assert_eq!(
+            from_toml_normalized("blink_interval = 0").blink_interval(),
+            Duration::ZERO
+        );
+        assert_eq!(
+            from_toml_normalized("blink_interval = 5").blink_interval(),
+            Duration::from_millis(10)
+        );
     }
 
     /// Asserts that thickness is clamped to the unit range and that NaN

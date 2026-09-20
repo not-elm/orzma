@@ -250,15 +250,14 @@ impl DeviceState {
     /// cells and the cursor position on show, the hidden screen, the
     /// title, and the palette's foreground and background.
     ///
-    /// The cursor's shape and blink return to the host-supplied cursor
-    /// policy's initial style rather than the power-up one.
+    /// The cursor's shape and blink are left as they are; vt510.pdf
+    /// p.277 Table 5-9 lists only `Text cursor enable`.
     ///
     /// # Control Functions
     ///
     /// - `DECSTR` (`CSI ! p`)
     pub fn soft_reset(&mut self) -> Option<DamageSpan> {
         self.modes.text_cursor.enable = TextCursorEnable::Shown;
-        self.apply_initial_cursor_style();
         self.modes.insert_replace = InsertReplaceMode::Replace;
         self.modes.app_cursor = false;
         self.modes.keypad_mode = KeypadMode::Numeric;
