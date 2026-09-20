@@ -35,12 +35,11 @@ pub(crate) struct KeyboardFocused;
 
 /// When present on an `OrzmaTerminal` entity, the host's mouse dispatchers and
 /// hover-cursor system drop it from their hit-test candidate set, so the
-/// pointer falls through to the next terminal below it. The webview router
-/// keeps it as a candidate and declines to act on it, so the pointer does not
-/// fall through there. The host marks a terminal `MouseDisabled` for modal
-/// suppression: vi mode, IME composition, or an unfocused window.
+/// pointer falls through to the next terminal below it. The host marks a
+/// terminal `TerminalMouseDisabled` for vi mode, IME composition, or an
+/// unfocused window.
 #[derive(Component)]
-pub(crate) struct MouseDisabled;
+pub(crate) struct TerminalMouseDisabled;
 
 /// When present on an `OrzmaTerminal` entity, the cursor is over one of its
 /// interactive inline webview rects. The host's mouse dispatchers and
@@ -255,7 +254,7 @@ fn maintain_input_gates(
         (
             Entity,
             Has<KeyboardDisabled>,
-            Has<MouseDisabled>,
+            Has<TerminalMouseDisabled>,
             Has<MouseClaimedByWebview>,
             Has<ViModeState>,
         ),
@@ -284,9 +283,9 @@ fn maintain_input_gates(
             commands.entity(entity).remove::<KeyboardDisabled>();
         }
         if disable_mouse && !has_mouse {
-            commands.entity(entity).insert(MouseDisabled);
+            commands.entity(entity).insert(TerminalMouseDisabled);
         } else if !disable_mouse && has_mouse {
-            commands.entity(entity).remove::<MouseDisabled>();
+            commands.entity(entity).remove::<TerminalMouseDisabled>();
         }
         if claim_mouse && !has_claim {
             commands.entity(entity).insert(MouseClaimedByWebview);
@@ -683,8 +682,11 @@ mod tests {
             "the rect-claim marks the shell so the terminal dispatchers yield to the router"
         );
         assert!(
-            !app.world().entity(shell).contains::<MouseDisabled>(),
-            "the claim must not suppress the shell — MouseDisabled is what keeps the router out too"
+            !app.world()
+                .entity(shell)
+                .contains::<TerminalMouseDisabled>(),
+            "the claim must not suppress the shell — the router is kept out by \
+             WebviewMouseDisabled, not by the claim"
         );
     }
 
@@ -711,7 +713,9 @@ mod tests {
             "an off-rect cursor claims nothing, so the press falls through to the terminal"
         );
         assert!(
-            !app.world().entity(shell).contains::<MouseDisabled>(),
+            !app.world()
+                .entity(shell)
+                .contains::<TerminalMouseDisabled>(),
             "webview focus alone must not suppress the shell"
         );
     }

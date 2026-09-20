@@ -2,7 +2,7 @@
 //! terminal surface (the shell terminal and webview hosts): the only
 //! writer of `HyperlinkHoverState` and the window's `CursorIcon`.
 
-use crate::input::focus::{MouseClaimedByWebview, MouseDisabled};
+use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled};
 use crate::input::mouse::separator::{GrabbedSeparator, SeparatorHit, SeparatorNodes};
 use crate::input::{InputPhase, current_modifiers};
 use crate::surface::OrzmaTerminal;
@@ -64,12 +64,12 @@ type HoverSurfaces<'w, 's> = Query<
     ),
     (
         With<OrzmaTerminal>,
-        Without<MouseDisabled>,
+        Without<TerminalMouseDisabled>,
         Without<MouseClaimedByWebview>,
     ),
 >;
 
-/// Skips any surface with input suppressed (`MouseDisabled`) or claimed by a
+/// Skips any surface with input suppressed (`TerminalMouseDisabled`) or claimed by a
 /// webview (`MouseClaimedByWebview`), so hover never advertises a link the
 /// mouse dispatcher would refuse to open. A divider the pointer holds or
 /// hovers claims the cursor before any surface is read, leaving the hover
@@ -528,7 +528,7 @@ mod tests {
         );
     }
 
-    /// Asserts that a `MouseDisabled` surface is never hovered: the hover
+    /// Asserts that a `TerminalMouseDisabled` surface is never hovered: the hover
     /// state stays empty and the cursor keeps the default arrow even over a
     /// linked cell.
     ///
@@ -567,7 +567,7 @@ mod tests {
         let (view, cells) = linked_grid();
         app.world_mut().spawn((
             OrzmaTerminal,
-            MouseDisabled,
+            TerminalMouseDisabled,
             ComputedNode {
                 size: Vec2::new(80.0, 80.0),
                 ..ComputedNode::DEFAULT
@@ -582,7 +582,7 @@ mod tests {
         let hover = app.world().resource::<HyperlinkHoverState>();
         assert_eq!(
             hover.entity, None,
-            "a MouseDisabled surface must not be hovered — the click is suppressed, so no link affordance"
+            "a TerminalMouseDisabled surface must not be hovered — the click is suppressed, so no link affordance"
         );
         assert_eq!(hover.hyperlink_id, None);
         let icon = app.world().entity(window_entity).get::<CursorIcon>();

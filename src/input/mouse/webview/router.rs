@@ -3,7 +3,7 @@
 //! cursor.
 
 use crate::input::InputPhase;
-use crate::input::focus::MouseDisabled;
+use crate::input::focus::TerminalMouseDisabled;
 use crate::input::mouse::MousePhase;
 use crate::input::mouse::cell_dims;
 use crate::input::mouse::separator::GrabbedSeparator;
@@ -62,7 +62,7 @@ type RouterSurfaces<'w, 's> = Query<
         &'static ComputedNode,
         &'static ComputedStackIndex,
         &'static UiGlobalTransform,
-        Has<MouseDisabled>,
+        Has<TerminalMouseDisabled>,
     ),
     With<OrzmaTerminal>,
 >;
@@ -488,7 +488,9 @@ mod tests {
     #[test]
     fn a_press_on_a_suppressed_terminal_does_not_reach_the_webview() {
         let (mut app, shell, _child) = make_webview_app();
-        app.world_mut().entity_mut(shell).insert(MouseDisabled);
+        app.world_mut()
+            .entity_mut(shell)
+            .insert(TerminalMouseDisabled);
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_left(&mut app, ButtonState::Pressed);
         app.update();
@@ -513,7 +515,9 @@ mod tests {
     fn suppression_of_the_pressed_terminal_releases_the_press() {
         let (mut app, shell, child) = make_webview_app();
         app.world_mut().resource_mut::<WebviewPress>().0 = Some(child);
-        app.world_mut().entity_mut(shell).insert(MouseDisabled);
+        app.world_mut()
+            .entity_mut(shell)
+            .insert(TerminalMouseDisabled);
         let win = app
             .world_mut()
             .query_filtered::<Entity, With<PrimaryWindow>>()
@@ -543,7 +547,7 @@ mod tests {
         app.world_mut().resource_mut::<WebviewPress>().0 = Some(child);
         app.world_mut().spawn((
             OrzmaTerminal,
-            MouseDisabled,
+            TerminalMouseDisabled,
             ComputedNode {
                 size: Vec2::new(200.0, 200.0),
                 ..ComputedNode::DEFAULT
@@ -636,7 +640,9 @@ mod tests {
     #[test]
     fn motion_over_a_suppressed_terminal_forwards_nothing() {
         let (mut app, shell, _child, rx) = make_move_app();
-        app.world_mut().entity_mut(shell).insert(MouseDisabled);
+        app.world_mut()
+            .entity_mut(shell)
+            .insert(TerminalMouseDisabled);
         write_cursor_moved(&mut app, Vec2::new(40.0, 48.0));
         app.update();
         assert!(

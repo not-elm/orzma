@@ -2,7 +2,7 @@
 //! entity means vi mode is active. Entering and exiting request a selection
 //! clear and a `RequestTtyViMode` switch on the underlying tty.
 
-use crate::input::focus::{KeyboardDisabled, MouseDisabled};
+use crate::input::focus::{KeyboardDisabled, TerminalMouseDisabled};
 use bevy::app::{App, Plugin};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
@@ -63,7 +63,7 @@ fn handle_enter_vi_mode_request(
     });
     commands
         .entity(ev.entity)
-        .insert((ViModeState, KeyboardDisabled, MouseDisabled));
+        .insert((ViModeState, KeyboardDisabled, TerminalMouseDisabled));
 }
 
 /// Removes `ViModeState`, and requests a selection clear followed by the
@@ -87,7 +87,7 @@ fn handle_exit_vi_mode(
         .entity(ev.entity)
         .remove::<ViModeState>()
         .remove::<KeyboardDisabled>()
-        .remove::<MouseDisabled>();
+        .remove::<TerminalMouseDisabled>();
 }
 
 #[cfg(test)]
@@ -171,7 +171,7 @@ mod tests {
     }
 
     /// Asserts that entering vi mode marks the entity `KeyboardDisabled`
-    /// and `MouseDisabled`.
+    /// and `TerminalMouseDisabled`.
     ///
     /// Case: the user enters vi mode on the focused terminal.
     #[test]
@@ -183,11 +183,11 @@ mod tests {
         app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
         assert!(app.world().get::<KeyboardDisabled>(entity).is_some());
-        assert!(app.world().get::<MouseDisabled>(entity).is_some());
+        assert!(app.world().get::<TerminalMouseDisabled>(entity).is_some());
     }
 
     /// Asserts that exiting vi mode removes `KeyboardDisabled` and
-    /// `MouseDisabled` again.
+    /// `TerminalMouseDisabled` again.
     ///
     /// Case: the user leaves vi mode with `Esc`.
     #[test]
@@ -202,7 +202,7 @@ mod tests {
         app.world_mut().trigger(ExitViMode { entity });
         app.update();
         assert!(app.world().get::<KeyboardDisabled>(entity).is_none());
-        assert!(app.world().get::<MouseDisabled>(entity).is_none());
+        assert!(app.world().get::<TerminalMouseDisabled>(entity).is_none());
     }
 
     /// Asserts that exiting vi mode removes `ViModeState` and requests a
