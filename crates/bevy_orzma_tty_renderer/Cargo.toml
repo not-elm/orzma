@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 bevy = { workspace = true }
+bitflags = { workspace = true }
 ab_glyph = "0.2"
 ttf-parser = "0.25"
 serde = { workspace = true }

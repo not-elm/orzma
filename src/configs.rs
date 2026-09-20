@@ -3,9 +3,12 @@
 //! IO errors warn and fall back to defaults.
 
 use bevy::prelude::*;
+use bevy_orzma_tty_renderer::prelude::CaretStyle;
 use orzma_configs::OrzmaConfigs;
+use orzma_configs::cursor::{CursorConfig, CursorStyleSetting};
 use orzma_configs::mouse::MouseConfig;
 use orzma_tty::prelude::WheelConfig;
+use orzma_vt::prelude::{CursorBlink, CursorPolicy, CursorShape, TextCursorStyle};
 
 /// The resolved `OrzmaConfigs`, loaded once at app build time.
 #[derive(Resource, Debug, Default, Deref)]
@@ -57,7 +60,9 @@ impl Plugin for OrzmaConfigsPlugin {
                 OrzmaConfigs::default()
             }
         });
-        app.insert_resource(OrzmaConfigsResource(configs));
+        let caret = caret_style(&configs.cursor);
+        app.insert_resource(OrzmaConfigsResource(configs))
+            .insert_resource(caret);
     }
 }
 
@@ -68,6 +73,30 @@ pub(crate) fn wheel_config(mc: &MouseConfig) -> WheelConfig {
         lines_per_notch: mc.lines_per_notch,
         fine_lines: mc.fine_lines,
         max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
+    }
+}
+
+/// The renderer's caret drawing knobs, from the `[cursor]` section.
+pub(crate) fn caret_style(config: &CursorConfig) -> CaretStyle {
+    CaretStyle {
+        blink_interval: config.blink_interval(),
+        blink_timeout: config.blink_timeout(),
+        thickness: config.thickness(),
+        unfocused_hollow: config.unfocused_hollow,
+    }
+}
+
+/// The VT-layer cursor policy the `[cursor]` section selects.
+pub(crate) fn cursor_policy(config: &CursorConfig) -> CursorPolicy {
+    CursorPolicy {
+        initial: TextCursorStyle {
+            shape: match config.style {
+                CursorStyleSetting::Block => CursorShape::Block,
+                CursorStyleSetting::Underline => CursorShape::Underline,
+                CursorStyleSetting::Bar => CursorShape::Bar,
+            },
+            blink: CursorBlink::Blinking,
+        },
     }
 }
 
@@ -86,6 +115,7 @@ pub(crate) fn env_guard() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn plugin_inserts_configs_resource_matching_defaults_when_no_config_file() {
@@ -217,5 +247,44 @@ mod tests {
         assert_eq!(out.lines_per_notch, 5);
         assert_eq!(out.fine_lines, 2);
         assert_eq!(out.max_protocol_events_per_frame, 16);
+    }
+
+    /// Asserts that `cursor_policy` maps each `[cursor]` style setting
+    /// to its `CursorShape` counterpart, and that the initial caret
+    /// blinks.
+    ///
+    /// Case: a user selects each `style` in the `[cursor]` section of
+    /// their config.toml in turn.
+    #[test]
+    fn cursor_policy_maps_every_style_setting() {
+        let cases = [
+            (CursorStyleSetting::Block, CursorShape::Block),
+            (CursorStyleSetting::Underline, CursorShape::Underline),
+            (CursorStyleSetting::Bar, CursorShape::Bar),
+        ];
+        for (style, expected_shape) in cases {
+            let mut config = CursorConfig::default();
+            config.style = style;
+            let policy = cursor_policy(&config);
+            assert_eq!(policy.initial.shape, expected_shape);
+            assert_eq!(policy.initial.blink, CursorBlink::Blinking);
+        }
+    }
+
+    /// Asserts that `caret_style` carries each `[cursor]` drawing knob
+    /// into its own `CaretStyle` field, resolving the timings through
+    /// the config's accessors.
+    ///
+    /// Case: a user turns the hollow unfocused caret off and leaves the
+    /// shipped blink timings alone.
+    #[test]
+    fn caret_style_maps_every_drawing_knob() {
+        let mut config = CursorConfig::default();
+        config.unfocused_hollow = false;
+        let style = caret_style(&config);
+        assert_eq!(style.blink_interval, Some(Duration::from_millis(750)));
+        assert_eq!(style.blink_timeout, Some(Duration::from_secs(5)));
+        assert_eq!(style.thickness, 0.15);
+        assert!(!style.unfocused_hollow);
     }
 }

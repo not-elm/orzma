@@ -55,6 +55,7 @@ impl Interpreter {
         chunk: &[u8],
     ) {
         let cursor_before = device.cursor();
+        let cursor_color_before = device.palette().cursor;
         let mut executor = Executor {
             output,
             device,
@@ -80,7 +81,8 @@ impl Interpreter {
         }
         executor.output.consumed = consumed;
         executor.sweep_evictions();
-        executor.output.damaged |= cursor_before != executor.device.cursor();
+        executor.output.damaged |= cursor_before != executor.device.cursor()
+            || cursor_color_before != executor.device.palette().cursor;
     }
 }
 
@@ -308,6 +310,11 @@ impl VTActor for Executor<'_> {
                 .device
                 .active_screen_mut()
                 .move_cursor_down(repeat_count(params.value(0))),
+            // VPR
+            (None, [], b'e') => self
+                .device
+                .active_screen_mut()
+                .move_cursor_down_within_page(repeat_count(params.value(0))),
             // CUF, HPR
             (None, [], b'C' | b'a') => self
                 .device
@@ -472,11 +479,12 @@ impl VTActor for Executor<'_> {
             (None, [b'$'], b'p') => self.report_mode(&params, false),
             // DECSCUSR
             (None, [b' '], b'q') => {
+                let initial = self.device.cursor_policy().initial;
                 if let Some(next) = self
                     .device
                     .modes()
                     .text_cursor
-                    .with_decscusr(params.value(0))
+                    .with_decscusr(initial, params.value(0))
                 {
                     self.device.modes_mut().text_cursor = next;
                 }
@@ -586,7 +594,7 @@ impl Executor<'_> {
         }
     }
 
-    /// Erases part of the active screen with its pen background (ED,
+    /// Erases part of the active screen with its pen colors (ED,
     /// and the alternate-screen modes that blank the screen they show
     /// or leave).
     fn erase_in_display(&mut self, mode: EraseScreenMode) {
@@ -645,37 +653,53 @@ impl Executor<'_> {
     }
 
     /// Applies the dynamic-color requests an `OSC 10`, `OSC 11`,
-    /// `OSC 110`, or `OSC 111` carries, in order, answering each query
-    /// with the colour held at that point.
+    /// `OSC 12`, `OSC 110`, `OSC 111`, or `OSC 112` carries, in order,
+    /// answering each query with the colour held at that point.
     ///
-    /// A command that changes a colour stages one full repaint,
-    /// whatever the number of requests it carries.
+    /// A query of an unset cursor color is answered with the default
+    /// foreground.
+    ///
+    /// A command that changes the foreground or the background stages
+    /// one full repaint, whatever the number of requests it carries. A
+    /// command that changes only the cursor color repaints no row.
     fn apply_dynamic_color_requests(&mut self, params: &[&[u8]], terminator: OscTerminator) {
-        let mut changed = false;
+        let mut repaint = false;
         for request in DynamicColorRequest::parse(params) {
             match request {
-                DynamicColorRequest::Set { target, color } => {
-                    changed |= match target {
-                        DynamicColor::Foreground => self.device.set_foreground_color(color),
-                        DynamicColor::Background => self.device.set_background_color(color),
-                    };
-                }
-                DynamicColorRequest::Reset { target } => {
-                    changed |= match target {
-                        DynamicColor::Foreground => self.device.reset_foreground_color(),
-                        DynamicColor::Background => self.device.reset_background_color(),
-                    };
-                }
+                DynamicColorRequest::Set { target, color } => match target {
+                    DynamicColor::Foreground => {
+                        repaint |= self.device.set_foreground_color(color);
+                    }
+                    DynamicColor::Background => {
+                        repaint |= self.device.set_background_color(color);
+                    }
+                    DynamicColor::Cursor => {
+                        self.device.set_cursor_color(color);
+                    }
+                },
+                DynamicColorRequest::Reset { target } => match target {
+                    DynamicColor::Foreground => {
+                        repaint |= self.device.reset_foreground_color();
+                    }
+                    DynamicColor::Background => {
+                        repaint |= self.device.reset_background_color();
+                    }
+                    DynamicColor::Cursor => {
+                        self.device.reset_cursor_color();
+                    }
+                },
                 DynamicColorRequest::Query { target } => {
+                    let palette = self.device.palette();
                     let color = match target {
-                        DynamicColor::Foreground => self.device.palette().foreground,
-                        DynamicColor::Background => self.device.palette().background,
+                        DynamicColor::Foreground => palette.foreground,
+                        DynamicColor::Background => palette.background,
+                        DynamicColor::Cursor => palette.cursor.unwrap_or(palette.foreground),
                     };
                     self.reply(&dynamic_color_reply(target, color, terminator));
                 }
             }
         }
-        if changed {
+        if repaint {
             self.stage(Some(DamageSpan::Full));
         }
     }

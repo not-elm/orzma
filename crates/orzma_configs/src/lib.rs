@@ -4,6 +4,7 @@
 
 #![warn(missing_docs)]
 
+use crate::cursor::CursorConfig;
 use crate::font::FontStyleSpec;
 use crate::inactive_pane::InactivePaneConfig;
 use crate::keyboard::KeyboardConfig;
@@ -15,6 +16,7 @@ pub use error::{OrzmaConfigsError, OrzmaConfigsResult};
 use serde::Deserialize;
 use std::str::FromStr;
 
+pub mod cursor;
 pub mod error;
 pub mod font;
 pub mod inactive_pane;
@@ -24,6 +26,15 @@ pub mod orzma;
 pub mod path;
 pub mod shortcuts;
 pub mod vi_mode;
+
+/// Returns `v` clamped to `0.0..=1.0`, or `default` when `v` is NaN.
+pub(crate) fn norm_unit(v: f32, default: f32) -> f32 {
+    if v.is_nan() {
+        default
+    } else {
+        v.clamp(0.0, 1.0)
+    }
+}
 
 /// Fully-resolved orzma configuration.
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -44,6 +55,8 @@ pub struct OrzmaConfigs {
     pub inactive_pane: InactivePaneConfig,
     /// Orzma single-terminal mode configuration.
     pub orzma: OrzmaConfig,
+    /// Cursor appearance and blink policy.
+    pub cursor: CursorConfig,
 }
 
 impl OrzmaConfigs {
