@@ -1,6 +1,8 @@
 //! `Pty` — owns the PTY master, the input queue its writer thread drains,
 //! the child killer, and the output and exit streams its OS threads feed.
 
+#[cfg(windows)]
+use crate::shell_integration::ShellIntegration;
 use crate::{
     CellPixels, SpawnOptions,
     error::{OrzmaTtyError, OrzmaTtyResult},
@@ -9,6 +11,8 @@ use crate::{
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded, unbounded};
 use orzma_vt::prelude::GridSize;
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+#[cfg(windows)]
+use std::env::var;
 #[cfg(any(test, feature = "test-support"))]
 use std::io::Result as IoResult;
 use std::io::{Read, Write};
@@ -101,7 +105,7 @@ impl Pty {
             .openpty(options.cell_px.pty_size(options.size))
             .map_err(OrzmaTtyError::PtyOpen)?;
 
-        let mut cmd = build_shell_command(&options.shell);
+        let mut cmd = build_shell_command(options);
         if let Some(cwd) = options.cwd.as_ref() {
             cmd.cwd(cwd);
         }
@@ -330,18 +334,34 @@ impl Drop for Pty {
     }
 }
 
-/// Builds the shell `CommandBuilder`: on macOS the shell is wrapped in
-/// `/usr/bin/login` so it runs as a login shell and sources
-/// `/etc/zprofile` (`path_helper`) and `~/.zprofile`. Every other
-/// platform spawns the shell directly.
-fn build_shell_command(shell: &str) -> CommandBuilder {
+/// The command that launches `options.shell`: a macOS login wrapper, a
+/// Windows shell carrying orzma's prompt hook, or the shell itself.
+fn build_shell_command(options: &SpawnOptions) -> CommandBuilder {
     #[cfg(target_os = "macos")]
     {
-        macos_login_command(shell)
+        macos_login_command(&options.shell)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
-        CommandBuilder::new(shell)
+        let mut cmd = CommandBuilder::new(&options.shell);
+        if options.shell_integration {
+            match ShellIntegration::for_shell(&options.shell, var("PROMPT").ok().as_deref()) {
+                ShellIntegration::Args(args) => {
+                    for arg in args {
+                        cmd.arg(arg);
+                    }
+                }
+                ShellIntegration::Env { key, value } => {
+                    cmd.env(key, value);
+                }
+                ShellIntegration::None => {}
+            }
+        }
+        cmd
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        CommandBuilder::new(&options.shell)
     }
 }
 
@@ -1075,5 +1095,36 @@ mod tests {
     fn a_detached_pty_reports_no_process_cwd() {
         let pty = Pty::detached(grid(80, 24), Box::new(sink())).expect("Pty::detached");
         assert_eq!(pty.process_cwd(), None);
+    }
+
+    /// Asserts that a recognized PowerShell is spawned with the prompt
+    /// hook appended, and that the same shell is spawned untouched when
+    /// the integration is off.
+    ///
+    /// Case: a Windows user opens a pane with the default shell, and
+    /// another user who has turned the setting off opens one too.
+    #[cfg(windows)]
+    #[test]
+    fn a_recognized_shell_is_spawned_with_the_prompt_hook() {
+        let on = SpawnOptions {
+            size: grid(80, 24),
+            cell_px: CellPixels::default(),
+            shell: "powershell".to_string(),
+            cwd: None,
+            env: vec![],
+            shell_integration: true,
+        };
+        let off = SpawnOptions {
+            shell_integration: false,
+            ..on.clone()
+        };
+        assert!(
+            format!("{:?}", build_shell_command(&on)).contains("-NoExit"),
+            "the hook must be appended when the integration is on"
+        );
+        assert!(
+            !format!("{:?}", build_shell_command(&off)).contains("-NoExit"),
+            "nothing may be appended when the integration is off"
+        );
     }
 }
