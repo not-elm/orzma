@@ -34,47 +34,6 @@ pub(crate) fn current_dir(params: &[&[u8]]) -> Option<PathBuf> {
     }
 }
 
-/// The directory a `file://` URI names, or `None` when the URI carries
-/// no such path.
-fn file_uri(parts: &[&[u8]]) -> Option<PathBuf> {
-    let joined = parts.join(&b';');
-    let rest = joined.strip_prefix(b"file://")?;
-    let index = rest.iter().position(|byte| *byte == b'/')?;
-    let decoded = percent_decode(&rest[index..]).decode_utf8_lossy();
-    host_path(&decoded)
-}
-
-/// The decoded URI path as a host path, or `None` when this platform
-/// cannot use it.
-#[cfg(not(windows))]
-fn host_path(decoded: &str) -> Option<PathBuf> {
-    Some(PathBuf::from(decoded))
-}
-
-/// The decoded URI path as a host path, or `None` when it names no
-/// drive.
-///
-/// A URI path opens with the `/` that separates it from the authority,
-/// so `C:\Users\x` arrives as `/C:/Users/x`; that separator is dropped.
-/// Anything still not absolute afterwards would be resolved against
-/// this process's own working directory, so it is rejected instead.
-#[cfg(windows)]
-fn host_path(decoded: &str) -> Option<PathBuf> {
-    let path = PathBuf::from(drive_rooted(decoded).unwrap_or(decoded));
-    path.is_absolute().then_some(path)
-}
-
-/// `decoded` without the leading `/` that precedes a drive letter, or
-/// `None` when it opens with anything else.
-#[cfg(windows)]
-fn drive_rooted(decoded: &str) -> Option<&str> {
-    let rest = decoded.strip_prefix('/')?;
-    let mut bytes = rest.bytes();
-    let letter = bytes.next()?;
-    let colon = bytes.next()?;
-    (letter.is_ascii_alphabetic() && colon == b':').then_some(rest)
-}
-
 /// The sanitized window title an `OSC 0` or `OSC 2` sets, or `None` for
 /// every other operating system command. An `OSC 0` or `OSC 2` that
 /// carries no text at all also returns `None`, rather than emptying the
@@ -140,6 +99,47 @@ impl OscTerminator {
 pub(crate) fn rgb_spec(color: Rgb) -> String {
     let Rgb { r, g, b } = color;
     format!("rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}")
+}
+
+/// The directory a `file://` URI names, or `None` when the URI carries
+/// no such path.
+fn file_uri(parts: &[&[u8]]) -> Option<PathBuf> {
+    let joined = parts.join(&b';');
+    let rest = joined.strip_prefix(b"file://")?;
+    let index = rest.iter().position(|byte| *byte == b'/')?;
+    let decoded = percent_decode(&rest[index..]).decode_utf8_lossy();
+    host_path(&decoded)
+}
+
+/// The decoded URI path as a host path, or `None` when this platform
+/// cannot use it.
+#[cfg(not(windows))]
+fn host_path(decoded: &str) -> Option<PathBuf> {
+    Some(PathBuf::from(decoded))
+}
+
+/// The decoded URI path as a host path, or `None` when it names no
+/// drive.
+///
+/// A URI path opens with the `/` that separates it from the authority,
+/// so `C:\Users\x` arrives as `/C:/Users/x`; that separator is dropped.
+/// Anything still not absolute afterwards would be resolved against
+/// this process's own working directory, so it is rejected instead.
+#[cfg(windows)]
+fn host_path(decoded: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(drive_rooted(decoded).unwrap_or(decoded));
+    path.is_absolute().then_some(path)
+}
+
+/// `decoded` without the leading `/` that precedes a drive letter, or
+/// `None` when it opens with anything else.
+#[cfg(windows)]
+fn drive_rooted(decoded: &str) -> Option<&str> {
+    let rest = decoded.strip_prefix('/')?;
+    let mut bytes = rest.bytes();
+    let letter = bytes.next()?;
+    let colon = bytes.next()?;
+    (letter.is_ascii_alphabetic() && colon == b':').then_some(rest)
 }
 
 /// Maximum length, in `char`s, of a sanitized title.
