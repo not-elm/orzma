@@ -3,13 +3,14 @@
 //! cursor.
 
 use crate::input::InputPhase;
+use crate::input::focus::MouseDisabled;
 use crate::input::mouse::MousePhase;
 use crate::input::mouse::cell_dims;
 use crate::input::mouse::separator::GrabbedSeparator;
 use crate::input::mouse::webview::{
     CefMouse, WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
-    release_webview_press, route_webview_left_click, webview_pointer_frame, webview_wheel_delta,
-    webview_wheel_target,
+    pressed_terminal, release_webview_press, route_webview_left_click, webview_pointer_frame,
+    webview_wheel_delta, webview_wheel_target,
 };
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
@@ -50,23 +51,66 @@ impl Plugin for MouseWebviewRouterPlugin {
     }
 }
 
+/// Every `OrzmaTerminal` surface the router hit-tests, carrying whether the
+/// host has suppressed that terminal's mouse input.
+type RouterSurfaces<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static ComputedNode,
+        &'static ComputedStackIndex,
+        &'static UiGlobalTransform,
+        Has<MouseDisabled>,
+    ),
+    With<OrzmaTerminal>,
+>;
+
+/// What the router found under the pointer.
+enum SurfaceUnderCursor {
+    /// No terminal surface lies under the pointer.
+    None,
+    /// The topmost surface has its mouse input suppressed.
+    Suppressed,
+    /// The topmost surface accepts pointer input, at this pane-local
+    /// physical point.
+    Open(Entity, Vec2),
+}
+
+impl SurfaceUnderCursor {
+    /// Resolves the topmost `OrzmaTerminal` under `cursor_phys`.
+    ///
+    /// A suppressed surface reports `Suppressed` rather than dropping out of
+    /// the hit test, so the pointer does not reach a surface below it.
+    fn resolve(surfaces: &RouterSurfaces, cursor_phys: Vec2) -> Self {
+        let candidates = surfaces
+            .iter()
+            .map(|(entity, node, stack, transform, _)| (entity, node, stack, transform));
+        let Some(terminal) = topmost_surface_at(cursor_phys, candidates) else {
+            return Self::None;
+        };
+        let Ok((_, node, _, transform, suppressed)) = surfaces.get(terminal) else {
+            return Self::None;
+        };
+        if suppressed {
+            return Self::Suppressed;
+        }
+        match phys_to_pane_local(node, transform, cursor_phys) {
+            Some(local_phys) => Self::Open(terminal, local_phys),
+            None => Self::None,
+        }
+    }
+}
+
 /// Forwards left press/release to the inline CEF child under the cursor
-/// on the shell surface. A window-unfocused frame drains the reader and
-/// releases an in-flight press so the focused page is not left logically
-/// pressed.
+/// on the shell surface. A window-unfocused frame, and a frame on which
+/// the terminal owning an in-flight press has its mouse input suppressed,
+/// release that press so the focused page is not left logically pressed.
 fn route_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
     mut buttons: MessageReader<MouseButtonInput>,
-    surfaces: Query<
-        (
-            Entity,
-            &ComputedNode,
-            &ComputedStackIndex,
-            &UiGlobalTransform,
-        ),
-        With<OrzmaTerminal>,
-    >,
+    surfaces: RouterSurfaces,
     metrics: Res<TerminalCellMetricsResource>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -88,6 +132,29 @@ fn route_webview_pointer(
         );
         return;
     }
+    if let Some(terminal) = pressed_terminal(&webview_press, &webview_route)
+        && surfaces
+            .get(terminal)
+            .is_ok_and(|(_, _, _, _, suppressed)| suppressed)
+    {
+        release_webview_press(
+            &mut webview_press,
+            &webview_route,
+            frame.cursor_phys,
+            frame.cell_w,
+            frame.cell_h,
+            frame.scale,
+        );
+    }
+    if let Some(cursor_phys) = frame.cursor_phys
+        && matches!(
+            SurfaceUnderCursor::resolve(&surfaces, cursor_phys),
+            SurfaceUnderCursor::Suppressed
+        )
+    {
+        buttons.clear();
+        return;
+    }
     for ev in buttons.read() {
         if ev.button != MouseButton::Left {
             continue;
@@ -95,13 +162,9 @@ fn route_webview_pointer(
         let Some(cursor_phys) = frame.cursor_phys else {
             continue;
         };
-        let Some(terminal) = topmost_surface_at(cursor_phys, surfaces.iter()) else {
-            continue;
-        };
-        let Ok((_, node, _, transform)) = surfaces.get(terminal) else {
-            continue;
-        };
-        let Some(local_phys) = phys_to_pane_local(node, transform, cursor_phys) else {
+        let SurfaceUnderCursor::Open(terminal, local_phys) =
+            SurfaceUnderCursor::resolve(&surfaces, cursor_phys)
+        else {
             continue;
         };
         route_webview_left_click(
@@ -122,15 +185,7 @@ fn route_webview_pointer(
 /// to the child's CEF browser via the shared `forward_webview_move_at`.
 fn forward_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
-    surfaces: Query<
-        (
-            Entity,
-            &ComputedNode,
-            &ComputedStackIndex,
-            &UiGlobalTransform,
-        ),
-        With<OrzmaTerminal>,
-    >,
+    surfaces: RouterSurfaces,
     children: Query<'_, '_, &'static Children>,
     webviews: Query<'_, '_, (&'static Webview, Has<NonInteractive>)>,
     overlay_rects: Query<'_, '_, &'static TerminalOverlays>,
@@ -156,10 +211,9 @@ fn forward_webview_mouse_moves(
     };
     forward_webview_move_at(
         &deps,
-        |c| {
-            let t = topmost_surface_at(c, surfaces.iter())?;
-            let (_, node, _, transform) = surfaces.get(t).ok()?;
-            Some((t, phys_to_pane_local(node, transform, c)?))
+        |c| match SurfaceUnderCursor::resolve(&surfaces, c) {
+            SurfaceUnderCursor::Open(terminal, local_phys) => Some((terminal, local_phys)),
+            SurfaceUnderCursor::None | SurfaceUnderCursor::Suppressed => None,
         },
         cursor_phys,
         &frame,
@@ -172,21 +226,13 @@ fn forward_webview_mouse_moves(
 /// wheel cedes to `crate::input::mouse::wheel::dispatch_mouse_wheel`
 /// (the terminal's wheel routing: mouse reports, alternate-scroll cursor
 /// keys, or the scrollback) through its own reader; over the rect the
-/// shell is `MouseDisabled` (rect-claim gate), so that dispatcher yields
-/// and only the page scrolls.
+/// shell is `MouseClaimedByWebview`, so that dispatcher yields and only
+/// the page scrolls.
 fn forward_webview_wheel(
     mut wheel: MessageReader<MouseWheel>,
     focused_webview: Res<FocusedWebview>,
     webview_parents: Query<&ChildOf, With<Webview>>,
-    surfaces: Query<
-        (
-            Entity,
-            &ComputedNode,
-            &ComputedStackIndex,
-            &UiGlobalTransform,
-        ),
-        With<OrzmaTerminal>,
-    >,
+    surfaces: RouterSurfaces,
     children: Query<&Children>,
     webviews: Query<(&Webview, Has<NonInteractive>)>,
     overlay_rects: Query<&TerminalOverlays>,
@@ -206,9 +252,11 @@ fn forward_webview_wheel(
     let (cell_w, cell_h) = cell_dims(&metrics);
     let target = window.cursor_position().and_then(|c| {
         let cursor_phys = c * scale;
-        let terminal = topmost_surface_at(cursor_phys, surfaces.iter())?;
-        let (_, node, _, transform) = surfaces.get(terminal).ok()?;
-        let local_phys = phys_to_pane_local(node, transform, cursor_phys)?;
+        let SurfaceUnderCursor::Open(terminal, local_phys) =
+            SurfaceUnderCursor::resolve(&surfaces, cursor_phys)
+        else {
+            return None;
+        };
         webview_wheel_target(
             &focused_webview,
             &webview_parents,
@@ -425,6 +473,57 @@ mod tests {
                 } if webview == child
             ),
             "the press phase of the click reaches the focused child"
+        );
+    }
+
+    /// Asserts that a press over an interactive rect on a suppressed
+    /// terminal reaches neither the webview focus nor the press marker.
+    ///
+    /// Case: the user enters vi mode and then clicks a link on a page
+    /// mounted in that pane.
+    #[test]
+    fn a_press_on_a_suppressed_terminal_does_not_reach_the_webview() {
+        let (mut app, shell, _child) = make_webview_app();
+        app.world_mut().entity_mut(shell).insert(MouseDisabled);
+        set_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_left(&mut app, ButtonState::Pressed);
+        app.update();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "a suppressed terminal must not hand its press to the inline webview"
+        );
+        assert_eq!(
+            app.world().resource::<WebviewPress>().0,
+            None,
+            "no in-flight press is recorded for a suppressed terminal"
+        );
+    }
+
+    /// Asserts that suppression of the terminal owning an in-flight press
+    /// releases that press, with no cursor anywhere on screen.
+    ///
+    /// Case: the user presses inside a page, drags the pointer off the
+    /// window, and vi mode starts before the button comes back up.
+    #[test]
+    fn suppression_of_the_pressed_terminal_releases_the_press() {
+        let (mut app, shell, child) = make_webview_app();
+        app.world_mut().resource_mut::<WebviewPress>().0 = Some(child);
+        app.world_mut().entity_mut(shell).insert(MouseDisabled);
+        let win = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Window>(win)
+            .unwrap()
+            .set_physical_cursor_position(None);
+        app.update();
+        assert_eq!(
+            app.world().resource::<WebviewPress>().0,
+            None,
+            "the press is released by its own terminal's suppression, not by what lies under the pointer"
         );
     }
 }

@@ -167,6 +167,16 @@ pub(in crate::input::mouse) fn release_webview_press(
     }
 }
 
+/// The terminal owning the in-flight webview press, or `None` when no press
+/// is in flight or its child is gone.
+pub(in crate::input::mouse) fn pressed_terminal(
+    webview_press: &WebviewPress,
+    route: &WebviewRouteParams,
+) -> Option<Entity> {
+    let child = webview_press.0?;
+    Some(route.webview_parents.get(child).ok()?.parent())
+}
+
 /// The per-frame pointer geometry both webview pointer pipelines derive from the
 /// primary window and cell metrics: the display `scale`, the physical cell pitch
 /// `(cell_w, cell_h)`, and the physical-pixel cursor position (`cursor_phys`,
