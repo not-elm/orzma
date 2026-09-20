@@ -134,6 +134,7 @@ impl PaneFactory for ShellFactory {
                     .into_iter()
                     .map(|(k, v)| (EnvKey(k), EnvValue(v)))
                     .collect(),
+                shell_integration: false,
             },
         )
     }

@@ -711,6 +711,7 @@ mod tests {
             shell: echo_program().into(),
             cwd: None,
             env: Vec::new(),
+            shell_integration: false,
         })
         .expect("Pty::spawn failed");
         answer_cursor_query(&mut pty);
@@ -762,6 +763,7 @@ mod tests {
             shell: echo_program().into(),
             cwd: None,
             env: Vec::new(),
+            shell_integration: false,
         })
         .expect("Pty::spawn failed");
         answer_cursor_query(&mut pty);
@@ -790,6 +792,7 @@ mod tests {
             shell: echo_program().into(),
             cwd: None,
             env: Vec::new(),
+            shell_integration: false,
         })
         .expect("Pty::spawn failed");
         answer_cursor_query(&mut pty);
@@ -1014,6 +1017,7 @@ mod tests {
             shell: "/bin/cat".into(),
             cwd: Some(dir.path().to_path_buf()),
             env: Vec::new(),
+            shell_integration: false,
         })
         .expect("Pty::spawn failed");
         let login_handoff = Duration::from_millis(200);
@@ -1037,6 +1041,7 @@ mod tests {
             shell: "/bin/sh".into(),
             cwd: None,
             env: Vec::new(),
+            shell_integration: false,
         })
         .expect("Pty::spawn failed");
         // NOTE: on macOS the shell runs as the developer's own login shell,

@@ -26,6 +26,7 @@ mod coalescer;
 mod error;
 mod input;
 mod pty;
+mod shell_integration;
 mod signal;
 pub mod test_support;
 
@@ -36,6 +37,7 @@ pub mod prelude {
 }
 
 /// Spawn parameters consumed exactly once by `OrzmaTty::spawn`.
+#[derive(Clone)]
 pub struct SpawnOptions {
     /// Terminal grid size.
     pub size: GridSize,
@@ -47,6 +49,9 @@ pub struct SpawnOptions {
     pub cwd: Option<PathBuf>,
     /// Arbitrary environment variables forwarded to the shell.
     pub env: Vec<(EnvKey, EnvValue)>,
+    /// Whether orzma may make a shell it recognizes report its working
+    /// directory. Has no effect outside Windows.
+    pub shell_integration: bool,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
