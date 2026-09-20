@@ -464,17 +464,27 @@ mod tests {
             )
             .expect("cmd spawns under a PTY");
         let mut pane = Pane::new(tty, (80, 24, CellPixels::default()), None);
-        let reported_dir = TempDir::new().expect("a temp dir");
-        let expected = reported_dir.path().to_path_buf();
-        pane.set_reported_cwd(expected.clone());
         let deadline = Instant::now() + Duration::from_secs(10);
-        let cwd = loop {
-            let cwd = pane.cwd();
-            if cwd.as_ref() == Some(&expected) || Instant::now() >= deadline {
-                break cwd;
+        let from_os = loop {
+            let from_os = pane.tty.process_cwd();
+            if from_os.is_some() || Instant::now() >= deadline {
+                break from_os;
             }
             thread::sleep(Duration::from_millis(10));
         };
+        let reported_dir = TempDir::new().expect("a temp dir");
+        let expected = reported_dir.path().to_path_buf();
+        pane.set_reported_cwd(expected.clone());
+        let cwd = pane.cwd();
+        // NOTE: closing the pseudoconsole blocks while the shell's output
+        // sits unread, so the terminal must be drained before the pane is
+        // dropped or this test hangs instead of finishing.
+        pane.tty.pump();
+        assert!(
+            from_os.is_some(),
+            "the OS must report a directory for the spawned shell, or this test proves nothing"
+        );
+        assert_ne!(from_os, Some(expected.clone()));
         assert_eq!(cwd, Some(expected));
     }
 

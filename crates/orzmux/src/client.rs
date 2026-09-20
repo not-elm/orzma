@@ -13,7 +13,8 @@ use std::thread::{self, JoinHandle};
 /// What the backend needs to spawn shells and route the wheel.
 #[derive(Debug, Clone)]
 pub struct OrzmuxConfig {
-    /// Shell override; `None` falls back to `$SHELL`, then `/bin/sh`.
+    /// Shell override; `None` falls back to `$SHELL`, then the
+    /// platform default.
     pub shell: Option<String>,
     /// Scrollback rows every pane retains on its primary screen.
     pub scrollback_rows: usize,

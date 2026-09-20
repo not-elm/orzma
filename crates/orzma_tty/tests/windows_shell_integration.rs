@@ -7,8 +7,9 @@ use orzma_tty::prelude::{OrzmaTty, TerminalKey, TerminalModifiers, TtySignal};
 use orzma_tty::{CellPixels, EnvKey, EnvValue, SpawnOptions};
 use orzma_vt::prelude::{GridSize, OrzmaVt, VtSignal};
 use std::ffi::OsString;
-use std::fs::{create_dir_all, write};
+use std::fs::{create_dir_all, read_to_string, write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use std::{env, iter};
@@ -34,7 +35,13 @@ fn an_injected_powershell_reports_its_directory_and_calls_back_the_user_prompt()
     let (shell_path, shell_name) = resolve_powershell();
 
     let home = TempDir::new().expect("a temporary home");
-    write_profile(home.path(), shell_name);
+    if !write_profile(home.path(), &shell_path) {
+        eprintln!(
+            "skipped: {shell_name} resolves its profile outside the temporary home, so this \
+             machine's Documents folder is redirected and no fixture profile can be isolated"
+        );
+        return;
+    }
 
     let target = TempDir::new().expect("a temporary directory");
     let expected = target.path().to_path_buf();
@@ -112,28 +119,55 @@ fn resolve_powershell() -> (PathBuf, &'static str) {
     panic!("neither pwsh nor powershell is on PATH; this test requires one of them installed");
 }
 
-/// Writes the fixture profile into the `Documents` profile directory
-/// `shell_name` actually reads under a temporary `USERPROFILE`.
+/// Writes the fixture profile into the file `shell` itself reports as
+/// its per-user profile under a temporary `USERPROFILE`, and reports
+/// whether that file landed inside `home`.
 ///
 /// Windows PowerShell 5.1 and PowerShell 7 read different directories
-/// under `USERPROFILE`\Documents (`WindowsPowerShell` and `PowerShell`
-/// respectively), so the profile is written only into the one the
-/// resolved shell will load.
-fn write_profile(home: &Path, shell_name: &str) {
-    let subdir = match shell_name {
-        "pwsh" => "PowerShell",
-        _ => "WindowsPowerShell",
+/// under Documents, and Documents is a known folder rather than a plain
+/// `USERPROFILE` subdirectory, so the shell is asked rather than
+/// guessed. A machine whose Documents folder is redirected — by
+/// OneDrive's Known Folder Move, for instance — resolves the profile
+/// outside `home`, and nothing is written there.
+fn write_profile(home: &Path, shell: &Path) -> bool {
+    // NOTE: the Documents known folder resolves to the empty string when
+    // its directory does not exist, which would leave the reported
+    // profile path relative. It has to exist before the shell is asked.
+    create_dir_all(home.join("Documents")).expect("the Documents directory");
+    // NOTE: a redirected stdout carries the console code page, which
+    // mangles a non-ASCII user name in the path. `WriteAllText` is UTF-8,
+    // and passing its destination through the environment keeps the
+    // snippet free of a path this test would have to quote.
+    let answer = home.join("reported-profile-path");
+    Command::new(shell)
+        .args([
+            "-NoProfile",
+            "-NoLogo",
+            "-Command",
+            "[IO.File]::WriteAllText($env:ORZMA_PROFILE_ANSWER, $PROFILE.CurrentUserCurrentHost)",
+        ])
+        .env("USERPROFILE", home)
+        .env("ORZMA_PROFILE_ANSWER", &answer)
+        .status()
+        .expect("the shell reports its profile path");
+    let answered = read_to_string(&answer).expect("the shell's reported profile path");
+    let profile = PathBuf::from(answered.trim());
+    if !profile.starts_with(home) {
+        return false;
+    }
+    let Some(profile_dir) = profile.parent() else {
+        return false;
     };
-    let profile_dir = home.join("Documents").join(subdir);
-    create_dir_all(&profile_dir).expect("the profile directory");
+    create_dir_all(profile_dir).expect("the profile directory");
     write(
-        profile_dir.join("Microsoft.PowerShell_profile.ps1"),
+        &profile,
         format!(
             "[Console]::Write(([char]27, ']0;{PROFILE_MARKER}', [char]7) -join '')\n\
              function global:prompt {{ '{USER_PROMPT}' }}\n"
         ),
     )
     .expect("the profile file");
+    true
 }
 
 /// The full path `name` resolves to through `PATH` and `PATHEXT`, or

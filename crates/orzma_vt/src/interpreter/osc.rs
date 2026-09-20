@@ -298,6 +298,29 @@ mod tests {
         );
     }
 
+    /// Asserts that percent-encoded octets in a drive-rooted path are
+    /// decoded, so a directory with a space or a non-ASCII name comes
+    /// back as the directory itself, while a stray `%` is kept verbatim.
+    ///
+    /// Case: a shell integration on Windows reports
+    /// `cd C:\Users\x\My Project\ドキュ` with every reserved and
+    /// non-ASCII byte escaped.
+    #[cfg(windows)]
+    #[test]
+    fn percent_encoded_octets_in_a_drive_rooted_path_are_decoded() {
+        assert_eq!(
+            current_dir(&[
+                b"7",
+                b"file:///C:/Users/x/My%20Project/%E3%83%89%E3%82%AD%E3%83%A5"
+            ]),
+            Some(PathBuf::from(r"C:\Users\x\My Project\ドキュ"))
+        );
+        assert_eq!(
+            current_dir(&[b"7", b"file:///C:/tmp/100%25/x%2"]),
+            Some(PathBuf::from(r"C:\tmp\100%\x%2"))
+        );
+    }
+
     /// Asserts that a `file://` URI carrying a drive letter reports a
     /// path rooted at that drive rather than one rooted at `/`.
     ///

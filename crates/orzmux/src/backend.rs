@@ -701,7 +701,8 @@ mod tests {
     use orzma_tty::test_support::{BlockingSink, CaptureSink, FailingSink};
     use orzma_vt::prelude::OrzmaVt;
     use std::collections::VecDeque;
-    use std::io::Write;
+    use std::io::{Error as IoError, Write};
+    use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -970,13 +971,47 @@ mod tests {
         );
     }
 
+    /// Asserts that a split whose target no longer exists is answered
+    /// with `SpawnFailed` alone, leaving the tree and the next pane id
+    /// untouched.
+    ///
+    /// Case: the target pane's shell exits between the moment the user
+    /// presses the split shortcut and the moment the backend reaches the
+    /// command.
+    #[test]
+    fn a_split_whose_target_is_gone_is_refused_without_disturbing_the_tree() {
+        let mut h = Harness::new();
+        let (root, _pane) = h.open_root();
+        let next_id = h.backend.next_pane_id;
+        h.send(OrzmuxCommand::NewPane {
+            request: RequestId(2),
+            at: NewPaneAt::Split {
+                pane: PaneTarget::Id(PaneId(9999)),
+                orientation: SplitOrientation::Vertical,
+            },
+            cwd: None,
+            env: vec![],
+        });
+        let events = h.drain();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events.front(),
+            Some(OrzmuxEvent::SpawnFailed {
+                request: RequestId(2),
+                ..
+            })
+        ));
+        assert_eq!(h.backend.tree.panes(), vec![root]);
+        assert_eq!(h.backend.next_pane_id, next_id);
+    }
+
     /// Asserts that a backend thread start-up failure's message includes
     /// the OS error text.
     ///
     /// Case: the OS refuses to start the `orzma-mux` thread.
     #[test]
     fn a_backend_thread_failure_keeps_the_os_error_text() {
-        let io_err = std::io::Error::other("out of threads");
+        let io_err = IoError::other("out of threads");
         assert_eq!(
             OrzmuxError::BackendThread(io_err).to_string(),
             "the orzma-mux thread could not be started: out of threads"
@@ -1140,7 +1175,7 @@ mod tests {
     // letter rather than `/`, so joining it to `file://localhost`
     // directly yields `file://localhostC:/…`, whose path the parser
     // reads as `/Users/…` — not drive-rooted, and rejected.
-    fn osc7(path: &std::path::Path) -> Vec<u8> {
+    fn osc7(path: &Path) -> Vec<u8> {
         let forward = path.display().to_string().replace('\\', "/");
         format!(
             "\x1b]7;file://localhost/{}\x1b\\",

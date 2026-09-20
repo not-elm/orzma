@@ -187,10 +187,16 @@ fn read_cwd(pid: i32) -> IoResult<PathBuf> {
 // would land somewhere else entirely.
 #[cfg(windows)]
 fn trimmed(path: &Path) -> PathBuf {
-    let text = path.as_os_str().to_string_lossy();
+    // NOTE: a path the loader stored as UTF-16 can hold an unpaired
+    // surrogate, which no `&str` can carry. Going through
+    // `to_string_lossy` would replace it and name a different directory,
+    // so a path that is not UTF-8 is passed through untouched.
+    let Some(text) = path.to_str() else {
+        return path.to_path_buf();
+    };
     let trimmed = text.trim_end_matches(['\\', '/']);
     if trimmed.len() <= 2 {
-        return PathBuf::from(text.as_ref());
+        return path.to_path_buf();
     }
     PathBuf::from(trimmed)
 }
