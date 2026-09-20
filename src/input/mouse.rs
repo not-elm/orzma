@@ -1,6 +1,6 @@
 //! Shared mouse-dispatch plumbing for every `OrzmaTerminal` surface, gated
-//! per entity by `MouseDisabled` so dispatch runs only for a surface that
-//! still owns the mouse.
+//! per entity by `MouseDisabled` and `MouseClaimedByWebview` so dispatch runs
+//! only for a surface that still owns the mouse.
 
 use crate::action::terminal::{
     TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart,

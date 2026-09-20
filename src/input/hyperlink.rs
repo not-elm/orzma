@@ -69,12 +69,12 @@ type HoverSurfaces<'w, 's> = Query<
     ),
 >;
 
-/// Skips any surface with input suppressed (`MouseDisabled`), so hover
-/// never advertises a link the mouse dispatcher would refuse to open. A
-/// divider the pointer holds or hovers claims the cursor before any
-/// surface is read, leaving the hover state empty; a held divider keeps
-/// the cursor even while the pointer reports no position, which is what
-/// a drag past the window's edge does.
+/// Skips any surface with input suppressed (`MouseDisabled`) or claimed by a
+/// webview (`MouseClaimedByWebview`), so hover never advertises a link the
+/// mouse dispatcher would refuse to open. A divider the pointer holds or
+/// hovers claims the cursor before any surface is read, leaving the hover
+/// state empty; a held divider keeps the cursor even while the pointer
+/// reports no position, which is what a drag past the window's edge does.
 fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,

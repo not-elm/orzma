@@ -155,8 +155,9 @@ struct FrameContext {
 /// cursor on press, locks drag/release to that terminal, tracks clicks and drag
 /// state, drives `decide_button`, and fans the decided effects out to
 /// per-operation `EntityEvent`s via `trigger_mouse_effects`. Skips any
-/// `OrzmaTerminal` carrying `MouseDisabled`. An empty candidate set (modal
-/// suppression) drains the readers and resets the gesture.
+/// `OrzmaTerminal` carrying `MouseDisabled` or `MouseClaimedByWebview`. An
+/// empty candidate set (modal suppression) drains the readers and resets the
+/// gesture.
 fn dispatch_mouse_buttons(
     mut commands: Commands,
     mut gesture: ResMut<OrzmaMouseGesture>,
