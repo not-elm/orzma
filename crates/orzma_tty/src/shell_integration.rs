@@ -2,17 +2,6 @@
 
 /// What orzma adds to a shell's spawn so the shell reports its working
 /// directory through `OSC 9;9`.
-// NOTE: only `build_shell_command`'s Windows arm consumes this, so a
-// Unix release build sees no caller. CI runs `clippy --all-targets -D
-// warnings`, which fails on the resulting `dead_code` unless the
-// expectation below is present.
-#[cfg_attr(
-    all(unix, not(test)),
-    expect(
-        dead_code,
-        reason = "the Windows integration is unit-tested on every platform"
-    )
-)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ShellIntegration {
     /// Arguments appended to the shell's own command line.

@@ -26,6 +26,7 @@ mod coalescer;
 mod error;
 mod input;
 mod pty;
+#[cfg(any(windows, test))]
 mod shell_integration;
 mod signal;
 pub mod test_support;
