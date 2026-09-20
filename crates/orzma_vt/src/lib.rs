@@ -272,7 +272,8 @@ pub enum VtSignal {
     },
     /// The application cleared the system clipboard via OSC 52.
     ClearClipboard,
-    /// A new current working directory reported via OSC 7.
+    /// A new current working directory reported via OSC 7 or the ConEmu
+    /// `OSC 9;9` subcommand.
     CurrentDir(PathBuf),
     /// A webview the PTY mounted inline, which the VT accepted and
     /// registered at the cursor anchor.

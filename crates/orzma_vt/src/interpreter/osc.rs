@@ -1,9 +1,10 @@
 //! The operating system commands this terminal implements.
 //!
-//! The window title (OSC 0 and OSC 2), the working directory (OSC 7),
-//! the indexed palette (OSC 4 and OSC 104), the dynamic foreground and
-//! background (OSC 10, OSC 11, OSC 110, and OSC 111), hyperlinks
-//! (OSC 8), and the clipboard (OSC 52) are implemented.
+//! The window title (OSC 0 and OSC 2), the working directory (OSC 7 and
+//! the ConEmu `OSC 9;9` subcommand), the indexed palette (OSC 4 and
+//! OSC 104), the dynamic foreground and background (OSC 10, OSC 11,
+//! OSC 110, and OSC 111), hyperlinks (OSC 8), and the clipboard (OSC 52)
+//! are implemented.
 //!
 //! TODO: implement the dynamic cursor color (OSC 12 and OSC 112).
 
@@ -16,20 +17,24 @@ use crate::device::color::Rgb;
 use percent_encoding::percent_decode;
 use std::path::PathBuf;
 
-/// The directory an `OSC 7` reports, or `None` for every other
-/// operating system command and for a URI this parser does not accept.
+/// The directory an `OSC 7` or the ConEmu `OSC 9;9` reports, or `None`
+/// for every other operating system command and for a path this parser
+/// does not accept.
 ///
-/// Only the `file` scheme is accepted, and only a URI that carries an
-/// absolute path after its authority. The host — `localhost`, a real
-/// hostname, or the empty host of `file:///…` — is ignored.
+/// For `OSC 7`, only the `file` scheme is accepted, and only a URI that
+/// carries an absolute path after its authority. The host — `localhost`,
+/// a real hostname, or the empty host of `file:///…` — is ignored.
 /// Percent-encoded octets in the path (`%20` for a space, the UTF-8
-/// octets of a non-ASCII name) are decoded.
+/// octets of a non-ASCII name) are decoded. On Windows, a decoded path of
+/// the form `/C:/…` is reported rooted at its drive, and a path that names
+/// no drive is rejected.
 ///
-/// On Windows, a decoded path of the form `/C:/…` is reported rooted at
-/// its drive, and a path that names no drive is rejected.
+/// For `OSC 9;9`, the payload is a host path, either bare or wrapped in one
+/// pair of double quotes, and must be absolute on this platform.
 pub(crate) fn current_dir(params: &[&[u8]]) -> Option<PathBuf> {
     match params {
         [b"7", parts @ ..] => file_uri(parts),
+        [b"9", b"9", parts @ ..] => conemu_path(parts),
         _ => None,
     }
 }
@@ -200,6 +205,24 @@ fn is_disallowed(c: char) -> bool {
                 | '\u{FFF9}'..='\u{FFFB}'
                 | '\u{E0000}'..='\u{E007F}'
         )
+}
+
+/// The directory an `OSC 9;9` reports, or `None` when its payload is
+/// not an absolute path on this platform.
+///
+/// The payload is a host path rather than a URI, and arrives either bare
+/// or wrapped in one pair of double quotes. Requiring it to be absolute
+/// separates this ConEmu subcommand from iTerm2's `OSC 9 ; <message>`
+/// notification, which carries arbitrary text.
+fn conemu_path(parts: &[&[u8]]) -> Option<PathBuf> {
+    let joined = parts.join(&b';');
+    let text = String::from_utf8_lossy(&joined);
+    let unquoted = text
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(&text);
+    let path = PathBuf::from(unquoted);
+    path.is_absolute().then_some(path)
 }
 
 #[cfg(test)]
@@ -498,5 +521,67 @@ mod tests {
         for byte in [0x18, 0x1a] {
             assert_eq!(OscTerminator::from_byte(byte), None);
         }
+    }
+
+    /// Asserts that an unquoted `OSC 9;9` payload reports its directory.
+    ///
+    /// Case: a `cmd.exe` prompt built from `PROMPT=$e]9;9;$P$e\` reports
+    /// the directory the user just changed into.
+    #[cfg(windows)]
+    #[test]
+    fn an_unquoted_conemu_report_reports_its_directory() {
+        assert_eq!(
+            current_dir(&[b"9", b"9", br"C:\Users\x\proj"]),
+            Some(PathBuf::from(r"C:\Users\x\proj"))
+        );
+    }
+
+    /// Asserts that a quoted `OSC 9;9` payload reports the directory
+    /// inside the quotes.
+    ///
+    /// Case: a PowerShell prompt built from Microsoft's shell-integration
+    /// snippet, which wraps the path in double quotes, reports a
+    /// directory after a `Set-Location`.
+    #[cfg(windows)]
+    #[test]
+    fn a_quoted_conemu_report_reports_the_directory_inside_the_quotes() {
+        assert_eq!(
+            current_dir(&[b"9", b"9", br#""C:\Users\x\proj""#]),
+            Some(PathBuf::from(r"C:\Users\x\proj"))
+        );
+    }
+
+    /// Asserts that an `OSC 9;9` payload carrying semicolons reports the
+    /// whole path rather than the part before the first one.
+    ///
+    /// Case: a user works in a directory named `a;b`, which NTFS allows,
+    /// and the command arrives split on every `;`.
+    #[cfg(windows)]
+    #[test]
+    fn a_conemu_report_keeps_the_semicolons_in_its_path() {
+        assert_eq!(
+            current_dir(&[b"9", b"9", br"C:\Users\x\a", b"b"]),
+            Some(PathBuf::from(r"C:\Users\x\a;b"))
+        );
+    }
+
+    /// Asserts that an `OSC 9` payload that is not an absolute path
+    /// reports no directory.
+    ///
+    /// Case: a program sends iTerm2's `OSC 9 ; <message>` notification
+    /// whose text happens to open with `9;`.
+    #[test]
+    fn a_relative_osc_nine_payload_is_rejected() {
+        assert!(current_dir(&[b"9", b"9", b"90% done"]).is_none());
+    }
+
+    /// Asserts that an `OSC 9` subcommand other than `9` reports no
+    /// directory.
+    ///
+    /// Case: a build tool sends ConEmu's `OSC 9;4` taskbar-progress
+    /// sequence, which this terminal does not implement.
+    #[test]
+    fn a_conemu_subcommand_other_than_nine_is_rejected() {
+        assert!(current_dir(&[b"9", b"4", b"1", b"50"]).is_none());
     }
 }
