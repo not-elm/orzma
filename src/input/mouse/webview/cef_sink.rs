@@ -216,8 +216,8 @@ mod tests {
     /// Asserts that every call is dropped, and none panics, while no sink
     /// resource is present.
     ///
-    /// Case: a headless test app, or a frame before the CEF plugin has
-    /// inserted its proxy.
+    /// Case: the sink resource is absent, as in a headless test app or a
+    /// frame before the CEF plugin has inserted its proxy.
     #[test]
     fn calls_without_a_sink_are_dropped() {
         let mut app = App::new();
