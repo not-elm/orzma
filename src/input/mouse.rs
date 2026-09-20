@@ -8,7 +8,7 @@ use crate::action::terminal::{
 };
 use crate::input::InputPhase;
 use crate::input::bindings::OrzmaMouseConfig;
-use crate::input::focus::MouseDisabled;
+use crate::input::focus::{MouseClaimedByWebview, MouseDisabled};
 use crate::input::mouse::button::MouseButtonInputPlugin;
 use crate::input::mouse::separator::SeparatorDragPlugin;
 use crate::input::mouse::wheel::MouseWheelInputPlugin;
@@ -177,7 +177,11 @@ type TerminalSurfaces<'w, 's> = Query<
         &'static TerminalView,
         &'static TerminalCells,
     ),
-    (With<OrzmaTerminal>, Without<MouseDisabled>),
+    (
+        With<OrzmaTerminal>,
+        Without<MouseDisabled>,
+        Without<MouseClaimedByWebview>,
+    ),
 >;
 
 /// The `(entity, node, stack, transform)` candidates `topmost_surface_at`

@@ -2,7 +2,7 @@
 //! terminal surface (the shell terminal and webview hosts): the only
 //! writer of `HyperlinkHoverState` and the window's `CursorIcon`.
 
-use crate::input::focus::MouseDisabled;
+use crate::input::focus::{MouseClaimedByWebview, MouseDisabled};
 use crate::input::mouse::separator::{GrabbedSeparator, SeparatorHit, SeparatorNodes};
 use crate::input::{InputPhase, current_modifiers};
 use crate::surface::OrzmaTerminal;
@@ -62,7 +62,11 @@ type HoverSurfaces<'w, 's> = Query<
         &'static ComputedStackIndex,
         &'static UiGlobalTransform,
     ),
-    (With<OrzmaTerminal>, Without<MouseDisabled>),
+    (
+        With<OrzmaTerminal>,
+        Without<MouseDisabled>,
+        Without<MouseClaimedByWebview>,
+    ),
 >;
 
 /// Skips any surface with input suppressed (`MouseDisabled`), so hover
@@ -587,6 +591,62 @@ mod tests {
             Some(&CursorIcon::System(SystemCursorIcon::Default)),
             "with input suppressed the cursor stays the arrow, not a link pointer"
         );
+    }
+
+    /// Asserts that a `MouseClaimedByWebview` surface is never hovered: the
+    /// hover state stays empty and the cursor keeps the default arrow even
+    /// over a linked cell.
+    ///
+    /// Case: the pointer crosses a hyperlink drawn underneath a mounted
+    /// page, where the click belongs to the page rather than the terminal.
+    #[test]
+    fn hover_skips_webview_claimed_surface() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<MouseMotion>();
+        app.init_resource::<HyperlinkHoverState>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.insert_resource(hover_test_metrics());
+        app.add_systems(Update, hyperlink_hover_and_cursor);
+
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            if cfg!(target_os = "macos") {
+                keys.press(KeyCode::SuperLeft);
+            } else {
+                keys.press(KeyCode::ControlLeft);
+            }
+        }
+
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(4.0, 8.0)));
+        app.world_mut().spawn((
+            window,
+            PrimaryWindow,
+            CursorIcon::System(SystemCursorIcon::Default),
+        ));
+
+        let (view, cells) = linked_grid();
+        app.world_mut().spawn((
+            OrzmaTerminal,
+            MouseClaimedByWebview,
+            ComputedNode {
+                size: Vec2::new(80.0, 80.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(40.0, 40.0),
+            view,
+            cells,
+        ));
+
+        app.update();
+
+        let hover = app.world().resource::<HyperlinkHoverState>();
+        assert_eq!(
+            hover.entity, None,
+            "a claimed surface must not be hovered — the click belongs to the page, so no link affordance"
+        );
+        assert_eq!(hover.hyperlink_id, None);
     }
 
     /// Asserts that a surface hosting a webview is not treated as a

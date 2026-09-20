@@ -547,7 +547,7 @@ fn button_kind(state: ButtonState) -> MouseReportKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::focus::MouseDisabled;
+    use crate::input::focus::{MouseClaimedByWebview, MouseDisabled};
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
     };
@@ -801,6 +801,31 @@ mod tests {
             });
         app.update();
         assert!(app.world().resource::<OrzmaMouseGesture>().drag.is_none());
+    }
+
+    /// Asserts that a press over a `MouseClaimedByWebview` terminal is
+    /// drained without arming a drag.
+    ///
+    /// Case: the user clicks a link inside a page mounted in the pane, so
+    /// the terminal underneath must not start a selection.
+    #[test]
+    fn webview_claimed_terminal_drains_without_arming_a_gesture() {
+        let mut app = make_selection_app();
+        let terminal = app
+            .world_mut()
+            .query_filtered::<Entity, With<OrzmaTerminal>>()
+            .single(app.world())
+            .expect("make_selection_app spawns exactly one terminal surface");
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(MouseClaimedByWebview);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_left(&mut app, ButtonState::Pressed);
+        app.update();
+        assert!(
+            app.world().resource::<OrzmaMouseGesture>().drag.is_none(),
+            "a claimed terminal must not arm a drag — the press belongs to the page"
+        );
     }
 
     /// Asserts that a single left press arms a drag, clears any existing

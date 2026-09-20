@@ -35,11 +35,17 @@ pub(crate) struct KeyboardFocused;
 
 /// When present on an `OrzmaTerminal` entity, the host's mouse dispatchers and
 /// hover-cursor system skip it — it is removed from the hit-test candidate set,
-/// so the pointer falls through to the next terminal below it. The host marks
-/// every terminal `MouseDisabled` for modal suppression (picker / IME / focused
-/// webview / unfocused window).
+/// so the pointer falls through to the next terminal below it. The host marks a
+/// terminal `MouseDisabled` for modal suppression: vi mode, IME composition, or
+/// an unfocused window.
 #[derive(Component)]
 pub(crate) struct MouseDisabled;
+
+/// When present on an `OrzmaTerminal` entity, the cursor is over one of its
+/// interactive inline webview rects. The host's mouse dispatchers and
+/// hover-cursor system skip it, while the webview router still acts on it.
+#[derive(Component)]
+pub(crate) struct MouseClaimedByWebview;
 
 /// A press landed on a pane surface.
 #[derive(EntityEvent, Debug, Clone, Copy)]
@@ -249,6 +255,7 @@ fn maintain_input_gates(
             Entity,
             Has<KeyboardDisabled>,
             Has<MouseDisabled>,
+            Has<MouseClaimedByWebview>,
             Has<ViModeState>,
         ),
         With<OrzmaTerminal>,
@@ -259,16 +266,17 @@ fn maintain_input_gates(
     let focused = window.map(|w| w.focused).unwrap_or(false);
     let keyboard_disable =
         should_disable_input(ime.is_composing(), focused, focused_webview.0.is_some());
-    // NOTE: mouse is NOT disabled on webview focus alone — only over an
-    // interactive inline rect (the rect-claim) — so an off-rect click still
-    // reaches `dispatch_mouse_buttons` (and clears webview focus in the router).
-    // Re-adding `focused_webview.0.is_some()` here would swallow that fallthrough
-    // click, stranding the user on a focused webview.
+    // NOTE: webview focus alone claims nothing — only the cursor sitting over an
+    // interactive inline rect does — so an off-rect click still reaches
+    // `dispatch_mouse_buttons` and clears webview focus in the router. Folding
+    // `focused_webview.0.is_some()` into either gate would swallow that
+    // fallthrough click, stranding the user on a focused webview.
     let mouse_modal = ime.is_composing() || !focused;
     let claimed = window.and_then(|w| cursor_claims_webview(w, &claim));
-    for (entity, has_keyboard, has_mouse, in_vi_mode) in terminals.iter() {
+    for (entity, has_keyboard, has_mouse, has_claim, in_vi_mode) in terminals.iter() {
         let disable_keyboard = keyboard_disable || in_vi_mode;
-        let disable_mouse = mouse_modal || in_vi_mode || Some(entity) == claimed;
+        let disable_mouse = mouse_modal || in_vi_mode;
+        let claim_mouse = Some(entity) == claimed;
         if disable_keyboard && !has_keyboard {
             commands.entity(entity).insert(KeyboardDisabled);
         } else if !disable_keyboard && has_keyboard {
@@ -278,6 +286,11 @@ fn maintain_input_gates(
             commands.entity(entity).insert(MouseDisabled);
         } else if !disable_mouse && has_mouse {
             commands.entity(entity).remove::<MouseDisabled>();
+        }
+        if claim_mouse && !has_claim {
+            commands.entity(entity).insert(MouseClaimedByWebview);
+        } else if !claim_mouse && has_claim {
+            commands.entity(entity).remove::<MouseClaimedByWebview>();
         }
     }
 }
@@ -643,20 +656,36 @@ mod tests {
             .set_physical_cursor_position(Some(DVec2::new(phys.x as f64, phys.y as f64)));
     }
 
+    /// Asserts that the cursor over an interactive webview rect claims the
+    /// shell for the webview without suppressing its mouse input.
+    ///
+    /// Case: the user moves the pointer onto a page mounted in a pane, and
+    /// the terminal underneath has to stand down so the click reaches the
+    /// page.
     #[test]
-    fn cursor_over_webview_rect_disables_mouse() {
+    fn cursor_over_webview_rect_claims_the_shell() {
         let (mut app, shell) = make_gate_app();
         set_gate_cursor(&mut app, Vec2::new(40.0, 48.0));
         app.update();
         assert!(
-            app.world().entity(shell).contains::<MouseDisabled>(),
-            "the cursor over an interactive webview rect must MouseDisable the shell so \
-             dispatch_mouse_buttons yields the click to the webview router"
+            app.world()
+                .entity(shell)
+                .contains::<MouseClaimedByWebview>(),
+            "the rect-claim marks the shell so the terminal dispatchers yield to the router"
+        );
+        assert!(
+            !app.world().entity(shell).contains::<MouseDisabled>(),
+            "the claim must not suppress the shell — MouseDisabled is what keeps the router out too"
         );
     }
 
+    /// Asserts that webview focus alone claims nothing and suppresses
+    /// nothing while the cursor sits outside every rect.
+    ///
+    /// Case: a page is focused in a pane and the user clicks on the
+    /// terminal text beside it.
     #[test]
-    fn focused_webview_off_rect_keeps_mouse_enabled() {
+    fn focused_webview_off_rect_claims_nothing() {
         let (mut app, shell) = make_gate_app();
         let child = app
             .world_mut()
@@ -667,9 +696,14 @@ mod tests {
         set_gate_cursor(&mut app, Vec2::new(400.0, 400.0));
         app.update();
         assert!(
+            !app.world()
+                .entity(shell)
+                .contains::<MouseClaimedByWebview>(),
+            "an off-rect cursor claims nothing, so the press falls through to the terminal"
+        );
+        assert!(
             !app.world().entity(shell).contains::<MouseDisabled>(),
-            "webview focus alone must NOT MouseDisable the shell — an off-rect click must fall \
-             through to the terminal (and clear webview focus in the router)"
+            "webview focus alone must not suppress the shell"
         );
     }
 
