@@ -28,7 +28,7 @@ pub(in crate::input::mouse) struct CefMouse<'w> {
 
 impl CefMouse<'_> {
     /// Sets the CEF focus flag on `webview`.
-    pub(in crate::input::mouse) fn set_focus(&self, webview: &Entity, focused: bool) {
+    pub fn set_focus(&self, webview: &Entity, focused: bool) {
         if let Some(sink) = &self.sink {
             sink.set_focus(webview, focused);
         }
@@ -36,7 +36,7 @@ impl CefMouse<'_> {
 
     /// Sends a click at `position` in webview-local DIP. `mouse_up` selects
     /// the release phase over the press phase.
-    pub(in crate::input::mouse) fn send_mouse_click(
+    pub fn send_mouse_click(
         &self,
         webview: &Entity,
         position: Vec2,
@@ -49,12 +49,7 @@ impl CefMouse<'_> {
     }
 
     /// Sends the raw CEF wheel `delta` at `position` in webview-local DIP.
-    pub(in crate::input::mouse) fn send_mouse_wheel(
-        &self,
-        webview: &Entity,
-        position: Vec2,
-        delta: Vec2,
-    ) {
+    pub fn send_mouse_wheel(&self, webview: &Entity, position: Vec2, delta: Vec2) {
         if let Some(sink) = &self.sink {
             sink.send_mouse_wheel(webview, position, delta);
         }
@@ -62,7 +57,7 @@ impl CefMouse<'_> {
 
     /// Sends pointer motion to `position` in webview-local DIP, carrying the
     /// held `buttons` so one call serves both hover and an in-rect drag.
-    pub(in crate::input::mouse) fn send_mouse_move<'a>(
+    pub fn send_mouse_move<'a>(
         &self,
         webview: &Entity,
         buttons: impl IntoIterator<Item = &'a MouseButton>,
