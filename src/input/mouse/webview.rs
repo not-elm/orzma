@@ -111,6 +111,11 @@ pub(in crate::input::mouse) fn route_webview_left_click(
             {
                 focused.0 = Some(hit.child);
             }
+            if !route.cef.is_connected() {
+                warn_once!(
+                    "no CEF pointer sink is present, so inline webview clicks do not reach the page"
+                );
+            }
             route.cef.set_focus(&hit.child, true);
             route
                 .cef
