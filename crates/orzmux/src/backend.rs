@@ -484,7 +484,7 @@ impl Backend {
                     if let VtSignal::CurrentDir(path) = &signal
                         && let Some(pane) = self.panes.get_mut(&id)
                     {
-                        pane.set_osc7_cwd(path.clone());
+                        pane.set_reported_cwd(path.clone());
                     }
                     self.emit(OrzmuxEvent::Signal { pane: id, signal });
                 }
