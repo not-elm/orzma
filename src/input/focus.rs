@@ -41,6 +41,14 @@ pub(crate) struct KeyboardFocused;
 #[derive(Component)]
 pub(crate) struct TerminalMouseDisabled;
 
+/// When present on an `OrzmaTerminal` entity, the webview router declines to
+/// forward pointer input to its inline children. The host marks a terminal
+/// `WebviewMouseDisabled` for vi mode, an unfocused window, or an IME
+/// composition that no inline webview owns. A composition owned by a focused
+/// inline webview is not a reason, and the page stays clickable throughout it.
+#[derive(Component)]
+pub(crate) struct WebviewMouseDisabled;
+
 /// When present on an `OrzmaTerminal` entity, the cursor is over one of its
 /// interactive inline webview rects. The host's mouse dispatchers and
 /// hover-cursor system skip it, while the webview router still acts on it.
@@ -74,6 +82,93 @@ impl Plugin for FocusSyncPlugin {
         )
         .add_observer(on_active_pane_changed)
         .add_observer(on_pane_clicked);
+    }
+}
+
+/// Inline-webview hit-test inputs for the mouse rect-claim. `metrics` is
+/// optional: the gate still runs before cell metrics exist, when no claim
+/// is possible yet.
+#[derive(SystemParam)]
+pub(in crate::input) struct WebviewClaimParams<'w, 's> {
+    metrics: Option<Res<'w, TerminalCellMetricsResource>>,
+    surfaces: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static ComputedNode,
+            &'static ComputedStackIndex,
+            &'static UiGlobalTransform,
+        ),
+        With<OrzmaTerminal>,
+    >,
+    children: Query<'w, 's, &'static Children>,
+    webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
+    overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
+}
+
+pub(in crate::input) fn maintain_input_gates(
+    mut commands: Commands,
+    ime: Res<ImeState>,
+    focused_webview: Res<FocusedWebview>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    terminals: Query<
+        (
+            Entity,
+            Has<KeyboardDisabled>,
+            Has<TerminalMouseDisabled>,
+            Has<WebviewMouseDisabled>,
+            Has<MouseClaimedByWebview>,
+            Has<ViModeState>,
+        ),
+        With<OrzmaTerminal>,
+    >,
+    claim: WebviewClaimParams,
+) {
+    let window = windows.single().ok();
+    let focused = window.map(|w| w.focused).unwrap_or(false);
+    let keyboard_disable =
+        should_disable_input(ime.is_composing(), focused, focused_webview.0.is_some());
+    // NOTE: webview focus alone claims nothing — only the cursor sitting over an
+    // interactive inline rect does — so an off-rect click still reaches
+    // `dispatch_mouse_buttons` and clears webview focus in the router. Folding
+    // `focused_webview.0.is_some()` into either gate unconditionally would swallow
+    // that fallthrough click, stranding the user on a focused webview. The
+    // conditional fold in `webview_modal` is safe because it is live only while a
+    // composition has no owner, a state in which there is no inline focus to clear.
+    let mouse_modal = ime.is_composing() || !focused;
+    let webview_modal = !focused || (ime.is_composing() && focused_webview.0.is_none());
+    let claimed = window.and_then(|w| cursor_claims_webview(w, &claim));
+    for (entity, has_keyboard, has_terminal, has_webview, has_claim, in_vi_mode) in terminals.iter()
+    {
+        set_marker(
+            &mut commands,
+            entity,
+            KeyboardDisabled,
+            keyboard_disable || in_vi_mode,
+            has_keyboard,
+        );
+        set_marker(
+            &mut commands,
+            entity,
+            TerminalMouseDisabled,
+            mouse_modal || in_vi_mode,
+            has_terminal,
+        );
+        set_marker(
+            &mut commands,
+            entity,
+            WebviewMouseDisabled,
+            webview_modal || in_vi_mode,
+            has_webview,
+        );
+        set_marker(
+            &mut commands,
+            entity,
+            MouseClaimedByWebview,
+            Some(entity) == claimed,
+            has_claim,
+        );
     }
 }
 
@@ -223,78 +318,6 @@ fn should_disable_input(composing: bool, window_focused: bool, webview_focused: 
     composing || !window_focused || webview_focused
 }
 
-/// Inline-webview hit-test inputs for the mouse rect-claim. `metrics` is
-/// optional: the gate still runs before cell metrics exist, when no claim
-/// is possible yet.
-#[derive(SystemParam)]
-struct WebviewClaimParams<'w, 's> {
-    metrics: Option<Res<'w, TerminalCellMetricsResource>>,
-    surfaces: Query<
-        'w,
-        's,
-        (
-            Entity,
-            &'static ComputedNode,
-            &'static ComputedStackIndex,
-            &'static UiGlobalTransform,
-        ),
-        With<OrzmaTerminal>,
-    >,
-    children: Query<'w, 's, &'static Children>,
-    webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
-    overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
-}
-
-fn maintain_input_gates(
-    mut commands: Commands,
-    ime: Res<ImeState>,
-    focused_webview: Res<FocusedWebview>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    terminals: Query<
-        (
-            Entity,
-            Has<KeyboardDisabled>,
-            Has<TerminalMouseDisabled>,
-            Has<MouseClaimedByWebview>,
-            Has<ViModeState>,
-        ),
-        With<OrzmaTerminal>,
-    >,
-    claim: WebviewClaimParams,
-) {
-    let window = windows.single().ok();
-    let focused = window.map(|w| w.focused).unwrap_or(false);
-    let keyboard_disable =
-        should_disable_input(ime.is_composing(), focused, focused_webview.0.is_some());
-    // NOTE: webview focus alone claims nothing — only the cursor sitting over an
-    // interactive inline rect does — so an off-rect click still reaches
-    // `dispatch_mouse_buttons` and clears webview focus in the router. Folding
-    // `focused_webview.0.is_some()` into either gate would swallow that
-    // fallthrough click, stranding the user on a focused webview.
-    let mouse_modal = ime.is_composing() || !focused;
-    let claimed = window.and_then(|w| cursor_claims_webview(w, &claim));
-    for (entity, has_keyboard, has_mouse, has_claim, in_vi_mode) in terminals.iter() {
-        let disable_keyboard = keyboard_disable || in_vi_mode;
-        let disable_mouse = mouse_modal || in_vi_mode;
-        let claim_mouse = Some(entity) == claimed;
-        if disable_keyboard && !has_keyboard {
-            commands.entity(entity).insert(KeyboardDisabled);
-        } else if !disable_keyboard && has_keyboard {
-            commands.entity(entity).remove::<KeyboardDisabled>();
-        }
-        if disable_mouse && !has_mouse {
-            commands.entity(entity).insert(TerminalMouseDisabled);
-        } else if !disable_mouse && has_mouse {
-            commands.entity(entity).remove::<TerminalMouseDisabled>();
-        }
-        if claim_mouse && !has_claim {
-            commands.entity(entity).insert(MouseClaimedByWebview);
-        } else if !claim_mouse && has_claim {
-            commands.entity(entity).remove::<MouseClaimedByWebview>();
-        }
-    }
-}
-
 /// The shell surface whose INTERACTIVE inline webview rect is under the
 /// cursor, or `None`. Considers only the topmost surface under the cursor;
 /// a `NonInteractive` child never claims it.
@@ -318,6 +341,20 @@ fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<
         scale,
     )?;
     Some(terminal)
+}
+
+fn set_marker<C: Component>(
+    commands: &mut Commands,
+    entity: Entity,
+    marker: C,
+    want: bool,
+    has: bool,
+) {
+    if want && !has {
+        commands.entity(entity).insert(marker);
+    } else if !want && has {
+        commands.entity(entity).remove::<C>();
+    }
 }
 
 #[cfg(test)]
@@ -717,6 +754,102 @@ mod tests {
                 .entity(shell)
                 .contains::<TerminalMouseDisabled>(),
             "webview focus alone must not suppress the shell"
+        );
+    }
+
+    /// Builds an `ImeState` holding a live preedit and inserts it, replacing
+    /// the non-composing default `make_gate_app` installed.
+    fn set_composing(app: &mut App) {
+        use crate::input::ime::apply_event;
+        use bevy::window::Ime;
+
+        let mut state = ImeState::default();
+        apply_event(
+            &mut state,
+            &Ime::Preedit {
+                window: Entity::PLACEHOLDER,
+                value: "あ".into(),
+                cursor: Some((3, 3)),
+            },
+        );
+        assert!(
+            state.is_composing(),
+            "the fixture must actually compose, or the gate assertions below are vacuous"
+        );
+        app.insert_resource(state);
+    }
+
+    /// Asserts that a composition owned by a focused inline webview sets the
+    /// terminal gate and leaves the webview gate clear.
+    ///
+    /// Case: the user is typing Japanese into a text field on a page mounted
+    /// in a pane, and moves the pointer over that page mid-conversion.
+    #[test]
+    fn a_webview_owned_composition_leaves_the_webview_gate_clear() {
+        let (mut app, shell) = make_gate_app();
+        let child = app
+            .world_mut()
+            .query_filtered::<Entity, With<Webview>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+        set_composing(&mut app);
+        set_gate_cursor(&mut app, Vec2::new(400.0, 400.0));
+        app.update();
+        assert!(
+            app.world()
+                .entity(shell)
+                .contains::<TerminalMouseDisabled>(),
+            "a composition still suppresses the terminal's own mouse input"
+        );
+        assert!(
+            !app.world().entity(shell).contains::<WebviewMouseDisabled>(),
+            "the page owning the composition must stay clickable while it composes"
+        );
+    }
+
+    /// Asserts that a composition no inline webview owns sets both gates.
+    ///
+    /// Case: the user is typing Japanese at the shell prompt while a page is
+    /// mounted in the same pane but not focused.
+    #[test]
+    fn an_unowned_composition_sets_both_gates() {
+        let (mut app, shell) = make_gate_app();
+        set_composing(&mut app);
+        set_gate_cursor(&mut app, Vec2::new(400.0, 400.0));
+        app.update();
+        assert!(
+            app.world()
+                .entity(shell)
+                .contains::<TerminalMouseDisabled>(),
+            "a composition suppresses the terminal's own mouse input"
+        );
+        assert!(
+            app.world().entity(shell).contains::<WebviewMouseDisabled>(),
+            "a stray click into a page mid-preedit would discard the pending commit, \
+             so an unowned composition suppresses the page too"
+        );
+    }
+
+    /// Asserts that vi mode sets both gates.
+    ///
+    /// Case: the user enters vi mode to scroll back through output in a pane
+    /// that has a page mounted in it.
+    #[test]
+    fn vi_mode_sets_both_gates() {
+        let (mut app, shell) = make_gate_app();
+        app.world_mut().entity_mut(shell).insert(ViModeState);
+        set_gate_cursor(&mut app, Vec2::new(400.0, 400.0));
+        app.update();
+        assert!(
+            app.world()
+                .entity(shell)
+                .contains::<TerminalMouseDisabled>(),
+            "vi mode suppresses terminal mouse input"
+        );
+        assert!(
+            app.world().entity(shell).contains::<WebviewMouseDisabled>(),
+            "vi mode must reach the page too, or a click in vi mode still drives it"
         );
     }
 
