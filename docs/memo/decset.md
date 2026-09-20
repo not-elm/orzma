@@ -70,7 +70,7 @@ Xterm自身がterminfoベースのアプリには47ではなくこれを使え�
 - 混用（`?47h`→`?1049l`など）は上のべき等規則の帰結どおりで、特別扱いしない。
   `?1049h`→`?47l`→`?1049l`では保存したカーソルは復元されない（xtermは復元する）。
 
-同期出力（**実装済み**）。フラグは `VtModes` にあるが、効果は描画のタイミングに出る。
+同期出力（**実装済み**）。フラグは `VtModes` にあるが、効果は描画のタイミングに出る。詳細は[Synchronized Output と DECRQM / DECRPM](synchronized-output.md)。
 
 | Ps | Set | Reset |
 | - | - | - |
@@ -96,6 +96,8 @@ Xterm自身がterminfoベースのアプリには47ではなくこれを使え�
 - RIS は同期更新を閉じる。DECSTR は閉じない。
 
 ## DECRQM / DECRPM（**実装済み**）
+
+詳細は[Synchronized Output と DECRQM / DECRPM](synchronized-output.md)。
 
 `CSI ? Ps $ p`（DEC private 形）と `CSI Ps $ p`（ANSI 形）に、`CSI ? Ps ; Pm $ y` / `CSI Ps ; Pm $ y` で答える。
 `Pm` は 0（未認識）・1（set）・2（reset）だけを使う。表は `DeviceState::private_mode_report` /
