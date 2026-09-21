@@ -1056,6 +1056,24 @@ mod tests {
         assert_eq!(out[0].cell().map(|c| c.text.as_str()), Some("b"));
     }
 
+    /// Asserts that refilling a cell replaces its hyperlink along with
+    /// its text, so an unlinked run leaves no link on the cell it
+    /// reuses.
+    ///
+    /// Case: a pager scrolls a linked filename out of a column that the
+    /// next frame fills with plain text.
+    #[test]
+    fn refill_row_drops_the_hyperlink_of_the_cell_it_reuses() {
+        let mut out = Vec::new();
+        let table = link_table(7, "https://example");
+        refill_row(&mut out, &[run_with_link("a", Some(id(7)))], 1, &table);
+        assert_eq!(out[0].cell().and_then(|c| c.hyperlink), Some(id(7)));
+
+        refill_row(&mut out, &[run_with_link("a", None)], 1, &table);
+
+        assert_eq!(out[0].cell().map(|c| c.hyperlink), Some(None));
+    }
+
     /// Asserts that a wide glyph and the narrow glyphs that replace it,
     /// and the reverse, leave cell and trailer slots where the new row
     /// puts them.
@@ -1092,6 +1110,20 @@ mod tests {
         assert_eq!(out[0].cell().map(|c| c.text.as_str()), Some("x"));
         assert_eq!(out[1], GridSlot::Empty);
         assert_eq!(out[2], GridSlot::Empty);
+    }
+
+    /// Asserts that a zero-column refill empties the row, whatever it
+    /// held and whatever the runs carry.
+    ///
+    /// Case: a pane is squeezed to zero columns while its row still
+    /// holds the text an earlier frame painted.
+    #[test]
+    fn refill_row_empties_a_zero_column_row() {
+        let mut out = Vec::new();
+        let table = HashMap::new();
+        refill_row(&mut out, &[run_with_widths("ab", &[1, 1])], 2, &table);
+        refill_row(&mut out, &[run_with_widths("ab", &[1, 1])], 0, &table);
+        assert!(out.is_empty());
     }
 
     /// Asserts that a reused cell whose text buffer grew far past the
