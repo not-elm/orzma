@@ -1,2 +1,0 @@
-Windows環境でWebviewを開き、Paneをリサイズするとリサイズ後のWebviewのフィット処理でハングする。
-別のPaneにフォーカスしてから再度WebviewのPaneにフォーカスを戻すと治る。
