@@ -1,6 +1,8 @@
 //! PTY-backed terminal core: spawns a shell under a PTY and
 //! drives an injected [`Vt`] implementor behind a frame coalescer.
 
+#![deny(unsafe_code)]
+
 use crate::{
     coalescer::Coalescer,
     error::{OrzmaTtyError, OrzmaTtyResult},

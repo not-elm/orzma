@@ -6051,7 +6051,7 @@ SOFTWARE.
 ### MIT License — `MIT`
 
 Used by:
-- sysinfo 0.38.4
+- sysinfo 0.39.6
 
 ~~~text
 The MIT License (MIT)
