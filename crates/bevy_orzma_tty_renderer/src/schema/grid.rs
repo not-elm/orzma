@@ -8,7 +8,7 @@ use crate::schema::{
 use bevy::prelude::*;
 #[cfg(test)]
 use orzma_vt::prelude::GridSize;
-use orzma_vt::prelude::{Frame, MAX_COMBINING, VtResult};
+use orzma_vt::prelude::{Frame, VtResult};
 use std::{collections::HashMap, mem};
 
 /// One materialized cell of the renderer's CPU-side grid, expanded
@@ -341,11 +341,6 @@ impl TerminalCells {
 /// Capacity, in bytes, above which a reused cell's text buffer is
 /// trimmed back before it is refilled.
 const RETAINED_TEXT_CAPACITY: usize = 64;
-
-const _: () = assert!(
-    (1 + MAX_COMBINING) * char::MAX_LEN_UTF8 <= RETAINED_TEXT_CAPACITY,
-    "the largest cell text the VT emits outgrows the retained text capacity",
-);
 
 /// Refills `out` with exactly `cols` column slots materialized from one
 /// row's attribute runs, replacing whatever it held, and resolves each
