@@ -937,6 +937,9 @@ fn resolve_metrics(
 /// `handles` is `(cells, glyphs)`. `dims` is `(cols, rows)` in cells. A
 /// zero in either axis uploads the one-element dummy buffers wgpu
 /// requires instead of an empty one.
+///
+/// Rows and columns of `cells` outside `dims` are ignored, and a slot
+/// `cells` does not cover keeps the default cell.
 fn upload_cells(
     state: &mut TerminalMaterialState,
     atlas: &mut GlyphAtlas,
@@ -950,18 +953,12 @@ fn upload_cells(
     let (cols, rows) = (u32::from(dims.0), u32::from(dims.1));
     let (cells_handle, glyphs_handle) = handles;
 
-    debug_assert_eq!(
-        cells.cells.len(),
-        usize::from(dims.1),
-        "the retained cells have exactly as many rows as the grid"
-    );
-
     let cell_count = (cols * rows) as usize;
     state.cpu_cells.clear();
     state.cpu_cells.resize(cell_count, GpuCell::default());
 
     if cols > 0 && rows > 0 {
-        rebuild_cells(state, atlas, cells, fonts, phys_font_size, cols);
+        rebuild_cells(state, atlas, cells, fonts, phys_font_size, (cols, rows));
     }
 
     if state.cpu_cells.is_empty() {
@@ -972,10 +969,10 @@ fn upload_cells(
     }
 
     if let Some(mut buf) = buffers.get_mut(cells_handle) {
-        buf.set_data(std::mem::take(&mut state.cpu_cells));
+        buf.set_data(&state.cpu_cells);
     }
     if let Some(mut buf) = buffers.get_mut(glyphs_handle) {
-        buf.set_data(state.cpu_glyphs.clone());
+        buf.set_data(&state.cpu_glyphs);
     }
 
     state.last_atlas_generation = atlas.generation;
@@ -990,10 +987,10 @@ fn rebuild_cells(
     cells: &TerminalCells,
     fonts: &TerminalFonts,
     phys_font_size: u16,
-    cols: u32,
+    dims: (u32, u32),
 ) {
     let restarts = atlas.restarts;
-    fill_cells(state, atlas, cells, fonts, phys_font_size, cols);
+    fill_cells(state, atlas, cells, fonts, phys_font_size, dims);
     if atlas.restarts == restarts {
         return;
     }
@@ -1003,32 +1000,28 @@ fn rebuild_cells(
     // glyph set does not fit the atlas at all, so that pass is final.
     state.glyph_index_map.clear();
     state.cpu_glyphs.clear();
-    fill_cells(state, atlas, cells, fonts, phys_font_size, cols);
+    fill_cells(state, atlas, cells, fonts, phys_font_size, dims);
 }
 
 /// Writes every visible cell's glyph index, color and style into the CPU
 /// cell table, resolving each glyph through the atlas as it goes.
+///
+/// `dims` is `(cols, rows)` in cells. A row or column of `cells` outside
+/// it is skipped without resolving its glyphs.
 fn fill_cells(
     state: &mut TerminalMaterialState,
     atlas: &mut GlyphAtlas,
     cells: &TerminalCells,
     fonts: &TerminalFonts,
     phys_font_size: u16,
-    cols: u32,
+    dims: (u32, u32),
 ) {
+    let (cols, rows) = dims;
     let packed_palette = PackedPalette::build(&cells.palette);
-    for (row_idx, row) in cells.cells.iter().enumerate() {
-        debug_assert_eq!(
-            row.len(),
-            cols as usize,
-            "every retained row is exactly as wide as the grid"
-        );
+    for (row_idx, row) in cells.cells.iter().enumerate().take(rows as usize) {
         let mut left_half: Option<GpuCell> = None;
-        for (col, slot) in row.iter().enumerate() {
+        for (col, slot) in row.iter().enumerate().take(cols as usize) {
             let col = col as u32;
-            if col >= cols {
-                break;
-            }
             let target = (row_idx as u32 * cols + col) as usize;
             match slot {
                 GridSlot::Empty => left_half = None,
@@ -1222,6 +1215,123 @@ mod tests {
         }
     }
 
+    fn uploaded(
+        state: &mut TerminalMaterialState,
+        buffers: &mut Assets<ShaderBuffer>,
+        handles: (&Handle<ShaderBuffer>, &Handle<ShaderBuffer>),
+        cells: &TerminalCells,
+        dims: (u16, u16),
+    ) {
+        let mut atlas = GlyphAtlas::default();
+        let fonts = TerminalFonts::default();
+        upload_cells(state, &mut atlas, buffers, cells, &fonts, handles, 16, dims);
+    }
+
+    fn grid_of(rows: usize, cols: usize) -> TerminalCells {
+        TerminalCells {
+            cells: vec![vec![GridSlot::Cell(cell_with_link("x", None)); cols]; rows],
+            ..Default::default()
+        }
+    }
+
+    fn hyperlink_ids(cells: &[GpuCell]) -> Vec<u32> {
+        cells.iter().map(|cell| cell.hyperlink_id).collect()
+    }
+
+    /// Asserts that an upload ignores the rows and columns outside its
+    /// dimensions without resolving their glyphs, and leaves the slots
+    /// the retained cells do not cover at their default, instead of
+    /// panicking on the mismatch.
+    ///
+    /// Case: a malformed frame that also resizes the pane is rejected by
+    /// the cells while the view takes the new size, so the next rebuilds
+    /// see a grid of another shape than the view reports.
+    #[test]
+    fn upload_cells_clips_a_grid_that_disagrees_with_its_dims() {
+        let mut buffers = Assets::<ShaderBuffer>::default();
+        let cells_handle = buffers.add(ShaderBuffer::default());
+        let glyphs_handle = buffers.add(ShaderBuffer::default());
+        let linked = |id| GridSlot::Cell(cell_with_link("x", Some(id)));
+        let larger = TerminalCells {
+            cells: vec![
+                vec![linked(1), linked(2), linked(3)],
+                vec![GridSlot::Empty, linked(4)],
+                vec![linked(5)],
+                vec![GridSlot::Cell(cell_with_link("y", Some(6)))],
+            ],
+            ..Default::default()
+        };
+        let smaller = TerminalCells {
+            cells: vec![vec![linked(7)]],
+            ..Default::default()
+        };
+        let untouched = gpu_cell_fingerprint(&[GpuCell::default()])[0];
+        let mut state = state_for(0);
+
+        uploaded(
+            &mut state,
+            &mut buffers,
+            (&cells_handle, &glyphs_handle),
+            &larger,
+            (2, 3),
+        );
+        assert_eq!(hyperlink_ids(&state.cpu_cells), [1, 2, 0, 4, 5, 0]);
+        let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
+        assert_eq!(fingerprint[2], untouched);
+        assert_eq!(fingerprint[5], untouched);
+        assert_eq!(
+            state.cpu_glyphs.len(),
+            1,
+            "the row outside the dimensions resolves no glyph"
+        );
+
+        uploaded(
+            &mut state,
+            &mut buffers,
+            (&cells_handle, &glyphs_handle),
+            &smaller,
+            (2, 3),
+        );
+        assert_eq!(hyperlink_ids(&state.cpu_cells), [7, 0, 0, 0, 0, 0]);
+        let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
+        assert!(fingerprint[1..].iter().all(|slot| *slot == untouched));
+    }
+
+    /// Asserts that every upload leaves the CPU cell table holding that
+    /// upload's cells alone, and hands the buffer asset their encoding.
+    ///
+    /// Case: a pane redraws at an unchanged size, and the second frame
+    /// blanks a cell that the first one painted.
+    #[test]
+    fn upload_cells_keeps_its_cpu_cell_table_across_uploads() {
+        let mut buffers = Assets::<ShaderBuffer>::default();
+        let cells_handle = buffers.add(ShaderBuffer::default());
+        let glyphs_handle = buffers.add(ShaderBuffer::default());
+        let painted = grid_of(2, 2);
+        let mut blanked = grid_of(2, 2);
+        blanked.cells[1][1] = GridSlot::Empty;
+        let mut state = state_for(0);
+
+        for cells in [&painted, &blanked] {
+            uploaded(
+                &mut state,
+                &mut buffers,
+                (&cells_handle, &glyphs_handle),
+                cells,
+                (2, 2),
+            );
+            assert_eq!(state.cpu_cells.len(), 4);
+            let mut expected = ShaderBuffer::default();
+            expected.set_data(&state.cpu_cells);
+            let encoded = buffers
+                .get(&cells_handle)
+                .and_then(|buffer| buffer.data.as_ref());
+            assert_eq!(encoded, expected.data.as_ref());
+        }
+        let untouched = gpu_cell_fingerprint(&[GpuCell::default()])[0];
+        assert_eq!(gpu_cell_fingerprint(&state.cpu_cells)[3], untouched);
+    }
+
     /// Asserts the GPU slots a row of a wide char, a combining mark and a
     /// linked cell produces, pinning the payload of every slot including
     /// the wide char's right half.
@@ -1247,7 +1357,7 @@ mod tests {
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
-        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 16, 4);
+        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 16, (4, 1));
 
         let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
         assert_eq!(
@@ -1296,7 +1406,7 @@ mod tests {
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
-        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 16, 2);
+        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 16, (2, 1));
 
         assert_eq!(state.cpu_cells[0].hyperlink_id, 7);
         assert_eq!(state.cpu_cells[1].hyperlink_id, 0);
@@ -1335,7 +1445,7 @@ mod tests {
             "the filler glyphs must not restart the atlas"
         );
 
-        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 24, 2);
+        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 24, (2, 1));
 
         for (col, ch) in [(0usize, 'M'), (1usize, 'A')] {
             let glyph_index = state.cpu_cells[col].glyph_index;
