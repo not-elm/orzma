@@ -251,14 +251,18 @@ impl Pty {
 
     /// The working directory of the process this PTY is showing: on Unix
     /// its foreground process group's leader, else the spawned process,
-    /// else on macOS the child of a spawned `/usr/bin/login` wrapper; on
-    /// Windows the spawned process. Only a directory that still exists
-    /// and can be entered is reported.
+    /// else the child of a spawned `/usr/bin/login` wrapper; on Windows
+    /// the spawned process. Only a directory that still exists and can be
+    /// entered is reported.
     ///
     /// Returns `None` when no candidate can be read: no process was
     /// spawned, the process belongs to another user or is elevated, it
-    /// has exited, its directory was removed or can no longer be
-    /// entered, or the platform is none of macOS, Linux, and Windows.
+    /// has exited, its directory was removed or can no longer be entered,
+    /// or the platform is one the process backend does not cover.
+    ///
+    /// On macOS a working directory whose bytes are not UTF-8 is reported
+    /// as absent, as is one whose vnode names no device; a process whose
+    /// name cannot be read is not listed at all.
     ///
     /// On Windows a PowerShell `Set-Location` does not change the
     /// process working directory, so the directory reported here is the
