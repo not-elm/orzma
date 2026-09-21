@@ -28,8 +28,7 @@ pub(crate) fn resolve(
     if direct.is_empty() {
         return None;
     }
-    let processes = Processes::of(&direct);
-    if let Some(path) = direct.iter().find_map(|&pid| processes.enterable_cwd(pid)) {
+    if let Some(path) = first_enterable_cwd(&direct) {
         return Some(path);
     }
     if !child_is_wrapper {
@@ -40,10 +39,7 @@ pub(crate) fn resolve(
         .into_iter()
         .filter(|&pid| Some(pid) != leader)
         .collect();
-    let processes = Processes::of(&children);
-    children
-        .into_iter()
-        .find_map(|pid| processes.enterable_cwd(pid))
+    first_enterable_cwd(&children)
 }
 
 /// A snapshot of the given processes and their working directories.
@@ -100,6 +96,13 @@ impl Processes {
         let path = path.to_path_buf();
         Some(path)
     }
+}
+
+/// The working directory of the first of `pids` that reports one which
+/// still exists and can be entered.
+fn first_enterable_cwd(pids: &[Pid]) -> Option<PathBuf> {
+    let processes = Processes::of(pids);
+    pids.iter().find_map(|&pid| processes.enterable_cwd(pid))
 }
 
 /// The pids whose parent is `pid`, in descending pid order.
