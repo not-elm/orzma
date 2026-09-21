@@ -18,10 +18,6 @@ debug = ["bevy_orzma_webview/debug"]
 [dependencies]
 ab_glyph = "0.2"
 anyhow = { workspace = true }
-# Code-less dependency: orzma has no `use arboard` after the clipboard migration.
-# It exists only so Cargo feature-unification keeps arboard's `wayland-data-control`
-# (wl-clipboard-rs) enabled on the single arboard build that `bevy_clipboard` pulls in.
-# Pin to match Bevy's arboard pin; if a future Bevy bump changes it, update this in lockstep.
 arboard = { version = "3.6.1", default-features = false, features = [
   "wayland-data-control",
 ] }
@@ -31,7 +27,9 @@ bevy_cef_core = { workspace = true }
 bevy_orzmux = { path = "crates/bevy_orzmux" }
 bevy_orzma_tty_renderer = { path = "crates/bevy_orzma_tty_renderer" }
 bevy_orzma_webview = { path = "crates/bevy_orzma_webview" }
-bevy_orzma_webview_host = { path = "crates/bevy_orzma_webview_host", features = ["cef"] }
+bevy_orzma_webview_host = { path = "crates/bevy_orzma_webview_host", features = [
+  "cef",
+] }
 orzmux = { path = "crates/orzmux" }
 orzma_tty = { path = "crates/orzma_tty" }
 orzma_vt = { path = "crates/orzma_vt" }
@@ -58,7 +56,10 @@ winit = "0.30"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+] }
 
 [target.'cfg(windows)'.dev-dependencies]
 async-channel = "2"
@@ -80,18 +81,7 @@ repository = "https://github.com/not-elm/orzma"
 publish = false
 
 [workspace.dependencies]
-# Bevy's `default` is `2d` + `3d` + `ui` + `audio`, and each of the first three
-# pulls in `default_platform`, which pulls in `sysinfo_plugin`. That plugin makes
-# `bevy_diagnostic` depend on `sysinfo` with `apple-app-store` on macOS, which
-# enables `sysinfo/apple-sandbox` and replaces sysinfo's macOS process module
-# with a stub whose `cwd()` and `parent()` always return `None`. Cargo unifies
-# features per package, so any other crate here that reads a process working
-# directory through sysinfo would silently get that stub. The groups are
-# therefore expanded one level so `default_platform` can be taken without
-# `sysinfo_plugin`. Re-check this list against bevy's own feature table on every
-# bevy upgrade.
 bevy = { version = "0.19", default-features = false, features = [
-  # `2d` + `3d` + `ui` + `audio`, minus the `default_platform` they share.
   "default_app",
   "2d_bevy_render",
   "3d_bevy_render",
@@ -102,8 +92,6 @@ bevy = { version = "0.19", default-features = false, features = [
   "picking",
   "bevy_audio",
   "vorbis",
-  # `default_platform`, minus `sysinfo_plugin`. `default_font` belongs to this
-  # group; orzma also listed it explicitly before this expansion.
   "std",
   "bevy_gilrs",
   "bevy_winit",
@@ -114,7 +102,6 @@ bevy = { version = "0.19", default-features = false, features = [
   "x11",
   "wayland",
   "custom_cursor",
-  # orzma's own additions.
   "system_clipboard",
   "system_font_discovery",
 ] }

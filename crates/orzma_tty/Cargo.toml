@@ -15,10 +15,7 @@ anyhow = { workspace = true }
 portable-pty = { workspace = true }
 crossbeam-channel = "0.5"
 tracing = { workspace = true }
-# orzma_tty is the only consumer: bevy stopped depending on sysinfo when
-# `sysinfo_plugin` was dropped from the workspace bevy features. Staying on 0.38
-# is deliberate — 0.39 fixes none of the macOS limitations this crate documents.
-sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
