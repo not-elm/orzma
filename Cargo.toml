@@ -61,9 +61,6 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Threading",
 ] }
 
-[target.'cfg(windows)'.dev-dependencies]
-async-channel = "2"
-
 [lints]
 workspace = true
 

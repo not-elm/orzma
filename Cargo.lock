@@ -5033,7 +5033,6 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "arboard",
- "async-channel",
  "bevy",
  "bevy_cef",
  "bevy_cef_core",
