@@ -5118,7 +5118,7 @@ SOFTWARE.
 ### MIT License — `MIT`
 
 Used by:
-- bevy_cef 0.12.0
+- bevy_cef 0.13.0
 
 ~~~text
 MIT License
@@ -5181,12 +5181,12 @@ Used by:
 - accesskit 0.24.1
 - accesskit_consumer 0.37.0
 - accesskit_macos 0.26.2
-- bevy_cef_core 0.12.0
+- bevy_cef_core 0.13.0
 - bevy_scene_macros 0.19.0
 - block2 0.5.1
 - block2 0.6.2
-- cef-dll-sys 149.3.0+149.0.6
-- cef 149.3.0+149.0.6
+- cef-dll-sys 152.4.0+152.0.8
+- cef 152.4.0+152.0.8
 - constgebra 0.1.4
 - dasp_sample 0.11.0
 - dispatch2 0.3.1
