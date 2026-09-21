@@ -80,8 +80,41 @@ repository = "https://github.com/not-elm/orzma"
 publish = false
 
 [workspace.dependencies]
-bevy = { version = "0.19", features = [
+# Bevy's `default` is `2d` + `3d` + `ui` + `audio`, and each of the first three
+# pulls in `default_platform`, which pulls in `sysinfo_plugin`. That plugin makes
+# `bevy_diagnostic` depend on `sysinfo` with `apple-app-store` on macOS, which
+# enables `sysinfo/apple-sandbox` and replaces sysinfo's macOS process module
+# with a stub whose `cwd()` and `parent()` always return `None`. Cargo unifies
+# features per package, so any other crate here that reads a process working
+# directory through sysinfo would silently get that stub. The groups are
+# therefore expanded one level so `default_platform` can be taken without
+# `sysinfo_plugin`. Re-check this list against bevy's own feature table on every
+# bevy upgrade.
+bevy = { version = "0.19", default-features = false, features = [
+  # `2d` + `3d` + `ui` + `audio`, minus the `default_platform` they share.
+  "default_app",
+  "2d_bevy_render",
+  "3d_bevy_render",
+  "ui_api",
+  "ui_bevy_render",
+  "bevy_ui_widgets",
+  "scene",
+  "picking",
+  "bevy_audio",
+  "vorbis",
+  # `default_platform`, minus `sysinfo_plugin`. `default_font` belongs to this
+  # group; orzma also listed it explicitly before this expansion.
+  "std",
+  "bevy_gilrs",
+  "bevy_winit",
+  "bevy_clipboard",
   "default_font",
+  "multi_threaded",
+  "webgl2",
+  "x11",
+  "wayland",
+  "custom_cursor",
+  # orzma's own additions.
   "system_clipboard",
   "system_font_discovery",
 ] }
