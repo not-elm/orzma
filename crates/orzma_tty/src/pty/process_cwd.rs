@@ -29,25 +29,24 @@ pub(crate) fn resolve(
         return None;
     }
     let processes = Processes::of(&direct);
-    if let Some(path) = direct
-        .iter()
-        .find_map(|&pid| enterable_cwd(&processes, pid))
-    {
+    if let Some(path) = direct.iter().find_map(|&pid| processes.enterable_cwd(pid)) {
         return Some(path);
     }
     if !child_is_wrapper {
         return None;
     }
     let wrapper = child?;
-    let processes = Processes::all();
-    processes
-        .children(wrapper)
+    let children: Vec<Pid> = children_of(wrapper)
         .into_iter()
         .filter(|&pid| Some(pid) != leader)
-        .find_map(|pid| enterable_cwd(&processes, pid))
+        .collect();
+    let processes = Processes::of(&children);
+    children
+        .into_iter()
+        .find_map(|pid| processes.enterable_cwd(pid))
 }
 
-/// A snapshot of the processes the operating system lists.
+/// A snapshot of the given processes and their working directories.
 struct Processes(System);
 
 impl Processes {
@@ -57,17 +56,35 @@ impl Processes {
         system.refresh_processes_specifics(
             ProcessesToUpdate::Some(pids),
             true,
-            Self::refresh_kind(),
+            refresh_kind().with_cwd(UpdateKind::Always),
         );
         Self(system)
     }
 
-    /// Reads every process the caller may see, with their working
-    /// directories.
-    fn all() -> Self {
-        let mut system = System::new();
-        system.refresh_processes_specifics(ProcessesToUpdate::All, true, Self::refresh_kind());
-        Self(system)
+    /// The working directory of `pid` when it can be read, still exists,
+    /// and can be entered; the reason is logged at debug level otherwise.
+    fn enterable_cwd(&self, pid: Pid) -> Option<PathBuf> {
+        // NOTE: on Unix, `<dir>/.` resolves only with search permission on
+        // the directory itself, which the spawn's chdir also needs;
+        // `is_dir()` on the bare path would accept a directory the new
+        // shell cannot enter, and the split would then fail to spawn. On
+        // Windows the `.` component is collapsed before the syscall, so
+        // this check is equivalent there to `path.is_dir()`.
+        match self.cwd(pid) {
+            Some(path) if path.join(".").is_dir() => Some(path),
+            Some(path) => {
+                debug!(
+                    ?pid,
+                    ?path,
+                    "working directory is gone or cannot be entered"
+                );
+                None
+            }
+            None => {
+                debug!(?pid, "working directory unreadable");
+                None
+            }
+        }
     }
 
     /// The working directory `pid` reports, or `None` when the process is
@@ -83,54 +100,30 @@ impl Processes {
         let path = path.to_path_buf();
         Some(path)
     }
-
-    /// The pids whose parent is `pid`, in descending pid order.
-    fn children(&self, pid: Pid) -> Vec<Pid> {
-        let mut children: Vec<Pid> = self
-            .0
-            .processes()
-            .values()
-            .filter(|process| process.parent() == Some(pid))
-            .map(Process::pid)
-            .collect();
-        children.sort_unstable_by(|a, b| b.cmp(a));
-        children
-    }
-
-    // NOTE: `ProcessRefreshKind::nothing()` leaves `tasks` set, and on Linux
-    // every thread is then listed as a process whose parent is its tgid, so
-    // `children` would return threads instead of child processes.
-    fn refresh_kind() -> ProcessRefreshKind {
-        ProcessRefreshKind::nothing()
-            .with_cwd(UpdateKind::Always)
-            .without_tasks()
-    }
 }
 
-/// The working directory of `pid` when it can be read, still exists, and
-/// can be entered; the reason is logged at debug level otherwise.
-fn enterable_cwd(processes: &Processes, pid: Pid) -> Option<PathBuf> {
-    // NOTE: on Unix, `<dir>/.` resolves only with search permission on the
-    // directory itself, which the spawn's chdir also needs; `is_dir()` on
-    // the bare path would accept a directory the new shell cannot enter,
-    // and the split would then fail to spawn. On Windows the `.` component
-    // is collapsed before the syscall, so this check is equivalent there to
-    // `path.is_dir()`.
-    match processes.cwd(pid) {
-        Some(path) if path.join(".").is_dir() => Some(path),
-        Some(path) => {
-            debug!(
-                ?pid,
-                ?path,
-                "working directory is gone or cannot be entered"
-            );
-            None
-        }
-        None => {
-            debug!(?pid, "working directory unreadable");
-            None
-        }
-    }
+/// The pids whose parent is `pid`, in descending pid order.
+///
+/// No working directory is read, so a pid this returns is looked up again
+/// with [`Processes::of`] before it is asked for one.
+fn children_of(pid: Pid) -> Vec<Pid> {
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind());
+    let mut children: Vec<Pid> = system
+        .processes()
+        .values()
+        .filter(|process| process.parent() == Some(pid))
+        .map(Process::pid)
+        .collect();
+    children.sort_unstable_by(|a, b| b.cmp(a));
+    children
+}
+
+// NOTE: `ProcessRefreshKind::nothing()` leaves `tasks` set, and on Linux
+// every thread is then listed as a process whose parent is its tgid, so
+// `children_of` would return threads instead of child processes.
+fn refresh_kind() -> ProcessRefreshKind {
+    ProcessRefreshKind::nothing().without_tasks()
 }
 
 /// The `Pid` for `pid`, or `None` when it does not fit one.
@@ -464,7 +457,7 @@ mod tests {
         let mut children = Vec::new();
         holds_within(
             || {
-                children = Processes::all().children(parent_pid);
+                children = children_of(parent_pid);
                 children.len() >= 8
             },
             Duration::from_secs(10),

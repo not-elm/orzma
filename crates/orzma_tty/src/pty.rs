@@ -261,8 +261,8 @@ impl Pty {
     /// or the platform is one the process backend does not cover.
     ///
     /// On macOS a working directory whose bytes are not UTF-8 is reported
-    /// as absent, as is one whose vnode names no device; a process whose
-    /// name cannot be read is not listed at all.
+    /// as absent, as is one whose vnode names no device, and so is the
+    /// directory of a process whose name the OS will not report.
     ///
     /// On Windows a PowerShell `Set-Location` does not change the
     /// process working directory, so the directory reported here is the
