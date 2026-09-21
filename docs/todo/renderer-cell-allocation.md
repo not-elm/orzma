@@ -21,9 +21,9 @@
 | §5 クラスタ長 | VT が 1 セルあたり基底 1 char + マーク最大 9 個（`orzma_vt::screen::cell::MAX_COMBINING`）に制限する。超過分は `CellExtra::push` が拒否し、カーソルもダメージも動かない。セルのテキストは 40 B 以下で、399 B の実測は再現しない。 |
 | §5 / §8 教訓 4 | VT は char 単位の幅で分割し、`unicode-segmentation` を使わない。ZWJ 家族絵文字は wide セル 4 個になる。orzma は Alacritty と同じ側にいる。 |
 | §6 ハイパーリンク | OSC 8 は有効。セルは id だけを持ち、`HyperlinkUri` は `Arc<str>` なので、セルごとの URI `String` クローンは存在しない。 |
-| §7 の 7a、§10 の #2 | main に入った。 |
+| §7 の 7a（`Option<Hyperlink>` → `Option<HyperlinkId>`） | main に入った。 |
 | §7 の容量保持の緩和策 | 「8 バイト以下なら再利用」は採らなかった。再利用するセルの既存容量を `shrink_to(64)` で縛る形に決着した（§11）。 |
-| §10 の #3、§11 の上限 3 件 | main に入った（上限 9、超過は無視、置き場所は VT の print 経路）。Ghostty（64）・kitty（24）・Alacritty master（9）も、超過分を無視する。 |
+| クラスタ長の上限（上限値・超過時の扱い・置き場所） | main に入った（上限 9、超過は無視、置き場所は VT の print 経路）。§11 のとおり決着した。Ghostty（64）・kitty（24）・Alacritty master（9）も、超過分を無視する。 |
 | §8 の Alacritty の行 | 上限 9 は master（`ede2ac144da4`）だけにある。リリース版 `alacritty_terminal 0.26.0` は上限のない `Vec<char>`。 |
 | §2 「無条件に `DamageSpan::Full`」 | シフト量がゼロかクランプで無効になった場合は `None` を返す。 |
 
