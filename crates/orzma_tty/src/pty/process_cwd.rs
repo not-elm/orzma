@@ -174,7 +174,7 @@ mod windows_tests {
     /// Case: a pane's shell is sitting at a prompt in a project
     /// directory and the user splits that pane.
     #[test]
-    fn read_cwd_reports_the_directory_a_process_was_started_in() {
+    fn a_live_process_reports_the_directory_it_was_started_in() {
         let dir = TempDir::new().expect("a temporary directory");
         // NOTE: `canonicalize` returns a verbatim `\\?\C:\…` path, whose
         // `VerbatimDisk` prefix `Path` compares unequal to the plain
@@ -190,7 +190,8 @@ mod windows_tests {
             .spawn()
             .expect("a spawned process");
         let pid = i32::try_from(child.id()).expect("a pid that fits");
-        let read = read_cwd(pid);
+        let pid = to_pid(pid).expect("a pid that fits a sysinfo Pid");
+        let read = Processes::of(&[pid]).cwd(pid);
         let _ = child.kill();
         let _ = child.wait();
         let read = read.expect("a readable working directory");
@@ -201,27 +202,26 @@ mod windows_tests {
         );
     }
 
-    /// Asserts that a pid no process holds reports an error rather than
-    /// a directory.
+    /// Asserts that a pid no process holds reports no directory.
     ///
     /// Case: the pane's shell exits between the moment its pid was
     /// recorded and the moment the split asks for its directory.
     #[test]
-    fn read_cwd_of_a_dead_process_is_an_error() {
+    fn a_dead_process_reports_no_directory() {
         let mut child = Command::new("cmd")
             .args(["/c", "exit"])
             .spawn()
             .expect("a spawned process");
         let pid = i32::try_from(child.id()).expect("a pid that fits");
         let _ = child.wait();
-        assert!(read_cwd(pid).is_err());
+        let pid = to_pid(pid).expect("a pid that fits a sysinfo Pid");
+        assert!(Processes::of(&[pid]).cwd(pid).is_none());
     }
 }
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     use super::*;
-    #[cfg(target_os = "macos")]
     use crate::pty::tests::holds_within;
     use std::fs::{Permissions, set_permissions};
     use std::os::unix::fs::PermissionsExt;
@@ -230,7 +230,6 @@ mod tests {
     #[cfg(target_os = "macos")]
     use std::process::Stdio;
     use std::process::{Child, Command};
-    #[cfg(target_os = "macos")]
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -432,5 +431,48 @@ mod tests {
     #[test]
     fn no_candidates_yield_no_directory() {
         assert_eq!(resolve(None, None, false), None);
+    }
+
+    /// Asserts that the snapshot reports this process's own working
+    /// directory.
+    ///
+    /// Case: the terminal runs as an ordinary user process and a split
+    /// asks for the directory of a pane whose shell is that process.
+    #[test]
+    fn the_current_process_reports_a_working_directory() {
+        let pid = i32::try_from(std::process::id()).expect("a pid that fits");
+        let pid = to_pid(pid).expect("a pid that fits a sysinfo Pid");
+        assert!(Processes::of(&[pid]).cwd(pid).is_some());
+    }
+
+    /// Asserts that a process's children are reported in descending pid
+    /// order.
+    ///
+    /// Case: a login wrapper has forked several shells and the split must
+    /// land in the one the user is interacting with.
+    #[test]
+    fn children_are_ordered_by_descending_pid() {
+        let dir = TempDir::new().expect("a temp dir");
+        let script = "for _ in 1 2 3 4 5 6 7 8; do sleep 30 & done; wait";
+        let parent = Running::start(
+            Command::new("/bin/sh")
+                .arg("-c")
+                .arg(script)
+                .current_dir(dir.path()),
+        );
+        let parent_pid = to_pid(parent.pid()).expect("a pid that fits");
+        let mut children = Vec::new();
+        holds_within(
+            || {
+                children = Processes::all().children(parent_pid);
+                children.len() >= 8
+            },
+            Duration::from_secs(10),
+        );
+        assert!(children.len() >= 8, "the shell never forked its children");
+        assert!(
+            children.is_sorted_by(|a, b| a > b),
+            "children must be in descending pid order, got {children:?}"
+        );
     }
 }
