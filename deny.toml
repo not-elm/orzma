@@ -68,3 +68,8 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # TODO: drop once bevy_cef 0.11 (TitleChanged/WebviewTitle API) is published to crates.io.
 allow-git = ["https://github.com/not-elm/bevy_cef"]
+
+[[bans.features]]
+crate = "sysinfo"
+deny = ["apple-sandbox", "apple-app-store"]
+reason = "the App Store stub replaces sysinfo's macOS process module; cwd() and parent() then always return None"
