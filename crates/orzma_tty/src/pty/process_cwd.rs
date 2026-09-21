@@ -1,26 +1,9 @@
 //! The working directory of the process a PTY is showing, read from the
 //! operating system.
 
-#[cfg(target_os = "macos")]
-use libc::{
-    PROC_PIDVNODEPATHINFO, c_int, c_void, pid_t, proc_listchildpids, proc_pidinfo,
-    proc_vnodepathinfo,
-};
-#[cfg(target_os = "macos")]
-use std::ffi::OsString;
-#[cfg(target_os = "linux")]
-use std::fs::read_link;
-use std::io::Result as IoResult;
-#[cfg(not(target_os = "linux"))]
-use std::io::{Error as IoError, ErrorKind};
-#[cfg(target_os = "macos")]
-use std::mem::MaybeUninit;
-#[cfg(target_os = "macos")]
-use std::os::unix::ffi::OsStringExt;
 #[cfg(windows)]
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(windows)]
 use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tracing::debug;
 
@@ -28,155 +11,131 @@ use tracing::debug;
 /// as a directory that exists and can be entered, or `None` when no
 /// candidate yields one.
 ///
-/// The candidates are `leader`, then `child`, then on macOS the children
-/// of `child` when `child_is_wrapper` is set; each pid is queried at most
-/// once.
+/// The candidates are `leader`, then `child`, then the children of
+/// `child` when `child_is_wrapper` is set; each pid is considered as a
+/// candidate at most once.
 pub(crate) fn resolve(
     leader: Option<i32>,
     child: Option<i32>,
     child_is_wrapper: bool,
 ) -> Option<PathBuf> {
-    let wrapper = child.filter(|_| child_is_wrapper);
-    let spawned = child
+    let leader = leader.and_then(to_pid);
+    let child = child.and_then(to_pid);
+    let direct: Vec<Pid> = leader
         .into_iter()
-        .chain(wrapper.into_iter().flat_map(wrapper_children))
-        .filter(|&pid| Some(pid) != leader);
-    leader.into_iter().chain(spawned).find_map(enterable_cwd)
+        .chain(child.filter(|&pid| Some(pid) != leader))
+        .collect();
+    if direct.is_empty() {
+        return None;
+    }
+    let processes = Processes::of(&direct);
+    if let Some(path) = direct
+        .iter()
+        .find_map(|&pid| enterable_cwd(&processes, pid))
+    {
+        return Some(path);
+    }
+    if !child_is_wrapper {
+        return None;
+    }
+    let wrapper = child?;
+    let processes = Processes::all();
+    processes
+        .children(wrapper)
+        .into_iter()
+        .filter(|&pid| Some(pid) != leader)
+        .find_map(|pid| enterable_cwd(&processes, pid))
 }
 
-/// The pids of up to [`MAX_CHILDREN`] children of `pid`, in the order the
-/// kernel lists them; a listing the kernel refuses yields no children.
-#[cfg(target_os = "macos")]
-fn wrapper_children(pid: i32) -> Vec<i32> {
-    const PIDS_SIZE: c_int = (MAX_CHILDREN * size_of::<pid_t>()) as c_int;
-    let mut pids: [pid_t; MAX_CHILDREN] = [0; MAX_CHILDREN];
-    // SAFETY: `pids` is a writable allocation of exactly `PIDS_SIZE` bytes,
-    // and `proc_listchildpids` writes at most `PIDS_SIZE` bytes into it.
-    let count = unsafe { proc_listchildpids(pid, pids.as_mut_ptr().cast::<c_void>(), PIDS_SIZE) };
-    pids.into_iter()
-        .take(usize::try_from(count).unwrap_or(0))
-        .collect()
-}
+/// A snapshot of the processes the operating system lists.
+struct Processes(System);
 
-/// Returns no children.
-#[cfg(not(target_os = "macos"))]
-fn wrapper_children(_pid: i32) -> Vec<i32> {
-    Vec::new()
+impl Processes {
+    /// Reads the given pids, with their working directories.
+    fn of(pids: &[Pid]) -> Self {
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(pids),
+            true,
+            Self::refresh_kind(),
+        );
+        Self(system)
+    }
+
+    /// Reads every process the caller may see, with their working
+    /// directories.
+    fn all() -> Self {
+        let mut system = System::new();
+        system.refresh_processes_specifics(ProcessesToUpdate::All, true, Self::refresh_kind());
+        Self(system)
+    }
+
+    /// The working directory `pid` reports, or `None` when the process is
+    /// not listed or reports none.
+    ///
+    /// On Windows the trailing separator the loader stores is removed,
+    /// except on a drive root.
+    fn cwd(&self, pid: Pid) -> Option<PathBuf> {
+        let path = self.0.process(pid).and_then(Process::cwd)?;
+        #[cfg(windows)]
+        let path = trimmed(path);
+        #[cfg(not(windows))]
+        let path = path.to_path_buf();
+        Some(path)
+    }
+
+    /// The pids whose parent is `pid`, in descending pid order.
+    fn children(&self, pid: Pid) -> Vec<Pid> {
+        let mut children: Vec<Pid> = self
+            .0
+            .processes()
+            .values()
+            .filter(|process| process.parent() == Some(pid))
+            .map(Process::pid)
+            .collect();
+        children.sort_unstable_by(|a, b| b.cmp(a));
+        children
+    }
+
+    // NOTE: `ProcessRefreshKind::nothing()` leaves `tasks` set, and on Linux
+    // every thread is then listed as a process whose parent is its tgid, so
+    // `children` would return threads instead of child processes.
+    fn refresh_kind() -> ProcessRefreshKind {
+        ProcessRefreshKind::nothing()
+            .with_cwd(UpdateKind::Always)
+            .without_tasks()
+    }
 }
 
 /// The working directory of `pid` when it can be read, still exists, and
 /// can be entered; the reason is logged at debug level otherwise.
-fn enterable_cwd(pid: i32) -> Option<PathBuf> {
+fn enterable_cwd(processes: &Processes, pid: Pid) -> Option<PathBuf> {
     // NOTE: on Unix, `<dir>/.` resolves only with search permission on the
     // directory itself, which the spawn's chdir also needs; `is_dir()` on
     // the bare path would accept a directory the new shell cannot enter,
     // and the split would then fail to spawn. On Windows the `.` component
     // is collapsed before the syscall, so this check is equivalent there to
     // `path.is_dir()`.
-    match read_cwd(pid) {
-        Ok(path) if path.join(".").is_dir() => Some(path),
-        Ok(path) => {
-            debug!(pid, ?path, "working directory is gone or cannot be entered");
+    match processes.cwd(pid) {
+        Some(path) if path.join(".").is_dir() => Some(path),
+        Some(path) => {
+            debug!(
+                ?pid,
+                ?path,
+                "working directory is gone or cannot be entered"
+            );
             None
         }
-        Err(err) => {
-            debug!(pid, %err, "working directory unreadable");
+        None => {
+            debug!(?pid, "working directory unreadable");
             None
         }
     }
 }
 
-/// The working directory of `pid` as the kernel records it.
-///
-/// # Errors
-///
-/// Returns the OS error when the process does not exist or belongs to
-/// another user, and `InvalidData` when the answer is truncated or its
-/// path is not NUL-terminated.
-#[cfg(target_os = "macos")]
-fn read_cwd(pid: i32) -> IoResult<PathBuf> {
-    const INFO_SIZE: c_int = size_of::<proc_vnodepathinfo>() as c_int;
-    let mut info = MaybeUninit::<proc_vnodepathinfo>::uninit();
-    // SAFETY: `info` is a writable allocation of exactly `INFO_SIZE` bytes,
-    // and `proc_pidinfo` writes at most `INFO_SIZE` bytes into it.
-    let written = unsafe {
-        proc_pidinfo(
-            pid,
-            PROC_PIDVNODEPATHINFO,
-            0,
-            info.as_mut_ptr().cast::<c_void>(),
-            INFO_SIZE,
-        )
-    };
-    if written <= 0 {
-        return Err(IoError::last_os_error());
-    }
-    if written != INFO_SIZE {
-        return Err(IoError::new(
-            ErrorKind::InvalidData,
-            format!("proc_pidinfo wrote {written} of {INFO_SIZE} bytes"),
-        ));
-    }
-    // SAFETY: `proc_pidinfo` reported writing all `INFO_SIZE` bytes of
-    // `info`.
-    let info = unsafe { info.assume_init() };
-    let path = info.pvi_cdir.vip_path.as_flattened();
-    let Some(len) = path.iter().position(|&c| c == 0) else {
-        return Err(IoError::new(
-            ErrorKind::InvalidData,
-            "the working directory path is not NUL-terminated",
-        ));
-    };
-    let bytes: Vec<u8> = path[..len].iter().map(|c| c.cast_unsigned()).collect();
-    Ok(PathBuf::from(OsString::from_vec(bytes)))
-}
-
-/// The working directory of `pid` as the kernel records it.
-///
-/// # Errors
-///
-/// Returns the OS error when the process does not exist or its
-/// directory may not be read.
-#[cfg(target_os = "linux")]
-fn read_cwd(pid: i32) -> IoResult<PathBuf> {
-    read_link(format!("/proc/{pid}/cwd"))
-}
-
-/// Reports that another process's working directory cannot be read here.
-///
-/// # Errors
-///
-/// Always returns `Unsupported`.
-#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-fn read_cwd(_pid: i32) -> IoResult<PathBuf> {
-    Err(IoError::from(ErrorKind::Unsupported))
-}
-
-/// The working directory of `pid` as the operating system records it,
-/// without the trailing separator the loader stores.
-///
-/// # Errors
-///
-/// Returns `InvalidInput` when `pid` does not fit a Windows process id,
-/// and `NotFound` when the process is not listed or its directory cannot
-/// be read — which is the case for a process this one may not read the
-/// memory of, such as an elevated shell or one owned by another user.
-#[cfg(windows)]
-fn read_cwd(pid: i32) -> IoResult<PathBuf> {
-    let pid = u32::try_from(pid)
-        .map(Pid::from_u32)
-        .map_err(|_| IoError::from(ErrorKind::InvalidInput))?;
-    let mut system = System::new();
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[pid]),
-        true,
-        ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
-    );
-    system
-        .process(pid)
-        .and_then(Process::cwd)
-        .map(trimmed)
-        .ok_or_else(|| IoError::from(ErrorKind::NotFound))
+/// The `Pid` for `pid`, or `None` when it does not fit one.
+fn to_pid(pid: i32) -> Option<Pid> {
+    u32::try_from(pid).ok().map(Pid::from_u32)
 }
 
 /// `path` without the trailing separator, unless the path is a drive
@@ -202,10 +161,6 @@ fn trimmed(path: &Path) -> PathBuf {
     }
     PathBuf::from(trimmed)
 }
-
-/// How many children of a wrapper process are tried.
-#[cfg(target_os = "macos")]
-const MAX_CHILDREN: usize = 64;
 
 #[cfg(all(test, windows))]
 mod windows_tests {
