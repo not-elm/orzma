@@ -936,7 +936,9 @@ fn resolve_metrics(
 ///
 /// `handles` is `(cells, glyphs)`. `dims` is `(cols, rows)` in cells. A
 /// zero in either axis uploads the one-element dummy buffers wgpu
-/// requires instead of an empty one.
+/// requires instead of an empty one. Rows and columns of `cells` outside
+/// `dims` are ignored, and a slot `cells` does not cover keeps the
+/// default cell.
 fn upload_cells(
     state: &mut TerminalMaterialState,
     atlas: &mut GlyphAtlas,
@@ -949,12 +951,6 @@ fn upload_cells(
 ) {
     let (cols, rows) = (u32::from(dims.0), u32::from(dims.1));
     let (cells_handle, glyphs_handle) = handles;
-
-    debug_assert_eq!(
-        cells.cells.len(),
-        usize::from(dims.1),
-        "the retained cells have exactly as many rows as the grid"
-    );
 
     let cell_count = (cols * rows) as usize;
     state.cpu_cells.clear();
@@ -972,10 +968,10 @@ fn upload_cells(
     }
 
     if let Some(mut buf) = buffers.get_mut(cells_handle) {
-        buf.set_data(std::mem::take(&mut state.cpu_cells));
+        buf.set_data(&state.cpu_cells);
     }
     if let Some(mut buf) = buffers.get_mut(glyphs_handle) {
-        buf.set_data(state.cpu_glyphs.clone());
+        buf.set_data(&state.cpu_glyphs);
     }
 
     state.last_atlas_generation = atlas.generation;
@@ -1018,11 +1014,6 @@ fn fill_cells(
 ) {
     let packed_palette = PackedPalette::build(&cells.palette);
     for (row_idx, row) in cells.cells.iter().enumerate() {
-        debug_assert_eq!(
-            row.len(),
-            cols as usize,
-            "every retained row is exactly as wide as the grid"
-        );
         let mut left_half: Option<GpuCell> = None;
         for (col, slot) in row.iter().enumerate() {
             let col = col as u32;
@@ -1219,6 +1210,96 @@ mod tests {
             last_phys_font_size: 0,
             cached_metrics: None,
             initialized: false,
+        }
+    }
+
+    fn uploaded(
+        state: &mut TerminalMaterialState,
+        buffers: &mut Assets<ShaderBuffer>,
+        handles: (&Handle<ShaderBuffer>, &Handle<ShaderBuffer>),
+        cells: &TerminalCells,
+        dims: (u16, u16),
+    ) {
+        let mut atlas = GlyphAtlas::default();
+        let fonts = TerminalFonts::default();
+        upload_cells(state, &mut atlas, buffers, cells, &fonts, handles, 16, dims);
+    }
+
+    fn grid_of(rows: usize, cols: usize) -> TerminalCells {
+        TerminalCells {
+            cells: vec![vec![GridSlot::Cell(cell_with_link("x", None)); cols]; rows],
+            ..Default::default()
+        }
+    }
+
+    /// Asserts that an upload ignores the rows and columns outside its
+    /// dimensions and leaves the slots the retained cells do not cover at
+    /// their default, instead of panicking on the mismatch.
+    ///
+    /// Case: a malformed frame that also resizes the pane is rejected by
+    /// the cells while the view takes the new size, so the next rebuild
+    /// sees a grid of another shape than the view reports.
+    #[test]
+    fn upload_cells_clips_a_grid_that_disagrees_with_its_dims() {
+        let mut buffers = Assets::<ShaderBuffer>::default();
+        let cells_handle = buffers.add(ShaderBuffer::default());
+        let glyphs_handle = buffers.add(ShaderBuffer::default());
+
+        let mut state = state_for(0);
+        uploaded(
+            &mut state,
+            &mut buffers,
+            (&cells_handle, &glyphs_handle),
+            &grid_of(3, 3),
+            (2, 2),
+        );
+        let larger = gpu_cell_fingerprint(&state.cpu_cells);
+        assert_eq!(larger.len(), 4);
+        assert!(larger.iter().all(|slot| slot.1 == u32::MAX));
+
+        let mut state = state_for(0);
+        uploaded(
+            &mut state,
+            &mut buffers,
+            (&cells_handle, &glyphs_handle),
+            &grid_of(1, 1),
+            (2, 2),
+        );
+        let smaller = gpu_cell_fingerprint(&state.cpu_cells);
+        assert_eq!(smaller.len(), 4);
+        assert_eq!(smaller[0].1, u32::MAX);
+        let untouched = gpu_cell_fingerprint(&[GpuCell::default()])[0];
+        assert!(smaller[1..].iter().all(|slot| *slot == untouched));
+    }
+
+    /// Asserts that an upload leaves the CPU cell table filled and
+    /// allocated, and hands the buffer asset the encoded cells, on every
+    /// upload.
+    ///
+    /// Case: a pane redraws twice in a row at an unchanged size.
+    #[test]
+    fn upload_cells_keeps_its_cpu_cell_table_across_uploads() {
+        let mut buffers = Assets::<ShaderBuffer>::default();
+        let cells_handle = buffers.add(ShaderBuffer::default());
+        let glyphs_handle = buffers.add(ShaderBuffer::default());
+        let cells = grid_of(2, 2);
+        let mut state = state_for(0);
+
+        for _ in 0..2 {
+            uploaded(
+                &mut state,
+                &mut buffers,
+                (&cells_handle, &glyphs_handle),
+                &cells,
+                (2, 2),
+            );
+            assert_eq!(state.cpu_cells.len(), 4);
+            assert!(state.cpu_cells.capacity() >= 4);
+            let encoded = buffers
+                .get(&cells_handle)
+                .and_then(|buffer| buffer.data.as_ref())
+                .map(Vec::len);
+            assert_eq!(encoded, Some(4 * GpuCell::min_size().get() as usize));
         }
     }
 
