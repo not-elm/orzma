@@ -2,6 +2,10 @@
 # docs/superpowers/specs/2026-06-21-makefile-to-just-migration-design.md.
 # https://just.systems/
 
+# Must match what Cargo resolves for bevy_cef_core's `cef` requirement, not the
+# version its manifest names: that is a caret requirement and Cargo ignores the
+# `+build` metadata when comparing, so it always resolves to the range maximum.
+# A lower pin ships a framework whose ABI the linked bindings do not match.
 cef_version := "152.4.0+152.0.8"
 cef_dir := home_directory() / ".local/share/cef"
 cef_framework_lib := cef_dir / "Chromium Embedded Framework.framework" / "Libraries"

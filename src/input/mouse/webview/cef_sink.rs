@@ -65,7 +65,7 @@ mod tests {
     /// Asserts that no call panics while no sink resource is present.
     ///
     /// Case: the sink resource is absent, as in a headless test app or a
-    /// frame before the CEF plugin has inserted its proxy.
+    /// frame before the CEF plugin has inserted `Browsers`.
     #[test]
     fn calls_without_a_sink_do_not_panic() {
         let mut app = App::new();
