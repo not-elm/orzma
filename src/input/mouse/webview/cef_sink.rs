@@ -4,26 +4,13 @@ use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::MouseButton;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-#[cfg(not(target_os = "windows"))]
 use bevy_cef_core::prelude::Browsers;
-#[cfg(target_os = "windows")]
-use bevy_cef_core::prelude::BrowsersProxy;
 
 /// The sink every inline-webview pointer call is routed through. Each call
 /// is dropped while no sink is present.
 #[derive(SystemParam)]
 pub(in crate::input::mouse) struct CefMouse<'w> {
-    // NOTE: `bevy_cef` calls `init_non_send::<Browsers>()` only off Windows; on
-    // Windows CEF owns its own UI thread and its host is reachable only through
-    // `BrowsersProxy`. A pointer call written directly against `Browsers` still
-    // compiles on Windows and fails there at run time — a plain
-    // `NonSend<Browsers>` param panics when its system first runs, and an
-    // `Option<NonSend<Browsers>>` is always `None` and silently does nothing —
-    // so every CEF pointer call belongs on this type.
-    #[cfg(not(target_os = "windows"))]
     sink: Option<NonSend<'w, Browsers>>,
-    #[cfg(target_os = "windows")]
-    sink: Option<Res<'w, BrowsersProxy>>,
 }
 
 impl CefMouse<'_> {
@@ -64,15 +51,8 @@ impl CefMouse<'_> {
         position: Vec2,
         mouse_leave: bool,
     ) {
-        let Some(sink) = &self.sink else {
-            return;
-        };
-        #[cfg(not(target_os = "windows"))]
-        sink.send_mouse_move(webview, buttons, position, mouse_leave);
-        #[cfg(target_os = "windows")]
-        {
-            let held: Vec<MouseButton> = buttons.into_iter().copied().collect();
-            sink.send_mouse_move(webview, &held, position, mouse_leave);
+        if let Some(sink) = &self.sink {
+            sink.send_mouse_move(webview, buttons, position, mouse_leave);
         }
     }
 }
