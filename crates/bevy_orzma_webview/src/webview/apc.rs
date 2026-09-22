@@ -13,6 +13,14 @@ use bevy_orzmux::prelude::{
 #[derive(Component, Debug, Default)]
 pub struct NonInteractive;
 
+/// Marks a webview that a pointer press must not give keyboard focus to.
+///
+/// A press inside its rect still reaches the page, and the owning pane still
+/// becomes active, but keyboard focus stays with the pane's terminal. An
+/// app-issued focus request still moves focus to the page.
+#[derive(Component, Debug, Default)]
+pub struct ClickFocusDisabled;
+
 /// Wires the APC-webview mount / unmount observers.
 pub(crate) struct ApcPlugin;
 

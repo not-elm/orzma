@@ -39,8 +39,9 @@ impl Plugin for ShortcutsApplyPlugin {
 }
 
 /// Applies the frame's key effects in press order: shortcuts, vi-mode
-/// keys, and typed keys all go through `commands.trigger`, never a
-/// direct backend send, so the mux receives them in this order.
+/// keys, typed keys, and the chords a focused webview declared as forward
+/// keys all go through `commands.trigger`, never a direct backend send, so
+/// the mux receives them in this order.
 fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffectMessage>) {
     for msg in effects.read() {
         match &msg.effect {
@@ -58,7 +59,7 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
                     trigger_vi_mode_action(&mut commands, entity, *action);
                 }
             }
-            KeyEffect::Type { logical, .. } => {
+            KeyEffect::Type { logical, .. } | KeyEffect::WebviewForward { logical, .. } => {
                 if msg.focused.is_some()
                     && let Some(key) = bevy_key_to_terminal_key(logical)
                 {
@@ -68,7 +69,6 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
                     });
                 }
             }
-            KeyEffect::WebviewForward { .. } => {}
         }
     }
 }
@@ -248,6 +248,10 @@ mod tests {
         KeyEffect::Shortcut { action, via_leader }
     }
 
+    fn forward_effect(logical: Key, key_code: KeyCode) -> KeyEffect {
+        KeyEffect::WebviewForward { logical, key_code }
+    }
+
     /// Asserts a `Type` key effect on a focused terminal fires
     /// `RequestActiveKeyInput` carrying the typed character.
     ///
@@ -268,6 +272,32 @@ mod tests {
             app.world().resource::<Captured>().order,
             vec!["key:a"],
             "a Type effect must forward to the active pane as a RequestActiveKeyInput"
+        );
+    }
+
+    /// Asserts a `WebviewForward` key effect fires `RequestActiveKeyInput`
+    /// carrying the forwarded character, so a chord the page declared in
+    /// `forward_keys` reaches the pane's PTY while the webview keeps keyboard
+    /// focus.
+    ///
+    /// Case: a TUI browser registers `j` as a forward key, the user clicks the
+    /// page to give it keyboard focus, and then presses `j` so the app's own
+    /// scroll handler runs.
+    #[test]
+    fn webview_forward_triggers_request_active_key_input() {
+        let (mut app, term) = dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![forward_effect(Key::Character("j".into()), KeyCode::KeyJ)],
+            Some(term),
+            false,
+            Modifiers::default(),
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().order,
+            vec!["key:j"],
+            "a declared forward chord must reach the active pane's PTY"
         );
     }
 

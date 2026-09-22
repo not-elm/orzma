@@ -20,12 +20,12 @@ use crate::ui::LiveStatus;
 use crate::watcher::FileWatcher;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{self, Event};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui_orzma::{KeyChord, Orzma, OrzmaBackend, OrzmaError, RpcError, Webview, WebviewHandle};
+use ratatui_orzma::{Orzma, OrzmaBackend, OrzmaError, RpcError, Webview, WebviewHandle};
 use std::ffi::OsStr;
 use std::io::stdout;
 use std::path::{Path, PathBuf};
@@ -279,16 +279,7 @@ fn register_view(
     let view = orzma.register(
         Webview::dir(asset_dir.path(), "index.html")
             .interactive(true)
-            .forward_keys([
-                KeyChord {
-                    mods: KeyModifiers::NONE,
-                    code: KeyCode::Backspace,
-                },
-                KeyChord {
-                    mods: KeyModifiers::CONTROL,
-                    code: KeyCode::Char('o'),
-                },
-            ])
+            .click_focus(false)
             .on("ready", move |(): ()| -> Result<Content, RpcError> {
                 let doc = ready_doc.lock().map_err(|_| RpcError::new("poisoned"))?;
                 Ok(content_for(&doc, ScrollTo::Preserve))

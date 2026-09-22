@@ -36,7 +36,8 @@ pub(crate) enum KeyEffect {
         /// The physical key, for named-key mapping.
         key_code: KeyCode,
     },
-    /// Forward the key to the focused webview's declared forward-key chord.
+    /// Write the key to the pane's PTY because the focused webview declared
+    /// the chord in its `forward_keys`. The page receives the chord as well.
     WebviewForward {
         /// The logical key, for text/printable-key mapping.
         logical: Key,
