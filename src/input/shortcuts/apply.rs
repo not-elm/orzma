@@ -6,6 +6,7 @@ use crate::input::keyboard::terminal_modifiers;
 use crate::{
     action::{
         clipboard::PasteAction,
+        font_zoom::FontZoomAction,
         terminal::trigger_selection_copy,
         vi::{mode::EnterViModeActionEvent, trigger_vi_mode_action},
     },
@@ -76,7 +77,8 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
 /// Applies one resolved `Shortcut`: vi-mode entry, paste (a direct paste
 /// fires only outside vi mode; a leader paste fires unconditionally), copy
 /// (fires unconditionally — vi mode included; no-selection is a no-op
-/// downstream), and the pane actions (select/split/kill, targeting the
+/// downstream), the font-size zoom (window-wide, so it fires even with no
+/// focused surface), and the pane actions (select/split/kill, targeting the
 /// backend's active pane). Window actions are no-ops; `Quit` and
 /// `ReleaseWebviewFocus` are handled upstream in `resolve_key_effects`.
 ///
@@ -103,6 +105,7 @@ fn apply_shortcut(
             }
         }
         Shortcut::Copy => trigger_selection_copy(commands, focused),
+        Shortcut::FontSize(step) => commands.trigger(FontZoomAction { direction: step }),
         Shortcut::SelectPane(direction) => commands.trigger(RequestPaneAction {
             action: PaneAction::SelectDirection(pane_direction(direction)),
         }),
@@ -157,7 +160,7 @@ mod tests {
     use bevy::ecs::resource::Resource;
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
-    use orzma_configs::shortcuts::{Modifiers, PaneDirection, SplitOrientation};
+    use orzma_configs::shortcuts::{FontSizeStep, Modifiers, PaneDirection, SplitOrientation};
     use orzma_tty::prelude::TerminalKey;
     use orzmux::prelude::PaneDirection as OrzmuxDirection;
 
@@ -169,6 +172,7 @@ mod tests {
         paste: u32,
         copy: u32,
         vi_mode: u32,
+        font_zoom: Vec<FontSizeStep>,
     }
 
     /// Builds an app running the dispatcher as a bare per-message
@@ -204,7 +208,10 @@ mod tests {
                     c.order.push(format!("pane:{d:?}"));
                 }
             })
-            .add_observer(|ev: On<PaneSpawnRequest>, mut c: ResMut<Captured>| c.spawns.push(ev.at));
+            .add_observer(|ev: On<PaneSpawnRequest>, mut c: ResMut<Captured>| c.spawns.push(ev.at))
+            .add_observer(|ev: On<FontZoomAction>, mut c: ResMut<Captured>| {
+                c.font_zoom.push(ev.direction);
+            });
         app
     }
 
@@ -525,5 +532,35 @@ mod tests {
             1,
             "EnterViMode must fire unconditionally, even when vi mode is already active"
         );
+    }
+
+    /// Asserts that each font-size shortcut triggers a `FontZoomAction` in the
+    /// matching direction, so the three keys reach the zoom observer.
+    ///
+    /// Case: the user presses the zoom-in, zoom-out and reset keys in turn.
+    #[test]
+    fn font_size_shortcuts_trigger_a_zoom_action() {
+        for step in [
+            FontSizeStep::Increase,
+            FontSizeStep::Decrease,
+            FontSizeStep::Reset,
+        ] {
+            let (mut app, term) = dispatch_app(Shortcuts::default());
+            dispatch(
+                &mut app,
+                vec![action_effect(Shortcut::FontSize(step), false)],
+                Some(term),
+                false,
+                Modifiers::default(),
+            );
+            app.update();
+
+            let captured = app.world().resource::<Captured>();
+            assert_eq!(
+                captured.font_zoom,
+                vec![step],
+                "{step:?} must reach the zoom observer unchanged"
+            );
+        }
     }
 }

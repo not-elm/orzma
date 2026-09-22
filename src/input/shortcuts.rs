@@ -16,6 +16,7 @@ use bevy_cef::prelude::FocusedWebview;
 use orzma_configs::shortcuts::{
     Key as ConfigKey, KeyChord, Leader, Modifiers, Shortcut, TapModifier,
 };
+use std::iter::once;
 use std::time::Duration;
 
 mod apply;
@@ -132,10 +133,61 @@ pub(crate) enum LeaderGate {
 /// The leader resolved to runtime form: a physical chord, or a modifier tap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResolvedLeader {
-    /// Chord leader: exact `(KeyCode, Modifiers)` to match.
-    Chord(KeyCode, Modifiers),
+    /// Chord leader: the physical chords to match.
+    Chord(PhysicalChords),
     /// Modifier-tap leader: the bare modifier to detect a tap on.
     Tap(TapModifier),
+}
+
+/// The physical chords one configured chord must match: the literal chord,
+/// plus the shifted twin a `Plus` chord needs on a layout where `+` is
+/// Shift+`=`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PhysicalChords {
+    keycode: KeyCode,
+    modifiers: Modifiers,
+    /// The twin's modifier set, when the chord resolves to two chords.
+    twin: Option<Modifiers>,
+}
+
+impl PhysicalChords {
+    /// The physical chords `chord` must match, or `None` when its logical key
+    /// has no physical `KeyCode`.
+    fn from_chord(chord: &KeyChord) -> Option<Self> {
+        let keycode = key_to_keycode(&chord.key)?;
+        // NOTE: the matcher compares the modifier set exactly, so without this
+        // twin a `Plus` chord never fires on a US layout, where `+` is
+        // Shift+`=`.
+        let twin = (chord.key == ConfigKey::Plus && !chord.modifiers.shift).then_some(Modifiers {
+            shift: true,
+            ..chord.modifiers
+        });
+        Some(Self {
+            keycode,
+            modifiers: chord.modifiers,
+            twin,
+        })
+    }
+
+    /// A single physical chord with no twin.
+    #[cfg(test)]
+    fn single(keycode: KeyCode, modifiers: Modifiers) -> Self {
+        Self {
+            keycode,
+            modifiers,
+            twin: None,
+        }
+    }
+
+    /// Whether `(keycode, mods)` is one of these chords.
+    fn contains(&self, keycode: KeyCode, mods: Modifiers) -> bool {
+        self.keycode == keycode && (self.modifiers == mods || self.twin == Some(mods))
+    }
+
+    /// Each physical chord, in registration order.
+    fn iter(self) -> impl Iterator<Item = (KeyCode, Modifiers)> {
+        once((self.keycode, self.modifiers)).chain(self.twin.map(|m| (self.keycode, m)))
+    }
 }
 
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
@@ -146,6 +198,40 @@ struct OrzmaShortcut {
     modifiers: Modifiers,
     action: Shortcut,
     repeat: bool,
+}
+
+impl OrzmaShortcut {
+    /// Resolves each bound chord to the lookup entries it contributes,
+    /// skipping (with a warning) any chord whose logical key has no physical
+    /// `KeyCode`.
+    fn from_chords<'a>(
+        chords: impl Iterator<Item = (&'static str, &'a KeyChord, Shortcut, bool)>,
+    ) -> Vec<Self> {
+        let mut out = Vec::new();
+        for (label, chord, action, repeat) in chords {
+            let Some(physical) = PhysicalChords::from_chord(chord) else {
+                tracing::warn!(
+                    label,
+                    chord = %chord,
+                    "shortcut key has no physical KeyCode mapping; ignoring binding"
+                );
+                continue;
+            };
+            out.extend(physical.iter().map(|(keycode, modifiers)| Self {
+                keycode,
+                modifiers,
+                action,
+                repeat,
+            }));
+        }
+        out
+    }
+
+    /// True when this entry is bound to the physical chord
+    /// `(keycode, modifiers)`.
+    fn matches_physical(&self, keycode: KeyCode, modifiers: Modifiers) -> bool {
+        self.keycode == keycode && self.modifiers == modifiers
+    }
 }
 
 /// The startup-resolved orzma shortcut tables. Built once from
@@ -176,7 +262,7 @@ impl Shortcuts {
 
     /// True when `(keycode, mods)` is the configured leader chord.
     fn is_leader(&self, keycode: KeyCode, mods: Modifiers) -> bool {
-        matches!(self.leader, Some(ResolvedLeader::Chord(kc, m)) if kc == keycode && m == mods)
+        matches!(self.leader, Some(ResolvedLeader::Chord(c)) if c.contains(keycode, mods))
     }
 
     fn tap_modifier(&self) -> Option<TapModifier> {
@@ -198,9 +284,7 @@ impl Shortcuts {
         keycode: KeyCode,
         mods: Modifiers,
     ) -> Option<&OrzmaShortcut> {
-        table
-            .iter()
-            .find(|s| s.keycode == keycode && s.modifiers == mods)
+        table.iter().find(|s| s.matches_physical(keycode, mods))
     }
 }
 
@@ -317,7 +401,7 @@ pub(crate) fn test_shortcuts_with_repeat_prefix(
             action,
             repeat: true,
         }],
-        leader: Some(ResolvedLeader::Chord(
+        leader: Some(ResolvedLeader::Chord(PhysicalChords::single(
             KeyCode::KeyA,
             Modifiers {
                 ctrl: true,
@@ -325,7 +409,7 @@ pub(crate) fn test_shortcuts_with_repeat_prefix(
                 alt: false,
                 meta: false,
             },
-        )),
+        ))),
         tap_timeout: Duration::from_millis(300),
         repeat_time,
     }
@@ -445,11 +529,13 @@ fn detect_modifier_tap(
 /// observe the empty default.
 fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OrzmaConfigsResource>) {
     let sc = &configs.shortcuts;
-    resolved.direct = resolve_from_chords(
+    resolved.direct = OrzmaShortcut::from_chords(
         sc.direct_chords()
             .map(|(label, chord, action)| (label, chord, action, false)),
     );
-    resolved.prefix = resolve_from_chords(sc.leader_chords());
+    resolved.prefix = OrzmaShortcut::from_chords(sc.leader_chords());
+    duplicate_physical_chords(&resolved.direct);
+    duplicate_physical_chords(&resolved.prefix);
     resolved.tap_timeout = Duration::from_millis(sc.leader_tap_timeout_ms);
     resolved.repeat_time = Duration::from_millis(sc.repeat_time_ms);
     // The leader (default Cmd tap) is only meaningful when there are
@@ -461,8 +547,8 @@ fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OrzmaConfigsRes
         match sc.leader.as_ref() {
             None => None,
             Some(Leader::ModifierTap(m)) => Some(ResolvedLeader::Tap(*m)),
-            Some(Leader::Chord(chord)) => match key_to_keycode(&chord.key) {
-                Some(keycode) => Some(ResolvedLeader::Chord(keycode, chord.modifiers)),
+            Some(Leader::Chord(chord)) => match PhysicalChords::from_chord(chord) {
+                Some(physical) => Some(ResolvedLeader::Chord(physical)),
                 None => {
                     tracing::warn!(chord = %chord, "shortcut leader key has no physical KeyCode mapping; <Leader> bindings unreachable");
                     None
@@ -470,6 +556,7 @@ fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OrzmaConfigsRes
             },
         }
     };
+    leader_shadows_physical_chord(resolved.leader, &resolved.direct);
     if resolved.leader.is_none() && !resolved.prefix.is_empty() {
         tracing::warn!(
             "shortcuts.<Leader> bindings are set but the leader is disabled or unmappable; they are unreachable"
@@ -482,28 +569,54 @@ fn populate_mouse_config(mut commands: Commands, configs: Res<OrzmaConfigsResour
     commands.insert_resource(OrzmaMouseConfig::from_config(&configs.mouse));
 }
 
-/// Resolves each bound chord to an `OrzmaShortcut`, skipping (with a warning)
-/// any chord whose logical key has no physical `KeyCode`.
-fn resolve_from_chords<'a>(
-    chords: impl Iterator<Item = (&'static str, &'a KeyChord, Shortcut, bool)>,
-) -> Vec<OrzmaShortcut> {
-    let mut out = Vec::new();
-    for (label, chord, action, repeat) in chords {
-        match key_to_keycode(&chord.key) {
-            Some(keycode) => out.push(OrzmaShortcut {
-                keycode,
-                modifiers: chord.modifiers,
-                action,
-                repeat,
-            }),
-            None => tracing::warn!(
-                label,
-                chord = %chord,
-                "shortcut key has no physical KeyCode mapping; ignoring binding"
-            ),
+/// Warns once per physical chord the leader shares with a direct binding, and
+/// returns how many such chords there were.
+///
+/// A shared chord makes the direct binding unreachable: the leader is checked
+/// before the direct table.
+fn leader_shadows_physical_chord(
+    leader: Option<ResolvedLeader>,
+    direct: &[OrzmaShortcut],
+) -> usize {
+    let Some(ResolvedLeader::Chord(chords)) = leader else {
+        return 0;
+    };
+    let mut found = 0;
+    for (keycode, modifiers) in chords.iter() {
+        for entry in direct {
+            if entry.matches_physical(keycode, modifiers) {
+                found += 1;
+                tracing::warn!(
+                    keycode = ?keycode,
+                    action = ?entry.action,
+                    "the leader and a direct binding resolve to the same physical chord; the binding is unreachable"
+                );
+            }
         }
     }
-    out
+    found
+}
+
+/// Warns once per entry that repeats an earlier entry's physical chord, and
+/// returns how many such entries there were.
+///
+/// A repeated chord is unreachable: `find_entry` returns the first match.
+fn duplicate_physical_chords(table: &[OrzmaShortcut]) -> usize {
+    let mut found = 0;
+    for (index, entry) in table.iter().enumerate() {
+        let earlier = table[..index]
+            .iter()
+            .any(|e| e.matches_physical(entry.keycode, entry.modifiers));
+        if earlier {
+            found += 1;
+            tracing::warn!(
+                keycode = ?entry.keycode,
+                action = ?entry.action,
+                "two shortcuts resolve to the same physical chord; this one is unreachable"
+            );
+        }
+    }
+    found
 }
 
 /// One input the tap machine observes. Key auto-repeats are filtered by the
@@ -585,8 +698,7 @@ pub(crate) fn is_modifier_key(keycode: KeyCode) -> bool {
 }
 
 /// Maps a config logical `Key` to the physical `KeyCode` orzma matches on.
-/// Returns `None` for keys with no stable physical mapping (`Plus`, `Other`,
-/// non-alphanumeric chars).
+/// Returns `None` for a key with no stable physical position.
 fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
     // NOTE: keep this accepted domain in lockstep with
     // `orzma_configs::shortcuts::Key::maps_to_physical_key`; a divergence lets
@@ -632,6 +744,8 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
             '9' => KeyCode::Digit9,
             '[' => KeyCode::BracketLeft,
             ']' => KeyCode::BracketRight,
+            '-' => KeyCode::Minus,
+            '=' => KeyCode::Equal,
             _ => return None,
         },
         ConfigKey::Escape => KeyCode::Escape,
@@ -643,7 +757,9 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
         ConfigKey::ArrowDown => KeyCode::ArrowDown,
         ConfigKey::ArrowLeft => KeyCode::ArrowLeft,
         ConfigKey::ArrowRight => KeyCode::ArrowRight,
-        ConfigKey::Plus => return None,
+        // TODO: map a numpad token to KeyCode::NumpadAdd / NumpadSubtract once
+        // the config grammar has one.
+        ConfigKey::Plus => KeyCode::Equal,
         ConfigKey::Other(_) => return None,
     })
 }
@@ -653,7 +769,7 @@ mod tests {
     use super::*;
     use bevy::input::keyboard::Key;
     use orzma_configs::OrzmaConfigs;
-    use orzma_configs::shortcuts::{Binding, Shortcuts as ConfigShortcuts};
+    use orzma_configs::shortcuts::{Binding, FontSizeStep, Shortcuts as ConfigShortcuts};
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -704,10 +820,10 @@ mod tests {
                     repeat: false,
                 },
             ],
-            leader: Some(ResolvedLeader::Chord(
+            leader: Some(ResolvedLeader::Chord(PhysicalChords::single(
                 KeyCode::KeyA,
                 mods(true, false, false, false),
-            )),
+            ))),
             tap_timeout: ms(300),
             repeat_time: ms(500),
         }
@@ -945,7 +1061,9 @@ mod tests {
 
     fn direct_only(config: &ConfigShortcuts) -> Shortcuts {
         Shortcuts {
-            direct: resolve_from_chords(config.direct_chords().map(|(l, c, a)| (l, c, a, false))),
+            direct: OrzmaShortcut::from_chords(
+                config.direct_chords().map(|(l, c, a)| (l, c, a, false)),
+            ),
             prefix: Vec::new(),
             leader: None,
             tap_timeout: Duration::from_millis(300),
@@ -958,10 +1076,10 @@ mod tests {
         let s = Shortcuts {
             direct: Vec::new(),
             prefix: Vec::new(),
-            leader: Some(ResolvedLeader::Chord(
+            leader: Some(ResolvedLeader::Chord(PhysicalChords::single(
                 KeyCode::KeyA,
                 mods(true, false, false, false),
-            )),
+            ))),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
         };
@@ -980,10 +1098,10 @@ mod tests {
                 action: Shortcut::ReleaseWebviewFocus,
                 repeat: false,
             }],
-            leader: Some(ResolvedLeader::Chord(
+            leader: Some(ResolvedLeader::Chord(PhysicalChords::single(
                 KeyCode::KeyA,
                 mods(true, false, false, false),
-            )),
+            ))),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
         };
@@ -1009,10 +1127,10 @@ mod tests {
                 action: Shortcut::KillPane,
                 repeat: false,
             }],
-            leader: Some(ResolvedLeader::Chord(
+            leader: Some(ResolvedLeader::Chord(PhysicalChords::single(
                 KeyCode::KeyB,
                 mods(true, false, false, false),
-            )),
+            ))),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
         };
@@ -1085,10 +1203,10 @@ mod tests {
                 action: Shortcut::EnterViMode,
                 repeat: false,
             }],
-            leader: Some(ResolvedLeader::Chord(
+            leader: Some(ResolvedLeader::Chord(PhysicalChords::single(
                 KeyCode::KeyA,
                 mods(true, false, false, false),
-            )),
+            ))),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
         };
@@ -1109,8 +1227,13 @@ mod tests {
         );
     }
 
+    /// Asserts that a leader-scoped binding resolves to its physical key and
+    /// carries its `<Leader:r>` repeat flag into the prefix table.
+    ///
+    /// Case: a user binds `kill-pane = "<Leader:r>d"` and holds the key to
+    /// close several panes in a row.
     #[test]
-    fn resolve_from_chords_accepts_leader_chords() {
+    fn from_chords_accepts_leader_chords() {
         let config = ConfigShortcuts {
             kill_pane: Some(Binding::Leader {
                 chord: orzma_configs::shortcuts::parse_key_chord("d").unwrap(),
@@ -1118,7 +1241,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let resolved = resolve_from_chords(config.leader_chords());
+        let resolved = OrzmaShortcut::from_chords(config.leader_chords());
         let kill_pane = resolved
             .iter()
             .find(|s| s.action == Shortcut::KillPane)
@@ -1159,22 +1282,30 @@ mod tests {
         assert_eq!(key_to_keycode(&ConfigKey::ArrowUp), Some(KeyCode::ArrowUp));
     }
 
+    /// Asserts that a key with no stable physical position resolves to `None`,
+    /// so the resolver warns and drops it.
+    ///
+    /// Case: a config binds an action to `F12`, which the keycode table does
+    /// not cover.
     #[test]
     fn unmappable_keys_are_none() {
-        assert_eq!(key_to_keycode(&ConfigKey::Plus), None);
         assert_eq!(key_to_keycode(&ConfigKey::Other("f12".into())), None);
     }
 
     /// Asserts that resolving the host default table yields one entry per
-    /// bound direct chord, dropping none of them.
+    /// bound direct chord, plus the shifted twin a `Plus` binding adds.
     ///
     /// Case: orzma starts with no config file, on whichever platform the build
     /// targets.
     #[test]
     fn default_bindings_resolve_to_every_direct_chord() {
-        let config = ConfigShortcuts::default();
-        let r = direct_only(&config);
-        assert_eq!(r.direct.len(), config.direct_chords().count());
+        // NOTE: drift guard — the count is pinned rather than re-derived from
+        // the production expansion rule, which would make a bug in that rule
+        // pass unnoticed. macOS binds six direct chords and the others five;
+        // the stock `Plus` binding adds one shifted twin either way.
+        let expected = if cfg!(target_os = "macos") { 7 } else { 6 };
+        let r = direct_only(&ConfigShortcuts::default());
+        assert_eq!(r.direct.len(), expected);
     }
 
     /// Asserts that every direct chord in the host default table resolves back
@@ -1223,9 +1354,14 @@ mod tests {
         );
     }
 
+    /// Asserts that the stock `release-webview-focus` binding resolves to the
+    /// unmodified `u` key in the prefix table.
+    ///
+    /// Case: a user with a focused webview taps the leader and presses `u` to
+    /// hand the keyboard back to the terminal.
     #[test]
     fn release_webview_focus_matches_default_leader_chord() {
-        let resolved = resolve_from_chords(ConfigShortcuts::default().leader_chords());
+        let resolved = OrzmaShortcut::from_chords(ConfigShortcuts::default().leader_chords());
         let entry = resolved
             .iter()
             .find(|s| s.action == Shortcut::ReleaseWebviewFocus)
@@ -1247,10 +1383,10 @@ mod tests {
                 action: Shortcut::EnterViMode,
                 repeat: false,
             }],
-            leader: Some(ResolvedLeader::Chord(
+            leader: Some(ResolvedLeader::Chord(PhysicalChords::single(
                 KeyCode::KeyA,
                 mods(true, false, false, false),
-            )),
+            ))),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
         }
@@ -1534,5 +1670,263 @@ mod tests {
         };
         let resolved = resolved_shortcuts(config);
         assert_eq!(resolved.repeat_time, Duration::from_millis(250));
+    }
+
+    /// Asserts that the `Plus` token resolves to the unshifted `=` key, so a
+    /// binding written `Cmd+Plus` fires without Shift held.
+    ///
+    /// Case: the user presses the key labelled `=`/`+` with the zoom modifier
+    /// held, without also holding Shift.
+    #[test]
+    fn plus_token_maps_to_the_equal_key() {
+        assert_eq!(key_to_keycode(&ConfigKey::Plus), Some(KeyCode::Equal));
+    }
+
+    /// Asserts that the punctuation keys the zoom bindings need resolve to
+    /// their physical keys.
+    ///
+    /// Case: a config binds `Cmd+-` to zoom out and `Cmd+=` to zoom in.
+    #[test]
+    fn zoom_punctuation_maps_to_physical_keys() {
+        assert_eq!(key_to_keycode(&ConfigKey::Char('-')), Some(KeyCode::Minus));
+        assert_eq!(key_to_keycode(&ConfigKey::Char('=')), Some(KeyCode::Equal));
+    }
+
+    /// Asserts that a `Plus` binding resolves to two direct entries, so the
+    /// action fires whether or not Shift is held with the `=` key.
+    ///
+    /// Case: on a US layout the user presses Cmd and the key labelled `+`,
+    /// which the OS delivers as Cmd+Shift+`=`.
+    #[test]
+    fn a_plus_binding_resolves_to_both_the_shifted_and_unshifted_chord() {
+        let meta = Modifiers {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            meta: true,
+        };
+        let chord = KeyChord {
+            key: ConfigKey::Plus,
+            modifiers: meta,
+        };
+        let resolved = OrzmaShortcut::from_chords(
+            [(
+                "increase-font-size",
+                &chord,
+                Shortcut::FontSize(FontSizeStep::Increase),
+                false,
+            )]
+            .into_iter(),
+        );
+
+        assert_eq!(
+            resolved.len(),
+            2,
+            "a Plus binding must expand to two entries"
+        );
+        assert!(
+            resolved.iter().any(|s| s.modifiers == meta),
+            "the unshifted chord must be registered"
+        );
+        assert!(
+            resolved
+                .iter()
+                .any(|s| s.modifiers.shift && s.modifiers.meta),
+            "the shifted twin must be registered"
+        );
+        assert!(
+            resolved.iter().all(|s| s.keycode == KeyCode::Equal
+                && s.action == Shortcut::FontSize(FontSizeStep::Increase)),
+            "both entries keep the same key code and action"
+        );
+    }
+
+    /// Asserts that a non-`Plus` binding resolves to exactly one entry, so the
+    /// expansion does not leak into every other shortcut.
+    ///
+    /// Case: the ordinary `Cmd+V` paste binding is resolved alongside a zoom
+    /// binding.
+    #[test]
+    fn a_non_plus_binding_resolves_to_one_entry() {
+        let chord = KeyChord {
+            key: ConfigKey::Char('v'),
+            modifiers: Modifiers {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                meta: true,
+            },
+        };
+        let resolved =
+            OrzmaShortcut::from_chords([("paste", &chord, Shortcut::Paste, false)].into_iter());
+
+        assert_eq!(resolved.len(), 1);
+    }
+
+    /// Asserts that two bindings resolving to the same physical chord are
+    /// reported.
+    ///
+    /// Case: a user binds one action to `Cmd+Plus` and another to `Cmd+=`,
+    /// which both land on `KeyCode::Equal`.
+    #[test]
+    fn duplicate_physical_chords_are_detected() {
+        let meta = Modifiers {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            meta: true,
+        };
+        let table = vec![
+            OrzmaShortcut {
+                keycode: KeyCode::Equal,
+                modifiers: meta,
+                action: Shortcut::Copy,
+                repeat: false,
+            },
+            OrzmaShortcut {
+                keycode: KeyCode::Equal,
+                modifiers: meta,
+                action: Shortcut::Paste,
+                repeat: false,
+            },
+        ];
+
+        assert_eq!(duplicate_physical_chords(&table), 1);
+    }
+
+    /// Asserts that a table with no collisions reports none.
+    ///
+    /// Case: the shipped defaults, where every direct binding uses a distinct
+    /// physical chord.
+    #[test]
+    fn distinct_physical_chords_are_not_reported() {
+        let meta = Modifiers {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            meta: true,
+        };
+        let table = vec![
+            OrzmaShortcut {
+                keycode: KeyCode::Equal,
+                modifiers: meta,
+                action: Shortcut::Copy,
+                repeat: false,
+            },
+            OrzmaShortcut {
+                keycode: KeyCode::Minus,
+                modifiers: meta,
+                action: Shortcut::Paste,
+                repeat: false,
+            },
+        ];
+
+        assert_eq!(duplicate_physical_chords(&table), 0);
+    }
+
+    /// Asserts that a `Plus` leader arms on both the unshifted and the shifted
+    /// physical chord.
+    ///
+    /// Case: a user sets `leader = "Cmd+Plus"` and presses the key labelled
+    /// `+`, which a US layout delivers as Cmd+Shift+`=`.
+    #[test]
+    fn a_plus_leader_arms_on_either_physical_chord() {
+        let meta = mods(false, false, false, true);
+        let chord = KeyChord {
+            key: ConfigKey::Plus,
+            modifiers: meta,
+        };
+        let physical = PhysicalChords::from_chord(&chord).expect("Plus maps to a physical key");
+
+        assert!(physical.contains(KeyCode::Equal, meta));
+        assert!(physical.contains(KeyCode::Equal, mods(false, true, false, true)));
+        assert!(
+            !physical.contains(KeyCode::Minus, meta),
+            "a different key code must not match"
+        );
+    }
+
+    /// Asserts that a chord needing no twin matches only its own modifier set.
+    ///
+    /// Case: the default `Cmd+V` paste binding is resolved.
+    #[test]
+    fn a_plain_chord_matches_only_itself() {
+        let meta = mods(false, false, false, true);
+        let chord = KeyChord {
+            key: ConfigKey::Char('v'),
+            modifiers: meta,
+        };
+        let physical = PhysicalChords::from_chord(&chord).expect("v maps to a physical key");
+
+        assert!(physical.contains(KeyCode::KeyV, meta));
+        assert!(!physical.contains(KeyCode::KeyV, mods(false, true, false, true)));
+    }
+
+    /// Asserts that a leader sharing a physical chord with a direct binding is
+    /// reported.
+    ///
+    /// Case: a user sets `leader = "Cmd+Plus"` and binds an action to `Cmd+=`,
+    /// which both land on `KeyCode::Equal`.
+    #[test]
+    fn a_leader_shadowing_a_direct_binding_physically_is_detected() {
+        let leader = Some(ResolvedLeader::Chord(
+            PhysicalChords::from_chord(&KeyChord {
+                key: ConfigKey::Plus,
+                modifiers: mods(false, false, false, true),
+            })
+            .expect("Plus maps to a physical key"),
+        ));
+        let direct = vec![OrzmaShortcut {
+            keycode: KeyCode::Equal,
+            modifiers: mods(false, false, false, true),
+            action: Shortcut::Copy,
+            repeat: false,
+        }];
+
+        assert_eq!(leader_shadows_physical_chord(leader, &direct), 1);
+    }
+
+    /// Asserts that a leader is reported when only its shifted twin collides
+    /// with a direct binding.
+    ///
+    /// Case: a user sets `leader = "Cmd+Plus"` and binds an action to
+    /// `Cmd+Shift+=`, which is the same keystroke as the leader.
+    #[test]
+    fn a_leader_shadowing_a_direct_binding_through_its_twin_is_detected() {
+        let leader = Some(ResolvedLeader::Chord(
+            PhysicalChords::from_chord(&KeyChord {
+                key: ConfigKey::Plus,
+                modifiers: mods(false, false, false, true),
+            })
+            .expect("Plus maps to a physical key"),
+        ));
+        let direct = vec![OrzmaShortcut {
+            keycode: KeyCode::Equal,
+            modifiers: mods(false, true, false, true),
+            action: Shortcut::Copy,
+            repeat: false,
+        }];
+
+        assert_eq!(leader_shadows_physical_chord(leader, &direct), 1);
+    }
+
+    /// Asserts that a leader on a different physical chord is not reported.
+    ///
+    /// Case: a user sets a `Cmd+A` chord leader and binds an action to
+    /// `Cmd+=`, which is a different key.
+    #[test]
+    fn a_leader_on_a_distinct_chord_is_not_reported() {
+        let leader = Some(ResolvedLeader::Chord(PhysicalChords::single(
+            KeyCode::KeyA,
+            mods(false, false, false, true),
+        )));
+        let direct = vec![OrzmaShortcut {
+            keycode: KeyCode::Equal,
+            modifiers: mods(false, false, false, true),
+            action: Shortcut::Copy,
+            repeat: false,
+        }];
+
+        assert_eq!(leader_shadows_physical_chord(leader, &direct), 0);
     }
 }

@@ -6,7 +6,7 @@ use crate::{
         atlas::{GlyphAtlas, GlyphRect},
         font::{
             CellMetrics, FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFontSize,
-            TerminalFonts,
+            TerminalFonts, physical_font_size,
         },
     },
     material::state::TerminalMaterialState,
@@ -776,7 +776,7 @@ fn update_terminal_material(
         let Some(dpr) = dpr else {
             continue;
         };
-        let phys_font_size = (font_size.0 * dpr).round() as u16;
+        let phys_font_size = physical_font_size(font_size.0, dpr);
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
         let dims_changed = (view.cols, view.rows) != state.last_grid_dims;
         let grid_changed = state.grid_dirty;

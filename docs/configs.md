@@ -110,7 +110,7 @@ webview_dim = 0.55        # f32 0..=1. Brightness multiplier for inactive webvie
 webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = full color, 1 = grey).
 
 [shortcuts]
-# NOTE: the values in this block are the macOS defaults. Four of them differ on
+# NOTE: the values in this block are the macOS defaults. Seven of them differ on
 # Windows and Linux — see "Platform defaults" below for the other table.
 # The leader for "<Leader>..." bindings. Either a full chord ("Ctrl+A": press
 # the chord, then the next key) OR a bare modifier to TAP ("Cmd"/"Ctrl"/"Alt":
@@ -156,6 +156,11 @@ resize-left-pane      = "<Leader:r>Shift+H"  # resize-pane -L 5 (repeatable)
 resize-down-pane      = "<Leader:r>Shift+J"  # resize-pane -D 5 (repeatable)
 resize-up-pane        = "<Leader:r>Shift+K"  # resize-pane -U 5 (repeatable)
 resize-right-pane     = "<Leader:r>Shift+L"  # resize-pane -R 5 (repeatable)
+
+# --- zoom actions ---
+increase-font-size    = "Cmd+Plus"   # Ctrl+Plus off macOS
+decrease-font-size    = "Cmd+-"      # Ctrl+- off macOS
+reset-font-size       = "Cmd+0"      # Ctrl+0 off macOS
 
 # --- window actions (no effect until the built-in multiplexer lands) ---
 new-window            = "<Leader>c"        # new-window
@@ -266,7 +271,7 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 
 ## Platform defaults
 
-Four defaults differ by platform, because macOS has a `Cmd` key and the other
+Seven defaults differ by platform, because macOS has a `Cmd` key and the other
 platforms do not. Every other action below is the same everywhere.
 
 | Action | Default (macOS) | Default (Windows / Linux) |
@@ -274,6 +279,9 @@ platforms do not. Every other action below is the same everywhere.
 | `leader` | `Cmd` (tap) | `Alt` (tap) |
 | `paste` | `Cmd+V` | `Ctrl+V` |
 | `copy` | `Cmd+C` | `Ctrl+C` |
+| `increase-font-size` | `Cmd+Plus` | `Ctrl+Plus` |
+| `decrease-font-size` | `Cmd+-` | `Ctrl+-` |
+| `reset-font-size` | `Cmd+0` | `Ctrl+0` |
 | `quit` | `Cmd+Q` | unbound |
 
 `quit` ships unbound off macOS because the window manager's own close
@@ -299,12 +307,15 @@ see it. Set `paste = "Ctrl+Shift+V"` to give it back.
 ## Shortcut actions
 
 The `Default` column lists the macOS value; see "Platform defaults" above for
-the four that differ elsewhere.
+the seven that differ elsewhere.
 
 | Action | Default | What it does |
 | --- | --- | --- |
 | `paste` | `Cmd+V` | Paste from the system clipboard. |
 | `copy` | `Cmd+C` | Copy the focused terminal's selection to the system clipboard, then dismiss the selection. |
+| `increase-font-size` | `Cmd+Plus` / `Ctrl+Plus` | Step the terminal font size up. |
+| `decrease-font-size` | `Cmd+-` / `Ctrl+-` | Step the terminal font size down. |
+| `reset-font-size` | `Cmd+0` / `Ctrl+0` | Return the terminal font size to `[font] size`. |
 | `release-webview-focus` | `<Leader>u` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit orzma. |
 | `enter-vi-mode` | `<Leader>s` | Enter vi mode. |
@@ -373,6 +384,33 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g.
   `next-window = "Ctrl+Shift+]"`.
+
+`Ctrl++` is not a valid value: a chord is split on `+`, so write `Ctrl+Plus`.
+A `Plus` binding also fires with Shift held, since `+` is Shift+`=` on a US
+layout. Key bindings match physical key positions, so on a non-US layout the
+`Plus` and `-` positions may not be where the labels are. The numeric keypad's
+`+` and `-` are not bindable. `Plus` resolves to the physical position of the
+`=` key on a US layout, and fires whether or not Shift is held — including
+when it is the leader. On a layout with a dedicated `+` key, such as German,
+that position is a different key, so bind the key you actually want by name
+instead.
+
+### Zoom and the window
+
+Zoom never resizes the OS window. The column and row counts change instead,
+and zooming in truncates the right edge of every scrollback row. Rows are not
+reflowed.
+
+Zoom scales the terminal grid only. A mounted webview's box grows and shrinks
+with the cell pitch, but the page inside keeps its own text size, so zooming
+in shows more of the page rather than a larger page. The vi-mode indicator
+keeps a fixed size. While a webview owns the keyboard the direct zoom chords
+go to the page rather than to orzma: release focus first (`<Leader>u`), or
+rebind the zoom actions to `<Leader>`-scoped chords, which fire regardless of
+focus.
+
+The zoom factor is not remembered across restarts; set `[font] size` to change
+the size permanently.
 
 ## Vi-mode keys
 

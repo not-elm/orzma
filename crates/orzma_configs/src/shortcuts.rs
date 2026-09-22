@@ -41,15 +41,15 @@ impl Key {
     /// # Invariants
     ///
     /// The accepted domain is exactly the keys that map to a physical
-    /// `KeyCode`: an ASCII-alphanumeric `Char`, `Char('[')`, `Char(']')`, and
-    /// every named key below. `Plus`, `Other`, and any other character do not
-    /// map.
+    /// `KeyCode`: an ASCII-alphanumeric `Char`, `Char('[')`, `Char(']')`,
+    /// `Char('-')`, `Char('=')`, `Plus`, and every named key below. `Other`
+    /// and any other character do not map.
     pub fn maps_to_physical_key(&self) -> bool {
         // NOTE: keep this domain in lockstep with `key_to_keycode`
         // (src/input/shortcuts.rs); a divergence silently disables the prefix
         // table (see the invariant above).
         match self {
-            Key::Char(c) => c.is_ascii_alphanumeric() || matches!(c, '[' | ']'),
+            Key::Char(c) => c.is_ascii_alphanumeric() || matches!(c, '[' | ']' | '-' | '='),
             Key::Escape
             | Key::Space
             | Key::Enter
@@ -58,8 +58,9 @@ impl Key {
             | Key::ArrowUp
             | Key::ArrowDown
             | Key::ArrowLeft
-            | Key::ArrowRight => true,
-            Key::Plus | Key::Other(_) => false,
+            | Key::ArrowRight
+            | Key::Plus => true,
+            Key::Other(_) => false,
         }
     }
 
@@ -330,6 +331,24 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub copy: Option<Binding>,
+    /// Step the terminal font size up.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub increase_font_size: Option<Binding>,
+    /// Step the terminal font size down.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub decrease_font_size: Option<Binding>,
+    /// Return the terminal font size to the configured `[font] size`.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub reset_font_size: Option<Binding>,
     /// Release keyboard focus from a focused webview back to the terminal.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
@@ -529,6 +548,9 @@ impl Default for Shortcuts {
             leader: host.leader,
             paste: host.paste,
             copy: host.copy,
+            increase_font_size: host.increase_font_size,
+            decrease_font_size: host.decrease_font_size,
+            reset_font_size: host.reset_font_size,
             release_webview_focus: Some(parse_default_binding("<Leader>u")),
             quit: host.quit,
             enter_vi_mode: Some(parse_default_binding("<Leader>s")),
@@ -573,6 +595,21 @@ impl Shortcuts {
         [
             ("paste", &self.paste, Shortcut::Paste),
             ("copy", &self.copy, Shortcut::Copy),
+            (
+                "increase-font-size",
+                &self.increase_font_size,
+                Shortcut::FontSize(FontSizeStep::Increase),
+            ),
+            (
+                "decrease-font-size",
+                &self.decrease_font_size,
+                Shortcut::FontSize(FontSizeStep::Decrease),
+            ),
+            (
+                "reset-font-size",
+                &self.reset_font_size,
+                Shortcut::FontSize(FontSizeStep::Reset),
+            ),
             (
                 "release-webview-focus",
                 &self.release_webview_focus,
@@ -759,6 +796,17 @@ pub enum SplitOrientation {
     Horizontal,
 }
 
+/// Which way a `font-size` shortcut moves the terminal font size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FontSizeStep {
+    /// Step to the next larger size.
+    Increase,
+    /// Step to the next smaller size.
+    Decrease,
+    /// Return to the configured `[font] size`.
+    Reset,
+}
+
 /// Shortcut actions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shortcut {
@@ -766,6 +814,8 @@ pub enum Shortcut {
     Paste,
     /// Copies the focused terminal's selection to the system clipboard.
     Copy,
+    /// Steps the terminal font size.
+    FontSize(FontSizeStep),
     /// Releases keyboard focus from a focused webview back to the terminal.
     ReleaseWebviewFocus,
     /// Quits the orzma application.
@@ -971,6 +1021,9 @@ struct PlatformDefaults {
     paste: Option<Binding>,
     copy: Option<Binding>,
     quit: Option<Binding>,
+    increase_font_size: Option<Binding>,
+    decrease_font_size: Option<Binding>,
+    reset_font_size: Option<Binding>,
 }
 
 impl PlatformDefaults {
@@ -984,6 +1037,9 @@ impl PlatformDefaults {
                 paste: Some(Binding::Direct(parse_default_chord("Cmd+V"))),
                 copy: Some(Binding::Direct(parse_default_chord("Cmd+C"))),
                 quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
+                increase_font_size: Some(Binding::Direct(parse_default_chord("Cmd+Plus"))),
+                decrease_font_size: Some(Binding::Direct(parse_default_chord("Cmd+-"))),
+                reset_font_size: Some(Binding::Direct(parse_default_chord("Cmd+0"))),
             }
         } else {
             PlatformDefaults {
@@ -991,6 +1047,9 @@ impl PlatformDefaults {
                 paste: Some(Binding::Direct(parse_default_chord("Ctrl+V"))),
                 copy: Some(Binding::Direct(parse_default_chord("Ctrl+C"))),
                 quit: None,
+                increase_font_size: Some(Binding::Direct(parse_default_chord("Ctrl+Plus"))),
+                decrease_font_size: Some(Binding::Direct(parse_default_chord("Ctrl+-"))),
+                reset_font_size: Some(Binding::Direct(parse_default_chord("Ctrl+0"))),
             }
         }
     }
@@ -1043,12 +1102,16 @@ mod tests {
         assert!(Key::ArrowRight.maps_to_physical_key());
     }
 
+    /// Asserts that a key with no stable physical position reports no mapping,
+    /// so the resolver drops the binding instead of resolving it to the wrong
+    /// key.
+    ///
+    /// Case: a config binds an action to `F12` or to `.`, neither of which the
+    /// keycode table covers.
     #[test]
-    fn maps_to_physical_key_false_for_plus_other_and_punctuation() {
-        assert!(!Key::Plus.maps_to_physical_key());
+    fn maps_to_physical_key_false_for_other_and_unmapped_punctuation() {
         assert!(!Key::Other("f12".into()).maps_to_physical_key());
         assert!(!Key::Char('.').maps_to_physical_key());
-        assert!(!Key::Char('-').maps_to_physical_key());
     }
 
     #[test]
@@ -1318,7 +1381,7 @@ mod tests {
     }
 
     /// Asserts that the macOS default table binds the `Cmd` tap leader and
-    /// three direct `Cmd` chords, leaving the other 29 actions leader-scoped.
+    /// six direct `Cmd` chords, leaving the other 29 actions leader-scoped.
     ///
     /// Case: a user on macOS starts orzma with no config file at all.
     #[cfg(target_os = "macos")]
@@ -1338,14 +1401,15 @@ mod tests {
             s.copy,
             Some(Binding::Direct(parse_key_chord("Cmd+C").unwrap()))
         );
-        assert_eq!(s.bindings_iter().count(), 32);
-        assert_eq!(s.direct_chords().count(), 3);
+        assert_eq!(s.bindings_iter().count(), 35);
+        assert_eq!(s.direct_chords().count(), 6);
         assert_eq!(s.leader_chords().count(), 29);
     }
 
     /// Asserts that the non-macOS default table binds the `Alt` tap leader and
-    /// `Ctrl` chords for paste and copy, and leaves `quit` unbound rather than
-    /// binding a chord the window manager already owns.
+    /// five direct `Ctrl` chords, leaves the other 29 actions leader-scoped,
+    /// and leaves `quit` unbound rather than binding a chord the window
+    /// manager already owns.
     ///
     /// Case: a user on Windows starts orzma with no config file at all, where
     /// no `Cmd` key exists to press.
@@ -1363,8 +1427,8 @@ mod tests {
             Some(Binding::Direct(parse_key_chord("Ctrl+C").unwrap()))
         );
         assert_eq!(s.quit, None);
-        assert_eq!(s.bindings_iter().count(), 32);
-        assert_eq!(s.direct_chords().count(), 2);
+        assert_eq!(s.bindings_iter().count(), 35);
+        assert_eq!(s.direct_chords().count(), 5);
         assert_eq!(s.leader_chords().count(), 29);
     }
 
@@ -1399,7 +1463,7 @@ mod tests {
     fn bindings_iter_count_is_pinned_to_field_count() {
         // NOTE: drift guard — adding a Shortcuts field without its
         // bindings_iter() entry silently unbinds the action.
-        assert_eq!(Shortcuts::default().bindings_iter().count(), 32);
+        assert_eq!(Shortcuts::default().bindings_iter().count(), 35);
     }
 
     #[test]
@@ -1574,7 +1638,7 @@ rename-window = "<Leader>d"
     }
 
     /// Asserts that the macOS default table round-trips to its exact JSON
-    /// form, pinning every one of the 33 fields at once.
+    /// form, pinning every one of the 38 fields at once.
     ///
     /// Case: a macOS user's config is serialized back out, so a stock binding
     /// that silently changes shape is caught here.
@@ -1582,12 +1646,12 @@ rename-window = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","increase-font-size":"Cmd+Plus","decrease-font-size":"Cmd+-","reset-font-size":"Cmd+0","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
     /// Asserts that the non-macOS default table round-trips to its exact JSON
-    /// form, pinning every one of the 33 fields at once, with the unbound
+    /// form, pinning every one of the 38 fields at once, with the unbound
     /// `quit` emitted as an empty string.
     ///
     /// Case: a Windows user's config is serialized back out, so a stock
@@ -1596,7 +1660,7 @@ rename-window = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","increase-font-size":"Ctrl+Plus","decrease-font-size":"Ctrl+-","reset-font-size":"Ctrl+0","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
@@ -1788,5 +1852,59 @@ rename-window = "<Leader>d"
             s.repeat_time_ms, 0,
             "0 means repeat disabled; it must survive normalize()"
         );
+    }
+
+    /// Asserts that the keys the zoom bindings use report a physical mapping,
+    /// so the config layer does not warn them away as unreachable.
+    ///
+    /// Case: the shipped platform defaults bind `Cmd+Plus` / `Cmd+-` /
+    /// `Cmd+0` and must survive the resolution pass.
+    #[test]
+    fn zoom_keys_map_to_physical_keys() {
+        assert!(Key::Plus.maps_to_physical_key());
+        assert!(Key::Char('-').maps_to_physical_key());
+        assert!(Key::Char('=').maps_to_physical_key());
+    }
+
+    /// Asserts that the three zoom actions ship with platform-appropriate
+    /// direct bindings.
+    ///
+    /// Case: a user installs orzma with no config file and presses the zoom
+    /// keys.
+    #[test]
+    fn zoom_actions_have_platform_defaults() {
+        let sc = Shortcuts::default();
+        let modifier = if cfg!(target_os = "macos") {
+            "Cmd"
+        } else {
+            "Ctrl"
+        };
+
+        assert_eq!(
+            sc.increase_font_size,
+            Some(parse_default_binding(&format!("{modifier}+Plus")))
+        );
+        assert_eq!(
+            sc.decrease_font_size,
+            Some(parse_default_binding(&format!("{modifier}+-")))
+        );
+        assert_eq!(
+            sc.reset_font_size,
+            Some(parse_default_binding(&format!("{modifier}+0")))
+        );
+    }
+
+    /// Asserts that each zoom action reaches `bindings_iter` under its
+    /// kebab-case config key.
+    ///
+    /// Case: a user rebinds `increase-font-size` in their config file.
+    #[test]
+    fn zoom_actions_appear_in_bindings_iter() {
+        let sc = Shortcuts::default();
+        let labels: Vec<&'static str> = sc.bindings_iter().map(|(label, _, _)| label).collect();
+
+        assert!(labels.contains(&"increase-font-size"));
+        assert!(labels.contains(&"decrease-font-size"));
+        assert!(labels.contains(&"reset-font-size"));
     }
 }
