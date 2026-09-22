@@ -132,6 +132,11 @@ release *args: setup-cef-release orzmd-web
 licenses-refresh-cef:
     cp "{{ cef_dir }}/CREDITS.html" licenses/chromium/CREDITS.html
 
+# regenerate build/windows/cef-inventory.json from the provisioned CEF dir (run on cef_version bump)
+[windows]
+cef-inventory-refresh:
+    python scripts/stage_windows.py --refresh-inventory --cef-dir "{{ cef_dir }}" --cef-version "{{ cef_version }}"
+
 # generate licenses/THIRD-PARTY-LICENSES.md from all dependency licenses
 licenses:
     python3 scripts/generate_licenses.py --cargo-about-version {{ cargo_about_version }} --pnpm-licenses-version {{ pnpm_licenses_version }}
