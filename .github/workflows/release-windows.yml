@@ -23,6 +23,7 @@ env:
 jobs:
   release:
     runs-on: windows-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
 
@@ -89,51 +90,62 @@ jobs:
 
       - name: Resolve version
         id: ver
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           $cargo = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages |
             Where-Object { $_.name -eq "orzma" } | ForEach-Object { $_.version }
-          if ("${{ github.ref_type }}" -eq "tag") {
-            $tag = "${{ github.ref_name }}".TrimStart("v")
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $tag = $env:GITHUB_REF_NAME.TrimStart("v")
             if ($tag -ne $cargo) {
               Write-Error "Tag v$tag does not match Cargo version $cargo; bump Cargo.toml or fix the tag."
               exit 1
             }
             $version = $tag
-          } elseif ("${{ inputs.version }}") {
+          } elseif ($env:DISPATCH_VERSION) {
             # A manual dry run may pass a 3-part version so the build is not blocked
             # by a prerelease Cargo version (wix build runs with -wx, and WIX1148 on
             # a version like 0.2.0-dev is then an error).
-            $version = "${{ inputs.version }}"
+            $version = $env:DISPATCH_VERSION
           } else {
             $version = $cargo
           }
           "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Stage the distribution tree
-        run: python scripts/stage_windows.py --version ${{ steps.ver.outputs.version }}
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: python scripts/stage_windows.py --version $env:VERSION
 
       # NOTE: the bindpaths must be absolute. WiX resolves a relative bindpath against
       # the .wxs file's own directory, not the working directory, so relative values
       # fail with WIX8601/WIX8600. `just msi` uses Resolve-Path for the same reason.
       - name: Build the MSI
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: >
           dotnet wix build build/windows/orzma.wxs
-          -ext WixToolset.UI.wixext/${{ env.WIX_VERSION }}
-          -bindpath "stage=${{ github.workspace }}\target\dist\stage"
-          -bindpath "build=${{ github.workspace }}\build\windows"
-          -d "Version=${{ steps.ver.outputs.version }}"
+          -ext WixToolset.UI.wixext/$env:WIX_VERSION
+          -bindpath "stage=$env:GITHUB_WORKSPACE\target\dist\stage"
+          -bindpath "build=$env:GITHUB_WORKSPACE\build\windows"
+          -d "Version=$env:VERSION"
           -wx
           -arch x64
-          -o "target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi"
+          -o "target/dist/orzma-$env:VERSION-x64.msi"
 
       - name: Validate the MSI
-        run: dotnet wix msi validate "target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi"
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: dotnet wix msi validate "target/dist/orzma-$env:VERSION-x64.msi"
 
       - name: Write the checksum sidecar
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          $msi = "target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi"
+          $msi = "target/dist/orzma-$env:VERSION-x64.msi"
           $hash = (Get-FileHash -Algorithm SHA256 $msi).Hash.ToLower()
-          "$hash  $(Split-Path -Leaf $msi)" | Out-File -Encoding ascii "$msi.sha256"
+          $name = Split-Path -Leaf $msi
+          [IO.File]::WriteAllText("$msi.sha256", "$hash  $name`n")
 
       - name: Publish GitHub Release
         if: github.ref_type == 'tag'

@@ -5,12 +5,12 @@ on:
     branches: [main]
     paths:
       - "scripts/**"
-      - "build/windows/**"
+      - "build/**"
       - ".github/workflows/ci-scripts.yml"
   pull_request:
     paths:
       - "scripts/**"
-      - "build/windows/**"
+      - "build/**"
       - ".github/workflows/ci-scripts.yml"
 
 concurrency:
@@ -22,7 +22,9 @@ permissions:
 
 jobs:
   unittest:
+    name: unittest (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
