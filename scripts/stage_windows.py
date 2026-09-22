@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import struct
+import subprocess
 from pathlib import Path
 
 APP_NAME = "orzma"
@@ -19,6 +20,55 @@ RENDER_PROCESS_VERSION = "0.13.0"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INVENTORY_PATH = REPO_ROOT / "build" / "windows" / "cef-inventory.json"
+
+CRT_STATIC_RUSTFLAGS = "-Ctarget-feature=+crt-static"
+
+RTF_HEADER = r"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fnil Segoe UI;}}\fs18"
+
+
+def cargo_build_argv(triple: str, profile: str) -> list[str]:
+    return ["cargo", "build", "--profile", profile, "--target", triple,
+            "--locked", "--no-default-features"]
+
+
+def companion_cargo_build_argv(triple: str, profile: str, names: tuple[str, ...]) -> list[str]:
+    argv = ["cargo", "build", "--profile", profile, "--target", triple, "--locked"]
+    for name in names:
+        argv += ["-p", name]
+    return argv
+
+
+def render_process_install_argv(version: str, triple: str, root: Path) -> list[str]:
+    # NOTE: --target is mandatory. Without it RUSTFLAGS reaches build scripts and
+    # build dependencies, and the cc build of ring is compiled against the static CRT.
+    # --force keeps a second staging run from failing on the already-installed binary.
+    return ["cargo", "install", f"{RENDER_PROCESS_BIN}@{version}",
+            "--target", triple, "--root", str(root), "--locked", "--force"]
+
+
+def cargo_env(base: dict[str, str]) -> dict[str, str]:
+    env = dict(base)
+    flags = env.get("RUSTFLAGS", "")
+    if CRT_STATIC_RUSTFLAGS not in flags.split():
+        env["RUSTFLAGS"] = f"{flags} {CRT_STATIC_RUSTFLAGS}".strip()
+    return env
+
+
+def license_rtf(text: str) -> str:
+    body = text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+    body = body.replace("\n", "\\par\n")
+    return f"{RTF_HEADER}\n{body}\n}}"
+
+
+def cargo_version(package: str) -> str:
+    out = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, check=True,
+    ).stdout
+    for pkg in json.loads(out)["packages"]:
+        if pkg["name"] == package:
+            return pkg["version"]
+    raise SystemExit(f"package {package} not found in cargo metadata")
 
 
 def sha256_file(path: Path) -> str:

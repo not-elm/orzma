@@ -138,5 +138,58 @@ class PeImports(unittest.TestCase):
         self.assertEqual(sw.forbidden_crt_imports(names), [])
 
 
+class CargoInvocation(unittest.TestCase):
+    def test_cargo_build_argv_disables_default_features(self):
+        self.assertEqual(
+            sw.cargo_build_argv("x86_64-pc-windows-msvc", "dist"),
+            ["cargo", "build", "--profile", "dist", "--target", "x86_64-pc-windows-msvc",
+             "--locked", "--no-default-features"],
+        )
+
+    def test_companion_cargo_build_argv_lists_packages(self):
+        self.assertEqual(
+            sw.companion_cargo_build_argv("x86_64-pc-windows-msvc", "dist", ("orzbrowser", "orzmd")),
+            ["cargo", "build", "--profile", "dist", "--target", "x86_64-pc-windows-msvc",
+             "--locked", "-p", "orzbrowser", "-p", "orzmd"],
+        )
+
+    def test_render_process_install_argv_pins_version_and_target(self):
+        argv = sw.render_process_install_argv("0.13.0", "x86_64-pc-windows-msvc", Path("/tmp/tools"))
+        self.assertIn("bevy_cef_render_process@0.13.0", argv)
+        self.assertIn("--target", argv)
+        self.assertEqual(argv[argv.index("--target") + 1], "x86_64-pc-windows-msvc")
+        self.assertEqual(argv[argv.index("--root") + 1], str(Path("/tmp/tools")))
+
+    def test_render_process_install_argv_is_idempotent(self):
+        argv = sw.render_process_install_argv("0.13.0", "x86_64-pc-windows-msvc", Path("/tmp/tools"))
+        self.assertIn("--force", argv)
+
+    def test_cargo_env_adds_crt_static(self):
+        self.assertEqual(sw.cargo_env({})["RUSTFLAGS"], "-Ctarget-feature=+crt-static")
+
+    def test_cargo_env_preserves_existing_rustflags(self):
+        env = sw.cargo_env({"RUSTFLAGS": "-Dwarnings"})
+        self.assertEqual(env["RUSTFLAGS"], "-Dwarnings -Ctarget-feature=+crt-static")
+
+    def test_cargo_env_does_not_duplicate_crt_static(self):
+        env = sw.cargo_env({"RUSTFLAGS": "-Ctarget-feature=+crt-static"})
+        self.assertEqual(env["RUSTFLAGS"], "-Ctarget-feature=+crt-static")
+
+
+class LicenseRtf(unittest.TestCase):
+    def test_wraps_text_in_rtf(self):
+        out = sw.license_rtf("MIT License\n")
+        self.assertTrue(out.startswith("{\\rtf1"))
+        self.assertTrue(out.endswith("}"))
+        self.assertIn("MIT License", out)
+
+    def test_escapes_rtf_control_characters(self):
+        out = sw.license_rtf("a{b}c\\d")
+        self.assertIn("a\\{b\\}c\\\\d", out)
+
+    def test_converts_newlines_to_par(self):
+        self.assertIn("first\\par", sw.license_rtf("first\nsecond"))
+
+
 if __name__ == "__main__":
     unittest.main()
