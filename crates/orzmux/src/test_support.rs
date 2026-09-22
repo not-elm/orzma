@@ -1,11 +1,11 @@
 //! Test fixtures for the multiplexer: PTY-less panes, a factory that
 //! hands the test their input ends, and a harness that drives one
-//! backend.
+//! event loop.
 
 use crate::backend::pane::PaneFactory;
 use crate::backend::{Backend, CommandSeq, NewPaneAt, OrzmuxEvent, PaneId, RequestId};
 use crate::error::OrzmuxResult;
-use crate::event_loop::OrzmuxCommand;
+use crate::event_loop::{EventLoop, OrzmuxCommand};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use orzma_tty::prelude::{OrzmaTty, OrzmaTtyError, WheelConfig};
 use orzma_tty::test_support::{BlockingSink, CaptureSink, FailingSink};
@@ -90,24 +90,24 @@ impl PaneFactory for FakeFactory {
     }
 }
 
-/// Drives one [`Backend`] whose panes are spawned by a PTY-less factory.
+/// Drives one [`EventLoop`] whose panes are spawned by a PTY-less
+/// factory.
 pub(crate) struct Harness {
-    pub(crate) backend: Backend,
-    pub(crate) _events: Receiver<OrzmuxEvent>,
+    pub(crate) event_loop: EventLoop,
+    pub(crate) events: Receiver<OrzmuxEvent>,
     pub(crate) panes: Receiver<FakePane>,
     pub(crate) log: Arc<FactoryLog>,
-    pub(crate) seq: u64,
-    /// Held so the command channel stays connected.
-    pub(crate) _commands: Sender<(CommandSeq, OrzmuxCommand)>,
+    seq: u64,
+    commands: Sender<(CommandSeq, OrzmuxCommand)>,
 }
 
 impl Harness {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::with_wheel(WheelConfig::default())
     }
 
     /// A harness whose backend routes the wheel by `wheel`.
-    pub(crate) fn with_wheel(wheel: WheelConfig) -> Self {
+    pub fn with_wheel(wheel: WheelConfig) -> Self {
         let (spawned_tx, spawned_rx) = unbounded();
         let (command_tx, command_rx) = unbounded();
         let (event_tx, event_rx) = unbounded();
@@ -116,36 +116,59 @@ impl Harness {
             spawned: spawned_tx,
             log: Arc::clone(&log),
         };
+        let backend = Backend::new(Box::new(factory), wheel);
         Self {
-            backend: Backend::new(Box::new(factory), command_rx, event_tx, wheel),
-            _events: event_rx,
+            event_loop: EventLoop::new(backend, command_rx, event_tx),
+            events: event_rx,
             panes: spawned_rx,
             log,
             seq: 0,
-            _commands: command_tx,
+            commands: command_tx,
         }
     }
 
-    pub(crate) fn send(&mut self, command: OrzmuxCommand) -> CommandSeq {
+    /// Sends one command and runs the loop's command + flush phases,
+    /// so the events it generated are queued on the event channel.
+    pub fn send(&mut self, command: OrzmuxCommand) -> CommandSeq {
         self.seq += 1;
         let seq = CommandSeq(self.seq);
-        self.backend.handle_command(seq, command);
+        let _ = self.commands.send((seq, command));
+        self.event_loop.drain_commands();
+        self.event_loop.flush_events();
         seq
     }
 
-    pub(crate) fn drain(&mut self) -> VecDeque<OrzmuxEvent> {
-        self.backend.drain_events().collect()
+    /// Hands out every event the loop has produced, flushing the
+    /// backend's outbox onto the event channel first.
+    pub fn drain(&mut self) -> VecDeque<OrzmuxEvent> {
+        self.event_loop.flush_events();
+        self.events.try_iter().collect()
+    }
+
+    /// The backend the loop drives.
+    pub fn backend(&self) -> &Backend {
+        self.event_loop.backend()
+    }
+
+    /// Pumps one pane, as the loop does when its stream is ready.
+    pub fn pump_pane(&mut self, id: PaneId) {
+        self.event_loop.pump_pane(id);
+    }
+
+    /// Pumps every pane whose deadline has passed.
+    pub fn service_deadlines(&mut self) {
+        self.event_loop.service_deadlines();
     }
 
     /// Waits until every live pane's queued PTY writes have been
     /// written.
-    pub(crate) fn settle_writes(&self) {
-        for pane in self.backend.panes().map(|(_, p)| p) {
+    pub fn settle_writes(&self) {
+        for pane in self.backend().panes().map(|(_, p)| p) {
             pane.tty.settle_writes();
         }
     }
 
-    pub(crate) fn resize(&mut self, size: GridSize) {
+    pub fn resize(&mut self, size: GridSize) {
         self.send(OrzmuxCommand::Resize {
             size,
             cell_px: CellPixels {
@@ -155,7 +178,7 @@ impl Harness {
         });
     }
 
-    pub(crate) fn open_root(&mut self) -> (PaneId, FakePane) {
+    pub fn open_root(&mut self) -> (PaneId, FakePane) {
         self.resize(GridSize::new(80, 24).expect("a valid size"));
         self.drain();
         self.send(OrzmuxCommand::NewPane {

@@ -1,16 +1,14 @@
-//! The multiplexer backend loop: owns every pane, waits on the command
-//! channel and each pane's PTY streams with one `Select`, and emits
-//! layout / frame / signal events to the GUI.
+//! The multiplexer's pane ledger: owns every pane and the layout tree,
+//! applies the operations the event loop dispatches, and queues the
+//! events the GUI receives.
 
 use crate::backend::layout::LayoutTree;
 use crate::backend::pane::{Pane, PaneFactory};
-use crate::backend::queue_sample::{ChunkDepth, QueueSampler};
+use crate::backend::queue_sample::ChunkDepth;
 use crate::error::{OrzmuxError, OrzmuxResult};
-use crate::event_loop::OrzmuxCommand;
-use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::prelude::{
-    MouseReport, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PumpItem, TerminalKey, TerminalModifiers,
-    TtySignal, WheelConfig, WheelInput,
+    MouseReport, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PumpItem, Readiness, TerminalKey,
+    TerminalModifiers, TtySignal, WheelConfig, WheelInput,
 };
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{
@@ -224,7 +222,8 @@ pub enum OrzmuxEvent {
     },
 }
 
-/// The backend state, driven by [`Backend::run`] on its own thread.
+/// Every live pane, the layout tree they tile, and the events they have
+/// generated since the last drain.
 pub(crate) struct Backend {
     factory: Box<dyn PaneFactory>,
     panes: HashMap<PaneId, Pane>,
@@ -233,16 +232,8 @@ pub(crate) struct Backend {
     /// Whether the primary window has keyboard focus, as the GUI last
     /// reported it.
     window_focused: bool,
-    commands: Receiver<(CommandSeq, OrzmuxCommand)>,
-    events: Sender<OrzmuxEvent>,
     next_pane_id: u32,
     processed: CommandSeq,
-    /// Set when the GUI's event receiver is gone; the loop exits.
-    gui_gone: bool,
-    /// What each `Select` index of the last `wait_ready` referred to.
-    sources: Vec<Ready>,
-    /// Per-queue peaks between samples; logged once a second.
-    sampler: QueueSampler,
     /// The wheel-routing policy handed to every pane's terminal.
     wheel: WheelConfig,
     /// Events generated since the last drain, in generation order.
@@ -251,80 +242,17 @@ pub(crate) struct Backend {
 
 impl Backend {
     /// A backend with no panes and no geometry.
-    pub fn new(
-        factory: Box<dyn PaneFactory>,
-        commands: Receiver<(CommandSeq, OrzmuxCommand)>,
-        events: Sender<OrzmuxEvent>,
-        wheel: WheelConfig,
-    ) -> Self {
+    pub fn new(factory: Box<dyn PaneFactory>, wheel: WheelConfig) -> Self {
         Self {
             factory,
             panes: HashMap::new(),
             tree: LayoutTree::new(),
             geometry: None,
             window_focused: true,
-            commands,
-            events,
             next_pane_id: 1,
             processed: CommandSeq::default(),
-            gui_gone: false,
-            sources: Vec::new(),
-            sampler: QueueSampler::new(Instant::now()),
             wheel,
             outbox: Vec::new(),
-        }
-    }
-
-    /// Runs until the command channel disconnects (the GUI dropped its
-    /// client) or the GUI stops receiving events. Dropping the panes on
-    /// return kills every child.
-    pub fn run(mut self) {
-        loop {
-            let ready = self.wait_ready();
-            self.record_queue_depths();
-            let connected = match ready {
-                Some(Ready::Commands) => self.drain_commands(),
-                Some(Ready::Pane(pane)) => {
-                    self.pump_pane(pane);
-                    true
-                }
-                None => true,
-            };
-            if !connected {
-                self.flush_events();
-                return;
-            }
-            self.service_deadlines();
-            self.flush_events();
-            self.report_queue_sample(Instant::now());
-            if self.gui_gone {
-                return;
-            }
-        }
-    }
-
-    /// Applies one command. An unresolvable target and a refused PTY
-    /// write are logged and dropped; `CopySelection` always answers,
-    /// `SelectPane` always publishes a layout, and `SelectPaneDirection`
-    /// publishes one only when the active pane moved.
-    pub fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
-        self.processed = seq;
-        if let OrzmuxCommand::NewPane {
-            request,
-            at,
-            cwd,
-            env,
-        } = command
-        {
-            if let Err(error) = self.open_pane(request, at, cwd, env) {
-                self.fail_spawn(request, &error);
-            }
-            return;
-        }
-        let name = command.name();
-        let target = command.target();
-        if let Err(error) = self.dispatch(command) {
-            log_refused_command(name, target, &error);
         }
     }
 
@@ -664,9 +592,35 @@ impl Backend {
     }
 
     /// Empties the outbox, yielding the events in generation order.
-    #[cfg(test)]
     pub fn drain_events(&mut self) -> impl Iterator<Item = OrzmuxEvent> + '_ {
         self.outbox.drain(..)
+    }
+
+    /// Every live pane's readable streams, in no fixed order.
+    pub fn readiness(&self) -> impl Iterator<Item = (PaneId, Readiness<'_>)> {
+        self.panes
+            .iter()
+            .map(|(id, pane)| (*id, pane.tty.readiness()))
+    }
+
+    /// The earliest deadline any pane wants to be pumped at.
+    pub fn next_deadline(&self, now: Instant) -> Option<Instant> {
+        self.panes
+            .values()
+            .filter_map(|p| p.tty.next_deadline(now))
+            .min()
+    }
+
+    /// Every live pane's unread chunk count, in no fixed order.
+    pub fn chunk_depths(&self) -> impl Iterator<Item = (PaneId, ChunkDepth)> {
+        self.panes
+            .iter()
+            .map(|(id, pane)| (*id, ChunkDepth(pane.tty.pending_chunk_count())))
+    }
+
+    /// Records the command watermark the next published layout carries.
+    pub fn set_processed(&mut self, seq: CommandSeq) {
+        self.processed = seq;
     }
 
     /// The pane layout tree.
@@ -691,109 +645,6 @@ impl Backend {
     #[cfg(test)]
     pub fn panes(&self) -> impl Iterator<Item = (PaneId, &Pane)> {
         self.panes.iter().map(|(id, pane)| (*id, pane))
-    }
-
-    /// Blocks until a command or a pane stream is ready, or the earliest
-    /// of the panes' next deadlines and the sampler's report deadline
-    /// passes. Returns the ready source, `None` on timeout.
-    fn wait_ready(&mut self) -> Option<Ready> {
-        let mut select = Select::new();
-        self.sources.clear();
-        select.recv(&self.commands);
-        self.sources.push(Ready::Commands);
-        for (id, pane) in &self.panes {
-            let readiness = pane.tty.readiness();
-            select.recv(readiness.chunks);
-            self.sources.push(Ready::Pane(*id));
-            if let Some(exit) = readiness.exit {
-                select.recv(exit);
-                self.sources.push(Ready::Pane(*id));
-            }
-        }
-        let index = match self.next_wake_deadline() {
-            Some(deadline) => select.ready_deadline(deadline).ok()?,
-            None => select.ready(),
-        };
-        Some(self.sources[index])
-    }
-
-    /// The earliest of the panes' next deadlines and the sampler's report
-    /// deadline, or `None` when every pane is idle and no peak waits to
-    /// be reported.
-    fn next_wake_deadline(&self) -> Option<Instant> {
-        let now = Instant::now();
-        self.panes
-            .values()
-            .filter_map(|p| p.tty.next_deadline(now))
-            .chain(self.sampler.report_deadline())
-            .min()
-    }
-
-    /// Applies up to `COMMAND_BATCH` queued commands. Returns `false`
-    /// when the command channel is disconnected.
-    fn drain_commands(&mut self) -> bool {
-        for _ in 0..COMMAND_BATCH {
-            match self.commands.try_recv() {
-                Ok((seq, command)) => self.handle_command(seq, command),
-                Err(TryRecvError::Empty) => return true,
-                Err(TryRecvError::Disconnected) => return false,
-            }
-        }
-        true
-    }
-
-    /// Routes one command to the operation that applies it.
-    fn dispatch(&mut self, command: OrzmuxCommand) -> OrzmuxResult {
-        match command {
-            OrzmuxCommand::NewPane { .. } => Ok(()),
-            OrzmuxCommand::Resize { size, cell_px } => {
-                self.resize(size, cell_px);
-                Ok(())
-            }
-            OrzmuxCommand::KillPane { pane } => self.kill_pane(pane),
-            OrzmuxCommand::SelectPane { pane } => self.select_pane(pane),
-            OrzmuxCommand::SelectPaneDirection { direction } => {
-                self.select_pane_direction(direction);
-                Ok(())
-            }
-            OrzmuxCommand::WindowFocus { focused } => {
-                self.window_focus(focused);
-                Ok(())
-            }
-            OrzmuxCommand::ResizeSplit { split, position } => {
-                self.resize_split(split, position);
-                Ok(())
-            }
-            OrzmuxCommand::KeyInput { pane, key, mods } => self.key_input(pane, key, mods),
-            OrzmuxCommand::Paste { pane, text } => self.paste(pane, text),
-            OrzmuxCommand::MouseInput { pane, report } => self.mouse_input(pane, report),
-            OrzmuxCommand::Wheel { pane, input } => self.wheel(pane, input),
-            OrzmuxCommand::Scroll { pane, scroll } => self.scroll(pane, scroll),
-            OrzmuxCommand::SelectionStart {
-                pane,
-                cell,
-                side,
-                kind,
-            } => self.selection_start(pane, cell, side, kind),
-            OrzmuxCommand::SelectionUpdate { pane, cell, side } => {
-                self.selection_update(pane, cell, side)
-            }
-            OrzmuxCommand::SelectionClear { pane } => self.selection_clear(pane),
-            OrzmuxCommand::CopySelection { pane } => {
-                self.copy_selection(pane);
-                Ok(())
-            }
-            OrzmuxCommand::RemovePlacements { pane, instances } => {
-                self.remove_placements(pane, instances)
-            }
-            OrzmuxCommand::MountPlacement {
-                pane,
-                instance,
-                row,
-                column,
-                size,
-            } => self.mount_placement(pane, instance, row, column, size),
-        }
     }
 
     /// `at` with its split target pinned to a concrete, live pane.
@@ -1007,51 +858,6 @@ impl Backend {
     fn emit(&mut self, event: OrzmuxEvent) {
         self.outbox.push(event);
     }
-
-    /// Sends every buffered event to the GUI, in generation order.
-    fn flush_events(&mut self) {
-        for event in self.outbox.drain(..) {
-            if self.events.send(event).is_err() {
-                self.gui_gone = true;
-            }
-        }
-    }
-
-    /// Records every queue's current depth into the sampler: each pane's
-    /// unread chunk count, the event channel, and the command channel.
-    fn record_queue_depths(&mut self) {
-        for (id, pane) in &self.panes {
-            self.sampler
-                .record_pane_depth(*id, ChunkDepth(pane.tty.pending_chunk_count()));
-        }
-        self.sampler
-            .record_channel_depths(self.events.len(), self.commands.len());
-    }
-
-    /// Logs the sample the sampler hands out at `now`, if one is due:
-    /// one line per pane with a recorded chunk peak and one line for
-    /// the channels when either has a recorded peak.
-    fn report_queue_sample(&mut self, now: Instant) {
-        let Some(sample) = self.sampler.sample(now) else {
-            return;
-        };
-        for (pane, depth) in sample.chunks {
-            tracing::debug!(
-                target: "orzmux::queues",
-                ?pane,
-                depth = depth.0,
-                "chunk queue peak"
-            );
-        }
-        if sample.events > 0 || sample.commands > 0 {
-            tracing::debug!(
-                target: "orzmux::queues",
-                events = sample.events,
-                commands = sample.commands,
-                "event and command queue peaks"
-            );
-        }
-    }
 }
 
 /// Logs a PTY write the pane's terminal refused.
@@ -1118,16 +924,6 @@ enum PinnedPaneAt {
     },
 }
 
-/// What one ready `Select` index refers to.
-#[derive(Debug, Clone, Copy)]
-enum Ready {
-    Commands,
-    Pane(PaneId),
-}
-
-/// How many queued commands one iteration applies before pumping panes.
-const COMMAND_BATCH: usize = 64;
-
 /// How many times one wake pumps the same pane while its chunks stay
 /// queued, before other panes and the command channel get a turn.
 const PUMP_ROUNDS: usize = 4;
@@ -1135,7 +931,7 @@ const PUMP_ROUNDS: usize = 4;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prelude::{PaneDirection, SplitId, SplitOrientation};
+    use crate::prelude::{OrzmuxCommand, PaneDirection, SplitId, SplitOrientation};
     use crate::test_support::{FakePane, Harness};
     use crossbeam_channel::{RecvTimeoutError, bounded};
     use orzma_tty::prelude::{
@@ -1235,8 +1031,8 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(h.backend.tree().panes(), vec![root]);
-        assert_eq!(h.backend.tree().active(), Some(root));
+        assert_eq!(h.backend().tree().panes(), vec![root]);
+        assert_eq!(h.backend().tree().active(), Some(root));
     }
 
     /// Asserts that each way a split can be refused reports its own
@@ -1271,7 +1067,7 @@ mod tests {
     fn a_split_whose_target_is_gone_is_refused_without_disturbing_the_tree() {
         let mut h = Harness::new();
         let (root, _pane) = h.open_root();
-        let next_id = h.backend.next_pane_id();
+        let next_id = h.backend().next_pane_id();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(2),
             at: NewPaneAt::Split {
@@ -1290,8 +1086,8 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(h.backend.tree().panes(), vec![root]);
-        assert_eq!(h.backend.next_pane_id(), next_id);
+        assert_eq!(h.backend().tree().panes(), vec![root]);
+        assert_eq!(h.backend().next_pane_id(), next_id);
     }
 
     /// Asserts that a backend thread start-up failure's message includes
@@ -1340,7 +1136,7 @@ mod tests {
         assert_eq!(frames[0].0, root);
         assert_eq!(frames[0].1.size, GridSize { cols: 40, rows: 24 });
         assert_eq!(
-            h.backend
+            h.backend()
                 .pane(root)
                 .expect("the root pane")
                 .tty
@@ -1386,7 +1182,7 @@ mod tests {
         );
         assert_eq!(frames.len(), 2);
         assert_eq!(
-            h.backend
+            h.backend()
                 .pane(root)
                 .expect("the root pane")
                 .tty
@@ -1395,7 +1191,7 @@ mod tests {
             60
         );
         assert_eq!(
-            h.backend
+            h.backend()
                 .pane(root)
                 .expect("the root pane")
                 .tty
@@ -1414,13 +1210,13 @@ mod tests {
     fn service_deadlines_pumps_a_pane_whose_deadline_passed() {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         h.drain();
         pane.chunk_tx.send(b"hello".to_vec()).unwrap();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         h.drain();
         thread::sleep(Duration::from_millis(15));
-        h.backend.service_deadlines();
+        h.service_deadlines();
         let events = h.drain();
         assert!(
             events
@@ -1452,13 +1248,13 @@ mod tests {
     fn a_closed_update_frame_arrives_between_its_signals() {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         h.drain();
         thread::sleep(OrzmaTty::<OrzmaVt>::SYNC_EMIT_INTERVAL);
         pane.chunk_tx
             .send(b"\x1b[?2026h\x07a\x1b[?2026l\x1b]2;t\x07".to_vec())
             .unwrap();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         assert_eq!(event_kinds(&h.drain()), ["signal", "frame", "signal"]);
     }
 
@@ -1471,13 +1267,13 @@ mod tests {
     fn an_open_update_holds_the_pane_frame_back() {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         h.drain();
         pane.chunk_tx.send(b"\x1b[?2026hhello".to_vec()).unwrap();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         thread::sleep(Duration::from_millis(15));
-        h.backend.service_deadlines();
-        h.backend.pump_pane(root);
+        h.service_deadlines();
+        h.pump_pane(root);
         assert!(
             !h.drain()
                 .iter()
@@ -1494,11 +1290,11 @@ mod tests {
     fn the_last_frame_precedes_the_pane_close() {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         h.drain();
         pane.chunk_tx.send(b"bye".to_vec()).unwrap();
         pane.exit_tx.send(Some(0)).unwrap();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         let events = h.drain();
         let frame = events
             .iter()
@@ -1507,61 +1303,6 @@ mod tests {
             .iter()
             .position(|e| matches!(e, OrzmuxEvent::PaneClosed { .. }));
         assert!(frame.is_some() && frame < closed, "{events:?}");
-    }
-
-    /// Asserts that the depths recorded after a wake are the chunks
-    /// still queued before the pump drains them.
-    ///
-    /// Case: a pane's reader queued two chunks while the backend slept
-    /// and the `Select` just woke for that pane.
-    #[test]
-    fn record_queue_depths_sees_the_chunks_queued_before_the_pump() {
-        let mut h = Harness::new();
-        let (root, pane) = h.open_root();
-        pane.chunk_tx.send(b"a".to_vec()).unwrap();
-        pane.chunk_tx.send(b"b".to_vec()).unwrap();
-        h.backend.record_queue_depths();
-        h.backend.pump_pane(root);
-        let sample = h
-            .backend
-            .sampler
-            .sample(Instant::now() + QueueSampler::SAMPLE_INTERVAL)
-            .expect("a peak was recorded");
-        assert_eq!(sample.chunks, vec![(root, ChunkDepth(2))]);
-    }
-
-    /// Asserts that the wake deadline is the sampler's report deadline
-    /// while every pane is idle, and the earlier coalescer deadline
-    /// once a pane has output pending.
-    ///
-    /// Case: a burst of output was recorded, then every pane went idle
-    /// before the second elapsed, and the peak still has to be logged.
-    #[test]
-    fn the_wake_deadline_is_the_report_deadline_when_no_pane_deadline_is_earlier() {
-        let mut h = Harness::new();
-        let (root, pane) = h.open_root();
-        h.backend.pump_pane(root);
-        h.drain();
-        assert_eq!(
-            h.backend.next_wake_deadline(),
-            None,
-            "precondition: the pane is idle after its bootstrap frame and no peak is recorded"
-        );
-        h.backend.sampler.record_pane_depth(root, ChunkDepth(2));
-        let report_deadline = h.backend.sampler.report_deadline();
-        assert!(report_deadline.is_some());
-        assert_eq!(h.backend.next_wake_deadline(), report_deadline);
-        pane.chunk_tx.send(b"x".to_vec()).unwrap();
-        h.backend.pump_pane(root);
-        let pane_deadline = h
-            .backend
-            .pane(root)
-            .expect("the root pane")
-            .tty
-            .next_deadline(Instant::now())
-            .expect("pending output arms the coalescer");
-        assert!(Some(pane_deadline) < report_deadline);
-        assert_eq!(h.backend.next_wake_deadline(), Some(pane_deadline));
     }
 
     /// An `OSC 7` sequence reporting `path`, spelled the way a shell on
@@ -1603,10 +1344,10 @@ mod tests {
     /// the pane's application has focus reporting enabled.
     fn enable_focus_reporting(h: &mut Harness, id: PaneId, pane: &FakePane) {
         pane.chunk_tx.send(b"\x1b[?1004h".to_vec()).unwrap();
-        h.backend.pump_pane(id);
+        h.pump_pane(id);
         h.drain();
         assert!(
-            h.backend
+            h.backend()
                 .pane(id)
                 .expect("the pane")
                 .tty
@@ -1640,7 +1381,7 @@ mod tests {
         pane.chunk_tx
             .send(b"\x1b[?1002h\x1b[?1006h".to_vec())
             .unwrap();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         h.drain();
         h.send(OrzmuxCommand::Wheel {
             pane: root,
@@ -1664,7 +1405,7 @@ mod tests {
         });
         let (root, pane) = h.open_root();
         pane.chunk_tx.send(b"\x1b[?1049h".to_vec()).unwrap();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         h.drain();
         h.send(OrzmuxCommand::Wheel {
             pane: root,
@@ -1712,8 +1453,8 @@ mod tests {
                 reason: CloseReason::Killed
             } if *pane == new
         )));
-        assert_eq!(h.backend.tree().panes(), vec![root]);
-        assert_eq!(h.backend.tree().active(), Some(root));
+        assert_eq!(h.backend().tree().panes(), vec![root]);
+        assert_eq!(h.backend().tree().active(), Some(root));
     }
 
     /// Asserts that a kill flushes the pane's pending output before
@@ -1731,10 +1472,10 @@ mod tests {
         // write below lands inside an ordinary debounce window instead of
         // being swept into the bootstrap snapshot, which the coalescer
         // always emits on a pane's very first pump regardless of damage.
-        h.backend.pump_pane(new);
+        h.pump_pane(new);
         h.drain();
         new_pane.chunk_tx.send(b"last words".to_vec()).unwrap();
-        h.backend.pump_pane(new);
+        h.pump_pane(new);
         h.drain();
         h.send(OrzmuxCommand::KillPane {
             pane: PaneTarget::Id(new),
@@ -1771,7 +1512,7 @@ mod tests {
         pane.exit_tx.send(Some(0)).unwrap();
         drop(pane.chunk_tx);
         drop(pane.exit_tx);
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         let events: Vec<OrzmuxEvent> = h.drain().into_iter().collect();
         assert!(events.iter().any(|e| matches!(
             e,
@@ -1784,7 +1525,7 @@ mod tests {
             panic!("Layout must be last");
         };
         assert!(layout.panes.is_empty());
-        assert!(h.backend.tree().is_empty());
+        assert!(h.backend().tree().is_empty());
     }
 
     /// Asserts that keyboard input reaches the active pane's PTY and that
@@ -1903,10 +1644,10 @@ mod tests {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
         pane.chunk_tx.send(uri).unwrap();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         h.drain();
         assert_eq!(
-            h.backend
+            h.backend()
                 .pane(root)
                 .expect("the root pane")
                 .cwd()
@@ -1934,7 +1675,7 @@ mod tests {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
         pane.chunk_tx.send(uri).unwrap();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         h.drain();
         h.log.cwds.lock().unwrap().clear();
         h.send(OrzmuxCommand::NewPane {
@@ -1967,7 +1708,7 @@ mod tests {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
         pane.chunk_tx.send(uri).unwrap();
-        h.backend.pump_pane(root);
+        h.pump_pane(root);
         h.drain();
         split_active(&mut h, 2);
         h.log.cwds.lock().unwrap().clear();
@@ -2132,7 +1873,7 @@ mod tests {
                 key: TerminalKey::Character(KeyText::new("z").unwrap()),
                 mods: TerminalModifiers::default(),
             });
-            h.backend
+            h.backend()
                 .pane(other)
                 .expect("the other pane")
                 .tty
@@ -2141,7 +1882,7 @@ mod tests {
             h.send(OrzmuxCommand::KillPane {
                 pane: PaneTarget::Id(stuck),
             });
-            let _ = done_tx.send((other_received, h.backend.pane(stuck).is_none()));
+            let _ = done_tx.send((other_received, h.backend().pane(stuck).is_none()));
         });
         let outcome = done_rx.recv_timeout(Duration::from_secs(10));
         gate.release();
