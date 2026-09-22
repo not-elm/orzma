@@ -1,6 +1,6 @@
 //! Window geometry: computes the whole-window cell size and cell pixel
-//! pitch from the primary window and the font metrics, records them in
-//! `PaneGeometry`, and sends `OrzmuxCommand::Resize`.
+//! pitch, records them in `PaneGeometry` once they form a valid grid
+//! size, and sends `OrzmuxCommand::Resize`.
 
 use crate::surface::geometry::{cell_pitch_phys, cells_for};
 use bevy::ecs::schedule::common_conditions::on_message;
@@ -9,7 +9,7 @@ use bevy::window::{PrimaryWindow, WindowResized};
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzmux::prelude::{OrzmuxConnection, PaneGeometry};
 use orzma_tty::CellPixels;
-use orzma_vt::prelude::GridSize;
+use orzma_vt::prelude::{GridSize, GridSizeError, VtError};
 use orzmux::prelude::OrzmuxCommand;
 
 /// Adds the window-geometry sender.
@@ -64,6 +64,20 @@ fn send_window_geometry(
         width: cell_w as u16,
         height: cell_h as u16,
     };
+    let size = match GridSize::new(cols, rows) {
+        Ok(size) => size,
+        Err(VtError::GridSize(GridSizeError::ZeroAxis)) => {
+            debug!(
+                cols,
+                rows, "window has no terminal cells; geometry not sent"
+            );
+            return;
+        }
+        Err(err) => {
+            warn!(cols, rows, %err, "window geometry is not a valid grid size; not sent");
+            return;
+        }
+    };
     let wanted = PaneGeometry {
         cell_px,
         scale_factor: window.scale_factor(),
@@ -74,13 +88,6 @@ fn send_window_geometry(
         }
         None => commands.insert_resource(wanted),
     }
-    let size = match GridSize::new(cols, rows) {
-        Ok(size) => size,
-        Err(err) => {
-            warn!(cols, rows, %err, "window geometry is not a valid grid size; not sent");
-            return;
-        }
-    };
     if last.0 == Some((size, cell_px)) {
         return;
     }
@@ -177,6 +184,135 @@ mod tests {
         ));
     }
 
+    /// Asserts that a minimize-and-restore round trip sends no `Resize`,
+    /// leaving the geometry the backend already holds untouched.
+    ///
+    /// Case: the user minimizes the orzma window while a shell is
+    /// running, then restores it to the same size.
+    #[test]
+    fn a_minimize_and_restore_round_trip_sends_nothing() {
+        let (client, _events, commands) = OrzmuxClient::detached();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(LayoutPlugin)
+            .insert_resource(OrzmuxConnection(client))
+            .insert_resource(metrics(8.0, 16.0));
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: WindowResolution::new(800, 600),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            commands.try_iter().count(),
+            1,
+            "the initial geometry is sent once"
+        );
+
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("the primary window")
+            .resolution = WindowResolution::new(0, 0);
+        app.world_mut().write_message(WindowResized {
+            window,
+            width: 0.0,
+            height: 0.0,
+        });
+        app.update();
+        assert!(
+            commands.try_iter().next().is_none(),
+            "a minimized window sends no Resize"
+        );
+        assert_eq!(
+            app.world().resource::<LastGeometry>().0,
+            Some((
+                GridSize::new(100, 37).expect("a valid grid size"),
+                CellPixels {
+                    width: 8,
+                    height: 16
+                }
+            )),
+            "the minimize leaves LastGeometry on the pre-minimize value"
+        );
+
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("the primary window")
+            .resolution = WindowResolution::new(800, 600);
+        app.world_mut().write_message(WindowResized {
+            window,
+            width: 800.0,
+            height: 600.0,
+        });
+        app.update();
+        assert!(
+            commands.try_iter().next().is_none(),
+            "restoring to the pre-minimize size sends nothing"
+        );
+    }
+
+    /// Asserts that a window with no terminal cells publishes no
+    /// `PaneGeometry`, and that restoring it to a valid size publishes
+    /// the geometry and sends one `Resize`.
+    ///
+    /// Case: the user launches orzma minimized on Windows, where the
+    /// platform reports a 0x0 client area from the first frame, and
+    /// then restores the window.
+    #[test]
+    fn a_window_with_no_cells_publishes_no_pane_geometry_until_restored() {
+        let (client, _events, commands) = OrzmuxClient::detached();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(LayoutPlugin)
+            .insert_resource(OrzmuxConnection(client))
+            .insert_resource(metrics(8.0, 16.0));
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: WindowResolution::new(0, 0),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        app.update();
+        app.update();
+        assert!(
+            !app.world().contains_resource::<PaneGeometry>(),
+            "a window with no cells publishes no PaneGeometry"
+        );
+        assert!(
+            commands.try_iter().next().is_none(),
+            "a window with no cells sends no Resize"
+        );
+
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("the primary window")
+            .resolution = WindowResolution::new(800, 600);
+        app.world_mut().write_message(WindowResized {
+            window,
+            width: 800.0,
+            height: 600.0,
+        });
+        app.update();
+        assert!(
+            app.world().contains_resource::<PaneGeometry>(),
+            "restoring the window publishes PaneGeometry"
+        );
+        assert_eq!(
+            commands.try_iter().count(),
+            1,
+            "restoring the window sends one Resize"
+        );
+    }
+
     /// Asserts that a window whose cell count is not a valid grid size
     /// sends no `Resize`.
     ///
@@ -199,7 +335,10 @@ mod tests {
         ));
         app.update();
         app.update();
-        assert!(app.world().contains_resource::<PaneGeometry>());
+        assert!(
+            !app.world().contains_resource::<PaneGeometry>(),
+            "an invalid grid size publishes no PaneGeometry"
+        );
         assert!(commands.try_iter().next().is_none());
     }
 
