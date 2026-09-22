@@ -394,7 +394,11 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
 A `Plus` binding also fires with Shift held, since `+` is Shift+`=` on a US
 layout. Key bindings match physical key positions, so on a non-US layout the
 `Plus` and `-` positions may not be where the labels are. The numeric keypad's
-`+` and `-` are not bindable.
+`+` and `-` are not bindable. `Plus` resolves to the physical position of the
+`=` key on a US layout, and fires whether or not Shift is held — including
+when it is the leader. On a layout with a dedicated `+` key, such as German,
+that position is a different key, so bind the key you actually want by name
+instead.
 
 ### Zoom and the window
 
