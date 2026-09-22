@@ -104,5 +104,39 @@ class CommittedInventory(unittest.TestCase):
             self.assertEqual(len(digest), 64)
 
 
+class PeImports(unittest.TestCase):
+    def test_rejects_non_pe_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "not-a-pe.bin"
+            path.write_bytes(b"this is not a pe image")
+            with self.assertRaises(ValueError):
+                sw.pe_imported_dlls(path)
+
+    @unittest.skipUnless(sys.platform == "win32", "PE parsing needs a real Windows binary")
+    def test_parses_a_system_library(self):
+        # NOTE: not sys.executable. A Microsoft Store Python resolves it to an app
+        # execution alias whose is_file() is True but whose open() raises OSError 22.
+        kernel32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "kernel32.dll"
+        if not kernel32.is_file():
+            self.skipTest("kernel32.dll not available")
+        names = sw.pe_imported_dlls(kernel32)
+        self.assertTrue(names)
+        for name in names:
+            self.assertTrue(name.endswith(".dll"), name)
+            self.assertEqual(name, name.lower())
+        self.assertIn("ntdll.dll", names)
+
+    def test_forbidden_crt_imports_flags_vcruntime(self):
+        names = ["kernel32.dll", "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"]
+        self.assertEqual(
+            sw.forbidden_crt_imports(names),
+            ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"],
+        )
+
+    def test_forbidden_crt_imports_allows_ucrt(self):
+        names = ["api-ms-win-crt-runtime-l1-1-0.dll", "kernel32.dll", "ucrtbase.dll"]
+        self.assertEqual(sw.forbidden_crt_imports(names), [])
+
+
 if __name__ == "__main__":
     unittest.main()

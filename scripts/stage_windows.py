@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 from pathlib import Path
 
 APP_NAME = "orzma"
@@ -61,6 +62,109 @@ def digest_mismatches(cef_dir: Path, staged: list[str], digests: dict[str, str])
 def load_inventory(path: Path) -> dict:
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+FORBIDDEN_CRT_IMPORTS = ("vcruntime140", "msvcp140")
+
+IMPORT_DIRECTORY_INDEX = 1
+DELAY_IMPORT_DIRECTORY_INDEX = 13
+IMPORT_DESCRIPTOR = (IMPORT_DIRECTORY_INDEX, 20, 12)
+DELAY_IMPORT_DESCRIPTOR = (DELAY_IMPORT_DIRECTORY_INDEX, 32, 4)
+
+
+def pe_imported_dlls(path: Path) -> list[str]:
+    """DLL names a PE image imports, including delay-loaded imports."""
+    with open(path, "rb") as f:
+        if _read_at(f, 0, 2) != b"MZ":
+            raise ValueError(f"not a PE image: {path}")
+        pe_offset = _u32(_read_at(f, 0x3C, 4), 0)
+        coff = _read_at(f, pe_offset, 24)
+        if coff[:4] != b"PE\0\0":
+            raise ValueError(f"missing PE signature: {path}")
+        section_count = _u16(coff, 6)
+        optional_size = _u16(coff, 20)
+        magic = _u16(_read_at(f, pe_offset + 24, 2), 0)
+        if magic not in (0x10B, 0x20B):
+            raise ValueError(f"unknown optional header magic {magic:#x}: {path}")
+        directories_offset = pe_offset + 24 + (96 if magic == 0x10B else 112)
+        # NumberOfRvaAndSizes sits immediately before the data directories. Reading a
+        # fixed 16 entries would run into the section table on an image that declares
+        # fewer, and index 13 would then yield a bogus RVA.
+        directory_count = _u32(_read_at(f, directories_offset - 4, 4), 0)
+        directories = _read_at(f, directories_offset, 8 * min(directory_count, 16))
+        sections = _read_at(f, pe_offset + 24 + optional_size, 40 * section_count)
+        names: list[str] = []
+        for index, stride, name_field in (IMPORT_DESCRIPTOR, DELAY_IMPORT_DESCRIPTOR):
+            if index >= directory_count:
+                continue
+            rva = _u32(directories, index * 8)
+            if rva:
+                names += _descriptor_names(f, sections, rva, stride, name_field)
+    return sorted({name.lower() for name in names})
+
+
+def forbidden_crt_imports(names: list[str]) -> list[str]:
+    return sorted(
+        name for name in names
+        if any(name.startswith(prefix) for prefix in FORBIDDEN_CRT_IMPORTS)
+    )
+
+
+def _u16(buf: bytes, offset: int) -> int:
+    return struct.unpack_from("<H", buf, offset)[0]
+
+
+def _u32(buf: bytes, offset: int) -> int:
+    return struct.unpack_from("<I", buf, offset)[0]
+
+
+def _read_at(f, offset: int, size: int) -> bytes:
+    f.seek(offset)
+    data = f.read(size)
+    if len(data) != size:
+        raise ValueError(f"unexpected end of file at offset {offset:#x}")
+    return data
+
+
+def _rva_to_offset(sections: bytes, rva: int) -> int:
+    for start in range(0, len(sections), 40):
+        virtual_address = _u32(sections, start + 12)
+        raw_size = _u32(sections, start + 16)
+        raw_pointer = _u32(sections, start + 20)
+        # NOTE: bound the match by SizeOfRawData, never by VirtualSize. An RVA inside a
+        # section's uninitialized tail has no bytes on disk, and a legacy VA-based
+        # delay-import descriptor lands outside every section. Both must raise here
+        # rather than yield an offset that reads unrelated bytes.
+        if raw_pointer and virtual_address <= rva < virtual_address + raw_size:
+            return raw_pointer + (rva - virtual_address)
+    raise ValueError(f"RVA {rva:#x} has no file-backed section")
+
+
+def _read_cstring(f, offset: int) -> str:
+    f.seek(offset)
+    out = bytearray()
+    while True:
+        chunk = f.read(64)
+        if not chunk:
+            raise ValueError("unterminated string in PE image")
+        end = chunk.find(b"\0")
+        if end >= 0:
+            out += chunk[:end]
+            return out.decode("ascii", "replace")
+        out += chunk
+
+
+def _descriptor_names(f, sections: bytes, rva: int, stride: int, name_field: int) -> list[str]:
+    names = []
+    offset = _rva_to_offset(sections, rva)
+    while True:
+        entry = _read_at(f, offset, stride)
+        if entry == b"\0" * stride:
+            return names
+        name_rva = _u32(entry, name_field)
+        if name_rva:
+            names.append(_read_cstring(f, _rva_to_offset(sections, name_rva)))
+        offset += stride
 
 
 def build_inventory(
