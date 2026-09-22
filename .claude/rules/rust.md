@@ -440,7 +440,11 @@ Not covered by this rule:
   where the name needs to be reachable, not by an enclosing type's
   ceiling.
 - Trait `impl` blocks, whose item visibility the trait dictates.
-- `#[cfg(test)] mod tests { ... }` contents.
+- Test-only code: `#[cfg(test)] mod tests { ... }` contents, and any
+  module gated behind `#[cfg(test)]` or a test-support feature
+  (`test_support.rs` and the like). Such code is unreachable from a
+  release build, so no spelling of its members' visibility is
+  load-bearing.
 
 ## Item ordering — private items last
 
@@ -464,7 +468,9 @@ Required:
 
 Not constrained:
 
-- `#[cfg(test)] mod tests { ... }` contents — test code is exempt.
+- Test-only code: `#[cfg(test)] mod tests { ... }` contents, and any
+  module gated behind `#[cfg(test)]` or a test-support feature
+  (`test_support.rs` and the like) — test code is exempt.
 - Trait `impl` blocks whose method order is dictated by the trait.
 - Struct field order — governed by layout / grouping concerns, not this
   rule.
@@ -511,7 +517,9 @@ Exceptions — these override the style rule:
   `commands` param so entity spawns flush before the components inserted
   on them) — order for correctness and record why in a `// NOTE:`.
 - Trait-method `impl`s whose signature is dictated by the trait.
-- `#[cfg(test)] mod tests { ... }` contents are exempt.
+- Test-only code is exempt: `#[cfg(test)] mod tests { ... }` contents,
+  and any module gated behind `#[cfg(test)]` or a test-support feature
+  (`test_support.rs` and the like).
 
 ## System optimization — gate with `run_if`, not in-body change checks
 
@@ -776,9 +784,10 @@ Forbidden:
 
 Exceptions:
 
-- `#[cfg(test)] mod tests { ... }` contents, `tests/` files, and
-  test-support code: `expect("what a valid value looks like")` is the
-  idiom there, and `assert!` is the point.
+- Test-only code: `#[cfg(test)] mod tests { ... }` contents, `tests/`
+  files, and any module gated behind `#[cfg(test)]` or a test-support
+  feature (`test_support.rs` and the like): `expect("what a valid value
+  looks like")` is the idiom there, and `assert!` is the point.
 - A condition that is impossible at that point — a literal, or a value
   the same function has already checked — may use `expect` with a message
   naming the invariant, justified with a `// NOTE:` and

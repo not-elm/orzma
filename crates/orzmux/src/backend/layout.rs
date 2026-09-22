@@ -12,6 +12,7 @@ const LEAF_MIN: GridSize = GridSize {
     rows: 1,
 };
 
+// TODO: make the drag minimum configurable.
 const MIN_DRAG_COLS: u16 = 4;
 const MIN_DRAG_ROWS: u16 = 2;
 

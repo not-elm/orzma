@@ -15,6 +15,6 @@ pub mod prelude {
         PaneTarget, RequestId, Separator, SplitId, SplitOrientation,
     };
     pub use crate::client::{OrzmuxClient, OrzmuxConfig};
-    pub use crate::error::*;
+    pub use crate::error::{OrzmuxError, OrzmuxResult};
     pub use crate::event_loop::OrzmuxCommand;
 }

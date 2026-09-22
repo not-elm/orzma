@@ -98,7 +98,7 @@ pub(crate) struct ShellFactory {
 impl ShellFactory {
     /// Resolves the shell now (config → `$SHELL` → the platform default)
     /// so every pane uses the same one.
-    pub(crate) fn new(
+    pub fn new(
         shell: Option<String>,
         scrollback_rows: usize,
         cursor_policy: CursorPolicy,

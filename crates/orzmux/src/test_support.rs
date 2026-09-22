@@ -127,12 +127,14 @@ impl Harness {
         }
     }
 
-    /// Sends one command and runs the loop's command + flush phases,
+    /// Sends one command and runs the loop's command and flush phases,
     /// so the events it generated are queued on the event channel.
     pub fn send(&mut self, command: OrzmuxCommand) -> CommandSeq {
         self.seq += 1;
         let seq = CommandSeq(self.seq);
-        let _ = self.commands.send((seq, command));
+        self.commands
+            .send((seq, command))
+            .expect("the harness holds the command receiver");
         self.event_loop.drain_commands();
         self.event_loop.flush_events();
         seq

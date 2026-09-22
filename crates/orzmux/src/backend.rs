@@ -723,7 +723,9 @@ impl Backend {
     /// resizes every pane whose applied geometry differs, flushes those
     /// panes, and emits their signals followed by one `Layout` carrying
     /// their frames. Everything after the focus update is a no-op without
-    /// geometry.
+    /// geometry. A pane whose resize is refused keeps its old size while
+    /// the remaining panes are still resized and the `Layout` still
+    /// publishes.
     fn publish_layout(&mut self) {
         self.refresh_focus();
         let Some(geometry) = self.geometry else {
@@ -877,28 +879,6 @@ pub fn log_refused_write(pane: PaneId, what: &'static str, err: &OrzmaTtyError, 
             tracing::error!(?pane, ?err, "{what} dropped: an earlier PTY write failed");
         }
         _ => tracing::warn!(?pane, ?err, "{what} dropped: an earlier PTY write failed"),
-    }
-}
-
-/// Logs a command the backend refused, at the level its failure earns.
-///
-/// An unresolvable target stays at debug — a pane closing while a
-/// command was in flight is ordinary. A refused PTY write goes through
-/// [`log_refused_write`] at `ERROR`, because a dropped keystroke is a
-/// user-visible loss.
-pub fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &OrzmuxError) {
-    match error {
-        OrzmuxError::UnresolvedTarget => {
-            tracing::debug!(
-                ?target,
-                command = name,
-                "pane command dropped: no such pane"
-            );
-        }
-        OrzmuxError::PtyWrite { pane, what, source } => {
-            log_refused_write(*pane, what, source, Level::ERROR);
-        }
-        _ => tracing::warn!(command = name, %error, "command refused"),
     }
 }
 

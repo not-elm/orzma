@@ -5,9 +5,9 @@
 use crate::backend::queue_sample::QueueSampler;
 use crate::backend::{
     Backend, CommandSeq, NewPaneAt, OrzmuxEvent, PaneDirection, PaneId, PaneTarget, RequestId,
-    SplitId, log_refused_command,
+    SplitId, log_refused_write,
 };
-use crate::error::OrzmuxResult;
+use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::prelude::{MouseReport, TerminalKey, TerminalModifiers, WheelInput};
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
@@ -17,6 +17,7 @@ use orzma_vt::prelude::{
 };
 use std::path::PathBuf;
 use std::time::Instant;
+use tracing::Level;
 
 /// A command the GUI sends to the backend.
 #[derive(Debug, Clone)]
@@ -304,7 +305,7 @@ impl EventLoop {
         }
     }
 
-    /// Pumps one pane and hands out whatever it produced.
+    /// Pumps one pane, queueing whatever it produced in the backend's outbox.
     #[cfg(test)]
     pub fn pump_pane(&mut self, id: PaneId) {
         self.backend.pump_pane(id);
@@ -350,6 +351,10 @@ impl EventLoop {
     /// Routes one command to the backend operation that applies it.
     fn dispatch(&mut self, command: OrzmuxCommand) -> OrzmuxResult {
         match command {
+            // NOTE: `handle_command` intercepts every `NewPane` before
+            // calling `dispatch`, so this arm never runs. Reaching it would
+            // mean a `NewPane` command was silently dropped instead of
+            // being routed to `Backend::open_pane`.
             OrzmuxCommand::NewPane { .. } => Ok(()),
             OrzmuxCommand::Resize { size, cell_px } => {
                 self.backend.resize(size, cell_px);
@@ -471,6 +476,33 @@ impl EventLoop {
                 "event and command queue peaks"
             );
         }
+    }
+}
+
+/// Logs a command the backend refused, at the level its failure earns.
+///
+/// An unresolvable target stays at debug — a pane closing while a
+/// command was in flight is ordinary. A refused PTY write goes through
+/// [`log_refused_write`] at `ERROR`, because a dropped keystroke is a
+/// user-visible loss.
+pub fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &OrzmuxError) {
+    match error {
+        OrzmuxError::UnresolvedTarget => match target {
+            Some(target) => {
+                tracing::debug!(
+                    ?target,
+                    command = name,
+                    "pane command dropped: no such pane"
+                );
+            }
+            None => {
+                tracing::debug!(command = name, "pane command dropped: no such pane");
+            }
+        },
+        OrzmuxError::PtyWrite { pane, what, source } => {
+            log_refused_write(*pane, what, source, Level::ERROR);
+        }
+        _ => tracing::warn!(command = name, %error, "command refused"),
     }
 }
 
