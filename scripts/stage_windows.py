@@ -78,6 +78,26 @@ def render_process_install_argv(version: str, triple: str, root: Path) -> list[s
             "--target", triple, "--root", str(root), "--locked", "--force"]
 
 
+def render_process_installed(tools_dir: Path, version: str, triple: str) -> bool:
+    """Whether cargo's install ledger under `tools_dir` records the render process at
+    `version` for `triple` and its binary is still on disk."""
+    exe = tools_dir / "bin" / f"{RENDER_PROCESS_BIN}.exe"
+    if not exe.is_file():
+        return False
+    try:
+        ledger = json.loads((tools_dir / ".crates2.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    installs = ledger.get("installs") if isinstance(ledger, dict) else None
+    if not isinstance(installs, dict):
+        return False
+    prefix = f"{RENDER_PROCESS_BIN} {version} "
+    return any(
+        key.startswith(prefix) and isinstance(entry, dict) and entry.get("target") == triple
+        for key, entry in installs.items()
+    )
+
+
 def cargo_env(base: dict[str, str]) -> dict[str, str]:
     env = dict(base)
     flags = env.get("RUSTFLAGS", "")
@@ -315,6 +335,7 @@ class StageConfig:
     out_dir: Path
     render_process_bin: Path | None
     skip_build: bool
+    rebuild_render_process: bool = False
 
     @property
     def stage_dir(self) -> Path:
@@ -336,6 +357,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
              "caller is then responsible for having built orzma.exe with "
              "--no-default-features",
     )
+    p.add_argument(
+        "--rebuild-render-process", action="store_true",
+        help=f"reinstall {RENDER_PROCESS_BIN} even when the pinned version is already "
+             "installed under the tools dir",
+    )
     p.add_argument("--out-dir", default=str(REPO_ROOT / "target" / "dist"))
     p.add_argument("--refresh-inventory", action="store_true",
                    help="rewrite build/windows/cef-inventory.json from --cef-dir and exit")
@@ -352,6 +378,7 @@ def resolve_config(args: argparse.Namespace) -> StageConfig:
             Path(args.render_process_bin).expanduser() if args.render_process_bin else None
         ),
         skip_build=args.skip_build,
+        rebuild_render_process=args.rebuild_render_process,
     )
 
 
@@ -378,6 +405,11 @@ def cargo_build(cfg: StageConfig) -> None:
     env = cargo_env(dict(os.environ))
     run(cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE), env=env)
     run(companion_cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE, COMPANION_BINS), env=env)
+    if not cfg.rebuild_render_process and render_process_installed(
+        cfg.tools_dir, RENDER_PROCESS_VERSION, TARGET_TRIPLE
+    ):
+        print(f"==> reusing {RENDER_PROCESS_BIN} {RENDER_PROCESS_VERSION} from {cfg.tools_dir}")
+        return
     run(render_process_install_argv(RENDER_PROCESS_VERSION, TARGET_TRIPLE, cfg.tools_dir), env=env)
 
 

@@ -215,6 +215,53 @@ class RenderProcessPin(unittest.TestCase):
         )
 
 
+class RenderProcessReuse(unittest.TestCase):
+    TRIPLE = "x86_64-pc-windows-msvc"
+
+    def _install(self, tools: Path, version: str = "0.13.0", target: str = TRIPLE,
+                 exe: bool = True) -> None:
+        key = f"bevy_cef_render_process {version} (registry+https://github.com/rust-lang/crates.io-index)"
+        _write(tools / ".crates2.json",
+               json.dumps({"installs": {key: {"target": target}}}).encode())
+        if exe:
+            _write(tools / "bin" / "bevy_cef_render_process.exe", b"MZ")
+
+    def test_a_matching_install_is_reused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._install(Path(tmp))
+            self.assertTrue(sw.render_process_installed(Path(tmp), "0.13.0", self.TRIPLE))
+
+    def test_a_different_version_is_reinstalled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._install(Path(tmp), version="0.12.0")
+            self.assertFalse(sw.render_process_installed(Path(tmp), "0.13.0", self.TRIPLE))
+
+    def test_a_version_sharing_a_prefix_is_not_mistaken_for_the_pin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._install(Path(tmp), version="0.13.01")
+            self.assertFalse(sw.render_process_installed(Path(tmp), "0.13.0", self.TRIPLE))
+
+    def test_a_different_target_is_reinstalled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._install(Path(tmp), target="aarch64-pc-windows-msvc")
+            self.assertFalse(sw.render_process_installed(Path(tmp), "0.13.0", self.TRIPLE))
+
+    def test_a_deleted_binary_is_reinstalled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._install(Path(tmp), exe=False)
+            self.assertFalse(sw.render_process_installed(Path(tmp), "0.13.0", self.TRIPLE))
+
+    def test_a_missing_or_corrupt_ledger_is_reinstalled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = Path(tmp)
+            _write(tools / "bin" / "bevy_cef_render_process.exe", b"MZ")
+            self.assertFalse(sw.render_process_installed(tools, "0.13.0", self.TRIPLE))
+            _write(tools / ".crates2.json", b"{not json")
+            self.assertFalse(sw.render_process_installed(tools, "0.13.0", self.TRIPLE))
+            _write(tools / ".crates2.json", b"[]")
+            self.assertFalse(sw.render_process_installed(tools, "0.13.0", self.TRIPLE))
+
+
 class LicenseRtf(unittest.TestCase):
     def test_wraps_text_in_rtf(self):
         out = sw.license_rtf("MIT License\n")
@@ -246,17 +293,19 @@ class StageConfigResolution(unittest.TestCase):
         self.assertEqual(cfg.tools_dir, sw.REPO_ROOT / "target" / "dist" / "tools")
         self.assertIsNone(cfg.render_process_bin)
         self.assertFalse(cfg.skip_build)
+        self.assertFalse(cfg.rebuild_render_process)
 
     def test_overrides_are_expanded(self):
         args = sw.build_arg_parser().parse_args(
             ["--version", "1.2.3", "--out-dir", "/tmp/out", "--cef-dir", "/tmp/cef",
-             "--render-process-bin", "/tmp/rp.exe", "--skip-build"]
+             "--render-process-bin", "/tmp/rp.exe", "--skip-build", "--rebuild-render-process"]
         )
         cfg = sw.resolve_config(args)
         self.assertEqual(cfg.out_dir, Path("/tmp/out"))
         self.assertEqual(cfg.cef_dir, Path("/tmp/cef"))
         self.assertEqual(cfg.render_process_bin, Path("/tmp/rp.exe"))
         self.assertTrue(cfg.skip_build)
+        self.assertTrue(cfg.rebuild_render_process)
 
 
 class StageCefTree(unittest.TestCase):
