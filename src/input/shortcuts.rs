@@ -585,8 +585,7 @@ pub(crate) fn is_modifier_key(keycode: KeyCode) -> bool {
 }
 
 /// Maps a config logical `Key` to the physical `KeyCode` orzma matches on.
-/// Returns `None` for keys with no stable physical mapping (`Plus`, `Other`,
-/// non-alphanumeric chars).
+/// Returns `None` for a key with no stable physical position.
 fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
     // NOTE: keep this accepted domain in lockstep with
     // `orzma_configs::shortcuts::Key::maps_to_physical_key`; a divergence lets
@@ -632,6 +631,8 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
             '9' => KeyCode::Digit9,
             '[' => KeyCode::BracketLeft,
             ']' => KeyCode::BracketRight,
+            '-' => KeyCode::Minus,
+            '=' => KeyCode::Equal,
             _ => return None,
         },
         ConfigKey::Escape => KeyCode::Escape,
@@ -643,7 +644,9 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
         ConfigKey::ArrowDown => KeyCode::ArrowDown,
         ConfigKey::ArrowLeft => KeyCode::ArrowLeft,
         ConfigKey::ArrowRight => KeyCode::ArrowRight,
-        ConfigKey::Plus => return None,
+        // TODO: map a numpad token to KeyCode::NumpadAdd / NumpadSubtract once
+        // the config grammar has one.
+        ConfigKey::Plus => KeyCode::Equal,
         ConfigKey::Other(_) => return None,
     })
 }
@@ -1159,9 +1162,13 @@ mod tests {
         assert_eq!(key_to_keycode(&ConfigKey::ArrowUp), Some(KeyCode::ArrowUp));
     }
 
+    /// Asserts that a key with no stable physical position resolves to `None`,
+    /// so the resolver warns and drops it.
+    ///
+    /// Case: a config binds an action to `F12`, which the keycode table does
+    /// not cover.
     #[test]
     fn unmappable_keys_are_none() {
-        assert_eq!(key_to_keycode(&ConfigKey::Plus), None);
         assert_eq!(key_to_keycode(&ConfigKey::Other("f12".into())), None);
     }
 
@@ -1534,5 +1541,25 @@ mod tests {
         };
         let resolved = resolved_shortcuts(config);
         assert_eq!(resolved.repeat_time, Duration::from_millis(250));
+    }
+
+    /// Asserts that the `Plus` token resolves to the unshifted `=` key, so a
+    /// binding written `Cmd+Plus` fires without Shift held.
+    ///
+    /// Case: the user presses the key labelled `=`/`+` with the zoom modifier
+    /// held, without also holding Shift.
+    #[test]
+    fn plus_token_maps_to_the_equal_key() {
+        assert_eq!(key_to_keycode(&ConfigKey::Plus), Some(KeyCode::Equal));
+    }
+
+    /// Asserts that the punctuation keys the zoom bindings need resolve to
+    /// their physical keys.
+    ///
+    /// Case: a config binds `Cmd+-` to zoom out and `Cmd+=` to zoom in.
+    #[test]
+    fn zoom_punctuation_maps_to_physical_keys() {
+        assert_eq!(key_to_keycode(&ConfigKey::Char('-')), Some(KeyCode::Minus));
+        assert_eq!(key_to_keycode(&ConfigKey::Char('=')), Some(KeyCode::Equal));
     }
 }

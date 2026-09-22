@@ -37,19 +37,12 @@ pub enum Key {
 impl Key {
     /// True when this logical key resolves to a physical `KeyCode` at runtime,
     /// so a leader bound to it can actually fire.
-    ///
-    /// # Invariants
-    ///
-    /// The accepted domain is exactly the keys that map to a physical
-    /// `KeyCode`: an ASCII-alphanumeric `Char`, `Char('[')`, `Char(']')`, and
-    /// every named key below. `Plus`, `Other`, and any other character do not
-    /// map.
     pub fn maps_to_physical_key(&self) -> bool {
         // NOTE: keep this domain in lockstep with `key_to_keycode`
         // (src/input/shortcuts.rs); a divergence silently disables the prefix
-        // table (see the invariant above).
+        // table.
         match self {
-            Key::Char(c) => c.is_ascii_alphanumeric() || matches!(c, '[' | ']'),
+            Key::Char(c) => c.is_ascii_alphanumeric() || matches!(c, '[' | ']' | '-' | '='),
             Key::Escape
             | Key::Space
             | Key::Enter
@@ -58,8 +51,9 @@ impl Key {
             | Key::ArrowUp
             | Key::ArrowDown
             | Key::ArrowLeft
-            | Key::ArrowRight => true,
-            Key::Plus | Key::Other(_) => false,
+            | Key::ArrowRight
+            | Key::Plus => true,
+            Key::Other(_) => false,
         }
     }
 
@@ -1043,12 +1037,16 @@ mod tests {
         assert!(Key::ArrowRight.maps_to_physical_key());
     }
 
+    /// Asserts that a key with no stable physical position reports no mapping,
+    /// so the resolver drops the binding instead of resolving it to the wrong
+    /// key.
+    ///
+    /// Case: a config binds an action to `F12` or to `.`, neither of which the
+    /// keycode table covers.
     #[test]
-    fn maps_to_physical_key_false_for_plus_other_and_punctuation() {
-        assert!(!Key::Plus.maps_to_physical_key());
+    fn maps_to_physical_key_false_for_other_and_unmapped_punctuation() {
         assert!(!Key::Other("f12".into()).maps_to_physical_key());
         assert!(!Key::Char('.').maps_to_physical_key());
-        assert!(!Key::Char('-').maps_to_physical_key());
     }
 
     #[test]
@@ -1788,5 +1786,17 @@ rename-window = "<Leader>d"
             s.repeat_time_ms, 0,
             "0 means repeat disabled; it must survive normalize()"
         );
+    }
+
+    /// Asserts that the keys the zoom bindings use report a physical mapping,
+    /// so the config layer does not warn them away as unreachable.
+    ///
+    /// Case: the shipped platform defaults bind `Cmd+Plus` / `Cmd+-` /
+    /// `Cmd+0` and must survive the resolution pass.
+    #[test]
+    fn zoom_keys_map_to_physical_keys() {
+        assert!(Key::Plus.maps_to_physical_key());
+        assert!(Key::Char('-').maps_to_physical_key());
+        assert!(Key::Char('=').maps_to_physical_key());
     }
 }
