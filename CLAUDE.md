@@ -15,7 +15,7 @@ The workspace root package is the one and only binary; library crates live under
   - `OrzmaWebviewPlugin` (from `bevy_orzma_webview`), `WindowTitlePlugin`.
   - The in-process webview feature — CEF render wiring, the control-socket listener, the `window.orzma` back-channel, the APC and control-socket `mount` / `unmount` verbs, and webviews — is aggregated under `OrzmaWebviewPlugin` (from `crates/bevy_orzma_webview`).
 
-  The root `Cargo.toml` depends on `bevy_orzma_webview` (path dep) and on `bevy_cef` (crates.io, `0.12`). A root `[features] debug` flag (forwarded through `bevy_orzma_webview/debug` to `bevy_cef/debug`) enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded webview; it is off by default (`cargo run --features debug`).
+  The root `Cargo.toml` depends on `bevy_orzma_webview` (path dep) and on `bevy_cef` (crates.io, `0.13`). A root `[features] debug` flag (forwarded through `bevy_orzma_webview/debug` to `bevy_cef/debug`) enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded webview; it is off by default (`cargo run --features debug`).
 
 - `crates/orzma_vt` (`orzma_vt`) — VT emulation: the `Vt` trait, `OrzmaVt`'s screen/grid/viewport model, CSI/OSC/APC dispatch, selection, vi-cursor state, and the palette/color types. No Bevy or PTY dependency; consumed by `orzma_tty`, `orzmux`, `bevy_orzmux`, and `bevy_orzma_tty_renderer`.
 - `crates/orzma_tty` (`orzma_tty`) — PTY-backed terminal core: spawns the login shell under a PTY (or, for tests, a PTY-less fake master) and drives an injected `Vt` implementor behind a frame coalescer. Exposes `OrzmaTty`, `SpawnOptions`, the key / mouse / paste input encoders, and the wheel router; no Bevy dependency.
@@ -31,7 +31,7 @@ The workspace root package is the one and only binary; library crates live under
   through `uds_windows` there and mounts webviews with the socket `mount` op,
   since ConPTY drops the APC verb. Linux is planned.
 
-In-process webview rendering is provided by the external `bevy_cef` crate (crates.io `0.12`, CEF v149 pinned to `149.3.0+149.0.6` in the justfile). Both the renderer and the helper render process come from `bevy_cef` / `export-cef-dir`; see `just setup-cef`.
+In-process webview rendering is provided by the external `bevy_cef` crate (crates.io `0.13`, CEF v152 pinned to `152.4.0+152.0.8` in the justfile). Both the renderer and the helper render process come from `bevy_cef` / `export-cef-dir`; see `just setup-cef`.
 
 ### TypeScript workspace (`pnpm-workspace.yaml`)
 

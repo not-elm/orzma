@@ -61,9 +61,6 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Threading",
 ] }
 
-[target.'cfg(windows)'.dev-dependencies]
-async-channel = "2"
-
 [lints]
 workspace = true
 
@@ -116,8 +113,8 @@ toml = "0.8"
 dirs = "5"
 unicode-width = "=0.2.0"
 open = "5"
-bevy_cef = "0.12"
-bevy_cef_core = "0.12"
+bevy_cef = "0.13"
+bevy_cef_core = "0.13"
 bitflags = "2"
 
 [workspace.lints.clippy]

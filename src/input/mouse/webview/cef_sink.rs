@@ -4,26 +4,13 @@ use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::MouseButton;
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
-#[cfg(not(target_os = "windows"))]
 use bevy_cef_core::prelude::Browsers;
-#[cfg(target_os = "windows")]
-use bevy_cef_core::prelude::BrowsersProxy;
 
 /// The sink every inline-webview pointer call is routed through. Each call
 /// is dropped while no sink is present.
 #[derive(SystemParam)]
 pub(in crate::input::mouse) struct CefMouse<'w> {
-    // NOTE: `bevy_cef` calls `init_non_send::<Browsers>()` only off Windows; on
-    // Windows CEF owns its own UI thread and its host is reachable only through
-    // `BrowsersProxy`. A pointer call written directly against `Browsers` still
-    // compiles on Windows and fails there at run time — a plain
-    // `NonSend<Browsers>` param panics when its system first runs, and an
-    // `Option<NonSend<Browsers>>` is always `None` and silently does nothing —
-    // so every CEF pointer call belongs on this type.
-    #[cfg(not(target_os = "windows"))]
     sink: Option<NonSend<'w, Browsers>>,
-    #[cfg(target_os = "windows")]
-    sink: Option<Res<'w, BrowsersProxy>>,
 }
 
 impl CefMouse<'_> {
@@ -64,15 +51,8 @@ impl CefMouse<'_> {
         position: Vec2,
         mouse_leave: bool,
     ) {
-        let Some(sink) = &self.sink else {
-            return;
-        };
-        #[cfg(not(target_os = "windows"))]
-        sink.send_mouse_move(webview, buttons, position, mouse_leave);
-        #[cfg(target_os = "windows")]
-        {
-            let held: Vec<MouseButton> = buttons.into_iter().copied().collect();
-            sink.send_mouse_move(webview, &held, position, mouse_leave);
+        if let Some(sink) = &self.sink {
+            sink.send_mouse_move(webview, buttons, position, mouse_leave);
         }
     }
 }
@@ -85,7 +65,7 @@ mod tests {
     /// Asserts that no call panics while no sink resource is present.
     ///
     /// Case: the sink resource is absent, as in a headless test app or a
-    /// frame before the CEF plugin has inserted its proxy.
+    /// frame before the CEF plugin has inserted `Browsers`.
     #[test]
     fn calls_without_a_sink_do_not_panic() {
         let mut app = App::new();
@@ -98,132 +78,5 @@ mod tests {
                 cef.send_mouse_move(&webview, [].iter(), Vec2::ZERO, false);
             })
             .expect("a one-shot system with only a CefMouse param runs");
-    }
-}
-
-#[cfg(all(test, target_os = "windows"))]
-mod windows_tests {
-    use super::*;
-    use async_channel::Receiver;
-    use bevy::ecs::system::RunSystemOnce;
-    use bevy_cef_core::prelude::CefCommand;
-
-    fn app_with_sink() -> (App, Entity, Receiver<CefCommand>) {
-        let (tx, rx) = async_channel::unbounded::<CefCommand>();
-        let mut app = App::new();
-        app.insert_resource(BrowsersProxy::new(tx));
-        let webview = app.world_mut().spawn_empty().id();
-        (app, webview, rx)
-    }
-
-    /// Asserts that a click is handed to the Windows command proxy as a
-    /// `SendMouseClick` carrying the entity, position, button, and phase.
-    ///
-    /// Case: the user presses the left button on a link inside a mounted
-    /// webview pane.
-    #[test]
-    fn a_click_reaches_the_windows_command_proxy() {
-        let (mut app, webview, rx) = app_with_sink();
-        app.world_mut()
-            .run_system_once(move |cef: CefMouse| {
-                cef.send_mouse_click(
-                    &webview,
-                    Vec2::new(12.0, 34.0),
-                    PointerButton::Primary,
-                    false,
-                );
-            })
-            .expect("a one-shot system with only a CefMouse param runs");
-        let command = rx.try_recv().expect("the proxy received one command");
-        assert!(
-            matches!(
-                command,
-                CefCommand::SendMouseClick {
-                    webview: target,
-                    position,
-                    button: PointerButton::Primary,
-                    mouse_up: false,
-                } if target == webview && position == Vec2::new(12.0, 34.0)
-            ),
-            "the click is forwarded verbatim to the CEF UI thread"
-        );
-    }
-
-    /// Asserts that pointer motion is handed to the proxy with every held
-    /// button, rather than a truncated subset.
-    ///
-    /// Case: the user drags a selection inside a webview with the left
-    /// button down.
-    #[test]
-    fn a_move_carries_every_held_button() {
-        let (mut app, webview, rx) = app_with_sink();
-        app.world_mut()
-            .run_system_once(move |cef: CefMouse| {
-                cef.send_mouse_move(
-                    &webview,
-                    [MouseButton::Left, MouseButton::Right].iter(),
-                    Vec2::new(5.0, 6.0),
-                    false,
-                );
-            })
-            .expect("a one-shot system with only a CefMouse param runs");
-        let command = rx.try_recv().expect("the proxy received one command");
-        assert!(
-            matches!(
-                command,
-                CefCommand::SendMouseMove { webview: target, ref buttons, position, mouse_leave: false }
-                    if target == webview
-                        && buttons.as_slice() == [MouseButton::Left, MouseButton::Right]
-                        && position == Vec2::new(5.0, 6.0)
-            ),
-            "both held buttons survive the slice repack"
-        );
-    }
-
-    /// Asserts that a focus request reaches the proxy as `SetFocus`.
-    ///
-    /// Case: a press lands inside an inline rect, so the page must take
-    /// keyboard focus before the click is delivered.
-    #[test]
-    fn a_focus_request_reaches_the_windows_command_proxy() {
-        let (mut app, webview, rx) = app_with_sink();
-        app.world_mut()
-            .run_system_once(move |cef: CefMouse| {
-                cef.set_focus(&webview, true);
-            })
-            .expect("a one-shot system with only a CefMouse param runs");
-        let command = rx.try_recv().expect("the proxy received one command");
-        assert!(
-            matches!(
-                command,
-                CefCommand::SetFocus { webview: target, focused: true } if target == webview
-            ),
-            "the focus request is forwarded to the CEF UI thread"
-        );
-    }
-
-    /// Asserts that a wheel notch reaches the proxy with its raw delta.
-    ///
-    /// Case: the user scrolls the wheel over a focused webview showing a
-    /// long document.
-    #[test]
-    fn a_wheel_notch_reaches_the_windows_command_proxy() {
-        let (mut app, webview, rx) = app_with_sink();
-        app.world_mut()
-            .run_system_once(move |cef: CefMouse| {
-                cef.send_mouse_wheel(&webview, Vec2::new(7.0, 8.0), Vec2::new(0.0, 120.0));
-            })
-            .expect("a one-shot system with only a CefMouse param runs");
-        let command = rx.try_recv().expect("the proxy received one command");
-        assert!(
-            matches!(
-                command,
-                CefCommand::SendMouseWheel { webview: target, position, delta }
-                    if target == webview
-                        && position == Vec2::new(7.0, 8.0)
-                        && delta == Vec2::new(0.0, 120.0)
-            ),
-            "the raw wheel delta is forwarded unscaled"
-        );
     }
 }

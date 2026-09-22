@@ -78,7 +78,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/orzma/cef
-          key: cef-${{ runner.os }}-149.3.0+149.0.6
+          key: cef-${{ runner.os }}-152.4.0+152.0.8
       - if: runner.os == 'Windows'
         shell: pwsh
         run: '"CEF_PATH=$env:USERPROFILE\.cache\orzma\cef" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV'
@@ -118,7 +118,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/orzma/cef
-          key: cef-${{ runner.os }}-149.3.0+149.0.6
+          key: cef-${{ runner.os }}-152.4.0+152.0.8
       - if: runner.os == 'Windows'
         shell: pwsh
         run: '"CEF_PATH=$env:USERPROFILE\.cache\orzma\cef" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV'
