@@ -146,6 +146,16 @@ licenses-refresh-cef:
 stage *args:
     if (-not $env:CEF_PATH) { $env:CEF_PATH = "{{ cef_cache_dir }}" }; python scripts/stage_windows.py {{ args }}
 
+# build the MSI from the staged tree (run `just stage` first)
+[windows]
+msi version="":
+    $v = "{{ version }}"; if (-not $v) { $v = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages | Where-Object { $_.name -eq "orzma" } | ForEach-Object { $_.version } }; $stage = (Resolve-Path "target/dist/stage").Path; $build = (Resolve-Path "build/windows").Path; dotnet wix build build/windows/orzma.wxs -ext WixToolset.UI.wixext -bindpath "stage=$stage" -bindpath "build=$build" -d "Version=$v" -wx -arch x64 -o "target/dist/orzma-$v-x64.msi"
+
+# run ICE validation on the built MSI
+[windows]
+msi-validate version="":
+    $v = "{{ version }}"; if (-not $v) { $v = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages | Where-Object { $_.name -eq "orzma" } | ForEach-Object { $_.version } }; dotnet wix msi validate "target/dist/orzma-$v-x64.msi"
+
 # regenerate build/windows/cef-inventory.json from the provisioned CEF dir (run on cef_version bump)
 [windows]
 cef-inventory-refresh:
