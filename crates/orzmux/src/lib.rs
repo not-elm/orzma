@@ -7,6 +7,8 @@ pub mod client;
 pub mod error;
 pub mod layout;
 pub mod protocol;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub mod prelude {
     pub use crate::client::{OrzmuxClient, OrzmuxConfig};

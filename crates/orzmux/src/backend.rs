@@ -98,7 +98,7 @@ impl Backend {
     /// are dropped with a debug log; `CopySelection` always answers,
     /// `SelectPane` always publishes a layout, and `SelectPaneDirection`
     /// publishes one only when the active pane moved.
-    fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
+    pub fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.processed = seq;
         match command {
             OrzmuxCommand::Resize { size, cell_px } => self.on_resize(size, cell_px),
@@ -225,7 +225,7 @@ impl Backend {
     /// Pumps one pane and forwards its output, pumping again up to
     /// `PUMP_ROUNDS` times while chunks remain queued; closes the pane on
     /// `ChildExit`.
-    pub(crate) fn pump_pane(&mut self, id: PaneId) {
+    pub fn pump_pane(&mut self, id: PaneId) {
         for _ in 0..PUMP_ROUNDS {
             let Some(pane) = self.panes.get_mut(&id) else {
                 return;
@@ -243,7 +243,7 @@ impl Backend {
     }
 
     /// Pumps every pane whose next deadline has passed.
-    pub(crate) fn service_deadlines(&mut self) {
+    pub fn service_deadlines(&mut self) {
         let now = Instant::now();
         let due: Vec<PaneId> = self
             .panes
@@ -254,6 +254,26 @@ impl Backend {
         for id in due {
             self.pump_pane(id);
         }
+    }
+
+    /// The pane layout tree.
+    pub fn tree(&self) -> &LayoutTree {
+        &self.tree
+    }
+
+    /// The live pane `id` names, or `None` when no pane carries it.
+    pub fn pane(&self, id: PaneId) -> Option<&Pane> {
+        self.panes.get(&id)
+    }
+
+    /// The id the next spawned pane takes.
+    pub fn next_pane_id(&self) -> u32 {
+        self.next_pane_id
+    }
+
+    /// Every live pane, in no fixed order.
+    pub fn panes(&self) -> impl Iterator<Item = (PaneId, &Pane)> {
+        self.panes.iter().map(|(id, pane)| (*id, pane))
     }
 
     /// Blocks until a command or a pane stream is ready, or the earliest
@@ -690,175 +710,21 @@ const PUMP_ROUNDS: usize = 4;
 mod tests {
     use super::*;
     use crate::prelude::{PaneDirection, SplitId, SplitOrientation};
-    use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
+    use crate::test_support::{FakePane, Harness};
+    use crossbeam_channel::{RecvTimeoutError, bounded};
     use orzma_tty::prelude::{
-        CellCoord, KeyText, OrzmaTty, OrzmaTtyError, ProtocolModifiers, TerminalKey,
-        TerminalModifiers, WheelInput, WheelModifiers,
+        CellCoord, KeyText, OrzmaTty, ProtocolModifiers, TerminalKey, TerminalModifiers,
+        WheelInput, WheelModifiers,
     };
-    use orzma_tty::test_support::{BlockingSink, CaptureSink, FailingSink};
+    use orzma_tty::test_support::BlockingSink;
     use orzma_vt::prelude::OrzmaVt;
     use std::collections::VecDeque;
-    use std::io::{Error as IoError, Write};
+    use std::io::Error as IoError;
     use std::path::Path;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
-
-    /// The test's ends of one spawned pane's streams.
-    struct FakePane {
-        chunk_tx: Sender<Vec<u8>>,
-        exit_tx: Sender<Option<i32>>,
-        sink: CaptureSink,
-    }
-
-    /// What the factory recorded, shared with the harness through `Arc`.
-    #[derive(Default)]
-    struct FactoryLog {
-        fail_next: AtomicBool,
-        /// Makes the next spawned pane's PTY writer fail every write.
-        fail_writes_next: AtomicBool,
-        /// When set, the next spawned pane's PTY writer is this sink, whose
-        /// writes block until it is released, as if the pane's application
-        /// stopped reading stdin.
-        block_writes_next: Mutex<Option<BlockingSink>>,
-        /// When set, every spawned pane's output stream starts with these
-        /// bytes, left unread until the test pumps the pane.
-        spawn_output: Mutex<Option<Vec<u8>>>,
-        sizes: Mutex<Vec<GridSize>>,
-        cwds: Mutex<Vec<Option<PathBuf>>>,
-    }
-
-    /// Spawns PTY-less terminals and hands the test their input ends.
-    struct FakeFactory {
-        spawned: Sender<FakePane>,
-        log: Arc<FactoryLog>,
-    }
-
-    impl PaneFactory for FakeFactory {
-        fn spawn(
-            &mut self,
-            size: GridSize,
-            _cell_px: CellPixels,
-            cwd: Option<PathBuf>,
-            _env: Vec<(EnvKey, EnvValue)>,
-        ) -> OrzmuxResult<OrzmaTty<OrzmaVt>> {
-            self.log.sizes.lock().unwrap().push(size);
-            self.log.cwds.lock().unwrap().push(cwd);
-            if self.log.fail_next.swap(false, Ordering::AcqRel) {
-                return Err(OrzmaTtyError::SpawnShell(anyhow::anyhow!("injected")).into());
-            }
-            let (chunk_tx, chunk_rx) = unbounded();
-            let (exit_tx, exit_rx) = unbounded();
-            if let Some(output) = self.log.spawn_output.lock().unwrap().clone() {
-                chunk_tx.send(output).unwrap();
-            }
-            let sink = CaptureSink::default();
-            let writer: Box<dyn Write + Send> =
-                if self.log.fail_writes_next.swap(false, Ordering::AcqRel) {
-                    Box::new(FailingSink)
-                } else if let Some(gate) = self.log.block_writes_next.lock().unwrap().take() {
-                    Box::new(gate)
-                } else {
-                    Box::new(sink.clone())
-                };
-            let tty = OrzmaTty::detached_with_channels(
-                OrzmaVt::new(size, 100),
-                size,
-                writer,
-                chunk_rx,
-                exit_rx,
-            )?;
-            let _ = self.spawned.send(FakePane {
-                chunk_tx,
-                exit_tx,
-                sink,
-            });
-            Ok(tty)
-        }
-    }
-
-    struct Harness {
-        backend: Backend,
-        events: Receiver<OrzmuxEvent>,
-        panes: Receiver<FakePane>,
-        log: Arc<FactoryLog>,
-        seq: u64,
-        /// Held so the command channel stays connected.
-        _commands: Sender<(CommandSeq, OrzmuxCommand)>,
-    }
-
-    impl Harness {
-        fn new() -> Self {
-            Self::with_wheel(WheelConfig::default())
-        }
-
-        /// A harness whose backend routes the wheel by `wheel`.
-        fn with_wheel(wheel: WheelConfig) -> Self {
-            let (spawned_tx, spawned_rx) = unbounded();
-            let (command_tx, command_rx) = unbounded();
-            let (event_tx, event_rx) = unbounded();
-            let log = Arc::new(FactoryLog::default());
-            let factory = FakeFactory {
-                spawned: spawned_tx,
-                log: Arc::clone(&log),
-            };
-            Self {
-                backend: Backend::new(Box::new(factory), command_rx, event_tx, wheel),
-                events: event_rx,
-                panes: spawned_rx,
-                log,
-                seq: 0,
-                _commands: command_tx,
-            }
-        }
-
-        fn send(&mut self, command: OrzmuxCommand) -> CommandSeq {
-            self.seq += 1;
-            let seq = CommandSeq(self.seq);
-            self.backend.handle_command(seq, command);
-            seq
-        }
-
-        fn drain(&self) -> VecDeque<OrzmuxEvent> {
-            self.events.try_iter().collect()
-        }
-
-        /// Waits until every live pane's queued PTY writes have been
-        /// written.
-        fn settle_writes(&self) {
-            for pane in self.backend.panes.values() {
-                pane.tty.settle_writes();
-            }
-        }
-
-        fn resize(&mut self, size: GridSize) {
-            self.send(OrzmuxCommand::Resize {
-                size,
-                cell_px: CellPixels {
-                    width: 8,
-                    height: 16,
-                },
-            });
-        }
-
-        fn open_root(&mut self) -> (PaneId, FakePane) {
-            self.resize(GridSize::new(80, 24).expect("a valid size"));
-            self.drain();
-            self.send(OrzmuxCommand::NewPane {
-                request: RequestId(1),
-                at: NewPaneAt::Root,
-                cwd: None,
-                env: vec![],
-            });
-            let events = self.drain();
-            let Some(OrzmuxEvent::PaneOpened { pane, .. }) = events.front() else {
-                panic!("expected PaneOpened, got {events:?}");
-            };
-            (*pane, self.panes.try_recv().expect("one spawned pane"))
-        }
-    }
 
     /// Asserts that `NewPane { Root }` before any `Resize` fails instead
     /// of guessing a size.
@@ -943,8 +809,8 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(h.backend.tree.panes(), vec![root]);
-        assert_eq!(h.backend.tree.active(), Some(root));
+        assert_eq!(h.backend.tree().panes(), vec![root]);
+        assert_eq!(h.backend.tree().active(), Some(root));
     }
 
     /// Asserts that each way a split can be refused reports its own
@@ -979,7 +845,7 @@ mod tests {
     fn a_split_whose_target_is_gone_is_refused_without_disturbing_the_tree() {
         let mut h = Harness::new();
         let (root, _pane) = h.open_root();
-        let next_id = h.backend.next_pane_id;
+        let next_id = h.backend.next_pane_id();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(2),
             at: NewPaneAt::Split {
@@ -998,8 +864,8 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(h.backend.tree.panes(), vec![root]);
-        assert_eq!(h.backend.next_pane_id, next_id);
+        assert_eq!(h.backend.tree().panes(), vec![root]);
+        assert_eq!(h.backend.next_pane_id(), next_id);
     }
 
     /// Asserts that a backend thread start-up failure's message includes
@@ -1047,7 +913,15 @@ mod tests {
         assert_eq!(frames.len(), 1, "only the shrunk root pane repaints");
         assert_eq!(frames[0].0, root);
         assert_eq!(frames[0].1.size, GridSize { cols: 40, rows: 24 });
-        assert_eq!(h.backend.panes[&root].tty.pty_size().cols, 40);
+        assert_eq!(
+            h.backend
+                .pane(root)
+                .expect("the root pane")
+                .tty
+                .pty_size()
+                .cols,
+            40
+        );
         assert_eq!(
             h.log.sizes.lock().unwrap().last(),
             Some(&GridSize { cols: 39, rows: 24 })
@@ -1085,8 +959,24 @@ mod tests {
             }
         );
         assert_eq!(frames.len(), 2);
-        assert_eq!(h.backend.panes[&root].tty.pty_size().cols, 60);
-        assert_eq!(h.backend.panes[&root].tty.pty_size().pixel_width, 60 * 8);
+        assert_eq!(
+            h.backend
+                .pane(root)
+                .expect("the root pane")
+                .tty
+                .pty_size()
+                .cols,
+            60
+        );
+        assert_eq!(
+            h.backend
+                .pane(root)
+                .expect("the root pane")
+                .tty
+                .pty_size()
+                .pixel_width,
+            60 * 8
+        );
     }
 
     /// Asserts that a pane whose coalescer deadline passed is pumped by
@@ -1237,7 +1127,10 @@ mod tests {
         assert_eq!(h.backend.next_wake_deadline(), report_deadline);
         pane.chunk_tx.send(b"x".to_vec()).unwrap();
         h.backend.pump_pane(root);
-        let pane_deadline = h.backend.panes[&root]
+        let pane_deadline = h
+            .backend
+            .pane(root)
+            .expect("the root pane")
             .tty
             .next_deadline(Instant::now())
             .expect("pending output arms the coalescer");
@@ -1287,7 +1180,13 @@ mod tests {
         h.backend.pump_pane(id);
         h.drain();
         assert!(
-            h.backend.panes[&id].tty.vt().modes().focus_in_out,
+            h.backend
+                .pane(id)
+                .expect("the pane")
+                .tty
+                .vt()
+                .modes()
+                .focus_in_out,
             "precondition: focus reporting is enabled"
         );
     }
@@ -1387,8 +1286,8 @@ mod tests {
                 reason: CloseReason::Killed
             } if *pane == new
         )));
-        assert_eq!(h.backend.tree.panes(), vec![root]);
-        assert_eq!(h.backend.tree.active(), Some(root));
+        assert_eq!(h.backend.tree().panes(), vec![root]);
+        assert_eq!(h.backend.tree().active(), Some(root));
     }
 
     /// Asserts that a kill flushes the pane's pending output before
@@ -1459,7 +1358,7 @@ mod tests {
             panic!("Layout must be last");
         };
         assert!(layout.panes.is_empty());
-        assert!(h.backend.tree.is_empty());
+        assert!(h.backend.tree().is_empty());
     }
 
     /// Asserts that keyboard input reaches the active pane's PTY and that
@@ -1581,7 +1480,11 @@ mod tests {
         h.backend.pump_pane(root);
         h.drain();
         assert_eq!(
-            h.backend.panes[&root].cwd().as_deref(),
+            h.backend
+                .pane(root)
+                .expect("the root pane")
+                .cwd()
+                .as_deref(),
             Some(project.path())
         );
         h.log.cwds.lock().unwrap().clear();
@@ -1803,12 +1706,16 @@ mod tests {
                 key: TerminalKey::Character(KeyText::new("z").unwrap()),
                 mods: TerminalModifiers::default(),
             });
-            h.backend.panes[&other].tty.settle_writes();
+            h.backend
+                .pane(other)
+                .expect("the other pane")
+                .tty
+                .settle_writes();
             let other_received = other_pane.sink.contents();
             h.send(OrzmuxCommand::KillPane {
                 pane: PaneTarget::Id(stuck),
             });
-            let _ = done_tx.send((other_received, !h.backend.panes.contains_key(&stuck)));
+            let _ = done_tx.send((other_received, h.backend.pane(stuck).is_none()));
         });
         let outcome = done_rx.recv_timeout(Duration::from_secs(10));
         gate.release();
