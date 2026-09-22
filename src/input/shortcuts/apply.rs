@@ -77,7 +77,8 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
 /// Applies one resolved `Shortcut`: vi-mode entry, paste (a direct paste
 /// fires only outside vi mode; a leader paste fires unconditionally), copy
 /// (fires unconditionally — vi mode included; no-selection is a no-op
-/// downstream), and the pane actions (select/split/kill, targeting the
+/// downstream), the font-size zoom (window-wide, so it fires even with no
+/// focused surface), and the pane actions (select/split/kill, targeting the
 /// backend's active pane). Window actions are no-ops; `Quit` and
 /// `ReleaseWebviewFocus` are handled upstream in `resolve_key_effects`.
 ///

@@ -37,10 +37,17 @@ pub enum Key {
 impl Key {
     /// True when this logical key resolves to a physical `KeyCode` at runtime,
     /// so a leader bound to it can actually fire.
+    ///
+    /// # Invariants
+    ///
+    /// The accepted domain is exactly the keys that map to a physical
+    /// `KeyCode`: an ASCII-alphanumeric `Char`, `Char('[')`, `Char(']')`,
+    /// `Char('-')`, `Char('=')`, `Plus`, and every named key below. `Other`
+    /// and any other character do not map.
     pub fn maps_to_physical_key(&self) -> bool {
         // NOTE: keep this domain in lockstep with `key_to_keycode`
         // (src/input/shortcuts.rs); a divergence silently disables the prefix
-        // table.
+        // table (see the invariant above).
         match self {
             Key::Char(c) => c.is_ascii_alphanumeric() || matches!(c, '[' | ']' | '-' | '='),
             Key::Escape
@@ -1400,8 +1407,9 @@ mod tests {
     }
 
     /// Asserts that the non-macOS default table binds the `Alt` tap leader and
-    /// `Ctrl` chords for paste and copy, and leaves `quit` unbound rather than
-    /// binding a chord the window manager already owns.
+    /// five direct `Ctrl` chords, leaves the other 29 actions leader-scoped,
+    /// and leaves `quit` unbound rather than binding a chord the window
+    /// manager already owns.
     ///
     /// Case: a user on Windows starts orzma with no config file at all, where
     /// no `Cmd` key exists to press.

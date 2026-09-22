@@ -399,11 +399,12 @@ layout. Key bindings match physical key positions, so on a non-US layout the
 ### Zoom and the window
 
 Zoom keeps the grid intact by resizing the OS window. Where that is not
-possible — fullscreen, maximized, a minimized window with no client area, a
-window manager that refuses the request, or a request clamped to the display —
-the column and row counts change instead, and the right edge of every
-scrollback row is truncated. Rows are not reflowed. Zooming out shrinks the
-window.
+possible — fullscreen, maximized, a window manager that refuses the request,
+or a request clamped to the display — the column and row counts change
+instead, and the right edge of every scrollback row is truncated. Rows are not
+reflowed. Zooming out shrinks the window. A window with no client area at all
+(a minimized window on Windows reports one) asks for no resize, since it shows
+no cells to preserve.
 
 A window manager that silently ignores the request, sending no resize event at
 all, is a different case: the column and row counts do not change and nothing
@@ -413,12 +414,17 @@ is made, which rules out the common causes.
 
 The clamp uses the monitor's full size, not its work area, because neither
 Bevy nor winit exposes one; a maximal request may end up partly behind the
-taskbar or dock.
+taskbar or dock. It bounds the requested size alone and not where the window
+sits, so a window already placed near the right or bottom edge of the display
+can still grow past that edge.
 
 Zoom scales the terminal grid only. A mounted webview's box grows and shrinks
 with the cell pitch, but the page inside keeps its own text size, so zooming
 in shows more of the page rather than a larger page. The vi-mode indicator
-keeps a fixed size.
+keeps a fixed size. While a webview owns the keyboard the direct zoom chords
+go to the page rather than to orzma: release focus first (`<Leader>u`), or
+rebind the zoom actions to `<Leader>`-scoped chords, which fire regardless of
+focus.
 
 The zoom factor is not remembered across restarts; set `[font] size` to change
 the size permanently.

@@ -29,11 +29,16 @@ const FONT_SIZE_PX: f32 = 12.0;
 /// The physical pixel font size the renderer rasterizes at for a logical
 /// size under the given scale factor.
 ///
-/// A product that rounds below one is raised to one.
+/// A product that rounds below one is raised to one, and a product that is
+/// not a number reports one rather than a zero-pixel face.
 pub fn physical_font_size(logical_px: f32, scale_factor: f32) -> u16 {
+    // NOTE: `f32::clamp` propagates NaN and `as u16` then saturates it to 0,
+    // which would hand the atlas a zero-pixel face. `max` returns the
+    // non-NaN operand, so it must come first.
     (logical_px * scale_factor)
         .round()
-        .clamp(1.0, f32::from(u16::MAX)) as u16
+        .max(1.0)
+        .min(f32::from(u16::MAX)) as u16
 }
 
 /// Logical (CSS) pixel font size for the terminal grid. Multiplied by the
@@ -901,5 +906,24 @@ mod tests {
     #[test]
     fn physical_font_size_never_returns_zero() {
         assert_eq!(physical_font_size(0.4, 1.0), 1);
+    }
+
+    /// Asserts that a product that is not a number reports one pixel rather
+    /// than saturating to a zero-pixel face.
+    ///
+    /// Case: a window reports a scale factor of zero while the configured
+    /// size is infinite, so the product is NaN.
+    #[test]
+    fn physical_font_size_maps_a_nan_product_to_one() {
+        assert_eq!(physical_font_size(f32::INFINITY, 0.0), 1);
+    }
+
+    /// Asserts that a product past the `u16` ceiling is clamped instead of
+    /// wrapping.
+    ///
+    /// Case: a very large configured font size on a high-DPI display.
+    #[test]
+    fn physical_font_size_clamps_to_the_u16_ceiling() {
+        assert_eq!(physical_font_size(100_000.0, 4.0), u16::MAX);
     }
 }

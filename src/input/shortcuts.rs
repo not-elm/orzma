@@ -1158,6 +1158,11 @@ mod tests {
         );
     }
 
+    /// Asserts that a leader-scoped binding resolves to its physical key and
+    /// carries its `<Leader:r>` repeat flag into the prefix table.
+    ///
+    /// Case: a user binds `kill-pane = "<Leader:r>d"` and holds the key to
+    /// close several panes in a row.
     #[test]
     fn from_chords_accepts_leader_chords() {
         let config = ConfigShortcuts {
@@ -1225,16 +1230,13 @@ mod tests {
     /// targets.
     #[test]
     fn default_bindings_resolve_to_every_direct_chord() {
-        let config = ConfigShortcuts::default();
-        let r = direct_only(&config);
-        let plus_bindings = config
-            .direct_chords()
-            .filter(|(_, chord, _)| chord.key == ConfigKey::Plus && !chord.modifiers.shift)
-            .count();
-        assert_eq!(
-            r.direct.len(),
-            config.direct_chords().count() + plus_bindings
-        );
+        // NOTE: drift guard — the count is pinned rather than re-derived from
+        // the production expansion rule, which would make a bug in that rule
+        // pass unnoticed. macOS binds six direct chords and the others five;
+        // the stock `Plus` binding adds one shifted twin either way.
+        let expected = if cfg!(target_os = "macos") { 7 } else { 6 };
+        let r = direct_only(&ConfigShortcuts::default());
+        assert_eq!(r.direct.len(), expected);
     }
 
     /// Asserts that every direct chord in the host default table resolves back
@@ -1283,6 +1285,11 @@ mod tests {
         );
     }
 
+    /// Asserts that the stock `release-webview-focus` binding resolves to the
+    /// unmodified `u` key in the prefix table.
+    ///
+    /// Case: a user with a focused webview taps the leader and presses `u` to
+    /// hand the keyboard back to the terminal.
     #[test]
     fn release_webview_focus_matches_default_leader_chord() {
         let resolved = OrzmaShortcut::from_chords(ConfigShortcuts::default().leader_chords());

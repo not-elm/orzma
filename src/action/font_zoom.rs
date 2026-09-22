@@ -191,7 +191,8 @@ fn may_resize(entity: Entity, window: &Window) -> bool {
 ///
 /// Both pitches are whole physical pixels; a zero on either axis is treated as
 /// one, so the division never divides by zero. `monitor` is the display's
-/// physical size, and `None` leaves the request unclamped.
+/// physical size; `None`, or a display reporting a zero axis, leaves the
+/// request unclamped.
 ///
 /// Returns `None` when `current` holds no whole cell on either axis, since
 /// there is no cell count to preserve.
@@ -208,13 +209,15 @@ fn requested_window_size(
         return None;
     }
     let want = cells * new;
-    Some(match monitor {
-        // NOTE: neither bevy_window::Monitor nor winit 0.30 exposes the work
-        // area, so the taskbar and dock are not excluded. The margin keeps a
-        // maximal request off the very edge of the display.
-        Some(monitor) => want.min(monitor * 95 / 100),
-        None => want,
-    })
+    // NOTE: neither bevy_window::Monitor nor winit 0.30 exposes the work
+    // area, so the taskbar and dock are not excluded. The margin keeps a
+    // maximal request off the very edge of the display. A display reporting a
+    // zero axis would otherwise clamp the request to a zero-size window.
+    Some(
+        monitor
+            .filter(|monitor| monitor.x > 0 && monitor.y > 0)
+            .map_or(want, |monitor| want.min(monitor * 95 / 100)),
+    )
 }
 
 #[cfg(test)]
@@ -413,6 +416,23 @@ mod tests {
         assert_eq!(want, Some(UVec2::new(80 * 20, 30 * 40)));
     }
 
+    /// Asserts that a display reporting a zero axis leaves the request
+    /// unclamped rather than collapsing the window to nothing.
+    ///
+    /// Case: the window sits on a monitor whose reported physical size has
+    /// not been filled in yet.
+    #[test]
+    fn a_degenerate_monitor_leaves_the_request_unclamped() {
+        let want = requested_window_size(
+            UVec2::new(800, 600),
+            (10, 20),
+            (20, 40),
+            Some(UVec2::new(0, 0)),
+        );
+
+        assert_eq!(want, Some(UVec2::new(80 * 20, 30 * 40)));
+    }
+
     /// Asserts that a degenerate pitch is treated as one pixel rather than
     /// dividing by zero.
     ///
@@ -448,6 +468,8 @@ mod tests {
 
     /// Builds an app with the zoom observer, one primary window of the given
     /// physical size, and a config whose `zoom_resizes_window` is `resizes`.
+    /// `TerminalFontSize` starts at the configured `[font] size`, matching
+    /// what the startup font bridge leaves it at in the real app.
     fn zoom_app(resizes: bool, width: u32, height: u32) -> (App, Entity) {
         let mut app = App::new();
         let configs = OrzmaConfigsResource(OrzmaConfigs {
@@ -457,10 +479,11 @@ mod tests {
             },
             ..OrzmaConfigs::default()
         });
+        let base_size = configs.font.size;
         app.add_plugins(MinimalPlugins)
             .add_plugins(FontZoomPlugin)
             .init_resource::<TerminalFonts>()
-            .init_resource::<TerminalFontSize>()
+            .insert_resource(TerminalFontSize(base_size))
             .insert_resource(configs);
         let mut window = Window {
             resolution: WindowResolution::new(width, height),
