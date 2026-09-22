@@ -226,6 +226,12 @@ impl OrzmaShortcut {
         }
         out
     }
+
+    /// True when this entry is bound to the physical chord
+    /// `(keycode, modifiers)`.
+    fn matches_physical(&self, keycode: KeyCode, modifiers: Modifiers) -> bool {
+        self.keycode == keycode && self.modifiers == modifiers
+    }
 }
 
 /// The startup-resolved orzma shortcut tables. Built once from
@@ -278,9 +284,7 @@ impl Shortcuts {
         keycode: KeyCode,
         mods: Modifiers,
     ) -> Option<&OrzmaShortcut> {
-        table
-            .iter()
-            .find(|s| s.keycode == keycode && s.modifiers == mods)
+        table.iter().find(|s| s.matches_physical(keycode, mods))
     }
 }
 
@@ -580,7 +584,7 @@ fn leader_shadows_physical_chord(
     let mut found = 0;
     for (keycode, modifiers) in chords.iter() {
         for entry in direct {
-            if entry.keycode == keycode && entry.modifiers == modifiers {
+            if entry.matches_physical(keycode, modifiers) {
                 found += 1;
                 tracing::warn!(
                     keycode = ?keycode,
@@ -602,7 +606,7 @@ fn duplicate_physical_chords(table: &[OrzmaShortcut]) -> usize {
     for (index, entry) in table.iter().enumerate() {
         let earlier = table[..index]
             .iter()
-            .any(|e| e.keycode == entry.keycode && e.modifiers == entry.modifiers);
+            .any(|e| e.matches_physical(entry.keycode, entry.modifiers));
         if earlier {
             found += 1;
             tracing::warn!(

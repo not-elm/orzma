@@ -18,32 +18,14 @@ const FACTORS: [f32; 12] = [
 /// The index of the unzoomed factor in [`FACTORS`].
 const BASE: usize = 4;
 
-/// Which way a zoom step moves along the factor ladder.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ZoomDirection {
-    /// Step to the next larger factor.
-    Increase,
-    /// Step to the next smaller factor.
-    Decrease,
-    /// Return to the unzoomed factor.
-    Reset,
-}
-
-impl From<FontSizeStep> for ZoomDirection {
-    fn from(step: FontSizeStep) -> Self {
-        match step {
-            FontSizeStep::Increase => Self::Increase,
-            FontSizeStep::Decrease => Self::Decrease,
-            FontSizeStep::Reset => Self::Reset,
-        }
-    }
-}
+/// The unzoomed factor.
+const BASE_FACTOR: f32 = FACTORS[BASE];
 
 /// The host asks for one zoom step on the terminal font size.
 #[derive(Event, Debug, Clone, Copy)]
 pub(crate) struct FontZoomAction {
     /// Which way to step.
-    pub direction: ZoomDirection,
+    pub direction: FontSizeStep,
 }
 
 /// The current zoom step, as an index into the factor ladder.
@@ -86,21 +68,20 @@ impl FontZoom {
     /// `BASE` without comparing pitches.
     pub fn next_index(
         &self,
-        direction: ZoomDirection,
+        direction: FontSizeStep,
         base_size: f32,
         current_pitch: (u16, u16),
         pitch_at: impl Fn(f32) -> (u16, u16),
     ) -> Option<(usize, (u16, u16))> {
         let step: isize = match direction {
-            ZoomDirection::Reset => {
+            FontSizeStep::Reset => {
                 if self.index == BASE {
                     return None;
                 }
-                let factor = *FACTORS.get(BASE)?;
-                return Some((BASE, pitch_at(base_size * factor)));
+                return Some((BASE, pitch_at(base_size * BASE_FACTOR)));
             }
-            ZoomDirection::Increase => 1,
-            ZoomDirection::Decrease => -1,
+            FontSizeStep::Increase => 1,
+            FontSizeStep::Decrease => -1,
         };
         let mut index = self.index;
         loop {
@@ -246,7 +227,7 @@ mod tests {
         let zoom = FontZoom::default();
         let current = distinct_pitch(11.25);
         assert_eq!(
-            zoom.next_index(ZoomDirection::Increase, 11.25, current, distinct_pitch),
+            zoom.next_index(FontSizeStep::Increase, 11.25, current, distinct_pitch),
             Some((5, distinct_pitch(11.25 * 1.1)))
         );
     }
@@ -260,7 +241,7 @@ mod tests {
         let zoom = FontZoom::default();
         let current = distinct_pitch(11.25);
         assert_eq!(
-            zoom.next_index(ZoomDirection::Decrease, 11.25, current, distinct_pitch),
+            zoom.next_index(FontSizeStep::Decrease, 11.25, current, distinct_pitch),
             Some((3, distinct_pitch(11.25 * 0.9)))
         );
     }
@@ -274,7 +255,7 @@ mod tests {
     fn a_rung_with_an_unchanged_cell_pitch_is_skipped() {
         let zoom = FontZoom::default();
         assert_eq!(
-            zoom.next_index(ZoomDirection::Increase, 11.25, (7, 15), constant_pitch),
+            zoom.next_index(FontSizeStep::Increase, 11.25, (7, 15), constant_pitch),
             None,
             "every rung reports the same pitch, so the ladder runs out"
         );
@@ -290,7 +271,7 @@ mod tests {
         zoom.set_index(FACTORS.len() - 1);
         let current = distinct_pitch(11.25 * zoom.factor());
         assert_eq!(
-            zoom.next_index(ZoomDirection::Increase, 11.25, current, distinct_pitch),
+            zoom.next_index(FontSizeStep::Increase, 11.25, current, distinct_pitch),
             None
         );
     }
@@ -304,7 +285,7 @@ mod tests {
         zoom.set_index(0);
         let current = distinct_pitch(11.25 * zoom.factor());
         assert_eq!(
-            zoom.next_index(ZoomDirection::Decrease, 11.25, current, distinct_pitch),
+            zoom.next_index(FontSizeStep::Decrease, 11.25, current, distinct_pitch),
             None
         );
     }
@@ -319,7 +300,7 @@ mod tests {
         zoom.set_index(FACTORS.len() - 1);
         let current = distinct_pitch(11.25 * zoom.factor());
         assert_eq!(
-            zoom.next_index(ZoomDirection::Reset, 11.25, current, distinct_pitch),
+            zoom.next_index(FontSizeStep::Reset, 11.25, current, distinct_pitch),
             Some((BASE, distinct_pitch(11.25)))
         );
     }
@@ -333,7 +314,7 @@ mod tests {
         let zoom = FontZoom::default();
         let current = distinct_pitch(11.25);
         assert_eq!(
-            zoom.next_index(ZoomDirection::Reset, 11.25, current, distinct_pitch),
+            zoom.next_index(FontSizeStep::Reset, 11.25, current, distinct_pitch),
             None
         );
     }
@@ -356,7 +337,7 @@ mod tests {
         let mut current = pitch_at(11.25 * zoom.factor());
         let mut steps = 0;
         while let Some((index, pitch)) =
-            zoom.next_index(ZoomDirection::Increase, 11.25, current, pitch_at)
+            zoom.next_index(FontSizeStep::Increase, 11.25, current, pitch_at)
         {
             assert!(
                 pitch.0 >= current.0 && pitch.1 >= current.1,
@@ -494,6 +475,22 @@ mod tests {
         (app, entity)
     }
 
+    /// Triggers one zoom-in step and reads back the window's physical size.
+    fn zoom_in(app: &mut App, entity: Entity) -> UVec2 {
+        app.world_mut().trigger(FontZoomAction {
+            direction: FontSizeStep::Increase,
+        });
+        app.update();
+        let window = app
+            .world()
+            .get::<Window>(entity)
+            .expect("the primary window");
+        UVec2::new(
+            window.resolution.physical_width(),
+            window.resolution.physical_height(),
+        )
+    }
+
     /// Asserts that a zoom step raises the terminal font size above the
     /// configured base.
     ///
@@ -504,7 +501,7 @@ mod tests {
         let before = app.world().resource::<TerminalFontSize>().0;
 
         app.world_mut().trigger(FontZoomAction {
-            direction: ZoomDirection::Increase,
+            direction: FontSizeStep::Increase,
         });
         app.update();
 
@@ -519,17 +516,7 @@ mod tests {
     fn the_window_is_untouched_when_the_config_disables_the_resize() {
         let (mut app, entity) = zoom_app(false, 1600, 1000);
 
-        app.world_mut().trigger(FontZoomAction {
-            direction: ZoomDirection::Increase,
-        });
-        app.update();
-
-        let window = app
-            .world()
-            .get::<Window>(entity)
-            .expect("the primary window");
-        assert_eq!(window.resolution.physical_width(), 1600);
-        assert_eq!(window.resolution.physical_height(), 1000);
+        assert_eq!(zoom_in(&mut app, entity), UVec2::new(1600, 1000));
     }
 
     /// Asserts that a zoom step grows the window when the config allows it,
@@ -540,17 +527,9 @@ mod tests {
     fn a_zoom_step_grows_the_window_when_enabled() {
         let (mut app, entity) = zoom_app(true, 1600, 1000);
 
-        app.world_mut().trigger(FontZoomAction {
-            direction: ZoomDirection::Increase,
-        });
-        app.update();
-
-        let window = app
-            .world()
-            .get::<Window>(entity)
-            .expect("the primary window");
-        assert!(window.resolution.physical_width() > 1600);
-        assert!(window.resolution.physical_height() > 1000);
+        let size = zoom_in(&mut app, entity);
+        assert!(size.x > 1600);
+        assert!(size.y > 1000);
     }
 
     /// Asserts that a fullscreen window is left untouched.
@@ -564,16 +543,7 @@ mod tests {
             .expect("the primary window")
             .mode = WindowMode::BorderlessFullscreen(MonitorSelection::Current);
 
-        app.world_mut().trigger(FontZoomAction {
-            direction: ZoomDirection::Increase,
-        });
-        app.update();
-
-        let window = app
-            .world()
-            .get::<Window>(entity)
-            .expect("the primary window");
-        assert_eq!(window.resolution.physical_width(), 1600);
+        assert_eq!(zoom_in(&mut app, entity), UVec2::new(1600, 1000));
     }
 
     /// Asserts that a window reporting no client area is left untouched
@@ -585,16 +555,6 @@ mod tests {
     fn a_minimized_window_is_untouched() {
         let (mut app, entity) = zoom_app(true, 0, 0);
 
-        app.world_mut().trigger(FontZoomAction {
-            direction: ZoomDirection::Increase,
-        });
-        app.update();
-
-        let window = app
-            .world()
-            .get::<Window>(entity)
-            .expect("the primary window");
-        assert_eq!(window.resolution.physical_width(), 0);
-        assert_eq!(window.resolution.physical_height(), 0);
+        assert_eq!(zoom_in(&mut app, entity), UVec2::ZERO);
     }
 }

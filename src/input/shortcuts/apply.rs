@@ -105,9 +105,7 @@ fn apply_shortcut(
             }
         }
         Shortcut::Copy => trigger_selection_copy(commands, focused),
-        Shortcut::FontSize(step) => commands.trigger(FontZoomAction {
-            direction: step.into(),
-        }),
+        Shortcut::FontSize(step) => commands.trigger(FontZoomAction { direction: step }),
         Shortcut::SelectPane(direction) => commands.trigger(RequestPaneAction {
             action: PaneAction::SelectDirection(pane_direction(direction)),
         }),
@@ -156,7 +154,6 @@ fn split_orientation(orientation: ConfigSplitOrientation) -> OrzmuxSplitOrientat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::font_zoom::ZoomDirection;
     use crate::action::terminal::TerminalSelectionCopy;
     use crate::input::shortcuts::Shortcuts;
     use crate::surface::OrzmaTerminal;
@@ -175,7 +172,7 @@ mod tests {
         paste: u32,
         copy: u32,
         vi_mode: u32,
-        font_zoom: Vec<ZoomDirection>,
+        font_zoom: Vec<FontSizeStep>,
     }
 
     /// Builds an app running the dispatcher as a bare per-message
@@ -513,10 +510,10 @@ mod tests {
     /// Case: the user presses the zoom-in, zoom-out and reset keys in turn.
     #[test]
     fn font_size_shortcuts_trigger_a_zoom_action() {
-        for (step, direction) in [
-            (FontSizeStep::Increase, ZoomDirection::Increase),
-            (FontSizeStep::Decrease, ZoomDirection::Decrease),
-            (FontSizeStep::Reset, ZoomDirection::Reset),
+        for step in [
+            FontSizeStep::Increase,
+            FontSizeStep::Decrease,
+            FontSizeStep::Reset,
         ] {
             let (mut app, term) = dispatch_app(Shortcuts::default());
             dispatch(
@@ -531,8 +528,8 @@ mod tests {
             let captured = app.world().resource::<Captured>();
             assert_eq!(
                 captured.font_zoom,
-                vec![direction],
-                "{step:?} must trigger {direction:?}"
+                vec![step],
+                "{step:?} must reach the zoom observer unchanged"
             );
         }
     }
