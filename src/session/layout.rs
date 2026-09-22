@@ -253,6 +253,63 @@ mod tests {
         );
     }
 
+    /// Asserts that a window with no terminal cells publishes no
+    /// `PaneGeometry`, and that restoring it to a valid size publishes
+    /// the geometry and sends one `Resize`.
+    ///
+    /// Case: the user launches orzma minimized on Windows, where the
+    /// platform reports a 0x0 client area from the first frame, and
+    /// then restores the window.
+    #[test]
+    fn a_window_with_no_cells_publishes_no_pane_geometry_until_restored() {
+        let (client, _events, commands) = OrzmuxClient::detached();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(LayoutPlugin)
+            .insert_resource(OrzmuxConnection(client))
+            .insert_resource(metrics(8.0, 16.0));
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: WindowResolution::new(0, 0),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        app.update();
+        app.update();
+        assert!(
+            !app.world().contains_resource::<PaneGeometry>(),
+            "a window with no cells publishes no PaneGeometry"
+        );
+        assert!(
+            commands.try_iter().next().is_none(),
+            "a window with no cells sends no Resize"
+        );
+
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("the primary window")
+            .resolution = WindowResolution::new(800, 600);
+        app.world_mut().write_message(WindowResized {
+            window,
+            width: 800.0,
+            height: 600.0,
+        });
+        app.update();
+        assert!(
+            app.world().contains_resource::<PaneGeometry>(),
+            "restoring the window publishes PaneGeometry"
+        );
+        assert_eq!(
+            commands.try_iter().count(),
+            1,
+            "restoring the window sends one Resize"
+        );
+    }
+
     /// Asserts that a window whose cell count is not a valid grid size
     /// sends no `Resize`.
     ///
