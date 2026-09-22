@@ -10,7 +10,7 @@ pub mod tabs;
 pub mod viewport;
 
 pub(crate) mod cursor;
-pub(crate) mod placements;
+pub(crate) mod webview_placements;
 
 mod state;
 
@@ -33,7 +33,6 @@ use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
-use crate::screen::placements::ScreenPlacements;
 use crate::screen::selection::{
     CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionGeometry, SelectionKind,
     SelectionRange,
@@ -41,6 +40,7 @@ use crate::screen::selection::{
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
 use crate::screen::viewport::{DisplayOffset, Scroll, Viewport, ViewportLine};
+use crate::screen::webview_placements::WebviewPlacements;
 use std::ops::Range;
 
 /// One terminal screen: cell storage plus the write cursor, updated
@@ -64,7 +64,7 @@ pub struct Screen {
     tabs: TabStops,
     character_set_mapping: CharacterSetMapping,
     checkpoint: Checkpoint,
-    placements: ScreenPlacements,
+    webview_placements: WebviewPlacements,
     selection: ScreenSelection,
 }
 
@@ -132,7 +132,7 @@ impl Screen {
             tabs: TabStops::default(),
             character_set_mapping: CharacterSetMapping::default(),
             checkpoint: Checkpoint::default(),
-            placements: ScreenPlacements::new(),
+            webview_placements: WebviewPlacements::new(),
             selection: ScreenSelection::new(),
         }
     }
@@ -1556,7 +1556,7 @@ impl Screen {
     pub fn mount_placement(&mut self, id: InstanceId, size: PlacementSize) {
         let anchor = self.cursor_line_id();
         let col = self.cursor_column();
-        self.placements.mount(id, anchor, col, size);
+        self.webview_placements.mount(id, anchor, col, size);
     }
 
     /// Registers a mount anchored at the visible row `row` and column
@@ -1572,35 +1572,35 @@ impl Screen {
         size: PlacementSize,
     ) {
         let anchor = self.grid.line_id(row);
-        self.placements.mount(id, anchor, column, size);
+        self.webview_placements.mount(id, anchor, column, size);
     }
 
     /// Drops the placement a re-mount replaces, without reporting it.
     pub fn supersede_placement(&mut self, id: InstanceId) {
-        self.placements.supersede(id);
+        self.webview_placements.supersede(id);
     }
 
     /// Removes the placement a client `unmount` addresses (`None`
     /// removes every placement on this screen); returns whether
     /// anything went.
     pub fn unmount_placement(&mut self, id: Option<InstanceId>) -> bool {
-        self.placements.unmount(id)
+        self.webview_placements.unmount(id)
     }
 
     /// Removes the placements the host names; returns whether anything
     /// went.
     pub fn remove_placements(&mut self, ids: &[InstanceId]) -> bool {
-        self.placements.remove_many(ids)
+        self.webview_placements.remove_many(ids)
     }
 
     /// Empties this screen's table and names every id it held.
     pub fn take_placements(&mut self) -> Vec<InstanceId> {
-        self.placements.take_all()
+        self.webview_placements.take_all()
     }
 
     /// Number of placements this screen holds.
     pub fn placement_count(&self) -> usize {
-        self.placements.len()
+        self.webview_placements.len()
     }
 
     /// Resolves this screen's placements into grid coordinates.
@@ -1610,14 +1610,14 @@ impl Screen {
     /// A placement this omits is exactly one [`Self::evict_lost_anchors`]
     /// evicts.
     pub fn project_placements(&self) -> Vec<AnchoredPlacement> {
-        self.placements
+        self.webview_placements
             .project(|anchor| self.grid.grid_line(anchor))
     }
 
     /// Drops the placements whose anchor row left this screen's grid and
     /// names them.
     pub fn evict_lost_anchors(&mut self) -> Vec<InstanceId> {
-        self.placements
+        self.webview_placements
             .evict_lost_anchors(|anchor| self.grid.grid_line(anchor))
     }
 }
