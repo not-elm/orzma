@@ -12,8 +12,6 @@
   ],
   "cef_version": "152.4.0+152.0.8",
   "optional": {
-    "dxcompiler.dll": "9313f24fb92baef806148b09451285eaf74af49467c3fa4360c83db17782a3ce",
-    "dxil.dll": "0850398076e9e30cd9ac28fc7d56a7d350ea755b0f3b6b2fc8f35a930888c845",
     "vk_swiftshader.dll": "953b79996c85c4ad518db35d31a497deee4b1421947196ad8b930b891907e7ac",
     "vk_swiftshader_icd.json": "32d83ff113fef532a9f97e0d2831f8656628ab1c99e9060f0332b1532839afd9",
     "vulkan-1.dll": "baa1160fd2e2eb33952918f69def90e69acd9e21b82b7c94529c6375ea10b603"
@@ -24,6 +22,8 @@
     "chrome_200_percent.pak": "207e9a611475f8747bea0e1d69fa7feb1fa9a317cd4cf8f55c20991188efda71",
     "chrome_elf.dll": "a32b58c541a454d9d2fada84ed9de68d953c06a80b93f7345cf9a622de64b698",
     "d3dcompiler_47.dll": "a05f99734f7c4822fefc12b367af21fd0976ed6608752fb1e1e80b6ece7ecbbb",
+    "dxcompiler.dll": "9313f24fb92baef806148b09451285eaf74af49467c3fa4360c83db17782a3ce",
+    "dxil.dll": "0850398076e9e30cd9ac28fc7d56a7d350ea755b0f3b6b2fc8f35a930888c845",
     "icudtl.dat": "9f48c7f9c7c94d516a14870707e910ab94d75ae640ff6842c4af53276cd26ebe",
     "libEGL.dll": "95a204fd838f5e4967fe8bedc1fb0fdef499f7d40bceaad7be801168ae9d22bf",
     "libGLESv2.dll": "1cb4b8d1c56ca992ad0714d96103f0138c68ae041f331331e289074510846231",

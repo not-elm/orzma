@@ -133,6 +133,13 @@ class PeImports(unittest.TestCase):
             ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"],
         )
 
+    def test_forbidden_crt_imports_flags_concrt_and_vcomp(self):
+        names = ["kernel32.dll", "concrt140.dll", "vcomp140.dll"]
+        self.assertEqual(
+            sw.forbidden_crt_imports(names),
+            ["concrt140.dll", "vcomp140.dll"],
+        )
+
     def test_forbidden_crt_imports_allows_ucrt(self):
         names = ["api-ms-win-crt-runtime-l1-1-0.dll", "kernel32.dll", "ucrtbase.dll"]
         self.assertEqual(sw.forbidden_crt_imports(names), [])

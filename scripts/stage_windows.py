@@ -29,6 +29,31 @@ CRT_STATIC_RUSTFLAGS = "-Ctarget-feature=+crt-static"
 
 RTF_HEADER = r"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fnil Segoe UI;}}\fs18"
 
+FORBIDDEN_CRT_IMPORTS = ("vcruntime140", "msvcp140", "concrt140", "vcomp140")
+
+IMPORT_DIRECTORY_INDEX = 1
+DELAY_IMPORT_DIRECTORY_INDEX = 13
+IMPORT_DESCRIPTOR = (IMPORT_DIRECTORY_INDEX, 20, 12)
+DELAY_IMPORT_DESCRIPTOR = (DELAY_IMPORT_DIRECTORY_INDEX, 32, 4)
+
+BUILD_ONLY_ENTRIES = {
+    "include",
+    "libcef_dll",
+    "cmake",
+    "CMakeLists.txt",
+    "libcef.lib",
+    "archive.json",
+    "bootstrap.exe",
+    "bootstrapc.exe",
+    "bevy_cef_render_process.exe",
+}
+
+OPTIONAL_ENTRIES = {
+    "vk_swiftshader.dll",
+    "vk_swiftshader_icd.json",
+    "vulkan-1.dll",
+}
+
 
 def cargo_build_argv(triple: str, profile: str) -> list[str]:
     return ["cargo", "build", "--profile", profile, "--target", triple,
@@ -118,12 +143,34 @@ def load_inventory(path: Path) -> dict:
         return json.load(f)
 
 
-FORBIDDEN_CRT_IMPORTS = ("vcruntime140", "msvcp140")
+def build_inventory(
+    cef_dir: Path, cef_version: str, build_only: set[str], optional_names: set[str]
+) -> dict:
+    required: dict[str, str] = {}
+    # NOTE: seed every optional name, present on this host or not. An entry that CEF
+    # ships only on some hosts would otherwise be missing from the inventory, and would
+    # then count as unclassified -- a hard staging failure -- wherever it does appear.
+    optional: dict[str, str | None] = {name: None for name in optional_names}
+    for rel in iter_cef_files(cef_dir, build_only):
+        if rel in optional_names:
+            optional[rel] = sha256_file(cef_dir / rel)
+        else:
+            required[rel] = sha256_file(cef_dir / rel)
+    return {
+        "cef_version": cef_version,
+        "build_only": sorted(build_only),
+        "required": required,
+        "optional": optional,
+    }
 
-IMPORT_DIRECTORY_INDEX = 1
-DELAY_IMPORT_DIRECTORY_INDEX = 13
-IMPORT_DESCRIPTOR = (IMPORT_DIRECTORY_INDEX, 20, 12)
-DELAY_IMPORT_DESCRIPTOR = (DELAY_IMPORT_DIRECTORY_INDEX, 32, 4)
+
+def refresh_inventory(cef_dir: Path, cef_version: str, out_path: Path) -> None:
+    inventory = build_inventory(cef_dir, cef_version, BUILD_ONLY_ENTRIES, OPTIONAL_ENTRIES)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(inventory, f, indent=2, sort_keys=True)
+        f.write("\n")
+    print(f"==> wrote {out_path} ({len(inventory['required'])} required files)")
 
 
 def pe_imported_dlls(path: Path) -> list[str]:
@@ -221,57 +268,6 @@ def _descriptor_names(f, sections: bytes, rva: int, stride: int, name_field: int
         offset += stride
 
 
-def build_inventory(
-    cef_dir: Path, cef_version: str, build_only: set[str], optional_names: set[str]
-) -> dict:
-    required: dict[str, str] = {}
-    # NOTE: seed every optional name, present on this host or not. An entry that CEF
-    # ships only on some hosts would otherwise be missing from the inventory, and would
-    # then count as unclassified -- a hard staging failure -- wherever it does appear.
-    optional: dict[str, str | None] = {name: None for name in optional_names}
-    for rel in iter_cef_files(cef_dir, build_only):
-        if rel in optional_names:
-            optional[rel] = sha256_file(cef_dir / rel)
-        else:
-            required[rel] = sha256_file(cef_dir / rel)
-    return {
-        "cef_version": cef_version,
-        "build_only": sorted(build_only),
-        "required": required,
-        "optional": optional,
-    }
-
-
-BUILD_ONLY_ENTRIES = {
-    "include",
-    "libcef_dll",
-    "cmake",
-    "CMakeLists.txt",
-    "libcef.lib",
-    "archive.json",
-    "bootstrap.exe",
-    "bootstrapc.exe",
-    "bevy_cef_render_process.exe",
-}
-
-OPTIONAL_ENTRIES = {
-    "vk_swiftshader.dll",
-    "vk_swiftshader_icd.json",
-    "vulkan-1.dll",
-    "dxil.dll",
-    "dxcompiler.dll",
-}
-
-
-def refresh_inventory(cef_dir: Path, cef_version: str, out_path: Path) -> None:
-    inventory = build_inventory(cef_dir, cef_version, BUILD_ONLY_ENTRIES, OPTIONAL_ENTRIES)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8", newline="\n") as f:
-        json.dump(inventory, f, indent=2, sort_keys=True)
-        f.write("\n")
-    print(f"==> wrote {out_path} ({len(inventory['required'])} required files)")
-
-
 @dataclass
 class StageConfig:
     version: str
@@ -294,7 +290,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--version")
     p.add_argument("--cef-dir", default="~/.local/share/cef")
     p.add_argument("--render-process-bin")
-    p.add_argument("--skip-build", action="store_true")
+    p.add_argument(
+        "--skip-build", action="store_true",
+        help="reuse already-built binaries instead of running cargo build; the "
+             "caller is then responsible for having built orzma.exe with "
+             "--no-default-features",
+    )
     p.add_argument("--out-dir", default=str(REPO_ROOT / "target" / "dist"))
     p.add_argument("--refresh-inventory", action="store_true",
                    help="rewrite build/windows/cef-inventory.json from --cef-dir and exit")
@@ -336,7 +337,6 @@ def verify_orzmd_web_assets(assets_dir: Path | None = None) -> None:
 def cargo_build(cfg: StageConfig) -> None:
     env = cargo_env(dict(os.environ))
     run(cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE), env=env)
-    verify_orzmd_web_assets()
     run(companion_cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE, COMPANION_BINS), env=env)
     run(render_process_install_argv(RENDER_PROCESS_VERSION, TARGET_TRIPLE, cfg.tools_dir), env=env)
 
@@ -392,7 +392,7 @@ def binary_sources(cfg: StageConfig) -> dict[str, Path]:
 def stage_binaries(cfg: StageConfig) -> None:
     for name, src in binary_sources(cfg).items():
         if not src.is_file():
-            raise SystemExit(f"binary not found: {src} (build first or pass --skip-build off)")
+            raise SystemExit(f"binary not found: {src} (build first, or omit --skip-build)")
         shutil.copy2(src, cfg.stage_dir / name)
         print(f"==> staged {name}")
 
@@ -421,7 +421,7 @@ def verify_crt(cfg: StageConfig) -> None:
             "dynamic CRT dependency found; the build did not use "
             f"{CRT_STATIC_RUSTFLAGS}: {offenders}"
         )
-    print("==> CRT check passed (no vcruntime140/msvcp140 imports)")
+    print(f"==> CRT check passed (no {'/'.join(FORBIDDEN_CRT_IMPORTS)} imports)")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -432,6 +432,7 @@ def main(argv: list[str] | None = None) -> None:
         refresh_inventory(Path(args.cef_dir).expanduser(), args.cef_version, INVENTORY_PATH)
         return
     cfg = resolve_config(args)
+    verify_orzmd_web_assets()
     if cfg.stage_dir.exists():
         shutil.rmtree(cfg.stage_dir)
     cfg.stage_dir.mkdir(parents=True)
