@@ -65,6 +65,20 @@ impl ResolvedViModeKeys {
         };
         self.0.get(&key).copied()
     }
+
+    /// Test-only constructor: a table holding exactly the given `Ctrl+`
+    /// physical-key bindings.
+    #[cfg(test)]
+    pub(crate) fn test_with_ctrl_keys(
+        entries: impl IntoIterator<Item = (KeyCode, ViModeAction)>,
+    ) -> Self {
+        ResolvedViModeKeys(
+            entries
+                .into_iter()
+                .map(|(key_code, action)| (ResolvedKey::Ctrl(key_code), action))
+                .collect(),
+        )
+    }
 }
 
 /// Fires the VI event for a matched action on `entity`, converting the

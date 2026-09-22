@@ -1165,24 +1165,36 @@ mod tests {
         assert_eq!(key_to_keycode(&ConfigKey::Other("f12".into())), None);
     }
 
+    /// Asserts that resolving the host default table yields one entry per
+    /// bound direct chord, dropping none of them.
+    ///
+    /// Case: orzma starts with no config file, on whichever platform the build
+    /// targets.
     #[test]
-    fn default_bindings_resolve_to_three_direct() {
-        let r = direct_only(&ConfigShortcuts::default());
-        assert_eq!(r.direct.len(), 3);
+    fn default_bindings_resolve_to_every_direct_chord() {
+        let config = ConfigShortcuts::default();
+        let r = direct_only(&config);
+        assert_eq!(r.direct.len(), config.direct_chords().count());
     }
 
+    /// Asserts that every direct chord in the host default table resolves back
+    /// to its own action through `match_gui_action`.
+    ///
+    /// Case: a user presses a stock direct chord — `Ctrl+V` on Windows,
+    /// `Cmd+V` on macOS — on a fresh install.
     #[test]
     fn match_gui_action_resolves_defaults() {
-        let r = direct_only(&ConfigShortcuts::default());
-        assert_eq!(
-            r.match_gui_action(KeyCode::KeyQ, mods(false, false, false, true)),
-            Some(Shortcut::Quit)
-        );
-        assert_eq!(
-            r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
-            Some(Shortcut::Paste),
-            "paste is a direct Cmd+V chord by default"
-        );
+        let config = ConfigShortcuts::default();
+        let r = direct_only(&config);
+        for (label, chord, action) in config.direct_chords() {
+            let keycode =
+                key_to_keycode(&chord.key).expect("a default chord maps to a physical key");
+            assert_eq!(
+                r.match_gui_action(keycode, chord.modifiers),
+                Some(action),
+                "the default chord for {label:?} ({chord}) must resolve to its own action"
+            );
+        }
     }
 
     #[test]
@@ -1444,11 +1456,11 @@ mod tests {
     }
 
     #[test]
-    fn build_shortcuts_leaves_default_cmd_leader_inert_without_leader_bindings() {
+    fn build_shortcuts_leaves_default_tap_leader_inert_without_leader_bindings() {
         // NOTE: `ConfigShortcuts::default()` ships 29 leader-scoped actions
-        // (plus the direct `paste`/`quit` chords), so `OrzmaConfigs::default()`
-        // alone no longer exercises the inert-leader path; every leader binding
-        // is explicitly unbound here to reproduce a config with no leader
+        // (alongside the direct chords), so `OrzmaConfigs::default()` alone no
+        // longer exercises the inert-leader path; every leader binding is
+        // explicitly unbound here to reproduce a config with no leader
         // bindings at all.
         let config = OrzmaConfigs {
             shortcuts: ConfigShortcuts {
@@ -1492,7 +1504,7 @@ mod tests {
     }
 
     #[test]
-    fn build_shortcuts_activates_default_cmd_leader_with_a_leader_binding() {
+    fn build_shortcuts_activates_default_tap_leader_with_a_leader_binding() {
         let config = OrzmaConfigs {
             shortcuts: ConfigShortcuts {
                 kill_pane: Some(Binding::Leader {
@@ -1503,8 +1515,12 @@ mod tests {
             },
             ..Default::default()
         };
+        let expected = match ConfigShortcuts::default().leader {
+            Some(Leader::ModifierTap(modifier)) => Some(modifier),
+            _ => None,
+        };
         let resolved = resolved_shortcuts(config);
-        assert_eq!(resolved.tap_modifier(), Some(TapModifier::Meta));
+        assert_eq!(resolved.tap_modifier(), expected);
     }
 
     #[test]

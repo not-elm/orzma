@@ -18,7 +18,7 @@ use std::time::Duration;
 pub(crate) enum KeyEffect {
     /// Run a bound `Shortcut`. `via_leader` distinguishes a leader-scoped
     /// firing from a direct GUI chord — appliers suppress a different subset
-    /// of each (e.g. a direct `Paste` fires in vi mode, a leader `Paste`
+    /// of each (e.g. a leader `Paste` fires in vi mode, a direct `Paste`
     /// does not).
     Shortcut {
         /// The action to run.
@@ -54,10 +54,33 @@ pub(crate) struct BatchContext<'a> {
     pub(crate) now: Duration,
     /// Whether the focused terminal is currently in vi mode.
     pub(crate) in_vi_mode: bool,
+    /// Whether the focused terminal currently holds a selection.
+    pub(crate) has_selection: bool,
     /// Whether a webview currently owns the keyboard.
     pub(crate) webview_focused: bool,
     /// The focused webview's declared forward-key chords (empty when none).
     pub(crate) forward_chords: &'a [NormalizedChord],
+}
+
+impl BatchContext<'_> {
+    /// Whether a direct chord bound to `action` claims the key, rather than
+    /// leaving it to vi-mode resolution or to the PTY.
+    ///
+    /// A direct `Copy` on a Ctrl-only chord claims the key only while a
+    /// selection exists, so `Ctrl+C` still reaches the PTY as `0x03` with
+    /// nothing to copy. A direct `Paste` does not claim the key in vi mode,
+    /// where the action is inert.
+    fn claims_direct_chord(&self, action: Shortcut) -> bool {
+        match action {
+            Shortcut::Copy => {
+                let ctrl_only =
+                    self.mods.ctrl && !self.mods.shift && !self.mods.alt && !self.mods.meta;
+                self.has_selection || !ctrl_only
+            }
+            Shortcut::Paste => !self.in_vi_mode,
+            _ => true,
+        }
+    }
 }
 
 /// The result of classifying one frame's pressed keys: the per-key
@@ -146,6 +169,7 @@ pub(crate) fn classify_key_batch<'a>(
                 LeaderStep::RunAction(action) => Some((action, true)),
                 LeaderStep::Passthrough => shortcuts
                     .match_gui_action(ev.key_code, ctx.mods)
+                    .filter(|action| ctx.claims_direct_chord(*action))
                     .map(|action| (action, false)),
             };
         if let Some((action, via_leader)) = action {
@@ -232,6 +256,7 @@ mod tests {
         test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
     };
     use bevy::prelude::Entity;
+    use orzma_configs::vi_mode::ViModeSelection;
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -273,6 +298,7 @@ mod tests {
             mods,
             now,
             in_vi_mode: false,
+            has_selection: false,
             webview_focused: false,
             forward_chords: &[],
         }
@@ -833,29 +859,148 @@ mod tests {
         assert_eq!(effects, vec![], "Cmd+J must not reach the terminal");
     }
 
+    /// Asserts that a direct paste chord is left unclaimed in vi mode rather
+    /// than swallowed, so the key reaches the `[vi-mode]` table instead of
+    /// dying on an action that is inert there.
+    ///
+    /// Case: a Windows user opens vi mode and presses `Ctrl+V`, which is both
+    /// the stock paste chord and vi mode's rectangular-selection toggle.
     #[test]
-    fn direct_paste_suppressed_in_vi_mode() {
+    fn direct_paste_unclaimed_in_vi_mode() {
         let sc = test_shortcuts_with_direct_chord(
             KeyCode::KeyV,
-            mods(false, false, false, true),
+            mods(true, false, false, false),
             Shortcut::Paste,
         );
-        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let resolved_vi_mode = ResolvedViModeKeys::test_with_ctrl_keys([(
+            KeyCode::KeyV,
+            ViModeAction::Selection(ViModeSelection::Rect),
+        )]);
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyV, Key::Character("v".into()))];
-        let mut c = ctx(mods(false, false, false, true), ms(0));
+        let mut c = ctx(mods(true, false, false, false), ms(0));
         c.in_vi_mode = true;
         let effects = run(&mut phase, &sc, &resolved_vi_mode, &events, c);
         assert_eq!(
             effects,
+            vec![KeyEffect::ViMode(ViModeAction::Selection(
+                ViModeSelection::Rect
+            ))],
+            "a direct paste chord must fall through to vi-mode resolution"
+        );
+    }
+
+    /// Asserts that a Ctrl-only copy chord claims the key while a selection
+    /// exists.
+    ///
+    /// Case: a Windows user drags out a selection and presses `Ctrl+C`.
+    #[test]
+    fn ctrl_copy_claims_key_with_selection() {
+        let sc = test_shortcuts_with_direct_chord(
+            KeyCode::KeyC,
+            mods(true, false, false, false),
+            Shortcut::Copy,
+        );
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let events = [press(KeyCode::KeyC, Key::Character("c".into()))];
+        let mut c = ctx(mods(true, false, false, false), ms(0));
+        c.has_selection = true;
+        let effects = run(&mut phase, &sc, &resolved_vi_mode, &events, c);
+        assert_eq!(
+            effects,
             vec![KeyEffect::Shortcut {
-                action: Shortcut::Paste,
+                action: Shortcut::Copy,
                 via_leader: false,
+            }]
+        );
+    }
+
+    /// Asserts that a Ctrl-only copy chord types instead of copying when no
+    /// selection exists, so the PTY still receives the interrupt byte.
+    ///
+    /// Case: a Windows user presses `Ctrl+C` to interrupt a running command
+    /// with nothing selected.
+    #[test]
+    fn ctrl_copy_falls_through_to_pty_without_selection() {
+        let sc = test_shortcuts_with_direct_chord(
+            KeyCode::KeyC,
+            mods(true, false, false, false),
+            Shortcut::Copy,
+        );
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let events = [press(KeyCode::KeyC, Key::Character("c".into()))];
+        let effects = run(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            ctx(mods(true, false, false, false), ms(0)),
+        );
+        assert_eq!(
+            effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("c".into()),
+                key_code: KeyCode::KeyC,
             }],
-            "the decider still emits the direct paste action; apply_shortcuts \
-             is what suppresses it in vi mode (via `via_leader || \
-             !in_vi_mode`), so a direct paste never fires while vi mode is \
-             active"
+            "Ctrl+C with no selection must reach the PTY"
+        );
+    }
+
+    /// Asserts that a copy chord carrying `meta` claims the key even with no
+    /// selection, so the macOS `Cmd+C` default never types into the PTY.
+    ///
+    /// Case: a macOS user presses `Cmd+C` with nothing selected.
+    #[test]
+    fn meta_copy_claims_key_without_selection() {
+        let sc = test_shortcuts_with_direct_chord(
+            KeyCode::KeyC,
+            mods(false, false, false, true),
+            Shortcut::Copy,
+        );
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let events = [press(KeyCode::KeyC, Key::Character("c".into()))];
+        let effects = run(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            ctx(mods(false, false, false, true), ms(0)),
+        );
+        assert_eq!(
+            effects,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::Copy,
+                via_leader: false,
+            }]
+        );
+    }
+
+    /// Asserts that a leader-scoped copy binding claims the key with no
+    /// selection, since no control byte is at stake behind the leader.
+    ///
+    /// Case: a user taps the leader then the copy key with nothing selected.
+    #[test]
+    fn leader_copy_claims_key_without_selection() {
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyC, Shortcut::Copy, Duration::ZERO);
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let mut phase = LeaderPhase::Pending;
+        let events = [press(KeyCode::KeyC, Key::Character("c".into()))];
+        let effects = run(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            ctx(no_mods(), ms(0)),
+        );
+        assert_eq!(
+            effects,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::Copy,
+                via_leader: true,
+            }]
         );
     }
 
