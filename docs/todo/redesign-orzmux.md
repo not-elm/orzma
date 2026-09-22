@@ -148,7 +148,7 @@ private な `Backend::spawn_pane`（`backend.rs:423`）とも紛らわしいた�
 の「Error handling — return `Result`, don't assert or unwrap」。回復できない境界が
 ログに落とす、という形）。境界は `handle_command` で、現行の `resolve_or_log` の
 debug 行と `log_refused_write` の呼び分けを 1 箇所に集約した `log_refused_command` が
-引き受ける。失敗しうる 12 個が `OrzmuxResult`、残り 6 個（`resize` /
+引き受ける。失敗しうる 13 個が `OrzmuxResult`、残り 5 個（`resize` /
 `select_pane_direction` / `window_focus` / `resize_split` / `copy_selection`）は `()`。
 常に `Ok` を返す `OrzmuxResult` は書かない。
 
