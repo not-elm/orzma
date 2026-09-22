@@ -5,7 +5,7 @@
 pub(crate) mod backend;
 pub mod client;
 pub mod error;
-pub mod protocol;
+pub(crate) mod event_loop;
 #[cfg(test)]
 pub(crate) mod test_support;
 
@@ -16,5 +16,5 @@ pub mod prelude {
     };
     pub use crate::client::{OrzmuxClient, OrzmuxConfig};
     pub use crate::error::*;
-    pub use crate::protocol::OrzmuxCommand;
+    pub use crate::event_loop::OrzmuxCommand;
 }

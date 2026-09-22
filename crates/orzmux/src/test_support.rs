@@ -5,7 +5,7 @@
 use crate::backend::pane::PaneFactory;
 use crate::backend::{Backend, CommandSeq, NewPaneAt, OrzmuxEvent, PaneId, RequestId};
 use crate::error::OrzmuxResult;
-use crate::protocol::OrzmuxCommand;
+use crate::event_loop::OrzmuxCommand;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use orzma_tty::prelude::{OrzmaTty, OrzmaTtyError, WheelConfig};
 use orzma_tty::test_support::{BlockingSink, CaptureSink, FailingSink};

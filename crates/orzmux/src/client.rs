@@ -3,7 +3,7 @@
 
 use crate::backend::{Backend, CommandSeq, OrzmuxEvent, ShellFactory};
 use crate::error::{OrzmuxError, OrzmuxResult};
-use crate::protocol::OrzmuxCommand;
+use crate::event_loop::OrzmuxCommand;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use orzma_tty::prelude::WheelConfig;
 use orzma_vt::prelude::CursorPolicy;

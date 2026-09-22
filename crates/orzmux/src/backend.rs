@@ -6,7 +6,7 @@ use crate::backend::layout::LayoutTree;
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::{ChunkDepth, QueueSampler};
 use crate::error::{OrzmuxError, OrzmuxResult};
-use crate::protocol::OrzmuxCommand;
+use crate::event_loop::OrzmuxCommand;
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::prelude::{
     OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PumpItem, TtySignal, WheelConfig,

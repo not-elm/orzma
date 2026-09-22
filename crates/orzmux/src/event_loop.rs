@@ -1,9 +1,10 @@
-//! The wire vocabulary between the GUI and the multiplexer backend.
-//! Everything here is plain data: no Bevy types and no GPU handles.
+//! The multiplexer's thread-facing half: the command vocabulary the GUI
+//! sends, and the loop that waits on the command channel and every
+//! pane's PTY streams.
 
 use crate::backend::{NewPaneAt, PaneDirection, PaneId, PaneTarget, RequestId, SplitId};
-use orzma_tty::prelude::{CellPixels, MouseReport, TerminalKey, TerminalModifiers, WheelInput};
-use orzma_tty::{EnvKey, EnvValue};
+use orzma_tty::prelude::{MouseReport, TerminalKey, TerminalModifiers, WheelInput};
+use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{
     CellSide, GridColumn, GridPoint, GridSize, InstanceId, PlacementSize, ScreenLine, Scroll,
     SelectionKind,
