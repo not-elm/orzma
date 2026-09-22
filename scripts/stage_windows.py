@@ -412,8 +412,11 @@ def stage_cef(cfg: StageConfig) -> None:
     required, optional = inventory["required"], inventory["optional"]
     entries = iter_cef_files(cfg.cef_dir, build_only)
     staged, missing, unclassified = classify_entries(entries, required, optional)
+    # Hashing the staged tree reads ~380MB, so settle the cheap checks first: a missing
+    # or unclassified entry already fails the run, and the digests would be thrown away.
+    assert_inventory_clean(missing, unclassified, [])
     digests = {**required, **optional}
-    assert_inventory_clean(missing, unclassified, digest_mismatches(cfg.cef_dir, staged, digests))
+    assert_inventory_clean([], [], digest_mismatches(cfg.cef_dir, staged, digests))
     copy_cef_entries(cfg.cef_dir, cfg.stage_dir, staged)
     print(f"==> staged {len(staged)} CEF files")
 
