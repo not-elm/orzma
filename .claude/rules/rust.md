@@ -385,6 +385,63 @@ Exceptions:
   value (e.g. an `Option<Entity>` from a query, an accessor returning a
   borrow) is not building a new `T` and is out of scope.
 
+## Visibility — don't restate a type's own ceiling on its members
+
+In an `impl` block on a type that is **not** itself externally `pub`,
+associated items are declared `pub`, never `pub(crate)` / `pub(super)` /
+`pub(in path)`. The type's own visibility already caps how far its
+methods can be reached, so repeating a narrower spelling on each one adds
+a qualifier that changes nothing.
+
+`pub(crate) struct Backend` cannot be named outside the crate, so
+`pub fn resize(&mut self, …)` on it is reachable in exactly the places
+`pub(crate) fn resize` would be. `pub` is then the honest spelling — "as
+reachable as this type allows" — and it keeps the diff quiet when the
+type's own visibility later changes: one line moves, not twenty.
+
+Required:
+
+| Instead of                                                          | Use                                  |
+| ------------------------------------------------------------------- | ------------------------------------ |
+| `pub(crate) fn tree(&self) -> &LayoutTree` on a `pub(crate)` type   | `pub fn tree(&self) -> &LayoutTree`  |
+| `pub(super) fn solve(&self) -> Solved` on a `pub(super)` type       | `pub fn solve(&self) -> Solved`      |
+| `pub(crate) const LIMIT: usize` in such an `impl`                   | `pub const LIMIT: usize`             |
+
+Private stays private. This rule raises `pub(crate)`-and-wider to `pub`;
+it never widens an item that has no visibility modifier. A helper used
+only inside its own module keeps none.
+
+Forbidden:
+
+| Pattern                                                    | Why                                                       |
+| ---------------------------------------------------------- | --------------------------------------------------------- |
+| `pub(crate) fn` in an `impl` on a `pub(crate)` type        | Redundant with the type's own ceiling                     |
+| `pub(super) fn` in an `impl` on a `pub(crate)` type        | Narrows below the ceiling for no stated reason            |
+
+Consequences to keep straight:
+
+- **Item ordering.** "Item ordering — private items last" still applies;
+  the middle group simply disappears — `pub` items first, private last.
+- **Doc comments.** "Every externally-public item (`pub` only …)" keys on
+  what a downstream crate can reach, not on the spelling. A `pub fn` on a
+  `pub(crate)` type is not externally public, so a `///` on it stays
+  recommended rather than required — the standing it had as `pub(crate)`.
+- Neither `unreachable_pub` nor `missing_docs` objects: the former is not
+  enabled in this workspace, and the latter fires only on items a
+  downstream crate can reach.
+
+Not covered by this rule:
+
+- An `impl` on a type that **is** externally `pub`. There, each member's
+  visibility is a real API decision and `pub(crate)` on one of them says
+  something true.
+- Struct fields, trait definitions and their items, and module-level
+  declarations (`pub(crate) mod`, `pub(crate) use`). Those are governed by
+  where the name needs to be reachable, not by an enclosing type's
+  ceiling.
+- Trait `impl` blocks, whose item visibility the trait dictates.
+- `#[cfg(test)] mod tests { ... }` contents.
+
 ## Item ordering — private items last
 
 Within an `impl` block (and at module / file scope), declare items in
@@ -730,6 +787,61 @@ Exceptions:
 - Code that predates this rule keeps its asserts and unwraps until it is
   touched; a change to such a function converts the ones in its path.
 
+## Static assertions — don't pin a trait bound with a `const` guard
+
+A trait bound a type must satisfy is not restated as a compile-time
+assertion item. The pattern below — a `const fn` with the bound in its
+signature, instantiated by an anonymous `const` — is forbidden wherever
+it appears under `src/` and `crates/`:
+
+```rust
+const fn assert_send_static<T: Send + 'static>() {}
+const _: () = assert_send_static::<OrzmuxEvent>();
+```
+
+The bound is already enforced where the type is used. A value that
+crosses a thread boundary reaches `std::thread::Builder::spawn`, whose
+`F: Send + 'static` obligation flows through every captured channel
+handle to the payload type; a value stored in a `static` needs
+`Sync`; a value behind `dyn Trait` names its bounds in the trait object.
+Any of those stops compiling the moment the property is lost, and the
+error points at the call site that actually depends on it. The guard
+restates that obligation somewhere the reader cannot connect to a
+caller, then goes stale when the real use moves or disappears — it
+keeps compiling long after nothing needs the bound, so it also fails to
+tell anyone the requirement is gone.
+
+Forbidden:
+
+| Pattern | Example | Why |
+| --- | --- | --- |
+| `const _: () = assert_fn::<T>();` pinning a bound | `const _: () = assert_send_static::<OrzmuxEvent>();` | Duplicates an obligation the real use already enforces |
+| A `const fn` whose only purpose is to carry a bound | `const fn assert_send_static<T: Send + 'static>() {}` | Same; it is an assertion wearing an item's clothes |
+| `static_assertions::assert_impl_all!` and equivalents | `assert_impl_all!(OrzmuxEvent: Send);` | Same, with a dependency attached |
+
+Instead:
+
+- **Say nothing.** This is the default. The bound is load-bearing at the
+  use site; let that site fail.
+- When the requirement is genuinely a contract of the type rather than a
+  by-product of one caller, state it in the type's doc comment under
+  `# Invariants` — prose the reader sees when they reach for the type.
+- When a specific caller must be prevented from regressing, write a
+  `#[test]` that exercises that caller's shape. A test carries the
+  two-part doc the "Test doc comments" rule requires, so the reason the
+  bound matters is written down.
+
+Not covered by this rule (leave as-is):
+
+- A `const` that computes a value the program uses (`const LEAF_MIN:
+  GridSize = …`). This rule is about assertions, not constants.
+- A bound written in a signature, `where` clause, or trait definition —
+  that is the normal way to require a bound, and the point of the rule.
+- A const-evaluated bound check that a public API's own contract depends
+  on, e.g. a `const` block inside a generic function that the function's
+  documented behavior relies on. Justify it with a `// NOTE:` naming the
+  behavior, as "Escape hatches" prescribes.
+
 ## Escape hatches
 
 When a rule is physically impossible to follow (e.g., trybuild fixtures, generated code, FFI conventions), justify the exception with a one-line `// NOTE:` and apply a local lint allowance:
@@ -763,6 +875,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Test doc comments — every `#[test]` fn documents its asserted contract plus a scenario-only `Case:` paragraph, and nothing else; pinned policies fold into the first line, never a paragraph of their own (see "Test doc comments")
 - "No blank lines between import groups"
 - `#[expect]` preference over `#[allow]`
+- Visibility — in an `impl` on a type that is not itself externally `pub`, associated items are spelled `pub`, not `pub(crate)` / `pub(super)` / `pub(in path)`; private items stay private (see "Visibility — don't restate a type's own ceiling on its members")
 - Item ordering — private (no-modifier) items declared after `pub` / exported ones (see "Item ordering — private items last")
 - Parameter ordering — mutable parameters declared before immutable ones in function signatures (see "Parameter ordering — mutable parameters first")
 - System optimization — whole-system resource change/added guards expressed as in-body early returns must be `run_if` run conditions instead (see "System optimization — gate with `run_if`, not in-body change checks")
@@ -773,6 +886,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - System composition — long systems that interleave gather/decide/apply must be split: pure decision helpers returning effect values, hand off across the seam via an `EntityEvent`+observer or a `Message` (`MessageWriter`/`MessageReader`) — never inline sequencing — bulky inline blocks extracted to helpers, and each system body kept within ~150 lines (see "System composition — keep systems focused; split by responsibility")
 - Protocol purity — `orzmux::protocol` types carry no `Entity` / bevy types / GPU handles (spec D7), so the multiplexer backend stays a Bevy-free thread and the channel types can later cross a socket boundary unchanged
 - Error handling — no `debug_assert!`, `unwrap`, `expect`, `panic!` or `assert!` in non-test code to enforce a precondition or reject an input; failures are returned as `Result` with `thiserror` enums and handled at the boundary that cannot recover (see "Error handling — return `Result`, don't assert or unwrap"). Enabling `clippy::unwrap_used` / `clippy::expect_used` workspace-wide would move the unwrap / expect half to the tool-enforced list
+- Static assertions — no `const _: () = assert_fn::<T>();` guard, no `const fn` that exists only to carry a bound, and no `static_assertions` macro; the bound is enforced where the type is used, and a genuine contract goes in the type's `# Invariants` or a `#[test]` (see "Static assertions — don't pin a trait bound with a `const` guard")
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
 
