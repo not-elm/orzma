@@ -452,21 +452,25 @@ impl Backend {
     }
 
     /// The pane layout tree.
+    #[cfg(test)]
     pub fn tree(&self) -> &LayoutTree {
         &self.tree
     }
 
     /// The live pane `id` names, or `None` when no pane carries it.
+    #[cfg(test)]
     pub fn pane(&self, id: PaneId) -> Option<&Pane> {
         self.panes.get(&id)
     }
 
     /// The id the next spawned pane takes.
+    #[cfg(test)]
     pub fn next_pane_id(&self) -> u32 {
         self.next_pane_id
     }
 
     /// Every live pane, in no fixed order.
+    #[cfg(test)]
     pub fn panes(&self) -> impl Iterator<Item = (PaneId, &Pane)> {
         self.panes.iter().map(|(id, pane)| (*id, pane))
     }

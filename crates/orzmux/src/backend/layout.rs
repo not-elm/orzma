@@ -72,6 +72,7 @@ impl LayoutTree {
     }
 
     /// Whether the tree holds no pane.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.root.is_none()
     }
@@ -82,6 +83,7 @@ impl LayoutTree {
     }
 
     /// Every pane in the tree, left-to-right / top-to-bottom.
+    #[cfg(test)]
     pub fn panes(&self) -> Vec<PaneId> {
         let mut out = Vec::new();
         if let Some(root) = &self.root {
@@ -332,6 +334,7 @@ impl Node {
         }
     }
 
+    #[cfg(test)]
     fn collect_leaves(&self, out: &mut Vec<PaneId>) {
         match self {
             Node::Leaf(id) => out.push(*id),
