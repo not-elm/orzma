@@ -146,15 +146,20 @@ licenses-refresh-cef:
 stage *args:
     if (-not $env:CEF_PATH) { $env:CEF_PATH = "{{ cef_cache_dir }}" }; python scripts/stage_windows.py {{ args }}
 
+# resolve the orzma Cargo version (hidden helper for msi/msi-validate)
+[windows]
+_orzma-version:
+    (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages | Where-Object { $_.name -eq "orzma" } | ForEach-Object { $_.version }
+
 # build the MSI from the staged tree (run `just stage` first)
 [windows]
 msi version="":
-    $v = "{{ version }}"; if (-not $v) { $v = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages | Where-Object { $_.name -eq "orzma" } | ForEach-Object { $_.version } }; if (-not (Test-Path "target/dist/stage")) { Write-Error "target/dist/stage not found; run 'just stage' first"; exit 1 }; if (-not (Test-Path "build/windows")) { Write-Error "build/windows not found; check your checkout"; exit 1 }; $stage = (Resolve-Path "target/dist/stage").Path; $build = (Resolve-Path "build/windows").Path; dotnet wix build build/windows/orzma.wxs -ext WixToolset.UI.wixext/6.0.2 -bindpath "stage=$stage" -bindpath "build=$build" -d "Version=$v" -wx -arch x64 -o "target/dist/orzma-$v-x64.msi"
+    $v = "{{ version }}"; if (-not $v) { $v = (just _orzma-version) }; if ($v -notmatch '^\d+\.\d+\.\d+$') { Write-Error "resolved version '$v' is not 3-part numeric; MSI ProductVersion cannot express a prerelease, pass one explicitly, e.g. 'just msi 0.2.0'"; exit 1 }; if (-not (Test-Path "target/dist/stage")) { Write-Error "target/dist/stage not found; run 'just stage' first"; exit 1 }; if (-not (Test-Path "build/windows")) { Write-Error "build/windows not found; check your checkout"; exit 1 }; $stage = (Resolve-Path "target/dist/stage").Path; $build = (Resolve-Path "build/windows").Path; dotnet wix build build/windows/orzma.wxs -ext WixToolset.UI.wixext/6.0.2 -bindpath "stage=$stage" -bindpath "build=$build" -d "Version=$v" -wx -arch x64 -o "target/dist/orzma-$v-x64.msi"
 
 # run ICE validation on the built MSI
 [windows]
 msi-validate version="":
-    $v = "{{ version }}"; if (-not $v) { $v = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages | Where-Object { $_.name -eq "orzma" } | ForEach-Object { $_.version } }; dotnet wix msi validate "target/dist/orzma-$v-x64.msi"
+    $v = "{{ version }}"; if (-not $v) { $v = (just _orzma-version) }; dotnet wix msi validate "target/dist/orzma-$v-x64.msi"
 
 # regenerate build/windows/cef-inventory.json from the provisioned CEF dir (run on cef_version bump)
 [windows]
