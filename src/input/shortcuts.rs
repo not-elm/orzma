@@ -1827,12 +1827,7 @@ mod tests {
     /// `+`, which a US layout delivers as Cmd+Shift+`=`.
     #[test]
     fn a_plus_leader_arms_on_either_physical_chord() {
-        let meta = Modifiers {
-            ctrl: false,
-            shift: false,
-            alt: false,
-            meta: true,
-        };
+        let meta = mods(false, false, false, true);
         let chord = KeyChord {
             key: ConfigKey::Plus,
             modifiers: meta,
@@ -1840,13 +1835,7 @@ mod tests {
         let physical = PhysicalChords::from_chord(&chord).expect("Plus maps to a physical key");
 
         assert!(physical.contains(KeyCode::Equal, meta));
-        assert!(physical.contains(
-            KeyCode::Equal,
-            Modifiers {
-                shift: true,
-                ..meta
-            }
-        ));
+        assert!(physical.contains(KeyCode::Equal, mods(false, true, false, true)));
         assert!(
             !physical.contains(KeyCode::Minus, meta),
             "a different key code must not match"
@@ -1858,12 +1847,7 @@ mod tests {
     /// Case: the default `Cmd+V` paste binding is resolved.
     #[test]
     fn a_plain_chord_matches_only_itself() {
-        let meta = Modifiers {
-            ctrl: false,
-            shift: false,
-            alt: false,
-            meta: true,
-        };
+        let meta = mods(false, false, false, true);
         let chord = KeyChord {
             key: ConfigKey::Char('v'),
             modifiers: meta,
@@ -1871,13 +1855,7 @@ mod tests {
         let physical = PhysicalChords::from_chord(&chord).expect("v maps to a physical key");
 
         assert!(physical.contains(KeyCode::KeyV, meta));
-        assert!(!physical.contains(
-            KeyCode::KeyV,
-            Modifiers {
-                shift: true,
-                ..meta
-            }
-        ));
+        assert!(!physical.contains(KeyCode::KeyV, mods(false, true, false, true)));
     }
 
     /// Asserts that a leader sharing a physical chord with a direct binding is
@@ -1887,22 +1865,40 @@ mod tests {
     /// which both land on `KeyCode::Equal`.
     #[test]
     fn a_leader_shadowing_a_direct_binding_physically_is_detected() {
-        let meta = Modifiers {
-            ctrl: false,
-            shift: false,
-            alt: false,
-            meta: true,
-        };
         let leader = Some(ResolvedLeader::Chord(
             PhysicalChords::from_chord(&KeyChord {
                 key: ConfigKey::Plus,
-                modifiers: meta,
+                modifiers: mods(false, false, false, true),
             })
             .expect("Plus maps to a physical key"),
         ));
         let direct = vec![OrzmaShortcut {
             keycode: KeyCode::Equal,
-            modifiers: meta,
+            modifiers: mods(false, false, false, true),
+            action: Shortcut::Copy,
+            repeat: false,
+        }];
+
+        assert_eq!(leader_shadows_physical_chord(leader, &direct), 1);
+    }
+
+    /// Asserts that a leader is reported when only its shifted twin collides
+    /// with a direct binding.
+    ///
+    /// Case: a user sets `leader = "Cmd+Plus"` and binds an action to
+    /// `Cmd+Shift+=`, which is the same keystroke as the leader.
+    #[test]
+    fn a_leader_shadowing_a_direct_binding_through_its_twin_is_detected() {
+        let leader = Some(ResolvedLeader::Chord(
+            PhysicalChords::from_chord(&KeyChord {
+                key: ConfigKey::Plus,
+                modifiers: mods(false, false, false, true),
+            })
+            .expect("Plus maps to a physical key"),
+        ));
+        let direct = vec![OrzmaShortcut {
+            keycode: KeyCode::Equal,
+            modifiers: mods(false, true, false, true),
             action: Shortcut::Copy,
             repeat: false,
         }];
@@ -1912,23 +1908,17 @@ mod tests {
 
     /// Asserts that a leader on a different physical chord is not reported.
     ///
-    /// Case: the shipped defaults, where the leader is a modifier tap and no
-    /// direct binding shares its chord.
+    /// Case: a user sets a `Cmd+A` chord leader and binds an action to
+    /// `Cmd+=`, which is a different key.
     #[test]
     fn a_leader_on_a_distinct_chord_is_not_reported() {
-        let meta = Modifiers {
-            ctrl: false,
-            shift: false,
-            alt: false,
-            meta: true,
-        };
         let leader = Some(ResolvedLeader::Chord(PhysicalChords::single(
             KeyCode::KeyA,
-            meta,
+            mods(false, false, false, true),
         )));
         let direct = vec![OrzmaShortcut {
             keycode: KeyCode::Equal,
-            modifiers: meta,
+            modifiers: mods(false, false, false, true),
             action: Shortcut::Copy,
             repeat: false,
         }];
