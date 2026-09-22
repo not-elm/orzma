@@ -173,52 +173,31 @@ pub enum OrzmuxCommand {
 }
 
 impl OrzmuxCommand {
-    /// The variant's name, as the refusal log line prints it.
-    pub(crate) fn name(&self) -> &'static str {
+    /// The variant's name and the pane it addresses, as the refusal log
+    /// line prints them. The pane is `None` for a command that addresses
+    /// the window rather than one pane.
+    pub(crate) fn log_context(&self) -> (&'static str, Option<PaneTarget>) {
         match self {
-            Self::Resize { .. } => "Resize",
-            Self::NewPane { .. } => "NewPane",
-            Self::KillPane { .. } => "KillPane",
-            Self::SelectPane { .. } => "SelectPane",
-            Self::SelectPaneDirection { .. } => "SelectPaneDirection",
-            Self::WindowFocus { .. } => "WindowFocus",
-            Self::KeyInput { .. } => "KeyInput",
-            Self::Paste { .. } => "Paste",
-            Self::MouseInput { .. } => "MouseInput",
-            Self::Wheel { .. } => "Wheel",
-            Self::Scroll { .. } => "Scroll",
-            Self::SelectionStart { .. } => "SelectionStart",
-            Self::SelectionUpdate { .. } => "SelectionUpdate",
-            Self::SelectionClear { .. } => "SelectionClear",
-            Self::CopySelection { .. } => "CopySelection",
-            Self::RemovePlacements { .. } => "RemovePlacements",
-            Self::ResizeSplit { .. } => "ResizeSplit",
-            Self::MountPlacement { .. } => "MountPlacement",
-        }
-    }
-
-    /// The pane the command addresses, or `None` when it addresses the
-    /// window rather than one pane.
-    pub(crate) fn target(&self) -> Option<PaneTarget> {
-        match self {
-            Self::KillPane { pane }
-            | Self::KeyInput { pane, .. }
-            | Self::Paste { pane, .. }
-            | Self::CopySelection { pane } => Some(*pane),
-            Self::SelectPane { pane }
-            | Self::MouseInput { pane, .. }
-            | Self::Wheel { pane, .. }
-            | Self::Scroll { pane, .. }
-            | Self::SelectionStart { pane, .. }
-            | Self::SelectionUpdate { pane, .. }
-            | Self::SelectionClear { pane }
-            | Self::RemovePlacements { pane, .. }
-            | Self::MountPlacement { pane, .. } => Some(PaneTarget::Id(*pane)),
-            Self::Resize { .. }
-            | Self::NewPane { .. }
-            | Self::SelectPaneDirection { .. }
-            | Self::WindowFocus { .. }
-            | Self::ResizeSplit { .. } => None,
+            Self::Resize { .. } => ("Resize", None),
+            Self::NewPane { .. } => ("NewPane", None),
+            Self::KillPane { pane } => ("KillPane", Some(*pane)),
+            Self::SelectPane { pane } => ("SelectPane", Some(PaneTarget::Id(*pane))),
+            Self::SelectPaneDirection { .. } => ("SelectPaneDirection", None),
+            Self::WindowFocus { .. } => ("WindowFocus", None),
+            Self::KeyInput { pane, .. } => ("KeyInput", Some(*pane)),
+            Self::Paste { pane, .. } => ("Paste", Some(*pane)),
+            Self::MouseInput { pane, .. } => ("MouseInput", Some(PaneTarget::Id(*pane))),
+            Self::Wheel { pane, .. } => ("Wheel", Some(PaneTarget::Id(*pane))),
+            Self::Scroll { pane, .. } => ("Scroll", Some(PaneTarget::Id(*pane))),
+            Self::SelectionStart { pane, .. } => ("SelectionStart", Some(PaneTarget::Id(*pane))),
+            Self::SelectionUpdate { pane, .. } => ("SelectionUpdate", Some(PaneTarget::Id(*pane))),
+            Self::SelectionClear { pane } => ("SelectionClear", Some(PaneTarget::Id(*pane))),
+            Self::CopySelection { pane } => ("CopySelection", Some(*pane)),
+            Self::RemovePlacements { pane, .. } => {
+                ("RemovePlacements", Some(PaneTarget::Id(*pane)))
+            }
+            Self::ResizeSplit { .. } => ("ResizeSplit", None),
+            Self::MountPlacement { pane, .. } => ("MountPlacement", Some(PaneTarget::Id(*pane))),
         }
     }
 }
@@ -321,8 +300,7 @@ impl EventLoop {
     /// publishes one only when the active pane moved.
     fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.backend.set_processed(seq);
-        let name = command.name();
-        let target = command.target();
+        let (name, target) = command.log_context();
         if let Err(error) = self.dispatch(command) {
             log_refused_command(name, target, &error);
         }
@@ -486,8 +464,8 @@ fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &O
                 tracing::debug!(command = name, "pane command dropped: no such pane");
             }
         },
-        OrzmuxError::PtyWrite { pane, what, source } => {
-            log_refused_write(*pane, what, source, Level::ERROR);
+        OrzmuxError::PtyWrite { pane, source } => {
+            log_refused_write(*pane, name, source, Level::ERROR);
         }
         _ => tracing::warn!(command = name, %error, "command refused"),
     }

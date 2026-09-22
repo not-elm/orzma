@@ -416,14 +416,7 @@ impl Backend {
         mods: TerminalModifiers,
     ) -> OrzmuxResult {
         let id = self.pane_id(target)?;
-        self.pane_mut(id)?
-            .tty
-            .send_key(&key, &mods)
-            .map_err(|source| OrzmuxError::PtyWrite {
-                pane: id,
-                what: "key",
-                source,
-            })
+        self.write_pty(id, |tty| tty.send_key(&key, &mods))
     }
 
     /// Sends pasted text to the pane `target` names.
@@ -435,14 +428,7 @@ impl Backend {
     /// the write.
     pub fn paste(&mut self, target: PaneTarget, text: String) -> OrzmuxResult {
         let id = self.pane_id(target)?;
-        self.pane_mut(id)?
-            .tty
-            .send_paste(&text)
-            .map_err(|source| OrzmuxError::PtyWrite {
-                pane: id,
-                what: "paste",
-                source,
-            })
+        self.write_pty(id, |tty| tty.send_paste(&text))
     }
 
     /// Sends a mouse report to `pane`.
@@ -453,14 +439,7 @@ impl Backend {
     /// carries `pane`, and [`OrzmuxError::PtyWrite`] when its PTY
     /// refuses the write.
     pub fn mouse_input(&mut self, pane: PaneId, report: MouseReport) -> OrzmuxResult {
-        self.pane_mut(pane)?
-            .tty
-            .send_mouse(report)
-            .map_err(|source| OrzmuxError::PtyWrite {
-                pane,
-                what: "mouse report",
-                source,
-            })
+        self.write_pty(pane, |tty| tty.send_mouse(report))
     }
 
     /// Routes a wheel event to `pane` under the backend's wheel policy.
@@ -472,14 +451,7 @@ impl Backend {
     /// refuses the write.
     pub fn wheel(&mut self, pane: PaneId, input: WheelInput) -> OrzmuxResult {
         let wheel = self.wheel;
-        self.pane_mut(pane)?
-            .tty
-            .send_wheel(input, &wheel)
-            .map_err(|source| OrzmuxError::PtyWrite {
-                pane,
-                what: "wheel",
-                source,
-            })
+        self.write_pty(pane, |tty| tty.send_wheel(input, &wheel))
     }
 
     /// Scrolls `pane`'s viewport.
@@ -856,6 +828,22 @@ impl Backend {
     /// carries `id`.
     fn pane_mut(&mut self, id: PaneId) -> OrzmuxResult<&mut Pane> {
         self.panes.get_mut(&id).ok_or(OrzmuxError::UnresolvedTarget)
+    }
+
+    /// Runs `write` against the PTY of the pane `id` names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `id`, and [`OrzmuxError::PtyWrite`] when the PTY refuses
+    /// the write.
+    fn write_pty(
+        &mut self,
+        id: PaneId,
+        write: impl FnOnce(&mut OrzmaTty<OrzmaVt>) -> OrzmaTtyResult,
+    ) -> OrzmuxResult {
+        write(&mut self.pane_mut(id)?.tty)
+            .map_err(|source| OrzmuxError::PtyWrite { pane: id, source })
     }
 
     fn emit(&mut self, event: OrzmuxEvent) {

@@ -39,12 +39,10 @@ pub enum OrzmuxError {
     #[error("the orzma-mux thread could not be started: {0}")]
     BackendThread(#[source] IoError),
     /// A pane's PTY refused a write.
-    #[error("the pane refused a {what} write: {source}")]
+    #[error("the pane refused a write: {source}")]
     PtyWrite {
         /// The pane whose PTY refused the write.
         pane: PaneId,
-        /// What was being written, as the log line names it.
-        what: &'static str,
         /// The refusal itself.
         #[source]
         source: OrzmaTtyError,
