@@ -304,8 +304,10 @@ impl Backend {
     /// reported its size, [`OrzmuxError::UnresolvedTarget`] when the
     /// split target is gone, [`OrzmuxError::RootOccupied`] or
     /// [`OrzmuxError::SplitRefused`] when the tree refuses the
-    /// insertion, and [`OrzmuxError::SpawnShell`] when the shell will
-    /// not start. The tree is left as it was in every case.
+    /// insertion, [`OrzmuxError::Unsolved`] or [`OrzmuxError::Vt`] when
+    /// the solved layout gives the new pane no valid rectangle, and
+    /// whatever the pane factory returns when the shell will not start.
+    /// The tree is left as it was in every case.
     pub fn open_pane(
         &mut self,
         request: RequestId,
@@ -582,8 +584,7 @@ impl Backend {
     /// Answers a `NewPane` request with the failure that refused it.
     // NOTE: `OrzmuxEvent` derives `Clone` and `PartialEq`, which
     // `OrzmaTtyError` does not, so the wire carries the rendered text
-    // rather than the error itself. This is the one place that renders
-    // it.
+    // rather than the error itself.
     pub fn fail_spawn(&mut self, request: RequestId, error: &OrzmuxError) {
         self.emit(OrzmuxEvent::SpawnFailed {
             request,

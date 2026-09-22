@@ -154,12 +154,12 @@ impl Harness {
 
     /// Pumps one pane, as the loop does when its stream is ready.
     pub fn pump_pane(&mut self, id: PaneId) {
-        self.event_loop.pump_pane(id);
+        self.event_loop.backend_mut().pump_pane(id);
     }
 
     /// Pumps every pane whose deadline has passed.
     pub fn service_deadlines(&mut self) {
-        self.event_loop.service_deadlines();
+        self.event_loop.backend_mut().service_deadlines();
     }
 
     /// Waits until every live pane's queued PTY writes have been

@@ -174,7 +174,7 @@ pub enum OrzmuxCommand {
 
 impl OrzmuxCommand {
     /// The variant's name, as the refusal log line prints it.
-    pub fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::Resize { .. } => "Resize",
             Self::NewPane { .. } => "NewPane",
@@ -199,14 +199,14 @@ impl OrzmuxCommand {
 
     /// The pane the command addresses, or `None` when it addresses the
     /// window rather than one pane.
-    pub fn target(&self) -> Option<PaneTarget> {
+    pub(crate) fn target(&self) -> Option<PaneTarget> {
         match self {
             Self::KillPane { pane }
             | Self::KeyInput { pane, .. }
             | Self::Paste { pane, .. }
             | Self::CopySelection { pane } => Some(*pane),
-            Self::SelectPane { pane } => Some(PaneTarget::Id(*pane)),
-            Self::MouseInput { pane, .. }
+            Self::SelectPane { pane }
+            | Self::MouseInput { pane, .. }
             | Self::Wheel { pane, .. }
             | Self::Scroll { pane, .. }
             | Self::SelectionStart { pane, .. }
@@ -269,14 +269,12 @@ impl EventLoop {
                 }
                 None => true,
             };
-            if !connected {
-                self.flush_events();
-                return;
+            if connected {
+                self.backend.service_deadlines();
             }
-            self.backend.service_deadlines();
             self.flush_events();
             self.report_queue_sample(Instant::now());
-            if self.gui_gone {
+            if !connected || self.gui_gone {
                 return;
             }
         }
@@ -305,22 +303,16 @@ impl EventLoop {
         }
     }
 
-    /// Pumps one pane, queueing whatever it produced in the backend's outbox.
-    #[cfg(test)]
-    pub fn pump_pane(&mut self, id: PaneId) {
-        self.backend.pump_pane(id);
-    }
-
-    /// Pumps every pane whose next deadline has passed.
-    #[cfg(test)]
-    pub fn service_deadlines(&mut self) {
-        self.backend.service_deadlines();
-    }
-
     /// The backend this loop drives.
     #[cfg(test)]
     pub fn backend(&self) -> &Backend {
         &self.backend
+    }
+
+    /// The backend this loop drives, for a test that drives it directly.
+    #[cfg(test)]
+    pub fn backend_mut(&mut self) -> &mut Backend {
+        &mut self.backend
     }
 
     /// Applies one command. An unresolvable target and a refused PTY
@@ -329,18 +321,6 @@ impl EventLoop {
     /// publishes one only when the active pane moved.
     fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.backend.set_processed(seq);
-        if let OrzmuxCommand::NewPane {
-            request,
-            at,
-            cwd,
-            env,
-        } = command
-        {
-            if let Err(error) = self.backend.open_pane(request, at, cwd, env) {
-                self.backend.fail_spawn(request, &error);
-            }
-            return;
-        }
         let name = command.name();
         let target = command.target();
         if let Err(error) = self.dispatch(command) {
@@ -348,14 +328,22 @@ impl EventLoop {
         }
     }
 
-    /// Routes one command to the backend operation that applies it.
+    /// Routes one command to the backend operation that applies it. A
+    /// refused `NewPane` is answered with `SpawnFailed` rather than
+    /// reported to the caller.
     fn dispatch(&mut self, command: OrzmuxCommand) -> OrzmuxResult {
         match command {
-            // NOTE: `handle_command` intercepts every `NewPane` before
-            // calling `dispatch`, so this arm never runs. Reaching it would
-            // mean a `NewPane` command was silently dropped instead of
-            // being routed to `Backend::open_pane`.
-            OrzmuxCommand::NewPane { .. } => Ok(()),
+            OrzmuxCommand::NewPane {
+                request,
+                at,
+                cwd,
+                env,
+            } => {
+                if let Err(error) = self.backend.open_pane(request, at, cwd, env) {
+                    self.backend.fail_spawn(request, &error);
+                }
+                Ok(())
+            }
             OrzmuxCommand::Resize { size, cell_px } => {
                 self.backend.resize(size, cell_px);
                 Ok(())
@@ -481,11 +469,10 @@ impl EventLoop {
 
 /// Logs a command the backend refused, at the level its failure earns.
 ///
-/// An unresolvable target stays at debug — a pane closing while a
-/// command was in flight is ordinary. A refused PTY write goes through
-/// [`log_refused_write`] at `ERROR`, because a dropped keystroke is a
-/// user-visible loss.
-pub fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &OrzmuxError) {
+/// An unresolvable target logs at `DEBUG`, a refused PTY write goes
+/// through [`log_refused_write`] at `ERROR`, and every other refusal
+/// logs at `WARN`.
+fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &OrzmuxError) {
     match error {
         OrzmuxError::UnresolvedTarget => match target {
             Some(target) => {

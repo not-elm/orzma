@@ -68,13 +68,14 @@ mod tests {
         );
     }
 
-    /// Asserts that each way a split can be refused reports its own
-    /// reason, rather than all of them collapsing to one message.
+    /// Asserts that each way a pane request can be refused reports its
+    /// own reason, rather than all of them collapsing to one message.
     ///
-    /// Case: a user splits before the window has reported its size, and
-    /// later splits a pane that has no room left to divide.
+    /// Case: a user asks for a pane before the window has reported its
+    /// size, asks for a second root pane, and splits a pane that has no
+    /// room left to divide.
     #[test]
-    fn a_refused_split_names_the_reason_it_was_refused() {
+    fn a_refused_pane_request_names_the_reason_it_was_refused() {
         assert_eq!(
             OrzmuxError::NoGeometry.to_string(),
             "a pane was requested before the window reported its size"
@@ -82,6 +83,10 @@ mod tests {
         assert_eq!(
             OrzmuxError::UnresolvedTarget.to_string(),
             "no pane matches the target"
+        );
+        assert_eq!(
+            OrzmuxError::RootOccupied.to_string(),
+            "the tree already holds a root pane"
         );
         assert_eq!(
             OrzmuxError::SplitRefused.to_string(),
