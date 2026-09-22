@@ -21,6 +21,9 @@ CARGO_PROFILE = "dist"
 COMPANION_BINS = ("orzbrowser", "orzmd")
 RENDER_PROCESS_BIN = "bevy_cef_render_process"
 RENDER_PROCESS_VERSION = "0.13.0"
+# The render process must be built from the same bevy_cef release orzma links, so the
+# pin above is checked against what Cargo.lock resolves for this crate.
+RENDER_PROCESS_CRATE = "bevy_cef_core"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INVENTORY_PATH = REPO_ROOT / "build" / "windows" / "cef-inventory.json"
@@ -86,7 +89,21 @@ def cargo_env(base: dict[str, str]) -> dict[str, str]:
 def license_rtf(text: str) -> str:
     body = text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
     body = body.replace("\n", "\\par\n")
-    return f"{RTF_HEADER}\n{body}\n}}"
+    return f"{RTF_HEADER}\n{rtf_escape_non_ascii(body)}\n}}"
+
+
+def rtf_escape_non_ascii(text: str) -> str:
+    """The text with every non-ASCII character replaced by an RTF \\uN escape."""
+    out = []
+    for ch in text:
+        if ord(ch) < 128:
+            out.append(ch)
+            continue
+        units = ch.encode("utf-16-le")
+        for start in range(0, len(units), 2):
+            unit = int.from_bytes(units[start:start + 2], "little")
+            out.append(f"\\u{unit - 65536 if unit > 32767 else unit}?")
+    return "".join(out)
 
 
 def cargo_version(package: str) -> str:
@@ -98,6 +115,29 @@ def cargo_version(package: str) -> str:
         if pkg["name"] == package:
             return pkg["version"]
     raise SystemExit(f"package {package} not found in cargo metadata")
+
+
+def locked_version(package: str, lock_path: Path | None = None) -> str | None:
+    """The version Cargo.lock pins for `package`, or None when it pins no such package."""
+    path = lock_path if lock_path is not None else REPO_ROOT / "Cargo.lock"
+    name = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("name = "):
+            name = line.split("=", 1)[1].strip().strip('"')
+        elif line.startswith("version = ") and name == package:
+            return line.split("=", 1)[1].strip().strip('"')
+    return None
+
+
+def assert_render_process_matches_lockfile(pinned: str, locked: str | None) -> None:
+    if locked is not None and locked != pinned:
+        raise SystemExit(
+            f"{RENDER_PROCESS_BIN} is pinned to {pinned} but Cargo.lock resolves "
+            f"{RENDER_PROCESS_CRATE} to {locked}. A render process built against a "
+            "different bevy_cef paints a blank webview at run time instead of failing "
+            "the build, so bump RENDER_PROCESS_VERSION in scripts/stage_windows.py "
+            "and bevy_cef_version in the justfile together."
+        )
 
 
 def sha256_file(path: Path) -> str:
@@ -433,6 +473,10 @@ def main(argv: list[str] | None = None) -> None:
         return
     cfg = resolve_config(args)
     verify_orzmd_web_assets()
+    if cfg.render_process_bin is None:
+        assert_render_process_matches_lockfile(
+            RENDER_PROCESS_VERSION, locked_version(RENDER_PROCESS_CRATE)
+        )
     if cfg.stage_dir.exists():
         shutil.rmtree(cfg.stage_dir)
     cfg.stage_dir.mkdir(parents=True)

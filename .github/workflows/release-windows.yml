@@ -110,6 +110,10 @@ jobs:
           } else {
             $version = $cargo
           }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            Write-Error "Resolved version '$version' is not 3-part numeric; MSI ProductVersion cannot express a prerelease. Re-run with the version input, e.g. 0.2.0."
+            exit 1
+          }
           "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Stage the distribution tree

@@ -183,6 +183,38 @@ class CargoInvocation(unittest.TestCase):
         self.assertEqual(env["RUSTFLAGS"], "-Ctarget-feature=+crt-static")
 
 
+class RenderProcessPin(unittest.TestCase):
+    LOCK = (
+        '[[package]]\nname = "bevy_cef"\nversion = "0.13.0"\n\n'
+        '[[package]]\nname = "bevy_cef_core"\nversion = "0.13.4"\n'
+    )
+
+    def _lock(self, tmp: str) -> Path:
+        path = Path(tmp) / "Cargo.lock"
+        path.write_text(self.LOCK, encoding="utf-8")
+        return path
+
+    def test_locked_version_reads_the_named_package(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = self._lock(tmp)
+            self.assertEqual(sw.locked_version("bevy_cef_core", lock), "0.13.4")
+            self.assertEqual(sw.locked_version("bevy_cef", lock), "0.13.0")
+            self.assertIsNone(sw.locked_version("not_a_package", lock))
+
+    def test_a_lockfile_bump_the_pin_missed_is_rejected(self):
+        with self.assertRaises(SystemExit) as raised:
+            sw.assert_render_process_matches_lockfile("0.13.0", "0.13.4")
+        self.assertIn("0.13.4", str(raised.exception))
+
+    def test_a_matching_pin_passes(self):
+        self.assertIsNone(sw.assert_render_process_matches_lockfile("0.13.0", "0.13.0"))
+
+    def test_the_committed_lockfile_matches_the_pin(self):
+        self.assertEqual(
+            sw.locked_version(sw.RENDER_PROCESS_CRATE), sw.RENDER_PROCESS_VERSION
+        )
+
+
 class LicenseRtf(unittest.TestCase):
     def test_wraps_text_in_rtf(self):
         out = sw.license_rtf("MIT License\n")
@@ -196,6 +228,13 @@ class LicenseRtf(unittest.TestCase):
 
     def test_converts_newlines_to_par(self):
         self.assertIn("first\\par", sw.license_rtf("first\nsecond"))
+
+    def test_escapes_non_ascii_so_the_rtf_stays_ascii(self):
+        out = sw.license_rtf("Copyright © 2026 山\U0001f600")
+        self.assertIn("\\u169?", out)
+        self.assertIn("\\u23665?", out)
+        self.assertIn("\\u-10179?\\u-8704?", out)
+        out.encode("ascii")
 
 
 class StageConfigResolution(unittest.TestCase):

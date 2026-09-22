@@ -159,7 +159,7 @@ msi version="":
 # run ICE validation on the built MSI
 [windows]
 msi-validate version="":
-    $v = "{{ version }}"; if (-not $v) { $v = (just _orzma-version) }; dotnet wix msi validate "target/dist/orzma-$v-x64.msi"
+    $v = "{{ version }}"; if (-not $v) { $v = (just _orzma-version) }; $msi = "target/dist/orzma-$v-x64.msi"; if (-not (Test-Path $msi)) { Write-Error "$msi not found; run 'just msi $v' first (a prerelease Cargo version needs an explicit 3-part version, e.g. 'just msi-validate 0.2.0')"; exit 1 }; dotnet wix msi validate $msi
 
 # regenerate build/windows/cef-inventory.json from the provisioned CEF dir (run on cef_version bump)
 [windows]

@@ -43,7 +43,10 @@ jobs:
           python-version: "3.12"
       - name: Run script tests
         shell: bash
+        env:
+          PATTERNS: ${{ matrix.patterns }}
         run: |
-          for pattern in ${{ matrix.patterns }}; do
+          set -f
+          for pattern in $PATTERNS; do
             python -m unittest discover -s scripts -p "$pattern" -v
           done
