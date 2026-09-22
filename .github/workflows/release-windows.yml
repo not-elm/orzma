@@ -1,0 +1,145 @@
+name: release-windows
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "3-part version to build (dry run only; defaults to the Cargo version)"
+        required: false
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+
+permissions:
+  contents: write
+
+env:
+  CEF_VERSION: "152.4.0+152.0.8"
+  WIX_VERSION: "6.0.2"
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      # stage_windows.py uses Path.write_text(newline=...), which needs Python 3.10+.
+      # Pin the same version ci-scripts.yml tests against instead of the runner default.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@1.95
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-windows"
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      # NOTE: this key must stay byte-identical to the one in ci-rust.yml. A tag ref can
+      # read the default branch's cache, so matching it reuses the ~460MB CI already
+      # downloaded instead of fetching CEF a second time.
+      - name: Cache the CEF build dependency
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/orzma/cef
+          key: cef-${{ runner.os }}-${{ env.CEF_VERSION }}
+
+      - name: Cache the exported CEF runtime
+        id: cef-runtime
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/cef
+          key: cef-runtime-${{ runner.os }}-${{ env.CEF_VERSION }}
+
+      - name: Point cef-dll-sys at the cached CEF
+        run: echo "CEF_PATH=$env:USERPROFILE\.cache\orzma\cef" >> $env:GITHUB_ENV
+
+      - name: Provision the CEF runtime
+        if: steps.cef-runtime.outputs.cache-hit != 'true'
+        run: just setup-cef
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Build orzmd web assets
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Restore WiX
+        run: |
+          dotnet tool restore
+          dotnet wix extension add -g WixToolset.UI.wixext/${{ env.WIX_VERSION }}
+
+      - name: Resolve version
+        id: ver
+        run: |
+          $cargo = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages |
+            Where-Object { $_.name -eq "orzma" } | ForEach-Object { $_.version }
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}".TrimStart("v")
+            if ($tag -ne $cargo) {
+              Write-Error "Tag v$tag does not match Cargo version $cargo; bump Cargo.toml or fix the tag."
+              exit 1
+            }
+            $version = $tag
+          } elseif ("${{ inputs.version }}") {
+            # A manual dry run may pass a 3-part version so the build is not blocked
+            # by a prerelease Cargo version (wix build runs with -wx, and WIX1148 on
+            # a version like 0.2.0-dev is then an error).
+            $version = "${{ inputs.version }}"
+          } else {
+            $version = $cargo
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Stage the distribution tree
+        run: python scripts/stage_windows.py --version ${{ steps.ver.outputs.version }}
+
+      # NOTE: the bindpaths must be absolute. WiX resolves a relative bindpath against
+      # the .wxs file's own directory, not the working directory, so relative values
+      # fail with WIX8601/WIX8600. `just msi` uses Resolve-Path for the same reason.
+      - name: Build the MSI
+        run: >
+          dotnet wix build build/windows/orzma.wxs
+          -ext WixToolset.UI.wixext/${{ env.WIX_VERSION }}
+          -bindpath "stage=${{ github.workspace }}\target\dist\stage"
+          -bindpath "build=${{ github.workspace }}\build\windows"
+          -d "Version=${{ steps.ver.outputs.version }}"
+          -wx
+          -arch x64
+          -o "target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi"
+
+      - name: Validate the MSI
+        run: dotnet wix msi validate "target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi"
+
+      - name: Write the checksum sidecar
+        run: |
+          $msi = "target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi"
+          $hash = (Get-FileHash -Algorithm SHA256 $msi).Hash.ToLower()
+          "$hash  $(Split-Path -Leaf $msi)" | Out-File -Encoding ascii "$msi.sha256"
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi
+            target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi.sha256
+          generate_release_notes: true
