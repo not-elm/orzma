@@ -149,7 +149,7 @@ stage *args:
 # build the MSI from the staged tree (run `just stage` first)
 [windows]
 msi version="":
-    $v = "{{ version }}"; if (-not $v) { $v = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages | Where-Object { $_.name -eq "orzma" } | ForEach-Object { $_.version } }; $stage = (Resolve-Path "target/dist/stage").Path; $build = (Resolve-Path "build/windows").Path; dotnet wix build build/windows/orzma.wxs -ext WixToolset.UI.wixext -bindpath "stage=$stage" -bindpath "build=$build" -d "Version=$v" -wx -arch x64 -o "target/dist/orzma-$v-x64.msi"
+    $v = "{{ version }}"; if (-not $v) { $v = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages | Where-Object { $_.name -eq "orzma" } | ForEach-Object { $_.version } }; if (-not (Test-Path "target/dist/stage")) { Write-Error "target/dist/stage not found; run 'just stage' first"; exit 1 }; if (-not (Test-Path "build/windows")) { Write-Error "build/windows not found; check your checkout"; exit 1 }; $stage = (Resolve-Path "target/dist/stage").Path; $build = (Resolve-Path "build/windows").Path; dotnet wix build build/windows/orzma.wxs -ext WixToolset.UI.wixext/6.0.2 -bindpath "stage=$stage" -bindpath "build=$build" -d "Version=$v" -wx -arch x64 -o "target/dist/orzma-$v-x64.msi"
 
 # run ICE validation on the built MSI
 [windows]
