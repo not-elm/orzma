@@ -191,5 +191,68 @@ class LicenseRtf(unittest.TestCase):
         self.assertIn("first\\par", sw.license_rtf("first\nsecond"))
 
 
+class StageConfigResolution(unittest.TestCase):
+    def test_defaults_point_at_target_dist(self):
+        args = sw.build_arg_parser().parse_args(["--version", "1.2.3"])
+        cfg = sw.resolve_config(args)
+        self.assertEqual(cfg.version, "1.2.3")
+        self.assertEqual(cfg.stage_dir, sw.REPO_ROOT / "target" / "dist" / "stage")
+        self.assertEqual(cfg.tools_dir, sw.REPO_ROOT / "target" / "dist" / "tools")
+        self.assertIsNone(cfg.render_process_bin)
+        self.assertFalse(cfg.skip_build)
+
+    def test_overrides_are_expanded(self):
+        args = sw.build_arg_parser().parse_args(
+            ["--version", "1.2.3", "--out-dir", "/tmp/out", "--cef-dir", "/tmp/cef",
+             "--render-process-bin", "/tmp/rp.exe", "--skip-build"]
+        )
+        cfg = sw.resolve_config(args)
+        self.assertEqual(cfg.out_dir, Path("/tmp/out"))
+        self.assertEqual(cfg.cef_dir, Path("/tmp/cef"))
+        self.assertEqual(cfg.render_process_bin, Path("/tmp/rp.exe"))
+        self.assertTrue(cfg.skip_build)
+
+
+class StageCefTree(unittest.TestCase):
+    def test_copies_staged_entries_and_creates_subdirectories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cef = root / "cef"
+            _write(cef / "libcef.dll", b"cef")
+            _write(cef / "locales" / "ja.pak", b"ja")
+            stage = root / "stage"
+            sw.copy_cef_entries(cef, stage, ["libcef.dll", "locales/ja.pak"])
+            self.assertEqual((stage / "libcef.dll").read_bytes(), b"cef")
+            self.assertEqual((stage / "locales" / "ja.pak").read_bytes(), b"ja")
+
+    def test_inventory_failures_are_reported_together(self):
+        with self.assertRaises(SystemExit) as raised:
+            sw.assert_inventory_clean(["icudtl.dat"], ["brand_new.dll"], ["libcef.dll"])
+        message = str(raised.exception)
+        self.assertIn("icudtl.dat", message)
+        self.assertIn("brand_new.dll", message)
+        self.assertIn("libcef.dll", message)
+
+    def test_inventory_clean_passes_silently(self):
+        self.assertIsNone(sw.assert_inventory_clean([], [], []))
+
+
+class OrzmdAssets(unittest.TestCase):
+    def test_missing_web_assets_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            assets = Path(tmp) / "assets"
+            assets.mkdir()
+            (assets / ".gitkeep").touch()
+            with self.assertRaises(SystemExit):
+                sw.verify_orzmd_web_assets(assets)
+
+    def test_present_web_assets_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            assets = Path(tmp) / "assets"
+            assets.mkdir()
+            (assets / "index.js").write_text("console.log(1)")
+            self.assertIsNone(sw.verify_orzmd_web_assets(assets))
+
+
 if __name__ == "__main__":
     unittest.main()

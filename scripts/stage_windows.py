@@ -3,10 +3,14 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import os
+import shutil
 import struct
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 APP_NAME = "orzma"
@@ -268,18 +272,178 @@ def refresh_inventory(cef_dir: Path, cef_version: str, out_path: Path) -> None:
     print(f"==> wrote {out_path} ({len(inventory['required'])} required files)")
 
 
-if __name__ == "__main__":
-    import argparse
+@dataclass
+class StageConfig:
+    version: str
+    cef_dir: Path
+    out_dir: Path
+    render_process_bin: Path | None
+    skip_build: bool
 
-    # NOTE: this option surface is the one Task 4 keeps. Only the body is replaced there,
-    # so the just recipe below does not need rewriting.
-    parser = argparse.ArgumentParser(description="Stage orzma for the Windows MSI")
-    parser.add_argument("--refresh-inventory", action="store_true")
-    parser.add_argument("--cef-dir", default="~/.local/share/cef")
-    parser.add_argument("--cef-version")
-    args = parser.parse_args()
-    if not args.refresh_inventory:
-        raise SystemExit("staging is implemented in a later task; pass --refresh-inventory")
-    if not args.cef_version:
-        raise SystemExit("--refresh-inventory requires --cef-version")
-    refresh_inventory(Path(args.cef_dir).expanduser(), args.cef_version, INVENTORY_PATH)
+    @property
+    def stage_dir(self) -> Path:
+        return self.out_dir / "stage"
+
+    @property
+    def tools_dir(self) -> Path:
+        return self.out_dir / "tools"
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Stage orzma for the Windows MSI")
+    p.add_argument("--version")
+    p.add_argument("--cef-dir", default="~/.local/share/cef")
+    p.add_argument("--render-process-bin")
+    p.add_argument("--skip-build", action="store_true")
+    p.add_argument("--out-dir", default=str(REPO_ROOT / "target" / "dist"))
+    p.add_argument("--refresh-inventory", action="store_true",
+                   help="rewrite build/windows/cef-inventory.json from --cef-dir and exit")
+    p.add_argument("--cef-version", help="required with --refresh-inventory")
+    return p
+
+
+def resolve_config(args: argparse.Namespace) -> StageConfig:
+    return StageConfig(
+        version=args.version or cargo_version(BIN_NAME),
+        cef_dir=Path(args.cef_dir).expanduser(),
+        out_dir=Path(args.out_dir).expanduser(),
+        render_process_bin=(
+            Path(args.render_process_bin).expanduser() if args.render_process_bin else None
+        ),
+        skip_build=args.skip_build,
+    )
+
+
+def run(argv: list[str], env: dict[str, str] | None = None) -> None:
+    print(f"==> {' '.join(argv)}")
+    subprocess.run(argv, check=True, cwd=str(REPO_ROOT), env=env)
+
+
+def verify_orzmd_web_assets(assets_dir: Path | None = None) -> None:
+    assets = assets_dir if assets_dir is not None else REPO_ROOT / "apps" / "orzmd" / "assets"
+    real = (
+        [p for p in assets.glob("*") if p.name not in {".gitignore", ".gitkeep"}]
+        if assets.is_dir() else []
+    )
+    if not real:
+        raise SystemExit(
+            "orzmd web assets missing: apps/orzmd/assets/ has only placeholders. "
+            "Run `pnpm build` (or `just orzmd-web`) before staging, "
+            "or orzmd will ship a blank viewer."
+        )
+
+
+def cargo_build(cfg: StageConfig) -> None:
+    env = cargo_env(dict(os.environ))
+    run(cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE), env=env)
+    verify_orzmd_web_assets()
+    run(companion_cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE, COMPANION_BINS), env=env)
+    run(render_process_install_argv(RENDER_PROCESS_VERSION, TARGET_TRIPLE, cfg.tools_dir), env=env)
+
+
+def assert_inventory_clean(missing: list[str], unclassified: list[str], mismatched: list[str]) -> None:
+    problems = []
+    if missing:
+        problems.append(f"missing required CEF files: {', '.join(missing)}")
+    if unclassified:
+        problems.append(
+            "unclassified CEF files (add them to required/optional/build_only in "
+            f"{INVENTORY_PATH.name}): {', '.join(unclassified)}"
+        )
+    if mismatched:
+        problems.append(
+            "sha256 mismatch, the CEF directory does not match the inventory "
+            f"(run `just cef-inventory-refresh` after a cef_version bump): {', '.join(mismatched)}"
+        )
+    if problems:
+        raise SystemExit("; ".join(problems))
+
+
+def copy_cef_entries(cef_dir: Path, stage_dir: Path, staged: list[str]) -> None:
+    for rel in staged:
+        dest = stage_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(cef_dir / rel, dest)
+
+
+def stage_cef(cfg: StageConfig) -> None:
+    inventory = load_inventory(INVENTORY_PATH)
+    build_only = set(inventory["build_only"])
+    required, optional = inventory["required"], inventory["optional"]
+    entries = iter_cef_files(cfg.cef_dir, build_only)
+    staged, missing, unclassified = classify_entries(entries, required, optional)
+    digests = {**required, **optional}
+    assert_inventory_clean(missing, unclassified, digest_mismatches(cfg.cef_dir, staged, digests))
+    copy_cef_entries(cfg.cef_dir, cfg.stage_dir, staged)
+    print(f"==> staged {len(staged)} CEF files")
+
+
+def binary_sources(cfg: StageConfig) -> dict[str, Path]:
+    built = REPO_ROOT / "target" / TARGET_TRIPLE / CARGO_PROFILE
+    sources = {f"{name}.exe": built / f"{name}.exe" for name in (BIN_NAME, *COMPANION_BINS)}
+    sources[f"{RENDER_PROCESS_BIN}.exe"] = (
+        cfg.render_process_bin
+        if cfg.render_process_bin
+        else cfg.tools_dir / "bin" / f"{RENDER_PROCESS_BIN}.exe"
+    )
+    return sources
+
+
+def stage_binaries(cfg: StageConfig) -> None:
+    for name, src in binary_sources(cfg).items():
+        if not src.is_file():
+            raise SystemExit(f"binary not found: {src} (build first or pass --skip-build off)")
+        shutil.copy2(src, cfg.stage_dir / name)
+        print(f"==> staged {name}")
+
+
+def stage_licenses(cfg: StageConfig) -> None:
+    for src in (REPO_ROOT / "licenses" / "THIRD-PARTY-LICENSES.md",):
+        shutil.copy2(src, cfg.stage_dir / src.name)
+    rtf = license_rtf((REPO_ROOT / "LICENSE").read_text(encoding="utf-8"))
+    (cfg.stage_dir / "license.rtf").write_text(rtf, encoding="ascii", newline="\r\n")
+
+
+def verify_crt(cfg: StageConfig) -> None:
+    offenders = {}
+    for path in sorted(cfg.stage_dir.rglob("*")):
+        if path.suffix.lower() not in (".exe", ".dll"):
+            continue
+        try:
+            imported = pe_imported_dlls(path)
+        except ValueError as error:
+            raise SystemExit(f"cannot read the import table of {path.name}: {error}") from error
+        found = forbidden_crt_imports(imported)
+        if found:
+            offenders[path.name] = found
+    if offenders:
+        raise SystemExit(
+            "dynamic CRT dependency found; the build did not use "
+            f"{CRT_STATIC_RUSTFLAGS}: {offenders}"
+        )
+    print("==> CRT check passed (no vcruntime140/msvcp140 imports)")
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_arg_parser().parse_args(argv)
+    if args.refresh_inventory:
+        if not args.cef_version:
+            raise SystemExit("--refresh-inventory requires --cef-version")
+        refresh_inventory(Path(args.cef_dir).expanduser(), args.cef_version, INVENTORY_PATH)
+        return
+    cfg = resolve_config(args)
+    if cfg.stage_dir.exists():
+        shutil.rmtree(cfg.stage_dir)
+    cfg.stage_dir.mkdir(parents=True)
+    if not cfg.skip_build:
+        cargo_build(cfg)
+    stage_cef(cfg)
+    stage_binaries(cfg)
+    stage_licenses(cfg)
+    verify_crt(cfg)
+    print(f"version={cfg.version}")
+    print(f"stage={cfg.stage_dir}")
+
+
+if __name__ == "__main__":
+    main()
