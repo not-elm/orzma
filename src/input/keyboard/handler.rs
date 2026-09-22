@@ -19,6 +19,7 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
+use bevy_orzma_tty_renderer::schema::TerminalView;
 use bevy_orzma_webview::ForwardKeys;
 use orzma_configs::shortcuts::Shortcut;
 
@@ -69,6 +70,7 @@ fn resolve_key_effects(
     windows: Query<&Window, With<PrimaryWindow>>,
     focused_surface: Query<Entity, With<KeyboardFocused>>,
     vi_modes: Query<(), With<ViModeState>>,
+    views: Query<&TerminalView>,
     forward_keys: Query<&ForwardKeys>,
 ) {
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
@@ -84,6 +86,8 @@ fn resolve_key_effects(
 
     let focused = resolve_focused_surface(&focused_surface);
     let in_vi_mode = focused.is_some_and(|entity| vi_modes.get(entity).is_ok());
+    let has_selection =
+        focused.is_some_and(|entity| views.get(entity).is_ok_and(|view| view.selection.is_some()));
     let forward_chords = focused_webview
         .0
         .and_then(|entity| forward_keys.get(entity).ok())
@@ -94,6 +98,7 @@ fn resolve_key_effects(
         mods,
         now: inputs.time.elapsed(),
         in_vi_mode,
+        has_selection,
         webview_focused: focused_webview.0.is_some(),
         forward_chords,
     };
@@ -178,6 +183,7 @@ mod tests {
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
     use orzma_configs::shortcuts::Modifiers;
+    use orzma_vt::prelude::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
     use std::time::Duration;
 
     #[derive(Resource, Default)]
@@ -253,6 +259,26 @@ mod tests {
             PrimaryWindow,
         ));
         app
+    }
+
+    fn hold_ctrl(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ControlLeft);
+    }
+
+    fn selection_range() -> SelectionRange {
+        SelectionRange {
+            start: GridPoint {
+                line: GridLine(0),
+                column: GridColumn(0),
+            },
+            end: GridPoint {
+                line: GridLine(0),
+                column: GridColumn(3),
+            },
+            geometry: SelectionGeometry::Linear,
+        }
     }
 
     fn press_key(app: &mut App, key_code: KeyCode, logical: Key) {
@@ -421,6 +447,69 @@ mod tests {
             app.world().resource::<Captured>().in_vi_mode,
             Some(false),
             "a focused surface NOT in vi mode sets KeyEffectMessage.in_vi_mode to false"
+        );
+    }
+
+    /// Asserts that a Ctrl-only copy chord resolves to the copy action when
+    /// the focused pane holds a selection.
+    ///
+    /// Case: a Windows user drags out a selection and presses `Ctrl+C`.
+    #[test]
+    fn ctrl_copy_copies_when_the_focused_pane_has_a_selection() {
+        let mut app = resolve_app(test_shortcuts_with_direct_chord(
+            KeyCode::KeyC,
+            Modifiers {
+                ctrl: true,
+                ..Modifiers::default()
+            },
+            Shortcut::Copy,
+        ));
+        app.world_mut().spawn((
+            OrzmaTerminal,
+            KeyboardFocused,
+            TerminalView {
+                selection: Some(selection_range()),
+                ..TerminalView::default()
+            },
+        ));
+        hold_ctrl(&mut app);
+        press_key(&mut app, KeyCode::KeyC, Key::Character("c".into()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().effects,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::Copy,
+                via_leader: false,
+            }]
+        );
+    }
+
+    /// Asserts that a Ctrl-only copy chord types into the PTY when the focused
+    /// pane holds no selection, so the interrupt byte still gets through.
+    ///
+    /// Case: a Windows user presses `Ctrl+C` to stop a running command with
+    /// nothing selected.
+    #[test]
+    fn ctrl_copy_types_when_the_focused_pane_has_no_selection() {
+        let mut app = resolve_app(test_shortcuts_with_direct_chord(
+            KeyCode::KeyC,
+            Modifiers {
+                ctrl: true,
+                ..Modifiers::default()
+            },
+            Shortcut::Copy,
+        ));
+        app.world_mut()
+            .spawn((OrzmaTerminal, KeyboardFocused, TerminalView::default()));
+        hold_ctrl(&mut app);
+        press_key(&mut app, KeyCode::KeyC, Key::Character("c".into()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("c".into()),
+                key_code: KeyCode::KeyC,
+            }]
         );
     }
 

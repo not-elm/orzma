@@ -115,7 +115,13 @@ fn trigger_mouse_effects(commands: &mut Commands, entity: Entity, effects: Vec<M
                 });
             }
             MouseEffect::SelClear => commands.trigger(TerminalSelectionClear { entity }),
-            MouseEffect::Copy => commands.trigger(TerminalSelectionCopy { entity }),
+            // NOTE: copy-on-release must NOT dismiss the selection — the
+            // drag the user just finished stays highlighted, and a Ctrl-only
+            // copy chord keeps something to copy.
+            MouseEffect::Copy => commands.trigger(TerminalSelectionCopy {
+                entity,
+                dismiss: false,
+            }),
             MouseEffect::OpenUri(uri) => commands.trigger(TerminalOpenUri { entity, uri }),
         }
     }

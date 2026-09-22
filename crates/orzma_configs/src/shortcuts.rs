@@ -524,12 +524,13 @@ pub struct Shortcuts {
 
 impl Default for Shortcuts {
     fn default() -> Self {
+        let host = PlatformDefaults::for_host();
         Shortcuts {
-            leader: Some(Leader::ModifierTap(TapModifier::Meta)),
-            paste: Some(Binding::Direct(parse_default_chord("Cmd+V"))),
-            copy: Some(Binding::Direct(parse_default_chord("Cmd+C"))),
+            leader: host.leader,
+            paste: host.paste,
+            copy: host.copy,
             release_webview_focus: Some(parse_default_binding("<Leader>u")),
-            quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
+            quit: host.quit,
             enter_vi_mode: Some(parse_default_binding("<Leader>s")),
             select_left_pane: Some(parse_default_binding("<Leader>h")),
             select_down_pane: Some(parse_default_binding("<Leader>j")),
@@ -963,6 +964,38 @@ fn parse_modifier_to_bit(token: &str) -> Option<(Modifiers, &'static str)> {
     }
 }
 
+/// The host-dependent slice of the default table: the bindings whose stock
+/// value differs between macOS and the Ctrl-based platforms.
+struct PlatformDefaults {
+    leader: Option<Leader>,
+    paste: Option<Binding>,
+    copy: Option<Binding>,
+    quit: Option<Binding>,
+}
+
+impl PlatformDefaults {
+    /// The quartet for the platform this build targets: `Cmd`-based on macOS,
+    /// `Ctrl`-based with an `Alt` tap leader elsewhere. `quit` is unbound off
+    /// macOS, where the window manager already closes the window.
+    fn for_host() -> Self {
+        if cfg!(target_os = "macos") {
+            PlatformDefaults {
+                leader: Some(Leader::ModifierTap(TapModifier::Meta)),
+                paste: Some(Binding::Direct(parse_default_chord("Cmd+V"))),
+                copy: Some(Binding::Direct(parse_default_chord("Cmd+C"))),
+                quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
+            }
+        } else {
+            PlatformDefaults {
+                leader: Some(Leader::ModifierTap(TapModifier::Alt)),
+                paste: Some(Binding::Direct(parse_default_chord("Ctrl+V"))),
+                copy: Some(Binding::Direct(parse_default_chord("Ctrl+C"))),
+                quit: None,
+            }
+        }
+    }
+}
+
 fn parse_default_chord(s: &str) -> KeyChord {
     parse_key_chord(s).unwrap_or_else(|e| panic!("invalid default chord {s:?}: {e}"))
 }
@@ -1284,6 +1317,11 @@ mod tests {
         );
     }
 
+    /// Asserts that the macOS default table binds the `Cmd` tap leader and
+    /// three direct `Cmd` chords, leaving the other 29 actions leader-scoped.
+    ///
+    /// Case: a user on macOS starts orzma with no config file at all.
+    #[cfg(target_os = "macos")]
     #[test]
     fn shortcuts_default_is_active_direct_bindings() {
         let s = Shortcuts::default();
@@ -1303,6 +1341,58 @@ mod tests {
         assert_eq!(s.bindings_iter().count(), 32);
         assert_eq!(s.direct_chords().count(), 3);
         assert_eq!(s.leader_chords().count(), 29);
+    }
+
+    /// Asserts that the non-macOS default table binds the `Alt` tap leader and
+    /// `Ctrl` chords for paste and copy, and leaves `quit` unbound rather than
+    /// binding a chord the window manager already owns.
+    ///
+    /// Case: a user on Windows starts orzma with no config file at all, where
+    /// no `Cmd` key exists to press.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn shortcuts_default_is_active_direct_bindings() {
+        let s = Shortcuts::default();
+        assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Alt)));
+        assert_eq!(
+            s.paste,
+            Some(Binding::Direct(parse_key_chord("Ctrl+V").unwrap()))
+        );
+        assert_eq!(
+            s.copy,
+            Some(Binding::Direct(parse_key_chord("Ctrl+C").unwrap()))
+        );
+        assert_eq!(s.quit, None);
+        assert_eq!(s.bindings_iter().count(), 32);
+        assert_eq!(s.direct_chords().count(), 2);
+        assert_eq!(s.leader_chords().count(), 29);
+    }
+
+    /// Asserts that every chord in the host default table is unique, so no
+    /// stock binding shadows another.
+    ///
+    /// Case: a user runs orzma with no config file, on whichever platform the
+    /// build targets.
+    #[test]
+    fn host_default_table_has_no_duplicate_chords() {
+        let s = Shortcuts::default();
+        assert_eq!(s.validate_no_direct_conflicts(), Ok(()));
+        assert_eq!(s.validate_no_leader_conflicts(), Ok(()));
+    }
+
+    /// Asserts that every direct chord in the host default table resolves to a
+    /// physical key, so a stock binding can actually fire.
+    ///
+    /// Case: a user presses a stock direct chord — `Ctrl+V` on Windows,
+    /// `Cmd+V` on macOS — on a fresh install.
+    #[test]
+    fn host_default_direct_chords_map_to_physical_keys() {
+        for (label, chord, _action) in Shortcuts::default().direct_chords() {
+            assert!(
+                chord.key.maps_to_physical_key(),
+                "default chord for {label:?} ({chord}) resolves to no physical key"
+            );
+        }
     }
 
     #[test]
@@ -1362,10 +1452,6 @@ mod tests {
                 repeat: false,
             })
         );
-        assert_eq!(
-            s.paste,
-            Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
-        );
     }
 
     #[test]
@@ -1423,10 +1509,7 @@ rename-window = "<Leader>d"
                 repeat: false,
             })
         );
-        assert_eq!(
-            s.paste,
-            Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
-        );
+        assert_eq!(s.paste, Shortcuts::default().paste);
         assert_eq!(s.leader_chords().count(), 29);
     }
 
@@ -1435,10 +1518,15 @@ rename-window = "<Leader>d"
         assert!(toml::from_str::<Shortcuts>("resize-pane-down = \"d\"\n").is_err());
     }
 
+    /// Asserts that two direct bindings sharing one chord are reported as a
+    /// single conflict naming both actions.
+    ///
+    /// Case: a user binds paste and quit to the same chord by hand.
     #[test]
     fn direct_conflict_detected() {
         let s = Shortcuts {
-            paste: Some(Binding::Direct(parse_key_chord("Cmd+Q").unwrap())),
+            paste: Some(Binding::Direct(parse_key_chord("Ctrl+Alt+Q").unwrap())),
+            quit: Some(Binding::Direct(parse_key_chord("Ctrl+Alt+Q").unwrap())),
             ..Default::default()
         };
         let err = s.validate_no_direct_conflicts().unwrap_err();
@@ -1485,10 +1573,30 @@ rename-window = "<Leader>d"
         assert!(err[0].actions.contains(&"rename-window"));
     }
 
+    /// Asserts that the macOS default table round-trips to its exact JSON
+    /// form, pinning every one of the 33 fields at once.
+    ///
+    /// Case: a macOS user's config is serialized back out, so a stock binding
+    /// that silently changes shape is caught here.
+    #[cfg(target_os = "macos")]
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        assert_eq!(json, expected);
+    }
+
+    /// Asserts that the non-macOS default table round-trips to its exact JSON
+    /// form, pinning every one of the 33 fields at once, with the unbound
+    /// `quit` emitted as an empty string.
+    ///
+    /// Case: a Windows user's config is serialized back out, so a stock
+    /// binding that silently changes shape is caught here.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn default_shortcuts_json_snapshot() {
+        let json = serde_json::to_string(&Shortcuts::default()).unwrap();
+        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 

@@ -53,12 +53,18 @@ pub(crate) struct TerminalSelectionCopy {
     /// The terminal entity whose selection is copied.
     #[event_target]
     pub entity: Entity,
+    /// Whether the selection is dismissed once its text has been requested.
+    /// When `false` the highlight survives the copy.
+    pub dismiss: bool,
 }
 
 /// Triggers a `TerminalSelectionCopy` on the focused terminal, if any.
 pub(crate) fn trigger_selection_copy(commands: &mut Commands, focused: Option<Entity>) {
     if let Some(entity) = focused {
-        commands.trigger(TerminalSelectionCopy { entity });
+        commands.trigger(TerminalSelectionCopy {
+            entity,
+            dismiss: true,
+        });
     }
 }
 
@@ -121,16 +127,24 @@ fn on_terminal_selection_clear(ev: On<TerminalSelectionClear>, mut commands: Com
 }
 
 /// Applies a `TerminalSelectionCopy`: asks the backend for the pane's
-/// selected text. The answer arrives as `TtySelectionTextSignal`.
+/// selected text, and dismisses the selection when the event asks for it.
+/// The answer arrives as `TtySelectionTextSignal`.
 fn on_terminal_selection_copy(
     ev: On<TerminalSelectionCopy>,
     mut commands: Commands,
     terminals: Query<(), With<OrzmaTerminal>>,
 ) {
     if terminals.get(ev.entity).is_ok() {
+        // NOTE: the copy request must be triggered before the clear. Both
+        // become `OrzmuxCommand`s on one ordered channel, so the backend reads
+        // the selected text only because it processes the copy first;
+        // triggering the clear ahead of it would answer with empty text.
         commands.trigger(RequestTtyCopySelection {
             terminal: ev.entity,
         });
+        if ev.dismiss {
+            commands.trigger(TerminalSelectionClear { entity: ev.entity });
+        }
     }
 }
 
@@ -331,8 +345,10 @@ mod tests {
             })
             .add_observer(|ev: On<CopyAction>, mut s: ResMut<Seen>| s.copies.push(ev.text.clone()));
         let terminal = app.world_mut().spawn(OrzmaTerminal).id();
-        app.world_mut()
-            .trigger(TerminalSelectionCopy { entity: terminal });
+        app.world_mut().trigger(TerminalSelectionCopy {
+            entity: terminal,
+            dismiss: true,
+        });
         app.world_mut().trigger(TtySelectionTextSignal {
             text: Some("hello".into()),
         });
@@ -345,5 +361,90 @@ mod tests {
         let seen = app.world().resource::<Seen>();
         assert_eq!(seen.requests, vec![terminal]);
         assert_eq!(seen.copies, vec!["hello".to_string()]);
+    }
+
+    /// Asserts that a dismissing copy clears the selection, and that it asks
+    /// the backend for the text before clearing rather than after.
+    ///
+    /// Case: a Windows user presses `Ctrl+C` over a selection, then presses it
+    /// again to interrupt the running command — which only reaches the shell
+    /// because the first press left no selection behind.
+    #[test]
+    fn selection_copy_requests_text_then_clears_the_selection() {
+        #[derive(Resource, Default)]
+        struct Order(Vec<&'static str>);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(SelectionPlugin)
+            .init_resource::<Order>()
+            .add_observer(|_: On<RequestTtyCopySelection>, mut o: ResMut<Order>| o.0.push("copy"))
+            .add_observer(|_: On<RequestTtySelectionClear>, mut o: ResMut<Order>| {
+                o.0.push("clear")
+            });
+        let terminal = app.world_mut().spawn(OrzmaTerminal).id();
+
+        app.world_mut().trigger(TerminalSelectionCopy {
+            entity: terminal,
+            dismiss: true,
+        });
+        app.update();
+
+        assert_eq!(app.world().resource::<Order>().0, vec!["copy", "clear"]);
+    }
+
+    /// Asserts that a non-dismissing copy asks for the text and leaves the
+    /// selection in place.
+    ///
+    /// Case: the user finishes a drag selection and lets go of the left
+    /// button, so orzma copies on release while the highlight stays up for a
+    /// following `Ctrl+C`.
+    #[test]
+    fn selection_copy_without_dismiss_keeps_the_selection() {
+        #[derive(Resource, Default)]
+        struct Order(Vec<&'static str>);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(SelectionPlugin)
+            .init_resource::<Order>()
+            .add_observer(|_: On<RequestTtyCopySelection>, mut o: ResMut<Order>| o.0.push("copy"))
+            .add_observer(|_: On<RequestTtySelectionClear>, mut o: ResMut<Order>| {
+                o.0.push("clear")
+            });
+        let terminal = app.world_mut().spawn(OrzmaTerminal).id();
+
+        app.world_mut().trigger(TerminalSelectionCopy {
+            entity: terminal,
+            dismiss: false,
+        });
+        app.update();
+
+        assert_eq!(app.world().resource::<Order>().0, vec!["copy"]);
+    }
+
+    /// Asserts that a copy aimed at an entity without a terminal clears
+    /// nothing, so a stale event cannot dismiss another pane's selection.
+    ///
+    /// Case: a copy event in flight while its target pane is torn down.
+    #[test]
+    fn selection_copy_on_a_bare_entity_clears_nothing() {
+        #[derive(Resource, Default)]
+        struct Order(Vec<&'static str>);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(SelectionPlugin)
+            .init_resource::<Order>()
+            .add_observer(|_: On<RequestTtyCopySelection>, mut o: ResMut<Order>| o.0.push("copy"))
+            .add_observer(|_: On<RequestTtySelectionClear>, mut o: ResMut<Order>| {
+                o.0.push("clear")
+            });
+        let bare = app.world_mut().spawn_empty().id();
+
+        app.world_mut().trigger(TerminalSelectionCopy {
+            entity: bare,
+            dismiss: true,
+        });
+        app.update();
+
+        assert!(app.world().resource::<Order>().0.is_empty());
     }
 }

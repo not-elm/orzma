@@ -74,7 +74,7 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
 }
 
 /// Applies one resolved `Shortcut`: vi-mode entry, paste (a direct paste
-/// fires outside vi mode; a leader paste fires unconditionally), copy
+/// fires only outside vi mode; a leader paste fires unconditionally), copy
 /// (fires unconditionally — vi mode included; no-selection is a no-op
 /// downstream), and the pane actions (select/split/kill, targeting the
 /// backend's active pane). Window actions are no-ops; `Quit` and

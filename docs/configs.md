@@ -110,12 +110,15 @@ webview_dim = 0.55        # f32 0..=1. Brightness multiplier for inactive webvie
 webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = full color, 1 = grey).
 
 [shortcuts]
+# NOTE: the values in this block are the macOS defaults. Four of them differ on
+# Windows and Linux — see "Platform defaults" below for the other table.
 # The leader for "<Leader>..." bindings. Either a full chord ("Ctrl+A": press
 # the chord, then the next key) OR a bare modifier to TAP ("Cmd"/"Ctrl"/"Alt":
-# tap the modifier with no other key, then the next key). Defaults to "Cmd", and
-# is active only when at least one action is bound to "<Leader>..." — the stock
-# defaults below already bind more than two dozen actions to "<Leader>...", so the Cmd tap
-# is armed out of the box. Set "" to disable it. "Shift" is not allowed as a tap.
+# tap the modifier with no other key, then the next key). Defaults to "Cmd" on
+# macOS and "Alt" elsewhere, and is active only when at least one action is
+# bound to "<Leader>..." — the stock defaults below already bind more than two
+# dozen actions to "<Leader>...", so the tap leader is armed out of the box.
+# Set "" to disable it. "Shift" is not allowed as a tap.
 leader = "Cmd"
 # Modifier-tap window (ms): a press+release within this time, with no intervening
 # key or mouse press, counts as a tap. Default 300; 0 reverts to 300.
@@ -137,7 +140,7 @@ repeat-time-ms = 500
 paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>p" for a leader binding.
 copy                  = "Cmd+C"        # Copy the focused terminal's selection to the system clipboard.
 release-webview-focus = "<Leader>u"
-quit                  = "Cmd+Q"
+quit                  = "Cmd+Q"        # Unbound by default off macOS, where the window manager closes the window.
 enter-vi-mode         = "<Leader>s"    # Enters Alacritty vi mode.
 
 # --- pane actions ---
@@ -261,12 +264,47 @@ shell within the window re-fires the action instead of reaching the terminal.
 If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 `:r` marker from that binding.
 
+## Platform defaults
+
+Four defaults differ by platform, because macOS has a `Cmd` key and the other
+platforms do not. Every other action below is the same everywhere.
+
+| Action | Default (macOS) | Default (Windows / Linux) |
+| --- | --- | --- |
+| `leader` | `Cmd` (tap) | `Alt` (tap) |
+| `paste` | `Cmd+V` | `Ctrl+V` |
+| `copy` | `Cmd+C` | `Ctrl+C` |
+| `quit` | `Cmd+Q` | unbound |
+
+`quit` ships unbound off macOS because the window manager's own close
+shortcut (`Alt+F4` on Windows) already exits orzma. Bind it explicitly if you
+want a second way out.
+
+`Ctrl+C` copies only while a selection exists. With nothing selected it is sent
+to the shell as the interrupt byte (`0x03`) instead, and the `copy` shortcut
+dismisses the selection, so pressing `Ctrl+C` twice copies and then interrupts.
+The mouse's own copy-on-release keeps the selection highlighted, so a drag
+followed by `Ctrl+C` still copies. A copy chord that carries any other
+modifier — including the macOS `Cmd+C` default — always copies and never
+reaches the shell.
+
+Two stock `[vi-mode]` keys share a chord with these defaults. Inside vi mode
+`Ctrl+V` toggles a rectangular selection (the paste action is inert there
+anyway), and `Ctrl+C` leaves vi mode whenever there is no selection to copy.
+
+Binding `paste` to `Ctrl+V` does take that key away from the program running in
+the terminal, so readline's quoted-insert and vim's visual-block mode no longer
+see it. Set `paste = "Ctrl+Shift+V"` to give it back.
+
 ## Shortcut actions
+
+The `Default` column lists the macOS value; see "Platform defaults" above for
+the four that differ elsewhere.
 
 | Action | Default | What it does |
 | --- | --- | --- |
 | `paste` | `Cmd+V` | Paste from the system clipboard. |
-| `copy` | `Cmd+C` | Copy the focused terminal's selection to the system clipboard. |
+| `copy` | `Cmd+C` | Copy the focused terminal's selection to the system clipboard, then dismiss the selection. |
 | `release-webview-focus` | `<Leader>u` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit orzma. |
 | `enter-vi-mode` | `<Leader>s` | Enter vi mode. |
@@ -311,12 +349,17 @@ leader-scoped key (e.g. `<Leader>s`), and regardless of whether the leader is
 a chord or a modifier tap.
 
 Note on the leader: because the stock defaults above bind more than two dozen
-actions to `<Leader>...`, the `Cmd` tap leader is armed by default — tapping and
-releasing `Cmd` (with no other key/mouse press in between) arms the leader,
-and the very next keystroke either fires a bound `<Leader>` action or is
-swallowed if nothing matches. `LeaderPending` has no expiry: after an
-accidental tap, the next keystroke is consumed one way or the other, it does
-not time out on its own.
+actions to `<Leader>...`, the tap leader is armed by default — tapping and
+releasing the leader modifier (`Cmd` on macOS, `Alt` elsewhere, with no other
+key/mouse press in between) arms the leader, and the very next keystroke either
+fires a bound `<Leader>` action or is swallowed if nothing matches.
+`LeaderPending` has no expiry: after an accidental tap, the next keystroke is
+consumed one way or the other, it does not time out on its own.
+
+Holding the leader modifier still behaves normally: only a bare press and
+release arms the leader, so `Alt+h` continues to reach the shell as a
+meta-prefixed key rather than selecting the left pane. Tabbing away from the
+window also disarms an in-progress tap.
 
 Two consequences of the stock `<Leader>` defaults worth knowing:
 
@@ -328,7 +371,8 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
 - **`leader = ""` disables every `<Leader>`-bound action at once** — with the
   stock defaults that includes all 29 leader-bound actions above, silently
   (a warning is logged, but startup succeeds). If you disable the leader,
-  rebind the actions you need to direct chords, e.g. `next-window = "Cmd+]"`.
+  rebind the actions you need to direct chords, e.g.
+  `next-window = "Ctrl+Shift+]"`.
 
 ## Vi-mode keys
 
@@ -368,10 +412,18 @@ A `[vi-mode]` entry is an optional `Ctrl+` prefix plus exactly one key.
 
 Shadowing note: `[shortcuts]` chords (both leader-scoped and direct) are
 matched **before** `[vi-mode]` keys. If the same keystroke is bound in both
-tables, the `[shortcuts]` action always fires and the `[vi-mode]` binding
+tables, the `[shortcuts]` action normally fires and the `[vi-mode]` binding
 never sees it — e.g. setting `leader = "Ctrl+B"` shadows the default
 `page-up = "Ctrl+B"` binding while vi mode is active. orzma does not
 validate across the two tables; check your own bindings for overlap.
+
+Two actions decline the keystroke instead of shadowing it, so the `[vi-mode]`
+binding still runs:
+
+- `paste` does nothing in vi mode, so a direct paste chord passes through —
+  the stock `Ctrl+V` reaches `toggle-rect-selection`.
+- `copy` passes a Ctrl-only chord through whenever there is no selection to
+  copy — the stock `Ctrl+C` reaches `exit`.
 
 ### Vi-mode actions
 
