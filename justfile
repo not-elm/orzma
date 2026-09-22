@@ -141,6 +141,15 @@ bundle *args: orzmd-web
     pnpm build
     python3 scripts/bundle_macos.py {{ args }}
 
+# build, package and ICE-validate the orzma MSI (e.g. `just bundle 0.2.0`)
+[windows]
+bundle version="":
+    pnpm i
+    pnpm build
+    just stage
+    just msi {{ version }}
+    just msi-validate {{ version }}
+
 # setup-cef-release then bundle with notarization
 [macos]
 release *args: setup-cef-release orzmd-web
