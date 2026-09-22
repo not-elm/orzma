@@ -143,15 +143,34 @@ the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
 
 | `kind` | Required | Optional (default) | Served at |
 | --- | --- | --- | --- |
-| `dir` | `root` (absolute dir path), `entry` (safe relative path, e.g. `index.html`) | `interactive` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `orzma://<handle>/` |
-| `inline` | `html` (full document, ≤ 4 MiB) | `interactive` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `orzma://<handle>/index.html` |
-| `url` | `url` (`http`/`https` only) | `interactive` (`true`), `bridge` (`false`), `forward_keys` (`[]`), `preload` (`[]`) | the remote URL directly (no `orzma://` origin) |
+| `dir` | `root` (absolute dir path), `entry` (safe relative path, e.g. `index.html`) | `interactive` (`true`), `click_focus` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `orzma://<handle>/` |
+| `inline` | `html` (full document, ≤ 4 MiB) | `interactive` (`true`), `click_focus` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `orzma://<handle>/index.html` |
+| `url` | `url` (`http`/`https` only) | `interactive` (`true`), `click_focus` (`true`), `bridge` (`false`), `forward_keys` (`[]`), `preload` (`[]`) | the remote URL directly (no `orzma://` origin) |
 
 - `interactive` — whether the mounted view accepts pointer/keyboard input.
+- `click_focus` — whether a pointer press inside the view's rect moves keyboard
+  focus to it. See [Click focus](#click-focus).
 - `bridge` (`url` only) — opt into the `window.orzma` back-channel. `dir` and
   `inline` are always bridged; a `url` view is bridged only with `bridge:true`.
 - `preload` — an array of JavaScript source strings injected before the page's
   own scripts (after the host bridge). Honored only for bridged views.
+
+### Click focus
+
+By default a pointer press inside a mounted view's rect gives that view
+keyboard focus, and the host then stops delivering keys to the pane's PTY —
+the page consumes them, and `forward_keys` is the way back out.
+
+`click_focus: false` turns that off for one registration: the press still
+reaches the page, and the click still makes the owning pane active, but
+keyboard focus stays with the pane's terminal. It suits a view that renders
+output and owns no keyboard affordances — no `keydown` handlers, no text
+fields — where the app drives everything from the TUI.
+
+A `focus` op still moves focus to such a view, so an app can hand it the
+keyboard deliberately and take it back with a `focus` op carrying `null`.
+Clicking inside a view that already holds app-granted focus does not revoke
+it; clicking it while a *different* view holds focus releases that one.
 
 ### Forward keys
 
