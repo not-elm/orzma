@@ -29,8 +29,7 @@ const FONT_SIZE_PX: f32 = 12.0;
 /// The physical pixel font size the renderer rasterizes at for a logical
 /// size under the given scale factor.
 ///
-/// A product that rounds below one is raised to one, since a zero-pixel face
-/// rasterizes nothing.
+/// A product that rounds below one is raised to one.
 pub fn physical_font_size(logical_px: f32, scale_factor: f32) -> u16 {
     (logical_px * scale_factor)
         .round()
@@ -898,8 +897,7 @@ mod tests {
     /// Asserts that a product rounding below one is raised to one rather than
     /// yielding a zero-pixel face.
     ///
-    /// Case: a very small configured font size on a low-DPI display, where the
-    /// rounded product would otherwise be zero.
+    /// Case: a very small configured font size on a low-DPI display.
     #[test]
     fn physical_font_size_never_returns_zero() {
         assert_eq!(physical_font_size(0.4, 1.0), 1);
