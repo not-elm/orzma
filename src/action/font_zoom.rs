@@ -3,8 +3,10 @@
 
 use crate::configs::OrzmaConfigsResource;
 use crate::surface::geometry::cell_pitch_phys;
+use bevy::ecs::system::NonSendMarker;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy::window::{Monitor, OnMonitor, PrimaryWindow, WindowMode};
+use bevy::winit::WINIT_WINDOWS;
 use bevy_orzma_tty_renderer::{TerminalFontSize, TerminalFonts, physical_font_size};
 
 /// The zoom factors, in ascending order. `FACTORS[BASE]` is the unzoomed 1.0.
@@ -114,11 +116,13 @@ fn on_font_zoom(
     ev: On<FontZoomAction>,
     mut zoom: ResMut<FontZoom>,
     mut font_size: ResMut<TerminalFontSize>,
+    mut windows: Query<(Entity, &mut Window, Option<&OnMonitor>), With<PrimaryWindow>>,
     configs: Res<OrzmaConfigsResource>,
     fonts: Res<TerminalFonts>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    monitors: Query<&Monitor>,
+    _non_send_marker: NonSendMarker,
 ) {
-    let Ok(window) = windows.single() else {
+    let Ok((entity, mut window, on_monitor)) = windows.single_mut() else {
         return;
     };
     let base = configs.font.size;
@@ -127,15 +131,79 @@ fn on_font_zoom(
         let (w, h) = cell_pitch_phys(&fonts.cell_metrics_px(physical_font_size(logical, dpr)));
         (w as u16, h as u16)
     };
-    let current_pitch = pitch_at(base * zoom.factor());
-    let Some((index, _)) = zoom.next_index(ev.direction, base, current_pitch, pitch_at) else {
+    let old_pitch = pitch_at(base * zoom.factor());
+    let Some((index, new_pitch)) = zoom.next_index(ev.direction, base, old_pitch, pitch_at) else {
         return;
     };
     zoom.set_index(index);
-    // NOTE: `next_index` only returns a rung whose cell pitch differs, so this
-    // write always carries a real change. Writing unconditionally here is what
-    // makes change detection fire exactly on a zoom step.
+    // NOTE: every rung carries a distinct factor, so this write always changes
+    // the value. Writing unconditionally here is what makes change detection
+    // fire exactly on a zoom step.
     *font_size = TerminalFontSize(base * zoom.factor());
+
+    if !configs.font.zoom_resizes_window || !may_resize(entity, &window) {
+        return;
+    }
+    let current = UVec2::new(
+        window.resolution.physical_width(),
+        window.resolution.physical_height(),
+    );
+    let monitor = on_monitor
+        .and_then(|on| monitors.get(on.0).ok())
+        .map(|m| UVec2::new(m.physical_width, m.physical_height));
+    let Some(want) = requested_window_size(current, old_pitch, new_pitch, monitor) else {
+        return;
+    };
+    window.resolution.set_physical_resolution(want.x, want.y);
+}
+
+/// Whether the window may be resized to preserve the grid.
+///
+/// A fullscreen or maximized window is left alone. A window winit does not
+/// know about yet is treated as resizable.
+fn may_resize(entity: Entity, window: &Window) -> bool {
+    if window.mode != WindowMode::Windowed {
+        return false;
+    }
+    // NOTE: a maximized window must be left alone. winit's Windows backend
+    // clears the maximized flag instead of refusing the resize, so dropping
+    // this check turns a zoom keypress into an un-maximize.
+    WINIT_WINDOWS.with_borrow(|winit_windows| {
+        winit_windows
+            .get_window(entity)
+            .is_none_or(|w| !w.is_maximized())
+    })
+}
+
+/// The physical window size that keeps the cell count `current` shows at
+/// `old_pitch` once the pitch becomes `new_pitch`, clamped to `monitor`.
+///
+/// Both pitches are whole physical pixels; a zero on either axis is treated as
+/// one, so the division never divides by zero. `monitor` is the display's
+/// physical size, and `None` leaves the request unclamped.
+///
+/// Returns `None` when `current` holds no whole cell on either axis, since
+/// there is no cell count to preserve.
+fn requested_window_size(
+    current: UVec2,
+    old_pitch: (u16, u16),
+    new_pitch: (u16, u16),
+    monitor: Option<UVec2>,
+) -> Option<UVec2> {
+    let old = UVec2::new(u32::from(old_pitch.0).max(1), u32::from(old_pitch.1).max(1));
+    let new = UVec2::new(u32::from(new_pitch.0).max(1), u32::from(new_pitch.1).max(1));
+    let cells = current / old;
+    if cells.x == 0 || cells.y == 0 {
+        return None;
+    }
+    let want = cells * new;
+    Some(match monitor {
+        // NOTE: neither bevy_window::Monitor nor winit 0.30 exposes the work
+        // area, so the taskbar and dock are not excluded. The margin keeps a
+        // maximal request off the very edge of the display.
+        Some(monitor) => want.min(monitor * 95 / 100),
+        None => want,
+    })
 }
 
 #[cfg(test)]
@@ -287,5 +355,215 @@ mod tests {
         }
         assert!(steps > 0, "the ladder must allow at least one zoom-in step");
         assert!(zoom.index() > BASE);
+    }
+
+    /// Asserts that the requested window size keeps the cell count the window
+    /// currently shows, so the grid does not shrink under the larger pitch.
+    ///
+    /// Case: a 1600x1000 window at a 13x30 cell pitch zooms to a 16x36 pitch.
+    #[test]
+    fn the_requested_size_preserves_the_cell_count() {
+        let want = requested_window_size(
+            UVec2::new(1600, 1000),
+            (13, 30),
+            (16, 36),
+            Some(UVec2::new(4000, 3000)),
+        );
+
+        // 1600 / 13 = 123 columns; 1000 / 30 = 33 rows.
+        assert_eq!(want, Some(UVec2::new(123 * 16, 33 * 36)));
+    }
+
+    /// Asserts that a request larger than the monitor is clamped, so the
+    /// window never asks for a size the display cannot show.
+    ///
+    /// Case: the user zooms in on a window that already fills most of a
+    /// 1920x1080 display.
+    #[test]
+    fn the_requested_size_is_clamped_to_the_monitor() {
+        let want = requested_window_size(
+            UVec2::new(1600, 1000),
+            (13, 30),
+            (16, 36),
+            Some(UVec2::new(1920, 1080)),
+        );
+
+        assert_eq!(want, Some(UVec2::new(1920 * 95 / 100, 1080 * 95 / 100)));
+    }
+
+    /// Asserts that an unknown monitor leaves the request unclamped rather
+    /// than falling back to a guess.
+    ///
+    /// Case: the window has just been created and has not been assigned to a
+    /// monitor yet.
+    #[test]
+    fn an_unknown_monitor_leaves_the_request_unclamped() {
+        let want = requested_window_size(UVec2::new(800, 600), (10, 20), (20, 40), None);
+
+        assert_eq!(want, Some(UVec2::new(80 * 20, 30 * 40)));
+    }
+
+    /// Asserts that a degenerate pitch is treated as one pixel rather than
+    /// dividing by zero.
+    ///
+    /// Case: a font whose metrics floor to zero on one axis.
+    #[test]
+    fn a_zero_pitch_is_treated_as_one_pixel() {
+        let want = requested_window_size(UVec2::new(100, 100), (0, 0), (2, 2), None);
+
+        assert_eq!(want, Some(UVec2::new(200, 200)));
+    }
+
+    /// Asserts that a window holding no whole cell asks for nothing rather
+    /// than collapsing to a one-pixel request.
+    ///
+    /// Case: the user minimizes the orzma window on Windows, which reports a
+    /// 0x0 client area, and then presses a zoom key.
+    #[test]
+    fn a_window_with_no_cells_requests_nothing() {
+        assert_eq!(
+            requested_window_size(UVec2::ZERO, (13, 30), (16, 36), None),
+            None
+        );
+        assert_eq!(
+            requested_window_size(UVec2::new(1600, 10), (13, 30), (16, 36), None),
+            None,
+            "one axis short of a whole cell is enough to decline"
+        );
+    }
+
+    use bevy::window::{MonitorSelection, WindowResolution};
+    use orzma_configs::OrzmaConfigs;
+    use orzma_configs::font::FontConfig;
+
+    /// Builds an app with the zoom observer, one primary window of the given
+    /// physical size, and a config whose `zoom_resizes_window` is `resizes`.
+    fn zoom_app(resizes: bool, width: u32, height: u32) -> (App, Entity) {
+        let mut app = App::new();
+        // `OrzmaConfigsResource` derives `Deref` but not `DerefMut`, so the
+        // inner config is built up front rather than mutated in place.
+        let configs = OrzmaConfigsResource(OrzmaConfigs {
+            font: FontConfig {
+                zoom_resizes_window: resizes,
+                ..FontConfig::default()
+            },
+            ..OrzmaConfigs::default()
+        });
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(FontZoomPlugin)
+            .init_resource::<TerminalFonts>()
+            .init_resource::<TerminalFontSize>()
+            .insert_resource(configs);
+        let mut window = Window {
+            resolution: WindowResolution::new(width, height),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        let entity = app.world_mut().spawn((window, PrimaryWindow)).id();
+        (app, entity)
+    }
+
+    /// Asserts that a zoom step raises the terminal font size above the
+    /// configured base.
+    ///
+    /// Case: the user presses the zoom-in key in a normal window.
+    #[test]
+    fn a_zoom_step_raises_the_terminal_font_size() {
+        let (mut app, _) = zoom_app(false, 1600, 1000);
+        let before = app.world().resource::<TerminalFontSize>().0;
+
+        app.world_mut().trigger(FontZoomAction {
+            direction: ZoomDirection::Increase,
+        });
+        app.update();
+
+        assert!(app.world().resource::<TerminalFontSize>().0 > before);
+    }
+
+    /// Asserts that the window is left untouched when the config disables the
+    /// resize, so the cell count changes instead.
+    ///
+    /// Case: a tiling window manager user sets `zoom_resizes_window = false`.
+    #[test]
+    fn the_window_is_untouched_when_the_config_disables_the_resize() {
+        let (mut app, entity) = zoom_app(false, 1600, 1000);
+
+        app.world_mut().trigger(FontZoomAction {
+            direction: ZoomDirection::Increase,
+        });
+        app.update();
+
+        let window = app
+            .world()
+            .get::<Window>(entity)
+            .expect("the primary window");
+        assert_eq!(window.resolution.physical_width(), 1600);
+        assert_eq!(window.resolution.physical_height(), 1000);
+    }
+
+    /// Asserts that a zoom step grows the window when the config allows it,
+    /// so the grid keeps its cell count.
+    ///
+    /// Case: the user presses the zoom-in key in a normal floating window.
+    #[test]
+    fn a_zoom_step_grows_the_window_when_enabled() {
+        let (mut app, entity) = zoom_app(true, 1600, 1000);
+
+        app.world_mut().trigger(FontZoomAction {
+            direction: ZoomDirection::Increase,
+        });
+        app.update();
+
+        let window = app
+            .world()
+            .get::<Window>(entity)
+            .expect("the primary window");
+        assert!(window.resolution.physical_width() > 1600);
+        assert!(window.resolution.physical_height() > 1000);
+    }
+
+    /// Asserts that a fullscreen window is left untouched.
+    ///
+    /// Case: the user zooms while orzma is in borderless fullscreen.
+    #[test]
+    fn a_fullscreen_window_is_untouched() {
+        let (mut app, entity) = zoom_app(true, 1600, 1000);
+        app.world_mut()
+            .get_mut::<Window>(entity)
+            .expect("the primary window")
+            .mode = WindowMode::BorderlessFullscreen(MonitorSelection::Current);
+
+        app.world_mut().trigger(FontZoomAction {
+            direction: ZoomDirection::Increase,
+        });
+        app.update();
+
+        let window = app
+            .world()
+            .get::<Window>(entity)
+            .expect("the primary window");
+        assert_eq!(window.resolution.physical_width(), 1600);
+    }
+
+    /// Asserts that a window reporting no client area is left untouched
+    /// rather than being asked for a collapsed size.
+    ///
+    /// Case: the user minimizes the orzma window on Windows and presses a
+    /// zoom key.
+    #[test]
+    fn a_minimized_window_is_untouched() {
+        let (mut app, entity) = zoom_app(true, 0, 0);
+
+        app.world_mut().trigger(FontZoomAction {
+            direction: ZoomDirection::Increase,
+        });
+        app.update();
+
+        let window = app
+            .world()
+            .get::<Window>(entity)
+            .expect("the primary window");
+        assert_eq!(window.resolution.physical_width(), 0);
+        assert_eq!(window.resolution.physical_height(), 0);
     }
 }

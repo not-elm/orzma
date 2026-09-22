@@ -393,6 +393,27 @@ layout. Key bindings match physical key positions, so on a non-US layout the
 `Plus` and `-` positions may not be where the labels are. The numeric keypad's
 `+` and `-` are not bindable.
 
+### Zoom and the window
+
+Zoom keeps the grid intact by resizing the OS window. Where that is not
+possible — fullscreen, maximized, a minimized window with no client area, a
+window manager that refuses the request, or a request clamped to the display —
+the column and row counts change instead, and the right edge of every
+scrollback row is truncated. Rows are not reflowed. Zooming out shrinks the
+window.
+
+The clamp uses the monitor's full size, not its work area, because neither
+Bevy nor winit exposes one; a maximal request may end up partly behind the
+taskbar or dock.
+
+Zoom scales the terminal grid only. A mounted webview's box grows and shrinks
+with the cell pitch, but the page inside keeps its own text size, so zooming
+in shows more of the page rather than a larger page. The vi-mode indicator
+keeps a fixed size.
+
+The zoom factor is not remembered across restarts; set `[font] size` to change
+the size permanently.
+
 ## Vi-mode keys
 
 `enter-vi-mode` (see the table above) drops the active pane into Alacritty vi
