@@ -9,7 +9,7 @@ use bevy::window::{PrimaryWindow, WindowResized};
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzmux::prelude::{OrzmuxConnection, PaneGeometry};
 use orzma_tty::CellPixels;
-use orzma_vt::prelude::GridSize;
+use orzma_vt::prelude::{GridSize, GridSizeError, VtError};
 use orzmux::prelude::OrzmuxCommand;
 
 /// Adds the window-geometry sender.
@@ -66,6 +66,10 @@ fn send_window_geometry(
     };
     let size = match GridSize::new(cols, rows) {
         Ok(size) => size,
+        Err(VtError::GridSize(GridSizeError::ZeroAxis)) => {
+            debug!(cols, rows, "window has no terminal cells; geometry not sent");
+            return;
+        }
         Err(err) => {
             warn!(cols, rows, %err, "window geometry is not a valid grid size; not sent");
             return;
@@ -175,6 +179,78 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    /// Asserts that a minimize-and-restore round trip sends no `Resize`,
+    /// leaving the geometry the backend already holds untouched.
+    ///
+    /// Case: the user minimizes the orzma window while a shell is
+    /// running, then restores it to the same size.
+    #[test]
+    fn a_minimize_and_restore_round_trip_sends_nothing() {
+        let (client, _events, commands) = OrzmuxClient::detached();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(LayoutPlugin)
+            .insert_resource(OrzmuxConnection(client))
+            .insert_resource(metrics(8.0, 16.0));
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: WindowResolution::new(800, 600),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            commands.try_iter().count(),
+            1,
+            "the initial geometry is sent once"
+        );
+
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("the primary window")
+            .resolution = WindowResolution::new(0, 0);
+        app.world_mut().write_message(WindowResized {
+            window,
+            width: 0.0,
+            height: 0.0,
+        });
+        app.update();
+        assert!(
+            commands.try_iter().next().is_none(),
+            "a minimized window sends no Resize"
+        );
+        assert_eq!(
+            app.world().resource::<LastGeometry>().0,
+            Some((
+                GridSize::new(100, 37).expect("a valid grid size"),
+                CellPixels {
+                    width: 8,
+                    height: 16
+                }
+            )),
+            "the minimize leaves LastGeometry on the pre-minimize value"
+        );
+
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("the primary window")
+            .resolution = WindowResolution::new(800, 600);
+        app.world_mut().write_message(WindowResized {
+            window,
+            width: 800.0,
+            height: 600.0,
+        });
+        app.update();
+        assert!(
+            commands.try_iter().next().is_none(),
+            "restoring to the pre-minimize size sends nothing"
+        );
     }
 
     /// Asserts that a window whose cell count is not a valid grid size
