@@ -67,7 +67,10 @@ fn send_window_geometry(
     let size = match GridSize::new(cols, rows) {
         Ok(size) => size,
         Err(VtError::GridSize(GridSizeError::ZeroAxis)) => {
-            debug!(cols, rows, "window has no terminal cells; geometry not sent");
+            debug!(
+                cols,
+                rows, "window has no terminal cells; geometry not sent"
+            );
             return;
         }
         Err(err) => {
