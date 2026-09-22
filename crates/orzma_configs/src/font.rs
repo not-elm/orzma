@@ -174,7 +174,7 @@ mod tests {
     }
 
     /// Asserts that window-preserving zoom is on unless the config turns it
-    /// off, so the shipped behaviour keeps the grid intact.
+    /// off.
     ///
     /// Case: a user with no `[font]` section zooms in for the first time.
     #[test]
@@ -185,8 +185,7 @@ mod tests {
     /// Asserts that the key is read from the `[font]` table under its
     /// snake_case spelling.
     ///
-    /// Case: a tiling window manager user disables the window resize so zoom
-    /// only changes the cell count.
+    /// Case: a tiling window manager user disables the window resize.
     #[test]
     fn zoom_resizes_window_parses_from_toml() {
         let parsed: FontConfig =
