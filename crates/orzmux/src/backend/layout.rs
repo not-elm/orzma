@@ -1,8 +1,8 @@
 //! The cell-unit pane layout: a binary split tree whose leaves are
 //! panes, solved into whole-window rectangles with one-cell separators.
 
+use crate::backend::{PaneDirection, PaneId, PaneRect, Separator, SplitId, SplitOrientation};
 use crate::error::{OrzmuxError, OrzmuxResult};
-use crate::protocol::{PaneDirection, PaneId, PaneRect, Separator, SplitId, SplitOrientation};
 use orzma_vt::prelude::{GridSize, MIN_COLUMNS};
 use std::cmp::Reverse;
 

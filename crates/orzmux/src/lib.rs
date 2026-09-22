@@ -2,7 +2,7 @@
 //! owns every pane's PTY and VT plus the cell-unit layout tree, and
 //! talks to the GUI over channels with plain-data commands and events.
 
-pub mod backend;
+pub(crate) mod backend;
 pub mod client;
 pub mod error;
 pub mod protocol;
@@ -10,7 +10,11 @@ pub mod protocol;
 pub(crate) mod test_support;
 
 pub mod prelude {
+    pub use crate::backend::{
+        CloseReason, CommandSeq, Layout, NewPaneAt, OrzmuxEvent, PaneDirection, PaneId, PaneRect,
+        PaneTarget, RequestId, Separator, SplitId, SplitOrientation,
+    };
     pub use crate::client::{OrzmuxClient, OrzmuxConfig};
     pub use crate::error::*;
-    pub use crate::protocol::*;
+    pub use crate::protocol::OrzmuxCommand;
 }

@@ -2,10 +2,10 @@
 //! hands the test their input ends, and a harness that drives one
 //! backend.
 
-use crate::backend::Backend;
 use crate::backend::pane::PaneFactory;
+use crate::backend::{Backend, CommandSeq, NewPaneAt, OrzmuxEvent, PaneId, RequestId};
 use crate::error::OrzmuxResult;
-use crate::protocol::{CommandSeq, NewPaneAt, OrzmuxCommand, OrzmuxEvent, PaneId, RequestId};
+use crate::protocol::OrzmuxCommand;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use orzma_tty::prelude::{OrzmaTty, OrzmaTtyError, WheelConfig};
 use orzma_tty::test_support::{BlockingSink, CaptureSink, FailingSink};
