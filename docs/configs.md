@@ -47,6 +47,11 @@ unfocused_hollow = true
 
 [font]
 size = 11.25              # f32, logical px. Must be 0 < size <= 200, else startup error.
+# Whether a zoom step asks the OS window to grow or shrink so the grid keeps
+# its cell count. With false the window stays put and cols/rows change instead,
+# which truncates the right edge of every scrollback row. Fullscreen and
+# maximized windows take that path regardless of this setting.
+zoom_resizes_window = true
 # Each face is a table of { family, style }. Omit [font] entirely to use the
 # bundled JetBrains Mono Nerd Font. A face's `family`, when omitted, inherits
 # `normal.family`; its `style`, when omitted, uses the face's default
