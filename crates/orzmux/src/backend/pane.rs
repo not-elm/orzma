@@ -1,7 +1,8 @@
 //! One pane as the backend owns it, together with the factory that
 //! spawns a pane's terminal.
 
-use orzma_tty::prelude::{OrzmaTty, OrzmaTtyResult};
+use crate::error::OrzmuxResult;
+use orzma_tty::prelude::OrzmaTty;
 use orzma_tty::{CellPixels, EnvKey, EnvValue, SpawnOptions};
 use orzma_vt::prelude::{CursorPolicy, GridSize, OrzmaVt};
 #[cfg(windows)]
@@ -83,7 +84,7 @@ pub(crate) trait PaneFactory: Send {
         cell_px: CellPixels,
         cwd: Option<PathBuf>,
         env: Vec<(EnvKey, EnvValue)>,
-    ) -> OrzmaTtyResult<OrzmaTty<OrzmaVt>>;
+    ) -> OrzmuxResult<OrzmaTty<OrzmaVt>>;
 }
 
 /// Spawns the resolved shell under a real PTY.
@@ -97,7 +98,7 @@ pub(crate) struct ShellFactory {
 impl ShellFactory {
     /// Resolves the shell now (config → `$SHELL` → the platform default)
     /// so every pane uses the same one.
-    pub(crate) fn new(
+    pub fn new(
         shell: Option<String>,
         scrollback_rows: usize,
         cursor_policy: CursorPolicy,
@@ -124,9 +125,9 @@ impl PaneFactory for ShellFactory {
         cell_px: CellPixels,
         cwd: Option<PathBuf>,
         env: Vec<(EnvKey, EnvValue)>,
-    ) -> OrzmaTtyResult<OrzmaTty<OrzmaVt>> {
+    ) -> OrzmuxResult<OrzmaTty<OrzmaVt>> {
         let vt = OrzmaVt::new(size, self.scrollback_rows).with_cursor_policy(self.cursor_policy);
-        OrzmaTty::spawn(
+        Ok(OrzmaTty::spawn(
             vt,
             SpawnOptions {
                 size,
@@ -136,7 +137,7 @@ impl PaneFactory for ShellFactory {
                 env,
                 shell_integration: self.shell_integration,
             },
-        )
+        )?)
     }
 }
 

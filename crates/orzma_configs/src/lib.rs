@@ -252,9 +252,15 @@ mod validate_tests {
         );
     }
 
+    /// Asserts that two actions sharing one direct chord fail validation with
+    /// a `DuplicateChords` error naming both.
+    ///
+    /// Case: a user rebinds release-webview-focus onto the chord they had
+    /// already given quit.
     #[test]
     fn validate_detects_chord_conflict() {
-        let toml_str = "[shortcuts]\nrelease-webview-focus = \"Cmd+Q\"\n";
+        let toml_str =
+            "[shortcuts]\nquit = \"Ctrl+Alt+Q\"\nrelease-webview-focus = \"Ctrl+Alt+Q\"\n";
         let mut configs: OrzmaConfigs = toml::from_str(toml_str).unwrap();
         configs.normalize();
         let err = configs.validate().unwrap_err();
@@ -268,9 +274,14 @@ mod validate_tests {
         }
     }
 
+    /// Asserts that a leader chord equal to a bound direct chord fails
+    /// validation, naming the shadowed action.
+    ///
+    /// Case: a user picks a leader chord they had already bound to quit, so
+    /// quit could never fire again.
     #[test]
     fn validate_rejects_leader_shadowing_direct_binding() {
-        let toml_str = "[shortcuts]\nleader = \"Cmd+Q\"\nrename-window = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nquit = \"Ctrl+Alt+Q\"\nleader = \"Ctrl+Alt+Q\"\nrename-window = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         match err {
             OrzmaConfigsError::LeaderShadowsDirectBinding { action, .. } => {
@@ -302,9 +313,13 @@ mod validate_tests {
         assert!(parse_validated(toml_str).is_ok());
     }
 
+    /// Asserts that a leader bound to a key with no physical position is
+    /// rejected at load time.
+    ///
+    /// Case: a user binds the leader to `Cmd+.` in their config file.
     #[test]
     fn validate_rejects_unmappable_leader() {
-        let toml_str = "[shortcuts]\nleader = \"Cmd+Plus\"\nrename-window = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Cmd+.\"\nrename-window = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         assert!(matches!(err, OrzmaConfigsError::UnmappableLeader { .. }));
     }

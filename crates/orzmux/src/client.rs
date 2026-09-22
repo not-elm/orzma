@@ -1,9 +1,9 @@
 //! The GUI-side handle on the multiplexer backend thread: sends
 //! commands, drains events, and joins the thread on drop.
 
-use crate::backend::{Backend, ShellFactory};
+use crate::backend::{Backend, CommandSeq, OrzmuxEvent, ShellFactory};
 use crate::error::{OrzmuxError, OrzmuxResult};
-use crate::protocol::{CommandSeq, OrzmuxCommand, OrzmuxEvent};
+use crate::event_loop::{EventLoop, OrzmuxCommand};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use orzma_tty::prelude::WheelConfig;
 use orzma_vt::prelude::CursorPolicy;
@@ -60,7 +60,10 @@ impl OrzmuxClient {
         let factory = ShellFactory::new(shell, scrollback_rows, cursor, shell_integration);
         let thread = thread::Builder::new()
             .name("orzma-mux".to_string())
-            .spawn(move || Backend::new(Box::new(factory), command_rx, event_tx, wheel).run())
+            .spawn(move || {
+                let backend = Backend::new(Box::new(factory), wheel);
+                EventLoop::new(backend, command_rx, event_tx).run()
+            })
             .map_err(OrzmuxError::BackendThread)?;
         Ok(Self {
             commands: Some(command_tx),

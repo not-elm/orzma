@@ -1,16 +1,20 @@
 //! The cell-unit pane layout: a binary split tree whose leaves are
 //! panes, solved into whole-window rectangles with one-cell separators.
 
-use crate::protocol::{PaneDirection, PaneId, PaneRect, Separator, SplitId, SplitOrientation};
+use crate::backend::{PaneDirection, PaneId, PaneRect, Separator, SplitId, SplitOrientation};
+use crate::error::{OrzmuxError, OrzmuxResult};
 use orzma_vt::prelude::{GridSize, MIN_COLUMNS};
 use std::cmp::Reverse;
-use thiserror::Error;
 
 /// The smallest rectangle a leaf is laid out in.
 const LEAF_MIN: GridSize = GridSize {
     cols: MIN_COLUMNS,
     rows: 1,
 };
+
+// TODO: make the drag minimum configurable.
+const MIN_DRAG_COLS: u16 = 4;
+const MIN_DRAG_ROWS: u16 = 2;
 
 /// The solved geometry of every pane and separator.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,17 +35,6 @@ impl Solved {
     }
 }
 
-/// A split was refused because the target leaf cannot hold two minimum
-/// leaves and a separator along the split axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("the target pane has too little room to divide")]
-pub struct SplitRefused;
-
-/// A root insertion was refused because the tree already has a pane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("the tree already holds a root pane")]
-pub struct RootOccupied;
-
 /// The split tree plus the activation history.
 #[derive(Debug, Default)]
 pub struct LayoutTree {
@@ -49,10 +42,6 @@ pub struct LayoutTree {
     history: Vec<PaneId>,
     next_split_id: u32,
 }
-
-// TODO: make the drag minimum configurable.
-const MIN_DRAG_COLS: u16 = 4;
-const MIN_DRAG_ROWS: u16 = 2;
 
 #[derive(Debug)]
 enum Node {
@@ -84,6 +73,7 @@ impl LayoutTree {
     }
 
     /// Whether the tree holds no pane.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.root.is_none()
     }
@@ -94,6 +84,7 @@ impl LayoutTree {
     }
 
     /// Every pane in the tree, left-to-right / top-to-bottom.
+    #[cfg(test)]
     pub fn panes(&self) -> Vec<PaneId> {
         let mut out = Vec::new();
         if let Some(root) = &self.root {
@@ -102,10 +93,14 @@ impl LayoutTree {
         out
     }
 
-    /// Makes `pane` the only pane. Refused while any pane exists.
-    pub fn insert_root(&mut self, pane: PaneId) -> Result<(), RootOccupied> {
+    /// Makes `pane` the only pane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::RootOccupied`] while any pane exists.
+    pub fn insert_root(&mut self, pane: PaneId) -> OrzmuxResult {
         if self.root.is_some() {
-            return Err(RootOccupied);
+            return Err(OrzmuxError::RootOccupied);
         }
         self.root = Some(Node::Leaf(pane));
         self.activate(pane);
@@ -113,30 +108,38 @@ impl LayoutTree {
     }
 
     /// Splits `target` in two, placing `new` right of / below it, and
-    /// makes `new` active. Refused when `target` is missing or, along the
-    /// axis in `window`, cannot hold two minimum leaves and a separator.
+    /// makes `new` active.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::SplitRefused`] when `target` is missing
+    /// or, along the axis in `window`, cannot hold two minimum leaves
+    /// and a separator.
     pub fn split(
         &mut self,
         target: PaneId,
         orientation: SplitOrientation,
         new: PaneId,
         window: GridSize,
-    ) -> Result<(), SplitRefused> {
-        let rect = self.solve(window).rect_of(target).ok_or(SplitRefused)?;
+    ) -> OrzmuxResult {
+        let rect = self
+            .solve(window)
+            .rect_of(target)
+            .ok_or(OrzmuxError::SplitRefused)?;
         let (along, needed) = match orientation {
             SplitOrientation::Vertical => (rect.cols, 2 * LEAF_MIN.cols + 1),
             SplitOrientation::Horizontal => (rect.rows, 2 * LEAF_MIN.rows + 1),
         };
         if along < needed {
-            return Err(SplitRefused);
+            return Err(OrzmuxError::SplitRefused);
         }
         let id = SplitId(self.next_split_id);
         self.next_split_id += 1;
         let Some(root) = self.root.as_mut() else {
-            return Err(SplitRefused);
+            return Err(OrzmuxError::SplitRefused);
         };
         if !root.split_leaf(target, orientation, new, id) {
-            return Err(SplitRefused);
+            return Err(OrzmuxError::SplitRefused);
         }
         self.activate(new);
         Ok(())
@@ -332,6 +335,7 @@ impl Node {
         }
     }
 
+    #[cfg(test)]
     fn collect_leaves(&self, out: &mut Vec<PaneId>) {
         match self {
             Node::Leaf(id) => out.push(*id),

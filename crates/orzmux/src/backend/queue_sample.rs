@@ -2,7 +2,7 @@
 //! peaks and the event / command channel peaks, handed out at most once
 //! per interval so a flooding terminal logs one line a second.
 
-use crate::protocol::PaneId;
+use crate::backend::PaneId;
 use std::mem;
 use std::time::{Duration, Instant};
 

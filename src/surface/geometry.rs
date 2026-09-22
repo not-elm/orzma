@@ -71,12 +71,14 @@ pub(crate) fn cell_at_local(
     (col, row, side_of(frac_x))
 }
 
-/// Computes terminal dimensions in cells from physical pixel size.
+/// Terminal dimensions in cells for a physical pixel size.
 ///
-/// Returns `(cols, rows)`, each clamped to a minimum of 1.
+/// Both pitches are in physical pixels and are expected to be at least
+/// `1.0`. Each axis is the pixel count divided by the cell pitch and
+/// floored, so an axis smaller than one cell is 0.
 pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16, u16) {
-    let cols = ((w_px as f32 / cell_w).floor() as u16).max(1);
-    let rows = ((h_px as f32 / cell_h).floor() as u16).max(1);
+    let cols = (w_px as f32 / cell_w).floor() as u16;
+    let rows = (h_px as f32 / cell_h).floor() as u16;
     (cols, rows)
 }
 
@@ -133,11 +135,16 @@ mod tests {
         );
     }
 
+    /// Asserts that each axis is floored independently, and that an axis
+    /// too small to hold one cell yields 0 rather than being clamped to 1.
+    ///
+    /// Case: the user minimizes the orzma window on Windows, which
+    /// reports a 0x0 client area.
     #[test]
     fn cells_for_divides_and_floors() {
         assert_eq!(cells_for(800, 600, 8.0, 16.0), (100, 37));
-        assert_eq!(cells_for(1, 1, 8.0, 16.0), (1, 1));
-        assert_eq!(cells_for(0, 0, 8.0, 16.0), (1, 1));
+        assert_eq!(cells_for(1, 1, 8.0, 16.0), (0, 0));
+        assert_eq!(cells_for(0, 0, 8.0, 16.0), (0, 0));
         assert_eq!(cells_for(807, 607, 8.0, 16.0), (100, 37));
     }
 
