@@ -426,9 +426,10 @@ Consequences to keep straight:
   what a downstream crate can reach, not on the spelling. A `pub fn` on a
   `pub(crate)` type is not externally public, so a `///` on it stays
   recommended rather than required — the standing it had as `pub(crate)`.
-- Neither `unreachable_pub` nor `missing_docs` objects: the former is not
-  enabled in this workspace, and the latter fires only on items a
-  downstream crate can reach.
+- Neither `unreachable_pub` nor `missing_docs` objects: `unreachable_pub`
+  is deliberately not enabled in this workspace — it flags precisely the
+  pattern this rule requires, so the two cannot both hold — and
+  `missing_docs` fires only on items a downstream crate can reach.
 
 Not covered by this rule:
 
@@ -438,7 +439,9 @@ Not covered by this rule:
 - Struct fields, trait definitions and their items, and module-level
   declarations (`pub(crate) mod`, `pub(crate) use`). Those are governed by
   where the name needs to be reachable, not by an enclosing type's
-  ceiling.
+  ceiling. Struct fields are excluded deliberately — the same ceiling
+  argument applies to them, but the rule stays scoped to associated items
+  until it has more mileage.
 - Trait `impl` blocks, whose item visibility the trait dictates.
 - Test-only code: `#[cfg(test)] mod tests { ... }` contents, and any
   module gated behind `#[cfg(test)]` or a test-support feature
@@ -809,10 +812,11 @@ const _: () = assert_send_static::<OrzmuxEvent>();
 ```
 
 The bound is already enforced where the type is used. A value that
-crosses a thread boundary reaches `std::thread::Builder::spawn`, whose
-`F: Send + 'static` obligation flows through every captured channel
-handle to the payload type; a value stored in a `static` needs
-`Sync`; a value behind `dyn Trait` names its bounds in the trait object.
+crosses a thread boundary reaches `std::thread::Builder::spawn` whenever
+the channel handle carrying it is captured by the spawned closure, whose
+`F: Send + 'static` obligation then flows through that handle to the
+payload type; a value stored in a `static` needs `Sync`; a value behind
+`dyn Trait` names its bounds in the trait object.
 Any of those stops compiling the moment the property is lost, and the
 error points at the call site that actually depends on it. The guard
 restates that obligation somewhere the reader cannot connect to a
@@ -826,7 +830,7 @@ Forbidden:
 | --- | --- | --- |
 | `const _: () = assert_fn::<T>();` pinning a bound | `const _: () = assert_send_static::<OrzmuxEvent>();` | Duplicates an obligation the real use already enforces |
 | A `const fn` whose only purpose is to carry a bound | `const fn assert_send_static<T: Send + 'static>() {}` | Same; it is an assertion wearing an item's clothes |
-| `static_assertions::assert_impl_all!` and equivalents | `assert_impl_all!(OrzmuxEvent: Send);` | Same, with a dependency attached |
+| `static_assertions::assert_impl_all!` and other trait-bound assertion macros | `assert_impl_all!(OrzmuxEvent: Send);` | Same, with a dependency attached |
 
 Instead:
 
@@ -846,6 +850,9 @@ Not covered by this rule (leave as-is):
   GridSize = …`). This rule is about assertions, not constants.
 - A bound written in a signature, `where` clause, or trait definition —
   that is the normal way to require a bound, and the point of the rule.
+- Size and layout assertions for FFI (`assert_eq_size!`, `assert_eq_align!`
+  and the like) — they pin a property no call site enforces, unlike a
+  trait bound a caller already depends on.
 - A const-evaluated bound check that a public API's own contract depends
   on, e.g. a `const` block inside a generic function that the function's
   documented behavior relies on. Justify it with a `// NOTE:` naming the
