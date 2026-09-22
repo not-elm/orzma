@@ -31,6 +31,16 @@ The companion apps `orzmd` and `orzbrowser` (built with the `ratatui_orzma` SDK)
 ship bundled inside `orzma.app`, so the Homebrew Cask install already includes
 them. To build and install them from source instead, run `just install-apps`.
 
+### Windows (installer)
+
+Download `orzma-<version>-x64.msi` from the [latest release](https://github.com/not-elm/orzma/releases/latest) and run it. The installer is per-user: it needs no administrator prompt, installs into `%LocalAppData%\Programs\orzma`, and puts `orzma`, `orzmd`, and `orzbrowser` on your `PATH`.
+
+The `PATH` change applies to newly started shells, so open a new terminal after installing.
+
+The installer is not code-signed yet, so SmartScreen shows "Windows protected your PC". Choose **More info** → **Run anyway** to continue.
+
+Requires Windows 10 1809 or later (x64).
+
 ### Windows (from source)
 
 Windows 10 1809+ / 11, x64. Prerequisites: the Rust toolchain (rustup),
