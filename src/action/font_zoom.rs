@@ -2,10 +2,8 @@
 //! and the observer that applies one step.
 
 use crate::configs::OrzmaConfigsResource;
-use crate::surface::geometry::cell_pitch_phys;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
-use bevy_orzma_tty_renderer::{TerminalFontSize, TerminalFonts, physical_font_size};
+use bevy_orzma_tty_renderer::TerminalFontSize;
 use orzma_configs::shortcuts::FontSizeStep;
 
 /// The zoom factors, in ascending order. `FACTORS[BASE]` is the unzoomed 1.0.
@@ -15,9 +13,6 @@ const FACTORS: [f32; 12] = [
 
 /// The index of the unzoomed factor in [`FACTORS`].
 const BASE: usize = 4;
-
-/// The unzoomed factor.
-const BASE_FACTOR: f32 = FACTORS[BASE];
 
 /// The host asks for one zoom step on the terminal font size.
 #[derive(Event, Debug, Clone, Copy)]
@@ -44,52 +39,23 @@ impl FontZoom {
         FACTORS.get(self.index).copied().unwrap_or(1.0)
     }
 
-    /// The current step's position on the ladder.
-    #[cfg(test)]
-    pub fn index(&self) -> usize {
-        self.index
-    }
-
     /// Moves the current step to `index`.
     pub fn set_index(&mut self, index: usize) {
         self.index = index;
     }
 
-    /// Returns the next index in `direction` paired with that index's cell
-    /// pitch, or `None` when the ladder has no such index left.
+    /// Returns the index one rung away in `direction`, or `None` when the
+    /// ladder has no rung left that way.
     ///
-    /// `base_size` is the configured `[font] size`; the logical size at a rung
-    /// is `base_size * FACTORS[rung]`. `pitch_at` maps a logical size to the
-    /// whole-physical-pixel cell pitch the renderer would paint at.
-    /// `current_pitch` is the pitch at the current rung. An `Increase` or
-    /// `Decrease` skips any rung whose pitch matches it; a `Reset` returns
-    /// `BASE` without comparing pitches.
-    pub fn next_index(
-        &self,
-        direction: FontSizeStep,
-        base_size: f32,
-        current_pitch: (u16, u16),
-        pitch_at: impl Fn(f32) -> (u16, u16),
-    ) -> Option<(usize, (u16, u16))> {
-        let step: isize = match direction {
-            FontSizeStep::Reset => {
-                if self.index == BASE {
-                    return None;
-                }
-                return Some((BASE, pitch_at(base_size * BASE_FACTOR)));
-            }
-            FontSizeStep::Increase => 1,
-            FontSizeStep::Decrease => -1,
+    /// A `Reset` returns `BASE`, or `None` when the current step is already
+    /// `BASE`.
+    pub fn next_index(&self, direction: FontSizeStep) -> Option<usize> {
+        let index = match direction {
+            FontSizeStep::Reset => BASE,
+            FontSizeStep::Increase => self.index.checked_add(1)?,
+            FontSizeStep::Decrease => self.index.checked_sub(1)?,
         };
-        let mut index = self.index;
-        loop {
-            index = index.checked_add_signed(step)?;
-            let factor = *FACTORS.get(index)?;
-            let pitch = pitch_at(base_size * factor);
-            if pitch != current_pitch {
-                return Some((index, pitch));
-            }
-        }
+        (index != self.index && index < FACTORS.len()).then_some(index)
     }
 }
 
@@ -106,88 +72,38 @@ fn on_font_zoom(
     ev: On<FontZoomAction>,
     mut zoom: ResMut<FontZoom>,
     mut font_size: ResMut<TerminalFontSize>,
-    windows: Query<&Window, With<PrimaryWindow>>,
     configs: Res<OrzmaConfigsResource>,
-    fonts: Res<TerminalFonts>,
 ) {
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let base = configs.font.size;
-    let dpr = window.scale_factor();
-    let pitch_at = |logical: f32| {
-        let (w, h) = cell_pitch_phys(&fonts.cell_metrics_px(physical_font_size(logical, dpr)));
-        (w as u16, h as u16)
-    };
-    let old_pitch = pitch_at(font_size.0);
-    let Some((index, _)) = zoom.next_index(ev.direction, base, old_pitch, pitch_at) else {
+    let Some(index) = zoom.next_index(ev.direction) else {
         return;
     };
     zoom.set_index(index);
     // NOTE: every rung carries a distinct factor, so this write always changes
     // the value. Writing unconditionally here is what makes change detection
     // fire exactly on a zoom step.
-    *font_size = TerminalFontSize(base * zoom.factor());
+    *font_size = TerminalFontSize(configs.font.size * zoom.factor());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A `pitch_at` stand-in that reports a cell pitch proportional to the
-    /// logical size, so every rung of the ladder resolves to a distinct pitch.
-    fn distinct_pitch(logical: f32) -> (u16, u16) {
-        let w = (logical * 10.0) as u16;
-        (w, w * 2)
-    }
-
-    /// A `pitch_at` stand-in that reports one pitch for every logical size, so
-    /// no rung ever changes the grid.
-    fn constant_pitch(_logical: f32) -> (u16, u16) {
-        (7, 15)
-    }
-
-    /// Asserts that an increase moves to the adjacent larger rung, and reports
-    /// that rung's cell pitch, when the rung changes the pitch.
+    /// Asserts that an increase moves to the adjacent larger rung.
     ///
     /// Case: the user presses the zoom-in key once from the unzoomed state.
     #[test]
     fn an_increase_advances_one_rung() {
         let zoom = FontZoom::default();
-        let current = distinct_pitch(11.25);
-        assert_eq!(
-            zoom.next_index(FontSizeStep::Increase, 11.25, current, distinct_pitch),
-            Some((5, distinct_pitch(11.25 * 1.1)))
-        );
+        assert_eq!(zoom.next_index(FontSizeStep::Increase), Some(BASE + 1));
     }
 
-    /// Asserts that a decrease moves to the adjacent smaller rung, and reports
-    /// that rung's cell pitch.
+    /// Asserts that a decrease moves to the adjacent smaller rung.
     ///
     /// Case: the user presses the zoom-out key once from the unzoomed state.
     #[test]
     fn a_decrease_retreats_one_rung() {
         let zoom = FontZoom::default();
-        let current = distinct_pitch(11.25);
-        assert_eq!(
-            zoom.next_index(FontSizeStep::Decrease, 11.25, current, distinct_pitch),
-            Some((3, distinct_pitch(11.25 * 0.9)))
-        );
-    }
-
-    /// Asserts that rungs whose cell pitch matches the current one are skipped
-    /// rather than accepted, so a keypress never leaves the grid unchanged.
-    ///
-    /// Case: at a small configured font size on a low-DPI display, adjacent
-    /// factors round to the same whole-pixel cell width.
-    #[test]
-    fn a_rung_with_an_unchanged_cell_pitch_is_skipped() {
-        let zoom = FontZoom::default();
-        assert_eq!(
-            zoom.next_index(FontSizeStep::Increase, 11.25, (7, 15), constant_pitch),
-            None,
-            "every rung reports the same pitch, so the ladder runs out"
-        );
+        assert_eq!(zoom.next_index(FontSizeStep::Decrease), Some(BASE - 1));
     }
 
     /// Asserts that an increase at the top of the ladder is ignored rather
@@ -198,11 +114,7 @@ mod tests {
     fn an_increase_at_the_top_returns_none() {
         let mut zoom = FontZoom::default();
         zoom.set_index(FACTORS.len() - 1);
-        let current = distinct_pitch(11.25 * zoom.factor());
-        assert_eq!(
-            zoom.next_index(FontSizeStep::Increase, 11.25, current, distinct_pitch),
-            None
-        );
+        assert_eq!(zoom.next_index(FontSizeStep::Increase), None);
     }
 
     /// Asserts that a decrease at the bottom of the ladder is ignored.
@@ -212,11 +124,7 @@ mod tests {
     fn a_decrease_at_the_bottom_returns_none() {
         let mut zoom = FontZoom::default();
         zoom.set_index(0);
-        let current = distinct_pitch(11.25 * zoom.factor());
-        assert_eq!(
-            zoom.next_index(FontSizeStep::Decrease, 11.25, current, distinct_pitch),
-            None
-        );
+        assert_eq!(zoom.next_index(FontSizeStep::Decrease), None);
     }
 
     /// Asserts that a reset returns the unzoomed rung regardless of how far
@@ -227,11 +135,7 @@ mod tests {
     fn a_reset_returns_the_base_rung() {
         let mut zoom = FontZoom::default();
         zoom.set_index(FACTORS.len() - 1);
-        let current = distinct_pitch(11.25 * zoom.factor());
-        assert_eq!(
-            zoom.next_index(FontSizeStep::Reset, 11.25, current, distinct_pitch),
-            Some((BASE, distinct_pitch(11.25)))
-        );
+        assert_eq!(zoom.next_index(FontSizeStep::Reset), Some(BASE));
     }
 
     /// Asserts that a reset from the unzoomed rung is ignored rather than
@@ -241,47 +145,10 @@ mod tests {
     #[test]
     fn a_reset_at_the_base_rung_returns_none() {
         let zoom = FontZoom::default();
-        let current = distinct_pitch(11.25);
-        assert_eq!(
-            zoom.next_index(FontSizeStep::Reset, 11.25, current, distinct_pitch),
-            None
-        );
+        assert_eq!(zoom.next_index(FontSizeStep::Reset), None);
     }
 
-    /// Asserts that walking the shipped ladder upward with the bundled font
-    /// takes at least one step and never reports a narrower cell than the rung
-    /// before it.
-    ///
-    /// Case: a user on a 2x display with the default configuration holds the
-    /// zoom-in key.
-    #[test]
-    fn the_shipped_ladder_widens_monotonically() {
-        let fonts = TerminalFonts::default();
-        let pitch_at = |logical: f32| {
-            let (w, h) = cell_pitch_phys(&fonts.cell_metrics_px(physical_font_size(logical, 2.0)));
-            (w as u16, h as u16)
-        };
-
-        let mut zoom = FontZoom::default();
-        let mut current = pitch_at(11.25 * zoom.factor());
-        let mut steps = 0;
-        while let Some((index, pitch)) =
-            zoom.next_index(FontSizeStep::Increase, 11.25, current, pitch_at)
-        {
-            assert!(
-                pitch.0 >= current.0 && pitch.1 >= current.1,
-                "rung {index} reports a narrower cell than the rung before it"
-            );
-            assert_ne!(pitch, current, "an accepted rung must change the pitch");
-            zoom.set_index(index);
-            current = pitch;
-            steps += 1;
-        }
-        assert!(steps > 0, "the ladder must allow at least one zoom-in step");
-        assert!(zoom.index() > BASE);
-    }
-
-    use bevy::window::WindowResolution;
+    use bevy::window::{PrimaryWindow, WindowResolution};
 
     /// Builds an app with the zoom observer and one primary window of the
     /// given physical size. `TerminalFontSize` starts at the configured
@@ -293,7 +160,6 @@ mod tests {
         let base_size = configs.font.size;
         app.add_plugins(MinimalPlugins)
             .add_plugins(FontZoomPlugin)
-            .init_resource::<TerminalFonts>()
             .insert_resource(TerminalFontSize(base_size))
             .insert_resource(configs);
         let mut window = Window {
