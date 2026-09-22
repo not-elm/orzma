@@ -12,6 +12,9 @@ const LEAF_MIN: GridSize = GridSize {
     rows: 1,
 };
 
+const MIN_DRAG_COLS: u16 = 4;
+const MIN_DRAG_ROWS: u16 = 2;
+
 /// The solved geometry of every pane and separator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Solved {
@@ -38,10 +41,6 @@ pub struct LayoutTree {
     history: Vec<PaneId>,
     next_split_id: u32,
 }
-
-// TODO: make the drag minimum configurable.
-const MIN_DRAG_COLS: u16 = 4;
-const MIN_DRAG_ROWS: u16 = 2;
 
 #[derive(Debug)]
 enum Node {

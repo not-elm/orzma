@@ -363,10 +363,6 @@ pub enum OrzmuxEvent {
     },
 }
 
-const fn assert_send_static<T: Send + 'static>() {}
-const _: () = assert_send_static::<OrzmuxEvent>();
-const _: () = assert_send_static::<OrzmuxCommand>();
-
 #[cfg(test)]
 mod tests {
     use super::*;

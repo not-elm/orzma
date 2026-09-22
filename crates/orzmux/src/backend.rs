@@ -50,7 +50,7 @@ pub(crate) struct Backend {
 
 impl Backend {
     /// A backend with no panes and no geometry.
-    pub(crate) fn new(
+    pub fn new(
         factory: Box<dyn PaneFactory>,
         commands: Receiver<(CommandSeq, OrzmuxCommand)>,
         events: Sender<OrzmuxEvent>,
@@ -76,7 +76,7 @@ impl Backend {
     /// Runs until the command channel disconnects (the GUI dropped its
     /// client) or the GUI stops receiving events. Dropping the panes on
     /// return kills every child.
-    pub(crate) fn run(mut self) {
+    pub fn run(mut self) {
         loop {
             let ready = self.wait_ready();
             self.record_queue_depths();
@@ -98,7 +98,7 @@ impl Backend {
     /// are dropped with a debug log; `CopySelection` always answers,
     /// `SelectPane` always publishes a layout, and `SelectPaneDirection`
     /// publishes one only when the active pane moved.
-    pub(crate) fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
+    fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.processed = seq;
         match command {
             OrzmuxCommand::Resize { size, cell_px } => self.on_resize(size, cell_px),
