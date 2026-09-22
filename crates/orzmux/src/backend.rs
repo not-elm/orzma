@@ -2,10 +2,10 @@
 //! channel and each pane's PTY streams with one `Select`, and emits
 //! layout / frame / signal events to the GUI.
 
+use crate::backend::layout::LayoutTree;
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::{ChunkDepth, QueueSampler};
 use crate::error::{OrzmuxError, OrzmuxResult};
-use crate::layout::LayoutTree;
 use crate::protocol::{
     CloseReason, CommandSeq, Layout, NewPaneAt, OrzmuxCommand, OrzmuxEvent, PaneId, PaneTarget,
     RequestId, SplitOrientation,
@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tracing::Level;
 
+pub(crate) mod layout;
 pub(crate) mod pane;
 pub(crate) mod queue_sample;
 pub(crate) use pane::ShellFactory;
