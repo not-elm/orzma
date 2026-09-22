@@ -318,60 +318,6 @@ impl Backend {
         }
     }
 
-    /// Routes one command to the operation that applies it.
-    fn dispatch(&mut self, command: OrzmuxCommand) -> OrzmuxResult {
-        match command {
-            OrzmuxCommand::NewPane { .. } => Ok(()),
-            OrzmuxCommand::Resize { size, cell_px } => {
-                self.resize(size, cell_px);
-                Ok(())
-            }
-            OrzmuxCommand::KillPane { pane } => self.kill_pane(pane),
-            OrzmuxCommand::SelectPane { pane } => self.select_pane(pane),
-            OrzmuxCommand::SelectPaneDirection { direction } => {
-                self.select_pane_direction(direction);
-                Ok(())
-            }
-            OrzmuxCommand::WindowFocus { focused } => {
-                self.window_focus(focused);
-                Ok(())
-            }
-            OrzmuxCommand::ResizeSplit { split, position } => {
-                self.resize_split(split, position);
-                Ok(())
-            }
-            OrzmuxCommand::KeyInput { pane, key, mods } => self.key_input(pane, key, mods),
-            OrzmuxCommand::Paste { pane, text } => self.paste(pane, text),
-            OrzmuxCommand::MouseInput { pane, report } => self.mouse_input(pane, report),
-            OrzmuxCommand::Wheel { pane, input } => self.wheel(pane, input),
-            OrzmuxCommand::Scroll { pane, scroll } => self.scroll(pane, scroll),
-            OrzmuxCommand::SelectionStart {
-                pane,
-                cell,
-                side,
-                kind,
-            } => self.selection_start(pane, cell, side, kind),
-            OrzmuxCommand::SelectionUpdate { pane, cell, side } => {
-                self.selection_update(pane, cell, side)
-            }
-            OrzmuxCommand::SelectionClear { pane } => self.selection_clear(pane),
-            OrzmuxCommand::CopySelection { pane } => {
-                self.copy_selection(pane);
-                Ok(())
-            }
-            OrzmuxCommand::RemovePlacements { pane, instances } => {
-                self.remove_placements(pane, instances)
-            }
-            OrzmuxCommand::MountPlacement {
-                pane,
-                instance,
-                row,
-                column,
-                size,
-            } => self.mount_placement(pane, instance, row, column, size),
-        }
-    }
-
     /// Pumps one pane and forwards its output, pumping again up to
     /// `PUMP_ROUNDS` times while chunks remain queued; closes the pane on
     /// `ChildExit`.
@@ -778,6 +724,60 @@ impl Backend {
             }
         }
         true
+    }
+
+    /// Routes one command to the operation that applies it.
+    fn dispatch(&mut self, command: OrzmuxCommand) -> OrzmuxResult {
+        match command {
+            OrzmuxCommand::NewPane { .. } => Ok(()),
+            OrzmuxCommand::Resize { size, cell_px } => {
+                self.resize(size, cell_px);
+                Ok(())
+            }
+            OrzmuxCommand::KillPane { pane } => self.kill_pane(pane),
+            OrzmuxCommand::SelectPane { pane } => self.select_pane(pane),
+            OrzmuxCommand::SelectPaneDirection { direction } => {
+                self.select_pane_direction(direction);
+                Ok(())
+            }
+            OrzmuxCommand::WindowFocus { focused } => {
+                self.window_focus(focused);
+                Ok(())
+            }
+            OrzmuxCommand::ResizeSplit { split, position } => {
+                self.resize_split(split, position);
+                Ok(())
+            }
+            OrzmuxCommand::KeyInput { pane, key, mods } => self.key_input(pane, key, mods),
+            OrzmuxCommand::Paste { pane, text } => self.paste(pane, text),
+            OrzmuxCommand::MouseInput { pane, report } => self.mouse_input(pane, report),
+            OrzmuxCommand::Wheel { pane, input } => self.wheel(pane, input),
+            OrzmuxCommand::Scroll { pane, scroll } => self.scroll(pane, scroll),
+            OrzmuxCommand::SelectionStart {
+                pane,
+                cell,
+                side,
+                kind,
+            } => self.selection_start(pane, cell, side, kind),
+            OrzmuxCommand::SelectionUpdate { pane, cell, side } => {
+                self.selection_update(pane, cell, side)
+            }
+            OrzmuxCommand::SelectionClear { pane } => self.selection_clear(pane),
+            OrzmuxCommand::CopySelection { pane } => {
+                self.copy_selection(pane);
+                Ok(())
+            }
+            OrzmuxCommand::RemovePlacements { pane, instances } => {
+                self.remove_placements(pane, instances)
+            }
+            OrzmuxCommand::MountPlacement {
+                pane,
+                instance,
+                row,
+                column,
+                size,
+            } => self.mount_placement(pane, instance, row, column, size),
+        }
     }
 
     /// `at` with its split target pinned to a concrete, live pane.
