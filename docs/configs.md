@@ -162,6 +162,11 @@ resize-down-pane      = "<Leader:r>Shift+J"  # resize-pane -D 5 (repeatable)
 resize-up-pane        = "<Leader:r>Shift+K"  # resize-pane -U 5 (repeatable)
 resize-right-pane     = "<Leader:r>Shift+L"  # resize-pane -R 5 (repeatable)
 
+# --- zoom actions ---
+increase-font-size    = "Cmd+Plus"   # Ctrl+Plus off macOS
+decrease-font-size    = "Cmd+-"      # Ctrl+- off macOS
+reset-font-size       = "Cmd+0"      # Ctrl+0 off macOS
+
 # --- window actions (no effect until the built-in multiplexer lands) ---
 new-window            = "<Leader>c"        # new-window
 kill-window           = "<Leader>Shift+X"  # kill-window, after a confirm prompt
@@ -310,6 +315,9 @@ the four that differ elsewhere.
 | --- | --- | --- |
 | `paste` | `Cmd+V` | Paste from the system clipboard. |
 | `copy` | `Cmd+C` | Copy the focused terminal's selection to the system clipboard, then dismiss the selection. |
+| `increase-font-size` | `Cmd+Plus` / `Ctrl+Plus` | Step the terminal font size up. |
+| `decrease-font-size` | `Cmd+-` / `Ctrl+-` | Step the terminal font size down. |
+| `reset-font-size` | `Cmd+0` / `Ctrl+0` | Return the terminal font size to `[font] size`. |
 | `release-webview-focus` | `<Leader>u` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit orzma. |
 | `enter-vi-mode` | `<Leader>s` | Enter vi mode. |
@@ -378,6 +386,12 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g.
   `next-window = "Ctrl+Shift+]"`.
+
+`Ctrl++` is not a valid value: a chord is split on `+`, so write `Ctrl+Plus`.
+A `Plus` binding also fires with Shift held, since `+` is Shift+`=` on a US
+layout. Key bindings match physical key positions, so on a non-US layout the
+`Plus` and `-` positions may not be where the labels are. The numeric keypad's
+`+` and `-` are not bindable.
 
 ## Vi-mode keys
 

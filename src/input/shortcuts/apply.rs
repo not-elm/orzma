@@ -115,7 +115,8 @@ fn apply_shortcut(
         Shortcut::KillPane => commands.trigger(RequestPaneAction {
             action: PaneAction::Kill,
         }),
-        Shortcut::ResizePane(_)
+        Shortcut::FontSize(_)
+        | Shortcut::ResizePane(_)
         | Shortcut::ZoomPane
         | Shortcut::NewWindow
         | Shortcut::KillWindow

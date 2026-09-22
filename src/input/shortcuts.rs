@@ -1219,7 +1219,7 @@ mod tests {
     }
 
     /// Asserts that resolving the host default table yields one entry per
-    /// bound direct chord, dropping none of them.
+    /// bound direct chord, plus the shifted twin a `Plus` binding adds.
     ///
     /// Case: orzma starts with no config file, on whichever platform the build
     /// targets.
@@ -1227,7 +1227,14 @@ mod tests {
     fn default_bindings_resolve_to_every_direct_chord() {
         let config = ConfigShortcuts::default();
         let r = direct_only(&config);
-        assert_eq!(r.direct.len(), config.direct_chords().count());
+        let plus_bindings = config
+            .direct_chords()
+            .filter(|(_, chord, _)| chord.key == ConfigKey::Plus && !chord.modifiers.shift)
+            .count();
+        assert_eq!(
+            r.direct.len(),
+            config.direct_chords().count() + plus_bindings
+        );
     }
 
     /// Asserts that every direct chord in the host default table resolves back
