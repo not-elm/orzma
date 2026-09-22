@@ -115,7 +115,7 @@ webview_dim = 0.55        # f32 0..=1. Brightness multiplier for inactive webvie
 webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = full color, 1 = grey).
 
 [shortcuts]
-# NOTE: the values in this block are the macOS defaults. Four of them differ on
+# NOTE: the values in this block are the macOS defaults. Seven of them differ on
 # Windows and Linux — see "Platform defaults" below for the other table.
 # The leader for "<Leader>..." bindings. Either a full chord ("Ctrl+A": press
 # the chord, then the next key) OR a bare modifier to TAP ("Cmd"/"Ctrl"/"Alt":
@@ -276,7 +276,7 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 
 ## Platform defaults
 
-Four defaults differ by platform, because macOS has a `Cmd` key and the other
+Seven defaults differ by platform, because macOS has a `Cmd` key and the other
 platforms do not. Every other action below is the same everywhere.
 
 | Action | Default (macOS) | Default (Windows / Linux) |
@@ -284,6 +284,9 @@ platforms do not. Every other action below is the same everywhere.
 | `leader` | `Cmd` (tap) | `Alt` (tap) |
 | `paste` | `Cmd+V` | `Ctrl+V` |
 | `copy` | `Cmd+C` | `Ctrl+C` |
+| `increase-font-size` | `Cmd+Plus` | `Ctrl+Plus` |
+| `decrease-font-size` | `Cmd+-` | `Ctrl+-` |
+| `reset-font-size` | `Cmd+0` | `Ctrl+0` |
 | `quit` | `Cmd+Q` | unbound |
 
 `quit` ships unbound off macOS because the window manager's own close
@@ -309,7 +312,7 @@ see it. Set `paste = "Ctrl+Shift+V"` to give it back.
 ## Shortcut actions
 
 The `Default` column lists the macOS value; see "Platform defaults" above for
-the four that differ elsewhere.
+the seven that differ elsewhere.
 
 | Action | Default | What it does |
 | --- | --- | --- |
@@ -401,6 +404,12 @@ window manager that refuses the request, or a request clamped to the display —
 the column and row counts change instead, and the right edge of every
 scrollback row is truncated. Rows are not reflowed. Zooming out shrinks the
 window.
+
+A window manager that silently ignores the request, sending no resize event at
+all, is a different case: the column and row counts do not change and nothing
+is truncated, but orzma goes on reporting a grid wider than the window can
+actually show. Fullscreen and maximized windows are skipped before a request
+is made, which rules out the common causes.
 
 The clamp uses the monitor's full size, not its work area, because neither
 Bevy nor winit exposes one; a maximal request may end up partly behind the

@@ -6,7 +6,7 @@ use crate::input::keyboard::terminal_modifiers;
 use crate::{
     action::{
         clipboard::PasteAction,
-        font_zoom::{FontZoomAction, ZoomDirection},
+        font_zoom::FontZoomAction,
         terminal::trigger_selection_copy,
         vi::{mode::EnterViModeActionEvent, trigger_vi_mode_action},
     },
@@ -19,8 +19,7 @@ use crate::{
 use bevy::prelude::*;
 use bevy_orzmux::prelude::{PaneAction, RequestActiveKeyInput, RequestPaneAction};
 use orzma_configs::shortcuts::{
-    FontSizeStep, PaneDirection as ConfigPaneDirection, Shortcut,
-    SplitOrientation as ConfigSplitOrientation,
+    PaneDirection as ConfigPaneDirection, Shortcut, SplitOrientation as ConfigSplitOrientation,
 };
 use orzmux::prelude::{
     NewPaneAt, PaneDirection as OrzmuxPaneDirection, PaneTarget,
@@ -106,7 +105,7 @@ fn apply_shortcut(
         }
         Shortcut::Copy => trigger_selection_copy(commands, focused),
         Shortcut::FontSize(step) => commands.trigger(FontZoomAction {
-            direction: zoom_direction(step),
+            direction: step.into(),
         }),
         Shortcut::SelectPane(direction) => commands.trigger(RequestPaneAction {
             action: PaneAction::SelectDirection(pane_direction(direction)),
@@ -133,16 +132,6 @@ fn apply_shortcut(
     }
 }
 
-/// Converts `orzma_configs`' shortcut-facing font-size step to the action
-/// layer's zoom direction.
-fn zoom_direction(step: FontSizeStep) -> ZoomDirection {
-    match step {
-        FontSizeStep::Increase => ZoomDirection::Increase,
-        FontSizeStep::Decrease => ZoomDirection::Decrease,
-        FontSizeStep::Reset => ZoomDirection::Reset,
-    }
-}
-
 /// Converts `orzma_configs`' shortcut-facing pane direction to the mux
 /// backend's.
 fn pane_direction(direction: ConfigPaneDirection) -> OrzmuxPaneDirection {
@@ -166,14 +155,14 @@ fn split_orientation(orientation: ConfigSplitOrientation) -> OrzmuxSplitOrientat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::font_zoom::{FontZoomAction, ZoomDirection};
+    use crate::action::font_zoom::ZoomDirection;
     use crate::action::terminal::TerminalSelectionCopy;
     use crate::input::shortcuts::Shortcuts;
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::resource::Resource;
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
-    use orzma_configs::shortcuts::{Modifiers, PaneDirection, SplitOrientation};
+    use orzma_configs::shortcuts::{FontSizeStep, Modifiers, PaneDirection, SplitOrientation};
     use orzma_tty::prelude::TerminalKey;
     use orzmux::prelude::PaneDirection as OrzmuxDirection;
 

@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use bevy::window::{Monitor, OnMonitor, PrimaryWindow, WindowMode};
 use bevy::winit::WINIT_WINDOWS;
 use bevy_orzma_tty_renderer::{TerminalFontSize, TerminalFonts, physical_font_size};
+use orzma_configs::shortcuts::FontSizeStep;
 
 /// The zoom factors, in ascending order. `FACTORS[BASE]` is the unzoomed 1.0.
 const FACTORS: [f32; 12] = [
@@ -26,6 +27,16 @@ pub(crate) enum ZoomDirection {
     Decrease,
     /// Return to the unzoomed factor.
     Reset,
+}
+
+impl From<FontSizeStep> for ZoomDirection {
+    fn from(step: FontSizeStep) -> Self {
+        match step {
+            FontSizeStep::Increase => Self::Increase,
+            FontSizeStep::Decrease => Self::Decrease,
+            FontSizeStep::Reset => Self::Reset,
+        }
+    }
 }
 
 /// The host asks for one zoom step on the terminal font size.
@@ -64,15 +75,15 @@ impl FontZoom {
         self.index = index;
     }
 
-    /// Returns the next index in `direction` whose cell pitch differs from
-    /// `current_pitch`, paired with that index's pitch, or `None` when the
-    /// ladder has no such index left.
+    /// Returns the next index in `direction` paired with that index's cell
+    /// pitch, or `None` when the ladder has no such index left.
     ///
     /// `base_size` is the configured `[font] size`; the logical size at a rung
     /// is `base_size * FACTORS[rung]`. `pitch_at` maps a logical size to the
     /// whole-physical-pixel cell pitch the renderer would paint at.
-    /// `current_pitch` is the pitch at the current rung. A rung whose pitch
-    /// matches it is skipped, so an accepted step always changes the grid.
+    /// `current_pitch` is the pitch at the current rung. An `Increase` or
+    /// `Decrease` skips any rung whose pitch matches it; a `Reset` returns
+    /// `BASE` without comparing pitches.
     pub fn next_index(
         &self,
         direction: ZoomDirection,
@@ -131,7 +142,7 @@ fn on_font_zoom(
         let (w, h) = cell_pitch_phys(&fonts.cell_metrics_px(physical_font_size(logical, dpr)));
         (w as u16, h as u16)
     };
-    let old_pitch = pitch_at(base * zoom.factor());
+    let old_pitch = pitch_at(font_size.0);
     let Some((index, new_pitch)) = zoom.next_index(ev.direction, base, old_pitch, pitch_at) else {
         return;
     };
@@ -370,7 +381,6 @@ mod tests {
             Some(UVec2::new(4000, 3000)),
         );
 
-        // 1600 / 13 = 123 columns; 1000 / 30 = 33 rows.
         assert_eq!(want, Some(UVec2::new(123 * 16, 33 * 36)));
     }
 
@@ -440,8 +450,6 @@ mod tests {
     /// physical size, and a config whose `zoom_resizes_window` is `resizes`.
     fn zoom_app(resizes: bool, width: u32, height: u32) -> (App, Entity) {
         let mut app = App::new();
-        // `OrzmaConfigsResource` derives `Deref` but not `DerefMut`, so the
-        // inner config is built up front rather than mutated in place.
         let configs = OrzmaConfigsResource(OrzmaConfigs {
             font: FontConfig {
                 zoom_resizes_window: resizes,
