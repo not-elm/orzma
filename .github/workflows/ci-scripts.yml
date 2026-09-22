@@ -1,0 +1,47 @@
+name: ci-scripts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - "build/windows/**"
+      - ".github/workflows/ci-scripts.yml"
+  pull_request:
+    paths:
+      - "scripts/**"
+      - "build/windows/**"
+      - ".github/workflows/ci-scripts.yml"
+
+concurrency:
+  group: ci-scripts-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            patterns: "test_*.py"
+          # The macOS bundler tests assert POSIX path strings ("/tmp/a.app" against
+          # "\tmp\a.app") and fail on Windows. They are unrelated to this work, so the
+          # Windows leg runs only the two suites added here.
+          - os: windows-latest
+            patterns: "test_stage_windows.py test_build_ico.py"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run script tests
+        shell: bash
+        run: |
+          for pattern in ${{ matrix.patterns }}; do
+            python -m unittest discover -s scripts -p "$pattern" -v
+          done
