@@ -6,6 +6,7 @@ use crate::input::keyboard::terminal_modifiers;
 use crate::{
     action::{
         clipboard::PasteAction,
+        font_zoom::{FontZoomAction, ZoomDirection},
         terminal::trigger_selection_copy,
         vi::{mode::EnterViModeActionEvent, trigger_vi_mode_action},
     },
@@ -18,7 +19,8 @@ use crate::{
 use bevy::prelude::*;
 use bevy_orzmux::prelude::{PaneAction, RequestActiveKeyInput, RequestPaneAction};
 use orzma_configs::shortcuts::{
-    PaneDirection as ConfigPaneDirection, Shortcut, SplitOrientation as ConfigSplitOrientation,
+    FontSizeStep, PaneDirection as ConfigPaneDirection, Shortcut,
+    SplitOrientation as ConfigSplitOrientation,
 };
 use orzmux::prelude::{
     NewPaneAt, PaneDirection as OrzmuxPaneDirection, PaneTarget,
@@ -103,6 +105,9 @@ fn apply_shortcut(
             }
         }
         Shortcut::Copy => trigger_selection_copy(commands, focused),
+        Shortcut::FontSize(step) => commands.trigger(FontZoomAction {
+            direction: zoom_direction(step),
+        }),
         Shortcut::SelectPane(direction) => commands.trigger(RequestPaneAction {
             action: PaneAction::SelectDirection(pane_direction(direction)),
         }),
@@ -115,8 +120,7 @@ fn apply_shortcut(
         Shortcut::KillPane => commands.trigger(RequestPaneAction {
             action: PaneAction::Kill,
         }),
-        Shortcut::FontSize(_)
-        | Shortcut::ResizePane(_)
+        Shortcut::ResizePane(_)
         | Shortcut::ZoomPane
         | Shortcut::NewWindow
         | Shortcut::KillWindow
@@ -126,6 +130,16 @@ fn apply_shortcut(
         | Shortcut::RenameWindow
         | Shortcut::Quit
         | Shortcut::ReleaseWebviewFocus => {}
+    }
+}
+
+/// Converts `orzma_configs`' shortcut-facing font-size step to the action
+/// layer's zoom direction.
+fn zoom_direction(step: FontSizeStep) -> ZoomDirection {
+    match step {
+        FontSizeStep::Increase => ZoomDirection::Increase,
+        FontSizeStep::Decrease => ZoomDirection::Decrease,
+        FontSizeStep::Reset => ZoomDirection::Reset,
     }
 }
 
@@ -152,6 +166,7 @@ fn split_orientation(orientation: ConfigSplitOrientation) -> OrzmuxSplitOrientat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::font_zoom::{FontZoomAction, ZoomDirection};
     use crate::action::terminal::TerminalSelectionCopy;
     use crate::input::shortcuts::Shortcuts;
     use crate::surface::OrzmaTerminal;
@@ -170,6 +185,7 @@ mod tests {
         paste: u32,
         copy: u32,
         vi_mode: u32,
+        font_zoom: Vec<ZoomDirection>,
     }
 
     /// Builds an app running the dispatcher as a bare per-message
@@ -205,7 +221,10 @@ mod tests {
                     c.order.push(format!("pane:{d:?}"));
                 }
             })
-            .add_observer(|ev: On<PaneSpawnRequest>, mut c: ResMut<Captured>| c.spawns.push(ev.at));
+            .add_observer(|ev: On<PaneSpawnRequest>, mut c: ResMut<Captured>| c.spawns.push(ev.at))
+            .add_observer(|ev: On<FontZoomAction>, mut c: ResMut<Captured>| {
+                c.font_zoom.push(ev.direction);
+            });
         app
     }
 
@@ -496,5 +515,35 @@ mod tests {
             1,
             "EnterViMode must fire unconditionally, even when vi mode is already active"
         );
+    }
+
+    /// Asserts that each font-size shortcut triggers a `FontZoomAction` in the
+    /// matching direction, so the three keys reach the zoom observer.
+    ///
+    /// Case: the user presses the zoom-in, zoom-out and reset keys in turn.
+    #[test]
+    fn font_size_shortcuts_trigger_a_zoom_action() {
+        for (step, direction) in [
+            (FontSizeStep::Increase, ZoomDirection::Increase),
+            (FontSizeStep::Decrease, ZoomDirection::Decrease),
+            (FontSizeStep::Reset, ZoomDirection::Reset),
+        ] {
+            let (mut app, term) = dispatch_app(Shortcuts::default());
+            dispatch(
+                &mut app,
+                vec![action_effect(Shortcut::FontSize(step), false)],
+                Some(term),
+                false,
+                Modifiers::default(),
+            );
+            app.update();
+
+            let captured = app.world().resource::<Captured>();
+            assert_eq!(
+                captured.font_zoom,
+                vec![direction],
+                "{step:?} must trigger {direction:?}"
+            );
+        }
     }
 }

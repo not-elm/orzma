@@ -700,7 +700,7 @@ mod tests {
     use super::*;
     use bevy::input::keyboard::Key;
     use orzma_configs::OrzmaConfigs;
-    use orzma_configs::shortcuts::{Binding, Shortcuts as ConfigShortcuts};
+    use orzma_configs::shortcuts::{Binding, FontSizeStep, Shortcuts as ConfigShortcuts};
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -1634,7 +1634,13 @@ mod tests {
             modifiers: meta,
         };
         let resolved = OrzmaShortcut::from_chords(
-            [("increase-font-size", &chord, Shortcut::Copy, false)].into_iter(),
+            [(
+                "increase-font-size",
+                &chord,
+                Shortcut::FontSize(FontSizeStep::Increase),
+                false,
+            )]
+            .into_iter(),
         );
 
         assert_eq!(
@@ -1653,9 +1659,8 @@ mod tests {
             "the shifted twin must be registered"
         );
         assert!(
-            resolved
-                .iter()
-                .all(|s| s.keycode == KeyCode::Equal && s.action == Shortcut::Copy),
+            resolved.iter().all(|s| s.keycode == KeyCode::Equal
+                && s.action == Shortcut::FontSize(FontSizeStep::Increase)),
             "both entries keep the same key code and action"
         );
     }
