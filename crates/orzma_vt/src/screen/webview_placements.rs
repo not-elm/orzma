@@ -6,13 +6,13 @@ use crate::placement::{AnchoredPlacement, InstanceId, PlacementSize};
 use crate::screen::grid::LineId;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint};
 
-/// The placements mounted on one screen.
+/// The webview placements mounted on one screen.
 #[derive(Debug)]
-pub(crate) struct ScreenPlacements {
+pub(crate) struct WebviewPlacements {
     placements: Vec<Placement>,
 }
 
-impl ScreenPlacements {
+impl WebviewPlacements {
     /// Builds an empty table.
     pub fn new() -> Self {
         Self {
@@ -135,15 +135,15 @@ mod tests {
     use crate::screen::grid::GridSize;
     use crate::screen::grid::coords::ScreenLine;
 
-    fn table() -> ScreenPlacements {
-        ScreenPlacements::new()
+    fn table() -> WebviewPlacements {
+        WebviewPlacements::new()
     }
 
     fn grid() -> Grid {
         Grid::new(GridSize { cols: 8, rows: 3 }, 10)
     }
 
-    fn mount(table: &mut ScreenPlacements, grid: &Grid, id: u128) {
+    fn mount(table: &mut WebviewPlacements, grid: &Grid, id: u128) {
         table.mount(
             InstanceId(id),
             grid.line_id(ScreenLine::TOP),
