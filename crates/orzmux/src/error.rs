@@ -1,6 +1,7 @@
 //! The error type the multiplexer reports, and the result alias built
 //! on it.
 
+use crate::backend::PaneId;
 use orzma_tty::prelude::OrzmaTtyError;
 use orzma_vt::prelude::VtError;
 use std::io::Error as IoError;
@@ -37,4 +38,15 @@ pub enum OrzmuxError {
     /// The backend thread could not be started.
     #[error("the orzma-mux thread could not be started: {0}")]
     BackendThread(#[source] IoError),
+    /// A pane's PTY refused a write.
+    #[error("the pane refused a {what} write: {source}")]
+    PtyWrite {
+        /// The pane whose PTY refused the write.
+        pane: PaneId,
+        /// What was being written, as the log line names it.
+        what: &'static str,
+        /// The refusal itself.
+        #[source]
+        source: OrzmaTtyError,
+    },
 }

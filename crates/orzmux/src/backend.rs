@@ -9,10 +9,14 @@ use crate::error::{OrzmuxError, OrzmuxResult};
 use crate::event_loop::OrzmuxCommand;
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
 use orzma_tty::prelude::{
-    OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PumpItem, TtySignal, WheelConfig,
+    MouseReport, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PumpItem, TerminalKey, TerminalModifiers,
+    TtySignal, WheelConfig, WheelInput,
 };
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
-use orzma_vt::prelude::{Frame, GridSize, OrzmaVt, Vt, VtSignal};
+use orzma_vt::prelude::{
+    CellSide, Frame, GridColumn, GridPoint, GridSize, InstanceId, OrzmaVt, PlacementSize,
+    ScreenLine, Scroll, SelectionKind, Vt, VtSignal,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -289,119 +293,74 @@ impl Backend {
         }
     }
 
-    /// Applies one command. Unknown panes and an unresolvable `Active`
-    /// are dropped with a debug log; `CopySelection` always answers,
+    /// Applies one command. An unresolvable target and a refused PTY
+    /// write are logged and dropped; `CopySelection` always answers,
     /// `SelectPane` always publishes a layout, and `SelectPaneDirection`
     /// publishes one only when the active pane moved.
     pub fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.processed = seq;
+        if let OrzmuxCommand::NewPane {
+            request,
+            at,
+            cwd,
+            env,
+        } = command
+        {
+            if let Err(error) = self.open_pane(request, at, cwd, env) {
+                self.fail_spawn(request, &error);
+            }
+            return;
+        }
+        let name = command.name();
+        let target = command.target();
+        if let Err(error) = self.dispatch(command) {
+            log_refused_command(name, target, &error);
+        }
+    }
+
+    /// Routes one command to the operation that applies it.
+    fn dispatch(&mut self, command: OrzmuxCommand) -> OrzmuxResult {
         match command {
-            OrzmuxCommand::Resize { size, cell_px } => self.on_resize(size, cell_px),
-            OrzmuxCommand::NewPane {
-                request,
-                at,
-                cwd,
-                env,
-            } => self.on_new_pane(request, at, cwd, env),
-            OrzmuxCommand::KillPane { pane } => {
-                if let Some(id) = self.resolve_or_log(pane, "KillPane") {
-                    self.close_pane(id, CloseReason::Killed);
-                }
+            OrzmuxCommand::NewPane { .. } => Ok(()),
+            OrzmuxCommand::Resize { size, cell_px } => {
+                self.resize(size, cell_px);
+                Ok(())
             }
-            OrzmuxCommand::SelectPane { pane } => {
-                if !self.tree.select(pane) {
-                    tracing::debug!(?pane, "select of an unknown pane refused");
-                }
-                self.publish_layout();
-            }
+            OrzmuxCommand::KillPane { pane } => self.kill_pane(pane),
+            OrzmuxCommand::SelectPane { pane } => self.select_pane(pane),
             OrzmuxCommand::SelectPaneDirection { direction } => {
-                let moved = self
-                    .geometry
-                    .is_some_and(|geometry| self.tree.select_direction(direction, geometry.size));
-                if moved {
-                    self.publish_layout();
-                }
+                self.select_pane_direction(direction);
+                Ok(())
             }
             OrzmuxCommand::WindowFocus { focused } => {
-                self.window_focused = focused;
-                self.refresh_focus();
+                self.window_focus(focused);
+                Ok(())
             }
             OrzmuxCommand::ResizeSplit { split, position } => {
-                if self
-                    .geometry
-                    .is_some_and(|g| self.tree.resize_split(split, position, g.size))
-                {
-                    self.publish_layout();
-                }
+                self.resize_split(split, position);
+                Ok(())
             }
-            OrzmuxCommand::KeyInput { pane, key, mods } => {
-                if let Some(id) = self.resolve_or_log(pane, "KeyInput")
-                    && let Some(p) = self.panes.get_mut(&id)
-                    && let Err(err) = p.tty.send_key(&key, &mods)
-                {
-                    log_refused_write(id, "key", &err, Level::ERROR);
-                }
-            }
-            OrzmuxCommand::Paste { pane, text } => {
-                if let Some(id) = self.resolve_or_log(pane, "Paste")
-                    && let Some(p) = self.panes.get_mut(&id)
-                    && let Err(err) = p.tty.send_paste(&text)
-                {
-                    log_refused_write(id, "paste", &err, Level::ERROR);
-                }
-            }
-            OrzmuxCommand::MouseInput { pane, report } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "MouseInput")
-                    && let Err(err) = p.tty.send_mouse(report)
-                {
-                    log_refused_write(pane, "mouse report", &err, Level::ERROR);
-                }
-            }
-            OrzmuxCommand::Wheel { pane, input } => {
-                let wheel = self.wheel;
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "Wheel")
-                    && let Err(err) = p.tty.send_wheel(input, &wheel)
-                {
-                    log_refused_write(pane, "wheel", &err, Level::ERROR);
-                }
-            }
-            OrzmuxCommand::Scroll { pane, scroll } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "Scroll") {
-                    p.tty.scroll(scroll);
-                }
-            }
+            OrzmuxCommand::KeyInput { pane, key, mods } => self.key_input(pane, key, mods),
+            OrzmuxCommand::Paste { pane, text } => self.paste(pane, text),
+            OrzmuxCommand::MouseInput { pane, report } => self.mouse_input(pane, report),
+            OrzmuxCommand::Wheel { pane, input } => self.wheel(pane, input),
+            OrzmuxCommand::Scroll { pane, scroll } => self.scroll(pane, scroll),
             OrzmuxCommand::SelectionStart {
                 pane,
                 cell,
                 side,
                 kind,
-            } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionStart") {
-                    p.tty.start_selection(cell, side, kind);
-                }
-            }
+            } => self.selection_start(pane, cell, side, kind),
             OrzmuxCommand::SelectionUpdate { pane, cell, side } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionUpdate") {
-                    p.tty.extend_selection(cell, side);
-                }
+                self.selection_update(pane, cell, side)
             }
-            OrzmuxCommand::SelectionClear { pane } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "SelectionClear") {
-                    p.tty.clear_selection();
-                }
-            }
+            OrzmuxCommand::SelectionClear { pane } => self.selection_clear(pane),
             OrzmuxCommand::CopySelection { pane } => {
-                let text = self
-                    .resolve(pane)
-                    .and_then(|id| self.panes.get(&id))
-                    .and_then(|p| p.tty.vt().selection_text())
-                    .filter(|t| !t.is_empty());
-                self.emit(OrzmuxEvent::SelectionText { text });
+                self.copy_selection(pane);
+                Ok(())
             }
             OrzmuxCommand::RemovePlacements { pane, instances } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "RemovePlacements") {
-                    p.tty.remove_placements(&instances);
-                }
+                self.remove_placements(pane, instances)
             }
             OrzmuxCommand::MountPlacement {
                 pane,
@@ -409,11 +368,7 @@ impl Backend {
                 row,
                 column,
                 size,
-            } => {
-                if let Some(p) = self.pane_mut(PaneTarget::Id(pane), "MountPlacement") {
-                    p.tty.mount_placement_at(instance, row, column, size);
-                }
-            }
+            } => self.mount_placement(pane, instance, row, column, size),
         }
     }
 
@@ -449,6 +404,307 @@ impl Backend {
         for id in due {
             self.pump_pane(id);
         }
+    }
+
+    /// Applies a new window size and republishes the layout.
+    pub fn resize(&mut self, size: GridSize, cell_px: CellPixels) {
+        self.geometry = Some(Geometry { size, cell_px });
+        self.publish_layout();
+    }
+
+    /// Spawns a pane at `at` and announces it with `PaneOpened`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::NoGeometry`] before the window has
+    /// reported its size, [`OrzmuxError::UnresolvedTarget`] when the
+    /// split target is gone, [`OrzmuxError::RootOccupied`] or
+    /// [`OrzmuxError::SplitRefused`] when the tree refuses the
+    /// insertion, and [`OrzmuxError::SpawnShell`] when the shell will
+    /// not start. The tree is left as it was in every case.
+    pub fn open_pane(
+        &mut self,
+        request: RequestId,
+        at: NewPaneAt,
+        cwd: Option<PathBuf>,
+        env: Vec<(EnvKey, EnvValue)>,
+    ) -> OrzmuxResult {
+        let geometry = self.geometry.ok_or(OrzmuxError::NoGeometry)?;
+        let at = self.pinned_pane_at(at)?;
+        let new = PaneId(self.next_pane_id);
+        self.next_pane_id += 1;
+        let previous_active = self.tree.active();
+        let split_target = self.insert_pane(new, at, geometry.size)?;
+        let spawn_cwd = cwd.or_else(|| {
+            split_target
+                .and_then(|id| self.panes.get(&id))
+                .and_then(Pane::cwd)
+        });
+        match self.spawn_pane(new, geometry, spawn_cwd.clone(), env) {
+            Ok((tty, size)) => {
+                self.panes.insert(
+                    new,
+                    Pane::new(tty, (size.cols, size.rows, geometry.cell_px), spawn_cwd),
+                );
+                self.emit(OrzmuxEvent::PaneOpened { pane: new, request });
+                self.publish_layout();
+                Ok(())
+            }
+            Err(error) => {
+                self.tree.remove(new);
+                if let Some(previous) = previous_active {
+                    self.tree.select(previous);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Kills the pane `target` names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when the target names
+    /// no live pane; no pane closes.
+    pub fn kill_pane(&mut self, target: PaneTarget) -> OrzmuxResult {
+        let id = self.pane_id(target)?;
+        self.close_pane(id, CloseReason::Killed);
+        Ok(())
+    }
+
+    /// Makes `pane` active. A layout is published either way.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`; the active pane is unchanged and the published
+    /// layout reflects that.
+    pub fn select_pane(&mut self, pane: PaneId) -> OrzmuxResult {
+        let selected = self.tree.select(pane);
+        self.publish_layout();
+        if selected {
+            Ok(())
+        } else {
+            Err(OrzmuxError::UnresolvedTarget)
+        }
+    }
+
+    /// Moves the active pane one step in `direction`, publishing a
+    /// layout only when the active pane moved.
+    pub fn select_pane_direction(&mut self, direction: PaneDirection) {
+        let moved = self
+            .geometry
+            .is_some_and(|geometry| self.tree.select_direction(direction, geometry.size));
+        if moved {
+            self.publish_layout();
+        }
+    }
+
+    /// Records the window's keyboard focus and reports it to the panes.
+    pub fn window_focus(&mut self, focused: bool) {
+        self.window_focused = focused;
+        self.refresh_focus();
+    }
+
+    /// Moves a divider, publishing a layout only when the tree changed.
+    pub fn resize_split(&mut self, split: SplitId, position: u16) {
+        if self
+            .geometry
+            .is_some_and(|g| self.tree.resize_split(split, position, g.size))
+        {
+            self.publish_layout();
+        }
+    }
+
+    /// Sends a key to the pane `target` names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when the target names
+    /// no live pane, and [`OrzmuxError::PtyWrite`] when its PTY refuses
+    /// the write.
+    pub fn key_input(
+        &mut self,
+        target: PaneTarget,
+        key: TerminalKey,
+        mods: TerminalModifiers,
+    ) -> OrzmuxResult {
+        let id = self.pane_id(target)?;
+        self.pane_mut(id)?
+            .tty
+            .send_key(&key, &mods)
+            .map_err(|source| OrzmuxError::PtyWrite {
+                pane: id,
+                what: "key",
+                source,
+            })
+    }
+
+    /// Sends pasted text to the pane `target` names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when the target names
+    /// no live pane, and [`OrzmuxError::PtyWrite`] when its PTY refuses
+    /// the write.
+    pub fn paste(&mut self, target: PaneTarget, text: String) -> OrzmuxResult {
+        let id = self.pane_id(target)?;
+        self.pane_mut(id)?
+            .tty
+            .send_paste(&text)
+            .map_err(|source| OrzmuxError::PtyWrite {
+                pane: id,
+                what: "paste",
+                source,
+            })
+    }
+
+    /// Sends a mouse report to `pane`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`, and [`OrzmuxError::PtyWrite`] when its PTY
+    /// refuses the write.
+    pub fn mouse_input(&mut self, pane: PaneId, report: MouseReport) -> OrzmuxResult {
+        self.pane_mut(pane)?
+            .tty
+            .send_mouse(report)
+            .map_err(|source| OrzmuxError::PtyWrite {
+                pane,
+                what: "mouse report",
+                source,
+            })
+    }
+
+    /// Routes a wheel event to `pane` under the backend's wheel policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`, and [`OrzmuxError::PtyWrite`] when its PTY
+    /// refuses the write.
+    pub fn wheel(&mut self, pane: PaneId, input: WheelInput) -> OrzmuxResult {
+        let wheel = self.wheel;
+        self.pane_mut(pane)?
+            .tty
+            .send_wheel(input, &wheel)
+            .map_err(|source| OrzmuxError::PtyWrite {
+                pane,
+                what: "wheel",
+                source,
+            })
+    }
+
+    /// Scrolls `pane`'s viewport.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`.
+    pub fn scroll(&mut self, pane: PaneId, scroll: Scroll) -> OrzmuxResult {
+        self.pane_mut(pane)?.tty.scroll(scroll);
+        Ok(())
+    }
+
+    /// Anchors a selection in `pane`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`.
+    pub fn selection_start(
+        &mut self,
+        pane: PaneId,
+        cell: GridPoint,
+        side: CellSide,
+        kind: SelectionKind,
+    ) -> OrzmuxResult {
+        self.pane_mut(pane)?.tty.start_selection(cell, side, kind);
+        Ok(())
+    }
+
+    /// Extends `pane`'s selection to `cell`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`.
+    pub fn selection_update(
+        &mut self,
+        pane: PaneId,
+        cell: GridPoint,
+        side: CellSide,
+    ) -> OrzmuxResult {
+        self.pane_mut(pane)?.tty.extend_selection(cell, side);
+        Ok(())
+    }
+
+    /// Drops `pane`'s selection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`.
+    pub fn selection_clear(&mut self, pane: PaneId) -> OrzmuxResult {
+        self.pane_mut(pane)?.tty.clear_selection();
+        Ok(())
+    }
+
+    /// Answers with the selected text of the pane `target` names. The
+    /// answer is `None` when the target does not resolve or holds no
+    /// selection.
+    pub fn copy_selection(&mut self, target: PaneTarget) {
+        let text = self
+            .pane_id(target)
+            .ok()
+            .and_then(|id| self.panes.get(&id))
+            .and_then(|p| p.tty.vt().selection_text())
+            .filter(|t| !t.is_empty());
+        self.emit(OrzmuxEvent::SelectionText { text });
+    }
+
+    /// Removes the named placements from `pane`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`.
+    pub fn remove_placements(&mut self, pane: PaneId, instances: Vec<InstanceId>) -> OrzmuxResult {
+        self.pane_mut(pane)?.tty.remove_placements(&instances);
+        Ok(())
+    }
+
+    /// Mounts a placement in `pane` at the given row and column.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`.
+    pub fn mount_placement(
+        &mut self,
+        pane: PaneId,
+        instance: InstanceId,
+        row: ScreenLine,
+        column: GridColumn,
+        size: PlacementSize,
+    ) -> OrzmuxResult {
+        self.pane_mut(pane)?
+            .tty
+            .mount_placement_at(instance, row, column, size);
+        Ok(())
+    }
+
+    /// Answers a `NewPane` request with the failure that refused it.
+    // NOTE: `OrzmuxEvent` derives `Clone` and `PartialEq`, which
+    // `OrzmaTtyError` does not, so the wire carries the rendered text
+    // rather than the error itself. This is the one place that renders
+    // it.
+    pub fn fail_spawn(&mut self, request: RequestId, error: &OrzmuxError) {
+        self.emit(OrzmuxEvent::SpawnFailed {
+            request,
+            error: error.to_string(),
+        });
     }
 
     /// The pane layout tree.
@@ -524,83 +780,23 @@ impl Backend {
         true
     }
 
-    fn on_resize(&mut self, size: GridSize, cell_px: CellPixels) {
-        self.geometry = Some(Geometry { size, cell_px });
-        self.publish_layout();
-    }
-
-    fn on_new_pane(
-        &mut self,
-        request: RequestId,
-        at: NewPaneAt,
-        cwd: Option<PathBuf>,
-        env: Vec<(EnvKey, EnvValue)>,
-    ) {
-        let Some(geometry) = self.geometry else {
-            self.fail_spawn(request, OrzmuxError::NoGeometry);
-            return;
-        };
-        let at = match self.resolve_at(at) {
-            Ok(at) => at,
-            Err(error) => {
-                self.fail_spawn(request, error);
-                return;
-            }
-        };
-        let new = PaneId(self.next_pane_id);
-        self.next_pane_id += 1;
-        let previous_active = self.tree.active();
-        let split_target = match self.insert_pane(new, at, geometry.size) {
-            Ok(split_target) => split_target,
-            Err(error) => {
-                self.fail_spawn(request, error);
-                return;
-            }
-        };
-        let spawn_cwd = cwd.or_else(|| {
-            split_target
-                .and_then(|id| self.panes.get(&id))
-                .and_then(Pane::cwd)
-        });
-        match self.spawn_pane(new, geometry, spawn_cwd.clone(), env) {
-            Ok((tty, size)) => {
-                self.panes.insert(
-                    new,
-                    Pane::new(tty, (size.cols, size.rows, geometry.cell_px), spawn_cwd),
-                );
-                self.emit(OrzmuxEvent::PaneOpened { pane: new, request });
-                self.publish_layout();
-            }
-            Err(error) => {
-                self.tree.remove(new);
-                if let Some(previous) = previous_active {
-                    self.tree.select(previous);
-                }
-                self.fail_spawn(request, error);
-            }
-        }
-    }
-
-    /// `at` with its split target resolved to a concrete, live pane.
+    /// `at` with its split target pinned to a concrete, live pane.
     ///
     /// # Errors
     ///
     /// Returns [`OrzmuxError::UnresolvedTarget`] when the split target
-    /// does not resolve.
-    fn resolve_at(&self, at: NewPaneAt) -> OrzmuxResult<ResolvedPaneAt> {
+    /// names no live pane.
+    fn pinned_pane_at(&self, at: NewPaneAt) -> OrzmuxResult<PinnedPaneAt> {
         let NewPaneAt::Split { pane, orientation } = at else {
-            return Ok(ResolvedPaneAt::Root);
+            return Ok(PinnedPaneAt::Root);
         };
-        let target = self.resolve(pane).ok_or(OrzmuxError::UnresolvedTarget)?;
+        let pane = self.pane_id(pane)?;
         // NOTE: `pane` is pinned to this concrete id now rather than
         // re-resolved later. `NewPaneAt::Split` can carry
         // `PaneTarget::Active`, and re-resolving it after something else
         // moved the active pane would divide whichever pane is active
         // then, not the one the command named.
-        Ok(ResolvedPaneAt::Split {
-            pane: target,
-            orientation,
-        })
+        Ok(PinnedPaneAt::Split { pane, orientation })
     }
 
     /// Inserts `new` into the tree at `at`. Returns the pane a split
@@ -615,15 +811,15 @@ impl Backend {
     fn insert_pane(
         &mut self,
         new: PaneId,
-        at: ResolvedPaneAt,
+        at: PinnedPaneAt,
         window: GridSize,
     ) -> OrzmuxResult<Option<PaneId>> {
         match at {
-            ResolvedPaneAt::Root => {
+            PinnedPaneAt::Root => {
                 self.tree.insert_root(new)?;
                 Ok(None)
             }
-            ResolvedPaneAt::Split { pane, orientation } => {
+            PinnedPaneAt::Split { pane, orientation } => {
                 self.tree.split(pane, orientation, new, window)?;
                 Ok(Some(pane))
             }
@@ -654,18 +850,6 @@ impl Backend {
         let size = GridSize::new(rect.cols, rect.rows)?;
         let tty = self.factory.spawn(size, geometry.cell_px, cwd, env)?;
         Ok((tty, size))
-    }
-
-    /// Answers a `NewPane` request with the failure that refused it.
-    // NOTE: `OrzmuxEvent` derives `Clone` and `PartialEq`, which
-    // `OrzmaTtyError` does not, so the wire carries the rendered text
-    // rather than the error itself. This is the one place that renders
-    // it.
-    fn fail_spawn(&mut self, request: RequestId, error: OrzmuxError) {
-        self.emit(OrzmuxEvent::SpawnFailed {
-            request,
-            error: error.to_string(),
-        });
     }
 
     /// Tells every pane whether it holds focus, then re-solves the tree,
@@ -780,30 +964,28 @@ impl Backend {
         self.publish_layout();
     }
 
-    /// Resolves a target against the active pane.
-    fn resolve(&self, target: PaneTarget) -> Option<PaneId> {
-        match target {
+    /// The id of the pane `target` names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] for an id no live pane
+    /// carries, and for [`PaneTarget::Active`] while no pane is active.
+    fn pane_id(&self, target: PaneTarget) -> OrzmuxResult<PaneId> {
+        let id = match target {
             PaneTarget::Active => self.tree.active(),
             PaneTarget::Id(id) => self.panes.contains_key(&id).then_some(id),
-        }
+        };
+        id.ok_or(OrzmuxError::UnresolvedTarget)
     }
 
-    /// Resolves a target, logging a debug line naming `command` when it
-    /// does not resolve (an unknown `PaneId`, or `Active` with no active
-    /// pane).
-    fn resolve_or_log(&self, target: PaneTarget, command: &'static str) -> Option<PaneId> {
-        let resolved = self.resolve(target);
-        if resolved.is_none() {
-            tracing::debug!(?target, command, "pane command dropped: no such pane");
-        }
-        resolved
-    }
-
-    /// Resolves a target to its pane's mutable state, logging a debug
-    /// line naming `command` when it does not resolve.
-    fn pane_mut(&mut self, target: PaneTarget, command: &'static str) -> Option<&mut Pane> {
-        let id = self.resolve_or_log(target, command)?;
-        self.panes.get_mut(&id)
+    /// The mutable state of the pane `id` carries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `id`.
+    fn pane_mut(&mut self, id: PaneId) -> OrzmuxResult<&mut Pane> {
+        self.panes.get_mut(&id).ok_or(OrzmuxError::UnresolvedTarget)
     }
 
     fn emit(&mut self, event: OrzmuxEvent) {
@@ -849,6 +1031,48 @@ impl Backend {
     }
 }
 
+/// Logs a PTY write the pane's terminal refused.
+///
+/// The first rejection of a stuck episode warns and later rejections stay
+/// at debug, a closed writer logs at debug, and any other failure logs at
+/// `failure`, which is `ERROR` or `WARN`.
+pub fn log_refused_write(pane: PaneId, what: &'static str, err: &OrzmaTtyError, failure: Level) {
+    match err {
+        OrzmaTtyError::PtyWriteQueueFull {
+            dropped_in_episode: 1,
+        } => tracing::warn!(?pane, %err, "{what} dropped: it does not fit in the PTY input queue"),
+        OrzmaTtyError::PtyWriteQueueFull { .. } | OrzmaTtyError::PtyWriterClosed => {
+            tracing::debug!(?pane, %err, "{what} dropped");
+        }
+        _ if failure == Level::ERROR => {
+            tracing::error!(?pane, ?err, "{what} dropped: an earlier PTY write failed");
+        }
+        _ => tracing::warn!(?pane, ?err, "{what} dropped: an earlier PTY write failed"),
+    }
+}
+
+/// Logs a command the backend refused, at the level its failure earns.
+///
+/// An unresolvable target stays at debug — a pane closing while a
+/// command was in flight is ordinary. A refused PTY write goes through
+/// [`log_refused_write`] at `ERROR`, because a dropped keystroke is a
+/// user-visible loss.
+pub fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &OrzmuxError) {
+    match error {
+        OrzmuxError::UnresolvedTarget => {
+            tracing::debug!(
+                ?target,
+                command = name,
+                "pane command dropped: no such pane"
+            );
+        }
+        OrzmuxError::PtyWrite { pane, what, source } => {
+            log_refused_write(*pane, what, source, Level::ERROR);
+        }
+        _ => tracing::warn!(command = name, %error, "command refused"),
+    }
+}
+
 /// The window geometry the GUI last reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Geometry {
@@ -856,10 +1080,10 @@ struct Geometry {
     cell_px: CellPixels,
 }
 
-/// Where a new pane goes, with its split target already resolved to a
+/// Where a new pane goes, with its split target already pinned to a
 /// live pane.
 #[derive(Clone, Copy)]
-enum ResolvedPaneAt {
+enum PinnedPaneAt {
     /// The first pane; valid only while the tree is empty.
     Root,
     /// Split `pane`, putting the new pane right of / below it.
@@ -876,26 +1100,6 @@ enum ResolvedPaneAt {
 enum Ready {
     Commands,
     Pane(PaneId),
-}
-
-/// Logs a PTY write the pane's terminal refused.
-///
-/// The first rejection of a stuck episode warns and later rejections stay
-/// at debug, a closed writer logs at debug, and any other failure logs at
-/// `failure`, which is `ERROR` or `WARN`.
-fn log_refused_write(pane: PaneId, what: &'static str, err: &OrzmaTtyError, failure: Level) {
-    match err {
-        OrzmaTtyError::PtyWriteQueueFull {
-            dropped_in_episode: 1,
-        } => tracing::warn!(?pane, %err, "{what} dropped: it does not fit in the PTY input queue"),
-        OrzmaTtyError::PtyWriteQueueFull { .. } | OrzmaTtyError::PtyWriterClosed => {
-            tracing::debug!(?pane, %err, "{what} dropped");
-        }
-        _ if failure == Level::ERROR => {
-            tracing::error!(?pane, ?err, "{what} dropped: an earlier PTY write failed");
-        }
-        _ => tracing::warn!(?pane, ?err, "{what} dropped: an earlier PTY write failed"),
-    }
 }
 
 /// How many queued commands one iteration applies before pumping panes.

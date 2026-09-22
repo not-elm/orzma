@@ -163,3 +163,54 @@ pub enum OrzmuxCommand {
         size: PlacementSize,
     },
 }
+
+impl OrzmuxCommand {
+    /// The variant's name, as the refusal log line prints it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Resize { .. } => "Resize",
+            Self::NewPane { .. } => "NewPane",
+            Self::KillPane { .. } => "KillPane",
+            Self::SelectPane { .. } => "SelectPane",
+            Self::SelectPaneDirection { .. } => "SelectPaneDirection",
+            Self::WindowFocus { .. } => "WindowFocus",
+            Self::KeyInput { .. } => "KeyInput",
+            Self::Paste { .. } => "Paste",
+            Self::MouseInput { .. } => "MouseInput",
+            Self::Wheel { .. } => "Wheel",
+            Self::Scroll { .. } => "Scroll",
+            Self::SelectionStart { .. } => "SelectionStart",
+            Self::SelectionUpdate { .. } => "SelectionUpdate",
+            Self::SelectionClear { .. } => "SelectionClear",
+            Self::CopySelection { .. } => "CopySelection",
+            Self::RemovePlacements { .. } => "RemovePlacements",
+            Self::ResizeSplit { .. } => "ResizeSplit",
+            Self::MountPlacement { .. } => "MountPlacement",
+        }
+    }
+
+    /// The pane the command addresses, or `None` when it addresses the
+    /// window rather than one pane.
+    pub fn target(&self) -> Option<PaneTarget> {
+        match self {
+            Self::KillPane { pane }
+            | Self::KeyInput { pane, .. }
+            | Self::Paste { pane, .. }
+            | Self::CopySelection { pane } => Some(*pane),
+            Self::SelectPane { pane } => Some(PaneTarget::Id(*pane)),
+            Self::MouseInput { pane, .. }
+            | Self::Wheel { pane, .. }
+            | Self::Scroll { pane, .. }
+            | Self::SelectionStart { pane, .. }
+            | Self::SelectionUpdate { pane, .. }
+            | Self::SelectionClear { pane }
+            | Self::RemovePlacements { pane, .. }
+            | Self::MountPlacement { pane, .. } => Some(PaneTarget::Id(*pane)),
+            Self::Resize { .. }
+            | Self::NewPane { .. }
+            | Self::SelectPaneDirection { .. }
+            | Self::WindowFocus { .. }
+            | Self::ResizeSplit { .. } => None,
+        }
+    }
+}
