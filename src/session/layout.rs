@@ -1,6 +1,6 @@
 //! Window geometry: computes the whole-window cell size and cell pixel
-//! pitch from the primary window and the font metrics, records them in
-//! `PaneGeometry`, and sends `OrzmuxCommand::Resize`.
+//! pitch, records them in `PaneGeometry` once they form a valid grid
+//! size, and sends `OrzmuxCommand::Resize`.
 
 use crate::surface::geometry::{cell_pitch_phys, cells_for};
 use bevy::ecs::schedule::common_conditions::on_message;
@@ -64,6 +64,13 @@ fn send_window_geometry(
         width: cell_w as u16,
         height: cell_h as u16,
     };
+    let size = match GridSize::new(cols, rows) {
+        Ok(size) => size,
+        Err(err) => {
+            warn!(cols, rows, %err, "window geometry is not a valid grid size; not sent");
+            return;
+        }
+    };
     let wanted = PaneGeometry {
         cell_px,
         scale_factor: window.scale_factor(),
@@ -74,13 +81,6 @@ fn send_window_geometry(
         }
         None => commands.insert_resource(wanted),
     }
-    let size = match GridSize::new(cols, rows) {
-        Ok(size) => size,
-        Err(err) => {
-            warn!(cols, rows, %err, "window geometry is not a valid grid size; not sent");
-            return;
-        }
-    };
     if last.0 == Some((size, cell_px)) {
         return;
     }
@@ -199,7 +199,10 @@ mod tests {
         ));
         app.update();
         app.update();
-        assert!(app.world().contains_resource::<PaneGeometry>());
+        assert!(
+            !app.world().contains_resource::<PaneGeometry>(),
+            "an invalid grid size publishes no PaneGeometry"
+        );
         assert!(commands.try_iter().next().is_none());
     }
 
