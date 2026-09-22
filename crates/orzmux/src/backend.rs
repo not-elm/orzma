@@ -689,12 +689,11 @@ const PUMP_ROUNDS: usize = 4;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::SplitRefused;
     use crate::prelude::{PaneDirection, SplitId, SplitOrientation};
     use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
     use orzma_tty::prelude::{
-        CellCoord, KeyText, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, ProtocolModifiers,
-        TerminalKey, TerminalModifiers, WheelInput, WheelModifiers,
+        CellCoord, KeyText, OrzmaTty, OrzmaTtyError, ProtocolModifiers, TerminalKey,
+        TerminalModifiers, WheelInput, WheelModifiers,
     };
     use orzma_tty::test_support::{BlockingSink, CaptureSink, FailingSink};
     use orzma_vt::prelude::OrzmaVt;
@@ -744,11 +743,11 @@ mod tests {
             _cell_px: CellPixels,
             cwd: Option<PathBuf>,
             _env: Vec<(EnvKey, EnvValue)>,
-        ) -> OrzmaTtyResult<OrzmaTty<OrzmaVt>> {
+        ) -> OrzmuxResult<OrzmaTty<OrzmaVt>> {
             self.log.sizes.lock().unwrap().push(size);
             self.log.cwds.lock().unwrap().push(cwd);
             if self.log.fail_next.swap(false, Ordering::AcqRel) {
-                return Err(OrzmaTtyError::SpawnShell(anyhow::anyhow!("injected")));
+                return Err(OrzmaTtyError::SpawnShell(anyhow::anyhow!("injected")).into());
             }
             let (chunk_tx, chunk_rx) = unbounded();
             let (exit_tx, exit_rx) = unbounded();
@@ -964,7 +963,7 @@ mod tests {
             "no pane matches the target"
         );
         assert_eq!(
-            OrzmuxError::from(SplitRefused).to_string(),
+            OrzmuxError::SplitRefused.to_string(),
             "the target pane has too little room to divide"
         );
     }
