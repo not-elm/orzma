@@ -1630,7 +1630,7 @@ rename-window = "<Leader>d"
     }
 
     /// Asserts that the macOS default table round-trips to its exact JSON
-    /// form, pinning every one of the 36 fields at once.
+    /// form, pinning every one of the 38 fields at once.
     ///
     /// Case: a macOS user's config is serialized back out, so a stock binding
     /// that silently changes shape is caught here.
@@ -1643,7 +1643,7 @@ rename-window = "<Leader>d"
     }
 
     /// Asserts that the non-macOS default table round-trips to its exact JSON
-    /// form, pinning every one of the 36 fields at once, with the unbound
+    /// form, pinning every one of the 38 fields at once, with the unbound
     /// `quit` emitted as an empty string.
     ///
     /// Case: a Windows user's config is serialized back out, so a stock
@@ -1887,7 +1887,7 @@ rename-window = "<Leader>d"
     }
 
     /// Asserts that each zoom action reaches `bindings_iter` under its
-    /// kebab-case config key, so it can be rebound and collision-checked.
+    /// kebab-case config key.
     ///
     /// Case: a user rebinds `increase-font-size` in their config file.
     #[test]
