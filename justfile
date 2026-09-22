@@ -116,6 +116,15 @@ setup-cef:
 icon *args:
     python3 scripts/build_icon.py {{ args }}
 
+# regenerate the Windows icon (build/windows/orzma.ico) from the master SVG
+[unix]
+ico *args:
+    python3 scripts/build_ico.py {{ args }}
+
+[windows]
+ico *args:
+    python scripts/build_ico.py {{ args }}
+
 # build and package the orzma .app (extra args pass through, e.g. --version 1.2.3)
 [macos]
 bundle *args: orzmd-web
