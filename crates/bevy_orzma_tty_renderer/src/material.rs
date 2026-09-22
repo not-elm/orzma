@@ -63,13 +63,6 @@ impl Plugin for TerminalMaterialPlugin {
         app.init_resource::<TerminalPaddingFallback>()
             .add_plugins(UiMaterialPlugin::<TerminalUiMaterial>::default())
             .add_plugins(state::TerminalMaterialStatePlugin)
-            // NOTE: Scheduled in `PostUpdate` (not `Update`) so it runs after
-            // `ui_layout_system` has written the current frame's
-            // `ComputedNode.size`. The downstream consumer
-            // `resize_terminals_to_node` in orzma depends on layout being
-            // settled before terminal grid params propagate; keeping the
-            // material write in the same schedule avoids a cross-frame split
-            // where `grid_size`/`cell_size_px` lag layout by one tick.
             .add_systems(
                 PostUpdate,
                 update_terminal_material.in_set(TerminalMaterialSystems::UpdateMaterial),

@@ -136,10 +136,6 @@ fn resolve_key_effects(
                 action: Shortcut::ReleaseWebviewFocus,
                 ..
             } => focused_webview.0 = None,
-            // NOTE: WebviewForward is classified (not suppressed, not typed) so
-            // the chord reaches the focused webview through CEF's native
-            // keyboard path; there is no message to deliver host-side.
-            KeyEffect::WebviewForward { .. } => {}
             effect => {
                 messages.write(KeyEffectMessage {
                     effect,
@@ -182,6 +178,7 @@ mod tests {
     use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
+    use bevy_orzma_webview::NormalizedChord;
     use orzma_configs::shortcuts::Modifiers;
     use orzma_vt::prelude::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
     use std::time::Duration;
@@ -569,6 +566,49 @@ mod tests {
                 ModifiersState::default()
             ),
             "the leader-claimed second key is withheld from CEF for the focused webview"
+        );
+    }
+
+    /// Asserts that a chord the focused webview declared in `forward_keys`
+    /// is fanned out as a `WebviewForward` message rather than dropped during
+    /// resolution, and is left out of the CEF filter so the page sees it too.
+    ///
+    /// Case: a TUI browser registers `j` as a forward key, the user clicks the
+    /// page to give it keyboard focus, and then presses `j` so the app's own
+    /// scroll handler runs.
+    #[test]
+    fn declared_forward_chord_is_fanned_out() {
+        let mut app = resolve_app(Shortcuts::default());
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
+        let webview = app
+            .world_mut()
+            .spawn(ForwardKeys(vec![NormalizedChord {
+                code: KeyCode::KeyJ,
+                alt: false,
+                ctrl: false,
+                shift: false,
+                logo: false,
+            }]))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
+        press_key(&mut app, KeyCode::KeyJ, Key::Character("j".into()));
+        app.update();
+        let cap = app.world().resource::<Captured>();
+        assert_eq!(
+            cap.effects,
+            vec![KeyEffect::WebviewForward {
+                logical: Key::Character("j".into()),
+                key_code: KeyCode::KeyJ,
+            }],
+            "a declared forward chord must reach the applier as a KeyEffectMessage"
+        );
+        assert!(
+            !app.world().resource::<CefKeyboardFilter>().contains(
+                webview,
+                KeyCode::KeyJ,
+                ModifiersState::default()
+            ),
+            "a forward chord is delivered to the app without being withheld from the page"
         );
     }
 
