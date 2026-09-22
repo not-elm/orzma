@@ -28,14 +28,6 @@ pub struct FontConfig {
     /// `scale_factor` to device pixels. The unit is not the typographic
     /// point; no 96/72 conversion is applied.
     pub size: f32,
-    /// Whether a zoom step asks the OS window to grow or shrink so the grid
-    /// keeps its cell count.
-    ///
-    /// With `false` the window stays put and the column and row counts change
-    /// instead, which truncates the right edge of every scrollback row.
-    /// Fullscreen and maximized windows take that path regardless of this
-    /// setting.
-    pub zoom_resizes_window: bool,
     /// The regular face; its `family` is the base every other face inherits.
     pub normal: FontFaceConfig,
     /// The bold face; `family`/`style` default from `normal` / Bold.
@@ -54,7 +46,6 @@ impl Default for FontConfig {
     fn default() -> Self {
         Self {
             size: DEFAULT_SIZE,
-            zoom_resizes_window: true,
             normal: FontFaceConfig::default(),
             bold: FontFaceConfig::default(),
             italic: FontFaceConfig::default(),
@@ -171,25 +162,5 @@ mod tests {
     fn ui_defaults_to_empty_face() {
         let f: FontConfig = toml::from_str("").unwrap();
         assert_eq!(f.ui, FontFaceConfig::default());
-    }
-
-    /// Asserts that window-preserving zoom is on unless the config turns it
-    /// off.
-    ///
-    /// Case: a user with no `[font]` section zooms in for the first time.
-    #[test]
-    fn zoom_resizes_window_defaults_to_true() {
-        assert!(FontConfig::default().zoom_resizes_window);
-    }
-
-    /// Asserts that the key is read from the `[font]` table under its
-    /// snake_case spelling.
-    ///
-    /// Case: a tiling window manager user disables the window resize.
-    #[test]
-    fn zoom_resizes_window_parses_from_toml() {
-        let parsed: FontConfig =
-            toml::from_str("zoom_resizes_window = false").expect("valid [font] table");
-        assert!(!parsed.zoom_resizes_window);
     }
 }

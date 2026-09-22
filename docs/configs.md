@@ -47,11 +47,6 @@ unfocused_hollow = true
 
 [font]
 size = 11.25              # f32, logical px. Must be 0 < size <= 200, else startup error.
-# Whether a zoom step asks the OS window to grow or shrink so the grid keeps
-# its cell count. With false the window stays put and cols/rows change instead,
-# which truncates the right edge of every scrollback row. Fullscreen and
-# maximized windows take that path regardless of this setting.
-zoom_resizes_window = true
 # Each face is a table of { family, style }. Omit [font] entirely to use the
 # bundled JetBrains Mono Nerd Font. A face's `family`, when omitted, inherits
 # `normal.family`; its `style`, when omitted, uses the face's default
@@ -402,25 +397,9 @@ instead.
 
 ### Zoom and the window
 
-Zoom keeps the grid intact by resizing the OS window. Where that is not
-possible — fullscreen, maximized, a window manager that refuses the request,
-or a request clamped to the display — the column and row counts change
-instead, and the right edge of every scrollback row is truncated. Rows are not
-reflowed. Zooming out shrinks the window. A window with no client area at all
-(a minimized window on Windows reports one) asks for no resize, since it shows
-no cells to preserve.
-
-A window manager that silently ignores the request, sending no resize event at
-all, is a different case: the column and row counts do not change and nothing
-is truncated, but orzma goes on reporting a grid wider than the window can
-actually show. Fullscreen and maximized windows are skipped before a request
-is made, which rules out the common causes.
-
-The clamp uses the monitor's full size, not its work area, because neither
-Bevy nor winit exposes one; a maximal request may end up partly behind the
-taskbar or dock. It bounds the requested size alone and not where the window
-sits, so a window already placed near the right or bottom edge of the display
-can still grow past that edge.
+Zoom never resizes the OS window. The column and row counts change instead,
+and zooming in truncates the right edge of every scrollback row. Rows are not
+reflowed.
 
 Zoom scales the terminal grid only. A mounted webview's box grows and shrinks
 with the cell pitch, but the page inside keeps its own text size, so zooming
