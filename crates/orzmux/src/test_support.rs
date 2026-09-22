@@ -93,7 +93,7 @@ impl PaneFactory for FakeFactory {
 /// Drives one [`Backend`] whose panes are spawned by a PTY-less factory.
 pub(crate) struct Harness {
     pub(crate) backend: Backend,
-    pub(crate) events: Receiver<OrzmuxEvent>,
+    pub(crate) _events: Receiver<OrzmuxEvent>,
     pub(crate) panes: Receiver<FakePane>,
     pub(crate) log: Arc<FactoryLog>,
     pub(crate) seq: u64,
@@ -118,7 +118,7 @@ impl Harness {
         };
         Self {
             backend: Backend::new(Box::new(factory), command_rx, event_tx, wheel),
-            events: event_rx,
+            _events: event_rx,
             panes: spawned_rx,
             log,
             seq: 0,
@@ -133,8 +133,8 @@ impl Harness {
         seq
     }
 
-    pub(crate) fn drain(&self) -> VecDeque<OrzmuxEvent> {
-        self.events.try_iter().collect()
+    pub(crate) fn drain(&mut self) -> VecDeque<OrzmuxEvent> {
+        self.backend.drain_events().collect()
     }
 
     /// Waits until every live pane's queued PTY writes have been

@@ -245,6 +245,8 @@ pub(crate) struct Backend {
     sampler: QueueSampler,
     /// The wheel-routing policy handed to every pane's terminal.
     wheel: WheelConfig,
+    /// Events generated since the last drain, in generation order.
+    outbox: Vec<OrzmuxEvent>,
 }
 
 impl Backend {
@@ -269,6 +271,7 @@ impl Backend {
             sources: Vec::new(),
             sampler: QueueSampler::new(Instant::now()),
             wheel,
+            outbox: Vec::new(),
         }
     }
 
@@ -279,13 +282,20 @@ impl Backend {
         loop {
             let ready = self.wait_ready();
             self.record_queue_depths();
-            match ready {
-                Some(Ready::Commands) if !self.drain_commands() => return,
-                Some(Ready::Commands) => {}
-                Some(Ready::Pane(pane)) => self.pump_pane(pane),
-                None => {}
+            let connected = match ready {
+                Some(Ready::Commands) => self.drain_commands(),
+                Some(Ready::Pane(pane)) => {
+                    self.pump_pane(pane);
+                    true
+                }
+                None => true,
+            };
+            if !connected {
+                self.flush_events();
+                return;
             }
             self.service_deadlines();
+            self.flush_events();
             self.report_queue_sample(Instant::now());
             if self.gui_gone {
                 return;
@@ -653,6 +663,12 @@ impl Backend {
         });
     }
 
+    /// Empties the outbox, yielding the events in generation order.
+    #[cfg(test)]
+    pub fn drain_events(&mut self) -> impl Iterator<Item = OrzmuxEvent> + '_ {
+        self.outbox.drain(..)
+    }
+
     /// The pane layout tree.
     #[cfg(test)]
     pub fn tree(&self) -> &LayoutTree {
@@ -989,8 +1005,15 @@ impl Backend {
     }
 
     fn emit(&mut self, event: OrzmuxEvent) {
-        if self.events.send(event).is_err() {
-            self.gui_gone = true;
+        self.outbox.push(event);
+    }
+
+    /// Sends every buffered event to the GUI, in generation order.
+    fn flush_events(&mut self) {
+        for event in self.outbox.drain(..) {
+            if self.events.send(event).is_err() {
+                self.gui_gone = true;
+            }
         }
     }
 
