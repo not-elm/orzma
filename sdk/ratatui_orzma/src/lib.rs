@@ -20,6 +20,7 @@ mod widget;
 
 pub use backend::OrzmaBackend;
 pub use error::{OrzmaError, OrzmaResult, RpcError};
+pub use events::FocusChange;
 pub use keychord::KeyChord;
 pub use protocol::HandleId;
 pub use session::{FramePlacements, Orzma};

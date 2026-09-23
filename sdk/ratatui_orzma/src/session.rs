@@ -756,6 +756,19 @@ fn spawn_reader(
                 {
                     map.insert(instance.to_owned(), active);
                 }
+            } else if op == "focus_changed" {
+                if let Some(v) = parsed.as_ref()
+                    && let Some(handle) = v["handle"].as_str()
+                    && let Some(instance) = v["instance"].as_str()
+                    && let Some(focused) = v["focused"].as_bool()
+                {
+                    match events.lock().ok().and_then(|map| map.get(handle).cloned()) {
+                        Some(queues) => queues.ingest_focus(instance.to_owned(), focused),
+                        None => {
+                            tracing::debug!(handle, "focus change for an unknown handle dropped")
+                        }
+                    }
+                }
             } else if op == "event" {
                 if let Ok(ev) = serde_json::from_str::<IncomingEvent>(trimmed) {
                     match events
@@ -781,6 +794,15 @@ fn spawn_reader(
                 }
             } else if parsed.as_ref().is_some_and(|v| v.get("op").is_none()) {
                 settle_reply(&pending, &handlers, &events, trimmed);
+            }
+        }
+        // NOTE: the host blurs this connection's placements when the socket
+        // drops, but its `focus_changed` pushes for them go to the dead
+        // connection, so the app would otherwise keep believing a page holds
+        // the keyboard.
+        if let Ok(map) = events.lock() {
+            for queues in map.values() {
+                queues.blur_all();
             }
         }
         // The socket closed: drop every pending sender so any in-flight
@@ -1086,6 +1108,7 @@ fn replay_registration(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::FocusChange;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     use ratatui::layout::Rect;
     use serde_json::json;
@@ -2110,6 +2133,64 @@ mod tests {
         assert_eq!(
             queues.drain_type(TypeId::of::<Hello>()),
             vec![serde_json::json!({"n":7})]
+        );
+    }
+
+    /// Asserts that a `focus_changed` push lands in its handle's queue, and
+    /// that the connection closing reports the focused placement as blurred.
+    ///
+    /// Case: the user clicks a markdown viewer's page, and then orzma's
+    /// control socket goes away while the page holds focus.
+    #[test]
+    fn reader_thread_queues_focus_changes_and_blurs_on_disconnect() {
+        use crate::uds::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("test.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let client = UnixStream::connect(&sock_path).unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client.try_clone().unwrap()));
+        let (server_conn, _) = listener.accept().unwrap();
+        let queues = Arc::new(EventQueues::from_decls(&[]));
+        let events: EventRegistry = Arc::new(Mutex::new(HashMap::from([(
+            "h1".to_owned(),
+            queues.clone(),
+        )])));
+
+        spawn_reader(
+            client,
+            writer,
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(VecDeque::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+            events,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let mut server = server_conn;
+        writeln!(
+            server,
+            r#"{{"op":"focus_changed","handle":"h1","instance":"{INSTANCE_A}","focused":true}}"#
+        )
+        .unwrap();
+        server.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(
+            queues.drain_focus(),
+            vec![FocusChange {
+                instance: INSTANCE_A.into(),
+                focused: true,
+            }]
+        );
+
+        drop(server);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(
+            queues.drain_focus(),
+            vec![FocusChange {
+                instance: INSTANCE_A.into(),
+                focused: false,
+            }]
         );
     }
 

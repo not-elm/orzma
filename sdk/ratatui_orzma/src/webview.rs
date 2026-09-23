@@ -1,7 +1,7 @@
 //! Webview builder and registered handle.
 
 use crate::error::{OrzmaError, OrzmaResult};
-use crate::events::{EventDecl, EventQueues};
+use crate::events::{EventDecl, EventQueues, FocusChange};
 use crate::handler::{BoxedHandler, make_handler};
 use crate::keychord::KeyChord;
 use crate::protocol::{ClientMsg, HandleId, NavAction, RegisterKind};
@@ -334,6 +334,16 @@ impl WebviewHandle {
                 }
             })
             .collect()
+    }
+
+    /// Drains the focus changes the host reported for this registration's
+    /// placements, oldest first.
+    ///
+    /// Every change is reported, including those this app requested. When
+    /// the control socket drops, a `focused: false` is reported for each
+    /// placement last reported focused.
+    pub fn read_focus_changes(&self) -> Vec<FocusChange> {
+        self.events.drain_focus()
     }
 
     /// Replaces this registration's forward-key chords with `keys`, for every
