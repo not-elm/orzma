@@ -4,6 +4,7 @@
 use crate::keymap::{Action, Mode};
 use crate::outline::Heading;
 use crate::protocol::{ScrollAction, SearchDir};
+use std::mem;
 
 /// A side effect for `main.rs` to perform after `on_action`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +25,10 @@ pub(crate) enum Cmd {
     Back,
     /// Exit the app.
     Quit,
+    /// Give the page keyboard focus.
+    Focus,
+    /// Take keyboard focus back from the page to the TUI.
+    Blur,
 }
 
 /// Whole-app state.
@@ -37,6 +42,8 @@ pub(crate) struct App {
     current_heading_index: Option<usize>,
     search_query: String,
     search_active: bool,
+    page_focused: bool,
+    refocus_after_search: bool,
 }
 
 impl App {
@@ -134,9 +141,10 @@ impl App {
                 }
             }
             Action::EnterSearch => {
+                self.refocus_after_search = self.page_focused;
                 self.mode = Mode::Search;
                 self.search_query.clear();
-                vec![]
+                vec![Cmd::Blur]
             }
             Action::SearchChar(c) => {
                 self.search_query.push(c);
@@ -149,21 +157,27 @@ impl App {
             Action::SearchConfirm => {
                 self.mode = Mode::Normal;
                 self.search_active = true;
-                vec![Cmd::Search(self.search_query.clone())]
+                let mut cmds = vec![Cmd::Search(self.search_query.clone())];
+                cmds.extend(self.take_refocus());
+                cmds
             }
             Action::SearchNext if self.search_active => vec![Cmd::SearchNav(SearchDir::Next)],
             Action::SearchPrev if self.search_active => vec![Cmd::SearchNav(SearchDir::Prev)],
             Action::SearchNext | Action::SearchPrev => vec![],
             Action::Escape => {
+                let leaving_search = self.mode == Mode::Search;
                 self.outline_open = false;
                 self.mode = Mode::Normal;
+                let mut cmds = Vec::new();
                 if self.search_active {
                     self.search_active = false;
                     self.search_query.clear();
-                    vec![Cmd::ClearSearch]
-                } else {
-                    vec![]
+                    cmds.push(Cmd::ClearSearch);
                 }
+                if leaving_search {
+                    cmds.extend(self.take_refocus());
+                }
+                cmds
             }
             Action::Ignore => vec![],
         }
@@ -175,7 +189,26 @@ impl App {
         self.search_query.clear();
         if self.mode == Mode::Search {
             self.mode = Mode::Normal;
+            self.refocus_after_search = false;
         }
+    }
+
+    /// Records a focus change the host reported for the page. A page that
+    /// gains focus during a search cancels the typed query, keeping the
+    /// previous search.
+    pub(crate) fn on_focus_change(&mut self, focused: bool) {
+        self.page_focused = focused;
+        if focused && self.mode == Mode::Search {
+            self.mode = Mode::Normal;
+            self.search_query.clear();
+            self.refocus_after_search = false;
+        }
+    }
+
+    /// `Focus` when the page held focus when the search began, clearing the
+    /// flag.
+    fn take_refocus(&mut self) -> Option<Cmd> {
+        mem::take(&mut self.refocus_after_search).then_some(Cmd::Focus)
     }
 
     fn resolve_chord(&mut self, c: char) -> Vec<Cmd> {
@@ -373,5 +406,105 @@ mod tests {
     fn back_action_emits_back_cmd() {
         let mut app = App::default();
         assert_eq!(app.on_action(Action::Back), vec![Cmd::Back]);
+    }
+
+    fn focused_app() -> App {
+        let mut app = App::default();
+        app.on_focus_change(true);
+        app
+    }
+
+    /// Asserts that opening the search always takes the keyboard back from
+    /// the page.
+    ///
+    /// Case: the user presses `/`, once after clicking the page and once
+    /// before ever clicking it.
+    #[test]
+    fn entering_search_blurs_the_page() {
+        assert_eq!(
+            focused_app().on_action(Action::EnterSearch),
+            vec![Cmd::Blur]
+        );
+        assert_eq!(
+            App::default().on_action(Action::EnterSearch),
+            vec![Cmd::Blur]
+        );
+    }
+
+    /// Asserts that confirming or escaping a search gives the page its focus
+    /// back when it had it at `/`.
+    ///
+    /// Case: the user clicks the page, searches, and wants to keep scrolling
+    /// with the wheel afterwards.
+    #[test]
+    fn leaving_search_refocuses_a_page_that_was_focused() {
+        let mut app = focused_app();
+        app.on_action(Action::EnterSearch);
+        app.on_focus_change(false);
+        app.on_action(Action::SearchChar('x'));
+        assert_eq!(
+            app.on_action(Action::SearchConfirm),
+            vec![Cmd::Search("x".into()), Cmd::Focus]
+        );
+
+        let mut app = focused_app();
+        app.on_action(Action::EnterSearch);
+        app.on_focus_change(false);
+        assert_eq!(app.on_action(Action::Escape), vec![Cmd::Focus]);
+    }
+
+    /// Asserts that leaving a search started without page focus leaves the
+    /// page unfocused.
+    ///
+    /// Case: the user searches before ever clicking the page.
+    #[test]
+    fn leaving_search_leaves_an_unfocused_page_alone() {
+        let mut app = App::default();
+        app.on_action(Action::EnterSearch);
+        app.on_action(Action::SearchChar('x'));
+        assert_eq!(
+            app.on_action(Action::SearchConfirm),
+            vec![Cmd::Search("x".into())]
+        );
+    }
+
+    /// Asserts that a click on the page during a search cancels the typed
+    /// query, keeps the previous search, and does not refocus later.
+    ///
+    /// Case: the user starts a second search, then clicks a link on the page
+    /// instead of finishing it.
+    #[test]
+    fn a_page_click_during_search_cancels_it() {
+        let mut app = focused_app();
+        app.on_action(Action::EnterSearch);
+        app.on_focus_change(false);
+        app.on_action(Action::SearchChar('a'));
+        app.on_action(Action::SearchConfirm);
+        app.on_focus_change(true);
+        app.on_action(Action::EnterSearch);
+        app.on_focus_change(false);
+        app.on_action(Action::SearchChar('b'));
+
+        app.on_focus_change(true);
+
+        assert_eq!(app.mode(), Mode::Normal);
+        assert_eq!(app.query(), "");
+        assert!(app.search_active(), "the previous search stays active");
+        assert_eq!(app.on_action(Action::Escape), vec![Cmd::ClearSearch]);
+    }
+
+    /// Asserts that a focus change outside the search leaves the mode as it
+    /// was.
+    ///
+    /// Case: the echo of the app's own focus request arrives while the
+    /// outline panel is open.
+    #[test]
+    fn a_focus_change_outside_search_keeps_the_mode() {
+        let mut app = app_with_outline(2);
+        app.on_action(Action::ToggleOutline);
+        app.on_focus_change(true);
+        assert_eq!(app.mode(), Mode::Outline);
+        app.on_focus_change(false);
+        assert_eq!(app.mode(), Mode::Outline);
     }
 }

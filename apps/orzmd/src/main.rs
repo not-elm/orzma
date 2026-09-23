@@ -279,7 +279,7 @@ fn register_view(
     let view = orzma.register(
         Webview::dir(asset_dir.path(), "index.html")
             .interactive(true)
-            .click_focus(false)
+            .forward_keys(keymap::forward_chords())
             .on("ready", move |(): ()| -> Result<Content, RpcError> {
                 let doc = ready_doc.lock().map_err(|_| RpcError::new("poisoned"))?;
                 Ok(content_for(&doc, ScrollTo::Preserve))
@@ -325,6 +325,9 @@ fn event_loop(
         .state
         .set_outline(shared.lock().unwrap().outline.clone());
     loop {
+        for change in view.read_focus_changes() {
+            session.state.on_focus_change(change.focused);
+        }
         for c in view.read_events::<SearchCount>() {
             session.search_status = Some(c);
         }
@@ -376,6 +379,9 @@ fn event_loop(
         if event::poll(Duration::from_millis(33))?
             && let Event::Key(key) = event::read()?
         {
+            for change in view.read_focus_changes() {
+                session.state.on_focus_change(change.focused);
+            }
             let action = keymap::map(session.state.mode(), key);
             for cmd in session.state.on_action(action) {
                 match cmd {
@@ -398,6 +404,12 @@ fn event_loop(
                     Cmd::ClearSearch => {
                         session.search_status = None;
                         let _ = view.emit("clearSearch", &());
+                    }
+                    Cmd::Focus => {
+                        let _ = view.focus();
+                    }
+                    Cmd::Blur => {
+                        let _ = orzma.blur();
                     }
                 }
             }

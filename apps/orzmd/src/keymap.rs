@@ -3,6 +3,7 @@
 //! completes.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui_orzma::KeyChord;
 
 /// The current input mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -70,6 +71,54 @@ pub(crate) fn map(mode: Mode, key: KeyEvent) -> Action {
         },
         Mode::Normal => map_normal(ctrl, key.code),
     }
+}
+
+/// The chords orzmd's Normal and Outline keymaps use, passed through to the
+/// TUI while the page holds keyboard focus.
+///
+/// Ctrl+C is left out so that, while the page is focused, it copies the
+/// page's selection instead of quitting.
+pub(crate) fn forward_chords() -> Vec<KeyChord> {
+    let plain = |code| KeyChord {
+        mods: KeyModifiers::NONE,
+        code,
+    };
+    let shift = |c| KeyChord {
+        mods: KeyModifiers::SHIFT,
+        code: KeyCode::Char(c),
+    };
+    let ctrl = |c| KeyChord {
+        mods: KeyModifiers::CONTROL,
+        code: KeyCode::Char(c),
+    };
+    vec![
+        plain(KeyCode::Esc),
+        plain(KeyCode::Enter),
+        plain(KeyCode::Tab),
+        plain(KeyCode::Backspace),
+        plain(KeyCode::Up),
+        plain(KeyCode::Down),
+        plain(KeyCode::PageUp),
+        plain(KeyCode::PageDown),
+        plain(KeyCode::Char(' ')),
+        plain(KeyCode::Char('j')),
+        plain(KeyCode::Char('k')),
+        plain(KeyCode::Char('q')),
+        plain(KeyCode::Char('r')),
+        plain(KeyCode::Char('g')),
+        plain(KeyCode::Char('o')),
+        plain(KeyCode::Char('n')),
+        plain(KeyCode::Char('/')),
+        plain(KeyCode::Char('[')),
+        plain(KeyCode::Char(']')),
+        shift('g'),
+        shift('n'),
+        ctrl('d'),
+        ctrl('u'),
+        ctrl('f'),
+        ctrl('b'),
+        ctrl('o'),
+    ]
 }
 
 fn map_normal(ctrl: bool, code: KeyCode) -> Action {
@@ -206,5 +255,32 @@ mod tests {
             ),
             Action::SearchBackspace
         );
+    }
+
+    /// Asserts that every forwarded chord drives an action in Normal or
+    /// Outline mode, and that Ctrl+C is not forwarded.
+    ///
+    /// Case: the user clicks the page and keeps navigating with the keys the
+    /// TUI documents, or selects text and presses Ctrl+C to copy it.
+    #[test]
+    fn every_forwarded_chord_drives_a_normal_or_outline_action() {
+        for chord in forward_chords() {
+            let code = match chord.code {
+                KeyCode::Char(c) if chord.mods.contains(KeyModifiers::SHIFT) => {
+                    KeyCode::Char(c.to_ascii_uppercase())
+                }
+                code => code,
+            };
+            let event = KeyEvent::new(code, chord.mods);
+            assert!(
+                map(Mode::Normal, event) != Action::Ignore
+                    || map(Mode::Outline, event) != Action::Ignore,
+                "{chord:?} drives nothing"
+            );
+        }
+        assert!(!forward_chords().contains(&KeyChord {
+            mods: KeyModifiers::CONTROL,
+            code: KeyCode::Char('c'),
+        }));
     }
 }
