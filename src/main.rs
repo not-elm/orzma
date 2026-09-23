@@ -15,7 +15,7 @@ mod window_title;
 
 use crate::action::ActionPlugin;
 use crate::cef_profile::CefProfileDir;
-use crate::redraw::RedrawPlugin;
+use crate::redraw::{AppWakers, RedrawPlugin};
 use crate::surface::SurfacePlugin;
 use crate::system_set::OrzmaSystems;
 use crate::window_title::WindowTitlePlugin;
@@ -32,7 +32,6 @@ use configs::{OrzmaConfigsPlugin, cursor_policy, wheel_config};
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
 use session::SessionPlugin;
-use std::task::Waker;
 use ui::OrzmaUiPlugin;
 
 /// Scrollback rows every pane retains on its primary screen.
@@ -50,6 +49,16 @@ fn main() {
     ensure_utf8_locale_env();
 
     let pre_configs = orzma_configs::OrzmaConfigs::load().unwrap_or_default();
+    let orzma_registry = WebviewAssetRegistry::default();
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(primary_window()),
+        ..default()
+    }));
+    let Some(wakers) = AppWakers::new(app.world()) else {
+        eprintln!("orzma: the window event loop is unavailable");
+        std::process::exit(1);
+    };
     let orzmux = match OrzmuxClient::spawn(
         OrzmuxConfig {
             shell: pre_configs.orzma.shell.clone(),
@@ -58,7 +67,7 @@ fn main() {
             cursor: cursor_policy(&pre_configs.cursor),
             shell_integration: pre_configs.orzma.shell_integration,
         },
-        Waker::noop().clone(),
+        wakers.input().clone(),
     ) {
         Ok(client) => client,
         Err(err) => {
@@ -66,16 +75,14 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let orzma_registry = WebviewAssetRegistry::default();
-    let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
-    App::new()
-        .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(primary_window()),
-                ..default()
-            }),
-            cef_plugin(orzma_registry.clone(), cef_profile.path()),
-        ))
+    let cef_profile = match CefProfileDir::acquire() {
+        Ok(profile) => profile,
+        Err(err) => {
+            eprintln!("orzma: cannot create the CEF profile directory: {err}");
+            std::process::exit(1);
+        }
+    };
+    app.add_plugins(cef_plugin(orzma_registry.clone(), cef_profile.path()))
         .add_plugins((
             SurfacePlugin,
             SessionPlugin,
@@ -88,9 +95,9 @@ fn main() {
             OrzmaUiPlugin,
         ))
         .add_plugins((
-            OrzmaWebviewPlugin::new(orzma_registry, Waker::noop().clone()),
+            OrzmaWebviewPlugin::new(orzma_registry, wakers.input().clone()),
             WindowTitlePlugin,
-            RedrawPlugin,
+            RedrawPlugin::new(wakers),
         ))
         .insert_resource(OrzmuxConnection(orzmux))
         .configure_sets(
