@@ -211,10 +211,6 @@ pub(crate) struct OrzmaView {
     pub entry: String,
     /// Whether the mounted webview accepts pointer/keyboard input.
     pub interactive: bool,
-    /// Whether a pointer press inside the mounted webview's rect moves
-    /// keyboard focus to it. A `false` view leaves the keyboard with the
-    /// owning pane on a click; a focus op still moves it.
-    pub click_focus: bool,
     /// The terminal surface an `Omount;n=<instance>` for this registration
     /// must originate from.
     pub owner_surface: Entity,
@@ -1279,7 +1275,6 @@ fn build_view(
             root,
             entry,
             interactive,
-            click_focus,
             forward_keys,
             preload,
         } => {
@@ -1294,7 +1289,6 @@ fn build_view(
                 source: OrzmaSource::Dir(root_path),
                 entry,
                 interactive,
-                click_focus,
                 owner_surface,
                 connection_id,
                 forward_keys: forward_keys
@@ -1308,7 +1302,6 @@ fn build_view(
         RegisterKind::Inline {
             html,
             interactive,
-            click_focus,
             forward_keys,
             preload,
         } => {
@@ -1319,7 +1312,6 @@ fn build_view(
                 source: OrzmaSource::Inline(html),
                 entry: "index.html".into(),
                 interactive,
-                click_focus,
                 owner_surface,
                 connection_id,
                 forward_keys: forward_keys
@@ -1333,7 +1325,6 @@ fn build_view(
         RegisterKind::Url {
             url,
             interactive,
-            click_focus,
             bridge,
             forward_keys,
             preload,
@@ -1343,7 +1334,6 @@ fn build_view(
                 source: OrzmaSource::Url { url, bridge },
                 entry: String::new(),
                 interactive,
-                click_focus,
                 owner_surface,
                 connection_id,
                 forward_keys: forward_keys
@@ -1410,7 +1400,6 @@ mod gc_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 1,
                 forward_keys: vec![],
@@ -1649,7 +1638,6 @@ mod registry_tests {
             source: OrzmaSource::Dir("/abs".into()),
             entry: "index.html".into(),
             interactive: true,
-            click_focus: true,
             owner_surface: owner,
             connection_id: conn,
             forward_keys: vec![],
@@ -1698,7 +1686,6 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1730,7 +1717,6 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1771,7 +1757,6 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1844,7 +1829,6 @@ mod apply_tests {
                     root: dir.path().to_string_lossy().into_owned(),
                     entry: "index.html".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1892,7 +1876,6 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1932,7 +1915,6 @@ mod apply_tests {
                     root: "/nonexistent/abs/xyz".into(),
                     entry: "index.html".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1958,7 +1940,6 @@ mod apply_tests {
                 source: OrzmaSource::Dir("/x".into()),
                 entry: "i".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2016,7 +1997,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2070,7 +2050,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 9,
                 forward_keys: vec![],
@@ -2133,7 +2112,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2278,7 +2256,6 @@ mod apply_tests {
                 },
                 entry: String::new(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2342,7 +2319,6 @@ mod apply_tests {
                 kind: RegisterKind::Url {
                     url: "https://example.com".into(),
                     interactive: true,
-                    click_focus: true,
                     bridge: false,
                     forward_keys: vec![],
                     preload: vec![],
@@ -2381,7 +2357,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2459,7 +2434,6 @@ mod apply_tests {
                 },
                 entry: String::new(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2522,7 +2496,6 @@ mod apply_tests {
                 },
                 entry: String::new(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2592,7 +2565,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2675,7 +2647,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2757,7 +2728,6 @@ mod apply_tests {
                 },
                 entry: String::new(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2811,7 +2781,6 @@ mod apply_tests {
             source: OrzmaSource::Inline("<h1>x</h1>".into()),
             entry: "index.html".into(),
             interactive: true,
-            click_focus: true,
             owner_surface,
             connection_id,
             forward_keys: vec![],
@@ -2956,7 +2925,6 @@ mod focus_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface,
                 connection_id,
                 forward_keys: vec![],
@@ -3332,7 +3300,6 @@ mod url_source_tests {
             RegisterKind::Url {
                 url: "https://example.com".into(),
                 interactive: true,
-                click_focus: true,
                 bridge: true,
                 forward_keys: vec![],
                 preload: vec![],
@@ -3353,7 +3320,6 @@ mod url_source_tests {
             RegisterKind::Url {
                 url: "file:///etc/passwd".into(),
                 interactive: true,
-                click_focus: true,
                 bridge: false,
                 forward_keys: vec![],
                 preload: vec![],
@@ -3371,7 +3337,6 @@ mod url_source_tests {
             RegisterKind::Inline {
                 html: "<h1>x</h1>".into(),
                 interactive: true,
-                click_focus: true,
                 forward_keys: vec![],
                 preload: vec!["window.A=1;".into()],
             },

@@ -134,9 +134,6 @@ pub(crate) enum RegisterKind {
         /// Whether the mounted webview accepts pointer/keyboard input.
         #[serde(default = "default_true")]
         interactive: bool,
-        /// Whether a pointer press inside the view moves keyboard focus to it.
-        #[serde(default = "default_true")]
-        click_focus: bool,
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
         forward_keys: Vec<HostKeyChord>,
@@ -151,9 +148,6 @@ pub(crate) enum RegisterKind {
         /// Whether the mounted webview accepts pointer/keyboard input.
         #[serde(default = "default_true")]
         interactive: bool,
-        /// Whether a pointer press inside the view moves keyboard focus to it.
-        #[serde(default = "default_true")]
-        click_focus: bool,
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
         forward_keys: Vec<HostKeyChord>,
@@ -168,9 +162,6 @@ pub(crate) enum RegisterKind {
         /// Whether the mounted webview accepts pointer/keyboard input.
         #[serde(default = "default_true")]
         interactive: bool,
-        /// Whether a pointer press inside the view moves keyboard focus to it.
-        #[serde(default = "default_true")]
-        click_focus: bool,
         /// Whether the `window.orzma` back-channel is injected (opt-in).
         #[serde(default)]
         bridge: bool,
@@ -293,7 +284,6 @@ mod tests {
                 root: "/abs".into(),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 forward_keys: vec![],
                 preload: vec![],
             })
@@ -311,50 +301,24 @@ mod tests {
             ClientMsg::Register(RegisterKind::Inline {
                 html: "<h1>x</h1>".into(),
                 interactive: false,
-                click_focus: true,
                 forward_keys: vec![],
                 preload: vec![],
             })
         );
     }
 
-    /// Asserts that `click_focus` parses off the register wire and defaults to
-    /// `true` when the client omits it.
+    /// Asserts that a `register` still parses when it carries the removed
+    /// `click_focus` field, which the host now ignores.
     ///
-    /// Case: a viewer app registers a page that owns no keyboard affordances
-    /// and asks that clicking it leave the keyboard with the TUI, while every
-    /// older client that never sends the field keeps the click-to-focus
-    /// behavior.
+    /// Case: an app built against an SDK that still sends `click_focus:false`
+    /// registers its view with an updated orzma.
     #[test]
-    fn parses_click_focus_and_defaults_to_true() {
-        let declared: ClientMsg = serde_json::from_str(
+    fn a_register_carrying_click_focus_still_parses() {
+        let msg: ClientMsg = serde_json::from_str(
             r#"{"op":"register","kind":"dir","root":"/abs","entry":"index.html","click_focus":false}"#,
         )
         .unwrap();
-        assert_eq!(
-            declared,
-            ClientMsg::Register(RegisterKind::Dir {
-                root: "/abs".into(),
-                entry: "index.html".into(),
-                interactive: true,
-                click_focus: false,
-                forward_keys: vec![],
-                preload: vec![],
-            })
-        );
-        let omitted: ClientMsg =
-            serde_json::from_str(r#"{"op":"register","kind":"inline","html":"<h1>x</h1>"}"#)
-                .unwrap();
-        assert_eq!(
-            omitted,
-            ClientMsg::Register(RegisterKind::Inline {
-                html: "<h1>x</h1>".into(),
-                interactive: true,
-                click_focus: true,
-                forward_keys: vec![],
-                preload: vec![],
-            })
-        );
+        assert!(matches!(msg, ClientMsg::Register(RegisterKind::Dir { .. })));
     }
 
     #[test]
@@ -512,7 +476,6 @@ mod tests {
             ClientMsg::Register(RegisterKind::Url {
                 url: "https://example.com".into(),
                 interactive: true,
-                click_focus: true,
                 bridge: false,
                 forward_keys: vec![],
                 preload: vec![],
@@ -531,7 +494,6 @@ mod tests {
             ClientMsg::Register(RegisterKind::Url {
                 url: "https://app.example.com".into(),
                 interactive: true,
-                click_focus: true,
                 bridge: true,
                 forward_keys: vec![],
                 preload: vec![],
@@ -548,7 +510,6 @@ mod tests {
             ClientMsg::Register(RegisterKind::Url {
                 url: "https://example.com".into(),
                 interactive: true,
-                click_focus: true,
                 bridge: false,
                 forward_keys: vec![],
                 preload: vec![],

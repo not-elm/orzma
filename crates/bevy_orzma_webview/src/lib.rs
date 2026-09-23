@@ -12,7 +12,7 @@ use bevy_orzma_webview_host::WebviewAssetRegistry;
 use control_plane::ControlPlanePlugin;
 pub use control_plane::{ChordKey, ControlPlaneHandle, HandleId, NormalizedChord, TokenRegistry};
 use webview::apc::ApcPlugin;
-pub use webview::apc::{ClickFocusDisabled, NonInteractive};
+pub use webview::apc::NonInteractive;
 use webview::mount::WebviewPlugin;
 pub use webview::mount::{
     ForwardKeys, Webview, WebviewHit, focused_webview_of, webview_hit_at, webview_local_dip,

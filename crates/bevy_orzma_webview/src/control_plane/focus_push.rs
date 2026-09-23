@@ -135,7 +135,6 @@ mod tests {
                     source,
                     entry: "index.html".into(),
                     interactive: true,
-                    click_focus: true,
                     owner_surface: Entity::PLACEHOLDER,
                     connection_id,
                     forward_keys: vec![],
