@@ -5,7 +5,7 @@
 use crate::backend::pane::PaneFactory;
 use crate::backend::{Backend, CommandSeq, NewPaneAt, OrzmuxEvent, PaneId, RequestId};
 use crate::error::OrzmuxResult;
-use crate::event_loop::{EventLoop, OrzmuxCommand};
+use crate::event_loop::{EventLoop, GuiLink, OrzmuxCommand};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use orzma_tty::prelude::{OrzmaTty, OrzmaTtyError, WheelConfig};
 use orzma_tty::test_support::{BlockingSink, CaptureSink, FailingSink};
@@ -14,8 +14,9 @@ use orzma_vt::prelude::{GridSize, OrzmaVt};
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Wake, Waker};
 
 /// The test's ends of one spawned pane's streams.
 pub(crate) struct FakePane {
@@ -120,6 +121,27 @@ impl PaneFactory for FakeFactory {
     }
 }
 
+/// Counts the wakes the event loop sends the GUI.
+#[derive(Default)]
+pub(crate) struct WakeCount(AtomicUsize);
+
+impl WakeCount {
+    /// The number of wakes sent so far.
+    pub fn get(&self) -> usize {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+impl Wake for WakeCount {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
 /// Drives one [`EventLoop`] whose panes are spawned by a PTY-less
 /// factory.
 pub(crate) struct Harness {
@@ -127,6 +149,7 @@ pub(crate) struct Harness {
     events: Receiver<OrzmuxEvent>,
     panes: Receiver<FakePane>,
     log: Arc<FactoryLog>,
+    wakes: Arc<WakeCount>,
     seq: u64,
     commands: Sender<(CommandSeq, OrzmuxCommand)>,
 }
@@ -144,11 +167,14 @@ impl Harness {
         let log = Arc::new(FactoryLog::default());
         let factory = FakeFactory::new(spawned_tx, Arc::clone(&log));
         let backend = Backend::new(Box::new(factory), wheel);
+        let wakes = Arc::new(WakeCount::default());
+        let gui = GuiLink::new(event_tx, Waker::from(Arc::clone(&wakes)));
         Self {
-            event_loop: EventLoop::new(backend, command_rx, event_tx),
+            event_loop: EventLoop::new(backend, command_rx, gui),
             events: event_rx,
             panes: spawned_rx,
             log,
+            wakes,
             seq: 0,
             commands: command_tx,
         }
@@ -231,6 +257,11 @@ impl Harness {
     /// clear, or `None` when there was none or it named no directory.
     pub fn last_spawn_cwd(&self) -> Option<PathBuf> {
         self.log.cwds.lock().unwrap().last().cloned().flatten()
+    }
+
+    /// The number of wakes the loop has sent the GUI.
+    pub fn wake_count(&self) -> usize {
+        self.wakes.get()
     }
 
     /// Pumps one pane, as the loop does when its stream is ready.

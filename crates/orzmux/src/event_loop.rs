@@ -4,11 +4,11 @@
 
 use crate::backend::queue_sample::QueueSampler;
 use crate::backend::{
-    Backend, CommandSeq, NewPaneAt, OrzmuxEvent, PaneDirection, PaneId, PaneTarget, RequestId,
-    SplitId, log_refused_write,
+    Backend, CommandSeq, NewPaneAt, PaneDirection, PaneId, PaneTarget, RequestId, SplitId,
+    log_refused_write,
 };
 use crate::error::{OrzmuxError, OrzmuxResult};
-use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
+use crossbeam_channel::{Receiver, Select, TryRecvError};
 use orzma_tty::prelude::{MouseReport, TerminalKey, TerminalModifiers, WheelInput};
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{
@@ -18,6 +18,10 @@ use orzma_vt::prelude::{
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing::Level;
+
+mod gui_link;
+
+pub(crate) use gui_link::GuiLink;
 
 /// A command the GUI sends to the backend.
 #[derive(Debug, Clone)]
@@ -207,7 +211,8 @@ impl OrzmuxCommand {
 pub(crate) struct EventLoop {
     backend: Backend,
     commands: Receiver<(CommandSeq, OrzmuxCommand)>,
-    events: Sender<OrzmuxEvent>,
+    /// The GUI's event channel, which wakes the GUI after each flush.
+    gui: GuiLink,
     /// Set when the GUI's event receiver is gone; the loop exits.
     gui_gone: bool,
     /// What each `Select` index of the last `wait_ready` referred to.
@@ -217,16 +222,17 @@ pub(crate) struct EventLoop {
 }
 
 impl EventLoop {
-    /// A loop that drives `backend` over the given channels.
+    /// A loop that drives `backend`, reading commands from `commands` and
+    /// sending events through `gui`.
     pub fn new(
         backend: Backend,
         commands: Receiver<(CommandSeq, OrzmuxCommand)>,
-        events: Sender<OrzmuxEvent>,
+        gui: GuiLink,
     ) -> Self {
         Self {
             backend,
             commands,
-            events,
+            gui,
             gui_gone: false,
             sources: Vec::new(),
             sampler: QueueSampler::new(Instant::now()),
@@ -272,13 +278,11 @@ impl EventLoop {
         true
     }
 
-    /// Hands the backend's queued events to the GUI, recording a gone
-    /// receiver instead of failing.
+    /// Hands the backend's queued events to the GUI and wakes it, recording
+    /// a gone receiver instead of failing.
     pub fn flush_events(&mut self) {
-        for event in self.backend.drain_events() {
-            if self.events.send(event).is_err() {
-                self.gui_gone = true;
-            }
+        if !self.gui.send_batch(self.backend.drain_events()) {
+            self.gui_gone = true;
         }
     }
 
@@ -416,7 +420,7 @@ impl EventLoop {
             self.sampler.record_pane_depth(id, depth);
         }
         self.sampler
-            .record_channel_depths(self.events.len(), self.commands.len());
+            .record_channel_depths(self.gui.depth(), self.commands.len());
     }
 
     /// Logs the sample the sampler hands out at `now`, if one is due:
@@ -485,7 +489,7 @@ const COMMAND_BATCH: usize = 64;
 mod tests {
     use super::*;
     use crate::backend::queue_sample::ChunkDepth;
-    use crate::backend::{CloseReason, SplitOrientation};
+    use crate::backend::{CloseReason, OrzmuxEvent, SplitOrientation};
     use crate::test_support::{FactoryLog, FakeFactory, FakePane, Harness};
     use crossbeam_channel::{RecvTimeoutError, bounded, unbounded};
     use orzma_tty::prelude::{
@@ -497,6 +501,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::path::Path;
     use std::sync::Arc;
+    use std::task::Waker;
     use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -579,7 +584,12 @@ mod tests {
             ))
             .expect("the loop still holds the receiver");
         drop(command_tx);
-        EventLoop::new(backend, command_rx, event_tx).run();
+        EventLoop::new(
+            backend,
+            command_rx,
+            GuiLink::new(event_tx, Waker::noop().clone()),
+        )
+        .run();
         let events: Vec<OrzmuxEvent> = event_rx.try_iter().collect();
         assert!(
             events
@@ -1542,5 +1552,34 @@ mod tests {
         });
 
         assert!(h.drain().is_empty());
+    }
+
+    /// Asserts that a pane frame emitted when its coalescer deadline passes
+    /// wakes the GUI exactly once, and that a flush with nothing queued
+    /// does not wake it.
+    ///
+    /// Case: a background build prints one line and goes quiet while the
+    /// user is looking at another application.
+    #[test]
+    fn a_deadline_frame_wakes_the_gui_and_an_empty_flush_does_not() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        h.pump_pane(root);
+        h.drain();
+        let before = h.wake_count();
+        h.drain();
+        assert_eq!(h.wake_count(), before, "an empty flush sends no wake");
+        pane.print(b"hello");
+        h.pump_pane(root);
+        assert!(h.drain().is_empty(), "the pump alone emits no frame");
+        thread::sleep(Duration::from_millis(15));
+        h.service_deadlines();
+        let events = h.drain();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, OrzmuxEvent::Frame { pane, .. } if *pane == root))
+        );
+        assert_eq!(h.wake_count(), before + 1);
     }
 }

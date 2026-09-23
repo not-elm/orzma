@@ -30,6 +30,7 @@ use configs::{OrzmaConfigsPlugin, cursor_policy, wheel_config};
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
 use session::SessionPlugin;
+use std::task::Waker;
 use ui::OrzmaUiPlugin;
 
 /// Scrollback rows every pane retains on its primary screen.
@@ -47,13 +48,16 @@ fn main() {
     ensure_utf8_locale_env();
 
     let pre_configs = orzma_configs::OrzmaConfigs::load().unwrap_or_default();
-    let orzmux = match OrzmuxClient::spawn(OrzmuxConfig {
-        shell: pre_configs.orzma.shell.clone(),
-        scrollback_rows: SCROLLBACK_ROWS,
-        wheel: wheel_config(&pre_configs.mouse),
-        cursor: cursor_policy(&pre_configs.cursor),
-        shell_integration: pre_configs.orzma.shell_integration,
-    }) {
+    let orzmux = match OrzmuxClient::spawn(
+        OrzmuxConfig {
+            shell: pre_configs.orzma.shell.clone(),
+            scrollback_rows: SCROLLBACK_ROWS,
+            wheel: wheel_config(&pre_configs.mouse),
+            cursor: cursor_policy(&pre_configs.cursor),
+            shell_integration: pre_configs.orzma.shell_integration,
+        },
+        Waker::noop().clone(),
+    ) {
         Ok(client) => client,
         Err(err) => {
             eprintln!("orzma: {err}");

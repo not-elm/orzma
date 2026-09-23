@@ -3,11 +3,12 @@
 
 use crate::backend::{Backend, CommandSeq, OrzmuxEvent, ShellFactory};
 use crate::error::{OrzmuxError, OrzmuxResult};
-use crate::event_loop::{EventLoop, OrzmuxCommand};
+use crate::event_loop::{EventLoop, GuiLink, OrzmuxCommand};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use orzma_tty::prelude::WheelConfig;
 use orzma_vt::prelude::CursorPolicy;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::task::Waker;
 use std::thread::{self, JoinHandle};
 
 /// What the backend needs to spawn shells and route the wheel.
@@ -43,11 +44,15 @@ impl OrzmuxClient {
     /// Starts the backend thread (named `orzma-mux`) and returns the
     /// client connected to it.
     ///
+    /// `waker` is woken after the backend queues events for the GUI, and
+    /// once more as the backend thread exits, by which time the event
+    /// channel reports the disconnect.
+    ///
     /// # Errors
     ///
     /// Returns [`OrzmuxError::BackendThread`] when the OS refuses to
     /// start the multiplexer thread.
-    pub fn spawn(config: OrzmuxConfig) -> OrzmuxResult<Self> {
+    pub fn spawn(config: OrzmuxConfig, waker: Waker) -> OrzmuxResult<Self> {
         let (command_tx, command_rx) = unbounded::<(CommandSeq, OrzmuxCommand)>();
         let (event_tx, event_rx) = unbounded::<OrzmuxEvent>();
         let OrzmuxConfig {
@@ -61,8 +66,9 @@ impl OrzmuxClient {
         let thread = thread::Builder::new()
             .name("orzma-mux".to_string())
             .spawn(move || {
+                let gui = GuiLink::new(event_tx, waker);
                 let backend = Backend::new(Box::new(factory), wheel);
-                EventLoop::new(backend, command_rx, event_tx).run()
+                EventLoop::new(backend, command_rx, gui).run()
             })
             .map_err(OrzmuxError::BackendThread)?;
         Ok(Self {
@@ -77,6 +83,9 @@ impl OrzmuxClient {
     /// Sends a command and returns its position in the send order. When
     /// the backend is gone the command is dropped with a warning and the
     /// returned sequence is the one that would have been used.
+    ///
+    /// Callers send a command when the state it carries changes, never on
+    /// every update.
     pub fn send(&self, command: OrzmuxCommand) -> CommandSeq {
         let seq = CommandSeq(self.next_seq.fetch_add(1, Ordering::Relaxed));
         let sent = self
