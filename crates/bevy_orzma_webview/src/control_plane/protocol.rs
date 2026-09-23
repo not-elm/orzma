@@ -255,6 +255,16 @@ pub(crate) enum PushMsg {
         /// `true` when compositing starts; `false` when it stops.
         active: bool,
     },
+    /// Fired when a placement gains (`focused: true`) or loses
+    /// (`focused: false`) webview keyboard focus, whatever caused it.
+    FocusChanged {
+        /// The registered handle the placement belongs to.
+        handle: HandleId,
+        /// The placement whose focus changed.
+        instance: String,
+        /// Whether the placement now holds webview focus.
+        focused: bool,
+    },
 }
 
 fn default_true() -> bool {
@@ -669,6 +679,24 @@ mod tests {
                     key: "esc".into(),
                 }],
             }
+        );
+    }
+
+    /// Asserts that a focus change serializes to the `focus_changed` push
+    /// shape.
+    ///
+    /// Case: the user clicks a mounted page and its program learns that the
+    /// page took the keyboard.
+    #[test]
+    fn focus_changed_serializes_to_the_push_shape() {
+        let msg = PushMsg::FocusChanged {
+            handle: "h1".into(),
+            instance: "i1".into(),
+            focused: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&msg).unwrap(),
+            serde_json::json!({"op": "focus_changed", "handle": "h1", "instance": "i1", "focused": true})
         );
     }
 }

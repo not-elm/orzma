@@ -2,6 +2,7 @@
 //! authenticated Tier 1 webview registrations from local programs, mints
 //! opaque handles, and tears them down on disconnect or surface despawn.
 
+use crate::control_plane::focus_push::FocusPushPlugin;
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, NavAction, RegisterKind, ServerMsg};
 use crate::webview::apc::NonInteractive;
@@ -25,6 +26,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use url::Url;
 
+mod focus_push;
 mod listener;
 mod protocol;
 
@@ -646,7 +648,8 @@ impl Plugin for ControlPlanePlugin {
         app.insert_resource(OrzmaRegistry::default());
         app.insert_resource(OrzmaRpc::default());
         app.insert_resource(WebviewAssetRegistryRes(self.orzma_assets.clone()));
-        app.add_systems(Update, (apply_control_events, gc_despawned_surfaces));
+        app.add_plugins(FocusPushPlugin)
+            .add_systems(Update, (apply_control_events, gc_despawned_surfaces));
     }
 }
 
