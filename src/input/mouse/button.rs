@@ -59,8 +59,8 @@ struct FrameContext {
 /// held gesture. A lost window focus, or a locked terminal that became
 /// mouse-disabled or vanished, cancels the held gesture; a frame with no
 /// usable cursor, or with no mouse-enabled terminal while nothing is held,
-/// resets it. While a separator grab holds the mouse, the frame's button
-/// and cursor messages are drained unseen.
+/// resets it. While a separator grab holds the mouse, a held gesture is
+/// cancelled and the frame's button and cursor messages are drained unseen.
 fn dispatch_mouse_buttons(
     mut commands: Commands,
     mut gesture: ResMut<OrzmaMouseGesture>,
@@ -78,7 +78,13 @@ fn dispatch_mouse_buttons(
     // NOTE: a separator grab must drain this system's readers rather than
     // skip the system: a skipped reader keeps the grab's press and release
     // unread, and a later frame would replay them into a pane as a click.
+    // A gesture still held in a pane must be cancelled here as well, since
+    // draining its release would otherwise leave that button stuck down.
     if !grabs.is_empty() {
+        if gesture.held.is_some() {
+            let mods = protocol_mods(&current_terminal_modifiers(&keys));
+            abandon_gesture(&mut commands, &mut gesture, mods);
+        }
         buttons.clear();
         cursor_moved.clear();
         return;

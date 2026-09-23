@@ -325,6 +325,7 @@ mod tests {
     use bevy::input::mouse::MouseWheel;
     use bevy::window::{WindowFocused, WindowResolution};
     use bevy_orzma_tty_renderer::schema::TerminalView;
+    use bevy_orzmux::prelude::RequestTtyPointer;
     use orzma_tty::CellPixels;
     use orzma_tty::prelude::{PointerInput, PointerKind};
 
@@ -676,15 +677,19 @@ mod tests {
         write_cursor_moved(app, phys);
     }
 
-    fn write_left(app: &mut App, state: ButtonState) {
+    fn write_button(app: &mut App, button: MouseButton, state: ButtonState) {
         let window = primary_window(app);
         app.world_mut()
             .resource_mut::<Messages<MouseButtonInput>>()
             .write(MouseButtonInput {
-                button: MouseButton::Left,
+                button,
                 state,
                 window,
             });
+    }
+
+    fn write_left(app: &mut App, state: ButtonState) {
+        write_button(app, MouseButton::Left, state);
     }
 
     fn press_at(app: &mut App, phys: Vec2) {
@@ -969,6 +974,44 @@ mod tests {
         app.update();
 
         assert!(!pressed_a_pane(&app));
+        assert!(app.world().resource::<OrzmaMouseGesture>().held.is_none());
+    }
+
+    /// Asserts that a separator grab cancels a gesture a pane button still
+    /// holds, so the pane's application is not left with that button down.
+    ///
+    /// Case: the user holds the right button in nvim's pane, moves onto the
+    /// divider and presses the left button there, and then lets go of the
+    /// right button while the divider is still grabbed.
+    #[test]
+    fn a_grab_cancels_a_gesture_held_in_a_pane() {
+        #[derive(Resource, Default)]
+        struct Cancels(Vec<Entity>);
+        let mut app = suppression_app();
+        app.init_resource::<Cancels>().add_observer(
+            |ev: On<RequestTtyPointer>, mut cancels: ResMut<Cancels>| {
+                if ev.input.kind == PointerKind::Cancel {
+                    cancels.0.push(ev.terminal);
+                }
+            },
+        );
+        let pane = app
+            .world_mut()
+            .query_filtered::<Entity, With<OrzmaTerminal>>()
+            .single(app.world())
+            .expect("drag_world spawns one terminal");
+        let separator = spawn_vertical_separator(&mut app, SplitId(1), 320.0, 400.0);
+
+        set_cursor(&mut app, Vec2::new(204.0, 200.0));
+        write_button(&mut app, MouseButton::Right, ButtonState::Pressed);
+        app.update();
+        assert!(app.world().resource::<OrzmaMouseGesture>().held.is_some());
+        press_at(&mut app, Vec2::new(322.0, 200.0));
+        write_button(&mut app, MouseButton::Right, ButtonState::Released);
+        app.update();
+
+        assert!(app.world().get::<GrabbedSeparator>(separator).is_some());
+        assert_eq!(app.world().resource::<Cancels>().0, vec![pane]);
         assert!(app.world().resource::<OrzmaMouseGesture>().held.is_none());
     }
 
