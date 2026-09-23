@@ -5,7 +5,7 @@
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, NavAction, RegisterKind, ServerMsg};
 use crate::webview::apc::NonInteractive;
-use crate::webview::mount::Webview;
+use crate::webview::mount::{ForwardKeys, Webview};
 use bevy::ecs::entity::Entities;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
@@ -356,6 +356,14 @@ impl OrzmaRegistry {
             for id in previous.instances {
                 self.by_instance.remove(&id);
             }
+        }
+    }
+
+    /// Replaces the forward-key chords of `handle`; an unknown handle is left
+    /// alone.
+    pub fn replace_forward_keys(&mut self, handle: &HandleId, keys: Vec<NormalizedChord>) {
+        if let Some(view) = self.by_handle.get_mut(handle) {
+            view.forward_keys = keys;
         }
     }
 
@@ -845,6 +853,18 @@ fn apply_control_events(
                 owner_surface,
                 &instance,
             ),
+            ControlEvent::SetForwardKeys {
+                connection_id,
+                handle,
+                keys,
+            } => on_set_forward_keys(
+                &mut commands,
+                &mut registry,
+                &webviews,
+                connection_id,
+                &handle,
+                &keys,
+            ),
         }
     }
 }
@@ -1031,6 +1051,35 @@ fn on_emit(
     for (entity, view) in webviews {
         if view.handle == handle {
             commands.trigger(HostEmitEvent::new(entity, "orzma.event", &frame));
+        }
+    }
+}
+
+/// Applies a `set_forward_keys`: replaces the forward-key chords of `handle`,
+/// when `connection_id` owns it, in the registry and on every mounted
+/// placement of it.
+fn on_set_forward_keys(
+    commands: &mut Commands,
+    registry: &mut OrzmaRegistry,
+    webviews: &Query<(Entity, &Webview)>,
+    connection_id: u64,
+    handle: &HandleId,
+    keys: &[HostKeyChord],
+) {
+    let owned = registry
+        .get(handle)
+        .is_some_and(|view| view.connection_id == connection_id);
+    if !owned {
+        tracing::debug!(%handle, "set_forward_keys for an unowned or unknown handle, dropping");
+        return;
+    }
+    let chords: Vec<NormalizedChord> = keys.iter().filter_map(NormalizedChord::parse).collect();
+    registry.replace_forward_keys(handle, chords.clone());
+    for (entity, view) in webviews {
+        if view.handle == *handle {
+            commands
+                .entity(entity)
+                .try_insert(ForwardKeys(chords.clone()));
         }
     }
 }
@@ -1610,6 +1659,7 @@ mod registry_tests {
 #[cfg(test)]
 mod apply_tests {
     use super::*;
+    use crate::webview::mount::resolve_mount;
     use crossbeam_channel::{bounded, unbounded};
     use orzmux::prelude::PaneId;
 
@@ -2751,6 +2801,122 @@ mod apply_tests {
             }
             other => panic!("expected Url, got {other:?}"),
         }
+    }
+
+    fn inline_view(owner_surface: Entity, connection_id: u64) -> OrzmaView {
+        OrzmaView {
+            source: OrzmaSource::Inline("<h1>x</h1>".into()),
+            entry: "index.html".into(),
+            interactive: true,
+            click_focus: true,
+            owner_surface,
+            connection_id,
+            forward_keys: vec![],
+            preload: vec![],
+            instances: Vec::new(),
+        }
+    }
+
+    fn esc_chord() -> HostKeyChord {
+        HostKeyChord {
+            mods: vec![],
+            key: "esc".into(),
+        }
+    }
+
+    /// Registers an inline view owned by `connection_id` on a fresh surface,
+    /// mounts its first instance, and returns `(surface, handle, child)`.
+    fn mounted_view(app: &mut App, connection_id: u64) -> (Entity, HandleId, Entity) {
+        let surface = app.world_mut().spawn_empty().id();
+        let handle = HandleId::from("h1");
+        let instance = {
+            let mut registry = app.world_mut().resource_mut::<OrzmaRegistry>();
+            registry.insert(handle.clone(), inline_view(surface, connection_id));
+            registry.mint_instance(&handle).expect("the handle mints")
+        };
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface),
+                Webview {
+                    handle: handle.clone(),
+                    instance,
+                    slot: 0,
+                    rows: 10,
+                    cols: 40,
+                },
+                ForwardKeys(vec![]),
+            ))
+            .id();
+        (surface, handle, child)
+    }
+
+    /// Asserts that the owner's `set_forward_keys` replaces the chords on the
+    /// mounted placement and in the registration a later mount resolves.
+    ///
+    /// Case: a TUI browser enters insert mode with its page mounted and
+    /// narrows its forward keys to Esc, and later mounts a second placement.
+    #[test]
+    fn set_forward_keys_from_the_owner_replaces_registry_and_mounted_chords() {
+        let (mut app, ev_tx) = apply_app();
+        let (surface, handle, child) = mounted_view(&mut app, 1);
+        ev_tx
+            .send(ControlEvent::SetForwardKeys {
+                connection_id: 1,
+                handle: handle.clone(),
+                keys: vec![esc_chord()],
+            })
+            .unwrap();
+        app.update();
+
+        let expected = vec![NormalizedChord::parse(&esc_chord()).expect("esc parses")];
+        assert_eq!(
+            app.world().get::<ForwardKeys>(child),
+            Some(&ForwardKeys(expected.clone())),
+            "the mounted placement must carry the new chords"
+        );
+        let registry = app.world().resource::<OrzmaRegistry>();
+        assert_eq!(
+            resolve_mount(&handle, surface, registry).map(|resolved| resolved.forward_keys),
+            Some(expected),
+            "a later mount must resolve the new chords"
+        );
+    }
+
+    /// Asserts that `set_forward_keys` from a connection that does not own the
+    /// handle, or naming an unknown handle, changes nothing.
+    ///
+    /// Case: a second program in the same pane guesses another program's
+    /// handle.
+    #[test]
+    fn set_forward_keys_from_another_connection_changes_nothing() {
+        let (mut app, ev_tx) = apply_app();
+        let (surface, handle, child) = mounted_view(&mut app, 1);
+        ev_tx
+            .send(ControlEvent::SetForwardKeys {
+                connection_id: 2,
+                handle: handle.clone(),
+                keys: vec![esc_chord()],
+            })
+            .unwrap();
+        ev_tx
+            .send(ControlEvent::SetForwardKeys {
+                connection_id: 1,
+                handle: HandleId::from("unknown"),
+                keys: vec![esc_chord()],
+            })
+            .unwrap();
+        app.update();
+
+        assert_eq!(
+            app.world().get::<ForwardKeys>(child),
+            Some(&ForwardKeys(vec![]))
+        );
+        let registry = app.world().resource::<OrzmaRegistry>();
+        assert_eq!(
+            resolve_mount(&handle, surface, registry).map(|resolved| resolved.forward_keys),
+            Some(vec![])
+        );
     }
 }
 

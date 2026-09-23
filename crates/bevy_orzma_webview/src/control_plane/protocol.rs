@@ -87,6 +87,14 @@ pub(crate) enum ClientMsg {
         /// The target instance.
         instance: String,
     },
+    /// Replaces the forward-key chords of a handle this connection owns, on
+    /// its registration and on every mounted placement.
+    SetForwardKeys {
+        /// The handle returned by a prior `register`.
+        handle: HandleId,
+        /// The complete new chord list.
+        keys: Vec<HostKeyChord>,
+    },
 }
 
 /// A navigation action on one mounted placement.
@@ -639,5 +647,28 @@ mod tests {
             }
             _ => panic!("expected inline register"),
         }
+    }
+
+    /// Asserts that a `set_forward_keys` line parses into its handle and
+    /// chord list.
+    ///
+    /// Case: a TUI browser enters its insert mode and replaces its forward
+    /// keys with Esc alone.
+    #[test]
+    fn parses_set_forward_keys() {
+        let msg: ClientMsg = serde_json::from_str(
+            r#"{"op":"set_forward_keys","handle":"h1","keys":[{"mods":[],"key":"esc"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            msg,
+            ClientMsg::SetForwardKeys {
+                handle: "h1".into(),
+                keys: vec![HostKeyChord {
+                    mods: vec![],
+                    key: "esc".into(),
+                }],
+            }
+        );
     }
 }
