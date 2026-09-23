@@ -10,7 +10,7 @@ mod webview;
 use bevy::prelude::*;
 use bevy_orzma_webview_host::WebviewAssetRegistry;
 use control_plane::ControlPlanePlugin;
-pub use control_plane::{ControlPlaneHandle, HandleId, NormalizedChord, TokenRegistry};
+pub use control_plane::{ChordKey, ControlPlaneHandle, HandleId, NormalizedChord, TokenRegistry};
 use webview::apc::ApcPlugin;
 pub use webview::apc::{ClickFocusDisabled, NonInteractive};
 use webview::mount::WebviewPlugin;

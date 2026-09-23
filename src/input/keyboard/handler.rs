@@ -178,7 +178,7 @@ mod tests {
     use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
-    use bevy_orzma_webview::NormalizedChord;
+    use bevy_orzma_webview::{ChordKey, NormalizedChord};
     use orzma_configs::shortcuts::Modifiers;
     use orzma_vt::prelude::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
     use std::time::Duration;
@@ -583,7 +583,7 @@ mod tests {
         let webview = app
             .world_mut()
             .spawn(ForwardKeys(vec![NormalizedChord {
-                code: KeyCode::KeyJ,
+                key: ChordKey::Code(KeyCode::KeyJ),
                 alt: false,
                 ctrl: false,
                 shift: false,

@@ -30,12 +30,22 @@ mod protocol;
 
 pub(crate) use protocol::PushMsg;
 
-/// A forward-key chord normalized to host input types: a bevy `KeyCode` plus
-/// modifier booleans.
+/// The key a forward-key chord matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChordKey {
+    /// A physical key, compared together with the exact modifier set.
+    Code(KeyCode),
+    /// A printable ASCII punctuation character, compared against the
+    /// character the key produced, with Shift ignored.
+    Char(char),
+}
+
+/// A forward-key chord normalized to host input types: the key it matches
+/// plus modifier booleans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NormalizedChord {
-    /// The base key as a bevy `KeyCode`.
-    pub code: KeyCode,
+    /// The key the chord matches.
+    pub key: ChordKey,
     /// Alt modifier active.
     pub alt: bool,
     /// Ctrl modifier active.
@@ -44,6 +54,115 @@ pub struct NormalizedChord {
     pub shift: bool,
     /// The Super/Command/Meta modifier (bevy calls it Super/logo).
     pub logo: bool,
+}
+
+impl NormalizedChord {
+    /// Normalizes a wire chord, returning `None` for an unrecognized key
+    /// name.
+    ///
+    /// `"backtab"` maps to the same physical key as `"tab"`; the Shift
+    /// distinction rides the modifier bits. A name made of one ASCII
+    /// punctuation character maps to [`ChordKey::Char`].
+    pub(crate) fn parse(chord: &HostKeyChord) -> Option<Self> {
+        let key = ChordKey::from_name(&chord.key)?;
+        let mut normalized = Self {
+            key,
+            alt: false,
+            ctrl: false,
+            shift: false,
+            logo: false,
+        };
+        for m in &chord.mods {
+            match m.as_str() {
+                "alt" => normalized.alt = true,
+                "ctrl" => normalized.ctrl = true,
+                "shift" => normalized.shift = true,
+                "meta" => normalized.logo = true,
+                _ => {}
+            }
+        }
+        Some(normalized)
+    }
+}
+
+impl ChordKey {
+    /// Maps a wire key name to the key it matches; `None` when unrecognized.
+    fn from_name(name: &str) -> Option<Self> {
+        let code = match name {
+            "tab" | "backtab" => KeyCode::Tab,
+            "f1" => KeyCode::F1,
+            "f2" => KeyCode::F2,
+            "f3" => KeyCode::F3,
+            "f4" => KeyCode::F4,
+            "f5" => KeyCode::F5,
+            "f6" => KeyCode::F6,
+            "f7" => KeyCode::F7,
+            "f8" => KeyCode::F8,
+            "f9" => KeyCode::F9,
+            "f10" => KeyCode::F10,
+            "f11" => KeyCode::F11,
+            "f12" => KeyCode::F12,
+            "0" => KeyCode::Digit0,
+            "1" => KeyCode::Digit1,
+            "2" => KeyCode::Digit2,
+            "3" => KeyCode::Digit3,
+            "4" => KeyCode::Digit4,
+            "5" => KeyCode::Digit5,
+            "6" => KeyCode::Digit6,
+            "7" => KeyCode::Digit7,
+            "8" => KeyCode::Digit8,
+            "9" => KeyCode::Digit9,
+            "a" => KeyCode::KeyA,
+            "b" => KeyCode::KeyB,
+            "c" => KeyCode::KeyC,
+            "d" => KeyCode::KeyD,
+            "e" => KeyCode::KeyE,
+            "f" => KeyCode::KeyF,
+            "g" => KeyCode::KeyG,
+            "h" => KeyCode::KeyH,
+            "i" => KeyCode::KeyI,
+            "j" => KeyCode::KeyJ,
+            "k" => KeyCode::KeyK,
+            "l" => KeyCode::KeyL,
+            "m" => KeyCode::KeyM,
+            "n" => KeyCode::KeyN,
+            "o" => KeyCode::KeyO,
+            "p" => KeyCode::KeyP,
+            "q" => KeyCode::KeyQ,
+            "r" => KeyCode::KeyR,
+            "s" => KeyCode::KeyS,
+            "t" => KeyCode::KeyT,
+            "u" => KeyCode::KeyU,
+            "v" => KeyCode::KeyV,
+            "w" => KeyCode::KeyW,
+            "x" => KeyCode::KeyX,
+            "y" => KeyCode::KeyY,
+            "z" => KeyCode::KeyZ,
+            "esc" => KeyCode::Escape,
+            " " => KeyCode::Space,
+            "down" => KeyCode::ArrowDown,
+            "up" => KeyCode::ArrowUp,
+            "left" => KeyCode::ArrowLeft,
+            "right" => KeyCode::ArrowRight,
+            "pagedown" => KeyCode::PageDown,
+            "pageup" => KeyCode::PageUp,
+            "home" => KeyCode::Home,
+            "end" => KeyCode::End,
+            "enter" => KeyCode::Enter,
+            "backspace" => KeyCode::Backspace,
+            "delete" => KeyCode::Delete,
+            _ => return Self::punctuation(name),
+        };
+        Some(Self::Code(code))
+    }
+
+    /// Maps a name made of exactly one ASCII punctuation character to a
+    /// character chord.
+    fn punctuation(name: &str) -> Option<Self> {
+        let mut chars = name.chars();
+        let c = chars.next()?;
+        (chars.next().is_none() && c.is_ascii_punctuation()).then_some(Self::Char(c))
+    }
 }
 
 /// Where a dynamic view's content lives.
@@ -1126,7 +1245,10 @@ fn build_view(
                 click_focus,
                 owner_surface,
                 connection_id,
-                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys
+                    .iter()
+                    .filter_map(NormalizedChord::parse)
+                    .collect(),
                 preload,
                 instances: Vec::new(),
             })
@@ -1148,7 +1270,10 @@ fn build_view(
                 click_focus,
                 owner_surface,
                 connection_id,
-                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys
+                    .iter()
+                    .filter_map(NormalizedChord::parse)
+                    .collect(),
                 preload,
                 instances: Vec::new(),
             })
@@ -1169,7 +1294,10 @@ fn build_view(
                 click_focus,
                 owner_surface,
                 connection_id,
-                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys
+                    .iter()
+                    .filter_map(NormalizedChord::parse)
+                    .collect(),
                 preload,
                 instances: Vec::new(),
             })
@@ -1199,91 +1327,6 @@ fn validate_url_source(url: &str) -> Result<String, &'static str> {
         return Err("invalid_url");
     }
     Ok(parsed.into())
-}
-
-/// Converts a wire [`HostKeyChord`] to a [`NormalizedChord`], returning `None`
-/// for unrecognized key names. Note that `"backtab"` maps to [`KeyCode::Tab`]
-/// (the same as `"tab"`): the shift distinction is carried in the modifier bits,
-/// so a forward-key `BackTab` and `Tab` are indistinguishable at the host.
-fn normalize_chord(chord: &HostKeyChord) -> Option<NormalizedChord> {
-    let code = match chord.key.as_str() {
-        "tab" | "backtab" => KeyCode::Tab,
-        "f1" => KeyCode::F1,
-        "f2" => KeyCode::F2,
-        "f3" => KeyCode::F3,
-        "f4" => KeyCode::F4,
-        "f5" => KeyCode::F5,
-        "f6" => KeyCode::F6,
-        "f7" => KeyCode::F7,
-        "f8" => KeyCode::F8,
-        "f9" => KeyCode::F9,
-        "f10" => KeyCode::F10,
-        "f11" => KeyCode::F11,
-        "f12" => KeyCode::F12,
-        "0" => KeyCode::Digit0,
-        "1" => KeyCode::Digit1,
-        "2" => KeyCode::Digit2,
-        "3" => KeyCode::Digit3,
-        "4" => KeyCode::Digit4,
-        "5" => KeyCode::Digit5,
-        "6" => KeyCode::Digit6,
-        "7" => KeyCode::Digit7,
-        "8" => KeyCode::Digit8,
-        "9" => KeyCode::Digit9,
-        "a" => KeyCode::KeyA,
-        "b" => KeyCode::KeyB,
-        "c" => KeyCode::KeyC,
-        "d" => KeyCode::KeyD,
-        "e" => KeyCode::KeyE,
-        "f" => KeyCode::KeyF,
-        "g" => KeyCode::KeyG,
-        "h" => KeyCode::KeyH,
-        "i" => KeyCode::KeyI,
-        "j" => KeyCode::KeyJ,
-        "k" => KeyCode::KeyK,
-        "l" => KeyCode::KeyL,
-        "m" => KeyCode::KeyM,
-        "n" => KeyCode::KeyN,
-        "o" => KeyCode::KeyO,
-        "p" => KeyCode::KeyP,
-        "q" => KeyCode::KeyQ,
-        "r" => KeyCode::KeyR,
-        "s" => KeyCode::KeyS,
-        "t" => KeyCode::KeyT,
-        "u" => KeyCode::KeyU,
-        "v" => KeyCode::KeyV,
-        "w" => KeyCode::KeyW,
-        "x" => KeyCode::KeyX,
-        "y" => KeyCode::KeyY,
-        "z" => KeyCode::KeyZ,
-        "esc" => KeyCode::Escape,
-        " " => KeyCode::Space,
-        "down" => KeyCode::ArrowDown,
-        "up" => KeyCode::ArrowUp,
-        "pagedown" => KeyCode::PageDown,
-        "pageup" => KeyCode::PageUp,
-        _ => return None,
-    };
-    let mut alt = false;
-    let mut ctrl = false;
-    let mut shift = false;
-    let mut logo = false;
-    for m in &chord.mods {
-        match m.as_str() {
-            "alt" => alt = true,
-            "ctrl" => ctrl = true,
-            "shift" => shift = true,
-            "meta" => logo = true,
-            _ => {}
-        }
-    }
-    Some(NormalizedChord {
-        code,
-        alt,
-        ctrl,
-        shift,
-        logo,
-    })
 }
 
 /// Upper bound on a single inline HTML document (4 MiB).
@@ -2964,42 +3007,37 @@ mod normalize_tests {
     use super::*;
     use crate::control_plane::protocol::HostKeyChord;
 
-    #[test]
-    fn normalize_chord_maps_keys_and_mods() {
-        let n = normalize_chord(&HostKeyChord {
-            mods: vec!["alt".into()],
-            key: "h".into(),
-        })
-        .unwrap();
-        assert_eq!(n.code, KeyCode::KeyH);
-        assert!(n.alt && !n.ctrl && !n.shift && !n.logo);
-        assert_eq!(
-            normalize_chord(&HostKeyChord {
-                mods: vec![],
-                key: "f5".into()
-            })
-            .unwrap()
-            .code,
-            KeyCode::F5
-        );
-        assert_eq!(
-            normalize_chord(&HostKeyChord {
-                mods: vec![],
-                key: "tab".into()
-            })
-            .unwrap()
-            .code,
-            KeyCode::Tab
-        );
-        assert!(
-            normalize_chord(&HostKeyChord {
-                mods: vec![],
-                key: "nope".into()
-            })
-            .is_none()
-        );
+    fn chord(mods: &[&str], key: &str) -> HostKeyChord {
+        HostKeyChord {
+            mods: mods.iter().map(|m| (*m).to_owned()).collect(),
+            key: key.to_owned(),
+        }
     }
 
+    /// Asserts that a letter, a function key and `tab` parse to their
+    /// physical keys with the declared modifiers, and an unknown name fails.
+    ///
+    /// Case: a program registers Alt+h, F5 and Tab as forward keys.
+    #[test]
+    fn normalize_chord_maps_keys_and_mods() {
+        let n = NormalizedChord::parse(&chord(&["alt"], "h")).unwrap();
+        assert_eq!(n.key, ChordKey::Code(KeyCode::KeyH));
+        assert!(n.alt && !n.ctrl && !n.shift && !n.logo);
+        assert_eq!(
+            NormalizedChord::parse(&chord(&[], "f5")).map(|c| c.key),
+            Some(ChordKey::Code(KeyCode::F5))
+        );
+        assert_eq!(
+            NormalizedChord::parse(&chord(&[], "tab")).map(|c| c.key),
+            Some(ChordKey::Code(KeyCode::Tab))
+        );
+        assert!(NormalizedChord::parse(&chord(&[], "nope")).is_none());
+    }
+
+    /// Asserts that the navigation key names the forward-key grammar already
+    /// accepted still parse to their physical keys.
+    ///
+    /// Case: a TUI browser forwards Esc, Space and the arrow and page keys.
     #[test]
     fn normalize_chord_maps_forward_keys_keys() {
         let cases: &[(&str, KeyCode)] = &[
@@ -3011,14 +3049,57 @@ mod normalize_tests {
             ("pageup", KeyCode::PageUp),
         ];
         for (key, expected) in cases {
-            let chord = normalize_chord(&HostKeyChord {
-                mods: vec![],
-                key: (*key).into(),
-            });
             assert_eq!(
-                chord.map(|c| c.code),
-                Some(*expected),
+                NormalizedChord::parse(&chord(&[], key)).map(|c| c.key),
+                Some(ChordKey::Code(*expected)),
                 "failed for key={key:?}"
+            );
+        }
+    }
+
+    /// Asserts that the editing and navigation key names added for forward
+    /// chords parse to their physical keys.
+    ///
+    /// Case: a markdown viewer forwards Backspace and Enter so its TUI can go
+    /// back and confirm a search while the page holds keyboard focus.
+    #[test]
+    fn parse_maps_editing_and_navigation_key_names() {
+        let cases: &[(&str, KeyCode)] = &[
+            ("enter", KeyCode::Enter),
+            ("backspace", KeyCode::Backspace),
+            ("left", KeyCode::ArrowLeft),
+            ("right", KeyCode::ArrowRight),
+            ("home", KeyCode::Home),
+            ("end", KeyCode::End),
+            ("delete", KeyCode::Delete),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(
+                NormalizedChord::parse(&chord(&[], name)).map(|c| c.key),
+                Some(ChordKey::Code(*expected)),
+                "failed for key={name:?}"
+            );
+        }
+    }
+
+    /// Asserts that one ASCII punctuation character parses to a character
+    /// chord, while a longer or non-punctuation name is rejected.
+    ///
+    /// Case: a markdown viewer forwards `/` to open its search and `[` / `]`
+    /// to jump between headings.
+    #[test]
+    fn parse_maps_single_punctuation_to_a_character_chord() {
+        for c in ['/', '?', '[', ']', ':'] {
+            assert_eq!(
+                NormalizedChord::parse(&chord(&[], &c.to_string())).map(|n| n.key),
+                Some(ChordKey::Char(c)),
+                "failed for key={c:?}"
+            );
+        }
+        for name in ["//", "é", "nope"] {
+            assert!(
+                NormalizedChord::parse(&chord(&[], name)).is_none(),
+                "{name:?} must be rejected"
             );
         }
     }

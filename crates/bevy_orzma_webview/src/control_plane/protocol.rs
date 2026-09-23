@@ -108,7 +108,8 @@ pub(crate) enum NavAction {
 pub(crate) struct HostKeyChord {
     /// Modifier names: any of `alt`, `ctrl`, `shift`, `meta`.
     pub(crate) mods: Vec<String>,
-    /// The base key: a lowercase char (`h`, `5`), or `tab`/`backtab`/`f1`..`f12`.
+    /// The base key name: a lowercase letter or digit, a named key (`tab`,
+    /// `enter`, `f1` …), or one ASCII punctuation character (`/`, `?`).
     pub(crate) key: String,
 }
 
