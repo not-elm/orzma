@@ -2091,6 +2091,65 @@ mod tests {
         );
     }
 
+    /// Asserts that a `focus_changed` push for a handle the app never
+    /// registered is dropped without panicking and without landing in any
+    /// registered handle's queue.
+    ///
+    /// Case: a stray `focus_changed` for a placement arrives on the socket
+    /// after the app has already unregistered that handle.
+    #[test]
+    fn reader_thread_drops_focus_change_for_unknown_handle() {
+        use crate::uds::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("test.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let client = UnixStream::connect(&sock_path).unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client.try_clone().unwrap()));
+        let (server_conn, _) = listener.accept().unwrap();
+        let queues = Arc::new(EventQueues::from_decls(&[]));
+        let events: EventRegistry = Arc::new(Mutex::new(HashMap::from([(
+            "h1".to_owned(),
+            queues.clone(),
+        )])));
+
+        spawn_reader(
+            client,
+            writer,
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(VecDeque::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+            events,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let mut server = server_conn;
+        writeln!(
+            server,
+            r#"{{"op":"focus_changed","handle":"h2","instance":"{INSTANCE_A}","focused":true}}"#
+        )
+        .unwrap();
+        server.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(queues.drain_focus(), vec![]);
+
+        writeln!(
+            server,
+            r#"{{"op":"focus_changed","handle":"h1","instance":"{INSTANCE_A}","focused":true}}"#
+        )
+        .unwrap();
+        server.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(
+            queues.drain_focus(),
+            vec![FocusChange {
+                instance: INSTANCE_A.into(),
+                focused: true,
+            }],
+            "the reader thread keeps processing after the unknown handle"
+        );
+    }
+
     /// Asserts that `blur` sends a focus op with a null instance.
     ///
     /// Case: a markdown viewer opens its search and takes the keyboard back

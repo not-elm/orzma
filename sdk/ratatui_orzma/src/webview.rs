@@ -326,7 +326,9 @@ impl WebviewHandle {
     ///
     /// Every change is reported, including those this app requested. When
     /// the control socket drops, a `focused: false` is reported for each
-    /// placement last reported focused.
+    /// placement last reported focused. Changes are buffered per handle up
+    /// to a fixed cap; an app that never drains them drops the oldest ones
+    /// and logs a throttled warning.
     pub fn read_focus_changes(&self) -> Vec<FocusChange> {
         self.events.drain_focus()
     }

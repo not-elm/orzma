@@ -65,11 +65,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 match (k.modifiers, k.code) {
                     (KeyModifiers::ALT, KeyCode::Char('l')) => {
                         view.focus()?;
-                        web_focused = true;
                     }
                     (KeyModifiers::ALT, KeyCode::Char('h')) => {
                         orzma.blur()?;
-                        web_focused = false;
                     }
                     (KeyModifiers::NONE, KeyCode::Char('q')) if !web_focused => return Ok(()),
                     _ => {}
