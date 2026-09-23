@@ -102,8 +102,8 @@ connection, and a client must tell them apart:
 - A **request reply** is the only host line with **no `op` field**. Both
   `register` and `new_instance` are answered this way, and either can also
   reply `{"ok":false,"error":"…"}`.
-- Every **host-initiated push** (`call`, `event`, `compositing`) carries an
-  `op` field.
+- Every **host-initiated push** (`call`, `event`, `compositing`,
+  `focus_changed`) carries an `op` field.
 
 So: a line with an `op` is a push; a line without one is the reply to your
 oldest outstanding request. This is the one framing rule a from-scratch client
@@ -133,6 +133,7 @@ Every program line carries an `op`:
 | `navigate` | `instance`, `action` | Navigate one mounted placement in place. |
 | `mount` | `instance`, `row`, `col`, `rows`, `cols` | Mount one placement at a 0-based cell of the pane's active screen, the socket form of the APC `mount` (see below). |
 | `unmount` | `instance` | Remove one placement mounted with the socket `mount`. |
+| `set_forward_keys` | `handle`, `keys` (array of chords) | Replace the forward keys of a handle this connection owns, on the registration and on every mounted placement; later mounts carry the new list. No reply; a handle this connection does not own is ignored. |
 
 `navigate.action` is one of the strings `"back"`, `"forward"`, `"reload"`, or
 the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
@@ -143,48 +144,60 @@ the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
 
 | `kind` | Required | Optional (default) | Served at |
 | --- | --- | --- | --- |
-| `dir` | `root` (absolute dir path), `entry` (safe relative path, e.g. `index.html`) | `interactive` (`true`), `click_focus` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `orzma://<handle>/` |
-| `inline` | `html` (full document, ≤ 4 MiB) | `interactive` (`true`), `click_focus` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `orzma://<handle>/index.html` |
-| `url` | `url` (`http`/`https` only) | `interactive` (`true`), `click_focus` (`true`), `bridge` (`false`), `forward_keys` (`[]`), `preload` (`[]`) | the remote URL directly (no `orzma://` origin) |
+| `dir` | `root` (absolute dir path), `entry` (safe relative path, e.g. `index.html`) | `interactive` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `orzma://<handle>/` |
+| `inline` | `html` (full document, ≤ 4 MiB) | `interactive` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `orzma://<handle>/index.html` |
+| `url` | `url` (`http`/`https` only) | `interactive` (`true`), `bridge` (`false`), `forward_keys` (`[]`), `preload` (`[]`) | the remote URL directly (no `orzma://` origin) |
 
 - `interactive` — whether the mounted view accepts pointer/keyboard input.
-- `click_focus` — whether a pointer press inside the view's rect moves keyboard
-  focus to it. See [Click focus](#click-focus).
+- `forward_keys` — the initial [forward keys](#forward-keys); replace them
+  later with `set_forward_keys`.
 - `bridge` (`url` only) — opt into the `window.orzma` back-channel. `dir` and
   `inline` are always bridged; a `url` view is bridged only with `bridge:true`.
 - `preload` — an array of JavaScript source strings injected before the page's
   own scripts (after the host bridge). Honored only for bridged views.
 
-### Click focus
+### Focus
 
-By default a pointer press inside a mounted view's rect gives that view
-keyboard focus, and the host then stops delivering keys to the pane's PTY —
-the page consumes them, and `forward_keys` is the way back out.
+A pointer press inside a mounted interactive view's rect always gives that
+view keyboard focus and makes its pane the active pane. While a view holds
+focus, the host delivers keys to the page, except the view's
+[forward keys](#forward-keys), which go to the pane's PTY instead.
 
-`click_focus: false` turns that off for one registration: the press still
-reaches the page, and the click still makes the owning pane active, but
-keyboard focus stays with the pane's terminal. It suits a view that renders
-output and owns no keyboard affordances — no `keydown` handlers, no text
-fields — where the app drives everything from the TUI.
+A `focus` op moves focus to a placement this connection owns, or, with
+`null`, takes it back from whichever view in this connection's pane holds
+it. The active pane does not change on a blur.
 
-A `focus` op still moves focus to such a view, so an app can hand it the
-keyboard deliberately and take it back with a `focus` op carrying `null`.
-Clicking inside a view that already holds app-granted focus does not revoke
-it; clicking it while a *different* view holds focus releases that one.
+Every change is reported to the program that registered the placement with a
+`focus_changed` push, whatever caused it: a click, a `focus` op, vi mode,
+the release-focus shortcut, a pane switch, or an unmount. A program whose
+TUI needs every key for a while — a search line, an address bar — sends a
+`focus` op with `null` when it starts and, if it wants, focuses the page
+again when it ends.
 
 ### Forward keys
 
 `forward_keys` lists key chords the host passes through to the pane's PTY
-instead of letting the focused webview consume them. Each chord is:
+instead of letting the focused webview consume them: a matching key reaches
+the program and never the page. `register` carries the initial list;
+`set_forward_keys` replaces it wholesale. Each chord is:
 
 ```json
 {"mods":["alt"],"key":"h"}
 ```
 
 `mods` is any subset of `"alt"`, `"ctrl"`, `"shift"`, `"meta"`. `key` is one of:
-a lowercase letter `a`–`z`, a digit `0`–`9`, `tab`, `backtab`, `f1`–`f12`,
-`esc`, `" "` (space), `up`, `down`, `pageup`, `pagedown`. Unrecognized chords
-are silently ignored.
+
+- a lowercase letter `a`–`z`, a digit `0`–`9`, `tab`, `backtab`, `f1`–`f12`,
+  `esc`, `" "` (space), `up`, `down`, `left`, `right`, `pageup`, `pagedown`,
+  `home`, `end`, `enter`, `backspace`, `delete` — matched against the physical
+  key with the exact modifier set;
+- one ASCII punctuation character such as `/`, `?`, `[`, `]`, `:` — matched
+  against the character the key produced, whichever key produced it, with
+  Shift ignored and the other modifiers exact. Characters typed through a dead
+  key or AltGr do not match.
+
+Unrecognized chords are silently ignored. The key-up of a forwarded key may
+still reach the page.
 
 ### Host → program messages
 
@@ -195,6 +208,7 @@ Every host push carries an `op`:
 | `call` | `handle`, `instance`, `reqId`, `method`, `params` | A page `window.orzma.call(method, params)`. Respond with a `reply` carrying the same `reqId`. |
 | `event` | `handle`, `event`, `payload` | A page `window.orzma.emit(event, payload)`. Fire-and-forget; no response. |
 | `compositing` | `handle`, `instance`, `active` (bool) | The placement first composited (`true`) or was unmounted after compositing (`false`). |
+| `focus_changed` | `handle`, `instance`, `focused` (bool) | The placement gained (`true`) or lost (`false`) keyboard focus. A move between placements sends `false` for the old one before `true` for the new one. |
 
 `call` names the instance whose page called; `event` does not, because a
 program reads events per handle rather than per placement. A program running
