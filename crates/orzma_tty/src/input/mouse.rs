@@ -1,13 +1,39 @@
 //! Pure VT-encoder for mouse-protocol reports: translates a logical
 //! mouse report into the byte sequence the PTY expects.
 
-use orzma_vt::prelude::MouseEncoding;
+use orzma_vt::prelude::{
+    DisplayOffset, GridColumn, GridPoint, GridSize, MouseEncoding, ViewportLine,
+};
 
 /// 1-indexed cell coordinate suitable for SGR / X10 mouse reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CellCoord {
     pub col: u32,
     pub row: u32,
+}
+
+impl CellCoord {
+    /// This cell clamped into `size`: the column to `1..=cols` and the
+    /// row to `1..=rows`, with a zero axis treated as one cell.
+    pub(crate) fn clamped_to(self, size: GridSize) -> Self {
+        Self {
+            col: self.col.max(1).min(u32::from(size.cols.max(1))),
+            row: self.row.max(1).min(u32::from(size.rows.max(1))),
+        }
+    }
+
+    /// The active-grid point this 1-based viewport cell shows while the
+    /// viewport sits `offset` rows above the live tail. The caller clamps
+    /// the cell into the grid first; a coordinate past `u16::MAX`
+    /// saturates.
+    pub(crate) fn to_grid_point(self, offset: DisplayOffset) -> GridPoint {
+        let line = u16::try_from(self.row.saturating_sub(1)).unwrap_or(u16::MAX);
+        let column = u16::try_from(self.col.saturating_sub(1)).unwrap_or(u16::MAX);
+        GridPoint {
+            line: ViewportLine(line).to_grid(offset),
+            column: GridColumn(column),
+        }
+    }
 }
 
 /// Mouse-protocol modifier set, mapped onto the report's `cb` bits
@@ -144,6 +170,7 @@ impl MouseReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orzma_vt::prelude::{DisplayOffset, GridColumn, GridLine, GridPoint, GridSize};
 
     fn report(button: MouseButton, kind: MouseReportKind, col: u32, row: u32) -> MouseReport {
         MouseReport {
@@ -286,5 +313,38 @@ mod tests {
     fn utf8_currently_falls_back_to_x10() {
         let r = report(MouseButton::Left, MouseReportKind::Press, 150, 42);
         assert_eq!(r.encode(MouseEncoding::Utf8), r.encode(MouseEncoding::X10));
+    }
+
+    /// Asserts that clamping pins each axis into the grid, treating zero
+    /// as the first cell.
+    ///
+    /// Case: a resize shrank the pane between the host's hit-test and the
+    /// backend's routing, and another event named column zero.
+    #[test]
+    fn clamped_to_pins_both_axes_into_the_grid() {
+        let size = GridSize { cols: 80, rows: 24 };
+        assert_eq!(
+            CellCoord { col: 500, row: 99 }.clamped_to(size),
+            CellCoord { col: 80, row: 24 }
+        );
+        assert_eq!(
+            CellCoord { col: 0, row: 0 }.clamped_to(size),
+            CellCoord { col: 1, row: 1 }
+        );
+    }
+
+    /// Asserts that a viewport cell maps to the active-grid point it
+    /// shows, reaching into history while the viewport is scrolled back.
+    ///
+    /// Case: the user drags a selection in a pane scrolled three rows back.
+    #[test]
+    fn to_grid_point_applies_the_display_offset() {
+        assert_eq!(
+            CellCoord { col: 4, row: 2 }.to_grid_point(DisplayOffset(3)),
+            GridPoint {
+                line: GridLine(-2),
+                column: GridColumn(3)
+            }
+        );
     }
 }

@@ -15,6 +15,7 @@ mod coalescer;
 mod focus;
 mod host;
 mod input;
+mod pointer;
 mod pump;
 mod resize;
 mod scroll;

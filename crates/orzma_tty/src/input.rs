@@ -1,16 +1,19 @@
 //! Encoders that turn user input events and focus changes into the byte
-//! sequences written to the PTY, and the router that picks how a wheel
-//! gesture reaches the application.
+//! sequences written to the PTY, and the routers that pick how a wheel
+//! gesture or a pointer event reaches the application.
 
 use orzma_vt::prelude::{MouseEncoding, VtModes};
 
 mod keyboard;
 mod mouse;
 mod paste;
+mod pointer;
 mod wheel;
 
 pub use keyboard::*;
 pub use mouse::*;
+pub(crate) use pointer::{PointerAction, PointerState};
+pub use pointer::{PointerButton, PointerInput, PointerKind};
 pub use wheel::*;
 
 /// VT-encoded bytes bound for the PTY: the encoding of a user input event or

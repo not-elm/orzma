@@ -101,6 +101,17 @@ impl Write for BlockingSink {
     }
 }
 
+/// A selection operation a [`FakeVt`] received.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionOp {
+    /// `start_selection`, with its arguments.
+    Start(GridPoint, CellSide, SelectionKind),
+    /// `extend_selection`, with its arguments.
+    Extend(GridPoint, CellSide),
+    /// `clear_selection`.
+    Clear,
+}
+
 /// Scriptable [`Vt`] fake for exercising `OrzmaTty` without a real
 /// emulator.
 ///
@@ -112,8 +123,9 @@ impl Write for BlockingSink {
 ///
 /// `scroll` records the motion: `Scroll::Bottom` snaps `display_offset`
 /// to zero, and every other motion returns the scripted `scroll_moves`.
-/// The selection operations return the scripted `selection_changes`, and
-/// `selection_text` is always `None`.
+/// The selection operations record themselves in `selections` and return
+/// the scripted `selection_changes`, and `selection_text` returns the
+/// scripted `selected_text`.
 pub struct FakeVt {
     /// Grid size reported and updated by `resize`.
     pub grid_size: GridSize,
@@ -129,6 +141,10 @@ pub struct FakeVt {
     pub scroll_moves: bool,
     /// Scripted return for the selection operations.
     pub selection_changes: bool,
+    /// Every selection operation received, in order.
+    pub selections: Vec<SelectionOp>,
+    /// Returned by `selection_text`.
+    pub selected_text: Option<String>,
     /// Every chunk `interpret` received, in order.
     pub interpreted: Vec<Vec<u8>>,
     /// Every motion `scroll` received, in order.
@@ -163,6 +179,8 @@ impl FakeVt {
             modes: VtModes::default(),
             scroll_moves: false,
             selection_changes: false,
+            selections: Vec::new(),
+            selected_text: None,
             interpreted: Vec::new(),
             scrolls: Vec::new(),
             resizes: Vec::new(),
@@ -233,20 +251,23 @@ impl Vt for FakeVt {
         }
     }
 
-    fn start_selection(&mut self, _cell: GridPoint, _side: CellSide, _kind: SelectionKind) -> bool {
+    fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool {
+        self.selections.push(SelectionOp::Start(cell, side, kind));
         self.selection_changes
     }
 
-    fn extend_selection(&mut self, _cell: GridPoint, _side: CellSide) -> bool {
+    fn extend_selection(&mut self, cell: GridPoint, side: CellSide) -> bool {
+        self.selections.push(SelectionOp::Extend(cell, side));
         self.selection_changes
     }
 
     fn clear_selection(&mut self) -> bool {
+        self.selections.push(SelectionOp::Clear);
         self.selection_changes
     }
 
     fn selection_text(&self) -> Option<String> {
-        None
+        self.selected_text.clone()
     }
 
     fn grid_size(&self) -> GridSize {

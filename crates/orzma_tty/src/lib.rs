@@ -7,8 +7,8 @@ use crate::{
     coalescer::Coalescer,
     error::{OrzmaTtyError, OrzmaTtyResult},
     input::{
-        MouseReport, MouseReportKind, PtyInput, TerminalKey, TerminalModifiers, WheelConfig,
-        WheelDecision, WheelInput,
+        MouseReport, MouseReportKind, PointerAction, PointerInput, PointerState, PtyInput,
+        TerminalKey, TerminalModifiers, WheelConfig, WheelDecision, WheelInput,
     },
     pty::{ChunkPoll, ExitPoll, Pty},
     signal::TtySignal,
@@ -140,6 +140,8 @@ pub struct OrzmaTty<V: Vt> {
     exit: ExitLatch,
     /// Whether the host last reported this terminal as focused.
     focused: bool,
+    /// How each held pointer button routes, from its press to its release.
+    pointer: PointerState,
     /// When the open synchronized update stops holding frames back;
     /// `None` while the VT reports none open. A deadline in the past
     /// marks an update that timed out and is not reopened until the VT
@@ -430,6 +432,55 @@ impl<V: Vt> OrzmaTty<V> {
         self.pty.enqueue_write(bytes)
     }
 
+    /// Routes one pointer event by the VT's current modes and applies the
+    /// result: reports are queued for the PTY as one write, and selection
+    /// effects apply to the VT.
+    ///
+    /// The event's cell is clamped into the grid first, and a viewport cell
+    /// maps onto the grid at the current display offset. A press is
+    /// forwarded only while a mouse tracking level is in force, Shift is
+    /// not held, and the viewport is at the live tail, and that routing
+    /// holds until the button's release. Nothing here moves the viewport.
+    /// Returns the selected text when the event finished a selection drag;
+    /// `None` otherwise, and when the selection is empty. `Ok` means the
+    /// reports were queued, not that they reached the PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the reports (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that. Selection
+    /// effects apply either way.
+    pub fn send_pointer(&mut self, mut input: PointerInput) -> OrzmaTtyResult<Option<String>> {
+        input.cell = input.cell.clamped_to(self.vt.grid_size());
+        let modes = self.vt.modes();
+        let offset = self.vt.display_offset();
+        let at_live_tail = self.vt.is_at_live_tail();
+        let mut bytes = Vec::new();
+        let mut copied = None;
+        for action in self.pointer.route(input, modes, at_live_tail) {
+            match action {
+                PointerAction::Report(report) => {
+                    bytes.extend(PtyInput::encode_mouse(&report, modes.mouse_encoding).into_bytes())
+                }
+                PointerAction::SelectionClear => self.clear_selection(),
+                PointerAction::SelectionStart { cell, side, kind } => {
+                    self.start_selection(cell.to_grid_point(offset), side, kind);
+                }
+                PointerAction::SelectionExtend { cell, side } => {
+                    self.extend_selection(cell.to_grid_point(offset), side);
+                }
+                PointerAction::Copy => {
+                    copied = self.vt.selection_text().filter(|text| !text.is_empty());
+                }
+            }
+        }
+        if !bytes.is_empty() {
+            self.pty.enqueue_write(bytes)?;
+        }
+        Ok(copied)
+    }
+
     /// Queues a paste of clipboard text for the PTY, honouring
     /// bracketed-paste mode (DECSET 2004).
     ///
@@ -587,6 +638,7 @@ impl<V: Vt> OrzmaTty<V> {
             pending_replies: Vec::new(),
             exit: ExitLatch::Running,
             focused: false,
+            pointer: PointerState::default(),
             sync_deadline: None,
         }
     }
