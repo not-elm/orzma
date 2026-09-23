@@ -356,6 +356,17 @@ impl WebviewHandle {
         }
     }
 
+    /// Gives this registration's default placement keyboard focus and makes
+    /// its pane the active pane.
+    ///
+    /// The op is sent on every call. The host drops a focus for a placement
+    /// that is not mounted yet, so call it once the page has composited (see
+    /// [`crate::WebviewWidget::on_compositing_change`]); a display-only `url`
+    /// view never reports compositing.
+    pub fn focus(&self) -> OrzmaResult<()> {
+        send_focus(&self.writer, Some(self.instance_id()))
+    }
+
     /// Whether `slot` is the very slot this handle reads its handle id from.
     ///
     /// Registrations are matched against a handle by this identity rather than
@@ -428,6 +439,13 @@ impl WebviewInstance {
         send_nav(&self.writer, self.id(), NavAction::Reload)
     }
 
+    /// Gives this placement keyboard focus and makes its pane the active
+    /// pane. The op is sent on every call; the host drops it while the
+    /// placement is not mounted.
+    pub fn focus(&self) -> OrzmaResult<()> {
+        send_focus(&self.writer, Some(self.id()))
+    }
+
     /// Creates a placement over a pre-existing shared instance slot, which the
     /// reconnect replay refills in place.
     pub(crate) fn new_shared(instance: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
@@ -442,6 +460,11 @@ pub(crate) fn write_msg(writer: &SharedWriter, msg: &ClientMsg) -> OrzmaResult<(
     writeln!(w, "{line}")?;
     w.flush()?;
     Ok(())
+}
+
+/// Writes one `focus` op: `Some` focuses that placement, `None` blurs.
+pub(crate) fn send_focus(writer: &SharedWriter, instance: Option<String>) -> OrzmaResult<()> {
+    write_msg(writer, &ClientMsg::Focus { instance })
 }
 
 /// Writes one `navigate` op addressed to `instance`.
@@ -789,5 +812,37 @@ mod tests {
         let _ = Webview::inline("x")
             .add_event::<A>("one")
             .add_event::<A>("two");
+    }
+
+    /// Asserts that focusing a handle names its default placement and an
+    /// extra placement names itself.
+    ///
+    /// Case: a TUI browser enters insert mode on the page it shows, and an
+    /// app with a split focuses the right-hand placement.
+    #[test]
+    fn focus_names_the_placement_it_focuses() {
+        use std::io::{BufRead, BufReader};
+        let (client, server) = UnixStream::pair().unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client));
+        let handle = WebviewHandle::new_shared(
+            Arc::new(Mutex::new(HandleId::from("h".to_owned()))),
+            Arc::new(Mutex::new("i1".to_owned())),
+            Arc::new(crate::events::EventQueues::from_decls(&[])),
+            writer.clone(),
+            Weak::new(),
+        );
+        let extra = WebviewInstance::new_shared(Arc::new(Mutex::new("i2".to_owned())), writer);
+
+        handle.focus().unwrap();
+        extra.focus().unwrap();
+
+        let mut reader = BufReader::new(server);
+        for expected in ["i1", "i2"] {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(v["op"], "focus");
+            assert_eq!(v["instance"], expected);
+        }
     }
 }

@@ -9,7 +9,9 @@ use crate::protocol::{
     ClientMsg, HandleId, IncomingCall, IncomingEvent, RegisterKind, ServerReply,
 };
 use crate::uds::UnixStream;
-use crate::webview::{SharedWriter, Webview, WebviewHandle, WebviewInstance, write_msg};
+use crate::webview::{
+    SharedWriter, Webview, WebviewHandle, WebviewInstance, send_focus, write_msg,
+};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use ratatui::layout::Rect;
 use std::collections::{HashMap, VecDeque};
@@ -458,6 +460,16 @@ impl Orzma {
             self.writer.clone(),
             Arc::downgrade(&self.core),
         ))
+    }
+
+    /// Takes keyboard focus back from the webview focused in this pane,
+    /// returning the keyboard to the pane's terminal.
+    ///
+    /// The host clears the focus only when the focused webview is mounted in
+    /// this connection's pane, whichever program registered it. The active
+    /// pane does not change.
+    pub fn blur(&self) -> OrzmaResult<()> {
+        send_focus(&self.writer, None)
     }
 
     /// Locks and clears the per-frame placement collector for `render_stateful_widget`.
@@ -2099,5 +2111,22 @@ mod tests {
             queues.drain_type(TypeId::of::<Hello>()),
             vec![serde_json::json!({"n":7})]
         );
+    }
+
+    /// Asserts that `blur` sends a focus op with a null instance.
+    ///
+    /// Case: a markdown viewer opens its search and takes the keyboard back
+    /// from its page.
+    #[test]
+    fn blur_sends_a_null_focus() {
+        let (orzma, _handle, server) = session_with_one_registration();
+
+        orzma.blur().unwrap();
+
+        let mut line = String::new();
+        BufReader::new(server).read_line(&mut line).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["op"], "focus");
+        assert!(v["instance"].is_null());
     }
 }
