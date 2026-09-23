@@ -1,4 +1,5 @@
 //! orzma Bevy GUI entry point.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod action;
 mod cef_profile;

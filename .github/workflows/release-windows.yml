@@ -1,0 +1,159 @@
+name: release-windows
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "3-part version to build (dry run only; defaults to the Cargo version)"
+        required: false
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+
+permissions:
+  contents: write
+
+env:
+  CEF_VERSION: "152.4.0+152.0.8"
+  WIX_VERSION: "6.0.2"
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      # stage_windows.py uses Path.write_text(newline=...), which needs Python 3.10+.
+      # Pin the same version ci-scripts.yml tests against instead of the runner default.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@1.95
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # Runs before CEF provisioning, pnpm and the WiX restore: everything this step
+      # rejects (a tag that disagrees with Cargo.toml, a prerelease version) would
+      # otherwise be caught only after minutes of setup that is then thrown away.
+      - name: Resolve version
+        id: ver
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          $cargo = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages |
+            Where-Object { $_.name -eq "orzma" } | ForEach-Object { $_.version }
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $tag = $env:GITHUB_REF_NAME.TrimStart("v")
+            if ($tag -ne $cargo) {
+              Write-Error "Tag v$tag does not match Cargo version $cargo; bump Cargo.toml or fix the tag."
+              exit 1
+            }
+            $version = $tag
+          } elseif ($env:DISPATCH_VERSION) {
+            # A manual dry run may pass a 3-part version so the build is not blocked
+            # by a prerelease Cargo version (wix build runs with -wx, and WIX1148 on
+            # a version like 0.2.0-dev is then an error).
+            $version = $env:DISPATCH_VERSION
+          } else {
+            $version = $cargo
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            Write-Error "Resolved version '$version' is not 3-part numeric; MSI ProductVersion cannot express a prerelease. Re-run with the version input, e.g. 0.2.0."
+            exit 1
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-windows"
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      # NOTE: this key must stay byte-identical to the one in ci-rust.yml. A tag ref can
+      # read the default branch's cache, so matching it reuses the ~460MB CI already
+      # downloaded instead of fetching CEF a second time.
+      - name: Cache the CEF build dependency
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/orzma/cef
+          key: cef-${{ runner.os }}-${{ env.CEF_VERSION }}
+
+      - name: Cache the exported CEF runtime
+        id: cef-runtime
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/cef
+          key: cef-runtime-${{ runner.os }}-${{ env.CEF_VERSION }}
+
+      - name: Point cef-dll-sys at the cached CEF
+        run: echo "CEF_PATH=$env:USERPROFILE\.cache\orzma\cef" >> $env:GITHUB_ENV
+
+      # Export only. The full setup-cef also builds a render process for local
+      # `cargo run`, which this job never uses — staging builds its own against the
+      # static CRT, so the extra compile of a CEF-linked crate would be thrown away.
+      - name: Provision the CEF runtime
+        if: steps.cef-runtime.outputs.cache-hit != 'true'
+        run: just setup-cef-export
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Build orzmd web assets
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Restore WiX
+        run: |
+          dotnet tool restore
+          dotnet wix extension add -g WixToolset.UI.wixext/${{ env.WIX_VERSION }}
+
+      # These three run through just so the release builds the MSI with exactly the
+      # command a developer verifies locally. Duplicating the wix invocation here is
+      # how local and CI builds drift apart.
+      - name: Stage the distribution tree
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: just stage --version $env:VERSION
+
+      - name: Build the MSI
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: just msi $env:VERSION
+
+      - name: Validate the MSI
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: just msi-validate $env:VERSION
+
+      - name: Write the checksum sidecar
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          $msi = "target/dist/orzma-$env:VERSION-x64.msi"
+          $hash = (Get-FileHash -Algorithm SHA256 $msi).Hash.ToLower()
+          $name = Split-Path -Leaf $msi
+          [IO.File]::WriteAllText("$msi.sha256", "$hash  $name`n")
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi
+            target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi.sha256
+          generate_release_notes: true
