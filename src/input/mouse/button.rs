@@ -274,6 +274,25 @@ fn release(
     else {
         return;
     };
+    // NOTE: a release sharing a frame with the last cursor move must send
+    // the skipped motion first, or a 1002/1003 application never learns
+    // the pointer crossed into the release cell, and a local selection drag
+    // copies short of it.
+    if gesture.last_target != Some((held.entity, cell)) {
+        trigger_mouse_effect(
+            commands,
+            held.entity,
+            MouseEffect::Pointer(PointerInput {
+                kind: PointerKind::Motion,
+                button: None,
+                cell,
+                side,
+                click_count: 1,
+                mods: frame.mods,
+            }),
+        );
+        gesture.last_target = Some((held.entity, cell));
+    }
     held.release(button);
     gesture.held = (!held.is_empty()).then_some(held);
     if gesture.held.is_none() {
@@ -423,8 +442,11 @@ mod tests {
     use bevy::input::mouse::MouseWheel;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
     use bevy::window::WindowResolution;
-    use bevy_orzma_tty_renderer::schema::TerminalView;
+    use bevy_orzma_tty_renderer::schema::{
+        Color, GridCell, GridSlot, HyperlinkId, HyperlinkUri, TerminalCells, TerminalView,
+    };
     use bevy_orzmux::prelude::RequestTtyPointer;
+    use std::collections::HashMap;
 
     /// What reached the world, in trigger order.
     #[derive(Debug, Clone, PartialEq)]
@@ -548,6 +570,36 @@ mod tests {
 
     fn cell(col: u32, row: u32) -> CellCoord {
         CellCoord { col, row }
+    }
+
+    /// A pane like `spawn_pane`, but its top-left cell links to `uri`.
+    fn spawn_linked_pane(app: &mut App, left: f32, width: f32, uri: &str) -> Entity {
+        let pane = spawn_pane(app, left, width);
+        let id = HyperlinkId::new(7).expect("nonzero");
+        let cells = TerminalCells {
+            cells: vec![vec![GridSlot::Cell(GridCell {
+                text: "x".to_string(),
+                fg: Color::DefaultForeground,
+                bg: Color::DefaultBackground,
+                style: 0,
+                hyperlink: Some(id),
+            })]],
+            hyperlinks: HashMap::from([(id, HyperlinkUri::new(uri))]),
+            ..default()
+        };
+        app.world_mut().entity_mut(pane).insert(cells);
+        pane
+    }
+
+    /// Holds the platform's link-activation modifier (Cmd on macOS, Ctrl
+    /// elsewhere) for the rest of the test.
+    fn hold_link_modifier(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        if cfg!(target_os = "macos") {
+            keys.press(KeyCode::SuperLeft);
+        } else {
+            keys.press(KeyCode::ControlLeft);
+        }
     }
 
     fn last_pointer(app: &App) -> (Entity, PointerInput) {
@@ -762,6 +814,33 @@ mod tests {
         assert_eq!(link_press(PointerButton::Left, true, false, || None), None);
     }
 
+    /// Asserts that a modified press on a linked cell opens the URI instead
+    /// of reaching the pane's backend, and that its release is then
+    /// ignored, leaving the gesture unheld.
+    ///
+    /// Case: the user holds the platform's link modifier and clicks an OSC
+    /// 8 hyperlink printed by `ls --hyperlink`, then lets go of the button.
+    #[test]
+    fn a_modified_press_on_a_link_opens_it_without_forwarding() {
+        let mut app = pointer_app();
+        let uri = "https://example.com";
+        spawn_linked_pane(&mut app, 0.0, 800.0, uri);
+        // A first frame settles the hover baseline over the linked cell, so
+        // the click frame below carries no incidental hover motion.
+        move_to(&mut app, Vec2::new(4.0, 8.0));
+        app.update();
+        app.world_mut().resource_mut::<Log>().0.clear();
+        hold_link_modifier(&mut app);
+        write_button(&mut app, MouseButton::Left, ButtonState::Pressed);
+        write_button(&mut app, MouseButton::Left, ButtonState::Released);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Log>().0,
+            vec![Heard::Opened(uri.to_string())]
+        );
+        assert!(app.world().resource::<OrzmaMouseGesture>().held.is_none());
+    }
+
     /// Asserts that a live cursor always wins, an off-window cursor falls
     /// back to the last known position only while a button is held, and an
     /// idle off-window cursor yields nothing.
@@ -957,6 +1036,40 @@ mod tests {
             .collect();
         assert_eq!(kinds, vec![PointerKind::Press, PointerKind::Release]);
         assert!(app.world().resource::<OrzmaMouseGesture>().held.is_none());
+    }
+
+    /// Asserts that a release sharing a frame with the last cursor move
+    /// still delivers a motion to the new cell before the release, rather
+    /// than skipping straight to the release at that cell.
+    ///
+    /// Case: the user drags to another cell and lets go of the button
+    /// before the next frame samples the cursor, as a quick flick does.
+    #[test]
+    fn a_same_frame_move_and_release_sends_motion_then_release() {
+        let mut app = pointer_app();
+        let pane = spawn_pane(&mut app, 0.0, 800.0);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_button(&mut app, MouseButton::Left, ButtonState::Pressed);
+        app.update();
+        move_to(&mut app, Vec2::new(56.0, 48.0));
+        write_button(&mut app, MouseButton::Left, ButtonState::Released);
+        app.update();
+        let to_pane: Vec<(PointerKind, CellCoord)> = app
+            .world()
+            .resource::<Log>()
+            .pointers()
+            .iter()
+            .filter(|(entity, _)| *entity == pane)
+            .map(|(_, input)| (input.kind, input.cell))
+            .collect();
+        assert_eq!(
+            to_pane,
+            vec![
+                (PointerKind::Press, cell(6, 4)),
+                (PointerKind::Motion, cell(7, 4)),
+                (PointerKind::Release, cell(7, 4)),
+            ]
+        );
     }
 
     /// Asserts that the held pane vanishing resets the gesture without an

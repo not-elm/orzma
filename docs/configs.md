@@ -296,6 +296,12 @@ followed by `Ctrl+C` still copies. A copy chord that carries any other
 modifier — including the macOS `Cmd+C` default — always copies and never
 reaches the shell.
 
+While an application tracks the mouse (for example nvim with `mouse` set),
+clicks and drags go to the application instead of orzma's own selection;
+holding Shift while clicking or dragging makes them select and copy in
+orzma instead. A pane scrolled back into its history always selects in
+orzma too, whether or not Shift is held.
+
 Two stock `[vi-mode]` keys share a chord with these defaults. Inside vi mode
 `Ctrl+V` toggles a rectangular selection (the paste action is inert there
 anyway), and `Ctrl+C` leaves vi mode whenever there is no selection to copy.

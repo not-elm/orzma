@@ -1,6 +1,7 @@
-//! Shared mouse-dispatch plumbing for every `OrzmaTerminal` surface, gated
-//! per entity by `TerminalMouseDisabled` and `MouseClaimedByWebview` so dispatch runs
-//! only for a surface that still owns the mouse.
+//! Shared mouse-dispatch plumbing for every `OrzmaTerminal` surface: a
+//! `TerminalMouseDisabled` or `MouseClaimedByWebview` component blocks a new
+//! press and hover on that surface, but neither drops a gesture the surface
+//! already holds.
 
 use crate::action::terminal::TerminalOpenUri;
 use crate::input::InputPhase;

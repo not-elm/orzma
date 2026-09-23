@@ -58,17 +58,17 @@ pub enum PointerButton {
 pub(crate) enum PointerAction {
     /// A mouse report bound for the application.
     Report(MouseReport),
-    /// Drop the active selection.
+    /// Drops the active selection.
     SelectionClear,
-    /// Anchor a new selection at a 1-based viewport cell.
+    /// Anchors a new selection at a 1-based viewport cell.
     SelectionStart {
         cell: CellCoord,
         side: CellSide,
         kind: SelectionKind,
     },
-    /// Move the selection's moving end to a 1-based viewport cell.
+    /// Moves the selection's moving end to a 1-based viewport cell.
     SelectionExtend { cell: CellCoord, side: CellSide },
-    /// Hand the selected text to the clipboard.
+    /// Hands the selected text to the clipboard.
     Copy,
 }
 

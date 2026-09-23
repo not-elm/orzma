@@ -96,7 +96,9 @@ mod tests {
     /// Asserts that `TerminalSelectionClear` is forwarded as a
     /// `RequestTtySelectionClear` targeting the same entity.
     ///
-    /// Case: the user clicks elsewhere to dismiss an existing selection.
+    /// Case: the user presses Ctrl+C (Cmd+C on macOS) over a selection, the
+    /// keyboard copy path that reaches this request once the backend has
+    /// read the selected text.
     #[test]
     fn selection_clear_triggers_the_matching_request() {
         let mut app = App::new();
@@ -188,9 +190,8 @@ mod tests {
     /// Asserts that a non-dismissing copy asks for the text and leaves the
     /// selection in place.
     ///
-    /// Case: the user finishes a drag selection and lets go of the left
-    /// button, so orzma copies on release while the highlight stays up for a
-    /// following `Ctrl+C`.
+    /// Case: the user presses Ctrl+C (Cmd+C on macOS) over a selection, the
+    /// keyboard copy path that reaches this observer today.
     #[test]
     fn selection_copy_without_dismiss_keeps_the_selection() {
         #[derive(Resource, Default)]

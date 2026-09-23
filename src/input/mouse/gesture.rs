@@ -233,6 +233,11 @@ mod tests {
         );
     }
 
+    /// Asserts that a freshly initialized gesture resource holds no button
+    /// and no target, while its click tracker still counts a first click.
+    ///
+    /// Case: the plugin's resource has just been inserted at startup,
+    /// before the first mouse event of the session arrives.
     #[test]
     fn mouse_gesture_resource_default_is_idle() {
         let g = OrzmaMouseGesture::default();
