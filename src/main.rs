@@ -86,9 +86,7 @@ fn main() {
             OrzmaUiPlugin,
         ))
         .add_plugins((
-            OrzmaWebviewPlugin {
-                orzma_assets: orzma_registry,
-            },
+            OrzmaWebviewPlugin::new(orzma_registry, Waker::noop().clone()),
             WindowTitlePlugin,
         ))
         .insert_resource(OrzmuxConnection(orzmux))

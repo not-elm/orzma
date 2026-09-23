@@ -8,12 +8,13 @@ use crate::control_plane::TokenRegistry;
 use crate::control_plane::protocol::{ClientMsg, NavAction, RegisterKind, ServerMsg};
 use bevy::prelude::Entity;
 use bevy_orzma_webview_host::uds::{UnixListener, UnixStream};
-use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+use crossbeam_channel::{Receiver, SendError, Sender, bounded, unbounded};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::ops::ControlFlow;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+use std::task::Waker;
 
 /// An event the listener emits to the ECS apply system.
 pub(crate) enum ControlEvent {
@@ -123,18 +124,45 @@ pub(crate) enum ControlEvent {
     },
 }
 
+/// The listener threads' handle on the apply system's queue: every event
+/// it queues also wakes the app.
+#[derive(Clone)]
+struct ControlEventSender {
+    events: Sender<ControlEvent>,
+    waker: Waker,
+}
+
+impl ControlEventSender {
+    /// Queues `event`, then wakes the app.
+    ///
+    /// # Errors
+    ///
+    /// Returns the event when the apply side is gone; the app is not woken.
+    pub fn send(&self, event: ControlEvent) -> Result<(), SendError<ControlEvent>> {
+        self.events.send(event)?;
+        self.waker.wake_by_ref();
+        Ok(())
+    }
+}
+
 /// Binds `sock_path`, spawns the accept loop, and returns the receiver of
 /// `ControlEvent`s. The accept loop, per-connection readers, and per-connection
 /// writers run on detached threads (process-lifetime; the socket is removed
-/// when the runtime dir drops).
+/// when the runtime dir drops). Every queued event wakes the app through
+/// `waker`.
 pub(crate) fn spawn_listener(
     sock_path: &std::path::Path,
     tokens: TokenRegistry,
     writers: ConnectionWriters,
+    waker: Waker,
 ) -> std::io::Result<Receiver<ControlEvent>> {
     let _ = std::fs::remove_file(sock_path);
     let listener = UnixListener::bind(sock_path)?;
     let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+    let events = ControlEventSender {
+        events: ev_tx,
+        waker,
+    };
     let mut next_id: u64 = 1;
     std::thread::spawn(move || {
         for stream in listener.incoming() {
@@ -144,11 +172,11 @@ pub(crate) fn spawn_listener(
             }
             let connection_id = next_id;
             next_id += 1;
-            let ev_tx = ev_tx.clone();
+            let events = events.clone();
             let tokens = tokens.clone();
             let writers = writers.clone();
             std::thread::spawn(move || {
-                serve_connection(stream, connection_id, tokens, ev_tx, writers);
+                serve_connection(stream, connection_id, tokens, events, writers);
             });
         }
     });
@@ -222,7 +250,7 @@ fn serve_connection(
     stream: UnixStream,
     connection_id: u64,
     tokens: TokenRegistry,
-    events: Sender<ControlEvent>,
+    events: ControlEventSender,
     writers: ConnectionWriters,
 ) {
     let read_half = match stream.try_clone() {
@@ -304,7 +332,7 @@ fn handle_client_msg(
     msg: ClientMsg,
     connection_id: u64,
     owner_surface: Entity,
-    events: &Sender<ControlEvent>,
+    events: &ControlEventSender,
     out_tx: &Sender<String>,
 ) -> ControlFlow<()> {
     match msg {
@@ -433,7 +461,142 @@ mod tests {
     use super::*;
     use crate::control_plane::ConnectionWriters;
     use orzma_vt::prelude::InstanceId;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::task::{Wake, Waker};
     use std::time::{Duration, Instant};
+
+    /// Counts the wakes the listener sends the app.
+    #[derive(Default)]
+    struct WakeCount(AtomicUsize);
+
+    impl WakeCount {
+        fn get(&self) -> usize {
+            self.0.load(Ordering::Acquire)
+        }
+    }
+
+    impl Wake for WakeCount {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    /// Records, at each wake, how many events the apply side could receive.
+    struct QueueProbe {
+        events: Receiver<ControlEvent>,
+        queued: Mutex<Vec<usize>>,
+    }
+
+    impl Wake for QueueProbe {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.queued.lock().unwrap().push(self.events.len());
+        }
+    }
+
+    /// Waits up to two seconds for at least `count` wakes.
+    fn wait_for_wakes(wakes: &WakeCount, count: usize) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while wakes.get() < count {
+            assert!(
+                Instant::now() < deadline,
+                "fewer than {count} wakes within 2s"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Asserts that a queued event is already receivable when the app is
+    /// woken.
+    ///
+    /// Case: a reader thread forwards a `register` while the app sleeps.
+    #[test]
+    fn a_queued_event_is_receivable_when_the_app_wakes() {
+        let (ev_tx, ev_rx) = unbounded();
+        let probe = Arc::new(QueueProbe {
+            events: ev_rx,
+            queued: Mutex::default(),
+        });
+        let sender = ControlEventSender {
+            events: ev_tx,
+            waker: Waker::from(Arc::clone(&probe)),
+        };
+        sender
+            .send(ControlEvent::Disconnect { connection_id: 1 })
+            .unwrap();
+        assert_eq!(*probe.queued.lock().unwrap(), vec![1]);
+    }
+
+    /// Asserts that a send to a gone apply side fails without waking the
+    /// app.
+    ///
+    /// Case: a connection's reader thread outlives the app at shutdown.
+    #[test]
+    fn a_send_to_a_gone_apply_side_fails_without_waking() {
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        drop(ev_rx);
+        let wakes = Arc::new(WakeCount::default());
+        let sender = ControlEventSender {
+            events: ev_tx,
+            waker: Waker::from(Arc::clone(&wakes)),
+        };
+        assert!(
+            sender
+                .send(ControlEvent::Disconnect { connection_id: 1 })
+                .is_err()
+        );
+        assert_eq!(wakes.get(), 0);
+    }
+
+    /// Asserts that a request line and the connection's close each wake the
+    /// app once their events are queued.
+    ///
+    /// Case: orzma sits idle while a program connects, emits an event to its
+    /// page, and exits.
+    #[test]
+    fn a_request_line_and_the_disconnect_each_wake_the_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let tokens = TokenRegistry::default();
+        tokens.insert("tok", Entity::from_bits(1));
+        let wakes = Arc::new(WakeCount::default());
+        let events = spawn_listener(
+            &sock,
+            tokens,
+            ConnectionWriters::default(),
+            Waker::from(Arc::clone(&wakes)),
+        )
+        .unwrap();
+
+        let mut client = UnixStream::connect(&sock).unwrap();
+        writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
+        writeln!(
+            client,
+            r#"{{"op":"emit","handle":"H","event":"tick","payload":null}}"#
+        )
+        .unwrap();
+        client.flush().unwrap();
+        let emit = events
+            .recv_timeout(Duration::from_secs(2))
+            .expect("an Emit event");
+        assert!(matches!(emit, ControlEvent::Emit { .. }));
+        wait_for_wakes(&wakes, 1);
+
+        drop(client);
+        let disconnect = events
+            .recv_timeout(Duration::from_secs(2))
+            .expect("a Disconnect event");
+        assert!(matches!(disconnect, ControlEvent::Disconnect { .. }));
+        wait_for_wakes(&wakes, 2);
+    }
 
     #[test]
     fn hello_then_register_emits_a_register_event_and_replies() {
@@ -443,7 +606,13 @@ mod tests {
         let surface = Entity::from_bits(11);
         tokens.insert("tok", surface);
 
-        let events = spawn_listener(&sock, tokens, ConnectionWriters::default()).unwrap();
+        let events = spawn_listener(
+            &sock,
+            tokens,
+            ConnectionWriters::default(),
+            Waker::noop().clone(),
+        )
+        .unwrap();
 
         let mut client = UnixStream::connect(&sock).unwrap();
         writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
@@ -487,6 +656,7 @@ mod tests {
             &sock,
             TokenRegistry::default(),
             ConnectionWriters::default(),
+            Waker::noop().clone(),
         )
         .unwrap();
 
@@ -506,7 +676,13 @@ mod tests {
         let sock = dir.path().join("ctl.sock");
         let tokens = TokenRegistry::default();
         tokens.insert("tok", Entity::from_bits(1));
-        let events = spawn_listener(&sock, tokens, ConnectionWriters::default()).unwrap();
+        let events = spawn_listener(
+            &sock,
+            tokens,
+            ConnectionWriters::default(),
+            Waker::noop().clone(),
+        )
+        .unwrap();
 
         let mut client = UnixStream::connect(&sock).unwrap();
         writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
@@ -530,7 +706,13 @@ mod tests {
         let sock = dir.path().join("ctl.sock");
         let tokens = TokenRegistry::default();
         tokens.insert("tok", Entity::from_bits(1));
-        let events = spawn_listener(&sock, tokens, ConnectionWriters::default()).unwrap();
+        let events = spawn_listener(
+            &sock,
+            tokens,
+            ConnectionWriters::default(),
+            Waker::noop().clone(),
+        )
+        .unwrap();
 
         let mut client = UnixStream::connect(&sock).unwrap();
         writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
@@ -560,7 +742,13 @@ mod tests {
         let sock = dir.path().join("ctl.sock");
         let tokens = TokenRegistry::default();
         tokens.insert("tok", Entity::from_bits(1));
-        let events = spawn_listener(&sock, tokens, ConnectionWriters::default()).unwrap();
+        let events = spawn_listener(
+            &sock,
+            tokens,
+            ConnectionWriters::default(),
+            Waker::noop().clone(),
+        )
+        .unwrap();
 
         let mut client = UnixStream::connect(&sock).unwrap();
         writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
@@ -591,7 +779,13 @@ mod tests {
         let tokens = TokenRegistry::default();
         let surface = Entity::from_bits(7);
         tokens.insert("tok", surface);
-        let events = spawn_listener(&sock, tokens, ConnectionWriters::default()).unwrap();
+        let events = spawn_listener(
+            &sock,
+            tokens,
+            ConnectionWriters::default(),
+            Waker::noop().clone(),
+        )
+        .unwrap();
 
         let mut client = UnixStream::connect(&sock).unwrap();
         writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
@@ -627,7 +821,13 @@ mod tests {
         let tokens = TokenRegistry::default();
         let surface = Entity::from_bits(7);
         tokens.insert("tok", surface);
-        let events = spawn_listener(&sock, tokens, ConnectionWriters::default()).unwrap();
+        let events = spawn_listener(
+            &sock,
+            tokens,
+            ConnectionWriters::default(),
+            Waker::noop().clone(),
+        )
+        .unwrap();
 
         let mut client = UnixStream::connect(&sock).unwrap();
         writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
@@ -680,7 +880,8 @@ mod tests {
         let tokens = TokenRegistry::default();
         tokens.insert("tok", Entity::from_bits(1));
         let writers = ConnectionWriters::default();
-        let _events = spawn_listener(&sock, tokens, writers.clone()).unwrap();
+        let _events =
+            spawn_listener(&sock, tokens, writers.clone(), Waker::noop().clone()).unwrap();
 
         let mut client = UnixStream::connect(&sock).unwrap();
         writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
@@ -711,6 +912,10 @@ mod tests {
     #[test]
     fn navigate_msg_emits_navigate_event() {
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let events = ControlEventSender {
+            events: ev_tx,
+            waker: Waker::noop().clone(),
+        };
         let (out_tx, _out_rx) = unbounded::<String>();
         let surface = Entity::from_bits(1);
 
@@ -721,7 +926,7 @@ mod tests {
             },
             7,
             surface,
-            &ev_tx,
+            &events,
             &out_tx,
         );
 
@@ -761,6 +966,7 @@ mod tests {
             &sock,
             TokenRegistry::default(),
             ConnectionWriters::default(),
+            Waker::noop().clone(),
         )
         .unwrap();
         let sddl = security_descriptor_sddl(&sock).unwrap();
