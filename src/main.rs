@@ -10,12 +10,14 @@ mod session;
 mod surface;
 mod system_set;
 mod ui;
+mod window_icon;
 mod window_title;
 
 use crate::action::ActionPlugin;
 use crate::cef_profile::CefProfileDir;
 use crate::surface::SurfacePlugin;
 use crate::system_set::OrzmaSystems;
+use crate::window_icon::WindowIconPlugin;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 #[cfg(not(target_os = "macos"))]
@@ -86,6 +88,7 @@ fn main() {
                 orzma_assets: orzma_registry,
             },
             WindowTitlePlugin,
+            WindowIconPlugin,
         ))
         .insert_resource(OrzmuxConnection(orzmux))
         .configure_sets(

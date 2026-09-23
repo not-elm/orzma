@@ -12,7 +12,7 @@ The workspace root package is the one and only binary; library crates live under
 
 - `orzma` (workspace root, `src/main.rs`) — the single binary: a Bevy 0.19 app. `main()` builds one `App` and adds `DefaultPlugins` (configured with a `WindowPlugin` titled "orzma") plus `cef_plugin(orzma_registry.clone(), cef_profile.path())` (from `bevy_cef`), then the orzma plugins:
   - `SurfacePlugin`, `SessionPlugin`, `OrzmuxPlugin` (from `bevy_orzmux`), `TerminalRendererPlugin` (from `bevy_orzma_tty_renderer`), `ActionPlugin`, `OrzmaConfigsPlugin`, `FontBridgePlugin`, `OrzmaInputPlugin` (`input`'s root plugin, aggregating `ShortcutsPlugin`, `OptionAsAltPlugin`, `KeyboardInputPlugin`, `MouseInputPlugin`, `FocusSyncPlugin`, `ImePlugin`, and `HyperlinkInputPlugin`), `OrzmaUiPlugin` (`ui`'s root plugin, aggregating the UI root, the shell-surface subtree, the IME overlay, and the vi-mode indicator);
-  - `OrzmaWebviewPlugin` (from `bevy_orzma_webview`), `WindowTitlePlugin`.
+  - `OrzmaWebviewPlugin` (from `bevy_orzma_webview`), `WindowTitlePlugin`, `WindowIconPlugin` (Windows-only: applies the icon `build.rs` embeds in the executable from `build/windows/orzma.ico` to the title bar and taskbar).
   - The in-process webview feature — CEF render wiring, the control-socket listener, the `window.orzma` back-channel, the APC and control-socket `mount` / `unmount` verbs, and webviews — is aggregated under `OrzmaWebviewPlugin` (from `crates/bevy_orzma_webview`).
 
   The root `Cargo.toml` depends on `bevy_orzma_webview` (path dep) and on `bevy_cef` (crates.io, `0.13`). A root `[features] debug` flag (forwarded through `bevy_orzma_webview/debug` to `bevy_cef/debug`) enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded webview; it is off by default (`cargo run --features debug`).
@@ -46,7 +46,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (crate
 
 ### `src/` module map
 
-`src/main.rs` plus: `action`, `cef_profile`, `configs`, `font`, `input`, `session`, `surface`, `system_set`, `ui`, `window_title`.
+`src/main.rs` plus: `action`, `cef_profile`, `configs`, `font`, `input`, `session`, `surface`, `system_set`, `ui`, `window_icon`, `window_title`.
 
 ## Commands
 
