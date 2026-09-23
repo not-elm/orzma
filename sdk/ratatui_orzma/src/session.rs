@@ -311,14 +311,12 @@ impl Orzma {
         let events: EventRegistry = Arc::new(Mutex::new(HashMap::new()));
         let (reconnect_tx, reconnect_rx) = crossbeam_channel::bounded::<()>(1);
 
-        {
-            let line = serde_json::to_string(&ClientMsg::Hello {
+        write_msg(
+            &writer,
+            &ClientMsg::Hello {
                 token: token.clone(),
-            })?;
-            let mut w = writer.lock()?;
-            writeln!(w, "{line}")?;
-            w.flush()?;
-        }
+            },
+        )?;
 
         spawn_reader(
             stream,

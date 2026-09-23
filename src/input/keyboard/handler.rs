@@ -570,7 +570,7 @@ mod tests {
     }
 
     /// Asserts that a chord the focused webview declared in `forward_keys`
-    /// is fanned out as a `WebviewForward` message and withheld from the page
+    /// is fanned out as a `Type` effect and withheld from the page
     /// through the CEF filter.
     ///
     /// Case: a TUI browser registers `j` as a forward key, the user clicks the
@@ -596,7 +596,7 @@ mod tests {
         let cap = app.world().resource::<Captured>();
         assert_eq!(
             cap.effects,
-            vec![KeyEffect::WebviewForward {
+            vec![KeyEffect::Type {
                 logical: Key::Character("j".into()),
                 key_code: KeyCode::KeyJ,
             }],

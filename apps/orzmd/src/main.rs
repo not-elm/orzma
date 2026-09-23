@@ -194,6 +194,13 @@ impl Session {
         }
         let _ = view.emit("content", &content);
     }
+
+    /// Applies the focus changes the host reported since the last call.
+    fn apply_focus_changes(&mut self, view: &WebviewHandle) {
+        for change in view.read_focus_changes() {
+            self.state.on_focus_change(change.focused);
+        }
+    }
 }
 
 fn file_name_of(path: &Path) -> String {
@@ -325,9 +332,7 @@ fn event_loop(
         .state
         .set_outline(shared.lock().unwrap().outline.clone());
     loop {
-        for change in view.read_focus_changes() {
-            session.state.on_focus_change(change.focused);
-        }
+        session.apply_focus_changes(view);
         for c in view.read_events::<SearchCount>() {
             session.search_status = Some(c);
         }
@@ -379,9 +384,7 @@ fn event_loop(
         if event::poll(Duration::from_millis(33))?
             && let Event::Key(key) = event::read()?
         {
-            for change in view.read_focus_changes() {
-                session.state.on_focus_change(change.focused);
-            }
+            session.apply_focus_changes(view);
             let action = keymap::map(session.state.mode(), key);
             for cmd in session.state.on_action(action) {
                 match cmd {

@@ -51,17 +51,14 @@ impl FocusRoute {
     /// Queues a `focus_changed` push carrying `focused` to the owning
     /// connection.
     fn send(&self, writers: &ConnectionWriters, focused: bool) {
-        let msg = PushMsg::FocusChanged {
-            handle: self.handle.clone(),
-            instance: self.instance.to_string(),
-            focused,
-        };
-        match serde_json::to_string(&msg) {
-            Ok(line) => {
-                writers.send(self.connection_id, line);
-            }
-            Err(e) => tracing::warn!(error = %e, "focus_changed push failed to serialize"),
-        }
+        writers.push(
+            self.connection_id,
+            &PushMsg::FocusChanged {
+                handle: self.handle.clone(),
+                instance: self.instance.to_string(),
+                focused,
+            },
+        );
     }
 }
 

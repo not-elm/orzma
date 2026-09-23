@@ -115,6 +115,17 @@ pub(crate) enum KeySet {
     Insert,
 }
 
+impl KeySet {
+    /// The forward-key set the page carries while the app is in `mode`.
+    pub(crate) fn of(mode: Mode) -> Self {
+        if mode == Mode::Insert {
+            Self::Insert
+        } else {
+            Self::Normal
+        }
+    }
+}
+
 /// The chords passed through to the TUI while the page holds keyboard focus.
 ///
 /// Ctrl+C is in neither list, so while the page is focused it copies the

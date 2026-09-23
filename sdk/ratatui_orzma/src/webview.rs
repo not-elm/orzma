@@ -272,11 +272,7 @@ impl WebviewHandle {
             event: event.to_owned(),
             payload: serde_json::to_value(payload)?,
         };
-        let line = serde_json::to_string(&msg)?;
-        let mut w = self.writer.lock()?;
-        writeln!(w, "{line}")?;
-        w.flush()?;
-        Ok(())
+        write_msg(&self.writer, &msg)
     }
 
     /// Navigates this registration's default placement to `url` in place (no
@@ -466,12 +462,7 @@ pub(crate) fn send_focus(writer: &SharedWriter, instance: Option<String>) -> Orz
 
 /// Writes one `navigate` op addressed to `instance`.
 fn send_nav(writer: &SharedWriter, instance: String, action: NavAction) -> OrzmaResult<()> {
-    let msg = ClientMsg::Navigate { instance, action };
-    let line = serde_json::to_string(&msg)?;
-    let mut w = writer.lock()?;
-    writeln!(w, "{line}")?;
-    w.flush()?;
-    Ok(())
+    write_msg(writer, &ClientMsg::Navigate { instance, action })
 }
 
 #[cfg(test)]

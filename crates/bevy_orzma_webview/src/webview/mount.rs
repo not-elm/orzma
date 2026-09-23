@@ -585,13 +585,14 @@ fn project_webview_overlays(
                 if !already_notified {
                     commands.entity(child).insert(CompositeNotified);
                     if let Some(owner) = owner {
-                        let msg = serde_json::to_string(&PushMsg::Compositing {
-                            handle: owner.handle.clone(),
-                            instance: owner.instance.to_string(),
-                            active: true,
-                        })
-                        .expect("PushMsg serializes infallibly");
-                        writers.send(owner.connection_id, msg);
+                        writers.push(
+                            owner.connection_id,
+                            &PushMsg::Compositing {
+                                handle: owner.handle.clone(),
+                                instance: owner.instance.to_string(),
+                                active: true,
+                            },
+                        );
                     }
                 }
             }
@@ -617,13 +618,14 @@ fn on_webview_removed(
     if !notified {
         return;
     }
-    let msg = serde_json::to_string(&PushMsg::Compositing {
-        handle: owner.handle.clone(),
-        instance: owner.instance.to_string(),
-        active: false,
-    })
-    .expect("PushMsg serializes infallibly");
-    writers.send(owner.connection_id, msg);
+    writers.push(
+        owner.connection_id,
+        &PushMsg::Compositing {
+            handle: owner.handle.clone(),
+            instance: owner.instance.to_string(),
+            active: false,
+        },
+    );
 }
 
 #[cfg(test)]

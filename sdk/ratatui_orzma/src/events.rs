@@ -14,6 +14,9 @@ const DEFAULT_CAP: usize = 1024;
 /// Minimum interval between overflow warnings for a single saturated ring.
 const WARN_EVERY: Duration = Duration::from_secs(5);
 
+/// The ring name the overflow warning carries for focus changes.
+const FOCUS_RING: &str = "focus_changed";
+
 /// A change of webview focus the host reported for one placement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FocusChange {
@@ -31,42 +34,57 @@ pub(crate) struct EventDecl {
     pub(crate) type_id: TypeId,
 }
 
-/// One bounded ring of raw payloads plus throttled-overflow bookkeeping.
-#[derive(Default, Debug)]
-struct RingBuf {
-    buf: VecDeque<Value>,
+/// One bounded ring plus throttled-overflow bookkeeping.
+#[derive(Debug)]
+struct RingBuf<T> {
+    buf: VecDeque<T>,
     dropped: u64,
     last_warn: Option<Instant>,
 }
 
-type Ring = Arc<Mutex<RingBuf>>;
+impl<T> Default for RingBuf<T> {
+    fn default() -> Self {
+        Self {
+            buf: VecDeque::new(),
+            dropped: 0,
+            last_warn: None,
+        }
+    }
+}
+
+impl<T> RingBuf<T> {
+    /// Appends `item`, dropping the oldest one first when `cap` is reached,
+    /// with a warning naming `ring` at most once per `WARN_EVERY`.
+    fn push(&mut self, item: T, cap: usize, ring: &str) {
+        if self.buf.len() >= cap {
+            self.buf.pop_front();
+            self.dropped += 1;
+            if self.last_warn.is_none_or(|t| t.elapsed() >= WARN_EVERY) {
+                tracing::warn!(
+                    ring,
+                    dropped = self.dropped,
+                    "inbound ring saturated; dropping oldest"
+                );
+                self.last_warn = Some(Instant::now());
+            }
+        }
+        self.buf.push_back(item);
+    }
+
+    /// Takes every buffered item, oldest first.
+    fn drain(&mut self) -> Vec<T> {
+        Vec::from(mem::take(&mut self.buf))
+    }
+}
+
+type Ring = Arc<Mutex<RingBuf<Value>>>;
 
 /// The focus changes buffered for one handle, plus the placement last
 /// reported focused.
 #[derive(Default, Debug)]
 struct FocusRing {
-    changes: VecDeque<FocusChange>,
+    changes: RingBuf<FocusChange>,
     focused: Option<String>,
-    dropped: u64,
-    last_warn: Option<Instant>,
-}
-
-impl FocusRing {
-    /// Appends `change`, dropping the oldest one first when `cap` is reached.
-    fn push(&mut self, change: FocusChange, cap: usize) {
-        if self.changes.len() >= cap {
-            self.changes.pop_front();
-            self.dropped += 1;
-            if self.last_warn.is_none_or(|t| t.elapsed() >= WARN_EVERY) {
-                tracing::warn!(
-                    dropped = self.dropped,
-                    "focus change ring saturated; dropping oldest"
-                );
-                self.last_warn = Some(Instant::now());
-            }
-        }
-        self.changes.push_back(change);
-    }
 }
 
 /// The per-handle set of inbound event rings, declared at `register` and shared
@@ -101,20 +119,9 @@ impl EventQueues {
         let Some(ring) = self.by_name.get(name) else {
             return false;
         };
-        let mut ring = ring.lock().unwrap_or_else(|e| e.into_inner());
-        if ring.buf.len() >= self.cap {
-            ring.buf.pop_front();
-            ring.dropped += 1;
-            if ring.last_warn.is_none_or(|t| t.elapsed() >= WARN_EVERY) {
-                tracing::warn!(
-                    event = name,
-                    dropped = ring.dropped,
-                    "inbound event ring saturated; dropping oldest"
-                );
-                ring.last_warn = Some(Instant::now());
-            }
-        }
-        ring.buf.push_back(payload);
+        ring.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(payload, self.cap, name);
         true
     }
 
@@ -126,8 +133,7 @@ impl EventQueues {
         let Some(ring) = self.by_type.get(&type_id) else {
             return Vec::new();
         };
-        let mut ring = ring.lock().unwrap_or_else(|e| e.into_inner());
-        Vec::from(mem::take(&mut ring.buf))
+        ring.lock().unwrap_or_else(|e| e.into_inner()).drain()
     }
 
     /// Buffers a `focus_changed` push for `instance`.
@@ -138,13 +144,17 @@ impl EventQueues {
         } else if ring.focused.as_deref() == Some(instance.as_str()) {
             ring.focused = None;
         }
-        ring.push(FocusChange { instance, focused }, self.cap);
+        ring.changes
+            .push(FocusChange { instance, focused }, self.cap, FOCUS_RING);
     }
 
     /// Drains every buffered focus change, oldest first.
     pub fn drain_focus(&self) -> Vec<FocusChange> {
-        let mut ring = self.focus.lock().unwrap_or_else(|e| e.into_inner());
-        Vec::from(mem::take(&mut ring.changes))
+        self.focus
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .changes
+            .drain()
     }
 
     /// Buffers `focused: false` for the placement last reported focused, if
@@ -152,12 +162,13 @@ impl EventQueues {
     pub fn blur_all(&self) {
         let mut ring = self.focus.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(instance) = ring.focused.take() {
-            ring.push(
+            ring.changes.push(
                 FocusChange {
                     instance,
                     focused: false,
                 },
                 self.cap,
+                FOCUS_RING,
             );
         }
     }

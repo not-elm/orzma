@@ -30,15 +30,10 @@ pub(crate) enum KeyEffect {
     /// Run a matched `[vi-mode]` key.
     ViMode(ViModeAction),
     /// Type the key into the focused terminal's PTY directly.
+    ///
+    /// A chord the focused webview declared in its `forward_keys` is typed
+    /// this way, and the page does not receive it.
     Type {
-        /// The logical key, for text/printable-key mapping.
-        logical: Key,
-        /// The physical key, for named-key mapping.
-        key_code: KeyCode,
-    },
-    /// Write the key to the pane's PTY because the focused webview declared
-    /// the chord in its `forward_keys`. The page does not receive the chord.
-    WebviewForward {
         /// The logical key, for text/printable-key mapping.
         logical: Key,
         /// The physical key, for named-key mapping.
@@ -156,7 +151,7 @@ pub(crate) fn classify_key_batch<'a>(
                         .any(|chord| chord_matches(chord, ev.key_code, &ev.logical_key, ctx.mods))
                     {
                         webview_suppressed.push(ev.key_code);
-                        effects.push(KeyEffect::WebviewForward {
+                        effects.push(KeyEffect::Type {
                             logical: ev.logical_key.clone(),
                             key_code: ev.key_code,
                         });
@@ -1204,7 +1199,7 @@ mod tests {
             );
             assert_eq!(
                 out.effects,
-                vec![KeyEffect::WebviewForward {
+                vec![KeyEffect::Type {
                     logical: Key::Character("?".into()),
                     key_code,
                 }],
@@ -1270,7 +1265,7 @@ mod tests {
         );
         assert_eq!(
             out.effects,
-            vec![KeyEffect::WebviewForward {
+            vec![KeyEffect::Type {
                 logical: Key::Character("G".into()),
                 key_code: KeyCode::KeyG,
             }]
@@ -1304,7 +1299,7 @@ mod tests {
         );
         assert_eq!(
             out.effects,
-            vec![KeyEffect::WebviewForward {
+            vec![KeyEffect::Type {
                 logical: Key::Character("k".into()),
                 key_code: KeyCode::KeyK,
             }]

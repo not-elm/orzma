@@ -65,6 +65,7 @@ pub(crate) struct App {
     address_buf: String,
     page_focused: bool,
     refocus_after_text_mode: bool,
+    key_set: KeySet,
 }
 
 impl App {
@@ -77,6 +78,7 @@ impl App {
             address_buf: String::new(),
             page_focused: false,
             refocus_after_text_mode: false,
+            key_set: KeySet::Normal,
         }
     }
 
@@ -104,7 +106,7 @@ impl App {
             return self.resolve_chord(c);
         }
 
-        match action {
+        let cmds = match action {
             Action::Prefix(c) => {
                 self.pending_prefix = Some(c);
                 vec![]
@@ -122,9 +124,7 @@ impl App {
             Action::HistoryForward => vec![Cmd::HistoryForward],
             Action::OpenAddress => {
                 self.address_buf = self.url.clone();
-                self.mode = Mode::Address;
-                self.refocus_after_text_mode = self.page_focused;
-                vec![Cmd::Blur]
+                vec![self.enter_text_mode(Mode::Address)]
             }
             Action::AddressChar(c) => {
                 self.address_buf.push(c);
@@ -158,29 +158,22 @@ impl App {
                         cmds.extend(self.take_refocus());
                         cmds
                     }
-                    Mode::Insert => vec![Cmd::SetForwardKeys(KeySet::Normal), Cmd::Blur],
+                    Mode::Insert => vec![Cmd::Blur],
                     Mode::Address | Mode::Help => self.take_refocus().into_iter().collect(),
                     _ => vec![],
                 }
             }
             Action::EnterInsert => {
                 self.mode = Mode::Insert;
-                vec![Cmd::SetForwardKeys(KeySet::Insert), Cmd::Focus]
+                vec![Cmd::Focus]
             }
-            Action::EnterHint => {
-                self.mode = Mode::Hint;
-                self.refocus_after_text_mode = self.page_focused;
-                vec![Cmd::HintShow, Cmd::Blur]
-            }
+            Action::EnterHint => vec![Cmd::HintShow, self.enter_text_mode(Mode::Hint)],
             Action::HintKey(c) => vec![Cmd::HintKey(c)],
             Action::HintBackspace => vec![Cmd::HintBackspace],
-            Action::OpenHelp => {
-                self.mode = Mode::Help;
-                self.refocus_after_text_mode = self.page_focused;
-                vec![Cmd::Blur]
-            }
+            Action::OpenHelp => vec![self.enter_text_mode(Mode::Help)],
             Action::Ignore => vec![],
-        }
+        };
+        self.with_key_set(cmds)
     }
 
     /// Records a page-driven URL change reported via `urlChanged` (CEF owns the
@@ -199,14 +192,15 @@ impl App {
         if self.mode != Mode::Hint {
             return vec![];
         }
-        if kind == "focusedInput" {
+        let cmds = if kind == "focusedInput" {
             self.mode = Mode::Insert;
             self.refocus_after_text_mode = false;
-            vec![Cmd::SetForwardKeys(KeySet::Insert), Cmd::Focus]
+            vec![Cmd::Focus]
         } else {
             self.mode = Mode::Normal;
             self.take_refocus().into_iter().collect()
-        }
+        };
+        self.with_key_set(cmds)
     }
 
     // TODO: a click that focuses a text input on the page leaves the app in
@@ -219,7 +213,7 @@ impl App {
     /// with the Normal keys.
     pub(crate) fn on_focus_change(&mut self, focused: bool) -> Vec<Cmd> {
         self.page_focused = focused;
-        match (self.mode, focused) {
+        let cmds = match (self.mode, focused) {
             (Mode::Address | Mode::Help, true) => {
                 self.mode = Mode::Normal;
                 self.address_buf.clear();
@@ -233,10 +227,11 @@ impl App {
             }
             (Mode::Insert, false) => {
                 self.mode = Mode::Normal;
-                vec![Cmd::SetForwardKeys(KeySet::Normal)]
+                vec![]
             }
             _ => vec![],
-        }
+        };
+        self.with_key_set(cmds)
     }
 
     fn resolve_chord(&mut self, c: char) -> Vec<Cmd> {
@@ -246,10 +241,30 @@ impl App {
         }
     }
 
+    /// Enters the TUI text mode `mode`, remembering whether the page held
+    /// focus so that leaving it can give focus back, and returns the `Blur`
+    /// that takes the keyboard from the page.
+    fn enter_text_mode(&mut self, mode: Mode) -> Cmd {
+        self.mode = mode;
+        self.refocus_after_text_mode = self.page_focused;
+        Cmd::Blur
+    }
+
     /// `Focus` when the page held focus when the text mode began, clearing
     /// the flag.
     fn take_refocus(&mut self) -> Option<Cmd> {
         mem::take(&mut self.refocus_after_text_mode).then_some(Cmd::Focus)
+    }
+
+    /// Puts `SetForwardKeys` first in `cmds` when the current mode needs a
+    /// different forward-key set than the page carries.
+    fn with_key_set(&mut self, mut cmds: Vec<Cmd>) -> Vec<Cmd> {
+        let wanted = KeySet::of(self.mode);
+        if wanted != self.key_set {
+            self.key_set = wanted;
+            cmds.insert(0, Cmd::SetForwardKeys(wanted));
+        }
+        cmds
     }
 }
 

@@ -344,6 +344,13 @@ impl OrzmaRegistry {
         Some((id, view))
     }
 
+    /// Resolves `handle` to its registration when `connection_id` owns it;
+    /// `None` when the handle is unknown or another connection owns it.
+    pub fn owned_handle(&self, connection_id: u64, handle: &HandleId) -> Option<&OrzmaView> {
+        self.get(handle)
+            .filter(|view| view.connection_id == connection_id)
+    }
+
     /// Inserts a registration with no instances yet.
     ///
     /// The caller mints its first instance with [`Self::mint_instance`]
@@ -547,6 +554,18 @@ impl ConnectionWriters {
             .get(&connection_id)
             .map(|tx| tx.send(line).is_ok())
             .unwrap_or(false)
+    }
+
+    /// Queues `msg` to `connection_id` as one NDJSON line; returns false if the
+    /// connection is gone, its writer has exited, or `msg` failed to serialize.
+    pub fn push(&self, connection_id: u64, msg: &PushMsg) -> bool {
+        match serde_json::to_string(msg) {
+            Ok(line) => self.send(connection_id, line),
+            Err(e) => {
+                tracing::warn!(error = %e, "push message failed to serialize");
+                false
+            }
+        }
     }
 }
 
@@ -930,10 +949,7 @@ fn on_new_instance(
     reply: &Sender<ServerMsg>,
 ) {
     let handle = HandleId::from(handle);
-    let owned = registry
-        .get(&handle)
-        .is_some_and(|v| v.connection_id == connection_id);
-    if !owned {
+    if registry.owned_handle(connection_id, &handle).is_none() {
         let code = if registry.get(&handle).is_some() {
             "not_owner"
         } else {
@@ -964,15 +980,13 @@ fn on_unregister(
     handle: &str,
 ) {
     let handle = HandleId::from(handle);
-    let removed: Vec<RemovedRegistration> = if registry
-        .get(&handle)
-        .is_some_and(|v| v.connection_id == connection_id)
-    {
-        orzma_assets.0.remove(handle.as_str());
-        registry.remove(&handle).into_iter().collect()
-    } else {
-        vec![]
-    };
+    let removed: Vec<RemovedRegistration> =
+        if registry.owned_handle(connection_id, &handle).is_some() {
+            orzma_assets.0.remove(handle.as_str());
+            registry.remove(&handle).into_iter().collect()
+        } else {
+            vec![]
+        };
     release_registrations(commands, webviews, &removed);
 }
 
@@ -1041,8 +1055,8 @@ fn on_emit(
 ) {
     let handle = HandleId::from(handle);
     let deliver = registry
-        .get(&handle)
-        .is_some_and(|v| v.connection_id == connection_id && v.source.is_bridged());
+        .owned_handle(connection_id, &handle)
+        .is_some_and(|v| v.source.is_bridged());
     if !deliver {
         return;
     }
@@ -1065,10 +1079,7 @@ fn on_set_forward_keys(
     handle: &HandleId,
     keys: &[HostKeyChord],
 ) {
-    let owned = registry
-        .get(handle)
-        .is_some_and(|view| view.connection_id == connection_id);
-    if !owned {
+    if registry.owned_handle(connection_id, handle).is_none() {
         tracing::debug!(%handle, "set_forward_keys for an unowned or unknown handle, dropping");
         return;
     }
