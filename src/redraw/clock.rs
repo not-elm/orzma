@@ -23,9 +23,8 @@ mod tests {
     /// Asserts that finishing the app removes the render world's time
     /// channel.
     ///
-    /// Case: orzma starts with the render plugin, which installs the channel
-    /// that would hand `Time<Real>` a pre-idle instant after each idle
-    /// stretch.
+    /// Case: orzma starts with the render plugin, which installs the render
+    /// world's time channel.
     #[test]
     fn finishing_the_app_removes_the_render_time_channel() {
         let mut app = App::new();

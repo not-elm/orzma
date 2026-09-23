@@ -124,27 +124,6 @@ pub(crate) enum ControlEvent {
     },
 }
 
-/// The listener threads' handle on the apply system's queue: every event
-/// it queues also wakes the app.
-#[derive(Clone)]
-struct ControlEventSender {
-    events: Sender<ControlEvent>,
-    waker: Waker,
-}
-
-impl ControlEventSender {
-    /// Queues `event`, then wakes the app.
-    ///
-    /// # Errors
-    ///
-    /// Returns the event when the apply side is gone; the app is not woken.
-    pub fn send(&self, event: ControlEvent) -> Result<(), SendError<ControlEvent>> {
-        self.events.send(event)?;
-        self.waker.wake_by_ref();
-        Ok(())
-    }
-}
-
 /// Binds `sock_path`, spawns the accept loop, and returns the receiver of
 /// `ControlEvent`s. The accept loop, per-connection readers, and per-connection
 /// writers run on detached threads (process-lifetime; the socket is removed
@@ -181,6 +160,27 @@ pub(crate) fn spawn_listener(
         }
     });
     Ok(ev_rx)
+}
+
+/// The listener threads' handle on the apply system's queue: every event
+/// it queues also wakes the app.
+#[derive(Clone)]
+struct ControlEventSender {
+    events: Sender<ControlEvent>,
+    waker: Waker,
+}
+
+impl ControlEventSender {
+    /// Queues `event`, then wakes the app.
+    ///
+    /// # Errors
+    ///
+    /// Returns the event when the apply side is gone; the app is not woken.
+    pub fn send(&self, event: ControlEvent) -> Result<(), SendError<ControlEvent>> {
+        self.events.send(event)?;
+        self.waker.wake_by_ref();
+        Ok(())
+    }
 }
 
 /// Whether a freshly accepted connection may proceed to the handshake.

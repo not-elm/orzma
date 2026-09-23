@@ -119,15 +119,6 @@ mod tests {
         }
     }
 
-    fn inactive() -> PaneInactiveStyle {
-        PaneInactiveStyle {
-            dim: 0.6,
-            tint: Vec4::ZERO,
-            overlay_dim: 1.0,
-            overlay_desaturate: 0.0,
-        }
-    }
-
     fn next_flip(app: &App) -> Option<Duration> {
         app.world().resource::<NextCaretFlip>().at()
     }
@@ -157,7 +148,9 @@ mod tests {
         assert_eq!(next_flip(&unfocused), None);
 
         let mut split = app(true);
-        split.world_mut().spawn((terminal(true), inactive()));
+        split
+            .world_mut()
+            .spawn((terminal(true), PaneInactiveStyle::default()));
         split.update();
         assert_eq!(next_flip(&split), None);
     }
