@@ -27,12 +27,14 @@ pub struct ProtocolModifiers {
 ///
 /// Wheel variants are press-shaped: they carry button codes 64..=67,
 /// and a wheel report uses [`MouseReportKind::Press`], never a release
-/// or a drag.
+/// or a motion. [`Self::None`] is the button of a
+/// [`MouseReportKind::Motion`] report sent while no button is held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseButton {
     Left,
     Middle,
     Right,
+    None,
     WheelUp,
     WheelDown,
     WheelLeft,
@@ -46,6 +48,7 @@ impl MouseButton {
             Self::Left => 0,
             Self::Middle => 1,
             Self::Right => 2,
+            Self::None => 3,
             Self::WheelUp => 64,
             Self::WheelDown => 65,
             Self::WheelLeft => 66,
@@ -54,12 +57,13 @@ impl MouseButton {
     }
 }
 
-/// What produced the report. `Drag` is "motion while the button is
-/// held" and is the only kind that sets the +32 motion bit.
+/// What produced the report. `Motion` is "the pointer moved to another
+/// cell", with or without a button held, and is the only kind that sets
+/// the +32 motion bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseReportKind {
     Press,
-    Drag,
+    Motion,
     Release,
 }
 
@@ -121,7 +125,7 @@ impl MouseReport {
 
     fn cb_bits(&self, base: u32) -> u32 {
         let mut cb = base;
-        if matches!(self.kind, MouseReportKind::Drag) {
+        if matches!(self.kind, MouseReportKind::Motion) {
             cb += 32;
         }
         if self.mods.shift {
@@ -156,10 +160,31 @@ mod tests {
         assert_eq!(r.encode(MouseEncoding::Sgr), b"\x1b[<0;5;7M");
     }
 
+    /// Asserts that a motion report sets the +32 motion bit on its
+    /// button code.
+    ///
+    /// Case: the user drags with the left button held over nvim, which
+    /// turned on button-event tracking.
     #[test]
-    fn sgr_left_drag_sets_motion_bit() {
-        let r = report(MouseButton::Left, MouseReportKind::Drag, 1, 1);
+    fn sgr_left_motion_sets_motion_bit() {
+        let r = report(MouseButton::Left, MouseReportKind::Motion, 1, 1);
         assert_eq!(r.encode(MouseEncoding::Sgr), b"\x1b[<32;1;1M");
+    }
+
+    /// Asserts that motion with no button held encodes as button code 3
+    /// plus the motion bit, 35, in both SGR and X10 framing.
+    ///
+    /// Case: nvim runs with `mousemoveevent` set, which turns on
+    /// any-event tracking, and the user moves the pointer over its window
+    /// with no button held.
+    #[test]
+    fn buttonless_motion_encodes_as_code_35() {
+        let r = report(MouseButton::None, MouseReportKind::Motion, 4, 2);
+        assert_eq!(r.encode(MouseEncoding::Sgr), b"\x1b[<35;4;2M");
+        assert_eq!(
+            r.encode(MouseEncoding::X10),
+            vec![0x1b, b'[', b'M', 35 + 32, 4 + 32, 2 + 32]
+        );
     }
 
     #[test]

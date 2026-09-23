@@ -130,7 +130,7 @@ impl LocalButtonAction {
                     },
                 }
             }
-            (MouseReportKind::Drag, MouseButtonKind::Left) => Self::UpdateLocalSelection {
+            (MouseReportKind::Motion, MouseButtonKind::Left) => Self::UpdateLocalSelection {
                 cell: evt.cell,
                 side: evt.side,
             },
@@ -480,7 +480,7 @@ fn synthesize_drag(
         return None;
     }
     let evt = ButtonEvent {
-        kind: MouseReportKind::Drag,
+        kind: MouseReportKind::Motion,
         button: held.button,
         cell,
         side,
@@ -870,7 +870,7 @@ mod tests {
         );
         let fx = decide_button(
             &mut g,
-            ev(MouseReportKind::Drag, 7, 5, 1),
+            ev(MouseReportKind::Motion, 7, 5, 1),
             ProtocolModifiers::default(),
             false,
             None,
@@ -891,7 +891,7 @@ mod tests {
         );
         let fx2 = decide_button(
             &mut g,
-            ev(MouseReportKind::Drag, 9, 5, 1),
+            ev(MouseReportKind::Motion, 9, 5, 1),
             ProtocolModifiers::default(),
             false,
             None,
@@ -921,7 +921,7 @@ mod tests {
         );
         decide_button(
             &mut g,
-            ev(MouseReportKind::Drag, 7, 5, 1),
+            ev(MouseReportKind::Motion, 7, 5, 1),
             ProtocolModifiers::default(),
             false,
             None,
