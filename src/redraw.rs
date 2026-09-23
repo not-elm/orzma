@@ -3,16 +3,18 @@
 
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
+use caret_wake::CaretWakePlugin;
 use clock::LiveClockPlugin;
 use follow_up::FollowUpPlugin;
 pub(crate) use wake::AppWakers;
 
+mod caret_wake;
 mod clock;
 mod follow_up;
 mod wake;
 
 /// Runs the app's updates on demand: requests one follow-up frame after
-/// outside input.
+/// outside input and wakes the app for the caret blink.
 pub(crate) struct RedrawPlugin {
     wakers: AppWakers,
 }
@@ -29,6 +31,7 @@ impl Plugin for RedrawPlugin {
         app.add_plugins((
             LiveClockPlugin,
             FollowUpPlugin::new(self.wakers.gate().clone()),
+            CaretWakePlugin::new(self.wakers.timer().clone()),
         ))
         .add_systems(Last, trace_update);
     }

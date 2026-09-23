@@ -9,6 +9,7 @@ use std::task::{Wake, Waker};
 /// The app's wake handles, built once on the winit event loop.
 pub(crate) struct AppWakers {
     input: Waker,
+    timer: Waker,
     gate: WakeGate,
 }
 
@@ -20,10 +21,11 @@ impl AppWakers {
         let proxy: EventLoopProxy<WinitUserEvent> = (**wrapper).clone();
         let gate = WakeGate(Arc::new(AtomicBool::new(false)));
         let input = Waker::from(Arc::new(ProxyWake {
-            proxy,
+            proxy: proxy.clone(),
             gate: Some(gate.clone()),
         }));
-        Some(Self { input, gate })
+        let timer = Waker::from(Arc::new(ProxyWake { proxy, gate: None }));
+        Some(Self { input, timer, gate })
     }
 
     /// The waker for outside input.
@@ -33,6 +35,14 @@ impl AppWakers {
     /// runs gets a follow-up frame.
     pub fn input(&self) -> &Waker {
         &self.input
+    }
+
+    /// The waker for scheduled repaints.
+    ///
+    /// Its wakes are never coalesced, and the update such a wake runs gets
+    /// no follow-up frame.
+    pub fn timer(&self) -> &Waker {
+        &self.timer
     }
 
     /// The pending-wake flag the input waker sets.
