@@ -570,8 +570,8 @@ mod tests {
     }
 
     /// Asserts that a chord the focused webview declared in `forward_keys`
-    /// is fanned out as a `WebviewForward` message rather than dropped during
-    /// resolution, and is left out of the CEF filter so the page sees it too.
+    /// is fanned out as a `WebviewForward` message and withheld from the page
+    /// through the CEF filter.
     ///
     /// Case: a TUI browser registers `j` as a forward key, the user clicks the
     /// page to give it keyboard focus, and then presses `j` so the app's own
@@ -603,12 +603,12 @@ mod tests {
             "a declared forward chord must reach the applier as a KeyEffectMessage"
         );
         assert!(
-            !app.world().resource::<CefKeyboardFilter>().contains(
+            app.world().resource::<CefKeyboardFilter>().contains(
                 webview,
                 KeyCode::KeyJ,
                 ModifiersState::default()
             ),
-            "a forward chord is delivered to the app without being withheld from the page"
+            "a forward chord must be withheld from the page"
         );
     }
 

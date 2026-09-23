@@ -37,7 +37,7 @@ pub(crate) enum KeyEffect {
         key_code: KeyCode,
     },
     /// Write the key to the pane's PTY because the focused webview declared
-    /// the chord in its `forward_keys`. The page receives the chord as well.
+    /// the chord in its `forward_keys`. The page does not receive the chord.
     WebviewForward {
         /// The logical key, for text/printable-key mapping.
         logical: Key,
@@ -85,10 +85,10 @@ impl BatchContext<'_> {
 }
 
 /// The result of classifying one frame's pressed keys: the per-key
-/// `KeyEffect`s, plus the physical keys the leader claimed while a
-/// webview owned the keyboard. The caller applies the frame's modifier
-/// snapshot when withholding `webview_suppressed` from CEF via
-/// `CefKeyboardFilter`; it is empty on the non-webview path.
+/// `KeyEffect`s, plus the physical keys withheld from the focused webview —
+/// those the leader claimed and those that matched a forward chord. The
+/// caller applies the frame's modifier snapshot when withholding them from
+/// CEF via `CefKeyboardFilter`; it is empty on the non-webview path.
 pub(crate) struct ClassifiedKeys {
     pub(crate) effects: Vec<KeyEffect>,
     pub(crate) webview_suppressed: Vec<KeyCode>,
@@ -128,9 +128,9 @@ pub(crate) fn classify_key_batch<'a>(
             // NOTE: the leader runs even while a webview owns the keyboard, so
             // `<Leader>` shortcuts work regardless of focus. Keys the leader
             // claims (the leader chord itself, an abandoned second key, or a
-            // fired binding) are recorded in `webview_suppressed` so the caller
-            // withholds them from CEF; a key the leader does not claim
-            // (`Passthrough`) still resolves to release / forward as before.
+            // fired binding) and the chords the webview declared as forward
+            // keys are recorded in `webview_suppressed` so the caller withholds
+            // them from CEF; any other key still reaches the page.
             match step_with_repeat(leader_phase, held_repeat, shortcuts, ev, ctx.mods, ctx.now) {
                 LeaderStep::Swallow => {
                     webview_suppressed.push(ev.key_code);
@@ -155,6 +155,7 @@ pub(crate) fn classify_key_batch<'a>(
                         .iter()
                         .any(|chord| chord_matches(chord, ev.key_code, &ev.logical_key, ctx.mods))
                     {
+                        webview_suppressed.push(ev.key_code);
                         effects.push(KeyEffect::WebviewForward {
                             logical: ev.logical_key.clone(),
                             key_code: ev.key_code,
@@ -1276,8 +1277,13 @@ mod tests {
         );
     }
 
+    /// Asserts that a declared forward chord is forwarded and withheld from
+    /// the page.
+    ///
+    /// Case: a markdown viewer forwards `k`, the user has clicked its page,
+    /// and presses `k` to scroll up.
     #[test]
-    fn webview_idle_forward_chord_forwards_and_not_suppressed() {
+    fn webview_idle_forward_chord_forwards_and_is_withheld_from_the_page() {
         let sc = Shortcuts::default();
         let resolved_vi_mode = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
@@ -1289,23 +1295,55 @@ mod tests {
             logo: false,
         }];
         let events = [press(KeyCode::KeyK, Key::Character("k".into()))];
-        let mut c = ctx(no_mods(), ms(0));
-        c.webview_focused = true;
-        c.forward_chords = &chords;
-        let out = run_full(&mut phase, &sc, &resolved_vi_mode, &events, c);
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            forward_ctx(&chords, no_mods()),
+        );
         assert_eq!(
             out.effects,
             vec![KeyEffect::WebviewForward {
                 logical: Key::Character("k".into()),
                 key_code: KeyCode::KeyK,
-            }],
-            "with no leader engaged a declared forward chord still forwards"
+            }]
         );
-        assert!(
-            out.webview_suppressed.is_empty(),
-            "a forward chord is not a leader claim — not withheld from CEF"
-        );
+        assert_eq!(out.webview_suppressed, vec![KeyCode::KeyK]);
         assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    /// Asserts that each auto-repeat of a held forward chord is forwarded
+    /// and withheld from the page again.
+    ///
+    /// Case: the user holds `j` to keep scrolling a markdown page whose
+    /// viewer forwards `j`.
+    #[test]
+    fn a_held_forward_chord_forwards_and_is_withheld_on_every_repeat() {
+        let sc = Shortcuts::default();
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let chords = [NormalizedChord {
+            key: ChordKey::Code(KeyCode::KeyJ),
+            alt: false,
+            ctrl: false,
+            shift: false,
+            logo: false,
+        }];
+        let events = [
+            press(KeyCode::KeyJ, Key::Character("j".into())),
+            press_repeat(KeyCode::KeyJ, Key::Character("j".into())),
+            press_repeat(KeyCode::KeyJ, Key::Character("j".into())),
+        ];
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            forward_ctx(&chords, no_mods()),
+        );
+        assert_eq!(out.effects.len(), 3, "every repeat is forwarded");
+        assert_eq!(out.webview_suppressed, vec![KeyCode::KeyJ; 3]);
     }
 
     #[test]
