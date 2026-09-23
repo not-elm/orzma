@@ -49,7 +49,10 @@ bevy_orzmux = { path = "crates/bevy_orzmux", features = ["test-support"] }
 orzmux = { path = "crates/orzmux", features = ["test-support"] }
 tempfile = { workspace = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[build-dependencies]
+embed-resource = "3"
+
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
 winit = "0.30"
 
 [target.'cfg(unix)'.dependencies]
