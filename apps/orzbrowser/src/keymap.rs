@@ -2,6 +2,7 @@
 //! the two-key chord `gg` emits [`Action::Prefix`] that `App` completes.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui_orzma::KeyChord;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Mode {
@@ -103,6 +104,61 @@ fn map_hint(ctrl: bool, code: KeyCode) -> Action {
         KeyCode::Char(c) => Action::HintKey(c),
         _ => Action::Ignore,
     }
+}
+
+/// Which forward-key list the page carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeySet {
+    /// The Normal-mode vim keys.
+    Normal,
+    /// Esc alone, so every other key types into the page.
+    Insert,
+}
+
+/// The chords passed through to the TUI while the page holds keyboard focus.
+///
+/// Ctrl+C is in neither list, so while the page is focused it copies the
+/// page's selection instead of quitting.
+pub(crate) fn forward_chords(set: KeySet) -> Vec<KeyChord> {
+    let plain = |code| KeyChord {
+        mods: KeyModifiers::NONE,
+        code,
+    };
+    if set == KeySet::Insert {
+        return vec![plain(KeyCode::Esc)];
+    }
+    let shift = |c| KeyChord {
+        mods: KeyModifiers::SHIFT,
+        code: KeyCode::Char(c),
+    };
+    let ctrl = |c| KeyChord {
+        mods: KeyModifiers::CONTROL,
+        code: KeyCode::Char(c),
+    };
+    vec![
+        plain(KeyCode::Char('j')),
+        plain(KeyCode::Down),
+        plain(KeyCode::Char('k')),
+        plain(KeyCode::Up),
+        plain(KeyCode::Char(' ')),
+        plain(KeyCode::PageDown),
+        plain(KeyCode::PageUp),
+        ctrl('d'),
+        ctrl('u'),
+        ctrl('f'),
+        ctrl('b'),
+        plain(KeyCode::Char('g')),
+        shift('g'),
+        shift('h'),
+        shift('l'),
+        plain(KeyCode::Char('o')),
+        plain(KeyCode::Char(':')),
+        plain(KeyCode::Char('r')),
+        plain(KeyCode::Char('i')),
+        plain(KeyCode::Char('f')),
+        plain(KeyCode::Char('?')),
+        plain(KeyCode::Char('q')),
+    ]
 }
 
 #[cfg(test)]
@@ -220,5 +276,44 @@ mod tests {
     fn hint_mode_ctrl_c_quits_and_other_ctrl_ignored() {
         assert_eq!(map(Mode::Hint, ctrl('c')), Action::Quit);
         assert_eq!(map(Mode::Hint, ctrl('d')), Action::Ignore);
+    }
+
+    fn event_of(chord: &KeyChord) -> KeyEvent {
+        let code = match chord.code {
+            KeyCode::Char(c) if chord.mods.contains(KeyModifiers::SHIFT) => {
+                KeyCode::Char(c.to_ascii_uppercase())
+            }
+            code => code,
+        };
+        KeyEvent::new(code, chord.mods)
+    }
+
+    /// Asserts that every Normal chord drives a Normal action, that the
+    /// Insert set is Esc alone, and that neither forwards Ctrl+C.
+    ///
+    /// Case: the user clicks a page and keeps browsing with the vim keys,
+    /// types into a form in insert mode, or copies selected text.
+    #[test]
+    fn forward_chord_sets_match_their_modes() {
+        for chord in forward_chords(KeySet::Normal) {
+            assert_ne!(
+                map(Mode::Normal, event_of(&chord)),
+                Action::Ignore,
+                "{chord:?}"
+            );
+        }
+        assert_eq!(
+            forward_chords(KeySet::Insert),
+            vec![KeyChord {
+                mods: KeyModifiers::NONE,
+                code: KeyCode::Esc,
+            }]
+        );
+        let ctrl_c = KeyChord {
+            mods: KeyModifiers::CONTROL,
+            code: KeyCode::Char('c'),
+        };
+        assert!(!forward_chords(KeySet::Normal).contains(&ctrl_c));
+        assert!(!forward_chords(KeySet::Insert).contains(&ctrl_c));
     }
 }

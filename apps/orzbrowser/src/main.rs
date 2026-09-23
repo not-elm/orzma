@@ -5,16 +5,18 @@ mod keymap;
 mod ui;
 
 use crate::app::{App, Cmd, ScrollAction};
+use crate::keymap::KeySet;
 use crossbeam_channel::{Receiver, Sender};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{self, Event};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui_orzma::{KeyChord, Orzma, OrzmaBackend, OrzmaError, RpcError, Webview, WebviewHandle};
+use ratatui_orzma::{Orzma, OrzmaBackend, OrzmaError, RpcError, Webview, WebviewHandle};
 use std::io::stdout;
+use std::ops::ControlFlow;
 use std::time::Duration;
 
 /// The Vimium-style link-hint engine, supplied to the URL webview as a preload
@@ -84,13 +86,20 @@ fn event_loop(
             app.on_page_url_changed(url);
         }
         while let Ok(outcome) = hint_rx.try_recv() {
-            app.on_hint_result(&outcome.kind);
+            for cmd in app.on_hint_result(&outcome.kind) {
+                if run_cmd(cmd, &view, orzma)?.is_break() {
+                    return Ok(());
+                }
+            }
             // A link hint reports its target URL so the host performs a
             // browser-initiated navigation (which builds back/forward history);
             // a page-side el.click() would record no back entry.
             if let Some(url) = outcome.url {
                 view.navigate(url)?;
             }
+        }
+        if apply_focus_changes(&mut app, &view, orzma)?.is_break() {
+            return Ok(());
         }
 
         terminal.draw(|f| {
@@ -100,30 +109,13 @@ fn event_loop(
         if event::poll(Duration::from_millis(33))?
             && let Event::Key(key) = event::read()?
         {
+            if apply_focus_changes(&mut app, &view, orzma)?.is_break() {
+                return Ok(());
+            }
             let action = keymap::map(app.mode(), key);
             for cmd in app.on_action(action) {
-                match cmd {
-                    Cmd::Quit => return Ok(()),
-                    Cmd::Navigate(url) => view.navigate(url)?,
-                    Cmd::HistoryBack => view.go_back()?,
-                    Cmd::HistoryForward => view.go_forward()?,
-                    Cmd::Reload => view.reload()?,
-                    Cmd::Scroll(action) => {
-                        let _ = view.emit("scroll", &scroll_payload(action));
-                    }
-                    Cmd::HintShow => {
-                        let _ = view.emit("hints:show", &serde_json::json!({}));
-                    }
-                    Cmd::HintKey(c) => {
-                        let _ =
-                            view.emit("hints:key", &serde_json::json!({ "key": c.to_string() }));
-                    }
-                    Cmd::HintBackspace => {
-                        let _ = view.emit("hints:key", &serde_json::json!({ "backspace": true }));
-                    }
-                    Cmd::HintHide => {
-                        let _ = view.emit("hints:hide", &serde_json::json!({}));
-                    }
+                if run_cmd(cmd, &view, orzma)?.is_break() {
+                    return Ok(());
                 }
             }
         }
@@ -136,96 +128,10 @@ fn register_view(
     url_tx: Sender<String>,
     hint_tx: Sender<HintOutcome>,
 ) -> anyhow::Result<WebviewHandle> {
-    let forward = [
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::Esc,
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::Char('j'),
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::Down,
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::Char('k'),
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::Up,
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::Char(' '),
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::PageDown,
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::PageUp,
-        },
-        KeyChord {
-            mods: KeyModifiers::CONTROL,
-            code: KeyCode::Char('d'),
-        },
-        KeyChord {
-            mods: KeyModifiers::CONTROL,
-            code: KeyCode::Char('u'),
-        },
-        KeyChord {
-            mods: KeyModifiers::CONTROL,
-            code: KeyCode::Char('f'),
-        },
-        KeyChord {
-            mods: KeyModifiers::CONTROL,
-            code: KeyCode::Char('b'),
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::Char('g'),
-        },
-        KeyChord {
-            mods: KeyModifiers::SHIFT,
-            code: KeyCode::Char('g'),
-        },
-        KeyChord {
-            mods: KeyModifiers::SHIFT,
-            code: KeyCode::Char('h'),
-        },
-        KeyChord {
-            mods: KeyModifiers::SHIFT,
-            code: KeyCode::Char('l'),
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::Char('o'),
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::Char('r'),
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::Char('i'),
-        },
-        KeyChord {
-            mods: KeyModifiers::NONE,
-            code: KeyCode::Char('q'),
-        },
-        KeyChord {
-            mods: KeyModifiers::CONTROL,
-            code: KeyCode::Char('c'),
-        },
-    ];
     let view = orzma.register(
         Webview::url(url)
             .interactive(true)
-            .forward_keys(forward)
+            .forward_keys(keymap::forward_chords(KeySet::Normal))
             .preload([ORZMA_HINTS_JS])
             .on(
                 "urlChanged",
@@ -250,6 +156,59 @@ fn register_view(
             ),
     )?;
     Ok(view)
+}
+
+/// Performs one [`Cmd`]; `Break` when the app should exit.
+fn run_cmd(cmd: Cmd, view: &WebviewHandle, orzma: &Orzma) -> anyhow::Result<ControlFlow<()>> {
+    match cmd {
+        Cmd::Quit => return Ok(ControlFlow::Break(())),
+        Cmd::Navigate(url) => view.navigate(url)?,
+        Cmd::HistoryBack => view.go_back()?,
+        Cmd::HistoryForward => view.go_forward()?,
+        Cmd::Reload => view.reload()?,
+        Cmd::Scroll(action) => {
+            let _ = view.emit("scroll", &scroll_payload(action));
+        }
+        Cmd::HintShow => {
+            let _ = view.emit("hints:show", &serde_json::json!({}));
+        }
+        Cmd::HintKey(c) => {
+            let _ = view.emit("hints:key", &serde_json::json!({ "key": c.to_string() }));
+        }
+        Cmd::HintBackspace => {
+            let _ = view.emit("hints:key", &serde_json::json!({ "backspace": true }));
+        }
+        Cmd::HintHide => {
+            let _ = view.emit("hints:hide", &serde_json::json!({}));
+        }
+        Cmd::SetForwardKeys(set) => {
+            let _ = view.set_forward_keys(keymap::forward_chords(set));
+        }
+        Cmd::Focus => {
+            let _ = view.focus();
+        }
+        Cmd::Blur => {
+            let _ = orzma.blur();
+        }
+    }
+    Ok(ControlFlow::Continue(()))
+}
+
+/// Applies the focus changes the host reported since the last call; `Break`
+/// when a resulting [`Cmd`] exits the app.
+fn apply_focus_changes(
+    app: &mut App,
+    view: &WebviewHandle,
+    orzma: &Orzma,
+) -> anyhow::Result<ControlFlow<()>> {
+    for change in view.read_focus_changes() {
+        for cmd in app.on_focus_change(change.focused) {
+            if run_cmd(cmd, view, orzma)?.is_break() {
+                return Ok(ControlFlow::Break(()));
+            }
+        }
+    }
+    Ok(ControlFlow::Continue(()))
 }
 
 fn scroll_payload(action: ScrollAction) -> serde_json::Value {

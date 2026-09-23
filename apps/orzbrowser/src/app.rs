@@ -1,7 +1,7 @@
 //! App state machine for orzbrowser. `on_action` is the single entry point;
 //! it returns the [`Cmd`] side-effects for `main.rs` to execute.
 
-use crate::keymap::{Action, Mode};
+use crate::keymap::{Action, KeySet, Mode};
 
 /// Scroll direction / magnitude for the webview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +47,12 @@ pub(crate) enum Cmd {
     HintHide,
     /// Exit the app.
     Quit,
+    /// Replace the page's forward keys with the given list.
+    SetForwardKeys(KeySet),
+    /// Give the page keyboard focus.
+    Focus,
+    /// Take keyboard focus back from the page to the TUI.
+    Blur,
 }
 
 /// Whole-app state for orzbrowser.
@@ -112,7 +118,7 @@ impl App {
             Action::OpenAddress => {
                 self.address_buf = self.url.clone();
                 self.mode = Mode::Address;
-                vec![]
+                vec![Cmd::Blur]
             }
             Action::AddressChar(c) => {
                 self.address_buf.push(c);
@@ -135,28 +141,28 @@ impl App {
                 }
             }
             Action::Escape => {
-                let was_hint = self.mode == Mode::Hint;
+                let left = self.mode;
                 self.mode = Mode::Normal;
                 self.address_buf.clear();
-                if was_hint {
-                    vec![Cmd::HintHide]
-                } else {
-                    vec![]
+                match left {
+                    Mode::Hint => vec![Cmd::HintHide],
+                    Mode::Insert => vec![Cmd::SetForwardKeys(KeySet::Normal), Cmd::Blur],
+                    _ => vec![],
                 }
             }
             Action::EnterInsert => {
                 self.mode = Mode::Insert;
-                vec![]
+                vec![Cmd::SetForwardKeys(KeySet::Insert), Cmd::Focus]
             }
             Action::EnterHint => {
                 self.mode = Mode::Hint;
-                vec![Cmd::HintShow]
+                vec![Cmd::HintShow, Cmd::Blur]
             }
             Action::HintKey(c) => vec![Cmd::HintKey(c)],
             Action::HintBackspace => vec![Cmd::HintBackspace],
             Action::OpenHelp => {
                 self.mode = Mode::Help;
-                vec![]
+                vec![Cmd::Blur]
             }
             Action::Ignore => vec![],
         }
@@ -169,18 +175,43 @@ impl App {
     }
 
     /// Applies a `hintResult` reported by the page: a hint that focused a form
-    /// field switches to Insert mode; any other resolution returns to Normal.
-    /// A no-op unless currently in Hint mode (guards against a late result
-    /// arriving after the user already cancelled with Esc).
-    pub(crate) fn on_hint_result(&mut self, kind: &str) {
+    /// field switches to Insert mode, carrying the insert keys and page focus;
+    /// any other resolution returns to Normal. A no-op unless currently in
+    /// Hint mode (guards against a late result arriving after the user
+    /// already cancelled with Esc).
+    pub(crate) fn on_hint_result(&mut self, kind: &str) -> Vec<Cmd> {
         if self.mode != Mode::Hint {
-            return;
+            return vec![];
         }
-        self.mode = if kind == "focusedInput" {
-            Mode::Insert
+        if kind == "focusedInput" {
+            self.mode = Mode::Insert;
+            vec![Cmd::SetForwardKeys(KeySet::Insert), Cmd::Focus]
         } else {
-            Mode::Normal
-        };
+            self.mode = Mode::Normal;
+            vec![]
+        }
+    }
+
+    /// Applies a focus change the host reported for the page: a page that
+    /// gains focus cancels the TUI's text modes, and one that loses focus in
+    /// Insert mode returns to Normal with the Normal keys.
+    pub(crate) fn on_focus_change(&mut self, focused: bool) -> Vec<Cmd> {
+        match (self.mode, focused) {
+            (Mode::Address | Mode::Help, true) => {
+                self.mode = Mode::Normal;
+                self.address_buf.clear();
+                vec![]
+            }
+            (Mode::Hint, true) => {
+                self.mode = Mode::Normal;
+                vec![Cmd::HintHide]
+            }
+            (Mode::Insert, false) => {
+                self.mode = Mode::Normal;
+                vec![Cmd::SetForwardKeys(KeySet::Normal)]
+            }
+            _ => vec![],
+        }
     }
 
     fn resolve_chord(&mut self, c: char) -> Vec<Cmd> {
@@ -415,7 +446,10 @@ mod tests {
     #[test]
     fn enter_hint_sets_hint_mode_and_emits_show() {
         let mut a = app();
-        assert_eq!(a.on_action(Action::EnterHint), vec![Cmd::HintShow]);
+        assert_eq!(
+            a.on_action(Action::EnterHint),
+            vec![Cmd::HintShow, Cmd::Blur]
+        );
         assert_eq!(a.mode(), Mode::Hint);
     }
 
@@ -463,6 +497,101 @@ mod tests {
     fn hint_result_is_ignored_when_not_in_hint_mode() {
         let mut a = app();
         a.on_hint_result("focusedInput");
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    /// Asserts that entering and leaving insert mode switches the forward
+    /// keys and hands the keyboard to the page and back.
+    ///
+    /// Case: the user presses `i` to type into a search box, then Esc.
+    #[test]
+    fn insert_mode_switches_forward_keys_and_focus() {
+        let mut a = app();
+        assert_eq!(
+            a.on_action(Action::EnterInsert),
+            vec![Cmd::SetForwardKeys(KeySet::Insert), Cmd::Focus]
+        );
+        assert_eq!(
+            a.on_action(Action::Escape),
+            vec![Cmd::SetForwardKeys(KeySet::Normal), Cmd::Blur]
+        );
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    /// Asserts that the TUI's text modes take the keyboard back from the
+    /// page.
+    ///
+    /// Case: after clicking the page, the user opens the address bar, the
+    /// link hints, and the help.
+    #[test]
+    fn text_modes_blur_the_page() {
+        let mut a = app();
+        assert_eq!(a.on_action(Action::OpenAddress), vec![Cmd::Blur]);
+        a.on_action(Action::Escape);
+        assert_eq!(
+            a.on_action(Action::EnterHint),
+            vec![Cmd::HintShow, Cmd::Blur]
+        );
+        a.on_action(Action::Escape);
+        assert_eq!(a.on_action(Action::OpenHelp), vec![Cmd::Blur]);
+    }
+
+    /// Asserts that a hint that focused a form field enters insert mode with
+    /// the insert keys and page focus.
+    ///
+    /// Case: the user follows a link hint onto a text input.
+    #[test]
+    fn a_focused_input_hint_enters_insert_mode() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        assert_eq!(
+            a.on_hint_result("focusedInput"),
+            vec![Cmd::SetForwardKeys(KeySet::Insert), Cmd::Focus]
+        );
+        assert_eq!(a.mode(), Mode::Insert);
+    }
+
+    /// Asserts that a `focusedInput` result arriving after the user left hint
+    /// mode does nothing.
+    ///
+    /// Case: the user presses Esc just before the page reports the hint it
+    /// resolved.
+    #[test]
+    fn a_late_focused_input_result_after_escape_does_nothing() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        a.on_action(Action::Escape);
+        assert_eq!(a.on_hint_result("focusedInput"), vec![]);
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    /// Asserts that a click on the page cancels the TUI's text modes, and
+    /// that losing focus in insert mode returns to normal mode.
+    ///
+    /// Case: the user clicks the page while typing an address or picking a
+    /// hint, and later presses the release-focus shortcut while typing into
+    /// a form.
+    #[test]
+    fn focus_changes_cancel_text_modes_and_leave_insert() {
+        let mut a = app();
+        a.on_action(Action::OpenAddress);
+        assert_eq!(a.on_focus_change(true), vec![]);
+        assert_eq!(a.mode(), Mode::Normal);
+        assert_eq!(a.address_buf(), "");
+
+        a.on_action(Action::EnterHint);
+        assert_eq!(a.on_focus_change(true), vec![Cmd::HintHide]);
+        assert_eq!(a.mode(), Mode::Normal);
+
+        a.on_action(Action::EnterInsert);
+        assert_eq!(a.on_focus_change(true), vec![], "the echo of our own focus");
+        assert_eq!(
+            a.on_focus_change(false),
+            vec![Cmd::SetForwardKeys(KeySet::Normal)]
+        );
+        assert_eq!(a.mode(), Mode::Normal);
+
+        assert_eq!(a.on_focus_change(true), vec![], "a click in normal mode");
         assert_eq!(a.mode(), Mode::Normal);
     }
 }

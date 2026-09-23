@@ -26,11 +26,7 @@ pub(crate) fn draw(
         _ => draw_status_bar(frame, chunks[0], app),
     }
 
-    frame.render_stateful_widget(
-        WebviewWidget::new(instance_id).focused(app.mode() == Mode::Insert),
-        chunks[1],
-        placements,
-    );
+    frame.render_stateful_widget(WebviewWidget::new(instance_id), chunks[1], placements);
 
     if app.mode() == Mode::Help {
         draw_help_modal(frame);
