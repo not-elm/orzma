@@ -25,17 +25,17 @@ impl HeldPointer {
 
     /// Marks `button` held.
     pub fn press(&mut self, button: PointerButton) {
-        self.buttons[slot(button)] = true;
+        self.buttons[button.index()] = true;
     }
 
     /// Marks `button` released.
     pub fn release(&mut self, button: PointerButton) {
-        self.buttons[slot(button)] = false;
+        self.buttons[button.index()] = false;
     }
 
     /// Whether `button` is held.
     pub fn holds(&self, button: PointerButton) -> bool {
-        self.buttons[slot(button)]
+        self.buttons[button.index()]
     }
 
     /// Whether no button is held.
@@ -180,14 +180,6 @@ pub(in crate::input::mouse) fn lock_dominant_axis(
         (0.0, horizontal)
     } else {
         (vertical, 0.0)
-    }
-}
-
-fn slot(button: PointerButton) -> usize {
-    match button {
-        PointerButton::Left => 0,
-        PointerButton::Middle => 1,
-        PointerButton::Right => 2,
     }
 }
 

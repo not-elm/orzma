@@ -386,16 +386,18 @@ impl PointerState {
 }
 
 impl PointerButton {
-    /// Every button, lowest-numbered first.
-    const ALL: [Self; 3] = [Self::Left, Self::Middle, Self::Right];
-
-    fn index(self) -> usize {
+    /// The button's zero-based position, lowest-numbered first: `Left` is
+    /// 0, `Middle` is 1, and `Right` is 2.
+    pub fn index(self) -> usize {
         match self {
             Self::Left => 0,
             Self::Middle => 1,
             Self::Right => 2,
         }
     }
+
+    /// Every button, lowest-numbered first.
+    const ALL: [Self; 3] = [Self::Left, Self::Middle, Self::Right];
 
     fn report_button(self) -> MouseButton {
         match self {
