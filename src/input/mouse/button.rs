@@ -229,9 +229,15 @@ fn press(
     }
     // NOTE: `PaneClicked` must trigger before the press: its observer sends
     // `SelectPane` on the same ordered command channel, so the backend
-    // focuses the pane (and writes any focus report) before it routes the
-    // press.
+    // makes the pane active before it routes the press.
     commands.trigger(PaneClicked { entity: target });
+    // NOTE: a press made while another button is held must send the motion
+    // to its cell first. The press records its cell as the last target,
+    // which suppresses that motion afterwards, so the held button's drag
+    // would never reach the cell.
+    if gesture.held.is_some() {
+        send_motion_to(commands, gesture, target, cell, side, frame.mods);
+    }
     gesture
         .held
         .get_or_insert(HeldPointer::new(target))
@@ -276,29 +282,13 @@ fn release(
     };
     // NOTE: a release sharing a frame with the last cursor move must send
     // the skipped motion first, or a 1002/1003 application never learns
-    // the pointer crossed into the release cell, and a local selection drag
-    // copies short of it.
-    if gesture.last_target != Some((held.entity, cell)) {
-        trigger_mouse_effect(
-            commands,
-            held.entity,
-            MouseEffect::Pointer(PointerInput {
-                kind: PointerKind::Motion,
-                button: None,
-                cell,
-                side,
-                click_count: 1,
-                mods: frame.mods,
-            }),
-        );
-        gesture.last_target = Some((held.entity, cell));
-    }
+    // the pointer crossed into the release cell.
+    send_motion_to(commands, gesture, held.entity, cell, side, frame.mods);
     held.release(button);
     gesture.held = (!held.is_empty()).then_some(held);
     if gesture.held.is_none() {
         gesture.last_cursor_phys = None;
     }
-    gesture.last_target = Some((held.entity, cell));
     trigger_mouse_effect(
         commands,
         held.entity,
@@ -343,6 +333,20 @@ fn send_motion(
         }
         return;
     };
+    send_motion_to(commands, gesture, target, cell, side, frame.mods);
+}
+
+/// Sends `target` a motion to `cell` and records the pair as the last
+/// target, unless the last pointer event already named that terminal and
+/// cell.
+fn send_motion_to(
+    commands: &mut Commands,
+    gesture: &mut OrzmaMouseGesture,
+    target: Entity,
+    cell: CellCoord,
+    side: CellSide,
+    mods: ProtocolModifiers,
+) {
     if gesture.last_target == Some((target, cell)) {
         return;
     }
@@ -356,7 +360,7 @@ fn send_motion(
             cell,
             side,
             click_count: 1,
-            mods: frame.mods,
+            mods,
         }),
     );
 }
@@ -795,6 +799,41 @@ mod tests {
         assert_eq!(presses_to_left, 2, "{log:?}");
     }
 
+    /// Asserts that a press made while another button is held, in a cell
+    /// the cursor reached in the same frame, first hands the pane a motion
+    /// to that cell and then the press.
+    ///
+    /// Case: the user holds the left button in a pane, flicks the pointer
+    /// to another cell, and presses the right button before the next frame
+    /// samples the cursor.
+    #[test]
+    fn a_chorded_press_in_a_new_cell_sends_the_motion_first() {
+        let mut app = pointer_app();
+        let pane = spawn_pane(&mut app, 0.0, 800.0);
+        set_phys_cursor(&mut app, Vec2::new(44.0, 72.0));
+        write_button(&mut app, MouseButton::Left, ButtonState::Pressed);
+        app.update();
+        move_to(&mut app, Vec2::new(76.0, 72.0));
+        write_button(&mut app, MouseButton::Right, ButtonState::Pressed);
+        app.update();
+        let to_pane: Vec<(PointerKind, Option<PointerButton>, CellCoord)> = app
+            .world()
+            .resource::<Log>()
+            .pointers()
+            .iter()
+            .filter(|(entity, _)| *entity == pane)
+            .map(|(_, input)| (input.kind, input.button, input.cell))
+            .collect();
+        assert_eq!(
+            to_pane,
+            vec![
+                (PointerKind::Press, Some(PointerButton::Left), cell(6, 5)),
+                (PointerKind::Motion, None, cell(10, 5)),
+                (PointerKind::Press, Some(PointerButton::Right), cell(10, 5)),
+            ]
+        );
+    }
+
     /// Asserts that only a left press with the link modifier held and no
     /// other button held opens a hyperlink, and only on a linked cell.
     ///
@@ -825,8 +864,6 @@ mod tests {
         let mut app = pointer_app();
         let uri = "https://example.com";
         spawn_linked_pane(&mut app, 0.0, 800.0, uri);
-        // A first frame settles the hover baseline over the linked cell, so
-        // the click frame below carries no incidental hover motion.
         move_to(&mut app, Vec2::new(4.0, 8.0));
         app.update();
         app.world_mut().resource_mut::<Log>().0.clear();
@@ -1048,10 +1085,10 @@ mod tests {
     fn a_same_frame_move_and_release_sends_motion_then_release() {
         let mut app = pointer_app();
         let pane = spawn_pane(&mut app, 0.0, 800.0);
-        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        set_phys_cursor(&mut app, Vec2::new(44.0, 56.0));
         write_button(&mut app, MouseButton::Left, ButtonState::Pressed);
         app.update();
-        move_to(&mut app, Vec2::new(56.0, 48.0));
+        move_to(&mut app, Vec2::new(52.0, 56.0));
         write_button(&mut app, MouseButton::Left, ButtonState::Released);
         app.update();
         let to_pane: Vec<(PointerKind, CellCoord)> = app

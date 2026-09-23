@@ -64,8 +64,9 @@ fn a_forwarded_press_follows_the_x10_encoding() {
 /// its viewport cells show, writes nothing to the PTY, and leaves the
 /// viewport where it is.
 ///
-/// Case: nvim tracks the mouse, the user has scrolled the pane three rows
-/// back into history, and drags across two rows there.
+/// Case: `fzf --height` tracks the mouse on the primary screen, the user
+/// has scrolled the pane three rows back into history, and drags across
+/// two rows there.
 #[test]
 fn a_scrolled_back_drag_selects_at_the_display_offset() {
     let (mut term, sink) = tracking_term();
@@ -78,7 +79,6 @@ fn a_scrolled_back_drag_selects_at_the_display_offset() {
     assert_eq!(
         term.vt.selections,
         vec![
-            SelectionOp::Clear,
             SelectionOp::Start(
                 GridPoint {
                     line: GridLine(-3),
@@ -97,6 +97,63 @@ fn a_scrolled_back_drag_selects_at_the_display_offset() {
         ]
     );
     assert!(term.vt.scrolls.is_empty());
+}
+
+/// Asserts that a selection change a pointer event makes arms the
+/// coalescer, so the highlight repaints without any output.
+///
+/// Case: the user starts a selection at an idle shell prompt, where no
+/// output would otherwise repaint the pane.
+#[test]
+fn a_pointer_selection_change_arms_the_coalescer() {
+    let (mut term, _sink) = detached_term();
+    term.vt.selection_changes = true;
+    term.send_pointer(press(PointerButton::Left, 1, 1))
+        .expect("press");
+    assert!(term.coalescer.is_armed());
+}
+
+/// Asserts that scrolling the viewport under a held selection drag moves
+/// the selection's end onto the grid point now under the pointer.
+///
+/// Case: the user drags a selection at a shell prompt and spins the wheel
+/// back three rows without moving the mouse.
+#[test]
+fn a_viewport_scroll_moves_a_held_drag_end() {
+    let (mut term, _sink) = detached_term();
+    term.send_pointer(press(PointerButton::Left, 1, 1))
+        .expect("press");
+    term.send_pointer(motion(5, 2)).expect("motion");
+    term.vt.scroll_moves = true;
+    term.vt.display_offset = DisplayOffset(3);
+    term.scroll(Scroll::Delta(3));
+    assert_eq!(
+        term.vt.selections.last(),
+        Some(&SelectionOp::Extend(
+            GridPoint {
+                line: GridLine(-2),
+                column: GridColumn(4)
+            },
+            CellSide::Left
+        ))
+    );
+}
+
+/// Asserts that a cancel after the pane shrank reports its release at a
+/// cell inside the new grid.
+///
+/// Case: the user holds the button over nvim near the pane's bottom-right
+/// corner, a split shrinks the pane, and the window then loses focus.
+#[test]
+fn a_cancel_after_a_shrink_reports_inside_the_grid() {
+    let (mut term, sink) = tracking_term();
+    term.send_pointer(press(PointerButton::Left, 70, 20))
+        .expect("press");
+    term.vt.grid_size = GridSize { cols: 40, rows: 10 };
+    term.send_pointer(event(PointerKind::Cancel, None, 1, 1))
+        .expect("cancel");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[<0;70;20M\x1b[<0;40;10m");
 }
 
 /// Asserts that a cell past the grid is clamped to the last column and

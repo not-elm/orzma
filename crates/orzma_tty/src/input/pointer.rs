@@ -6,7 +6,6 @@ use crate::input::mouse::{
     CellCoord, MouseButton, MouseReport, MouseReportKind, ProtocolModifiers,
 };
 use orzma_vt::prelude::{CellSide, MouseTracking, SelectionKind, VtModes};
-use std::mem;
 
 /// One pointer event the host UI hands to a terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,9 +83,12 @@ pub(crate) struct PointerState {
     last_reported_cell: Option<CellCoord>,
     /// The last cell an event named, where a cancel reports its releases.
     last_input_cell: Option<CellCoord>,
-    /// Whether the last press was forwarded, so the next local press
-    /// counts as a single click.
-    last_press_forwarded: bool,
+    /// Whether the host's current run of consecutive clicks holds a
+    /// forwarded press, so the local presses after it count their own
+    /// clicks.
+    forwarded_in_chain: bool,
+    /// The click count the last local press was given.
+    local_clicks: u8,
 }
 
 /// Where a held button's events go.
@@ -98,22 +100,24 @@ enum Latch {
     Local,
 }
 
-/// The left button's selection gesture.
+/// The left button's selection gesture, whose selection is anchored at
+/// the press.
 #[derive(Clone, Copy, Debug)]
 struct LocalDrag {
-    origin: CellCoord,
-    side: CellSide,
-    kind: SelectionKind,
     phase: DragPhase,
+    /// The cell the selection's moving end was last put on.
     last_cell: CellCoord,
+    /// The half of `last_cell` the moving end sits in.
+    last_side: CellSide,
 }
 
-/// Whether a selection gesture has anchored its selection yet.
+/// Whether a selection gesture has left the cell it was pressed on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DragPhase {
-    /// A single click is held on its origin cell; nothing is selected.
+    /// A single click is held on the cell it was pressed on; its
+    /// selection is still empty.
     Armed,
-    /// The selection is anchored and follows the pointer.
+    /// The selection follows the pointer.
     Started,
 }
 
@@ -126,23 +130,31 @@ impl PointerState {
     /// force, Shift is not held, and the viewport is at the live tail;
     /// otherwise it drives the selection. That routing holds for the
     /// button until its release or a cancel, whatever the modes do
-    /// meanwhile. A report is produced only at a tracking level that asks
-    /// for it, a motion report only when the pointer left the cell of the
-    /// last report, and a release whose press was not forwarded is never
-    /// reported. Only the release of a left-button selection drag yields
-    /// [`PointerAction::Copy`], and never together with a report.
+    /// meanwhile. A forwarded press clears the selection unless the left
+    /// button is still dragging one, and a left-button selection is
+    /// anchored at its press. Local presses that follow a forwarded press
+    /// among consecutive clicks count their clicks from that press. A
+    /// report is produced only at a tracking level that asks for it, a
+    /// motion report only when the pointer left the cell of the last
+    /// report, and a release whose press was not forwarded is never
+    /// reported. An event routed while no tracking level is in force
+    /// forgets the cell of the last report. The release of a left-button
+    /// selection drag moves the selection's end to where it was released
+    /// and yields [`PointerAction::Copy`], never together with a report.
     pub fn route(
         &mut self,
         input: PointerInput,
         modes: VtModes,
         at_live_tail: bool,
     ) -> Vec<PointerAction> {
-        let tracking = modes.mouse_tracking;
+        if !modes.mouse_reporting_active() {
+            self.last_reported_cell = None;
+        }
         let actions = match input.kind {
-            PointerKind::Press => self.press(input, tracking, at_live_tail),
-            PointerKind::Motion => self.motion(input, tracking, at_live_tail),
-            PointerKind::Release => self.release(input, tracking),
-            PointerKind::Cancel => self.cancel(input, tracking),
+            PointerKind::Press => self.press(input, modes, at_live_tail),
+            PointerKind::Motion => self.motion(input, modes, at_live_tail),
+            PointerKind::Release => self.release(input, modes),
+            PointerKind::Cancel => self.cancel(input, modes),
         };
         if input.kind != PointerKind::Cancel {
             self.last_input_cell = Some(input.cell);
@@ -150,18 +162,28 @@ impl PointerState {
         actions
     }
 
+    /// The 1-based viewport cell and half a held left-button selection
+    /// drag last put the selection's moving end on; `None` unless such a
+    /// drag has left the cell it was pressed on.
+    pub fn drag_end(&self) -> Option<(CellCoord, CellSide)> {
+        self.local_drag
+            .filter(|drag| drag.phase == DragPhase::Started)
+            .map(|drag| (drag.last_cell, drag.last_side))
+    }
+
     fn press(
         &mut self,
         input: PointerInput,
-        tracking: MouseTracking,
+        modes: VtModes,
         at_live_tail: bool,
     ) -> Vec<PointerAction> {
         let Some(button) = input.button else {
             return Vec::new();
         };
         let slot = button.index();
+        let reporting = modes.mouse_reporting_active();
         let mut actions = Vec::new();
-        if self.latches[slot] == Some(Latch::Forwarded) && tracking != MouseTracking::Off {
+        if self.latches[slot] == Some(Latch::Forwarded) && reporting {
             actions.push(self.report(
                 button.report_button(),
                 MouseReportKind::Release,
@@ -169,11 +191,14 @@ impl PointerState {
                 input.mods,
             ));
         }
-        if tracking != MouseTracking::Off && !input.mods.shift && at_live_tail {
+        if reporting && !input.mods.shift && at_live_tail {
             self.latches[slot] = Some(Latch::Forwarded);
-            self.local_drag = None;
-            self.last_press_forwarded = true;
-            actions.push(PointerAction::SelectionClear);
+            self.forwarded_in_chain = true;
+            self.local_clicks = 0;
+            if !self.left_still_selecting(button) {
+                self.local_drag = None;
+                actions.push(PointerAction::SelectionClear);
+            }
             actions.push(self.report(
                 button.report_button(),
                 MouseReportKind::Press,
@@ -183,15 +208,34 @@ impl PointerState {
             return actions;
         }
         self.latches[slot] = Some(Latch::Local);
-        let click_count = if mem::take(&mut self.last_press_forwarded) {
-            1
-        } else {
-            input.click_count.clamp(1, 3)
-        };
+        let click_count = self.local_click_count(input.click_count);
         if button == PointerButton::Left {
             actions.push(self.start_local(input, click_count));
         }
         actions
+    }
+
+    /// Whether the left button, pressed before `button`, still drives a
+    /// selection drag that a press of `button` must leave alone.
+    fn left_still_selecting(&self, button: PointerButton) -> bool {
+        button != PointerButton::Left
+            && self.latches[PointerButton::Left.index()] == Some(Latch::Local)
+    }
+
+    /// The click count a local press counts as, given the host's count of
+    /// consecutive clicks. A forwarded press earlier in the same run
+    /// restarts the count, so only the local presses since it count.
+    fn local_click_count(&mut self, host_clicks: u8) -> u8 {
+        if host_clicks <= 1 {
+            self.forwarded_in_chain = false;
+        }
+        let clicks = if self.forwarded_in_chain {
+            self.local_clicks.saturating_add(1).min(3)
+        } else {
+            host_clicks.clamp(1, 3)
+        };
+        self.local_clicks = clicks;
+        clicks
     }
 
     fn start_local(&mut self, input: PointerInput, click_count: u8) -> PointerAction {
@@ -209,32 +253,32 @@ impl PointerState {
             }
         };
         self.local_drag = Some(LocalDrag {
-            origin: input.cell,
-            side: input.side,
-            kind,
             phase,
             last_cell: input.cell,
+            last_side: input.side,
         });
-        match phase {
-            DragPhase::Armed => PointerAction::SelectionClear,
-            DragPhase::Started => PointerAction::SelectionStart {
-                cell: input.cell,
-                side: input.side,
-                kind,
-            },
+        PointerAction::SelectionStart {
+            cell: input.cell,
+            side: input.side,
+            kind,
         }
     }
 
     fn motion(
         &mut self,
         input: PointerInput,
-        tracking: MouseTracking,
+        modes: VtModes,
         at_live_tail: bool,
     ) -> Vec<PointerAction> {
         let moved = self.last_reported_cell != Some(input.cell);
         let mut actions = Vec::new();
         if let Some(button) = self.lowest_forwarded() {
-            if moved && matches!(tracking, MouseTracking::Drag | MouseTracking::Motion) {
+            if moved
+                && matches!(
+                    modes.mouse_tracking,
+                    MouseTracking::Drag | MouseTracking::Motion
+                )
+            {
                 actions.push(self.report(
                     button.report_button(),
                     MouseReportKind::Motion,
@@ -244,7 +288,7 @@ impl PointerState {
             }
         } else if self.latches.iter().all(Option::is_none)
             && moved
-            && tracking == MouseTracking::Motion
+            && modes.mouse_tracking == MouseTracking::Motion
             && at_live_tail
         {
             actions.push(self.report(
@@ -258,43 +302,26 @@ impl PointerState {
         actions
     }
 
-    fn extend_local(&mut self, input: PointerInput) -> Vec<PointerAction> {
-        let Some(drag) = self.local_drag.as_mut() else {
-            return Vec::new();
-        };
-        match drag.phase {
-            DragPhase::Armed if input.cell != drag.origin => {
-                drag.phase = DragPhase::Started;
-                drag.last_cell = input.cell;
-                vec![
-                    PointerAction::SelectionStart {
-                        cell: drag.origin,
-                        side: drag.side,
-                        kind: drag.kind,
-                    },
-                    PointerAction::SelectionExtend {
-                        cell: input.cell,
-                        side: input.side,
-                    },
-                ]
-            }
-            DragPhase::Started if input.cell != drag.last_cell => {
-                drag.last_cell = input.cell;
-                vec![PointerAction::SelectionExtend {
-                    cell: input.cell,
-                    side: input.side,
-                }]
-            }
-            DragPhase::Armed | DragPhase::Started => Vec::new(),
+    fn extend_local(&mut self, input: PointerInput) -> Option<PointerAction> {
+        let drag = self.local_drag.as_mut()?;
+        if input.cell == drag.last_cell {
+            return None;
         }
+        drag.phase = DragPhase::Started;
+        drag.last_cell = input.cell;
+        drag.last_side = input.side;
+        Some(PointerAction::SelectionExtend {
+            cell: input.cell,
+            side: input.side,
+        })
     }
 
-    fn release(&mut self, input: PointerInput, tracking: MouseTracking) -> Vec<PointerAction> {
+    fn release(&mut self, input: PointerInput, modes: VtModes) -> Vec<PointerAction> {
         let Some(button) = input.button else {
             return Vec::new();
         };
         match self.latches[button.index()].take() {
-            Some(Latch::Forwarded) if tracking != MouseTracking::Off => vec![self.report(
+            Some(Latch::Forwarded) if modes.mouse_reporting_active() => vec![self.report(
                 button.report_button(),
                 MouseReportKind::Release,
                 input.cell,
@@ -304,19 +331,25 @@ impl PointerState {
                 Some(LocalDrag {
                     phase: DragPhase::Started,
                     ..
-                }) => vec![PointerAction::Copy],
+                }) => vec![
+                    PointerAction::SelectionExtend {
+                        cell: input.cell,
+                        side: input.side,
+                    },
+                    PointerAction::Copy,
+                ],
                 _ => Vec::new(),
             },
             _ => Vec::new(),
         }
     }
 
-    fn cancel(&mut self, input: PointerInput, tracking: MouseTracking) -> Vec<PointerAction> {
+    fn cancel(&mut self, input: PointerInput, modes: VtModes) -> Vec<PointerAction> {
         let cell = self.last_input_cell.unwrap_or(input.cell);
         let mut actions = Vec::new();
         for button in PointerButton::ALL {
             let forwarded = self.latches[button.index()].take() == Some(Latch::Forwarded);
-            if forwarded && tracking != MouseTracking::Off {
+            if forwarded && modes.mouse_reporting_active() {
                 actions.push(self.report(
                     button.report_button(),
                     MouseReportKind::Release,
@@ -448,11 +481,27 @@ mod tests {
             .count()
     }
 
+    fn start(col: u32, row: u32, kind: SelectionKind) -> PointerAction {
+        PointerAction::SelectionStart {
+            cell: at(col, row),
+            side: CellSide::Left,
+            kind,
+        }
+    }
+
+    fn extend(col: u32, row: u32) -> PointerAction {
+        PointerAction::SelectionExtend {
+            cell: at(col, row),
+            side: CellSide::Left,
+        }
+    }
+
     /// Asserts that a press is forwarded exactly when a tracking level is
     /// in force, Shift is not held, and the viewport is at the live tail.
     ///
     /// Case: the user clicks in panes running nvim, a plain shell, and
-    /// nvim scrolled back into history, with and without Shift held.
+    /// `fzf --height` scrolled back into history, with and without Shift
+    /// held.
     #[test]
     fn a_press_is_forwarded_only_with_tracking_no_shift_and_the_live_tail() {
         for tracking in [
@@ -521,7 +570,8 @@ mod tests {
     /// copies rather than reporting.
     ///
     /// Case: the user starts dragging a selection at a shell prompt just
-    /// as a script launches nvim in the same pane.
+    /// as a script starts `fzf --height`, which turns on mouse tracking in
+    /// the same pane.
     #[test]
     fn a_selection_drag_survives_tracking_turning_on() {
         let mut state = PointerState::default();
@@ -529,16 +579,10 @@ mod tests {
         state.route(press(PointerButton::Left, 1, 1), off, LIVE);
         state.route(motion(3, 1), off, LIVE);
         let on = modes(MouseTracking::Drag);
-        assert_eq!(
-            state.route(motion(4, 1), on, LIVE),
-            vec![PointerAction::SelectionExtend {
-                cell: at(4, 1),
-                side: CellSide::Left
-            }]
-        );
+        assert_eq!(state.route(motion(4, 1), on, LIVE), vec![extend(4, 1)]);
         assert_eq!(
             state.route(release(PointerButton::Left, 4, 1), on, LIVE),
-            vec![PointerAction::Copy]
+            vec![extend(4, 1), PointerAction::Copy]
         );
     }
 
@@ -564,7 +608,7 @@ mod tests {
         );
         assert_eq!(
             state.route(press(PointerButton::Left, 3, 2), off, LIVE),
-            vec![PointerAction::SelectionClear]
+            vec![start(3, 2, SelectionKind::Simple)]
         );
     }
 
@@ -641,22 +685,43 @@ mod tests {
         state.route(press(PointerButton::Right, 1, 1), m, LIVE);
         assert_eq!(
             state.route(with_shift(press(PointerButton::Left, 1, 1)), m, LIVE),
-            vec![PointerAction::SelectionClear]
+            vec![start(1, 1, SelectionKind::Simple)]
         );
         assert_eq!(
             state.route(motion(3, 1), m, LIVE),
             vec![
                 report(MouseButton::Right, MouseReportKind::Motion, 3, 1),
-                PointerAction::SelectionStart {
-                    cell: at(1, 1),
-                    side: CellSide::Left,
-                    kind: SelectionKind::Simple
-                },
-                PointerAction::SelectionExtend {
-                    cell: at(3, 1),
-                    side: CellSide::Left
-                },
+                extend(3, 1),
             ]
+        );
+    }
+
+    /// Asserts that a forwarded press of another button leaves a held
+    /// left-button selection drag alone, so the drag keeps extending and
+    /// copies on release.
+    ///
+    /// Case: the user Shift-drags a selection over nvim, lets go of Shift,
+    /// and presses the right button before releasing the left one.
+    #[test]
+    fn a_forwarded_press_leaves_a_held_selection_drag_alone() {
+        let mut state = PointerState::default();
+        let m = modes(MouseTracking::Drag);
+        state.route(with_shift(press(PointerButton::Left, 1, 1)), m, LIVE);
+        state.route(motion(3, 1), m, LIVE);
+        assert_eq!(
+            state.route(press(PointerButton::Right, 3, 1), m, LIVE),
+            vec![report(MouseButton::Right, MouseReportKind::Press, 3, 1)]
+        );
+        assert_eq!(
+            state.route(motion(4, 1), m, LIVE),
+            vec![
+                report(MouseButton::Right, MouseReportKind::Motion, 4, 1),
+                extend(4, 1),
+            ]
+        );
+        assert_eq!(
+            state.route(release(PointerButton::Left, 4, 1), m, LIVE),
+            vec![extend(4, 1), PointerAction::Copy]
         );
     }
 
@@ -696,6 +761,25 @@ mod tests {
         );
     }
 
+    /// Asserts that an event routed while tracking is off forgets the cell
+    /// of the last report, so the next application's first motion into
+    /// that cell is reported.
+    ///
+    /// Case: the user hovers over nvim with `mousemoveevent` set, quits
+    /// it, moves around the shell prompt, relaunches nvim, and moves back
+    /// onto the cell of the last hover report.
+    #[test]
+    fn tracking_off_forgets_the_last_reported_cell() {
+        let mut state = PointerState::default();
+        let on = modes(MouseTracking::Motion);
+        state.route(motion(10, 5), on, LIVE);
+        state.route(motion(9, 5), modes(MouseTracking::Off), LIVE);
+        assert_eq!(
+            state.route(motion(10, 5), on, LIVE),
+            vec![report(MouseButton::None, MouseReportKind::Motion, 10, 5)]
+        );
+    }
+
     /// Asserts that buttonless motion is reported with Shift held, and
     /// that a scrolled-back viewport reports none.
     ///
@@ -720,22 +804,32 @@ mod tests {
         assert!(state.route(motion(3, 2), m, false).is_empty());
     }
 
-    /// Asserts that a local press right after a forwarded one counts as a
-    /// single click, whatever the host counted.
+    /// Asserts that local presses after a forwarded one count their clicks
+    /// from it, whatever the host counted: the first is a single click,
+    /// which copies nothing, and the next a double click, which copies.
     ///
-    /// Case: the user clicks in nvim and, a moment later, Shift-clicks the
-    /// same spot to start a selection.
+    /// Case: the user clicks in nvim and, a moment later, Shift-double-clicks
+    /// the same word.
     #[test]
-    fn a_local_press_after_a_forwarded_one_is_a_single_click() {
+    fn local_presses_after_a_forwarded_one_count_their_own_clicks() {
         let mut state = PointerState::default();
         let m = modes(MouseTracking::Drag);
         state.route(press(PointerButton::Left, 2, 2), m, LIVE);
         state.route(release(PointerButton::Left, 2, 2), m, LIVE);
-        let second = with_shift(with_clicks(press(PointerButton::Left, 2, 2), 2));
-        assert_eq!(
-            state.route(second, m, LIVE),
-            vec![PointerAction::SelectionClear]
-        );
+        for (host_clicks, copies) in [(2, false), (3, true)] {
+            let local = with_shift(with_clicks(press(PointerButton::Left, 2, 2), host_clicks));
+            assert_eq!(
+                state.route(local, m, LIVE),
+                vec![start(2, 2, SelectionKind::Simple)],
+                "host count {host_clicks}"
+            );
+            let released = state.route(release(PointerButton::Left, 2, 2), m, LIVE);
+            assert_eq!(
+                released.contains(&PointerAction::Copy),
+                copies,
+                "host count {host_clicks}: {released:?}"
+            );
+        }
     }
 
     /// Asserts that a second press of a still-forwarded button reports its
@@ -758,9 +852,9 @@ mod tests {
         );
     }
 
-    /// Asserts that a single click arms without selecting and copies
-    /// nothing on a bare release, while a drag anchors at the origin on
-    /// its first cell change, then only extends, and copies on release.
+    /// Asserts that a single click anchors an empty selection at the press
+    /// and copies nothing on a bare release, while a drag extends that
+    /// selection from its first cell change on and copies on release.
     ///
     /// Case: the user clicks once at a shell prompt, then presses again
     /// and drags across four cells before letting go.
@@ -770,7 +864,7 @@ mod tests {
         let off = modes(MouseTracking::Off);
         assert_eq!(
             state.route(press(PointerButton::Left, 5, 5), off, LIVE),
-            vec![PointerAction::SelectionClear]
+            vec![start(5, 5, SelectionKind::Simple)]
         );
         assert!(
             state
@@ -779,31 +873,55 @@ mod tests {
         );
         state.route(press(PointerButton::Left, 5, 5), off, LIVE);
         assert!(state.route(motion(5, 5), off, LIVE).is_empty());
-        assert_eq!(
-            state.route(motion(7, 5), off, LIVE),
-            vec![
-                PointerAction::SelectionStart {
-                    cell: at(5, 5),
-                    side: CellSide::Left,
-                    kind: SelectionKind::Simple
-                },
-                PointerAction::SelectionExtend {
-                    cell: at(7, 5),
-                    side: CellSide::Left
-                },
-            ]
-        );
-        assert_eq!(
-            state.route(motion(9, 5), off, LIVE),
-            vec![PointerAction::SelectionExtend {
-                cell: at(9, 5),
-                side: CellSide::Left
-            }]
-        );
+        assert_eq!(state.route(motion(7, 5), off, LIVE), vec![extend(7, 5)]);
+        assert_eq!(state.route(motion(9, 5), off, LIVE), vec![extend(9, 5)]);
         assert_eq!(
             state.route(release(PointerButton::Left, 9, 5), off, LIVE),
-            vec![PointerAction::Copy]
+            vec![extend(9, 5), PointerAction::Copy]
         );
+    }
+
+    /// Asserts that releasing a selection drag moves the selection's end
+    /// to the half of the cell it was released in before copying.
+    ///
+    /// Case: the user drags right across a word at a shell prompt, entering
+    /// its last letter on the left half, and lets go on the right half.
+    #[test]
+    fn a_drag_release_extends_to_the_released_half_before_copying() {
+        let mut state = PointerState::default();
+        let off = modes(MouseTracking::Off);
+        state.route(press(PointerButton::Left, 1, 1), off, LIVE);
+        state.route(motion(5, 1), off, LIVE);
+        let mut released = release(PointerButton::Left, 5, 1);
+        released.side = CellSide::Right;
+        assert_eq!(
+            state.route(released, off, LIVE),
+            vec![
+                PointerAction::SelectionExtend {
+                    cell: at(5, 1),
+                    side: CellSide::Right
+                },
+                PointerAction::Copy,
+            ]
+        );
+    }
+
+    /// Asserts that a drag's end is known only once the drag has left the
+    /// cell it was pressed on, follows the cells it reaches, and is gone
+    /// after the release.
+    ///
+    /// Case: the user presses at a shell prompt and drags down a row while
+    /// spinning the wheel, then lets go.
+    #[test]
+    fn the_drag_end_is_known_only_while_a_drag_is_under_way() {
+        let mut state = PointerState::default();
+        let off = modes(MouseTracking::Off);
+        state.route(press(PointerButton::Left, 2, 2), off, LIVE);
+        assert_eq!(state.drag_end(), None);
+        state.route(motion(4, 3), off, LIVE);
+        assert_eq!(state.drag_end(), Some((at(4, 3), CellSide::Left)));
+        state.route(release(PointerButton::Left, 4, 3), off, LIVE);
+        assert_eq!(state.drag_end(), None);
     }
 
     /// Asserts that a double click selects plainly at once, a triple click
@@ -834,23 +952,18 @@ mod tests {
             ),
         ] {
             let mut state = PointerState::default();
-            assert_eq!(
-                state.route(input, off, LIVE),
-                vec![PointerAction::SelectionStart {
-                    cell: at(2, 2),
-                    side: CellSide::Left,
-                    kind
-                }]
-            );
+            assert_eq!(state.route(input, off, LIVE), vec![start(2, 2, kind)]);
             assert_eq!(
                 state.route(release(PointerButton::Left, 2, 2), off, LIVE),
-                vec![PointerAction::Copy]
+                vec![extend(2, 2), PointerAction::Copy]
             );
         }
         let mut state = PointerState::default();
-        assert_eq!(
-            state.route(with_clicks(press(PointerButton::Left, 2, 2), 0), off, LIVE),
-            vec![PointerAction::SelectionClear]
+        state.route(with_clicks(press(PointerButton::Left, 2, 2), 0), off, LIVE);
+        assert!(
+            state
+                .route(release(PointerButton::Left, 2, 2), off, LIVE)
+                .is_empty()
         );
     }
 

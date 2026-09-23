@@ -92,7 +92,7 @@ pub enum OrzmuxCommand {
         /// The notches and the modifiers and cell they were gathered with.
         input: WheelInput,
     },
-    /// Route one pointer event over a pane by the pane's live VT modes:
+    /// Routes one pointer event over a pane by the pane's live VT modes:
     /// a mouse report for the application, or the pane's own selection.
     Pointer {
         /// The pane the pointer event addresses.
@@ -1089,6 +1089,51 @@ mod tests {
                 CellSide::Right,
             ),
         });
+        let copied: Vec<OrzmuxEvent> = h
+            .drain()
+            .into_iter()
+            .filter(|event| matches!(event, OrzmuxEvent::SelectionCopied { .. }))
+            .collect();
+        assert_eq!(
+            copied,
+            vec![OrzmuxEvent::SelectionCopied {
+                text: "hello".to_string()
+            }]
+        );
+    }
+
+    /// Asserts that a selection drag released on the right half of the
+    /// cell it entered on its left half copies that cell's character too.
+    ///
+    /// Case: the user drags right across the first word of a line the
+    /// shell printed, reaches its last letter on the letter's left half,
+    /// and lets go on its right half.
+    #[test]
+    fn a_drag_released_on_the_right_half_copies_that_character() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx.send(b"hello world".to_vec()).unwrap();
+        h.pump_pane(root);
+        h.drain();
+        for input in [
+            pointer(
+                PointerKind::Press,
+                Some(PointerButton::Left),
+                1,
+                1,
+                CellSide::Left,
+            ),
+            pointer(PointerKind::Motion, None, 5, 1, CellSide::Left),
+            pointer(
+                PointerKind::Release,
+                Some(PointerButton::Left),
+                5,
+                1,
+                CellSide::Right,
+            ),
+        ] {
+            h.send(OrzmuxCommand::Pointer { pane: root, input });
+        }
         let copied: Vec<OrzmuxEvent> = h
             .drain()
             .into_iter()

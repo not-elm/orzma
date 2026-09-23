@@ -279,9 +279,14 @@ impl<V: Vt> OrzmaTty<V> {
 
     /// Scrolls the grid, arming the coalescer only when the viewport
     /// actually moved; a clamped or zero motion reports no damage.
+    ///
+    /// When the viewport moves under a held selection drag, the
+    /// selection's moving end follows it onto the cell now under the
+    /// pointer.
     pub fn scroll(&mut self, scroll: Scroll) {
         if self.vt.scroll(scroll) {
             self.coalescer.arm_or_extend(Instant::now());
+            self.follow_drag_end();
         }
     }
 
@@ -412,14 +417,16 @@ impl<V: Vt> OrzmaTty<V> {
     /// result: reports are queued for the PTY as one write, and selection
     /// effects apply to the VT.
     ///
-    /// The event's cell is clamped into the grid first, and a viewport cell
-    /// maps onto the grid at the current display offset. A press is
-    /// forwarded only while a mouse tracking level is in force, Shift is
-    /// not held, and the viewport is at the live tail, and that routing
-    /// holds until the button's release. Nothing here moves the viewport.
-    /// Returns the selected text when the event finished a selection drag;
-    /// `None` otherwise, and when the selection is empty. `Ok` means the
-    /// reports were queued, not that they reached the PTY.
+    /// Every cell is clamped into the current grid first, including one
+    /// kept from an earlier event such as the cell a cancel reports its
+    /// releases at, and a viewport cell maps onto the grid at the current
+    /// display offset. A press is forwarded only while a mouse tracking
+    /// level is in force, Shift is not held, and the viewport is at the
+    /// live tail, and that routing holds until the button's release.
+    /// Nothing here moves the viewport. Returns the selected text when the
+    /// event finished a selection drag; `None` otherwise, and when the
+    /// selection is empty. `Ok` means the reports were queued, not that
+    /// they reached the PTY.
     ///
     /// # Errors
     ///
@@ -428,7 +435,8 @@ impl<V: Vt> OrzmaTty<V> {
     /// thread's write failed, and `PtyWriterClosed` after that. Selection
     /// effects apply either way.
     pub fn send_pointer(&mut self, mut input: PointerInput) -> OrzmaTtyResult<Option<String>> {
-        input.cell = input.cell.clamped_to(self.vt.grid_size());
+        let size = self.vt.grid_size();
+        input.cell = input.cell.clamped_to(size);
         let modes = self.vt.modes();
         let offset = self.vt.display_offset();
         let at_live_tail = self.vt.is_at_live_tail();
@@ -436,15 +444,16 @@ impl<V: Vt> OrzmaTty<V> {
         let mut copied = None;
         for action in self.pointer.route(input, modes, at_live_tail) {
             match action {
-                PointerAction::Report(report) => {
+                PointerAction::Report(mut report) => {
+                    report.cell = report.cell.clamped_to(size);
                     bytes.extend(PtyInput::encode_mouse(&report, modes.mouse_encoding).into_bytes())
                 }
                 PointerAction::SelectionClear => self.clear_selection(),
                 PointerAction::SelectionStart { cell, side, kind } => {
-                    self.start_selection(cell.to_grid_point(offset), side, kind);
+                    self.start_selection(cell.clamped_to(size).to_grid_point(offset), side, kind);
                 }
                 PointerAction::SelectionExtend { cell, side } => {
-                    self.extend_selection(cell.to_grid_point(offset), side);
+                    self.extend_selection(cell.clamped_to(size).to_grid_point(offset), side);
                 }
                 PointerAction::Copy => {
                     copied = self.vt.selection_text().filter(|text| !text.is_empty());
@@ -638,6 +647,18 @@ impl<V: Vt> OrzmaTty<V> {
         if !self.vt.is_at_live_tail() {
             self.scroll(Scroll::Bottom);
         }
+    }
+
+    /// Moves a held selection drag's moving end onto the grid point its
+    /// viewport cell shows at the current display offset.
+    fn follow_drag_end(&mut self) {
+        let Some((cell, side)) = self.pointer.drag_end() else {
+            return;
+        };
+        let point = cell
+            .clamped_to(self.vt.grid_size())
+            .to_grid_point(self.vt.display_offset());
+        self.extend_selection(point, side);
     }
 
     /// Appends the PTY bytes `decision` encodes to `bytes`, or applies its

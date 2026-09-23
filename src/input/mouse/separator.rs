@@ -139,9 +139,9 @@ impl SeparatorHit {
     }
 }
 
-/// The divider the pointer is holding. While it exists, every other
-/// mouse consumer forwards nothing and keeps whatever in-flight state it
-/// already holds.
+/// The divider the pointer is holding. While it exists, no press, release,
+/// or pointer motion reaches a pane or an inline webview, and a gesture a
+/// pane still held is cancelled.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub(in crate::input) struct GrabbedSeparator {
     /// The split the held divider moves.

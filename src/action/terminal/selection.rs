@@ -16,24 +16,19 @@ pub(crate) struct TerminalSelectionClear {
     pub entity: Entity,
 }
 
-/// Copies `entity`'s current selection to the clipboard.
+/// Copies `entity`'s current selection to the clipboard and dismisses the
+/// selection.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct TerminalSelectionCopy {
     /// The terminal entity whose selection is copied.
     #[event_target]
     pub entity: Entity,
-    /// Whether the selection is dismissed once its text has been requested.
-    /// When `false` the highlight survives the copy.
-    pub dismiss: bool,
 }
 
 /// Triggers a `TerminalSelectionCopy` on the focused terminal, if any.
 pub(crate) fn trigger_selection_copy(commands: &mut Commands, focused: Option<Entity>) {
     if let Some(entity) = focused {
-        commands.trigger(TerminalSelectionCopy {
-            entity,
-            dismiss: true,
-        });
+        commands.trigger(TerminalSelectionCopy { entity });
     }
 }
 
@@ -57,8 +52,8 @@ fn on_terminal_selection_clear(ev: On<TerminalSelectionClear>, mut commands: Com
 }
 
 /// Applies a `TerminalSelectionCopy`: asks the backend for the pane's
-/// selected text, and dismisses the selection when the event asks for it.
-/// The answer arrives as `TtySelectionTextSignal`.
+/// selected text, then dismisses the selection. The answer arrives as
+/// `TtySelectionTextSignal`.
 fn on_terminal_selection_copy(
     ev: On<TerminalSelectionCopy>,
     mut commands: Commands,
@@ -72,9 +67,7 @@ fn on_terminal_selection_copy(
         commands.trigger(RequestTtyCopySelection {
             terminal: ev.entity,
         });
-        if ev.dismiss {
-            commands.trigger(TerminalSelectionClear { entity: ev.entity });
-        }
+        commands.trigger(TerminalSelectionClear { entity: ev.entity });
     }
 }
 
@@ -96,9 +89,8 @@ mod tests {
     /// Asserts that `TerminalSelectionClear` is forwarded as a
     /// `RequestTtySelectionClear` targeting the same entity.
     ///
-    /// Case: the user presses Ctrl+C (Cmd+C on macOS) over a selection, the
-    /// keyboard copy path that reaches this request once the backend has
-    /// read the selected text.
+    /// Case: the user copies a selection with Ctrl+C (Cmd+C on macOS),
+    /// which then dismisses it.
     #[test]
     fn selection_clear_triggers_the_matching_request() {
         let mut app = App::new();
@@ -140,10 +132,8 @@ mod tests {
             })
             .add_observer(|ev: On<CopyAction>, mut s: ResMut<Seen>| s.copies.push(ev.text.clone()));
         let terminal = app.world_mut().spawn(OrzmaTerminal).id();
-        app.world_mut().trigger(TerminalSelectionCopy {
-            entity: terminal,
-            dismiss: true,
-        });
+        app.world_mut()
+            .trigger(TerminalSelectionCopy { entity: terminal });
         app.world_mut().trigger(TtySelectionTextSignal {
             text: Some("hello".into()),
         });
@@ -158,8 +148,8 @@ mod tests {
         assert_eq!(seen.copies, vec!["hello".to_string()]);
     }
 
-    /// Asserts that a dismissing copy clears the selection, and that it asks
-    /// the backend for the text before clearing rather than after.
+    /// Asserts that a copy clears the selection, and that it asks the
+    /// backend for the text before clearing rather than after.
     ///
     /// Case: a Windows user presses `Ctrl+C` over a selection, then presses it
     /// again to interrupt the running command — which only reaches the shell
@@ -178,41 +168,11 @@ mod tests {
             });
         let terminal = app.world_mut().spawn(OrzmaTerminal).id();
 
-        app.world_mut().trigger(TerminalSelectionCopy {
-            entity: terminal,
-            dismiss: true,
-        });
+        app.world_mut()
+            .trigger(TerminalSelectionCopy { entity: terminal });
         app.update();
 
         assert_eq!(app.world().resource::<Order>().0, vec!["copy", "clear"]);
-    }
-
-    /// Asserts that a non-dismissing copy asks for the text and leaves the
-    /// selection in place.
-    ///
-    /// Case: the user presses Ctrl+C (Cmd+C on macOS) over a selection, the
-    /// keyboard copy path that reaches this observer today.
-    #[test]
-    fn selection_copy_without_dismiss_keeps_the_selection() {
-        #[derive(Resource, Default)]
-        struct Order(Vec<&'static str>);
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(SelectionPlugin)
-            .init_resource::<Order>()
-            .add_observer(|_: On<RequestTtyCopySelection>, mut o: ResMut<Order>| o.0.push("copy"))
-            .add_observer(|_: On<RequestTtySelectionClear>, mut o: ResMut<Order>| {
-                o.0.push("clear")
-            });
-        let terminal = app.world_mut().spawn(OrzmaTerminal).id();
-
-        app.world_mut().trigger(TerminalSelectionCopy {
-            entity: terminal,
-            dismiss: false,
-        });
-        app.update();
-
-        assert_eq!(app.world().resource::<Order>().0, vec!["copy"]);
     }
 
     /// Asserts that a copy aimed at an entity without a terminal clears
@@ -233,10 +193,8 @@ mod tests {
             });
         let bare = app.world_mut().spawn_empty().id();
 
-        app.world_mut().trigger(TerminalSelectionCopy {
-            entity: bare,
-            dismiss: true,
-        });
+        app.world_mut()
+            .trigger(TerminalSelectionCopy { entity: bare });
         app.update();
 
         assert!(app.world().resource::<Order>().0.is_empty());

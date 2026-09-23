@@ -1,7 +1,6 @@
-//! Shared mouse-dispatch plumbing for every `OrzmaTerminal` surface: a
-//! `TerminalMouseDisabled` or `MouseClaimedByWebview` component blocks a new
-//! press and hover on that surface, but neither drops a gesture the surface
-//! already holds.
+//! Shared mouse-dispatch plumbing for every `OrzmaTerminal` surface: both
+//! `TerminalMouseDisabled` and `MouseClaimedByWebview` block a new press and
+//! hover there, and only `TerminalMouseDisabled` also cancels a held gesture.
 
 use crate::action::terminal::TerminalOpenUri;
 use crate::input::InputPhase;
@@ -115,7 +114,8 @@ fn cell_at_cursor(
 
 /// 1-indexed `(CellCoord, CellSide)` of the cell at pane-local physical
 /// `local`, clamped to `1..=cols` × `1..=rows`. `CellSide` is `Left` in the
-/// left half.
+/// left half, and a point past the last column reads as the right half of
+/// the last cell.
 fn cell_at_local(
     local: Vec2,
     cell_w: f32,
@@ -127,7 +127,7 @@ fn cell_at_local(
     let row_f = (local.y / cell_h).max(0.0);
     let col = (col_f.floor() as u32 + 1).min(cols as u32).max(1);
     let row = (row_f.floor() as u32 + 1).min(rows as u32).max(1);
-    let side = if col_f - col_f.floor() < 0.5 {
+    let side = if col_f < f32::from(cols) && col_f - col_f.floor() < 0.5 {
         CellSide::Left
     } else {
         CellSide::Right
@@ -339,17 +339,19 @@ mod tests {
 
     /// Asserts that `cell_at_local` yields 1-indexed cell coordinates,
     /// clamps them to the grid bounds, and reports which half of the cell
-    /// was hit.
+    /// was hit, a point past the last column reading as its right half.
     ///
-    /// Case: the user clicks the pane's top-left corner, a point far past
-    /// the bottom-right cell, and the right half of a cell in the top row.
+    /// Case: the user clicks the pane's top-left corner, drags far past
+    /// the bottom-right cell, and clicks the right half of a cell in the
+    /// top row.
     #[test]
     fn cell_at_local_is_one_indexed_and_clamped() {
         let (cell, side) = cell_at_local(Vec2::new(0.0, 0.0), 10.0, 20.0, 80, 24);
         assert_eq!((cell.col, cell.row), (1, 1));
         assert_eq!(side, CellSide::Left);
-        let (cell, _) = cell_at_local(Vec2::new(10_000.0, 10_000.0), 10.0, 20.0, 80, 24);
+        let (cell, side) = cell_at_local(Vec2::new(10_002.0, 10_000.0), 10.0, 20.0, 80, 24);
         assert_eq!((cell.col, cell.row), (80, 24));
+        assert_eq!(side, CellSide::Right);
         let (cell, side) = cell_at_local(Vec2::new(17.0, 5.0), 10.0, 20.0, 80, 24);
         assert_eq!(cell.col, 2);
         assert_eq!(side, CellSide::Right);
