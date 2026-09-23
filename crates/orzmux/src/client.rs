@@ -56,7 +56,7 @@ impl OrzmuxClient {
     /// start the multiplexer thread.
     pub fn spawn(config: OrzmuxConfig, waker: Waker) -> OrzmuxResult<Self> {
         let (command_tx, command_rx) = unbounded::<(CommandSeq, OrzmuxCommand)>();
-        let (event_tx, event_rx) = unbounded::<OrzmuxEvent>();
+        let (gui, event_rx) = GuiLink::channel(waker);
         let OrzmuxConfig {
             shell,
             scrollback_rows,
@@ -68,7 +68,6 @@ impl OrzmuxClient {
         let thread = thread::Builder::new()
             .name("orzma-mux".to_string())
             .spawn(move || {
-                let gui = GuiLink::new(event_tx, waker);
                 let backend = Backend::new(Box::new(factory), wheel);
                 EventLoop::new(backend, command_rx, gui).run()
             })

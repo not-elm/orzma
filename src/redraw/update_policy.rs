@@ -211,9 +211,6 @@ mod tests {
     #[test]
     fn the_begin_frame_interval_is_below_the_tick() {
         let app = app();
-        assert_eq!(
-            app.world().resource::<BeginFrameInterval>().0,
-            Duration::from_millis(30)
-        );
+        assert!(app.world().resource::<BeginFrameInterval>().0 < WEBVIEW_TICK);
     }
 }

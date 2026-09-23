@@ -33,6 +33,7 @@ use configs::{OrzmaConfigsPlugin, cursor_policy, wheel_config};
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
 use session::SessionPlugin;
+use std::fmt::Display;
 use ui::OrzmaUiPlugin;
 
 /// Scrollback rows every pane retains on its primary screen.
@@ -63,11 +64,9 @@ fn main() {
                 ..default()
             }),
     );
-    let Some(wakers) = AppWakers::new(app.world()) else {
-        eprintln!("orzma: the window event loop is unavailable");
-        std::process::exit(1);
-    };
-    let orzmux = match OrzmuxClient::spawn(
+    let wakers = AppWakers::new(app.world())
+        .unwrap_or_else(|| fatal("the window event loop is unavailable"));
+    let orzmux = OrzmuxClient::spawn(
         OrzmuxConfig {
             shell: pre_configs.orzma.shell.clone(),
             scrollback_rows: SCROLLBACK_ROWS,
@@ -76,20 +75,10 @@ fn main() {
             shell_integration: pre_configs.orzma.shell_integration,
         },
         wakers.input().clone(),
-    ) {
-        Ok(client) => client,
-        Err(err) => {
-            eprintln!("orzma: {err}");
-            std::process::exit(1);
-        }
-    };
-    let cef_profile = match CefProfileDir::acquire() {
-        Ok(profile) => profile,
-        Err(err) => {
-            eprintln!("orzma: cannot create the CEF profile directory: {err}");
-            std::process::exit(1);
-        }
-    };
+    )
+    .unwrap_or_else(|err| fatal(err));
+    let cef_profile = CefProfileDir::acquire()
+        .unwrap_or_else(|err| fatal(format!("cannot create the CEF profile directory: {err}")));
     app.add_plugins(cef_plugin(orzma_registry.clone(), cef_profile.path()))
         .add_plugins((
             SurfacePlugin,
@@ -113,6 +102,12 @@ fn main() {
             OrzmaSystems::Input.after(OrzmuxSystems::ApplyLayout),
         )
         .run();
+}
+
+/// Reports `message` on standard error and exits the process with status 1.
+fn fatal(message: impl Display) -> ! {
+    eprintln!("orzma: {message}");
+    std::process::exit(1);
 }
 
 /// The primary window descriptor.

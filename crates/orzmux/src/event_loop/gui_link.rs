@@ -3,29 +3,32 @@
 //! disconnects.
 
 use crate::backend::OrzmuxEvent;
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::task::Waker;
 
 /// The backend's link to the GUI: sends events, wakes the GUI after a
 /// batch that sent at least one event, and when dropped disconnects the
 /// event channel before a last wake, so the woken GUI observes the
 /// disconnect.
+///
+/// # Invariants
+///
+/// Holds the only sender of its event channel.
 pub(crate) struct GuiLink {
     events: Option<Sender<OrzmuxEvent>>,
     waker: Waker,
 }
 
 impl GuiLink {
-    /// A link that sends on `events` and wakes the GUI through `waker`.
-    ///
-    /// `events` must be the only sender of the GUI's event channel, or the
-    /// wake sent on drop can arrive before the channel reports the
-    /// disconnect.
-    pub fn new(events: Sender<OrzmuxEvent>, waker: Waker) -> Self {
-        Self {
+    /// A link on a new event channel that wakes the GUI through `waker`,
+    /// paired with the channel's receiving end for the GUI.
+    pub fn channel(waker: Waker) -> (Self, Receiver<OrzmuxEvent>) {
+        let (events, receiver) = unbounded();
+        let link = Self {
             events: Some(events),
             waker,
-        }
+        };
+        (link, receiver)
     }
 
     /// Sends `batch` in order and wakes the GUI once when at least one
@@ -67,25 +70,25 @@ impl Drop for GuiLink {
 mod tests {
     use super::*;
     use crate::test_support::WakeCount;
-    use crossbeam_channel::{Receiver, TryRecvError, unbounded};
+    use crossbeam_channel::TryRecvError;
     use std::iter;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::task::Wake;
     use std::thread;
 
-    /// Records, at each wake, whether the GUI's receiver reported the
+    /// Records, at each wake, whether the watched receiver reported the
     /// disconnect.
+    #[derive(Default)]
     struct DisconnectProbe {
-        receiver: Receiver<OrzmuxEvent>,
+        receiver: OnceLock<Receiver<OrzmuxEvent>>,
         seen: Mutex<Vec<bool>>,
     }
 
     impl DisconnectProbe {
-        fn new(receiver: Receiver<OrzmuxEvent>) -> Self {
-            Self {
-                receiver,
-                seen: Mutex::default(),
-            }
+        fn watch(&self, receiver: Receiver<OrzmuxEvent>) {
+            self.receiver
+                .set(receiver)
+                .expect("the probe watches a single receiver");
         }
 
         fn seen(&self) -> Vec<bool> {
@@ -99,7 +102,9 @@ mod tests {
         }
 
         fn wake_by_ref(self: &Arc<Self>) {
-            let disconnected = matches!(self.receiver.try_recv(), Err(TryRecvError::Disconnected));
+            let disconnected = self.receiver.get().is_some_and(|receiver| {
+                matches!(receiver.try_recv(), Err(TryRecvError::Disconnected))
+            });
             self.seen.lock().unwrap().push(disconnected);
         }
     }
@@ -115,9 +120,8 @@ mod tests {
     /// next turn has nothing to send.
     #[test]
     fn a_batch_with_events_wakes_once_and_an_empty_batch_does_not() {
-        let (events, receiver) = unbounded();
         let wakes = Arc::new(WakeCount::default());
-        let link = GuiLink::new(events, Waker::from(Arc::clone(&wakes)));
+        let (link, receiver) = GuiLink::channel(Waker::from(Arc::clone(&wakes)));
         assert!(link.send_batch([answer(), answer()]));
         assert_eq!(wakes.get(), 1);
         assert_eq!(receiver.len(), 2);
@@ -132,10 +136,9 @@ mod tests {
     /// deliver.
     #[test]
     fn a_batch_reports_a_gone_receiver() {
-        let (events, receiver) = unbounded();
-        drop(receiver);
         let wakes = Arc::new(WakeCount::default());
-        let link = GuiLink::new(events, Waker::from(Arc::clone(&wakes)));
+        let (link, receiver) = GuiLink::channel(Waker::from(Arc::clone(&wakes)));
+        drop(receiver);
         assert!(!link.send_batch([answer()]));
         assert_eq!(wakes.get(), 0);
     }
@@ -146,9 +149,9 @@ mod tests {
     /// Case: the GUI drops its client at exit and the backend loop returns.
     #[test]
     fn dropping_the_link_disconnects_before_the_last_wake() {
-        let (events, receiver) = unbounded();
-        let probe = Arc::new(DisconnectProbe::new(receiver));
-        let link = GuiLink::new(events, Waker::from(Arc::clone(&probe)));
+        let probe = Arc::new(DisconnectProbe::default());
+        let (link, receiver) = GuiLink::channel(Waker::from(Arc::clone(&probe)));
+        probe.watch(receiver);
         drop(link);
         assert_eq!(probe.seen(), vec![true]);
     }
@@ -159,11 +162,11 @@ mod tests {
     /// Case: the backend thread panics mid-loop.
     #[test]
     fn a_panicking_thread_still_disconnects_before_the_last_wake() {
-        let (events, receiver) = unbounded();
-        let probe = Arc::new(DisconnectProbe::new(receiver));
-        let waker = Waker::from(Arc::clone(&probe));
+        let probe = Arc::new(DisconnectProbe::default());
+        let (link, receiver) = GuiLink::channel(Waker::from(Arc::clone(&probe)));
+        probe.watch(receiver);
         let outcome = thread::spawn(move || {
-            let _link = GuiLink::new(events, waker);
+            let _link = link;
             panic!("injected backend failure");
         })
         .join();

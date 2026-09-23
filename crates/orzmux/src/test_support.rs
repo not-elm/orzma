@@ -163,12 +163,11 @@ impl Harness {
     pub fn with_wheel(wheel: WheelConfig) -> Self {
         let (spawned_tx, spawned_rx) = unbounded();
         let (command_tx, command_rx) = unbounded();
-        let (event_tx, event_rx) = unbounded();
         let log = Arc::new(FactoryLog::default());
         let factory = FakeFactory::new(spawned_tx, Arc::clone(&log));
         let backend = Backend::new(Box::new(factory), wheel);
         let wakes = Arc::new(WakeCount::default());
-        let gui = GuiLink::new(event_tx, Waker::from(Arc::clone(&wakes)));
+        let (gui, event_rx) = GuiLink::channel(Waker::from(Arc::clone(&wakes)));
         Self {
             event_loop: EventLoop::new(backend, command_rx, gui),
             events: event_rx,

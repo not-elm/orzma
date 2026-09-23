@@ -572,7 +572,7 @@ mod tests {
     #[test]
     fn the_final_batch_reaches_the_gui_after_a_disconnect() {
         let (command_tx, command_rx) = unbounded();
-        let (event_tx, event_rx) = unbounded();
+        let (gui, event_rx) = GuiLink::channel(Waker::noop().clone());
         let (spawned_tx, _spawned_rx) = unbounded();
         let factory = FakeFactory::new(spawned_tx, Arc::new(FactoryLog::default()));
         let backend = Backend::new(Box::new(factory), WheelConfig::default());
@@ -585,12 +585,7 @@ mod tests {
             ))
             .expect("the loop still holds the receiver");
         drop(command_tx);
-        EventLoop::new(
-            backend,
-            command_rx,
-            GuiLink::new(event_tx, Waker::noop().clone()),
-        )
-        .run();
+        EventLoop::new(backend, command_rx, gui).run();
         let events: Vec<OrzmuxEvent> = event_rx.try_iter().collect();
         assert!(
             events
