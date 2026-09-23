@@ -307,8 +307,8 @@ mod tests {
         );
     }
 
-    /// Asserts that a `register` still parses when it carries the removed
-    /// `click_focus` field, which the host now ignores.
+    /// Asserts that a `register` carrying an unknown `click_focus` field
+    /// still parses, the field ignored.
     ///
     /// Case: an app built against an SDK that still sends `click_focus:false`
     /// registers its view with an updated orzma.

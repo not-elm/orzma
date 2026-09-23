@@ -3140,7 +3140,7 @@ mod back_channel_state_tests {
 }
 
 #[cfg(test)]
-mod normalize_tests {
+mod parse_tests {
     use super::*;
     use crate::control_plane::protocol::HostKeyChord;
 
@@ -3156,7 +3156,7 @@ mod normalize_tests {
     ///
     /// Case: a program registers Alt+h, F5 and Tab as forward keys.
     #[test]
-    fn normalize_chord_maps_keys_and_mods() {
+    fn parse_maps_keys_and_mods() {
         let n = NormalizedChord::parse(&chord(&["alt"], "h")).unwrap();
         assert_eq!(n.key, ChordKey::Code(KeyCode::KeyH));
         assert!(n.alt && !n.ctrl && !n.shift && !n.logo);
@@ -3176,7 +3176,7 @@ mod normalize_tests {
     ///
     /// Case: a TUI browser forwards Esc, Space and the arrow and page keys.
     #[test]
-    fn normalize_chord_maps_forward_keys_keys() {
+    fn parse_maps_forward_keys_keys() {
         let cases: &[(&str, KeyCode)] = &[
             ("esc", KeyCode::Escape),
             (" ", KeyCode::Space),
