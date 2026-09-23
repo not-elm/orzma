@@ -19,7 +19,7 @@ pub use material::TerminalPaddingFallback;
 
 pub mod prelude {
     pub use crate::TerminalRendererPlugin;
-    pub use crate::cursor::{CaretStyle, CursorPlugin, LastKeyInstant};
+    pub use crate::cursor::{CaretStyle, CursorPlugin, LastKeyInstant, NextCaretFlip};
     pub use crate::grid::TerminalGridPlugin;
     pub use crate::material::{OVERLAY_SLOTS, PaneInactiveStyle, TerminalOverlays};
     pub use crate::schema::*;
