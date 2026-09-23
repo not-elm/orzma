@@ -194,7 +194,9 @@ the program and never the page. `register` carries the initial list;
 - one ASCII punctuation character such as `/`, `?`, `[`, `]`, `:` — matched
   against the character the key produced, whichever key produced it, with
   Shift ignored and the other modifiers exact. Characters typed through a dead
-  key or AltGr do not match.
+  key or AltGr do not match. On macOS, a character typed with the Option key
+  does not match a punctuation chord unless `option_as_alt` is in effect for
+  that side.
 
 Unrecognized chords are silently ignored. The key-up of a forwarded key may
 still reach the page.
