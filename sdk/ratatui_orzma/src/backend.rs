@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// A ratatui [`Backend`] that wraps another backend and emits orzma webview
-/// mount/unmount APC verbs (and the control-plane focus op) after each frame's cell
-/// diff — so an app needs no separate post-draw flush call.
+/// mount/unmount verbs after each frame's cell diff — so an app needs no
+/// separate post-draw flush call.
 ///
 /// Construct it with [`OrzmaBackend::new`], passing the [`Orzma`] session it links
 /// to, then build a normal ratatui terminal:
@@ -204,12 +204,12 @@ mod tests {
     }
 
     /// Asserts that a draw taken while the control socket is down still
-    /// succeeds and schedules a reconnect, even when a widget claims focus.
+    /// succeeds and schedules a reconnect.
     ///
-    /// Case: the user is typing in a focused webview when the orzma that owns
+    /// Case: the user is scrolling a mounted page when the orzma that owns
     /// the control socket goes away.
     #[test]
-    fn a_disconnected_draw_with_a_focused_widget_still_schedules_a_reconnect() {
+    fn a_disconnected_draw_still_schedules_a_reconnect() {
         use crate::uds::UnixStream;
         use std::sync::{Arc, Mutex};
         const INSTANCE: &str = "3f5a9c02d1e84b7690ab3cde12f45678";
@@ -219,7 +219,6 @@ mod tests {
         {
             let mut f = frame.lock().unwrap();
             f.record(INSTANCE.into(), ratatui::layout::Rect::new(0, 0, 10, 5));
-            f.set_focused(INSTANCE.into());
         }
 
         let (near, far) = UnixStream::pair().unwrap();

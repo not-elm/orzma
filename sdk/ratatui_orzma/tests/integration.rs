@@ -41,13 +41,14 @@ impl Write for SharedBuf {
     }
 }
 
-/// Asserts that a draw mounts a focused placement through the platform's
-/// geometry channel — the PTY as an APC verb on Unix, the control socket as
-/// a `mount` op on Windows — and always sends the focus op over the socket.
+/// Asserts that a draw mounts a placement through the platform's geometry
+/// channel — the PTY as an APC verb on Unix, the control socket as a `mount`
+/// op on Windows — and that focusing it sends the focus op over the socket.
 ///
-/// Case: an app focuses and renders a webview placement for the first time.
+/// Case: an app renders a webview placement for the first time and then
+/// focuses it.
 #[test]
-fn backend_draw_emits_mount_apc_and_focus_op() {
+fn backend_draw_emits_mount_and_focus_sends_the_focus_op() {
     let server = FakeServer::start("view-1");
     with_env(&server.sock_path.clone(), || {
         let orzma = Orzma::connect().unwrap();
@@ -56,19 +57,20 @@ fn backend_draw_emits_mount_apc_and_focus_op() {
         let term_bytes = SharedBuf(Arc::new(Mutex::new(Vec::new())));
         let mut backend = OrzmaBackend::new(CrosstermBackend::new(term_bytes.clone()), &orzma);
 
-        // A WebviewWidget records its placement + focus into the frame the SDK
-        // shares with the backend — the same path render_stateful_widget drives.
         {
             let mut scratch = Buffer::empty(Rect::new(0, 0, 80, 40));
             let mut frame = orzma.frame();
-            WebviewWidget::new(handle.instance_id())
-                .focused(true)
-                .render(Rect::new(2, 3, 48, 12), &mut scratch, &mut *frame);
+            WebviewWidget::new(handle.instance_id()).render(
+                Rect::new(2, 3, 48, 12),
+                &mut scratch,
+                &mut *frame,
+            );
         }
 
         // Terminal::flush calls Backend::draw once per frame; drive it directly.
         let no_cells: Vec<(u16, u16, &Cell)> = Vec::new();
         Backend::draw(&mut backend, no_cells.into_iter()).unwrap();
+        handle.focus().unwrap();
 
         let out = String::from_utf8(term_bytes.0.lock().unwrap().clone()).unwrap();
         let instance = &server.instance;

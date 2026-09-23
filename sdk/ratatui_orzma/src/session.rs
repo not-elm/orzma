@@ -39,25 +39,12 @@ pub(crate) struct Placement {
 #[derive(Debug, Default)]
 pub struct FramePlacements {
     placements: Vec<Placement>,
-    focused: Option<String>,
     pub(crate) pending_compositing: HashMap<String, bool>,
 }
 
 impl FramePlacements {
     pub(crate) fn record(&mut self, instance: String, area: Rect) {
         self.placements.push(Placement { instance, area });
-    }
-
-    /// Marks `instance` focused for this frame. Last writer wins; a debug build
-    /// trips an assertion if more than one widget claims focus in a single frame
-    /// (the app must focus at most one placement at a time).
-    pub(crate) fn set_focused(&mut self, instance: String) {
-        debug_assert!(
-            self.focused.is_none(),
-            "multiple webviews marked focused in one frame (last wins): had {:?}, now {instance:?}",
-            self.focused
-        );
-        self.focused = Some(instance);
     }
 
     /// Removes and returns the buffered compositing state for `instance`, if any.
@@ -68,11 +55,6 @@ impl FramePlacements {
     #[cfg(test)]
     pub(crate) fn placements_for_test(&self) -> &[Placement] {
         &self.placements
-    }
-
-    #[cfg(test)]
-    pub(crate) fn focused_for_test(&self) -> Option<&str> {
-        self.focused.as_deref()
     }
 
     #[cfg(test)]
@@ -88,16 +70,14 @@ pub(crate) struct FlushState {
     pub last: HashMap<String, Rect>,
     #[cfg(not(test))]
     last: HashMap<String, Rect>,
-    last_focused: Option<String>,
 }
 
 impl FlushState {
-    /// Emits this frame's geometry and, when focus changed since the last
-    /// frame, the control-plane focus op.
+    /// Emits this frame's geometry.
     ///
-    /// On Unix the geometry rides the PTY as APC verbs (`out`) and only the
-    /// focus op takes the socket; on Windows ConPTY drops APC, so the
-    /// geometry takes the socket too, as `mount` / `unmount` ops.
+    /// On Unix the geometry rides the PTY as APC verbs (`out`); on Windows
+    /// ConPTY drops APC, so the geometry takes the socket as `mount` /
+    /// `unmount` ops.
     pub fn emit_frame(
         &mut self,
         out: &mut impl Write,
@@ -106,45 +86,27 @@ impl FlushState {
     ) -> OrzmaResult<()> {
         if cfg!(windows) {
             let (verbs, current) = PlacementVerb::diff(self, &frame.placements);
-            let focus_changed = self.last_focused != frame.focused;
             // NOTE: only take the writer lock (shared with the reader thread
             // and every WebviewHandle::emit) when there is something to send;
             // this runs every render frame and the unchanged path must not
-            // contend the lock. When it is taken, one lock covers the whole
-            // frame's writes so geometry and focus cannot interleave with a
-            // concurrent emit line.
-            if !verbs.is_empty() || focus_changed {
+            // contend the lock.
+            if !verbs.is_empty() {
                 let mut w = socket.lock()?;
-                if !verbs.is_empty() {
-                    write_socket_verbs(&mut *w, &verbs)?;
-                    w.flush()?;
-                }
-                if focus_changed {
-                    flush_focus(&mut *w, &mut self.last_focused, &frame.focused)?;
-                }
+                write_socket_verbs(&mut *w, &verbs)?;
+                w.flush()?;
             }
             self.last = current;
             return Ok(());
         }
-        self.emit_placements(out, frame)?;
-        // NOTE: only take the writer lock (shared with the reader thread and
-        // every WebviewHandle::emit) when focus actually changed; this runs every
-        // render frame and the unchanged path must not contend the lock.
-        if self.last_focused == frame.focused {
-            return Ok(());
-        }
-        let mut w = socket.lock()?;
-        flush_focus(&mut *w, &mut self.last_focused, &frame.focused)
+        self.emit_placements(out, frame)
     }
 
-    /// Emits this frame's geometry to `out` alone, leaving the focus op unsent.
+    /// Emits this frame's geometry to `out` alone, leaving the socket untouched.
     ///
     /// This is the flush to use while the control socket is down. On Unix
-    /// geometry rides the PTY, which outlives the socket, and there is nothing
-    /// at the other end of the socket to receive a focus op — attempting one
-    /// would only fail the whole draw. On Windows geometry needs the socket
-    /// too, so nothing is emitted until the reconnect, after which
-    /// [`Self::reset`] re-asserts every placement.
+    /// geometry rides the PTY, which outlives the socket. On Windows geometry
+    /// needs the socket too, so nothing is emitted until the reconnect, after
+    /// which [`Self::reset`] re-asserts every placement.
     pub fn emit_placements(
         &mut self,
         out: &mut impl Write,
@@ -157,7 +119,7 @@ impl FlushState {
     }
 
     /// Drops the record of what was last emitted, so the next flush re-asserts
-    /// this frame's geometry and focus from scratch.
+    /// this frame's geometry from scratch.
     ///
     /// Called when the connection the record described has gone: the host
     /// forgets every mount when the socket drops, so diffing against it would
@@ -167,7 +129,6 @@ impl FlushState {
     /// emits no unmount for an id the host has already dropped.
     pub fn reset(&mut self) {
         self.last.clear();
-        self.last_focused = None;
     }
 }
 
@@ -482,7 +443,6 @@ impl Orzma {
     pub fn frame(&self) -> MutexGuard<'_, FramePlacements> {
         let mut frame = self.frame.lock().unwrap_or_else(|e| e.into_inner());
         frame.placements.clear();
-        frame.focused = None;
         frame.pending_compositing = std::mem::take(
             &mut *self
                 .pending_compositing
@@ -696,27 +656,6 @@ fn flush_placements_over_socket(
     write_socket_verbs(socket, &verbs)?;
     socket.flush()?;
     state.last = current;
-    Ok(())
-}
-
-/// Emits the control-plane focus op (`ClientMsg::Focus`) when the focused
-/// instance changed from the last flush. `Some(i)` focuses placement `i`;
-/// `None` blurs. No write when unchanged (diff-driven, like geometry in
-/// `flush_placements`).
-fn flush_focus(
-    out: &mut impl Write,
-    last_focused: &mut Option<String>,
-    focused: &Option<String>,
-) -> OrzmaResult<()> {
-    if last_focused == focused {
-        return Ok(());
-    }
-    let line = serde_json::to_string(&ClientMsg::Focus {
-        instance: focused.clone(),
-    })?;
-    writeln!(out, "{line}")?;
-    out.flush()?;
-    *last_focused = focused.clone();
     Ok(())
 }
 
@@ -1633,17 +1572,16 @@ mod tests {
         assert!(written.contains(&format!("n={b}")));
     }
 
+    /// Asserts that `reset` forgets every placement it last emitted.
+    ///
+    /// Case: the control socket drops and the host forgets every mount, so
+    /// the next flush must mount each placement again from scratch.
     #[test]
-    fn flush_state_reset_clears_placements_and_focus() {
+    fn flush_state_reset_clears_placements() {
         let mut state = FlushState::default();
         state.last.insert("h1".into(), rect(0, 0, 10, 5));
-        state.last_focused = Some("h1".into());
         state.reset();
         assert!(state.last.is_empty(), "last should be empty after reset");
-        assert_eq!(
-            state.last_focused, None,
-            "last_focused should be None after reset"
-        );
     }
 
     /// Asserts that a placement is mounted at its cursor position when new or
@@ -1897,45 +1835,6 @@ mod tests {
         assert!(captured[0].contains("skipping a placement"));
     }
 
-    /// Asserts that a focus op names the newly-focused instance, and that a
-    /// frame focusing the same instance again writes nothing.
-    ///
-    /// Case: the user clicks into a webview pane and then keeps typing in it
-    /// across many frames.
-    #[test]
-    fn flush_focus_emits_on_change_and_skips_unchanged() {
-        let mut last = None;
-        let mut buf = Vec::new();
-        flush_focus(&mut buf, &mut last, &Some(INSTANCE_A.to_string())).unwrap();
-        let v: serde_json::Value =
-            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
-        assert_eq!(v["op"], "focus");
-        assert_eq!(v["instance"], INSTANCE_A);
-
-        let mut buf2 = Vec::new();
-        flush_focus(&mut buf2, &mut last, &Some(INSTANCE_A.to_string())).unwrap();
-        assert!(
-            String::from_utf8(buf2).unwrap().is_empty(),
-            "unchanged focus emits nothing"
-        );
-    }
-
-    /// Asserts that dropping focus emits a focus op with a null instance and
-    /// clears the remembered target.
-    ///
-    /// Case: the user moves focus from a webview pane back to a native widget.
-    #[test]
-    fn flush_focus_emits_blur_on_none() {
-        let mut last = Some(INSTANCE_A.to_string());
-        let mut buf = Vec::new();
-        flush_focus(&mut buf, &mut last, &None).unwrap();
-        let v: serde_json::Value =
-            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
-        assert_eq!(v["op"], "focus");
-        assert_eq!(v["instance"], serde_json::Value::Null);
-        assert_eq!(last, None);
-    }
-
     #[test]
     fn take_compositing_returns_and_removes_entry() {
         let mut fp = FramePlacements::default();
@@ -1961,7 +1860,6 @@ mod tests {
         {
             let mut fp = frame_arc.lock().unwrap_or_else(|e| e.into_inner());
             fp.placements.clear();
-            fp.focused = None;
             fp.pending_compositing = shared
                 .lock()
                 .map(|mut map| std::mem::take(&mut *map))
@@ -1975,7 +1873,6 @@ mod tests {
         {
             let mut fp = frame_arc.lock().unwrap_or_else(|e| e.into_inner());
             fp.placements.clear();
-            fp.focused = None;
             fp.pending_compositing = shared
                 .lock()
                 .map(|mut map| std::mem::take(&mut *map))

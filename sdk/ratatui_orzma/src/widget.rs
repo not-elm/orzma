@@ -13,7 +13,6 @@ use ratatui::widgets::{Clear, StatefulWidget, Widget};
 pub struct WebviewWidget<W = WebviewDefaultPlaceholder> {
     instance: String,
     fallback: W,
-    focused: bool,
     on_compositing_change: Option<Box<dyn Fn(bool) + 'static>>,
 }
 
@@ -28,7 +27,6 @@ impl WebviewWidget<WebviewDefaultPlaceholder> {
         Self {
             instance: instance.into(),
             fallback: WebviewDefaultPlaceholder,
-            focused: false,
             on_compositing_change: None,
         }
     }
@@ -40,7 +38,6 @@ impl<W> WebviewWidget<W> {
         WebviewWidget {
             instance: self.instance,
             fallback: widget,
-            focused: self.focused,
             on_compositing_change: self.on_compositing_change,
         }
     }
@@ -54,26 +51,6 @@ impl<W> WebviewWidget<W> {
         self.on_compositing_change = Some(Box::new(f));
         self
     }
-
-    /// Marks the widget focused, a hint for drawing a focus frame/title around
-    /// the webview (the page content itself is composited by the host). When
-    /// the host accepts a `true` focus request, it gives the webview keyboard
-    /// focus and makes its pane the active pane.
-    ///
-    /// Focusing a webview on the same frame it is first mounted may race the
-    /// mount on the host (the focus op travels the control socket while the
-    /// mount APC verb travels the terminal output), so the focus op can be
-    /// silently dropped; focus a webview on a frame after its first mount,
-    /// or re-assert focus if needed.
-    pub fn focused(mut self, focused: bool) -> Self {
-        self.focused = focused;
-        self
-    }
-
-    /// Whether this widget is currently focused.
-    pub fn is_focused(&self) -> bool {
-        self.focused
-    }
 }
 
 impl<W: Widget> StatefulWidget for WebviewWidget<W> {
@@ -86,9 +63,6 @@ impl<W: Widget> StatefulWidget for WebviewWidget<W> {
         Clear.render(area, buf);
         self.fallback.render(area, buf);
         state.record(self.instance.clone(), area);
-        if self.focused {
-            state.set_focused(self.instance.clone());
-        }
         if let Some(active) = state.take_compositing(&self.instance)
             && let Some(cb) = &self.on_compositing_change
         {
@@ -151,52 +125,6 @@ mod tests {
             .render(area, &mut buf, &mut state);
 
         assert_eq!(buf[(0, 0)].symbol(), "h");
-    }
-
-    #[test]
-    fn focused_widget_constructs() {
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 4,
-            height: 1,
-        };
-        let mut buf = Buffer::empty(area);
-        let mut state = FramePlacements::default();
-        WebviewWidget::new(INSTANCE)
-            .focused(true)
-            .render(area, &mut buf, &mut state);
-        assert_eq!(state.placements_for_test().len(), 1);
-    }
-
-    #[test]
-    fn focused_render_records_focused_handle() {
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 4,
-            height: 1,
-        };
-        let mut buf = Buffer::empty(area);
-        let mut state = FramePlacements::default();
-        WebviewWidget::new(INSTANCE)
-            .focused(true)
-            .render(area, &mut buf, &mut state);
-        assert_eq!(state.focused_for_test(), Some(INSTANCE));
-    }
-
-    #[test]
-    fn unfocused_render_records_no_focus() {
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 4,
-            height: 1,
-        };
-        let mut buf = Buffer::empty(area);
-        let mut state = FramePlacements::default();
-        WebviewWidget::new(INSTANCE).render(area, &mut buf, &mut state);
-        assert_eq!(state.focused_for_test(), None);
     }
 
     #[test]

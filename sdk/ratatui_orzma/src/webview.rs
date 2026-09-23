@@ -32,7 +32,6 @@ impl Webview {
             kind: RegisterKind::Inline {
                 html: html.into(),
                 interactive: true,
-                click_focus: true,
                 forward_keys: Vec::new(),
                 preload: Vec::new(),
             },
@@ -51,7 +50,6 @@ impl Webview {
             kind: RegisterKind::Url {
                 url: url.into(),
                 interactive: true,
-                click_focus: true,
                 bridge: false,
                 forward_keys: Vec::new(),
                 preload: Vec::new(),
@@ -68,7 +66,6 @@ impl Webview {
                 root: root.as_ref().display().to_string(),
                 entry: entry.into(),
                 interactive: true,
-                click_focus: true,
                 forward_keys: Vec::new(),
                 preload: Vec::new(),
             },
@@ -83,18 +80,6 @@ impl Webview {
             RegisterKind::Inline { interactive: i, .. } => *i = interactive,
             RegisterKind::Dir { interactive: i, .. } => *i = interactive,
             RegisterKind::Url { interactive: i, .. } => *i = interactive,
-        }
-        self
-    }
-
-    /// Declares whether a pointer press inside this view moves keyboard focus
-    /// to it. With `false`, clicking the page leaves the keyboard with the app,
-    /// which can still hand focus over with a focus request. Fixed at register.
-    pub fn click_focus(mut self, click_focus: bool) -> Self {
-        match &mut self.kind {
-            RegisterKind::Inline { click_focus: c, .. }
-            | RegisterKind::Dir { click_focus: c, .. }
-            | RegisterKind::Url { click_focus: c, .. } => *c = click_focus,
         }
         self
     }
@@ -548,24 +533,6 @@ mod tests {
         assert_eq!(v["op"], "register");
         assert_eq!(v["forward_keys"][0]["key"], "h");
         assert_eq!(v["forward_keys"][0]["mods"][0], "alt");
-    }
-
-    #[test]
-    fn click_focus_false_rides_register_wire() {
-        let wv = Webview::dir("/abs/ui", "index.html").click_focus(false);
-        let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
-        assert_eq!(v["op"], "register");
-        assert_eq!(v["click_focus"], serde_json::json!(false));
-    }
-
-    #[test]
-    fn click_focus_is_omitted_from_wire_by_default() {
-        let wv = Webview::inline("x");
-        let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
-        assert!(
-            v.get("click_focus").is_none(),
-            "the default click_focus must be skipped"
-        );
     }
 
     #[test]
