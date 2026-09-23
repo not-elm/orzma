@@ -20,6 +20,7 @@ use crate::surface::SurfacePlugin;
 use crate::system_set::OrzmaSystems;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
+use bevy::render::RenderPlugin;
 #[cfg(not(target_os = "macos"))]
 use bevy_cef::prelude::early_exit_if_subprocess;
 use bevy_orzma_tty_renderer::TerminalRendererPlugin;
@@ -51,10 +52,17 @@ fn main() {
     let pre_configs = orzma_configs::OrzmaConfigs::load().unwrap_or_default();
     let orzma_registry = WebviewAssetRegistry::default();
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(primary_window()),
-        ..default()
-    }));
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(primary_window()),
+                ..default()
+            })
+            .set(RenderPlugin {
+                synchronous_pipeline_compilation: true,
+                ..default()
+            }),
+    );
     let Some(wakers) = AppWakers::new(app.world()) else {
         eprintln!("orzma: the window event loop is unavailable");
         std::process::exit(1);
