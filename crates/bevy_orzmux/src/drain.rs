@@ -94,6 +94,9 @@ fn apply_event(
             None => tracing::debug!(?pane, "signal for an unknown pane dropped"),
         },
         OrzmuxEvent::SelectionText { text } => commands.trigger(TtySelectionTextSignal { text }),
+        OrzmuxEvent::SelectionCopied { text } => {
+            commands.trigger(TtySelectionTextSignal { text: Some(text) });
+        }
         OrzmuxEvent::PaneClosed { pane, reason } => {
             if let Some(entity) = registry.panes.remove(&pane) {
                 let code = match reason {
@@ -333,6 +336,24 @@ mod tests {
             .unwrap();
         app.update();
         assert_eq!(app.world().resource::<Seen>().texts, vec![None]);
+    }
+
+    /// Asserts that `SelectionCopied` reaches the host as a selection-text
+    /// signal carrying the text.
+    ///
+    /// Case: the user finishes dragging a selection across a word, and the
+    /// backend hands the text back for the clipboard.
+    #[test]
+    fn selection_copied_becomes_a_selection_text_signal() {
+        let (mut app, events) = app();
+        events
+            .send(OrzmuxEvent::SelectionCopied { text: "hi".into() })
+            .unwrap();
+        app.update();
+        assert_eq!(
+            app.world().resource::<Seen>().texts,
+            vec![Some("hi".to_string())]
+        );
     }
 
     /// Asserts that a vanished backend ends the session once and that the

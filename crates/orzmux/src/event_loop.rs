@@ -9,7 +9,7 @@ use crate::backend::{
 };
 use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
-use orzma_tty::prelude::{MouseReport, TerminalKey, TerminalModifiers, WheelInput};
+use orzma_tty::prelude::{MouseReport, PointerInput, TerminalKey, TerminalModifiers, WheelInput};
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{
     CellSide, GridColumn, GridPoint, GridSize, InstanceId, PlacementSize, ScreenLine, Scroll,
@@ -103,6 +103,14 @@ pub enum OrzmuxCommand {
         /// The notches and the modifiers and cell they were gathered with.
         input: WheelInput,
     },
+    /// Route one pointer event over a pane by the pane's live VT modes:
+    /// a mouse report for the application, or the pane's own selection.
+    Pointer {
+        /// The pane the pointer event addresses.
+        pane: PaneId,
+        /// The pointer event.
+        input: PointerInput,
+    },
     /// Scroll a pane's viewport.
     Scroll {
         /// The pane to scroll.
@@ -188,6 +196,7 @@ impl OrzmuxCommand {
             Self::Paste { pane, .. } => ("Paste", Some(*pane)),
             Self::MouseInput { pane, .. } => ("MouseInput", Some(PaneTarget::Id(*pane))),
             Self::Wheel { pane, .. } => ("Wheel", Some(PaneTarget::Id(*pane))),
+            Self::Pointer { pane, .. } => ("Pointer", Some(PaneTarget::Id(*pane))),
             Self::Scroll { pane, .. } => ("Scroll", Some(PaneTarget::Id(*pane))),
             Self::SelectionStart { pane, .. } => ("SelectionStart", Some(PaneTarget::Id(*pane))),
             Self::SelectionUpdate { pane, .. } => ("SelectionUpdate", Some(PaneTarget::Id(*pane))),
@@ -344,6 +353,7 @@ impl EventLoop {
             OrzmuxCommand::Paste { pane, text } => self.backend.paste(pane, text),
             OrzmuxCommand::MouseInput { pane, report } => self.backend.mouse_input(pane, report),
             OrzmuxCommand::Wheel { pane, input } => self.backend.wheel(pane, input),
+            OrzmuxCommand::Pointer { pane, input } => self.backend.pointer(pane, input),
             OrzmuxCommand::Scroll { pane, scroll } => self.backend.scroll(pane, scroll),
             OrzmuxCommand::SelectionStart {
                 pane,
@@ -489,11 +499,12 @@ mod tests {
     use crate::test_support::{FactoryLog, FakeFactory, FakePane, Harness};
     use crossbeam_channel::{RecvTimeoutError, bounded, unbounded};
     use orzma_tty::prelude::{
-        CellCoord, KeyText, OrzmaTty, ProtocolModifiers, WheelConfig, WheelModifiers,
+        CellCoord, KeyText, OrzmaTty, PointerButton, PointerInput, PointerKind, ProtocolModifiers,
+        WheelConfig, WheelModifiers,
     };
     use orzma_tty::test_support::BlockingSink;
     use orzma_vt::Vt;
-    use orzma_vt::prelude::OrzmaVt;
+    use orzma_vt::prelude::{CellSide, OrzmaVt};
     use std::collections::VecDeque;
     use std::path::Path;
     use std::sync::Arc;
@@ -1038,6 +1049,126 @@ mod tests {
         });
         assert!(h.drain().is_empty());
         assert!(root_pane.sink.contents().is_empty());
+    }
+
+    /// One pointer event on cell (`col`, `row`) with nothing held.
+    fn pointer(
+        kind: PointerKind,
+        button: Option<PointerButton>,
+        col: u32,
+        row: u32,
+        side: CellSide,
+    ) -> PointerInput {
+        PointerInput {
+            kind,
+            button,
+            cell: CellCoord { col, row },
+            side,
+            click_count: 1,
+            mods: ProtocolModifiers::default(),
+        }
+    }
+
+    /// Asserts that a `Pointer` press reaches its pane's terminal, which
+    /// reports it in that pane's own encoding.
+    ///
+    /// Case: nvim has turned on button-event tracking and SGR reports in a
+    /// pane, and the user clicks in it.
+    #[test]
+    fn a_pointer_press_reaches_its_panes_terminal() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx
+            .send(b"\x1b[?1002h\x1b[?1006h".to_vec())
+            .unwrap();
+        h.pump_pane(root);
+        h.drain();
+        h.send(OrzmuxCommand::Pointer {
+            pane: root,
+            input: pointer(
+                PointerKind::Press,
+                Some(PointerButton::Left),
+                3,
+                2,
+                CellSide::Left,
+            ),
+        });
+        h.settle_writes();
+        assert_eq!(pane.sink.contents(), b"\x1b[<0;3;2M");
+    }
+
+    /// Asserts that a selection drag finished through `Pointer` commands
+    /// emits `SelectionCopied` carrying the selected text.
+    ///
+    /// Case: with no application tracking the mouse, the user drags across
+    /// the first word of a line the shell printed and lets go.
+    #[test]
+    fn a_finished_selection_drag_emits_selection_copied() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.chunk_tx.send(b"hello world".to_vec()).unwrap();
+        h.pump_pane(root);
+        h.drain();
+        h.send(OrzmuxCommand::Pointer {
+            pane: root,
+            input: pointer(
+                PointerKind::Press,
+                Some(PointerButton::Left),
+                1,
+                1,
+                CellSide::Left,
+            ),
+        });
+        h.send(OrzmuxCommand::Pointer {
+            pane: root,
+            input: pointer(PointerKind::Motion, None, 5, 1, CellSide::Right),
+        });
+        h.send(OrzmuxCommand::Pointer {
+            pane: root,
+            input: pointer(
+                PointerKind::Release,
+                Some(PointerButton::Left),
+                5,
+                1,
+                CellSide::Right,
+            ),
+        });
+        let copied: Vec<OrzmuxEvent> = h
+            .drain()
+            .into_iter()
+            .filter(|event| matches!(event, OrzmuxEvent::SelectionCopied { .. }))
+            .collect();
+        assert_eq!(
+            copied,
+            vec![OrzmuxEvent::SelectionCopied {
+                text: "hello".to_string()
+            }]
+        );
+    }
+
+    /// Asserts that a pointer event for a pane that does not exist is
+    /// refused as an unresolved target.
+    ///
+    /// Case: a click queued for a pane arrives after the pane's shell
+    /// exited and the pane closed.
+    #[test]
+    fn a_pointer_for_an_unknown_pane_is_refused() {
+        let mut h = Harness::new();
+        h.open_root();
+        let result = h.event_loop.backend_mut().pointer(
+            PaneId(42),
+            pointer(
+                PointerKind::Press,
+                Some(PointerButton::Left),
+                1,
+                1,
+                CellSide::Left,
+            ),
+        );
+        assert!(
+            matches!(result, Err(OrzmuxError::UnresolvedTarget)),
+            "{result:?}"
+        );
     }
 
     /// Asserts that `Active` targets resolve in command order, so a kill
