@@ -517,7 +517,8 @@ mod tests {
     /// Asserts that a queued event is already receivable when the app is
     /// woken.
     ///
-    /// Case: a reader thread forwards a `register` while the app sleeps.
+    /// Case: a connection's reader thread queues its disconnect while the
+    /// app sleeps.
     #[test]
     fn a_queued_event_is_receivable_when_the_app_wakes() {
         let (ev_tx, ev_rx) = unbounded();

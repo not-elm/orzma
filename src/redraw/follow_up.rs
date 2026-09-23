@@ -45,6 +45,13 @@ fn request_follow_up(
     for event in events.read() {
         input |= counts_as_input(event);
     }
+    // NOTE: bevy_winit re-reads every `RequestRedraw` in `Messages` after
+    // each update with a fresh cursor, so a request left in the buffer
+    // would run another update, and the clear below keeps each trigger
+    // to exactly one follow-up. The clear also drops any `RequestRedraw`
+    // that another system wrote earlier in the same update, so no other
+    // system may rely on writing `RequestRedraw` before this one runs in
+    // `First`.
     if !redraws.is_empty() {
         redraws.clear();
     }
@@ -54,9 +61,12 @@ fn request_follow_up(
 }
 
 /// Whether a window event counts as outside input: every event except the
-/// device-level `MouseMotion`.
+/// device-level `MouseMotion` and the app's own `RequestRedraw`.
 fn counts_as_input(event: &WindowEvent) -> bool {
-    !matches!(event, WindowEvent::MouseMotion(_))
+    !matches!(
+        event,
+        WindowEvent::MouseMotion(_) | WindowEvent::RequestRedraw(_)
+    )
 }
 
 #[cfg(test)]
@@ -65,6 +75,7 @@ mod tests {
     use bevy::input::ButtonState;
     use bevy::input::keyboard::{Key, KeyboardInput};
     use bevy::input::mouse::MouseMotion;
+    use bevy::window::WindowFocused;
 
     fn app(gate: &WakeGate) -> App {
         let mut app = App::new();
@@ -92,22 +103,40 @@ mod tests {
         WindowEvent::MouseMotion(MouseMotion { delta: Vec2::ONE })
     }
 
-    /// Asserts that every window event except `MouseMotion` counts as
-    /// outside input.
+    /// A test resource recording the return of `WakeGate::arm` from an
+    /// `Update` system.
+    #[derive(Resource, Default)]
+    struct ArmResult(Option<bool>);
+
+    /// Arms the gate again and records whether this call newly armed it.
+    fn record_arm(mut result: ResMut<ArmResult>, gate: Res<WakeGate>) {
+        result.0 = Some(gate.arm());
+    }
+
+    /// Asserts that a keyboard press and a window-focus change count as
+    /// outside input, while mouse motion and the app's own redraw request
+    /// do not.
     ///
-    /// Case: the user presses a key over the window, and separately moves
-    /// the mouse over another monitor while orzma has focus.
+    /// Case: the user presses a key and brings the window to focus, and
+    /// separately moves the mouse over another monitor while the window
+    /// system also reports its own pending redraw.
     #[test]
-    fn every_window_event_but_mouse_motion_counts_as_input() {
+    fn window_input_counts_but_mouse_motion_and_redraw_requests_do_not() {
         assert!(counts_as_input(&key_press()));
+        assert!(counts_as_input(&WindowEvent::WindowFocused(
+            WindowFocused {
+                window: Entity::PLACEHOLDER,
+                focused: true,
+            }
+        )));
         assert!(!counts_as_input(&mouse_motion()));
+        assert!(!counts_as_input(&WindowEvent::RequestRedraw(RequestRedraw)));
     }
 
     /// Asserts that an armed gate yields exactly one follow-up request and
     /// is taken.
     ///
-    /// Case: the backend sent a frame while orzma was idle, and its update
-    /// must be followed by one more.
+    /// Case: the backend sends a frame while orzma is idle.
     #[test]
     fn an_armed_gate_requests_one_follow_up_and_is_taken() {
         let gate = WakeGate::detached();
@@ -137,16 +166,48 @@ mod tests {
         assert_eq!(redraws(&moved), 0);
     }
 
-    /// Asserts that the previous update's request is cleared, so each
-    /// trigger yields exactly one follow-up frame.
+    /// Asserts that two triggers arriving in the same update still yield
+    /// exactly one follow-up request, which the next update clears.
     ///
-    /// Case: one PTY frame arrives, and the follow-up update that runs next
-    /// has nothing new to take in.
+    /// Case: the backend sends a frame and the user presses a key within
+    /// the same update.
     #[test]
-    fn the_previous_request_is_cleared_so_one_trigger_yields_one_frame() {
+    fn two_triggers_in_one_update_yield_one_request_that_the_next_update_clears() {
         let gate = WakeGate::detached();
         let mut app = app(&gate);
         assert!(gate.arm());
+        app.world_mut().write_message(key_press());
+        app.update();
+        assert_eq!(redraws(&app), 1);
+        app.update();
+        assert_eq!(redraws(&app), 0);
+    }
+
+    /// Asserts that `First` has already taken the gate by the time
+    /// `Update` runs.
+    ///
+    /// Case: the backend arms the gate for a wake, and orzma's next
+    /// update runs.
+    #[test]
+    fn the_gate_is_taken_in_first_before_update_runs() {
+        let gate = WakeGate::detached();
+        let mut app = app(&gate);
+        app.init_resource::<ArmResult>()
+            .add_systems(Update, record_arm);
+        assert!(gate.arm());
+        app.update();
+        assert_eq!(app.world().resource::<ArmResult>().0, Some(true));
+    }
+
+    /// Asserts that a follow-up request drains every window event queued
+    /// in the update, not just the first one.
+    ///
+    /// Case: two keys arrive in the same update.
+    #[test]
+    fn every_queued_window_event_is_read_in_one_update() {
+        let gate = WakeGate::detached();
+        let mut app = app(&gate);
+        app.world_mut().write_message(key_press());
         app.world_mut().write_message(key_press());
         app.update();
         assert_eq!(redraws(&app), 1);

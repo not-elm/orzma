@@ -211,7 +211,8 @@ impl OrzmuxCommand {
 pub(crate) struct EventLoop {
     backend: Backend,
     commands: Receiver<(CommandSeq, OrzmuxCommand)>,
-    /// The GUI's event channel, which wakes the GUI after each flush.
+    /// The GUI's event channel, which wakes the GUI after each flush that
+    /// sends an event.
     gui: GuiLink,
     /// Set when the GUI's event receiver is gone; the loop exits.
     gui_gone: bool,
@@ -278,8 +279,8 @@ impl EventLoop {
         true
     }
 
-    /// Hands the backend's queued events to the GUI and wakes it, recording
-    /// a gone receiver instead of failing.
+    /// Hands the backend's queued events to the GUI, waking it only when it
+    /// sent any, and records a gone receiver instead of failing.
     pub fn flush_events(&mut self) {
         if !self.gui.send_batch(self.backend.drain_events()) {
             self.gui_gone = true;

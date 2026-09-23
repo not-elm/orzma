@@ -1,17 +1,15 @@
 //! The backend's sending end of the GUI event channel, which wakes the GUI
-//! after each batch it sends and once more after it disconnects.
+//! after a batch that sent at least one event, and once more after it
+//! disconnects.
 
 use crate::backend::OrzmuxEvent;
 use crossbeam_channel::Sender;
 use std::task::Waker;
 
-/// The backend's link to the GUI: sends events, wakes the GUI after each
-/// batch, and when dropped disconnects the event channel before a last
-/// wake, so the woken GUI observes the disconnect.
-///
-/// # Invariants
-///
-/// Holds the only sender of the GUI's event channel.
+/// The backend's link to the GUI: sends events, wakes the GUI after a
+/// batch that sent at least one event, and when dropped disconnects the
+/// event channel before a last wake, so the woken GUI observes the
+/// disconnect.
 pub(crate) struct GuiLink {
     events: Option<Sender<OrzmuxEvent>>,
     waker: Waker,
@@ -19,6 +17,10 @@ pub(crate) struct GuiLink {
 
 impl GuiLink {
     /// A link that sends on `events` and wakes the GUI through `waker`.
+    ///
+    /// `events` must be the only sender of the GUI's event channel, or the
+    /// wake sent on drop can arrive before the channel reports the
+    /// disconnect.
     pub fn new(events: Sender<OrzmuxEvent>, waker: Waker) -> Self {
         Self {
             events: Some(events),
@@ -27,7 +29,8 @@ impl GuiLink {
     }
 
     /// Sends `batch` in order and wakes the GUI once when at least one
-    /// event was sent. Returns `false` when the GUI's receiver is gone.
+    /// event was sent. Returns `false` when a send finds the receiver
+    /// gone.
     pub fn send_batch(&self, batch: impl IntoIterator<Item = OrzmuxEvent>) -> bool {
         let Some(events) = self.events.as_ref() else {
             return false;

@@ -46,7 +46,9 @@ impl OrzmuxClient {
     ///
     /// `waker` is woken after the backend queues events for the GUI, and
     /// once more as the backend thread exits, by which time the event
-    /// channel reports the disconnect.
+    /// channel reports the disconnect. `waker` is invoked on the backend
+    /// thread, including while the client's drop joins that thread, so it
+    /// must not block on the thread that drops the client.
     ///
     /// # Errors
     ///

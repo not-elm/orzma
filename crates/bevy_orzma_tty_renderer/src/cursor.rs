@@ -55,12 +55,12 @@ impl Plugin for CursorPlugin {
 fn publish_next_caret_flip(
     mut next: ResMut<NextCaretFlip>,
     terminals: Query<(&TerminalView, Has<PaneInactiveStyle>)>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    window: Query<&Window, With<PrimaryWindow>>,
     style: Res<CaretStyle>,
     last_key: Res<LastKeyInstant>,
     time: Res<Time<Real>>,
 ) {
-    let window_focused = windows.single().is_ok_and(|window| window.focused);
+    let window_focused = window.single().is_ok_and(|window| window.focused);
     let blinking = terminals.iter().any(|(view, inactive)| {
         view.caret().is_some_and(|(_, cursor)| {
             CaretStroke::blinks(cursor, view.suppress_cursor, window_focused && !inactive)
