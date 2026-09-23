@@ -112,6 +112,13 @@ pub(crate) enum ClientMsg {
         /// The target placement.
         instance: String,
     },
+    /// Replace the forward-key chords of a handle this connection owns.
+    SetForwardKeys {
+        /// The target handle.
+        handle: HandleId,
+        /// The complete new chord list.
+        keys: Vec<KeyChord>,
+    },
 }
 
 /// A navigation action on one mounted placement.
@@ -192,6 +199,17 @@ pub(crate) enum RegisterKind {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         preload: Vec<String>,
     },
+}
+
+impl RegisterKind {
+    /// Replaces the forward-key chords this registration declares.
+    pub fn replace_forward_keys(&mut self, keys: Vec<KeyChord>) {
+        match self {
+            Self::Inline { forward_keys, .. }
+            | Self::Dir { forward_keys, .. }
+            | Self::Url { forward_keys, .. } => *forward_keys = keys,
+        }
+    }
 }
 
 /// The untagged reply to a `register` or `new_instance` request.

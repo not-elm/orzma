@@ -108,8 +108,10 @@ impl Webview {
         self
     }
 
-    /// Declares chords the page lets through to the app while focused (the host
-    /// forwards them to the PTY so the app reads them via `crossterm::event::read`).
+    /// Declares the initial chords the page lets through to the app while
+    /// focused: the host writes them to the PTY, so the app reads them via
+    /// `crossterm::event::read`, and the page never receives them. Replace
+    /// the list after registration with [`WebviewHandle::set_forward_keys`].
     pub fn forward_keys(mut self, keys: impl IntoIterator<Item = KeyChord>) -> Self {
         match &mut self.kind {
             RegisterKind::Inline { forward_keys, .. }
@@ -334,6 +336,26 @@ impl WebviewHandle {
             .collect()
     }
 
+    /// Replaces this registration's forward-key chords with `keys`, for every
+    /// placement mounted now and every later mount.
+    ///
+    /// The list given at registration ([`Webview::forward_keys`]) is the
+    /// initial one; this replaces it wholesale. A reconnect replays the
+    /// latest list, even when this call's send failed.
+    pub fn set_forward_keys(&self, keys: impl IntoIterator<Item = KeyChord>) -> OrzmaResult<()> {
+        let keys: Vec<KeyChord> = keys.into_iter().collect();
+        match self.session.upgrade() {
+            Some(core) => core.set_forward_keys(&self.writer, self, keys),
+            None => write_msg(
+                &self.writer,
+                &ClientMsg::SetForwardKeys {
+                    handle: self.handle_id(),
+                    keys,
+                },
+            ),
+        }
+    }
+
     /// Whether `slot` is the very slot this handle reads its handle id from.
     ///
     /// Registrations are matched against a handle by this identity rather than
@@ -411,6 +433,15 @@ impl WebviewInstance {
     pub(crate) fn new_shared(instance: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
         Self { instance, writer }
     }
+}
+
+/// Writes one control-socket line carrying `msg`.
+pub(crate) fn write_msg(writer: &SharedWriter, msg: &ClientMsg) -> OrzmaResult<()> {
+    let line = serde_json::to_string(msg)?;
+    let mut w = writer.lock()?;
+    writeln!(w, "{line}")?;
+    w.flush()?;
+    Ok(())
 }
 
 /// Writes one `navigate` op addressed to `instance`.

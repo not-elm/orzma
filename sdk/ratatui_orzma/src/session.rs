@@ -4,11 +4,12 @@ use crate::error::{OrzmaError, OrzmaResult};
 use crate::escape::{clamp_dims, cursor_to, mount, unmount, valid_instance};
 use crate::events::{EventQueues, EventRegistry};
 use crate::handler::BoxedHandler;
+use crate::keychord::KeyChord;
 use crate::protocol::{
     ClientMsg, HandleId, IncomingCall, IncomingEvent, RegisterKind, ServerReply,
 };
 use crate::uds::UnixStream;
-use crate::webview::{SharedWriter, Webview, WebviewHandle, WebviewInstance};
+use crate::webview::{SharedWriter, Webview, WebviewHandle, WebviewInstance, write_msg};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use ratatui::layout::Rect;
 use std::collections::{HashMap, VecDeque};
@@ -275,6 +276,41 @@ impl SessionCore {
             ),
         }
         Ok(WebviewInstance::new_shared(slot, writer.clone()))
+    }
+
+    /// Replaces `handle`'s forward-key chords: rewrites its saved
+    /// registration, so a reconnect replays the new list, and then sends
+    /// `set_forward_keys` through `writer`.
+    ///
+    /// The saved registration keeps the new list even when the send fails.
+    pub fn set_forward_keys(
+        &self,
+        writer: &SharedWriter,
+        handle: &WebviewHandle,
+        keys: Vec<KeyChord>,
+    ) -> OrzmaResult<()> {
+        // NOTE: hold the saved registrations across the send, as mint_instance
+        // does. Two calls, or a call and a reconnect replay, then reach the
+        // socket in the order they rewrote the saved list, so the host never
+        // ends up with an older list than the one a later replay carries.
+        let mut regs = self.registrations.lock().unwrap_or_else(|e| e.into_inner());
+        match regs
+            .iter_mut()
+            .find(|r| handle.shares_handle_slot(&r.handle_slot))
+        {
+            Some(reg) => reg.kind.replace_forward_keys(keys.clone()),
+            None => tracing::debug!(
+                handle = %handle.handle_id(),
+                "forward keys replaced for a handle with no saved registration; a reconnect will not carry them"
+            ),
+        }
+        write_msg(
+            writer,
+            &ClientMsg::SetForwardKeys {
+                handle: handle.handle_id(),
+                keys,
+            },
+        )
     }
 }
 
@@ -1038,7 +1074,9 @@ fn replay_registration(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     use ratatui::layout::Rect;
+    use serde_json::json;
     use std::fmt::Debug;
     use tracing::field::{Field, Visit};
     use tracing::span::{Attributes, Id, Record};
@@ -1249,6 +1287,60 @@ mod tests {
             reconnect_tx: bounded::<()>(1).0,
         };
         (orzma, handle, server)
+    }
+
+    fn esc_chord() -> KeyChord {
+        KeyChord {
+            mods: KeyModifiers::NONE,
+            code: KeyCode::Esc,
+        }
+    }
+
+    fn replayed_forward_keys(orzma: &Orzma) -> serde_json::Value {
+        let regs = orzma.core.registrations.lock().unwrap();
+        serde_json::to_value(ClientMsg::Register(regs[0].kind.clone())).unwrap()["forward_keys"]
+            .clone()
+    }
+
+    /// Asserts that replacing forward keys sends `set_forward_keys` for the
+    /// handle and rewrites the saved registration a reconnect replays.
+    ///
+    /// Case: a TUI browser enters insert mode, and later its session
+    /// reconnects after orzma restarted the control socket.
+    #[test]
+    fn set_forward_keys_sends_the_op_and_updates_the_replayed_registration() {
+        let (orzma, handle, server) = session_with_one_registration();
+
+        handle.set_forward_keys([esc_chord()]).unwrap();
+
+        let mut line = String::new();
+        BufReader::new(server).read_line(&mut line).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["op"], "set_forward_keys");
+        assert_eq!(v["handle"], "h-old");
+        assert_eq!(v["keys"], json!([{"mods": [], "key": "esc"}]));
+        assert_eq!(
+            replayed_forward_keys(&orzma),
+            json!([{"mods": [], "key": "esc"}])
+        );
+    }
+
+    /// Asserts that the saved registration takes the new forward keys
+    /// whatever the send's result.
+    ///
+    /// Case: a TUI browser leaves insert mode while orzma's control socket is
+    /// down, and the session reconnects afterwards.
+    #[test]
+    fn set_forward_keys_keeps_the_new_list_whatever_the_send_result() {
+        let (orzma, handle, server) = session_with_one_registration();
+        drop(server);
+
+        let _ = handle.set_forward_keys([esc_chord()]);
+
+        assert_eq!(
+            replayed_forward_keys(&orzma),
+            json!([{"mods": [], "key": "esc"}])
+        );
     }
 
     /// Asserts that an instance minted while a reconnect replaces the handle it

@@ -81,4 +81,34 @@ mod tests {
             json!({"mods": [], "key": "f5"})
         );
     }
+
+    /// Asserts that the editing and navigation keys and punctuation
+    /// serialize to the names the host's forward-key grammar accepts.
+    ///
+    /// Case: a markdown viewer forwards Backspace, Enter and `/` to its TUI.
+    #[test]
+    fn serializes_editing_keys_and_punctuation_to_host_names() {
+        let cases = [
+            (KeyCode::Enter, "enter"),
+            (KeyCode::Backspace, "backspace"),
+            (KeyCode::Left, "left"),
+            (KeyCode::Right, "right"),
+            (KeyCode::Home, "home"),
+            (KeyCode::End, "end"),
+            (KeyCode::Delete, "delete"),
+            (KeyCode::Char('/'), "/"),
+            (KeyCode::Char('?'), "?"),
+        ];
+        for (code, name) in cases {
+            assert_eq!(
+                serde_json::to_value(KeyChord {
+                    mods: KeyModifiers::NONE,
+                    code,
+                })
+                .unwrap(),
+                json!({"mods": [], "key": name}),
+                "failed for {code:?}"
+            );
+        }
+    }
 }
