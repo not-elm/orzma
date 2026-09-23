@@ -19,32 +19,62 @@ use std::sync::{Arc, Mutex};
 
 /// The test's ends of one spawned pane's streams.
 pub(crate) struct FakePane {
-    pub(crate) chunk_tx: Sender<Vec<u8>>,
-    pub(crate) exit_tx: Sender<Option<i32>>,
-    pub(crate) sink: CaptureSink,
+    chunk_tx: Sender<Vec<u8>>,
+    exit_tx: Sender<Option<i32>>,
+    sink: CaptureSink,
+}
+
+impl FakePane {
+    /// Feeds `bytes` to the pane's output stream, as if its application
+    /// printed them.
+    pub fn print(&self, bytes: &[u8]) {
+        self.chunk_tx
+            .send(bytes.to_vec())
+            .expect("the pane's terminal holds the output receiver");
+    }
+
+    /// Ends the pane's application with the exit status `code`.
+    pub fn exit(&self, code: Option<i32>) {
+        self.exit_tx
+            .send(code)
+            .expect("the pane's terminal holds the exit receiver");
+    }
+
+    /// The bytes the backend has written to the pane's PTY so far.
+    pub fn received(&self) -> Vec<u8> {
+        self.sink.contents()
+    }
 }
 
 /// What the factory recorded, shared with the harness through `Arc`.
 #[derive(Default)]
 pub(crate) struct FactoryLog {
-    pub(crate) fail_next: AtomicBool,
+    fail_next: AtomicBool,
     /// Makes the next spawned pane's PTY writer fail every write.
-    pub(crate) fail_writes_next: AtomicBool,
+    fail_writes_next: AtomicBool,
     /// When set, the next spawned pane's PTY writer is this sink, whose
     /// writes block until it is released, as if the pane's application
     /// stopped reading stdin.
-    pub(crate) block_writes_next: Mutex<Option<BlockingSink>>,
+    block_writes_next: Mutex<Option<BlockingSink>>,
     /// When set, every spawned pane's output stream starts with these
     /// bytes, left unread until the test pumps the pane.
-    pub(crate) spawn_output: Mutex<Option<Vec<u8>>>,
-    pub(crate) sizes: Mutex<Vec<GridSize>>,
-    pub(crate) cwds: Mutex<Vec<Option<PathBuf>>>,
+    spawn_output: Mutex<Option<Vec<u8>>>,
+    sizes: Mutex<Vec<GridSize>>,
+    cwds: Mutex<Vec<Option<PathBuf>>>,
 }
 
 /// Spawns PTY-less terminals and hands the test their input ends.
 pub(crate) struct FakeFactory {
-    pub(crate) spawned: Sender<FakePane>,
-    pub(crate) log: Arc<FactoryLog>,
+    spawned: Sender<FakePane>,
+    log: Arc<FactoryLog>,
+}
+
+impl FakeFactory {
+    /// A factory that hands each spawned pane's test ends to `spawned` and
+    /// records every spawn request in `log`.
+    pub fn new(spawned: Sender<FakePane>, log: Arc<FactoryLog>) -> Self {
+        Self { spawned, log }
+    }
 }
 
 impl PaneFactory for FakeFactory {
@@ -93,10 +123,10 @@ impl PaneFactory for FakeFactory {
 /// Drives one [`EventLoop`] whose panes are spawned by a PTY-less
 /// factory.
 pub(crate) struct Harness {
-    pub(crate) event_loop: EventLoop,
-    pub(crate) events: Receiver<OrzmuxEvent>,
-    pub(crate) panes: Receiver<FakePane>,
-    pub(crate) log: Arc<FactoryLog>,
+    event_loop: EventLoop,
+    events: Receiver<OrzmuxEvent>,
+    panes: Receiver<FakePane>,
+    log: Arc<FactoryLog>,
     seq: u64,
     commands: Sender<(CommandSeq, OrzmuxCommand)>,
 }
@@ -112,10 +142,7 @@ impl Harness {
         let (command_tx, command_rx) = unbounded();
         let (event_tx, event_rx) = unbounded();
         let log = Arc::new(FactoryLog::default());
-        let factory = FakeFactory {
-            spawned: spawned_tx,
-            log: Arc::clone(&log),
-        };
+        let factory = FakeFactory::new(spawned_tx, Arc::clone(&log));
         let backend = Backend::new(Box::new(factory), wheel);
         Self {
             event_loop: EventLoop::new(backend, command_rx, event_tx),
@@ -150,6 +177,60 @@ impl Harness {
     /// The backend the loop drives.
     pub fn backend(&self) -> &Backend {
         self.event_loop.backend()
+    }
+
+    /// The loop the harness drives.
+    pub fn event_loop(&self) -> &EventLoop {
+        &self.event_loop
+    }
+
+    /// The loop the harness drives, for a test that changes its state.
+    pub fn event_loop_mut(&mut self) -> &mut EventLoop {
+        &mut self.event_loop
+    }
+
+    /// The next pane the factory spawned, or `None` when none is waiting.
+    pub fn spawned_pane(&self) -> Option<FakePane> {
+        self.panes.try_recv().ok()
+    }
+
+    /// Makes the next spawn request fail.
+    pub fn fail_next_spawn(&self) {
+        self.log.fail_next.store(true, Ordering::Release);
+    }
+
+    /// Makes the next spawned pane's PTY writer fail every write.
+    pub fn fail_next_writes(&self) {
+        self.log.fail_writes_next.store(true, Ordering::Release);
+    }
+
+    /// Makes `sink` the PTY writer of the next spawned pane; its writes
+    /// block until the test releases it.
+    pub fn block_next_writes(&self, sink: BlockingSink) {
+        *self.log.block_writes_next.lock().unwrap() = Some(sink);
+    }
+
+    /// Starts the output stream of every pane spawned from now on with
+    /// `output`, left unread until the test pumps the pane.
+    pub fn set_spawn_output(&self, output: &[u8]) {
+        *self.log.spawn_output.lock().unwrap() = Some(output.to_vec());
+    }
+
+    /// The grid size of the latest spawn request, or `None` before the
+    /// first.
+    pub fn last_spawn_size(&self) -> Option<GridSize> {
+        self.log.sizes.lock().unwrap().last().copied()
+    }
+
+    /// Forgets the working directories of the spawn requests so far.
+    pub fn clear_spawn_cwds(&self) {
+        self.log.cwds.lock().unwrap().clear();
+    }
+
+    /// The working directory of the latest spawn request since the last
+    /// clear, or `None` when there was none or it named no directory.
+    pub fn last_spawn_cwd(&self) -> Option<PathBuf> {
+        self.log.cwds.lock().unwrap().last().cloned().flatten()
     }
 
     /// Pumps one pane, as the loop does when its stream is ready.
