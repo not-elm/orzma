@@ -7,13 +7,13 @@ use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::ChunkDepth;
 use crate::error::{OrzmuxError, OrzmuxResult};
 use orzma_tty::prelude::{
-    MouseReport, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PointerInput, PumpItem, Readiness,
-    TerminalKey, TerminalModifiers, TtySignal, WheelConfig, WheelInput,
+    OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PointerInput, PumpItem, Readiness, TerminalKey,
+    TerminalModifiers, TtySignal, WheelConfig, WheelInput,
 };
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{
-    CellSide, Frame, GridColumn, GridPoint, GridSize, InstanceId, OrzmaVt, PlacementSize,
-    ScreenLine, Scroll, SelectionKind, Vt, VtSignal,
+    Frame, GridColumn, GridSize, InstanceId, OrzmaVt, PlacementSize, ScreenLine, Scroll, Vt,
+    VtSignal,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -437,17 +437,6 @@ impl Backend {
         self.write_pty(id, |tty| tty.send_paste(&text))
     }
 
-    /// Sends a mouse report to `pane`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
-    /// carries `pane`, and [`OrzmuxError::PtyWrite`] when its PTY
-    /// refuses the write.
-    pub fn mouse_input(&mut self, pane: PaneId, report: MouseReport) -> OrzmuxResult {
-        self.write_pty(pane, |tty| tty.send_mouse(report))
-    }
-
     /// Routes a wheel event to `pane` under the backend's wheel policy.
     ///
     /// # Errors
@@ -484,39 +473,6 @@ impl Backend {
     /// carries `pane`.
     pub fn scroll(&mut self, pane: PaneId, scroll: Scroll) -> OrzmuxResult {
         self.pane_mut(pane)?.tty.scroll(scroll);
-        Ok(())
-    }
-
-    /// Anchors a selection in `pane`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
-    /// carries `pane`.
-    pub fn selection_start(
-        &mut self,
-        pane: PaneId,
-        cell: GridPoint,
-        side: CellSide,
-        kind: SelectionKind,
-    ) -> OrzmuxResult {
-        self.pane_mut(pane)?.tty.start_selection(cell, side, kind);
-        Ok(())
-    }
-
-    /// Extends `pane`'s selection to `cell`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
-    /// carries `pane`.
-    pub fn selection_update(
-        &mut self,
-        pane: PaneId,
-        cell: GridPoint,
-        side: CellSide,
-    ) -> OrzmuxResult {
-        self.pane_mut(pane)?.tty.extend_selection(cell, side);
         Ok(())
     }
 

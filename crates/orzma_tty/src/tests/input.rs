@@ -1,5 +1,5 @@
-//! Tests for the key, mouse, and paste writers: VT modes decide the
-//! encoding, and a paste snaps a scrolled-back viewport.
+//! Tests for the key and paste writers: VT modes decide the encoding, and
+//! a paste snaps a scrolled-back viewport.
 
 use super::*;
 
@@ -42,34 +42,6 @@ fn send_key_honours_the_vt_reported_cursor_mode() {
         .expect("send_key");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[A");
-}
-
-/// Asserts that `send_mouse` writes the encoded report while a mouse
-/// tracking level is in force, and writes nothing while none is.
-///
-/// Case: a client of the multiplexer's command channel forwards a
-/// button report for a pane in which nvim has just exited, dropping
-/// DECRST 1002 and 1006 before the report arrives.
-#[test]
-fn send_mouse_only_writes_while_a_tracking_level_is_in_force() {
-    let report = MouseReport {
-        button: MouseButton::WheelUp,
-        kind: MouseReportKind::Press,
-        cell: CellCoord { col: 1, row: 1 },
-        mods: ProtocolModifiers::default(),
-    };
-
-    let (mut term, sink) = tracking_term();
-    assert_eq!(sink.contents(), b"", "construction must write nothing");
-    term.send_mouse(report).expect("send_mouse");
-    term.settle_writes();
-    assert_eq!(sink.contents(), b"\x1b[<64;1;1M");
-
-    let (mut term, sink) = detached_term();
-    assert_eq!(sink.contents(), b"", "construction must write nothing");
-    term.send_mouse(report).expect("send_mouse");
-    term.settle_writes();
-    assert_eq!(sink.contents(), b"");
 }
 
 /// Asserts that paste encoding consults the VT-reported bracketed

@@ -376,30 +376,6 @@ impl<V: Vt> OrzmaTty<V> {
             .enqueue_write(PtyInput::encode_key(key, mods, modes).into_bytes())
     }
 
-    /// Encodes one mouse report in the terminal's active mouse encoding
-    /// and queues it for the PTY.
-    ///
-    /// Writes nothing while the VT has no mouse tracking level in force.
-    ///
-    /// Does not snap a scrolled-back viewport: the report's cell
-    /// coordinates are the ones the host computed against the viewport on
-    /// screen. `Ok` means the report was queued, not that it reached the
-    /// PTY.
-    ///
-    /// # Errors
-    ///
-    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
-    /// the report (nothing is queued), `PtyWrite` once after the writer
-    /// thread's write failed, and `PtyWriterClosed` after that.
-    pub fn send_mouse(&mut self, report: MouseReport) -> OrzmaTtyResult {
-        let modes = self.vt.modes();
-        if !modes.mouse_reporting_active() {
-            return Ok(());
-        }
-        self.pty
-            .enqueue_write(PtyInput::encode_mouse(&report, modes.mouse_encoding).into_bytes())
-    }
-
     /// Routes one frame's wheel notches by the VT's current modes and
     /// applies the result.
     ///

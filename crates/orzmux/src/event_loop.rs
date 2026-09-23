@@ -9,12 +9,9 @@ use crate::backend::{
 };
 use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
-use orzma_tty::prelude::{MouseReport, PointerInput, TerminalKey, TerminalModifiers, WheelInput};
+use orzma_tty::prelude::{PointerInput, TerminalKey, TerminalModifiers, WheelInput};
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
-use orzma_vt::prelude::{
-    CellSide, GridColumn, GridPoint, GridSize, InstanceId, PlacementSize, ScreenLine, Scroll,
-    SelectionKind,
-};
+use orzma_vt::prelude::{GridColumn, GridSize, InstanceId, PlacementSize, ScreenLine, Scroll};
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing::Level;
@@ -87,14 +84,6 @@ pub enum OrzmuxCommand {
         /// The pasted text.
         text: String,
     },
-    /// Forward a mouse report to a pane's PTY. The pane writes nothing
-    /// while its VT has no mouse tracking level in force.
-    MouseInput {
-        /// The pane receiving the mouse event.
-        pane: PaneId,
-        /// The mouse report to encode.
-        report: MouseReport,
-    },
     /// Route one frame's wheel notches over a pane by the pane's live VT
     /// modes.
     Wheel {
@@ -117,26 +106,6 @@ pub enum OrzmuxCommand {
         pane: PaneId,
         /// The scroll motion to apply.
         scroll: Scroll,
-    },
-    /// Begin a selection in a pane.
-    SelectionStart {
-        /// The pane the selection starts in.
-        pane: PaneId,
-        /// The cell the selection anchors at.
-        cell: GridPoint,
-        /// Which half of the anchor cell the press landed on.
-        side: CellSide,
-        /// The selection's granularity (cell, word, line).
-        kind: SelectionKind,
-    },
-    /// Extend an in-progress selection to a new cell.
-    SelectionUpdate {
-        /// The pane whose selection is extended.
-        pane: PaneId,
-        /// The cell the selection now extends to.
-        cell: GridPoint,
-        /// Which half of the target cell the drag landed on.
-        side: CellSide,
     },
     /// Clear a pane's selection.
     SelectionClear {
@@ -194,12 +163,9 @@ impl OrzmuxCommand {
             Self::WindowFocus { .. } => ("WindowFocus", None),
             Self::KeyInput { pane, .. } => ("KeyInput", Some(*pane)),
             Self::Paste { pane, .. } => ("Paste", Some(*pane)),
-            Self::MouseInput { pane, .. } => ("MouseInput", Some(PaneTarget::Id(*pane))),
             Self::Wheel { pane, .. } => ("Wheel", Some(PaneTarget::Id(*pane))),
             Self::Pointer { pane, .. } => ("Pointer", Some(PaneTarget::Id(*pane))),
             Self::Scroll { pane, .. } => ("Scroll", Some(PaneTarget::Id(*pane))),
-            Self::SelectionStart { pane, .. } => ("SelectionStart", Some(PaneTarget::Id(*pane))),
-            Self::SelectionUpdate { pane, .. } => ("SelectionUpdate", Some(PaneTarget::Id(*pane))),
             Self::SelectionClear { pane } => ("SelectionClear", Some(PaneTarget::Id(*pane))),
             Self::CopySelection { pane } => ("CopySelection", Some(*pane)),
             Self::RemovePlacements { pane, .. } => {
@@ -351,19 +317,9 @@ impl EventLoop {
             }
             OrzmuxCommand::KeyInput { pane, key, mods } => self.backend.key_input(pane, key, mods),
             OrzmuxCommand::Paste { pane, text } => self.backend.paste(pane, text),
-            OrzmuxCommand::MouseInput { pane, report } => self.backend.mouse_input(pane, report),
             OrzmuxCommand::Wheel { pane, input } => self.backend.wheel(pane, input),
             OrzmuxCommand::Pointer { pane, input } => self.backend.pointer(pane, input),
             OrzmuxCommand::Scroll { pane, scroll } => self.backend.scroll(pane, scroll),
-            OrzmuxCommand::SelectionStart {
-                pane,
-                cell,
-                side,
-                kind,
-            } => self.backend.selection_start(pane, cell, side, kind),
-            OrzmuxCommand::SelectionUpdate { pane, cell, side } => {
-                self.backend.selection_update(pane, cell, side)
-            }
             OrzmuxCommand::SelectionClear { pane } => self.backend.selection_clear(pane),
             OrzmuxCommand::CopySelection { pane } => {
                 self.backend.copy_selection(pane);
