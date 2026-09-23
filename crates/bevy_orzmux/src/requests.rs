@@ -3,9 +3,10 @@
 
 use crate::requests::{
     copy::CopyPlugin, key_input::KeyInputPlugin, mouse_input::MouseInputPlugin,
-    pane::PaneActionPlugin, paste::PastePlugin, scroll::ScrollPlugin, selection::SelectionPlugin,
-    split_resize::SplitResizePlugin, vi_mode::ViModePlugin, vi_motion::ViMotionPlugin,
-    webview_mount::WebviewMountPlugin, webview_remove::WebviewRemovePlugin, wheel::WheelPlugin,
+    pane::PaneActionPlugin, paste::PastePlugin, pointer::PointerPlugin, scroll::ScrollPlugin,
+    selection::SelectionPlugin, split_resize::SplitResizePlugin, vi_mode::ViModePlugin,
+    vi_motion::ViMotionPlugin, webview_mount::WebviewMountPlugin,
+    webview_remove::WebviewRemovePlugin, wheel::WheelPlugin,
 };
 use crate::{OrzmuxConnection, OrzmuxPane};
 use bevy::ecs::system::SystemParam;
@@ -17,6 +18,7 @@ mod key_input;
 mod mouse_input;
 mod pane;
 mod paste;
+mod pointer;
 mod scroll;
 mod selection;
 mod split_resize;
@@ -31,6 +33,7 @@ pub use key_input::{RequestActiveKeyInput, RequestTtyKeyInput};
 pub use mouse_input::RequestTtyMouseInput;
 pub use pane::{PaneAction, RequestPaneAction};
 pub use paste::{RequestActivePaste, RequestTtyPaste};
+pub use pointer::RequestTtyPointer;
 pub use scroll::RequestTtyScroll;
 pub use selection::{
     CellSide, GridPoint, RequestTtySelectionClear, RequestTtySelectionKindChange,
@@ -54,6 +57,7 @@ impl Plugin for OrzmaEventRequestPlugin {
             MouseInputPlugin,
             PaneActionPlugin,
             PastePlugin,
+            PointerPlugin,
             ScrollPlugin,
             SelectionPlugin,
             SplitResizePlugin,
@@ -148,8 +152,8 @@ mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, spawn_pane};
     use orzma_tty::prelude::{
-        CellCoord, KeyText, MouseButton, MouseReport, MouseReportKind, ProtocolModifiers,
-        TerminalKey, TerminalModifiers, WheelInput, WheelModifiers,
+        CellCoord, KeyText, MouseButton, MouseReport, MouseReportKind, PointerButton, PointerInput,
+        PointerKind, ProtocolModifiers, TerminalKey, TerminalModifiers, WheelInput, WheelModifiers,
     };
     use orzma_vt::prelude::{GridColumn, GridLine, InstanceId, PlacementSize, ScreenLine, Scroll};
     use orzmux::prelude::{PaneId, SplitId};
@@ -206,6 +210,17 @@ mod tests {
                 mods: WheelModifiers::default(),
                 cell: Some(CellCoord { col: 1, row: 1 }),
                 report_mods: ProtocolModifiers::default(),
+            },
+        });
+        world.trigger(RequestTtyPointer {
+            terminal: pane,
+            input: PointerInput {
+                kind: PointerKind::Press,
+                button: Some(PointerButton::Left),
+                cell: CellCoord { col: 1, row: 1 },
+                side: CellSide::Left,
+                click_count: 1,
+                mods: ProtocolModifiers::default(),
             },
         });
         world.trigger(RequestTtyScroll {
