@@ -6,6 +6,7 @@ mod cef_profile;
 mod configs;
 mod font;
 mod input;
+mod redraw;
 mod session;
 mod surface;
 mod system_set;
@@ -14,6 +15,7 @@ mod window_title;
 
 use crate::action::ActionPlugin;
 use crate::cef_profile::CefProfileDir;
+use crate::redraw::RedrawPlugin;
 use crate::surface::SurfacePlugin;
 use crate::system_set::OrzmaSystems;
 use crate::window_title::WindowTitlePlugin;
@@ -88,6 +90,7 @@ fn main() {
         .add_plugins((
             OrzmaWebviewPlugin::new(orzma_registry, Waker::noop().clone()),
             WindowTitlePlugin,
+            RedrawPlugin,
         ))
         .insert_resource(OrzmuxConnection(orzmux))
         .configure_sets(
