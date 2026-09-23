@@ -2,10 +2,7 @@
 //! per entity by `TerminalMouseDisabled` and `MouseClaimedByWebview` so dispatch runs
 //! only for a surface that still owns the mouse.
 
-use crate::action::terminal::{
-    TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart,
-    TerminalSelectionUpdate,
-};
+use crate::action::terminal::TerminalOpenUri;
 use crate::input::InputPhase;
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled};
@@ -19,8 +16,8 @@ use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::CursorMoved;
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzma_tty_renderer::schema::{TerminalCells, TerminalView};
-use bevy_orzmux::prelude::{CellSide, GridPoint, SelectionKind};
-use orzma_tty::prelude::{CellCoord, ProtocolModifiers, TerminalModifiers};
+use bevy_orzmux::prelude::{CellSide, RequestTtyPointer};
+use orzma_tty::prelude::{CellCoord, PointerInput, ProtocolModifiers, TerminalModifiers};
 
 mod button;
 mod gesture;
@@ -75,55 +72,22 @@ fn on_any_mouse_message() -> impl SystemCondition<()> {
         .or_else(on_message::<MouseWheel>)
 }
 
-/// An ordered operation to apply to the target terminal: a selection
-/// start/update/clear, a copy, or an opened URI.
+/// An operation to apply to the target terminal: a pointer event for its
+/// backend to route, or a hyperlink to open.
 #[derive(Debug, Clone, PartialEq)]
 enum MouseEffect {
-    SelStart {
-        point: GridPoint,
-        side: CellSide,
-        ty: SelectionKind,
-    },
-    SelUpdate {
-        point: GridPoint,
-        side: CellSide,
-    },
-    SelClear,
-    Copy,
+    Pointer(PointerInput),
     OpenUri(String),
 }
 
-/// Fans an ordered `Vec<MouseEffect>` out to per-operation `EntityEvent`s on
-/// `entity`, preserving order: the command queue is FIFO, and each trigger
-/// resolves before the next.
-fn trigger_mouse_effects(commands: &mut Commands, entity: Entity, effects: Vec<MouseEffect>) {
-    for effect in effects {
-        match effect {
-            MouseEffect::SelStart { point, side, ty } => {
-                commands.trigger(TerminalSelectionStart {
-                    entity,
-                    point,
-                    side,
-                    ty,
-                });
-            }
-            MouseEffect::SelUpdate { point, side } => {
-                commands.trigger(TerminalSelectionUpdate {
-                    entity,
-                    point,
-                    side,
-                });
-            }
-            MouseEffect::SelClear => commands.trigger(TerminalSelectionClear { entity }),
-            // NOTE: copy-on-release must NOT dismiss the selection — the
-            // drag the user just finished stays highlighted, and a Ctrl-only
-            // copy chord keeps something to copy.
-            MouseEffect::Copy => commands.trigger(TerminalSelectionCopy {
-                entity,
-                dismiss: false,
-            }),
-            MouseEffect::OpenUri(uri) => commands.trigger(TerminalOpenUri { entity, uri }),
-        }
+/// Triggers the `EntityEvent` that applies `effect` to `entity`.
+fn trigger_mouse_effect(commands: &mut Commands, entity: Entity, effect: MouseEffect) {
+    match effect {
+        MouseEffect::Pointer(input) => commands.trigger(RequestTtyPointer {
+            terminal: entity,
+            input,
+        }),
+        MouseEffect::OpenUri(uri) => commands.trigger(TerminalOpenUri { entity, uri }),
     }
 }
 
@@ -190,6 +154,22 @@ type TerminalSurfaces<'w, 's> = Query<
     ),
 >;
 
+/// The surface query for the terminal a held button is locked to: every
+/// `OrzmaTerminal` without `TerminalMouseDisabled`. Unlike
+/// [`TerminalSurfaces`], a webview claim does not drop a terminal from it,
+/// so a drag that crosses an inline webview keeps its terminal.
+type HeldSurfaces<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static ComputedNode,
+        &'static UiGlobalTransform,
+        &'static TerminalView,
+        &'static TerminalCells,
+    ),
+    (With<OrzmaTerminal>, Without<TerminalMouseDisabled>),
+>;
+
 /// The `(entity, node, stack, transform)` candidates `topmost_surface_at`
 /// hit-tests, projected from the surface query.
 fn hit_candidates<'a>(
@@ -239,7 +219,26 @@ struct CellContext<'a> {
     cell_h: f32,
 }
 
-impl CellContext<'_> {
+impl<'a> CellContext<'a> {
+    /// The context of the terminal a held button is locked to, or `None`
+    /// when it is gone or mouse-disabled.
+    fn held(
+        held_surfaces: &'a HeldSurfaces<'_, '_>,
+        target: Entity,
+        cell_w: f32,
+        cell_h: f32,
+    ) -> Option<Self> {
+        let (node, transform, view, cells) = held_surfaces.get(target).ok()?;
+        Some(Self {
+            node,
+            transform,
+            view,
+            cells,
+            cell_w,
+            cell_h,
+        })
+    }
+
     fn hit(&self, cursor_phys: Vec2) -> Option<(CellCoord, CellSide)> {
         cell_at_cursor(
             self.node,
@@ -250,6 +249,13 @@ impl CellContext<'_> {
             self.view.cols,
             self.view.rows,
         )
+    }
+
+    /// The URI of the OSC 8 hyperlink on the 1-based `cell`, if any.
+    fn link_at(&self, cell: CellCoord) -> Option<String> {
+        self.cells
+            .hyperlink_at((cell.row - 1) as u16, (cell.col - 1) as u16)
+            .map(|(_id, uri)| uri.as_str().to_string())
     }
 }
 
@@ -283,30 +289,8 @@ mod test_support {
 
     pub(super) fn add_effect_capture_observers(app: &mut App) {
         app.add_observer(
-            |ev: On<TerminalSelectionStart>, mut cap: ResMut<CapturedEffects>| {
-                cap.0.push(MouseEffect::SelStart {
-                    point: ev.point,
-                    side: ev.side,
-                    ty: ev.ty,
-                });
-            },
-        )
-        .add_observer(
-            |ev: On<TerminalSelectionUpdate>, mut cap: ResMut<CapturedEffects>| {
-                cap.0.push(MouseEffect::SelUpdate {
-                    point: ev.point,
-                    side: ev.side,
-                });
-            },
-        )
-        .add_observer(
-            |_ev: On<TerminalSelectionClear>, mut cap: ResMut<CapturedEffects>| {
-                cap.0.push(MouseEffect::SelClear);
-            },
-        )
-        .add_observer(
-            |_ev: On<TerminalSelectionCopy>, mut cap: ResMut<CapturedEffects>| {
-                cap.0.push(MouseEffect::Copy);
+            |ev: On<RequestTtyPointer>, mut cap: ResMut<CapturedEffects>| {
+                cap.0.push(MouseEffect::Pointer(ev.input));
             },
         )
         .add_observer(

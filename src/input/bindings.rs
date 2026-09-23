@@ -20,35 +20,10 @@ pub(crate) enum FineModifier {
     None,
 }
 
-/// Host-side burst cap for PTY-bound button reports.
-///
-/// TODO: reintroduce mouse-button routing against `orzma_tty`.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ButtonConfig {
-    /// Hard cap on the number of PTY-bound reports emitted per route call.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read again when sub-project C ports button reporting"
-        )
-    )]
-    pub max_protocol_events_per_frame: u32,
-}
-
 /// Host-supplied mouse policy. `Default` is a working spawn-and-go config; the
 /// host overrides it from `orzma_configs`.
 #[derive(Resource)]
 pub(crate) struct OrzmaMouseConfig {
-    /// Button-report burst cap. MUST be non-zero or forwarded clicks are dropped.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read again when sub-project C ports button reporting"
-        )
-    )]
-    pub buttons: ButtonConfig,
     /// Cells of wheel travel per emitted notch (smooth-scroll accumulation).
     pub cells_per_notch: f32,
     /// Dominant-axis lock strength: horizontal scroll survives only when
@@ -67,9 +42,6 @@ impl OrzmaMouseConfig {
     /// The policy the resolved `[mouse]` block selects.
     pub(crate) fn from_config(mc: &MouseConfig) -> Self {
         Self {
-            buttons: ButtonConfig {
-                max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
-            },
             cells_per_notch: mc.cells_per_notch,
             axis_lock_ratio: mc.axis_lock_ratio,
             double_click_timeout: Duration::from_millis(mc.double_click_timeout_ms as u64),
@@ -87,9 +59,6 @@ impl OrzmaMouseConfig {
 impl Default for OrzmaMouseConfig {
     fn default() -> Self {
         Self {
-            buttons: ButtonConfig {
-                max_protocol_events_per_frame: 8,
-            },
             cells_per_notch: 0.5,
             axis_lock_ratio: 0.9,
             double_click_timeout: Duration::from_millis(400),
@@ -104,16 +73,12 @@ mod tests {
     use super::*;
 
     /// Asserts that the spawn-and-go default sets every field to its
-    /// documented value, with a non-zero button cap.
+    /// documented value.
     ///
     /// Case: the app starts before the `[mouse]` block has been applied.
     #[test]
-    fn default_config_sets_button_cap_explicitly() {
+    fn default_config_sets_every_field() {
         let cfg = OrzmaMouseConfig::default();
-        assert_eq!(
-            cfg.buttons.max_protocol_events_per_frame, 8,
-            "must NOT be ButtonConfig::default()'s 0"
-        );
         assert_eq!(cfg.cells_per_notch, 0.5);
         assert_eq!(cfg.axis_lock_ratio, 0.9);
         assert_eq!(cfg.double_click_timeout, Duration::from_millis(400));
@@ -123,20 +88,17 @@ mod tests {
 
     /// Asserts that each `[mouse]` field lands on its counterpart.
     ///
-    /// Case: a user sets `fine_modifier = "ctrl"`,
-    /// `max_protocol_events_per_frame = 5`, `cells_per_notch = 1.0`, and
-    /// `axis_lock_ratio = 0.5` in config.toml.
+    /// Case: a user sets `fine_modifier = "ctrl"`, `cells_per_notch = 1.0`,
+    /// and `axis_lock_ratio = 0.5` in config.toml.
     #[test]
     fn mouse_config_maps_from_orzma_config() {
         let mc = MouseConfig {
             fine_modifier: CfgFineModifier::Ctrl,
-            max_protocol_events_per_frame: 5,
             cells_per_notch: 1.0,
             axis_lock_ratio: 0.5,
             ..MouseConfig::default()
         };
         let out = OrzmaMouseConfig::from_config(&mc);
-        assert_eq!(out.buttons.max_protocol_events_per_frame, 5);
         assert_eq!(out.cells_per_notch, 1.0);
         assert_eq!(
             out.axis_lock_ratio, 0.5,

@@ -1,45 +1,47 @@
 //! Click, wheel, and drag gesture primitives.
 
-use crate::input::mouse::button::MouseButtonKind;
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::prelude::*;
-use bevy_orzmux::prelude::{CellSide, SelectionKind};
-use orzma_tty::prelude::CellCoord;
+use orzma_tty::prelude::{CellCoord, PointerButton};
 use std::time::Duration;
 
-/// Phase of an in-progress left-drag: `Armed` after a single-click press (no
-/// selection started yet), `Started` once the pointer crossed into another cell.
+/// The terminal a held button locked the gesture to, and which buttons are
+/// held. Every later press, motion, and release goes to `entity` until no
+/// button is held, even when the pointer wanders onto another terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::input::mouse) enum DragPhase {
-    /// The button is held but the pointer has not left the origin cell.
-    Armed,
-    /// The pointer has crossed a cell boundary and selection is active.
-    Started,
-}
-
-/// An in-progress local-selection gesture: the selection anchor, the granularity,
-/// and the drag phase (drives lazy materialization of the selection).
-pub(in crate::input::mouse) struct DragGesture {
-    /// The cell where the gesture originated.
-    pub origin: CellCoord,
-    /// The half of the origin cell where the gesture started.
-    pub side: CellSide,
-    /// The selection granularity (word, line, etc.).
-    pub ty: SelectionKind,
-    /// Current phase of the drag.
-    pub phase: DragPhase,
-}
-
-/// A held mouse button: the terminal the press landed on, the button, and the
-/// last cell a drag was synthesized for. The `entity` locks drag/release to the
-/// press terminal even when the pointer wanders onto another terminal. Tracked
-/// for BOTH local selection and app-forward drags — the forward path never sets
-/// `drag`, so drag-motion synthesis must not depend on it.
-#[derive(Clone, Copy)]
 pub(in crate::input::mouse) struct HeldPointer {
     pub entity: Entity,
-    pub button: MouseButtonKind,
-    pub last_cell: CellCoord,
+    buttons: [bool; 3],
+}
+
+impl HeldPointer {
+    /// A lock on `entity` with no button held yet.
+    pub fn new(entity: Entity) -> Self {
+        Self {
+            entity,
+            buttons: [false; 3],
+        }
+    }
+
+    /// Marks `button` held.
+    pub fn press(&mut self, button: PointerButton) {
+        self.buttons[slot(button)] = true;
+    }
+
+    /// Marks `button` released.
+    pub fn release(&mut self, button: PointerButton) {
+        self.buttons[slot(button)] = false;
+    }
+
+    /// Whether `button` is held.
+    pub fn holds(&self, button: PointerButton) -> bool {
+        self.buttons[slot(button)]
+    }
+
+    /// Whether no button is held.
+    pub fn is_empty(&self) -> bool {
+        !self.buttons.contains(&true)
+    }
 }
 
 /// Tracks the current mouse gesture and consecutive-click count.
@@ -47,24 +49,26 @@ pub(in crate::input::mouse) struct HeldPointer {
 pub(in crate::input::mouse) struct OrzmaMouseGesture {
     /// Consecutive-click counter for multi-click detection.
     pub click: ClickTracker,
-    /// In-progress local-selection gesture, or `None` when idle.
-    pub drag: Option<DragGesture>,
-    /// Held button + last drag cell, for both local and app-forward drags.
+    /// The locked terminal and held buttons, or `None` when no button is
+    /// held.
     pub held: Option<HeldPointer>,
+    /// The terminal and cell the last pointer event named, so motion is
+    /// sent only when either changes.
+    pub last_target: Option<(Entity, CellCoord)>,
     /// Last observed physical cursor position, including out-of-bounds values
     /// carried by `CursorMoved` while a button is held. Lets a drag continue
     /// when `Window::cursor_position()` masks an off-window cursor; cleared on
-    /// every gesture reset and on release.
+    /// every gesture reset and on the last release.
     pub last_cursor_phys: Option<Vec2>,
 }
 
 impl OrzmaMouseGesture {
-    /// Resets the in-progress gesture: drops any drag, held button, and cached
-    /// cursor position. The multi-click counter is preserved so a follow-up
-    /// click can still chain.
-    pub(in crate::input::mouse) fn reset(&mut self) {
-        self.drag = None;
+    /// Resets the in-progress gesture: drops the held lock, the last
+    /// target, and the cached cursor position. The multi-click counter is
+    /// preserved so a follow-up click can still chain.
+    pub fn reset(&mut self) {
         self.held = None;
+        self.last_target = None;
         self.last_cursor_phys = None;
     }
 }
@@ -179,6 +183,14 @@ pub(in crate::input::mouse) fn lock_dominant_axis(
     }
 }
 
+fn slot(button: PointerButton) -> usize {
+    match button {
+        PointerButton::Left => 0,
+        PointerButton::Middle => 1,
+        PointerButton::Right => 2,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,34 +236,28 @@ mod tests {
     #[test]
     fn mouse_gesture_resource_default_is_idle() {
         let g = OrzmaMouseGesture::default();
-        assert!(g.drag.is_none());
+        assert!(g.held.is_none() && g.last_target.is_none());
         let mut t = g.click;
         let cfg = (Duration::from_millis(400), 8.0f32);
         assert_eq!(t.register(Duration::from_millis(0), Vec2::ZERO, cfg), 1);
     }
 
-    /// Asserts that a `DragGesture` carries its origin, side, and kind through
-    /// the `Armed` to `Started` phase transition.
+    /// Asserts that a held-pointer lock tracks each button and reports
+    /// empty only once every held button is released.
     ///
-    /// Case: the user presses on a cell and then drags off it.
+    /// Case: the user presses the left button, adds the right one, and
+    /// lets go of them one at a time.
     #[test]
-    fn drag_gesture_phase_transitions() {
-        let armed = DragGesture {
-            origin: CellCoord { col: 1, row: 1 },
-            side: CellSide::Left,
-            ty: SelectionKind::Simple,
-            phase: DragPhase::Armed,
-        };
-        assert_eq!(armed.phase, DragPhase::Armed);
-        assert_eq!((armed.origin.col, armed.origin.row), (1, 1));
-        assert_eq!(armed.side, CellSide::Left);
-        assert_eq!(armed.ty, SelectionKind::Simple);
-
-        let started = DragGesture {
-            phase: DragPhase::Started,
-            ..armed
-        };
-        assert_eq!(started.phase, DragPhase::Started);
+    fn held_pointer_tracks_each_button_until_all_are_released() {
+        let mut held = HeldPointer::new(Entity::PLACEHOLDER);
+        held.press(PointerButton::Left);
+        held.press(PointerButton::Right);
+        assert!(held.holds(PointerButton::Left) && held.holds(PointerButton::Right));
+        assert!(!held.holds(PointerButton::Middle));
+        held.release(PointerButton::Left);
+        assert!(!held.is_empty());
+        held.release(PointerButton::Right);
+        assert!(held.is_empty());
     }
 
     #[test]
