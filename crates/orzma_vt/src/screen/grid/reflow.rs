@@ -866,6 +866,7 @@ mod tests {
     use super::*;
     use crate::device::color::Color;
     use crate::screen::cell::{BodyWidth, GlyphClass};
+    use std::time::{Duration, Instant};
 
     /// A row `cols` wide holding `text`, a wide glyph taking two columns.
     fn row_of(text: &str, cols: u16, wrap_at: Option<u16>, id: u64) -> GridRow {
@@ -1410,5 +1411,42 @@ mod tests {
         );
         assert_eq!(cursor, cursor_at(0, 6));
         assert_eq!(points, [Some(cursor_at(2, 1))]);
+    }
+
+    /// Asserts that rewrapping ten thousand rows of history to a new width
+    /// fits the per-pane frame budget.
+    ///
+    /// Case: a user with a full scrollback drags the window narrower and
+    /// wider.
+    #[test]
+    #[ignore = "timing; run with `cargo test -p orzma_vt --release -- --ignored reflowing_a_full`"]
+    fn reflowing_a_full_scrollback_fits_the_frame_budget() {
+        let mut grid = grid(200, 50, 10_000);
+        let text: String = ('a'..='z').cycle().take(150).collect();
+        for _ in 0..10_050 {
+            write(&mut grid, 49, &text);
+            grid.scroll_up_one(ScreenLine(0), ScreenLine(49), Cell::default());
+        }
+        let mut timings = Vec::new();
+        for cols in [120u16, 200, 120, 200, 120, 200] {
+            let mut cursor = cursor_at(49, 0);
+            let mut saved = cursor_at(0, 0);
+            let start = Instant::now();
+            grid.reflow(
+                &mut cursor,
+                &mut saved,
+                &mut [],
+                GridSize { cols, rows: 50 },
+                ScrollbackOnGrow::Keep,
+            );
+            timings.push(start.elapsed());
+        }
+        timings.sort();
+        let median = timings[timings.len() / 2];
+        eprintln!("median reflow: {median:?}; four panes: {:?}", median * 4);
+        assert!(
+            median <= Duration::from_millis(8),
+            "one pane took {median:?}"
+        );
     }
 }

@@ -241,17 +241,36 @@ impl EventLoop {
         }
     }
 
-    /// Applies up to `COMMAND_BATCH` queued commands. Returns `false`
+    /// Applies up to `COMMAND_BATCH` queued commands, applying only the
+    /// last of a run of consecutive `Resize` commands. Returns `false`
     /// when the command channel is disconnected.
     pub fn drain_commands(&mut self) -> bool {
+        let mut held: Option<(CommandSeq, OrzmuxCommand)> = None;
+        let mut connected = true;
         for _ in 0..COMMAND_BATCH {
             match self.commands.try_recv() {
-                Ok((seq, command)) => self.handle_command(seq, command),
-                Err(TryRecvError::Empty) => return true,
-                Err(TryRecvError::Disconnected) => return false,
+                Ok((seq, command @ OrzmuxCommand::Resize { .. })) => {
+                    if let Some((superseded, _)) = held.replace((seq, command)) {
+                        self.backend.set_processed(superseded);
+                    }
+                }
+                Ok((seq, command)) => {
+                    if let Some((held_seq, held_command)) = held.take() {
+                        self.handle_command(held_seq, held_command);
+                    }
+                    self.handle_command(seq, command);
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    connected = false;
+                    break;
+                }
             }
         }
-        true
+        if let Some((seq, command)) = held {
+            self.handle_command(seq, command);
+        }
+        connected
     }
 
     /// Hands the backend's queued events to the GUI, waking it only when it
@@ -774,6 +793,42 @@ mod tests {
                 .pty_size()
                 .pixel_width,
             60 * 8
+        );
+    }
+
+    /// Asserts that back-to-back resizes apply only the last one.
+    ///
+    /// Case: the user drags the window edge, so the GUI queues several
+    /// sizes before the loop wakes.
+    #[test]
+    fn back_to_back_resizes_apply_only_the_last() {
+        let mut h = Harness::new();
+        let (root, _pane) = h.open_root();
+        h.drain();
+        for cols in [70, 60, 50] {
+            h.queue(OrzmuxCommand::Resize {
+                size: GridSize::new(cols, 24).expect("a valid size"),
+                cell_px: CellPixels {
+                    width: 8,
+                    height: 16,
+                },
+            });
+        }
+        h.event_loop_mut().drain_commands();
+        let layouts = h
+            .drain()
+            .into_iter()
+            .filter(|event| matches!(event, OrzmuxEvent::Layout { .. }))
+            .count();
+        assert_eq!(layouts, 1);
+        assert_eq!(
+            h.backend()
+                .pane(root)
+                .expect("the root pane")
+                .tty
+                .pty_size()
+                .cols,
+            50
         );
     }
 
