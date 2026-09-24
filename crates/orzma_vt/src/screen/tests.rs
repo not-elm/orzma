@@ -94,14 +94,7 @@ fn print_text(screen: &mut Screen, text: &str) {
 /// The glyphs of the row at `line`, history included, with trailing
 /// blanks trimmed.
 fn row_text(screen: &Screen, line: i32) -> String {
-    screen
-        .grid
-        .row(GridLine(line))
-        .iter()
-        .flat_map(Cell::chars)
-        .collect::<String>()
-        .trim_end()
-        .to_string()
+    screen.grid.row(GridLine(line)).text()
 }
 
 mod backspace;

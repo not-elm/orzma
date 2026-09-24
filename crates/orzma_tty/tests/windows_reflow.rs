@@ -3,15 +3,16 @@
 
 #![cfg(windows)]
 
+#[path = "support/powershell.rs"]
+mod powershell;
+
 use orzma_tty::prelude::{OrzmaTty, TerminalKey, TerminalModifiers};
 use orzma_tty::{CellPixels, EnvKey, EnvValue, NATIVE_SCROLLBACK_ON_GROW, SpawnOptions};
 use orzma_vt::prelude::{Frame, GridSize, OrzmaVt, Row, Run, Scroll};
+use powershell::resolve_powershell;
 use std::collections::BTreeMap;
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use std::{env, iter};
 use tempfile::TempDir;
 
 /// Viewport rows of the grid the test drives.
@@ -49,7 +50,7 @@ const TRAILER: &str = "done";
 /// the window narrows it to half its width and widens it back.
 #[test]
 fn a_narrow_then_wide_resize_keeps_the_cursor_row_and_every_line_once() {
-    let shell = resolve_powershell();
+    let (shell, _) = resolve_powershell();
     let home = TempDir::new().expect("a temporary home");
     let size = GridSize::new(WIDE, ROWS).expect("a valid grid size");
     let mut tty = OrzmaTty::spawn(
@@ -217,37 +218,4 @@ fn every_row(tty: &mut OrzmaTty<OrzmaVt>) -> Vec<String> {
         }
         tty.scroll(Scroll::PageDown);
     }
-}
-
-/// The PowerShell executable this test runs against, preferring `pwsh`.
-fn resolve_powershell() -> PathBuf {
-    on_path("pwsh")
-        .or_else(|| on_path("powershell"))
-        .expect("neither pwsh nor powershell is on PATH")
-}
-
-/// The full path `name` resolves to through `PATH` and `PATHEXT`.
-fn on_path(name: &str) -> Option<PathBuf> {
-    let path = env::var_os("PATH")?;
-    let extensions: Vec<OsString> = env::var("PATHEXT")
-        .ok()
-        .map(|v| {
-            v.split(';')
-                .filter(|e| !e.is_empty())
-                .map(OsString::from)
-                .collect()
-        })
-        .unwrap_or_else(|| vec![OsString::from(".EXE")]);
-    env::split_paths(&path).find_map(|dir| candidate(&dir, name, &extensions))
-}
-
-/// The first spelling of `name` under `dir` that names a file.
-fn candidate(dir: &Path, name: &str, extensions: &[OsString]) -> Option<PathBuf> {
-    iter::once(dir.join(name))
-        .chain(extensions.iter().map(|ext| {
-            let mut file = OsString::from(name);
-            file.push(ext);
-            dir.join(file)
-        }))
-        .find(|path| path.is_file())
 }

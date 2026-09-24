@@ -469,7 +469,6 @@ mod tests {
     use crate::device::modes::{CursorBlink, CursorShape};
     use crate::error::{GridSizeError, VtError};
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
-    use crate::screen::cell::Cell;
     use crate::screen::grid::MIN_COLUMNS;
     use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
     use crate::screen::grid::reflow::ScrollbackOnGrow;
@@ -516,23 +515,6 @@ mod tests {
             end: cell(end.0, end.1),
             geometry,
         }
-    }
-
-    /// Every row of the active screen's ring, history first, each with its
-    /// trailing blanks trimmed.
-    fn ring_rows(vt: &OrzmaVt) -> Vec<String> {
-        let grid = vt.device.active_screen().grid();
-        let history = i32::try_from(grid.history_len()).expect("a small history");
-        (-history..i32::from(grid.size().rows))
-            .map(|line| {
-                grid.row(GridLine(line))
-                    .iter()
-                    .flat_map(Cell::chars)
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect()
     }
 
     /// Asserts that a Lines start projects the anchored row from its first
@@ -994,7 +976,10 @@ mod tests {
         vt.interpret(b"\x1b[H\x1b[2JPS> ");
         let _ = vt.resize(GridSize { cols: 2, rows: 4 });
         let _ = vt.resize(GridSize { cols: 8, rows: 4 });
-        assert_eq!(ring_rows(&vt), ["1", "2", "PS>", "", "", ""]);
+        assert_eq!(
+            vt.device.active_screen().grid().ring_texts(),
+            ["1", "2", "PS>", "", "", ""]
+        );
         assert_eq!(
             vt.device.active_screen().cursors()[0],
             (ScreenLine(0), GridColumn(4), false)
@@ -1028,7 +1013,10 @@ mod tests {
         let _ = vt.resize(GridSize { cols: 4, rows: 4 });
         vt.interpret(b"\x1b[3;1Hxyz");
         let _ = vt.resize(GridSize { cols: 12, rows: 4 });
-        assert_eq!(ring_rows(&vt), ["a", "bbbbcccc", "xyz", "", ""]);
+        assert_eq!(
+            vt.device.active_screen().grid().ring_texts(),
+            ["a", "bbbbcccc", "xyz", "", ""]
+        );
     }
 
     /// Asserts that a shrink names the placement whose anchor row it

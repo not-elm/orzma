@@ -902,19 +902,6 @@ mod tests {
         assert_eq!(device.evict_lost_anchors(), vec![id]);
     }
 
-    fn row_text(device: &DeviceState, line: i32) -> String {
-        device
-            .screens
-            .primary
-            .grid()
-            .row(GridLine(line))
-            .iter()
-            .flat_map(Cell::chars)
-            .collect::<String>()
-            .trim_end()
-            .to_string()
-    }
-
     /// Asserts that a resize while the alternate screen is shown leaves
     /// the primary screen at its size until the flip back reflows it.
     ///
@@ -940,8 +927,9 @@ mod tests {
             device.active_screen().grid_size(),
             GridSize { cols: 4, rows: 3 }
         );
-        assert_eq!(row_text(&device, 0), "abcd");
-        assert_eq!(row_text(&device, 1), "efg");
+        let primary = device.screens.primary.grid();
+        assert_eq!(primary.row(GridLine(0)).text(), "abcd");
+        assert_eq!(primary.row(GridLine(1)).text(), "efg");
     }
 
     /// Asserts that several resizes behind the alternate screen reflow the

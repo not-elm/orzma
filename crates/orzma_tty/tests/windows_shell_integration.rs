@@ -3,16 +3,18 @@
 
 #![cfg(windows)]
 
+#[path = "support/powershell.rs"]
+mod powershell;
+
 use orzma_tty::prelude::{OrzmaTty, TerminalKey, TerminalModifiers, TtySignal};
 use orzma_tty::{CellPixels, EnvKey, EnvValue, SpawnOptions};
 use orzma_vt::prelude::{GridSize, OrzmaVt, VtSignal};
-use std::ffi::OsString;
+use powershell::resolve_powershell;
 use std::fs::{canonicalize, create_dir_all, read_to_string, write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use std::{env, iter};
 use tempfile::TempDir;
 
 /// The marker the fixture profile announces itself with, through an
@@ -184,23 +186,6 @@ fn a_failing_command_still_shows_as_failed_through_the_injected_hook() {
     );
 }
 
-/// The PowerShell executable this test runs against, preferring `pwsh`
-/// (PowerShell 7, the default `windows_default_shell` picks) and falling
-/// back to Windows PowerShell 5.1 when `pwsh` is not installed.
-///
-/// # Panics
-///
-/// Panics when neither `pwsh` nor `powershell` resolves on `PATH`.
-fn resolve_powershell() -> (PathBuf, &'static str) {
-    if let Some(path) = on_path("pwsh") {
-        return (path, "pwsh");
-    }
-    if let Some(path) = on_path("powershell") {
-        return (path, "powershell");
-    }
-    panic!("neither pwsh nor powershell is on PATH; this test requires one of them installed");
-}
-
 /// Writes the fixture profile that announces itself through an `OSC 0`
 /// marker and installs a custom prompt, or reports `false` when `shell`
 /// resolves its profile outside `home`.
@@ -288,31 +273,4 @@ fn resolve_profile_path(home: &Path, shell: &Path) -> Option<PathBuf> {
     let answered = read_to_string(&answer).expect("the shell's reported profile path");
     let profile = PathBuf::from(answered.trim());
     profile.starts_with(home).then_some(profile)
-}
-
-/// The full path `name` resolves to through `PATH` and `PATHEXT`, or
-/// `None` when no entry names a file.
-fn on_path(name: &str) -> Option<PathBuf> {
-    let path = env::var_os("PATH")?;
-    let extensions: Vec<OsString> = env::var("PATHEXT")
-        .ok()
-        .map(|v| {
-            v.split(';')
-                .filter(|e| !e.is_empty())
-                .map(OsString::from)
-                .collect()
-        })
-        .unwrap_or_else(|| vec![OsString::from(".EXE")]);
-    env::split_paths(&path).find_map(|dir| candidate(&dir, name, &extensions))
-}
-
-/// The first spelling of `name` under `dir` that names a file.
-fn candidate(dir: &Path, name: &str, extensions: &[OsString]) -> Option<PathBuf> {
-    iter::once(dir.join(name))
-        .chain(extensions.iter().map(|ext| {
-            let mut file = OsString::from(name);
-            file.push(ext);
-            dir.join(file)
-        }))
-        .find(|path| path.is_file())
 }

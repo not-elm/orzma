@@ -55,14 +55,7 @@ fn a_parked_cursor_stays_parked_and_the_next_glyph_wraps() {
     let mut screen = sized(8, 3, 10);
     print_text(&mut screen, "abcdefgh");
     reflow(&mut screen, 4, 3);
-    assert_eq!(
-        (
-            screen.state.line,
-            screen.state.column,
-            screen.state.pending_wrap
-        ),
-        (ScreenLine(1), GridColumn(3), true)
-    );
+    assert_eq!(screen.cursors()[0], (ScreenLine(1), GridColumn(3), true));
     print_text(&mut screen, "x");
     assert_eq!(row_text(&screen, 2), "x");
     assert_eq!(screen.grid.wrap_at(GridLine(1)), Some(4));
@@ -241,12 +234,7 @@ fn a_scrolled_back_viewport_keeps_its_top_row() {
     screen.set_display_offset(DisplayOffset(1));
     reflow(&mut screen, 2, 2);
     assert_eq!(screen.display_offset(), DisplayOffset(2));
-    let top: String = screen
-        .viewport_row(ViewportLine(0))
-        .iter()
-        .flat_map(Cell::chars)
-        .collect();
-    assert_eq!(top.trim_end(), "cd");
+    assert_eq!(screen.viewport_row(ViewportLine(0)).text(), "cd");
 }
 
 /// Asserts that a viewport whose top row the history cap drops moves to
@@ -261,12 +249,7 @@ fn a_viewport_whose_top_row_is_dropped_moves_to_the_oldest_row() {
     screen.set_display_offset(DisplayOffset(2));
     reflow(&mut screen, 2, 2);
     assert_eq!(screen.display_offset(), DisplayOffset(2));
-    let top: String = screen
-        .viewport_row(ViewportLine(0))
-        .iter()
-        .flat_map(Cell::chars)
-        .collect();
-    assert_eq!(top.trim_end(), "cd");
+    assert_eq!(screen.viewport_row(ViewportLine(0)).text(), "cd");
 }
 
 /// Asserts that a saved cursor whose column falls past the new width is
@@ -284,14 +267,7 @@ fn a_saved_cursor_past_the_new_width_does_not_arm_the_deferred_wrap() {
     screen.move_cursor_to(Some(1), Some(3));
     reflow(&mut screen, 4, 3);
     screen.restore_checkpoint();
-    assert_eq!(
-        (
-            screen.state.line,
-            screen.state.column,
-            screen.state.pending_wrap
-        ),
-        (ScreenLine(1), GridColumn(3), false)
-    );
+    assert_eq!(screen.cursors()[0], (ScreenLine(1), GridColumn(3), false));
 }
 
 /// Asserts that a saved cursor seated on the top row because its own row
@@ -375,14 +351,7 @@ fn a_cursor_armed_off_the_last_column_keeps_its_column() {
         (GridColumn(16), true)
     );
     screen.reflow(GridSize { cols: 20, rows: 4 }, ScrollbackOnGrow::Reclaim);
-    assert_eq!(
-        (
-            screen.state.line,
-            screen.state.column,
-            screen.state.pending_wrap
-        ),
-        (ScreenLine(0), GridColumn(16), true)
-    );
+    assert_eq!(screen.cursors()[0], (ScreenLine(0), GridColumn(16), true));
 }
 
 /// Asserts that a reflow keeps the background of the blank rows below the

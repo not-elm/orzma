@@ -453,6 +453,13 @@ impl Grid {
         }
     }
 
+    /// Every row of the ring, oldest history row first, as its text with
+    /// trailing blanks trimmed.
+    #[cfg(test)]
+    pub(crate) fn ring_texts(&self) -> Vec<String> {
+        self.rows.iter().map(|row| row.cells.text()).collect()
+    }
+
     /// Appends one blank row at the live tail.
     ///
     /// # Invariants
@@ -646,7 +653,7 @@ mod tests {
 
     /// Scrolls with the margins a screen carries before any `DECSTBM`,
     /// which is the region every history assertion below is about.
-    fn scroll_up_whole_screen(grid: &mut Grid, fill: Cell) {
+    pub(crate) fn scroll_up_whole_screen(grid: &mut Grid, fill: Cell) {
         let bottom = ScreenLine(grid.size().rows - 1);
         grid.scroll_up_one(ScreenLine(0), bottom, fill);
     }

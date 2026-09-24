@@ -219,6 +219,18 @@ impl Row<Cell> {
             })
     }
 
+    /// The row's glyphs and their marks, left to right, with trailing
+    /// blanks trimmed.
+    #[cfg(test)]
+    pub fn text(&self) -> String {
+        self.0
+            .iter()
+            .flat_map(Cell::chars)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
     /// Restores the wide-pair invariant at the joint between `left` and
     /// `left + 1`, blanking whichever half lost its partner.
     fn heal_joint(&mut self, left: usize) {

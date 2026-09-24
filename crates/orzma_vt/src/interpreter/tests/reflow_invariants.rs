@@ -10,41 +10,6 @@ use proptest::prelude::*;
 use std::collections::HashSet;
 use std::ops::Range;
 
-/// One piece of output.
-#[derive(Debug, Clone)]
-enum Output {
-    Ascii(u8),
-    Cjk,
-    Mark,
-    Newline,
-}
-
-fn output_strategy() -> impl Strategy<Value = Output> {
-    prop_oneof![
-        6 => (b'a'..=b'z').prop_map(Output::Ascii),
-        2 => Just(Output::Cjk),
-        1 => Just(Output::Mark),
-        1 => Just(Output::Newline),
-    ]
-}
-
-fn emit(vt: &mut OrzmaVt, output: &Output) {
-    match output {
-        Output::Ascii(byte) => {
-            vt.interpret(&[*byte]);
-        }
-        Output::Cjk => {
-            vt.interpret("あ".as_bytes());
-        }
-        Output::Mark => {
-            vt.interpret("\u{0301}".as_bytes());
-        }
-        Output::Newline => {
-            vt.interpret(b"\r\n");
-        }
-    }
-}
-
 /// One piece of the traffic a program sends: output, cursor motion,
 /// erasure, editing, margins, scrolling, pen changes, cursor saves, and
 /// screen flips.
@@ -75,6 +40,17 @@ enum Traffic {
     OriginMode(bool),
     Cuu(u8),
     Cud(u8),
+}
+
+/// Plain output: ASCII letters, a Japanese glyph, a combining mark, and
+/// newlines.
+fn output_strategy() -> impl Strategy<Value = Traffic> {
+    prop_oneof![
+        6 => (b'a'..=b'z').prop_map(Traffic::Ascii),
+        2 => Just(Traffic::Cjk),
+        1 => Just(Traffic::Mark),
+        1 => Just(Traffic::Newline),
+    ]
 }
 
 fn traffic_strategy() -> impl Strategy<Value = Traffic> {
@@ -144,10 +120,9 @@ fn bytes_of(traffic: &Traffic) -> Vec<u8> {
 /// their recorded wraps, each line's trailing blanks trimmed, and the
 /// empty lines at the end dropped.
 fn logical_lines(grid: &Grid) -> Vec<String> {
-    let history = i32::try_from(grid.history_len()).expect("history fits an i32");
     let mut lines = Vec::new();
     let mut current = String::new();
-    for line in -history..i32::from(grid.size().rows) {
+    for line in ring_lines(grid) {
         let row = grid.row(GridLine(line));
         let cells: &[Cell] = row;
         let wrap = grid.wrap_at(GridLine(line));
@@ -190,6 +165,18 @@ fn ring_ids(grid: &Grid) -> Vec<LineId> {
         .collect()
 }
 
+/// Checks that every row of the ring is `cols` wide with its wide pairs
+/// intact, and that the history index is in step.
+fn check_rows(grid: &Grid, cols: u16) -> Result<(), TestCaseError> {
+    for line in ring_lines(grid) {
+        let row = grid.row(GridLine(line));
+        prop_assert_eq!(row.len(), usize::from(cols), "row {} width", line);
+        prop_assert!(row.wide_pairs_intact(), "row {} broke a wide pair", line);
+    }
+    grid.assert_history_index_matches_ring();
+    Ok(())
+}
+
 /// Checks the structure a reflow or a truncating resize leaves behind:
 /// every row as wide as the grid with its wide pairs intact and its wrap
 /// inside the row, no id twice in the ring, the history index in step,
@@ -198,10 +185,8 @@ fn check_structure(vt: &OrzmaVt) -> Result<(), TestCaseError> {
     let screen = vt.device.active_screen();
     let grid = screen.grid();
     let size = grid.size();
+    check_rows(grid, size.cols)?;
     for line in ring_lines(grid) {
-        let row = grid.row(GridLine(line));
-        prop_assert_eq!(row.len(), usize::from(size.cols), "row {} width", line);
-        prop_assert!(row.wide_pairs_intact(), "row {} broke a wide pair", line);
         if let Some(cells) = grid.wrap_at(GridLine(line)) {
             prop_assert!(cells <= size.cols, "row {} wraps at {}", line, cells);
         }
@@ -209,7 +194,6 @@ fn check_structure(vt: &OrzmaVt) -> Result<(), TestCaseError> {
     let ids = ring_ids(grid);
     let unique: HashSet<LineId> = ids.iter().copied().collect();
     prop_assert_eq!(unique.len(), ids.len(), "an id repeats in the ring");
-    grid.assert_history_index_matches_ring();
     prop_assert_eq!(
         grid.wrap_at(GridLine(i32::from(size.rows) - 1)),
         None,
@@ -278,20 +262,14 @@ proptest! {
         let mut vt = OrzmaVt::new(GridSize { cols: 6, rows: 3 }, 10_000)
             .with_scrollback_on_grow(policy);
         for output in &outputs {
-            emit(&mut vt, output);
+            vt.interpret(&bytes_of(output));
         }
         let before = logical_lines(vt.device.active_screen().grid());
         for (cols, rows) in &sizes {
             let _ = vt.resize(GridSize { cols: *cols, rows: *rows });
             let grid = vt.device.active_screen().grid();
             prop_assert_eq!(logical_lines(grid), before.clone(), "after {}x{}", cols, rows);
-            let history = i32::try_from(grid.history_len()).expect("history fits an i32");
-            for line in -history..i32::from(grid.size().rows) {
-                let row = grid.row(GridLine(line));
-                prop_assert_eq!(row.len(), usize::from(*cols));
-                prop_assert!(row.wide_pairs_intact(), "row {} broke", line);
-            }
-            grid.assert_history_index_matches_ring();
+            check_rows(grid, *cols)?;
         }
     }
 }
@@ -319,7 +297,7 @@ proptest! {
         let size = GridSize { cols: start.0, rows: start.1 };
         let mut vt = OrzmaVt::new(size, 10_000);
         for output in &outputs {
-            emit(&mut vt, output);
+            vt.interpret(&bytes_of(output));
         }
         vt.interpret(b"\r\nPS>");
         let screen = vt.device.active_screen();

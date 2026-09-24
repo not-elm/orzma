@@ -819,13 +819,7 @@ mod tests {
         let (root, _pane) = h.open_root();
         h.drain();
         for cols in [70, 60, 50] {
-            h.queue(OrzmuxCommand::Resize {
-                size: GridSize::new(cols, 24).expect("a valid size"),
-                cell_px: CellPixels {
-                    width: 8,
-                    height: 16,
-                },
-            });
+            h.queue_resize(GridSize::new(cols, 24).expect("a valid size"));
         }
         h.event_loop_mut().drain_commands();
         let layouts = h
@@ -853,20 +847,9 @@ mod tests {
     fn back_to_back_divider_moves_apply_only_the_last() {
         let mut h = Harness::new();
         let (_root, _pane) = h.open_root();
-        h.send(OrzmuxCommand::NewPane {
-            request: RequestId(2),
-            at: NewPaneAt::Split {
-                pane: PaneTarget::Active,
-                orientation: SplitOrientation::Vertical,
-            },
-            cwd: None,
-            env: vec![],
-        });
-        let mut opened = h.drain();
-        let Some(OrzmuxEvent::Layout { layout, .. }) = opened.pop_back() else {
-            panic!("expected a Layout after the split");
-        };
-        let split = layout.separators[0].split;
+        split_active(&mut h, 2);
+        let window = GridSize::new(80, 24).expect("a valid size");
+        let split = h.backend().tree().solve(window).separators[0].split;
         for position in [50, 55, 60] {
             h.queue(OrzmuxCommand::ResizeSplit { split, position });
         }

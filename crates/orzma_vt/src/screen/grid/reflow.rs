@@ -1510,6 +1510,7 @@ mod tests {
     use super::*;
     use crate::device::color::Color;
     use crate::screen::cell::{BodyWidth, GlyphClass};
+    use crate::screen::grid::tests::scroll_up_whole_screen;
     use proptest::prelude::*;
     use proptest::sample::Index;
     use std::collections::HashSet;
@@ -1536,17 +1537,8 @@ mod tests {
         }
     }
 
-    fn text_of(row: &GridRow) -> String {
-        row.cells
-            .iter()
-            .flat_map(Cell::chars)
-            .collect::<String>()
-            .trim_end()
-            .to_string()
-    }
-
     fn texts(rows: &[GridRow]) -> Vec<String> {
-        rows.iter().map(text_of).collect()
+        rows.iter().map(|row| row.cells.text()).collect()
     }
 
     fn wraps(rows: &[GridRow]) -> Vec<Option<u16>> {
@@ -1804,21 +1796,6 @@ mod tests {
         }
     }
 
-    /// Every row of the ring, oldest first, trimmed.
-    fn all_rows(grid: &Grid) -> Vec<String> {
-        let history = i32::try_from(grid.history_len()).expect("a small history");
-        (-history..i32::from(grid.size().rows))
-            .map(|line| {
-                grid.row(GridLine(line))
-                    .iter()
-                    .flat_map(Cell::chars)
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect()
-    }
-
     fn cursor_at(line: i32, boundary: u16) -> TrackedPoint {
         TrackedPoint {
             line: GridLine(line),
@@ -1850,10 +1827,10 @@ mod tests {
         write(&mut grid, 2, "PS>");
         let mut cursor = cursor_at(2, 4);
         reflow(&mut grid, &mut cursor, 4, 6, ScrollbackOnGrow::Keep);
-        assert_eq!(all_rows(&grid), ["abcd", "efgh", "", "PS>", "", ""]);
+        assert_eq!(grid.ring_texts(), ["abcd", "efgh", "", "PS>", "", ""]);
         assert_eq!(cursor, cursor_at(4, 0));
         reflow(&mut grid, &mut cursor, 8, 6, ScrollbackOnGrow::Keep);
-        assert_eq!(all_rows(&grid), ["abcdefgh", "", "PS>", "", "", ""]);
+        assert_eq!(grid.ring_texts(), ["abcdefgh", "", "PS>", "", "", ""]);
         assert_eq!(cursor, cursor_at(2, 4));
         grid.assert_history_index_matches_ring();
     }
@@ -1872,10 +1849,10 @@ mod tests {
         write(&mut grid, 2, "PS>");
         let mut cursor = cursor_at(2, 4);
         reflow(&mut grid, &mut cursor, 4, 3, ScrollbackOnGrow::Keep);
-        assert_eq!(all_rows(&grid), ["line", "1", "line", "2", "PS>", ""]);
+        assert_eq!(grid.ring_texts(), ["line", "1", "line", "2", "PS>", ""]);
         assert_eq!(cursor, cursor_at(2, 0));
         reflow(&mut grid, &mut cursor, 8, 3, ScrollbackOnGrow::Keep);
-        assert_eq!(all_rows(&grid), ["line1", "line", "2", "PS>", ""]);
+        assert_eq!(grid.ring_texts(), ["line1", "line", "2", "PS>", ""]);
         assert_eq!(cursor, cursor_at(1, 4));
         grid.assert_history_index_matches_ring();
     }
@@ -1896,10 +1873,10 @@ mod tests {
         reflow(&mut grid, &mut cursor, 4, 3, ScrollbackOnGrow::Keep);
         reflow(&mut grid, &mut cursor, 8, 3, ScrollbackOnGrow::Keep);
         for _ in 0..3 {
-            grid.scroll_up_one(ScreenLine(0), ScreenLine(2), Cell::default());
+            scroll_up_whole_screen(&mut grid, Cell::default());
         }
         reflow(&mut grid, &mut cursor, 10, 3, ScrollbackOnGrow::Keep);
-        assert!(all_rows(&grid).contains(&"line2".to_string()));
+        assert!(grid.ring_texts().contains(&"line2".to_string()));
     }
 
     /// Asserts that under `Reclaim` narrowing and widening back restores
@@ -1916,7 +1893,7 @@ mod tests {
         let mut cursor = cursor_at(2, 4);
         reflow(&mut grid, &mut cursor, 4, 3, ScrollbackOnGrow::Reclaim);
         reflow(&mut grid, &mut cursor, 8, 3, ScrollbackOnGrow::Reclaim);
-        assert_eq!(all_rows(&grid), ["line1", "line2", "PS>"]);
+        assert_eq!(grid.ring_texts(), ["line1", "line2", "PS>"]);
         assert_eq!(cursor, cursor_at(2, 4));
         grid.assert_history_index_matches_ring();
     }
@@ -1932,14 +1909,14 @@ mod tests {
         write(&mut grid, 0, "zz");
         write(&mut grid, 1, "abcdef");
         for _ in 0..2 {
-            grid.scroll_up_one(ScreenLine(0), ScreenLine(2), Cell::default());
+            scroll_up_whole_screen(&mut grid, Cell::default());
         }
         write(&mut grid, 1, "PS>");
-        assert_eq!(all_rows(&grid), ["zz", "abcd", "ef", "PS>", ""]);
+        assert_eq!(grid.ring_texts(), ["zz", "abcd", "ef", "PS>", ""]);
         assert_eq!(grid.wrap_at(GridLine(-1)), Some(4));
         let mut cursor = cursor_at(1, 3);
         reflow(&mut grid, &mut cursor, 8, 3, ScrollbackOnGrow::Reclaim);
-        assert_eq!(all_rows(&grid), ["zz", "abcdef", "PS>", ""]);
+        assert_eq!(grid.ring_texts(), ["zz", "abcdef", "PS>", ""]);
         assert_eq!(grid.history_len(), 1);
         assert_eq!(cursor, cursor_at(1, 3));
         grid.assert_history_index_matches_ring();
@@ -1957,14 +1934,14 @@ mod tests {
         write(&mut grid, 0, "h1");
         write(&mut grid, 1, "abcdefghij");
         for _ in 0..2 {
-            grid.scroll_up_one(ScreenLine(0), ScreenLine(2), Cell::default());
+            scroll_up_whole_screen(&mut grid, Cell::default());
         }
         write(&mut grid, 1, "PS>");
-        assert_eq!(all_rows(&grid), ["h1", "abcdefgh", "ij", "PS>", ""]);
+        assert_eq!(grid.ring_texts(), ["h1", "abcdefgh", "ij", "PS>", ""]);
         assert_eq!(grid.wrap_at(GridLine(-1)), Some(8));
         let mut cursor = cursor_at(1, 3);
         reflow(&mut grid, &mut cursor, 4, 3, ScrollbackOnGrow::Reclaim);
-        assert_eq!(all_rows(&grid), ["h1", "abcd", "efgh", "ij", "PS>", ""]);
+        assert_eq!(grid.ring_texts(), ["h1", "abcd", "efgh", "ij", "PS>", ""]);
         assert_eq!(grid.history_len(), 3);
         assert_eq!(grid.wrap_at(GridLine(-1)), Some(4));
         assert_eq!(cursor, cursor_at(1, 3));
@@ -1981,18 +1958,18 @@ mod tests {
         let mut reclaim = grid(4, 2, 10);
         write(&mut reclaim, 0, "a");
         write(&mut reclaim, 1, "b");
-        reclaim.scroll_up_one(ScreenLine(0), ScreenLine(1), Cell::default());
+        scroll_up_whole_screen(&mut reclaim, Cell::default());
         let mut keep = grid(4, 2, 10);
         write(&mut keep, 0, "a");
         write(&mut keep, 1, "b");
-        keep.scroll_up_one(ScreenLine(0), ScreenLine(1), Cell::default());
+        scroll_up_whole_screen(&mut keep, Cell::default());
         let mut cursor = cursor_at(1, 0);
         reflow(&mut reclaim, &mut cursor, 4, 3, ScrollbackOnGrow::Reclaim);
         assert_eq!(reclaim.history_len(), 0);
         assert_eq!(cursor, cursor_at(2, 0));
         let mut cursor = cursor_at(1, 0);
         reflow(&mut keep, &mut cursor, 4, 3, ScrollbackOnGrow::Keep);
-        assert_eq!(all_rows(&keep), ["a", "b", "", ""]);
+        assert_eq!(keep.ring_texts(), ["a", "b", "", ""]);
         assert_eq!(keep.history_len(), 1);
         assert_eq!(cursor, cursor_at(1, 0));
     }
@@ -2010,7 +1987,7 @@ mod tests {
         }
         let mut cursor = cursor_at(1, 0);
         reflow(&mut grid, &mut cursor, 4, 2, ScrollbackOnGrow::Keep);
-        assert_eq!(all_rows(&grid), ["a", "b", "c"]);
+        assert_eq!(grid.ring_texts(), ["a", "b", "c"]);
         assert_eq!(cursor, cursor_at(0, 0));
     }
 
@@ -2053,7 +2030,7 @@ mod tests {
         let mut cursor = cursor_at(1, 4);
         reflow(&mut grid, &mut cursor, 2, 2, ScrollbackOnGrow::Keep);
         assert_eq!(grid.history_len(), 0);
-        assert_eq!(all_rows(&grid), ["ef", "gh"]);
+        assert_eq!(grid.ring_texts(), ["ef", "gh"]);
         assert_eq!(cursor, cursor_at(1, 2));
     }
 
@@ -2068,10 +2045,10 @@ mod tests {
         let mut grid = grid(4, 2, 3);
         for text in ["aaaa", "bbbb", "cccc", "dddd"] {
             write(&mut grid, 1, text);
-            grid.scroll_up_one(ScreenLine(0), ScreenLine(1), Cell::default());
+            scroll_up_whole_screen(&mut grid, Cell::default());
         }
         write(&mut grid, 1, "PS>");
-        assert_eq!(all_rows(&grid), ["aaaa", "bbbb", "cccc", "dddd", "PS>"]);
+        assert_eq!(grid.ring_texts(), ["aaaa", "bbbb", "cccc", "dddd", "PS>"]);
         let mut cursor = cursor_at(1, 3);
         let mut saved = cursor_at(0, 0);
         let mut points = [
@@ -2087,7 +2064,7 @@ mod tests {
             GridSize { cols: 2, rows: 2 },
             ScrollbackOnGrow::Keep,
         );
-        assert_eq!(all_rows(&grid), ["cc", "dd", "dd", "PS", ">"]);
+        assert_eq!(grid.ring_texts(), ["cc", "dd", "dd", "PS", ">"]);
         assert_eq!(cursor, cursor_at(1, 1));
         assert_eq!(
             points,
@@ -2252,8 +2229,10 @@ mod tests {
     }
 
     /// Each row as its id, its cells, and its recorded wrap.
-    fn laid_out(rows: &[GridRow]) -> Vec<(LineId, Row<Cell>, Option<u16>)> {
-        rows.iter()
+    fn laid_out<'a>(
+        rows: impl IntoIterator<Item = &'a GridRow>,
+    ) -> Vec<(LineId, Row<Cell>, Option<u16>)> {
+        rows.into_iter()
             .map(|row| (row.id, row.cells.clone(), row.wrap_at))
             .collect()
     }
@@ -2304,14 +2283,6 @@ mod tests {
         grid.next_line_id = u64::try_from(rows.len()).expect("a short run");
         grid.rows = VecDeque::from(rows);
         grid
-    }
-
-    /// Every row of the ring, oldest first, as its id, cells, and wrap.
-    fn ring_of(grid: &Grid) -> Vec<(LineId, Row<Cell>, Option<u16>)> {
-        grid.rows
-            .iter()
-            .map(|row| (row.id, row.cells.clone(), row.wrap_at))
-            .collect()
     }
 
     /// Checks that no id repeats in `grid`'s ring and that its history
@@ -2480,8 +2451,8 @@ mod tests {
             prop_assert_eq!(kept, all.min(cap));
             let original = u64::try_from(total).expect("a short run");
             prop_assert_eq!(
-                with_original_ids(ring_of(&capped).into_iter(), original),
-                with_original_ids(ring_of(&uncapped).into_iter().skip(all - kept), original)
+                with_original_ids(laid_out(&capped.rows).into_iter(), original),
+                with_original_ids(laid_out(&uncapped.rows).into_iter().skip(all - kept), original)
             );
             prop_assert_eq!(capped_cursor, uncapped_cursor);
             prop_assert_eq!(capped_saved.line, uncapped_saved.line);
@@ -2508,7 +2479,7 @@ mod tests {
         for _ in 0..10_050usize.div_ceil(rows_per_line) {
             write(&mut grid, first_row, &text);
             for _ in 0..rows_per_line {
-                grid.scroll_up_one(ScreenLine(0), ScreenLine(49), Cell::default());
+                scroll_up_whole_screen(&mut grid, Cell::default());
             }
         }
         grid
