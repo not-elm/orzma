@@ -183,6 +183,21 @@ impl ScreenSelection {
         self.state.take().is_some()
     }
 
+    /// The active selection's anchor and moving ends; `None` without an
+    /// active selection.
+    pub fn ends(&self) -> Option<(SelectionEnd, SelectionEnd)> {
+        self.state.map(|state| (state.anchor, state.moving))
+    }
+
+    /// Moves the active selection's ends to `anchor` and `moving`,
+    /// keeping its kind; a no-op without an active selection.
+    pub fn relocate(&mut self, anchor: SelectionEnd, moving: SelectionEnd) {
+        if let Some(state) = &mut self.state {
+            state.anchor = anchor;
+            state.moving = moving;
+        }
+    }
+
     /// Resolves the endpoints through `line_of` into the range a frame
     /// carries.
     ///

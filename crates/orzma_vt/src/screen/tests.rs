@@ -125,6 +125,7 @@ mod move_cursor_to_line;
 mod move_forward_tabs;
 mod new;
 mod print;
+mod reflow;
 mod reset;
 mod resize;
 mod restore_checkpoint;

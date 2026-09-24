@@ -32,6 +32,7 @@ use crate::screen::checkpoint::Checkpoint;
 use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
+use crate::screen::grid::reflow::{ScrollbackOnGrow, TrackedPoint};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::selection::{
     CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionGeometry, SelectionKind,
@@ -50,7 +51,7 @@ use std::ops::Range;
 /// for the caller to stage; pure cursor motion returns nothing.
 ///
 /// The caller must reject a size with a zero axis before it reaches
-/// [`Self::new`] or [`Self::resize`].
+/// [`Self::new`], [`Self::resize`] or [`Self::reflow`].
 ///
 /// # Invariants
 ///
@@ -1560,6 +1561,122 @@ impl Screen {
         Some(DamageSpan::Full)
     }
 
+    /// Resizes the grid to `size`, rewrapping its rows at the new width
+    /// and carrying every position that points into them to the same
+    /// text; `None` when the dimensions already matched.
+    ///
+    /// Rows a resize frees at the bottom come back from history under
+    /// [`ScrollbackOnGrow::Reclaim`] and stay blank under
+    /// [`ScrollbackOnGrow::Keep`]. The cursor, the saved cursor, the
+    /// selection's ends, the placement anchors, and a scrolled-back
+    /// viewport follow the text they stood on; an armed deferred wrap
+    /// survives when the cursor lands on a row's right edge. The cursor
+    /// and the saved cursor stay on the screen. A selection with an end
+    /// on a dropped row is cleared, a placement whose anchor row is
+    /// dropped stops resolving so the next [`Self::evict_lost_anchors`]
+    /// names it, and a viewport whose top row is dropped moves to the
+    /// oldest history row.
+    ///
+    /// # Invariants
+    ///
+    /// A resize that changes the dimensions reports [`DamageSpan::Full`].
+    ///
+    /// A height change returns the margins to the whole page.
+    pub fn reflow(&mut self, size: GridSize, policy: ScrollbackOnGrow) -> Option<DamageSpan> {
+        let old = self.grid.size();
+        if old == size {
+            return None;
+        }
+        self.state.last_landing = None;
+        let mut cursor = TrackedPoint::cursor(
+            self.state.line,
+            self.state.column,
+            self.state.pending_wrap,
+            old.cols,
+        );
+        let mut saved = TrackedPoint::cursor(
+            self.checkpoint.line,
+            self.checkpoint.column,
+            self.checkpoint.pending_wrap,
+            old.cols,
+        );
+        let selection = self.selection.ends();
+        let anchors = self.webview_placements.anchors();
+        let viewport = self.viewport.offset.0;
+        let mut points: Vec<Option<TrackedPoint>> = Vec::new();
+        if let Some((anchor, moving)) = selection {
+            for end in [anchor, moving] {
+                points.push(
+                    self.grid
+                        .grid_line(end.line)
+                        .map(|line| TrackedPoint::new(line, end.boundary)),
+                );
+            }
+        }
+        for (line, column) in &anchors {
+            points.push(
+                self.grid
+                    .grid_line(*line)
+                    .map(|line| TrackedPoint::new(line, column.0)),
+            );
+        }
+        if viewport > 0 {
+            points.push(
+                i32::try_from(viewport)
+                    .ok()
+                    .map(|offset| TrackedPoint::new(GridLine(-offset), 0)),
+            );
+        }
+        self.grid
+            .reflow(&mut cursor, &mut saved, &mut points, size, policy);
+        self.seat_reflowed(cursor, saved, size);
+        let mut moved = points.into_iter();
+        if selection.is_some() {
+            let ends = [moved.next().flatten(), moved.next().flatten()].map(|point| {
+                point.and_then(|point| {
+                    self.grid.line_id_at(point.line()).map(|line| SelectionEnd {
+                        line,
+                        boundary: point.boundary().min(size.cols),
+                    })
+                })
+            });
+            match ends {
+                [Some(anchor), Some(moving)] => self.selection.relocate(anchor, moving),
+                _ => {
+                    let _ = self.selection.clear();
+                }
+            }
+        }
+        let retired = self.grid.retired_id();
+        let last_column = size.cols.saturating_sub(1);
+        let reanchored: Vec<(LineId, GridColumn)> = anchors
+            .iter()
+            .map(|(_, column)| {
+                moved
+                    .next()
+                    .flatten()
+                    .and_then(|point| {
+                        self.grid
+                            .line_id_at(point.line())
+                            .map(|line| (line, GridColumn(point.boundary().min(last_column))))
+                    })
+                    .unwrap_or((retired, *column))
+            })
+            .collect();
+        self.webview_placements.reanchor(&reanchored);
+        if viewport > 0 {
+            let offset = match moved.next().flatten() {
+                Some(point) => u32::try_from(point.line().0.saturating_neg()).unwrap_or(0),
+                None => u32::MAX,
+            };
+            self.set_display_offset(DisplayOffset(offset));
+        }
+        if old.rows != size.rows {
+            self.scroll_region.set_margins(Margins::new(size.rows));
+        }
+        Some(DamageSpan::Full)
+    }
+
     /// Fills the visible screen with the alignment pattern, returning to
     /// the page-wide scroll region and the absolute cursor origin.
     ///
@@ -1582,6 +1699,32 @@ impl Screen {
         self.scroll_region = ScrollRegion::new(size.rows);
         self.seat_cursor(ScreenLine(0), GridColumn(0));
         DamageSpan::Full
+    }
+
+    /// Seats the cursor and the saved cursor on the positions a reflow
+    /// carried them to, clamped onto a screen of `size`.
+    fn seat_reflowed(&mut self, cursor: TrackedPoint, saved: TrackedPoint, size: GridSize) {
+        let last_line = size.rows.saturating_sub(1);
+        let (line, column, pending_wrap) = Self::cursor_at(cursor, size.cols, last_line);
+        self.state.line = line;
+        self.state.column = column;
+        self.state.pending_wrap = pending_wrap;
+        let (line, column, pending_wrap) = Self::cursor_at(saved, size.cols, last_line);
+        self.checkpoint.line = line;
+        self.checkpoint.column = column;
+        self.checkpoint.pending_wrap = pending_wrap;
+    }
+
+    /// The cursor position `point` stands for on a screen `cols` wide
+    /// whose last row is `last_line`: a point on the right edge parks on
+    /// the last column with the deferred wrap armed.
+    fn cursor_at(point: TrackedPoint, cols: u16, last_line: u16) -> (ScreenLine, GridColumn, bool) {
+        let line = ScreenLine(u16::try_from(point.line().0).unwrap_or(0).min(last_line));
+        if point.boundary() >= cols {
+            (line, GridColumn(cols.saturating_sub(1)), true)
+        } else {
+            (line, GridColumn(point.boundary()), false)
+        }
     }
 
     fn reclaimable_rows(&self, old_rows: u16, rows: u16) -> u16 {

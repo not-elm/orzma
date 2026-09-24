@@ -325,6 +325,12 @@ impl Grid {
         }
     }
 
+    /// An id no row holds or will ever hold, so an anchor moved to it
+    /// never resolves again.
+    pub fn retired_id(&mut self) -> LineId {
+        self.mint()
+    }
+
     /// The active-grid line the row `id` now sits at; `None` once it has
     /// left the ring.
     ///

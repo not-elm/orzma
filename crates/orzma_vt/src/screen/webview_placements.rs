@@ -64,6 +64,21 @@ impl WebviewPlacements {
         before != self.placements.len()
     }
 
+    /// Every placement's anchor row and column, in table order.
+    pub fn anchors(&self) -> Vec<(LineId, GridColumn)> {
+        self.placements.iter().map(|p| (p.anchor, p.col)).collect()
+    }
+
+    /// Moves each placement to the anchor at the same position in
+    /// `anchors`; a placement past the end of `anchors` stays where it
+    /// was.
+    pub fn reanchor(&mut self, anchors: &[(LineId, GridColumn)]) {
+        for (placement, (line, col)) in self.placements.iter_mut().zip(anchors) {
+            placement.anchor = *line;
+            placement.col = *col;
+        }
+    }
+
     /// Resolves every placement's anchor through `line_of` — the complete
     /// list, not a diff.
     pub fn project(
