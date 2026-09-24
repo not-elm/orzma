@@ -4,6 +4,8 @@ pub mod row;
 pub mod run;
 
 pub(crate) mod coords;
+pub(crate) mod reflow;
+
 mod history_index;
 
 use crate::error::{GridSizeError, VtResult};

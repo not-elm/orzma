@@ -16,6 +16,13 @@ use std::ops::{Deref, DerefMut, Index, IndexMut};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row<T>(Vec<T>);
 
+impl<T> Row<T> {
+    /// The row's elements, left to right.
+    pub fn into_inner(self) -> Vec<T> {
+        self.0
+    }
+}
+
 impl<T: Clone> Row<T> {
     /// Builds a row of `len` copies of `fill`.
     pub fn filled(len: u16, fill: T) -> Self {
