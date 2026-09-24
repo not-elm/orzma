@@ -4,11 +4,14 @@ use crate::error::{OrzmaError, OrzmaResult};
 use crate::escape::{clamp_dims, cursor_to, mount, unmount, valid_instance};
 use crate::events::{EventQueues, EventRegistry};
 use crate::handler::BoxedHandler;
+use crate::keychord::KeyChord;
 use crate::protocol::{
     ClientMsg, HandleId, IncomingCall, IncomingEvent, RegisterKind, ServerReply,
 };
 use crate::uds::UnixStream;
-use crate::webview::{SharedWriter, Webview, WebviewHandle, WebviewInstance};
+use crate::webview::{
+    SharedWriter, Webview, WebviewHandle, WebviewInstance, send_focus, write_msg,
+};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use ratatui::layout::Rect;
 use std::collections::{HashMap, VecDeque};
@@ -36,25 +39,12 @@ pub(crate) struct Placement {
 #[derive(Debug, Default)]
 pub struct FramePlacements {
     placements: Vec<Placement>,
-    focused: Option<String>,
     pub(crate) pending_compositing: HashMap<String, bool>,
 }
 
 impl FramePlacements {
     pub(crate) fn record(&mut self, instance: String, area: Rect) {
         self.placements.push(Placement { instance, area });
-    }
-
-    /// Marks `instance` focused for this frame. Last writer wins; a debug build
-    /// trips an assertion if more than one widget claims focus in a single frame
-    /// (the app must focus at most one placement at a time).
-    pub(crate) fn set_focused(&mut self, instance: String) {
-        debug_assert!(
-            self.focused.is_none(),
-            "multiple webviews marked focused in one frame (last wins): had {:?}, now {instance:?}",
-            self.focused
-        );
-        self.focused = Some(instance);
     }
 
     /// Removes and returns the buffered compositing state for `instance`, if any.
@@ -65,11 +55,6 @@ impl FramePlacements {
     #[cfg(test)]
     pub(crate) fn placements_for_test(&self) -> &[Placement] {
         &self.placements
-    }
-
-    #[cfg(test)]
-    pub(crate) fn focused_for_test(&self) -> Option<&str> {
-        self.focused.as_deref()
     }
 
     #[cfg(test)]
@@ -85,16 +70,14 @@ pub(crate) struct FlushState {
     pub last: HashMap<String, Rect>,
     #[cfg(not(test))]
     last: HashMap<String, Rect>,
-    last_focused: Option<String>,
 }
 
 impl FlushState {
-    /// Emits this frame's geometry and, when focus changed since the last
-    /// frame, the control-plane focus op.
+    /// Emits this frame's geometry.
     ///
-    /// On Unix the geometry rides the PTY as APC verbs (`out`) and only the
-    /// focus op takes the socket; on Windows ConPTY drops APC, so the
-    /// geometry takes the socket too, as `mount` / `unmount` ops.
+    /// On Unix the geometry rides the PTY as APC verbs (`out`); on Windows
+    /// ConPTY drops APC, so the geometry takes the socket as `mount` /
+    /// `unmount` ops.
     pub fn emit_frame(
         &mut self,
         out: &mut impl Write,
@@ -103,45 +86,27 @@ impl FlushState {
     ) -> OrzmaResult<()> {
         if cfg!(windows) {
             let (verbs, current) = PlacementVerb::diff(self, &frame.placements);
-            let focus_changed = self.last_focused != frame.focused;
             // NOTE: only take the writer lock (shared with the reader thread
             // and every WebviewHandle::emit) when there is something to send;
             // this runs every render frame and the unchanged path must not
-            // contend the lock. When it is taken, one lock covers the whole
-            // frame's writes so geometry and focus cannot interleave with a
-            // concurrent emit line.
-            if !verbs.is_empty() || focus_changed {
+            // contend the lock.
+            if !verbs.is_empty() {
                 let mut w = socket.lock()?;
-                if !verbs.is_empty() {
-                    write_socket_verbs(&mut *w, &verbs)?;
-                    w.flush()?;
-                }
-                if focus_changed {
-                    flush_focus(&mut *w, &mut self.last_focused, &frame.focused)?;
-                }
+                write_socket_verbs(&mut *w, &verbs)?;
+                w.flush()?;
             }
             self.last = current;
             return Ok(());
         }
-        self.emit_placements(out, frame)?;
-        // NOTE: only take the writer lock (shared with the reader thread and
-        // every WebviewHandle::emit) when focus actually changed; this runs every
-        // render frame and the unchanged path must not contend the lock.
-        if self.last_focused == frame.focused {
-            return Ok(());
-        }
-        let mut w = socket.lock()?;
-        flush_focus(&mut *w, &mut self.last_focused, &frame.focused)
+        self.emit_placements(out, frame)
     }
 
-    /// Emits this frame's geometry to `out` alone, leaving the focus op unsent.
+    /// Emits this frame's geometry to `out` alone, leaving the socket untouched.
     ///
     /// This is the flush to use while the control socket is down. On Unix
-    /// geometry rides the PTY, which outlives the socket, and there is nothing
-    /// at the other end of the socket to receive a focus op — attempting one
-    /// would only fail the whole draw. On Windows geometry needs the socket
-    /// too, so nothing is emitted until the reconnect, after which
-    /// [`Self::reset`] re-asserts every placement.
+    /// geometry rides the PTY, which outlives the socket. On Windows geometry
+    /// needs the socket too, so nothing is emitted until the reconnect, after
+    /// which [`Self::reset`] re-asserts every placement.
     pub fn emit_placements(
         &mut self,
         out: &mut impl Write,
@@ -154,7 +119,7 @@ impl FlushState {
     }
 
     /// Drops the record of what was last emitted, so the next flush re-asserts
-    /// this frame's geometry and focus from scratch.
+    /// this frame's geometry from scratch.
     ///
     /// Called when the connection the record described has gone: the host
     /// forgets every mount when the socket drops, so diffing against it would
@@ -164,7 +129,6 @@ impl FlushState {
     /// emits no unmount for an id the host has already dropped.
     pub fn reset(&mut self) {
         self.last.clear();
-        self.last_focused = None;
     }
 }
 
@@ -276,6 +240,41 @@ impl SessionCore {
         }
         Ok(WebviewInstance::new_shared(slot, writer.clone()))
     }
+
+    /// Replaces `handle`'s forward-key chords: rewrites its saved
+    /// registration, so a reconnect replays the new list, and then sends
+    /// `set_forward_keys` through `writer`.
+    ///
+    /// The saved registration keeps the new list even when the send fails.
+    pub fn set_forward_keys(
+        &self,
+        writer: &SharedWriter,
+        handle: &WebviewHandle,
+        keys: Vec<KeyChord>,
+    ) -> OrzmaResult<()> {
+        // NOTE: hold the saved registrations across the send, as mint_instance
+        // does. Two calls, or a call and a reconnect replay, then reach the
+        // socket in the order they rewrote the saved list, so the host never
+        // ends up with an older list than the one a later replay carries.
+        let mut regs = self.registrations.lock().unwrap_or_else(|e| e.into_inner());
+        match regs
+            .iter_mut()
+            .find(|r| handle.shares_handle_slot(&r.handle_slot))
+        {
+            Some(reg) => reg.kind.replace_forward_keys(keys.clone()),
+            None => tracing::debug!(
+                handle = %handle.handle_id(),
+                "forward keys replaced for a handle with no saved registration; a reconnect will not carry them"
+            ),
+        }
+        write_msg(
+            writer,
+            &ClientMsg::SetForwardKeys {
+                handle: handle.handle_id(),
+                keys,
+            },
+        )
+    }
 }
 
 /// An orzma session: owns the control-socket connection and reader thread.
@@ -312,14 +311,12 @@ impl Orzma {
         let events: EventRegistry = Arc::new(Mutex::new(HashMap::new()));
         let (reconnect_tx, reconnect_rx) = crossbeam_channel::bounded::<()>(1);
 
-        {
-            let line = serde_json::to_string(&ClientMsg::Hello {
+        write_msg(
+            &writer,
+            &ClientMsg::Hello {
                 token: token.clone(),
-            })?;
-            let mut w = writer.lock()?;
-            writeln!(w, "{line}")?;
-            w.flush()?;
-        }
+            },
+        )?;
 
         spawn_reader(
             stream,
@@ -424,6 +421,16 @@ impl Orzma {
         ))
     }
 
+    /// Takes keyboard focus back from the webview focused in this pane,
+    /// returning the keyboard to the pane's terminal.
+    ///
+    /// The host clears the focus only when the focused webview is mounted in
+    /// this connection's pane, whichever program registered it. The active
+    /// pane does not change.
+    pub fn blur(&self) -> OrzmaResult<()> {
+        send_focus(&self.writer, None)
+    }
+
     /// Locks and clears the per-frame placement collector for `render_stateful_widget`.
     ///
     /// The returned guard derefs to [`FramePlacements`]; pass `&mut *orzma.frame()`
@@ -434,7 +441,6 @@ impl Orzma {
     pub fn frame(&self) -> MutexGuard<'_, FramePlacements> {
         let mut frame = self.frame.lock().unwrap_or_else(|e| e.into_inner());
         frame.placements.clear();
-        frame.focused = None;
         frame.pending_compositing = std::mem::take(
             &mut *self
                 .pending_compositing
@@ -651,27 +657,6 @@ fn flush_placements_over_socket(
     Ok(())
 }
 
-/// Emits the control-plane focus op (`ClientMsg::Focus`) when the focused
-/// instance changed from the last flush. `Some(i)` focuses placement `i`;
-/// `None` blurs. No write when unchanged (diff-driven, like geometry in
-/// `flush_placements`).
-fn flush_focus(
-    out: &mut impl Write,
-    last_focused: &mut Option<String>,
-    focused: &Option<String>,
-) -> OrzmaResult<()> {
-    if last_focused == focused {
-        return Ok(());
-    }
-    let line = serde_json::to_string(&ClientMsg::Focus {
-        instance: focused.clone(),
-    })?;
-    writeln!(out, "{line}")?;
-    out.flush()?;
-    *last_focused = focused.clone();
-    Ok(())
-}
-
 fn spawn_reader(
     stream: UnixStream,
     writer: SharedWriter,
@@ -708,6 +693,19 @@ fn spawn_reader(
                 {
                     map.insert(instance.to_owned(), active);
                 }
+            } else if op == "focus_changed" {
+                if let Some(v) = parsed.as_ref()
+                    && let Some(handle) = v["handle"].as_str()
+                    && let Some(instance) = v["instance"].as_str()
+                    && let Some(focused) = v["focused"].as_bool()
+                {
+                    match events.lock().ok().and_then(|map| map.get(handle).cloned()) {
+                        Some(queues) => queues.ingest_focus(instance.to_owned(), focused),
+                        None => {
+                            tracing::debug!(handle, "focus change for an unknown handle dropped")
+                        }
+                    }
+                }
             } else if op == "event" {
                 if let Ok(ev) = serde_json::from_str::<IncomingEvent>(trimmed) {
                     match events
@@ -733,6 +731,15 @@ fn spawn_reader(
                 }
             } else if parsed.as_ref().is_some_and(|v| v.get("op").is_none()) {
                 settle_reply(&pending, &handlers, &events, trimmed);
+            }
+        }
+        // NOTE: the host blurs this connection's placements when the socket
+        // drops, but its `focus_changed` pushes for them go to the dead
+        // connection, so the app would otherwise keep believing a page holds
+        // the keyboard.
+        if let Ok(map) = events.lock() {
+            for queues in map.values() {
+                queues.blur_all();
             }
         }
         // The socket closed: drop every pending sender so any in-flight
@@ -1038,7 +1045,10 @@ fn replay_registration(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::FocusChange;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
     use ratatui::layout::Rect;
+    use serde_json::json;
     use std::fmt::Debug;
     use tracing::field::{Field, Visit};
     use tracing::span::{Attributes, Id, Record};
@@ -1249,6 +1259,60 @@ mod tests {
             reconnect_tx: bounded::<()>(1).0,
         };
         (orzma, handle, server)
+    }
+
+    fn esc_chord() -> KeyChord {
+        KeyChord {
+            mods: KeyModifiers::NONE,
+            code: KeyCode::Esc,
+        }
+    }
+
+    fn replayed_forward_keys(orzma: &Orzma) -> serde_json::Value {
+        let regs = orzma.core.registrations.lock().unwrap();
+        serde_json::to_value(ClientMsg::Register(regs[0].kind.clone())).unwrap()["forward_keys"]
+            .clone()
+    }
+
+    /// Asserts that replacing forward keys sends `set_forward_keys` for the
+    /// handle and rewrites the saved registration a reconnect replays.
+    ///
+    /// Case: a TUI browser enters insert mode, and later its session
+    /// reconnects after orzma restarted the control socket.
+    #[test]
+    fn set_forward_keys_sends_the_op_and_updates_the_replayed_registration() {
+        let (orzma, handle, server) = session_with_one_registration();
+
+        handle.set_forward_keys([esc_chord()]).unwrap();
+
+        let mut line = String::new();
+        BufReader::new(server).read_line(&mut line).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["op"], "set_forward_keys");
+        assert_eq!(v["handle"], "h-old");
+        assert_eq!(v["keys"], json!([{"mods": [], "key": "esc"}]));
+        assert_eq!(
+            replayed_forward_keys(&orzma),
+            json!([{"mods": [], "key": "esc"}])
+        );
+    }
+
+    /// Asserts that the saved registration takes the new forward keys
+    /// whatever the send's result.
+    ///
+    /// Case: a TUI browser leaves insert mode while orzma's control socket is
+    /// down, and the session reconnects afterwards.
+    #[test]
+    fn set_forward_keys_keeps_the_new_list_whatever_the_send_result() {
+        let (orzma, handle, server) = session_with_one_registration();
+        drop(server);
+
+        let _ = handle.set_forward_keys([esc_chord()]);
+
+        assert_eq!(
+            replayed_forward_keys(&orzma),
+            json!([{"mods": [], "key": "esc"}])
+        );
     }
 
     /// Asserts that an instance minted while a reconnect replaces the handle it
@@ -1506,17 +1570,16 @@ mod tests {
         assert!(written.contains(&format!("n={b}")));
     }
 
+    /// Asserts that `reset` forgets every placement it last emitted.
+    ///
+    /// Case: the control socket drops and the host forgets every mount, so
+    /// the next flush must mount each placement again from scratch.
     #[test]
-    fn flush_state_reset_clears_placements_and_focus() {
+    fn flush_state_reset_clears_placements() {
         let mut state = FlushState::default();
         state.last.insert("h1".into(), rect(0, 0, 10, 5));
-        state.last_focused = Some("h1".into());
         state.reset();
         assert!(state.last.is_empty(), "last should be empty after reset");
-        assert_eq!(
-            state.last_focused, None,
-            "last_focused should be None after reset"
-        );
     }
 
     /// Asserts that a placement is mounted at its cursor position when new or
@@ -1770,45 +1833,6 @@ mod tests {
         assert!(captured[0].contains("skipping a placement"));
     }
 
-    /// Asserts that a focus op names the newly-focused instance, and that a
-    /// frame focusing the same instance again writes nothing.
-    ///
-    /// Case: the user clicks into a webview pane and then keeps typing in it
-    /// across many frames.
-    #[test]
-    fn flush_focus_emits_on_change_and_skips_unchanged() {
-        let mut last = None;
-        let mut buf = Vec::new();
-        flush_focus(&mut buf, &mut last, &Some(INSTANCE_A.to_string())).unwrap();
-        let v: serde_json::Value =
-            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
-        assert_eq!(v["op"], "focus");
-        assert_eq!(v["instance"], INSTANCE_A);
-
-        let mut buf2 = Vec::new();
-        flush_focus(&mut buf2, &mut last, &Some(INSTANCE_A.to_string())).unwrap();
-        assert!(
-            String::from_utf8(buf2).unwrap().is_empty(),
-            "unchanged focus emits nothing"
-        );
-    }
-
-    /// Asserts that dropping focus emits a focus op with a null instance and
-    /// clears the remembered target.
-    ///
-    /// Case: the user moves focus from a webview pane back to a native widget.
-    #[test]
-    fn flush_focus_emits_blur_on_none() {
-        let mut last = Some(INSTANCE_A.to_string());
-        let mut buf = Vec::new();
-        flush_focus(&mut buf, &mut last, &None).unwrap();
-        let v: serde_json::Value =
-            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
-        assert_eq!(v["op"], "focus");
-        assert_eq!(v["instance"], serde_json::Value::Null);
-        assert_eq!(last, None);
-    }
-
     #[test]
     fn take_compositing_returns_and_removes_entry() {
         let mut fp = FramePlacements::default();
@@ -1834,7 +1858,6 @@ mod tests {
         {
             let mut fp = frame_arc.lock().unwrap_or_else(|e| e.into_inner());
             fp.placements.clear();
-            fp.focused = None;
             fp.pending_compositing = shared
                 .lock()
                 .map(|mut map| std::mem::take(&mut *map))
@@ -1848,7 +1871,6 @@ mod tests {
         {
             let mut fp = frame_arc.lock().unwrap_or_else(|e| e.into_inner());
             fp.placements.clear();
-            fp.focused = None;
             fp.pending_compositing = shared
                 .lock()
                 .map(|mut map| std::mem::take(&mut *map))
@@ -2007,5 +2029,139 @@ mod tests {
             queues.drain_type(TypeId::of::<Hello>()),
             vec![serde_json::json!({"n":7})]
         );
+    }
+
+    /// Asserts that a `focus_changed` push lands in its handle's queue, and
+    /// that the connection closing reports the focused placement as blurred.
+    ///
+    /// Case: the user clicks a markdown viewer's page, and then orzma's
+    /// control socket goes away while the page holds focus.
+    #[test]
+    fn reader_thread_queues_focus_changes_and_blurs_on_disconnect() {
+        use crate::uds::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("test.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let client = UnixStream::connect(&sock_path).unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client.try_clone().unwrap()));
+        let (server_conn, _) = listener.accept().unwrap();
+        let queues = Arc::new(EventQueues::from_decls(&[]));
+        let events: EventRegistry = Arc::new(Mutex::new(HashMap::from([(
+            "h1".to_owned(),
+            queues.clone(),
+        )])));
+
+        spawn_reader(
+            client,
+            writer,
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(VecDeque::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+            events,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let mut server = server_conn;
+        writeln!(
+            server,
+            r#"{{"op":"focus_changed","handle":"h1","instance":"{INSTANCE_A}","focused":true}}"#
+        )
+        .unwrap();
+        server.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(
+            queues.drain_focus(),
+            vec![FocusChange {
+                instance: INSTANCE_A.into(),
+                focused: true,
+            }]
+        );
+
+        drop(server);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(
+            queues.drain_focus(),
+            vec![FocusChange {
+                instance: INSTANCE_A.into(),
+                focused: false,
+            }]
+        );
+    }
+
+    /// Asserts that a `focus_changed` push for a handle the app never
+    /// registered is dropped without panicking and without landing in any
+    /// registered handle's queue.
+    ///
+    /// Case: a stray `focus_changed` for a placement arrives on the socket
+    /// after the app has already unregistered that handle.
+    #[test]
+    fn reader_thread_drops_focus_change_for_unknown_handle() {
+        use crate::uds::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("test.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let client = UnixStream::connect(&sock_path).unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client.try_clone().unwrap()));
+        let (server_conn, _) = listener.accept().unwrap();
+        let queues = Arc::new(EventQueues::from_decls(&[]));
+        let events: EventRegistry = Arc::new(Mutex::new(HashMap::from([(
+            "h1".to_owned(),
+            queues.clone(),
+        )])));
+
+        spawn_reader(
+            client,
+            writer,
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(VecDeque::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+            events,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let mut server = server_conn;
+        writeln!(
+            server,
+            r#"{{"op":"focus_changed","handle":"h2","instance":"{INSTANCE_A}","focused":true}}"#
+        )
+        .unwrap();
+        server.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(queues.drain_focus(), vec![]);
+
+        writeln!(
+            server,
+            r#"{{"op":"focus_changed","handle":"h1","instance":"{INSTANCE_A}","focused":true}}"#
+        )
+        .unwrap();
+        server.flush().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(
+            queues.drain_focus(),
+            vec![FocusChange {
+                instance: INSTANCE_A.into(),
+                focused: true,
+            }],
+            "the reader thread keeps processing after the unknown handle"
+        );
+    }
+
+    /// Asserts that `blur` sends a focus op with a null instance.
+    ///
+    /// Case: a markdown viewer opens its search and takes the keyboard back
+    /// from its page.
+    #[test]
+    fn blur_sends_a_null_focus() {
+        let (orzma, _handle, server) = session_with_one_registration();
+
+        orzma.blur().unwrap();
+
+        let mut line = String::new();
+        BufReader::new(server).read_line(&mut line).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["op"], "focus");
+        assert!(v["instance"].is_null());
     }
 }

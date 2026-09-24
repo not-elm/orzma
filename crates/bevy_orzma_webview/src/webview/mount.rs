@@ -2,7 +2,7 @@
 //! registered view into the terminal's text flow, keep their size in step with
 //! the cell metrics, and project their placements into `TerminalOverlays`.
 
-use super::apc::{ClickFocusDisabled, NonInteractive};
+use super::apc::NonInteractive;
 use super::render::preload::build_preload;
 use crate::control_plane::{
     ConnectionWriters, HandleId, NormalizedChord, OrzmaRegistry, OrzmaSource, PushMsg, WebviewOwner,
@@ -128,9 +128,6 @@ pub(crate) struct ResolvedWebviewMount {
     pub url: String,
     /// Whether the page receives pointer/keyboard input.
     pub interactive: bool,
-    /// Whether a pointer press inside the page's rect moves keyboard focus
-    /// to it.
-    pub click_focus: bool,
     /// `(connection_id, handle)` of the registering program, used to stamp
     /// `WebviewOwner` for `window.orzma` back-channel routing. `Some` only when
     /// the registration is bridged; a display-only `Url` view leaves it `None`.
@@ -172,7 +169,6 @@ pub(crate) fn resolve_mount(
     Some(ResolvedWebviewMount {
         url,
         interactive: view.interactive,
-        click_focus: view.click_focus,
         owner,
         forward_keys: view.forward_keys.clone(),
         preload: view.preload.clone(),
@@ -257,9 +253,6 @@ pub(crate) fn mount(params: &mut WebviewParams, dynamic: &OrzmaRegistry, ctx: We
     ));
     if !resolved.interactive {
         params.commands.entity(webview).insert(NonInteractive);
-    }
-    if !resolved.click_focus {
-        params.commands.entity(webview).insert(ClickFocusDisabled);
     }
     // NOTE: the orzma bridge script (window.orzma) and WebviewOwner (the
     // inbound-call gate) are inserted only for a bridged registration; the
@@ -592,13 +585,14 @@ fn project_webview_overlays(
                 if !already_notified {
                     commands.entity(child).insert(CompositeNotified);
                     if let Some(owner) = owner {
-                        let msg = serde_json::to_string(&PushMsg::Compositing {
-                            handle: owner.handle.clone(),
-                            instance: owner.instance.to_string(),
-                            active: true,
-                        })
-                        .expect("PushMsg serializes infallibly");
-                        writers.send(owner.connection_id, msg);
+                        writers.push(
+                            owner.connection_id,
+                            &PushMsg::Compositing {
+                                handle: owner.handle.clone(),
+                                instance: owner.instance.to_string(),
+                                active: true,
+                            },
+                        );
                     }
                 }
             }
@@ -624,13 +618,14 @@ fn on_webview_removed(
     if !notified {
         return;
     }
-    let msg = serde_json::to_string(&PushMsg::Compositing {
-        handle: owner.handle.clone(),
-        instance: owner.instance.to_string(),
-        active: false,
-    })
-    .expect("PushMsg serializes infallibly");
-    writers.send(owner.connection_id, msg);
+    writers.push(
+        owner.connection_id,
+        &PushMsg::Compositing {
+            handle: owner.handle.clone(),
+            instance: owner.instance.to_string(),
+            active: false,
+        },
+    );
 }
 
 #[cfg(test)]
@@ -681,7 +676,6 @@ mod tests {
             source: OrzmaSource::Inline("<h1>x</h1>".into()),
             entry: "index.html".into(),
             interactive,
-            click_focus: true,
             owner_surface,
             connection_id: 1,
             forward_keys: vec![],
@@ -698,7 +692,6 @@ mod tests {
             },
             entry: String::new(),
             interactive: true,
-            click_focus: true,
             owner_surface,
             connection_id: 1,
             forward_keys: vec![],
@@ -860,29 +853,6 @@ mod tests {
             .map(|view| view.slot)
     }
 
-    /// Asserts that a registration declaring `click_focus: false` stamps
-    /// `ClickFocusDisabled` on the mounted child.
-    ///
-    /// Case: a markdown viewer registers a page that owns no keyboard
-    /// affordances, so a click on it must leave the keyboard with the pane's
-    /// TUI rather than hand it to the page.
-    #[test]
-    fn a_click_focus_opt_out_stamps_the_marker() {
-        let mut app = make_test_app();
-        let terminal = spawn_terminal(&mut app);
-        let mut view = inline_view(terminal, true);
-        view.click_focus = false;
-        let instance = register_view(&mut app, "h", view);
-
-        mount(&mut app, terminal, instance);
-
-        let child = webview_children_of(&app, terminal)[0];
-        assert!(
-            app.world().get::<ClickFocusDisabled>(child).is_some(),
-            "a click_focus:false view must carry ClickFocusDisabled"
-        );
-    }
-
     #[test]
     fn mount_spawns_child_with_inline_components() {
         let (mut app, terminal, instance) = app_with_registration();
@@ -936,10 +906,6 @@ mod tests {
         assert!(
             app.world().get::<NonInteractive>(child).is_none(),
             "an interactive view must not be stamped NonInteractive"
-        );
-        assert!(
-            app.world().get::<ClickFocusDisabled>(child).is_none(),
-            "a view that did not opt out of click focus must not be stamped ClickFocusDisabled"
         );
     }
 
@@ -1948,7 +1914,6 @@ mod tests {
             source: OrzmaSource::Dir("/abs/ui".into()),
             entry: "index.html".into(),
             interactive,
-            click_focus: true,
             owner_surface,
             connection_id: 1,
             forward_keys: vec![],

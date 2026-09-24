@@ -7,7 +7,7 @@ use crate::input::shortcuts::{
 };
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
-use bevy_orzma_webview::NormalizedChord;
+use bevy_orzma_webview::{ChordKey, NormalizedChord};
 use orzma_configs::shortcuts::{Modifiers, Shortcut};
 use orzma_configs::vi_mode::ViModeAction;
 use std::time::Duration;
@@ -30,15 +30,10 @@ pub(crate) enum KeyEffect {
     /// Run a matched `[vi-mode]` key.
     ViMode(ViModeAction),
     /// Type the key into the focused terminal's PTY directly.
+    ///
+    /// A chord the focused webview declared in its `forward_keys` is typed
+    /// this way, and the page does not receive it.
     Type {
-        /// The logical key, for text/printable-key mapping.
-        logical: Key,
-        /// The physical key, for named-key mapping.
-        key_code: KeyCode,
-    },
-    /// Write the key to the pane's PTY because the focused webview declared
-    /// the chord in its `forward_keys`. The page receives the chord as well.
-    WebviewForward {
         /// The logical key, for text/printable-key mapping.
         logical: Key,
         /// The physical key, for named-key mapping.
@@ -85,10 +80,10 @@ impl BatchContext<'_> {
 }
 
 /// The result of classifying one frame's pressed keys: the per-key
-/// `KeyEffect`s, plus the physical keys the leader claimed while a
-/// webview owned the keyboard. The caller applies the frame's modifier
-/// snapshot when withholding `webview_suppressed` from CEF via
-/// `CefKeyboardFilter`; it is empty on the non-webview path.
+/// `KeyEffect`s, plus the physical keys withheld from the focused webview —
+/// those the leader claimed and those that matched a forward chord. The
+/// caller applies the frame's modifier snapshot when withholding them from
+/// CEF via `CefKeyboardFilter`; it is empty on the non-webview path.
 pub(crate) struct ClassifiedKeys {
     pub(crate) effects: Vec<KeyEffect>,
     pub(crate) webview_suppressed: Vec<KeyCode>,
@@ -128,9 +123,9 @@ pub(crate) fn classify_key_batch<'a>(
             // NOTE: the leader runs even while a webview owns the keyboard, so
             // `<Leader>` shortcuts work regardless of focus. Keys the leader
             // claims (the leader chord itself, an abandoned second key, or a
-            // fired binding) are recorded in `webview_suppressed` so the caller
-            // withholds them from CEF; a key the leader does not claim
-            // (`Passthrough`) still resolves to release / forward as before.
+            // fired binding) and the chords the webview declared as forward
+            // keys are recorded in `webview_suppressed` so the caller withholds
+            // them from CEF; any other key still reaches the page.
             match step_with_repeat(leader_phase, held_repeat, shortcuts, ev, ctx.mods, ctx.now) {
                 LeaderStep::Swallow => {
                     webview_suppressed.push(ev.key_code);
@@ -153,9 +148,10 @@ pub(crate) fn classify_key_batch<'a>(
                     } else if ctx
                         .forward_chords
                         .iter()
-                        .any(|chord| chord_matches(chord, ev.key_code, ctx.mods))
+                        .any(|chord| chord_matches(chord, ev.key_code, &ev.logical_key, ctx.mods))
                     {
-                        effects.push(KeyEffect::WebviewForward {
+                        webview_suppressed.push(ev.key_code);
+                        effects.push(KeyEffect::Type {
                             logical: ev.logical_key.clone(),
                             key_code: ev.key_code,
                         });
@@ -240,14 +236,28 @@ fn step_with_repeat(
     step
 }
 
-/// True when `chord` (a focused webview's declared forward-key entry) matches
-/// the physical key and exact modifier set of a pressed event.
-fn chord_matches(chord: &NormalizedChord, key_code: KeyCode, mods: Modifiers) -> bool {
-    chord.code == key_code
-        && chord.ctrl == mods.ctrl
-        && chord.shift == mods.shift
-        && chord.alt == mods.alt
-        && chord.logo == mods.meta
+/// True when `chord` (a focused webview's declared forward-key entry)
+/// matches a pressed event.
+///
+/// A [`ChordKey::Code`] chord compares the physical key and the exact
+/// modifier set. A [`ChordKey::Char`] chord compares the character the key
+/// produced and every modifier except Shift, which the character already
+/// reflects.
+fn chord_matches(
+    chord: &NormalizedChord,
+    key_code: KeyCode,
+    logical: &Key,
+    mods: Modifiers,
+) -> bool {
+    let others_match = chord.ctrl == mods.ctrl && chord.alt == mods.alt && chord.logo == mods.meta;
+    match chord.key {
+        ChordKey::Code(code) => others_match && code == key_code && chord.shift == mods.shift,
+        ChordKey::Char(c) => {
+            let mut buf = [0u8; 4];
+            let expected: &str = c.encode_utf8(&mut buf);
+            others_match && matches!(logical, Key::Character(text) if text.as_str() == expected)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1149,36 +1159,186 @@ mod tests {
         assert_eq!(phase, LeaderPhase::Idle);
     }
 
+    fn char_chord(c: char) -> NormalizedChord {
+        NormalizedChord {
+            key: ChordKey::Char(c),
+            alt: false,
+            ctrl: false,
+            shift: false,
+            logo: false,
+        }
+    }
+
+    fn forward_ctx(chords: &[NormalizedChord], mods: Modifiers) -> BatchContext<'_> {
+        let mut c = ctx(mods, ms(0));
+        c.webview_focused = true;
+        c.forward_chords = chords;
+        c
+    }
+
+    /// Asserts that a punctuation chord matches the character a key produced
+    /// with Shift held, whichever physical key produced it.
+    ///
+    /// Case: on a JIS keyboard the user presses Shift+/ to open the help of a
+    /// TUI browser that forwards `?`, and the same view runs under a layout
+    /// that puts `?` on another key.
     #[test]
-    fn webview_idle_forward_chord_forwards_and_not_suppressed() {
+    fn a_punctuation_chord_matches_the_produced_character_with_shift_held() {
+        let sc = Shortcuts::default();
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let chords = [char_chord('?')];
+        for key_code in [KeyCode::Slash, KeyCode::Minus] {
+            let mut phase = LeaderPhase::Idle;
+            let events = [press(key_code, Key::Character("?".into()))];
+            let out = run_full(
+                &mut phase,
+                &sc,
+                &resolved_vi_mode,
+                &events,
+                forward_ctx(&chords, mods(false, true, false, false)),
+            );
+            assert_eq!(
+                out.effects,
+                vec![KeyEffect::Type {
+                    logical: Key::Character("?".into()),
+                    key_code,
+                }],
+                "`?` produced by {key_code:?} must match the `?` chord"
+            );
+        }
+    }
+
+    /// Asserts that a punctuation chord does not match while Ctrl is held
+    /// unless the chord names Ctrl.
+    ///
+    /// Case: the user presses Ctrl+/ (a page shortcut) in a view that
+    /// forwards a plain `/`.
+    #[test]
+    fn a_punctuation_chord_requires_its_ctrl_state() {
+        let sc = Shortcuts::default();
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let chords = [char_chord('/')];
+        let mut phase = LeaderPhase::Idle;
+        let events = [press(KeyCode::Slash, Key::Character("/".into()))];
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            forward_ctx(&chords, mods(true, false, false, false)),
+        );
+        assert_eq!(out.effects, vec![], "Ctrl+/ must stay with the page");
+    }
+
+    /// Asserts that a physical-key chord still compares Shift exactly.
+    ///
+    /// Case: a view forwards Shift+g (go to bottom) but not a plain g, and
+    /// the user presses both.
+    #[test]
+    fn a_physical_key_chord_compares_shift_exactly() {
+        let sc = Shortcuts::default();
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let chords = [NormalizedChord {
+            key: ChordKey::Code(KeyCode::KeyG),
+            alt: false,
+            ctrl: false,
+            shift: true,
+            logo: false,
+        }];
+        let mut phase = LeaderPhase::Idle;
+        let plain = [press(KeyCode::KeyG, Key::Character("g".into()))];
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &plain,
+            forward_ctx(&chords, no_mods()),
+        );
+        assert_eq!(out.effects, vec![], "a plain g must stay with the page");
+        let shifted = [press(KeyCode::KeyG, Key::Character("G".into()))];
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &shifted,
+            forward_ctx(&chords, mods(false, true, false, false)),
+        );
+        assert_eq!(
+            out.effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("G".into()),
+                key_code: KeyCode::KeyG,
+            }]
+        );
+    }
+
+    /// Asserts that a declared forward chord is forwarded and withheld from
+    /// the page.
+    ///
+    /// Case: a markdown viewer forwards `k`, the user has clicked its page,
+    /// and presses `k` to scroll up.
+    #[test]
+    fn webview_idle_forward_chord_forwards_and_is_withheld_from_the_page() {
         let sc = Shortcuts::default();
         let resolved_vi_mode = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let chords = [NormalizedChord {
-            code: KeyCode::KeyK,
+            key: ChordKey::Code(KeyCode::KeyK),
             alt: false,
             ctrl: false,
             shift: false,
             logo: false,
         }];
         let events = [press(KeyCode::KeyK, Key::Character("k".into()))];
-        let mut c = ctx(no_mods(), ms(0));
-        c.webview_focused = true;
-        c.forward_chords = &chords;
-        let out = run_full(&mut phase, &sc, &resolved_vi_mode, &events, c);
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            forward_ctx(&chords, no_mods()),
+        );
         assert_eq!(
             out.effects,
-            vec![KeyEffect::WebviewForward {
+            vec![KeyEffect::Type {
                 logical: Key::Character("k".into()),
                 key_code: KeyCode::KeyK,
-            }],
-            "with no leader engaged a declared forward chord still forwards"
+            }]
         );
-        assert!(
-            out.webview_suppressed.is_empty(),
-            "a forward chord is not a leader claim — not withheld from CEF"
-        );
+        assert_eq!(out.webview_suppressed, vec![KeyCode::KeyK]);
         assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    /// Asserts that each auto-repeat of a held forward chord is forwarded
+    /// and withheld from the page again.
+    ///
+    /// Case: the user holds `j` to keep scrolling a markdown page whose
+    /// viewer forwards `j`.
+    #[test]
+    fn a_held_forward_chord_forwards_and_is_withheld_on_every_repeat() {
+        let sc = Shortcuts::default();
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let chords = [NormalizedChord {
+            key: ChordKey::Code(KeyCode::KeyJ),
+            alt: false,
+            ctrl: false,
+            shift: false,
+            logo: false,
+        }];
+        let events = [
+            press(KeyCode::KeyJ, Key::Character("j".into())),
+            press_repeat(KeyCode::KeyJ, Key::Character("j".into())),
+            press_repeat(KeyCode::KeyJ, Key::Character("j".into())),
+        ];
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            forward_ctx(&chords, no_mods()),
+        );
+        assert_eq!(out.effects.len(), 3, "every repeat is forwarded");
+        assert_eq!(out.webview_suppressed, vec![KeyCode::KeyJ; 3]);
     }
 
     #[test]

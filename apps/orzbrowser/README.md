@@ -85,6 +85,10 @@ Opening the address bar with `o` or `:` replaces it with an editable prompt:
 | `?` | Show help |
 | `q` / `Ctrl-c` | Quit |
 
+While the page has keyboard focus, `Ctrl-c` copies in the page instead of
+quitting; `q` still quits, since Normal mode forwards it to the TUI even
+while the page is focused.
+
 ### Address bar
 
 | Key | Action |

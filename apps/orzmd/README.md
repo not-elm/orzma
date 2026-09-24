@@ -82,6 +82,11 @@ switches to `○ missing` and the last rendered content stays on screen.
 | `r` | Reload the file |
 | `q` / `Ctrl-c` | Quit |
 
+While the page has keyboard focus, `Ctrl-c` copies in the page instead of
+quitting; `q` still quits, since it is one of the chords
+`keymap::forward_chords()` forwards to the TUI even while the page is
+focused.
+
 ### Outline panel
 
 | Key | Action |

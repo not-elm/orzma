@@ -1,7 +1,7 @@
 //! Webview builder and registered handle.
 
 use crate::error::{OrzmaError, OrzmaResult};
-use crate::events::{EventDecl, EventQueues};
+use crate::events::{EventDecl, EventQueues, FocusChange};
 use crate::handler::{BoxedHandler, make_handler};
 use crate::keychord::KeyChord;
 use crate::protocol::{ClientMsg, HandleId, NavAction, RegisterKind};
@@ -32,7 +32,6 @@ impl Webview {
             kind: RegisterKind::Inline {
                 html: html.into(),
                 interactive: true,
-                click_focus: true,
                 forward_keys: Vec::new(),
                 preload: Vec::new(),
             },
@@ -51,7 +50,6 @@ impl Webview {
             kind: RegisterKind::Url {
                 url: url.into(),
                 interactive: true,
-                click_focus: true,
                 bridge: false,
                 forward_keys: Vec::new(),
                 preload: Vec::new(),
@@ -68,7 +66,6 @@ impl Webview {
                 root: root.as_ref().display().to_string(),
                 entry: entry.into(),
                 interactive: true,
-                click_focus: true,
                 forward_keys: Vec::new(),
                 preload: Vec::new(),
             },
@@ -87,18 +84,6 @@ impl Webview {
         self
     }
 
-    /// Declares whether a pointer press inside this view moves keyboard focus
-    /// to it. With `false`, clicking the page leaves the keyboard with the app,
-    /// which can still hand focus over with a focus request. Fixed at register.
-    pub fn click_focus(mut self, click_focus: bool) -> Self {
-        match &mut self.kind {
-            RegisterKind::Inline { click_focus: c, .. }
-            | RegisterKind::Dir { click_focus: c, .. }
-            | RegisterKind::Url { click_focus: c, .. } => *c = click_focus,
-        }
-        self
-    }
-
     /// Opts a `url` webview into the `window.orzma` back-channel. A no-op for
     /// `inline`/`dir` webviews, which are always bridged. Fixed at register.
     pub fn bridge(mut self, bridge: bool) -> Self {
@@ -108,8 +93,10 @@ impl Webview {
         self
     }
 
-    /// Declares chords the page lets through to the app while focused (the host
-    /// forwards them to the PTY so the app reads them via `crossterm::event::read`).
+    /// Declares the initial chords the page lets through to the app while
+    /// focused: the host writes them to the PTY, so the app reads them via
+    /// `crossterm::event::read`, and the page never receives them. Replace
+    /// the list after registration with [`WebviewHandle::set_forward_keys`].
     pub fn forward_keys(mut self, keys: impl IntoIterator<Item = KeyChord>) -> Self {
         match &mut self.kind {
             RegisterKind::Inline { forward_keys, .. }
@@ -285,11 +272,7 @@ impl WebviewHandle {
             event: event.to_owned(),
             payload: serde_json::to_value(payload)?,
         };
-        let line = serde_json::to_string(&msg)?;
-        let mut w = self.writer.lock()?;
-        writeln!(w, "{line}")?;
-        w.flush()?;
-        Ok(())
+        write_msg(&self.writer, &msg)
     }
 
     /// Navigates this registration's default placement to `url` in place (no
@@ -332,6 +315,49 @@ impl WebviewHandle {
                 }
             })
             .collect()
+    }
+
+    /// Drains the focus changes the host reported for this registration's
+    /// placements, oldest first.
+    ///
+    /// Every change is reported, including those this app requested. When
+    /// the control socket drops, a `focused: false` is reported for each
+    /// placement last reported focused. Changes are buffered per handle up
+    /// to a fixed cap; an app that never drains them drops the oldest ones
+    /// and logs a throttled warning.
+    pub fn read_focus_changes(&self) -> Vec<FocusChange> {
+        self.events.drain_focus()
+    }
+
+    /// Replaces this registration's forward-key chords with `keys`, for every
+    /// placement mounted now and every later mount.
+    ///
+    /// The list given at registration ([`Webview::forward_keys`]) is the
+    /// initial one; this replaces it wholesale. A reconnect replays the
+    /// latest list, even when this call's send failed.
+    pub fn set_forward_keys(&self, keys: impl IntoIterator<Item = KeyChord>) -> OrzmaResult<()> {
+        let keys: Vec<KeyChord> = keys.into_iter().collect();
+        match self.session.upgrade() {
+            Some(core) => core.set_forward_keys(&self.writer, self, keys),
+            None => write_msg(
+                &self.writer,
+                &ClientMsg::SetForwardKeys {
+                    handle: self.handle_id(),
+                    keys,
+                },
+            ),
+        }
+    }
+
+    /// Gives this registration's default placement keyboard focus and makes
+    /// its pane the active pane.
+    ///
+    /// The op is sent on every call. The host drops a focus for a placement
+    /// that is not mounted yet, so call it once the page has composited (see
+    /// [`crate::WebviewWidget::on_compositing_change`]); a display-only `url`
+    /// view never reports compositing.
+    pub fn focus(&self) -> OrzmaResult<()> {
+        send_focus(&self.writer, Some(self.instance_id()))
     }
 
     /// Whether `slot` is the very slot this handle reads its handle id from.
@@ -406,6 +432,13 @@ impl WebviewInstance {
         send_nav(&self.writer, self.id(), NavAction::Reload)
     }
 
+    /// Gives this placement keyboard focus and makes its pane the active
+    /// pane. The op is sent on every call; the host drops it while the
+    /// placement is not mounted.
+    pub fn focus(&self) -> OrzmaResult<()> {
+        send_focus(&self.writer, Some(self.id()))
+    }
+
     /// Creates a placement over a pre-existing shared instance slot, which the
     /// reconnect replay refills in place.
     pub(crate) fn new_shared(instance: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
@@ -413,14 +446,23 @@ impl WebviewInstance {
     }
 }
 
-/// Writes one `navigate` op addressed to `instance`.
-fn send_nav(writer: &SharedWriter, instance: String, action: NavAction) -> OrzmaResult<()> {
-    let msg = ClientMsg::Navigate { instance, action };
-    let line = serde_json::to_string(&msg)?;
+/// Writes one control-socket line carrying `msg`.
+pub(crate) fn write_msg(writer: &SharedWriter, msg: &ClientMsg) -> OrzmaResult<()> {
+    let line = serde_json::to_string(msg)?;
     let mut w = writer.lock()?;
     writeln!(w, "{line}")?;
     w.flush()?;
     Ok(())
+}
+
+/// Writes one `focus` op: `Some` focuses that placement, `None` blurs.
+pub(crate) fn send_focus(writer: &SharedWriter, instance: Option<String>) -> OrzmaResult<()> {
+    write_msg(writer, &ClientMsg::Focus { instance })
+}
+
+/// Writes one `navigate` op addressed to `instance`.
+fn send_nav(writer: &SharedWriter, instance: String, action: NavAction) -> OrzmaResult<()> {
+    write_msg(writer, &ClientMsg::Navigate { instance, action })
 }
 
 #[cfg(test)]
@@ -484,24 +526,6 @@ mod tests {
         assert_eq!(v["op"], "register");
         assert_eq!(v["forward_keys"][0]["key"], "h");
         assert_eq!(v["forward_keys"][0]["mods"][0], "alt");
-    }
-
-    #[test]
-    fn click_focus_false_rides_register_wire() {
-        let wv = Webview::dir("/abs/ui", "index.html").click_focus(false);
-        let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
-        assert_eq!(v["op"], "register");
-        assert_eq!(v["click_focus"], serde_json::json!(false));
-    }
-
-    #[test]
-    fn click_focus_is_omitted_from_wire_by_default() {
-        let wv = Webview::inline("x");
-        let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
-        assert!(
-            v.get("click_focus").is_none(),
-            "the default click_focus must be skipped"
-        );
     }
 
     #[test]
@@ -758,5 +782,37 @@ mod tests {
         let _ = Webview::inline("x")
             .add_event::<A>("one")
             .add_event::<A>("two");
+    }
+
+    /// Asserts that focusing a handle names its default placement and an
+    /// extra placement names itself.
+    ///
+    /// Case: a TUI browser enters insert mode on the page it shows, and an
+    /// app with a split focuses the right-hand placement.
+    #[test]
+    fn focus_names_the_placement_it_focuses() {
+        use std::io::{BufRead, BufReader};
+        let (client, server) = UnixStream::pair().unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client));
+        let handle = WebviewHandle::new_shared(
+            Arc::new(Mutex::new(HandleId::from("h".to_owned()))),
+            Arc::new(Mutex::new("i1".to_owned())),
+            Arc::new(crate::events::EventQueues::from_decls(&[])),
+            writer.clone(),
+            Weak::new(),
+        );
+        let extra = WebviewInstance::new_shared(Arc::new(Mutex::new("i2".to_owned())), writer);
+
+        handle.focus().unwrap();
+        extra.focus().unwrap();
+
+        let mut reader = BufReader::new(server);
+        for expected in ["i1", "i2"] {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(v["op"], "focus");
+            assert_eq!(v["instance"], expected);
+        }
     }
 }

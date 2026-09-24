@@ -5,7 +5,7 @@
 use crate::control_plane::ConnectionWriters;
 use crate::control_plane::HandleId;
 use crate::control_plane::TokenRegistry;
-use crate::control_plane::protocol::{ClientMsg, NavAction, RegisterKind, ServerMsg};
+use crate::control_plane::protocol::{ClientMsg, HostKeyChord, NavAction, RegisterKind, ServerMsg};
 use bevy::prelude::Entity;
 use bevy_orzma_webview_host::uds::{UnixListener, UnixStream};
 use crossbeam_channel::{Receiver, SendError, Sender, bounded, unbounded};
@@ -121,6 +121,15 @@ pub(crate) enum ControlEvent {
         owner_surface: Entity,
         /// The target instance.
         instance: String,
+    },
+    /// A `set_forward_keys` naming a handle.
+    SetForwardKeys {
+        /// The connection that sent it. Ownership is not checked here.
+        connection_id: u64,
+        /// The handle whose chords are replaced.
+        handle: HandleId,
+        /// The complete new chord list, still in wire form.
+        keys: Vec<HostKeyChord>,
     },
 }
 
@@ -450,6 +459,13 @@ fn handle_client_msg(
                 connection_id,
                 owner_surface,
                 instance,
+            });
+        }
+        ClientMsg::SetForwardKeys { handle, keys } => {
+            let _ = events.send(ControlEvent::SetForwardKeys {
+                connection_id,
+                handle,
+                keys,
             });
         }
     }
@@ -946,6 +962,43 @@ mod tests {
             }
             _ => panic!("expected Navigate"),
         }
+    }
+
+    /// Asserts that a `set_forward_keys` line becomes a control event that
+    /// carries the sending connection.
+    ///
+    /// Case: a TUI browser replaces its forward keys when the user enters
+    /// insert mode.
+    #[test]
+    fn set_forward_keys_becomes_a_control_event() {
+        let (events_tx, events_rx) = unbounded::<ControlEvent>();
+        let events = ControlEventSender {
+            events: events_tx,
+            waker: Waker::noop().clone(),
+        };
+        let (out_tx, _out_rx) = unbounded::<String>();
+        let flow = handle_client_msg(
+            ClientMsg::SetForwardKeys {
+                handle: "h1".into(),
+                keys: vec![],
+            },
+            7,
+            Entity::PLACEHOLDER,
+            &events,
+            &out_tx,
+        );
+        assert_eq!(flow, ControlFlow::Continue(()));
+        let Ok(ControlEvent::SetForwardKeys {
+            connection_id,
+            handle,
+            keys,
+        }) = events_rx.try_recv()
+        else {
+            panic!("expected a SetForwardKeys control event");
+        };
+        assert_eq!(connection_id, 7);
+        assert_eq!(handle, HandleId::from("h1"));
+        assert!(keys.is_empty());
     }
 
     /// Asserts that the bound socket file inherits the runtime

@@ -2,10 +2,11 @@
 //! authenticated Tier 1 webview registrations from local programs, mints
 //! opaque handles, and tears them down on disconnect or surface despawn.
 
+use crate::control_plane::focus_push::FocusPushPlugin;
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, NavAction, RegisterKind, ServerMsg};
 use crate::webview::apc::NonInteractive;
-use crate::webview::mount::Webview;
+use crate::webview::mount::{ForwardKeys, Webview};
 use bevy::ecs::entity::Entities;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
@@ -26,17 +27,28 @@ use std::sync::{Arc, RwLock};
 use std::task::Waker;
 use url::Url;
 
+mod focus_push;
 mod listener;
 mod protocol;
 
 pub(crate) use protocol::PushMsg;
 
-/// A forward-key chord normalized to host input types: a bevy `KeyCode` plus
-/// modifier booleans.
+/// The key a forward-key chord matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChordKey {
+    /// A physical key, compared together with the exact modifier set.
+    Code(KeyCode),
+    /// A printable ASCII punctuation character, compared against the
+    /// character the key produced, with Shift ignored.
+    Char(char),
+}
+
+/// A forward-key chord normalized to host input types: the key it matches
+/// plus modifier booleans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NormalizedChord {
-    /// The base key as a bevy `KeyCode`.
-    pub code: KeyCode,
+    /// The key the chord matches.
+    pub key: ChordKey,
     /// Alt modifier active.
     pub alt: bool,
     /// Ctrl modifier active.
@@ -45,6 +57,115 @@ pub struct NormalizedChord {
     pub shift: bool,
     /// The Super/Command/Meta modifier (bevy calls it Super/logo).
     pub logo: bool,
+}
+
+impl NormalizedChord {
+    /// Normalizes a wire chord, returning `None` for an unrecognized key
+    /// name.
+    ///
+    /// `"backtab"` maps to the same physical key as `"tab"`; the Shift
+    /// distinction rides the modifier bits. A name made of one ASCII
+    /// punctuation character maps to [`ChordKey::Char`].
+    pub(crate) fn parse(chord: &HostKeyChord) -> Option<Self> {
+        let key = ChordKey::from_name(&chord.key)?;
+        let mut normalized = Self {
+            key,
+            alt: false,
+            ctrl: false,
+            shift: false,
+            logo: false,
+        };
+        for m in &chord.mods {
+            match m.as_str() {
+                "alt" => normalized.alt = true,
+                "ctrl" => normalized.ctrl = true,
+                "shift" => normalized.shift = true,
+                "meta" => normalized.logo = true,
+                _ => {}
+            }
+        }
+        Some(normalized)
+    }
+}
+
+impl ChordKey {
+    /// Maps a wire key name to the key it matches; `None` when unrecognized.
+    fn from_name(name: &str) -> Option<Self> {
+        let code = match name {
+            "tab" | "backtab" => KeyCode::Tab,
+            "f1" => KeyCode::F1,
+            "f2" => KeyCode::F2,
+            "f3" => KeyCode::F3,
+            "f4" => KeyCode::F4,
+            "f5" => KeyCode::F5,
+            "f6" => KeyCode::F6,
+            "f7" => KeyCode::F7,
+            "f8" => KeyCode::F8,
+            "f9" => KeyCode::F9,
+            "f10" => KeyCode::F10,
+            "f11" => KeyCode::F11,
+            "f12" => KeyCode::F12,
+            "0" => KeyCode::Digit0,
+            "1" => KeyCode::Digit1,
+            "2" => KeyCode::Digit2,
+            "3" => KeyCode::Digit3,
+            "4" => KeyCode::Digit4,
+            "5" => KeyCode::Digit5,
+            "6" => KeyCode::Digit6,
+            "7" => KeyCode::Digit7,
+            "8" => KeyCode::Digit8,
+            "9" => KeyCode::Digit9,
+            "a" => KeyCode::KeyA,
+            "b" => KeyCode::KeyB,
+            "c" => KeyCode::KeyC,
+            "d" => KeyCode::KeyD,
+            "e" => KeyCode::KeyE,
+            "f" => KeyCode::KeyF,
+            "g" => KeyCode::KeyG,
+            "h" => KeyCode::KeyH,
+            "i" => KeyCode::KeyI,
+            "j" => KeyCode::KeyJ,
+            "k" => KeyCode::KeyK,
+            "l" => KeyCode::KeyL,
+            "m" => KeyCode::KeyM,
+            "n" => KeyCode::KeyN,
+            "o" => KeyCode::KeyO,
+            "p" => KeyCode::KeyP,
+            "q" => KeyCode::KeyQ,
+            "r" => KeyCode::KeyR,
+            "s" => KeyCode::KeyS,
+            "t" => KeyCode::KeyT,
+            "u" => KeyCode::KeyU,
+            "v" => KeyCode::KeyV,
+            "w" => KeyCode::KeyW,
+            "x" => KeyCode::KeyX,
+            "y" => KeyCode::KeyY,
+            "z" => KeyCode::KeyZ,
+            "esc" => KeyCode::Escape,
+            " " => KeyCode::Space,
+            "down" => KeyCode::ArrowDown,
+            "up" => KeyCode::ArrowUp,
+            "left" => KeyCode::ArrowLeft,
+            "right" => KeyCode::ArrowRight,
+            "pagedown" => KeyCode::PageDown,
+            "pageup" => KeyCode::PageUp,
+            "home" => KeyCode::Home,
+            "end" => KeyCode::End,
+            "enter" => KeyCode::Enter,
+            "backspace" => KeyCode::Backspace,
+            "delete" => KeyCode::Delete,
+            _ => return Self::punctuation(name),
+        };
+        Some(Self::Code(code))
+    }
+
+    /// Maps a name made of exactly one ASCII punctuation character to a
+    /// character chord.
+    fn punctuation(name: &str) -> Option<Self> {
+        let mut chars = name.chars();
+        let c = chars.next()?;
+        (chars.next().is_none() && c.is_ascii_punctuation()).then_some(Self::Char(c))
+    }
 }
 
 /// Where a dynamic view's content lives.
@@ -91,10 +212,6 @@ pub(crate) struct OrzmaView {
     pub entry: String,
     /// Whether the mounted webview accepts pointer/keyboard input.
     pub interactive: bool,
-    /// Whether a pointer press inside the mounted webview's rect moves
-    /// keyboard focus to it. A `false` view leaves the keyboard with the
-    /// owning pane on a click; a focus op still moves it.
-    pub click_focus: bool,
     /// The terminal surface an `Omount;n=<instance>` for this registration
     /// must originate from.
     pub owner_surface: Entity,
@@ -228,6 +345,13 @@ impl OrzmaRegistry {
         Some((id, view))
     }
 
+    /// Resolves `handle` to its registration when `connection_id` owns it;
+    /// `None` when the handle is unknown or another connection owns it.
+    pub fn owned_handle(&self, connection_id: u64, handle: &HandleId) -> Option<&OrzmaView> {
+        self.get(handle)
+            .filter(|view| view.connection_id == connection_id)
+    }
+
     /// Inserts a registration with no instances yet.
     ///
     /// The caller mints its first instance with [`Self::mint_instance`]
@@ -238,6 +362,14 @@ impl OrzmaRegistry {
             for id in previous.instances {
                 self.by_instance.remove(&id);
             }
+        }
+    }
+
+    /// Replaces the forward-key chords of `handle`; an unknown handle is left
+    /// alone.
+    pub fn replace_forward_keys(&mut self, handle: &HandleId, keys: Vec<NormalizedChord>) {
+        if let Some(view) = self.by_handle.get_mut(handle) {
+            view.forward_keys = keys;
         }
     }
 
@@ -424,6 +556,18 @@ impl ConnectionWriters {
             .map(|tx| tx.send(line).is_ok())
             .unwrap_or(false)
     }
+
+    /// Queues `msg` to `connection_id` as one NDJSON line; returns false if the
+    /// connection is gone, its writer has exited, or `msg` failed to serialize.
+    pub fn push(&self, connection_id: u64, msg: &PushMsg) -> bool {
+        match serde_json::to_string(msg) {
+            Ok(line) => self.send(connection_id, line),
+            Err(e) => {
+                tracing::warn!(error = %e, "push message failed to serialize");
+                false
+            }
+        }
+    }
 }
 
 /// Mints an opaque 128-bit [`HandleId`] (CSPRNG), base32-encoded (unpadded)
@@ -531,7 +675,8 @@ impl Plugin for ControlPlanePlugin {
         app.insert_resource(OrzmaRegistry::default());
         app.insert_resource(OrzmaRpc::default());
         app.insert_resource(WebviewAssetRegistryRes(self.orzma_assets.clone()));
-        app.add_systems(Update, (apply_control_events, gc_despawned_surfaces));
+        app.add_plugins(FocusPushPlugin)
+            .add_systems(Update, (apply_control_events, gc_despawned_surfaces));
     }
 }
 
@@ -738,6 +883,18 @@ fn apply_control_events(
                 owner_surface,
                 &instance,
             ),
+            ControlEvent::SetForwardKeys {
+                connection_id,
+                handle,
+                keys,
+            } => on_set_forward_keys(
+                &mut commands,
+                &mut registry,
+                &webviews,
+                connection_id,
+                &handle,
+                &keys,
+            ),
         }
     }
 }
@@ -804,10 +961,7 @@ fn on_new_instance(
     reply: &Sender<ServerMsg>,
 ) {
     let handle = HandleId::from(handle);
-    let owned = registry
-        .get(&handle)
-        .is_some_and(|v| v.connection_id == connection_id);
-    if !owned {
+    if registry.owned_handle(connection_id, &handle).is_none() {
         let code = if registry.get(&handle).is_some() {
             "not_owner"
         } else {
@@ -838,15 +992,13 @@ fn on_unregister(
     handle: &str,
 ) {
     let handle = HandleId::from(handle);
-    let removed: Vec<RemovedRegistration> = if registry
-        .get(&handle)
-        .is_some_and(|v| v.connection_id == connection_id)
-    {
-        orzma_assets.0.remove(handle.as_str());
-        registry.remove(&handle).into_iter().collect()
-    } else {
-        vec![]
-    };
+    let removed: Vec<RemovedRegistration> =
+        if registry.owned_handle(connection_id, &handle).is_some() {
+            orzma_assets.0.remove(handle.as_str());
+            registry.remove(&handle).into_iter().collect()
+        } else {
+            vec![]
+        };
     release_registrations(commands, webviews, &removed);
 }
 
@@ -915,8 +1067,8 @@ fn on_emit(
 ) {
     let handle = HandleId::from(handle);
     let deliver = registry
-        .get(&handle)
-        .is_some_and(|v| v.connection_id == connection_id && v.source.is_bridged());
+        .owned_handle(connection_id, &handle)
+        .is_some_and(|v| v.source.is_bridged());
     if !deliver {
         return;
     }
@@ -924,6 +1076,32 @@ fn on_emit(
     for (entity, view) in webviews {
         if view.handle == handle {
             commands.trigger(HostEmitEvent::new(entity, "orzma.event", &frame));
+        }
+    }
+}
+
+/// Applies a `set_forward_keys`: replaces the forward-key chords of `handle`,
+/// when `connection_id` owns it, in the registry and on every mounted
+/// placement of it.
+fn on_set_forward_keys(
+    commands: &mut Commands,
+    registry: &mut OrzmaRegistry,
+    webviews: &Query<(Entity, &Webview)>,
+    connection_id: u64,
+    handle: &HandleId,
+    keys: &[HostKeyChord],
+) {
+    if registry.owned_handle(connection_id, handle).is_none() {
+        tracing::debug!(%handle, "set_forward_keys for an unowned or unknown handle, dropping");
+        return;
+    }
+    let chords: Vec<NormalizedChord> = keys.iter().filter_map(NormalizedChord::parse).collect();
+    registry.replace_forward_keys(handle, chords.clone());
+    for (entity, view) in webviews {
+        if view.handle == *handle {
+            commands
+                .entity(entity)
+                .try_insert(ForwardKeys(chords.clone()));
         }
     }
 }
@@ -1120,7 +1298,6 @@ fn build_view(
             root,
             entry,
             interactive,
-            click_focus,
             forward_keys,
             preload,
         } => {
@@ -1135,10 +1312,12 @@ fn build_view(
                 source: OrzmaSource::Dir(root_path),
                 entry,
                 interactive,
-                click_focus,
                 owner_surface,
                 connection_id,
-                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys
+                    .iter()
+                    .filter_map(NormalizedChord::parse)
+                    .collect(),
                 preload,
                 instances: Vec::new(),
             })
@@ -1146,7 +1325,6 @@ fn build_view(
         RegisterKind::Inline {
             html,
             interactive,
-            click_focus,
             forward_keys,
             preload,
         } => {
@@ -1157,10 +1335,12 @@ fn build_view(
                 source: OrzmaSource::Inline(html),
                 entry: "index.html".into(),
                 interactive,
-                click_focus,
                 owner_surface,
                 connection_id,
-                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys
+                    .iter()
+                    .filter_map(NormalizedChord::parse)
+                    .collect(),
                 preload,
                 instances: Vec::new(),
             })
@@ -1168,7 +1348,6 @@ fn build_view(
         RegisterKind::Url {
             url,
             interactive,
-            click_focus,
             bridge,
             forward_keys,
             preload,
@@ -1178,10 +1357,12 @@ fn build_view(
                 source: OrzmaSource::Url { url, bridge },
                 entry: String::new(),
                 interactive,
-                click_focus,
                 owner_surface,
                 connection_id,
-                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys
+                    .iter()
+                    .filter_map(NormalizedChord::parse)
+                    .collect(),
                 preload,
                 instances: Vec::new(),
             })
@@ -1213,91 +1394,6 @@ fn validate_url_source(url: &str) -> Result<String, &'static str> {
     Ok(parsed.into())
 }
 
-/// Converts a wire [`HostKeyChord`] to a [`NormalizedChord`], returning `None`
-/// for unrecognized key names. Note that `"backtab"` maps to [`KeyCode::Tab`]
-/// (the same as `"tab"`): the shift distinction is carried in the modifier bits,
-/// so a forward-key `BackTab` and `Tab` are indistinguishable at the host.
-fn normalize_chord(chord: &HostKeyChord) -> Option<NormalizedChord> {
-    let code = match chord.key.as_str() {
-        "tab" | "backtab" => KeyCode::Tab,
-        "f1" => KeyCode::F1,
-        "f2" => KeyCode::F2,
-        "f3" => KeyCode::F3,
-        "f4" => KeyCode::F4,
-        "f5" => KeyCode::F5,
-        "f6" => KeyCode::F6,
-        "f7" => KeyCode::F7,
-        "f8" => KeyCode::F8,
-        "f9" => KeyCode::F9,
-        "f10" => KeyCode::F10,
-        "f11" => KeyCode::F11,
-        "f12" => KeyCode::F12,
-        "0" => KeyCode::Digit0,
-        "1" => KeyCode::Digit1,
-        "2" => KeyCode::Digit2,
-        "3" => KeyCode::Digit3,
-        "4" => KeyCode::Digit4,
-        "5" => KeyCode::Digit5,
-        "6" => KeyCode::Digit6,
-        "7" => KeyCode::Digit7,
-        "8" => KeyCode::Digit8,
-        "9" => KeyCode::Digit9,
-        "a" => KeyCode::KeyA,
-        "b" => KeyCode::KeyB,
-        "c" => KeyCode::KeyC,
-        "d" => KeyCode::KeyD,
-        "e" => KeyCode::KeyE,
-        "f" => KeyCode::KeyF,
-        "g" => KeyCode::KeyG,
-        "h" => KeyCode::KeyH,
-        "i" => KeyCode::KeyI,
-        "j" => KeyCode::KeyJ,
-        "k" => KeyCode::KeyK,
-        "l" => KeyCode::KeyL,
-        "m" => KeyCode::KeyM,
-        "n" => KeyCode::KeyN,
-        "o" => KeyCode::KeyO,
-        "p" => KeyCode::KeyP,
-        "q" => KeyCode::KeyQ,
-        "r" => KeyCode::KeyR,
-        "s" => KeyCode::KeyS,
-        "t" => KeyCode::KeyT,
-        "u" => KeyCode::KeyU,
-        "v" => KeyCode::KeyV,
-        "w" => KeyCode::KeyW,
-        "x" => KeyCode::KeyX,
-        "y" => KeyCode::KeyY,
-        "z" => KeyCode::KeyZ,
-        "esc" => KeyCode::Escape,
-        " " => KeyCode::Space,
-        "down" => KeyCode::ArrowDown,
-        "up" => KeyCode::ArrowUp,
-        "pagedown" => KeyCode::PageDown,
-        "pageup" => KeyCode::PageUp,
-        _ => return None,
-    };
-    let mut alt = false;
-    let mut ctrl = false;
-    let mut shift = false;
-    let mut logo = false;
-    for m in &chord.mods {
-        match m.as_str() {
-            "alt" => alt = true,
-            "ctrl" => ctrl = true,
-            "shift" => shift = true,
-            "meta" => logo = true,
-            _ => {}
-        }
-    }
-    Some(NormalizedChord {
-        code,
-        alt,
-        ctrl,
-        shift,
-        logo,
-    })
-}
-
 /// Upper bound on a single inline HTML document (4 MiB).
 const MAX_INLINE_HTML: usize = 4 * 1024 * 1024;
 
@@ -1327,7 +1423,6 @@ mod gc_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 1,
                 forward_keys: vec![],
@@ -1566,7 +1661,6 @@ mod registry_tests {
             source: OrzmaSource::Dir("/abs".into()),
             entry: "index.html".into(),
             interactive: true,
-            click_focus: true,
             owner_surface: owner,
             connection_id: conn,
             forward_keys: vec![],
@@ -1579,6 +1673,7 @@ mod registry_tests {
 #[cfg(test)]
 mod apply_tests {
     use super::*;
+    use crate::webview::mount::resolve_mount;
     use crossbeam_channel::{bounded, unbounded};
     use orzmux::prelude::PaneId;
 
@@ -1614,7 +1709,6 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1646,7 +1740,6 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1687,7 +1780,6 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1760,7 +1852,6 @@ mod apply_tests {
                     root: dir.path().to_string_lossy().into_owned(),
                     entry: "index.html".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1808,7 +1899,6 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1848,7 +1938,6 @@ mod apply_tests {
                     root: "/nonexistent/abs/xyz".into(),
                     entry: "index.html".into(),
                     interactive: true,
-                    click_focus: true,
                     forward_keys: vec![],
                     preload: vec![],
                 },
@@ -1874,7 +1963,6 @@ mod apply_tests {
                 source: OrzmaSource::Dir("/x".into()),
                 entry: "i".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
                 forward_keys: vec![],
@@ -1932,7 +2020,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -1986,7 +2073,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 9,
                 forward_keys: vec![],
@@ -2049,7 +2135,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2194,7 +2279,6 @@ mod apply_tests {
                 },
                 entry: String::new(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2258,7 +2342,6 @@ mod apply_tests {
                 kind: RegisterKind::Url {
                     url: "https://example.com".into(),
                     interactive: true,
-                    click_focus: true,
                     bridge: false,
                     forward_keys: vec![],
                     preload: vec![],
@@ -2297,7 +2380,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2375,7 +2457,6 @@ mod apply_tests {
                 },
                 entry: String::new(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2438,7 +2519,6 @@ mod apply_tests {
                 },
                 entry: String::new(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2508,7 +2588,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2591,7 +2670,6 @@ mod apply_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2673,7 +2751,6 @@ mod apply_tests {
                 },
                 entry: String::new(),
                 interactive: true,
-                click_focus: true,
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
@@ -2721,6 +2798,121 @@ mod apply_tests {
             other => panic!("expected Url, got {other:?}"),
         }
     }
+
+    fn inline_view(owner_surface: Entity, connection_id: u64) -> OrzmaView {
+        OrzmaView {
+            source: OrzmaSource::Inline("<h1>x</h1>".into()),
+            entry: "index.html".into(),
+            interactive: true,
+            owner_surface,
+            connection_id,
+            forward_keys: vec![],
+            preload: vec![],
+            instances: Vec::new(),
+        }
+    }
+
+    fn esc_chord() -> HostKeyChord {
+        HostKeyChord {
+            mods: vec![],
+            key: "esc".into(),
+        }
+    }
+
+    /// Registers an inline view owned by `connection_id` on a fresh surface,
+    /// mounts its first instance, and returns `(surface, handle, child)`.
+    fn mounted_view(app: &mut App, connection_id: u64) -> (Entity, HandleId, Entity) {
+        let surface = app.world_mut().spawn_empty().id();
+        let handle = HandleId::from("h1");
+        let instance = {
+            let mut registry = app.world_mut().resource_mut::<OrzmaRegistry>();
+            registry.insert(handle.clone(), inline_view(surface, connection_id));
+            registry.mint_instance(&handle).expect("the handle mints")
+        };
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface),
+                Webview {
+                    handle: handle.clone(),
+                    instance,
+                    slot: 0,
+                    rows: 10,
+                    cols: 40,
+                },
+                ForwardKeys(vec![]),
+            ))
+            .id();
+        (surface, handle, child)
+    }
+
+    /// Asserts that the owner's `set_forward_keys` replaces the chords on the
+    /// mounted placement and in the registration a later mount resolves.
+    ///
+    /// Case: a TUI browser enters insert mode with its page mounted and
+    /// narrows its forward keys to Esc, and later mounts a second placement.
+    #[test]
+    fn set_forward_keys_from_the_owner_replaces_registry_and_mounted_chords() {
+        let (mut app, ev_tx) = apply_app();
+        let (surface, handle, child) = mounted_view(&mut app, 1);
+        ev_tx
+            .send(ControlEvent::SetForwardKeys {
+                connection_id: 1,
+                handle: handle.clone(),
+                keys: vec![esc_chord()],
+            })
+            .unwrap();
+        app.update();
+
+        let expected = vec![NormalizedChord::parse(&esc_chord()).expect("esc parses")];
+        assert_eq!(
+            app.world().get::<ForwardKeys>(child),
+            Some(&ForwardKeys(expected.clone())),
+            "the mounted placement must carry the new chords"
+        );
+        let registry = app.world().resource::<OrzmaRegistry>();
+        assert_eq!(
+            resolve_mount(&handle, surface, registry).map(|resolved| resolved.forward_keys),
+            Some(expected),
+            "a later mount must resolve the new chords"
+        );
+    }
+
+    /// Asserts that `set_forward_keys` from a connection that does not own the
+    /// handle, or naming an unknown handle, changes nothing.
+    ///
+    /// Case: a second program in the same pane guesses another program's
+    /// handle.
+    #[test]
+    fn set_forward_keys_from_another_connection_changes_nothing() {
+        let (mut app, ev_tx) = apply_app();
+        let (surface, handle, child) = mounted_view(&mut app, 1);
+        ev_tx
+            .send(ControlEvent::SetForwardKeys {
+                connection_id: 2,
+                handle: handle.clone(),
+                keys: vec![esc_chord()],
+            })
+            .unwrap();
+        ev_tx
+            .send(ControlEvent::SetForwardKeys {
+                connection_id: 1,
+                handle: HandleId::from("unknown"),
+                keys: vec![esc_chord()],
+            })
+            .unwrap();
+        app.update();
+
+        assert_eq!(
+            app.world().get::<ForwardKeys>(child),
+            Some(&ForwardKeys(vec![]))
+        );
+        let registry = app.world().resource::<OrzmaRegistry>();
+        assert_eq!(
+            resolve_mount(&handle, surface, registry).map(|resolved| resolved.forward_keys),
+            Some(vec![])
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2756,7 +2948,6 @@ mod focus_tests {
                 source: OrzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 owner_surface,
                 connection_id,
                 forward_keys: vec![],
@@ -2972,48 +3163,43 @@ mod back_channel_state_tests {
 }
 
 #[cfg(test)]
-mod normalize_tests {
+mod parse_tests {
     use super::*;
     use crate::control_plane::protocol::HostKeyChord;
 
-    #[test]
-    fn normalize_chord_maps_keys_and_mods() {
-        let n = normalize_chord(&HostKeyChord {
-            mods: vec!["alt".into()],
-            key: "h".into(),
-        })
-        .unwrap();
-        assert_eq!(n.code, KeyCode::KeyH);
-        assert!(n.alt && !n.ctrl && !n.shift && !n.logo);
-        assert_eq!(
-            normalize_chord(&HostKeyChord {
-                mods: vec![],
-                key: "f5".into()
-            })
-            .unwrap()
-            .code,
-            KeyCode::F5
-        );
-        assert_eq!(
-            normalize_chord(&HostKeyChord {
-                mods: vec![],
-                key: "tab".into()
-            })
-            .unwrap()
-            .code,
-            KeyCode::Tab
-        );
-        assert!(
-            normalize_chord(&HostKeyChord {
-                mods: vec![],
-                key: "nope".into()
-            })
-            .is_none()
-        );
+    fn chord(mods: &[&str], key: &str) -> HostKeyChord {
+        HostKeyChord {
+            mods: mods.iter().map(|m| (*m).to_owned()).collect(),
+            key: key.to_owned(),
+        }
     }
 
+    /// Asserts that a letter, a function key and `tab` parse to their
+    /// physical keys with the declared modifiers, and an unknown name fails.
+    ///
+    /// Case: a program registers Alt+h, F5 and Tab as forward keys.
     #[test]
-    fn normalize_chord_maps_forward_keys_keys() {
+    fn parse_maps_keys_and_mods() {
+        let n = NormalizedChord::parse(&chord(&["alt"], "h")).unwrap();
+        assert_eq!(n.key, ChordKey::Code(KeyCode::KeyH));
+        assert!(n.alt && !n.ctrl && !n.shift && !n.logo);
+        assert_eq!(
+            NormalizedChord::parse(&chord(&[], "f5")).map(|c| c.key),
+            Some(ChordKey::Code(KeyCode::F5))
+        );
+        assert_eq!(
+            NormalizedChord::parse(&chord(&[], "tab")).map(|c| c.key),
+            Some(ChordKey::Code(KeyCode::Tab))
+        );
+        assert!(NormalizedChord::parse(&chord(&[], "nope")).is_none());
+    }
+
+    /// Asserts that the navigation key names the forward-key grammar already
+    /// accepted still parse to their physical keys.
+    ///
+    /// Case: a TUI browser forwards Esc, Space and the arrow and page keys.
+    #[test]
+    fn parse_maps_forward_keys_keys() {
         let cases: &[(&str, KeyCode)] = &[
             ("esc", KeyCode::Escape),
             (" ", KeyCode::Space),
@@ -3023,14 +3209,57 @@ mod normalize_tests {
             ("pageup", KeyCode::PageUp),
         ];
         for (key, expected) in cases {
-            let chord = normalize_chord(&HostKeyChord {
-                mods: vec![],
-                key: (*key).into(),
-            });
             assert_eq!(
-                chord.map(|c| c.code),
-                Some(*expected),
+                NormalizedChord::parse(&chord(&[], key)).map(|c| c.key),
+                Some(ChordKey::Code(*expected)),
                 "failed for key={key:?}"
+            );
+        }
+    }
+
+    /// Asserts that the editing and navigation key names added for forward
+    /// chords parse to their physical keys.
+    ///
+    /// Case: a markdown viewer forwards Backspace and Enter so its TUI can go
+    /// back and confirm a search while the page holds keyboard focus.
+    #[test]
+    fn parse_maps_editing_and_navigation_key_names() {
+        let cases: &[(&str, KeyCode)] = &[
+            ("enter", KeyCode::Enter),
+            ("backspace", KeyCode::Backspace),
+            ("left", KeyCode::ArrowLeft),
+            ("right", KeyCode::ArrowRight),
+            ("home", KeyCode::Home),
+            ("end", KeyCode::End),
+            ("delete", KeyCode::Delete),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(
+                NormalizedChord::parse(&chord(&[], name)).map(|c| c.key),
+                Some(ChordKey::Code(*expected)),
+                "failed for key={name:?}"
+            );
+        }
+    }
+
+    /// Asserts that one ASCII punctuation character parses to a character
+    /// chord, while a longer or non-punctuation name is rejected.
+    ///
+    /// Case: a markdown viewer forwards `/` to open its search and `[` / `]`
+    /// to jump between headings.
+    #[test]
+    fn parse_maps_single_punctuation_to_a_character_chord() {
+        for c in ['/', '?', '[', ']', ':'] {
+            assert_eq!(
+                NormalizedChord::parse(&chord(&[], &c.to_string())).map(|n| n.key),
+                Some(ChordKey::Char(c)),
+                "failed for key={c:?}"
+            );
+        }
+        for name in ["//", "é", "nope"] {
+            assert!(
+                NormalizedChord::parse(&chord(&[], name)).is_none(),
+                "{name:?} must be rejected"
             );
         }
     }
@@ -3094,7 +3323,6 @@ mod url_source_tests {
             RegisterKind::Url {
                 url: "https://example.com".into(),
                 interactive: true,
-                click_focus: true,
                 bridge: true,
                 forward_keys: vec![],
                 preload: vec![],
@@ -3115,7 +3343,6 @@ mod url_source_tests {
             RegisterKind::Url {
                 url: "file:///etc/passwd".into(),
                 interactive: true,
-                click_focus: true,
                 bridge: false,
                 forward_keys: vec![],
                 preload: vec![],
@@ -3133,7 +3360,6 @@ mod url_source_tests {
             RegisterKind::Inline {
                 html: "<h1>x</h1>".into(),
                 interactive: true,
-                click_focus: true,
                 forward_keys: vec![],
                 preload: vec!["window.A=1;".into()],
             },

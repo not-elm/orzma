@@ -1,7 +1,8 @@
 //! App state machine for orzbrowser. `on_action` is the single entry point;
 //! it returns the [`Cmd`] side-effects for `main.rs` to execute.
 
-use crate::keymap::{Action, Mode};
+use crate::keymap::{Action, KeySet, Mode};
+use std::mem;
 
 /// Scroll direction / magnitude for the webview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +48,12 @@ pub(crate) enum Cmd {
     HintHide,
     /// Exit the app.
     Quit,
+    /// Replace the page's forward keys with the given list.
+    SetForwardKeys(KeySet),
+    /// Give the page keyboard focus.
+    Focus,
+    /// Take keyboard focus back from the page to the TUI.
+    Blur,
 }
 
 /// Whole-app state for orzbrowser.
@@ -56,6 +63,9 @@ pub(crate) struct App {
     pending_prefix: Option<char>,
     url: String,
     address_buf: String,
+    page_focused: bool,
+    refocus_after_text_mode: bool,
+    key_set: KeySet,
 }
 
 impl App {
@@ -66,6 +76,9 @@ impl App {
             pending_prefix: None,
             url: initial_url,
             address_buf: String::new(),
+            page_focused: false,
+            refocus_after_text_mode: false,
+            key_set: KeySet::Normal,
         }
     }
 
@@ -93,7 +106,7 @@ impl App {
             return self.resolve_chord(c);
         }
 
-        match action {
+        let cmds = match action {
             Action::Prefix(c) => {
                 self.pending_prefix = Some(c);
                 vec![]
@@ -111,8 +124,7 @@ impl App {
             Action::HistoryForward => vec![Cmd::HistoryForward],
             Action::OpenAddress => {
                 self.address_buf = self.url.clone();
-                self.mode = Mode::Address;
-                vec![]
+                vec![self.enter_text_mode(Mode::Address)]
             }
             Action::AddressChar(c) => {
                 self.address_buf.push(c);
@@ -128,38 +140,40 @@ impl App {
                 let url = normalize_url(input);
                 self.mode = Mode::Normal;
                 self.address_buf.clear();
-                if empty || url == self.url {
+                let mut cmds = if empty || url == self.url {
                     vec![]
                 } else {
                     vec![Cmd::Navigate(url)]
-                }
+                };
+                cmds.extend(self.take_refocus());
+                cmds
             }
             Action::Escape => {
-                let was_hint = self.mode == Mode::Hint;
+                let left = self.mode;
                 self.mode = Mode::Normal;
                 self.address_buf.clear();
-                if was_hint {
-                    vec![Cmd::HintHide]
-                } else {
-                    vec![]
+                match left {
+                    Mode::Hint => {
+                        let mut cmds = vec![Cmd::HintHide];
+                        cmds.extend(self.take_refocus());
+                        cmds
+                    }
+                    Mode::Insert => vec![Cmd::Blur],
+                    Mode::Address | Mode::Help => self.take_refocus().into_iter().collect(),
+                    _ => vec![],
                 }
             }
             Action::EnterInsert => {
                 self.mode = Mode::Insert;
-                vec![]
+                vec![Cmd::Focus]
             }
-            Action::EnterHint => {
-                self.mode = Mode::Hint;
-                vec![Cmd::HintShow]
-            }
+            Action::EnterHint => vec![Cmd::HintShow, self.enter_text_mode(Mode::Hint)],
             Action::HintKey(c) => vec![Cmd::HintKey(c)],
             Action::HintBackspace => vec![Cmd::HintBackspace],
-            Action::OpenHelp => {
-                self.mode = Mode::Help;
-                vec![]
-            }
+            Action::OpenHelp => vec![self.enter_text_mode(Mode::Help)],
             Action::Ignore => vec![],
-        }
+        };
+        self.with_key_set(cmds)
     }
 
     /// Records a page-driven URL change reported via `urlChanged` (CEF owns the
@@ -169,18 +183,55 @@ impl App {
     }
 
     /// Applies a `hintResult` reported by the page: a hint that focused a form
-    /// field switches to Insert mode; any other resolution returns to Normal.
-    /// A no-op unless currently in Hint mode (guards against a late result
-    /// arriving after the user already cancelled with Esc).
-    pub(crate) fn on_hint_result(&mut self, kind: &str) {
+    /// field switches to Insert mode, carrying the insert keys and page focus;
+    /// any other resolution returns to Normal, refocusing the page if it held
+    /// focus when Hint mode began. A no-op unless currently in Hint mode
+    /// (guards against a late result arriving after the user already
+    /// cancelled with Esc).
+    pub(crate) fn on_hint_result(&mut self, kind: &str) -> Vec<Cmd> {
         if self.mode != Mode::Hint {
-            return;
+            return vec![];
         }
-        self.mode = if kind == "focusedInput" {
-            Mode::Insert
+        let cmds = if kind == "focusedInput" {
+            self.mode = Mode::Insert;
+            self.refocus_after_text_mode = false;
+            vec![Cmd::Focus]
         } else {
-            Mode::Normal
+            self.mode = Mode::Normal;
+            self.take_refocus().into_iter().collect()
         };
+        self.with_key_set(cmds)
+    }
+
+    // TODO: a click that focuses a text input on the page leaves the app in
+    // Normal mode, so the forwarded Normal keys (`j`, `k`, …) scroll instead
+    // of typing. Entering Insert automatically needs the page to report,
+    // via a preload script, that an editable element took focus.
+    /// Records the page's focus state and applies the host's report: a page
+    /// that gains focus while Address, Hint or Help is open cancels that
+    /// text mode, and one that loses focus in Insert mode returns to Normal
+    /// with the Normal keys.
+    pub(crate) fn on_focus_change(&mut self, focused: bool) -> Vec<Cmd> {
+        self.page_focused = focused;
+        let cmds = match (self.mode, focused) {
+            (Mode::Address | Mode::Help, true) => {
+                self.mode = Mode::Normal;
+                self.address_buf.clear();
+                self.refocus_after_text_mode = false;
+                vec![]
+            }
+            (Mode::Hint, true) => {
+                self.mode = Mode::Normal;
+                self.refocus_after_text_mode = false;
+                vec![Cmd::HintHide]
+            }
+            (Mode::Insert, false) => {
+                self.mode = Mode::Normal;
+                vec![]
+            }
+            _ => vec![],
+        };
+        self.with_key_set(cmds)
     }
 
     fn resolve_chord(&mut self, c: char) -> Vec<Cmd> {
@@ -188,6 +239,32 @@ impl App {
             'g' => vec![Cmd::Scroll(ScrollAction::Top)],
             _ => vec![],
         }
+    }
+
+    /// Enters the TUI text mode `mode`, remembering whether the page held
+    /// focus so that leaving it can give focus back, and returns the `Blur`
+    /// that takes the keyboard from the page.
+    fn enter_text_mode(&mut self, mode: Mode) -> Cmd {
+        self.mode = mode;
+        self.refocus_after_text_mode = self.page_focused;
+        Cmd::Blur
+    }
+
+    /// `Focus` when the page held focus when the text mode began, clearing
+    /// the flag.
+    fn take_refocus(&mut self) -> Option<Cmd> {
+        mem::take(&mut self.refocus_after_text_mode).then_some(Cmd::Focus)
+    }
+
+    /// Puts `SetForwardKeys` first in `cmds` when the current mode needs a
+    /// different forward-key set than the page carries.
+    fn with_key_set(&mut self, mut cmds: Vec<Cmd>) -> Vec<Cmd> {
+        let wanted = KeySet::of(self.mode);
+        if wanted != self.key_set {
+            self.key_set = wanted;
+            cmds.insert(0, Cmd::SetForwardKeys(wanted));
+        }
+        cmds
     }
 }
 
@@ -415,7 +492,10 @@ mod tests {
     #[test]
     fn enter_hint_sets_hint_mode_and_emits_show() {
         let mut a = app();
-        assert_eq!(a.on_action(Action::EnterHint), vec![Cmd::HintShow]);
+        assert_eq!(
+            a.on_action(Action::EnterHint),
+            vec![Cmd::HintShow, Cmd::Blur]
+        );
         assert_eq!(a.mode(), Mode::Hint);
     }
 
@@ -463,6 +543,225 @@ mod tests {
     fn hint_result_is_ignored_when_not_in_hint_mode() {
         let mut a = app();
         a.on_hint_result("focusedInput");
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    /// Asserts that entering and leaving insert mode switches the forward
+    /// keys and hands the keyboard to the page and back.
+    ///
+    /// Case: the user presses `i` to type into a search box, then Esc.
+    #[test]
+    fn insert_mode_switches_forward_keys_and_focus() {
+        let mut a = app();
+        assert_eq!(
+            a.on_action(Action::EnterInsert),
+            vec![Cmd::SetForwardKeys(KeySet::Insert), Cmd::Focus]
+        );
+        assert_eq!(
+            a.on_action(Action::Escape),
+            vec![Cmd::SetForwardKeys(KeySet::Normal), Cmd::Blur]
+        );
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    /// Asserts that the TUI's text modes take the keyboard back from the
+    /// page.
+    ///
+    /// Case: after clicking the page, the user opens the address bar, the
+    /// link hints, and the help.
+    #[test]
+    fn text_modes_blur_the_page() {
+        let mut a = app();
+        assert_eq!(a.on_action(Action::OpenAddress), vec![Cmd::Blur]);
+        a.on_action(Action::Escape);
+        assert_eq!(
+            a.on_action(Action::EnterHint),
+            vec![Cmd::HintShow, Cmd::Blur]
+        );
+        a.on_action(Action::Escape);
+        assert_eq!(a.on_action(Action::OpenHelp), vec![Cmd::Blur]);
+    }
+
+    /// Asserts that a hint that focused a form field enters insert mode with
+    /// the insert keys and page focus.
+    ///
+    /// Case: the user follows a link hint onto a text input.
+    #[test]
+    fn a_focused_input_hint_enters_insert_mode() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        assert_eq!(
+            a.on_hint_result("focusedInput"),
+            vec![Cmd::SetForwardKeys(KeySet::Insert), Cmd::Focus]
+        );
+        assert_eq!(a.mode(), Mode::Insert);
+    }
+
+    /// Asserts that a `focusedInput` result arriving after the user left hint
+    /// mode does nothing.
+    ///
+    /// Case: the user presses Esc just before the page reports the hint it
+    /// resolved.
+    #[test]
+    fn a_late_focused_input_result_after_escape_does_nothing() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        a.on_action(Action::Escape);
+        assert_eq!(a.on_hint_result("focusedInput"), vec![]);
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    /// Asserts that a click on the page cancels the TUI's text modes, and
+    /// that losing focus in insert mode returns to normal mode.
+    ///
+    /// Case: the user clicks the page while typing an address or picking a
+    /// hint, and later presses the release-focus shortcut while typing into
+    /// a form.
+    #[test]
+    fn focus_changes_cancel_text_modes_and_leave_insert() {
+        let mut a = app();
+        a.on_action(Action::OpenAddress);
+        assert_eq!(a.on_focus_change(true), vec![]);
+        assert_eq!(a.mode(), Mode::Normal);
+        assert_eq!(a.address_buf(), "");
+
+        a.on_action(Action::EnterHint);
+        assert_eq!(a.on_focus_change(true), vec![Cmd::HintHide]);
+        assert_eq!(a.mode(), Mode::Normal);
+
+        a.on_action(Action::EnterInsert);
+        assert_eq!(a.on_focus_change(true), vec![], "the echo of our own focus");
+        assert_eq!(
+            a.on_focus_change(false),
+            vec![Cmd::SetForwardKeys(KeySet::Normal)]
+        );
+        assert_eq!(a.mode(), Mode::Normal);
+
+        assert_eq!(a.on_focus_change(true), vec![], "a click in normal mode");
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    /// Asserts that leaving Address, Hint or Help refocuses the page when it
+    /// held focus before the mode was entered.
+    ///
+    /// Case: the user clicks the page, then opens the address bar, follows a
+    /// link hint to a non-input target, or opens help, and exits each with
+    /// the mode's own way out.
+    #[test]
+    fn text_mode_exit_refocuses_a_previously_focused_page() {
+        let mut a = app();
+        a.on_focus_change(true);
+        a.on_action(Action::OpenAddress);
+        assert_eq!(a.on_action(Action::Escape), vec![Cmd::Focus]);
+
+        let mut a = app();
+        a.on_focus_change(true);
+        a.on_action(Action::OpenAddress);
+        a.on_action(Action::AddressChar('x'));
+        assert_eq!(
+            a.on_action(Action::AddressConfirm),
+            vec![Cmd::Navigate("https://example.comx".into()), Cmd::Focus]
+        );
+
+        let mut a = app();
+        a.on_focus_change(true);
+        a.on_action(Action::EnterHint);
+        assert_eq!(a.on_action(Action::Escape), vec![Cmd::HintHide, Cmd::Focus]);
+
+        let mut a = app();
+        a.on_focus_change(true);
+        a.on_action(Action::EnterHint);
+        assert_eq!(a.on_hint_result("clicked"), vec![Cmd::Focus]);
+
+        let mut a = app();
+        a.on_focus_change(true);
+        a.on_action(Action::OpenHelp);
+        assert_eq!(a.on_action(Action::Escape), vec![Cmd::Focus]);
+    }
+
+    /// Asserts that leaving Address, Hint or Help does not refocus the page
+    /// when it did not hold focus before the mode was entered.
+    ///
+    /// Case: the user opens the address bar, follows a link hint to a
+    /// non-input target, or opens help without first clicking the page, and
+    /// exits each the same way.
+    #[test]
+    fn text_mode_exit_does_not_refocus_an_unfocused_page() {
+        let mut a = app();
+        a.on_action(Action::OpenAddress);
+        assert_eq!(a.on_action(Action::Escape), vec![]);
+
+        let mut a = app();
+        a.on_action(Action::OpenAddress);
+        a.on_action(Action::AddressChar('x'));
+        assert_eq!(
+            a.on_action(Action::AddressConfirm),
+            vec![Cmd::Navigate("https://example.comx".into())]
+        );
+
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        assert_eq!(a.on_action(Action::Escape), vec![Cmd::HintHide]);
+
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        assert_eq!(a.on_hint_result("clicked"), vec![]);
+
+        let mut a = app();
+        a.on_action(Action::OpenHelp);
+        assert_eq!(a.on_action(Action::Escape), vec![]);
+    }
+
+    /// Asserts that a hint landing on a form field emits exactly one
+    /// `Focus`, even when the page held focus before Hint mode began, and
+    /// that leaving the resulting Insert mode with Esc emits no extra
+    /// `Focus`.
+    ///
+    /// Case: the user clicks the page, follows a link hint onto a text
+    /// input, types into it, then presses Esc.
+    #[test]
+    fn focused_input_hint_emits_one_focus_and_leaves_no_pending_refocus() {
+        let mut a = app();
+        a.on_focus_change(true);
+        a.on_action(Action::EnterHint);
+        assert_eq!(
+            a.on_hint_result("focusedInput"),
+            vec![Cmd::SetForwardKeys(KeySet::Insert), Cmd::Focus]
+        );
+        assert_eq!(
+            a.on_action(Action::Escape),
+            vec![Cmd::SetForwardKeys(KeySet::Normal), Cmd::Blur]
+        );
+    }
+
+    /// Asserts that a focus notification arriving while a text mode is open
+    /// clears the pending refocus, so a later text-mode round that starts
+    /// from an unfocused page emits no `Focus`.
+    ///
+    /// Case: the user clicks the page and opens the address bar, but the
+    /// page reports focus again before the address bar is closed; the user
+    /// then clicks away, reopens the address bar, and exits it.
+    #[test]
+    fn focus_change_during_a_text_mode_clears_the_pending_refocus() {
+        let mut a = app();
+        a.on_focus_change(true);
+        a.on_action(Action::OpenAddress);
+        assert_eq!(a.on_focus_change(true), vec![]);
+
+        a.on_focus_change(false);
+        a.on_action(Action::OpenAddress);
+        assert_eq!(a.on_action(Action::Escape), vec![]);
+    }
+
+    /// Asserts that a focus notification while Help is open returns to
+    /// Normal with no commands.
+    ///
+    /// Case: the user opens help, then clicks the page.
+    #[test]
+    fn focus_change_true_leaves_help_mode_quietly() {
+        let mut a = app();
+        a.on_action(Action::OpenHelp);
+        assert_eq!(a.on_focus_change(true), vec![]);
         assert_eq!(a.mode(), Mode::Normal);
     }
 }

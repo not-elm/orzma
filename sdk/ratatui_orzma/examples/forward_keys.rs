@@ -8,14 +8,12 @@
 //! Only `Alt+h` is declared as a forward-key, and that asymmetry is the point:
 //! `Alt+h` is pressed WHILE the page holds keyboard focus, so without forwarding it
 //! would be swallowed by the page and focus could never leave the webview — the host
-//! forwards the declared chord to the app so `event::read` sees it even while the
-//! page is focused. `Alt+l` is pressed while the app still owns the keyboard, so it
-//! already reaches `event::read` and needs no declaration. (A forwarded chord is
-//! delivered to the app; it is not suppressed from the page, but this page ignores
-//! `Alt+h`, so that does not matter.)
+//! forwards the declared chord to the app, and only to the app, so `event::read`
+//! sees it even while the page is focused. `Alt+l` is pressed while the app still
+//! owns the keyboard, so it already reaches `event::read` and needs no declaration.
 //!
-//! `WebviewWidget::focused` reports focus to the SDK; the `OrzmaBackend` wrapping the
-//! terminal emits the control-plane focus op when it changes.
+//! `WebviewHandle::focus` and `Orzma::blur` send the control-plane focus op, and
+//! `WebviewHandle::read_focus_changes` reports a click that focused the page.
 
 #[path = "common/terminal.rs"]
 mod common;
@@ -39,6 +37,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut web_focused = false;
     common::run(&orzma, |terminal| {
         loop {
+            for change in view.read_focus_changes() {
+                web_focused = change.focused;
+            }
+
             terminal.draw(|f| {
                 let rows =
                     Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(f.area());
@@ -51,7 +53,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
                 f.render_stateful_widget(
                     WebviewWidget::new(view.instance_id())
-                        .focused(web_focused)
                         .fallback(Block::bordered().title("webview")),
                     rows[1],
                     &mut *orzma.frame(),
@@ -62,8 +63,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 && let Event::Key(k) = event::read()?
             {
                 match (k.modifiers, k.code) {
-                    (KeyModifiers::ALT, KeyCode::Char('l')) => web_focused = true,
-                    (KeyModifiers::ALT, KeyCode::Char('h')) => web_focused = false,
+                    (KeyModifiers::ALT, KeyCode::Char('l')) => {
+                        view.focus()?;
+                    }
+                    (KeyModifiers::ALT, KeyCode::Char('h')) => {
+                        orzma.blur()?;
+                    }
                     (KeyModifiers::NONE, KeyCode::Char('q')) if !web_focused => return Ok(()),
                     _ => {}
                 }

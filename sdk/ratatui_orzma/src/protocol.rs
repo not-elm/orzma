@@ -112,6 +112,13 @@ pub(crate) enum ClientMsg {
         /// The target placement.
         instance: String,
     },
+    /// Replace the forward-key chords of a handle this connection owns.
+    SetForwardKeys {
+        /// The target handle.
+        handle: HandleId,
+        /// The complete new chord list.
+        keys: Vec<KeyChord>,
+    },
 }
 
 /// A navigation action on one mounted placement.
@@ -131,11 +138,6 @@ pub(crate) enum NavAction {
     To(String),
 }
 
-/// Whether `click_focus` still holds its default, so the wire omits it.
-fn click_focus_is_default(click_focus: &bool) -> bool {
-    *click_focus
-}
-
 /// The content variants of a `register` request.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -146,9 +148,6 @@ pub(crate) enum RegisterKind {
         html: String,
         /// Whether the view accepts focus/input.
         interactive: bool,
-        /// Whether a pointer press inside the view moves keyboard focus to it.
-        #[serde(skip_serializing_if = "click_focus_is_default")]
-        click_focus: bool,
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         forward_keys: Vec<KeyChord>,
@@ -164,9 +163,6 @@ pub(crate) enum RegisterKind {
         entry: String,
         /// Whether the view accepts focus/input.
         interactive: bool,
-        /// Whether a pointer press inside the view moves keyboard focus to it.
-        #[serde(skip_serializing_if = "click_focus_is_default")]
-        click_focus: bool,
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         forward_keys: Vec<KeyChord>,
@@ -180,9 +176,6 @@ pub(crate) enum RegisterKind {
         url: String,
         /// Whether the view accepts focus/input.
         interactive: bool,
-        /// Whether a pointer press inside the view moves keyboard focus to it.
-        #[serde(skip_serializing_if = "click_focus_is_default")]
-        click_focus: bool,
         /// Whether the `window.orzma` back-channel is injected (opt-in).
         bridge: bool,
         /// Chords the page lets through to the app while focused.
@@ -192,6 +185,17 @@ pub(crate) enum RegisterKind {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         preload: Vec<String>,
     },
+}
+
+impl RegisterKind {
+    /// Replaces the forward-key chords this registration declares.
+    pub fn replace_forward_keys(&mut self, keys: Vec<KeyChord>) {
+        match self {
+            Self::Inline { forward_keys, .. }
+            | Self::Dir { forward_keys, .. }
+            | Self::Url { forward_keys, .. } => *forward_keys = keys,
+        }
+    }
 }
 
 /// The untagged reply to a `register` or `new_instance` request.
@@ -279,7 +283,6 @@ mod tests {
         let v = serde_json::to_value(ClientMsg::Register(RegisterKind::Inline {
             html: "<h1>hi</h1>".into(),
             interactive: true,
-            click_focus: true,
             forward_keys: Vec::new(),
             preload: Vec::new(),
         }))
@@ -413,7 +416,6 @@ mod tests {
         let v = serde_json::to_value(ClientMsg::Register(RegisterKind::Url {
             url: "https://example.com".into(),
             interactive: true,
-            click_focus: true,
             bridge: false,
             forward_keys: Vec::new(),
             preload: Vec::new(),
@@ -435,7 +437,6 @@ mod tests {
         let v = serde_json::to_value(ClientMsg::Register(RegisterKind::Url {
             url: "https://app.example.com".into(),
             interactive: true,
-            click_focus: true,
             bridge: true,
             forward_keys: Vec::new(),
             preload: Vec::new(),

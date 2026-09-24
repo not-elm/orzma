@@ -87,6 +87,14 @@ pub(crate) enum ClientMsg {
         /// The target instance.
         instance: String,
     },
+    /// Replaces the forward-key chords of a handle this connection owns, on
+    /// its registration and on every mounted placement.
+    SetForwardKeys {
+        /// The handle returned by a prior `register`.
+        handle: HandleId,
+        /// The complete new chord list.
+        keys: Vec<HostKeyChord>,
+    },
 }
 
 /// A navigation action on one mounted placement.
@@ -108,7 +116,8 @@ pub(crate) enum NavAction {
 pub(crate) struct HostKeyChord {
     /// Modifier names: any of `alt`, `ctrl`, `shift`, `meta`.
     pub(crate) mods: Vec<String>,
-    /// The base key: a lowercase char (`h`, `5`), or `tab`/`backtab`/`f1`..`f12`.
+    /// The base key name: a lowercase letter or digit, a named key (`tab`,
+    /// `enter`, `f1` …), or one ASCII punctuation character (`/`, `?`).
     pub(crate) key: String,
 }
 
@@ -125,9 +134,6 @@ pub(crate) enum RegisterKind {
         /// Whether the mounted webview accepts pointer/keyboard input.
         #[serde(default = "default_true")]
         interactive: bool,
-        /// Whether a pointer press inside the view moves keyboard focus to it.
-        #[serde(default = "default_true")]
-        click_focus: bool,
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
         forward_keys: Vec<HostKeyChord>,
@@ -142,9 +148,6 @@ pub(crate) enum RegisterKind {
         /// Whether the mounted webview accepts pointer/keyboard input.
         #[serde(default = "default_true")]
         interactive: bool,
-        /// Whether a pointer press inside the view moves keyboard focus to it.
-        #[serde(default = "default_true")]
-        click_focus: bool,
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
         forward_keys: Vec<HostKeyChord>,
@@ -159,9 +162,6 @@ pub(crate) enum RegisterKind {
         /// Whether the mounted webview accepts pointer/keyboard input.
         #[serde(default = "default_true")]
         interactive: bool,
-        /// Whether a pointer press inside the view moves keyboard focus to it.
-        #[serde(default = "default_true")]
-        click_focus: bool,
         /// Whether the `window.orzma` back-channel is injected (opt-in).
         #[serde(default)]
         bridge: bool,
@@ -246,6 +246,16 @@ pub(crate) enum PushMsg {
         /// `true` when compositing starts; `false` when it stops.
         active: bool,
     },
+    /// Fired when a placement gains (`focused: true`) or loses
+    /// (`focused: false`) webview keyboard focus, whatever caused it.
+    FocusChanged {
+        /// The registered handle the placement belongs to.
+        handle: HandleId,
+        /// The placement whose focus changed.
+        instance: String,
+        /// Whether the placement now holds webview focus.
+        focused: bool,
+    },
 }
 
 fn default_true() -> bool {
@@ -274,7 +284,6 @@ mod tests {
                 root: "/abs".into(),
                 entry: "index.html".into(),
                 interactive: true,
-                click_focus: true,
                 forward_keys: vec![],
                 preload: vec![],
             })
@@ -292,50 +301,24 @@ mod tests {
             ClientMsg::Register(RegisterKind::Inline {
                 html: "<h1>x</h1>".into(),
                 interactive: false,
-                click_focus: true,
                 forward_keys: vec![],
                 preload: vec![],
             })
         );
     }
 
-    /// Asserts that `click_focus` parses off the register wire and defaults to
-    /// `true` when the client omits it.
+    /// Asserts that a `register` carrying an unknown `click_focus` field
+    /// still parses, the field ignored.
     ///
-    /// Case: a viewer app registers a page that owns no keyboard affordances
-    /// and asks that clicking it leave the keyboard with the TUI, while every
-    /// older client that never sends the field keeps the click-to-focus
-    /// behavior.
+    /// Case: an app built against an SDK that still sends `click_focus:false`
+    /// registers its view with an updated orzma.
     #[test]
-    fn parses_click_focus_and_defaults_to_true() {
-        let declared: ClientMsg = serde_json::from_str(
+    fn a_register_carrying_click_focus_still_parses() {
+        let msg: ClientMsg = serde_json::from_str(
             r#"{"op":"register","kind":"dir","root":"/abs","entry":"index.html","click_focus":false}"#,
         )
         .unwrap();
-        assert_eq!(
-            declared,
-            ClientMsg::Register(RegisterKind::Dir {
-                root: "/abs".into(),
-                entry: "index.html".into(),
-                interactive: true,
-                click_focus: false,
-                forward_keys: vec![],
-                preload: vec![],
-            })
-        );
-        let omitted: ClientMsg =
-            serde_json::from_str(r#"{"op":"register","kind":"inline","html":"<h1>x</h1>"}"#)
-                .unwrap();
-        assert_eq!(
-            omitted,
-            ClientMsg::Register(RegisterKind::Inline {
-                html: "<h1>x</h1>".into(),
-                interactive: true,
-                click_focus: true,
-                forward_keys: vec![],
-                preload: vec![],
-            })
-        );
+        assert!(matches!(msg, ClientMsg::Register(RegisterKind::Dir { .. })));
     }
 
     #[test]
@@ -493,7 +476,6 @@ mod tests {
             ClientMsg::Register(RegisterKind::Url {
                 url: "https://example.com".into(),
                 interactive: true,
-                click_focus: true,
                 bridge: false,
                 forward_keys: vec![],
                 preload: vec![],
@@ -512,7 +494,6 @@ mod tests {
             ClientMsg::Register(RegisterKind::Url {
                 url: "https://app.example.com".into(),
                 interactive: true,
-                click_focus: true,
                 bridge: true,
                 forward_keys: vec![],
                 preload: vec![],
@@ -529,7 +510,6 @@ mod tests {
             ClientMsg::Register(RegisterKind::Url {
                 url: "https://example.com".into(),
                 interactive: true,
-                click_focus: true,
                 bridge: false,
                 forward_keys: vec![],
                 preload: vec![],
@@ -638,5 +618,46 @@ mod tests {
             }
             _ => panic!("expected inline register"),
         }
+    }
+
+    /// Asserts that a `set_forward_keys` line parses into its handle and
+    /// chord list.
+    ///
+    /// Case: a TUI browser enters its insert mode and replaces its forward
+    /// keys with Esc alone.
+    #[test]
+    fn parses_set_forward_keys() {
+        let msg: ClientMsg = serde_json::from_str(
+            r#"{"op":"set_forward_keys","handle":"h1","keys":[{"mods":[],"key":"esc"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            msg,
+            ClientMsg::SetForwardKeys {
+                handle: "h1".into(),
+                keys: vec![HostKeyChord {
+                    mods: vec![],
+                    key: "esc".into(),
+                }],
+            }
+        );
+    }
+
+    /// Asserts that a focus change serializes to the `focus_changed` push
+    /// shape.
+    ///
+    /// Case: the user clicks a mounted page and its program learns that the
+    /// page took the keyboard.
+    #[test]
+    fn focus_changed_serializes_to_the_push_shape() {
+        let msg = PushMsg::FocusChanged {
+            handle: "h1".into(),
+            instance: "i1".into(),
+            focused: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&msg).unwrap(),
+            serde_json::json!({"op": "focus_changed", "handle": "h1", "instance": "i1", "focused": true})
+        );
     }
 }

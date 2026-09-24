@@ -284,11 +284,9 @@ fn forward_webview_wheel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::focus::PaneClicked;
     use bevy::math::{DVec2, IVec4};
     use bevy::window::WindowResolution;
     use bevy_orzma_tty_renderer::CellMetrics;
-    use bevy_orzma_webview::ClickFocusDisabled;
     use orzma_vt::prelude::InstanceId;
 
     fn test_metrics() -> TerminalCellMetricsResource {
@@ -393,108 +391,6 @@ mod tests {
             app.world().resource::<WebviewPress>().0,
             Some(child),
             "the press is recorded so the matching release routes to the same child"
-        );
-    }
-
-    #[derive(Resource, Default)]
-    struct ClickedPanes(Vec<Entity>);
-
-    /// Spawns a second inline webview child of `shell`, outside every overlay
-    /// rect so the hit test never lands on it.
-    fn spawn_sibling_webview(app: &mut App, shell: Entity) -> Entity {
-        app.world_mut()
-            .spawn((
-                ChildOf(shell),
-                Webview {
-                    handle: "sibling".into(),
-                    instance: InstanceId(2),
-                    slot: 1,
-                    rows: 10,
-                    cols: 40,
-                },
-            ))
-            .id()
-    }
-
-    fn watch_pane_clicks(app: &mut App) {
-        app.init_resource::<ClickedPanes>();
-        app.add_observer(|ev: On<PaneClicked>, mut clicked: ResMut<ClickedPanes>| {
-            clicked.0.push(ev.entity);
-        });
-    }
-
-    /// Asserts that a press inside a `ClickFocusDisabled` rect leaves keyboard
-    /// focus with the terminal and asks for the owning pane instead, while
-    /// still recording the press for the page.
-    ///
-    /// Case: a markdown viewer's page owns no keyboard affordances, and the
-    /// user clicks it to follow a link while still driving the TUI from the
-    /// keyboard.
-    #[test]
-    fn a_click_focus_opt_out_press_selects_the_pane_without_taking_focus() {
-        let (mut app, shell, child) = make_webview_app();
-        app.world_mut().entity_mut(child).insert(ClickFocusDisabled);
-        watch_pane_clicks(&mut app);
-        set_cursor(&mut app, Vec2::new(40.0, 48.0));
-        write_left(&mut app, ButtonState::Pressed);
-        app.update();
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "a press on a click-focus opt-out must not hand the keyboard to the page"
-        );
-        assert_eq!(
-            app.world().resource::<ClickedPanes>().0,
-            vec![shell],
-            "the click must still make the owning pane active"
-        );
-        assert_eq!(
-            app.world().resource::<WebviewPress>().0,
-            Some(child),
-            "the press is recorded so the matching release reaches the page"
-        );
-    }
-
-    /// Asserts that a press inside a `ClickFocusDisabled` rect releases the
-    /// inline focus a DIFFERENT page still holds.
-    ///
-    /// Case: the user has been typing into a browser pane's page, then clicks
-    /// the markdown viewer's page in the neighbouring pane.
-    #[test]
-    fn a_click_focus_opt_out_press_releases_another_pages_focus() {
-        let (mut app, shell, child) = make_webview_app();
-        app.world_mut().entity_mut(child).insert(ClickFocusDisabled);
-        let sibling = spawn_sibling_webview(&mut app, shell);
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(sibling);
-        watch_pane_clicks(&mut app);
-        set_cursor(&mut app, Vec2::new(40.0, 48.0));
-        write_left(&mut app, ButtonState::Pressed);
-        app.update();
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "the keyboard must not stay with a page the user clicked away from"
-        );
-    }
-
-    /// Asserts that a press inside a `ClickFocusDisabled` rect leaves the
-    /// focus its own app granted with a focus request.
-    ///
-    /// Case: the app put the page into an editing mode and handed it the
-    /// keyboard, and the user then clicks inside that same page.
-    #[test]
-    fn a_click_focus_opt_out_press_keeps_focus_its_app_granted() {
-        let (mut app, _shell, child) = make_webview_app();
-        app.world_mut().entity_mut(child).insert(ClickFocusDisabled);
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
-        watch_pane_clicks(&mut app);
-        set_cursor(&mut app, Vec2::new(40.0, 48.0));
-        write_left(&mut app, ButtonState::Pressed);
-        app.update();
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            Some(child),
-            "a click inside the page must not revoke the focus its app asked for"
         );
     }
 
