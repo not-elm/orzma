@@ -408,6 +408,9 @@ instead.
 Zoom never resizes the OS window. The column and row counts change instead,
 and the rows are reflowed to the new width, scrollback included: a line that
 no longer fits wraps onto the next row, and zooming back out joins it again.
+When the window grows taller, or zooming out adds rows, Windows leaves
+scrollback in place and adds blank rows at the bottom, because ConPTY keeps no
+scrollback; on other platforms rows come back from scrollback.
 A full-screen program on the alternate screen is not reflowed; it redraws
 itself at the new size.
 
