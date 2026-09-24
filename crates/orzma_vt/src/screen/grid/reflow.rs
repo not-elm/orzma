@@ -63,17 +63,18 @@ impl Grid {
     /// and carrying `cursor`, `saved`, and `points` to the text they stood
     /// on.
     ///
-    /// The screen keeps its top row where the text allows: rows move into
-    /// history only as far as the cursor, or the text below it, needs to
-    /// stay on screen, and the rest past the bottom are dropped. Rows a
-    /// resize frees at the bottom come back from history under
-    /// [`ScrollbackOnGrow::Reclaim`] and stay blank under
+    /// The row holding the old top row's first cell stays on top where the
+    /// text allows: rows move into history only as far as the cursor, or
+    /// the text below it, needs to stay on screen, and the rest past the
+    /// bottom are dropped. Rows a resize frees at the bottom come back from
+    /// history under [`ScrollbackOnGrow::Reclaim`] and stay blank under
     /// [`ScrollbackOnGrow::Keep`]. A width change rewraps history as well;
     /// a height-only change rewraps nothing. Under
     /// [`ScrollbackOnGrow::Keep`], history and the screen are rewrapped
     /// apart, so a line split between them joins only once both halves sit
     /// in history. Under [`ScrollbackOnGrow::Reclaim`], the history rows of
-    /// a line that runs onto the screen are rewrapped with the screen.
+    /// a line that runs onto the screen are rewrapped with the screen, and
+    /// the rows of that line above the old top row go back to history.
     /// `size.cols` must be at least two.
     ///
     /// Blank rows below both the cursor and the last row showing text are
@@ -140,6 +141,10 @@ impl Grid {
             }
         }
 
+        let mut old_top = SlicePoint {
+            row: 0,
+            boundary: 0,
+        };
         if policy == ScrollbackOnGrow::Reclaim && old.cols != size.cols {
             let joined = continued_tail(&history);
             if joined > 0 {
@@ -147,7 +152,7 @@ impl Grid {
                 let mut run: Vec<GridRow> = history.drain(from..).collect();
                 run.append(&mut screen);
                 screen = run;
-                extent += joined;
+                old_top.row += joined;
                 cursor_at.row += joined;
                 for slot in carried.iter_mut().flatten() {
                     *slot = match *slot {
@@ -188,6 +193,7 @@ impl Grid {
             let mut screen_points: Vec<Option<SlicePoint>> = carried
                 .iter()
                 .map(|slot| slot.and_then(Carried::screen))
+                .chain([Some(old_top)])
                 .collect();
             screen = rewrap(
                 Some(&mut cursor_at),
@@ -197,6 +203,9 @@ impl Grid {
                 old.cols,
                 size.cols,
             );
+            if let Some(Some(moved)) = screen_points.pop() {
+                old_top = moved;
+            }
             for (slot, point) in carried.iter_mut().zip(screen_points) {
                 if let (Some(Carried::Screen(_)), Some(point)) = (*slot, point) {
                     *slot = Some(Carried::Screen(point));
@@ -219,7 +228,10 @@ impl Grid {
             .rposition(has_text)
             .unwrap_or(0)
             .max(cursor_at.row);
-        let top = (last_row + 1).saturating_sub(new_rows).min(cursor_at.row);
+        let top = (last_row + 1)
+            .saturating_sub(new_rows)
+            .max(old_top.row)
+            .min(cursor_at.row);
         let pushed_from = history.len();
         history.extend(screen.drain(..top));
         cursor_at.row -= top;
@@ -253,8 +265,8 @@ impl Grid {
 
         if policy == ScrollbackOnGrow::Reclaim {
             let grown = i64::from(size.rows) - i64::from(old.rows);
-            let saved_rows =
-                i64::try_from(extent + 1).unwrap_or(0) - i64::try_from(reflowed).unwrap_or(0);
+            let saved_rows = i64::try_from(extent + 1).unwrap_or(0)
+                - (i64::try_from(reflowed).unwrap_or(0) - i64::try_from(old_top.row).unwrap_or(0));
             let pulled = usize::try_from(grown + saved_rows)
                 .unwrap_or(0)
                 .min(history.len())
@@ -1238,6 +1250,56 @@ mod tests {
         reflow(&mut grid, &mut cursor, 8, 3, ScrollbackOnGrow::Reclaim);
         assert_eq!(all_rows(&grid), ["line1", "line2", "PS>"]);
         assert_eq!(cursor, cursor_at(2, 4));
+        grid.assert_history_index_matches_ring();
+    }
+
+    /// Asserts that under `Reclaim` a widening that joins a history row
+    /// onto the screen's top line pulls no other row back from history.
+    ///
+    /// Case: the newest history row wraps onto the top row of the screen,
+    /// above the prompt, when the user widens the window on macOS.
+    #[test]
+    fn a_widening_that_joins_history_pulls_no_other_row_back() {
+        let mut grid = grid(4, 3, 10);
+        write(&mut grid, 0, "zz");
+        write(&mut grid, 1, "abcdef");
+        for _ in 0..2 {
+            grid.scroll_up_one(ScreenLine(0), ScreenLine(2), Cell::default());
+        }
+        write(&mut grid, 1, "PS>");
+        assert_eq!(all_rows(&grid), ["zz", "abcd", "ef", "PS>", ""]);
+        assert_eq!(grid.wrap_at(GridLine(-1)), Some(4));
+        let mut cursor = cursor_at(1, 3);
+        reflow(&mut grid, &mut cursor, 8, 3, ScrollbackOnGrow::Reclaim);
+        assert_eq!(all_rows(&grid), ["zz", "abcdef", "PS>", ""]);
+        assert_eq!(grid.history_len(), 1);
+        assert_eq!(cursor, cursor_at(1, 3));
+        grid.assert_history_index_matches_ring();
+    }
+
+    /// Asserts that under `Reclaim` a narrowing that joins a history row
+    /// onto the screen's top line keeps the old top row on top and returns
+    /// the rest of that line to history, still continuing onto the screen.
+    ///
+    /// Case: the newest history row wraps onto the top row of the screen,
+    /// above the prompt, when the user narrows the window on macOS.
+    #[test]
+    fn a_narrowing_that_joins_history_keeps_the_old_top_row_on_top() {
+        let mut grid = grid(8, 3, 10);
+        write(&mut grid, 0, "h1");
+        write(&mut grid, 1, "abcdefghij");
+        for _ in 0..2 {
+            grid.scroll_up_one(ScreenLine(0), ScreenLine(2), Cell::default());
+        }
+        write(&mut grid, 1, "PS>");
+        assert_eq!(all_rows(&grid), ["h1", "abcdefgh", "ij", "PS>", ""]);
+        assert_eq!(grid.wrap_at(GridLine(-1)), Some(8));
+        let mut cursor = cursor_at(1, 3);
+        reflow(&mut grid, &mut cursor, 4, 3, ScrollbackOnGrow::Reclaim);
+        assert_eq!(all_rows(&grid), ["h1", "abcd", "efgh", "ij", "PS>", ""]);
+        assert_eq!(grid.history_len(), 3);
+        assert_eq!(grid.wrap_at(GridLine(-1)), Some(4));
+        assert_eq!(cursor, cursor_at(1, 3));
         grid.assert_history_index_matches_ring();
     }
 
