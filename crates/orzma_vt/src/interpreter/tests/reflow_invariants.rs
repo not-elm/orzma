@@ -297,7 +297,10 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(ProptestConfig {
+        max_global_rejects: 1 << 16,
+        ..ProptestConfig::with_cases(256)
+    })]
 
     /// Asserts that under `Reclaim` narrowing the window and widening it
     /// back restores every cell and recorded wrap of every row, history
@@ -329,6 +332,10 @@ proptest! {
         let after = (ring_cells(screen.grid()), screen.cursors()[0]);
         prop_assert_eq!(after, before);
     }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
 
     /// Asserts that after every resize, whatever the history cap and the
     /// policy, each row is as wide as the grid with its wide pairs intact,
