@@ -89,11 +89,15 @@ pub struct Grid {
     history_index: HistoryIndex,
 }
 
-/// One stored row: its identity together with its cells.
+/// One stored row: its identity, its cells, and how its logical line
+/// continues.
 #[derive(Debug)]
 struct GridRow {
     id: LineId,
     cells: Row<Cell>,
+    /// How many leading cells belong to a logical line that continues on
+    /// the next row; `None` when the row ends its line.
+    wrap_at: Option<u16>,
 }
 
 impl Grid {
@@ -104,6 +108,7 @@ impl Grid {
             rows.push_back(GridRow {
                 id: LineId(id),
                 cells: Row::filled(size.cols, Cell::default()),
+                wrap_at: None,
             });
         }
         Self {
@@ -144,11 +149,23 @@ impl Grid {
     }
 
     /// Overwrites the given column range of one visible row with `fill`.
+    ///
+    /// A range reaching the last column ends the row's logical line, and
+    /// one covering the whole row also ends the line of the row above it,
+    /// which is the newest history row for the top row.
     pub fn fill_visible_row_range(&mut self, line: ScreenLine, columns: Range<u16>, fill: Cell) {
+        let reaches_end = columns.end >= self.size.cols;
+        let whole_row = columns.start == 0 && reaches_end;
         let row: &mut Row<Cell> = &mut self[line];
         let cells: &mut [Cell] = row;
         cells[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
         row.normalize_wide_pairs();
+        if reaches_end {
+            self.end_visible_line(line.0);
+        }
+        if whole_row {
+            self.end_line_above(line);
+        }
     }
 
     /// Shifts one visible row's cells from `column` right by `count`
@@ -216,79 +233,50 @@ impl Grid {
     ///
     /// The departing row becomes the newest history row only when `top`
     /// is the first screen line. A region with content pinned above it
-    /// discards the row instead.
+    /// discards the row instead. A `fill` of any width other than
+    /// [`CellWidth::Narrow`] is stored as narrow.
     ///
-    /// The caller must pass a [`CellWidth::Narrow`] `fill`.
+    /// The entering row ends its logical line, and so do the rows whose
+    /// next row the scroll changes: the one above `top` and the one left
+    /// just above the entering row.
     pub fn scroll_up_one(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
-        debug_assert_eq!(
-            fill.width,
-            CellWidth::Narrow,
-            "a scroll fills with narrow blanks"
-        );
-        let base = self.history_len();
-        let id = self.mint();
+        let fill = Cell {
+            width: CellWidth::Narrow,
+            ..fill
+        };
+        self.rotate_up(top, bottom, fill);
+        self.end_visible_line(bottom.0);
+        if top < bottom {
+            self.end_visible_line(bottom.0 - 1);
+        }
         if top > ScreenLine(0) {
-            let mut recycled = self
-                .rows
-                .remove(base + usize::from(top.0))
-                .expect("the region's top row is inside the ring");
-            recycled.id = id;
-            recycled.cells.fill(fill);
-            self.rows.insert(base + usize::from(bottom.0), recycled);
-            return;
+            self.end_line_above(top);
         }
-        let grows_history = base < self.max_history;
-        let departing = self.rows[base].id;
-        let entering = if grows_history {
-            GridRow {
-                id,
-                cells: Row::filled(self.size.cols, fill),
-            }
-        } else {
-            let mut recycled = self
-                .rows
-                .pop_front()
-                .expect("the ring always holds the visible rows");
-            if self.max_history > 0 {
-                self.history_index.pop_oldest(recycled.id);
-            }
-            recycled.id = id;
-            recycled.cells.fill(fill);
-            recycled
-        };
-        if self.max_history > 0 {
-            self.history_index.enter(departing);
-        }
-        // NOTE: Seating the entering row just past the bottom margin is
-        // what hands the departing row to history: the ring grows by one,
-        // so the window of visible rows slides off it while the rows
-        // below the margin keep their distance from the new end.
-        let below_bottom = if grows_history {
-            base + usize::from(bottom.0) + 1
-        } else {
-            base + usize::from(bottom.0)
-        };
-        self.rows.insert(below_bottom, entering);
     }
 
     /// Scrolls the region down by one row: a `fill`-filled row enters at
     /// `top` and the row at `bottom` is discarded.
     ///
-    /// The caller must pass a [`CellWidth::Narrow`] `fill`.
+    /// A `fill` of any width other than [`CellWidth::Narrow`] is stored as
+    /// narrow. The entering row ends its logical line, and so do the rows
+    /// whose next row the scroll changes: the one above `top`, which is
+    /// the newest history row when `top` is the first screen line, and
+    /// the one pushed down to `bottom`.
     pub fn scroll_down_one(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
-        debug_assert_eq!(
-            fill.width,
-            CellWidth::Narrow,
-            "a scroll fills with narrow blanks"
-        );
+        let fill = Cell {
+            width: CellWidth::Narrow,
+            ..fill
+        };
         let base = self.history_len();
-        let mut recycled = self
-            .rows
-            .remove(base + usize::from(bottom.0))
-            .expect("the region's bottom row is inside the ring");
+        let Some(mut recycled) = self.rows.remove(base + usize::from(bottom.0)) else {
+            return;
+        };
         recycled.id = self.mint();
         recycled.cells.fill(fill);
         self.rows.insert(base + usize::from(top.0), recycled);
+        self.end_visible_line(top.0);
+        self.end_visible_line(bottom.0);
+        self.end_line_above(top);
     }
 
     /// The id of the row at a screen line.
@@ -309,6 +297,30 @@ impl Grid {
             return None;
         }
         self.line_id_at(point.line)
+    }
+
+    /// How many leading cells of the row at `line` continue on the next
+    /// row; `None` when the row ends its logical line or the line is
+    /// outside the ring.
+    pub fn wrap_at(&self, line: GridLine) -> Option<u16> {
+        let index = self.ring_index(line)?;
+        self.rows[index].wrap_at
+    }
+
+    /// Records that the first `cells` cells of the row at `line` continue
+    /// on the next row. A line outside the ring is ignored.
+    pub fn set_wrap_at(&mut self, line: GridLine, cells: u16) {
+        if let Some(index) = self.ring_index(line) {
+            self.rows[index].wrap_at = Some(cells);
+        }
+    }
+
+    /// Records that the row at `line` ends its logical line. A line
+    /// outside the ring is ignored.
+    pub fn clear_wrap_at(&mut self, line: GridLine) {
+        if let Some(index) = self.ring_index(line) {
+            self.rows[index].wrap_at = None;
+        }
     }
 
     /// The active-grid line the row `id` now sits at; `None` once it has
@@ -353,7 +365,8 @@ impl Grid {
     /// whether the dimensions changed.
     ///
     /// A shrink drops rows from the bottom. Rows that should reach
-    /// history must be scrolled off the top before this call.
+    /// history must be scrolled off the top before this call. A width
+    /// change ends every row's logical line.
     ///
     /// # Invariants
     ///
@@ -382,7 +395,75 @@ impl Grid {
         self.rows.push_back(GridRow {
             id,
             cells: Row::filled(self.size.cols, Cell::default()),
+            wrap_at: None,
         });
+    }
+
+    /// Moves the region's rows up by one, handing the departing row to
+    /// history or discarding it, without ending any logical line.
+    fn rotate_up(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
+        let base = self.history_len();
+        let id = self.mint();
+        if top > ScreenLine(0) {
+            let Some(mut recycled) = self.rows.remove(base + usize::from(top.0)) else {
+                return;
+            };
+            recycled.id = id;
+            recycled.cells.fill(fill);
+            self.rows.insert(base + usize::from(bottom.0), recycled);
+            return;
+        }
+        let grows_history = base < self.max_history;
+        let departing = self.rows[base].id;
+        let entering = if grows_history {
+            GridRow {
+                id,
+                cells: Row::filled(self.size.cols, fill),
+                wrap_at: None,
+            }
+        } else {
+            let Some(mut recycled) = self.rows.pop_front() else {
+                return;
+            };
+            if self.max_history > 0 {
+                self.history_index.pop_oldest(recycled.id);
+            }
+            recycled.id = id;
+            recycled.cells.fill(fill);
+            recycled
+        };
+        if self.max_history > 0 {
+            self.history_index.enter(departing);
+        }
+        // NOTE: Seating the entering row just past the bottom margin is
+        // what hands the departing row to history: the ring grows by one,
+        // so the window of visible rows slides off it while the rows
+        // below the margin keep their distance from the new end.
+        let below_bottom = if grows_history {
+            base + usize::from(bottom.0) + 1
+        } else {
+            base + usize::from(bottom.0)
+        };
+        self.rows.insert(below_bottom, entering);
+    }
+
+    /// Ends the logical line of the visible row `line`.
+    fn end_visible_line(&mut self, line: u16) {
+        let index = self.visible_index(line);
+        if let Some(row) = self.rows.get_mut(index) {
+            row.wrap_at = None;
+        }
+    }
+
+    /// Ends the logical line of the row directly above the visible row
+    /// `line`, which is the newest history row when `line` is the top.
+    fn end_line_above(&mut self, line: ScreenLine) {
+        let Some(index) = self.visible_index(line.0).checked_sub(1) else {
+            return;
+        };
+        if let Some(row) = self.rows.get_mut(index) {
+            row.wrap_at = None;
+        }
     }
 
     fn resize_rows(&mut self, rows: u16) {
@@ -414,6 +495,7 @@ impl Grid {
             // NOTE: A resize can only break one joint per row, so repair
             // that index instead of sweeping the whole row.
             row.cells.repair_after_resize(old_cols);
+            row.wrap_at = None;
         }
         self.size.cols = cols;
     }
@@ -1416,6 +1498,179 @@ mod tests {
             step(&mut grid);
             scroll_up_whole_screen(&mut grid, Cell::default());
             step(&mut grid);
+        }
+    }
+
+    mod wrap_at {
+        use super::*;
+
+        fn wrap(grid: &mut Grid, line: u16, cells: u16) {
+            grid.set_wrap_at(GridLine::from(ScreenLine(line)), cells);
+        }
+
+        fn wrap_of(grid: &Grid, line: i32) -> Option<u16> {
+            grid.wrap_at(GridLine(line))
+        }
+
+        /// Asserts that a recorded wrap reads back and a row nobody
+        /// wrapped reads as ending its line.
+        ///
+        /// Case: autowrap carries a long command from the first row of a
+        /// fresh terminal onto the second.
+        #[test]
+        fn a_recorded_wrap_reads_back() {
+            let mut grid = grid(3, 10);
+            wrap(&mut grid, 0, 4);
+            assert_eq!(wrap_of(&grid, 0), Some(4));
+            assert_eq!(wrap_of(&grid, 1), None);
+        }
+
+        /// Asserts that a line outside the ring reads as unwrapped and a
+        /// write there is ignored.
+        ///
+        /// Case: a caller names a row the scrollback has already trimmed.
+        #[test]
+        fn a_line_outside_the_ring_reads_as_unwrapped() {
+            let mut grid = grid(3, 10);
+            grid.set_wrap_at(GridLine(-1), 4);
+            assert_eq!(wrap_of(&grid, -1), None);
+            assert_eq!(wrap_of(&grid, 3), None);
+        }
+
+        /// Asserts that a wrap travels with its row into history.
+        ///
+        /// Case: a wrapped command scrolls off the top of the screen.
+        #[test]
+        fn a_wrap_follows_its_row_into_history() {
+            let mut grid = grid(3, 10);
+            wrap(&mut grid, 0, 4);
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            assert_eq!(wrap_of(&grid, -1), Some(4));
+        }
+
+        /// Asserts that a fill reaching the last column ends the row's
+        /// line, while one short of it keeps the wrap.
+        ///
+        /// Case: a line editor erases to the end of one wrapped row and
+        /// only the start of another.
+        #[test]
+        fn a_fill_reaching_the_last_column_ends_the_line() {
+            let mut grid = grid(3, 10);
+            wrap(&mut grid, 0, 4);
+            wrap(&mut grid, 1, 4);
+            grid.fill_visible_row_range(ScreenLine(0), 2..4, Cell::default());
+            grid.fill_visible_row_range(ScreenLine(1), 0..2, Cell::default());
+            assert_eq!(wrap_of(&grid, 0), None);
+            assert_eq!(wrap_of(&grid, 1), Some(4));
+        }
+
+        /// Asserts that a whole-row fill also ends the line of the row
+        /// above it, reaching into history from the top row.
+        ///
+        /// Case: `clear` erases the screen right after a wrapped line
+        /// scrolled half into history.
+        #[test]
+        fn a_whole_row_fill_ends_the_line_of_the_row_above() {
+            let mut grid = grid(3, 10);
+            wrap(&mut grid, 0, 4);
+            wrap(&mut grid, 1, 4);
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            assert_eq!(wrap_of(&grid, -1), Some(4));
+            grid.fill_visible_row_range(ScreenLine(0), 0..4, Cell::default());
+            assert_eq!(wrap_of(&grid, -1), None);
+            assert_eq!(wrap_of(&grid, 0), None);
+        }
+
+        /// Asserts that a scroll ends the lines of the entering row and of
+        /// the row that now sits just above it.
+        ///
+        /// Case: a line feed at the bottom margin pushes a wrapped last
+        /// row up next to a fresh blank row.
+        #[test]
+        fn a_scroll_up_ends_the_line_above_the_entering_row() {
+            let mut grid = grid(3, 10);
+            wrap(&mut grid, 2, 4);
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            assert_eq!(wrap_of(&grid, 1), None);
+            assert_eq!(wrap_of(&grid, 2), None);
+        }
+
+        /// Asserts that a region scroll below the top ends the line of the
+        /// row above the region.
+        ///
+        /// Case: a pager scrolls a region under a status line whose row was
+        /// wrapped into the region.
+        #[test]
+        fn a_region_scroll_up_ends_the_line_above_the_region() {
+            let mut grid = grid(4, 10);
+            wrap(&mut grid, 0, 4);
+            grid.scroll_up_one(ScreenLine(1), ScreenLine(3), Cell::default());
+            assert_eq!(wrap_of(&grid, 0), None);
+        }
+
+        /// Asserts that a reverse scroll ends the line of the row pushed
+        /// down to the bottom margin and keeps the rows that stay adjacent.
+        ///
+        /// Case: a full-screen editor scrolls backwards over two wrapped
+        /// rows.
+        #[test]
+        fn a_scroll_down_ends_the_lines_whose_next_row_changed() {
+            let mut grid = grid(3, 10);
+            wrap(&mut grid, 0, 4);
+            wrap(&mut grid, 1, 4);
+            grid.scroll_down_one(ScreenLine(0), ScreenLine(2), Cell::default());
+            assert_eq!(wrap_of(&grid, 0), None);
+            assert_eq!(wrap_of(&grid, 1), Some(4));
+            assert_eq!(wrap_of(&grid, 2), None);
+        }
+
+        /// Asserts that a reverse scroll at the top ends the line of the
+        /// newest history row.
+        ///
+        /// Case: a line wrapped from history onto the screen, and a program
+        /// then scrolls the screen backwards.
+        #[test]
+        fn a_scroll_down_at_the_top_ends_the_newest_history_line() {
+            let mut grid = grid(3, 10);
+            wrap(&mut grid, 0, 4);
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            grid.scroll_down_one(ScreenLine(0), ScreenLine(2), Cell::default());
+            assert_eq!(wrap_of(&grid, -1), None);
+        }
+
+        /// Asserts that a truncating resize that changes the width ends
+        /// every line, history included, and a height-only one keeps them.
+        ///
+        /// Case: the alternate screen is resized under a full-screen
+        /// program that left wrapped rows behind.
+        #[test]
+        fn a_truncating_width_change_ends_every_line() {
+            let mut grid = grid(3, 10);
+            wrap(&mut grid, 0, 4);
+            assert!(grid.resize(GridSize { cols: 4, rows: 4 }));
+            assert_eq!(wrap_of(&grid, 0), Some(4));
+            wrap(&mut grid, 1, 4);
+            scroll_up_whole_screen(&mut grid, Cell::default());
+            assert_eq!(wrap_of(&grid, -1), Some(4));
+            assert!(grid.resize(GridSize { cols: 2, rows: 4 }));
+            assert_eq!(wrap_of(&grid, -1), None);
+            assert_eq!(wrap_of(&grid, 0), None);
+        }
+
+        /// Asserts that a scroll given a fill of another width stores a
+        /// narrow blank instead of rejecting it.
+        ///
+        /// Case: a caller passes a filler cell as the fill of a region
+        /// scroll.
+        #[test]
+        fn a_scroll_stores_a_non_narrow_fill_as_narrow() {
+            let mut grid = grid(3, 10);
+            let fill = Cell {
+                width: CellWidth::LeadingSpacer,
+                ..Cell::default()
+            };
+            scroll_up_whole_screen(&mut grid, fill);
+            assert_eq!(grid[ScreenLine(2)][0].width, CellWidth::Narrow);
         }
     }
 }
