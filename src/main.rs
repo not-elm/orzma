@@ -11,6 +11,7 @@ mod session;
 mod surface;
 mod system_set;
 mod ui;
+mod window_icon;
 mod window_title;
 
 use crate::action::ActionPlugin;
@@ -18,6 +19,7 @@ use crate::cef_profile::CefProfileDir;
 use crate::redraw::{AppWakers, RedrawPlugin};
 use crate::surface::SurfacePlugin;
 use crate::system_set::OrzmaSystems;
+use crate::window_icon::WindowIconPlugin;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 use bevy::render::RenderPlugin;
@@ -94,6 +96,7 @@ fn main() {
         .add_plugins((
             OrzmaWebviewPlugin::new(orzma_registry, wakers.input().clone()),
             WindowTitlePlugin,
+            WindowIconPlugin,
             RedrawPlugin::new(wakers),
         ))
         .insert_resource(OrzmuxConnection(orzmux))
