@@ -1355,6 +1355,20 @@ impl Screen {
         &self.grid
     }
 
+    /// The cursor's and then the saved cursor's row, column, and whether
+    /// each has its deferred wrap armed.
+    #[cfg(test)]
+    pub fn cursors(&self) -> [(ScreenLine, GridColumn, bool); 2] {
+        [
+            (self.state.line, self.state.column, self.state.pending_wrap),
+            (
+                self.checkpoint.line,
+                self.checkpoint.column,
+                self.checkpoint.pending_wrap,
+            ),
+        ]
+    }
+
     /// Moves `range`'s start off a continuation column onto the wide
     /// body to its left, and its end off a wide body onto the
     /// continuation column to its right.

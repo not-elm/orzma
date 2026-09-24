@@ -1294,6 +1294,9 @@ mod tests {
     use super::*;
     use crate::device::color::Color;
     use crate::screen::cell::{BodyWidth, GlyphClass};
+    use proptest::prelude::*;
+    use proptest::sample::Index;
+    use std::collections::HashSet;
     use std::time::{Duration, Instant};
 
     /// A row `cols` wide holding `text`, a wide glyph taking two columns.
@@ -1898,6 +1901,415 @@ mod tests {
         );
         assert_eq!(cursor, cursor_at(0, 6));
         assert_eq!(points, [Some(cursor_at(2, 1))]);
+    }
+
+    /// One piece of a generated row.
+    #[derive(Debug, Clone)]
+    enum Piece {
+        Letter(char),
+        Wide,
+        Blank,
+        Erased(u8),
+    }
+
+    /// How a generated row's logical line goes on past it.
+    #[derive(Debug, Clone, Copy)]
+    enum GoesOn {
+        No,
+        Full,
+        At(u16),
+    }
+
+    /// A generated run of rows `cols` wide; `broken` names a cell to turn
+    /// into a wide glyph's body, or its continuation when the flag is set,
+    /// which may break a wide pair.
+    #[derive(Debug, Clone)]
+    struct Run {
+        cols: u16,
+        rows: Vec<(Vec<Piece>, GoesOn)>,
+        broken: Option<(Index, Index, bool)>,
+    }
+
+    impl Run {
+        /// The rows, ids counting up from zero, laid out as autowrap would
+        /// lay them: a wide glyph that would start in the last column
+        /// leaves a filler there, and a full row goes on after its filler.
+        fn build(&self) -> Vec<GridRow> {
+            let width = usize::from(self.cols);
+            let wide = Pen::default().stamp('あ', BodyWidth::Wide, None);
+            let mut rows: Vec<GridRow> = (0u64..)
+                .zip(&self.rows)
+                .map(|(id, (pieces, goes_on))| {
+                    let mut cells: Vec<Cell> = Vec::with_capacity(width);
+                    for piece in pieces {
+                        let room = width - cells.len();
+                        match piece {
+                            Piece::Letter(c) if room > 0 => {
+                                cells.push(Pen::default().stamp(*c, BodyWidth::Narrow, None));
+                            }
+                            Piece::Wide if room >= 2 => {
+                                cells.push(wide.clone());
+                                cells.push(wide.continuation());
+                            }
+                            Piece::Wide if room == 1 => cells.push(Pen::default().filler()),
+                            Piece::Blank if room > 0 => cells.push(Cell::default()),
+                            Piece::Erased(color) if room > 0 => cells.push(
+                                Pen {
+                                    bg: Color::Indexed(*color),
+                                    ..Pen::default()
+                                }
+                                .erase_cell(),
+                            ),
+                            _ => {}
+                        }
+                    }
+                    cells.resize(width, Cell::default());
+                    let filled_out = cells
+                        .last()
+                        .is_some_and(|cell| cell.width == CellWidth::LeadingSpacer);
+                    let wrap_at = match goes_on {
+                        GoesOn::No => None,
+                        GoesOn::Full if filled_out => Some(self.cols - 1),
+                        GoesOn::Full => Some(self.cols),
+                        GoesOn::At(count) => Some((*count).min(self.cols)),
+                    };
+                    GridRow {
+                        id: LineId(id),
+                        cells: Row::from(cells),
+                        wrap_at,
+                    }
+                })
+                .collect();
+            if let Some((row, column, continuation)) = &self.broken {
+                let index = row.index(rows.len());
+                let column = u16::try_from(column.index(width)).expect("a narrow row");
+                rows[index].cells[column] = if *continuation {
+                    wide.continuation()
+                } else {
+                    wide.clone()
+                };
+            }
+            rows
+        }
+    }
+
+    fn piece() -> impl Strategy<Value = Piece> {
+        prop_oneof![
+            8 => prop::char::range('a', 'z').prop_map(Piece::Letter),
+            3 => Just(Piece::Wide),
+            3 => Just(Piece::Blank),
+            1 => (1u8..4).prop_map(Piece::Erased),
+        ]
+    }
+
+    fn goes_on() -> impl Strategy<Value = GoesOn> {
+        prop_oneof![
+            3 => Just(GoesOn::No),
+            4 => Just(GoesOn::Full),
+            1 => (0u16..=12).prop_map(GoesOn::At),
+        ]
+    }
+
+    fn run() -> impl Strategy<Value = Run> {
+        (
+            2u16..=10,
+            prop::collection::vec((prop::collection::vec(piece(), 0..=14), goes_on()), 1..=12),
+            prop::option::weighted(0.25, (any::<Index>(), any::<Index>(), any::<bool>())),
+        )
+            .prop_map(|(cols, rows, broken)| Run { cols, rows, broken })
+    }
+
+    /// Positions on random rows of a run, each at a boundary to be clamped
+    /// to the run's width.
+    fn spots() -> impl Strategy<Value = Vec<Option<(Index, u16)>>> {
+        prop::collection::vec(prop::option::of((any::<Index>(), 0u16..=12)), 0..4)
+    }
+
+    /// `spots` as positions inside `run`.
+    fn slice_points(run: &Run, spots: &[Option<(Index, u16)>]) -> Vec<Option<SlicePoint>> {
+        spots
+            .iter()
+            .map(|spot| {
+                spot.map(|(row, boundary)| at(row.index(run.rows.len()), boundary.min(run.cols)))
+            })
+            .collect()
+    }
+
+    /// Each row as its id, its cells, and its recorded wrap.
+    fn laid_out(rows: &[GridRow]) -> Vec<(LineId, Row<Cell>, Option<u16>)> {
+        rows.iter()
+            .map(|row| (row.id, row.cells.clone(), row.wrap_at))
+            .collect()
+    }
+
+    /// Each row as its cells and recorded wrap, and its id when the id is
+    /// one of the first `original` rather than minted.
+    fn with_original_ids(
+        rows: impl Iterator<Item = (LineId, Row<Cell>, Option<u16>)>,
+        original: u64,
+    ) -> Vec<(Option<LineId>, Row<Cell>, Option<u16>)> {
+        rows.map(|(id, cells, wrap_at)| ((id.0 < original).then_some(id), cells, wrap_at))
+            .collect()
+    }
+
+    /// Rewraps `rows` as [`rewrap`] does, but cuts every line cell by cell.
+    fn rewrap_cell_by_cell(
+        mut cursor: Option<&mut SlicePoint>,
+        points: &mut [Option<SlicePoint>],
+        mint: &mut impl FnMut() -> LineId,
+        rows: Vec<GridRow>,
+        old_cols: u16,
+        cols: u16,
+    ) -> Vec<GridRow> {
+        let starts = line_starts(&rows);
+        let mut rewrap = Rewrap::new(old_cols, cols, cursor.as_deref().copied(), points.to_vec());
+        let row_count = rows.len();
+        let mut source = rows.into_iter();
+        let mut out = Vec::new();
+        for (line, &start) in starts.iter().enumerate() {
+            let end = starts.get(line + 1).copied().unwrap_or(row_count);
+            rewrap.line.extend(source.by_ref().take(end - start));
+            let Some(id) = rewrap.line.first().map(|row| row.id) else {
+                continue;
+            };
+            let total = share_out(&mut rewrap.shares, &rewrap.line, start);
+            let ends = rewrap.line.last().is_none_or(|row| row.wrap_at.is_none());
+            let cursor_spot = rewrap
+                .cursor_from
+                .and_then(|point| Spot::on(&rewrap.shares, point, old_cols));
+            rewrap.find_spots();
+            rewrap.gather();
+            let first_special = rewrap.first_special();
+            let text_end = if ends {
+                text_end(
+                    rewrap
+                        .segments
+                        .iter()
+                        .map(Vec::as_slice)
+                        .zip(&rewrap.shares),
+                    total,
+                )
+            } else {
+                total
+            };
+            let keep_end = kept_len(total, ends, text_end, cursor_spot);
+            let fill = rewrap.fill(keep_end, total);
+            rewrap.keep(keep_end);
+            if first_special.is_some_and(|first| first < keep_end) {
+                let _ = rewrap.pair_up();
+            }
+            rewrap.cut_cell_by_cell();
+            let extra = rewrap.place(
+                cursor.as_deref_mut(),
+                points,
+                cursor_spot,
+                keep_end,
+                out.len(),
+            );
+            rewrap.emit(&mut out, mint, id, &fill, ends, extra);
+        }
+        out
+    }
+
+    /// A grid of `size` whose ring holds `rows`, the first `history` of
+    /// them as history, with history capped at `cap`.
+    fn seeded(rows: Vec<GridRow>, size: GridSize, history: usize, cap: usize) -> Grid {
+        let mut grid = Grid::new(size, cap);
+        grid.history_index
+            .rebuild(rows.iter().take(history).map(|row| row.id));
+        grid.next_line_id = u64::try_from(rows.len()).expect("a short run");
+        grid.rows = VecDeque::from(rows);
+        grid
+    }
+
+    /// Every row of the ring, oldest first, as its id, cells, and wrap.
+    fn ring_of(grid: &Grid) -> Vec<(LineId, Row<Cell>, Option<u16>)> {
+        grid.rows
+            .iter()
+            .map(|row| (row.id, row.cells.clone(), row.wrap_at))
+            .collect()
+    }
+
+    /// Checks that no id repeats in `grid`'s ring and that its history
+    /// index names exactly its history rows.
+    fn check_ids(grid: &Grid) -> Result<(), TestCaseError> {
+        let ids: HashSet<LineId> = grid.rows.iter().map(|row| row.id).collect();
+        prop_assert_eq!(ids.len(), grid.rows.len(), "an id repeats in the ring");
+        grid.assert_history_index_matches_ring();
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(512))]
+
+        /// Asserts that cutting lines in bulk makes the rows, ids, wraps,
+        /// cursor, and positions that cutting them cell by cell makes.
+        ///
+        /// Case: a scrollback of wrapped lines mixing ASCII, Japanese
+        /// glyphs, fillers, erase colors, and now and then a broken wide
+        /// pair is rewrapped at another width while the cursor and a
+        /// selection sit on it.
+        #[test]
+        fn bulk_cuts_match_cell_by_cell_cuts(
+            run in run(),
+            cols in 2u16..=12,
+            cursor in prop::option::of((any::<Index>(), 0u16..=12)),
+            spots in spots(),
+        ) {
+            let cursor = slice_points(&run, &[cursor]).pop().flatten();
+            let points = slice_points(&run, &spots);
+            let (mut bulk_cursor, mut bulk_points) = (cursor, points.clone());
+            let bulk = rewrap(
+                bulk_cursor.as_mut(),
+                &mut bulk_points,
+                &mut minter(),
+                run.build(),
+                run.cols,
+                cols,
+            );
+            let (mut slow_cursor, mut slow_points) = (cursor, points);
+            let slow = rewrap_cell_by_cell(
+                slow_cursor.as_mut(),
+                &mut slow_points,
+                &mut minter(),
+                run.build(),
+                run.cols,
+                cols,
+            );
+            prop_assert_eq!(laid_out(&bulk), laid_out(&slow));
+            prop_assert_eq!(bulk_cursor, slow_cursor);
+            prop_assert_eq!(bulk_points, slow_points);
+        }
+
+        /// Asserts that rewrapping only the newest lines drops whole lines,
+        /// makes at least the rows asked for, makes for the lines it keeps
+        /// the rows and positions a full rewrap makes, and loses exactly the
+        /// positions on the lines it drops.
+        ///
+        /// Case: a capped scrollback of wrapped lines is rewrapped at another
+        /// width while a selection spans its oldest and newest lines.
+        #[test]
+        fn rewrapping_the_newest_lines_matches_a_full_rewrap(
+            run in run(),
+            cols in 2u16..=12,
+            needed in 0usize..30,
+            spots in spots(),
+        ) {
+            let points = slice_points(&run, &spots);
+            let mut full_points = points.clone();
+            let full = rewrap(None, &mut full_points, &mut minter(), run.build(), run.cols, cols);
+            let mut newest_points = points;
+            let newest = rewrap_newest(
+                None,
+                &mut newest_points,
+                &mut minter(),
+                run.build(),
+                run.cols,
+                cols,
+                needed,
+            );
+            prop_assert!(newest.len() <= full.len());
+            let dropped = full.len() - newest.len();
+            prop_assert!(newest.len() >= needed.min(full.len()), "made {} of {}", newest.len(), needed);
+            prop_assert!(
+                dropped == 0 || dropped == full.len() || full[dropped - 1].wrap_at.is_none(),
+                "cut a line apart"
+            );
+            let original = u64::try_from(run.rows.len()).expect("a short run");
+            prop_assert_eq!(
+                with_original_ids(laid_out(&newest).into_iter(), original),
+                with_original_ids(laid_out(&full[dropped..]).into_iter(), original)
+            );
+            for (newest_point, full_point) in newest_points.iter().zip(&full_points) {
+                let expected = full_point.and_then(|point| {
+                    point.row.checked_sub(dropped).map(|row| SlicePoint { row, ..point })
+                });
+                prop_assert_eq!(*newest_point, expected);
+            }
+        }
+
+        /// Asserts that a reflow under a small history cap leaves the newest
+        /// history rows, the screen, the cursor, and the positions an
+        /// uncapped reflow leaves, and loses exactly the positions on the
+        /// rows past the cap.
+        ///
+        /// Case: a terminal whose scrollback holds from none to a few rows
+        /// is resized to another width and height under either policy while
+        /// the cursor, the saved cursor, and a selection sit in its rows.
+        #[test]
+        fn a_capped_reflow_keeps_the_newest_rows_an_uncapped_one_makes(
+            run in run(),
+            cap in prop_oneof![
+                Just(0usize), Just(1usize), Just(2usize), Just(3usize), Just(5usize), Just(8usize)
+            ],
+            history in any::<Index>(),
+            to in (2u16..=12, 1u16..=8),
+            keep in any::<bool>(),
+            cursor in (any::<Index>(), 0u16..=12),
+            saved in (any::<Index>(), 0u16..=12),
+            spots in spots(),
+        ) {
+            let policy = if keep { ScrollbackOnGrow::Keep } else { ScrollbackOnGrow::Reclaim };
+            let total = run.rows.len();
+            let history = history.index(cap.min(total - 1) + 1);
+            let visible = u16::try_from(total - history).expect("a short run");
+            let size = GridSize { cols: run.cols, rows: visible };
+            let rows = || {
+                let mut rows = run.build();
+                if let Some(bottom) = rows.last_mut() {
+                    bottom.wrap_at = None;
+                }
+                rows
+            };
+            let on_screen = |(row, boundary): (Index, u16)| {
+                cursor_at(
+                    i32::try_from(row.index(usize::from(visible))).expect("a short run"),
+                    boundary.min(run.cols),
+                )
+            };
+            let depth = i32::try_from(history).expect("a short run");
+            let points: Vec<Option<TrackedPoint>> = spots
+                .iter()
+                .map(|spot| {
+                    spot.map(|(row, boundary)| {
+                        cursor_at(
+                            i32::try_from(row.index(total)).expect("a short run") - depth,
+                            boundary.min(run.cols),
+                        )
+                    })
+                })
+                .collect();
+            let to = GridSize { cols: to.0, rows: to.1 };
+            let mut capped = seeded(rows(), size, history, cap);
+            let (mut capped_cursor, mut capped_saved) = (on_screen(cursor), on_screen(saved));
+            let mut capped_points = points.clone();
+            capped.reflow(&mut capped_cursor, &mut capped_saved, &mut capped_points, to, policy);
+            let mut uncapped = seeded(rows(), size, history, usize::MAX);
+            let (mut uncapped_cursor, mut uncapped_saved) = (on_screen(cursor), on_screen(saved));
+            let mut uncapped_points = points;
+            uncapped.reflow(&mut uncapped_cursor, &mut uncapped_saved, &mut uncapped_points, to, policy);
+
+            check_ids(&capped)?;
+            check_ids(&uncapped)?;
+            let kept = capped.history_len();
+            let all = uncapped.history_len();
+            prop_assert_eq!(kept, all.min(cap));
+            let original = u64::try_from(total).expect("a short run");
+            prop_assert_eq!(
+                with_original_ids(ring_of(&capped).into_iter(), original),
+                with_original_ids(ring_of(&uncapped).into_iter().skip(all - kept), original)
+            );
+            prop_assert_eq!(capped_cursor, uncapped_cursor);
+            prop_assert_eq!(capped_saved.line, uncapped_saved.line);
+            if uncapped_saved.line != GridLine(0) {
+                prop_assert_eq!(capped_saved, uncapped_saved);
+            }
+            let oldest_kept = -i32::try_from(kept).expect("a short history");
+            for (capped_point, uncapped_point) in capped_points.iter().zip(&uncapped_points) {
+                let expected = uncapped_point.filter(|point| point.line.0 >= oldest_kept);
+                prop_assert_eq!(*capped_point, expected);
+            }
+        }
     }
 
     /// A grid `cols` wide and fifty rows tall whose ten thousand history
