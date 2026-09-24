@@ -458,6 +458,7 @@ mod tests {
     use crate::device::modes::{CursorBlink, CursorShape};
     use crate::error::{GridSizeError, VtError};
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
+    use crate::screen::cell::Cell;
     use crate::screen::grid::MIN_COLUMNS;
     use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
     use crate::screen::grid::reflow::ScrollbackOnGrow;
@@ -504,6 +505,23 @@ mod tests {
             end: cell(end.0, end.1),
             geometry,
         }
+    }
+
+    /// Every row of the active screen's ring, history first, each with its
+    /// trailing blanks trimmed.
+    fn ring_rows(vt: &OrzmaVt) -> Vec<String> {
+        let grid = vt.device.active_screen().grid();
+        let history = i32::try_from(grid.history_len()).expect("a small history");
+        (-history..i32::from(grid.size().rows))
+            .map(|line| {
+                grid.row(GridLine(line))
+                    .iter()
+                    .flat_map(Cell::chars)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
     }
 
     /// Asserts that a Lines start projects the anchored row from its first
@@ -960,6 +978,26 @@ mod tests {
     fn a_zero_axis_resize_returns_none() {
         let mut vt = vt();
         assert_eq!(vt.resize(GridSize { cols: 0, rows: 3 }), None);
+    }
+
+    /// Asserts that a shrink that drops wrapped rows below the cursor ends
+    /// the line on the new bottom row, so text printed later in the rows a
+    /// growth adds stays a line of its own.
+    ///
+    /// Case: under ConPTY a program saves the cursor, prints a line that
+    /// wraps over the rows below, and restores the cursor; the user drags
+    /// the window shorter and back, the program prints on a lower row, and
+    /// the user then widens the window.
+    #[test]
+    fn a_shrink_below_the_cursor_ends_the_line_on_the_new_bottom_row() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 4 }, 50)
+            .with_scrollback_on_grow(ScrollbackOnGrow::Keep);
+        vt.interpret(b"a\r\n\x1b7bbbbccccdddd\x1b8");
+        let _ = vt.resize(GridSize { cols: 4, rows: 2 });
+        let _ = vt.resize(GridSize { cols: 4, rows: 4 });
+        vt.interpret(b"\x1b[3;1Hxyz");
+        let _ = vt.resize(GridSize { cols: 12, rows: 4 });
+        assert_eq!(ring_rows(&vt), ["a", "bbbbcccc", "xyz", "", ""]);
     }
 
     /// Asserts that a shrink names the placement whose anchor row it

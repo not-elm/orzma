@@ -491,6 +491,9 @@ impl Grid {
         if rows < old {
             let dropped = usize::from(old - rows);
             self.rows.truncate(self.rows.len() - dropped);
+            if let Some(last) = self.rows.back_mut() {
+                last.wrap_at = None;
+            }
         } else if old < rows {
             let growth = usize::from(rows - old);
             let history = self.history_len();
@@ -1663,6 +1666,24 @@ mod tests {
             assert!(grid.resize(GridSize { cols: 2, rows: 4 }));
             assert_eq!(wrap_of(&grid, -1), None);
             assert_eq!(wrap_of(&grid, 0), None);
+        }
+
+        /// Asserts that a shrink ends the line of the row it leaves at the
+        /// bottom, so the rows a later growth adds do not join that line.
+        ///
+        /// Case: a full-screen program left a line wrapped over the bottom
+        /// rows of the alternate screen, and the user drags the window
+        /// shorter and then taller again.
+        #[test]
+        fn a_shrink_ends_the_line_of_the_new_bottom_row() {
+            let mut grid = grid(4, 10);
+            wrap(&mut grid, 0, 4);
+            wrap(&mut grid, 1, 4);
+            assert!(grid.resize(GridSize { cols: 4, rows: 2 }));
+            assert_eq!(wrap_of(&grid, 0), Some(4));
+            assert_eq!(wrap_of(&grid, 1), None);
+            assert!(grid.resize(GridSize { cols: 4, rows: 4 }));
+            assert_eq!(wrap_of(&grid, 1), None);
         }
 
         /// Asserts that a scroll given a fill of another width stores a

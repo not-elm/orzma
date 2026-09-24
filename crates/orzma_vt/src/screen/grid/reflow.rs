@@ -275,6 +275,9 @@ impl Grid {
             }
         }
         screen.truncate(new_rows);
+        if let Some(last) = screen.last_mut() {
+            last.wrap_at = None;
+        }
         for _ in 0..padded {
             let id = self.mint();
             screen.push(GridRow {
