@@ -89,3 +89,47 @@ fn trailing_blanks_are_trimmed_after_marks() {
     screen.extend_selection(point(0, 3), CellSide::Right);
     assert_eq!(screen.selection_text().as_deref(), Some("e\u{0301}"));
 }
+
+/// Asserts that a selection across a soft wrap copies the line without a
+/// newline at the wrap.
+///
+/// Case: the user copies a long command that autowrap carried onto a
+/// second row.
+#[test]
+fn copying_across_a_soft_wrap_joins_the_rows() {
+    let mut screen = screen();
+    print_text(&mut screen, "abcdef");
+    screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
+    screen.extend_selection(point(1, 1), CellSide::Right);
+    assert_eq!(screen.selection_text().as_deref(), Some("abcdef"));
+}
+
+/// Asserts that blanks at the end of a wrapped row are kept, since the
+/// line continues after them.
+///
+/// Case: the user copies `ab  cd`, where the wrap fell between the two
+/// spaces and the next word.
+#[test]
+fn copying_across_a_soft_wrap_keeps_the_blanks_before_it() {
+    let mut screen = screen();
+    print_text(&mut screen, "ab  cd");
+    screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
+    screen.extend_selection(point(1, 1), CellSide::Right);
+    assert_eq!(screen.selection_text().as_deref(), Some("ab  cd"));
+}
+
+/// Asserts that a wrapped row's cells past its recorded length are left
+/// out of the copy.
+///
+/// Case: the user copies a line whose first row a resize padded out past
+/// the text that continues.
+#[test]
+fn copying_leaves_out_the_cells_past_the_recorded_wrap() {
+    let mut screen = screen();
+    seed_row(&mut screen, ScreenLine(0), &['a', 'b', 'x', 'x']);
+    seed_row(&mut screen, ScreenLine(1), &['c', 'd']);
+    screen.grid.set_wrap_at(GridLine(0), 2);
+    screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
+    screen.extend_selection(point(1, 1), CellSide::Right);
+    assert_eq!(screen.selection_text().as_deref(), Some("abcd"));
+}

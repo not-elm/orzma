@@ -1729,27 +1729,36 @@ impl Screen {
     /// The text the active selection covers, row by row; `None` exactly
     /// when [`Self::selection_range`] is `None`.
     ///
-    /// Each row's span comes from [`SelectionRange::span_on`], with
-    /// trailing blanks trimmed. Rows are joined by `\n` with none after
-    /// the last. A continuation column and a wrap filler contribute nothing.
-    /// A cell's combining marks follow its glyph.
-    // TODO: Join soft-wrapped rows without a newline once `Row` records
-    // the wrap.
+    /// Each row's span comes from [`SelectionRange::span_on`]. Rows are
+    /// joined by `\n` with none after the last, except that a row whose
+    /// logical line continues on the next row joins it directly and keeps
+    /// its trailing blanks; its cells past the recorded wrap contribute
+    /// nothing. Other rows have trailing blanks trimmed. A continuation
+    /// column and a wrap filler contribute nothing, and a cell's combining
+    /// marks follow its glyph.
     pub fn selection_text(&self) -> Option<String> {
         let range = self.selection_range()?;
         let last_column = self.grid.size().cols - 1;
         let mut text = String::new();
+        let mut joined = true;
         for line in range.start.line.0..=range.end.line.0 {
             let (first, last) = range.span_on(line, last_column);
-            let row = self.grid.row(GridLine(line));
+            let grid_line = GridLine(line);
+            let wrap = self.grid.wrap_at(grid_line);
+            let row = self.grid.row(grid_line);
             let row_text: String = (first..=last)
+                .filter(|column| wrap.is_none_or(|cells| *column < cells))
                 .map(|column| &row[GridColumn(column)])
                 .flat_map(Cell::chars)
                 .collect();
-            if line != range.start.line.0 {
+            if !joined {
                 text.push('\n');
             }
-            text.push_str(row_text.trim_end());
+            match wrap {
+                Some(_) => text.push_str(&row_text),
+                None => text.push_str(row_text.trim_end()),
+            }
+            joined = wrap.is_some();
         }
         Some(text)
     }
