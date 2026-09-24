@@ -1349,12 +1349,6 @@ impl Screen {
         self.state.column
     }
 
-    /// The grid this screen draws on.
-    #[cfg(test)]
-    pub(crate) fn grid(&self) -> &Grid {
-        &self.grid
-    }
-
     /// The cursor's and then the saved cursor's row, column, and whether
     /// each has its deferred wrap armed.
     #[cfg(test)]
@@ -1367,6 +1361,12 @@ impl Screen {
                 self.checkpoint.pending_wrap,
             ),
         ]
+    }
+
+    /// The grid this screen draws on.
+    #[cfg(test)]
+    pub(crate) fn grid(&self) -> &Grid {
+        &self.grid
     }
 
     /// Moves `range`'s start off a continuation column onto the wide
