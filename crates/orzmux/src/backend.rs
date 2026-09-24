@@ -7,13 +7,13 @@ use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::ChunkDepth;
 use crate::error::{OrzmuxError, OrzmuxResult};
 use orzma_tty::prelude::{
-    MouseReport, OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PumpItem, Readiness, TerminalKey,
+    OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PointerInput, PumpItem, Readiness, TerminalKey,
     TerminalModifiers, TtySignal, WheelConfig, WheelInput,
 };
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{
-    CellSide, Frame, GridColumn, GridPoint, GridSize, InstanceId, OrzmaVt, PlacementSize,
-    ScreenLine, Scroll, SelectionKind, Vt, VtSignal,
+    Frame, GridColumn, GridSize, InstanceId, OrzmaVt, PlacementSize, ScreenLine, Scroll, Vt,
+    VtSignal,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -212,6 +212,12 @@ pub enum OrzmuxEvent {
     SelectionText {
         /// The selection's text, when a selection existed.
         text: Option<String>,
+    },
+    /// A selection drag in a pane finished, and its text is ready for the
+    /// clipboard. The text is never empty.
+    SelectionCopied {
+        /// The selected text.
+        text: String,
     },
     /// A pane closed, whether by shell exit or by `KillPane`.
     PaneClosed {
@@ -431,17 +437,6 @@ impl Backend {
         self.write_pty(id, |tty| tty.send_paste(&text))
     }
 
-    /// Sends a mouse report to `pane`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
-    /// carries `pane`, and [`OrzmuxError::PtyWrite`] when its PTY
-    /// refuses the write.
-    pub fn mouse_input(&mut self, pane: PaneId, report: MouseReport) -> OrzmuxResult {
-        self.write_pty(pane, |tty| tty.send_mouse(report))
-    }
-
     /// Routes a wheel event to `pane` under the backend's wheel policy.
     ///
     /// # Errors
@@ -454,6 +449,22 @@ impl Backend {
         self.write_pty(pane, |tty| tty.send_wheel(input, &wheel))
     }
 
+    /// Routes a pointer event to `pane` by that pane's live VT modes, and
+    /// emits [`OrzmuxEvent::SelectionCopied`] when the event finished a
+    /// selection drag.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`, and [`OrzmuxError::PtyWrite`] when its PTY
+    /// refuses the reports.
+    pub fn pointer(&mut self, pane: PaneId, input: PointerInput) -> OrzmuxResult {
+        if let Some(text) = self.write_pty(pane, |tty| tty.send_pointer(input))? {
+            self.emit(OrzmuxEvent::SelectionCopied { text });
+        }
+        Ok(())
+    }
+
     /// Scrolls `pane`'s viewport.
     ///
     /// # Errors
@@ -462,39 +473,6 @@ impl Backend {
     /// carries `pane`.
     pub fn scroll(&mut self, pane: PaneId, scroll: Scroll) -> OrzmuxResult {
         self.pane_mut(pane)?.tty.scroll(scroll);
-        Ok(())
-    }
-
-    /// Anchors a selection in `pane`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
-    /// carries `pane`.
-    pub fn selection_start(
-        &mut self,
-        pane: PaneId,
-        cell: GridPoint,
-        side: CellSide,
-        kind: SelectionKind,
-    ) -> OrzmuxResult {
-        self.pane_mut(pane)?.tty.start_selection(cell, side, kind);
-        Ok(())
-    }
-
-    /// Extends `pane`'s selection to `cell`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
-    /// carries `pane`.
-    pub fn selection_update(
-        &mut self,
-        pane: PaneId,
-        cell: GridPoint,
-        side: CellSide,
-    ) -> OrzmuxResult {
-        self.pane_mut(pane)?.tty.extend_selection(cell, side);
         Ok(())
     }
 
@@ -830,18 +808,19 @@ impl Backend {
         self.panes.get_mut(&id).ok_or(OrzmuxError::UnresolvedTarget)
     }
 
-    /// Runs `write` against the PTY of the pane `id` names.
+    /// Runs `write` against the PTY of the pane `id` names, returning what
+    /// it returns.
     ///
     /// # Errors
     ///
     /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
     /// carries `id`, and [`OrzmuxError::PtyWrite`] when the PTY refuses
     /// the write.
-    fn write_pty(
+    fn write_pty<T>(
         &mut self,
         id: PaneId,
-        write: impl FnOnce(&mut OrzmaTty<OrzmaVt>) -> OrzmaTtyResult,
-    ) -> OrzmuxResult {
+        write: impl FnOnce(&mut OrzmaTty<OrzmaVt>) -> OrzmaTtyResult<T>,
+    ) -> OrzmuxResult<T> {
         write(&mut self.pane_mut(id)?.tty)
             .map_err(|source| OrzmuxError::PtyWrite { pane: id, source })
     }

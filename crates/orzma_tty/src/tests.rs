@@ -2,10 +2,7 @@
 
 use super::*;
 use crate::error::OrzmaTtyError;
-use crate::input::{
-    CellCoord, MouseButton, MouseReportKind, ProtocolModifiers, WheelConfig, WheelInput,
-    WheelModifiers,
-};
+use crate::input::{CellCoord, ProtocolModifiers, WheelConfig, WheelInput, WheelModifiers};
 use crate::test_support::{CaptureSink, FailingMaster, FailingSink, FakeVt};
 use crossbeam_channel::{Sender, unbounded};
 use std::thread;
@@ -15,6 +12,7 @@ mod coalescer;
 mod focus;
 mod host;
 mod input;
+mod pointer;
 mod pump;
 mod resize;
 mod scroll;

@@ -51,7 +51,9 @@ pub(crate) struct WebviewMouseDisabled;
 
 /// When present on an `OrzmaTerminal` entity, the cursor is over one of its
 /// interactive inline webview rects. The host's mouse dispatchers and
-/// hover-cursor system skip it, while the webview router still acts on it.
+/// hover-cursor system skip it for a new press and for hover, though a
+/// gesture already held in it keeps reaching it, and the webview router
+/// still acts on it.
 #[derive(Component)]
 pub(crate) struct MouseClaimedByWebview;
 

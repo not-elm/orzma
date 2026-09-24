@@ -2,8 +2,8 @@
 //! or at the backend's active pane.
 
 use crate::requests::{
-    copy::CopyPlugin, key_input::KeyInputPlugin, mouse_input::MouseInputPlugin,
-    pane::PaneActionPlugin, paste::PastePlugin, scroll::ScrollPlugin, selection::SelectionPlugin,
+    copy::CopyPlugin, key_input::KeyInputPlugin, pane::PaneActionPlugin, paste::PastePlugin,
+    pointer::PointerPlugin, scroll::ScrollPlugin, selection::SelectionPlugin,
     split_resize::SplitResizePlugin, vi_mode::ViModePlugin, vi_motion::ViMotionPlugin,
     webview_mount::WebviewMountPlugin, webview_remove::WebviewRemovePlugin, wheel::WheelPlugin,
 };
@@ -14,9 +14,9 @@ use orzmux::prelude::{CommandSeq, OrzmuxCommand, PaneId};
 
 mod copy;
 mod key_input;
-mod mouse_input;
 mod pane;
 mod paste;
+mod pointer;
 mod scroll;
 mod selection;
 mod split_resize;
@@ -28,14 +28,13 @@ mod wheel;
 
 pub use copy::RequestTtyCopySelection;
 pub use key_input::{RequestActiveKeyInput, RequestTtyKeyInput};
-pub use mouse_input::RequestTtyMouseInput;
 pub use pane::{PaneAction, RequestPaneAction};
 pub use paste::{RequestActivePaste, RequestTtyPaste};
+pub use pointer::RequestTtyPointer;
 pub use scroll::RequestTtyScroll;
 pub use selection::{
     CellSide, GridPoint, RequestTtySelectionClear, RequestTtySelectionKindChange,
-    RequestTtySelectionStart, RequestTtySelectionStartAtViCursor, RequestTtySelectionUpdate,
-    SelectionKind,
+    RequestTtySelectionStartAtViCursor, SelectionKind,
 };
 pub use split_resize::RequestSplitResize;
 pub use vi_mode::{RequestTtyViMode, ViModeSwitch};
@@ -51,9 +50,9 @@ impl Plugin for OrzmaEventRequestPlugin {
         app.add_plugins((
             CopyPlugin,
             KeyInputPlugin,
-            MouseInputPlugin,
             PaneActionPlugin,
             PastePlugin,
+            PointerPlugin,
             ScrollPlugin,
             SelectionPlugin,
             SplitResizePlugin,
@@ -148,10 +147,10 @@ mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, spawn_pane};
     use orzma_tty::prelude::{
-        CellCoord, KeyText, MouseButton, MouseReport, MouseReportKind, ProtocolModifiers,
+        CellCoord, KeyText, PointerButton, PointerInput, PointerKind, ProtocolModifiers,
         TerminalKey, TerminalModifiers, WheelInput, WheelModifiers,
     };
-    use orzma_vt::prelude::{GridColumn, GridLine, InstanceId, PlacementSize, ScreenLine, Scroll};
+    use orzma_vt::prelude::{GridColumn, InstanceId, PlacementSize, ScreenLine, Scroll};
     use orzmux::prelude::{PaneId, SplitId};
 
     /// Asserts that no request observer runs once the connection is
@@ -165,10 +164,6 @@ mod tests {
         let pane = spawn_pane(&mut app, PaneId(1));
         app.world_mut().remove_resource::<OrzmuxConnection>();
         let key = TerminalKey::Character(KeyText::new("x").unwrap());
-        let cell = GridPoint {
-            line: GridLine(0),
-            column: GridColumn(0),
-        };
         let instance: InstanceId = "3f5a9c02d1e84b7690ab3cde12f45678"
             .parse()
             .expect("valid id");
@@ -189,15 +184,6 @@ mod tests {
         });
         world.trigger(RequestActivePaste { text: "x".into() });
         world.trigger(RequestTtyCopySelection { terminal: pane });
-        world.trigger(RequestTtyMouseInput {
-            terminal: pane,
-            mouse: MouseReport {
-                button: MouseButton::Left,
-                kind: MouseReportKind::Press,
-                cell: CellCoord { col: 1, row: 1 },
-                mods: ProtocolModifiers::default(),
-            },
-        });
         world.trigger(RequestTtyWheel {
             terminal: pane,
             input: WheelInput {
@@ -208,20 +194,20 @@ mod tests {
                 report_mods: ProtocolModifiers::default(),
             },
         });
+        world.trigger(RequestTtyPointer {
+            terminal: pane,
+            input: PointerInput {
+                kind: PointerKind::Press,
+                button: Some(PointerButton::Left),
+                cell: CellCoord { col: 1, row: 1 },
+                side: CellSide::Left,
+                click_count: 1,
+                mods: ProtocolModifiers::default(),
+            },
+        });
         world.trigger(RequestTtyScroll {
             terminal: pane,
             scroll: Scroll::Delta(1),
-        });
-        world.trigger(RequestTtySelectionStart {
-            terminal: pane,
-            cell,
-            side: CellSide::Left,
-            kind: SelectionKind::Simple,
-        });
-        world.trigger(RequestTtySelectionUpdate {
-            terminal: pane,
-            cell,
-            side: CellSide::Right,
         });
         world.trigger(RequestTtySelectionClear { terminal: pane });
         world.trigger(RequestTtyWebviewMount {

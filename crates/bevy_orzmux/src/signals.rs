@@ -119,8 +119,10 @@ pub struct TtyFrameSignal {
     pub frame: Frame,
 }
 
-/// The backend's answer to a `RequestTtyCopySelection`: the selected
-/// text (`None` when the pane was gone or the selection empty).
+/// Selected text for the clipboard: the backend's answer to a
+/// `RequestTtyCopySelection` (`None` when the pane was gone or the
+/// selection empty), or the text of a selection drag the user just
+/// finished (never `None`).
 #[derive(Event, Debug, Clone)]
 pub struct TtySelectionTextSignal {
     pub text: Option<String>,
