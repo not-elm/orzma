@@ -109,8 +109,9 @@ pub trait Vt {
     /// placements are omitted from the emitted lists (hidden, not
     /// evicted). Returning to the primary screen tears the alternate
     /// screen's placements down instead, naming them in that chunk's
-    /// [`VtSignal::WebviewEvicted`], together with the primary-screen
-    /// placements whose anchor rows the deferred reflow dropped. A
+    /// [`VtSignal::WebviewEvicted`]; the primary-screen placements whose
+    /// anchor rows the deferred reflow dropped are named by the chunk's
+    /// closing eviction, like any other placement its bytes strand. A
     /// re-issued `mount` for a live instance updates that placement in
     /// place — the id does not change, and nothing is named by
     /// [`VtSignal::WebviewEvicted`].
@@ -980,6 +981,26 @@ mod tests {
         assert_eq!(reclaim.device.active_screen().grid().history_len(), 0);
     }
 
+    /// Asserts that under `Reclaim` narrowing a cleared screen and widening
+    /// it back leaves the scrollback in history and the prompt on the top
+    /// row.
+    ///
+    /// Case: the user clears the screen, then narrows the window until the
+    /// prompt wraps and widens it back on macOS.
+    #[test]
+    fn a_round_trip_after_a_clear_leaves_scrollback_in_history() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 8, rows: 4 }, 10);
+        vt.interpret(b"1\r\n2\r\n3\r\n4\r\n5\r\n6");
+        vt.interpret(b"\x1b[H\x1b[2JPS> ");
+        let _ = vt.resize(GridSize { cols: 2, rows: 4 });
+        let _ = vt.resize(GridSize { cols: 8, rows: 4 });
+        assert_eq!(ring_rows(&vt), ["1", "2", "PS>", "", "", ""]);
+        assert_eq!(
+            vt.device.active_screen().cursors()[0],
+            (ScreenLine(0), GridColumn(4), false)
+        );
+    }
+
     /// Asserts that a size with a zero axis is ignored.
     ///
     /// Case: a host builds the size from a minimized window's geometry
@@ -1366,6 +1387,30 @@ mod tests {
             out.signals
         );
         assert_eq!(vt.device.active_screen().placement_count(), 0);
+    }
+
+    /// Asserts that a placement the deferred reflow strands and the same
+    /// chunk re-mounts is updated in place rather than evicted and
+    /// re-created.
+    ///
+    /// Case: a webview is mounted on the first row of a terminal without
+    /// scrollback, the user narrows the window inside a full-screen editor,
+    /// and the program re-mounts the webview in the same write that quits
+    /// the editor.
+    #[test]
+    fn a_placement_the_deferred_reflow_strands_and_the_chunk_remounts_stays() {
+        let id = InstanceId(7);
+        let size = PlacementSize { rows: 1, cols: 1 };
+        let mut vt = OrzmaVt::new(GridSize { cols: 8, rows: 2 }, 0);
+        vt.interpret(b"abcdefgh");
+        assert!(vt.mount_placement_at(ScreenLine(0), GridColumn(1), size, id));
+        vt.interpret(b"\x1b[?1049h");
+        let _ = vt.resize(GridSize { cols: 2, rows: 2 });
+        let out = vt.interpret(format!("\x1b[?1049l\x1b_Omount;n={id},r=1,c=1\x1b\\").as_bytes());
+        assert_eq!(
+            out.signals,
+            vec![VtSignal::WebviewMount { instance: id, size }]
+        );
     }
 
     /// Asserts that a primary-screen selection is hidden while the alternate

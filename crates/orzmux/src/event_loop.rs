@@ -179,6 +179,26 @@ impl OrzmuxCommand {
             Self::MountPlacement { pane, .. } => ("MountPlacement", Some(PaneTarget::Id(*pane))),
         }
     }
+
+    /// Whether a later command of the same kind can replace this one
+    /// unapplied: a window resize or a divider move.
+    fn is_replaceable(&self) -> bool {
+        matches!(self, Self::Resize { .. } | Self::ResizeSplit { .. })
+    }
+
+    /// Whether this command, arriving right after `earlier`, leaves
+    /// nothing for `earlier` to do: a window resize replaces the resize
+    /// before it, and a divider move the move of the same divider before
+    /// it.
+    fn supersedes(&self, earlier: &Self) -> bool {
+        match (earlier, self) {
+            (Self::Resize { .. }, Self::Resize { .. }) => true,
+            (Self::ResizeSplit { split: moved, .. }, Self::ResizeSplit { split, .. }) => {
+                moved == split
+            }
+            _ => false,
+        }
+    }
 }
 
 /// The multiplexer's thread: owns the GUI channels and drives one
@@ -242,23 +262,27 @@ impl EventLoop {
     }
 
     /// Applies up to `COMMAND_BATCH` queued commands, applying only the
-    /// last of a run of consecutive `Resize` commands. Returns `false`
-    /// when the command channel is disconnected.
+    /// last of a run of consecutive `Resize` commands, and only the last
+    /// of a run of consecutive `ResizeSplit` commands for the same split.
+    /// Returns `false` when the command channel is disconnected.
     pub fn drain_commands(&mut self) -> bool {
         let mut held: Option<(CommandSeq, OrzmuxCommand)> = None;
         let mut connected = true;
         for _ in 0..COMMAND_BATCH {
             match self.commands.try_recv() {
-                Ok((seq, command @ OrzmuxCommand::Resize { .. })) => {
-                    if let Some((superseded, _)) = held.replace((seq, command)) {
-                        self.backend.set_processed(superseded);
-                    }
-                }
                 Ok((seq, command)) => {
                     if let Some((held_seq, held_command)) = held.take() {
-                        self.handle_command(held_seq, held_command);
+                        if command.supersedes(&held_command) {
+                            self.backend.set_processed(held_seq);
+                        } else {
+                            self.handle_command(held_seq, held_command);
+                        }
                     }
-                    self.handle_command(seq, command);
+                    if command.is_replaceable() {
+                        held = Some((seq, command));
+                    } else {
+                        self.handle_command(seq, command);
+                    }
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
@@ -475,7 +499,7 @@ const COMMAND_BATCH: usize = 64;
 mod tests {
     use super::*;
     use crate::backend::queue_sample::ChunkDepth;
-    use crate::backend::{CloseReason, OrzmuxEvent, SplitOrientation};
+    use crate::backend::{CloseReason, Layout, OrzmuxEvent, SplitOrientation};
     use crate::test_support::{FactoryLog, FakeFactory, FakePane, Harness};
     use crossbeam_channel::{RecvTimeoutError, bounded, unbounded};
     use orzma_tty::prelude::{
@@ -830,6 +854,44 @@ mod tests {
                 .cols,
             50
         );
+    }
+
+    /// Asserts that back-to-back moves of one divider apply only the last.
+    ///
+    /// Case: the user drags a divider between two panes, so the GUI queues
+    /// several positions before the loop wakes.
+    #[test]
+    fn back_to_back_divider_moves_apply_only_the_last() {
+        let mut h = Harness::new();
+        let (_root, _pane) = h.open_root();
+        h.send(OrzmuxCommand::NewPane {
+            request: RequestId(2),
+            at: NewPaneAt::Split {
+                pane: PaneTarget::Active,
+                orientation: SplitOrientation::Vertical,
+            },
+            cwd: None,
+            env: vec![],
+        });
+        let mut opened = h.drain();
+        let Some(OrzmuxEvent::Layout { layout, .. }) = opened.pop_back() else {
+            panic!("expected a Layout after the split");
+        };
+        let split = layout.separators[0].split;
+        for position in [50, 55, 60] {
+            h.queue(OrzmuxCommand::ResizeSplit { split, position });
+        }
+        h.event_loop_mut().drain_commands();
+        let layouts: Vec<Layout> = h
+            .drain()
+            .into_iter()
+            .filter_map(|event| match event {
+                OrzmuxEvent::Layout { layout, .. } => Some(layout),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(layouts.len(), 1);
+        assert_eq!(layouts[0].separators[0].x, 60);
     }
 
     /// Asserts that a pane whose coalescer deadline passed is pumped by

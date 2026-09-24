@@ -269,7 +269,8 @@ impl Screen {
     /// deferred wrap.
     ///
     /// A wrap records, on the row it leaves, how many of that row's cells
-    /// continue on the next one.
+    /// continue on the next one; a filler in the row's last column is not
+    /// among them.
     ///
     /// # Errors
     ///
@@ -289,7 +290,9 @@ impl Screen {
         let wrapping = auto_wrap.wraps();
         let mut scrolled = false;
         if self.state.pending_wrap && wrapping {
-            scrolled = self.wrap_recording(cols);
+            let ends_in_filler =
+                self.grid[self.state.line][cols - 1].width == CellWidth::LeadingSpacer;
+            scrolled = self.wrap_recording(if ends_in_filler { cols - 1 } else { cols });
         }
         let first_line = self.state.line;
         if !self.fits(columns) {
@@ -1579,17 +1582,22 @@ impl Screen {
     /// and carrying every position that points into them to the same
     /// text; `None` when the dimensions already matched.
     ///
-    /// Rows a resize frees at the bottom come back from history under
-    /// [`ScrollbackOnGrow::Reclaim`] and stay blank under
-    /// [`ScrollbackOnGrow::Keep`]. The cursor, the saved cursor, the
-    /// selection's ends, the placement anchors, and a scrolled-back
-    /// viewport follow the text they stood on; an armed deferred wrap
-    /// survives when the cursor lands on a row's right edge. The cursor
-    /// and the saved cursor stay on the screen. A selection with an end
-    /// on a dropped row is cleared, a placement whose anchor row is
-    /// dropped stops resolving so the next [`Self::evict_lost_anchors`]
-    /// names it, and a viewport whose top row is dropped moves to the
-    /// oldest history row.
+    /// Under [`ScrollbackOnGrow::Reclaim`], the rows a height growth adds
+    /// come back from history, and so do the rows a rewrap frees while the
+    /// text or the cursor reached the bottom row; under
+    /// [`ScrollbackOnGrow::Keep`] they stay blank. The cursor, the saved
+    /// cursor, the selection's ends, the placement anchors, and a
+    /// scrolled-back viewport follow the text they stood on; an armed
+    /// deferred wrap survives when the cursor lands on a row's right edge,
+    /// and a change of height alone leaves the cursor's deferred wrap as it
+    /// was. A whole-line selection keeps the whole rows it covered, and a
+    /// selection end on the right edge of a row that ends its logical line
+    /// stays on the right edge of that line's last row. The cursor and the
+    /// saved cursor stay on the screen. A selection with an end on a
+    /// dropped row is cleared, a placement whose anchor row is dropped
+    /// stops resolving so the next [`Self::evict_lost_anchors`] names it,
+    /// and a viewport whose top row is dropped moves to the oldest history
+    /// row.
     ///
     /// # Invariants
     ///
@@ -1618,13 +1626,22 @@ impl Screen {
         let anchors = self.webview_placements.anchors();
         let viewport = self.viewport.offset.0;
         let mut points: Vec<Option<TrackedPoint>> = Vec::new();
+        let mut on_line_end_edge = [false; 2];
         if let Some((anchor, moving)) = selection {
-            for end in [anchor, moving] {
-                points.push(
-                    self.grid
-                        .grid_line(end.line)
-                        .map(|line| TrackedPoint::new(line, end.boundary)),
-                );
+            let lines = [anchor, moving].map(|end| self.grid.grid_line(end.line));
+            let boundaries = match self.selection.kind() {
+                Some(SelectionKind::Lines) if lines[0].map(|l| l.0) <= lines[1].map(|l| l.0) => {
+                    [0, old.cols]
+                }
+                Some(SelectionKind::Lines) => [old.cols, 0],
+                _ => [anchor.boundary, moving.boundary],
+            };
+            for ((line, boundary), edge) in
+                lines.into_iter().zip(boundaries).zip(&mut on_line_end_edge)
+            {
+                *edge = boundary >= old.cols
+                    && line.is_some_and(|line| self.grid.wrap_at(line).is_none());
+                points.push(line.map(|line| TrackedPoint::new(line, boundary)));
             }
         }
         for (line, column) in &anchors {
@@ -1641,16 +1658,28 @@ impl Screen {
                     .map(|offset| TrackedPoint::new(GridLine(-offset), 0)),
             );
         }
+        let armed = self.state.pending_wrap;
         self.grid
             .reflow(&mut cursor, &mut saved, &mut points, size, policy);
         self.seat_reflowed(cursor, saved, size);
+        if old.cols == size.cols {
+            self.state.pending_wrap = armed;
+        }
         let mut moved = points.into_iter();
         if selection.is_some() {
-            let ends = [moved.next().flatten(), moved.next().flatten()].map(|point| {
+            let ends = [
+                (moved.next().flatten(), on_line_end_edge[0]),
+                (moved.next().flatten(), on_line_end_edge[1]),
+            ]
+            .map(|(point, edge)| {
                 point.and_then(|point| {
                     self.grid.line_id_at(point.line()).map(|line| SelectionEnd {
                         line,
-                        boundary: point.boundary().min(size.cols),
+                        boundary: if edge {
+                            size.cols
+                        } else {
+                            point.boundary().min(size.cols)
+                        },
                     })
                 })
             });
@@ -1888,35 +1917,34 @@ impl Screen {
     ///
     /// Each row's span comes from [`SelectionRange::span_on`]. Rows are
     /// joined by `\n` with none after the last, except that a row whose
-    /// logical line continues on the next row joins it directly and keeps
-    /// its trailing blanks; its cells past the recorded wrap contribute
-    /// nothing. Other rows have trailing blanks trimmed. A continuation
-    /// column and a wrap filler contribute nothing, and a cell's combining
-    /// marks follow its glyph.
+    /// logical line continues on the next row joins it directly; its cells
+    /// past the recorded wrap contribute nothing. Trailing blanks are
+    /// trimmed where a logical line ends and at the end of the selection,
+    /// never at a soft wrap. A continuation column and a wrap filler
+    /// contribute nothing, and a cell's combining marks follow its glyph.
     pub fn selection_text(&self) -> Option<String> {
         let range = self.selection_range()?;
         let last_column = self.grid.size().cols - 1;
         let mut text = String::new();
-        let mut joined = true;
+        let mut logical_line = String::new();
         for line in range.start.line.0..=range.end.line.0 {
             let (first, last) = range.span_on(line, last_column);
             let grid_line = GridLine(line);
             let wrap = self.grid.wrap_at(grid_line);
             let row = self.grid.row(grid_line);
-            let row_text: String = (first..=last)
-                .filter(|column| wrap.is_none_or(|cells| *column < cells))
-                .map(|column| &row[GridColumn(column)])
-                .flat_map(Cell::chars)
-                .collect();
-            if !joined {
+            logical_line.extend(
+                (first..=last)
+                    .filter(|column| wrap.is_none_or(|cells| *column < cells))
+                    .map(|column| &row[GridColumn(column)])
+                    .flat_map(Cell::chars),
+            );
+            if wrap.is_none() && line != range.end.line.0 {
+                text.push_str(logical_line.trim_end());
                 text.push('\n');
+                logical_line.clear();
             }
-            match wrap {
-                Some(_) => text.push_str(&row_text),
-                None => text.push_str(row_text.trim_end()),
-            }
-            joined = wrap.is_some();
         }
+        text.push_str(logical_line.trim_end());
         Some(text)
     }
 

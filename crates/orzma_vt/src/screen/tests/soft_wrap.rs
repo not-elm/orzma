@@ -151,3 +151,21 @@ fn a_wrap_that_stays_on_its_row_records_nothing() {
     assert_eq!(wrap_of(&screen, 3), None);
     assert_eq!(wrap_of(&screen, 2), None);
 }
+
+/// Asserts that a deferred wrap resolved on a row that ends in a filler
+/// records a wrap that stops short of the filler.
+///
+/// Case: a program restores a cursor it saved at the right edge onto a row
+/// where Japanese text has since wrapped, then prints.
+#[test]
+fn a_deferred_wrap_over_a_filler_stops_short_of_it() {
+    let mut screen = screen();
+    print_text(&mut screen, "abcd");
+    screen.save_checkpoint();
+    screen.move_cursor_to(Some(1), Some(1));
+    print_text(&mut screen, "xyz\u{3042}");
+    assert_eq!(wrap_of(&screen, 0), Some(3));
+    screen.restore_checkpoint();
+    print_text(&mut screen, "q");
+    assert_eq!(wrap_of(&screen, 0), Some(3));
+}

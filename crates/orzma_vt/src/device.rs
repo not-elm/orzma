@@ -682,8 +682,9 @@ impl DeviceState {
     ///
     /// A flip to the primary screen first reflows it to the alternate
     /// screen's size when a resize arrived while the alternate screen was
-    /// shown, and the placements that reflow strands follow the alternate
-    /// screen's in the result.
+    /// shown. The placements that reflow strands are not named here: their
+    /// anchors stop resolving, and the next [`Self::evict_lost_anchors`]
+    /// names them.
     pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
         self.modes.active_screen = to;
         // NOTE: Dropping this clear lets a link a killed program left open
@@ -695,16 +696,9 @@ impl DeviceState {
             ScreenKind::Alternate => Vec::new(),
             ScreenKind::Primary => {
                 self.screens.alternate.clear_selection();
-                let mut evicted = self.screens.alternate.take_placements();
+                let evicted = self.screens.alternate.take_placements();
                 let size = self.screens.alternate.grid_size();
-                if self
-                    .screens
-                    .primary
-                    .reflow(size, self.scrollback_on_grow)
-                    .is_some()
-                {
-                    evicted.extend(self.screens.primary.evict_lost_anchors());
-                }
+                let _ = self.screens.primary.reflow(size, self.scrollback_on_grow);
                 evicted
             }
         }

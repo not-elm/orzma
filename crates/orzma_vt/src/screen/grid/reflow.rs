@@ -13,8 +13,8 @@ use std::mem;
 /// screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScrollbackOnGrow {
-    /// Rows come back from scrollback, keeping the content anchored to
-    /// the bottom.
+    /// Rows come back from scrollback, keeping content that reached the
+    /// bottom row anchored to it.
     #[default]
     Reclaim,
     /// Scrollback stays put and blank rows fill the bottom.
@@ -39,11 +39,18 @@ impl TrackedPoint {
     }
 
     /// The position a cursor at `line` and `column` stands for; an armed
-    /// deferred wrap puts it on the right edge, `cols`.
+    /// deferred wrap on the last column puts it on the right edge, `cols`.
+    /// A cursor left of the last column stands at its column, armed or
+    /// not.
     pub fn cursor(line: ScreenLine, column: GridColumn, pending_wrap: bool, cols: u16) -> Self {
+        let on_last_column = column.0.saturating_add(1) >= cols;
         Self {
             line: GridLine::from(line),
-            boundary: if pending_wrap { cols } else { column.0 },
+            boundary: if pending_wrap && on_last_column {
+                cols
+            } else {
+                column.0
+            },
         }
     }
 
@@ -67,10 +74,11 @@ impl Grid {
     /// text allows: rows move into history only as far as the cursor, or
     /// the text below it, needs to stay on screen, and the rest past the
     /// bottom are dropped, leaving the bottom row to end its logical line.
-    /// Rows a resize frees at the bottom come back from history under
-    /// [`ScrollbackOnGrow::Reclaim`] and stay blank under
-    /// [`ScrollbackOnGrow::Keep`]. A width change rewraps history as well;
-    /// a height-only change rewraps nothing. Under
+    /// Under [`ScrollbackOnGrow::Reclaim`], the rows a height growth adds
+    /// come back from history, and so do the rows a rewrap frees while the
+    /// text or the cursor reached the bottom row; under
+    /// [`ScrollbackOnGrow::Keep`] they stay blank. A width change rewraps
+    /// history as well; a height-only change rewraps nothing. Under
     /// [`ScrollbackOnGrow::Keep`], history and the screen are rewrapped
     /// apart, so a line split between them joins only once both halves sit
     /// in history. Under [`ScrollbackOnGrow::Reclaim`], the history rows of
@@ -79,10 +87,12 @@ impl Grid {
     /// `size.cols` must be at least two.
     ///
     /// Blank rows below both the cursor and the last row showing text are
-    /// not kept. `cursor` always lands on the screen. `saved` lands on the
-    /// screen too: on row zero when its row moved into history or past
-    /// the cap, and on the last row when its row fell off the bottom. Each
-    /// of `points` on a blank row that is not kept keeps its distance below
+    /// not kept, but the blank rows added at the bottom reuse their cells
+    /// in order, so their colors survive. `cursor` always lands on the
+    /// screen. `saved` lands on the screen too: on row zero when its row
+    /// moved into history or past the cap, and on the last row when its row
+    /// fell off the bottom, in either case short of the right edge. Each of
+    /// `points` on a blank row that is not kept keeps its distance below
     /// the last row that is kept, its boundary clamped to the new width.
     /// Each of `points` becomes `None` when the row it lands on falls past
     /// the history cap or off the bottom of the screen, and may otherwise
@@ -134,7 +144,7 @@ impl Grid {
         while extent + 1 < screen.len() && screen[extent].wrap_at.is_some() {
             extent += 1;
         }
-        screen.truncate(extent + 1);
+        let dropped = screen.split_off((extent + 1).min(screen.len()));
         for slot in carried.iter_mut().flatten() {
             if let Carried::Screen(point) = *slot
                 && point.row > extent
@@ -223,8 +233,13 @@ impl Grid {
         let padded = new_rows.saturating_sub(reflowed.saturating_sub(top));
         let reclaimed = if policy == ScrollbackOnGrow::Reclaim {
             let grown = i64::from(size.rows) - i64::from(old.rows);
-            let saved_rows = i64::try_from(extent + 1).unwrap_or(0)
-                - (i64::try_from(reflowed).unwrap_or(0) - i64::try_from(old_top.row).unwrap_or(0));
+            let saved_rows = if extent + 1 == old_rows {
+                i64::try_from(extent + 1).unwrap_or(0)
+                    - (i64::try_from(reflowed).unwrap_or(0)
+                        - i64::try_from(old_top.row).unwrap_or(0))
+            } else {
+                0
+            };
             usize::try_from(grown + saved_rows).unwrap_or(0).min(padded)
         } else {
             0
@@ -282,11 +297,29 @@ impl Grid {
         if let Some(last) = screen.last_mut() {
             last.wrap_at = None;
         }
+        let mut dropped = dropped.into_iter();
         for _ in 0..padded {
             let id = self.mint();
+            let cells = match dropped.next() {
+                Some(row) => {
+                    let fill = row.cells.last().map_or_else(Cell::default, |last| {
+                        Pen {
+                            fg: last.fg,
+                            bg: last.bg,
+                            style: last.style,
+                        }
+                        .erase_cell()
+                    });
+                    let mut cells = row.cells;
+                    cells.resize(size.cols, fill);
+                    cells.repair_after_resize(old.cols);
+                    cells
+                }
+                None => Row::filled(size.cols, Cell::default()),
+            };
             screen.push(GridRow {
                 id,
-                cells: Row::filled(size.cols, Cell::default()),
+                cells,
                 wrap_at: None,
             });
         }
@@ -351,6 +384,7 @@ impl Grid {
             boundary: cursor_at.boundary,
         };
         let saved_slot = carried.pop().flatten();
+        let last_column = size.cols.saturating_sub(1);
         *saved = match saved_slot {
             Some(Carried::Screen(point)) => TrackedPoint {
                 line: line_of(point.row),
@@ -358,15 +392,15 @@ impl Grid {
             },
             Some(Carried::LostBelow) => TrackedPoint {
                 line: line_of(new_rows.saturating_sub(1)),
-                boundary: fit(saved.boundary),
+                boundary: fit(saved.boundary).min(last_column),
             },
             Some(Carried::History(point)) => TrackedPoint {
                 line: GridLine(0),
-                boundary: point.boundary,
+                boundary: point.boundary.min(last_column),
             },
             _ => TrackedPoint {
                 line: GridLine(0),
-                boundary: fit(saved.boundary),
+                boundary: fit(saved.boundary).min(last_column),
             },
         };
         for (point, slot) in points.iter_mut().zip(carried) {
@@ -1069,8 +1103,8 @@ impl Rewrap {
     /// The gathered cell `offset` cells into the line.
     fn cell_at(&self, offset: usize) -> Option<&Cell> {
         let segment = self.shares[..self.segments.len().min(self.shares.len())]
-            .iter()
-            .rposition(|share| share.start <= offset)?;
+            .partition_point(|share| share.start <= offset)
+            .checked_sub(1)?;
         let start = self.shares.get(segment)?.start;
         self.segments.get(segment)?.get(offset - start)
     }

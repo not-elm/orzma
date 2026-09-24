@@ -189,6 +189,12 @@ impl ScreenSelection {
         self.state.map(|state| (state.anchor, state.moving))
     }
 
+    /// The active selection's granularity; `None` without an active
+    /// selection.
+    pub fn kind(&self) -> Option<SelectionKind> {
+        self.state.map(|state| state.kind)
+    }
+
     /// Moves the active selection's ends to `anchor` and `moving`,
     /// keeping its kind; a no-op without an active selection.
     pub fn relocate(&mut self, anchor: SelectionEnd, moving: SelectionEnd) {

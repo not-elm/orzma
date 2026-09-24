@@ -293,3 +293,117 @@ fn a_saved_cursor_past_the_new_width_does_not_arm_the_deferred_wrap() {
         (ScreenLine(1), GridColumn(3), false)
     );
 }
+
+/// Asserts that a saved cursor seated on the top row because its own row
+/// moved into history does not arm the deferred wrap there.
+///
+/// Case: a program saves the cursor at the right edge of a full row and
+/// prints two more lines, the user narrows the window, and the program
+/// restores the cursor and prints.
+#[test]
+fn a_saved_cursor_moved_off_its_row_does_not_arm_the_deferred_wrap() {
+    let mut screen = sized(4, 3, 10);
+    print_text(&mut screen, "abcd");
+    screen.save_checkpoint();
+    print_text(&mut screen, "\n12\n34");
+    reflow(&mut screen, 2, 3);
+    screen.restore_checkpoint();
+    print_text(&mut screen, "x");
+    assert_eq!(row_text(&screen, 0), "1x");
+    assert_eq!(screen.grid.wrap_at(GridLine(0)), None);
+}
+
+/// Asserts that a whole-line selection keeps every row its line rewraps
+/// into rather than only the row holding the click.
+///
+/// Case: the user triple-clicks a long line of output and narrows the
+/// window before copying it.
+#[test]
+fn a_whole_line_selection_keeps_its_rewrapped_rows() {
+    let mut screen = sized(8, 3, 10);
+    print_text(&mut screen, "abcdefgh\nxy");
+    screen.start_selection(point(0, 5), CellSide::Left, SelectionKind::Lines);
+    reflow(&mut screen, 4, 3);
+    assert_eq!(screen.selection_text().as_deref(), Some("abcdefgh"));
+}
+
+/// Asserts that a selection starting on the right edge of a row that ends
+/// its line still starts on the next line after a widening.
+///
+/// Case: the user starts a drag in the padding right of a full line and
+/// widens the window before copying.
+#[test]
+fn a_selection_starting_past_a_line_end_keeps_its_text() {
+    let mut screen = sized(4, 4, 10);
+    print_text(&mut screen, "abcd\nefgh");
+    screen.start_selection(point(0, 3), CellSide::Right, SelectionKind::Simple);
+    screen.extend_selection(point(1, 1), CellSide::Right);
+    assert_eq!(screen.selection_text().as_deref(), Some("ef"));
+    reflow(&mut screen, 8, 4);
+    assert_eq!(screen.selection_text().as_deref(), Some("ef"));
+}
+
+/// Asserts that the blanks a narrowing keeps before the cursor and splits
+/// across a soft wrap are left out of the copy.
+///
+/// Case: the cursor sits past the end of a short line when the user selects
+/// it together with the line below and narrows the window before copying.
+#[test]
+fn blanks_kept_for_the_cursor_are_left_out_of_the_copy() {
+    let mut screen = sized(8, 4, 10);
+    print_text(&mut screen, "ab\ncd");
+    screen.move_cursor_to(Some(1), Some(6));
+    screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
+    screen.extend_selection(point(1, 1), CellSide::Right);
+    reflow(&mut screen, 4, 4);
+    assert_eq!(screen.selection_text().as_deref(), Some("ab\ncd"));
+}
+
+/// Asserts that a cursor a backward tab left off the last column with the
+/// deferred wrap armed keeps its column, and its armed wrap, across a
+/// height-only reflow.
+///
+/// Case: a program fills a row, tabs backward, and the user drags the
+/// window taller before the program prints again.
+#[test]
+fn a_cursor_armed_off_the_last_column_keeps_its_column() {
+    let mut screen = sized(20, 3, 10);
+    print_text(&mut screen, "abcdefghijklmnopqrst");
+    screen.move_backward_tabs(1);
+    assert_eq!(
+        (screen.state.column, screen.state.pending_wrap),
+        (GridColumn(16), true)
+    );
+    screen.reflow(GridSize { cols: 20, rows: 4 }, ScrollbackOnGrow::Reclaim);
+    assert_eq!(
+        (
+            screen.state.line,
+            screen.state.column,
+            screen.state.pending_wrap
+        ),
+        (ScreenLine(0), GridColumn(16), true)
+    );
+}
+
+/// Asserts that a reflow keeps the background of the blank rows below the
+/// cursor rather than resetting it.
+///
+/// Case: a script paints the whole screen blue with a clear, and the user
+/// drags the window taller.
+#[test]
+fn a_reflow_keeps_the_colors_of_blank_rows_below_the_cursor() {
+    let mut screen = sized(6, 4, 10);
+    screen.pen_mut().bg = Color::Indexed(4);
+    let _ = screen.erase_in_display(EraseScreenMode::All);
+    screen.reflow(GridSize { cols: 6, rows: 5 }, ScrollbackOnGrow::Reclaim);
+    for line in 0..4 {
+        assert!(
+            screen
+                .grid
+                .row(GridLine(line))
+                .iter()
+                .all(|cell| cell.bg == Color::Indexed(4)),
+            "row {line} lost its background"
+        );
+    }
+}
