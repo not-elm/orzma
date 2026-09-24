@@ -372,9 +372,10 @@ impl Grid {
     /// Resizes the grid, truncating rather than reflowing; returns
     /// whether the dimensions changed.
     ///
-    /// A shrink drops rows from the bottom. Rows that should reach
-    /// history must be scrolled off the top before this call. A width
-    /// change ends every row's logical line.
+    /// A shrink drops rows from the bottom and leaves the bottom row ending
+    /// its logical line. Rows that should reach history must be scrolled
+    /// off the top before this call. A width change ends every row's
+    /// logical line.
     ///
     /// # Invariants
     ///

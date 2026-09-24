@@ -66,8 +66,9 @@ impl Grid {
     /// The row holding the old top row's first cell stays on top where the
     /// text allows: rows move into history only as far as the cursor, or
     /// the text below it, needs to stay on screen, and the rest past the
-    /// bottom are dropped. Rows a resize frees at the bottom come back from
-    /// history under [`ScrollbackOnGrow::Reclaim`] and stay blank under
+    /// bottom are dropped, leaving the bottom row to end its logical line.
+    /// Rows a resize frees at the bottom come back from history under
+    /// [`ScrollbackOnGrow::Reclaim`] and stay blank under
     /// [`ScrollbackOnGrow::Keep`]. A width change rewraps history as well;
     /// a height-only change rewraps nothing. Under
     /// [`ScrollbackOnGrow::Keep`], history and the screen are rewrapped
@@ -81,8 +82,11 @@ impl Grid {
     /// not kept. `cursor` always lands on the screen. `saved` lands on the
     /// screen too: on row zero when its row moved into history or past
     /// the cap, and on the last row when its row fell off the bottom. Each
-    /// of `points` becomes `None` when its row is dropped and may
-    /// otherwise land in history.
+    /// of `points` on a blank row that is not kept keeps its distance below
+    /// the last row that is kept, its boundary clamped to the new width.
+    /// Each of `points` becomes `None` when the row it lands on falls past
+    /// the history cap or off the bottom of the screen, and may otherwise
+    /// land in history.
     ///
     /// # Invariants
     ///
