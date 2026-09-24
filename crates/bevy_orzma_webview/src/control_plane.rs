@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use std::task::Waker;
 use url::Url;
 
 mod listener;
@@ -488,12 +489,18 @@ fn surface_token(surface: Entity) -> String {
 /// `orzma` scheme handler.
 pub(crate) struct ControlPlanePlugin {
     orzma_assets: WebviewAssetRegistry,
+    waker: Waker,
 }
 
 impl ControlPlanePlugin {
-    /// Builds the plugin sharing `orzma_assets` with the `orzma` scheme handler.
-    pub(crate) fn new(orzma_assets: WebviewAssetRegistry) -> Self {
-        Self { orzma_assets }
+    /// Builds the plugin sharing `orzma_assets` with the `orzma` scheme
+    /// handler. The listener wakes the app through `waker` after queuing
+    /// each event.
+    pub fn new(orzma_assets: WebviewAssetRegistry, waker: Waker) -> Self {
+        Self {
+            orzma_assets,
+            waker,
+        }
     }
 }
 
@@ -504,7 +511,12 @@ impl Plugin for ControlPlanePlugin {
         match RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), "control") {
             Ok(runtime) => {
                 let sock_path = runtime.sock_dir().join("control.sock");
-                match spawn_listener(&sock_path, tokens.clone(), writers.clone()) {
+                match spawn_listener(
+                    &sock_path,
+                    tokens.clone(),
+                    writers.clone(),
+                    self.waker.clone(),
+                ) {
                     Ok(events) => {
                         app.insert_resource(ControlEvents(events));
                         app.insert_resource(ControlPlaneHandle { sock_path, tokens });
