@@ -386,6 +386,18 @@ impl Grid {
         true
     }
 
+    /// Checks that the history index names exactly the history rows, each
+    /// at its ring index, and no visible row.
+    #[cfg(test)]
+    pub(crate) fn assert_history_index_matches_ring(&self) {
+        let history = self.history_len();
+        assert_eq!(self.history_index.len(), history);
+        for (index, row) in self.rows.iter().enumerate() {
+            let expected = (index < history).then_some(index);
+            assert_eq!(self.history_index.index_of(row.id), expected);
+        }
+    }
+
     /// Appends one blank row at the live tail.
     ///
     /// # Invariants
@@ -526,18 +538,6 @@ impl Grid {
         let index = i64::from(self.history_len() as u32) + i64::from(line.0);
         let index = usize::try_from(index).ok()?;
         (index < self.rows.len()).then_some(index)
-    }
-
-    /// Checks that the history index names exactly the history rows, each
-    /// at its ring index, and no visible row.
-    #[cfg(test)]
-    fn assert_history_index_matches_ring(&self) {
-        let history = self.history_len();
-        assert_eq!(self.history_index.len(), history);
-        for (index, row) in self.rows.iter().enumerate() {
-            let expected = (index < history).then_some(index);
-            assert_eq!(self.history_index.index_of(row.id), expected);
-        }
     }
 }
 
