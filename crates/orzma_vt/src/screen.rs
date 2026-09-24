@@ -1720,14 +1720,13 @@ impl Screen {
     /// carried them to, clamped onto a screen of `size`.
     fn seat_reflowed(&mut self, cursor: TrackedPoint, saved: TrackedPoint, size: GridSize) {
         let last_line = size.rows.saturating_sub(1);
-        let (line, column, pending_wrap) = Self::cursor_at(cursor, size.cols, last_line);
-        self.state.line = line;
-        self.state.column = column;
-        self.state.pending_wrap = pending_wrap;
-        let (line, column, pending_wrap) = Self::cursor_at(saved, size.cols, last_line);
-        self.checkpoint.line = line;
-        self.checkpoint.column = column;
-        self.checkpoint.pending_wrap = pending_wrap;
+        (self.state.line, self.state.column, self.state.pending_wrap) =
+            Self::cursor_at(cursor, size.cols, last_line);
+        (
+            self.checkpoint.line,
+            self.checkpoint.column,
+            self.checkpoint.pending_wrap,
+        ) = Self::cursor_at(saved, size.cols, last_line);
     }
 
     /// The cursor position `point` stands for on a screen `cols` wide

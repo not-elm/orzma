@@ -131,10 +131,7 @@ impl Grid {
         carried.push(Some(Carried::at(*saved, history_len, old_rows)));
         let mut cursor_at = match Carried::at(*cursor, history_len, old_rows) {
             Carried::Screen(point) => point,
-            _ => SlicePoint {
-                row: 0,
-                boundary: 0,
-            },
+            _ => SlicePoint::default(),
         };
 
         let last_text = screen.iter().rposition(has_text).unwrap_or(0);
@@ -156,10 +153,7 @@ impl Grid {
             }
         }
 
-        let mut old_top = SlicePoint {
-            row: 0,
-            boundary: 0,
-        };
+        let mut old_top = SlicePoint::default();
         if policy == ScrollbackOnGrow::Reclaim && rewraps {
             let joined = continued_tail(&history);
             if joined > 0 {
@@ -231,19 +225,14 @@ impl Grid {
             .max(old_top.row)
             .min(cursor_at.row);
         let padded = new_rows.saturating_sub(reflowed.saturating_sub(top));
-        let reclaimed = if policy == ScrollbackOnGrow::Reclaim {
-            let grown = i64::from(size.rows) - i64::from(old.rows);
-            let saved_rows = if extent + 1 == old_rows {
-                i64::try_from(extent + 1).unwrap_or(0)
-                    - (i64::try_from(reflowed).unwrap_or(0)
-                        - i64::try_from(old_top.row).unwrap_or(0))
-            } else {
-                0
-            };
-            usize::try_from(grown + saved_rows).unwrap_or(0).min(padded)
-        } else {
-            0
-        };
+        let reclaimed = match policy {
+            ScrollbackOnGrow::Reclaim if extent + 1 == old_rows => {
+                (new_rows + extent + 1 + old_top.row).saturating_sub(old_rows + reflowed)
+            }
+            ScrollbackOnGrow::Reclaim => new_rows.saturating_sub(old_rows),
+            ScrollbackOnGrow::Keep => 0,
+        }
+        .min(padded);
 
         if rewraps {
             let mut history_points: Vec<Option<SlicePoint>> = carried
@@ -302,14 +291,10 @@ impl Grid {
             let id = self.mint();
             let cells = match dropped.next() {
                 Some(row) => {
-                    let fill = row.cells.last().map_or_else(Cell::default, |last| {
-                        Pen {
-                            fg: last.fg,
-                            bg: last.bg,
-                            style: last.style,
-                        }
-                        .erase_cell()
-                    });
+                    let fill = row
+                        .cells
+                        .last()
+                        .map_or_else(Cell::default, |last| last.pen().erase_cell());
                     let mut cells = row.cells;
                     cells.resize(size.cols, fill);
                     cells.repair_after_resize(old.cols);
@@ -420,7 +405,7 @@ impl Grid {
 }
 
 /// A position inside one run of rows being rewrapped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct SlicePoint {
     /// The row's index inside the run.
     row: usize,
@@ -486,14 +471,11 @@ impl Carried {
 /// continues onto the screen; zero when the newest history row ends its
 /// line.
 fn continued_tail(history: &[GridRow]) -> usize {
-    if history.last().is_none_or(|row| row.wrap_at.is_none()) {
-        return 0;
-    }
-    let start = history
+    history
         .iter()
-        .rposition(|row| row.wrap_at.is_none())
-        .map_or(0, |index| index + 1);
-    history.len() - start
+        .rev()
+        .take_while(|row| row.wrap_at.is_some())
+        .count()
 }
 
 /// Where a position falls inside one logical line.
@@ -650,8 +632,9 @@ impl Rewrap {
 
     /// The first of the fewest newest lines of `rows` whose cuts are sure to
     /// make at least `needed` rows between them, as an index into
-    /// `starts`, and for each line from the newest back to it how many
-    /// cells the line keeps, when that was measured.
+    /// `starts`; for each line from the newest back to it how many cells
+    /// the line keeps, when that was measured; and how many rows those lines
+    /// count as between them.
     ///
     /// A line counts as the fewest rows its kept cells can fill, and a line
     /// no wider than `self.cols` counts as one row without being measured.
@@ -662,17 +645,17 @@ impl Rewrap {
         rows: &[GridRow],
         starts: &[usize],
         needed: usize,
-    ) -> (usize, Vec<Option<usize>>) {
-        let mut keep_ends = Vec::new();
+    ) -> (usize, Vec<Option<usize>>, usize) {
         if needed == usize::MAX {
-            return (0, keep_ends);
+            return (0, Vec::new(), 0);
         }
+        let mut keep_ends = Vec::with_capacity(starts.len().min(needed));
         let width = usize::from(self.cols).max(1);
         let mut made = 0;
         let mut end = rows.len();
         for (line, &start) in starts.iter().enumerate().rev() {
             if made >= needed {
-                return (line + 1, keep_ends);
+                return (line + 1, keep_ends, made);
             }
             let Some(line_rows) = rows.get(start..end) else {
                 break;
@@ -697,7 +680,7 @@ impl Rewrap {
             keep_ends.push(kept);
             end = start;
         }
-        (0, keep_ends)
+        (0, keep_ends, made)
     }
 
     /// Cuts the line held in `self.line`, whose first row is the run's row
@@ -813,14 +796,7 @@ impl Rewrap {
             .iter()
             .rev()
             .find_map(|cells| cells.last())
-            .map_or_else(Cell::default, |last| {
-                Pen {
-                    fg: last.fg,
-                    bg: last.bg,
-                    style: last.style,
-                }
-                .erase_cell()
-            })
+            .map_or_else(Cell::default, |last| last.pen().erase_cell())
     }
 
     /// Cuts the `keep_end` gathered cells into `self.cut` and `self.built`,
@@ -987,11 +963,7 @@ impl Rewrap {
             let wide_at_edge = if pairing == Pairing::Intact {
                 self.cell_at(edge)
                     .filter(|cell| cell.width == CellWidth::Wide)
-                    .map(|cell| Pen {
-                        fg: cell.fg,
-                        bg: cell.bg,
-                        style: cell.style,
-                    })
+                    .map(Cell::pen)
             } else {
                 None
             };
@@ -1017,9 +989,7 @@ impl Rewrap {
             filler: None,
         });
         for k in (0..self.cut.len()).rev() {
-            let Some(&CutRow { start, filler, .. }) = self.cut.get(k) else {
-                continue;
-            };
+            let CutRow { start, filler, .. } = self.cut[k];
             let mut row = self.take_tail(start);
             if let Some(pen) = filler {
                 row.push(pen.filler());
@@ -1063,11 +1033,7 @@ impl Rewrap {
             let span = if cell.width == CellWidth::Wide { 2 } else { 1 };
             if row.len() + span > width {
                 let count = row.len();
-                let filler = (span == 2 && row.len() + 1 == width).then_some(Pen {
-                    fg: cell.fg,
-                    bg: cell.bg,
-                    style: cell.style,
-                });
+                let filler = (span == 2 && row.len() + 1 == width).then(|| cell.pen());
                 if let Some(pen) = filler {
                     row.push(pen.filler());
                 }
@@ -1102,9 +1068,7 @@ impl Rewrap {
 
     /// The gathered cell `offset` cells into the line.
     fn cell_at(&self, offset: usize) -> Option<&Cell> {
-        let segment = self.shares[..self.segments.len().min(self.shares.len())]
-            .partition_point(|share| share.start <= offset)
-            .checked_sub(1)?;
+        let segment = self.segment_of(offset)?;
         let start = self.shares.get(segment)?.start;
         self.segments.get(segment)?.get(offset - start)
     }
@@ -1114,10 +1078,7 @@ impl Rewrap {
     fn take_tail(&mut self, start: usize) -> Vec<Cell> {
         let width = usize::from(self.cols);
         let held = self.segments.len().min(self.shares.len());
-        let segment = self.shares[..held]
-            .iter()
-            .rposition(|share| share.start <= start)
-            .unwrap_or(0);
+        let segment = self.segment_of(start).unwrap_or(0);
         let offset = start.saturating_sub(self.shares.get(segment).map_or(0, |share| share.start));
         let mut row = if offset == 0 {
             self.segments
@@ -1144,6 +1105,15 @@ impl Rewrap {
             self.segments.truncate(segment);
         }
         row
+    }
+
+    /// The gathered segment holding the cell `offset` cells into the line;
+    /// `None` when no gathered segment starts at or before `offset`.
+    fn segment_of(&self, offset: usize) -> Option<usize> {
+        let held = self.segments.len().min(self.shares.len());
+        self.shares[..held]
+            .partition_point(|share| share.start <= offset)
+            .checked_sub(1)
     }
 
     /// An empty buffer with room for a row `self.cols` wide, reusing a
@@ -1205,7 +1175,7 @@ fn rewrap_newest(
 ) -> Vec<GridRow> {
     let starts = line_starts(&rows);
     let mut rewrap = Rewrap::new(old_cols, cols, cursor.as_deref().copied(), points.to_vec());
-    let (kept_from, mut keep_ends) = rewrap.newest_lines(&rows, &starts, needed);
+    let (kept_from, mut keep_ends, made) = rewrap.newest_lines(&rows, &starts, needed);
     let row_count = rows.len();
     let dropped = starts.get(kept_from).copied().unwrap_or(row_count);
     for point in points.iter_mut() {
@@ -1217,7 +1187,11 @@ fn rewrap_newest(
     for row in source.by_ref().take(dropped) {
         recycle(&mut rewrap.spare, row.cells.into_inner(), usize::from(cols));
     }
-    let mut out = Vec::with_capacity(row_count - dropped);
+    let mut out = Vec::with_capacity(if needed == usize::MAX {
+        row_count
+    } else {
+        made
+    });
     for (line, &start) in starts.iter().enumerate().skip(kept_from) {
         let end = starts.get(line + 1).copied().unwrap_or(row_count);
         rewrap.line.extend(source.by_ref().take(end - start));

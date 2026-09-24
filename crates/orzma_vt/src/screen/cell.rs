@@ -233,6 +233,15 @@ impl Cell {
             .into_iter()
             .chain(self.marks().iter().copied().filter(move |_| body))
     }
+
+    /// The pen the cell was printed with: its colors and SGR attributes.
+    pub(crate) fn pen(&self) -> Pen {
+        Pen {
+            fg: self.fg,
+            bg: self.bg,
+            style: self.style,
+        }
+    }
 }
 
 /// The current SGR attributes applied to subsequently printed cells.
