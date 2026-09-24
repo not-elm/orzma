@@ -100,16 +100,20 @@ pub trait Vt {
     /// always sets [`InterpretOutput::damaged`], so the frame carrying the
     /// new [`Frame::placements`] list is guaranteed to follow. Evictions
     /// the VT performs on its own authority (history trim, reset,
-    /// alternate-screen teardown) surface as [`VtSignal::WebviewEvicted`].
+    /// alternate-screen teardown, and the primary screen's reflow that a
+    /// resize deferred while the alternate screen was shown) surface as
+    /// [`VtSignal::WebviewEvicted`].
     ///
     /// A placement projects only while the screen it was mounted on is
     /// active: while the alternate screen is shown, primary-screen
     /// placements are omitted from the emitted lists (hidden, not
     /// evicted). Returning to the primary screen tears the alternate
     /// screen's placements down instead, naming them in that chunk's
-    /// [`VtSignal::WebviewEvicted`]. A re-issued `mount` for a live
-    /// instance updates that placement in place — the id does not
-    /// change, and nothing is named by [`VtSignal::WebviewEvicted`].
+    /// [`VtSignal::WebviewEvicted`], together with the primary-screen
+    /// placements whose anchor rows the deferred reflow dropped. A
+    /// re-issued `mount` for a live instance updates that placement in
+    /// place — the id does not change, and nothing is named by
+    /// [`VtSignal::WebviewEvicted`].
     ///
     /// # Invariants
     ///
@@ -167,12 +171,18 @@ pub trait Vt {
     /// either axis of `size` is zero. Only a real change stages (full)
     /// damage.
     ///
+    /// A size with a zero axis is ignored and changes nothing. A column
+    /// count below [`MIN_COLUMNS`](crate::prelude::MIN_COLUMNS) is raised
+    /// to it.
+    ///
     /// The primary screen's rows, history included, are rewrapped at the
     /// new width, and the positions pointing into them follow their text;
     /// what the rows a growth frees hold follows the terminal's
     /// [`ScrollbackOnGrow`]. The alternate screen is truncated. While the
     /// alternate screen is shown, the primary screen is rewrapped only when
-    /// it is shown again.
+    /// it is shown again, and the primary-screen placements that rewrap
+    /// strands are named by the [`VtSignal::WebviewEvicted`] of the
+    /// [`Vt::interpret`] call that shows it, not by this call.
     ///
     /// # Invariants
     ///
@@ -1322,6 +1332,40 @@ mod tests {
             "leaving the alternate screen evicts the placement, got {:?}",
             out.signals
         );
+    }
+
+    /// Asserts that a resize behind the alternate screen names no
+    /// primary-screen placement, and the flip back names the one whose
+    /// anchor row the deferred reflow dropped past the history cap.
+    ///
+    /// Case: a webview is mounted on the first row of a terminal without
+    /// scrollback, the user opens a full-screen editor, narrows the window,
+    /// and quits the editor.
+    #[test]
+    fn leaving_the_alternate_screen_names_a_placement_the_deferred_reflow_stranded() {
+        let id = InstanceId(7);
+        let mut vt = OrzmaVt::new(GridSize { cols: 8, rows: 2 }, 0);
+        vt.interpret(b"abcdefgh");
+        assert!(vt.mount_placement_at(
+            ScreenLine(0),
+            GridColumn(1),
+            PlacementSize { rows: 1, cols: 1 },
+            id
+        ));
+        vt.interpret(b"\x1b[?1049h");
+        assert_eq!(
+            vt.resize(GridSize { cols: 2, rows: 2 }),
+            Some(ResizeChanged { evicted: vec![] })
+        );
+        let out = vt.interpret(b"\x1b[?1049l");
+        assert!(
+            out.signals.contains(&VtSignal::WebviewEvicted {
+                placements: vec![id]
+            }),
+            "the flip back names the stranded placement, got {:?}",
+            out.signals
+        );
+        assert_eq!(vt.device.active_screen().placement_count(), 0);
     }
 
     /// Asserts that a primary-screen selection is hidden while the alternate
