@@ -4,7 +4,7 @@
 #![cfg(windows)]
 
 use orzma_tty::prelude::{OrzmaTty, TerminalKey, TerminalModifiers};
-use orzma_tty::{CellPixels, NATIVE_SCROLLBACK_ON_GROW, SpawnOptions};
+use orzma_tty::{CellPixels, EnvKey, EnvValue, NATIVE_SCROLLBACK_ON_GROW, SpawnOptions};
 use orzma_vt::prelude::{Frame, GridSize, OrzmaVt, Row, Run, Scroll};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use std::{env, iter};
+use tempfile::TempDir;
 
 /// Viewport rows of the grid the test drives.
 const ROWS: u16 = 24;
@@ -49,6 +50,7 @@ const TRAILER: &str = "done";
 #[test]
 fn a_narrow_then_wide_resize_keeps_the_cursor_row_and_every_line_once() {
     let shell = resolve_powershell();
+    let home = TempDir::new().expect("a temporary home");
     let size = GridSize::new(WIDE, ROWS).expect("a valid grid size");
     let mut tty = OrzmaTty::spawn(
         OrzmaVt::new(size, 1000).with_scrollback_on_grow(NATIVE_SCROLLBACK_ON_GROW),
@@ -57,7 +59,10 @@ fn a_narrow_then_wide_resize_keeps_the_cursor_row_and_every_line_once() {
             cell_px: CellPixels::default(),
             shell: shell.display().to_string(),
             cwd: None,
-            env: vec![],
+            env: vec![(
+                EnvKey("USERPROFILE".to_string()),
+                EnvValue(home.path().display().to_string()),
+            )],
             shell_integration: false,
         },
     )
