@@ -230,10 +230,12 @@ impl DeviceState {
     /// - `RIS` (`ESC c`)
     pub fn reset(&mut self) -> Option<DamageSpan> {
         self.preceding_graphic = None;
-        let size = self.screens.alternate.grid_size();
-        let _ = self.screens.primary.resize(size);
         let was_showing_alternate = matches!(self.modes.active_screen, ScreenKind::Alternate);
         let primary = self.screens.primary.reset();
+        let _ = self
+            .screens
+            .primary
+            .resize(self.screens.alternate.grid_size());
         let _ = self.screens.alternate.reset();
         // NOTE: This wholesale write is the one place `auto_wrap` is set
         // without `DeviceState::set_auto_wrap`, and it is sound only because

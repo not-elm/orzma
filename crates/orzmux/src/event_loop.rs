@@ -180,12 +180,6 @@ impl OrzmuxCommand {
         }
     }
 
-    /// Whether a later command of the same kind can replace this one
-    /// unapplied: a window resize or a divider move.
-    fn is_replaceable(&self) -> bool {
-        matches!(self, Self::Resize { .. } | Self::ResizeSplit { .. })
-    }
-
     /// Whether this command, arriving right after `earlier`, leaves
     /// nothing for `earlier` to do: a window resize replaces the resize
     /// before it, and a divider move the move of the same divider before
@@ -270,19 +264,14 @@ impl EventLoop {
         let mut connected = true;
         for _ in 0..COMMAND_BATCH {
             match self.commands.try_recv() {
-                Ok((seq, command)) => {
-                    if let Some((held_seq, held_command)) = held.take() {
-                        if command.supersedes(&held_command) {
-                            self.backend.set_processed(held_seq);
-                        } else {
-                            self.handle_command(held_seq, held_command);
-                        }
-                    }
-                    if command.is_replaceable() {
-                        held = Some((seq, command));
-                    } else {
+                Ok(next) => {
+                    if let Some((seq, command)) = held
+                        .take()
+                        .filter(|(_, earlier)| !next.1.supersedes(earlier))
+                    {
                         self.handle_command(seq, command);
                     }
+                    held = Some(next);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
