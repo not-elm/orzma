@@ -76,6 +76,34 @@ fn point(line: i32, column: u16) -> GridPoint {
     }
 }
 
+/// Prints `text` through the screen's own print path; a `'\n'` is a
+/// carriage return followed by a line feed.
+fn print_text(screen: &mut Screen, text: &str) {
+    for c in text.chars() {
+        if c == '\n' {
+            screen.carriage_return();
+            screen.line_feed();
+        } else {
+            screen
+                .print(classified(c), PrintOptions::default())
+                .expect("a printable glyph");
+        }
+    }
+}
+
+/// The glyphs of the row at `line`, history included, with trailing
+/// blanks trimmed.
+fn row_text(screen: &Screen, line: i32) -> String {
+    screen
+        .grid
+        .row(GridLine(line))
+        .iter()
+        .flat_map(Cell::chars)
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
 mod backspace;
 mod carriage_return;
 mod cursor;
@@ -111,6 +139,7 @@ mod selection_text;
 mod set_origin_mode;
 mod set_scroll_region;
 mod soft_reset;
+mod soft_wrap;
 mod tab_stop_edits;
 mod tab_to;
 mod viewport_row;
