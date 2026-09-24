@@ -139,9 +139,9 @@ impl SeparatorHit {
     }
 }
 
-/// The divider the pointer is holding. While it exists, every other
-/// mouse consumer forwards nothing and keeps whatever in-flight state it
-/// already holds.
+/// The divider the pointer is holding. While it exists, no press, release,
+/// or pointer motion reaches a pane or an inline webview, and a gesture a
+/// pane still held is cancelled.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub(in crate::input) struct GrabbedSeparator {
     /// The split the held divider moves.
@@ -313,6 +313,7 @@ fn container_local(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::mouse::MouseEffect;
     use crate::input::mouse::MouseInputPlugin;
     use crate::input::mouse::gesture::OrzmaMouseGesture;
     use crate::input::mouse::test_support::{
@@ -322,9 +323,11 @@ mod tests {
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::message::Messages;
     use bevy::input::mouse::MouseWheel;
-    use bevy::window::WindowResolution;
+    use bevy::window::{WindowFocused, WindowResolution};
     use bevy_orzma_tty_renderer::schema::TerminalView;
+    use bevy_orzmux::prelude::RequestTtyPointer;
     use orzma_tty::CellPixels;
+    use orzma_tty::prelude::{PointerInput, PointerKind};
 
     const SCALE: f32 = 1.0;
     const CELL: (f32, f32) = (8.0, 16.0);
@@ -614,6 +617,7 @@ mod tests {
         let mut app = drag_world(SCALE);
         app.add_plugins(MouseInputPlugin)
             .add_message::<MouseWheel>()
+            .add_message::<WindowFocused>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<CapturedEffects>()
@@ -673,15 +677,19 @@ mod tests {
         write_cursor_moved(app, phys);
     }
 
-    fn write_left(app: &mut App, state: ButtonState) {
+    fn write_button(app: &mut App, button: MouseButton, state: ButtonState) {
         let window = primary_window(app);
         app.world_mut()
             .resource_mut::<Messages<MouseButtonInput>>()
             .write(MouseButtonInput {
-                button: MouseButton::Left,
+                button,
                 state,
                 window,
             });
+    }
+
+    fn write_left(app: &mut App, state: ButtonState) {
+        write_button(app, MouseButton::Left, state);
     }
 
     fn press_at(app: &mut App, phys: Vec2) {
@@ -726,6 +734,23 @@ mod tests {
     /// The positions requested since the last call, draining the record.
     fn requested(app: &mut App) -> Vec<u16> {
         std::mem::take(&mut app.world_mut().resource_mut::<Requested>().0)
+    }
+
+    /// Whether the dispatcher handed any pane a press or a release.
+    fn pressed_a_pane(app: &App) -> bool {
+        app.world()
+            .resource::<CapturedEffects>()
+            .0
+            .iter()
+            .any(|effect| {
+                matches!(
+                    effect,
+                    MouseEffect::Pointer(PointerInput {
+                        kind: PointerKind::Press | PointerKind::Release,
+                        ..
+                    })
+                )
+            })
     }
 
     /// Asserts that a cursor is converted to the nearest whole-window
@@ -888,29 +913,27 @@ mod tests {
         assert!(app.world().get::<GrabbedSeparator>(separator).is_none());
     }
 
-    /// Asserts that a press a separator grab consumed produces no
-    /// selection effect in the pane beside the divider and leaves the
-    /// shared gesture empty, on the press frame itself.
+    /// Asserts that a press a separator grab consumed hands no press to the
+    /// pane beside the divider and leaves the shared gesture unlocked, on
+    /// the press frame itself.
     ///
     /// Case: the user presses on the divider between two panes.
     #[test]
-    fn a_grabbed_press_starts_no_selection_in_the_neighbouring_pane() {
+    fn a_grabbed_press_reaches_no_neighbouring_pane() {
         let mut app = suppression_app();
         let separator = spawn_vertical_separator(&mut app, SplitId(1), 320.0, 400.0);
 
         press_at(&mut app, Vec2::new(320.0, 200.0));
 
         assert!(app.world().get::<GrabbedSeparator>(separator).is_some());
-        assert!(app.world().resource::<CapturedEffects>().0.is_empty());
-        let gesture = app.world().resource::<OrzmaMouseGesture>();
-        assert!(gesture.held.is_none());
-        assert!(gesture.drag.is_none());
+        assert!(!pressed_a_pane(&app));
+        assert!(app.world().resource::<OrzmaMouseGesture>().held.is_none());
     }
 
     /// Asserts that a press and its release arriving in one message batch
     /// suppress the button dispatcher for that frame and retire the grab
-    /// by the end of it, so the click leaves no selection effect, no
-    /// gesture, and nothing latched.
+    /// by the end of it, so the click reaches no pane, locks no gesture, and
+    /// is not replayed into a pane on a later frame.
     ///
     /// Case: the user clicks a divider once, quickly enough that the
     /// press and the release arrive in one frame's message batch.
@@ -924,19 +947,24 @@ mod tests {
         write_left(&mut app, ButtonState::Released);
         app.update();
 
-        assert!(app.world().resource::<CapturedEffects>().0.is_empty());
+        assert!(!pressed_a_pane(&app));
         assert!(app.world().get::<GrabbedSeparator>(separator).is_none());
         let gesture = app.world().resource::<OrzmaMouseGesture>();
         assert!(gesture.held.is_none());
-        assert!(gesture.drag.is_none());
+        set_cursor(&mut app, Vec2::new(360.0, 200.0));
+        app.update();
+        assert!(
+            !pressed_a_pane(&app),
+            "a later frame must not replay the divider click into the pane"
+        );
     }
 
-    /// Asserts that a whole press-drag-release gesture on a divider
-    /// produces no selection effect on any of its frames.
+    /// Asserts that a whole press-drag-release gesture on a divider hands
+    /// no press or release to any pane on any of its frames.
     ///
     /// Case: the user drags a divider across two cells and lets go.
     #[test]
-    fn a_whole_divider_drag_produces_no_selection_effect() {
+    fn a_whole_divider_drag_presses_no_pane() {
         let mut app = suppression_app();
         spawn_vertical_separator(&mut app, SplitId(1), 320.0, 400.0);
 
@@ -945,10 +973,46 @@ mod tests {
         release(&mut app);
         app.update();
 
-        assert!(app.world().resource::<CapturedEffects>().0.is_empty());
-        let gesture = app.world().resource::<OrzmaMouseGesture>();
-        assert!(gesture.held.is_none());
-        assert!(gesture.drag.is_none());
+        assert!(!pressed_a_pane(&app));
+        assert!(app.world().resource::<OrzmaMouseGesture>().held.is_none());
+    }
+
+    /// Asserts that a separator grab cancels a gesture a pane button still
+    /// holds, so the pane's application is not left with that button down.
+    ///
+    /// Case: the user holds the right button in nvim's pane, moves onto the
+    /// divider and presses the left button there, and then lets go of the
+    /// right button while the divider is still grabbed.
+    #[test]
+    fn a_grab_cancels_a_gesture_held_in_a_pane() {
+        #[derive(Resource, Default)]
+        struct Cancels(Vec<Entity>);
+        let mut app = suppression_app();
+        app.init_resource::<Cancels>().add_observer(
+            |ev: On<RequestTtyPointer>, mut cancels: ResMut<Cancels>| {
+                if ev.input.kind == PointerKind::Cancel {
+                    cancels.0.push(ev.terminal);
+                }
+            },
+        );
+        let pane = app
+            .world_mut()
+            .query_filtered::<Entity, With<OrzmaTerminal>>()
+            .single(app.world())
+            .expect("drag_world spawns one terminal");
+        let separator = spawn_vertical_separator(&mut app, SplitId(1), 320.0, 400.0);
+
+        set_cursor(&mut app, Vec2::new(204.0, 200.0));
+        write_button(&mut app, MouseButton::Right, ButtonState::Pressed);
+        app.update();
+        assert!(app.world().resource::<OrzmaMouseGesture>().held.is_some());
+        press_at(&mut app, Vec2::new(322.0, 200.0));
+        write_button(&mut app, MouseButton::Right, ButtonState::Released);
+        app.update();
+
+        assert!(app.world().get::<GrabbedSeparator>(separator).is_some());
+        assert_eq!(app.world().resource::<Cancels>().0, vec![pane]);
+        assert!(app.world().resource::<OrzmaMouseGesture>().held.is_none());
     }
 
     /// Asserts that the webview pointer router leaves an in-flight press
@@ -972,7 +1036,7 @@ mod tests {
     }
 
     /// Asserts that a press landing outside every grab band still
-    /// reaches the button dispatcher and starts a selection.
+    /// reaches the button dispatcher and the pane under it.
     ///
     /// Case: the user clicks in the middle of a pane, well away from the
     /// divider beside it.
@@ -983,6 +1047,6 @@ mod tests {
 
         press_at(&mut app, Vec2::new(600.0, 200.0));
 
-        assert!(!app.world().resource::<CapturedEffects>().0.is_empty());
+        assert!(pressed_a_pane(&app));
     }
 }

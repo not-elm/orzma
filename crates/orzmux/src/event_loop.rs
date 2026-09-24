@@ -4,20 +4,21 @@
 
 use crate::backend::queue_sample::QueueSampler;
 use crate::backend::{
-    Backend, CommandSeq, NewPaneAt, OrzmuxEvent, PaneDirection, PaneId, PaneTarget, RequestId,
-    SplitId, log_refused_write,
+    Backend, CommandSeq, NewPaneAt, PaneDirection, PaneId, PaneTarget, RequestId, SplitId,
+    log_refused_write,
 };
 use crate::error::{OrzmuxError, OrzmuxResult};
-use crossbeam_channel::{Receiver, Select, Sender, TryRecvError};
-use orzma_tty::prelude::{MouseReport, TerminalKey, TerminalModifiers, WheelInput};
+use crossbeam_channel::{Receiver, Select, TryRecvError};
+use orzma_tty::prelude::{PointerInput, TerminalKey, TerminalModifiers, WheelInput};
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
-use orzma_vt::prelude::{
-    CellSide, GridColumn, GridPoint, GridSize, InstanceId, PlacementSize, ScreenLine, Scroll,
-    SelectionKind,
-};
+use orzma_vt::prelude::{GridColumn, GridSize, InstanceId, PlacementSize, ScreenLine, Scroll};
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing::Level;
+
+mod gui_link;
+
+pub(crate) use gui_link::GuiLink;
 
 /// A command the GUI sends to the backend.
 #[derive(Debug, Clone)]
@@ -87,14 +88,6 @@ pub enum OrzmuxCommand {
         /// The pasted text.
         text: String,
     },
-    /// Forward a mouse report to a pane's PTY. The pane writes nothing
-    /// while its VT has no mouse tracking level in force.
-    MouseInput {
-        /// The pane receiving the mouse event.
-        pane: PaneId,
-        /// The mouse report to encode.
-        report: MouseReport,
-    },
     /// Route one frame's wheel notches over a pane by the pane's live VT
     /// modes.
     Wheel {
@@ -103,32 +96,20 @@ pub enum OrzmuxCommand {
         /// The notches and the modifiers and cell they were gathered with.
         input: WheelInput,
     },
+    /// Routes one pointer event over a pane by the pane's live VT modes:
+    /// a mouse report for the application, or the pane's own selection.
+    Pointer {
+        /// The pane the pointer event addresses.
+        pane: PaneId,
+        /// The pointer event.
+        input: PointerInput,
+    },
     /// Scroll a pane's viewport.
     Scroll {
         /// The pane to scroll.
         pane: PaneId,
         /// The scroll motion to apply.
         scroll: Scroll,
-    },
-    /// Begin a selection in a pane.
-    SelectionStart {
-        /// The pane the selection starts in.
-        pane: PaneId,
-        /// The cell the selection anchors at.
-        cell: GridPoint,
-        /// Which half of the anchor cell the press landed on.
-        side: CellSide,
-        /// The selection's granularity (cell, word, line).
-        kind: SelectionKind,
-    },
-    /// Extend an in-progress selection to a new cell.
-    SelectionUpdate {
-        /// The pane whose selection is extended.
-        pane: PaneId,
-        /// The cell the selection now extends to.
-        cell: GridPoint,
-        /// Which half of the target cell the drag landed on.
-        side: CellSide,
     },
     /// Clear a pane's selection.
     SelectionClear {
@@ -186,11 +167,9 @@ impl OrzmuxCommand {
             Self::WindowFocus { .. } => ("WindowFocus", None),
             Self::KeyInput { pane, .. } => ("KeyInput", Some(*pane)),
             Self::Paste { pane, .. } => ("Paste", Some(*pane)),
-            Self::MouseInput { pane, .. } => ("MouseInput", Some(PaneTarget::Id(*pane))),
             Self::Wheel { pane, .. } => ("Wheel", Some(PaneTarget::Id(*pane))),
+            Self::Pointer { pane, .. } => ("Pointer", Some(PaneTarget::Id(*pane))),
             Self::Scroll { pane, .. } => ("Scroll", Some(PaneTarget::Id(*pane))),
-            Self::SelectionStart { pane, .. } => ("SelectionStart", Some(PaneTarget::Id(*pane))),
-            Self::SelectionUpdate { pane, .. } => ("SelectionUpdate", Some(PaneTarget::Id(*pane))),
             Self::SelectionClear { pane } => ("SelectionClear", Some(PaneTarget::Id(*pane))),
             Self::CopySelection { pane } => ("CopySelection", Some(*pane)),
             Self::RemovePlacements { pane, .. } => {
@@ -207,7 +186,9 @@ impl OrzmuxCommand {
 pub(crate) struct EventLoop {
     backend: Backend,
     commands: Receiver<(CommandSeq, OrzmuxCommand)>,
-    events: Sender<OrzmuxEvent>,
+    /// The GUI's event channel, which wakes the GUI after each flush that
+    /// sends an event.
+    gui: GuiLink,
     /// Set when the GUI's event receiver is gone; the loop exits.
     gui_gone: bool,
     /// What each `Select` index of the last `wait_ready` referred to.
@@ -217,16 +198,17 @@ pub(crate) struct EventLoop {
 }
 
 impl EventLoop {
-    /// A loop that drives `backend` over the given channels.
+    /// A loop that drives `backend`, reading commands from `commands` and
+    /// sending events through `gui`.
     pub fn new(
         backend: Backend,
         commands: Receiver<(CommandSeq, OrzmuxCommand)>,
-        events: Sender<OrzmuxEvent>,
+        gui: GuiLink,
     ) -> Self {
         Self {
             backend,
             commands,
-            events,
+            gui,
             gui_gone: false,
             sources: Vec::new(),
             sampler: QueueSampler::new(Instant::now()),
@@ -272,13 +254,11 @@ impl EventLoop {
         true
     }
 
-    /// Hands the backend's queued events to the GUI, recording a gone
-    /// receiver instead of failing.
+    /// Hands the backend's queued events to the GUI, waking it only when it
+    /// sent any, and records a gone receiver instead of failing.
     pub fn flush_events(&mut self) {
-        for event in self.backend.drain_events() {
-            if self.events.send(event).is_err() {
-                self.gui_gone = true;
-            }
+        if !self.gui.send_batch(self.backend.drain_events()) {
+            self.gui_gone = true;
         }
     }
 
@@ -342,18 +322,9 @@ impl EventLoop {
             }
             OrzmuxCommand::KeyInput { pane, key, mods } => self.backend.key_input(pane, key, mods),
             OrzmuxCommand::Paste { pane, text } => self.backend.paste(pane, text),
-            OrzmuxCommand::MouseInput { pane, report } => self.backend.mouse_input(pane, report),
             OrzmuxCommand::Wheel { pane, input } => self.backend.wheel(pane, input),
+            OrzmuxCommand::Pointer { pane, input } => self.backend.pointer(pane, input),
             OrzmuxCommand::Scroll { pane, scroll } => self.backend.scroll(pane, scroll),
-            OrzmuxCommand::SelectionStart {
-                pane,
-                cell,
-                side,
-                kind,
-            } => self.backend.selection_start(pane, cell, side, kind),
-            OrzmuxCommand::SelectionUpdate { pane, cell, side } => {
-                self.backend.selection_update(pane, cell, side)
-            }
             OrzmuxCommand::SelectionClear { pane } => self.backend.selection_clear(pane),
             OrzmuxCommand::CopySelection { pane } => {
                 self.backend.copy_selection(pane);
@@ -416,7 +387,7 @@ impl EventLoop {
             self.sampler.record_pane_depth(id, depth);
         }
         self.sampler
-            .record_channel_depths(self.events.len(), self.commands.len());
+            .record_channel_depths(self.gui.depth(), self.commands.len());
     }
 
     /// Logs the sample the sampler hands out at `now`, if one is due:
@@ -485,19 +456,20 @@ const COMMAND_BATCH: usize = 64;
 mod tests {
     use super::*;
     use crate::backend::queue_sample::ChunkDepth;
-    use crate::backend::{CloseReason, SplitOrientation};
+    use crate::backend::{CloseReason, OrzmuxEvent, SplitOrientation};
     use crate::test_support::{FactoryLog, FakeFactory, FakePane, Harness};
     use crossbeam_channel::{RecvTimeoutError, bounded, unbounded};
     use orzma_tty::prelude::{
-        CellCoord, KeyText, OrzmaTty, ProtocolModifiers, WheelConfig, WheelModifiers,
+        CellCoord, KeyText, OrzmaTty, PointerButton, PointerInput, PointerKind, ProtocolModifiers,
+        WheelConfig, WheelModifiers,
     };
     use orzma_tty::test_support::BlockingSink;
     use orzma_vt::Vt;
-    use orzma_vt::prelude::OrzmaVt;
+    use orzma_vt::prelude::{CellSide, OrzmaVt};
     use std::collections::VecDeque;
     use std::path::Path;
     use std::sync::Arc;
-    use std::sync::atomic::Ordering;
+    use std::task::Waker;
     use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -511,12 +483,12 @@ mod tests {
     fn record_queue_depths_sees_the_chunks_queued_before_the_pump() {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx.send(b"a".to_vec()).unwrap();
-        pane.chunk_tx.send(b"b".to_vec()).unwrap();
-        h.event_loop.record_queue_depths();
+        pane.print(b"a");
+        pane.print(b"b");
+        h.event_loop_mut().record_queue_depths();
         h.pump_pane(root);
         let sample = h
-            .event_loop
+            .event_loop_mut()
             .sampler
             .sample(Instant::now() + QueueSampler::SAMPLE_INTERVAL)
             .expect("a peak was recorded");
@@ -536,15 +508,17 @@ mod tests {
         h.pump_pane(root);
         h.drain();
         assert_eq!(
-            h.event_loop.next_wake_deadline(),
+            h.event_loop().next_wake_deadline(),
             None,
             "precondition: the pane is idle after its bootstrap frame and no peak is recorded"
         );
-        h.event_loop.sampler.record_pane_depth(root, ChunkDepth(2));
-        let report_deadline = h.event_loop.sampler.report_deadline();
+        h.event_loop_mut()
+            .sampler
+            .record_pane_depth(root, ChunkDepth(2));
+        let report_deadline = h.event_loop().sampler.report_deadline();
         assert!(report_deadline.is_some());
-        assert_eq!(h.event_loop.next_wake_deadline(), report_deadline);
-        pane.chunk_tx.send(b"x".to_vec()).unwrap();
+        assert_eq!(h.event_loop().next_wake_deadline(), report_deadline);
+        pane.print(b"x");
         h.pump_pane(root);
         let pane_deadline = h
             .backend()
@@ -554,7 +528,7 @@ mod tests {
             .next_deadline(Instant::now())
             .expect("pending output arms the coalescer");
         assert!(Some(pane_deadline) < report_deadline);
-        assert_eq!(h.event_loop.next_wake_deadline(), Some(pane_deadline));
+        assert_eq!(h.event_loop().next_wake_deadline(), Some(pane_deadline));
     }
 
     /// Asserts that the events of the final command batch still reach the
@@ -565,12 +539,9 @@ mod tests {
     #[test]
     fn the_final_batch_reaches_the_gui_after_a_disconnect() {
         let (command_tx, command_rx) = unbounded();
-        let (event_tx, event_rx) = unbounded();
+        let (gui, event_rx) = GuiLink::channel(Waker::noop().clone());
         let (spawned_tx, _spawned_rx) = unbounded();
-        let factory = FakeFactory {
-            spawned: spawned_tx,
-            log: Arc::new(FactoryLog::default()),
-        };
+        let factory = FakeFactory::new(spawned_tx, Arc::new(FactoryLog::default()));
         let backend = Backend::new(Box::new(factory), WheelConfig::default());
         command_tx
             .send((
@@ -581,7 +552,7 @@ mod tests {
             ))
             .expect("the loop still holds the receiver");
         drop(command_tx);
-        EventLoop::new(backend, command_rx, event_tx).run();
+        EventLoop::new(backend, command_rx, gui).run();
         let events: Vec<OrzmuxEvent> = event_rx.try_iter().collect();
         assert!(
             events
@@ -654,7 +625,7 @@ mod tests {
     fn a_failed_split_spawn_rolls_back_and_reports_spawn_failed() {
         let mut h = Harness::new();
         let (root, _pane) = h.open_root();
-        h.log.fail_next.store(true, Ordering::Release);
+        h.fail_next_spawn();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(2),
             at: NewPaneAt::Split {
@@ -752,10 +723,7 @@ mod tests {
                 .cols,
             40
         );
-        assert_eq!(
-            h.log.sizes.lock().unwrap().last(),
-            Some(&GridSize { cols: 39, rows: 24 })
-        );
+        assert_eq!(h.last_spawn_size(), Some(GridSize { cols: 39, rows: 24 }));
     }
 
     /// Asserts that a window resize re-solves every pane and bundles the
@@ -820,7 +788,7 @@ mod tests {
         let (root, pane) = h.open_root();
         h.pump_pane(root);
         h.drain();
-        pane.chunk_tx.send(b"hello".to_vec()).unwrap();
+        pane.print(b"hello");
         h.pump_pane(root);
         h.drain();
         thread::sleep(Duration::from_millis(15));
@@ -859,9 +827,7 @@ mod tests {
         h.pump_pane(root);
         h.drain();
         thread::sleep(OrzmaTty::<OrzmaVt>::SYNC_EMIT_INTERVAL);
-        pane.chunk_tx
-            .send(b"\x1b[?2026h\x07a\x1b[?2026l\x1b]2;t\x07".to_vec())
-            .unwrap();
+        pane.print(b"\x1b[?2026h\x07a\x1b[?2026l\x1b]2;t\x07");
         h.pump_pane(root);
         assert_eq!(event_kinds(&h.drain()), ["signal", "frame", "signal"]);
     }
@@ -877,7 +843,7 @@ mod tests {
         let (root, pane) = h.open_root();
         h.pump_pane(root);
         h.drain();
-        pane.chunk_tx.send(b"\x1b[?2026hhello".to_vec()).unwrap();
+        pane.print(b"\x1b[?2026hhello");
         h.pump_pane(root);
         thread::sleep(Duration::from_millis(15));
         h.service_deadlines();
@@ -900,8 +866,8 @@ mod tests {
         let (root, pane) = h.open_root();
         h.pump_pane(root);
         h.drain();
-        pane.chunk_tx.send(b"bye".to_vec()).unwrap();
-        pane.exit_tx.send(Some(0)).unwrap();
+        pane.print(b"bye");
+        pane.exit(Some(0));
         h.pump_pane(root);
         let events = h.drain();
         let frame = events
@@ -945,13 +911,13 @@ mod tests {
         let Some(OrzmuxEvent::PaneOpened { pane, .. }) = events.front() else {
             panic!("expected PaneOpened, got {events:?}");
         };
-        (*pane, h.panes.try_recv().expect("one spawned pane"))
+        (*pane, h.spawned_pane().expect("one spawned pane"))
     }
 
     /// Feeds `CSI ? 1004 h` through `pane`'s output stream and pumps it, so
     /// the pane's application has focus reporting enabled.
     fn enable_focus_reporting(h: &mut Harness, id: PaneId, pane: &FakePane) {
-        pane.chunk_tx.send(b"\x1b[?1004h".to_vec()).unwrap();
+        pane.print(b"\x1b[?1004h");
         h.pump_pane(id);
         h.drain();
         assert!(
@@ -986,9 +952,7 @@ mod tests {
     fn a_wheel_command_reaches_its_panes_terminal() {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx
-            .send(b"\x1b[?1002h\x1b[?1006h".to_vec())
-            .unwrap();
+        pane.print(b"\x1b[?1002h\x1b[?1006h");
         h.pump_pane(root);
         h.drain();
         h.send(OrzmuxCommand::Wheel {
@@ -996,7 +960,7 @@ mod tests {
             input: wheel_up(),
         });
         h.settle_writes();
-        assert_eq!(pane.sink.contents(), b"\x1b[<64;1;1M");
+        assert_eq!(pane.received(), b"\x1b[<64;1;1M");
     }
 
     /// Asserts that the wheel policy the backend was built with reaches
@@ -1012,7 +976,7 @@ mod tests {
             ..WheelConfig::default()
         });
         let (root, pane) = h.open_root();
-        pane.chunk_tx.send(b"\x1b[?1049h".to_vec()).unwrap();
+        pane.print(b"\x1b[?1049h");
         h.pump_pane(root);
         h.drain();
         h.send(OrzmuxCommand::Wheel {
@@ -1020,7 +984,7 @@ mod tests {
             input: wheel_up(),
         });
         h.settle_writes();
-        assert_eq!(pane.sink.contents(), b"\x1b[A".repeat(5));
+        assert_eq!(pane.received(), b"\x1b[A".repeat(5));
     }
 
     /// Asserts that a `Wheel` for an unknown pane writes nothing and
@@ -1037,7 +1001,170 @@ mod tests {
             input: wheel_up(),
         });
         assert!(h.drain().is_empty());
-        assert!(root_pane.sink.contents().is_empty());
+        assert!(root_pane.received().is_empty());
+    }
+
+    /// One pointer event on cell (`col`, `row`) with nothing held.
+    fn pointer(
+        kind: PointerKind,
+        button: Option<PointerButton>,
+        col: u32,
+        row: u32,
+        side: CellSide,
+    ) -> PointerInput {
+        PointerInput {
+            kind,
+            button,
+            cell: CellCoord { col, row },
+            side,
+            click_count: 1,
+            mods: ProtocolModifiers::default(),
+        }
+    }
+
+    /// Asserts that a `Pointer` press reaches its pane's terminal, which
+    /// reports it in that pane's own encoding.
+    ///
+    /// Case: nvim has turned on button-event tracking and SGR reports in a
+    /// pane, and the user clicks in it.
+    #[test]
+    fn a_pointer_press_reaches_its_panes_terminal() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.print(b"\x1b[?1002h\x1b[?1006h");
+        h.pump_pane(root);
+        h.drain();
+        h.send(OrzmuxCommand::Pointer {
+            pane: root,
+            input: pointer(
+                PointerKind::Press,
+                Some(PointerButton::Left),
+                3,
+                2,
+                CellSide::Left,
+            ),
+        });
+        h.settle_writes();
+        assert_eq!(pane.received(), b"\x1b[<0;3;2M");
+    }
+
+    /// Asserts that a selection drag finished through `Pointer` commands
+    /// emits `SelectionCopied` carrying the selected text.
+    ///
+    /// Case: with no application tracking the mouse, the user drags across
+    /// the first word of a line the shell printed and lets go.
+    #[test]
+    fn a_finished_selection_drag_emits_selection_copied() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.print(b"hello world");
+        h.pump_pane(root);
+        h.drain();
+        h.send(OrzmuxCommand::Pointer {
+            pane: root,
+            input: pointer(
+                PointerKind::Press,
+                Some(PointerButton::Left),
+                1,
+                1,
+                CellSide::Left,
+            ),
+        });
+        h.send(OrzmuxCommand::Pointer {
+            pane: root,
+            input: pointer(PointerKind::Motion, None, 5, 1, CellSide::Right),
+        });
+        h.send(OrzmuxCommand::Pointer {
+            pane: root,
+            input: pointer(
+                PointerKind::Release,
+                Some(PointerButton::Left),
+                5,
+                1,
+                CellSide::Right,
+            ),
+        });
+        let copied: Vec<OrzmuxEvent> = h
+            .drain()
+            .into_iter()
+            .filter(|event| matches!(event, OrzmuxEvent::SelectionCopied { .. }))
+            .collect();
+        assert_eq!(
+            copied,
+            vec![OrzmuxEvent::SelectionCopied {
+                text: "hello".to_string()
+            }]
+        );
+    }
+
+    /// Asserts that a selection drag released on the right half of the
+    /// cell it entered on its left half copies that cell's character too.
+    ///
+    /// Case: the user drags right across the first word of a line the
+    /// shell printed, reaches its last letter on the letter's left half,
+    /// and lets go on its right half.
+    #[test]
+    fn a_drag_released_on_the_right_half_copies_that_character() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.print(b"hello world");
+        h.pump_pane(root);
+        h.drain();
+        for input in [
+            pointer(
+                PointerKind::Press,
+                Some(PointerButton::Left),
+                1,
+                1,
+                CellSide::Left,
+            ),
+            pointer(PointerKind::Motion, None, 5, 1, CellSide::Left),
+            pointer(
+                PointerKind::Release,
+                Some(PointerButton::Left),
+                5,
+                1,
+                CellSide::Right,
+            ),
+        ] {
+            h.send(OrzmuxCommand::Pointer { pane: root, input });
+        }
+        let copied: Vec<OrzmuxEvent> = h
+            .drain()
+            .into_iter()
+            .filter(|event| matches!(event, OrzmuxEvent::SelectionCopied { .. }))
+            .collect();
+        assert_eq!(
+            copied,
+            vec![OrzmuxEvent::SelectionCopied {
+                text: "hello".to_string()
+            }]
+        );
+    }
+
+    /// Asserts that a pointer event for a pane that does not exist is
+    /// refused as an unresolved target.
+    ///
+    /// Case: a click queued for a pane arrives after the pane's shell
+    /// exited and the pane closed.
+    #[test]
+    fn a_pointer_for_an_unknown_pane_is_refused() {
+        let mut h = Harness::new();
+        h.open_root();
+        let result = h.event_loop_mut().backend_mut().pointer(
+            PaneId(42),
+            pointer(
+                PointerKind::Press,
+                Some(PointerButton::Left),
+                1,
+                1,
+                CellSide::Left,
+            ),
+        );
+        assert!(
+            matches!(result, Err(OrzmuxError::UnresolvedTarget)),
+            "{result:?}"
+        );
     }
 
     /// Asserts that `Active` targets resolve in command order, so a kill
@@ -1082,7 +1209,7 @@ mod tests {
         // always emits on a pane's very first pump regardless of damage.
         h.pump_pane(new);
         h.drain();
-        new_pane.chunk_tx.send(b"last words".to_vec()).unwrap();
+        new_pane.print(b"last words");
         h.pump_pane(new);
         h.drain();
         h.send(OrzmuxCommand::KillPane {
@@ -1116,10 +1243,9 @@ mod tests {
     fn a_child_exit_closes_the_pane_and_the_last_one_empties_the_layout() {
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx.send(b"logout\r\n".to_vec()).unwrap();
-        pane.exit_tx.send(Some(0)).unwrap();
-        drop(pane.chunk_tx);
-        drop(pane.exit_tx);
+        pane.print(b"logout\r\n");
+        pane.exit(Some(0));
+        drop(pane);
         h.pump_pane(root);
         let events: Vec<OrzmuxEvent> = h.drain().into_iter().collect();
         assert!(events.iter().any(|e| matches!(
@@ -1158,7 +1284,7 @@ mod tests {
             mods: TerminalModifiers::default(),
         });
         h.settle_writes();
-        assert_eq!(root_pane.sink.contents(), b"a");
+        assert_eq!(root_pane.received(), b"a");
     }
 
     /// Asserts that a `KeyInput` for an unknown pane writes nothing and
@@ -1177,7 +1303,7 @@ mod tests {
         });
         assert!(h.drain().is_empty());
         h.settle_writes();
-        assert!(root_pane.sink.contents().is_empty());
+        assert!(root_pane.received().is_empty());
     }
 
     /// Asserts that directional selection moves the active pane and
@@ -1251,7 +1377,7 @@ mod tests {
         let uri = osc7(project.path());
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx.send(uri).unwrap();
+        pane.print(&uri);
         h.pump_pane(root);
         h.drain();
         assert_eq!(
@@ -1262,12 +1388,9 @@ mod tests {
                 .as_deref(),
             Some(project.path())
         );
-        h.log.cwds.lock().unwrap().clear();
+        h.clear_spawn_cwds();
         split_active(&mut h, 2);
-        assert_eq!(
-            h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
-            Some(project.path())
-        );
+        assert_eq!(h.last_spawn_cwd().as_deref(), Some(project.path()));
     }
 
     /// Asserts that a split given an explicit directory spawns there
@@ -1282,10 +1405,10 @@ mod tests {
         let uri = osc7(project.path());
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx.send(uri).unwrap();
+        pane.print(&uri);
         h.pump_pane(root);
         h.drain();
-        h.log.cwds.lock().unwrap().clear();
+        h.clear_spawn_cwds();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(2),
             at: NewPaneAt::Split {
@@ -1296,10 +1419,7 @@ mod tests {
             env: vec![],
         });
         h.drain();
-        assert_eq!(
-            h.log.cwds.lock().unwrap().last().cloned().flatten(),
-            Some(explicit.path().to_path_buf())
-        );
+        assert_eq!(h.last_spawn_cwd(), Some(explicit.path().to_path_buf()));
     }
 
     /// Asserts that a pane spawned in an inherited directory passes that
@@ -1315,16 +1435,13 @@ mod tests {
         let uri = osc7(project.path());
         let mut h = Harness::new();
         let (root, pane) = h.open_root();
-        pane.chunk_tx.send(uri).unwrap();
+        pane.print(&uri);
         h.pump_pane(root);
         h.drain();
         split_active(&mut h, 2);
-        h.log.cwds.lock().unwrap().clear();
+        h.clear_spawn_cwds();
         split_active(&mut h, 3);
-        assert_eq!(
-            h.log.cwds.lock().unwrap().last().and_then(|c| c.as_deref()),
-            Some(project.path())
-        );
+        assert_eq!(h.last_spawn_cwd().as_deref(), Some(project.path()));
     }
 
     /// Asserts that selecting a pane reports focus loss to the pane it
@@ -1341,8 +1458,8 @@ mod tests {
         h.send(OrzmuxCommand::SelectPane { pane: root });
         h.send(OrzmuxCommand::SelectPane { pane: new });
         h.settle_writes();
-        assert_eq!(root_pane.sink.contents(), b"\x1b[I\x1b[O");
-        assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
+        assert_eq!(root_pane.received(), b"\x1b[I\x1b[O");
+        assert_eq!(new_pane.received(), b"\x1b[O\x1b[I");
     }
 
     /// Asserts that a split reports focus loss to the pane it splits and
@@ -1356,11 +1473,11 @@ mod tests {
         let mut h = Harness::new();
         let (root, root_pane) = h.open_root();
         enable_focus_reporting(&mut h, root, &root_pane);
-        *h.log.spawn_output.lock().unwrap() = Some(b"\x1b[?1004h".to_vec());
+        h.set_spawn_output(b"\x1b[?1004h");
         let (_new, new_pane) = split_active(&mut h, 2);
         h.settle_writes();
-        assert_eq!(root_pane.sink.contents(), b"\x1b[O");
-        assert_eq!(new_pane.sink.contents(), b"");
+        assert_eq!(root_pane.received(), b"\x1b[O");
+        assert_eq!(new_pane.received(), b"");
     }
 
     /// Asserts that a split whose spawn fails reports no focus change.
@@ -1372,7 +1489,7 @@ mod tests {
         let mut h = Harness::new();
         let (root, root_pane) = h.open_root();
         enable_focus_reporting(&mut h, root, &root_pane);
-        h.log.fail_next.store(true, Ordering::Release);
+        h.fail_next_spawn();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(2),
             at: NewPaneAt::Split {
@@ -1387,7 +1504,7 @@ mod tests {
             Some(OrzmuxEvent::SpawnFailed { .. })
         ));
         h.settle_writes();
-        assert_eq!(root_pane.sink.contents(), b"");
+        assert_eq!(root_pane.received(), b"");
     }
 
     /// Asserts that killing the active pane reports focus gain to the pane
@@ -1404,7 +1521,7 @@ mod tests {
             pane: PaneTarget::Active,
         });
         h.settle_writes();
-        assert_eq!(root_pane.sink.contents(), b"\x1b[I");
+        assert_eq!(root_pane.received(), b"\x1b[I");
     }
 
     /// Asserts that window focus changes reach only the active pane, and
@@ -1423,8 +1540,8 @@ mod tests {
         h.send(OrzmuxCommand::WindowFocus { focused: false });
         h.send(OrzmuxCommand::WindowFocus { focused: true });
         h.settle_writes();
-        assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
-        assert_eq!(root_pane.sink.contents(), b"");
+        assert_eq!(new_pane.received(), b"\x1b[O\x1b[I");
+        assert_eq!(root_pane.received(), b"");
     }
 
     /// Asserts that a failed focus write to the pane being left does not
@@ -1435,7 +1552,7 @@ mod tests {
     #[test]
     fn a_failed_focus_write_does_not_stop_the_incoming_report() {
         let mut h = Harness::new();
-        h.log.fail_writes_next.store(true, Ordering::Release);
+        h.fail_next_writes();
         let (root, root_pane) = h.open_root();
         let (new, new_pane) = split_active(&mut h, 2);
         enable_focus_reporting(&mut h, root, &root_pane);
@@ -1444,7 +1561,7 @@ mod tests {
         h.settle_writes();
         h.send(OrzmuxCommand::SelectPane { pane: new });
         h.settle_writes();
-        assert_eq!(new_pane.sink.contents(), b"\x1b[O\x1b[I");
+        assert_eq!(new_pane.received(), b"\x1b[O\x1b[I");
     }
 
     /// Asserts that a pane whose PTY stops accepting input neither stalls
@@ -1461,7 +1578,7 @@ mod tests {
         thread::spawn(move || {
             let mut h = Harness::new();
             let stuck_writer = thread_gate.clone();
-            *h.log.block_writes_next.lock().unwrap() = Some(thread_gate);
+            h.block_next_writes(thread_gate);
             let (stuck, _stuck_pane) = h.open_root();
             let (other, other_pane) = split_active(&mut h, 2);
             for text in ["x", "y"] {
@@ -1486,7 +1603,7 @@ mod tests {
                 .expect("the other pane")
                 .tty
                 .settle_writes();
-            let other_received = other_pane.sink.contents();
+            let other_received = other_pane.received();
             h.send(OrzmuxCommand::KillPane {
                 pane: PaneTarget::Id(stuck),
             });
@@ -1561,5 +1678,34 @@ mod tests {
         });
 
         assert!(h.drain().is_empty());
+    }
+
+    /// Asserts that a pane frame emitted when its coalescer deadline passes
+    /// wakes the GUI exactly once, and that a flush with nothing queued
+    /// does not wake it.
+    ///
+    /// Case: a background build prints one line and goes quiet while the
+    /// user is looking at another application.
+    #[test]
+    fn a_deadline_frame_wakes_the_gui_and_an_empty_flush_does_not() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        h.pump_pane(root);
+        h.drain();
+        let before = h.wake_count();
+        h.drain();
+        assert_eq!(h.wake_count(), before, "an empty flush sends no wake");
+        pane.print(b"hello");
+        h.pump_pane(root);
+        assert!(h.drain().is_empty(), "the pump alone emits no frame");
+        thread::sleep(Duration::from_millis(15));
+        h.service_deadlines();
+        let events = h.drain();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, OrzmuxEvent::Frame { pane, .. } if *pane == root))
+        );
+        assert_eq!(h.wake_count(), before + 1);
     }
 }

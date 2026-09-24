@@ -9,10 +9,9 @@ use crate::action::terminal::{open_uri::OpenUriPlugin, selection::SelectionPlugi
 use bevy::prelude::*;
 
 pub(crate) use open_uri::TerminalOpenUri;
-pub(crate) use selection::{
-    TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
-    trigger_selection_copy,
-};
+#[cfg(test)]
+pub(crate) use selection::TerminalSelectionCopy;
+pub(crate) use selection::trigger_selection_copy;
 
 /// Aggregates the per-command terminal action plugins.
 pub(super) struct TerminalActionPlugin;

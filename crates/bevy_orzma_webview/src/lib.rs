@@ -11,6 +11,7 @@ use bevy::prelude::*;
 use bevy_orzma_webview_host::WebviewAssetRegistry;
 use control_plane::ControlPlanePlugin;
 pub use control_plane::{ChordKey, ControlPlaneHandle, HandleId, NormalizedChord, TokenRegistry};
+use std::task::Waker;
 use webview::apc::ApcPlugin;
 pub use webview::apc::NonInteractive;
 use webview::mount::WebviewPlugin;
@@ -23,18 +24,27 @@ pub use webview::render::cef_plugin;
 
 /// The in-process webview subsystem: CEF render wiring, the `window.orzma`
 /// back-channel, APC mount and unmount, and the control socket.
-///
-/// The host supplies the `WebviewAssetRegistry` shared with the `orzma://`
-/// scheme handler (built via [`cef_plugin`]).
 pub struct OrzmaWebviewPlugin {
-    /// The registry shared with the `orzma://` scheme handler.
-    pub orzma_assets: WebviewAssetRegistry,
+    orzma_assets: WebviewAssetRegistry,
+    waker: Waker,
+}
+
+impl OrzmaWebviewPlugin {
+    /// Builds the plugin sharing `orzma_assets` with the `orzma://` scheme
+    /// handler built by [`cef_plugin`]. The control-socket listener wakes the
+    /// app through `waker` after it queues work for the app.
+    pub fn new(orzma_assets: WebviewAssetRegistry, waker: Waker) -> Self {
+        Self {
+            orzma_assets,
+            waker,
+        }
+    }
 }
 
 impl Plugin for OrzmaWebviewPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            ControlPlanePlugin::new(self.orzma_assets.clone()),
+            ControlPlanePlugin::new(self.orzma_assets.clone(), self.waker.clone()),
             RenderPlugin,
             ApcPlugin,
             WebviewPlugin,

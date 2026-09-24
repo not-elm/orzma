@@ -6,6 +6,7 @@ mod cef_profile;
 mod configs;
 mod font;
 mod input;
+mod redraw;
 mod session;
 mod surface;
 mod system_set;
@@ -15,11 +16,13 @@ mod window_title;
 
 use crate::action::ActionPlugin;
 use crate::cef_profile::CefProfileDir;
+use crate::redraw::{AppWakers, RedrawPlugin};
 use crate::surface::SurfacePlugin;
 use crate::system_set::OrzmaSystems;
 use crate::window_icon::WindowIconPlugin;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
+use bevy::render::RenderPlugin;
 #[cfg(not(target_os = "macos"))]
 use bevy_cef::prelude::early_exit_if_subprocess;
 use bevy_orzma_tty_renderer::TerminalRendererPlugin;
@@ -32,6 +35,7 @@ use configs::{OrzmaConfigsPlugin, cursor_policy, wheel_config};
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
 use session::SessionPlugin;
+use std::fmt::Display;
 use ui::OrzmaUiPlugin;
 
 /// Scrollback rows every pane retains on its primary screen.
@@ -49,29 +53,35 @@ fn main() {
     ensure_utf8_locale_env();
 
     let pre_configs = orzma_configs::OrzmaConfigs::load().unwrap_or_default();
-    let orzmux = match OrzmuxClient::spawn(OrzmuxConfig {
-        shell: pre_configs.orzma.shell.clone(),
-        scrollback_rows: SCROLLBACK_ROWS,
-        wheel: wheel_config(&pre_configs.mouse),
-        cursor: cursor_policy(&pre_configs.cursor),
-        shell_integration: pre_configs.orzma.shell_integration,
-    }) {
-        Ok(client) => client,
-        Err(err) => {
-            eprintln!("orzma: {err}");
-            std::process::exit(1);
-        }
-    };
     let orzma_registry = WebviewAssetRegistry::default();
-    let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
-    App::new()
-        .add_plugins((
-            DefaultPlugins.set(WindowPlugin {
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
                 primary_window: Some(primary_window()),
                 ..default()
+            })
+            .set(RenderPlugin {
+                synchronous_pipeline_compilation: true,
+                ..default()
             }),
-            cef_plugin(orzma_registry.clone(), cef_profile.path()),
-        ))
+    );
+    let wakers = AppWakers::new(app.world())
+        .unwrap_or_else(|| fatal("the window event loop is unavailable"));
+    let orzmux = OrzmuxClient::spawn(
+        OrzmuxConfig {
+            shell: pre_configs.orzma.shell.clone(),
+            scrollback_rows: SCROLLBACK_ROWS,
+            wheel: wheel_config(&pre_configs.mouse),
+            cursor: cursor_policy(&pre_configs.cursor),
+            shell_integration: pre_configs.orzma.shell_integration,
+        },
+        wakers.input().clone(),
+    )
+    .unwrap_or_else(|err| fatal(err));
+    let cef_profile = CefProfileDir::acquire()
+        .unwrap_or_else(|err| fatal(format!("cannot create the CEF profile directory: {err}")));
+    app.add_plugins(cef_plugin(orzma_registry.clone(), cef_profile.path()))
         .add_plugins((
             SurfacePlugin,
             SessionPlugin,
@@ -84,11 +94,10 @@ fn main() {
             OrzmaUiPlugin,
         ))
         .add_plugins((
-            OrzmaWebviewPlugin {
-                orzma_assets: orzma_registry,
-            },
+            OrzmaWebviewPlugin::new(orzma_registry, wakers.input().clone()),
             WindowTitlePlugin,
             WindowIconPlugin,
+            RedrawPlugin::new(wakers),
         ))
         .insert_resource(OrzmuxConnection(orzmux))
         .configure_sets(
@@ -96,6 +105,12 @@ fn main() {
             OrzmaSystems::Input.after(OrzmuxSystems::ApplyLayout),
         )
         .run();
+}
+
+/// Reports `message` on standard error and exits the process with status 1.
+fn fatal(message: impl Display) -> ! {
+    eprintln!("orzma: {message}");
+    std::process::exit(1);
 }
 
 /// The primary window descriptor.
