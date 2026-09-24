@@ -3,7 +3,7 @@
 
 use crate::error::OrzmuxResult;
 use orzma_tty::prelude::OrzmaTty;
-use orzma_tty::{CellPixels, EnvKey, EnvValue, SpawnOptions};
+use orzma_tty::{CellPixels, EnvKey, EnvValue, NATIVE_SCROLLBACK_ON_GROW, SpawnOptions};
 use orzma_vt::prelude::{CursorPolicy, GridSize, OrzmaVt};
 #[cfg(windows)]
 use std::path::Path;
@@ -126,7 +126,9 @@ impl PaneFactory for ShellFactory {
         cwd: Option<PathBuf>,
         env: Vec<(EnvKey, EnvValue)>,
     ) -> OrzmuxResult<OrzmaTty<OrzmaVt>> {
-        let vt = OrzmaVt::new(size, self.scrollback_rows).with_cursor_policy(self.cursor_policy);
+        let vt = OrzmaVt::new(size, self.scrollback_rows)
+            .with_cursor_policy(self.cursor_policy)
+            .with_scrollback_on_grow(NATIVE_SCROLLBACK_ON_GROW);
         Ok(OrzmaTty::spawn(
             vt,
             SpawnOptions {
