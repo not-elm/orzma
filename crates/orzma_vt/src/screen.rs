@@ -42,7 +42,7 @@ use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
 use crate::screen::viewport::{DisplayOffset, Scroll, Viewport, ViewportLine};
 use crate::screen::webview_placements::WebviewPlacements;
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 /// One terminal screen: cell storage plus the write cursor, updated
 /// atomically by each operation.
@@ -1664,25 +1664,46 @@ impl Screen {
     /// to the oldest history row.
     fn land_riders(&mut self, riders: &Riders, anchors: &[(LineId, GridColumn)], cols: u16) {
         if let Some(ends) = riders.selection {
-            let ends = ends.map(|(index, on_line_end_edge)| {
-                riders.moved(index).and_then(|point| {
-                    self.grid.line_id_at(point.line()).map(|line| SelectionEnd {
-                        line,
-                        boundary: if on_line_end_edge {
-                            cols
-                        } else {
-                            point.boundary().min(cols)
-                        },
-                    })
+            self.land_selection(riders, ends, cols);
+        }
+        self.land_placements(riders, anchors, cols);
+        if let Some(index) = riders.viewport {
+            self.land_viewport(riders.moved(index));
+        }
+    }
+
+    /// Moves the selection onto the positions a reflow to `cols` columns
+    /// carried its `ends` in `riders` to, or clears it when the row of
+    /// either end is gone.
+    ///
+    /// An end that stood on the right edge of a row ending its logical line
+    /// lands on the right edge again.
+    fn land_selection(&mut self, riders: &Riders, ends: [(usize, bool); 2], cols: u16) {
+        let ends = ends.map(|(index, on_line_end_edge)| {
+            riders.moved(index).and_then(|point| {
+                self.grid.line_id_at(point.line()).map(|line| SelectionEnd {
+                    line,
+                    boundary: if on_line_end_edge {
+                        cols
+                    } else {
+                        point.boundary().min(cols)
+                    },
                 })
-            });
-            match ends {
-                [Some(anchor), Some(moving)] => self.selection.relocate(anchor, moving),
-                _ => {
-                    let _ = self.selection.clear();
-                }
+            })
+        });
+        match ends {
+            [Some(anchor), Some(moving)] => self.selection.relocate(anchor, moving),
+            _ => {
+                let _ = self.selection.clear();
             }
         }
+    }
+
+    /// Re-anchors each placement on the position a reflow to `cols`
+    /// columns carried its anchor in `riders` to, with `anchors` the
+    /// placements' anchors from before it; a placement whose anchor row is
+    /// gone moves to a retired id.
+    fn land_placements(&mut self, riders: &Riders, anchors: &[(LineId, GridColumn)], cols: u16) {
         let retired = self.grid.retired_id();
         let last_column = cols.saturating_sub(1);
         let reanchored: Vec<(LineId, GridColumn)> = riders
@@ -1701,13 +1722,17 @@ impl Screen {
             })
             .collect();
         self.webview_placements.reanchor(&reanchored);
-        if let Some(index) = riders.viewport {
-            let offset = match riders.moved(index) {
-                Some(point) => u32::try_from(point.line().0.saturating_neg()).unwrap_or(0),
-                None => u32::MAX,
-            };
-            self.set_display_offset(DisplayOffset(offset));
-        }
+    }
+
+    /// Scrolls the viewport back to show the row a reflow carried its top
+    /// row to, `top`, on top; to the oldest history row when that row is
+    /// gone.
+    fn land_viewport(&mut self, top: Option<TrackedPoint>) {
+        let offset = match top {
+            Some(point) => u32::try_from(point.line().0.saturating_neg()).unwrap_or(0),
+            None => u32::MAX,
+        };
+        self.set_display_offset(DisplayOffset(offset));
     }
 
     /// The cursor position `point` stands for on a screen `cols` wide
@@ -1882,15 +1907,9 @@ impl Screen {
         for line in range.start.line.0..=range.end.line.0 {
             let (first, last) = range.span_on(line, last_column);
             let grid_line = GridLine(line);
-            let wrap = self.grid.wrap_at(grid_line);
-            let row = self.grid.row(grid_line);
-            logical_line.extend(
-                (first..=last)
-                    .filter(|column| wrap.is_none_or(|cells| *column < cells))
-                    .map(|column| &row[GridColumn(column)])
-                    .flat_map(Cell::chars),
-            );
-            if wrap.is_none() && line != range.end.line.0 {
+            self.push_span_text(&mut logical_line, grid_line, first..=last);
+            let line_ends = self.grid.wrap_at(grid_line).is_none();
+            if line_ends && line != range.end.line.0 {
                 text.push_str(logical_line.trim_end());
                 text.push('\n');
                 logical_line.clear();
@@ -1905,6 +1924,19 @@ impl Screen {
     fn selection_end(&self, cell: GridPoint, side: CellSide) -> Option<SelectionEnd> {
         let line = self.grid.line_id_at_point(cell)?;
         Some(SelectionEnd::at(line, cell.column, side))
+    }
+
+    /// Appends to `out` the text of the cells in `columns` of the row at
+    /// `line`; the cells past the row's recorded wrap contribute nothing.
+    fn push_span_text(&self, out: &mut String, line: GridLine, columns: RangeInclusive<u16>) {
+        let wrap = self.grid.wrap_at(line);
+        let row = self.grid.row(line);
+        out.extend(
+            columns
+                .filter(|column| wrap.is_none_or(|cells| *column < cells))
+                .map(|column| &row[GridColumn(column)])
+                .flat_map(Cell::chars),
+        );
     }
 }
 
@@ -1961,53 +1993,88 @@ impl Riders {
         viewport: u32,
         cols: u16,
     ) -> Self {
-        let mut points: Vec<Option<TrackedPoint>> = Vec::with_capacity(anchors.len() + 3);
-        let selection = selection.ends().map(|(anchor, moving)| {
-            let lines = [anchor, moving].map(|end| grid.grid_line(end.line));
-            let boundaries = match selection.kind() {
-                Some(SelectionKind::Lines) if lines[0].map(|l| l.0) <= lines[1].map(|l| l.0) => {
-                    [0, cols]
-                }
-                Some(SelectionKind::Lines) => [cols, 0],
-                _ => [anchor.boundary, moving.boundary],
-            };
-            let mut carry = |line: Option<GridLine>, boundary: u16| {
-                let on_line_end_edge =
-                    boundary >= cols && line.is_some_and(|line| grid.wrap_at(line).is_none());
-                points.push(line.map(|line| TrackedPoint::new(line, boundary)));
-                (points.len() - 1, on_line_end_edge)
-            };
-            [
-                carry(lines[0], boundaries[0]),
-                carry(lines[1], boundaries[1]),
-            ]
-        });
-        let first_anchor = points.len();
-        points.extend(anchors.iter().map(|(line, column)| {
-            grid.grid_line(*line)
-                .map(|line| TrackedPoint::new(line, column.0))
-        }));
-        let anchors = first_anchor..points.len();
-        let viewport = (viewport > 0).then(|| {
-            points.push(
-                i32::try_from(viewport)
-                    .ok()
-                    .map(|offset| TrackedPoint::new(GridLine(-offset), 0)),
-            );
-            points.len() - 1
-        });
-        Self {
-            points,
-            selection,
-            anchors,
-            viewport,
-        }
+        let mut riders = Self {
+            points: Vec::with_capacity(anchors.len() + 3),
+            selection: None,
+            anchors: 0..0,
+            viewport: None,
+        };
+        riders.carry_selection(grid, selection, cols);
+        riders.carry_anchors(grid, anchors);
+        riders.carry_viewport(viewport);
+        riders
     }
 
     /// Where the position at `index` in `points` stands now; `None` once
     /// its row is gone.
     fn moved(&self, index: usize) -> Option<TrackedPoint> {
         self.points.get(index).copied().flatten()
+    }
+
+    /// Carries the ends of `selection` on `grid`, a grid `cols` wide.
+    ///
+    /// A whole-line selection is carried from the left edge of its top row
+    /// to the right edge of its bottom row.
+    fn carry_selection(&mut self, grid: &Grid, selection: &ScreenSelection, cols: u16) {
+        let Some((anchor, moving)) = selection.ends() else {
+            return;
+        };
+        let lines = [anchor, moving].map(|end| grid.grid_line(end.line));
+        let anchor_on_top = lines[0].map(|line| line.0) <= lines[1].map(|line| line.0);
+        let boundaries = match selection.kind() {
+            Some(SelectionKind::Lines) if anchor_on_top => [0, cols],
+            Some(SelectionKind::Lines) => [cols, 0],
+            _ => [anchor.boundary, moving.boundary],
+        };
+        self.selection = Some([
+            self.carry_selection_end(grid, lines[0], boundaries[0], cols),
+            self.carry_selection_end(grid, lines[1], boundaries[1], cols),
+        ]);
+    }
+
+    /// Carries a selection end at `boundary` on `line` of `grid`, a grid
+    /// `cols` wide, returning its index in `self.points` and whether it
+    /// stands on the right edge of a row that ends its logical line.
+    fn carry_selection_end(
+        &mut self,
+        grid: &Grid,
+        line: Option<GridLine>,
+        boundary: u16,
+        cols: u16,
+    ) -> (usize, bool) {
+        let on_line_end_edge =
+            boundary >= cols && line.is_some_and(|line| grid.wrap_at(line).is_none());
+        let index = self.carry(line.map(|line| TrackedPoint::new(line, boundary)));
+        (index, on_line_end_edge)
+    }
+
+    /// Carries each of the placement `anchors` on `grid`, in order.
+    fn carry_anchors(&mut self, grid: &Grid, anchors: &[(LineId, GridColumn)]) {
+        let first = self.points.len();
+        self.points.extend(anchors.iter().map(|(line, column)| {
+            grid.grid_line(*line)
+                .map(|line| TrackedPoint::new(line, column.0))
+        }));
+        self.anchors = first..self.points.len();
+    }
+
+    /// Carries the top row of a viewport scrolled back by `viewport` rows;
+    /// nothing at the live tail.
+    fn carry_viewport(&mut self, viewport: u32) {
+        if viewport == 0 {
+            return;
+        }
+        let top = i32::try_from(viewport)
+            .ok()
+            .map(|offset| TrackedPoint::new(GridLine(-offset), 0));
+        self.viewport = Some(self.carry(top));
+    }
+
+    /// Adds `point` to the carried positions, returning its index in
+    /// `self.points`.
+    fn carry(&mut self, point: Option<TrackedPoint>) -> usize {
+        self.points.push(point);
+        self.points.len() - 1
     }
 }
 

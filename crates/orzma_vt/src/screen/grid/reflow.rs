@@ -63,6 +63,50 @@ impl TrackedPoint {
     pub fn boundary(&self) -> u16 {
         self.boundary
     }
+
+    /// The position `point` on the rebuilt screen stands for.
+    fn on_screen(point: SlicePoint) -> Self {
+        Self {
+            line: GridLine(i32::try_from(point.row).unwrap_or(i32::MAX)),
+            boundary: point.boundary,
+        }
+    }
+
+    /// The position `point` stands for in rebuilt history `history_len`
+    /// rows long.
+    fn in_history(point: SlicePoint, history_len: usize) -> Self {
+        let row = i32::try_from(point.row).unwrap_or(i32::MAX);
+        let rows_above = i32::try_from(history_len).unwrap_or(i32::MAX);
+        Self {
+            line: GridLine(row - rows_above),
+            boundary: point.boundary,
+        }
+    }
+
+    /// Where the saved cursor, carried to `slot` from boundary `boundary`,
+    /// lands on a screen `height` rows tall rewrapped at `widths.new`: where
+    /// it was carried when that is on the screen, and otherwise on row zero
+    /// when its row moved into history or past the cap, or on the last row
+    /// when its row fell off the bottom, in either case short of the right
+    /// edge.
+    fn saved_landing(slot: Option<Carried>, boundary: u16, height: usize, widths: Widths) -> Self {
+        let last_column = widths.new.saturating_sub(1);
+        match slot {
+            Some(Carried::Screen(point)) => Self::on_screen(point),
+            Some(Carried::LostBelow) => Self::on_screen(SlicePoint {
+                row: height.saturating_sub(1),
+                boundary: widths.fit(boundary).min(last_column),
+            }),
+            Some(Carried::History(point)) => Self {
+                line: GridLine(0),
+                boundary: point.boundary.min(last_column),
+            },
+            _ => Self {
+                line: GridLine(0),
+                boundary: widths.fit(boundary).min(last_column),
+            },
+        }
+    }
 }
 
 impl Grid {
@@ -110,224 +154,49 @@ impl Grid {
         size: GridSize,
         policy: ScrollbackOnGrow,
     ) {
-        let old = self.size;
-        let new_rows = usize::from(size.rows);
-        let rewraps = old.cols != size.cols;
-        let fit = |boundary: u16| {
-            if boundary >= old.cols {
-                size.cols
-            } else {
-                boundary.min(size.cols.saturating_sub(1))
-            }
+        let widths = Widths {
+            old: self.size.cols,
+            new: size.cols,
         };
+        let height = usize::from(size.rows);
         let history_len = self.history_len();
-        let mut history: Vec<GridRow> = Vec::from(mem::take(&mut self.rows));
-        let mut screen: Vec<GridRow> = history.split_off(history_len.min(history.len()));
-        let old_rows = screen.len();
-        let mut carried: Vec<Option<Carried>> = points
-            .iter()
-            .map(|point| point.map(|point| Carried::at(point, history_len, old_rows)))
-            .collect();
-        carried.push(Some(Carried::at(*saved, history_len, old_rows)));
-        let mut cursor_at = match Carried::at(*cursor, history_len, old_rows) {
-            Carried::Screen(point) => point,
-            _ => SlicePoint::default(),
-        };
-
-        let (extent, dropped) = split_below(&mut screen, &mut carried, cursor_at.row);
-
-        let mut old_top = SlicePoint::default();
-        if policy == ScrollbackOnGrow::Reclaim && rewraps {
-            let joined = continued_tail(&history);
-            lift_tail(
-                &mut history,
-                &mut screen,
-                &mut carried,
-                &mut cursor_at,
-                joined,
-                None,
-            );
-            old_top.row += joined;
-        }
-
-        if rewraps {
-            let mut moved = picked(&carried, Carried::screen);
-            moved.push(Some(old_top));
-            screen = rewrap(
-                Some(&mut cursor_at),
-                &mut moved,
-                &mut || self.mint(),
-                screen,
-                old.cols,
-                size.cols,
-            );
-            if let Some(Some(point)) = moved.pop() {
-                old_top = point;
-            }
-            write_back(&mut carried, moved, Carried::screen, Carried::Screen);
-        }
-
-        let reflowed = screen.len();
-        for slot in carried.iter_mut().flatten() {
-            if let Carried::Below { rows, boundary } = *slot {
-                *slot = Carried::Screen(SlicePoint {
-                    row: reflowed.saturating_sub(1) + rows,
-                    boundary: fit(boundary),
-                });
-            }
-        }
-
-        let last_row = screen
-            .iter()
-            .rposition(has_text)
-            .unwrap_or(0)
-            .max(cursor_at.row);
-        let top = (last_row + 1)
-            .saturating_sub(new_rows)
-            .max(old_top.row)
-            .min(cursor_at.row);
-        let padded = new_rows.saturating_sub(reflowed.saturating_sub(top));
-        let reclaimed = match policy {
-            ScrollbackOnGrow::Reclaim if extent + 1 == old_rows => {
-                (new_rows + extent + 1 + old_top.row).saturating_sub(old_rows + reflowed)
-            }
-            ScrollbackOnGrow::Reclaim => new_rows.saturating_sub(old_rows),
-            ScrollbackOnGrow::Keep => 0,
-        }
-        .min(padded);
-
-        if rewraps {
-            let mut moved = picked(&carried, Carried::history);
-            // NOTE: `needed` must stay at least the number of history rows
-            // the push, pull and cap steps below can keep, or rows that
-            // should survive the cap are dropped without being rewrapped.
-            let needed = self
-                .max_history
-                .saturating_add(reclaimed)
-                .saturating_sub(top);
-            history = rewrap_newest(
-                None,
-                &mut moved,
-                &mut || self.mint(),
-                history,
-                old.cols,
-                size.cols,
-                needed,
-            );
-            write_back(&mut carried, moved, Carried::history, Carried::History);
-        }
-
-        sink_top(
-            &mut history,
-            &mut screen,
-            &mut carried,
-            &mut cursor_at,
-            top,
-            new_rows,
+        let mut ring = Rebuild::split(
+            mem::take(&mut self.rows),
+            history_len,
+            *cursor,
+            *saved,
+            points,
         );
-        screen.truncate(new_rows);
-        if let Some(last) = screen.last_mut() {
-            last.wrap_at = None;
+        ring.split_below();
+        if widths.rewraps() {
+            if policy == ScrollbackOnGrow::Reclaim {
+                ring.join_continued_tail();
+            }
+            ring.rewrap_screen(&mut || self.mint(), widths);
         }
-        self.pad(&mut screen, dropped, padded, old.cols, size.cols);
-        let pulled = reclaimed.min(history.len());
-        lift_tail(
-            &mut history,
-            &mut screen,
-            &mut carried,
-            &mut cursor_at,
-            pulled,
-            Some(new_rows),
-        );
-        drop_past_cap(&mut history, &mut carried, self.max_history);
-
-        self.history_index.rebuild(history.iter().map(|row| row.id));
-        let history_len = history.len();
-        let mut rows = VecDeque::from(history);
-        rows.extend(screen);
-        self.rows = rows;
-        self.size = size;
-
-        let line_of = |row: usize| GridLine(i32::try_from(row).unwrap_or(i32::MAX));
-        let history_line = |row: usize| {
-            GridLine(
-                i32::try_from(row).unwrap_or(i32::MAX)
-                    - i32::try_from(history_len).unwrap_or(i32::MAX),
-            )
-        };
-        *cursor = TrackedPoint {
-            line: line_of(cursor_at.row),
-            boundary: cursor_at.boundary,
-        };
-        let saved_slot = carried.pop().flatten();
-        let last_column = size.cols.saturating_sub(1);
-        *saved = match saved_slot {
-            Some(Carried::Screen(point)) => TrackedPoint {
-                line: line_of(point.row),
-                boundary: point.boundary,
-            },
-            Some(Carried::LostBelow) => TrackedPoint {
-                line: line_of(new_rows.saturating_sub(1)),
-                boundary: fit(saved.boundary).min(last_column),
-            },
-            Some(Carried::History(point)) => TrackedPoint {
-                line: GridLine(0),
-                boundary: point.boundary.min(last_column),
-            },
-            _ => TrackedPoint {
-                line: GridLine(0),
-                boundary: fit(saved.boundary).min(last_column),
-            },
-        };
-        for (point, slot) in points.iter_mut().zip(carried) {
-            *point = match slot {
-                Some(Carried::History(slice)) => Some(TrackedPoint {
-                    line: history_line(slice.row),
-                    boundary: slice.boundary,
-                }),
-                Some(Carried::Screen(slice)) => Some(TrackedPoint {
-                    line: line_of(slice.row),
-                    boundary: slice.boundary,
-                }),
-                _ => None,
-            };
+        ring.land_below(widths);
+        let settling = Settling::of(&ring, policy, height);
+        if widths.rewraps() {
+            let needed = settling.history_needed(self.max_history);
+            ring.rewrap_history(&mut || self.mint(), needed, widths);
         }
+        ring.sink_top(settling.sunk, height);
+        ring.cut_screen_to(height);
+        ring.pad(&mut || self.mint(), settling.padded, widths);
+        ring.reclaim(settling.reclaimed, height);
+        ring.drop_past_cap(self.max_history);
+        ring.hand_back(cursor, saved, points, height, widths);
+        self.install(ring, size);
     }
 
-    /// Appends `count` rows `cols` wide to `screen`, each under a freshly
-    /// minted id and ending its logical line: first the rows of `dropped`,
-    /// each `old_cols` wide and filled out in the colors of its last cell,
-    /// then blank ones.
-    fn pad(
-        &mut self,
-        screen: &mut Vec<GridRow>,
-        dropped: Vec<GridRow>,
-        count: usize,
-        old_cols: u16,
-        cols: u16,
-    ) {
-        let mut dropped = dropped.into_iter();
-        for _ in 0..count {
-            let id = self.mint();
-            let cells = match dropped.next() {
-                Some(row) => {
-                    let fill = row
-                        .cells
-                        .last()
-                        .map_or_else(Cell::default, |last| last.pen().erase_cell());
-                    let mut cells = row.cells;
-                    cells.resize(cols, fill);
-                    cells.repair_after_resize(old_cols);
-                    cells
-                }
-                None => Row::filled(cols, Cell::default()),
-            };
-            screen.push(GridRow {
-                id,
-                cells,
-                wrap_at: None,
-            });
-        }
+    /// Puts the rows `ring` rebuilt back into the ring, at `size`.
+    fn install(&mut self, ring: Rebuild, size: GridSize) {
+        self.history_index
+            .rebuild(ring.history.iter().map(|row| row.id));
+        let mut rows = VecDeque::from(ring.history);
+        rows.extend(ring.screen);
+        self.rows = rows;
+        self.size = size;
     }
 }
 
@@ -394,6 +263,391 @@ impl Carried {
     }
 }
 
+/// The ring's rows while a reflow rebuilds them, split into history and
+/// screen, with the positions the reflow carries.
+struct Rebuild {
+    /// The history rows, oldest first.
+    history: Vec<GridRow>,
+    /// The screen rows, top first.
+    screen: Vec<GridRow>,
+    /// The screen rows split off below the last row the reflow keeps.
+    dropped: Vec<GridRow>,
+    /// How many rows the screen had before the reflow.
+    old_rows: usize,
+    /// Where the cursor stands on the screen.
+    cursor: SlicePoint,
+    /// Where the first cell of the screen's old top row stands on the
+    /// screen.
+    old_top: SlicePoint,
+    /// Where each carried position stands: the caller's points in order,
+    /// then the saved cursor.
+    carried: Vec<Option<Carried>>,
+}
+
+impl Rebuild {
+    /// Splits `rows` into the first `history_len` as history and the rest
+    /// as the screen, and places `cursor`, `saved`, and each of `points` on
+    /// them.
+    fn split(
+        rows: VecDeque<GridRow>,
+        history_len: usize,
+        cursor: TrackedPoint,
+        saved: TrackedPoint,
+        points: &[Option<TrackedPoint>],
+    ) -> Self {
+        let mut history = Vec::from(rows);
+        let screen = history.split_off(history_len.min(history.len()));
+        let old_rows = screen.len();
+        let carried = points
+            .iter()
+            .copied()
+            .chain([Some(saved)])
+            .map(|point| point.map(|point| Carried::at(point, history_len, old_rows)))
+            .collect();
+        let cursor = match Carried::at(cursor, history_len, old_rows) {
+            Carried::Screen(point) => point,
+            _ => SlicePoint::default(),
+        };
+        Self {
+            history,
+            screen,
+            dropped: Vec::new(),
+            old_rows,
+            cursor,
+            old_top: SlicePoint::default(),
+            carried,
+        }
+    }
+
+    /// Splits off the screen rows below the last row the reflow keeps into
+    /// `self.dropped`, and turns each carried position on a split-off row
+    /// into [`Carried::Below`].
+    ///
+    /// The kept rows run through the last row showing text or the cursor's
+    /// row, whichever is lower, and on through the rows that row's logical
+    /// line continues onto.
+    fn split_below(&mut self) {
+        let last_text = self.screen.iter().rposition(has_text).unwrap_or(0);
+        let mut extent = last_text
+            .max(self.cursor.row)
+            .min(self.screen.len().saturating_sub(1));
+        while extent + 1 < self.screen.len() && self.screen[extent].wrap_at.is_some() {
+            extent += 1;
+        }
+        self.dropped = self.screen.split_off((extent + 1).min(self.screen.len()));
+        for slot in self.carried.iter_mut().flatten() {
+            if let Carried::Screen(point) = *slot
+                && point.row > extent
+            {
+                *slot = Carried::Below {
+                    rows: point.row - extent,
+                    boundary: point.boundary,
+                };
+            }
+        }
+    }
+
+    /// Moves the history rows of the logical line that runs onto the
+    /// screen to the top of the screen, so that a screen rewrap joins them
+    /// with the rest of their line.
+    fn join_continued_tail(&mut self) {
+        let joined = continued_tail(&self.history);
+        self.lift_tail(joined, None);
+        self.old_top.row += joined;
+    }
+
+    /// Rewraps the screen rows at `widths.new`, carrying the cursor, the
+    /// old top row's first cell, and each position on the screen; `mint`
+    /// names every row the cut adds.
+    fn rewrap_screen(&mut self, mint: &mut impl FnMut() -> LineId, widths: Widths) {
+        let mut moved = picked(&self.carried, Carried::screen);
+        moved.push(Some(self.old_top));
+        self.screen = rewrap(
+            Some(&mut self.cursor),
+            &mut moved,
+            mint,
+            mem::take(&mut self.screen),
+            widths.old,
+            widths.new,
+        );
+        if let Some(Some(point)) = moved.pop() {
+            self.old_top = point;
+        }
+        write_back(&mut self.carried, moved, Carried::screen, Carried::Screen);
+    }
+
+    /// Puts each position carried below the kept rows back on the screen,
+    /// as many rows below the last screen row as it stood below the last
+    /// kept one, with its boundary fitted to `widths.new`.
+    fn land_below(&mut self, widths: Widths) {
+        let last_row = self.screen.len().saturating_sub(1);
+        for slot in self.carried.iter_mut().flatten() {
+            if let Carried::Below { rows, boundary } = *slot {
+                *slot = Carried::Screen(SlicePoint {
+                    row: last_row + rows,
+                    boundary: widths.fit(boundary),
+                });
+            }
+        }
+    }
+
+    /// Rewraps the newest history rows at `widths.new`, keeping the fewest
+    /// newest lines sure to make `needed` rows and dropping the older ones
+    /// whole, and carries each position in history along; `mint` names
+    /// every row the cut adds.
+    fn rewrap_history(&mut self, mint: &mut impl FnMut() -> LineId, needed: usize, widths: Widths) {
+        let mut moved = picked(&self.carried, Carried::history);
+        self.history = rewrap_newest(
+            None,
+            &mut moved,
+            mint,
+            mem::take(&mut self.history),
+            widths.old,
+            widths.new,
+            needed,
+        );
+        write_back(&mut self.carried, moved, Carried::history, Carried::History);
+    }
+
+    /// Moves the first `top` screen rows to the end of history, carrying
+    /// the cursor and each position with them: a position on a moved row
+    /// moves into history, one on the rest of the screen moves up `top`
+    /// rows, and one that lands `height` rows or more down is lost below.
+    ///
+    /// `top` must not pass the cursor's row.
+    fn sink_top(&mut self, top: usize, height: usize) {
+        let pushed_from = self.history.len();
+        self.history.extend(self.screen.drain(..top));
+        self.cursor.row = self.cursor.row.saturating_sub(top);
+        for slot in self.carried.iter_mut().flatten() {
+            if let Carried::Screen(point) = *slot {
+                *slot = if point.row < top {
+                    Carried::History(SlicePoint {
+                        row: pushed_from + point.row,
+                        ..point
+                    })
+                } else if point.row - top >= height {
+                    Carried::LostBelow
+                } else {
+                    Carried::Screen(SlicePoint {
+                        row: point.row - top,
+                        ..point
+                    })
+                };
+            }
+        }
+    }
+
+    /// Drops the screen rows past `height`, leaving the last row to end its
+    /// logical line.
+    fn cut_screen_to(&mut self, height: usize) {
+        self.screen.truncate(height);
+        if let Some(last) = self.screen.last_mut() {
+            last.wrap_at = None;
+        }
+    }
+
+    /// Appends `count` rows `widths.new` wide to the screen, each under an
+    /// id `mint` names and ending its logical line: first the rows split
+    /// off below the kept ones, each `widths.old` wide and filled out in
+    /// the colors of its last cell, then blank ones.
+    fn pad(&mut self, mint: &mut impl FnMut() -> LineId, count: usize, widths: Widths) {
+        let mut dropped = mem::take(&mut self.dropped).into_iter();
+        for _ in 0..count {
+            let id = mint();
+            let cells = match dropped.next() {
+                Some(mut row) => {
+                    fill_out(&mut row.cells, widths);
+                    row.cells
+                }
+                None => Row::filled(widths.new, Cell::default()),
+            };
+            self.screen.push(GridRow {
+                id,
+                cells,
+                wrap_at: None,
+            });
+        }
+    }
+
+    /// Pulls up to `count` of the newest history rows back onto the top of
+    /// a screen `height` rows tall, pushing as many rows off its bottom.
+    fn reclaim(&mut self, count: usize, height: usize) {
+        let pulled = count.min(self.history.len());
+        self.lift_tail(pulled, Some(height));
+    }
+
+    /// Drops the oldest history rows past `cap`: each position on a dropped
+    /// row is lost above, and each on a kept one follows its row.
+    fn drop_past_cap(&mut self, cap: usize) {
+        let excess = self.history.len().saturating_sub(cap);
+        if excess == 0 {
+            return;
+        }
+        self.history.drain(..excess);
+        for slot in self.carried.iter_mut().flatten() {
+            if let Carried::History(point) = *slot {
+                *slot = if point.row < excess {
+                    Carried::LostAbove
+                } else {
+                    Carried::History(SlicePoint {
+                        row: point.row - excess,
+                        ..point
+                    })
+                };
+            }
+        }
+    }
+
+    /// Writes the positions the rebuild carried back into `cursor`,
+    /// `saved`, and `points`, in active-grid coordinates on a screen
+    /// `height` rows tall rewrapped at `widths.new`.
+    ///
+    /// `cursor` and `saved` always land on the screen; each of `points`
+    /// whose row is gone becomes `None`.
+    fn hand_back(
+        &mut self,
+        cursor: &mut TrackedPoint,
+        saved: &mut TrackedPoint,
+        points: &mut [Option<TrackedPoint>],
+        height: usize,
+        widths: Widths,
+    ) {
+        *cursor = TrackedPoint::on_screen(self.cursor);
+        let saved_slot = self.carried.pop().flatten();
+        *saved = TrackedPoint::saved_landing(saved_slot, saved.boundary, height, widths);
+        let history_len = self.history.len();
+        for (point, slot) in points.iter_mut().zip(&self.carried) {
+            *point = match *slot {
+                Some(Carried::History(slice)) => Some(TrackedPoint::in_history(slice, history_len)),
+                Some(Carried::Screen(slice)) => Some(TrackedPoint::on_screen(slice)),
+                _ => None,
+            };
+        }
+    }
+
+    /// Moves the newest `count` history rows to the top of the screen,
+    /// carrying the cursor and each position with them: a position on a
+    /// moved row moves onto the screen, and one already on the screen
+    /// moves down `count` rows.
+    ///
+    /// With `height` set, the screen first gives up its last `count` rows,
+    /// and a position that would land `height` rows or more down is lost
+    /// below. A `count` of zero changes nothing.
+    fn lift_tail(&mut self, count: usize, height: Option<usize>) {
+        if count == 0 {
+            return;
+        }
+        let from = self.history.len().saturating_sub(count);
+        if height.is_some() {
+            self.screen
+                .truncate(self.screen.len().saturating_sub(count));
+        }
+        self.screen.splice(0..0, self.history.drain(from..));
+        self.cursor.row += count;
+        for slot in self.carried.iter_mut().flatten() {
+            *slot = match *slot {
+                Carried::History(point) if point.row >= from => Carried::Screen(SlicePoint {
+                    row: point.row - from,
+                    ..point
+                }),
+                Carried::Screen(point)
+                    if height.is_some_and(|height| point.row + count >= height) =>
+                {
+                    Carried::LostBelow
+                }
+                Carried::Screen(point) => Carried::Screen(SlicePoint {
+                    row: point.row + count,
+                    ..point
+                }),
+                other => other,
+            };
+        }
+    }
+}
+
+/// How a rebuilt screen settles into the new height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Settling {
+    /// How many of the screen's top rows sink into history.
+    sunk: usize,
+    /// How many rows are added at the bottom of the screen.
+    padded: usize,
+    /// How many of the added rows history may give back instead.
+    reclaimed: usize,
+}
+
+impl Settling {
+    /// How the screen `ring` rebuilt settles into `height` rows under
+    /// `policy`.
+    ///
+    /// The old top row stays on top where the text allows: rows sink into
+    /// history only as far as the cursor, or the text below it, needs to
+    /// stay on screen.
+    fn of(ring: &Rebuild, policy: ScrollbackOnGrow, height: usize) -> Self {
+        let rebuilt = ring.screen.len();
+        let last_row = ring
+            .screen
+            .iter()
+            .rposition(has_text)
+            .unwrap_or(0)
+            .max(ring.cursor.row);
+        let sunk = (last_row + 1)
+            .saturating_sub(height)
+            .max(ring.old_top.row)
+            .min(ring.cursor.row);
+        let padded = height.saturating_sub(rebuilt.saturating_sub(sunk));
+        let reclaimable = match policy {
+            ScrollbackOnGrow::Reclaim if ring.dropped.is_empty() => {
+                (height + ring.old_top.row).saturating_sub(rebuilt)
+            }
+            ScrollbackOnGrow::Reclaim => height.saturating_sub(ring.old_rows),
+            ScrollbackOnGrow::Keep => 0,
+        };
+        Self {
+            sunk,
+            padded,
+            reclaimed: reclaimable.min(padded),
+        }
+    }
+
+    /// How many rows a rewrap of history must make so that history can
+    /// still hold `cap` rows once the screen settles.
+    fn history_needed(self, cap: usize) -> usize {
+        // NOTE: The result must stay at least the number of history rows
+        // the sink, reclaim, and cap steps can keep, or rows that should
+        // survive the cap are dropped without being rewrapped.
+        cap.saturating_add(self.reclaimed).saturating_sub(self.sunk)
+    }
+}
+
+/// The widths a reflow rewraps rows from and to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Widths {
+    /// The width the rows have before the reflow.
+    old: u16,
+    /// The width the reflow rewraps them at.
+    new: u16,
+}
+
+impl Widths {
+    /// Whether the width changes, so that rows rewrap.
+    fn rewraps(self) -> bool {
+        self.old != self.new
+    }
+
+    /// Where `boundary`, taken on a row `self.old` wide, falls on a row
+    /// `self.new` wide: the right edge stays the right edge, and any other
+    /// boundary stops short of it.
+    fn fit(self, boundary: u16) -> u16 {
+        if boundary >= self.old {
+            self.new
+        } else {
+            boundary.min(self.new.saturating_sub(1))
+        }
+    }
+}
+
 /// How many rows at the end of `history` hold a logical line that
 /// continues onto the screen; zero when the newest history row ends its
 /// line.
@@ -403,140 +657,6 @@ fn continued_tail(history: &[GridRow]) -> usize {
         .rev()
         .take_while(|row| row.wrap_at.is_some())
         .count()
-}
-
-/// Splits off the rows of `screen` below the last row a reflow keeps,
-/// returning that row's index and the rows split off, and turns each of
-/// `carried` on a split-off row into [`Carried::Below`].
-///
-/// The kept rows run through the last row showing text or the cursor's
-/// row `cursor_row`, whichever is lower, and on through the rows that row's
-/// logical line continues onto.
-fn split_below(
-    screen: &mut Vec<GridRow>,
-    carried: &mut [Option<Carried>],
-    cursor_row: usize,
-) -> (usize, Vec<GridRow>) {
-    let last_text = screen.iter().rposition(has_text).unwrap_or(0);
-    let mut extent = last_text
-        .max(cursor_row)
-        .min(screen.len().saturating_sub(1));
-    while extent + 1 < screen.len() && screen[extent].wrap_at.is_some() {
-        extent += 1;
-    }
-    let dropped = screen.split_off((extent + 1).min(screen.len()));
-    for slot in carried.iter_mut().flatten() {
-        if let Carried::Screen(point) = *slot
-            && point.row > extent
-        {
-            *slot = Carried::Below {
-                rows: point.row - extent,
-                boundary: point.boundary,
-            };
-        }
-    }
-    (extent, dropped)
-}
-
-/// Moves the newest `count` rows of `history` to the top of `screen`,
-/// carrying `cursor` and `carried` with them: a position on a moved row
-/// moves onto the screen, and one already on the screen moves down
-/// `count` rows.
-///
-/// With `height` set, the screen first gives up its last `count` rows,
-/// and a position that would land `height` rows or more down is lost
-/// below. A `count` of zero changes nothing.
-fn lift_tail(
-    history: &mut Vec<GridRow>,
-    screen: &mut Vec<GridRow>,
-    carried: &mut [Option<Carried>],
-    cursor: &mut SlicePoint,
-    count: usize,
-    height: Option<usize>,
-) {
-    if count == 0 {
-        return;
-    }
-    let from = history.len().saturating_sub(count);
-    if height.is_some() {
-        screen.truncate(screen.len().saturating_sub(count));
-    }
-    screen.splice(0..0, history.drain(from..));
-    cursor.row += count;
-    for slot in carried.iter_mut().flatten() {
-        *slot = match *slot {
-            Carried::History(point) if point.row >= from => Carried::Screen(SlicePoint {
-                row: point.row - from,
-                ..point
-            }),
-            Carried::Screen(point) if height.is_some_and(|height| point.row + count >= height) => {
-                Carried::LostBelow
-            }
-            Carried::Screen(point) => Carried::Screen(SlicePoint {
-                row: point.row + count,
-                ..point
-            }),
-            other => other,
-        };
-    }
-}
-
-/// Moves the first `top` rows of `screen` to the end of `history`,
-/// carrying `cursor` and `carried` with them: a position on a moved row
-/// moves into history, one on the rest of the screen moves up `top` rows,
-/// and one that lands `height` rows or more down is lost below.
-///
-/// `top` must not pass the cursor's row.
-fn sink_top(
-    history: &mut Vec<GridRow>,
-    screen: &mut Vec<GridRow>,
-    carried: &mut [Option<Carried>],
-    cursor: &mut SlicePoint,
-    top: usize,
-    height: usize,
-) {
-    let pushed_from = history.len();
-    history.extend(screen.drain(..top));
-    cursor.row = cursor.row.saturating_sub(top);
-    for slot in carried.iter_mut().flatten() {
-        if let Carried::Screen(point) = *slot {
-            *slot = if point.row < top {
-                Carried::History(SlicePoint {
-                    row: pushed_from + point.row,
-                    ..point
-                })
-            } else if point.row - top >= height {
-                Carried::LostBelow
-            } else {
-                Carried::Screen(SlicePoint {
-                    row: point.row - top,
-                    ..point
-                })
-            };
-        }
-    }
-}
-
-/// Drops the oldest rows of `history` past `cap`: each of `carried` on a
-/// dropped row is lost above, and each on a kept one follows its row.
-fn drop_past_cap(history: &mut Vec<GridRow>, carried: &mut [Option<Carried>], cap: usize) {
-    let excess = history.len().saturating_sub(cap);
-    if excess == 0 {
-        return;
-    }
-    history.drain(..excess);
-    for slot in carried.iter_mut().flatten() {
-        if let Carried::History(point) = *slot {
-            *slot = if point.row < excess {
-                Carried::LostAbove
-            } else {
-                Carried::History(SlicePoint {
-                    row: point.row - excess,
-                    ..point
-                })
-            };
-        }
-    }
 }
 
 /// The position `pick` finds in each slot of `carried`, in order; `None`
@@ -562,6 +682,16 @@ fn write_back(
             *slot = Some(point.map_or(Carried::LostAbove, rebuild));
         }
     }
+}
+
+/// Fills out `cells`, a row `widths.old` wide, to `widths.new` columns in
+/// the colors of its last cell.
+fn fill_out(cells: &mut Row<Cell>, widths: Widths) {
+    let fill = cells
+        .last()
+        .map_or_else(Cell::default, |last| last.pen().erase_cell());
+    cells.resize(widths.new, fill);
+    cells.repair_after_resize(widths.old);
 }
 
 /// Where a position falls inside one logical line.
@@ -809,28 +939,41 @@ impl Rewrap {
             let Some(line_rows) = rows.get(start..end) else {
                 break;
             };
-            let line = Measure::of(
-                &mut self.shares,
-                line_rows,
-                start,
-                self.cursor_from,
-                self.old_cols,
-            );
-            let kept = (line.total > width)
-                .then(|| {
-                    line.keep_end(|| {
-                        let rows = line_rows.iter().zip(&self.shares).map(|(row, share)| {
-                            (row.cells.get(..share.taken).unwrap_or_default(), share)
-                        });
-                        text_end(rows, line.total, width - 1).unwrap_or(width)
-                    })
-                })
-                .filter(|&kept| kept > width);
+            let kept = self.keep_end_over(width, line_rows, start);
             made += kept.map_or(1, |kept| kept.div_ceil(width));
             keep_ends.push(kept);
             end = start;
         }
         (0, keep_ends, made)
+    }
+
+    /// How many cells the line held in `line_rows`, whose first row is the
+    /// run's row `first`, keeps when that is more than `width`; `None`
+    /// otherwise.
+    fn keep_end_over(
+        &mut self,
+        width: usize,
+        line_rows: &[GridRow],
+        first: usize,
+    ) -> Option<usize> {
+        let line = Measure::of(
+            &mut self.shares,
+            line_rows,
+            first,
+            self.cursor_from,
+            self.old_cols,
+        );
+        if line.total <= width {
+            return None;
+        }
+        let kept = line.keep_end(|| {
+            let rows = line_rows
+                .iter()
+                .zip(&self.shares)
+                .map(|(row, share)| (row.cells.get(..share.taken).unwrap_or_default(), share));
+            text_end(rows, line.total, width - 1).unwrap_or(width)
+        });
+        (kept > width).then_some(kept)
     }
 
     /// Cuts the line held in `self.line`, whose first row is the run's row
@@ -1033,38 +1176,63 @@ impl Rewrap {
         base: usize,
     ) -> bool {
         let width = usize::from(self.cols);
-        let last = self.cut.len().saturating_sub(1);
-        let cols = self.cols;
-        let to_point = |placed: Placed| match placed {
-            Placed::At { row, boundary } => SlicePoint {
-                row: base + row,
-                boundary: u16::try_from(boundary).unwrap_or(cols),
-            },
-            Placed::PastFullEnd => SlicePoint {
-                row: base + last,
-                boundary: cols,
-            },
-        };
         let cursor_placed = cursor_spot.map(|spot| Placed::of(&self.cut, spot, width));
         if let (Some(point), Some(placed)) = (cursor, cursor_placed) {
-            *point = match placed {
-                Placed::PastFullEnd => SlicePoint {
-                    row: base + last + 1,
-                    boundary: 0,
-                },
-                placed => to_point(placed),
-            };
+            *point = self.cursor_point(placed, base);
         }
+        self.place_points(points, keep_end, base);
+        matches!(cursor_placed, Some(Placed::PastFullEnd))
+    }
+
+    /// Where the cursor, placed at `placed` in the cut whose first row
+    /// lands at index `base`, stands in the rows made: just past a full last
+    /// row, it opens the row after it.
+    fn cursor_point(&self, placed: Placed, base: usize) -> SlicePoint {
+        match placed {
+            Placed::PastFullEnd => SlicePoint {
+                row: base + self.last_cut_row() + 1,
+                boundary: 0,
+            },
+            placed => self.point_at(placed, base),
+        }
+    }
+
+    /// Moves each of `points` that sat on the line onto the rows of
+    /// `self.cut`, the first of which lands at index `base`; a position
+    /// past the line's first `keep_end` cells moves to the end of those
+    /// cells.
+    fn place_points(&self, points: &mut [Option<SlicePoint>], keep_end: usize, base: usize) {
+        let width = usize::from(self.cols);
         for &(index, spot) in &self.spots {
             let clamped = Spot {
                 offset: spot.offset.min(keep_end),
                 ..spot
             };
             if let Some(slot) = points.get_mut(index) {
-                *slot = Some(to_point(Placed::of(&self.cut, clamped, width)));
+                *slot = Some(self.point_at(Placed::of(&self.cut, clamped, width), base));
             }
         }
-        matches!(cursor_placed, Some(Placed::PastFullEnd))
+    }
+
+    /// Where `placed`, a position in the cut whose first row lands at index
+    /// `base`, stands in the rows made: just past a full last row, it stays
+    /// on that row's right edge.
+    fn point_at(&self, placed: Placed, base: usize) -> SlicePoint {
+        match placed {
+            Placed::At { row, boundary } => SlicePoint {
+                row: base + row,
+                boundary: u16::try_from(boundary).unwrap_or(self.cols),
+            },
+            Placed::PastFullEnd => SlicePoint {
+                row: base + self.last_cut_row(),
+                boundary: self.cols,
+            },
+        }
+    }
+
+    /// The index of the cut's last row; zero for an empty cut.
+    fn last_cut_row(&self) -> usize {
+        self.cut.len().saturating_sub(1)
     }
 
     /// Pushes the rows of `self.built` onto `out`, each filled out to
@@ -1085,7 +1253,7 @@ impl Rewrap {
         extra: bool,
     ) {
         let width = usize::from(self.cols);
-        let last = self.cut.len().saturating_sub(1);
+        let last = self.last_cut_row();
         for (k, (mut row, cut_row)) in self.built.drain(..).zip(&self.cut).enumerate() {
             let pad = if k == last {
                 fill.clone()
@@ -1158,38 +1326,51 @@ impl Rewrap {
     /// there and opens the next row. `pairing` must not be
     /// [`Pairing::Broken`], and `self.cols` must be at least two.
     fn cut_in_bulk(&mut self, keep_end: usize, pairing: Pairing) {
+        self.plan_bulk_cut(keep_end, pairing);
+        self.build_planned_rows();
+    }
+
+    /// Plans in `self.cut` the rows the gathered `keep_end` cells, whose
+    /// wide glyphs pair up as `pairing` says, are cut into.
+    ///
+    /// A wide glyph that would start in the last column leaves a filler
+    /// there and opens the next row.
+    fn plan_bulk_cut(&mut self, keep_end: usize, pairing: Pairing) {
         let width = usize::from(self.cols);
         let mut start = 0;
         while keep_end - start > width {
-            let edge = start + width - 1;
-            let wide_at_edge = if pairing == Pairing::Intact {
-                self.cell_at(edge)
-                    .filter(|cell| cell.width == CellWidth::Wide)
-                    .map(Cell::pen)
-            } else {
-                None
-            };
-            if wide_at_edge.is_some() {
-                self.cut.push(CutRow {
-                    start,
-                    count: width - 1,
-                    filler: wide_at_edge,
-                });
-                start = edge;
-            } else {
-                self.cut.push(CutRow {
-                    start,
-                    count: width,
-                    filler: None,
-                });
-                start += width;
-            }
+            let filler = self.wide_pen_at(start + width - 1, pairing);
+            let count = if filler.is_some() { width - 1 } else { width };
+            self.cut.push(CutRow {
+                start,
+                count,
+                filler,
+            });
+            start += count;
         }
         self.cut.push(CutRow {
             start,
             count: keep_end - start,
             filler: None,
         });
+    }
+
+    /// The pen of the wide glyph the gathered cell `offset` cells into the
+    /// line holds; `None` for any other cell, and for every cell unless the
+    /// wide glyphs pair up [`Pairing::Intact`].
+    fn wide_pen_at(&self, offset: usize, pairing: Pairing) -> Option<Pen> {
+        if pairing != Pairing::Intact {
+            return None;
+        }
+        self.cell_at(offset)
+            .filter(|cell| cell.width == CellWidth::Wide)
+            .map(Cell::pen)
+    }
+
+    /// Moves the gathered cells into `self.built`, one buffer per row
+    /// planned in `self.cut`, and keeps the emptied buffers for later cuts.
+    fn build_planned_rows(&mut self) {
+        let width = usize::from(self.cols);
         for k in (0..self.cut.len()).rev() {
             let CutRow { start, filler, .. } = self.cut[k];
             let mut row = self.take_tail(start);
@@ -1210,21 +1391,10 @@ impl Rewrap {
     /// wide glyph that would start in the last column leaves a filler
     /// there and opens the next row.
     fn cut_cell_by_cell(&mut self) {
-        let mut cells = self.segments.first_mut().map(mem::take).unwrap_or_default();
         let width = usize::from(self.cols);
-        for mut later in self.segments.drain(1..) {
-            cells.append(&mut later);
-            recycle(&mut self.spare, later, width);
-        }
-        self.segments.clear();
+        let cells = self.join_segments();
         if cells.len() <= width {
-            let count = cells.len();
-            self.cut.push(CutRow {
-                start: 0,
-                count,
-                filler: None,
-            });
-            self.built.push(cells);
+            self.push_cut_row(cells, 0, None);
             return;
         }
         let mut row: Vec<Cell> = Vec::with_capacity(width);
@@ -1234,18 +1404,9 @@ impl Rewrap {
         while let Some(cell) = cells.next() {
             let span = if cell.width == CellWidth::Wide { 2 } else { 1 };
             if row.len() + span > width {
-                let count = row.len();
                 let filler = (span == 2 && row.len() + 1 == width).then(|| cell.pen());
-                if let Some(pen) = filler {
-                    row.push(pen.filler());
-                }
-                self.cut.push(CutRow {
-                    start,
-                    count,
-                    filler,
-                });
-                self.built
-                    .push(mem::replace(&mut row, Vec::with_capacity(width)));
+                let full = mem::replace(&mut row, Vec::with_capacity(width));
+                self.push_cut_row(full, start, filler);
                 start = offset;
             }
             if span == 2 {
@@ -1259,13 +1420,36 @@ impl Rewrap {
             }
             offset += span;
         }
-        let count = row.len();
+        self.push_cut_row(row, start, None);
+    }
+
+    /// Moves every gathered cell into one buffer, in line order, and keeps
+    /// the emptied buffers for later cuts.
+    fn join_segments(&mut self) -> Vec<Cell> {
+        let width = usize::from(self.cols);
+        let mut cells = self.segments.first_mut().map(mem::take).unwrap_or_default();
+        for mut later in self.segments.drain(1..) {
+            cells.append(&mut later);
+            recycle(&mut self.spare, later, width);
+        }
+        self.segments.clear();
+        cells
+    }
+
+    /// Adds `cells`, starting `start` cells into the line, as the cut's
+    /// next row; with `filler` set, the row closes with a filler in that
+    /// pen, which the row's count of the line's cells leaves out.
+    fn push_cut_row(&mut self, mut cells: Vec<Cell>, start: usize, filler: Option<Pen>) {
+        let count = cells.len();
+        if let Some(pen) = filler {
+            cells.push(pen.filler());
+        }
         self.cut.push(CutRow {
             start,
             count,
-            filler: None,
+            filler,
         });
-        self.built.push(row);
+        self.built.push(cells);
     }
 
     /// The gathered cell `offset` cells into the line.
@@ -1316,6 +1500,14 @@ impl Rewrap {
         self.shares[..held]
             .partition_point(|share| share.start <= offset)
             .checked_sub(1)
+    }
+
+    /// Keeps the cell buffers of `rows` for later cuts.
+    fn recycle_rows(&mut self, rows: impl Iterator<Item = GridRow>) {
+        let width = usize::from(self.cols);
+        for row in rows {
+            recycle(&mut self.spare, row.cells.into_inner(), width);
+        }
     }
 
     /// An empty buffer with room for a row `self.cols` wide, reusing a
@@ -1380,15 +1572,9 @@ fn rewrap_newest(
     let (kept_from, mut keep_ends, made) = rewrap.newest_lines(&rows, &starts, needed);
     let row_count = rows.len();
     let dropped = starts.get(kept_from).copied().unwrap_or(row_count);
-    for point in points.iter_mut() {
-        if point.is_some_and(|point| point.row < dropped) {
-            *point = None;
-        }
-    }
+    forget_points_above(points, dropped);
     let mut source = rows.into_iter();
-    for row in source.by_ref().take(dropped) {
-        recycle(&mut rewrap.spare, row.cells.into_inner(), usize::from(cols));
-    }
+    rewrap.recycle_rows(source.by_ref().take(dropped));
     let mut out = Vec::with_capacity(if needed == usize::MAX {
         row_count
     } else {
@@ -1408,6 +1594,15 @@ fn rewrap_newest(
         );
     }
     out
+}
+
+/// Turns each of `points` on a row above the run's row `row` into `None`.
+fn forget_points_above(points: &mut [Option<SlicePoint>], row: usize) {
+    for point in points.iter_mut() {
+        if point.is_some_and(|point| point.row < row) {
+            *point = None;
+        }
+    }
 }
 
 /// Keeps `cells` in `spare` for a later cut when it has room for a row

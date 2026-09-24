@@ -192,15 +192,8 @@ impl Grid {
             return;
         };
         let count = row.clamp_to_room(column, count);
-        if let Some(tail) = row.cells.get_mut(usize::from(column.0)..) {
-            tail.rotate_right(usize::from(count));
-            tail[..usize::from(count)].fill(fill);
-        }
-        row.cells.normalize_wide_pairs();
-        if let Some(wrapped) = row.wrap_at
-            && column.0 < wrapped
-            && wrapped < cols
-        {
+        row.shift_cells_right(column, count, fill);
+        if let Some(wrapped) = row.wrap_inside(column, cols) {
             row.wrap_at = Some(wrapped.saturating_add(count).min(cols));
         }
     }
@@ -227,16 +220,8 @@ impl Grid {
             return;
         };
         let count = row.clamp_to_room(column, count);
-        if let Some(tail) = row.cells.get_mut(usize::from(column.0)..) {
-            tail.rotate_left(usize::from(count));
-            let opened = tail.len().saturating_sub(usize::from(count));
-            tail[opened..].fill(fill);
-        }
-        row.cells.normalize_wide_pairs();
-        if let Some(wrapped) = row.wrap_at
-            && column.0 < wrapped
-            && wrapped < cols
-        {
+        row.shift_cells_left(column, count, fill);
+        if let Some(wrapped) = row.wrap_inside(column, cols) {
             row.wrap_at = Some(wrapped - count.min(wrapped - column.0));
         }
     }
@@ -481,33 +466,35 @@ impl Grid {
     /// The entering row ends its logical line, and every other row keeps
     /// its wrap.
     fn rotate_up(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
-        let base = self.history_len();
         let id = self.mint();
         if top > ScreenLine(0) {
-            let Some(mut recycled) = self.rows.remove(base + usize::from(top.0)) else {
-                return;
-            };
-            recycled.recycle(id, fill);
-            self.rows.insert(base + usize::from(bottom.0), recycled);
-            return;
+            self.discard_region_top(top, bottom, id, fill);
+        } else {
+            self.hand_top_to_history(bottom, id, fill);
         }
+    }
+
+    /// Moves the region's top row to its bottom as a fresh row named `id`
+    /// and filled with `fill`, discarding what the row held.
+    fn discard_region_top(&mut self, top: ScreenLine, bottom: ScreenLine, id: LineId, fill: Cell) {
+        let base = self.history_len();
+        let Some(mut recycled) = self.rows.remove(base + usize::from(top.0)) else {
+            return;
+        };
+        recycled.recycle(id, fill);
+        self.rows.insert(base + usize::from(bottom.0), recycled);
+    }
+
+    /// Hands the screen's top row to history and seats a row named `id`
+    /// and filled with `fill` at the region's `bottom`; a full history
+    /// drops its oldest row, and a grid without history drops the top row
+    /// itself.
+    fn hand_top_to_history(&mut self, bottom: ScreenLine, id: LineId, fill: Cell) {
+        let base = self.history_len();
         let grows_history = base < self.max_history;
         let departing = self.rows[base].id;
-        let entering = if grows_history {
-            GridRow {
-                id,
-                cells: Row::filled(self.size.cols, fill),
-                wrap_at: None,
-            }
-        } else {
-            let Some(mut recycled) = self.rows.pop_front() else {
-                return;
-            };
-            if self.max_history > 0 {
-                self.history_index.pop_oldest(recycled.id);
-            }
-            recycled.recycle(id, fill);
-            recycled
+        let Some(entering) = self.entering_row(grows_history, id, fill) else {
+            return;
         };
         if self.max_history > 0 {
             self.history_index.enter(departing);
@@ -522,6 +509,26 @@ impl Grid {
             base + usize::from(bottom.0)
         };
         self.rows.insert(below_bottom, entering);
+    }
+
+    /// The row a scroll that hands the top row to history seats at the
+    /// bottom, named `id` and filled with `fill`: a fresh one while
+    /// `grows_history` says history grows, and otherwise the oldest row,
+    /// recycled; `None` when the ring holds no row.
+    fn entering_row(&mut self, grows_history: bool, id: LineId, fill: Cell) -> Option<GridRow> {
+        if grows_history {
+            return Some(GridRow {
+                id,
+                cells: Row::filled(self.size.cols, fill),
+                wrap_at: None,
+            });
+        }
+        let mut recycled = self.rows.pop_front()?;
+        if self.max_history > 0 {
+            self.history_index.pop_oldest(recycled.id);
+        }
+        recycled.recycle(id, fill);
+        Some(recycled)
     }
 
     fn resize_rows(&mut self, rows: u16) {
@@ -607,6 +614,36 @@ impl GridRow {
     fn clamp_to_room(&self, column: GridColumn, count: u16) -> u16 {
         let room = self.cells.len().saturating_sub(usize::from(column.0));
         count.min(u16::try_from(room).unwrap_or(u16::MAX))
+    }
+
+    /// Shifts the cells from `column` right by `count` columns, filling the
+    /// columns that open with `fill` and discarding the cells pushed past
+    /// the row's end; `count` must fit between `column` and the row's end.
+    fn shift_cells_right(&mut self, column: GridColumn, count: u16, fill: Cell) {
+        if let Some(tail) = self.cells.get_mut(usize::from(column.0)..) {
+            tail.rotate_right(usize::from(count));
+            tail[..usize::from(count)].fill(fill);
+        }
+        self.cells.normalize_wide_pairs();
+    }
+
+    /// Shifts the cells from `column + count` left to `column`, filling the
+    /// columns that open at the row's end with `fill`; `count` must fit
+    /// between `column` and the row's end.
+    fn shift_cells_left(&mut self, column: GridColumn, count: u16, fill: Cell) {
+        if let Some(tail) = self.cells.get_mut(usize::from(column.0)..) {
+            tail.rotate_left(usize::from(count));
+            let opened = tail.len().saturating_sub(usize::from(count));
+            tail[opened..].fill(fill);
+        }
+        self.cells.normalize_wide_pairs();
+    }
+
+    /// The recorded wrap when it ends past `column` and short of the last
+    /// column of a row `cols` wide; `None` otherwise.
+    fn wrap_inside(&self, column: GridColumn, cols: u16) -> Option<u16> {
+        self.wrap_at
+            .filter(|&wrapped| column.0 < wrapped && wrapped < cols)
     }
 }
 

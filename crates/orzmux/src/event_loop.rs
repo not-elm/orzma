@@ -265,12 +265,7 @@ impl EventLoop {
         for _ in 0..COMMAND_BATCH {
             match self.commands.try_recv() {
                 Ok(next) => {
-                    if let Some((seq, command)) = held
-                        .take()
-                        .filter(|(_, earlier)| !next.1.supersedes(earlier))
-                    {
-                        self.handle_command(seq, command);
-                    }
+                    self.apply_unless_superseded(held.take(), &next.1);
                     held = Some(next);
                 }
                 Err(TryRecvError::Empty) => break,
@@ -304,6 +299,18 @@ impl EventLoop {
     #[cfg(test)]
     pub fn backend_mut(&mut self) -> &mut Backend {
         &mut self.backend
+    }
+
+    /// Applies the `held` command unless `next`, arriving right after it,
+    /// supersedes it; a superseded command is dropped unapplied.
+    fn apply_unless_superseded(
+        &mut self,
+        held: Option<(CommandSeq, OrzmuxCommand)>,
+        next: &OrzmuxCommand,
+    ) {
+        if let Some((seq, command)) = held.filter(|(_, earlier)| !next.supersedes(earlier)) {
+            self.handle_command(seq, command);
+        }
     }
 
     /// Applies one command. An unresolvable target and a refused PTY
