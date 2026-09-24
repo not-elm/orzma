@@ -9,7 +9,8 @@ pub(crate) mod reflow;
 mod history_index;
 
 use crate::error::{GridSizeError, VtResult};
-use crate::screen::cell::{Cell, CellWidth};
+use crate::hyperlink::HyperlinkId;
+use crate::screen::cell::{BodyWidth, Cell, CellWidth, Pen};
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::grid::history_index::HistoryIndex;
 use crate::screen::grid::row::Row;
@@ -162,22 +163,23 @@ impl Grid {
         let cells: &mut [Cell] = row;
         cells[usize::from(columns.start)..usize::from(columns.end)].fill(fill);
         row.normalize_wide_pairs();
+        let line = GridLine::from(line);
         if reaches_end {
-            self.end_visible_line(line.0);
+            self.clear_wrap_at(line);
         }
         if whole_row {
-            self.end_line_above(line);
+            self.clear_wrap_at(GridLine(line.0 - 1));
         }
     }
 
     /// Shifts one visible row's cells from `column` right by `count`
     /// columns, filling the columns that open with `fill`.
     ///
-    /// The cells pushed past the last column are discarded. The row
-    /// keeps its id, and nothing reaches history.
-    ///
-    /// The caller must clamp `count` to the columns from `column`
-    /// through the row's end.
+    /// `count` is clamped to the columns from `column` through the row's
+    /// end, and the cells pushed past the last column are discarded. The
+    /// row keeps its id, and nothing reaches history. A recorded wrap that
+    /// ends past `column` and short of the last column moves right with the
+    /// text, as far as the last column. A line off the screen is ignored.
     pub fn insert_visible_row_cells(
         &mut self,
         line: ScreenLine,
@@ -185,30 +187,34 @@ impl Grid {
         count: u16,
         fill: Cell,
     ) {
-        let start = usize::from(column.0);
-        let count = usize::from(count);
-        let row: &mut Row<Cell> = &mut self[line];
-        let cells: &mut [Cell] = row;
-        let cols = cells.len();
-        debug_assert!(
-            start + count <= cols,
-            "an in-row insert stays inside the row"
-        );
-        cells[start..cols].rotate_right(count);
-        cells[start..start + count].fill(fill);
-        row.normalize_wide_pairs();
+        let cols = self.size.cols;
+        let Some(row) = self.visible_row_mut(line) else {
+            return;
+        };
+        let count = row.clamp_to_room(column, count);
+        if let Some(tail) = row.cells.get_mut(usize::from(column.0)..) {
+            tail.rotate_right(usize::from(count));
+            tail[..usize::from(count)].fill(fill);
+        }
+        row.cells.normalize_wide_pairs();
+        if let Some(wrapped) = row.wrap_at
+            && column.0 < wrapped
+            && wrapped < cols
+        {
+            row.wrap_at = Some(wrapped.saturating_add(count).min(cols));
+        }
     }
 
     /// Shifts one visible row's cells from `column + count` left to
     /// `column`, filling the columns that open at the row's end with
     /// `fill`.
     ///
-    /// The `count` cells starting at `column` are overwritten by the
-    /// cells that shift into them. The row keeps its id, and nothing
-    /// reaches history.
-    ///
-    /// The caller must clamp `count` to the columns from `column`
-    /// through the row's end.
+    /// `count` is clamped to the columns from `column` through the row's
+    /// end, and the `count` cells starting at `column` are overwritten by
+    /// the cells that shift into them. The row keeps its id, and nothing
+    /// reaches history. A recorded wrap that ends past `column` and short of
+    /// the last column moves left with the text, but never left of
+    /// `column`. A line off the screen is ignored.
     pub fn delete_visible_row_cells(
         &mut self,
         line: ScreenLine,
@@ -216,18 +222,63 @@ impl Grid {
         count: u16,
         fill: Cell,
     ) {
-        let start = usize::from(column.0);
-        let count = usize::from(count);
-        let row: &mut Row<Cell> = &mut self[line];
-        let cells: &mut [Cell] = row;
-        let cols = cells.len();
-        debug_assert!(
-            start + count <= cols,
-            "an in-row delete stays inside the row"
-        );
-        cells[start..cols].rotate_left(count);
-        cells[cols - count..].fill(fill);
-        row.normalize_wide_pairs();
+        let cols = self.size.cols;
+        let Some(row) = self.visible_row_mut(line) else {
+            return;
+        };
+        let count = row.clamp_to_room(column, count);
+        if let Some(tail) = row.cells.get_mut(usize::from(column.0)..) {
+            tail.rotate_left(usize::from(count));
+            let opened = tail.len().saturating_sub(usize::from(count));
+            tail[opened..].fill(fill);
+        }
+        row.cells.normalize_wide_pairs();
+        if let Some(wrapped) = row.wrap_at
+            && column.0 < wrapped
+            && wrapped < cols
+        {
+            row.wrap_at = Some(wrapped - count.min(wrapped - column.0));
+        }
+    }
+
+    /// Stamps `c` at `column` of the visible row `line` with `pen`'s
+    /// attributes inside `hyperlink_id`, adding the continuation column
+    /// when `width` is [`BodyWidth::Wide`] and restoring the wide-pair
+    /// invariant on both sides of the write.
+    ///
+    /// A glyph reaching the last column ends the row's logical line, and one
+    /// ending past a recorded wrap that stops short of the last column
+    /// extends the wrap to cover it.
+    ///
+    /// # Errors
+    ///
+    /// [`StampError::OutOfRow`](crate::error::StampError::OutOfRow) when
+    /// `column`, or the continuation of a wide glyph, lies past the end of
+    /// the row. The row and its wrap are then left unchanged.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `line` is off the screen.
+    pub fn stamp_visible(
+        &mut self,
+        line: ScreenLine,
+        column: GridColumn,
+        c: char,
+        width: BodyWidth,
+        pen: &Pen,
+        hyperlink_id: Option<HyperlinkId>,
+    ) -> VtResult {
+        let cols = self.size.cols;
+        let index = self.visible_index(line.0);
+        let row = &mut self.rows[index];
+        row.cells.stamp_at(column.0, c, width, pen, hyperlink_id)?;
+        let end = column.0.saturating_add(width.columns());
+        if end >= cols {
+            row.wrap_at = None;
+        } else if row.wrap_at.is_some_and(|cells| cells < end) {
+            row.wrap_at = Some(end);
+        }
+        Ok(())
     }
 
     /// Scrolls the region up by one row: the row at `top` leaves and a
@@ -247,12 +298,11 @@ impl Grid {
             ..fill
         };
         self.rotate_up(top, bottom, fill);
-        self.end_visible_line(bottom.0);
         if top < bottom {
-            self.end_visible_line(bottom.0 - 1);
+            self.clear_wrap_at(GridLine(i32::from(bottom.0) - 1));
         }
         if top > ScreenLine(0) {
-            self.end_line_above(top);
+            self.clear_wrap_at(GridLine(i32::from(top.0) - 1));
         }
     }
 
@@ -273,12 +323,10 @@ impl Grid {
         let Some(mut recycled) = self.rows.remove(base + usize::from(bottom.0)) else {
             return;
         };
-        recycled.id = self.mint();
-        recycled.cells.fill(fill);
+        recycled.recycle(self.mint(), fill);
         self.rows.insert(base + usize::from(top.0), recycled);
-        self.end_visible_line(top.0);
-        self.end_visible_line(bottom.0);
-        self.end_line_above(top);
+        self.clear_wrap_at(GridLine::from(bottom));
+        self.clear_wrap_at(GridLine(i32::from(top.0) - 1));
     }
 
     /// The id of the row at a screen line.
@@ -421,7 +469,10 @@ impl Grid {
     }
 
     /// Moves the region's rows up by one, handing the departing row to
-    /// history or discarding it, without ending any logical line.
+    /// history or discarding it.
+    ///
+    /// The entering row ends its logical line, and every other row keeps
+    /// its wrap.
     fn rotate_up(&mut self, top: ScreenLine, bottom: ScreenLine, fill: Cell) {
         let base = self.history_len();
         let id = self.mint();
@@ -429,8 +480,7 @@ impl Grid {
             let Some(mut recycled) = self.rows.remove(base + usize::from(top.0)) else {
                 return;
             };
-            recycled.id = id;
-            recycled.cells.fill(fill);
+            recycled.recycle(id, fill);
             self.rows.insert(base + usize::from(bottom.0), recycled);
             return;
         }
@@ -449,8 +499,7 @@ impl Grid {
             if self.max_history > 0 {
                 self.history_index.pop_oldest(recycled.id);
             }
-            recycled.id = id;
-            recycled.cells.fill(fill);
+            recycled.recycle(id, fill);
             recycled
         };
         if self.max_history > 0 {
@@ -466,25 +515,6 @@ impl Grid {
             base + usize::from(bottom.0)
         };
         self.rows.insert(below_bottom, entering);
-    }
-
-    /// Ends the logical line of the visible row `line`.
-    fn end_visible_line(&mut self, line: u16) {
-        let index = self.visible_index(line);
-        if let Some(row) = self.rows.get_mut(index) {
-            row.wrap_at = None;
-        }
-    }
-
-    /// Ends the logical line of the row directly above the visible row
-    /// `line`, which is the newest history row when `line` is the top.
-    fn end_line_above(&mut self, line: ScreenLine) {
-        let Some(index) = self.visible_index(line.0).checked_sub(1) else {
-            return;
-        };
-        if let Some(row) = self.rows.get_mut(index) {
-            row.wrap_at = None;
-        }
     }
 
     fn resize_rows(&mut self, rows: u16) {
@@ -543,11 +573,33 @@ impl Grid {
         self.history_len() + usize::from(line)
     }
 
+    /// The row at a screen line; `None` when the line is off the screen.
+    fn visible_row_mut(&mut self, line: ScreenLine) -> Option<&mut GridRow> {
+        let index = self.visible_index(line.0);
+        self.rows.get_mut(index)
+    }
+
     /// The ring index of an active-grid line; `None` outside the ring.
     fn ring_index(&self, line: GridLine) -> Option<usize> {
         let index = i64::from(self.history_len() as u32) + i64::from(line.0);
         let index = usize::try_from(index).ok()?;
         (index < self.rows.len()).then_some(index)
+    }
+}
+
+impl GridRow {
+    /// Reuses the row as a fresh one named `id`: every cell becomes `fill`
+    /// and the row ends its logical line.
+    fn recycle(&mut self, id: LineId, fill: Cell) {
+        self.id = id;
+        self.cells.fill(fill);
+        self.wrap_at = None;
+    }
+
+    /// `count` clamped to the columns from `column` through the row's end.
+    fn clamp_to_room(&self, column: GridColumn, count: u16) -> u16 {
+        let room = self.cells.len().saturating_sub(usize::from(column.0));
+        count.min(u16::try_from(room).unwrap_or(u16::MAX))
     }
 }
 

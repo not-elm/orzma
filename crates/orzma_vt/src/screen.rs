@@ -290,9 +290,7 @@ impl Screen {
         let wrapping = auto_wrap.wraps();
         let mut scrolled = false;
         if self.state.pending_wrap && wrapping {
-            let ends_in_filler =
-                self.grid[self.state.line][cols - 1].width == CellWidth::LeadingSpacer;
-            scrolled = self.wrap_recording(if ends_in_filler { cols - 1 } else { cols });
+            scrolled = self.wrap_recording();
         }
         let first_line = self.state.line;
         if !self.fits(columns) {
@@ -302,7 +300,7 @@ impl Screen {
             }
             let pen = self.state.pen;
             self.grid[self.state.line].place_filler(&pen)?;
-            scrolled |= self.wrap_recording(cols - 1);
+            scrolled |= self.wrap_recording();
         }
         Ok(Some(PrintDamage {
             first_line,
@@ -320,14 +318,23 @@ impl Screen {
         self.line_feed().is_some()
     }
 
-    /// Wraps the cursor onto the next row and records that the first
-    /// `cells` cells of the row it left continue there; returns whether
-    /// the move scrolled.
+    /// Wraps the cursor onto the next row and records that the row it left
+    /// continues there with every cell but a filler in its last column;
+    /// returns whether the move scrolled.
     ///
     /// Nothing is recorded when the row left behind does not end up
     /// directly above the cursor: the move stayed on its row, or a region
     /// scroll discarded the row.
-    fn wrap_recording(&mut self, cells: u16) -> bool {
+    fn wrap_recording(&mut self) -> bool {
+        let cols = self.grid.size().cols;
+        let ends_in_filler = self.grid[self.state.line]
+            .last()
+            .is_some_and(|cell| cell.width == CellWidth::LeadingSpacer);
+        let cells = if ends_in_filler {
+            cols.saturating_sub(1)
+        } else {
+            cols
+        };
         let departed = self.cursor_line_id();
         let scrolled = self.wrap_to_next_line();
         let above = GridLine(i32::from(self.state.line.0) - 1);
@@ -335,29 +342,6 @@ impl Screen {
             self.grid.set_wrap_at(above, cells);
         }
         scrolled
-    }
-
-    /// Moves the cursor row's recorded wrap with its text after an in-row
-    /// shift at the cursor that opened `inserted` columns or closed
-    /// `deleted` ones.
-    ///
-    /// Only a wrap that stops short of the last column moves, and only
-    /// when the shift starts inside it.
-    fn follow_row_shift(&mut self, inserted: u16, deleted: u16) {
-        let line = GridLine::from(self.state.line);
-        let cols = self.grid.size().cols;
-        let column = self.state.column.0;
-        let Some(cells) = self.grid.wrap_at(line) else {
-            return;
-        };
-        if cells >= cols || column >= cells {
-            return;
-        }
-        let moved = cells
-            .saturating_add(inserted)
-            .min(cols)
-            .saturating_sub(deleted.min(cells - column));
-        self.grid.set_wrap_at(line, moved);
     }
 
     /// Whether a glyph spanning `width` columns fits from the cursor's
@@ -391,24 +375,14 @@ impl Screen {
             self.insert_characters(width.columns());
         }
         let (line, column) = (self.state.line, self.state.column);
-        self.grid[line].stamp_at(
-            column.0,
+        self.grid.stamp_visible(
+            line,
+            column,
             glyph,
             width,
             &self.state.pen,
             options.hyperlink_id,
         )?;
-        let end = column.0 + width.columns();
-        let grid_line = GridLine::from(line);
-        if end >= self.grid.size().cols {
-            self.grid.clear_wrap_at(grid_line);
-        } else if self
-            .grid
-            .wrap_at(grid_line)
-            .is_some_and(|cells| cells < end)
-        {
-            self.grid.set_wrap_at(grid_line, end);
-        }
         self.state.last_landing = Some((line, column));
         self.advance_past_glyph(width, options.auto_wrap);
         Ok(())
@@ -788,7 +762,6 @@ impl Screen {
         let fill = self.state.pen.erase_cell();
         self.grid
             .insert_visible_row_cells(self.state.line, self.state.column, count, fill);
-        self.follow_row_shift(count, 0);
         self.state.pending_wrap = false;
         self.damage_span(self.state.line, self.state.line)
     }
@@ -817,7 +790,6 @@ impl Screen {
         let fill = self.state.pen.erase_cell();
         self.grid
             .delete_visible_row_cells(self.state.line, self.state.column, count, fill);
-        self.follow_row_shift(0, count);
         self.state.pending_wrap = false;
         self.damage_span(self.state.line, self.state.line)
     }
