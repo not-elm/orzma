@@ -71,10 +71,16 @@ impl CaretStroke {
                 Self::from(cursor.shape)
             });
         }
-        if cursor.blinking && !input.phase_on {
+        if Self::blinks(cursor, input.suppressed, input.focused) && !input.phase_on {
             return None;
         }
         Some(Self::from(cursor.shape))
+    }
+
+    /// Whether a caret follows the blink phase: it is painted, it has
+    /// focus, and the terminal asked it to blink.
+    pub fn blinks(cursor: Cursor, suppressed: bool, focused: bool) -> bool {
+        cursor.visible && !suppressed && focused && cursor.blinking
     }
 }
 
@@ -268,5 +274,41 @@ mod tests {
         ] {
             assert!(PackedCursorStyle::from(stroke).contains(PackedCursorStyle::VISIBLE));
         }
+    }
+
+    /// Asserts that a caret follows the blink phase only when it is
+    /// painted, focused, and blinking.
+    ///
+    /// Case: a blinking bar caret blinks in the active pane; the same
+    /// caret stops blinking once `DECTCEM` hides it, once an IME
+    /// composition suppresses it, once its pane goes inactive, or once
+    /// its shape turns steady.
+    #[test]
+    fn a_caret_blinks_only_when_painted_focused_and_blinking() {
+        assert!(CaretStroke::blinks(
+            cursor(CursorShape::Bar, true, true),
+            false,
+            true
+        ));
+        assert!(!CaretStroke::blinks(
+            cursor(CursorShape::Bar, true, false),
+            false,
+            true
+        ));
+        assert!(!CaretStroke::blinks(
+            cursor(CursorShape::Bar, true, true),
+            true,
+            true
+        ));
+        assert!(!CaretStroke::blinks(
+            cursor(CursorShape::Bar, true, true),
+            false,
+            false
+        ));
+        assert!(!CaretStroke::blinks(
+            cursor(CursorShape::Bar, false, true),
+            false,
+            true
+        ));
     }
 }
