@@ -6,6 +6,7 @@
 use orzma_tty::prelude::{OrzmaTty, TerminalKey, TerminalModifiers};
 use orzma_tty::{CellPixels, NATIVE_SCROLLBACK_ON_GROW, SpawnOptions};
 use orzma_vt::prelude::{Frame, GridSize, OrzmaVt, Row, Run, Scroll};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
@@ -15,16 +16,40 @@ use std::{env, iter};
 /// Viewport rows of the grid the test drives.
 const ROWS: u16 = 24;
 
-/// Asserts that after a narrow-then-wide resize the cursor sits on the
-/// row orzma's own reflow put it on, and every output line survives
-/// exactly once.
+/// Columns of the grid before the narrowing and after the widening.
+const WIDE: u16 = 80;
+
+/// Columns of the narrowed grid, fewer than the prompt and every output
+/// line take.
+const NARROW: u16 = 40;
+
+/// How many padded lines the command prints.
+const LINES: usize = 30;
+
+/// How many `x`s pad each output line past [`NARROW`] columns.
+const PADDING: usize = 40;
+
+/// The prompt the command installs, wider than [`NARROW`] columns and
+/// narrower than [`WIDE`].
+const PROMPT: &str = r"PS C:\orzma\reflow\a-prompt-wider-than-forty-columns> ";
+
+/// The one-row line the command prints after the padded lines; with it,
+/// the narrowing splits one padded line across the history/screen
+/// boundary.
+const TRAILER: &str = "done";
+
+/// Asserts that across a narrow-then-wide resize the cursor stays on the
+/// row orzma's own reflow chose, a wrapped output line and the prompt
+/// rewrap and come back whole, and every output line survives exactly
+/// once, including the one the narrowing split across the history/screen
+/// boundary.
 ///
-/// Case: a Windows user with a screenful of output narrows the window to
-/// half its width and widens it back.
+/// Case: a Windows user whose prompt and output lines are wider than half
+/// the window narrows it to half its width and widens it back.
 #[test]
 fn a_narrow_then_wide_resize_keeps_the_cursor_row_and_every_line_once() {
     let shell = resolve_powershell();
-    let size = GridSize::new(80, ROWS).expect("a valid grid size");
+    let size = GridSize::new(WIDE, ROWS).expect("a valid grid size");
     let mut tty = OrzmaTty::spawn(
         OrzmaVt::new(size, 1000).with_scrollback_on_grow(NATIVE_SCROLLBACK_ON_GROW),
         SpawnOptions {
@@ -41,14 +66,18 @@ fn a_narrow_then_wide_resize_keeps_the_cursor_row_and_every_line_once() {
     wait_until(&mut tty, &mut mirror, |mirror| {
         mirror.rows.iter().any(|row| row.ends_with('>'))
     });
-    tty.send_paste("1..30 | ForEach-Object { \"line $_\" }")
-        .expect("the command text");
+    let command = format!(
+        "function global:prompt {{ '{PROMPT}' }}; \
+         1..{LINES} | ForEach-Object {{ \"line $_ \" + ('x' * {PADDING}) }}; '{TRAILER}'"
+    );
+    tty.send_paste(&command).expect("the command text");
     tty.send_key(&TerminalKey::Enter, &TerminalModifiers::default())
         .expect("the newline");
     wait_until(&mut tty, &mut mirror, |mirror| {
-        mirror.rows.iter().any(|row| row == "line 30")
+        mirror.rows.iter().any(|row| row == PROMPT.trim_end())
     });
-    for cols in [40, 80] {
+    let last_line = format!("line {LINES} {}", "x".repeat(PADDING));
+    for cols in [NARROW, WIDE] {
         let size = GridSize::new(cols, ROWS).expect("a valid grid size");
         tty.resize(size, CellPixels::default()).expect("the resize");
         let reflowed = tty.flush_now();
@@ -60,18 +89,39 @@ fn a_narrow_then_wide_resize_keeps_the_cursor_row_and_every_line_once() {
             mirror.cursor_line, own_line,
             "ConPTY moved the cursor off the row orzma's reflow chose at {cols} columns"
         );
+        for line in [last_line.as_str(), PROMPT.trim_end()] {
+            let head: String = line.chars().take(usize::from(cols)).collect();
+            assert!(
+                mirror.rows.contains(&head),
+                "no row holds the first {cols} columns of `{line}`:\n{:#?}",
+                mirror.rows
+            );
+        }
+        if cols == NARROW {
+            let top = mirror.rows.first().expect("a screen row");
+            assert!(
+                !top.is_empty() && top.chars().all(|c| c == 'x'),
+                "the top row at {cols} columns does not continue a line split into \
+                 history:\n{:#?}",
+                mirror.rows
+            );
+        }
     }
     let rows = every_row(&mut tty);
-    let counts: Vec<usize> = (1..=30)
+    let counts: Vec<usize> = (1..=LINES)
         .map(|n| {
-            rows.iter()
-                .filter(|row| **row == format!("line {n}"))
-                .count()
+            let prefix = format!("line {n} ");
+            rows.iter().filter(|row| row.starts_with(&prefix)).count()
         })
         .collect();
     assert!(
         counts.iter().all(|count| *count == 1),
         "every output line appears exactly once: {counts:?}\n{rows:#?}"
+    );
+    let prompts = rows.iter().filter(|row| *row == PROMPT.trim_end()).count();
+    assert_eq!(
+        prompts, 1,
+        "the prompt comes back whole on exactly one row:\n{rows:#?}"
     );
 }
 
@@ -145,29 +195,23 @@ fn settle(tty: &mut OrzmaTty<OrzmaVt>, mirror: &mut Mirror) {
     }
 }
 
-/// Every history row followed by every screen row, read by scrolling the
-/// viewport to the top and back.
+/// Every history row followed by every screen row, read by paging the
+/// viewport from the oldest history row down to the live tail.
 fn every_row(tty: &mut OrzmaTty<OrzmaVt>) -> Vec<String> {
+    let mut by_line: BTreeMap<i64, String> = BTreeMap::new();
     tty.scroll(Scroll::Top);
-    let top_output = tty.flush_now();
-    let top = top_output.frames().last().expect("a scroll emits a frame");
-    let history = usize::try_from(top.display_offset.0).expect("history fits usize");
-    assert!(
-        history <= usize::from(ROWS),
-        "the history outgrew one viewport"
-    );
-    let mut above = Mirror::new();
-    above.apply(top);
-    tty.scroll(Scroll::Bottom);
-    let bottom_output = tty.flush_now();
-    let bottom = bottom_output
-        .frames()
-        .last()
-        .expect("a scroll emits a frame");
-    let mut live = Mirror::new();
-    live.apply(bottom);
-    above.rows.truncate(history);
-    above.rows.into_iter().chain(live.rows).collect()
+    loop {
+        let output = tty.flush_now();
+        let page = output.frames().last().expect("a scroll emits a frame");
+        let offset = i64::from(page.display_offset.0);
+        for row in &page.rows {
+            by_line.insert(i64::from(row.line.0) - offset, text(&row.contents));
+        }
+        if offset == 0 {
+            return by_line.into_values().collect();
+        }
+        tty.scroll(Scroll::PageDown);
+    }
 }
 
 /// The PowerShell executable this test runs against, preferring `pwsh`.
