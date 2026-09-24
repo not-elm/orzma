@@ -33,6 +33,17 @@ impl HistoryIndex {
         self.seq_of.insert(id, self.next_seq());
     }
 
+    /// Forgets every row and records `ids`, oldest first, as the history
+    /// rows.
+    pub fn rebuild(&mut self, ids: impl ExactSizeIterator<Item = LineId>) {
+        self.seq_of.clear();
+        self.popped = 0;
+        self.seq_of.reserve(ids.len());
+        for id in ids {
+            self.enter(id);
+        }
+    }
+
     /// Records that `id`, the oldest history row, left through the cap.
     pub fn pop_oldest(&mut self, id: LineId) {
         self.seq_of.remove(&id);
@@ -134,6 +145,24 @@ mod tests {
         index.enter(LineId(20));
         assert_eq!(index.index_of(LineId(20)), Some(1));
         assert_eq!(index.index_of(LineId(11)), None);
+    }
+
+    /// Asserts that a rebuild forgets every row and every pop it counted,
+    /// and indexes the given rows from zero in order.
+    ///
+    /// Case: the user resizes the window, so the scrollback is rewrapped
+    /// and its rows are indexed afresh.
+    #[test]
+    fn a_rebuild_indexes_the_given_rows_from_zero() {
+        let mut index = HistoryIndex::default();
+        index.enter(LineId(10));
+        index.enter(LineId(11));
+        index.pop_oldest(LineId(10));
+        index.rebuild([LineId(20), LineId(11)].into_iter());
+        assert_eq!(index.index_of(LineId(20)), Some(0));
+        assert_eq!(index.index_of(LineId(11)), Some(1));
+        assert_eq!(index.index_of(LineId(10)), None);
+        assert_eq!(index.len(), 2);
     }
 
     /// Asserts that a pop, a reclaim, and an entry compose into the

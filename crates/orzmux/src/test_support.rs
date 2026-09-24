@@ -18,6 +18,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Wake, Waker};
 
+/// The cell size every window resize the harness sends carries.
+const CELL_PX: CellPixels = CellPixels {
+    width: 8,
+    height: 16,
+};
+
 /// The test's ends of one spawned pane's streams.
 pub(crate) struct FakePane {
     chunk_tx: Sender<Vec<u8>>,
@@ -182,13 +188,19 @@ impl Harness {
     /// Sends one command and runs the loop's command and flush phases,
     /// so the events it generated are queued on the event channel.
     pub fn send(&mut self, command: OrzmuxCommand) -> CommandSeq {
+        let seq = self.queue(command);
+        self.event_loop.drain_commands();
+        self.event_loop.flush_events();
+        seq
+    }
+
+    /// Queues one command without running the loop.
+    pub fn queue(&mut self, command: OrzmuxCommand) -> CommandSeq {
         self.seq += 1;
         let seq = CommandSeq(self.seq);
         self.commands
             .send((seq, command))
             .expect("the harness holds the command receiver");
-        self.event_loop.drain_commands();
-        self.event_loop.flush_events();
         seq
     }
 
@@ -284,11 +296,16 @@ impl Harness {
     pub fn resize(&mut self, size: GridSize) {
         self.send(OrzmuxCommand::Resize {
             size,
-            cell_px: CellPixels {
-                width: 8,
-                height: 16,
-            },
+            cell_px: CELL_PX,
         });
+    }
+
+    /// Queues a window resize to `size` without running the loop.
+    pub fn queue_resize(&mut self, size: GridSize) -> CommandSeq {
+        self.queue(OrzmuxCommand::Resize {
+            size,
+            cell_px: CELL_PX,
+        })
     }
 
     pub fn open_root(&mut self) -> (PaneId, FakePane) {

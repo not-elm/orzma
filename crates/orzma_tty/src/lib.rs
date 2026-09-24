@@ -37,6 +37,15 @@ pub mod test_support;
 
 pub use cell_pixels::CellPixels;
 
+/// What the VT does with the rows a resize frees for the PTY this
+/// platform spawns: [`ScrollbackOnGrow::Keep`] under Windows ConPTY and
+/// [`ScrollbackOnGrow::Reclaim`] under a Unix PTY.
+pub const NATIVE_SCROLLBACK_ON_GROW: ScrollbackOnGrow = if cfg!(windows) {
+    ScrollbackOnGrow::Keep
+} else {
+    ScrollbackOnGrow::Reclaim
+};
+
 pub mod prelude {
     pub use crate::{
         CellPixels, OrzmaTty, PumpItem, PumpOutput, Readiness, error::*, input::*, signal::*,

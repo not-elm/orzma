@@ -32,6 +32,7 @@ use crate::screen::checkpoint::Checkpoint;
 use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
+use crate::screen::grid::reflow::{ScrollbackOnGrow, TrackedPoint};
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::selection::{
     CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionGeometry, SelectionKind,
@@ -41,7 +42,7 @@ use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
 use crate::screen::viewport::{DisplayOffset, Scroll, Viewport, ViewportLine};
 use crate::screen::webview_placements::WebviewPlacements;
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 /// One terminal screen: cell storage plus the write cursor, updated
 /// atomically by each operation.
@@ -50,7 +51,7 @@ use std::ops::Range;
 /// for the caller to stage; pure cursor motion returns nothing.
 ///
 /// The caller must reject a size with a zero axis before it reaches
-/// [`Self::new`] or [`Self::resize`].
+/// [`Self::new`], [`Self::resize`] or [`Self::reflow`].
 ///
 /// # Invariants
 ///
@@ -267,6 +268,10 @@ impl Screen {
     /// overflows the row with autowrap reset, which also disarms the
     /// deferred wrap.
     ///
+    /// A wrap records, on the row it leaves, how many of that row's cells
+    /// continue on the next one; a filler in the row's last column is not
+    /// among them.
+    ///
     /// # Errors
     ///
     /// [`VtError::Stamp`](crate::error::VtError::Stamp) when the row
@@ -278,13 +283,14 @@ impl Screen {
         auto_wrap: AutoWrap,
     ) -> VtResult<Option<PrintDamage>> {
         let columns = width.columns();
-        if self.grid.size().cols < columns {
+        let cols = self.grid.size().cols;
+        if cols < columns {
             return Ok(None);
         }
         let wrapping = auto_wrap.wraps();
         let mut scrolled = false;
         if self.state.pending_wrap && wrapping {
-            scrolled = self.wrap_to_next_line();
+            scrolled = self.wrap_recording();
         }
         let first_line = self.state.line;
         if !self.fits(columns) {
@@ -294,7 +300,7 @@ impl Screen {
             }
             let pen = self.state.pen;
             self.grid[self.state.line].place_filler(&pen)?;
-            scrolled |= self.wrap_to_next_line();
+            scrolled |= self.wrap_recording();
         }
         Ok(Some(PrintDamage {
             first_line,
@@ -312,6 +318,32 @@ impl Screen {
         self.line_feed().is_some()
     }
 
+    /// Wraps the cursor onto the next row and records that the row it left
+    /// continues there with every cell but a filler in its last column;
+    /// returns whether the move scrolled.
+    ///
+    /// Nothing is recorded when the row left behind does not end up
+    /// directly above the cursor: the move stayed on its row, or a region
+    /// scroll discarded the row.
+    fn wrap_recording(&mut self) -> bool {
+        let cols = self.grid.size().cols;
+        let ends_in_filler = self.grid[self.state.line]
+            .last()
+            .is_some_and(|cell| cell.width == CellWidth::LeadingSpacer);
+        let cells = if ends_in_filler {
+            cols.saturating_sub(1)
+        } else {
+            cols
+        };
+        let departed = self.cursor_line_id();
+        let scrolled = self.wrap_to_next_line();
+        let above = GridLine(i32::from(self.state.line.0) - 1);
+        if self.grid.line_id_at(above) == Some(departed) {
+            self.grid.set_wrap_at(above, cells);
+        }
+        scrolled
+    }
+
     /// Whether a glyph spanning `width` columns fits from the cursor's
     /// column through the row's end.
     fn fits(&self, width: u16) -> bool {
@@ -324,6 +356,11 @@ impl Screen {
     ///
     /// The glyph must fit between the cursor and the row's end, and under
     /// autowrap an armed deferred wrap must already have been resolved.
+    ///
+    /// A glyph reaching the last column ends the row's logical line; a wrap
+    /// that resolves later records it again. A glyph landing past a
+    /// recorded wrap that stops short of the last column extends the wrap
+    /// to cover it.
     ///
     /// # Errors
     ///
@@ -338,8 +375,9 @@ impl Screen {
             self.insert_characters(width.columns());
         }
         let (line, column) = (self.state.line, self.state.column);
-        self.grid[line].stamp_at(
-            column.0,
+        self.grid.stamp_visible(
+            line,
+            column,
             glyph,
             width,
             &self.state.pen,
@@ -711,6 +749,9 @@ impl Screen {
     /// margins VT510 gates `ICH` on. Selection and placement anchors hold
     /// absolute columns and do not move with the content.
     ///
+    /// A recorded wrap that stops short of the last column moves with the
+    /// text the shift moves.
+    ///
     /// # Control Functions
     ///
     /// - `ICH` (`CSI Pn @`)
@@ -737,6 +778,9 @@ impl Screen {
     /// The edit applies wherever the cursor sits, ignoring the scrolling
     /// margins VT510 gates `DCH` on. Selection and placement anchors hold
     /// absolute columns and do not move with the content.
+    ///
+    /// A recorded wrap that stops short of the last column moves with the
+    /// text the shift moves.
     ///
     /// # Control Functions
     ///
@@ -1280,6 +1324,20 @@ impl Screen {
         self.state.column
     }
 
+    /// The cursor's and then the saved cursor's row, column, and whether
+    /// each has its deferred wrap armed.
+    #[cfg(test)]
+    pub fn cursors(&self) -> [(ScreenLine, GridColumn, bool); 2] {
+        [
+            (self.state.line, self.state.column, self.state.pending_wrap),
+            (
+                self.checkpoint.line,
+                self.checkpoint.column,
+                self.checkpoint.pending_wrap,
+            ),
+        ]
+    }
+
     /// The grid this screen draws on.
     #[cfg(test)]
     pub(crate) fn grid(&self) -> &Grid {
@@ -1492,6 +1550,72 @@ impl Screen {
         Some(DamageSpan::Full)
     }
 
+    /// Resizes the grid to `size`, rewrapping its rows at the new width
+    /// and carrying every position that points into them to the same
+    /// text; `None` when the dimensions already matched.
+    ///
+    /// Under [`ScrollbackOnGrow::Reclaim`], the rows a height growth adds
+    /// come back from history, and so do the rows a rewrap frees while the
+    /// text or the cursor reached the bottom row; under
+    /// [`ScrollbackOnGrow::Keep`] they stay blank. The cursor, the saved
+    /// cursor, the selection's ends, the placement anchors, and a
+    /// scrolled-back viewport follow the text they stood on; an armed
+    /// deferred wrap survives when the cursor lands on a row's right edge,
+    /// and a change of height alone leaves the cursor's deferred wrap as it
+    /// was. A whole-line selection keeps the whole rows it covered, and a
+    /// selection end on the right edge of a row that ends its logical line
+    /// stays on the right edge of that line's last row. The cursor and the
+    /// saved cursor stay on the screen. A selection with an end on a
+    /// dropped row is cleared, a placement whose anchor row is dropped
+    /// stops resolving so the next [`Self::evict_lost_anchors`] names it,
+    /// and a viewport whose top row is dropped moves to the oldest history
+    /// row.
+    ///
+    /// # Invariants
+    ///
+    /// A resize that changes the dimensions reports [`DamageSpan::Full`].
+    ///
+    /// A height change returns the margins to the whole page.
+    pub fn reflow(&mut self, size: GridSize, policy: ScrollbackOnGrow) -> Option<DamageSpan> {
+        let old = self.grid.size();
+        if old == size {
+            return None;
+        }
+        self.state.last_landing = None;
+        let mut cursor = TrackedPoint::cursor(
+            self.state.line,
+            self.state.column,
+            self.state.pending_wrap,
+            old.cols,
+        );
+        let mut saved = TrackedPoint::cursor(
+            self.checkpoint.line,
+            self.checkpoint.column,
+            self.checkpoint.pending_wrap,
+            old.cols,
+        );
+        let anchors = self.webview_placements.anchors();
+        let mut riders = Riders::gather(
+            &self.grid,
+            &self.selection,
+            &anchors,
+            self.viewport.offset.0,
+            old.cols,
+        );
+        let armed = self.state.pending_wrap;
+        self.grid
+            .reflow(&mut cursor, &mut saved, &mut riders.points, size, policy);
+        self.seat_reflowed(cursor, saved, size);
+        if old.cols == size.cols {
+            self.state.pending_wrap = armed;
+        }
+        self.land_riders(&riders, &anchors, size.cols);
+        if old.rows != size.rows {
+            self.scroll_region.set_margins(Margins::new(size.rows));
+        }
+        Some(DamageSpan::Full)
+    }
+
     /// Fills the visible screen with the alignment pattern, returning to
     /// the page-wide scroll region and the absolute cursor origin.
     ///
@@ -1514,6 +1638,113 @@ impl Screen {
         self.scroll_region = ScrollRegion::new(size.rows);
         self.seat_cursor(ScreenLine(0), GridColumn(0));
         DamageSpan::Full
+    }
+
+    /// Seats the cursor and the saved cursor on the positions a reflow
+    /// carried them to, clamped onto a screen of `size`.
+    fn seat_reflowed(&mut self, cursor: TrackedPoint, saved: TrackedPoint, size: GridSize) {
+        let last_line = size.rows.saturating_sub(1);
+        (self.state.line, self.state.column, self.state.pending_wrap) =
+            Self::cursor_at(cursor, size.cols, last_line);
+        (
+            self.checkpoint.line,
+            self.checkpoint.column,
+            self.checkpoint.pending_wrap,
+        ) = Self::cursor_at(saved, size.cols, last_line);
+    }
+
+    /// Moves the selection, the placements and a scrolled-back viewport onto
+    /// the positions a reflow to `cols` columns carried `riders` to, with
+    /// `anchors` the placements' anchors from before it.
+    ///
+    /// A selection end that stood on the right edge of a row ending its
+    /// logical line lands on the right edge again. A selection with an end
+    /// on a dropped row is cleared, a placement whose anchor row is dropped
+    /// moves to a retired id, and a viewport whose top row is dropped moves
+    /// to the oldest history row.
+    fn land_riders(&mut self, riders: &Riders, anchors: &[(LineId, GridColumn)], cols: u16) {
+        if let Some(ends) = riders.selection {
+            self.land_selection(riders, ends, cols);
+        }
+        self.land_placements(riders, anchors, cols);
+        if let Some(index) = riders.viewport {
+            self.land_viewport(riders.moved(index));
+        }
+    }
+
+    /// Moves the selection onto the positions a reflow to `cols` columns
+    /// carried its `ends` in `riders` to, or clears it when the row of
+    /// either end is gone.
+    ///
+    /// An end that stood on the right edge of a row ending its logical line
+    /// lands on the right edge again.
+    fn land_selection(&mut self, riders: &Riders, ends: [(usize, bool); 2], cols: u16) {
+        let ends = ends.map(|(index, on_line_end_edge)| {
+            riders.moved(index).and_then(|point| {
+                self.grid.line_id_at(point.line()).map(|line| SelectionEnd {
+                    line,
+                    boundary: if on_line_end_edge {
+                        cols
+                    } else {
+                        point.boundary().min(cols)
+                    },
+                })
+            })
+        });
+        match ends {
+            [Some(anchor), Some(moving)] => self.selection.relocate(anchor, moving),
+            _ => {
+                let _ = self.selection.clear();
+            }
+        }
+    }
+
+    /// Re-anchors each placement on the position a reflow to `cols`
+    /// columns carried its anchor in `riders` to, with `anchors` the
+    /// placements' anchors from before it; a placement whose anchor row is
+    /// gone moves to a retired id.
+    fn land_placements(&mut self, riders: &Riders, anchors: &[(LineId, GridColumn)], cols: u16) {
+        let retired = self.grid.retired_id();
+        let last_column = cols.saturating_sub(1);
+        let reanchored: Vec<(LineId, GridColumn)> = riders
+            .anchors
+            .clone()
+            .zip(anchors)
+            .map(|(index, (_, column))| {
+                riders
+                    .moved(index)
+                    .and_then(|point| {
+                        self.grid
+                            .line_id_at(point.line())
+                            .map(|line| (line, GridColumn(point.boundary().min(last_column))))
+                    })
+                    .unwrap_or((retired, *column))
+            })
+            .collect();
+        self.webview_placements.reanchor(&reanchored);
+    }
+
+    /// Scrolls the viewport back to show the row a reflow carried its top
+    /// row to, `top`, on top; to the oldest history row when that row is
+    /// gone.
+    fn land_viewport(&mut self, top: Option<TrackedPoint>) {
+        let offset = match top {
+            Some(point) => u32::try_from(point.line().0.saturating_neg()).unwrap_or(0),
+            None => u32::MAX,
+        };
+        self.set_display_offset(DisplayOffset(offset));
+    }
+
+    /// The cursor position `point` stands for on a screen `cols` wide
+    /// whose last row is `last_line`: a point on the right edge parks on
+    /// the last column with the deferred wrap armed.
+    fn cursor_at(point: TrackedPoint, cols: u16, last_line: u16) -> (ScreenLine, GridColumn, bool) {
+        let line = ScreenLine(u16::try_from(point.line().0).unwrap_or(0).min(last_line));
+        if point.boundary() >= cols {
+            (line, GridColumn(cols.saturating_sub(1)), true)
+        } else {
+            (line, GridColumn(point.boundary()), false)
+        }
     }
 
     fn reclaimable_rows(&self, old_rows: u16, rows: u16) -> u16 {
@@ -1661,28 +1892,30 @@ impl Screen {
     /// The text the active selection covers, row by row; `None` exactly
     /// when [`Self::selection_range`] is `None`.
     ///
-    /// Each row's span comes from [`SelectionRange::span_on`], with
-    /// trailing blanks trimmed. Rows are joined by `\n` with none after
-    /// the last. A continuation column and a wrap filler contribute nothing.
-    /// A cell's combining marks follow its glyph.
-    // TODO: Join soft-wrapped rows without a newline once `Row` records
-    // the wrap.
+    /// Each row's span comes from [`SelectionRange::span_on`]. Rows are
+    /// joined by `\n` with none after the last, except that a row whose
+    /// logical line continues on the next row joins it directly; its cells
+    /// past the recorded wrap contribute nothing. Trailing blanks are
+    /// trimmed where a logical line ends and at the end of the selection,
+    /// never at a soft wrap. A continuation column and a wrap filler
+    /// contribute nothing, and a cell's combining marks follow its glyph.
     pub fn selection_text(&self) -> Option<String> {
         let range = self.selection_range()?;
         let last_column = self.grid.size().cols - 1;
         let mut text = String::new();
+        let mut logical_line = String::new();
         for line in range.start.line.0..=range.end.line.0 {
             let (first, last) = range.span_on(line, last_column);
-            let row = self.grid.row(GridLine(line));
-            let row_text: String = (first..=last)
-                .map(|column| &row[GridColumn(column)])
-                .flat_map(Cell::chars)
-                .collect();
-            if line != range.start.line.0 {
+            let grid_line = GridLine(line);
+            self.push_span_text(&mut logical_line, grid_line, first..=last);
+            let line_ends = self.grid.wrap_at(grid_line).is_none();
+            if line_ends && line != range.end.line.0 {
+                text.push_str(logical_line.trim_end());
                 text.push('\n');
+                logical_line.clear();
             }
-            text.push_str(row_text.trim_end());
         }
+        text.push_str(logical_line.trim_end());
         Some(text)
     }
 
@@ -1691,6 +1924,19 @@ impl Screen {
     fn selection_end(&self, cell: GridPoint, side: CellSide) -> Option<SelectionEnd> {
         let line = self.grid.line_id_at_point(cell)?;
         Some(SelectionEnd::at(line, cell.column, side))
+    }
+
+    /// Appends to `out` the text of the cells in `columns` of the row at
+    /// `line`; the cells past the row's recorded wrap contribute nothing.
+    fn push_span_text(&self, out: &mut String, line: GridLine, columns: RangeInclusive<u16>) {
+        let wrap = self.grid.wrap_at(line);
+        let row = self.grid.row(line);
+        out.extend(
+            columns
+                .filter(|column| wrap.is_none_or(|cells| *column < cells))
+                .map(|column| &row[GridColumn(column)])
+                .flat_map(Cell::chars),
+        );
     }
 }
 
@@ -1713,6 +1959,122 @@ impl PrintDamage {
             return Some(DamageSpan::Full);
         }
         screen.damage_span(self.first_line, self.last_line)
+    }
+}
+
+/// The positions a reflow carries besides the two cursors, and what each
+/// one stands for.
+struct Riders {
+    /// Every carried position, at the indices the fields below name.
+    points: Vec<Option<TrackedPoint>>,
+    /// The selection's anchor and moving ends, each as its index in
+    /// `points` and whether it stood on the right edge of a row that ends
+    /// its logical line; `None` without a selection.
+    selection: Option<[(usize, bool); 2]>,
+    /// The indices in `points` of the placement anchors, in the order the
+    /// placements list them.
+    anchors: Range<usize>,
+    /// The index in `points` of the top row a scrolled-back viewport shows;
+    /// `None` at the live tail.
+    viewport: Option<usize>,
+}
+
+impl Riders {
+    /// Gathers what a reflow of `grid` from `cols` columns carries: the ends
+    /// of `selection`, the placement `anchors`, and the top row of a
+    /// viewport scrolled back by `viewport` rows.
+    ///
+    /// A whole-line selection is carried from the left edge of its top row
+    /// to the right edge of its bottom row.
+    fn gather(
+        grid: &Grid,
+        selection: &ScreenSelection,
+        anchors: &[(LineId, GridColumn)],
+        viewport: u32,
+        cols: u16,
+    ) -> Self {
+        let mut riders = Self {
+            points: Vec::with_capacity(anchors.len() + 3),
+            selection: None,
+            anchors: 0..0,
+            viewport: None,
+        };
+        riders.carry_selection(grid, selection, cols);
+        riders.carry_anchors(grid, anchors);
+        riders.carry_viewport(viewport);
+        riders
+    }
+
+    /// Where the position at `index` in `points` stands now; `None` once
+    /// its row is gone.
+    fn moved(&self, index: usize) -> Option<TrackedPoint> {
+        self.points.get(index).copied().flatten()
+    }
+
+    /// Carries the ends of `selection` on `grid`, a grid `cols` wide.
+    ///
+    /// A whole-line selection is carried from the left edge of its top row
+    /// to the right edge of its bottom row.
+    fn carry_selection(&mut self, grid: &Grid, selection: &ScreenSelection, cols: u16) {
+        let Some((anchor, moving)) = selection.ends() else {
+            return;
+        };
+        let lines = [anchor, moving].map(|end| grid.grid_line(end.line));
+        let anchor_on_top = lines[0].map(|line| line.0) <= lines[1].map(|line| line.0);
+        let boundaries = match selection.kind() {
+            Some(SelectionKind::Lines) if anchor_on_top => [0, cols],
+            Some(SelectionKind::Lines) => [cols, 0],
+            _ => [anchor.boundary, moving.boundary],
+        };
+        self.selection = Some([
+            self.carry_selection_end(grid, lines[0], boundaries[0], cols),
+            self.carry_selection_end(grid, lines[1], boundaries[1], cols),
+        ]);
+    }
+
+    /// Carries a selection end at `boundary` on `line` of `grid`, a grid
+    /// `cols` wide, returning its index in `self.points` and whether it
+    /// stands on the right edge of a row that ends its logical line.
+    fn carry_selection_end(
+        &mut self,
+        grid: &Grid,
+        line: Option<GridLine>,
+        boundary: u16,
+        cols: u16,
+    ) -> (usize, bool) {
+        let on_line_end_edge =
+            boundary >= cols && line.is_some_and(|line| grid.wrap_at(line).is_none());
+        let index = self.carry(line.map(|line| TrackedPoint::new(line, boundary)));
+        (index, on_line_end_edge)
+    }
+
+    /// Carries each of the placement `anchors` on `grid`, in order.
+    fn carry_anchors(&mut self, grid: &Grid, anchors: &[(LineId, GridColumn)]) {
+        let first = self.points.len();
+        self.points.extend(anchors.iter().map(|(line, column)| {
+            grid.grid_line(*line)
+                .map(|line| TrackedPoint::new(line, column.0))
+        }));
+        self.anchors = first..self.points.len();
+    }
+
+    /// Carries the top row of a viewport scrolled back by `viewport` rows;
+    /// nothing at the live tail.
+    fn carry_viewport(&mut self, viewport: u32) {
+        if viewport == 0 {
+            return;
+        }
+        let top = i32::try_from(viewport)
+            .ok()
+            .map(|offset| TrackedPoint::new(GridLine(-offset), 0));
+        self.viewport = Some(self.carry(top));
+    }
+
+    /// Adds `point` to the carried positions, returning its index in
+    /// `self.points`.
+    fn carry(&mut self, point: Option<TrackedPoint>) -> usize {
+        self.points.push(point);
+        self.points.len() - 1
     }
 }
 

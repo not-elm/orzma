@@ -9,6 +9,7 @@ use crate::{
     placement::{InstanceId, PlacementSize},
     screen::grid::GridSize,
     screen::grid::coords::{GridColumn, GridPoint, ScreenLine},
+    screen::grid::reflow::ScrollbackOnGrow,
     screen::selection::{CellSide, SelectionKind},
     screen::viewport::{DisplayOffset, Scroll},
 };
@@ -39,6 +40,7 @@ pub mod prelude {
     pub use crate::screen::cell::{GlyphClass, MAX_COMBINING};
     pub use crate::screen::cursor::Cursor;
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
+    pub use crate::screen::grid::reflow::ScrollbackOnGrow;
     pub use crate::screen::grid::row::Row;
     pub use crate::screen::grid::run::{Run, Style};
     pub use crate::screen::grid::{GridSize, MIN_COLUMNS};
@@ -98,16 +100,21 @@ pub trait Vt {
     /// always sets [`InterpretOutput::damaged`], so the frame carrying the
     /// new [`Frame::placements`] list is guaranteed to follow. Evictions
     /// the VT performs on its own authority (history trim, reset,
-    /// alternate-screen teardown) surface as [`VtSignal::WebviewEvicted`].
+    /// alternate-screen teardown, and the primary screen's reflow that a
+    /// resize deferred while the alternate screen was shown) surface as
+    /// [`VtSignal::WebviewEvicted`].
     ///
     /// A placement projects only while the screen it was mounted on is
     /// active: while the alternate screen is shown, primary-screen
     /// placements are omitted from the emitted lists (hidden, not
     /// evicted). Returning to the primary screen tears the alternate
     /// screen's placements down instead, naming them in that chunk's
-    /// [`VtSignal::WebviewEvicted`]. A re-issued `mount` for a live
-    /// instance updates that placement in place — the id does not
-    /// change, and nothing is named by [`VtSignal::WebviewEvicted`].
+    /// [`VtSignal::WebviewEvicted`]; the primary-screen placements whose
+    /// anchor rows the deferred reflow dropped are named by the chunk's
+    /// closing eviction, like any other placement its bytes strand. A
+    /// re-issued `mount` for a live instance updates that placement in
+    /// place — the id does not change, and nothing is named by
+    /// [`VtSignal::WebviewEvicted`].
     ///
     /// # Invariants
     ///
@@ -161,12 +168,22 @@ pub trait Vt {
     /// No [`VtSignal::WebviewEvicted`] is raised.
     fn remove_placements(&mut self, instances: &[InstanceId]) -> bool;
 
-    /// Resizes the grid, truncating rather than reflowing; `None` when
-    /// the dimensions did not change. Only a real change stages (full)
+    /// Resizes the grid; `None` when the dimensions did not change or
+    /// either axis of `size` is zero. Only a real change stages (full)
     /// damage.
     ///
-    /// Both axes of `size` must be nonzero, as [`GridSize::new`]
-    /// guarantees.
+    /// A size with a zero axis is ignored and changes nothing. A column
+    /// count below [`MIN_COLUMNS`](crate::prelude::MIN_COLUMNS) is raised
+    /// to it.
+    ///
+    /// The primary screen's rows, history included, are rewrapped at the
+    /// new width, and the positions pointing into them follow their text;
+    /// what the rows a growth frees hold follows the terminal's
+    /// [`ScrollbackOnGrow`]. The alternate screen is truncated. While the
+    /// alternate screen is shown, the primary screen is rewrapped only when
+    /// it is shown again, and the primary-screen placements that rewrap
+    /// strands are named by the [`VtSignal::WebviewEvicted`] of the
+    /// [`Vt::interpret`] call that shows it, not by this call.
     ///
     /// # Invariants
     ///
@@ -363,6 +380,13 @@ impl OrzmaVt {
         self.device.set_cursor_policy(policy);
         self
     }
+
+    /// Returns this terminal with `policy` deciding what a resize does
+    /// with the rows it frees at the bottom of the primary screen.
+    pub fn with_scrollback_on_grow(mut self, policy: ScrollbackOnGrow) -> Self {
+        self.device.set_scrollback_on_grow(policy);
+        self
+    }
 }
 
 impl Vt for OrzmaVt {
@@ -447,6 +471,7 @@ mod tests {
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
     use crate::screen::grid::MIN_COLUMNS;
     use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
+    use crate::screen::grid::reflow::ScrollbackOnGrow;
     use crate::screen::selection::{SelectionGeometry, SelectionRange};
     use crate::screen::viewport::ViewportLine;
 
@@ -880,19 +905,19 @@ mod tests {
         );
     }
 
-    /// Asserts that a selection whose end lies past a shrunken width projects
-    /// onto the new last column instead of past the grid.
+    /// Asserts that a width shrink rewraps a selected row, and the
+    /// selection follows its text into history.
     ///
     /// Case: the user has a full row selected and narrows the window.
     #[test]
-    fn a_width_shrink_clamps_the_projected_column() {
+    fn a_width_shrink_reflows_the_selection_with_its_text() {
         let mut vt = filled();
         vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Simple);
         vt.extend_selection(cell(0, 3), CellSide::Right);
         assert!(vt.resize(GridSize { cols: 2, rows: 3 }).is_some());
         assert_eq!(
             projected(&vt),
-            Some(range((0, 0), (0, 1), SelectionGeometry::Linear))
+            Some(range((-3, 0), (-2, 1), SelectionGeometry::Linear))
         );
     }
 
@@ -918,6 +943,80 @@ mod tests {
     fn a_same_size_resize_returns_none() {
         let mut vt = vt();
         assert_eq!(vt.resize(GridSize { cols: 4, rows: 3 }), None);
+    }
+
+    /// Asserts that under `Keep` a growth leaves history in place, while
+    /// the default `Reclaim` pulls it back onto the screen.
+    ///
+    /// Case: the user drags the window taller after output scrolled off
+    /// the top, once under ConPTY and once under a Unix PTY.
+    #[test]
+    fn the_scrollback_policy_decides_whether_a_growth_pulls_history() {
+        let mut keep = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10)
+            .with_scrollback_on_grow(ScrollbackOnGrow::Keep);
+        let mut reclaim = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10);
+        for vt in [&mut keep, &mut reclaim] {
+            vt.interpret(b"1\r\n2\r\n3\r\n4");
+            assert!(vt.resize(GridSize { cols: 4, rows: 4 }).is_some());
+        }
+        assert_eq!(keep.device.active_screen().grid().history_len(), 1);
+        assert_eq!(reclaim.device.active_screen().grid().history_len(), 0);
+    }
+
+    /// Asserts that under `Reclaim` narrowing a cleared screen and widening
+    /// it back leaves the scrollback in history and the prompt on the top
+    /// row.
+    ///
+    /// Case: the user clears the screen, then narrows the window until the
+    /// prompt wraps and widens it back on macOS.
+    #[test]
+    fn a_round_trip_after_a_clear_leaves_scrollback_in_history() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 8, rows: 4 }, 10);
+        vt.interpret(b"1\r\n2\r\n3\r\n4\r\n5\r\n6");
+        vt.interpret(b"\x1b[H\x1b[2JPS> ");
+        let _ = vt.resize(GridSize { cols: 2, rows: 4 });
+        let _ = vt.resize(GridSize { cols: 8, rows: 4 });
+        assert_eq!(
+            vt.device.active_screen().grid().ring_texts(),
+            ["1", "2", "PS>", "", "", ""]
+        );
+        assert_eq!(
+            vt.device.active_screen().cursors()[0],
+            (ScreenLine(0), GridColumn(4), false)
+        );
+    }
+
+    /// Asserts that a size with a zero axis is ignored.
+    ///
+    /// Case: a host builds the size from a minimized window's geometry
+    /// without going through `GridSize::new`.
+    #[test]
+    fn a_zero_axis_resize_returns_none() {
+        let mut vt = vt();
+        assert_eq!(vt.resize(GridSize { cols: 0, rows: 3 }), None);
+    }
+
+    /// Asserts that a shrink that drops wrapped rows below the cursor ends
+    /// the line on the new bottom row, so text printed later in the rows a
+    /// growth adds stays a line of its own.
+    ///
+    /// Case: under ConPTY a program saves the cursor, prints a line that
+    /// wraps over the rows below, and restores the cursor; the user drags
+    /// the window shorter and back, the program prints on a lower row, and
+    /// the user then widens the window.
+    #[test]
+    fn a_shrink_below_the_cursor_ends_the_line_on_the_new_bottom_row() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 4, rows: 4 }, 50)
+            .with_scrollback_on_grow(ScrollbackOnGrow::Keep);
+        vt.interpret(b"a\r\n\x1b7bbbbccccdddd\x1b8");
+        let _ = vt.resize(GridSize { cols: 4, rows: 2 });
+        let _ = vt.resize(GridSize { cols: 4, rows: 4 });
+        vt.interpret(b"\x1b[3;1Hxyz");
+        let _ = vt.resize(GridSize { cols: 12, rows: 4 });
+        assert_eq!(
+            vt.device.active_screen().grid().ring_texts(),
+            ["a", "bbbbcccc", "xyz", "", ""]
+        );
     }
 
     /// Asserts that a shrink names the placement whose anchor row it
@@ -1241,6 +1340,64 @@ mod tests {
             }),
             "leaving the alternate screen evicts the placement, got {:?}",
             out.signals
+        );
+    }
+
+    /// Asserts that a resize behind the alternate screen names no
+    /// primary-screen placement, and the flip back names the one whose
+    /// anchor row the deferred reflow dropped past the history cap.
+    ///
+    /// Case: a webview is mounted on the first row of a terminal without
+    /// scrollback, the user opens a full-screen editor, narrows the window,
+    /// and quits the editor.
+    #[test]
+    fn leaving_the_alternate_screen_names_a_placement_the_deferred_reflow_stranded() {
+        let id = InstanceId(7);
+        let mut vt = OrzmaVt::new(GridSize { cols: 8, rows: 2 }, 0);
+        vt.interpret(b"abcdefgh");
+        assert!(vt.mount_placement_at(
+            ScreenLine(0),
+            GridColumn(1),
+            PlacementSize { rows: 1, cols: 1 },
+            id
+        ));
+        vt.interpret(b"\x1b[?1049h");
+        assert_eq!(
+            vt.resize(GridSize { cols: 2, rows: 2 }),
+            Some(ResizeChanged { evicted: vec![] })
+        );
+        let out = vt.interpret(b"\x1b[?1049l");
+        assert!(
+            out.signals.contains(&VtSignal::WebviewEvicted {
+                placements: vec![id]
+            }),
+            "the flip back names the stranded placement, got {:?}",
+            out.signals
+        );
+        assert_eq!(vt.device.active_screen().placement_count(), 0);
+    }
+
+    /// Asserts that a placement the deferred reflow strands and the same
+    /// chunk re-mounts is updated in place rather than evicted and
+    /// re-created.
+    ///
+    /// Case: a webview is mounted on the first row of a terminal without
+    /// scrollback, the user narrows the window inside a full-screen editor,
+    /// and the program re-mounts the webview in the same write that quits
+    /// the editor.
+    #[test]
+    fn a_placement_the_deferred_reflow_strands_and_the_chunk_remounts_stays() {
+        let id = InstanceId(7);
+        let size = PlacementSize { rows: 1, cols: 1 };
+        let mut vt = OrzmaVt::new(GridSize { cols: 8, rows: 2 }, 0);
+        vt.interpret(b"abcdefgh");
+        assert!(vt.mount_placement_at(ScreenLine(0), GridColumn(1), size, id));
+        vt.interpret(b"\x1b[?1049h");
+        let _ = vt.resize(GridSize { cols: 2, rows: 2 });
+        let out = vt.interpret(format!("\x1b[?1049l\x1b_Omount;n={id},r=1,c=1\x1b\\").as_bytes());
+        assert_eq!(
+            out.signals,
+            vec![VtSignal::WebviewMount { instance: id, size }]
         );
     }
 

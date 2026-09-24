@@ -16,6 +16,13 @@ use std::ops::{Deref, DerefMut, Index, IndexMut};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row<T>(Vec<T>);
 
+impl<T> Row<T> {
+    /// The row's elements, left to right.
+    pub fn into_inner(self) -> Vec<T> {
+        self.0
+    }
+}
+
 impl<T: Clone> Row<T> {
     /// Builds a row of `len` copies of `fill`.
     pub fn filled(len: u16, fill: T) -> Self {
@@ -210,6 +217,18 @@ impl Row<Cell> {
                 CellWidth::LeadingSpacer => at + 1 == cols && cell.c == ' ' && cell.extra.is_none(),
                 CellWidth::Narrow => true,
             })
+    }
+
+    /// The row's glyphs and their marks, left to right, with trailing
+    /// blanks trimmed.
+    #[cfg(test)]
+    pub fn text(&self) -> String {
+        self.0
+            .iter()
+            .flat_map(Cell::chars)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
     }
 
     /// Restores the wide-pair invariant at the joint between `left` and
