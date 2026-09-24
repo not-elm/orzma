@@ -16,8 +16,9 @@ use crate::hyperlink::{HyperlinkId, HyperlinkInterner, HyperlinkUri};
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::cell::ClassifiedGlyph;
 use crate::screen::cursor::Cursor;
-use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, ScreenLine};
+use crate::screen::grid::reflow::ScrollbackOnGrow;
+use crate::screen::grid::{GridSize, MIN_COLUMNS};
 use crate::screen::margins::OriginMode;
 use crate::screen::viewport::{DisplayOffset, Scroll};
 use crate::screen::{PrintOptions, Screen};
@@ -34,15 +35,16 @@ pub(crate) struct DeviceState {
     active_hyperlink: Option<HyperlinkId>,
     preceding_graphic: Option<ClassifiedGlyph>,
     cursor_policy: CursorPolicy,
+    scrollback_on_grow: ScrollbackOnGrow,
 }
 
 impl DeviceState {
     /// Builds a blank device with the primary screen active.
     ///
     /// The alternate screen is built without scrollback, so its viewport
-    /// stays pinned to the live tail.
+    /// stays pinned to the live tail. Both axes of `size` must be nonzero,
+    /// as [`GridSize::new`] guarantees.
     pub fn new(size: GridSize, max_history: usize) -> Self {
-        Self::assert_nonzero_size(size);
         Self {
             screens: Screens {
                 primary: Screen::new(size, max_history),
@@ -55,6 +57,7 @@ impl DeviceState {
             active_hyperlink: None,
             preceding_graphic: None,
             cursor_policy: CursorPolicy::default(),
+            scrollback_on_grow: ScrollbackOnGrow::default(),
         }
     }
 
@@ -74,34 +77,43 @@ impl DeviceState {
         }
     }
 
-    /// Resizes both screens, truncating rather than reflowing; `None`
-    /// when the dimensions already matched.
+    /// Resizes the screens to `size`; `None` when the dimensions of the
+    /// screen on show already matched or either axis of `size` is zero.
+    /// A column count below [`MIN_COLUMNS`] is raised to it, as
+    /// [`GridSize::new`] does.
     ///
-    /// The caller must reject a size with a zero axis before it reaches
-    /// this method.
+    /// While the primary screen is shown it is reflowed with
+    /// [`Screen::reflow`] under the device's [`ScrollbackOnGrow`], and the
+    /// alternate screen is truncated. While the alternate screen is shown
+    /// only it is resized, and the primary screen keeps its size until
+    /// [`Self::switch_screen`] shows it again.
     ///
     /// Placements this strands are not named here: their anchors stop
     /// resolving, and the next [`Self::evict_lost_anchors`] names them.
     ///
     /// # Invariants
     ///
-    /// A resize that changes the dimensions reports [`DamageSpan::Full`].
+    /// A resize that changes the dimensions of the screen on show reports
+    /// [`DamageSpan::Full`].
     ///
-    /// Both grid axes are nonzero, and both screens are always the same
-    /// size.
+    /// Both grid axes are nonzero, and the two screens are the same size
+    /// while the primary screen is shown.
     pub fn resize(&mut self, size: GridSize) -> Option<DamageSpan> {
-        Self::assert_nonzero_size(size);
-        let primary = self.screens.primary.resize(size);
-        let _ = self.screens.alternate.resize(size);
-        primary
-    }
-
-    /// Rejects a degenerate grid size in debug builds.
-    fn assert_nonzero_size(size: GridSize) {
-        debug_assert!(
-            size.cols > 0 && size.rows > 0,
-            "a degenerate grid size is rejected before it reaches the device"
-        );
+        if size.cols == 0 || size.rows == 0 {
+            return None;
+        }
+        let size = GridSize {
+            cols: size.cols.max(MIN_COLUMNS),
+            ..size
+        };
+        match self.modes.active_screen {
+            ScreenKind::Primary => {
+                let primary = self.screens.primary.reflow(size, self.scrollback_on_grow);
+                let _ = self.screens.alternate.resize(size);
+                primary
+            }
+            ScreenKind::Alternate => self.screens.alternate.resize(size),
+        }
     }
 
     /// Moves the active viewport; `None` for a clamped or zero motion.
@@ -211,11 +223,15 @@ impl DeviceState {
     /// The cursor's shape and blink return to the host-supplied cursor
     /// policy's initial style rather than the power-up one.
     ///
+    /// The primary screen comes back at the size the alternate screen has.
+    ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`)
     pub fn reset(&mut self) -> Option<DamageSpan> {
         self.preceding_graphic = None;
+        let size = self.screens.alternate.grid_size();
+        let _ = self.screens.primary.resize(size);
         let was_showing_alternate = matches!(self.modes.active_screen, ScreenKind::Alternate);
         let primary = self.screens.primary.reset();
         let _ = self.screens.alternate.reset();
@@ -550,6 +566,12 @@ impl DeviceState {
         self.apply_initial_cursor_style();
     }
 
+    /// Sets what a resize does with the rows it frees at the bottom of the
+    /// primary screen.
+    pub fn set_scrollback_on_grow(&mut self, policy: ScrollbackOnGrow) {
+        self.scrollback_on_grow = policy;
+    }
+
     /// Switches the active screen without a flip's side effects.
     #[cfg(test)]
     pub(crate) fn set_active_screen_for_test(&mut self, kind: ScreenKind) {
@@ -657,6 +679,11 @@ impl DeviceState {
     ///
     /// A flip in either direction closes the open hyperlink. Each screen
     /// keeps its own pen, colours included, across flips.
+    ///
+    /// A flip to the primary screen first reflows it to the alternate
+    /// screen's size when a resize arrived while the alternate screen was
+    /// shown, and the placements that reflow strands follow the alternate
+    /// screen's in the result.
     pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
         self.modes.active_screen = to;
         // NOTE: Dropping this clear lets a link a killed program left open
@@ -668,7 +695,17 @@ impl DeviceState {
             ScreenKind::Alternate => Vec::new(),
             ScreenKind::Primary => {
                 self.screens.alternate.clear_selection();
-                self.screens.alternate.take_placements()
+                let mut evicted = self.screens.alternate.take_placements();
+                let size = self.screens.alternate.grid_size();
+                if self
+                    .screens
+                    .primary
+                    .reflow(size, self.scrollback_on_grow)
+                    .is_some()
+                {
+                    evicted.extend(self.screens.primary.evict_lost_anchors());
+                }
+                evicted
             }
         }
     }
@@ -714,7 +751,8 @@ mod tests {
     use crate::hyperlink::HyperlinkUri;
     use crate::screen::cell::Cell;
     use crate::screen::character_sets::{CharacterSet, GCode};
-    use crate::screen::grid::coords::GridColumn;
+    use crate::screen::grid::coords::{GridColumn, GridLine};
+    use crate::screen::grid::reflow::ScrollbackOnGrow;
     use crate::screen::viewport::ViewportLine;
     use std::iter::from_fn;
 
@@ -866,6 +904,118 @@ mod tests {
             Some(DamageSpan::Full)
         );
         assert_eq!(device.evict_lost_anchors(), vec![id]);
+    }
+
+    fn row_text(device: &DeviceState, line: i32) -> String {
+        device
+            .screens
+            .primary
+            .grid()
+            .row(GridLine(line))
+            .iter()
+            .flat_map(Cell::chars)
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// Asserts that a resize while the alternate screen is shown leaves
+    /// the primary screen at its size until the flip back reflows it.
+    ///
+    /// Case: the user narrows the window while a full-screen editor is
+    /// open, then quits the editor.
+    #[test]
+    fn the_primary_screen_reflows_only_when_shown_again() {
+        let mut device = DeviceState::new(GridSize { cols: 8, rows: 3 }, 10);
+        for c in "abcdefg".chars() {
+            device.print(c).expect("a printable glyph");
+        }
+        let _ = device.switch_screen(ScreenKind::Alternate);
+        assert_eq!(
+            device.resize(GridSize { cols: 4, rows: 3 }),
+            Some(DamageSpan::Full)
+        );
+        assert_eq!(
+            device.screens.primary.grid_size(),
+            GridSize { cols: 8, rows: 3 }
+        );
+        let _ = device.switch_screen(ScreenKind::Primary);
+        assert_eq!(
+            device.active_screen().grid_size(),
+            GridSize { cols: 4, rows: 3 }
+        );
+        assert_eq!(row_text(&device, 0), "abcd");
+        assert_eq!(row_text(&device, 1), "efg");
+    }
+
+    /// Asserts that several resizes behind the alternate screen reflow the
+    /// primary screen once, from its old size to the last one.
+    ///
+    /// Case: the user drags the window narrower and back while a
+    /// full-screen editor is open under ConPTY.
+    #[test]
+    fn resizes_behind_the_alternate_screen_collapse_into_one_reflow() {
+        let mut device = DeviceState::new(GridSize { cols: 4, rows: 2 }, 10);
+        device.set_scrollback_on_grow(ScrollbackOnGrow::Keep);
+        for c in "abcdefgh".chars() {
+            device.print(c).expect("a printable glyph");
+        }
+        let _ = device.switch_screen(ScreenKind::Alternate);
+        let _ = device.resize(GridSize { cols: 2, rows: 2 });
+        let _ = device.resize(GridSize { cols: 4, rows: 2 });
+        let _ = device.switch_screen(ScreenKind::Primary);
+        assert_eq!(device.screens.primary.grid().history_len(), 0);
+    }
+
+    /// Asserts that a reset while the alternate screen is shown brings the
+    /// primary screen back at the current size.
+    ///
+    /// Case: a program sends `RIS` from a full-screen editor after the user
+    /// resized the window.
+    #[test]
+    fn a_reset_on_the_alternate_screen_brings_the_primary_back_at_the_current_size() {
+        let mut device = DeviceState::new(GridSize { cols: 8, rows: 3 }, 10);
+        let _ = device.switch_screen(ScreenKind::Alternate);
+        let _ = device.resize(GridSize { cols: 4, rows: 5 });
+        let _ = device.reset();
+        assert_eq!(
+            device.active_screen().grid_size(),
+            GridSize { cols: 4, rows: 5 }
+        );
+    }
+
+    /// Asserts that a size with a zero axis is ignored rather than
+    /// applied.
+    ///
+    /// Case: a host builds the size from a minimized window's geometry
+    /// without going through `GridSize::new`.
+    #[test]
+    fn a_zero_axis_resize_is_ignored() {
+        let mut device = DeviceState::new(GridSize { cols: 8, rows: 3 }, 10);
+        assert_eq!(device.resize(GridSize { cols: 0, rows: 3 }), None);
+        assert_eq!(device.resize(GridSize { cols: 8, rows: 0 }), None);
+        assert_eq!(
+            device.active_screen().grid_size(),
+            GridSize { cols: 8, rows: 3 }
+        );
+    }
+
+    /// Asserts that a one-column size is widened to the narrowest grid
+    /// rather than applied.
+    ///
+    /// Case: a host builds a one-column size from a sliver of a pane
+    /// without going through `GridSize::new`.
+    #[test]
+    fn a_one_column_resize_is_widened_to_the_narrowest_grid() {
+        let mut device = DeviceState::new(GridSize { cols: 8, rows: 3 }, 10);
+        let _ = device.resize(GridSize { cols: 1, rows: 3 });
+        assert_eq!(
+            device.active_screen().grid_size(),
+            GridSize {
+                cols: MIN_COLUMNS,
+                rows: 3
+            }
+        );
     }
 
     /// Asserts that a stop set on one screen is absent from the other,

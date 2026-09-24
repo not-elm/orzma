@@ -9,6 +9,7 @@ use crate::{
     placement::{InstanceId, PlacementSize},
     screen::grid::GridSize,
     screen::grid::coords::{GridColumn, GridPoint, ScreenLine},
+    screen::grid::reflow::ScrollbackOnGrow,
     screen::selection::{CellSide, SelectionKind},
     screen::viewport::{DisplayOffset, Scroll},
 };
@@ -39,6 +40,7 @@ pub mod prelude {
     pub use crate::screen::cell::{GlyphClass, MAX_COMBINING};
     pub use crate::screen::cursor::Cursor;
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
+    pub use crate::screen::grid::reflow::ScrollbackOnGrow;
     pub use crate::screen::grid::row::Row;
     pub use crate::screen::grid::run::{Run, Style};
     pub use crate::screen::grid::{GridSize, MIN_COLUMNS};
@@ -161,12 +163,16 @@ pub trait Vt {
     /// No [`VtSignal::WebviewEvicted`] is raised.
     fn remove_placements(&mut self, instances: &[InstanceId]) -> bool;
 
-    /// Resizes the grid, truncating rather than reflowing; `None` when
-    /// the dimensions did not change. Only a real change stages (full)
+    /// Resizes the grid; `None` when the dimensions did not change or
+    /// either axis of `size` is zero. Only a real change stages (full)
     /// damage.
     ///
-    /// Both axes of `size` must be nonzero, as [`GridSize::new`]
-    /// guarantees.
+    /// The primary screen's rows, history included, are rewrapped at the
+    /// new width, and the positions pointing into them follow their text;
+    /// what the rows a growth frees hold follows the terminal's
+    /// [`ScrollbackOnGrow`]. The alternate screen is truncated. While the
+    /// alternate screen is shown, the primary screen is rewrapped only when
+    /// it is shown again.
     ///
     /// # Invariants
     ///
@@ -363,6 +369,13 @@ impl OrzmaVt {
         self.device.set_cursor_policy(policy);
         self
     }
+
+    /// Returns this terminal with `policy` deciding what a resize does
+    /// with the rows it frees at the bottom of the primary screen.
+    pub fn with_scrollback_on_grow(mut self, policy: ScrollbackOnGrow) -> Self {
+        self.device.set_scrollback_on_grow(policy);
+        self
+    }
 }
 
 impl Vt for OrzmaVt {
@@ -447,6 +460,7 @@ mod tests {
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
     use crate::screen::grid::MIN_COLUMNS;
     use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
+    use crate::screen::grid::reflow::ScrollbackOnGrow;
     use crate::screen::selection::{SelectionGeometry, SelectionRange};
     use crate::screen::viewport::ViewportLine;
 
@@ -880,19 +894,19 @@ mod tests {
         );
     }
 
-    /// Asserts that a selection whose end lies past a shrunken width projects
-    /// onto the new last column instead of past the grid.
+    /// Asserts that a width shrink rewraps a selected row, and the
+    /// selection follows its text into history.
     ///
     /// Case: the user has a full row selected and narrows the window.
     #[test]
-    fn a_width_shrink_clamps_the_projected_column() {
+    fn a_width_shrink_reflows_the_selection_with_its_text() {
         let mut vt = filled();
         vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Simple);
         vt.extend_selection(cell(0, 3), CellSide::Right);
         assert!(vt.resize(GridSize { cols: 2, rows: 3 }).is_some());
         assert_eq!(
             projected(&vt),
-            Some(range((0, 0), (0, 1), SelectionGeometry::Linear))
+            Some(range((-3, 0), (-2, 1), SelectionGeometry::Linear))
         );
     }
 
@@ -918,6 +932,34 @@ mod tests {
     fn a_same_size_resize_returns_none() {
         let mut vt = vt();
         assert_eq!(vt.resize(GridSize { cols: 4, rows: 3 }), None);
+    }
+
+    /// Asserts that under `Keep` a growth leaves history in place, while
+    /// the default `Reclaim` pulls it back onto the screen.
+    ///
+    /// Case: the user drags the window taller after output scrolled off
+    /// the top, once under ConPTY and once under a Unix PTY.
+    #[test]
+    fn the_scrollback_policy_decides_whether_a_growth_pulls_history() {
+        let mut keep = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10)
+            .with_scrollback_on_grow(ScrollbackOnGrow::Keep);
+        let mut reclaim = OrzmaVt::new(GridSize { cols: 4, rows: 3 }, 10);
+        for vt in [&mut keep, &mut reclaim] {
+            vt.interpret(b"1\r\n2\r\n3\r\n4");
+            assert!(vt.resize(GridSize { cols: 4, rows: 4 }).is_some());
+        }
+        assert_eq!(keep.device.active_screen().grid().history_len(), 1);
+        assert_eq!(reclaim.device.active_screen().grid().history_len(), 0);
+    }
+
+    /// Asserts that a size with a zero axis is ignored.
+    ///
+    /// Case: a host builds the size from a minimized window's geometry
+    /// without going through `GridSize::new`.
+    #[test]
+    fn a_zero_axis_resize_returns_none() {
+        let mut vt = vt();
+        assert_eq!(vt.resize(GridSize { cols: 0, rows: 3 }), None);
     }
 
     /// Asserts that a shrink names the placement whose anchor row it
