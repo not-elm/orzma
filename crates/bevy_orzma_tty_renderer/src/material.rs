@@ -2,10 +2,10 @@
 //! the plugin that keeps every pane's material current.
 
 use crate::{
-    glyph::atlas::GlyphRect,
+    glyph::{AtlasImage, atlas::GlyphRect},
     material::{
         params::{TerminalParams, TerminalParamsPlugin},
-        upload::CellUploadPlugin,
+        upload::{CellUploadPlugin, TerminalMaterialState},
     },
     schema::{Rgb, Style},
 };
@@ -29,7 +29,6 @@ use bevy::{
 };
 
 mod params;
-mod state;
 mod upload;
 
 /// Ordering anchor for the systems that write each terminal's material.
@@ -68,10 +67,11 @@ impl Plugin for TerminalMaterialPlugin {
             Shader::from_wgsl
         );
         app.init_resource::<TerminalPaddingFallback>()
-            .add_plugins(UiMaterialPlugin::<TerminalUiMaterial>::default())
-            .add_plugins(state::TerminalMaterialStatePlugin)
-            .add_plugins(TerminalParamsPlugin)
-            .add_plugins(CellUploadPlugin)
+            .add_plugins((
+                UiMaterialPlugin::<TerminalUiMaterial>::default(),
+                CellUploadPlugin,
+                TerminalParamsPlugin,
+            ))
             .configure_sets(
                 PostUpdate,
                 (
@@ -81,7 +81,8 @@ impl Plugin for TerminalMaterialPlugin {
                 )
                     .chain()
                     .in_set(TerminalMaterialSystems::UpdateMaterial),
-            );
+            )
+            .add_observer(init_material_node);
     }
 }
 
@@ -417,6 +418,54 @@ fn pack_linear(rgb: Rgb) -> u32 {
     Color::srgb_u8(rgb.r, rgb.g, rgb.b).to_linear().as_u32()
 }
 
+/// Seeds a new terminal node's material with one-element cell and glyph
+/// buffers, the glyph atlas and default uniforms, and gives the node the
+/// upload cache for those buffers. A node whose material asset is missing
+/// is left uninitialized.
+fn init_material_node(
+    add: On<Add, MaterialNode<TerminalUiMaterial>>,
+    mut commands: Commands,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
+    mut materials: ResMut<Assets<TerminalUiMaterial>>,
+    nodes: Query<&MaterialNode<TerminalUiMaterial>>,
+    atlas_image: Res<AtlasImage>,
+) {
+    let entity = add.event_target();
+    let Ok(node) = nodes.get(entity) else {
+        warn!(
+            ?entity,
+            "a terminal material node vanished before it was initialized"
+        );
+        return;
+    };
+    let Some(mut material) = materials.get_mut(&node.0) else {
+        warn!(
+            ?entity,
+            "a terminal material node has no material asset; it is not initialized"
+        );
+        return;
+    };
+
+    // NOTE: Seed both storage buffers with one dummy element. wgpu rejects
+    //       zero-sized storage buffers at bind time, so the bind group would
+    //       fail to materialize before the first wire snapshot arrived and
+    //       the whole material would silently drop out of the UI pass.
+    let mut cells_seed = ShaderBuffer::default();
+    cells_seed.set_data(vec![GpuCell::default()]);
+    let mut glyphs_seed = ShaderBuffer::default();
+    glyphs_seed.set_data(vec![GpuGlyph::default()]);
+    let cells_buffer = buffers.add(cells_seed);
+    let glyphs_buffer = buffers.add(glyphs_seed);
+
+    material.params = TerminalParams::default();
+    material.cells = cells_buffer.clone();
+    material.glyphs = glyphs_buffer.clone();
+    material.atlas = atlas_image.handle.clone();
+    commands
+        .entity(entity)
+        .insert(TerminalMaterialState::new(cells_buffer, glyphs_buffer));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -728,5 +777,47 @@ mod tests {
         let painter = wgsl_fn_body(src, "paint_cursor");
         assert!(painter.contains("col == cursor_span_left()"));
         assert!(painter.contains("col == cursor_span_right()"));
+    }
+
+    /// Asserts that a new terminal node gets its upload cache and a
+    /// material seeded with one-element cell and glyph buffers and the glyph
+    /// atlas.
+    ///
+    /// Case: the shell surface spawns the first terminal node at startup.
+    #[test]
+    fn a_new_material_node_is_seeded_and_given_its_cache() {
+        const ATLAS: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000003");
+        let mut app = App::new();
+        app.init_resource::<Assets<ShaderBuffer>>()
+            .init_resource::<Assets<TerminalUiMaterial>>()
+            .insert_resource(AtlasImage {
+                handle: ATLAS,
+                last_generation: 0,
+            })
+            .add_observer(init_material_node);
+        let material = app
+            .world_mut()
+            .resource_mut::<Assets<TerminalUiMaterial>>()
+            .add(TerminalUiMaterial::default());
+        let node = app.world_mut().spawn(MaterialNode(material.clone())).id();
+        app.update();
+
+        assert!(app.world().entity(node).contains::<TerminalMaterialState>());
+        let seeded = app
+            .world()
+            .resource::<Assets<TerminalUiMaterial>>()
+            .get(&material)
+            .expect("the node's material");
+        assert_eq!(seeded.atlas, ATLAS);
+        let buffers = app.world().resource::<Assets<ShaderBuffer>>();
+        for buffer in [&seeded.cells, &seeded.glyphs] {
+            assert!(
+                buffers
+                    .get(buffer)
+                    .and_then(|seed| seed.data.as_ref())
+                    .is_some_and(|data| !data.is_empty()),
+                "a seeded buffer holds one element"
+            );
+        }
     }
 }
