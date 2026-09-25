@@ -5,7 +5,7 @@
 use crate::{
     error::{RendererError, RendererResult},
     font::{FontFace, TerminalCellMetricsResource, TerminalFonts},
-    glyph::{GlyphKey, atlas::GlyphAtlas},
+    glyph::{GlyphAtlas, GlyphKey},
     grid::{TerminalCells, TerminalView},
     material::{GpuCell, GpuGlyph, STYLE_WIDE_RIGHT_HALF, pack_linear},
     system_set::MaterialStage,

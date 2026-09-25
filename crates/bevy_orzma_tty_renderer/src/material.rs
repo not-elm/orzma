@@ -2,7 +2,7 @@
 //! current for every pane.
 
 use crate::{
-    glyph::{AtlasImage, atlas::GlyphRect},
+    glyph::{AtlasImage, GlyphRect},
     material::{
         params::{TerminalParams, TerminalParamsPlugin},
         upload::{CellUploadPlugin, TerminalMaterialState},
@@ -813,7 +813,7 @@ mod tests {
     #[test]
     fn an_upload_lands_in_the_buffers_its_material_binds() {
         use crate::font::{TerminalCellMetricsResource, TerminalFonts};
-        use crate::glyph::atlas::GlyphAtlas;
+        use crate::glyph::GlyphAtlas;
         use crate::grid::{TerminalCells, TerminalView};
         use orzma_vt::prelude::Cell;
 

@@ -6,7 +6,7 @@ use crate::{
         CaretPaint, CaretPaintInput, CaretStyle, LastKeyInstant, PackedCursorStyle, blink_phase_on,
     },
     font::{CellMetrics, TerminalCellMetricsResource},
-    glyph::atlas::GlyphAtlas,
+    glyph::GlyphAtlas,
     grid::{TerminalCells, TerminalView},
     hyperlink::HyperlinkHoverState,
     material::{

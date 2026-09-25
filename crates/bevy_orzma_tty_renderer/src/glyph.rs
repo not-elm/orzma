@@ -1,7 +1,7 @@
-//! Glyph rasterization: the terminal fonts, the glyph atlas they are packed
-//! into, and the atlas's GPU texture.
+//! Glyph rasterization: the glyph atlas the fonts' glyphs are packed into,
+//! and the atlas's GPU texture.
 
-use crate::glyph::atlas::{GlyphAtlas, TerminalGlyphAtlasPlugin};
+use crate::glyph::atlas::TerminalGlyphAtlasPlugin;
 use crate::system_set::TerminalMaterialSystems;
 use bevy::{
     asset::{AssetEventSystems, RenderAssetUsages},
@@ -10,9 +10,11 @@ use bevy::{
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 
-pub(crate) mod atlas;
+mod atlas;
 mod key;
+mod outline;
 
+pub use atlas::{GlyphAtlas, GlyphRect};
 pub use key::GlyphKey;
 
 pub struct TerminalGlyphPlugin;
