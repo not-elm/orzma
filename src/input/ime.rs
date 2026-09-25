@@ -19,8 +19,9 @@ use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
-use bevy_orzma_tty_renderer::prelude::{TerminalOverlays, TerminalView};
+use bevy_orzma_tty_renderer::prelude::{
+    TerminalCellMetricsResource, TerminalOverlays, TerminalView,
+};
 use bevy_orzma_webview::{Webview, focused_webview_of};
 use bevy_orzmux::prelude::RequestActiveKeyInput;
 use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
@@ -380,9 +381,8 @@ mod tests {
     use bevy::prelude::{MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
-    use bevy_orzma_tty_renderer::CellMetrics;
-    use bevy_orzma_tty_renderer::prelude::{Cursor, TerminalView};
-    use orzma_vt::prelude::InstanceId;
+    use bevy_orzma_tty_renderer::prelude::{CellMetrics, TerminalView};
+    use orzma_vt::prelude::{Cursor, InstanceId};
 
     #[test]
     fn try_new_returns_none_for_empty_text() {

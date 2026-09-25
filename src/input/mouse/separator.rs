@@ -324,7 +324,7 @@ mod tests {
     use bevy::ecs::message::Messages;
     use bevy::input::mouse::MouseWheel;
     use bevy::window::{WindowFocused, WindowResolution};
-    use bevy_orzma_tty_renderer::schema::TerminalView;
+    use bevy_orzma_tty_renderer::prelude::TerminalView;
     use bevy_orzmux::prelude::RequestTtyPointer;
     use orzma_tty::CellPixels;
     use orzma_tty::prelude::{PointerInput, PointerKind};

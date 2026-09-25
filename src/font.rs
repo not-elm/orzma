@@ -5,9 +5,10 @@
 use crate::configs::OrzmaConfigsResource;
 use bevy::prelude::*;
 use bevy::text::{Font, FontCx, FontSize, FontSource, FontStyle, FontWeight, TextFont};
+use bevy_orzma_tty_renderer::bundled;
 use bevy_orzma_tty_renderer::bundled::FALLBACK_REGULAR;
-use bevy_orzma_tty_renderer::{
-    FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled,
+use bevy_orzma_tty_renderer::prelude::{
+    FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts,
 };
 use fontique::{Blob, Collection, Script, SourceCache};
 use orzma_configs::font::{FontFaceConfig, FontSlant, FontStyleSpec};
@@ -304,8 +305,8 @@ mod tests {
     use bevy::asset::AssetPlugin;
     use bevy::text::TextPlugin;
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
-    use bevy_orzma_tty_renderer::TerminalFontPlugin;
     use bevy_orzma_tty_renderer::bundled;
+    use bevy_orzma_tty_renderer::prelude::TerminalFontPlugin;
     use fontique::{FontInfoOverride, FontWeight};
     use std::sync::Arc;
 

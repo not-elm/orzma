@@ -20,7 +20,7 @@ use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
 use bevy::time::{Real, Time};
 use bevy::window::{CursorMoved, PrimaryWindow, WindowFocused};
-use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
+use bevy_orzma_tty_renderer::prelude::TerminalCellMetricsResource;
 use bevy_orzmux::prelude::CellSide;
 use orzma_tty::prelude::{CellCoord, PointerButton, PointerInput, PointerKind, ProtocolModifiers};
 use std::time::Duration;
@@ -446,10 +446,9 @@ mod tests {
     use bevy::input::mouse::MouseWheel;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
     use bevy::window::WindowResolution;
-    use bevy_orzma_tty_renderer::schema::{
-        Cell, HyperlinkId, HyperlinkUri, TerminalCells, TerminalView,
-    };
+    use bevy_orzma_tty_renderer::prelude::{TerminalCells, TerminalView};
     use bevy_orzmux::prelude::RequestTtyPointer;
+    use orzma_vt::prelude::{Cell, HyperlinkId, HyperlinkUri};
     use std::collections::HashMap;
 
     /// What reached the world, in trigger order.

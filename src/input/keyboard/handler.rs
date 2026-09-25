@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
-use bevy_orzma_tty_renderer::schema::TerminalView;
+use bevy_orzma_tty_renderer::prelude::TerminalView;
 use bevy_orzma_webview::ForwardKeys;
 use orzma_configs::shortcuts::Shortcut;
 

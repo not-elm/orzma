@@ -5,7 +5,7 @@
 pub(crate) mod geometry;
 
 use bevy::prelude::*;
-use bevy_orzma_tty_renderer::material::TerminalUiMaterial;
+use bevy_orzma_tty_renderer::prelude::TerminalUiMaterial;
 
 /// Marker component identifying an Orzma-mode terminal entity.
 ///

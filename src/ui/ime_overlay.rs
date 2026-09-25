@@ -25,11 +25,10 @@ use bevy::ui::{
     UiGlobalTransform, UiRect, UiSystems, Val,
 };
 use bevy::window::{PrimaryWindow, Window};
-use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
-use bevy_orzma_tty_renderer::TerminalFontInitSet;
-use bevy_orzma_tty_renderer::TerminalFontSize;
-use bevy_orzma_tty_renderer::material::TerminalMaterialSystems;
-use bevy_orzma_tty_renderer::prelude::{TerminalCells, TerminalView};
+use bevy_orzma_tty_renderer::prelude::{
+    TerminalCellMetricsResource, TerminalCells, TerminalFontInitSet, TerminalFontSize,
+    TerminalMaterialSystems, TerminalView,
+};
 use layout::{CaretVisual, PlacedCell, compute_overlay_layout};
 
 /// Adds the IME preedit overlay.
@@ -661,7 +660,7 @@ mod tests {
     use bevy::math::Vec2;
     use bevy::prelude::MinimalPlugins;
     use bevy::window::Ime;
-    use bevy_orzma_tty_renderer::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::CellMetrics;
 
     #[test]
     fn suppresses_cursor_on_focused_terminal() {
@@ -755,7 +754,7 @@ mod tests {
     fn overlay_background_matches_pane_palette_background_while_composing() {
         use crate::surface::OrzmaTerminal;
         use bevy::window::WindowResolution;
-        use bevy_orzma_tty_renderer::prelude::{Cursor, Palette, Rgb};
+        use orzma_vt::prelude::{Cursor, Palette, Rgb};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -840,7 +839,7 @@ mod tests {
     fn run_overlay_with_composition(value: &str, caret: Option<(usize, usize)>) -> App {
         use crate::surface::OrzmaTerminal;
         use bevy::window::WindowResolution;
-        use bevy_orzma_tty_renderer::prelude::{Cursor, Palette, Rgb};
+        use orzma_vt::prelude::{Cursor, Palette, Rgb};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -964,7 +963,7 @@ mod tests {
         use bevy::app::Update;
         use bevy::ecs::query::{Changed, Or};
         use bevy::window::WindowResolution;
-        use bevy_orzma_tty_renderer::prelude::{Cursor, Palette, Rgb};
+        use orzma_vt::prelude::{Cursor, Palette, Rgb};
 
         #[derive(Resource, Default)]
         struct ChangedOverlayNodes(usize);
@@ -1116,7 +1115,7 @@ mod tests {
         use crate::surface::OrzmaTerminal;
         use bevy::app::PostUpdate;
         use bevy::window::WindowResolution;
-        use bevy_orzma_tty_renderer::prelude::{Cursor, Palette, Rgb};
+        use orzma_vt::prelude::{Cursor, Palette, Rgb};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);

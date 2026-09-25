@@ -22,8 +22,16 @@ pub use material::TerminalPaddingFallback;
 pub mod prelude {
     pub use crate::TerminalRendererPlugin;
     pub use crate::cursor::{CaretStyle, CursorPlugin, LastKeyInstant, NextCaretFlip};
+    pub use crate::error::{RendererError, RendererResult};
+    pub use crate::glyph::font::{
+        CellMetrics, FontFace, TerminalCellMetricsResource, TerminalFontInitSet,
+        TerminalFontPlugin, TerminalFontSize, TerminalFonts, physical_font_size,
+    };
     pub use crate::grid::TerminalGridPlugin;
-    pub use crate::material::{OVERLAY_SLOTS, PaneInactiveStyle, TerminalOverlays};
+    pub use crate::material::{
+        OVERLAY_SLOTS, PaneInactiveStyle, TerminalMaterialSystems, TerminalOverlays,
+        TerminalPaddingFallback, TerminalUiMaterial,
+    };
     pub use crate::schema::*;
 }
 

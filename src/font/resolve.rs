@@ -2,7 +2,7 @@
 //! collection face index, via a `fontique` collection. Pure over the
 //! borrowed collection and source cache.
 
-use bevy_orzma_tty_renderer::FontFace;
+use bevy_orzma_tty_renderer::prelude::FontFace;
 use fontique::{
     Attributes, Collection, FontStyle, FontWeight, FontWidth, QueryFamily, QueryStatus, SourceCache,
 };

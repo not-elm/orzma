@@ -4,7 +4,7 @@
 use bevy::ecs::entity::Entity;
 use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
-use bevy_orzma_tty_renderer::CellMetrics;
+use bevy_orzma_tty_renderer::prelude::CellMetrics;
 
 /// Which half of a cell the pointer fell in (left vs. right of the midline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

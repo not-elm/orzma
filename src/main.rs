@@ -25,7 +25,7 @@ use bevy::prelude::*;
 use bevy::render::RenderPlugin;
 #[cfg(not(target_os = "macos"))]
 use bevy_cef::prelude::early_exit_if_subprocess;
-use bevy_orzma_tty_renderer::TerminalRendererPlugin;
+use bevy_orzma_tty_renderer::prelude::TerminalRendererPlugin;
 use bevy_orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use bevy_orzma_webview_host::WebviewAssetRegistry;
 use bevy_orzmux::prelude::{

@@ -3,7 +3,7 @@
 //! No Bevy ECS dependency.
 
 use bevy::math::Vec2;
-use bevy_orzma_tty_renderer::CellMetrics;
+use bevy_orzma_tty_renderer::prelude::CellMetrics;
 use orzma_vt::prelude::GlyphClass;
 
 /// A rectangle in logical pixels relative to the window origin.

@@ -13,8 +13,9 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::{FocusedWebview, WebviewSource};
-use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
-use bevy_orzma_tty_renderer::prelude::{PaneInactiveStyle, TerminalOverlays};
+use bevy_orzma_tty_renderer::prelude::{
+    PaneInactiveStyle, TerminalCellMetricsResource, TerminalOverlays,
+};
 use bevy_orzma_webview::{NonInteractive, Webview, webview_hit_at};
 use bevy_orzmux::prelude::{OrzmuxActivePaneChanged, OrzmuxPane, PaneAction, RequestPaneAction};
 use orzma_configs::inactive_pane::InactivePaneConfig;
@@ -636,7 +637,7 @@ mod tests {
     fn make_gate_app() -> (App, Entity) {
         use bevy::math::IVec4;
         use bevy::window::WindowResolution;
-        use bevy_orzma_tty_renderer::CellMetrics;
+        use bevy_orzma_tty_renderer::prelude::CellMetrics;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);

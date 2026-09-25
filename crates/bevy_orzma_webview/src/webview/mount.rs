@@ -16,10 +16,10 @@ use bevy_cef::prelude::{
     FocusedWebview, PreloadScripts, WebviewGpuImageInjectSet, WebviewSize, WebviewSource,
     WebviewTextureTarget,
 };
-use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
-use bevy_orzma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
-use bevy_orzma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
-use bevy_orzma_tty_renderer::schema::TerminalView;
+use bevy_orzma_tty_renderer::prelude::{
+    OVERLAY_SLOTS, TerminalCellMetricsResource, TerminalMaterialSystems, TerminalOverlays,
+    TerminalUiMaterial, TerminalView,
+};
 use bevy_orzmux::prelude::{RequestTtyWebviewRemove, TtyWebviewEvictedSignal};
 use orzma_vt::prelude::InstanceId;
 
@@ -635,7 +635,7 @@ mod tests {
     use crate::webview::apc::{on_webview_mount, on_webview_unmount};
     use bevy::ecs::system::RunSystemOnce;
     use bevy_cef::prelude::PreloadScripts;
-    use bevy_orzma_tty_renderer::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::CellMetrics;
     use bevy_orzmux::prelude::{
         TtyWebviewEvictedSignal, TtyWebviewMountRejectedSignal, TtyWebviewMountSignal,
         TtyWebviewUnmountSignal,

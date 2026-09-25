@@ -6,7 +6,7 @@ use crate::surface::geometry::{cell_pitch_phys, cells_for};
 use bevy::ecs::schedule::common_conditions::on_message;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized, WindowScaleFactorChanged};
-use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
+use bevy_orzma_tty_renderer::prelude::TerminalCellMetricsResource;
 use bevy_orzmux::prelude::{OrzmuxConnection, PaneGeometry};
 use orzma_tty::CellPixels;
 use orzma_vt::prelude::{GridSize, GridSizeError, VtError};
@@ -101,7 +101,7 @@ fn send_window_geometry(
 mod tests {
     use super::*;
     use bevy::window::WindowResolution;
-    use bevy_orzma_tty_renderer::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::CellMetrics;
     use orzmux::prelude::OrzmuxClient;
 
     fn metrics(advance: f32, line_height: f32) -> TerminalCellMetricsResource {
