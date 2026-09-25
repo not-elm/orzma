@@ -1,3 +1,6 @@
+//! Glyph rasterization: the terminal fonts, the glyph atlas they are packed
+//! into, and the atlas's GPU texture.
+
 use crate::glyph::{
     atlas::{GlyphAtlas, TerminalGlyphAtlasPlugin},
     font::TerminalFontPlugin,
@@ -19,9 +22,9 @@ impl Plugin for TerminalGlyphPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((TerminalGlyphAtlasPlugin, TerminalFontPlugin))
             .add_systems(Startup, init_atlas_image)
-            // NOTE: Must run in the same schedule as
-            // `update_terminal_material` (now `PostUpdate`) so the `.after`
-            // ordering is honoured by Bevy's executor — cross-schedule
+            // NOTE: Must run in `PostUpdate`, the schedule of the
+            // `TerminalMaterialSystems::UpdateMaterial` systems, so the
+            // `.after` ordering is honoured by Bevy's executor — cross-schedule
             // `.after` is silently ignored.
             .add_systems(
                 PostUpdate,

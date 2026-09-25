@@ -7,7 +7,6 @@ use crate::{
 };
 use bevy::{
     ecs::{lifecycle::HookContext, world::DeferredWorld},
-    platform::collections::HashMap,
     prelude::*,
     render::storage::ShaderBuffer,
 };
@@ -51,23 +50,13 @@ fn on_add_material_node(mut world: DeferredWorld, ctx: HookContext) {
         .get_mut(&material_handle)
     {
         material.params = TerminalParams::default();
-        material.cells = cells_buffer;
-        material.glyphs = glyphs_buffer;
+        material.cells = cells_buffer.clone();
+        material.glyphs = glyphs_buffer.clone();
         material.atlas = atlas_handle;
     }
 
     world
         .commands()
         .entity(ctx.entity)
-        .insert(TerminalMaterialState {
-            glyph_index_map: HashMap::new(),
-            cpu_cells: Vec::new(),
-            cpu_glyphs: Vec::new(),
-            last_atlas_generation: 0,
-            grid_dirty: true,
-            last_grid_dims: (0, 0),
-            last_phys_font_size: 0,
-            cached_metrics: None,
-            initialized: false,
-        });
+        .insert(TerminalMaterialState::new(cells_buffer, glyphs_buffer));
 }

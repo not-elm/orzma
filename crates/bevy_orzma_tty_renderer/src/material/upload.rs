@@ -2,25 +2,18 @@
 //! when its cells, its size, the glyph atlas or the font size changed.
 
 use crate::{
+    error::{RendererError, RendererResult},
     glyph::{
         atlas::GlyphAtlas,
-        font::{
-            CellMetrics, FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFontSize,
-            TerminalFonts, physical_font_size,
-        },
+        font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
     },
-    material::{
-        GpuCell, GpuGlyph, MaterialStage, STYLE_WIDE_RIGHT_HALF, TerminalUiMaterial, pack_linear,
-    },
+    material::{GpuCell, GpuGlyph, MaterialStage, STYLE_WIDE_RIGHT_HALF, pack_linear},
     schema::{
         Color as CellColor, GridCell, GridSlot, HyperlinkId, Palette, Style, TerminalCells,
         TerminalView,
     },
 };
-use bevy::{
-    platform::collections::HashMap, prelude::*, render::storage::ShaderBuffer,
-    window::PrimaryWindow,
-};
+use bevy::{platform::collections::HashMap, prelude::*, render::storage::ShaderBuffer};
 
 /// Registers the per-pane cell upload.
 pub(crate) struct CellUploadPlugin;
@@ -29,243 +22,210 @@ impl Plugin for CellUploadPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             PostUpdate,
-            update_terminal_material.in_set(MaterialStage::Upload),
+            upload_terminal_cells
+                .in_set(MaterialStage::Upload)
+                .run_if(resource_exists::<TerminalCellMetricsResource>),
         );
     }
 }
 
-/// CPU-side cache mirroring what the GPU sees this frame.
+/// CPU-side cache mirroring what one pane's cell and glyph buffers hold.
 #[derive(Component)]
 pub(crate) struct TerminalMaterialState {
-    pub glyph_index_map: HashMap<GlyphKey, u32>,
-    pub cpu_cells: Vec<GpuCell>,
-    pub cpu_glyphs: Vec<GpuGlyph>,
-    pub last_atlas_generation: u64,
-    /// Set from [`crate::schema::TerminalCells`]'s change detection and
-    /// cleared only once the rebuild actually uploads, so it stays set
-    /// across a frame whose rebuild bails out.
-    pub grid_dirty: bool,
-    pub last_grid_dims: (u16, u16),
-    /// Last physical font size used for glyph rasterization; `0` before
-    /// the entity's first rebuild.
-    pub last_phys_font_size: u16,
-    /// Cached output of `TerminalFonts::cell_metrics_px(last_phys_font_size)`.
-    pub cached_metrics: Option<CellMetrics>,
-    pub initialized: bool,
+    cells_buffer: Handle<ShaderBuffer>,
+    glyphs_buffer: Handle<ShaderBuffer>,
+    glyph_index_map: HashMap<GlyphKey, u32>,
+    cpu_cells: Vec<GpuCell>,
+    cpu_glyphs: Vec<GpuGlyph>,
+    /// `None` until the buffers hold a valid build: before the first one,
+    /// after a failed upload, and after a build during which the atlas
+    /// restarted.
+    uploaded: Option<UploadBasis>,
 }
 
 impl TerminalMaterialState {
-    /// Resets all glyph-cache state and marks the grid dirty, so the next
-    /// `update_terminal_material` invocation fully reuploads the atlas
-    /// LUT, glyph rects, and atlas generation marker.
+    /// A cache that uploads into `cells_buffer` and `glyphs_buffer`, with
+    /// nothing built yet.
+    pub fn new(cells_buffer: Handle<ShaderBuffer>, glyphs_buffer: Handle<ShaderBuffer>) -> Self {
+        Self {
+            cells_buffer,
+            glyphs_buffer,
+            glyph_index_map: HashMap::new(),
+            cpu_cells: Vec::new(),
+            cpu_glyphs: Vec::new(),
+            uploaded: None,
+        }
+    }
+
+    /// Whether the buffers must be rebuilt for `basis`, given whether the
+    /// pane's cells changed since the last run.
+    fn needs_upload(&self, basis: UploadBasis, cells_changed: bool) -> bool {
+        cells_changed || self.uploaded != Some(basis)
+    }
+
+    /// Rebuilds both buffers for `cells` at `basis`, recording `basis` only
+    /// when the atlas did not restart during the build.
     ///
-    /// It leaves `last_phys_font_size`, `cpu_cells`, and `initialized`
-    /// untouched; the caller writes `last_phys_font_size` itself after
-    /// invalidating.
-    pub(crate) fn invalidate_all(&mut self) {
-        self.glyph_index_map.clear();
-        self.cpu_glyphs.clear();
-        self.last_atlas_generation = 0;
-        self.grid_dirty = true;
-        self.cached_metrics = None;
+    /// The glyph table is kept only when the recorded build has the atlas
+    /// restarts and the font size of `basis`. A zero in either axis of
+    /// `basis.dims` uploads the one-element buffers wgpu requires instead of
+    /// empty ones, and rows and columns of `cells` outside the dimensions
+    /// are ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RendererError::MissingShaderBuffer`], leaving the atlas and
+    /// this cache untouched, when either buffer asset is missing.
+    fn upload(
+        &mut self,
+        atlas: &mut GlyphAtlas,
+        buffers: &mut Assets<ShaderBuffer>,
+        cells: &TerminalCells,
+        fonts: &TerminalFonts,
+        basis: UploadBasis,
+    ) -> RendererResult {
+        if !buffers.contains(&self.cells_buffer) || !buffers.contains(&self.glyphs_buffer) {
+            return Err(RendererError::MissingShaderBuffer);
+        }
+        let keeps_glyphs = self
+            .uploaded
+            .is_some_and(|built| built.keeps_glyphs_for(basis));
+        if !keeps_glyphs {
+            self.glyph_index_map.clear();
+            self.cpu_glyphs.clear();
+        }
+        let (cols, rows) = (u32::from(basis.dims.0), u32::from(basis.dims.1));
+        self.cpu_cells.clear();
+        self.cpu_cells
+            .resize((cols * rows) as usize, GpuCell::default());
+        if cols > 0 && rows > 0 {
+            fill_cells(
+                self,
+                atlas,
+                cells,
+                fonts,
+                basis.phys_font_size,
+                (cols, rows),
+            );
+        }
+        if self.cpu_cells.is_empty() {
+            self.cpu_cells.push(GpuCell::default());
+        }
+        if self.cpu_glyphs.is_empty() {
+            self.cpu_glyphs.push(GpuGlyph::default());
+        }
+        if let Some(mut buffer) = buffers.get_mut(&self.cells_buffer) {
+            buffer.set_data(&self.cpu_cells);
+        }
+        if let Some(mut buffer) = buffers.get_mut(&self.glyphs_buffer) {
+            buffer.set_data(&self.cpu_glyphs);
+        }
+        self.uploaded = (atlas.restarts == basis.atlas_restarts).then_some(basis);
+        Ok(())
     }
 }
 
-fn update_terminal_material(
+/// What a pane's cell and glyph buffers were built from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct UploadBasis {
+    /// The `(cols, rows)` of the pane's `TerminalView`.
+    dims: (u16, u16),
+    /// The `GlyphAtlas::restarts` every glyph index in the buffers is valid
+    /// for.
+    atlas_restarts: u64,
+    /// The physical font size the glyphs were keyed at.
+    phys_font_size: u16,
+}
+
+impl UploadBasis {
+    /// The basis a pane showing `view` would be built from now.
+    fn current(
+        view: &TerminalView,
+        atlas: &GlyphAtlas,
+        metrics: &TerminalCellMetricsResource,
+    ) -> Self {
+        Self {
+            dims: (view.cols, view.rows),
+            atlas_restarts: atlas.restarts,
+            phys_font_size: metrics.phys_font_size,
+        }
+    }
+
+    /// Whether a glyph table built at this basis still indexes the atlas
+    /// correctly at `other`.
+    fn keeps_glyphs_for(self, other: Self) -> bool {
+        self.atlas_restarts == other.atlas_restarts && self.phys_font_size == other.phys_font_size
+    }
+}
+
+/// Rebuilds the buffers of every pane whose cells, size, atlas restart
+/// count or font size changed; when a rebuild restarted the atlas, rebuilds
+/// once more every pane that restart left stale.
+fn upload_terminal_cells(
     mut atlas: ResMut<GlyphAtlas>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut terminals: Query<(
-        &MaterialNode<TerminalUiMaterial>,
+        Entity,
         &mut TerminalMaterialState,
         Ref<TerminalCells>,
-        // NOTE: `view` is taken as a plain `&`, never `Ref`. Latching
-        //       `view.is_changed()` into `grid_dirty` would make every cursor
-        //       move, selection drag and IME toggle rebuild and re-upload the
-        //       whole cell SSBO again — the defect the view/cells split removed.
+        // NOTE: `view` is read as a plain `&`, never `Ref`: rebuilding when
+        //       the view changed would re-upload the whole cell buffer on
+        //       every cursor move, selection drag and IME toggle, which
+        //       change only the uniforms.
         &TerminalView,
     )>,
-    mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
-    materials: Res<Assets<TerminalUiMaterial>>,
     fonts: Res<TerminalFonts>,
-    font_size: Res<TerminalFontSize>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    metrics: Res<TerminalCellMetricsResource>,
 ) {
-    let dpr = windows.single().ok().map(|window| window.scale_factor());
-    for (handle, mut state, cells, view) in terminals.iter_mut() {
-        // NOTE: Latch the cells' change signal before the bail-out below.
-        // Bevy clears it once this system has run, so cells written on a
-        // frame that skips the upload would otherwise never reach the GPU.
-        state.grid_dirty |= cells.is_changed();
-        let Some(dpr) = dpr else {
-            continue;
-        };
-        let phys_font_size = physical_font_size(font_size.0, dpr);
-        let atlas_invalidated = atlas.generation != state.last_atlas_generation;
-        let dims_changed = (view.cols, view.rows) != state.last_grid_dims;
-        let grid_changed = state.grid_dirty;
-        let phys_size_changed = phys_font_size != state.last_phys_font_size;
-
-        let needs_rebuild = !state.initialized
-            || grid_changed
-            || atlas_invalidated
-            || dims_changed
-            || phys_size_changed;
-
-        resolve_metrics(
-            &mut state,
-            &mut cell_metrics_res,
-            &fonts,
-            phys_font_size,
-            phys_size_changed,
-            atlas_invalidated,
-        );
-
-        let Some((cells_handle, glyphs_handle)) = materials
-            .get(&handle.0)
-            .map(|m| (m.cells.clone(), m.glyphs.clone()))
-        else {
-            continue;
-        };
-
-        if needs_rebuild {
-            upload_cells(
+    let restarts_before = atlas.restarts;
+    for (entity, mut state, cells, view) in &mut terminals {
+        let basis = UploadBasis::current(view, &atlas, &metrics);
+        if state.needs_upload(basis, cells.is_changed()) {
+            upload_pane(
                 &mut state,
                 &mut atlas,
                 &mut buffers,
+                entity,
                 &cells,
                 &fonts,
-                (&cells_handle, &glyphs_handle),
-                phys_font_size,
-                (view.cols, view.rows),
+                basis,
+            );
+        }
+    }
+    if atlas.restarts == restarts_before {
+        return;
+    }
+    for (entity, mut state, cells, view) in &mut terminals {
+        let basis = UploadBasis::current(view, &atlas, &metrics);
+        if state.needs_upload(basis, false) {
+            upload_pane(
+                &mut state,
+                &mut atlas,
+                &mut buffers,
+                entity,
+                &cells,
+                &fonts,
+                basis,
             );
         }
     }
 }
 
-/// Resolves the cell metrics for `phys_font_size`, clearing the glyph
-/// caches first when `phys_size_changed` or `atlas_invalidated` is set,
-/// and refreshing the shared cell-metrics resource.
-///
-/// A `phys_size_changed` resolve also records `phys_font_size` as the
-/// state's last physical size, so the next frame reports no change.
-fn resolve_metrics(
-    state: &mut TerminalMaterialState,
-    cell_metrics: &mut TerminalCellMetricsResource,
-    fonts: &TerminalFonts,
-    phys_font_size: u16,
-    phys_size_changed: bool,
-    atlas_invalidated: bool,
-) -> CellMetrics {
-    if phys_size_changed {
-        state.invalidate_all();
-        state.last_phys_font_size = phys_font_size;
-    }
-
-    // NOTE: atlas.generation can advance during this very system (via
-    //       get_or_insert in rebuild_cells), and a generation jump means
-    //       the atlas pixel buffer was wiped — every cached glyph index
-    //       in cpu_cells is now stale and would resolve to garbage
-    //       texels. Clearing the LUT here forces a full rerasterization
-    //       on the rebuild path.
-    if atlas_invalidated {
-        state.glyph_index_map.clear();
-        state.cpu_glyphs.clear();
-    }
-
-    let metrics = if let Some(cached) = state.cached_metrics {
-        cached
-    } else {
-        let m = fonts.cell_metrics_px(phys_font_size);
-        state.cached_metrics = Some(m);
-        m
-    };
-
-    // NOTE: Write the metrics back to TerminalCellMetricsResource so
-    //       gui-side resize_terminals_to_node reads DPR-adjusted phys
-    //       values on the next frame. The OR condition also catches
-    //       the case where the Resource was reset externally (e.g.
-    //       hot-reload) even if our local state matches.
-    if phys_size_changed || cell_metrics.phys_font_size != phys_font_size {
-        *cell_metrics = TerminalCellMetricsResource {
-            metrics,
-            phys_font_size,
-        };
-    }
-
-    metrics
-}
-
-/// Rebuilds one terminal's cell and glyph buffers and uploads both,
-/// then records the atlas generation and grid dimensions the upload was
-/// built from.
-///
-/// `handles` is `(cells, glyphs)`. `dims` is `(cols, rows)` in cells. A
-/// zero in either axis uploads the one-element dummy buffers wgpu
-/// requires instead of an empty one.
-///
-/// Rows and columns of `cells` outside `dims` are ignored, and a slot
-/// `cells` does not cover keeps the default cell.
-fn upload_cells(
+/// Uploads one pane; a failure is logged and forgets the recorded build, so
+/// the next run rebuilds the pane.
+fn upload_pane(
     state: &mut TerminalMaterialState,
     atlas: &mut GlyphAtlas,
     buffers: &mut Assets<ShaderBuffer>,
+    entity: Entity,
     cells: &TerminalCells,
     fonts: &TerminalFonts,
-    handles: (&Handle<ShaderBuffer>, &Handle<ShaderBuffer>),
-    phys_font_size: u16,
-    dims: (u16, u16),
+    basis: UploadBasis,
 ) {
-    let (cols, rows) = (u32::from(dims.0), u32::from(dims.1));
-    let (cells_handle, glyphs_handle) = handles;
-
-    let cell_count = (cols * rows) as usize;
-    state.cpu_cells.clear();
-    state.cpu_cells.resize(cell_count, GpuCell::default());
-
-    if cols > 0 && rows > 0 {
-        rebuild_cells(state, atlas, cells, fonts, phys_font_size, (cols, rows));
+    if let Err(err) = state.upload(atlas, buffers, cells, fonts, basis) {
+        warn!(terminal = ?entity, %err, "cell upload failed; the next run retries it");
+        state.uploaded = None;
     }
-
-    if state.cpu_cells.is_empty() {
-        state.cpu_cells.push(GpuCell::default());
-    }
-    if state.cpu_glyphs.is_empty() {
-        state.cpu_glyphs.push(GpuGlyph::default());
-    }
-
-    if let Some(mut buf) = buffers.get_mut(cells_handle) {
-        buf.set_data(&state.cpu_cells);
-    }
-    if let Some(mut buf) = buffers.get_mut(glyphs_handle) {
-        buf.set_data(&state.cpu_glyphs);
-    }
-
-    state.last_atlas_generation = atlas.generation;
-    state.grid_dirty = false;
-    state.last_grid_dims = dims;
-    state.initialized = true;
-}
-
-fn rebuild_cells(
-    state: &mut TerminalMaterialState,
-    atlas: &mut GlyphAtlas,
-    cells: &TerminalCells,
-    fonts: &TerminalFonts,
-    phys_font_size: u16,
-    dims: (u32, u32),
-) {
-    let restarts = atlas.restarts;
-    fill_cells(state, atlas, cells, fonts, phys_font_size, dims);
-    if atlas.restarts == restarts {
-        return;
-    }
-    // NOTE: A restart during the pass wiped the texels every index
-    // resolved before it points at; one more pass re-resolves them
-    // against the restarted atlas. A second restart means the grid's
-    // glyph set does not fit the atlas at all, so that pass is final.
-    state.glyph_index_map.clear();
-    state.cpu_glyphs.clear();
-    fill_cells(state, atlas, cells, fonts, phys_font_size, dims);
 }
 
 /// Writes every visible cell's glyph index, color and style into the CPU
@@ -443,10 +403,9 @@ impl PackedPalette {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::glyph::font::{CellMetrics, FontFace, GlyphKey};
+    use bevy::ecs::change_detection::Tick;
 
     fn cell_with_link(text: &str, link: Option<u32>) -> GridCell {
-        use crate::schema::{Color as CellColor, HyperlinkId};
         GridCell {
             text: text.to_string(),
             fg: CellColor::DefaultForeground,
@@ -473,32 +432,8 @@ mod tests {
             .collect()
     }
 
-    /// Builds a state whose cell buffer is sized for `cell_count` slots.
-    fn state_for(cell_count: usize) -> TerminalMaterialState {
-        use bevy::platform::collections::HashMap;
-        TerminalMaterialState {
-            glyph_index_map: HashMap::new(),
-            cpu_cells: vec![GpuCell::default(); cell_count],
-            cpu_glyphs: Vec::new(),
-            last_atlas_generation: 0,
-            grid_dirty: true,
-            last_grid_dims: (0, 0),
-            last_phys_font_size: 0,
-            cached_metrics: None,
-            initialized: false,
-        }
-    }
-
-    fn uploaded(
-        state: &mut TerminalMaterialState,
-        buffers: &mut Assets<ShaderBuffer>,
-        handles: (&Handle<ShaderBuffer>, &Handle<ShaderBuffer>),
-        cells: &TerminalCells,
-        dims: (u16, u16),
-    ) {
-        let mut atlas = GlyphAtlas::default();
-        let fonts = TerminalFonts::default();
-        upload_cells(state, &mut atlas, buffers, cells, &fonts, handles, 16, dims);
+    fn hyperlink_ids(cells: &[GpuCell]) -> Vec<u32> {
+        cells.iter().map(|cell| cell.hyperlink_id).collect()
     }
 
     fn grid_of(rows: usize, cols: usize) -> TerminalCells {
@@ -508,8 +443,151 @@ mod tests {
         }
     }
 
-    fn hyperlink_ids(cells: &[GpuCell]) -> Vec<u32> {
-        cells.iter().map(|cell| cell.hyperlink_id).collect()
+    /// One row holding a plain cell for each `char` of `text`.
+    fn row_of(text: &str) -> TerminalCells {
+        TerminalCells {
+            cells: vec![
+                text.chars()
+                    .map(|ch| GridSlot::Cell(cell_with_link(&ch.to_string(), None)))
+                    .collect(),
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// A cache sized for `cell_count` default cells, whose buffers are
+    /// unused handles.
+    fn state_for(cell_count: usize) -> TerminalMaterialState {
+        TerminalMaterialState {
+            cpu_cells: vec![GpuCell::default(); cell_count],
+            ..TerminalMaterialState::new(Handle::default(), Handle::default())
+        }
+    }
+
+    /// Two empty buffer assets and a cache that uploads into them.
+    fn buffers_and_state() -> (Assets<ShaderBuffer>, TerminalMaterialState) {
+        let mut buffers = Assets::<ShaderBuffer>::default();
+        let cells = buffers.add(ShaderBuffer::default());
+        let glyphs = buffers.add(ShaderBuffer::default());
+        (buffers, TerminalMaterialState::new(cells, glyphs))
+    }
+
+    fn basis_at(dims: (u16, u16), atlas: &GlyphAtlas, phys_font_size: u16) -> UploadBasis {
+        UploadBasis {
+            dims,
+            atlas_restarts: atlas.restarts,
+            phys_font_size,
+        }
+    }
+
+    /// Uploads `cells` at `dims` against a fresh atlas at 16 px.
+    fn uploaded(
+        state: &mut TerminalMaterialState,
+        buffers: &mut Assets<ShaderBuffer>,
+        cells: &TerminalCells,
+        dims: (u16, u16),
+    ) {
+        let mut atlas = GlyphAtlas::default();
+        let fonts = TerminalFonts::default();
+        let basis = basis_at(dims, &atlas, 16);
+        state
+            .upload(&mut atlas, buffers, cells, &fonts, basis)
+            .expect("both buffers exist");
+    }
+
+    /// A 32x24 atlas whose one shelf already holds 24 px `M` and `W`, so a
+    /// 24 px `A` restarts it.
+    fn nearly_full_atlas(fonts: &TerminalFonts) -> GlyphAtlas {
+        let mut atlas = GlyphAtlas::new(32, 24);
+        for ch in ['M', 'W'] {
+            atlas
+                .get_or_insert(GlyphKey::new(FontFace::Regular, u32::from(ch), 24), fonts)
+                .expect("the filler glyph rasterizes");
+        }
+        assert_eq!(
+            atlas.restarts, 0,
+            "the filler glyphs must not restart the atlas"
+        );
+        atlas
+    }
+
+    /// The top-left corner of the rect the atlas holds for the plain 24 px
+    /// glyph `ch`.
+    fn rect_origin(atlas: &GlyphAtlas, ch: char) -> Vec2 {
+        let rect = atlas.glyphs[&GlyphKey::new(FontFace::Regular, u32::from(ch), 24)];
+        Vec2::new(f32::from(rect.u), f32::from(rect.v))
+    }
+
+    /// An app that runs only the cell upload, with `atlas`, 24 px metrics
+    /// and no primary window.
+    fn upload_app(atlas: GlyphAtlas) -> App {
+        let fonts = TerminalFonts::default();
+        let mut app = App::new();
+        app.add_plugins(CellUploadPlugin)
+            .insert_resource(TerminalCellMetricsResource::new(&fonts, 24))
+            .insert_resource(fonts)
+            .insert_resource(atlas)
+            .init_resource::<Assets<ShaderBuffer>>();
+        app
+    }
+
+    /// Spawns a one-row pane showing `text`, with fresh buffers.
+    fn spawn_pane(app: &mut App, text: &str) -> Entity {
+        let state = {
+            let mut buffers = app.world_mut().resource_mut::<Assets<ShaderBuffer>>();
+            let cells = buffers.add(ShaderBuffer::default());
+            let glyphs = buffers.add(ShaderBuffer::default());
+            TerminalMaterialState::new(cells, glyphs)
+        };
+        let view = TerminalView {
+            cols: u16::try_from(text.chars().count()).expect("a short test row"),
+            rows: 1,
+            ..Default::default()
+        };
+        app.world_mut().spawn((state, view, row_of(text))).id()
+    }
+
+    fn state_of(app: &App, pane: Entity) -> &TerminalMaterialState {
+        app.world()
+            .get::<TerminalMaterialState>(pane)
+            .expect("the pane's cache")
+    }
+
+    fn last_built(app: &App, pane: Entity) -> Tick {
+        app.world()
+            .entity(pane)
+            .get_ref::<TerminalMaterialState>()
+            .expect("the pane's cache")
+            .last_changed()
+    }
+
+    fn set_cells(app: &mut App, pane: Entity, text: &str) {
+        *app.world_mut()
+            .get_mut::<TerminalCells>(pane)
+            .expect("the pane's cells") = row_of(text);
+    }
+
+    fn encoded_cells(app: &App, pane: Entity) -> Option<Vec<u8>> {
+        let state = state_of(app, pane);
+        app.world()
+            .resource::<Assets<ShaderBuffer>>()
+            .get(&state.cells_buffer)
+            .and_then(|buffer| buffer.data.clone())
+    }
+
+    #[derive(Resource, Default)]
+    struct VisitOrder(Vec<Entity>);
+
+    fn record_visit_order(
+        mut order: ResMut<VisitOrder>,
+        panes: Query<(
+            Entity,
+            &TerminalMaterialState,
+            &TerminalCells,
+            &TerminalView,
+        )>,
+    ) {
+        order.0 = panes.iter().map(|(pane, ..)| pane).collect();
     }
 
     /// Asserts that an upload ignores the rows and columns outside its
@@ -521,10 +599,8 @@ mod tests {
     /// the cells while the view takes the new size, so the next rebuilds
     /// see a grid of another shape than the view reports.
     #[test]
-    fn upload_cells_clips_a_grid_that_disagrees_with_its_dims() {
-        let mut buffers = Assets::<ShaderBuffer>::default();
-        let cells_handle = buffers.add(ShaderBuffer::default());
-        let glyphs_handle = buffers.add(ShaderBuffer::default());
+    fn an_upload_clips_a_grid_that_disagrees_with_its_dims() {
+        let (mut buffers, mut state) = buffers_and_state();
         let linked = |id| GridSlot::Cell(cell_with_link("x", Some(id)));
         let larger = TerminalCells {
             cells: vec![
@@ -540,15 +616,8 @@ mod tests {
             ..Default::default()
         };
         let untouched = gpu_cell_fingerprint(&[GpuCell::default()])[0];
-        let mut state = state_for(0);
 
-        uploaded(
-            &mut state,
-            &mut buffers,
-            (&cells_handle, &glyphs_handle),
-            &larger,
-            (2, 3),
-        );
+        uploaded(&mut state, &mut buffers, &larger, (2, 3));
         assert_eq!(hyperlink_ids(&state.cpu_cells), [1, 2, 0, 4, 5, 0]);
         let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
         assert_eq!(fingerprint[2], untouched);
@@ -559,13 +628,7 @@ mod tests {
             "the row outside the dimensions resolves no glyph"
         );
 
-        uploaded(
-            &mut state,
-            &mut buffers,
-            (&cells_handle, &glyphs_handle),
-            &smaller,
-            (2, 3),
-        );
+        uploaded(&mut state, &mut buffers, &smaller, (2, 3));
         assert_eq!(hyperlink_ids(&state.cpu_cells), [7, 0, 0, 0, 0, 0]);
         let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
         assert!(fingerprint[1..].iter().all(|slot| *slot == untouched));
@@ -577,28 +640,19 @@ mod tests {
     /// Case: a pane redraws at an unchanged size, and the second frame
     /// blanks a cell that the first one painted.
     #[test]
-    fn upload_cells_keeps_its_cpu_cell_table_across_uploads() {
-        let mut buffers = Assets::<ShaderBuffer>::default();
-        let cells_handle = buffers.add(ShaderBuffer::default());
-        let glyphs_handle = buffers.add(ShaderBuffer::default());
+    fn an_upload_keeps_its_cpu_cell_table_across_uploads() {
+        let (mut buffers, mut state) = buffers_and_state();
         let painted = grid_of(2, 2);
         let mut blanked = grid_of(2, 2);
         blanked.cells[1][1] = GridSlot::Empty;
-        let mut state = state_for(0);
 
         for cells in [&painted, &blanked] {
-            uploaded(
-                &mut state,
-                &mut buffers,
-                (&cells_handle, &glyphs_handle),
-                cells,
-                (2, 2),
-            );
+            uploaded(&mut state, &mut buffers, cells, (2, 2));
             assert_eq!(state.cpu_cells.len(), 4);
             let mut expected = ShaderBuffer::default();
             expected.set_data(&state.cpu_cells);
             let encoded = buffers
-                .get(&cells_handle)
+                .get(&state.cells_buffer)
                 .and_then(|buffer| buffer.data.as_ref());
             assert_eq!(encoded, expected.data.as_ref());
         }
@@ -614,7 +668,7 @@ mod tests {
     /// click, while an accented latin suffix typed right after it stays
     /// plain, unlinked text.
     #[test]
-    fn rebuild_cells_pins_wide_combining_and_linked_slots() {
+    fn filling_pins_wide_combining_and_linked_slots() {
         let wide = cell_with_link("あ", Some(3));
         let combining = cell_with_link("e\u{0332}", None);
         let plain = cell_with_link("z", None);
@@ -631,7 +685,7 @@ mod tests {
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
-        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 16, (4, 1));
+        fill_cells(&mut state, &mut atlas, &cells, &fonts, 16, (4, 1));
 
         let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
         assert_eq!(
@@ -669,7 +723,7 @@ mod tests {
     ///
     /// Case: a row mixes OSC 8 linked text with plain text.
     #[test]
-    fn rebuild_cells_writes_hyperlink_id_when_present() {
+    fn filling_writes_the_hyperlink_id_when_present() {
         let linked = cell_with_link("x", Some(7));
         let unlinked = cell_with_link("y", None);
         let cells = TerminalCells {
@@ -680,59 +734,10 @@ mod tests {
         let mut atlas = GlyphAtlas::default();
         let fonts = TerminalFonts::default();
 
-        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 16, (2, 1));
+        fill_cells(&mut state, &mut atlas, &cells, &fonts, 16, (2, 1));
 
         assert_eq!(state.cpu_cells[0].hyperlink_id, 7);
         assert_eq!(state.cpu_cells[1].hyperlink_id, 0);
-    }
-
-    /// Asserts that a cell resolved before a mid-rebuild atlas restart is
-    /// re-resolved against the restarted atlas rather than keeping a
-    /// glyph index into the rect the restart evicted.
-    ///
-    /// Case: a row's first glyph is already cached in the atlas, and its
-    /// second glyph overflows a nearly full atlas mid-rebuild.
-    #[test]
-    fn rebuild_cells_survives_an_atlas_restart_mid_pass() {
-        let m = cell_with_link("M", None);
-        let a = cell_with_link("A", None);
-        let cells = TerminalCells {
-            cells: vec![vec![GridSlot::Cell(m), GridSlot::Cell(a)]],
-            ..Default::default()
-        };
-        let mut state = state_for(2);
-        let mut atlas = GlyphAtlas::new(32, 24);
-        let fonts = TerminalFonts::default();
-        // Pack 'M' (12x18) then 'W' (14x18) onto the first shelf so it
-        // sits at x=26, leaving no room for 'A' (13x18) beside them and
-        // no room below for its height either — resolving 'A' forces the
-        // single restart this test exercises, evicting the 'M' rect cell
-        // 0 already resolved against.
-        atlas
-            .get_or_insert(GlyphKey::new(FontFace::Regular, u32::from('M'), 24), &fonts)
-            .expect("'M' rasterizes");
-        atlas
-            .get_or_insert(GlyphKey::new(FontFace::Regular, u32::from('W'), 24), &fonts)
-            .expect("'W' rasterizes");
-        assert_eq!(
-            atlas.restarts, 0,
-            "the filler glyphs must not restart the atlas"
-        );
-
-        rebuild_cells(&mut state, &mut atlas, &cells, &fonts, 24, (2, 1));
-
-        for (col, ch) in [(0usize, 'M'), (1usize, 'A')] {
-            let glyph_index = state.cpu_cells[col].glyph_index;
-            let glyph = state.cpu_glyphs[glyph_index as usize];
-            let key = GlyphKey::new(FontFace::Regular, u32::from(ch), 24);
-            let rect = atlas.glyphs[&key];
-            assert_eq!(
-                glyph.uv_min,
-                Vec2::new(rect.u as f32, rect.v as f32),
-                "cell {col} ({ch:?}) glyph index must point at the restarted atlas's rect"
-            );
-        }
-        assert_eq!(atlas.restarts, 1);
     }
 
     /// Asserts that the underline-like combining marks promote to
@@ -767,7 +772,7 @@ mod tests {
     /// mounted behind default-background cells.
     #[test]
     fn cell_packing_resolves_through_the_live_palette() {
-        use crate::schema::{Color as CellColor, Palette, Rgb};
+        use crate::schema::Rgb;
         let mut palette = Palette {
             foreground: Rgb {
                 r: 10,
@@ -821,48 +826,357 @@ mod tests {
         assert_eq!(composable_marks("").count(), 0);
     }
 
-    fn populated_state() -> TerminalMaterialState {
-        let mut state = TerminalMaterialState {
-            glyph_index_map: HashMap::new(),
-            cpu_cells: Vec::new(),
-            cpu_glyphs: vec![GpuGlyph::default(), GpuGlyph::default()],
-            last_atlas_generation: 42,
-            grid_dirty: false,
-            last_grid_dims: (80, 24),
-            last_phys_font_size: 24,
-            cached_metrics: Some(CellMetrics {
-                advance_phys: 5.5,
-                line_height_phys: 14.4,
-                ascent_phys: 10.0,
-                descent_phys: 2.4,
-                underline_position_phys: -1.5,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
-            }),
-            initialized: true,
+    /// Asserts that a pane needs an upload before its first build, when its
+    /// cells changed, and when any part of its basis moved, and not
+    /// otherwise.
+    ///
+    /// Case: a pane is drawn for the first time and then sits idle, until it
+    /// receives output, is resized, sees the glyph atlas restart, and has
+    /// its font zoomed.
+    #[test]
+    fn a_pane_needs_an_upload_exactly_when_its_cells_or_basis_changed() {
+        let built = UploadBasis {
+            dims: (80, 24),
+            atlas_restarts: 0,
+            phys_font_size: 24,
         };
-        state
-            .glyph_index_map
-            .insert(GlyphKey::new(FontFace::Regular, 'A' as u32, 24), 7);
-        state
+        let mut state = state_for(0);
+        assert!(state.needs_upload(built, false), "never built");
+        state.uploaded = Some(built);
+        assert!(!state.needs_upload(built, false));
+        assert!(state.needs_upload(built, true));
+        for moved in [
+            UploadBasis {
+                dims: (81, 24),
+                ..built
+            },
+            UploadBasis {
+                atlas_restarts: 1,
+                ..built
+            },
+            UploadBasis {
+                phys_font_size: 12,
+                ..built
+            },
+        ] {
+            assert!(state.needs_upload(moved, false), "{moved:?}");
+        }
     }
 
+    /// Asserts that an upload keeps the glyph table when only the size
+    /// changed, and drops it when the atlas restarted or the font size
+    /// changed since the recorded build.
+    ///
+    /// Case: a pane is resized, then the shared atlas fills up and
+    /// restarts, and then the user zooms the font.
     #[test]
-    fn invalidate_all_clears_lut_and_atlas_markers() {
-        let mut state = populated_state();
-        state.invalidate_all();
-        assert!(state.glyph_index_map.is_empty());
-        assert!(state.cpu_glyphs.is_empty());
-        assert_eq!(state.last_atlas_generation, 0);
-        assert!(state.grid_dirty);
-        assert!(state.cached_metrics.is_none());
+    fn an_upload_keeps_the_glyph_table_only_while_atlas_and_font_size_hold() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let (mut buffers, mut state) = buffers_and_state();
+        let steps = [
+            ((1, 1), "x", 0, 16, 1, "the first build"),
+            ((2, 1), "y", 0, 16, 2, "a resize keeps the table"),
+            ((2, 1), "y", 1, 16, 1, "an atlas restart drops the table"),
+            ((2, 1), "x", 1, 24, 1, "a font size change drops the table"),
+        ];
+        for (dims, text, restarts, phys_font_size, glyphs, why) in steps {
+            atlas.restarts = restarts;
+            let basis = basis_at(dims, &atlas, phys_font_size);
+            state
+                .upload(&mut atlas, &mut buffers, &row_of(text), &fonts, basis)
+                .expect("both buffers exist");
+            assert_eq!(state.glyph_index_map.len(), glyphs, "{why}");
+        }
     }
 
+    /// Asserts that an upload with no recorded build drops the glyph table.
+    ///
+    /// Case: a pane's previous upload failed, and its next frame shows
+    /// different glyphs.
     #[test]
-    fn invalidate_all_preserves_phys_font_size() {
-        let mut state = populated_state();
-        state.invalidate_all();
-        assert_eq!(state.last_phys_font_size, 24);
-        assert!(state.initialized);
+    fn an_upload_without_a_recorded_basis_drops_the_glyph_table() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let (mut buffers, mut state) = buffers_and_state();
+        let basis = basis_at((1, 1), &atlas, 16);
+        state
+            .upload(&mut atlas, &mut buffers, &row_of("x"), &fonts, basis)
+            .expect("both buffers exist");
+        state.uploaded = None;
+        state
+            .upload(&mut atlas, &mut buffers, &row_of("y"), &fonts, basis)
+            .expect("both buffers exist");
+        assert_eq!(state.glyph_index_map.len(), 1);
+    }
+
+    /// Asserts that an upload during which the atlas restarts records no
+    /// basis, rather than recording glyph indices into rects the restart
+    /// evicted.
+    ///
+    /// Case: a row's first glyph is already cached in a nearly full atlas,
+    /// and its second glyph overflows the atlas mid-build.
+    #[test]
+    fn an_upload_that_restarts_the_atlas_records_no_basis() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = nearly_full_atlas(&fonts);
+        let (mut buffers, mut state) = buffers_and_state();
+        let basis = basis_at((2, 1), &atlas, 24);
+        state
+            .upload(&mut atlas, &mut buffers, &row_of("MA"), &fonts, basis)
+            .expect("both buffers exist");
+        assert_eq!(atlas.restarts, 1);
+        assert_eq!(state.uploaded, None);
+    }
+
+    /// Asserts that an upload with a missing buffer fails before touching
+    /// the atlas, the glyph table or the recorded build.
+    ///
+    /// Case: a pane's cell buffer asset is gone when its next frame, which
+    /// also resizes the pane and shows new glyphs, arrives.
+    #[test]
+    fn an_upload_with_a_missing_buffer_changes_nothing() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let (mut buffers, mut state) = buffers_and_state();
+        let built = basis_at((1, 1), &atlas, 16);
+        state
+            .upload(&mut atlas, &mut buffers, &row_of("x"), &fonts, built)
+            .expect("both buffers exist");
+        assert!(buffers.remove(&state.cells_buffer).is_some());
+        let generation = atlas.generation;
+        let glyphs = state.glyph_index_map.clone();
+
+        let resized = basis_at((2, 1), &atlas, 16);
+        let result = state.upload(&mut atlas, &mut buffers, &row_of("yz"), &fonts, resized);
+
+        assert!(matches!(result, Err(RendererError::MissingShaderBuffer)));
+        assert_eq!(atlas.generation, generation);
+        assert_eq!(state.glyph_index_map, glyphs);
+        assert_eq!(state.uploaded, Some(built));
+    }
+
+    /// Asserts that a pane with no visible cells uploads one-element cell
+    /// and glyph buffers rather than empty ones.
+    ///
+    /// Case: a pane exists before its first frame reports a size, so its
+    /// view is still 0 by 0.
+    #[test]
+    fn a_zero_sized_pane_uploads_one_element_buffers() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let (mut buffers, mut state) = buffers_and_state();
+        let basis = basis_at((0, 0), &atlas, 16);
+        state
+            .upload(
+                &mut atlas,
+                &mut buffers,
+                &TerminalCells::default(),
+                &fonts,
+                basis,
+            )
+            .expect("both buffers exist");
+        assert_eq!(state.cpu_cells.len(), 1);
+        assert_eq!(state.cpu_glyphs.len(), 1);
+        let encoded = buffers
+            .get(&state.cells_buffer)
+            .and_then(|buffer| buffer.data.as_ref());
+        assert!(encoded.is_some_and(|data| !data.is_empty()));
+    }
+
+    /// Asserts that a change to a pane's cells reaches its cell buffer with
+    /// no primary window present.
+    ///
+    /// Case: output arrives while the window is being re-created, so no
+    /// primary window exists for that frame.
+    #[test]
+    fn a_cell_change_is_uploaded_without_a_primary_window() {
+        let mut app = upload_app(GlyphAtlas::default());
+        let pane = spawn_pane(&mut app, "ab");
+        app.update();
+        let before = encoded_cells(&app, pane);
+
+        set_cells(&mut app, pane, "cd");
+        app.update();
+
+        let mut expected = ShaderBuffer::default();
+        expected.set_data(&state_of(&app, pane).cpu_cells);
+        let after = encoded_cells(&app, pane);
+        assert_ne!(after, before);
+        assert_eq!(after, expected.data);
+    }
+
+    /// Asserts that a glyph newly rasterized for one pane, which grows the
+    /// atlas without restarting it, leaves another pane unbuilt.
+    ///
+    /// Case: one pane prints characters it has never shown before while a
+    /// second pane sits idle.
+    #[test]
+    fn a_glyph_added_for_one_pane_leaves_another_pane_unbuilt() {
+        let mut app = upload_app(GlyphAtlas::default());
+        let idle = spawn_pane(&mut app, "ab");
+        let busy = spawn_pane(&mut app, "cd");
+        app.update();
+        let idle_built = last_built(&app, idle);
+        let generation = app.world().resource::<GlyphAtlas>().generation;
+
+        set_cells(&mut app, busy, "ef");
+        app.update();
+
+        let atlas = app.world().resource::<GlyphAtlas>();
+        assert!(
+            atlas.generation > generation,
+            "the busy pane rasterized new glyphs"
+        );
+        assert_eq!(atlas.restarts, 0);
+        assert_eq!(last_built(&app, idle), idle_built);
+    }
+
+    /// Asserts that when one pane's build restarts the atlas, a pane the
+    /// same run visited before the restart is rebuilt within that run
+    /// against the restarted atlas.
+    ///
+    /// Case: two panes share a nearly full atlas, and the second pane prints
+    /// a glyph that does not fit.
+    #[test]
+    fn an_atlas_restart_rebuilds_the_panes_it_left_stale_in_the_same_run() {
+        let mut app = upload_app(GlyphAtlas::new(32, 24));
+        let idle = spawn_pane(&mut app, "M");
+        let busy = spawn_pane(&mut app, "W");
+        app.init_resource::<VisitOrder>()
+            .add_systems(PostUpdate, record_visit_order.before(MaterialStage::Upload));
+        app.update();
+        assert_eq!(
+            app.world().resource::<VisitOrder>().0,
+            [idle, busy],
+            "the idle pane is visited first"
+        );
+        assert_eq!(app.world().resource::<GlyphAtlas>().restarts, 0);
+
+        set_cells(&mut app, busy, "A");
+        app.update();
+
+        let atlas = app.world().resource::<GlyphAtlas>();
+        assert_eq!(atlas.restarts, 1, "`A` does not fit beside `M` and `W`");
+        let idle_state = state_of(&app, idle);
+        assert_eq!(
+            idle_state.uploaded.map(|built| built.atlas_restarts),
+            Some(1)
+        );
+        let glyph = idle_state.cpu_glyphs[idle_state.cpu_cells[0].glyph_index as usize];
+        assert_eq!(glyph.uv_min, rect_origin(atlas, 'M'));
+    }
+
+    /// Asserts that a pane whose own build restarted the atlas is rebuilt in
+    /// the same run and recorded as built against the restarted atlas.
+    ///
+    /// Case: a pane prints a row whose second glyph overflows a nearly full
+    /// atlas that already caches the first.
+    #[test]
+    fn a_pane_whose_build_restarted_the_atlas_is_rebuilt_in_the_same_run() {
+        let fonts = TerminalFonts::default();
+        let mut app = upload_app(nearly_full_atlas(&fonts));
+        let pane = spawn_pane(&mut app, "MA");
+        app.update();
+
+        let atlas = app.world().resource::<GlyphAtlas>();
+        assert_eq!(atlas.restarts, 1);
+        let state = state_of(&app, pane);
+        assert_eq!(state.uploaded.map(|built| built.atlas_restarts), Some(1));
+        for (col, ch) in [(0usize, 'M'), (1usize, 'A')] {
+            let glyph = state.cpu_glyphs[state.cpu_cells[col].glyph_index as usize];
+            assert_eq!(glyph.uv_min, rect_origin(atlas, ch), "cell {col} ({ch:?})");
+        }
+    }
+
+    /// Asserts that a pane whose glyphs never fit the atlas together ends
+    /// the run unrecorded rather than rebuilding without end.
+    ///
+    /// Case: a large font zoom leaves a pane showing more distinct glyphs
+    /// than the atlas can hold at once.
+    #[test]
+    fn a_pane_whose_glyphs_never_fit_the_atlas_stays_unrecorded() {
+        let mut app = upload_app(GlyphAtlas::new(32, 24));
+        let pane = spawn_pane(&mut app, "MAW");
+        app.update();
+        assert_eq!(state_of(&app, pane).uploaded, None);
+        assert_eq!(
+            app.world().resource::<GlyphAtlas>().restarts,
+            2,
+            "the first pass and the one extra pass each restarted the atlas"
+        );
+    }
+
+    /// Asserts that a pane whose cell buffer is missing is not recorded as
+    /// built, and is rebuilt on the first run after the buffer returns.
+    ///
+    /// Case: a pane's cell buffer asset is gone for a frame while output
+    /// keeps arriving.
+    #[test]
+    fn a_pane_with_a_missing_buffer_is_retried_once_the_buffer_returns() {
+        let mut app = upload_app(GlyphAtlas::default());
+        let pane = spawn_pane(&mut app, "ab");
+        app.update();
+        let cells_buffer = state_of(&app, pane).cells_buffer.clone();
+        let parked = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderBuffer>>()
+            .remove(&cells_buffer)
+            .expect("the cell buffer exists");
+        set_cells(&mut app, pane, "cd");
+        let generation = app.world().resource::<GlyphAtlas>().generation;
+        app.update();
+        assert_eq!(state_of(&app, pane).uploaded, None);
+        assert_eq!(
+            app.world().resource::<GlyphAtlas>().generation,
+            generation,
+            "the failed upload rasterized nothing"
+        );
+
+        app.world_mut()
+            .resource_mut::<Assets<ShaderBuffer>>()
+            .insert(&cells_buffer, parked)
+            .expect("the buffer's id is still live");
+        app.update();
+        assert!(state_of(&app, pane).uploaded.is_some());
+    }
+
+    /// Asserts that a change to a pane's view that keeps its size leaves
+    /// the pane unbuilt.
+    ///
+    /// Case: an IME composition starts in an idle pane, which only hides
+    /// the caret.
+    #[test]
+    fn a_view_change_that_keeps_the_size_rebuilds_nothing() {
+        let mut app = upload_app(GlyphAtlas::default());
+        let pane = spawn_pane(&mut app, "ab");
+        app.update();
+        let built = last_built(&app, pane);
+        app.world_mut()
+            .get_mut::<TerminalView>(pane)
+            .expect("the pane's view")
+            .suppress_cursor = true;
+        app.update();
+        assert_eq!(last_built(&app, pane), built);
+    }
+
+    /// Asserts that a change of the physical font size rebuilds every pane
+    /// in the same run, with glyphs keyed at the new size only.
+    ///
+    /// Case: the user zooms the font while two panes are open.
+    #[test]
+    fn a_font_size_change_rebuilds_every_pane_at_the_new_size() {
+        let mut app = upload_app(GlyphAtlas::default());
+        let panes = [spawn_pane(&mut app, "ab"), spawn_pane(&mut app, "cd")];
+        app.update();
+        let zoomed = TerminalCellMetricsResource::new(app.world().resource::<TerminalFonts>(), 30);
+        app.insert_resource(zoomed);
+        app.update();
+        for pane in panes {
+            let state = state_of(&app, pane);
+            assert_eq!(state.uploaded.map(|built| built.phys_font_size), Some(30));
+            assert_eq!(state.glyph_index_map.len(), 2);
+            assert!(state.glyph_index_map.keys().all(|key| key.size_px == 30));
+        }
     }
 }

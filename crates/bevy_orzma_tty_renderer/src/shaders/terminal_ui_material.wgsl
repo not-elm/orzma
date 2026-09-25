@@ -183,7 +183,7 @@ fn paint_grid_cell(hit: CellHit, fallback: vec4<f32>) -> vec4<f32> {
 fn paint_right_strip(p_px: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
     // Defensive guard (#10): cell_size_px is Vec2::ZERO during the
     // ~1-frame window between MaterialNode insertion and the first
-    // update_terminal_material write. The grid_h_phys = 0 check below
+    // write_terminal_params write. The grid_h_phys = 0 check below
     // already prevents the strip-entry, but the explicit cell_size_px
     // guard documents the invariant and protects against future
     // refactors that might remove the height check.

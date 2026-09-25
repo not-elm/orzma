@@ -24,4 +24,8 @@ pub enum RendererError {
     /// A frame whose content the VT schema rejects.
     #[error(transparent)]
     Vt(#[from] VtError),
+    /// A pane's cell or glyph `ShaderBuffer` asset that is missing, so the
+    /// pane cannot be uploaded.
+    #[error("a terminal's cell or glyph shader buffer is missing")]
+    MissingShaderBuffer,
 }
