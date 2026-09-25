@@ -25,6 +25,7 @@ mod shader;
 mod upload;
 
 pub use overlay::{OVERLAY_SLOTS, TerminalOverlays};
+pub use params::TerminalPaddingFallback;
 
 /// Registers the custom material and embeds its WGSL shader into the binary.
 #[derive(Default)]
@@ -38,30 +39,29 @@ impl Plugin for TerminalMaterialPlugin {
             "shaders/terminal_ui_material.wgsl",
             Shader::from_wgsl
         );
-        app.init_resource::<TerminalPaddingFallback>()
-            .add_plugins((
-                UiMaterialPlugin::<TerminalUiMaterial>::default(),
-                CellUploadPlugin,
-                TerminalParamsPlugin,
-            ))
-            .configure_sets(
-                PostUpdate,
-                (
-                    MaterialStage::Metrics,
-                    MaterialStage::Upload,
-                    MaterialStage::Params,
-                )
-                    .chain()
-                    .in_set(TerminalMaterialSystems::UpdateMaterial),
+        app.add_plugins((
+            UiMaterialPlugin::<TerminalUiMaterial>::default(),
+            CellUploadPlugin,
+            TerminalParamsPlugin,
+        ))
+        .configure_sets(
+            PostUpdate,
+            (
+                MaterialStage::Metrics,
+                MaterialStage::Upload,
+                MaterialStage::Params,
             )
-            // NOTE: An asset write that lands after `AssetEventSystems` is
-            // extracted only on a later update, which on-demand redraw may not
-            // run until the next wake.
-            .configure_sets(
-                PostUpdate,
-                TerminalMaterialSystems::UpdateMaterial.before(AssetEventSystems),
-            )
-            .add_observer(init_material_node);
+                .chain()
+                .in_set(TerminalMaterialSystems::UpdateMaterial),
+        )
+        // NOTE: An asset write that lands after `AssetEventSystems` is
+        // extracted only on a later update, which on-demand redraw may not
+        // run until the next wake.
+        .configure_sets(
+            PostUpdate,
+            TerminalMaterialSystems::UpdateMaterial.before(AssetEventSystems),
+        )
+        .add_observer(init_material_node);
     }
 }
 
@@ -99,12 +99,6 @@ impl TerminalUiMaterial {
         self.overlays = textures.clone();
     }
 }
-
-/// Padding colour used for the area outside a terminal grid (and the whole
-/// quad while a grid is unpainted) when the terminal's default background
-/// is black. Defaults to black.
-#[derive(Resource, Default)]
-pub struct TerminalPaddingFallback(pub [u8; 3]);
 
 const TERMINAL_SHADER_HANDLE: Handle<Shader> = uuid_handle!("98195199-3092-42b6-b370-77dfc2ef83f9");
 
