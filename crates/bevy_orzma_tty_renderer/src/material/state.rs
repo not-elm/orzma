@@ -1,9 +1,9 @@
 use crate::{
-    glyph::{
-        AtlasImage,
-        font::{CellMetrics, GlyphKey},
+    glyph::AtlasImage,
+    material::{
+        GpuCell, GpuGlyph, TerminalUiMaterial, params::TerminalParams,
+        upload::TerminalMaterialState,
     },
-    material::{GpuCell, GpuGlyph, TerminalUiMaterial, params::TerminalParams},
 };
 use bevy::{
     ecs::{lifecycle::HookContext, world::DeferredWorld},
@@ -20,43 +20,6 @@ impl Plugin for TerminalMaterialStatePlugin {
         app.world_mut()
             .register_component_hooks::<MaterialNode<TerminalUiMaterial>>()
             .on_add(on_add_material_node);
-    }
-}
-
-/// CPU-side cache mirroring what the GPU sees this frame.
-#[derive(Component)]
-pub(crate) struct TerminalMaterialState {
-    pub glyph_index_map: HashMap<GlyphKey, u32>,
-    pub cpu_cells: Vec<GpuCell>,
-    pub cpu_glyphs: Vec<GpuGlyph>,
-    pub last_atlas_generation: u64,
-    /// Set from [`crate::schema::TerminalCells`]'s change detection and
-    /// cleared only once the rebuild actually uploads, so it stays set
-    /// across a frame whose rebuild bails out.
-    pub grid_dirty: bool,
-    pub last_grid_dims: (u16, u16),
-    /// Last physical font size used for glyph rasterization; `0` before
-    /// the entity's first rebuild.
-    pub last_phys_font_size: u16,
-    /// Cached output of `TerminalFonts::cell_metrics_px(last_phys_font_size)`.
-    pub cached_metrics: Option<CellMetrics>,
-    pub initialized: bool,
-}
-
-impl TerminalMaterialState {
-    /// Resets all glyph-cache state and marks the grid dirty, so the next
-    /// `update_terminal_material` invocation fully reuploads the atlas
-    /// LUT, glyph rects, and atlas generation marker.
-    ///
-    /// It leaves `last_phys_font_size`, `cpu_cells`, and `initialized`
-    /// untouched; the caller writes `last_phys_font_size` itself after
-    /// invalidating.
-    pub(crate) fn invalidate_all(&mut self) {
-        self.glyph_index_map.clear();
-        self.cpu_glyphs.clear();
-        self.last_atlas_generation = 0;
-        self.grid_dirty = true;
-        self.cached_metrics = None;
     }
 }
 
@@ -107,55 +70,4 @@ fn on_add_material_node(mut world: DeferredWorld, ctx: HookContext) {
             cached_metrics: None,
             initialized: false,
         });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::glyph::font::{CellMetrics, FontFace, GlyphKey};
-
-    fn populated_state() -> TerminalMaterialState {
-        let mut state = TerminalMaterialState {
-            glyph_index_map: HashMap::new(),
-            cpu_cells: Vec::new(),
-            cpu_glyphs: vec![GpuGlyph::default(), GpuGlyph::default()],
-            last_atlas_generation: 42,
-            grid_dirty: false,
-            last_grid_dims: (80, 24),
-            last_phys_font_size: 24,
-            cached_metrics: Some(CellMetrics {
-                advance_phys: 5.5,
-                line_height_phys: 14.4,
-                ascent_phys: 10.0,
-                descent_phys: 2.4,
-                underline_position_phys: -1.5,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
-            }),
-            initialized: true,
-        };
-        state
-            .glyph_index_map
-            .insert(GlyphKey::new(FontFace::Regular, 'A' as u32, 24), 7);
-        state
-    }
-
-    #[test]
-    fn invalidate_all_clears_lut_and_atlas_markers() {
-        let mut state = populated_state();
-        state.invalidate_all();
-        assert!(state.glyph_index_map.is_empty());
-        assert!(state.cpu_glyphs.is_empty());
-        assert_eq!(state.last_atlas_generation, 0);
-        assert!(state.grid_dirty);
-        assert!(state.cached_metrics.is_none());
-    }
-
-    #[test]
-    fn invalidate_all_preserves_phys_font_size() {
-        let mut state = populated_state();
-        state.invalidate_all();
-        assert_eq!(state.last_phys_font_size, 24);
-        assert!(state.initialized);
-    }
 }
