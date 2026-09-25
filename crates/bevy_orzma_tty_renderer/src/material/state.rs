@@ -3,7 +3,7 @@ use crate::{
         AtlasImage,
         font::{CellMetrics, GlyphKey},
     },
-    material::{GpuCell, GpuGlyph, TerminalParams, TerminalUiMaterial},
+    material::{GpuCell, GpuGlyph, TerminalUiMaterial, params::TerminalParams},
 };
 use bevy::{
     ecs::{lifecycle::HookContext, world::DeferredWorld},
