@@ -3,69 +3,14 @@
 
 use crate::error::RendererResult;
 use crate::schema::{
-    AnchoredPlacement, Color, Cursor, CursorShape, DisplayOffset, GridPoint, HyperlinkId,
+    AnchoredPlacement, Cell, CellWidth, Cursor, CursorShape, DisplayOffset, GridPoint, HyperlinkId,
     HyperlinkUri, Palette, Run, SelectionRange, ViCursor,
 };
 use bevy::prelude::*;
 use orzma_vt::prelude::Frame;
 #[cfg(test)]
 use orzma_vt::prelude::GridSize;
-use std::{collections::HashMap, mem};
-
-/// One materialized cell of the renderer's CPU-side grid, expanded
-/// from the frame's [`crate::schema::Run`]s.
-#[derive(Debug, Clone, PartialEq)]
-pub struct GridCell {
-    /// The cell's glyph followed by the marks combined onto it.
-    pub text: String,
-    /// Foreground color, symbolic.
-    pub fg: Color,
-    /// Background color, symbolic.
-    pub bg: Color,
-    /// Style bitmask, carried over unchanged from [`crate::schema::Run::style`].
-    pub style: u16,
-    /// Id of the hyperlink covering this cell, present only when the
-    /// retained table can resolve it. The URI lives in the table, not
-    /// here.
-    pub hyperlink: Option<HyperlinkId>,
-}
-
-impl GridCell {
-    /// Whether this cell paints no glyph: its text is empty or all
-    /// whitespace.
-    #[inline]
-    pub fn is_blank(&self) -> bool {
-        self.text.trim().is_empty()
-    }
-}
-
-/// One column of the renderer's CPU-side grid.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum GridSlot {
-    /// No run covered this column.
-    #[default]
-    Empty,
-    /// The glyph occupying this column.
-    Cell(GridCell),
-    /// The right half of the wide cell in the preceding column.
-    ///
-    /// Meaningful only immediately after a [`GridSlot::Cell`] holding a
-    /// double-width glyph; a producer must not emit it after a narrow
-    /// cell.
-    WideTrailer,
-}
-
-impl GridSlot {
-    /// The cell painting this column, or `None` for a column no run
-    /// covered and for a wide cell's right half.
-    #[inline]
-    pub fn cell(&self) -> Option<&GridCell> {
-        match self {
-            Self::Cell(cell) => Some(cell),
-            Self::Empty | Self::WideTrailer => None,
-        }
-    }
-}
+use std::collections::HashMap;
 
 /// The viewport geometry of one terminal, and where the user is looking
 /// and pointing within it.
@@ -209,12 +154,17 @@ impl TerminalView {
     }
 }
 
-/// The painted contents of one terminal, materialized into column slots
-/// from the frames applied to it.
+/// The painted contents of one terminal, materialized into cells from
+/// the frames applied to it.
 #[derive(Component, Default)]
 pub struct TerminalCells {
-    /// Column slots indexed `[row][column]`.
-    pub cells: Vec<Vec<GridSlot>>,
+    /// Cells indexed `[row][column]`.
+    ///
+    /// A [`CellWidth::Wide`] cell is followed by its
+    /// [`Cell::continuation`], and a column no run covered holds
+    /// [`Cell::default`]. A cell carries a hyperlink id only when
+    /// [`Self::hyperlinks`] holds it.
+    pub cells: Vec<Vec<Cell>>,
     /// OSC 8 hyperlinks indexed by id. Every applied frame merges its
     /// `hyperlinks` into this table, and a known id is never
     /// overwritten.
@@ -230,14 +180,11 @@ impl TerminalCells {
     /// resolve to the same hyperlink. Returns `None` for out-of-bounds
     /// or unlinked cells.
     pub fn hyperlink_at(&self, row: u16, col: u16) -> Option<(HyperlinkId, &HyperlinkUri)> {
-        let row_slots = self.cells.get(usize::from(row))?;
-        let col = usize::from(col);
-        let cell = match row_slots.get(col)? {
-            GridSlot::Cell(cell) => cell,
-            GridSlot::WideTrailer => row_slots.get(col.checked_sub(1)?)?.cell()?,
-            GridSlot::Empty => return None,
-        };
-        let id = cell.hyperlink?;
+        let id = self
+            .cells
+            .get(usize::from(row))?
+            .get(usize::from(col))?
+            .hyperlink_id?;
         Some((id, self.hyperlinks.get(&id)?))
     }
 
@@ -276,7 +223,7 @@ impl TerminalCells {
 
     /// Applies `frame`'s content sections to these cells.
     ///
-    /// Every row the frame carries inside its size replaces the slots at
+    /// Every row the frame carries inside its size replaces the cells at
     /// that line, resolving its hyperlink ids against the table, into
     /// which this frame's own definitions are merged first; the `None`
     /// sections are left alone.
@@ -290,7 +237,7 @@ impl TerminalCells {
     /// # Invariants
     ///
     /// After `apply` returns `Ok` there are exactly `frame.size.rows`
-    /// rows, each holding exactly `frame.size.cols` slots. It mutates the
+    /// rows, each holding exactly `frame.size.cols` cells. It mutates the
     /// cells exactly when [`Self::differs_from`] reports `true` and it
     /// returns `Ok`.
     ///
@@ -312,7 +259,7 @@ impl TerminalCells {
             .try_for_each(Run::check)?;
         let cols = usize::from(size.cols);
         self.cells
-            .resize_with(usize::from(size.rows), || vec![GridSlot::Empty; cols]);
+            .resize_with(usize::from(size.rows), || vec![Cell::default(); cols]);
         for link in hyperlinks {
             self.hyperlinks
                 .entry(link.id)
@@ -327,7 +274,7 @@ impl TerminalCells {
         for row in &mut self.cells {
             if row.len() != cols {
                 row.clear();
-                row.resize(cols, GridSlot::Empty);
+                row.resize_with(cols, Cell::default);
             }
         }
         if let Some(palette) = palette {
@@ -342,70 +289,64 @@ impl TerminalCells {
     }
 }
 
-/// Capacity, in bytes, above which a reused cell's text buffer is
-/// trimmed back before it is refilled.
-const RETAINED_TEXT_CAPACITY: usize = 64;
-
-/// Refills `out` with exactly `cols` column slots materialized from one
-/// row's attribute runs, replacing whatever it held, and resolves each
-/// run's hyperlink id against the retained table.
+/// Refills `out` with exactly `cols` cells materialized from one row's
+/// attribute runs, replacing whatever it held, and resolves each run's
+/// hyperlink id against the retained table.
 ///
-/// Column advance follows each run's widths: a `char` at width two takes
-/// a cell slot plus the [`GridSlot::WideTrailer`] that follows it, and a
-/// `char` at width zero joins the text of the cell before it instead of
-/// taking a column. Runs that do not fill the row leave
-/// [`GridSlot::Empty`] behind, and content past the last column is
-/// truncated. Every run must pass [`Run::check`].
+/// Column advance follows each run's widths. A `char` at width two takes
+/// a [`CellWidth::Wide`] cell plus the [`Cell::continuation`] that
+/// follows it, or one narrow cell on the last column. A `char` at width
+/// zero joins the marks of the cell before it instead of taking a column,
+/// and marks past [`MAX_COMBINING`] are dropped. Runs that do not fill
+/// the row leave [`Cell::default`] behind, and content past the last
+/// column is truncated. Every run must pass [`Run::check`].
+///
+/// [`MAX_COMBINING`]: orzma_vt::prelude::MAX_COMBINING
 fn refill_row(
-    out: &mut Vec<GridSlot>,
+    out: &mut Vec<Cell>,
     runs: &[Run],
     cols: u16,
     hyperlinks: &HashMap<HyperlinkId, HyperlinkUri>,
 ) {
-    out.resize(usize::from(cols), GridSlot::Empty);
+    out.resize_with(usize::from(cols), Cell::default);
     let mut column = 0usize;
     let mut base_column: Option<usize> = None;
     'runs: for run in runs {
-        let hyperlink = run.hyperlink_id.filter(|id| hyperlinks.contains_key(id));
+        let hyperlink_id = run.hyperlink_id.filter(|id| hyperlinks.contains_key(id));
         let mut widths = run.widths.iter().copied();
         for c in run.text.chars() {
             let cell_width = widths.next().unwrap_or(1);
             if cell_width == 0 {
-                if let Some(GridSlot::Cell(base)) = base_column.and_then(|index| out.get_mut(index))
-                {
-                    base.text.push(c);
+                if let Some(base) = base_column.and_then(|index| out.get_mut(index)) {
+                    base.push_mark(c);
                 }
                 continue;
             }
             let Some(slot) = out.get_mut(column) else {
                 break 'runs;
             };
-            let mut text = match mem::take(slot) {
-                GridSlot::Cell(cell) => cell.text,
-                GridSlot::Empty | GridSlot::WideTrailer => String::new(),
-            };
-            text.clear();
-            text.shrink_to(RETAINED_TEXT_CAPACITY);
-            text.push(c);
-            *slot = GridSlot::Cell(GridCell {
-                text,
+            *slot = Cell {
+                c,
+                width: CellWidth::Narrow,
+                extra: None,
                 fg: run.fg,
                 bg: run.bg,
-                style: run.style.bits(),
-                hyperlink,
-            });
+                style: run.style,
+                hyperlink_id,
+            };
             base_column = Some(column);
             column += 1;
             if cell_width == 2
-                && let Some(trailer) = out.get_mut(column)
+                && let Some([body, spacer]) = out.get_mut(column - 1..=column)
             {
-                *trailer = GridSlot::WideTrailer;
+                body.width = CellWidth::Wide;
+                *spacer = body.continuation();
                 column += 1;
             }
         }
     }
     if let Some(tail) = out.get_mut(column..) {
-        tail.fill(GridSlot::Empty);
+        tail.fill_with(Cell::default);
     }
 }
 
@@ -427,7 +368,7 @@ impl TerminalCells {
     /// A one-by-one cell grid that already mirrors [`quiet_frame`].
     pub(crate) fn settled() -> Self {
         Self {
-            cells: vec![vec![GridSlot::Empty]],
+            cells: vec![vec![Cell::default()]],
             ..Default::default()
         }
     }
@@ -458,20 +399,23 @@ mod tests {
         Color, Cursor, CursorShape, GridColumn, GridLine, GridPoint, Hyperlink, InstanceId,
         PlacementSize, Rgb, Row, SelectionGeometry, Style,
     };
-    use orzma_vt::prelude::{DirtyRow, RunError, ViewportLine, VtError};
+    use orzma_vt::prelude::{DirtyRow, MAX_COMBINING, RunError, ViewportLine, VtError};
 
     fn id(value: u32) -> HyperlinkId {
         HyperlinkId::new(value).expect("nonzero")
     }
 
-    fn cell_with_link(text: &str, link: Option<u32>) -> GridCell {
-        GridCell {
-            text: text.to_string(),
-            fg: Color::DefaultForeground,
-            bg: Color::DefaultBackground,
-            style: 0,
-            hyperlink: link.map(id),
+    fn linked_cell(c: char, link: Option<u32>) -> Cell {
+        Cell {
+            c,
+            hyperlink_id: link.map(id),
+            ..Cell::default()
         }
+    }
+
+    /// The glyph and marks `cell` paints, as one string.
+    fn text_of(cell: &Cell) -> String {
+        cell.chars().collect()
     }
 
     /// A retained table holding the single entry a linked-cell fixture
@@ -503,11 +447,7 @@ mod tests {
         run
     }
 
-    fn refilled(
-        runs: &[Run],
-        cols: u16,
-        table: &HashMap<HyperlinkId, HyperlinkUri>,
-    ) -> Vec<GridSlot> {
+    fn refilled(runs: &[Run], cols: u16, table: &HashMap<HyperlinkId, HyperlinkUri>) -> Vec<Cell> {
         let mut out = Vec::new();
         refill_row(&mut out, runs, cols, table);
         out
@@ -846,9 +786,9 @@ mod tests {
     /// Case: the pointer hovers a column of the row that no attribute
     /// run painted this frame.
     #[test]
-    fn hyperlink_at_returns_none_for_empty_slot() {
+    fn hyperlink_at_returns_none_for_a_blank_cell() {
         let cells = TerminalCells {
-            cells: vec![vec![GridSlot::Empty; 4]],
+            cells: vec![vec![Cell::default(); 4]],
             ..Default::default()
         };
         assert!(cells.hyperlink_at(0, 0).is_none());
@@ -860,9 +800,8 @@ mod tests {
     /// input layer asks which link sits under the pointer.
     #[test]
     fn hyperlink_at_returns_id_and_uri_for_linked_cell() {
-        let cell = cell_with_link("x", Some(7));
         let cells = TerminalCells {
-            cells: vec![vec![GridSlot::Cell(cell)]],
+            cells: vec![vec![linked_cell('x', Some(7))]],
             hyperlinks: link_table(7, "https://example"),
             ..Default::default()
         };
@@ -877,9 +816,8 @@ mod tests {
     /// hyperlink.
     #[test]
     fn hyperlink_at_returns_none_for_unlinked_cell() {
-        let cell = cell_with_link("x", None);
         let cells = TerminalCells {
-            cells: vec![vec![GridSlot::Cell(cell)]],
+            cells: vec![vec![linked_cell('x', None)]],
             ..Default::default()
         };
         assert!(cells.hyperlink_at(0, 0).is_none());
@@ -892,14 +830,13 @@ mod tests {
     /// and the user may hover either half.
     #[test]
     fn hyperlink_at_resolves_both_halves_of_wide_char() {
-        let wide_linked = cell_with_link("あ", Some(7));
-        let trailing = cell_with_link("b", None);
+        let wide_linked = Cell {
+            width: CellWidth::Wide,
+            ..linked_cell('あ', Some(7))
+        };
+        let continuation = wide_linked.continuation();
         let cells = TerminalCells {
-            cells: vec![vec![
-                GridSlot::Cell(wide_linked),
-                GridSlot::WideTrailer,
-                GridSlot::Cell(trailing),
-            ]],
+            cells: vec![vec![wide_linked, continuation, linked_cell('b', None)]],
             hyperlinks: link_table(7, "https://example"),
             ..Default::default()
         };
@@ -926,34 +863,30 @@ mod tests {
         ];
         let table = link_table(7, "https://example");
         let slots = refilled(&runs, 2, &table);
-        assert_eq!(slots[0].cell().and_then(|c| c.hyperlink), Some(id(7)));
-        assert!(
-            slots[1]
-                .cell()
-                .expect("run fills every slot")
-                .hyperlink
-                .is_none()
-        );
+        assert_eq!(slots[0].hyperlink_id, Some(id(7)));
+        assert_eq!(text_of(&slots[1]), "b");
+        assert_eq!(slots[1].hyperlink_id, None);
     }
 
-    /// Asserts that a row materializes one slot per column, with a wide
-    /// glyph taking a cell slot and the trailer slot that follows it.
+    /// Asserts that a row materializes one cell per column, with a wide
+    /// glyph taking a wide cell and the continuation that follows it.
     ///
     /// Case: a CJK character is printed at the start of a four-column
     /// row.
     #[test]
-    fn refill_row_indexes_slots_by_column() {
+    fn refill_row_indexes_cells_by_column() {
         let slots = refilled(&[run_with_widths("あz", &[2, 1])], 4, &HashMap::new());
         assert_eq!(slots.len(), 4);
-        assert_eq!(slots[0].cell().map(|c| c.text.as_str()), Some("あ"));
-        assert_eq!(slots[1], GridSlot::WideTrailer);
-        assert_eq!(slots[2].cell().map(|c| c.text.as_str()), Some("z"));
-        assert_eq!(slots[3], GridSlot::Empty);
+        assert_eq!(text_of(&slots[0]), "あ");
+        assert_eq!(slots[0].width, CellWidth::Wide);
+        assert_eq!(slots[1], slots[0].continuation());
+        assert_eq!(text_of(&slots[2]), "z");
+        assert_eq!(slots[3], Cell::default());
     }
 
-    /// Asserts that a wide glyph landing on the grid's last column
-    /// produces one cell slot and no trailing `WideTrailer`, since no
-    /// column remains for one.
+    /// Asserts that a wide glyph landing on the grid's last column is
+    /// stored as one narrow cell rather than a wide cell without its
+    /// continuation.
     ///
     /// Case: a CJK character is the only character a single-column-wide
     /// pane can hold.
@@ -961,11 +894,12 @@ mod tests {
     fn refill_row_stops_a_wide_glyph_at_the_last_column() {
         let slots = refilled(&[run_with_widths("あ", &[2])], 1, &HashMap::new());
         assert_eq!(slots.len(), 1);
-        assert_eq!(slots[0].cell().map(|c| c.text.as_str()), Some("あ"));
+        assert_eq!(text_of(&slots[0]), "あ");
+        assert_eq!(slots[0].width, CellWidth::Narrow);
     }
 
-    /// Asserts that a zero-width `char` joins the text of the cell before
-    /// it instead of taking a column of its own.
+    /// Asserts that a zero-width `char` joins the marks of the cell
+    /// before it instead of taking a column of its own.
     ///
     /// Case: a program prints an accented latin word, so the accent
     /// arrives right after the letter it modifies.
@@ -976,9 +910,9 @@ mod tests {
             3,
             &HashMap::new(),
         );
-        assert_eq!(slots[0].cell().map(|c| c.text.as_str()), Some("a\u{0301}"));
-        assert_eq!(slots[1].cell().map(|c| c.text.as_str()), Some("b"));
-        assert_eq!(slots[2], GridSlot::Empty);
+        assert_eq!(text_of(&slots[0]), "a\u{0301}");
+        assert_eq!(text_of(&slots[1]), "b");
+        assert_eq!(slots[2], Cell::default());
     }
 
     /// Asserts that a run without widths yields one one-column cell per
@@ -988,91 +922,43 @@ mod tests {
     #[test]
     fn refill_row_treats_an_empty_width_list_as_one_column_each() {
         let slots = refilled(&[run_with_widths("ab", &[])], 2, &HashMap::new());
-        assert_eq!(slots[0].cell().map(|c| c.text.as_str()), Some("a"));
-        assert_eq!(slots[1].cell().map(|c| c.text.as_str()), Some("b"));
+        assert_eq!(text_of(&slots[0]), "a");
+        assert_eq!(text_of(&slots[1]), "b");
     }
 
     /// Asserts that a run's `char`s are never re-measured: a wide glyph
-    /// declared at width one takes one column.
+    /// declared at width one takes one narrow cell.
     ///
     /// Case: a frame declares a CJK glyph at width one on a row the VT
     /// already laid out.
     #[test]
     fn refill_row_does_not_remeasure_the_text() {
         let slots = refilled(&[run_with_widths("あb", &[1, 1])], 2, &HashMap::new());
-        assert_eq!(slots[0].cell().map(|c| c.text.as_str()), Some("あ"));
-        assert_eq!(slots[1].cell().map(|c| c.text.as_str()), Some("b"));
+        assert_eq!(text_of(&slots[0]), "あ");
+        assert_eq!(slots[0].width, CellWidth::Narrow);
+        assert_eq!(text_of(&slots[1]), "b");
     }
 
-    /// Asserts that re-applying a row keeps the row buffer and each
-    /// cell's text buffer, so the refilled cell retains the capacity it
-    /// had before.
+    /// Asserts that re-applying a row refills its row buffer in place
+    /// rather than allocating a new one.
     ///
     /// Case: a status line redraws the same column every frame, first
     /// with a heavily accented letter and then with a plain one.
     #[test]
-    fn a_reapplied_row_keeps_its_row_and_text_buffers() {
+    fn a_reapplied_row_keeps_its_row_buffer() {
         let mut cells = TerminalCells::default();
         let accented = run_with_widths("a\u{0301}\u{0301}\u{0301}\u{0301}", &[1, 0, 0, 0, 0]);
         cells
             .apply(&one_row_frame(1, accented))
             .expect("a well-formed frame applies");
         let row_ptr = cells.cells[0].as_ptr();
-        let (text_ptr, capacity) = {
-            let text = &cells.cells[0][0]
-                .cell()
-                .expect("the run fills the slot")
-                .text;
-            (text.as_ptr(), text.capacity())
-        };
-        assert!(capacity > 8, "nine bytes of text need more than eight");
 
         cells
             .apply(&one_row_frame(1, run_with_widths("b", &[1])))
             .expect("a well-formed frame applies");
 
-        let text = &cells.cells[0][0]
-            .cell()
-            .expect("the run fills the slot")
-            .text;
-        assert_eq!(text, "b");
-        assert_eq!(text.capacity(), capacity);
-        assert_eq!(text.as_ptr(), text_ptr);
+        assert_eq!(text_of(&cells.cells[0][0]), "b");
         assert_eq!(cells.cells[0].as_ptr(), row_ptr);
-    }
-
-    /// Asserts that a carried row keeps the text buffers of the cells
-    /// that survive a column-count change, so a surviving cell retains
-    /// the capacity it had before.
-    ///
-    /// Case: the user drags the window edge, so each frame repaints
-    /// every row at a new width.
-    #[test]
-    fn a_carried_row_keeps_its_text_buffers_across_a_cols_change() {
-        let mut cells = TerminalCells::default();
-        let accented = run_with_widths("a\u{0301}\u{0301}\u{0301}\u{0301}", &[1, 0, 0, 0, 0]);
-        cells
-            .apply(&one_row_frame(1, accented))
-            .expect("a well-formed frame applies");
-        let capacity = cells.cells[0][0]
-            .cell()
-            .expect("the run fills the slot")
-            .text
-            .capacity();
-        assert!(capacity > 8, "nine bytes of text need more than eight");
-
-        cells
-            .apply(&one_row_frame(2, run_with_widths("bc", &[1, 1])))
-            .expect("a well-formed frame applies");
-
-        assert_eq!(cells.cells[0].len(), 2);
-        let text = &cells.cells[0][0]
-            .cell()
-            .expect("the run fills the slot")
-            .text;
-        assert_eq!(text, "b");
-        assert_eq!(text.capacity(), capacity);
-        assert_eq!(cells.cells[0][1].cell().map(|c| c.text.as_str()), Some("c"));
     }
 
     /// Asserts that refilling a cell that held combining marks leaves
@@ -1091,11 +977,11 @@ mod tests {
             &table,
         );
         refill_row(&mut out, &[run_with_widths("b", &[1])], 1, &table);
-        assert_eq!(out[0].cell().map(|c| c.text.as_str()), Some("b"));
+        assert_eq!(text_of(&out[0]), "b");
     }
 
     /// Asserts that refilling a cell replaces its hyperlink along with
-    /// its text, so an unlinked run leaves no link on the cell it
+    /// its glyph, so an unlinked run leaves no link on the cell it
     /// reuses.
     ///
     /// Case: a pager scrolls a linked filename out of a column that the
@@ -1105,49 +991,49 @@ mod tests {
         let mut out = Vec::new();
         let table = link_table(7, "https://example");
         refill_row(&mut out, &[run_with_link("a", Some(id(7)))], 1, &table);
-        assert_eq!(out[0].cell().and_then(|c| c.hyperlink), Some(id(7)));
+        assert_eq!(out[0].hyperlink_id, Some(id(7)));
 
         refill_row(&mut out, &[run_with_link("a", None)], 1, &table);
 
-        assert_eq!(out[0].cell().map(|c| c.hyperlink), Some(None));
+        assert_eq!(out[0].hyperlink_id, None);
     }
 
     /// Asserts that a wide glyph and the narrow glyphs that replace it,
-    /// and the reverse, leave cell and trailer slots where the new row
-    /// puts them.
+    /// and the reverse, leave wide cells and their continuations where
+    /// the new row puts them.
     ///
     /// Case: a file listing scrolls so that a row holding a CJK name now
     /// holds an ASCII name, and the next scroll brings the CJK name back.
     #[test]
-    fn refill_row_swaps_wide_and_narrow_slots() {
+    fn refill_row_swaps_wide_and_narrow_cells() {
         let mut out = Vec::new();
         let table = HashMap::new();
         refill_row(&mut out, &[run_with_widths("あ", &[2])], 2, &table);
-        assert_eq!(out[1], GridSlot::WideTrailer);
+        assert_eq!(out[1].width, CellWidth::Spacer);
 
         refill_row(&mut out, &[run_with_widths("ab", &[1, 1])], 2, &table);
-        assert_eq!(out[0].cell().map(|c| c.text.as_str()), Some("a"));
-        assert_eq!(out[1].cell().map(|c| c.text.as_str()), Some("b"));
+        assert_eq!(text_of(&out[0]), "a");
+        assert_eq!(text_of(&out[1]), "b");
 
         refill_row(&mut out, &[run_with_widths("あ", &[2])], 2, &table);
-        assert_eq!(out[0].cell().map(|c| c.text.as_str()), Some("あ"));
-        assert_eq!(out[1], GridSlot::WideTrailer);
+        assert_eq!(text_of(&out[0]), "あ");
+        assert_eq!(out[1].width, CellWidth::Spacer);
     }
 
     /// Asserts that refilling a row with runs that cover fewer columns
-    /// than before leaves the uncovered tail empty.
+    /// than before resets the uncovered tail to default cells.
     ///
     /// Case: a producer that does not pad its rows with blanks repaints
     /// a full row with a shorter line.
     #[test]
-    fn refill_row_empties_the_tail_a_shorter_row_leaves() {
+    fn refill_row_blanks_the_tail_a_shorter_row_leaves() {
         let mut out = Vec::new();
         let table = HashMap::new();
         refill_row(&mut out, &[run_with_widths("abc", &[1, 1, 1])], 3, &table);
         refill_row(&mut out, &[run_with_widths("x", &[1])], 3, &table);
-        assert_eq!(out[0].cell().map(|c| c.text.as_str()), Some("x"));
-        assert_eq!(out[1], GridSlot::Empty);
-        assert_eq!(out[2], GridSlot::Empty);
+        assert_eq!(text_of(&out[0]), "x");
+        assert_eq!(out[1], Cell::default());
+        assert_eq!(out[2], Cell::default());
     }
 
     /// Asserts that a zero-column refill empties the row, whatever it
@@ -1164,34 +1050,39 @@ mod tests {
         assert!(out.is_empty());
     }
 
-    /// Asserts that a reused cell whose text buffer grew far past the
-    /// retained bound gives capacity back when it is refilled.
+    /// Asserts that a cell keeps at most `MAX_COMBINING` of the marks
+    /// that follow its glyph and drops the rest.
     ///
-    /// Case: a frame stacks a hundred accents on one letter, and the
-    /// next frame prints a plain letter in the same column.
+    /// Case: a frame stacks a hundred accents on one letter.
     #[test]
-    fn refill_row_trims_an_oversized_text_buffer() {
-        let mut out = Vec::new();
-        let table = HashMap::new();
+    fn refill_row_keeps_at_most_max_combining_marks() {
         let text = format!("a{}", "\u{0301}".repeat(100));
         let mut widths = vec![0u8; 101];
         widths[0] = 1;
-        refill_row(&mut out, &[run_with_widths(&text, &widths)], 1, &table);
-        let inflated = out[0]
-            .cell()
-            .expect("the run fills the slot")
-            .text
-            .capacity();
-        assert!(inflated >= 201);
+        let slots = refilled(&[run_with_widths(&text, &widths)], 1, &HashMap::new());
+        assert_eq!(slots[0].c, 'a');
+        assert_eq!(slots[0].marks(), ['\u{0301}'; MAX_COMBINING]);
+    }
 
-        refill_row(&mut out, &[run_with_widths("b", &[1])], 1, &table);
-
-        let trimmed = out[0]
-            .cell()
-            .expect("the run fills the slot")
-            .text
-            .capacity();
-        assert!(trimmed < inflated);
+    /// Asserts that the continuation of a wide glyph carries the glyph's
+    /// colors, style and hyperlink.
+    ///
+    /// Case: a CJK filename is printed in bold red inside an OSC 8 link,
+    /// and the user hovers the right half of its first character.
+    #[test]
+    fn refill_row_carries_a_wide_glyphs_pen_and_link_into_its_continuation() {
+        let run = Run {
+            fg: Color::Indexed(1),
+            style: Style::BOLD,
+            hyperlink_id: Some(id(7)),
+            ..run_with_widths("あ", &[2])
+        };
+        let slots = refilled(&[run], 2, &link_table(7, "https://example"));
+        assert_eq!(slots[1], slots[0].continuation());
+        assert_eq!(
+            (slots[1].fg, slots[1].style, slots[1].hyperlink_id),
+            (Color::Indexed(1), Style::BOLD, Some(id(7)))
+        );
     }
 
     /// Asserts that a mark arriving right after the glyph that fills the
@@ -1207,11 +1098,11 @@ mod tests {
         refill_row(&mut out, &runs, 1, &table);
         refill_row(&mut out, &runs, 1, &table);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].cell().map(|c| c.text.as_str()), Some("a\u{0301}"));
+        assert_eq!(text_of(&out[0]), "a\u{0301}");
     }
 
     /// Asserts that a mark following a wide glyph joins the glyph's cell
-    /// rather than its trailer, on every refill.
+    /// rather than its continuation, on every refill.
     ///
     /// Case: a CJK character carrying a combining mark is redrawn in
     /// place.
@@ -1222,8 +1113,8 @@ mod tests {
         let runs = [run_with_widths("あ\u{0301}", &[2, 0])];
         refill_row(&mut out, &runs, 2, &table);
         refill_row(&mut out, &runs, 2, &table);
-        assert_eq!(out[0].cell().map(|c| c.text.as_str()), Some("あ\u{0301}"));
-        assert_eq!(out[1], GridSlot::WideTrailer);
+        assert_eq!(text_of(&out[0]), "あ\u{0301}");
+        assert_eq!(out[1], out[0].continuation());
     }
 
     /// Asserts that a mark following a glyph truncated past the last
@@ -1239,16 +1130,16 @@ mod tests {
             &HashMap::new(),
         );
         assert_eq!(slots.len(), 1);
-        assert_eq!(slots[0].cell().map(|c| c.text.as_str()), Some("a"));
+        assert_eq!(text_of(&slots[0]), "a");
     }
 
-    /// Asserts that a carried row replaces that row's slots when
+    /// Asserts that a carried row replaces that row's cells when
     /// applied, while a row the frame does not touch is leveled to the
     /// full row width instead of keeping its original length.
     ///
     /// Case: a build prints one line of a two-row pane.
     #[test]
-    fn a_carried_row_replaces_its_slots_and_leaves_other_rows_full_width() {
+    fn a_carried_row_replaces_its_cells_and_leaves_other_rows_full_width() {
         let mut cells = TerminalCells {
             cells: vec![vec![], vec![]],
             ..Default::default()
@@ -1260,13 +1151,13 @@ mod tests {
         };
         assert!(cells.differs_from(&frame));
         cells.apply(&frame).expect("a valid frame");
-        assert_eq!(cells.cells[1][0].cell().map(|c| c.text.as_str()), Some("x"));
-        assert_eq!(cells.cells[0], vec![GridSlot::Empty; 2]);
+        assert_eq!(text_of(&cells.cells[1][0]), "x");
+        assert_eq!(cells.cells[0], vec![Cell::default(); 2]);
     }
 
     /// Asserts that cells built at the frame's size but without cell
     /// rows still differ, and that applying the frame gives every row
-    /// a slot and fills the carried ones.
+    /// its cells and fills the carried ones.
     ///
     /// Case: the host pre-sizes the grid to the PTY geometry before the
     /// VT's bootstrap repaint arrives at that same size.
@@ -1284,7 +1175,7 @@ mod tests {
         assert!(cells.differs_from(&frame));
         cells.apply(&frame).expect("a valid frame");
         assert_eq!(cells.cells.len(), 2);
-        assert_eq!(cells.cells[1][0].cell().map(|c| c.text.as_str()), Some("b"));
+        assert_eq!(text_of(&cells.cells[1][0]), "b");
         assert!(!cells.differs_from(&Frame {
             size: GridSize { cols: 2, rows: 2 },
             ..quiet_frame()
@@ -1309,7 +1200,7 @@ mod tests {
         assert!(cells.differs_from(&frame));
         cells.apply(&frame).expect("a valid frame");
         assert_eq!(cells.cells.len(), 1);
-        assert_eq!(cells.cells[0][0].cell().map(|c| c.text.as_str()), Some("a"));
+        assert_eq!(text_of(&cells.cells[0][0]), "a");
     }
 
     /// Asserts that a frame changing only the column count is a
@@ -1366,7 +1257,7 @@ mod tests {
         assert!(cells.differs_from(&frame));
         cells.apply(&frame).expect("a valid frame");
         assert_eq!(cells.cells.len(), 2);
-        assert_eq!(cells.cells[1][0].cell().map(|c| c.text.as_str()), Some("b"));
+        assert_eq!(text_of(&cells.cells[1][0]), "b");
     }
 
     /// Asserts that a column-count change levels every retained row to
@@ -1491,6 +1382,42 @@ mod tests {
         );
     }
 
+    /// Asserts that applying the runs a stored row emits reproduces that
+    /// row's cells exactly.
+    ///
+    /// Case: the VT repaints a row holding an accented letter, a CJK
+    /// character inside an OSC 8 link, and a colored letter.
+    #[test]
+    fn a_row_survives_the_round_trip_through_its_runs() {
+        let mut accented = linked_cell('e', None);
+        assert!(accented.push_mark('\u{0301}'));
+        let wide = Cell {
+            width: CellWidth::Wide,
+            ..linked_cell('あ', Some(7))
+        };
+        let colored = Cell {
+            fg: Color::Indexed(1),
+            ..linked_cell('z', None)
+        };
+        let stored = vec![accented, wide.clone(), wide.continuation(), colored];
+        let mut cells = TerminalCells::default();
+        cells
+            .apply(&Frame {
+                size: GridSize { cols: 4, rows: 1 },
+                rows: vec![DirtyRow {
+                    line: ViewportLine(0),
+                    contents: Row::from(stored.clone()).to_runs(),
+                }],
+                hyperlinks: vec![Hyperlink {
+                    id: id(7),
+                    uri: HyperlinkUri::new("https://example"),
+                }],
+                ..quiet_frame()
+            })
+            .expect("a stored row's runs apply");
+        assert_eq!(cells.cells[0], stored);
+    }
+
     /// Asserts that a frame carrying nothing new reports no difference
     /// for either component.
     ///
@@ -1590,9 +1517,9 @@ mod tests {
     /// non-default palette already in place.
     #[test]
     fn a_cells_that_reports_no_difference_is_not_mutated_by_apply() {
-        let linked = cell_with_link("x", Some(7));
+        let linked = linked_cell('x', Some(7));
         let mut cells = TerminalCells {
-            cells: vec![vec![GridSlot::Cell(linked)]],
+            cells: vec![vec![linked]],
             hyperlinks: HashMap::from([(id(7), HyperlinkUri::new("https://example"))]),
             palette: Palette {
                 background: Rgb { r: 9, g: 8, b: 7 },
@@ -1642,7 +1569,7 @@ mod tests {
             cells.apply(&frame),
             Err(RendererError::Vt(VtError::Run(RunError::InvalidWidth)))
         ));
-        assert_eq!(cells.cells, vec![vec![GridSlot::Empty]]);
+        assert_eq!(cells.cells, vec![vec![Cell::default()]]);
         assert!(cells.hyperlinks.is_empty());
     }
 }

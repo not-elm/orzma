@@ -49,7 +49,7 @@ fn apply_frame(
 mod tests {
     use super::*;
     use crate::schema::{
-        AnchoredPlacement, Cursor, DisplayOffset, GridColumn, GridLine, GridPoint, GridSlot,
+        AnchoredPlacement, Cell, Cursor, DisplayOffset, GridColumn, GridLine, GridPoint,
         InstanceId, PlacementSize, SelectionGeometry, SelectionRange, quiet_frame,
     };
     use orzma_vt::prelude::{DirtyRow, Frame, GridSize, Row, Run, ViewportLine};
@@ -339,7 +339,7 @@ mod tests {
         app.update();
         assert_eq!(
             app.world().get::<TerminalCells>(terminal).unwrap().cells,
-            vec![vec![GridSlot::Empty]]
+            vec![vec![Cell::default()]]
         );
     }
 }

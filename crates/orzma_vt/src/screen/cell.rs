@@ -207,7 +207,7 @@ impl Default for Cell {
 
 impl Cell {
     /// The continuation cell that follows a [`CellWidth::Wide`] body,
-    /// sharing its pen.
+    /// sharing its colors, style and hyperlink.
     pub fn continuation(&self) -> Self {
         Self {
             width: CellWidth::Spacer,
@@ -504,12 +504,12 @@ mod tests {
     }
 
     /// Asserts that a continuation cell is a blank sharing the body's
-    /// pen.
+    /// colors, style and hyperlink.
     ///
-    /// Case: a fullwidth glyph is printed inside a region with a colored
-    /// background.
+    /// Case: a fullwidth glyph is printed inside an OSC 8 link over a
+    /// colored background.
     #[test]
-    fn a_continuation_shares_the_body_pen() {
+    fn a_continuation_shares_the_body_pen_and_hyperlink() {
         let body = Cell {
             c: 'あ',
             width: CellWidth::Wide,
@@ -517,15 +517,15 @@ mod tests {
             fg: Color::Indexed(1),
             bg: Color::Indexed(4),
             style: Style::BOLD,
-            hyperlink_id: None,
+            hyperlink_id: HyperlinkId::new(7),
         };
         let spacer = body.continuation();
         assert_eq!(spacer.width, CellWidth::Spacer);
         assert_eq!(spacer.c, ' ');
         assert_eq!(spacer.extra, None);
         assert_eq!(
-            (spacer.fg, spacer.bg, spacer.style),
-            (body.fg, body.bg, body.style)
+            (spacer.fg, spacer.bg, spacer.style, spacer.hyperlink_id),
+            (body.fg, body.bg, body.style, body.hyperlink_id)
         );
     }
 

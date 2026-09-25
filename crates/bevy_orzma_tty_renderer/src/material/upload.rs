@@ -10,7 +10,7 @@ use crate::{
     },
     material::{GpuCell, GpuGlyph, MaterialStage, STYLE_WIDE_RIGHT_HALF, pack_linear},
     schema::{
-        Color as CellColor, GridCell, GridSlot, HyperlinkId, Palette, Style, TerminalCells,
+        Cell, CellWidth, Color as CellColor, HyperlinkId, Palette, Style, TerminalCells,
         TerminalView,
     },
 };
@@ -215,7 +215,9 @@ fn upload_terminal_cells(
 /// cell table, resolving each glyph through the atlas as it goes.
 ///
 /// `dims` is `(cols, rows)` in cells. A row or column of `cells` outside
-/// it is skipped without resolving its glyphs.
+/// it is skipped without resolving its glyphs. A [`CellWidth::Spacer`]
+/// repeats the body cell directly to its left as the flagged right half;
+/// a spacer without one leaves its slot at the default.
 fn fill_cells(
     state: &mut TerminalMaterialState,
     atlas: &mut GlyphAtlas,
@@ -228,27 +230,26 @@ fn fill_cells(
     let packed_palette = PackedPalette::build(&cells.palette);
     for (row_idx, row) in cells.cells.iter().enumerate().take(rows as usize) {
         let mut left_half: Option<GpuCell> = None;
-        for (col, slot) in row.iter().enumerate().take(cols as usize) {
+        for (col, cell) in row.iter().enumerate().take(cols as usize) {
             let col = col as u32;
             let target = (row_idx as u32 * cols + col) as usize;
-            match slot {
-                GridSlot::Empty => left_half = None,
-                GridSlot::Cell(cell) => {
+            match cell.width {
+                CellWidth::Narrow | CellWidth::Wide | CellWidth::LeadingSpacer => {
                     let gpu = GpuCell {
                         glyph_index: resolve_glyph_index(state, atlas, cell, fonts, phys_font_size),
                         fg_packed: packed_palette.cell_fg(cell.fg),
                         bg_packed: packed_palette.cell_bg(cell.bg),
                         style_flags: u32::from(
-                            cell.style | style_from_combining_marks(&cell.text).bits(),
+                            (cell.style | style_from_combining_marks(cell)).bits(),
                         ),
-                        hyperlink_id: cell.hyperlink.map_or(0, HyperlinkId::get),
+                        hyperlink_id: cell.hyperlink_id.map_or(0, HyperlinkId::get),
                     };
                     if let Some(target) = state.cpu_cells.get_mut(target) {
                         *target = gpu;
                     }
                     left_half = Some(gpu);
                 }
-                GridSlot::WideTrailer => {
+                CellWidth::Spacer => {
                     if let Some(left) = left_half.take()
                         && let Some(target) = state.cpu_cells.get_mut(target)
                     {
@@ -276,40 +277,37 @@ fn line_style(mark: char) -> Option<Style> {
     }
 }
 
-/// Promotes the combining marks in a cell's text that stand for lines to
-/// the `Style` underline and strike flags so the shader paints them.
-fn style_from_combining_marks(text: &str) -> Style {
-    if text.is_ascii() {
-        return Style::empty();
-    }
-    text.chars()
+/// Promotes the characters of a cell's glyph and marks that stand for
+/// lines to the `Style` underline and strike flags so the shader paints
+/// them.
+fn style_from_combining_marks(cell: &Cell) -> Style {
+    cell.chars()
         .filter_map(line_style)
         .fold(Style::empty(), |acc, s| acc | s)
 }
 
-/// The marks of a cell's text that are composed onto its glyph: every
-/// `char` after the first, except the marks [`line_style`] maps to a line.
-fn composable_marks(text: &str) -> impl Iterator<Item = char> + '_ {
-    text.chars().skip(1).filter(|c| line_style(*c).is_none())
+/// The marks composed onto a cell's glyph: its combining marks, except
+/// the marks [`line_style`] maps to a line.
+fn composable_marks(cell: &Cell) -> impl Iterator<Item = char> + '_ {
+    cell.marks()
+        .iter()
+        .copied()
+        .filter(|c| line_style(*c).is_none())
 }
 
 fn resolve_glyph_index(
     state: &mut TerminalMaterialState,
     atlas: &mut GlyphAtlas,
-    cell: &GridCell,
+    cell: &Cell,
     fonts: &TerminalFonts,
     phys_font_size: u16,
 ) -> u32 {
-    if cell.is_blank() {
-        return u32::MAX;
-    }
-    let codepoint = cell.text.chars().next().map(|c| c as u32).unwrap_or(0);
-    if codepoint == 0 || codepoint == 0x20 {
+    if matches!(cell.c, '\0' | ' ') || cell.chars().all(char::is_whitespace) {
         return u32::MAX;
     }
     let face = FontFace::from_style(cell.style);
     let key =
-        GlyphKey::new(face, codepoint, phys_font_size).with_marks(composable_marks(&cell.text));
+        GlyphKey::new(face, u32::from(cell.c), phys_font_size).with_marks(composable_marks(cell));
     if let Some(&idx) = state.glyph_index_map.get(&key) {
         return idx;
     }
@@ -379,14 +377,27 @@ mod tests {
     use super::*;
     use bevy::ecs::change_detection::Tick;
 
-    fn cell_with_link(text: &str, link: Option<u32>) -> GridCell {
-        GridCell {
-            text: text.to_string(),
-            fg: CellColor::DefaultForeground,
-            bg: CellColor::DefaultBackground,
-            style: 0,
-            hyperlink: link.map(|id| HyperlinkId::new(id).expect("nonzero")),
+    /// A narrow cell holding the first `char` of `text` as its glyph and
+    /// the rest as its marks, linked to `link` when given.
+    fn cell_with_link(text: &str, link: Option<u32>) -> Cell {
+        let mut chars = text.chars();
+        let mut cell = Cell {
+            c: chars.next().expect("a fixture names a glyph"),
+            hyperlink_id: link.map(|id| HyperlinkId::new(id).expect("nonzero")),
+            ..Cell::default()
+        };
+        for mark in chars {
+            assert!(cell.push_mark(mark), "a fixture stays under the mark cap");
         }
+        cell
+    }
+
+    /// The fingerprint a default cell packs to under the default palette:
+    /// no glyph, the palette foreground, the transparent background, no
+    /// style and no link.
+    fn blank_fingerprint() -> (u32, u32, u32, u32, u32) {
+        let fg = PackedPalette::build(&Palette::default()).cell_fg(CellColor::DefaultForeground);
+        (u32::MAX, fg, TRANSPARENT_BG, 0, 0)
     }
 
     /// Returns the observable payload of each GPU slot as
@@ -412,7 +423,7 @@ mod tests {
 
     fn grid_of(rows: usize, cols: usize) -> TerminalCells {
         TerminalCells {
-            cells: vec![vec![GridSlot::Cell(cell_with_link("x", None)); cols]; rows],
+            cells: vec![vec![cell_with_link("x", None); cols]; rows],
             ..Default::default()
         }
     }
@@ -422,7 +433,10 @@ mod tests {
         TerminalCells {
             cells: vec![
                 text.chars()
-                    .map(|ch| GridSlot::Cell(cell_with_link(&ch.to_string(), None)))
+                    .map(|c| Cell {
+                        c,
+                        ..Cell::default()
+                    })
                     .collect(),
             ],
             ..Default::default()
@@ -575,13 +589,13 @@ mod tests {
     #[test]
     fn an_upload_clips_a_grid_that_disagrees_with_its_dims() {
         let (mut buffers, mut state) = buffers_and_state();
-        let linked = |id| GridSlot::Cell(cell_with_link("x", Some(id)));
+        let linked = |id| cell_with_link("x", Some(id));
         let larger = TerminalCells {
             cells: vec![
                 vec![linked(1), linked(2), linked(3)],
-                vec![GridSlot::Empty, linked(4)],
+                vec![Cell::default(), linked(4)],
                 vec![linked(5)],
-                vec![GridSlot::Cell(cell_with_link("y", Some(6)))],
+                vec![cell_with_link("y", Some(6))],
             ],
             ..Default::default()
         };
@@ -594,7 +608,7 @@ mod tests {
         uploaded(&mut state, &mut buffers, &larger, (2, 3));
         assert_eq!(hyperlink_ids(&state.cpu_cells), [1, 2, 0, 4, 5, 0]);
         let fingerprint = gpu_cell_fingerprint(&state.cpu_cells);
-        assert_eq!(fingerprint[2], untouched);
+        assert_eq!(fingerprint[2], blank_fingerprint());
         assert_eq!(fingerprint[5], untouched);
         assert_eq!(
             state.cpu_glyphs.len(),
@@ -618,7 +632,7 @@ mod tests {
         let (mut buffers, mut state) = buffers_and_state();
         let painted = grid_of(2, 2);
         let mut blanked = grid_of(2, 2);
-        blanked.cells[1][1] = GridSlot::Empty;
+        blanked.cells[1][1] = Cell::default();
 
         for cells in [&painted, &blanked] {
             uploaded(&mut state, &mut buffers, cells, (2, 2));
@@ -630,8 +644,10 @@ mod tests {
                 .and_then(|buffer| buffer.data.as_ref());
             assert_eq!(encoded, expected.data.as_ref());
         }
-        let untouched = gpu_cell_fingerprint(&[GpuCell::default()])[0];
-        assert_eq!(gpu_cell_fingerprint(&state.cpu_cells)[3], untouched);
+        assert_eq!(
+            gpu_cell_fingerprint(&state.cpu_cells)[3],
+            blank_fingerprint()
+        );
     }
 
     /// Asserts the GPU slots a row of a wide char, a combining mark and a
@@ -643,16 +659,15 @@ mod tests {
     /// plain, unlinked text.
     #[test]
     fn filling_pins_wide_combining_and_linked_slots() {
-        let wide = cell_with_link("あ", Some(3));
+        let wide = Cell {
+            width: CellWidth::Wide,
+            ..cell_with_link("あ", Some(3))
+        };
+        let continuation = wide.continuation();
         let combining = cell_with_link("e\u{0332}", None);
         let plain = cell_with_link("z", None);
         let cells = TerminalCells {
-            cells: vec![vec![
-                GridSlot::Cell(wide),
-                GridSlot::WideTrailer,
-                GridSlot::Cell(combining),
-                GridSlot::Cell(plain),
-            ]],
+            cells: vec![vec![wide, continuation, combining, plain]],
             ..Default::default()
         };
         let mut state = state_for(4);
@@ -692,6 +707,37 @@ mod tests {
         );
     }
 
+    /// Asserts that a glyph and marks that are all whitespace, and a NUL
+    /// or space glyph under any marks, resolve to no glyph.
+    ///
+    /// Case: a row holds an ideographic space, a space carrying a stray
+    /// accent, a NUL an application left behind, and an untouched column.
+    #[test]
+    fn cells_that_paint_no_glyph_resolve_none() {
+        let cells = TerminalCells {
+            cells: vec![vec![
+                cell_with_link("\u{3000}", None),
+                cell_with_link(" \u{0301}", None),
+                cell_with_link("\0", None),
+                Cell::default(),
+            ]],
+            ..Default::default()
+        };
+        let mut state = state_for(4);
+        let mut atlas = GlyphAtlas::default();
+        let fonts = TerminalFonts::default();
+
+        fill_cells(&mut state, &mut atlas, &cells, &fonts, 16, (4, 1));
+
+        assert!(
+            state
+                .cpu_cells
+                .iter()
+                .all(|cell| cell.glyph_index == u32::MAX)
+        );
+        assert!(state.cpu_glyphs.is_empty());
+    }
+
     /// Asserts that a linked cell's wire id reaches its GPU slot while
     /// an unlinked cell's slot keeps the 0 sentinel.
     ///
@@ -701,7 +747,7 @@ mod tests {
         let linked = cell_with_link("x", Some(7));
         let unlinked = cell_with_link("y", None);
         let cells = TerminalCells {
-            cells: vec![vec![GridSlot::Cell(linked), GridSlot::Cell(unlinked)]],
+            cells: vec![vec![linked, unlinked]],
             ..Default::default()
         };
         let mut state = state_for(2);
@@ -715,26 +761,31 @@ mod tests {
     }
 
     /// Asserts that the underline-like combining marks promote to
-    /// `Style::UNDERLINE`, the long stroke overlay to `Style::STRIKE`, and
-    /// any other text to no flags.
+    /// `Style::UNDERLINE` and the long stroke overlay to `Style::STRIKE`,
+    /// whether they are the glyph itself or a mark on it, while other text
+    /// and a continuation column promote to no flags.
     ///
     /// Case: a program decorates text with combining low lines and stroke
     /// overlays next to plain ASCII and accented text.
     #[test]
     fn combining_marks_promote_to_underline_and_strike() {
-        assert_eq!(style_from_combining_marks("a"), Style::empty());
-        assert_eq!(style_from_combining_marks("e\u{0301}"), Style::empty());
+        let style_of = |text: &str| style_from_combining_marks(&cell_with_link(text, None));
+        assert_eq!(style_of("a"), Style::empty());
+        assert_eq!(style_of("e\u{0301}"), Style::empty());
         for mark in ['\u{0331}', '\u{0332}', '\u{0333}'] {
-            assert_eq!(
-                style_from_combining_marks(&format!("a{mark}")),
-                Style::UNDERLINE
-            );
+            assert_eq!(style_of(&format!("a{mark}")), Style::UNDERLINE);
         }
-        assert_eq!(style_from_combining_marks("a\u{0336}"), Style::STRIKE);
+        assert_eq!(style_of("a\u{0336}"), Style::STRIKE);
         assert_eq!(
-            style_from_combining_marks("a\u{0332}\u{0336}"),
+            style_of("a\u{0332}\u{0336}"),
             Style::UNDERLINE | Style::STRIKE
         );
+        assert_eq!(style_of("\u{0332}"), Style::UNDERLINE);
+        let spacer = Cell {
+            width: CellWidth::Spacer,
+            ..cell_with_link("\u{0332}", None)
+        };
+        assert_eq!(style_from_combining_marks(&spacer), Style::empty());
     }
 
     /// Asserts that fg and bg packing resolve symbolic colors through
@@ -792,12 +843,16 @@ mod tests {
     /// a long stroke overlay and a tilde.
     #[test]
     fn composable_marks_skip_the_base_and_the_line_marks() {
+        let decorated = cell_with_link("e\u{0301}\u{0332}\u{0336}\u{0303}", None);
         assert_eq!(
-            composable_marks("e\u{0301}\u{0332}\u{0336}\u{0303}").collect::<Vec<_>>(),
+            composable_marks(&decorated).collect::<Vec<_>>(),
             ['\u{0301}', '\u{0303}']
         );
-        assert_eq!(composable_marks("a").count(), 0);
-        assert_eq!(composable_marks("").count(), 0);
+        assert_eq!(composable_marks(&cell_with_link("a", None)).count(), 0);
+        assert_eq!(
+            composable_marks(&cell_with_link("\u{0301}", None)).count(),
+            0
+        );
     }
 
     /// Asserts that a pane needs an upload before its first build, when its

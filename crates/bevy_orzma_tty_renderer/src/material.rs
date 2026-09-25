@@ -848,7 +848,7 @@ mod tests {
     fn an_upload_lands_in_the_buffers_its_material_binds() {
         use crate::glyph::atlas::GlyphAtlas;
         use crate::glyph::font::{TerminalCellMetricsResource, TerminalFonts};
-        use crate::schema::{Color as CellColor, GridCell, GridSlot, TerminalCells, TerminalView};
+        use crate::schema::{Cell, TerminalCells, TerminalView};
 
         let fonts = TerminalFonts::default();
         let (mut app, material) = material_node_app();
@@ -863,13 +863,10 @@ mod tests {
             ..Default::default()
         };
         let cells = TerminalCells {
-            cells: vec![vec![GridSlot::Cell(GridCell {
-                text: "x".to_string(),
-                fg: CellColor::DefaultForeground,
-                bg: CellColor::DefaultBackground,
-                style: 0,
-                hyperlink: None,
-            })]],
+            cells: vec![vec![Cell {
+                c: 'x',
+                ..Cell::default()
+            }]],
             ..Default::default()
         };
         app.world_mut()

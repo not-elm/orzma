@@ -447,7 +447,7 @@ mod tests {
     use bevy::ui::{ComputedNode, UiGlobalTransform};
     use bevy::window::WindowResolution;
     use bevy_orzma_tty_renderer::schema::{
-        Color, GridCell, GridSlot, HyperlinkId, HyperlinkUri, TerminalCells, TerminalView,
+        Cell, HyperlinkId, HyperlinkUri, TerminalCells, TerminalView,
     };
     use bevy_orzmux::prelude::RequestTtyPointer;
     use std::collections::HashMap;
@@ -581,13 +581,11 @@ mod tests {
         let pane = spawn_pane(app, left, width);
         let id = HyperlinkId::new(7).expect("nonzero");
         let cells = TerminalCells {
-            cells: vec![vec![GridSlot::Cell(GridCell {
-                text: "x".to_string(),
-                fg: Color::DefaultForeground,
-                bg: Color::DefaultBackground,
-                style: 0,
-                hyperlink: Some(id),
-            })]],
+            cells: vec![vec![Cell {
+                c: 'x',
+                hyperlink_id: Some(id),
+                ..Cell::default()
+            }]],
             hyperlinks: HashMap::from([(id, HyperlinkUri::new(uri))]),
             ..default()
         };
