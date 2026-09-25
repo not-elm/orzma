@@ -6,14 +6,16 @@ use bevy::prelude::*;
 
 pub mod bundled;
 mod cursor;
+mod error;
 pub mod glyph;
 mod grid;
 pub mod material;
 pub mod schema;
 
+pub use crate::error::{RendererError, RendererResult};
 pub use crate::glyph::font::{
-    CellMetrics, FontFace, FontLoadError, TerminalCellMetricsResource, TerminalFontInitSet,
-    TerminalFontPlugin, TerminalFontSize, TerminalFonts, physical_font_size,
+    CellMetrics, FontFace, TerminalCellMetricsResource, TerminalFontInitSet, TerminalFontPlugin,
+    TerminalFontSize, TerminalFonts, physical_font_size,
 };
 pub use material::TerminalPaddingFallback;
 

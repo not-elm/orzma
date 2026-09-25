@@ -2,27 +2,13 @@ use crate::bundled::{
     BOLD, BOLD_ITALIC, FALLBACK_BOLD, FALLBACK_BOLD_ITALIC, FALLBACK_ITALIC, FALLBACK_REGULAR,
     ITALIC, REGULAR, SYMBOL_REGULAR,
 };
+use crate::error::{RendererError, RendererResult};
 use crate::schema::Style;
 use ab_glyph::{Font, FontArc, FontVec, ScaleFont};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use orzma_vt::prelude::MAX_COMBINING;
 use ttf_parser::Face as TtfFace;
-
-/// Error returned by `TerminalFonts::from_faces` and
-/// `TerminalFonts::from_bytes` when a face's bytes fail to parse.
-#[derive(Debug, thiserror::Error)]
-pub enum FontLoadError {
-    /// `ab_glyph` rejected the bytes for this face.
-    #[error("ab_glyph rejected {face:?} face: {source}")]
-    ParseFailed {
-        /// Which face's bytes were invalid.
-        face: FontFace,
-        /// Underlying ab_glyph error.
-        #[source]
-        source: ab_glyph::InvalidFont,
-    },
-}
 
 const FONT_SIZE_PX: f32 = 12.0;
 
@@ -215,16 +201,16 @@ fn bundled_symbol_face() -> FontArc {
 
 /// Builds one primary `FontArc` from owned bytes at a `.ttc` face index,
 /// tagging parse failures with the offending face.
-fn primary_face(bytes: Vec<u8>, index: u32, face: FontFace) -> Result<FontArc, FontLoadError> {
+fn primary_face(bytes: Vec<u8>, index: u32, face: FontFace) -> RendererResult<FontArc> {
     FontVec::try_from_vec_and_index(bytes, index)
         .map(FontArc::from)
-        .map_err(|source| FontLoadError::ParseFailed { face, source })
+        .map_err(|source| RendererError::FontParse { face, source })
 }
 
 /// Builds one fallback `FontArc` from owned bytes (always face index 0),
 /// tagging parse failures with the offending face.
-fn fallback_face(bytes: Vec<u8>, face: FontFace) -> Result<FontArc, FontLoadError> {
-    FontArc::try_from_vec(bytes).map_err(|source| FontLoadError::ParseFailed { face, source })
+fn fallback_face(bytes: Vec<u8>, face: FontFace) -> RendererResult<FontArc> {
+    FontArc::try_from_vec(bytes).map_err(|source| RendererError::FontParse { face, source })
 }
 
 impl TerminalFonts {
@@ -232,7 +218,9 @@ impl TerminalFonts {
     /// pairs plus four fallback byte buffers. Each primary face is loaded at
     /// its own collection index; fallback and symbol faces are always index 0.
     ///
-    /// Returns `FontLoadError::ParseFailed` naming the face whose bytes
+    /// # Errors
+    ///
+    /// Returns [`RendererError::FontParse`] naming the face whose bytes
     /// failed to parse.
     pub fn from_faces(
         regular: (Vec<u8>, u32),
@@ -243,7 +231,7 @@ impl TerminalFonts {
         fallback_bold: Vec<u8>,
         fallback_italic: Vec<u8>,
         fallback_bold_italic: Vec<u8>,
-    ) -> Result<Self, FontLoadError> {
+    ) -> RendererResult<Self> {
         let regular_index = regular.1;
         let regular = primary_face(regular.0, regular.1, FontFace::Regular)?;
         let bold = primary_face(bold.0, bold.1, FontFace::Bold)?;
@@ -272,11 +260,13 @@ impl TerminalFonts {
     /// per face (four primary + four fallback), loading every primary face
     /// at collection index 0.
     ///
-    /// Returns `FontLoadError::ParseFailed` naming the face whose bytes
-    /// failed to parse.
-    ///
     /// The symbol fallback face is always the bundled Noto Sans Symbols 2,
     /// so callers do not supply it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RendererError::FontParse`] naming the face whose bytes
+    /// failed to parse.
     pub fn from_bytes(
         regular: Vec<u8>,
         bold: Vec<u8>,
@@ -286,7 +276,7 @@ impl TerminalFonts {
         fallback_bold: Vec<u8>,
         fallback_italic: Vec<u8>,
         fallback_bold_italic: Vec<u8>,
-    ) -> Result<Self, FontLoadError> {
+    ) -> RendererResult<Self> {
         Self::from_faces(
             (regular, 0),
             (bold, 0),
@@ -546,6 +536,32 @@ mod tests {
         let mf = via_faces.cell_metrics_px(12);
         assert!((mb.advance_phys - mf.advance_phys).abs() < 0.001);
         assert!((mb.line_height_phys - mf.line_height_phys).abs() < 0.001);
+    }
+
+    /// Asserts that a face whose bytes do not parse is reported as a
+    /// font-parse error naming that face, not the first face loaded.
+    ///
+    /// Case: the configured bold family resolves to a file that is not a
+    /// font, while every other face is valid.
+    #[test]
+    fn an_unparsable_face_is_reported_by_name() {
+        let result = TerminalFonts::from_bytes(
+            bundled::REGULAR.to_vec(),
+            b"not a font".to_vec(),
+            bundled::ITALIC.to_vec(),
+            bundled::BOLD_ITALIC.to_vec(),
+            bundled::FALLBACK_REGULAR.to_vec(),
+            bundled::FALLBACK_BOLD.to_vec(),
+            bundled::FALLBACK_ITALIC.to_vec(),
+            bundled::FALLBACK_BOLD_ITALIC.to_vec(),
+        );
+        assert!(matches!(
+            result,
+            Err(RendererError::FontParse {
+                face: FontFace::Bold,
+                ..
+            })
+        ));
     }
 
     #[test]

@@ -1,14 +1,15 @@
 //! The renderer's CPU-side mirror of one terminal's viewport and painted
 //! content, materialized from the frames applied to it.
 
+use crate::error::RendererResult;
 use crate::schema::{
     AnchoredPlacement, Color, Cursor, CursorShape, DisplayOffset, GridPoint, HyperlinkId,
     HyperlinkUri, Palette, Run, SelectionRange, ViCursor,
 };
 use bevy::prelude::*;
+use orzma_vt::prelude::Frame;
 #[cfg(test)]
 use orzma_vt::prelude::GridSize;
-use orzma_vt::prelude::{Frame, VtResult};
 use std::{collections::HashMap, mem};
 
 /// One materialized cell of the renderer's CPU-side grid, expanded
@@ -283,7 +284,8 @@ impl TerminalCells {
     /// # Errors
     ///
     /// A frame carrying a run that fails [`Run::check`] is rejected with
-    /// that error, and the cells are left untouched.
+    /// that error wrapped in [`RendererError::Vt`], and the cells are left
+    /// untouched.
     ///
     /// # Invariants
     ///
@@ -291,7 +293,9 @@ impl TerminalCells {
     /// rows, each holding exactly `frame.size.cols` slots. It mutates the
     /// cells exactly when [`Self::differs_from`] reports `true` and it
     /// returns `Ok`.
-    pub fn apply(&mut self, frame: &Frame) -> VtResult {
+    ///
+    /// [`RendererError::Vt`]: crate::RendererError::Vt
+    pub fn apply(&mut self, frame: &Frame) -> RendererResult {
         let Frame {
             size,
             rows,
@@ -449,6 +453,7 @@ pub(crate) fn quiet_frame() -> Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::RendererError;
     use crate::schema::{
         Color, Cursor, CursorShape, GridColumn, GridLine, GridPoint, Hyperlink, InstanceId,
         PlacementSize, Rgb, Row, SelectionGeometry, Style,
@@ -1635,7 +1640,7 @@ mod tests {
         assert!(cells.differs_from(&frame));
         assert!(matches!(
             cells.apply(&frame),
-            Err(VtError::Run(RunError::InvalidWidth))
+            Err(RendererError::Vt(VtError::Run(RunError::InvalidWidth)))
         ));
         assert_eq!(cells.cells, vec![vec![GridSlot::Empty]]);
         assert!(cells.hyperlinks.is_empty());
