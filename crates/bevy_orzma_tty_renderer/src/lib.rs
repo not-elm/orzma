@@ -38,6 +38,11 @@ pub mod prelude {
 
 /// Renders every terminal pane: mirrors its frames into components,
 /// rasterizes its glyphs, and keeps its material and caret current.
+///
+/// # Panics
+///
+/// Panics if any entity has carried `OrzmuxPane` before the plugin is
+/// added.
 pub struct TerminalRendererPlugin;
 
 impl Plugin for TerminalRendererPlugin {

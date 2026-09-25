@@ -282,7 +282,6 @@ fn cell_context_for<'a>(
 mod test_support {
     use super::*;
     use bevy::window::PrimaryWindow;
-    use bevy_orzma_tty_renderer::prelude::TerminalCellMetricsResource;
 
     #[derive(Resource, Default)]
     pub(super) struct CapturedEffects(pub(super) Vec<MouseEffect>);

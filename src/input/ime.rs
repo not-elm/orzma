@@ -381,7 +381,7 @@ mod tests {
     use bevy::prelude::{MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
-    use bevy_orzma_tty_renderer::prelude::{CellMetrics, TerminalView};
+    use bevy_orzma_tty_renderer::prelude::CellMetrics;
     use orzma_vt::prelude::{Cursor, InstanceId};
 
     #[test]

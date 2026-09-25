@@ -55,7 +55,9 @@ pub enum TerminalFontInitSet {
 /// with the font size and the primary window's scale factor.
 ///
 /// A `TerminalFonts` resource inserted before the plugin is built is kept;
-/// otherwise the bundled fonts are inserted.
+/// otherwise the bundled fonts are inserted. The cell metrics are inserted
+/// only if a single primary window exists at the app's first update;
+/// otherwise the plugin never inserts them.
 #[derive(Default)]
 pub struct TerminalFontPlugin;
 
