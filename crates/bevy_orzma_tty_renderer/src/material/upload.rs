@@ -68,15 +68,17 @@ impl TerminalMaterialState {
     /// when the atlas did not restart during the build.
     ///
     /// The glyph table is kept only when the recorded build used the same
-    /// atlas restart count and font size as `basis`. A zero in either axis of
-    /// `basis.dims` uploads the one-element buffers wgpu requires instead of
-    /// empty ones, and rows and columns of `cells` outside the dimensions
-    /// are ignored.
+    /// atlas restart count and font size as `basis`, and a kept table that
+    /// gained no glyph leaves the glyph buffer unwritten. A zero in either
+    /// axis of `basis.dims` uploads the one-element buffers wgpu requires
+    /// instead of empty ones, and rows and columns of `cells` outside the
+    /// dimensions are ignored.
     ///
     /// # Errors
     ///
-    /// Returns [`RendererError::MissingShaderBuffer`], leaving the atlas and
-    /// this cache untouched, when either buffer asset is missing.
+    /// Returns [`RendererError::MissingShaderBuffer`] when either buffer
+    /// asset is missing. The atlas and the glyph table are left untouched,
+    /// and the recorded build is forgotten, so the next run rebuilds the pane.
     fn upload(
         &mut self,
         atlas: &mut GlyphAtlas,
@@ -86,6 +88,7 @@ impl TerminalMaterialState {
         basis: UploadBasis,
     ) -> RendererResult {
         if !buffers.contains(&self.cells_buffer) || !buffers.contains(&self.glyphs_buffer) {
+            self.uploaded = None;
             return Err(RendererError::MissingShaderBuffer);
         }
         let keeps_glyphs = self
@@ -95,6 +98,7 @@ impl TerminalMaterialState {
             self.glyph_index_map.clear();
             self.cpu_glyphs.clear();
         }
+        let kept_glyph_count = keeps_glyphs.then_some(self.cpu_glyphs.len());
         let (cols, rows) = (u32::from(basis.dims.0), u32::from(basis.dims.1));
         self.cpu_cells.clear();
         self.cpu_cells
@@ -118,7 +122,13 @@ impl TerminalMaterialState {
         if let Some(mut buffer) = buffers.get_mut(&self.cells_buffer) {
             buffer.set_data(&self.cpu_cells);
         }
-        if let Some(mut buffer) = buffers.get_mut(&self.glyphs_buffer) {
+        // NOTE: Skipping the write relies on the glyph table being
+        //       append-only between clears. A kept table is the one the
+        //       recorded build wrote in full, so an unchanged length means
+        //       unchanged contents.
+        if kept_glyph_count != Some(self.cpu_glyphs.len())
+            && let Some(mut buffer) = buffers.get_mut(&self.glyphs_buffer)
+        {
             buffer.set_data(&self.cpu_glyphs);
         }
         self.uploaded = (atlas.restarts == basis.atlas_restarts).then_some(basis);
@@ -161,10 +171,14 @@ impl UploadBasis {
 
 /// Rebuilds the buffers of every pane whose cells, size, atlas restart
 /// count or font size changed; when a rebuild restarted the atlas, rebuilds
-/// once more every pane that restart left stale.
+/// once more every pane that restart left stale. A failed upload is logged
+/// and retried on the next run.
 ///
-/// A pane whose glyphs do not fit the atlas together stays unrecorded, so
-/// every run rebuilds it and restarts the atlas.
+/// A restart during that second pass, which happens when the visible glyphs
+/// of all panes do not fit the atlas together, leaves the panes the pass
+/// already rebuilt stale until the next run. A pane whose own glyphs do not
+/// fit the atlas stays unrecorded, so every run rebuilds it and restarts the
+/// atlas.
 ///
 /// TODO: grow the atlas instead of restarting it when it is full, so such a
 /// pane settles.
@@ -185,53 +199,19 @@ fn upload_terminal_cells(
     metrics: Res<TerminalCellMetricsResource>,
 ) {
     let restarts_before = atlas.restarts;
-    for (entity, mut state, cells, view) in &mut terminals {
-        let basis = UploadBasis::current(view, &atlas, &metrics);
-        if state.needs_upload(basis, cells.is_changed()) {
-            upload_pane(
-                &mut state,
-                &mut atlas,
-                &mut buffers,
-                entity,
-                &cells,
-                &fonts,
-                basis,
-            );
+    for after_restart in [false, true] {
+        if after_restart && atlas.restarts == restarts_before {
+            break;
         }
-    }
-    if atlas.restarts == restarts_before {
-        return;
-    }
-    for (entity, mut state, cells, view) in &mut terminals {
-        let basis = UploadBasis::current(view, &atlas, &metrics);
-        if state.needs_upload(basis, false) {
-            upload_pane(
-                &mut state,
-                &mut atlas,
-                &mut buffers,
-                entity,
-                &cells,
-                &fonts,
-                basis,
-            );
+        for (entity, mut state, cells, view) in &mut terminals {
+            let basis = UploadBasis::current(view, &atlas, &metrics);
+            let cells_changed = !after_restart && cells.is_changed();
+            if state.needs_upload(basis, cells_changed)
+                && let Err(err) = state.upload(&mut atlas, &mut buffers, &cells, &fonts, basis)
+            {
+                warn!(terminal = ?entity, %err, "cell upload failed; the next run retries it");
+            }
         }
-    }
-}
-
-/// Uploads one pane; a failure is logged and forgets the recorded build, so
-/// the next run rebuilds the pane.
-fn upload_pane(
-    state: &mut TerminalMaterialState,
-    atlas: &mut GlyphAtlas,
-    buffers: &mut Assets<ShaderBuffer>,
-    entity: Entity,
-    cells: &TerminalCells,
-    fonts: &TerminalFonts,
-    basis: UploadBasis,
-) {
-    if let Err(err) = state.upload(atlas, buffers, cells, fonts, basis) {
-        warn!(terminal = ?entity, %err, "cell upload failed; the next run retries it");
-        state.uploaded = None;
     }
 }
 
@@ -259,7 +239,7 @@ fn fill_cells(
                 GridSlot::Empty => left_half = None,
                 GridSlot::Cell(cell) => {
                     let gpu = GpuCell {
-                        glyph_index: resolve_glyph_index(cell, state, fonts, atlas, phys_font_size),
+                        glyph_index: resolve_glyph_index(state, atlas, cell, fonts, phys_font_size),
                         fg_packed: packed_palette.cell_fg(cell.fg),
                         bg_packed: packed_palette.cell_bg(cell.bg),
                         style_flags: u32::from(
@@ -327,10 +307,10 @@ fn composable_marks(text: &str) -> impl Iterator<Item = char> + '_ {
 }
 
 fn resolve_glyph_index(
-    cell: &GridCell,
     state: &mut TerminalMaterialState,
-    fonts: &TerminalFonts,
     atlas: &mut GlyphAtlas,
+    cell: &GridCell,
+    fonts: &TerminalFonts,
     phys_font_size: u16,
 ) -> u32 {
     if cell.is_blank() {
@@ -937,12 +917,12 @@ mod tests {
     }
 
     /// Asserts that an upload with a missing buffer fails before touching
-    /// the atlas, the glyph table or the recorded build.
+    /// the atlas or the glyph table, and forgets the recorded build.
     ///
     /// Case: a pane's cell buffer asset is gone when its next frame, which
     /// also resizes the pane and shows new glyphs, arrives.
     #[test]
-    fn an_upload_with_a_missing_buffer_changes_nothing() {
+    fn an_upload_with_a_missing_buffer_forgets_the_recorded_build() {
         let fonts = TerminalFonts::default();
         let mut atlas = GlyphAtlas::default();
         let (mut buffers, mut state) = buffers_and_state();
@@ -960,7 +940,48 @@ mod tests {
         assert!(matches!(result, Err(RendererError::MissingShaderBuffer)));
         assert_eq!(atlas.generation, generation);
         assert_eq!(state.glyph_index_map, glyphs);
-        assert_eq!(state.uploaded, Some(built));
+        assert_eq!(state.uploaded, None);
+    }
+
+    /// Asserts that an upload rewrites the glyph buffer only when its glyph
+    /// table was rebuilt or gained a glyph.
+    ///
+    /// Case: a pane receives output that reuses only glyphs it already
+    /// shows, and then output that introduces a new one.
+    #[test]
+    fn an_upload_rewrites_the_glyph_buffer_only_when_the_table_changed() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let (mut buffers, mut state) = buffers_and_state();
+        let basis = basis_at((2, 1), &atlas, 16);
+        state
+            .upload(&mut atlas, &mut buffers, &row_of("ab"), &fonts, basis)
+            .expect("both buffers exist");
+        buffers
+            .get_mut(&state.glyphs_buffer)
+            .expect("the glyph buffer exists")
+            .data = None;
+
+        state
+            .upload(&mut atlas, &mut buffers, &row_of("ba"), &fonts, basis)
+            .expect("both buffers exist");
+        let encoded_glyphs = |buffers: &Assets<ShaderBuffer>, state: &TerminalMaterialState| {
+            buffers
+                .get(&state.glyphs_buffer)
+                .and_then(|buffer| buffer.data.clone())
+        };
+        assert_eq!(
+            encoded_glyphs(&buffers, &state),
+            None,
+            "known glyphs leave the glyph buffer unwritten"
+        );
+
+        state
+            .upload(&mut atlas, &mut buffers, &row_of("bc"), &fonts, basis)
+            .expect("both buffers exist");
+        let mut expected = ShaderBuffer::default();
+        expected.set_data(&state.cpu_glyphs);
+        assert_eq!(encoded_glyphs(&buffers, &state), expected.data);
     }
 
     /// Asserts that a pane with no visible cells uploads one-element cell

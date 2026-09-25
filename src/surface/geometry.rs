@@ -18,10 +18,7 @@ pub(crate) enum Side {
 /// is derived from, so every hit-test and resize divides by the same
 /// numbers.
 pub(crate) fn cell_pitch_phys(metrics: &CellMetrics) -> (f32, f32) {
-    (
-        metrics.advance_phys.floor().max(1.0),
-        metrics.line_height_phys.floor().max(1.0),
-    )
+    metrics.cell_size_phys().into()
 }
 
 /// Pointer in pane-local physical px (origin = pane node top-left), or `None`

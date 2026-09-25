@@ -7,7 +7,7 @@ use crate::glyph::{
 };
 use crate::material::TerminalMaterialSystems;
 use bevy::{
-    asset::RenderAssetUsages,
+    asset::{AssetEventSystems, RenderAssetUsages},
     image::ImageSampler,
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
@@ -22,14 +22,15 @@ impl Plugin for TerminalGlyphPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((TerminalGlyphAtlasPlugin, TerminalFontPlugin))
             .add_systems(Startup, init_atlas_image)
-            // NOTE: Must run in `PostUpdate`, the schedule of the
-            // `TerminalMaterialSystems::UpdateMaterial` systems, so the
-            // `.after` ordering is honoured by Bevy's executor — cross-schedule
-            // `.after` is silently ignored.
+            // NOTE: `sync_atlas_image` must run in `PostUpdate`, the schedule
+            // of the `TerminalMaterialSystems::UpdateMaterial` systems,
+            // because Bevy's executor silently ignores an `.after` across
+            // schedules.
             .add_systems(
                 PostUpdate,
                 sync_atlas_image
                     .after(TerminalMaterialSystems::UpdateMaterial)
+                    .before(AssetEventSystems)
                     .run_if(resource_changed::<GlyphAtlas>),
             );
     }

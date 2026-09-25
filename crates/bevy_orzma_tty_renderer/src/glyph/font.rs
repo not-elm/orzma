@@ -1,5 +1,5 @@
-//! Terminal fonts: the faces the grid draws with, their cell metrics, and
-//! the systems that keep those metrics current.
+//! Terminal fonts: the faces the grid draws with and their cell metrics,
+//! kept current with the font size and the window's scale factor.
 
 use crate::bundled::{
     BOLD, BOLD_ITALIC, FALLBACK_BOLD, FALLBACK_BOLD_ITALIC, FALLBACK_ITALIC, FALLBACK_REGULAR,
@@ -69,43 +69,20 @@ impl Plugin for TerminalFontPlugin {
                 Startup,
                 init_cell_metrics_from_primary_window.in_set(TerminalFontInitSet::InitCellMetrics),
             )
+            // NOTE: Both runs are needed. The PreUpdate run lets `Update`
+            // systems size the grid from the new metrics in the update that
+            // delivers a scale factor change, and the PostUpdate run applies a
+            // font size that `Update` changed before that update's upload.
+            .add_systems(
+                PreUpdate,
+                update_cell_metrics.run_if(resource_exists::<TerminalCellMetricsResource>),
+            )
             .add_systems(
                 PostUpdate,
                 update_cell_metrics
                     .in_set(MaterialStage::Metrics)
                     .run_if(resource_exists::<TerminalCellMetricsResource>),
             );
-    }
-}
-
-/// Inserts `TerminalCellMetricsResource` from the PrimaryWindow's
-/// scale_factor and `TerminalFontSize`. The very first metrics already
-/// carry the OS-reported scale factor, not a DPR of 1.0.
-///
-/// The system runs only while exactly one primary window exists; without
-/// one (under `MinimalPlugins`, say) it is skipped.
-fn init_cell_metrics_from_primary_window(
-    mut commands: Commands,
-    fonts: Res<TerminalFonts>,
-    font_size: Res<TerminalFontSize>,
-    window: Single<&Window, With<PrimaryWindow>>,
-) {
-    let phys_font_size = physical_font_size(font_size.0, window.scale_factor());
-    commands.insert_resource(TerminalCellMetricsResource::new(&fonts, phys_font_size));
-}
-
-/// Rewrites `TerminalCellMetricsResource` when the physical font size that
-/// `TerminalFontSize` and the primary window's scale factor give differs
-/// from the one the metrics were measured at.
-fn update_cell_metrics(
-    mut metrics: ResMut<TerminalCellMetricsResource>,
-    fonts: Res<TerminalFonts>,
-    font_size: Res<TerminalFontSize>,
-    window: Single<&Window, With<PrimaryWindow>>,
-) {
-    let phys_font_size = physical_font_size(font_size.0, window.scale_factor());
-    if metrics.phys_font_size != phys_font_size {
-        *metrics = TerminalCellMetricsResource::new(&fonts, phys_font_size);
     }
 }
 
@@ -151,7 +128,8 @@ impl CellMetrics {
 /// rewritten, with the change marked, only when the physical font size —
 /// the font size times the primary window's scale factor, rounded —
 /// differs from the one `metrics` was measured at. A scale factor change
-/// that rounds to the same physical size leaves it untouched.
+/// that rounds to the same physical size leaves it untouched. It already
+/// reflects the primary window's current scale factor when `Update` runs.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct TerminalCellMetricsResource {
     /// Current cell pitch and typographic measurements in physical pixels.
@@ -526,6 +504,37 @@ impl FontFace {
     }
 }
 
+/// Inserts `TerminalCellMetricsResource` from the PrimaryWindow's
+/// scale_factor and `TerminalFontSize`. The very first metrics already
+/// carry the OS-reported scale factor, not a DPR of 1.0.
+///
+/// The system runs only while exactly one primary window exists; without
+/// one (under `MinimalPlugins`, say) it is skipped.
+fn init_cell_metrics_from_primary_window(
+    mut commands: Commands,
+    fonts: Res<TerminalFonts>,
+    font_size: Res<TerminalFontSize>,
+    window: Single<&Window, With<PrimaryWindow>>,
+) {
+    let phys_font_size = physical_font_size(font_size.0, window.scale_factor());
+    commands.insert_resource(TerminalCellMetricsResource::new(&fonts, phys_font_size));
+}
+
+/// Rewrites `TerminalCellMetricsResource` when the physical font size that
+/// `TerminalFontSize` and the primary window's scale factor give differs
+/// from the one the metrics were measured at.
+fn update_cell_metrics(
+    mut metrics: ResMut<TerminalCellMetricsResource>,
+    fonts: Res<TerminalFonts>,
+    font_size: Res<TerminalFontSize>,
+    window: Single<&Window, With<PrimaryWindow>>,
+) {
+    let phys_font_size = physical_font_size(font_size.0, window.scale_factor());
+    if metrics.phys_font_size != phys_font_size {
+        *metrics = TerminalCellMetricsResource::new(&fonts, phys_font_size);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,7 +699,7 @@ mod tests {
         let upem = f32::from(face.units_per_em());
         let em_scale = (i32::from(face.ascender()) - i32::from(face.descender())) as f32 / upem;
         let px_scale = 12.0_f32 * em_scale;
-        let cell_w_phys_floor = m.advance_phys.floor().max(1.0);
+        let cell_w_phys_floor = m.cell_size_phys().x;
 
         for (name, face_arc) in [
             ("Regular", &fonts.regular),
@@ -1048,5 +1057,46 @@ mod tests {
                 .last_changed(),
             marked
         );
+    }
+
+    /// Asserts that a system in `Update` reads the metrics of a new scale
+    /// factor in the update that delivers the change, not one update later.
+    ///
+    /// Case: the user drags the window onto a display with twice the scale
+    /// factor, and the window's grid size is recomputed in that update.
+    #[test]
+    fn update_reads_the_metrics_of_a_new_scale_factor_in_the_same_update() {
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+
+        #[derive(Resource, Default)]
+        struct SizeReadInUpdate(Option<u16>);
+
+        fn record_size(
+            mut read: ResMut<SizeReadInUpdate>,
+            metrics: Res<TerminalCellMetricsResource>,
+        ) {
+            read.0 = Some(metrics.phys_font_size);
+        }
+
+        let mut app = App::new();
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        app.add_plugins(TerminalFontPlugin)
+            .init_resource::<SizeReadInUpdate>()
+            .add_systems(Update, record_size);
+        app.update();
+        assert_eq!(app.world().resource::<SizeReadInUpdate>().0, Some(12));
+
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("the primary window")
+            .resolution
+            .set_scale_factor(2.0);
+        app.update();
+        assert_eq!(app.world().resource::<SizeReadInUpdate>().0, Some(24));
     }
 }

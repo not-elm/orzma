@@ -323,7 +323,7 @@ fn write_terminal_params(
         };
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
             (Some(hovered), Some(id)) if hovered == entity => {
-                (id.get(), if hover.modifier_held { 1 } else { 0 })
+                (id.get(), u32::from(hover.modifier_held))
             }
             _ => (0, 0),
         };
@@ -386,9 +386,8 @@ fn selection_uniforms(
         (i64::from(line.0) + i64::from(display_offset)).clamp(-1, i64::from(rows)) as i32
     };
     let kind = match sel.geometry {
-        // NOTE: Block degrades to the char encoding until the shader
-        // grows a rectangular mode; SelectionKind cannot currently
-        // produce Block, so no user-visible selection takes this arm.
+        // TODO: Give the shader a rectangular selection mode so that a
+        // `Block` selection stops painting as a char selection.
         SelectionGeometry::Linear | SelectionGeometry::Block => 1u32,
         SelectionGeometry::Lines => 2,
     };
@@ -479,8 +478,8 @@ mod tests {
     /// Asserts that a pane without overlays binds no overlay textures,
     /// even after it bound some.
     ///
-    /// Case: the last webview in a pane unmounts, so the pane loses its
-    /// `TerminalOverlays`.
+    /// Case: a host plugin removes a pane's `TerminalOverlays` outright,
+    /// instead of resetting its slots, after the pane displayed a webview.
     #[test]
     fn a_pane_without_overlays_binds_no_overlay_textures() {
         const WEBVIEW: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000004");
@@ -539,6 +538,11 @@ mod tests {
         assert_eq!(params.cursor_thickness_phys, 2.0);
     }
 
+    /// Asserts that the default uniforms mark no link as hovered and leave
+    /// the hover accent off.
+    ///
+    /// Case: the user splits a pane while the pointer rests on a link in the
+    /// old pane, and the new pane starts from the default uniforms.
     #[test]
     fn terminal_params_default_hyperlink_uniforms_are_zero() {
         let params = TerminalParams::default();
@@ -546,16 +550,30 @@ mod tests {
         assert_eq!(params.hover_active, 0);
     }
 
+    /// Asserts that the default uniforms draw the pane at full brightness.
+    ///
+    /// Case: a new window opens with a single pane, which carries no
+    /// inactive-pane style.
     #[test]
     fn terminal_params_default_dim_is_one() {
         assert_eq!(TerminalParams::default().dim, 1.0);
     }
 
+    /// Asserts that the uniform block's std140 size is 336 bytes with the
+    /// overlay rects included.
+    ///
+    /// Case: a pane shows an inline webview whose placement the shader reads
+    /// from the overlay rects in the uniform block.
     #[test]
     fn terminal_params_uniform_size_includes_overlay_rects() {
         assert_eq!(<TerminalParams as ShaderType>::min_size().get(), 336);
     }
 
+    /// Asserts that the default uniforms apply no background tint and leave
+    /// overlays undimmed and in full color.
+    ///
+    /// Case: the only pane in a window shows an inline webview, and no
+    /// inactive-pane style has ever been applied to it.
     #[test]
     fn terminal_params_default_inactive_treatment_is_noop() {
         let p = TerminalParams::default();
@@ -609,6 +627,12 @@ mod tests {
         );
     }
 
+    /// Asserts that a black default background paints the padding in the
+    /// fallback color rather than black.
+    ///
+    /// Case: the shell never sets a background color, so the pane keeps its
+    /// built-in black one, and the window's width leaves a strip beside the
+    /// grid's last column.
     #[test]
     fn padding_color_falls_back_when_default_bg_is_black() {
         let got = padding_color(Rgb { r: 0, g: 0, b: 0 }, [30, 32, 40]);
@@ -616,6 +640,11 @@ mod tests {
         assert_eq!(got, Vec4::new(c.red, c.green, c.blue, 1.0));
     }
 
+    /// Asserts that a non-black default background paints the padding in
+    /// that background, ignoring the fallback color.
+    ///
+    /// Case: a theme script sets a dark navy background with `OSC 11`, and
+    /// the window's width leaves a strip beside the grid's last column.
     #[test]
     fn padding_color_uses_default_bg_when_set() {
         let got = padding_color(

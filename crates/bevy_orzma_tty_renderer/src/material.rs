@@ -1,5 +1,5 @@
-//! The terminal's UI material: its shader data layout and bind group, and
-//! the plugin that keeps every pane's material current.
+//! The terminal's UI material: its shader data layout and bind group, kept
+//! current for every pane.
 
 use crate::{
     glyph::{AtlasImage, atlas::GlyphRect},
@@ -10,7 +10,7 @@ use crate::{
     schema::{Rgb, Style},
 };
 use bevy::{
-    asset::{load_internal_asset, uuid_handle},
+    asset::{AssetEventSystems, load_internal_asset, uuid_handle},
     ecs::system::{SystemParamItem, lifetimeless::SRes},
     prelude::*,
     render::{
@@ -34,22 +34,12 @@ mod upload;
 /// Ordering anchor for the systems that write each terminal's material.
 ///
 /// A system that resizes a terminal's grid from the layout must run
-/// `.before(Self::UpdateMaterial)`.
+/// `.before(Self::UpdateMaterial)`. The set runs before
+/// `AssetEventSystems`, so the asset writes it makes reach the render world
+/// in the same update.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum TerminalMaterialSystems {
     UpdateMaterial,
-}
-
-/// Ordering stages inside [`TerminalMaterialSystems::UpdateMaterial`], run
-/// in declaration order.
-#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
-pub(crate) enum MaterialStage {
-    /// Resolves the shared cell metrics.
-    Metrics,
-    /// Rebuilds and uploads each pane's cell and glyph buffers.
-    Upload,
-    /// Writes each pane's material uniforms.
-    Params,
 }
 
 const TERMINAL_SHADER_HANDLE: Handle<Shader> = uuid_handle!("98195199-3092-42b6-b370-77dfc2ef83f9");
@@ -81,6 +71,13 @@ impl Plugin for TerminalMaterialPlugin {
                 )
                     .chain()
                     .in_set(TerminalMaterialSystems::UpdateMaterial),
+            )
+            // NOTE: An asset write that lands after `AssetEventSystems` is
+            // extracted only on a later update, which on-demand redraw may not
+            // run until the next wake.
+            .configure_sets(
+                PostUpdate,
+                TerminalMaterialSystems::UpdateMaterial.before(AssetEventSystems),
             )
             .add_observer(init_material_node);
     }
@@ -340,6 +337,18 @@ impl Default for TerminalOverlays {
             textures: [const { None }; OVERLAY_SLOTS],
         }
     }
+}
+
+/// Ordering stages inside [`TerminalMaterialSystems::UpdateMaterial`], run
+/// in declaration order.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub(crate) enum MaterialStage {
+    /// Resolves the shared cell metrics.
+    Metrics,
+    /// Rebuilds and uploads each pane's cell and glyph buffers.
+    Upload,
+    /// Writes each pane's material uniforms.
+    Params,
 }
 
 /// One GPU-side cell — 20 bytes, indexed `row * cols + col` in the storage buffer.
