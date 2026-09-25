@@ -147,9 +147,11 @@ impl CellMetrics {
 
 /// The canonical cell pitch and advance values.
 ///
-/// It is inserted at startup from the PrimaryWindow's scale_factor and
-/// rewritten whenever the DPR or the font size changes (e.g. the window
-/// moves to a different-DPR display).
+/// It is inserted at startup from the PrimaryWindow's scale_factor, and
+/// rewritten, with the change marked, only when the physical font size —
+/// the font size times the primary window's scale factor, rounded —
+/// differs from the one `metrics` was measured at. A scale factor change
+/// that rounds to the same physical size leaves it untouched.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct TerminalCellMetricsResource {
     /// Current cell pitch and typographic measurements in physical pixels.

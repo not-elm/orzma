@@ -1,5 +1,6 @@
 //! Per-pane cell upload: rebuilds each terminal's cell and glyph buffers
-//! when its cells, its size, the glyph atlas or the font size changed.
+//! when its cells or its size change, the glyph atlas restarts, or the font
+//! size changes.
 
 use crate::{
     error::{RendererError, RendererResult},
@@ -66,8 +67,8 @@ impl TerminalMaterialState {
     /// Rebuilds both buffers for `cells` at `basis`, recording `basis` only
     /// when the atlas did not restart during the build.
     ///
-    /// The glyph table is kept only when the recorded build has the atlas
-    /// restarts and the font size of `basis`. A zero in either axis of
+    /// The glyph table is kept only when the recorded build used the same
+    /// atlas restart count and font size as `basis`. A zero in either axis of
     /// `basis.dims` uploads the one-element buffers wgpu requires instead of
     /// empty ones, and rows and columns of `cells` outside the dimensions
     /// are ignored.
@@ -161,6 +162,12 @@ impl UploadBasis {
 /// Rebuilds the buffers of every pane whose cells, size, atlas restart
 /// count or font size changed; when a rebuild restarted the atlas, rebuilds
 /// once more every pane that restart left stale.
+///
+/// A pane whose glyphs do not fit the atlas together stays unrecorded, so
+/// every run rebuilds it and restarts the atlas.
+///
+/// TODO: grow the atlas instead of restarting it when it is full, so such a
+/// pane settles.
 fn upload_terminal_cells(
     mut atlas: ResMut<GlyphAtlas>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,

@@ -820,4 +820,90 @@ mod tests {
             );
         }
     }
+
+    /// Asserts that an upload writes the cell array into the buffer the
+    /// material binds as `cells`, and the glyph array into the buffer it
+    /// binds as `glyphs`.
+    ///
+    /// Case: a terminal node is created and renders its very first
+    /// character.
+    #[test]
+    fn an_upload_lands_in_the_buffers_its_material_binds() {
+        use crate::glyph::atlas::GlyphAtlas;
+        use crate::glyph::font::{TerminalCellMetricsResource, TerminalFonts};
+        use crate::schema::{Color as CellColor, GridCell, GridSlot, TerminalCells, TerminalView};
+
+        const ATLAS: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000004");
+        let fonts = TerminalFonts::default();
+        let mut app = App::new();
+        app.init_resource::<Assets<ShaderBuffer>>()
+            .init_resource::<Assets<TerminalUiMaterial>>()
+            .insert_resource(AtlasImage {
+                handle: ATLAS,
+                last_generation: 0,
+            })
+            .insert_resource(TerminalCellMetricsResource::new(&fonts, 16))
+            .insert_resource(fonts)
+            .insert_resource(GlyphAtlas::default())
+            .add_observer(init_material_node)
+            .add_plugins(CellUploadPlugin);
+
+        let material = app
+            .world_mut()
+            .resource_mut::<Assets<TerminalUiMaterial>>()
+            .add(TerminalUiMaterial::default());
+        let view = TerminalView {
+            cols: 1,
+            rows: 1,
+            ..Default::default()
+        };
+        let cells = TerminalCells {
+            cells: vec![vec![GridSlot::Cell(GridCell {
+                text: "x".to_string(),
+                fg: CellColor::DefaultForeground,
+                bg: CellColor::DefaultBackground,
+                style: 0,
+                hyperlink: None,
+            })]],
+            ..Default::default()
+        };
+        app.world_mut()
+            .spawn((MaterialNode(material.clone()), view, cells));
+        app.update();
+
+        let mut cell_seed = ShaderBuffer::default();
+        cell_seed.set_data(vec![GpuCell::default()]);
+        let mut glyph_seed = ShaderBuffer::default();
+        glyph_seed.set_data(vec![GpuGlyph::default()]);
+
+        let seeded = app
+            .world()
+            .resource::<Assets<TerminalUiMaterial>>()
+            .get(&material)
+            .expect("the node's material");
+        let buffers = app.world().resource::<Assets<ShaderBuffer>>();
+        let cells_buffer = buffers.get(&seeded.cells).expect("the cells asset exists");
+        let glyphs_buffer = buffers
+            .get(&seeded.glyphs)
+            .expect("the glyphs asset exists");
+
+        assert_ne!(
+            cells_buffer.data, cell_seed.data,
+            "the upload must replace the seed cell"
+        );
+        assert_eq!(
+            cells_buffer.data.as_ref().map(Vec::len),
+            cell_seed.data.as_ref().map(Vec::len),
+            "a handle swap would land the glyph array's length here instead"
+        );
+        assert_ne!(
+            glyphs_buffer.data, glyph_seed.data,
+            "the upload must replace the seed glyph"
+        );
+        assert_eq!(
+            glyphs_buffer.data.as_ref().map(Vec::len),
+            glyph_seed.data.as_ref().map(Vec::len),
+            "a handle swap would land the cell array's length here instead"
+        );
+    }
 }
