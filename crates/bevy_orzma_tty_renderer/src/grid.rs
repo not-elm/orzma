@@ -17,6 +17,11 @@ pub use view::TerminalView;
 ///
 /// Both are required components of [`OrzmuxPane`]. The plugin must be
 /// added before any pane is promoted.
+///
+/// # Panics
+///
+/// Panics if any entity has carried `OrzmuxPane` before the plugin is
+/// added.
 #[derive(Default)]
 pub struct TerminalGridPlugin;
 

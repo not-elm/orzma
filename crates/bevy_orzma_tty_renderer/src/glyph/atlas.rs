@@ -2,8 +2,10 @@
 //! coverage texture.
 
 use crate::font::TerminalFonts;
-use crate::glyph::GlyphKey;
-use crate::glyph::outline::{GlyphTier, fit_symbol_to_cell, outline_marks, resolve_glyph, union};
+use crate::glyph::{
+    GlyphKey,
+    outline::{GlyphTier, fit_symbol_to_cell, outline_marks, resolve_glyph, union},
+};
 use ab_glyph::{Font, OutlinedGlyph, PxScale};
 use bevy::{platform::collections::HashMap, prelude::*};
 use std::iter::once;

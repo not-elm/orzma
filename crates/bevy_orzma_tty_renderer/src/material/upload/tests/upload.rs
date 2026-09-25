@@ -1,8 +1,10 @@
 //! Tests for rebuilding one pane's cell and glyph buffers.
 
 use super::*;
-use crate::material::upload::palette::{PackedPalette, TRANSPARENT_BG};
-use crate::material::upload::test_support::{cell_with_link, gpu_cell_fingerprint, state_for};
+use crate::material::upload::{
+    palette::{PackedPalette, TRANSPARENT_BG},
+    test_support::{cell_with_link, gpu_cell_fingerprint, state_for},
+};
 use orzma_vt::prelude::{Color as CellColor, Palette};
 
 /// The fingerprint a default cell packs to under the default palette:

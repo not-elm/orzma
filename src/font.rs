@@ -5,8 +5,7 @@
 use crate::configs::OrzmaConfigsResource;
 use bevy::prelude::*;
 use bevy::text::{Font, FontCx, FontSize, FontSource, FontStyle, FontWeight, TextFont};
-use bevy_orzma_tty_renderer::bundled;
-use bevy_orzma_tty_renderer::bundled::FALLBACK_REGULAR;
+use bevy_orzma_tty_renderer::bundled::{self, FALLBACK_REGULAR};
 use bevy_orzma_tty_renderer::prelude::{
     FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts,
 };
