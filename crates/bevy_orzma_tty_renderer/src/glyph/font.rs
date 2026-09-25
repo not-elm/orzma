@@ -207,16 +207,19 @@ fn primary_face(bytes: Vec<u8>, index: u32, face: FontFace) -> RendererResult<Fo
         .map_err(|source| RendererError::FontParse { face, source })
 }
 
-/// Builds one fallback `FontArc` from owned bytes (always face index 0),
-/// tagging parse failures with the offending face.
-fn fallback_face(bytes: Vec<u8>, face: FontFace) -> RendererResult<FontArc> {
-    FontArc::try_from_vec(bytes).map_err(|source| RendererError::FontParse { face, source })
+/// Loads one bundled fallback face at face index 0, tagging parse failures
+/// with the face it stands in for.
+fn fallback_face(bytes: &'static [u8], face: FontFace) -> RendererResult<FontArc> {
+    FontArc::try_from_slice(bytes).map_err(|source| RendererError::FontParse { face, source })
 }
 
 impl TerminalFonts {
     /// Constructs a `TerminalFonts` from four primary `(bytes, .ttc index)`
-    /// pairs plus four fallback byte buffers. Each primary face is loaded at
-    /// its own collection index; fallback and symbol faces are always index 0.
+    /// pairs, loading each primary face at its own collection index.
+    ///
+    /// The fallback faces are always the bundled UDEV Gothic 35 faces and
+    /// the symbol face is always the bundled Noto Sans Symbols 2, so callers
+    /// supply neither.
     ///
     /// # Errors
     ///
@@ -227,20 +230,16 @@ impl TerminalFonts {
         bold: (Vec<u8>, u32),
         italic: (Vec<u8>, u32),
         bold_italic: (Vec<u8>, u32),
-        fallback_regular: Vec<u8>,
-        fallback_bold: Vec<u8>,
-        fallback_italic: Vec<u8>,
-        fallback_bold_italic: Vec<u8>,
     ) -> RendererResult<Self> {
         let regular_index = regular.1;
         let regular = primary_face(regular.0, regular.1, FontFace::Regular)?;
         let bold = primary_face(bold.0, bold.1, FontFace::Bold)?;
         let italic = primary_face(italic.0, italic.1, FontFace::Italic)?;
         let bold_italic = primary_face(bold_italic.0, bold_italic.1, FontFace::BoldItalic)?;
-        let fallback_regular = fallback_face(fallback_regular, FontFace::Regular)?;
-        let fallback_bold = fallback_face(fallback_bold, FontFace::Bold)?;
-        let fallback_italic = fallback_face(fallback_italic, FontFace::Italic)?;
-        let fallback_bold_italic = fallback_face(fallback_bold_italic, FontFace::BoldItalic)?;
+        let fallback_regular = fallback_face(FALLBACK_REGULAR, FontFace::Regular)?;
+        let fallback_bold = fallback_face(FALLBACK_BOLD, FontFace::Bold)?;
+        let fallback_italic = fallback_face(FALLBACK_ITALIC, FontFace::Italic)?;
+        let fallback_bold_italic = fallback_face(FALLBACK_BOLD_ITALIC, FontFace::BoldItalic)?;
         let symbol = bundled_symbol_face();
         Ok(Self {
             regular,
@@ -256,12 +255,12 @@ impl TerminalFonts {
         })
     }
 
-    /// Constructs a `TerminalFonts` from eight owned TTF byte buffers, one
-    /// per face (four primary + four fallback), loading every primary face
-    /// at collection index 0.
+    /// Constructs a `TerminalFonts` from four owned TTF byte buffers, one
+    /// per primary face, loading every primary face at collection index 0.
     ///
-    /// The symbol fallback face is always the bundled Noto Sans Symbols 2,
-    /// so callers do not supply it.
+    /// The fallback faces are always the bundled UDEV Gothic 35 faces and
+    /// the symbol face is always the bundled Noto Sans Symbols 2, so callers
+    /// supply neither.
     ///
     /// # Errors
     ///
@@ -272,21 +271,8 @@ impl TerminalFonts {
         bold: Vec<u8>,
         italic: Vec<u8>,
         bold_italic: Vec<u8>,
-        fallback_regular: Vec<u8>,
-        fallback_bold: Vec<u8>,
-        fallback_italic: Vec<u8>,
-        fallback_bold_italic: Vec<u8>,
     ) -> RendererResult<Self> {
-        Self::from_faces(
-            (regular, 0),
-            (bold, 0),
-            (italic, 0),
-            (bold_italic, 0),
-            fallback_regular,
-            fallback_bold,
-            fallback_italic,
-            fallback_bold_italic,
-        )
+        Self::from_faces((regular, 0), (bold, 0), (italic, 0), (bold_italic, 0))
     }
 
     /// Returns the primary face matching `face`.
@@ -509,10 +495,6 @@ mod tests {
             bundled::BOLD.to_vec(),
             bundled::ITALIC.to_vec(),
             bundled::BOLD_ITALIC.to_vec(),
-            bundled::FALLBACK_REGULAR.to_vec(),
-            bundled::FALLBACK_BOLD.to_vec(),
-            bundled::FALLBACK_ITALIC.to_vec(),
-            bundled::FALLBACK_BOLD_ITALIC.to_vec(),
         )
         .expect("from_bytes");
         let via_faces = TerminalFonts::from_faces(
@@ -520,10 +502,6 @@ mod tests {
             (bundled::BOLD.to_vec(), 0),
             (bundled::ITALIC.to_vec(), 0),
             (bundled::BOLD_ITALIC.to_vec(), 0),
-            bundled::FALLBACK_REGULAR.to_vec(),
-            bundled::FALLBACK_BOLD.to_vec(),
-            bundled::FALLBACK_ITALIC.to_vec(),
-            bundled::FALLBACK_BOLD_ITALIC.to_vec(),
         )
         .expect("from_faces");
         assert_eq!(via_faces.regular_index, 0);
@@ -550,10 +528,6 @@ mod tests {
             b"not a font".to_vec(),
             bundled::ITALIC.to_vec(),
             bundled::BOLD_ITALIC.to_vec(),
-            bundled::FALLBACK_REGULAR.to_vec(),
-            bundled::FALLBACK_BOLD.to_vec(),
-            bundled::FALLBACK_ITALIC.to_vec(),
-            bundled::FALLBACK_BOLD_ITALIC.to_vec(),
         );
         assert!(matches!(
             result,
@@ -562,6 +536,34 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// Asserts that `from_faces` sets the bundled UDEV Gothic 35 faces as
+    /// the fallbacks, whatever the primary faces are.
+    ///
+    /// Case: the user configures a system family whose four faces all
+    /// resolve to one file, and the grid still needs CJK coverage for every
+    /// style.
+    #[test]
+    fn from_faces_sets_the_bundled_fallbacks() {
+        let fonts = TerminalFonts::from_faces(
+            (bundled::REGULAR.to_vec(), 0),
+            (bundled::REGULAR.to_vec(), 0),
+            (bundled::REGULAR.to_vec(), 0),
+            (bundled::REGULAR.to_vec(), 0),
+        )
+        .expect("from_faces accepts JBM regular for all four faces");
+        for (face, bytes) in [
+            (FontFace::Regular, bundled::FALLBACK_REGULAR),
+            (FontFace::Bold, bundled::FALLBACK_BOLD),
+            (FontFace::Italic, bundled::FALLBACK_ITALIC),
+            (FontFace::BoldItalic, bundled::FALLBACK_BOLD_ITALIC),
+        ] {
+            assert!(
+                fonts.fallback_choice(&face).font_data() == bytes,
+                "{face:?} fallback is not the bundled face"
+            );
+        }
     }
 
     #[test]
@@ -710,17 +712,8 @@ mod tests {
         // Build a non-default TerminalFonts via from_bytes — same TTF for
         // all four faces (legal for a smoke test; the labels are advisory).
         let bytes: Vec<u8> = crate::bundled::REGULAR.to_vec();
-        let custom = TerminalFonts::from_bytes(
-            bytes.clone(),
-            bytes.clone(),
-            bytes.clone(),
-            bytes.clone(),
-            bytes.clone(),
-            bytes.clone(),
-            bytes.clone(),
-            bytes,
-        )
-        .expect("from_bytes accepts JBM regular for all eight slots");
+        let custom = TerminalFonts::from_bytes(bytes.clone(), bytes.clone(), bytes.clone(), bytes)
+            .expect("from_bytes accepts JBM regular for all four faces");
 
         // Use a sentinel: pre-insert THIS specific instance, then check
         // that the bytes pointer hasn't changed after Plugin::build.

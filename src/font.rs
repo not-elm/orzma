@@ -200,10 +200,6 @@ fn bridge_font_config(
             (bold.bytes, bold.index),
             (italic.bytes, italic.index),
             (bold_italic.bytes, bold_italic.index),
-            bundled::FALLBACK_REGULAR.to_vec(),
-            bundled::FALLBACK_BOLD.to_vec(),
-            bundled::FALLBACK_ITALIC.to_vec(),
-            bundled::FALLBACK_BOLD_ITALIC.to_vec(),
         )
         .expect("validated bytes must parse");
         regular_from_family
