@@ -8,8 +8,9 @@ use crate::{
         atlas::GlyphAtlas,
         font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
     },
-    material::{GpuCell, GpuGlyph, MaterialStage, STYLE_WIDE_RIGHT_HALF, pack_linear},
+    material::{GpuCell, GpuGlyph, STYLE_WIDE_RIGHT_HALF, pack_linear},
     schema::{TerminalCells, TerminalView},
+    system_set::MaterialStage,
 };
 use bevy::{platform::collections::HashMap, prelude::*, render::storage::ShaderBuffer};
 use orzma_vt::prelude::{Cell, CellWidth, Color as CellColor, HyperlinkId, Palette, Style};

@@ -6,7 +6,7 @@ use crate::bundled::{
     ITALIC, REGULAR, SYMBOL_REGULAR,
 };
 use crate::error::{RendererError, RendererResult};
-use crate::material::MaterialStage;
+use crate::system_set::MaterialStage;
 use ab_glyph::{Font, FontArc, FontVec, ScaleFont};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;

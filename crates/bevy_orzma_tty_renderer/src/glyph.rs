@@ -5,7 +5,7 @@ use crate::glyph::{
     atlas::{GlyphAtlas, TerminalGlyphAtlasPlugin},
     font::TerminalFontPlugin,
 };
-use crate::material::TerminalMaterialSystems;
+use crate::system_set::TerminalMaterialSystems;
 use bevy::{
     asset::{AssetEventSystems, RenderAssetUsages},
     image::ImageSampler,

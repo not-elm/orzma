@@ -7,6 +7,7 @@ use crate::{
         params::{TerminalParams, TerminalParamsPlugin},
         upload::{CellUploadPlugin, TerminalMaterialState},
     },
+    system_set::{MaterialStage, TerminalMaterialSystems},
 };
 use bevy::{
     asset::{AssetEventSystems, load_internal_asset, uuid_handle},
@@ -30,17 +31,6 @@ use orzma_vt::prelude::{Rgb, Style};
 
 mod params;
 mod upload;
-
-/// Ordering anchor for the systems that write each terminal's material.
-///
-/// A system that resizes a terminal's grid from the layout must run
-/// `.before(Self::UpdateMaterial)`. The set runs before
-/// `AssetEventSystems`, so the asset writes it makes reach the render world
-/// in the same update.
-#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
-pub enum TerminalMaterialSystems {
-    UpdateMaterial,
-}
 
 const TERMINAL_SHADER_HANDLE: Handle<Shader> = uuid_handle!("98195199-3092-42b6-b370-77dfc2ef83f9");
 
@@ -266,38 +256,6 @@ impl TerminalUiMaterial {
     }
 }
 
-/// Per-pane inactive-pane treatment for the terminal renderer: a background
-/// `tint` (rgb = target color in LINEAR space, `a` = blend amount) and a
-/// brightness `dim`. The shader blends each background source toward `tint.rgb`
-/// by `tint.a` before glyphs/overlays paint (background only), then multiplies
-/// the final color by `dim`. An absent component is treated as
-/// `{ dim: 1.0, tint: ZERO }` (full-bright, untinted / active).
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct PaneInactiveStyle {
-    /// Brightness multiplier in `0.0..=1.0`; `1.0` = full-bright.
-    pub dim: f32,
-    /// Background tint: rgb = target color (linear), `a` = blend amount in
-    /// `0.0..=1.0` (`0.0` = no tint / active).
-    pub tint: Vec4,
-    /// Inline-overlay (webview) brightness multiplier in `0.0..=1.0`; `1.0` =
-    /// full-bright. Applied to overlay samples only, independent of `tint`.
-    pub overlay_dim: f32,
-    /// Inline-overlay (webview) desaturation in `0.0..=1.0`; `0.0` = full color,
-    /// `1.0` = grey.
-    pub overlay_desaturate: f32,
-}
-
-impl Default for PaneInactiveStyle {
-    fn default() -> Self {
-        Self {
-            dim: 1.0,
-            tint: Vec4::ZERO,
-            overlay_dim: 1.0,
-            overlay_desaturate: 0.0,
-        }
-    }
-}
-
 /// Padding colour used for the area outside a terminal grid (and the whole
 /// quad while a grid is unpainted) when the terminal's default background
 /// is black. Defaults to black.
@@ -337,18 +295,6 @@ impl Default for TerminalOverlays {
             textures: [const { None }; OVERLAY_SLOTS],
         }
     }
-}
-
-/// Ordering stages inside [`TerminalMaterialSystems::UpdateMaterial`], run
-/// in declaration order.
-#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
-pub(crate) enum MaterialStage {
-    /// Resolves the shared cell metrics.
-    Metrics,
-    /// Rebuilds and uploads each pane's cell and glyph buffers.
-    Upload,
-    /// Writes each pane's material uniforms.
-    Params,
 }
 
 /// One GPU-side cell — 20 bytes, indexed `row * cols + col` in the storage buffer.

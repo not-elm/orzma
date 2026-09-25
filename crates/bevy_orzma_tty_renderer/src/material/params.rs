@@ -10,10 +10,11 @@ use crate::{
         font::{CellMetrics, TerminalCellMetricsResource},
     },
     material::{
-        MaterialStage, OVERLAY_SLOTS, PaneInactiveStyle, TerminalOverlays, TerminalPaddingFallback,
-        TerminalUiMaterial, pack_linear,
+        OVERLAY_SLOTS, TerminalOverlays, TerminalPaddingFallback, TerminalUiMaterial, pack_linear,
     },
+    pane_style::PaneInactiveStyle,
     schema::{HyperlinkHoverState, TerminalCells, TerminalView},
+    system_set::MaterialStage,
 };
 use bevy::{prelude::*, render::render_resource::ShaderType, window::PrimaryWindow};
 use orzma_vt::prelude::{GridLine, Palette, Rgb, SelectionGeometry, SelectionRange};

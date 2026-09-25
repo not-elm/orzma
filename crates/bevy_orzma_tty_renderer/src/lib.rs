@@ -10,7 +10,9 @@ mod error;
 pub mod glyph;
 mod grid;
 pub mod material;
+mod pane_style;
 pub mod schema;
+mod system_set;
 
 pub use crate::error::{RendererError, RendererResult};
 pub use crate::glyph::font::{
@@ -29,10 +31,11 @@ pub mod prelude {
     };
     pub use crate::grid::TerminalGridPlugin;
     pub use crate::material::{
-        OVERLAY_SLOTS, PaneInactiveStyle, TerminalMaterialSystems, TerminalOverlays,
-        TerminalPaddingFallback, TerminalUiMaterial,
+        OVERLAY_SLOTS, TerminalOverlays, TerminalPaddingFallback, TerminalUiMaterial,
     };
+    pub use crate::pane_style::PaneInactiveStyle;
     pub use crate::schema::*;
+    pub use crate::system_set::TerminalMaterialSystems;
 }
 
 pub struct TerminalRendererPlugin;
