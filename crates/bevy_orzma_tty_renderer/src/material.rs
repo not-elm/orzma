@@ -7,7 +7,6 @@ use crate::{
         params::{TerminalParams, TerminalParamsPlugin},
         upload::{CellUploadPlugin, TerminalMaterialState},
     },
-    schema::{Rgb, Style},
 };
 use bevy::{
     asset::{AssetEventSystems, load_internal_asset, uuid_handle},
@@ -27,6 +26,7 @@ use bevy::{
     },
     shader::ShaderRef,
 };
+use orzma_vt::prelude::{Rgb, Style};
 
 mod params;
 mod upload;
@@ -868,7 +868,8 @@ mod tests {
     fn an_upload_lands_in_the_buffers_its_material_binds() {
         use crate::glyph::atlas::GlyphAtlas;
         use crate::glyph::font::{TerminalCellMetricsResource, TerminalFonts};
-        use crate::schema::{Cell, TerminalCells, TerminalView};
+        use crate::schema::{TerminalCells, TerminalView};
+        use orzma_vt::prelude::Cell;
 
         let fonts = TerminalFonts::default();
         let (mut app, material) = material_node_app();

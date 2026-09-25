@@ -48,11 +48,12 @@ fn apply_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{
-        AnchoredPlacement, Cell, Cursor, DisplayOffset, GridColumn, GridLine, GridPoint,
-        InstanceId, PlacementSize, SelectionGeometry, SelectionRange, quiet_frame,
+    use crate::schema::quiet_frame;
+    use orzma_vt::prelude::{
+        AnchoredPlacement, Cell, Cursor, DirtyRow, DisplayOffset, Frame, GridColumn, GridLine,
+        GridPoint, GridSize, InstanceId, PlacementSize, Row, Run, SelectionGeometry,
+        SelectionRange, ViewportLine,
     };
-    use orzma_vt::prelude::{DirtyRow, Frame, GridSize, Row, Run, ViewportLine};
     use orzmux::prelude::PaneId;
 
     #[derive(Resource, Default)]

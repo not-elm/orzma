@@ -7,11 +7,10 @@ use crate::bundled::{
 };
 use crate::error::{RendererError, RendererResult};
 use crate::material::MaterialStage;
-use crate::schema::Style;
 use ab_glyph::{Font, FontArc, FontVec, ScaleFont};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use orzma_vt::prelude::MAX_COMBINING;
+use orzma_vt::prelude::{MAX_COMBINING, Style};
 use ttf_parser::Face as TtfFace;
 
 const FONT_SIZE_PX: f32 = 12.0;

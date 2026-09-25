@@ -9,12 +9,10 @@ use crate::{
         font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
     },
     material::{GpuCell, GpuGlyph, MaterialStage, STYLE_WIDE_RIGHT_HALF, pack_linear},
-    schema::{
-        Cell, CellWidth, Color as CellColor, HyperlinkId, Palette, Style, TerminalCells,
-        TerminalView,
-    },
+    schema::{TerminalCells, TerminalView},
 };
 use bevy::{platform::collections::HashMap, prelude::*, render::storage::ShaderBuffer};
+use orzma_vt::prelude::{Cell, CellWidth, Color as CellColor, HyperlinkId, Palette, Style};
 
 /// Registers the per-pane cell upload.
 pub(crate) struct CellUploadPlugin;
@@ -797,7 +795,7 @@ mod tests {
     /// mounted behind default-background cells.
     #[test]
     fn cell_packing_resolves_through_the_live_palette() {
-        use crate::schema::Rgb;
+        use orzma_vt::prelude::Rgb;
         let mut palette = Palette {
             foreground: Rgb {
                 r: 10,

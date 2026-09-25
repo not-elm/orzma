@@ -13,12 +13,10 @@ use crate::{
         MaterialStage, OVERLAY_SLOTS, PaneInactiveStyle, TerminalOverlays, TerminalPaddingFallback,
         TerminalUiMaterial, pack_linear,
     },
-    schema::{
-        GridLine, HyperlinkHoverState, Palette, Rgb, SelectionGeometry, SelectionRange,
-        TerminalCells, TerminalView,
-    },
+    schema::{HyperlinkHoverState, TerminalCells, TerminalView},
 };
 use bevy::{prelude::*, render::render_resource::ShaderType, window::PrimaryWindow};
+use orzma_vt::prelude::{GridLine, Palette, Rgb, SelectionGeometry, SelectionRange};
 
 /// Registers the per-pane uniform write.
 pub(crate) struct TerminalParamsPlugin;
@@ -404,8 +402,8 @@ fn selection_uniforms(
 mod tests {
     use super::*;
     use crate::glyph::font::TerminalFonts;
-    use crate::schema::HyperlinkId;
     use bevy::asset::uuid_handle;
+    use orzma_vt::prelude::HyperlinkId;
 
     /// An app running only the uniform write, for one pane and no primary
     /// window; returns the pane and its material.
@@ -666,7 +664,9 @@ mod tests {
     /// at the live tail.
     #[test]
     fn selection_uniforms_projects_in_viewport_endpoints() {
-        use crate::schema::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
+        use orzma_vt::prelude::{
+            GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange,
+        };
         let sel = SelectionRange {
             start: GridPoint {
                 line: GridLine(1),
@@ -690,7 +690,9 @@ mod tests {
     /// only the middle of it is on screen.
     #[test]
     fn selection_uniforms_clamps_off_viewport_endpoints() {
-        use crate::schema::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
+        use orzma_vt::prelude::{
+            GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange,
+        };
         let sel = SelectionRange {
             start: GridPoint {
                 line: GridLine(-40),
