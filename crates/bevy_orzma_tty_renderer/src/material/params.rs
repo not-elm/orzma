@@ -9,11 +9,12 @@ use crate::{
         atlas::GlyphAtlas,
         font::{CellMetrics, TerminalCellMetricsResource},
     },
+    grid::{TerminalCells, TerminalView},
+    hyperlink::HyperlinkHoverState,
     material::{
         OVERLAY_SLOTS, TerminalOverlays, TerminalPaddingFallback, TerminalUiMaterial, pack_linear,
     },
     pane_style::PaneInactiveStyle,
-    schema::{HyperlinkHoverState, TerminalCells, TerminalView},
     system_set::MaterialStage,
 };
 use bevy::{prelude::*, render::render_resource::ShaderType, window::PrimaryWindow};

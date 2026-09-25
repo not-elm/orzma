@@ -1,6 +1,6 @@
 use crate::{
     cursor::CursorPlugin, glyph::TerminalGlyphPlugin, grid::TerminalGridPlugin,
-    material::TerminalMaterialPlugin, schema::HyperlinkHoverState,
+    hyperlink::HyperlinkHoverState, material::TerminalMaterialPlugin,
 };
 use bevy::prelude::*;
 
@@ -9,9 +9,9 @@ mod cursor;
 mod error;
 pub mod glyph;
 mod grid;
+mod hyperlink;
 pub mod material;
 mod pane_style;
-pub mod schema;
 mod system_set;
 
 pub use crate::error::{RendererError, RendererResult};
@@ -29,12 +29,12 @@ pub mod prelude {
         CellMetrics, FontFace, TerminalCellMetricsResource, TerminalFontInitSet,
         TerminalFontPlugin, TerminalFontSize, TerminalFonts, physical_font_size,
     };
-    pub use crate::grid::TerminalGridPlugin;
+    pub use crate::grid::{TerminalCells, TerminalGridPlugin, TerminalView};
+    pub use crate::hyperlink::HyperlinkHoverState;
     pub use crate::material::{
         OVERLAY_SLOTS, TerminalOverlays, TerminalPaddingFallback, TerminalUiMaterial,
     };
     pub use crate::pane_style::PaneInactiveStyle;
-    pub use crate::schema::*;
     pub use crate::system_set::TerminalMaterialSystems;
 }
 

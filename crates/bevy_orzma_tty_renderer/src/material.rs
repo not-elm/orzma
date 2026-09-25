@@ -814,7 +814,7 @@ mod tests {
     fn an_upload_lands_in_the_buffers_its_material_binds() {
         use crate::glyph::atlas::GlyphAtlas;
         use crate::glyph::font::{TerminalCellMetricsResource, TerminalFonts};
-        use crate::schema::{TerminalCells, TerminalView};
+        use crate::grid::{TerminalCells, TerminalView};
         use orzma_vt::prelude::Cell;
 
         let fonts = TerminalFonts::default();

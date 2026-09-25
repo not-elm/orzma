@@ -1,7 +1,7 @@
 //! Caret paint policy: focus, hollow rendering, and the blink phase.
 
+use crate::grid::TerminalView;
 use crate::pane_style::PaneInactiveStyle;
-use crate::schema::TerminalView;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use std::time::Duration;

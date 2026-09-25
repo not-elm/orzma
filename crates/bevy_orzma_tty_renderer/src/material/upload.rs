@@ -8,8 +8,8 @@ use crate::{
         atlas::GlyphAtlas,
         font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
     },
+    grid::{TerminalCells, TerminalView},
     material::{GpuCell, GpuGlyph, STYLE_WIDE_RIGHT_HALF, pack_linear},
-    schema::{TerminalCells, TerminalView},
     system_set::MaterialStage,
 };
 use bevy::{platform::collections::HashMap, prelude::*, render::storage::ShaderBuffer};
