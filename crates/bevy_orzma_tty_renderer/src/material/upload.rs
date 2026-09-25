@@ -189,10 +189,6 @@ fn upload_terminal_cells(
         Entity,
         &mut TerminalMaterialState,
         Ref<TerminalCells>,
-        // NOTE: `view` is read as a plain `&`, never `Ref`: rebuilding when
-        //       the view changed would re-upload the whole cell buffer on
-        //       every cursor move, selection drag and IME toggle, which
-        //       change only the uniforms.
         &TerminalView,
     )>,
     fonts: Res<TerminalFonts>,
@@ -252,15 +248,6 @@ fn fill_cells(
                     }
                     left_half = Some(gpu);
                 }
-                // NOTE: For width=2 (CJK / wide) cells we ALSO populate the
-                //       right-half slot with the same glyph_index + fg + bg
-                //       and set STYLE_WIDE_RIGHT_HALF. The shader uses the
-                //       bit to anchor the wide glyph to the left-half cell's
-                //       origin (`in_cell_px_eff = in_cell_px + vec2(cell_pitch_px.x, 0)`),
-                //       rendering a continuous wide glyph across both cells.
-                //       Without this, the right half stays at GpuCell::default
-                //       (bg=0 transparent, glyph_index=GLYPH_NONE) and CJK
-                //       characters render as half-glyphs with black gaps.
                 GridSlot::WideTrailer => {
                     if let Some(left) = left_half.take()
                         && let Some(target) = state.cpu_cells.get_mut(target)
